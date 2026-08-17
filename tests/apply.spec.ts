@@ -101,6 +101,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     peers: [],
     delegates: [],
     sessionNodes: false,
+    wakeJoinedOnBoot: false,
     dshHome: '',
     cardTtlMs: 172_800_000,
     ...overrides,
@@ -737,6 +738,95 @@ describe('a2a session nodes (opt-in join)', () => {
     await ctx.fiber.dispose()
   })
 
+  it('wakes cold joined sessions on boot when wakeJoinedOnBoot is on', async () => {
+    const home = tmpHome()
+    const first = await (async () => {
+      const ctx = new Context()
+      await ctx.plugin(SystemPrompt)
+      await ctx.plugin(ToolRuntime)
+      await ctx.plugin(TimerService)
+      await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+      await ctx.plugin(FakeAgentsService)
+      const agents = ctx.get('agents') as unknown as FakeAgentsService
+      apply(ctx, makeConfig({ sessionNodes: true, dshHome: home }))
+      const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+      const session = replyingAgent(ctx)
+      agents.agent = session
+      ctx.emit('agent/created', { agent: session })
+      await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+      await ctx.fiber.dispose()
+      return undefined
+    })()
+    void first
+    // The restarted host mounts with the wake face and the flag on; the
+    // woken agent publishes, and the remount joins it with no join call.
+    const woken = replyingAgent(new Context())
+    const wokenPromise = Promise.resolve(woken)
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    ctx.provide('sessionPersistence', {
+      list: async () => [{ id: SessionId('agent-1') }],
+    } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
+    const materialize = vi.fn(async () => {
+      ;(ctx.get('agents') as unknown as FakeAgentsService).agent = woken
+      ctx.emit('agent/created', { agent: woken })
+      return woken
+    })
+    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, announce: true, dshHome: home }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    await vi.waitFor(() => { expect(materialize).toHaveBeenCalledWith('agent-1') })
+    await new Promise(resolve => setImmediate(resolve))
+    const state = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { sessions: { id: string; joined: boolean; live?: boolean }[] }
+    expect(state.sessions[0]).toMatchObject({ id: 'agent-1', joined: true, live: true })
+    await ctx.fiber.dispose()
+    void wokenPromise
+  })
+
+  it('wakes a cold joined team on route (wake-on-route), then steers the woken agent', async () => {
+    const home = tmpHome()
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    const agents = ctx.get('agents') as unknown as FakeAgentsService
+    ctx.provide('sessionPersistence', {
+      list: async () => [{ id: SessionId('agent-1') }],
+    } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
+    apply(ctx, makeConfig({ sessionNodes: true, dshHome: home }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    const session = replyingAgent(ctx)
+    agents.agent = session
+    ctx.emit('agent/created', { agent: session })
+    await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+    ctx.emit('agent/disposed', { agent: session })
+    // Disposal leaves the registry: no live agent answers the team.
+    agents.agent = undefined
+    // The team now names a cold joined session; a route wakes it through
+    // the api gateway's materialization and steers the woken agent.
+    const woken = replyingAgent(ctx)
+    const materialize = vi.fn(async () => {
+      agents.agent = woken
+      ctx.emit('agent/created', { agent: woken })
+      return woken
+    })
+    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    const response = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+      method: 'POST',
+      body: JSON.stringify({ team: 'dsh/agent-1', message: 'route to the cold team' }),
+    })
+    await expect(response.json()).resolves.toMatchObject({ routed: true, result: { text: 'peer node replied' } })
+    expect(materialize).toHaveBeenCalledWith('agent-1')
+    expect(woken.steer).toHaveBeenCalledTimes(1)
+    await ctx.fiber.dispose()
+  })
+
   it('mounts sessions that are live before the plugin', async () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
@@ -965,6 +1055,7 @@ describe('a2a plugin module surface', () => {
       peers: [],
       delegates: [],
       sessionNodes: true,
+      wakeJoinedOnBoot: false,
       dshHome: '',
       cardTtlMs: 172_800_000,
       flushTimeoutMs: 300_000,

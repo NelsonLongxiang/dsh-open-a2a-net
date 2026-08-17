@@ -1,10 +1,10 @@
-/** Package-owned invariant companion. @module @nelsonlongxiang/dsh-open-a2a-net/invariant */
+/** Package-owned invariant companion. @module @jf/dsh-open-a2a-net/invariant */
 
 /* jscpd:ignore-start */
 import type { Context } from '@deepseek-ai/cordis'
 import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 
-const PACKAGE_NAME = '@nelsonlongxiang/dsh-open-a2a-net'
+const PACKAGE_NAME = '@jf/dsh-open-a2a-net'
 
 /** Cordis companion plugin name. */
 export const name = 'a2a-invariant'

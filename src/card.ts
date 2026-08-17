@@ -4,7 +4,7 @@
  * expiry, so only the key holder can extend a card's life. Expiry and the
  * signature are enforced wherever a card is parsed — no background cleanup.
  * Design basis: .agents/notes/proposed/feature/2026-08-16-gnunet-prior-art-for-a2a-topology.md (slice 1).
- * @module @nelsonlongxiang/dsh-open-a2a-net/card
+ * @module @jf/dsh-open-a2a-net/card
  */
 
 import { createPublicKey, sign as edSign, verify as edVerify, type KeyObject } from 'node:crypto'

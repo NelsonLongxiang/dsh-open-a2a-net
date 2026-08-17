@@ -1,4 +1,4 @@
-# @nelsonlongxiang/dsh-open-a2a-net
+# @jf/dsh-open-a2a-net
 
 Open A2A network plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH): turns a DSH
 deployment into one node of a decentralized agent network — no central server, no registry.
@@ -12,7 +12,7 @@ node** other hosts can discover and join from the web sidebar.
 ## Install
 
 ```sh
-npx -p @deepseek-ai/dsh dsh plugin --profile <name> add @nelsonlongxiang/dsh-open-a2a-net
+npx -p @deepseek-ai/dsh dsh plugin --profile <name> add @jf/dsh-open-a2a-net
 ```
 
 (As a package specifier, a local path, or a Git URL; the package declares no `prepare`, so a Git or path install
@@ -45,13 +45,14 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | `agentName` | `'DeepSeek Harness A2A node'` | Human-facing name on the card. |
 | `apiKey` | `''` | `X-API-Key` sent on peer requests; non-empty also gates the control routes. |
 | `sessionNodes` | `true` | Expose main sessions as joinable network nodes. |
+| `wakeJoinedOnBoot` | `false` | Materialize every cold joined session's agent on mount (needs the api gateway; wake-on-route and the sidebar wake button stay available without it). |
 | `cardTtlMs` / `flushTimeoutMs` / `routeTimeoutMs` | see schema | Card lifetime and route timing budgets. |
 
 Example — one announcing node with a seed:
 
 ```yaml
 - id: a2a
-  name: '@nelsonlongxiang/dsh-open-a2a-net'
+  name: '@jf/dsh-open-a2a-net'
   config:
     announce: true
     peers: ['http://127.0.0.1:41243']

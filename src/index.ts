@@ -3,7 +3,7 @@
  * `a2a_route` model tools over verified peer agent cards and direct peer
  * routes, publishes this node's card and joined session teams, and dispatches
  * inbound direct routes into live agent sessions.
- * @module @nelsonlongxiang/dsh-open-a2a-net
+ * @module @jf/dsh-open-a2a-net
  */
 
 import { createHash, createPrivateKey, generateKeyPairSync, randomBytes, timingSafeEqual } from 'node:crypto'
@@ -31,6 +31,10 @@ import type { } from '@deepseek-ai/dsh-session-title'
 // `ctx.sessionPersistence` on Context; the provider is mounted by app
 // compositions and stays optional here (cold listing degrades without it).
 import type { } from '@deepseek-ai/dsh-session-persistence'
+// Type-only: the api gateway's declaration merging puts `ctx.apiProxy` on
+// Context; the service is mounted by app compositions and stays optional
+// here (boot wake and wake-on-route degrade without it).
+import type { } from '@deepseek-ai/dsh-host-apiproxy'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import s from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -119,6 +123,15 @@ export interface Config {
    */
   readonly sessionNodes: boolean
   /**
+   * Wake every cold joined session's agent when the plugin mounts (dev boxes
+   * and always-on collaboration hosts that restart often: the network state
+   * returns without opening each session). Each wake materializes a full
+   * agent — log replay plus composed preset world — so the default stays
+   * off for deployments that would rather pay on demand (wake-on-route and
+   * the sidebar's wake button remain available).
+   */
+  readonly wakeJoinedOnBoot: boolean
+  /**
    * `final` reply budget: how long an inbound direct route waits for the
    * session's next assistant message before answering with a timeout
    * notice. Without it a session that never idles (or never produces text)
@@ -143,6 +156,7 @@ export const Config: s<Config> = s.object({
   delegates: s.array(s.object({ name: s.string(), url: s.string(), publicKey: s.string().default('') })).default([]),
   dshHome: s.string().default(''),
   sessionNodes: s.boolean().default(true),
+  wakeJoinedOnBoot: s.boolean().default(false),
   cardTtlMs: s.number().default(172_800_000),
   flushTimeoutMs: s.number().default(300_000),
   routeTimeoutMs: s.number().default(1_800_000),
@@ -346,6 +360,34 @@ export function apply(ctx: Context, config: Config): void {
   // is a local fact: the entry dispatches `/a2a/direct` routes and rides
   // the announced card's unsigned sessionTeams listing.
   const sessionNodes = new Map<string, Agent>()
+  // Live top-level agents: the join surface's candidates and the cold-row
+  // complement (apply scope — the direct-route wake below reads it too).
+  const liveRoots = new Map<string, Agent>()
+
+  /**
+   * The api gateway's wake face, when composed: materializing a persisted
+   * session's agent (log replay plus composed preset world) is web-app
+   * knowledge, so both wake paths ride the one service that owns it.
+   */
+  const materialize = (id: string): Promise<Agent> | undefined => {
+    const apiProxy = ctx.get('apiProxy')
+    if (apiProxy === undefined) return undefined
+    return apiProxy.materializeSession(SessionId(id))
+  }
+
+  /**
+   * Wake one cold joined session on demand — the route-triggered half:
+   * the join consented to network reachability, so a route addressed to
+   * its team pays the wake rather than failing.
+   * @param team - the routed team name.
+   * @returns a promise resolving with the woken agent, or undefined when
+   * the team names no cold joined session or no wake face is composed.
+   */
+  const wakeColdTeam = (team: string): Promise<Agent> | undefined => {
+    const id = joinedSessions.list().find(entry => !liveRoots.has(entry) && `${config.team}/${id8(entry)}` === team)
+    if (id === undefined) return undefined
+    return materialize(id)
+  }
 
   /**
    * The 8-char id suffix session-node labels and teams key on. Web agents
@@ -439,7 +481,6 @@ export function apply(ctx: Context, config: Config): void {
     // explicit (the sidebar control), never automatic. A throwing
     // agent/created listener vetoes publication, so tracking is strictly
     // side-effect-only.
-    const liveRoots = new Map<string, Agent>()
     ctx.on('agent/created', ({ agent }) => {
       const agents = ctx.get('agents')
       if (agents === undefined || !agents.roots().some(root => root.id === agent.id)) return
@@ -455,6 +496,21 @@ export function apply(ctx: Context, config: Config): void {
     for (const agent of ctx.get('agents')?.roots() ?? []) {
       liveRoots.set(String(agent.id), agent)
       if (joinedSessions.has(String(agent.id))) mountSessionNode(agent)
+    }
+
+    if (config.wakeJoinedOnBoot) {
+      if (ctx.get('apiProxy') === undefined) {
+        logger.warn('wakeJoinedOnBoot is on but no api gateway is composed; cold joined sessions stay asleep')
+      } else {
+        for (const id of joinedSessions.list()) {
+          if (liveRoots.has(id)) continue
+          // The remount listener joins the node the moment the woken agent
+          // publishes; a failed wake keeps the cold row and its intent.
+          materialize(id)?.catch((error: unknown) => {
+            logger.warn(`boot wake of ${id} failed: ${String(error)}`)
+          })
+        }
+      }
     }
 
     whenWebServerSettled((webServer) => {
@@ -623,10 +679,18 @@ export function apply(ctx: Context, config: Config): void {
     { ok: true; reply: string } | { ok: false; error: string }
   > {
     const agent = resolveAgentForTeam(team) ?? liveAgent()
-    if (agent === undefined) {
-      return Promise.resolve({ ok: false, error: 'No live DSH agent is available to accept this message.' })
+    if (agent !== undefined) {
+      return routeIntoAgentFor(agent, team, message, caller)
     }
-    return routeIntoAgentFor(agent, team, message, caller)
+    // Wake-on-route: a cold joined team materializes on demand, then steers.
+    const woken = wakeColdTeam(team)
+    if (woken !== undefined) {
+      return woken.then(
+        agent => routeIntoAgentFor(agent, team, message, caller),
+        (error: unknown) => ({ ok: false, error: `waking the session for team "${team}" failed: ${String(error)}` }) as const,
+      )
+    }
+    return Promise.resolve({ ok: false, error: 'No live DSH agent is available to accept this message.' })
   }
 
   /**
