@@ -678,7 +678,7 @@ export function apply(ctx: Context, config: Config): void {
   function routeIntoAgent(team: string, message: string, caller: string): Promise<
     { ok: true; reply: string } | { ok: false; error: string }
   > {
-    const agent = resolveAgentForTeam(team) ?? liveAgent()
+    const agent = resolveAgentForTeam(team)
     if (agent !== undefined) {
       return routeIntoAgentFor(agent, team, message, caller)
     }
@@ -690,7 +690,16 @@ export function apply(ctx: Context, config: Config): void {
         (error: unknown) => ({ ok: false, error: `waking the session for team "${team}" failed: ${String(error)}` }) as const,
       )
     }
-    return Promise.resolve({ ok: false, error: 'No live DSH agent is available to accept this message.' })
+    // Only the bare process team falls back to the live (initiator) agent.
+    // A session-node-shaped team that misses is an error, never a silent
+    // redirect: a mistyped or stale short id must not reach another session
+    // through the initiator fallback.
+    if (team === config.team) {
+      const live = liveAgent()
+      if (live !== undefined) return routeIntoAgentFor(live, team, message, caller)
+      return Promise.resolve({ ok: false, error: 'No live DSH agent is available to accept this message.' })
+    }
+    return Promise.resolve({ ok: false, error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.` })
   }
 
   /**

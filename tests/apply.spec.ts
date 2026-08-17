@@ -827,6 +827,32 @@ describe('a2a session nodes (opt-in join)', () => {
     await ctx.fiber.dispose()
   })
 
+  it('does not fall a missing session team back to the live initiator (P0: silent misroute)', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    const agents = ctx.get('agents') as unknown as FakeAgentsService
+    apply(ctx, makeConfig({ sessionNodes: true, dshHome: tmpHome() }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    // A live initiator exists, so the pre-fix code silently routed any
+    // unjoined session-shaped team to it (the reported misdelivery shape).
+    const initiator = replyingAgent(ctx)
+    agents.agent = initiator
+    ctx.emit('agent/created', { agent: initiator })
+    const response = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+      method: 'POST',
+      body: JSON.stringify({ team: 'dsh/00000000', message: 'route to nobody' }),
+    })
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'No live DSH session node accepts team "dsh/00000000" and no cold joined session matches it.',
+    })
+    expect(initiator.steer).not.toHaveBeenCalled()
+    await ctx.fiber.dispose()
+  })
+
   it('mounts sessions that are live before the plugin', async () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
