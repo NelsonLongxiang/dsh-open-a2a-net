@@ -991,21 +991,57 @@ ${message}`
         : sessionNodes.has(String(exec.agent.id)) ? sessionTeamOf(exec.agent) : sessionLabelOf(exec.agent)
       const fetch = memoizedCardFetch()
       // Candidate zones in preference order: this host's own teams first
-      // (cheapest possible — a loopback /a2a/direct against the very
+      // (cheapest possible — an in-process steer against the very
       // sessionNodes the route names, reusing wake-on-route and the inbound
       // header verbatim), then direct publishers (a peer's own team or one
       // of its joined session teams), then every tracked zone's delegation
       // resolutions, deduplicated by URL.
-      const candidates: string[] = []
       const failures: string[] = []
-      const localUrl = (() => {
-        const webServer = ctx.get('webServer')
-        return webServer === undefined ? undefined : `http://127.0.0.1:${String(webServer.port)}`
-      })()
+      const webServer = ctx.get('webServer')
       const teamIsLocal = args.team === config.team
         || resolveAgentForTeam(args.team) !== undefined
         || joinedSessions.list().some(id => `${config.team}/${id8(id)}` === args.team)
-      if (localUrl !== undefined && teamIsLocal) candidates.push(localUrl)
+      // Same-host candidate: dial in-process, not over loopback HTTP. A
+      // loopback fetch nests the final wait inside the caller's own tool
+      // signal — when that turn budget aborts, the abort surfaces as the
+      // peer's failure even though delivery succeeded (the observed
+      // AbortError misdelivery shape). The in-process call delivers and
+      // waits with the host's own flush budget instead.
+      if (teamIsLocal && webServer !== undefined) {
+        // The turn signal still bounds the wait: on abort the message is
+        // already delivered (steer happened), so the honest result reports
+        // delivery without a reply rather than a failure.
+        const aborted = new Promise<never>((_, reject) => {
+          exec.signal.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
+        })
+        let outcome: Awaited<ReturnType<typeof routeIntoAgent>>
+        try {
+          outcome = await Promise.race([routeIntoAgent(args.team, args.message, callerSession ?? session), aborted])
+        } catch {
+          recordActivity('out', args.team, 'local', true)
+          return {
+            routed: true,
+            team: args.team,
+            session,
+            result: { text: `The message was delivered to ${args.team}, but the wait for its reply was aborted (the target session answers on its own cadence; route again with the context id).` },
+            task_id: `direct-${Math.random().toString(16).slice(2, 10)}`,
+            context_id: args.context_id ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
+          }
+        }
+        recordActivity('out', args.team, 'local', outcome.ok)
+        if (outcome.ok) {
+          return {
+            routed: true,
+            team: args.team,
+            session,
+            result: { text: outcome.reply },
+            task_id: `direct-${Math.random().toString(16).slice(2, 10)}`,
+            context_id: args.context_id ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
+          }
+        }
+        failures.push(`local: ${outcome.error}`)
+      }
+      const candidates: string[] = []
       for (const peer of peerStore.list()) {
         const card = await fetch(peer)
         if (card === undefined) continue
