@@ -953,38 +953,40 @@ ${message}`
     },
     presentCall: () => ({ card: 'generic', title: 'List reachable A2A teams', kind: 'other', rawInput: null }),
     execute: async (): Promise<{ ok: boolean; teams: { team: string; session: string; name: string; description: string; local?: boolean }[] }> => {
-      // This host's own teams lead the listing (the loopback candidates
-      // a2a_route dials first): the process team, then every joined live
-      // session node with its title and activity facts — without them a
-      // single-host deployment listed nothing and same-host collaboration
-      // had to fall back to the CLI.
-      // The peer set is seeds plus discovered, scored and bounded referrals.
-      // Each card lists the peer's own team plus its joined session teams
-      // with title and activity facts. Delegated names are not listed — only
-      // names a tracked zone publishes directly appear; delegations resolve
-      // at route time (a resolvable delegation always aliases a listed team,
-      // so rows for them would repeat, and deeper chains need the walk).
-      const teams: { team: string; session: string; name: string; description: string; local?: boolean }[] = [
-        { team: config.team, session, name: config.agentName, description: '', local: true },
-        ...[...sessionNodes.values()].map(agent => ({
-          team: sessionTeamOf(agent),
-          session,
-          ...nodeMetadataOf(agent),
-          local: true,
-        })),
-      ]
-      const fetch = memoizedCardFetch()
-      for (const peer of peerStore.list()) {
-        const card = await fetch(peer)
-        if (card === undefined) continue
-        teams.push({ team: card.team, session: card.session, name: card.name, description: '' })
-        for (const entry of card.sessionTeams ?? []) {
-          teams.push({ team: entry.team, session: card.session, name: entry.name, description: entry.description })
-        }
-      }
-      return { ok: true, teams }
+      return { ok: true, teams: await listDirectoryTeams() }
     },
   }))
+
+  /**
+   * The directory's listing: this host's own teams lead (the loopback
+   * candidates a2a_route dials first) — the process team, then every joined
+   * live session node with its title and activity facts; then every tracked
+   * peer card's own team plus its joined session teams. Delegated names are
+   * not listed — only names a tracked zone publishes directly appear;
+   * delegations resolve at route time (a resolvable delegation always
+   * aliases a listed team, so rows for them would repeat).
+   */
+  async function listDirectoryTeams(): Promise<{ team: string; session: string; name: string; description: string; local?: boolean }[]> {
+    const teams: { team: string; session: string; name: string; description: string; local?: boolean }[] = [
+      { team: config.team, session, name: config.agentName, description: '', local: true },
+      ...[...sessionNodes.values()].map(agent => ({
+        team: sessionTeamOf(agent),
+        session,
+        ...nodeMetadataOf(agent),
+        local: true,
+      })),
+    ]
+    const fetch = memoizedCardFetch()
+    for (const peer of peerStore.list()) {
+      const card = await fetch(peer)
+      if (card === undefined) continue
+      teams.push({ team: card.team, session: card.session, name: card.name, description: '' })
+      for (const entry of card.sessionTeams ?? []) {
+        teams.push({ team: entry.team, session: card.session, name: entry.name, description: entry.description })
+      }
+    }
+    return teams
+  }
 
   ctx.tools.register(defineTool({
     name: 'a2a_route',
@@ -1014,88 +1016,21 @@ ${message}`
       const callerSession = exec.agent === undefined ? undefined
         : sessionNodes.has(String(exec.agent.id)) ? sessionTeamOf(exec.agent) : sessionLabelOf(exec.agent)
       const fetch = memoizedCardFetch()
-      // Candidate zones in preference order: this host's own teams first
-      // (cheapest possible — an in-process steer against the very
-      // sessionNodes the route names, reusing wake-on-route and the inbound
-      // header verbatim), then direct publishers (a peer's own team or one
-      // of its joined session teams), then every tracked zone's delegation
-      // resolutions, deduplicated by URL.
+      // Candidate order: this host's own teams first (an in-process steer —
+      // cheapest possible and immune to nested-signal aborts), then direct
+      // publishers, then zone delegations, deduplicated by URL.
       const failures: string[] = []
-      const webServer = ctx.get('webServer')
-      const teamIsLocal = args.team === config.team
-        || resolveAgentForTeam(args.team) !== undefined
-        || joinedSessions.list().some(id => `${config.team}/${id8(id)}` === args.team)
-      // Same-host candidate: dial in-process, not over loopback HTTP. A
-      // loopback fetch nests the final wait inside the caller's own tool
-      // signal — when that turn budget aborts, the abort surfaces as the
-      // peer's failure even though delivery succeeded (the observed
-      // AbortError misdelivery shape). The in-process call delivers and
-      // waits with the host's own flush budget instead.
-      if (teamIsLocal && webServer !== undefined) {
-        // The turn signal still bounds the wait: on abort the message is
-        // already delivered (steer happened), so the honest result reports
-        // delivery without a reply rather than a failure. Results use the
-        // canonical A2aRouteOk shape (ok/team/reply) — the wire route shape
-        // renders as "failed: undefined" through the tool's renderer.
-        const aborted = new Promise<never>((_, reject) => {
-          exec.signal.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
-        })
-        const flight = beginRoute(args.team, 'local')
-        let outcome: Awaited<ReturnType<typeof routeIntoAgent>>
-        try {
-          outcome = await Promise.race([routeIntoAgent(args.team, args.message, callerSession ?? session), aborted])
-        } catch {
-          endRoute(flight)
-          recordActivity('out', args.team, 'local', true)
-          return {
-            ok: true,
-            team: args.team,
-            reply: `The message was delivered to ${args.team}, but the wait for its reply was aborted (the target session answers on its own cadence; route again with the context id).`,
-            task_id: `direct-${Math.random().toString(16).slice(2, 10)}`,
-            context_id: args.context_id ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
-            task_status: 'TASK_STATE_ABORTED_WAIT',
-          }
-        }
-        endRoute(flight)
-        recordActivity('out', args.team, 'local', outcome.ok)
-        if (outcome.ok) {
-          return {
-            ok: true,
-            team: args.team,
-            reply: outcome.reply,
-            task_id: `direct-${Math.random().toString(16).slice(2, 10)}`,
-            context_id: args.context_id ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
-            task_status: 'TASK_STATE_COMPLETED',
-          }
-        }
+      const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, exec.signal)
+      if (outcome !== undefined) {
+        if (outcome.ok) return outcome as unknown as Record<string, JsonValue>
         failures.push(`local: ${outcome.error}`)
       }
-      const candidates: string[] = []
-      for (const peer of peerStore.list()) {
-        const card = await fetch(peer)
-        if (card === undefined) continue
-        if (card.team === args.team || (card.sessionTeams ?? []).some(entry => entry.team === args.team)) candidates.push(peer)
-      }
-      // Zone-relative resolution (slice 3). Cycle, depth, and key-binding
-      // failures are configuration bugs: closed, logged, and surfaced.
-      for (const peer of peerStore.list()) {
-        const outcome = await resolveZone(fetch, peer, args.team)
-        if (outcome.ok) {
-          if (!candidates.includes(outcome.url)) candidates.push(outcome.url)
-          continue
-        }
-        if (outcome.reason === 'not-found' || outcome.reason === 'unreachable') continue
-        failures.push(`${peer} ${outcome.reason}: ${outcome.detail}`)
-      }
-      // Failover (slice 4's reachable-fleet half): try every candidate in
-      // order — an offline path falls back to the next alternate without a
-      // caller-visible error; only exhaustion surfaces, with each
-      // candidate's reason. A cancelled call stops dialing immediately.
+      const candidates = await directoryPeerCandidates(fetch, args.team, failures)
+      // Failover: try every candidate in order — an offline path falls back
+      // to the next alternate without a caller-visible error; only
+      // exhaustion surfaces, with each candidate's reason.
       for (const candidate of candidates) {
-        const flight = beginRoute(args.team, candidate)
-        const result = await client.routeDirect(candidate, args.team, args.message, args.context_id, exec.signal, callerSession)
-        endRoute(flight)
-        recordActivity('out', args.team, candidate, result.ok)
+        const result = await dispatchPeerCandidate(candidate, args.team, args.message, args.context_id, exec.signal, callerSession)
         if (result.ok || exec.signal.aborted) return result as unknown as Record<string, JsonValue>
         failures.push(`${candidate}: ${result.error}`)
       }
@@ -1106,6 +1041,176 @@ ${message}`
           ? `team "${args.team}" is not published by any configured peer${failures.length === 0 ? '' : ` (unresolved delegations: ${failures.join('; ')})`}`
           : `team "${args.team}" failed on every candidate: ${failures.join('; ')}`,
         code: -32004,
+      }
+    },
+  }))
+
+  /**
+   * The route dispatcher's local half: same-host candidates dial in-process,
+   * not over loopback HTTP — a loopback fetch nests the final wait inside the
+   * caller's own tool signal, and when that turn budget aborts, the abort
+   * surfaces as the peer's failure even though delivery succeeded. The turn
+   * signal still races the wait; on abort the honest result reports delivery
+   * without a reply. Results use the canonical A2aRouteOk shape — the wire
+   * route shape renders as "failed: undefined" through the tool renderer.
+   * @returns the canonical result, or undefined when the team is not local.
+   */
+  async function dispatchLocalCandidate(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal): Promise<A2aRouteResult | undefined> {
+    const webServer = ctx.get('webServer')
+    const teamIsLocal = team === config.team
+      || resolveAgentForTeam(team) !== undefined
+      || joinedSessions.list().some(id => `${config.team}/${id8(id)}` === team)
+    if (!teamIsLocal || webServer === undefined) return undefined
+    const aborted = new Promise<never>((_, reject) => {
+      signal.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
+    })
+    const flight = beginRoute(team, 'local')
+    let outcome: Awaited<ReturnType<typeof routeIntoAgent>>
+    try {
+      outcome = await Promise.race([routeIntoAgent(team, message, callerSession ?? session), aborted])
+    } catch {
+      endRoute(flight)
+      recordActivity('out', team, 'local', true)
+      return {
+        ok: true,
+        team,
+        reply: `The message was delivered to ${team}, but the wait for its reply was aborted (the target session answers on its own cadence; route again with the context id).`,
+        task_id: `direct-${Math.random().toString(16).slice(2, 10)}`,
+        context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
+        task_status: 'TASK_STATE_ABORTED_WAIT',
+      }
+    }
+    endRoute(flight)
+    recordActivity('out', team, 'local', outcome.ok)
+    if (outcome.ok) {
+      return {
+        ok: true,
+        team,
+        reply: outcome.reply,
+        task_id: `direct-${Math.random().toString(16).slice(2, 10)}`,
+        context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
+        task_status: 'TASK_STATE_COMPLETED',
+      }
+    }
+    return { ok: false, error: outcome.error, code: -32000 }
+  }
+
+  /**
+   * The route dispatcher's peer half: one candidate dial with the in-flight
+   * registration and activity-ring record the panel reads.
+   */
+  async function dispatchPeerCandidate(url: string, team: string, message: string, contextId: string | undefined, signal: AbortSignal, callerSession: string | undefined): Promise<A2aRouteResult> {
+    const flight = beginRoute(team, url)
+    const result = await client.routeDirect(url, team, message, contextId, signal, callerSession)
+    endRoute(flight)
+    recordActivity('out', team, url, result.ok)
+    return result
+  }
+
+  /**
+   * The directory's candidate walk for one team: direct publishers first,
+   * then every tracked zone's delegation resolutions (cycle/depth/key-binding
+   * failures are configuration bugs: closed, logged, and surfaced into
+   * {@link failures}), deduplicated by URL.
+   */
+  async function directoryPeerCandidates(fetch: (url: string) => Promise<A2aPeerCard | undefined>, team: string, failures: string[]): Promise<string[]> {
+    const candidates: string[] = []
+    for (const peer of peerStore.list()) {
+      const card = await fetch(peer)
+      if (card === undefined) continue
+      if (card.team === team || (card.sessionTeams ?? []).some(entry => entry.team === team)) candidates.push(peer)
+    }
+    for (const peer of peerStore.list()) {
+      const outcome = await resolveZone(fetch, peer, team)
+      if (outcome.ok) {
+        if (!candidates.includes(outcome.url)) candidates.push(outcome.url)
+        continue
+      }
+      if (outcome.reason === 'not-found' || outcome.reason === 'unreachable') continue
+      failures.push(`${peer} ${outcome.reason}: ${outcome.detail}`)
+    }
+    return candidates
+  }
+
+  ctx.tools.register(defineTool({
+    name: 'a2a_status',
+    description:
+      'Read-only A2A network health: the tracked peer fleet with quality scores, routes currently in flight '
+      + '(who is waiting on whom), and the recent routing activity ring (inbound and outbound outcomes). '
+      + 'Use it to observe an ongoing collaboration or diagnose delivery instead of re-routing.',
+    parameters: {},
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          peers: {
+            type: 'array',
+            required: true,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                url: { type: 'string', required: true },
+                score: { type: 'number' },
+              },
+            },
+          },
+          inFlight: {
+            type: 'array',
+            required: true,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                team: { type: 'string', required: true },
+                peer: { type: 'string', required: true },
+                startedAt: { type: 'number', required: true },
+              },
+            },
+          },
+          activity: {
+            type: 'array',
+            required: true,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ts: { type: 'number', required: true },
+                dir: { type: 'string', required: true },
+                team: { type: 'string', required: true },
+                peer: { type: 'string', required: true },
+                ok: { type: 'boolean', required: true },
+              },
+            },
+          },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: [
+          ...(value.inFlight.length === 0 ? [] : ['In flight:']),
+          ...value.inFlight.map((route: { team: string; peer: string }) => `  → ${route.team} via ${route.peer === 'local' ? 'this host' : route.peer}`),
+          `Peers (${String(value.peers.length)}):`,
+          ...value.peers.map((peer: { url: string; score?: number }) => `  ${peer.url}${typeof peer.score === 'number' ? ` (score ${String(Math.round(peer.score))})` : ''}`),
+          ...(value.activity.length === 0 ? [] : ['Recent routes:']),
+          ...[...value.activity].reverse().slice(0, 10).map((entry: { dir: string; team: string; ok: boolean }) => `  ${entry.dir === 'in' ? '←' : '→'} ${entry.team} ${entry.ok ? 'ok' : 'failed'}`),
+        ].join('\n'),
+      }],
+    },
+    presentCall: () => ({ card: 'generic', title: 'A2A network status', kind: 'other', rawInput: null }),
+    execute: async (): Promise<{
+      ok: boolean
+      peers: { url: string; score?: number }[]
+      inFlight: { team: string; peer: string; startedAt: number }[]
+      activity: RouteActivityEntry[]
+    }> => {
+      return {
+        ok: true,
+        peers: peerStore.list().map(url => ({ url, score: peerStore.score(url) })),
+        inFlight: [...inFlightRoutes.values()].map(route => ({ team: route.team, peer: route.peer, startedAt: route.startedAt })),
+        activity: recentActivity.slice(),
       }
     },
   }))

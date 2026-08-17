@@ -464,6 +464,10 @@ describe('a2a plugin decentralized routing (peers)', () => {
       // stamps its routable session team instead.
       const steered = (session.steer.mock.calls[0]?.[0] as { content: Array<{ type: string; text: string }> }).content[0]
       expect(steered?.text).toContain('[A2A direct] from "sess-1" (routed to dsh/agent-1)')
+      // The status tool surfaces the completed route in the activity ring.
+      const status = await ctx.tools.get('a2a_status')?.execute({}, runContext()) as { ok: boolean; activity: { dir: string; team: string; ok: boolean }[] }
+      expect(status.ok).toBe(true)
+      expect(status.activity.some(entry => entry.dir === 'out' && entry.team === 'dsh/agent-1' && entry.ok)).toBe(true)
     } finally {
       await ctx.fiber.dispose()
     }
