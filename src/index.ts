@@ -390,13 +390,19 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
-   * The 8-char id suffix session-node labels and teams key on. Web agents
+   * The short id suffix session-node labels and teams key on. Web agents
    * carry `SessionId`-branded ids whose first 8 characters are the literal
    * `session-` prefix — every node would share one team — so the brand
-   * strips before the slice.
+   * strips before the slice. Imported sessions (`import-<uuid>`) keep the
+   * `import-` prefix plus the uuid's first 8 hex chars: a bare 8-char slice
+   * would collapse the whole import family into 16 possible ids (the uuid's
+   * 8th char), which collides as soon as several sessions are imported.
    */
   function id8(id: string): string {
-    return id.replace(/^session-/, '').slice(0, 8)
+    const bare = id.replace(/^session-/, '')
+    const imported = bare.match(/^import-([0-9a-fA-F]+)/)
+    if (imported !== null) return `import-${imported[1]!.slice(0, 8)}`
+    return bare.slice(0, 8)
   }
 
   /** The 8-char suffix of one agent's id. */

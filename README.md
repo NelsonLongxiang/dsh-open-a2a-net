@@ -27,7 +27,9 @@ shared tool runtime.
   candidates when a peer is unreachable.
 - **Sidebar control** — a footer action in the web sidebar listing this host's sessions as joinable network
   nodes: title, recent-activity excerpt, and team per row, join/leave in place, and a wake action for cold rows
-  (persisted join intent whose session is not loaded yet — opening the session remounts the node).
+  (persisted join intent whose session is not loaded yet — opening the session remounts the node). Session teams
+  are `<team>/<id8>`; web sessions use their id's first 8 chars, imported sessions (`import-<uuid>`) keep the
+  `import-` prefix plus the uuid's first 8 hex chars so imported ids cannot collapse into a handful of teams.
 - **Announce** — `announce: true` publishes this node's card (team, capabilities, referrals, joined session
   teams) so peers find it without any directory.
 

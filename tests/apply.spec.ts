@@ -853,6 +853,52 @@ describe('a2a session nodes (opt-in join)', () => {
     await ctx.fiber.dispose()
   })
 
+  it('distinguishes imported sessions whose bare 8-char ids would collide (P2: import- id8)', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    const agents = ctx.get('agents') as unknown as FakeAgentsService
+    apply(ctx, makeConfig({ sessionNodes: true, dshHome: tmpHome() }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    // Two imported sessions whose ids only differ past the 8th character:
+    // a bare slice(0, 8) would give both the team dsh/import-5.
+    const first = replyingAgent(ctx)
+    const second = replyingAgent(ctx)
+    const firstId = 'import-5630a8ab-1111-1111-1111-111111111111'
+    const secondId = 'import-5630a8ac-2222-2222-2222-222222222222'
+    Object.assign(first, { id: firstId })
+    Object.assign(second, { id: secondId })
+    agents.roots = vi.fn(() => [first, second])
+    agents.get = vi.fn((id: unknown) => [first, second].find(a => String(a.id) === String(id))) as unknown as typeof agents.get
+    ctx.emit('agent/created', { agent: first })
+    ctx.emit('agent/created', { agent: second })
+    const join = async (id: string): Promise<void> => {
+      const response = await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/join`, {
+        method: 'POST',
+        body: JSON.stringify({ id }),
+      })
+      expect(response.status).toBe(200)
+    }
+    await join(firstId)
+    await join(secondId)
+    const direct = `http://127.0.0.1:${String(port)}/a2a/direct`
+    const hit = async (team: string): Promise<string> => {
+      const response = await globalThis.fetch(direct, {
+        method: 'POST',
+        body: JSON.stringify({ team, message: 'q' }),
+      })
+      const json = await response.json() as { routed?: boolean; result?: { text?: string } }
+      return json.routed === true && json.result ? json.result.text ?? '' : ''
+    }
+    // Each imported session keeps its own uuid-derived team and answers it.
+    expect(await hit('dsh/import-5630a8ab')).toContain('peer node replied')
+    expect(await hit('dsh/import-5630a8ac')).toContain('peer node replied')
+    await ctx.fiber.dispose()
+  })
+
   it('mounts sessions that are live before the plugin', async () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
