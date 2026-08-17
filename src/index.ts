@@ -893,8 +893,9 @@ ${message}`
   ctx.tools.register(defineTool({
     name: 'a2a_teams',
     description:
-      'List remote A2A teams across the tracked peer network, with owner label and a recent-activity '
-      + 'excerpt for joined sessions. Call this before a2a_route to pick a target team.',
+      'List reachable A2A teams: this host\'s own process team and joined session nodes first (marked [this host], '
+      + 'routable over loopback — same-host collaboration needs no peers), then teams across the tracked peer network '
+      + 'with owner label and a recent-activity excerpt for joined sessions. Call this before a2a_route to pick a target team.',
     parameters: {},
     output: {
       schema: {
@@ -913,6 +914,7 @@ ${message}`
                 session: { type: 'string', required: true },
                 name: { type: 'string', required: true },
                 description: { type: 'string', required: true },
+                local: { type: 'boolean', description: 'true when the team is served by this host (loopback candidate).' },
               },
             },
           },
@@ -921,19 +923,32 @@ ${message}`
       render: (_args, value) => [{
         type: 'text',
         text: value.teams.length === 0
-          ? 'No remote A2A teams are currently reachable.'
-          : value.teams.map(team => `- ${team.team}${team.name === '' ? '' : ` (${team.name})`}${team.description === '' ? '' : ` — ${team.description}`}`).join('\n'),
+          ? 'No A2A teams are currently reachable.'
+          : value.teams.map(team => `- ${team.team}${team.local === true ? ' [this host]' : ''}${team.name === '' ? '' : ` (${team.name})`}${team.description === '' ? '' : ` — ${team.description}`}`).join('\n'),
       }],
     },
-    presentCall: () => ({ card: 'generic', title: 'List remote A2A teams', kind: 'other', rawInput: null }),
-    execute: async (): Promise<{ ok: boolean; teams: { team: string; session: string; name: string; description: string }[] }> => {
+    presentCall: () => ({ card: 'generic', title: 'List reachable A2A teams', kind: 'other', rawInput: null }),
+    execute: async (): Promise<{ ok: boolean; teams: { team: string; session: string; name: string; description: string; local?: boolean }[] }> => {
+      // This host's own teams lead the listing (the loopback candidates
+      // a2a_route dials first): the process team, then every joined live
+      // session node with its title and activity facts — without them a
+      // single-host deployment listed nothing and same-host collaboration
+      // had to fall back to the CLI.
       // The peer set is seeds plus discovered, scored and bounded referrals.
       // Each card lists the peer's own team plus its joined session teams
       // with title and activity facts. Delegated names are not listed — only
       // names a tracked zone publishes directly appear; delegations resolve
       // at route time (a resolvable delegation always aliases a listed team,
       // so rows for them would repeat, and deeper chains need the walk).
-      const teams: { team: string; session: string; name: string; description: string }[] = []
+      const teams: { team: string; session: string; name: string; description: string; local?: boolean }[] = [
+        { team: config.team, session, name: config.agentName, description: '', local: true },
+        ...[...sessionNodes.values()].map(agent => ({
+          team: sessionTeamOf(agent),
+          session,
+          ...nodeMetadataOf(agent),
+          local: true,
+        })),
+      ]
       const fetch = memoizedCardFetch()
       for (const peer of peerStore.list()) {
         const card = await fetch(peer)
@@ -969,14 +984,28 @@ ${message}`
     timeoutMs: config.routeTimeoutMs,
     presentCall: args => ({ card: 'generic', title: `A2A route → ${args.team}`, kind: 'other', rawInput: args }),
     execute: async (args: { team: string; message: string; context_id?: string }, exec): Promise<Record<string, JsonValue>> => {
-      const callerSession = exec.agent === undefined ? undefined : sessionLabelOf(exec.agent)
+      // The caller identity travels as a routable team (the calling session's
+      // node team when it has joined, else the node label), so the receiver
+      // can answer with one a2a_route instead of an unroutable display label.
+      const callerSession = exec.agent === undefined ? undefined
+        : sessionNodes.has(String(exec.agent.id)) ? sessionTeamOf(exec.agent) : sessionLabelOf(exec.agent)
       const fetch = memoizedCardFetch()
-      // Candidate zones in preference order: direct publishers first
-      // (cheapest authority — a peer's own team or one of its joined
-      // session teams), then every tracked zone's delegation resolutions,
-      // deduplicated by URL.
+      // Candidate zones in preference order: this host's own teams first
+      // (cheapest possible — a loopback /a2a/direct against the very
+      // sessionNodes the route names, reusing wake-on-route and the inbound
+      // header verbatim), then direct publishers (a peer's own team or one
+      // of its joined session teams), then every tracked zone's delegation
+      // resolutions, deduplicated by URL.
       const candidates: string[] = []
       const failures: string[] = []
+      const localUrl = (() => {
+        const webServer = ctx.get('webServer')
+        return webServer === undefined ? undefined : `http://127.0.0.1:${String(webServer.port)}`
+      })()
+      const teamIsLocal = args.team === config.team
+        || resolveAgentForTeam(args.team) !== undefined
+        || joinedSessions.list().some(id => `${config.team}/${id8(id)}` === args.team)
+      if (localUrl !== undefined && teamIsLocal) candidates.push(localUrl)
       for (const peer of peerStore.list()) {
         const card = await fetch(peer)
         if (card === undefined) continue

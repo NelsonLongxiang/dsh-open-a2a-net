@@ -339,7 +339,8 @@ describe('a2a plugin announce (peer discovery)', () => {
     apply(ctx, makeConfig({ peers: ['http://bare-peer'], dshHome: tmpHome() }))
     await expect(ctx.tools.get('a2a_teams')?.execute({}, runContext())).resolves.toMatchObject({
       ok: true,
-      teams: [{ team: 'solo' }],
+      // The host's own process team leads; the peer card's team follows.
+      teams: [{ team: 'dsh', local: true }, { team: 'solo' }],
     })
     await ctx.fiber.dispose()
   })
@@ -411,7 +412,9 @@ describe('a2a plugin decentralized routing (peers)', () => {
       const teams = ctx.tools.get('a2a_teams')
       await expect(teams?.execute({}, runContext())).resolves.toMatchObject({
         ok: true,
-        teams: [{ team: 'dsh' }],
+        // The unreachable seed contributes nothing; the host's own row and
+        // the good peer's row remain.
+        teams: [{ team: 'dsh', local: true }, { team: 'dsh', session: 'sess-1' }],
       })
     } finally {
       vi.unstubAllGlobals()
@@ -430,7 +433,7 @@ describe('a2a plugin decentralized routing (peers)', () => {
     try {
       const teams = ctx.tools.get('a2a_teams')
       const listed = await teams?.execute({}, runContext())
-      expect(listed).toMatchObject({ ok: true, teams: [{ team: 'dsh', session: 'sess-1' }] })
+      expect(listed).toMatchObject({ ok: true, teams: [{ team: 'dsh', local: true }, { team: 'dsh', session: 'sess-1' }] })
 
       const route = ctx.tools.get('a2a_route')
       const result = await route?.execute({ team: 'dsh', message: 'hello peer' }, runContext())
@@ -441,6 +444,27 @@ describe('a2a plugin decentralized routing (peers)', () => {
     } finally {
       await ctx.fiber.dispose()
       await peer.dispose()
+    }
+  })
+
+  it('a2a_route reaches a same-host session team over the loopback candidate', async () => {
+    const { ctx, agents, port } = await mountJoinHarness()
+    try {
+      const session = replyingAgent(ctx)
+      agents.agent = session
+      ctx.emit('agent/created', { agent: session })
+      await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+      const route = ctx.tools.get('a2a_route')
+      const result = await route?.execute({ team: 'dsh/agent-1', message: 'same-host hello' }, runContext())
+      expect(result).toMatchObject({ ok: true, team: 'dsh/agent-1', reply: 'peer node replied' })
+      expect(session.steer).toHaveBeenCalledTimes(1)
+      // The steered header carries the node label when the route has no
+      // calling session (runContext carries no agent); a joined caller
+      // stamps its routable session team instead.
+      const steered = (session.steer.mock.calls[0]?.[0] as { content: Array<{ type: string; text: string }> }).content[0]
+      expect(steered?.text).toContain('[A2A direct] from "sess-1" (routed to dsh/agent-1)')
+    } finally {
+      await ctx.fiber.dispose()
     }
   })
 
@@ -515,11 +539,11 @@ describe('a2a plugin decentralized routing (peers)', () => {
     try {
       const teams = ctx.tools.get('a2a_teams')
       // The first call knows only the seed; B joins the store through A's card.
-      await expect(teams?.execute({}, runContext())).resolves.toMatchObject({ ok: true, teams: [{ team: 'team-a' }] })
+      await expect(teams?.execute({}, runContext())).resolves.toMatchObject({ ok: true, teams: [{ team: 'dsh', local: true }, { team: 'team-a' }] })
       // The referral is tracked now, so the next call fetches B too.
       await expect(teams?.execute({}, runContext())).resolves.toMatchObject({
         ok: true,
-        teams: [{ team: 'team-a' }, { team: 'analysis' }],
+        teams: [{ team: 'dsh', local: true }, { team: 'team-a' }, { team: 'analysis' }],
       })
     } finally {
       await ctx.fiber.dispose()
@@ -549,7 +573,7 @@ describe('a2a plugin decentralized routing (peers)', () => {
       const second = await mountClient()
       await expect(second.tools.get('a2a_teams')?.execute({}, runContext())).resolves.toMatchObject({
         ok: true,
-        teams: [{ team: 'team-a' }, { team: 'analysis' }],
+        teams: [{ team: 'dsh', local: true }, { team: 'team-a' }, { team: 'analysis' }],
       })
       await second.fiber.dispose()
     } finally {
@@ -1217,17 +1241,18 @@ describe('a2a plugin outbound tools', () => {
     apply(ctx, makeConfig())
     const teams = ctx.tools.get('a2a_teams')
     const empty = teams?.output.render({}, { ok: true, teams: [] }) ?? []
-    expect(empty).toEqual([{ type: 'text', text: 'No remote A2A teams are currently reachable.' }])
+    expect(empty).toEqual([{ type: 'text', text: 'No A2A teams are currently reachable.' }])
     const listed = teams?.output.render({}, {
       ok: true,
       teams: [
+        { team: 'dsh', session: 'this-host', name: 'Home', description: '', local: true },
         { team: 'dsh', session: 'peer-a', name: 'Peer A', description: '' },
         { team: 'dsh/abcd1234', session: 'peer-a', name: 'Porting', description: 'porting the parser' },
       ],
     }) ?? []
     expect(listed).toEqual([{
       type: 'text',
-      text: '- dsh (Peer A)\n- dsh/abcd1234 (Porting) — porting the parser',
+      text: '- dsh [this host] (Home)\n- dsh (Peer A)\n- dsh/abcd1234 (Porting) — porting the parser',
     }])
     await ctx.fiber.dispose()
   })
