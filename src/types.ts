@@ -1,6 +1,6 @@
 /**
  * Wire and configuration vocabulary for the A2A client extension.
- * @module @jf/dsh-open-a2a-net/types
+ * @module @nelsonlongxiang/dsh-open-a2a-net/types
  */
 
 /** One peer node's agent card — the decentralized discovery record. */

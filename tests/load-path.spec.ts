@@ -1,5 +1,5 @@
 /**
- * Real-load-path guard for @jf/dsh-open-a2a-net. The plugin is a NAMESPACE
+ * Real-load-path guard for @nelsonlongxiang/dsh-open-a2a-net. The plugin is a NAMESPACE
  * plugin with `inject` — a stray `export default apply` would make the
  * cordis Loader's `unwrapExports` (`exports.default ?? exports`) collapse
  * the module to the bare `apply` function, DROPPING `inject` (postmortem

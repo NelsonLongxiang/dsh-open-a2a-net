@@ -6,7 +6,7 @@
  * keeps failing is evicted, while seeds stay for the lifetime of the config
  * that named them. Design basis:
  * .agents/notes/proposed/feature/2026-08-16-gnunet-prior-art-for-a2a-topology.md.
- * @module @jf/dsh-open-a2a-net/peer-store
+ * @module @nelsonlongxiang/dsh-open-a2a-net/peer-store
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'

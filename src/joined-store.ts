@@ -6,7 +6,7 @@
  * intent across those lifecycles: the plugin remounts the node whenever the
  * session's Agent comes back, until the user leaves (the only intent
  * remover; disposal alone never unpersists).
- * @module @jf/dsh-open-a2a-net/joined-store
+ * @module @nelsonlongxiang/dsh-open-a2a-net/joined-store
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'

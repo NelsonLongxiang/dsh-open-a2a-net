@@ -3,7 +3,7 @@
  * `a2a_route` model tools over verified peer agent cards and direct peer
  * routes, publishes this node's card and joined session teams, and dispatches
  * inbound direct routes into live agent sessions.
- * @module @jf/dsh-open-a2a-net
+ * @module @nelsonlongxiang/dsh-open-a2a-net
  */
 
 import { createHash, createPrivateKey, generateKeyPairSync, randomBytes, timingSafeEqual } from 'node:crypto'

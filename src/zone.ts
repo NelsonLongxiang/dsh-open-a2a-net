@@ -5,7 +5,7 @@
  * cap and by visited-URL cycle detection — both fail closed with a reason,
  * never a hang. Design basis:
  * .agents/notes/proposed/feature/2026-08-16-gnunet-prior-art-for-a2a-topology.md.
- * @module @jf/dsh-open-a2a-net/zone
+ * @module @nelsonlongxiang/dsh-open-a2a-net/zone
  */
 
 import type { A2aPeerCard } from './types.ts'

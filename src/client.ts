@@ -3,7 +3,7 @@
  * agent-card fetches (discovery) and direct routes to a peer's
  * `/a2a/direct` endpoint. Timing and fetch seams are constructor-injected so
  * tests drive them without a network.
- * @module @jf/dsh-open-a2a-net/client
+ * @module @nelsonlongxiang/dsh-open-a2a-net/client
  */
 
 import { verifyCard } from './card.ts'
