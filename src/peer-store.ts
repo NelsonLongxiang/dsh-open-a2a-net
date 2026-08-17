@@ -121,6 +121,15 @@ export class PeerStore {
     this.persist()
   }
 
+  /**
+   * The current quality score of one tracked peer, for state reporting.
+   * @param url - the peer URL.
+   * @returns the score, or undefined when the peer is not tracked.
+   */
+  score(url: string): number | undefined {
+    return this.peers.get(url)?.score
+  }
+
   /** Load a persisted snapshot on construction, if present. */
   private restore(): void {
     if (this.path === '' || !existsSync(this.path)) return

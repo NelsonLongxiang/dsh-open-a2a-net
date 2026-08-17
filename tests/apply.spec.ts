@@ -695,7 +695,7 @@ describe('a2a session nodes (opt-in join)', () => {
     // The host "restarts": the Agent is gone, the intent stays, and the
     // state route keeps the session visible as a cold joined row.
     ctx.emit('agent/disposed', { agent: session })
-    await expect(readState()).resolves.toEqual({ nodes: true, sessions: [{ id: 'agent-1', label: 'sess-1-agent-1', team: 'dsh/agent-1', joined: true, live: false }] } as never)
+    await expect(readState()).resolves.toMatchObject({ nodes: true, sessions: [{ id: 'agent-1', label: 'sess-1-agent-1', team: 'dsh/agent-1', joined: true, live: false }] })
     // A deleted session (intent whose persistence header is gone) never lists.
     headers.length = 0
     await expect(readState()).resolves.toMatchObject({ sessions: [] })

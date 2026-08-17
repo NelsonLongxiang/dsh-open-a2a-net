@@ -4,6 +4,29 @@
   max-width: 100%;
 }
 
+/* The unread badge rides the trigger pill, not the bare icon. */
+.trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.unreadBadge {
+  position: absolute;
+  top: -6px;
+  right: -8px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+  color: #fff;
+  background: var(--dsh-accent, #4c8bf5);
+}
+
 /* Fixed, not absolute: the sidebar column clips its descendants (the
    collapse slide), which would cut this popover at the column edge whenever
    the column is narrower than the popover; the component positions it from
@@ -30,6 +53,17 @@
   font-weight: 600;
 }
 
+.sectionTitle {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--dsh-border, #2a2a30);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.65;
+}
+
 .empty {
   font-size: 12px;
   opacity: 0.7;
@@ -48,12 +82,50 @@
   border-color: var(--dsh-border, #2a2a30);
 }
 
+/* The facts block is the row's click target: opens the session. */
 .facts {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  padding: 2px 4px;
+  border: none;
+  background: none;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.facts:hover {
+  background: var(--dsh-surface-hover, rgb(255 255 255 / 6%));
+}
+
+.nameRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stateDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.stateDot.live {
+  background: var(--dsh-accent, #4c8bf5);
+}
+
+.stateDot.live.joined {
+  background: var(--dsh-success, #3fb96f);
+}
+
+.stateDot.cold {
+  background: var(--dsh-warning, #d9a13c);
 }
 
 .name {
@@ -81,4 +153,90 @@
 .note {
   font-size: 11px;
   opacity: 0.6;
+}
+
+/* Peer fleet chips. */
+.peerGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.peerChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--dsh-border, #2a2a30);
+  font-size: 11px;
+}
+
+.peerHost {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+.peerScore {
+  font-family: var(--dsh-mono, monospace);
+  opacity: 0.6;
+}
+
+/* Routing activity ring. */
+.activityList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.activityRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.activityRow[data-ok='false'] {
+  opacity: 0.55;
+}
+
+.activityDir {
+  flex: none;
+  font-weight: 600;
+}
+
+.activityDir.in {
+  color: var(--dsh-success, #3fb96f);
+}
+
+.activityDir.out {
+  color: var(--dsh-accent, #4c8bf5);
+}
+
+.activityTeam {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--dsh-mono, monospace);
+  opacity: 0.8;
+}
+
+.activityPeer {
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.55;
+}
+
+.activityTime {
+  flex: none;
+  opacity: 0.5;
+  font-family: var(--dsh-mono, monospace);
 }

@@ -23,6 +23,8 @@ const neverHook = (() => { throw new Error('control must not read global hooks')
 const openSession = vi.fn<(id: string) => void>()
 
 let stateSessions: A2aSessionRow[] = []
+let statePeers: { url: string; score?: number }[] = []
+let stateActivity: { ts: number; dir: 'in' | 'out'; team: string; peer: string; ok: boolean }[] = []
 let stateOk = true
 const posts: Array<{ url: string; body: string }> = []
 const fetchMock = vi.fn<(input: string, init?: RequestInit) => Promise<Response>>()
@@ -48,6 +50,8 @@ const row = (overrides: Partial<A2aSessionRow> = {}): A2aSessionRow => ({
 describe('A2aControl', () => {
   beforeEach(() => {
     stateSessions = [row()]
+    statePeers = []
+    stateActivity = []
     stateOk = true
     posts.length = 0
     listById = {}
@@ -58,7 +62,7 @@ describe('A2aControl', () => {
         posts.push({ url: input, body: typeof init?.body === 'string' ? init.body : '' })
         return jsonResponse({ id: 'agent-1' })
       }
-      return stateOk ? jsonResponse({ nodes: true, sessions: stateSessions }) : jsonResponse({ error: 'gone' }, false)
+      return stateOk ? jsonResponse({ nodes: true, sessions: stateSessions, peers: statePeers, activity: stateActivity }) : jsonResponse({ error: 'gone' }, false)
     }))
     vi.stubGlobal('fetch', fetchMock)
   })
@@ -162,8 +166,9 @@ describe('A2aControl', () => {
     expect(await screen.findByText('Cold dev session')).toBeTruthy()
     expect(screen.getByText('not loaded (waiting to wake after a restart)')).toBeTruthy()
     expect(screen.getByText('dsh/agent-1')).toBeTruthy()
-    // Wake goes through the injected open flow, not a host POST.
-    fireEvent.click(screen.getByRole('button', { name: 'Wake' }))
+    // Wake goes through the injected open flow, not a host POST: the row's
+    // facts block is the click target (its tooltip carries the wake hint).
+    fireEvent.click(screen.getByTitle('Wake'))
     expect(openSession).toHaveBeenCalledWith('agent-1')
     expect(posts).toEqual([])
     // Leaving a cold row still drops the persisted intent host-side.
@@ -178,5 +183,48 @@ describe('A2aControl', () => {
     mountControl()
     openPopover()
     expect(await screen.findByText('dsh-host-ab12cd34-agent-9')).toBeTruthy()
+  })
+
+  it('opens the session when a live row is clicked', async () => {
+    mountControl()
+    openPopover()
+    // The row's facts block is the click target; no host POST fires.
+    fireEvent.click((await screen.findByText('Parser porting session')).closest('button') ?? document.body)
+    expect(openSession).toHaveBeenCalledWith('agent-1')
+    expect(posts).toEqual([])
+  })
+
+  it('renders the peer fleet and the routing activity ring', async () => {
+    statePeers = [{ url: 'http://127.0.0.1:41243', score: 10_040 }, { url: 'http://10.20.30.42:3001', score: 9_860 }]
+    stateActivity = [
+      { ts: Date.now() - 30_000, dir: 'in', team: 'dsh/agent-1', peer: 'dsh-host-peer-beta', ok: true },
+      { ts: Date.now() - 5_000, dir: 'out', team: 'shared', peer: 'http://127.0.0.1:41243', ok: false },
+    ]
+    mountControl()
+    openPopover()
+    expect(await screen.findByText('Peers')).toBeTruthy()
+    // The peer URL appears in both the chip and the activity row's peer
+    // column; both occurrences come from the one fleet entry.
+    expect(screen.getAllByText('127.0.0.1:41243').length).toBeGreaterThan(0)
+    expect(screen.getByText('10.20.30.42:3001')).toBeTruthy()
+    expect(screen.getByText('10040')).toBeTruthy()
+    expect(screen.getByText('Routing activity')).toBeTruthy()
+    // The team name appears on both the session row and the inbound entry.
+    expect(screen.getAllByText('dsh/agent-1').length).toBeGreaterThan(1)
+    // Relative time tolerates a second of test jitter.
+    expect(screen.getByText(/3[01]s/)).toBeTruthy()
+  })
+
+  it('shows an unread badge for inbound activity that arrived while closed', async () => {
+    stateActivity = [
+      { ts: Date.now() - 60_000, dir: 'in', team: 'dsh/agent-1', peer: '', ok: true },
+      { ts: Date.now() - 30_000, dir: 'in', team: 'dsh/agent-2', peer: '', ok: true },
+    ]
+    const { container } = mountControl()
+    // The badge renders on the trigger without opening the panel.
+    expect(await waitFor(() => { expect(container.querySelector('[aria-label="2"]')).not.toBeNull() }))
+    openPopover()
+    // Opening clears the unread count.
+    await waitFor(() => { expect(container.querySelector('[aria-label="2"]')).toBeNull() })
   })
 })

@@ -1,11 +1,13 @@
 /**
- * A2A network control: a footer action listing this host's sessions as
- * joinable network nodes. Probes the host's session-node state route at
- * registration time (the seat renders only on a host that serves it); each
- * live row shows the session's title, recent-activity excerpt, and team with
- * a join/leave toggle, while cold rows (persisted join intent, agent not back
- * — the dev-restart shape) show the session's list title with a wake action
- * that opens it through the standard flow; the remount joins it after load.
+ * A2A network control: a footer action opening this host's network panel.
+ * Probes the host's session-node state route at registration time (the seat
+ * renders only on a host that serves it). The panel has three sections:
+ * session nodes (live rows show title, recent-activity excerpt, and team with
+ * a join/leave toggle and open the session on row click — the wake action on
+ * cold rows opens the session through the standard flow), the peer fleet
+ * (tracked URLs with quality scores), and the recent routing activity ring
+ * (inbound and outbound outcomes). While open, the panel polls so listings
+ * visibly follow each turn.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
@@ -25,6 +27,28 @@ export interface A2aSessionRow {
   readonly live?: boolean
 }
 
+/** One tracked peer as the state route reports it. */
+export interface A2aPeerRow {
+  readonly url: string
+  readonly score?: number
+}
+
+/** One routing outcome as the state route reports it. */
+export interface A2aActivityRow {
+  readonly ts: number
+  readonly dir: 'in' | 'out'
+  readonly team: string
+  readonly peer: string
+  readonly ok: boolean
+}
+
+/** The state route's full body. */
+export interface A2aState {
+  readonly sessions: readonly A2aSessionRow[]
+  readonly peers: readonly A2aPeerRow[]
+  readonly activity: readonly A2aActivityRow[]
+}
+
 /** Wake face the registration injects: opens one session through the standard sessions flow. */
 export interface A2aControlInjected {
   readonly openSession: (id: string) => void
@@ -33,30 +57,44 @@ export interface A2aControlInjected {
 /** Full component props: the footer-action owner share, the locale seat, and the wake face. */
 export type A2aControlProps = PropsRuntime<'sidebar.footer.action'> & PropsLocale<'a2aNet'> & A2aControlInjected
 
-/** Fetch the host's session-node state; undefined means the route is absent. */
-async function fetchState(): Promise<A2aSessionRow[] | undefined> {
+/** Fetch the host's network state; undefined means the route is absent. */
+async function fetchState(): Promise<A2aState | undefined> {
   const response = await fetch('/__dsh_a2a/state', { cache: 'no-store' })
   if (!response.ok) return undefined
-  const body = await response.json() as { nodes?: boolean; sessions?: A2aSessionRow[] }
+  const body = await response.json() as { nodes?: boolean; sessions?: A2aSessionRow[]; peers?: A2aPeerRow[]; activity?: A2aActivityRow[] }
   if (body.nodes !== true || !Array.isArray(body.sessions)) return undefined
-  return body.sessions
+  return {
+    sessions: body.sessions,
+    peers: Array.isArray(body.peers) ? body.peers : [],
+    activity: Array.isArray(body.activity) ? body.activity : [],
+  }
+}
+
+/** Compact relative time for an activity row. */
+function relativeTime(ts: number): string {
+  const seconds = Math.max(0, Math.round((Date.now() - ts) / 1000))
+  if (seconds < 60) return `${String(seconds)}s`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${String(minutes)}m`
+  return `${String(Math.round(minutes / 60))}h`
 }
 
 /**
- * Render the network toggle and its session popover.
+ * Render the network toggle and its network panel.
  * @param props - composed slot props.
  * @returns the control element tree.
  */
 export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProps) {
   const [open, setOpen] = useState(false)
-  const [sessions, setSessions] = useState<A2aSessionRow[]>([])
+  const [state, setState] = useState<A2aState>({ sessions: [], peers: [], activity: [] })
   const [busy, setBusy] = useState<string | null>(null)
+  const [seenActivity, setSeenActivity] = useState(0)
   const stopped = useRef(false)
   useEffect(() => () => { stopped.current = true }, [])
   const wrap = useRef<HTMLDivElement>(null)
   // Cold rows carry no host-side facts; the client's own session list holds
   // the durable title for exactly those sessions.
-  const listById = useSessions(state => state.byId)
+  const listById = useSessions(state2 => state2.byId)
   // The popover anchors to the trigger's viewport rect: the sidebar column
   // clips its descendants (the collapse slide), so an in-column absolute
   // popover is cut at the column edge whenever the column is narrower than
@@ -64,6 +102,9 @@ export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProp
   // panel precedent). The left edge clamps so a narrow viewport never hides
   // the popover's right side.
   const [anchor, setAnchor] = useState<{ left: number; bottom: number } | null>(null)
+  // The unread badge counts inbound activity entries that arrived while the
+  // panel was closed; opening the panel clears it.
+  const unread = Math.max(0, state.activity.filter(entry => entry.dir === 'in').length - seenActivity)
   const toggleOpen = (): void => {
     if (open) { setOpen(false); return }
     const rect = wrap.current?.getBoundingClientRect()
@@ -73,12 +114,13 @@ export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProp
         bottom: window.innerHeight - rect.top + 8,
       })
     }
+    setSeenActivity(state.activity.filter(entry => entry.dir === 'in').length)
     setOpen(true)
   }
 
   const refresh = useCallback((): void => {
-    void fetchState().then((rows) => {
-      if (!stopped.current && rows !== undefined) setSessions(rows)
+    void fetchState().then((next) => {
+      if (!stopped.current && next !== undefined) setState(next)
     }).catch(() => {})
   }, [])
 
@@ -87,10 +129,19 @@ export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProp
   }, [open, refresh])
 
   useEffect(() => {
+    // The unread badge lives on the closed trigger, so the state must move
+    // even while the panel is closed — a slow poll keeps it fresh; the open
+    // panel's faster poll below takes over while visible.
+    const slow = setInterval(refresh, 10_000)
+    refresh()
+    return () => { clearInterval(slow) }
+  }, [refresh])
+
+  useEffect(() => {
     if (!open) return
-    // While the popover is open, titles and activity excerpts keep moving
-    // with each turn; poll so the listing visibly follows.
-    const poll = setInterval(refresh, 5_000)
+    // While the panel is open, titles, activity excerpts, and the routing
+    // ring keep moving; poll so the listing visibly follows.
+    const poll = setInterval(refresh, 2_000)
     return () => { clearInterval(poll) }
   }, [open, refresh])
 
@@ -116,6 +167,8 @@ export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProp
       .finally(() => { if (!stopped.current) setBusy(null) })
   }
 
+  const { sessions, peers, activity } = state
+
   return (
     <div ref={wrap} className={clsx(css.wrap, wide ? css.wide : css.rail)}>
       <Button
@@ -126,8 +179,11 @@ export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProp
         aria-expanded={open}
         onClick={() => { toggleOpen() }}
       >
-        <IconGlobeOutline14 />
-        {wide ? <span>{t('a2a.label')}</span> : null}
+        <span className={css.trigger}>
+          <IconGlobeOutline14 />
+          {wide ? <span>{t('a2a.label')}</span> : null}
+          {unread > 0 ? <span className={css.unreadBadge} aria-label={String(unread)}>{unread > 9 ? '9+' : String(unread)}</span> : null}
+        </span>
       </Button>
       {open
         ? (
@@ -146,19 +202,24 @@ export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProp
                 const description = cold ? t('a2a.cold') : (row.description ?? '')
                 return (
                   <div key={row.id} className={clsx(css.row, row.joined && css.joined)}>
-                    <div className={css.facts}>
-                      <div className={css.name}>{name}</div>
-                      <div className={css.description} title={description}>{description}</div>
-                      <div className={css.team}>{row.team}</div>
-                    </div>
+                    <button
+                      type="button"
+                      className={css.facts}
+                      title={row.live === false ? t('a2a.wake') : name}
+                      onClick={() => { openSession(row.id) }}
+                    >
+                      <span className={css.nameRow}>
+                        <span className={clsx(css.stateDot, cold ? 'cold' : 'live', row.joined && 'joined')} aria-hidden />
+                        <span className={css.name}>{name}</span>
+                      </span>
+                      <span className={css.description}>{description}</span>
+                      <span className={css.team}>{row.team}</span>
+                    </button>
                     {cold
                       ? (
                         <>
                           <Button variant="outline" size="sm" disabled={busy === row.id} onClick={() => { toggle(row) }}>
                             {t('a2a.leave')}
-                          </Button>
-                          <Button variant="primary" size="sm" onClick={() => { openSession(row.id) }}>
-                            {t('a2a.wake')}
                           </Button>
                         </>
                       )
@@ -176,6 +237,34 @@ export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProp
                 )
               })}
             <div className={css.note}>{t('a2a.note')}</div>
+            <div className={css.sectionTitle}>{t('a2a.peers')}</div>
+            {peers.length === 0
+              ? <div className={css.empty}>{t('a2a.peersEmpty')}</div>
+              : (
+                <div className={css.peerGrid}>
+                  {peers.map((peer) => (
+                    <span key={peer.url} className={css.peerChip} title={peer.url}>
+                      <span className={css.peerHost}>{peer.url.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}</span>
+                      {typeof peer.score === 'number' ? <span className={css.peerScore}>{String(Math.round(peer.score))}</span> : null}
+                    </span>
+                  ))}
+                </div>
+              )}
+            <div className={css.sectionTitle}>{t('a2a.activity')}</div>
+            {activity.length === 0
+              ? <div className={css.empty}>{t('a2a.activityEmpty')}</div>
+              : (
+                <div className={css.activityList}>
+                  {[...activity].reverse().slice(0, 10).map((entry, index) => (
+                    <div key={`${String(entry.ts)}-${String(index)}`} className={css.activityRow} data-ok={entry.ok}>
+                      <span className={clsx(css.activityDir, entry.dir)}>{entry.dir === 'in' ? '←' : '→'}</span>
+                      <span className={css.activityTeam} title={entry.team}>{entry.team}</span>
+                      <span className={css.activityPeer} title={entry.peer}>{entry.peer === '' ? '' : entry.peer.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}</span>
+                      <span className={css.activityTime}>{relativeTime(entry.ts)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
           </div>
         )
         : null}

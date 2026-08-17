@@ -355,6 +355,25 @@ export function apply(ctx: Context, config: Config): void {
   // whenever the Agent comes back, until the user leaves.
   const joinedSessions = new JoinedSessions(join(home, 'a2a', 'joined.json'))
 
+  /**
+   * Recent routing activity for the network panel: a bounded ring of the
+   * latest inbound and outbound route outcomes, newest last. The state route
+   * serves a copy; the panel derives unread badges from new entries.
+   */
+  interface RouteActivityEntry {
+    readonly ts: number
+    readonly dir: 'in' | 'out'
+    readonly team: string
+    readonly peer: string
+    readonly ok: boolean
+  }
+  const ACTIVITY_CAP = 20
+  const recentActivity: RouteActivityEntry[] = []
+  const recordActivity = (dir: 'in' | 'out', team: string, peer: string, ok: boolean): void => {
+    recentActivity.push({ ts: Date.now(), dir, team, peer, ok })
+    if (recentActivity.length > ACTIVITY_CAP) recentActivity.splice(0, recentActivity.length - ACTIVITY_CAP)
+  }
+
   // Session nodes: every joined top-level session is its own addressable
   // team (label `<session>-<agentId8>`, team `<team>/<agentId8>`). Joining
   // is a local fact: the entry dispatches `/a2a/direct` routes and rides
@@ -566,7 +585,12 @@ export function apply(ctx: Context, config: Config): void {
                 })
               }
             }
-            const body = JSON.stringify({ nodes: true, sessions })
+            const body = JSON.stringify({
+              nodes: true,
+              sessions,
+              peers: peerStore.list().map(url => ({ url, score: peerStore.score(url) })),
+              activity: recentActivity.slice(),
+            })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) })
             res.end(body)
           })()
@@ -807,6 +831,7 @@ ${message}`
             return
           }
           void routeIntoAgent(team, message, caller).then((outcome) => {
+            recordActivity('in', team, caller, outcome.ok)
             const payload = outcome.ok
               ? JSON.stringify({
                 routed: true,
@@ -969,6 +994,7 @@ ${message}`
       // candidate's reason. A cancelled call stops dialing immediately.
       for (const candidate of candidates) {
         const result = await client.routeDirect(candidate, args.team, args.message, args.context_id, exec.signal, callerSession)
+        recordActivity('out', args.team, candidate, result.ok)
         if (result.ok || exec.signal.aborted) return result as unknown as Record<string, JsonValue>
         failures.push(`${candidate}: ${result.error}`)
       }
