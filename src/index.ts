@@ -369,6 +369,25 @@ export function apply(ctx: Context, config: Config): void {
   }
   const ACTIVITY_CAP = 20
   const recentActivity: RouteActivityEntry[] = []
+  /**
+   * In-flight outbound routes: a route registers on dial and unregisters on
+   * settlement, so the panel can show collaboration in progress ("who is
+   * waiting on whom") — the state route serves a snapshot.
+   */
+  interface InFlightRoute {
+    readonly id: number
+    readonly team: string
+    readonly peer: string
+    readonly startedAt: number
+  }
+  const inFlightRoutes = new Map<number, InFlightRoute>()
+  let inFlightSeq = 0
+  const beginRoute = (team: string, peer: string): number => {
+    const id = ++inFlightSeq
+    inFlightRoutes.set(id, { id, team, peer, startedAt: Date.now() })
+    return id
+  }
+  const endRoute = (id: number): void => { inFlightRoutes.delete(id) }
   const recordActivity = (dir: 'in' | 'out', team: string, peer: string, ok: boolean): void => {
     recentActivity.push({ ts: Date.now(), dir, team, peer, ok })
     if (recentActivity.length > ACTIVITY_CAP) recentActivity.splice(0, recentActivity.length - ACTIVITY_CAP)
@@ -590,6 +609,11 @@ export function apply(ctx: Context, config: Config): void {
               sessions,
               peers: peerStore.list().map(url => ({ url, score: peerStore.score(url) })),
               activity: recentActivity.slice(),
+              inFlight: [...inFlightRoutes.values()].map(route => ({
+                team: route.team,
+                peer: route.peer,
+                startedAt: route.startedAt,
+              })),
             })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) })
             res.end(body)
@@ -1016,10 +1040,12 @@ ${message}`
         const aborted = new Promise<never>((_, reject) => {
           exec.signal.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
         })
+        const flight = beginRoute(args.team, 'local')
         let outcome: Awaited<ReturnType<typeof routeIntoAgent>>
         try {
           outcome = await Promise.race([routeIntoAgent(args.team, args.message, callerSession ?? session), aborted])
         } catch {
+          endRoute(flight)
           recordActivity('out', args.team, 'local', true)
           return {
             ok: true,
@@ -1030,6 +1056,7 @@ ${message}`
             task_status: 'TASK_STATE_ABORTED_WAIT',
           }
         }
+        endRoute(flight)
         recordActivity('out', args.team, 'local', outcome.ok)
         if (outcome.ok) {
           return {
@@ -1065,7 +1092,9 @@ ${message}`
       // caller-visible error; only exhaustion surfaces, with each
       // candidate's reason. A cancelled call stops dialing immediately.
       for (const candidate of candidates) {
+        const flight = beginRoute(args.team, candidate)
         const result = await client.routeDirect(candidate, args.team, args.message, args.context_id, exec.signal, callerSession)
+        endRoute(flight)
         recordActivity('out', args.team, candidate, result.ok)
         if (result.ok || exec.signal.aborted) return result as unknown as Record<string, JsonValue>
         failures.push(`${candidate}: ${result.error}`)

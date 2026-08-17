@@ -14,6 +14,8 @@ export type A2aNetKey =
   | 'a2a.peersEmpty'
   | 'a2a.activity'
   | 'a2a.activityEmpty'
+  | 'a2a.inFlight'
+  | 'a2a.jump'
 
 /** Simplified Chinese dictionary. */
 export const zh: Record<A2aNetKey, string> = {
@@ -29,6 +31,8 @@ export const zh: Record<A2aNetKey, string> = {
   'a2a.peersEmpty': '尚无已知对等节点（配 peers 种子入网）',
   'a2a.activity': '路由活动',
   'a2a.activityEmpty': '暂无路由记录',
+  'a2a.inFlight': '进行中的路由',
+  'a2a.jump': '点击跳转到该会话',
 }
 
 /** English dictionary. */
@@ -45,4 +49,6 @@ export const en: Record<A2aNetKey, string> = {
   'a2a.peersEmpty': 'No known peers yet (set peers seeds to join the mesh)',
   'a2a.activity': 'Routing activity',
   'a2a.activityEmpty': 'No routes yet',
+  'a2a.inFlight': 'Routes in flight',
+  'a2a.jump': 'Click to open this session',
 }

@@ -42,11 +42,19 @@ export interface A2aActivityRow {
   readonly ok: boolean
 }
 
+/** One in-flight outbound route as the state route reports it. */
+export interface A2aInFlightRow {
+  readonly team: string
+  readonly peer: string
+  readonly startedAt: number
+}
+
 /** The state route's full body. */
 export interface A2aState {
   readonly sessions: readonly A2aSessionRow[]
   readonly peers: readonly A2aPeerRow[]
   readonly activity: readonly A2aActivityRow[]
+  readonly inFlight: readonly A2aInFlightRow[]
 }
 
 /** Wake face the registration injects: opens one session through the standard sessions flow. */
@@ -61,12 +69,13 @@ export type A2aControlProps = PropsRuntime<'sidebar.footer.action'> & PropsLocal
 async function fetchState(): Promise<A2aState | undefined> {
   const response = await fetch('/__dsh_a2a/state', { cache: 'no-store' })
   if (!response.ok) return undefined
-  const body = await response.json() as { nodes?: boolean; sessions?: A2aSessionRow[]; peers?: A2aPeerRow[]; activity?: A2aActivityRow[] }
+  const body = await response.json() as { nodes?: boolean; sessions?: A2aSessionRow[]; peers?: A2aPeerRow[]; activity?: A2aActivityRow[]; inFlight?: A2aInFlightRow[] }
   if (body.nodes !== true || !Array.isArray(body.sessions)) return undefined
   return {
     sessions: body.sessions,
     peers: Array.isArray(body.peers) ? body.peers : [],
     activity: Array.isArray(body.activity) ? body.activity : [],
+    inFlight: Array.isArray(body.inFlight) ? body.inFlight : [],
   }
 }
 
@@ -86,7 +95,7 @@ function relativeTime(ts: number): string {
  */
 export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProps) {
   const [open, setOpen] = useState(false)
-  const [state, setState] = useState<A2aState>({ sessions: [], peers: [], activity: [] })
+  const [state, setState] = useState<A2aState>({ sessions: [], peers: [], activity: [], inFlight: [] })
   const [busy, setBusy] = useState<string | null>(null)
   const [seenActivity, setSeenActivity] = useState(0)
   const stopped = useRef(false)
@@ -167,7 +176,7 @@ export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProp
       .finally(() => { if (!stopped.current) setBusy(null) })
   }
 
-  const { sessions, peers, activity } = state
+  const { sessions, peers, activity, inFlight } = state
 
   return (
     <div ref={wrap} className={clsx(css.wrap, wide ? css.wide : css.rail)}>
@@ -251,18 +260,46 @@ export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProp
                 </div>
               )}
             <div className={css.sectionTitle}>{t('a2a.activity')}</div>
+            {inFlight.length > 0 && (
+              <div className={css.inFlightList} aria-label={t('a2a.inFlight')}>
+                {inFlight.map((route) => (
+                  <div key={`${route.team}-${String(route.startedAt)}`} className={css.inFlightRow}>
+                    <span className={css.inFlightPulse} aria-hidden />
+                    <span className={clsx(css.activityDir, 'out')}>{'→'}</span>
+                    <span className={css.activityTeam} title={route.team}>{route.team}</span>
+                    <span className={css.activityPeer}>{route.peer === 'local' ? '' : route.peer.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}</span>
+                    <span className={css.activityTime}>{relativeTime(route.startedAt)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             {activity.length === 0
               ? <div className={css.empty}>{t('a2a.activityEmpty')}</div>
               : (
                 <div className={css.activityList}>
-                  {[...activity].reverse().slice(0, 10).map((entry, index) => (
-                    <div key={`${String(entry.ts)}-${String(index)}`} className={css.activityRow} data-ok={entry.ok}>
-                      <span className={clsx(css.activityDir, entry.dir)}>{entry.dir === 'in' ? '←' : '→'}</span>
-                      <span className={css.activityTeam} title={entry.team}>{entry.team}</span>
-                      <span className={css.activityPeer} title={entry.peer}>{entry.peer === '' ? '' : entry.peer.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}</span>
-                      <span className={css.activityTime}>{relativeTime(entry.ts)}</span>
-                    </div>
-                  ))}
+                  {[...activity].reverse().slice(0, 10).map((entry, index) => {
+                    // A same-host session team resolves to its session row;
+                    // clicking the activity line jumps there (the linkage
+                    // into an ongoing collaboration).
+                    const target = sessions.find(row => row.team === entry.team)
+                    const fresh = Date.now() - entry.ts < 5_000
+                    return (
+                      <div
+                        key={`${String(entry.ts)}-${String(index)}`}
+                        className={clsx(css.activityRow, fresh && css.fresh)}
+                        data-ok={entry.ok}
+                        data-jump={target !== undefined}
+                        title={target !== undefined ? t('a2a.jump') : undefined}
+                        onClick={() => { if (target !== undefined) openSession(target.id) }}
+                        role={target !== undefined ? 'button' : undefined}
+                      >
+                        <span className={clsx(css.activityDir, entry.dir)}>{entry.dir === 'in' ? '←' : '→'}</span>
+                        <span className={css.activityTeam} title={entry.team}>{entry.team}</span>
+                        <span className={css.activityPeer} title={entry.peer}>{entry.peer === '' ? '' : entry.peer.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}</span>
+                        <span className={css.activityTime}>{relativeTime(entry.ts)}</span>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
           </div>
