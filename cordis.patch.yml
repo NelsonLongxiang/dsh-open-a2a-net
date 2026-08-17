@@ -1,0 +1,21 @@
+# Bundle patch for @nelsonlongxiang/dsh-open-a2a-net: mounts the a2a row into
+# the host composition of a dsh profile. The plugin registers its
+# /.well-known/agent-card.json announce route, its /__dsh_a2a/* state and
+# control routes, and the a2a_teams / a2a_route model tools on the shared web
+# server and tool runtime — it owns no listener of its own, so compose it
+# beside a webserver row (the stock web profile already has one).
+#
+# Install: `dsh plugin --profile <name> add @nelsonlongxiang/dsh-open-a2a-net`
+# (npm, a local path, or Git). The `dsh plugin` command pnpm-installs the
+# package into the profile and reconciles it into the profile's
+# `dsh.profile.bundles` layer list.
+#
+# All config keys carry schema defaults: session nodes are on (the sidebar
+# join control works out of the box), announce is opt-in. Peers, zone
+# delegates, and an API key are set per deployment through row config
+# overlays, never here.
+- insert:
+    - id: a2a
+      # Node-resolvable package name — must stay in sync with package.json
+      # `name`. Quoted because `@` is a reserved YAML indicator.
+      name: '@nelsonlongxiang/dsh-open-a2a-net'
