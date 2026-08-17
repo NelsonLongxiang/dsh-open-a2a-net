@@ -505,9 +505,15 @@ export function apply(ctx: Context, config: Config): void {
     }
 
     if (config.wakeJoinedOnBoot) {
-      if (ctx.get('apiProxy') === undefined) {
-        logger.warn('wakeJoinedOnBoot is on but no api gateway is composed; cold joined sessions stay asleep')
-      } else {
+      // The api gateway may activate after this row in the same tree, so the
+      // wake rides the loader tree's settlement — the same deferral the web
+      // server registration uses — instead of an apply-time snapshot that
+      // would see apiProxy before its fiber mounts and skip the wake.
+      const wakeColdJoined = (): void => {
+        if (ctx.get('apiProxy') === undefined) {
+          logger.warn('wakeJoinedOnBoot is on but no api gateway is composed; cold joined sessions stay asleep')
+          return
+        }
         for (const id of joinedSessions.list()) {
           if (liveRoots.has(id)) continue
           // The remount listener joins the node the moment the woken agent
@@ -517,6 +523,14 @@ export function apply(ctx: Context, config: Config): void {
           })
         }
       }
+      const settled = ctx.get('loader')?.await()
+      if (settled === undefined) wakeColdJoined()
+      else void settled.then(() => {
+        if (ctx.fiber.uid !== null) wakeColdJoined()
+      }, () => {
+        // A failed boot never wakes anything; the dying tree logs its own
+        // failure once.
+      })
     }
 
     whenWebServerSettled((webServer) => {

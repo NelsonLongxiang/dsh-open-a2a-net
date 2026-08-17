@@ -787,6 +787,48 @@ describe('a2a session nodes (opt-in join)', () => {
     void wokenPromise
   })
 
+  it('wakes cold joined sessions on boot after the loader tree settles even when the api gateway mounts late (P3: apply-time snapshot)', async () => {
+    const home = tmpHome()
+    // First host: join one session, then die with the persisted intent.
+    {
+      const ctx = new Context()
+      await ctx.plugin(SystemPrompt)
+      await ctx.plugin(ToolRuntime)
+      await ctx.plugin(TimerService)
+      await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+      await ctx.plugin(FakeAgentsService)
+      const agents = ctx.get('agents') as unknown as FakeAgentsService
+      apply(ctx, makeConfig({ sessionNodes: true, dshHome: home }))
+      const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+      const session = replyingAgent(ctx)
+      agents.agent = session
+      ctx.emit('agent/created', { agent: session })
+      await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+      await ctx.fiber.dispose()
+    }
+    // Restarted host: a loader tree holds the wake back, and the api gateway
+    // only mounts after this row applied — the pre-fix apply-time apiProxy
+    // snapshot skipped the wake entirely.
+    const woken = replyingAgent(new Context())
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    await ctx.plugin(FakeLoaderService)
+    const loader = ctx.get('loader') as unknown as FakeLoaderService
+    ctx.provide('sessionPersistence', {
+      list: async () => [{ id: SessionId('agent-1') }],
+    } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
+    apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, dshHome: home }))
+    const materialize = vi.fn(async () => woken)
+    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    loader.settle()
+    await vi.waitFor(() => { expect(materialize).toHaveBeenCalledWith('agent-1') })
+    await ctx.fiber.dispose()
+  })
+
   it('wakes a cold joined team on route (wake-on-route), then steers the woken agent', async () => {
     const home = tmpHome()
     const ctx = new Context()
