@@ -5,7 +5,7 @@
  */
 import { generateKeyPairSync } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { A2aClient, type A2aFetch } from '../src/client.ts'
+import { A2aClient, type A2aFetch } from '../src/a2a-client.ts'
 import { signCard } from '../src/card.ts'
 
 

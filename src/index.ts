@@ -42,12 +42,12 @@ import type { JsonValue } from '@deepseek-ai/dsh-tools'
 import { MessageId } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { A2aClient, type A2aFetch, type A2aSchedule } from './client.ts'
+import { A2aClient, type A2aFetch, type A2aSchedule } from './a2a-client.ts'
 import type { A2aPeerCard, A2aRouteResult, ZoneRecord } from './types.ts'
 
 export type * from './types.ts'
-export { A2aClient } from './client.ts'
-export type { A2aClientOptions, A2aFetch, A2aSchedule } from './client.ts'
+export { A2aClient } from './a2a-client.ts'
+export type { A2aClientOptions, A2aFetch, A2aSchedule } from './a2a-client.ts'
 
 export const name = 'a2a'
 
@@ -183,7 +183,7 @@ function renderRoute(_args: unknown, value: Record<string, JsonValue>): { type: 
 export function apply(ctx: Context, config: Config): void {
   const logger = ctx.logger('a2a')
   // The production seams: Node's globals. Tests inject their own A2aClient
-  // seams through src/client.ts directly. During fiber teardown the timer
+  // seams through src/a2a-client.ts directly. During fiber teardown the timer
   // service is already gone; a timer armed then belongs to nobody, so the
   // arming fails closed (callback never fires).
   const schedule: A2aSchedule = (callback, delayMs) => {

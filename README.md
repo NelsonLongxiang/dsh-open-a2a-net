@@ -69,8 +69,8 @@ callers. Set an `apiKey` before exposing the listener beyond loopback.
 
 ```sh
 pnpm install   # auto-install-peers pulls the DSH peer train from npm
-pnpm verify    # typecheck (host + client) and vitest
-pnpm build     # host lib, client types, and the browser bundle (lib/client.js)
+pnpm verify    # typecheck, build, source tests, and built-artifact layout guard
+pnpm build     # host lib (including lib/a2a-client.js), client types, and browser bundle (lib/client.js)
 ```
 
 ## License

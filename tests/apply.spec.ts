@@ -3,7 +3,7 @@
  * and zone naming over real web servers, the session-node join surface and
  * its control-route authorization, and the direct-route dispatch contract —
  * all against a fake agents service. Client wire behavior is covered by
- * client.spec.ts against src/client.ts seams.
+ * client.spec.ts against src/a2a-client.ts seams.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { generateKeyPairSync } from 'node:crypto'
