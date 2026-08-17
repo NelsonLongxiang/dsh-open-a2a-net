@@ -1010,7 +1010,9 @@ ${message}`
       if (teamIsLocal && webServer !== undefined) {
         // The turn signal still bounds the wait: on abort the message is
         // already delivered (steer happened), so the honest result reports
-        // delivery without a reply rather than a failure.
+        // delivery without a reply rather than a failure. Results use the
+        // canonical A2aRouteOk shape (ok/team/reply) — the wire route shape
+        // renders as "failed: undefined" through the tool's renderer.
         const aborted = new Promise<never>((_, reject) => {
           exec.signal.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
         })
@@ -1020,23 +1022,23 @@ ${message}`
         } catch {
           recordActivity('out', args.team, 'local', true)
           return {
-            routed: true,
+            ok: true,
             team: args.team,
-            session,
-            result: { text: `The message was delivered to ${args.team}, but the wait for its reply was aborted (the target session answers on its own cadence; route again with the context id).` },
+            reply: `The message was delivered to ${args.team}, but the wait for its reply was aborted (the target session answers on its own cadence; route again with the context id).`,
             task_id: `direct-${Math.random().toString(16).slice(2, 10)}`,
             context_id: args.context_id ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
+            task_status: 'TASK_STATE_ABORTED_WAIT',
           }
         }
         recordActivity('out', args.team, 'local', outcome.ok)
         if (outcome.ok) {
           return {
-            routed: true,
+            ok: true,
             team: args.team,
-            session,
-            result: { text: outcome.reply },
+            reply: outcome.reply,
             task_id: `direct-${Math.random().toString(16).slice(2, 10)}`,
             context_id: args.context_id ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
+            task_status: 'TASK_STATE_COMPLETED',
           }
         }
         failures.push(`local: ${outcome.error}`)

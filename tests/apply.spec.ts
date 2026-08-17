@@ -456,8 +456,8 @@ describe('a2a plugin decentralized routing (peers)', () => {
       await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
       const route = ctx.tools.get('a2a_route')
       const result = await route?.execute({ team: 'dsh/agent-1', message: 'same-host hello' }, runContext())
-      // The in-process local candidate answers with the wire route shape.
-      expect(result).toMatchObject({ routed: true, team: 'dsh/agent-1', result: { text: 'peer node replied' } })
+      // The in-process local candidate answers with the canonical route shape.
+      expect(result).toMatchObject({ ok: true, team: 'dsh/agent-1', reply: 'peer node replied' })
       expect(session.steer).toHaveBeenCalledTimes(1)
       // The steered header carries the node label when the route has no
       // calling session (runContext carries no agent); a joined caller
