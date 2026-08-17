@@ -437,7 +437,7 @@ describe('a2a plugin decentralized routing (peers)', () => {
       expect(result).toMatchObject({ ok: true, team: 'dsh', reply: 'peer node replied' })
       expect(peer.steer).toHaveBeenCalledTimes(1)
       const steered = (peer.steer.mock.calls[0]?.[0] as { content: Array<{ type: string; text: string }> }).content[0]
-      expect(steered?.text).toContain('[A2A direct] remote team "dsh"')
+      expect(steered?.text).toContain('[A2A direct] from "sess-1" (routed to dsh)')
     } finally {
       await ctx.fiber.dispose()
       await peer.dispose()
@@ -968,7 +968,7 @@ describe('a2a session nodes (opt-in join)', () => {
     const route = ctx.tools.get('a2a_route')
     await route?.execute({ team: 'dsh', message: 'hello peer' }, { signal: new AbortController().signal, agent: caller } as unknown as ToolRunContext)
     const steered = (peer.steer.mock.calls[0]?.[0] as { content: Array<{ type: string; text: string }> }).content[0]
-    expect(steered?.text).toContain('caller sess-1-agent-1')
+    expect(steered?.text).toContain('from "sess-1-agent-1"')
     await ctx.fiber.dispose()
     await peer.dispose()
   })

@@ -762,7 +762,12 @@ export function apply(ctx: Context, config: Config): void {
       const waiter = registerFinalWaiter(agent, (text) => {
         resolve({ ok: true, reply: text })
       })
-      const text = `[A2A direct] remote team "${team}" (caller ${caller === '' ? 'unknown' : caller}) sent:
+      // The header names the sender first: `caller` is the routing node's
+      // own label (the session that issued the route), while `team` is this
+      // request's target — showing the target as "remote team" hid the
+      // actual origin behind the receiver's own team name.
+      const from = caller === '' ? 'an unknown node' : caller
+      const text = `[A2A direct] from "${from}" (routed to ${team}) sent:
 
 ${message}`
       try {
