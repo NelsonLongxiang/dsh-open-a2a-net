@@ -39,7 +39,8 @@ shared tool runtime.
   sends one message to a team, reuses `context_id` to continue a remote conversation, and fails over across
   candidates when a peer is unreachable. `a2a_tasks` reconciles the receipt contract: every route that leaves a
   task owed a reply (async delivery, a released wait) stays queryable as pending until its
-  `[A2A receipt] task <task_id>` message correlates, then shows the outcome summary — persisted across
+  `[A2A receipt] task <task_id>` message correlates, then shows the outcome summary — with the follow-up
+  `context_id` kept on the row, persisted across
   restarts. `a2a_probe` measures the tracked fleet's reachability and round-trip latency (one verified-card
   fetch per peer, optionally narrowed to a single url) for pre-dispatch health checks, naming each miss's
   stage — `unreachable` (transport/HTTP) vs. `rejected` (distrusted card).
