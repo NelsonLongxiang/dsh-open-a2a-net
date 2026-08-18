@@ -26,6 +26,7 @@ let stateSessions: A2aSessionRow[] = []
 let stateGroups: string[] = []
 let statePeers: { url: string; score?: number }[] = []
 let stateActivity: { ts: number; dir: 'in' | 'out'; team: string; peer: string; ok: boolean }[] = []
+let stateVersion: string | undefined
 let stateOk = true
 const posts: Array<{ url: string; body: string }> = []
 const fetchMock = vi.fn<(input: string, init?: RequestInit) => Promise<Response>>()
@@ -54,6 +55,7 @@ describe('A2aControl', () => {
     stateGroups = []
     statePeers = []
     stateActivity = []
+    stateVersion = undefined
     stateOk = true
     posts.length = 0
     listById = {}
@@ -64,7 +66,7 @@ describe('A2aControl', () => {
         posts.push({ url: input, body: typeof init?.body === 'string' ? init.body : '' })
         return jsonResponse({ id: 'agent-1' })
       }
-      return stateOk ? jsonResponse({ nodes: true, sessions: stateSessions, groups: stateGroups, peers: statePeers, activity: stateActivity }) : jsonResponse({ error: 'gone' }, false)
+      return stateOk ? jsonResponse({ nodes: true, ...(stateVersion === undefined ? {} : { version: stateVersion }), sessions: stateSessions, groups: stateGroups, peers: statePeers, activity: stateActivity }) : jsonResponse({ error: 'gone' }, false)
     }))
     vi.stubGlobal('fetch', fetchMock)
   })
@@ -77,6 +79,19 @@ describe('A2aControl', () => {
     fireEvent.click(screen.getByRole('button', { name: 'A2A network' }))
   }
 
+  it('shows the plugin version badge when the state route reports one', async () => {
+    stateVersion = '0.5.4'
+    mountControl()
+    openPopover()
+    expect(await screen.findByText('v0.5.4')).toBeTruthy()
+  })
+
+  it('omits the version badge when the state route omits the field', async () => {
+    mountControl()
+    openPopover()
+    expect(await screen.findByText('Parser porting session')).toBeTruthy()
+    expect(screen.queryByText(/^v[0-9]/)).toBeNull()
+  })
   it('toggles the popover, lists session facts, and closes on outside pointerdown', async () => {
     const { container } = mountControl()
     expect(container.querySelector('[role="dialog"]')).toBeNull()

@@ -707,8 +707,11 @@ describe('a2a session nodes (opt-in join)', () => {
     // A child agent never shows up; the live root does, unjoined.
     ctx.emit('agent/created', { agent: { ...makeAgent(), id: SessionId('agent-2') } })
     const state = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as {
+      version?: string
       sessions: { id: string; label: string; team: string; name: string; description: string; joined: boolean }[]
     }
+    // The state route carries the package version (the panel's version badge).
+    expect(state.version).toBe('0.5.5')
     expect(state.sessions).toHaveLength(1)
     expect(state.sessions[0]).toMatchObject({
       id: 'agent-1',

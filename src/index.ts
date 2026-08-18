@@ -11,6 +11,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 import { dirname, join } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+// The package own version, read from package.json at load time so the
+// panel never drifts from the manifest the installer actually resolved.
+const PLUGIN_VERSION: string = String(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version)
 import { signCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { JoinedSessions } from './joined-store.ts'
@@ -638,6 +641,7 @@ export function apply(ctx: Context, config: Config): void {
             }
             const body = JSON.stringify({
               nodes: true,
+              version: PLUGIN_VERSION,
               sessions,
               groups: groupStore.list(),
               host: lanIp === '' ? {} : { lanIp },

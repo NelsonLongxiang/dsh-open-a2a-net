@@ -59,6 +59,8 @@ export interface A2aState {
   readonly peers: readonly A2aPeerRow[]
   readonly activity: readonly A2aActivityRow[]
   readonly inFlight: readonly A2aInFlightRow[]
+  /** The host plugin package version, when the state route reports it. */
+  readonly version?: string
 }
 
 /** Wake face the registration injects: opens one session through the standard sessions flow. */
@@ -73,7 +75,7 @@ export type A2aControlProps = PropsRuntime<'sidebar.footer.action'> & PropsLocal
 async function fetchState(): Promise<A2aState | undefined> {
   const response = await fetch('/__dsh_a2a/state', { cache: 'no-store' })
   if (!response.ok) return undefined
-  const body = await response.json() as { nodes?: boolean; sessions?: A2aSessionRow[]; groups?: string[]; peers?: A2aPeerRow[]; activity?: A2aActivityRow[]; inFlight?: A2aInFlightRow[] }
+  const body = await response.json() as { nodes?: boolean; version?: string; sessions?: A2aSessionRow[]; groups?: string[]; peers?: A2aPeerRow[]; activity?: A2aActivityRow[]; inFlight?: A2aInFlightRow[] }
   if (body.nodes !== true || !Array.isArray(body.sessions)) return undefined
   return {
     sessions: body.sessions,
@@ -81,6 +83,7 @@ async function fetchState(): Promise<A2aState | undefined> {
     peers: Array.isArray(body.peers) ? body.peers : [],
     activity: Array.isArray(body.activity) ? body.activity : [],
     inFlight: Array.isArray(body.inFlight) ? body.inFlight : [],
+    ...(typeof body.version === 'string' ? { version: body.version } : {}),
   }
 }
 
@@ -343,7 +346,10 @@ export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProp
             aria-label={t('a2a.title')}
             style={anchor === null ? undefined : { left: `${String(anchor.left)}px`, bottom: `${String(anchor.bottom)}px` }}
           >
-            <div className={css.title}>{t('a2a.title')}</div>
+            <div className={css.title}>
+              {t('a2a.title')}
+              {state.version !== undefined ? <span className={css.versionTag} title={state.version}>v{state.version}</span> : null}
+            </div>
             <input
               className={css.searchInput}
               type="search"

@@ -438,3 +438,13 @@
 @media (prefers-reduced-motion: reduce) {
   .inFlightPulse { animation: none; }
 }
+
+.versionTag {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--dsh-color-text-tertiary, #888);
+  background: var(--dsh-color-bg-secondary, rgba(128, 128, 128, 0.12));
+}
