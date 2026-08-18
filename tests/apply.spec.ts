@@ -399,6 +399,33 @@ describe('a2a plugin decentralized routing (peers)', () => {
     await ctx.fiber.dispose()
   })
 
+  it('answers wait:false immediately with the delivered shape (peer async)', async () => {
+    const { ctx, agents, port } = await mountJoinHarness()
+    try {
+      const session = replyingAgent(ctx)
+      agents.agent = session
+      ctx.emit('agent/created', { agent: session })
+      await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+      const response = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        body: JSON.stringify({ team: 'dsh/agent-1', message: 'long cross-host task', caller_session: 'peer-caller', wait: false }),
+      })
+      const json = await response.json() as { routed?: boolean; delivered?: boolean; task_status?: string; result?: unknown }
+      // Delivery answers at once: no result member, the delivered flag and
+      // status carry the receipt contract.
+      expect(json.routed).toBe(true)
+      expect(json.delivered).toBe(true)
+      expect(json.task_status).toBe('TASK_STATE_DELIVERED')
+      expect(json.result).toBeUndefined()
+      // The steer already happened.
+      expect(session.steer).toHaveBeenCalledTimes(1)
+      const steered = (session.steer.mock.calls[0]?.[0] as { content: Array<{ type: string; text: string }> }).content[0]
+      expect(steered?.text).toContain('from "peer-caller" (routed to dsh/agent-1)')
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
   it('drops an unreachable peer during team discovery while keeping the good one', async () => {
     const peer = await mountPeerNode()
     const ctx = new Context()

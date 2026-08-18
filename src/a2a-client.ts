@@ -37,6 +37,7 @@ const HTTP_TIMEOUT_MS = 15_000
 
 type WireRoute = {
   readonly routed?: unknown
+  readonly delivered?: unknown
   readonly error?: unknown
   readonly code?: unknown
   readonly task_id?: unknown
@@ -153,9 +154,13 @@ export class A2aClient {
     contextId?: string,
     signal?: AbortSignal,
     callerSession?: string,
+    asyncMode = false,
   ): Promise<A2aRouteResult> {
     const args: Record<string, unknown> = { team, message, caller_session: callerSession ?? this.options.sessionId }
     if (contextId !== undefined) args.context_id = contextId
+    // wait:false asks the peer to steer and answer delivered immediately —
+    // the async half of the receipt contract for cross-host long tasks.
+    if (asyncMode) args.wait = false
     let raw: WireRoute
     try {
       raw = await this.http('/a2a/direct', {
@@ -173,6 +178,19 @@ export class A2aClient {
       }
       if (typeof raw.code === 'number') failure.code = raw.code
       return failure
+    }
+    // The delivered shape (wait:false): no result member — the reply rides
+    // the receipt contract back to the caller's team instead.
+    if (raw.routed === true && raw.delivered === true) {
+      const taskId = wireText(raw.task_id)
+      return {
+        ok: true,
+        team,
+        reply: `Delivered to ${team} (async). The target routes a receipt — a message starting "[A2A receipt] task ${taskId} <outcome summary>" — back to your team when done; watch a2a_status activity or follow up with the context id.`,
+        task_id: taskId,
+        context_id: wireText(raw.context_id),
+        task_status: wireText(raw.task_status) === '' ? 'TASK_STATE_DELIVERED' : wireText(raw.task_status),
+      }
     }
     const reply = this.replyText(raw.result, '')
     return {

@@ -907,6 +907,7 @@ ${message}`
             readonly message?: unknown
             readonly context_id?: unknown
             readonly caller_session?: unknown
+            readonly wait?: unknown
           }
           try {
             body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof body
@@ -919,9 +920,60 @@ ${message}`
           const team = typeof body.team === 'string' ? body.team : ''
           const message = typeof body.message === 'string' ? body.message : ''
           const caller = typeof body.caller_session === 'string' ? body.caller_session : ''
+          const noWait = body.wait === false
           const contextId = typeof body.context_id === 'string' && body.context_id !== '' ? body.context_id : `ctx-${Math.random().toString(16).slice(2, 10)}`
           if (team === '' || message === '') {
             const payload = JSON.stringify({ error: 'team and message are required', code: -32000 })
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+            return
+          }
+          // wait:false delivers without the final-reply hold: steer resolves
+          // synchronously inside routeIntoAgentFor, so by the time the agent
+          // lookup settles the message is already in — answer delivered and
+          // let the receipt contract carry the reply.
+          if (noWait) {
+            const agent = resolveAgentForTeam(team)
+            const woken = agent !== undefined ? undefined : wakeColdTeam(team)
+            const deliver = (target: Agent): void => {
+              const from = caller === '' ? 'an unknown node' : caller
+              try {
+                steerRelay(target, `[A2A direct] from "${from}" (routed to ${team}) sent:\n\n${message}`)
+                recordActivity('in', team, caller, true)
+                const payload = JSON.stringify({
+                  routed: true,
+                  delivered: true,
+                  team,
+                  session,
+                  task_id: `direct-${Math.random().toString(16).slice(2, 10)}`,
+                  context_id: contextId,
+                  task_status: 'TASK_STATE_DELIVERED',
+                  artifacts: [],
+                })
+                res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+                res.end(payload)
+              } catch (error) {
+                recordActivity('in', team, caller, false)
+                const payload = JSON.stringify({ error: `The DSH session rejected the message: ${String(error)}`, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
+                res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+                res.end(payload)
+              }
+            }
+            if (agent !== undefined) { deliver(agent); return }
+            if (woken !== undefined) {
+              void woken.then(deliver, (error: unknown) => {
+                recordActivity('in', team, caller, false)
+                const payload = JSON.stringify({ error: `waking the session for team "${team}" failed: ${String(error)}`, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
+                res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+                res.end(payload)
+              })
+              return
+            }
+            if (team === config.team) {
+              const live = liveAgent()
+              if (live !== undefined) { deliver(live); return }
+            }
+            const payload = JSON.stringify({ error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.`, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
             return
@@ -1147,7 +1199,7 @@ ${message}`
       // to the next alternate without a caller-visible error; only
       // exhaustion surfaces, with each candidate's reason.
       for (const candidate of candidates) {
-        const result = await dispatchPeerCandidate(candidate, args.team, args.message, args.context_id, exec.signal, callerSession)
+        const result = await dispatchPeerCandidate(candidate, args.team, args.message, args.context_id, exec.signal, callerSession, args.async === true)
         if (result.ok || exec.signal.aborted) return result as unknown as Record<string, JsonValue>
         failures.push(`${candidate}: ${result.error}`)
       }
@@ -1235,15 +1287,15 @@ ${message}`
 
   /**
    * The route dispatcher's peer half: one candidate dial with the in-flight
-   * registration and activity-ring record the panel reads. Async mode cannot
-   * reuse the blocking HTTP wait — the peer's /a2a/direct only answers with
-   * the final reply — so async peer routes keep the blocking dial but the
-   * caller-side wait is bounded by the tool budget; the receipt contract
-   * covers the long tail. (Same-host async is the fully async path.)
+   * registration and activity-ring record the panel reads. Async mode sends
+   * wait:false — the peer steers and answers delivered immediately (its
+   * 0.5.2+ handler), so cross-host long tasks ride the receipt contract
+   * exactly like same-host ones; older peers that ignore the flag simply
+   * keep the blocking wait (graceful degradation).
    */
-  async function dispatchPeerCandidate(url: string, team: string, message: string, contextId: string | undefined, signal: AbortSignal, callerSession: string | undefined): Promise<A2aRouteResult> {
+  async function dispatchPeerCandidate(url: string, team: string, message: string, contextId: string | undefined, signal: AbortSignal, callerSession: string | undefined, asyncMode = false): Promise<A2aRouteResult> {
     const flight = beginRoute(team, url)
-    const result = await client.routeDirect(url, team, message, contextId, signal, callerSession)
+    const result = await client.routeDirect(url, team, message, contextId, signal, callerSession, asyncMode)
     endRoute(flight)
     recordActivity('out', team, url, result.ok)
     return result
