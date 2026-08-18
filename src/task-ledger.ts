@@ -36,6 +36,8 @@ export interface TaskRecord {
   readonly team: string
   readonly peer: string
   readonly startedAt: number
+  /** The conversation the delivery steered, for follow-up routes. */
+  readonly contextId?: string
   status: 'pending' | 'resolved'
   resolvedAt?: number
   summary?: string
@@ -79,10 +81,18 @@ export class TaskLedger {
    * @param taskId - the correlation key the receipt echoes.
    * @param team - the team the route addressed.
    * @param peer - the candidate that accepted the delivery ('local' or URL).
+   * @param contextId - the delivery's conversation id, kept for follow-up routes (empty omits it).
    */
-  track(taskId: string, team: string, peer: string): void {
+  track(taskId: string, team: string, peer: string, contextId?: string): void {
     if (taskId === '' || this.tasks.some(entry => entry.taskId === taskId)) return
-    this.tasks = [{ taskId, team, peer, startedAt: Date.now(), status: 'pending' as const }, ...this.tasks].slice(0, TASK_CAP)
+    this.tasks = [{
+      taskId,
+      team,
+      peer,
+      startedAt: Date.now(),
+      ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
+      status: 'pending' as const,
+    }, ...this.tasks].slice(0, TASK_CAP)
     this.persist()
   }
 
@@ -123,6 +133,7 @@ export class TaskLedger {
           team: typeof task.team === 'string' ? task.team : '',
           peer: typeof task.peer === 'string' ? task.peer : '',
           startedAt: typeof task.startedAt === 'number' && Number.isFinite(task.startedAt) ? task.startedAt : Date.now(),
+          ...(typeof task.contextId === 'string' && task.contextId !== '' ? { contextId: task.contextId } : {}),
           status: task.status === 'resolved' ? 'resolved' : 'pending',
           ...(typeof task.resolvedAt === 'number' && Number.isFinite(task.resolvedAt) ? { resolvedAt: task.resolvedAt } : {}),
           ...(typeof task.summary === 'string' ? { summary: task.summary } : {}),

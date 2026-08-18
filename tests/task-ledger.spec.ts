@@ -39,6 +39,14 @@ describe('TaskLedger registration and listing', () => {
     expect(record?.team).toBe('team/x')
     expect(record?.startedAt).toBe(first)
   })
+
+  it('keeps the follow-up context id on the record, omitting an empty one', () => {
+    const ledger = new TaskLedger('')
+    ledger.track('direct-aa', 'team/x', 'local', 'ctx-7f')
+    ledger.track('direct-bb', 'dsh', 'http://peer', '')
+    expect(ledger.list().find(task => task.taskId === 'direct-aa')?.contextId).toBe('ctx-7f')
+    expect(ledger.list().find(task => task.taskId === 'direct-bb')?.contextId).toBeUndefined()
+  })
 })
 
 describe('TaskLedger receipt correlation', () => {
@@ -90,13 +98,14 @@ describe('TaskLedger bounds and persistence', () => {
   it('persists the ledger across instances and reloads it on construction', () => {
     const path = ledgerPath()
     const ledger = new TaskLedger(path)
-    ledger.track('direct-aa', 'team/x', 'local')
+    ledger.track('direct-aa', 'team/x', 'local', 'ctx-7f')
     ledger.resolveFromMessage('[A2A receipt] task direct-aa done')
     const reloaded = new TaskLedger(path)
     const record = reloaded.list()[0]
     expect(record?.taskId).toBe('direct-aa')
     expect(record?.status).toBe('resolved')
     expect(record?.summary).toBe('done')
+    expect(record?.contextId).toBe('ctx-7f')
     expect(existsSync(path)).toBe(true)
     expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({ tasks: [{ taskId: 'direct-aa' }] })
   })
