@@ -37,7 +37,10 @@ shared tool runtime.
 
 - **Model tools** — `a2a_teams` lists the teams this node can see (own, peers', joined sessions'); `a2a_route`
   sends one message to a team, reuses `context_id` to continue a remote conversation, and fails over across
-  candidates when a peer is unreachable.
+  candidates when a peer is unreachable. `a2a_tasks` reconciles the receipt contract: every route that leaves a
+  task owed a reply (async delivery, a released wait) stays queryable as pending until its
+  `[A2A receipt] task <task_id>` message correlates, then shows the outcome summary — persisted across
+  restarts.
 - **Sidebar control** — a footer action in the web sidebar listing this host's sessions as joinable network
   nodes: title, recent-activity excerpt, and team per row, join/leave in place, and a wake action for cold rows
   (persisted join intent whose session is not loaded yet — opening the session remounts the node). Session teams
