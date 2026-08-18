@@ -48,7 +48,7 @@ import type { JsonValue } from '@deepseek-ai/dsh-tools'
 import { MessageId } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { A2aClient, type A2aFetch, type A2aSchedule } from './a2a-client.ts'
+import { A2aClient, type A2aFetch, type A2aSchedule, type CardFetchOutcome } from './a2a-client.ts'
 import type { A2aPeerCard, A2aRouteResult, ZoneRecord } from './types.ts'
 
 export type * from './types.ts'
@@ -1223,16 +1223,17 @@ ${message}`
   })
 
   /**
-   * Fetch one peer's card and move its store entry: the fetch is itself the
-   * reachability check — a miss degrades the peer, a verified card raises it
-   * and offers its referral list to the store. A peer offered mid-iteration
-   * is fetched on a later tool call, so gossip converges across calls.
-   * @param peer - base URL of the peer to visit.
-   * @returns the verified card, or undefined when the peer is unreachable or serves an invalid card.
+   * Settle one card-fetch outcome into the peer store and the plain card:
+   * the fetch is itself the reachability check — a miss degrades the peer, a
+   * verified card raises it and offers its referral list to the store. A
+   * peer offered mid-iteration is fetched on a later tool call, so gossip
+   * converges across calls.
+   * @param peer - base URL of the peer the outcome belongs to.
+   * @param outcome - the detailed fetch outcome (probe and discovery share it).
+   * @returns the verified card, or undefined when the peer is unreachable, rejected, or a self-referral.
    */
-  async function fetchPeerCard(peer: string): Promise<A2aPeerCard | undefined> {
-    const card = await client.fetchCard(peer)
-    if (card === undefined) {
+  function settlePeerCard(peer: string, outcome: CardFetchOutcome): A2aPeerCard | undefined {
+    if (!outcome.ok) {
       peerStore.noteFailure(peer)
       return undefined
     }
@@ -1240,13 +1241,22 @@ ${message}`
     // URL back at it) must not track the node as its own peer: the node would
     // list its own teams as remote rows and offer its own URL onward. The
     // signed card session is the identity check — no URL guessing.
-    if (card.session === session) {
+    if (outcome.card.session === session) {
       peerStore.drop(peer)
       return undefined
     }
     peerStore.noteSuccess(peer)
-    for (const referral of card.peers ?? []) peerStore.offer(referral)
-    return card
+    for (const referral of outcome.card.peers ?? []) peerStore.offer(referral)
+    return outcome.card
+  }
+
+  /**
+   * Fetch one peer's card and settle it into the store (discovery path).
+   * @param peer - base URL of the peer to visit.
+   * @returns the verified card, or undefined when the peer is unreachable or serves an invalid card.
+   */
+  async function fetchPeerCard(peer: string): Promise<A2aPeerCard | undefined> {
+    return settlePeerCard(peer, await client.fetchCardDetail(peer))
   }
 
   /**
@@ -1862,13 +1872,17 @@ ${message}`
       const targets = args.url !== undefined && args.url !== '' ? [args.url] : peerStore.list()
       const probeOne = async (url: string): Promise<{ url: string; reachable: boolean; ms: number; team?: string; error?: string }> => {
         const startedAt = Date.now()
-        const card = await fetchPeerCard(url)
+        const outcome = await client.fetchCardDetail(url)
         const ms = Date.now() - startedAt
-        // The fetch is the probe: it also moves the peer's quality score and
-        // learns its referrals, exactly like a discovery sweep would.
-        return card === undefined
-          ? { url, reachable: false, ms, error: 'no verified agent card served' }
-          : { url, reachable: true, ms, team: card.team }
+        // The fetch is the probe: settling it moves the peer's quality score
+        // and learns its referrals, exactly like a discovery sweep would,
+        // while the outcome's stage names the failure for the report.
+        const card = settlePeerCard(url, outcome)
+        if (card !== undefined) return { url, reachable: true, ms, team: card.team }
+        if (outcome.ok) return { url, reachable: false, ms, error: 'dropped: the card lists this node back as its own referral' }
+        return outcome.stage === 'unreachable'
+          ? { url, reachable: false, ms, error: `unreachable: ${outcome.detail}` }
+          : { url, reachable: false, ms, error: `rejected: ${outcome.reason} card` }
       }
       // Promise.all keeps the report in the store's preference order.
       return { ok: true, results: await Promise.all(targets.map(probeOne)) }

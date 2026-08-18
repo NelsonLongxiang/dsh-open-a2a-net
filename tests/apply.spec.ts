@@ -704,7 +704,7 @@ describe('a2a plugin decentralized routing (peers)', () => {
       expect(reachable?.team).toBe('dsh')
       const dead = result.results.find(entry => entry.url === 'http://127.0.0.1:1')
       expect(dead?.reachable).toBe(false)
-      expect(typeof dead?.error).toBe('string')
+      expect(dead?.error).toContain('unreachable')
     } finally {
       await ctx.fiber.dispose()
       await peer.dispose()
