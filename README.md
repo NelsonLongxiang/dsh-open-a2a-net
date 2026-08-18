@@ -46,6 +46,8 @@ shared tool runtime.
   (persisted join intent whose session is not loaded yet — opening the session remounts the node). Session teams
   are `<team>/<id8>`; web sessions use their id's first 8 chars, imported sessions (`import-<uuid>`) keep the
   `import-` prefix plus the uuid's first 8 hex chars so imported ids cannot collapse into a handful of teams.
+  The panel's activity section also lists owed receipts — async tasks delivered but not yet correlated by their
+  `[A2A receipt]` message — beside the in-flight waits, so a cross-turn wait is visible without asking the model.
 - **Archive leaves the network** — archiving a session (workspace registry state) prunes its join
   intent and unmounts its node: at boot settlement before any wake, on every state read (a mid-session
   archive disappears within one panel poll), and as a route-time guard that never wakes an archived
