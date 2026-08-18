@@ -691,6 +691,47 @@ describe('a2a plugin decentralized routing (peers)', () => {
       await ctx.fiber.dispose()
     }
   })
+
+  it('a2a_probe measures reachability and latency across the tracked peers', async () => {
+    const peer = await mountPeerNode()
+    const { ctx } = await mountJoinHarness({ peers: [peer.baseUrl, 'http://127.0.0.1:1'] })
+    try {
+      const result = await ctx.tools.get('a2a_probe')?.execute({}, runContext()) as { ok: boolean; results: { url: string; reachable: boolean; ms?: number; team?: string; error?: string }[] }
+      expect(result.ok).toBe(true)
+      const reachable = result.results.find(entry => entry.url === peer.baseUrl)
+      expect(reachable?.reachable).toBe(true)
+      expect(typeof reachable?.ms).toBe('number')
+      expect(reachable?.team).toBe('dsh')
+      const dead = result.results.find(entry => entry.url === 'http://127.0.0.1:1')
+      expect(dead?.reachable).toBe(false)
+      expect(typeof dead?.error).toBe('string')
+    } finally {
+      await ctx.fiber.dispose()
+      await peer.dispose()
+    }
+  })
+
+  it('a2a_probe narrows to one url when given', async () => {
+    const peer = await mountPeerNode()
+    const { ctx } = await mountJoinHarness({ peers: [peer.baseUrl] })
+    try {
+      const result = await ctx.tools.get('a2a_probe')?.execute({ url: peer.baseUrl }, runContext()) as { ok: boolean; results: { url: string }[] }
+      expect(result.results).toHaveLength(1)
+      expect(result.results[0]?.url).toBe(peer.baseUrl)
+    } finally {
+      await ctx.fiber.dispose()
+      await peer.dispose()
+    }
+  })
+
+  it('a2a_probe answers an empty fleet with ok and no results', async () => {
+    const { ctx } = await mountJoinHarness()
+    try {
+      await expect(ctx.tools.get('a2a_probe')?.execute({}, runContext())).resolves.toMatchObject({ ok: true, results: [] })
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
   it('a2a_route unblocks the caller when the target never replies (reply-wait deadline)', async () => {
     const { ctx, agents, port } = await mountJoinHarness()
     try {

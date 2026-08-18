@@ -1815,6 +1815,66 @@ ${message}`
     },
   }))
 
+  ctx.tools.register(defineTool({
+    name: 'a2a_probe',
+    description:
+      'Probe the tracked peer fleet for reachability and round-trip latency: one verified-card fetch per peer '
+      + '(the same fetch discovery uses), reporting reachable peers with their team and latency and unreachable '
+      + 'ones with the failure reason. Pass url to probe one target instead of the whole fleet. Use it before '
+      + 'dispatching verification work or when routes fail over, instead of guessing which node is down.',
+    parameters: {
+      url: { type: 'string', description: 'Optional single peer base URL to probe; empty probes every tracked peer.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          results: {
+            type: 'array',
+            required: true,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                url: { type: 'string', required: true },
+                reachable: { type: 'boolean', required: true },
+                ms: { type: 'number', description: 'Round-trip of the card fetch, reachable or not.' },
+                team: { type: 'string', description: 'The team the peer publishes, when reachable.' },
+                error: { type: 'string', description: 'Why the peer is unreachable.' },
+              },
+            },
+          },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: [
+          `Fleet probe (${String(value.results.length)}):`,
+          ...value.results.map((row: { url: string; reachable: boolean; ms?: number; team?: string; error?: string }) =>
+            `  ${row.reachable ? '✓' : '✗'} ${row.url}${row.reachable ? ` (team ${String(row.team)}, ${String(row.ms)}ms)` : ` (${String(row.error)})`}`),
+        ].join('\n'),
+      }],
+    },
+    presentCall: args => ({ card: 'generic', title: args.url === undefined || args.url === '' ? 'Probe the A2A fleet' : `Probe A2A peer: ${args.url}`, kind: 'other', rawInput: args }),
+    execute: async (args: { url?: string }): Promise<{ ok: boolean; results: { url: string; reachable: boolean; ms: number; team?: string; error?: string }[] }> => {
+      const targets = args.url !== undefined && args.url !== '' ? [args.url] : peerStore.list()
+      const probeOne = async (url: string): Promise<{ url: string; reachable: boolean; ms: number; team?: string; error?: string }> => {
+        const startedAt = Date.now()
+        const card = await fetchPeerCard(url)
+        const ms = Date.now() - startedAt
+        // The fetch is the probe: it also moves the peer's quality score and
+        // learns its referrals, exactly like a discovery sweep would.
+        return card === undefined
+          ? { url, reachable: false, ms, error: 'no verified agent card served' }
+          : { url, reachable: true, ms, team: card.team }
+      }
+      // Promise.all keeps the report in the store's preference order.
+      return { ok: true, results: await Promise.all(targets.map(probeOne)) }
+    },
+  }))
+
   /**
    * Steering targets awaiting a final reply, keyed by agent session id. Each
    * entry remembers the request id to answer and the log length when the
