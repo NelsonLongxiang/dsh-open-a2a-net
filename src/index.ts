@@ -844,6 +844,12 @@ export function apply(ctx: Context, config: Config): void {
                 peer: route.peer,
                 startedAt: route.startedAt,
               })),
+              // Owed receipts: the cross-turn waits the in-flight ring cannot
+              // show (an async dispatch rides no wait). Resolved tasks stay
+              // off the panel — the inbound activity row is their receipt.
+              tasks: taskLedger.list()
+                .filter(task => task.status === 'pending')
+                .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, status: task.status })),
             })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) })
             res.end(body)

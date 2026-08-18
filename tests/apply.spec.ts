@@ -668,6 +668,29 @@ describe('a2a plugin decentralized routing (peers)', () => {
       await ctx.fiber.dispose()
     }
   })
+
+  it('the panel state route lists tasks owed a receipt until they correlate', async () => {
+    const { ctx, agents, port } = await mountJoinHarness()
+    try {
+      const session = replyingAgent(ctx)
+      agents.agent = session
+      ctx.emit('agent/created', { agent: session })
+      await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+      const route = ctx.tools.get('a2a_route')
+      const delivered = await route?.execute({ team: 'dsh/agent-1', message: 'long task', async: true }, runContext()) as { ok: boolean; task_id: string }
+      expect(delivered.ok).toBe(true)
+      // The panel polls the state route: the owed task rides it as a
+      // pending row with its routing facts.
+      const owing = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { tasks: { taskId: string; team: string; peer: string; status: string }[] }
+      expect(owing.tasks).toEqual([{ taskId: delivered.task_id, team: 'dsh/agent-1', peer: 'local', status: 'pending', startedAt: expect.any(Number) }])
+      // Correlation clears the pending row within one poll.
+      await postJson(port, '/a2a/direct', { team: 'dsh', message: `[A2A receipt] task ${String(delivered.task_id)} tests green` })
+      const settled = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { tasks: unknown[] }
+      expect(settled.tasks).toEqual([])
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
   it('a2a_route unblocks the caller when the target never replies (reply-wait deadline)', async () => {
     const { ctx, agents, port } = await mountJoinHarness()
     try {
