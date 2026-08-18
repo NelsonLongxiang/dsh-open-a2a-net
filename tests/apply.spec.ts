@@ -732,6 +732,39 @@ describe('a2a plugin decentralized routing (peers)', () => {
       await ctx.fiber.dispose()
     }
   })
+
+  it('a cross-host async route owes its receipt with the peer candidate recorded', async () => {
+    // A distinct team keeps the route off this host's own candidate (both
+    // nodes default to 'dsh', which would answer locally and never dial).
+    const peer = await mountPeerNode({ team: 'peer-team' })
+    const { ctx, agents, port } = await mountJoinHarness({ peers: [peer.baseUrl] })
+    try {
+      const session = replyingAgent(ctx)
+      agents.agent = session
+      ctx.emit('agent/created', { agent: session })
+      const route = ctx.tools.get('a2a_route')
+      const delivered = await route?.execute({ team: 'peer-team', message: 'cross-host long task', async: true }, runContext()) as { ok: boolean; task_id: string; task_status: string }
+      expect(delivered.ok).toBe(true)
+      expect(delivered.task_status).toBe('TASK_STATE_DELIVERED')
+      // The ledger row names the dialed peer URL — the wait:false path owes
+      // its receipt exactly like the local one, with the candidate for
+      // diagnosis.
+      await expect(ctx.tools.get('a2a_tasks')?.execute({}, runContext())).resolves.toMatchObject({
+        ok: true,
+        tasks: [{ taskId: delivered.task_id, team: 'peer-team', peer: peer.baseUrl, status: 'pending' }],
+      })
+      // The peer's receipt arrives over HTTP and correlates by task id.
+      const receipt = await postJson(port, '/a2a/direct', { team: 'dsh', message: `[A2A receipt] task ${String(delivered.task_id)} cross-host green` })
+      expect(receipt.status).toBe(200)
+      await expect(ctx.tools.get('a2a_tasks')?.execute({}, runContext())).resolves.toMatchObject({
+        ok: true,
+        tasks: [{ taskId: delivered.task_id, status: 'resolved', summary: 'cross-host green' }],
+      })
+    } finally {
+      await ctx.fiber.dispose()
+      await peer.dispose()
+    }
+  })
   it('a2a_route unblocks the caller when the target never replies (reply-wait deadline)', async () => {
     const { ctx, agents, port } = await mountJoinHarness()
     try {
