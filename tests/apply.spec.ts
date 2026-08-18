@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { generateKeyPairSync } from 'node:crypto'
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -711,7 +711,7 @@ describe('a2a session nodes (opt-in join)', () => {
       sessions: { id: string; label: string; team: string; name: string; description: string; joined: boolean }[]
     }
     // The state route carries the package version (the panel's version badge).
-    expect(state.version).toBe('0.5.6')
+    expect(state.version).toBe('0.5.7')
     expect(state.sessions).toHaveLength(1)
     expect(state.sessions[0]).toMatchObject({
       id: 'agent-1',
@@ -1556,6 +1556,93 @@ describe('a2a node facts title source', () => {
       sessionTeams: { name: string }[]
     }
     expect(card.sessionTeams[0]?.name).toBe('Parser porting session')
+    await ctx.fiber.dispose()
+  })
+})
+
+describe('a2a plugin archive pruning (archived sessions leave the network)', () => {
+  const archivedId = 'session-archiv01-0000-0000-0000-000000000000'
+  const writeJoined = (home: string, ids: string[]): void => {
+    mkdirSync(join(home, 'a2a'), { recursive: true })
+    writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: ids }))
+  }
+  const readJoined = (home: string): string[] =>
+    JSON.parse(readFileSync(join(home, 'a2a', 'joined.json'), 'utf8')).sessions
+
+  it('prunes the join intent at boot when the registry reports the session archived', async () => {
+    const home = tmpHome()
+    writeJoined(home, [archivedId])
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    ctx.provide('sessionPersistence', {
+      list: async () => [{ id: SessionId(archivedId) }],
+    } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
+    ctx.provide('workspaceRegistry', { archivedSessionIds: [archivedId] })
+    apply(ctx, makeConfig({ sessionNodes: true, dshHome: home }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    // Boot settlement pruned the intent: no cold row, and the durable
+    // joined.json lost the id with it.
+    const state = await (await globalThis.fetch('http://127.0.0.1:' + String(port) + '/__dsh_a2a/state')).json() as { sessions: unknown[] }
+    expect(state.sessions).toEqual([])
+    expect(readJoined(home)).toEqual([])
+    await ctx.fiber.dispose()
+  })
+
+  it('prunes on state reads when the archive happens mid-session', async () => {
+    const home = tmpHome()
+    writeJoined(home, [archivedId])
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    ctx.provide('sessionPersistence', {
+      list: async () => [{ id: SessionId(archivedId) }],
+    } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
+    const archived: string[] = []
+    ctx.provide('workspaceRegistry', { get archivedSessionIds(): readonly string[] { return archived } })
+    apply(ctx, makeConfig({ sessionNodes: true, dshHome: home }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    const readState = async (): Promise<{ sessions: { id: string; live?: boolean }[] }> =>
+      await (await globalThis.fetch('http://127.0.0.1:' + String(port) + '/__dsh_a2a/state')).json() as { sessions: { id: string; live?: boolean }[] }
+    // Before the archive the cold joined row is listed as usual.
+    await expect(readState()).resolves.toMatchObject({ sessions: [{ id: archivedId, joined: true, live: false }] })
+    // The registry flips mid-session; the next panel poll prunes the row
+    // and the durable intent together.
+    archived.push(archivedId)
+    await expect(readState()).resolves.toMatchObject({ sessions: [] })
+    expect(readJoined(home)).toEqual([])
+    await ctx.fiber.dispose()
+  })
+
+  it('never wakes an archived cold target: the async route fails without materializing', async () => {
+    const home = tmpHome()
+    writeJoined(home, [archivedId])
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    apply(ctx, makeConfig({ sessionNodes: true, dshHome: home }))
+    // The registry mounts after apply: boot pruning saw no registry and
+    // kept the intent, so only the route-time guard stands between the
+    // archived id and a wake.
+    ctx.provide('workspaceRegistry', { archivedSessionIds: [archivedId] })
+    const materializeSession = vi.fn(() => new Promise<ReturnType<typeof makeAgent>>(() => {}))
+    ctx.provide('apiProxy', { materializeSession })
+    const route = ctx.tools.get('a2a_route')
+    const result = await route?.execute({ team: 'dsh/archiv01', message: 'hello', async: true }, runContext()) as { ok: boolean; error?: string }
+    // Archive is closure: the route answers the honest no-acceptor error
+    // and the api gateway is never asked to materialize the session.
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('No live DSH session node accepts team')
+    expect(materializeSession).not.toHaveBeenCalled()
     await ctx.fiber.dispose()
   })
 })

@@ -448,7 +448,40 @@ export function apply(ctx: Context, config: Config): void {
   const wakeColdTeam = (team: string): Promise<Agent> | undefined => {
     const id = joinedSessions.list().find(entry => !liveRoots.has(entry) && `${config.team}/${id8(entry)}` === team)
     if (id === undefined) return undefined
+    // An archived session never wakes: archive is closure, not sleep.
+    if (archivedSessionFilter()?.(id) === true) return undefined
     return materialize(id)
+  }
+
+  /**
+   * The workspace registry's archived set, when composed. Archiving is a
+   * registry state — the session store stays — so this list is the one
+   * authoritative archive signal. Read structurally: the registry is an
+   * optional neighbor, not a dependency.
+   */
+  function archivedSessionFilter(): ((id: string) => boolean) | undefined {
+    const registry = (ctx as unknown as { get(name: string): unknown }).get('workspaceRegistry') as { archivedSessionIds?: readonly unknown[] } | undefined
+    if (registry === undefined || !Array.isArray(registry.archivedSessionIds)) return undefined
+    const archived = new Set(registry.archivedSessionIds.map(String))
+    return (id: string): boolean => archived.has(id)
+  }
+
+  /**
+   * Archived sessions leave the node network: archive is closure, so the
+   * persisted join intent goes, a mounted live node unmounts, and the next
+   * listing stops advertising the team. Runs at boot settlement and on every
+   * state read — the panel's poll makes a mid-session archive disappear
+   * within one poll interval.
+   */
+  const pruneArchivedJoins = (): void => {
+    const isArchived = archivedSessionFilter()
+    if (isArchived === undefined) return
+    for (const id of joinedSessions.list()) {
+      if (!isArchived(id)) continue
+      sessionNodes.delete(id)
+      joinedSessions.remove(id)
+      logger.info(`a2a: archived session ${id8(id)} left the node network`)
+    }
   }
 
   /**
@@ -570,12 +603,15 @@ export function apply(ctx: Context, config: Config): void {
       if (joinedSessions.has(String(agent.id))) mountSessionNode(agent)
     }
 
-    if (config.wakeJoinedOnBoot) {
-      // The api gateway may activate after this row in the same tree, so the
-      // wake rides the loader tree's settlement — the same deferral the web
-      // server registration uses — instead of an apply-time snapshot that
-      // would see apiProxy before its fiber mounts and skip the wake.
-      const wakeColdJoined = (): void => {
+    {
+      // Archive pruning and boot wake both ride the loader tree's
+      // settlement: the workspace registry and the api gateway may activate
+      // after this row in the same tree, and an apply-time snapshot would
+      // see neither. Archived intents prune first — an archived session
+      // must never wake — and pruning runs even with the wake off.
+      const pruneThenWake = (): void => {
+        pruneArchivedJoins()
+        if (!config.wakeJoinedOnBoot) return
         if (ctx.get('apiProxy') === undefined) {
           logger.warn('wakeJoinedOnBoot is on but no api gateway is composed; cold joined sessions stay asleep')
           return
@@ -590,9 +626,9 @@ export function apply(ctx: Context, config: Config): void {
         }
       }
       const settled = ctx.get('loader')?.await()
-      if (settled === undefined) wakeColdJoined()
+      if (settled === undefined) pruneThenWake()
       else void settled.then(() => {
-        if (ctx.fiber.uid !== null) wakeColdJoined()
+        if (ctx.fiber.uid !== null) pruneThenWake()
       }, () => {
         // A failed boot never wakes anything; the dying tree logs its own
         // failure once.
@@ -605,6 +641,10 @@ export function apply(ctx: Context, config: Config): void {
         path: '/__dsh_a2a/state',
         handler: controlRoute((_req: IncomingMessage, res: ServerResponse) => {
           void (async () => {
+            // The panel polls this route: pruning here makes a mid-session
+            // archive leave the network within one poll interval, no restart
+            // required.
+            pruneArchivedJoins()
             const assignments = groupStore.all()
             const groupOf = (id: string): string | undefined => {
               const name = assignments[id]
