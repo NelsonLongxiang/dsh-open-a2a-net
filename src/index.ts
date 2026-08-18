@@ -1094,6 +1094,14 @@ ${message}`
       peerStore.noteFailure(peer)
       return undefined
     }
+    // A self-referral learned from a peer's card (the peer lists this node's
+    // URL back at it) must not track the node as its own peer: the node would
+    // list its own teams as remote rows and offer its own URL onward. The
+    // signed card session is the identity check — no URL guessing.
+    if (card.session === session) {
+      peerStore.drop(peer)
+      return undefined
+    }
     peerStore.noteSuccess(peer)
     for (const referral of card.peers ?? []) peerStore.offer(referral)
     return card

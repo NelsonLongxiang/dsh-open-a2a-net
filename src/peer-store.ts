@@ -97,6 +97,19 @@ export class PeerStore {
   }
 
   /**
+   * Drop one tracked peer outright — a self-referral (a peer listing this
+   * node's own URL back at it) must not linger as a tracked peer. Seeds are
+   * config-owned and stay.
+   * @param url - the peer to forget.
+   */
+  drop(url: string): void {
+    const peer = this.peers.get(url)
+    if (peer === undefined || peer.seed) return
+    this.peers.delete(url)
+    this.persist()
+  }
+
+  /**
    * Note a failed fetch of one peer. A non-seed's score drops; an
    * at-or-below-floor peer is evicted, so a bad referral disappears rather
    * than degrading forever. Seeds are config-owned and never penalized.

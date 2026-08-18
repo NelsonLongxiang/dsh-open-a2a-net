@@ -455,6 +455,44 @@ describe('a2a plugin decentralized routing (peers)', () => {
     }
   })
 
+  it('never lists itself: a self-referral card is dropped, not tracked', async () => {
+    // The peer card is signed with the SAME session label as the caller
+    // node — the shape a peer produces when it learned this node URL and
+    // lists it back. Fetching it must neither track the peer nor surface
+    // its teams (they are this host own teams).
+    const peer = await mountPeerNode()
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    // The peer node derives its own session; force it to collide with the
+    // caller by naming the caller session explicitly on both sides.
+    apply(ctx, makeConfig({ peers: [peer.baseUrl], sessionNodes: true, session: 'sess-1', dshHome: tmpHome() }))
+    try {
+      const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+      const readState = async (): Promise<{ remote: { team: string; session?: string }[]; peers: { url: string }[] }> =>
+        await (await globalThis.fetch('http://127.0.0.1:' + String(port) + '/__dsh_a2a/state')).json() as { remote: { team: string; session?: string }[]; peers: { url: string }[] }
+      await readState()
+      for (let i = 0; i < 20; i++) {
+        const state = await readState()
+        if (state.peers.some(p => p.url === peer.baseUrl)) {
+          // The peer was contacted; if its card carries our session label
+          // the guard must have dropped it again by now.
+          await new Promise(resolve => setImmediate(resolve))
+          continue
+        }
+        await new Promise(resolve => setImmediate(resolve))
+      }
+      // Final check after the sweep settled: the self-labeled card is gone
+      // from the store and no remote row carries its teams.
+      const state = await readState()
+      expect(state.remote).toEqual([])
+    } finally {
+      await ctx.fiber.dispose()
+      await peer.dispose()
+    }
+  })
   it('the state route lists peer-side teams as remote rows for the panel', async () => {
     const peer = await mountPeerNode()
     const ctx = new Context()
@@ -743,7 +781,7 @@ describe('a2a session nodes (opt-in join)', () => {
       sessions: { id: string; label: string; team: string; name: string; description: string; joined: boolean }[]
     }
     // The state route carries the package version (the panel's version badge).
-    expect(state.version).toBe('0.5.8')
+    expect(state.version).toBe('0.5.9')
     expect(state.sessions).toHaveLength(1)
     expect(state.sessions[0]).toMatchObject({
       id: 'agent-1',
