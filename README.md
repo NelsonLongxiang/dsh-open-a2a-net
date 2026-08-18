@@ -30,6 +30,10 @@ shared tool runtime.
   (persisted join intent whose session is not loaded yet — opening the session remounts the node). Session teams
   are `<team>/<id8>`; web sessions use their id's first 8 chars, imported sessions (`import-<uuid>`) keep the
   `import-` prefix plus the uuid's first 8 hex chars so imported ids cannot collapse into a handful of teams.
+- **Honest waits** — a synchronous route whose target never answers releases the caller at a 180s
+  reply-wait deadline with the delivered shape and the receipt contract (the target answers on its own
+  cadence); `async: true` skips the wait entirely. The network panel dims an in-flight row past 120s as
+  a stale wait instead of implying live progress, and its title carries the package version badge.
 - **Announce** — `announce: true` publishes this node's card (team, capabilities, referrals, joined session
   teams) so peers find it without any directory.
 

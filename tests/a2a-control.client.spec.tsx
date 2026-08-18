@@ -25,6 +25,7 @@ const openSession = vi.fn<(id: string) => void>()
 let stateSessions: A2aSessionRow[] = []
 let stateGroups: string[] = []
 let statePeers: { url: string; score?: number }[] = []
+let stateInFlight: { team: string; peer: string; startedAt: number }[] = []
 let stateActivity: { ts: number; dir: 'in' | 'out'; team: string; peer: string; ok: boolean }[] = []
 let stateVersion: string | undefined
 let stateOk = true
@@ -54,6 +55,7 @@ describe('A2aControl', () => {
     stateSessions = [row()]
     stateGroups = []
     statePeers = []
+    stateInFlight = []
     stateActivity = []
     stateVersion = undefined
     stateOk = true
@@ -66,7 +68,7 @@ describe('A2aControl', () => {
         posts.push({ url: input, body: typeof init?.body === 'string' ? init.body : '' })
         return jsonResponse({ id: 'agent-1' })
       }
-      return stateOk ? jsonResponse({ nodes: true, ...(stateVersion === undefined ? {} : { version: stateVersion }), sessions: stateSessions, groups: stateGroups, peers: statePeers, activity: stateActivity }) : jsonResponse({ error: 'gone' }, false)
+      return stateOk ? jsonResponse({ nodes: true, ...(stateVersion === undefined ? {} : { version: stateVersion }), sessions: stateSessions, groups: stateGroups, peers: statePeers, activity: stateActivity, inFlight: stateInFlight }) : jsonResponse({ error: 'gone' }, false)
     }))
     vi.stubGlobal('fetch', fetchMock)
   })
@@ -211,6 +213,14 @@ describe('A2aControl', () => {
     expect(posts).toEqual([])
   })
 
+  it('dims an in-flight row whose reply wait is stale', async () => {
+    stateInFlight = [{ team: 'dsh/agent-1', peer: 'local', startedAt: Date.now() - 150_000 }]
+    mountControl()
+    openPopover()
+    expect(await screen.findByText('Routing activity')).toBeTruthy()
+    // The stale row carries the explanatory tooltip instead of implying an active pulse.
+    expect(screen.getByTitle(/Reply wait past 120s/)).toBeTruthy()
+  })
   it('renders the peer fleet and the routing activity ring', async () => {
     statePeers = [{ url: 'http://127.0.0.1:41243', score: 10_040 }, { url: 'http://10.20.30.42:3001', score: 9_860 }]
     stateActivity = [

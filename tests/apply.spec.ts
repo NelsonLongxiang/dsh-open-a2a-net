@@ -711,7 +711,7 @@ describe('a2a session nodes (opt-in join)', () => {
       sessions: { id: string; label: string; team: string; name: string; description: string; joined: boolean }[]
     }
     // The state route carries the package version (the panel's version badge).
-    expect(state.version).toBe('0.5.5')
+    expect(state.version).toBe('0.5.6')
     expect(state.sessions).toHaveLength(1)
     expect(state.sessions[0]).toMatchObject({
       id: 'agent-1',

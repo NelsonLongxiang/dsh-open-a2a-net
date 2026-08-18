@@ -15,6 +15,7 @@ export type A2aNetKey =
   | 'a2a.activity'
   | 'a2a.activityEmpty'
   | 'a2a.inFlight'
+  | 'a2a.inFlightStale'
   | 'a2a.jump'
   | 'a2a.search'
   | 'a2a.searchEmpty'
@@ -39,6 +40,7 @@ export const zh: Record<A2aNetKey, string> = {
   'a2a.activity': '路由活动',
   'a2a.activityEmpty': '暂无路由记录',
   'a2a.inFlight': '进行中的路由',
+  'a2a.inFlightStale': '等待回执超时（对端处理慢或回执丢失）；180 秒后自动解除并按已送达处理',
   'a2a.jump': '点击跳转到该会话',
   'a2a.search': '搜索会话（名称 / team / 摘要）',
   'a2a.searchEmpty': '没有匹配的会话',
@@ -64,6 +66,7 @@ export const en: Record<A2aNetKey, string> = {
   'a2a.activity': 'Routing activity',
   'a2a.activityEmpty': 'No routes yet',
   'a2a.inFlight': 'Routes in flight',
+  'a2a.inFlightStale': 'Reply wait past 120s (slow or lost receipt); auto-releases as delivered at 180s',
   'a2a.jump': 'Click to open this session',
   'a2a.search': 'Search sessions (name / team / excerpt)',
   'a2a.searchEmpty': 'No sessions match',

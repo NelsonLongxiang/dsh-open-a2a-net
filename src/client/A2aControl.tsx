@@ -459,7 +459,11 @@ export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProp
             {inFlight.length > 0 && (
               <div className={css.inFlightList} aria-label={t('a2a.inFlight')}>
                 {inFlight.map((route) => (
-                  <div key={`${route.team}-${String(route.startedAt)}`} className={css.inFlightRow}>
+                  <div
+                    key={`${route.team}-${String(route.startedAt)}`}
+                    className={clsx(css.inFlightRow, Date.now() - route.startedAt > 120_000 && css.inFlightStale)}
+                    title={Date.now() - route.startedAt > 120_000 ? t('a2a.inFlightStale') : undefined}
+                  >
                     <span className={css.inFlightPulse} aria-hidden />
                     <span className={clsx(css.activityDir, 'out')}>{'→'}</span>
                     <span className={css.activityTeam} title={route.team}>{route.team}</span>

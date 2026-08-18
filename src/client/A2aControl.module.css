@@ -448,3 +448,11 @@
   color: var(--dsh-color-text-tertiary, #888);
   background: var(--dsh-color-bg-secondary, rgba(128, 128, 128, 0.12));
 }
+
+.inFlightStale {
+  opacity: 0.55;
+}
+.inFlightStale .inFlightPulse {
+  animation: none;
+  opacity: 0.4;
+}
