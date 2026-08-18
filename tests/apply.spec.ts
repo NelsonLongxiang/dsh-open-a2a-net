@@ -527,6 +527,38 @@ describe('a2a plugin decentralized routing (peers)', () => {
       await ctx.fiber.dispose()
     }
   })
+  it('a2a_route unblocks the caller when the target never replies (reply-wait deadline)', async () => {
+    const { ctx, agents, port } = await mountJoinHarness()
+    try {
+      // A silent agent: steer delivers but never answers, so the reply wait
+      // would park the caller's turn forever without the deadline.
+      const silent = makeAgent()
+      agents.agent = silent
+      ctx.emit('agent/created', { agent: silent })
+      await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+      const route = ctx.tools.get('a2a_route')
+      vi.useFakeTimers()
+      let result: unknown
+      try {
+        const pending = route?.execute({ team: 'dsh/agent-1', message: 'slow target' }, runContext()) as Promise<unknown>
+        await vi.advanceTimersByTimeAsync(180_000)
+        result = await pending
+      } finally {
+        vi.useRealTimers()
+      }
+      const delivered = result as { ok: boolean; team: string; reply: string; task_status: string }
+      // Delivery stands on its own; the deadline releases the turn with the
+      // receipt contract as the follow-up path.
+      expect(delivered.ok).toBe(true)
+      expect(delivered.team).toBe('dsh/agent-1')
+      expect(delivered.task_status).toBe('TASK_STATE_DELIVERED')
+      expect(delivered.reply).toContain('no reply arrived within 180s')
+      expect(delivered.reply).toContain('[A2A receipt] task')
+      expect(silent.steer).toHaveBeenCalledTimes(1)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
 
   it('a2a_route fails over to the next peer publishing the team when the first candidate fails', async () => {
     // Both peers publish `shared`; the first has no live agent, so its direct

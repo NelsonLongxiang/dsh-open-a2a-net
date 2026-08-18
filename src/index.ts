@@ -1305,10 +1305,36 @@ ${message}`
     const aborted = new Promise<never>((_, reject) => {
       signal.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
     })
+    // A reply wait without a deadline parks the caller's whole turn forever
+    // when the target session answers on its own (slow or never) cadence. The
+    // deadline turns that into the same honest delivered shape the abort path
+    // returns: the receipt contract carries the follow-up, the caller keeps
+    // moving.
+    const REPLY_WAIT_MS = 180_000
+    const expired = new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => { reject(new Error('reply-wait-timeout')) }, REPLY_WAIT_MS)
+      timer.unref?.()
+      const done = (): void => { clearTimeout(timer); signal.removeEventListener('abort', onAbort) }
+      const onAbort = (): void => done()
+      signal.addEventListener('abort', onAbort, { once: true })
+      wait.then(done, done)
+    })
     let outcome: Awaited<ReturnType<typeof routeIntoAgent>>
     try {
-      outcome = await Promise.race([wait, aborted])
-    } catch {
+      outcome = await Promise.race([wait, aborted, expired])
+    } catch (error) {
+      if (String(error).includes('reply-wait-timeout')) {
+        endRoute(flight)
+        recordActivity('out', team, 'local', true)
+        return {
+          ok: true,
+          team,
+          reply: `The message was delivered to ${team}, but no reply arrived within ${Math.round(REPLY_WAIT_MS / 1000)}s (the target session answers on its own cadence). It routes a receipt, a message starting "[A2A receipt] task ${taskId}", back to your team when done; check a2a_status activity or follow up with the context id.`,
+          task_id: taskId,
+          context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
+          task_status: 'TASK_STATE_DELIVERED',
+        }
+      }
       endRoute(flight)
       recordActivity('out', team, 'local', true)
       return {
