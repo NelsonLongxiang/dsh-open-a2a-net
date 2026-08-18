@@ -40,7 +40,8 @@ shared tool runtime.
   candidates when a peer is unreachable. `a2a_tasks` reconciles the receipt contract: every route that leaves a
   task owed a reply (async delivery, a released wait) stays queryable as pending until its
   `[A2A receipt] task <task_id>` message correlates, then shows the outcome summary — persisted across
-  restarts.
+  restarts. `a2a_probe` measures the tracked fleet's reachability and round-trip latency (one verified-card
+  fetch per peer, optionally narrowed to a single url) for pre-dispatch health checks.
 - **Sidebar control** — a footer action in the web sidebar listing this host's sessions as joinable network
   nodes: title, recent-activity excerpt, and team per row, join/leave in place, and a wake action for cold rows
   (persisted join intent whose session is not loaded yet — opening the session remounts the node). Session teams
