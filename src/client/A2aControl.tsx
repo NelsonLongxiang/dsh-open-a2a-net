@@ -60,6 +60,15 @@ export interface A2aInFlightRow {
   readonly startedAt: number
 }
 
+/** One outbound task owed a receipt, as the state route reports it. */
+export interface A2aTaskRow {
+  readonly taskId: string
+  readonly team: string
+  readonly peer: string
+  readonly startedAt: number
+  readonly status: string
+}
+
 /** The state route's full body. */
 export interface A2aState {
   readonly sessions: readonly A2aSessionRow[]
@@ -68,6 +77,7 @@ export interface A2aState {
   readonly peers: readonly A2aPeerRow[]
   readonly activity: readonly A2aActivityRow[]
   readonly inFlight: readonly A2aInFlightRow[]
+  readonly tasks: readonly A2aTaskRow[]
   /** The host plugin package version, when the state route reports it. */
   readonly version?: string
 }
@@ -84,7 +94,7 @@ export type A2aControlProps = PropsRuntime<'sidebar.footer.action'> & PropsLocal
 async function fetchState(): Promise<A2aState | undefined> {
   const response = await fetch('/__dsh_a2a/state', { cache: 'no-store' })
   if (!response.ok) return undefined
-  const body = await response.json() as { nodes?: boolean; version?: string; sessions?: A2aSessionRow[]; groups?: string[]; remote?: A2aRemoteRow[]; peers?: A2aPeerRow[]; activity?: A2aActivityRow[]; inFlight?: A2aInFlightRow[] }
+  const body = await response.json() as { nodes?: boolean; version?: string; sessions?: A2aSessionRow[]; groups?: string[]; remote?: A2aRemoteRow[]; peers?: A2aPeerRow[]; activity?: A2aActivityRow[]; inFlight?: A2aInFlightRow[]; tasks?: A2aTaskRow[] }
   if (body.nodes !== true || !Array.isArray(body.sessions)) return undefined
   return {
     sessions: body.sessions,
@@ -92,6 +102,7 @@ async function fetchState(): Promise<A2aState | undefined> {
     peers: Array.isArray(body.peers) ? body.peers : [],
     activity: Array.isArray(body.activity) ? body.activity : [],
     inFlight: Array.isArray(body.inFlight) ? body.inFlight : [],
+    tasks: Array.isArray(body.tasks) ? body.tasks : [],
     remote: Array.isArray(body.remote) ? body.remote : [],
     ...(typeof body.version === 'string' ? { version: body.version } : {}),
   }
@@ -218,7 +229,7 @@ function SessionRow({ row, t, listById, openSession, busy, onToggle, pickerFor, 
  */
 export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProps) {
   const [open, setOpen] = useState(false)
-  const [state, setState] = useState<A2aState>({ sessions: [], groups: [], peers: [], activity: [], inFlight: [], remote: [] })
+  const [state, setState] = useState<A2aState>({ sessions: [], groups: [], peers: [], activity: [], inFlight: [], tasks: [], remote: [] })
   const [busy, setBusy] = useState<string | null>(null)
   const [seenActivity, setSeenActivity] = useState(0)
   // Panel-local search: filters session rows by name/team/description.
@@ -316,7 +327,7 @@ export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProp
       .catch(() => {})
   }
 
-  const { sessions, groups, peers, activity, inFlight, remote } = state
+  const { sessions, groups, peers, activity, inFlight, tasks, remote } = state
   // Search filters by name, team, or description (case-insensitive).
   const needle = search.trim().toLowerCase()
   const matches = (row: A2aSessionRow): boolean => {
@@ -525,6 +536,25 @@ export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProp
                   </div>
                 ))}
               </div>
+            )}
+            {tasks.length > 0 && (
+              <>
+                <div className={css.sectionTitle}>{t('a2a.tasks')}</div>
+                <div className={css.inFlightList} aria-label={t('a2a.tasks')}>
+                  {tasks.map((task) => (
+                    <div
+                      key={task.taskId}
+                      className={css.inFlightRow}
+                      title={t('a2a.tasksNote')}
+                    >
+                      <span className={clsx(css.activityDir, 'out')}>{'→'}</span>
+                      <span className={css.activityTeam} title={task.team}>{task.team}</span>
+                      <span className={css.activityPeer}>{task.peer === 'local' ? '' : task.peer.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}</span>
+                      <span className={css.activityTime}>{relativeTime(task.startedAt)}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
             {activity.length === 0
               ? <div className={css.empty}>{t('a2a.activityEmpty')}</div>

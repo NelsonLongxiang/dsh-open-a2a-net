@@ -26,6 +26,7 @@ let stateSessions: A2aSessionRow[] = []
 let stateGroups: string[] = []
 let statePeers: { url: string; score?: number }[] = []
 let stateInFlight: { team: string; peer: string; startedAt: number }[] = []
+let stateTasks: { taskId: string; team: string; peer: string; startedAt: number; status: string }[] = []
 let stateRemote: { team: string; name: string; origin?: string; workspace?: string }[] = []
 let stateActivity: { ts: number; dir: 'in' | 'out'; team: string; peer: string; ok: boolean }[] = []
 let stateVersion: string | undefined
@@ -57,6 +58,7 @@ describe('A2aControl', () => {
     stateGroups = []
     statePeers = []
     stateInFlight = []
+    stateTasks = []
     stateRemote = []
     stateActivity = []
     stateVersion = undefined
@@ -70,7 +72,7 @@ describe('A2aControl', () => {
         posts.push({ url: input, body: typeof init?.body === 'string' ? init.body : '' })
         return jsonResponse({ id: 'agent-1' })
       }
-      return stateOk ? jsonResponse({ nodes: true, ...(stateVersion === undefined ? {} : { version: stateVersion }), sessions: stateSessions, groups: stateGroups, peers: statePeers, activity: stateActivity, inFlight: stateInFlight, remote: stateRemote }) : jsonResponse({ error: 'gone' }, false)
+      return stateOk ? jsonResponse({ nodes: true, ...(stateVersion === undefined ? {} : { version: stateVersion }), sessions: stateSessions, groups: stateGroups, peers: statePeers, activity: stateActivity, inFlight: stateInFlight, tasks: stateTasks, remote: stateRemote }) : jsonResponse({ error: 'gone' }, false)
     }))
     vi.stubGlobal('fetch', fetchMock)
   })
@@ -95,6 +97,29 @@ describe('A2aControl', () => {
     openPopover()
     expect(await screen.findByText('Parser porting session')).toBeTruthy()
     expect(screen.queryByText(/^v[0-9]/)).toBeNull()
+  })
+
+  it('lists tasks owed a receipt with their wait age', async () => {
+    // A distinct session team keeps the owed-row assertions unambiguous.
+    stateSessions = [row({ team: 'dsh/agent-9' })]
+    stateTasks = [
+      { taskId: 'direct-aa', team: 'dsh/agent-1', peer: 'local', startedAt: Date.now() - 65_000, status: 'pending' },
+      { taskId: 'direct-bb', team: 'team-x', peer: 'http://192.168.1.4:41243', startedAt: Date.now() - 3_600_000, status: 'pending' },
+    ]
+    mountControl()
+    openPopover()
+    expect(await screen.findByText('Owed receipts')).toBeTruthy()
+    expect(screen.getByText('dsh/agent-1')).toBeTruthy()
+    expect(screen.getByText('team-x')).toBeTruthy()
+    expect(screen.getByText('1m')).toBeTruthy()
+    expect(screen.getByText('1h')).toBeTruthy()
+  })
+
+  it('hides the owed-receipts block when no task is pending', async () => {
+    mountControl()
+    openPopover()
+    expect(await screen.findByText('Parser porting session')).toBeTruthy()
+    expect(screen.queryByText('Owed receipts')).toBeNull()
   })
   it('toggles the popover, lists session facts, and closes on outside pointerdown', async () => {
     const { container } = mountControl()
