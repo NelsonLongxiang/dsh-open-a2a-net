@@ -337,11 +337,16 @@ describe('a2a plugin announce (peer discovery)', () => {
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(TimerService)
     apply(ctx, makeConfig({ peers: ['http://bare-peer'], dshHome: tmpHome() }))
-    await expect(ctx.tools.get('a2a_teams')?.execute({}, runContext())).resolves.toMatchObject({
-      ok: true,
-      // The host's own process team leads; the peer card's team follows.
-      teams: [{ team: 'dsh', local: true }, { team: 'solo' }],
-    })
+    const listed = await ctx.tools.get('a2a_teams')?.execute({}, runContext()) as { ok: boolean; teams: { team: string; local?: boolean; origin?: string }[] }
+    expect(listed.ok).toBe(true)
+    // The host's own process team leads with its origin tag; the peer card's
+    // team follows with the publisher session as its origin (the natural
+    // grouping dimension for fleet rows).
+    expect(listed.teams[0]?.team).toBe('dsh')
+    expect(listed.teams[0]?.local).toBe(true)
+    expect(listed.teams[0]?.origin).toContain('this host')
+    expect(listed.teams[1]?.team).toBe('solo')
+    expect(listed.teams[1]?.origin).toBe('sess-9')
     await ctx.fiber.dispose()
   })
 })

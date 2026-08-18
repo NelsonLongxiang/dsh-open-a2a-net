@@ -986,10 +986,10 @@ ${message}`
     description:
       'List or search reachable A2A teams: this host\'s own process team and joined session nodes first (marked [this host], '
       + 'routable over loopback — same-host collaboration needs no peers), then teams across the tracked peer network '
-      + 'with owner label and a recent-activity excerpt for joined sessions. Pass query to filter by keyword '
-      + '(case-insensitive substring over team name, session title, and activity excerpt) — searching discovers one '
-      + 'extra referral hop within the call, so a keyword hunt reaches sessions the previous call had not yet gossiped. '
-      + 'Call this before a2a_route to pick a target team.',
+      + 'with owner label, a recent-activity excerpt, the publishing host (origin: node label + LAN IP — the natural '
+      + 'grouping when a fleet spans machines), and the session\'s working directory when shared. Pass query to filter '
+      + 'by keyword (case-insensitive substring over team name, title, excerpt, origin, or workspace) — searching '
+      + 'discovers one extra referral hop within the call. Call this before a2a_route to pick a target team.',
     parameters: {
       query: { type: 'string', description: 'Optional keyword filter (case-insensitive substring over team/name/description).' },
     },
@@ -1012,6 +1012,8 @@ ${message}`
                 name: { type: 'string', required: true },
                 description: { type: 'string', required: true },
                 local: { type: 'boolean', description: 'true when the team is served by this host (loopback candidate).' },
+                origin: { type: 'string', description: 'The publishing host (node session label, LAN IP when known) — the natural grouping for fleet rows.' },
+                workspace: { type: 'string', description: 'The session\'s working directory, when shared.' },
               },
             },
           },
@@ -1021,16 +1023,17 @@ ${message}`
         type: 'text',
         text: value.teams.length === 0
           ? `No A2A teams${(value.query ?? '') === '' ? '' : ` matching "${String(args.query)}"`} are currently reachable.`
-          : value.teams.map(team => `- ${team.team}${team.local === true ? ' [this host]' : ''}${team.name === '' ? '' : ` (${team.name})`}${team.description === '' ? '' : ` — ${team.description}`}`).join('\n'),
+          : value.teams.map(team => `- ${team.team}${team.local === true ? ' [this host]' : ''}${team.name === '' ? '' : ` (${team.name})`}${team.description === '' ? '' : ` — ${team.description}`}${typeof team.origin === 'string' && team.origin !== '' && team.local !== true ? ` @ ${team.origin}` : ''}${typeof team.workspace === 'string' && team.workspace !== '' ? ` [${team.workspace}]` : ''}`).join('\n'),
       }],
     },
     presentCall: args => ({ card: 'generic', title: args.query === undefined || args.query === '' ? 'List reachable A2A teams' : `Search A2A teams: ${args.query}`, kind: 'other', rawInput: args }),
-    execute: async (args: { query?: string }): Promise<{ ok: boolean; query: string; teams: { team: string; session: string; name: string; description: string; local?: boolean }[] }> => {
+    execute: async (args: { query?: string }): Promise<{ ok: boolean; query: string; teams: DirectoryTeamRow[] }> => {
       const query = args.query?.trim().toLowerCase() ?? ''
       const teams = await listDirectoryTeams(query !== '')
       if (query === '') return { ok: true, query: '', teams }
-      const matches = (team: { team: string; name: string; description: string }): boolean =>
+      const matches = (team: DirectoryTeamRow): boolean =>
         team.team.toLowerCase().includes(query) || team.name.toLowerCase().includes(query) || team.description.toLowerCase().includes(query)
+        || (team.origin ?? '').toLowerCase().includes(query) || (team.workspace ?? '').toLowerCase().includes(query)
       return { ok: true, query, teams: teams.filter(matches) }
     },
   }))
@@ -1052,32 +1055,49 @@ ${message}`
    * while staying bounded (one extra sweep, still under the store cap).
    * @param expand - chase one referral hop beyond the current store walk.
    */
-  async function listDirectoryTeams(expand: boolean): Promise<{ team: string; session: string; name: string; description: string; local?: boolean }[]> {
-    const teams: { team: string; session: string; name: string; description: string; local?: boolean }[] = [
-      { team: config.team, session, name: config.agentName, description: '', local: true },
+  type DirectoryTeamRow = { team: string; session: string; name: string; description: string; local?: boolean; origin?: string; workspace?: string }
+  async function listDirectoryTeams(expand: boolean): Promise<DirectoryTeamRow[]> {
+    const localOrigin = lanIp === '' ? `${session} [this host]` : `${session} [this host, ${lanIp}]`
+    const teams: DirectoryTeamRow[] = [
+      { team: config.team, session, name: config.agentName, description: '', local: true, origin: localOrigin },
       ...[...sessionNodes.values()].map(agent => ({
         team: sessionTeamOf(agent),
         session,
         ...nodeMetadataOf(agent),
         local: true,
+        origin: localOrigin,
       })),
     ]
     const fetch = memoizedCardFetch()
-    const collectPeer = async (peer: string): Promise<void> => {
+    // Collect per peer in store order (concurrent fetches, ordered merge):
+    // the listing's row order follows the peer store's preference order,
+    // independent of fetch completion timing.
+    const collectPeer = async (peer: string): Promise<DirectoryTeamRow[]> => {
       const card = await fetch(peer)
-      if (card === undefined) return
-      teams.push({ team: card.team, session: card.session, name: card.name, description: '' })
+      if (card === undefined) return []
+      // The origin fields (publisher session label + LAN IP) are natural
+      // grouping dimensions: a fleet's rows cluster by the host that owns
+      // them, no manual grouping required.
+      const origin = card.lanIp !== undefined ? `${card.session} (${card.lanIp})` : card.session
+      const rows: DirectoryTeamRow[] = [
+        { team: card.team, session: card.session, name: card.name, description: '', origin },
+      ]
       for (const entry of card.sessionTeams ?? []) {
-        teams.push({ team: entry.team, session: card.session, name: entry.name, description: entry.description })
+        rows.push({ team: entry.team, session: card.session, name: entry.name, description: entry.description, origin, ...(entry.workspace !== undefined ? { workspace: entry.workspace } : {}) })
       }
+      return rows
     }
-    const before = new Set(peerStore.list())
-    await Promise.all([...before].map(collectPeer))
+    const sweep = async (peers: readonly string[]): Promise<void> => {
+      const collected = await Promise.all(peers.map(collectPeer))
+      for (const rows of collected) teams.push(...rows)
+    }
+    const before = peerStore.list()
+    await sweep(before)
     if (expand) {
       // One extra hop: only peers the first sweep's referrals newly offered,
       // collected once each — the memo keeps already-fetched URLs free.
-      const fresh = peerStore.list().filter(peer => !before.has(peer))
-      if (fresh.length > 0) await Promise.all(fresh.map(collectPeer))
+      const fresh = peerStore.list().filter(peer => !before.includes(peer))
+      if (fresh.length > 0) await sweep(fresh)
     }
     return teams
   }

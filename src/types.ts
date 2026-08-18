@@ -29,6 +29,11 @@ export interface A2aPeerCard {
    * session's title and recent-activity excerpt as facts.
    */
   readonly sessionTeams?: readonly A2aSessionTeamInfo[]
+  /**
+   * The publishing host's LAN IPv4. Unsigned and optional: served fresh, it
+   * lets peers group and tell machines apart in a same-team fleet.
+   */
+  readonly lanIp?: string
   /** Base64 SPKI DER of the signing node's Ed25519 public key. */
   readonly publicKey: string
   /**
@@ -49,6 +54,8 @@ export interface A2aSessionTeamInfo {
   readonly name: string
   /** One-line excerpt of the session's newest user or assistant text. */
   readonly description: string
+  /** The session's working directory, when the publishing node shares it. */
+  readonly workspace?: string
 }
 
 /**

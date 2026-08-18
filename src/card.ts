@@ -74,6 +74,7 @@ interface WireCard {
   readonly peers?: unknown
   readonly sessionTeams?: unknown
   readonly records?: unknown
+  readonly lanIp?: unknown
   readonly publicKey?: unknown
   readonly signature?: unknown
 }
@@ -125,7 +126,12 @@ function sessionTeams(wire: WireCard): readonly A2aSessionTeamInfo[] | undefined
     const team = entry as Partial<A2aSessionTeamInfo> | null
     if (typeof team?.team !== 'string' || team.team === '') continue
     if (typeof team.name !== 'string' || typeof team.description !== 'string') continue
-    entries.push({ team: team.team, name: team.name, description: team.description })
+    entries.push({
+      team: team.team,
+      name: team.name,
+      description: team.description,
+      ...(typeof team.workspace === 'string' && team.workspace !== '' ? { workspace: team.workspace } : {}),
+    })
   }
   return entries
 }
@@ -177,6 +183,7 @@ export function verifyCard(candidate: unknown, now: number): CardVerification {
       expiresAt: wire.expiresAt,
       ...(peers !== undefined ? { peers } : {}),
       ...(teams !== undefined && teams.length > 0 ? { sessionTeams: teams } : {}),
+      ...(typeof wire.lanIp === 'string' && wire.lanIp !== '' ? { lanIp: wire.lanIp } : {}),
       publicKey: wire.publicKey,
       signature: wire.signature,
     },
