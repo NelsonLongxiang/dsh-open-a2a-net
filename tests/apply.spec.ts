@@ -455,6 +455,38 @@ describe('a2a plugin decentralized routing (peers)', () => {
     }
   })
 
+  it('the state route lists peer-side teams as remote rows for the panel', async () => {
+    const peer = await mountPeerNode()
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    apply(ctx, makeConfig({ peers: [peer.baseUrl], sessionNodes: true, dshHome: tmpHome() }))
+    try {
+      const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+      const readState = async (): Promise<{ remote: { team: string; name: string; origin?: string }[] }> => {
+        const response = await globalThis.fetch('http://127.0.0.1:' + String(port) + '/__dsh_a2a/state')
+        const text = await response.text()
+        if (text === '') throw new Error('empty state body, status ' + String(response.status))
+        return JSON.parse(text) as { remote: { team: string; name: string; origin?: string }[] }
+      }
+      // The first read kicks the background sweep and may answer empty; the
+      // next picks the fresh rows up (the panel polls).
+      await readState()
+      for (let i = 0; i < 20; i++) {
+        const state = await readState()
+        // The peer row carries its origin (session label + LAN IP) so the
+        // panel can group remote teams by publishing host.
+        if (state.remote.some(row => row.team === "dsh" && row.origin !== undefined)) return
+        await new Promise(resolve => setImmediate(resolve))
+      }
+      throw new Error('remote rows never appeared')
+    } finally {
+      await ctx.fiber.dispose()
+      await peer.dispose()
+    }
+  })
   it('a2a_route connects directly to a peer node and returns its reply', async () => {
     const peer = await mountPeerNode()
     const ctx = new Context()
@@ -711,7 +743,7 @@ describe('a2a session nodes (opt-in join)', () => {
       sessions: { id: string; label: string; team: string; name: string; description: string; joined: boolean }[]
     }
     // The state route carries the package version (the panel's version badge).
-    expect(state.version).toBe('0.5.7')
+    expect(state.version).toBe('0.5.8')
     expect(state.sessions).toHaveLength(1)
     expect(state.sessions[0]).toMatchObject({
       id: 'agent-1',

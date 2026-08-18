@@ -10,6 +10,8 @@ export type A2aNetKey =
   | 'a2a.cold'
   | 'a2a.wake'
   | 'a2a.note'
+  | 'a2a.remote'
+  | 'a2a.remoteUnknownOrigin'
   | 'a2a.peers'
   | 'a2a.peersEmpty'
   | 'a2a.activity'
@@ -35,6 +37,8 @@ export const zh: Record<A2aNetKey, string> = {
   'a2a.cold': '未加载（重启后待唤醒）',
   'a2a.wake': '唤醒',
   'a2a.note': '只有加入的会话才会被网络中的其他节点发现；点击会话行可跳转。',
+  'a2a.remote': '远程节点（按 host 分组）',
+  'a2a.remoteUnknownOrigin': '未知来源',
   'a2a.peers': '对等节点',
   'a2a.peersEmpty': '尚无已知对等节点（配 peers 种子入网）',
   'a2a.activity': '路由活动',
@@ -61,6 +65,8 @@ export const en: Record<A2aNetKey, string> = {
   'a2a.cold': 'not loaded (waiting to wake after a restart)',
   'a2a.wake': 'Wake',
   'a2a.note': 'Only joined sessions are discoverable by other nodes; click a row to open the session.',
+  'a2a.remote': 'Remote teams (by host)',
+  'a2a.remoteUnknownOrigin': 'Unknown origin',
   'a2a.peers': 'Peers',
   'a2a.peersEmpty': 'No known peers yet (set peers seeds to join the mesh)',
   'a2a.activity': 'Routing activity',

@@ -635,6 +635,26 @@ export function apply(ctx: Context, config: Config): void {
       })
     }
 
+    // Peer-side rows for the panel, grouped there by origin: the sweep is
+    // real network work, so a shared 5s cache serves the 2s panel poll
+    // without hammering peers. The state read answers synchronously from the
+    // cache (never awaiting inside the handler) and kicks a background
+    // refresh when stale — the next poll picks the fresh rows up.
+    let remoteRowsCache: { at: number; rows: { team: string; name: string; origin?: string; workspace?: string }[] } | undefined
+    const refreshRemoteRows = (): void => {
+      const now = Date.now()
+      if (remoteRowsCache !== undefined && now - remoteRowsCache.at < 5_000) return
+      void listDirectoryTeams(false)
+        .then(all => {
+          remoteRowsCache = {
+            at: now,
+            rows: all
+              .filter(row => row.local !== true)
+              .map(row => ({ team: row.team, name: row.name, ...(row.origin !== undefined ? { origin: row.origin } : {}), ...(row.workspace !== undefined ? { workspace: row.workspace } : {}) })),
+          }
+        })
+        .catch(() => {})
+    }
     whenWebServerSettled((webServer) => {
       ctx.effect(() => webServer.register({
         kind: 'exact',
@@ -686,6 +706,7 @@ export function apply(ctx: Context, config: Config): void {
               groups: groupStore.list(),
               host: lanIp === '' ? {} : { lanIp },
               peers: peerStore.list().map(url => ({ url, score: peerStore.score(url) })),
+              remote: (refreshRemoteRows(), remoteRowsCache?.rows ?? []),
               activity: recentActivity.slice(),
               inFlight: [...inFlightRoutes.values()].map(route => ({
                 team: route.team,
