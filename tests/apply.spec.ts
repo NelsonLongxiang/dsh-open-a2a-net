@@ -605,6 +605,69 @@ describe('a2a plugin decentralized routing (peers)', () => {
       await ctx.fiber.dispose()
     }
   })
+
+  it('a2a_tasks registers beside the routing tools and lists an empty ledger', async () => {
+    const { ctx } = await mountJoinHarness()
+    try {
+      const tasks = ctx.tools.get('a2a_tasks')
+      expect(tasks).toBeDefined()
+      await expect(tasks?.execute({}, runContext())).resolves.toMatchObject({ ok: true, tasks: [] })
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('a2a_route async tracks the owed task and an inbound receipt resolves it', async () => {
+    const { ctx, agents, port } = await mountJoinHarness()
+    try {
+      const session = replyingAgent(ctx)
+      agents.agent = session
+      ctx.emit('agent/created', { agent: session })
+      await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+      const route = ctx.tools.get('a2a_route')
+      const delivered = await route?.execute({ team: 'dsh/agent-1', message: 'long task', async: true }, runContext()) as { ok: boolean; task_id: string }
+      expect(delivered.ok).toBe(true)
+      // The owed task is queryable while the target works.
+      const tasks = ctx.tools.get('a2a_tasks')
+      await expect(tasks?.execute({}, runContext())).resolves.toMatchObject({
+        ok: true,
+        tasks: [{ taskId: delivered.task_id, team: 'dsh/agent-1', peer: 'local', status: 'pending' }],
+      })
+      // The target's receipt arrives as an ordinary inbound route to this
+      // node's team and correlates by task id.
+      const receipt = await postJson(port, '/a2a/direct', { team: 'dsh', message: `[A2A receipt] task ${String(delivered.task_id)} tests green on 0.6.0` })
+      expect(receipt.status).toBe(200)
+      await expect(tasks?.execute({}, runContext())).resolves.toMatchObject({
+        ok: true,
+        tasks: [{ taskId: delivered.task_id, status: 'resolved', summary: 'tests green on 0.6.0' }],
+      })
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('a receipt relayed through the in-process candidate resolves its task', async () => {
+    const { ctx, agents, port } = await mountJoinHarness()
+    try {
+      const session = replyingAgent(ctx)
+      agents.agent = session
+      ctx.emit('agent/created', { agent: session })
+      await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+      const route = ctx.tools.get('a2a_route')
+      const delivered = await route?.execute({ team: 'dsh/agent-1', message: 'long task', async: true }, runContext()) as { ok: boolean; task_id: string }
+      expect(delivered.ok).toBe(true)
+      // The answered session routes its receipt back over the same-host
+      // candidate: the relay correlates it before steering.
+      const receipt = await route?.execute({ team: 'dsh/agent-1', message: `[A2A receipt] task ${String(delivered.task_id)} second opinion agrees` }, runContext()) as { ok: boolean }
+      expect(receipt.ok).toBe(true)
+      await expect(ctx.tools.get('a2a_tasks')?.execute({}, runContext())).resolves.toMatchObject({
+        ok: true,
+        tasks: [{ taskId: delivered.task_id, status: 'resolved', summary: 'second opinion agrees' }],
+      })
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
   it('a2a_route unblocks the caller when the target never replies (reply-wait deadline)', async () => {
     const { ctx, agents, port } = await mountJoinHarness()
     try {
