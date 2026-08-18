@@ -3,7 +3,7 @@
  * bundle have different output paths. The DSH client export reserves
  * `lib/client.js`, so the host package root must import `lib/a2a-client.js`.
  */
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
@@ -28,5 +28,22 @@ describe('built package layout', () => {
 
     const host = await import(pathToFileURL(fileURLToPath(artifact('lib/index.js'))).href)
     expect(host.A2aClient).toBeTypeOf('function')
+  })
+
+  it('ships a compiled artifact for every host source module', async () => {
+    // The pack file list is `lib` wholesale, so a module missing its build
+    // output would ship as a broken import. The guard walks the host tree
+    // (`src/client` bundles separately; `css-modules.d.ts` declares no
+    // runtime) and demands both shapes of each artifact.
+    const sources = (await readdir(artifact('src'), { withFileTypes: true }))
+      .filter(entry => entry.isFile() && entry.name.endsWith('.ts') && entry.name !== 'css-modules.d.ts')
+      .map(entry => entry.name.replace(/\.ts$/, ''))
+    expect(sources.length).toBeGreaterThan(0)
+    const compiled = new Set(await readdir(artifact('lib')))
+    const declared = new Set(await readdir(artifact('lib/types')))
+    for (const name of sources) {
+      expect(compiled.has(`${name}.js`)).toBe(true)
+      expect(declared.has(`${name}.d.ts`)).toBe(true)
+    }
   })
 })
