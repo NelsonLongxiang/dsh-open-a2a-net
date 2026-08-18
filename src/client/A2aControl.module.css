@@ -165,6 +165,135 @@
   opacity: 0.6;
 }
 
+/* Search box under the panel title. */
+.searchInput {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--dsh-border, #2a2a30);
+  background: var(--dsh-surface, #141419);
+  color: inherit;
+}
+
+.searchInput:focus {
+  outline: 1px solid var(--dsh-accent, #4c8bf5);
+}
+
+/* Grouped session listing. */
+.sessionGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.groupHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.75;
+  cursor: pointer;
+  text-align: left;
+}
+
+.groupChevron {
+  display: inline-block;
+  transition: transform 0.12s ease;
+}
+
+.groupChevronClosed {
+  transform: rotate(-90deg);
+}
+
+/* The group tag pill on a row's name line. */
+.groupTag {
+  flex: none;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 16px;
+  border: 1px solid var(--dsh-border, #2a2a30);
+  opacity: 0.8;
+}
+
+/* The # button opening the group picker. */
+.groupButton {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: none;
+  color: inherit;
+  opacity: 0.55;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.groupButton:hover {
+  border-color: var(--dsh-border, #2a2a30);
+  opacity: 1;
+}
+
+/* The group picker popover inside a row. */
+.groupPicker {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px dashed var(--dsh-border, #2a2a30);
+}
+
+.groupOption {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--dsh-border, #2a2a30);
+  background: none;
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.groupOptionActive {
+  border-color: var(--dsh-accent, #4c8bf5);
+  color: var(--dsh-accent, #4c8bf5);
+}
+
+.groupNew {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 2px;
+}
+
+.groupInput {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--dsh-border, #2a2a30);
+  background: var(--dsh-surface, #141419);
+  color: inherit;
+}
+
 /* Peer fleet chips. */
 .peerGrid {
   display: flex;

@@ -16,6 +16,13 @@ export type A2aNetKey =
   | 'a2a.activityEmpty'
   | 'a2a.inFlight'
   | 'a2a.jump'
+  | 'a2a.search'
+  | 'a2a.searchEmpty'
+  | 'a2a.group'
+  | 'a2a.groupDefault'
+  | 'a2a.groupClear'
+  | 'a2a.groupNew'
+  | 'a2a.groupNewGo'
 
 /** Simplified Chinese dictionary. */
 export const zh: Record<A2aNetKey, string> = {
@@ -33,6 +40,13 @@ export const zh: Record<A2aNetKey, string> = {
   'a2a.activityEmpty': '暂无路由记录',
   'a2a.inFlight': '进行中的路由',
   'a2a.jump': '点击跳转到该会话',
+  'a2a.search': '搜索会话（名称 / team / 摘要）',
+  'a2a.searchEmpty': '没有匹配的会话',
+  'a2a.group': '设置分组',
+  'a2a.groupDefault': '未分组',
+  'a2a.groupClear': '清除分组',
+  'a2a.groupNew': '新建分组…',
+  'a2a.groupNewGo': '创建并归入',
 }
 
 /** English dictionary. */
@@ -51,4 +65,11 @@ export const en: Record<A2aNetKey, string> = {
   'a2a.activityEmpty': 'No routes yet',
   'a2a.inFlight': 'Routes in flight',
   'a2a.jump': 'Click to open this session',
+  'a2a.search': 'Search sessions (name / team / excerpt)',
+  'a2a.searchEmpty': 'No sessions match',
+  'a2a.group': 'Set group',
+  'a2a.groupDefault': 'Ungrouped',
+  'a2a.groupClear': 'Clear group',
+  'a2a.groupNew': 'New group…',
+  'a2a.groupNewGo': 'Create & assign',
 }

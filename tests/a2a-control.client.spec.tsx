@@ -23,6 +23,7 @@ const neverHook = (() => { throw new Error('control must not read global hooks')
 const openSession = vi.fn<(id: string) => void>()
 
 let stateSessions: A2aSessionRow[] = []
+let stateGroups: string[] = []
 let statePeers: { url: string; score?: number }[] = []
 let stateActivity: { ts: number; dir: 'in' | 'out'; team: string; peer: string; ok: boolean }[] = []
 let stateOk = true
@@ -50,6 +51,7 @@ const row = (overrides: Partial<A2aSessionRow> = {}): A2aSessionRow => ({
 describe('A2aControl', () => {
   beforeEach(() => {
     stateSessions = [row()]
+    stateGroups = []
     statePeers = []
     stateActivity = []
     stateOk = true
@@ -62,7 +64,7 @@ describe('A2aControl', () => {
         posts.push({ url: input, body: typeof init?.body === 'string' ? init.body : '' })
         return jsonResponse({ id: 'agent-1' })
       }
-      return stateOk ? jsonResponse({ nodes: true, sessions: stateSessions, peers: statePeers, activity: stateActivity }) : jsonResponse({ error: 'gone' }, false)
+      return stateOk ? jsonResponse({ nodes: true, sessions: stateSessions, groups: stateGroups, peers: statePeers, activity: stateActivity }) : jsonResponse({ error: 'gone' }, false)
     }))
     vi.stubGlobal('fetch', fetchMock)
   })
@@ -226,5 +228,41 @@ describe('A2aControl', () => {
     openPopover()
     // Opening clears the unread count.
     await waitFor(() => { expect(container.querySelector('[aria-label="2"]')).toBeNull() })
+  })
+
+  it('filters session rows through the search box', async () => {
+    stateSessions = [row(), row({ id: 'agent-2', label: 'dsh-host-ab12cd34-agent-2', team: 'dsh/agent-2', name: 'Telemetry review', description: 'check notices wiring' })]
+    mountControl()
+    openPopover()
+    expect(await screen.findByText('Parser porting session')).toBeTruthy()
+    expect(screen.getByText('Telemetry review')).toBeTruthy()
+    // Searching narrows to the matching row only.
+    fireEvent.change(screen.getByLabelText('Search sessions (name / team / excerpt)'), { target: { value: 'telemetry' } })
+    expect(screen.queryByText('Parser porting session')).toBeNull()
+    expect(screen.getByText('Telemetry review')).toBeTruthy()
+    // Searching by team substring also matches.
+    fireEvent.change(screen.getByLabelText('Search sessions (name / team / excerpt)'), { target: { value: 'dsh/agent-1' } })
+    expect(screen.getByText('Parser porting session')).toBeTruthy()
+    expect(screen.queryByText('Telemetry review')).toBeNull()
+  })
+
+  it('renders grouped sessions under their group heads and assigns through the picker', async () => {
+    stateSessions = [row(), row({ id: 'agent-2', label: 'dsh-host-ab12cd34-agent-2', team: 'dsh/agent-2', name: 'Telemetry review', group: 'ops' })]
+    stateGroups = ['ops']
+    mountControl()
+    openPopover()
+    // The ungrouped head counts the row without a group; the ops group head
+    // renders with its member.
+    expect(await screen.findByText(/Ungrouped · 1/)).toBeTruthy()
+    expect(screen.getByText(/ops · 1/)).toBeTruthy()
+    expect(screen.getByText('Telemetry review')).toBeTruthy()
+    // The group tag pill shows on the assigned row.
+    expect(screen.getByText('ops')).toBeTruthy()
+    // The picker's assign posts to the groups route.
+    fireEvent.click(screen.getAllByLabelText('Set group')[0]!)
+    fireEvent.click(screen.getByText('Clear group'))
+    await waitFor(() => {
+      expect(posts).toContainEqual({ url: '/__dsh_a2a/groups', body: JSON.stringify({ action: 'assign', id: 'agent-1', name: '' }) })
+    })
   })
 })

@@ -12,6 +12,7 @@ import { networkInterfaces } from 'node:os'
 import { dirname, join } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { signCard, type CardCore } from './card.ts'
+import { GroupStore } from './group-store.ts'
 import { JoinedSessions } from './joined-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
@@ -279,7 +280,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param res - the response for the malformed-body rejection.
    * @param use - receives the parsed body.
    */
-  function readJsonBody(req: IncomingMessage, res: ServerResponse, use: (body: { readonly id?: unknown }) => void): void {
+  function readJsonBody(req: IncomingMessage, res: ServerResponse, use: (body: { readonly id?: unknown; readonly name?: unknown; readonly action?: unknown }) => void): void {
     const chunks: Buffer[] = []
     let size = 0
     req.on('data', (chunk: Buffer) => {
@@ -408,6 +409,10 @@ export function apply(ctx: Context, config: Config): void {
     }
     return ''
   })()
+
+  // Session groups: user-named buckets for the panel's session listing,
+  // persisted beside the join intents so they survive restarts.
+  const groupStore = new GroupStore(join(home, 'a2a', 'groups.json'))
 
   // Session nodes: every joined top-level session is its own addressable
   // team (label `<session>-<agentId8>`, team `<team>/<agentId8>`). Joining
@@ -597,6 +602,11 @@ export function apply(ctx: Context, config: Config): void {
         path: '/__dsh_a2a/state',
         handler: controlRoute((_req: IncomingMessage, res: ServerResponse) => {
           void (async () => {
+            const assignments = groupStore.all()
+            const groupOf = (id: string): string | undefined => {
+              const name = assignments[id]
+              return name === undefined ? undefined : name
+            }
             const sessions: Array<Record<string, unknown>> = [...liveRoots.values()].map(agent => ({
               id: String(agent.id),
               label: sessionLabelOf(agent),
@@ -604,6 +614,7 @@ export function apply(ctx: Context, config: Config): void {
               ...nodeMetadataOf(agent),
               joined: sessionNodes.has(String(agent.id)),
               live: true,
+              ...(groupOf(String(agent.id)) !== undefined ? { group: groupOf(String(agent.id)) } : {}),
             }))
             // Cold joined sessions: a remembered intent whose Agent is not
             // back yet (host restarted, session not opened). The row carries
@@ -621,12 +632,14 @@ export function apply(ctx: Context, config: Config): void {
                   team: `${config.team}/${id8(id)}`,
                   joined: true,
                   live: false,
+                  ...(groupOf(id) !== undefined ? { group: groupOf(id) } : {}),
                 })
               }
             }
             const body = JSON.stringify({
               nodes: true,
               sessions,
+              groups: groupStore.list(),
               host: lanIp === '' ? {} : { lanIp },
               peers: peerStore.list().map(url => ({ url, score: peerStore.score(url) })),
               activity: recentActivity.slice(),
@@ -675,6 +688,39 @@ export function apply(ctx: Context, config: Config): void {
           })
         }),
       }), 'a2a: session-node leave route')
+      // Groups control: create/remove named groups and assign sessions to
+      // them (an empty name unassigns). Same guard as join/leave — the
+      // group taxonomy enumerates session ids, so it stays behind the key.
+      ctx.effect(() => webServer.register({
+        kind: 'exact',
+        path: '/__dsh_a2a/groups',
+        handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+          readJsonBody(req, res, (body) => {
+            const action = body.action
+            let payload: string
+            if (action === 'create') {
+              const name = typeof body.name === 'string' ? body.name : ''
+              const stored = groupStore.create(name)
+              payload = JSON.stringify(stored === undefined ? { ok: false, error: 'invalid name or group cap reached' } : { ok: true, name: stored, groups: groupStore.list() })
+            } else if (action === 'remove') {
+              const name = typeof body.name === 'string' ? body.name : ''
+              payload = JSON.stringify({ ok: groupStore.remove(name), groups: groupStore.list() })
+            } else if (action === 'assign') {
+              const id = typeof body.id === 'string' ? body.id : ''
+              const name = typeof body.name === 'string' ? body.name : undefined
+              if (id === '' || name === undefined) {
+                payload = JSON.stringify({ ok: false, error: 'id and name are required' })
+              } else {
+                payload = JSON.stringify({ ok: groupStore.assign(id, name), groups: groupStore.list() })
+              }
+            } else {
+              payload = JSON.stringify({ ok: false, error: 'unknown action' })
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+          })
+        }),
+      }), 'a2a: session-group route')
     })
   }
 
