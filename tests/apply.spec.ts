@@ -627,11 +627,12 @@ describe('a2a plugin decentralized routing (peers)', () => {
       const route = ctx.tools.get('a2a_route')
       const delivered = await route?.execute({ team: 'dsh/agent-1', message: 'long task', async: true }, runContext()) as { ok: boolean; task_id: string }
       expect(delivered.ok).toBe(true)
-      // The owed task is queryable while the target works.
+      // The owed task is queryable while the target works, keeping the
+      // follow-up context id the delivered reply promised.
       const tasks = ctx.tools.get('a2a_tasks')
       await expect(tasks?.execute({}, runContext())).resolves.toMatchObject({
         ok: true,
-        tasks: [{ taskId: delivered.task_id, team: 'dsh/agent-1', peer: 'local', status: 'pending' }],
+        tasks: [{ taskId: delivered.task_id, team: 'dsh/agent-1', peer: 'local', status: 'pending', contextId: expect.any(String) }],
       })
       // The target's receipt arrives as an ordinary inbound route to this
       // node's team and correlates by task id.

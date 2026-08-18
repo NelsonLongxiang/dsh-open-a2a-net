@@ -1440,7 +1440,7 @@ ${message}`
   const trackOwedTask = (taskId: string, team: string, peer: string, result: A2aRouteResult): void => {
     if (!result.ok) return
     if (result.task_status !== 'TASK_STATE_DELIVERED' && result.task_status !== 'TASK_STATE_ABORTED_WAIT') return
-    taskLedger.track(taskId, team, peer)
+    taskLedger.track(taskId, team, peer, result.context_id === '' ? undefined : result.context_id)
   }
 
   ctx.tools.register(defineTool({
@@ -1799,6 +1799,7 @@ ${message}`
                 team: { type: 'string', required: true },
                 peer: { type: 'string', required: true },
                 startedAt: { type: 'number', required: true },
+                contextId: { type: 'string' },
                 status: { type: 'string', required: true },
                 resolvedAt: { type: 'number' },
                 summary: { type: 'string' },
@@ -1813,14 +1814,14 @@ ${message}`
           ? 'No routed tasks are owed a receipt.'
           : [
             ...(value.tasks.some((task: { status: string }) => task.status === 'pending') ? ['Owed receipts:'] : []),
-            ...value.tasks.filter((task: { status: string }) => task.status === 'pending').map((task: { taskId: string; team: string; peer: string; startedAt: number }) => `  - ${task.taskId} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}), waiting ${describeAge(Date.now() - task.startedAt)}`),
+            ...value.tasks.filter((task: { status: string }) => task.status === 'pending').map((task: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string }) => `  - ${task.taskId} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}), waiting ${describeAge(Date.now() - task.startedAt)}${task.contextId === undefined || task.contextId === '' ? '' : `, follow-up context ${task.contextId}`}`),
             ...(value.tasks.some((task: { status: string }) => task.status === 'resolved') ? ['Resolved:'] : []),
             ...value.tasks.filter((task: { status: string }) => task.status === 'resolved').map((task: { taskId: string; team: string; peer: string; startedAt: number; resolvedAt?: number; summary?: string }) => `  - ${task.taskId} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}): ${task.summary === undefined || task.summary === '' ? 'resolved' : task.summary}`),
           ].join('\n'),
       }],
     },
     presentCall: () => ({ card: 'generic', title: 'A2A task ledger', kind: 'other', rawInput: null }),
-    execute: async (): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; status: 'pending' | 'resolved'; resolvedAt?: number; summary?: string }[] }> => {
+    execute: async (): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; status: 'pending' | 'resolved'; resolvedAt?: number; summary?: string }[] }> => {
       return { ok: true, tasks: taskLedger.list().map(task => ({ ...task })) }
     },
   }))
