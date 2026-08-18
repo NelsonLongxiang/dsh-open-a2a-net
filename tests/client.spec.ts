@@ -115,6 +115,44 @@ describe('fetchCard', () => {
   })
 })
 
+describe('fetchCardDetail', () => {
+  it('classifies a transport or HTTP failure as unreachable with the detail', async () => {
+    const failing: A2aFetch = () => Promise.reject(new Error('ECONNREFUSED down'))
+    await expect(makeClient({ fetch: failing }).fetchCardDetail('http://gone:1')).resolves.toEqual({
+      ok: false,
+      stage: 'unreachable',
+      detail: expect.stringContaining('ECONNREFUSED'),
+    })
+    const { fetch: errorFetch } = stubFetch(() => ({ status: 503, body: { error: 'boom' } }))
+    await expect(makeClient({ fetch: errorFetch }).fetchCardDetail('http://err:1')).resolves.toMatchObject({
+      ok: false,
+      stage: 'unreachable',
+    })
+  })
+
+  it('classifies verification failures with the card rejection reason', async () => {
+    const expired = (() => {
+      const { privateKey } = generateKeyPairSync('ed25519')
+      return signCard({ name: 'peer', session: 's', team: 't', capabilities: {}, expiresAt: Date.now() - 1 }, privateKey)
+    })()
+    const { fetch } = stubFetch(() => ({ status: 200, body: expired }))
+    await expect(makeClient({ fetch }).fetchCardDetail('http://stale:1')).resolves.toEqual({
+      ok: false,
+      stage: 'rejected',
+      reason: 'expired',
+    })
+  })
+
+  it('returns the verified card on the ok path', async () => {
+    const card = freshCard()
+    const { fetch } = stubFetch(() => ({ status: 200, body: card }))
+    await expect(makeClient({ fetch }).fetchCardDetail('http://peer:1')).resolves.toMatchObject({
+      ok: true,
+      card: { team: 'research' },
+    })
+  })
+})
+
 describe('routeDirect', () => {
   it('sends the canonical args and returns the canonical result', async () => {
     const { calls, fetch } = stubFetch(() => ({ status: 200, body: { routed: true, task_id: 't-1', context_id: 'ctx-1', task_status: 'TASK_STATE_COMPLETED', result: { text: 'reply body' } } }))
