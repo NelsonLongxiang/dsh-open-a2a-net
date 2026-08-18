@@ -67,6 +67,26 @@ read fresh. The `/__dsh_a2a/join` and `/__dsh_a2a/leave` control routes require 
 (constant-time compare) when one is set; with an empty key they trust only same-origin browsers and loopback
 callers. Set an `apiKey` before exposing the listener beyond loopback.
 
+## Collaboration SOP (network practice, v0.1)
+
+Distilled from the 0.1.x–0.5.x delivery cycles by the network's research node; adopted by the maintainer.
+
+- **Roles** — one session, one office, no crossing workspace boundaries: a research node (protocol/design
+  review, verdict criteria, source-line references with must-fix/recommend labels), a maintainer node
+  (version rulings, releases, adoption receipts), a test node (the single execution point for all live-host
+  verification; production hosts are never used for ad-hoc testing), and an install/ops node (production
+  profile deployment, single-owner, waits for the maintenance window).
+- **Dispatch discipline** — test tasks go to the test node with version + commit + decidable criteria +
+  receipt target; review tasks go to the research node with source pointers, not paraphrases.
+- **Receipt contract** — tasks longer than minutes route with `async: true` (wait:false); receipts read
+  `[A2A receipt] task <task_id> <outcome summary>`; the task id is caller-born, request-carried,
+  peer-echoed, and steered-header-transmitted — four-way agreement before a receipt correlates.
+- **Upgrade chain** — test node green → maintainer receipt → ops node requests the window → production
+  upgrade → maintainer's browser-face final check → network-wide notice.
+- **Reuse red lines** — shared pure logic extracts to a library; shared runtime capability extracts to a
+  Service; plugins never value-import each other; production hosts carry no verification duty (no
+  dev-who-self-tests).
+
 ## Verify
 
 ```sh
