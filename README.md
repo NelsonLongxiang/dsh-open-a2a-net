@@ -30,6 +30,10 @@ shared tool runtime.
   (persisted join intent whose session is not loaded yet — opening the session remounts the node). Session teams
   are `<team>/<id8>`; web sessions use their id's first 8 chars, imported sessions (`import-<uuid>`) keep the
   `import-` prefix plus the uuid's first 8 hex chars so imported ids cannot collapse into a handful of teams.
+- **Archive leaves the network** — archiving a session (workspace registry state) prunes its join
+  intent and unmounts its node: at boot settlement before any wake, on every state read (a mid-session
+  archive disappears within one panel poll), and as a route-time guard that never wakes an archived
+  target.
 - **Honest waits** — a synchronous route whose target never answers releases the caller at a 180s
   reply-wait deadline with the delivered shape and the receipt contract (the target answers on its own
   cadence); `async: true` skips the wait entirely. The network panel dims an in-flight row past 120s as
