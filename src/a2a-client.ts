@@ -155,12 +155,18 @@ export class A2aClient {
     signal?: AbortSignal,
     callerSession?: string,
     asyncMode = false,
+    taskIdFromCaller?: string,
   ): Promise<A2aRouteResult> {
     const args: Record<string, unknown> = { team, message, caller_session: callerSession ?? this.options.sessionId }
     if (contextId !== undefined) args.context_id = contextId
     // wait:false asks the peer to steer and answer delivered immediately —
     // the async half of the receipt contract for cross-host long tasks.
     if (asyncMode) args.wait = false
+    // The caller-born task id rides the request (idempotency key): a peer
+    // that echoes it keeps the receipt header correlated with this route's
+    // own result; the fallback below stamps it when the peer generated its
+    // own (pre-0.5.3 peers).
+    if (taskIdFromCaller !== undefined) args.task_id = taskIdFromCaller
     let raw: WireRoute
     try {
       raw = await this.http('/a2a/direct', {
@@ -182,7 +188,7 @@ export class A2aClient {
     // The delivered shape (wait:false): no result member — the reply rides
     // the receipt contract back to the caller's team instead.
     if (raw.routed === true && raw.delivered === true) {
-      const taskId = wireText(raw.task_id)
+      const taskId = wireText(raw.task_id) !== '' ? wireText(raw.task_id) : taskIdFromCaller ?? ''
       return {
         ok: true,
         team,
@@ -197,7 +203,7 @@ export class A2aClient {
       ok: true,
       team,
       reply,
-      task_id: wireText(raw.task_id),
+      task_id: wireText(raw.task_id) !== '' ? wireText(raw.task_id) : taskIdFromCaller ?? wireText(raw.task_id),
       context_id: wireText(raw.context_id),
       task_status: wireText(raw.task_status),
     }

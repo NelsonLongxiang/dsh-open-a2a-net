@@ -731,7 +731,10 @@ export function apply(ctx: Context, config: Config): void {
         name: config.agentName,
         session,
         team: config.team,
-        capabilities: { route: true },
+        // async: wait:false is honored (steer + delivered, no final hold);
+        // the signed capability turns async dialing into a deterministic
+        // check instead of a timeout race against pre-0.5.2 peers.
+        capabilities: { route: true, async: true },
         expiresAt: Date.now() + config.cardTtlMs,
         ...(records.length > 0 ? { records: [...records] } : {}),
       })
@@ -809,19 +812,20 @@ export function apply(ctx: Context, config: Config): void {
    * Steer one direct route request into a live agent and resolve with its
    * final reply (final semantics always: the HTTP caller has no other
    * channel to learn the reply).
+   * @param taskId - the correlation key the steered receipt header carries.
    */
-  function routeIntoAgent(team: string, message: string, caller: string): Promise<
+  function routeIntoAgent(team: string, message: string, caller: string, taskId?: string): Promise<
     { ok: true; reply: string } | { ok: false; error: string }
   > {
     const agent = resolveAgentForTeam(team)
     if (agent !== undefined) {
-      return routeIntoAgentFor(agent, team, message, caller)
+      return routeIntoAgentFor(agent, team, message, caller, taskId)
     }
     // Wake-on-route: a cold joined team materializes on demand, then steers.
     const woken = wakeColdTeam(team)
     if (woken !== undefined) {
       return woken.then(
-        agent => routeIntoAgentFor(agent, team, message, caller),
+        agent => routeIntoAgentFor(agent, team, message, caller, taskId),
         (error: unknown) => ({ ok: false, error: `waking the session for team "${team}" failed: ${String(error)}` }) as const,
       )
     }
@@ -831,7 +835,7 @@ export function apply(ctx: Context, config: Config): void {
     // through the initiator fallback.
     if (team === config.team) {
       const live = liveAgent()
-      if (live !== undefined) return routeIntoAgentFor(live, team, message, caller)
+      if (live !== undefined) return routeIntoAgentFor(live, team, message, caller, taskId)
       return Promise.resolve({ ok: false, error: 'No live DSH agent is available to accept this message.' })
     }
     return Promise.resolve({ ok: false, error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.` })
@@ -846,7 +850,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param caller - caller label for the steered prefix.
    * @returns the agent's final reply, or the explicit failure.
    */
-  function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string): Promise<
+  function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string): Promise<
     { ok: true; reply: string } | { ok: false; error: string }
   > {
     return new Promise((resolve) => {
@@ -856,9 +860,12 @@ export function apply(ctx: Context, config: Config): void {
       // The header names the sender first: `caller` is the routing node's
       // own label (the session that issued the route), while `team` is this
       // request's target — showing the target as "remote team" hid the
-      // actual origin behind the receiver's own team name.
+      // actual origin behind the receiver's own team name. The task id, when
+      // the caller supplied one, rides the header so an "[A2A receipt] task
+      // <id>" answer correlates with the caller's own route result.
       const from = caller === '' ? 'an unknown node' : caller
-      const text = `[A2A direct] from "${from}" (routed to ${team}) sent:
+      const taskPrefix = taskId === undefined ? '' : `(task ${taskId}) `
+      const text = `[A2A direct] ${taskPrefix}from "${from}" (routed to ${team}) sent:
 
 ${message}`
       try {
@@ -908,6 +915,7 @@ ${message}`
             readonly context_id?: unknown
             readonly caller_session?: unknown
             readonly wait?: unknown
+            readonly task_id?: unknown
           }
           try {
             body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof body
@@ -922,6 +930,10 @@ ${message}`
           const caller = typeof body.caller_session === 'string' ? body.caller_session : ''
           const noWait = body.wait === false
           const contextId = typeof body.context_id === 'string' && body.context_id !== '' ? body.context_id : `ctx-${Math.random().toString(16).slice(2, 10)}`
+          // The caller-born task id (idempotency key): echo it when present
+          // so the receipt header correlates with the caller's own result;
+          // pre-0.5.3 callers carry none and this node mints one.
+          const taskId = typeof body.task_id === 'string' && body.task_id !== '' ? body.task_id : `direct-${Math.random().toString(16).slice(2, 10)}`
           if (team === '' || message === '') {
             const payload = JSON.stringify({ error: 'team and message are required', code: -32000 })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
@@ -938,14 +950,17 @@ ${message}`
             const deliver = (target: Agent): void => {
               const from = caller === '' ? 'an unknown node' : caller
               try {
-                steerRelay(target, `[A2A direct] from "${from}" (routed to ${team}) sent:\n\n${message}`)
+                // The receipt header carries the task id: the target echoes
+                // it verbatim in "[A2A receipt] task <id> ...", closing the
+                // correlation loop with the caller's own route result.
+                steerRelay(target, `[A2A direct] (task ${taskId}) from "${from}" (routed to ${team}) sent:\n\n${message}`)
                 recordActivity('in', team, caller, true)
                 const payload = JSON.stringify({
                   routed: true,
                   delivered: true,
                   team,
                   session,
-                  task_id: `direct-${Math.random().toString(16).slice(2, 10)}`,
+                  task_id: taskId,
                   context_id: contextId,
                   task_status: 'TASK_STATE_DELIVERED',
                   artifacts: [],
@@ -954,7 +969,7 @@ ${message}`
                 res.end(payload)
               } catch (error) {
                 recordActivity('in', team, caller, false)
-                const payload = JSON.stringify({ error: `The DSH session rejected the message: ${String(error)}`, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
+                const payload = JSON.stringify({ error: `The DSH session rejected the message: ${String(error)}`, code: -32000, team, task_id: taskId, task_status: 'TASK_STATE_FAILED' })
                 res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
                 res.end(payload)
               }
@@ -978,7 +993,7 @@ ${message}`
             res.end(payload)
             return
           }
-          void routeIntoAgent(team, message, caller).then((outcome) => {
+          void routeIntoAgent(team, message, caller, taskId).then((outcome) => {
             recordActivity('in', team, caller, outcome.ok)
             const payload = outcome.ok
               ? JSON.stringify({
@@ -986,12 +1001,12 @@ ${message}`
                 team,
                 session,
                 result: { text: outcome.reply },
-                task_id: `direct-${Math.random().toString(16).slice(2, 10)}`,
+                task_id: taskId,
                 context_id: contextId,
                 task_status: 'TASK_STATE_COMPLETED',
                 artifacts: [],
               })
-              : JSON.stringify({ error: outcome.error, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
+              : JSON.stringify({ error: outcome.error, code: -32000, team, task_id: taskId, task_status: 'TASK_STATE_FAILED' })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
           })
@@ -1185,11 +1200,16 @@ ${message}`
       const callerSession = exec.agent === undefined ? undefined
         : sessionNodes.has(String(exec.agent.id)) ? sessionTeamOf(exec.agent) : sessionLabelOf(exec.agent)
       const fetch = memoizedCardFetch()
+      // The task id is born at the caller (idempotency key semantics): both
+      // dispatchers carry the one id, the peer request echoes it, and the
+      // steered receipt header names it — so "[A2A receipt] task <id>" from
+      // the target correlates with the route's own result verbatim.
+      const taskId = `direct-${Math.random().toString(16).slice(2, 10)}`
       // Candidate order: this host's own teams first (an in-process steer —
       // cheapest possible and immune to nested-signal aborts), then direct
       // publishers, then zone delegations, deduplicated by URL.
       const failures: string[] = []
-      const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, exec.signal, args.async === true)
+      const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, exec.signal, args.async === true, taskId)
       if (outcome !== undefined) {
         if (outcome.ok) return outcome as unknown as Record<string, JsonValue>
         failures.push(`local: ${outcome.error}`)
@@ -1199,8 +1219,24 @@ ${message}`
       // to the next alternate without a caller-visible error; only
       // exhaustion surfaces, with each candidate's reason.
       for (const candidate of candidates) {
-        const result = await dispatchPeerCandidate(candidate, args.team, args.message, args.context_id, exec.signal, callerSession, args.async === true)
-        if (result.ok || exec.signal.aborted) return result as unknown as Record<string, JsonValue>
+        // Capability gate: wait:false only dials peers whose signed card
+        // declares async — against a pre-0.5.2 peer the flag would silently
+        // degrade into a minutes-long blocking hold (an async intent must
+        // never turn into a surprise wait). The memo keeps the card fetch
+        // free after the directory walk.
+        let peerAsync = false
+        if (args.async === true) {
+          const card = await fetch(candidate)
+          const caps = card?.capabilities as { async?: unknown } | undefined
+          peerAsync = card !== undefined && caps?.async === true
+        }
+        const result = await dispatchPeerCandidate(candidate, args.team, args.message, args.context_id, exec.signal, callerSession, peerAsync, taskId)
+        if (result.ok || exec.signal.aborted) {
+          if (args.async === true && !peerAsync && result.ok) {
+            return { ...result, reply: `${result.reply}\n(Note: the peer does not advertise async; the call waited synchronously.)` } as unknown as Record<string, JsonValue>
+          }
+          return result as unknown as Record<string, JsonValue>
+        }
         failures.push(`${candidate}: ${result.error}`)
       }
       if (failures.length > 0) logger.warn(`route to team "${args.team}" exhausted its candidates: ${failures.join('; ')}`)
@@ -1227,31 +1263,45 @@ ${message}`
    * and the caller gets the delivered shape with the receipt contract.
    * @returns the canonical result, or undefined when the team is not local.
    */
-  async function dispatchLocalCandidate(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode = false): Promise<A2aRouteResult | undefined> {
+  async function dispatchLocalCandidate(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode = false, taskIdFromCaller?: string): Promise<A2aRouteResult | undefined> {
     const webServer = ctx.get('webServer')
     const teamIsLocal = team === config.team
       || resolveAgentForTeam(team) !== undefined
       || joinedSessions.list().some(id => `${config.team}/${id8(id)}` === team)
     if (!teamIsLocal || webServer === undefined) return undefined
-    const taskId = `direct-${Math.random().toString(16).slice(2, 10)}`
+    const taskId = taskIdFromCaller ?? `direct-${Math.random().toString(16).slice(2, 10)}`
     const flight = beginRoute(team, 'local')
-    const wait = routeIntoAgent(team, message, callerSession ?? session)
     if (asyncMode) {
-      // Fire-and-forget: the steer already happened inside routeIntoAgentFor
-      // (synchronous), the waiter owns the flush timeout, and the settled
-      // promise's answer resolves a future nobody reads — safe. Delivery is
-      // the success criterion under the receipt contract.
-      void wait.then(() => { endRoute(flight) }, () => { endRoute(flight) })
-      recordActivity('out', team, 'local', true)
-      return {
-        ok: true,
-        team,
-        reply: `Delivered to ${team} (async). The target routes a receipt — a message starting "[A2A receipt] task ${taskId} <outcome summary>" — back to your team when done; watch a2a_status activity or follow up with the context id.`,
-        task_id: taskId,
-        context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
-        task_status: 'TASK_STATE_DELIVERED',
+      // Delivery means the message is IN, not merely enqueued: a cold team
+      // materializes first (the wake settles, or fails honestly), then the
+      // steer fires, then delivered answers. The receipt header carries the
+      // task id so the target can echo it back verbatim.
+      const agent = resolveAgentForTeam(team) ?? (team === config.team ? liveAgent() : undefined)
+      const woken = agent !== undefined ? Promise.resolve(agent) : wakeColdTeam(team)
+      if (woken === undefined) {
+        endRoute(flight)
+        return { ok: false, error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.`, code: -32000 }
+      }
+      try {
+        const target = await woken
+        steerRelay(target, `[A2A direct] (task ${taskId}) from "${callerSession ?? session}" (routed to ${team}) sent:\n\n${message}`)
+        endRoute(flight)
+        recordActivity('out', team, 'local', true)
+        return {
+          ok: true,
+          team,
+          reply: `Delivered to ${team} (async). The target routes a receipt — a message starting "[A2A receipt] task ${taskId} <outcome summary>" — back to your team when done; watch a2a_status activity or follow up with the context id.`,
+          task_id: taskId,
+          context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
+          task_status: 'TASK_STATE_DELIVERED',
+        }
+      } catch (error) {
+        endRoute(flight)
+        recordActivity('out', team, 'local', false)
+        return { ok: false, error: `waking or steering the session for team "${team}" failed: ${String(error)}`, code: -32000 }
       }
     }
+    const wait = routeIntoAgent(team, message, callerSession ?? session, taskId)
     const aborted = new Promise<never>((_, reject) => {
       signal.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
     })
@@ -1293,9 +1343,9 @@ ${message}`
    * exactly like same-host ones; older peers that ignore the flag simply
    * keep the blocking wait (graceful degradation).
    */
-  async function dispatchPeerCandidate(url: string, team: string, message: string, contextId: string | undefined, signal: AbortSignal, callerSession: string | undefined, asyncMode = false): Promise<A2aRouteResult> {
+  async function dispatchPeerCandidate(url: string, team: string, message: string, contextId: string | undefined, signal: AbortSignal, callerSession: string | undefined, asyncMode = false, taskIdFromCaller?: string): Promise<A2aRouteResult> {
     const flight = beginRoute(team, url)
-    const result = await client.routeDirect(url, team, message, contextId, signal, callerSession, asyncMode)
+    const result = await client.routeDirect(url, team, message, contextId, signal, callerSession, asyncMode, taskIdFromCaller)
     endRoute(flight)
     recordActivity('out', team, url, result.ok)
     return result

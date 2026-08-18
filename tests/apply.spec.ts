@@ -472,7 +472,7 @@ describe('a2a plugin decentralized routing (peers)', () => {
       expect(result).toMatchObject({ ok: true, team: 'dsh', reply: 'peer node replied' })
       expect(peer.steer).toHaveBeenCalledTimes(1)
       const steered = (peer.steer.mock.calls[0]?.[0] as { content: Array<{ type: string; text: string }> }).content[0]
-      expect(steered?.text).toContain('[A2A direct] from "sess-1" (routed to dsh)')
+      expect(steered?.text).toContain('from "sess-1" (routed to dsh) sent:')
     } finally {
       await ctx.fiber.dispose()
       await peer.dispose()
@@ -495,7 +495,9 @@ describe('a2a plugin decentralized routing (peers)', () => {
       // calling session (runContext carries no agent); a joined caller
       // stamps its routable session team instead.
       const steered = (session.steer.mock.calls[0]?.[0] as { content: Array<{ type: string; text: string }> }).content[0]
-      expect(steered?.text).toContain('[A2A direct] from "sess-1" (routed to dsh/agent-1)')
+      expect(steered?.text).toContain('from "sess-1" (routed to dsh/agent-1) sent:')
+      // The task id rides the header (receipt correlation key).
+      expect(steered?.text).toMatch(/\(task direct-[0-9a-f]+\) /)
       // The status tool surfaces the completed route in the activity ring.
       const status = await ctx.tools.get('a2a_status')?.execute({}, runContext()) as { ok: boolean; activity: { dir: string; team: string; ok: boolean }[] }
       expect(status.ok).toBe(true)
