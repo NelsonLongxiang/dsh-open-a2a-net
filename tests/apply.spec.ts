@@ -140,7 +140,10 @@ async function mountPeerNode(
   })
   liveAgent.steer = steer
   if (withAgent) registry.agent = liveAgent
-  apply(ctx, makeConfig({ announce: true, dshHome: tmpHome(), ...overrides }))
+  // Distinct session label: two nodes sharing one label would look like a
+  // self-referral to the discovery guard (the signed session is the node
+  // identity), and the tests must model two DIFFERENT hosts.
+  apply(ctx, makeConfig({ announce: true, session: 'peer-node', dshHome: tmpHome(), ...overrides }))
   const port = (ctx as unknown as { webServer: WebServer }).webServer.port
   return {
     baseUrl: `http://127.0.0.1:${String(port)}`,
@@ -446,7 +449,7 @@ describe('a2a plugin decentralized routing (peers)', () => {
         ok: true,
         // The unreachable seed contributes nothing; the host's own row and
         // the good peer's row remain.
-        teams: [{ team: 'dsh', local: true }, { team: 'dsh', session: 'sess-1' }],
+        teams: [{ team: 'dsh', local: true }, { team: 'dsh', session: 'peer-node' }],
       })
     } finally {
       vi.unstubAllGlobals()
@@ -460,15 +463,15 @@ describe('a2a plugin decentralized routing (peers)', () => {
     // node — the shape a peer produces when it learned this node URL and
     // lists it back. Fetching it must neither track the peer nor surface
     // its teams (they are this host own teams).
-    const peer = await mountPeerNode()
+    // Force the collision: the peer card carries the caller's own session
+    // label (the self-referral shape), so the guard must drop it again.
+    const peer = await mountPeerNode({ session: 'sess-1' })
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(TimerService)
     await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
-    // The peer node derives its own session; force it to collide with the
-    // caller by naming the caller session explicitly on both sides.
-    apply(ctx, makeConfig({ peers: [peer.baseUrl], sessionNodes: true, session: 'sess-1', dshHome: tmpHome() }))
+    apply(ctx, makeConfig({ peers: [peer.baseUrl], sessionNodes: true, dshHome: tmpHome() }))
     try {
       const port = (ctx as unknown as { webServer: WebServer }).webServer.port
       const readState = async (): Promise<{ remote: { team: string; session?: string }[]; peers: { url: string }[] }> =>
@@ -535,7 +538,7 @@ describe('a2a plugin decentralized routing (peers)', () => {
     try {
       const teams = ctx.tools.get('a2a_teams')
       const listed = await teams?.execute({}, runContext())
-      expect(listed).toMatchObject({ ok: true, teams: [{ team: 'dsh', local: true }, { team: 'dsh', session: 'sess-1' }] })
+      expect(listed).toMatchObject({ ok: true, teams: [{ team: 'dsh', local: true }, { team: 'dsh', session: 'peer-node' }] })
 
       const route = ctx.tools.get('a2a_route')
       const result = await route?.execute({ team: 'dsh', message: 'hello peer' }, runContext())
