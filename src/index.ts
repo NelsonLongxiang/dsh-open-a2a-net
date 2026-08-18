@@ -8,6 +8,7 @@
 
 import { createHash, createPrivateKey, generateKeyPairSync, randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { networkInterfaces } from 'node:os'
 import { dirname, join } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { signCard, type CardCore } from './card.ts'
@@ -393,6 +394,21 @@ export function apply(ctx: Context, config: Config): void {
     if (recentActivity.length > ACTIVITY_CAP) recentActivity.splice(0, recentActivity.length - ACTIVITY_CAP)
   }
 
+  /**
+   * This host's primary LAN IPv4 (first non-internal address), computed once:
+   * a node fact the card and state route publish so peers and operators can
+   * tell machines apart in a same-team fleet. Empty when no external address
+   * exists (loopback-only deployments).
+   */
+  const lanIp = (() => {
+    for (const entries of Object.values(networkInterfaces())) {
+      for (const entry of entries ?? []) {
+        if (entry.family === 'IPv4' && !entry.internal) return entry.address
+      }
+    }
+    return ''
+  })()
+
   // Session nodes: every joined top-level session is its own addressable
   // team (label `<session>-<agentId8>`, team `<team>/<agentId8>`). Joining
   // is a local fact: the entry dispatches `/a2a/direct` routes and rides
@@ -472,15 +488,19 @@ export function apply(ctx: Context, config: Config): void {
 
   /**
    * Human-facing node facts for one session: the session title (fallback:
-   * the node label) and a one-line recent-activity excerpt.
+   * the node label), a one-line recent-activity excerpt, and the session's
+   * working directory (from the durable session header — a storage fact
+   * read fresh, never baked into any prompt).
    * @param agent - the session the facts describe.
-   * @returns the name/description pair the card and state route serve.
+   * @returns the name/description/workspace triple the card and state route serve.
    */
-  function nodeMetadataOf(agent: Agent): { name: string; description: string } {
+  function nodeMetadataOf(agent: Agent): { name: string; description: string; workspace?: string } {
     const title = ctx.get('sessionTitle')?.get(agent.session)?.title
+    const cwd = (agent.session as { header?: { cwd?: string } }).header?.cwd
     return {
       name: title !== undefined && title !== '' ? title : sessionLabelOf(agent),
       description: recentActivityOf(agent),
+      ...(cwd !== undefined && cwd !== '' ? { workspace: cwd } : {}),
     }
   }
 
@@ -607,6 +627,7 @@ export function apply(ctx: Context, config: Config): void {
             const body = JSON.stringify({
               nodes: true,
               sessions,
+              host: lanIp === '' ? {} : { lanIp },
               peers: peerStore.list().map(url => ({ url, score: peerStore.score(url) })),
               activity: recentActivity.slice(),
               inFlight: [...inFlightRoutes.values()].map(route => ({
@@ -683,7 +704,7 @@ export function apply(ctx: Context, config: Config): void {
           // re-signs), so each card read spreads the publisher's latest
           // view of the network.
           const sessionTeams = [...sessionNodes.values()].map(agent => ({ team: sessionTeamOf(agent), ...nodeMetadataOf(agent) }))
-          const body = JSON.stringify({ ...currentCard, peers: peerStore.list(), ...(sessionTeams.length > 0 ? { sessionTeams } : {}), description: `A2A node exposing team ${config.team}` })
+          const body = JSON.stringify({ ...currentCard, peers: peerStore.list(), ...(sessionTeams.length > 0 ? { sessionTeams } : {}), ...(lanIp !== '' ? { lanIp } : {}), description: `A2A node exposing team ${config.team}` })
           res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) })
           res.end(body)
         },
@@ -917,16 +938,22 @@ ${message}`
   ctx.tools.register(defineTool({
     name: 'a2a_teams',
     description:
-      'List reachable A2A teams: this host\'s own process team and joined session nodes first (marked [this host], '
+      'List or search reachable A2A teams: this host\'s own process team and joined session nodes first (marked [this host], '
       + 'routable over loopback — same-host collaboration needs no peers), then teams across the tracked peer network '
-      + 'with owner label and a recent-activity excerpt for joined sessions. Call this before a2a_route to pick a target team.',
-    parameters: {},
+      + 'with owner label and a recent-activity excerpt for joined sessions. Pass query to filter by keyword '
+      + '(case-insensitive substring over team name, session title, and activity excerpt) — searching discovers one '
+      + 'extra referral hop within the call, so a keyword hunt reaches sessions the previous call had not yet gossiped. '
+      + 'Call this before a2a_route to pick a target team.',
+    parameters: {
+      query: { type: 'string', description: 'Optional keyword filter (case-insensitive substring over team/name/description).' },
+    },
     output: {
       schema: {
         type: 'object',
         additionalProperties: false,
         properties: {
           ok: { type: 'boolean', required: true },
+          query: { type: 'string', description: 'The filter applied, empty when unfiltered.' },
           teams: {
             type: 'array',
             required: true,
@@ -944,16 +971,21 @@ ${message}`
           },
         },
       },
-      render: (_args, value) => [{
+      render: (args, value) => [{
         type: 'text',
         text: value.teams.length === 0
-          ? 'No A2A teams are currently reachable.'
+          ? `No A2A teams${(value.query ?? '') === '' ? '' : ` matching "${String(args.query)}"`} are currently reachable.`
           : value.teams.map(team => `- ${team.team}${team.local === true ? ' [this host]' : ''}${team.name === '' ? '' : ` (${team.name})`}${team.description === '' ? '' : ` — ${team.description}`}`).join('\n'),
       }],
     },
-    presentCall: () => ({ card: 'generic', title: 'List reachable A2A teams', kind: 'other', rawInput: null }),
-    execute: async (): Promise<{ ok: boolean; teams: { team: string; session: string; name: string; description: string; local?: boolean }[] }> => {
-      return { ok: true, teams: await listDirectoryTeams() }
+    presentCall: args => ({ card: 'generic', title: args.query === undefined || args.query === '' ? 'List reachable A2A teams' : `Search A2A teams: ${args.query}`, kind: 'other', rawInput: args }),
+    execute: async (args: { query?: string }): Promise<{ ok: boolean; query: string; teams: { team: string; session: string; name: string; description: string; local?: boolean }[] }> => {
+      const query = args.query?.trim().toLowerCase() ?? ''
+      const teams = await listDirectoryTeams(query !== '')
+      if (query === '') return { ok: true, query: '', teams }
+      const matches = (team: { team: string; name: string; description: string }): boolean =>
+        team.team.toLowerCase().includes(query) || team.name.toLowerCase().includes(query) || team.description.toLowerCase().includes(query)
+      return { ok: true, query, teams: teams.filter(matches) }
     },
   }))
 
@@ -965,8 +997,16 @@ ${message}`
    * not listed — only names a tracked zone publishes directly appear;
    * delegations resolve at route time (a resolvable delegation always
    * aliases a listed team, so rows for them would repeat).
+   *
+   * Discovery is gossip: each fetch offers the card's referrals to the
+   * store, and mid-iteration offers are normally fetched on the next call.
+   * A search pass chases one extra hop within the call — after the first
+   * sweep, peers that were newly offered get their own card fetched — so a
+   * keyword hunt reaches sessions the previous call had not yet gossiped,
+   * while staying bounded (one extra sweep, still under the store cap).
+   * @param expand - chase one referral hop beyond the current store walk.
    */
-  async function listDirectoryTeams(): Promise<{ team: string; session: string; name: string; description: string; local?: boolean }[]> {
+  async function listDirectoryTeams(expand: boolean): Promise<{ team: string; session: string; name: string; description: string; local?: boolean }[]> {
     const teams: { team: string; session: string; name: string; description: string; local?: boolean }[] = [
       { team: config.team, session, name: config.agentName, description: '', local: true },
       ...[...sessionNodes.values()].map(agent => ({
@@ -977,13 +1017,21 @@ ${message}`
       })),
     ]
     const fetch = memoizedCardFetch()
-    for (const peer of peerStore.list()) {
+    const collectPeer = async (peer: string): Promise<void> => {
       const card = await fetch(peer)
-      if (card === undefined) continue
+      if (card === undefined) return
       teams.push({ team: card.team, session: card.session, name: card.name, description: '' })
       for (const entry of card.sessionTeams ?? []) {
         teams.push({ team: entry.team, session: card.session, name: entry.name, description: entry.description })
       }
+    }
+    const before = new Set(peerStore.list())
+    await Promise.all([...before].map(collectPeer))
+    if (expand) {
+      // One extra hop: only peers the first sweep's referrals newly offered,
+      // collected once each — the memo keeps already-fetched URLs free.
+      const fresh = peerStore.list().filter(peer => !before.has(peer))
+      if (fresh.length > 0) await Promise.all(fresh.map(collectPeer))
     }
     return teams
   }
@@ -994,11 +1042,14 @@ ${message}`
       'Route a message to a remote A2A team on the peer network and await its reply. '
       + 'Pick the team with a2a_teams first. Team names also resolve through peers\' signed zone '
       + 'delegation records (zone-relative, at most 5 hops). Reuse context_id from a previous reply '
-      + 'to continue that conversation. The call blocks until the remote team responds, which may take minutes.',
+      + 'to continue that conversation. The call blocks until the remote team responds, which may take minutes — '
+      + 'pass async for long-running tasks: delivery returns immediately and the target routes a receipt '
+      + '(message starting "[A2A receipt] task <task_id> <outcome summary>") back to your team.',
     parameters: {
       team: { type: 'string', required: true, description: 'Target team name, from a2a_teams.' },
       message: { type: 'string', required: true, description: 'The request text to send.' },
       context_id: { type: 'string', description: 'Context id from a previous a2a_route reply, to continue that conversation.' },
+      async: { type: 'boolean', description: 'Fire-and-forget: deliver and return immediately (delivered:true + task_id) without waiting for the target\'s reply. The target answers by routing a receipt — a message starting "[A2A receipt] task <task_id> <outcome summary>" — back to your team (visible in a2a_status activity), or follow up with the context_id. Prefer async for long-running tasks (minutes to hours).' },
     },
     output: {
       schema: {
@@ -1009,7 +1060,7 @@ ${message}`
     },
     timeoutMs: config.routeTimeoutMs,
     presentCall: args => ({ card: 'generic', title: `A2A route → ${args.team}`, kind: 'other', rawInput: args }),
-    execute: async (args: { team: string; message: string; context_id?: string }, exec): Promise<Record<string, JsonValue>> => {
+    execute: async (args: { team: string; message: string; context_id?: string; async?: boolean }, exec): Promise<Record<string, JsonValue>> => {
       // The caller identity travels as a routable team (the calling session's
       // node team when it has joined, else the node label), so the receiver
       // can answer with one a2a_route instead of an unroutable display label.
@@ -1020,7 +1071,7 @@ ${message}`
       // cheapest possible and immune to nested-signal aborts), then direct
       // publishers, then zone delegations, deduplicated by URL.
       const failures: string[] = []
-      const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, exec.signal)
+      const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, exec.signal, args.async === true)
       if (outcome !== undefined) {
         if (outcome.ok) return outcome as unknown as Record<string, JsonValue>
         failures.push(`local: ${outcome.error}`)
@@ -1053,21 +1104,42 @@ ${message}`
    * signal still races the wait; on abort the honest result reports delivery
    * without a reply. Results use the canonical A2aRouteOk shape — the wire
    * route shape renders as "failed: undefined" through the tool renderer.
+   * @param asyncMode - deliver without waiting: the steer fires, the
+   * registered waiter still flushes (harmlessly) into the settled promise,
+   * and the caller gets the delivered shape with the receipt contract.
    * @returns the canonical result, or undefined when the team is not local.
    */
-  async function dispatchLocalCandidate(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal): Promise<A2aRouteResult | undefined> {
+  async function dispatchLocalCandidate(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode = false): Promise<A2aRouteResult | undefined> {
     const webServer = ctx.get('webServer')
     const teamIsLocal = team === config.team
       || resolveAgentForTeam(team) !== undefined
       || joinedSessions.list().some(id => `${config.team}/${id8(id)}` === team)
     if (!teamIsLocal || webServer === undefined) return undefined
+    const taskId = `direct-${Math.random().toString(16).slice(2, 10)}`
+    const flight = beginRoute(team, 'local')
+    const wait = routeIntoAgent(team, message, callerSession ?? session)
+    if (asyncMode) {
+      // Fire-and-forget: the steer already happened inside routeIntoAgentFor
+      // (synchronous), the waiter owns the flush timeout, and the settled
+      // promise's answer resolves a future nobody reads — safe. Delivery is
+      // the success criterion under the receipt contract.
+      void wait.then(() => { endRoute(flight) }, () => { endRoute(flight) })
+      recordActivity('out', team, 'local', true)
+      return {
+        ok: true,
+        team,
+        reply: `Delivered to ${team} (async). The target routes a receipt — a message starting "[A2A receipt] task ${taskId} <outcome summary>" — back to your team when done; watch a2a_status activity or follow up with the context id.`,
+        task_id: taskId,
+        context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
+        task_status: 'TASK_STATE_DELIVERED',
+      }
+    }
     const aborted = new Promise<never>((_, reject) => {
       signal.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
     })
-    const flight = beginRoute(team, 'local')
     let outcome: Awaited<ReturnType<typeof routeIntoAgent>>
     try {
-      outcome = await Promise.race([routeIntoAgent(team, message, callerSession ?? session), aborted])
+      outcome = await Promise.race([wait, aborted])
     } catch {
       endRoute(flight)
       recordActivity('out', team, 'local', true)
@@ -1075,7 +1147,7 @@ ${message}`
         ok: true,
         team,
         reply: `The message was delivered to ${team}, but the wait for its reply was aborted (the target session answers on its own cadence; route again with the context id).`,
-        task_id: `direct-${Math.random().toString(16).slice(2, 10)}`,
+        task_id: taskId,
         context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
         task_status: 'TASK_STATE_ABORTED_WAIT',
       }
@@ -1087,7 +1159,7 @@ ${message}`
         ok: true,
         team,
         reply: outcome.reply,
-        task_id: `direct-${Math.random().toString(16).slice(2, 10)}`,
+        task_id: taskId,
         context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
         task_status: 'TASK_STATE_COMPLETED',
       }
@@ -1097,7 +1169,11 @@ ${message}`
 
   /**
    * The route dispatcher's peer half: one candidate dial with the in-flight
-   * registration and activity-ring record the panel reads.
+   * registration and activity-ring record the panel reads. Async mode cannot
+   * reuse the blocking HTTP wait — the peer's /a2a/direct only answers with
+   * the final reply — so async peer routes keep the blocking dial but the
+   * caller-side wait is bounded by the tool budget; the receipt contract
+   * covers the long tail. (Same-host async is the fully async path.)
    */
   async function dispatchPeerCandidate(url: string, team: string, message: string, contextId: string | undefined, signal: AbortSignal, callerSession: string | undefined): Promise<A2aRouteResult> {
     const flight = beginRoute(team, url)

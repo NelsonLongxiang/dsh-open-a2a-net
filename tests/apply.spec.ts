@@ -473,6 +473,27 @@ describe('a2a plugin decentralized routing (peers)', () => {
     }
   })
 
+  it('a2a_route async delivers immediately and returns the receipt contract', async () => {
+    const { ctx, agents, port } = await mountJoinHarness()
+    try {
+      const session = replyingAgent(ctx)
+      agents.agent = session
+      ctx.emit('agent/created', { agent: session })
+      await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+      const route = ctx.tools.get('a2a_route')
+      const result = await route?.execute({ team: 'dsh/agent-1', message: 'long task', async: true }, runContext()) as { ok: boolean; reply: string; task_status: string }
+      // Delivery is the success: the delivered shape names the receipt
+      // contract and never waits for the target's reply.
+      expect(result.ok).toBe(true)
+      expect(result.task_status).toBe('TASK_STATE_DELIVERED')
+      expect(result.reply).toContain('[A2A receipt] task')
+      // The steer already happened (fire-and-forget still delivers).
+      expect(session.steer).toHaveBeenCalledTimes(1)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
   it('a2a_route fails over to the next peer publishing the team when the first candidate fails', async () => {
     // Both peers publish `shared`; the first has no live agent, so its direct
     // route answers an error and the caller must fall through to the second.
