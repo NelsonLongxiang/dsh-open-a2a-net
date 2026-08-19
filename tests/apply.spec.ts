@@ -1702,6 +1702,33 @@ describe('a2a plugin outbound tools', () => {
     await ctx.fiber.dispose()
   })
 
+  it('renders the a2a_probe report with a health summary and per-peer rows', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    apply(ctx, makeConfig())
+    const probe = ctx.tools.get('a2a_probe')
+    const empty = probe?.output.render({}, { ok: true, results: [] }) ?? []
+    expect(empty).toEqual([{ type: 'text', text: 'No peers are tracked; add seeds or let referrals arrive.' }])
+    const mixed = probe?.output.render({}, {
+      ok: true,
+      results: [
+        { url: 'http://peer:1', reachable: true, ms: 42, team: 'dsh' },
+        { url: 'http://gone:1', reachable: false, ms: 3, error: 'unreachable: ECONNREFUSED' },
+      ],
+    }) ?? []
+    expect(mixed).toEqual([{
+      type: 'text',
+      text: [
+        'Fleet probe (2): 1 reachable, 1 down',
+        '  ✓ http://peer:1 (team dsh, 42ms)',
+        '  ✗ http://gone:1 (unreachable: ECONNREFUSED)',
+      ].join('\n'),
+    }])
+    await ctx.fiber.dispose()
+  })
+
   it('renders the a2a_tasks ledger with wait ages, follow-up contexts, and resolution times', async () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)

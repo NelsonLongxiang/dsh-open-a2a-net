@@ -1869,11 +1869,13 @@ ${message}`
       },
       render: (_args, value) => [{
         type: 'text',
-        text: [
-          `Fleet probe (${String(value.results.length)}):`,
-          ...value.results.map((row: { url: string; reachable: boolean; ms?: number; team?: string; error?: string }) =>
-            `  ${row.reachable ? '✓' : '✗'} ${row.url}${row.reachable ? ` (team ${String(row.team)}, ${String(row.ms)}ms)` : ` (${String(row.error)})`}`),
-        ].join('\n'),
+        text: value.results.length === 0
+          ? 'No peers are tracked; add seeds or let referrals arrive.'
+          : [
+            `Fleet probe (${String(value.results.length)}): ${String(value.results.filter((row: { reachable: boolean }) => row.reachable).length)} reachable, ${String(value.results.filter((row: { reachable: boolean }) => !row.reachable).length)} down`,
+            ...value.results.map((row: { url: string; reachable: boolean; ms?: number; team?: string; error?: string }) =>
+              `  ${row.reachable ? '✓' : '✗'} ${row.url}${row.reachable ? ` (team ${String(row.team)}, ${String(row.ms)}ms)` : ` (${String(row.error)})`}`),
+          ].join('\n'),
       }],
     },
     presentCall: args => ({ card: 'generic', title: args.url === undefined || args.url === '' ? 'Probe the A2A fleet' : `Probe A2A peer: ${args.url}`, kind: 'other', rawInput: args }),
