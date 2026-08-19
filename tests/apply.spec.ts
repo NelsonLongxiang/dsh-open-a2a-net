@@ -1717,6 +1717,7 @@ describe('a2a plugin outbound tools', () => {
       tasks: [
         { taskId: 'direct-aa', team: 'research', peer: 'http://peer:1', startedAt: now - 2 * 60_000, contextId: 'ctx-1', status: 'pending' },
         { taskId: 'direct-bb', team: 'dsh', peer: 'local', startedAt: now - 4 * 60_000, resolvedAt: now - 60_000, status: 'resolved', summary: 'tests green' },
+        { taskId: 'direct-cc', team: 'research', peer: 'http://peer:2', startedAt: now - 2 * 60 * 60_000, contextId: 'ctx-2', status: 'pending' },
       ],
     }) ?? []
     expect(listed).toEqual([{
@@ -1724,6 +1725,7 @@ describe('a2a plugin outbound tools', () => {
       text: [
         'Owed receipts:',
         '  - direct-aa → research (via http://peer:1), waiting 2m, follow-up context ctx-1',
+        '  - direct-cc → research (via http://peer:2), waiting 2h, follow-up context ctx-2, still no receipt — the target may be gone; probe it or follow up with the context id',
         'Resolved:',
         '  - direct-bb → dsh (via this host) after 3m: tests green',
       ].join('\n'),

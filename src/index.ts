@@ -1814,7 +1814,15 @@ ${message}`
           ? 'No routed tasks are owed a receipt.'
           : [
             ...(value.tasks.some((task: { status: string }) => task.status === 'pending') ? ['Owed receipts:'] : []),
-            ...value.tasks.filter((task: { status: string }) => task.status === 'pending').map((task: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string }) => `  - ${task.taskId} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}), waiting ${describeAge(Date.now() - task.startedAt)}${task.contextId === undefined || task.contextId === '' ? '' : `, follow-up context ${task.contextId}`}`),
+            ...value.tasks.filter((task: { status: string }) => task.status === 'pending').map((task: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string }) => {
+              // Beyond an hour the receipt is more likely lost than late
+              // (the target died before routing it): name the two ways out.
+              const overdue = Date.now() - task.startedAt > 60 * 60_000
+                ? ', still no receipt — the target may be gone; probe it or follow up with the context id'
+                : ''
+              const context = task.contextId === undefined || task.contextId === '' ? '' : `, follow-up context ${task.contextId}`
+              return `  - ${task.taskId} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}), waiting ${describeAge(Date.now() - task.startedAt)}${context}${overdue}`
+            }),
             ...(value.tasks.some((task: { status: string }) => task.status === 'resolved') ? ['Resolved:'] : []),
             ...value.tasks.filter((task: { status: string }) => task.status === 'resolved').map((task: { taskId: string; team: string; peer: string; startedAt: number; resolvedAt?: number; summary?: string }) => `  - ${task.taskId} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer})${typeof task.resolvedAt === 'number' ? ` after ${describeAge(task.resolvedAt - task.startedAt)}` : ''}: ${task.summary === undefined || task.summary === '' ? 'resolved' : task.summary}`),
           ].join('\n'),
