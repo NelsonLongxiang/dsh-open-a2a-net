@@ -15,8 +15,11 @@ node** other hosts can discover and join from the web sidebar.
 npx -p @deepseek-ai/dsh dsh plugin --profile <name> add @nelsonlongxiang/dsh-open-a2a-net
 ```
 
-(As a package specifier, a local path, or a Git URL; the package declares no `prepare`, so a Git or path install
-needs `pnpm build` in the repository first.) Then restart the profile. The plugin composes beside the stock
+(As a package specifier, a local path, or a Git URL; the package runs `pnpm build` in `prepare`, so a source
+install builds on install. Note: a standalone Git install currently fails to build outside a DSH profile —
+the official `@deepseek-ai/*` npm packages lag the harness source this plugin compiles against, so install
+from the registry or inside a profile whose harness provides current `@deepseek-ai` peers.) Then restart the
+profile. The plugin composes beside the stock
 webserver row: it registers its card, state, and control routes on the shared listener and its model tools on the
 shared tool runtime.
 
