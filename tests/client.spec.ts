@@ -179,6 +179,13 @@ describe('routeDirect', () => {
     await expect(makeClient({ fetch: nullFetch }).routeDirect('http://p:1', 't', 'm')).resolves.toMatchObject({ reply: '""' })
   })
 
+  it('falls back to the caller-born task id when a sync answer echoes none', async () => {
+    const { fetch } = stubFetch(() => ({ status: 200, body: { result: 'reply body' } }))
+    await expect(makeClient({ fetch }).routeDirect('http://p:1', 't', 'm', undefined, undefined, undefined, false, 't-9')).resolves.toMatchObject({ task_id: 't-9' })
+    // Without a caller id either, the absent echo stays empty.
+    await expect(makeClient({ fetch }).routeDirect('http://p:1', 't', 'm')).resolves.toMatchObject({ task_id: '' })
+  })
+
   it('returns an explicit failure for a peer error answer', async () => {
     const { fetch } = stubFetch(() => ({ status: 200, body: { error: 'no live agent', code: -32000 } }))
     await expect(makeClient({ fetch }).routeDirect('http://p:1', 't', 'm')).resolves.toEqual({

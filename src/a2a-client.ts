@@ -227,7 +227,9 @@ export class A2aClient {
       ok: true,
       team,
       reply,
-      task_id: wireText(raw.task_id) !== '' ? wireText(raw.task_id) : taskIdFromCaller ?? wireText(raw.task_id),
+      // Same echo-first rule as the delivered branch: the peer's echo wins,
+      // else the caller-born id, else ''.
+      task_id: wireText(raw.task_id) !== '' ? wireText(raw.task_id) : taskIdFromCaller ?? '',
       context_id: wireText(raw.context_id),
       task_status: wireText(raw.task_status),
     }
