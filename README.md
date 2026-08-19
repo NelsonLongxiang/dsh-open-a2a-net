@@ -9,6 +9,10 @@ Each node publishes a **signed, expiring agent card** at `/.well-known/agent-car
 failover across the reachable half of candidates. Every main session can additionally be exposed as a **session
 node** other hosts can discover and join from the web sidebar.
 
+| The sidebar network panel | The network panel overview |
+| --- | --- |
+| ![Sidebar network panel](images/image-01.png) | ![Network panel overview](images/image-02.png) |
+
 ## Install
 
 ```sh
