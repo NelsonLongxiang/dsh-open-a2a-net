@@ -1816,7 +1816,7 @@ ${message}`
             ...(value.tasks.some((task: { status: string }) => task.status === 'pending') ? ['Owed receipts:'] : []),
             ...value.tasks.filter((task: { status: string }) => task.status === 'pending').map((task: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string }) => `  - ${task.taskId} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}), waiting ${describeAge(Date.now() - task.startedAt)}${task.contextId === undefined || task.contextId === '' ? '' : `, follow-up context ${task.contextId}`}`),
             ...(value.tasks.some((task: { status: string }) => task.status === 'resolved') ? ['Resolved:'] : []),
-            ...value.tasks.filter((task: { status: string }) => task.status === 'resolved').map((task: { taskId: string; team: string; peer: string; startedAt: number; resolvedAt?: number; summary?: string }) => `  - ${task.taskId} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}): ${task.summary === undefined || task.summary === '' ? 'resolved' : task.summary}`),
+            ...value.tasks.filter((task: { status: string }) => task.status === 'resolved').map((task: { taskId: string; team: string; peer: string; startedAt: number; resolvedAt?: number; summary?: string }) => `  - ${task.taskId} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer})${typeof task.resolvedAt === 'number' ? ` after ${describeAge(task.resolvedAt - task.startedAt)}` : ''}: ${task.summary === undefined || task.summary === '' ? 'resolved' : task.summary}`),
           ].join('\n'),
       }],
     },

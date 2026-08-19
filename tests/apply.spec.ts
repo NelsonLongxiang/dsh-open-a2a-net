@@ -1702,6 +1702,35 @@ describe('a2a plugin outbound tools', () => {
     await ctx.fiber.dispose()
   })
 
+  it('renders the a2a_tasks ledger with wait ages, follow-up contexts, and resolution times', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    apply(ctx, makeConfig())
+    const tasks = ctx.tools.get('a2a_tasks')
+    const empty = tasks?.output.render({}, { ok: true, tasks: [] }) ?? []
+    expect(empty).toEqual([{ type: 'text', text: 'No routed tasks are owed a receipt.' }])
+    const now = Date.now()
+    const listed = tasks?.output.render({}, {
+      ok: true,
+      tasks: [
+        { taskId: 'direct-aa', team: 'research', peer: 'http://peer:1', startedAt: now - 2 * 60_000, contextId: 'ctx-1', status: 'pending' },
+        { taskId: 'direct-bb', team: 'dsh', peer: 'local', startedAt: now - 4 * 60_000, resolvedAt: now - 60_000, status: 'resolved', summary: 'tests green' },
+      ],
+    }) ?? []
+    expect(listed).toEqual([{
+      type: 'text',
+      text: [
+        'Owed receipts:',
+        '  - direct-aa → research (via http://peer:1), waiting 2m, follow-up context ctx-1',
+        'Resolved:',
+        '  - direct-bb → dsh (via this host) after 3m: tests green',
+      ].join('\n'),
+    }])
+    await ctx.fiber.dispose()
+  })
+
 })
 
 describe('a2a persisted join intent', () => {
