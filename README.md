@@ -62,6 +62,16 @@ shared tool runtime.
 - **Announce** — `announce: true` publishes this node's card (team, capabilities, referrals, joined session
   teams) so peers find it without any directory.
 
+## Model tools at a glance
+
+| Tool | Answers | Notes |
+| --- | --- | --- |
+| `a2a_teams` | Which teams can I route to? | Own, peers', and joined sessions' teams, with activity excerpts. |
+| `a2a_route` | Send a message to a team. | `context_id` continues a conversation; `async: true` delivers without waiting; fails over across candidates. |
+| `a2a_tasks` | Which async tasks still owe a receipt? | Pending rows keep the follow-up `context_id`; overdue rows name the way out; persisted across restarts. |
+| `a2a_probe` | Is the fleet healthy? | One verified-card fetch per peer (or one given url); `N reachable, M down`; misses classified `unreachable` vs `rejected`. |
+| `a2a_status` | What is this node doing right now? | Tracked peers with quality scores, in-flight routes, and recent routing activity. |
+
 ## Configuration
 
 Row config overlays in the profile's patch layers; every key has a schema default.
