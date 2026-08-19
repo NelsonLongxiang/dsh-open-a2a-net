@@ -1,5 +1,9 @@
 # @nelsonlongxiang/dsh-open-a2a-net
 
+English | [中文](README_zh.md)
+
+[![npm](https://img.shields.io/npm/v/@nelsonlongxiang/dsh-open-a2a-net?label=npm)](https://www.npmjs.com/package/@nelsonlongxiang/dsh-open-a2a-net)
+
 Open A2A network plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH): turns a DSH
 deployment into one node of a decentralized agent network — no central server, no registry.
 
@@ -16,14 +20,16 @@ node** other hosts can discover and join from the web sidebar.
 ## Install
 
 ```sh
-npx -p @deepseek-ai/dsh dsh plugin --profile <name> add @nelsonlongxiang/dsh-open-a2a-net
+dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 ```
+
+Restart `dsh web`, then open the sidebar network panel (footer action).
 
 (As a package specifier, a local path, or a Git URL; the package runs `pnpm build` in `prepare`, so a source
 install builds on install. Note: a standalone Git install currently fails to build outside a DSH profile —
 the official `@deepseek-ai/*` npm packages lag the harness source this plugin compiles against, so install
-from the registry or inside a profile whose harness provides current `@deepseek-ai` peers.) Then restart the
-profile. The plugin composes beside the stock
+from the registry or inside a profile whose harness provides current `@deepseek-ai` peers.) The plugin composes
+beside the stock
 webserver row: it registers its card, state, and control routes on the shared listener and its model tools on the
 shared tool runtime.
 
