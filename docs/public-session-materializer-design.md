@@ -1,4 +1,24 @@
-# 公共会话物化能力设计
+# 公共会话物化能力设计（已裁定：不公共化）
+
+## 结论（2026-08-19 创造者裁定）
+
+**本设计已被否决。** `apiProxy.materializeSession(sessionId)` 不公共化为 `sessionMaterializer` 核心服务；A2A 归档守卫与冷唤醒全部内化在 A2A 插件内实现。
+
+裁定依据：唯一消费者是 A2A joined nodes（api-proxy.ts 原注释明示）；核心仓反模式条款"单消费者公共 service seam 不成立——应传私有能力闭包"。公共化的正当性前提是出现第二个非 A2A 消费者，现在不存在。
+
+## 插件侧实际实现（0.5.10 已交付）
+
+- 冷唤醒：继续调 `ctx.apiProxy.materializeSession(sessionId)`（现状已可用，核心零改动）。
+- 归档硬拒：`src/index.ts` `archivedSessionFilter()` 读取 `workspaceRegistry.archivedSessionIds`（公开 getter），命中即拒绝唤醒（wakeColdTeam）并清理 joined intent（pruneArchivedJoins，boot 与 state 读取双路径）。
+- UI 隐藏：`/__dsh_a2a/state` 全量 liveRoots 过滤归档，已归档从未加入的根也不再出现。
+- 测试：`tests/apply.spec.ts` 覆盖 180s 回执时限、boot/runtime 归档清理、归档冷目标不唤醒、归档 live 根不列出。
+
+## 留档
+
+以下原文保留裁定前的分析，仅作历史参考；其中"目标公共契约""迁移方案""上游 PR 最小范围"章节均已作废。
+
+---
+
 
 ## 结论
 
