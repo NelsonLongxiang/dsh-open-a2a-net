@@ -784,7 +784,7 @@ describe('a2a session nodes (opt-in join)', () => {
       sessions: { id: string; label: string; team: string; name: string; description: string; joined: boolean }[]
     }
     // The state route carries the package version (the panel's version badge).
-    expect(state.version).toBe('0.5.9')
+    expect(state.version).toBe('0.5.10')
     expect(state.sessions).toHaveLength(1)
     expect(state.sessions[0]).toMatchObject({
       id: 'agent-1',
@@ -1693,6 +1693,30 @@ describe('a2a plugin archive pruning (archived sessions leave the network)', () 
     await ctx.fiber.dispose()
   })
 
+  it('never lists an archived live session as a join-surface row, joined or not', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    const agents = ctx.get('agents') as unknown as FakeAgentsService
+    const session = replyingAgent(ctx)
+    agents.agent = session
+    apply(ctx, makeConfig({ sessionNodes: true, dshHome: tmpHome() }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    ctx.emit('agent/created', { agent: session })
+    const readState = async (): Promise<{ sessions: { id: string }[] }> =>
+      await (await globalThis.fetch('http://127.0.0.1:' + String(port) + '/__dsh_a2a/state')).json() as { sessions: { id: string }[] }
+    // A live, never-joined root lists as the join surface normally.
+    await expect(readState()).resolves.toMatchObject({ sessions: [{ id: 'agent-1', live: true, joined: false }] })
+    // The registry reports it archived mid-session: archive is closure, so
+    // the panel must stop listing it within one poll — no join was ever
+    // involved, only the listing filter stands.
+    ctx.provide('workspaceRegistry', { archivedSessionIds: ['agent-1'] })
+    await expect(readState()).resolves.toMatchObject({ sessions: [] })
+    await ctx.fiber.dispose()
+  })
   it('never wakes an archived cold target: the async route fails without materializing', async () => {
     const home = tmpHome()
     writeJoined(home, [archivedId])

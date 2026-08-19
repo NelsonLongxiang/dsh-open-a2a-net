@@ -670,15 +670,22 @@ export function apply(ctx: Context, config: Config): void {
               const name = assignments[id]
               return name === undefined ? undefined : name
             }
-            const sessions: Array<Record<string, unknown>> = [...liveRoots.values()].map(agent => ({
-              id: String(agent.id),
-              label: sessionLabelOf(agent),
-              team: sessionTeamOf(agent),
-              ...nodeMetadataOf(agent),
-              joined: sessionNodes.has(String(agent.id)),
-              live: true,
-              ...(groupOf(String(agent.id)) !== undefined ? { group: groupOf(String(agent.id)) } : {}),
-            }))
+            // Archived sessions are closed: the GUI hides them everywhere, so
+            // the panel must not re-list them as join surface rows — joined
+            // or not. (The prune above already took their join intents; this
+            // covers never-joined live roots and any intent a restart left.)
+            const isArchived = archivedSessionFilter()
+            const sessions: Array<Record<string, unknown>> = [...liveRoots.values()]
+              .filter(agent => isArchived?.(String(agent.id)) !== true)
+              .map(agent => ({
+                id: String(agent.id),
+                label: sessionLabelOf(agent),
+                team: sessionTeamOf(agent),
+                ...nodeMetadataOf(agent),
+                joined: sessionNodes.has(String(agent.id)),
+                live: true,
+                ...(groupOf(String(agent.id)) !== undefined ? { group: groupOf(String(agent.id)) } : {}),
+              }))
             // Cold joined sessions: a remembered intent whose Agent is not
             // back yet (host restarted, session not opened). The row carries
             // no facts — the Web client merges the session title from its
