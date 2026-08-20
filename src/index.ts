@@ -137,6 +137,15 @@ export interface Config {
    */
   readonly wakeJoinedOnBoot: boolean
   /**
+   * Pause between consecutive boot wakes. Each wake replays a full session
+   * log — the zstd decode yields the event loop only every 500ms — so
+   * unbounded concurrent wakes of several huge logs starve every request
+   * for tens of seconds after a restart. The serial queue with this pause
+   * keeps the preheat while capping decode saturation: the first wake
+   * starts immediately, and wake-on-route never waits on this queue.
+   */
+  readonly wakeBootStaggerMs: number
+  /**
    * `final` reply budget: how long an inbound direct route waits for the
    * session's next assistant message before answering with a timeout
    * notice. Without it a session that never idles (or never produces text)
@@ -162,6 +171,7 @@ export const Config: s<Config> = s.object({
   dshHome: s.string().default(''),
   sessionNodes: s.boolean().default(true),
   wakeJoinedOnBoot: s.boolean().default(false),
+  wakeBootStaggerMs: s.number().default(3_000),
   cardTtlMs: s.number().default(172_800_000),
   flushTimeoutMs: s.number().default(300_000),
   routeTimeoutMs: s.number().default(1_800_000),
@@ -616,12 +626,27 @@ export function apply(ctx: Context, config: Config): void {
           logger.warn('wakeJoinedOnBoot is on but no api gateway is composed; cold joined sessions stay asleep')
           return
         }
+        // Serial with a configurable pause: one full log replay at a time
+        // keeps the decode from saturating the event loop (concurrent wakes
+        // of several huge logs stalled every request for tens of seconds).
+        // The first wake starts immediately; the re-check drops ids another
+        // path (wake-on-route, a manual open) already materialized.
+        let bootWakeChain: Promise<void> = Promise.resolve()
+        let firstBootWake = true
         for (const id of joinedSessions.list()) {
           if (liveRoots.has(id)) continue
           // The remount listener joins the node the moment the woken agent
           // publishes; a failed wake keeps the cold row and its intent.
-          materialize(id)?.catch((error: unknown) => {
-            logger.warn(`boot wake of ${id} failed: ${String(error)}`)
+          const pauseMs = firstBootWake ? 0 : config.wakeBootStaggerMs
+          firstBootWake = false
+          bootWakeChain = bootWakeChain.then(async () => {
+            if (pauseMs > 0) await new Promise(resolve => setTimeout(resolve, pauseMs))
+            if (liveRoots.has(id)) return
+            try {
+              await materialize(id)
+            } catch (error: unknown) {
+              logger.warn(`boot wake of ${id} failed: ${String(error)}`)
+            }
           })
         }
       }

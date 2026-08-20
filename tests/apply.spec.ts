@@ -102,6 +102,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     delegates: [],
     sessionNodes: false,
     wakeJoinedOnBoot: false,
+    wakeBootStaggerMs: 3_000,
     dshHome: '',
     cardTtlMs: 172_800_000,
     ...overrides,
@@ -784,7 +785,7 @@ describe('a2a session nodes (opt-in join)', () => {
       sessions: { id: string; label: string; team: string; name: string; description: string; joined: boolean }[]
     }
     // The state route carries the package version (the panel's version badge).
-    expect(state.version).toBe('0.5.10')
+    expect(state.version).toBe(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version)
     expect(state.sessions).toHaveLength(1)
     expect(state.sessions[0]).toMatchObject({
       id: 'agent-1',
@@ -1018,6 +1019,109 @@ describe('a2a session nodes (opt-in join)', () => {
     ctx.provide('apiProxy', { materializeSession: materialize } as never)
     loader.settle()
     await vi.waitFor(() => { expect(materialize).toHaveBeenCalledWith('agent-1') })
+    await ctx.fiber.dispose()
+  })
+
+  it('runs boot wakes serially with the configured pause between them', async () => {
+    const home = tmpHome()
+    {
+      const ctx = new Context()
+      await ctx.plugin(SystemPrompt)
+      await ctx.plugin(ToolRuntime)
+      await ctx.plugin(TimerService)
+      await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+      await ctx.plugin(FakeAgentsService)
+      apply(ctx, makeConfig({ sessionNodes: true, dshHome: home }))
+      const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+      const session = replyingAgent(ctx)
+      ;(ctx.get('agents') as unknown as FakeAgentsService).agent = session
+      ctx.emit('agent/created', { agent: session })
+      await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+      await ctx.fiber.dispose()
+    }
+    // Two cold joined ids: joins must persist both intents.
+    const homeJoin = home
+    mkdirSync(join(homeJoin, 'a2a'), { recursive: true })
+    const joinedPath = join(homeJoin, 'a2a', 'joined.json')
+    writeFileSync(joinedPath, JSON.stringify({ sessions: ['agent-1', 'session-2-0000-0000-0000-000000000000'] }))
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    ctx.provide('sessionPersistence', {
+      list: async () => [{ id: SessionId('agent-1') }, { id: SessionId('session-2-0000-0000-0000-000000000000') }],
+    } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
+    const events: string[] = []
+    let resolveFirst: (() => void) | undefined
+    const firstGate = new Promise<void>(resolve => { resolveFirst = resolve })
+    const materialize = vi.fn(async (id: string) => {
+      events.push('start:' + String(id))
+      if (String(id) === 'agent-1') await firstGate
+      events.push('end:' + String(id))
+      return makeAgent()
+    })
+    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, wakeBootStaggerMs: 30, dshHome: home }))
+    // The first wake starts at once; the second must not start before the
+    // first settles (serial) nor before the pause elapses (stagger).
+    await vi.waitFor(() => { expect(events).toContain('start:agent-1') })
+    expect(events.filter(e => e.startsWith('start:'))).toEqual(['start:agent-1'])
+    resolveFirst?.()
+    await vi.waitFor(() => { expect(events.slice(0, 3)).toEqual(['start:agent-1', 'end:agent-1', 'start:session-2-0000-0000-0000-000000000000']) })
+    await ctx.fiber.dispose()
+  })
+
+  it('route wake never waits on the boot queue, and the parked boot wake skips it', async () => {
+    const home = tmpHome()
+    const slowId = 'session-2-0000-0000-0000-000000000000'
+    mkdirSync(join(home, 'a2a'), { recursive: true })
+    writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: [slowId, 'agent-1'] }))
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    ctx.provide('sessionPersistence', {
+      list: async () => [{ id: SessionId(slowId) }, { id: SessionId('agent-1') }],
+    } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
+    let releaseSlow: (() => void) | undefined
+    const slowGate = new Promise<void>(resolve => { releaseSlow = resolve })
+    const materialize = vi.fn(async (id: string) => {
+      if (String(id) === slowId) {
+        await slowGate
+        const slow = replyingAgent(ctx)
+        ;(ctx.get('agents') as unknown as FakeAgentsService).agent = slow
+        ctx.emit('agent/created', { agent: slow })
+        return slow
+      }
+      const woken = replyingAgent(ctx)
+      ;(ctx.get('agents') as unknown as FakeAgentsService).agent = woken
+      ctx.emit('agent/created', { agent: woken })
+      return woken
+    })
+    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    // The boot queue's first wake (slowId) is in flight and the long stagger
+    // parks agent-1's boot wake — but a route addressed to agent-1 wakes it
+    // at once, and when the parked boot wake finally runs it skips the id
+    // the route already materialized.
+    apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, wakeBootStaggerMs: 5_000, dshHome: home }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    await vi.waitFor(() => { expect(materialize).toHaveBeenCalledWith(slowId) })
+    const routeResponse = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+      method: 'POST',
+      body: JSON.stringify({ team: 'dsh/agent-1', message: 'route wake during the stagger window', wait: false }),
+    })
+    const routed = await routeResponse.json() as { delivered?: boolean }
+    expect(routed.delivered).toBe(true)
+    expect(materialize).toHaveBeenCalledWith('agent-1')
+    releaseSlow?.()
+    await new Promise(resolve => setTimeout(resolve, 30))
+    // agent-1 was materialized exactly once — by the route, not the queue.
+    const calls = materialize.mock.calls.map(call => String(call[0]))
+    expect(calls.filter(id => id === 'agent-1')).toHaveLength(1)
     await ctx.fiber.dispose()
   })
 
@@ -1362,6 +1466,7 @@ describe('a2a plugin module surface', () => {
       delegates: [],
       sessionNodes: true,
       wakeJoinedOnBoot: false,
+      wakeBootStaggerMs: 3_000,
       dshHome: '',
       cardTtlMs: 172_800_000,
       flushTimeoutMs: 300_000,
