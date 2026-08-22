@@ -160,6 +160,12 @@ export interface Config {
   /** Shorter window for unreachable/invalid cards, so a revived peer reappears quickly. */
   readonly cardCacheNegativeTtlMs: number
   /**
+   * Serve window for the panel\x27s remote rows. The refresh itself rides the
+   * shared card cache, so this is pure sweep cadence: how often real
+   * network activity happens while the panel polls every 2s.
+   */
+  readonly remoteRowsTtlMs: number
+  /**
    * `final` reply budget: how long an inbound direct route waits for the
    * session's next assistant message before answering with a timeout
    * notice. Without it a session that never idles (or never produces text)
@@ -189,6 +195,7 @@ export const Config: s<Config> = s.object({
   stateColdRowsTtlMs: s.number().default(5_000),
   cardCacheTtlMs: s.number().default(60_000),
   cardCacheNegativeTtlMs: s.number().default(30_000),
+  remoteRowsTtlMs: s.number().default(15_000),
   cardTtlMs: s.number().default(172_800_000),
   flushTimeoutMs: s.number().default(300_000),
   routeTimeoutMs: s.number().default(1_800_000),
@@ -716,15 +723,22 @@ export function apply(ctx: Context, config: Config): void {
     }
 
     // Peer-side rows for the panel, grouped there by origin: the sweep is
-    // real network work, so a shared 5s cache serves the 2s panel poll
-    // without hammering peers. The state read answers synchronously from the
-    // cache (never awaiting inside the handler) and kicks a background
-    // refresh when stale — the next poll picks the fresh rows up.
+    // real network work, so a shared window serves the 2s panel poll without
+    // hammering peers. The state read answers synchronously from the cache
+    // (never awaiting inside the handler) and kicks a background refresh when
+    // stale — the next poll picks the fresh rows up. With the shared card
+    // cache serving the sweep\x27s fetches, the window length is pure cadence:
+    // remoteRowsTtlMs (default 15s) spaces the real network activity while
+    // staying well inside a peer restart\x27s noticeability. Single-flight: a
+    // refresh already in flight serves every poll that arrives before it
+    // settles — no stacked sweeps.
     let remoteRowsCache: { at: number; rows: { team: string; name: string; origin?: string; workspace?: string }[] } | undefined
+    let remoteRowsInFlight: Promise<void> | undefined
     const refreshRemoteRows = (): void => {
       const now = Date.now()
-      if (remoteRowsCache !== undefined && now - remoteRowsCache.at < 5_000) return
-      void listDirectoryTeams(false)
+      if (remoteRowsCache !== undefined && now - remoteRowsCache.at < config.remoteRowsTtlMs) return
+      if (remoteRowsInFlight !== undefined) return
+      remoteRowsInFlight = listDirectoryTeams(false)
         .then(all => {
           remoteRowsCache = {
             at: now,
@@ -734,6 +748,9 @@ export function apply(ctx: Context, config: Config): void {
           }
         })
         .catch(() => {})
+        .finally(() => {
+          remoteRowsInFlight = undefined
+        })
     }
     whenWebServerSettled((webServer) => {
       ctx.effect(() => webServer.register({
