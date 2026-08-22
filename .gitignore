@@ -5,3 +5,6 @@ lib/
 .sessions/
 .npmrc
 package-lock.json
+i.log
+t.log
+tscc.log
