@@ -146,6 +146,12 @@ export interface Config {
    */
   readonly wakeBootStaggerMs: number
   /**
+   * How long the state route serves the cold-row id set from cache before
+   * re-enumerating the persistence layer. The panel polls every 2s; the
+   * default keeps one full enumeration per 5s instead of one per poll.
+   */
+  readonly stateColdRowsTtlMs: number
+  /**
    * `final` reply budget: how long an inbound direct route waits for the
    * session's next assistant message before answering with a timeout
    * notice. Without it a session that never idles (or never produces text)
@@ -172,6 +178,7 @@ export const Config: s<Config> = s.object({
   sessionNodes: s.boolean().default(true),
   wakeJoinedOnBoot: s.boolean().default(false),
   wakeBootStaggerMs: s.number().default(3_000),
+  stateColdRowsTtlMs: s.number().default(5_000),
   cardTtlMs: s.number().default(172_800_000),
   flushTimeoutMs: s.number().default(300_000),
   routeTimeoutMs: s.number().default(1_800_000),
@@ -660,6 +667,22 @@ export function apply(ctx: Context, config: Config): void {
       })
     }
 
+    // Cold-row ids are the expensive half of the state read: enumerating
+    // the persistence layer walks every stored session's metadata, and the
+    // panel polls this route every 2s. A 5s TTL keeps the poll cheap while
+    // staying fresher than the panel's own cadence; live rows come from
+    // liveRoots and never touch this cache.
+    let coldRowsCache: { at: number; ids: Set<string> } | undefined
+    const coldJoinedIds = async (): Promise<Set<string>> => {
+      const now = Date.now()
+      if (coldRowsCache !== undefined && now - coldRowsCache.at < config.stateColdRowsTtlMs) return coldRowsCache.ids
+      const persistence = ctx.get('sessionPersistence')
+      if (persistence === undefined) return new Set()
+      const ids = new Set((await persistence.list()).map(header => String(header.id)))
+      coldRowsCache = { at: now, ids }
+      return ids
+    }
+
     // Peer-side rows for the panel, grouped there by origin: the sweep is
     // real network work, so a shared 5s cache serves the 2s panel poll
     // without hammering peers. The state read answers synchronously from the
@@ -716,20 +739,22 @@ export function apply(ctx: Context, config: Config): void {
             // no facts — the Web client merges the session title from its
             // own list — and wakes through the normal session-open path,
             // after which the remount above joins it automatically.
+            // Cold rows only exist when a joined intent lacks a live agent;
+            // with all intents live (or none) the persistence layer is never
+            // asked and the handler stays synchronous to its response.
+            const coldCandidates = joinedSessions.list().filter(id => !liveRoots.has(id))
             const persistence = ctx.get('sessionPersistence')
-            if (persistence !== undefined) {
-              const persisted = new Set((await persistence.list()).map(header => String(header.id)))
-              for (const id of joinedSessions.list()) {
-                if (liveRoots.has(id) || !persisted.has(id)) continue
-                sessions.push({
-                  id,
-                  label: `${session}-${id8(id)}`,
-                  team: `${config.team}/${id8(id)}`,
-                  joined: true,
-                  live: false,
-                  ...(groupOf(id) !== undefined ? { group: groupOf(id) } : {}),
-                })
-              }
+            const persisted = persistence !== undefined && coldCandidates.length > 0 ? await coldJoinedIds() : new Set<string>()
+            for (const id of coldCandidates) {
+              if (!persisted.has(id)) continue
+              sessions.push({
+                id,
+                label: `${session}-${id8(id)}`,
+                team: `${config.team}/${id8(id)}`,
+                joined: true,
+                live: false,
+                ...(groupOf(id) !== undefined ? { group: groupOf(id) } : {}),
+              })
             }
             const body = JSON.stringify({
               nodes: true,
