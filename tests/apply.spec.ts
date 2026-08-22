@@ -1693,6 +1693,40 @@ describe('a2a removal-regression edges', () => {
     await ctx.fiber.dispose()
   })
 
+  it('bounds the recent-activity scan for textless huge logs (memoized, no full walk)', async () => {
+    const { ctx, agents, port } = await mountJoinHarness({ announce: true })
+    const session = replyingAgent(ctx)
+    // 5000 non-text events: the backward scan must stop at its limit and
+    // answer the placeholder, then the memo serves repeats.
+    const filler = { type: 'turn/start', data: {} }
+    ;(session.session.events as unknown[]).push(...Array.from({ length: 5_000 }, () => filler))
+    agents.agent = session
+    ctx.emit('agent/created', { agent: session })
+    await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+    const readCard = async (): Promise<string> => (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).text()
+    await expect(readCard()).resolves.toContain('no activity yet')
+    // A text landing in the tail window invalidates the memo on the next serve.
+    ;(session.session.events as unknown[]).push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'fresh tail text' }] } } })
+    await expect(readCard()).resolves.toContain('fresh tail text')
+    await ctx.fiber.dispose()
+  })
+
+  it('serves the memoized description when the log has not grown', async () => {
+    const { ctx, agents, port } = await mountJoinHarness({ announce: true })
+    const session = replyingAgent(ctx)
+    ;(session.session.events as unknown[]).push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'stable line' }] } } })
+    agents.agent = session
+    ctx.emit('agent/created', { agent: session })
+    await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+    const readCard = async (): Promise<{ sessionTeams: { description: string }[] }> =>
+      await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).json() as { sessionTeams: { description: string }[] }
+    const first = await readCard()
+    expect(first.sessionTeams[0]?.description).toBe('stable line')
+    const second = await readCard()
+    expect(second.sessionTeams[0]?.description).toBe('stable line')
+    await ctx.fiber.dispose()
+  })
+
   it('answers a steer rejection from the direct endpoint with the failure text', async () => {
     const { ctx, agents, port } = await mountJoinHarness()
     const session = makeAgent()
