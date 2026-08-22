@@ -103,6 +103,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     sessionNodes: false,
     wakeJoinedOnBoot: false,
     wakeBootStaggerMs: 3_000,
+    stateColdRowsTtlMs: 5_000,
     dshHome: '',
     cardTtlMs: 172_800_000,
     ...overrides,
@@ -877,7 +878,7 @@ describe('a2a session nodes (opt-in join)', () => {
     ctx.provide('sessionPersistence', {
       list: async () => [...headers],
     } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
-    apply(ctx, makeConfig({ sessionNodes: true, dshHome: home }))
+    apply(ctx, makeConfig({ sessionNodes: true, dshHome: home, stateColdRowsTtlMs: 10 }))
     const port = (ctx as unknown as { webServer: WebServer }).webServer.port
     const readState = async (): Promise<{ sessions: { id: string; joined: boolean; live?: boolean }[] }> =>
       await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { sessions: { id: string; joined: boolean; live?: boolean }[] }
@@ -890,7 +891,10 @@ describe('a2a session nodes (opt-in join)', () => {
     ctx.emit('agent/disposed', { agent: session })
     await expect(readState()).resolves.toMatchObject({ nodes: true, sessions: [{ id: 'agent-1', label: 'sess-1-agent-1', team: 'dsh/agent-1', joined: true, live: false }] })
     // A deleted session (intent whose persistence header is gone) never lists.
+    // The cold-row id set is TTL-cached for the panel poll; this mount runs a
+    // 10ms window so the deletion lands within one poll interval.
     headers.length = 0
+    await new Promise(resolve => setTimeout(resolve, 30))
     await expect(readState()).resolves.toMatchObject({ sessions: [] })
     // Leave on the cold id drops the intent without any runtime node.
     headers.push({ id: SessionId('agent-1') })
@@ -1467,6 +1471,7 @@ describe('a2a plugin module surface', () => {
       sessionNodes: true,
       wakeJoinedOnBoot: false,
       wakeBootStaggerMs: 3_000,
+      stateColdRowsTtlMs: 5_000,
       dshHome: '',
       cardTtlMs: 172_800_000,
       flushTimeoutMs: 300_000,
