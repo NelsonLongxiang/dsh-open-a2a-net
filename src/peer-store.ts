@@ -9,7 +9,8 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/peer-store
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 /** Hard cap on tracked peers, seeds included (hostlist bound: 30). */
@@ -53,6 +54,7 @@ export class PeerStore {
     seeds: readonly string[],
     private readonly path: string,
     private readonly cap = PEER_CAP,
+    private readonly persistDebounceMs = 1_000,
   ) {
     this.restore()
     for (const seed of seeds) {
@@ -164,17 +166,46 @@ export class PeerStore {
     }
   }
 
-  /** Persist the current peer set (no-op when no path was configured). */
+  /**
+   * Persist the current peer set (no-op when no path was configured).
+   * Writes are debounced and asynchronous: a sweep that settles dozens of
+   * fetch outcomes must not fire one synchronous writeFileSync per change
+   * (each blocks the event loop for milliseconds on Windows). The dirty
+   * flag coalesces the whole window into one async write; `flush()` lets
+   * tests and teardown await the final state on disk. A crash inside the
+   * window loses at most `persistDebounceMs` of score deltas — seeds are
+   * re-seeded from config on every boot, and scores rebuild on contact.
+   */
+  private dirty = false
+  private writeChain: Promise<void> = Promise.resolve()
+
   private persist(): void {
     if (this.path === '') return
-    try {
-      mkdirSync(dirname(this.path), { recursive: true })
-      const snapshot: PeerStoreSnapshot = {
-        peers: [...this.peers.values()].map(peer => ({ ...peer })),
-      }
-      writeFileSync(this.path, JSON.stringify(snapshot), { mode: 0o600 })
-    } catch {
-      // An unwritable home must not break routing; the store degrades to memory-only.
-    }
+    this.dirty = true
+    setTimeout(() => {
+      if (!this.dirty) return
+      this.dirty = false
+      this.writeChain = this.writeChain.then(async () => {
+        if (this.path === '') return
+        try {
+          await mkdir(dirname(this.path), { recursive: true })
+          const snapshot: PeerStoreSnapshot = {
+            peers: [...this.peers.values()].map(peer => ({ ...peer })),
+          }
+          await writeFile(this.path, JSON.stringify(snapshot), { mode: 0o600 })
+        } catch {
+          // An unwritable home must not break routing; the store degrades to memory-only.
+        }
+      })
+    }, this.persistDebounceMs)
+  }
+
+  /**
+   * Await the last scheduled write (tests and teardown). Resolves when the
+   * debounced write chain has settled with the current in-memory state.
+   */
+  async flush(): Promise<void> {
+    if (this.dirty) await new Promise(resolve => setTimeout(resolve, this.persistDebounceMs + 5))
+    await this.writeChain
   }
 }
