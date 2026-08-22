@@ -1,6 +1,6 @@
 {
   "name": "@nelsonlongxiang/dsh-open-a2a-net",
-  "version": "0.5.15",
+  "version": "0.5.16",
   "description": "Open A2A network plugin for DeepSeek Harness: signed agent cards, decentralized peer/zone discovery, direct routing model tools, and joinable session nodes with a sidebar control",
   "type": "module",
   "main": "lib/index.js",
