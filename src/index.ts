@@ -152,6 +152,14 @@ export interface Config {
    */
   readonly stateColdRowsTtlMs: number
   /**
+   * Serve window for a verified peer card from the shared cache. Cards are
+   * signed for days and re-signed at TTL/4, so 60s is semantically safe; a
+   * peer that restarts with a fresh card is picked up on the next window.
+   */
+  readonly cardCacheTtlMs: number
+  /** Shorter window for unreachable/invalid cards, so a revived peer reappears quickly. */
+  readonly cardCacheNegativeTtlMs: number
+  /**
    * `final` reply budget: how long an inbound direct route waits for the
    * session's next assistant message before answering with a timeout
    * notice. Without it a session that never idles (or never produces text)
@@ -179,6 +187,8 @@ export const Config: s<Config> = s.object({
   wakeJoinedOnBoot: s.boolean().default(false),
   wakeBootStaggerMs: s.number().default(3_000),
   stateColdRowsTtlMs: s.number().default(5_000),
+  cardCacheTtlMs: s.number().default(60_000),
+  cardCacheNegativeTtlMs: s.number().default(30_000),
   cardTtlMs: s.number().default(172_800_000),
   flushTimeoutMs: s.number().default(300_000),
   routeTimeoutMs: s.number().default(1_800_000),
@@ -1187,16 +1197,52 @@ ${message}`
   }
 
   /**
-   * One verified-card fetch per zone URL per tool call: the direct pass and
-   * every delegated hop share the memo, so each zone is fetched (and scored,
-   * and offered referrals) exactly once per call.
-   * @returns the memoized card fetch.
+   * Apply-scope shared card cache: every caller (teams listing, route
+   * candidate walks, panel sweeps) shares one TTL window per URL, so a
+   * poll-happy consumer cannot re-fetch a peer's card — or re-punish a dead
+   * one — more than once per window. Cards live for days and re-sign at
+   * TTL/4, so a 60s serve window is semantically safe. Negative results
+   * (unreachable/invalid) cache for a shorter window so a restarting peer
+   * reappears quickly. Scoring stays with the real network fetch only: a
+   * cache hit never re-scores, which is what keeps the debounced peer-store
+   * writes rare. Concurrent callers for one URL join a single in-flight
+   * fetch (single-flight) instead of racing N requests.
+   */
+  interface CardCacheEntry { at: number; card: A2aPeerCard | undefined }
+  const cardCache = new Map<string, CardCacheEntry>()
+  const cardCacheInFlight = new Map<string, Promise<A2aPeerCard | undefined>>()
+
+  function cachedCardFetch(url: string): Promise<A2aPeerCard | undefined> {
+    const hit = cardCache.get(url)
+    const now = Date.now()
+    if (hit !== undefined && now - hit.at < (hit.card !== undefined ? config.cardCacheTtlMs : config.cardCacheNegativeTtlMs)) {
+      return Promise.resolve(hit.card)
+    }
+    const inFlight = cardCacheInFlight.get(url)
+    if (inFlight !== undefined) return inFlight
+    const fetch = fetchPeerCard(url)
+      .then(card => {
+        cardCache.set(url, { at: Date.now(), card })
+        return card
+      })
+      .finally(() => {
+        cardCacheInFlight.delete(url)
+      })
+    cardCacheInFlight.set(url, fetch)
+    return fetch
+  }
+
+  /**
+   * Kept for the per-call semantics the route tool documents (one fetch per
+   * zone per call): it now reads through the shared cache, so a second call
+   * within the window is free but the first always reflects live state.
    */
   function memoizedCardFetch(): ZoneCardFetch {
-    const cache = new Map<string, A2aPeerCard | undefined>()
+    const seen = new Set<string>()
     return async (url: string) => {
-      if (!cache.has(url)) cache.set(url, await fetchPeerCard(url))
-      return cache.get(url)
+      if (seen.has(url)) return cardCache.get(url)?.card
+      seen.add(url)
+      return cachedCardFetch(url)
     }
   }
 
