@@ -4,3 +4,4 @@ lib/
 .DS_Store
 .sessions/
 .npmrc
+package-lock.json
