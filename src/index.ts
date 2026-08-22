@@ -568,15 +568,34 @@ export function apply(ctx: Context, config: Config): void {
    * @param agent - the session whose event log is scanned.
    * @returns the excerpt, or a placeholder for a fresh session.
    */
+  // Memoized per agent: quiet sessions with no text events would otherwise
+  // rescan their whole (multi-MB) event arrays on every panel poll. The
+  // cache invalidates when the log grows or its tail event object changes;
+  // the backward scan itself stops after RECENT_ACTIVITY_SCAN_LIMIT events
+  // so a textless log costs one bounded pass, not a full walk.
+  const recentActivityCache = new WeakMap<Agent, { length: number; tail: unknown; value: string }>()
+  const RECENT_ACTIVITY_SCAN_LIMIT = 500
+
   function recentActivityOf(agent: Agent): string {
     const events = agent.session.events
-    for (let index = events.length - 1; index >= 0; index -= 1) {
+    const length = events.length
+    const tail = length > 0 ? events[length - 1] : undefined
+    const cached = recentActivityCache.get(agent)
+    if (cached !== undefined && cached.length === length && cached.tail === tail) return cached.value
+    const value = scanRecentActivity(events)
+    recentActivityCache.set(agent, { length, tail, value })
+    return value
+  }
+
+  function scanRecentActivity(events: readonly ({ type?: string } | undefined)[]): string {
+    const floor = Math.max(0, events.length - RECENT_ACTIVITY_SCAN_LIMIT)
+    for (let index = events.length - 1; index >= floor; index -= 1) {
       const event = events[index]
       if (event === undefined) continue
       const blocks = event.type === 'user/message'
-        ? event.data.content
+        ? (event as { data: { content: Array<{ type: string; text?: string }> } }).data.content
         : event.type === 'assistant/message'
-          ? event.data.message.content
+          ? (event as { data: { message: { content: Array<{ type: string; text?: string }> } } }).data.message.content
           : undefined
       const text = blocks
         ?.filter((block): block is { type: 'text'; text: string } => block.type === 'text')
