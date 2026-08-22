@@ -354,6 +354,9 @@ export function apply(ctx: Context, config: Config): void {
   // the same home as the node key.
   const home = config.dshHome === '' ? resolveDshHome() : resolveDshHome(config.dshHome)
   const peerStore = new PeerStore(config.peers, join(home, 'a2a', 'peers.json'))
+  // Graceful disposal lands the debounced peer state on disk before a
+  // restart reads it back (fiber teardown awaits effect disposers).
+  ctx.effect(() => () => peerStore.flush())
   // Slice 3: an unset session derives from a per-home node id, and the
   // configured delegations become signed zone records on every card.
   const session = config.session === '' ? deriveSession(home) : config.session

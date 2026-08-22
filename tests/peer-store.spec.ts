@@ -64,12 +64,25 @@ describe('PeerStore quality scoring', () => {
     expect(store.list()).toEqual(['http://a'])
   })
 
-  it('rewards a successful fetch and persists the score', () => {
+  it('rewards a successful fetch and persists the score', async () => {
     const path = storePath()
-    const store = new PeerStore(['http://a'], path)
+    const store = new PeerStore(['http://a'], path, PEER_CAP, 0)
     store.noteSuccess('http://a')
+    await store.flush()
     const snapshot = JSON.parse(readFileSync(path, 'utf8')) as { peers: { url: string; score: number }[] }
     expect(snapshot.peers).toEqual([{ url: 'http://a', score: INITIAL_SCORE + SUCCESS_REWARD, seed: true }])
+  })
+
+  it('coalesces a burst of changes into one debounced write', async () => {
+    const path = storePath()
+    const store = new PeerStore(['http://a'], path, 60, 5)
+    for (let index = 0; index < 50; index++) store.offer(`http://p${String(index)}`)
+    store.noteSuccess('http://a')
+    await new Promise(resolve => setTimeout(resolve, 30))
+    await store.flush()
+    const snapshot = JSON.parse(readFileSync(path, 'utf8')) as { peers: { url: string }[] }
+    // One write carries the whole burst: all 51 peers in the final state.
+    expect(snapshot.peers).toHaveLength(51)
   })
 
   it('ignores fetch outcomes for unknown peers', () => {
@@ -83,10 +96,11 @@ describe('PeerStore quality scoring', () => {
 })
 
 describe('PeerStore persistence', () => {
-  it('restores offered peers with their scores and non-seed flags', () => {
+  it('restores offered peers with their scores and non-seed flags', async () => {
     const path = storePath()
-    const first = new PeerStore([], path)
+    const first = new PeerStore([], path, PEER_CAP, 0)
     first.offer('http://a')
+    await first.flush()
     const second = new PeerStore([], path)
     expect(second.list()).toEqual(['http://a'])
     // Restored as a non-seed: repeated failures evict it.
@@ -94,17 +108,21 @@ describe('PeerStore persistence', () => {
     expect(second.list()).toEqual([])
   })
 
-  it('re-marks a persisted peer that the config names as a seed', () => {
+  it('re-marks a persisted peer that the config names as a seed', async () => {
     const path = storePath()
-    new PeerStore([], path).offer('http://a')
+    const first = new PeerStore([], path, PEER_CAP, 0)
+    first.offer('http://a')
+    await first.flush()
     const reboot = new PeerStore(['http://a'], path)
     for (let index = 0; index < INITIAL_SCORE / FAILURE_PENALTY + 5; index++) reboot.noteFailure('http://a')
     expect(reboot.list()).toEqual(['http://a'])
   })
 
-  it('orders a restored discovered peer behind later-arriving seeds', () => {
+  it('orders a restored discovered peer behind later-arriving seeds', async () => {
     const path = storePath()
-    new PeerStore([], path).offer('http://d1')
+    const first = new PeerStore([], path, PEER_CAP, 0)
+    first.offer('http://d1')
+    await first.flush()
     const store = new PeerStore(['http://s1', 'http://s2'], path)
     store.offer('http://d2')
     store.offer('http://d3')
@@ -113,13 +131,14 @@ describe('PeerStore persistence', () => {
     expect(store.list()).toEqual(['http://s1', 'http://s2', 'http://d3', 'http://d1', 'http://d2'])
   })
 
-  it('falls back to seeds when the store file is corrupt, then recovers on the next write', () => {
+  it('falls back to seeds when the store file is corrupt, then recovers on the next write', async () => {
     const path = storePath()
     mkdirSync(dirname(path), { recursive: true })
     writeFileSync(path, 'not json')
-    const store = new PeerStore(['http://a'], path)
+    const store = new PeerStore(['http://a'], path, PEER_CAP, 0)
     expect(store.list()).toEqual(['http://a'])
     store.offer('http://b')
+    await store.flush()
     const snapshot = JSON.parse(readFileSync(path, 'utf8')) as { peers: unknown[] }
     expect(snapshot.peers).toHaveLength(2)
   })
