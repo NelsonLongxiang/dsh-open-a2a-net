@@ -37,12 +37,20 @@ shared tool runtime.
 
 - **Model tools** — `a2a_teams` lists the teams this node can see (own, peers', joined sessions'); `a2a_route`
   sends one message to a team, reuses `context_id` to continue a remote conversation, and fails over across
-  candidates when a peer is unreachable.
+  candidates when a peer is unreachable. `a2a_tasks` reconciles the receipt contract: every route that leaves a
+  task owed a reply (async delivery, a released wait) stays queryable as pending until its
+  `[A2A receipt] task <task_id>` message correlates, then shows the outcome summary — with the follow-up
+  `context_id` kept on the row, persisted across
+  restarts. `a2a_probe` measures the tracked fleet's reachability and round-trip latency (one verified-card
+  fetch per peer, optionally narrowed to a single url) for pre-dispatch health checks, naming each miss's
+  stage — `unreachable` (transport/HTTP) vs. `rejected` (distrusted card).
 - **Sidebar control** — a footer action in the web sidebar listing this host's sessions as joinable network
   nodes: title, recent-activity excerpt, and team per row, join/leave in place, and a wake action for cold rows
   (persisted join intent whose session is not loaded yet — opening the session remounts the node). Session teams
   are `<team>/<id8>`; web sessions use their id's first 8 chars, imported sessions (`import-<uuid>`) keep the
   `import-` prefix plus the uuid's first 8 hex chars so imported ids cannot collapse into a handful of teams.
+  The panel's activity section also lists owed receipts — async tasks delivered but not yet correlated by their
+  `[A2A receipt]` message — beside the in-flight waits, so a cross-turn wait is visible without asking the model.
 - **Archive leaves the network** — archiving a session (workspace registry state) prunes its join
   intent and unmounts its node: at boot settlement before any wake, on every state read (a mid-session
   archive disappears within one panel poll), and as a route-time guard that never wakes an archived
@@ -53,6 +61,16 @@ shared tool runtime.
   a stale wait instead of implying live progress, and its title carries the package version badge.
 - **Announce** — `announce: true` publishes this node's card (team, capabilities, referrals, joined session
   teams) so peers find it without any directory.
+
+## Model tools at a glance
+
+| Tool | Answers | Notes |
+| --- | --- | --- |
+| `a2a_teams` | Which teams can I route to? | Own, peers', and joined sessions' teams, with activity excerpts. |
+| `a2a_route` | Send a message to a team. | `context_id` continues a conversation; `async: true` delivers without waiting; fails over across candidates. |
+| `a2a_tasks` | Which async tasks still owe a receipt? | Pending rows keep the follow-up `context_id`; overdue rows name the way out; persisted across restarts. |
+| `a2a_probe` | Is the fleet healthy? | One verified-card fetch per peer (or one given url); `N reachable, M down`; misses classified `unreachable` vs `rejected`. |
+| `a2a_status` | What is this node doing right now? | Tracked peers with quality scores, in-flight routes, and recent routing activity. |
 
 ## Configuration
 

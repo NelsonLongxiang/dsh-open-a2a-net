@@ -18,6 +18,7 @@ import { signCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { JoinedSessions } from './joined-store.ts'
 import { PeerStore } from './peer-store.ts'
+import { TaskLedger } from './task-ledger.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
@@ -47,7 +48,7 @@ import type { JsonValue } from '@deepseek-ai/dsh-tools'
 import { MessageId } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { A2aClient, type A2aFetch, type A2aSchedule } from './a2a-client.ts'
+import { A2aClient, type A2aFetch, type A2aSchedule, type CardFetchOutcome } from './a2a-client.ts'
 import type { A2aPeerCard, A2aRouteResult, ZoneRecord } from './types.ts'
 
 export type * from './types.ts'
@@ -454,6 +455,12 @@ export function apply(ctx: Context, config: Config): void {
   // persisted beside the join intents so they survive restarts.
   const groupStore = new GroupStore(join(home, 'a2a', 'groups.json'))
 
+  // The async-task ledger: every route that leaves a task owed a receipt is
+  // queryable here, and the correlating `[A2A receipt] task <id>` message
+  // resolves it — the caller-side half of the receipt contract, persisted so
+  // a restart does not orphan the reconciliation.
+  const taskLedger = new TaskLedger(join(home, 'a2a', 'tasks.json'))
+
   // Session nodes: every joined top-level session is its own addressable
   // team (label `<session>-<agentId8>`, team `<team>/<agentId8>`). Joining
   // is a local fact: the entry dispatches `/a2a/direct` routes and rides
@@ -837,6 +844,12 @@ export function apply(ctx: Context, config: Config): void {
                 peer: route.peer,
                 startedAt: route.startedAt,
               })),
+              // Owed receipts: the cross-turn waits the in-flight ring cannot
+              // show (an async dispatch rides no wait). Resolved tasks stay
+              // off the panel — the inbound activity row is their receipt.
+              tasks: taskLedger.list()
+                .filter(task => task.status === 'pending')
+                .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, status: task.status })),
             })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) })
             res.end(body)
@@ -1129,6 +1142,11 @@ ${message}`
             res.end(payload)
             return
           }
+          // The caller-side receipt correlation: a message shaped as a
+          // receipt resolves the task it echoes, whichever wait semantics
+          // carried it here. Correlation is bookkeeping only — the message
+          // steers on exactly as before.
+          taskLedger.resolveFromMessage(message)
           // wait:false delivers without the final-reply hold: steer resolves
           // synchronously inside routeIntoAgentFor, so by the time the agent
           // lookup settles the message is already in — answer delivered and
@@ -1205,16 +1223,17 @@ ${message}`
   })
 
   /**
-   * Fetch one peer's card and move its store entry: the fetch is itself the
-   * reachability check — a miss degrades the peer, a verified card raises it
-   * and offers its referral list to the store. A peer offered mid-iteration
-   * is fetched on a later tool call, so gossip converges across calls.
-   * @param peer - base URL of the peer to visit.
-   * @returns the verified card, or undefined when the peer is unreachable or serves an invalid card.
+   * Settle one card-fetch outcome into the peer store and the plain card:
+   * the fetch is itself the reachability check — a miss degrades the peer, a
+   * verified card raises it and offers its referral list to the store. A
+   * peer offered mid-iteration is fetched on a later tool call, so gossip
+   * converges across calls.
+   * @param peer - base URL of the peer the outcome belongs to.
+   * @param outcome - the detailed fetch outcome (probe and discovery share it).
+   * @returns the verified card, or undefined when the peer is unreachable, rejected, or a self-referral.
    */
-  async function fetchPeerCard(peer: string): Promise<A2aPeerCard | undefined> {
-    const card = await client.fetchCard(peer)
-    if (card === undefined) {
+  function settlePeerCard(peer: string, outcome: CardFetchOutcome): A2aPeerCard | undefined {
+    if (!outcome.ok) {
       peerStore.noteFailure(peer)
       return undefined
     }
@@ -1222,13 +1241,22 @@ ${message}`
     // URL back at it) must not track the node as its own peer: the node would
     // list its own teams as remote rows and offer its own URL onward. The
     // signed card session is the identity check — no URL guessing.
-    if (card.session === session) {
+    if (outcome.card.session === session) {
       peerStore.drop(peer)
       return undefined
     }
     peerStore.noteSuccess(peer)
-    for (const referral of card.peers ?? []) peerStore.offer(referral)
-    return card
+    for (const referral of outcome.card.peers ?? []) peerStore.offer(referral)
+    return outcome.card
+  }
+
+  /**
+   * Fetch one peer's card and settle it into the store (discovery path).
+   * @param peer - base URL of the peer to visit.
+   * @returns the verified card, or undefined when the peer is unreachable or serves an invalid card.
+   */
+  async function fetchPeerCard(peer: string): Promise<A2aPeerCard | undefined> {
+    return settlePeerCard(peer, await client.fetchCardDetail(peer))
   }
 
   /**
@@ -1402,6 +1430,19 @@ ${message}`
     return teams
   }
 
+  /**
+   * Track one routed task in the ledger when its result leaves it owed a
+   * receipt: delivered-but-unanswered tasks (an async dispatch, the
+   * reply-wait deadline's release, or an aborted wait) reconcile later when
+   * the `[A2A receipt] task <id>` message arrives, while a synchronous
+   * completion already carries its answer and owes nothing.
+   */
+  const trackOwedTask = (taskId: string, team: string, peer: string, result: A2aRouteResult): void => {
+    if (!result.ok) return
+    if (result.task_status !== 'TASK_STATE_DELIVERED' && result.task_status !== 'TASK_STATE_ABORTED_WAIT') return
+    taskLedger.track(taskId, team, peer, result.context_id === '' ? undefined : result.context_id)
+  }
+
   ctx.tools.register(defineTool({
     name: 'a2a_route',
     description:
@@ -1444,7 +1485,10 @@ ${message}`
       const failures: string[] = []
       const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, exec.signal, args.async === true, taskId)
       if (outcome !== undefined) {
-        if (outcome.ok) return outcome as unknown as Record<string, JsonValue>
+        if (outcome.ok) {
+          trackOwedTask(taskId, args.team, 'local', outcome)
+          return outcome as unknown as Record<string, JsonValue>
+        }
         failures.push(`local: ${outcome.error}`)
       }
       const candidates = await directoryPeerCandidates(fetch, args.team, failures)
@@ -1465,6 +1509,7 @@ ${message}`
         }
         const result = await dispatchPeerCandidate(candidate, args.team, args.message, args.context_id, exec.signal, callerSession, peerAsync, taskId)
         if (result.ok || exec.signal.aborted) {
+          if (result.ok) trackOwedTask(taskId, args.team, candidate, result)
           if (args.async === true && !peerAsync && result.ok) {
             return { ...result, reply: `${result.reply}\n(Note: the peer does not advertise async; the call waited synchronously.)` } as unknown as Record<string, JsonValue>
           }
@@ -1502,6 +1547,10 @@ ${message}`
       || resolveAgentForTeam(team) !== undefined
       || joinedSessions.list().some(id => `${config.team}/${id8(id)}` === team)
     if (!teamIsLocal || webServer === undefined) return undefined
+    // A receipt relayed between same-host sessions (the answering session
+    // routing its `[A2A receipt]` back over the in-process candidate)
+    // correlates here too — same contract, no HTTP on the path.
+    taskLedger.resolveFromMessage(message)
     const taskId = taskIdFromCaller ?? `direct-${Math.random().toString(16).slice(2, 10)}`
     const flight = beginRoute(team, 'local')
     if (asyncMode) {
@@ -1715,6 +1764,139 @@ ${message}`
         inFlight: [...inFlightRoutes.values()].map(route => ({ team: route.team, peer: route.peer, startedAt: route.startedAt })),
         activity: recentActivity.slice(),
       }
+    },
+  }))
+
+  /** Human duration for a ledger row: how long a task has been owed or took. */
+  const describeAge = (ms: number): string => {
+    const minutes = Math.floor(ms / 60_000)
+    if (minutes < 1) return 'under a minute'
+    if (minutes < 60) return `${String(minutes)}m`
+    return `${String(Math.floor(minutes / 60))}h${minutes % 60 === 0 ? '' : `${String(minutes % 60)}m`}`
+  }
+
+  ctx.tools.register(defineTool({
+    name: 'a2a_tasks',
+    description:
+      'Read-only ledger of routed A2A tasks that are owed a receipt: every async delivery or released wait '
+      + 'stays queryable until its `[A2A receipt] task <task_id>` message correlates (then it shows the outcome '
+      + 'summary). Use it to reconcile dispatched async work instead of re-routing to ask for progress.',
+    parameters: {},
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          tasks: {
+            type: 'array',
+            required: true,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                taskId: { type: 'string', required: true },
+                team: { type: 'string', required: true },
+                peer: { type: 'string', required: true },
+                startedAt: { type: 'number', required: true },
+                contextId: { type: 'string' },
+                status: { type: 'string', required: true },
+                resolvedAt: { type: 'number' },
+                summary: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.tasks.length === 0
+          ? 'No routed tasks are owed a receipt.'
+          : [
+            ...(value.tasks.some((task: { status: string }) => task.status === 'pending') ? ['Owed receipts:'] : []),
+            ...value.tasks.filter((task: { status: string }) => task.status === 'pending').map((task: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string }) => {
+              // Beyond an hour the receipt is more likely lost than late
+              // (the target died before routing it): name the two ways out.
+              const overdue = Date.now() - task.startedAt > 60 * 60_000
+                ? ', still no receipt — the target may be gone; probe it or follow up with the context id'
+                : ''
+              const context = task.contextId === undefined || task.contextId === '' ? '' : `, follow-up context ${task.contextId}`
+              return `  - ${task.taskId} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}), waiting ${describeAge(Date.now() - task.startedAt)}${context}${overdue}`
+            }),
+            ...(value.tasks.some((task: { status: string }) => task.status === 'resolved') ? ['Resolved:'] : []),
+            ...value.tasks.filter((task: { status: string }) => task.status === 'resolved').map((task: { taskId: string; team: string; peer: string; startedAt: number; resolvedAt?: number; summary?: string }) => `  - ${task.taskId} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer})${typeof task.resolvedAt === 'number' ? ` after ${describeAge(task.resolvedAt - task.startedAt)}` : ''}: ${task.summary === undefined || task.summary === '' ? 'resolved' : task.summary}`),
+          ].join('\n'),
+      }],
+    },
+    presentCall: () => ({ card: 'generic', title: 'A2A task ledger', kind: 'other', rawInput: null }),
+    execute: async (): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; status: 'pending' | 'resolved'; resolvedAt?: number; summary?: string }[] }> => {
+      return { ok: true, tasks: taskLedger.list().map(task => ({ ...task })) }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'a2a_probe',
+    description:
+      'Probe the tracked peer fleet for reachability and round-trip latency: one verified-card fetch per peer '
+      + '(the same fetch discovery uses), reporting reachable peers with their team and latency and unreachable '
+      + 'ones with the failure reason. Pass url to probe one target instead of the whole fleet. Use it before '
+      + 'dispatching verification work or when routes fail over, instead of guessing which node is down.',
+    parameters: {
+      url: { type: 'string', description: 'Optional single peer base URL to probe; empty probes every tracked peer.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          results: {
+            type: 'array',
+            required: true,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                url: { type: 'string', required: true },
+                reachable: { type: 'boolean', required: true },
+                ms: { type: 'number', description: 'Round-trip of the card fetch, reachable or not.' },
+                team: { type: 'string', description: 'The team the peer publishes, when reachable.' },
+                error: { type: 'string', description: 'Why the peer is unreachable.' },
+              },
+            },
+          },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.results.length === 0
+          ? 'No peers are tracked; add seeds or let referrals arrive.'
+          : [
+            `Fleet probe (${String(value.results.length)}): ${String(value.results.filter((row: { reachable: boolean }) => row.reachable).length)} reachable, ${String(value.results.filter((row: { reachable: boolean }) => !row.reachable).length)} down`,
+            ...value.results.map((row: { url: string; reachable: boolean; ms?: number; team?: string; error?: string }) =>
+              `  ${row.reachable ? '✓' : '✗'} ${row.url}${row.reachable ? ` (team ${String(row.team)}, ${String(row.ms)}ms)` : ` (${String(row.error)})`}`),
+          ].join('\n'),
+      }],
+    },
+    presentCall: args => ({ card: 'generic', title: args.url === undefined || args.url === '' ? 'Probe the A2A fleet' : `Probe A2A peer: ${args.url}`, kind: 'other', rawInput: args }),
+    execute: async (args: { url?: string }): Promise<{ ok: boolean; results: { url: string; reachable: boolean; ms: number; team?: string; error?: string }[] }> => {
+      const targets = args.url !== undefined && args.url !== '' ? [args.url] : peerStore.list()
+      const probeOne = async (url: string): Promise<{ url: string; reachable: boolean; ms: number; team?: string; error?: string }> => {
+        const startedAt = Date.now()
+        const outcome = await client.fetchCardDetail(url)
+        const ms = Date.now() - startedAt
+        // The fetch is the probe: settling it moves the peer's quality score
+        // and learns its referrals, exactly like a discovery sweep would,
+        // while the outcome's stage names the failure for the report.
+        const card = settlePeerCard(url, outcome)
+        if (card !== undefined) return { url, reachable: true, ms, team: card.team }
+        if (outcome.ok) return { url, reachable: false, ms, error: 'dropped: the card lists this node back as its own referral' }
+        return outcome.stage === 'unreachable'
+          ? { url, reachable: false, ms, error: `unreachable: ${outcome.detail}` }
+          : { url, reachable: false, ms, error: `rejected: ${outcome.reason} card` }
+      }
+      // Promise.all keeps the report in the store's preference order.
+      return { ok: true, results: await Promise.all(targets.map(probeOne)) }
     },
   }))
 

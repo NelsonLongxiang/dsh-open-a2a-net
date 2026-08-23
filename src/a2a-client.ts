@@ -6,7 +6,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/a2a-client
  */
 
-import { verifyCard } from './card.ts'
+import { verifyCard, type CardRejection } from './card.ts'
 import type { A2aPeerCard, A2aRouteResult } from './types.ts'
 
 /** One-shot delayed callback returning its disposer. */
@@ -34,6 +34,17 @@ export interface A2aClientOptions {
 
 /** Direct-route HTTP budget. */
 const HTTP_TIMEOUT_MS = 15_000
+
+/**
+ * One card fetch with its failure stage kept: a peer that cannot be reached
+ * (transport or HTTP error) is a different diagnosis from one that answers
+ * with a card verification rejects — probes report the difference, plain
+ * discovery collapses both to `undefined`.
+ */
+export type CardFetchOutcome =
+  | { readonly ok: true; readonly card: A2aPeerCard }
+  | { readonly ok: false; readonly stage: 'unreachable'; readonly detail: string }
+  | { readonly ok: false; readonly stage: 'rejected'; readonly reason: CardRejection }
 
 type WireRoute = {
   readonly routed?: unknown
@@ -109,14 +120,27 @@ export class A2aClient {
    * @returns the verified card, or `undefined` when unreachable, malformed, or rejected.
    */
   async fetchCard(baseUrl: string): Promise<A2aPeerCard | undefined> {
+    const outcome = await this.fetchCardDetail(baseUrl)
+    return outcome.ok ? outcome.card : undefined
+  }
+
+  /**
+   * The diagnosing half of {@link fetchCard}: the same fetch and verification
+   * with the failure stage preserved, so a probe can tell a down node from a
+   * distrusted card.
+   * @param baseUrl - the peer's base URL.
+   * @returns the verified card, or the failure's stage and detail.
+   */
+  async fetchCardDetail(baseUrl: string): Promise<CardFetchOutcome> {
     try {
       const candidate = await this.http('/.well-known/agent-card.json', { method: 'GET' }, baseUrl)
       const verified = verifyCard(candidate, Date.now())
-      if (!verified.ok) return undefined
-      return verified.card
-    } catch {
-      // An unreachable or malformed peer leaves discovery to the other peers.
-      return undefined
+      if (!verified.ok) return { ok: false, stage: 'rejected', reason: verified.reason }
+      return { ok: true, card: verified.card }
+    } catch (error) {
+      // An unreachable or malformed peer leaves discovery to the other peers;
+      // the detail names what actually happened for the probe.
+      return { ok: false, stage: 'unreachable', detail: String(error).slice(0, 200) }
     }
   }
 
@@ -203,7 +227,9 @@ export class A2aClient {
       ok: true,
       team,
       reply,
-      task_id: wireText(raw.task_id) !== '' ? wireText(raw.task_id) : taskIdFromCaller ?? wireText(raw.task_id),
+      // Same echo-first rule as the delivered branch: the peer's echo wins,
+      // else the caller-born id, else ''.
+      task_id: wireText(raw.task_id) !== '' ? wireText(raw.task_id) : taskIdFromCaller ?? '',
       context_id: wireText(raw.context_id),
       task_status: wireText(raw.task_status),
     }
