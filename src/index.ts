@@ -769,7 +769,7 @@ export function apply(ctx: Context, config: Config): void {
             at: now,
             rows: all
               .filter(row => row.local !== true)
-              .map(row => ({ team: row.team, name: row.name, ...(row.origin !== undefined ? { origin: row.origin } : {}), ...(row.workspace !== undefined ? { workspace: row.workspace } : {}) })),
+              .map(row => ({ team: row.team, name: row.name, ...(row.origin !== undefined ? { origin: row.origin } : {}), ...(row.via !== undefined ? { via: row.via } : {}), ...(row.workspace !== undefined ? { workspace: row.workspace } : {}) })),
           }
         })
         .catch(() => {})
@@ -783,10 +783,12 @@ export function apply(ctx: Context, config: Config): void {
         path: '/__dsh_a2a/state',
         handler: controlRoute((_req: IncomingMessage, res: ServerResponse) => {
           void (async () => {
+            const t0 = Date.now()
             // The panel polls this route: pruning here makes a mid-session
             // archive leave the network within one poll interval, no restart
             // required.
             pruneArchivedJoins()
+            const tPrune = Date.now()
             const assignments = groupStore.all()
             const groupOf = (id: string): string | undefined => {
               const name = assignments[id]
@@ -797,6 +799,7 @@ export function apply(ctx: Context, config: Config): void {
             // or not. (The prune above already took their join intents; this
             // covers never-joined live roots and any intent a restart left.)
             const isArchived = archivedSessionFilter()
+            const tFacts0 = Date.now()
             const sessions: Array<Record<string, unknown>> = [...liveRoots.values()]
               .filter(agent => isArchived?.(String(agent.id)) !== true)
               .map(agent => ({
@@ -816,9 +819,11 @@ export function apply(ctx: Context, config: Config): void {
             // Cold rows only exist when a joined intent lacks a live agent;
             // with all intents live (or none) the persistence layer is never
             // asked and the handler stays synchronous to its response.
+            const tFacts1 = Date.now()
             const coldCandidates = joinedSessions.list().filter(id => !liveRoots.has(id))
             const persistence = ctx.get('sessionPersistence')
             const persisted = persistence !== undefined && coldCandidates.length > 0 ? await coldJoinedIds() : new Set<string>()
+            const tCold = Date.now()
             for (const id of coldCandidates) {
               if (!persisted.has(id)) continue
               sessions.push({
@@ -851,7 +856,13 @@ export function apply(ctx: Context, config: Config): void {
                 .filter(task => task.status === 'pending')
                 .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, status: task.status })),
             })
-            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) })
+            res.writeHead(200, {
+              'Content-Type': 'application/json',
+              'Content-Length': Buffer.byteLength(body),
+              // Phase timing (ms since request start): prune / live-row facts /
+              // cold-rows enumeration. Diagnostic for the poll-latency question.
+              'X-A2A-Timing': `prune=${tPrune - t0};facts=${tFacts1 - tFacts0};cold=${tCold - tFacts1};total=${Date.now() - t0}`,
+            })
             res.end(body)
           })()
         }),
@@ -1361,7 +1372,8 @@ ${message}`
       if (query === '') return { ok: true, query: '', teams }
       const matches = (team: DirectoryTeamRow): boolean =>
         team.team.toLowerCase().includes(query) || team.name.toLowerCase().includes(query) || team.description.toLowerCase().includes(query)
-        || (team.origin ?? '').toLowerCase().includes(query) || (team.workspace ?? '').toLowerCase().includes(query)
+        || team.session.toLowerCase().includes(query)
+        || (team.origin ?? '').toLowerCase().includes(query) || (team.workspace ?? '').toLowerCase().includes(query) || (team.via ?? '').toLowerCase().includes(query)
       return { ok: true, query, teams: teams.filter(matches) }
     },
   }))
@@ -1383,7 +1395,7 @@ ${message}`
    * while staying bounded (one extra sweep, still under the store cap).
    * @param expand - chase one referral hop beyond the current store walk.
    */
-  type DirectoryTeamRow = { team: string; session: string; name: string; description: string; local?: boolean; origin?: string; workspace?: string }
+  type DirectoryTeamRow = { team: string; session: string; name: string; description: string; local?: boolean; origin?: string; workspace?: string; via?: string }
   async function listDirectoryTeams(expand: boolean): Promise<DirectoryTeamRow[]> {
     const localOrigin = lanIp === '' ? `${session} [this host]` : `${session} [this host, ${lanIp}]`
     const teams: DirectoryTeamRow[] = [
@@ -1407,11 +1419,14 @@ ${message}`
       // grouping dimensions: a fleet's rows cluster by the host that owns
       // them, no manual grouping required.
       const origin = card.lanIp !== undefined ? `${card.session} (${card.lanIp})` : card.session
+      // via = the peer URL the card was fetched from: the panel shows which
+      // host:port each remote row came from, so an unknown node is traceable
+      // to its publishing endpoint at a glance.
       const rows: DirectoryTeamRow[] = [
-        { team: card.team, session: card.session, name: card.name, description: '', origin },
+        { team: card.team, session: card.session, name: card.name, description: '', origin, via: peer },
       ]
       for (const entry of card.sessionTeams ?? []) {
-        rows.push({ team: entry.team, session: card.session, name: entry.name, description: entry.description, origin, ...(entry.workspace !== undefined ? { workspace: entry.workspace } : {}) })
+        rows.push({ team: entry.team, session: card.session, name: entry.name, description: entry.description, origin, via: peer, ...(entry.workspace !== undefined ? { workspace: entry.workspace } : {}) })
       }
       return rows
     }
