@@ -634,7 +634,11 @@ export function apply(ctx: Context, config: Config): void {
     const cached = titleCache.get(agent)
     if (cached !== undefined && cached.length === length && cached.tail === tail) return cached.title
     const title = ctx.get('sessionTitle')?.get(agent.session)?.title
-    titleCache.set(agent, { length, tail, title })
+    // An undefined answer is transient (service not yet ready on a cold
+    // wake) - caching it would pin the miss until the log grows again.
+    // Read-through instead: the title service is cheap, and the next poll
+    // picks up the real title as soon as the service can produce one.
+    if (title !== undefined) titleCache.set(agent, { length, tail, title })
     return title
   }
 
