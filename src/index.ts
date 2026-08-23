@@ -1663,17 +1663,36 @@ ${message}`
    * The directory's candidate walk for one team: direct publishers first,
    * then every tracked zone's delegation resolutions (cycle/depth/key-binding
    * failures are configuration bugs: closed, logged, and surfaced into
-   * {@link failures}), deduplicated by URL.
+   * {@link failures}), deduplicated by URL. Both passes run their per-peer
+   * fetches concurrently under a small cap: a serial walk of a store full of
+   * cold-cache dead peers pays their HTTP timeouts one after another (worst
+   * case cap × 15s), while a bounded concurrent walk pays one timeout window.
    */
+  const CANDIDATE_CONCURRENCY = 6
+  async function mapBounded<T, R>(items: readonly T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
+    const results = new Array<R>(items.length)
+    let next = 0
+    const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const index = next
+        next += 1
+        results[index] = await task(items[index] as T)
+      }
+    })
+    await Promise.all(workers)
+    return results
+  }
+
   async function directoryPeerCandidates(fetch: (url: string) => Promise<A2aPeerCard | undefined>, team: string, failures: string[]): Promise<string[]> {
+    const peers = peerStore.list()
     const candidates: string[] = []
-    for (const peer of peerStore.list()) {
-      const card = await fetch(peer)
-      if (card === undefined) continue
-      if (card.team === team || (card.sessionTeams ?? []).some(entry => entry.team === team)) candidates.push(peer)
+    const cards = await mapBounded(peers, CANDIDATE_CONCURRENCY, async peer => ({ peer, card: await fetch(peer) }))
+    for (const entry of cards) {
+      if (entry.card === undefined) continue
+      if (entry.card.team === team || (entry.card.sessionTeams ?? []).some(item => item.team === team)) candidates.push(entry.peer)
     }
-    for (const peer of peerStore.list()) {
-      const outcome = await resolveZone(fetch, peer, team)
+    const resolutions = await mapBounded(peers, CANDIDATE_CONCURRENCY, async peer => ({ peer, outcome: await resolveZone(fetch, peer, team) }))
+    for (const { peer, outcome } of resolutions) {
       if (outcome.ok) {
         if (!candidates.includes(outcome.url)) candidates.push(outcome.url)
         continue

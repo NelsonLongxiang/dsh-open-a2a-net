@@ -85,6 +85,22 @@ describe('PeerStore quality scoring', () => {
     expect(snapshot.peers).toHaveLength(51)
   })
 
+  it('resets the debounce window on every change (trailing coalesce, no write mid-drip)', async () => {
+    const path = storePath()
+    const store = new PeerStore([], path, 60, 50)
+    store.offer('http://a')
+    await new Promise(resolve => setTimeout(resolve, 30))
+    store.offer('http://b')
+    // 65ms after the first change: past that change's window, still inside the
+    // second change's reset window — a per-change timer would have written
+    // here, a trailing debounce has not.
+    await new Promise(resolve => setTimeout(resolve, 35))
+    expect(existsSync(path)).toBe(false)
+    await store.flush()
+    const snapshot = JSON.parse(readFileSync(path, 'utf8')) as { peers: { url: string }[] }
+    expect(snapshot.peers.map(peer => peer.url).sort()).toEqual(['http://a', 'http://b'])
+  })
+
   it('ignores fetch outcomes for unknown peers', () => {
     const path = storePath()
     const store = new PeerStore([], path)

@@ -178,11 +178,18 @@ export class PeerStore {
    */
   private dirty = false
   private writeChain: Promise<void> = Promise.resolve()
+  private pendingTimer: NodeJS.Timeout | undefined
 
   private persist(): void {
     if (this.path === '') return
     this.dirty = true
-    setTimeout(() => {
+    // Classic trailing debounce: one shared timer, reset on every change, so
+    // a steady drip of outcomes still lands as one write after the last
+    // change — not one write per elapsed window. Unref'd so a timer armed at
+    // teardown never keeps the process alive for it.
+    if (this.pendingTimer !== undefined) clearTimeout(this.pendingTimer)
+    const timer = setTimeout(() => {
+      this.pendingTimer = undefined
       if (!this.dirty) return
       this.dirty = false
       this.writeChain = this.writeChain.then(async () => {
@@ -198,6 +205,8 @@ export class PeerStore {
         }
       })
     }, this.persistDebounceMs)
+    timer.unref?.()
+    this.pendingTimer = timer
   }
 
   /**
