@@ -1450,6 +1450,7 @@ ${message}`
                 description: { type: 'string', required: true },
                 local: { type: 'boolean', description: 'true when the team is served by this host (loopback candidate).' },
                 origin: { type: 'string', description: 'The publishing host (node session label, LAN IP when known) — the natural grouping for fleet rows.' },
+                via: { type: 'string', description: 'The peer URL this row was discovered through (host:port), when it came from a peer card.' },
                 workspace: { type: 'string', description: 'The session\'s working directory, when shared.' },
               },
             },
