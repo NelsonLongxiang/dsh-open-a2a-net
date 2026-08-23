@@ -102,6 +102,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     delegates: [],
     sessionNodes: false,
     wakeJoinedOnBoot: false,
+    wakePrewarmDelayMs: 0,
+    wakePrewarmQuietMs: 0,
     wakeBootStaggerMs: 3_000,
     stateColdRowsTtlMs: 5_000,
     cardCacheTtlMs: 60_000,
@@ -1055,11 +1057,14 @@ describe('a2a session nodes (opt-in join)', () => {
     ctx.emit('agent/disposed', { agent: session })
     await expect(readState()).resolves.toMatchObject({ nodes: true, sessions: [{ id: 'agent-1', label: 'sess-1-agent-1', team: 'dsh/agent-1', joined: true, live: false }] })
     // A deleted session (intent whose persistence header is gone) never lists.
-    // The cold-row id set is TTL-cached for the panel poll; this mount runs a
-    // 10ms window so the deletion lands within one poll interval.
+    // The cold-row id set serves stale-while-revalidate: the read past the
+    // 10ms TTL serves the old snapshot and kicks a background refresh, so
+    // the deletion lands on a poll after the refresh settles.
     headers.length = 0
     await new Promise(resolve => setTimeout(resolve, 30))
-    await expect(readState()).resolves.toMatchObject({ sessions: [] })
+    await vi.waitFor(async () => {
+      await expect(readState()).resolves.toMatchObject({ sessions: [] })
+    })
     // Leave on the cold id drops the intent without any runtime node.
     headers.push({ id: SessionId('agent-1') })
     await postJson(port, '/__dsh_a2a/leave', { id: 'agent-1' })
@@ -1290,6 +1295,252 @@ describe('a2a session nodes (opt-in join)', () => {
     // agent-1 was materialized exactly once — by the route, not the queue.
     const calls = materialize.mock.calls.map(call => String(call[0]))
     expect(calls.filter(id => id === 'agent-1')).toHaveLength(1)
+    await ctx.fiber.dispose()
+  })
+
+  it('shares one materialization between concurrent route wakes (single-flight)', async () => {
+    const home = tmpHome()
+    mkdirSync(join(home, 'a2a'), { recursive: true })
+    writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: ['agent-1'] }))
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    ctx.provide('sessionPersistence', {
+      list: async () => [{ id: SessionId('agent-1') }],
+    } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
+    let release: (() => void) | undefined
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const materialize = vi.fn(async () => {
+      await gate
+      const woken = replyingAgent(ctx)
+      ;(ctx.get('agents') as unknown as FakeAgentsService).agent = woken
+      ctx.emit('agent/created', { agent: woken })
+      return woken
+    })
+    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    apply(ctx, makeConfig({ sessionNodes: true, dshHome: home }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    const route = (team: string): Promise<Response> => globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+      method: 'POST',
+      body: JSON.stringify({ team, message: 'concurrent wake', wait: false }),
+    })
+    // Both requests enter the handler while the wake is gated; neither
+    // response can settle before the shared wake releases.
+    const a = route('dsh/agent-1')
+    const b = route('dsh/agent-1')
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(materialize).toHaveBeenCalledTimes(1)
+    release?.()
+    await expect(a.then(response => response.json())).resolves.toMatchObject({ delivered: true })
+    await expect(b.then(response => response.json())).resolves.toMatchObject({ delivered: true })
+    expect(materialize).toHaveBeenCalledTimes(1)
+    await ctx.fiber.dispose()
+  })
+
+  it('a route wake joins a boot prewarm already in flight instead of stacking a second replay', async () => {
+    const home = tmpHome()
+    mkdirSync(join(home, 'a2a'), { recursive: true })
+    writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: ['agent-1'] }))
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    ctx.provide('sessionPersistence', {
+      list: async () => [{ id: SessionId('agent-1') }],
+    } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
+    let release: (() => void) | undefined
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const materialize = vi.fn(async () => {
+      await gate
+      const woken = replyingAgent(ctx)
+      ;(ctx.get('agents') as unknown as FakeAgentsService).agent = woken
+      ctx.emit('agent/created', { agent: woken })
+      return woken
+    })
+    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, dshHome: home }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    // The prewarm is mid-replay (gated) when the route arrives.
+    await vi.waitFor(() => { expect(materialize).toHaveBeenCalledTimes(1) })
+    const routed = globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+      method: 'POST',
+      body: JSON.stringify({ team: 'dsh/agent-1', message: 'route during prewarm', wait: false }),
+    })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(materialize).toHaveBeenCalledTimes(1)
+    release?.()
+    await expect(routed.then(response => response.json())).resolves.toMatchObject({ delivered: true })
+    expect(materialize).toHaveBeenCalledTimes(1)
+    await ctx.fiber.dispose()
+  })
+
+  it('defers the first boot prewarm wake until wakePrewarmDelayMs elapses', async () => {
+    const home = tmpHome()
+    mkdirSync(join(home, 'a2a'), { recursive: true })
+    writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: ['agent-1'] }))
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    ctx.provide('sessionPersistence', {
+      list: async () => [{ id: SessionId('agent-1') }],
+    } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
+    const materialize = vi.fn(async () => makeAgent())
+    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, wakePrewarmDelayMs: 120, dshHome: home }))
+    await new Promise(resolve => setTimeout(resolve, 40))
+    expect(materialize).not.toHaveBeenCalled()
+    await vi.waitFor(() => { expect(materialize).toHaveBeenCalledWith('agent-1') })
+    await ctx.fiber.dispose()
+  })
+
+  it('boot prewarm yields to a recent route demand, then resumes after the quiet window', async () => {
+    const home = tmpHome()
+    mkdirSync(join(home, 'a2a'), { recursive: true })
+    writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: ['agent-1', 'agent-2'] }))
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    ctx.provide('sessionPersistence', {
+      list: async () => [{ id: SessionId('agent-1') }, { id: SessionId('agent-2') }],
+    } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
+    const materialize = vi.fn(async (id: string) => {
+      const woken = replyingAgent(ctx)
+      ;(ctx.get('agents') as unknown as FakeAgentsService).agent = woken
+      woken.id = SessionId(String(id))
+      ctx.emit('agent/created', { agent: woken })
+      return woken
+    })
+    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    apply(ctx, makeConfig({
+      sessionNodes: true,
+      wakeJoinedOnBoot: true,
+      wakePrewarmDelayMs: 0,
+      wakePrewarmQuietMs: 400,
+      wakeBootStaggerMs: 200,
+      dshHome: home,
+    }))
+    // The first prewarm wake (agent-1) is itself the demand clock's start:
+    // waking it does not count, but the route that follows does.
+    await vi.waitFor(() => { expect(materialize).toHaveBeenCalledWith('agent-1') })
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    // agent-1 now live: a route to its team records foreground demand.
+    await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+      method: 'POST',
+      body: JSON.stringify({ team: 'dsh/agent-1', message: 'foreground demand', wait: false }),
+    })
+    await new Promise(resolve => setTimeout(resolve, 100))
+    // Inside the quiet window: agent-2 stays asleep (the stagger has long
+    // elapsed; only the demand yield holds it back).
+    expect(materialize.mock.calls.map(call => String(call[0]))).toEqual(['agent-1'])
+    // Past the window (demand 400ms old): the queue resumes. The yield
+    // retry cadence is 1s, so the wait budget must exceed it.
+    await vi.waitFor(() => { expect(materialize).toHaveBeenCalledWith('agent-2') }, { timeout: 4_000 })
+    await ctx.fiber.dispose()
+  })
+
+  it('disposing the fiber mid-queue stops further boot prewarm wakes', async () => {
+    const home = tmpHome()
+    mkdirSync(join(home, 'a2a'), { recursive: true })
+    writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: ['agent-1', 'agent-2'] }))
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    ctx.provide('sessionPersistence', {
+      list: async () => [{ id: SessionId('agent-1') }, { id: SessionId('agent-2') }],
+    } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
+    const materialize = vi.fn(async () => makeAgent())
+    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, wakePrewarmDelayMs: 0, wakeBootStaggerMs: 200, dshHome: home }))
+    await vi.waitFor(() => { expect(materialize).toHaveBeenCalledWith('agent-1') })
+    await ctx.fiber.dispose()
+    await new Promise(resolve => setTimeout(resolve, 400))
+    expect(materialize.mock.calls.map(call => String(call[0]))).toEqual(['agent-1'])
+  })
+
+  it('serves cold rows stale-while-revalidate: a hung enumeration never blocks the poll', async () => {
+    const home = tmpHome()
+    const headers: Array<{ id: ReturnType<typeof SessionId> }> = [{ id: SessionId('agent-1') }]
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    const agents = ctx.get('agents') as unknown as FakeAgentsService
+    let hang = false
+    let pendingRelease: (() => void) | undefined
+    const list = vi.fn(async () => {
+      if (!hang) return [...headers]
+      await new Promise<void>(resolve => { pendingRelease = resolve })
+      return [...headers]
+    })
+    ctx.provide('sessionPersistence', { list } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
+    apply(ctx, makeConfig({ sessionNodes: true, dshHome: home, stateColdRowsTtlMs: 10 }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    const session = replyingAgent(ctx)
+    agents.agent = session
+    ctx.emit('agent/created', { agent: session })
+    await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+    ctx.emit('agent/disposed', { agent: session })
+    const readState = async (): Promise<{ sessions: { id: string; live?: boolean }[] }> =>
+      await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { sessions: { id: string; live?: boolean }[] }
+    // First read seeds the snapshot (awaits the enumeration).
+    await expect(readState()).resolves.toMatchObject({ sessions: [{ id: 'agent-1', live: false }] })
+    // Past the TTL with the enumeration hung: the poll serves the stale
+    // snapshot immediately instead of blocking on the persistence layer.
+    hang = true
+    headers.length = 0
+    await new Promise(resolve => setTimeout(resolve, 30))
+    const served = await readState()
+    expect(served.sessions).toMatchObject([{ id: 'agent-1', live: false }])
+    // The background refresh lands; the next read reflects the deletion.
+    pendingRelease?.()
+    await vi.waitFor(async () => {
+      const fresh = await readState()
+      expect(fresh.sessions).toEqual([])
+    })
+    await ctx.fiber.dispose()
+  })
+
+  it('bounds one directory sweep at six concurrent card fetches', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    const seeds = Array.from({ length: 10 }, (_unused, index) => `http://127.0.0.1:${String(9000 + index)}`)
+    let inFlight = 0
+    let maxInFlight = 0
+    const countingFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      inFlight += 1
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      await new Promise(resolve => setTimeout(resolve, 20))
+      inFlight -= 1
+      throw new Error('unreachable seed')
+    })
+    vi.stubGlobal('fetch', countingFetch)
+    try {
+      apply(ctx, makeConfig({ peers: seeds, dshHome: tmpHome() }))
+      const listed = await ctx.tools.get('a2a_teams')?.execute({}, runContext()) as { ok: boolean; teams: { team: string }[] }
+      expect(listed.ok).toBe(true)
+      expect(maxInFlight).toBeLessThanOrEqual(6)
+      expect(countingFetch).toHaveBeenCalledTimes(10)
+    } finally {
+      vi.unstubAllGlobals()
+    }
     await ctx.fiber.dispose()
   })
 
@@ -1634,6 +1885,8 @@ describe('a2a plugin module surface', () => {
       delegates: [],
       sessionNodes: true,
       wakeJoinedOnBoot: false,
+      wakePrewarmDelayMs: 10_000,
+      wakePrewarmQuietMs: 5_000,
       wakeBootStaggerMs: 3_000,
       stateColdRowsTtlMs: 5_000,
       cardCacheTtlMs: 60_000,

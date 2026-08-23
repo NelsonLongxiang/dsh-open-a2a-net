@@ -129,21 +129,35 @@ export interface Config {
    */
   readonly sessionNodes: boolean
   /**
-   * Wake every cold joined session's agent when the plugin mounts (dev boxes
-   * and always-on collaboration hosts that restart often: the network state
-   * returns without opening each session). Each wake materializes a full
-   * agent — log replay plus composed preset world — so the default stays
-   * off for deployments that would rather pay on demand (wake-on-route and
-   * the sidebar's wake button remain available).
+   * Prewarm every cold joined session's agent after the plugin mounts (dev
+   * boxes and always-on collaboration hosts that restart often: the network
+   * state returns without opening each session). Each wake materializes a
+   * full agent — a main-thread log replay — so the prewarm is deferred,
+   * foreground-yielding, and cancellable (see `wakePrewarmDelayMs` /
+   * `wakePrewarmQuietMs`); the default stays off for deployments that would
+   * rather pay on demand (wake-on-route and the sidebar's wake button remain
+   * available either way).
    */
   readonly wakeJoinedOnBoot: boolean
   /**
-   * Pause between consecutive boot wakes. Each wake replays a full session
-   * log — the zstd decode yields the event loop only every 500ms — so
-   * unbounded concurrent wakes of several huge logs starve every request
+   * Idle delay between loader settlement and the first boot prewarm wake:
+   * boot traffic gets a clear window before any log replay starts. `0`
+   * restores the old fire-at-settle behavior.
+   */
+  readonly wakePrewarmDelayMs: number
+  /**
+   * Foreground quiet window: a wake/route demand inside this window (or any
+   * outbound route still in flight) postpones the next prewarm step. Panel
+   * polls never count. `0` disables the yield.
+   */
+  readonly wakePrewarmQuietMs: number
+  /**
+   * Pause between consecutive boot prewarm wakes. Each wake replays a full
+   * session log — the zstd decode yields the event loop only every 500ms —
+   * so unbounded concurrent wakes of several huge logs starve every request
    * for tens of seconds after a restart. The serial queue with this pause
-   * keeps the preheat while capping decode saturation: the first wake
-   * starts immediately, and wake-on-route never waits on this queue.
+   * keeps the preheat while capping decode saturation, and wake-on-route
+   * never waits on this queue.
    */
   readonly wakeBootStaggerMs: number
   /**
@@ -192,6 +206,8 @@ export const Config: s<Config> = s.object({
   dshHome: s.string().default(''),
   sessionNodes: s.boolean().default(true),
   wakeJoinedOnBoot: s.boolean().default(false),
+  wakePrewarmDelayMs: s.number().default(10_000),
+  wakePrewarmQuietMs: s.number().default(5_000),
   wakeBootStaggerMs: s.number().default(3_000),
   stateColdRowsTtlMs: s.number().default(5_000),
   cardCacheTtlMs: s.number().default(60_000),
@@ -469,6 +485,10 @@ export function apply(ctx: Context, config: Config): void {
   // Live top-level agents: the join surface's candidates and the cold-row
   // complement (apply scope — the direct-route wake below reads it too).
   const liveRoots = new Map<string, Agent>()
+  // Last foreground wake/route demand (epoch ms): boot prewarm steps yield
+  // while demand keeps arriving inside the quiet window. Panel polls never
+  // touch this — they are constant and would starve warming forever.
+  let lastWakeDemandAt = 0
 
   /**
    * The api gateway's wake face, when composed: materializing a persisted
@@ -479,6 +499,25 @@ export function apply(ctx: Context, config: Config): void {
     const apiProxy = ctx.get('apiProxy') as { materializeSession?: (sessionId: SessionId) => Promise<Agent> } | undefined
     if (apiProxy?.materializeSession === undefined) return undefined
     return apiProxy.materializeSession(SessionId(id))
+  }
+
+  // Per-id single-flight: a materialization is a full log replay (seconds of
+  // main-thread decode for a large session), so two wake paths converging on
+  // one cold id — a route arriving while boot prewarm is already replaying it —
+  // must join the in-flight replay, not stack a second one. Rejections
+  // propagate to every waiter (each caller keeps its own error policy); the
+  // map entry clears in `finally` so a later wake can retry after a failure.
+  const materializeInFlight = new Map<string, Promise<Agent>>()
+  const materializeOnce = (id: string): Promise<Agent> | undefined => {
+    const inFlight = materializeInFlight.get(id)
+    if (inFlight !== undefined) return inFlight
+    const started = materialize(id)
+    if (started === undefined) return undefined
+    const flight = started.finally(() => {
+      if (materializeInFlight.get(id) === flight) materializeInFlight.delete(id)
+    })
+    materializeInFlight.set(id, flight)
+    return flight
   }
 
   /**
@@ -494,7 +533,9 @@ export function apply(ctx: Context, config: Config): void {
     if (id === undefined) return undefined
     // An archived session never wakes: archive is closure, not sleep.
     if (archivedSessionFilter()?.(id) === true) return undefined
-    return materialize(id)
+    // Route demand is foreground: boot prewarm yields to it for a quiet window.
+    lastWakeDemandAt = Date.now()
+    return materializeOnce(id)
   }
 
   /**
@@ -690,6 +731,11 @@ export function apply(ctx: Context, config: Config): void {
       // after this row in the same tree, and an apply-time snapshot would
       // see neither. Archived intents prune first — an archived session
       // must never wake — and pruning runs even with the wake off.
+      // Prewarm lifecycle: cancelled at fiber teardown so a mid-queue reload
+      // or dispose never lets the old instance's queue keep waking sessions.
+      let prewarmCancelled = false
+      /** Retry cadence while foreground demand holds the prewarm back. */
+      const PREWARM_YIELD_RETRY_MS = 1_000
       const pruneThenWake = (): void => {
         pruneArchivedJoins()
         if (!config.wakeJoinedOnBoot) return
@@ -697,30 +743,54 @@ export function apply(ctx: Context, config: Config): void {
           logger.warn('wakeJoinedOnBoot is on but no api gateway is composed; cold joined sessions stay asleep')
           return
         }
-        // Serial with a configurable pause: one full log replay at a time
-        // keeps the decode from saturating the event loop (concurrent wakes
-        // of several huge logs stalled every request for tens of seconds).
-        // The first wake starts immediately; the re-check drops ids another
-        // path (wake-on-route, a manual open) already materialized.
-        let bootWakeChain: Promise<void> = Promise.resolve()
-        let firstBootWake = true
-        for (const id of joinedSessions.list()) {
-          if (liveRoots.has(id)) continue
-          // The remount listener joins the node the moment the woken agent
-          // publishes; a failed wake keeps the cold row and its intent.
-          const pauseMs = firstBootWake ? 0 : config.wakeBootStaggerMs
-          firstBootWake = false
-          bootWakeChain = bootWakeChain.then(async () => {
-            if (pauseMs > 0) await new Promise(resolve => setTimeout(resolve, pauseMs))
-            if (liveRoots.has(id)) return
-            try {
-              await materialize(id)
-            } catch (error: unknown) {
+        // Low-priority prewarm instead of an eager serial chain: each wake
+        // is a full main-thread log replay (the decode yields the loop only
+        // every ~500ms), so waking every cold join at settlement starved
+        // web requests for minutes on hosts with many large joined logs.
+        // Three properties make the prewarm safe:
+        //   deferred — nothing replays until wakePrewarmDelayMs after the
+        //     tree settles, giving boot traffic a clear window;
+        //   yielding — a foreground demand (a wake/route inside
+        //     wakePrewarmQuietMs, or any outbound route in flight)
+        //     postpones the next step; panel polls never count (they are
+        //     constant and would starve warming forever);
+        //   cancellable — disposal (reload, teardown) stops the queue; the
+        //     timer seam itself fails closed after the timer service is gone.
+        // Per-tick rechecks skip ids another path already woke, archived,
+        // or left since queuing; the remount listener joins each node the
+        // moment its woken agent publishes, and a failed wake keeps the cold
+        // row and its intent. Wake-on-route and manual opens never queue.
+        prewarmCancelled = false
+        const ids = joinedSessions.list()
+        let index = 0
+        const step = (): void => {
+          if (prewarmCancelled || ctx.fiber.uid === null) return
+          while (index < ids.length
+            && (liveRoots.has(ids[index]!) || !joinedSessions.has(ids[index]!) || archivedSessionFilter()?.(ids[index]!) === true)) index += 1
+          if (index >= ids.length) return
+          const foregroundBusy = Date.now() - lastWakeDemandAt < config.wakePrewarmQuietMs || inFlightRoutes.size > 0
+          if (foregroundBusy) {
+            schedule(step, PREWARM_YIELD_RETRY_MS)
+            return
+          }
+          const id = ids[index++]!
+          const startedAt = Date.now()
+          const flight = materializeOnce(id)
+          if (flight === undefined) return
+          void flight
+            .catch(error => {
               logger.warn(`boot wake of ${id} failed: ${String(error)}`)
-            }
-          })
+            })
+            .then(() => {
+              logger.info(`a2a: boot prewarm ${id8(id)} settled in ${String(Date.now() - startedAt)}ms (${String(ids.length - index)} left)`)
+              if (!prewarmCancelled && ctx.fiber.uid !== null) schedule(step, config.wakeBootStaggerMs)
+            })
         }
+        schedule(step, config.wakePrewarmDelayMs)
       }
+      ctx.effect(() => () => {
+        prewarmCancelled = true
+      })
       const settled = ctx.get('loader')?.await()
       if (settled === undefined) pruneThenWake()
       else void settled.then(() => {
@@ -733,18 +803,39 @@ export function apply(ctx: Context, config: Config): void {
 
     // Cold-row ids are the expensive half of the state read: enumerating
     // the persistence layer walks every stored session's metadata, and the
-    // panel polls this route every 2s. A 5s TTL keeps the poll cheap while
-    // staying fresher than the panel's own cadence; live rows come from
-    // liveRoots and never touch this cache.
+    // panel polls this route every 2s. Stale-while-revalidate: the first
+    // read after boot pays one enumeration to seed the snapshot; every later
+    // read serves the snapshot synchronously (fresh within the TTL, stale
+    // past it while a single-flight background refresh runs) — the polled
+    // handler never blocks on the persistence layer again. A rejecting list
+    // degrades to the previous snapshot instead of an unhandled rejection.
     let coldRowsCache: { at: number; ids: Set<string> } | undefined
-    const coldJoinedIds = async (): Promise<Set<string>> => {
-      const now = Date.now()
-      if (coldRowsCache !== undefined && now - coldRowsCache.at < config.stateColdRowsTtlMs) return coldRowsCache.ids
+    let coldRowsRefresh: Promise<void> | undefined
+    const refreshColdIds = (): Promise<void> => {
+      if (coldRowsRefresh !== undefined) return coldRowsRefresh
       const persistence = ctx.get('sessionPersistence')
-      if (persistence === undefined) return new Set()
-      const ids = new Set((await persistence.list()).map(header => String(header.id)))
-      coldRowsCache = { at: now, ids }
-      return ids
+      if (persistence === undefined) return Promise.resolve()
+      coldRowsRefresh = persistence.list()
+        .then(headers => {
+          coldRowsCache = { at: Date.now(), ids: new Set(headers.map(header => String(header.id))) }
+        })
+        .catch(() => {
+          // Keep serving the last snapshot; the next expiry retries.
+        })
+        .finally(() => {
+          coldRowsRefresh = undefined
+        })
+      return coldRowsRefresh
+    }
+    const coldJoinedIds = async (): Promise<Set<string>> => {
+      if (coldRowsCache === undefined) {
+        await refreshColdIds()
+        // The refresh assigns inside a closure, so the outer narrowing does
+        // not follow it — re-read through an explicitly typed view.
+        return (coldRowsCache as { ids: Set<string> } | undefined)?.ids ?? new Set<string>()
+      }
+      if (Date.now() - coldRowsCache.at >= config.stateColdRowsTtlMs) void refreshColdIds()
+      return coldRowsCache.ids
     }
 
     // Peer-side rows for the panel, grouped there by origin: the sweep is
@@ -1158,6 +1249,9 @@ ${message}`
           // carried it here. Correlation is bookkeeping only — the message
           // steers on exactly as before.
           taskLedger.resolveFromMessage(message)
+          // Inbound routing is foreground demand: boot prewarm yields for a
+          // quiet window around it.
+          lastWakeDemandAt = Date.now()
           // wait:false delivers without the final-reply hold: steer resolves
           // synchronously inside routeIntoAgentFor, so by the time the agent
           // lookup settles the message is already in — answer delivered and
@@ -1430,8 +1524,11 @@ ${message}`
       }
       return rows
     }
+    // Bounded-concurrency sweep (mapBounded keeps row order by index, so the
+    // listing still follows the peer store's preference order): a cold cache
+    // must not open up to PEER_CAP simultaneous card fetches at once.
     const sweep = async (peers: readonly string[]): Promise<void> => {
-      const collected = await Promise.all(peers.map(collectPeer))
+      const collected = await mapBounded(peers, SWEEP_CONCURRENCY, collectPeer)
       for (const rows of collected) teams.push(...rows)
     }
     const before = peerStore.list()
@@ -1684,6 +1781,8 @@ ${message}`
    * case cap × 15s), while a bounded concurrent walk pays one timeout window.
    */
   const CANDIDATE_CONCURRENCY = 6
+  /** Concurrent card fetches in one directory sweep (cold-cache burst bound). */
+  const SWEEP_CONCURRENCY = 6
   async function mapBounded<T, R>(items: readonly T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
     const results = new Array<R>(items.length)
     let next = 0
