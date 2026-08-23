@@ -469,8 +469,8 @@ export function apply(ctx: Context, config: Config): void {
    * knowledge, so both wake paths ride the one service that owns it.
    */
   const materialize = (id: string): Promise<Agent> | undefined => {
-    const apiProxy = ctx.get('apiProxy')
-    if (apiProxy === undefined) return undefined
+    const apiProxy = ctx.get('apiProxy') as { materializeSession?: (sessionId: SessionId) => Promise<Agent> } | undefined
+    if (apiProxy?.materializeSession === undefined) return undefined
     return apiProxy.materializeSession(SessionId(id))
   }
 
@@ -572,8 +572,26 @@ export function apply(ctx: Context, config: Config): void {
    * @param agent - the session the facts describe.
    * @returns the name/description/workspace triple the card and state route serve.
    */
-  function nodeMetadataOf(agent: Agent): { name: string; description: string; workspace?: string } {
+  // The title service derives its answer from the session log, so calling
+  // it per agent per panel poll re-derives 24 titles every 2s on a busy
+  // host. Memoize per agent with the same fingerprint the excerpt cache
+  // uses (event count + tail identity): a title only changes when the log
+  // grows or its tail event object changes.
+  const titleCache = new WeakMap<Agent, { length: number; tail: unknown; title: string | undefined }>()
+
+  function sessionTitleOf(agent: Agent): string | undefined {
+    const events = agent.session.events
+    const length = events.length
+    const tail = length > 0 ? events[length - 1] : undefined
+    const cached = titleCache.get(agent)
+    if (cached !== undefined && cached.length === length && cached.tail === tail) return cached.title
     const title = ctx.get('sessionTitle')?.get(agent.session)?.title
+    titleCache.set(agent, { length, tail, title })
+    return title
+  }
+
+  function nodeMetadataOf(agent: Agent): { name: string; description: string; workspace?: string } {
+    const title = sessionTitleOf(agent)
     const cwd = (agent.session as { header?: { cwd?: string } }).header?.cwd
     return {
       name: title !== undefined && title !== '' ? title : sessionLabelOf(agent),

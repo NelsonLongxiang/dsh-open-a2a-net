@@ -1749,13 +1749,16 @@ describe('a2a removal-regression edges', () => {
 })
 
 describe('a2a node facts title source', () => {
-  /** Fake session-title service: a fixed snapshot for any session. */
+  /** Fake session-title service: a fixed snapshot for any session, counting calls. */
   class FakeSessionTitleService extends Service {
+    calls = 0
+
     constructor(ctx: Context) {
       super(ctx, 'sessionTitle')
     }
 
     get(): { title: string } {
+      this.calls += 1
       return { title: 'Parser porting session' }
     }
   }
@@ -1779,6 +1782,35 @@ describe('a2a node facts title source', () => {
       sessionTeams: { name: string }[]
     }
     expect(card.sessionTeams[0]?.name).toBe('Parser porting session')
+    await ctx.fiber.dispose()
+  })
+
+  it('memoizes the title per agent: the title service is derived once per log state', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    await ctx.plugin(FakeSessionTitleService)
+    const title = ctx.get('sessionTitle') as unknown as FakeSessionTitleService
+    const agents = ctx.get('agents') as unknown as FakeAgentsService
+    apply(ctx, makeConfig({ sessionNodes: true, announce: true, dshHome: tmpHome() }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    const session = replyingAgent(ctx)
+    agents.agent = session
+    ctx.emit('agent/created', { agent: session })
+    await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+    const readCard = async (): Promise<{ sessionTeams: { name: string }[] }> =>
+      await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).json() as { sessionTeams: { name: string }[] }
+    await readCard()
+    await readCard()
+    // Two serves over an unchanged log: one derivation.
+    expect(title.calls).toBe(1)
+    // The log grows: the next serve re-derives the title.
+    ;(session.session.events as unknown[]).push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'new turn' }] } } })
+    await readCard()
+    expect(title.calls).toBe(2)
     await ctx.fiber.dispose()
   })
 })
