@@ -86,7 +86,9 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | `agentName` | `'DeepSeek Harness A2A node'` | Human-facing name on the card. |
 | `apiKey` | `''` | `X-API-Key` sent on peer requests; non-empty also gates the control routes. |
 | `sessionNodes` | `true` | Expose main sessions as joinable network nodes. |
-| `wakeJoinedOnBoot` | `false` | Materialize every cold joined session's agent on mount (needs the api gateway; wake-on-route and the sidebar wake button stay available without it). |
+| `wakeJoinedOnBoot` | `false` | Prewarm cold joined sessions' agents after mount (needs the api gateway; wake-on-route and the sidebar wake button stay available without it). The prewarm is deferred, foreground-yielding, and cancellable — it never blocks the boot window (see the two knobs below). |
+| `wakePrewarmDelayMs` | `10000` | Idle delay between loader settlement and the first prewarm wake; `0` restores fire-at-settle. |
+| `wakePrewarmQuietMs` | `5000` | Foreground quiet window: a wake/route demand (or any outbound route in flight) inside this window postpones the next prewarm step; `0` disables the yield. |
 | `cardTtlMs` / `flushTimeoutMs` / `routeTimeoutMs` | see schema | Card lifetime and route timing budgets. |
 
 Example — one announcing node with a seed:

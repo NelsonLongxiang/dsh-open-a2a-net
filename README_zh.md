@@ -44,7 +44,9 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 | `agentName` | `'DeepSeek Harness A2A node'` | 卡片上的人类可读名称。 |
 | `apiKey` | `''` | peer 请求携带的 `X-API-Key`；非空时同时门禁控制路由。 |
 | `sessionNodes` | `true` | 把主会话暴露为可加入的网络节点。 |
-| `wakeJoinedOnBoot` | `false` | 挂载时物化所有冷加入会话的 agent（需要 api gateway；无它时路由唤醒与侧栏唤醒按钮仍可用）。 |
+| `wakeJoinedOnBoot` | `false` | 挂载后预热冷加入会话的 agent（需要 api gateway；无它时路由唤醒与侧栏唤醒按钮仍可用）。预热是延迟启动、前台让路、可取消的——不会阻塞启动窗口（见下方两个参数）。 |
+| `wakePrewarmDelayMs` | `10000` | loader 树就绪到第一次预热唤醒之间的空闲延迟；`0` 恢复就绪即唤醒的旧行为。 |
+| `wakePrewarmQuietMs` | `5000` | 前台静默窗口：窗口内有唤醒/路由需求（或有出站路由在途）则推迟下一步预热；`0` 关闭让路。 |
 | `cardTtlMs` / `flushTimeoutMs` / `routeTimeoutMs` | 见 schema | 卡片生命周期与路由时序预算。 |
 
 示例——一个带种子的通告节点：
