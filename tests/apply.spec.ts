@@ -2285,6 +2285,46 @@ describe('a2a node facts title source', () => {
     expect(title.calls).toBe(2)
     await ctx.fiber.dispose()
   })
+
+  it('does not pin a transient undefined title: the service is retried on the next serve', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    // The title service answers undefined once (cold wake), then the real title.
+    let answer: string | undefined = undefined
+    class FlakyTitleService extends Service {
+      calls = 0
+      constructor(ctx2: Context) { super(ctx2, 'sessionTitle') }
+      get(): { title?: string } {
+        this.calls += 1
+        const t = answer
+        return t === undefined ? {} : { title: t }
+      }
+    }
+    await ctx.plugin(FlakyTitleService)
+    const flaky = ctx.get('sessionTitle') as unknown as FlakyTitleService
+    const agents = ctx.get('agents') as unknown as FakeAgentsService
+    apply(ctx, makeConfig({ sessionNodes: true, announce: true, dshHome: tmpHome() }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    const session = replyingAgent(ctx)
+    agents.agent = session
+    ctx.emit('agent/created', { agent: session })
+    await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+    const readCard = async (): Promise<{ sessionTeams: { name: string }[] }> =>
+      await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).json() as { sessionTeams: { name: string }[] }
+    await readCard()
+    expect(flaky.calls).toBe(1)
+    // The service recovers: the unchanged log still re-reads (undefined is
+    // never pinned), so the next serve carries the real title.
+    answer = 'Recovered title'
+    const second = await readCard()
+    expect(second.sessionTeams[0]?.name).toBe('Recovered title')
+    expect(flaky.calls).toBe(2)
+    await ctx.fiber.dispose()
+  })
 })
 
 describe('a2a plugin archive pruning (archived sessions leave the network)', () => {

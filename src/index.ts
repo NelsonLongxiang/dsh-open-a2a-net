@@ -634,7 +634,11 @@ export function apply(ctx: Context, config: Config): void {
     const cached = titleCache.get(agent)
     if (cached !== undefined && cached.length === length && cached.tail === tail) return cached.title
     const title = ctx.get('sessionTitle')?.get(agent.session)?.title
-    titleCache.set(agent, { length, tail, title })
+    // An undefined answer is transient (service not yet ready on a cold
+    // wake) - caching it would pin the miss until the log grows again.
+    // Read-through instead: the title service is cheap, and the next poll
+    // picks up the real title as soon as the service can produce one.
+    if (title !== undefined) titleCache.set(agent, { length, tail, title })
     return title
   }
 
@@ -1446,6 +1450,7 @@ ${message}`
                 description: { type: 'string', required: true },
                 local: { type: 'boolean', description: 'true when the team is served by this host (loopback candidate).' },
                 origin: { type: 'string', description: 'The publishing host (node session label, LAN IP when known) — the natural grouping for fleet rows.' },
+                via: { type: 'string', description: 'The peer URL this row was discovered through (host:port), when it came from a peer card.' },
                 workspace: { type: 'string', description: 'The session\'s working directory, when shared.' },
               },
             },
