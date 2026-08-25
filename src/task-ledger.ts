@@ -97,6 +97,17 @@ export class TaskLedger {
   }
 
   /**
+   * v0.5.23 (async-stall): whether a tracked task still owes its receipt.
+   * The async nudge consults this — a resolved task disarms its retry.
+   * @param taskId - the correlation key the receipt echoes.
+   * @returns true when the task is tracked and still pending.
+   */
+  isPending(taskId: string): boolean {
+    const record = this.tasks.find(entry => entry.taskId === taskId)
+    return record !== undefined && record.status === 'pending'
+  }
+
+  /**
    * Correlate one message against the ledger: a receipt (message starting
    * `[A2A receipt] task <id> …`) resolves its task, keeping the outcome
    * summary; a repeat receipt refreshes the record with the latest outcome.

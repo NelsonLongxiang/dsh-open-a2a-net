@@ -1878,6 +1878,7 @@ describe('a2a plugin module surface', () => {
     expect(resolved).toEqual({
       apiKey: '',
       session: '',
+      asyncNudgeDelayMs: 120_000,
       team: 'dsh',
       announce: false,
       agentName: 'DeepSeek Harness A2A node',

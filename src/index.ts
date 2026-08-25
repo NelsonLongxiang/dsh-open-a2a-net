@@ -160,6 +160,11 @@ export interface Config {
    * never waits on this queue.
    */
   readonly wakeBootStaggerMs: number
+
+  /**
+   * v0.5.23 (async-stall): see the schema comment on asyncNudgeDelayMs.
+   */
+  readonly asyncNudgeDelayMs: number
   /**
    * How long the state route serves the cold-row id set from cache before
    * re-enumerating the persistence layer. The panel polls every 2s; the
@@ -209,6 +214,13 @@ export const Config: s<Config> = s.object({
   wakePrewarmDelayMs: s.number().default(10_000),
   wakePrewarmQuietMs: s.number().default(5_000),
   wakeBootStaggerMs: s.number().default(3_000),
+
+  /**
+   * v0.5.23 (async-stall): delay before a delivered-but-unconsumed async
+   * route re-wakes its target with a one-line nudge (defect
+   * t-mt6nd0sq-hxuhj6). 0 disables the nudge entirely.
+   */
+  asyncNudgeDelayMs: s.number().default(120_000),
   stateColdRowsTtlMs: s.number().default(5_000),
   cardCacheTtlMs: s.number().default(60_000),
   cardCacheNegativeTtlMs: s.number().default(30_000),
@@ -1103,6 +1115,52 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
+   * v0.5.23 (async-stall): whether the steered agent actually left idle. A
+   * steer on an idle driver flips status to running within the same tick
+   * (wakeDriver sets the phase synchronously before kick); still-idle after
+   * the steer means the wake was latched (maintenance/abort window) or the
+   * driver never claimed it — the delivered-but-stalled shape the defect
+   * ticket documented. The probe reads status once, immediately: a message
+   * already consumed back to idle reads false-negative-conservative, which
+   * only arms the harmless nudge below.
+   * @param agent - the steered target.
+   * @returns true when the driver shows running (or already errored past the
+   * claim, which consumption also implies); false when it stayed idle.
+   */
+  function probeConsumption(agent: Agent, taskId: string): boolean {
+    void taskId
+    try {
+      return agent.status === 'running'
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * v0.5.23 (async-stall): one delayed nudge per session while a task stays
+   * unconsumed. The steer above parked the message; a latched wake replays
+   * only at convergence, and a dropped one never does — the nudge re-steers
+   * a one-line prompt after the delay, which productizes the manual
+   * recovery this defect needed (a synchronous probe re-woke the session).
+   * Per-session single-flight plus a global cap keep a fleet of stalled
+   * targets from stacking retries; a consumed task disarms itself.
+   */
+  const nudgeInFlight = new Set<string>()
+  function armAsyncNudge(agent: Agent, team: string, taskId: string, delayMs: number): void {
+    const key = String(agent.id)
+    if (nudgeInFlight.has(key)) return
+    nudgeInFlight.add(key)
+    const timer = setTimeout(() => {
+      nudgeInFlight.delete(key)
+      if (!taskLedger.isPending(taskId)) return
+      if (agent.status !== 'idle') return
+      logger.info(`a2a: async nudge re-waking ${team} (task ${taskId} delivered but not consumed)`)
+      steerRelay(agent, `[A2A nudge] (task ${taskId}) your earlier routed message was delivered while this session could not start a turn — please consume the inbox backlog now.`)
+    }, delayMs)
+    ctx.effect(() => () => clearTimeout(timer), `a2a: async nudge ${taskId}`)
+  }
+
+  /**
    * Register one final-reply waiter for the agent and arm its flush timeout.
    * @param agent - the agent whose next assistant message answers the waiter.
    * @param answer - how the waiter's reply is delivered.
@@ -1271,6 +1329,16 @@ ${message}`
                 // correlation loop with the caller's own route result.
                 steerRelay(target, `[A2A direct] (task ${taskId}) from "${from}" (routed to ${team}) sent:\n\n${message}`)
                 recordActivity('in', team, caller, true)
+                // v0.5.23 (async-stall): "delivered" only proves the steer call
+                // returned — not that a turn started. An idle-phase steer wakes
+                // the driver, but a maintenance/abort window latches the wake for
+                // replay that may never fire (defect t-mt6nd0sq-hxuhj6: seven
+                // delivered:true routes with zero log growth). Probe the driver
+                // shortly after: running means the message is being consumed;
+                // still-idle means the wake was latched or dropped — surface that
+                // honestly and arm a delayed nudge retry below.
+                const consumedProbe = probeConsumption(target, taskId)
+                if (!consumedProbe) armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
                 const payload = JSON.stringify({
                   routed: true,
                   delivered: true,
@@ -1280,6 +1348,7 @@ ${message}`
                   context_id: contextId,
                   task_status: 'TASK_STATE_DELIVERED',
                   artifacts: [],
+                  consumed: consumedProbe,
                 })
                 res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
                 res.end(payload)
