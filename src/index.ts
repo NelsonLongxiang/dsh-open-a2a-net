@@ -1154,8 +1154,15 @@ export function apply(ctx: Context, config: Config): void {
       nudgeInFlight.delete(key)
       if (!taskLedger.isPending(taskId)) return
       if (agent.status !== 'idle') return
+      // Re-resolve rather than reusing the delivered agent: a session-node
+      // entry captured at delivery may have been disposed since (a stale
+      // reference steers a dead object — no error, no log growth, exactly
+      // the stall this nudge exists to recover). The registry lookup returns
+      // the current live node, or the wake path materializes the session
+      // afresh.
+      const fresh = resolveAgentForTeam(team) ?? agent
       logger.info(`a2a: async nudge re-waking ${team} (task ${taskId} delivered but not consumed)`)
-      steerRelay(agent, `[A2A nudge] (task ${taskId}) your earlier routed message was delivered while this session could not start a turn — please consume the inbox backlog now.`)
+      steerRelay(fresh, `[A2A nudge] (task ${taskId}) your earlier routed message was delivered while this session could not start a turn — please consume the inbox backlog now.`)
     }, delayMs)
     ctx.effect(() => () => clearTimeout(timer), `a2a: async nudge ${taskId}`)
   }
