@@ -257,4 +257,38 @@ describe('canvas team routing', () => {
     const result = await route!.execute({ team: 'dsh/canvas/empty', message: 'nobody home' }, noAgent()) as { ok: boolean; error?: string }
     expect(result.ok).toBe(false)
   })
+
+  it('a file-seeded unjoined member never wakes or steers — direct canvas.json edits cannot mint routable membership', async () => {
+    // External tamper: canvas.json names a session that never joined. The
+    // join-gate consent invariant must hold by construction: no live node,
+    // no remembered intent, no wake face call, no steer.
+    const m = await mount({ canvas: [{ name: 'alpha', members: ['session-never-joined'] }] })
+    mounted.push(m.dispose)
+    const coldEvents: unknown[] = []
+    const ghost = makeAgent('session-never-joined', coldEvents)
+    answering(m.ctx, ghost)
+    const proxy = new FakeApiProxy(m.ctx, () => ghost)
+    void proxy
+    const route = m.ctx.tools.get('a2a_route')
+    const result = await route!.execute({ team: 'dsh/canvas/alpha', message: 'bypass attempt' }, noAgent()) as { ok: boolean }
+    expect(result.ok).toBe(false)
+    expect(proxy.materialized).toEqual([])
+    expect(ghost.steer).not.toHaveBeenCalled()
+  })
+
+  it('the state poll prunes canvas members without a live node or join intent', async () => {
+    // canvas.json carries ids whose join state is gone (intent removed,
+    // file edited between restarts). The poll sweep drops them.
+    const m = await mount({ joined: ['session-aaa'], canvas: [{ name: 'alpha', members: ['session-aaa', 'session-stale1'] }] })
+    mounted.push(m.dispose)
+    const a = makeAgent('session-aaa', [])
+    answering(m.ctx, a)
+    goLive(m, a)
+    await postJson(m.port, '/__dsh_a2a/join', { id: 'session-aaa' })
+    await postJson(m.port, '/__dsh_a2a/leave', { id: 'session-aaa' })
+    // session-aaa left (intent gone); session-stale1 never had one.
+    const state = await (await fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { canvas: { teams: Array<{ name: string; members: string[] }> } }
+    const alpha = state.canvas.teams.find(t => t.name === 'alpha')
+    expect(alpha?.members).toEqual([])
+  })
 })

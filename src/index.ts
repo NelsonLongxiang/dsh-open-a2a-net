@@ -591,6 +591,27 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
+   * Lifecycle revalidation for canvas membership: a member is legitimate
+   * only while it is live on the network (a mounted session node) or while
+   * a join intent is remembered. The control route enforces this at write
+   * time, but canvas.json is a plain file — an external edit (or a join
+   * intent that vanished between restarts) can leave a stale id behind.
+   * Routing is already safe by construction (live resolution needs a
+   * mounted node; cold wake needs the remembered intent), so this sweep is
+   * hygiene, not a security backstop: it drops dead ids at the same seams
+   * the archive prune runs (boot settlement and the state poll).
+   */
+  const pruneCanvasMemberships = (): void => {
+    for (const name of canvasStore.list()) {
+      for (const id of canvasStore.membersOf(name)) {
+        if (sessionNodes.has(id) || joinedSessions.has(id)) continue
+        canvasStore.removeMember(name, id)
+        logger.info(`a2a: canvas team "${name}" dropped stale member ${id8(id)} (no live node, no join intent)`)
+      }
+    }
+  }
+
+  /**
    * The short id suffix session-node labels and teams key on. Web agents
    * carry `SessionId`-branded ids whose first 8 characters are the literal
    * `session-` prefix — every node would share one team — so the brand
@@ -799,6 +820,7 @@ export function apply(ctx: Context, config: Config): void {
       const PREWARM_YIELD_RETRY_MS = 1_000
       const pruneThenWake = (): void => {
         pruneArchivedJoins()
+        pruneCanvasMemberships()
         if (!config.wakeJoinedOnBoot) return
         if (ctx.get('apiProxy') === undefined) {
           logger.warn('wakeJoinedOnBoot is on but no api gateway is composed; cold joined sessions stay asleep')
@@ -940,6 +962,7 @@ export function apply(ctx: Context, config: Config): void {
             // archive leave the network within one poll interval, no restart
             // required.
             pruneArchivedJoins()
+            pruneCanvasMemberships()
             const tPrune = Date.now()
             const assignments = groupStore.all()
             const groupOf = (id: string): string | undefined => {
