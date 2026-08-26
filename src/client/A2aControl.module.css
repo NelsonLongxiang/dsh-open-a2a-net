@@ -472,12 +472,25 @@
   padding: 1px 6px;
   border-radius: 999px;
   font-size: 11px;
+  max-width: 100%;
   color: var(--dsh-color-text-secondary, #aaa);
   background: var(--dsh-color-bg-secondary, rgba(128, 128, 128, 0.12));
 }
+/* Compact-label contract: the chip stays whole on one line; the member
+   name shrinks (ellipsis) instead of wrapping or clipping blind, and the
+   remove button's aria-label discloses the full value to non-visual users.
+   The hover title remains a secondary affordance, never the only one. */
+.canvasChip > span:not([class]) {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .canvasChipRemove {
   border: none;
-  padding: 0 2px;
+  padding: 2px 5px;
+  min-width: 22px;
+  min-height: 22px;
   font-size: 11px;
   line-height: 1;
   cursor: pointer;
@@ -486,6 +499,11 @@
 }
 .canvasChipRemove:hover {
   color: var(--dsh-color-text-primary, #eee);
+}
+.canvasChipRemove:focus-visible {
+  outline: 2px solid var(--dsh-color-primary, #4f8cff);
+  outline-offset: 1px;
+  border-radius: 4px;
 }
 
 .canvasActions {

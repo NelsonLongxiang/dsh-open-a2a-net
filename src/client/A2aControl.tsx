@@ -573,8 +573,8 @@ export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProp
                                 <button
                                   type="button"
                                   className={css.canvasChipRemove}
-                                  title={t('a2a.canvasRemove')}
-                                  aria-label={t('a2a.canvasRemove')}
+                                  title={`${String(t('a2a.canvasRemove'))}: ${memberName(member.id)} (${teamRow.name})`}
+                                  aria-label={`${String(t('a2a.canvasRemove'))}: ${memberName(member.id)} (${teamRow.name})`}
                                   disabled={busy === `canvas:${teamRow.name}`}
                                   onClick={() => { postCanvas({ action: 'remove-member', name: teamRow.name, id: member.id }, `canvas:${teamRow.name}`) }}
                                 >

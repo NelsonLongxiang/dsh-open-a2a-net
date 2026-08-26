@@ -216,7 +216,8 @@ describe('A2aControl', () => {
     })
     // A member chip's × removes from that team.
     stateCanvas = [{ name: 'alpha', team: 'dsh/canvas/alpha', members: [{ id: 'agent-1', team: 'dsh/agent-1', joined: true, live: true }] }]
-    fireEvent.click(await screen.findByRole('button', { name: 'Remove from this team' }))
+    // The × accessible name carries member + team (non-visual disclosure).
+    fireEvent.click(await screen.findByRole('button', { name: /Remove from this team/ }))
     await waitFor(() => {
       expect(postedBodies.some(body => body.includes('remove-member'))).toBe(true)
     })
