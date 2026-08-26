@@ -37,10 +37,11 @@ shared tool runtime.
 
 - **Model tools** — `a2a_teams` lists the teams this node can see (own, peers', joined sessions'); `a2a_route`
   sends one message to a team, reuses `context_id` to continue a remote conversation, and fails over across
-  candidates when a peer is unreachable. `a2a_tasks` reconciles the receipt contract: every route that leaves a
-  task owed a reply (async delivery, a released wait) stays queryable as pending until its
-  `[A2A receipt] task <task_id>` message correlates, then shows the outcome summary — with the follow-up
-  `context_id` kept on the row, persisted across
+  candidates when a peer is unreachable. `a2a_tasks` reconciles the receipt contract across three tiers: every route that leaves a
+  task owed a reply (async delivery, a released wait) stays in the owed book as pending until its
+  `[A2A receipt] task <task_id>` message correlates — overdue rows auto-dead-letter past the stale TTL (a revived target can still
+  settle with a late receipt), every settlement lands in the bounded archive instead of being silently evicted, and each row keeps
+  its follow-up `context_id`, persisted across
   restarts. `a2a_probe` measures the tracked fleet's reachability and round-trip latency (one verified-card
   fetch per peer, optionally narrowed to a single url) for pre-dispatch health checks, naming each miss's
   stage — `unreachable` (transport/HTTP) vs. `rejected` (distrusted card).
@@ -68,7 +69,7 @@ shared tool runtime.
 | --- | --- | --- |
 | `a2a_teams` | Which teams can I route to? | Own, peers', and joined sessions' teams, with activity excerpts. |
 | `a2a_route` | Send a message to a team. | `context_id` continues a conversation; `async: true` delivers without waiting; fails over across candidates. |
-| `a2a_tasks` | Which async tasks still owe a receipt? | Pending rows keep the follow-up `context_id`; overdue rows name the way out; persisted across restarts. |
+| `a2a_tasks` | Which async tasks still owe a receipt? | Three tiers: owed rows keep the follow-up `context_id`; past-TTL rows auto-dead-letter (still settleable); outcomes land in the bounded archive; persisted across restarts. |
 | `a2a_probe` | Is the fleet healthy? | One verified-card fetch per peer (or one given url); `N reachable, M down`; misses classified `unreachable` vs `rejected`. |
 | `a2a_status` | What is this node doing right now? | Tracked peers with quality scores, in-flight routes, and recent routing activity. |
 

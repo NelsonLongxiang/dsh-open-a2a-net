@@ -1040,12 +1040,17 @@ export function apply(ctx: Context, config: Config): void {
                 peer: route.peer,
                 startedAt: route.startedAt,
               })),
-              // Owed receipts: the cross-turn waits the in-flight ring cannot
-              // show (an async dispatch rides no wait). Resolved tasks stay
-              // off the panel — the inbound activity row is their receipt.
+              // Owed receipts: pending rows only — the cross-turn waits the
+              // in-flight ring cannot show. Dead-lettered rows ride their own
+              // list and settled ones just a count, all additive so the panel
+              // keeps rendering plain owed rows until it learns the tiers.
               tasks: taskLedger.list()
                 .filter(task => task.status === 'pending')
                 .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, status: task.status })),
+              tasksDead: taskLedger.list()
+                .filter(task => task.status === 'dead')
+                .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt })),
+              archivedCount: taskLedger.archive().length,
             })
             res.writeHead(200, {
               'Content-Type': 'application/json',
@@ -2250,9 +2255,10 @@ ${message}`
   ctx.tools.register(defineTool({
     name: 'a2a_tasks',
     description:
-      'Read-only ledger of routed A2A tasks that are owed a receipt: every async delivery or released wait '
-      + 'stays queryable until its `[A2A receipt] task <task_id>` message correlates (then it shows the outcome '
-      + 'summary). Use it to reconcile dispatched async work instead of re-routing to ask for progress.',
+      'Read-only three-tier ledger of routed A2A tasks: pending rows still owed a receipt, rows '
+      + 'auto-dead-lettered past the stale TTL, and the bounded archive of correlated '
+      + '`[A2A receipt] task <task_id>` outcomes. Use it to reconcile dispatched async work instead of '
+      + 're-routing to ask for progress.',
     parameters: {},
     output: {
       schema: {
@@ -2273,16 +2279,31 @@ ${message}`
                 startedAt: { type: 'number', required: true },
                 contextId: { type: 'string' },
                 status: { type: 'string', required: true },
-                resolvedAt: { type: 'number' },
+                deadAt: { type: 'number' },
+              },
+            },
+          },
+          archive: {
+            type: 'array',
+            required: true,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                taskId: { type: 'string', required: true },
+                team: { type: 'string', required: true },
+                startedAt: { type: 'number', required: true },
+                resolvedAt: { type: 'number', required: true },
                 summary: { type: 'string' },
               },
             },
           },
+          archivedTotal: { type: 'number', required: true },
         },
       },
       render: (_args, value) => [{
         type: 'text',
-        text: value.tasks.length === 0
+        text: value.tasks.length === 0 && value.archivedTotal === 0
           ? 'No routed tasks are owed a receipt.'
           : [
             ...(value.tasks.some((task: { status: string }) => task.status === 'pending') ? ['Owed receipts:'] : []),
@@ -2295,15 +2316,27 @@ ${message}`
               const context = task.contextId === undefined || task.contextId === '' ? '' : `, follow-up context ${task.contextId}`
               return `  - ${task.taskId} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}), waiting ${describeAge(Date.now() - task.startedAt)}${context}${overdue}`
             }),
-            ...(value.tasks.some((task: { status: string }) => task.status === 'resolved') ? ['Resolved:'] : []),
-            ...value.tasks.filter((task: { status: string }) => task.status === 'resolved').map((task: { taskId: string; team: string; peer: string; startedAt: number; resolvedAt?: number; summary?: string }) => `  - ${task.taskId} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer})${typeof task.resolvedAt === 'number' ? ` after ${describeAge(task.resolvedAt - task.startedAt)}` : ''}: ${task.summary === undefined || task.summary === '' ? 'resolved' : task.summary}`),
+            ...(value.tasks.some((task: { status: string }) => task.status === 'dead') ? ['Dead-lettered (auto-flagged past the stale TTL; a revived target can still settle with a late receipt):'] : []),
+            ...value.tasks.filter((task: { status: string }) => task.status === 'dead').map((task: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string }) => {
+              const context = task.contextId === undefined || task.contextId === '' ? '' : `, follow-up context ${task.contextId}`
+              return `  - ${task.taskId} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}), dispatched ${describeAge(Date.now() - task.startedAt)} ago${context}`
+            }),
+            ...(value.archivedTotal > 0 ? [`Archived (${String(value.archivedTotal)}), most recent first:`] : []),
+            ...value.archive.map((entry: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string }) => `  - ${entry.taskId} → ${entry.team}: after ${describeAge(entry.resolvedAt - entry.startedAt)}, ${entry.summary === undefined || entry.summary === '' ? 'resolved' : entry.summary}`),
+            ...(value.archivedTotal > value.archive.length ? [`  (+${String(value.archivedTotal - value.archive.length)} older not shown)`] : []),
           ].join('\n'),
       }],
     },
     presentCall: () => ({ card: 'generic', title: 'A2A task ledger', kind: 'other', rawInput: null }),
-    execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; status: 'pending' | 'resolved'; resolvedAt?: number; summary?: string }[] }> => {
+    execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; status: 'pending' | 'dead'; deadAt?: number }[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string }[]; archivedTotal: number }> => {
       a2aJoinGateRefusal(exec)
-      return { ok: true, tasks: taskLedger.list().map(task => ({ ...task })) }
+      const archiveAll = taskLedger.archive()
+      return {
+        ok: true,
+        tasks: taskLedger.list().map(task => ({ ...task })),
+        archive: archiveAll.slice(0, 5).map(({ taskId, team, startedAt, resolvedAt, summary }) => ({ taskId, team, startedAt, resolvedAt, ...(summary !== undefined && summary !== '' ? { summary } : {}) })),
+        archivedTotal: archiveAll.length,
+      }
     },
   }))
 
