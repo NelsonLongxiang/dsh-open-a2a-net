@@ -500,6 +500,16 @@
 .canvasChipRemove:hover {
   color: var(--dsh-color-text-primary, #eee);
 }
+.canvasChipRemove {
+  /* ui-ux-pro-max Data-Dense Dashboard: hover transitions 150-300ms;
+     color-only at 140ms keeps it under the ornament threshold */
+  transition: color 140ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .canvasChipRemove {
+    transition: none;
+  }
+}
 .canvasChipRemove:focus-visible {
   outline: 2px solid var(--dsh-color-primary, #4f8cff);
   outline-offset: 1px;
