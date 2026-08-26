@@ -1494,6 +1494,33 @@ ${message}`
     }
   }
 
+  /**
+   * v0.5.24 (join-gate): a session that has not joined the A2A network may
+   * not use its outbound tools. Joining is a user gesture (the sidebar
+   * control) — never automatic, never proxied — so an unjoined session's
+   * model must be told plainly instead of silently failing routes. The gate
+   * only applies to in-session calls (an agent context exists); host-side
+   * service invocations without an agent (e.g. the taskboard marquee's
+   * joined-caller identity) pass through untouched, and a joined session
+   * (sessionNodes carries its id) is exempt. appliesToA2aTools returns the
+   * refusal error object, or undefined when the call may proceed.
+   */
+  const a2aJoinGateRefusal = (exec: { agent?: { id: unknown } } | undefined): void => {
+    const agent = exec?.agent
+    if (agent === undefined) return
+    if (sessionNodes.has(String(agent.id))) return
+    // The process's own initiator session IS the node (its team is this
+    // node's team): routing out from the operator face needs no join. Every
+    // other top-level session is a guest that must join by user gesture.
+    const agents = ctx.get('agents')
+    try {
+      if (agents !== undefined && agents.requireInitiator() === agent) return
+    } catch { /* no initiator in this fiber — a guest stays gated */ }
+    // A thrown tool error renders as the model-visible failure surface —
+    // loud, structured, and schema-free (no success shape is produced).
+    throw new Error('你被禁止使用 a2a 网络：本会话未加入 A2A 网络（join 是用户手势）。Join via the sidebar control to enable, then retry.')
+  }
+
   ctx.tools.register(defineTool({
     name: 'a2a_teams',
     description:
@@ -1541,7 +1568,8 @@ ${message}`
       }],
     },
     presentCall: args => ({ card: 'generic', title: args.query === undefined || args.query === '' ? 'List reachable A2A teams' : `Search A2A teams: ${args.query}`, kind: 'other', rawInput: args }),
-    execute: async (args: { query?: string }): Promise<{ ok: boolean; query: string; teams: DirectoryTeamRow[] }> => {
+    execute: async (args: { query?: string }, exec): Promise<{ ok: boolean; query: string; teams: DirectoryTeamRow[] }> => {
+      a2aJoinGateRefusal(exec)
       const query = args.query?.trim().toLowerCase() ?? ''
       const teams = await listDirectoryTeams(query !== '')
       if (query === '') return { ok: true, query: '', teams }
@@ -1664,6 +1692,7 @@ ${message}`
       // The caller identity travels as a routable team (the calling session's
       // node team when it has joined, else the node label), so the receiver
       // can answer with one a2a_route instead of an unroutable display label.
+      a2aJoinGateRefusal(exec)
       const callerSession = exec.agent === undefined ? undefined
         : sessionNodes.has(String(exec.agent.id)) ? sessionTeamOf(exec.agent) : sessionLabelOf(exec.agent)
       const fetch = memoizedCardFetch()
@@ -1966,12 +1995,13 @@ ${message}`
       }],
     },
     presentCall: () => ({ card: 'generic', title: 'A2A network status', kind: 'other', rawInput: null }),
-    execute: async (): Promise<{
+    execute: async (_args, exec): Promise<{
       ok: boolean
       peers: { url: string; score?: number }[]
       inFlight: { team: string; peer: string; startedAt: number }[]
       activity: RouteActivityEntry[]
     }> => {
+      a2aJoinGateRefusal(exec)
       return {
         ok: true,
         peers: peerStore.list().map(url => ({ url, score: peerStore.score(url) })),
@@ -2043,7 +2073,8 @@ ${message}`
       }],
     },
     presentCall: () => ({ card: 'generic', title: 'A2A task ledger', kind: 'other', rawInput: null }),
-    execute: async (): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; status: 'pending' | 'resolved'; resolvedAt?: number; summary?: string }[] }> => {
+    execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; status: 'pending' | 'resolved'; resolvedAt?: number; summary?: string }[] }> => {
+      a2aJoinGateRefusal(exec)
       return { ok: true, tasks: taskLedger.list().map(task => ({ ...task })) }
     },
   }))
@@ -2093,7 +2124,8 @@ ${message}`
       }],
     },
     presentCall: args => ({ card: 'generic', title: args.url === undefined || args.url === '' ? 'Probe the A2A fleet' : `Probe A2A peer: ${args.url}`, kind: 'other', rawInput: args }),
-    execute: async (args: { url?: string }): Promise<{ ok: boolean; results: { url: string; reachable: boolean; ms: number; team?: string; error?: string }[] }> => {
+    execute: async (args: { url?: string }, exec): Promise<{ ok: boolean; results: { url: string; reachable: boolean; ms: number; team?: string; error?: string }[] }> => {
+      a2aJoinGateRefusal(exec)
       const targets = args.url !== undefined && args.url !== '' ? [args.url] : peerStore.list()
       const probeOne = async (url: string): Promise<{ url: string; reachable: boolean; ms: number; team?: string; error?: string }> => {
         const startedAt = Date.now()

@@ -431,6 +431,15 @@ describe('a2a plugin decentralized routing (peers)', () => {
       expect(session.steer).toHaveBeenCalledTimes(1)
       const steered = (session.steer.mock.calls[0]?.[0] as { content: Array<{ type: string; text: string }> }).content[0]
       expect(steered?.text).toContain('from "peer-caller" (routed to dsh/agent-1)')
+      // v0.5.24 (join-gate): the joined session's tool face passes the gate —
+      // a2a_teams answers ok with no refusal, while an unjoined agent id
+      // gets the plain-language ban and the join pointer.
+      type ExecCtor = Parameters<NonNullable<ReturnType<typeof ctx.tools.get>>['execute']>[1]
+      const joinedFace = await ctx.tools.get('a2a_teams')!.execute({}, { signal: new AbortController().signal, agent: session } as unknown as ExecCtor) as { ok: boolean; error?: string }
+      expect(joinedFace.ok).toBe(true)
+      expect(joinedFace.error).toBeUndefined()
+      await expect(ctx.tools.get('a2a_teams')!.execute({}, { signal: new AbortController().signal, agent: { id: SessionId('session-outside000000000000000000') } } as unknown as ExecCtor))
+        .rejects.toThrow('你被禁止使用 a2a 网络')
     } finally {
       await ctx.fiber.dispose()
     }
@@ -1678,12 +1687,22 @@ describe('a2a session nodes (opt-in join)', () => {
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(TimerService)
-    apply(ctx, makeConfig({ peers: [peer.baseUrl], dshHome: tmpHome() }))
+    await ctx.plugin(FakeAgentsService)
+    // v0.5.24 (join-gate): the outbound caller must be a joined session node
+    // (user gesture) — pre-seed the join intent, mount the caller, then route.
+    const home = tmpHome()
+    mkdirSync(join(home, 'a2a'), { recursive: true })
     const caller = makeAgent()
+    writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: [String(caller.id)] }), 'utf8')
+    apply(ctx, makeConfig({ peers: [peer.baseUrl], dshHome: home, sessionNodes: true }))
+    ;(ctx.get('agents') as unknown as FakeAgentsService).agent = caller
+    ctx.emit('agent/created', { agent: caller })
     const route = ctx.tools.get('a2a_route')
     await route?.execute({ team: 'dsh', message: 'hello peer' }, { signal: new AbortController().signal, agent: caller } as unknown as ToolRunContext)
     const steered = (peer.steer.mock.calls[0]?.[0] as { content: Array<{ type: string; text: string }> }).content[0]
-    expect(steered?.text).toContain('from "sess-1-agent-1"')
+    // A joined caller presents its routable team (dsh/<id8>) — not the
+    // bare display label — so the receiver can answer with one a2a_route.
+    expect(steered?.text).toContain('from "dsh/agent-1"')
     await ctx.fiber.dispose()
     await peer.dispose()
   })
