@@ -30,6 +30,8 @@ let stateTasks: { taskId: string; team: string; peer: string; startedAt: number;
 let stateRemote: { team: string; name: string; origin?: string; workspace?: string }[] = []
 let stateActivity: { ts: number; dir: 'in' | 'out'; team: string; peer: string; ok: boolean }[] = []
 let stateVersion: string | undefined
+type CanvasTeamFixture = { name: string; team: string; members: Array<{ id: string; team: string; joined: boolean; live: boolean }> }
+let stateCanvas: readonly CanvasTeamFixture[] | undefined = undefined
 let stateOk = true
 const posts: Array<{ url: string; body: string }> = []
 const fetchMock = vi.fn<(input: string, init?: RequestInit) => Promise<Response>>()
@@ -54,6 +56,7 @@ const row = (overrides: Partial<A2aSessionRow> = {}): A2aSessionRow => ({
 
 describe('A2aControl', () => {
   beforeEach(() => {
+    stateCanvas = undefined
     stateSessions = [row()]
     stateGroups = []
     statePeers = []
@@ -72,7 +75,7 @@ describe('A2aControl', () => {
         posts.push({ url: input, body: typeof init?.body === 'string' ? init.body : '' })
         return jsonResponse({ id: 'agent-1' })
       }
-      return stateOk ? jsonResponse({ nodes: true, ...(stateVersion === undefined ? {} : { version: stateVersion }), sessions: stateSessions, groups: stateGroups, peers: statePeers, activity: stateActivity, inFlight: stateInFlight, tasks: stateTasks, remote: stateRemote }) : jsonResponse({ error: 'gone' }, false)
+      return stateOk ? jsonResponse({ nodes: true, ...(stateVersion === undefined ? {} : { version: stateVersion }), sessions: stateSessions, groups: stateGroups, peers: statePeers, activity: stateActivity, inFlight: stateInFlight, tasks: stateTasks, remote: stateRemote, ...(stateCanvas === undefined ? {} : { canvas: { teams: stateCanvas } }) }) : jsonResponse({ error: 'gone' }, false)
     }))
     vi.stubGlobal('fetch', fetchMock)
   })
@@ -120,6 +123,121 @@ describe('A2aControl', () => {
     openPopover()
     expect(await screen.findByText('Parser porting session')).toBeTruthy()
     expect(screen.queryByText('Owed receipts')).toBeNull()
+  })
+
+  it('renders the canvas section when the host serves the canvas face', async () => {
+    stateCanvas = [
+      {
+        name: 'alpha',
+        team: 'dsh/canvas/alpha',
+        members: [
+          { id: 'agent-1', team: 'dsh/agent-1', joined: true, live: true },
+          { id: 'session-cold1', team: 'dsh/cold1', joined: true, live: false },
+        ],
+      },
+      { name: 'beta', team: 'dsh/canvas/beta', members: [{ id: 'agent-1', team: 'dsh/agent-1', joined: true, live: true }] },
+    ]
+    mountControl()
+    openPopover()
+    // Both teams visible; agent-1 appears as a member chip in BOTH teams —
+    // the one-node-many-teams view is the point of the canvas.
+    expect(await screen.findByText('Canvas teams (arbitrary grouping)')).toBeTruthy()
+    const alphaHead = await screen.findByText(/alpha · 2/)
+    expect(alphaHead).toBeTruthy()
+    expect(screen.getByText(/beta · 1/)).toBeTruthy()
+    const chips = screen.getAllByText('Parser porting session')
+    expect(chips.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('omits the canvas section when the host does not serve the canvas face', async () => {
+    stateSessions = [row()]
+    stateCanvas = undefined
+    mountControl()
+    openPopover()
+    expect(await screen.findByText('Parser porting session')).toBeTruthy()
+    expect(screen.queryByText('Canvas teams (arbitrary grouping)')).toBeNull()
+  })
+
+  it('creates a canvas team from the section input', async () => {
+    stateCanvas = []
+    let created: string | undefined
+    fetchMock.mockImplementation(((input: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        created = typeof init?.body === 'string' ? init.body : ''
+        return jsonResponse({ ok: true, name: 'gamma', teams: [{ name: 'gamma', team: 'dsh/canvas/gamma', members: [] }] })
+      }
+      return jsonResponse({ nodes: true, sessions: [], groups: [], peers: [], activity: [], inFlight: [], tasks: [], remote: [], canvas: { teams: created === undefined ? [] : [{ name: 'gamma', team: 'dsh/canvas/gamma', members: [] }] } })
+    }))
+    mountControl()
+    openPopover()
+    // fetchMock serves the canvas face with an empty team list from the
+    // first poll, so the section renders before anything is created.
+    await screen.findByPlaceholderText('New team name')
+    fireEvent.change(screen.getByPlaceholderText('New team name'), { target: { value: 'gamma' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => {
+      expect(created).toBe(JSON.stringify({ action: 'create', name: 'gamma' }))
+    })
+    await screen.findByText(/gamma · 0/)
+  })
+
+  it('adds a member through the joined-only picker and removes one from a chip', async () => {
+    stateSessions = [row({ joined: true }), row({ id: 'unjoined-1', label: 'dsh-host-ab12cd34-unjoined-1', team: 'dsh/unjoined-1', joined: false })]
+    stateCanvas = [{ name: 'alpha', team: 'dsh/canvas/alpha', members: [] }]
+    const postedBodies: string[] = []
+    fetchMock.mockImplementation(((input: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        const body = typeof init?.body === 'string' ? init.body : ''
+        postedBodies.push(body)
+        // The host applies mutations immediately; mirror that so the
+        // refresh this handler triggers already carries the new membership.
+        if (body.includes('add-member')) {
+          stateCanvas = [{ name: 'alpha', team: 'dsh/canvas/alpha', members: [{ id: 'agent-1', team: 'dsh/agent-1', joined: true, live: true }] }]
+        }
+        return jsonResponse({ ok: true })
+      }
+      return jsonResponse({ nodes: true, sessions: stateSessions, groups: [], peers: [], activity: [], inFlight: [], tasks: [], remote: [], canvas: { teams: stateCanvas } })
+    }))
+    mountControl()
+    openPopover()
+    fireEvent.click(await screen.findByRole('button', { name: '+ Add member' }))
+    // The picker lists only joined sessions — the unjoined row stays out
+    // of the picker (no membership without join consent), though it still
+    // appears in the regular session listing above.
+    await waitFor(() => {
+      const options = Array.from(document.querySelectorAll('button[class*="groupOption"]'))
+      expect(options.length).toBe(1)
+      expect((options[0]?.textContent ?? '').includes('unjoined-1')).toBe(false)
+    })
+    const option = Array.from(document.querySelectorAll('button[class*="groupOption"]'))[0]!
+    fireEvent.click(option)
+    await waitFor(() => {
+      expect(postedBodies).toContain(JSON.stringify({ action: 'add-member', name: 'alpha', id: 'agent-1' }))
+    })
+    // A member chip's × removes from that team.
+    stateCanvas = [{ name: 'alpha', team: 'dsh/canvas/alpha', members: [{ id: 'agent-1', team: 'dsh/agent-1', joined: true, live: true }] }]
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove from this team' }))
+    await waitFor(() => {
+      expect(postedBodies.some(body => body.includes('remove-member'))).toBe(true)
+    })
+  })
+
+  it('deletes a canvas team with its memberships', async () => {
+    stateCanvas = [{ name: 'alpha', team: 'dsh/canvas/alpha', members: [{ id: 'agent-1', team: 'dsh/agent-1', joined: true, live: true }] }]
+    const postedBodies: string[] = []
+    fetchMock.mockImplementation(((input: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        postedBodies.push(typeof init?.body === 'string' ? init.body : '')
+        return jsonResponse({ ok: true })
+      }
+      return jsonResponse({ nodes: true, sessions: [row()], groups: [], peers: [], activity: [], inFlight: [], tasks: [], remote: [], canvas: { teams: stateCanvas } })
+    }))
+    mountControl()
+    openPopover()
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    await waitFor(() => {
+      expect(postedBodies).toContain(JSON.stringify({ action: 'remove', name: 'alpha' }))
+    })
   })
   it('toggles the popover, lists session facts, and closes on outside pointerdown', async () => {
     const { container } = mountControl()

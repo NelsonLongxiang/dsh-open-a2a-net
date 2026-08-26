@@ -452,6 +452,47 @@
 .inFlightStale {
   opacity: 0.55;
 }
+
+.canvasCreate {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.canvasCreate .groupInput {
+  flex: 1;
+  min-width: 0;
+}
+
+.canvasChip {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  margin: 2px 4px 2px 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--dsh-color-text-secondary, #aaa);
+  background: var(--dsh-color-bg-secondary, rgba(128, 128, 128, 0.12));
+}
+.canvasChipRemove {
+  border: none;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  background: transparent;
+  color: var(--dsh-color-text-tertiary, #888);
+}
+.canvasChipRemove:hover {
+  color: var(--dsh-color-text-primary, #eee);
+}
+
+.canvasActions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
 .inFlightStale .inFlightPulse {
   animation: none;
   opacity: 0.4;

@@ -69,6 +69,25 @@ export interface A2aTaskRow {
   readonly status: string
 }
 
+/** One canvas-team member chip as the state route reports it. */
+export interface A2aCanvasMemberRow {
+  /** The member session id. */
+  readonly id: string
+  /** The member's node alias team (<team>/<id8>). */
+  readonly team: string
+  /** Whether the member is on the network (live node or join intent). */
+  readonly joined: boolean
+  /** Whether the member's agent is mounted right now. */
+  readonly live: boolean
+}
+
+/** One user-composed multi-member routing group (the wire name is <team>/canvas/<name>). */
+export interface A2aCanvasTeamRow {
+  readonly name: string
+  readonly team: string
+  readonly members: readonly A2aCanvasMemberRow[]
+}
+
 /** The state route's full body. */
 export interface A2aState {
   readonly sessions: readonly A2aSessionRow[]
@@ -80,6 +99,8 @@ export interface A2aState {
   readonly tasks: readonly A2aTaskRow[]
   /** The host plugin package version, when the state route reports it. */
   readonly version?: string
+  /** Canvas teams: present only when the host serves the canvas face. */
+  readonly canvas?: { readonly teams: readonly A2aCanvasTeamRow[] }
 }
 
 /** Wake face the registration injects: opens one session through the standard sessions flow. */
@@ -94,7 +115,7 @@ export type A2aControlProps = PropsRuntime<'sidebar.footer.action'> & PropsLocal
 async function fetchState(): Promise<A2aState | undefined> {
   const response = await fetch('/__dsh_a2a/state', { cache: 'no-store' })
   if (!response.ok) return undefined
-  const body = await response.json() as { nodes?: boolean; version?: string; sessions?: A2aSessionRow[]; groups?: string[]; remote?: A2aRemoteRow[]; peers?: A2aPeerRow[]; activity?: A2aActivityRow[]; inFlight?: A2aInFlightRow[]; tasks?: A2aTaskRow[] }
+  const body = await response.json() as { nodes?: boolean; version?: string; sessions?: A2aSessionRow[]; groups?: string[]; remote?: A2aRemoteRow[]; peers?: A2aPeerRow[]; activity?: A2aActivityRow[]; inFlight?: A2aInFlightRow[]; tasks?: A2aTaskRow[]; canvas?: { teams?: A2aCanvasTeamRow[] } }
   if (body.nodes !== true || !Array.isArray(body.sessions)) return undefined
   return {
     sessions: body.sessions,
@@ -104,6 +125,7 @@ async function fetchState(): Promise<A2aState | undefined> {
     inFlight: Array.isArray(body.inFlight) ? body.inFlight : [],
     tasks: Array.isArray(body.tasks) ? body.tasks : [],
     remote: Array.isArray(body.remote) ? body.remote : [],
+    ...(Array.isArray(body.canvas?.teams) ? { canvas: { teams: body.canvas.teams } } : {}),
     ...(typeof body.version === 'string' ? { version: body.version } : {}),
   }
 }
@@ -327,7 +349,40 @@ export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProp
       .catch(() => {})
   }
 
+  // Canvas UI state: the team whose add-member picker is open, and the
+  // new-team name being typed.
+  const [canvasPickerFor, setCanvasPickerFor] = useState<string | null>(null)
+  const [canvasNewName, setCanvasNewName] = useState('')
+
+  /** One canvas control action, then refresh the panel. */
+  const postCanvas = (payload: Record<string, unknown>, key: string): void => {
+    setBusy(key)
+    void fetch('/__dsh_a2a/canvas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+      .then(() => { refresh() })
+      .catch(() => {})
+      .finally(() => { if (!stopped.current) setBusy(null) })
+  }
+
+  /** Create a canvas team from the section input (noop on blank). */
+  const createTeam = (): void => {
+    const name = canvasNewName.trim()
+    if (name === '') return
+    postCanvas({ action: 'create', name }, `canvas:create`)
+    setCanvasNewName('')
+  }
+
   const { sessions, groups, peers, activity, inFlight, tasks, remote } = state
+  const canvasTeams = state.canvas?.teams ?? []
+  const rowById = new Map(sessions.map(row => [row.id, row]))
+  /** The display name of one member session (host facts, fallback the id). */
+  const memberName = (id: string): string => {
+    const found = rowById.get(id)
+    return found === undefined ? id : ((found.live === false ? (listById[id as keyof typeof listById]?.displayTitle ?? found.label) : (found.name ?? found.label)))
+  }
   // Search filters by name, team, or description (case-insensitive).
   const needle = search.trim().toLowerCase()
   const matches = (row: A2aSessionRow): boolean => {
@@ -463,6 +518,105 @@ export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProp
                   </>
                 )}
             <div className={css.note}>{t('a2a.note')}</div>
+            {state.canvas !== undefined && (
+              <>
+                <div className={css.sectionTitle}>{t('a2a.canvasTitle')}</div>
+                <div className={css.canvasCreate}>
+                  <input
+                    className={css.groupInput}
+                    value={canvasNewName}
+                    placeholder={t('a2a.canvasNew')}
+                    maxLength={40}
+                    aria-label={t('a2a.canvasNew')}
+                    onChange={(event) => { setCanvasNewName(event.target.value) }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') createTeam()
+                    }}
+                  />
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    disabled={canvasNewName.trim() === ''}
+                    onClick={() => { createTeam() }}
+                  >
+                    {t('a2a.canvasNewGo')}
+                  </Button>
+                </div>
+                {canvasTeams.length === 0
+                  ? <div className={css.empty}>{t('a2a.canvasEmpty')}</div>
+                  : canvasTeams.map(teamRow => {
+                    const isCollapsed = collapsed.has('canvas:' + teamRow.name)
+                    return (
+                      <div className={css.sessionGroup} key={teamRow.name}>
+                        <button
+                          type="button"
+                          className={css.groupHead}
+                          onClick={() => {
+                            setCollapsed((current) => {
+                              const next = new Set(current)
+                              if (next.has('canvas:' + teamRow.name)) next.delete('canvas:' + teamRow.name)
+                              else next.add('canvas:' + teamRow.name)
+                              return next
+                            })
+                          }}
+                        >
+                          <span className={clsx(css.groupChevron, isCollapsed && css.groupChevronClosed)} aria-hidden>▾</span>
+                          {teamRow.name} · {String(teamRow.members.length)}
+                        </button>
+                        {!isCollapsed && (
+                          <>
+                            <span className={css.team}>{teamRow.team}</span>
+                            {teamRow.members.map(member => (
+                              <span className={css.canvasChip} key={member.id}>
+                                <span className={clsx(css.stateDot, member.live ? 'live' : 'cold', member.joined && 'joined')} aria-hidden />
+                                <span title={member.team}>{memberName(member.id)}</span>
+                                <button
+                                  type="button"
+                                  className={css.canvasChipRemove}
+                                  title={t('a2a.canvasRemove')}
+                                  aria-label={t('a2a.canvasRemove')}
+                                  disabled={busy === `canvas:${teamRow.name}`}
+                                  onClick={() => { postCanvas({ action: 'remove-member', name: teamRow.name, id: member.id }, `canvas:${teamRow.name}`) }}
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            ))}
+                            <div className={css.canvasActions}>
+                              <Button variant="outline" size="sm" onClick={() => { setCanvasPickerFor(canvasPickerFor === teamRow.name ? null : teamRow.name) }}>
+                                {t('a2a.canvasAdd')}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={busy === `canvas:del:${teamRow.name}`}
+                                onClick={() => { postCanvas({ action: 'remove', name: teamRow.name }, `canvas:del:${teamRow.name}`) }}
+                              >
+                                {t('a2a.canvasDelete')}
+                              </Button>
+                            </div>
+                            {canvasPickerFor === teamRow.name && (
+                              <div className={css.groupPicker}>
+                                {((): readonly A2aSessionRow[] => state.sessions.filter(candidate =>
+                                  candidate.joined && !teamRow.members.some(member => member.id === candidate.id)))().map(candidate => (
+                                    <button
+                                      type="button"
+                                      key={candidate.id}
+                                      className={css.groupOption}
+                                      onClick={() => { postCanvas({ action: 'add-member', name: teamRow.name, id: candidate.id }, `canvas:${teamRow.name}`); setCanvasPickerFor(null) }}
+                                    >
+                                      {memberName(candidate.id)}{candidate.live === false ? ` — ${t('a2a.cold')}` : ''}
+                                    </button>
+                                  ))}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )
+                  })}
+              </>
+            )}
             {(needle === '' ? remote : remote.filter(row => row.team.toLowerCase().includes(needle) || row.name.toLowerCase().includes(needle) || (row.origin ?? '').toLowerCase().includes(needle) || (row.workspace ?? '').toLowerCase().includes(needle))).length > 0 && (
               <>
                 <div className={css.sectionTitle}>{t('a2a.remote')}</div>
