@@ -16,6 +16,7 @@ import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 const PLUGIN_VERSION: string = String(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version)
 import { signCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
+import { CanvasStore } from './canvas-store.ts'
 import { JoinedSessions } from './joined-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { TaskLedger } from './task-ledger.ts'
@@ -482,6 +483,10 @@ export function apply(ctx: Context, config: Config): void {
   // Session groups: user-named buckets for the panel's session listing,
   // persisted beside the join intents so they survive restarts.
   const groupStore = new GroupStore(join(home, 'a2a', 'groups.json'))
+  // Canvas teams: user-composed multi-member routing groups. A session node
+  // may sit in many teams; routing to <team>/canvas/<name> resolves the
+  // first live member or wakes the first cold one (member order = priority).
+  const canvasStore = new CanvasStore(join(home, 'a2a', 'canvas.json'))
 
   // The async-task ledger: every route that leaves a task owed a receipt is
   // queryable here, and the correlating `[A2A receipt] task <id>` message
@@ -541,7 +546,10 @@ export function apply(ctx: Context, config: Config): void {
    * the team names no cold joined session or no wake face is composed.
    */
   const wakeColdTeam = (team: string): Promise<Agent> | undefined => {
-    const id = joinedSessions.list().find(entry => !liveRoots.has(entry) && `${config.team}/${id8(entry)}` === team)
+    const aliasId = joinedSessions.list().find(entry => !liveRoots.has(entry) && `${config.team}/${id8(entry)}` === team)
+    // Canvas teams wake their first cold joined member (member order is
+    // the routing priority; an archived member never wakes).
+    const id = aliasId ?? canvasColdMemberId(parseCanvasTeamName(team))
     if (id === undefined) return undefined
     // An archived session never wakes: archive is closure, not sleep.
     if (archivedSessionFilter()?.(id) === true) return undefined
@@ -577,7 +585,29 @@ export function apply(ctx: Context, config: Config): void {
       if (!isArchived(id)) continue
       sessionNodes.delete(id)
       joinedSessions.remove(id)
+      canvasStore.dropMember(id)
       logger.info(`a2a: archived session ${id8(id)} left the node network`)
+    }
+  }
+
+  /**
+   * Lifecycle revalidation for canvas membership: a member is legitimate
+   * only while it is live on the network (a mounted session node) or while
+   * a join intent is remembered. The control route enforces this at write
+   * time, but canvas.json is a plain file — an external edit (or a join
+   * intent that vanished between restarts) can leave a stale id behind.
+   * Routing is already safe by construction (live resolution needs a
+   * mounted node; cold wake needs the remembered intent), so this sweep is
+   * hygiene, not a security backstop: it drops dead ids at the same seams
+   * the archive prune runs (boot settlement and the state poll).
+   */
+  const pruneCanvasMemberships = (): void => {
+    for (const name of canvasStore.list()) {
+      for (const id of canvasStore.membersOf(name)) {
+        if (sessionNodes.has(id) || joinedSessions.has(id)) continue
+        canvasStore.removeMember(name, id)
+        logger.info(`a2a: canvas team "${name}" dropped stale member ${id8(id)} (no live node, no join intent)`)
+      }
     }
   }
 
@@ -622,6 +652,42 @@ export function apply(ctx: Context, config: Config): void {
     if (!team.startsWith(prefix)) return undefined
     const suffix = team.slice(prefix.length)
     return [...sessionNodes.values()].find(agent => agentId8(agent) === suffix)
+  }
+
+  /**
+   * The canvas team's wire name: `<team>/canvas/<name>`. The extra path
+   * segment can never collide with a node alias (`<team>/<id8>`), so the
+   * two namespaces coexist without reservation tables.
+   */
+  const canvasTeamOf = (name: string): string => `${config.team}/canvas/${name}`
+
+  /** The canvas team name a routed team string names, when it exists. */
+  const parseCanvasTeamName = (team: string): string | undefined => {
+    const prefix = `${config.team}/canvas/`
+    if (!team.startsWith(prefix)) return undefined
+    const name = team.slice(prefix.length)
+    return canvasStore.hasTeam(name) ? name : undefined
+  }
+
+  /** The canvas team's first live member agent (member order = priority). */
+  function canvasLiveAgent(name: string | undefined): Agent | undefined {
+    if (name === undefined) return undefined
+    for (const id of canvasStore.membersOf(name)) {
+      const agent = sessionNodes.get(id)
+      if (agent !== undefined) return agent
+    }
+    return undefined
+  }
+
+  /**
+   * The canvas team's first cold joined member id — the wake candidate.
+   * Cold means: joined intent remembered, no live root, not archived.
+   */
+  function canvasColdMemberId(name: string | undefined): string | undefined {
+    if (name === undefined) return undefined
+    const isArchived = archivedSessionFilter()
+    return canvasStore.membersOf(name).find(id =>
+      joinedSessions.has(id) && !liveRoots.has(id) && isArchived?.(id) !== true)
   }
 
   /**
@@ -754,6 +820,7 @@ export function apply(ctx: Context, config: Config): void {
       const PREWARM_YIELD_RETRY_MS = 1_000
       const pruneThenWake = (): void => {
         pruneArchivedJoins()
+        pruneCanvasMemberships()
         if (!config.wakeJoinedOnBoot) return
         if (ctx.get('apiProxy') === undefined) {
           logger.warn('wakeJoinedOnBoot is on but no api gateway is composed; cold joined sessions stay asleep')
@@ -895,6 +962,7 @@ export function apply(ctx: Context, config: Config): void {
             // archive leave the network within one poll interval, no restart
             // required.
             pruneArchivedJoins()
+            pruneCanvasMemberships()
             const tPrune = Date.now()
             const assignments = groupStore.all()
             const groupOf = (id: string): string | undefined => {
@@ -947,6 +1015,18 @@ export function apply(ctx: Context, config: Config): void {
               version: PLUGIN_VERSION,
               sessions,
               groups: groupStore.list(),
+              canvas: {
+                teams: canvasStore.list().map(name => ({
+                  name,
+                  team: canvasTeamOf(name),
+                  members: canvasStore.membersOf(name).map(id => ({
+                    id,
+                    team: `${config.team}/${id8(id)}`,
+                    joined: sessionNodes.has(id) || joinedSessions.has(id),
+                    live: sessionNodes.has(id),
+                  })),
+                })),
+              },
               host: lanIp === '' ? {} : { lanIp },
               peers: peerStore.list().map(url => ({ url, score: peerStore.score(url) })),
               remote: (refreshRemoteRows(), remoteRowsCache?.rows ?? []),
@@ -1002,6 +1082,9 @@ export function apply(ctx: Context, config: Config): void {
             const id = typeof body.id === 'string' ? body.id : ''
             if (id !== '') sessionNodes.delete(id)
             joinedSessions.remove(id)
+            // Leaving the network leaves every canvas team too: membership
+            // without join consent would be a routing backdoor.
+            canvasStore.dropMember(id)
             const payload = JSON.stringify({ id })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
@@ -1041,6 +1124,52 @@ export function apply(ctx: Context, config: Config): void {
           })
         }),
       }), 'a2a: session-group route')
+      // Canvas control: create/remove named multi-member teams and manage
+      // membership. Same key guard as join/leave — membership enumerates
+      // session ids. A member must be a joined session (live node or
+      // remembered intent): canvas routing only reaches sessions the user
+      // put on the network by gesture — no routing backdoor over unjoined
+      // sessions.
+      ctx.effect(() => webServer.register({
+        kind: 'exact',
+        path: '/__dsh_a2a/canvas',
+        handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+          readJsonBody(req, res, (body) => {
+            const action = body.action
+            let payload: string
+            if (action === 'create') {
+              const name = typeof body.name === 'string' ? body.name : ''
+              const stored = canvasStore.create(name)
+              payload = JSON.stringify(stored === undefined ? { ok: false, error: 'invalid name or team cap reached' } : { ok: true, name: stored, teams: canvasStore.list() })
+            } else if (action === 'remove') {
+              const name = typeof body.name === 'string' ? body.name : ''
+              payload = JSON.stringify({ ok: canvasStore.remove(name), teams: canvasStore.list() })
+            } else if (action === 'add-member') {
+              const name = typeof body.name === 'string' ? body.name : ''
+              const id = typeof body.id === 'string' ? body.id : ''
+              const memberJoined = id !== '' && (sessionNodes.has(id) || joinedSessions.has(id))
+              if (name === '' || !memberJoined) {
+                payload = JSON.stringify({ ok: false, error: 'name and a joined session id are required' })
+              } else {
+                canvasStore.create(name)
+                payload = JSON.stringify({ ok: canvasStore.addMember(name, id), teams: canvasStore.list(), members: canvasStore.membersOf(name) })
+              }
+            } else if (action === 'remove-member') {
+              const name = typeof body.name === 'string' ? body.name : ''
+              const id = typeof body.id === 'string' ? body.id : ''
+              if (name === '' || id === '') {
+                payload = JSON.stringify({ ok: false, error: 'name and id are required' })
+              } else {
+                payload = JSON.stringify({ ok: canvasStore.removeMember(name, id), teams: canvasStore.list(), members: canvasStore.membersOf(name) })
+              }
+            } else {
+              payload = JSON.stringify({ ok: false, error: 'unknown action' })
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+          })
+        }),
+      }), 'a2a: session-canvas route')
     })
   }
 
@@ -1190,7 +1319,7 @@ export function apply(ctx: Context, config: Config): void {
   function routeIntoAgent(team: string, message: string, caller: string, taskId?: string): Promise<
     { ok: true; reply: string } | { ok: false; error: string }
   > {
-    const agent = resolveAgentForTeam(team)
+    const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
       return routeIntoAgentFor(agent, team, message, caller, taskId)
     }
@@ -1529,7 +1658,9 @@ ${message}`
       + 'with owner label, a recent-activity excerpt, the publishing host (origin: node label + LAN IP — the natural '
       + 'grouping when a fleet spans machines), and the session\'s working directory when shared. Pass query to filter '
       + 'by keyword (case-insensitive substring over team name, title, excerpt, origin, or workspace) — searching '
-      + 'discovers one extra referral hop within the call. Call this before a2a_route to pick a target team.',
+      + 'discovers one extra referral hop within the call. Canvas teams (<team>/canvas/<name>, user-composed multi-member groups) '
+      + 'list as local rows; routing to one resolves the first live member or wakes the first cold one. '
+      + 'Call this before a2a_route to pick a target team.',
     parameters: {
       query: { type: 'string', description: 'Optional keyword filter (case-insensitive substring over team/name/description).' },
     },
@@ -1610,6 +1741,21 @@ ${message}`
         local: true,
         origin: localOrigin,
       })),
+      // Canvas teams: user-composed multi-member rows. Member count and live
+      // count are the facts a caller needs before routing — resolution picks
+      // the first live member at route time.
+      ...canvasStore.list().map(name => {
+        const members = canvasStore.membersOf(name)
+        const live = members.filter(id => sessionNodes.has(id)).length
+        return {
+          team: canvasTeamOf(name),
+          session,
+          name,
+          description: `canvas team — ${members.length} member${members.length === 1 ? '' : 's'}, ${live} live`,
+          local: true,
+          origin: localOrigin,
+        }
+      }),
     ]
     const fetch = memoizedCardFetch()
     // Collect per peer in store order (concurrent fetches, ordered merge):
@@ -1765,9 +1911,11 @@ ${message}`
    */
   async function dispatchLocalCandidate(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode = false, taskIdFromCaller?: string): Promise<A2aRouteResult | undefined> {
     const webServer = ctx.get('webServer')
+    const canvasName = parseCanvasTeamName(team)
     const teamIsLocal = team === config.team
       || resolveAgentForTeam(team) !== undefined
       || joinedSessions.list().some(id => `${config.team}/${id8(id)}` === team)
+      || (canvasName !== undefined && (canvasLiveAgent(canvasName) !== undefined || canvasColdMemberId(canvasName) !== undefined))
     if (!teamIsLocal || webServer === undefined) return undefined
     // A receipt relayed between same-host sessions (the answering session
     // routing its `[A2A receipt]` back over the in-process candidate)
@@ -1780,7 +1928,7 @@ ${message}`
       // materializes first (the wake settles, or fails honestly), then the
       // steer fires, then delivered answers. The receipt header carries the
       // task id so the target can echo it back verbatim.
-      const agent = resolveAgentForTeam(team) ?? (team === config.team ? liveAgent() : undefined)
+      const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(canvasName) ?? (team === config.team ? liveAgent() : undefined)
       const woken = agent !== undefined ? Promise.resolve(agent) : wakeColdTeam(team)
       if (woken === undefined) {
         endRoute(flight)

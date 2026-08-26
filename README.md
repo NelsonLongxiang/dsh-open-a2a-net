@@ -72,6 +72,15 @@ shared tool runtime.
 | `a2a_probe` | Is the fleet healthy? | One verified-card fetch per peer (or one given url); `N reachable, M down`; misses classified `unreachable` vs `rejected`. |
 | `a2a_status` | What is this node doing right now? | Tracked peers with quality scores, in-flight routes, and recent routing activity. |
 
+## Canvas teams (arbitrary grouping, v0.5.25)
+
+A canvas team is a user-composed, named, multi-member routing group: **one atomic session node may sit in many teams**, and a route to `<team>/canvas/<name>` resolves the **first live member** (member order is the routing priority) or wakes the **first cold joined member** (wake-on-route). The `canvas/` path segment can never collide with a node alias (`<team>/<id8>`), so both namespaces coexist untouched.
+
+- Storage: `<dsh-home>/a2a/canvas.json` (ordered team entries; caps: 64 teams × 32 members)
+- Control API: `POST /__dsh_a2a/canvas` with `action: create | remove | add-member | remove-member`
+- Membership requires a joined session (live node or remembered intent) — no routing backdoor over unjoined sessions; leaving the network (leave/archive) drops every canvas membership
+- `a2a_teams` lists canvas teams as local rows with member/live counts; `/__dsh_a2a/state` serves per-member `joined`/`live` flags
+
 ## Configuration
 
 Row config overlays in the profile's patch layers; every key has a schema default.

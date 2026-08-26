@@ -452,6 +452,75 @@
 .inFlightStale {
   opacity: 0.55;
 }
+
+.canvasCreate {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.canvasCreate .groupInput {
+  flex: 1;
+  min-width: 0;
+}
+
+.canvasChip {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  margin: 2px 4px 2px 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  max-width: 100%;
+  color: var(--dsh-color-text-secondary, #aaa);
+  background: var(--dsh-color-bg-secondary, rgba(128, 128, 128, 0.12));
+}
+/* Compact-label contract: the chip stays whole on one line; the member
+   name shrinks (ellipsis) instead of wrapping or clipping blind, and the
+   remove button's aria-label discloses the full value to non-visual users.
+   The hover title remains a secondary affordance, never the only one. */
+.canvasChip > span:not([class]) {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.canvasChipRemove {
+  border: none;
+  padding: 2px 5px;
+  min-width: 22px;
+  min-height: 22px;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  background: transparent;
+  color: var(--dsh-color-text-tertiary, #888);
+}
+.canvasChipRemove:hover {
+  color: var(--dsh-color-text-primary, #eee);
+}
+.canvasChipRemove {
+  /* ui-ux-pro-max Data-Dense Dashboard: hover transitions 150-300ms;
+     color-only at 140ms keeps it under the ornament threshold */
+  transition: color 140ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .canvasChipRemove {
+    transition: none;
+  }
+}
+.canvasChipRemove:focus-visible {
+  outline: 2px solid var(--dsh-color-primary, #4f8cff);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+.canvasActions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
 .inFlightStale .inFlightPulse {
   animation: none;
   opacity: 0.4;

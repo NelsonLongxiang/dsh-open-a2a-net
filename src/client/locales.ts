@@ -28,6 +28,13 @@ export type A2aNetKey =
   | 'a2a.groupClear'
   | 'a2a.groupNew'
   | 'a2a.groupNewGo'
+  | 'a2a.canvasTitle'
+  | 'a2a.canvasEmpty'
+  | 'a2a.canvasNew'
+  | 'a2a.canvasNewGo'
+  | 'a2a.canvasAdd'
+  | 'a2a.canvasRemove'
+  | 'a2a.canvasDelete'
 
 /** Simplified Chinese dictionary. */
 export const zh: Record<A2aNetKey, string> = {
@@ -57,6 +64,13 @@ export const zh: Record<A2aNetKey, string> = {
   'a2a.groupClear': '清除分组',
   'a2a.groupNew': '新建分组…',
   'a2a.groupNewGo': '创建并归入',
+  'a2a.canvasTitle': '画布队伍（任意组队）',
+  'a2a.canvasEmpty': '尚无画布队伍——上方输入名字创建',
+  'a2a.canvasNew': '新队伍名',
+  'a2a.canvasNewGo': '建队',
+  'a2a.canvasAdd': '+ 添加成员',
+  'a2a.canvasRemove': '移出该队伍',
+  'a2a.canvasDelete': '解散',
 }
 
 /** English dictionary. */
@@ -87,4 +101,11 @@ export const en: Record<A2aNetKey, string> = {
   'a2a.groupClear': 'Clear group',
   'a2a.groupNew': 'New group…',
   'a2a.groupNewGo': 'Create & assign',
+  'a2a.canvasTitle': 'Canvas teams (arbitrary grouping)',
+  'a2a.canvasEmpty': 'No canvas teams yet — name one above and create it',
+  'a2a.canvasNew': 'New team name',
+  'a2a.canvasNewGo': 'Create',
+  'a2a.canvasAdd': '+ Add member',
+  'a2a.canvasRemove': 'Remove from this team',
+  'a2a.canvasDelete': 'Delete',
 }
