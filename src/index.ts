@@ -17,6 +17,8 @@ const PLUGIN_VERSION: string = String(JSON.parse(readFileSync(new URL('../packag
 import { signCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { CanvasStore } from './canvas-store.ts'
+import { LayoutStore } from './layout-store.ts'
+import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { TaskLedger } from './task-ledger.ts'
@@ -487,6 +489,8 @@ export function apply(ctx: Context, config: Config): void {
   // may sit in many teams; routing to <team>/canvas/<name> resolves the
   // first live member or wakes the first cold one (member order = priority).
   const canvasStore = new CanvasStore(join(home, 'a2a', 'canvas.json'))
+  // Spatial presentation state for the full-page stage (contract v2).
+  const layoutStore = new LayoutStore(join(home, 'a2a', 'canvas-layout.json'))
 
   // The async-task ledger: every route that leaves a task owed a receipt is
   // queryable here, and the correlating `[A2A receipt] task <id>` message
@@ -1170,6 +1174,82 @@ export function apply(ctx: Context, config: Config): void {
           })
         }),
       }), 'a2a: session-canvas route')
+      // Layout face (contract v2): whole-document GET + save/reset for the
+      // stage's spatial presentation state. Validated/clamped server-side by
+      // LayoutStore so a buggy client cannot poison persisted geometry.
+      ctx.effect(() => webServer.register({
+        kind: 'exact',
+        path: '/__dsh_a2a/canvas-layout',
+        handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+          if (req.method === 'GET') {
+            const payload = JSON.stringify({ ok: true, layout: layoutStore.get() })
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+            return
+          }
+          readJsonBody(req, res, (body) => {
+            const action = (body as { action?: unknown }).action
+            if (action === 'reset') {
+              layoutStore.reset()
+              const payload = JSON.stringify({ ok: true, layout: null })
+              res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+              return
+            }
+            if (action === 'save') {
+              const accepted = layoutStore.save((body as { layout?: unknown }).layout)
+              const payload = JSON.stringify(accepted ? { ok: true, layout: layoutStore.get() } : { ok: false, error: 'payload is not a version-1 layout document' })
+              res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+              return
+            }
+            const payload = JSON.stringify({ ok: false, error: 'unknown action' })
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+          })
+        }),
+      }), 'a2a: canvas-layout route')
+      // The dsh-a2a-munder-difflin floor stage: a same-origin full-page
+      // surface adapted from the Munder Difflin office renderer (stage/,
+      // NOTICE). Serves the built Vite tree with a traversal-guarded map.
+      ctx.effect(() => webServer.register({
+        kind: 'prefix',
+        path: '/__dsh_a2a_canvas',
+        handler: (req: IncomingMessage, res: ServerResponse) => {
+          const rootDir = fileURLToPath(new URL('../assets/stageDist', import.meta.url))
+          // The host hands over the full pathname: strip our mount prefix so
+          // ''/'/' map onto the built index.html and deeper paths resolve
+          // relative to it.
+          const MOUNT = '/__dsh_a2a_canvas'
+          let raw = (req.url ?? '/').split('?')[0] ?? '/'
+          if (raw === MOUNT || raw === MOUNT + '/') raw = '/index.html'
+          else if (raw.startsWith(MOUNT + '/')) raw = raw.slice(MOUNT.length)
+          const rel = decodeURIComponent(raw).replace(/\\/g, '/')
+          if (rel.includes('..')) {
+            res.writeHead(403, { 'Content-Type': 'text/plain', 'X-A2A-Stage': 'traversal' })
+            res.end()
+            return
+          }
+          try {
+            const file = readFileSync(join(rootDir, rel))
+            const ext = rel.slice(rel.lastIndexOf('.') + 1)
+            const types: Record<string, string> = {
+              html: 'text/html; charset=utf-8',
+              js: 'text/javascript; charset=utf-8',
+              mjs: 'text/javascript; charset=utf-8',
+              css: 'text/css; charset=utf-8',
+              png: 'image/png',
+              json: 'application/json; charset=utf-8',
+              svg: 'image/svg+xml',
+            }
+            res.writeHead(200, { 'Content-Type': types[ext] ?? 'application/octet-stream', 'Cache-Control': 'no-store', 'X-A2A-Stage': 'ok:' + ext })
+            res.end(file)
+          } catch (err) {
+            res.writeHead(404, { 'Content-Type': 'text/plain', 'X-A2A-Stage': 'miss' })
+            res.end('stage-miss rel=' + rel + ' rootDir=' + rootDir + ' err=' + String(err))
+          }
+        },
+      }), 'a2a: canvas-stage page')
     })
   }
 
