@@ -1255,6 +1255,45 @@ export function apply(ctx: Context, config: Config): void {
           }
         },
       }), 'a2a: canvas-stage page')
+      // The dsh-a2a-nexus stage: Three.js infinite-canvas topology viewer.
+      // Serves the built Vite tree from assets/nexusDist with a traversal-
+      // guarded file map (same discipline as canvas-stage).
+      ctx.effect(() => webServer.register({
+        kind: 'prefix',
+        path: '/__dsh_a2a_nexus',
+        handler: (req: IncomingMessage, res: ServerResponse) => {
+          const rootDirNexus = fileURLToPath(new URL('../assets/nexusDist', import.meta.url))
+          const MOUNT = '/__dsh_a2a_nexus'
+          let raw = (req.url ?? '/').split('?')[0] ?? '/'
+          if (raw === MOUNT || raw === MOUNT + '/') raw = '/index.html'
+          else if (raw.startsWith(MOUNT + '/')) raw = raw.slice(MOUNT.length)
+          else if (!raw.startsWith('/')) raw = '/' + raw
+          const rel = decodeURIComponent(raw).replace(/\\/g, '/')
+          if (rel.includes('..')) {
+            res.writeHead(403, { 'Content-Type': 'text/plain' })
+            res.end()
+            return
+          }
+          try {
+            const file = readFileSync(join(rootDirNexus, rel))
+            const ext = rel.slice(rel.lastIndexOf('.') + 1)
+            const types: Record<string, string> = {
+              html: 'text/html; charset=utf-8',
+              js: 'text/javascript; charset=utf-8',
+              mjs: 'text/javascript; charset=utf-8',
+              css: 'text/css; charset=utf-8',
+              png: 'image/png',
+              json: 'application/json; charset=utf-8',
+              svg: 'image/svg+xml',
+            }
+            res.writeHead(200, { 'Content-Type': types[ext] ?? 'application/octet-stream', 'Cache-Control': 'no-store' })
+            res.end(file)
+          } catch {
+            res.writeHead(404, { 'Content-Type': 'text/plain' })
+            res.end()
+          }
+        },
+      }), 'a2a: nexus-stage page')
     })
   }
 
