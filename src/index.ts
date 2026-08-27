@@ -21,7 +21,7 @@ import { LayoutStore } from './layout-store.ts'
 import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { PeerStore } from './peer-store.ts'
-import { TaskLedger } from './task-ledger.ts'
+import { TaskLedger, SUMMARY_CAP } from './task-ledger.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
@@ -1382,6 +1382,32 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
+   * Receipt auto-synthesis (backlog root fix): an async delivery used to rely
+   * on the target model choosing to route a "[A2A receipt] task <id>" message
+   * back — a pure convention the models almost never honored, so the owed
+   * book filled to TASK_CAP with receipts that would never come. The host
+   * already owns the machinery to know when the steered turn produced a final
+   * reply (the same final-waiter the sync wait uses), so the receipt is now
+   * synthesized host-side: on the target's next final text, one loopback async
+   * dispatch returns the receipt to the caller's routable team. Idempotent via
+   * isPending (settled/archived/superseded tasks never double-send), and
+   * receipts themselves are never tracked as new debts.
+   */
+  function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string): void {
+    if (!callerTeam || callerTeam === '') return
+    // Never synthesize a receipt for a receipt: answering an envelope by mail
+    // would ping-pong both ledgers.
+    if (deliveredText.startsWith('[A2A receipt] task ')) return
+    registerFinalWaiter(target, (finalText) => {
+      if (!taskLedger.isPending(taskId)) return
+      const summary = finalText.trim().replace(/\s+/g, ' ').slice(0, SUMMARY_CAP) || 'done'
+      const receipt = `[A2A receipt] task ${taskId} ${summary} (auto)`
+      void dispatchLocalCandidate(callerTeam, receipt, session, undefined, new AbortController().signal, true)
+        .catch(() => { /* caller unreachable: dead-letter machinery still bounds the row */ })
+    })
+  }
+
+  /**
    * Register one final-reply waiter for the agent and arm its flush timeout.
    * @param agent - the agent whose next assistant message answers the waiter.
    * @param answer - how the waiter's reply is delivered.
@@ -1548,8 +1574,9 @@ ${message}`
                 // The receipt header carries the task id: the target echoes
                 // it verbatim in "[A2A receipt] task <id> ...", closing the
                 // correlation loop with the caller's own route result.
-                steerRelay(target, `[A2A direct] (task ${taskId}) from "${from}" (routed to ${team}) sent:\n\n${message}`)
+                steerRelay(target, `[A2A direct] (task ${taskId}) from "${from}" (routed to ${team}) sent:\n\n${message}\n\n(When done, route your outcome back with one call — a2a_route { team: "${from}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`)
                 recordActivity('in', team, caller, true)
+                armReceiptAutosend(target, taskId, from, message)
                 // v0.5.23 (async-stall): "delivered" only proves the steer call
                 // returned — not that a turn started. An idle-phase steer wakes
                 // the driver, but a maintenance/abort window latches the wake for
@@ -2021,7 +2048,10 @@ ${message}`
       }
       try {
         const target = await woken
-        steerRelay(target, `[A2A direct] (task ${taskId}) from "${callerSession ?? session}" (routed to ${team}) sent:\n\n${message}`)
+        const callerTeam = callerSession !== undefined && callerSession.includes('/') ? callerSession : undefined
+        const receiptHint = callerTeam === undefined ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${callerTeam}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
+        steerRelay(target, `[A2A direct] (task ${taskId}) from "${callerSession ?? session}" (routed to ${team}) sent:\n\n${message}${receiptHint}`)
+        armReceiptAutosend(target, taskId, callerTeam, message)
         endRoute(flight)
         recordActivity('out', team, 'local', true)
         return {
