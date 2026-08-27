@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { FRAME_HUES } from './tokens'
+import { FRAME_HUES, S } from './tokens'
 
 // ─── DOM shell ──
 const app = document.getElementById('app')!
@@ -75,6 +75,8 @@ async function fetchLayout(): Promise<any | null> {
 
 // ─── Boot / poll / reconcile ──
 const meshesById = new Map<string, THREE.Mesh>()
+/** Seat index for edge drawing: sid → the mesh currently sitting there. */
+const sessionMeshes = new Map<string, THREE.Mesh>()
 
 function seatAt(i: number): THREE.Vector3 {
   const angle = Math.random() * Math.PI * 2; const dist = 12 + Math.random() * 18
@@ -94,7 +96,7 @@ async function cycle(): Promise<void> {
       const sid = sessions[i]!.id
       if (!meshesById.has(sid)) {
         const isLive = sessions[i]!.live !== false
-        const color = isLive ? T.S.nodeLive : T.S.nodeCold
+        const color = isLive ? S.nodeLive : S.nodeCold
         const mesh = makeNode(color, isLive ? 0.9 : 0.5)
         mesh.userData = { label: sessions[i]!.name ?? sessions[i]!.label, sid }
         mesh.position.copy(seatAt(i))
