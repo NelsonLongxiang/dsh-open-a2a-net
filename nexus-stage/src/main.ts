@@ -14,6 +14,7 @@ import {
 import {
   attachLabel, detachLabel, mountChrome, pinInspector, unpinInspector, setAriaLabel,
 } from './overlay'
+import { createStageKeyboardHandler, wireReducedRendering } from './interaction'
 import './overlay.css'
 
 // ─── DOM shell ──
@@ -237,20 +238,25 @@ renderer.domElement.addEventListener('pointerdown', (ev) => {
   } else { pinned = undefined; unpinInspector() }
 })
 
-renderer.domElement.addEventListener('keydown', (ev) => {
-  const ids = [...meshesById.keys()]
-  if (ev.key === 'Escape') { pinned = undefined; unpinInspector(); return }
-  if (ev.key === 'Enter' || ev.key === 'Tab') {
-    const idx = pinned ? ids.indexOf(pinned) : -1
-    const next = ids[(idx + 1) % ids.length]
-    if (next === undefined) return
-    pinned = next
-    const row = sessionById.get(next)
-    const team = sessionTeam.get(next) ?? '?'
-    const liveTxt = row ? (row.live !== false ? 'live' : 'cold') : '?'
-    pinInspector(app, next + ' · ' + liveTxt + ' · 团队 ' + team)
-  }
-})
+renderer.domElement.addEventListener('keydown', createStageKeyboardHandler(
+  {
+    pinned: () => pinned,
+    ids: () => [...meshesById.keys()],
+    nextAfter: (current) => {
+      const idx = current !== undefined ? [...meshesById.keys()].indexOf(current) : -1
+      return [...meshesById.keys()][(idx + 1) % [...meshesById.keys()].length]
+    },
+    pin: (next) => {
+      const row = sessionById.get(next)
+      const team = sessionTeam.get(next) ?? '?'
+      const liveTxt = row ? (row.live !== false ? 'live' : 'cold') : '?'
+      pinned = next
+      pinInspector(app, next + ' · ' + liveTxt + ' · 团队 ' + team)
+    },
+    escape: () => { pinned = undefined; unpinInspector() },
+  },
+  renderer.domElement,
+))
 
 
 // ─── Animate: full rAF loop in normal mode; reduced-motion gets renderOnce
@@ -262,12 +268,17 @@ function renderOnce(): void {
 }
 
 if (prefersReducedMotion()) {
-  controls.addEventListener('change', () => { controls.update(); renderOnce() })
+  // Reduced-motion (gate 3): no rAF loop. controls change and each settled
+  // cycle call renderOnce() through the wired loop — the stage never drifts
+  // on its own, and renderOnceCount() is observable for the behavior tests.
+  const reducedLoop = wireReducedRendering(controls, renderOnce)
+  controls.addEventListener('change', () => controls.update())
+} else {
+  function tick(): void {
+    requestAnimationFrame(tick)
+    controls.update()
+    labelRenderer.render(scene, camera)
+    renderer.render(scene, camera)
+  }
+  tick()
 }
-function tick(): void {
-  requestAnimationFrame(tick)
-  controls.update()
-  labelRenderer.render(scene, camera)
-  renderer.render(scene, camera)
-}
-tick()

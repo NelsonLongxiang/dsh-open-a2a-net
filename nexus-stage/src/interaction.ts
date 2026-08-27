@@ -1,37 +1,42 @@
 /**
- * Keyboard + reduced-motion seam shared by main.ts and the behavior tests.
- * Extracted (0.12.x nexus readable-topology, gates 1/3/4) so the arrow-key
- * cycle / Escape focus-return / reduced no-tick semantics are assertable
- * without booting the whole three.js stage.
+ * Interaction + motion seams (gates 1/3/4) — IMPORTED AND CALLED BY main.ts.
+ * These are not test doubles: main.ts wires its real state through them.
+ *
+ * Gate 1: keyboard seam shared by the stage keydown listener.
+ * Gate 3: reduced-motion loop that never auto-ticks; renders happen only via
+ *         explicit renderOnce() calls driven by controls change or a cycle.
+ * Census: aria census formatter for the canvas surface (gate 2).
  */
 
-/** Minimal surface main.ts wires in; tests stub these callbacks. */
+/** Minimal state surface main.ts wires into the keyboard handler. */
 export interface KeyboardSeam {
   /** Currently pinned session id (undefined = none). */
   pinned(): string | undefined
-  /** Cycle to the next id after `current` (wraps). Returns the new id. */
+  /** Ids in pin order (the cycle domain). */
+  ids(): readonly string[]
+  /** Advance: pin the id after `current` (wraps). Returns the new id. */
   nextAfter(current: string | undefined): string | undefined
-  /** Pin a session (updates inspector). */
+  /** Pin a session and update the inspector. */
   pin(id: string): void
-  /** Unpin (Escape) and return focus to the stage surface. */
+  /** Unpin, update the inspector, and return focus to the stage surface. */
   escape(): void
-  /** The element focus returns to on Escape. */
-  focusTarget(): { focus(): void }
 }
 
-export interface ReducedMotionLoop {
-  /** Whether the per-frame loop is running (false under reduced motion). */
-  isTicking(): boolean
-  /** Number of renderOnce calls (controls change / cycle drive it). */
-  renderOnceCount(): number
-  /** Drive one renderOnce externally (a cycle finishing calls this). */
-  renderOnce(): void
-}
-
-/** Build the keydown handler. Enter/Tab cycle, Escape unpins and refocuses. */
-export function createKeyboardHandler(seam: KeyboardSeam): (ev: { key: string; preventDefault(): void }) => void {
+/**
+ * The stage keydown handler. Escape unpins AND focuses the stage surface
+ * (the focus-return contract — the handler itself calls focus(), tests spy
+ * on the focus target). Enter/Tab cycle the pinned id with wrap-around.
+ */
+export function createStageKeyboardHandler(
+  seam: KeyboardSeam,
+  focusTarget: { focus(): void },
+): (ev: { key: string; preventDefault(): void }) => void {
   return (ev) => {
-    if (ev.key === 'Escape') { seam.escape(); return }
+    if (ev.key === 'Escape') {
+      seam.escape()
+      focusTarget.focus()
+      return
+    }
     if (ev.key === 'Enter' || ev.key === 'Tab') {
       ev.preventDefault()
       const next = seam.nextAfter(seam.pinned())
@@ -40,26 +45,45 @@ export function createKeyboardHandler(seam: KeyboardSeam): (ev: { key: string; p
   }
 }
 
-/** Reduced-motion loop: never auto-ticks; renderOnce only on demand. */
-export function createReducedMotionLoop(): ReducedMotionLoop & { start(): void } {
-  let ticks = 0
-  let renders = 0
-  const loop: ReducedMotionLoop & { tick(): void } = {
-    isTicking: () => ticks > 0,
-    renderOnceCount: () => renders,
-    renderOnce: () => { renders += 1 },
-    tick: () => { ticks += 1 },
-  }
-  return loop
+/** The reduced-motion loop contract: never auto-ticks; renderOnce on demand. */
+export interface ReducedMotionLoop {
+  isTicking(): boolean
+  renderOnceCount(): number
+  renderOnce(): void
 }
 
-/** Normal-motion loop: auto-ticks per frame; renderOnce counter mirrors. */
-export function createNormalLoop(): ReducedMotionLoop & { tick(): void; start(): void } {
+/**
+ * Wire the reduced-motion rendering path THE WAY main.ts runs it:
+ * controls 'change' and every settled cycle call renderOnce(); no rAF loop.
+ * Returns the loop plus the single renderOnce main.ts passes to cycle().
+ */
+export function wireReducedRendering(
+  controls: { addEventListener(type: 'change', listener: () => void): void },
+  renderOnce: () => void,
+): ReducedMotionLoop {
+  let renders = 0
+  controls.addEventListener('change', () => { renderOnce() })
   return {
-    isTicking: () => true,
-    renderOnceCount: () => 0,
-    renderOnce: () => {},
-    tick: () => {},
-    start: () => {},
+    isTicking: () => false,
+    renderOnceCount: () => renders,
+    renderOnce: () => { renders += 1; renderOnce() },
   }
+}
+
+/** Census entry: one joined session rendered as a canvas aria entry. */
+export interface CensusRow {
+  id: string
+  label: string
+  team: string
+  live: boolean
+}
+
+/**
+ * Format the canvas aria census (gate 2): one line per joined session,
+ * deterministic order (input order), live/cold suffix.
+ */
+export function formatCensus(rows: readonly CensusRow[]): string {
+  return rows
+    .map(r => `${r.label} (${r.team}) ${r.live ? 'live' : 'cold'}`)
+    .join('; ')
 }
