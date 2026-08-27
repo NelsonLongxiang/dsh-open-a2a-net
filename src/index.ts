@@ -54,6 +54,7 @@ import { MessageId } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { A2aClient, type A2aFetch, type A2aSchedule, type CardFetchOutcome } from './a2a-client.ts'
+import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from './transport-caps.ts'
 import type { A2aPeerCard, A2aRouteResult, ZoneRecord } from './types.ts'
 
 export type * from './types.ts'
@@ -1602,12 +1603,23 @@ ${message}`
       handler: (req: IncomingMessage, res: ServerResponse) => {
         const chunks: Buffer[] = []
         let size = 0
+        // B5 enforcement: 512 KiB hard cap. An oversized body is rejected,
+        // never truncated and never connection-killed mid-read — buffering
+        // stops at the crossing chunk, the stream drains to `end`, and the
+        // peer receives one structured 413 with a wire error code (the old
+        // behavior tore the socket down with no diagnosis at all).
+        let overflowed = false
+        const declared = Number.parseInt(String(req.headers['content-length'] ?? ''), 10)
+        if (Number.isFinite(declared) && !withinRouteBodyCap(declared)) overflowed = true
         req.on('data', (chunk: Buffer) => {
-          size += chunk.length
-          if (size > 1_000_000) {
-            req.destroy()
+          if (overflowed) return
+          const next = size + chunk.length
+          if (!withinRouteBodyCap(next)) {
+            overflowed = true
+            chunks.length = 0
             return
           }
+          size = next
           chunks.push(chunk)
         })
         /* v8 ignore next 6 -- client aborts surface as 'close' via the shared
@@ -1620,6 +1632,14 @@ ${message}`
           }
         })
         req.on('end', () => {
+          if (overflowed) {
+            if (!res.writableEnded && !res.headersSent) {
+              const payload = JSON.stringify({ error: 'payload too large', code: WIRE_ERROR_PAYLOAD_TOO_LARGE })
+              res.writeHead(413, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+            }
+            return
+          }
           let body: {
             readonly team?: unknown
             readonly message?: unknown
