@@ -81,6 +81,12 @@ export interface TaskLedgerOptions {
   staleTtlMs?: number
   /** Archive capacity override; defaults to {@link ARCHIVE_CAP}. */
   archiveCap?: number
+  /**
+   * Clock injection for tests: every sweep/TTL decision reads the time from
+   * here. Defaults to Date.now. Injecting a steppable clock makes the stale
+   * transition deterministic - no real sleeps to race under load.
+   */
+  now?: () => number
 }
 
 /** The persisted ledger document: the owed book plus its settled archive. */
@@ -102,6 +108,8 @@ export class TaskLedger {
   private archived: ArchivedRecord[] = []
   private readonly staleTtlMs: number
   private readonly archiveCap: number
+  /** Injectable clock (option `now`). */
+  private readonly now: () => number
 
   /**
    * @param path - persistence file (`<dsh-home>/a2a/tasks.json`); empty = no persistence.
@@ -110,6 +118,7 @@ export class TaskLedger {
   constructor(private readonly path: string, options?: TaskLedgerOptions) {
     this.staleTtlMs = options?.staleTtlMs ?? TASK_STALE_TTL_MS
     this.archiveCap = options?.archiveCap ?? ARCHIVE_CAP
+    this.now = options?.now ?? (() => Date.now())
     this.restore()
   }
 
@@ -119,7 +128,7 @@ export class TaskLedger {
    * @returns the owed-book records.
    */
   list(): readonly TaskRecord[] {
-    this.sweep(Date.now())
+    this.sweep(this.now())
     return [...this.tasks]
   }
 
@@ -146,14 +155,14 @@ export class TaskLedger {
    */
   track(taskId: string, team: string, peer: string, contextId?: string): void {
     if (taskId === '') return
-    this.sweep(Date.now())
+    this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
     this.tasks = [{
       taskId,
       team,
       peer,
-      startedAt: Date.now(),
+      startedAt: this.now(),
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
       status: 'pending' as const,
     }, ...this.tasks].slice(0, TASK_CAP)
@@ -171,7 +180,7 @@ export class TaskLedger {
   isPending(taskId: string): boolean {
     const record = this.tasks.find(entry => entry.taskId === taskId)
     if (record === undefined || record.status !== 'pending') return false
-    return Date.now() - record.startedAt <= this.staleTtlMs
+    return this.now() - record.startedAt <= this.staleTtlMs
   }
 
   /**
@@ -188,7 +197,7 @@ export class TaskLedger {
     if (match === null) return false
     const taskId = match[1] ?? ''
     const summary = (match[2] ?? '').trim().slice(0, SUMMARY_CAP)
-    this.sweep(Date.now())
+    this.sweep(this.now())
     const record = this.tasks.find(entry => entry.taskId === taskId)
     if (record !== undefined) {
       this.tasks = this.tasks.filter(entry => entry.taskId !== taskId)
@@ -198,7 +207,7 @@ export class TaskLedger {
         peer: record.peer,
         startedAt: record.startedAt,
         ...(record.contextId !== undefined ? { contextId: record.contextId } : {}),
-        resolvedAt: Date.now(),
+        resolvedAt: this.now(),
         ...(summary !== '' ? { summary } : {}),
       })
       this.persist()
@@ -207,7 +216,7 @@ export class TaskLedger {
     const settled = this.archived.find(entry => entry.taskId === taskId)
     if (settled === undefined) return false
     this.archived = [
-      { ...settled, resolvedAt: Date.now(), ...(summary !== '' ? { summary } : {}) },
+      { ...settled, resolvedAt: this.now(), ...(summary !== '' ? { summary } : {}) },
       ...this.archived.filter(entry => entry.taskId !== taskId),
     ]
     this.persist()
@@ -252,9 +261,9 @@ export class TaskLedger {
               taskId: entry.taskId,
               team: typeof entry.team === 'string' ? entry.team : '',
               peer: typeof entry.peer === 'string' ? entry.peer : '',
-              startedAt: typeof entry.startedAt === 'number' && Number.isFinite(entry.startedAt) ? entry.startedAt : Date.now(),
+              startedAt: typeof entry.startedAt === 'number' && Number.isFinite(entry.startedAt) ? entry.startedAt : this.now(),
               ...(typeof entry.contextId === 'string' && entry.contextId !== '' ? { contextId: entry.contextId } : {}),
-              resolvedAt: typeof entry.resolvedAt === 'number' && Number.isFinite(entry.resolvedAt) ? entry.resolvedAt : Date.now(),
+              resolvedAt: typeof entry.resolvedAt === 'number' && Number.isFinite(entry.resolvedAt) ? entry.resolvedAt : this.now(),
               ...(typeof entry.summary === 'string' && entry.summary !== '' ? { summary: entry.summary } : {}),
             })
             continue
@@ -263,11 +272,11 @@ export class TaskLedger {
             taskId: entry.taskId,
             team: typeof entry.team === 'string' ? entry.team : '',
             peer: typeof entry.peer === 'string' ? entry.peer : '',
-            startedAt: typeof entry.startedAt === 'number' && Number.isFinite(entry.startedAt) ? entry.startedAt : Date.now(),
+            startedAt: typeof entry.startedAt === 'number' && Number.isFinite(entry.startedAt) ? entry.startedAt : this.now(),
             ...(typeof entry.contextId === 'string' && entry.contextId !== '' ? { contextId: entry.contextId } : {}),
             status: entry.status === 'dead' ? 'dead' : 'pending',
             ...(entry.status === 'dead'
-              ? { deadAt: typeof entry.deadAt === 'number' && Number.isFinite(entry.deadAt) ? entry.deadAt : Date.now() }
+              ? { deadAt: typeof entry.deadAt === 'number' && Number.isFinite(entry.deadAt) ? entry.deadAt : this.now() }
               : {}),
           })
         }
@@ -282,9 +291,9 @@ export class TaskLedger {
             taskId: entry.taskId,
             team: typeof entry.team === 'string' ? entry.team : '',
             peer: typeof entry.peer === 'string' ? entry.peer : '',
-            startedAt: typeof entry.startedAt === 'number' && Number.isFinite(entry.startedAt) ? entry.startedAt : Date.now(),
+            startedAt: typeof entry.startedAt === 'number' && Number.isFinite(entry.startedAt) ? entry.startedAt : this.now(),
             ...(typeof entry.contextId === 'string' && entry.contextId !== '' ? { contextId: entry.contextId } : {}),
-            resolvedAt: typeof entry.resolvedAt === 'number' && Number.isFinite(entry.resolvedAt) ? entry.resolvedAt : Date.now(),
+            resolvedAt: typeof entry.resolvedAt === 'number' && Number.isFinite(entry.resolvedAt) ? entry.resolvedAt : this.now(),
             ...(typeof entry.summary === 'string' && entry.summary !== '' ? { summary: entry.summary } : {}),
           })
         }
