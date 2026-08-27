@@ -45,6 +45,19 @@ describe('signCard / verifyCard round trip', () => {
     expect(verifyCard({ ...card, name: 'spoof' }, NOW)).toEqual({ ok: false, reason: 'bad-signature' })
   })
 
+  it('carries an unsigned served-fresh version through verification', () => {
+    const { privateKey } = generateKeyPairSync('ed25519')
+    const signed = signCard(core(), privateKey)
+    const served = { ...signed, version: '0.6.0' }
+    expect(verifyCard(served, NOW)).toEqual({ ok: true, card: served })
+    // Pre-version peers stay verified unchanged: the absent member neither
+    // joins the signature payload nor alters the returned shape.
+    expect(verifyCard(signed, NOW)).toEqual({ ok: true, card: signed })
+    // Non-string or empty junk drops silently instead of rejecting the card.
+    expect(verifyCard({ ...signed, version: 42 }, NOW)).toEqual({ ok: true, card: signed })
+    expect(verifyCard({ ...signed, version: '' }, NOW)).toEqual({ ok: true, card: signed })
+  })
+
   it('rejects unsigned and malformed candidates before crypto runs', () => {
     expect(verifyCard({ name: 'x', session: 's', team: 't' }, NOW)).toEqual({ ok: false, reason: 'unsigned' })
     expect(verifyCard(null, NOW)).toEqual({ ok: false, reason: 'malformed' })

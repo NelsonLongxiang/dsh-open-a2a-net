@@ -117,8 +117,11 @@ Example — one announcing node with a seed:
 
 ## Trust model
 
-Cards are Ed25519-signed and expire; `peers` referrals and `sessionTeams` listings on a card are unsigned and
-read fresh. The `/__dsh_a2a/join` and `/__dsh_a2a/leave` control routes require the configured `apiKey`
+Cards are Ed25519-signed and expire; `peers` referrals, `sessionTeams` listings, `lanIp`, and `version` on a card
+are unsigned and read fresh — the last two exist so operators can audit which build every fleet node actually runs
+without visiting each host. A referral URL whose own fetch just proved it serves this node's card is remembered,
+and re-offers of it within a suppression window are ignored instead of flickering in and out of the peer store.
+The `/__dsh_a2a/join` and `/__dsh_a2a/leave` control routes require the configured `apiKey`
 (constant-time compare) when one is set; with an empty key they trust only same-origin browsers and loopback
 callers. Set an `apiKey` before exposing the listener beyond loopback.
 

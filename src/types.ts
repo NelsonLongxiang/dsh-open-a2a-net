@@ -34,6 +34,12 @@ export interface A2aPeerCard {
    * lets peers group and tell machines apart in a same-team fleet.
    */
   readonly lanIp?: string
+  /**
+   * The publishing plugin's package version. Unsigned and optional: served
+   * fresh like `lanIp`, it lets operators audit a fleet's actual running
+   * builds without visiting each host.
+   */
+  readonly version?: string
   /** Base64 SPKI DER of the signing node's Ed25519 public key. */
   readonly publicKey: string
   /**
