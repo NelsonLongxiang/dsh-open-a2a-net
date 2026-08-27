@@ -9,6 +9,36 @@ renderer.setSize(app.clientWidth || window.innerWidth, app.clientHeight || windo
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
 app.appendChild(renderer.domElement)
 
+// ─── Fault surface ──
+// Fetch failures must never masquerade as an empty fleet. The stage is opened
+// directly by humans who cannot see devtools logs in passing, so the newest
+// fetch fault rides a fixed badge plus a throttled console.error. A healthy
+// response hides the badge — visible silence then genuinely means zero rows,
+// and "empty" stays distinguishable from "unreachable".
+const faultBadge = document.createElement('div')
+faultBadge.style.cssText =
+  'position:fixed;top:10px;right:10px;max-width:48ch;padding:6px 10px;' +
+  'border:1px solid #ef4444;background:#2a0d0dcc;color:#fecaca;' +
+  'font:12px/1.5 "JetBrains Mono",monospace;border-radius:4px;' +
+  'display:none;z-index:9;pointer-events:none'
+app.appendChild(faultBadge)
+let lastFaultLoggedAt = 0
+function fault(message: string): void {
+  const now = Date.now()
+  if (now - lastFaultLoggedAt > 60_000) {
+    console.error(`[nexus] ${message}`)
+    lastFaultLoggedAt = now
+  }
+  faultBadge.textContent = message
+  faultBadge.style.display = 'block'
+}
+function clearFault(): void {
+  if (faultBadge.style.display !== 'none') {
+    faultBadge.style.display = 'none'
+    lastFaultLoggedAt = 0
+  }
+}
+
 // ─── Scene, camera, controls ──
 const scene = new THREE.Scene()
 scene.background = new THREE.Color(0x060a12)
@@ -84,43 +114,64 @@ function seatAt(i: number): THREE.Vector3 {
 }
 
 async function cycle(): Promise<void> {
+  let res: Response
   try {
-    const res = await fetch('/__dsh_a2a/state', { cache: 'no-store' }); if (!res.ok) return
-    const body = await res.json() as StateBody
-    const sessions = (body.sessions ?? []).filter((s) => s.joined === true)
-    const teams = body.canvas?.teams ?? []
-    const peers = body.peers ?? []
+    res = await fetch('/__dsh_a2a/state', { cache: 'no-store' })
+  } catch (error) {
+    fault(`state unreachable: ${String((error as Error | undefined)?.message ?? error).slice(0, 80)}`)
+    return
+  }
+  if (!res.ok) { fault(`state ${res.status} from host`); return }
+  clearFault()
+  let body: StateBody
+  try {
+    body = await res.json() as StateBody
+  } catch (error) {
+    fault(`state JSON parse failed: ${String((error as Error | undefined)?.message ?? error).slice(0, 80)}`)
+    return
+  }
+  const sessions = (body.sessions ?? []).filter((s) => s.joined === true)
+  const teams = body.canvas?.teams ?? []
+  const peers = body.peers ?? []
+  // Read-path of layout persistence (write-path arrives with planning mode):
+  // a node saved on a previous visit keeps its world spot instead of a fresh
+  // random seat, so saved arrangements survive reloads.
+  const layout = await fetchLayout()
 
-    // Seat un-seated nodes
-    for (let i = 0; i < sessions.length; i++) {
-      const sid = sessions[i]!.id
-      if (!meshesById.has(sid)) {
-        const isLive = sessions[i]!.live !== false
-        const color = isLive ? S.nodeLive : S.nodeCold
-        const mesh = makeNode(color, isLive ? 0.9 : 0.5)
-        mesh.userData = { label: sessions[i]!.name ?? sessions[i]!.label, sid }
-        mesh.position.copy(seatAt(i))
-        nodeGroup.add(mesh); sessionMeshes.set(sid, mesh)
-      }
+  // Seat un-seated nodes.
+  for (let i = 0; i < sessions.length; i++) {
+    const sid = sessions[i]!.id
+    if (!meshesById.has(sid)) {
+      const isLive = sessions[i]!.live !== false
+      const color = isLive ? S.nodeLive : S.nodeCold
+      const mesh = makeNode(color, isLive ? 0.9 : 0.5)
+      mesh.userData = { label: sessions[i]!.name ?? sessions[i]!.label, sid }
+      const saved = layout?.nodes?.[sid]
+      mesh.position.copy(saved ? new THREE.Vector3(saved.x, 0, saved.y) : seatAt(i))
+      nodeGroup.add(mesh)
+      sessionMeshes.set(sid, mesh)
     }
+  }
 
-    // Draw membership edges between nodes sharing a canvas team
-    lineGroup.clear()
-    const edgesMat = new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.15 })
-
-    for (const team of teams) {
-      for (let mi = 0; mi < team.members.length; mi++) {
-        for (let mj = mi + 1; mj < team.members.length; mj++) {
-          const aMesh = meshesById.get(team.members[mi].id)
-          const bMesh = meshesById.get(team.members[mj].id)
-          if (aMesh && bMesh) {
-            const geo = new THREE.BufferGeometry().setFromPoints([aMesh.position.clone(), bMesh.position.clone()])
-            lineGroup.add(new THREE.Line(geo, edgesMat.clone()))
-          }
+  // Draw membership edges between nodes sharing a canvas team. The opacity
+  // is empirical: 0.15 cyan on near-black measured invisible against the fog
+  // even while technically rendering (external UX review P0-3), so the view
+  // drew six silent non-lines over today's demo team. One shared material is
+  // enough — every edge answers to the same visibility contract.
+  lineGroup.clear()
+  const edgesMat = new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.6 })
+  for (const team of teams) {
+    for (let mi = 0; mi < team.members.length; mi++) {
+      for (let mj = mi + 1; mj < team.members.length; mj++) {
+        const aMesh = meshesById.get(team.members[mi].id)
+        const bMesh = meshesById.get(team.members[mj].id)
+        if (aMesh && bMesh) {
+          const geo = new THREE.BufferGeometry().setFromPoints([aMesh.position.clone(), bMesh.position.clone()])
+          lineGroup.add(new THREE.Line(geo, edgesMat))
         }
       }
     }
-  } catch { /* host unreachable */ }
+  }
 }
 
 setInterval(() => void cycle(), 5000)

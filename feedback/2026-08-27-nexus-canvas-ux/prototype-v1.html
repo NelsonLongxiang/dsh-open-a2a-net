@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>A2A Nexus · 规划模式线框 v0.1</title>
+<style>
+/* ── 三层令牌（对齐 docs/canvas-stage-design-system.md）── */
+:root{
+  /* primitive */
+  --uupm-ink-0:#dde3f0; --uupm-ink-1:#7a86a0; --uupm-bg-0:#060a12; --uupm-bg-1:#0d1322; --uupm-bg-2:#131b2e;
+  --uupm-accent:#8B5CF6; --uupm-live:#4ade80; --uupm-cold:#4a5568; --uupm-edge-member:#22d3ee; --uupm-edge-federal:#6366f1; --uupm-warn:#f59e0b;
+  /* semantic */
+  --surface:var(--uupm-bg-1); --ink:var(--uupm-ink-0); --ink-muted:var(--uupm-ink-1);
+  --accent:var(--uupm-accent); --edge-live:var(--uupm-live); --edge-cold:var(--uupm-cold);
+  /* component */
+  --card-bg:var(--surface); --card-line:rgba(122,134,160,.28); --frame-line:rgba(139,92,246,.45);
+  --toolbar-bg:rgba(13,19,34,.92);
+}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;overflow:hidden}
+body{
+  background:var(--uupm-bg-0); color:var(--ink);
+  font:13px/1.5 "Avenir Next","Segoe UI Variable","Segoe UI",sans-serif;
+}
+.mono{font-family:ui-monospace,Cascadia,Consolas,monospace}
+
+/* ── 世界层：工程坐标纸点阵（随内容平移缩放，本静态稿固定）── */
+#world{
+  position:absolute; inset:0;
+  background-image:radial-gradient(circle, rgba(122,134,160,.22) 1px, transparent 1px);
+  background-size:24px 24px;
+}
+
+/* ── 团队框（LayoutSnapshot.frames 的可视化消费）── */
+.frame{
+  position:absolute; border:1px solid var(--frame-line); border-radius:10px;
+  background:rgba(139,92,246,.05);
+}
+.frame.f-blue{--frame-line:rgba(59,130,246,.45); background:rgba(59,130,246,.05)}
+.frame-head{
+  position:absolute; top:-13px; left:12px; padding:2px 10px; border-radius:6px;
+  background:var(--uupm-bg-2); border:1px solid var(--frame-line);
+  font-size:12px; font-weight:600; letter-spacing:.02em;
+  display:flex; gap:8px; align-items:center; cursor:grab;
+}
+.frame-head .cnt{color:var(--ink-muted); font-weight:400}
+.frame-head .route{font-size:10.5px; color:var(--ink-muted)}
+
+/* ── 节点卡（session node）── */
+.node{
+  position:absolute; width:172px; padding:8px 12px 8px 14px;
+  background:var(--card-bg); border:1px solid var(--card-line); border-left:3px solid var(--edge-live);
+  border-radius:8px; cursor:grab; user-select:none;
+  transition:border-color 120ms cubic-bezier(0.2,0,0,1);
+}
+.node:hover{border-color:rgba(122,134,160,.55)}
+.node:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.node.selected{outline:2px solid var(--accent); outline-offset:1px}
+.node.cold{border-left-color:var(--edge-cold)}
+.node .nm{font-weight:600; display:flex; align-items:center; gap:7px}
+.node .dot{width:8px; height:8px; border-radius:50%; background:var(--edge-live); flex:none}
+.node.cold .dot{background:transparent; border:1.5px solid var(--edge-cold)}
+.node .sub{font-size:11px; color:var(--ink-muted); margin-top:2px}
+.node .prio{
+  position:absolute; top:6px; right:8px; font-size:10px; color:var(--ink-muted);
+  border:1px solid var(--card-line); border-radius:4px; padding:0 5px;
+}
+
+/* ── 边层 ── */
+svg#edges{position:absolute; inset:0; width:100%; height:100%; pointer-events:none}
+.e-member{stroke:var(--uupm-edge-member); stroke-opacity:.38; stroke-width:1.5}
+.e-federal{stroke:var(--uupm-edge-federal); stroke-opacity:.5; stroke-width:1.5; stroke-dasharray:6 5}
+.e-activity{stroke:var(--accent); stroke-width:2; stroke-dasharray:8 6}
+@media (prefers-reduced-motion: no-preference){
+  .e-activity{animation:flow 1.2s linear infinite}
+  @keyframes flow{to{stroke-dashoffset:-14}}
+}
+.edge-label{font-size:10.5px; fill:var(--ink-muted)}
+
+/* ── peer 节点（八面体 → 2D 菱形徽章）── */
+.peer{
+  position:absolute; display:flex; align-items:center; gap:8px;
+  padding:7px 12px; border:1px dashed var(--uupm-edge-federal); border-radius:8px;
+  background:rgba(99,102,241,.07); color:var(--ink);
+}
+.peer .dia{width:10px; height:10px; background:var(--uupm-edge-federal); transform:rotate(45deg); flex:none}
+
+/* ── HUD ── */
+#toolbar{
+  position:absolute; top:16px; left:16px; display:flex; gap:6px; align-items:center;
+  background:var(--toolbar-bg); border:1px solid var(--card-line); border-radius:8px; padding:6px 8px;
+}
+#toolbar button{
+  background:transparent; color:var(--ink); border:1px solid var(--card-line); border-radius:6px;
+  padding:4px 10px; font:inherit; cursor:pointer;
+}
+#toolbar button:hover{border-color:var(--accent)}
+#toolbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+#save-lamp{display:flex; align-items:center; gap:6px; font-size:11px; color:var(--ink-muted); padding:0 6px}
+#save-lamp i{width:7px; height:7px; border-radius:50%; background:var(--edge-live)}
+
+#statusbar{
+  position:absolute; top:16px; right:16px; display:flex; gap:14px;
+  background:var(--toolbar-bg); border:1px solid var(--card-line); border-radius:8px; padding:8px 14px; font-size:12px;
+}
+#statusbar b{font-weight:600}
+.ok{color:var(--edge-live)} .warn{color:var(--uupm-warn)} .mut{color:var(--ink-muted)}
+
+#legend{
+  position:absolute; bottom:16px; left:16px; font-size:11px; color:var(--ink-muted);
+  background:var(--toolbar-bg); border:1px solid var(--card-line); border-radius:8px; padding:8px 12px;
+  display:grid; gap:4px;
+}
+#legend i{display:inline-block; width:18px; border-top:2px solid; vertical-align:middle; margin-right:6px}
+
+#tooltip{
+  position:absolute; padding:8px 12px; background:var(--uupm-bg-2); border:1px solid var(--card-line);
+  border-radius:8px; font-size:11.5px; max-width:230px;
+}
+#tooltip .row{display:flex; justify-content:space-between; gap:14px}
+#tooltip .k{color:var(--ink-muted)}
+</style>
+</head>
+<body>
+<div id="world">
+  <svg id="edges">
+    <!-- 星形成员边：锚点=队框标题栏底边中点 → 成员卡顶边中点（替代 O(n²) 两两全连接） -->
+    <line class="e-member" x1="330" y1="222" x2="206" y2="340"/>
+    <line class="e-member" x1="330" y1="222" x2="416" y2="350"/>
+    <line class="e-member" x1="330" y1="222" x2="256" y2="480"/>
+    <line class="e-member" x1="820" y1="204" x2="726" y2="340"/>
+    <line class="e-member" x1="820" y1="204" x2="936" y2="360"/>
+    <line class="e-member" x1="820" y1="204" x2="786" y2="500"/>
+    <!-- 跨队多属：analyst-02 同时在采购战队（多对多不变量） -->
+    <line class="e-member" x1="820" y1="204" x2="502" y2="360" stroke-dasharray="3 4"/>
+    <!-- 联邦线：本机原点 → peer -->
+    <line class="e-federal" x1="1150" y1="300" x2="1420" y2="200"/>
+    <!-- 活动边：inFlight 路由流量（瞬时） -->
+    <line class="e-activity" x1="640" y1="390" x2="502" y2="380"/>
+    <text class="edge-label mono" x="512" y="420">a2a_route · task 8f3a · 12s</text>
+    <text class="edge-label mono" x="1260" y="238">gns referral</text>
+  </svg>
+
+  <!-- 团队框 1 -->
+  <div class="frame" style="left:110px;top:210px;width:460px;height:380px">
+    <div class="frame-head">选品先锋 <span class="cnt mono">3 成员</span> <span class="route mono">alpha/canvas/xuanpin</span></div>
+  </div>
+  <!-- 团队框 2 -->
+  <div class="frame f-blue" style="left:630px;top:190px;width:420px;height:420px">
+    <div class="frame-head">采购战队 <span class="cnt mono">3 成员 +1 跨队</span> <span class="route mono">beta/canvas/caigou</span></div>
+  </div>
+
+  <!-- 节点：live -->
+  <div class="node" tabindex="0" style="left:120px;top:340px">
+    <div class="nm"><span class="dot"></span>scout-01</div>
+    <div class="sub mono">alpha/a1b2c3d4 · 侦查</div>
+    <span class="prio mono">P0</span>
+  </div>
+  <div class="node selected" tabindex="0" style="left:330px;top:350px">
+    <div class="nm"><span class="dot"></span>analyst-02</div>
+    <div class="sub mono">alpha/e5f6a7b8 · 分析 · 跨队×2</div>
+    <span class="prio mono">P1</span>
+  </div>
+  <!-- 节点：cold（joined 意图在网、agent 未挂载） -->
+  <div class="node cold" tabindex="0" style="left:170px;top:480px">
+    <div class="nm"><span class="dot"></span>review-03</div>
+    <div class="sub mono">alpha/c9d0e1f2 · 审查 · cold</div>
+    <span class="prio mono">P2</span>
+  </div>
+  <div class="node" tabindex="0" style="left:640px;top:340px">
+    <div class="nm"><span class="dot"></span>source-04</div>
+    <div class="sub mono">beta/11223344 · 寻源</div>
+    <span class="prio mono">P0</span>
+  </div>
+  <div class="node" tabindex="0" style="left:850px;top:360px">
+    <div class="nm"><span class="dot"></span>cost-05</div>
+    <div class="sub mono">beta/55667788 · 测算</div>
+    <span class="prio mono">P1</span>
+  </div>
+  <div class="node cold" tabindex="0" style="left:700px;top:500px">
+    <div class="nm"><span class="dot"></span>buyer-06</div>
+    <div class="sub mono">beta/99aabbcc · 采购 · cold</div>
+    <span class="prio mono">P2</span>
+  </div>
+  <!-- 自由节点：无队 -->
+  <div class="node" tabindex="0" style="left:1160px;top:430px">
+    <div class="nm"><span class="dot"></span>lone-07</div>
+    <div class="sub mono">gamma/ddeeff00 · 未组队</div>
+  </div>
+  <!-- peer -->
+  <div class="peer" style="left:1400px;top:170px">
+    <span class="dia"></span>
+    <span>192.168.3.88:3080 <span class="mut mono">score 42</span></span>
+  </div>
+
+  <!-- hover tooltip 示例（analyst-02，置于卡下方空白区，不遮卡） -->
+  <div id="tooltip" style="left:336px;top:436px">
+    <div class="row"><span class="k">路由别名</span><span class="mono">alpha/e5f6a7b8</span></div>
+    <div class="row"><span class="k">成员资格</span><span>选品先锋 P1 · 采购战队 P3</span></div>
+    <div class="row"><span class="k">状态</span><span class="ok">live · joined</span></div>
+  </div>
+</div>
+
+<div id="toolbar">
+  <button>＋ 建队(G)</button><button>适配(0)</button><button>－</button><span class="mono mut">100%</span><button>＋</button>
+  <span id="save-lamp"><i></i>布局已保存 12:03</span>
+</div>
+<div id="statusbar">
+  <span><b class="ok">● 5 live</b></span><span><b class="warn">● 2 cold</b></span><span class="mut">1 inFlight · 1 peer</span>
+</div>
+<div id="legend">
+  <span><i style="border-color:var(--uupm-edge-member)"></i>成员边（星形，框→成员）</span>
+  <span><i style="border-color:var(--accent)"></i>活动边（inFlight 路由，瞬时）</span>
+  <span><i style="border-color:var(--uupm-edge-federal);border-top-style:dashed"></i>联邦线（→peer）</span>
+  <span><i style="border-color:var(--uupm-edge-member);border-top-style:dashed"></i>跨队多属（虚线）</span>
+</div>
+</body>
+</html>
