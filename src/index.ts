@@ -24,6 +24,8 @@ import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, SUMMARY_CAP } from './task-ledger.ts'
+import { formatReceipt } from './receipt.ts'
+import { runReceiptLadder } from './receipt-ladder.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
@@ -1457,18 +1459,29 @@ export function apply(ctx: Context, config: Config): void {
     if (deliveredText.startsWith('[A2A receipt] task ')) return
     registerFinalWaiter(target, (finalText) => {
       if (!taskLedger.isPending(taskId)) return
-      const summary = finalText.trim().replace(/\s+/g, ' ').slice(0, SUMMARY_CAP) || 'done'
-      const receipt = `[A2A receipt] task ${taskId} ${summary} (auto)`
-      void dispatchLocalCandidate(callerTeam, receipt, session, undefined, new AbortController().signal, true)
-        .catch((error) => {
-          // N2 (observability): a receipt that cannot reach the caller still
-          // resolves locally via correlation dedupe, but operators deserve a
-          // breadcrumb. Throttled per task to avoid ping-pong noise.
-          const key = `receipt:${taskId}`
-          if ((receiptWarnAt.get(key) ?? 0) + 60_000 > Date.now()) return
-          receiptWarnAt.set(key, Date.now())
-          logger.warn(`a2a: receipt autosend to ${callerTeam} for task ${taskId} failed: ${String(error).slice(0, 120)}`)
-        })
+      const summary = `${finalText.trim().replace(/\s+/g, ' ').slice(0, SUMMARY_CAP) || 'done'} (auto)`
+      // v2 envelope projection: header stays byte-compatible for every
+      // legacy correlator; the machine JSON rides exactly one following line.
+      const receipt = formatReceipt(taskId, summary, { outcome: 'completed', idempotencyKey: taskId })
+      // Three-tier hard order (work-order P2): caller lane first; on failure
+      // escalate ONCE to the owner mailbox — the outcome never evaporates
+      // just because the original waiter died. Archive holds truth regardless.
+      void runReceiptLadder(
+        {
+          deliver: (team) => dispatchLocalCandidate(team, receipt, session, undefined, new AbortController().signal, true) as Promise<void>,
+          ownerTeam: config.team,
+          log: (stage, error) => {
+            // N2 (observability): throttled per task to avoid ping-pong noise.
+            const key = `receipt:${taskId}`
+            if ((receiptWarnAt.get(key) ?? 0) + 60_000 > Date.now()) return
+            receiptWarnAt.set(key, Date.now())
+            logger.warn(`a2a: receipt autosend ${stage} for task ${taskId} failed: ${String(error).slice(0, 120)}`)
+          },
+        },
+        callerTeam,
+      ).catch(() => {
+        // Ladder exhausted: the throttled breadcrumbs above already said why.
+      })
     })
   }
 

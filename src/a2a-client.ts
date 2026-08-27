@@ -88,7 +88,9 @@ export class A2aClient {
   }, baseUrl: string): Promise<unknown> {
     if (init.signal?.aborted) throw new Error('A2A request aborted before dispatch')
     const controller = new AbortController()
+    let ownBudgetFired = false
     const timer = this.options.schedule(() => {
+      ownBudgetFired = true
       controller.abort()
     }, HTTP_TIMEOUT_MS)
     const abort = (): void => {
@@ -105,6 +107,13 @@ export class A2aClient {
       const text = await response.text()
       if (!response.ok) throw new Error(`A2A HTTP ${String(response.status)}: ${text.slice(0, 200)}`)
       return JSON.parse(text) as unknown
+    } catch (error) {
+      // Tag the escapee so the caller can tell our budget firing from an
+      // external signal — the abortElapsedMs telemetry needs the author.
+      if (ownBudgetFired && error instanceof Error) {
+        ;(error as { ownBudgetExhausted?: boolean }).ownBudgetExhausted = true
+      }
+      throw error
     } finally {
       timer()
       init.signal?.removeEventListener('abort', abort)
@@ -192,6 +201,7 @@ export class A2aClient {
     // own (pre-0.5.3 peers).
     if (taskIdFromCaller !== undefined) args.task_id = taskIdFromCaller
     let raw: WireRoute
+    const dispatchedAt = Date.now()
     try {
       raw = await this.http('/a2a/direct', {
         method: 'POST',
@@ -199,7 +209,17 @@ export class A2aClient {
         ...(signal !== undefined ? { signal } : {}),
       }, baseUrl) as WireRoute
     } catch (error) {
-      return { ok: false, error: `direct route to peer failed: ${String(error)}`, code: -32000 }
+      const ownBudgetExhausted = (error as { ownBudgetExhausted?: unknown }).ownBudgetExhausted === true
+      const failure: Extract<A2aRouteResult, { ok: false }> = {
+        ok: false,
+        error: `direct route to peer failed: ${String(error)}`,
+        code: -32000,
+        // Wait-window telemetry (envelope-v2 §4): measured patience plus
+        // whose budget ended it. Pure observation, zero semantics.
+        abortElapsedMs: Date.now() - dispatchedAt,
+        ...(ownBudgetExhausted ? { ownBudgetExhausted: true } : {}),
+      }
+      return failure
     }
     if (raw.error !== undefined && raw.error !== null) {
       const failure: { ok: false; error: string; code?: number } = {
