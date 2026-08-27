@@ -18,6 +18,7 @@
 1. **Signature** = cross-host (.157) ∧ sync-await ∧ target turn duration > client wait window. Independent of payload size and content (R1 ≈ R2).
 2. **async immunity**: enqueue-and-return has no abort window by construction → the standard avoidance toward slow-cadence seats.
 3. **Two-family diagnostic divide**: local-host busy sessions degrade into graceful timeout-with-context_id; cross-host aborts surface as `-32004`. Telling the families apart IS the diagnosis.
+4. **Three shapes of "did not wait to completion"** (appended live, same day): ① infrastructure time-window stamps (`produced no final reply within window`, host-plumbing origin, `sender=dsh-host-*`); ② session business receipts (`[A2A receipt]` family — the ONLY shape that speaks about delivery truth); ③ client-side aborts (`-32004` — patience end). All three look like non-reply from the caller's chair; conflating them sends forensics wandering across layers that never touched each other.
 
 ## 3. Law linkage
 
