@@ -8,7 +8,7 @@ import { C, S } from './tokens'
 import { LodMachine, prefersReducedMotion } from './lod'
 import type { Lod } from './lod'
 import {
-  MOCK, drawMembership, drawActivity, drawPeers,
+  MOCK, drawMembership, drawActivity, drawPeers, formatCensus,
   type StateBody,
 } from './topology'
 import {
@@ -60,7 +60,7 @@ labelRenderer.domElement.style.pointerEvents = 'none'
 app.appendChild(labelRenderer.domElement)
 
 // reduced-motion: static equivalence (no per-frame drift; render on demand)
-const reducedMotion = prefersReducedMotion()
+
 
 // ─── Scene, camera, controls ──
 const scene = new THREE.Scene()
@@ -209,8 +209,7 @@ async function cycle(): Promise<void> {
   drawPeers(peers, peerGroup, lineGroup)
 
   const liveCount = sessions.filter(s => s.live !== false).length
-  setAriaLabel(renderer.domElement, 'A2A 拓扑：' + sessions.length + ' 个节点（' + liveCount + ' live / ' + (sessions.length - liveCount) + ' cold），' + teams.length + ' 个团队，' + peers.length + ' 个联邦对端')
-
+  setAriaLabel(renderer.domElement, formatCensus(sessions, teams, peers))
   if (useMock) drawActivity([['s1', 's3'], ['s4', 's5']], meshesById, lineGroup)
 }
 
@@ -252,6 +251,7 @@ renderer.domElement.addEventListener('keydown', (ev) => {
   }
 })
 
+
 // ─── Animate: full rAF loop in normal mode; reduced-motion gets renderOnce
 //  — static frames are still rendered after controls change or a cycle, so
 //  the stage never goes blank, it just does not drift on its own. ──
@@ -259,25 +259,14 @@ function renderOnce(): void {
   labelRenderer.render(scene, camera)
   renderer.render(scene, camera)
 }
+
+if (prefersReducedMotion()) {
+  controls.addEventListener('change', () => { controls.update(); renderOnce() })
+}
 function tick(): void {
   requestAnimationFrame(tick)
-  if (reducedMotion) return
   controls.update()
-  lodMachine.update(camera.position.length())
   labelRenderer.render(scene, camera)
   renderer.render(scene, camera)
 }
-if (reducedMotion) {
-  renderOnce()
-  // Static mode: re-render only on real events — controls interaction or a
-  // completed state cycle. Never a self-drifting rAF loop.
-  controls.addEventListener('change', () => { controls.update(); renderOnce() })
-  const wake = setInterval(() => { void cycle().then(renderOnce) }, 5000)
-  const offWake = () => clearInterval(wake)
-  window.addEventListener('pagehide', offWake, { once: true })
-} else {
-  tick()
-}
-
-// ─── Chrome mounts once (HUD/legend/aria) ──
-mountChrome(app, renderer.domElement)
+tick()

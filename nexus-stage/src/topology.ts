@@ -52,6 +52,20 @@ export function inFlightPairs(sessions: readonly SessionRow[]): Array<[string, s
   return pairs
 }
 
+/** Pure census formatter for the canvas aria-label: node total, live/cold
+ *  split, team count, peer count — the five counts the P0 audit requires
+ *  asserted. Pure: no DOM, no state, same input always same string. */
+export function formatCensus(
+  sessions: readonly { live?: boolean }[],
+  teams: readonly { name: string }[],
+  peers: readonly unknown[],
+): string {
+  const liveCount = sessions.filter(s => s.live !== false).length
+  const cold = sessions.length - liveCount
+  return 'A2A 拓扑：' + sessions.length + ' 个节点（' + liveCount + ' live / ' + cold + ' cold），'
+    + teams.length + ' 个团队，' + peers.length + ' 个联邦对端'
+}
+
 /** Mock hard-acceptance dataset: 5 nodes / 2 teams / 1 peer. */
 export const MOCK = {
   sessions: [

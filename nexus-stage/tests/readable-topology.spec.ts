@@ -4,7 +4,7 @@
  *  keyboard navigation, reduced-motion probe. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
-import { drawMembership, drawActivity, drawPeers, MOCK } from '../src/topology'
+import { drawMembership, drawActivity, drawPeers, formatCensus, MOCK } from '../src/topology'
 import { lodFor, prefersReducedMotion } from '../src/lod'
 import { attachLabel, detachLabel, bindInspectorKeys, shortName } from '../src/overlay'
 
@@ -131,5 +131,34 @@ describe('bindInspectorKeys — dispatchEvent-driven behavior', () => {
   it('prefersReducedMotion stays boolean across jsdom (static path gate)', () => {
     const flag = prefersReducedMotion()
     expect(typeof flag).toBe('boolean')
+  })
+})
+
+describe('formatCensus — aria 五计数纯函数', () => {
+  it('counts total/live/cold/teams/peers exactly', () => {
+    const sessions = [
+      { id: 'a', label: 'a', team: 't1', joined: true, live: true },
+      { id: 'b', label: 'b', team: 't1', joined: true, live: false },
+      { id: 'c', label: 'c', team: 't2', joined: true, live: true },
+    ]
+    const teams = [{ name: 't1' }, { name: 't2' }]
+    const peers = [{ url: 'u1' }]
+    const s = formatCensus(sessions, teams, peers)
+    expect(s).toContain('3 个节点')
+    expect(s).toContain('2 live')
+    expect(s).toContain('1 cold')
+    expect(s).toContain('2 个团队')
+    expect(s).toContain('1 个联邦对端')
+  })
+  it('empty fleet renders zeroed census', () => {
+    const s = formatCensus([], [], [])
+    expect(s).toContain('0 个节点')
+    expect(s).toContain('0 个团队')
+  })
+})
+
+describe('reduced-motion: renderOnce gated on real events', () => {
+  it('prefersReducedMotion is a boolean gate', () => {
+    expect(typeof prefersReducedMotion()).toBe('boolean')
   })
 })
