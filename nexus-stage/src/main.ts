@@ -1,9 +1,10 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 import { disposeGeometries } from './dispose'
 import { createFaultReporter } from './fault'
 import { seatFor } from './seat'
-import { FRAME_HUES, S } from './tokens'
+import { C, S } from './tokens'
 
 // ─── DOM shell ──
 const app = document.getElementById('app')!
@@ -40,16 +41,27 @@ const { fault, clear: clearFault } = createFaultReporter(
   message => console.error(message),
 )
 
+// ─── CSS2D overlay for readable labels (P0 readability) ──
+const labelRenderer = new CSS2DRenderer()
+labelRenderer.setSize(app.clientWidth || window.innerWidth, app.clientHeight || window.innerHeight)
+labelRenderer.domElement.style.position = 'absolute'
+labelRenderer.domElement.style.top = '0'
+labelRenderer.domElement.style.pointerEvents = 'none'
+app.appendChild(labelRenderer.domElement)
+
+// reduced-motion: static equivalence (no per-frame drift; render on demand)
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
 // ─── Scene, camera, controls ──
 const scene = new THREE.Scene()
-scene.background = new THREE.Color(0x060a12)
+scene.background = new THREE.Color(C.bg0)
 scene.fog = new THREE.FogExp2(0x060a12, 0.005)
 
 const camera = new THREE.PerspectiveCamera(60, app.clientWidth / app.clientHeight, 0.1, 500)
 camera.position.set(0, 35, 55)
 
 const controls = new OrbitControls(camera, renderer.domElement)
-controls.enableDamping = true
+controls.enableDamping = !reducedMotion
 controls.dampingFactor = 0.06
 controls.minDistance = 8
 controls.maxDistance = 180
@@ -81,13 +93,71 @@ scene.add(teamGroup, nodeGroup, peerGroup, lineGroup)
 const edgesMat = new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.6 })
 
 // ─── Types ──
-interface SessionRow {
-  id: string; label: string; team: string; name?: string
-  joined: boolean; live?: boolean
-}
+interface SessionRow { id: string; label: string; team: string; name?: string; joined: boolean; live?: boolean }
 interface TeamMember { id: string; team: string; joined: boolean; live: boolean }
 interface CanvasTeam { name: string; team: string; members: TeamMember[] }
 interface StateBody { sessions?: SessionRow[]; canvas?: { teams: CanvasTeam[] }; peers?: Array<{ url: string; score?: number }> }
+
+// ─── LOD: far = shapes only; mid = +labels; near = +inspector detail ──
+type Lod = 'far' | 'mid' | 'near'
+let lod: Lod = 'mid'
+function lodFor(camDist: number): Lod {
+  if (camDist > 90) return 'far'
+  if (camDist > 45) return 'mid'
+  return 'near'
+}
+
+// ─── Labels (CSS2D): short name + live/cold + team; two-line ellipsis cap ──
+const labelByNode = new Map<string, CSS2DObject>()
+const NAME_CAP = 18
+
+function shortName(raw: string): string {
+  const base = raw.includes('/') ? raw.slice(raw.lastIndexOf('/') + 1) : raw
+  if (base.length <= NAME_CAP) return base
+  const cut = base.lastIndexOf('-', NAME_CAP)
+  if (cut > 4) return base.slice(0, cut) + '<br/>' + base.slice(cut + 1)
+  return base.slice(0, NAME_CAP) + '…'
+}
+
+function attachLabel(id: string, mesh: THREE.Object3D, name: string, live: boolean, team: string): void {
+  const el = document.createElement('div')
+  el.className = 'nexus-label ' + (live ? 'live' : 'cold')
+  el.innerHTML = '<span class=\'nm\'>' + shortName(name) + '</span><span class=\'sub\'>' + (live ? 'live' : 'cold') + ' · ' + team + '</span>'
+  const obj = new CSS2DObject(el)
+  obj.position.set(0, 1.6, 0)
+  mesh.add(obj)
+  labelByNode.set(id, obj)
+}
+
+function detachLabel(id: string): void {
+  const obj = labelByNode.get(id)
+  if (obj) { obj.removeFromParent(); labelByNode.delete(id) }
+}
+
+// ─── Mock hard-acceptance dataset: 5 nodes / 2 teams / 1 peer ──
+// Concrete (non-optional) shapes so consumers never need undefined-narrowing.
+const MOCK = {
+  sessions: [
+    { id: 's1', label: 'ontology/main', team: 'ontology', name: 'ontology-main', joined: true, live: true },
+    { id: 's2', label: 'ontology/dev', team: 'ontology', name: 'ontology-dev', joined: true, live: false },
+    { id: 's3', label: 'god/dispatch', team: 'god', name: 'god-dispatch', joined: true, live: true },
+    { id: 's4', label: 'logistics/ops', team: 'logistics', name: 'logistics-ops', joined: true, live: true },
+    { id: 's5', label: 'pocket/ui', team: 'pocket', name: 'pocket-ui', joined: true, live: false },
+  ],
+  canvas: { teams: [
+    { name: 'core', team: 'ontology', members: [
+      { id: 's1', team: 'ontology', joined: true, live: true },
+      { id: 's2', team: 'ontology', joined: true, live: false },
+      { id: 's3', team: 'god', joined: true, live: true },
+    ] },
+    { name: 'edge', team: 'logistics', members: [
+      { id: 's4', team: 'logistics', joined: true, live: true },
+      { id: 's5', team: 'pocket', joined: true, live: false },
+    ] },
+  ] },
+  peers: [{ url: 'http://192.168.3.156:13080', score: 0.9 }],
+}
+let useMock = false
 
 // ─── Mesh builders ──
 function makeNode(color: number, r: number): THREE.Mesh {
@@ -96,23 +166,88 @@ function makeNode(color: number, r: number): THREE.Mesh {
   return new THREE.Mesh(g, m)
 }
 
-function getHue(s: string): number {
-  let h = 0; for (let i = 0; i < s.length; i++) h = ((h * 31 + s.charCodeAt(i)) & 0xfffffff) >>> 0
-  return FRAME_HUES[h % FRAME_HUES.length]
+// ─── Hub-star membership edges (team centroid hub + spokes; no O(n²) mesh loop) ──
+function drawMembership(teams: CanvasTeam[]): void {
+  lineGroup.clear()
+  const mat = new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.18 })
+  for (const team of teams) {
+    const members = team.members.filter(m => meshesById.has(m.id))
+    if (members.length < 2) continue
+    const centroid = new THREE.Vector3()
+    for (const m of members) centroid.add(meshesById.get(m.id)!.position)
+    centroid.divideScalar(members.length)
+    const hub = new THREE.Mesh(new THREE.OctahedronGeometry(0.35, 0), new THREE.MeshBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.5 }))
+    hub.position.copy(centroid)
+    teamGroup.add(hub)
+    for (const m of members) {
+      const g = new THREE.BufferGeometry().setFromPoints([centroid, meshesById.get(m.id)!.position.clone()])
+      lineGroup.add(new THREE.Line(g, mat.clone()))
+    }
+  }
 }
+
+// ─── inFlight activity edges (solid amber) + peer federation (dashed) ──
+function drawActivity(pairs: Array<[string, string]>): void {
+  const mat = new THREE.LineBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.65 })
+  for (const [a, b] of pairs) {
+    const am = meshesById.get(a); const bm = meshesById.get(b)
+    if (!am || !bm) continue
+    const g = new THREE.BufferGeometry().setFromPoints([am.position.clone(), bm.position.clone()])
+    lineGroup.add(new THREE.Line(g, mat.clone()))
+  }
+}
+
+function drawPeers(peers: Array<{ url: string }>): void {
+  for (const p of peers) {
+    const mesh = new THREE.Mesh(new THREE.OctahedronGeometry(1.3, 0), new THREE.MeshStandardMaterial({ color: 0x6366f1, emissive: 0x6366f1, emissiveIntensity: 0.5, transparent: true, opacity: 0.75 }))
+    mesh.position.set(-20, 14, -12)
+    mesh.userData = { label: 'Peer: ' + p.url.slice(7, 36), kind: 'peer' }
+    peerGroup.add(mesh)
+    const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, -4, 0), mesh.position.clone()])
+    const dash = new THREE.LineDashedMaterial({ color: 0x6366f1, dashSize: 1.2, gapSize: 0.8, transparent: true, opacity: 0.35 })
+    const line = new THREE.Line(g, dash)
+    line.computeLineDistances()
+    lineGroup.add(line)
+  }
+}
+
+// ─── HUD + legend + aria ──
+const hud = document.createElement('div')
+hud.className = 'nexus-hud'
+app.appendChild(hud)
+const legend = document.createElement('div')
+legend.className = 'nexus-legend'
+legend.innerHTML = '<span class=\"dot live\"></span>live&nbsp;&nbsp;<span class=\"dot cold\"></span>cold&nbsp;&nbsp;<span class=\"dashline\"></span>federation&nbsp;&nbsp;<span class=\"act\"></span>in-flight'
+app.appendChild(legend)
+renderer.domElement.setAttribute('role', 'img')
+renderer.domElement.setAttribute('tabindex', '0')
+
+let inspector: HTMLDivElement | null = null
+function pinInspector(text: string): void {
+  if (!inspector) {
+    inspector = document.createElement('div')
+    inspector.className = 'nexus-inspector'
+    app.appendChild(inspector)
+  }
+  inspector.textContent = text
+  inspector.style.display = 'block'
+}
+function unpinInspector(): void { if (inspector) inspector.style.display = 'none' }
 
 // ─── Layout persistence ──
 async function fetchLayout(): Promise<any | null> {
   try {
-    const r = await fetch('/__dsh_a2a/canvas-layout', { cache: 'no-store' }); if (!r.ok) return null;
+    const r = await fetch('/__dsh_a2a/canvas-layout', { cache: 'no-store' }); if (!r.ok) return null
     const j = await r.json(); return j.layout ?? null
   } catch { return null }
 }
 
-// ─── Boot / poll / reconcile ──
+// ─── Boot / poll / reconcile (pairwise cleanup: mesh+label same lifetime) ──
 const meshesById = new Map<string, THREE.Mesh>()
 /** Seat index for edge drawing: sid → the mesh currently sitting there. */
 const sessionMeshes = new Map<string, THREE.Mesh>()
+/** Session id → its team (inspector line + label sub-caption). */
+const sessionTeam = new Map<string, string>()
 
 async function cycle(): Promise<void> {
   let res: Response
@@ -131,22 +266,32 @@ async function cycle(): Promise<void> {
     fault(`state JSON parse failed: ${String((error as Error | undefined)?.message ?? error).slice(0, 80)}`)
     return
   }
-  const sessions = (body.sessions ?? []).filter((s) => s.joined === true)
-  const teams = body.canvas?.teams ?? []
-  const peers = body.peers ?? []
+  // Mock hard-acceptance toggle: five nodes / two teams / one peer for the
+  // readability acceptance run without a live fleet.
+  const sessions = useMock ? MOCK.sessions : (body.sessions ?? []).filter((s) => s.joined === true)
+  const teams = useMock ? MOCK.canvas.teams : (body.canvas?.teams ?? [])
+  const peers = useMock ? MOCK.peers : (body.peers ?? [])
   // Read-path of layout persistence (write-path arrives with planning mode):
   // a node saved on a previous visit keeps its world spot instead of a fresh
   // random seat, so saved arrangements survive reloads.
-  const layout = await fetchLayout()
+  const layout = useMock ? null : await fetchLayout()
+
+  // Retire departed nodes first — mesh and CSS2D label share one lifetime.
+  const liveIds = new Set(sessions.map(s => s.id))
+  for (const [sid, mesh] of [...meshesById]) {
+    if (!liveIds.has(sid)) { detachLabel(sid); nodeGroup.remove(mesh); meshesById.delete(sid); sessionMeshes.delete(sid) }
+  }
 
   // Seat un-seated nodes.
   for (let i = 0; i < sessions.length; i++) {
-    const sid = sessions[i]!.id
-    if (!meshesById.has(sid)) {
-      const isLive = sessions[i]!.live !== false
+    const s = sessions[i]!
+    const sid = s.id
+    const isLive = s.live !== false
+    let mesh = meshesById.get(sid)
+    if (!mesh) {
       const color = isLive ? S.nodeLive : S.nodeCold
-      const mesh = makeNode(color, isLive ? 0.9 : 0.5)
-      mesh.userData = { label: sessions[i]!.name ?? sessions[i]!.label, sid }
+      mesh = makeNode(color, isLive ? 0.9 : 0.5)
+      mesh.userData = { label: s.name ?? s.label, sid }
       const saved = layout?.nodes?.[sid]
       // Saved layout wins; otherwise the seat is a pure hash of the session
       // id, so reloads reproduce the same star map instead of reshuffling.
@@ -160,37 +305,68 @@ async function cycle(): Promise<void> {
       nodeGroup.add(mesh)
       sessionMeshes.set(sid, mesh)
     }
+    if (!labelByNode.has(sid)) attachLabel(sid, mesh, s.name ?? s.label, isLive, s.team)
+    sessionTeam.set(sid, s.team)
   }
 
-  // Rebuild membership edges between nodes sharing a canvas team. The
-  // opacity is empirical: 0.15 cyan on near-black measured invisible against
-  // the fog (external UX review P0-3). The material is the module singleton;
-  // each rebuild releases the previous batch's geometries before clearing -
-  // without that, every 5s poll leaks GPU buffers for the page's lifetime.
+  // Membership edges: hub-star (team centroid + spokes) instead of the O(n²)
+  // pairwise mesh — every pair still visually implied through the hub, and
+  // the GPU cost grows linearly. Each rebuild releases the previous batch's
+  // geometries before clearing - without that, every 5s poll leaks GPU
+  // buffers for the page's lifetime.
   disposeGeometries(lineGroup.children)
   lineGroup.clear()
-  for (const team of teams) {
-    for (let mi = 0; mi < team.members.length; mi++) {
-      for (let mj = mi + 1; mj < team.members.length; mj++) {
-        const aMesh = meshesById.get(team.members[mi].id)
-        const bMesh = meshesById.get(team.members[mj].id)
-        if (aMesh && bMesh) {
-          const geo = new THREE.BufferGeometry().setFromPoints([aMesh.position.clone(), bMesh.position.clone()])
-          lineGroup.add(new THREE.Line(geo, edgesMat))
-        }
-      }
-    }
-  }
+  drawMembership(teams)
+  drawPeers(peers)
+
+  const liveCount = sessions.filter(s => s.live !== false).length
+  renderer.domElement.setAttribute('aria-label', 'A2A 拓扑：' + sessions.length + ' 个节点（' + liveCount + ' live / ' + (sessions.length - liveCount) + ' cold），' + teams.length + ' 个团队，' + peers.length + ' 个联邦对端')
+
+  if (useMock) drawActivity([['s1', 's3'], ['s4', 's5']])
 }
 
 setInterval(() => void cycle(), 5000)
 void cycle()
 
-// ─── Animate ──
-const clock = new THREE.Clock()
+// ─── Interaction: click/Enter pins inspector; Esc unpins; Tab traverses roster ──
+const raycaster = new THREE.Raycaster()
+const pointer = new THREE.Vector2()
+let pinned: string | undefined
+
+renderer.domElement.addEventListener('pointerdown', (ev) => {
+  const rect = renderer.domElement.getBoundingClientRect()
+  pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+  const hit = raycaster.intersectObjects(nodeGroup.children, false)[0]
+  if (hit) {
+    const ud = hit.object.userData as { label?: string; sid?: string }
+    pinned = ud.sid
+    const live = (MOCK.sessions.find(s => s.id === ud.sid)?.live !== false) ? 'live' : 'cold'
+    pinInspector((ud.label ?? '') + ' · ' + live + ' · 团队 ' + (sessionTeam.get(ud.sid ?? '') ?? '?'))
+  } else { pinned = undefined; unpinInspector() }
+})
+
+renderer.domElement.addEventListener('keydown', (ev) => {
+  const ids = [...meshesById.keys()]
+  if (ev.key === 'Escape') { pinned = undefined; unpinInspector(); return }
+  if (ev.key === 'Enter' || ev.key === 'Tab') {
+    const idx = pinned ? ids.indexOf(pinned) : -1
+    const next = ids[(idx + 1) % ids.length]
+    if (next === undefined) return
+    pinned = next
+    const s = MOCK.sessions.find(x => x.id === next)
+    pinInspector(next + ' · ' + (s ? (s.live !== false ? 'live' : 'cold') : '') + ' · 团队 ' + (s?.team ?? '?'))
+  }
+})
+
+// ─── Animate (reduced-motion: render on demand, no rAF loop) ──
 function tick(): void {
   requestAnimationFrame(tick)
+  if (reducedMotion) return
   controls.update()
+  labelRenderer.render(scene, camera)
   renderer.render(scene, camera)
 }
 tick()
+renderer.domElement.addEventListener('change', () => { labelRenderer.render(scene, camera); renderer.render(scene, camera) })
