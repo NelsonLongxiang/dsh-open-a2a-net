@@ -73,6 +73,23 @@ export interface ArchivedRecord {
   readonly contextId?: string
   readonly resolvedAt: number
   readonly summary?: string
+  /**
+   * When a receipt arrived for an explicitly abandoned row ({@link TaskLedger.abandon}).
+   * Orphan isolation: the abandonment outcome stays verbatim; the late answer is
+   * recorded as metadata only, never promoted to resolution.
+   */
+  readonly lateReceiptAt?: number
+}
+
+/** Result of an explicit caller-side abandon. Total and never-thrown. */
+export type AbandonOutcome = 'cleared' | 'already-terminal' | 'unknown'
+
+/** Structured verdict for one {@link TaskLedger.abandon} call (consumer contract: idempotent). */
+export interface AbandonResult {
+  readonly outcome: AbandonOutcome
+  readonly taskId: string
+  /** Settle time: fresh abandonment's clock tick, or the already-settled row's original resolvedAt. */
+  readonly archivedAt?: number
 }
 
 /** Per-instance knobs; defaults come from the exported constants. */
@@ -184,6 +201,46 @@ export class TaskLedger {
   }
 
   /**
+   * Caller-side give-up (work-order P1a): clears one owed row into the
+   * archive under a `caller-abandoned` outcome so waiters stop occupying the
+   * remote budget and the three-tier book stays honest about who ended it.
+   * NOT cooperative cancellation — the remote may still be working. A late
+   * receipt against an abandoned row lands as orphan metadata
+   * ({@link ArchivedRecord.lateReceiptAt}) without rewriting the decision.
+   * Idempotent and total per the consumer contract: repeat calls and unknown
+   * ids return stable structured outcomes, never throw.
+   * @param taskId - the correlation key to abandon.
+   * @param reason - optional short cause, folded into the archived summary.
+   * @returns `{outcome:'cleared'}` when a pending/dead row was settled now,
+   * `'already-terminal'` when the archive already held the task's end,
+   * `'unknown'` when neither tier ever saw the id.
+   */
+  abandon(taskId: string, reason?: string): AbandonResult {
+    if (taskId === '') return { outcome: 'unknown', taskId }
+    this.sweep(this.now())
+    const record = this.tasks.find(entry => entry.taskId === taskId)
+    if (record !== undefined) {
+      this.tasks = this.tasks.filter(entry => entry.taskId !== taskId)
+      const resolvedAt = this.now()
+      const cause = reason === undefined || reason === '' ? '' : `: ${reason.slice(0, SUMMARY_CAP - 'caller-abandoned:'.length)}`
+      this.archiveSettled({
+        taskId: record.taskId,
+        team: record.team,
+        peer: record.peer,
+        startedAt: record.startedAt,
+        ...(record.contextId !== undefined ? { contextId: record.contextId } : {}),
+        resolvedAt,
+        summary: `caller-abandoned${cause}`,
+      })
+      this.persist()
+      return { outcome: 'cleared', taskId, archivedAt: resolvedAt }
+    }
+    const settled = this.archived.find(entry => entry.taskId === taskId)
+    if (settled === undefined) return { outcome: 'unknown', taskId }
+    return { outcome: 'already-terminal', taskId, archivedAt: settled.resolvedAt }
+  }
+
+  /**
    * Correlate one message against the ledger: a receipt (message starting
    * `[A2A receipt] task <id> …`) settles its task into the archive, keeping
    * the outcome summary; a repeat or late receipt refreshes that archived
@@ -215,8 +272,17 @@ export class TaskLedger {
     }
     const settled = this.archived.find(entry => entry.taskId === taskId)
     if (settled === undefined) return false
+    // Orphan isolation: a receipt for an explicitly abandoned row must not
+    // rewrite the abandonment outcome — the caller stopped waiting by choice.
+    // Record that the target did answer later; keep the decision verbatim.
+    const abandoned = settled.summary?.startsWith('caller-abandoned') ?? false
     this.archived = [
-      { ...settled, resolvedAt: this.now(), ...(summary !== '' ? { summary } : {}) },
+      {
+        ...settled,
+        ...(abandoned
+          ? { lateReceiptAt: this.now() }
+          : { resolvedAt: this.now(), ...(summary !== '' ? { summary } : {}) }),
+      },
       ...this.archived.filter(entry => entry.taskId !== taskId),
     ]
     this.persist()
@@ -265,6 +331,7 @@ export class TaskLedger {
               ...(typeof entry.contextId === 'string' && entry.contextId !== '' ? { contextId: entry.contextId } : {}),
               resolvedAt: typeof entry.resolvedAt === 'number' && Number.isFinite(entry.resolvedAt) ? entry.resolvedAt : this.now(),
               ...(typeof entry.summary === 'string' && entry.summary !== '' ? { summary: entry.summary } : {}),
+              ...(typeof entry.lateReceiptAt === 'number' && Number.isFinite(entry.lateReceiptAt) ? { lateReceiptAt: entry.lateReceiptAt } : {}),
             })
             continue
           }
@@ -295,6 +362,7 @@ export class TaskLedger {
             ...(typeof entry.contextId === 'string' && entry.contextId !== '' ? { contextId: entry.contextId } : {}),
             resolvedAt: typeof entry.resolvedAt === 'number' && Number.isFinite(entry.resolvedAt) ? entry.resolvedAt : this.now(),
             ...(typeof entry.summary === 'string' && entry.summary !== '' ? { summary: entry.summary } : {}),
+            ...(typeof entry.lateReceiptAt === 'number' && Number.isFinite(entry.lateReceiptAt) ? { lateReceiptAt: entry.lateReceiptAt } : {}),
           })
         }
       }
