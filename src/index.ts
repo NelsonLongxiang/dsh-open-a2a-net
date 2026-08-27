@@ -26,6 +26,7 @@ import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, SUMMARY_CAP } from './task-ledger.ts'
 import { formatReceipt } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
+import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from './idempotency-store.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
@@ -56,6 +57,7 @@ import { MessageId } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { A2aClient, type A2aFetch, type A2aSchedule, type CardFetchOutcome } from './a2a-client.ts'
+import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from './transport-caps.ts'
 import type { A2aPeerCard, A2aRouteResult, ZoneRecord } from './types.ts'
 
 export type * from './types.ts'
@@ -534,6 +536,11 @@ export function apply(ctx: Context, config: Config): void {
   // resolves it — the caller-side half of the receipt contract, persisted so
   // a restart does not orphan the reconciliation.
   const taskLedger = new TaskLedger(join(home, 'a2a', 'tasks.json'))
+
+  // Server-side idempotency keys (work-order P3): a caller-born task id
+  // executes at most once inside the 24h window — same-key replays answer
+  // refused-but-idempotent, same-key different-payload answers conflict.
+  const idempotencyStore = new IdempotencyStore(join(home, 'a2a', 'idempotency.json'))
 
   // Self-referral suppression: gossip mirrors peer lists back and forth, so
   // a URL whose fetch just proved it serves this node keeps coming home as
@@ -1615,12 +1622,23 @@ ${message}`
       handler: (req: IncomingMessage, res: ServerResponse) => {
         const chunks: Buffer[] = []
         let size = 0
+        // B5 enforcement: 512 KiB hard cap. An oversized body is rejected,
+        // never truncated and never connection-killed mid-read — buffering
+        // stops at the crossing chunk, the stream drains to `end`, and the
+        // peer receives one structured 413 with a wire error code (the old
+        // behavior tore the socket down with no diagnosis at all).
+        let overflowed = false
+        const declared = Number.parseInt(String(req.headers['content-length'] ?? ''), 10)
+        if (Number.isFinite(declared) && !withinRouteBodyCap(declared)) overflowed = true
         req.on('data', (chunk: Buffer) => {
-          size += chunk.length
-          if (size > 1_000_000) {
-            req.destroy()
+          if (overflowed) return
+          const next = size + chunk.length
+          if (!withinRouteBodyCap(next)) {
+            overflowed = true
+            chunks.length = 0
             return
           }
+          size = next
           chunks.push(chunk)
         })
         /* v8 ignore next 6 -- client aborts surface as 'close' via the shared
@@ -1633,6 +1651,14 @@ ${message}`
           }
         })
         req.on('end', () => {
+          if (overflowed) {
+            if (!res.writableEnded && !res.headersSent) {
+              const payload = JSON.stringify({ error: 'payload too large', code: WIRE_ERROR_PAYLOAD_TOO_LARGE })
+              res.writeHead(413, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+            }
+            return
+          }
           let body: {
             readonly team?: unknown
             readonly message?: unknown
@@ -1661,6 +1687,26 @@ ${message}`
           if (team === '' || message === '') {
             const payload = JSON.stringify({ error: 'team and message are required', code: -32000 })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+            return
+          }
+          // Server-side idempotency (P3/B3): one key, one execution inside
+          // the window. Same key + same payload fingerprint ⇒ replay (409,
+          // -32003, replay:true — the prior attempt stays authoritative);
+          // same key + different payload ⇒ hard conflict (409, -32002).
+          // Checked BEFORE any steering or ledger correlation: a replay must
+          // never re-enter the target session, no matter how it settles.
+          const idemFingerprint = createHash('sha256').update(JSON.stringify({ caller, message, noWait, team })).digest('hex')
+          const idemVerdict = idempotencyStore.claim(taskId, idemFingerprint)
+          if (idemVerdict !== 'fresh') {
+            const replay = idemVerdict === 'replay'
+            const payload = JSON.stringify({
+              error: replay ? 'duplicate task id within the idempotency window' : 'task id reused with a different payload',
+              code: replay ? WIRE_ERROR_REPLAY_REJECTED : WIRE_ERROR_IDEMPOTENCY_CONFLICT,
+              task_id: taskId,
+              replay,
+            })
+            res.writeHead(409, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
             return
           }
