@@ -133,7 +133,9 @@ redirects (301) onto its trailing-slash form, so both spellings render and
 the shell's relative assets always resolve inside the served tree. For
 offline development, `nexus-stage/scripts/mockhost.py [port]` serves the
 built stage with canned state; open `/?fault=500` on it to exercise the
-on-page fault badge.
+on-page fault badge. `pnpm verify` needs no manual bootstrap on a fresh
+checkout: its `verify:nexus` step installs the subpackage dependencies
+itself before building.
 
 ## Collaboration SOP (network practice, v0.1)
 
