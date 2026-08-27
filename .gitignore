@@ -5,7 +5,11 @@ lib/
 .DS_Store
 .sessions/
 .npmrc
-package-lock.json
+# Root lockfile stays local (the root is a pnpm consumer), but a bare
+# `package-lock.json` here suppressed EVERY level - which silently blocked
+# nexus-stage's lockfile from being committed and broke fresh-checkout
+# `npm ci` (verify:nexus) with EUSAGE. Anchor to the root only.
+/package-lock.json
 i.log
 t.log
 tscc.log
