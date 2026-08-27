@@ -1393,6 +1393,8 @@ export function apply(ctx: Context, config: Config): void {
    * isPending (settled/archived/superseded tasks never double-send), and
    * receipts themselves are never tracked as new debts.
    */
+  const receiptWarnAt = new Map<string, number>()
+
   function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string): void {
     if (!callerTeam || callerTeam === '') return
     // Never synthesize a receipt for a receipt: answering an envelope by mail
@@ -1403,7 +1405,15 @@ export function apply(ctx: Context, config: Config): void {
       const summary = finalText.trim().replace(/\s+/g, ' ').slice(0, SUMMARY_CAP) || 'done'
       const receipt = `[A2A receipt] task ${taskId} ${summary} (auto)`
       void dispatchLocalCandidate(callerTeam, receipt, session, undefined, new AbortController().signal, true)
-        .catch(() => { /* caller unreachable: dead-letter machinery still bounds the row */ })
+        .catch((error) => {
+          // N2 (observability): a receipt that cannot reach the caller still
+          // resolves locally via correlation dedupe, but operators deserve a
+          // breadcrumb. Throttled per task to avoid ping-pong noise.
+          const key = `receipt:${taskId}`
+          if ((receiptWarnAt.get(key) ?? 0) + 60_000 > Date.now()) return
+          receiptWarnAt.set(key, Date.now())
+          logger.warn(`a2a: receipt autosend to ${callerTeam} for task ${taskId} failed: ${String(error).slice(0, 120)}`)
+        })
     })
   }
 
@@ -2048,7 +2058,11 @@ ${message}`
       }
       try {
         const target = await woken
-        const callerTeam = callerSession !== undefined && callerSession.includes('/') ? callerSession : undefined
+        // N1 (review seat 7e4cf94a): dashed composite labels are NOT routable;
+        // accept only <zone>/<short-id> shapes so envelopes stop bouncing -32004.
+        const routable = callerSession !== undefined &&
+          (/[a-z0-9-]+\/[0-9a-f]{8}$/i.test(callerSession) || /[a-z0-9-]+\/[a-z0-9]{4,}$/i.test(callerSession))
+        const callerTeam = routable ? callerSession : undefined
         const receiptHint = callerTeam === undefined ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${callerTeam}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
         steerRelay(target, `[A2A direct] (task ${taskId}) from "${callerSession ?? session}" (routed to ${team}) sent:\n\n${message}${receiptHint}`)
         armReceiptAutosend(target, taskId, callerTeam, message)

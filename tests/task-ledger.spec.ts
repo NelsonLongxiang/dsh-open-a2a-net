@@ -204,10 +204,14 @@ describe('TaskLedger settled-archive migration and bounds', () => {
   })
 
   it('persists all three tiers and restores a dead row without zombie revival', async () => {
+    // Hardened per load-sensitive flake triage (seat f966a951): a steppable
+    // injected clock replaces the real-setTimeout TTL crossing - the stale
+    // transition is now deterministic regardless of parallel-build jitter.
+    let clock = Date.now()
     const path = ledgerPath()
-    const ledger = new TaskLedger(path, { staleTtlMs: 20 })
+    const ledger = new TaskLedger(path, { staleTtlMs: 20, now: () => clock })
     ledger.track('direct-dead', 'dsh', 'local')
-    await tickPastTtl(40)
+    clock += 100
     ledger.list() // sweeps to dead and persists the marker
     ledger.track('direct-live', 'dsh', 'local')
     ledger.track('direct-settled', 'dsh', 'local')

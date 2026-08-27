@@ -111,6 +111,10 @@ Example — one announcing node with a seed:
     peers: ['http://127.0.0.1:41243']
 ```
 
+## Leave semantics (bounded staleness)
+
+`leave` is a per-session, per-host gesture: it removes the join intent locally and unmounts the node. There is **no network-wide revocation broadcast** — peer directories keep publishing the team until their card TTL expires, and inbound deliveries during that window fail honestly (the host no longer resolves the team). Remote targets that already implemented the receipt contract are unaffected. A formal revocation-broadcast protocol is tracked in upstream note `2026-08-27-a2a-leave-no-revocation-broadcast.md` (proposed).
+
 ## Trust model
 
 Cards are Ed25519-signed and expire; `peers` referrals and `sessionTeams` listings on a card are unsigned and
