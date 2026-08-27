@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config'
+import { configDefaults, defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
@@ -11,5 +11,14 @@ export default defineConfig({
         inline: ['@deepseek-ai/dsh-client-ui-primitives'],
       },
     },
+    exclude: [
+      // Worktrees live under the main checkout's .claude/ and carry full
+      // copies of this suite (often without rebuilt lib/ artifacts), which
+      // turned `pnpm test` into hundreds of ghost failures on master.
+      // Path filters resolve against the process cwd, so runs from inside a
+      // worktree never match this pattern and keep seeing their own tests.
+      '**/.claude/**',
+      ...configDefaults.exclude,
+    ],
   },
 })
