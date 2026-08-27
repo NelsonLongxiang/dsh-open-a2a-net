@@ -27,7 +27,8 @@
     "images",
     "README_zh.md",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "nexus-stage"
   ],
   "dsh": {
     "bundle": {
