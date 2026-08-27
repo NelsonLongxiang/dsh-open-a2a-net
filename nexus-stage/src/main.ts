@@ -5,7 +5,7 @@ import { disposeGeometries } from './dispose'
 import { createFaultReporter } from './fault'
 import { seatFor } from './seat'
 import { C, S } from './tokens'
-import { lodFor, prefersReducedMotion } from './lod'
+import { LodMachine, prefersReducedMotion } from './lod'
 import type { Lod } from './lod'
 import {
   MOCK, drawMembership, drawActivity, drawPeers,
@@ -104,16 +104,8 @@ const edgesMat = new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: tru
 
 // ─── Types re-exported from topology ──
 
-// ─── LOD state (hysteresis: ±6 world units at each boundary, so a slow
-//  orbit drift at ~45/90 does not flip label visibility every frame) ──
-let lod: Lod = 'mid'
-const LOD_HYSTERESIS = 6
-function lodWithHysteresis(camDist: number): Lod {
-  if (lod === 'far') return camDist < 90 - LOD_HYSTERESIS ? lodFor(camDist) : 'far'
-  if (lod === 'near') return camDist > 45 + LOD_HYSTERESIS ? lodFor(camDist) : 'near'
-  return camDist < 45 - LOD_HYSTERESIS ? 'near'
-    : camDist > 90 + LOD_HYSTERESIS ? 'far' : 'mid'
-}
+// ─── LOD hysteresis machine (B5: far↔mid↔near 双向滞回) ──
+const lodMachine = new LodMachine()
 
 // ─── Mock toggle ──
 let useMock = false
@@ -234,8 +226,9 @@ renderer.domElement.addEventListener('pointerdown', (ev) => {
   if (hit) {
     const ud = hit.object.userData as { label?: string; sid?: string }
     pinned = ud.sid
-    const live = (MOCK.sessions.find(s => s.id === ud.sid)?.live !== false) ? 'live' : 'cold'
-    pinInspector(app, (ud.label ?? '') + ' · ' + live + ' · 团队 ' + (sessionTeam.get(ud.sid ?? '') ?? '?'))
+    const sid = ud.sid ?? ''
+    const live = sessionTeam.has(sid) || ud.sid !== undefined ? 'live' : 'cold'
+    pinInspector(app, (ud.label ?? '') + ' · ' + live + ' · 团队 ' + (sessionTeam.get(sid) ?? '?'))
   } else { pinned = undefined; unpinInspector() }
 })
 
@@ -247,8 +240,8 @@ renderer.domElement.addEventListener('keydown', (ev) => {
     const next = ids[(idx + 1) % ids.length]
     if (next === undefined) return
     pinned = next
-    const s = MOCK.sessions.find(x => x.id === next)
-    pinInspector(app, next + ' · ' + (s ? (s.live !== false ? 'live' : 'cold') : '') + ' · 团队 ' + (s?.team ?? '?'))
+    const team = sessionTeam.get(next) ?? '?'
+    pinInspector(app, next + ' · ' + (team !== '?' ? 'live' : '?') + ' · 团队 ' + team)
   }
 })
 
@@ -263,7 +256,7 @@ function tick(): void {
   requestAnimationFrame(tick)
   if (reducedMotion) return
   controls.update()
-  lod = lodWithHysteresis(camera.position.length())
+  lodMachine.update(camera.position.length())
   labelRenderer.render(scene, camera)
   renderer.render(scene, camera)
 }

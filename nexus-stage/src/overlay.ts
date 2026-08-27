@@ -34,8 +34,32 @@ export function attachLabel(mesh: THREE.Object3D, name: string, live: boolean, t
   return obj
 }
 
+/** Split a long slug into [head, tail] at the last '-' before the cap — the
+ *  DOM twin of shortName, for callers that render two lines via spans. */
+export function shortNameParts(raw: string): [string, string | null] {
+  const base = raw.includes('/') ? raw.slice(raw.lastIndexOf('/') + 1) : raw
+  if (base.length <= NAME_CAP) return [base, null]
+  const cut = base.lastIndexOf('-', NAME_CAP)
+  if (cut > 4) return [base.slice(0, cut), base.slice(cut + 1)]
+  return [base.slice(0, NAME_CAP) + '…', null]
+}
+
 export function detachLabel(obj: CSS2DObject): void {
   obj.removeFromParent()
+}
+
+export function labelCount(): number {
+  return labelByNode.size
+}
+
+export function clearLabels(): void {
+  for (const obj of labelByNode.values()) obj.removeFromParent()
+  labelByNode.clear()
+}
+
+export function disposeOverlay(): void {
+  clearLabels()
+  inspector = null
 }
 
 export function hasLabel(id: string): boolean {

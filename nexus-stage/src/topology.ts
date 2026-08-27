@@ -3,10 +3,54 @@
  *  cost grows linearly with roster size instead of O(n²) pairwise lines. */
 import * as THREE from 'three'
 
-export interface SessionRow { id: string; label: string; team: string; name?: string; joined: boolean; live?: boolean }
+export interface SessionRow { id: string; label: string; team: string; name?: string; joined: boolean; live?: boolean; inFlight?: boolean }
 export interface TeamMember { id: string; team: string; joined: boolean; live: boolean }
 export interface CanvasTeam { name: string; team: string; members: TeamMember[] }
 export interface StateBody { sessions?: SessionRow[]; canvas?: { teams: CanvasTeam[] }; peers?: Array<{ url: string; score?: number }> }
+
+/** Normalize one raw session row from /state: drops rows without a usable
+ *  id, coerces the booleans, and keeps inFlight for activity edges. */
+export function normalizeSession(raw: unknown): SessionRow | null {
+  const c = raw as Partial<SessionRow> | null | undefined
+  if (c === null || typeof c !== 'object') return null
+  if (typeof c.id !== 'string' || c.id === '') return null
+  return {
+    id: c.id,
+    label: typeof c.label === 'string' && c.label !== '' ? c.label : c.id,
+    team: typeof c.team === 'string' && c.team !== '' ? c.team : 'unassigned',
+    name: typeof c.name === 'string' ? c.name : undefined,
+    joined: c.joined !== false,
+    live: c.live !== false,
+    inFlight: c.inFlight === true,
+  }
+}
+
+/** Normalize a whole state body: malformed rows are skipped individually. */
+export function normalizeStateBody(raw: unknown): { sessions: SessionRow[]; teams: CanvasTeam[]; peers: Array<{ url: string; score?: number }> } {
+  const body = (raw ?? {}) as Partial<StateBody>
+  const sessions: SessionRow[] = []
+  if (Array.isArray(body.sessions)) {
+    for (const r of body.sessions) {
+      const s = normalizeSession(r)
+      if (s !== null) sessions.push(s)
+    }
+  }
+  const teams = Array.isArray(body.canvas?.teams) ? body.canvas!.teams : []
+  const peers = (Array.isArray(body.peers) ? body.peers : []).filter(
+    (p): p is { url: string; score?: number } => p !== null && typeof p === 'object' && typeof (p as { url?: unknown }).url === 'string',
+  )
+  return { sessions, teams, peers }
+}
+
+/** inFlight pairs derive from normalized rows flagged inFlight (the round
+ *  ledger's activity projection), drawn by the caller after seeding. */
+export function inFlightPairs(sessions: readonly SessionRow[]): Array<[string, string]> {
+  const live: string[] = []
+  for (const s of sessions) if (s.inFlight === true && s.joined !== false) live.push(s.id)
+  const pairs: Array<[string, string]> = []
+  for (let i = 0; i + 1 < live.length; i += 2) pairs.push([live[i]!, live[i + 1]!])
+  return pairs
+}
 
 /** Mock hard-acceptance dataset: 5 nodes / 2 teams / 1 peer. */
 export const MOCK = {
