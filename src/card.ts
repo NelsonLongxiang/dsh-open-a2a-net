@@ -75,6 +75,7 @@ interface WireCard {
   readonly sessionTeams?: unknown
   readonly records?: unknown
   readonly lanIp?: unknown
+  readonly version?: unknown
   readonly publicKey?: unknown
   readonly signature?: unknown
 }
@@ -184,6 +185,7 @@ export function verifyCard(candidate: unknown, now: number): CardVerification {
       ...(peers !== undefined ? { peers } : {}),
       ...(teams !== undefined && teams.length > 0 ? { sessionTeams: teams } : {}),
       ...(typeof wire.lanIp === 'string' && wire.lanIp !== '' ? { lanIp: wire.lanIp } : {}),
+      ...(typeof wire.version === 'string' && wire.version !== '' ? { version: wire.version } : {}),
       publicKey: wire.publicKey,
       signature: wire.signature,
     },

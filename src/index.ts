@@ -21,6 +21,7 @@ import { LayoutStore } from './layout-store.ts'
 import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { PeerStore } from './peer-store.ts'
+import { SelfReferralFilter } from './self-suppress.ts'
 import { TaskLedger, SUMMARY_CAP } from './task-ledger.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import type { Context } from '@deepseek-ai/cordis'
@@ -497,6 +498,11 @@ export function apply(ctx: Context, config: Config): void {
   // resolves it — the caller-side half of the receipt contract, persisted so
   // a restart does not orphan the reconciliation.
   const taskLedger = new TaskLedger(join(home, 'a2a', 'tasks.json'))
+
+  // Self-referral suppression: gossip mirrors peer lists back and forth, so
+  // a URL whose fetch just proved it serves this node keeps coming home as
+  // an inbound referral; see src/self-suppress.ts for the shape of the fix.
+  const selfReferrals = new SelfReferralFilter()
 
   // Session nodes: every joined top-level session is its own addressable
   // team (label `<session>-<agentId8>`, team `<team>/<agentId8>`). Joining
@@ -1324,9 +1330,10 @@ export function apply(ctx: Context, config: Config): void {
           // The unsigned peers and sessionTeams fields carry this node's
           // current peer set and joined sessions at serve time (between
           // re-signs), so each card read spreads the publisher's latest
-          // view of the network.
+          // view of the network. `version` and `lanIp` are likewise
+          // unsigned served-fresh facts: fleet auditability without SSH.
           const sessionTeams = [...sessionNodes.values()].map(agent => ({ team: sessionTeamOf(agent), ...nodeMetadataOf(agent) }))
-          const body = JSON.stringify({ ...currentCard, peers: peerStore.list(), ...(sessionTeams.length > 0 ? { sessionTeams } : {}), ...(lanIp !== '' ? { lanIp } : {}), description: `A2A node exposing team ${config.team}` })
+          const body = JSON.stringify({ ...currentCard, peers: peerStore.list(), ...(sessionTeams.length > 0 ? { sessionTeams } : {}), ...(lanIp !== '' ? { lanIp } : {}), ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}), description: `A2A node exposing team ${config.team}` })
           res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) })
           res.end(body)
         },
@@ -1717,11 +1724,14 @@ ${message}`
     // list its own teams as remote rows and offer its own URL onward. The
     // signed card session is the identity check — no URL guessing.
     if (outcome.card.session === session) {
+      // Remember the alias so mirrored referral lists stop re-offering it
+      // between fetches (the drop alone flickers in and out of the store).
+      selfReferrals.remember(peer)
       peerStore.drop(peer)
       return undefined
     }
     peerStore.noteSuccess(peer)
-    for (const referral of outcome.card.peers ?? []) peerStore.offer(referral)
+    for (const referral of outcome.card.peers ?? []) if (selfReferrals.shouldOffer(referral)) peerStore.offer(referral)
     return outcome.card
   }
 
@@ -1959,6 +1969,27 @@ ${message}`
   }
 
   /**
+   * Whether one caller label can receive network traffic back. Composite
+   * `<zone>/<id>` shapes route anywhere (N1); bare zone names resolve to a
+   * live initiator per host, so cross-host they would steer whichever node
+   * shares the name — treated as unroutable everywhere.
+   */
+  function routableCallerLabel(callerSession: string | undefined): boolean {
+    return callerSession !== undefined &&
+      (/[a-z0-9-]+\/[0-9a-f]{8}$/i.test(callerSession) || /[a-z0-9-]+\/[a-z0-9]{4,}$/i.test(callerSession))
+  }
+
+  /**
+   * Why an async route from such a caller cannot expect its receipt: the
+   * autosend arm skips it and the steered hint is omitted, so the debt has
+   * no paying path — say so at dispatch time instead of silently stranding
+   * a pending row.
+   */
+  function unroutableCallerNote(label: string): string {
+    return `\n(Note: caller label "${label}" is not network-routable, so the target cannot auto-send a receipt back to you — reconcile via context_id follow-ups instead.)`
+  }
+
+  /**
    * Track one routed task in the ledger when its result leaves it owed a
    * receipt: delivered-but-unanswered tasks (an async dispatch, the
    * reply-wait deadline's release, or an aborted wait) reconcile later when
@@ -2039,8 +2070,15 @@ ${message}`
         const result = await dispatchPeerCandidate(candidate, args.team, args.message, args.context_id, exec.signal, callerSession, peerAsync, taskId)
         if (result.ok || exec.signal.aborted) {
           if (result.ok) trackOwedTask(taskId, args.team, candidate, result)
-          if (args.async === true && !peerAsync && result.ok) {
-            return { ...result, reply: `${result.reply}\n(Note: the peer does not advertise async; the call waited synchronously.)` } as unknown as Record<string, JsonValue>
+          const notes: string[] = []
+          if (result.ok && args.async === true && result.task_status === 'TASK_STATE_DELIVERED' && !routableCallerLabel(callerSession)) {
+            notes.push(unroutableCallerNote(String(callerSession ?? session)))
+          }
+          if (result.ok && args.async === true && !peerAsync) {
+            notes.push('\n(Note: the peer does not advertise async; the call waited synchronously.)')
+          }
+          if (result.ok && notes.length > 0) {
+            return { ...result, reply: `${result.reply}${notes.join('')}` } as unknown as Record<string, JsonValue>
           }
           return result as unknown as Record<string, JsonValue>
         }
@@ -2099,8 +2137,7 @@ ${message}`
         const target = await woken
         // N1 (review seat 7e4cf94a): dashed composite labels are NOT routable;
         // accept only <zone>/<short-id> shapes so envelopes stop bouncing -32004.
-        const routable = callerSession !== undefined &&
-          (/[a-z0-9-]+\/[0-9a-f]{8}$/i.test(callerSession) || /[a-z0-9-]+\/[a-z0-9]{4,}$/i.test(callerSession))
+        const routable = routableCallerLabel(callerSession)
         const callerTeam = routable ? callerSession : undefined
         const receiptHint = callerTeam === undefined ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${callerTeam}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
         steerRelay(target, `[A2A direct] (task ${taskId}) from "${callerSession ?? session}" (routed to ${team}) sent:\n\n${message}${receiptHint}`)
@@ -2110,7 +2147,7 @@ ${message}`
         return {
           ok: true,
           team,
-          reply: `Delivered to ${team} (async). The target routes a receipt — a message starting "[A2A receipt] task ${taskId} <outcome summary>" — back to your team when done; watch a2a_status activity or follow up with the context id.`,
+          reply: `Delivered to ${team} (async). The target routes a receipt — a message starting "[A2A receipt] task ${taskId} <outcome summary>" — back to your team when done; watch a2a_status activity or follow up with the context id.${routable ? '' : unroutableCallerNote(String(callerSession ?? session))}`,
           task_id: taskId,
           context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
           task_status: 'TASK_STATE_DELIVERED',
