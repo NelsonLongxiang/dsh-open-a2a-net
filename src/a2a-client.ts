@@ -7,6 +7,7 @@
  */
 
 import { verifyCard, type CardRejection } from './card.ts'
+import { MAX_ROUTE_BODY_BYTES, WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from './transport-caps.ts'
 import type { A2aPeerCard, A2aRouteResult } from './types.ts'
 
 /** One-shot delayed callback returning its disposer. */
@@ -200,12 +201,23 @@ export class A2aClient {
     // own result; the fallback below stamps it when the peer generated its
     // own (pre-0.5.3 peers).
     if (taskIdFromCaller !== undefined) args.task_id = taskIdFromCaller
+    // Outbound half of the same B5 ruling: refuse to put an oversized
+    // payload on the wire. Rejection is local and instant — a doomed upload
+    // would burn the 15s HTTP budget and end in the peer's 413 anyway.
+    const body = JSON.stringify(args)
+    if (!withinRouteBodyCap(Buffer.byteLength(body, 'utf8'))) {
+      return {
+        ok: false,
+        error: `payload exceeds the ${String(MAX_ROUTE_BODY_BYTES)}-byte direct-route transport cap`,
+        code: WIRE_ERROR_PAYLOAD_TOO_LARGE,
+      }
+    }
     let raw: WireRoute
     const dispatchedAt = Date.now()
     try {
       raw = await this.http('/a2a/direct', {
         method: 'POST',
-        body: JSON.stringify(args),
+        body,
         ...(signal !== undefined ? { signal } : {}),
       }, baseUrl) as WireRoute
     } catch (error) {

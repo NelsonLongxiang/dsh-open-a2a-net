@@ -56,6 +56,7 @@ import { MessageId } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { A2aClient, type A2aFetch, type A2aSchedule, type CardFetchOutcome } from './a2a-client.ts'
+import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from './transport-caps.ts'
 import type { A2aPeerCard, A2aRouteResult, ZoneRecord } from './types.ts'
 
 export type * from './types.ts'
@@ -353,6 +354,26 @@ export function apply(ctx: Context, config: Config): void {
    * @param res - the response for the malformed-body rejection.
    * @param use - receives the parsed body.
    */
+  // Wire code for boundary-refused corrupted text. -32004 is intentionally
+  // left as a reservation gap for the client-abort telemetry family seen in
+  // the wild; this lands at -32005 (cluster-C error-code registry).
+  const WIRE_ERROR_TEXT_CORRUPTED = -32005
+
+  /**
+   * Boundary guard for undecodable text (consumed by the readJsonBody
+   * guard): U+FFFD is produced by a lossy decoder upstream of us — the bytes
+   * arrived already destroyed, so storing them would only immortalize
+   * garbage names and excerpts.
+   */
+  function anyReplacementChar(value: unknown): boolean {
+    if (typeof value === 'string') return value.includes('\uFFFD')
+    if (Array.isArray(value)) return value.some(entry => anyReplacementChar(entry))
+    if (value !== null && typeof value === 'object') {
+      return Object.values(value).some(entry => anyReplacementChar(entry))
+    }
+    return false
+  }
+
   function readJsonBody(req: IncomingMessage, res: ServerResponse, use: (body: { readonly id?: unknown; readonly name?: unknown; readonly action?: unknown }) => void): void {
     const chunks: Buffer[] = []
     let size = 0
@@ -371,6 +392,19 @@ export function apply(ctx: Context, config: Config): void {
       } catch {
         const payload = JSON.stringify({ error: 'malformed body' })
         res.writeHead(400, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+        res.end(payload)
+        return
+      }
+      // P0 garbled-text guard (panel mojibake report): U+FFFD means the
+      // sender's encoder destroyed the text BEFORE the wire. Persisting it
+      // immortalizes the loss and re-displays garbage forever — refuse at
+      // the boundary so corruption never reaches any store.
+      if (anyReplacementChar(body)) {
+        const payload = JSON.stringify({
+          error: 'text contains undecodable characters (U+FFFD) — fix the sender encoding and retry',
+          code: WIRE_ERROR_TEXT_CORRUPTED,
+        })
+        res.writeHead(422, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
         res.end(payload)
         return
       }
@@ -1582,12 +1616,23 @@ ${message}`
       handler: (req: IncomingMessage, res: ServerResponse) => {
         const chunks: Buffer[] = []
         let size = 0
+        // B5 enforcement: 512 KiB hard cap. An oversized body is rejected,
+        // never truncated and never connection-killed mid-read — buffering
+        // stops at the crossing chunk, the stream drains to `end`, and the
+        // peer receives one structured 413 with a wire error code (the old
+        // behavior tore the socket down with no diagnosis at all).
+        let overflowed = false
+        const declared = Number.parseInt(String(req.headers['content-length'] ?? ''), 10)
+        if (Number.isFinite(declared) && !withinRouteBodyCap(declared)) overflowed = true
         req.on('data', (chunk: Buffer) => {
-          size += chunk.length
-          if (size > 1_000_000) {
-            req.destroy()
+          if (overflowed) return
+          const next = size + chunk.length
+          if (!withinRouteBodyCap(next)) {
+            overflowed = true
+            chunks.length = 0
             return
           }
+          size = next
           chunks.push(chunk)
         })
         /* v8 ignore next 6 -- client aborts surface as 'close' via the shared
@@ -1600,6 +1645,14 @@ ${message}`
           }
         })
         req.on('end', () => {
+          if (overflowed) {
+            if (!res.writableEnded && !res.headersSent) {
+              const payload = JSON.stringify({ error: 'payload too large', code: WIRE_ERROR_PAYLOAD_TOO_LARGE })
+              res.writeHead(413, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+            }
+            return
+          }
           let body: {
             readonly team?: unknown
             readonly message?: unknown
