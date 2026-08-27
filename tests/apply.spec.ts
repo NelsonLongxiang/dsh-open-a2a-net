@@ -651,7 +651,10 @@ describe('a2a plugin decentralized routing (peers)', () => {
       expect(receipt.status).toBe(200)
       await expect(tasks?.execute({}, runContext())).resolves.toMatchObject({
         ok: true,
-        tasks: [{ taskId: delivered.task_id, status: 'resolved', summary: 'tests green on 0.6.0' }],
+        // Settled rows leave the owed book for the archive — the outcome
+        // stays queryable instead of being evicted by later debts.
+        archive: [{ taskId: delivered.task_id, summary: 'tests green on 0.6.0' }],
+        archivedTotal: 1,
       })
     } finally {
       await ctx.fiber.dispose()
@@ -674,7 +677,8 @@ describe('a2a plugin decentralized routing (peers)', () => {
       expect(receipt.ok).toBe(true)
       await expect(ctx.tools.get('a2a_tasks')?.execute({}, runContext())).resolves.toMatchObject({
         ok: true,
-        tasks: [{ taskId: delivered.task_id, status: 'resolved', summary: 'second opinion agrees' }],
+        archive: [{ taskId: delivered.task_id, summary: 'second opinion agrees' }],
+        archivedTotal: 1,
       })
     } finally {
       await ctx.fiber.dispose()
@@ -770,7 +774,8 @@ describe('a2a plugin decentralized routing (peers)', () => {
       expect(receipt.status).toBe(200)
       await expect(ctx.tools.get('a2a_tasks')?.execute({}, runContext())).resolves.toMatchObject({
         ok: true,
-        tasks: [{ taskId: delivered.task_id, status: 'resolved', summary: 'cross-host green' }],
+        archive: [{ taskId: delivered.task_id, summary: 'cross-host green' }],
+        archivedTotal: 1,
       })
     } finally {
       await ctx.fiber.dispose()
@@ -2002,23 +2007,27 @@ describe('a2a plugin outbound tools', () => {
     await ctx.fiber.dispose()
   })
 
-  it('renders the a2a_tasks ledger with wait ages, follow-up contexts, and resolution times', async () => {
+  it('renders the a2a_tasks ledger in tiers: owed ages, follow-up contexts, dead-letters, archive', async () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(TimerService)
     apply(ctx, makeConfig())
     const tasks = ctx.tools.get('a2a_tasks')
-    const empty = tasks?.output.render({}, { ok: true, tasks: [] }) ?? []
+    const empty = tasks?.output.render({}, { ok: true, tasks: [], archive: [], archivedTotal: 0 }) ?? []
     expect(empty).toEqual([{ type: 'text', text: 'No routed tasks are owed a receipt.' }])
     const now = Date.now()
     const listed = tasks?.output.render({}, {
       ok: true,
       tasks: [
         { taskId: 'direct-aa', team: 'research', peer: 'http://peer:1', startedAt: now - 2 * 60_000, contextId: 'ctx-1', status: 'pending' },
-        { taskId: 'direct-bb', team: 'dsh', peer: 'local', startedAt: now - 4 * 60_000, resolvedAt: now - 60_000, status: 'resolved', summary: 'tests green' },
         { taskId: 'direct-cc', team: 'research', peer: 'http://peer:2', startedAt: now - 2 * 60 * 60_000, contextId: 'ctx-2', status: 'pending' },
+        { taskId: 'direct-dd', team: 'dsh', peer: 'local', startedAt: now - 25 * 60 * 60_000, status: 'dead', deadAt: now - 60_000 },
       ],
+      archive: [
+        { taskId: 'direct-bb', team: 'dsh', startedAt: now - 4 * 60_000, resolvedAt: now - 60_000, summary: 'tests green' },
+      ],
+      archivedTotal: 7,
     }) ?? []
     expect(listed).toEqual([{
       type: 'text',
@@ -2026,8 +2035,11 @@ describe('a2a plugin outbound tools', () => {
         'Owed receipts:',
         '  - direct-aa → research (via http://peer:1), waiting 2m, follow-up context ctx-1',
         '  - direct-cc → research (via http://peer:2), waiting 2h, follow-up context ctx-2, still no receipt — the target may be gone; probe it or follow up with the context id',
-        'Resolved:',
-        '  - direct-bb → dsh (via this host) after 3m: tests green',
+        'Dead-lettered (auto-flagged past the stale TTL; a revived target can still settle with a late receipt):',
+        '  - direct-dd → dsh (via this host), dispatched 25h ago',
+        'Archived (7), most recent first:',
+        '  - direct-bb → dsh: after 3m, tests green',
+        '  (+6 older not shown)',
       ].join('\n'),
     }])
     await ctx.fiber.dispose()
