@@ -70,6 +70,7 @@ scene.fog = new THREE.FogExp2(0x060a12, 0.005)
 const camera = new THREE.PerspectiveCamera(60, app.clientWidth / app.clientHeight, 0.1, 500)
 camera.position.set(0, 35, 55)
 
+const reducedMotion = prefersReducedMotion()
 const controls = new OrbitControls(camera, renderer.domElement)
 controls.enableDamping = !reducedMotion
 controls.dampingFactor = 0.06
