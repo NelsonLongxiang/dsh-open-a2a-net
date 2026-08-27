@@ -8,12 +8,13 @@ import { C, S } from './tokens'
 import { LodMachine, prefersReducedMotion } from './lod'
 import type { Lod } from './lod'
 import {
-  MOCK, drawMembership, drawActivity, drawPeers, formatCensus,
+  MOCK, drawMembership, drawActivity, drawPeers,
   type StateBody,
 } from './topology'
 import {
-  attachLabel, detachLabel, mountChrome, pinInspector, unpinInspector, setAriaLabel,
+  attachLabel, detachLabel, mountChrome, pinInspector, unpinInspector,
 } from './overlay'
+import { updateCensus } from './census'
 import { createStageKeyboardHandler, wireReducedRendering } from './interaction'
 import './overlay.css'
 
@@ -72,6 +73,8 @@ const camera = new THREE.PerspectiveCamera(60, app.clientWidth / app.clientHeigh
 camera.position.set(0, 35, 55)
 
 const reducedMotion = prefersReducedMotion()
+/** Module-level reduced-motion loop: cycle() end calls renderOnce() through it. */
+let reducedLoop: { renderOnce(): void } | undefined = undefined
 const controls = new OrbitControls(camera, renderer.domElement)
 controls.enableDamping = !reducedMotion
 controls.dampingFactor = 0.06
@@ -210,8 +213,10 @@ async function cycle(): Promise<void> {
   drawMembership(teams, meshesById, lineGroup, teamGroup)
   drawPeers(peers, peerGroup, lineGroup)
 
-  const liveCount = sessions.filter(s => s.live !== false).length
-  setAriaLabel(renderer.domElement, formatCensus(sessions, teams, peers))
+  updateCensus(renderer.domElement, sessions, teams, peers)
+  // Reduced-motion contract: a settled cycle is an external render driver —
+  // the stage must repaint fresh data (5s updates were invisible without it).
+  reducedLoop?.renderOnce()
   if (useMock) drawActivity([['s1', 's3'], ['s4', 's5']], meshesById, lineGroup)
 }
 
@@ -271,7 +276,7 @@ if (prefersReducedMotion()) {
   // Reduced-motion (gate 3): no rAF loop. controls change and each settled
   // cycle call renderOnce() through the wired loop — the stage never drifts
   // on its own, and renderOnceCount() is observable for the behavior tests.
-  const reducedLoop = wireReducedRendering(controls, renderOnce)
+  reducedLoop = wireReducedRendering(controls, renderOnce)
   controls.addEventListener('change', () => controls.update())
 } else {
   function tick(): void {

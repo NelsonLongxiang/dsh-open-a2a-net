@@ -88,3 +88,26 @@ describe('gate 2 — aria census', () => {
     expect(text).toContain('2 个团队')
   })
 })
+
+
+describe('A-cycle - reduced renderOnce driven by settled cycle', () => {
+  it('cycle settle triggers renderOnce through the wired loop (5s update visible)', () => {
+    // Regression: without this wiring the canvas never repainted after a
+    // 5s state update under reduced motion - the fresh data was invisible.
+    let changeListeners: Array<() => void> = []
+    const controls = {
+      addEventListener: (_t: string, l: () => void) => { changeListeners.push(l) },
+    }
+    let renders = 0
+    const renderOnce = () => { renders += 1 }
+    const loop = wireReducedRendering(controls, renderOnce)
+    // simulate: controls change fires once
+    for (const l of changeListeners) l()
+    const afterChange = renders
+    expect(afterChange).toBeGreaterThanOrEqual(1)
+    // simulate: a settled cycle calls renderOnce again
+    loop.renderOnce()
+    expect(renders).toBe(afterChange + 1)
+    expect(loop.isTicking()).toBe(false) // still no auto-tick under reduced
+  })
+})
