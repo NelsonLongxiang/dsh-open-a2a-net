@@ -82,3 +82,7 @@ Verdicts ride the cluster-C error-code family; none are advisory-only.
 
 - Rotation interplay: if handles rotate (see fingerprint criteria F3), does the anchor stay stable? Default: yes — anchors track declarations, not presentation aliases.
 - Whether `originHostAnchor` should eventually carry a key fingerprint alongside the label (synergy with delivery-origin-auth §2); deferred until slice 2 exercises real shapes.
+
+## 8. Sister document
+
+**Native-teams `docs/t3-declaration-remote-members.md`** (@1210686, rides PR#66) consumes this file's CompositeAnchor verbatim per ruling A4 (§Q1-Q4 of the ROUND-2 dossier) for `TeamDeclaration.agents[].kind:'remote'` — local declarations binding remote members. Validation responsibilities split there: tool-face emits full anchors via `TeamRegistry.describeTarget/catalog`; this side owns `projection-stale` enforcement. Constants stay frozen HERE; any evolution amends §2 first and re-syncs that mirror.
