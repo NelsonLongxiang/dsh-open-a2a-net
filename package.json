@@ -28,7 +28,12 @@
     "README_zh.md",
     "cordis.patch.yml",
     "README.md",
-    "nexus-stage"
+    "nexus-stage/src",
+    "nexus-stage/scripts",
+    "nexus-stage/package.json",
+    "nexus-stage/package-lock.json",
+    "nexus-stage/tsconfig.json",
+    "nexus-stage/vite.config.ts"
   ],
   "dsh": {
     "bundle": {
