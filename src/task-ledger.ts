@@ -23,6 +23,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { parseReceipt, RECEIPT_OUTCOMES, type ReceiptOutcomeV2 } from './receipt.ts'
 
+/**
+ * Caller-ended summaries (abandon / cancel) share one isolation law: late
+ * receipts never rewrite the verdict — they only stamp lateReceiptAt, and
+ * the projected outcome collapses to 'abandoned'.
+ */
+const CALLER_ENDED_PREFIX = /^caller-(abandoned|cancelled)/
+
 /** Hard cap on the owed book (pending + dead-lettered rows, most recent first). */
 export const TASK_CAP = 64
 
@@ -93,6 +100,13 @@ export interface AbandonResult {
   readonly taskId: string
   /** Settle time: fresh abandonment's clock tick, or the already-settled row's original resolvedAt. */
   readonly archivedAt?: number
+}
+
+/** Result of a cooperative {@link TaskLedger.cancel}; adds routing facts for the notify half. */
+export interface CancelledResult extends AbandonResult {
+  /** Team the ended row addressed — the route layer reaches a live local target through it. */
+  readonly team?: string
+  readonly contextId?: string
 }
 
 /** Per-instance knobs; defaults come from the exported constants. */
@@ -245,6 +259,49 @@ export class TaskLedger {
   }
 
   /**
+   * Cooperative cancellation (work-order P1b): ends one owed row like
+   * {@link abandon} but marks it `caller-cancelled` so downstream tooling
+   * tells "stopped waiting" from "ordered a stop". Implemented standalone
+   * (not via a shared endTask core) deliberately: abandon() is already
+   * reviewed semantics on this stack — touching it would ripple re-review;
+   * the ~20 duplicated lines buy a frozen reviewed surface.
+   * Cross-node targets degrade honestly: no reachable lane ⇒ no notify —
+   * the route layer reads team/contextId from here for its best-effort
+   * steer, which is the documented boundary until origin-auth lands.
+   */
+  cancel(taskId: string, reason?: string): CancelledResult {
+    if (taskId === '') return { outcome: 'unknown', taskId }
+    this.sweep(this.now())
+    const record = this.tasks.find(entry => entry.taskId === taskId)
+    if (record !== undefined) {
+      this.tasks = this.tasks.filter(entry => entry.taskId !== taskId)
+      const resolvedAt = this.now()
+      const cause = reason === undefined || reason === '' ? '' : `: ${reason.slice(0, SUMMARY_CAP - 'caller-cancelled:'.length)}`
+      this.archiveSettled({
+        taskId: record.taskId,
+        team: record.team,
+        peer: record.peer,
+        startedAt: record.startedAt,
+        ...(record.contextId !== undefined ? { contextId: record.contextId } : {}),
+        resolvedAt,
+        summary: `caller-cancelled${cause}`,
+        outcome: 'abandoned',
+      })
+      this.persist()
+      return {
+        outcome: 'cleared',
+        taskId,
+        archivedAt: resolvedAt,
+        team: record.team,
+        ...(record.contextId !== undefined ? { contextId: record.contextId } : {}),
+      }
+    }
+    const settled = this.archived.find(entry => entry.taskId === taskId)
+    if (settled === undefined) return { outcome: 'unknown', taskId }
+    return { outcome: 'already-terminal', taskId, archivedAt: settled.resolvedAt }
+  }
+
+  /**
    * Correlate one message against the ledger: a receipt (message starting
    * `[A2A receipt] task <id> …`) settles its task into the archive, keeping
    * the outcome summary; a repeat or late receipt refreshes that archived
@@ -286,11 +343,11 @@ export class TaskLedger {
     // rewrite the abandonment outcome — the caller stopped waiting by choice.
     // Record that the target did answer later; keep the decision verbatim and
     // pin the projected verdict to 'abandoned'.
-    const abandoned = settled.summary?.startsWith('caller-abandoned') ?? false
+    const callerEnded = CALLER_ENDED_PREFIX.test(settled.summary ?? '')
     this.archived = [
       {
         ...settled,
-        ...(abandoned
+        ...(callerEnded
           ? { lateReceiptAt: this.now(), outcome: 'abandoned' as const }
           : {
               resolvedAt: this.now(),

@@ -1750,6 +1750,40 @@ ${message}`
     }), 'a2a: task abandon route')
   })
 
+  whenWebServerSettled((webServer) => {
+    // Cooperative cancellation (work-order P1b): end the owed row AND, when
+    // it pointed at a live local target, steer a stop notice so a running
+    // turn wraps up instead of burning budget on an orphaned task. Standard
+    // control guard; total outcome vocabulary like the abandon sibling.
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/__dsh_a2a/tasks/cancel',
+      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+        readJsonBody(req, res, (body) => {
+          const fields = body as Record<string, unknown>
+          const taskId = typeof fields.task_id === 'string' ? fields.task_id : ''
+          const reason = typeof fields.reason === 'string' ? fields.reason : undefined
+          const result = taskLedger.cancel(taskId, reason)
+          let steered = false
+          if (result.outcome === 'cleared' && result.team !== undefined) {
+            const live = resolveAgentForTeam(result.team)
+            if (live !== undefined) {
+              try {
+                steerRelay(live, `[A2A cancel] (task ${taskId}) the caller cancelled this task${reason ? `: ${reason}` : ''}. Stop any work tied to it and acknowledge via [A2A receipt] task ${taskId} cancelled.`)
+                steered = true
+              } catch {
+                // Bookkeeping already settled; steering is best-effort only.
+              }
+            }
+          }
+          const payload = JSON.stringify({ ...result, steered })
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+          res.end(payload)
+        })
+      }),
+    }), 'a2a: task cancel route')
+  })
+
   /**
    * Settle one card-fetch outcome into the peer store and the plain card:
    * the fetch is itself the reachability check — a miss degrades the peer, a
