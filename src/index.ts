@@ -353,6 +353,26 @@ export function apply(ctx: Context, config: Config): void {
    * @param res - the response for the malformed-body rejection.
    * @param use - receives the parsed body.
    */
+  // Wire code for boundary-refused corrupted text. -32004 is intentionally
+  // left as a reservation gap for the client-abort telemetry family seen in
+  // the wild; this lands at -32005 (cluster-C error-code registry).
+  const WIRE_ERROR_TEXT_CORRUPTED = -32005
+
+  /**
+   * Boundary guard for undecodable text (consumed by the readJsonBody
+   * guard): U+FFFD is produced by a lossy decoder upstream of us — the bytes
+   * arrived already destroyed, so storing them would only immortalize
+   * garbage names and excerpts.
+   */
+  function anyReplacementChar(value: unknown): boolean {
+    if (typeof value === 'string') return value.includes('\uFFFD')
+    if (Array.isArray(value)) return value.some(entry => anyReplacementChar(entry))
+    if (value !== null && typeof value === 'object') {
+      return Object.values(value).some(entry => anyReplacementChar(entry))
+    }
+    return false
+  }
+
   function readJsonBody(req: IncomingMessage, res: ServerResponse, use: (body: { readonly id?: unknown; readonly name?: unknown; readonly action?: unknown }) => void): void {
     const chunks: Buffer[] = []
     let size = 0
@@ -371,6 +391,19 @@ export function apply(ctx: Context, config: Config): void {
       } catch {
         const payload = JSON.stringify({ error: 'malformed body' })
         res.writeHead(400, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+        res.end(payload)
+        return
+      }
+      // P0 garbled-text guard (panel mojibake report): U+FFFD means the
+      // sender's encoder destroyed the text BEFORE the wire. Persisting it
+      // immortalizes the loss and re-displays garbage forever — refuse at
+      // the boundary so corruption never reaches any store.
+      if (anyReplacementChar(body)) {
+        const payload = JSON.stringify({
+          error: 'text contains undecodable characters (U+FFFD) — fix the sender encoding and retry',
+          code: WIRE_ERROR_TEXT_CORRUPTED,
+        })
+        res.writeHead(422, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
         res.end(payload)
         return
       }
@@ -1237,7 +1270,7 @@ export function apply(ctx: Context, config: Config): void {
           const MOUNT = '/__dsh_a2a_canvas'
           const resolved = resolveStageMount(req.url ?? '/', MOUNT)
           if (resolved.redirectTo !== undefined) {
-            res.writeHead(301, { Location: resolved.redirectTo, 'X-A2A-Stage': 'redirect' })
+            res.writeHead(301, { Location: resolved.redirectTo, 'Cache-Control': 'no-store', 'X-A2A-Stage': 'redirect' })
             res.end()
             return
           }
@@ -1281,7 +1314,7 @@ export function apply(ctx: Context, config: Config): void {
           const MOUNT = '/__dsh_a2a_nexus'
           const resolved = resolveStageMount(req.url ?? '/', MOUNT)
           if (resolved.redirectTo !== undefined) {
-            res.writeHead(301, { Location: resolved.redirectTo })
+            res.writeHead(301, { Location: resolved.redirectTo, 'Cache-Control': 'no-store' })
             res.end()
             return
           }

@@ -46,4 +46,19 @@ describe('built package layout', () => {
       expect(declared.has(`${name}.d.ts`)).toBe(true)
     }
   })
+
+  it('serves the nexus stage shell whose hashed bundle exists with no orphans', async () => {
+    // The nexus subpackage ships as a committed dist tree (PR #18 hold, PR #25
+    // transport). This guard keeps it honest: the shell's module reference
+    // must resolve on disk, and every hashed bundle in assets/ must be the
+    // one the current shell references - a half-rebuilt tree leaves stale
+    // doubles that silently serve old code.
+    const shell = await readFile(artifact('assets/nexusDist/index.html'), 'utf8')
+    const referenced = [...shell.matchAll(/assets\/(index-[\w-]+\.js)/g)].map(m => m[1] as string)
+    expect(referenced.length).toBeGreaterThan(0)
+    const present = (await readdir(artifact('assets/nexusDist/assets')))
+      .filter(name => name.endsWith('.js'))
+    for (const name of referenced) expect(present, `missing ${name}`).toContain(name)
+    expect(present.slice().sort()).toEqual(referenced.slice().sort())
+  })
 })
