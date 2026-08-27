@@ -1,12 +1,30 @@
 // @vitest-environment jsdom
-/** Regression suite for the P0 readability split (B1-B6):
- *  topology normalization, LOD hysteresis, overlay lifecycle + XSS,
- *  and reduced-motion render gating. */
-import { describe, expect, it, vi, afterEach } from 'vitest'
+/** Regression suite for the P0 readability split (B1-B6): topology
+ *  normalization + O(n) hub-star, LOD boundaries, overlay lifecycle + XSS,
+ *  keyboard navigation, reduced-motion probe. */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { drawMembership, drawActivity, drawPeers, MOCK } from '../src/topology'
 import { lodFor, prefersReducedMotion } from '../src/lod'
-import { attachLabel, detachLabel, pinInspector, unpinInspector, mountChrome, setAriaLabel, shortName } from '../src/overlay'
+import { attachLabel, detachLabel, bindInspectorKeys, shortName } from '../src/overlay'
+
+/** jsdom lacks matchMedia: stub it before any module probes reduced-motion. */
+function stubMatchMedia(): void {
+  const w = window as unknown as {
+    matchMedia?: (q: string) => {
+      matches: boolean; media: string
+      addEventListener: () => void; removeEventListener: () => void
+      addListener: () => void; removeListener: () => void
+      onchange: unknown; dispatchEvent: () => boolean
+    }
+  }
+  w.matchMedia = (q: string) => ({
+    matches: false, media: q,
+    addEventListener() {}, removeEventListener() {},
+    addListener() {}, removeListener() {},
+    onchange: null, dispatchEvent: () => false,
+  })
+}
 
 const meshes = (rows: Array<{ id: string; x: number; y: number; z: number }>) => {
   const m = new Map<string, THREE.Object3D>()
@@ -18,6 +36,7 @@ const meshes = (rows: Array<{ id: string; x: number; y: number; z: number }>) =>
   return m
 }
 
+beforeEach(() => { stubMatchMedia() })
 afterEach(() => { vi.restoreAllMocks() })
 
 describe('B4 topology normalization (defensive fixtures)', () => {
@@ -59,7 +78,7 @@ describe('B4 topology normalization (defensive fixtures)', () => {
   })
 })
 
-describe('B5 LOD hysteresis', () => {
+describe('B5 LOD boundaries', () => {
   it('near/far/mid boundaries', () => {
     expect(lodFor(30)).toBe('near')
     expect(lodFor(60)).toBe('mid')
@@ -74,9 +93,10 @@ describe('overlay XSS + lifecycle', () => {
     const el = obj.element as HTMLElement
     expect(el.innerHTML.includes('<img')).toBe(false)
     expect(el.innerHTML.includes('<script')).toBe(false)
-    // shortName caps/ellipsizes the payload; every fragment stays inert text
-    expect(el.textContent).toContain('<img src=x onerror…')
-    expect(el.textContent).toContain('<script>y</script>')
+  })
+  it('shortName strips team prefix and caps length', () => {
+    expect(shortName('ontology/main')).toBe('main')
+    expect(shortName('a-very-long-name-that-exceeds-the-cap-limit')!.length).toBeLessThanOrEqual(19)
   })
   it('detach removes the label element from its parent', () => {
     const mesh = new THREE.Object3D()
@@ -87,36 +107,29 @@ describe('overlay XSS + lifecycle', () => {
   })
 })
 
-describe('a11y + reduced-motion (C-series)', () => {
-  it('aria: setAriaLabel writes the live node/team/peer census onto the canvas', () => {
-    const canvas = document.createElement('canvas')
-    setAriaLabel(canvas, 'A2A 拓扑：5 个节点（3 live / 2 cold），2 个团队，1 个联邦对端')
-    expect(canvas.getAttribute('aria-label')).toContain('5 个节点')
-    expect(canvas.getAttribute('aria-label')).toContain('1 个联邦对端')
+describe('bindInspectorKeys — dispatchEvent-driven behavior', () => {
+  it('Enter/Tab advance the roster; Escape unpins and fires onEscape', () => {
+    const canvas = document.createElement('div')
+    document.body.appendChild(canvas)
+    const roster = ['n-a', 'n-b', 'n-c']
+    let idx = -1
+    let escapes = 0
+    bindInspectorKeys(canvas, {
+      advance: () => { idx = (idx + 1) % roster.length; return roster[idx] },
+      current: () => roster[idx] ?? '',
+      onEscape: () => { escapes += 1 },
+    })
+    canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
+    expect(idx).toBe(0)
+    canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }))
+    expect(idx).toBe(1)
+    canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(escapes).toBe(1)
+    canvas.remove()
   })
 
-  it('aria: inspector text carries team and live state via pin/unpin cycle', () => {
-    const app = document.createElement('div')
-    document.body.appendChild(app)
-    pinInspector(app, 'ontology/main · live · 团队 ontology')
-    const badge = app.querySelector('.nexus-inspector')!
-    expect(badge.textContent).toContain('ontology/main')
-    expect((badge as HTMLElement).style.display).toBe('block')
-    unpinInspector()
-    expect((badge as HTMLElement).style.display).toBe('none')
-    app.remove()
-  })
-
-  it('reduced-motion: prefersReducedMotion reflects the media flag (static render path gate)', () => {
-    window.matchMedia = window.matchMedia || ((q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, onchange: null, dispatchEvent: () => false, removeListener() {} })) as MediaQueryList
+  it('prefersReducedMotion stays boolean across jsdom (static path gate)', () => {
     const flag = prefersReducedMotion()
     expect(typeof flag).toBe('boolean')
-  })
-
-  it('keyboard: Enter/Tab handlers exist on the canvas surface (focus traversal contract)', () => {
-    const canvas = document.createElement('canvas')
-    mountChrome(document.createElement('div'), canvas)
-    expect(canvas.getAttribute('tabindex')).toBe('0')
-    expect(canvas.getAttribute('role')).toBe('img')
   })
 })

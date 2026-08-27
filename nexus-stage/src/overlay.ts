@@ -11,8 +11,6 @@ const NAME_CAP = 18
 export function shortName(raw: string): string {
   const base = raw.includes('/') ? raw.slice(raw.lastIndexOf('/') + 1) : raw
   if (base.length <= NAME_CAP) return base
-  const cut = base.lastIndexOf('-', NAME_CAP)
-  if (cut > 4) return base.slice(0, cut) + '<br/>' + base.slice(cut + 1)
   return base.slice(0, NAME_CAP) + '…'
 }
 
@@ -102,4 +100,31 @@ export function mountChrome(app: HTMLElement, canvas: HTMLCanvasElement): void {
 
 export function setAriaLabel(canvas: HTMLCanvasElement, label: string): void {
   canvas.setAttribute('aria-label', label)
+}
+
+/** Keyboard surface for the readability contract: Enter/Tab advance the
+ *  roster, Esc unpins. Bound here so tests can drive dispatchEvent and the
+ *  production path stays identical. Handlers are pure wiring — the caller
+ *  supplies the roster navigation and inspector rendering callbacks. */
+export function bindInspectorKeys(
+  canvas: HTMLElement,
+  handlers: {
+    advance: () => string | undefined
+    current: () => string
+    onEscape: () => void
+  },
+): void {
+  canvas.setAttribute('tabindex', '0')
+  canvas.addEventListener('keydown', (ev: KeyboardEvent) => {
+    if (ev.key === 'Enter' || ev.key === 'Tab') {
+      ev.preventDefault()
+      const next = handlers.advance()
+      if (next !== undefined) pinInspector(canvas.ownerDocument?.body ?? document.body, handlers.current())
+      return
+    }
+    if (ev.key === 'Escape') {
+      handlers.onEscape()
+      unpinInspector()
+    }
+  })
 }
