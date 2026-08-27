@@ -21,6 +21,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { parseReceipt, RECEIPT_OUTCOMES, type ReceiptOutcomeV2 } from './receipt.ts'
 
 /** Hard cap on the owed book (pending + dead-lettered rows, most recent first). */
 export const TASK_CAP = 64
@@ -41,12 +42,10 @@ export const SUMMARY_CAP = 200
 export const TASK_STALE_TTL_MS = 24 * 60 * 60_000
 
 /**
- * Matches the receipt contract: a message starting with the literal receipt
- * header followed by the task id and the outcome summary. The header is the
- * network's fixed template (case-sensitive), so anything else is an ordinary
- * routed message.
+ * The receipt correlation template now lives in `receipt.ts` (shared codec
+ * for header + v2 envelope line). This ledger consumes `parseReceipt` so
+ * human summaries and machine projections can never drift apart again.
  */
-const RECEIPT_PATTERN = /^\[A2A receipt\] task (\S+)\s*([\s\S]*)$/
 
 /** Lifecycle of a tracked outbound task inside the owed book. */
 export type TaskStatus = 'pending' | 'dead'
@@ -73,6 +72,10 @@ export interface ArchivedRecord {
   readonly contextId?: string
   readonly resolvedAt: number
   readonly summary?: string
+  /** Controlled vocabulary verdict when the settling receipt carried a v2 envelope; forced 'abandoned' for caller-abandoned rows. */
+  readonly outcome?: ReceiptOutcomeV2 | 'abandoned'
+  /** Remote-turn wall-clock cost, when the settling envelope carried it. */
+  readonly elapsedMs?: number
   /**
    * When a receipt arrived for an explicitly abandoned row ({@link TaskLedger.abandon}).
    * Orphan isolation: the abandonment outcome stays verbatim; the late answer is
@@ -231,6 +234,7 @@ export class TaskLedger {
         ...(record.contextId !== undefined ? { contextId: record.contextId } : {}),
         resolvedAt,
         summary: `caller-abandoned${cause}`,
+        outcome: 'abandoned',
       })
       this.persist()
       return { outcome: 'cleared', taskId, archivedAt: resolvedAt }
@@ -250,10 +254,14 @@ export class TaskLedger {
    * @returns whether the message correlated a tracked task.
    */
   resolveFromMessage(message: string): boolean {
-    const match = RECEIPT_PATTERN.exec(message)
-    if (match === null) return false
-    const taskId = match[1] ?? ''
-    const summary = (match[2] ?? '').trim().slice(0, SUMMARY_CAP)
+    const parsed = parseReceipt(message)
+    if (parsed === null) return false
+    const taskId = parsed.taskId
+    const summary = parsed.summary.trim().slice(0, SUMMARY_CAP)
+    // Controlled vocabulary only: a foreign outcome string never lands here.
+    const envelopeOutcome =
+      parsed.envelope?.outcome !== undefined ? (parsed.envelope.outcome as ReceiptOutcomeV2) : undefined
+    const elapsedMs = parsed.envelope?.elapsedMs
     this.sweep(this.now())
     const record = this.tasks.find(entry => entry.taskId === taskId)
     if (record !== undefined) {
@@ -266,6 +274,8 @@ export class TaskLedger {
         ...(record.contextId !== undefined ? { contextId: record.contextId } : {}),
         resolvedAt: this.now(),
         ...(summary !== '' ? { summary } : {}),
+        ...(envelopeOutcome !== undefined ? { outcome: envelopeOutcome } : {}),
+        ...(elapsedMs !== undefined ? { elapsedMs } : {}),
       })
       this.persist()
       return true
@@ -274,14 +284,19 @@ export class TaskLedger {
     if (settled === undefined) return false
     // Orphan isolation: a receipt for an explicitly abandoned row must not
     // rewrite the abandonment outcome — the caller stopped waiting by choice.
-    // Record that the target did answer later; keep the decision verbatim.
+    // Record that the target did answer later; keep the decision verbatim and
+    // pin the projected verdict to 'abandoned'.
     const abandoned = settled.summary?.startsWith('caller-abandoned') ?? false
     this.archived = [
       {
         ...settled,
         ...(abandoned
-          ? { lateReceiptAt: this.now() }
-          : { resolvedAt: this.now(), ...(summary !== '' ? { summary } : {}) }),
+          ? { lateReceiptAt: this.now(), outcome: 'abandoned' as const }
+          : {
+              resolvedAt: this.now(),
+              ...(summary !== '' ? { summary } : {}),
+              ...(envelopeOutcome !== undefined ? { outcome: envelopeOutcome } : {}),
+            }),
       },
       ...this.archived.filter(entry => entry.taskId !== taskId),
     ]
@@ -331,6 +346,7 @@ export class TaskLedger {
               ...(typeof entry.contextId === 'string' && entry.contextId !== '' ? { contextId: entry.contextId } : {}),
               resolvedAt: typeof entry.resolvedAt === 'number' && Number.isFinite(entry.resolvedAt) ? entry.resolvedAt : this.now(),
               ...(typeof entry.summary === 'string' && entry.summary !== '' ? { summary: entry.summary } : {}),
+              ...(typeof entry.outcome === 'string' && (RECEIPT_OUTCOMES as readonly string[]).includes(entry.outcome) ? { outcome: entry.outcome as ReceiptOutcomeV2 } : {}),
               ...(typeof entry.lateReceiptAt === 'number' && Number.isFinite(entry.lateReceiptAt) ? { lateReceiptAt: entry.lateReceiptAt } : {}),
             })
             continue
@@ -362,6 +378,7 @@ export class TaskLedger {
             ...(typeof entry.contextId === 'string' && entry.contextId !== '' ? { contextId: entry.contextId } : {}),
             resolvedAt: typeof entry.resolvedAt === 'number' && Number.isFinite(entry.resolvedAt) ? entry.resolvedAt : this.now(),
             ...(typeof entry.summary === 'string' && entry.summary !== '' ? { summary: entry.summary } : {}),
+            ...(typeof entry.outcome === 'string' && (RECEIPT_OUTCOMES as readonly string[]).includes(entry.outcome) ? { outcome: entry.outcome as ReceiptOutcomeV2 } : {}),
             ...(typeof entry.lateReceiptAt === 'number' && Number.isFinite(entry.lateReceiptAt) ? { lateReceiptAt: entry.lateReceiptAt } : {}),
           })
         }

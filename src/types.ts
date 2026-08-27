@@ -100,6 +100,13 @@ export interface A2aRouteError {
   readonly ok: false
   /** Peer or transport failure text. */
   readonly error: string
+  /**
+   * Wall-clock ms from dispatch to abort/failure. Present on transport-level
+   * failures only — pins the wait-window measurement instead of a feeling.
+   */
+  readonly abortElapsedMs?: number
+  /** True when THIS client's own reply-wait budget fired (vs caller signal / peer refusal). */
+  readonly ownBudgetExhausted?: boolean
   /** A2A JSON-RPC-style code when the peer supplied one. */
   readonly code?: number
   readonly task_id?: string

@@ -24,6 +24,7 @@ import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, SUMMARY_CAP } from './task-ledger.ts'
+import { formatReceipt } from './receipt.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
@@ -1457,8 +1458,10 @@ export function apply(ctx: Context, config: Config): void {
     if (deliveredText.startsWith('[A2A receipt] task ')) return
     registerFinalWaiter(target, (finalText) => {
       if (!taskLedger.isPending(taskId)) return
-      const summary = finalText.trim().replace(/\s+/g, ' ').slice(0, SUMMARY_CAP) || 'done'
-      const receipt = `[A2A receipt] task ${taskId} ${summary} (auto)`
+      const summary = `${finalText.trim().replace(/\s+/g, ' ').slice(0, SUMMARY_CAP) || 'done'} (auto)`
+      // v2 envelope projection: header stays byte-compatible for every
+      // legacy correlator; the machine JSON rides exactly one following line.
+      const receipt = formatReceipt(taskId, summary, { outcome: 'completed', idempotencyKey: taskId })
       void dispatchLocalCandidate(callerTeam, receipt, session, undefined, new AbortController().signal, true)
         .catch((error) => {
           // N2 (observability): a receipt that cannot reach the caller still
