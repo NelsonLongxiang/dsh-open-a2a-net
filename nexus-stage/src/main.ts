@@ -1,6 +1,8 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { disposeGeometries } from './dispose'
 import { createFaultReporter } from './fault'
+import { seatFor } from './seat'
 import { FRAME_HUES, S } from './tokens'
 
 // ─── DOM shell ──
@@ -73,6 +75,11 @@ const peerGroup = new THREE.Group()
 const lineGroup = new THREE.Group()
 scene.add(teamGroup, nodeGroup, peerGroup, lineGroup)
 
+// ─── Edge material ──
+// One shared material for every membership edge: the visibility contract is
+// constant, so allocation happens once instead of once per poll cycle.
+const edgesMat = new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.6 })
+
 // ─── Types ──
 interface SessionRow {
   id: string; label: string; team: string; name?: string
@@ -106,11 +113,6 @@ async function fetchLayout(): Promise<any | null> {
 const meshesById = new Map<string, THREE.Mesh>()
 /** Seat index for edge drawing: sid → the mesh currently sitting there. */
 const sessionMeshes = new Map<string, THREE.Mesh>()
-
-function seatAt(i: number): THREE.Vector3 {
-  const angle = Math.random() * Math.PI * 2; const dist = 12 + Math.random() * 18
-  return new THREE.Vector3(Math.cos(angle) * dist, (Math.random() - 0.5) * 2, Math.sin(angle) * dist)
-}
 
 async function cycle(): Promise<void> {
   let res: Response
@@ -146,26 +148,27 @@ async function cycle(): Promise<void> {
       const mesh = makeNode(color, isLive ? 0.9 : 0.5)
       mesh.userData = { label: sessions[i]!.name ?? sessions[i]!.label, sid }
       const saved = layout?.nodes?.[sid]
-      // Layout v1 rows are numeric pairs; a malformed entry must fall back to
-      // a random seat instead of NaN-positioning an invisible node (reviewer
-      // advisory on PR #28).
+      // Saved layout wins; otherwise the seat is a pure hash of the session
+      // id, so reloads reproduce the same star map instead of reshuffling.
+      // Malformed layout rows (non-numeric) fall through to the hash seat.
       if (saved !== undefined && typeof saved.x === 'number' && typeof saved.y === 'number') {
         mesh.position.set(saved.x, 0, saved.y)
       } else {
-        mesh.position.copy(seatAt(i))
+        const p = seatFor(sid)
+        mesh.position.set(p.x, p.y, p.z)
       }
       nodeGroup.add(mesh)
       sessionMeshes.set(sid, mesh)
     }
   }
 
-  // Draw membership edges between nodes sharing a canvas team. The opacity
-  // is empirical: 0.15 cyan on near-black measured invisible against the fog
-  // even while technically rendering (external UX review P0-3), so the view
-  // drew six silent non-lines over today's demo team. One shared material is
-  // enough — every edge answers to the same visibility contract.
+  // Rebuild membership edges between nodes sharing a canvas team. The
+  // opacity is empirical: 0.15 cyan on near-black measured invisible against
+  // the fog (external UX review P0-3). The material is the module singleton;
+  // each rebuild releases the previous batch's geometries before clearing -
+  // without that, every 5s poll leaks GPU buffers for the page's lifetime.
+  disposeGeometries(lineGroup.children)
   lineGroup.clear()
-  const edgesMat = new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.6 })
   for (const team of teams) {
     for (let mi = 0; mi < team.members.length; mi++) {
       for (let mj = mi + 1; mj < team.members.length; mj++) {
