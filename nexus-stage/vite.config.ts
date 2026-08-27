@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import { fileURLToPath, URL } from 'node:url'
 
-const distDir = fileURLToPath(new URL('../../assets/nexusDist', import.meta.url))
+const distDir = fileURLToPath(new URL('../assets/nexusDist', import.meta.url))
 
 export default defineConfig({
   plugins: [],
