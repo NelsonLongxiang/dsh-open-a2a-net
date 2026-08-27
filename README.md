@@ -125,6 +125,16 @@ The `/__dsh_a2a/join` and `/__dsh_a2a/leave` control routes require the configur
 (constant-time compare) when one is set; with an empty key they trust only same-origin browsers and loopback
 callers. Set an `apiKey` before exposing the listener beyond loopback.
 
+## Stages (visualization surfaces)
+
+Two full-page stages mount beside the model tools: `/__dsh_a2a_nexus` (the
+Three.js topology viewer) and `/__dsh_a2a_canvas`. A bare mount path
+redirects (301) onto its trailing-slash form, so both spellings render and
+the shell's relative assets always resolve inside the served tree. For
+offline development, `nexus-stage/scripts/mockhost.py [port]` serves the
+built stage with canned state; open `/?fault=500` on it to exercise the
+on-page fault badge.
+
 ## Collaboration SOP (network practice, v0.1)
 
 Distilled from the 0.1.x–0.5.x delivery cycles by the network's research node; adopted by the maintainer.

@@ -1235,7 +1235,7 @@ export function apply(ctx: Context, config: Config): void {
           const MOUNT = '/__dsh_a2a_canvas'
           const resolved = resolveStageMount(req.url ?? '/', MOUNT)
           if (resolved.redirectTo !== undefined) {
-            res.writeHead(301, { Location: resolved.redirectTo, 'X-A2A-Stage': 'redirect' })
+            res.writeHead(301, { Location: resolved.redirectTo, 'Cache-Control': 'no-store', 'X-A2A-Stage': 'redirect' })
             res.end()
             return
           }
@@ -1279,7 +1279,7 @@ export function apply(ctx: Context, config: Config): void {
           const MOUNT = '/__dsh_a2a_nexus'
           const resolved = resolveStageMount(req.url ?? '/', MOUNT)
           if (resolved.redirectTo !== undefined) {
-            res.writeHead(301, { Location: resolved.redirectTo })
+            res.writeHead(301, { Location: resolved.redirectTo, 'Cache-Control': 'no-store' })
             res.end()
             return
           }

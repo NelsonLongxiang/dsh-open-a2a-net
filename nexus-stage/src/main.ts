@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { createFaultReporter } from './fault'
 import { FRAME_HUES, S } from './tokens'
 
 // ─── DOM shell ──
@@ -11,10 +12,12 @@ app.appendChild(renderer.domElement)
 
 // ─── Fault surface ──
 // Fetch failures must never masquerade as an empty fleet. The stage is opened
-// directly by humans who cannot see devtools logs in passing, so the newest
-// fetch fault rides a fixed badge plus a throttled console.error. A healthy
-// response hides the badge — visible silence then genuinely means zero rows,
-// and "empty" stays distinguishable from "unreachable".
+// directly by humans who cannot watch devtools, so the newest fault rides a
+// fixed badge (always current) while console.error stays throttled to one
+// line per window (the N2 breadcrumb cadence). A healthy response hides the
+// badge — visible silence then genuinely means zero rows, and "empty" stays
+// distinguishable from "unreachable". The lifecycle lives in ./fault so the
+// unit tests can pin it without a DOM.
 const faultBadge = document.createElement('div')
 faultBadge.style.cssText =
   'position:fixed;top:10px;right:10px;max-width:48ch;padding:6px 10px;' +
@@ -22,22 +25,18 @@ faultBadge.style.cssText =
   'font:12px/1.5 "JetBrains Mono",monospace;border-radius:4px;' +
   'display:none;z-index:9;pointer-events:none'
 app.appendChild(faultBadge)
-let lastFaultLoggedAt = 0
-function fault(message: string): void {
-  const now = Date.now()
-  if (now - lastFaultLoggedAt > 60_000) {
-    console.error(`[nexus] ${message}`)
-    lastFaultLoggedAt = now
-  }
-  faultBadge.textContent = message
-  faultBadge.style.display = 'block'
-}
-function clearFault(): void {
-  if (faultBadge.style.display !== 'none') {
-    faultBadge.style.display = 'none'
-    lastFaultLoggedAt = 0
-  }
-}
+const { fault, clear: clearFault } = createFaultReporter(
+  {
+    show(message) {
+      faultBadge.textContent = message
+      faultBadge.style.display = 'block'
+    },
+    hide() {
+      faultBadge.style.display = 'none'
+    },
+  },
+  message => console.error(message),
+)
 
 // ─── Scene, camera, controls ──
 const scene = new THREE.Scene()
@@ -147,7 +146,14 @@ async function cycle(): Promise<void> {
       const mesh = makeNode(color, isLive ? 0.9 : 0.5)
       mesh.userData = { label: sessions[i]!.name ?? sessions[i]!.label, sid }
       const saved = layout?.nodes?.[sid]
-      mesh.position.copy(saved ? new THREE.Vector3(saved.x, 0, saved.y) : seatAt(i))
+      // Layout v1 rows are numeric pairs; a malformed entry must fall back to
+      // a random seat instead of NaN-positioning an invisible node (reviewer
+      // advisory on PR #28).
+      if (saved !== undefined && typeof saved.x === 'number' && typeof saved.y === 'number') {
+        mesh.position.set(saved.x, 0, saved.y)
+      } else {
+        mesh.position.copy(seatAt(i))
+      }
       nodeGroup.add(mesh)
       sessionMeshes.set(sid, mesh)
     }
