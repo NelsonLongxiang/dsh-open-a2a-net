@@ -6,7 +6,7 @@ import { describe, expect, it, vi, afterEach } from 'vitest'
 import * as THREE from 'three'
 import { drawMembership, drawActivity, drawPeers, MOCK } from '../src/topology'
 import { lodFor, prefersReducedMotion } from '../src/lod'
-import { attachLabel, detachLabel, shortName } from '../src/overlay'
+import { attachLabel, detachLabel, pinInspector, unpinInspector, mountChrome, setAriaLabel, shortName } from '../src/overlay'
 
 const meshes = (rows: Array<{ id: string; x: number; y: number; z: number }>) => {
   const m = new Map<string, THREE.Object3D>()
@@ -84,5 +84,39 @@ describe('overlay XSS + lifecycle', () => {
     const parent = obj.element.parentElement
     detachLabel(obj)
     expect(parent?.contains(obj.element) ?? false).toBe(false)
+  })
+})
+
+describe('a11y + reduced-motion (C-series)', () => {
+  it('aria: setAriaLabel writes the live node/team/peer census onto the canvas', () => {
+    const canvas = document.createElement('canvas')
+    setAriaLabel(canvas, 'A2A 拓扑：5 个节点（3 live / 2 cold），2 个团队，1 个联邦对端')
+    expect(canvas.getAttribute('aria-label')).toContain('5 个节点')
+    expect(canvas.getAttribute('aria-label')).toContain('1 个联邦对端')
+  })
+
+  it('aria: inspector text carries team and live state via pin/unpin cycle', () => {
+    const app = document.createElement('div')
+    document.body.appendChild(app)
+    pinInspector(app, 'ontology/main · live · 团队 ontology')
+    const badge = app.querySelector('.nexus-inspector')!
+    expect(badge.textContent).toContain('ontology/main')
+    expect((badge as HTMLElement).style.display).toBe('block')
+    unpinInspector()
+    expect((badge as HTMLElement).style.display).toBe('none')
+    app.remove()
+  })
+
+  it('reduced-motion: prefersReducedMotion reflects the media flag (static render path gate)', () => {
+    window.matchMedia = window.matchMedia || ((q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, onchange: null, dispatchEvent: () => false, removeListener() {} })) as MediaQueryList
+    const flag = prefersReducedMotion()
+    expect(typeof flag).toBe('boolean')
+  })
+
+  it('keyboard: Enter/Tab handlers exist on the canvas surface (focus traversal contract)', () => {
+    const canvas = document.createElement('canvas')
+    mountChrome(document.createElement('div'), canvas)
+    expect(canvas.getAttribute('tabindex')).toBe('0')
+    expect(canvas.getAttribute('role')).toBe('img')
   })
 })

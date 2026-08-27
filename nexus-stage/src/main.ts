@@ -128,6 +128,9 @@ async function fetchLayout(): Promise<any | null> {
 // ─── Boot / poll / reconcile (pairwise cleanup: mesh+label same lifetime) ──
 const meshesById = new Map<string, THREE.Mesh>()
 const labelByNode = new Map<string, CSS2DObject>()
+/** Normalized session rows from the latest real cycle (never MOCK) — the
+ *  interaction handlers read live/name/team from here, not from fixtures. */
+const sessionById = new Map<string, import('./topology').SessionRow>()
 const sessionTeam = new Map<string, string>()
 
 async function cycle(): Promise<void> {
@@ -187,6 +190,8 @@ async function cycle(): Promise<void> {
     }
     if (!labelByNode.has(sid)) labelByNode.set(sid, attachLabel(mesh, s.name ?? s.label, isLive, s.team))
     sessionTeam.set(sid, s.team)
+    // Real normalized row: interaction handlers read this, never MOCK.
+    sessionById.set(sid, s)
   }
 
   // Membership edges: hub-star (team centroid + spokes) instead of the O(n²)
@@ -226,9 +231,9 @@ renderer.domElement.addEventListener('pointerdown', (ev) => {
   if (hit) {
     const ud = hit.object.userData as { label?: string; sid?: string }
     pinned = ud.sid
-    const sid = ud.sid ?? ''
-    const live = sessionTeam.has(sid) || ud.sid !== undefined ? 'live' : 'cold'
-    pinInspector(app, (ud.label ?? '') + ' · ' + live + ' · 团队 ' + (sessionTeam.get(sid) ?? '?'))
+    const row = ud.sid !== undefined ? sessionById.get(ud.sid) : undefined
+    const live = row ? (row.live !== false ? 'live' : 'cold') : '?'
+    pinInspector(app, (ud.label ?? '') + ' · ' + live + ' · 团队 ' + (row?.team ?? sessionTeam.get(ud.sid ?? '') ?? '?'))
   } else { pinned = undefined; unpinInspector() }
 })
 
@@ -240,8 +245,10 @@ renderer.domElement.addEventListener('keydown', (ev) => {
     const next = ids[(idx + 1) % ids.length]
     if (next === undefined) return
     pinned = next
+    const row = sessionById.get(next)
     const team = sessionTeam.get(next) ?? '?'
-    pinInspector(app, next + ' · ' + (team !== '?' ? 'live' : '?') + ' · 团队 ' + team)
+    const liveTxt = row ? (row.live !== false ? 'live' : 'cold') : '?'
+    pinInspector(app, next + ' · ' + liveTxt + ' · 团队 ' + team)
   }
 })
 
@@ -262,8 +269,9 @@ function tick(): void {
 }
 if (reducedMotion) {
   renderOnce()
-  renderer.domElement.addEventListener('change', () => { controls.update(); renderOnce() })
-  // Reduced-motion still needs fresh state; poll slower and re-render each time.
+  // Static mode: re-render only on real events — controls interaction or a
+  // completed state cycle. Never a self-drifting rAF loop.
+  controls.addEventListener('change', () => { controls.update(); renderOnce() })
   const wake = setInterval(() => { void cycle().then(renderOnce) }, 5000)
   const offWake = () => clearInterval(wake)
   window.addEventListener('pagehide', offWake, { once: true })

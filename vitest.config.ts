@@ -12,6 +12,9 @@ export default defineConfig({
       },
     },
     exclude: [
+      // nexus-stage carries its own suite, consumed by the root gate via
+      // `npm --prefix nexus-stage run test` — never double-scan it here.
+      '**/nexus-stage/**',
       // Worktrees live under the main checkout's .claude/ and carry full
       // copies of this suite (often without rebuilt lib/ artifacts), which
       // turned `pnpm test` into hundreds of ghost failures on master.
