@@ -1713,6 +1713,30 @@ ${message}`
     }), 'a2a: direct route endpoint')
   })
 
+  whenWebServerSettled((webServer) => {
+    // Task-ledger control: explicit caller-side abandonment of one owed
+    // async task — the orchestrator's give-up path (work-order P1a).
+    // Deliberately OUTSIDE the sessionNodes gate: every async route tracks
+    // its task whether or not this node exposes joinable sessions. Rides the
+    // standard control guard; structured outcome vocabulary
+    // {cleared|already-terminal|unknown}; idempotent; never throws.
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/__dsh_a2a/tasks/abandon',
+      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+        readJsonBody(req, res, (body) => {
+          const fields = body as Record<string, unknown>
+          const taskId = typeof fields.task_id === 'string' ? fields.task_id : ''
+          const reason = typeof fields.reason === 'string' ? fields.reason : undefined
+          const result = taskLedger.abandon(taskId, reason)
+          const payload = JSON.stringify(result)
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+          res.end(payload)
+        })
+      }),
+    }), 'a2a: task abandon route')
+  })
+
   /**
    * Settle one card-fetch outcome into the peer store and the plain card:
    * the fetch is itself the reachability check — a miss degrades the peer, a
