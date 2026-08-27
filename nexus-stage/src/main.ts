@@ -5,6 +5,16 @@ import { disposeGeometries } from './dispose'
 import { createFaultReporter } from './fault'
 import { seatFor } from './seat'
 import { C, S } from './tokens'
+import { lodFor, prefersReducedMotion } from './lod'
+import type { Lod } from './lod'
+import {
+  MOCK, drawMembership, drawActivity, drawPeers,
+  type StateBody,
+} from './topology'
+import {
+  attachLabel, detachLabel, mountChrome, pinInspector, unpinInspector, setAriaLabel,
+} from './overlay'
+import './overlay.css'
 
 // ─── DOM shell ──
 const app = document.getElementById('app')!
@@ -50,7 +60,7 @@ labelRenderer.domElement.style.pointerEvents = 'none'
 app.appendChild(labelRenderer.domElement)
 
 // reduced-motion: static equivalence (no per-frame drift; render on demand)
-const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+const reducedMotion = prefersReducedMotion()
 
 // ─── Scene, camera, controls ──
 const scene = new THREE.Scene()
@@ -92,71 +102,20 @@ scene.add(teamGroup, nodeGroup, peerGroup, lineGroup)
 // constant, so allocation happens once instead of once per poll cycle.
 const edgesMat = new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.6 })
 
-// ─── Types ──
-interface SessionRow { id: string; label: string; team: string; name?: string; joined: boolean; live?: boolean }
-interface TeamMember { id: string; team: string; joined: boolean; live: boolean }
-interface CanvasTeam { name: string; team: string; members: TeamMember[] }
-interface StateBody { sessions?: SessionRow[]; canvas?: { teams: CanvasTeam[] }; peers?: Array<{ url: string; score?: number }> }
+// ─── Types re-exported from topology ──
 
-// ─── LOD: far = shapes only; mid = +labels; near = +inspector detail ──
-type Lod = 'far' | 'mid' | 'near'
+// ─── LOD state (hysteresis: ±6 world units at each boundary, so a slow
+//  orbit drift at ~45/90 does not flip label visibility every frame) ──
 let lod: Lod = 'mid'
-function lodFor(camDist: number): Lod {
-  if (camDist > 90) return 'far'
-  if (camDist > 45) return 'mid'
-  return 'near'
+const LOD_HYSTERESIS = 6
+function lodWithHysteresis(camDist: number): Lod {
+  if (lod === 'far') return camDist < 90 - LOD_HYSTERESIS ? lodFor(camDist) : 'far'
+  if (lod === 'near') return camDist > 45 + LOD_HYSTERESIS ? lodFor(camDist) : 'near'
+  return camDist < 45 - LOD_HYSTERESIS ? 'near'
+    : camDist > 90 + LOD_HYSTERESIS ? 'far' : 'mid'
 }
 
-// ─── Labels (CSS2D): short name + live/cold + team; two-line ellipsis cap ──
-const labelByNode = new Map<string, CSS2DObject>()
-const NAME_CAP = 18
-
-function shortName(raw: string): string {
-  const base = raw.includes('/') ? raw.slice(raw.lastIndexOf('/') + 1) : raw
-  if (base.length <= NAME_CAP) return base
-  const cut = base.lastIndexOf('-', NAME_CAP)
-  if (cut > 4) return base.slice(0, cut) + '<br/>' + base.slice(cut + 1)
-  return base.slice(0, NAME_CAP) + '…'
-}
-
-function attachLabel(id: string, mesh: THREE.Object3D, name: string, live: boolean, team: string): void {
-  const el = document.createElement('div')
-  el.className = 'nexus-label ' + (live ? 'live' : 'cold')
-  el.innerHTML = '<span class=\'nm\'>' + shortName(name) + '</span><span class=\'sub\'>' + (live ? 'live' : 'cold') + ' · ' + team + '</span>'
-  const obj = new CSS2DObject(el)
-  obj.position.set(0, 1.6, 0)
-  mesh.add(obj)
-  labelByNode.set(id, obj)
-}
-
-function detachLabel(id: string): void {
-  const obj = labelByNode.get(id)
-  if (obj) { obj.removeFromParent(); labelByNode.delete(id) }
-}
-
-// ─── Mock hard-acceptance dataset: 5 nodes / 2 teams / 1 peer ──
-// Concrete (non-optional) shapes so consumers never need undefined-narrowing.
-const MOCK = {
-  sessions: [
-    { id: 's1', label: 'ontology/main', team: 'ontology', name: 'ontology-main', joined: true, live: true },
-    { id: 's2', label: 'ontology/dev', team: 'ontology', name: 'ontology-dev', joined: true, live: false },
-    { id: 's3', label: 'god/dispatch', team: 'god', name: 'god-dispatch', joined: true, live: true },
-    { id: 's4', label: 'logistics/ops', team: 'logistics', name: 'logistics-ops', joined: true, live: true },
-    { id: 's5', label: 'pocket/ui', team: 'pocket', name: 'pocket-ui', joined: true, live: false },
-  ],
-  canvas: { teams: [
-    { name: 'core', team: 'ontology', members: [
-      { id: 's1', team: 'ontology', joined: true, live: true },
-      { id: 's2', team: 'ontology', joined: true, live: false },
-      { id: 's3', team: 'god', joined: true, live: true },
-    ] },
-    { name: 'edge', team: 'logistics', members: [
-      { id: 's4', team: 'logistics', joined: true, live: true },
-      { id: 's5', team: 'pocket', joined: true, live: false },
-    ] },
-  ] },
-  peers: [{ url: 'http://192.168.3.156:13080', score: 0.9 }],
-}
+// ─── Mock toggle ──
 let useMock = false
 
 // ─── Mesh builders ──
@@ -165,74 +124,6 @@ function makeNode(color: number, r: number): THREE.Mesh {
   const m = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.7, roughness: 0.3 })
   return new THREE.Mesh(g, m)
 }
-
-// ─── Hub-star membership edges (team centroid hub + spokes; no O(n²) mesh loop) ──
-function drawMembership(teams: CanvasTeam[]): void {
-  lineGroup.clear()
-  const mat = new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.18 })
-  for (const team of teams) {
-    const members = team.members.filter(m => meshesById.has(m.id))
-    if (members.length < 2) continue
-    const centroid = new THREE.Vector3()
-    for (const m of members) centroid.add(meshesById.get(m.id)!.position)
-    centroid.divideScalar(members.length)
-    const hub = new THREE.Mesh(new THREE.OctahedronGeometry(0.35, 0), new THREE.MeshBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.5 }))
-    hub.position.copy(centroid)
-    teamGroup.add(hub)
-    for (const m of members) {
-      const g = new THREE.BufferGeometry().setFromPoints([centroid, meshesById.get(m.id)!.position.clone()])
-      lineGroup.add(new THREE.Line(g, mat.clone()))
-    }
-  }
-}
-
-// ─── inFlight activity edges (solid amber) + peer federation (dashed) ──
-function drawActivity(pairs: Array<[string, string]>): void {
-  const mat = new THREE.LineBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.65 })
-  for (const [a, b] of pairs) {
-    const am = meshesById.get(a); const bm = meshesById.get(b)
-    if (!am || !bm) continue
-    const g = new THREE.BufferGeometry().setFromPoints([am.position.clone(), bm.position.clone()])
-    lineGroup.add(new THREE.Line(g, mat.clone()))
-  }
-}
-
-function drawPeers(peers: Array<{ url: string }>): void {
-  for (const p of peers) {
-    const mesh = new THREE.Mesh(new THREE.OctahedronGeometry(1.3, 0), new THREE.MeshStandardMaterial({ color: 0x6366f1, emissive: 0x6366f1, emissiveIntensity: 0.5, transparent: true, opacity: 0.75 }))
-    mesh.position.set(-20, 14, -12)
-    mesh.userData = { label: 'Peer: ' + p.url.slice(7, 36), kind: 'peer' }
-    peerGroup.add(mesh)
-    const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, -4, 0), mesh.position.clone()])
-    const dash = new THREE.LineDashedMaterial({ color: 0x6366f1, dashSize: 1.2, gapSize: 0.8, transparent: true, opacity: 0.35 })
-    const line = new THREE.Line(g, dash)
-    line.computeLineDistances()
-    lineGroup.add(line)
-  }
-}
-
-// ─── HUD + legend + aria ──
-const hud = document.createElement('div')
-hud.className = 'nexus-hud'
-app.appendChild(hud)
-const legend = document.createElement('div')
-legend.className = 'nexus-legend'
-legend.innerHTML = '<span class=\"dot live\"></span>live&nbsp;&nbsp;<span class=\"dot cold\"></span>cold&nbsp;&nbsp;<span class=\"dashline\"></span>federation&nbsp;&nbsp;<span class=\"act\"></span>in-flight'
-app.appendChild(legend)
-renderer.domElement.setAttribute('role', 'img')
-renderer.domElement.setAttribute('tabindex', '0')
-
-let inspector: HTMLDivElement | null = null
-function pinInspector(text: string): void {
-  if (!inspector) {
-    inspector = document.createElement('div')
-    inspector.className = 'nexus-inspector'
-    app.appendChild(inspector)
-  }
-  inspector.textContent = text
-  inspector.style.display = 'block'
-}
-function unpinInspector(): void { if (inspector) inspector.style.display = 'none' }
 
 // ─── Layout persistence ──
 async function fetchLayout(): Promise<any | null> {
@@ -244,9 +135,7 @@ async function fetchLayout(): Promise<any | null> {
 
 // ─── Boot / poll / reconcile (pairwise cleanup: mesh+label same lifetime) ──
 const meshesById = new Map<string, THREE.Mesh>()
-/** Seat index for edge drawing: sid → the mesh currently sitting there. */
-const sessionMeshes = new Map<string, THREE.Mesh>()
-/** Session id → its team (inspector line + label sub-caption). */
+const labelByNode = new Map<string, CSS2DObject>()
 const sessionTeam = new Map<string, string>()
 
 async function cycle(): Promise<void> {
@@ -279,7 +168,7 @@ async function cycle(): Promise<void> {
   // Retire departed nodes first — mesh and CSS2D label share one lifetime.
   const liveIds = new Set(sessions.map(s => s.id))
   for (const [sid, mesh] of [...meshesById]) {
-    if (!liveIds.has(sid)) { detachLabel(sid); nodeGroup.remove(mesh); meshesById.delete(sid); sessionMeshes.delete(sid) }
+    if (!liveIds.has(sid)) { const lbl = labelByNode.get(sid); if (lbl) detachLabel(lbl); nodeGroup.remove(mesh); meshesById.delete(sid) }
   }
 
   // Seat un-seated nodes.
@@ -303,9 +192,8 @@ async function cycle(): Promise<void> {
         mesh.position.set(p.x, p.y, p.z)
       }
       nodeGroup.add(mesh)
-      sessionMeshes.set(sid, mesh)
     }
-    if (!labelByNode.has(sid)) attachLabel(sid, mesh, s.name ?? s.label, isLive, s.team)
+    if (!labelByNode.has(sid)) labelByNode.set(sid, attachLabel(mesh, s.name ?? s.label, isLive, s.team))
     sessionTeam.set(sid, s.team)
   }
 
@@ -313,16 +201,20 @@ async function cycle(): Promise<void> {
   // pairwise mesh — every pair still visually implied through the hub, and
   // the GPU cost grows linearly. Each rebuild releases the previous batch's
   // geometries before clearing - without that, every 5s poll leaks GPU
-  // buffers for the page's lifetime.
+  // buffers for the page's lifetime. Hub meshes (teamGroup) and peer nodes
+  // (peerGroup) are rebuilt on the same cadence, so they release too.
   disposeGeometries(lineGroup.children)
-  lineGroup.clear()
-  drawMembership(teams)
-  drawPeers(peers)
+  disposeGeometries(teamGroup.children)
+  teamGroup.clear()
+  disposeGeometries(peerGroup.children)
+  peerGroup.clear()
+  drawMembership(teams, meshesById, lineGroup, teamGroup)
+  drawPeers(peers, peerGroup, lineGroup)
 
   const liveCount = sessions.filter(s => s.live !== false).length
-  renderer.domElement.setAttribute('aria-label', 'A2A 拓扑：' + sessions.length + ' 个节点（' + liveCount + ' live / ' + (sessions.length - liveCount) + ' cold），' + teams.length + ' 个团队，' + peers.length + ' 个联邦对端')
+  setAriaLabel(renderer.domElement, 'A2A 拓扑：' + sessions.length + ' 个节点（' + liveCount + ' live / ' + (sessions.length - liveCount) + ' cold），' + teams.length + ' 个团队，' + peers.length + ' 个联邦对端')
 
-  if (useMock) drawActivity([['s1', 's3'], ['s4', 's5']])
+  if (useMock) drawActivity([['s1', 's3'], ['s4', 's5']], meshesById, lineGroup)
 }
 
 setInterval(() => void cycle(), 5000)
@@ -343,7 +235,7 @@ renderer.domElement.addEventListener('pointerdown', (ev) => {
     const ud = hit.object.userData as { label?: string; sid?: string }
     pinned = ud.sid
     const live = (MOCK.sessions.find(s => s.id === ud.sid)?.live !== false) ? 'live' : 'cold'
-    pinInspector((ud.label ?? '') + ' · ' + live + ' · 团队 ' + (sessionTeam.get(ud.sid ?? '') ?? '?'))
+    pinInspector(app, (ud.label ?? '') + ' · ' + live + ' · 团队 ' + (sessionTeam.get(ud.sid ?? '') ?? '?'))
   } else { pinned = undefined; unpinInspector() }
 })
 
@@ -356,17 +248,35 @@ renderer.domElement.addEventListener('keydown', (ev) => {
     if (next === undefined) return
     pinned = next
     const s = MOCK.sessions.find(x => x.id === next)
-    pinInspector(next + ' · ' + (s ? (s.live !== false ? 'live' : 'cold') : '') + ' · 团队 ' + (s?.team ?? '?'))
+    pinInspector(app, next + ' · ' + (s ? (s.live !== false ? 'live' : 'cold') : '') + ' · 团队 ' + (s?.team ?? '?'))
   }
 })
 
-// ─── Animate (reduced-motion: render on demand, no rAF loop) ──
+// ─── Animate: full rAF loop in normal mode; reduced-motion gets renderOnce
+//  — static frames are still rendered after controls change or a cycle, so
+//  the stage never goes blank, it just does not drift on its own. ──
+function renderOnce(): void {
+  labelRenderer.render(scene, camera)
+  renderer.render(scene, camera)
+}
 function tick(): void {
   requestAnimationFrame(tick)
   if (reducedMotion) return
   controls.update()
+  lod = lodWithHysteresis(camera.position.length())
   labelRenderer.render(scene, camera)
   renderer.render(scene, camera)
 }
-tick()
-renderer.domElement.addEventListener('change', () => { labelRenderer.render(scene, camera); renderer.render(scene, camera) })
+if (reducedMotion) {
+  renderOnce()
+  renderer.domElement.addEventListener('change', () => { controls.update(); renderOnce() })
+  // Reduced-motion still needs fresh state; poll slower and re-render each time.
+  const wake = setInterval(() => { void cycle().then(renderOnce) }, 5000)
+  const offWake = () => clearInterval(wake)
+  window.addEventListener('pagehide', offWake, { once: true })
+} else {
+  tick()
+}
+
+// ─── Chrome mounts once (HUD/legend/aria) ──
+mountChrome(app, renderer.domElement)
