@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
+import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, SUMMARY_CAP } from './task-ledger.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import type { Context } from '@deepseek-ai/cordis'
@@ -1228,14 +1229,17 @@ export function apply(ctx: Context, config: Config): void {
         path: '/__dsh_a2a_canvas',
         handler: (req: IncomingMessage, res: ServerResponse) => {
           const rootDir = fileURLToPath(new URL('../assets/stageDist', import.meta.url))
-          // The host hands over the full pathname: strip our mount prefix so
-          // ''/'/' map onto the built index.html and deeper paths resolve
-          // relative to it.
+          // Directory-classic resolution: the bare mount 301s onto itself
+          // with a slash, so the shell's `./assets` references resolve
+          // inside this tree instead of 404ing against the web root.
           const MOUNT = '/__dsh_a2a_canvas'
-          let raw = (req.url ?? '/').split('?')[0] ?? '/'
-          if (raw === MOUNT || raw === MOUNT + '/') raw = '/index.html'
-          else if (raw.startsWith(MOUNT + '/')) raw = raw.slice(MOUNT.length)
-          const rel = decodeURIComponent(raw).replace(/\\/g, '/')
+          const resolved = resolveStageMount(req.url ?? '/', MOUNT)
+          if (resolved.redirectTo !== undefined) {
+            res.writeHead(301, { Location: resolved.redirectTo, 'X-A2A-Stage': 'redirect' })
+            res.end()
+            return
+          }
+          const rel = decodeURIComponent(resolved.rel).replace(/\\/g, '/')
           if (rel.includes('..')) {
             res.writeHead(403, { 'Content-Type': 'text/plain', 'X-A2A-Stage': 'traversal' })
             res.end()
@@ -1269,12 +1273,17 @@ export function apply(ctx: Context, config: Config): void {
         path: '/__dsh_a2a_nexus',
         handler: (req: IncomingMessage, res: ServerResponse) => {
           const rootDirNexus = fileURLToPath(new URL('../assets/nexusDist', import.meta.url))
+          // Same directory-classic resolution as the canvas mount: the bare
+          // `/__dsh_a2a_nexus` form used to serve the shell verbatim, whose
+          // `./assets` then 404'd at the web root — a silent black viewer.
           const MOUNT = '/__dsh_a2a_nexus'
-          let raw = (req.url ?? '/').split('?')[0] ?? '/'
-          if (raw === MOUNT || raw === MOUNT + '/') raw = '/index.html'
-          else if (raw.startsWith(MOUNT + '/')) raw = raw.slice(MOUNT.length)
-          else if (!raw.startsWith('/')) raw = '/' + raw
-          const rel = decodeURIComponent(raw).replace(/\\/g, '/')
+          const resolved = resolveStageMount(req.url ?? '/', MOUNT)
+          if (resolved.redirectTo !== undefined) {
+            res.writeHead(301, { Location: resolved.redirectTo })
+            res.end()
+            return
+          }
+          const rel = decodeURIComponent(resolved.rel).replace(/\\/g, '/')
           if (rel.includes('..')) {
             res.writeHead(403, { 'Content-Type': 'text/plain' })
             res.end()
