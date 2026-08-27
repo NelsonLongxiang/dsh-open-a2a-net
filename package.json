@@ -55,7 +55,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "test": "vitest run",
     "test:build-layout": "vitest run tests/build-layout.spec.ts",
-    "verify:nexus": "npm --prefix nexus-stage ci --no-audit --no-fund && npm --prefix nexus-stage run build",
+    "verify:nexus": "npm --prefix nexus-stage ci --no-audit --no-fund && npm --prefix nexus-stage run build && npm --prefix nexus-stage run test && git diff --exit-code -- assets/nexusDist",
     "verify": "pnpm typecheck && pnpm build && pnpm test && pnpm test:build-layout && pnpm verify:nexus"
   },
   "peerDependencies": {

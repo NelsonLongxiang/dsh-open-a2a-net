@@ -1,9 +1,22 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 import { disposeGeometries } from './dispose'
 import { createFaultReporter } from './fault'
 import { seatFor } from './seat'
-import { FRAME_HUES, S } from './tokens'
+import { C, S } from './tokens'
+import { LodMachine, prefersReducedMotion } from './lod'
+import type { Lod } from './lod'
+import {
+  MOCK, drawMembership, drawActivity, drawPeers,
+  type StateBody,
+} from './topology'
+import {
+  attachLabel, detachLabel, mountChrome, pinInspector, unpinInspector,
+} from './overlay'
+import { updateCensus } from './census'
+import { createStageKeyboardHandler, wireReducedRendering } from './interaction'
+import './overlay.css'
 
 // ─── DOM shell ──
 const app = document.getElementById('app')!
@@ -40,16 +53,30 @@ const { fault, clear: clearFault } = createFaultReporter(
   message => console.error(message),
 )
 
+// ─── CSS2D overlay for readable labels (P0 readability) ──
+const labelRenderer = new CSS2DRenderer()
+labelRenderer.setSize(app.clientWidth || window.innerWidth, app.clientHeight || window.innerHeight)
+labelRenderer.domElement.style.position = 'absolute'
+labelRenderer.domElement.style.top = '0'
+labelRenderer.domElement.style.pointerEvents = 'none'
+app.appendChild(labelRenderer.domElement)
+
+// reduced-motion: static equivalence (no per-frame drift; render on demand)
+
+
 // ─── Scene, camera, controls ──
 const scene = new THREE.Scene()
-scene.background = new THREE.Color(0x060a12)
+scene.background = new THREE.Color(C.bg0)
 scene.fog = new THREE.FogExp2(0x060a12, 0.005)
 
 const camera = new THREE.PerspectiveCamera(60, app.clientWidth / app.clientHeight, 0.1, 500)
 camera.position.set(0, 35, 55)
 
+const reducedMotion = prefersReducedMotion()
+/** Module-level reduced-motion loop: cycle() end calls renderOnce() through it. */
+let reducedLoop: { renderOnce(): void } | undefined = undefined
 const controls = new OrbitControls(camera, renderer.domElement)
-controls.enableDamping = true
+controls.enableDamping = !reducedMotion
 controls.dampingFactor = 0.06
 controls.minDistance = 8
 controls.maxDistance = 180
@@ -80,14 +107,13 @@ scene.add(teamGroup, nodeGroup, peerGroup, lineGroup)
 // constant, so allocation happens once instead of once per poll cycle.
 const edgesMat = new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.6 })
 
-// ─── Types ──
-interface SessionRow {
-  id: string; label: string; team: string; name?: string
-  joined: boolean; live?: boolean
-}
-interface TeamMember { id: string; team: string; joined: boolean; live: boolean }
-interface CanvasTeam { name: string; team: string; members: TeamMember[] }
-interface StateBody { sessions?: SessionRow[]; canvas?: { teams: CanvasTeam[] }; peers?: Array<{ url: string; score?: number }> }
+// ─── Types re-exported from topology ──
+
+// ─── LOD hysteresis machine (B5: far↔mid↔near 双向滞回) ──
+const lodMachine = new LodMachine()
+
+// ─── Mock toggle ──
+let useMock = false
 
 // ─── Mesh builders ──
 function makeNode(color: number, r: number): THREE.Mesh {
@@ -96,23 +122,21 @@ function makeNode(color: number, r: number): THREE.Mesh {
   return new THREE.Mesh(g, m)
 }
 
-function getHue(s: string): number {
-  let h = 0; for (let i = 0; i < s.length; i++) h = ((h * 31 + s.charCodeAt(i)) & 0xfffffff) >>> 0
-  return FRAME_HUES[h % FRAME_HUES.length]
-}
-
 // ─── Layout persistence ──
 async function fetchLayout(): Promise<any | null> {
   try {
-    const r = await fetch('/__dsh_a2a/canvas-layout', { cache: 'no-store' }); if (!r.ok) return null;
+    const r = await fetch('/__dsh_a2a/canvas-layout', { cache: 'no-store' }); if (!r.ok) return null
     const j = await r.json(); return j.layout ?? null
   } catch { return null }
 }
 
-// ─── Boot / poll / reconcile ──
+// ─── Boot / poll / reconcile (pairwise cleanup: mesh+label same lifetime) ──
 const meshesById = new Map<string, THREE.Mesh>()
-/** Seat index for edge drawing: sid → the mesh currently sitting there. */
-const sessionMeshes = new Map<string, THREE.Mesh>()
+const labelByNode = new Map<string, CSS2DObject>()
+/** Normalized session rows from the latest real cycle (never MOCK) — the
+ *  interaction handlers read live/name/team from here, not from fixtures. */
+const sessionById = new Map<string, import('./topology').SessionRow>()
+const sessionTeam = new Map<string, string>()
 
 async function cycle(): Promise<void> {
   let res: Response
@@ -131,22 +155,32 @@ async function cycle(): Promise<void> {
     fault(`state JSON parse failed: ${String((error as Error | undefined)?.message ?? error).slice(0, 80)}`)
     return
   }
-  const sessions = (body.sessions ?? []).filter((s) => s.joined === true)
-  const teams = body.canvas?.teams ?? []
-  const peers = body.peers ?? []
+  // Mock hard-acceptance toggle: five nodes / two teams / one peer for the
+  // readability acceptance run without a live fleet.
+  const sessions = useMock ? MOCK.sessions : (body.sessions ?? []).filter((s) => s.joined === true)
+  const teams = useMock ? MOCK.canvas.teams : (body.canvas?.teams ?? [])
+  const peers = useMock ? MOCK.peers : (body.peers ?? [])
   // Read-path of layout persistence (write-path arrives with planning mode):
   // a node saved on a previous visit keeps its world spot instead of a fresh
   // random seat, so saved arrangements survive reloads.
-  const layout = await fetchLayout()
+  const layout = useMock ? null : await fetchLayout()
+
+  // Retire departed nodes first — mesh and CSS2D label share one lifetime.
+  const liveIds = new Set(sessions.map(s => s.id))
+  for (const [sid, mesh] of [...meshesById]) {
+    if (!liveIds.has(sid)) { const lbl = labelByNode.get(sid); if (lbl) detachLabel(lbl); nodeGroup.remove(mesh); meshesById.delete(sid) }
+  }
 
   // Seat un-seated nodes.
   for (let i = 0; i < sessions.length; i++) {
-    const sid = sessions[i]!.id
-    if (!meshesById.has(sid)) {
-      const isLive = sessions[i]!.live !== false
+    const s = sessions[i]!
+    const sid = s.id
+    const isLive = s.live !== false
+    let mesh = meshesById.get(sid)
+    if (!mesh) {
       const color = isLive ? S.nodeLive : S.nodeCold
-      const mesh = makeNode(color, isLive ? 0.9 : 0.5)
-      mesh.userData = { label: sessions[i]!.name ?? sessions[i]!.label, sid }
+      mesh = makeNode(color, isLive ? 0.9 : 0.5)
+      mesh.userData = { label: s.name ?? s.label, sid }
       const saved = layout?.nodes?.[sid]
       // Saved layout wins; otherwise the seat is a pure hash of the session
       // id, so reloads reproduce the same star map instead of reshuffling.
@@ -158,39 +192,98 @@ async function cycle(): Promise<void> {
         mesh.position.set(p.x, p.y, p.z)
       }
       nodeGroup.add(mesh)
-      sessionMeshes.set(sid, mesh)
     }
+    if (!labelByNode.has(sid)) labelByNode.set(sid, attachLabel(mesh, s.name ?? s.label, isLive, s.team))
+    sessionTeam.set(sid, s.team)
+    // Real normalized row: interaction handlers read this, never MOCK.
+    sessionById.set(sid, s)
   }
 
-  // Rebuild membership edges between nodes sharing a canvas team. The
-  // opacity is empirical: 0.15 cyan on near-black measured invisible against
-  // the fog (external UX review P0-3). The material is the module singleton;
-  // each rebuild releases the previous batch's geometries before clearing -
-  // without that, every 5s poll leaks GPU buffers for the page's lifetime.
+  // Membership edges: hub-star (team centroid + spokes) instead of the O(n²)
+  // pairwise mesh — every pair still visually implied through the hub, and
+  // the GPU cost grows linearly. Each rebuild releases the previous batch's
+  // geometries before clearing - without that, every 5s poll leaks GPU
+  // buffers for the page's lifetime. Hub meshes (teamGroup) and peer nodes
+  // (peerGroup) are rebuilt on the same cadence, so they release too.
   disposeGeometries(lineGroup.children)
-  lineGroup.clear()
-  for (const team of teams) {
-    for (let mi = 0; mi < team.members.length; mi++) {
-      for (let mj = mi + 1; mj < team.members.length; mj++) {
-        const aMesh = meshesById.get(team.members[mi].id)
-        const bMesh = meshesById.get(team.members[mj].id)
-        if (aMesh && bMesh) {
-          const geo = new THREE.BufferGeometry().setFromPoints([aMesh.position.clone(), bMesh.position.clone()])
-          lineGroup.add(new THREE.Line(geo, edgesMat))
-        }
-      }
-    }
-  }
+  disposeGeometries(teamGroup.children)
+  teamGroup.clear()
+  disposeGeometries(peerGroup.children)
+  peerGroup.clear()
+  drawMembership(teams, meshesById, lineGroup, teamGroup)
+  drawPeers(peers, peerGroup, lineGroup)
+
+  updateCensus(renderer.domElement, sessions, teams, peers)
+  // Reduced-motion contract: a settled cycle is an external render driver —
+  // the stage must repaint fresh data (5s updates were invisible without it).
+  reducedLoop?.renderOnce()
+  if (useMock) drawActivity([['s1', 's3'], ['s4', 's5']], meshesById, lineGroup)
 }
 
 setInterval(() => void cycle(), 5000)
 void cycle()
 
-// ─── Animate ──
-const clock = new THREE.Clock()
-function tick(): void {
-  requestAnimationFrame(tick)
-  controls.update()
+// ─── Interaction: click/Enter pins inspector; Esc unpins; Tab traverses roster ──
+const raycaster = new THREE.Raycaster()
+const pointer = new THREE.Vector2()
+let pinned: string | undefined
+
+renderer.domElement.addEventListener('pointerdown', (ev) => {
+  const rect = renderer.domElement.getBoundingClientRect()
+  pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+  const hit = raycaster.intersectObjects(nodeGroup.children, false)[0]
+  if (hit) {
+    const ud = hit.object.userData as { label?: string; sid?: string }
+    pinned = ud.sid
+    const row = ud.sid !== undefined ? sessionById.get(ud.sid) : undefined
+    const live = row ? (row.live !== false ? 'live' : 'cold') : '?'
+    pinInspector(app, (ud.label ?? '') + ' · ' + live + ' · 团队 ' + (row?.team ?? sessionTeam.get(ud.sid ?? '') ?? '?'))
+  } else { pinned = undefined; unpinInspector() }
+})
+
+renderer.domElement.addEventListener('keydown', createStageKeyboardHandler(
+  {
+    pinned: () => pinned,
+    ids: () => [...meshesById.keys()],
+    nextAfter: (current) => {
+      const idx = current !== undefined ? [...meshesById.keys()].indexOf(current) : -1
+      return [...meshesById.keys()][(idx + 1) % [...meshesById.keys()].length]
+    },
+    pin: (next) => {
+      const row = sessionById.get(next)
+      const team = sessionTeam.get(next) ?? '?'
+      const liveTxt = row ? (row.live !== false ? 'live' : 'cold') : '?'
+      pinned = next
+      pinInspector(app, next + ' · ' + liveTxt + ' · 团队 ' + team)
+    },
+    escape: () => { pinned = undefined; unpinInspector() },
+  },
+  renderer.domElement,
+))
+
+
+// ─── Animate: full rAF loop in normal mode; reduced-motion gets renderOnce
+//  — static frames are still rendered after controls change or a cycle, so
+//  the stage never goes blank, it just does not drift on its own. ──
+function renderOnce(): void {
+  labelRenderer.render(scene, camera)
   renderer.render(scene, camera)
 }
-tick()
+
+if (prefersReducedMotion()) {
+  // Reduced-motion (gate 3): no rAF loop. controls change and each settled
+  // cycle call renderOnce() through the wired loop — the stage never drifts
+  // on its own, and renderOnceCount() is observable for the behavior tests.
+  reducedLoop = wireReducedRendering(controls, renderOnce)
+  controls.addEventListener('change', () => controls.update())
+} else {
+  function tick(): void {
+    requestAnimationFrame(tick)
+    controls.update()
+    labelRenderer.render(scene, camera)
+    renderer.render(scene, camera)
+  }
+  tick()
+}
