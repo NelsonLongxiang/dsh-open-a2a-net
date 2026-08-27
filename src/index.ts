@@ -24,6 +24,7 @@ import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, SUMMARY_CAP } from './task-ledger.ts'
+import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from './idempotency-store.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
@@ -532,6 +533,11 @@ export function apply(ctx: Context, config: Config): void {
   // resolves it — the caller-side half of the receipt contract, persisted so
   // a restart does not orphan the reconciliation.
   const taskLedger = new TaskLedger(join(home, 'a2a', 'tasks.json'))
+
+  // Server-side idempotency keys (work-order P3): a caller-born task id
+  // executes at most once inside the 24h window — same-key replays answer
+  // refused-but-idempotent, same-key different-payload answers conflict.
+  const idempotencyStore = new IdempotencyStore(join(home, 'a2a', 'idempotency.json'))
 
   // Self-referral suppression: gossip mirrors peer lists back and forth, so
   // a URL whose fetch just proved it serves this node keeps coming home as
@@ -1648,6 +1654,26 @@ ${message}`
           if (team === '' || message === '') {
             const payload = JSON.stringify({ error: 'team and message are required', code: -32000 })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+            return
+          }
+          // Server-side idempotency (P3/B3): one key, one execution inside
+          // the window. Same key + same payload fingerprint ⇒ replay (409,
+          // -32003, replay:true — the prior attempt stays authoritative);
+          // same key + different payload ⇒ hard conflict (409, -32002).
+          // Checked BEFORE any steering or ledger correlation: a replay must
+          // never re-enter the target session, no matter how it settles.
+          const idemFingerprint = createHash('sha256').update(JSON.stringify({ caller, message, noWait, team })).digest('hex')
+          const idemVerdict = idempotencyStore.claim(taskId, idemFingerprint)
+          if (idemVerdict !== 'fresh') {
+            const replay = idemVerdict === 'replay'
+            const payload = JSON.stringify({
+              error: replay ? 'duplicate task id within the idempotency window' : 'task id reused with a different payload',
+              code: replay ? WIRE_ERROR_REPLAY_REJECTED : WIRE_ERROR_IDEMPOTENCY_CONFLICT,
+              task_id: taskId,
+              replay,
+            })
+            res.writeHead(409, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
             return
           }
