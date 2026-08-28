@@ -672,6 +672,15 @@ describe('settle fence coverage', () => {
     const route = m.ctx.tools.get('a2a_route')
     const result = await route!.execute({ team: 'dsh', message: 'async job', async: true }, noAgent()) as { ok: boolean; task_id?: string }
     expect(result.ok).toBe(true)
+    // Named loggers are minted per ctx.logger() call, so a monkey-patched
+    // service .warn never intercepts — observe the warn through the logger
+    // service's exporter sink instead (levels.default admits warn).
+    const warns: Array<{ type: string; args: unknown[] }> = []
+    ;(m.ctx.logger as unknown as { exporter(sink: { colors: number; levels: { default: number }; export: (message: { type: string; args: unknown[] }) => void }): unknown }).exporter({
+      colors: 0,
+      levels: { default: 3 },
+      export: message => { warns.push(message) },
+    })
     m.ctx.on('a2a/receipt-resolved', () => { throw new Error('consumer exploded') })
     const res = await postJson(m.port, '/a2a/direct', { team: 'dsh', message: `[A2A receipt] task ${String(result.task_id)} done`, caller_session: 'someone' })
     const body = await res.json() as { result?: { text?: string } }
@@ -684,5 +693,8 @@ describe('settle fence coverage', () => {
     // The routing path answers normally afterwards (the fence is per-emit).
     const second = await postJson(m.port, '/a2a/direct', { team: 'dsh', message: 'plain follow-up', caller_session: 'someone' })
     await expect(second.json()).resolves.toMatchObject({ result: { text: 'work finished' } })
+    // The throw degraded to the fence warn: cordis dispatch is synchronous,
+    // so the sync throw landed in settleAndAnnounce's catch.
+    expect(warns.some(entry => entry.type === 'warn' && String(entry.args[0]).includes('receipt-resolved listener rejected'))).toBe(true)
   })
 })
