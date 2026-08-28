@@ -7,7 +7,7 @@
  * bridge declines ambiguous claims; wait:false fires detached).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer, type Server } from 'node:http'
@@ -134,7 +134,7 @@ type Mounted = {
   dispose: () => Promise<void>
 }
 
-async function mount(options: { peers?: string[]; nativeTeamsInbound?: boolean; nativeRoundWaitMs?: number } = {}): Promise<Mounted> {
+async function mount(options: { peers?: string[]; nativeTeamsInbound?: boolean; nativeRoundWaitMs?: number; announce?: boolean; joined?: string[] } = {}): Promise<Mounted> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
@@ -143,13 +143,17 @@ async function mount(options: { peers?: string[]; nativeTeamsInbound?: boolean; 
   const agents = new FakeInitiatorAgents(ctx)
   const registry = new FakeTeamsRegistry(ctx)
   const home = tmpHome()
+  if ((options.joined?.length ?? 0) > 0) {
+    mkdirSync(join(home, 'a2a'), { recursive: true })
+    writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: options.joined }), 'utf8')
+  }
   apply(ctx, {
     apiKey: '',
     session: 'bridge-test',
     team: 'dsh',
     routeTimeoutMs: 60_000,
     flushTimeoutMs: 300_000,
-    announce: false,
+    announce: options.announce === true,
     agentName: 'bridge node',
     peers: options.peers ?? [],
     delegates: [],
@@ -508,7 +512,7 @@ describe('P2 receipt-callback routing', () => {
     expect(peer.seen[0]).toMatchObject({ callback: 'dsh/aaaa' })
   })
 
-  it('an unjoined callbackTarget parent falls back to the bare team', async () => {
+  it('an unjoined callbackTarget parent rides NO callback — a bare-team address would be intercepted local-first by a same-named peer', async () => {
     const peer = await startPeer({ asyncCap: true })
     const m = await mount({ peers: [peer.url] })
     mounted.push(async () => { await m.dispose(); await peer.close() })
@@ -520,7 +524,19 @@ describe('P2 receipt-callback routing', () => {
       idempotencyKey: 'p2-2',
       callbackTarget: { label: 'team', parentSessionId: 'session-ghost' },
     })
-    expect(peer.seen[0]).toMatchObject({ callback: 'dsh' })
+    // Omitting the callback restores the P1 behavior: the receipt hint uses
+    // the node label, which structurally cannot resolve on the peer — lost
+    // honestly, never misdelivered to the peer's own initiator.
+    expect(peer.seen[0]?.callback).toBeUndefined()
+    // A null callbackTarget must not crash the submission either.
+    await face.submit({
+      handle: 'peer-team',
+      message: 'null target tolerated',
+      delivery: 'async',
+      idempotencyKey: 'p2-3',
+      callbackTarget: null,
+    })
+    expect(peer.seen[1]?.callback).toBeUndefined()
   })
 
   it('an inbound noWait route honors the callback address in its receipt hint', async () => {
@@ -555,5 +571,49 @@ describe('P2 receipt-callback routing', () => {
     expect(body.delivered).toBe(true)
     expect(steered[0]).not.toContain(longCallback)
     expect(steered[0]).toContain('team: "caller-x"')
+  })
+
+  it('the receipt autosend delivers cross-node through the directory walk', async () => {
+    const peer = await startPeer({ asyncCap: true })
+    const m = await mount({ peers: [peer.url] })
+    mounted.push(async () => { await m.dispose(); await peer.close() })
+    // The bare-team target answers, which arms the receipt autosend at the
+    // caller's callback address — a REMOTE team only resolvable through the
+    // peer directory. The autosend must walk it, not silently no-op. The
+    // answer is deferred 30ms so the waiter registration (which follows the
+    // steer synchronously) lands first, like a real turn.
+    const initiator = makeAgent('session-main1')
+    const steer = vi.fn((message: { content: Array<{ type: string; text?: string }> }) => {
+      setTimeout(() => {
+        initiator.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'all done' }] } } })
+        m.ctx.emit('agent/status', { agent: initiator, status: 'idle' })
+      }, 30)
+    })
+    ;(initiator as unknown as { steer: unknown }).steer = steer
+    m.agents.agents.push(initiator)
+    const res = await postJson(m.port, '/a2a/direct', { team: 'dsh', message: 'job', caller_session: 'caller-x', callback: 'peer-team', wait: false })
+    const body = await res.json() as { delivered?: boolean }
+    expect(body.delivered).toBe(true)
+    for (let i = 0; i < 50 && !peer.seen.some(entry => String(entry.message ?? '').startsWith('[A2A receipt]')); i++) {
+      await new Promise(resolve => { setTimeout(resolve, 20) })
+    }
+    const receipt = peer.seen.find(entry => String(entry.message ?? '').startsWith('[A2A receipt]'))
+    expect(receipt).toBeDefined()
+    expect(String(receipt?.message)).toContain('all done')
+  })
+
+  it('cold joined teams are advertised on the card so cross-node wake-on-route is discoverable', async () => {
+    const m = await mount({ announce: true, joined: ['session-cold9'] })
+    mounted.push(m.dispose)
+    const live = makeAgent('session-live1')
+    m.agents.agents.push(live)
+    m.ctx.emit('agent/created', { agent: live })
+    await postJson(m.port, '/__dsh_a2a/join', { id: 'session-live1' })
+    const card = await (await fetch(`http://127.0.0.1:${String(m.port)}/.well-known/agent-card.json`)).json() as { sessionTeams?: Array<{ team: string; description?: string }> }
+    const teams = (card.sessionTeams ?? []).map(entry => entry.team)
+    expect(teams).toContain('dsh/live1')
+    expect(teams).toContain('dsh/cold9')
+    const cold = card.sessionTeams!.find(entry => entry.team === 'dsh/cold9')
+    expect(cold!.description).toContain('cold')
   })
 })

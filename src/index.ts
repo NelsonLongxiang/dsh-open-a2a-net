@@ -1407,7 +1407,17 @@ export function apply(ctx: Context, config: Config): void {
           // re-signs), so each card read spreads the publisher's latest
           // view of the network. `version` and `lanIp` are likewise
           // unsigned served-fresh facts: fleet auditability without SSH.
-          const sessionTeams = [...sessionNodes.values()].map(agent => ({ team: sessionTeamOf(agent), ...nodeMetadataOf(agent) }))
+          // Cold joined teams (intent remembered, agent not loaded) are
+          // advertised too: their routes are wake-on-route's to honor, and
+          // without the listing a cross-node caller has no candidate and
+          // the wake never fires.
+          const isArchived = archivedSessionFilter()
+          const sessionTeams = [
+            ...[...sessionNodes.values()].map(agent => ({ team: sessionTeamOf(agent), ...nodeMetadataOf(agent) })),
+            ...joinedSessions.list()
+              .filter(id => !liveRoots.has(id) && isArchived?.(id) !== true)
+              .map(id => ({ team: `${config.team}/${id8(id)}`, name: `${session}-${id8(id)}`, description: 'cold — not loaded; routing here wakes the session' })),
+          ]
           const body = JSON.stringify({ ...currentCard, peers: peerStore.list(), ...(sessionTeams.length > 0 ? { sessionTeams } : {}), ...(lanIp !== '' ? { lanIp } : {}), ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}), description: `A2A node exposing team ${config.team}` })
           res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) })
           res.end(body)
@@ -1528,7 +1538,12 @@ export function apply(ctx: Context, config: Config): void {
     // would ping-pong both ledgers.
     if (deliveredText.startsWith('[A2A receipt] task ')) return
     registerFinalWaiter(target, (finalText) => {
-      if (!taskLedger.isPending(taskId)) return
+      // Idempotency: a row THIS ledger tracks must still be pending
+      // (settled/dead rows never re-send). A foreign task id (an inbound
+      // route the caller tracks on ITS node) has no local row — the final
+      // waiter itself fires at most once per armed task, which is the dedup.
+      const row = taskLedger.list().find(entry => entry.taskId === taskId)
+      if (row !== undefined && row.status !== 'pending') return
       const summary = `${finalText.trim().replace(/\s+/g, ' ').slice(0, SUMMARY_CAP) || 'done'} (auto)`
       // v2 envelope projection: header stays byte-compatible for every
       // legacy correlator; the machine JSON rides exactly one following line.
@@ -1536,9 +1551,15 @@ export function apply(ctx: Context, config: Config): void {
       // Three-tier hard order (work-order P2): caller lane first; on failure
       // escalate ONCE to the owner mailbox — the outcome never evaporates
       // just because the original waiter died. Archive holds truth regardless.
+      // The deliver closure is a FULL dispatch (local first, then the
+      // directory walk with failover, throwing when nothing delivers): the
+      // callback address may be another node's team, and a local-only
+      // closure would silently no-op there — runReceiptLadder reads a
+      // settled undefined as tier-1 success, so the receipt would vanish
+      // without a log.
       void runReceiptLadder(
         {
-          deliver: (team) => dispatchLocalCandidate(team, receipt, session, undefined, new AbortController().signal, true) as Promise<void>,
+          deliver: (team) => dispatchAnywhere(team, receipt, session, undefined, new AbortController().signal, true) as Promise<void>,
           ownerTeam: config.team,
           log: (stage, error) => {
             // N2 (observability): throttled per task to avoid ping-pong noise.
@@ -2787,6 +2808,35 @@ ${message}`
   }
 
   /**
+   * Full dispatch for background senders (the receipt autosend): local
+   * first, then the directory walk with per-candidate failover. Unlike
+   * {@link dispatchLocalCandidate}, a team that is not ours is NOT treated
+   * as a silent non-route — the walk either delivers or THROWS, so the
+   * receipt ladder can distinguish "delivered" from "no route" and its
+   * owner escalation actually fires for cross-node callback addresses.
+   */
+  async function dispatchAnywhere(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode: boolean, taskId?: string): Promise<void> {
+    const local = await dispatchLocalCandidate(team, message, callerSession, contextId, signal, asyncMode, taskId)
+    if (local !== undefined) {
+      if (!local.ok) throw new Error(local.error)
+      return
+    }
+    const failures: string[] = []
+    const candidates = await directoryPeerCandidates(memoizedCardFetch(), team, failures)
+    if (candidates.length === 0) {
+      throw new Error(`no route to "${team}": not a local team and not published by any tracked peer`)
+    }
+    let lastError = 'no candidate delivered'
+    for (const candidate of candidates) {
+      const result = await dispatchPeerCandidate(candidate, team, message, contextId, signal, callerSession, asyncMode, taskId)
+      if (result.ok) return
+      lastError = result.error
+      if (signal.aborted) break
+    }
+    throw new Error(`delivery to "${team}" failed on every candidate: ${lastError}`)
+  }
+
+  /**
    * The directory's candidate walk for one team: direct publishers first,
    * then every tracked zone's delegation resolutions (cycle/depth/key-binding
    * failures are configuration bugs: closed, logged, and surfaced into
@@ -2866,14 +2916,17 @@ ${message}`
         ? request.idempotencyKey
         : `direct-${Math.random().toString(16).slice(2, 10)}`
       // P2 receipt-callback: the receipt routes back to the submitting
-      // session's own node team (wake-on-route covers a cold parent), not
-      // to the node's bare team. When the parent is not a joined session
-      // node, fall back to the bare team — the caller-side ledger still
-      // reconciles via the initiator.
+      // session's own node team, but ONLY when that session is a joined
+      // node. Without a joined parent there is no routable address that
+      // means "this session" on the peer — omitting the callback keeps the
+      // P1 behavior (the caller label cannot resolve on the peer, so the
+      // receipt is lost honestly); falling back to `config.team` would be
+      // actively harmful: a same-named peer resolves it LOCAL-first and the
+      // receipt steers the peer's own initiator, never leaving that host.
       let callbackAddress: string | undefined
-      if (request.callbackTarget !== undefined) {
+      if (request.callbackTarget) {
         const parent = request.callbackTarget.parentSessionId
-        callbackAddress = sessionNodes.has(parent) || joinedSessions.has(parent) ? `${config.team}/${id8(parent)}` : config.team
+        if (sessionNodes.has(parent) || joinedSessions.has(parent)) callbackAddress = `${config.team}/${id8(parent)}`
       }
       for (const candidate of candidates) {
         // Capability gate per candidate, like a2a_route's loop: a
