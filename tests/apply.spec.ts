@@ -2057,11 +2057,16 @@ describe('a2a persisted join intent', () => {
     agents.agent = first
     ctx.emit('agent/created', { agent: first })
     await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
-    // Disposal unmounts the runtime node but keeps the intent.
+    // Disposal unmounts the runtime node but keeps the intent: the team is
+    // still advertised — as COLD (its routes are wake-on-route's to honor),
+    // which is what keeps it discoverable cross-node while asleep.
     ctx.emit('agent/disposed', { agent: first })
-    const afterDispose = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).text()
-    expect(afterDispose).not.toContain('sessionTeams')
-    // The agent comes back: the intent remounts the node and its card team.
+    const afterDispose = JSON.parse(await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).text()) as {
+      sessionTeams: { team: string; description: string }[]
+    }
+    expect(afterDispose.sessionTeams).toEqual([{ team: 'dsh/agent-1', name: 'sess-1-agent-1', description: 'cold — not loaded; routing here wakes the session' }])
+    // The agent comes back: the intent remounts the node and its card team
+    // goes live again.
     const second = replyingAgent(ctx)
     agents.agent = second
     ctx.emit('agent/created', { agent: second })
