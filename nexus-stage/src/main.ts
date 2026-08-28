@@ -194,6 +194,7 @@ async function cycle(): Promise<void> {
         mesh.position.set(p.x, p.y, p.z)
       }
       nodeGroup.add(mesh)
+      meshesById.set(sid, mesh)
     }
     if (!labelByNode.has(sid)) labelByNode.set(sid, attachLabel(mesh, s.name ?? s.label, isLive, s.team))
     sessionTeam.set(sid, s.team)
@@ -297,8 +298,16 @@ function setMode(next: 'scene' | 'plan'): void {
   mode = next
   tabScene.setAttribute('aria-selected', String(next === 'scene'))
   tabPlan.setAttribute('aria-selected', String(next === 'plan'))
-  if (next === 'plan') planning.activate()
-  else planning.deactivate()
+  if (next === 'plan') {
+    // 3D chrome must not leak onto the planning canvas: the inspector is
+    // appended to #app last, so a panel pinned in observation mode would
+    // float above #dsh-plan (and eat its clicks) until unpinned.
+    pinned = undefined
+    unpinInspector()
+    planning.activate()
+  } else {
+    planning.deactivate()
+  }
 }
 tabScene.addEventListener('click', () => setMode('scene'))
 tabPlan.addEventListener('click', () => setMode('plan'))
