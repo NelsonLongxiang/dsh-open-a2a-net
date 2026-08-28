@@ -672,8 +672,6 @@ describe('settle fence coverage', () => {
     const route = m.ctx.tools.get('a2a_route')
     const result = await route!.execute({ team: 'dsh', message: 'async job', async: true }, noAgent()) as { ok: boolean; task_id?: string }
     expect(result.ok).toBe(true)
-    const warnings: string[] = []
-    ;(m.ctx.logger as unknown as { warn: (m: string) => void }).warn = (message: string) => { warnings.push(message) }
     m.ctx.on('a2a/receipt-resolved', () => { throw new Error('consumer exploded') })
     const res = await postJson(m.port, '/a2a/direct', { team: 'dsh', message: `[A2A receipt] task ${String(result.task_id)} done`, caller_session: 'someone' })
     const body = await res.json() as { result?: { text?: string } }
