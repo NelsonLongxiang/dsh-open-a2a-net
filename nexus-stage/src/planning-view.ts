@@ -699,7 +699,12 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       const idx = buttons.indexOf(document.activeElement as HTMLButtonElement)
       if (e.key === 'ArrowDown') { e.preventDefault(); buttons[(idx + 1 + buttons.length) % buttons.length]?.focus() }
       else if (e.key === 'ArrowUp') { e.preventDefault(); buttons[(idx - 1 + buttons.length) % buttons.length]?.focus() }
-      else if (e.key === 'Escape') { e.preventDefault(); if (menuLevel !== 'root') openMenu(x, y, target, 'root'); else closeMenu() }
+      else if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation() // drill-back is menu-internal; root must not double-close
+        if (menuLevel !== 'root') openMenu(x, y, target, 'root')
+        else closeMenu()
+      }
     })
     root.appendChild(el)
     menu = el
@@ -758,6 +763,15 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   function pointerDown(ev: SeamPointer): void {
     if (viewW === 0) { viewW = root.clientWidth; viewH = root.clientHeight }
     const target = ev.target as Element | null
+    // Context-menu dismissal: the first pointerdown outside an open menu
+    // closes it and is swallowed; a press on the menu's own chrome is
+    // swallowed too — only its items act.
+    if (menu !== null) {
+      if (target !== null && target.closest('.p-menu') !== null) return
+      closeMenu()
+      ev.preventDefault()
+      return
+    }
     if (target !== null && (target.closest('button') !== null || target.closest('.p-lamp') !== null || target.closest('.p-status') !== null)) return
     const p = localXY(ev)
     const nodeEl = target !== null ? target.closest<HTMLElement>('.p-node') : null
@@ -872,6 +886,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   }
 
   function wheel(ev: SeamPointer): void {
+    if (menu !== null) closeMenu()
     const p = localXY(ev)
     if (ev.ctrlKey) {
       const factor = Math.exp(-(ev.deltaY ?? 0) * 0.0015)
@@ -900,7 +915,12 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
 
   function key(ev: SeamKey): void {
     if (dialog !== null) return // modal: the dialog input handles Enter/Esc itself
-    if (menu !== null && (ev.key === 'g' || ev.key === 'G' || ev.key === 'Delete' || ev.key === 'Backspace' || ev.key === ' ' || ev.key === '0')) return
+    if (menu !== null) {
+      // The menu owns most keys (its own handler navigates); Escape still
+      // closes from here so a seam/keyboard Esc never gets lost.
+      if (ev.key === 'Escape') { closeMenu(); ev.preventDefault() }
+      return
+    }
     if (ev.key === ' ' && ev.target === root) { spaceDown = true; ev.preventDefault(); return }
     // 键盘全等路径（WCAG 2.2 Dragging Movements）：
     if (ev.key === ' ' && (ev.target as Element | null)?.classList?.contains('p-node')) {

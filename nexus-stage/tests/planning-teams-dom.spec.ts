@@ -206,6 +206,50 @@ describe('context menu', () => {
     expect(document.activeElement).toBe(a)
   })
 
+  it('an open menu dismisses on outside pointerdown (swallowed, no gesture) and on wheel', () => {
+    const { v, actions, onDirty } = view()
+    v.reconcile(arrangedInput)
+    const a = v.root.querySelector<HTMLElement>('.p-node[data-id="a"]')!
+    v.seam.contextMenu(ptr({ target: a, clientX: 10, clientY: 10 }))
+    expect(v.root.querySelector('.p-menu')).not.toBeNull()
+    // Outside pointerdown: closes the menu and is swallowed — no marquee,
+    // no selection change, no action, no dirty.
+    v.seam.pointerDown(ptr({ target: v.root, clientX: 5, clientY: 5 }))
+    v.seam.pointerUp(ptr({ target: v.root, clientX: 5, clientY: 5 }))
+    expect(v.root.querySelector('.p-menu')).toBeNull()
+    expect(v.root.querySelector('.p-node.selected')).toBeNull()
+    expect(actions).toHaveLength(0)
+    expect(onDirty).not.toHaveBeenCalled()
+
+    // Wheel also dismisses…
+    v.seam.contextMenu(ptr({ target: a, clientX: 10, clientY: 10 }))
+    expect(v.root.querySelector('.p-menu')).not.toBeNull()
+    v.seam.wheel(ptr({ target: v.root, deltaY: 100 }))
+    expect(v.root.querySelector('.p-menu')).toBeNull()
+
+    // …and while a menu is open, root shortcuts are owned by the menu.
+    v.seam.contextMenu(ptr({ target: a, clientX: 10, clientY: 10 }))
+    v.seam.key(key({ key: 'g', target: v.root }))
+    expect(v.root.querySelector('.p-dialog')).toBeNull()
+    v.seam.key(key({ key: 'Escape', target: v.root })) // Esc closes the menu
+    expect(v.root.querySelector('.p-menu')).toBeNull()
+  })
+
+  it('a press on the menu chrome is swallowed; an enabled item acts and closes', () => {
+    const { v, actions } = view()
+    v.reconcile(arrangedInput)
+    const head = v.root.querySelector<HTMLElement>('.p-frame-head[data-frame="甲"]')!
+    v.seam.contextMenu(ptr({ target: head, clientX: 10, clientY: 10 }))
+    const menu = v.root.querySelector<HTMLElement>('.p-menu')!
+    v.seam.pointerDown(ptr({ target: menu, clientX: 10, clientY: 10 }))
+    v.seam.pointerUp(ptr({ target: menu, clientX: 10, clientY: 10 }))
+    expect(v.root.querySelector('.p-menu')).not.toBeNull() // chrome press keeps it open
+    const item = menu.querySelector<HTMLButtonElement>('[role=menuitem]')! // 解散团队, enabled
+    item.click()
+    expect(actions).toEqual([{ type: 'remove-team', name: '甲' }])
+    expect(v.root.querySelector('.p-menu')).toBeNull()
+  })
+
   it('frame-head context menu offers 解散团队 and emits remove-team', () => {
     const { v, actions } = view()
     v.reconcile(arrangedInput)
