@@ -487,3 +487,73 @@ describe('outbound face: idempotency verdicts and cancel', () => {
     expect(steers.some(text => text.includes('[A2A cancel]') && text.includes(String(result.task_id)))).toBe(true)
   })
 })
+
+describe('P2 receipt-callback routing', () => {
+  it('face.submit maps a joined callbackTarget parent to its node team on the wire', async () => {
+    const peer = await startPeer({ asyncCap: true })
+    const m = await mount({ peers: [peer.url] })
+    mounted.push(async () => { await m.dispose(); await peer.close() })
+    const node = makeAgent('session-aaaa')
+    m.agents.agents.push(node)
+    m.ctx.emit('agent/created', { agent: node })
+    await postJson(m.port, '/__dsh_a2a/join', { id: 'session-aaaa' })
+    const face = m.face() as { submit: (request: Record<string, unknown>) => Promise<Record<string, unknown>> }
+    await face.submit({
+      handle: 'peer-team',
+      message: 'round with a home',
+      delivery: 'async',
+      idempotencyKey: 'p2-1',
+      callbackTarget: { label: 'team', parentSessionId: 'session-aaaa' },
+    })
+    expect(peer.seen[0]).toMatchObject({ callback: 'dsh/aaaa' })
+  })
+
+  it('an unjoined callbackTarget parent falls back to the bare team', async () => {
+    const peer = await startPeer({ asyncCap: true })
+    const m = await mount({ peers: [peer.url] })
+    mounted.push(async () => { await m.dispose(); await peer.close() })
+    const face = m.face() as { submit: (request: Record<string, unknown>) => Promise<Record<string, unknown>> }
+    await face.submit({
+      handle: 'peer-team',
+      message: 'parent never joined',
+      delivery: 'async',
+      idempotencyKey: 'p2-2',
+      callbackTarget: { label: 'team', parentSessionId: 'session-ghost' },
+    })
+    expect(peer.seen[0]).toMatchObject({ callback: 'dsh' })
+  })
+
+  it('an inbound noWait route honors the callback address in its receipt hint', async () => {
+    const m = await mount({})
+    mounted.push(m.dispose)
+    const initiator = makeAgent('session-main1')
+    const steered: string[] = []
+    const steer = vi.fn((message: { content: Array<{ type: string; text?: string }> }) => {
+      steered.push(message.content.find(block => block.type === 'text')?.text ?? '')
+    })
+    ;(initiator as unknown as { steer: unknown }).steer = steer
+    m.agents.agents.push(initiator)
+    const res = await postJson(m.port, '/a2a/direct', { team: 'dsh', message: 'job', caller_session: 'someone', callback: 'dsh/cb9', wait: false })
+    const body = await res.json() as { delivered?: boolean }
+    expect(body.delivered).toBe(true)
+    expect(steered[0]).toContain('a2a_route { team: "dsh/cb9"')
+  })
+
+  it('an oversized callback is treated as absent (the caller label plays its role)', async () => {
+    const m = await mount({})
+    mounted.push(m.dispose)
+    const initiator = makeAgent('session-main1')
+    const steered: string[] = []
+    const steer = vi.fn((message: { content: Array<{ type: string; text?: string }> }) => {
+      steered.push(message.content.find(block => block.type === 'text')?.text ?? '')
+    })
+    ;(initiator as unknown as { steer: unknown }).steer = steer
+    m.agents.agents.push(initiator)
+    const longCallback = 'dsh/' + 'x'.repeat(200)
+    const res = await postJson(m.port, '/a2a/direct', { team: 'dsh', message: 'job', caller_session: 'caller-x', callback: longCallback, wait: false })
+    const body = await res.json() as { delivered?: boolean }
+    expect(body.delivered).toBe(true)
+    expect(steered[0]).not.toContain(longCallback)
+    expect(steered[0]).toContain('team: "caller-x"')
+  })
+})

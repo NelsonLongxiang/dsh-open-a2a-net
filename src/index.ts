@@ -1880,6 +1880,7 @@ ${message}`
             readonly message?: unknown
             readonly context_id?: unknown
             readonly caller_session?: unknown
+            readonly callback?: unknown
             readonly wait?: unknown
             readonly task_id?: unknown
           }
@@ -1894,6 +1895,12 @@ ${message}`
           const team = typeof body.team === 'string' ? body.team : ''
           const message = typeof body.message === 'string' ? body.message : ''
           const caller = typeof body.caller_session === 'string' ? body.caller_session : ''
+          // P2 receipt-callback: where THIS node's receipt should route on
+          // the caller's side — the caller knows its routable address best
+          // (a joined session's node team, e.g. via the transport face's
+          // callbackTarget mapping). Bounded; absent → the caller label
+          // plays its usual role.
+          const callback = typeof body.callback === 'string' && body.callback !== '' && body.callback.length <= 128 ? body.callback : ''
           const noWait = body.wait === false
           const contextId = typeof body.context_id === 'string' && body.context_id !== '' ? body.context_id : `ctx-${Math.random().toString(16).slice(2, 10)}`
           // The caller-born task id (idempotency key): echo it when present
@@ -1943,13 +1950,17 @@ ${message}`
             const woken = agent !== undefined ? undefined : wakeColdTeam(team)
             const deliver = (target: Agent): void => {
               const from = caller === '' ? 'an unknown node' : caller
+              // The receipt target: the caller's callback address when it
+              // supplied one (a session node team — wake-on-route covers a
+              // cold one), else the caller label as before.
+              const receiptTarget = callback !== '' ? callback : from
               try {
                 // The receipt header carries the task id: the target echoes
                 // it verbatim in "[A2A receipt] task <id> ...", closing the
                 // correlation loop with the caller's own route result.
-                steerRelay(target, `[A2A direct] (task ${taskId}) from "${from}" (routed to ${team}) sent:\n\n${message}\n\n(When done, route your outcome back with one call — a2a_route { team: "${from}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`)
+                steerRelay(target, `[A2A direct] (task ${taskId}) from "${from}" (routed to ${team}) sent:\n\n${message}\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`)
                 recordActivity('in', team, caller, true)
-                armReceiptAutosend(target, taskId, from, message)
+                armReceiptAutosend(target, taskId, receiptTarget, message)
                 // v0.5.23 (async-stall): "delivered" only proves the steer call
                 // returned — not that a turn started. An idle-phase steer wakes
                 // the driver, but a maintenance/abort window latches the wake for
@@ -2467,6 +2478,10 @@ ${message}`
       a2aJoinGateRefusal(exec)
       const callerSession = exec.agent === undefined ? undefined
         : sessionNodes.has(String(exec.agent.id)) ? sessionTeamOf(exec.agent) : sessionLabelOf(exec.agent)
+      // P2 receipt-callback: the caller's routable address rides the wire so
+      // a peer routes its receipt to THIS session's node team (not to
+      // wherever its caller-label heuristics land).
+      const callbackAddress = routableCallerLabel(callerSession) ? callerSession : undefined
       const fetch = memoizedCardFetch()
       // The task id is born at the caller (idempotency key semantics): both
       // dispatchers carry the one id, the peer request echoes it, and the
@@ -2477,7 +2492,7 @@ ${message}`
       // cheapest possible and immune to nested-signal aborts), then direct
       // publishers, then zone delegations, deduplicated by URL.
       const failures: string[] = []
-      const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, exec.signal, args.async === true, taskId)
+      const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, exec.signal, args.async === true, taskId, callbackAddress)
       if (outcome !== undefined) {
         if (outcome.ok) {
           trackOwedTask(taskId, args.team, 'local', outcome)
@@ -2501,7 +2516,7 @@ ${message}`
           const caps = card?.capabilities as { async?: unknown } | undefined
           peerAsync = card !== undefined && caps?.async === true
         }
-        const result = await dispatchPeerCandidate(candidate, args.team, args.message, args.context_id, exec.signal, callerSession, peerAsync, taskId)
+        const result = await dispatchPeerCandidate(candidate, args.team, args.message, args.context_id, exec.signal, callerSession, peerAsync, taskId, callbackAddress)
         if (result.ok || exec.signal.aborted) {
           if (result.ok) trackOwedTask(taskId, args.team, candidate, result)
           const notes: string[] = []
@@ -2542,7 +2557,7 @@ ${message}`
    * and the caller gets the delivered shape with the receipt contract.
    * @returns the canonical result, or undefined when the team is not local.
    */
-  async function dispatchLocalCandidate(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode = false, taskIdFromCaller?: string): Promise<A2aRouteResult | undefined> {
+  async function dispatchLocalCandidate(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode = false, taskIdFromCaller?: string, callbackAddress?: string): Promise<A2aRouteResult | undefined> {
     const webServer = ctx.get('webServer')
     const canvasName = parseCanvasTeamName(team)
     let teamIsLocal = team === config.team
@@ -2615,8 +2630,12 @@ ${message}`
         const target = await woken
         // N1 (review seat 7e4cf94a): dashed composite labels are NOT routable;
         // accept only <zone>/<short-id> shapes so envelopes stop bouncing -32004.
+        // An explicit callback address (P2) wins over the caller-label
+        // derivation: it is the submitting session's own node team.
         const routable = routableCallerLabel(callerSession)
-        const callerTeam = routable ? callerSession : undefined
+        const callerTeam = callbackAddress !== undefined && callbackAddress !== ''
+          ? callbackAddress
+          : routable ? callerSession : undefined
         const receiptHint = callerTeam === undefined ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${callerTeam}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
         steerRelay(target, `[A2A direct] (task ${taskId}) from "${callerSession ?? session}" (routed to ${team}) sent:\n\n${message}${receiptHint}`)
         armReceiptAutosend(target, taskId, callerTeam, message)
@@ -2759,9 +2778,9 @@ ${message}`
    * exactly like same-host ones; older peers that ignore the flag simply
    * keep the blocking wait (graceful degradation).
    */
-  async function dispatchPeerCandidate(url: string, team: string, message: string, contextId: string | undefined, signal: AbortSignal, callerSession: string | undefined, asyncMode = false, taskIdFromCaller?: string): Promise<A2aRouteResult> {
+  async function dispatchPeerCandidate(url: string, team: string, message: string, contextId: string | undefined, signal: AbortSignal, callerSession: string | undefined, asyncMode = false, taskIdFromCaller?: string, callbackAddress?: string): Promise<A2aRouteResult> {
     const flight = beginRoute(team, url)
-    const result = await client.routeDirect(url, team, message, contextId, signal, callerSession, asyncMode, taskIdFromCaller)
+    const result = await client.routeDirect(url, team, message, contextId, signal, callerSession, asyncMode, taskIdFromCaller, callbackAddress)
     endRoute(flight)
     recordActivity('out', team, url, result.ok)
     return result
@@ -2846,10 +2865,16 @@ ${message}`
       const taskId = request.idempotencyKey !== undefined && request.idempotencyKey !== ''
         ? request.idempotencyKey
         : `direct-${Math.random().toString(16).slice(2, 10)}`
-      // The wire caller label is this node's own label: the per-round
-      // receipt backflow to `callbackTarget` is the P2 slice, so receipts
-      // route to the bare team (the node's initiator) meanwhile — the owed
-      // ledger keeps the submission visible to the operator either way.
+      // P2 receipt-callback: the receipt routes back to the submitting
+      // session's own node team (wake-on-route covers a cold parent), not
+      // to the node's bare team. When the parent is not a joined session
+      // node, fall back to the bare team — the caller-side ledger still
+      // reconciles via the initiator.
+      let callbackAddress: string | undefined
+      if (request.callbackTarget !== undefined) {
+        const parent = request.callbackTarget.parentSessionId
+        callbackAddress = sessionNodes.has(parent) || joinedSessions.has(parent) ? `${config.team}/${id8(parent)}` : config.team
+      }
       for (const candidate of candidates) {
         // Capability gate per candidate, like a2a_route's loop: a
         // delivery:async submit never dials a peer whose signed card does
@@ -2860,7 +2885,7 @@ ${message}`
           const card = await fetch(candidate)
           peerAsync = (card?.capabilities as { async?: unknown } | undefined)?.async === true
         }
-        const result = await dispatchPeerCandidate(candidate, request.handle, request.message, request.contextId, abort, session, request.delivery === 'async' && peerAsync, taskId)
+        const result = await dispatchPeerCandidate(candidate, request.handle, request.message, request.contextId, abort, session, request.delivery === 'async' && peerAsync, taskId, callbackAddress)
         if (!result.ok) {
           // Idempotency verdicts (B3) are terminal, not failover: a replay
           // says the prior attempt at THIS peer stays authoritative —

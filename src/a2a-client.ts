@@ -206,6 +206,7 @@ export class A2aClient {
     callerSession?: string,
     asyncMode = false,
     taskIdFromCaller?: string,
+    callbackAddress?: string,
   ): Promise<A2aRouteResult> {
     const args: Record<string, unknown> = { team, message, caller_session: callerSession ?? this.options.sessionId }
     if (contextId !== undefined) args.context_id = contextId
@@ -217,6 +218,11 @@ export class A2aClient {
     // own result; the fallback below stamps it when the peer generated its
     // own (pre-0.5.3 peers).
     if (taskIdFromCaller !== undefined) args.task_id = taskIdFromCaller
+    // The callback address (P2): where the peer routes THIS caller's
+    // receipt — distinct from the caller label when the submitting session
+    // has its own node team (the transport face's callbackTarget mapping
+    // rides this). Old peers ignore the extra body field harmlessly.
+    if (callbackAddress !== undefined && callbackAddress !== '') args.callback = callbackAddress
     // Outbound half of the same B5 ruling: refuse to put an oversized
     // payload on the wire. Rejection is local and instant — a doomed upload
     // would burn the 15s HTTP budget and end in the peer's 413 anyway.
