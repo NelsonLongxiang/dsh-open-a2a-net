@@ -12,6 +12,9 @@
  * - card/frame elements are keyed-diffed so focus, the pickup transition,
  *   and an in-flight pointer capture survive a poll; SVG edges carry no
  *   state and are rebuilt wholesale;
+ * - the federation overlay (peer chips + activity/federal edges) renders
+ *   on every render, OUTSIDE the revision gate, so inFlight ages tick per
+ *   poll and the badge column tracks the content bounds;
  * - XSS: session labels/teams are attacker-shaped data and land only via
  *   createElement + textContent.
  *
@@ -23,7 +26,11 @@
 
 import type { LampState } from './layout-wire'
 import { buildLayoutDoc, clampDoc, type LayoutDoc, type LayoutRect } from './layout-doc'
-import { starEdges } from './edges'
+import { FRAME_HEAD_LIFT, starEdges } from './edges'
+import {
+  activityEdges, federalEdges, flyBounds, placePeers,
+  type FrameAnchor, type InFlightRow, type PeerPlacement, type PeerRow,
+} from './federation'
 import { clampViewport, fitView, panBy, screenToWorld, worldTransformCss, zoomAt, type LayoutViewport } from './viewport'
 import { NODE_H, WorldModel, nodeRect, deriveInitialFrame, planSeatFor, type SessionLite, type TeamLite } from './world'
 import { applyAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction, type RosterOp } from './canvas-ops'
@@ -51,6 +58,10 @@ export interface PlanningInput {
   sessions: ReadonlyArray<PlanningSession>
   teams: ReadonlyArray<PlanningTeam>
   peerCount: number
+  /** Federation peers (PR D): rows for the badge column right of the content. */
+  peers?: ReadonlyArray<PeerRow>
+  /** Pending outbound routes (PR D): the accent activity edges. */
+  inFlight?: ReadonlyArray<InFlightRow>
 }
 
 export interface PlanningDeps {
@@ -65,6 +76,8 @@ export interface PlanningDeps {
    * rolls its optimistic mutation back via the returned scoped undo.
    */
   onCanvasAction(a: CanvasAction): Promise<boolean>
+  /** Wall clock for the inFlight age labels (tests pin it; default Date.now). */
+  now?(): number
 }
 
 /** Pointer-like event surface the handlers consume (real events satisfy it). */
@@ -121,6 +134,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   let gesture: Gesture = { kind: 'none' }
   let spaceDown = false
   let renderedRevision = -1
+  const clock = deps.now ?? Date.now
   const ac = new AbortController()
   const signal = { signal: ac.signal } as AddEventListenerOptions
 
@@ -177,21 +191,37 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   status.className = 'p-status'
   const statusLive = document.createElement('span')
   const statusCold = document.createElement('span')
+  const statusAct = document.createElement('span')
+  statusAct.className = 'mut'
   const statusMut = document.createElement('span')
   statusMut.className = 'mut'
-  status.append(statusLive, statusCold, statusMut)
+  status.append(statusLive, statusCold, statusAct, statusMut)
+  // Fly control (PR D): the whole statusbar fits the frames ∪ peers region,
+  // keyboard-parity via Enter/Space with a focus ring (a11y parity with 0).
+  status.tabIndex = 0
+  status.setAttribute('role', 'button')
+  status.setAttribute('aria-label', '定位在途路由与联邦对端')
+  status.title = '定位在途与联邦（回车）'
+  status.addEventListener('click', () => flyToFederation(), signal)
+  status.addEventListener('keydown', (ev) => {
+    const e = ev as KeyboardEvent
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flyToFederation() }
+  }, signal)
 
   const legend = document.createElement('div')
   legend.className = 'p-legend'
-  const legendRow = (dashed: boolean, text: string): void => {
+  const legendRow = (dashed: boolean, text: string, color?: string): void => {
     const row = document.createElement('span')
     const bar = document.createElement('i')
     if (dashed) bar.className = 'dashed'
+    if (color !== undefined) bar.style.borderTopColor = color
     row.append(bar, document.createTextNode(text))
     legend.appendChild(row)
   }
   legendRow(false, '成员边（星形，框→成员）')
   legendRow(true, '跨队多属（虚线）')
+  legendRow(false, '活动边（inFlight 路由，瞬时）', 'var(--accent)')
+  legendRow(true, '联邦线（→peer）', 'var(--federal)')
 
   const noticeStack = document.createElement('div')
   noticeStack.className = 'p-notice-stack'
@@ -214,11 +244,13 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
 
   function render(): void {
     applyViewport()
-    if (model.revision === renderedRevision) return
-    renderedRevision = model.revision
-    renderFrames()
-    renderNodes()
-    renderEdges()
+    if (model.revision !== renderedRevision) {
+      renderedRevision = model.revision
+      renderFrames()
+      renderNodes()
+      renderEdges()
+    }
+    renderFederation()
   }
 
   // ── keyed diff: frames ──
@@ -351,6 +383,103 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
   }
 
+  // ── federation overlay (PR D): peer chips + activity/federal edges ──
+  // Runs on EVERY render, outside the model-revision gate: the poll's
+  // inFlight ages must tick even when the model is unchanged, and the
+  // badge column tracks the content bounds each reconcile. Its SVG
+  // children are tracked separately because renderEdges clears the svg
+  // wholesale - this appends after it (render() orders the two).
+  const peerEls = new Map<string, HTMLElement>()
+  let fedSvg: SVGElement[] = []
+  let lastPlacements: PeerPlacement[] = []
+  let lastPeers: ReadonlyArray<PeerRow> = []
+  let lastInFlight: ReadonlyArray<InFlightRow> = []
+
+  function renderFederation(): void {
+    for (const el of fedSvg) el.remove()
+    fedSvg = []
+    const bounds = model.contentBounds()
+    if (bounds === null) { // degenerate: empty canvas -> no badges, no edges
+      for (const [, el] of peerEls) el.remove()
+      peerEls.clear()
+      lastPlacements = []
+      return
+    }
+    const placements = placePeers(lastPeers, bounds)
+    lastPlacements = placements
+    // Chips: keyed by url (identity survives polls), repositioned every
+    // render; the url is attacker-shaped data -> textContent only.
+    const seen = new Set<string>()
+    for (const p of placements) {
+      seen.add(p.url)
+      let el = peerEls.get(p.url)
+      if (el === undefined) {
+        el = document.createElement('div')
+        el.className = 'peer'
+        el.dataset.url = p.url
+        const dia = document.createElement('span')
+        dia.className = 'dia'
+        const u = document.createElement('span')
+        u.className = 'u mono'
+        el.append(dia, u)
+        world.appendChild(el)
+        peerEls.set(p.url, el)
+      }
+      el.style.left = `${p.x}px`
+      el.style.top = `${p.y}px`
+      const uEl = el.querySelector<HTMLElement>('.u')!
+      const txt = `${p.url} score ${p.score ?? 0}`
+      if (uEl.textContent !== txt) uEl.textContent = txt
+    }
+    for (const [url, el] of [...peerEls]) {
+      if (!seen.has(url)) { el.remove(); peerEls.delete(url) }
+    }
+    // Edges: titlebar anchors (fx + fw/2, fy + 11, edges.ts lockstep).
+    const anchors = new Map<string, FrameAnchor>()
+    for (const [name, rect] of model.allFrames()) {
+      anchors.set(name, { name, x: rect.x + rect.w / 2, y: rect.y + FRAME_HEAD_LIFT })
+    }
+    for (const e of activityEdges(lastInFlight, anchors, placements, clock())) {
+      fedSvg.push(...fedEdge(e, 'e-activity', e.label))
+    }
+    for (const e of federalEdges(placements, bounds)) {
+      fedSvg.push(...fedEdge(e, 'e-federal', e.label))
+    }
+  }
+
+  /** One overlay line + its optional midpoint label (offset +14/+18). */
+  function fedEdge(
+    e: { x1: number; y1: number; x2: number; y2: number },
+    cls: string,
+    label: string,
+  ): SVGElement[] {
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+    line.setAttribute('class', cls)
+    line.setAttribute('x1', String(e.x1))
+    line.setAttribute('y1', String(e.y1))
+    line.setAttribute('x2', String(e.x2))
+    line.setAttribute('y2', String(e.y2))
+    svg.appendChild(line)
+    const out: SVGElement[] = [line]
+    if (label !== '') {
+      const t = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+      t.setAttribute('class', 'edge-label mono')
+      t.setAttribute('x', String((e.x1 + e.x2) / 2 + 14))
+      t.setAttribute('y', String((e.y1 + e.y2) / 2 + 18))
+      t.textContent = label
+      svg.appendChild(t)
+      out.push(t)
+    }
+    return out
+  }
+
+  /** Statusbar fly: fit the frames ∪ peers region (flyBounds pads it). */
+  function flyToFederation(): void {
+    vp = fitView(flyBounds(model.contentBounds(), lastPlacements), root.clientWidth || viewW, root.clientHeight || viewH)
+    applyViewport()
+    deps.onDirty()
+  }
+
   // ── status counts ──
   function renderStatus(input: PlanningInput): void {
     const live = input.sessions.filter(s => s.live !== false).length
@@ -365,6 +494,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     bCold.className = 'warn'
     bCold.textContent = `● ${cold} cold`
     statusCold.appendChild(bCold)
+    statusAct.textContent = `${input.inFlight?.length ?? 0} inFlight`
     statusMut.className = 'mut'
     statusMut.textContent = `${input.teams.length} 队 · ${input.peerCount} peer`
   }
@@ -619,7 +749,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   function pointerDown(ev: SeamPointer): void {
     if (viewW === 0) { viewW = root.clientWidth; viewH = root.clientHeight }
     const target = ev.target as Element | null
-    if (target !== null && (target.closest('button') !== null || target.closest('.p-lamp') !== null)) return
+    if (target !== null && (target.closest('button') !== null || target.closest('.p-lamp') !== null || target.closest('.p-status') !== null)) return
     const p = localXY(ev)
     const nodeEl = target !== null ? target.closest<HTMLElement>('.p-node') : null
     const headEl = target !== null ? target.closest<HTMLElement>('.p-frame-head') : null
@@ -870,6 +1000,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
 
   function reconcile(input: PlanningInput): void {
     lastTeams = input.teams
+    lastPeers = input.peers ?? []
+    lastInFlight = input.inFlight ?? []
     const memberships = new Map<string, Array<{ team: string; index: number }>>()
     for (const team of input.teams) {
       for (let i = 0; i < team.members.length; i++) {

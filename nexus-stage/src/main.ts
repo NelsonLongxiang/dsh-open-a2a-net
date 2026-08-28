@@ -163,7 +163,13 @@ async function cycle(): Promise<void> {
   // readability acceptance run without a live fleet.
   const sessions = useMock ? MOCK.sessions : (body.sessions ?? []).filter((s) => s.joined === true)
   const teams = useMock ? MOCK.canvas.teams : (body.canvas?.teams ?? [])
-  const peers = useMock ? MOCK.peers : (body.peers ?? [])
+  const peers = useMock ? MOCK.peers : (body.peers ?? []).filter(p => p !== null && typeof p === 'object' && typeof (p as { url?: unknown }).url === 'string')
+  // PR D federation rows: pending outbound routes ride the same state
+  // payload (top-level inFlight; the mock face has none). Cast only —
+  // topology.StateBody predates the rows and is outside this change.
+  const inFlight = useMock
+    ? []
+    : ((body as { inFlight?: ReadonlyArray<{ team: string; peer: string; startedAt: number }> }).inFlight ?? []).filter(r => r !== null && typeof r === 'object' && typeof (r as { team?: unknown }).team === 'string' && typeof (r as { peer?: unknown }).peer === 'string' && Number.isFinite((r as { startedAt?: unknown }).startedAt))
   // Read-path of layout persistence (write-path arrives with planning mode):
   // a node saved on a previous visit keeps its world spot instead of a fresh
   // random seat, so saved arrangements survive reloads.
@@ -240,7 +246,7 @@ async function cycle(): Promise<void> {
       planning.adoptExternalLayout(layout)
     }
   }
-  planning.reconcile({ sessions, teams, peerCount: peers.length })
+  planning.reconcile({ sessions, teams, peerCount: peers.length, peers, inFlight })
   canvasFace = body.canvas !== undefined
   tabPlan.style.display = canvasFace ? '' : 'none'
   if (!canvasFace && mode === 'plan') setMode('scene')

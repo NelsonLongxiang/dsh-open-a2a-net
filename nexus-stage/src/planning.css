@@ -13,10 +13,11 @@
   /* primitive */
   --uupm-ink-0:#dde3f0; --uupm-ink-1:#7a86a0; --uupm-bg-0:#060a12; --uupm-bg-1:#0d1322; --uupm-bg-2:#131b2e;
   --uupm-accent:#8B5CF6; --uupm-live:#4ade80; --uupm-cold:#4a5568; --uupm-edge-member:#22d3ee;
-  --uupm-warn:#f59e0b; --uupm-error:#ef4444;
+  --uupm-warn:#f59e0b; --uupm-error:#ef4444; --uupm-indigo:#6366f1;
   /* semantic */
   --surface:var(--uupm-bg-1); --ink:var(--uupm-ink-0); --ink-muted:var(--uupm-ink-1);
   --accent:var(--uupm-accent); --edge-live:var(--uupm-live); --edge-cold:var(--uupm-cold);
+  --federal:var(--uupm-indigo);
   /* component */
   --card-bg:var(--surface); --card-line:rgba(122,134,160,.28); --toolbar-bg:rgba(13,19,34,.92);
 }
@@ -118,6 +119,27 @@
 /* ── PR C: drop-target highlight, context menu, name dialog, notices ── */
 #dsh-plan .p-frame.drop-target{border-color:var(--accent); border-width:2px; background:rgba(139,92,246,.10)}
 #dsh-plan .p-frame-head:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+
+/* ── PR D: federation overlay — peer badges, activity/federal edges, status fly ── */
+#dsh-plan .peer{position:absolute; display:flex; align-items:center; gap:7px; pointer-events:none;
+  border:1px dashed var(--federal); border-radius:8px; background:color-mix(in srgb, var(--federal) 7%, transparent);
+  padding:4px 9px; font-size:11px; color:var(--ink); white-space:nowrap;
+  transform:translate(-50%,-50%)}
+#dsh-plan .peer .dia{width:10px; height:10px; flex:none; background:var(--federal); transform:rotate(45deg)}
+#dsh-plan .peer .u{max-width:34ch; overflow:hidden; text-overflow:ellipsis}
+#dsh-plan .e-activity{stroke:var(--accent); stroke-width:2; stroke-dasharray:8 6; stroke-opacity:.9}
+#dsh-plan .e-federal{stroke:var(--federal); stroke-width:1.5; stroke-dasharray:6 5; stroke-opacity:.5}
+#dsh-plan .edge-label{font-size:10.5px; fill:var(--ink-muted)}
+/* in-flight routes flow only when motion is welcome; reduced-motion keeps
+   the zero-animation baseline (state stays in the label text). */
+@media (prefers-reduced-motion: no-preference){
+  #dsh-plan .e-activity{animation:p-activity-flow 1.1s linear infinite}
+}
+@keyframes p-activity-flow{to{stroke-dashoffset:-28}}
+#dsh-plan .p-status{cursor:pointer}
+#dsh-plan .p-status:hover{border-color:var(--accent)}
+#dsh-plan .p-status:active{background:rgba(139,92,246,.12)}
+#dsh-plan .p-status:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
 
 #dsh-plan .p-menu{position:fixed; z-index:5; min-width:170px; display:grid; padding:4px; gap:2px;
   background:var(--toolbar-bg); border:1px solid var(--card-line); border-radius:8px}
