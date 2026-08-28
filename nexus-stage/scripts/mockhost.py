@@ -31,7 +31,10 @@ def fetch_state() -> bytes:
 
 
 state_bytes = fetch_state()
-layout_bytes = json.dumps({'ok': True, 'layout': None}).encode()
+# The layout store starts absent and remembers saves in memory only - the
+# mock exists to exercise the stage's save loop (lamp ladder), not to be a
+# second implementation of the host's clamp (the stage normalizes on GET).
+layout_store = {'doc': None}
 
 
 class MockHost(SimpleHTTPRequestHandler):
@@ -45,9 +48,35 @@ class MockHost(SimpleHTTPRequestHandler):
             else:
                 self._json(state_bytes)
         elif path == '/__dsh_a2a/canvas-layout':
-            self._json(layout_bytes)
+            self._json(json.dumps({'ok': True, 'layout': layout_store['doc']}).encode())
         else:
             super().do_GET()
+
+    def do_POST(self):  # noqa: N802 - stdlib signature
+        path, _, query = self.path.partition('?')
+        referer = self.headers.get('Referer') or ''
+        faulted = 'fault' in query or 'fault' in referer
+        if path != '/__dsh_a2a/canvas-layout':
+            self._json(b'{"ok":false,"error":"unknown route"}', status=404)
+            return
+        try:
+            length = int(self.headers.get('Content-Length') or 0)
+            body = json.loads(self.rfile.read(length) or b'{}')
+        except Exception:  # noqa: BLE001 - malformed body mirrors the host 400
+            self._json(b'{"ok":false,"error":"malformed body"}', status=400)
+            return
+        if faulted:
+            self._json(b'{"ok":false,"error":"injected fault"}', status=500)
+            return
+        action = body.get('action')
+        if action == 'reset':
+            layout_store['doc'] = None
+            self._json(b'{"ok":true,"layout":null}')
+        elif action == 'save':
+            layout_store['doc'] = body.get('layout')
+            self._json(json.dumps({'ok': True, 'layout': layout_store['doc']}).encode())
+        else:
+            self._json(b'{"ok":false,"error":"unknown action"}')
 
     def _json(self, payload: bytes, status: int = 200):
         self.send_response(status)
