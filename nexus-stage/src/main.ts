@@ -3,7 +3,6 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 import { disposeGeometries } from './dispose'
 import { createFaultReporter } from './fault'
-import { seatFor } from './seat'
 import { C, S } from './tokens'
 import { LodMachine, prefersReducedMotion } from './lod'
 import type { Lod } from './lod'
@@ -18,6 +17,7 @@ import { updateCensus } from './census'
 import { createStageKeyboardHandler, wireReducedRendering } from './interaction'
 import { createPlanningView } from './planning-view'
 import { createSaveLoop, type LampState } from './layout-wire'
+import { projectFleet } from './reproject'
 import './overlay.css'
 
 // ─── DOM shell ──
@@ -173,7 +173,7 @@ async function cycle(): Promise<void> {
     if (!liveIds.has(sid)) { const lbl = labelByNode.get(sid); if (lbl) detachLabel(lbl); nodeGroup.remove(mesh); meshesById.delete(sid) }
   }
 
-  // Seat un-seated nodes.
+  // Seat un-seated nodes (position arrives in the reprojection pass below).
   for (let i = 0; i < sessions.length; i++) {
     const s = sessions[i]!
     const sid = s.id
@@ -183,16 +183,6 @@ async function cycle(): Promise<void> {
       const color = isLive ? S.nodeLive : S.nodeCold
       mesh = makeNode(color, isLive ? 0.9 : 0.5)
       mesh.userData = { label: s.name ?? s.label, sid }
-      const saved = layout?.nodes?.[sid]
-      // Saved layout wins; otherwise the seat is a pure hash of the session
-      // id, so reloads reproduce the same star map instead of reshuffling.
-      // Malformed layout rows (non-numeric) fall through to the hash seat.
-      if (saved !== undefined && typeof saved.x === 'number' && typeof saved.y === 'number') {
-        mesh.position.set(saved.x, 0, saved.y)
-      } else {
-        const p = seatFor(sid)
-        mesh.position.set(p.x, p.y, p.z)
-      }
       nodeGroup.add(mesh)
       meshesById.set(sid, mesh)
     }
@@ -200,6 +190,22 @@ async function cycle(): Promise<void> {
     sessionTeam.set(sid, s.team)
     // Real normalized row: interaction handlers read this, never MOCK.
     sessionById.set(sid, s)
+  }
+
+  // 3D lens reprojection (ruling A of review-node-position.md): the shared
+  // layout document is 2D pixels (card centers), so the scene re-projects
+  // the whole fleet - saved positions plus unsaved polar fallbacks - into
+  // its observation envelope every poll. This keeps ANY arrangement on
+  // camera (a modest 2D arrange used to throw 4 of 5 nodes off camera) and
+  // makes the 3D view follow 2D saves mid-session (P3: layout was read
+  // only at mesh creation). Runs before the edge pass so edges follow.
+  const targets = projectFleet(
+    sessions.map(s => s.id),
+    (layout?.nodes ?? {}) as Record<string, { x: number; y: number }>,
+  )
+  for (const [sid, mesh] of meshesById) {
+    const t = targets.get(sid)
+    if (t !== undefined) mesh.position.set(t.x, 0, t.y)
   }
 
   // Membership edges: hub-star (team centroid + spokes) instead of the O(n²)
