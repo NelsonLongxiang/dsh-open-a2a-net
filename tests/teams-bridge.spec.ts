@@ -617,3 +617,41 @@ describe('P2 receipt-callback routing', () => {
     expect(cold!.description).toContain('cold')
   })
 })
+
+describe('P2 receipt-resolved event seam', () => {
+  it('emits a2a/receipt-resolved when an inbound receipt settles a tracked task', async () => {
+    const m = await mount({ nativeTeamsInbound: true })
+    mounted.push(m.dispose)
+    const initiator = makeAgent('session-main1')
+    const steer = vi.fn((message: { content: Array<{ type: string; text?: string }> }) => {
+      setTimeout(() => {
+        initiator.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'work finished' }] } } })
+        m.ctx.emit('agent/status', { agent: initiator, status: 'idle' })
+      }, 30)
+    })
+    ;(initiator as unknown as { steer: unknown }).steer = steer
+    m.agents.agents.push(initiator)
+    const resolved: Array<{ taskId: string; late?: boolean }> = []
+    m.ctx.on('a2a/receipt-resolved', info => { resolved.push(info) })
+    // Book a tracked owed row: an async local steer route (no bridge marker).
+    const route = m.ctx.tools.get('a2a_route')
+    const result = await route!.execute({ team: 'dsh', message: 'async job', async: true }, noAgent()) as { ok: boolean; task_id?: string }
+    expect(result.ok).toBe(true)
+    expect(resolved).toHaveLength(0)
+    // The receipt arrives over the direct endpoint and settles the row.
+    const res = await postJson(m.port, '/a2a/direct', { team: 'dsh', message: `[A2A receipt] task ${String(result.task_id)} tests green`, caller_session: 'someone' })
+    const body = await res.json() as { result?: { text?: string } }
+    expect(body.result?.text).toBe('work finished')
+    expect(resolved).toHaveLength(1)
+    expect(resolved[0]).toMatchObject({ taskId: result.task_id, team: 'dsh' })
+  })
+
+  it('a receipt that correlates nothing emits no event', async () => {
+    const m = await mount({})
+    mounted.push(m.dispose)
+    const resolved: Array<{ taskId: string }> = []
+    m.ctx.on('a2a/receipt-resolved', info => { resolved.push(info) })
+    await postJson(m.port, '/a2a/direct', { team: 'dsh', message: '[A2A receipt] task direct-unknown nonsense', caller_session: 'someone' })
+    expect(resolved).toHaveLength(0)
+  })
+})

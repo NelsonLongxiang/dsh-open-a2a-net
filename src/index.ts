@@ -23,7 +23,7 @@ import { JoinedSessions } from './joined-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
-import { TaskLedger, SUMMARY_CAP } from './task-ledger.ts'
+import { TaskLedger, SUMMARY_CAP, type ReceiptResolvedInfo } from './task-ledger.ts'
 import { formatReceipt } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from './idempotency-store.ts'
@@ -66,6 +66,18 @@ export { A2aClient } from './a2a-client.ts'
 export type { A2aClientOptions, A2aFetch, A2aSchedule } from './a2a-client.ts'
 export { NATIVE_TEAMS_A2A_FACE_KEY } from './teams-bridge.ts'
 export type { NativeTeamsBridgeFace, TeamsBridgeResolveInfo, TeamsBridgeSubmitOutcome, TeamsBridgeSubmitRequest } from './teams-bridge.ts'
+export type { ReceiptResolvedInfo } from './task-ledger.ts'
+
+// P2 seam: every correlated receipt is announced on this event for peer
+// plugins that track async submissions natively (native-teams settles its
+// outstanding `startRoundAsync` rounds from it). Payload vocabulary lives in
+// ReceiptResolvedInfo; emission is fire-and-forget at both receipt arrival
+// points (the direct endpoint and the local dispatch relay).
+declare module '@deepseek-ai/cordis' {
+  interface Events {
+    'a2a/receipt-resolved'(payload: ReceiptResolvedInfo): void
+  }
+}
 
 export const name = 'a2a'
 
@@ -560,6 +572,23 @@ export function apply(ctx: Context, config: Config): void {
   // resolves it — the caller-side half of the receipt contract, persisted so
   // a restart does not orphan the reconciliation.
   const taskLedger = new TaskLedger(join(home, 'a2a', 'tasks.json'))
+
+  /**
+   * Settle one message through the ledger and announce what it correlated
+   * on `a2a/receipt-resolved` — the seam peer plugins (native-teams)
+   * consume to settle their outstanding async submissions. Listener
+   * failures are contained: a bad consumer must not break the routing path.
+   * @param message - the inbound or relayed message text.
+   */
+  function settleAndAnnounce(message: string): void {
+    const resolved = taskLedger.resolveFromMessage(message)
+    if (resolved === undefined) return
+    try {
+      ctx.emit('a2a/receipt-resolved', resolved)
+    } catch (error) {
+      logger.warn(`a2a: receipt-resolved listener rejected: ${String(error)}`)
+    }
+  }
 
   // Server-side idempotency keys (work-order P3): a caller-born task id
   // executes at most once inside the 24h window — same-key replays answer
@@ -1958,7 +1987,7 @@ ${message}`
           // receipt resolves the task it echoes, whichever wait semantics
           // carried it here. Correlation is bookkeeping only — the message
           // steers on exactly as before.
-          taskLedger.resolveFromMessage(message)
+          settleAndAnnounce(message)
           // Inbound routing is foreground demand: boot prewarm yields for a
           // quiet window around it.
           lastWakeDemandAt = Date.now()
@@ -2593,7 +2622,7 @@ ${message}`
     // A receipt relayed between same-host sessions (the answering session
     // routing its `[A2A receipt]` back over the in-process candidate)
     // correlates here too — same contract, no HTTP on the path.
-    taskLedger.resolveFromMessage(message)
+    settleAndAnnounce(message)
     const taskId = taskIdFromCaller ?? `direct-${Math.random().toString(16).slice(2, 10)}`
     const flight = beginRoute(team, 'local')
     if (asyncMode) {

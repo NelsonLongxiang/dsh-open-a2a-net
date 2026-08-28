@@ -67,7 +67,7 @@ describe('task-ledger abandon', () => {
     const { ledger, file } = tmpLedger()
     ledger.track('t-1', 'dsh/target', 'http://peer')
     ledger.abandon('t-1', 'gave up waiting')
-    expect(ledger.resolveFromMessage('[A2A receipt] task t-1 actually finished late')).toBe(true)
+    expect(ledger.resolveFromMessage('[A2A receipt] task t-1 actually finished late')).toBeDefined()
     const row = ledger.archive()[0]
     expect(row?.summary).toBe('caller-abandoned: gave up waiting')
     expect(row?.lateReceiptAt).toBeTypeOf('number')
@@ -80,7 +80,7 @@ describe('task-ledger abandon', () => {
   it('keeps ordinary receipt correlation untouched for non-abandoned rows', () => {
     const { ledger } = tmpLedger()
     ledger.track('t-9', 'dsh/target', 'local')
-    expect(ledger.resolveFromMessage('[A2A receipt] task t-9 normal finish')).toBe(true)
+    expect(ledger.resolveFromMessage('[A2A receipt] task t-9 normal finish')).toBeDefined()
     const row = ledger.archive()[0]
     expect(row?.summary).toBe('normal finish')
     expect(row?.lateReceiptAt).toBeUndefined()

@@ -123,6 +123,29 @@ export interface TaskLedgerOptions {
   now?: () => number
 }
 
+/**
+ * What one correlated receipt settled — the payload of the
+ * `a2a/receipt-resolved` event, emitted for consumers that react to receipt
+ * arrivals (P2: native-teams settles its outstanding async submissions from
+ * this seam). `outcome` carries the v2 envelope's controlled-vocabulary
+ * verdict when the receipt rode one; `late` marks a receipt answering a
+ * dead-lettered row (revival) or an abandoned row (arrival recorded) — a
+ * healthy row's duplicate receipt refreshes the archive with NO marker.
+ */
+export interface ReceiptResolvedInfo {
+  readonly taskId: string
+  /** The team the task was routed to (as the dispatcher recorded it). */
+  readonly team: string
+  /** The peer (or `'local'`) the task was dispatched through. */
+  readonly peer: string
+  /** v2 envelope outcome, when the receipt rode one. */
+  readonly outcome?: string
+  /** One-line outcome summary, when the receipt carried one. */
+  readonly summary?: string
+  /** True when the receipt answered a dead-lettered or abandoned row. */
+  readonly late?: boolean
+}
+
 /** The persisted ledger document: the owed book plus its settled archive. */
 export interface TaskLedgerSnapshot {
   readonly tasks: readonly TaskRecord[]
@@ -308,11 +331,12 @@ export class TaskLedger {
    * record with the latest outcome. A dead-lettered row revives through this
    * same path when a revived target finally answers.
    * @param message - the inbound or relayed message text.
-   * @returns whether the message correlated a tracked task.
+   * @returns what the receipt settled, or `undefined` when the message
+   *   correlated nothing.
    */
-  resolveFromMessage(message: string): boolean {
+  resolveFromMessage(message: string): ReceiptResolvedInfo | undefined {
     const parsed = parseReceipt(message)
-    if (parsed === null) return false
+    if (parsed === null) return undefined
     const taskId = parsed.taskId
     const summary = parsed.summary.trim().slice(0, SUMMARY_CAP)
     // Controlled vocabulary only: a foreign outcome string never lands here.
@@ -335,10 +359,19 @@ export class TaskLedger {
         ...(elapsedMs !== undefined ? { elapsedMs } : {}),
       })
       this.persist()
-      return true
+      return {
+        taskId,
+        team: record.team,
+        peer: record.peer,
+        // A dead row still lives in the tasks array (the sweep only flips
+        // status): its receipt is a revival — the late marker's first form.
+        ...(record.status === 'dead' ? { late: true } : {}),
+        ...(envelopeOutcome !== undefined ? { outcome: envelopeOutcome } : {}),
+        ...(summary !== '' ? { summary } : {}),
+      }
     }
     const settled = this.archived.find(entry => entry.taskId === taskId)
-    if (settled === undefined) return false
+    if (settled === undefined) return undefined
     // Orphan isolation: a receipt for an explicitly abandoned row must not
     // rewrite the abandonment outcome — the caller stopped waiting by choice.
     // Record that the target did answer later; keep the decision verbatim and
@@ -358,7 +391,17 @@ export class TaskLedger {
       ...this.archived.filter(entry => entry.taskId !== taskId),
     ]
     this.persist()
-    return true
+    return {
+      taskId,
+      team: settled.team,
+      peer: settled.peer,
+      ...(envelopeOutcome !== undefined ? { outcome: envelopeOutcome } : {}),
+      ...(summary !== '' ? { summary } : {}),
+      // The late marker's second form: the caller had already moved on
+      // (abandonment recorded verbatim). A HEALTHY row's duplicate refresh
+      // is neither dead-lettered nor abandoned — it carries no marker.
+      ...(callerEnded ? { late: true } : {}),
+    }
   }
 
   /** Move one settled record to the archive head, trimming at the cap. */
