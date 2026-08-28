@@ -1922,6 +1922,7 @@ describe('a2a plugin module surface', () => {
       flushTimeoutMs: 300_000,
       routeTimeoutMs: 1_800_000,
       nativeTeamsInbound: false,
+      nativeRoundWaitMs: 180_000,
     })
   })
 })

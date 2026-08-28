@@ -106,7 +106,15 @@ export class A2aClient {
         signal: controller.signal,
       })
       const text = await response.text()
-      if (!response.ok) throw new Error(`A2A HTTP ${String(response.status)}: ${text.slice(0, 200)}`)
+      if (!response.ok) {
+        // Carry the status and raw body on the error so callers can read the
+        // peer's structured wire code (idempotency verdicts) without parsing
+        // the prose of the message.
+        const error = new Error(`A2A HTTP ${String(response.status)}: ${text.slice(0, 200)}`)
+        ;(error as { statusCode?: number }).statusCode = response.status
+        ;(error as { bodyText?: string }).bodyText = text
+        throw error
+      }
       return JSON.parse(text) as unknown
     } catch (error) {
       // Tag the escapee so the caller can tell our budget firing from an
@@ -222,10 +230,24 @@ export class A2aClient {
       }, baseUrl) as WireRoute
     } catch (error) {
       const ownBudgetExhausted = (error as { ownBudgetExhausted?: unknown }).ownBudgetExhausted === true
+      // The peer's structured wire code rides the HTTP rejection body
+      // (idempotency verdicts -32002/-32003 among others): surface it, so a
+      // caller can tell a terminal verdict from an ordinary transport miss
+      // without parsing prose.
+      let code = -32000
+      const bodyText = (error as { bodyText?: unknown }).bodyText
+      if (typeof bodyText === 'string') {
+        try {
+          const parsed = JSON.parse(bodyText) as { code?: unknown }
+          if (typeof parsed.code === 'number') code = parsed.code
+        } catch {
+          /* prose body — keep the generic code */
+        }
+      }
       const failure: Extract<A2aRouteResult, { ok: false }> = {
         ok: false,
         error: `direct route to peer failed: ${String(error)}`,
-        code: -32000,
+        code,
         // Wait-window telemetry (envelope-v2 §4): measured patience plus
         // whose budget ended it. Pure observation, zero semantics.
         abortElapsedMs: Date.now() - dispatchedAt,
@@ -264,29 +286,6 @@ export class A2aClient {
       task_id: wireText(raw.task_id) !== '' ? wireText(raw.task_id) : taskIdFromCaller ?? '',
       context_id: wireText(raw.context_id),
       task_status: wireText(raw.task_status),
-    }
-  }
-
-  /**
-   * Ask one peer's control route to cancel a task this node dispatched to
-   * it (the native-teams transport face's cancel half). The peer applies
-   * its own control guard (the shared api key this node dials with);
-   * `cleared` maps to true, every other outcome or transport failure is a
-   * plain false — cancellation is best-effort by contract.
-   * @param baseUrl - the peer's base URL.
-   * @param taskId - the task id the original submit carried.
-   * @param reason - optional human-readable reason.
-   * @returns whether the peer reported the row cleared.
-   */
-  async cancelRemoteTask(baseUrl: string, taskId: string, reason?: string): Promise<boolean> {
-    try {
-      const raw = await this.http('/__dsh_a2a/tasks/cancel', {
-        method: 'POST',
-        body: JSON.stringify({ task_id: taskId, ...(reason !== undefined && reason !== '' ? { reason } : {}) }),
-      }, baseUrl) as { readonly outcome?: unknown }
-      return raw.outcome === 'cleared'
-    } catch {
-      return false
     }
   }
 }

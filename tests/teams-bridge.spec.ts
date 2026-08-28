@@ -45,6 +45,7 @@ class FakeTeamsRegistry extends Service {
   readonly rounds: Array<{ args: { team?: string; message: string }; parentId: string }> = []
   answer = 'round done'
   fail = false
+  hang = false
   constructor(ctx: Context) { super(ctx, 'teams') }
   listTeams(): Array<{ name: string; description: string }> {
     return [...this.claims.keys()].map(name => ({ name, description: `team ${name}` }))
@@ -56,6 +57,7 @@ class FakeTeamsRegistry extends Service {
   }
   async startRound(args: { team?: string; message: string }, parent: { id: string; session: { events: readonly unknown[] } }): Promise<string> {
     this.rounds.push({ args, parentId: String(parent.id) })
+    if (this.hang) return new Promise<string>(() => {})
     if (this.fail) throw new Error('the round failed')
     return this.answer
   }
@@ -70,7 +72,7 @@ function tmpHome(): string {
 }
 
 /** One real loopback peer: a verified signed card plus an echoing direct route. */
-async function startPeer(options: { session?: string; asyncCap?: boolean } = {}): Promise<{ url: string; seen: Array<Record<string, unknown>>; close: () => Promise<void> }> {
+async function startPeer(options: { session?: string; asyncCap?: boolean; direct?: (body: Record<string, unknown>) => { readonly status: number; readonly payload: Record<string, unknown> } } = {}): Promise<{ url: string; seen: Array<Record<string, unknown>>; close: () => Promise<void> }> {
   const { privateKey } = generateKeyPairSync('ed25519')
   const session = options.session ?? 'peer-node'
   const card = signCard({
@@ -94,10 +96,18 @@ async function startPeer(options: { session?: string; asyncCap?: boolean } = {})
       req.on('end', () => {
         const body = JSON.parse(raw) as Record<string, unknown>
         seen.push(body)
-        const payload = body.wait === false
-          ? JSON.stringify({ routed: true, delivered: true, team: body.team, session, task_id: body.task_id, context_id: 'ctx-peer', task_status: 'TASK_STATE_DELIVERED' })
-          : JSON.stringify({ routed: true, team: body.team, session, result: { text: 'peer says hi' }, task_id: body.task_id, context_id: 'ctx-peer', task_status: 'TASK_STATE_COMPLETED' })
-        res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+        let status = 200
+        let payload: string
+        if (options.direct !== undefined) {
+          const overridden = options.direct(body)
+          status = overridden.status
+          payload = JSON.stringify(overridden.payload)
+        } else if (body.wait === false) {
+          payload = JSON.stringify({ routed: true, delivered: true, team: body.team, session, task_id: body.task_id, context_id: 'ctx-peer', task_status: 'TASK_STATE_DELIVERED' })
+        } else {
+          payload = JSON.stringify({ routed: true, team: body.team, session, result: { text: 'peer says hi' }, task_id: body.task_id, context_id: 'ctx-peer', task_status: 'TASK_STATE_COMPLETED' })
+        }
+        res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
         res.end(payload)
       })
       return
@@ -124,7 +134,7 @@ type Mounted = {
   dispose: () => Promise<void>
 }
 
-async function mount(options: { peers?: string[]; nativeTeamsInbound?: boolean } = {}): Promise<Mounted> {
+async function mount(options: { peers?: string[]; nativeTeamsInbound?: boolean; nativeRoundWaitMs?: number } = {}): Promise<Mounted> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
@@ -155,6 +165,7 @@ async function mount(options: { peers?: string[]; nativeTeamsInbound?: boolean }
     dshHome: home,
     cardTtlMs: 172_800_000,
     nativeTeamsInbound: options.nativeTeamsInbound,
+    nativeRoundWaitMs: options.nativeRoundWaitMs,
   } satisfies Config)
   return {
     ctx,
@@ -174,6 +185,7 @@ const noAgent = (): ToolRunContext => ({ signal: new AbortController().signal } 
 
 const mounted: Array<() => Promise<void>> = []
 afterEach(async () => {
+  vi.useRealTimers()
   while (mounted.length > 0) await (mounted.pop() as () => Promise<void>)()
 })
 
@@ -315,5 +327,136 @@ describe('inbound native-teams bridge', () => {
     off.registry.claims.set('freight-team', { plane: 'local', localLabel: 'team' })
     const result = await off.ctx.tools.get('a2a_teams')!.execute({}, noAgent()) as { teams: Array<{ team: string }> }
     expect(result.teams.find(row => row.team === 'freight-team')).toBeUndefined()
+  })
+
+  it('a registry claim never shadows a live session team (documented chain order)', async () => {
+    const m = await mount({ nativeTeamsInbound: true })
+    mounted.push(m.dispose)
+    const events: unknown[] = []
+    const node = makeAgent('session-aaa')
+    ;(node.session as { events: unknown[] }).events = events
+    const steer = vi.fn(() => {
+      events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'session node answered' }] } } })
+      m.ctx.emit('agent/status', { agent: node, status: 'idle' })
+    })
+    ;(node as unknown as { steer: unknown }).steer = steer
+    m.agents.agents.push(node)
+    m.ctx.emit('agent/created', { agent: node })
+    await postJson(m.port, '/__dsh_a2a/join', { id: 'session-aaa' })
+    m.registry.claims.set('dsh/aaa', { plane: 'local', localLabel: 'team' })
+    const route = m.ctx.tools.get('a2a_route')
+    const result = await route!.execute({ team: 'dsh/aaa', message: 'who is this' }, noAgent()) as { ok: boolean; reply?: string }
+    expect(result.ok).toBe(true)
+    expect(result.reply).toBe('session node answered')
+    expect(steer).toHaveBeenCalledTimes(1)
+    expect(m.registry.rounds).toHaveLength(0)
+  })
+
+  it('wait:false with no live initiator fails honestly instead of answering phantom delivered', async () => {
+    const m = await mount({ nativeTeamsInbound: true })
+    mounted.push(m.dispose)
+    m.registry.claims.set('freight-team', { plane: 'local', localLabel: 'team' })
+    const res = await postJson(m.port, '/a2a/direct', { team: 'freight-team', message: 'x', caller_session: 'peer-x', wait: false })
+    const body = await res.json() as { delivered?: boolean; error?: string }
+    expect(body.delivered).toBeUndefined()
+    expect(body.error).toContain('No live DSH initiator')
+    expect(m.registry.rounds).toHaveLength(0)
+  })
+
+  it('a wait-mode round past the reply window answers the honest unsettled shape (no false completion)', async () => {
+    const m = await mount({ nativeTeamsInbound: true, nativeRoundWaitMs: 150 })
+    mounted.push(async () => { await m.dispose() })
+    const initiator = makeAgent('session-main1')
+    m.agents.agents.push(initiator)
+    m.registry.claims.set('freight-team', { plane: 'local', localLabel: 'team' })
+    m.registry.hang = true
+    const res = await postJson(m.port, '/a2a/direct', { team: 'freight-team', message: 'slow round', caller_session: 'peer-x' })
+    const body = await res.json() as { task_status?: string; result?: { text?: string } }
+    expect(body.task_status).toBe('TASK_STATE_DELIVERED')
+    expect(body.result?.text).toContain('still running past the reply window')
+    expect(m.registry.rounds).toHaveLength(1)
+  }, 15_000)
+
+  it('an async local native round is NOT booked as receipt-owed (rounds emit no receipts)', async () => {
+    const m = await mount({ nativeTeamsInbound: true })
+    mounted.push(m.dispose)
+    const initiator = makeAgent('session-main1')
+    m.agents.agents.push(initiator)
+    m.registry.claims.set('freight-team', { plane: 'local', localLabel: 'team' })
+    const route = m.ctx.tools.get('a2a_route')
+    const result = await route!.execute({ team: 'freight-team', message: 'async job', async: true }, noAgent()) as { ok: boolean; task_id?: string; bridge?: string }
+    expect(result.ok).toBe(true)
+    expect(result.bridge).toBe('native-teams')
+    const state = await (await fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { tasks: Array<{ taskId: string }> }
+    expect(state.tasks.map(task => task.taskId)).not.toContain(result.task_id)
+  })
+})
+
+describe('outbound face: idempotency verdicts and cancel', () => {
+  it('a peer 409 replay is terminal accepted — never a failover duplicate dispatch', async () => {
+    const peer = await startPeer({
+      direct: () => ({ status: 409, payload: { error: 'duplicate task id within the idempotency window', code: -32003, replay: true } }),
+    })
+    const m = await mount({ peers: [peer.url] })
+    mounted.push(async () => { await m.dispose(); await peer.close() })
+    const face = m.face() as { submit: (request: Record<string, unknown>) => Promise<Record<string, unknown>> }
+    const outcome = await face.submit({ handle: 'peer-team', message: 'retry of an unacknowledged submit', delivery: 'sync', idempotencyKey: 'wb-r' })
+    expect(outcome).toMatchObject({ kind: 'accepted', taskId: 'wb-r' })
+    expect(peer.seen).toHaveLength(1)
+  })
+
+  it('a peer 409 conflict (same key, different payload) fails instead of redirecting', async () => {
+    const peer = await startPeer({
+      direct: () => ({ status: 409, payload: { error: 'task id reused with a different payload', code: -32002 } }),
+    })
+    const m = await mount({ peers: [peer.url] })
+    mounted.push(async () => { await m.dispose(); await peer.close() })
+    const face = m.face() as { submit: (request: Record<string, unknown>) => Promise<Record<string, unknown>> }
+    await expect(face.submit({ handle: 'peer-team', message: 'conflicting payload', delivery: 'sync', idempotencyKey: 'wb-c' }))
+      .rejects.toThrow("conflicts at the peer's idempotency ledger")
+    expect(peer.seen).toHaveLength(1)
+  })
+
+  it('cancel of a remote submission drives the wire stop-notice to the team and clears the row', async () => {
+    const peer = await startPeer({ asyncCap: true })
+    const m = await mount({ peers: [peer.url] })
+    mounted.push(async () => { await m.dispose(); await peer.close() })
+    const face = m.face() as { submit: (request: Record<string, unknown>) => Promise<Record<string, unknown>>; cancel: (ref: { taskId?: string }, reason?: string) => Promise<boolean> }
+    await face.submit({ handle: 'peer-team', message: 'long job', delivery: 'async', idempotencyKey: 'wb-z' })
+    const cleared = await face.cancel({ taskId: 'wb-z' }, 'changed mind')
+    expect(cleared).toBe(true)
+    const notice = peer.seen.find(entry => String(entry.message ?? '').includes('[A2A cancel]'))
+    expect(notice).toBeDefined()
+    expect(String(notice?.message)).toContain('task wb-z')
+    expect(String(notice?.message)).toContain('changed mind')
+    const state = await (await fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { tasks: Array<{ taskId: string }> }
+    expect(state.tasks.map(task => task.taskId)).not.toContain('wb-z')
+  })
+
+  it('cancel of a local steered task steers the cooperative stop-notice at the live target', async () => {
+    const m = await mount({ nativeTeamsInbound: true })
+    mounted.push(m.dispose)
+    const events: unknown[] = []
+    const node = makeAgent('session-aaa')
+    ;(node.session as { events: unknown[] }).events = events
+    const steers: string[] = []
+    const steer = vi.fn((message: { content: Array<{ type: string; text?: string }> }) => {
+      const text = message.content.find(block => block.type === 'text')?.text ?? ''
+      steers.push(text)
+      events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'node acknowledged' }] } } })
+      m.ctx.emit('agent/status', { agent: node, status: 'idle' })
+    })
+    ;(node as unknown as { steer: unknown }).steer = steer
+    m.agents.agents.push(node)
+    m.ctx.emit('agent/created', { agent: node })
+    await postJson(m.port, '/__dsh_a2a/join', { id: 'session-aaa' })
+    const route = m.ctx.tools.get('a2a_route')
+    const result = await route!.execute({ team: 'dsh/aaa', message: 'long local job', async: true }, noAgent()) as { ok: boolean; task_id?: string }
+    expect(result.ok).toBe(true)
+    expect(result.task_id).toBeDefined()
+    const face = m.face() as { cancel: (ref: { taskId?: string }, reason?: string) => Promise<boolean> }
+    const cleared = await face.cancel({ taskId: result.task_id }, 'review seat fix check')
+    expect(cleared).toBe(true)
+    expect(steers.some(text => text.includes('[A2A cancel]') && text.includes(String(result.task_id)))).toBe(true)
   })
 })

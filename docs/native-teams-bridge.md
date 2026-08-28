@@ -11,13 +11,13 @@ face 契约到本仓既有机制的映射（无新暴露面——只重排 a2a_r
 
 | face 契约 | 本仓实现 | 备注 |
 |---|---|---|
-| `resolve(handle)` | peer 卡直查（`card.team` / `sessionTeams[].team`）→ `kind:'node', hops:1`；zone 委托解析 → `kind:'zone'`；全不中 → `undefined` | 只应答 peer 网络已发布的名字 |
+| `resolve(handle)` | **复用 `directoryPeerCandidates` 单次目录遍历**（与 submit 同一匹配器，无双重实现漂移）；命中 → `{kind:'node', hops:1, url}`；全不中 → `undefined` | resolve+submit 组合的第二次遍历走共享卡缓存，零额外网络 |
 | `submit{delivery:'sync'}` | `dispatchPeerCandidate`（wait 语义），`TASK_STATE_COMPLETED` → `{kind:'completed', text}`；DELIVERED/ABORTED_WAIT → `{kind:'accepted'}` | 对端 HTTP 预算 15s（`a2a-client` 既有约束）；跨宿主长同步等待是 P2 预算议题 |
-| `submit{delivery:'async'}` | 能力闸门：仅拨签名卡声明 `capabilities.async` 的 peer（镜像 a2a_route）；`wait:false` 派发 → `{kind:'accepted', taskId, acceptedAt}` | accepted 提交按既有规则进欠账账本（`a2a_tasks` 可见） |
-| `idempotencyKey` | 即 wire `task_id`（B3：编排方铸造的 dedup 键 = 线上任务 id，对端幂等闸门沿用） | 缺省时本端铸 `direct-<8hex>` |
+| `submit{delivery:'async'}` | **逐候选**能力闸门（镜像 a2a_route 的 failover 循环——转投的下一个候选同样只拨声明 async 的 peer）；`wait:false` 派发 → `{kind:'accepted', taskId, acceptedAt}` | accepted 提交按既有规则进欠账账本（`a2a_tasks` 可见） |
+| `idempotencyKey` | 即 wire `task_id`（B3：编排方铸造的 dedup 键 = 线上任务 id，对端幂等闸门沿用）；缺省时本端铸 `direct-<8hex>` | **对端 409 判决是终态非 failover**：`-32003` 回放 → `accepted`（先前尝试在对端仍权威，转投=重复执行）；`-32002` 冲突 → 抛错（调用方 bug，同键异载荷） |
 | `contextId` / `sessionKey` | `context_id` 直通；`sessionKey` 由调用方（native-teams registry）持有，face 不解释 | |
 | `callbackTarget` | **P1 不消费**——wire caller label 为本节点标签，回执暂落本端 bare team（initiator），由欠账账本对账 | 回执回流到轮 = **P2 切片** |
-| `cancel(ref)` | 账本行定位 → `peer === 'local'` 本端 `taskLedger.cancel`；远端走对端 `/__dsh_a2a/tasks/cancel` 控制路由（共享 api key 守卫） | 协作式，best-effort |
+| `cancel(ref)` | 欠账行定位 → 本地：镜像控制路由（对活目标 steer `[A2A cancel]`）；远端：**经 wire 向该团队投递停止通知**（对端不跟踪入站任务 id，其账本路由必然 `unknown`）→ 清除本端欠账行 | 协作式，best-effort；通知措辞单一来源 `cancelNoticeText` |
 
 挂载方式：`ctx.reflect.provide('nativeTeamsA2a', face)`（fiber effect-scoped，随卸载回收）；
 native-teams 侧 presence-guarded probe（`mountedA2AFace`）——未挂载时对端降级纯本地路由，永不 crash。
@@ -27,7 +27,8 @@ native-teams 侧 presence-guarded probe（`mountedA2AFace`）——未挂载时�
 判定与派发链（`/a2a/direct`、出站工具的本地候选、目录列行三处共用）：
 
 ```
-team 名 → 会话节点精确解析 → canvas 团队 →【新增】teamsRegistry probe
+team 名 → 会话节点精确解析 → canvas 团队 → 冷 joined 唤醒
+  →【新增】teamsRegistry probe（claim 判定 memo 5s，仅在同步快速检查全失时才支付 await）
   → describeTarget(team)：plane==='local' 且非 ambiguous 且有 localLabel → 命中
   → startRound({team, message: A2A信封}, parent=本节点活 initiator, signal)
 → bare team 兜底（次序在桥之后）
@@ -37,13 +38,21 @@ team 名 → 会话节点精确解析 → canvas 团队 →【新增】teamsRegi
   `nativeTeamsInbound: true` 时生效（exposure-grants 治理姿态：授予是显式的，从不是环境的）。
 - **仅 dispatcher 层**：入站调用方寻址团队，不能寻址成员——成员保持
   visible-not-addressable（T3 `routable:false` 的结构对应物）。
+- **次序纪律**：registry 主张**绝不遮蔽**活的本地会话团队——所有路径先会话/canvas/
+  唤醒，桥只在 miss 时介入（与上方链序一致）。
 - **parent-of-record**：P1 用本节点活 initiator（与 bare-team 兜底同一身份语义；
   入站轮在谱系上等价于操作者从 main 发起的一轮）。专用 broker 单节点留 P2。
 - **B4 保持**：ambiguous 声明由桥拒收（`ERR_TARGET_AMBIGUOUS` 语义归属 native-teams，
   桥只做到"不抢"）；桥对 registry 缺席/seam 未挂载/describeTarget 抛错一律视为不主张。
-- **noWait 语义**：轮脱离派发，应答 delivered（`consumed:false` + `bridge:'native-teams'`）。
-  **本切片 native-teams 轮不发 A2A 回执**——脱离轮的结果经其自身链结算，调用方以
-  context_id 续查；回执回流（callbackTarget 消费端）是 P2。
+- **prepare-first（幻影禁令）**：脱离派发（`wait:false` 与 async 工具路径）先做
+  prepare（主张+seam+initiator——全部可快速失败的项），prepare 过关才应答
+  delivered；任何 fast-fail 如实报错并记失败活动环。派发后的迟到失败纠正活动环 + warn。
+- **有界等待**：轮等待有 180s 死线（`nativeRoundWaitMs` 可调，对齐 steer 路径），
+  超时应答诚实的 delivered-unsettled 形态（**不承诺回执**——steer 死线文案的
+  回执承诺对本桥是假的）；调用方 abort（存在时）经 signal 贯通取消轮本身。
+- **无回执 ⇒ 不记账**：本切片 native-teams 轮不发 A2A 回执，其结果携带
+  `bridge: 'native-teams'` 标记，`trackOwedTask` 据此跳过——不可兑付的行绝不
+  占据 64 格欠账账本（回执回流 callbackTarget 消费端是 P2）。
 
 ## 3. 错误与守卫继承
 
@@ -51,9 +60,14 @@ team 名 → 会话节点精确解析 → canvas 团队 →【新增】teamsRegi
 |---|---|
 | resolve 全不中 | `undefined`（调用方 seam 报 `faceUnmounted`/不可达，文案归属 native-teams） |
 | submit 无候选 / 全候选失败 | 抛错（native-teams 包装为 `submitFailed`）；候选取尽即止，逐候选 failover |
-| submit async 对非 async peer | 不静默降级为分钟级阻塞：按同步语义拨号，如实回 completed |
+| submit 对端 409 回放（-32003） | 终态 `accepted`——先前尝试在对端仍权威；绝不转投其他 peer |
+| submit 对端 409 冲突（-32002） | 抛错（同键异载荷是调用方 bug，重定向只会扩散错误） |
+| submit async 对非 async peer | 不静默降级为分钟级阻塞：该候选按同步语义拨号（逐候选判定） |
 | 入站桥 off / registry 缺席 / 声明歧义 | 标准解析链裁决（标准 no-live 错误），桥零痕迹 |
-| 入站轮失败 | 同步：诚实错误（含 sibling 错误文本）；脱离：活动环记失败 + warn 日志 |
+| 入站轮失败（等待式） | 诚实错误（含 sibling 错误文本），活动环记失败 |
+| 入站轮超时（`nativeRoundWaitMs`） | delivered-unsettled 形态（不承诺回执），轮继续运行 |
+| 入站轮失败（脱离式） | prepare 阶段失败：如实报错、绝不回答 delivered；派发后失败：活动环纠正 + warn 日志 |
+| 调用方 abort | 存在 signal 的路径贯通取消轮本身；无 signal 的 HTTP 入站仅释放等待者 |
 
 ## 4. P2 待办锚点（本文件的后续章节位）
 

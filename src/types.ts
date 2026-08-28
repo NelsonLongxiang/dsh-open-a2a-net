@@ -93,6 +93,12 @@ export interface A2aRouteOk {
   /** Context id for continuing this conversation in a later `a2a_route` call. */
   readonly context_id: string
   readonly task_status: string
+  /**
+   * Present when the result rode the native-teams bridge: its rounds emit
+   * no A2A receipt in this slice, so callers must not book the row as
+   * receipt-owed (`trackOwedTask` skips it).
+   */
+  readonly bridge?: 'native-teams'
 }
 
 /** Canonical `a2a_route` failure value. */
