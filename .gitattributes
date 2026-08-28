@@ -1,0 +1,4 @@
+nexus-stage/*.html text eol=lf
+nexus-stage/**/*.html text eol=lf
+assets/nexusDist/*.html text eol=lf
+assets/nexusDist/**/*.html text eol=lf
