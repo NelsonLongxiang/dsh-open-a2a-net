@@ -82,6 +82,15 @@ A canvas team is a user-composed, named, multi-member routing group: **one atomi
 - Membership requires a joined session (live node or remembered intent) — no routing backdoor over unjoined sessions; leaving the network (leave/archive) drops every canvas membership
 - `a2a_teams` lists canvas teams as local rows with member/live counts; `/__dsh_a2a/state` serves per-member `joined`/`live` flags
 
+## Native-teams bridge (node unification, P1)
+
+Two half-bridges to `@nelsonlongxiang/dsh-native-teams` (structural contract mirror: `src/teams-bridge.ts`; the frozen contract lives in that package's `src/a2a-face.ts`):
+
+- **Outbound transport face** — this plugin mounts the `nativeTeamsA2a` service: `resolve` answers from the tracked peer directory plus zone delegations, `submit` rides the direct-route dispatcher (candidate failover; async gated on the peer's signed `capabilities.async`; accepted submissions track in the owed ledger), `cancel` asks the owning peer's control route. It exposes nothing new — only teams the peer network already publishes resolve.
+- **Inbound dispatch** (config `nativeTeamsInbound`, default `false`) — a routed team name the sibling registry classifies as an unambiguous local claim starts a routed round through its authoritative seam (`describeTarget`/`startRound`), parented by this node's live initiator, with the A2A envelope riding the round message. Registry presence alone is never exposure: the operator opts in. Dispatcher-level only — inbound callers address the team, never its members (members stay visible-not-addressable). `wait: false` fires the round detached and answers delivered; native-teams rounds do not emit A2A receipts in this slice (the receipt backflow to `callbackTarget` is the P2 slice).
+
+See `docs/native-teams-bridge.md` for the full mapping and scope notes.
+
 ## Configuration
 
 Row config overlays in the profile's patch layers; every key has a schema default.
@@ -96,6 +105,7 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | `agentName` | `'DeepSeek Harness A2A node'` | Human-facing name on the card. |
 | `apiKey` | `''` | `X-API-Key` sent on peer requests; non-empty also gates the control routes. |
 | `sessionNodes` | `true` | Expose main sessions as joinable network nodes. |
+| `nativeTeamsInbound` | `false` | Dispatch inbound direct routes (and the outbound A2A tools' local candidates) to native-teams registry teams through its routing seam; needs the sibling plugin composed. |
 | `wakeJoinedOnBoot` | `false` | Prewarm cold joined sessions' agents after mount (needs the api gateway; wake-on-route and the sidebar wake button stay available without it). The prewarm is deferred, foreground-yielding, and cancellable — it never blocks the boot window (see the two knobs below). |
 | `wakePrewarmDelayMs` | `10000` | Idle delay between loader settlement and the first prewarm wake; `0` restores fire-at-settle. |
 | `wakePrewarmQuietMs` | `5000` | Foreground quiet window: a wake/route demand (or any outbound route in flight) inside this window postpones the next prewarm step; `0` disables the yield. |

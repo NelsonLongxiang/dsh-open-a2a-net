@@ -266,4 +266,27 @@ export class A2aClient {
       task_status: wireText(raw.task_status),
     }
   }
+
+  /**
+   * Ask one peer's control route to cancel a task this node dispatched to
+   * it (the native-teams transport face's cancel half). The peer applies
+   * its own control guard (the shared api key this node dials with);
+   * `cleared` maps to true, every other outcome or transport failure is a
+   * plain false — cancellation is best-effort by contract.
+   * @param baseUrl - the peer's base URL.
+   * @param taskId - the task id the original submit carried.
+   * @param reason - optional human-readable reason.
+   * @returns whether the peer reported the row cleared.
+   */
+  async cancelRemoteTask(baseUrl: string, taskId: string, reason?: string): Promise<boolean> {
+    try {
+      const raw = await this.http('/__dsh_a2a/tasks/cancel', {
+        method: 'POST',
+        body: JSON.stringify({ task_id: taskId, ...(reason !== undefined && reason !== '' ? { reason } : {}) }),
+      }, baseUrl) as { readonly outcome?: unknown }
+      return raw.outcome === 'cleared'
+    } catch {
+      return false
+    }
+  }
 }

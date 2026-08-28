@@ -39,6 +39,15 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 - 成员必须是 joined 会话（活节点或已记意图）——未加入会话没有路由后门；退出网络（leave/archive）自动清空全部画布成员关系
 - `a2a_teams` 以本地行列出画布队伍（含成员数/活数）；`/__dsh_a2a/state` 提供每成员 `joined`/`live` 标记
 
+## Native-teams 桥（节点统一，P1）
+
+通往 `@nelsonlongxiang/dsh-native-teams` 的两条半桥（结构契约镜像：`src/teams-bridge.ts`；冻结契约原文在该包 `src/a2a-face.ts`）：
+
+- **出站传输面**——本插件挂载 `nativeTeamsA2a` 服务：`resolve` 由已跟踪 peer 目录 + 区域委托应答，`submit` 走直连路由派发器（候选 failover；async 按对端签名卡 `capabilities.async` 门禁；accepted 提交进欠账账本），`cancel` 询问持有该任务的 peer 控制路由。它不暴露任何新东西——只有 peer 网络已发布的团队可解析。
+- **入站分发**（配置 `nativeTeamsInbound`，默认 `false`）——兄弟注册表判定为无歧义本地主张的团队名，经其权威路由缝（`describeTarget`/`startRound`）发起一轮路由，由本节点活 initiator 会话担任 parent，A2A 信封随轮消息携带。注册表存在本身绝不是暴露：操作者显式开启才算。仅分发到 dispatcher 层——入站调用方寻址团队，不能寻址成员（成员保持可见不可寻）。`wait: false` 脱离派发并应答 delivered；本切片 native-teams 轮不发 A2A 回执（回 `callbackTarget` 的回执回流属 P2 切片）。
+
+完整映射与范围说明见 `docs/native-teams-bridge.md`。
+
 ## 配置
 
 行配置叠加在 profile 的 patch 层；每个键都有 schema 默认值。
@@ -53,6 +62,7 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 | `agentName` | `'DeepSeek Harness A2A node'` | 卡片上的人类可读名称。 |
 | `apiKey` | `''` | peer 请求携带的 `X-API-Key`；非空时同时门禁控制路由。 |
 | `sessionNodes` | `true` | 把主会话暴露为可加入的网络节点。 |
+| `nativeTeamsInbound` | `false` | 把入站直连路由（及出站 A2A 工具的本地候选）经 native-teams 路由缝分发到其注册表团队；需兄弟插件已组合。 |
 | `wakeJoinedOnBoot` | `false` | 挂载后预热冷加入会话的 agent（需要 api gateway；无它时路由唤醒与侧栏唤醒按钮仍可用）。预热是延迟启动、前台让路、可取消的——不会阻塞启动窗口（见下方两个参数）。 |
 | `wakePrewarmDelayMs` | `10000` | loader 树就绪到第一次预热唤醒之间的空闲延迟；`0` 恢复就绪即唤醒的旧行为。 |
 | `wakePrewarmQuietMs` | `5000` | 前台静默窗口：窗口内有唤醒/路由需求（或有出站路由在途）则推迟下一步预热；`0` 关闭让路。 |
