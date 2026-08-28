@@ -26,6 +26,7 @@ import { buildLayoutDoc, clampDoc, type LayoutDoc, type LayoutRect } from './lay
 import { starEdges } from './edges'
 import { clampViewport, fitView, panBy, screenToWorld, worldTransformCss, zoomAt, type LayoutViewport } from './viewport'
 import { NODE_H, WorldModel, nodeRect, deriveInitialFrame, planSeatFor, type SessionLite, type TeamLite } from './world'
+import { applyAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction, type RosterOp } from './canvas-ops'
 import { FRAME_HUES } from './tokens'
 import './planning.css'
 
@@ -57,6 +58,13 @@ export interface PlanningDeps {
   onDirty(): void
   /** The save lamp was clicked (error state -> retry). */
   onLampClick(): void
+  /**
+   * A team write action (optimistic state already applied). Resolves true
+   * when the host accepted it (or it was an idempotent no-op); false means
+   * the caller's undo has been run by the wire's error path - the view
+   * rolls its optimistic mutation back via the returned scoped undo.
+   */
+  onCanvasAction(a: CanvasAction): Promise<boolean>
 }
 
 /** Pointer-like event surface the handlers consume (real events satisfy it). */
@@ -73,11 +81,11 @@ export interface SeamPointer {
   preventDefault(): void
 }
 
-export interface SeamKey { key: string; shiftKey: boolean; target: Element | null; preventDefault(): void }
+export interface SeamKey { key: string; shiftKey: boolean; altKey?: boolean; target: Element | null; preventDefault(): void }
 
 type Gesture =
   | { readonly kind: 'none' }
-  | { readonly kind: 'node'; ids: readonly string[]; last: { x: number; y: number }; moved: boolean; el: Element | null }
+  | { readonly kind: 'node'; ids: readonly string[]; last: { x: number; y: number }; moved: boolean; el: Element | null; origins: ReadonlyArray<{ team: string; ids: readonly string[] }> }
   | { readonly kind: 'frame'; name: string; snap: NonNullable<ReturnType<WorldModel['beginFrameDrag']>>; origin: { x: number; y: number }; moved: boolean }
   | { readonly kind: 'pan'; last: { x: number; y: number }; moved: boolean }
   | { readonly kind: 'marquee'; origin: { x: number; y: number }; last: { x: number; y: number }; additive: boolean }
@@ -92,6 +100,8 @@ export interface PlanningView {
   /** The current document for the save loop, read at send time. */
   snapshotDoc(): unknown
   setLamp(state: LampState, savedAt?: string): void
+  /** A transient notice (host error verbatim or an info hint). */
+  notice(kind: 'error' | 'info', text: string): void
   seam: {
     pointerDown(ev: SeamPointer): void
     pointerMove(ev: SeamPointer): void
@@ -99,6 +109,7 @@ export interface PlanningView {
     wheel(ev: SeamPointer): void
     key(ev: SeamKey): void
     keyUp(ev: SeamKey): void
+    contextMenu(ev: SeamPointer): void
   }
   destroy(): void
 }
@@ -151,6 +162,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     mkButton('－', '缩小', () => zoomCenter(1 / 1.2)),
     zoomLabel,
     mkButton('＋', '放大', () => zoomCenter(1.2)),
+    mkButton('建队', '组成团队（G）：先框选至少 2 个节点', () => startCreateFromSelection()),
   )
   const lamp = document.createElement('span')
   lamp.className = 'p-lamp'
@@ -181,7 +193,12 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   legendRow(false, '成员边（星形，框→成员）')
   legendRow(true, '跨队多属（虚线）')
 
-  root.append(grid, world, marquee, toolbar, status, legend)
+  const noticeStack = document.createElement('div')
+  noticeStack.className = 'p-notice-stack'
+  noticeStack.setAttribute('role', 'log')
+  noticeStack.setAttribute('aria-live', 'polite')
+
+  root.append(grid, world, marquee, toolbar, status, legend, noticeStack)
 
   // ── viewport application ──
   let viewW = 0
@@ -222,6 +239,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         const head = document.createElement('div')
         head.className = 'p-frame-head'
         head.dataset.frame = name
+        head.tabIndex = 0 // keyboard: Shift+F10 menu, Delete 散队
         const title = document.createElement('span')
         title.className = 'ttl'
         const cnt = document.createElement('span')
@@ -317,9 +335,11 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   }
 
   // ── edges: stateless, rebuilt wholesale ──
+  // Derived from the MODEL (not lastTeams): optimistic membership changes
+  // must repaint their edges immediately, before the host confirms.
   function renderEdges(): void {
     while (svg.firstChild !== null) svg.firstChild.remove()
-    const teams = lastTeams.map(t => ({ name: t.name, members: t.members }))
+    const teams = model.allFrames().map(([name]) => ({ name, members: model.teamMemberIds(name).map(id => ({ id })) }))
     for (const e of starEdges(teams, new Map(model.allFrames()), model.positions())) {
       const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
       line.setAttribute('class', 'e-member' + (e.dashed ? ' dashed' : ''))
@@ -349,10 +369,251 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     statusMut.textContent = `${input.teams.length} 队 · ${input.peerCount} peer`
   }
 
+  // ── canvas write actions: optimistic apply + team-scoped undo ──
+  const pendingTeams = new Set<string>()
+
+  function emitAction(a: CanvasAction): void {
+    const undo = applyAction(model, a)
+    const team = actionTeam(a)
+    pendingTeams.add(team)
+    render()
+    void deps.onCanvasAction(a).then(ok => {
+      pendingTeams.delete(team)
+      if (!ok) undo() // host refused: roll this action's optimistic delta back
+      render()
+    })
+  }
+
+  // ── notices (host errors verbatim; design.md §3.4 不吞错) ──
+  function notice(kind: 'error' | 'info', text: string): void {
+    while (noticeStack.childElementCount >= 3) noticeStack.firstElementChild?.remove()
+    const item = document.createElement('div')
+    item.className = 'p-notice' + (kind === 'error' ? ' error' : '')
+    item.setAttribute('role', kind === 'error' ? 'alert' : 'status')
+    item.textContent = text
+    noticeStack.appendChild(item)
+    setTimeout(() => item.remove(), 4000)
+  }
+
+  // ── 建队：selection → 命名对话框 → create-team ──
+  function selectedByY(): string[] {
+    return model
+      .selectedIds()
+      .map(id => ({ id, y: model.getNode(id)?.y ?? 0 }))
+      .sort((a, b) => a.y - b.y)
+      .map(r => r.id)
+  }
+
+  function startCreateFromSelection(): void {
+    if (dialog !== null) return
+    const ids = selectedByY()
+    if (ids.length < 2) { notice('info', '框选至少 2 个节点'); return }
+    openNameDialog(ids)
+  }
+
+  let dialog: {
+    wrap: HTMLDivElement
+    restoreFocus: HTMLElement | null
+    ids: readonly string[]
+  } | null = null
+
+  function openNameDialog(ids: readonly string[]): void {
+    const wrap = document.createElement('div')
+    wrap.className = 'p-dialog'
+    const panel = document.createElement('div')
+    panel.className = 'p-dialog-panel'
+    panel.setAttribute('role', 'dialog')
+    panel.setAttribute('aria-modal', 'true')
+    panel.setAttribute('aria-labelledby', 'p-dialog-title')
+    const title = document.createElement('div')
+    title.id = 'p-dialog-title'
+    title.className = 'p-dialog-title'
+    title.textContent = `组建团队（${ids.length} 个节点，框选顺序即优先级）`
+    const input = document.createElement('input')
+    input.className = 'p-dialog-input'
+    input.maxLength = 40
+    input.setAttribute('aria-label', '团队名')
+    const err = document.createElement('div')
+    err.className = 'p-dialog-err'
+    err.setAttribute('aria-live', 'polite')
+    const row = document.createElement('div')
+    row.className = 'p-dialog-row'
+    const okBtn = document.createElement('button')
+    okBtn.type = 'button'
+    okBtn.textContent = '组建'
+    const cancelBtn = document.createElement('button')
+    cancelBtn.type = 'button'
+    cancelBtn.textContent = '取消'
+    row.append(okBtn, cancelBtn)
+    panel.append(title, input, err, row)
+    wrap.appendChild(panel)
+    root.appendChild(wrap)
+
+    const restoreFocus = document.activeElement as HTMLElement | null
+    const close = (): void => {
+      wrap.remove()
+      dialog = null
+      restoreFocus?.focus()
+    }
+    const nameError = (): string | null => {
+      const name = input.value.trim()
+      if (name === '' || name.length > 40 || name.includes('/') || /^\d+$/.test(name)) {
+        return '队名需 1..40 字，不含“/”，不为纯数字'
+      }
+      return null
+    }
+    const confirm = (): void => {
+      const problem = nameError()
+      if (problem !== null) { err.textContent = problem; input.focus(); return }
+      const name = input.value.trim()
+      close()
+      emitAction({ type: 'create-team', name, ids })
+    }
+    okBtn.addEventListener('click', confirm)
+    cancelBtn.addEventListener('click', close)
+    input.addEventListener('keydown', (ev) => {
+      const e = ev as KeyboardEvent
+      if (e.key === 'Enter') { e.preventDefault(); confirm() }
+      if (e.key === 'Escape') { e.preventDefault(); close() }
+    })
+    dialog = { wrap, restoreFocus, ids }
+    input.focus()
+  }
+
+  // ── context menu（节点/框头；下钻单层；键盘全等）──
+  type MenuTarget = { kind: 'node'; id: string } | { kind: 'frame'; name: string }
+  let menu: HTMLDivElement | null = null
+  let menuTarget: MenuTarget | undefined
+  let menuLevel: 'root' | 'join' | 'leave' | 'promote' = 'root'
+  let menuAnchor: HTMLElement | null = null
+
+  function closeMenu(): void {
+    menu?.remove()
+    menu = null
+    menuTarget = undefined
+    menuLevel = 'root'
+    menuAnchor?.focus()
+    menuAnchor = null
+  }
+
+  function menuItem(label: string, enabled: boolean, onPick: () => void): HTMLButtonElement {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.setAttribute('role', 'menuitem')
+    b.textContent = label
+    if (!enabled) { b.disabled = true; b.setAttribute('aria-disabled', 'true') }
+    else b.addEventListener('click', () => { closeMenu(); onPick() })
+    return b
+  }
+
+  function openMenu(x: number, y: number, target: MenuTarget, level: 'root' | 'join' | 'leave' | 'promote' = 'root'): void {
+    menu?.remove()
+    menuTarget = target
+    menuLevel = level
+    const el = document.createElement('div')
+    el.className = 'p-menu'
+    el.setAttribute('role', 'menu')
+    el.setAttribute('aria-label', '团队操作')
+    let items: HTMLButtonElement[] = []
+    if (target.kind === 'frame') {
+      items = [menuItem(`解散团队「${target.name}」`, true, () => emitAction({ type: 'remove-team', name: target.name }))]
+    } else {
+      const id = target.id
+      if (level === 'root') {
+        const create = menuItem('组成团队…', model.selectedIds().length >= 2, () => openNameDialog(selectedByY()))
+        create.title = '先框选或 Shift 加选至少 2 个节点'
+        items.push(create)
+        if (lastTeams.length > 0) {
+          items.push(menuItem('加入团队 ▸', true, () => openMenu(x, y, target, 'join')))
+          const teamsOf = model.getNode(id)?.memberships.map(m => m.team) ?? []
+          if (teamsOf.length > 0) {
+            items.push(menuItem('置顶路由 ▸', true, () => openMenu(x, y, target, 'promote')))
+            items.push(menuItem('离队 ▸', true, () => openMenu(x, y, target, 'leave')))
+          }
+        }
+      } else {
+        items.push(menuItem('‹ 返回', true, () => openMenu(x, y, target, 'root')))
+        for (const t of lastTeams) {
+          if (level === 'join') {
+            const already = (model.getNode(id)?.memberships.some(m => m.team === t.name)) ?? true
+            items.push(menuItem(already ? `${t.name}（已加入）` : t.name, !already, () => emitAction({ type: 'add-member', team: t.name, ids: [id] })))
+          } else if (level === 'leave') {
+            const member = (model.getNode(id)?.memberships.some(m => m.team === t.name)) ?? false
+            items.push(menuItem(t.name, member, () => emitAction({ type: 'remove-member', team: t.name, ids: [id] })))
+          } else {
+            const member = (model.getNode(id)?.memberships.some(m => m.team === t.name)) ?? false
+            items.push(menuItem(t.name, member, () => {
+              const current = model.teamMemberIds(t.name)
+              const desired = [id, ...current.filter(x => x !== id)]
+              emitAction({ type: 'reorder', team: t.name, ops: reorderOps(current, desired) })
+            }))
+          }
+        }
+      }
+    }
+    el.append(...items)
+    el.style.left = `${Math.min(x, window.innerWidth - 200)}px`
+    el.style.top = `${Math.min(y, window.innerHeight - 40 - items.length * 30)}px`
+    el.addEventListener('keydown', (ev) => {
+      const e = ev as KeyboardEvent
+      const buttons = Array.from(el.querySelectorAll<HTMLButtonElement>('[role=menuitem]'))
+      const idx = buttons.indexOf(document.activeElement as HTMLButtonElement)
+      if (e.key === 'ArrowDown') { e.preventDefault(); buttons[(idx + 1 + buttons.length) % buttons.length]?.focus() }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); buttons[(idx - 1 + buttons.length) % buttons.length]?.focus() }
+      else if (e.key === 'Escape') { e.preventDefault(); if (menuLevel !== 'root') openMenu(x, y, target, 'root'); else closeMenu() }
+    })
+    root.appendChild(el)
+    menu = el
+    items[0]?.focus()
+  }
+
+  /** Context menu from a real contextmenu event or the keyboard equivalent. */
+  function contextMenuAt(x: number, y: number, target: Element | null): void {
+    if (dialog !== null) return
+    const nodeEl = target?.closest<HTMLElement>('.p-node') ?? null
+    const headEl = target?.closest<HTMLElement>('.p-frame-head') ?? null
+    if (nodeEl !== null) {
+      const id = nodeEl.dataset.id ?? ''
+      if (!model.isSelected(id)) model.setSelection([id])
+      menuAnchor = nodeEl
+      openMenu(x, y, { kind: 'node', id })
+    } else if (headEl !== null) {
+      menuAnchor = headEl
+      openMenu(x, y, { kind: 'frame', name: headEl.dataset.frame ?? '' })
+    }
+  }
+
   // ── gestures ──
   function localXY(ev: { clientX: number; clientY: number }): { x: number; y: number } {
     const rect = root.getBoundingClientRect()
     return { x: ev.clientX - rect.left, y: ev.clientY - rect.top }
+  }
+
+  /** Drop dispatch for a moved node drag: 入队 / 离队 / 队内 y 排序. */
+  function dropDispatch(gesture: Extract<Gesture, { kind: 'node' }>, ev: SeamPointer): void {
+    const p = localXY(ev)
+    const w = screenToWorld(vp, p.x, p.y)
+    const f = innermostFrameAt(new Map(model.allFrames()), w)
+    if (f !== undefined) {
+      const fresh = gesture.ids.filter(id => !(model.getNode(id)?.memberships.some(m => m.team === f)))
+      if (fresh.length > 0) {
+        emitAction({ type: 'add-member', team: f, ids: fresh }) // 入队：不自动离原队（多对多）
+        return
+      }
+      if (gesture.ids.length === 1) {
+        // Already a member: an in-frame drop sorts that frame's members by y.
+        const current = model.teamMemberIds(f)
+        const desired = yOrderedMembers(model, f)
+        if (desired.join(' ') !== current.join(' ')) {
+          emitAction({ type: 'reorder', team: f, ops: reorderOps(current, desired) })
+        }
+      }
+      return
+    }
+    // Blank: 离队 from the teams the dragged ids belonged to at drag start.
+    for (const origin of gesture.origins) {
+      emitAction({ type: 'remove-member', team: origin.team, ids: [...origin.ids] })
+    }
   }
 
   function pointerDown(ev: SeamPointer): void {
@@ -367,7 +628,14 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       const already = model.isSelected(id)
       if (!already && !ev.shiftKey) model.setSelection([id])
       const ids = ev.shiftKey || already ? (model.isSelected(id) ? model.selectedIds() : [...model.selectedIds(), id]) : [id]
-      gesture = { kind: 'node', ids, last: screenToWorld(vp, p.x, p.y), moved: false, el: nodeEl }
+      // Origin teams (for the drag-out-to-blank 离队 path), captured at down.
+      const byTeam = new Map<string, string[]>()
+      for (const dragged of ids) {
+        for (const m of model.getNode(dragged)?.memberships ?? []) {
+          byTeam.set(m.team, [...(byTeam.get(m.team) ?? []), dragged])
+        }
+      }
+      gesture = { kind: 'node', ids, last: screenToWorld(vp, p.x, p.y), moved: false, el: nodeEl, origins: [...byTeam].map(([team, tIds]) => ({ team, ids: tIds })) }
       nodeEl.classList.add('dragging')
     } else if (headEl !== null) {
       const name = headEl.dataset.frame ?? ''
@@ -400,6 +668,11 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       gesture.moved = true
       gesture.last = w
       model.dragNodes(gesture.ids, dx, dy)
+      // Drop-target highlight: the innermost frame under the pointer, but
+      // only when the drop would change something (some id not yet member).
+      const f = innermostFrameAt(new Map(model.allFrames()), w)
+      const relevant = f !== undefined && gesture.ids.some(id => !(model.getNode(id)?.memberships.some(m => m.team === f)))
+      for (const [name, el] of frameEls) el.classList.toggle('drop-target', relevant && name === f)
       render()
     } else if (gesture.kind === 'frame') {
       const w = screenToWorld(vp, p.x, p.y)
@@ -437,8 +710,10 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
           model.setSelection([id])
         }
       } else {
+        dropDispatch(gesture, ev)
         deps.onDirty()
       }
+      for (const el of frameEls.values()) el.classList.remove('drop-target')
       gesture.el?.classList.remove('dragging')
       render()
     } else if (gesture.kind === 'frame') {
@@ -483,11 +758,38 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   }
 
   function key(ev: SeamKey): void {
+    if (dialog !== null) return // modal: the dialog input handles Enter/Esc itself
+    if (menu !== null && (ev.key === 'g' || ev.key === 'G' || ev.key === 'Delete' || ev.key === 'Backspace' || ev.key === ' ' || ev.key === '0')) return
     if (ev.key === ' ' && ev.target === root) { spaceDown = true; ev.preventDefault(); return }
+    // 键盘全等路径（WCAG 2.2 Dragging Movements）：
+    if (ev.key === ' ' && (ev.target as Element | null)?.classList?.contains('p-node')) {
+      const el = ev.target as HTMLElement
+      const id = el.dataset.id ?? ''
+      const current = model.selectedIds()
+      model.setSelection(current.includes(id) ? current.filter(x => x !== id) : [...current, id])
+      render()
+      ev.preventDefault()
+      return
+    }
+    if ((ev.key === 'F10' && ev.shiftKey) || ev.key === 'ContextMenu') {
+      ev.preventDefault()
+      const fe = (document.activeElement as Element | null) ?? null
+      const r = fe?.getBoundingClientRect?.() ?? { left: 0, top: 0, width: 0, height: 0 }
+      contextMenuAt(r.left + r.width / 2, r.top + r.height / 2, fe)
+      return
+    }
+    if (ev.key === 'Delete' || ev.key === 'Backspace') { ev.preventDefault(); deleteFocused(); return }
+    if (ev.altKey && (ev.key === 'ArrowUp' || ev.key === 'ArrowDown')) { ev.preventDefault(); altMove(ev.key === 'ArrowUp'); return }
+    if (ev.key === 'g' || ev.key === 'G') { startCreateFromSelection(); return }
     if (ev.key === '0') { fitToContent(); return }
     if (ev.key === '=' || ev.key === '+') { zoomCenter(1.2); return }
     if (ev.key === '-') { zoomCenter(1 / 1.2); return }
-    if (ev.key === 'Escape') { model.setSelection([]); render(); return }
+    if (ev.key === 'Escape') {
+      if (menu !== null) { closeMenu(); render(); return } // menu > clear selection
+      model.setSelection([])
+      render()
+      return
+    }
     const step = ev.shiftKey ? 40 : 8
     const dxdy: Record<string, [number, number]> = {
       ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step],
@@ -504,6 +806,49 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
   }
 
+  /** Delete 按焦点对象：单队卡=离队、多队卡=下钻离队菜单、无队=info、框头=散队。 */
+  function deleteFocused(): void {
+    const fe = document.activeElement as HTMLElement | null
+    const headEl = fe?.closest?.<HTMLElement>('.p-frame-head') ?? null
+    const nodeEl = fe?.closest?.<HTMLElement>('.p-node') ?? null
+    if (headEl !== null) {
+      emitAction({ type: 'remove-team', name: headEl.dataset.frame ?? '' })
+      return
+    }
+    if (nodeEl !== null) {
+      const id = nodeEl.dataset.id ?? ''
+      const teams = model.getNode(id)?.memberships.map(m => m.team) ?? []
+      if (teams.length === 0) { notice('info', '该节点未加入任何团队'); return }
+      if (teams.length === 1) {
+        emitAction({ type: 'remove-member', team: teams[0]!, ids: [id] })
+        return
+      }
+      menuAnchor = nodeEl
+      openMenu(window.innerWidth / 2, window.innerHeight / 2, { kind: 'node', id }, 'leave')
+      return
+    }
+    notice('info', '焦点不在节点或团队框上')
+  }
+
+  /** Alt+↑/↓: move the focused card within its single team's priority. */
+  function altMove(up: boolean): void {
+    const fe = document.activeElement as HTMLElement | null
+    const nodeEl = fe?.closest?.<HTMLElement>('.p-node') ?? null
+    if (nodeEl === null) return
+    const id = nodeEl.dataset.id ?? ''
+    const mem = model.getNode(id)?.memberships ?? []
+    if (mem.length !== 1) return
+    const team = mem[0]!.team
+    const current = model.teamMemberIds(team)
+    const idx = current.indexOf(id)
+    const to = up ? Math.max(0, idx - 1) : Math.min(current.length - 1, idx + 1)
+    if (to === idx) return
+    const desired = [...current]
+    desired.splice(idx, 1)
+    desired.splice(to, 0, id)
+    emitAction({ type: 'reorder', team, ops: reorderOps(current, desired) })
+  }
+
   function keyUp(ev: SeamKey): void {
     if (ev.key === ' ') spaceDown = false
   }
@@ -514,6 +859,11 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   root.addEventListener('wheel', (ev) => wheel(ev as unknown as SeamPointer), { ...signal, passive: false })
   root.addEventListener('keydown', (ev) => key(ev as unknown as SeamKey), signal)
   root.addEventListener('keyup', (ev) => keyUp(ev as unknown as SeamKey), signal)
+  root.addEventListener('contextmenu', (ev) => {
+    const e = ev as unknown as SeamPointer
+    e.preventDefault()
+    contextMenuAt(e.clientX, e.clientY, e.target)
+  }, signal)
 
   // ── poll reconcile: incremental, never repositions existing nodes ──
   let lastTeams: ReadonlyArray<PlanningTeam> = []
@@ -530,6 +880,16 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       }
     }
     const seen = new Set<string>()
+    // In-flight write guard: membership entries of teams with unsettled
+    // writes come from the model, not the (stale) payload — a poll racing
+    // an optimistic add must not snap the new edge away.
+    const resolveMemberships = (id: string): Array<{ team: string; index: number }> => {
+      const payload = memberships.get(id) ?? []
+      if (pendingTeams.size === 0) return payload
+      const keep = payload.filter(m => !pendingTeams.has(m.team))
+      const pending = (model.getNode(id)?.memberships ?? []).filter(m => pendingTeams.has(m.team))
+      return [...keep, ...pending]
+    }
     for (const s of input.sessions) {
       if (s.joined !== true) continue
       seen.add(s.id)
@@ -537,7 +897,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         model.upsertNode({
           id: s.id, x: model.getNode(s.id)!.x, y: model.getNode(s.id)!.y,
           label: s.label, team: s.team, name: s.name, live: s.live !== false,
-          memberships: memberships.get(s.id) ?? [],
+          memberships: resolveMemberships(s.id),
         })
       } else {
         const saved = layoutDoc?.nodes[s.id]
@@ -550,7 +910,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         }
         model.upsertNode({
           id: s.id, x, y, label: s.label, team: s.team, name: s.name, live: s.live !== false,
-          memberships: memberships.get(s.id) ?? [],
+          memberships: resolveMemberships(s.id),
         })
       }
     }
@@ -569,6 +929,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       if (rects.length > 0) model.setFrame(team.name, deriveInitialFrame(rects))
     }
     for (const [name] of model.allFrames()) {
+      if (pendingTeams.has(name)) continue // an in-flight create/remove owns this name
       if (!input.teams.some(t => t.name === name)) model.removeFrame(name)
     }
     renderStatus(input)
@@ -627,6 +988,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     adoptExternalLayout,
     snapshotDoc,
     setLamp,
+    notice,
     destroy,
     seam: {
       pointerDown,
@@ -635,6 +997,10 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       wheel,
       key,
       keyUp,
+      contextMenu(ev: SeamPointer): void {
+        ev.preventDefault()
+        contextMenuAt(ev.clientX, ev.clientY, ev.target)
+      },
     },
   }
 }

@@ -12,9 +12,10 @@ import { createPlanningView, type SeamKey, type SeamPointer } from '../src/plann
 function view() {
   const onDirty = vi.fn()
   const onLampClick = vi.fn()
-  const v = createPlanningView({ onDirty, onLampClick })
+  const onCanvasAction = vi.fn(() => Promise.resolve(true))
+  const v = createPlanningView({ onDirty, onLampClick, onCanvasAction })
   document.body.appendChild(v.root)
-  return { v, onDirty, onLampClick }
+  return { v, onDirty, onLampClick, onCanvasAction }
 }
 
 const sessions = [
@@ -123,11 +124,11 @@ describe('planning view DOM', () => {
     expect(onLampClick).toHaveBeenCalledTimes(1)
   })
 
-  it('toolbar renders no PR-C controls (no 建队) and three buttons', () => {
+  it('toolbar carries the PR-C 建队 control (4 buttons)', () => {
     const { v } = view()
     const buttons = Array.from(v.root.querySelectorAll<HTMLButtonElement>('.p-toolbar button'))
-    expect(buttons).toHaveLength(3)
-    expect(v.root.textContent).not.toContain('建队')
+    expect(buttons).toHaveLength(4)
+    expect(buttons.some(b => b.textContent === '建队')).toBe(true)
   })
 
   it('attacker-shaped labels land as text, never as markup', () => {

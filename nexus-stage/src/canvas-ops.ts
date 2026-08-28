@@ -14,13 +14,17 @@
 
 import { nodeRect, deriveInitialFrame, type WorldModel } from './world'
 
+/** One pre-computed host op (remove = remove-member, add = add-member). */
+export type RosterOp = { op: 'remove' | 'add'; id: string }
+
 /** The five user-facing write actions (one per design.md §3.3 row). */
 export type CanvasAction =
   | { type: 'create-team'; name: string; ids: readonly string[] }
   | { type: 'add-member'; team: string; ids: readonly string[] }
   | { type: 'remove-member'; team: string; ids: readonly string[] }
   | { type: 'remove-team'; name: string }
-  | { type: 'reorder'; team: string; ids: readonly string[] }
+  /** `ops` comes from reorderOps() at emit time; the wire stays model-free. */
+  | { type: 'reorder'; team: string; ops: ReadonlyArray<RosterOp> }
 
 /** Reverts exactly what one applyAction did (team-scoped). */
 export type Undo = () => void
@@ -79,22 +83,27 @@ export function applyAction(model: WorldModel, a: CanvasAction): Undo {
       model.setTeamMembers(a.name, preIds)
     }
   }
-  // reorder: the desired roster replaces the current one wholesale. The
-  // undo WALKS the current roster back to the captured pre-order (same
-  // append-host discipline as reorderOps), so members a later queued
-  // action added stay put.
+  // reorder: apply the pre-computed ops to the current roster (remove
+  // anywhere, append). The undo WALKS the current roster back to the
+  // captured pre-order (same append-host discipline), so members a later
+  // queued action added stay put.
   const pre = model.teamMemberIds(a.team)
-  model.setTeamMembers(a.team, [...a.ids])
+  let roster = [...pre]
+  for (const op of a.ops) {
+    if (op.op === 'remove') roster = roster.filter(x => x !== op.id)
+    else roster.push(op.id)
+  }
+  model.setTeamMembers(a.team, roster)
   return () => {
-    let roster = model.teamMemberIds(a.team)
+    let back = model.teamMemberIds(a.team)
     for (let i = 0; i < pre.length; i++) {
       const id = pre[i]!
-      if (roster[i] === id) continue
-      if (!roster.includes(id)) continue
-      roster = roster.filter(x => x !== id)
-      roster.push(id)
+      if (back[i] === id) continue
+      if (!back.includes(id)) continue
+      back = back.filter(x => x !== id)
+      back.push(id)
     }
-    model.setTeamMembers(a.team, roster)
+    model.setTeamMembers(a.team, back)
   }
 }
 

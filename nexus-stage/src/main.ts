@@ -18,6 +18,8 @@ import { createStageKeyboardHandler, wireReducedRendering } from './interaction'
 import { createPlanningView } from './planning-view'
 import { createSaveLoop, type LampState } from './layout-wire'
 import { projectFleet } from './reproject'
+import { createCanvasWire } from './canvas-wire'
+import type { CanvasAction } from './canvas-ops'
 import './overlay.css'
 
 // ─── DOM shell ──
@@ -252,9 +254,40 @@ let canvasFace = false
 let lampState: LampState = 'idle'
 let lastLayoutJson: string | undefined
 
+// ─── Canvas write face: the wire + the action channel (PR C) ──
+const canvasWire = createCanvasWire({
+  send: async (body) => {
+    const r = await fetch('/__dsh_a2a/canvas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+    })
+    return { status: r.status, body: await r.json() as { ok?: boolean; error?: string } }
+  },
+  onNotice: (kind, text) => planning.notice(kind, text),
+})
+
+function runCanvasAction(a: CanvasAction): Promise<boolean> {
+  switch (a.type) {
+    case 'create-team': return canvasWire.createTeam(a.name, a.ids)
+    case 'add-member': return canvasWire.addMembers(a.team, a.ids)
+    case 'remove-member': return canvasWire.removeMembers(a.team, a.ids)
+    case 'remove-team': return canvasWire.removeTeam(a.name)
+    case 'reorder': return canvasWire.runRosterOps(a.team, a.ops)
+  }
+}
+
 const planning = createPlanningView({
   onDirty: () => saveLoop.markDirty(),
   onLampClick: () => saveLoop.retry(),
+  onCanvasAction: async (a) => {
+    const ok = await runCanvasAction(a)
+    // Settled: converge on truth either way — success absorbs the host's
+    // rich state; failure re-pulls so the rollback matches reality.
+    void cycle()
+    return ok
+  },
 })
 app.appendChild(planning.root)
 
