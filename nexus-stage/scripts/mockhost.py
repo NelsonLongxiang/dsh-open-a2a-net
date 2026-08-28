@@ -5,6 +5,10 @@ both proof scenes are plain openable URLs, no browser automation required:
 
   http://127.0.0.1:<port>/            healthy (canned live-shaped state)
   http://127.0.0.1:<port>/?fault=500  state answers 500 -> on-page fault badge
+  http://127.0.0.1:<port>/?demo=1     state merges a demo federation dataset
+                                      (2 peers + 2 inFlight routes) so the PR D
+                                      activity/federal layers stay demonstrable
+                                      offline and on fleets with no live routes
 
 Usage: python scripts/mockhost.py [port]        (default 8780)
 State source: LIVE_STATE env, else http://127.0.0.1:3080/__dsh_a2a/state, with
@@ -14,6 +18,7 @@ import functools
 import json
 import os
 import sys
+import time
 import urllib.request
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -68,7 +73,16 @@ def valid_name(raw):
     return name
 
 
-def build_state():
+# ── demo federation dataset (PR D): merged into /__dsh_a2a/state only when the
+# request carries demo=1 (query or Referer), so the activity/federal layers are
+# demonstrable offline and on live fleets that have no in-flight routes. ──
+DEMO_PEERS = [
+    {'url': 'http://192.168.3.88:3080', 'score': 42},
+    {'url': 'http://10.0.0.7:13080', 'score': 17},
+]
+
+
+def build_state(demo: bool = False) -> bytes:
     """The snapshot with canvas.teams regenerated from the mutable store."""
     state = dict(_BASE)
     team_rows = []
@@ -82,6 +96,17 @@ def build_state():
             members.append(row)
         team_rows.append({'name': name, 'team': f'{host_prefix}/canvas/{name}', 'members': members})
     state['canvas'] = {'teams': team_rows}
+    if demo:
+        # fresh list copies - _BASE's own peers must stay untouched
+        state['peers'] = list(state.get('peers') or []) + [dict(p) for p in DEMO_PEERS]
+        names = [row['name'] for row in team_rows]
+        first = names[0] if names else 'dsh'
+        second = names[1] if len(names) > 1 else first
+        now_ms = int(time.time() * 1000)
+        state['inFlight'] = [
+            {'team': first, 'peer': '192.168.3.88:3080', 'startedAt': now_ms - 12000},
+            {'team': second, 'peer': '10.0.0.7:13080', 'startedAt': now_ms - 45000},
+        ]
     return json.dumps(state).encode()
 
 
@@ -90,11 +115,12 @@ class MockHost(SimpleHTTPRequestHandler):
         path, _, query = self.path.partition('?')
         referer = self.headers.get('Referer') or ''
         faulted = 'fault' in query or 'fault' in referer
+        demo = 'demo=1' in query or 'demo=1' in referer
         if path == '/__dsh_a2a/state':
             if faulted:
                 self._json(b'{"ok":false,"error":"injected fault"}', status=500)
             else:
-                self._json(build_state())  # regenerated: canvas writes stay visible
+                self._json(build_state(demo))  # regenerated: canvas writes stay visible
         elif path == '/__dsh_a2a/canvas-layout':
             self._json(json.dumps({'ok': True, 'layout': layout_store['doc']}).encode())
         else:

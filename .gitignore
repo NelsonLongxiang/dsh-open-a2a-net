@@ -15,3 +15,6 @@ t.log
 tscc.log
 # Windows '> nul' redirect accidents materialize a real reserved-name file.
 nul
+
+# Python bytecode (mockhost smoke runs)
+__pycache__/
