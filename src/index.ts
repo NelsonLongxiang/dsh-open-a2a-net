@@ -59,10 +59,13 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { A2aClient, type A2aFetch, type A2aSchedule, type CardFetchOutcome } from './a2a-client.ts'
 import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from './transport-caps.ts'
 import type { A2aPeerCard, A2aRouteResult, ZoneRecord } from './types.ts'
+import { NATIVE_TEAMS_A2A_FACE_KEY, type NativeTeamsBridgeFace } from './teams-bridge.ts'
 
 export type * from './types.ts'
 export { A2aClient } from './a2a-client.ts'
 export type { A2aClientOptions, A2aFetch, A2aSchedule } from './a2a-client.ts'
+export { NATIVE_TEAMS_A2A_FACE_KEY } from './teams-bridge.ts'
+export type { NativeTeamsBridgeFace, TeamsBridgeResolveInfo, TeamsBridgeSubmitOutcome, TeamsBridgeSubmitRequest } from './teams-bridge.ts'
 
 export const name = 'a2a'
 
@@ -206,6 +209,25 @@ export interface Config {
    * remote session's reply (default 30 minutes).
    */
   readonly routeTimeoutMs: number
+  /**
+   * Opt-in native-teams inbound bridge: when composed with
+   * `@nelsonlongxiang/dsh-native-teams`, a routed team name that its
+   * registry classifies as an unambiguous local claim dispatches through
+   * its authoritative routing seam (`/a2a/direct`, the outbound A2A tools,
+   * and the directory listing). Off by default — exposing every registered
+   * team to the network is an operator decision (exposure-grants
+   * governance: grants are deliberate, never ambient). Dispatcher-level
+   * only: inbound callers address the team, never its individual members
+   * (members stay visible-not-addressable).
+   */
+  readonly nativeTeamsInbound?: boolean
+  /**
+   * Reply-wait budget for one native-teams round (the bridge's answer
+   * deadline, mirroring the steer path's 180s deadline). A round still
+   * running past it answers the honest delivered-unsettled shape instead
+   * of parking the caller; the round itself keeps going.
+   */
+  readonly nativeRoundWaitMs?: number
 }
 
 /** Schemastery configuration for the A2A client plugin row. */
@@ -237,6 +259,8 @@ export const Config: s<Config> = s.object({
   cardTtlMs: s.number().default(172_800_000),
   flushTimeoutMs: s.number().default(300_000),
   routeTimeoutMs: s.number().default(1_800_000),
+  nativeTeamsInbound: s.boolean().default(false),
+  nativeRoundWaitMs: s.number().default(180_000),
 })
 
 /** Model-facing text for one route result. */
@@ -1425,6 +1449,12 @@ export function apply(ctx: Context, config: Config): void {
     })
   }
 
+  /** The cooperative stop-notice text, shared by the tasks/cancel control
+   * route and the transport face's cancel half (one contract, one wording). */
+  function cancelNoticeText(taskId: string, reason?: string): string {
+    return `[A2A cancel] (task ${taskId}) the caller cancelled this task${reason !== undefined && reason !== '' ? `: ${reason}` : ''}. Stop any work tied to it and acknowledge via [A2A receipt] task ${taskId} cancelled.`
+  }
+
   /**
    * v0.5.23 (async-stall): whether the steered agent actually left idle. A
    * steer on an idle driver flips status to running within the same tick
@@ -1542,11 +1572,13 @@ export function apply(ctx: Context, config: Config): void {
   /**
    * Steer one direct route request into a live agent and resolve with its
    * final reply (final semantics always: the HTTP caller has no other
-   * channel to learn the reply).
+   * channel to learn the reply). A bridge round that outlived the reply
+   * window answers with `status: TASK_STATE_DELIVERED` + the `bridge`
+   * marker instead of a (false) completion.
    * @param taskId - the correlation key the steered receipt header carries.
    */
-  function routeIntoAgent(team: string, message: string, caller: string, taskId?: string): Promise<
-    { ok: true; reply: string } | { ok: false; error: string }
+  async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string): Promise<
+    { ok: true; reply: string; status?: string; bridge?: 'native-teams' } | { ok: false; error: string }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
@@ -1560,6 +1592,21 @@ export function apply(ctx: Context, config: Config): void {
         (error: unknown) => ({ ok: false, error: `waking the session for team "${team}" failed: ${String(error)}` }) as const,
       )
     }
+    // Native-teams inbound bridge (opt-in): a registry team claims the
+    // handle and dispatches through its authoritative seam. Checked before
+    // the bare-team fallback — a team named exactly like this node's team
+    // resolves to the registry's claim, not the initiator redirect.
+    if (config.nativeTeamsInbound === true) {
+      const prepared = await nativeTeamsPrepare(team)
+      if (prepared.ok) {
+        const bridged = await nativeTeamsRound(prepared, team, caller, message, taskId)
+        if (bridged.ok) {
+          if (bridged.settled) return { ok: true, reply: bridged.reply }
+          return { ok: true, reply: bridged.reply, status: 'TASK_STATE_DELIVERED', bridge: 'native-teams' }
+        }
+        return { ok: false, error: bridged.error }
+      }
+    }
     // Only the bare process team falls back to the live (initiator) agent.
     // A session-node-shaped team that misses is an error, never a silent
     // redirect: a mistyped or stale short id must not reach another session
@@ -1567,9 +1614,9 @@ export function apply(ctx: Context, config: Config): void {
     if (team === config.team) {
       const live = liveAgent()
       if (live !== undefined) return routeIntoAgentFor(live, team, message, caller, taskId)
-      return Promise.resolve({ ok: false, error: 'No live DSH agent is available to accept this message.' })
+      return { ok: false, error: 'No live DSH agent is available to accept this message.' }
     }
-    return Promise.resolve({ ok: false, error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.` })
+    return { ok: false, error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.` }
   }
 
   /**
@@ -1613,6 +1660,175 @@ ${message}`
         resolve({ ok: false, error: `The DSH session rejected the message: ${String(error)}` })
       }
     })
+  }
+
+  // ── Native-teams inbound bridge (opt-in: config.nativeTeamsInbound) ──
+  //
+  // Structural probe of the sibling registry (plugins never value-import
+  // each other): when @nelsonlongxiang/dsh-native-teams is composed, its
+  // `teams` service can classify a team name across planes (describeTarget)
+  // and start a routed round through the same authoritative chain the
+  // interactive route tools use (startRound). Absent registry, unmounted
+  // seam, or an ambiguous / remote-plane answer all decline the bridge —
+  // the standard resolution chain keeps its verdict. Dispatch is
+  // dispatcher-level only: inbound callers address the team, never its
+  // individual members (members stay visible-not-addressable).
+  //
+  // Precedence on every path (local tools and HTTP inbound alike): session
+  // node → canvas team → cold joined wake → native-teams claim → bare team
+  // fallback. Rounds are bounded like the steer path: a 180s reply-wait
+  // deadline releases the caller while the round keeps running, and the
+  // caller's abort (where one exists) cancels the round through its own
+  // signal. Rounds emit no A2A receipt in this slice, so their results
+  // carry the `bridge` marker and callers must not book them as
+  // receipt-owed.
+  interface BridgeTeamsDescriptor {
+    readonly plane: 'local' | 'a2a'
+    readonly ambiguous?: boolean
+    readonly localLabel?: string
+  }
+  interface BridgeTeamsRegistry {
+    listTeams(): Array<{ name: string; description: string }>
+    describeTarget(handle: string): Promise<BridgeTeamsDescriptor>
+    startRound(args: { team?: string; message: string }, parent: { id: string; session: { events: readonly unknown[] } }, signal: AbortSignal): Promise<string>
+  }
+
+  function teamsRegistry(): BridgeTeamsRegistry | undefined {
+    const candidate = (ctx as unknown as { get(name: string): unknown }).get('teams') as Partial<BridgeTeamsRegistry> | undefined
+    if (candidate === undefined || candidate === null) return undefined
+    if (typeof candidate.describeTarget !== 'function' || typeof candidate.startRound !== 'function' || typeof candidate.listTeams !== 'function') return undefined
+    return candidate as BridgeTeamsRegistry
+  }
+
+  /** Reply-wait parity with the steer path's 180s deadline: native-teams
+   * rounds settle on their own cadence, but a wedged seam must not park a
+   * caller past a bounded window (config.nativeRoundWaitMs). */
+  /** The claim table changes at registry-edit cadence: a short memo dedupes
+   * the double probe (callers pre-check, the round re-verifies) without
+   * pretending the answer is permanent. */
+  const BRIDGE_CLAIM_TTL_MS = 5_000
+  const bridgeClaimCache = new Map<string, { at: number; claimed: boolean }>()
+  const bridgeTimers = new Set<ReturnType<typeof setTimeout>>()
+  ctx.effect(() => () => {
+    for (const timer of bridgeTimers) clearTimeout(timer)
+  })
+
+  /**
+   * Whether the native-teams registry claims `team` as an unambiguous local
+   * target, memoized for {@link BRIDGE_CLAIM_TTL_MS}. Ordinary misses never
+   * throw (the D2 query contract); anything that does throw is treated as a
+   * miss — the bridge is a guest here. The memo is skipped entirely while
+   * the bridge is off, so the flag gates the probe itself.
+   */
+  async function nativeTeamsClaims(team: string): Promise<boolean> {
+    if (config.nativeTeamsInbound !== true) return false
+    const cached = bridgeClaimCache.get(team)
+    if (cached !== undefined && Date.now() - cached.at < BRIDGE_CLAIM_TTL_MS) return cached.claimed
+    const teams = teamsRegistry()
+    let claimed = false
+    if (teams !== undefined) {
+      try {
+        const descriptor = await teams.describeTarget(team)
+        claimed = descriptor.plane === 'local' && descriptor.ambiguous !== true && descriptor.localLabel !== undefined
+      } catch {
+        claimed = false
+      }
+    }
+    bridgeClaimCache.set(team, { at: Date.now(), claimed })
+    // Bounded memo: probe-miss names accumulate one tiny row each; past a
+    // generous cap, drop the whole table (a cold re-probe costs one local
+    // describeTarget call).
+    if (bridgeClaimCache.size > 512) bridgeClaimCache.clear()
+    return claimed
+  }
+
+  type NativeTeamsPrepared =
+    | { readonly ok: true; readonly teams: BridgeTeamsRegistry; readonly parent: { id: string; session: { events: readonly unknown[] } } }
+    | { readonly ok: false; readonly reason: 'not-claimed' }
+    | { readonly ok: false; readonly reason: 'error'; readonly error: string }
+
+  /**
+   * Resolve everything the round needs BEFORE any caller is told the
+   * dispatch happened: the claim, the seam, and a parent initiator. The
+   * `error` variant is the only fast-failure shape — `not-claimed` simply
+   * hands the address back to the standard resolution chain.
+   */
+  async function nativeTeamsPrepare(team: string): Promise<NativeTeamsPrepared> {
+    if (!await nativeTeamsClaims(team)) return { ok: false, reason: 'not-claimed' }
+    const teams = teamsRegistry()
+    if (teams === undefined) return { ok: false, reason: 'not-claimed' }
+    const parent = liveAgent()
+    if (parent === undefined) return { ok: false, reason: 'error', error: 'No live DSH initiator is available to parent the native-teams round.' }
+    return { ok: true, teams, parent }
+  }
+
+  /** The A2A envelope rides the round message so the dispatcher sees the network origin. */
+  function bridgeEnvelope(team: string, caller: string, message: string, taskId: string | undefined): string {
+    const from = caller === '' ? 'an unknown node' : caller
+    const taskPrefix = taskId === undefined ? '' : `(task ${taskId}) `
+    return `[A2A direct] ${taskPrefix}from "${from}" (routed to ${team}) sent:\n\n${message}`
+  }
+
+  type NativeTeamsRoundOutcome =
+    | { readonly ok: true; readonly reply: string; readonly settled: boolean }
+    | { readonly ok: false; readonly error: string; readonly phase?: 'pre-dispatch'; readonly aborted?: boolean }
+
+  /** The projection for a round that outlived the reply window: unlike the
+   * steer deadline's text, this must NOT promise a receipt — native-teams
+   * rounds route none in this slice. */
+  function bridgeUnsettledReply(team: string): string {
+    return `The native-teams round for "${team}" is still running past the reply window; it was delivered and keeps going. Native-teams rounds route no A2A receipt in this slice — reconcile with a follow-up route (continuity rides the team's own durable round chain).`
+  }
+
+  /**
+   * Fire the round and wait, bounded. The caller's signal (when it has one)
+   * cancels the round itself; the deadline releases the caller with the
+   * unsettled projection while the round keeps running detached.
+   * @param prepared - a ready dispatch (claim, seam, parent) from {@link nativeTeamsPrepare}.
+   */
+  async function nativeTeamsRound(prepared: Extract<NativeTeamsPrepared, { ok: true }>, team: string, caller: string, message: string, taskId: string | undefined, external?: AbortSignal): Promise<NativeTeamsRoundOutcome> {
+    const controller = new AbortController()
+    // One listener, always removed after the race: an external abort cancels
+    // the round through its own controller.
+    const onExternalAbort = (): void => { controller.abort() }
+    if (external !== undefined) {
+      if (external.aborted) controller.abort()
+      else external.addEventListener('abort', onExternalAbort)
+    }
+    if (controller.signal.aborted) return { ok: false, error: 'aborted before the native-teams round was dispatched', phase: 'pre-dispatch' }
+    let roundError: unknown
+    type Verdict = { readonly kind: 'settled'; readonly reply: string } | { readonly kind: 'failed' } | { readonly kind: 'deadline' } | { readonly kind: 'aborted' }
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<Verdict>(resolve => {
+      deadlineTimer = setTimeout(() => {
+        if (deadlineTimer !== undefined) bridgeTimers.delete(deadlineTimer)
+        resolve({ kind: 'deadline' })
+      }, config.nativeRoundWaitMs ?? 180_000)
+      deadlineTimer.unref?.()
+      bridgeTimers.add(deadlineTimer)
+    })
+    const verdict = await Promise.race([
+      prepared.teams.startRound({ team, message: bridgeEnvelope(team, caller, message, taskId) }, prepared.parent, controller.signal).then(
+        (reply): Verdict => ({ kind: 'settled', reply }),
+        (error: unknown): Verdict => { roundError = error; return { kind: 'failed' } },
+      ),
+      deadline,
+      new Promise<Verdict>(resolve => {
+        if (controller.signal.aborted) resolve({ kind: 'aborted' })
+        else controller.signal.addEventListener('abort', () => resolve({ kind: 'aborted' }), { once: true })
+      }),
+    ])
+    // Hygiene: the losing deadline timer stops here (not 180s later), and
+    // the external-signal listener does not outlive the round.
+    if (deadlineTimer !== undefined) {
+      clearTimeout(deadlineTimer)
+      bridgeTimers.delete(deadlineTimer)
+    }
+    if (external !== undefined) external.removeEventListener('abort', onExternalAbort)
+    if (verdict.kind === 'settled') return { ok: true, reply: verdict.reply, settled: true }
+    if (verdict.kind === 'deadline') return { ok: true, reply: bridgeUnsettledReply(team), settled: false }
+    if (verdict.kind === 'aborted') return { ok: false, error: `the wait for the native-teams round "${team}" was aborted (the round was cancelled with it)`, aborted: true }
+    return { ok: false, error: `the native-teams round for "${team}" failed: ${String(roundError)}` }
   }
 
   whenWebServerSettled((webServer) => {
@@ -1774,13 +1990,48 @@ ${message}`
               })
               return
             }
-            if (team === config.team) {
-              const live = liveAgent()
-              if (live !== undefined) { deliver(live); return }
-            }
-            const payload = JSON.stringify({ error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.`, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
-            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
-            res.end(payload)
+            // Remaining candidates need one async classification (the
+            // native-teams bridge), so the tail answers inside an IIFE.
+            void (async () => {
+              // Native-teams inbound bridge (opt-in): prepare BEFORE answering
+              // delivered — claim, seam, and parent initiator are everything
+              // that can fail fast, and a phantom dispatch must never answer
+              // success. Past prepare, the round fires detached (noWait means
+              // delivery, not settlement); its late outcome corrects the
+              // activity ring and the log.
+              const standardMiss = (): void => {
+                if (team === config.team) {
+                  const live = liveAgent()
+                  if (live !== undefined) { deliver(live); return }
+                }
+                const payload = JSON.stringify({ error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.`, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
+                res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+                res.end(payload)
+              }
+              const prepared = await nativeTeamsPrepare(team)
+              if (!prepared.ok) {
+                if (prepared.reason === 'error') {
+                  recordActivity('in', team, caller, false)
+                  const payload = JSON.stringify({ error: prepared.error, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
+                  res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+                  res.end(payload)
+                  return
+                }
+                standardMiss()
+                return
+              }
+              recordActivity('in', team, caller, true)
+              void nativeTeamsRound(prepared, team, caller, message, taskId)
+                .then(outcome => {
+                  if (!outcome.ok) {
+                    recordActivity('in', team, caller, false)
+                    logger.warn(`a2a: detached native-teams round for "${team}" failed: ${outcome.error}`)
+                  }
+                })
+              const payload = JSON.stringify({ routed: true, delivered: true, team, session, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_DELIVERED', artifacts: [], consumed: false, bridge: 'native-teams' })
+              res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+            })()
             return
           }
           void routeIntoAgent(team, message, caller, taskId).then((outcome) => {
@@ -1793,8 +2044,13 @@ ${message}`
                 result: { text: outcome.reply },
                 task_id: taskId,
                 context_id: contextId,
-                task_status: 'TASK_STATE_COMPLETED',
+                task_status: outcome.status ?? 'TASK_STATE_COMPLETED',
                 artifacts: [],
+                // The bridge marker rides the wire so the caller's
+                // trackOwedTask skips a receipt-less native round — without
+                // it, a cross-node unsettled round books an unpayable owed
+                // row and re-creates the TASK_CAP backlog.
+                ...(outcome.bridge !== undefined ? { bridge: outcome.bridge } : {}),
               })
               : JSON.stringify({ error: outcome.error, code: -32000, team, task_id: taskId, task_status: 'TASK_STATE_FAILED' })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
@@ -1846,9 +2102,11 @@ ${message}`
           let steered = false
           if (result.outcome === 'cleared' && result.team !== undefined) {
             const live = resolveAgentForTeam(result.team)
+              ?? canvasLiveAgent(parseCanvasTeamName(result.team))
+              ?? (result.team === config.team ? liveAgent() : undefined)
             if (live !== undefined) {
               try {
-                steerRelay(live, `[A2A cancel] (task ${taskId}) the caller cancelled this task${reason ? `: ${reason}` : ''}. Stop any work tied to it and acknowledge via [A2A receipt] task ${taskId} cancelled.`)
+                steerRelay(live, cancelNoticeText(taskId, reason))
                 steered = true
               } catch {
                 // Bookkeeping already settled; steering is best-effort only.
@@ -2086,6 +2344,19 @@ ${message}`
           origin: localOrigin,
         }
       }),
+      // Native-teams registry rows (opt-in bridge): local teams this node
+      // can dispatch inbound. They list only when the operator opted in —
+      // registry presence alone is never network exposure.
+      ...(config.nativeTeamsInbound === true
+        ? (teamsRegistry()?.listTeams() ?? []).map(entry => ({
+          team: entry.name,
+          session,
+          name: entry.name,
+          description: entry.description,
+          local: true,
+          origin: localOrigin,
+        }))
+        : []),
     ]
     const fetch = memoizedCardFetch()
     // Collect per peer in store order (concurrent fetches, ordered merge):
@@ -2157,6 +2428,10 @@ ${message}`
    */
   const trackOwedTask = (taskId: string, team: string, peer: string, result: A2aRouteResult): void => {
     if (!result.ok) return
+    // Native-teams bridge rounds emit no A2A receipt in this slice: booking
+    // them as receipt-owed would fill the owed book with rows no receipt can
+    // ever settle (evicting genuinely receivable peer rows past TASK_CAP).
+    if (result.bridge !== undefined) return
     if (result.task_status !== 'TASK_STATE_DELIVERED' && result.task_status !== 'TASK_STATE_ABORTED_WAIT') return
     taskLedger.track(taskId, team, peer, result.context_id === '' ? undefined : result.context_id)
   }
@@ -2270,10 +2545,14 @@ ${message}`
   async function dispatchLocalCandidate(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode = false, taskIdFromCaller?: string): Promise<A2aRouteResult | undefined> {
     const webServer = ctx.get('webServer')
     const canvasName = parseCanvasTeamName(team)
-    const teamIsLocal = team === config.team
+    let teamIsLocal = team === config.team
       || resolveAgentForTeam(team) !== undefined
       || joinedSessions.list().some(id => `${config.team}/${id8(id)}` === team)
       || (canvasName !== undefined && (canvasLiveAgent(canvasName) !== undefined || canvasColdMemberId(canvasName) !== undefined))
+    // The native-teams claim probe is an await: pay it only when the four
+    // cheap synchronous locality checks missed (a registry team is a local
+    // candidate even though no session node backs it).
+    if (!teamIsLocal && team !== config.team) teamIsLocal = await nativeTeamsClaims(team)
     if (!teamIsLocal || webServer === undefined) return undefined
     // A receipt relayed between same-host sessions (the answering session
     // routing its `[A2A receipt]` back over the in-process candidate)
@@ -2286,11 +2565,51 @@ ${message}`
       // materializes first (the wake settles, or fails honestly), then the
       // steer fires, then delivered answers. The receipt header carries the
       // task id so the target can echo it back verbatim.
-      const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(canvasName) ?? (team === config.team ? liveAgent() : undefined)
-      const woken = agent !== undefined ? Promise.resolve(agent) : wakeColdTeam(team)
+      const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(canvasName)
+      let woken = agent !== undefined ? Promise.resolve(agent) : wakeColdTeam(team)
       if (woken === undefined) {
-        endRoute(flight)
-        return { ok: false, error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.`, code: -32000 }
+        // Bridge BEFORE the bare-team fallback — claim beats the initiator
+        // redirect, the same rule routeIntoAgent follows (a bare team name
+        // claimed by the registry must not fork its destination by wait
+        // semantics). Prepare-first: claim, seam, and parent initiator are
+        // everything that can fail fast, so a phantom delivery never answers
+        // success. The fire is truly detached (no caller signal — the turn
+        // ending must not silently retract an already-announced delivery);
+        // rounds emit no receipt in this slice (the `bridge` marker keeps
+        // the caller's ledger honest).
+        const prepared = await nativeTeamsPrepare(team)
+        if (prepared.ok) {
+          endRoute(flight)
+          recordActivity('out', team, 'local', true)
+          void nativeTeamsRound(prepared, team, callerSession ?? session, message, taskId)
+            .then(outcome => {
+              if (!outcome.ok) {
+                recordActivity('out', team, 'local', false)
+                logger.warn(`a2a: detached native-teams round for "${team}" failed: ${outcome.error}`)
+              }
+            })
+          return {
+            ok: true,
+            team,
+            reply: `Delivered to ${team} (async native-teams round dispatched). The round settles through the team's own routing chain; it routes no A2A receipt in this slice — reconcile via context_id follow-ups.`,
+            task_id: taskId,
+            context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
+            task_status: 'TASK_STATE_DELIVERED',
+            bridge: 'native-teams',
+          }
+        }
+        if (prepared.reason === 'error') {
+          endRoute(flight)
+          recordActivity('out', team, 'local', false)
+          return { ok: false, error: prepared.error, code: -32000 }
+        }
+        // Claim declined: the bare process team still steers the live initiator.
+        const live = team === config.team ? liveAgent() : undefined
+        if (live === undefined) {
+          endRoute(flight)
+          return { ok: false, error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.`, code: -32000 }
+        }
+        woken = Promise.resolve(live)
       }
       try {
         const target = await woken
@@ -2315,6 +2634,60 @@ ${message}`
         endRoute(flight)
         recordActivity('out', team, 'local', false)
         return { ok: false, error: `waking or steering the session for team "${team}" failed: ${String(error)}`, code: -32000 }
+      }
+    }
+    if (!asyncMode) {
+      // Bridge only on a steer-path miss, matching the documented chain
+      // (session node → canvas → cold wake → native-teams claim → bare): a
+      // registry claim must never shadow a live local session team. The
+      // caller's abort cancels the round through its own signal; the 180s
+      // deadline restores the bound the steer machinery observes.
+      const steerable = resolveAgentForTeam(team) !== undefined
+        || canvasLiveAgent(canvasName) !== undefined
+        || joinedSessions.list().some(id => `${config.team}/${id8(id)}` === team)
+        || wakeColdTeam(team) !== undefined
+      if (!steerable && team !== config.team) {
+        const prepared = await nativeTeamsPrepare(team)
+        if (prepared.ok) {
+          const outcome = await nativeTeamsRound(prepared, team, callerSession ?? session, message, taskId, signal)
+          endRoute(flight)
+          if (!outcome.ok) {
+            // The aborted-wait shape is earned only by an actual round
+            // cancellation (the caller's abort reached the seam). A
+            // pre-dispatch abort means the message never left the node, and
+            // a failed round means it never answered — both answer the
+            // honest error instead of claiming a delivery.
+            if (outcome.aborted === true) {
+              recordActivity('out', team, 'local', true)
+              return {
+                ok: true,
+                team,
+                reply: `The message was delivered to ${team} (native-teams round), but the wait was aborted (the round was cancelled with it).`,
+                task_id: taskId,
+                context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
+                task_status: 'TASK_STATE_ABORTED_WAIT',
+                bridge: 'native-teams',
+              }
+            }
+            recordActivity('out', team, 'local', false)
+            return { ok: false, error: outcome.error, code: -32000 }
+          }
+          recordActivity('out', team, 'local', true)
+          return {
+            ok: true,
+            team,
+            reply: outcome.reply,
+            task_id: taskId,
+            context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
+            task_status: outcome.settled ? 'TASK_STATE_COMPLETED' : 'TASK_STATE_DELIVERED',
+            ...(outcome.settled ? {} : { bridge: 'native-teams' as const }),
+          }
+        }
+        if (prepared.reason === 'error') {
+          endRoute(flight)
+          recordActivity('out', team, 'local', false)
+          return { ok: false, error: prepared.error, code: -32000 }
+        }
       }
     }
     const wait = routeIntoAgent(team, message, callerSession ?? session, taskId)
@@ -2371,7 +2744,8 @@ ${message}`
         reply: outcome.reply,
         task_id: taskId,
         context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
-        task_status: 'TASK_STATE_COMPLETED',
+        task_status: outcome.status ?? 'TASK_STATE_COMPLETED',
+        ...(outcome.bridge !== undefined ? { bridge: outcome.bridge } : {}),
       }
     }
     return { ok: false, error: outcome.error, code: -32000 }
@@ -2438,6 +2812,122 @@ ${message}`
     }
     return candidates
   }
+
+  // ── Outbound transport face: the `nativeTeamsA2a` bridge ─────────────
+  //
+  // Contract: @nelsonlongxiang/dsh-native-teams/src/a2a-face.ts (0.14.0,
+  // structural mirror in src/teams-bridge.ts). This plugin mounts the
+  // implementation under the face's frozen service key — protocol
+  // primitives live on the protocol face (three-party consensus), and
+  // native-teams probes it presence-guarded (unmounted ⇒ local-only
+  // routing, never a crash). The face ships only what this plugin already
+  // does for a2a_route: resolve via the ONE directory walk (same matcher
+  // submit uses — no drift-prone double implementation), submit via the
+  // direct-route dispatcher (per-candidate async gate, failover included),
+  // cancel via the cooperative stop-notice. It exposes nothing new — only
+  // teams the tracked peer network already publishes resolve here.
+  const bridgeFace: NativeTeamsBridgeFace = {
+    resolve: async (handle) => {
+      const failures: string[] = []
+      const candidates = await directoryPeerCandidates(memoizedCardFetch(), handle, failures)
+      if (candidates.length === 0) return undefined
+      return { kind: 'node', hops: 1, url: candidates[0] }
+    },
+    submit: async (request, signal) => {
+      const abort = signal ?? new AbortController().signal
+      const failures: string[] = []
+      const fetch = memoizedCardFetch()
+      const candidates = await directoryPeerCandidates(fetch, request.handle, failures)
+      if (candidates.length === 0) {
+        throw new Error(`team "${request.handle}" is not published by any tracked peer${failures.length === 0 ? '' : ` (unresolved delegations: ${failures.join('; ')})`}`)
+      }
+      // The caller-born task id (B3): the orchestrator's dedup key IS the
+      // wire task id, so the peer's echo correlates with the caller's ledger.
+      const taskId = request.idempotencyKey !== undefined && request.idempotencyKey !== ''
+        ? request.idempotencyKey
+        : `direct-${Math.random().toString(16).slice(2, 10)}`
+      // The wire caller label is this node's own label: the per-round
+      // receipt backflow to `callbackTarget` is the P2 slice, so receipts
+      // route to the bare team (the node's initiator) meanwhile — the owed
+      // ledger keeps the submission visible to the operator either way.
+      for (const candidate of candidates) {
+        // Capability gate per candidate, like a2a_route's loop: a
+        // delivery:async submit never dials a peer whose signed card does
+        // not declare async — failover must not silently degrade into the
+        // minutes-long blocking wait the gate exists to prevent.
+        let peerAsync = false
+        if (request.delivery === 'async') {
+          const card = await fetch(candidate)
+          peerAsync = (card?.capabilities as { async?: unknown } | undefined)?.async === true
+        }
+        const result = await dispatchPeerCandidate(candidate, request.handle, request.message, request.contextId, abort, session, request.delivery === 'async' && peerAsync, taskId)
+        if (!result.ok) {
+          // Idempotency verdicts (B3) are terminal, not failover: a replay
+          // says the prior attempt at THIS peer stays authoritative —
+          // re-dispatching the same dedup key at another peer would execute
+          // the task twice; a conflict is a caller bug (same key, different
+          // payload) and must surface as a failure, not a redirect.
+          if (result.code === WIRE_ERROR_REPLAY_REJECTED) {
+            return { kind: 'accepted', taskId, acceptedAt: new Date().toISOString(), contextId: request.contextId ?? '' }
+          }
+          if (result.code === WIRE_ERROR_IDEMPOTENCY_CONFLICT) {
+            throw new Error(`A2A submit for "${request.handle}" conflicts at the peer's idempotency ledger (task ${taskId} reused with a different payload)`)
+          }
+          if (abort.aborted) break
+          continue
+        }
+        trackOwedTask(taskId, request.handle, candidate, result)
+        const contextId = request.contextId ?? (result.context_id !== '' ? result.context_id : `ctx-${Math.random().toString(16).slice(2, 10)}`)
+        if (result.task_status === 'TASK_STATE_COMPLETED') {
+          return { kind: 'completed', text: result.reply, taskId, contextId }
+        }
+        // DELIVERED / ABORTED_WAIT: the message is in and the receipt
+        // contract carries the outcome — the face maps both to the
+        // accepted shape (the submission stays visible in a2a_tasks).
+        return { kind: 'accepted', taskId, acceptedAt: new Date().toISOString(), contextId }
+      }
+      throw new Error(`A2A submit for "${request.handle}" failed on every candidate`)
+    },
+    cancel: async (ref, reason) => {
+      const taskId = ref.taskId
+      if (taskId === undefined || taskId === '') return false
+      const row = taskLedger.list().find(entry => entry.taskId === taskId)
+      if (row === undefined) return false
+      const notice = cancelNoticeText(taskId, reason)
+      if (row.peer === 'local') {
+        // Mirror the tasks/cancel control route: the cooperative stop-notice
+        // steers the live local target, not just the ledger row. The target
+        // resolution spans every kind the dispatcher can book — session
+        // node, canvas team, bare process team — a row's team is whatever
+        // the dispatch accepted, so the cancel must accept the same set.
+        const live = resolveAgentForTeam(row.team)
+          ?? canvasLiveAgent(parseCanvasTeamName(row.team))
+          ?? (row.team === config.team ? liveAgent() : undefined)
+        if (live !== undefined) {
+          try {
+            steerRelay(live, notice)
+          } catch {
+            // Bookkeeping below settles regardless; steering is best-effort.
+          }
+        }
+      } else {
+        // Peers do NOT track inbound task ids (the owed ledger's writer runs
+        // on the dispatcher side), so the peer's ledger-cancel route would
+        // deterministically answer 'unknown'. Drive the stop-notice through
+        // the wire to the team itself instead. The notice deliberately
+        // carries NO task_id: the original id is already claimed at the
+        // peer's idempotency ledger with a different payload, so reusing it
+        // would 409-conflict before any steer happens (a bodyless key is
+        // always fresh there). The original id rides the notice text.
+        const result = await client.routeDirect(row.peer, row.team, notice, undefined, undefined, session, true)
+        if (!result.ok) {
+          logger.warn(`a2a: cancel stop-notice for task ${taskId} failed to deliver to ${row.team}: ${result.error}`)
+        }
+      }
+      return taskLedger.cancel(taskId, reason).outcome === 'cleared'
+    },
+  }
+  ctx.reflect.provide(NATIVE_TEAMS_A2A_FACE_KEY, bridgeFace)
 
   ctx.tools.register(defineTool({
     name: 'a2a_status',
