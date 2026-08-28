@@ -56,6 +56,14 @@ type WireRoute = {
   readonly context_id?: unknown
   readonly task_status?: unknown
   readonly result?: unknown
+  readonly bridge?: unknown
+}
+
+/** The native-teams bridge marker, when the peer's answer carries one: its
+ * rounds emit no A2A receipt in this slice, so the caller must not book the
+ * task as receipt-owed. */
+function wireBridge(value: unknown): 'native-teams' | undefined {
+  return value === 'native-teams' ? 'native-teams' : undefined
 }
 
 /** Wire strings are absent-or-string; anything else degrades to ''. */
@@ -264,19 +272,26 @@ export class A2aClient {
       return failure
     }
     // The delivered shape (wait:false): no result member — the reply rides
-    // the receipt contract back to the caller's team instead.
+    // the receipt contract back to the caller's team instead. A bridged
+    // native round carries the peer's `bridge` marker and promises NO
+    // receipt: the text must not claim one the slice will never send.
     if (raw.routed === true && raw.delivered === true) {
       const taskId = wireText(raw.task_id) !== '' ? wireText(raw.task_id) : taskIdFromCaller ?? ''
+      const bridge = wireBridge(raw.bridge)
       return {
         ok: true,
         team,
-        reply: `Delivered to ${team} (async). The target routes a receipt — a message starting "[A2A receipt] task ${taskId} <outcome summary>" — back to your team when done; watch a2a_status activity or follow up with the context id.`,
+        reply: bridge !== undefined
+          ? `Delivered to ${team} (async native-teams round). It settles through the team's own routing chain and routes no A2A receipt in this slice — reconcile via context_id follow-ups.`
+          : `Delivered to ${team} (async). The target routes a receipt — a message starting "[A2A receipt] task ${taskId} <outcome summary>" — back to your team when done; watch a2a_status activity or follow up with the context id.`,
         task_id: taskId,
         context_id: wireText(raw.context_id),
         task_status: wireText(raw.task_status) === '' ? 'TASK_STATE_DELIVERED' : wireText(raw.task_status),
+        ...(bridge !== undefined ? { bridge } : {}),
       }
     }
     const reply = this.replyText(raw.result, '')
+    const bridge = wireBridge(raw.bridge)
     return {
       ok: true,
       team,
@@ -286,6 +301,7 @@ export class A2aClient {
       task_id: wireText(raw.task_id) !== '' ? wireText(raw.task_id) : taskIdFromCaller ?? '',
       context_id: wireText(raw.context_id),
       task_status: wireText(raw.task_status),
+      ...(bridge !== undefined ? { bridge } : {}),
     }
   }
 }

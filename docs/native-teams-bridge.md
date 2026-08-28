@@ -17,7 +17,7 @@ face 契约到本仓既有机制的映射（无新暴露面——只重排 a2a_r
 | `idempotencyKey` | 即 wire `task_id`（B3：编排方铸造的 dedup 键 = 线上任务 id，对端幂等闸门沿用）；缺省时本端铸 `direct-<8hex>` | **对端 409 判决是终态非 failover**：`-32003` 回放 → `accepted`（先前尝试在对端仍权威，转投=重复执行）；`-32002` 冲突 → 抛错（调用方 bug，同键异载荷） |
 | `contextId` / `sessionKey` | `context_id` 直通；`sessionKey` 由调用方（native-teams registry）持有，face 不解释 | |
 | `callbackTarget` | **P1 不消费**——wire caller label 为本节点标签，回执暂落本端 bare team（initiator），由欠账账本对账 | 回执回流到轮 = **P2 切片** |
-| `cancel(ref)` | 欠账行定位 → 本地：镜像控制路由（对活目标 steer `[A2A cancel]`）；远端：**经 wire 向该团队投递停止通知**（对端不跟踪入站任务 id，其账本路由必然 `unknown`）→ 清除本端欠账行 | 协作式，best-effort；通知措辞单一来源 `cancelNoticeText` |
+| `cancel(ref)` | 欠账行定位 → 本地：镜像控制路由（目标解析横跨会话节点/canvas/bare 团队，与派发侧同集，对活目标 steer `[A2A cancel]`）；远端：**经 wire 向该团队投递停止通知**（对端不跟踪入站任务 id，其账本路由必然 `unknown`）→ 清除本端欠账行 | 协作式，best-effort；通知措辞单一来源 `cancelNoticeText`；**通知刻意不带原 task_id**——原 id 已在对端幂等账本以不同载荷 claim，复用必 409 冲突在 steer 之前被拒（原 id 随通知文本携带） |
 
 挂载方式：`ctx.reflect.provide('nativeTeamsA2a', face)`（fiber effect-scoped，随卸载回收）；
 native-teams 侧 presence-guarded probe（`mountedA2AFace`）——未挂载时对端降级纯本地路由，永不 crash。

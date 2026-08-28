@@ -297,6 +297,26 @@ describe('inbound native-teams bridge', () => {
     expect(body.error).toContain('the native-teams round for "freight-team" failed')
   })
 
+  it('a claimed bare team name bridges on the async path too — claim beats the initiator redirect regardless of wait semantics', async () => {
+    const m = await mount({ nativeTeamsInbound: true })
+    mounted.push(m.dispose)
+    const initiator = makeAgent('session-main1')
+    const steers: string[] = []
+    const steer = vi.fn((message: { content: Array<{ type: string; text?: string }> }) => {
+      steers.push(message.content.find(block => block.type === 'text')?.text ?? '')
+    })
+    ;(initiator as unknown as { steer: unknown }).steer = steer
+    m.agents.agents.push(initiator)
+    m.registry.claims.set('dsh', { plane: 'local', localLabel: 'team' })
+    const route = m.ctx.tools.get('a2a_route')
+    const result = await route!.execute({ team: 'dsh', message: 'bare claimed', async: true }, noAgent()) as { ok: boolean; bridge?: string }
+    expect(result.ok).toBe(true)
+    expect(result.bridge).toBe('native-teams')
+    expect(m.registry.rounds).toHaveLength(1)
+    expect(m.registry.rounds[0]!.args.team).toBe('dsh')
+    expect(steers).toHaveLength(0)
+  })
+
   it('wait:false to a native team fires the round detached and answers delivered', async () => {
     const m = await mount({ nativeTeamsInbound: true })
     mounted.push(m.dispose)
@@ -371,9 +391,12 @@ describe('inbound native-teams bridge', () => {
     m.registry.claims.set('freight-team', { plane: 'local', localLabel: 'team' })
     m.registry.hang = true
     const res = await postJson(m.port, '/a2a/direct', { team: 'freight-team', message: 'slow round', caller_session: 'peer-x' })
-    const body = await res.json() as { task_status?: string; result?: { text?: string } }
+    const body = await res.json() as { task_status?: string; result?: { text?: string }; bridge?: string }
     expect(body.task_status).toBe('TASK_STATE_DELIVERED')
     expect(body.result?.text).toContain('still running past the reply window')
+    // The unsettled bridge marker rides the wire so the remote caller's
+    // ledger does not book an unpayable owed row.
+    expect(body.bridge).toBe('native-teams')
     expect(m.registry.rounds).toHaveLength(1)
   }, 15_000)
 
@@ -429,6 +452,10 @@ describe('outbound face: idempotency verdicts and cancel', () => {
     expect(notice).toBeDefined()
     expect(String(notice?.message)).toContain('task wb-z')
     expect(String(notice?.message)).toContain('changed mind')
+    // The notice deliberately carries NO task_id: the original id is already
+    // claimed at the peer's idempotency ledger with a different payload, so
+    // reusing it would 409-conflict before any steer happens.
+    expect(notice?.task_id).toBeUndefined()
     const state = await (await fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { tasks: Array<{ taskId: string }> }
     expect(state.tasks.map(task => task.taskId)).not.toContain('wb-z')
   })
