@@ -655,3 +655,34 @@ describe('P2 receipt-resolved event seam', () => {
     expect(resolved).toHaveLength(0)
   })
 })
+
+describe('settle fence coverage', () => {
+  it('a synchronously throwing receipt listener degrades to a warning — the routing path survives', async () => {
+    const m = await mount({ nativeTeamsInbound: true })
+    mounted.push(m.dispose)
+    const initiator = makeAgent('session-main1')
+    const steer = vi.fn((message: { content: Array<{ type: string; text?: string }> }) => {
+      setTimeout(() => {
+        initiator.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'work finished' }] } } })
+        m.ctx.emit('agent/status', { agent: initiator, status: 'idle' })
+      }, 30)
+    })
+    ;(initiator as unknown as { steer: unknown }).steer = steer
+    m.agents.agents.push(initiator)
+    const route = m.ctx.tools.get('a2a_route')
+    const result = await route!.execute({ team: 'dsh', message: 'async job', async: true }, noAgent()) as { ok: boolean; task_id?: string }
+    expect(result.ok).toBe(true)
+    m.ctx.on('a2a/receipt-resolved', () => { throw new Error('consumer exploded') })
+    const res = await postJson(m.port, '/a2a/direct', { team: 'dsh', message: `[A2A receipt] task ${String(result.task_id)} done`, caller_session: 'someone' })
+    const body = await res.json() as { result?: { text?: string } }
+    expect(body.result?.text).toBe('work finished')
+    // The fence let the settlement complete before the consumer threw: the
+    // owed row is archived even though the listener exploded.
+    const state = await (await fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { tasks: Array<{ taskId: string }>; archivedCount: number }
+    expect(state.tasks.map(task => task.taskId)).not.toContain(result.task_id)
+    expect(state.archivedCount).toBeGreaterThan(0)
+    // The routing path answers normally afterwards (the fence is per-emit).
+    const second = await postJson(m.port, '/a2a/direct', { team: 'dsh', message: 'plain follow-up', caller_session: 'someone' })
+    await expect(second.json()).resolves.toMatchObject({ result: { text: 'work finished' } })
+  })
+})

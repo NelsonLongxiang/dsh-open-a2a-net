@@ -576,8 +576,11 @@ export function apply(ctx: Context, config: Config): void {
   /**
    * Settle one message through the ledger and announce what it correlated
    * on `a2a/receipt-resolved` — the seam peer plugins (native-teams)
-   * consume to settle their outstanding async submissions. Listener
-   * failures are contained: a bad consumer must not break the routing path.
+   * consume to settle their outstanding async submissions. Fence honesty:
+   * the try/catch contains SYNCHRONOUS listener throws (cordis dispatch is
+   * synchronous, so a throw lands here and the routing path survives); an
+   * ASYNC listener that rejects escapes as an unhandled rejection and is
+   * the consumer's own discipline — keep seam listeners synchronous.
    * @param message - the inbound or relayed message text.
    */
   function settleAndAnnounce(message: string): void {
