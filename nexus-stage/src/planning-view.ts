@@ -153,7 +153,16 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   world.className = 'p-world'
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
   svg.setAttribute('class', 'p-edges')
-  world.appendChild(svg)
+  // Stable layers: frames must ALWAYS paint (and lose hit-testing) below
+  // cards, regardless of which keyed diff created its element first — a
+  // frame created after the cards used to sit on top of them and swallow
+  // every real-pointer drag inside the team (synthetic tests bypassed it
+  // by targeting cards directly).
+  const frameLayer = document.createElement('div')
+  frameLayer.className = 'p-layer p-frames'
+  const nodeLayer = document.createElement('div')
+  nodeLayer.className = 'p-layer p-nodes'
+  world.append(svg, frameLayer, nodeLayer)
 
   const marquee = document.createElement('div')
   marquee.className = 'p-marquee'
@@ -280,7 +289,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         route.className = 'route mono'
         head.append(title, cnt, route)
         el.appendChild(head)
-        world.appendChild(el)
+        frameLayer.appendChild(el)
         frameEls.set(name, el)
       }
       const hue = frameHue(name)
@@ -341,7 +350,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         const prio = document.createElement('span')
         prio.className = 'prio mono'
         el.append(nm, sub, prio)
-        world.appendChild(el)
+        nodeLayer.appendChild(el)
         nodeEls.set(n.id, el)
       }
       const r = nodeRect(n)

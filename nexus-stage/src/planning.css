@@ -38,7 +38,14 @@
 
 /* ── transformed world container ── */
 #dsh-plan .p-world{position:absolute; inset:0; z-index:1; transform-origin:0 0}
+#dsh-plan .p-layer{position:absolute; inset:0; pointer-events:none}
 #dsh-plan .p-edges{position:absolute; overflow:visible; width:100%; height:100%; pointer-events:none}
+/* The team frame is a grouping surface, not an interactive one: left
+   event-transparent so real drags reach the member cards inside it (the
+   frame head opts back in for group-drag/menu/Delete). */
+#dsh-plan .p-frame{pointer-events:none}
+#dsh-plan .p-frame-head{pointer-events:auto}
+#dsh-plan .p-node{pointer-events:auto}
 #dsh-plan .e-member{stroke:var(--uupm-edge-member); stroke-opacity:.38; stroke-width:1.5}
 #dsh-plan .e-member.dashed{stroke-dasharray:3 4}
 
