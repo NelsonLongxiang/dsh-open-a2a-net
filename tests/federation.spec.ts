@@ -102,8 +102,10 @@ describe('federalEdges', () => {
     const edges = federalEdges(placed, bounds)
     expect(edges).toHaveLength(3)
     expect(edges.map(e => e.label)).toEqual(['gns referral', '', ''])
-    expect(edges[0]!.x1).toBe(bounds.minX - FEDERAL_ANCHOR_GAP)
-    expect(edges[0]!.y1).toBe((bounds.minY + bounds.maxY) / 2)
+    // Gutter anchor: right of the card field, at the badges' vertical mid —
+    // short stubs that cannot cross the card field (the wiring-anomaly fix).
+    expect(edges[0]!.x1).toBe(bounds.maxX + 20)
+    expect(edges[0]!.y1).toBe((placed[0]!.y + placed[2]!.y) / 2)
     expect(edges[2]!.x2).toBe(500 + PEER_COLUMN_GAP)
     expect(edges[2]!.y2).toBe(50 + 2 * PEER_COLUMN_STEP)
   })

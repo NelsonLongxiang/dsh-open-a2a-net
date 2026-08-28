@@ -9,6 +9,8 @@
      nowrap/ellipsis so the card can never outgrow the edge math.
    Layers (z): grid 0 < world 1 < marquee 2 < HUD 3. */
 
+#dsh-plan *,#dsh-plan *::before,#dsh-plan *::after{box-sizing:border-box}
+
 #dsh-plan{
   /* primitive */
   --uupm-ink-0:#dde3f0; --uupm-ink-1:#7a86a0; --uupm-bg-0:#060a12; --uupm-bg-1:#0d1322; --uupm-bg-2:#131b2e;

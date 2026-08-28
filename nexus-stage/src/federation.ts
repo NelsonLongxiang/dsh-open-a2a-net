@@ -126,11 +126,16 @@ export function federalEdges(
   peers: ReadonlyArray<PeerPlacement>,
   bounds: WorldBounds | null,
 ): ActivityEdge[] {
-  const x1 = bounds !== null ? bounds.minX - FEDERAL_ANCHOR_GAP : -FEDERAL_ANCHOR_GAP
-  const y1 = bounds !== null ? (bounds.minY + bounds.maxY) / 2 : 0
+  // Gutter anchor: between the card field's right edge and the badge column,
+  // at the badges' vertical mid — short stubs that cannot cross any card
+  // (an anchor at the content's left middle raked long diagonals through
+  // the whole field: the reported wiring anomaly).
+  const anchor = bounds !== null
+    ? { x: bounds.maxX + 20, y: peers.length > 0 ? (peers[0]!.y + peers[peers.length - 1]!.y) / 2 : (bounds.minY + bounds.maxY) / 2 }
+    : { x: -FEDERAL_ANCHOR_GAP, y: 0 }
   return peers.map((peer, i) => ({
-    x1,
-    y1,
+    x1: anchor.x,
+    y1: anchor.y,
     x2: peer.x,
     y2: peer.y,
     label: i === 0 ? 'gns referral' : '',
