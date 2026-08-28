@@ -16,18 +16,39 @@
  */
 
 import { clampDoc, type LayoutDoc, type LayoutPoint, type LayoutRect } from './layout-doc'
-import { seatFor } from './seat'
+import { hashId } from './seat'
 import type { WorldBounds } from './viewport'
 
 /** Card geometry: the single source both CSS and edge math must agree with. */
 export const NODE_W = 172
 export const NODE_H = 56
 
+/**
+ * Deterministic 2D fallback seating. The 3D scene's polar ring (radius
+ * 12-30) is sized for unit spheres - 172px cards dropped onto it stack
+ * into one pile. Unarranged cards instead spread on three card-scaled
+ * rings (48 hash slots, y compressed for wide screens), so a fresh
+ * canvas is readable before the first save; once anything is saved, the
+ * persisted document wins in BOTH modes and this is only history.
+ */
+const PLAN_RINGS = [150, 290, 430]
+const PLAN_SLOTS = 16
+
+export function planSeatFor(sid: string): { x: number; y: number } {
+  const h = hashId(sid)
+  const ring = Math.floor(h / PLAN_SLOTS) % PLAN_RINGS.length
+  const slot = h % PLAN_SLOTS
+  const angle = (slot / PLAN_SLOTS) * Math.PI * 2 + ring * (Math.PI / PLAN_SLOTS)
+  const r = PLAN_RINGS[ring]!
+  return { x: Math.round(Math.cos(angle) * r), y: Math.round(Math.sin(angle) * r * 0.6) }
+}
+
 /** Minimal session row shape the model needs (topology.SessionRow satisfies it). */
 export interface SessionLite { id: string; label: string; team: string; name?: string; joined: boolean; live?: boolean }
 
-/** Minimal team shape (topology.CanvasTeam satisfies it). */
-export interface TeamLite { name: string; members: ReadonlyArray<{ id: string }> }
+/** Minimal team shape (topology.CanvasTeam satisfies it). `team` is the
+ * mono route alias `<host>/canvas/<name>` when the payload carries it. */
+export interface TeamLite { name: string; team?: string; members: ReadonlyArray<{ id: string }> }
 
 /** One node's memberships in state order: team name + index (member order = routing priority). */
 export interface Membership { readonly team: string; readonly index: number }
@@ -37,10 +58,13 @@ export interface WorldNode {
   x: number
   y: number
   readonly id: string
-  readonly label: string
-  readonly name?: string
-  readonly live: boolean
-  readonly memberships: ReadonlyArray<Membership>
+  /** Rendered attributes refresh on each poll; the position never does. */
+  label: string
+  /** The route alias `<team>/<id8>` the state payload provides. */
+  team: string
+  name?: string
+  live: boolean
+  memberships: ReadonlyArray<Membership>
 }
 
 /** A team frame rectangle in world space (top-left + size). */
@@ -176,6 +200,59 @@ export class WorldModel {
     this.bump()
   }
 
+  /**
+   * Poll-cycle maintenance: insert or refresh one node without touching
+   * its position (the live model is authoritative between saves; a poll
+   * must never snap a dragged card back to its last-saved spot). New
+   * nodes seat at the given coordinates (saved spot or hash seat).
+   */
+  upsertNode(n: WorldNode): void {
+    const existing = this.nodes.get(n.id)
+    if (existing === undefined) {
+      this.nodes.set(n.id, n)
+      this.bump()
+      return
+    }
+    existing.label = n.label
+    existing.name = n.name
+    existing.live = n.live
+    existing.memberships = n.memberships
+    this.bump()
+  }
+
+  /** Drop a node that left the joined roster; clears it from selection. */
+  removeNode(id: string): void {
+    if (this.nodes.delete(id)) {
+      this.selection.delete(id)
+      this.bump()
+    }
+  }
+
+  /** Set or replace one frame rect (adopted layout or derived initial). */
+  setFrame(name: string, rect: FrameGeom): void {
+    this.frames.set(name, rect)
+    this.bump()
+  }
+
+  /** Drop a frame whose team vanished from the state payload. */
+  removeFrame(name: string): void {
+    if (this.frames.delete(name)) this.bump()
+  }
+
+  /** Node center positions, for the layout document builder. */
+  positions(): Map<string, LayoutPoint> {
+    const out = new Map<string, LayoutPoint>()
+    for (const [id, n] of this.nodes) out.set(id, { x: n.x, y: n.y })
+    return out
+  }
+
+  /** Frame rectangles, for the layout document builder. */
+  frameRects(): Map<string, LayoutRect> {
+    const out = new Map<string, LayoutRect>()
+    for (const [name, r] of this.frames) out.set(name, { ...r })
+    return out
+  }
+
   /** Union of node cards and frame rects; null when the canvas is empty. */
   contentBounds(): WorldBounds | null {
     let minX = Number.POSITIVE_INFINITY
@@ -196,7 +273,7 @@ export class WorldModel {
   /**
    * Build from one state payload plus the persisted layout (when the host
    * has one). Joined sessions only (same roster rule as the 3D scene);
-   * saved positions win, the deterministic 2D seat {seatFor.x, seatFor.z}
+   * saved positions win, the deterministic card-scaled ring seat
    * falls back - the same world spot the 3D grid plane shows for an
    * unsaved node. Frames come from the layout when present; a frame with
    * neither saved rect nor members is skipped. The layout is clamped with
@@ -230,15 +307,16 @@ export class WorldModel {
         x = saved.x
         y = saved.y
       } else {
-        const p = seatFor(s.id)
+        const p = planSeatFor(s.id)
         x = p.x
-        y = p.z
+        y = p.y
       }
       model.nodes.set(s.id, {
         id: s.id,
         x,
         y,
         label: s.label,
+        team: s.team,
         name: s.name,
         live: s.live !== false,
         memberships: memberships.get(s.id) ?? [],

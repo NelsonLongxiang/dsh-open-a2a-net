@@ -14,7 +14,7 @@
 import { SCALE_MAX, SCALE_MIN, type LayoutViewport } from './layout-doc'
 
 /** Re-export for callers that only want the viewport vocabulary. */
-export type { LayoutViewport as ViewportState } from './layout-doc.ts'
+export type { LayoutViewport, LayoutViewport as ViewportState } from './layout-doc'
 
 /** The zero viewport: origin, unzoomed - what a fresh canvas shows. */
 export const IDENTITY_VIEWPORT: LayoutViewport = { x: 0, y: 0, scale: 1 }

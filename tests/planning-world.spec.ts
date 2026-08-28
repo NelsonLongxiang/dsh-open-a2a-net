@@ -7,8 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { buildLayoutDoc, clampDoc, COORD_LIMIT, LAYOUT_FRAME_CAP, LAYOUT_NODE_CAP, SCALE_MAX } from '../nexus-stage/src/layout-doc.ts'
-import { NODE_H, NODE_W, buildWorld, deriveInitialFrame, nodeRect, type SessionLite, type TeamLite } from '../nexus-stage/src/world.ts'
-import { seatFor } from '../nexus-stage/src/seat.ts'
+import { NODE_H, NODE_W, buildWorld, deriveInitialFrame, nodeRect, planSeatFor, type SessionLite, type TeamLite } from '../nexus-stage/src/world.ts'
 
 const sessions: SessionLite[] = [
   { id: 's1', label: 'scout', team: 'dsh/1', name: 'scout-01', joined: true, live: true },
@@ -22,7 +21,7 @@ const teams: TeamLite[] = [
 ]
 
 describe('buildWorld', () => {
-  it('lets saved layout win and falls back to the 3D-consistent seat', () => {
+  it('lets saved layout win and falls back to the card-scaled ring seat', () => {
     const m = buildWorld({
       sessions,
       teams,
@@ -30,9 +29,9 @@ describe('buildWorld', () => {
     })
     expect(m.getNode('s1')?.x).toBe(-70)
     expect(m.getNode('s1')?.y).toBe(80)
-    const seat = seatFor('s2')
+    const seat = planSeatFor('s2')
     expect(m.getNode('s2')?.x).toBe(seat.x)
-    expect(m.getNode('s2')?.y).toBe(seat.z)
+    expect(m.getNode('s2')?.y).toBe(seat.y)
     expect(m.getFrame('采购')).toEqual({ x: 0, y: 0, w: 300, h: 200 })
     expect(m.viewport).toEqual({ x: 5, y: 6, scale: 2 })
   })
@@ -62,7 +61,7 @@ describe('buildWorld', () => {
   it('treats a malformed layout as absent (seat fallback), not as an error', () => {
     const m = buildWorld({ sessions, teams, layout: { version: 2, junk: true } })
     expect(m.viewport).toEqual({ x: 0, y: 0, scale: 1 })
-    expect(m.getNode('s1')?.x).toBeCloseTo(seatFor('s1').x, 9)
+    expect(m.getNode('s1')?.x).toBe(planSeatFor('s1').x)
   })
 })
 

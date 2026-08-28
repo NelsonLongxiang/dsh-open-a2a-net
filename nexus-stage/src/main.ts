@@ -16,6 +16,8 @@ import {
 } from './overlay'
 import { updateCensus } from './census'
 import { createStageKeyboardHandler, wireReducedRendering } from './interaction'
+import { createPlanningView } from './planning-view'
+import { createSaveLoop, type LampState } from './layout-wire'
 import './overlay.css'
 
 // ─── DOM shell ──
@@ -218,7 +220,89 @@ async function cycle(): Promise<void> {
   // the stage must repaint fresh data (5s updates were invisible without it).
   reducedLoop?.renderOnce()
   if (useMock) drawActivity([['s1', 's3'], ['s4', 's5']], meshesById, lineGroup)
+
+  // ── Planning mode shares this poll: same state payload, same layout GET. ──
+  const layoutJson = JSON.stringify(layout ?? null)
+  if (layoutJson !== lastLayoutJson) {
+    lastLayoutJson = layoutJson
+    // Adopt poll-sourced layouts only while nothing is unsaved/in flight —
+    // otherwise a slow GET would revert positions the user is still dragging.
+    if ((lampState === 'idle' || lampState === 'saved') && !saveLoop.isBusy()) {
+      planning.adoptExternalLayout(layout)
+    }
+  }
+  planning.reconcile({ sessions, teams, peerCount: peers.length })
+  canvasFace = body.canvas !== undefined
+  tabPlan.style.display = canvasFace ? '' : 'none'
+  if (!canvasFace && mode === 'plan') setMode('scene')
 }
+
+// ─── Planning mode (2D): view + save loop + mode tabs (design.md §1 双模) ──
+// The 3D observation scene stays the landing mode; the planning canvas is
+// created eagerly but hidden, so the first poll fills it without a flash.
+let mode: 'scene' | 'plan' = 'scene'
+let canvasFace = false
+let lampState: LampState = 'idle'
+let lastLayoutJson: string | undefined
+
+const planning = createPlanningView({
+  onDirty: () => saveLoop.markDirty(),
+  onLampClick: () => saveLoop.retry(),
+})
+app.appendChild(planning.root)
+
+const saveLoop = createSaveLoop({
+  snapshot: () => planning.snapshotDoc(),
+  send: (doc, opts) => fetch('/__dsh_a2a/canvas-layout', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'save', layout: doc }),
+    cache: 'no-store',
+    keepalive: opts.keepalive,
+  }).then(async (r) => await r.json() as { ok: boolean; layout?: unknown; error?: string }),
+  schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => { clearTimeout(t) } },
+  now: Date.now,
+  onLamp: (state) => {
+    lampState = state
+    const now = new Date()
+    const hhmm = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0')
+    planning.setLamp(state, hhmm)
+  },
+  onAdopt: (normalized) => { planning.adoptExternalLayout(normalized) },
+  onHttpError: (message) => fault(message),
+})
+window.addEventListener('pagehide', () => saveLoop.flush())
+
+const tabBar = document.createElement('div')
+tabBar.className = 'nexus-modes'
+tabBar.setAttribute('role', 'tablist')
+tabBar.setAttribute('aria-label', '舞台模式')
+const mkTab = (label: string, title: string): HTMLButtonElement => {
+  const b = document.createElement('button')
+  b.type = 'button'
+  b.textContent = label
+  b.title = title
+  b.setAttribute('role', 'tab')
+  return b
+}
+const tabScene = mkTab('观测', '3D 拓扑观测模式')
+const tabPlan = mkTab('规划', '2D 无限画布 · 规划模式')
+// The planning tab exists only while the host serves the canvas face
+// (state.canvas !== undefined — the contract's master switch).
+tabPlan.style.display = 'none'
+tabBar.append(tabScene, tabPlan)
+app.appendChild(tabBar)
+
+function setMode(next: 'scene' | 'plan'): void {
+  mode = next
+  tabScene.setAttribute('aria-selected', String(next === 'scene'))
+  tabPlan.setAttribute('aria-selected', String(next === 'plan'))
+  if (next === 'plan') planning.activate()
+  else planning.deactivate()
+}
+tabScene.addEventListener('click', () => setMode('scene'))
+tabPlan.addEventListener('click', () => setMode('plan'))
+setMode('scene')
 
 setInterval(() => void cycle(), 5000)
 void cycle()
@@ -266,8 +350,11 @@ renderer.domElement.addEventListener('keydown', createStageKeyboardHandler(
 
 // ─── Animate: full rAF loop in normal mode; reduced-motion gets renderOnce
 //  — static frames are still rendered after controls change or a cycle, so
-//  the stage never goes blank, it just does not drift on its own. ──
+//  the stage never goes blank, it just does not drift on its own. In plan
+//  mode the 3D loop pauses (one guarded entry, never cancelled — planning
+//  root covers the canvas, so a frozen frame is invisible). ──
 function renderOnce(): void {
+  if (mode !== 'scene') return
   labelRenderer.render(scene, camera)
   renderer.render(scene, camera)
 }
@@ -281,6 +368,7 @@ if (prefersReducedMotion()) {
 } else {
   function tick(): void {
     requestAnimationFrame(tick)
+    if (mode !== 'scene') return
     controls.update()
     labelRenderer.render(scene, camera)
     renderer.render(scene, camera)
