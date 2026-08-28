@@ -877,7 +877,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       const factor = Math.exp(-(ev.deltaY ?? 0) * 0.0015)
       vp = zoomAt(vp, factor, p.x, p.y)
     } else {
-      vp = panBy(vp, -(ev.deltaX ?? 0), -(ev.deltaY ?? 0))
+      // Natural scrolling: the viewport follows the wheel (scroll down
+      // reveals content further down), same convention as a webpage.
+      vp = panBy(vp, ev.deltaX ?? 0, ev.deltaY ?? 0)
     }
     ev.preventDefault()
     applyViewport()

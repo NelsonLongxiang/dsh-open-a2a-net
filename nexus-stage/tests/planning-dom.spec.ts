@@ -124,6 +124,16 @@ describe('planning view DOM', () => {
     expect(onLampClick).toHaveBeenCalledTimes(1)
   })
 
+  it('wheel pans with the native delta (scroll down reveals lower content)', () => {
+    const { v } = view()
+    const t = (): string => v.root.querySelector<HTMLElement>('.p-world')!.style.transform
+    v.seam.wheel({ button: 0, shiftKey: false, ctrlKey: false, clientX: 0, clientY: 0, target: v.root, deltaY: 100, preventDefault: () => {} })
+    const afterDown = t()
+    expect(afterDown).toContain('translate(0px, -100px)') // viewport moved down the world
+    v.seam.wheel({ button: 0, shiftKey: false, ctrlKey: false, clientX: 0, clientY: 0, target: v.root, deltaY: -100, preventDefault: () => {} })
+    expect(t()).toBe('translate(0px, 0px) scale(1)') // and back
+  })
+
   it('toolbar carries the PR-C 建队 control (4 buttons)', () => {
     const { v } = view()
     const buttons = Array.from(v.root.querySelectorAll<HTMLButtonElement>('.p-toolbar button'))
