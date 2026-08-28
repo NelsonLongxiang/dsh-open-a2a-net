@@ -1771,7 +1771,7 @@ ${message}`
 
   type NativeTeamsRoundOutcome =
     | { readonly ok: true; readonly reply: string; readonly settled: boolean }
-    | { readonly ok: false; readonly error: string; readonly phase?: 'pre-dispatch' }
+    | { readonly ok: false; readonly error: string; readonly phase?: 'pre-dispatch'; readonly aborted?: boolean }
 
   /** The projection for a round that outlived the reply window: unlike the
    * steer deadline's text, this must NOT promise a receipt — native-teams
@@ -1788,9 +1788,12 @@ ${message}`
    */
   async function nativeTeamsRound(prepared: Extract<NativeTeamsPrepared, { ok: true }>, team: string, caller: string, message: string, taskId: string | undefined, external?: AbortSignal): Promise<NativeTeamsRoundOutcome> {
     const controller = new AbortController()
+    // One listener, always removed after the race: an external abort cancels
+    // the round through its own controller.
+    const onExternalAbort = (): void => { controller.abort() }
     if (external !== undefined) {
       if (external.aborted) controller.abort()
-      else external.addEventListener('abort', () => { controller.abort() }, { once: true })
+      else external.addEventListener('abort', onExternalAbort)
     }
     if (controller.signal.aborted) return { ok: false, error: 'aborted before the native-teams round was dispatched', phase: 'pre-dispatch' }
     let roundError: unknown
@@ -1804,8 +1807,6 @@ ${message}`
       deadlineTimer.unref?.()
       bridgeTimers.add(deadlineTimer)
     })
-    const onExternalAbort = (): void => { controller.abort() }
-    if (external !== undefined && !external.aborted) external.addEventListener('abort', onExternalAbort)
     const verdict = await Promise.race([
       prepared.teams.startRound({ team, message: bridgeEnvelope(team, caller, message, taskId) }, prepared.parent, controller.signal).then(
         (reply): Verdict => ({ kind: 'settled', reply }),
@@ -1826,7 +1827,7 @@ ${message}`
     if (external !== undefined) external.removeEventListener('abort', onExternalAbort)
     if (verdict.kind === 'settled') return { ok: true, reply: verdict.reply, settled: true }
     if (verdict.kind === 'deadline') return { ok: true, reply: bridgeUnsettledReply(team), settled: false }
-    if (verdict.kind === 'aborted') return { ok: false, error: `the wait for the native-teams round "${team}" was aborted (the round was cancelled with it)` }
+    if (verdict.kind === 'aborted') return { ok: false, error: `the wait for the native-teams round "${team}" was aborted (the round was cancelled with it)`, aborted: true }
     return { ok: false, error: `the native-teams round for "${team}" failed: ${String(roundError)}` }
   }
 
@@ -2651,12 +2652,12 @@ ${message}`
           const outcome = await nativeTeamsRound(prepared, team, callerSession ?? session, message, taskId, signal)
           endRoute(flight)
           if (!outcome.ok) {
-            // A pre-dispatch abort means the message never left the node:
-            // answering "delivered" there would be exactly the phantom the
-            // prepare-first gate exists to prevent. Only a post-dispatch
-            // abort (the round was cancelled with the caller) earns the
-            // aborted-wait shape.
-            if (signal.aborted && outcome.phase !== 'pre-dispatch') {
+            // The aborted-wait shape is earned only by an actual round
+            // cancellation (the caller's abort reached the seam). A
+            // pre-dispatch abort means the message never left the node, and
+            // a failed round means it never answered — both answer the
+            // honest error instead of claiming a delivery.
+            if (outcome.aborted === true) {
               recordActivity('out', team, 'local', true)
               return {
                 ok: true,
