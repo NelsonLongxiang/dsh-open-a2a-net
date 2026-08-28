@@ -300,12 +300,16 @@ function setMode(next: 'scene' | 'plan'): void {
   tabPlan.setAttribute('aria-selected', String(next === 'plan'))
   if (next === 'plan') {
     // 3D chrome must not leak onto the planning canvas: the inspector is
-    // appended to #app last, so a panel pinned in observation mode would
-    // float above #dsh-plan (and eat its clicks) until unpinned.
+    // appended to #app last, and CSS2DRenderer stamps each label with its
+    // own z-index (distance-sorted), so both float above z:auto #dsh-plan
+    // no matter the DOM order. Hide the layer wholesale - the 3D rAF is
+    // paused in plan mode, so the labels have nothing live to show.
     pinned = undefined
     unpinInspector()
+    labelRenderer.domElement.style.display = 'none'
     planning.activate()
   } else {
+    labelRenderer.domElement.style.display = ''
     planning.deactivate()
   }
 }
