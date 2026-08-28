@@ -253,6 +253,33 @@ export class WorldModel {
     return out
   }
 
+  /** Member ids of one team, in routing-priority (index) order. */
+  teamMemberIds(name: string): string[] {
+    const rows: Array<{ id: string; index: number }> = []
+    for (const n of this.nodes.values()) {
+      const m = n.memberships.find(x => x.team === name)
+      if (m !== undefined) rows.push({ id: n.id, index: m.index })
+    }
+    return rows.sort((a, b) => a.index - b.index).map(r => r.id)
+  }
+
+  /**
+   * Replace one team's roster (the single primitive every write action and
+   * its undo go through): entries for OTHER teams are preserved verbatim
+   * in their array position, this team's entries are rebuilt from `ids`
+   * (order = routing priority, indexes renormalized to 0..n-1 so the P
+   * badges stay continuous). One bump for the whole operation.
+   */
+  setTeamMembers(name: string, ids: ReadonlyArray<string>): void {
+    for (const n of this.nodes.values()) {
+      const rest = n.memberships.filter(m => m.team !== name)
+      const idx = ids.indexOf(n.id)
+      if (idx >= 0) rest.push({ team: name, index: idx })
+      n.memberships = rest
+    }
+    this.bump()
+  }
+
   /** Union of node cards and frame rects; null when the canvas is empty. */
   contentBounds(): WorldBounds | null {
     let minX = Number.POSITIVE_INFINITY
