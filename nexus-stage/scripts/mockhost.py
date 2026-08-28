@@ -36,6 +36,54 @@ state_bytes = fetch_state()
 # second implementation of the host's clamp (the stage normalizes on GET).
 layout_store = {'doc': None}
 
+# ── canvas store (PR C): mutable teams, mirrored shapes from src/canvas-store.ts,
+# so team writes are visible on the NEXT POLL (state is regenerated per request
+# from this store - a startup snapshot would hide every write). ──
+CANVAS_NAME_MAX = 40
+CANVAS_TEAM_CAP = 64
+CANVAS_MEMBER_CAP = 32
+
+_BASE = json.loads(state_bytes)
+member_rows = {}  # id -> rich member row captured from the snapshot
+joined_ids = {s.get('id') for s in _BASE.get('sessions', []) if isinstance(s, dict)}
+teams = {}  # name -> [member ids], order = routing priority
+host_prefix = 'dsh'
+for _t in _BASE.get('canvas', {}).get('teams', []):
+    teams[_t['name']] = [m['id'] for m in _t.get('members', [])]
+    for _m in _t.get('members', []):
+        member_rows[_m['id']] = _m
+        _p = _m.get('team', '').split('/')[0]
+        if _p:
+            host_prefix = _p
+            break
+
+
+def valid_name(raw):
+    """Mirror of canvas-store.validName: trim, 1..40, no '/', not pure digits."""
+    if not isinstance(raw, str):
+        return None
+    name = raw.strip()
+    if name == '' or len(name) > CANVAS_NAME_MAX or '/' in name or name.isdigit():
+        return None
+    return name
+
+
+def build_state():
+    """The snapshot with canvas.teams regenerated from the mutable store."""
+    state = dict(_BASE)
+    team_rows = []
+    for name, ids in teams.items():
+        members = []
+        for mid in ids:
+            row = member_rows.get(mid)
+            if row is None:
+                row = {'id': mid, 'team': f'{host_prefix}/{mid[:8]}', 'joined': True, 'live': True}
+                member_rows[mid] = row
+            members.append(row)
+        team_rows.append({'name': name, 'team': f'{host_prefix}/canvas/{name}', 'members': members})
+    state['canvas'] = {'teams': team_rows}
+    return json.dumps(state).encode()
+
 
 class MockHost(SimpleHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 - stdlib signature
@@ -46,7 +94,7 @@ class MockHost(SimpleHTTPRequestHandler):
             if faulted:
                 self._json(b'{"ok":false,"error":"injected fault"}', status=500)
             else:
-                self._json(state_bytes)
+                self._json(build_state())  # regenerated: canvas writes stay visible
         elif path == '/__dsh_a2a/canvas-layout':
             self._json(json.dumps({'ok': True, 'layout': layout_store['doc']}).encode())
         else:
@@ -56,12 +104,17 @@ class MockHost(SimpleHTTPRequestHandler):
         path, _, query = self.path.partition('?')
         referer = self.headers.get('Referer') or ''
         faulted = 'fault' in query or 'fault' in referer
-        if path != '/__dsh_a2a/canvas-layout':
+        if path not in ('/__dsh_a2a/canvas-layout', '/__dsh_a2a/canvas'):
             self._json(b'{"ok":false,"error":"unknown route"}', status=404)
             return
         try:
             length = int(self.headers.get('Content-Length') or 0)
-            body = json.loads(self.rfile.read(length) or b'{}')
+            raw = self.rfile.read(length) or b'{}'
+            if b'\xef\xbf\xbd' in raw:  # U+FFFD guard, same as the host's text-guard
+                self._json(b'{"error": "text contains undecodable characters (U+FFFD) '
+                           b'\xe2\x80\x94 fix the sender encoding and retry", "code": -32005}', status=422)
+                return
+            body = json.loads(raw)
         except Exception:  # noqa: BLE001 - malformed body mirrors the host 400
             self._json(b'{"ok":false,"error":"malformed body"}', status=400)
             return
@@ -69,12 +122,61 @@ class MockHost(SimpleHTTPRequestHandler):
             self._json(b'{"ok":false,"error":"injected fault"}', status=500)
             return
         action = body.get('action')
+        if path == '/__dsh_a2a/canvas-layout':
+            self._canvas_layout(action, body)
+        else:
+            self._canvas(action, body)
+
+    def _canvas_layout(self, action, body):
         if action == 'reset':
             layout_store['doc'] = None
             self._json(b'{"ok":true,"layout":null}')
         elif action == 'save':
             layout_store['doc'] = body.get('layout')
             self._json(json.dumps({'ok': True, 'layout': layout_store['doc']}).encode())
+        else:
+            self._json(b'{"ok":false,"error":"unknown action"}')
+
+    def _canvas(self, action, body):
+        if action == 'create':
+            name = valid_name(body.get('name'))
+            if name is None or (name not in teams and len(teams) >= CANVAS_TEAM_CAP):
+                self._json(b'{"ok":false,"error":"invalid name or team cap reached"}')
+            else:
+                teams.setdefault(name, [])
+                self._json(json.dumps({'ok': True, 'name': name, 'teams': list(teams)}).encode())
+        elif action == 'remove':
+            name = body.get('name')
+            teams.pop(name, None)
+            self._json(json.dumps({'ok': True, 'teams': list(teams)}).encode())
+        elif action == 'add-member':
+            name = valid_name(body.get('name'))
+            mid = body.get('id')
+            if name is None or not isinstance(mid, str) or mid not in joined_ids:
+                self._json(b'{"ok":false,"error":"name and a joined session id are required"}')
+                return
+            roster = teams.setdefault(name, [])
+            if mid in roster:
+                self._json(json.dumps({'ok': True, 'teams': list(teams), 'members': list(roster)}).encode())
+            elif len(roster) >= CANVAS_MEMBER_CAP:
+                self._json(json.dumps({'ok': False, 'teams': list(teams), 'members': list(roster)}).encode())
+            else:
+                roster.append(mid)
+                self._json(json.dumps({'ok': True, 'teams': list(teams), 'members': list(roster)}).encode())
+        elif action == 'remove-member':
+            name = body.get('name')
+            mid = body.get('id')
+            if not isinstance(name, str) or not name.strip() or not isinstance(mid, str):
+                self._json(b'{"ok":false,"error":"name and id are required"}')
+                return
+            roster = teams.get(name)
+            if roster is None:
+                self._json(json.dumps({'ok': False, 'teams': list(teams), 'members': []}).encode())
+            elif mid in roster:
+                roster.remove(mid)
+                self._json(json.dumps({'ok': True, 'teams': list(teams), 'members': list(roster)}).encode())
+            else:
+                self._json(json.dumps({'ok': False, 'teams': list(teams), 'members': list(roster)}).encode())
         else:
             self._json(b'{"ok":false,"error":"unknown action"}')
 
