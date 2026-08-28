@@ -71,7 +71,7 @@ team 名 → 会话节点精确解析 → canvas 团队 → 冷 joined 唤醒
 
 ## 4. P2 待办锚点（本文件的后续章节位）
 
-1. ~~callbackTarget 消费端（回执回流提交会话）~~ → **P2a 已落**：wire `callback` 字段（入站 noWait 的回执提示 + 宿主代发回执地址；出站 `routeDirect`/face.submit 携带）。剩余半段：native-teams 侧对 startRoundAsync 调用方的回执-轮关联（依赖 sessionKey 语义）。
+1. ~~callbackTarget 消费端（回执回流提交会话）~~ → **P2a 已落**：wire `callback` 字段（入站 noWait 的回执提示 + 宿主代发回执地址；出站 `routeDirect`/face.submit 携带）。**协议面半段亦已落**：`a2a/receipt-resolved` cordis 事件（载荷 `ReceiptResolvedInfo`：taskId/team/peer/outcome/summary/late；两发射点 `/a2a/direct` 与 local relay；监听失败降级 warn）——消费半段归 native-teams（`docs/async-round-settlement.md`）。
 2. sessionKey durable 化（触 native-teams 写保护红线，需运营者裁定）。
 3. 专用 inbound broker 单节点（替换 initiator 兜底 parent）。
 4. 跨宿主同步提交的 HTTP 预算扩展（现 15s，`a2a-client` 既有）。

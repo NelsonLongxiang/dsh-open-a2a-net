@@ -77,11 +77,12 @@ describe('TaskLedger receipt correlation', () => {
     expect(ledger.list()[0]?.status).toBe('pending')
   })
 
-  it('refreshes an archived task when its receipt arrives again', () => {
+  it('refreshes an archived task when its receipt arrives again — a healthy duplicate carries no late marker', () => {
     const ledger = new TaskLedger('')
     ledger.track('direct-aa', 'team/x', 'local')
-    ledger.resolveFromMessage('[A2A receipt] task direct-aa first attempt')
-    ledger.resolveFromMessage('[A2A receipt] task direct-aa second attempt')
+    expect(ledger.resolveFromMessage('[A2A receipt] task direct-aa first attempt')).toBeDefined()
+    const refresh = ledger.resolveFromMessage('[A2A receipt] task direct-aa second attempt')
+    expect(refresh?.late).toBeUndefined()
     expect(ledger.list()).toEqual([])
     expect(ledger.archive()).toHaveLength(1)
     expect(ledger.archive()[0]?.summary).toBe('second attempt')
@@ -157,7 +158,8 @@ describe('TaskLedger stale-TTL dead-letter tier', () => {
     ledger.track('direct-zombie', 'dsh', 'local')
     await tickPastTtl(40)
     expect(ledger.list()[0]?.status).toBe('dead')
-    expect(ledger.resolveFromMessage('[A2A receipt] task direct-zombie arrived late')).toBeDefined()
+    const revived = ledger.resolveFromMessage('[A2A receipt] task direct-zombie arrived late')
+    expect(revived).toMatchObject({ taskId: 'direct-zombie', late: true })
     expect(ledger.list()).toEqual([])
     expect(ledger.archive()).toHaveLength(1)
     expect(ledger.archive()[0]?.summary).toBe('arrived late')

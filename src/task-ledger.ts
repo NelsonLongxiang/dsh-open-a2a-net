@@ -123,14 +123,14 @@ export interface TaskLedgerOptions {
   now?: () => number
 }
 
-/** The persisted ledger document: the owed book plus its settled archive. */
 /**
  * What one correlated receipt settled — the payload of the
  * `a2a/receipt-resolved` event, emitted for consumers that react to receipt
  * arrivals (P2: native-teams settles its outstanding async submissions from
  * this seam). `outcome` carries the v2 envelope's controlled-vocabulary
- * verdict when the receipt rode one; `late` marks a receipt that arrived
- * after the row was dead-lettered or the caller had moved on.
+ * verdict when the receipt rode one; `late` marks a receipt answering a
+ * dead-lettered row (revival) or an abandoned row (arrival recorded) — a
+ * healthy row's duplicate receipt refreshes the archive with NO marker.
  */
 export interface ReceiptResolvedInfo {
   readonly taskId: string
@@ -142,10 +142,11 @@ export interface ReceiptResolvedInfo {
   readonly outcome?: string
   /** One-line outcome summary, when the receipt carried one. */
   readonly summary?: string
-  /** True when the receipt arrived after dead-letter or caller abandonment. */
+  /** True when the receipt answered a dead-lettered or abandoned row. */
   readonly late?: boolean
 }
 
+/** The persisted ledger document: the owed book plus its settled archive. */
 export interface TaskLedgerSnapshot {
   readonly tasks: readonly TaskRecord[]
   readonly archived?: readonly ArchivedRecord[]
@@ -362,6 +363,9 @@ export class TaskLedger {
         taskId,
         team: record.team,
         peer: record.peer,
+        // A dead row still lives in the tasks array (the sweep only flips
+        // status): its receipt is a revival — the late marker's first form.
+        ...(record.status === 'dead' ? { late: true } : {}),
         ...(envelopeOutcome !== undefined ? { outcome: envelopeOutcome } : {}),
         ...(summary !== '' ? { summary } : {}),
       }
@@ -393,7 +397,10 @@ export class TaskLedger {
       peer: settled.peer,
       ...(envelopeOutcome !== undefined ? { outcome: envelopeOutcome } : {}),
       ...(summary !== '' ? { summary } : {}),
-      late: true,
+      // The late marker's second form: the caller had already moved on
+      // (abandonment recorded verbatim). A HEALTHY row's duplicate refresh
+      // is neither dead-lettered nor abandoned — it carries no marker.
+      ...(callerEnded ? { late: true } : {}),
     }
   }
 
