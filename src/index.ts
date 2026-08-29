@@ -57,7 +57,7 @@ import { MessageId } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { A2aClient, type A2aFetch, type A2aSchedule, type CardFetchOutcome } from './a2a-client.ts'
-import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from './transport-caps.ts'
+import { MAX_LAYOUT_BODY_BYTES, WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from './transport-caps.ts'
 import type { A2aPeerCard, A2aRouteResult, ZoneRecord } from './types.ts'
 import { NATIVE_TEAMS_A2A_FACE_KEY, type NativeTeamsBridgeFace } from './teams-bridge.ts'
 
@@ -411,18 +411,40 @@ export function apply(ctx: Context, config: Config): void {
     return false
   }
 
-  function readJsonBody(req: IncomingMessage, res: ServerResponse, use: (body: { readonly id?: unknown; readonly name?: unknown; readonly action?: unknown }) => void): void {
+  function readJsonBody(req: IncomingMessage, res: ServerResponse, use: (body: { readonly id?: unknown; readonly name?: unknown; readonly action?: unknown }) => void, maxBytes = 10_000): void {
     const chunks: Buffer[] = []
     let size = 0
+    // Same contract as the direct endpoint's reader (B5 enforcement): an
+    // oversized body is rejected, never truncated and never connection-
+    // killed mid-read — buffering stops at the crossing chunk, the stream
+    // drains to `end`, and the client receives one structured 413 (the old
+    // behavior tore the socket down with no diagnosis at all). The default
+    // keeps the historical 10 KiB control cap; the layout save route passes
+    // MAX_LAYOUT_BODY_BYTES because a full-fleet document legitimately
+    // exceeds it (LayoutStore still clamps every value server-side).
+    let overflowed = false
+    const declared = Number.parseInt(String(req.headers['content-length'] ?? ''), 10)
+    if (Number.isFinite(declared) && declared > maxBytes) overflowed = true
     req.on('data', (chunk: Buffer) => {
-      size += chunk.length
-      if (size > 10_000) {
-        req.destroy()
+      if (overflowed) return
+      const next = size + chunk.length
+      if (next > maxBytes) {
+        overflowed = true
+        chunks.length = 0
         return
       }
+      size = next
       chunks.push(chunk)
     })
     req.on('end', () => {
+      if (overflowed) {
+        if (!res.writableEnded && !res.headersSent) {
+          const payload = JSON.stringify({ error: 'payload too large', code: WIRE_ERROR_PAYLOAD_TOO_LARGE })
+          res.writeHead(413, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+          res.end(payload)
+        }
+        return
+      }
       let body: { readonly id?: unknown }
       try {
         body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof body
@@ -1338,7 +1360,7 @@ export function apply(ctx: Context, config: Config): void {
             const payload = JSON.stringify({ ok: false, error: 'unknown action' })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
-          })
+          }, MAX_LAYOUT_BODY_BYTES)
         }),
       }), 'a2a: canvas-layout route')
       // The dsh-a2a-munder-difflin floor stage: a same-origin full-page
