@@ -926,11 +926,15 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     const p = localXY(ev)
     if (rightPress !== null) {
       // Right-hold pan: incremental viewport follow once past the threshold.
+      // User ruling (2026-08-30): the drag moves the CONTENT, not the window —
+      // drag right and the canvas follows the cursor (Figma convention), so
+      // the viewport origin moves OPPOSITE the pointer delta. The wheel and
+      // middle/space pans keep their own established directions.
       const dx = p.x - rightPress.x
       const dy = p.y - rightPress.y
       if (Math.hypot(dx, dy) > 4) {
         rightPress.moved = true
-        vp = clampViewport(panBy(vp, dx, dy))
+        vp = clampViewport(panBy(vp, -dx, -dy))
         rightPress.x = p.x
         rightPress.y = p.y
         applyViewport()
