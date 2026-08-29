@@ -86,6 +86,28 @@ describe('activityEdges', () => {
     expect(activityEdges(inFlight, anchors, tricky, 61_000)).toHaveLength(0)
   })
 
+  it('merges identical (team, peer) routes into one counted edge', () => {
+    const rows: InFlightRow[] = [
+      { team: 'alpha', peer: '10.0.0.5:8787', startedAt: 60_000 },
+      { team: 'alpha', peer: '10.0.0.5:8787', startedAt: 68_000 }, // newer duplicate
+    ]
+    const edges = activityEdges(rows, anchors, placePeers(peers, bounds), 72_400)
+    expect(edges).toHaveLength(1)
+    expect(edges[0]!.label).toContain('×2')
+    // Age reports the OLDEST route of the merged span.
+    expect(edges[0]!.label).toContain('12s')
+  })
+
+  it('does not merge routes to different peers', () => {
+    const rows: InFlightRow[] = [
+      { team: 'alpha', peer: '10.0.0.5:8787', startedAt: 60_000 },
+      { team: 'alpha', peer: '10.0.0.7:9000', startedAt: 60_000 },
+    ]
+    const edges = activityEdges(rows, anchors, placePeers(peers, bounds), 72_400)
+    expect(edges).toHaveLength(2)
+    expect(edges.every(e => !e.label.includes('×'))).toBe(true)
+  })
+
   it('skips rows whose team has no frame or whose peer matches no badge', () => {
     const placed = placePeers(peers, bounds)
     const rows: InFlightRow[] = [
