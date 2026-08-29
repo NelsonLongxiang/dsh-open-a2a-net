@@ -154,6 +154,38 @@ describe('canvas wire', () => {
     expect(wire.hasPending()).toBe(false)
   })
 
+  it('create-team compensates a ghost empty team when the first add fails on a created team', async () => {
+    const { f, wire } = fixture()
+    const done = wire.createTeam('新队', ['a', 'b'], true)
+    await f.respond(ok) // create ok
+    await f.respond({ status: 200, body: { ok: false, error: 'name and a joined session id are required' } }) // first add fails
+    await f.respond(ok) // the compensating remove round-trips too
+    expect(await done).toBe(false)
+    expect(f.bodies).toHaveLength(3) // create, add, compensating remove
+    expect(f.bodies[2]).toEqual({ action: 'remove', name: '新队' })
+    expect(f.notices).toHaveLength(1) // the original error, verbatim
+  })
+
+  it('a pre-existing team is NOT removed on first-add failure (created=false)', async () => {
+    const { f, wire } = fixture()
+    const done = wire.createTeam('旧队', ['a', 'b'], false)
+    await f.respond(ok)
+    await f.respond({ status: 200, body: { ok: false, error: 'name and a joined session id are required' } })
+    expect(await done).toBe(false)
+    expect(f.bodies).toHaveLength(2) // no compensating remove over user data
+  })
+
+  it('a mid-sequence failure keeps genuinely joined members (no ghost remove)', async () => {
+    const { f, wire } = fixture()
+    const done = wire.createTeam('新队', ['a', 'b'], true)
+    await f.respond(ok) // create
+    await f.respond(ok) // first add succeeded — the team is no longer empty
+    await f.respond({ status: 200, body: { ok: false, error: 'x' } }) // second add fails
+    expect(await done).toBe(false)
+    expect(f.bodies).toHaveLength(3)
+    expect(f.bodies[2]).toEqual({ action: 'add-member', name: '新队', id: 'b' }) // no remove emitted
+  })
+
   it('hasPending tracks in-flight work', async () => {
     const { f, wire } = fixture()
     expect(wire.hasPending()).toBe(false)

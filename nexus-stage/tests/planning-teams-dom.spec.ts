@@ -108,7 +108,7 @@ describe('建队 flow', () => {
     input.value = '先锋'
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     expect(actions).toHaveLength(1)
-    expect(actions[0]).toEqual({ type: 'create-team', name: '先锋', ids: ['a', 'b'] })
+    expect(actions[0]).toEqual({ type: 'create-team', name: '先锋', ids: ['a', 'b'], created: true })
     // Optimistic before settle: frame + P badges exist already.
     expect(v.root.querySelector('.p-frame[data-name="先锋"]')).not.toBeNull()
   })
@@ -157,7 +157,7 @@ describe('建队 flow', () => {
     expect(v.root.querySelector('.p-frame[data-name="先锋"]')).not.toBeNull()
     await settle(false)
     expect(v.root.querySelector('.p-frame[data-name="先锋"]')).toBeNull()
-    expect(actions[0]).toEqual({ type: 'create-team', name: '先锋', ids: ['a', 'b'] })
+    expect(actions[0]).toEqual({ type: 'create-team', name: '先锋', ids: ['a', 'b'], created: true })
   })
 })
 

@@ -632,7 +632,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       if (problem !== null) { err.textContent = problem; input.focus(); return }
       const name = input.value.trim()
       close()
-      emitAction({ type: 'create-team', name, ids })
+      const created = model.getFrame(name) === undefined
+      emitAction({ type: 'create-team', name, ids, created })
     }
     okBtn.addEventListener('click', confirm)
     cancelBtn.addEventListener('click', close)
@@ -645,6 +646,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // three focusables; Esc anywhere in the panel cancels.
     wrap.addEventListener('keydown', (ev) => {
       const e = ev as KeyboardEvent
+      if (e.key === 'Escape') { e.preventDefault(); close(); return }
       if (e.key !== 'Tab') return
       e.preventDefault()
       const focusables = Array.from(panel.querySelectorAll<HTMLElement>('input, button'))
@@ -690,8 +692,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // goes deaf.
     if (menuAnchor === null) {
       menuAnchor = target.kind === 'node'
-        ? nodeLayer.querySelector<HTMLElement>(`.p-node[data-id='${target.id}']`) ?? null
-        : frameLayer.querySelector<HTMLElement>(`.p-frame-head[data-frame='${target.name}']`) ?? null
+        ? nodeEls.get(target.id) ?? null
+        : frameEls.get(target.name) ?? null
     }
     menu?.remove()
     menuTarget = target
@@ -795,7 +797,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         // Already a member: an in-frame drop sorts that frame's members by y.
         const current = model.teamMemberIds(f)
         const desired = yOrderedMembers(model, f)
-        if (desired.join(' ') !== current.join(' ')) {
+        if (desired.join('\u0000') !== current.join('\u0000')) {
           emitAction({ type: 'reorder', team: f, ops: reorderOps(current, desired) })
         }
       }
@@ -971,6 +973,13 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
     if (ev.key === ' ' && ev.target === root) { spaceDown = true; ev.preventDefault(); return }
     // 键盘全等路径（WCAG 2.2 Dragging Movements）：
+    const headTarget = (ev.target as Element | null)?.closest?.('.p-frame-head') ?? null
+    if ((ev.key === 'Enter' || ev.key === ' ') && headTarget !== null) {
+      ev.preventDefault()
+      const r = headTarget.getBoundingClientRect()
+      contextMenuAt(r.left + r.width / 2, r.top + r.height / 2, headTarget)
+      return
+    }
     if (ev.key === ' ' && (ev.target as Element | null)?.classList?.contains('p-node')) {
       const el = ev.target as HTMLElement
       const id = el.dataset.id ?? ''

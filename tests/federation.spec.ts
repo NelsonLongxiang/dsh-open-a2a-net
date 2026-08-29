@@ -77,10 +77,13 @@ describe('activityEdges', () => {
       .toBe('a2a_route · 10.0.0.5:8787 · 0s')
   })
 
-  it('matches the peer by host:port suffix against the badge url', () => {
+  it('matches the peer by exact parsed host:port against the badge url', () => {
     // Badge urls carry the scheme; peer rows store bare host:port.
     const placed = placePeers([{ url: 'https://10.0.0.5:8787' }], bounds)
     expect(activityEdges(inFlight, anchors, placed, 61_000)).toHaveLength(1)
+    // A bare endsWith would let 'bad10.0.0.5:8787' satisfy '10.0.0.5:8787' — parse, don't guess.
+    const tricky = placePeers([{ url: 'http://bad10.0.0.5:8787' }], bounds)
+    expect(activityEdges(inFlight, anchors, tricky, 61_000)).toHaveLength(0)
   })
 
   it('skips rows whose team has no frame or whose peer matches no badge', () => {

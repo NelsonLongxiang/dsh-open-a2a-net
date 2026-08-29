@@ -10,7 +10,7 @@ feat(nexus): 2D 规划画布——无限画布/组队交互/联邦层（设计�
 
 ## 分阶段内容
 
-- **A · 观测面修复**：故障徽章（空场≠不可达）、布局读路径、hub-star 成员边、CSS2D 标签/检查器/census、LOD 与降级渲染；死代码 scene.ts/data.ts 清除。
+- **A · 观测面修复**：已随此前的 PR 先行合入 master（不在本 diff 内）。本分支仅携带其两个后续修复：节点退役的 GPU 释放与映射清理、观测/规划双模焦点与 z 序隔离。
 - **B · 规划模式骨架**：点阵世界层、172px 节点卡（live/cold/P 徽标）、队框（色相哈希+居中标题栏）、星形成员边（跨队虚线）、布局持久化回路（写路径 + 800ms 防抖 + 存盘灯 + pagehide flush）、框选/拖拽/键盘全等。
 - **C · 组队交互**：建队（框选≥2→命名对话框→串行 create+add）、入队/离队（拖放命中 + 侧沟命中测试）、调优先级（帧内 y 排序 → 最小 remove+add 序列；置顶路由）、散队；乐观更新 + 按队作用域 undo + host 错误原文 Toast；右键菜单全键盘等价（Shift+F10/Space/Delete/Alt+↑↓）。
 - **D · 活动/联邦层**：peer 徽章列、inFlight 活动边（整秒年龄标签、reduced-motion 静态等价）、联邦线（gns referral 首辐标注）、状态条 inFlight 计数 + 点击飞行定位；mockhost `?demo=1` 演示数据集。
