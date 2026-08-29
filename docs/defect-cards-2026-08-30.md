@@ -69,9 +69,44 @@
   dsh/bdf3218e、dsh/830b15fd）+ probe-88-nowait-01（→3081/dsh/830b15fd）、
   probe-88-nowait-02（→.157/dsh/bdf3218e）手工 POST delivered+consumed。
 
+## F5（插件侧，PR-4，中风险）——回执债常态化：结算完整性（08-30 待办，龙翔点名根治）
+
+- **现象（08-30 台账实况）**：欠回执常态化——26 条 owed，其中 6 条收款方为
+  本会话（0a70e9fc）本身；author 席 0.5.38/0.5.39 发版请求已获完整答复，
+  回执却 1h+ 未结算（caller 标签 `dsh-host-9c53bf95-*` 不可路由）；另一类
+  "内容已答、回执形式件未走"（target 经 direct 通道答复，无
+  `[A2A receipt]` 前缀路由，账本无法关联结算）。存量死信 40h+ 自动归档
+  正常，但**新生债务持续大于结算速率**——问题不是回执慢，是债务可以
+  无限制生出且缺乏结算通路。
+
+- **三层根治设计（结算完整性）**：
+  1. **生债闸（dispatch-time gate）**：投递时即解析 receiptTarget
+     （callback || caller）——当前不可路由且不可物化（wake/adopt 均失败）时，
+     响应附 `receipt: "none"`，账本落 `DELIVERED_NO_RECEIPT` 终态。
+     **不制造无法结算的债**；要回执的调用方必须提供可路由 callback
+     （a2a_route 对自身标签不可路由的调用方当场告警）。
+  2. **证据即结算（settle-on-echo）**：回执提示已使每条委派消息自带
+     `task <taskId>` 标记——入站 direct/relay 处理器扫描命中已知 pending
+     taskId 的任何来文即结算（`RECEIVED_VIA_DIRECT`），不再依赖
+     `[A2A receipt]` 前缀形式件；armReceiptAutosend 的 final-waiter 合成
+     继续作为兜底通道。解决"内容已答、形式件未走"类。
+  3. **过期降级（debt TTL）**：owed 回执超过 `receiptDebtTtlMs`（默认 2h）
+     降级为 `EXPIRED_UNSETTLED`（终态 + 原因码：unroutable-caller /
+     unconsumed / target-gone），监督循环停止催收，a2a_tasks 按原因码分类
+     展示。死信侧 TTL 归档已正常，本条补的是**回执侧**的镜像机制。
+
+- **与 F1'/F2'/F3 的关系**：F1'/F2'/F3 治"投了没人消费"（无最终回复 →
+  无论怎么改都无回执）；本卡治"消费了但债收不回/债不该生"。两者合起来
+  才是回执链闭环。
+
+- **验收**：① 不可路由 caller 的 async 投递 → 响应 receipt:"none"、账本
+  终态、零新增债务；② target 经 direct 答复（含 task id）→ 账本即时
+  结算；③ 2h 未结算 → EXPIRED_UNSETTLED + 原因码；④ 3081 双会话回归
+  （本 host + 跨 host 各一轮）。
+
 ## 节奏
 
-0.5.38 重启验收闭环后，F1'→PR-1、F2'→PR-2、F4→PR-3 依序走 worktree PR
-（3081 测试线验证）；F3 由 harness 仓实施时另开 PR。登记渠道说明：gitee
-issues 写端点对本 token 异常（401/404，pulls 端点三种姿势均正常——已实测
-分离），故以本文件 + PR 为登记载体。
+0.5.39 重启验收闭环后，F1'→PR-1、F2'→PR-2、F4→PR-3、F5→PR-4 依序走
+worktree PR（3081 测试线验证）；F3 由 harness 仓实施时另开 PR。登记渠道
+说明：gitee issues 写端点对本 token 异常（401/404，pulls 端点三种姿势均
+正常——已实测分离），故以本文件 + PR 为登记载体。
