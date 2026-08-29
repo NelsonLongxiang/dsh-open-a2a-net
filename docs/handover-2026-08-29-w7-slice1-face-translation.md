@@ -9,8 +9,8 @@
 |---|---|
 | master | `4760485`（!41 合并提交） |
 | 版本 | **0.5.35**（已发 jf-tech 私仓 latest，tarball 直验过） |
-| 本日落库 | !39：回放翻译 delivery 分岔（R1 APPROVE）；!41：slice 2 查询面（R1 REQUEST CHANGES 两 BLOCKING → 闭环 → R2 APPROVE → R-2-1 一行收口） |
-| 门禁基线 | typecheck×2 / vitest 361 / build 全绿（含 +21 新测试：store 四态/端点/钩子/fan-out） |
+| 本日落库 | !39：回放翻译 delivery 分岔（R1 APPROVE）；!40：slice 1 交接文档；!41：slice 2 查询面（R1 REQUEST CHANGES 两 BLOCKING → 闭环 → R2 APPROVE → R-2-1 一行收口） |
+| 门禁基线 | typecheck×2 / vitest 361 / build 全绿（+28 新测试：feature 21 + 评审收口 7——store 四态/端点/钩子/fan-out） |
 
 ## 二、契约语义（本 PR 的产品本体）
 
@@ -32,7 +32,7 @@
 
 ## 三·五、slice 2（!41）：S1 结果检索面
 
-- **wire**：`POST /a2a/query`，体只携 `{task_id, fingerprint}`，恒 200 四态应答（unknown-task / payload-mismatch / pending / completed|failed）。畸形字段恒 unknown-task；不 claim、不 steer、不入会话、**不产 wire 错误码**——闸门冻结面（409 形态字节级钉住）零触碰。
+- **wire**：`POST /a2a/query`，体只携 `{task_id, fingerprint}`，语义层恒 200 四态应答（unknown-task / payload-mismatch / pending / completed|failed）；不可解析体 / 超大体同 `/a2a/direct` 答 400 / 413，不涉冻结词汇。畸形字段恒 unknown-task；不 claim、不 steer、不入会话、**语义应答不产 wire 错误码**——闸门冻结面（409 形态字节级钉住）零触碰。
 - **产物滞留**：`IdempotencyStore` 行扩展 `{taskId, fingerprint, at, outcome?, settledAt?}`——`recordOutcome` **首写定终身**；`OUTCOME_TEXT_CAP = 65536` 截断带 flag；v2 快照（v1 快照恢复为 pending）；产物随认领行生死（TTL 24h / cap 256）。
 - **三挂钩**（首写定终身，占位散文两条通道都封死）：sync 应答（非 `TASK_STATE_COMPLETED` 的 status 不记 + `placeholder` 标志的 flush 超时/死会话应答不记）；桥 detached 轮（`settled:true` 才记）；回执关联（`settleAndAnnounce` 内直接 `parseReceipt`——在 ledger 早退之前，只记 summary 人类文本，envelope 受控词表永不入账）。
 - **`peerPayloadFingerprint` 单一实现**：闸门 claim、查询端点复核、bridgeFace 重组三方共用一处导出（字段序即 wire 格式，勿动）。
@@ -42,7 +42,7 @@
 
 ## 四、主检出现状（接手者必读）
 
-主检出停在 **`feat/nexus-planning-b`**——另一会话的 WIP 分支（未合 master，tip `baf51a1`；其工作树状态随时漂移），**不要动它**。需要在 master 上构建/发版时：`git worktree add .claude/worktrees/<name> origin/master` 从 worktree 执行（本日 0.5.34 即如此发布；worktree 依赖经目录上行解析主检出 node_modules，无需重装；`verify:nexus` 可跳过仅当未触 nexus 面——nexusDist 以 master 提交态打包）。
+主检出停在 **`feat/nexus-planning-b`**——另一会话的 WIP 分支（未合 master；WIP 推进中，tip 随时漂移——撰写时为 `baf51a1`，已前进至 `efdf6b0`，接手时以 `git rev-parse` 实时为准），**不要动它**。需要在 master 上构建/发版时：`git worktree add .claude/worktrees/<name> origin/master` 从 worktree 执行（本日 0.5.34 即如此发布；worktree 依赖经目录上行解析主检出 node_modules，无需重装；`verify:nexus` 可跳过仅当未触 nexus 面——nexusDist 以 master 提交态打包）。
 
 ## 五、待办队列
 
