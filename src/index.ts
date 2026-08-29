@@ -2065,6 +2065,13 @@ ${message}`
                 // The receipt header carries the task id: the target echoes
                 // it verbatim in "[A2A receipt] task <id> ...", closing the
                 // correlation loop with the caller's own route result.
+                // F1' (consumed-probe prior-running): capture the pre-steer
+                // status first — a target that was already running (its own
+                // turn / a brand-new session's activation window) reads
+                // `running` after the steer whether or not our wake was
+                // latched, so the post-steer read alone would answer a false
+                // consumed:true and strand the message.
+                const runningBeforeSteer = probeConsumption(target, taskId)
                 steerRelay(target, `[A2A direct] (task ${taskId}) from "${from}" (routed to ${team}) sent:\n\n${message}\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`)
                 recordActivity('in', team, caller, true)
                 armReceiptAutosend(target, taskId, receiptTarget, message)
@@ -2076,7 +2083,11 @@ ${message}`
                 // shortly after: running means the message is being consumed;
                 // still-idle means the wake was latched or dropped — surface that
                 // honestly and arm a delayed nudge retry below.
-                const consumedProbe = probeConsumption(target, taskId)
+                // F1': a prior-running target never trusts the single
+                // post-steer read — answer consumed:false conservatively and
+                // arm the nudge (a false negative costs one harmless nudge; a
+                // false positive strands the delivered message).
+                const consumedProbe = runningBeforeSteer ? false : probeConsumption(target, taskId)
                 if (!consumedProbe) armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
                 const payload = JSON.stringify({
                   routed: true,

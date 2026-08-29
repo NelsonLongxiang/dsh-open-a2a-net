@@ -512,3 +512,49 @@ describe('idempotency window observability — R1 regressions', () => {
     expect(restored.stats()).toMatchObject({ claimsFresh: 0, replays: 0, conflicts: 0 })
   })
 })
+
+describe('consumed probe honesty — prior-running targets (F1 defect card)', () => {
+  it('a target already running before the steer answers consumed:false — the activation window never masquerades as consumption', async () => {
+    // 08-30 evidence: a brand-new session's activation window reads
+    // `running` after the steer whether or not the wake was latched, so the
+    // single post-steer read answered a false consumed:true and the nudge
+    // never armed. The pre-steer status is the tell: prior-running means
+    // the probe cannot distinguish "consuming us" from "running on its
+    // own" — answer conservatively.
+    const { port, registry, dispose } = await mount()
+    try {
+      const agent = registry.agent as unknown as { status?: string }
+      agent.status = 'running'
+      const direct = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: 'dsh', message: 'async work', caller_session: 'idem-runner', task_id: 'prior-running-task', wait: false }),
+      })
+      const body = await direct.json() as { delivered?: boolean; consumed?: boolean }
+      expect(body.delivered).toBe(true)
+      expect(body.consumed).toBe(false)
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('an idle target whose steer flips the status to running still answers consumed:true (unchanged happy path)', async () => {
+    const { port, registry, dispose } = await mount()
+    try {
+      const agent = registry.agent as unknown as { status?: string; steer: () => void }
+      agent.steer = (() => {
+        agent.status = 'running'
+      }) as typeof agent.steer
+      const direct = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: 'dsh', message: 'async work', caller_session: 'idem-runner', task_id: 'wake-running-task', wait: false }),
+      })
+      const body = await direct.json() as { delivered?: boolean; consumed?: boolean }
+      expect(body.delivered).toBe(true)
+      expect(body.consumed).toBe(true)
+    } finally {
+      await dispose()
+    }
+  })
+})
