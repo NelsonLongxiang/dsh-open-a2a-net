@@ -420,19 +420,34 @@ describe('inbound native-teams bridge', () => {
 })
 
 describe('outbound face: idempotency verdicts and cancel', () => {
-  it('a peer 409 replay is terminal accepted — never a failover duplicate dispatch', async () => {
+  it('a peer 409 replay under async delivery is terminal accepted — never a failover duplicate dispatch', async () => {
     const peer = await startPeer({
       direct: () => ({ status: 409, payload: { error: 'duplicate task id within the idempotency window', code: -32003, replay: true } }),
     })
     const m = await mount({ peers: [peer.url] })
     mounted.push(async () => { await m.dispose(); await peer.close() })
     const face = m.face() as { submit: (request: Record<string, unknown>) => Promise<Record<string, unknown>> }
-    const outcome = await face.submit({ handle: 'peer-team', message: 'retry of an unacknowledged submit', delivery: 'sync', idempotencyKey: 'wb-r' })
+    const outcome = await face.submit({ handle: 'peer-team', message: 'retry of an unacknowledged submit', delivery: 'async', idempotencyKey: 'wb-r' })
     expect(outcome).toMatchObject({ kind: 'accepted', taskId: 'wb-r' })
     expect(peer.seen).toHaveLength(1)
   })
 
-  it('a peer 409 conflict (same key, different payload) fails instead of redirecting', async () => {
+  it('a peer 409 replay under sync delivery throws with the frozen -32003 literal (W7 S1) — never a failover duplicate dispatch', async () => {
+    const peer = await startPeer({
+      direct: () => ({ status: 409, payload: { error: 'duplicate task id within the idempotency window', code: -32003, replay: true } }),
+    })
+    const m = await mount({ peers: [peer.url] })
+    mounted.push(async () => { await m.dispose(); await peer.close() })
+    const face = m.face() as { submit: (request: Record<string, unknown>) => Promise<Record<string, unknown>> }
+    // The literal is the classification channel: downstream wraps strip
+    // structured codes, and graph-loop's classifier matches the code value
+    // in the message prose.
+    await expect(face.submit({ handle: 'peer-team', message: 'retry of an unacknowledged submit', delivery: 'sync', idempotencyKey: 'wb-r' }))
+      .rejects.toThrow(/-32003/)
+    expect(peer.seen).toHaveLength(1)
+  })
+
+  it('a peer 409 conflict (same key, different payload) fails with the -32002 literal instead of redirecting', async () => {
     const peer = await startPeer({
       direct: () => ({ status: 409, payload: { error: 'task id reused with a different payload', code: -32002 } }),
     })
@@ -440,7 +455,7 @@ describe('outbound face: idempotency verdicts and cancel', () => {
     mounted.push(async () => { await m.dispose(); await peer.close() })
     const face = m.face() as { submit: (request: Record<string, unknown>) => Promise<Record<string, unknown>> }
     await expect(face.submit({ handle: 'peer-team', message: 'conflicting payload', delivery: 'sync', idempotencyKey: 'wb-c' }))
-      .rejects.toThrow("conflicts at the peer's idempotency ledger")
+      .rejects.toThrow(/conflicts at the peer's idempotency ledger.*-32002/)
     expect(peer.seen).toHaveLength(1)
   })
 
