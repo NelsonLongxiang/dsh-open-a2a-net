@@ -24,9 +24,9 @@ import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, SUMMARY_CAP, type ReceiptResolvedInfo } from './task-ledger.ts'
-import { formatReceipt } from './receipt.ts'
+import { formatReceipt, parseReceipt } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
-import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from './idempotency-store.ts'
+import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint } from './idempotency-store.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
@@ -584,6 +584,22 @@ export function apply(ctx: Context, config: Config): void {
    * @param message - the inbound or relayed message text.
    */
   function settleAndAnnounce(message: string): void {
+    // W7 slice-2 hook 3: a receipt that correlates an id THIS node's
+    // idempotency ledger claimed records the receipt's human line as that
+    // key's outcome. Parsed DIRECTLY off the receipt codec — a claimed key
+    // usually is NOT in the owed book (the claim lives on the receiving
+    // side, the owed book on the dispatcher side), so the ledger's own
+    // correlation would never reach it. `summary` is the one-line text;
+    // the envelope's controlled-vocabulary outcome is never a product and
+    // must not be recorded as one. First-write wins inside the store, so a
+    // late receipt never overwrites a precise sync-hook record.
+    const parsed = parseReceipt(message)
+    if (parsed !== null && parsed.taskId !== '') {
+      const line = parsed.summary.trim()
+      if (line !== '') {
+        idempotencyStore.recordOutcome(parsed.taskId, { status: 'completed', reply: line.slice(0, SUMMARY_CAP) })
+      }
+    }
     const resolved = taskLedger.resolveFromMessage(message)
     if (resolved === undefined) return
     try {
@@ -1569,7 +1585,12 @@ export function apply(ctx: Context, config: Config): void {
     // Never synthesize a receipt for a receipt: answering an envelope by mail
     // would ping-pong both ledgers.
     if (deliveredText.startsWith('[A2A receipt] task ')) return
-    registerFinalWaiter(target, (finalText) => {
+    registerFinalWaiter(target, (finalText, placeholder) => {
+      // W7 slice-2: a host-authored placeholder (flush timeout, dead
+      // session) must not synthesize a COMPLETION receipt — a wedged
+      // session has no product, and hook 3 would otherwise ledger the
+      // placeholder as one on the same-node loop-back.
+      if (placeholder === true) return
       // Idempotency: a row THIS ledger tracks must still be pending
       // (settled/dead rows never re-send). A foreign task id (an inbound
       // route the caller tracks on ITS node) has no local row — the final
@@ -1614,7 +1635,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param answer - how the waiter's reply is delivered.
    * @returns the registered waiter (for callers that may retract it).
    */
-  function registerFinalWaiter(agent: Agent, answer: (text: string) => void): FinalWaiter {
+  function registerFinalWaiter(agent: Agent, answer: (text: string, placeholder?: boolean) => void): FinalWaiter {
     const key = String(agent.id)
     const waiter: FinalWaiter = { answer, sinceEvents: agent.session.events.length }
     waiter.timeoutDisposer = armFlushTimeout(key, waiter)
@@ -1631,7 +1652,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param taskId - the correlation key the steered receipt header carries.
    */
   async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string): Promise<
-    { ok: true; reply: string; status?: string; bridge?: 'native-teams' } | { ok: false; error: string }
+    { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean } | { ok: false; error: string }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
@@ -1682,11 +1703,11 @@ export function apply(ctx: Context, config: Config): void {
    * @returns the agent's final reply, or the explicit failure.
    */
   function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string): Promise<
-    { ok: true; reply: string } | { ok: false; error: string }
+    { ok: true; reply: string; placeholder?: boolean } | { ok: false; error: string }
   > {
     return new Promise((resolve) => {
-      const waiter = registerFinalWaiter(agent, (text) => {
-        resolve({ ok: true, reply: text })
+      const waiter = registerFinalWaiter(agent, (text, placeholder) => {
+        resolve({ ok: true, reply: text, ...(placeholder === true ? { placeholder: true } : {}) })
       })
       // The header names the sender first: `caller` is the routing node's
       // own label (the session that issued the route), while `team` is this
@@ -1972,7 +1993,7 @@ ${message}`
           // same key + different payload ⇒ hard conflict (409, -32002).
           // Checked BEFORE any steering or ledger correlation: a replay must
           // never re-enter the target session, no matter how it settles.
-          const idemFingerprint = createHash('sha256').update(JSON.stringify({ caller, message, noWait, team })).digest('hex')
+          const idemFingerprint = peerPayloadFingerprint({ caller, message, noWait, team })
           const idemVerdict = idempotencyStore.claim(taskId, idemFingerprint)
           if (idemVerdict !== 'fresh') {
             const replay = idemVerdict === 'replay'
@@ -2091,6 +2112,15 @@ ${message}`
                     recordActivity('in', team, caller, false)
                     logger.warn(`a2a: detached native-teams round for "${team}" failed: ${outcome.error}`)
                   }
+                  // W7 slice-2 hook 2: only a genuinely settled detached round
+                  // records an outcome. The deadline's settled:false
+                  // projection is a placeholder, not a product — the same
+                  // ruling as hook 1's DELIVERED skip; placeholder prose never
+                  // enters the ledger a replay could adopt from.
+                  if (taskId !== '') {
+                    if (!outcome.ok) idempotencyStore.recordOutcome(taskId, { status: 'failed', error: outcome.error })
+                    else if (outcome.settled) idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: outcome.reply })
+                  }
                 })
               const payload = JSON.stringify({ routed: true, delivered: true, team, session, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_DELIVERED', artifacts: [], consumed: false, bridge: 'native-teams' })
               res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
@@ -2100,6 +2130,23 @@ ${message}`
           }
           void routeIntoAgent(team, message, caller, taskId).then((outcome) => {
             recordActivity('in', team, caller, outcome.ok)
+            // W7 slice-2 hook 1: record the settled outcome on the claim row.
+            // Ruling: a non-COMPLETED status (TASK_STATE_DELIVERED — the
+            // bridge-round deadline placeholder, ABORTED_WAIT likewise) is
+            // NOT a settled outcome, and neither is a host-authored
+            // placeholder on the reply channel (flush timeout, dead session)
+            // — the row stays pending, because an adopted replay must never
+            // settle a node on placeholder text (the exact hazard W7 gap B
+            // closed, barred from resurrecting through the outcome ledger).
+            if (taskId !== '') {
+              if (!outcome.ok) {
+                idempotencyStore.recordOutcome(taskId, { status: 'failed', error: outcome.error })
+              } else if (outcome.placeholder === true) {
+                // placeholder prose never enters the ledger
+              } else if (outcome.status === undefined || outcome.status === 'TASK_STATE_COMPLETED') {
+                idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: outcome.reply })
+              }
+            }
             const payload = outcome.ok
               ? JSON.stringify({
                 routed: true,
@@ -2123,6 +2170,98 @@ ${message}`
         })
       },
     }), 'a2a: direct route endpoint')
+  })
+
+  whenWebServerSettled((webServer) => {
+    // W7 slice 2: the S1 outcome-retrieval surface — a READ-ONLY lookup of
+    // one claimed task's settled outcome. The body carries ONLY the task id
+    // and the submit payload's fingerprint (peerPayloadFingerprint, the
+    // gate's own shared implementation): the fingerprint match is the
+    // authorization, and the fan-out probe never leaks the original message
+    // to peers that never saw it. Constant-200 semantics — a query NEVER
+    // produces a wire error code (the frozen -32002/-32003 vocabulary stays
+    // submit-only), never claims, never steers, never enters a session: the
+    // gate's "verdict before steer" has its mirror in "a query executes
+    // nothing". Malformed fields degrade to unknown-task rather than
+    // guessing; an unparseable body answers 400 like /a2a/direct.
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/a2a/query',
+      handler: (req: IncomingMessage, res: ServerResponse) => {
+        const chunks: Buffer[] = []
+        let size = 0
+        let overflowed = false
+        req.on('data', (chunk: Buffer) => {
+          if (overflowed) return
+          const next = size + chunk.length
+          if (next > 65_536) {
+            overflowed = true
+            chunks.length = 0
+            return
+          }
+          size = next
+          chunks.push(chunk)
+        })
+        req.on('error', () => {
+          if (!res.headersSent) {
+            res.writeHead(400)
+            res.end()
+          }
+        })
+        req.on('end', () => {
+          if (overflowed) {
+            if (!res.writableEnded && !res.headersSent) {
+              const payload = JSON.stringify({ error: 'payload too large', code: WIRE_ERROR_PAYLOAD_TOO_LARGE })
+              res.writeHead(413, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+            }
+            return
+          }
+          let body: {
+            readonly task_id?: unknown
+            readonly fingerprint?: unknown
+          }
+          try {
+            body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof body
+          } catch {
+            const payload = JSON.stringify({ error: 'malformed body', code: -32000 })
+            res.writeHead(400, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+            return
+          }
+          const taskId = typeof body.task_id === 'string' ? body.task_id : ''
+          const fingerprint = typeof body.fingerprint === 'string' ? body.fingerprint : ''
+          const verdict = taskId === '' || fingerprint === ''
+            ? { found: false as const, reason: 'unknown-task' as const }
+            : idempotencyStore.query(taskId, fingerprint)
+          const payload = JSON.stringify(
+            verdict.found
+              ? verdict.status === 'pending'
+                ? { found: true, status: 'pending', task_id: taskId }
+                : verdict.status === 'completed'
+                  ? {
+                    found: true,
+                    status: 'completed',
+                    reply: verdict.reply,
+                    settled_at: new Date(verdict.settledAt).toISOString(),
+                    task_id: taskId,
+                    ...(verdict.truncated === true ? { truncated: true } : {}),
+                  }
+                  : {
+                    found: true,
+                    status: 'failed',
+                    error: verdict.error,
+                    settled_at: new Date(verdict.settledAt).toISOString(),
+                    task_id: taskId,
+                    ...(verdict.truncated === true ? { truncated: true } : {}),
+                  }
+              : { found: false, reason: verdict.reason, task_id: taskId },
+          )
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+          res.end(payload)
+        })
+      },
+    }), 'a2a: query endpoint')
   })
 
   whenWebServerSettled((webServer) => {
@@ -3014,6 +3153,47 @@ ${message}`
       }
       throw new Error(`A2A submit for "${request.handle}" failed on every candidate`)
     },
+    queryOutcome: async (request, signal) => {
+      const abort = signal ?? new AbortController().signal
+      if (request.taskId === '') return undefined
+      const failures: string[] = []
+      const fetch = memoizedCardFetch()
+      const candidates = await directoryPeerCandidates(fetch, request.handle, failures)
+      // No candidate to ask: no increment of information — undefined, never
+      // a synthetic verdict.
+      if (candidates.length === 0) return undefined
+      let mismatch = false
+      let answeredUnknown = false
+      for (const candidate of candidates) {
+        // A caller cancel mid-fan-out ends the probe: answers collected
+        // before the abort must not aggregate into a verdict the caller
+        // already walked away from.
+        if (abort.aborted) return undefined
+        // Recompute the fingerprint EXACTLY as the submit pass computed it:
+        // the same shared implementation, and the same per-candidate async
+        // gate (delivery async × that peer's declared capability). Sync
+        // delivery — every graph-loop dispatch — is noWait:false throughout.
+        let peerAsync = false
+        if (request.delivery === 'async') {
+          const card = await fetch(candidate)
+          peerAsync = (card?.capabilities as { async?: unknown } | undefined)?.async === true
+        }
+        const fingerprint = peerPayloadFingerprint({ caller: session, message: request.message, noWait: request.delivery === 'async' && peerAsync, team: request.handle })
+        const answer = await client.queryOutcome(candidate, request.taskId, fingerprint, abort)
+        if (answer === undefined) continue // transport miss — probe the next candidate (read-only fan-out)
+        if (!answer.found) {
+          if (answer.reason === 'payload-mismatch') mismatch = true
+          else answeredUnknown = true
+          continue
+        }
+        return answer
+      }
+      // A mismatch anywhere wins the aggregation: the key exists at a peer
+      // with a different payload — the most diagnostic negative there is.
+      if (mismatch) return { found: false, reason: 'payload-mismatch' }
+      if (answeredUnknown) return { found: false, reason: 'unknown-task' }
+      return undefined
+    },
     cancel: async (ref, reason) => {
       const taskId = ref.taskId
       if (taskId === undefined || taskId === '') return false
@@ -3308,7 +3488,9 @@ ${message}`
    * message was steered, so the flush reads only fresh assistant output.
    */
   interface FinalWaiter {
-    readonly answer: (text: string) => void
+    /** @param placeholder - true when the text is a host-authored
+     * stand-in (flush timeout, dead session), NOT the session's product. */
+    readonly answer: (text: string, placeholder?: boolean) => void
     readonly sinceEvents: number
     timeoutDisposer?: () => void
   }
@@ -3320,7 +3502,7 @@ ${message}`
       const kept = entries.filter(entry => entry !== waiter)
       if (kept.length === 0) pendingFinals.delete(agentId)
       else pendingFinals.set(agentId, kept)
-      waiter.answer('The DSH session produced no final reply within the configured window.')
+      waiter.answer('The DSH session produced no final reply within the configured window.', true)
     }, config.flushTimeoutMs)
   }
 
@@ -3331,7 +3513,7 @@ ${message}`
     if (agent === undefined) {
       for (const entry of entries) {
         entry.timeoutDisposer?.()
-        entry.answer('The target DSH session is no longer live.')
+        entry.answer('The target DSH session is no longer live.', true)
       }
       pendingFinals.delete(agentId)
       return

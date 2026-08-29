@@ -59,9 +59,35 @@ export type TeamsBridgeSubmitOutcome =
   | { readonly kind: 'completed'; readonly text: string; readonly taskId?: string; readonly contextId?: string }
   | { readonly kind: 'accepted'; readonly taskId: string; readonly acceptedAt: string; readonly contextId?: string }
 
+/** Mirror of native-teams' `A2AQueryRequest` (W7 slice 2): one read-only
+ * outcome lookup. The caller re-presents the EXACT submit fields so the
+ * transport face can recompute the submit payload's fingerprint — the gate's
+ * own shared implementation — as the query's authorization. */
+export interface TeamsBridgeQueryRequest {
+  /** The claimed task id (the orchestrator's dedup key on graph-loop dispatches). */
+  readonly taskId: string
+  /** Remote group-entry handle the submit addressed. */
+  readonly handle: string
+  /** The original submit message text, verbatim. */
+  readonly message: string
+  /** The original submit delivery mode. */
+  readonly delivery: 'sync' | 'async'
+}
+
+/** Mirror of native-teams' `A2AQueryOutcome` (W7 slice 2): the four-state
+ * read-only answer, 1:1 with the wire's `/a2a/query` body. `undefined` from
+ * the face means "no increment of information" (unresolved handle, no peer
+ * answered, transport failed) — a query failure is never a verdict. */
+export type TeamsBridgeQueryOutcome =
+  | { readonly found: false; readonly reason: 'unknown-task' | 'payload-mismatch' }
+  | { readonly found: true; readonly status: 'pending' }
+  | { readonly found: true; readonly status: 'completed'; readonly reply: string; readonly settledAt: string; readonly truncated?: boolean }
+  | { readonly found: true; readonly status: 'failed'; readonly error: string; readonly settledAt: string; readonly truncated?: boolean }
+
 /** Mirror of native-teams' `NativeTeamsA2AFace` transport contract. */
 export interface NativeTeamsBridgeFace {
   resolve(handle: string, opts?: { timeoutMs?: number }): Promise<TeamsBridgeResolveInfo | undefined>
   submit(request: TeamsBridgeSubmitRequest, signal?: AbortSignal): Promise<TeamsBridgeSubmitOutcome>
   cancel?(ref: { readonly taskId?: string; readonly sessionKey?: string }, reason?: string): Promise<boolean>
+  queryOutcome?(request: TeamsBridgeQueryRequest, signal?: AbortSignal): Promise<TeamsBridgeQueryOutcome | undefined>
 }

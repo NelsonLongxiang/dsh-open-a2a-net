@@ -274,3 +274,42 @@ describe('error code absence', () => {
     await expect(makeClient({ fetch }).routeDirect('http://p:1', 't', 'm')).resolves.toEqual({ ok: false, error: 'plain failure' })
   })
 })
+
+describe('queryOutcome (W7 slice 2)', () => {
+  it('posts the task id + fingerprint to /a2a/query and parses the four states', async () => {
+    const { calls, fetch } = stubFetch(() => ({ status: 200, body: { found: true, status: 'completed', reply: 'the product', settled_at: '2026-08-29T00:00:00.000Z', task_id: 't-1' } }))
+    const client = makeClient({ fetch })
+    const answer = await client.queryOutcome('http://peer', 't-1', 'fprint')
+    expect(answer).toEqual({ found: true, status: 'completed', reply: 'the product', settledAt: '2026-08-29T00:00:00.000Z' })
+    expect(calls[0].url).toBe('http://peer/a2a/query')
+    expect(JSON.parse(String(calls[0].body))).toEqual({ task_id: 't-1', fingerprint: 'fprint' })
+    const failed = await makeClient({ fetch: stubFetch(() => ({ status: 200, body: { found: true, status: 'failed', error: 'boom prose', settled_at: '2026-08-29T01:00:00.000Z', truncated: true, task_id: 't-2' } })).fetch })
+      .queryOutcome('http://peer', 't-2', 'fprint')
+    expect(failed).toEqual({ found: true, status: 'failed', error: 'boom prose', settledAt: '2026-08-29T01:00:00.000Z', truncated: true })
+    const pending = await makeClient({ fetch: stubFetch(() => ({ status: 200, body: { found: true, status: 'pending', task_id: 't-3' } })).fetch })
+      .queryOutcome('http://peer', 't-3', 'fprint')
+    expect(pending).toEqual({ found: true, status: 'pending' })
+    const negative = await makeClient({ fetch: stubFetch(() => ({ status: 200, body: { found: false, reason: 'payload-mismatch', task_id: 't-4' } })).fetch })
+      .queryOutcome('http://peer', 't-4', 'fprint')
+    expect(negative).toEqual({ found: false, reason: 'payload-mismatch' })
+  })
+
+  it('degrades every transport failure, HTTP error, and malformed body to undefined', async () => {
+    const rejecting = makeClient({ fetch: () => Promise.reject(new Error('network down')) })
+    await expect(rejecting.queryOutcome('http://peer', 't-1', 'fprint')).resolves.toBeUndefined()
+    const httpError = makeClient({ fetch: stubFetch(() => ({ status: 404, body: { error: 'no route' } })).fetch })
+    await expect(httpError.queryOutcome('http://peer', 't-1', 'fprint')).resolves.toBeUndefined()
+    const garbage = makeClient({ fetch: stubFetch(() => ({ status: 200, body: { found: 'yes', status: 'completed' } })).fetch })
+    await expect(garbage.queryOutcome('http://peer', 't-1', 'fprint')).resolves.toBeUndefined()
+    const foundless = makeClient({ fetch: stubFetch(() => ({ status: 200, body: { found: true, status: 'completed', reply: 42, settled_at: 'x' } })).fetch })
+    await expect(foundless.queryOutcome('http://peer', 't-1', 'fprint')).resolves.toBeUndefined()
+  })
+
+  it('never dispatches when the task id or fingerprint is empty', async () => {
+    const { calls, fetch } = stubFetch(() => ({ status: 200, body: { found: true, status: 'pending' } }))
+    const client = makeClient({ fetch })
+    await expect(client.queryOutcome('http://peer', '', 'fprint')).resolves.toBeUndefined()
+    await expect(client.queryOutcome('http://peer', 't-1', '')).resolves.toBeUndefined()
+    expect(calls).toEqual([])
+  })
+})
