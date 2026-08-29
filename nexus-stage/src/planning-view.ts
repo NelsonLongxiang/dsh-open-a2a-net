@@ -543,11 +543,20 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     const team = actionTeam(a)
     pendingAdd(team)
     render()
-    void deps.onCanvasAction(a).then(ok => {
-      pendingRelease(team)
-      if (!ok) undo() // host refused: roll this action's optimistic delta back
-      render()
-    })
+    void deps.onCanvasAction(a).then(
+      ok => {
+        pendingRelease(team)
+        if (!ok) undo() // host refused: roll this action's optimistic delta back
+        render()
+      },
+      () => {
+        // Contract-robustness: a rejecting action channel must not pin the
+        // team's guard (and its optimistic state) forever.
+        pendingRelease(team)
+        undo()
+        render()
+      },
+    )
   }
 
   // ── notices (host errors verbatim; design.md §3.4 不吞错) ──
@@ -654,7 +663,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // three focusables; Esc anywhere in the panel cancels.
     wrap.addEventListener('keydown', (ev) => {
       const e = ev as KeyboardEvent
-      if (e.key === 'Escape') { e.preventDefault(); close(); return }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return }
       if (e.key !== 'Tab') return
       e.preventDefault()
       const focusables = Array.from(panel.querySelectorAll<HTMLElement>('input, button'))
@@ -680,7 +689,10 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     menu = null
     menuTarget = undefined
     menuLevel = 'root'
-    menuAnchor?.focus()
+    // The anchor may have been detached by a poll while the menu was open —
+    // focus() on a detached node drops focus to body and the canvas goes deaf.
+    if (menuAnchor !== null && menuAnchor.isConnected) menuAnchor.focus()
+    else root.focus()
     menuAnchor = null
   }
 
@@ -834,8 +846,18 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     const p = localXY(ev)
     const nodeEl = target !== null ? target.closest<HTMLElement>('.p-node') : null
     const headEl = target !== null ? target.closest<HTMLElement>('.p-frame-head') : null
+    if ((nodeEl !== null || headEl !== null) && ev.button === 1) {
+      // Middle-button anywhere — including on cards and frame heads — pans
+      // (baf51a1 claimed this; the guards used to swallow it before the pan
+      // branch was reachable, and skipped preventDefault, re-enabling
+      // native autoscroll).
+      gesture = { kind: 'pan', last: p, moved: false }
+      ev.preventDefault()
+      try { root.setPointerCapture(ev.pointerId ?? 0) } catch { /* jsdom */ }
+      return
+    }
     if (nodeEl !== null) {
-      if (ev.button !== 0) return // middle/right on a card: pan/nothing, never a card drag (F3)
+      if (ev.button !== 0) return // right on a card: contextmenu only, never a card drag (F3)
       const id = nodeEl.dataset.id ?? ''
       const already = model.isSelected(id)
       if (!already && !ev.shiftKey) model.setSelection([id])
@@ -951,7 +973,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     if (menu !== null) closeMenu()
     const p = localXY(ev)
     if (ev.ctrlKey) {
-      const factor = Math.exp(-(ev.deltaY ?? 0) * 0.0015)
+      const line = ev.deltaMode === 1 ? 16 : 1
+      const factor = Math.exp(-((ev.deltaY ?? 0) * line) * 0.0015)
       vp = zoomAt(vp, factor, p.x, p.y)
     } else {
       // Natural scrolling: the viewport follows the wheel (scroll down

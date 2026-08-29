@@ -135,6 +135,21 @@ describe('建队 flow', () => {
     expect(actions).toHaveLength(0)
   })
 
+  it('a duplicate team name JOINS the existing team instead of wiping it (F2)', async () => {
+    const { v, actions } = view(true)
+    v.reconcile(arrangedInput)
+    selectTwo(v)
+    v.seam.key(key({ key: 'g', target: v.root }))
+    const input = v.root.querySelector('.p-dialog input')!
+    input.value = '甲' // already exists with members a, c
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(actions).toHaveLength(1)
+    expect(actions[0]).toEqual({ type: 'add-member', team: '甲', ids: ['a', 'b'] })
+    // The existing roster is untouched (b appended; a was already a member
+    // and stays — host add-member is idempotent).
+    expect(v.root.textContent).toContain('3 成员')
+  })
+
   it('Esc cancels the dialog without emitting', () => {
     const { v, actions } = view()
     v.reconcile(baseInput)
