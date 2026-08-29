@@ -11,6 +11,10 @@
  *   member cap hit)                                silent success
  * - HTTP >= 400                                  → body error verbatim, else `HTTP <status>`
  * - send() throws                                → `画布不可达：<message>`
+ * - 200 + ok:false WITHOUT an error string       → idempotent no-op
+ *   (absent target, member/team cap hit) — silent success
+ * - 200 + non-JSON body (proxy artifact)         → classified as success
+ *   (known limitation: nothing parseable to classify)
  *
  * Ops on the same team run through a serial queue (a later gesture waits
  * instead of racing; cross-team ops run in parallel) - mirrors the
@@ -34,10 +38,10 @@ export interface CanvasWireDeps {
 }
 
 export interface CanvasWire {
-  /** create → add-member per id, serial, first failure stops. */
-  /** `created`: the team did not exist model-side before this action — a
-   *  first-add failure would then leave a ghost EMPTY team on the host,
-   *  which is compensated with a best-effort remove. */
+  /** create → add-member per id, serial, first failure stops. `created`:
+   *  the team did not exist model-side before this action — a first-add
+   *  failure would then leave a ghost EMPTY team on the host, compensated
+   *  with a best-effort remove. */
   createTeam(name: string, ids: readonly string[], created?: boolean): Promise<boolean>
   addMembers(team: string, ids: readonly string[]): Promise<boolean>
   removeMembers(team: string, ids: readonly string[]): Promise<boolean>

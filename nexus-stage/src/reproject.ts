@@ -64,6 +64,8 @@ export function projectFleet(
 }
 
 function seatFor2D(id: string): { x: number; y: number } {
-  const p = seatFor(id)
-  return { x: p.x, y: p.z }
-}
+    // The 3D polar seat lives on the x/z ground plane; the top-down lens
+    // reads its plan view: (x, z) -> (x, y).
+    const p = seatFor(id)
+    return { x: p.x, y: p.z }
+  }

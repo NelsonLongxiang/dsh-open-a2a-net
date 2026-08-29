@@ -81,9 +81,9 @@
 > 实施状态（2026-08-29）：四步全部完成；偏离裁决见同目录 implementation-notes.md。
 
 | PR | 内容 | 复用/依据 | 状态 |
-|---|---|---|
-| A. 取证修复先行 | `cycle()` 空 catch 改显式离线态卡；`fetchLayout` 接线（布局加载→定位→保存回路）；成员边改星形 + opacity 提到可见 ✅ 已实施 | main.ts 现状；本交付 review.md P0 三条 |
-| B. 规划模式骨架 | 2D 画布 tab：点阵世界层 + 节点卡 + 队框 + 星形边 + 布局持久化回路 + 拖拽/框选 ✅ 已实施 | `LayoutSnapshot.frames` 首次有消费者 |
+|---|---|---|---|
+| A. 取证修复先行 | `cycle()` 空 catch 改显式离线态卡；`fetchLayout` 接线（布局加载→定位→保存回路）；成员边改星形 + opacity 提到可见 | main.ts 现状；本交付 review.md P0 三条 | ✅ 已实施 |
+| B. 规划模式骨架 | 2D 画布 tab：点阵世界层 + 节点卡 + 队框 + 星形边 + 布局持久化回路 + 拖拽/框选 | `LayoutSnapshot.frames` 首次有消费者 | ✅ 已实施 |
 | C. 组队交互 | 建队/入队/离队/调优先级/散队全动作 + 乐观更新回滚 + 右键菜单等价路径 | 契约写面四 action；A2aControl.tsx 列表版是参照实现 | ✅ 已实施 |
 | D. 活动/联邦层 | inFlight 活动边 + peer 徽章 + 联邦线 + 状态条飞行定位 | `state.inFlight/activity/peers` 已下发未消费 | ✅ 已实施 |
 
