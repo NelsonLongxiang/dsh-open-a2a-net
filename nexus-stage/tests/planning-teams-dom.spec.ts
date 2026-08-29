@@ -344,6 +344,36 @@ describe('drop targeting', () => {
     expect((actions[0] as { team: string }).team).toBe('甲')
   })
 
+  it('F1: an unmoved multi-select click never writes a group 离队 (data-loss fix)', () => {
+    const { v, actions, onDirty } = view(true)
+    v.reconcile(arrangedInput)
+    const a = v.root.querySelector<HTMLElement>('.p-node[data-id="a"]')!
+    // Both cards are 甲 members sitting OUTSIDE the frame (menu-join is the
+    // normal path — cards never enter the frame box).
+    const b = v.root.querySelector<HTMLElement>('.p-node[data-id="c"]')!
+    // click b (select), then shift-click a WITHOUT moving: the old code read
+    // this as a two-card drop on blank and 离队-ed the whole group.
+    v.seam.pointerDown(ptr({ target: b, clientX: 600, clientY: 0 }))
+    v.seam.pointerUp(ptr({ target: b, clientX: 600, clientY: 0 }))
+    v.seam.pointerDown(ptr({ target: a, clientX: 0, clientY: 0, shiftKey: true }))
+    v.seam.pointerUp(ptr({ target: a, clientX: 0, clientY: 0, shiftKey: true }))
+    expect(actions).toHaveLength(0)
+    expect(onDirty).not.toHaveBeenCalled()
+    expect(a.classList.contains('selected')).toBe(true)
+  })
+
+  it('F3: middle-button drag on a card pans instead of dragging/joining', () => {
+    const { v, actions } = view(true)
+    v.reconcile(arrangedInput)
+    const a = v.root.querySelector<HTMLElement>('.p-node[data-id="a"]')!
+    const top0 = a.style.top
+    v.seam.pointerDown(ptr({ target: a, clientX: 0, clientY: 0, button: 1 }))
+    v.seam.pointerMove(ptr({ target: v.root, clientX: 0, clientY: 100, button: 1 }))
+    v.seam.pointerUp(ptr({ target: v.root, clientX: 0, clientY: 100, button: 1 }))
+    expect(a.style.top).toBe(top0) // the card did not move
+    expect(actions).toHaveLength(0)
+  })
+
   it('no drop logic without movement (plain click)', () => {
     const { v, actions } = view(true)
     v.reconcile(arrangedInput)

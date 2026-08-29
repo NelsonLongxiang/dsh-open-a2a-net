@@ -91,14 +91,15 @@ export interface SeamPointer {
   target: Element | null
   deltaX?: number
   deltaY?: number
+  deltaMode?: number
   preventDefault(): void
 }
 
-export interface SeamKey { key: string; shiftKey: boolean; altKey?: boolean; target: Element | null; preventDefault(): void }
+export interface SeamKey { key: string; shiftKey: boolean; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; target: Element | null; preventDefault(): void }
 
 type Gesture =
   | { readonly kind: 'none' }
-  | { readonly kind: 'node'; ids: readonly string[]; last: { x: number; y: number }; moved: boolean; el: Element | null; origins: ReadonlyArray<{ team: string; ids: readonly string[] }> }
+  | { readonly kind: 'node'; ids: readonly string[]; clicked: string; last: { x: number; y: number }; moved: boolean; el: Element | null; origins: ReadonlyArray<{ team: string; ids: readonly string[] }> }
   | { readonly kind: 'frame'; name: string; snap: NonNullable<ReturnType<WorldModel['beginFrameDrag']>>; origin: { x: number; y: number }; moved: boolean }
   | { readonly kind: 'pan'; last: { x: number; y: number }; moved: boolean }
   | { readonly kind: 'marquee'; origin: { x: number; y: number }; last: { x: number; y: number }; additive: boolean }
@@ -632,8 +633,15 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       if (problem !== null) { err.textContent = problem; input.focus(); return }
       const name = input.value.trim()
       close()
-      const created = model.getFrame(name) === undefined
-      emitAction({ type: 'create-team', name, ids, created })
+      if (model.getFrame(name) !== undefined) {
+        // Duplicate name: host create is idempotent-ok, but the optimistic
+        // create-team would WIPE the existing roster and overwrite its saved
+        // frame rect. Join instead — same wire result, nothing destroyed.
+        notice('info', `已加入现有团队「${name}」`)
+        emitAction({ type: 'add-member', team: name, ids })
+        return
+      }
+      emitAction({ type: 'create-team', name, ids, created: true })
     }
     okBtn.addEventListener('click', confirm)
     cancelBtn.addEventListener('click', close)
@@ -827,6 +835,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     const nodeEl = target !== null ? target.closest<HTMLElement>('.p-node') : null
     const headEl = target !== null ? target.closest<HTMLElement>('.p-frame-head') : null
     if (nodeEl !== null) {
+      if (ev.button !== 0) return // middle/right on a card: pan/nothing, never a card drag (F3)
       const id = nodeEl.dataset.id ?? ''
       const already = model.isSelected(id)
       if (!already && !ev.shiftKey) model.setSelection([id])
@@ -838,9 +847,10 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
           byTeam.set(m.team, [...(byTeam.get(m.team) ?? []), dragged])
         }
       }
-      gesture = { kind: 'node', ids, last: screenToWorld(vp, p.x, p.y), moved: false, el: nodeEl, origins: [...byTeam].map(([team, tIds]) => ({ team, ids: tIds })) }
+      gesture = { kind: 'node', clicked: id, ids, last: screenToWorld(vp, p.x, p.y), moved: false, el: nodeEl, origins: [...byTeam].map(([team, tIds]) => ({ team, ids: tIds })) }
       nodeEl.classList.add('dragging')
     } else if (headEl !== null) {
+      if (ev.button !== 0) return
       const name = headEl.dataset.frame ?? ''
       const snap = model.beginFrameDrag(name)
       if (snap === undefined) return
@@ -903,9 +913,11 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
 
   function pointerUp(ev: SeamPointer): void {
     if (gesture.kind === 'node') {
-      const id = gesture.ids[0] ?? ''
-      if (!gesture.moved && gesture.ids.length === 1) {
-        // A click (no drag): shift toggles, plain click selects alone.
+      const id = gesture.clicked
+      if (!gesture.moved) {
+        // A click (no drag) is pure selection — NEVER a drop. The F1 fix:
+        // an unmoved multi-select click used to fall through to dropDispatch
+        // and write an entire group's 离队 to the host.
         if (ev.shiftKey) {
           const current = model.selectedIds()
           model.setSelection(current.includes(id) ? current.filter(x => x !== id) : [...current, id])
@@ -944,7 +956,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     } else {
       // Natural scrolling: the viewport follows the wheel (scroll down
       // reveals content further down), same convention as a webpage.
-      vp = panBy(vp, ev.deltaX ?? 0, ev.deltaY ?? 0)
+      // Line-mode wheels (Firefox, deltaMode=1) report ~3 per notch.
+      const line = ev.deltaMode === 1 ? 16 : 1
+      vp = clampViewport(panBy(vp, (ev.deltaX ?? 0) * line, (ev.deltaY ?? 0) * line))
     }
     ev.preventDefault()
     applyViewport()
@@ -965,6 +979,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
 
   function key(ev: SeamKey): void {
     if (dialog !== null) return // modal: the dialog input handles Enter/Esc itself
+    if (ev.ctrlKey || ev.metaKey) return // browser/OS chords stay browser/OS
     if (menu !== null) {
       // The menu owns most keys (its own handler navigates); Escape still
       // closes from here so a seam/keyboard Esc never gets lost.
@@ -1139,6 +1154,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
     for (const team of input.teams) {
       if (model.getFrame(team.name) !== undefined) continue // live rect wins
+      if (pendingTeams.has(team.name)) continue // 散队 in flight: don't resurrect
       const saved = layoutDoc?.frames[team.name]
       if (saved !== undefined) { model.setFrame(team.name, { ...saved }); continue }
       const rects: LayoutRect[] = []
