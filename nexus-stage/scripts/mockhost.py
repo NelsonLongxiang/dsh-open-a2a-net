@@ -39,6 +39,32 @@ state_bytes = fetch_state()
 # The layout store starts absent and remembers saves in memory only - the
 # mock exists to exercise the stage's save loop (lamp ladder), not to be a
 # second implementation of the host's clamp (the stage normalizes on GET).
+# Optional on-disk persistence: set LAYOUT_FILE=<path> so the layout
+# survives mock-host restarts (the in-memory default wipes on exit).
+# Corrupt files are treated as absent - presentation state only.
+LAYOUT_FILE = os.environ.get('LAYOUT_FILE', '')
+
+
+def layout_load():
+    if not LAYOUT_FILE or not os.path.exists(LAYOUT_FILE):
+        return None
+    try:
+        with open(LAYOUT_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:  # noqa: BLE001 - corrupt layout is presentation loss only
+        return None
+
+
+def layout_persist(doc):
+    if not LAYOUT_FILE:
+        return
+    try:
+        with open(LAYOUT_FILE, 'w', encoding='utf-8') as f:
+            f.write('' if doc is None else json.dumps(doc))
+    except OSError:
+        pass
+
+
 layout_store = {'doc': None}
 
 # ── canvas store (PR C): mutable teams, mirrored shapes from src/canvas-store.ts,
@@ -122,7 +148,7 @@ class MockHost(SimpleHTTPRequestHandler):
             else:
                 self._json(build_state(demo))  # regenerated: canvas writes stay visible
         elif path == '/__dsh_a2a/canvas-layout':
-            self._json(json.dumps({'ok': True, 'layout': layout_store['doc']}).encode())
+            self._json(json.dumps({'ok': True, 'layout': layout_load()}).encode())
         else:
             super().do_GET()
 
@@ -156,9 +182,11 @@ class MockHost(SimpleHTTPRequestHandler):
     def _canvas_layout(self, action, body):
         if action == 'reset':
             layout_store['doc'] = None
+            layout_persist(None)
             self._json(b'{"ok":true,"layout":null}')
         elif action == 'save':
             layout_store['doc'] = body.get('layout')
+            layout_persist(layout_store['doc'])
             self._json(json.dumps({'ok': True, 'layout': layout_store['doc']}).encode())
         else:
             self._json(b'{"ok":false,"error":"unknown action"}')
