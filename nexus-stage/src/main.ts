@@ -14,6 +14,7 @@ import { attachLabel, detachLabel, pinInspector, unpinInspector } from './overla
 import { updateCensus } from './census'
 import { createStageKeyboardHandler, wireReducedRendering } from './interaction'
 import { createPlanningView } from './planning-view'
+import { requestedBootMode } from './stage-mode'
 import { createSaveLoop, type LampState } from './layout-wire'
 import { projectFleet } from './reproject'
 import { createCanvasWire } from './canvas-wire'
@@ -386,7 +387,6 @@ function setMode(next: 'scene' | 'plan'): void {
 }
 tabScene.addEventListener('click', () => setMode('scene'))
 tabPlan.addEventListener('click', () => setMode('plan'))
-setMode('scene')
 
 setInterval(() => void cycle(), 5000)
 void cycle()
@@ -395,6 +395,13 @@ void cycle()
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
 let pinned: string | undefined
+
+// Boot deep-link: the A2A panel's 规划 link opens `?mode=plan`; the poll's
+// canvas-face guard flips back to observation on hosts that do not serve it.
+// This must run AFTER `pinned` above — plan mode clears the pin, and a TDZ
+// write here kills the whole boot script (the real-browser GIF recording
+// caught exactly that; unit tests and typecheck cannot see call-site order).
+setMode(requestedBootMode(window.location.search))
 
 renderer.domElement.addEventListener('pointerdown', (ev) => {
   const rect = renderer.domElement.getBoundingClientRect()
