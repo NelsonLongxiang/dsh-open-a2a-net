@@ -146,6 +146,10 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   const clock = deps.now ?? Date.now
   const ac = new AbortController()
   const noticeTimers: Array<ReturnType<typeof setTimeout>> = []
+  /** Active right-button press: hold-drag pans; a clean release opens the
+   *  context menu (the contextmenu event itself is always suppressed). */
+  let rightPress: { x: number; y: number; target: Element | null; moved: boolean } | null = null
+  let suppressNextMenu = false
   const signal = { signal: ac.signal } as AddEventListenerOptions
 
   // ── DOM shell (built once) ──
@@ -858,8 +862,17 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       ev.preventDefault()
       return
     }
-    if (target !== null && (target.closest('button') !== null || target.closest('.p-lamp') !== null || target.closest('.p-status') !== null)) return
     const p = localXY(ev)
+    // 右键按下：按住拖动 = 平移（Figma 惯例），原地抬起 = 上下文菜单。
+    // Pan actually starts on the first move beyond RIGHT_DRAG_THRESHOLD px;
+    // a clean press falls through to the context menu at pointerup.
+    if (ev.button === 2) {
+      rightPress = { x: p.x, y: p.y, target: ev.target, moved: false }
+      ev.preventDefault()
+      try { root.setPointerCapture(ev.pointerId ?? 0) } catch { /* jsdom */ }
+      return
+    }
+    if (target !== null && (target.closest('button') !== null || target.closest('.p-lamp') !== null || target.closest('.p-status') !== null)) return
     const nodeEl = target !== null ? target.closest<HTMLElement>('.p-node') : null
     const headEl = target !== null ? target.closest<HTMLElement>('.p-frame-head') : null
     if ((nodeEl !== null || headEl !== null) && ev.button === 1) {
@@ -911,6 +924,19 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
 
   function pointerMove(ev: SeamPointer): void {
     const p = localXY(ev)
+    if (rightPress !== null) {
+      // Right-hold pan: incremental viewport follow once past the threshold.
+      const dx = p.x - rightPress.x
+      const dy = p.y - rightPress.y
+      if (Math.hypot(dx, dy) > 4) {
+        rightPress.moved = true
+        vp = clampViewport(panBy(vp, dx, dy))
+        rightPress.x = p.x
+        rightPress.y = p.y
+        applyViewport()
+      }
+      return
+    }
     if (gesture.kind === 'node') {
       const w = screenToWorld(vp, p.x, p.y)
       const dx = w.x - gesture.last.x
@@ -951,6 +977,20 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   }
 
   function pointerUp(ev: SeamPointer): void {
+    if (rightPress !== null) {
+      const wasPan = rightPress.moved
+      const pressTarget = rightPress.target
+      const x = rightPress.x
+      const y = rightPress.y
+      rightPress = null
+      if (wasPan) {
+        suppressNextMenu = true
+        deps.onDirty() // the viewport persists with the layout
+      } else if (pressTarget !== null) {
+        contextMenuAt(x, y, pressTarget) // clean right-click: context menu
+      }
+      return
+    }
     if (gesture.kind === 'node') {
       const id = gesture.clicked
       if (!gesture.moved) {
@@ -1137,6 +1177,10 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   root.addEventListener('contextmenu', (ev) => {
     const e = ev as unknown as SeamPointer
     e.preventDefault()
+    // Right-drag pans (suppressNextMenu); a clean right-click opens the
+    // menu programmatically at pointerup. Either way the native menu dies.
+    e.preventDefault()
+    if (suppressNextMenu) { suppressNextMenu = false; return }
     contextMenuAt(e.clientX, e.clientY, e.target)
   }, signal)
 
