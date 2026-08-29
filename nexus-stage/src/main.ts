@@ -268,7 +268,7 @@ async function cycle(): Promise<void> {
   const remoteTeams = ((body as { remote?: ReadonlyArray<{ team?: string; name?: string; via?: string; workspace?: string }> }).remote ?? [])
     .filter(r => r !== null && typeof r === 'object' && typeof (r as { team?: unknown }).team === 'string' && typeof (r as { via?: unknown }).via === 'string')
     .map(r => ({ team: r.team as string, name: r.name, via: r.via as string, workspace: r.workspace }))
-  planning.reconcile({ sessions, teams, peerCount: peers.length, peers, remoteTeams })
+  planning.reconcile({ sessions, teams, peerCount: peers.length, peers, inFlight, remoteTeams })
   canvasFace = body.canvas !== undefined
   tabPlan.style.display = canvasFace ? '' : 'none'
   if (!canvasFace && mode === 'plan') setMode('scene')

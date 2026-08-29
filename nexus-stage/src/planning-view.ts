@@ -12,9 +12,9 @@
  * - card/frame elements are keyed-diffed so focus, the pickup transition,
  *   and an in-flight pointer capture survive a poll; SVG edges carry no
  *   state and are rebuilt wholesale;
- * - the federation overlay (peer chips + activity/federal edges) renders
+ * - the federation overlay (peer cards + activity/federal edges) renders
  *   on every render, OUTSIDE the revision gate, so inFlight ages tick per
- *   poll and the badge column tracks the content bounds;
+ *   poll and the badge cards track the local content bounds;
  * - XSS: session labels/teams are attacker-shaped data and land only via
  *   createElement + textContent.
  *
@@ -555,9 +555,11 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       },
       () => {
         // Contract-robustness: a rejecting action channel must not pin the
-        // team's guard (and its optimistic state) forever.
+        // team's guard (and its optimistic state) forever — and per §3.4
+        // 不吞错, the rollback surfaces to the user.
         pendingRelease(team)
         undo()
+        notice('error', '操作通道异常，已回滚')
         render()
       },
     )
@@ -822,7 +824,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         emitAction({ type: 'add-member', team: f, ids: fresh }) // 入队：不自动离原队（多对多）
         return
       }
-      if (gesture.ids.length === 1) {
+      // Reorder only for LOCAL single-card drops: dropping a peer card is a
+      // position move, never a roster write (P2 from the incremental seat).
+      if (gesture.ids.length === 1 && model.getNode(gesture.clicked)?.remote !== true) {
         // Already a member: an in-frame drop sorts that frame's members by y.
         const current = model.teamMemberIds(f)
         const desired = yOrderedMembers(model, f)
