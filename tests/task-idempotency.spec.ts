@@ -5,7 +5,7 @@
  * 409/-32002, expiry re-opens the window, and every path is total.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -433,5 +433,82 @@ describe('/a2a/query outcome retrieval — hooks and honest negatives', () => {
     expect(restored.query('t-ghost', 'h2')).toEqual({ found: true, status: 'completed', reply: 'real', settledAt: 2 })
     // completed-without-text on disk → pending, never a fabricated empty reply
     expect(restored.query('t-bare', 'h3')).toEqual({ found: true, status: 'pending' })
+  })
+})
+
+describe('idempotency window observability (0.5.36)', () => {
+  function tmpStore(options?: IdempotencyOptions): { store: IdempotencyStore; file: string } {
+    const file = join(mkdtempSync(join(tmpdir(), 'dsh-a2a-idem-')), 'idempotency.json')
+    return { store: new IdempotencyStore(file, options), file }
+  }
+
+  it('counts fresh/replay/conflict cumulatively and derives the outcome split', () => {
+    const { store } = tmpStore()
+    store.claim('t-1', 'h1')            // fresh #1
+    store.claim('t-1', 'h1')            // replay #1
+    store.claim('t-1', 'h2')            // conflict #1
+    store.claim('t-2', 'h2')            // fresh #2
+    store.recordOutcome('t-1', { status: 'completed', reply: 'x' })
+    expect(store.stats()).toMatchObject({
+      window: 2, cap: 256, pending: 1, settled: 1, claimsFresh: 2, replays: 1, conflicts: 1,
+    })
+  })
+
+  it('pre-stats snapshots restore with zeroed counters; persisted counters survive restart', () => {
+    const { store, file } = tmpStore()
+    store.claim('t-1', 'h1')
+    // A pre-stats (v2) snapshot: counters unknown → zero-filled, never fabricated.
+    writeFileSync(file, JSON.stringify({ entries: [{ taskId: 't-1', fingerprint: 'h1', at: Date.now() }] }))
+    const legacy = new IdempotencyStore(file)
+    expect(legacy.stats()).toMatchObject({ claimsFresh: 0, replays: 0, conflicts: 0 })
+    // Persisted counters survive a restart.
+    writeFileSync(file, JSON.stringify({
+      entries: [{ taskId: 't-1', fingerprint: 'h1', at: Date.now() }],
+      stats: { claimsFresh: 5, replays: 2, conflicts: 1 },
+    }))
+    const restored = new IdempotencyStore(file)
+    expect(restored.stats()).toMatchObject({ window: 1, claimsFresh: 5, replays: 2, conflicts: 1 })
+  })
+})
+
+describe('idempotency window observability — R1 regressions', () => {
+  function tmpStore(options?: IdempotencyOptions): { store: IdempotencyStore; file: string } {
+    const file = join(mkdtempSync(join(tmpdir(), 'dsh-a2a-idem-')), 'idempotency.json')
+    return { store: new IdempotencyStore(file, options), file }
+  }
+
+  it('B-1 regression: a TTL-aged entry cannot wipe persisted counters across double restart', () => {
+    const { store, file } = tmpStore()
+    store.claim('aged', 'h1')
+    store.claim('fresh', 'h2')
+    store.recordOutcome('fresh', { status: 'completed', reply: 'x' })
+    // Simulate the aged entry having expired on disk (24h later), counters intact.
+    writeFileSync(file, JSON.stringify({
+      entries: [
+        { taskId: 'aged', fingerprint: 'h1', at: Date.now() - 48 * 3_600_000 },
+        { taskId: 'fresh', fingerprint: 'h2', at: Date.now(), outcome: { status: 'completed', reply: 'x' }, settledAt: Date.now() },
+      ],
+      stats: { claimsFresh: 7, replays: 3, conflicts: 1 },
+    }))
+    // Restart 1: the expired entry prunes on restore — but the prune's
+    // persist must carry the RESTORED counters, not zeros.
+    const boot1 = new IdempotencyStore(file)
+    expect(boot1.stats()).toMatchObject({ claimsFresh: 7, replays: 3, conflicts: 1 })
+    const onDisk = JSON.parse(readFileSync(file, 'utf8')) as { stats?: { claimsFresh: number } }
+    expect(onDisk.stats?.claimsFresh).toBe(7)
+    // Restart 2 (a silent node, no persist-triggering traffic in between):
+    // the evidence must still be there.
+    const boot2 = new IdempotencyStore(file)
+    expect(boot2.stats()).toMatchObject({ claimsFresh: 7, replays: 3, conflicts: 1 })
+  })
+
+  it('malformed stats values degrade to zero, never climb from a poisoned base', () => {
+    const { file } = tmpStore()
+    writeFileSync(file, JSON.stringify({
+      entries: [{ taskId: 't-1', fingerprint: 'h1', at: Date.now() }],
+      stats: { claimsFresh: -7, replays: 1.5, conflicts: 'many' },
+    }))
+    const restored = new IdempotencyStore(file)
+    expect(restored.stats()).toMatchObject({ claimsFresh: 0, replays: 0, conflicts: 0 })
   })
 })

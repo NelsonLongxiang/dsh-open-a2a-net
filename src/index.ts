@@ -26,7 +26,7 @@ import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, SUMMARY_CAP, type ReceiptResolvedInfo } from './task-ledger.ts'
 import { formatReceipt, parseReceipt } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
-import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint } from './idempotency-store.ts'
+import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
@@ -1172,6 +1172,12 @@ export function apply(ctx: Context, config: Config): void {
                 .filter(task => task.status === 'dead')
                 .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt })),
               archivedCount: taskLedger.archive().length,
+              // 0.5.36 observability: the idempotency window aggregate —
+              // window occupancy, outcome split, and cumulative claim-verdict
+              // counters (the data the UNIQUE-ization decision waits on).
+              // Read-only; no fingerprints cross here (they are /a2a/query's
+              // only auth material).
+              idempotency: idempotencyStore.stats(),
             })
             res.writeHead(200, {
               'Content-Type': 'application/json',
@@ -1997,6 +2003,11 @@ ${message}`
           const idemVerdict = idempotencyStore.claim(taskId, idemFingerprint)
           if (idemVerdict !== 'fresh') {
             const replay = idemVerdict === 'replay'
+            // 0.5.36 observability: conflict = caller bug (graph-loop prompt
+            // minting / key management) — warn loudly so it is never misread
+            // as the normal-depth-defense zero-traffic shape. Replays stay
+            // silent by design.
+            if (!replay) logger.warn(`a2a: idempotency CONFLICT on task ${taskId.slice(0, 80)} — same key reused with a different payload (caller bug; never auto-retry)`)
             const payload = JSON.stringify({
               error: replay ? 'duplicate task id within the idempotency window' : 'task id reused with a different payload',
               code: replay ? WIRE_ERROR_REPLAY_REJECTED : WIRE_ERROR_IDEMPOTENCY_CONFLICT,
@@ -3240,6 +3251,8 @@ ${message}`
     description:
       'Read-only A2A network health: the tracked peer fleet with quality scores, routes currently in flight '
       + '(who is waiting on whom), and the recent routing activity ring (inbound and outbound outcomes). '
+      + 'Includes the idempotency window occupancy (claims, replays, conflicts) behind the UNIQUE-ization '
+      + 'traffic watch. '
       + 'Use it to observe an ongoing collaboration or diagnose delivery instead of re-routing.',
     parameters: {},
     output: {
@@ -3288,6 +3301,20 @@ ${message}`
               },
             },
           },
+          idempotency: {
+            type: 'object',
+            additionalProperties: false,
+            required: true,
+            properties: {
+              window: { type: 'number', required: true },
+              cap: { type: 'number', required: true },
+              pending: { type: 'number', required: true },
+              settled: { type: 'number', required: true },
+              claimsFresh: { type: 'number', required: true },
+              replays: { type: 'number', required: true },
+              conflicts: { type: 'number', required: true },
+            },
+          },
         },
       },
       render: (_args, value) => [{
@@ -3297,6 +3324,7 @@ ${message}`
           ...value.inFlight.map((route: { team: string; peer: string }) => `  → ${route.team} via ${route.peer === 'local' ? 'this host' : route.peer}`),
           `Peers (${String(value.peers.length)}):`,
           ...value.peers.map((peer: { url: string; score?: number }) => `  ${peer.url}${typeof peer.score === 'number' ? ` (score ${String(Math.round(peer.score))})` : ''}`),
+          `Idempotency window: ${String(value.idempotency.window)}/${String(value.idempotency.cap)} (pending ${String(value.idempotency.pending)}, settled ${String(value.idempotency.settled)}) — claims ${String(value.idempotency.claimsFresh)}, replays ${String(value.idempotency.replays)}, conflicts ${String(value.idempotency.conflicts)}`,
           ...(value.activity.length === 0 ? [] : ['Recent routes:']),
           ...[...value.activity].reverse().slice(0, 10).map((entry: { dir: string; team: string; ok: boolean }) => `  ${entry.dir === 'in' ? '←' : '→'} ${entry.team} ${entry.ok ? 'ok' : 'failed'}`),
         ].join('\n'),
@@ -3308,6 +3336,7 @@ ${message}`
       peers: { url: string; score?: number }[]
       inFlight: { team: string; peer: string; startedAt: number }[]
       activity: RouteActivityEntry[]
+      idempotency: IdempotencyStats
     }> => {
       a2aJoinGateRefusal(exec)
       return {
@@ -3315,6 +3344,7 @@ ${message}`
         peers: peerStore.list().map(url => ({ url, score: peerStore.score(url) })),
         inFlight: [...inFlightRoutes.values()].map(route => ({ team: route.team, peer: route.peer, startedAt: route.startedAt })),
         activity: recentActivity.slice(),
+        idempotency: idempotencyStore.stats(),
       }
     },
   }))

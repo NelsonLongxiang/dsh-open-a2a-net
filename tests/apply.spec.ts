@@ -2476,3 +2476,49 @@ describe('a2a plugin archive pruning (archived sessions leave the network)', () 
     await ctx.fiber.dispose()
   })
 })
+
+describe('idempotency window observability (0.5.36)', () => {
+  it('the state route exposes the idempotency aggregate; counters move on real traffic', async () => {
+    const { ctx, port } = await mountJoinHarness()
+    try {
+      const fetchState = async () => (await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as {
+        idempotency?: { window: number; cap: number; pending: number; settled: number; claimsFresh: number; replays: number; conflicts: number }
+      }).idempotency
+      // Fresh boot: empty window, zeroed cumulative counters.
+      await expect(fetchState()).resolves.toMatchObject({
+        window: 0, cap: 256, pending: 0, settled: 0, claimsFresh: 0, replays: 0, conflicts: 0,
+      })
+      const pinned = JSON.stringify({ team: 'dsh/agent-1', message: 'pin me', caller_session: 'sess-1', task_id: 'obs-task' })
+      const p1 = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: pinned })
+      expect(p1.status).toBe(200)
+      const p2 = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: pinned })
+      expect(p2.status).toBe(409)
+      // Tampered payload on the same key: the conflict verdict counts too.
+      const p3 = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: 'dsh/agent-1', message: 'tampered payload', caller_session: 'sess-1', task_id: 'obs-task' }),
+      })
+      expect(p3.status).toBe(409)
+      await expect(fetchState()).resolves.toMatchObject({
+        window: 1, cap: 256, claimsFresh: 1, replays: 1, conflicts: 1,
+      })
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('a2a_status carries the idempotency segment', async () => {
+    const { ctx } = await mountJoinHarness()
+    try {
+      const status = await ctx.tools.get('a2a_status')?.execute({}, runContext()) as {
+        ok: boolean
+        idempotency?: { window: number; cap: number; pending: number; settled: number; claimsFresh: number; replays: number; conflicts: number }
+      }
+      expect(status.ok).toBe(true)
+      expect(status.idempotency).toMatchObject({ window: 0, cap: 256, pending: 0, settled: 0, claimsFresh: 0, replays: 0, conflicts: 0 })
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+})
