@@ -240,7 +240,7 @@ async function cycle(): Promise<void> {
   // Real in-flight routes: each pending outbound route draws an amber edge
   // from its team hub to the matching peer mesh (both tagged in topology).
   // Unmatched rows — a team without a live hub, an unknown peer — skip.
-  const inFlightRows = ((body as { inFlight?: ReadonlyArray<{ team: string; peer: string }> }).inFlight ?? [])
+  const inFlightRows = useMock ? [] : inFlight
   for (const route of inFlightRows) {
     const hub = teamGroup.children.find(h => (h.userData as { team?: string } | undefined)?.team === route.team)
     const peer = peerGroup.children.find(p => (p.userData as { peer?: string } | undefined)?.peer === route.peer)

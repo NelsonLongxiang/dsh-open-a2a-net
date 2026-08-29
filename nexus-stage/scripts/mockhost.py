@@ -59,7 +59,8 @@ def layout_persist(doc):
     if not LAYOUT_FILE:
         return
     try:
-        with open(LAYOUT_FILE, 'w', encoding='utf-8') as f:
+        fd = os.open(LAYOUT_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
             f.write('' if doc is None else json.dumps(doc))
     except OSError:
         pass
@@ -148,7 +149,8 @@ class MockHost(SimpleHTTPRequestHandler):
             else:
                 self._json(build_state(demo))  # regenerated: canvas writes stay visible
         elif path == '/__dsh_a2a/canvas-layout':
-            self._json(json.dumps({'ok': True, 'layout': layout_load()}).encode())
+            doc = layout_load() if LAYOUT_FILE else layout_store['doc']
+            self._json(json.dumps({'ok': True, 'layout': doc}).encode())
         else:
             super().do_GET()
 
