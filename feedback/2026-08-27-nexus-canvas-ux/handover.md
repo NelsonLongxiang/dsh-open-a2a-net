@@ -1,13 +1,28 @@
 # 交接文档 · 规划画布（PR B/C/D + 收尾）· 2026-08-29
 
-> 状态：**待确认**。本文档未经提交/推送；确认后由协调席 commit + push（建议归档于本目录）。
+> 基准 HEAD：`fa02172` @ 2026-08-29 深夜。本文档已提交并推送至 `origin/feat/nexus-planning-b`。**纪律：定稿后每再提交一次，必须同步追加 §0 增量或更新本基准行。**
+
+## 0. 交接后增量（基准 efdf6b0 → fa02172 · 2026-08-29 深夜回填）
+
+初稿以 `efdf6b0`（领先 42 commits）为基准；定稿提交 `66a57e8` 之后又落 5 个提交，接手者以本节为准：
+
+| 提交 | 内容 |
+|---|---|
+| `66a57e8` | peer cards v1 —— peers 加入统一节点模型（本文档随此提交落库） |
+| `5854a89` | 增量复审 P1/P2 —— peer drop/add-member 过滤、lastPlacements 存储、杂项 |
+| `f5ac795` | 移除误入库的调试探针；dist 经 verify 工具链重建 |
+| `d5a2071` | 二轮深审发现 —— inFlight 透传、重排守卫、README 边界 |
+| `9f17d9b` | contextMenuAt 远端卡守卫 + federation spec ptr helper |
+| `fa02172` | 右键按住拖拽平移 2D 画布；纯右击保留菜单 |
+
+运行事实（2026-08-29 深夜实测）：8780 mockhost 仍在运行；生产宿主 `3080/__dsh_a2a_nexus/` 200 可用，`/__dsh_a2a_canvas/` 404——安装版未含画布（A 面冻结于 0.5.32），合并+解冻前画布只能经 8780 查看。
 
 ## 1. 分支与 PR 状态
 
 | 项 | 值 |
 |---|---|
-| 分支 | `feat/nexus-planning-b`（已推送 Gitee，HEAD `efdf6b0`） |
-| 领先 master | 42 commits |
+| 分支 | `feat/nexus-planning-b`（已推送 Gitee，HEAD `fa02172`） |
+| 领先 master | 48 commits（含 §0 增量 6 个） |
 | 工作树 | 干净（4 个已知未跟踪项见 §6） |
 | 门禁 | `pnpm verify` exit 0（typecheck×2 → build → 根套件 417 → build-layout 门禁 → verify:nexus 自举/构建/子包 66/dist diff 门禁） |
 | 测试 | 根 417 passed + 2 skipped；子包 66/66 |
@@ -48,7 +63,7 @@
 
 | 项 | 说明 |
 |---|---|
-| **C:\tmp 误删事故** | 猎虫席子代理清理时误删用户既有 `C:\tmp`（8/4–23 工作产物）。恢复窗口：提权 `vssadmin list shadows /for=c:` 或 Recuva/winfr；尽量减少 C 盘写入。协调席已披露 |
+| **C:\tmp 误删事故** | 猎虫席子代理清理时误删用户既有 `C:\tmp`（8/4–23 工作产物）。恢复窗口：提权 `vssadmin list shadows /for=c:` 或 Recuva/winfr；尽量减少 C 盘写入。恢复决策树与命令备于本目录 `ctmp-recovery.md`。预防纪律：清理只碰本会话自建路径，共享根目录禁 `rm -rf`；删除两段式——先移隔离区（如 `D:\tmp-quarantine\<日期>`）观察后再清。协调席已披露 |
 | 8780 mockhost | 协调席启动的测试服务（后台任务 `bp3ndi2f8`）仍在运行；布局存**内存**，重启即清；`LAYOUT_FILE` 环境变量可持久化（卡3）。生产验证请用真宿主 |
 | 多标签页布局并发 | last-write-wins，互相覆盖——场景分析与候选方案见 `multi-tab-analysis.md`（rev 乐观锁为契约 v2 候选） |
 | 10KB 请求体上限 | 布局文档 256 节点 ≈ 23KB > host readJsonBody 10KB 上限——约 147 joined 会话后保存永久失败。**host 侧问题**，需与 readJsonBody 上限同源裁定，非画布侧可修 |
