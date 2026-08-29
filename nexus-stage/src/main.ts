@@ -104,6 +104,8 @@ scene.add(teamGroup, nodeGroup, peerGroup, lineGroup)
 // One shared material for every membership edge: the visibility contract is
 // constant, so allocation happens once instead of once per poll cycle.
 const edgesMat = new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.6 })
+/** Shared amber material for in-flight routes (mirrors drawActivity). */
+const routeMat = new THREE.LineBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.65 })
 
 // ─── Types re-exported from topology ──
 
@@ -234,6 +236,18 @@ async function cycle(): Promise<void> {
   peerGroup.clear()
   drawMembership(teams, meshesById, lineGroup, teamGroup)
   drawPeers(peers, peerGroup, lineGroup)
+
+  // Real in-flight routes: each pending outbound route draws an amber edge
+  // from its team hub to the matching peer mesh (both tagged in topology).
+  // Unmatched rows — a team without a live hub, an unknown peer — skip.
+  const inFlightRows = ((body as { inFlight?: ReadonlyArray<{ team: string; peer: string }> }).inFlight ?? [])
+  for (const route of inFlightRows) {
+    const hub = teamGroup.children.find(h => (h.userData as { team?: string } | undefined)?.team === route.team)
+    const peer = peerGroup.children.find(p => (p.userData as { peer?: string } | undefined)?.peer === route.peer)
+    if (hub === undefined || peer === undefined) continue
+    const geo = new THREE.BufferGeometry().setFromPoints([hub.position.clone(), peer.position.clone()])
+    lineGroup.add(new THREE.Line(geo, routeMat))
+  }
 
   updateCensus(renderer.domElement, sessions, teams, peers)
   // Reduced-motion contract: a settled cycle is an external render driver —

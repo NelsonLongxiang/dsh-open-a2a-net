@@ -105,6 +105,7 @@ export function drawMembership(
     centroid.divideScalar(members.length)
     const hub = new THREE.Mesh(new THREE.OctahedronGeometry(0.35, 0), new THREE.MeshBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.5 }))
     hub.position.copy(centroid)
+    hub.userData = { team: team.name }
     teamGroup.add(hub)
     for (const m of members) {
       const g = new THREE.BufferGeometry().setFromPoints([centroid, meshesById.get(m.id)!.position.clone()])
@@ -125,16 +126,19 @@ export function drawActivity(pairs: ReadonlyArray<readonly [string, string]>, me
 }
 
 /** Peer federation nodes (dashed link from origin). */
-export function drawPeers(peers: ReadonlyArray<{ url: string }>, peerGroup: THREE.Group, lineGroup: THREE.Group): void {
-  for (const p of peers) {
+export function drawPeers(peers: ReadonlyArray<{ url: string; score?: number }>, peerGroup: THREE.Group, lineGroup: THREE.Group): void {
+  peers.forEach((p, i) => {
+    const host = p.url.replace(/^\w+:\/\//, '')
     const mesh = new THREE.Mesh(new THREE.OctahedronGeometry(1.3, 0), new THREE.MeshStandardMaterial({ color: 0x6366f1, emissive: 0x6366f1, emissiveIntensity: 0.5, transparent: true, opacity: 0.75 }))
-    mesh.position.set(-20, 14, -12)
-    mesh.userData = { label: 'Peer: ' + p.url.slice(7, 36), kind: 'peer' }
+    // Spread peers along an arc instead of stacking every octahedron at one
+    // point (all-identical positions made N peers look like one).
+    mesh.position.set(-20 - i * 10, 14 + (i % 2) * 6, -12 - i * 6)
+    mesh.userData = { label: 'Peer: ' + host, kind: 'peer', peer: host }
     peerGroup.add(mesh)
     const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, -4, 0), mesh.position.clone()])
     const dash = new THREE.LineDashedMaterial({ color: 0x6366f1, dashSize: 1.2, gapSize: 0.8, transparent: true, opacity: 0.35 })
     const line = new THREE.Line(g, dash)
     line.computeLineDistances()
     lineGroup.add(line)
-  }
+  })
 }
