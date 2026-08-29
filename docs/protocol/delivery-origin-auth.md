@@ -1,8 +1,17 @@
 # Protocol: Delivery Origin Authentication — Minimal OriginClaim Envelope
 
-- **Status**: proposed (work-order P5 / ROUND-2 Cluster C1)
+- **Status**: proposed (work-order P5 / ROUND-2 Cluster C1); field evidence
+  2026-08-30 confirms tier three is still unenforced (see below)
 - **Owner**: dsh-open-a2a-net (protocol face)
 - **Gate**: hub-strategy GA precondition — see §6
+
+> **Field evidence (2026-08-30, defect card F4).** An unjoined session on a
+> production home hand-POSTed `wait:false` deliveries — no credentials — to a
+> loopback bind and across hosts to `192.168.3.157:13080`; both answered
+> `routed/delivered/consumed:true`. Until the envelope lands, the honest
+> mitigations are: set `apiKey` (header-authenticates control **and** direct
+> routes), or bind to loopback only. Nodes seeded with non-loopback peers and
+> an empty key now log a boot warning (`directDeliveryExposure`).
 
 ## 1. Motivation
 
