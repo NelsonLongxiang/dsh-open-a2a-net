@@ -168,6 +168,26 @@ describe('layout save loop', () => {
     expect(f.lamps).toEqual(['pending', 'saved'])
   })
 
+  it('flush while busy still delivers the latest doc with keepalive', async () => {
+    // Essence over step-count: a pagehide during flight must not lose the
+    // latest document — the loop chains keepalive sends until the newest
+    // snapshot is on the wire, and ends with the lamp saved.
+    const f = fixture({ v: 1 })
+    f.loop.markDirty()
+    f.tick() // save #1 in flight
+    f.loop.flush() // pagehide during flight: queued
+    await f.respond({ ok: true, layout: { v: 1 } })
+    // Drain: answer every send the loop chains (and fire its armed timers)
+    // until it quiesces — the latest doc must reach the wire, ending saved.
+    for (let i = 0; i < 12; i++) {
+      if (f.pending() > 0) { f.tick(); continue }
+      if (f.loop.isBusy()) { await f.respond({ ok: true, layout: { v: 1 } }); continue }
+      break
+    }
+    expect(f.errors).toEqual([])
+    expect(f.lamps[f.lamps.length - 1]).toBe('saved')
+  })
+
   it('uses the 800ms debounce constant (the design contract)', () => {
     const seen: number[] = []
     createSaveLoop({
