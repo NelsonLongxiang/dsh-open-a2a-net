@@ -119,7 +119,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
   }
 }
 
-async function mount(): Promise<{ port: number; dispose: () => Promise<void> }> {
+async function mount(overrides: Partial<Config> = {}): Promise<{ port: number; registry: FakeAgentsService; dispose: () => Promise<void> }> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
@@ -137,10 +137,11 @@ async function mount(): Promise<{ port: number; dispose: () => Promise<void> }> 
     ctx.emit('agent/status', { agent: liveAgent, status: 'idle' })
   })
   registry.agent = liveAgent
-  apply(ctx, makeConfig({ announce: true, session: 'peer-node', dshHome: mkdtempSync(join(tmpdir(), 'dsh-a2a-idem-host-')) }))
+  apply(ctx, makeConfig({ announce: true, session: 'peer-node', dshHome: mkdtempSync(join(tmpdir(), 'dsh-a2a-idem-host-')), ...overrides }))
   const port = (ctx as unknown as { webServer: WebServer }).webServer.port
   return {
     port,
+    registry,
     dispose: async () => {
       await ctx.fiber.dispose()
     },
@@ -162,6 +163,9 @@ describe('/a2a/direct idempotency enforcement', () => {
       expect(parsed.code).toBe(WIRE_ERROR_REPLAY_REJECTED)
       expect(parsed.replay).toBe(true)
       expect(parsed.task_id).toBe('pinned-task')
+      // Byte-level shape pin (frozen surface): the whole 409 body, not just
+      // its fields — any shape drift must fail here first.
+      expect(parsed).toEqual({ error: 'duplicate task id within the idempotency window', code: WIRE_ERROR_REPLAY_REJECTED, task_id: 'pinned-task', replay: true })
     } finally {
       await dispose()
     }
@@ -331,5 +335,103 @@ describe('/a2a/query outcome retrieval', () => {
     } finally {
       await dispose()
     }
+  })
+})
+
+
+describe('/a2a/query outcome retrieval — hooks and honest negatives', () => {
+  function query(port: number, body: Record<string, unknown>): Promise<{ status: number; json: () => Promise<Record<string, unknown>> }> {
+    return globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  }
+
+  it('a delivered-but-unsettled noWait round answers pending — the honest registered debt', async () => {
+    // noWait to a live team: delivered with no settlement hook on this path
+    // (the receipt routes to the caller, not back here) — the claim row
+    // stays pending and the endpoint says so, never a fabricated product.
+    const { port, dispose } = await mount()
+    try {
+      const fingerprint = peerPayloadFingerprint({ caller: 'idem-runner', message: 'async work', noWait: true, team: 'dsh' })
+      const direct = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: 'dsh', message: 'async work', caller_session: 'idem-runner', task_id: 'async-task', wait: false }),
+      })
+      expect((await direct.json() as { delivered?: boolean }).delivered).toBe(true)
+      await expect(query(port, { task_id: 'async-task', fingerprint }).then(r => r.json()))
+        .resolves.toEqual({ found: true, status: 'pending', task_id: 'async-task' })
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('a wedged session answers a flush-timeout PLACEHOLDER — the placeholder never enters the ledger (gap-B bar, reply channel)', async () => {
+    const { port, registry, dispose } = await mount({ flushTimeoutMs: 80 })
+    try {
+      // Wedge the session: the steer produces no assistant message and no
+      // idle flush, so the sync round resolves with the host's timeout
+      // placeholder prose.
+      const agent = registry.agent as unknown as { steer: (msg: string) => void } | undefined
+      if (agent !== undefined) agent.steer = () => {}
+      const fingerprint = peerPayloadFingerprint({ caller: 'idem-runner', message: 'wedged work', noWait: false, team: 'dsh' })
+      const direct = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: 'dsh', message: 'wedged work', caller_session: 'idem-runner', task_id: 'wedged-task' }),
+      })
+      const body = await direct.json() as { result?: { text?: string } }
+      expect(body.result?.text).toContain('no final reply within the configured window')
+      await expect(query(port, { task_id: 'wedged-task', fingerprint }).then(r => r.json()))
+        .resolves.toEqual({ found: true, status: 'pending', task_id: 'wedged-task' })
+    } finally {
+      await dispose()
+    }
+  }, 10_000)
+
+  it('a receipt line records the claimed key\'s outcome (hook 3, summary — never the envelope vocabulary)', async () => {
+    const { port, dispose } = await mount()
+    try {
+      const fingerprint = peerPayloadFingerprint({ caller: 'idem-runner', message: 'async work', noWait: true, team: 'dsh' })
+      await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: 'dsh', message: 'async work', caller_session: 'idem-runner', task_id: 'receipted-task', wait: false }),
+      })
+      await expect(query(port, { task_id: 'receipted-task', fingerprint }).then(r => r.json()))
+        .resolves.toEqual({ found: true, status: 'pending', task_id: 'receipted-task' })
+      // The receipt routes back through this node: its one-line summary —
+      // not the envelope's controlled vocabulary — becomes the outcome.
+      await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: 'dsh', message: '[A2A receipt] task receipted-task everything settled fine on the peer', caller_session: 'idem-runner' }),
+      })
+      await expect(query(port, { task_id: 'receipted-task', fingerprint }).then(r => r.json()))
+        .resolves.toMatchObject({ found: true, status: 'completed', reply: expect.stringContaining('settled fine') })
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('store: an oversized failure prose truncates with the flag; a text-less status degrades to pending on restore', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'dsh-a2a-idem-')), 'idempotency.json')
+    const store = new IdempotencyStore(file)
+    store.claim('t-err', 'h1')
+    store.recordOutcome('t-err', { status: 'failed', error: 'e'.repeat(70_000) })
+    const failed = store.query('t-err', 'h1')
+    expect(failed).toMatchObject({ status: 'failed', truncated: true })
+    expect(failed.found === true && failed.status === 'failed' && failed.error.length === OUTCOME_TEXT_CAP).toBe(true)
+
+    store.claim('t-ghost', 'h2')
+    store.recordOutcome('t-ghost', { status: 'completed', reply: 'real' })
+    writeFileSync(file, JSON.stringify({ entries: [
+      { taskId: 't-err', fingerprint: 'h1', at: Date.now(), outcome: { status: 'failed', error: 'e'.repeat(70_000), truncated: true }, settledAt: 1 },
+      { taskId: 't-ghost', fingerprint: 'h2', at: Date.now(), outcome: { status: 'completed', reply: 'real' }, settledAt: 2 },
+      { taskId: 't-bare', fingerprint: 'h3', at: Date.now(), outcome: { status: 'completed' }, settledAt: 3 },
+    ] }))
+    const restored = new IdempotencyStore(file)
+    expect(restored.query('t-err', 'h1')).toMatchObject({ status: 'failed', truncated: true })
+    expect(restored.query('t-ghost', 'h2')).toEqual({ found: true, status: 'completed', reply: 'real', settledAt: 2 })
+    // completed-without-text on disk → pending, never a fabricated empty reply
+    expect(restored.query('t-bare', 'h3')).toEqual({ found: true, status: 'pending' })
   })
 })

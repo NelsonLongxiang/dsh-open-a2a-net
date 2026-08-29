@@ -780,8 +780,10 @@ describe('bridgeFace queryOutcome (W7 slice 2)', () => {
     const face = m.face() as { queryOutcome: (request: Record<string, unknown>) => Promise<Record<string, unknown> | undefined> }
     const answer = await face.queryOutcome({ taskId: 'wb-q5', handle: 'peer-team', message: 'hello peer', delivery: 'sync' })
     expect(answer).toEqual({ found: true, status: 'failed', error: 'the prior attempt exploded at the peer', settledAt: '2026-08-29T01:00:00.000Z' })
-    // Read-only fan-out: the query dialed both candidates but never /a2a/direct.
-    expect(dead.seen.every(entry => !('message' in entry) || entry.wait === undefined)).toBe(true)
+    // Read-only fan-out: the query dialed both candidates and every dial
+    // carried only {task_id, fingerprint} — never the message payload.
+    expect(dead.seen.length).toBeGreaterThan(0)
+    expect(dead.seen.every(entry => typeof entry.fingerprint === 'string' && !('message' in entry))).toBe(true)
   })
 
   it('prefers payload-mismatch over unknown-task when candidates disagree', async () => {
@@ -793,4 +795,61 @@ describe('bridgeFace queryOutcome (W7 slice 2)', () => {
     await expect(face.queryOutcome({ taskId: 'wb-q6', handle: 'peer-team', message: 'hello peer', delivery: 'sync' }))
       .resolves.toEqual({ found: false, reason: 'payload-mismatch' })
   })
+})
+
+describe('inbound outcome ledger (W7 slice 2 hooks)', () => {
+  function query(port: number, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json() as Promise<Record<string, unknown>>)
+  }
+
+  it('hook 2: a settled detached bridge round records its reply as the claimed key\'s outcome', async () => {
+    const m = await mount({ nativeTeamsInbound: true })
+    mounted.push(m.dispose)
+    m.agents.agents.push(makeAgent('session-main1'))
+    m.registry.claims.set('freight-team', { plane: 'local', localLabel: 'team' })
+    m.registry.answer = 'detached work done'
+    const fingerprint = peerPayloadFingerprint({ caller: 'peer-x', message: 'async job', noWait: true, team: 'freight-team' })
+    const res = await postJson(m.port, '/a2a/direct', { team: 'freight-team', message: 'async job', caller_session: 'peer-x', task_id: 'hook-2a', wait: false })
+    expect((await res.json() as { delivered?: boolean }).delivered).toBe(true)
+    // The detached round settles a beat later; the ledger follows.
+    let answer: Record<string, unknown> = {}
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 50))
+      answer = await query(m.port, { task_id: 'hook-2a', fingerprint })
+      if (answer.status === 'completed') break
+    }
+    expect(answer).toMatchObject({ found: true, status: 'completed', reply: 'detached work done' })
+  })
+
+  it('hook 2: a failed detached round records the failure prose', async () => {
+    const m = await mount({ nativeTeamsInbound: true })
+    mounted.push(m.dispose)
+    m.agents.agents.push(makeAgent('session-main1'))
+    m.registry.claims.set('freight-team', { plane: 'local', localLabel: 'team' })
+    m.registry.fail = true
+    const fingerprint = peerPayloadFingerprint({ caller: 'peer-x', message: 'doomed job', noWait: true, team: 'freight-team' })
+    await postJson(m.port, '/a2a/direct', { team: 'freight-team', message: 'doomed job', caller_session: 'peer-x', task_id: 'hook-2b', wait: false })
+    let answer: Record<string, unknown> = {}
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 50))
+      answer = await query(m.port, { task_id: 'hook-2b', fingerprint })
+      if (answer.status === 'failed') break
+    }
+    expect(answer).toMatchObject({ found: true, status: 'failed', error: expect.stringContaining('failed') })
+  })
+
+  it('hook 1: a bridge round past the reply window keeps the ledger pending — the DELIVERED placeholder never books (gap-B bar)', async () => {
+    const m = await mount({ nativeTeamsInbound: true, nativeRoundWaitMs: 150 })
+    mounted.push(async () => { await m.dispose() })
+    m.agents.agents.push(makeAgent('session-main1'))
+    m.registry.claims.set('freight-team', { plane: 'local', localLabel: 'team' })
+    m.registry.hang = true
+    const fingerprint = peerPayloadFingerprint({ caller: 'peer-x', message: 'slow round', noWait: false, team: 'freight-team' })
+    const res = await postJson(m.port, '/a2a/direct', { team: 'freight-team', message: 'slow round', caller_session: 'peer-x', task_id: 'hook-1a' })
+    const body = await res.json() as { task_status?: string; result?: { text?: string } }
+    expect(body.task_status).toBe('TASK_STATE_DELIVERED')
+    expect(body.result?.text).toContain('still running past the reply window')
+    // The placeholder prose rode the wire — but the ledger says pending.
+    await expect(query(m.port, { task_id: 'hook-1a', fingerprint })).resolves.toEqual({ found: true, status: 'pending', task_id: 'hook-1a' })
+  }, 15_000)
 })

@@ -24,7 +24,7 @@ import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, SUMMARY_CAP, type ReceiptResolvedInfo } from './task-ledger.ts'
-import { formatReceipt } from './receipt.ts'
+import { formatReceipt, parseReceipt } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint } from './idempotency-store.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
@@ -584,21 +584,24 @@ export function apply(ctx: Context, config: Config): void {
    * @param message - the inbound or relayed message text.
    */
   function settleAndAnnounce(message: string): void {
-    const resolved = taskLedger.resolveFromMessage(message)
-    if (resolved === undefined) return
     // W7 slice-2 hook 3: a receipt that correlates an id THIS node's
-    // idempotency ledger claimed records the receipt line as that key's
-    // outcome. Receipt lines are one-line free text by contract, so the
-    // recorded status is 'completed' — the receipt reports, the adopting
-    // side's postCondition judges success or failure. First-write wins
-    // inside the store, so a late receipt never overwrites a precise
-    // sync-hook record.
-    if (resolved.taskId !== '') {
-      const line = resolved.outcome ?? resolved.summary
-      if (line !== undefined && line !== '') {
-        idempotencyStore.recordOutcome(resolved.taskId, { status: 'completed', reply: line })
+    // idempotency ledger claimed records the receipt's human line as that
+    // key's outcome. Parsed DIRECTLY off the receipt codec — a claimed key
+    // usually is NOT in the owed book (the claim lives on the receiving
+    // side, the owed book on the dispatcher side), so the ledger's own
+    // correlation would never reach it. `summary` is the one-line text;
+    // the envelope's controlled-vocabulary outcome is never a product and
+    // must not be recorded as one. First-write wins inside the store, so a
+    // late receipt never overwrites a precise sync-hook record.
+    const parsed = parseReceipt(message)
+    if (parsed !== null && parsed.taskId !== '') {
+      const line = parsed.summary.trim()
+      if (line !== '') {
+        idempotencyStore.recordOutcome(parsed.taskId, { status: 'completed', reply: line.slice(0, 200) })
       }
     }
+    const resolved = taskLedger.resolveFromMessage(message)
+    if (resolved === undefined) return
     try {
       ctx.emit('a2a/receipt-resolved', resolved)
     } catch (error) {
@@ -1627,7 +1630,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param answer - how the waiter's reply is delivered.
    * @returns the registered waiter (for callers that may retract it).
    */
-  function registerFinalWaiter(agent: Agent, answer: (text: string) => void): FinalWaiter {
+  function registerFinalWaiter(agent: Agent, answer: (text: string, placeholder?: boolean) => void): FinalWaiter {
     const key = String(agent.id)
     const waiter: FinalWaiter = { answer, sinceEvents: agent.session.events.length }
     waiter.timeoutDisposer = armFlushTimeout(key, waiter)
@@ -1644,7 +1647,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param taskId - the correlation key the steered receipt header carries.
    */
   async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string): Promise<
-    { ok: true; reply: string; status?: string; bridge?: 'native-teams' } | { ok: false; error: string }
+    { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean } | { ok: false; error: string }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
@@ -1695,11 +1698,11 @@ export function apply(ctx: Context, config: Config): void {
    * @returns the agent's final reply, or the explicit failure.
    */
   function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string): Promise<
-    { ok: true; reply: string } | { ok: false; error: string }
+    { ok: true; reply: string; placeholder?: boolean } | { ok: false; error: string }
   > {
     return new Promise((resolve) => {
-      const waiter = registerFinalWaiter(agent, (text) => {
-        resolve({ ok: true, reply: text })
+      const waiter = registerFinalWaiter(agent, (text, placeholder) => {
+        resolve({ ok: true, reply: text, ...(placeholder === true ? { placeholder: true } : {}) })
       })
       // The header names the sender first: `caller` is the routing node's
       // own label (the session that issued the route), while `team` is this
@@ -2125,13 +2128,16 @@ ${message}`
             // W7 slice-2 hook 1: record the settled outcome on the claim row.
             // Ruling: a non-COMPLETED status (TASK_STATE_DELIVERED — the
             // bridge-round deadline placeholder, ABORTED_WAIT likewise) is
-            // NOT a settled outcome: the row stays pending, because an
-            // adopted replay must never settle a node on placeholder text
-            // (the exact hazard W7 gap B closed, barred from resurrecting
-            // through the outcome ledger).
+            // NOT a settled outcome, and neither is a host-authored
+            // placeholder on the reply channel (flush timeout, dead session)
+            // — the row stays pending, because an adopted replay must never
+            // settle a node on placeholder text (the exact hazard W7 gap B
+            // closed, barred from resurrecting through the outcome ledger).
             if (taskId !== '') {
               if (!outcome.ok) {
                 idempotencyStore.recordOutcome(taskId, { status: 'failed', error: outcome.error })
+              } else if (outcome.placeholder === true) {
+                // placeholder prose never enters the ledger
               } else if (outcome.status === undefined || outcome.status === 'TASK_STATE_COMPLETED') {
                 idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: outcome.reply })
               }
@@ -3154,6 +3160,10 @@ ${message}`
       let mismatch = false
       let answeredUnknown = false
       for (const candidate of candidates) {
+        // A caller cancel mid-fan-out ends the probe: answers collected
+        // before the abort must not aggregate into a verdict the caller
+        // already walked away from.
+        if (abort.aborted) return undefined
         // Recompute the fingerprint EXACTLY as the submit pass computed it:
         // the same shared implementation, and the same per-candidate async
         // gate (delivery async × that peer's declared capability). Sync
@@ -3473,7 +3483,9 @@ ${message}`
    * message was steered, so the flush reads only fresh assistant output.
    */
   interface FinalWaiter {
-    readonly answer: (text: string) => void
+    /** @param placeholder - true when the text is a host-authored
+     * stand-in (flush timeout, dead session), NOT the session's product. */
+    readonly answer: (text: string, placeholder?: boolean) => void
     readonly sinceEvents: number
     timeoutDisposer?: () => void
   }
@@ -3485,7 +3497,7 @@ ${message}`
       const kept = entries.filter(entry => entry !== waiter)
       if (kept.length === 0) pendingFinals.delete(agentId)
       else pendingFinals.set(agentId, kept)
-      waiter.answer('The DSH session produced no final reply within the configured window.')
+      waiter.answer('The DSH session produced no final reply within the configured window.', true)
     }, config.flushTimeoutMs)
   }
 
@@ -3496,7 +3508,7 @@ ${message}`
     if (agent === undefined) {
       for (const entry of entries) {
         entry.timeoutDisposer?.()
-        entry.answer('The target DSH session is no longer live.')
+        entry.answer('The target DSH session is no longer live.', true)
       }
       pendingFinals.delete(agentId)
       return

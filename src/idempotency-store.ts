@@ -138,11 +138,15 @@ function capOutcome(outcome: TaskOutcome): TaskOutcome {
     : { ...outcome, error: outcome.error!.slice(0, OUTCOME_TEXT_CAP), truncated: true }
 }
 
-/** A corrupt persisted outcome degrades to no-outcome (pending), never blocks restore. */
+/** A corrupt persisted outcome degrades to no-outcome (pending), never
+ * blocks restore. A status without its text degrades too: a query answering
+ * `completed` with an empty reply would be a lie, not a degraded truth. */
 function restoreOutcome(raw: unknown): TaskOutcome | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined
   const candidate = raw as Partial<TaskOutcome>
   if (candidate.status !== 'completed' && candidate.status !== 'failed') return undefined
+  if (candidate.status === 'completed' && typeof candidate.reply !== 'string') return undefined
+  if (candidate.status === 'failed' && typeof candidate.error !== 'string') return undefined
   return {
     status: candidate.status,
     ...(typeof candidate.reply === 'string' ? { reply: candidate.reply } : {}),
