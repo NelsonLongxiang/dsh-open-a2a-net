@@ -250,6 +250,41 @@ describe('context menu', () => {
     expect(v.root.querySelector('.p-menu')).toBeNull()
   })
 
+  it('queued same-team actions keep the guard up until BOTH settle (the race)', async () => {
+    const { v, actions, settle } = view(true)
+    v.reconcile(arrangedInput)
+    const a = v.root.querySelector<HTMLElement>('.p-node[data-id="a"]')!
+    const edgeForA = (): boolean =>
+      Array.from(v.root.querySelectorAll('svg .e-member')).some(l => l.getAttribute('x2') === '0')
+    // Gesture 1: drag a out to blank -> remove-member (in flight)
+    drag(v, a, { x: 0, y: 0 }, { x: 1500, y: 800 })
+    // Gesture 2 (same team, queued): drag a back into the frame -> add-member
+    drag(v, a, { x: 1500, y: 800 }, { x: 10, y: 10 })
+    expect(actions).toHaveLength(2)
+    // A poll arrives BEFORE either settles, carrying the old payload:
+    v.reconcile(arrangedInput)
+    expect(edgeForA()).toBe(true) // refcount guard: a's optimistic edge survives
+    await settle(true) // op 1 settles
+    v.reconcile(arrangedInput)
+    expect(edgeForA()).toBe(true) // op 2 still in flight: guard must stay up
+    await settle(true) // op 2 settles
+    v.reconcile(arrangedInput)
+    expect(edgeForA()).toBe(true)
+  })
+
+  it('Esc after a drill-down restores focus to the anchored card', () => {
+    const { v } = view(true)
+    v.reconcile(arrangedInput)
+    const a = v.root.querySelector<HTMLElement>('.p-node[data-id="a"]')!
+    a.focus()
+    v.seam.contextMenu(ptr({ target: a, clientX: 10, clientY: 10 }))
+    const join = Array.from(v.root.querySelectorAll<HTMLButtonElement>('[role=menuitem]'))
+      .find(b => b.textContent!.includes('加入团队'))!
+    join.click() // drill down (the root close consumed the anchor)
+    v.seam.key(key({ key: 'Escape', target: v.root })) // close from the drilled level
+    expect(document.activeElement).toBe(a) // re-seeded anchor: canvas stays keyboard-alive
+  })
+
   it('frame-head context menu offers 解散团队 and emits remove-team', () => {
     const { v, actions } = view()
     v.reconcile(arrangedInput)
@@ -319,23 +354,64 @@ describe('drop targeting', () => {
   })
 })
 
+describe('Alt+arrows priority reorder', () => {
+  function singleTeamView() {
+    const v3 = view(true)
+    v3.v.reconcile({
+      sessions: [
+        { id: 'a', label: 'A', team: 'x/a', joined: true, live: true },
+        { id: 'b', label: 'B', team: 'x/b', joined: true, live: true },
+        { id: 'c', label: 'C', team: 'x/c', joined: true, live: true },
+        { id: 'd', label: 'D', team: 'x/d', joined: true, live: true },
+      ],
+      teams: [{ name: '甲', team: 'dsh/canvas/jia', members: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }],
+      peerCount: 0,
+    })
+    return v3
+  }
+  const focusCard = (v: ReturnType<typeof view>['v'], id: string): void => {
+    v.root.querySelector<HTMLElement>(`.p-node[data-id="${id}"]`)!.focus()
+  }
+
+  it('Alt+ArrowUp promotes the focused member one slot', () => {
+    const v3 = singleTeamView()
+    focusCard(v3.v, 'b')
+    v3.v.seam.key(key({ key: 'ArrowUp', altKey: true, target: v3.v.root, preventDefault: () => {} }))
+    expect(v3.actions[0]!.type).toBe('reorder')
+    expect((v3.actions[0] as { team: string }).team).toBe('甲')
+  })
+
+  it('boundaries emit nothing (first up, last down)', () => {
+    const v3 = singleTeamView()
+    focusCard(v3.v, 'a')
+    v3.v.seam.key(key({ key: 'ArrowUp', altKey: true, target: v3.v.root, preventDefault: () => {} }))
+    expect(v3.actions).toHaveLength(0) // already first
+    focusCard(v3.v, 'c')
+    v3.v.seam.key(key({ key: 'ArrowDown', altKey: true, target: v3.v.root, preventDefault: () => {} }))
+    expect(v3.actions).toHaveLength(0) // already last
+  })
+})
+
 describe('notices', () => {
   it('keeps at most three and auto-dismisses after 4s', () => {
     vi.useFakeTimers()
-    const { v } = view()
-    v.notice('info', 'one')
-    v.notice('info', 'two')
-    v.notice('info', 'three')
-    v.notice('error', 'four — host text')
-    const stack = v.root.querySelector('.p-notice-stack')!
-    expect(stack.childElementCount).toBe(3)
-    expect(stack.textContent).not.toContain('one')
-    const err = stack.querySelectorAll('.p-notice.error')
-    expect(err).toHaveLength(1)
-    expect(err[0]!.getAttribute('role')).toBe('alert')
-    vi.advanceTimersByTime(4100)
-    expect(stack.childElementCount).toBe(0)
-    vi.useRealTimers()
+    try {
+      const { v } = view()
+      v.notice('info', 'one')
+      v.notice('info', 'two')
+      v.notice('info', 'three')
+      v.notice('error', 'four — host text')
+      const stack = v.root.querySelector('.p-notice-stack')!
+      expect(stack.childElementCount).toBe(3)
+      expect(stack.textContent).not.toContain('one')
+      const err = stack.querySelectorAll('.p-notice.error')
+      expect(err).toHaveLength(1)
+      expect(err[0]!.getAttribute('role')).toBe('alert')
+      vi.advanceTimersByTime(4100)
+      expect(stack.childElementCount).toBe(0)
+    } finally {
+      vi.useRealTimers() // no fake-timer leak into the rest of the file
+    }
   })
 })
 

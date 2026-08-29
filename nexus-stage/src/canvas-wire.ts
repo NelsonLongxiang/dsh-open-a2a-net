@@ -35,7 +35,10 @@ export interface CanvasWireDeps {
 
 export interface CanvasWire {
   /** create → add-member per id, serial, first failure stops. */
-  createTeam(name: string, ids: readonly string[]): Promise<boolean>
+  /** `created`: the team did not exist model-side before this action — a
+   *  first-add failure would then leave a ghost EMPTY team on the host,
+   *  which is compensated with a best-effort remove. */
+  createTeam(name: string, ids: readonly string[], created?: boolean): Promise<boolean>
   addMembers(team: string, ids: readonly string[]): Promise<boolean>
   removeMembers(team: string, ids: readonly string[]): Promise<boolean>
   /** Pre-computed remove/add roster ops (from canvas-ops.reorderOps). */
@@ -107,10 +110,19 @@ export function createCanvasWire(deps: CanvasWireDeps): CanvasWire {
   }
 
   return {
-    createTeam(name, ids) {
+    createTeam(name, ids, created = false) {
       return enqueue(name, async () => {
         if (!(await raw({ action: 'create', name }))) return false
-        return serial({ action: 'add-member', name }, ids)
+        for (let i = 0; i < ids.length; i++) {
+          if (!(await raw({ action: 'add-member', name, id: ids[i]! }))) {
+            // A failure on the FIRST add of a team this action created leaves
+            // a ghost EMPTY team on the host — compensate with a remove.
+            // Later failures keep whatever members genuinely joined.
+            if (created && i === 0) await raw({ action: 'remove', name })
+            return false
+          }
+        }
+        return true
       })
     },
     addMembers(team, ids) {

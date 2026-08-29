@@ -102,7 +102,9 @@ export function activityEdges(
   for (const row of inFlight) {
     const anchor = anchors.get(row.team)
     if (anchor === undefined) continue
-    const badge = peers.find(p => p.url.endsWith(row.peer))
+    // Match by parsed host:port — a bare endsWith would let 'badhost:port'
+    // satisfy a 'host:port' route.
+    const badge = peers.find(p => { try { return new URL(p.url).host === row.peer } catch { return false } })
     if (badge === undefined) continue
     const elapsed = Math.max(0, Math.round((now - row.startedAt) / 1000))
     out.push({

@@ -153,6 +153,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   world.className = 'p-world'
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
   svg.setAttribute('class', 'p-edges')
+  // NOTE: the svg is intentionally NOT aria-hidden — its .edge-label texts
+  // carry the route ages that reduced-motion users rely on.
   // Stable layers: frames must ALWAYS paint (and lose hit-testing) below
   // cards, regardless of which keyed diff created its element first — a
   // frame created after the cards used to sit on top of them and swallow
@@ -162,6 +164,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   frameLayer.className = 'p-layer p-frames'
   const nodeLayer = document.createElement('div')
   nodeLayer.className = 'p-layer p-nodes'
+  nodeLayer.setAttribute('role', 'listbox')
+  nodeLayer.setAttribute('aria-multiselectable', 'true')
+  nodeLayer.setAttribute('aria-label', '会话节点')
   world.append(svg, frameLayer, nodeLayer)
 
   const marquee = document.createElement('div')
@@ -188,12 +193,20 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     mkButton('建队', '组成团队（G）：先框选至少 2 个节点', () => startCreateFromSelection()),
   )
   const lamp = document.createElement('span')
+  lamp.setAttribute('aria-live', 'polite')
   lamp.className = 'p-lamp'
   const lampDot = document.createElement('i')
   const lampText = document.createElement('span')
   lampText.textContent = '布局'
   lamp.append(lampDot, lampText)
   lamp.addEventListener('click', () => { if (lamp.classList.contains('error')) deps.onLampClick() }, signal)
+  lamp.addEventListener('keydown', (ev) => {
+    const e = ev as KeyboardEvent
+    if ((e.key === 'Enter' || e.key === ' ') && lamp.classList.contains('error')) {
+      e.preventDefault()
+      deps.onLampClick()
+    }
+  }, signal)
   toolbar.appendChild(lamp)
 
   const status = document.createElement('div')
@@ -281,6 +294,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         head.className = 'p-frame-head'
         head.dataset.frame = name
         head.tabIndex = 0 // keyboard: Shift+F10 menu, Delete 散队
+        head.setAttribute('role', 'button')
+        head.setAttribute('aria-haspopup', 'menu')
+        head.setAttribute('aria-label', `团队框 ${name}（拖动整组，回车菜单）`)
         const title = document.createElement('span')
         title.className = 'ttl'
         const cnt = document.createElement('span')
@@ -358,6 +374,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       el.style.top = `${r.y}px`
       el.classList.toggle('cold', !n.live)
       el.classList.toggle('selected', model.isSelected(n.id))
+      el.setAttribute('aria-selected', String(model.isSelected(n.id)))
       const nmText = n.name ?? n.label
       const nmEl = el.querySelector<HTMLElement>('.nm-text')!
       if (nmEl.textContent !== nmText) nmEl.textContent = nmText
@@ -509,15 +526,24 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   }
 
   // ── canvas write actions: optimistic apply + team-scoped undo ──
-  const pendingTeams = new Set<string>()
+  // Per-team REFERENCE COUNT: two queued actions on one team keep the guard
+  // up until BOTH settle (a Set deleted per action let a mid-queue poll wipe
+  // the second action's optimistic membership).
+  const pendingTeams = new Map<string, number>()
+  const pendingAdd = (team: string): void => { pendingTeams.set(team, (pendingTeams.get(team) ?? 0) + 1) }
+  const pendingRelease = (team: string): void => {
+    const n = (pendingTeams.get(team) ?? 0) - 1
+    if (n <= 0) pendingTeams.delete(team)
+    else pendingTeams.set(team, n)
+  }
 
   function emitAction(a: CanvasAction): void {
     const undo = applyAction(model, a)
     const team = actionTeam(a)
-    pendingTeams.add(team)
+    pendingAdd(team)
     render()
     void deps.onCanvasAction(a).then(ok => {
-      pendingTeams.delete(team)
+      pendingRelease(team)
       if (!ok) undo() // host refused: roll this action's optimistic delta back
       render()
     })
@@ -567,7 +593,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     const title = document.createElement('div')
     title.id = 'p-dialog-title'
     title.className = 'p-dialog-title'
-    title.textContent = `组建团队（${ids.length} 个节点，框选顺序即优先级）`
+    title.textContent = `组建团队（${ids.length} 个节点，自上而下即优先级）`
     const input = document.createElement('input')
     input.className = 'p-dialog-input'
     input.maxLength = 40
@@ -615,6 +641,19 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       if (e.key === 'Enter') { e.preventDefault(); confirm() }
       if (e.key === 'Escape') { e.preventDefault(); close() }
     })
+    // Focus trap (aria-modal must not be a false promise): Tab cycles the
+    // three focusables; Esc anywhere in the panel cancels.
+    wrap.addEventListener('keydown', (ev) => {
+      const e = ev as KeyboardEvent
+      if (e.key !== 'Tab') return
+      e.preventDefault()
+      const focusables = Array.from(panel.querySelectorAll<HTMLElement>('input, button'))
+      const idx = focusables.indexOf(document.activeElement as HTMLElement)
+      const next = e.shiftKey
+        ? focusables[(idx - 1 + focusables.length) % focusables.length]
+        : focusables[(idx + 1) % focusables.length]
+      next?.focus()
+    }, signal)
     dialog = { wrap, restoreFocus, ids }
     input.focus()
   }
@@ -646,6 +685,14 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   }
 
   function openMenu(x: number, y: number, target: MenuTarget, level: 'root' | 'join' | 'leave' | 'promote' = 'root'): void {
+    // Re-seed the anchor after a drill-down: closeMenu focuses whatever this
+    // menu was anchored to, or keyboard focus falls to body and the canvas
+    // goes deaf.
+    if (menuAnchor === null) {
+      menuAnchor = target.kind === 'node'
+        ? nodeLayer.querySelector<HTMLElement>(`.p-node[data-id='${target.id}']`) ?? null
+        : frameLayer.querySelector<HTMLElement>(`.p-frame-head[data-frame='${target.name}']`) ?? null
+    }
     menu?.remove()
     menuTarget = target
     menuLevel = level
@@ -762,6 +809,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
 
   function pointerDown(ev: SeamPointer): void {
     if (viewW === 0) { viewW = root.clientWidth; viewH = root.clientHeight }
+    if (dialog !== null) { ev.preventDefault(); return } // modal: no gestures behind the dialog
     const target = ev.target as Element | null
     // Context-menu dismissal: the first pointerdown outside an open menu
     // closes it and is swallowed; a press on the menu's own chrome is
@@ -1124,9 +1172,19 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     if (state === 'pending') lamp.classList.add('pending')
     if (state === 'saved') lamp.classList.add('saved')
     if (state === 'error') lamp.classList.add('error')
+    // Error state is a keyboard-reachable retry control (review P0-2).
+    if (state === 'error') {
+      lamp.tabIndex = 0
+      lamp.setAttribute('role', 'button')
+      lamp.setAttribute('aria-label', '布局保存失败，按回车重试')
+    } else {
+      lamp.removeAttribute('tabindex')
+      lamp.removeAttribute('role')
+      lamp.removeAttribute('aria-label')
+    }
     const text = state === 'pending' ? '布局待保存…'
       : state === 'saved' ? `布局已保存 ${savedAt ?? ''}`.trimEnd()
-      : state === 'error' ? '保存失败 · 点击重试'
+      : state === 'error' ? '保存失败 · 回车重试'
       : '布局'
     lampText.textContent = text
   }

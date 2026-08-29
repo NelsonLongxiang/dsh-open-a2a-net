@@ -14,14 +14,20 @@
 #dsh-plan{
   /* primitive */
   --uupm-ink-0:#dde3f0; --uupm-ink-1:#7a86a0; --uupm-bg-0:#060a12; --uupm-bg-1:#0d1322; --uupm-bg-2:#131b2e;
-  --uupm-accent:#8B5CF6; --uupm-live:#4ade80; --uupm-cold:#4a5568; --uupm-edge-member:#22d3ee;
-  --uupm-warn:#f59e0b; --uupm-error:#ef4444; --uupm-indigo:#6366f1;
+  --uupm-accent:#8B5CF6; --uupm-live:#4ade80; --uupm-cold:#64748b; --uupm-edge-member:#22d3ee;
+  --uupm-warn:#f59e0b; --uupm-error:#ef4444;
+  /* accent washes (hover 8% / active 12-18% / tint 5-10%), one definition each */
+  --uupm-wash-5:rgba(139,92,246,.05); --uupm-wash-8:rgba(139,92,246,.08);
+  --uupm-wash-12:rgba(139,92,246,.12); --uupm-wash-15:rgba(139,92,246,.15);
+  --uupm-wash-18:rgba(139,92,246,.18); --uupm-indigo:#6366f1;
   /* semantic */
   --surface:var(--uupm-bg-1); --ink:var(--uupm-ink-0); --ink-muted:var(--uupm-ink-1);
   --accent:var(--uupm-accent); --edge-live:var(--uupm-live); --edge-cold:var(--uupm-cold);
   --federal:var(--uupm-indigo);
   /* component */
-  --card-bg:var(--surface); --card-line:rgba(122,134,160,.28); --toolbar-bg:rgba(13,19,34,.92);
+  --card-bg:var(--surface); --card-line:#5c6680; --card-line-hover:#7a86a0; --toolbar-bg:rgba(13,19,34,.92);
+  --grid-dot:rgba(122,134,160,.22); --scrim:rgba(6,10,18,.6);
+  --error-ink:#fecaca; --error-panel:#2a0d10f2; --federal:#6366f1;
 }
 
 #dsh-plan{
@@ -33,7 +39,7 @@
 
 /* ── dot-grid world layer: screen-fixed, positioned by JS from the viewport ── */
 #dsh-plan .p-grid{position:absolute; inset:0; z-index:0; pointer-events:none;
-  background-image:radial-gradient(circle, rgba(122,134,160,.22) 1px, transparent 1px);
+  background-image:radial-gradient(circle, var(--grid-dot) 1px, transparent 1px);
   background-size:24px 24px; background-position:0 0}
 
 /* ── transformed world container ── */
@@ -51,12 +57,13 @@
 
 /* ── team frame ── */
 #dsh-plan .p-frame{position:absolute; border:1px solid var(--frame-line,#8B5CF6); border-radius:10px;
-  background:var(--frame-bg,rgba(139,92,246,.05)); min-width:120px; min-height:60px}
+  background:var(--frame-bg,var(--uupm-wash-5)); min-width:120px; min-height:60px}
 #dsh-plan .p-frame-head{position:absolute; top:-13px; left:50%; transform:translateX(-50%);
   height:24px; padding:0 10px; border-radius:6px; display:flex; gap:8px; align-items:center;
   background:var(--uupm-bg-2); border:1px solid var(--frame-line,#8B5CF6);
   font-size:12px; font-weight:600; letter-spacing:.02em; white-space:nowrap; cursor:grab}
 #dsh-plan .p-frame-head:active{cursor:grabbing}
+#dsh-plan .p-frame-head:hover{border-color:var(--card-line-hover)}
 #dsh-plan .p-frame-head .cnt{color:var(--ink-muted); font-weight:400}
 #dsh-plan .p-frame-head .route{font-size:10.5px; color:var(--ink-muted)}
 
@@ -65,7 +72,7 @@
   background:var(--card-bg); border:1px solid var(--card-line); border-left:3px solid var(--edge-live);
   border-radius:8px; cursor:grab; user-select:none;
   transition:border-color 120ms cubic-bezier(0.2,0,0,1), transform 120ms cubic-bezier(0.2,0,0,1)}
-#dsh-plan .p-node:hover{border-color:rgba(122,134,160,.55)}
+#dsh-plan .p-node:hover{border-color:var(--card-line-hover)}
 #dsh-plan .p-node:active{cursor:grabbing}
 #dsh-plan .p-node:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
 #dsh-plan .p-node.selected{outline:2px solid var(--accent); outline-offset:1px}
@@ -82,7 +89,7 @@
 
 /* ── marquee ── */
 #dsh-plan .p-marquee{position:absolute; z-index:2; display:none; pointer-events:none;
-  border:1px solid var(--accent); background:rgba(139,92,246,.08)}
+  border:1px solid var(--accent); background:var(--uupm-wash-8)}
 
 /* ── HUD ── */
 #dsh-plan .p-toolbar{position:absolute; top:16px; left:16px; z-index:3; display:flex; gap:6px; align-items:center;
@@ -97,7 +104,7 @@
 #dsh-plan .p-toolbar button{background:transparent; color:var(--ink); border:1px solid var(--card-line); border-radius:6px;
   padding:4px 10px; font:inherit; cursor:pointer}
 #dsh-plan .p-toolbar button:hover{border-color:var(--accent)}
-#dsh-plan .p-toolbar button:active{background:rgba(139,92,246,.15)}
+#dsh-plan .p-toolbar button:active{background:var(--uupm-wash-15)}
 #dsh-plan .p-toolbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
 #dsh-plan .p-zoom{min-width:44px; text-align:center; font-size:11px; color:var(--ink-muted)}
 #dsh-plan .p-lamp{display:flex; align-items:center; gap:6px; font-size:11px; color:var(--ink-muted); padding:0 6px}
@@ -126,7 +133,7 @@
 }
 
 /* ── PR C: drop-target highlight, context menu, name dialog, notices ── */
-#dsh-plan .p-frame.drop-target{border-color:var(--accent); border-width:2px; background:rgba(139,92,246,.10)}
+#dsh-plan .p-frame.drop-target{border-color:var(--accent); border-width:2px; background:var(--uupm-wash-12)}
 #dsh-plan .p-frame-head:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
 
 /* ── PR D: federation overlay — peer badges, activity/federal edges, status fly ── */
@@ -147,20 +154,20 @@
 @keyframes p-activity-flow{to{stroke-dashoffset:-28}}
 #dsh-plan .p-status{cursor:pointer}
 #dsh-plan .p-status:hover{border-color:var(--accent)}
-#dsh-plan .p-status:active{background:rgba(139,92,246,.12)}
+#dsh-plan .p-status:active{background:var(--uupm-wash-12)}
 #dsh-plan .p-status:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
 
 #dsh-plan .p-menu{position:fixed; z-index:5; min-width:170px; display:grid; padding:4px; gap:2px;
   background:var(--toolbar-bg); border:1px solid var(--card-line); border-radius:8px}
 #dsh-plan .p-menu [role=menuitem]{background:transparent; color:var(--ink); border:1px solid transparent;
   border-radius:6px; padding:6px 10px; font:inherit; text-align:left; cursor:pointer; white-space:nowrap}
-#dsh-plan .p-menu [role=menuitem]:hover{border-color:var(--card-line); background:rgba(139,92,246,.10)}
-#dsh-plan .p-menu [role=menuitem]:active{background:rgba(139,92,246,.18)}
+#dsh-plan .p-menu [role=menuitem]:hover{border-color:var(--card-line); background:var(--uupm-wash-8)}
+#dsh-plan .p-menu [role=menuitem]:active{background:var(--uupm-wash-18)}
 #dsh-plan .p-menu [role=menuitem]:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
 #dsh-plan .p-menu [role=menuitem][aria-disabled=true]{color:var(--ink-muted); cursor:not-allowed}
 
 #dsh-plan .p-dialog{position:absolute; inset:0; z-index:6; display:grid; place-items:center;
-  background:rgba(6,10,18,.6)}
+  background:var(--scrim)}
 #dsh-plan .p-dialog-panel{min-width:300px; padding:14px 16px; display:grid; gap:10px;
   background:var(--uupm-bg-2); border:1px solid var(--card-line); border-radius:10px}
 #dsh-plan .p-dialog-title{font-weight:600; font-size:12.5px; color:var(--ink)}
@@ -173,7 +180,7 @@
 #dsh-plan .p-dialog-row button{background:transparent; color:var(--ink); border:1px solid var(--card-line);
   border-radius:6px; padding:5px 12px; font:inherit; cursor:pointer}
 #dsh-plan .p-dialog-row button:hover{border-color:var(--accent)}
-#dsh-plan .p-dialog-row button:active{background:rgba(139,92,246,.15)}
+#dsh-plan .p-dialog-row button:active{background:var(--uupm-wash-15)}
 #dsh-plan .p-dialog-row button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
 
 #dsh-plan .p-notice-stack{position:absolute; bottom:52px; left:50%; transform:translateX(-50%); z-index:5;
@@ -181,7 +188,14 @@
 #dsh-plan .p-notice{max-width:60ch; padding:7px 12px; font-size:12px; color:var(--ink);
   background:var(--toolbar-bg); border:1px solid var(--card-line); border-radius:8px; white-space:nowrap;
   overflow:hidden; text-overflow:ellipsis}
-#dsh-plan .p-notice.error{color:#fecaca; border-color:var(--uupm-error); background:#2a0d10f2}
+#dsh-plan .p-notice.error{color:var(--error-ink); border-color:var(--uupm-error); background:var(--error-panel)}
+
+/* ── fault badge (unscoped: lives on #app, outside #dsh-plan's token scope —
+   carries its own component tokens; font follows the design-system mono stack) ── */
+.nexus-fault{position:fixed;top:10px;right:10px;max-width:48ch;padding:6px 10px;
+  border:1px solid #ef4444;background:#2a0d10cc;color:#fecaca;
+  font:12px/1.5 ui-monospace,Cascadia,Consolas,monospace;border-radius:4px;
+  display:none;z-index:9;pointer-events:none}
 
 /* ── mode tabs (unscoped: visible in BOTH stage modes, so it cannot live
    inside #dsh-plan's token scope — it carries its own component tokens,
@@ -192,5 +206,6 @@
 .nexus-modes button{background:transparent; color:#7a86a0; border:1px solid transparent; border-radius:6px;
   padding:4px 12px; font:inherit; cursor:pointer}
 .nexus-modes button:hover{color:#dde3f0; border-color:rgba(122,134,160,.28)}
+.nexus-modes button:active{background:rgba(139,92,246,.15)}
 .nexus-modes button[aria-selected=true]{color:#dde3f0; border-color:#8b5cf6; background:rgba(139,92,246,.12)}
 .nexus-modes button:focus-visible{outline:2px solid #8b5cf6; outline-offset:1px}

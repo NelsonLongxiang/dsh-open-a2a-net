@@ -19,7 +19,7 @@ export type RosterOp = { op: 'remove' | 'add'; id: string }
 
 /** The five user-facing write actions (one per design.md §3.3 row). */
 export type CanvasAction =
-  | { type: 'create-team'; name: string; ids: readonly string[] }
+  | { type: 'create-team'; name: string; ids: readonly string[]; /** true when the model had no such team before this action (a serial failure then leaves a ghost EMPTY team on the host — the wire compensates with a remove). */ created?: boolean }
   | { type: 'add-member'; team: string; ids: readonly string[] }
   | { type: 'remove-member'; team: string; ids: readonly string[] }
   | { type: 'remove-team'; name: string }

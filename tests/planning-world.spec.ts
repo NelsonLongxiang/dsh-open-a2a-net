@@ -71,6 +71,7 @@ describe('group drag', () => {
     // Copies, not references - applyFrameDrag mutates the live geometry.
     const before = { ...m.getFrame('选品')! }
     const s1 = { ...m.getNode('s1')! }
+    const s3 = { ...m.getNode('s3')! } // non-member: must stay put
     const snap = m.beginFrameDrag('选品')!
     m.applyFrameDrag(snap, 30, -20)
     const after = m.getFrame('选品')!
@@ -78,8 +79,9 @@ describe('group drag', () => {
     expect(after.y).toBeCloseTo(before.y - 20, 9)
     expect(m.getNode('s1')!.x).toBeCloseTo(s1.x + 30, 9)
     expect(m.getNode('s1')!.y).toBeCloseTo(s1.y - 20, 9)
-    // The non-member node stays put.
-    expect(m.getNode('s3')).toBeDefined()
+    // The non-member node's position is untouched by the group drag.
+    expect(m.getNode('s3')!.x).toBeCloseTo(s3.x, 9)
+    expect(m.getNode('s3')!.y).toBeCloseTo(s3.y, 9)
   })
 
   it('repeated applies from the same snapshot do not drift', () => {

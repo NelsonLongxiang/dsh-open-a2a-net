@@ -100,6 +100,37 @@ describe('planning view DOM', () => {
     expect(s1.classList.contains('selected')).toBe(false)
   })
 
+  it('paint order: the frames layer precedes the nodes layer (hit-test ruling)', () => {
+    const { v } = view()
+    v.reconcile({ sessions, teams, peerCount: 0 })
+    const frames = v.root.querySelector('.p-frames')!
+    const nodes = v.root.querySelector('.p-nodes')!
+    // FOLLOWING means frames precede nodes in DOM order = frames paint
+    // below cards = cards win hit-testing (the aa455f5 ruling).
+    expect(frames.compareDocumentPosition(nodes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('a poll never snaps a dragged card back (position survives reconcile)', () => {
+    const { v } = view()
+    v.reconcile({ sessions, teams, peerCount: 0 })
+    const el = v.root.querySelector<HTMLElement>('.p-node[data-id="s1"]')!
+    const left0 = parseFloat(el.style.left)
+    const top0 = parseFloat(el.style.top)
+    v.seam.pointerDown(ptr({ target: el, clientX: 100, clientY: 100 }))
+    v.seam.pointerMove(ptr({ target: el, clientX: 180, clientY: 130 }))
+    v.seam.pointerUp(ptr({ target: el, clientX: 180, clientY: 130 }))
+    v.reconcile({ sessions, teams, peerCount: 0 }) // a poll lands right after the drag
+    expect(parseFloat(el.style.left)).toBe(left0 + 80)
+    expect(parseFloat(el.style.top)).toBe(top0 + 30)
+  })
+
+  it('Ctrl+wheel zooms in on scroll-up', () => {
+    const { v } = view()
+    const t = (): string => v.root.querySelector<HTMLElement>('.p-world')!.style.transform
+    v.seam.wheel({ button: 0, shiftKey: false, ctrlKey: true, clientX: 400, clientY: 300, target: v.root, deltaY: -100, preventDefault: () => {} })
+    expect(t()).toContain('scale(1.')
+  })
+
   it('keyed diff: a re-rendered card keeps element identity across polls', () => {
     const { v } = view()
     v.reconcile({ sessions, teams, peerCount: 0 })

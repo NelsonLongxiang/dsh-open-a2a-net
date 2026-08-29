@@ -36,11 +36,7 @@ app.appendChild(renderer.domElement)
 // distinguishable from "unreachable". The lifecycle lives in ./fault so the
 // unit tests can pin it without a DOM.
 const faultBadge = document.createElement('div')
-faultBadge.style.cssText =
-  'position:fixed;top:10px;right:10px;max-width:48ch;padding:6px 10px;' +
-  'border:1px solid #ef4444;background:#2a0d0dcc;color:#fecaca;' +
-  'font:12px/1.5 "JetBrains Mono",monospace;border-radius:4px;' +
-  'display:none;z-index:9;pointer-events:none'
+faultBadge.className = 'nexus-fault'
 app.appendChild(faultBadge)
 const { fault, clear: clearFault } = createFaultReporter(
   {
@@ -176,7 +172,18 @@ async function cycle(): Promise<void> {
   // Retire departed nodes first — mesh and CSS2D label share one lifetime.
   const liveIds = new Set(sessions.map(s => s.id))
   for (const [sid, mesh] of [...meshesById]) {
-    if (!liveIds.has(sid)) { const lbl = labelByNode.get(sid); if (lbl) detachLabel(lbl); nodeGroup.remove(mesh); meshesById.delete(sid) }
+    if (!liveIds.has(sid)) {
+      const lbl = labelByNode.get(sid)
+      if (lbl) detachLabel(lbl)
+      // Group.remove only unlinks: geometry and material must be disposed
+      // explicitly, or GPU buffers accumulate for the page's lifetime.
+      disposeGeometries([mesh])
+      mesh.material instanceof THREE.Material && mesh.material.dispose()
+      nodeGroup.remove(mesh)
+      meshesById.delete(sid)
+      sessionById.delete(sid)
+      sessionTeam.delete(sid)
+    }
   }
 
   // Seat un-seated nodes (position arrives in the reprojection pass below).
@@ -274,7 +281,7 @@ const canvasWire = createCanvasWire({
 
 function runCanvasAction(a: CanvasAction): Promise<boolean> {
   switch (a.type) {
-    case 'create-team': return canvasWire.createTeam(a.name, a.ids)
+    case 'create-team': return canvasWire.createTeam(a.name, a.ids, a.created)
     case 'add-member': return canvasWire.addMembers(a.team, a.ids)
     case 'remove-member': return canvasWire.removeMembers(a.team, a.ids)
     case 'remove-team': return canvasWire.removeTeam(a.name)
@@ -341,6 +348,9 @@ function setMode(next: 'scene' | 'plan'): void {
   mode = next
   tabScene.setAttribute('aria-selected', String(next === 'scene'))
   tabPlan.setAttribute('aria-selected', String(next === 'plan'))
+  // The hidden 3D canvas keeps tabindex=0 otherwise: Tab would focus an
+  // invisible surface and Enter would pin the 3D inspector over planning.
+  renderer.domElement.tabIndex = next === 'scene' ? 0 : -1
   if (next === 'plan') {
     // 3D chrome must not leak onto the planning canvas: the inspector is
     // appended to #app last, and CSS2DRenderer stamps each label with its
@@ -354,6 +364,7 @@ function setMode(next: 'scene' | 'plan'): void {
   } else {
     labelRenderer.domElement.style.display = ''
     planning.deactivate()
+    tabScene.focus() // focus must not fall to body after leaving planning
   }
 }
 tabScene.addEventListener('click', () => setMode('scene'))
