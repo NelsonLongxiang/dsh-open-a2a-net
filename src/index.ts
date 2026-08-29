@@ -2978,10 +2978,26 @@ ${message}`
           // the task twice; a conflict is a caller bug (same key, different
           // payload) and must surface as a failure, not a redirect.
           if (result.code === WIRE_ERROR_REPLAY_REJECTED) {
-            return { kind: 'accepted', taskId, acceptedAt: new Date().toISOString(), contextId: request.contextId ?? '' }
+            // async: acceptance IS the honest outcome — the submission is
+            // fire-and-forget and the prior attempt settles via the receipt
+            // contract.
+            if (request.delivery === 'async') {
+              return { kind: 'accepted', taskId, acceptedAt: new Date().toISOString(), contextId: request.contextId ?? '' }
+            }
+            // sync (W7 recovery table, S1): a sync caller cannot consume an
+            // acceptance — its verdict contract needs round text, and the
+            // handle-ack prose would settle a null verdict as a normal node.
+            // Throw instead, and the frozen -32003 literal MUST ride the
+            // message: structured codes have no survival channel through the
+            // downstream submitFailedError wrap (message-only), so the
+            // graph-loop classifier's probeText match on the code value is
+            // the only programmatic channel (adjudicated exception to
+            // "message 禁止下游解析").
+            throw new Error(`A2A submit for "${request.handle}" replayed at the peer's idempotency ledger (task ${taskId} duplicate within the idempotency window, -32003: the prior attempt stays authoritative — fail-closed; outcome retrieval needs a query face)`)
           }
           if (result.code === WIRE_ERROR_IDEMPOTENCY_CONFLICT) {
-            throw new Error(`A2A submit for "${request.handle}" conflicts at the peer's idempotency ledger (task ${taskId} reused with a different payload)`)
+            // -32002 literal on the message: same classification channel as the sync replay above.
+            throw new Error(`A2A submit for "${request.handle}" conflicts at the peer's idempotency ledger (task ${taskId} reused with a different payload, -32002)`)
           }
           if (abort.aborted) break
           continue
