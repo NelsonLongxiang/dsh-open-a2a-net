@@ -26,7 +26,7 @@ import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, SUMMARY_CAP, type ReceiptResolvedInfo } from './task-ledger.ts'
 import { formatReceipt } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
-import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from './idempotency-store.ts'
+import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint } from './idempotency-store.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
@@ -586,6 +586,19 @@ export function apply(ctx: Context, config: Config): void {
   function settleAndAnnounce(message: string): void {
     const resolved = taskLedger.resolveFromMessage(message)
     if (resolved === undefined) return
+    // W7 slice-2 hook 3: a receipt that correlates an id THIS node's
+    // idempotency ledger claimed records the receipt line as that key's
+    // outcome. Receipt lines are one-line free text by contract, so the
+    // recorded status is 'completed' — the receipt reports, the adopting
+    // side's postCondition judges success or failure. First-write wins
+    // inside the store, so a late receipt never overwrites a precise
+    // sync-hook record.
+    if (resolved.taskId !== '') {
+      const line = resolved.outcome ?? resolved.summary
+      if (line !== undefined && line !== '') {
+        idempotencyStore.recordOutcome(resolved.taskId, { status: 'completed', reply: line })
+      }
+    }
     try {
       ctx.emit('a2a/receipt-resolved', resolved)
     } catch (error) {
@@ -1972,7 +1985,7 @@ ${message}`
           // same key + different payload ⇒ hard conflict (409, -32002).
           // Checked BEFORE any steering or ledger correlation: a replay must
           // never re-enter the target session, no matter how it settles.
-          const idemFingerprint = createHash('sha256').update(JSON.stringify({ caller, message, noWait, team })).digest('hex')
+          const idemFingerprint = peerPayloadFingerprint({ caller, message, noWait, team })
           const idemVerdict = idempotencyStore.claim(taskId, idemFingerprint)
           if (idemVerdict !== 'fresh') {
             const replay = idemVerdict === 'replay'
@@ -2091,6 +2104,15 @@ ${message}`
                     recordActivity('in', team, caller, false)
                     logger.warn(`a2a: detached native-teams round for "${team}" failed: ${outcome.error}`)
                   }
+                  // W7 slice-2 hook 2: only a genuinely settled detached round
+                  // records an outcome. The deadline's settled:false
+                  // projection is a placeholder, not a product — the same
+                  // ruling as hook 1's DELIVERED skip; placeholder prose never
+                  // enters the ledger a replay could adopt from.
+                  if (taskId !== '') {
+                    if (!outcome.ok) idempotencyStore.recordOutcome(taskId, { status: 'failed', error: outcome.error })
+                    else if (outcome.settled) idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: outcome.reply })
+                  }
                 })
               const payload = JSON.stringify({ routed: true, delivered: true, team, session, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_DELIVERED', artifacts: [], consumed: false, bridge: 'native-teams' })
               res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
@@ -2100,6 +2122,20 @@ ${message}`
           }
           void routeIntoAgent(team, message, caller, taskId).then((outcome) => {
             recordActivity('in', team, caller, outcome.ok)
+            // W7 slice-2 hook 1: record the settled outcome on the claim row.
+            // Ruling: a non-COMPLETED status (TASK_STATE_DELIVERED — the
+            // bridge-round deadline placeholder, ABORTED_WAIT likewise) is
+            // NOT a settled outcome: the row stays pending, because an
+            // adopted replay must never settle a node on placeholder text
+            // (the exact hazard W7 gap B closed, barred from resurrecting
+            // through the outcome ledger).
+            if (taskId !== '') {
+              if (!outcome.ok) {
+                idempotencyStore.recordOutcome(taskId, { status: 'failed', error: outcome.error })
+              } else if (outcome.status === undefined || outcome.status === 'TASK_STATE_COMPLETED') {
+                idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: outcome.reply })
+              }
+            }
             const payload = outcome.ok
               ? JSON.stringify({
                 routed: true,
@@ -2123,6 +2159,98 @@ ${message}`
         })
       },
     }), 'a2a: direct route endpoint')
+  })
+
+  whenWebServerSettled((webServer) => {
+    // W7 slice 2: the S1 outcome-retrieval surface — a READ-ONLY lookup of
+    // one claimed task's settled outcome. The body carries ONLY the task id
+    // and the submit payload's fingerprint (peerPayloadFingerprint, the
+    // gate's own shared implementation): the fingerprint match is the
+    // authorization, and the fan-out probe never leaks the original message
+    // to peers that never saw it. Constant-200 semantics — a query NEVER
+    // produces a wire error code (the frozen -32002/-32003 vocabulary stays
+    // submit-only), never claims, never steers, never enters a session: the
+    // gate's "verdict before steer" has its mirror in "a query executes
+    // nothing". Malformed fields degrade to unknown-task rather than
+    // guessing; an unparseable body answers 400 like /a2a/direct.
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/a2a/query',
+      handler: (req: IncomingMessage, res: ServerResponse) => {
+        const chunks: Buffer[] = []
+        let size = 0
+        let overflowed = false
+        req.on('data', (chunk: Buffer) => {
+          if (overflowed) return
+          const next = size + chunk.length
+          if (next > 65_536) {
+            overflowed = true
+            chunks.length = 0
+            return
+          }
+          size = next
+          chunks.push(chunk)
+        })
+        req.on('error', () => {
+          if (!res.headersSent) {
+            res.writeHead(400)
+            res.end()
+          }
+        })
+        req.on('end', () => {
+          if (overflowed) {
+            if (!res.writableEnded && !res.headersSent) {
+              const payload = JSON.stringify({ error: 'payload too large', code: WIRE_ERROR_PAYLOAD_TOO_LARGE })
+              res.writeHead(413, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+            }
+            return
+          }
+          let body: {
+            readonly task_id?: unknown
+            readonly fingerprint?: unknown
+          }
+          try {
+            body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof body
+          } catch {
+            const payload = JSON.stringify({ error: 'malformed body', code: -32000 })
+            res.writeHead(400, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+            return
+          }
+          const taskId = typeof body.task_id === 'string' ? body.task_id : ''
+          const fingerprint = typeof body.fingerprint === 'string' ? body.fingerprint : ''
+          const verdict = taskId === '' || fingerprint === ''
+            ? { found: false as const, reason: 'unknown-task' as const }
+            : idempotencyStore.query(taskId, fingerprint)
+          const payload = JSON.stringify(
+            verdict.found
+              ? verdict.status === 'pending'
+                ? { found: true, status: 'pending', task_id: taskId }
+                : verdict.status === 'completed'
+                  ? {
+                    found: true,
+                    status: 'completed',
+                    reply: verdict.reply,
+                    settled_at: new Date(verdict.settledAt).toISOString(),
+                    task_id: taskId,
+                    ...(verdict.truncated === true ? { truncated: true } : {}),
+                  }
+                  : {
+                    found: true,
+                    status: 'failed',
+                    error: verdict.error,
+                    settled_at: new Date(verdict.settledAt).toISOString(),
+                    task_id: taskId,
+                    ...(verdict.truncated === true ? { truncated: true } : {}),
+                  }
+              : { found: false, reason: verdict.reason, task_id: taskId },
+          )
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+          res.end(payload)
+        })
+      },
+    }), 'a2a: query endpoint')
   })
 
   whenWebServerSettled((webServer) => {
@@ -3013,6 +3141,43 @@ ${message}`
         return { kind: 'accepted', taskId, acceptedAt: new Date().toISOString(), contextId }
       }
       throw new Error(`A2A submit for "${request.handle}" failed on every candidate`)
+    },
+    queryOutcome: async (request, signal) => {
+      const abort = signal ?? new AbortController().signal
+      if (request.taskId === '') return undefined
+      const failures: string[] = []
+      const fetch = memoizedCardFetch()
+      const candidates = await directoryPeerCandidates(fetch, request.handle, failures)
+      // No candidate to ask: no increment of information — undefined, never
+      // a synthetic verdict.
+      if (candidates.length === 0) return undefined
+      let mismatch = false
+      let answeredUnknown = false
+      for (const candidate of candidates) {
+        // Recompute the fingerprint EXACTLY as the submit pass computed it:
+        // the same shared implementation, and the same per-candidate async
+        // gate (delivery async × that peer's declared capability). Sync
+        // delivery — every graph-loop dispatch — is noWait:false throughout.
+        let peerAsync = false
+        if (request.delivery === 'async') {
+          const card = await fetch(candidate)
+          peerAsync = (card?.capabilities as { async?: unknown } | undefined)?.async === true
+        }
+        const fingerprint = peerPayloadFingerprint({ caller: session, message: request.message, noWait: request.delivery === 'async' && peerAsync, team: request.handle })
+        const answer = await client.queryOutcome(candidate, request.taskId, fingerprint, abort)
+        if (answer === undefined) continue // transport miss — probe the next candidate (read-only fan-out)
+        if (!answer.found) {
+          if (answer.reason === 'payload-mismatch') mismatch = true
+          else answeredUnknown = true
+          continue
+        }
+        return answer
+      }
+      // A mismatch anywhere wins the aggregation: the key exists at a peer
+      // with a different payload — the most diagnostic negative there is.
+      if (mismatch) return { found: false, reason: 'payload-mismatch' }
+      if (answeredUnknown) return { found: false, reason: 'unknown-task' }
+      return undefined
     },
     cancel: async (ref, reason) => {
       const taskId = ref.taskId

@@ -22,6 +22,7 @@ import WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, type Config } from '../src/index.ts'
+import { peerPayloadFingerprint } from '../src/idempotency-store.ts'
 import { signCard } from '../src/card.ts'
 import { NATIVE_TEAMS_A2A_FACE_KEY } from '../src/teams-bridge.ts'
 
@@ -72,7 +73,7 @@ function tmpHome(): string {
 }
 
 /** One real loopback peer: a verified signed card plus an echoing direct route. */
-async function startPeer(options: { session?: string; asyncCap?: boolean; direct?: (body: Record<string, unknown>) => { readonly status: number; readonly payload: Record<string, unknown> } } = {}): Promise<{ url: string; seen: Array<Record<string, unknown>>; close: () => Promise<void> }> {
+async function startPeer(options: { session?: string; asyncCap?: boolean; direct?: (body: Record<string, unknown>) => { readonly status: number; readonly payload: Record<string, unknown> }; query?: (body: Record<string, unknown>) => { readonly status: number; readonly payload: Record<string, unknown> } } = {}): Promise<{ url: string; seen: Array<Record<string, unknown>>; close: () => Promise<void> }> {
   const { privateKey } = generateKeyPairSync('ed25519')
   const session = options.session ?? 'peer-node'
   const card = signCard({
@@ -107,6 +108,20 @@ async function startPeer(options: { session?: string; asyncCap?: boolean; direct
         } else {
           payload = JSON.stringify({ routed: true, team: body.team, session, result: { text: 'peer says hi' }, task_id: body.task_id, context_id: 'ctx-peer', task_status: 'TASK_STATE_COMPLETED' })
         }
+        res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+        res.end(payload)
+      })
+      return
+    }
+    if (req.url === '/a2a/query') {
+      let raw = ''
+      req.on('data', (chunk: Buffer) => { raw += chunk.toString('utf8') })
+      req.on('end', () => {
+        const body = JSON.parse(raw) as Record<string, unknown>
+        seen.push(body)
+        const overridden = options.query?.(body)
+        const status = overridden?.status ?? 200
+        const payload = JSON.stringify(overridden?.payload ?? { found: false, reason: 'unknown-task', task_id: body.task_id })
         res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
         res.end(payload)
       })
@@ -711,5 +726,71 @@ describe('settle fence coverage', () => {
     // The throw degraded to the fence warn: cordis dispatch is synchronous,
     // so the sync throw landed in settleAndAnnounce's catch.
     expect(warns.some(entry => entry.type === 'warn' && String(entry.args[0]).includes('receipt-resolved listener rejected'))).toBe(true)
+  })
+})
+
+describe('bridgeFace queryOutcome (W7 slice 2)', () => {
+  it('recomputes the submit fingerprint and returns the peer answer verbatim on a match', async () => {
+    const expected = peerPayloadFingerprint({ caller: 'bridge-test', message: 'hello peer', noWait: false, team: 'peer-team' })
+    const peer = await startPeer({
+      query: body => {
+        expect(body.task_id).toBe('wb-q1')
+        expect(body.fingerprint).toBe(expected)
+        return { status: 200, payload: { found: true, status: 'completed', reply: 'the prior work is done', settled_at: '2026-08-29T00:00:00.000Z', task_id: 'wb-q1' } }
+      },
+    })
+    const m = await mount({ peers: [peer.url] })
+    mounted.push(async () => { await m.dispose(); await peer.close() })
+    const face = m.face() as { queryOutcome: (request: Record<string, unknown>) => Promise<Record<string, unknown> | undefined> }
+    const answer = await face.queryOutcome({ taskId: 'wb-q1', handle: 'peer-team', message: 'hello peer', delivery: 'sync' })
+    expect(answer).toEqual({ found: true, status: 'completed', reply: 'the prior work is done', settledAt: '2026-08-29T00:00:00.000Z' })
+  })
+
+  it('propagates payload-mismatch from the peer', async () => {
+    const peer = await startPeer({ query: () => ({ status: 200, payload: { found: false, reason: 'payload-mismatch', task_id: 'wb-q2' } }) })
+    const m = await mount({ peers: [peer.url] })
+    mounted.push(async () => { await m.dispose(); await peer.close() })
+    const face = m.face() as { queryOutcome: (request: Record<string, unknown>) => Promise<Record<string, unknown> | undefined> }
+    await expect(face.queryOutcome({ taskId: 'wb-q2', handle: 'peer-team', message: 'hello peer', delivery: 'sync' }))
+      .resolves.toEqual({ found: false, reason: 'payload-mismatch' })
+  })
+
+  it('answers undefined when the peer has no query surface (404 transport miss)', async () => {
+    const peer = await startPeer({ query: () => ({ status: 404, payload: { error: 'no route' } }) })
+    const m = await mount({ peers: [peer.url] })
+    mounted.push(async () => { await m.dispose(); await peer.close() })
+    const face = m.face() as { queryOutcome: (request: Record<string, unknown>) => Promise<Record<string, unknown> | undefined> }
+    await expect(face.queryOutcome({ taskId: 'wb-q3', handle: 'peer-team', message: 'hello peer', delivery: 'sync' })).resolves.toBeUndefined()
+  })
+
+  it('answers undefined when no tracked peer publishes the handle', async () => {
+    const m = await mount({})
+    mounted.push(m.dispose)
+    const face = m.face() as { queryOutcome: (request: Record<string, unknown>) => Promise<Record<string, unknown> | undefined> }
+    await expect(face.queryOutcome({ taskId: 'wb-q4', handle: 'nowhere-team', message: 'x', delivery: 'sync' })).resolves.toBeUndefined()
+  })
+
+  it('fans out read-only across candidates and prefers a real answer over a negative', async () => {
+    const dead = await startPeer({ query: () => ({ status: 404, payload: { error: 'no route' } }) })
+    const live = await startPeer({
+      query: () => ({ status: 200, payload: { found: true, status: 'failed', error: 'the prior attempt exploded at the peer', settled_at: '2026-08-29T01:00:00.000Z', task_id: 'wb-q5' } }),
+    })
+    const m = await mount({ peers: [dead.url, live.url] })
+    mounted.push(async () => { await m.dispose(); await dead.close(); await live.close() })
+    const face = m.face() as { queryOutcome: (request: Record<string, unknown>) => Promise<Record<string, unknown> | undefined> }
+    const answer = await face.queryOutcome({ taskId: 'wb-q5', handle: 'peer-team', message: 'hello peer', delivery: 'sync' })
+    expect(answer).toEqual({ found: true, status: 'failed', error: 'the prior attempt exploded at the peer', settledAt: '2026-08-29T01:00:00.000Z' })
+    // Read-only fan-out: the query dialed both candidates but never /a2a/direct.
+    expect(dead.seen.every(entry => !('message' in entry) || entry.wait === undefined)).toBe(true)
+  })
+
+  it('prefers payload-mismatch over unknown-task when candidates disagree', async () => {
+    const plain = await startPeer({ query: () => ({ status: 200, payload: { found: false, reason: 'unknown-task', task_id: 'wb-q6' } }) })
+    const hostile = await startPeer({ query: () => ({ status: 200, payload: { found: false, reason: 'payload-mismatch', task_id: 'wb-q6' } }) })
+    const m = await mount({ peers: [plain.url, hostile.url] })
+    mounted.push(async () => { await m.dispose(); await plain.close(); await hostile.close() })
+    const face = m.face() as { queryOutcome: (request: Record<string, unknown>) => Promise<Record<string, unknown> | undefined> }
+    await expect(face.queryOutcome({ taskId: 'wb-q6', handle: 'peer-team', message: 'hello peer', delivery: 'sync' }))
+      .resolves.toEqual({ found: false, reason: 'payload-mismatch' })
   })
 })

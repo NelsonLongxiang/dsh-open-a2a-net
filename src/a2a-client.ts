@@ -310,4 +310,55 @@ export class A2aClient {
       ...(bridge !== undefined ? { bridge } : {}),
     }
   }
+
+  /**
+   * Query a peer's `/a2a/query` outcome surface (W7 slice 2): read-only
+   * lookup of one claimed task's settled outcome. The fingerprint is the
+   * authorization — the caller recomputes it from the exact submit fields
+   * with the shared `peerPayloadFingerprint`. Every transport-level failure
+   * (network miss, HTTP error, unparseable or malformed body, empty fields)
+   * answers `undefined`: a query that cannot complete carries no increment
+   * of information, never a verdict.
+   */
+  async queryOutcome(baseUrl: string, taskId: string, fingerprint: string, signal?: AbortSignal): Promise<A2aQueryAnswer | undefined> {
+    if (taskId === '' || fingerprint === '') return undefined
+    try {
+      const raw = await this.http('/a2a/query', {
+        method: 'POST',
+        body: JSON.stringify({ task_id: taskId, fingerprint }),
+        ...(signal !== undefined ? { signal } : {}),
+      }, baseUrl) as Record<string, unknown>
+      return parseQueryAnswer(raw)
+    } catch {
+      return undefined
+    }
+  }
+}
+
+/** The typed `/a2a/query` answer, 1:1 with the wire body's four states. */
+export type A2aQueryAnswer =
+  | { readonly found: false; readonly reason: 'unknown-task' | 'payload-mismatch' }
+  | { readonly found: true; readonly status: 'pending' }
+  | { readonly found: true; readonly status: 'completed'; readonly reply: string; readonly settledAt: string; readonly truncated?: boolean }
+  | { readonly found: true; readonly status: 'failed'; readonly error: string; readonly settledAt: string; readonly truncated?: boolean }
+
+/** Coerce one raw wire body into an {@link A2aQueryAnswer}; anything
+ * malformed degrades to `undefined` (no verdict), never to a guess. */
+function parseQueryAnswer(raw: Record<string, unknown>): A2aQueryAnswer | undefined {
+  if (raw.found !== true && raw.found !== false) return undefined
+  if (raw.found === false) {
+    if (raw.reason !== 'unknown-task' && raw.reason !== 'payload-mismatch') return undefined
+    return { found: false, reason: raw.reason }
+  }
+  if (raw.status === 'pending') return { found: true, status: 'pending' }
+  const settledAt = typeof raw.settled_at === 'string' && raw.settled_at !== '' ? raw.settled_at : undefined
+  if (settledAt === undefined) return undefined
+  const truncated = raw.truncated === true ? { truncated: true } : {}
+  if (raw.status === 'completed' && typeof raw.reply === 'string') {
+    return { found: true, status: 'completed', reply: raw.reply, settledAt, ...truncated }
+  }
+  if (raw.status === 'failed' && typeof raw.error === 'string') {
+    return { found: true, status: 'failed', error: raw.error, settledAt, ...truncated }
+  }
+  return undefined
 }
