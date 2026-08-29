@@ -19,6 +19,7 @@ import WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { signCard } from '../src/card.ts'
+import { WIRE_ERROR_PAYLOAD_TOO_LARGE } from '../src/transport-caps.ts'
 import { apply, Config as ConfigSchema, type A2aSchedule, type Config } from '../src/index.ts'
 
 /** Fake agents registry: one recoverable root agent or none. */
@@ -1802,13 +1803,15 @@ describe('a2a control-route authorization', () => {
     await ctx.fiber.dispose()
   })
 
-  it('destroys an oversized control body', async () => {
+  it('answers 413 to an oversized control body (never connection-killed)', async () => {
     const { ctx, port } = await mountJoinHarness()
     const oversized = 'x'.repeat(11_000)
-    await expect(globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/join`, {
+    const response = await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/join`, {
       method: 'POST',
       body: oversized,
-    })).rejects.toThrow()
+    })
+    expect(response.status).toBe(413)
+    await expect(response.json()).resolves.toMatchObject({ code: WIRE_ERROR_PAYLOAD_TOO_LARGE })
     await ctx.fiber.dispose()
   })
 
