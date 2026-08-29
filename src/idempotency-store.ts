@@ -127,6 +127,26 @@ interface Snapshot {
     readonly outcome?: TaskOutcome
     readonly settledAt?: number
   }>
+  /** Cumulative claim-verdict counters (0.5.36): persisted so the
+   * UNIQUE-ization traffic decision sees CROSS-RESTART accumulation —
+   * a per-boot blip would destroy exactly the evidence it needs. */
+  readonly stats?: {
+    readonly claimsFresh?: number
+    readonly replays?: number
+    readonly conflicts?: number
+  }
+}
+
+/** The read-only idempotency-window aggregate (state route / a2a_status;
+ * 0.5.36 observability slice). Counters are cumulative since genesis. */
+export interface IdempotencyStats {
+  readonly window: number
+  readonly cap: number
+  readonly pending: number
+  readonly settled: number
+  readonly claimsFresh: number
+  readonly replays: number
+  readonly conflicts: number
 }
 
 /** Cap the stored text; truncation is flagged, never silent. */
@@ -160,6 +180,9 @@ export class IdempotencyStore {
   private readonly ttlMs: number
   private readonly cap: number
   private readonly now: () => number
+  private claimsFresh = 0
+  private replays = 0
+  private conflicts = 0
 
   /**
    * @param path - persistence file; empty string keeps the store memory-only.
@@ -183,17 +206,52 @@ export class IdempotencyStore {
     this.prune(this.now())
     const existing = this.rows.get(taskId)
     if (existing !== undefined) {
-      if (existing.fingerprint !== fingerprint) return 'conflict'
+      if (existing.fingerprint !== fingerprint) {
+        // 0.5.36 observability: conflicts are the "caller bug" verdict —
+        // counted and persisted so the UNIQUE-ization traffic decision has
+        // cross-restart evidence instead of a per-boot blip.
+        this.conflicts += 1
+        this.persist()
+        return 'conflict'
+      }
       // Fixed window from the first claim: a replay does NOT refresh `at`,
       // so only genuinely aged keys re-open (the comment previously claimed
       // a sliding refresh the code never performed — W7 slice-2 §2.3 kept
       // the behavior and fixed the prose).
+      this.replays += 1
+      this.persist()
       return 'replay'
     }
     if (this.rows.size >= this.cap) this.evictOldest()
+    this.claimsFresh += 1
     this.rows.set(taskId, { fingerprint, at: this.now() })
     this.persist()
     return 'fresh'
+  }
+
+  /**
+   * Read-only aggregate for the observability surfaces (state route /
+   * a2a_status, 0.5.36): window occupancy, outcome split, and the
+   * cumulative claim-verdict counters. Never throws; the only write it may
+   * perform is the shared lazy TTL prune.
+   */
+  stats(): IdempotencyStats {
+    this.prune(this.now())
+    let pending = 0
+    let settled = 0
+    for (const row of this.rows.values()) {
+      if (row.outcome === undefined) pending += 1
+      else settled += 1
+    }
+    return {
+      window: this.rows.size,
+      cap: this.cap,
+      pending,
+      settled,
+      claimsFresh: this.claimsFresh,
+      replays: this.replays,
+      conflicts: this.conflicts,
+    }
   }
 
   /**
@@ -286,6 +344,12 @@ export class IdempotencyStore {
         })
       }
       this.prune(this.now())
+      // Counters restore with zero-fill for pre-stats snapshots — an old
+      // file means "no recorded traffic", never fabricated numbers.
+      const stats = snapshot?.stats
+      this.claimsFresh = typeof stats?.claimsFresh === 'number' && Number.isFinite(stats.claimsFresh) ? stats.claimsFresh : 0
+      this.replays = typeof stats?.replays === 'number' && Number.isFinite(stats.replays) ? stats.replays : 0
+      this.conflicts = typeof stats?.conflicts === 'number' && Number.isFinite(stats.conflicts) ? stats.conflicts : 0
     } catch {
       // A corrupt window file must never block routing: start fresh instead.
     }
@@ -296,7 +360,10 @@ export class IdempotencyStore {
     try {
       mkdirSync(dirname(this.path), { recursive: true })
       const entries = [...this.rows].map(([taskId, entry]) => ({ taskId, ...entry }))
-      writeFileSync(this.path, JSON.stringify({ entries }), { mode: 0o600 })
+      writeFileSync(this.path, JSON.stringify({
+        entries,
+        stats: { claimsFresh: this.claimsFresh, replays: this.replays, conflicts: this.conflicts },
+      }), { mode: 0o600 })
     } catch {
       // Unwritable home: degrade to memory-only, routing continues.
     }

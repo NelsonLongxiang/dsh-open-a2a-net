@@ -435,3 +435,38 @@ describe('/a2a/query outcome retrieval — hooks and honest negatives', () => {
     expect(restored.query('t-bare', 'h3')).toEqual({ found: true, status: 'pending' })
   })
 })
+
+describe('idempotency window observability (0.5.36)', () => {
+  function tmpStore(options?: IdempotencyOptions): { store: IdempotencyStore; file: string } {
+    const file = join(mkdtempSync(join(tmpdir(), 'dsh-a2a-idem-')), 'idempotency.json')
+    return { store: new IdempotencyStore(file, options), file }
+  }
+
+  it('counts fresh/replay/conflict cumulatively and derives the outcome split', () => {
+    const { store } = tmpStore()
+    store.claim('t-1', 'h1')            // fresh #1
+    store.claim('t-1', 'h1')            // replay #1
+    store.claim('t-1', 'h2')            // conflict #1
+    store.claim('t-2', 'h2')            // fresh #2
+    store.recordOutcome('t-1', { status: 'completed', reply: 'x' })
+    expect(store.stats()).toMatchObject({
+      window: 2, cap: 256, pending: 1, settled: 1, claimsFresh: 2, replays: 1, conflicts: 1,
+    })
+  })
+
+  it('pre-stats snapshots restore with zeroed counters; persisted counters survive restart', () => {
+    const { store, file } = tmpStore()
+    store.claim('t-1', 'h1')
+    // A pre-stats (v2) snapshot: counters unknown → zero-filled, never fabricated.
+    writeFileSync(file, JSON.stringify({ entries: [{ taskId: 't-1', fingerprint: 'h1', at: Date.now() }] }))
+    const legacy = new IdempotencyStore(file)
+    expect(legacy.stats()).toMatchObject({ claimsFresh: 0, replays: 0, conflicts: 0 })
+    // Persisted counters survive a restart.
+    writeFileSync(file, JSON.stringify({
+      entries: [{ taskId: 't-1', fingerprint: 'h1', at: Date.now() }],
+      stats: { claimsFresh: 5, replays: 2, conflicts: 1 },
+    }))
+    const restored = new IdempotencyStore(file)
+    expect(restored.stats()).toMatchObject({ window: 1, claimsFresh: 5, replays: 2, conflicts: 1 })
+  })
+})
