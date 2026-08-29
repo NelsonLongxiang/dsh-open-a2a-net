@@ -137,6 +137,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   let renderedRevision = -1
   const clock = deps.now ?? Date.now
   const ac = new AbortController()
+  const noticeTimers: Array<ReturnType<typeof setTimeout>> = []
   const signal = { signal: ac.signal } as AddEventListenerOptions
 
   // ── DOM shell (built once) ──
@@ -567,7 +568,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     item.setAttribute('role', kind === 'error' ? 'alert' : 'status')
     item.textContent = text
     noticeStack.appendChild(item)
-    setTimeout(() => item.remove(), 4000)
+    noticeTimers.push(setTimeout(() => item.remove(), 4000))
   }
 
   // ── 建队：selection → 命名对话框 → create-team ──
@@ -589,7 +590,6 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   let dialog: {
     wrap: HTMLDivElement
     restoreFocus: HTMLElement | null
-    ids: readonly string[]
   } | null = null
 
   function openNameDialog(ids: readonly string[]): void {
@@ -673,7 +673,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         : focusables[(idx + 1) % focusables.length]
       next?.focus()
     }, signal)
-    dialog = { wrap, restoreFocus, ids }
+    dialog = { wrap, restoreFocus }
     input.focus()
   }
 
@@ -761,7 +761,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
     el.append(...items)
     el.style.left = `${Math.min(x, window.innerWidth - 200)}px`
-    el.style.top = `${Math.min(y, window.innerHeight - 40 - items.length * 30)}px`
+    const menuH = items.length * 30 + 8
+    el.style.top = `${Math.max(8, Math.min(y, window.innerHeight - menuH - 8))}px`
     el.addEventListener('keydown', (ev) => {
       const e = ev as KeyboardEvent
       const buttons = Array.from(el.querySelectorAll<HTMLButtonElement>('[role=menuitem]'))
@@ -1247,7 +1248,10 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
 
   function deactivate(): void { root.style.display = 'none' }
 
-  function destroy(): void { ac.abort() }
+  function destroy(): void {
+    ac.abort()
+    for (const t of noticeTimers) clearTimeout(t)
+  }
 
   return {
     root,
