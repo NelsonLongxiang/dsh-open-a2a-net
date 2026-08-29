@@ -1,6 +1,6 @@
 # Nexus 规划模式 · 无限画布节点交互设计 v0.1
 
-> 设计席交付 · 2026-08-27 · 状态：评审中
+> 设计席交付 · 2026-08-27 · 状态：已实施（2026-08-29，A–D 四步全部落地；偏离与实施期修复见同目录 implementation-notes.md）
 > 依据：`docs/canvas-stage-design-system.md`（Swiss 极简 + 三层令牌 + 点阵世界层 + 零缓动）、`docs/canvas-ui-contract.md`（锁定 v1）、`src/layout-store.ts`（布局持久化契约 v2）、`nexus-stage/src/main.ts` 现状。
 > 线框实证：同目录 `prototype-v1.html` + `shots/prototype-v1.1.png`。
 
@@ -78,11 +78,13 @@
 
 ## 6. 实施路线（每步独立 PR，走 worktree 四角色流程）
 
-| PR | 内容 | 复用/依据 |
+> 实施状态（2026-08-29）：四步全部完成；偏离裁决见同目录 implementation-notes.md。
+
+| PR | 内容 | 复用/依据 | 状态 |
 |---|---|---|
-| A. 取证修复先行 | `cycle()` 空 catch 改显式离线态卡；`fetchLayout` 接线（布局加载→定位→保存回路）；成员边改星形 + opacity 提到可见 | main.ts 现状；本交付 review.md P0 三条 |
-| B. 规划模式骨架 | 2D 画布 tab：点阵世界层 + 节点卡 + 队框 + 星形边 + 布局持久化回路 + 拖拽/框选 | `LayoutSnapshot.frames` 首次有消费者 |
-| C. 组队交互 | 建队/入队/离队/调优先级/散队全动作 + 乐观更新回滚 + 右键菜单等价路径 | 契约写面四 action；A2aControl.tsx 列表版是参照实现 |
-| D. 活动/联邦层 | inFlight 活动边 + peer 徽章 + 联邦线 + 状态条飞行定位 | `state.inFlight/activity/peers` 已下发未消费 |
+| A. 取证修复先行 | `cycle()` 空 catch 改显式离线态卡；`fetchLayout` 接线（布局加载→定位→保存回路）；成员边改星形 + opacity 提到可见 ✅ 已实施 | main.ts 现状；本交付 review.md P0 三条 |
+| B. 规划模式骨架 | 2D 画布 tab：点阵世界层 + 节点卡 + 队框 + 星形边 + 布局持久化回路 + 拖拽/框选 ✅ 已实施 | `LayoutSnapshot.frames` 首次有消费者 |
+| C. 组队交互 | 建队/入队/离队/调优先级/散队全动作 + 乐观更新回滚 + 右键菜单等价路径 | 契约写面四 action；A2aControl.tsx 列表版是参照实现 | ✅ 已实施 |
+| D. 活动/联邦层 | inFlight 活动边 + peer 徽章 + 联邦线 + 状态条飞行定位 | `state.inFlight/activity/peers` 已下发未消费 | ✅ 已实施 |
 
 验收门：教义 §五交付前门六条 + 契约不变量四条逐条 + `tests/canvas-stage.spec.ts` in-process harness 范式补规划模式用例 + 三缩放抽查对比度。
