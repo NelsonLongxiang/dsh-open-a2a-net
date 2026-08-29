@@ -2493,8 +2493,15 @@ describe('idempotency window observability (0.5.36)', () => {
       expect(p1.status).toBe(200)
       const p2 = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: pinned })
       expect(p2.status).toBe(409)
+      // Tampered payload on the same key: the conflict verdict counts too.
+      const p3 = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: 'dsh/agent-1', message: 'tampered payload', caller_session: 'sess-1', task_id: 'obs-task' }),
+      })
+      expect(p3.status).toBe(409)
       await expect(fetchState()).resolves.toMatchObject({
-        window: 1, cap: 256, claimsFresh: 1, replays: 1, conflicts: 0,
+        window: 1, cap: 256, claimsFresh: 1, replays: 1, conflicts: 1,
       })
     } finally {
       await ctx.fiber.dispose()

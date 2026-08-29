@@ -343,13 +343,21 @@ export class IdempotencyStore {
           ...(outcome !== undefined && settledAt !== undefined ? { outcome, settledAt } : {}),
         })
       }
-      this.prune(this.now())
-      // Counters restore with zero-fill for pre-stats snapshots — an old
-      // file means "no recorded traffic", never fabricated numbers.
+      // Counters restore FIRST — before any prune(): a prune that evicts an
+      // expired entry calls persist(), and persisting while the in-memory
+      // counters are still zero would wipe the snapshot's cumulative
+      // evidence to disk (R1 B-1: the TTL-silent-restart sequence — exactly
+      // the low-traffic scenario this slice exists for). Zero-fill for
+      // pre-stats snapshots: an old file means "no recorded traffic", never
+      // fabricated numbers; malformed values (negative/fractional) degrade
+      // to zero rather than climbing from a poisoned base.
       const stats = snapshot?.stats
-      this.claimsFresh = typeof stats?.claimsFresh === 'number' && Number.isFinite(stats.claimsFresh) ? stats.claimsFresh : 0
-      this.replays = typeof stats?.replays === 'number' && Number.isFinite(stats.replays) ? stats.replays : 0
-      this.conflicts = typeof stats?.conflicts === 'number' && Number.isFinite(stats.conflicts) ? stats.conflicts : 0
+      const count = (value: unknown): number =>
+        typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0
+      this.claimsFresh = count(stats?.claimsFresh)
+      this.replays = count(stats?.replays)
+      this.conflicts = count(stats?.conflicts)
+      this.prune(this.now())
     } catch {
       // A corrupt window file must never block routing: start fresh instead.
     }

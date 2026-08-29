@@ -26,7 +26,7 @@ import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, SUMMARY_CAP, type ReceiptResolvedInfo } from './task-ledger.ts'
 import { formatReceipt, parseReceipt } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
-import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint } from './idempotency-store.ts'
+import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
@@ -2007,7 +2007,7 @@ ${message}`
             // minting / key management) — warn loudly so it is never misread
             // as the normal-depth-defense zero-traffic shape. Replays stay
             // silent by design.
-            if (!replay) logger.warn(`a2a: idempotency CONFLICT on task ${taskId} — same key reused with a different payload (caller bug; never auto-retry)`)
+            if (!replay) logger.warn(`a2a: idempotency CONFLICT on task ${taskId.slice(0, 80)} — same key reused with a different payload (caller bug; never auto-retry)`)
             const payload = JSON.stringify({
               error: replay ? 'duplicate task id within the idempotency window' : 'task id reused with a different payload',
               code: replay ? WIRE_ERROR_REPLAY_REJECTED : WIRE_ERROR_IDEMPOTENCY_CONFLICT,
@@ -3336,15 +3336,7 @@ ${message}`
       peers: { url: string; score?: number }[]
       inFlight: { team: string; peer: string; startedAt: number }[]
       activity: RouteActivityEntry[]
-      idempotency: {
-        window: number
-        cap: number
-        pending: number
-        settled: number
-        claimsFresh: number
-        replays: number
-        conflicts: number
-      }
+      idempotency: IdempotencyStats
     }> => {
       a2aJoinGateRefusal(exec)
       return {

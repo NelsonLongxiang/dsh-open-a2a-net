@@ -71,7 +71,7 @@ shared tool runtime.
 | `a2a_route` | Send a message to a team. | `context_id` continues a conversation; `async: true` delivers without waiting; fails over across candidates. |
 | `a2a_tasks` | Which async tasks still owe a receipt? | Three tiers: owed rows keep the follow-up `context_id`; past-TTL rows auto-dead-letter (still settleable); outcomes land in the bounded archive; persisted across restarts. |
 | `a2a_probe` | Is the fleet healthy? | One verified-card fetch per peer (or one given url); `N reachable, M down`; misses classified `unreachable` vs `rejected`. |
-| `a2a_status` | What is this node doing right now? | Tracked peers with quality scores, in-flight routes, and recent routing activity. |
+| `a2a_status` | What is this node doing right now? | Tracked peers with quality scores, in-flight routes, recent routing activity, and the idempotency window aggregate (occupancy + claim/replay/conflict counters). |
 
 ## Canvas teams (arbitrary grouping, v0.5.25)
 
