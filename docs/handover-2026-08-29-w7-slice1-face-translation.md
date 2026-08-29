@@ -27,12 +27,12 @@
 ## 三、回归面与兼容
 
 - 合法性：@!23 协议冻结面管 wire 码值/409 形态/闸门次序，**face 翻译层不在内**——本 PR 未触冻结契约。
-- 行为变化影响面：翻转时点全 workspace **生产代码无显式供键调用方**（评审 grep 证实）；此后 graph-loop 0.5.1 起透传引擎键（`runId:nodeId:ordinal`，与 `direct-<8hex>` 键空间不相交），本 face 的分岔自此有真实流量。
+- 行为变化影响面：翻转时点全 workspace **生产代码无显式供键调用方**（评审 grep 证实）；此后 graph-loop 0.5.1 起透传引擎键（`runId:nodeId:ordinal`，与 `direct-<8hex>` 键空间不相交），分岔面自此**可达**（引擎键真实上行；回放/冲突命中按设计仍应近零）。
 - 测试钉位：`tests/teams-bridge.spec.ts`——sync 回放 throw 正则 + async 回放 accepted 回归 + conflict 字断言，三案都以 `peer.seen` 长度 1 钉死"判决终态不 failover"。
 
 ## 四、主检出现状（接手者必读）
 
-主检出停在 **`feat/nexus-planning-b`**（另一会话的 WIP，含未提交脏文件）——**不要动它**。需要在 master 上构建/发版时：`git worktree add .claude/worktrees/<name> origin/master` 从 worktree 执行（本日 0.5.34 即如此发布；worktree 依赖经目录上行解析主检出 node_modules，无需重装；`verify:nexus` 可跳过仅当未触 nexus 面——nexusDist 以 master 提交态打包）。
+主检出停在 **`feat/nexus-planning-b`**——另一会话的 WIP 分支（未合 master，tip `baf51a1`；其工作树状态随时漂移），**不要动它**。需要在 master 上构建/发版时：`git worktree add .claude/worktrees/<name> origin/master` 从 worktree 执行（本日 0.5.34 即如此发布；worktree 依赖经目录上行解析主检出 node_modules，无需重装；`verify:nexus` 可跳过仅当未触 nexus 面——nexusDist 以 master 提交态打包）。
 
 ## 五、待办队列
 
