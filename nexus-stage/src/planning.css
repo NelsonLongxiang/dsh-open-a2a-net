@@ -140,7 +140,6 @@
 #dsh-plan .p-node.remote{border-left-color:var(--federal)}
 #dsh-plan .p-node.remote .dot{background:var(--federal)}
 #dsh-plan .p-node.remote .prio{color:var(--ink)}
-#dsh-plan .peer .u{max-width:34ch; overflow:hidden; text-overflow:ellipsis}
 #dsh-plan .e-activity{stroke:var(--accent); stroke-width:2; stroke-dasharray:8 6; stroke-opacity:.9}
 #dsh-plan .e-federal{stroke:var(--federal); stroke-width:1.5; stroke-dasharray:6 5; stroke-opacity:.5}
 #dsh-plan .edge-label{font-size:10.5px; fill:var(--ink-muted)}

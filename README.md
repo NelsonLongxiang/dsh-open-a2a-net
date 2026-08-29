@@ -138,14 +138,6 @@ callers. Set an `apiKey` before exposing the listener beyond loopback.
 
 ## Stages (visualization surfaces)
 
-Two full-page stages mount beside the model tools: `/__dsh_a2a_nexus`
-(the Three.js topology viewer) and `/__dsh_a2a_canvas`. The planning
-canvas persists its layout document **last-write-wins**: two browsers
-(or tabs) arranging the same fleet will overwrite each other's
-arrangements — one planner at a time for now.
-
-## Stages (visualization surfaces)
-
 Two full-page stages mount beside the model tools: `/__dsh_a2a_nexus` (the
 Three.js topology viewer) and `/__dsh_a2a_canvas`. A bare mount path
 redirects (301) onto its trailing-slash form, so both spellings render and

@@ -461,6 +461,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     const placements: PeerPlacement[] = model.allNodes()
       .filter(n => n.remote === true)
       .map(n => ({ url: n.peerUrl ?? n.id.slice(5), score: n.score, x: n.x, y: n.y }))
+    lastPlacements = placements
     const bounds = model.contentBounds()
     if (bounds !== null) {
       // Edges: titlebar anchors (fx + fw/2, fy + 11, edges.ts lockstep).
@@ -813,8 +814,10 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     const p = localXY(ev)
     const w = screenToWorld(vp, p.x, p.y)
     const f = innermostFrameAt(new Map(model.allFrames()), w)
+    // 契约不变量 1：成员必须 joined session——对等卡永远不进名单写面。
+    const localIds = gesture.ids.filter(id => model.getNode(id)?.remote !== true)
     if (f !== undefined) {
-      const fresh = gesture.ids.filter(id => !(model.getNode(id)?.memberships.some(m => m.team === f)))
+      const fresh = localIds.filter(id => !(model.getNode(id)?.memberships.some(m => m.team === f)))
       if (fresh.length > 0) {
         emitAction({ type: 'add-member', team: f, ids: fresh }) // 入队：不自动离原队（多对多）
         return
@@ -912,7 +915,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       // Drop-target highlight: the innermost frame under the pointer, but
       // only when the drop would change something (some id not yet member).
       const f = innermostFrameAt(new Map(model.allFrames()), w)
-      const relevant = f !== undefined && gesture.ids.some(id => !(model.getNode(id)?.memberships.some(m => m.team === f)))
+      const joinables = gesture.ids.filter(id => model.getNode(id)?.remote !== true)
+      const relevant = f !== undefined && joinables.length > 0
       for (const [name, el] of frameEls) el.classList.toggle('drop-target', relevant && name === f)
       render()
     } else if (gesture.kind === 'frame') {

@@ -115,14 +115,20 @@ export function createSaveLoop(deps: SaveLoopDeps): SaveLoop {
       deps.onHttpError(`layout save unreachable: ${String((error as Error | undefined)?.message ?? error).slice(0, 80)}`)
     }
     busy = false
+    if (lamp === 'error') {
+      // The flush request was consumed by the failed save: retry is
+      // explicit — do not let the stale flag chain an extra keepalive.
+      flushAfterSettle = false
+      return
+    }
     // pagehide raced a busy save: the queued edits must not wait for a
     // debounce that a closing page will never fire — flush immediately.
-    if (flushAfterSettle && lamp !== 'error') {
+    if (flushAfterSettle) {
       flushAfterSettle = false
       void fire(true)
       return
     }
-    if (dirty && lamp !== 'error') {
+    if (dirty) {
       dirty = false
       setLamp('pending')
       arm()

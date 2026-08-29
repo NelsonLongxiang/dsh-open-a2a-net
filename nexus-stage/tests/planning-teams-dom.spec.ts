@@ -300,6 +300,40 @@ describe('context menu', () => {
     expect(document.activeElement).toBe(a) // re-seeded anchor: canvas stays keyboard-alive
   })
 
+  it('P1: a peer card dropped onto a frame never emits add-member', () => {
+    const { v, actions, onDirty } = view(true)
+    const peerInput = { ...arrangedInput, peers: [{ url: 'http://p1:80', score: 1 }] }
+    v.reconcile(peerInput)
+    const peerCard = v.root.querySelector<HTMLElement>('.p-node.remote')!
+    // trusted-style drag of the PEER card onto frame 甲: contract invariant 1
+    // (members must be joined sessions) — must be a no-op, no error toast.
+    drag(v, peerCard, { x: 0, y: 0 }, { x: 10, y: 10 })
+    expect(actions).toHaveLength(0)
+    expect(onDirty).toHaveBeenCalled() // position still persists
+  })
+
+  it('P1: 建队 filters peer cards out of the selection (dialog ids exclude peers)', async () => {
+    const { v, actions } = view(true)
+    const peerInput = { ...arrangedInput, peers: [{ url: 'http://p1:80', score: 1 }] }
+    v.reconcile(peerInput)
+    // Two session cards selected (click + shift-click), THEN the peer card:
+    // 建队 ids must exclude the remote card.
+    const s1 = v.root.querySelector<HTMLElement>('.p-node[data-id="a"]')!
+    const s2 = v.root.querySelector<HTMLElement>('.p-node[data-id="b"]')!
+    const peerCard = v.root.querySelector<HTMLElement>('.p-node.remote')!
+    v.seam.pointerDown(ptr({ target: s1, clientX: 5, clientY: 5 }))
+    v.seam.pointerUp(ptr({ target: s1, clientX: 5, clientY: 5 }))
+    v.seam.pointerDown(ptr({ target: s2, clientX: 5, clientY: 5, shiftKey: true }))
+    v.seam.pointerUp(ptr({ target: s2, clientX: 5, clientY: 5, shiftKey: true }))
+    v.seam.pointerDown(ptr({ target: peerCard, clientX: 5, clientY: 5, shiftKey: true }))
+    v.seam.pointerUp(ptr({ target: peerCard, clientX: 5, clientY: 5, shiftKey: true }))
+    v.seam.key(key({ key: 'g', target: v.root }))
+    const input = v.root.querySelector('.p-dialog input')!
+    input.value = '混合队'
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(actions[0]).toEqual({ type: 'create-team', name: '混合队', ids: ['a', 'b'], created: true })
+  })
+
   it('frame-head context menu offers 解散团队 and emits remove-team', () => {
     const { v, actions } = view()
     v.reconcile(arrangedInput)

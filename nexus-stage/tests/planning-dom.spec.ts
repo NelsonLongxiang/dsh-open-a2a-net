@@ -149,6 +149,20 @@ describe('planning view DOM', () => {
     expect(t()).toContain('scale(1.')
   })
 
+  it('middle-button drag on a card pans the viewport (no card drag, no roster write)', () => {
+    const { v, onDirty } = view()
+    v.reconcile({ sessions, teams, peerCount: 0 })
+    const a = v.root.querySelector<HTMLElement>('.p-node[data-id="s1"]')!
+    const left0 = a.style.left
+    const t0 = v.root.querySelector<HTMLElement>('.p-world')!.style.transform
+    v.seam.pointerDown(ptr({ target: a, clientX: 100, clientY: 100, button: 1 }))
+    v.seam.pointerMove(ptr({ target: v.root, clientX: 160, clientY: 160, button: 1 }))
+    v.seam.pointerUp(ptr({ target: v.root, clientX: 160, clientY: 160, button: 1 }))
+    expect(a.style.left).toBe(left0) // the card itself never moves
+    expect(v.root.querySelector<HTMLElement>('.p-world')!.style.transform).not.toBe(t0) // viewport panned
+    expect(onDirty).toHaveBeenCalled() // viewport persists
+  })
+
   it('keyed diff: a re-rendered card keeps element identity across polls', () => {
     const { v } = view()
     v.reconcile({ sessions, teams, peerCount: 0 })
