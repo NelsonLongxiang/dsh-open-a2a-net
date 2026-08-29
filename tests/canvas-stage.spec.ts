@@ -12,6 +12,7 @@ import { existsSync, mkdtempSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { apply } from '../src/index.ts'
+import { MAX_LAYOUT_BODY_BYTES, WIRE_ERROR_PAYLOAD_TOO_LARGE } from '../src/transport-caps.ts'
 
 async function harness(): Promise<number> {
   const ctx = new Context()
@@ -81,6 +82,32 @@ describe('canvas-layout control face', () => {
       frames: { 选品: { x: 10, y: 20, w: 400, h: 300 } },
     })
     expect((await (await fetch(base + '/__dsh_a2a/canvas-layout')).json()).layout).toEqual(saved.layout)
+  })
+
+  it('saves a full-fleet document above the legacy 10 KiB control cap', async () => {
+    const port = await harness()
+    const base = 'http://127.0.0.1:' + String(port)
+    // 256 nodes with long ids: ≈32 KiB of legitimate document — rejected by
+    // the old shared control cap, inside MAX_LAYOUT_BODY_BYTES.
+    const nodes: Record<string, { x: number; y: number }> = {}
+    for (let i = 0; i < 256; i++) nodes[`session-${String(i).padStart(3, '0')}-${'x'.repeat(96)}`] = { x: i, y: i * 2 }
+    const body = JSON.stringify({ action: 'save', layout: { version: 1, viewport: { x: 0, y: 0, scale: 1 }, nodes, frames: {} } })
+    expect(Buffer.byteLength(body, 'utf8')).toBeGreaterThan(10_000)
+    const response = await fetch(base + '/__dsh_a2a/canvas-layout', { method: 'POST', body })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ ok: true })
+  })
+
+  it('answers 413 with the transport wire code above MAX_LAYOUT_BODY_BYTES', async () => {
+    const port = await harness()
+    const base = 'http://127.0.0.1:' + String(port)
+    const nodes: Record<string, { x: number; y: number }> = {}
+    for (let i = 0; i < 4000; i++) nodes[`session-${String(i).padStart(4, '0')}`] = { x: i, y: i }
+    const body = JSON.stringify({ action: 'save', layout: { version: 1, viewport: { x: 0, y: 0, scale: 1 }, nodes, frames: {} } })
+    expect(Buffer.byteLength(body, 'utf8')).toBeGreaterThan(MAX_LAYOUT_BODY_BYTES)
+    const response = await fetch(base + '/__dsh_a2a/canvas-layout', { method: 'POST', body })
+    expect(response.status).toBe(413)
+    expect(await response.json()).toMatchObject({ code: WIRE_ERROR_PAYLOAD_TOO_LARGE })
   })
 })
 
