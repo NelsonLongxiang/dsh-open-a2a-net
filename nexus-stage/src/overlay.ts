@@ -66,28 +66,6 @@ export function pinInspector(app: HTMLElement, text: string): void {
 }
 export function unpinInspector(): void { if (inspector) inspector.style.display = 'none' }
 
-/** HUD (top-left) + legend (bottom-left) + aria role on the canvas. */
-export function mountChrome(app: HTMLElement, canvas: HTMLCanvasElement): void {
-  const hud = document.createElement('div')
-  hud.className = 'nexus-hud'
-  hud.textContent = 'A2A Nexus'
-  app.appendChild(hud)
-  const legend = document.createElement('div')
-  legend.className = 'nexus-legend'
-  const dotLive = document.createElement('span'); dotLive.className = 'dot live'
-  const tLive = document.createElement('span'); tLive.textContent = 'live'
-  const dotCold = document.createElement('span'); dotCold.className = 'dot cold'
-  const tCold = document.createElement('span'); tCold.textContent = 'cold'
-  const dash = document.createElement('span'); dash.className = 'dashline'
-  const tFed = document.createElement('span'); tFed.textContent = 'federation'
-  const act = document.createElement('span'); act.className = 'act'
-  const tAct = document.createElement('span'); tAct.textContent = 'in-flight'
-  legend.append(dotLive, tLive, dotCold, tCold, dash, tFed, act, tAct)
-  app.appendChild(legend)
-  canvas.setAttribute('role', 'img')
-  canvas.setAttribute('tabindex', '0')
-}
-
 export function setAriaLabel(canvas: HTMLCanvasElement, label: string): void {
   canvas.setAttribute('aria-label', label)
 }

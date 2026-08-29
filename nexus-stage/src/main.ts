@@ -10,9 +10,7 @@ import {
   MOCK, drawMembership, drawActivity, drawPeers,
   type StateBody,
 } from './topology'
-import {
-  attachLabel, detachLabel, mountChrome, pinInspector, unpinInspector,
-} from './overlay'
+import { attachLabel, detachLabel, pinInspector, unpinInspector } from './overlay'
 import { updateCensus } from './census'
 import { createStageKeyboardHandler, wireReducedRendering } from './interaction'
 import { createPlanningView } from './planning-view'
