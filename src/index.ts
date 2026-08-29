@@ -597,7 +597,7 @@ export function apply(ctx: Context, config: Config): void {
     if (parsed !== null && parsed.taskId !== '') {
       const line = parsed.summary.trim()
       if (line !== '') {
-        idempotencyStore.recordOutcome(parsed.taskId, { status: 'completed', reply: line.slice(0, 200) })
+        idempotencyStore.recordOutcome(parsed.taskId, { status: 'completed', reply: line.slice(0, SUMMARY_CAP) })
       }
     }
     const resolved = taskLedger.resolveFromMessage(message)
@@ -1585,7 +1585,12 @@ export function apply(ctx: Context, config: Config): void {
     // Never synthesize a receipt for a receipt: answering an envelope by mail
     // would ping-pong both ledgers.
     if (deliveredText.startsWith('[A2A receipt] task ')) return
-    registerFinalWaiter(target, (finalText) => {
+    registerFinalWaiter(target, (finalText, placeholder) => {
+      // W7 slice-2: a host-authored placeholder (flush timeout, dead
+      // session) must not synthesize a COMPLETION receipt — a wedged
+      // session has no product, and hook 3 would otherwise ledger the
+      // placeholder as one on the same-node loop-back.
+      if (placeholder === true) return
       // Idempotency: a row THIS ledger tracks must still be pending
       // (settled/dead rows never re-send). A foreign task id (an inbound
       // route the caller tracks on ITS node) has no local row — the final
