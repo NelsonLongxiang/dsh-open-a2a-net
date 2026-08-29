@@ -293,8 +293,46 @@ function renderRoute(_args: unknown, value: Record<string, JsonValue>): { type: 
  * @param ctx - registrant context carrying the tool registry and timer.
  * @param config - deployment's A2A node facts.
  */
+/**
+ * Exposure audit for unauthenticated direct deliveries (defect card F4, the
+ * zero-risk slice). `/a2a/direct` carries no per-call caller identity yet
+ * (docs/protocol/delivery-origin-auth.md stays best-effort until the
+ * OriginClaim envelope lands), so with an empty `apiKey` every process that
+ * can reach this host's ports can steer every joined session. A node that
+ * only talks to loopback peers (same-host collaboration) is not exposed;
+ * one seeded with non-loopback peers is, and the operator should either set
+ * `apiKey` or accept the exposure deliberately.
+ * @param peers - the configured seed peer URLs.
+ * @param apiKey - the configured API key ('' disables header auth).
+ * @returns the non-loopback seed peers and, when they coincide with an
+ *   empty key, the boot warning to log.
+ */
+export function directDeliveryExposure(
+  peers: readonly string[],
+  apiKey: string,
+): { nonLoopbackPeers: string[]; warning: string | undefined } {
+  const nonLoopbackPeers = peers.filter((peer) => {
+    try {
+      const { hostname } = new URL(peer)
+      const host = hostname.replace(/^\[|\]$/g, '').toLowerCase()
+      return !(host === 'localhost' || host.endsWith('.localhost') || host === '::1' || /^127\./.test(host))
+    } catch {
+      return false // a malformed seed URL says nothing about exposure
+    }
+  })
+  const warning =
+    nonLoopbackPeers.length > 0 && apiKey === ''
+      ? 'a2a: unauthenticated direct deliveries are accepted from any host that can reach this node (non-loopback peers configured, apiKey empty) — any local process or reachable peer can steer every joined session; set apiKey to require the X-API-Key header, or see docs/protocol/delivery-origin-auth.md for the enforcement plan'
+      : undefined
+  return { nonLoopbackPeers, warning }
+}
+
 export function apply(ctx: Context, config: Config): void {
   const logger = ctx.logger('a2a')
+  // F4 slice: say the quiet part at boot instead of leaving the exposure to
+  // be discovered from a ledger full of unexplained steering.
+  const exposure = directDeliveryExposure(config.peers, config.apiKey)
+  if (exposure.warning !== undefined) logger.warn(exposure.warning)
   // The production seams: Node's globals. Tests inject their own A2aClient
   // seams through src/a2a-client.ts directly. During fiber teardown the timer
   // service is already gone; a timer armed then belongs to nobody, so the
