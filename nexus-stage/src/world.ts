@@ -64,6 +64,13 @@ export interface WorldNode {
   team: string
   name?: string
   live: boolean
+  /** Peer node (PR D v1 ruling): a remote host entry rendered as a card.
+   *  Excluded from local content bounds; no memberships, ever. */
+  remote?: boolean
+  /** Full peer URL (identity is the bare host:port in the node id). */
+  peerUrl?: string
+  /** Reachability score from a2a_probe (peers only). */
+  score?: number
   memberships: ReadonlyArray<Membership>
 }
 
@@ -239,6 +246,14 @@ export class WorldModel {
     if (this.frames.delete(name)) this.bump()
   }
 
+  /** Update a peer node's reachability score (render attr; no bump unless it changed). */
+  upsertScore(id: string, score: number | undefined): void {
+    const n = this.nodes.get(id)
+    if (n === undefined || n.score === score) return
+    n.score = score
+    this.bump()
+  }
+
   /** Node center positions, for the layout document builder. */
   positions(): Map<string, LayoutPoint> {
     const out = new Map<string, LayoutPoint>()
@@ -292,7 +307,10 @@ export class WorldModel {
       maxX = Math.max(maxX, r.x + r.w)
       maxY = Math.max(maxY, r.y + r.h)
     }
-    for (const n of this.nodes.values()) absorb(nodeRect(n))
+    for (const n of this.nodes.values()) {
+      if (n.remote === true) continue // peer cards hang outside the field
+      absorb(nodeRect(n))
+    }
     for (const r of this.frames.values()) absorb(r)
     return minX === Number.POSITIVE_INFINITY ? null : { minX, minY, maxX, maxY }
   }

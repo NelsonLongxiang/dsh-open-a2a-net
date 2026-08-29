@@ -28,8 +28,9 @@ import type { LampState } from './layout-wire'
 import { buildLayoutDoc, clampDoc, type LayoutDoc, type LayoutRect } from './layout-doc'
 import { FRAME_HEAD_LIFT, starEdges } from './edges'
 import {
-  activityEdges, federalEdges, flyBounds, placePeers,
+  activityEdges, federalEdges, flyBounds, groupRemoteTeams, peerNodeId, peerHostOf, placePeers,
   type FrameAnchor, type InFlightRow, type PeerPlacement, type PeerRow,
+  type RemoteTeamRow,
 } from './federation'
 import { clampViewport, fitView, panBy, screenToWorld, worldTransformCss, zoomAt, type LayoutViewport } from './viewport'
 import { NODE_H, WorldModel, nodeRect, deriveInitialFrame, planSeatFor, type SessionLite, type TeamLite } from './world'
@@ -62,6 +63,8 @@ export interface PlanningInput {
   peers?: ReadonlyArray<PeerRow>
   /** Pending outbound routes (PR D): the accent activity edges. */
   inFlight?: ReadonlyArray<InFlightRow>
+  /** Remote team directory rows (PR D v1 ruling): grouped under peer cards. */
+  remoteTeams?: ReadonlyArray<RemoteTeamRow>
 }
 
 export interface PlanningDeps {
@@ -351,6 +354,16 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
   }
 
+  /** Remote card sub line: score + remote team count/names behind this peer. */
+  function remoteSubText(host: string): string {
+    const rows = lastRemoteTeams.get(host) ?? []
+    const names = rows.map(r => r.name !== undefined && r.name !== '' ? r.name : r.team)
+    const head = names.slice(0, 2).join('、')
+    const more = names.length > 2 ? ` +${names.length - 2}` : ''
+    const score = peerScoreByText.get(host)
+    return (score !== undefined ? `score ${score} · ` : '') + `${rows.length} 远端团队` + (head !== '' ? `：${head}${more}` : '')
+  }
+
   /** The mono route line `<host>/canvas/<name>` when the payload carries it. */
   function routeText(name: string): string {
     const t = lastTeams.find(x => x.name === name)
@@ -387,18 +400,21 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       el.style.left = `${r.x}px`
       el.style.top = `${r.y}px`
       el.classList.toggle('cold', !n.live)
+      el.classList.toggle('remote', n.remote === true)
       el.classList.toggle('selected', model.isSelected(n.id))
       el.setAttribute('aria-selected', String(model.isSelected(n.id)))
-      const nmText = n.name ?? n.label
+      const host = n.id.slice('peer-'.length)
+      const nmText = n.remote === true ? host : (n.name ?? n.label)
       const nmEl = el.querySelector<HTMLElement>('.nm-text')!
       if (nmEl.textContent !== nmText) nmEl.textContent = nmText
       const subEl = el.querySelector<HTMLElement>('.sub')!
-      const subText = n.team + (n.name !== undefined && n.name !== '' ? ' · ' + n.name : '')
-        + (n.memberships.length > 1 ? ` · 跨队×${n.memberships.length}` : '')
+      const subText = n.remote === true
+        ? remoteSubText(host)
+        : n.team + (n.name !== undefined && n.name !== '' ? ' · ' + n.name : '')
+          + (n.memberships.length > 1 ? ` · 跨队×${n.memberships.length}` : '')
       if (subEl.textContent !== subText) subEl.textContent = subText
       const prioEl = el.querySelector<HTMLElement>('.prio')!
-      const first = n.memberships[0]
-      const prioText = first !== undefined ? `P${first.index}` : ''
+      const prioText = n.remote === true ? 'peer' : (n.memberships[0] !== undefined ? `P${n.memberships[0]!.index}` : '')
       if (prioEl.textContent !== prioText) prioEl.textContent = prioText
     }
     for (const [id, el] of [...nodeEls]) {
@@ -429,61 +445,35 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   // badge column tracks the content bounds each reconcile. Its SVG
   // children are tracked separately because renderEdges clears the svg
   // wholesale - this appends after it (render() orders the two).
-  const peerEls = new Map<string, HTMLElement>()
   let fedSvg: SVGElement[] = []
   let lastPlacements: PeerPlacement[] = []
   let lastPeers: ReadonlyArray<PeerRow> = []
+  let lastRemoteTeams: ReadonlyMap<string, RemoteTeamRow[]> = new Map()
+  const peerScoreByText = new Map<string, number | undefined>()
   let lastInFlight: ReadonlyArray<InFlightRow> = []
 
   function renderFederation(): void {
     for (const el of fedSvg) el.remove()
     fedSvg = []
+    // Peer placements come from the MODEL's remote nodes (v1 ruling: peers
+    // are cards in the same pipeline, dragged/saved like sessions) — the
+    // old chip column is gone.
+    const placements: PeerPlacement[] = model.allNodes()
+      .filter(n => n.remote === true)
+      .map(n => ({ url: n.peerUrl ?? n.id.slice(5), score: n.score, x: n.x, y: n.y }))
     const bounds = model.contentBounds()
-    if (bounds === null) { // degenerate: empty canvas -> no badges, no edges
-      for (const [, el] of peerEls) el.remove()
-      peerEls.clear()
-      lastPlacements = []
-      return
-    }
-    const placements = placePeers(lastPeers, bounds)
-    lastPlacements = placements
-    // Chips: keyed by url (identity survives polls), repositioned every
-    // render; the url is attacker-shaped data -> textContent only.
-    const seen = new Set<string>()
-    for (const p of placements) {
-      seen.add(p.url)
-      let el = peerEls.get(p.url)
-      if (el === undefined) {
-        el = document.createElement('div')
-        el.className = 'peer'
-        el.dataset.url = p.url
-        const dia = document.createElement('span')
-        dia.className = 'dia'
-        const u = document.createElement('span')
-        u.className = 'u mono'
-        el.append(dia, u)
-        world.appendChild(el)
-        peerEls.set(p.url, el)
+    if (bounds !== null) {
+      // Edges: titlebar anchors (fx + fw/2, fy + 11, edges.ts lockstep).
+      const anchors = new Map<string, FrameAnchor>()
+      for (const [name, rect] of model.allFrames()) {
+        anchors.set(name, { name, x: rect.x + rect.w / 2, y: rect.y + FRAME_HEAD_LIFT })
       }
-      el.style.left = `${p.x}px`
-      el.style.top = `${p.y}px`
-      const uEl = el.querySelector<HTMLElement>('.u')!
-      const txt = `${p.url} score ${p.score ?? 0}`
-      if (uEl.textContent !== txt) uEl.textContent = txt
-    }
-    for (const [url, el] of [...peerEls]) {
-      if (!seen.has(url)) { el.remove(); peerEls.delete(url) }
-    }
-    // Edges: titlebar anchors (fx + fw/2, fy + 11, edges.ts lockstep).
-    const anchors = new Map<string, FrameAnchor>()
-    for (const [name, rect] of model.allFrames()) {
-      anchors.set(name, { name, x: rect.x + rect.w / 2, y: rect.y + FRAME_HEAD_LIFT })
-    }
-    for (const e of activityEdges(lastInFlight, anchors, placements, clock())) {
-      fedSvg.push(...fedEdge(e, 'e-activity', e.label))
-    }
-    for (const e of federalEdges(placements, bounds)) {
-      fedSvg.push(...fedEdge(e, 'e-federal', e.label))
+      for (const e of activityEdges(lastInFlight, anchors, placements, clock())) {
+        fedSvg.push(...fedEdge(e, 'e-activity', e.label))
+      }
+      for (const e of federalEdges(placements, bounds)) {
+        fedSvg.push(...fedEdge(e, 'e-federal', e.label))
+      }
     }
   }
 
@@ -594,8 +584,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
 
   function startCreateFromSelection(): void {
     if (dialog !== null) return
-    const ids = selectedByY()
-    if (ids.length < 2) { notice('info', '框选至少 2 个节点'); return }
+    // Peer cards are not joinable sessions: they never enter 建队 ids.
+    const ids = selectedByY().filter(id => model.getNode(id)?.remote !== true)
+    if (ids.length < 2) { notice('info', '框选至少 2 个会话节点'); return }
     openNameDialog(ids)
   }
 
@@ -1190,7 +1181,42 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       }
     }
     for (const id of model.nodeIds()) {
-      if (!seen.has(id)) model.removeNode(id)
+      if (!seen.has(id) && !id.startsWith('peer-')) model.removeNode(id)
+    }
+
+    // Peer nodes (v1 ruling): same model pipeline as sessions, `remote` flag
+    // on. Saved positions win; new peers take the deterministic column over
+    // the LOCAL content bounds (remote cards hang outside the field and are
+    // excluded from bounds, so the column cannot feed back into itself).
+    const peerSeen = new Set<string>()
+    lastRemoteTeams = groupRemoteTeams(input.remoteTeams ?? [])
+    peerScoreByText.clear()
+    for (const p of input.peers ?? []) {
+      peerScoreByText.set(peerHostOf(p.url), p.score)
+    }
+    if (input.peers !== undefined) {
+      const localBounds = model.contentBounds()
+      const placements = placePeers(input.peers, localBounds)
+      input.peers.forEach((p, i) => {
+        const id = peerNodeId(p.url)
+        peerSeen.add(id)
+        const saved = layoutDoc?.nodes[id]
+        const existing = model.getNode(id)
+        const base = existing !== undefined
+          ? { x: existing.x, y: existing.y }
+          : saved !== undefined
+            ? { x: saved.x, y: saved.y }
+            : { x: placements[i]?.x ?? 200, y: placements[i]?.y ?? 0 }
+        model.upsertNode({
+          id, x: base.x, y: base.y,
+          label: p.url, team: '', name: p.url, peerUrl: p.url,
+          live: true, remote: true, memberships: [],
+        })
+        model.upsertScore(id, p.score)
+      })
+    }
+    for (const id of model.nodeIds()) {
+      if (id.startsWith('peer-') && !peerSeen.has(id)) model.removeNode(id)
     }
     for (const team of input.teams) {
       if (model.getFrame(team.name) !== undefined) continue // live rect wins

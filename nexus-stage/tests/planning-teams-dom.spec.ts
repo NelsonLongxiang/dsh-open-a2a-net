@@ -119,7 +119,7 @@ describe('建队 flow', () => {
     v.seam.key(key({ key: 'g', target: v.root }))
     expect(v.root.querySelector('.p-dialog')).toBeNull()
     expect(actions).toHaveLength(0)
-    expect(v.root.textContent).toContain('框选至少 2 个节点')
+    expect(v.root.textContent).toContain('框选至少 2 个会话节点')
   })
 
   it('empty name shows the inline mirror error and emits nothing', async () => {

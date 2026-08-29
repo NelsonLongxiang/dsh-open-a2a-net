@@ -137,11 +137,9 @@
 #dsh-plan .p-frame-head:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
 
 /* ── PR D: federation overlay — peer badges, activity/federal edges, status fly ── */
-#dsh-plan .peer{position:absolute; display:flex; align-items:center; gap:7px; pointer-events:none;
-  border:1px dashed var(--federal); border-radius:8px; background:color-mix(in srgb, var(--federal) 7%, transparent);
-  padding:4px 9px; font-size:11px; color:var(--ink); white-space:nowrap;
-  transform:translate(-50%,-50%)}
-#dsh-plan .peer .dia{width:10px; height:10px; flex:none; background:var(--federal); transform:rotate(45deg)}
+#dsh-plan .p-node.remote{border-left-color:var(--federal)}
+#dsh-plan .p-node.remote .dot{background:var(--federal)}
+#dsh-plan .p-node.remote .prio{color:var(--ink)}
 #dsh-plan .peer .u{max-width:34ch; overflow:hidden; text-overflow:ellipsis}
 #dsh-plan .e-activity{stroke:var(--accent); stroke-width:2; stroke-dasharray:8 6; stroke-opacity:.9}
 #dsh-plan .e-federal{stroke:var(--federal); stroke-width:1.5; stroke-dasharray:6 5; stroke-opacity:.5}

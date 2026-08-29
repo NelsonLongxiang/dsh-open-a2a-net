@@ -88,3 +88,38 @@
 | D. 活动/联邦层 | inFlight 活动边 + peer 徽章 + 联邦线 + 状态条飞行定位 | `state.inFlight/activity/peers` 已下发未消费 | ✅ 已实施 |
 
 验收门：教义 §五交付前门六条 + 契约不变量四条逐条 + `tests/canvas-stage.spec.ts` in-process harness 范式补规划模式用例 + 三缩放抽查对比度。
+
+
+## 7. 对等节点卡 v1（设计方向：用户裁决 2026-08-29）
+
+> 裁决原文："对等节点事实上跟会话节点没什么区别，他是团队节点的一种展现形式，只是只保留了一个节点入口。"
+> 协议依据：目录实现（index.ts listDirectoryTeams）对每个 peer 抓签名卡片，卡片携带该宿主全部会话团队，行标 origin（宿主聚类）/ via（对端端点）——**对等节点就是一组远端团队行的折叠分组入口**，数据模型已按此组织，画布此前未消费。
+
+### 7.1 统一节点模型
+
+节点 = 联邦图中的入口。两类：
+
+| | 本地会话节点 | 对等节点（远端组节点） |
+|---|---|---|
+| 入口指向 | 本地团队成员 | 经由该对端可达的远端团队（卡片 sessionTeams，state.remote 行） |
+| 状态徽标 | live ● / cold ○ | 可达性 score（a2a_probe 数据） |
+| 可操作性 | 拖拽排布、加入/离队、路由目标 | 拖拽排布、展开远端团队清单；**无 join/leave**（不引入"加入对端宿主"假语义） |
+| 布局持久化 | nodes{id:{x,y}} | **同表**：节点键 `peer-<host>:<port>`（≤128 不透明字符串，v1 契约无 schema 变更） |
+
+保留的唯一类型差异：peer 不可入本地队（成员必须 joined session——契约不变量 1）。
+
+### 7.2 交互规格
+
+- 卡面：172px 卡（同 chrome），靛蓝远端徽标替代 live 点，host:port 替代路由别名，`score N` 替代 P 徽标，展开区列远端团队行（team + workspace，来自 state.remote 按 via 聚合）
+- 拖拽：与本地卡同管线，位置随布局文档持久化（save/adopt round-trip）
+- 右键菜单：v1 无操作项（不提供加入本地队/路由）；Ctrl+滚轮缩放、框选、Esc 全适用
+- 建队：选择集里的对等卡**不参与**（ids 过滤 remote；全 remote → info 提示）
+- 联邦线/活动边：不变（hub/badge → 保留现有锚定）
+
+### 7.3 验收门
+
+1. 布局文档含 `peer-*` 键，clampDoc 通过（键 ≤128 无约束冲突），save/adopt round-trip 位置保持
+2. 拖拽对等卡 → 0px 端点偏差的边随动（活动边锚定到对端卡）
+3. demo=1 下 2 张远端卡渲染远端团队清单；XSS：url/name 纯 textContent
+4. 选择集全为对等卡时 G → info 提示；混合选择 → 仅本地会话入 ids
+5. 设计系统门（四态/令牌/reduced-motion/无 emoji）逐项过

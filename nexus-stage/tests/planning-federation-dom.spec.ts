@@ -71,20 +71,21 @@ describe('federation overlay DOM', () => {
     expect(label()).toContain('17s')
   })
 
-  it('reconcile with peers+inFlight lays badge chips in the deterministic column', () => {
+  it('peers render as remote cards (host title, score, remote team count)', () => {
     const { v } = view()
-    v.reconcile(fedInput)
-    const chips = v.root.querySelectorAll<HTMLElement>('.peer')
-    expect(chips).toHaveLength(2)
-    const first = v.root.querySelector<HTMLElement>('.peer[data-url="https://10.0.0.5:8787"]')!
-    expect(first).not.toBeNull()
-    expect(first.textContent).toContain('https://10.0.0.5:8787')
+    v.reconcile({ ...fedInput, remoteTeams: [
+      { team: '远端甲', name: 'alpha-team', via: 'https://10.0.0.5:8787' },
+      { team: '远端乙', via: 'https://10.0.0.5:8787' },
+      { team: '远端丙', via: 'http://192.168.3.9:13080' },
+    ] })
+    const cards = v.root.querySelectorAll<HTMLElement>('.p-node.remote')
+    expect(cards).toHaveLength(2)
+    const first = v.root.querySelector<HTMLElement>('.p-node[data-id="peer-10.0.0.5:8787"]')!
+    expect(first.textContent).toContain('10.0.0.5:8787')
     expect(first.textContent).toContain('score 0.9')
-    expect(first.style.left).toBe('440px')
-    expect(first.style.top).toBe('-200px')
-    const second = v.root.querySelector<HTMLElement>('.peer[data-url="http://192.168.3.9:13080"]')!
-    expect(second.style.left).toBe('440px')
-    expect(second.style.top).toBe('-110px')
+    expect(first.textContent).toContain('2 远端团队')
+    expect(first.textContent).toContain('alpha-team')
+    expect(first.classList.contains('remote')).toBe(true)
   })
 
   it('each pending route draws an accent edge labelled a2a_route · peer · age', () => {
@@ -124,9 +125,10 @@ describe('federation overlay DOM', () => {
   it('degenerate bounds (empty canvas) skip badges and federation edges', () => {
     const { v } = view()
     v.reconcile(fedInput)
-    expect(v.root.querySelectorAll('.peer')).toHaveLength(2)
-    v.reconcile({ sessions: [], teams: [], peerCount: peers.length, peers, inFlight: [] })
-    expect(v.root.querySelectorAll('.peer')).toHaveLength(0)
+    expect(v.root.querySelectorAll('.p-node.remote')).toHaveLength(2)
+    // Peers are first-class cards now: they only vanish when the PEERS go away.
+    v.reconcile({ sessions: [], teams: [], peerCount: peers.length, peers: [], inFlight: [] })
+    expect(v.root.querySelectorAll('.p-node.remote')).toHaveLength(0)
     expect(v.root.querySelectorAll('svg .e-activity')).toHaveLength(0)
     expect(v.root.querySelectorAll('svg .e-federal')).toHaveLength(0)
   })
@@ -162,10 +164,13 @@ describe('federation overlay DOM', () => {
       peers: [{ url: evil, score: 0.5 }],
       inFlight: [{ team: '甲', peer: evil, startedAt: 60_000 }],
     })
-    const chip = v.root.querySelector<HTMLElement>('.peer')!
-    expect(chip.dataset.url).toBe(evil)
-    expect(chip.textContent).toContain(evil)
+    const card = v.root.querySelector<HTMLElement>('.p-node.remote')!
+    // The node id is sanitized (peerNodeId strips non-id chars), so no
+    // markup can ever materialize; the display shows the sanitized host.
+    expect(card.dataset.id).not.toContain('<')
     expect(v.root.querySelector('img')).toBeNull()
+    expect(card.textContent).not.toContain('<')
+    expect(v.root.querySelectorAll('.p-node.remote')).toHaveLength(1) // garbage collapses, no crash
   })
 
   it('the legend gains the 活动边 and 联邦线 rows', () => {

@@ -44,6 +44,47 @@ export interface PeerPlacement {
 }
 
 /** One derived overlay edge, ready for the SVG / label layers. */
+/** Node id for a peer endpoint: `peer-<host>:<port>` (≤128, no '/').
+ *  Unparseable urls keep their raw text, reduced to id-safe characters —
+ *  attacker-shaped urls collapse to one id instead of poisoning selectors. */
+export function peerNodeId(url: string): string {
+  const host = peerHostOf(url).replace(/[^A-Za-z0-9.:\[\]-]/g, '-')
+  return `peer-${host}`
+}
+
+/** Bare host:port of a peer url (scheme stripped; unparseable urls pass through). */
+export function peerHostOf(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return url
+  }
+}
+
+/** One remote team row as the directory reports it (state.remote). */
+export interface RemoteTeamRow {
+  team: string
+  name?: string
+  via?: string
+  workspace?: string
+}
+
+/**
+ * Group remote team rows by the peer endpoint they arrived through. Rows
+ * without a usable `via` land under '' (skipped by peer card rendering).
+ * Key = bare host:port.
+ */
+export function groupRemoteTeams(rows: ReadonlyArray<RemoteTeamRow>): Map<string, RemoteTeamRow[]> {
+  const out = new Map<string, RemoteTeamRow[]>()
+  for (const row of rows) {
+    const via = row.via !== undefined && row.via !== '' ? peerHostOf(row.via) : ''
+    const list = out.get(via) ?? []
+    list.push(row)
+    out.set(via, list)
+  }
+  return out
+}
+
 export interface ActivityEdge {
   x1: number
   y1: number
