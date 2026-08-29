@@ -9,11 +9,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createPlanningView, type SeamKey, type SeamPointer } from '../src/planning-view.ts'
 
-function view() {
+function view(viewSize?: { w: number; h: number }) {
   const onDirty = vi.fn()
   const onLampClick = vi.fn()
   const onCanvasAction = vi.fn(() => Promise.resolve(true))
-  const v = createPlanningView({ onDirty, onLampClick, onCanvasAction })
+  const v = createPlanningView({ onDirty, onLampClick, onCanvasAction, viewSize: viewSize ? () => viewSize : undefined })
   document.body.appendChild(v.root)
   return { v, onDirty, onLampClick, onCanvasAction }
 }
@@ -80,6 +80,24 @@ describe('planning view DOM', () => {
     expect(parseFloat(frame.style.left)).toBe(fx0 + 100)
     expect(parseFloat(s1.style.left)).toBe(s1x0 + 100)
     expect(onDirty).toHaveBeenCalledTimes(1)
+  })
+
+  it('keyboard: 0 fits (transform moves off identity, dirty fires)', () => {
+    // Injected viewport size: jsdom has no layout, so fit math needs a
+    // deterministic box to produce a non-identity transform.
+    const onDirty = vi.fn()
+    const v = createPlanningView({
+      onDirty, onLampClick: vi.fn(), onCanvasAction: () => Promise.resolve(true),
+      viewSize: () => ({ w: 1000, h: 800 }),
+    })
+    document.body.appendChild(v.root)
+    v.reconcile({ sessions, teams, peerCount: 0 })
+    const before = v.root.querySelector<HTMLElement>('.p-world')!.style.transform
+    v.seam.key(key({ key: '0', target: v.root }))
+    const after = v.root.querySelector<HTMLElement>('.p-world')!.style.transform
+    expect(after).not.toBe(before)
+    expect(after).toContain('scale(')
+    expect(onDirty).toHaveBeenCalled()
   })
 
   it('keyboard: 0 fits (dirty), Escape clears selection, arrows nudge selection', () => {

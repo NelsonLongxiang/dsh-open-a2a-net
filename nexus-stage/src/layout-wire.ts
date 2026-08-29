@@ -65,6 +65,7 @@ export function createSaveLoop(deps: SaveLoopDeps): SaveLoop {
   let cancelTimer: (() => void) | undefined
   let busy = false
   let dirty = false
+  let flushAfterSettle = false
   let lamp: LampState = 'idle'
 
   function setLamp(next: LampState): void {
@@ -114,6 +115,13 @@ export function createSaveLoop(deps: SaveLoopDeps): SaveLoop {
       deps.onHttpError(`layout save unreachable: ${String((error as Error | undefined)?.message ?? error).slice(0, 80)}`)
     }
     busy = false
+    // pagehide raced a busy save: the queued edits must not wait for a
+    // debounce that a closing page will never fire — flush immediately.
+    if (flushAfterSettle && lamp !== 'error') {
+      flushAfterSettle = false
+      void fire(true)
+      return
+    }
     if (dirty && lamp !== 'error') {
       dirty = false
       setLamp('pending')
@@ -134,7 +142,7 @@ export function createSaveLoop(deps: SaveLoopDeps): SaveLoop {
       void fire(false)
     },
     flush() {
-      if (busy) { dirty = true; return }
+      if (busy) { flushAfterSettle = true; dirty = true; return }
       clearTimer()
       void fire(true)
     },

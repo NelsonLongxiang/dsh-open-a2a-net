@@ -69,11 +69,16 @@ export interface PlanningDeps {
   onDirty(): void
   /** The save lamp was clicked (error state -> retry). */
   onLampClick(): void
+  /** Viewport size in CSS px (defaults to the root element's box; tests
+   *  inject fixed sizes so fit math is assertable without layout). */
+  viewSize?(): { w: number; h: number }
   /**
-   * A team write action (optimistic state already applied). Resolves true
-   * when the host accepted it (or it was an idempotent no-op); false means
-   * the caller's undo has been run by the wire's error path - the view
-   * rolls its optimistic mutation back via the returned scoped undo.
+   * A team write action (optimistic state already applied by the view).
+   * Resolves true when the host accepted it — or it was an idempotent
+   * no-op (ok:false without an error string). Resolves false when the
+   * write was refused/failed: the view then rolls the action's scoped
+   * undo back itself. Rejecting the promise is also handled (treated as
+   * false) — the channel must not leave the team's guard pinned.
    */
   onCanvasAction(a: CanvasAction): Promise<boolean>
   /** Wall clock for the inFlight age labels (tests pin it; default Date.now). */
@@ -257,6 +262,13 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   // ── viewport application ──
   let viewW = 0
   let viewH = 0
+  const measure = (): { w: number; h: number } =>
+    deps.viewSize ? deps.viewSize() : { w: root.clientWidth, h: root.clientHeight }
+  const syncViewSize = (): void => {
+    const size = measure()
+    viewW = size.w
+    viewH = size.h
+  }
 
   function applyViewport(): void {
     world.style.transform = worldTransformCss(vp)
@@ -769,6 +781,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       const idx = buttons.indexOf(document.activeElement as HTMLButtonElement)
       if (e.key === 'ArrowDown') { e.preventDefault(); buttons[(idx + 1 + buttons.length) % buttons.length]?.focus() }
       else if (e.key === 'ArrowUp') { e.preventDefault(); buttons[(idx - 1 + buttons.length) % buttons.length]?.focus() }
+      else if (e.key === 'Home') { e.preventDefault(); buttons[0]?.focus() }
+      else if (e.key === 'End') { e.preventDefault(); buttons[buttons.length - 1]?.focus() }
       else if (e.key === 'Escape') {
         e.preventDefault()
         e.stopPropagation() // drill-back is menu-internal; root must not double-close
@@ -831,7 +845,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   }
 
   function pointerDown(ev: SeamPointer): void {
-    if (viewW === 0) { viewW = root.clientWidth; viewH = root.clientHeight }
+    if (viewW === 0) syncViewSize()
     if (dialog !== null) { ev.preventDefault(); return } // modal: no gestures behind the dialog
     const target = ev.target as Element | null
     // Context-menu dismissal: the first pointerdown outside an open menu
@@ -990,13 +1004,15 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   }
 
   function zoomCenter(factor: number): void {
+    syncViewSize()
     vp = zoomAt(vp, factor, viewW / 2, viewH / 2)
     applyViewport()
     deps.onDirty()
   }
 
   function fitToContent(): void {
-    vp = fitView(model.contentBounds(), root.clientWidth || viewW, root.clientHeight || viewH)
+    syncViewSize()
+    vp = fitView(model.contentBounds(), viewW, viewH)
     applyViewport()
     deps.onDirty()
   }
@@ -1240,8 +1256,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
 
   function activate(): void {
     root.style.display = 'block'
-    viewW = root.clientWidth
-    viewH = root.clientHeight
+    syncViewSize()
     applyViewport()
     root.focus()
   }
