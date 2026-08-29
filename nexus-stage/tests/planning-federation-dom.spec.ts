@@ -9,7 +9,11 @@
  * Time is pinned through the injectable `now` dep.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { createPlanningView, type PlanningInput } from '../src/planning-view.ts'
+import { createPlanningView, type PlanningInput, type SeamPointer } from '../src/planning-view.ts'
+
+function ptr(o: Partial<SeamPointer>): SeamPointer {
+  return { button: 0, shiftKey: false, ctrlKey: false, clientX: 0, clientY: 0, pointerId: 1, target: null, preventDefault: () => {}, ...o }
+}
 
 const NOW = 72_400
 
@@ -171,6 +175,24 @@ describe('federation overlay DOM', () => {
     expect(v.root.querySelector('img')).toBeNull()
     expect(card.textContent).not.toContain('<')
     expect(v.root.querySelectorAll('.p-node.remote')).toHaveLength(1) // garbage collapses, no crash
+  })
+
+  it('context menu never opens on a peer card (read-only entry, P2 regression)', () => {
+    const { v } = view()
+    v.reconcile({
+      sessions,
+      teams,
+      peerCount: peers.length,
+      peers,
+      inFlight: [],
+      remoteTeams: [{ team: '远端甲', via: 'https://10.0.0.5:8787' }],
+    })
+    const remoteCard = v.root.querySelector<HTMLElement>('.p-node.remote')!
+    console.log('DEBUG remoteCard.dataset.id:', JSON.stringify(remoteCard.dataset.id))
+    v.seam.contextMenu(ptr({ target: remoteCard, clientX: 10, clientY: 10 }))
+    const menu = v.root.querySelector('.p-menu')
+    console.log('DEBUG menu after contextMenu:', menu !== null, menu?.textContent?.slice(0, 60))
+    expect(menu).toBeNull()
   })
 
   it('the legend gains the 活动边 and 联邦线 rows', () => {

@@ -792,7 +792,10 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   /** Context menu from a real contextmenu event or the keyboard equivalent. */
   function contextMenuAt(x: number, y: number, target: Element | null): void {
     if (dialog !== null) return
-    const nodeEl = target?.closest<HTMLElement>('.p-node') ?? null
+    // Peer endpoints are read-only entries: no roster menu for them.
+    const probeNode = target?.closest<HTMLElement>('.p-node') ?? null
+    if (probeNode !== null && model.getNode(probeNode.dataset.id ?? '')?.remote === true) return
+    const nodeEl = probeNode
     const headEl = target?.closest<HTMLElement>('.p-frame-head') ?? null
     if (nodeEl !== null) {
       const id = nodeEl.dataset.id ?? ''
