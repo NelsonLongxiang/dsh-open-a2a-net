@@ -1,18 +1,16 @@
 /**
- * Persisted spatial layout for the infinite-canvas page ('a2a/canvas-layout.json').
- * Pure presentation state: node coordinates, team-frame rectangles, and the
- * viewport transform. Membership truth stays in canvas.json - this store may
- * be reset freely without touching who sits in which team.
+ * Client-side mirror of the host layout contract (src/layout-store.ts).
+ * The host module imports node:fs, so the stage cannot share its types -
+ * this file redeclares the v1 document shape and reimplements the exact
+ * clamp discipline. Parity is not optional: the save loop adopts the
+ * host's normalized response, and a mirror that clamped differently from
+ * the host would make every save look like an external edit and keep the
+ * save lamp pending forever. The clamp vectors in tests/planning-world.spec.ts
+ * pin both sides to the same answers.
  *
- * Unit semantics (contract note 6, 2026-08-28 ruling): {x,y} are 2D
- * planning-canvas card centers in pixels. Other consumers (the 3D
- * observation lens) must reproject into their own envelope, never consume
- * the values as absolute scene coordinates.
- * @module @nelsonlongxiang/dsh-open-a2a-net/layout-store
+ * Zero dependencies, no DOM - unit-testable straight from the root suite.
+ * @module nexus-stage/layout-doc
  */
-
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
 
 /** One draggable point in world space. */
 export interface LayoutPoint { readonly x: number; readonly y: number }
@@ -23,8 +21,8 @@ export interface LayoutRect extends LayoutPoint { readonly w: number; readonly h
 /** The viewport transform (world point at the top-left corner, plus zoom). */
 export interface LayoutViewport extends LayoutPoint { readonly scale: number }
 
-/** The whole persisted document. */
-export interface LayoutSnapshot {
+/** The whole persisted document (v1). */
+export interface LayoutDoc {
   readonly version: 1
   readonly viewport: LayoutViewport
   readonly nodes: Readonly<Record<string, LayoutPoint>>
@@ -64,11 +62,19 @@ function clampRect(raw: unknown): LayoutRect | undefined {
   return { ...point, w: Math.min(w, COORD_LIMIT), h: Math.min(h, COORD_LIMIT) }
 }
 
-function clampDoc(raw: unknown): LayoutSnapshot | undefined {
+/**
+ * Normalize an untrusted layout document exactly as the host does:
+ * version!==1 rejects the whole doc; non-finite coordinates drop the
+ * point; coordinates round and clamp to ±COORD_LIMIT; scale clamps to
+ * [SCALE_MIN, SCALE_MAX]; node keys cap at 128 chars; frame keys mirror
+ * canvas team names (no '/', cap 40); rects need w>0 and h>0; caps are
+ * first-wins in insertion order - entries beyond are silently dropped,
+ * never refused (an overflow renders, it just does not persist).
+ */
+export function clampDoc(raw: unknown): LayoutDoc | undefined {
   if (raw === null || typeof raw !== 'object') return undefined
   const rec = raw as Record<string, unknown>
   if (rec.version !== 1) return undefined
-  // The viewport is a point+scale, not a rect - validate its own shape.
   const vpRaw = rec.viewport
   if (vpRaw === null || typeof vpRaw !== 'object') return undefined
   const vp = vpRaw as Record<string, unknown>
@@ -77,7 +83,6 @@ function clampDoc(raw: unknown): LayoutSnapshot | undefined {
   const vsRaw = vp.scale
   const vsNum = typeof vsRaw === 'number' ? vsRaw : Number.NaN
   if (vx === undefined || vy === undefined || !Number.isFinite(vsNum)) return undefined
-  const viewport = { x: vx, y: vy }
   const scale = Math.max(SCALE_MIN, Math.min(SCALE_MAX, vsNum))
   const nodes: Record<string, LayoutPoint> = {}
   if (rec.nodes !== null && typeof rec.nodes === 'object') {
@@ -91,74 +96,48 @@ function clampDoc(raw: unknown): LayoutSnapshot | undefined {
   const frames: Record<string, LayoutRect> = {}
   if (rec.frames !== null && typeof rec.frames === 'object') {
     for (const [name, rect] of Object.entries(rec.frames as Record<string, unknown>)) {
-      // Frame keys mirror canvas team names: same discipline (no '/', cap 40).
       if (typeof name !== 'string' || name === '' || name.includes('/') || name.length > 40) continue
       const r = clampRect(rect)
       if (r !== undefined) frames[name] = r
       if (Object.keys(frames).length >= LAYOUT_FRAME_CAP) break
     }
   }
-  return { version: 1, viewport: { x: viewport.x, y: viewport.y, scale }, nodes, frames }
+  return { version: 1, viewport: { x: vx, y: vy, scale }, nodes, frames }
 }
 
 /**
- * Whole-document layout store with last-write-wins persistence. Accepts
- * anything the client sends and answers with the normalized truth: clients
- * round-trip GET after save when they need canonical numbers.
+ * Build a save payload from trusted in-memory state. Pre-clamps with the
+ * same mirror discipline and truncates in roster insertion order, so the
+ * document we send is already the document the host will normalize to -
+ * the save response is then a fixpoint of our payload, which the save
+ * loop relies on to tell "our own save echoed back" from "someone else
+ * edited while the request was in flight".
  */
-export class LayoutStore {
-  private doc: LayoutSnapshot | undefined
-  private readonly path: string
-
-  /** @param path - the snapshot file; an empty path keeps memory-only. */
-  constructor(path: string) {
-    this.path = path
-    this.restore()
+export function buildLayoutDoc(
+  viewport: LayoutViewport,
+  nodes: ReadonlyMap<string, LayoutPoint>,
+  frames: ReadonlyMap<string, LayoutRect>,
+): LayoutDoc {
+  const clamp = (n: number): number => Math.max(-COORD_LIMIT, Math.min(COORD_LIMIT, Math.round(n)))
+  const docNodes: Record<string, LayoutPoint> = {}
+  for (const [id, p] of nodes) {
+    if (typeof id !== 'string' || id === '' || id.length > 128) continue
+    docNodes[id] = { x: clamp(p.x), y: clamp(p.y) }
+    if (Object.keys(docNodes).length >= LAYOUT_NODE_CAP) break
   }
-
-  private restore(): void {
-    if (this.path === '' || !existsSync(this.path)) return
-    try {
-      this.doc = clampDoc(JSON.parse(readFileSync(this.path, 'utf8')))
-    } catch {
-      this.doc = undefined // corrupt layout is presentation loss only
-    }
+  const docFrames: Record<string, LayoutRect> = {}
+  for (const [name, r] of frames) {
+    if (typeof name !== 'string' || name === '' || name.includes('/') || name.length > 40) continue
+    const w = clamp(r.w)
+    const h = clamp(r.h)
+    if (w <= 0 || h <= 0) continue
+    docFrames[name] = { x: clamp(r.x), y: clamp(r.y), w: Math.min(w, COORD_LIMIT), h: Math.min(h, COORD_LIMIT) }
+    if (Object.keys(docFrames).length >= LAYOUT_FRAME_CAP) break
   }
-
-  private persist(): void {
-    if (this.path === '') return
-    try {
-      mkdirSync(dirname(this.path), { recursive: true })
-      writeFileSync(this.path, JSON.stringify(this.doc), { mode: 0o600 })
-    } catch {
-      // An unwritable home degrades to memory-only presentation state.
-    }
-  }
-
-  /** The current snapshot, or null before the first save. */
-  get(): LayoutSnapshot | null {
-    return this.doc ?? null
-  }
-
-  /**
-   * Replace the document wholesale after normalization.
-   * @returns false when the payload is not a version-1 layout document.
-   */
-  save(raw: unknown): boolean {
-    const doc = clampDoc(raw)
-    if (doc === undefined) return false
-    this.doc = doc
-    this.persist()
-    return true
-  }
-
-  /** Drop all persisted presentation state. */
-  reset(): void {
-    this.doc = undefined
-    if (this.path === '') return
-    try {
-      mkdirSync(dirname(this.path), { recursive: true })
-      writeFileSync(this.path, '', { mode: 0o600 })
-    } catch { /* degrade to memory-only */ }
+  return {
+    version: 1,
+    viewport: { x: clamp(viewport.x), y: clamp(viewport.y), scale: Math.max(SCALE_MIN, Math.min(SCALE_MAX, viewport.scale)) },
+    nodes: docNodes,
+    frames: docFrames,
   }
 }

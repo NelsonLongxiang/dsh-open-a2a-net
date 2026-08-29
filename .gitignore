@@ -15,3 +15,12 @@ t.log
 tscc.log
 # Windows '> nul' redirect accidents materialize a real reserved-name file.
 nul
+
+# Python bytecode (mockhost smoke runs)
+__pycache__/
+
+# local scratch (one-shot patch scripts, live-data evidence shots)
+.claude-*.py
+feedback/2026-08-27-nexus-canvas-ux/shots/planning-live-*.png
+nexus-stage/pnpm-lock.yaml
+nexus-stage/pnpm-workspace.yaml

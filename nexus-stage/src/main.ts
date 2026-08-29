@@ -3,7 +3,6 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 import { disposeGeometries } from './dispose'
 import { createFaultReporter } from './fault'
-import { seatFor } from './seat'
 import { C, S } from './tokens'
 import { LodMachine, prefersReducedMotion } from './lod'
 import type { Lod } from './lod'
@@ -11,11 +10,14 @@ import {
   MOCK, drawMembership, drawActivity, drawPeers,
   type StateBody,
 } from './topology'
-import {
-  attachLabel, detachLabel, mountChrome, pinInspector, unpinInspector,
-} from './overlay'
+import { attachLabel, detachLabel, pinInspector, unpinInspector } from './overlay'
 import { updateCensus } from './census'
 import { createStageKeyboardHandler, wireReducedRendering } from './interaction'
+import { createPlanningView } from './planning-view'
+import { createSaveLoop, type LampState } from './layout-wire'
+import { projectFleet } from './reproject'
+import { createCanvasWire } from './canvas-wire'
+import type { CanvasAction } from './canvas-ops'
 import './overlay.css'
 
 // ─── DOM shell ──
@@ -34,11 +36,7 @@ app.appendChild(renderer.domElement)
 // distinguishable from "unreachable". The lifecycle lives in ./fault so the
 // unit tests can pin it without a DOM.
 const faultBadge = document.createElement('div')
-faultBadge.style.cssText =
-  'position:fixed;top:10px;right:10px;max-width:48ch;padding:6px 10px;' +
-  'border:1px solid #ef4444;background:#2a0d0dcc;color:#fecaca;' +
-  'font:12px/1.5 "JetBrains Mono",monospace;border-radius:4px;' +
-  'display:none;z-index:9;pointer-events:none'
+faultBadge.className = 'nexus-fault'
 app.appendChild(faultBadge)
 const { fault, clear: clearFault } = createFaultReporter(
   {
@@ -106,6 +104,8 @@ scene.add(teamGroup, nodeGroup, peerGroup, lineGroup)
 // One shared material for every membership edge: the visibility contract is
 // constant, so allocation happens once instead of once per poll cycle.
 const edgesMat = new THREE.LineBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.6 })
+/** Shared amber material for in-flight routes (mirrors drawActivity). */
+const routeMat = new THREE.LineBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.65 })
 
 // ─── Types re-exported from topology ──
 
@@ -159,7 +159,13 @@ async function cycle(): Promise<void> {
   // readability acceptance run without a live fleet.
   const sessions = useMock ? MOCK.sessions : (body.sessions ?? []).filter((s) => s.joined === true)
   const teams = useMock ? MOCK.canvas.teams : (body.canvas?.teams ?? [])
-  const peers = useMock ? MOCK.peers : (body.peers ?? [])
+  const peers = useMock ? MOCK.peers : (body.peers ?? []).filter(p => p !== null && typeof p === 'object' && typeof (p as { url?: unknown }).url === 'string')
+  // PR D federation rows: pending outbound routes ride the same state
+  // payload (top-level inFlight; the mock face has none). Cast only —
+  // topology.StateBody predates the rows and is outside this change.
+  const inFlight = useMock
+    ? []
+    : ((body as { inFlight?: ReadonlyArray<{ team: string; peer: string; startedAt: number }> }).inFlight ?? []).filter(r => r !== null && typeof r === 'object' && typeof (r as { team?: unknown }).team === 'string' && typeof (r as { peer?: unknown }).peer === 'string' && Number.isFinite((r as { startedAt?: unknown }).startedAt))
   // Read-path of layout persistence (write-path arrives with planning mode):
   // a node saved on a previous visit keeps its world spot instead of a fresh
   // random seat, so saved arrangements survive reloads.
@@ -168,10 +174,21 @@ async function cycle(): Promise<void> {
   // Retire departed nodes first — mesh and CSS2D label share one lifetime.
   const liveIds = new Set(sessions.map(s => s.id))
   for (const [sid, mesh] of [...meshesById]) {
-    if (!liveIds.has(sid)) { const lbl = labelByNode.get(sid); if (lbl) detachLabel(lbl); nodeGroup.remove(mesh); meshesById.delete(sid) }
+    if (!liveIds.has(sid)) {
+      const lbl = labelByNode.get(sid)
+      if (lbl) detachLabel(lbl)
+      // Group.remove only unlinks: geometry and material must be disposed
+      // explicitly, or GPU buffers accumulate for the page's lifetime.
+      disposeGeometries([mesh])
+      mesh.material instanceof THREE.Material && mesh.material.dispose()
+      nodeGroup.remove(mesh)
+      meshesById.delete(sid)
+      sessionById.delete(sid)
+      sessionTeam.delete(sid)
+    }
   }
 
-  // Seat un-seated nodes.
+  // Seat un-seated nodes (position arrives in the reprojection pass below).
   for (let i = 0; i < sessions.length; i++) {
     const s = sessions[i]!
     const sid = s.id
@@ -181,22 +198,29 @@ async function cycle(): Promise<void> {
       const color = isLive ? S.nodeLive : S.nodeCold
       mesh = makeNode(color, isLive ? 0.9 : 0.5)
       mesh.userData = { label: s.name ?? s.label, sid }
-      const saved = layout?.nodes?.[sid]
-      // Saved layout wins; otherwise the seat is a pure hash of the session
-      // id, so reloads reproduce the same star map instead of reshuffling.
-      // Malformed layout rows (non-numeric) fall through to the hash seat.
-      if (saved !== undefined && typeof saved.x === 'number' && typeof saved.y === 'number') {
-        mesh.position.set(saved.x, 0, saved.y)
-      } else {
-        const p = seatFor(sid)
-        mesh.position.set(p.x, p.y, p.z)
-      }
       nodeGroup.add(mesh)
+      meshesById.set(sid, mesh)
     }
     if (!labelByNode.has(sid)) labelByNode.set(sid, attachLabel(mesh, s.name ?? s.label, isLive, s.team))
     sessionTeam.set(sid, s.team)
     // Real normalized row: interaction handlers read this, never MOCK.
     sessionById.set(sid, s)
+  }
+
+  // 3D lens reprojection (ruling A of review-node-position.md): the shared
+  // layout document is 2D pixels (card centers), so the scene re-projects
+  // the whole fleet - saved positions plus unsaved polar fallbacks - into
+  // its observation envelope every poll. This keeps ANY arrangement on
+  // camera (a modest 2D arrange used to throw 4 of 5 nodes off camera) and
+  // makes the 3D view follow 2D saves mid-session (P3: layout was read
+  // only at mesh creation). Runs before the edge pass so edges follow.
+  const targets = projectFleet(
+    sessions.map(s => s.id),
+    (layout?.nodes ?? {}) as Record<string, { x: number; y: number }>,
+  )
+  for (const [sid, mesh] of meshesById) {
+    const t = targets.get(sid)
+    if (t !== undefined) mesh.position.set(t.x, 0, t.y)
   }
 
   // Membership edges: hub-star (team centroid + spokes) instead of the O(n²)
@@ -213,12 +237,156 @@ async function cycle(): Promise<void> {
   drawMembership(teams, meshesById, lineGroup, teamGroup)
   drawPeers(peers, peerGroup, lineGroup)
 
+  // Real in-flight routes: each pending outbound route draws an amber edge
+  // from its team hub to the matching peer mesh (both tagged in topology).
+  // Unmatched rows — a team without a live hub, an unknown peer — skip.
+  const inFlightRows = useMock ? [] : inFlight
+  for (const route of inFlightRows) {
+    const hub = teamGroup.children.find(h => (h.userData as { team?: string } | undefined)?.team === route.team)
+    const peer = peerGroup.children.find(p => (p.userData as { peer?: string } | undefined)?.peer === route.peer)
+    if (hub === undefined || peer === undefined) continue
+    const geo = new THREE.BufferGeometry().setFromPoints([hub.position.clone(), peer.position.clone()])
+    lineGroup.add(new THREE.Line(geo, routeMat))
+  }
+
   updateCensus(renderer.domElement, sessions, teams, peers)
   // Reduced-motion contract: a settled cycle is an external render driver —
   // the stage must repaint fresh data (5s updates were invisible without it).
   reducedLoop?.renderOnce()
   if (useMock) drawActivity([['s1', 's3'], ['s4', 's5']], meshesById, lineGroup)
+
+  // ── Planning mode shares this poll: same state payload, same layout GET. ──
+  const layoutJson = JSON.stringify(layout ?? null)
+  if (layoutJson !== lastLayoutJson) {
+    lastLayoutJson = layoutJson
+    // Adopt poll-sourced layouts only while nothing is unsaved/in flight —
+    // otherwise a slow GET would revert positions the user is still dragging.
+    if ((lampState === 'idle' || lampState === 'saved') && !saveLoop.isBusy()) {
+      planning.adoptExternalLayout(layout)
+    }
+  }
+  const remoteTeams = ((body as { remote?: ReadonlyArray<{ team?: string; name?: string; via?: string; workspace?: string }> }).remote ?? [])
+    .filter(r => r !== null && typeof r === 'object' && typeof (r as { team?: unknown }).team === 'string' && typeof (r as { via?: unknown }).via === 'string')
+    .map(r => ({ team: r.team as string, name: r.name, via: r.via as string, workspace: r.workspace }))
+  planning.reconcile({ sessions, teams, peerCount: peers.length, peers, inFlight, remoteTeams })
+  canvasFace = body.canvas !== undefined
+  tabPlan.style.display = canvasFace ? '' : 'none'
+  if (!canvasFace && mode === 'plan') setMode('scene')
 }
+
+// ─── Planning mode (2D): view + save loop + mode tabs (design.md §1 双模) ──
+// The 3D observation scene stays the landing mode; the planning canvas is
+// created eagerly but hidden, so the first poll fills it without a flash.
+let mode: 'scene' | 'plan' = 'scene'
+let canvasFace = false
+let lampState: LampState = 'idle'
+let lastLayoutJson: string | undefined
+
+// ─── Canvas write face: the wire + the action channel (PR C) ──
+const canvasWire = createCanvasWire({
+  send: async (body) => {
+    const r = await fetch('/__dsh_a2a/canvas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+    })
+    return { status: r.status, body: await r.json() as { ok?: boolean; error?: string } }
+  },
+  onNotice: (kind, text) => planning.notice(kind, text),
+})
+
+function runCanvasAction(a: CanvasAction): Promise<boolean> {
+  switch (a.type) {
+    case 'create-team': return canvasWire.createTeam(a.name, a.ids, a.created)
+    case 'add-member': return canvasWire.addMembers(a.team, a.ids)
+    case 'remove-member': return canvasWire.removeMembers(a.team, a.ids)
+    case 'remove-team': return canvasWire.removeTeam(a.name)
+    case 'reorder': return canvasWire.runRosterOps(a.team, a.ops)
+  }
+}
+
+const planning = createPlanningView({
+  onDirty: () => saveLoop.markDirty(),
+  onLampClick: () => saveLoop.retry(),
+  onCanvasAction: async (a) => {
+    const ok = await runCanvasAction(a)
+    // Settled: converge on truth either way — success absorbs the host's
+    // rich state; failure re-pulls so the rollback matches reality.
+    void cycle()
+    return ok
+  },
+})
+app.appendChild(planning.root)
+
+const saveLoop = createSaveLoop({
+  snapshot: () => planning.snapshotDoc(),
+  send: (doc, opts) => fetch('/__dsh_a2a/canvas-layout', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'save', layout: doc }),
+    cache: 'no-store',
+    keepalive: opts.keepalive,
+  }).then(async (r) => await r.json() as { ok: boolean; layout?: unknown; error?: string }),
+  schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => { clearTimeout(t) } },
+  now: Date.now,
+  onLamp: (state) => {
+    lampState = state
+    const now = new Date()
+    const hhmm = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0')
+    planning.setLamp(state, hhmm)
+  },
+  onAdopt: (normalized) => { planning.adoptExternalLayout(normalized) },
+  onHttpError: (message) => fault(message),
+})
+window.addEventListener('pagehide', () => saveLoop.flush())
+
+const tabBar = document.createElement('div')
+tabBar.className = 'nexus-modes'
+tabBar.setAttribute('role', 'tablist')
+tabBar.setAttribute('aria-label', '舞台模式')
+const mkTab = (label: string, title: string): HTMLButtonElement => {
+  const b = document.createElement('button')
+  b.type = 'button'
+  b.textContent = label
+  b.title = title
+  b.setAttribute('role', 'tab')
+  return b
+}
+const tabScene = mkTab('观测', '3D 拓扑观测模式')
+const tabPlan = mkTab('规划', '2D 无限画布 · 规划模式')
+// The planning tab exists only while the host serves the canvas face
+// (state.canvas !== undefined — the contract's master switch).
+tabPlan.style.display = 'none'
+tabBar.append(tabScene, tabPlan)
+app.appendChild(tabBar)
+
+function setMode(next: 'scene' | 'plan'): void {
+  mode = next
+  tabScene.setAttribute('aria-selected', String(next === 'scene'))
+  tabPlan.setAttribute('aria-selected', String(next === 'plan'))
+  // The hidden 3D canvas keeps tabindex=0 otherwise: Tab would focus an
+  // invisible surface and Enter would pin the 3D inspector over planning.
+  renderer.domElement.tabIndex = next === 'scene' ? 0 : -1
+  if (next === 'plan') {
+    // 3D chrome must not leak onto the planning canvas: the inspector is
+    // appended to #app last, and CSS2DRenderer stamps each label with its
+    // own z-index (distance-sorted), so both float above z:auto #dsh-plan
+    // no matter the DOM order. Hide the layer wholesale - the 3D rAF is
+    // paused in plan mode, so the labels have nothing live to show.
+    pinned = undefined
+    unpinInspector()
+    labelRenderer.domElement.style.display = 'none'
+    planning.activate()
+  } else {
+    labelRenderer.domElement.style.display = ''
+    planning.deactivate()
+    tabScene.focus() // focus must not fall to body after leaving planning
+  }
+}
+tabScene.addEventListener('click', () => setMode('scene'))
+tabPlan.addEventListener('click', () => setMode('plan'))
+setMode('scene')
 
 setInterval(() => void cycle(), 5000)
 void cycle()
@@ -266,8 +434,11 @@ renderer.domElement.addEventListener('keydown', createStageKeyboardHandler(
 
 // ─── Animate: full rAF loop in normal mode; reduced-motion gets renderOnce
 //  — static frames are still rendered after controls change or a cycle, so
-//  the stage never goes blank, it just does not drift on its own. ──
+//  the stage never goes blank, it just does not drift on its own. In plan
+//  mode the 3D loop pauses (one guarded entry, never cancelled — planning
+//  root covers the canvas, so a frozen frame is invisible). ──
 function renderOnce(): void {
+  if (mode !== 'scene') return
   labelRenderer.render(scene, camera)
   renderer.render(scene, camera)
 }
@@ -281,6 +452,7 @@ if (prefersReducedMotion()) {
 } else {
   function tick(): void {
     requestAnimationFrame(tick)
+    if (mode !== 'scene') return
     controls.update()
     labelRenderer.render(scene, camera)
     renderer.render(scene, camera)

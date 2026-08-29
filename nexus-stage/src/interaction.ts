@@ -69,21 +69,3 @@ export function wireReducedRendering(
     renderOnce: () => { renders += 1; renderOnce() },
   }
 }
-
-/** Census entry: one joined session rendered as a canvas aria entry. */
-export interface CensusRow {
-  id: string
-  label: string
-  team: string
-  live: boolean
-}
-
-/**
- * Format the canvas aria census (gate 2): one line per joined session,
- * deterministic order (input order), live/cold suffix.
- */
-export function formatCensus(rows: readonly CensusRow[]): string {
-  return rows
-    .map(r => `${r.label} (${r.team}) ${r.live ? 'live' : 'cold'}`)
-    .join('; ')
-}

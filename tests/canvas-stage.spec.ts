@@ -57,6 +57,33 @@ describe('canvas-layout control face', () => {
     expect((await get()).layout).toBeNull()
   })
 
+  it('normalizes a 2D planning document: frames kept, clamps applied, bad keys dropped', async () => {
+    const port = await harness()
+    const base = 'http://127.0.0.1:' + String(port)
+    const post = (b: unknown): Promise<any> => fetch(base + '/__dsh_a2a/canvas-layout', { method: 'POST', body: JSON.stringify(b) }).then(r => r.json())
+    const doc = {
+      version: 1,
+      viewport: { x: 12.6, y: -3.2, scale: 99 },
+      nodes: { 'session-a': { x: 2e6, y: 1.6 }, 'session-b': { x: 0, y: 0 } },
+      frames: {
+        选品: { x: 10, y: 20, w: 400, h: 300 },
+        'a/b': { x: 0, y: 0, w: 1, h: 1 },
+        flat: { x: 0, y: 0, w: 0, h: 9 },
+      },
+    }
+    const saved = await post({ action: 'save', layout: doc })
+    expect(saved.ok).toBe(true)
+    // The echoed snapshot is the fixpoint the client relies on: rounding,
+    // the scale clamp, coordinate clamping, and dropped keys all applied.
+    expect(saved.layout).toEqual({
+      version: 1,
+      viewport: { x: 13, y: -3, scale: 3 },
+      nodes: { 'session-a': { x: 1e6, y: 2 }, 'session-b': { x: 0, y: 0 } },
+      frames: { 选品: { x: 10, y: 20, w: 400, h: 300 } },
+    })
+    expect((await (await fetch(base + '/__dsh_a2a/canvas-layout')).json()).layout).toEqual(saved.layout)
+  })
+
   it('saves a full-fleet document above the legacy 10 KiB control cap', async () => {
     const port = await harness()
     const base = 'http://127.0.0.1:' + String(port)
