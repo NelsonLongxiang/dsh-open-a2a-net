@@ -1240,7 +1240,7 @@ export function apply(ctx: Context, config: Config): void {
                 .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, status: task.status, direction: task.direction ?? 'outbound', receiptExpected: task.receiptExpected !== false })),
               tasksDead: taskLedger.list()
                 .filter(task => task.status === 'dead')
-                .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt })),
+                .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt, reason: task.reason ?? 'unspecified' })),
               archivedCount: taskLedger.archive().length,
               // 0.5.36 observability: the idempotency window aggregate —
               // window occupancy, outcome split, and cumulative claim-verdict
@@ -3595,7 +3595,7 @@ ${message}`
       }],
     },
     presentCall: () => ({ card: 'generic', title: 'A2A task ledger', kind: 'other', rawInput: null }),
-    execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; status: 'pending' | 'dead'; deadAt?: number }[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string }[]; archivedTotal: number }> => {
+    execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; status: 'pending' | 'dead'; deadAt?: number; reason?: 'fire-forget' | 'unconsumed' }[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string }[]; archivedTotal: number }> => {
       a2aJoinGateRefusal(exec)
       const archiveAll = taskLedger.archive()
       return {

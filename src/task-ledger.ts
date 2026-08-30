@@ -57,6 +57,9 @@ export const TASK_STALE_TTL_MS = 24 * 60 * 60_000
 /** Lifecycle of a tracked outbound task inside the owed book. */
 export type TaskStatus = 'pending' | 'dead'
 
+/** F5 layer-3: why a dead row aged out (stamped by the sweep at flip time). */
+export type DeadReason = 'fire-forget' | 'unconsumed'
+
 /** One tracked outbound task still in the owed book (unsettled). */
 export interface TaskRecord {
   readonly taskId: string
@@ -81,6 +84,13 @@ export interface TaskRecord {
   status: TaskStatus
   /** When the row was swept to dead-letter (absent while pending). */
   deadAt?: number
+  /**
+   * F5 layer-3: why the row aged out. 'fire-forget' — a receiptExpected:false
+   * row expiring is expected bookkeeping, not a failure; 'unconsumed' — a
+   * receipt-owed row never settled, the actionable stale shape. Absent on
+   * dead rows persisted before this field (rendered as 'unspecified').
+   */
+  reason?: DeadReason
 }
 
 /** One settled task kept for audit, with its receipt-correlated outcome. */
@@ -494,6 +504,11 @@ export class TaskLedger {
       if (entry.status === 'pending' && now - entry.startedAt > this.staleTtlMs) {
         entry.status = 'dead'
         entry.deadAt = now
+        // F5 layer-3: stamp WHY the row aged — a fire-and-forget row
+        // (receiptExpected:false) expiring is expected bookkeeping; a
+        // receipt-owed row expiring means the settlement chain failed for
+        // that delivery and deserves supervision attention.
+        entry.reason = entry.receiptExpected === false ? 'fire-forget' : 'unconsumed'
         changed = true
       }
     }

@@ -227,3 +227,27 @@ describe('TaskLedger settled-archive migration and bounds', () => {
     expect(reloaded.archive()[0]?.summary).toBe('kept')
   })
 })
+
+describe('dead-letter aging reason (F5 layer-3)', () => {
+  it('stamps fire-forget vs unconsumed by receipt expectation at sweep time', async () => {
+    const ledger = new TaskLedger('', { staleTtlMs: 30 })
+    ledger.trackInbound('direct-ff', 'dsh', 'dsh-host-9c53bf95-00000000', undefined, false)
+    ledger.track('direct-owed', 'dsh', 'local')
+    await tickPastTtl(45)
+    ledger.resolveEcho('__sweep-trigger__')
+    const rows = ledger.list().map(entry => [entry.taskId, entry.status, entry.reason])
+    // Most recent first: the owed row was tracked after the fire-and-forget one.
+    expect(rows).toEqual([
+      ['direct-owed', 'dead', 'unconsumed'],
+      ['direct-ff', 'dead', 'fire-forget'],
+    ])
+  })
+
+  it('rows persisted before the field render an absent reason (back-compat)', async () => {
+    const ledger = new TaskLedger('', { staleTtlMs: 30 })
+    ledger.track('direct-legacy', 'dsh', 'local')
+    ledger.resolveFromMessage('[A2A receipt] task direct-legacy settled')
+    const archived = ledger.archive()[0]
+    expect(archived?.reason).toBeUndefined()
+  })
+})
