@@ -456,7 +456,11 @@ if (prefersReducedMotion()) {
   // cycle call renderOnce() through the wired loop — the stage never drifts
   // on its own, and renderOnceCount() is observable for the behavior tests.
   reducedLoop = wireReducedRendering(controls, renderOnce)
-  controls.addEventListener('change', () => controls.update())
+  // NOTE: no 'change' -> controls.update() here. OrbitControls' own input
+  // handlers call update() internally, so an external listener re-entrant
+  // on 'change' self-triggers (~10k synchronous frames per camera move =
+  // the RangeError storm under prefers-reduced-motion; update() only
+  // needs per-frame driving when damping is on, which it is not here).
 } else {
   function tick(): void {
     requestAnimationFrame(tick)
