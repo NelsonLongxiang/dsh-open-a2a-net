@@ -2913,7 +2913,7 @@ ${message}`
       return {
         ok: false,
         error: candidates.length === 0
-          ? `team "${args.team}" is not published by any configured peer${failures.length === 0 ? '' : ` (unresolved delegations: ${failures.join('; ')})`}`
+          ? `team "${args.team}" is not published by any configured peer${failures.length === 0 ? '' : ` (unresolved delegations: ${failures.join('; ')})`} — 若目标是未加入网络的会话：请其在侧边栏加入（或经 a2a-collab CLI 注册）后重试`
           : `team "${args.team}" failed on every candidate: ${failures.join('; ')}`,
         code: -32004,
       }
