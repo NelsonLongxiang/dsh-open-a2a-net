@@ -1013,6 +1013,14 @@ export function apply(ctx: Context, config: Config): void {
       if (joinedSessions.has(String(agent.id))) mountSessionNode(agent)
     }
 
+    /** F-observability: the boot prewarm's lifecycle, surfaced on the state route (F: prewarm not running was invisible). */
+    const prewarmStatus: {
+      state: 'off' | 'skipped:apiProxy-missing' | 'draining' | 'done' | 'cancelled'
+      attempted: number
+      woken: number
+      failed: Array<{ id: string; error: string }>
+    } = { state: 'off', attempted: 0, woken: 0, failed: [] }
+
     {
       // Archive pruning and boot wake both ride the loader tree's
       // settlement: the workspace registry and the api gateway may activate
@@ -1027,8 +1035,14 @@ export function apply(ctx: Context, config: Config): void {
       const pruneThenWake = (): void => {
         pruneArchivedJoins()
         pruneCanvasMemberships()
-        if (!config.wakeJoinedOnBoot) return
+        if (!config.wakeJoinedOnBoot) {
+          prewarmStatus.state = 'off'
+          return
+        }
         if (ctx.get('apiProxy') === undefined) {
+          // F-observability: this skip used to be console-only — the state
+          // route now carries it so a dead prewarm is a reading, not a rumor.
+          prewarmStatus.state = 'skipped:apiProxy-missing'
           logger.warn('wakeJoinedOnBoot is on but no api gateway is composed; cold joined sessions stay asleep')
           return
         }
@@ -1051,26 +1065,39 @@ export function apply(ctx: Context, config: Config): void {
         // row and its intent. Wake-on-route and manual opens never queue.
         prewarmCancelled = false
         const ids = joinedSessions.list()
+        prewarmStatus.state = 'draining'
         let index = 0
         const step = (): void => {
-          if (prewarmCancelled || ctx.fiber.uid === null) return
+          if (prewarmCancelled || ctx.fiber.uid === null) {
+            prewarmStatus.state = 'cancelled'
+            return
+          }
           while (index < ids.length
             && (liveRoots.has(ids[index]!) || !joinedSessions.has(ids[index]!) || archivedSessionFilter()?.(ids[index]!) === true)) index += 1
-          if (index >= ids.length) return
+          if (index >= ids.length) {
+            prewarmStatus.state = 'done'
+            return
+          }
           const foregroundBusy = Date.now() - lastWakeDemandAt < config.wakePrewarmQuietMs || inFlightRoutes.size > 0
           if (foregroundBusy) {
             schedule(step, PREWARM_YIELD_RETRY_MS)
             return
           }
           const id = ids[index++]!
+          prewarmStatus.attempted += 1
           const startedAt = Date.now()
           const flight = materializeOnce(id)
-          if (flight === undefined) return
+          if (flight === undefined) {
+            prewarmStatus.failed.push({ id, error: 'materializer-unavailable' })
+            return
+          }
           void flight
             .catch(error => {
+              prewarmStatus.failed.push({ id, error: String(error).slice(0, 200) })
               logger.warn(`boot wake of ${id} failed: ${String(error)}`)
             })
             .then(() => {
+              prewarmStatus.woken += 1
               logger.info(`a2a: boot prewarm ${id8(id)} settled in ${String(Date.now() - startedAt)}ms (${String(ids.length - index)} left)`)
               if (!prewarmCancelled && ctx.fiber.uid !== null) schedule(step, config.wakeBootStaggerMs)
             })
@@ -1259,6 +1286,10 @@ export function apply(ctx: Context, config: Config): void {
               // Read-only; no fingerprints cross here (they are /a2a/query's
               // only auth material).
               idempotency: idempotencyStore.stats(),
+              // F-observability: the boot prewarm's lifecycle — a dead or
+              // skipped prewarm is the root shape behind "cold rows pile up
+              // after restart" and must be readable, not a console rumor.
+              prewarm: { ...prewarmStatus, failed: [...prewarmStatus.failed] },
             })
             res.writeHead(200, {
               'Content-Type': 'application/json',

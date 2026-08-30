@@ -689,3 +689,32 @@ describe('settlement integrity — debt gate and echo settle (F5 defect card)', 
     }
   })
 })
+
+describe('prewarm observability on the state route (F: prewarm not running)', () => {
+  const readPrewarm = async (port: number): Promise<Record<string, unknown> | undefined> => {
+    const res = await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)
+    const body = (await res.json()) as { prewarm?: Record<string, unknown> }
+    return body.prewarm
+  }
+
+  it('wakeJoinedOnBoot on with no api gateway reports skipped:apiProxy-missing (the silent kill becomes a reading)', async () => {
+    const { port, dispose } = await mount({ wakeJoinedOnBoot: true, announce: true, sessionNodes: true })
+    try {
+      const prewarm = await readPrewarm(port)
+      expect(prewarm).toMatchObject({ state: 'skipped:apiProxy-missing' })
+      expect(prewarm?.attempted).toBe(0)
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('wakeJoinedOnBoot off reports off (config-intended, not an anomaly)', async () => {
+    const { port, dispose } = await mount({ wakeJoinedOnBoot: false, announce: true, sessionNodes: true })
+    try {
+      const prewarm = await readPrewarm(port)
+      expect(prewarm).toMatchObject({ state: 'off' })
+    } finally {
+      await dispose()
+    }
+  })
+})
