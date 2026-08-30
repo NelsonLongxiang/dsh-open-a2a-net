@@ -741,7 +741,18 @@ export function apply(ctx: Context, config: Config): void {
    * the team names no cold joined session or no wake face is composed.
    */
   const wakeColdTeam = (team: string): Promise<Agent> | undefined => {
-    const aliasId = joinedSessions.list().find(entry => !liveRoots.has(entry) && `${config.team}/${id8(entry)}` === team)
+    // F7 (wake-intent self-heal): a boot-time transient can prune the
+    // in-memory intent while joined.json still holds it (memory/file
+    // divergence — the live repro on 0.5.40). The persisted file is the
+    // durable source of the user's gesture: if the in-memory match fails,
+    // reload once and retry before giving up.
+    const matchJoined = (): string | undefined =>
+      joinedSessions.list().find(entry => !liveRoots.has(entry) && `${config.team}/${id8(entry)}` === team)
+    let aliasId = matchJoined()
+    if (aliasId === undefined) {
+      joinedSessions.reload()
+      aliasId = matchJoined()
+    }
     // Canvas teams wake their first cold joined member (member order is
     // the routing priority; an archived member never wakes).
     const id = aliasId ?? canvasColdMemberId(parseCanvasTeamName(team))
