@@ -7,10 +7,10 @@
 
 | 维度 | 状态 |
 |---|---|
-| master | `5363041`（!43 合并提交；仓 tip `d08476c` 另含并行线文档件 !56-!58） |
-| 版本 | **0.5.36**（已发 jf-tech 私仓 latest，tarball 直验过） |
+| master | `5363041`（!43 合并提交；仓 tip `d08476c` 另含并行线 !44–!58——control-routes 修复、nexus 功能及 0.5.37–0.5.39 发版，非仅文档） |
+| 版本 | **0.5.36 = 本文所述发版**（08-29 时为 latest，tarball 直验过）；08-30 并行线已续发 0.5.37–0.5.39，现 latest=0.5.39 |
 | 本日落库 | !39 回放翻译（R1 APPROVE）；!40 交接文档；!41 slice 2 查询面（两 BLOCKING → R2 APPROVE）；!43 幂等窗口可观测（R1 REQUEST CHANGES 一 BLOCKING → 闭环 → R2 APPROVE）；另有并行线 !56-!58 文档件 |
-| 门禁基线 | typecheck×2 / vitest 369 / build 全绿（!43 净增 2 回归测试 + conflict e2e 扩展） |
+| 门禁基线 | typecheck×2 / vitest 369 / build 全绿（!43 净增 6 测试：观测 e2e ×2 + store 断言 ×2 + R1 回归 ×2） |
 
 ## 二、契约语义（本 PR 的产品本体）
 
