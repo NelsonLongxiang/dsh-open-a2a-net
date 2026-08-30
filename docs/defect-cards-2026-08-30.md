@@ -157,3 +157,23 @@
 worktree PR（3081 测试线验证）；F3 由 harness 仓实施时另开 PR。登记渠道
 说明：gitee issues 写端点对本 token 异常（401/404，pulls 端点三种姿势均
 正常——已实测分离），故以本文件 + PR 为登记载体。
+
+## F7（插件侧，缺陷）——join 意图内存丢失：boot 期 prune 误剪导致 wake-on-route 永久 no-match
+
+- **活体复现（0.5.40，0830 深夜）**：冷加入会话 `dsh/b5acc5eb` 路由报
+  "No live DSH session node accepts team … and no cold joined session
+  matches it"；同时刻三重事实互相矛盾——① join 意图文件
+  `<home>/a2a/joined.json` 仍含该会话；② state 路由（sessionPersistence
+  投影）仍把它列为 cold row；③ `a2a_route` 的 wakeColdTeam find 却
+  no-match。④ 另一冷行 `dsh/d781fa5e` 同形状。
+- **根因指向**：boot 期 `pruneArchivedJoins()` 依赖 workspace registry 的
+  archived 集合——registry 在树早启动窗口可能暂报 archived（或暂时缺
+  席），intent 被从内存 `joinedSessions` 剪除且**未回写/或回写时序错位**，
+  此后 registry 恢复正常也无法自愈（内存与文件分叉，直到下次重启）。
+- **修复方向**：① prune 前置双源核对（registry archived ∧ 持久层确无）；
+  ② 内存剪除必须同步持久化；③ 增加自愈——wakeColdTeam no-match 时对照
+  joined.json 回填内存意图；④ 单测：boot 期 registry 暂报 archived →
+  稳定后 wake-on-route 必须命中。
+- **影响**：被误剪会话的 wake-on-route / 冷唤醒全链失效（join 状态在
+  GUI 面仍显示已加入），直到宿主重启。08-30 评审席 fd99deeb 唤醒失败
+  即此形状（预热情列饿死是另一层，勿混淆）。
