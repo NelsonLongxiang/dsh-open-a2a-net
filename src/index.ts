@@ -1227,7 +1227,7 @@ export function apply(ctx: Context, config: Config): void {
               // keeps rendering plain owed rows until it learns the tiers.
               tasks: taskLedger.list()
                 .filter(task => task.status === 'pending')
-                .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, status: task.status })),
+                .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, status: task.status, direction: task.direction ?? 'outbound' })),
               tasksDead: taskLedger.list()
                 .filter(task => task.status === 'dead')
                 .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt })),
@@ -1607,18 +1607,64 @@ export function apply(ctx: Context, config: Config): void {
    * only at convergence, and a dropped one never does — the nudge re-steers
    * a one-line prompt after the delay, which productizes the manual
    * recovery this defect needed (a synchronous probe re-woke the session).
-   * Per-session single-flight plus a global cap keep a fleet of stalled
-   * targets from stacking retries; a consumed task disarms itself.
+   * F2' (receipt-settlement): arming is unconditional and the per-session
+   * single-flight is a bounded budget (initial delay + one re-arm) instead
+   * of a one-shot — a target busy on its own turn at delay time used to
+   * drop the shot entirely. At budget expiry the escalation climbs to the
+   * host's queue-mode prompt seam when composed: queue-mode enqueues past
+   * the maintenance latch that eats steers (08-30 evidence: queue woke a
+   * session within 90s where steer stayed silent). No seam composed ⇒ the
+   * escalation degrades to a no-op and the ledger row keeps the debt
+   * visible for /a2a/query follow-ups.
    */
-  const nudgeInFlight = new Set<string>()
+  const nudgeBudget = new Map<string, number>()
+  const escalateQueuePrompt = (agent: Agent, team: string, taskId: string): void => {
+    const apiProxy = ctx.get('apiProxy') as
+      | { prompt?: (request: {
+          requestId: string
+          sessionId: Agent['id']
+          mode: 'queue' | 'steer'
+          content: ReadonlyArray<{ type: 'text'; text: string }>
+        }) => Promise<unknown> }
+      | undefined
+    if (typeof apiProxy?.prompt !== 'function') return
+    logger.info(`a2a: async nudge escalates to queue-mode prompt for ${team} (task ${taskId})`)
+    try {
+      void apiProxy.prompt({
+        requestId: `a2a-nudge-${taskId}`,
+        sessionId: agent.id,
+        mode: 'queue',
+        content: [{ type: 'text', text: `[A2A nudge] (task ${taskId}) your earlier routed message was delivered while this session could not start a turn — please consume the inbox backlog now (ignore if there is nothing pending).` }],
+      }).catch(() => {})
+    } catch {
+      /* queueing is best-effort: the ledger row keeps the debt visible */
+    }
+  }
   function armAsyncNudge(agent: Agent, team: string, taskId: string, delayMs: number): void {
     const key = String(agent.id)
-    if (nudgeInFlight.has(key)) return
-    nudgeInFlight.add(key)
+    const spent = nudgeBudget.get(key)
+    if (spent !== undefined && spent > 1) return
+    nudgeBudget.set(key, spent ?? 0)
     const timer = setTimeout(() => {
-      nudgeInFlight.delete(key)
-      if (!taskLedger.isPending(taskId)) return
-      if (agent.status !== 'idle') return
+      if (!taskLedger.isPending(taskId)) {
+        nudgeBudget.delete(key)
+        return
+      }
+      if (agent.status !== 'idle') {
+        // Busy on its own turn (or wedged): spend the bounded re-arm, then
+        // climb to the queue-mode seam. Re-resolve on the steer path below
+        // only — a busy target needs the queue, not another steer.
+        const spent = nudgeBudget.get(key) ?? 0
+        if (spent < 1) {
+          nudgeBudget.set(key, spent + 1)
+          armAsyncNudge(agent, team, taskId, delayMs)
+          return
+        }
+        nudgeBudget.delete(key)
+        escalateQueuePrompt(agent, team, taskId)
+        return
+      }
+      nudgeBudget.delete(key)
       // Re-resolve rather than reusing the delivered agent: a session-node
       // entry captured at delivery may have been disposed since (a stale
       // reference steers a dead object — no error, no log growth, exactly
@@ -2125,8 +2171,16 @@ ${message}`
                 // post-steer read — answer consumed:false conservatively and
                 // arm the nudge (a false negative costs one harmless nudge; a
                 // false positive strands the delivered message).
+                // F2' (receipt-settlement): the delivery is born into the
+                // ledger — an inbound row owes a receipt only this node can
+                // produce, and before this row existed the nudge's isPending
+                // gate no-op'd for exactly the deliveries that stall (08-30:
+                // zero ledger records for latched activations). Arming is
+                // unconditional now; settlement evidence disarms in the
+                // callback.
                 const consumedProbe = runningBeforeSteer ? false : probeConsumption(target, taskId)
-                if (!consumedProbe) armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
+                taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId)
+                armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
                 const payload = JSON.stringify({
                   routed: true,
                   delivered: true,

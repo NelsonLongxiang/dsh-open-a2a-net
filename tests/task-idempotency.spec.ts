@@ -558,3 +558,59 @@ describe('consumed probe honesty — prior-running targets (F1 defect card)', ()
     }
   })
 })
+
+describe('inbound ledger birth + unconditional nudge (F2 defect card)', () => {
+  it('an inbound noWait delivery is born into the ledger with direction inbound (the nudge gate can see it now)', async () => {
+    // sessionNodes composes the panel state surface this assertion reads
+    // through (the route sits inside the sessionNodes scope).
+    const { port, dispose } = await mount({ sessionNodes: true })
+    try {
+      const direct = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: 'dsh', message: 'async work', caller_session: 'idem-runner', task_id: 'inbound-born-task', wait: false }),
+      })
+      expect((await direct.json() as { delivered?: boolean }).delivered).toBe(true)
+      // The state route registers through whenWebServerSettled (async settle):
+      // poll briefly instead of racing the registration tick.
+      let stateRes: { status: number; text: () => Promise<string> } | undefined
+      let stateText = ''
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        stateRes = await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)
+        stateText = await stateRes.text()
+        if (stateRes.status === 200) break
+        await new Promise(resolve => setTimeout(resolve, 25))
+      }
+      expect({ status: stateRes?.status, body: stateText.slice(0, 200) }, stateText.slice(0, 400)).toMatchObject({ status: 200 })
+      const state = JSON.parse(stateText) as { tasks?: Array<{ taskId?: string; direction?: string; status?: string }> }
+      const row = (state.tasks ?? []).find(task => task.taskId === 'inbound-born-task')
+      expect(row).toMatchObject({ taskId: 'inbound-born-task', direction: 'inbound', status: 'pending' })
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('a pending inbound task that turns idle gets the steer nudge at the delay (arm unconditional, settle disarms)', async () => {
+    const { port, registry, dispose } = await mount({ asyncNudgeDelayMs: 60 })
+    try {
+      const agent = registry.agent as unknown as { status?: string; steer: ReturnType<typeof vi.fn> }
+      // F1' shape: prior-running at steer time — the probe cannot call it
+      // consumed, so the nudge arms; by delay time the target is idle, so
+      // the steer-nudge leg fires.
+      agent.status = 'running'
+      const direct = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: 'dsh', message: 'async work', caller_session: 'idem-runner', task_id: 'nudged-task', wait: false }),
+      })
+      expect((await direct.json() as { consumed?: boolean }).consumed).toBe(false)
+      agent.status = 'idle'
+      await new Promise(resolve => setTimeout(resolve, 250))
+      const nudgeCalls = agent.steer.mock.calls
+        .filter(args => String((args[0] as { content?: ReadonlyArray<{ type?: string; text?: string }> })?.content?.[0]?.text ?? '').includes('[A2A nudge]'))
+      expect(nudgeCalls.length).toBeGreaterThanOrEqual(1)
+    } finally {
+      await dispose()
+    }
+  })
+})

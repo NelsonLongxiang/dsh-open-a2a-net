@@ -63,6 +63,12 @@ export interface TaskRecord {
   readonly team: string
   readonly peer: string
   readonly startedAt: number
+  /**
+   * Which side of the wire this row serves: 'outbound' (this node sent and
+   * awaits a receipt) or 'inbound' (this node received and owes one).
+   * Absent on rows persisted before F2' — those are outbound by birth.
+   */
+  readonly direction?: 'inbound' | 'outbound'
   /** The conversation the delivery steered, for follow-up routes. */
   readonly contextId?: string
   status: TaskStatus
@@ -220,6 +226,37 @@ export class TaskLedger {
       team,
       peer,
       startedAt: this.now(),
+      direction: 'outbound' as const,
+      ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
+      status: 'pending' as const,
+    }, ...this.tasks].slice(0, TASK_CAP)
+    this.persist()
+  }
+
+  /**
+   * F2' (receipt-settlement): remember one INBOUND delivery owed a receipt —
+   * this node is the settlement debtor here: the caller waits for a receipt
+   * only this target can produce. Before this row type existed, inbound
+   * deliveries were born ledger-less, so the async nudge's isPending gate
+   * no-op'd for exactly the deliveries that stall (08-30 evidence: zero
+   * ledger records for latched activations). Idempotent by task id like
+   * {@link track}.
+   * @param taskId - the correlation key the caller's task was born with.
+   * @param team - the team the delivery addressed (this node's).
+   * @param from - the caller's receipt target (label or callback address).
+   * @param contextId - the delivery's conversation id, kept for follow-up routes (empty omits it).
+   */
+  trackInbound(taskId: string, team: string, from: string, contextId?: string): void {
+    if (taskId === '') return
+    this.sweep(this.now())
+    if (this.tasks.some(entry => entry.taskId === taskId)) return
+    if (this.archived.some(entry => entry.taskId === taskId)) return
+    this.tasks = [{
+      taskId,
+      team,
+      peer: `local:${from}`,
+      startedAt: this.now(),
+      direction: 'inbound' as const,
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
       status: 'pending' as const,
     }, ...this.tasks].slice(0, TASK_CAP)
