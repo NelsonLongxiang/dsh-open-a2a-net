@@ -614,3 +614,78 @@ describe('inbound ledger birth + unconditional nudge (F2 defect card)', () => {
     }
   })
 })
+
+describe('settlement integrity — debt gate and echo settle (F5 defect card)', () => {
+  it('a process-label caller is born fire-and-forget: receipt:"none", ledger row receiptExpected:false', async () => {
+    // The 08-30 debt shape: dsh-host-* labels resolve to no session and no
+    // card row, so every receipt routed at them stranded. The gate makes
+    // such deliveries explicit fire-and-forget instead of born debt.
+    const { port, dispose } = await mount({ sessionNodes: true })
+    try {
+      const direct = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: 'dsh', message: 'async work', caller_session: 'dsh-host-9c53bf95-74555a36', task_id: 'fire-forget-task', wait: false }),
+      })
+      const body = await direct.json() as { delivered?: boolean; receipt?: string }
+      expect(body.delivered).toBe(true)
+      expect(body.receipt).toBe('none')
+      let row: { receiptExpected?: boolean; status?: string } | undefined
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const state = await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`).then(r => r.json() as Promise<{ tasks?: Array<{ taskId?: string; receiptExpected?: boolean; status?: string }> }>)
+        row = (state.tasks ?? []).find(task => task.taskId === 'fire-forget-task')
+        if (row !== undefined) break
+        await new Promise(resolve => setTimeout(resolve, 25))
+      }
+      expect(row).toMatchObject({ taskId: 'fire-forget-task', receiptExpected: false, status: 'pending' })
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('a routable session caller keeps receipt:"routed" (the gate never eats real debts)', async () => {
+    const { port, dispose } = await mount({ sessionNodes: true })
+    try {
+      const direct = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: 'dsh', message: 'async work', caller_session: 'dsh/0a70e9fc', task_id: 'routed-debt-task', wait: false }),
+      })
+      const body = await direct.json() as { delivered?: boolean; receipt?: string }
+      expect(body.delivered).toBe(true)
+      expect(body.receipt).toBe('routed')
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('a content reply echoing the task id settles the pending row without the receipt envelope', async () => {
+    const { port, dispose } = await mount({ sessionNodes: true })
+    try {
+      const direct = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: 'dsh', message: 'async work', caller_session: 'idem-runner', task_id: 'echo-task', wait: false }),
+      })
+      expect((await direct.json() as { delivered?: boolean }).delivered).toBe(true)
+      // The peer answers CONTENT-wise, referencing the task id, but no
+      // formal receipt envelope rides the reply — the 08-30 shape.
+      const reply = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: 'dsh', message: '讨论回复（基于 task echo-task）：结论如下……', caller_session: 'idem-runner', wait: false }),
+      })
+      expect((await reply.json() as { delivered?: boolean }).delivered).toBe(true)
+      let pending: unknown[] | undefined
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const state = await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`).then(r => r.json() as Promise<{ tasks?: Array<{ taskId?: string }> }>)
+        pending = (state.tasks ?? []).filter(task => task.taskId === 'echo-task')
+        if (pending !== undefined && pending.length === 0) break
+        await new Promise(resolve => setTimeout(resolve, 25))
+      }
+      expect(pending).toEqual([])
+    } finally {
+      await dispose()
+    }
+  })
+})

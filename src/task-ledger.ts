@@ -69,6 +69,13 @@ export interface TaskRecord {
    * Absent on rows persisted before F2' — those are outbound by birth.
    */
   readonly direction?: 'inbound' | 'outbound'
+  /**
+   * F5: whether a receipt is actually owed. Absent ⇒ true (back-compat).
+   * `false` marks fire-and-forget deliveries — the caller's label could not
+   * receive a receipt at dispatch (process-form label), so no debt was born
+   * and supervision must not chase this row.
+   */
+  readonly receiptExpected?: boolean
   /** The conversation the delivery steered, for follow-up routes. */
   readonly contextId?: string
   status: TaskStatus
@@ -246,7 +253,7 @@ export class TaskLedger {
    * @param from - the caller's receipt target (label or callback address).
    * @param contextId - the delivery's conversation id, kept for follow-up routes (empty omits it).
    */
-  trackInbound(taskId: string, team: string, from: string, contextId?: string): void {
+  trackInbound(taskId: string, team: string, from: string, contextId?: string, receiptExpected?: boolean): void {
     if (taskId === '') return
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
@@ -257,6 +264,7 @@ export class TaskLedger {
       peer: `local:${from}`,
       startedAt: this.now(),
       direction: 'inbound' as const,
+      ...(receiptExpected === false ? { receiptExpected: false } : {}),
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
       status: 'pending' as const,
     }, ...this.tasks].slice(0, TASK_CAP)
@@ -375,8 +383,7 @@ export class TaskLedger {
     const parsed = parseReceipt(message)
     if (parsed === null) return undefined
     const taskId = parsed.taskId
-    const summary = parsed.summary.trim().slice(0, SUMMARY_CAP)
-    // Controlled vocabulary only: a foreign outcome string never lands here.
+    const summary = parsed.summary.trim().slice(0, SUMMARY_CAP)    // Controlled vocabulary only: a foreign outcome string never lands here.
     const envelopeOutcome =
       parsed.envelope?.outcome !== undefined ? (parsed.envelope.outcome as ReceiptOutcomeV2) : undefined
     const elapsedMs = parsed.envelope?.elapsedMs
@@ -439,6 +446,40 @@ export class TaskLedger {
       // is neither dead-lettered nor abandoned — it carries no marker.
       ...(callerEnded ? { late: true } : {}),
     }
+  }
+
+  /**
+   * F5 (settlement integrity): settle pending rows by CONTENT ECHO — an
+   * inbound message that references `task <id>` of a pending row counts as
+   * the peer demonstrably responding to that task, even when the formal
+   * `[A2A receipt]` envelope never rode the reply (the 08-30 shape: content
+   * answered, formality lost). The receipt envelope keeps precedence: this
+   * runs only when {@link resolveFromMessage} correlated nothing. Echo-
+   * settled rows archive with a marker summary so the audit trail shows
+   * they were echoes, not envelopes.
+   * @param message - the inbound message text.
+   * @returns the task ids this message settled (usually none or one).
+   */
+  resolveEcho(message: string): string[] {
+    const settled: string[] = []
+    this.sweep(this.now())
+    for (const record of [...this.tasks]) {
+      if (record.status !== 'pending') continue
+      if (!message.includes(`task ${record.taskId}`)) continue
+      this.tasks = this.tasks.filter(entry => entry.taskId !== record.taskId)
+      this.archiveSettled({
+        taskId: record.taskId,
+        team: record.team,
+        peer: record.peer,
+        startedAt: record.startedAt,
+        ...(record.contextId !== undefined ? { contextId: record.contextId } : {}),
+        resolvedAt: this.now(),
+        summary: '(settled by content echo)',
+      })
+      settled.push(record.taskId)
+    }
+    if (settled.length > 0) this.persist()
+    return settled
   }
 
   /** Move one settled record to the archive head, trimming at the cap. */
