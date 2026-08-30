@@ -697,9 +697,11 @@ describe('a2a plugin decentralized routing (peers)', () => {
       const delivered = await route?.execute({ team: 'dsh/agent-1', message: 'long task', async: true }, runContext()) as { ok: boolean; task_id: string }
       expect(delivered.ok).toBe(true)
       // The panel polls the state route: the owed task rides it as a
-      // pending row with its routing facts.
-      const owing = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { tasks: { taskId: string; team: string; peer: string; status: string }[] }
-      expect(owing.tasks).toEqual([{ taskId: delivered.task_id, team: 'dsh/agent-1', peer: 'local', status: 'pending', startedAt: expect.any(Number) }])
+      // pending row with its routing facts (F2' adds the wire-side marker:
+      // outbound rows are debts this node collects, inbound rows debts it
+      // owes).
+      const owing = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { tasks: { taskId: string; team: string; peer: string; status: string; direction: string }[] }
+      expect(owing.tasks).toEqual([{ taskId: delivered.task_id, team: 'dsh/agent-1', peer: 'local', status: 'pending', startedAt: expect.any(Number), direction: 'outbound' }])
       // Correlation clears the pending row within one poll.
       await postJson(port, '/a2a/direct', { team: 'dsh', message: `[A2A receipt] task ${String(delivered.task_id)} tests green` })
       const settled = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { tasks: unknown[] }
