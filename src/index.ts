@@ -3558,6 +3558,9 @@ ${message}`
                 contextId: { type: 'string' },
                 status: { type: 'string', required: true },
                 deadAt: { type: 'number' },
+                direction: { type: 'string', enum: ['inbound', 'outbound'] },
+                receiptExpected: { type: 'boolean' },
+                reason: { type: 'string', enum: ['fire-forget', 'unconsumed'] },
               },
             },
           },
@@ -3606,7 +3609,7 @@ ${message}`
       }],
     },
     presentCall: () => ({ card: 'generic', title: 'A2A task ledger', kind: 'other', rawInput: null }),
-    execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; status: 'pending' | 'dead'; deadAt?: number; reason?: 'fire-forget' | 'unconsumed' }[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string }[]; archivedTotal: number }> => {
+    execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; status: 'pending' | 'dead'; deadAt?: number; reason?: 'fire-forget' | 'unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean }[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string }[]; archivedTotal: number }> => {
       a2aJoinGateRefusal(exec)
       const archiveAll = taskLedger.archive()
       return {
