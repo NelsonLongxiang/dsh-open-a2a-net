@@ -204,3 +204,27 @@ worktree PR（3081 测试线验证）；F3 由 harness 仓实施时另开 PR。�
     = 意图重同步；F5 原因码 = 行面标注
 - **验收**：重启后 T+N 分钟内全部非 archived 意图物化或带原因码；corrupt
   行标 needs-repair；面板/监督可按原因过滤。
+
+## F9（应答侧+接收侧，双向修复）——应答误投进程 team = 债务出生的标准形状
+
+- **活体标本（0830 深夜）**：open-a2a-net 线向 skills-manager（dsh/50b344c2）
+  发组队设计讨论（task direct-814655e6，outbound receiptExpected:true）。
+  对方完成答复后，应答经 a2a_route 投给 **team "dsh"**（进程 team，本地
+  优先解析截留——两节点进程 team 同名），而非回给原始 caller
+  dsh/0a70e9fc。结果：应答内容进了进程 team 信箱蒸发，**调用方债挂着
+  不结算**（答复文本甚至含 "task direct-814655e6" 字样，回显结算本可
+  命中，但该投递从未进入任何被观测会话）。用户手工中转才让内容到达。
+- **机制链**：应答方路由目标错（同名 team 本地截留）→ 应答进进程 team
+  信箱 → 进程 team 无活会话消费或消费不被对方账本观测 → 债挂死。
+
+### 修复（三层）
+1. **应答方（skills-manager 线）**：回复路由目标必须取原始 caller team
+   （投递时的 receipt hint 已写明），不得默认回投节点 team。
+2. **接收侧自愈（open-a2a-net，本卡主体）**：direct 投递目标是本节点
+   进程 team 且无活 initiator 消费时——不得静默丢弃：落"无主应答"暂存
+   （按 task id 关联 pending 行结算 + 内容转投原 caller 的可路由地址，
+   或至少 state 面可见 + 原因码 `reply-no-consumer`）。
+3. **同名 team 消歧**（协议面）：a2a_route 对与本地 config.team 同名的
+   目标，本地解析失败时**必须**尝试 peer 解析（现状：本地截留即弃，
+   跨节点同名 team 永远不可达——中转 receipt 时实测）。跨节点同名 team
+   的可达性是 F8 对账器的前置。
