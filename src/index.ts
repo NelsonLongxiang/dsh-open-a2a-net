@@ -661,7 +661,17 @@ export function apply(ctx: Context, config: Config): void {
       }
     }
     const resolved = taskLedger.resolveFromMessage(message)
-    if (resolved === undefined) return
+    if (resolved === undefined) {
+      // F5 (settlement integrity): the formal envelope missed — an inbound
+      // message that still echoes a pending task id means the peer
+      // demonstrably responded to it, which settles the debt even when the
+      // receipt formality never rode the reply.
+      const echoed = taskLedger.resolveEcho(message)
+      if (echoed.length > 0) {
+        logger.info(`a2a: ${String(echoed.length)} pending task(s) settled by content echo (${echoed.join(', ')})`)
+      }
+      return
+    }
     try {
       ctx.emit('a2a/receipt-resolved', resolved)
     } catch (error) {
@@ -1227,7 +1237,7 @@ export function apply(ctx: Context, config: Config): void {
               // keeps rendering plain owed rows until it learns the tiers.
               tasks: taskLedger.list()
                 .filter(task => task.status === 'pending')
-                .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, status: task.status, direction: task.direction ?? 'outbound' })),
+                .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, status: task.status, direction: task.direction ?? 'outbound', receiptExpected: task.receiptExpected !== false })),
               tasksDead: taskLedger.list()
                 .filter(task => task.status === 'dead')
                 .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt })),
@@ -1599,6 +1609,25 @@ export function apply(ctx: Context, config: Config): void {
     } catch {
       return false
     }
+  }
+
+  /**
+   * F5 (settlement integrity): whether a receipt routed at this target can
+   * actually land. A session team resolves locally (a joined live node) —
+   * receipts flow. Anything else carrying the process-label shape
+   * (`dsh-host-<8hex>-<rand>`, the node's own label form) resolves to no
+   * session and appears in no card directory: every receipt routed at it
+   * strands, which is exactly the 08-30 debt pile (six full replies given,
+   * zero receipts settled). Those deliveries are born fire-and-forget.
+   * Unknown labels stay receipt-expected (conservative — losing a receivable
+   * receipt is worse than chasing a stranded one).
+   * @param receiptTarget - the callback address or caller label.
+   * @returns the expectation verdict for the delivery.
+   */
+  function receiptExpectationOf(receiptTarget: string): 'receivable' | 'process-label' {
+    if (resolveAgentForTeam(receiptTarget) !== undefined) return 'receivable'
+    if (/^dsh-host-[0-9a-f]{8}-/.test(receiptTarget)) return 'process-label'
+    return 'receivable'
   }
 
   /**
@@ -2179,7 +2208,14 @@ ${message}`
                 // unconditional now; settlement evidence disarms in the
                 // callback.
                 const consumedProbe = runningBeforeSteer ? false : probeConsumption(target, taskId)
-                taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId)
+                // F5 (settlement integrity): the debt gate — a process-label
+                // caller cannot receive receipts, so this delivery is born
+                // fire-and-forget (receiptExpected:false, answered as
+                // receipt:"none") instead of manufacturing a debt nobody can
+                // settle. The row itself stays: stall visibility and the
+                // nudge still apply to the TARGET side.
+                const receiptExpectation = receiptExpectationOf(receiptTarget)
+                taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label')
                 armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
                 const payload = JSON.stringify({
                   routed: true,
@@ -2191,6 +2227,7 @@ ${message}`
                   task_status: 'TASK_STATE_DELIVERED',
                   artifacts: [],
                   consumed: consumedProbe,
+                  receipt: receiptExpectation === 'process-label' ? 'none' : 'routed',
                 })
                 res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
                 res.end(payload)
