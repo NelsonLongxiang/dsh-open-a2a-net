@@ -5,8 +5,10 @@
 - **Owner**: dsh-open-a2a-net (protocol face)
 - **Gate**: hub-strategy GA precondition — see §6
 
-> **Field evidence (2026-08-30, defect card F4).** An unjoined session on a
-> production home hand-POSTed `wait:false` deliveries — no credentials — to a
+> **Field evidence (2026-08-30, defect card F4).** An unjoined session on the
+> 192.168.3.156 host (source attribution corrected by the reporter; .88 is
+> the LAN Gitea server, not the reporting machine) hand-POSTed
+> `wait:false` deliveries — no credentials — to a
 > loopback bind and across hosts to `192.168.3.157:13080`; both answered
 > `routed/delivered/consumed:true`. Until the envelope lands, the honest
 > mitigations are: set `apiKey` (header-authenticates control **and** direct
