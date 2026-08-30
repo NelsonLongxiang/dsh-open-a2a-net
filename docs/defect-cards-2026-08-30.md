@@ -177,3 +177,30 @@ worktree PR（3081 测试线验证）；F3 由 harness 仓实施时另开 PR。�
 - **影响**：被误剪会话的 wake-on-route / 冷唤醒全链失效（join 状态在
   GUI 面仍显示已加入），直到宿主重启。08-30 评审席 fd99deeb 唤醒失败
   即此形状（预热情列饿死是另一层，勿混淆）。
+
+## F8（插件侧，系统性）——自动唤醒缺持续对账：恢复机制是"一次性事件"而非"期望状态收敛"
+
+- **现象（0830 深夜重启后调查）**：`wakeJoinedOnBoot: true` 已生效、join 意图
+  文件完整，但 5 个已加入会话数小时保持冷态（24c861fb、fa7947a3、b5acc5eb、
+  d781fa5e、08189fb1），无任何失败原因可见。逐个 adopt 探测分类：
+  - 1 例 corrupt session log（seq gap，物化必然失败，无修复路径）
+  - 4 例 workspace 上下文错配（"belongs to X, not Y"——物化需会话自身
+    记录的 cwd，调用方缺省上下文即拒）
+- **系统性根因**：自动唤醒是**一次性事件**（boot 预热单轮 + 路由按需），
+  不是**期望状态收敛**——
+  1. boot 后才变冷的会话无任何恢复覆盖（预热只在启动时跑一轮）
+  2. 预热对单会话失败 = warn 后跳过，无重试、无原因落面（面板冷行不带
+     失败原因，监督无法区分"排队中/暂时失败/永久失败"）
+  3. workspace 上下文耦合：物化校验 cwd，跨 workspace 会话对缺省上下文
+     必拒（"belongs to"实证 ×4）
+  4. 数据级阻断：corrupt log 无修复路径，该会话永久不可物化
+- **修复设计（F8 对账器）**：
+  - 周期性（或事件触发）diff join 意图 vs live agents；冷意图逐个尝试
+    物化，**cwd 取自 persistence 的会话记录**（"belongs to"错误证明宿主
+    侧记录了每个会话的 workspace——对账器按记录传参即可消掉错配）
+  - 失败 → 记原因 + 指数退避（上限），行面携带 lastWakeError/attempts
+  - corrupt log → 标 'needs-repair'（不重试），暴露修复入口
+  - 吸收既有机制：boot 预热 = 对账器首轮；wake-on-route 自愈（PR #63）
+    = 意图重同步；F5 原因码 = 行面标注
+- **验收**：重启后 T+N 分钟内全部非 archived 意图物化或带原因码；corrupt
+  行标 needs-repair；面板/监督可按原因过滤。
