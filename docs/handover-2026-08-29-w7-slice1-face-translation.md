@@ -1,16 +1,16 @@
-# 交接报告：W7 协议面——slice 1 回放翻译 + slice 2 查询面（2026-08-29）
+# 交接报告：W7 协议面——slice 1 回放翻译 + slice 2 查询面 + 幂等窗口可观测（2026-08-29/30）
 
-> 交接范围：本仓 W7 两片均已合并发版——slice 1 回放翻译（!39，0.5.34）与 slice 2 查询面（!41，0.5.35）；本文交付契约语义、回归面与下一位维护者的注意项。
+> 交接范围：本仓 W7 三片均已合并发版——slice 1 回放翻译（!39，0.5.34）、slice 2 查询面（!41，0.5.35）与幂等窗口可观测（!43，0.5.36）；本文交付契约语义、回归面与下一位维护者的注意项。
 > 设计权威：dsh-graph-loop `docs/w7-remote-recovery-table.md`（slice 1）与 `docs/w7-slice2-outcome-retrieval.md`（slice 2，其 master d29e080）；本仓配套文档 `docs/native-teams-bridge.md`（随两片回写，§3.1 检索面小节）。
 
 ## 一、结论速览
 
 | 维度 | 状态 |
 |---|---|
-| master | `4760485`（!41 合并提交） |
-| 版本 | **0.5.35**（已发 jf-tech 私仓 latest，tarball 直验过） |
-| 本日落库 | !39：回放翻译 delivery 分岔（R1 APPROVE）；!40：slice 1 交接文档；!41：slice 2 查询面（R1 REQUEST CHANGES 两 BLOCKING → 闭环 → R2 APPROVE → R-2-1 一行收口） |
-| 门禁基线 | typecheck×2 / vitest 361 / build 全绿（+28 新测试：feature 21 + 评审收口 7——store 四态/端点/钩子/fan-out） |
+| master | `5363041`（!43 合并提交；仓 tip `d08476c` 另含并行线文档件 !56-!58） |
+| 版本 | **0.5.36**（已发 jf-tech 私仓 latest，tarball 直验过） |
+| 本日落库 | !39 回放翻译（R1 APPROVE）；!40 交接文档；!41 slice 2 查询面（两 BLOCKING → R2 APPROVE）；!43 幂等窗口可观测（R1 REQUEST CHANGES 一 BLOCKING → 闭环 → R2 APPROVE）；另有并行线 !56-!58 文档件 |
+| 门禁基线 | typecheck×2 / vitest 369 / build 全绿（!43 净增 2 回归测试 + conflict e2e 扩展） |
 
 ## 二、契约语义（本 PR 的产品本体）
 
@@ -40,6 +40,19 @@
 - **R-2-1 封源**：`armReceiptAutosend` 对 placeholder 应答不合成完成回执（同宿回执环回曾是占位入账的最后一条窄通道）。
 - **已知负债（登记不设防）**：入站 noWait 活代理任务的产物对端不可知（回执直达 caller）→ 认领行滞留 pending；回执关联的信任面 = 能投递回执者即可记产物（与既有 taskLedger 关联同暴露面）；async 交付的 fingerprint 再现依赖 card cache（graph-loop 全 sync 不经过）。
 
+## 三·六、幂等窗口可观测（!43，0.5.36）
+
+立项依据（调研证实）：幂等窗口 today **零可观测**——409 早退处无日志、无计数、无 activity，连 idempotency.json 都不留痕；而 idem_key UNIQUE 化（W8 §7 负债行"欠账单待 face 流量"）押在 face 流量数据上，闸门键 0.5.1 起上行而采集点为零。
+
+- **store 计数器（持久化）**：`claim()` 三分支自增 fresh/replay/conflict，persist 进快照 `stats` 段——**跨重启累积**（易失计数会毁掉 UNIQUE 决策需要的跨日证据）；v1/v2 旧快照恢复补零，绝不伪造数字。
+- **`stats()` 只读聚合**：`{window, cap, pending, settled, claimsFresh, replays, conflicts}`。
+- **state 路由 `idempotency` 段**（controlRoute 鉴权内）：UNIQUE 化的观测点。**隐私裁定：无指纹**——指纹是 /a2a/query 唯一鉴权物，入 state 即向 control-authorized 查看者交出离线字典攻击验证面。
+- **a2a_status 加段**：sessionNodes:false 下 initiator 仍可读——补上该形态的观测退化。
+- **conflict 分支一行 warn**：caller bug 路防误读；replay 按设计纵深保持静默。
+- **B-1 教训（R1 BLOCKING）**：restore() 内 `prune()` 曾先于 stats 恢复——TTL 过期 entry 触发 prune→persist 时内存计数还是 0，**把磁盘累积证据静默清成 {0,0,0}**，且恰好在切片的目标场景（低流量节点静默重启）触发。修法：stats 恢复前移；回归测试直查磁盘跨双重启断言。**通则：恢复序列里，任何可能触发 persist 的步骤必须在恢复完成之后。**
+- **登记（裁定维持现状）**：conflict warn 的 taskId 80 字符窗口内换行注入残留（与既有 sink 同款类债务）；replay/conflict 409 全量写盘（设计稳态≈0 可接受）；面板 UI 节降级可选二期（为稳态恒零的计数建类型+双语+组件测试性价比低）。
+- **UNIQUE 化数据源就此就绪**：凭 state 路由 / a2a_status 的窗口计数立项即可。
+
 ## 四、主检出现状（接手者必读）
 
 主检出停在 **`feat/nexus-planning-b`**——另一会话的 WIP 分支（未合 master；WIP 推进中，tip 随时漂移——撰写时为 `baf51a1`，已前进至 `efdf6b0`，接手时以 `git rev-parse` 实时为准），**不要动它**。需要在 master 上构建/发版时：`git worktree add .claude/worktrees/<name> origin/master` 从 worktree 执行（本日 0.5.34 即如此发布；worktree 依赖经目录上行解析主检出 node_modules，无需重装；`verify:nexus` 可跳过仅当未触 nexus 面——nexusDist 以 master 提交态打包）。
@@ -47,6 +60,6 @@
 ## 五、待办队列
 
 1. ~~slice 2 查询面~~ **已落地**（!41，0.5.35）——bridgeFace 增方法 + `/a2a/query` 端点均按 RF-1 append-only 落库，冻结面零触碰（409 字节级钉住）。
-2. idem_key UNIQUE 化（W8 §7 欠账；face 流量已真实开始，可启动观察；部分索引，odoo-dev）。
+2. idem_key UNIQUE 化（W8 §7 欠账；face 流量已真实开始；部分索引，odoo-dev）。**数据源已就绪**（0.5.36）：state 路由 `idempotency` 段 / a2a_status 窗口计数——replay/conflict 累计有真实流量即立项。
 3. 既有非阻断注记：emit 围栏 parallel 化（随手收口项）。
 4. P2 遗留锚点照旧（callbackTarget 消费端链路已在、sessionKey durable 已裁定落地于 native-teams !72）。
