@@ -830,7 +830,9 @@ describe('a2a plugin decentralized routing (peers)', () => {
       const route = ctx.tools.get('a2a_route')
       const ac = new AbortController()
       const pending = route?.execute({ team: 'dsh/agent-1', message: 'slow target' }, { ...runContext(), signal: ac.signal } as never) as Promise<unknown>
-      await new Promise(resolve => setTimeout(resolve, 30))
+      // Condition-based, never a fixed sleep: the abort lands only after the
+      // local dispatch provably fired the steer (load-independent).
+      await vi.waitFor(() => { expect(silent.steer).toHaveBeenCalled() })
       ac.abort()
       const result = await pending as { ok: boolean; task_status: string }
       expect(result.ok).toBe(true)
