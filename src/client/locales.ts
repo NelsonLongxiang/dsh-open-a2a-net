@@ -10,6 +10,7 @@ export type A2aNetKey =
   | 'a2a.inFlightStale'
   | 'a2a.tasks'
   | 'a2a.tasksNote'
+  | 'a2a.tasksStale'
   | 'a2a.jump'
   | 'a2a.stageTitle'
   | 'a2a.stageScene'
@@ -25,6 +26,7 @@ export const zh: Record<A2aNetKey, string> = {
   'a2a.inFlightStale': '等待回执超时（对端处理慢或回执丢失）；180 秒后自动解除并按已送达处理',
   'a2a.tasks': '欠回执的异步任务',
   'a2a.tasksNote': '异步欠账分三段：未决（等回执）→ 死信（超期自动标注，目标恢复后仍可补回执结算）→ 归档（结算留痕不蒸发）',
+  'a2a.tasksStale': '对话式已送达未答（非欠账，24h 自动死信）',
   'a2a.jump': '点击跳转到该会话',
   'a2a.stageTitle': '舞台视图（会话与团队管理已迁入规划视图）',
   'a2a.stageScene': '观测 · 3D',
@@ -41,6 +43,7 @@ export const en: Record<A2aNetKey, string> = {
   'a2a.inFlightStale': 'Reply wait past 120s (slow or lost receipt); auto-releases as delivered at 180s',
   'a2a.tasks': 'Owed receipts',
   'a2a.tasksNote': 'Async debts in three tiers: pending (awaiting receipt) → dead-lettered (auto-flagged past the stale TTL; a revived target can still settle late) → archived (settled records kept for audit)',
+  'a2a.tasksStale': 'Delivered conversationally, no formal receipt (not debt; auto-dead-letters at the TTL)',
   'a2a.jump': 'Click to open this session',
   'a2a.stageTitle': 'Stage views (session & team management moved to the planning view)',
   'a2a.stageScene': 'Observe · 3D',

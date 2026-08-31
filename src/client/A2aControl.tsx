@@ -43,6 +43,8 @@ export interface A2aTaskRow {
   readonly peer: string
   readonly startedAt: number
   readonly status: string
+  /** C-ruling: false rows are conversational noise (delivered, no formal receipt, past the stale hour). */
+  readonly settleable?: boolean
 }
 
 /** The state the feed renders. */
@@ -56,6 +58,8 @@ export interface A2aState {
   readonly version?: string
   /** Whether the host serves the canvas face (gates the planning deep link). */
   readonly hasCanvas: boolean
+  /** C face: stale conversational tail count (delivered without formal receipt, past the stale hour). */
+  readonly tasksStaleCount?: number
 }
 
 /** Wake face the registration injects: opens one session through the standard sessions flow. */
@@ -70,7 +74,7 @@ export type A2aControlProps = PropsRuntime<'sidebar.footer.action'> & PropsLocal
 async function fetchState(): Promise<A2aState | undefined> {
   const response = await fetch('/__dsh_a2a/state', { cache: 'no-store' })
   if (!response.ok) return undefined
-  const body = await response.json() as { nodes?: boolean; version?: string; sessions?: A2aSessionRow[]; activity?: A2aActivityRow[]; inFlight?: A2aInFlightRow[]; tasks?: A2aTaskRow[]; canvas?: { teams?: unknown[] } }
+  const body = await response.json() as { nodes?: boolean; version?: string; sessions?: A2aSessionRow[]; activity?: A2aActivityRow[]; inFlight?: A2aInFlightRow[]; tasks?: A2aTaskRow[]; canvas?: { teams?: unknown[] }; tasksStaleCount?: number }
   if (body.nodes !== true || !Array.isArray(body.sessions)) return undefined
   return {
     sessions: body.sessions,
@@ -78,6 +82,7 @@ async function fetchState(): Promise<A2aState | undefined> {
     inFlight: Array.isArray(body.inFlight) ? body.inFlight : [],
     tasks: Array.isArray(body.tasks) ? body.tasks : [],
     hasCanvas: body.canvas !== undefined,
+    ...(typeof body.tasksStaleCount === 'number' ? { tasksStaleCount: body.tasksStaleCount } : {}),
     ...(typeof body.version === 'string' ? { version: body.version } : {}),
   }
 }
@@ -249,18 +254,34 @@ export function A2aControl({ wide, t, openSession }: A2aControlProps) {
                   ))}
                 </div>
               )}
-              {tasks.length > 0 && (
-                <>
-                  <div className={css.sectionTitle}>{t('a2a.tasks')}</div>
-                  <div className={css.inFlightList} aria-label={t('a2a.tasks')}>
-                    {tasks.map((task) => (
-                      <div key={task.taskId} className={css.inFlightRow} title={t('a2a.tasksNote')}>
-                        <FeedRow dir="out" team={task.team} peer={task.peer} ts={task.startedAt} openSession={openSession} t={t} />
+              {(() => {
+                // C-ruling: render only settleable debt; the stale tail is a
+                // count line, never a row-per-noise listing.
+                const settleableTasks = tasks.filter(task => task.settleable !== false)
+                const staleCount = state.tasksStaleCount ?? (tasks.length - settleableTasks.length)
+                if (settleableTasks.length === 0 && staleCount === 0) return null
+                return (
+                  <>
+                    {settleableTasks.length > 0 && (
+                      <>
+                        <div className={css.sectionTitle}>{t('a2a.tasks')}</div>
+                        <div className={css.inFlightList} aria-label={t('a2a.tasks')}>
+                          {settleableTasks.map((task) => (
+                            <div key={task.taskId} className={css.inFlightRow} title={t('a2a.tasksNote')}>
+                              <FeedRow dir="out" team={task.team} peer={task.peer} ts={task.startedAt} openSession={openSession} t={t} />
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                    {staleCount > 0 && (
+                      <div className={css.staleNote} title={t('a2a.tasksNote')}>
+                        {t('a2a.tasksStale')} · {String(staleCount)}
                       </div>
-                    ))}
-                  </div>
-                </>
-              )}
+                    )}
+                  </>
+                )
+              })()}
               <div className={css.sectionTitle}>{t('a2a.activity')}</div>
               {activity.length === 0
                 ? <div className={css.empty}>{t('a2a.activityEmpty')}</div>

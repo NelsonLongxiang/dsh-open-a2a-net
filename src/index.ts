@@ -1465,7 +1465,17 @@ export function apply(ctx: Context, config: Config): void {
               // keeps rendering plain owed rows until it learns the tiers.
               tasks: taskLedger.list()
                 .filter(task => task.status === 'pending')
-                .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, status: task.status, direction: task.direction ?? 'outbound', receiptExpected: task.receiptExpected !== false })),
+                .map(task => ({
+                  taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, status: task.status,
+                  direction: task.direction ?? 'outbound', receiptExpected: task.receiptExpected !== false,
+                  // C-ruling bucket split: a pending row is settleable while
+                  // it is young, expected, and answerable; past the stale
+                  // hour it is conversational noise waiting on the dead TTL.
+                  settleable: task.receiptExpected !== false && Date.now() - task.startedAt < 60 * 60_000,
+                })),
+              // C face: the stale/conversational tail as a count, so the
+              // panel can render only truly settleable debt.
+              tasksStaleCount: taskLedger.list().filter(task => task.status === 'pending' && (task.receiptExpected === false || Date.now() - task.startedAt >= 60 * 60_000)).length,
               tasksDead: taskLedger.list()
                 .filter(task => task.status === 'dead')
                 .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt, reason: task.reason ?? 'unspecified' })),
@@ -3287,10 +3297,13 @@ ${message}`
 
   /**
    * Track one routed task in the ledger when its result leaves it owed a
-   * receipt: delivered-but-unanswered tasks (an async dispatch, the
-   * reply-wait deadline's release, or an aborted wait) reconcile later when
-   * the `[A2A receipt] task <id>` message arrives, while a synchronous
-   * completion already carries its answer and owes nothing.
+   * receipt: ONLY an explicitly async dispatch (fire-and-forget) owes one —
+   * a synchronous wait released early (TASK_STATE_ABORTED_WAIT) is a
+   * conversational exchange, and booking it as owed filled the ledger with
+   * conversation noise no receipt can ever settle (A-ruling, 2026-09-01
+   * decision seat: sync Q&A must not enter pending; only real
+   * receipt-awaiting rows stay on the book). A synchronous completion
+   * already carries its answer and owes nothing.
    */
   const trackOwedTask = (taskId: string, team: string, peer: string, result: A2aRouteResult): void => {
     if (!result.ok) return
@@ -3298,7 +3311,7 @@ ${message}`
     // them as receipt-owed would fill the owed book with rows no receipt can
     // ever settle (evicting genuinely receivable peer rows past TASK_CAP).
     if (result.bridge !== undefined) return
-    if (result.task_status !== 'TASK_STATE_DELIVERED' && result.task_status !== 'TASK_STATE_ABORTED_WAIT') return
+    if (result.task_status !== 'TASK_STATE_DELIVERED') return
     taskLedger.track(taskId, team, peer, result.context_id === '' ? undefined : result.context_id)
   }
 
@@ -4096,16 +4109,23 @@ ${message}`
         text: value.tasks.length === 0 && value.archivedTotal === 0
           ? 'No routed tasks are owed a receipt.'
           : [
-            ...(value.tasks.some((task: { status: string }) => task.status === 'pending') ? ['Owed receipts:'] : []),
-            ...value.tasks.filter((task: { status: string }) => task.status === 'pending').map((task: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string }) => {
-              // Beyond an hour the receipt is more likely lost than late
-              // (the target died before routing it): name the two ways out.
-              const overdue = Date.now() - task.startedAt > 60 * 60_000
-                ? ', still no receipt — the target may be gone; probe it or follow up with the context id'
-                : ''
-              const context = task.contextId === undefined || task.contextId === '' ? '' : `, follow-up context ${task.contextId}`
-              return `  - ${task.taskId} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}), waiting ${describeAge(Date.now() - task.startedAt)}${context}${overdue}`
-            }),
+            ...(() => {
+              // C-ruling split (2026-09-01 decision seat): only young,
+              // receipt-expected pending rows are settleable debt — the
+              // stale tail is conversational noise waiting on the dead
+              // TTL; count it, don't list it.
+              const pending = value.tasks.filter((task: { status: string }) => task.status === 'pending')
+              const settleable = pending.filter((task: { receiptExpected?: boolean; startedAt: number }) => task.receiptExpected !== false && Date.now() - task.startedAt < 60 * 60_000)
+              const staleCount = pending.length - settleable.length
+              return [
+                ...(settleable.length > 0 ? ['Owed receipts:'] : []),
+                ...settleable.map((task: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string }) => {
+                  const context = task.contextId === undefined || task.contextId === '' ? '' : `, follow-up context ${task.contextId}`
+                  return `  - ${task.taskId} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}), waiting ${describeAge(Date.now() - task.startedAt)}${context}`
+                }),
+                ...(staleCount > 0 ? [`Delivered conversationally without a formal receipt (${String(staleCount)}) — not debts; they auto-dead-letter at the stale TTL.`] : []),
+              ]
+            })(),
             ...(value.tasks.some((task: { status: string }) => task.status === 'dead') ? ['Dead-lettered (auto-flagged past the stale TTL; a revived target can still settle with a late receipt):'] : []),
             ...value.tasks.filter((task: { status: string }) => task.status === 'dead').map((task: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string }) => {
               const context = task.contextId === undefined || task.contextId === '' ? '' : `, follow-up context ${task.contextId}`
