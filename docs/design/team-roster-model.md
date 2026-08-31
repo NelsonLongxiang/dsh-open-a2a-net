@@ -47,6 +47,12 @@
 3. `materializer-unavailable` 静默停摆（`return` 不再调度）→ 修复为记录后续跑。
 4. corrupt log → 标 `needs-repair`（停退避，暴露修复入口），不无限重试。
 5. boot prewarm 降级为对账器首轮；wake-on-route 保持不变。
+   - **并存关系（评审 nit 对齐，6e7441b6 留痕）**：对账器对 prewarm 是**吸收式替换**，
+     非叠加降级——boot 预热保留为"首轮快速排空"（大舰队一次性批量物化的分期节奏），
+     其后常驻收敛只由对账器承担；两教科书式语义不再各自为政。
+   - **字段命名约定**：state 面新观测字段统一 `reconcile.*` 前缀
+     （state/lastTickAt/lastChecked/woken/rows[].{id,error,attempts,nextRetryAt,needsRepair}），
+     不与 prewarm.* 旧字段混用——旧字段保留只读，待下个大版本再议合并。
 
 ## 四、切片与验收
 

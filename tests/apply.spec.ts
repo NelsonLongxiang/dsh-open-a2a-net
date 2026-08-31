@@ -1922,6 +1922,8 @@ describe('a2a plugin module surface', () => {
       wakeReconcileIntervalMs: 60_000,
       wakeReconcileBackoffBaseMs: 5_000,
       wakeReconcileMaxBackoffMs: 600_000,
+      teamJoinAllowlist: [],
+      teamScopeRouting: false,
       stateColdRowsTtlMs: 5_000,
       cardCacheTtlMs: 60_000,
       cardCacheNegativeTtlMs: 30_000,
