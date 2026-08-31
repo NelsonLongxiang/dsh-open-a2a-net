@@ -27,6 +27,7 @@
 import type { LampState } from './layout-wire'
 import { buildLayoutDoc, clampDoc, type LayoutDoc, type LayoutRect } from './layout-doc'
 import { FRAME_HEAD_LIFT, starEdges } from './edges'
+import { displayName } from './stage-name'
 import {
   activityEdges, federalEdges, flyBounds, groupRemoteTeams, peerNodeId, peerHostOf, placePeers,
   type FrameAnchor, type InFlightRow, type PeerPlacement, type PeerRow,
@@ -408,13 +409,16 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       el.classList.toggle('selected', model.isSelected(n.id))
       el.setAttribute('aria-selected', String(model.isSelected(n.id)))
       const host = n.id.slice('peer-'.length)
-      const nmText = n.remote === true ? host : (n.name ?? n.label)
+      const nmText = n.remote === true ? host : displayName(n)
       const nmEl = el.querySelector<HTMLElement>('.nm-text')!
       if (nmEl.textContent !== nmText) nmEl.textContent = nmText
       const subEl = el.querySelector<HTMLElement>('.sub')!
+      const subBase = n.team + (n.name !== undefined && n.name !== '' ? ' · ' + n.name : '')
+      // When the title fell back to the team label the sub line would repeat
+      // it verbatim; collapse to the cross-team suffix alone in that case.
       const subText = n.remote === true
         ? remoteSubText(host)
-        : n.team + (n.name !== undefined && n.name !== '' ? ' · ' + n.name : '')
+        : (subBase === nmText ? '' : subBase)
           + (n.memberships.length > 1 ? ` · 跨队×${n.memberships.length}` : '')
       if (subEl.textContent !== subText) subEl.textContent = subText
       const prioEl = el.querySelector<HTMLElement>('.prio')!
