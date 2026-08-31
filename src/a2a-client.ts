@@ -56,6 +56,14 @@ type WireRoute = {
   readonly context_id?: unknown
   readonly task_status?: unknown
   readonly result?: unknown
+  readonly bridge?: unknown
+}
+
+/** The native-teams bridge marker, when the peer's answer carries one: its
+ * rounds emit no A2A receipt in this slice, so the caller must not book the
+ * task as receipt-owed. */
+function wireBridge(value: unknown): 'native-teams' | undefined {
+  return value === 'native-teams' ? 'native-teams' : undefined
 }
 
 /** Wire strings are absent-or-string; anything else degrades to ''. */
@@ -106,7 +114,15 @@ export class A2aClient {
         signal: controller.signal,
       })
       const text = await response.text()
-      if (!response.ok) throw new Error(`A2A HTTP ${String(response.status)}: ${text.slice(0, 200)}`)
+      if (!response.ok) {
+        // Carry the status and raw body on the error so callers can read the
+        // peer's structured wire code (idempotency verdicts) without parsing
+        // the prose of the message.
+        const error = new Error(`A2A HTTP ${String(response.status)}: ${text.slice(0, 200)}`)
+        ;(error as { statusCode?: number }).statusCode = response.status
+        ;(error as { bodyText?: string }).bodyText = text
+        throw error
+      }
       return JSON.parse(text) as unknown
     } catch (error) {
       // Tag the escapee so the caller can tell our budget firing from an
@@ -190,6 +206,7 @@ export class A2aClient {
     callerSession?: string,
     asyncMode = false,
     taskIdFromCaller?: string,
+    callbackAddress?: string,
   ): Promise<A2aRouteResult> {
     const args: Record<string, unknown> = { team, message, caller_session: callerSession ?? this.options.sessionId }
     if (contextId !== undefined) args.context_id = contextId
@@ -201,6 +218,11 @@ export class A2aClient {
     // own result; the fallback below stamps it when the peer generated its
     // own (pre-0.5.3 peers).
     if (taskIdFromCaller !== undefined) args.task_id = taskIdFromCaller
+    // The callback address (P2): where the peer routes THIS caller's
+    // receipt — distinct from the caller label when the submitting session
+    // has its own node team (the transport face's callbackTarget mapping
+    // rides this). Old peers ignore the extra body field harmlessly.
+    if (callbackAddress !== undefined && callbackAddress !== '') args.callback = callbackAddress
     // Outbound half of the same B5 ruling: refuse to put an oversized
     // payload on the wire. Rejection is local and instant — a doomed upload
     // would burn the 15s HTTP budget and end in the peer's 413 anyway.
@@ -222,10 +244,24 @@ export class A2aClient {
       }, baseUrl) as WireRoute
     } catch (error) {
       const ownBudgetExhausted = (error as { ownBudgetExhausted?: unknown }).ownBudgetExhausted === true
+      // The peer's structured wire code rides the HTTP rejection body
+      // (idempotency verdicts -32002/-32003 among others): surface it, so a
+      // caller can tell a terminal verdict from an ordinary transport miss
+      // without parsing prose.
+      let code = -32000
+      const bodyText = (error as { bodyText?: unknown }).bodyText
+      if (typeof bodyText === 'string') {
+        try {
+          const parsed = JSON.parse(bodyText) as { code?: unknown }
+          if (typeof parsed.code === 'number') code = parsed.code
+        } catch {
+          /* prose body — keep the generic code */
+        }
+      }
       const failure: Extract<A2aRouteResult, { ok: false }> = {
         ok: false,
         error: `direct route to peer failed: ${String(error)}`,
-        code: -32000,
+        code,
         // Wait-window telemetry (envelope-v2 §4): measured patience plus
         // whose budget ended it. Pure observation, zero semantics.
         abortElapsedMs: Date.now() - dispatchedAt,
@@ -242,19 +278,26 @@ export class A2aClient {
       return failure
     }
     // The delivered shape (wait:false): no result member — the reply rides
-    // the receipt contract back to the caller's team instead.
+    // the receipt contract back to the caller's team instead. A bridged
+    // native round carries the peer's `bridge` marker and promises NO
+    // receipt: the text must not claim one the slice will never send.
     if (raw.routed === true && raw.delivered === true) {
       const taskId = wireText(raw.task_id) !== '' ? wireText(raw.task_id) : taskIdFromCaller ?? ''
+      const bridge = wireBridge(raw.bridge)
       return {
         ok: true,
         team,
-        reply: `Delivered to ${team} (async). The target routes a receipt — a message starting "[A2A receipt] task ${taskId} <outcome summary>" — back to your team when done; watch a2a_status activity or follow up with the context id.`,
+        reply: bridge !== undefined
+          ? `Delivered to ${team} (async native-teams round). It settles through the team's own routing chain and routes no A2A receipt in this slice — reconcile via context_id follow-ups.`
+          : `Delivered to ${team} (async). The target routes a receipt — a message starting "[A2A receipt] task ${taskId} <outcome summary>" — back to your team when done; watch a2a_status activity or follow up with the context id.`,
         task_id: taskId,
         context_id: wireText(raw.context_id),
         task_status: wireText(raw.task_status) === '' ? 'TASK_STATE_DELIVERED' : wireText(raw.task_status),
+        ...(bridge !== undefined ? { bridge } : {}),
       }
     }
     const reply = this.replyText(raw.result, '')
+    const bridge = wireBridge(raw.bridge)
     return {
       ok: true,
       team,
@@ -264,6 +307,58 @@ export class A2aClient {
       task_id: wireText(raw.task_id) !== '' ? wireText(raw.task_id) : taskIdFromCaller ?? '',
       context_id: wireText(raw.context_id),
       task_status: wireText(raw.task_status),
+      ...(bridge !== undefined ? { bridge } : {}),
     }
   }
+
+  /**
+   * Query a peer's `/a2a/query` outcome surface (W7 slice 2): read-only
+   * lookup of one claimed task's settled outcome. The fingerprint is the
+   * authorization — the caller recomputes it from the exact submit fields
+   * with the shared `peerPayloadFingerprint`. Every transport-level failure
+   * (network miss, HTTP error, unparseable or malformed body, empty fields)
+   * answers `undefined`: a query that cannot complete carries no increment
+   * of information, never a verdict.
+   */
+  async queryOutcome(baseUrl: string, taskId: string, fingerprint: string, signal?: AbortSignal): Promise<A2aQueryAnswer | undefined> {
+    if (taskId === '' || fingerprint === '') return undefined
+    try {
+      const raw = await this.http('/a2a/query', {
+        method: 'POST',
+        body: JSON.stringify({ task_id: taskId, fingerprint }),
+        ...(signal !== undefined ? { signal } : {}),
+      }, baseUrl) as Record<string, unknown>
+      return parseQueryAnswer(raw)
+    } catch {
+      return undefined
+    }
+  }
+}
+
+/** The typed `/a2a/query` answer, 1:1 with the wire body's four states. */
+export type A2aQueryAnswer =
+  | { readonly found: false; readonly reason: 'unknown-task' | 'payload-mismatch' }
+  | { readonly found: true; readonly status: 'pending' }
+  | { readonly found: true; readonly status: 'completed'; readonly reply: string; readonly settledAt: string; readonly truncated?: boolean }
+  | { readonly found: true; readonly status: 'failed'; readonly error: string; readonly settledAt: string; readonly truncated?: boolean }
+
+/** Coerce one raw wire body into an {@link A2aQueryAnswer}; anything
+ * malformed degrades to `undefined` (no verdict), never to a guess. */
+function parseQueryAnswer(raw: Record<string, unknown>): A2aQueryAnswer | undefined {
+  if (raw.found !== true && raw.found !== false) return undefined
+  if (raw.found === false) {
+    if (raw.reason !== 'unknown-task' && raw.reason !== 'payload-mismatch') return undefined
+    return { found: false, reason: raw.reason }
+  }
+  if (raw.status === 'pending') return { found: true, status: 'pending' }
+  const settledAt = typeof raw.settled_at === 'string' && raw.settled_at !== '' ? raw.settled_at : undefined
+  if (settledAt === undefined) return undefined
+  const truncated = raw.truncated === true ? { truncated: true } : {}
+  if (raw.status === 'completed' && typeof raw.reply === 'string') {
+    return { found: true, status: 'completed', reply: raw.reply, settledAt, ...truncated }
+  }
+  if (raw.status === 'failed' && typeof raw.error === 'string') {
+    return { found: true, status: 'failed', error: raw.error, settledAt, ...truncated }
+  }
+  return undefined
 }

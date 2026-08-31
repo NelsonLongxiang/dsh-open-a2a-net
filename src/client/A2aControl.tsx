@@ -426,6 +426,20 @@ export function A2aControl({ wide, t, useSessions, openSession }: A2aControlProp
               {t('a2a.title')}
               {state.version !== undefined ? <span className={css.versionTag} title={state.version}>v{state.version}</span> : null}
             </div>
+            <div className={css.stageRow}>
+              <span className={css.stageTitle}>{t('a2a.stageTitle')}</span>
+              <span className={css.stageLinks}>
+                <a className={css.stageLink} href="/__dsh_a2a_nexus/" target="_blank" rel="noreferrer" title={t('a2a.stageScene')}>
+                  {t('a2a.stageScene')}
+                </a>
+                {/* The planning deep link only makes sense while the host serves the canvas face — otherwise the stage would just land on observation. */}
+                {state.canvas !== undefined && (
+                  <a className={css.stageLink} href="/__dsh_a2a_nexus/?mode=plan" target="_blank" rel="noreferrer" title={t('a2a.stagePlan')}>
+                    {t('a2a.stagePlan')}
+                  </a>
+                )}
+              </span>
+            </div>
             <input
               className={css.searchInput}
               type="search"

@@ -71,7 +71,7 @@ shared tool runtime.
 | `a2a_route` | Send a message to a team. | `context_id` continues a conversation; `async: true` delivers without waiting; fails over across candidates. |
 | `a2a_tasks` | Which async tasks still owe a receipt? | Three tiers: owed rows keep the follow-up `context_id`; past-TTL rows auto-dead-letter (still settleable); outcomes land in the bounded archive; persisted across restarts. |
 | `a2a_probe` | Is the fleet healthy? | One verified-card fetch per peer (or one given url); `N reachable, M down`; misses classified `unreachable` vs `rejected`. |
-| `a2a_status` | What is this node doing right now? | Tracked peers with quality scores, in-flight routes, and recent routing activity. |
+| `a2a_status` | What is this node doing right now? | Tracked peers with quality scores, in-flight routes, recent routing activity, and the idempotency window aggregate (occupancy + claim/replay/conflict counters). |
 
 ## Canvas teams (arbitrary grouping, v0.5.25)
 
@@ -81,6 +81,15 @@ A canvas team is a user-composed, named, multi-member routing group: **one atomi
 - Control API: `POST /__dsh_a2a/canvas` with `action: create | remove | add-member | remove-member`
 - Membership requires a joined session (live node or remembered intent) — no routing backdoor over unjoined sessions; leaving the network (leave/archive) drops every canvas membership
 - `a2a_teams` lists canvas teams as local rows with member/live counts; `/__dsh_a2a/state` serves per-member `joined`/`live` flags
+
+## Native-teams bridge (node unification, P1)
+
+Two half-bridges to `@nelsonlongxiang/dsh-native-teams` (structural contract mirror: `src/teams-bridge.ts`; the frozen contract lives in that package's `src/a2a-face.ts`):
+
+- **Outbound transport face** — this plugin mounts the `nativeTeamsA2a` service: `resolve` answers through the one directory walk `submit` uses (no drift-prone double matcher), `submit` rides the direct-route dispatcher (per-candidate async gate mirroring `a2a_route`; a peer's idempotency 409 replay is terminal per delivery (async → accepted, sync → throws with the `-32003` literal), never a failover duplicate; accepted submissions track in the owed ledger; when the submitting session is a joined node, its node team rides the wire as the receipt `callback`, so a peer's receipt wakes the session that dispatched the round — wake-on-route covers a cold one; without a joined parent no callback rides and receipts fall back to the caller label), `cancel` drives the cooperative `[A2A cancel]` stop-notice through the wire to the owning team (peers do not track inbound task ids, so a ledger route would always answer unknown) and clears the owed row. It exposes nothing new — only teams the peer network already publishes resolve.
+- **Inbound dispatch** (config `nativeTeamsInbound`, default `false`) — a routed team name the sibling registry classifies as an unambiguous local claim starts a routed round through its authoritative seam (`describeTarget`/`startRound`), parented by this node's live initiator, with the A2A envelope riding the round message. Registry presence alone is never exposure: the operator opts in. Dispatcher-level only — inbound callers address the team, never its members (members stay visible-not-addressable). Rounds are bounded like the steer path: a 180s reply-wait deadline (`nativeRoundWaitMs`) answers the honest delivered-unsettled shape while the round keeps going, and the caller's abort (where one exists) cancels the round through its own signal. `wait: false` fires the round detached after prepare-first checks (claim, seam, initiator — a phantom dispatch never answers success); native-teams rounds do not emit A2A receipts in this slice, so their results carry the `bridge` marker and are never booked as receipt-owed (the receipt backflow to `callbackTarget` is the P2 slice).
+
+See `docs/native-teams-bridge.md` for the full mapping and scope notes.
 
 ## Configuration
 
@@ -96,6 +105,8 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | `agentName` | `'DeepSeek Harness A2A node'` | Human-facing name on the card. |
 | `apiKey` | `''` | `X-API-Key` sent on peer requests; non-empty also gates the control routes. |
 | `sessionNodes` | `true` | Expose main sessions as joinable network nodes. |
+| `nativeTeamsInbound` | `false` | Dispatch inbound direct routes (and the outbound A2A tools' local candidates) to native-teams registry teams through its routing seam; needs the sibling plugin composed. |
+| `nativeRoundWaitMs` | `180000` | Reply-wait budget for one native-teams round (the bridge's deadline, mirroring the steer path's 180s). A round still running past it answers the honest delivered-unsettled shape and keeps going. |
 | `wakeJoinedOnBoot` | `false` | Prewarm cold joined sessions' agents after mount (needs the api gateway; wake-on-route and the sidebar wake button stay available without it). The prewarm is deferred, foreground-yielding, and cancellable — it never blocks the boot window (see the two knobs below). |
 | `wakePrewarmDelayMs` | `10000` | Idle delay between loader settlement and the first prewarm wake; `0` restores fire-at-settle. |
 | `wakePrewarmQuietMs` | `5000` | Foreground quiet window: a wake/route demand (or any outbound route in flight) inside this window postpones the next prewarm step; `0` disables the yield. |
@@ -133,7 +144,10 @@ redirects (301) onto its trailing-slash form, so both spellings render and
 the shell's relative assets always resolve inside the served tree. For
 offline development, `nexus-stage/scripts/mockhost.py [port]` serves the
 built stage with canned state; open `/?fault=500` on it to exercise the
-on-page fault badge. `pnpm verify` needs no manual bootstrap on a fresh
+on-page fault badge. The planning canvas persists its layout document
+**last-write-wins** — two browsers (or tabs) arranging the same fleet
+will overwrite each other's arrangements; one planner at a time (see
+`feedback/2026-08-27-nexus-canvas-ux/multi-tab-analysis.md`). `pnpm verify` needs no manual bootstrap on a fresh
 checkout: its `verify:nexus` step installs the subpackage dependencies
 itself before building.
 

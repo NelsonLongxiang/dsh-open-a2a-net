@@ -3,6 +3,11 @@
  * Pure presentation state: node coordinates, team-frame rectangles, and the
  * viewport transform. Membership truth stays in canvas.json - this store may
  * be reset freely without touching who sits in which team.
+ *
+ * Unit semantics (contract note 6, 2026-08-28 ruling): {x,y} are 2D
+ * planning-canvas card centers in pixels. Other consumers (the 3D
+ * observation lens) must reproject into their own envelope, never consume
+ * the values as absolute scene coordinates.
  * @module @nelsonlongxiang/dsh-open-a2a-net/layout-store
  */
 

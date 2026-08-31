@@ -57,17 +57,40 @@ export const TASK_STALE_TTL_MS = 24 * 60 * 60_000
 /** Lifecycle of a tracked outbound task inside the owed book. */
 export type TaskStatus = 'pending' | 'dead'
 
+/** F5 layer-3: why a dead row aged out (stamped by the sweep at flip time). */
+export type DeadReason = 'fire-forget' | 'unconsumed'
+
 /** One tracked outbound task still in the owed book (unsettled). */
 export interface TaskRecord {
   readonly taskId: string
   readonly team: string
   readonly peer: string
   readonly startedAt: number
+  /**
+   * Which side of the wire this row serves: 'outbound' (this node sent and
+   * awaits a receipt) or 'inbound' (this node received and owes one).
+   * Absent on rows persisted before F2' — those are outbound by birth.
+   */
+  readonly direction?: 'inbound' | 'outbound'
+  /**
+   * F5: whether a receipt is actually owed. Absent ⇒ true (back-compat).
+   * `false` marks fire-and-forget deliveries — the caller's label could not
+   * receive a receipt at dispatch (process-form label), so no debt was born
+   * and supervision must not chase this row.
+   */
+  readonly receiptExpected?: boolean
   /** The conversation the delivery steered, for follow-up routes. */
   readonly contextId?: string
   status: TaskStatus
   /** When the row was swept to dead-letter (absent while pending). */
   deadAt?: number
+  /**
+   * F5 layer-3: why the row aged out. 'fire-forget' — a receiptExpected:false
+   * row expiring is expected bookkeeping, not a failure; 'unconsumed' — a
+   * receipt-owed row never settled, the actionable stale shape. Absent on
+   * dead rows persisted before this field (rendered as 'unspecified').
+   */
+  reason?: DeadReason
 }
 
 /** One settled task kept for audit, with its receipt-correlated outcome. */
@@ -121,6 +144,29 @@ export interface TaskLedgerOptions {
    * transition deterministic - no real sleeps to race under load.
    */
   now?: () => number
+}
+
+/**
+ * What one correlated receipt settled — the payload of the
+ * `a2a/receipt-resolved` event, emitted for consumers that react to receipt
+ * arrivals (P2: native-teams settles its outstanding async submissions from
+ * this seam). `outcome` carries the v2 envelope's controlled-vocabulary
+ * verdict when the receipt rode one; `late` marks a receipt answering a
+ * dead-lettered row (revival) or an abandoned row (arrival recorded) — a
+ * healthy row's duplicate receipt refreshes the archive with NO marker.
+ */
+export interface ReceiptResolvedInfo {
+  readonly taskId: string
+  /** The team the task was routed to (as the dispatcher recorded it). */
+  readonly team: string
+  /** The peer (or `'local'`) the task was dispatched through. */
+  readonly peer: string
+  /** v2 envelope outcome, when the receipt rode one. */
+  readonly outcome?: string
+  /** One-line outcome summary, when the receipt carried one. */
+  readonly summary?: string
+  /** True when the receipt answered a dead-lettered or abandoned row. */
+  readonly late?: boolean
 }
 
 /** The persisted ledger document: the owed book plus its settled archive. */
@@ -197,6 +243,38 @@ export class TaskLedger {
       team,
       peer,
       startedAt: this.now(),
+      direction: 'outbound' as const,
+      ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
+      status: 'pending' as const,
+    }, ...this.tasks].slice(0, TASK_CAP)
+    this.persist()
+  }
+
+  /**
+   * F2' (receipt-settlement): remember one INBOUND delivery owed a receipt —
+   * this node is the settlement debtor here: the caller waits for a receipt
+   * only this target can produce. Before this row type existed, inbound
+   * deliveries were born ledger-less, so the async nudge's isPending gate
+   * no-op'd for exactly the deliveries that stall (08-30 evidence: zero
+   * ledger records for latched activations). Idempotent by task id like
+   * {@link track}.
+   * @param taskId - the correlation key the caller's task was born with.
+   * @param team - the team the delivery addressed (this node's).
+   * @param from - the caller's receipt target (label or callback address).
+   * @param contextId - the delivery's conversation id, kept for follow-up routes (empty omits it).
+   */
+  trackInbound(taskId: string, team: string, from: string, contextId?: string, receiptExpected?: boolean): void {
+    if (taskId === '') return
+    this.sweep(this.now())
+    if (this.tasks.some(entry => entry.taskId === taskId)) return
+    if (this.archived.some(entry => entry.taskId === taskId)) return
+    this.tasks = [{
+      taskId,
+      team,
+      peer: `local:${from}`,
+      startedAt: this.now(),
+      direction: 'inbound' as const,
+      ...(receiptExpected === false ? { receiptExpected: false } : {}),
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
       status: 'pending' as const,
     }, ...this.tasks].slice(0, TASK_CAP)
@@ -308,14 +386,14 @@ export class TaskLedger {
    * record with the latest outcome. A dead-lettered row revives through this
    * same path when a revived target finally answers.
    * @param message - the inbound or relayed message text.
-   * @returns whether the message correlated a tracked task.
+   * @returns what the receipt settled, or `undefined` when the message
+   *   correlated nothing.
    */
-  resolveFromMessage(message: string): boolean {
+  resolveFromMessage(message: string): ReceiptResolvedInfo | undefined {
     const parsed = parseReceipt(message)
-    if (parsed === null) return false
+    if (parsed === null) return undefined
     const taskId = parsed.taskId
-    const summary = parsed.summary.trim().slice(0, SUMMARY_CAP)
-    // Controlled vocabulary only: a foreign outcome string never lands here.
+    const summary = parsed.summary.trim().slice(0, SUMMARY_CAP)    // Controlled vocabulary only: a foreign outcome string never lands here.
     const envelopeOutcome =
       parsed.envelope?.outcome !== undefined ? (parsed.envelope.outcome as ReceiptOutcomeV2) : undefined
     const elapsedMs = parsed.envelope?.elapsedMs
@@ -335,10 +413,19 @@ export class TaskLedger {
         ...(elapsedMs !== undefined ? { elapsedMs } : {}),
       })
       this.persist()
-      return true
+      return {
+        taskId,
+        team: record.team,
+        peer: record.peer,
+        // A dead row still lives in the tasks array (the sweep only flips
+        // status): its receipt is a revival — the late marker's first form.
+        ...(record.status === 'dead' ? { late: true } : {}),
+        ...(envelopeOutcome !== undefined ? { outcome: envelopeOutcome } : {}),
+        ...(summary !== '' ? { summary } : {}),
+      }
     }
     const settled = this.archived.find(entry => entry.taskId === taskId)
-    if (settled === undefined) return false
+    if (settled === undefined) return undefined
     // Orphan isolation: a receipt for an explicitly abandoned row must not
     // rewrite the abandonment outcome — the caller stopped waiting by choice.
     // Record that the target did answer later; keep the decision verbatim and
@@ -358,7 +445,51 @@ export class TaskLedger {
       ...this.archived.filter(entry => entry.taskId !== taskId),
     ]
     this.persist()
-    return true
+    return {
+      taskId,
+      team: settled.team,
+      peer: settled.peer,
+      ...(envelopeOutcome !== undefined ? { outcome: envelopeOutcome } : {}),
+      ...(summary !== '' ? { summary } : {}),
+      // The late marker's second form: the caller had already moved on
+      // (abandonment recorded verbatim). A HEALTHY row's duplicate refresh
+      // is neither dead-lettered nor abandoned — it carries no marker.
+      ...(callerEnded ? { late: true } : {}),
+    }
+  }
+
+  /**
+   * F5 (settlement integrity): settle pending rows by CONTENT ECHO — an
+   * inbound message that references `task <id>` of a pending row counts as
+   * the peer demonstrably responding to that task, even when the formal
+   * `[A2A receipt]` envelope never rode the reply (the 08-30 shape: content
+   * answered, formality lost). The receipt envelope keeps precedence: this
+   * runs only when {@link resolveFromMessage} correlated nothing. Echo-
+   * settled rows archive with a marker summary so the audit trail shows
+   * they were echoes, not envelopes.
+   * @param message - the inbound message text.
+   * @returns the task ids this message settled (usually none or one).
+   */
+  resolveEcho(message: string): string[] {
+    const settled: string[] = []
+    this.sweep(this.now())
+    for (const record of [...this.tasks]) {
+      if (record.status !== 'pending') continue
+      if (!message.includes(`task ${record.taskId}`)) continue
+      this.tasks = this.tasks.filter(entry => entry.taskId !== record.taskId)
+      this.archiveSettled({
+        taskId: record.taskId,
+        team: record.team,
+        peer: record.peer,
+        startedAt: record.startedAt,
+        ...(record.contextId !== undefined ? { contextId: record.contextId } : {}),
+        resolvedAt: this.now(),
+        summary: '(settled by content echo)',
+      })
+      settled.push(record.taskId)
+    }
+    if (settled.length > 0) this.persist()
+    return settled
   }
 
   /** Move one settled record to the archive head, trimming at the cap. */
@@ -373,6 +504,11 @@ export class TaskLedger {
       if (entry.status === 'pending' && now - entry.startedAt > this.staleTtlMs) {
         entry.status = 'dead'
         entry.deadAt = now
+        // F5 layer-3: stamp WHY the row aged — a fire-and-forget row
+        // (receiptExpected:false) expiring is expected bookkeeping; a
+        // receipt-owed row expiring means the settlement chain failed for
+        // that delivery and deserves supervision attention.
+        entry.reason = entry.receiptExpected === false ? 'fire-forget' : 'unconsumed'
         changed = true
       }
     }

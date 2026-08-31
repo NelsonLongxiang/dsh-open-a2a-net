@@ -12,6 +12,7 @@ import { existsSync, mkdtempSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { apply } from '../src/index.ts'
+import { MAX_LAYOUT_BODY_BYTES, WIRE_ERROR_PAYLOAD_TOO_LARGE } from '../src/transport-caps.ts'
 
 async function harness(): Promise<number> {
   const ctx = new Context()
@@ -54,6 +55,59 @@ describe('canvas-layout control face', () => {
     expect((await post({ action: 'wat' })).ok).toBe(false)
     expect((await post({ action: 'reset' })).ok).toBe(true)
     expect((await get()).layout).toBeNull()
+  })
+
+  it('normalizes a 2D planning document: frames kept, clamps applied, bad keys dropped', async () => {
+    const port = await harness()
+    const base = 'http://127.0.0.1:' + String(port)
+    const post = (b: unknown): Promise<any> => fetch(base + '/__dsh_a2a/canvas-layout', { method: 'POST', body: JSON.stringify(b) }).then(r => r.json())
+    const doc = {
+      version: 1,
+      viewport: { x: 12.6, y: -3.2, scale: 99 },
+      nodes: { 'session-a': { x: 2e6, y: 1.6 }, 'session-b': { x: 0, y: 0 } },
+      frames: {
+        选品: { x: 10, y: 20, w: 400, h: 300 },
+        'a/b': { x: 0, y: 0, w: 1, h: 1 },
+        flat: { x: 0, y: 0, w: 0, h: 9 },
+      },
+    }
+    const saved = await post({ action: 'save', layout: doc })
+    expect(saved.ok).toBe(true)
+    // The echoed snapshot is the fixpoint the client relies on: rounding,
+    // the scale clamp, coordinate clamping, and dropped keys all applied.
+    expect(saved.layout).toEqual({
+      version: 1,
+      viewport: { x: 13, y: -3, scale: 3 },
+      nodes: { 'session-a': { x: 1e6, y: 2 }, 'session-b': { x: 0, y: 0 } },
+      frames: { 选品: { x: 10, y: 20, w: 400, h: 300 } },
+    })
+    expect((await (await fetch(base + '/__dsh_a2a/canvas-layout')).json()).layout).toEqual(saved.layout)
+  })
+
+  it('saves a full-fleet document above the legacy 10 KiB control cap', async () => {
+    const port = await harness()
+    const base = 'http://127.0.0.1:' + String(port)
+    // 256 nodes with long ids: ≈32 KiB of legitimate document — rejected by
+    // the old shared control cap, inside MAX_LAYOUT_BODY_BYTES.
+    const nodes: Record<string, { x: number; y: number }> = {}
+    for (let i = 0; i < 256; i++) nodes[`session-${String(i).padStart(3, '0')}-${'x'.repeat(96)}`] = { x: i, y: i * 2 }
+    const body = JSON.stringify({ action: 'save', layout: { version: 1, viewport: { x: 0, y: 0, scale: 1 }, nodes, frames: {} } })
+    expect(Buffer.byteLength(body, 'utf8')).toBeGreaterThan(10_000)
+    const response = await fetch(base + '/__dsh_a2a/canvas-layout', { method: 'POST', body })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ ok: true })
+  })
+
+  it('answers 413 with the transport wire code above MAX_LAYOUT_BODY_BYTES', async () => {
+    const port = await harness()
+    const base = 'http://127.0.0.1:' + String(port)
+    const nodes: Record<string, { x: number; y: number }> = {}
+    for (let i = 0; i < 4000; i++) nodes[`session-${String(i).padStart(4, '0')}`] = { x: i, y: i }
+    const body = JSON.stringify({ action: 'save', layout: { version: 1, viewport: { x: 0, y: 0, scale: 1 }, nodes, frames: {} } })
+    expect(Buffer.byteLength(body, 'utf8')).toBeGreaterThan(MAX_LAYOUT_BODY_BYTES)
+    const response = await fetch(base + '/__dsh_a2a/canvas-layout', { method: 'POST', body })
+    expect(response.status).toBe(413)
+    expect(await response.json()).toMatchObject({ code: WIRE_ERROR_PAYLOAD_TOO_LARGE })
   })
 })
 

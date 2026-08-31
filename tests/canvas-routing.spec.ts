@@ -1,7 +1,7 @@
 /**
  * Canvas team routing integration: multi-member teams route to the first
  * live member, fail over to the next member, wake the first cold joined
- * member through the apiProxy wake face, list as local rows in a2a_teams,
+ * member through the sessionController wake face, list as local rows in a2a_teams,
  * surface in the state route, and keep join-gate semantics (membership
  * requires join; leave drops membership).
  */
@@ -29,16 +29,16 @@ class FakeMultiAgents extends Service {
 }
 
 /** Fake wake face: records materialization ids, resolves the cold agent. */
-class FakeApiProxy extends Service {
+class FakeSessionController extends Service {
   materialized: string[] = []
   private readonly resolve: (agent: Agent) => void
   constructor(ctx: Context, resolve: (agent: Agent) => void) {
-    super(ctx, 'apiProxy')
+    super(ctx, 'sessionController')
     this.resolve = resolve
   }
-  materializeSession(id: SessionId): Promise<Agent> {
+  resolveAgent(id: SessionId): Promise<{ agent: Agent }> {
     this.materialized.push(String(id))
-    return Promise.resolve(this.resolve(String(id)))
+    return Promise.resolve({ agent: this.resolve(String(id)) })
   }
 }
 
@@ -184,7 +184,7 @@ describe('canvas team routing', () => {
     answering(m.ctx, cold1)
     // The wake face resolves whichever id it is asked for; only cold1 is a
     // member candidate that materializes into a live root.
-    const proxy = new FakeApiProxy(m.ctx, (id: string) => {
+    const proxy = new FakeSessionController(m.ctx, (id: string) => {
       if (id === 'session-cold1') return cold1
       throw new Error('unexpected wake target')
     })
@@ -267,7 +267,7 @@ describe('canvas team routing', () => {
     const coldEvents: unknown[] = []
     const ghost = makeAgent('session-never-joined', coldEvents)
     answering(m.ctx, ghost)
-    const proxy = new FakeApiProxy(m.ctx, () => ghost)
+    const proxy = new FakeSessionController(m.ctx, () => ghost)
     void proxy
     const route = m.ctx.tools.get('a2a_route')
     const result = await route!.execute({ team: 'dsh/canvas/alpha', message: 'bypass attempt' }, noAgent()) as { ok: boolean }

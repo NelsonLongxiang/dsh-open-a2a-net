@@ -1,6 +1,6 @@
 # Nexus 规划模式 · 无限画布节点交互设计 v0.1
 
-> 设计席交付 · 2026-08-27 · 状态：评审中
+> 设计席交付 · 2026-08-27 · 状态：已实施（2026-08-29，A–D 四步全部落地；偏离与实施期修复见同目录 implementation-notes.md）
 > 依据：`docs/canvas-stage-design-system.md`（Swiss 极简 + 三层令牌 + 点阵世界层 + 零缓动）、`docs/canvas-ui-contract.md`（锁定 v1）、`src/layout-store.ts`（布局持久化契约 v2）、`nexus-stage/src/main.ts` 现状。
 > 线框实证：同目录 `prototype-v1.html` + `shots/prototype-v1.1.png`。
 
@@ -78,11 +78,48 @@
 
 ## 6. 实施路线（每步独立 PR，走 worktree 四角色流程）
 
-| PR | 内容 | 复用/依据 |
-|---|---|---|
-| A. 取证修复先行 | `cycle()` 空 catch 改显式离线态卡；`fetchLayout` 接线（布局加载→定位→保存回路）；成员边改星形 + opacity 提到可见 | main.ts 现状；本交付 review.md P0 三条 |
-| B. 规划模式骨架 | 2D 画布 tab：点阵世界层 + 节点卡 + 队框 + 星形边 + 布局持久化回路 + 拖拽/框选 | `LayoutSnapshot.frames` 首次有消费者 |
-| C. 组队交互 | 建队/入队/离队/调优先级/散队全动作 + 乐观更新回滚 + 右键菜单等价路径 | 契约写面四 action；A2aControl.tsx 列表版是参照实现 |
-| D. 活动/联邦层 | inFlight 活动边 + peer 徽章 + 联邦线 + 状态条飞行定位 | `state.inFlight/activity/peers` 已下发未消费 |
+> 实施状态（2026-08-29）：四步全部完成；偏离裁决见同目录 implementation-notes.md。
+
+| PR | 内容 | 复用/依据 | 状态 |
+|---|---|---|---|
+| A. 取证修复先行 | `cycle()` 空 catch 改显式离线态卡；`fetchLayout` 接线（布局加载→定位→保存回路）；成员边改星形 + opacity 提到可见 | main.ts 现状；本交付 review.md P0 三条 | ✅ 已实施 |
+| B. 规划模式骨架 | 2D 画布 tab：点阵世界层 + 节点卡 + 队框 + 星形边 + 布局持久化回路 + 拖拽/框选 | `LayoutSnapshot.frames` 首次有消费者 | ✅ 已实施 |
+| C. 组队交互 | 建队/入队/离队/调优先级/散队全动作 + 乐观更新回滚 + 右键菜单等价路径 | 契约写面四 action；A2aControl.tsx 列表版是参照实现 | ✅ 已实施 |
+| D. 活动/联邦层 | inFlight 活动边 + peer 徽章 + 联邦线 + 状态条飞行定位 | `state.inFlight/activity/peers` 已下发未消费 | ✅ 已实施 |
 
 验收门：教义 §五交付前门六条 + 契约不变量四条逐条 + `tests/canvas-stage.spec.ts` in-process harness 范式补规划模式用例 + 三缩放抽查对比度。
+
+
+## 7. 对等节点卡 v1（设计方向：用户裁决 2026-08-29）
+
+> 裁决原文："对等节点事实上跟会话节点没什么区别，他是团队节点的一种展现形式，只是只保留了一个节点入口。"
+> 协议依据：目录实现（index.ts listDirectoryTeams）对每个 peer 抓签名卡片，卡片携带该宿主全部会话团队，行标 origin（宿主聚类）/ via（对端端点）——**对等节点就是一组远端团队行的折叠分组入口**，数据模型已按此组织，画布此前未消费。
+
+### 7.1 统一节点模型
+
+节点 = 联邦图中的入口。两类：
+
+| | 本地会话节点 | 对等节点（远端组节点） |
+|---|---|---|
+| 入口指向 | 本地团队成员 | 经由该对端可达的远端团队（卡片 sessionTeams，state.remote 行） |
+| 状态徽标 | live ● / cold ○ | 可达性 score（a2a_probe 数据） |
+| 可操作性 | 拖拽排布、加入/离队、路由目标 | 拖拽排布、展开远端团队清单；**无 join/leave**（不引入"加入对端宿主"假语义） |
+| 布局持久化 | nodes{id:{x,y}} | **同表**：节点键 `peer-<host>:<port>`（≤128 不透明字符串，v1 契约无 schema 变更） |
+
+保留的唯一类型差异：peer 不可入本地队（成员必须 joined session——契约不变量 1）。
+
+### 7.2 交互规格
+
+- 卡面：172px 卡（同 chrome），靛蓝远端徽标替代 live 点，host:port 替代路由别名，`score N` 替代 P 徽标，展开区列远端团队行（team + workspace，来自 state.remote 按 via 聚合）
+- 拖拽：与本地卡同管线，位置随布局文档持久化（save/adopt round-trip）
+- 右键菜单：v1 无操作项（不提供加入本地队/路由）；Ctrl+滚轮缩放、框选、Esc 全适用
+- 建队：选择集里的对等卡**不参与**（ids 过滤 remote；全 remote → info 提示）
+- 联邦线/活动边：不变（hub/badge → 保留现有锚定）
+
+### 7.3 验收门
+
+1. 布局文档含 `peer-*` 键，clampDoc 通过（键 ≤128 无约束冲突），save/adopt round-trip 位置保持
+2. 拖拽对等卡 → 0px 端点偏差的边随动（活动边锚定到对端卡）
+3. demo=1 下 2 张远端卡渲染远端团队清单；XSS：url/name 纯 textContent
+4. 选择集全为对等卡时 G → info 提示；混合选择 → 仅本地会话入 ids
+5. 设计系统门（四态/令牌/reduced-motion/无 emoji）逐项过

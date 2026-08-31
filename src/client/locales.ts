@@ -35,6 +35,9 @@ export type A2aNetKey =
   | 'a2a.canvasAdd'
   | 'a2a.canvasRemove'
   | 'a2a.canvasDelete'
+  | 'a2a.stageTitle'
+  | 'a2a.stageScene'
+  | 'a2a.stagePlan'
 
 /** Simplified Chinese dictionary. */
 export const zh: Record<A2aNetKey, string> = {
@@ -71,6 +74,9 @@ export const zh: Record<A2aNetKey, string> = {
   'a2a.canvasAdd': '+ 添加成员',
   'a2a.canvasRemove': '移出该队伍',
   'a2a.canvasDelete': '解散',
+  'a2a.stageTitle': '舞台视图',
+  'a2a.stageScene': '观测 · 3D',
+  'a2a.stagePlan': '规划 · 2D',
 }
 
 /** English dictionary. */
@@ -108,4 +114,7 @@ export const en: Record<A2aNetKey, string> = {
   'a2a.canvasAdd': '+ Add member',
   'a2a.canvasRemove': 'Remove from this team',
   'a2a.canvasDelete': 'Delete',
+  'a2a.stageTitle': 'Stage views',
+  'a2a.stageScene': 'Observe · 3D',
+  'a2a.stagePlan': 'Plan · 2D',
 }

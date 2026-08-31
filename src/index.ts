@@ -20,13 +20,14 @@ import { CanvasStore } from './canvas-store.ts'
 import { LayoutStore } from './layout-store.ts'
 import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
+import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
-import { TaskLedger, SUMMARY_CAP } from './task-ledger.ts'
-import { formatReceipt } from './receipt.ts'
+import { TaskLedger, SUMMARY_CAP, type ReceiptResolvedInfo } from './task-ledger.ts'
+import { formatReceipt, parseReceipt } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
-import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from './idempotency-store.ts'
+import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
@@ -45,10 +46,13 @@ import type { } from '@deepseek-ai/dsh-session-title'
 // `ctx.sessionPersistence` on Context; the provider is mounted by app
 // compositions and stays optional here (cold listing degrades without it).
 import type { } from '@deepseek-ai/dsh-session-persistence'
-// Type-only: the api gateway's declaration merging puts `ctx.apiProxy` on
-// Context; the service is mounted by app compositions and stays optional
-// here (boot wake and wake-on-route degrade without it).
-import type { } from '@deepseek-ai/dsh-host-apiproxy'
+// The session controller is the wake face's owner, mounted by app
+// compositions and stays optional here (boot wake and wake-on-route degrade
+// without it). Successor of the removed ApiProxy seam
+// (@deepseek-ai/dsh-host-apiproxy was deleted upstream in
+// 4f00a8b82a "refactor(api): remove ApiProxy package"; resolveAgent is the
+// materializeSession face's current home). Looked up by service key at
+// runtime — no compile-time dependency on the controller package.
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import s from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -57,12 +61,27 @@ import { MessageId } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { A2aClient, type A2aFetch, type A2aSchedule, type CardFetchOutcome } from './a2a-client.ts'
-import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from './transport-caps.ts'
+import { MAX_LAYOUT_BODY_BYTES, WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from './transport-caps.ts'
 import type { A2aPeerCard, A2aRouteResult, ZoneRecord } from './types.ts'
+import { NATIVE_TEAMS_A2A_FACE_KEY, type NativeTeamsBridgeFace } from './teams-bridge.ts'
 
 export type * from './types.ts'
 export { A2aClient } from './a2a-client.ts'
 export type { A2aClientOptions, A2aFetch, A2aSchedule } from './a2a-client.ts'
+export { NATIVE_TEAMS_A2A_FACE_KEY } from './teams-bridge.ts'
+export type { NativeTeamsBridgeFace, TeamsBridgeResolveInfo, TeamsBridgeSubmitOutcome, TeamsBridgeSubmitRequest } from './teams-bridge.ts'
+export type { ReceiptResolvedInfo } from './task-ledger.ts'
+
+// P2 seam: every correlated receipt is announced on this event for peer
+// plugins that track async submissions natively (native-teams settles its
+// outstanding `startRoundAsync` rounds from it). Payload vocabulary lives in
+// ReceiptResolvedInfo; emission is fire-and-forget at both receipt arrival
+// points (the direct endpoint and the local dispatch relay).
+declare module '@deepseek-ai/cordis' {
+  interface Events {
+    'a2a/receipt-resolved'(payload: ReceiptResolvedInfo): void
+  }
+}
 
 export const name = 'a2a'
 
@@ -169,6 +188,26 @@ export interface Config {
    * never waits on this queue.
    */
   readonly wakeBootStaggerMs: number
+  /**
+   * F8: continuous desired-state reconciliation. The boot prewarm is a
+   * one-shot queue; the reconciler re-derives the due set every tick and
+   * wakes one cold intent per pass — covering post-boot drift, failed
+   * wakes, and gateways that mounted late. Default on.
+   */
+  readonly wakeReconcile: boolean
+  /** Cadence between reconciliation ticks (floored at 50ms). */
+  readonly wakeReconcileIntervalMs: number
+  /** First-retry delay after a failed reconcile wake; doubles per attempt. */
+  readonly wakeReconcileBackoffBaseMs: number
+  /** Backoff ceiling; corrupt-log rows park as needs-repair and never retry. */
+  readonly wakeReconcileMaxBackoffMs: number
+  /**
+   * S4: joinable-team patterns for a2a_team_join — exact names or
+   * trailing-`*` prefixes. Empty list denies every join (default).
+   */
+  readonly teamJoinAllowlist: string[]
+  /** S3 (queued): team-scoped routing admission. Enforcement off by default. */
+  readonly teamScopeRouting: boolean
 
   /**
    * v0.5.23 (async-stall): see the schema comment on asyncNudgeDelayMs.
@@ -206,6 +245,25 @@ export interface Config {
    * remote session's reply (default 30 minutes).
    */
   readonly routeTimeoutMs: number
+  /**
+   * Opt-in native-teams inbound bridge: when composed with
+   * `@nelsonlongxiang/dsh-native-teams`, a routed team name that its
+   * registry classifies as an unambiguous local claim dispatches through
+   * its authoritative routing seam (`/a2a/direct`, the outbound A2A tools,
+   * and the directory listing). Off by default — exposing every registered
+   * team to the network is an operator decision (exposure-grants
+   * governance: grants are deliberate, never ambient). Dispatcher-level
+   * only: inbound callers address the team, never its individual members
+   * (members stay visible-not-addressable).
+   */
+  readonly nativeTeamsInbound?: boolean
+  /**
+   * Reply-wait budget for one native-teams round (the bridge's answer
+   * deadline, mirroring the steer path's 180s deadline). A round still
+   * running past it answers the honest delivered-unsettled shape instead
+   * of parking the caller; the round itself keeps going.
+   */
+  readonly nativeRoundWaitMs?: number
 }
 
 /** Schemastery configuration for the A2A client plugin row. */
@@ -223,6 +281,24 @@ export const Config: s<Config> = s.object({
   wakePrewarmDelayMs: s.number().default(10_000),
   wakePrewarmQuietMs: s.number().default(5_000),
   wakeBootStaggerMs: s.number().default(3_000),
+  wakeReconcile: s.boolean().default(true),
+  wakeReconcileIntervalMs: s.number().default(60_000),
+  wakeReconcileBackoffBaseMs: s.number().default(5_000),
+  wakeReconcileMaxBackoffMs: s.number().default(600_000),
+  /**
+   * S4: the joinable-team curation list. A model calling a2a_team_join may
+   * only declare membership in a team matching one of these patterns — an
+   * exact name or a trailing-`*` prefix (`dsh/canvas/*`). Default empty:
+   * the owner's no-self-join ruling, institutionalized as default-deny;
+   * a refused join carries guidance instead of failing silently.
+   */
+  teamJoinAllowlist: s.array(s.string()).default([]),
+  /**
+   * S3 (queued): when true, route dispatch checks caller↔target shared
+   * team membership before addressing. Default off — enforcement that
+   * touches live nodes is reported to the decision seat before enabling.
+   */
+  teamScopeRouting: s.boolean().default(false),
 
   /**
    * v0.5.23 (async-stall): delay before a delivered-but-unconsumed async
@@ -237,6 +313,8 @@ export const Config: s<Config> = s.object({
   cardTtlMs: s.number().default(172_800_000),
   flushTimeoutMs: s.number().default(300_000),
   routeTimeoutMs: s.number().default(1_800_000),
+  nativeTeamsInbound: s.boolean().default(false),
+  nativeRoundWaitMs: s.number().default(180_000),
 })
 
 /** Model-facing text for one route result. */
@@ -257,8 +335,46 @@ function renderRoute(_args: unknown, value: Record<string, JsonValue>): { type: 
  * @param ctx - registrant context carrying the tool registry and timer.
  * @param config - deployment's A2A node facts.
  */
+/**
+ * Exposure audit for unauthenticated direct deliveries (defect card F4, the
+ * zero-risk slice). `/a2a/direct` carries no per-call caller identity yet
+ * (docs/protocol/delivery-origin-auth.md stays best-effort until the
+ * OriginClaim envelope lands), so with an empty `apiKey` every process that
+ * can reach this host's ports can steer every joined session. A node that
+ * only talks to loopback peers (same-host collaboration) is not exposed;
+ * one seeded with non-loopback peers is, and the operator should either set
+ * `apiKey` or accept the exposure deliberately.
+ * @param peers - the configured seed peer URLs.
+ * @param apiKey - the configured API key ('' disables header auth).
+ * @returns the non-loopback seed peers and, when they coincide with an
+ *   empty key, the boot warning to log.
+ */
+export function directDeliveryExposure(
+  peers: readonly string[],
+  apiKey: string,
+): { nonLoopbackPeers: string[]; warning: string | undefined } {
+  const nonLoopbackPeers = peers.filter((peer) => {
+    try {
+      const { hostname } = new URL(peer)
+      const host = hostname.replace(/^\[|\]$/g, '').toLowerCase()
+      return !(host === 'localhost' || host.endsWith('.localhost') || host === '::1' || /^127\./.test(host))
+    } catch {
+      return false // a malformed seed URL says nothing about exposure
+    }
+  })
+  const warning =
+    nonLoopbackPeers.length > 0 && apiKey === ''
+      ? 'a2a: unauthenticated direct deliveries are accepted from any host that can reach this node (non-loopback peers configured, apiKey empty) — any local process or reachable peer can steer every joined session; set apiKey to require the X-API-Key header, or see docs/protocol/delivery-origin-auth.md for the enforcement plan'
+      : undefined
+  return { nonLoopbackPeers, warning }
+}
+
 export function apply(ctx: Context, config: Config): void {
   const logger = ctx.logger('a2a')
+  // F4 slice: say the quiet part at boot instead of leaving the exposure to
+  // be discovered from a ledger full of unexplained steering.
+  const exposure = directDeliveryExposure(config.peers, config.apiKey)
+  if (exposure.warning !== undefined) logger.warn(exposure.warning)
   // The production seams: Node's globals. Tests inject their own A2aClient
   // seams through src/a2a-client.ts directly. During fiber teardown the timer
   // service is already gone; a timer armed then belongs to nobody, so the
@@ -375,18 +491,40 @@ export function apply(ctx: Context, config: Config): void {
     return false
   }
 
-  function readJsonBody(req: IncomingMessage, res: ServerResponse, use: (body: { readonly id?: unknown; readonly name?: unknown; readonly action?: unknown }) => void): void {
+  function readJsonBody(req: IncomingMessage, res: ServerResponse, use: (body: { readonly id?: unknown; readonly name?: unknown; readonly action?: unknown }) => void, maxBytes = 10_000): void {
     const chunks: Buffer[] = []
     let size = 0
+    // Same contract as the direct endpoint's reader (B5 enforcement): an
+    // oversized body is rejected, never truncated and never connection-
+    // killed mid-read — buffering stops at the crossing chunk, the stream
+    // drains to `end`, and the client receives one structured 413 (the old
+    // behavior tore the socket down with no diagnosis at all). The default
+    // keeps the historical 10 KiB control cap; the layout save route passes
+    // MAX_LAYOUT_BODY_BYTES because a full-fleet document legitimately
+    // exceeds it (LayoutStore still clamps every value server-side).
+    let overflowed = false
+    const declared = Number.parseInt(String(req.headers['content-length'] ?? ''), 10)
+    if (Number.isFinite(declared) && declared > maxBytes) overflowed = true
     req.on('data', (chunk: Buffer) => {
-      size += chunk.length
-      if (size > 10_000) {
-        req.destroy()
+      if (overflowed) return
+      const next = size + chunk.length
+      if (next > maxBytes) {
+        overflowed = true
+        chunks.length = 0
         return
       }
+      size = next
       chunks.push(chunk)
     })
     req.on('end', () => {
+      if (overflowed) {
+        if (!res.writableEnded && !res.headersSent) {
+          const payload = JSON.stringify({ error: 'payload too large', code: WIRE_ERROR_PAYLOAD_TOO_LARGE })
+          res.writeHead(413, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+          res.end(payload)
+        }
+        return
+      }
       let body: { readonly id?: unknown }
       try {
         body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof body
@@ -467,6 +605,10 @@ export function apply(ctx: Context, config: Config): void {
   // host restarts silently dropped every join. The store remounts the node
   // whenever the Agent comes back, until the user leaves.
   const joinedSessions = new JoinedSessions(join(home, 'a2a', 'joined.json'))
+  // S2: node-declared team memberships — the roster half of the
+  // team-roster iteration. Joins ride the allowlist-gated tools; the store
+  // is the durable declaration the card publishes and the state face reads.
+  const teamMemberships = new TeamMembershipStore(join(home, 'a2a', 'teams.json'))
 
   /**
    * Recent routing activity for the network panel: a bounded ring of the
@@ -537,6 +679,52 @@ export function apply(ctx: Context, config: Config): void {
   // a restart does not orphan the reconciliation.
   const taskLedger = new TaskLedger(join(home, 'a2a', 'tasks.json'))
 
+  /**
+   * Settle one message through the ledger and announce what it correlated
+   * on `a2a/receipt-resolved` — the seam peer plugins (native-teams)
+   * consume to settle their outstanding async submissions. Fence honesty:
+   * the try/catch contains SYNCHRONOUS listener throws (cordis dispatch is
+   * synchronous, so a throw lands here and the routing path survives); an
+   * ASYNC listener that rejects escapes as an unhandled rejection and is
+   * the consumer's own discipline — keep seam listeners synchronous.
+   * @param message - the inbound or relayed message text.
+   */
+  function settleAndAnnounce(message: string): void {
+    // W7 slice-2 hook 3: a receipt that correlates an id THIS node's
+    // idempotency ledger claimed records the receipt's human line as that
+    // key's outcome. Parsed DIRECTLY off the receipt codec — a claimed key
+    // usually is NOT in the owed book (the claim lives on the receiving
+    // side, the owed book on the dispatcher side), so the ledger's own
+    // correlation would never reach it. `summary` is the one-line text;
+    // the envelope's controlled-vocabulary outcome is never a product and
+    // must not be recorded as one. First-write wins inside the store, so a
+    // late receipt never overwrites a precise sync-hook record.
+    const parsed = parseReceipt(message)
+    if (parsed !== null && parsed.taskId !== '') {
+      const line = parsed.summary.trim()
+      if (line !== '') {
+        idempotencyStore.recordOutcome(parsed.taskId, { status: 'completed', reply: line.slice(0, SUMMARY_CAP) })
+      }
+    }
+    const resolved = taskLedger.resolveFromMessage(message)
+    if (resolved === undefined) {
+      // F5 (settlement integrity): the formal envelope missed — an inbound
+      // message that still echoes a pending task id means the peer
+      // demonstrably responded to it, which settles the debt even when the
+      // receipt formality never rode the reply.
+      const echoed = taskLedger.resolveEcho(message)
+      if (echoed.length > 0) {
+        logger.info(`a2a: ${String(echoed.length)} pending task(s) settled by content echo (${echoed.join(', ')})`)
+      }
+      return
+    }
+    try {
+      ctx.emit('a2a/receipt-resolved', resolved)
+    } catch (error) {
+      logger.warn(`a2a: receipt-resolved listener rejected: ${String(error)}`)
+    }
+  }
+
   // Server-side idempotency keys (work-order P3): a caller-born task id
   // executes at most once inside the 24h window — same-key replays answer
   // refused-but-idempotent, same-key different-payload answers conflict.
@@ -561,14 +749,21 @@ export function apply(ctx: Context, config: Config): void {
   let lastWakeDemandAt = 0
 
   /**
-   * The api gateway's wake face, when composed: materializing a persisted
-   * session's agent (log replay plus composed preset world) is web-app
-   * knowledge, so both wake paths ride the one service that owns it.
+   * The session controller's wake face, when composed: materializing a
+   * persisted session's agent (log replay plus composed preset world) is
+   * web-app knowledge, so both wake paths ride the one service that owns it.
+   * resolveAgent resolves { agent } or { error }; a structured error becomes
+   * a thrown one so the wake paths' existing failure handling applies.
    */
   const materialize = (id: string): Promise<Agent> | undefined => {
-    const apiProxy = ctx.get('apiProxy') as { materializeSession?: (sessionId: SessionId) => Promise<Agent> } | undefined
-    if (apiProxy?.materializeSession === undefined) return undefined
-    return apiProxy.materializeSession(SessionId(id))
+    const controller = ctx.get('sessionController') as {
+      resolveAgent?: (sessionId: SessionId) => Promise<{ agent: Agent } | { error: { message: string } }>
+    } | undefined
+    if (controller?.resolveAgent === undefined) return undefined
+    return controller.resolveAgent(SessionId(id)).then((result) => {
+      if ('agent' in result) return result.agent
+      throw new Error(`session "${id}" did not materialize: ${result.error.message}`)
+    })
   }
 
   // Per-id single-flight: a materialization is a full log replay (seconds of
@@ -599,7 +794,18 @@ export function apply(ctx: Context, config: Config): void {
    * the team names no cold joined session or no wake face is composed.
    */
   const wakeColdTeam = (team: string): Promise<Agent> | undefined => {
-    const aliasId = joinedSessions.list().find(entry => !liveRoots.has(entry) && `${config.team}/${id8(entry)}` === team)
+    // F7 (wake-intent self-heal): a boot-time transient can prune the
+    // in-memory intent while joined.json still holds it (memory/file
+    // divergence — the live repro on 0.5.40). The persisted file is the
+    // durable source of the user's gesture: if the in-memory match fails,
+    // reload once and retry before giving up.
+    const matchJoined = (): string | undefined =>
+      joinedSessions.list().find(entry => !liveRoots.has(entry) && `${config.team}/${id8(entry)}` === team)
+    let aliasId = matchJoined()
+    if (aliasId === undefined) {
+      joinedSessions.reload()
+      aliasId = matchJoined()
+    }
     // Canvas teams wake their first cold joined member (member order is
     // the routing priority; an archived member never wakes).
     const id = aliasId ?? canvasColdMemberId(parseCanvasTeamName(team))
@@ -639,6 +845,9 @@ export function apply(ctx: Context, config: Config): void {
       sessionNodes.delete(id)
       joinedSessions.remove(id)
       canvasStore.dropMember(id)
+      // S2 consistency: an archived node's roster declarations die with it
+      // — a left node keeps no team membership.
+      teamMemberships.dropSession(id)
       logger.info(`a2a: archived session ${id8(id)} left the node network`)
     }
   }
@@ -860,6 +1069,116 @@ export function apply(ctx: Context, config: Config): void {
       if (joinedSessions.has(String(agent.id))) mountSessionNode(agent)
     }
 
+    /** F-observability: the boot prewarm's lifecycle, surfaced on the state route (F: prewarm not running was invisible). */
+    const prewarmStatus: {
+      state: 'off' | 'skipped:sessionController-missing' | 'draining' | 'done' | 'cancelled'
+      attempted: number
+      woken: number
+      failed: Array<{ id: string; error: string }>
+    } = { state: 'off', attempted: 0, woken: 0, failed: [] }
+
+    // F8: continuous desired-state reconciliation. The boot prewarm is a
+    // one-shot snapshot over a queue — a session that goes cold later, a
+    // wake that failed once, or a gateway absent at that instant never got
+    // a second look (the live shapes behind "auto-wake is crippled":
+    // silent stalls, unretried failures, post-boot drift). The reconciler
+    // re-derives the due set every tick from the join intents and wakes at
+    // most one id per pass, with per-id exponential backoff and a parked
+    // needs-repair state for corrupt logs. Scoped beside prewarmStatus:
+    // the state route reads both, and its cancel flag is its own.
+    const reconcileStatus: {
+      state: 'off' | 'idle' | 'draining'
+      lastTickAt: number
+      lastChecked: number
+      woken: number
+      rows: Array<{ id: string; error: string; attempts: number; nextRetryAt: number; needsRepair: boolean }>
+    } = { state: 'off', lastTickAt: 0, lastChecked: 0, woken: 0, rows: [] }
+    const reconcileFailures = new Map<string, { attempts: number; nextRetryAt: number; error: string; needsRepair: boolean }>()
+    const CORRUPT_LOG_SIGNATURE = /corrupt/i
+    const RECONCILE_YIELD_MS = 1_000
+    const recordWakeFailure = (id: string, error: string): void => {
+      const attempts = (reconcileFailures.get(id)?.attempts ?? 0) + 1
+      const needsRepair = CORRUPT_LOG_SIGNATURE.test(error)
+      const backoff = needsRepair
+        ? Number.MAX_SAFE_INTEGER
+        : Math.min(
+          Math.max(config.wakeReconcileBackoffBaseMs, 1) * 2 ** Math.min(attempts - 1, 20),
+          Math.max(config.wakeReconcileMaxBackoffMs, config.wakeReconcileBackoffBaseMs),
+        )
+      reconcileFailures.set(id, { attempts, nextRetryAt: Date.now() + backoff, error, needsRepair })
+    }
+    let reconcileCancelled = false
+    ctx.effect(() => () => {
+      reconcileCancelled = true
+    })
+    let reconcilePostponed = 0
+    const reconcileTick = (): void => {
+      if (reconcileCancelled || ctx.fiber.uid === null) return
+      const interval = Math.max(50, config.wakeReconcileIntervalMs)
+      if (!config.wakeReconcile || ctx.get('sessionController') === undefined) {
+        // Late-mounting gateway: keep the cadence so a proxy that appears
+        // after apply still starts reconciling (the P3 apply-time snapshot
+        // lesson, on a loop instead of a one-shot).
+        reconcileStatus.state = 'off'
+        schedule(reconcileTick, interval)
+        return
+      }
+      const now = Date.now()
+      for (const id of reconcileFailures.keys()) {
+        if (liveRoots.has(id) || !joinedSessions.has(id)) reconcileFailures.delete(id)
+      }
+      const due = joinedSessions.list().filter(id =>
+        !liveRoots.has(id)
+        && joinedSessions.has(id)
+        && archivedSessionFilter()?.(id) !== true
+        && !materializeInFlight.has(id)
+        && (reconcileFailures.get(id)?.nextRetryAt ?? 0) <= now)
+      reconcileStatus.lastTickAt = now
+      reconcileStatus.lastChecked = due.length
+      reconcileStatus.rows = [...reconcileFailures.entries()]
+        .map(([rowId, row]) => ({ id: rowId, error: row.error, attempts: row.attempts, nextRetryAt: row.nextRetryAt, needsRepair: row.needsRepair }))
+      if (due.length === 0) {
+        reconcileStatus.state = 'idle'
+        schedule(reconcileTick, interval)
+        return
+      }
+      // Foreground demand postpones a pass — but at most five one-second
+      // yields per pass, then the reconciler proceeds anyway. The boot
+      // prewarm could starve forever under steady traffic; a convergence
+      // loop must not.
+      if ((Date.now() - lastWakeDemandAt < config.wakePrewarmQuietMs || inFlightRoutes.size > 0) && reconcilePostponed < 5) {
+        reconcilePostponed += 1
+        schedule(reconcileTick, RECONCILE_YIELD_MS)
+        return
+      }
+      reconcilePostponed = 0
+      reconcileStatus.state = 'draining'
+      const id = due[0]!
+      const flight = materializeOnce(id)
+      if (flight === undefined) {
+        // The shape that silently killed the boot prewarm mid-queue: here
+        // it records a reason and the next pass re-derives the set.
+        recordWakeFailure(id, 'materializer-unavailable')
+        schedule(reconcileTick, Math.min(RECONCILE_YIELD_MS, interval))
+        return
+      }
+      void flight
+        .then(() => {
+          reconcileFailures.delete(id)
+          reconcileStatus.woken += 1
+        })
+        .catch(error => {
+          recordWakeFailure(id, String(error).slice(0, 200))
+          logger.warn(`reconcile wake of ${id} failed: ${String(error).slice(0, 200)}`)
+        })
+        .finally(() => {
+          // A quick re-check after each attempt keeps a multi-id drain
+          // moving at the yield cadence; the interval cadence resumes as
+          // soon as a pass finds nothing due.
+          if (!reconcileCancelled && ctx.fiber.uid !== null) schedule(reconcileTick, Math.min(RECONCILE_YIELD_MS, interval))
+        })
+    }
+
     {
       // Archive pruning and boot wake both ride the loader tree's
       // settlement: the workspace registry and the api gateway may activate
@@ -874,9 +1193,18 @@ export function apply(ctx: Context, config: Config): void {
       const pruneThenWake = (): void => {
         pruneArchivedJoins()
         pruneCanvasMemberships()
-        if (!config.wakeJoinedOnBoot) return
-        if (ctx.get('apiProxy') === undefined) {
-          logger.warn('wakeJoinedOnBoot is on but no api gateway is composed; cold joined sessions stay asleep')
+        // F8: the reconciler runs regardless of the boot prewarm flag —
+        // it is the durable convergence loop, not a boot-time courtesy.
+        if (config.wakeReconcile) schedule(reconcileTick, Math.max(50, config.wakeReconcileIntervalMs))
+        if (!config.wakeJoinedOnBoot) {
+          prewarmStatus.state = 'off'
+          return
+        }
+        if (ctx.get('sessionController') === undefined) {
+          // F-observability: this skip used to be console-only — the state
+          // route now carries it so a dead prewarm is a reading, not a rumor.
+          prewarmStatus.state = 'skipped:sessionController-missing'
+          logger.warn('wakeJoinedOnBoot is on but no session controller is composed; cold joined sessions stay asleep')
           return
         }
         // Low-priority prewarm instead of an eager serial chain: each wake
@@ -898,26 +1226,48 @@ export function apply(ctx: Context, config: Config): void {
         // row and its intent. Wake-on-route and manual opens never queue.
         prewarmCancelled = false
         const ids = joinedSessions.list()
+        prewarmStatus.state = 'draining'
         let index = 0
         const step = (): void => {
-          if (prewarmCancelled || ctx.fiber.uid === null) return
+          if (prewarmCancelled || ctx.fiber.uid === null) {
+            prewarmStatus.state = 'cancelled'
+            return
+          }
           while (index < ids.length
             && (liveRoots.has(ids[index]!) || !joinedSessions.has(ids[index]!) || archivedSessionFilter()?.(ids[index]!) === true)) index += 1
-          if (index >= ids.length) return
+          if (index >= ids.length) {
+            prewarmStatus.state = 'done'
+            return
+          }
           const foregroundBusy = Date.now() - lastWakeDemandAt < config.wakePrewarmQuietMs || inFlightRoutes.size > 0
           if (foregroundBusy) {
             schedule(step, PREWARM_YIELD_RETRY_MS)
             return
           }
           const id = ids[index++]!
+          prewarmStatus.attempted += 1
           const startedAt = Date.now()
           const flight = materializeOnce(id)
-          if (flight === undefined) return
+          if (flight === undefined) {
+            prewarmStatus.failed.push({ id, error: 'materializer-unavailable' })
+            // F8 fix: a bare return here used to kill the drain mid-queue —
+            // the remaining ids never got a pass and the state stayed
+            // 'draining' forever (the silent-stall shape). Record the
+            // failure, keep the queue moving.
+            recordWakeFailure(id, 'materializer-unavailable')
+            schedule(step, config.wakeBootStaggerMs)
+            return
+          }
           void flight
             .catch(error => {
+              prewarmStatus.failed.push({ id, error: String(error).slice(0, 200) })
+              // Feed the reconciler's backoff bookkeeping so a boot-time
+              // failure does not get hammered again without a pause.
+              recordWakeFailure(id, String(error).slice(0, 200))
               logger.warn(`boot wake of ${id} failed: ${String(error)}`)
             })
             .then(() => {
+              prewarmStatus.woken += 1
               logger.info(`a2a: boot prewarm ${id8(id)} settled in ${String(Date.now() - startedAt)}ms (${String(ids.length - index)} left)`)
               if (!prewarmCancelled && ctx.fiber.uid !== null) schedule(step, config.wakeBootStaggerMs)
             })
@@ -1095,11 +1445,70 @@ export function apply(ctx: Context, config: Config): void {
               // keeps rendering plain owed rows until it learns the tiers.
               tasks: taskLedger.list()
                 .filter(task => task.status === 'pending')
-                .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, status: task.status })),
+                .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, status: task.status, direction: task.direction ?? 'outbound', receiptExpected: task.receiptExpected !== false })),
               tasksDead: taskLedger.list()
                 .filter(task => task.status === 'dead')
-                .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt })),
+                .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt, reason: task.reason ?? 'unspecified' })),
               archivedCount: taskLedger.archive().length,
+              // 0.5.36 observability: the idempotency window aggregate —
+              // window occupancy, outcome split, and cumulative claim-verdict
+              // counters (the data the UNIQUE-ization decision waits on).
+              // Read-only; no fingerprints cross here (they are /a2a/query's
+              // only auth material).
+              idempotency: idempotencyStore.stats(),
+              // F-observability: the boot prewarm's lifecycle — a dead or
+              // skipped prewarm is the root shape behind "cold rows pile up
+              // after restart" and must be readable, not a console rumor.
+              prewarm: { ...prewarmStatus, failed: [...prewarmStatus.failed] },
+              // F8 observability: reconciliation cadence, wake outcomes,
+              // and per-row failure reasons with backoff and the parked
+              // needs-repair state — the cold row's "why am I still cold".
+              reconcile: { ...reconcileStatus, rows: [...reconcileStatus.rows] },
+              // S1: flat node registry — local sessions and remote card
+              // nodes in one table, zone-qualified team handles as the
+              // stable cross-host addresses. Local ids are the session
+              // UUIDs; remote ids are the publishing team handles. (The
+              // `nodes` boolean above is the capability flag the panel
+              // already consumes; this face rides its own key.)
+              registry: {
+                nodes: [
+                  ...sessions.map(row => ({
+                    id: String(row.id),
+                    label: String(row.label ?? ''),
+                    team: String(row.team ?? ''),
+                    zone: config.team,
+                    live: row.live === true,
+                    joined: row.joined === true,
+                    ...(typeof row.workspace === 'string' && row.workspace !== '' ? { workspace: row.workspace } : {}),
+                    teams: [...teamMemberships.teamsOf(String(row.id))],
+                  })),
+                  ...(remoteRowsCache?.rows ?? []).map(row => ({
+                    id: String(row.team),
+                    label: String(row.name ?? ''),
+                    team: String(row.team),
+                    zone: String(row.team).split('/')[0] ?? config.team,
+                    host: String(row.origin ?? ''),
+                    ...(row.workspace !== undefined && row.workspace !== '' ? { workspace: row.workspace } : {}),
+                    remote: true,
+                  })),
+                ],
+                // S2: local team rosters rebuilt from member declarations.
+                teams: (() => {
+                  const roster = new Map<string, string[]>()
+                  for (const entry of teamMemberships.list()) {
+                    for (const team of entry.teams) {
+                      const members = roster.get(team) ?? []
+                      members.push(entry.session)
+                      roster.set(team, members)
+                    }
+                  }
+                  return [...roster.entries()].map(([team, members]) => ({
+                    team,
+                    members,
+                    live: members.filter(member => liveRoots.has(member)).length,
+                  }))
+                })(),
+              },
             })
             res.writeHead(200, {
               'Content-Type': 'application/json',
@@ -1141,8 +1550,10 @@ export function apply(ctx: Context, config: Config): void {
             if (id !== '') sessionNodes.delete(id)
             joinedSessions.remove(id)
             // Leaving the network leaves every canvas team too: membership
-            // without join consent would be a routing backdoor.
+            // without join consent would be a routing backdoor. Team
+            // roster declarations die the same way (S2 consistency).
             canvasStore.dropMember(id)
+            teamMemberships.dropSession(id)
             const payload = JSON.stringify({ id })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
@@ -1260,7 +1671,7 @@ export function apply(ctx: Context, config: Config): void {
             const payload = JSON.stringify({ ok: false, error: 'unknown action' })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
-          })
+          }, MAX_LAYOUT_BODY_BYTES)
         }),
       }), 'a2a: canvas-layout route')
       // The dsh-a2a-munder-difflin floor stage: a same-origin full-page
@@ -1383,8 +1794,28 @@ export function apply(ctx: Context, config: Config): void {
           // re-signs), so each card read spreads the publisher's latest
           // view of the network. `version` and `lanIp` are likewise
           // unsigned served-fresh facts: fleet auditability without SSH.
-          const sessionTeams = [...sessionNodes.values()].map(agent => ({ team: sessionTeamOf(agent), ...nodeMetadataOf(agent) }))
-          const body = JSON.stringify({ ...currentCard, peers: peerStore.list(), ...(sessionTeams.length > 0 ? { sessionTeams } : {}), ...(lanIp !== '' ? { lanIp } : {}), ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}), description: `A2A node exposing team ${config.team}` })
+          // Cold joined teams (intent remembered, agent not loaded) are
+          // advertised too: their routes are wake-on-route's to honor, and
+          // without the listing a cross-node caller has no candidate and
+          // the wake never fires.
+          const isArchived = archivedSessionFilter()
+          const sessionTeams = [
+            ...[...sessionNodes.values()].map(agent => ({ team: sessionTeamOf(agent), ...nodeMetadataOf(agent) })),
+            ...joinedSessions.list()
+              .filter(id => !liveRoots.has(id) && isArchived?.(id) !== true)
+              .map(id => ({ team: `${config.team}/${id8(id)}`, name: `${session}-${id8(id)}`, description: 'cold — not loaded; routing here wakes the session' })),
+          ]
+          const memberships = teamMemberships.list().flatMap(entry =>
+            entry.teams.map(team => ({ node: `${config.team}/${id8(entry.session)}`, team })))
+          const body = JSON.stringify({
+            ...currentCard,
+            peers: peerStore.list(),
+            ...(sessionTeams.length > 0 ? { sessionTeams } : {}),
+            ...(memberships.length > 0 ? { teamMemberships: memberships } : {}),
+            ...(lanIp !== '' ? { lanIp } : {}),
+            ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}),
+            description: `A2A node exposing team ${config.team}`,
+          })
           res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) })
           res.end(body)
         },
@@ -1425,6 +1856,12 @@ export function apply(ctx: Context, config: Config): void {
     })
   }
 
+  /** The cooperative stop-notice text, shared by the tasks/cancel control
+   * route and the transport face's cancel half (one contract, one wording). */
+  function cancelNoticeText(taskId: string, reason?: string): string {
+    return `[A2A cancel] (task ${taskId}) the caller cancelled this task${reason !== undefined && reason !== '' ? `: ${reason}` : ''}. Stop any work tied to it and acknowledge via [A2A receipt] task ${taskId} cancelled.`
+  }
+
   /**
    * v0.5.23 (async-stall): whether the steered agent actually left idle. A
    * steer on an idle driver flips status to running within the same tick
@@ -1448,23 +1885,88 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
+   * F5 (settlement integrity): whether a receipt routed at this target can
+   * actually land. A session team resolves locally (a joined live node) —
+   * receipts flow. Anything else carrying the process-label shape
+   * (`dsh-host-<8hex>-<rand>`, the node's own label form) resolves to no
+   * session and appears in no card directory: every receipt routed at it
+   * strands, which is exactly the 08-30 debt pile (six full replies given,
+   * zero receipts settled). Those deliveries are born fire-and-forget.
+   * Unknown labels stay receipt-expected (conservative — losing a receivable
+   * receipt is worse than chasing a stranded one).
+   * @param receiptTarget - the callback address or caller label.
+   * @returns the expectation verdict for the delivery.
+   */
+  function receiptExpectationOf(receiptTarget: string): 'receivable' | 'process-label' {
+    if (resolveAgentForTeam(receiptTarget) !== undefined) return 'receivable'
+    if (/^dsh-host-[0-9a-f]{8}-/.test(receiptTarget)) return 'process-label'
+    return 'receivable'
+  }
+
+  /**
    * v0.5.23 (async-stall): one delayed nudge per session while a task stays
    * unconsumed. The steer above parked the message; a latched wake replays
    * only at convergence, and a dropped one never does — the nudge re-steers
    * a one-line prompt after the delay, which productizes the manual
    * recovery this defect needed (a synchronous probe re-woke the session).
-   * Per-session single-flight plus a global cap keep a fleet of stalled
-   * targets from stacking retries; a consumed task disarms itself.
+   * F2' (receipt-settlement): arming is unconditional and the per-session
+   * single-flight is a bounded budget (initial delay + one re-arm) instead
+   * of a one-shot — a target busy on its own turn at delay time used to
+   * drop the shot entirely. At budget expiry the escalation climbs to the
+   * host's queue-mode prompt seam when composed: queue-mode enqueues past
+   * the maintenance latch that eats steers (08-30 evidence: queue woke a
+   * session within 90s where steer stayed silent). No seam composed ⇒ the
+   * escalation degrades to a no-op and the ledger row keeps the debt
+   * visible for /a2a/query follow-ups.
    */
-  const nudgeInFlight = new Set<string>()
+  const nudgeBudget = new Map<string, number>()
+  const escalateQueuePrompt = (agent: Agent, team: string, taskId: string): void => {
+    const controller = ctx.get('sessionController') as
+      | { prompt?: (request: {
+          requestId: string
+          sessionId: Agent['id']
+          mode: 'queue' | 'steer'
+          content: ReadonlyArray<{ type: 'text'; text: string }>
+        }) => Promise<unknown> }
+      | undefined
+    if (typeof controller?.prompt !== 'function') return
+    logger.info(`a2a: async nudge escalates to queue-mode prompt for ${team} (task ${taskId})`)
+    try {
+      void controller.prompt({
+        requestId: `a2a-nudge-${taskId}`,
+        sessionId: agent.id,
+        mode: 'queue',
+        content: [{ type: 'text', text: `[A2A nudge] (task ${taskId}) your earlier routed message was delivered while this session could not start a turn — please consume the inbox backlog now (ignore if there is nothing pending).` }],
+      }).catch(() => {})
+    } catch {
+      /* queueing is best-effort: the ledger row keeps the debt visible */
+    }
+  }
   function armAsyncNudge(agent: Agent, team: string, taskId: string, delayMs: number): void {
     const key = String(agent.id)
-    if (nudgeInFlight.has(key)) return
-    nudgeInFlight.add(key)
+    const spent = nudgeBudget.get(key)
+    if (spent !== undefined && spent > 1) return
+    nudgeBudget.set(key, spent ?? 0)
     const timer = setTimeout(() => {
-      nudgeInFlight.delete(key)
-      if (!taskLedger.isPending(taskId)) return
-      if (agent.status !== 'idle') return
+      if (!taskLedger.isPending(taskId)) {
+        nudgeBudget.delete(key)
+        return
+      }
+      if (agent.status !== 'idle') {
+        // Busy on its own turn (or wedged): spend the bounded re-arm, then
+        // climb to the queue-mode seam. Re-resolve on the steer path below
+        // only — a busy target needs the queue, not another steer.
+        const spent = nudgeBudget.get(key) ?? 0
+        if (spent < 1) {
+          nudgeBudget.set(key, spent + 1)
+          armAsyncNudge(agent, team, taskId, delayMs)
+          return
+        }
+        nudgeBudget.delete(key)
+        escalateQueuePrompt(agent, team, taskId)
+        return
+      }
+      nudgeBudget.delete(key)
       // Re-resolve rather than reusing the delivered agent: a session-node
       // entry captured at delivery may have been disposed since (a stale
       // reference steers a dead object — no error, no log growth, exactly
@@ -1497,8 +1999,18 @@ export function apply(ctx: Context, config: Config): void {
     // Never synthesize a receipt for a receipt: answering an envelope by mail
     // would ping-pong both ledgers.
     if (deliveredText.startsWith('[A2A receipt] task ')) return
-    registerFinalWaiter(target, (finalText) => {
-      if (!taskLedger.isPending(taskId)) return
+    registerFinalWaiter(target, (finalText, placeholder) => {
+      // W7 slice-2: a host-authored placeholder (flush timeout, dead
+      // session) must not synthesize a COMPLETION receipt — a wedged
+      // session has no product, and hook 3 would otherwise ledger the
+      // placeholder as one on the same-node loop-back.
+      if (placeholder === true) return
+      // Idempotency: a row THIS ledger tracks must still be pending
+      // (settled/dead rows never re-send). A foreign task id (an inbound
+      // route the caller tracks on ITS node) has no local row — the final
+      // waiter itself fires at most once per armed task, which is the dedup.
+      const row = taskLedger.list().find(entry => entry.taskId === taskId)
+      if (row !== undefined && row.status !== 'pending') return
       const summary = `${finalText.trim().replace(/\s+/g, ' ').slice(0, SUMMARY_CAP) || 'done'} (auto)`
       // v2 envelope projection: header stays byte-compatible for every
       // legacy correlator; the machine JSON rides exactly one following line.
@@ -1506,9 +2018,15 @@ export function apply(ctx: Context, config: Config): void {
       // Three-tier hard order (work-order P2): caller lane first; on failure
       // escalate ONCE to the owner mailbox — the outcome never evaporates
       // just because the original waiter died. Archive holds truth regardless.
+      // The deliver closure is a FULL dispatch (local first, then the
+      // directory walk with failover, throwing when nothing delivers): the
+      // callback address may be another node's team, and a local-only
+      // closure would silently no-op there — runReceiptLadder reads a
+      // settled undefined as tier-1 success, so the receipt would vanish
+      // without a log.
       void runReceiptLadder(
         {
-          deliver: (team) => dispatchLocalCandidate(team, receipt, session, undefined, new AbortController().signal, true) as Promise<void>,
+          deliver: (team) => dispatchAnywhere(team, receipt, session, undefined, new AbortController().signal, true) as Promise<void>,
           ownerTeam: config.team,
           log: (stage, error) => {
             // N2 (observability): throttled per task to avoid ping-pong noise.
@@ -1531,7 +2049,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param answer - how the waiter's reply is delivered.
    * @returns the registered waiter (for callers that may retract it).
    */
-  function registerFinalWaiter(agent: Agent, answer: (text: string) => void): FinalWaiter {
+  function registerFinalWaiter(agent: Agent, answer: (text: string, placeholder?: boolean) => void): FinalWaiter {
     const key = String(agent.id)
     const waiter: FinalWaiter = { answer, sinceEvents: agent.session.events.length }
     waiter.timeoutDisposer = armFlushTimeout(key, waiter)
@@ -1542,11 +2060,13 @@ export function apply(ctx: Context, config: Config): void {
   /**
    * Steer one direct route request into a live agent and resolve with its
    * final reply (final semantics always: the HTTP caller has no other
-   * channel to learn the reply).
+   * channel to learn the reply). A bridge round that outlived the reply
+   * window answers with `status: TASK_STATE_DELIVERED` + the `bridge`
+   * marker instead of a (false) completion.
    * @param taskId - the correlation key the steered receipt header carries.
    */
-  function routeIntoAgent(team: string, message: string, caller: string, taskId?: string): Promise<
-    { ok: true; reply: string } | { ok: false; error: string }
+  async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string): Promise<
+    { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean } | { ok: false; error: string }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
@@ -1560,6 +2080,21 @@ export function apply(ctx: Context, config: Config): void {
         (error: unknown) => ({ ok: false, error: `waking the session for team "${team}" failed: ${String(error)}` }) as const,
       )
     }
+    // Native-teams inbound bridge (opt-in): a registry team claims the
+    // handle and dispatches through its authoritative seam. Checked before
+    // the bare-team fallback — a team named exactly like this node's team
+    // resolves to the registry's claim, not the initiator redirect.
+    if (config.nativeTeamsInbound === true) {
+      const prepared = await nativeTeamsPrepare(team)
+      if (prepared.ok) {
+        const bridged = await nativeTeamsRound(prepared, team, caller, message, taskId)
+        if (bridged.ok) {
+          if (bridged.settled) return { ok: true, reply: bridged.reply }
+          return { ok: true, reply: bridged.reply, status: 'TASK_STATE_DELIVERED', bridge: 'native-teams' }
+        }
+        return { ok: false, error: bridged.error }
+      }
+    }
     // Only the bare process team falls back to the live (initiator) agent.
     // A session-node-shaped team that misses is an error, never a silent
     // redirect: a mistyped or stale short id must not reach another session
@@ -1567,9 +2102,9 @@ export function apply(ctx: Context, config: Config): void {
     if (team === config.team) {
       const live = liveAgent()
       if (live !== undefined) return routeIntoAgentFor(live, team, message, caller, taskId)
-      return Promise.resolve({ ok: false, error: 'No live DSH agent is available to accept this message.' })
+      return { ok: false, error: 'No live DSH agent is available to accept this message.' }
     }
-    return Promise.resolve({ ok: false, error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.` })
+    return { ok: false, error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.` }
   }
 
   /**
@@ -1582,11 +2117,11 @@ export function apply(ctx: Context, config: Config): void {
    * @returns the agent's final reply, or the explicit failure.
    */
   function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string): Promise<
-    { ok: true; reply: string } | { ok: false; error: string }
+    { ok: true; reply: string; placeholder?: boolean } | { ok: false; error: string }
   > {
     return new Promise((resolve) => {
-      const waiter = registerFinalWaiter(agent, (text) => {
-        resolve({ ok: true, reply: text })
+      const waiter = registerFinalWaiter(agent, (text, placeholder) => {
+        resolve({ ok: true, reply: text, ...(placeholder === true ? { placeholder: true } : {}) })
       })
       // The header names the sender first: `caller` is the routing node's
       // own label (the session that issued the route), while `team` is this
@@ -1613,6 +2148,175 @@ ${message}`
         resolve({ ok: false, error: `The DSH session rejected the message: ${String(error)}` })
       }
     })
+  }
+
+  // ── Native-teams inbound bridge (opt-in: config.nativeTeamsInbound) ──
+  //
+  // Structural probe of the sibling registry (plugins never value-import
+  // each other): when @nelsonlongxiang/dsh-native-teams is composed, its
+  // `teams` service can classify a team name across planes (describeTarget)
+  // and start a routed round through the same authoritative chain the
+  // interactive route tools use (startRound). Absent registry, unmounted
+  // seam, or an ambiguous / remote-plane answer all decline the bridge —
+  // the standard resolution chain keeps its verdict. Dispatch is
+  // dispatcher-level only: inbound callers address the team, never its
+  // individual members (members stay visible-not-addressable).
+  //
+  // Precedence on every path (local tools and HTTP inbound alike): session
+  // node → canvas team → cold joined wake → native-teams claim → bare team
+  // fallback. Rounds are bounded like the steer path: a 180s reply-wait
+  // deadline releases the caller while the round keeps running, and the
+  // caller's abort (where one exists) cancels the round through its own
+  // signal. Rounds emit no A2A receipt in this slice, so their results
+  // carry the `bridge` marker and callers must not book them as
+  // receipt-owed.
+  interface BridgeTeamsDescriptor {
+    readonly plane: 'local' | 'a2a'
+    readonly ambiguous?: boolean
+    readonly localLabel?: string
+  }
+  interface BridgeTeamsRegistry {
+    listTeams(): Array<{ name: string; description: string }>
+    describeTarget(handle: string): Promise<BridgeTeamsDescriptor>
+    startRound(args: { team?: string; message: string }, parent: { id: string; session: { events: readonly unknown[] } }, signal: AbortSignal): Promise<string>
+  }
+
+  function teamsRegistry(): BridgeTeamsRegistry | undefined {
+    const candidate = (ctx as unknown as { get(name: string): unknown }).get('teams') as Partial<BridgeTeamsRegistry> | undefined
+    if (candidate === undefined || candidate === null) return undefined
+    if (typeof candidate.describeTarget !== 'function' || typeof candidate.startRound !== 'function' || typeof candidate.listTeams !== 'function') return undefined
+    return candidate as BridgeTeamsRegistry
+  }
+
+  /** Reply-wait parity with the steer path's 180s deadline: native-teams
+   * rounds settle on their own cadence, but a wedged seam must not park a
+   * caller past a bounded window (config.nativeRoundWaitMs). */
+  /** The claim table changes at registry-edit cadence: a short memo dedupes
+   * the double probe (callers pre-check, the round re-verifies) without
+   * pretending the answer is permanent. */
+  const BRIDGE_CLAIM_TTL_MS = 5_000
+  const bridgeClaimCache = new Map<string, { at: number; claimed: boolean }>()
+  const bridgeTimers = new Set<ReturnType<typeof setTimeout>>()
+  ctx.effect(() => () => {
+    for (const timer of bridgeTimers) clearTimeout(timer)
+  })
+
+  /**
+   * Whether the native-teams registry claims `team` as an unambiguous local
+   * target, memoized for {@link BRIDGE_CLAIM_TTL_MS}. Ordinary misses never
+   * throw (the D2 query contract); anything that does throw is treated as a
+   * miss — the bridge is a guest here. The memo is skipped entirely while
+   * the bridge is off, so the flag gates the probe itself.
+   */
+  async function nativeTeamsClaims(team: string): Promise<boolean> {
+    if (config.nativeTeamsInbound !== true) return false
+    const cached = bridgeClaimCache.get(team)
+    if (cached !== undefined && Date.now() - cached.at < BRIDGE_CLAIM_TTL_MS) return cached.claimed
+    const teams = teamsRegistry()
+    let claimed = false
+    if (teams !== undefined) {
+      try {
+        const descriptor = await teams.describeTarget(team)
+        claimed = descriptor.plane === 'local' && descriptor.ambiguous !== true && descriptor.localLabel !== undefined
+      } catch {
+        claimed = false
+      }
+    }
+    bridgeClaimCache.set(team, { at: Date.now(), claimed })
+    // Bounded memo: probe-miss names accumulate one tiny row each; past a
+    // generous cap, drop the whole table (a cold re-probe costs one local
+    // describeTarget call).
+    if (bridgeClaimCache.size > 512) bridgeClaimCache.clear()
+    return claimed
+  }
+
+  type NativeTeamsPrepared =
+    | { readonly ok: true; readonly teams: BridgeTeamsRegistry; readonly parent: { id: string; session: { events: readonly unknown[] } } }
+    | { readonly ok: false; readonly reason: 'not-claimed' }
+    | { readonly ok: false; readonly reason: 'error'; readonly error: string }
+
+  /**
+   * Resolve everything the round needs BEFORE any caller is told the
+   * dispatch happened: the claim, the seam, and a parent initiator. The
+   * `error` variant is the only fast-failure shape — `not-claimed` simply
+   * hands the address back to the standard resolution chain.
+   */
+  async function nativeTeamsPrepare(team: string): Promise<NativeTeamsPrepared> {
+    if (!await nativeTeamsClaims(team)) return { ok: false, reason: 'not-claimed' }
+    const teams = teamsRegistry()
+    if (teams === undefined) return { ok: false, reason: 'not-claimed' }
+    const parent = liveAgent()
+    if (parent === undefined) return { ok: false, reason: 'error', error: 'No live DSH initiator is available to parent the native-teams round.' }
+    return { ok: true, teams, parent }
+  }
+
+  /** The A2A envelope rides the round message so the dispatcher sees the network origin. */
+  function bridgeEnvelope(team: string, caller: string, message: string, taskId: string | undefined): string {
+    const from = caller === '' ? 'an unknown node' : caller
+    const taskPrefix = taskId === undefined ? '' : `(task ${taskId}) `
+    return `[A2A direct] ${taskPrefix}from "${from}" (routed to ${team}) sent:\n\n${message}`
+  }
+
+  type NativeTeamsRoundOutcome =
+    | { readonly ok: true; readonly reply: string; readonly settled: boolean }
+    | { readonly ok: false; readonly error: string; readonly phase?: 'pre-dispatch'; readonly aborted?: boolean }
+
+  /** The projection for a round that outlived the reply window: unlike the
+   * steer deadline's text, this must NOT promise a receipt — native-teams
+   * rounds route none in this slice. */
+  function bridgeUnsettledReply(team: string): string {
+    return `The native-teams round for "${team}" is still running past the reply window; it was delivered and keeps going. Native-teams rounds route no A2A receipt in this slice — reconcile with a follow-up route (continuity rides the team's own durable round chain).`
+  }
+
+  /**
+   * Fire the round and wait, bounded. The caller's signal (when it has one)
+   * cancels the round itself; the deadline releases the caller with the
+   * unsettled projection while the round keeps running detached.
+   * @param prepared - a ready dispatch (claim, seam, parent) from {@link nativeTeamsPrepare}.
+   */
+  async function nativeTeamsRound(prepared: Extract<NativeTeamsPrepared, { ok: true }>, team: string, caller: string, message: string, taskId: string | undefined, external?: AbortSignal): Promise<NativeTeamsRoundOutcome> {
+    const controller = new AbortController()
+    // One listener, always removed after the race: an external abort cancels
+    // the round through its own controller.
+    const onExternalAbort = (): void => { controller.abort() }
+    if (external !== undefined) {
+      if (external.aborted) controller.abort()
+      else external.addEventListener('abort', onExternalAbort)
+    }
+    if (controller.signal.aborted) return { ok: false, error: 'aborted before the native-teams round was dispatched', phase: 'pre-dispatch' }
+    let roundError: unknown
+    type Verdict = { readonly kind: 'settled'; readonly reply: string } | { readonly kind: 'failed' } | { readonly kind: 'deadline' } | { readonly kind: 'aborted' }
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<Verdict>(resolve => {
+      deadlineTimer = setTimeout(() => {
+        if (deadlineTimer !== undefined) bridgeTimers.delete(deadlineTimer)
+        resolve({ kind: 'deadline' })
+      }, config.nativeRoundWaitMs ?? 180_000)
+      deadlineTimer.unref?.()
+      bridgeTimers.add(deadlineTimer)
+    })
+    const verdict = await Promise.race([
+      prepared.teams.startRound({ team, message: bridgeEnvelope(team, caller, message, taskId) }, prepared.parent, controller.signal).then(
+        (reply): Verdict => ({ kind: 'settled', reply }),
+        (error: unknown): Verdict => { roundError = error; return { kind: 'failed' } },
+      ),
+      deadline,
+      new Promise<Verdict>(resolve => {
+        if (controller.signal.aborted) resolve({ kind: 'aborted' })
+        else controller.signal.addEventListener('abort', () => resolve({ kind: 'aborted' }), { once: true })
+      }),
+    ])
+    // Hygiene: the losing deadline timer stops here (not 180s later), and
+    // the external-signal listener does not outlive the round.
+    if (deadlineTimer !== undefined) {
+      clearTimeout(deadlineTimer)
+      bridgeTimers.delete(deadlineTimer)
+    }
+    if (external !== undefined) external.removeEventListener('abort', onExternalAbort)
+    if (verdict.kind === 'settled') return { ok: true, reply: verdict.reply, settled: true }
+    if (verdict.kind === 'deadline') return { ok: true, reply: bridgeUnsettledReply(team), settled: false }
+    if (verdict.kind === 'aborted') return { ok: false, error: `the wait for the native-teams round "${team}" was aborted (the round was cancelled with it)`, aborted: true }
+    return { ok: false, error: `the native-teams round for "${team}" failed: ${String(roundError)}` }
   }
 
   whenWebServerSettled((webServer) => {
@@ -1664,6 +2368,7 @@ ${message}`
             readonly message?: unknown
             readonly context_id?: unknown
             readonly caller_session?: unknown
+            readonly callback?: unknown
             readonly wait?: unknown
             readonly task_id?: unknown
           }
@@ -1678,6 +2383,12 @@ ${message}`
           const team = typeof body.team === 'string' ? body.team : ''
           const message = typeof body.message === 'string' ? body.message : ''
           const caller = typeof body.caller_session === 'string' ? body.caller_session : ''
+          // P2 receipt-callback: where THIS node's receipt should route on
+          // the caller's side — the caller knows its routable address best
+          // (a joined session's node team, e.g. via the transport face's
+          // callbackTarget mapping). Bounded; absent → the caller label
+          // plays its usual role.
+          const callback = typeof body.callback === 'string' && body.callback !== '' && body.callback.length <= 128 ? body.callback : ''
           const noWait = body.wait === false
           const contextId = typeof body.context_id === 'string' && body.context_id !== '' ? body.context_id : `ctx-${Math.random().toString(16).slice(2, 10)}`
           // The caller-born task id (idempotency key): echo it when present
@@ -1696,10 +2407,15 @@ ${message}`
           // same key + different payload ⇒ hard conflict (409, -32002).
           // Checked BEFORE any steering or ledger correlation: a replay must
           // never re-enter the target session, no matter how it settles.
-          const idemFingerprint = createHash('sha256').update(JSON.stringify({ caller, message, noWait, team })).digest('hex')
+          const idemFingerprint = peerPayloadFingerprint({ caller, message, noWait, team })
           const idemVerdict = idempotencyStore.claim(taskId, idemFingerprint)
           if (idemVerdict !== 'fresh') {
             const replay = idemVerdict === 'replay'
+            // 0.5.36 observability: conflict = caller bug (graph-loop prompt
+            // minting / key management) — warn loudly so it is never misread
+            // as the normal-depth-defense zero-traffic shape. Replays stay
+            // silent by design.
+            if (!replay) logger.warn(`a2a: idempotency CONFLICT on task ${taskId.slice(0, 80)} — same key reused with a different payload (caller bug; never auto-retry)`)
             const payload = JSON.stringify({
               error: replay ? 'duplicate task id within the idempotency window' : 'task id reused with a different payload',
               code: replay ? WIRE_ERROR_REPLAY_REJECTED : WIRE_ERROR_IDEMPOTENCY_CONFLICT,
@@ -1714,7 +2430,7 @@ ${message}`
           // receipt resolves the task it echoes, whichever wait semantics
           // carried it here. Correlation is bookkeeping only — the message
           // steers on exactly as before.
-          taskLedger.resolveFromMessage(message)
+          settleAndAnnounce(message)
           // Inbound routing is foreground demand: boot prewarm yields for a
           // quiet window around it.
           lastWakeDemandAt = Date.now()
@@ -1727,13 +2443,24 @@ ${message}`
             const woken = agent !== undefined ? undefined : wakeColdTeam(team)
             const deliver = (target: Agent): void => {
               const from = caller === '' ? 'an unknown node' : caller
+              // The receipt target: the caller's callback address when it
+              // supplied one (a session node team — wake-on-route covers a
+              // cold one), else the caller label as before.
+              const receiptTarget = callback !== '' ? callback : from
               try {
                 // The receipt header carries the task id: the target echoes
                 // it verbatim in "[A2A receipt] task <id> ...", closing the
                 // correlation loop with the caller's own route result.
-                steerRelay(target, `[A2A direct] (task ${taskId}) from "${from}" (routed to ${team}) sent:\n\n${message}\n\n(When done, route your outcome back with one call — a2a_route { team: "${from}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`)
+                // F1' (consumed-probe prior-running): capture the pre-steer
+                // status first — a target that was already running (its own
+                // turn / a brand-new session's activation window) reads
+                // `running` after the steer whether or not our wake was
+                // latched, so the post-steer read alone would answer a false
+                // consumed:true and strand the message.
+                const runningBeforeSteer = probeConsumption(target, taskId)
+                steerRelay(target, `[A2A direct] (task ${taskId}) from "${from}" (routed to ${team}) sent:\n\n${message}\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`)
                 recordActivity('in', team, caller, true)
-                armReceiptAutosend(target, taskId, from, message)
+                armReceiptAutosend(target, taskId, receiptTarget, message)
                 // v0.5.23 (async-stall): "delivered" only proves the steer call
                 // returned — not that a turn started. An idle-phase steer wakes
                 // the driver, but a maintenance/abort window latches the wake for
@@ -1742,8 +2469,27 @@ ${message}`
                 // shortly after: running means the message is being consumed;
                 // still-idle means the wake was latched or dropped — surface that
                 // honestly and arm a delayed nudge retry below.
-                const consumedProbe = probeConsumption(target, taskId)
-                if (!consumedProbe) armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
+                // F1': a prior-running target never trusts the single
+                // post-steer read — answer consumed:false conservatively and
+                // arm the nudge (a false negative costs one harmless nudge; a
+                // false positive strands the delivered message).
+                // F2' (receipt-settlement): the delivery is born into the
+                // ledger — an inbound row owes a receipt only this node can
+                // produce, and before this row existed the nudge's isPending
+                // gate no-op'd for exactly the deliveries that stall (08-30:
+                // zero ledger records for latched activations). Arming is
+                // unconditional now; settlement evidence disarms in the
+                // callback.
+                const consumedProbe = runningBeforeSteer ? false : probeConsumption(target, taskId)
+                // F5 (settlement integrity): the debt gate — a process-label
+                // caller cannot receive receipts, so this delivery is born
+                // fire-and-forget (receiptExpected:false, answered as
+                // receipt:"none") instead of manufacturing a debt nobody can
+                // settle. The row itself stays: stall visibility and the
+                // nudge still apply to the TARGET side.
+                const receiptExpectation = receiptExpectationOf(receiptTarget)
+                taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label')
+                armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
                 const payload = JSON.stringify({
                   routed: true,
                   delivered: true,
@@ -1754,6 +2500,7 @@ ${message}`
                   task_status: 'TASK_STATE_DELIVERED',
                   artifacts: [],
                   consumed: consumedProbe,
+                  receipt: receiptExpectation === 'process-label' ? 'none' : 'routed',
                 })
                 res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
                 res.end(payload)
@@ -1774,17 +2521,78 @@ ${message}`
               })
               return
             }
-            if (team === config.team) {
-              const live = liveAgent()
-              if (live !== undefined) { deliver(live); return }
-            }
-            const payload = JSON.stringify({ error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.`, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
-            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
-            res.end(payload)
+            // Remaining candidates need one async classification (the
+            // native-teams bridge), so the tail answers inside an IIFE.
+            void (async () => {
+              // Native-teams inbound bridge (opt-in): prepare BEFORE answering
+              // delivered — claim, seam, and parent initiator are everything
+              // that can fail fast, and a phantom dispatch must never answer
+              // success. Past prepare, the round fires detached (noWait means
+              // delivery, not settlement); its late outcome corrects the
+              // activity ring and the log.
+              const standardMiss = (): void => {
+                if (team === config.team) {
+                  const live = liveAgent()
+                  if (live !== undefined) { deliver(live); return }
+                }
+                const payload = JSON.stringify({ error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.`, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
+                res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+                res.end(payload)
+              }
+              const prepared = await nativeTeamsPrepare(team)
+              if (!prepared.ok) {
+                if (prepared.reason === 'error') {
+                  recordActivity('in', team, caller, false)
+                  const payload = JSON.stringify({ error: prepared.error, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
+                  res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+                  res.end(payload)
+                  return
+                }
+                standardMiss()
+                return
+              }
+              recordActivity('in', team, caller, true)
+              void nativeTeamsRound(prepared, team, caller, message, taskId)
+                .then(outcome => {
+                  if (!outcome.ok) {
+                    recordActivity('in', team, caller, false)
+                    logger.warn(`a2a: detached native-teams round for "${team}" failed: ${outcome.error}`)
+                  }
+                  // W7 slice-2 hook 2: only a genuinely settled detached round
+                  // records an outcome. The deadline's settled:false
+                  // projection is a placeholder, not a product — the same
+                  // ruling as hook 1's DELIVERED skip; placeholder prose never
+                  // enters the ledger a replay could adopt from.
+                  if (taskId !== '') {
+                    if (!outcome.ok) idempotencyStore.recordOutcome(taskId, { status: 'failed', error: outcome.error })
+                    else if (outcome.settled) idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: outcome.reply })
+                  }
+                })
+              const payload = JSON.stringify({ routed: true, delivered: true, team, session, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_DELIVERED', artifacts: [], consumed: false, bridge: 'native-teams' })
+              res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+            })()
             return
           }
           void routeIntoAgent(team, message, caller, taskId).then((outcome) => {
             recordActivity('in', team, caller, outcome.ok)
+            // W7 slice-2 hook 1: record the settled outcome on the claim row.
+            // Ruling: a non-COMPLETED status (TASK_STATE_DELIVERED — the
+            // bridge-round deadline placeholder, ABORTED_WAIT likewise) is
+            // NOT a settled outcome, and neither is a host-authored
+            // placeholder on the reply channel (flush timeout, dead session)
+            // — the row stays pending, because an adopted replay must never
+            // settle a node on placeholder text (the exact hazard W7 gap B
+            // closed, barred from resurrecting through the outcome ledger).
+            if (taskId !== '') {
+              if (!outcome.ok) {
+                idempotencyStore.recordOutcome(taskId, { status: 'failed', error: outcome.error })
+              } else if (outcome.placeholder === true) {
+                // placeholder prose never enters the ledger
+              } else if (outcome.status === undefined || outcome.status === 'TASK_STATE_COMPLETED') {
+                idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: outcome.reply })
+              }
+            }
             const payload = outcome.ok
               ? JSON.stringify({
                 routed: true,
@@ -1793,8 +2601,13 @@ ${message}`
                 result: { text: outcome.reply },
                 task_id: taskId,
                 context_id: contextId,
-                task_status: 'TASK_STATE_COMPLETED',
+                task_status: outcome.status ?? 'TASK_STATE_COMPLETED',
                 artifacts: [],
+                // The bridge marker rides the wire so the caller's
+                // trackOwedTask skips a receipt-less native round — without
+                // it, a cross-node unsettled round books an unpayable owed
+                // row and re-creates the TASK_CAP backlog.
+                ...(outcome.bridge !== undefined ? { bridge: outcome.bridge } : {}),
               })
               : JSON.stringify({ error: outcome.error, code: -32000, team, task_id: taskId, task_status: 'TASK_STATE_FAILED' })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
@@ -1803,6 +2616,98 @@ ${message}`
         })
       },
     }), 'a2a: direct route endpoint')
+  })
+
+  whenWebServerSettled((webServer) => {
+    // W7 slice 2: the S1 outcome-retrieval surface — a READ-ONLY lookup of
+    // one claimed task's settled outcome. The body carries ONLY the task id
+    // and the submit payload's fingerprint (peerPayloadFingerprint, the
+    // gate's own shared implementation): the fingerprint match is the
+    // authorization, and the fan-out probe never leaks the original message
+    // to peers that never saw it. Constant-200 semantics — a query NEVER
+    // produces a wire error code (the frozen -32002/-32003 vocabulary stays
+    // submit-only), never claims, never steers, never enters a session: the
+    // gate's "verdict before steer" has its mirror in "a query executes
+    // nothing". Malformed fields degrade to unknown-task rather than
+    // guessing; an unparseable body answers 400 like /a2a/direct.
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/a2a/query',
+      handler: (req: IncomingMessage, res: ServerResponse) => {
+        const chunks: Buffer[] = []
+        let size = 0
+        let overflowed = false
+        req.on('data', (chunk: Buffer) => {
+          if (overflowed) return
+          const next = size + chunk.length
+          if (next > 65_536) {
+            overflowed = true
+            chunks.length = 0
+            return
+          }
+          size = next
+          chunks.push(chunk)
+        })
+        req.on('error', () => {
+          if (!res.headersSent) {
+            res.writeHead(400)
+            res.end()
+          }
+        })
+        req.on('end', () => {
+          if (overflowed) {
+            if (!res.writableEnded && !res.headersSent) {
+              const payload = JSON.stringify({ error: 'payload too large', code: WIRE_ERROR_PAYLOAD_TOO_LARGE })
+              res.writeHead(413, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+            }
+            return
+          }
+          let body: {
+            readonly task_id?: unknown
+            readonly fingerprint?: unknown
+          }
+          try {
+            body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof body
+          } catch {
+            const payload = JSON.stringify({ error: 'malformed body', code: -32000 })
+            res.writeHead(400, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+            return
+          }
+          const taskId = typeof body.task_id === 'string' ? body.task_id : ''
+          const fingerprint = typeof body.fingerprint === 'string' ? body.fingerprint : ''
+          const verdict = taskId === '' || fingerprint === ''
+            ? { found: false as const, reason: 'unknown-task' as const }
+            : idempotencyStore.query(taskId, fingerprint)
+          const payload = JSON.stringify(
+            verdict.found
+              ? verdict.status === 'pending'
+                ? { found: true, status: 'pending', task_id: taskId }
+                : verdict.status === 'completed'
+                  ? {
+                    found: true,
+                    status: 'completed',
+                    reply: verdict.reply,
+                    settled_at: new Date(verdict.settledAt).toISOString(),
+                    task_id: taskId,
+                    ...(verdict.truncated === true ? { truncated: true } : {}),
+                  }
+                  : {
+                    found: true,
+                    status: 'failed',
+                    error: verdict.error,
+                    settled_at: new Date(verdict.settledAt).toISOString(),
+                    task_id: taskId,
+                    ...(verdict.truncated === true ? { truncated: true } : {}),
+                  }
+              : { found: false, reason: verdict.reason, task_id: taskId },
+          )
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+          res.end(payload)
+        })
+      },
+    }), 'a2a: query endpoint')
   })
 
   whenWebServerSettled((webServer) => {
@@ -1846,9 +2751,11 @@ ${message}`
           let steered = false
           if (result.outcome === 'cleared' && result.team !== undefined) {
             const live = resolveAgentForTeam(result.team)
+              ?? canvasLiveAgent(parseCanvasTeamName(result.team))
+              ?? (result.team === config.team ? liveAgent() : undefined)
             if (live !== undefined) {
               try {
-                steerRelay(live, `[A2A cancel] (task ${taskId}) the caller cancelled this task${reason ? `: ${reason}` : ''}. Stop any work tied to it and acknowledge via [A2A receipt] task ${taskId} cancelled.`)
+                steerRelay(live, cancelNoticeText(taskId, reason))
                 steered = true
               } catch {
                 // Bookkeeping already settled; steering is best-effort only.
@@ -1980,6 +2887,112 @@ ${message}`
     throw new Error('你被禁止使用 a2a 网络：本会话未加入 A2A 网络（join 是用户手势）。Join via the sidebar control to enable, then retry.')
   }
 
+  // S4: team-membership tools — node-declared rosters under the owner's
+  // allowlist curation. Joining is a network-visible declaration (the card
+  // publishes it), so the default allowlist denies everything: a refused
+  // join says why and names the curation surface instead of failing
+  // silently. Leaving is always allowed — it only shrinks exposure.
+  const teamJoinAllowed = (team: string): boolean =>
+    (config.teamJoinAllowlist ?? []).some(pattern =>
+      pattern === '*' || (pattern.endsWith('*') ? team.startsWith(pattern.slice(0, -1)) : pattern === team))
+  const joinedNodeOrNone = (id: string): string | undefined =>
+    joinedSessions.has(id) || sessionNodes.has(id) ? id : undefined
+
+  ctx.tools.register(defineTool({
+    name: 'a2a_team_join',
+    description:
+      'Declare one of this host\'s joined session nodes a member of a routable team '
+      + '(node-declared roster; the host card publishes it and peers rebuild team rosters as the union of '
+      + 'member declarations). Gated by the owner\'s teamJoinAllowlist — an empty list denies every join; '
+      + 'patterns are exact names or trailing-`*` prefixes. Collaboration itself stays within teams '
+      + '(team-scoped routing is a separate, default-off enforcement).',
+    parameters: {
+      team: { type: 'string', description: 'The routable team to join (full form, e.g. dsh/canvas/review-gate).' },
+      id: { type: 'string', description: 'The joined session node id on this host that declares the membership.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          team: { type: 'string' },
+          id: { type: 'string' },
+          teams: { type: 'array', items: { type: 'string' } },
+          error: { type: 'string', description: 'Refusal reason when ok is false: unknown node or team not allowlisted.' },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok === true
+          ? `Node ${String(value.id)} joined team ${String(value.team)}; its teams: ${Array.isArray(value.teams) ? value.teams.join(', ') : String(value.team)}`
+          : `Join refused: ${String(value.error)}`,
+      }],
+    },
+    presentCall: () => ({ card: 'generic', title: 'A2A team join', kind: 'other', rawInput: null }),
+    execute: async (args, exec): Promise<{ ok: boolean; team?: string; id?: string; teams?: string[]; error?: string }> => {
+      a2aJoinGateRefusal(exec)
+      const team = String(args.team ?? '').trim()
+      const id = String(args.id ?? '').trim()
+      if (team === '' || id === '') return { ok: false, error: 'both team and id are required' }
+      if (joinedNodeOrNone(id) === undefined) {
+        return { ok: false, error: `session ${id} is not a joined node on this host — join the network first (sidebar control or a2a-collab), then declare team membership` }
+      }
+      if (!teamJoinAllowed(team)) {
+        return { ok: false, error: `team "${team}" is not in this host's teamJoinAllowlist — the owner curates joinable teams (exact names or trailing-* prefixes); ask them to add the pattern` }
+      }
+      teamMemberships.add(id, team)
+      logger.info(`a2a: ${id8(id)} declared membership in ${team}`)
+      return { ok: true, team, id, teams: [...teamMemberships.teamsOf(id)] }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'a2a_team_leave',
+    description:
+      'Retract one team-membership declaration previously made by a2a_team_join. Always allowed — leaving only '
+      + 'shrinks the node\'s visible collaboration surface.',
+    parameters: {
+      team: { type: 'string', description: 'The routable team to leave.' },
+      id: { type: 'string', description: 'The session node id retracting the membership.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          team: { type: 'string' },
+          id: { type: 'string' },
+          teams: { type: 'array', items: { type: 'string' } },
+          error: { type: 'string', description: 'Refusal reason when ok is false: node unknown or membership absent.' },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok === true
+          ? `Node ${String(value.id)} left team ${String(value.team)}; remaining teams: ${Array.isArray(value.teams) && value.teams.length > 0 ? value.teams.join(', ') : 'none'}`
+          : `Leave refused: ${String(value.error)}`,
+      }],
+    },
+    presentCall: () => ({ card: 'generic', title: 'A2A team leave', kind: 'other', rawInput: null }),
+    execute: async (args, exec): Promise<{ ok: boolean; team?: string; id?: string; teams?: string[]; error?: string }> => {
+      a2aJoinGateRefusal(exec)
+      const team = String(args.team ?? '').trim()
+      const id = String(args.id ?? '').trim()
+      if (team === '' || id === '') return { ok: false, error: 'both team and id are required' }
+      if (joinedNodeOrNone(id) === undefined) {
+        return { ok: false, error: `session ${id} is not a joined node on this host` }
+      }
+      if (!teamMemberships.teamsOf(id).includes(team)) {
+        return { ok: false, error: `session ${id} declares no membership in "${team}" — nothing to leave` }
+      }
+      teamMemberships.remove(id, team)
+      logger.info(`a2a: ${id8(id)} retracted membership in ${team}`)
+      return { ok: true, team, id, teams: [...teamMemberships.teamsOf(id)] }
+    },
+  }))
+
   ctx.tools.register(defineTool({
     name: 'a2a_teams',
     description:
@@ -2086,6 +3099,19 @@ ${message}`
           origin: localOrigin,
         }
       }),
+      // Native-teams registry rows (opt-in bridge): local teams this node
+      // can dispatch inbound. They list only when the operator opted in —
+      // registry presence alone is never network exposure.
+      ...(config.nativeTeamsInbound === true
+        ? (teamsRegistry()?.listTeams() ?? []).map(entry => ({
+          team: entry.name,
+          session,
+          name: entry.name,
+          description: entry.description,
+          local: true,
+          origin: localOrigin,
+        }))
+        : []),
     ]
     const fetch = memoizedCardFetch()
     // Collect per peer in store order (concurrent fetches, ordered merge):
@@ -2157,6 +3183,10 @@ ${message}`
    */
   const trackOwedTask = (taskId: string, team: string, peer: string, result: A2aRouteResult): void => {
     if (!result.ok) return
+    // Native-teams bridge rounds emit no A2A receipt in this slice: booking
+    // them as receipt-owed would fill the owed book with rows no receipt can
+    // ever settle (evicting genuinely receivable peer rows past TASK_CAP).
+    if (result.bridge !== undefined) return
     if (result.task_status !== 'TASK_STATE_DELIVERED' && result.task_status !== 'TASK_STATE_ABORTED_WAIT') return
     taskLedger.track(taskId, team, peer, result.context_id === '' ? undefined : result.context_id)
   }
@@ -2190,8 +3220,42 @@ ${message}`
       // node team when it has joined, else the node label), so the receiver
       // can answer with one a2a_route instead of an unroutable display label.
       a2aJoinGateRefusal(exec)
+      // S3 (team-scoped routing, off by default): when the owner turns it
+      // on, collaboration happens inside teams. A session caller must have
+      // declared membership in the target team before it may address it,
+      // and a caller with no teams at all has no network — a teamless node
+      // is, by the same ruling, an unjoined one. Host-side calls (no agent)
+      // and the initiator face stay exempt, like the join gate; discovery
+      // (a2a_teams) stays open so a teamless node can still see what to join.
+      if (config.teamScopeRouting && exec.agent !== undefined) {
+        const scopeCaller = String(exec.agent.id)
+        let initiator = false
+        try {
+          initiator = ctx.get('agents')?.requireInitiator() === exec.agent
+        } catch { /* no initiator in this fiber */ }
+        if (!initiator) {
+          const callerTeams = teamMemberships.teamsOf(scopeCaller)
+          const team = String(args.team ?? '').trim()
+          if (callerTeams.length === 0) {
+            return {
+              ok: false,
+              error: `team-scoped routing is on and this session (${id8(scopeCaller)}) has declared no team membership — a teamless node has no network. Declare one with a2a_team_join (subject to the owner's teamJoinAllowlist)`,
+            }
+          }
+          if (!callerTeams.includes(team)) {
+            return {
+              ok: false,
+              error: `team-scoped routing is on: routing to "${team}" requires declared membership. This session's teams: ${callerTeams.join(', ')}. a2a_team_join can declare it (subject to the owner's teamJoinAllowlist)`,
+            }
+          }
+        }
+      }
       const callerSession = exec.agent === undefined ? undefined
         : sessionNodes.has(String(exec.agent.id)) ? sessionTeamOf(exec.agent) : sessionLabelOf(exec.agent)
+      // P2 receipt-callback: the caller's routable address rides the wire so
+      // a peer routes its receipt to THIS session's node team (not to
+      // wherever its caller-label heuristics land).
+      const callbackAddress = routableCallerLabel(callerSession) ? callerSession : undefined
       const fetch = memoizedCardFetch()
       // The task id is born at the caller (idempotency key semantics): both
       // dispatchers carry the one id, the peer request echoes it, and the
@@ -2202,7 +3266,7 @@ ${message}`
       // cheapest possible and immune to nested-signal aborts), then direct
       // publishers, then zone delegations, deduplicated by URL.
       const failures: string[] = []
-      const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, exec.signal, args.async === true, taskId)
+      const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, exec.signal, args.async === true, taskId, callbackAddress)
       if (outcome !== undefined) {
         if (outcome.ok) {
           trackOwedTask(taskId, args.team, 'local', outcome)
@@ -2226,7 +3290,7 @@ ${message}`
           const caps = card?.capabilities as { async?: unknown } | undefined
           peerAsync = card !== undefined && caps?.async === true
         }
-        const result = await dispatchPeerCandidate(candidate, args.team, args.message, args.context_id, exec.signal, callerSession, peerAsync, taskId)
+        const result = await dispatchPeerCandidate(candidate, args.team, args.message, args.context_id, exec.signal, callerSession, peerAsync, taskId, callbackAddress)
         if (result.ok || exec.signal.aborted) {
           if (result.ok) trackOwedTask(taskId, args.team, candidate, result)
           const notes: string[] = []
@@ -2247,7 +3311,7 @@ ${message}`
       return {
         ok: false,
         error: candidates.length === 0
-          ? `team "${args.team}" is not published by any configured peer${failures.length === 0 ? '' : ` (unresolved delegations: ${failures.join('; ')})`}`
+          ? `team "${args.team}" is not published by any configured peer${failures.length === 0 ? '' : ` (unresolved delegations: ${failures.join('; ')})`} — 若目标是未加入网络的会话：请其在侧边栏加入（或经 a2a-collab CLI 注册）后重试`
           : `team "${args.team}" failed on every candidate: ${failures.join('; ')}`,
         code: -32004,
       }
@@ -2267,18 +3331,22 @@ ${message}`
    * and the caller gets the delivered shape with the receipt contract.
    * @returns the canonical result, or undefined when the team is not local.
    */
-  async function dispatchLocalCandidate(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode = false, taskIdFromCaller?: string): Promise<A2aRouteResult | undefined> {
+  async function dispatchLocalCandidate(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode = false, taskIdFromCaller?: string, callbackAddress?: string): Promise<A2aRouteResult | undefined> {
     const webServer = ctx.get('webServer')
     const canvasName = parseCanvasTeamName(team)
-    const teamIsLocal = team === config.team
+    let teamIsLocal = team === config.team
       || resolveAgentForTeam(team) !== undefined
       || joinedSessions.list().some(id => `${config.team}/${id8(id)}` === team)
       || (canvasName !== undefined && (canvasLiveAgent(canvasName) !== undefined || canvasColdMemberId(canvasName) !== undefined))
+    // The native-teams claim probe is an await: pay it only when the four
+    // cheap synchronous locality checks missed (a registry team is a local
+    // candidate even though no session node backs it).
+    if (!teamIsLocal && team !== config.team) teamIsLocal = await nativeTeamsClaims(team)
     if (!teamIsLocal || webServer === undefined) return undefined
     // A receipt relayed between same-host sessions (the answering session
     // routing its `[A2A receipt]` back over the in-process candidate)
     // correlates here too — same contract, no HTTP on the path.
-    taskLedger.resolveFromMessage(message)
+    settleAndAnnounce(message)
     const taskId = taskIdFromCaller ?? `direct-${Math.random().toString(16).slice(2, 10)}`
     const flight = beginRoute(team, 'local')
     if (asyncMode) {
@@ -2286,18 +3354,62 @@ ${message}`
       // materializes first (the wake settles, or fails honestly), then the
       // steer fires, then delivered answers. The receipt header carries the
       // task id so the target can echo it back verbatim.
-      const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(canvasName) ?? (team === config.team ? liveAgent() : undefined)
-      const woken = agent !== undefined ? Promise.resolve(agent) : wakeColdTeam(team)
+      const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(canvasName)
+      let woken = agent !== undefined ? Promise.resolve(agent) : wakeColdTeam(team)
       if (woken === undefined) {
-        endRoute(flight)
-        return { ok: false, error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.`, code: -32000 }
+        // Bridge BEFORE the bare-team fallback — claim beats the initiator
+        // redirect, the same rule routeIntoAgent follows (a bare team name
+        // claimed by the registry must not fork its destination by wait
+        // semantics). Prepare-first: claim, seam, and parent initiator are
+        // everything that can fail fast, so a phantom delivery never answers
+        // success. The fire is truly detached (no caller signal — the turn
+        // ending must not silently retract an already-announced delivery);
+        // rounds emit no receipt in this slice (the `bridge` marker keeps
+        // the caller's ledger honest).
+        const prepared = await nativeTeamsPrepare(team)
+        if (prepared.ok) {
+          endRoute(flight)
+          recordActivity('out', team, 'local', true)
+          void nativeTeamsRound(prepared, team, callerSession ?? session, message, taskId)
+            .then(outcome => {
+              if (!outcome.ok) {
+                recordActivity('out', team, 'local', false)
+                logger.warn(`a2a: detached native-teams round for "${team}" failed: ${outcome.error}`)
+              }
+            })
+          return {
+            ok: true,
+            team,
+            reply: `Delivered to ${team} (async native-teams round dispatched). The round settles through the team's own routing chain; it routes no A2A receipt in this slice — reconcile via context_id follow-ups.`,
+            task_id: taskId,
+            context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
+            task_status: 'TASK_STATE_DELIVERED',
+            bridge: 'native-teams',
+          }
+        }
+        if (prepared.reason === 'error') {
+          endRoute(flight)
+          recordActivity('out', team, 'local', false)
+          return { ok: false, error: prepared.error, code: -32000 }
+        }
+        // Claim declined: the bare process team still steers the live initiator.
+        const live = team === config.team ? liveAgent() : undefined
+        if (live === undefined) {
+          endRoute(flight)
+          return { ok: false, error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.`, code: -32000 }
+        }
+        woken = Promise.resolve(live)
       }
       try {
         const target = await woken
         // N1 (review seat 7e4cf94a): dashed composite labels are NOT routable;
         // accept only <zone>/<short-id> shapes so envelopes stop bouncing -32004.
+        // An explicit callback address (P2) wins over the caller-label
+        // derivation: it is the submitting session's own node team.
         const routable = routableCallerLabel(callerSession)
-        const callerTeam = routable ? callerSession : undefined
+        const callerTeam = callbackAddress !== undefined && callbackAddress !== ''
+          ? callbackAddress
+          : routable ? callerSession : undefined
         const receiptHint = callerTeam === undefined ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${callerTeam}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
         steerRelay(target, `[A2A direct] (task ${taskId}) from "${callerSession ?? session}" (routed to ${team}) sent:\n\n${message}${receiptHint}`)
         armReceiptAutosend(target, taskId, callerTeam, message)
@@ -2315,6 +3427,60 @@ ${message}`
         endRoute(flight)
         recordActivity('out', team, 'local', false)
         return { ok: false, error: `waking or steering the session for team "${team}" failed: ${String(error)}`, code: -32000 }
+      }
+    }
+    if (!asyncMode) {
+      // Bridge only on a steer-path miss, matching the documented chain
+      // (session node → canvas → cold wake → native-teams claim → bare): a
+      // registry claim must never shadow a live local session team. The
+      // caller's abort cancels the round through its own signal; the 180s
+      // deadline restores the bound the steer machinery observes.
+      const steerable = resolveAgentForTeam(team) !== undefined
+        || canvasLiveAgent(canvasName) !== undefined
+        || joinedSessions.list().some(id => `${config.team}/${id8(id)}` === team)
+        || wakeColdTeam(team) !== undefined
+      if (!steerable && team !== config.team) {
+        const prepared = await nativeTeamsPrepare(team)
+        if (prepared.ok) {
+          const outcome = await nativeTeamsRound(prepared, team, callerSession ?? session, message, taskId, signal)
+          endRoute(flight)
+          if (!outcome.ok) {
+            // The aborted-wait shape is earned only by an actual round
+            // cancellation (the caller's abort reached the seam). A
+            // pre-dispatch abort means the message never left the node, and
+            // a failed round means it never answered — both answer the
+            // honest error instead of claiming a delivery.
+            if (outcome.aborted === true) {
+              recordActivity('out', team, 'local', true)
+              return {
+                ok: true,
+                team,
+                reply: `The message was delivered to ${team} (native-teams round), but the wait was aborted (the round was cancelled with it).`,
+                task_id: taskId,
+                context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
+                task_status: 'TASK_STATE_ABORTED_WAIT',
+                bridge: 'native-teams',
+              }
+            }
+            recordActivity('out', team, 'local', false)
+            return { ok: false, error: outcome.error, code: -32000 }
+          }
+          recordActivity('out', team, 'local', true)
+          return {
+            ok: true,
+            team,
+            reply: outcome.reply,
+            task_id: taskId,
+            context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
+            task_status: outcome.settled ? 'TASK_STATE_COMPLETED' : 'TASK_STATE_DELIVERED',
+            ...(outcome.settled ? {} : { bridge: 'native-teams' as const }),
+          }
+        }
+        if (prepared.reason === 'error') {
+          endRoute(flight)
+          recordActivity('out', team, 'local', false)
+          return { ok: false, error: prepared.error, code: -32000 }
+        }
       }
     }
     const wait = routeIntoAgent(team, message, callerSession ?? session, taskId)
@@ -2371,7 +3537,8 @@ ${message}`
         reply: outcome.reply,
         task_id: taskId,
         context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
-        task_status: 'TASK_STATE_COMPLETED',
+        task_status: outcome.status ?? 'TASK_STATE_COMPLETED',
+        ...(outcome.bridge !== undefined ? { bridge: outcome.bridge } : {}),
       }
     }
     return { ok: false, error: outcome.error, code: -32000 }
@@ -2385,12 +3552,41 @@ ${message}`
    * exactly like same-host ones; older peers that ignore the flag simply
    * keep the blocking wait (graceful degradation).
    */
-  async function dispatchPeerCandidate(url: string, team: string, message: string, contextId: string | undefined, signal: AbortSignal, callerSession: string | undefined, asyncMode = false, taskIdFromCaller?: string): Promise<A2aRouteResult> {
+  async function dispatchPeerCandidate(url: string, team: string, message: string, contextId: string | undefined, signal: AbortSignal, callerSession: string | undefined, asyncMode = false, taskIdFromCaller?: string, callbackAddress?: string): Promise<A2aRouteResult> {
     const flight = beginRoute(team, url)
-    const result = await client.routeDirect(url, team, message, contextId, signal, callerSession, asyncMode, taskIdFromCaller)
+    const result = await client.routeDirect(url, team, message, contextId, signal, callerSession, asyncMode, taskIdFromCaller, callbackAddress)
     endRoute(flight)
     recordActivity('out', team, url, result.ok)
     return result
+  }
+
+  /**
+   * Full dispatch for background senders (the receipt autosend): local
+   * first, then the directory walk with per-candidate failover. Unlike
+   * {@link dispatchLocalCandidate}, a team that is not ours is NOT treated
+   * as a silent non-route — the walk either delivers or THROWS, so the
+   * receipt ladder can distinguish "delivered" from "no route" and its
+   * owner escalation actually fires for cross-node callback addresses.
+   */
+  async function dispatchAnywhere(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode: boolean, taskId?: string): Promise<void> {
+    const local = await dispatchLocalCandidate(team, message, callerSession, contextId, signal, asyncMode, taskId)
+    if (local !== undefined) {
+      if (!local.ok) throw new Error(local.error)
+      return
+    }
+    const failures: string[] = []
+    const candidates = await directoryPeerCandidates(memoizedCardFetch(), team, failures)
+    if (candidates.length === 0) {
+      throw new Error(`no route to "${team}": not a local team and not published by any tracked peer`)
+    }
+    let lastError = 'no candidate delivered'
+    for (const candidate of candidates) {
+      const result = await dispatchPeerCandidate(candidate, team, message, contextId, signal, callerSession, asyncMode, taskId)
+      if (result.ok) return
+      lastError = result.error
+      if (signal.aborted) break
+    }
+    throw new Error(`delivery to "${team}" failed on every candidate: ${lastError}`)
   }
 
   /**
@@ -2439,11 +3635,195 @@ ${message}`
     return candidates
   }
 
+  // ── Outbound transport face: the `nativeTeamsA2a` bridge ─────────────
+  //
+  // Contract: @nelsonlongxiang/dsh-native-teams/src/a2a-face.ts (0.14.0,
+  // structural mirror in src/teams-bridge.ts). This plugin mounts the
+  // implementation under the face's frozen service key — protocol
+  // primitives live on the protocol face (three-party consensus), and
+  // native-teams probes it presence-guarded (unmounted ⇒ local-only
+  // routing, never a crash). The face ships only what this plugin already
+  // does for a2a_route: resolve via the ONE directory walk (same matcher
+  // submit uses — no drift-prone double implementation), submit via the
+  // direct-route dispatcher (per-candidate async gate, failover included),
+  // cancel via the cooperative stop-notice. It exposes nothing new — only
+  // teams the tracked peer network already publishes resolve here.
+  const bridgeFace: NativeTeamsBridgeFace = {
+    resolve: async (handle) => {
+      const failures: string[] = []
+      const candidates = await directoryPeerCandidates(memoizedCardFetch(), handle, failures)
+      if (candidates.length === 0) return undefined
+      return { kind: 'node', hops: 1, url: candidates[0] }
+    },
+    submit: async (request, signal) => {
+      const abort = signal ?? new AbortController().signal
+      const failures: string[] = []
+      const fetch = memoizedCardFetch()
+      const candidates = await directoryPeerCandidates(fetch, request.handle, failures)
+      if (candidates.length === 0) {
+        throw new Error(`team "${request.handle}" is not published by any tracked peer${failures.length === 0 ? '' : ` (unresolved delegations: ${failures.join('; ')})`}`)
+      }
+      // The caller-born task id (B3): the orchestrator's dedup key IS the
+      // wire task id, so the peer's echo correlates with the caller's ledger.
+      const taskId = request.idempotencyKey !== undefined && request.idempotencyKey !== ''
+        ? request.idempotencyKey
+        : `direct-${Math.random().toString(16).slice(2, 10)}`
+      // P2 receipt-callback: the receipt routes back to the submitting
+      // session's own node team, but ONLY when that session is a joined
+      // node. Without a joined parent there is no routable address that
+      // means "this session" on the peer — omitting the callback keeps the
+      // P1 behavior (the caller label cannot resolve on the peer, so the
+      // receipt is lost honestly); falling back to `config.team` would be
+      // actively harmful: a same-named peer resolves it LOCAL-first and the
+      // receipt steers the peer's own initiator, never leaving that host.
+      let callbackAddress: string | undefined
+      if (request.callbackTarget) {
+        const parent = request.callbackTarget.parentSessionId
+        if (sessionNodes.has(parent) || joinedSessions.has(parent)) callbackAddress = `${config.team}/${id8(parent)}`
+      }
+      for (const candidate of candidates) {
+        // Capability gate per candidate, like a2a_route's loop: a
+        // delivery:async submit never dials a peer whose signed card does
+        // not declare async — failover must not silently degrade into the
+        // minutes-long blocking wait the gate exists to prevent.
+        let peerAsync = false
+        if (request.delivery === 'async') {
+          const card = await fetch(candidate)
+          peerAsync = (card?.capabilities as { async?: unknown } | undefined)?.async === true
+        }
+        const result = await dispatchPeerCandidate(candidate, request.handle, request.message, request.contextId, abort, session, request.delivery === 'async' && peerAsync, taskId, callbackAddress)
+        if (!result.ok) {
+          // Idempotency verdicts (B3) are terminal, not failover: a replay
+          // says the prior attempt at THIS peer stays authoritative —
+          // re-dispatching the same dedup key at another peer would execute
+          // the task twice; a conflict is a caller bug (same key, different
+          // payload) and must surface as a failure, not a redirect.
+          if (result.code === WIRE_ERROR_REPLAY_REJECTED) {
+            // async: acceptance IS the honest outcome — the submission is
+            // fire-and-forget and the prior attempt settles via the receipt
+            // contract.
+            if (request.delivery === 'async') {
+              return { kind: 'accepted', taskId, acceptedAt: new Date().toISOString(), contextId: request.contextId ?? '' }
+            }
+            // sync (W7 recovery table, S1): a sync caller cannot consume an
+            // acceptance — its verdict contract needs round text, and the
+            // handle-ack prose would settle a null verdict as a normal node.
+            // Throw instead, and the frozen -32003 literal MUST ride the
+            // message: structured codes have no survival channel through the
+            // downstream submitFailedError wrap (message-only), so the
+            // graph-loop classifier's probeText match on the code value is
+            // the only programmatic channel (adjudicated exception to
+            // "message 禁止下游解析").
+            throw new Error(`A2A submit for "${request.handle}" replayed at the peer's idempotency ledger (task ${taskId} duplicate within the idempotency window, -32003: the prior attempt stays authoritative — fail-closed; outcome retrieval needs a query face)`)
+          }
+          if (result.code === WIRE_ERROR_IDEMPOTENCY_CONFLICT) {
+            // -32002 literal on the message: same classification channel as the sync replay above.
+            throw new Error(`A2A submit for "${request.handle}" conflicts at the peer's idempotency ledger (task ${taskId} reused with a different payload, -32002)`)
+          }
+          if (abort.aborted) break
+          continue
+        }
+        trackOwedTask(taskId, request.handle, candidate, result)
+        const contextId = request.contextId ?? (result.context_id !== '' ? result.context_id : `ctx-${Math.random().toString(16).slice(2, 10)}`)
+        if (result.task_status === 'TASK_STATE_COMPLETED') {
+          return { kind: 'completed', text: result.reply, taskId, contextId }
+        }
+        // DELIVERED / ABORTED_WAIT: the message is in and the receipt
+        // contract carries the outcome — the face maps both to the
+        // accepted shape (the submission stays visible in a2a_tasks).
+        return { kind: 'accepted', taskId, acceptedAt: new Date().toISOString(), contextId }
+      }
+      throw new Error(`A2A submit for "${request.handle}" failed on every candidate`)
+    },
+    queryOutcome: async (request, signal) => {
+      const abort = signal ?? new AbortController().signal
+      if (request.taskId === '') return undefined
+      const failures: string[] = []
+      const fetch = memoizedCardFetch()
+      const candidates = await directoryPeerCandidates(fetch, request.handle, failures)
+      // No candidate to ask: no increment of information — undefined, never
+      // a synthetic verdict.
+      if (candidates.length === 0) return undefined
+      let mismatch = false
+      let answeredUnknown = false
+      for (const candidate of candidates) {
+        // A caller cancel mid-fan-out ends the probe: answers collected
+        // before the abort must not aggregate into a verdict the caller
+        // already walked away from.
+        if (abort.aborted) return undefined
+        // Recompute the fingerprint EXACTLY as the submit pass computed it:
+        // the same shared implementation, and the same per-candidate async
+        // gate (delivery async × that peer's declared capability). Sync
+        // delivery — every graph-loop dispatch — is noWait:false throughout.
+        let peerAsync = false
+        if (request.delivery === 'async') {
+          const card = await fetch(candidate)
+          peerAsync = (card?.capabilities as { async?: unknown } | undefined)?.async === true
+        }
+        const fingerprint = peerPayloadFingerprint({ caller: session, message: request.message, noWait: request.delivery === 'async' && peerAsync, team: request.handle })
+        const answer = await client.queryOutcome(candidate, request.taskId, fingerprint, abort)
+        if (answer === undefined) continue // transport miss — probe the next candidate (read-only fan-out)
+        if (!answer.found) {
+          if (answer.reason === 'payload-mismatch') mismatch = true
+          else answeredUnknown = true
+          continue
+        }
+        return answer
+      }
+      // A mismatch anywhere wins the aggregation: the key exists at a peer
+      // with a different payload — the most diagnostic negative there is.
+      if (mismatch) return { found: false, reason: 'payload-mismatch' }
+      if (answeredUnknown) return { found: false, reason: 'unknown-task' }
+      return undefined
+    },
+    cancel: async (ref, reason) => {
+      const taskId = ref.taskId
+      if (taskId === undefined || taskId === '') return false
+      const row = taskLedger.list().find(entry => entry.taskId === taskId)
+      if (row === undefined) return false
+      const notice = cancelNoticeText(taskId, reason)
+      if (row.peer === 'local') {
+        // Mirror the tasks/cancel control route: the cooperative stop-notice
+        // steers the live local target, not just the ledger row. The target
+        // resolution spans every kind the dispatcher can book — session
+        // node, canvas team, bare process team — a row's team is whatever
+        // the dispatch accepted, so the cancel must accept the same set.
+        const live = resolveAgentForTeam(row.team)
+          ?? canvasLiveAgent(parseCanvasTeamName(row.team))
+          ?? (row.team === config.team ? liveAgent() : undefined)
+        if (live !== undefined) {
+          try {
+            steerRelay(live, notice)
+          } catch {
+            // Bookkeeping below settles regardless; steering is best-effort.
+          }
+        }
+      } else {
+        // Peers do NOT track inbound task ids (the owed ledger's writer runs
+        // on the dispatcher side), so the peer's ledger-cancel route would
+        // deterministically answer 'unknown'. Drive the stop-notice through
+        // the wire to the team itself instead. The notice deliberately
+        // carries NO task_id: the original id is already claimed at the
+        // peer's idempotency ledger with a different payload, so reusing it
+        // would 409-conflict before any steer happens (a bodyless key is
+        // always fresh there). The original id rides the notice text.
+        const result = await client.routeDirect(row.peer, row.team, notice, undefined, undefined, session, true)
+        if (!result.ok) {
+          logger.warn(`a2a: cancel stop-notice for task ${taskId} failed to deliver to ${row.team}: ${result.error}`)
+        }
+      }
+      return taskLedger.cancel(taskId, reason).outcome === 'cleared'
+    },
+  }
+  ctx.reflect.provide(NATIVE_TEAMS_A2A_FACE_KEY, bridgeFace)
+
   ctx.tools.register(defineTool({
     name: 'a2a_status',
     description:
       'Read-only A2A network health: the tracked peer fleet with quality scores, routes currently in flight '
       + '(who is waiting on whom), and the recent routing activity ring (inbound and outbound outcomes). '
+      + 'Includes the idempotency window occupancy (claims, replays, conflicts) behind the UNIQUE-ization '
+      + 'traffic watch. '
       + 'Use it to observe an ongoing collaboration or diagnose delivery instead of re-routing.',
     parameters: {},
     output: {
@@ -2492,6 +3872,20 @@ ${message}`
               },
             },
           },
+          idempotency: {
+            type: 'object',
+            additionalProperties: false,
+            required: true,
+            properties: {
+              window: { type: 'number', required: true },
+              cap: { type: 'number', required: true },
+              pending: { type: 'number', required: true },
+              settled: { type: 'number', required: true },
+              claimsFresh: { type: 'number', required: true },
+              replays: { type: 'number', required: true },
+              conflicts: { type: 'number', required: true },
+            },
+          },
         },
       },
       render: (_args, value) => [{
@@ -2501,6 +3895,7 @@ ${message}`
           ...value.inFlight.map((route: { team: string; peer: string }) => `  → ${route.team} via ${route.peer === 'local' ? 'this host' : route.peer}`),
           `Peers (${String(value.peers.length)}):`,
           ...value.peers.map((peer: { url: string; score?: number }) => `  ${peer.url}${typeof peer.score === 'number' ? ` (score ${String(Math.round(peer.score))})` : ''}`),
+          `Idempotency window: ${String(value.idempotency.window)}/${String(value.idempotency.cap)} (pending ${String(value.idempotency.pending)}, settled ${String(value.idempotency.settled)}) — claims ${String(value.idempotency.claimsFresh)}, replays ${String(value.idempotency.replays)}, conflicts ${String(value.idempotency.conflicts)}`,
           ...(value.activity.length === 0 ? [] : ['Recent routes:']),
           ...[...value.activity].reverse().slice(0, 10).map((entry: { dir: string; team: string; ok: boolean }) => `  ${entry.dir === 'in' ? '←' : '→'} ${entry.team} ${entry.ok ? 'ok' : 'failed'}`),
         ].join('\n'),
@@ -2512,6 +3907,7 @@ ${message}`
       peers: { url: string; score?: number }[]
       inFlight: { team: string; peer: string; startedAt: number }[]
       activity: RouteActivityEntry[]
+      idempotency: IdempotencyStats
     }> => {
       a2aJoinGateRefusal(exec)
       return {
@@ -2519,6 +3915,7 @@ ${message}`
         peers: peerStore.list().map(url => ({ url, score: peerStore.score(url) })),
         inFlight: [...inFlightRoutes.values()].map(route => ({ team: route.team, peer: route.peer, startedAt: route.startedAt })),
         activity: recentActivity.slice(),
+        idempotency: idempotencyStore.stats(),
       }
     },
   }))
@@ -2559,6 +3956,9 @@ ${message}`
                 contextId: { type: 'string' },
                 status: { type: 'string', required: true },
                 deadAt: { type: 'number' },
+                direction: { type: 'string', enum: ['inbound', 'outbound'] },
+                receiptExpected: { type: 'boolean' },
+                reason: { type: 'string', enum: ['fire-forget', 'unconsumed'] },
               },
             },
           },
@@ -2607,7 +4007,7 @@ ${message}`
       }],
     },
     presentCall: () => ({ card: 'generic', title: 'A2A task ledger', kind: 'other', rawInput: null }),
-    execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; status: 'pending' | 'dead'; deadAt?: number }[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string }[]; archivedTotal: number }> => {
+    execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; status: 'pending' | 'dead'; deadAt?: number; reason?: 'fire-forget' | 'unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean }[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string }[]; archivedTotal: number }> => {
       a2aJoinGateRefusal(exec)
       const archiveAll = taskLedger.archive()
       return {
@@ -2692,7 +4092,9 @@ ${message}`
    * message was steered, so the flush reads only fresh assistant output.
    */
   interface FinalWaiter {
-    readonly answer: (text: string) => void
+    /** @param placeholder - true when the text is a host-authored
+     * stand-in (flush timeout, dead session), NOT the session's product. */
+    readonly answer: (text: string, placeholder?: boolean) => void
     readonly sinceEvents: number
     timeoutDisposer?: () => void
   }
@@ -2704,7 +4106,7 @@ ${message}`
       const kept = entries.filter(entry => entry !== waiter)
       if (kept.length === 0) pendingFinals.delete(agentId)
       else pendingFinals.set(agentId, kept)
-      waiter.answer('The DSH session produced no final reply within the configured window.')
+      waiter.answer('The DSH session produced no final reply within the configured window.', true)
     }, config.flushTimeoutMs)
   }
 
@@ -2715,7 +4117,7 @@ ${message}`
     if (agent === undefined) {
       for (const entry of entries) {
         entry.timeoutDisposer?.()
-        entry.answer('The target DSH session is no longer live.')
+        entry.answer('The target DSH session is no longer live.', true)
       }
       pendingFinals.delete(agentId)
       return

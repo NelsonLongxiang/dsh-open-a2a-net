@@ -19,6 +19,7 @@ import WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { signCard } from '../src/card.ts'
+import { WIRE_ERROR_PAYLOAD_TOO_LARGE } from '../src/transport-caps.ts'
 import { apply, Config as ConfigSchema, type A2aSchedule, type Config } from '../src/index.ts'
 
 /** Fake agents registry: one recoverable root agent or none. */
@@ -40,6 +41,18 @@ class FakeAgentsService extends Service {
   get(id: Agent['id']): Agent | undefined {
     return this.agent !== undefined && this.agent.id === id ? this.agent : undefined
   }
+}
+
+/**
+ * Mount the session controller's wake face over the test's materialize spy.
+ * resolveAgent answers `{ agent }` / `{ error }`; the wrapper keeps the
+ * spy's own contract (called with the bare id, resolving the Agent) so the
+ * call assertions survive the apiProxy → sessionController migration.
+ */
+function provideSessionController(ctx: Context, materialize: (sessionId: string) => Promise<Agent>): void {
+  ctx.provide('sessionController', {
+    resolveAgent: async (sessionId: SessionId) => ({ agent: await materialize(String(sessionId)) }),
+  } as never)
 }
 
 /** Fake loader service: tree settlement the test resolves or rejects by hand. */
@@ -696,9 +709,11 @@ describe('a2a plugin decentralized routing (peers)', () => {
       const delivered = await route?.execute({ team: 'dsh/agent-1', message: 'long task', async: true }, runContext()) as { ok: boolean; task_id: string }
       expect(delivered.ok).toBe(true)
       // The panel polls the state route: the owed task rides it as a
-      // pending row with its routing facts.
-      const owing = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { tasks: { taskId: string; team: string; peer: string; status: string }[] }
-      expect(owing.tasks).toEqual([{ taskId: delivered.task_id, team: 'dsh/agent-1', peer: 'local', status: 'pending', startedAt: expect.any(Number) }])
+      // pending row with its routing facts (F2' adds the wire-side marker:
+      // outbound rows are debts this node collects, inbound rows debts it
+      // owes).
+      const owing = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { tasks: { taskId: string; team: string; peer: string; status: string; direction: string; receiptExpected: boolean }[] }
+      expect(owing.tasks).toEqual([{ taskId: delivered.task_id, team: 'dsh/agent-1', peer: 'local', status: 'pending', startedAt: expect.any(Number), direction: 'outbound', receiptExpected: true }])
       // Correlation clears the pending row within one poll.
       await postJson(port, '/a2a/direct', { team: 'dsh', message: `[A2A receipt] task ${String(delivered.task_id)} tests green` })
       const settled = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { tasks: unknown[] }
@@ -1156,7 +1171,7 @@ describe('a2a session nodes (opt-in join)', () => {
       ctx.emit('agent/created', { agent: woken })
       return woken
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    provideSessionController(ctx, materialize)
     apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, announce: true, dshHome: home }))
     const port = (ctx as unknown as { webServer: WebServer }).webServer.port
     await vi.waitFor(() => { expect(materialize).toHaveBeenCalledWith('agent-1') })
@@ -1187,7 +1202,7 @@ describe('a2a session nodes (opt-in join)', () => {
       await ctx.fiber.dispose()
     }
     // Restarted host: a loader tree holds the wake back, and the api gateway
-    // only mounts after this row applied — the pre-fix apply-time apiProxy
+    // only mounts after this row applied — the pre-fix apply-time sessionController
     // snapshot skipped the wake entirely.
     const woken = replyingAgent(new Context())
     const ctx = new Context()
@@ -1203,7 +1218,7 @@ describe('a2a session nodes (opt-in join)', () => {
     } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
     apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, dshHome: home }))
     const materialize = vi.fn(async () => woken)
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    provideSessionController(ctx, materialize)
     loader.settle()
     await vi.waitFor(() => { expect(materialize).toHaveBeenCalledWith('agent-1') })
     await ctx.fiber.dispose()
@@ -1249,7 +1264,7 @@ describe('a2a session nodes (opt-in join)', () => {
       events.push('end:' + String(id))
       return makeAgent()
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    provideSessionController(ctx, materialize)
     apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, wakeBootStaggerMs: 30, dshHome: home }))
     // The first wake starts at once; the second must not start before the
     // first settles (serial) nor before the pause elapses (stagger).
@@ -1289,7 +1304,7 @@ describe('a2a session nodes (opt-in join)', () => {
       ctx.emit('agent/created', { agent: woken })
       return woken
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    provideSessionController(ctx, materialize)
     // The boot queue's first wake (slowId) is in flight and the long stagger
     // parks agent-1's boot wake — but a route addressed to agent-1 wakes it
     // at once, and when the parked boot wake finally runs it skips the id
@@ -1334,7 +1349,7 @@ describe('a2a session nodes (opt-in join)', () => {
       ctx.emit('agent/created', { agent: woken })
       return woken
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    provideSessionController(ctx, materialize)
     apply(ctx, makeConfig({ sessionNodes: true, dshHome: home }))
     const port = (ctx as unknown as { webServer: WebServer }).webServer.port
     const route = (team: string): Promise<Response> => globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
@@ -1376,7 +1391,7 @@ describe('a2a session nodes (opt-in join)', () => {
       ctx.emit('agent/created', { agent: woken })
       return woken
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    provideSessionController(ctx, materialize)
     apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, dshHome: home }))
     const port = (ctx as unknown as { webServer: WebServer }).webServer.port
     // The prewarm is mid-replay (gated) when the route arrives.
@@ -1407,7 +1422,7 @@ describe('a2a session nodes (opt-in join)', () => {
       list: async () => [{ id: SessionId('agent-1') }],
     } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
     const materialize = vi.fn(async () => makeAgent())
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    provideSessionController(ctx, materialize)
     apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, wakePrewarmDelayMs: 120, dshHome: home }))
     await new Promise(resolve => setTimeout(resolve, 40))
     expect(materialize).not.toHaveBeenCalled()
@@ -1435,7 +1450,7 @@ describe('a2a session nodes (opt-in join)', () => {
       ctx.emit('agent/created', { agent: woken })
       return woken
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    provideSessionController(ctx, materialize)
     apply(ctx, makeConfig({
       sessionNodes: true,
       wakeJoinedOnBoot: true,
@@ -1477,7 +1492,7 @@ describe('a2a session nodes (opt-in join)', () => {
       list: async () => [{ id: SessionId('agent-1') }, { id: SessionId('agent-2') }],
     } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
     const materialize = vi.fn(async () => makeAgent())
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    provideSessionController(ctx, materialize)
     apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, wakePrewarmDelayMs: 0, wakeBootStaggerMs: 200, dshHome: home }))
     await vi.waitFor(() => { expect(materialize).toHaveBeenCalledWith('agent-1') })
     await ctx.fiber.dispose()
@@ -1587,7 +1602,7 @@ describe('a2a session nodes (opt-in join)', () => {
       ctx.emit('agent/created', { agent: woken })
       return woken
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    provideSessionController(ctx, materialize)
     const response = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
       method: 'POST',
       body: JSON.stringify({ team: 'dsh/agent-1', message: 'route to the cold team' }),
@@ -1802,13 +1817,15 @@ describe('a2a control-route authorization', () => {
     await ctx.fiber.dispose()
   })
 
-  it('destroys an oversized control body', async () => {
+  it('answers 413 to an oversized control body (never connection-killed)', async () => {
     const { ctx, port } = await mountJoinHarness()
     const oversized = 'x'.repeat(11_000)
-    await expect(globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/join`, {
+    const response = await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/join`, {
       method: 'POST',
       body: oversized,
-    })).rejects.toThrow()
+    })
+    expect(response.status).toBe(413)
+    await expect(response.json()).resolves.toMatchObject({ code: WIRE_ERROR_PAYLOAD_TOO_LARGE })
     await ctx.fiber.dispose()
   })
 
@@ -1913,6 +1930,12 @@ describe('a2a plugin module surface', () => {
       wakePrewarmDelayMs: 10_000,
       wakePrewarmQuietMs: 5_000,
       wakeBootStaggerMs: 3_000,
+      wakeReconcile: true,
+      wakeReconcileIntervalMs: 60_000,
+      wakeReconcileBackoffBaseMs: 5_000,
+      wakeReconcileMaxBackoffMs: 600_000,
+      teamJoinAllowlist: [],
+      teamScopeRouting: false,
       stateColdRowsTtlMs: 5_000,
       cardCacheTtlMs: 60_000,
       cardCacheNegativeTtlMs: 30_000,
@@ -1921,6 +1944,8 @@ describe('a2a plugin module surface', () => {
       cardTtlMs: 172_800_000,
       flushTimeoutMs: 300_000,
       routeTimeoutMs: 1_800_000,
+      nativeTeamsInbound: false,
+      nativeRoundWaitMs: 180_000,
     })
   })
 })
@@ -2055,11 +2080,16 @@ describe('a2a persisted join intent', () => {
     agents.agent = first
     ctx.emit('agent/created', { agent: first })
     await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
-    // Disposal unmounts the runtime node but keeps the intent.
+    // Disposal unmounts the runtime node but keeps the intent: the team is
+    // still advertised — as COLD (its routes are wake-on-route's to honor),
+    // which is what keeps it discoverable cross-node while asleep.
     ctx.emit('agent/disposed', { agent: first })
-    const afterDispose = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).text()
-    expect(afterDispose).not.toContain('sessionTeams')
-    // The agent comes back: the intent remounts the node and its card team.
+    const afterDispose = JSON.parse(await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).text()) as {
+      sessionTeams: { team: string; description: string }[]
+    }
+    expect(afterDispose.sessionTeams).toEqual([{ team: 'dsh/agent-1', name: 'sess-1-agent-1', description: 'cold — not loaded; routing here wakes the session' }])
+    // The agent comes back: the intent remounts the node and its card team
+    // goes live again.
     const second = replyingAgent(ctx)
     agents.agent = second
     ctx.emit('agent/created', { agent: second })
@@ -2458,7 +2488,7 @@ describe('a2a plugin archive pruning (archived sessions leave the network)', () 
     // archived id and a wake.
     ctx.provide('workspaceRegistry', { archivedSessionIds: [archivedId] })
     const materializeSession = vi.fn(() => new Promise<ReturnType<typeof makeAgent>>(() => {}))
-    ctx.provide('apiProxy', { materializeSession })
+    provideSessionController(ctx, materializeSession)
     const route = ctx.tools.get('a2a_route')
     const result = await route?.execute({ team: 'dsh/archiv01', message: 'hello', async: true }, runContext()) as { ok: boolean; error?: string }
     // Archive is closure: the route answers the honest no-acceptor error
@@ -2467,5 +2497,51 @@ describe('a2a plugin archive pruning (archived sessions leave the network)', () 
     expect(result.error).toContain('No live DSH session node accepts team')
     expect(materializeSession).not.toHaveBeenCalled()
     await ctx.fiber.dispose()
+  })
+})
+
+describe('idempotency window observability (0.5.36)', () => {
+  it('the state route exposes the idempotency aggregate; counters move on real traffic', async () => {
+    const { ctx, port } = await mountJoinHarness()
+    try {
+      const fetchState = async () => (await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as {
+        idempotency?: { window: number; cap: number; pending: number; settled: number; claimsFresh: number; replays: number; conflicts: number }
+      }).idempotency
+      // Fresh boot: empty window, zeroed cumulative counters.
+      await expect(fetchState()).resolves.toMatchObject({
+        window: 0, cap: 256, pending: 0, settled: 0, claimsFresh: 0, replays: 0, conflicts: 0,
+      })
+      const pinned = JSON.stringify({ team: 'dsh/agent-1', message: 'pin me', caller_session: 'sess-1', task_id: 'obs-task' })
+      const p1 = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: pinned })
+      expect(p1.status).toBe(200)
+      const p2 = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: pinned })
+      expect(p2.status).toBe(409)
+      // Tampered payload on the same key: the conflict verdict counts too.
+      const p3 = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: 'dsh/agent-1', message: 'tampered payload', caller_session: 'sess-1', task_id: 'obs-task' }),
+      })
+      expect(p3.status).toBe(409)
+      await expect(fetchState()).resolves.toMatchObject({
+        window: 1, cap: 256, claimsFresh: 1, replays: 1, conflicts: 1,
+      })
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('a2a_status carries the idempotency segment', async () => {
+    const { ctx } = await mountJoinHarness()
+    try {
+      const status = await ctx.tools.get('a2a_status')?.execute({}, runContext()) as {
+        ok: boolean
+        idempotency?: { window: number; cap: number; pending: number; settled: number; claimsFresh: number; replays: number; conflicts: number }
+      }
+      expect(status.ok).toBe(true)
+      expect(status.idempotency).toMatchObject({ window: 0, cap: 256, pending: 0, settled: 0, claimsFresh: 0, replays: 0, conflicts: 0 })
+    } finally {
+      await ctx.fiber.dispose()
+    }
   })
 })

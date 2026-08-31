@@ -451,4 +451,31 @@ describe('A2aControl', () => {
       expect(posts).toContainEqual({ url: '/__dsh_a2a/groups', body: JSON.stringify({ action: 'assign', id: 'agent-1', name: '' }) })
     })
   })
+
+  it('links the observation stage from the panel header', async () => {
+    mountControl()
+    openPopover()
+    const observe = await screen.findByText('Observe · 3D')
+    expect(observe.getAttribute('href')).toBe('/__dsh_a2a_nexus/')
+    expect(observe.getAttribute('target')).toBe('_blank')
+    expect(observe.getAttribute('rel')).toBe('noreferrer')
+  })
+
+  it('offers the planning deep link only while the host serves the canvas face', async () => {
+    // With the canvas face served, the plan link carries the boot deep-link
+    // the stage parses (requestedBootMode).
+    stateCanvas = []
+    mountControl()
+    openPopover()
+    const plan = await screen.findByText('Plan · 2D')
+    expect(plan.getAttribute('href')).toBe('/__dsh_a2a_nexus/?mode=plan')
+    // Face-less hosts hide the planning link: the stage would just land on
+    // observation, so the button would be a lie.
+    cleanup()
+    stateCanvas = undefined
+    mountControl()
+    openPopover()
+    expect(await screen.findByText('Observe · 3D')).toBeTruthy()
+    expect(screen.queryByText('Plan · 2D')).toBeNull()
+  })
 })

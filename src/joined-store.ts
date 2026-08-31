@@ -78,6 +78,18 @@ export class JoinedSessions {
     this.persist()
   }
 
+  /**
+   * F7 (wake-intent self-heal): re-read the persisted snapshot into memory.
+   * A boot-time transient (e.g. the workspace registry briefly reporting a
+   * session archived) can prune the in-memory intent while the file still
+   * holds it — the file is the durable source of the user's gesture, so the
+   * reload restores memory to match it. Callers use this as a one-shot
+   * fallback when a wake finds no in-memory match.
+   */
+  reload(): void {
+    this.restore()
+  }
+
   /** Load a persisted snapshot on construction, if present. */
   private restore(): void {
     if (this.path === '' || !existsSync(this.path)) return

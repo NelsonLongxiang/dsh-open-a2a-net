@@ -9,6 +9,13 @@
  * DIFFERENT payload is a hard `conflict`. All three verdicts are plain data;
  * the endpoint maps them to 200/409(-32003)/409(-32002).
  *
+ * W7 slice 2: the claim row now also RETAINS the prior attempt's settled
+ * outcome (when a settlement hook recorded one), and {@link query} answers
+ * the read-only `/a2a/query` surface — the retrieval half of the S1
+ * recovery row. The fingerprint that guards a claim is the same value that
+ * authorizes a query: presenting {@link peerPayloadFingerprint} of the
+ * original submit means holding the original payload.
+ *
  * Persistence at `<dsh-home>/a2a/idempotency.json`; TTL prunes lazily on
  * every entry point (no timers — this host restarts too often), capacity
  * evicts oldest-inserted first, and every failure degrades to memory-only.
@@ -17,6 +24,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/idempotency-store
  */
 
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
@@ -32,12 +40,74 @@ export const WIRE_ERROR_IDEMPOTENCY_CONFLICT = -32002
 /** Wire code: exact replay — refused so the prior run stays authoritative. */
 export const WIRE_ERROR_REPLAY_REJECTED = -32003
 
+/** Cap on one stored outcome text; truncation is flagged, never silent. */
+export const OUTCOME_TEXT_CAP = 65_536
+
 /** The three claim verdicts; stable vocabulary per the consumer contract. */
 export type ClaimVerdict = 'fresh' | 'replay' | 'conflict'
+
+/**
+ * The payload fingerprint of one A2A submit — the shared implementation the
+ * gate claims with, the query endpoint re-verifies with, and the caller-side
+ * bridge face recomputes from the exact submit fields. ONE implementation by
+ * contract (W7 slice 2): any drift across those three roles would turn
+ * honest outcome queries into phantom payload-mismatch verdicts. The field
+ * order below IS the wire format; do not reorder.
+ */
+export function peerPayloadFingerprint(input: {
+  readonly caller: string
+  readonly message: string
+  readonly noWait: boolean
+  readonly team: string
+}): string {
+  return createHash('sha256')
+    .update(JSON.stringify({ caller: input.caller, message: input.message, noWait: input.noWait, team: input.team }))
+    .digest('hex')
+}
+
+/** The settled outcome of the execution that earned a claim (W7 slice 2). */
+export interface TaskOutcome {
+  readonly status: 'completed' | 'failed'
+  /** The settled round text (completed rows). */
+  readonly reply?: string
+  /** The failure prose (failed rows). */
+  readonly error?: string
+  /** True when the stored text was cut to {@link OUTCOME_TEXT_CAP}. */
+  readonly truncated?: boolean
+}
+
+/**
+ * The read-only answer for one outcome lookup. `pending` honestly means
+ * "in flight OR the outcome was never registered" — the two are
+ * indistinguishable from outside, and the answer pretends otherwise for
+ * neither (old snapshots restored without outcomes, hooks that never fire
+ * for a delivery mode, all land here).
+ */
+export type StoredQueryVerdict =
+  | { readonly found: false; readonly reason: 'unknown-task' | 'payload-mismatch' }
+  | { readonly found: true; readonly status: 'pending' }
+  | {
+    readonly found: true
+    readonly status: 'completed'
+    readonly reply: string
+    /** Settle time (epoch ms); the endpoint maps it to wire ISO. */
+    readonly settledAt: number
+    readonly truncated?: boolean
+  }
+  | {
+    readonly found: true
+    readonly status: 'failed'
+    readonly error: string
+    /** Settle time (epoch ms); the endpoint maps it to wire ISO. */
+    readonly settledAt: number
+    readonly truncated?: boolean
+  }
 
 interface ClaimedKey {
   readonly fingerprint: string
   readonly at: number
+  readonly outcome?: TaskOutcome
+  readonly settledAt?: number
 }
 
 export interface IdempotencyOptions {
@@ -50,7 +120,59 @@ export interface IdempotencyOptions {
 }
 
 interface Snapshot {
-  readonly entries?: ReadonlyArray<{ readonly taskId: string; readonly fingerprint: string; readonly at: number }>
+  readonly entries?: ReadonlyArray<{
+    readonly taskId: string
+    readonly fingerprint: string
+    readonly at: number
+    readonly outcome?: TaskOutcome
+    readonly settledAt?: number
+  }>
+  /** Cumulative claim-verdict counters (0.5.36): persisted so the
+   * UNIQUE-ization traffic decision sees CROSS-RESTART accumulation —
+   * a per-boot blip would destroy exactly the evidence it needs. */
+  readonly stats?: {
+    readonly claimsFresh?: number
+    readonly replays?: number
+    readonly conflicts?: number
+  }
+}
+
+/** The read-only idempotency-window aggregate (state route / a2a_status;
+ * 0.5.36 observability slice). Counters are cumulative since genesis. */
+export interface IdempotencyStats {
+  readonly window: number
+  readonly cap: number
+  readonly pending: number
+  readonly settled: number
+  readonly claimsFresh: number
+  readonly replays: number
+  readonly conflicts: number
+}
+
+/** Cap the stored text; truncation is flagged, never silent. */
+function capOutcome(outcome: TaskOutcome): TaskOutcome {
+  const text = outcome.reply ?? outcome.error
+  if (text === undefined || text.length <= OUTCOME_TEXT_CAP) return outcome
+  return outcome.reply !== undefined
+    ? { ...outcome, reply: outcome.reply.slice(0, OUTCOME_TEXT_CAP), truncated: true }
+    : { ...outcome, error: outcome.error!.slice(0, OUTCOME_TEXT_CAP), truncated: true }
+}
+
+/** A corrupt persisted outcome degrades to no-outcome (pending), never
+ * blocks restore. A status without its text degrades too: a query answering
+ * `completed` with an empty reply would be a lie, not a degraded truth. */
+function restoreOutcome(raw: unknown): TaskOutcome | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const candidate = raw as Partial<TaskOutcome>
+  if (candidate.status !== 'completed' && candidate.status !== 'failed') return undefined
+  if (candidate.status === 'completed' && typeof candidate.reply !== 'string') return undefined
+  if (candidate.status === 'failed' && typeof candidate.error !== 'string') return undefined
+  return {
+    status: candidate.status,
+    ...(typeof candidate.reply === 'string' ? { reply: candidate.reply } : {}),
+    ...(typeof candidate.error === 'string' ? { error: candidate.error } : {}),
+    ...(candidate.truncated === true ? { truncated: true } : {}),
+  }
 }
 
 export class IdempotencyStore {
@@ -58,6 +180,9 @@ export class IdempotencyStore {
   private readonly ttlMs: number
   private readonly cap: number
   private readonly now: () => number
+  private claimsFresh = 0
+  private replays = 0
+  private conflicts = 0
 
   /**
    * @param path - persistence file; empty string keeps the store memory-only.
@@ -81,15 +206,97 @@ export class IdempotencyStore {
     this.prune(this.now())
     const existing = this.rows.get(taskId)
     if (existing !== undefined) {
-      if (existing.fingerprint !== fingerprint) return 'conflict'
-      // Sliding refresh: a hammering duplicate cannot out-wait the window
-      // while spamming; only genuinely aged keys re-open.
+      if (existing.fingerprint !== fingerprint) {
+        // 0.5.36 observability: conflicts are the "caller bug" verdict —
+        // counted and persisted so the UNIQUE-ization traffic decision has
+        // cross-restart evidence instead of a per-boot blip.
+        this.conflicts += 1
+        this.persist()
+        return 'conflict'
+      }
+      // Fixed window from the first claim: a replay does NOT refresh `at`,
+      // so only genuinely aged keys re-open (the comment previously claimed
+      // a sliding refresh the code never performed — W7 slice-2 §2.3 kept
+      // the behavior and fixed the prose).
+      this.replays += 1
+      this.persist()
       return 'replay'
     }
     if (this.rows.size >= this.cap) this.evictOldest()
+    this.claimsFresh += 1
     this.rows.set(taskId, { fingerprint, at: this.now() })
     this.persist()
     return 'fresh'
+  }
+
+  /**
+   * Read-only aggregate for the observability surfaces (state route /
+   * a2a_status, 0.5.36): window occupancy, outcome split, and the
+   * cumulative claim-verdict counters. Never throws; the only write it may
+   * perform is the shared lazy TTL prune.
+   */
+  stats(): IdempotencyStats {
+    this.prune(this.now())
+    let pending = 0
+    let settled = 0
+    for (const row of this.rows.values()) {
+      if (row.outcome === undefined) pending += 1
+      else settled += 1
+    }
+    return {
+      window: this.rows.size,
+      cap: this.cap,
+      pending,
+      settled,
+      claimsFresh: this.claimsFresh,
+      replays: this.replays,
+      conflicts: this.conflicts,
+    }
+  }
+
+  /**
+   * Attach the settled outcome to an existing claim (W7 slice 2). First
+   * write wins: the sync / detached-bridge / receipt hooks are mutually
+   * exclusive by wait semantics today, so a second write would only ever
+   * mean a future hook bug — ignore it instead of flip-flopping the record.
+   * Unknown or already-settled ids answer `false`. Never throws.
+   * @returns whether the outcome was recorded.
+   */
+  recordOutcome(taskId: string, outcome: TaskOutcome, settledAt: number = this.now()): boolean {
+    if (taskId === '') return false
+    this.prune(this.now())
+    const existing = this.rows.get(taskId)
+    if (existing === undefined || existing.outcome !== undefined) return false
+    this.rows.set(taskId, {
+      fingerprint: existing.fingerprint,
+      at: existing.at,
+      settledAt,
+      outcome: capOutcome(outcome),
+    })
+    this.persist()
+    return true
+  }
+
+  /**
+   * Read-only outcome lookup for the `/a2a/query` surface (W7 slice 2).
+   * The caller must present the task id AND the original payload's
+   * fingerprint — the fingerprint match is the authorization, and a
+   * mismatch is a plain negative answer, never the frozen -32002 conflict
+   * vocabulary (queries do not produce conflicts). Empty or unknown ids
+   * answer unknown-task. Never claims, never throws; the only write it may
+   * perform is the shared lazy TTL prune.
+   */
+  query(taskId: string, fingerprint: string): StoredQueryVerdict {
+    if (taskId === '') return { found: false, reason: 'unknown-task' }
+    this.prune(this.now())
+    const existing = this.rows.get(taskId)
+    if (existing === undefined) return { found: false, reason: 'unknown-task' }
+    if (existing.fingerprint !== fingerprint) return { found: false, reason: 'payload-mismatch' }
+    if (existing.outcome === undefined || existing.settledAt === undefined) return { found: true, status: 'pending' }
+    const truncation = existing.outcome.truncated === true ? { truncated: true } : {}
+    return existing.outcome.status === 'completed'
+      ? { found: true, status: 'completed', reply: existing.outcome.reply ?? '', settledAt: existing.settledAt, ...truncation }
+      : { found: true, status: 'failed', error: existing.outcome.error ?? '', settledAt: existing.settledAt, ...truncation }
   }
 
   /** Whether one key currently sits inside the window (diagnostics). */
@@ -128,8 +335,28 @@ export class IdempotencyStore {
         const entry = raw as Partial<ClaimedKey> & { taskId?: unknown }
         if (typeof entry?.taskId !== 'string' || entry.taskId === '') continue
         if (typeof entry.fingerprint !== 'string' || typeof entry.at !== 'number' || !Number.isFinite(entry.at)) continue
-        this.rows.set(entry.taskId, { fingerprint: entry.fingerprint, at: entry.at })
+        const outcome = restoreOutcome(entry.outcome)
+        const settledAt = typeof entry.settledAt === 'number' && Number.isFinite(entry.settledAt) ? entry.settledAt : undefined
+        this.rows.set(entry.taskId, {
+          fingerprint: entry.fingerprint,
+          at: entry.at,
+          ...(outcome !== undefined && settledAt !== undefined ? { outcome, settledAt } : {}),
+        })
       }
+      // Counters restore FIRST — before any prune(): a prune that evicts an
+      // expired entry calls persist(), and persisting while the in-memory
+      // counters are still zero would wipe the snapshot's cumulative
+      // evidence to disk (R1 B-1: the TTL-silent-restart sequence — exactly
+      // the low-traffic scenario this slice exists for). Zero-fill for
+      // pre-stats snapshots: an old file means "no recorded traffic", never
+      // fabricated numbers; malformed values (negative/fractional) degrade
+      // to zero rather than climbing from a poisoned base.
+      const stats = snapshot?.stats
+      const count = (value: unknown): number =>
+        typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0
+      this.claimsFresh = count(stats?.claimsFresh)
+      this.replays = count(stats?.replays)
+      this.conflicts = count(stats?.conflicts)
       this.prune(this.now())
     } catch {
       // A corrupt window file must never block routing: start fresh instead.
@@ -141,7 +368,10 @@ export class IdempotencyStore {
     try {
       mkdirSync(dirname(this.path), { recursive: true })
       const entries = [...this.rows].map(([taskId, entry]) => ({ taskId, ...entry }))
-      writeFileSync(this.path, JSON.stringify({ entries }), { mode: 0o600 })
+      writeFileSync(this.path, JSON.stringify({
+        entries,
+        stats: { claimsFresh: this.claimsFresh, replays: this.replays, conflicts: this.conflicts },
+      }), { mode: 0o600 })
     } catch {
       // Unwritable home: degrade to memory-only, routing continues.
     }

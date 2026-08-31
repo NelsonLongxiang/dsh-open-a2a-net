@@ -1,0 +1,29 @@
+/* Nexus readability overlay: labels, HUD, legend, inspector.
+   Light/dark token vars follow prefers-color-scheme. */
+:root{
+  color-scheme:dark;
+  --n-bg:#060a12; --n-ink:#dde3f0; --n-ink-muted:#7a86a0; --n-panel:#0d1322;
+  --n-live:#4ade80; --n-cold:#7a86a0; --n-border:#223052; --n-act:#f59e0b;
+}
+@media (prefers-color-scheme: light){
+  :root{ --n-bg:#eef2fa; --n-ink:#1a2438; --n-ink-muted:#5a6580; --n-panel:#ffffff;
+         --n-live:#16803a; --n-cold:#8a93a8; --n-border:#c6d0e6; --n-act:#b45309; }
+}
+.nexus-label{pointer-events:none;transform:translate(-50%,-100%);text-align:center;
+  font-size:12px;line-height:1.25;color:var(--n-ink);background:color-mix(in srgb,var(--n-panel) 82%,transparent);
+  border:1px solid var(--n-border);border-radius:6px;padding:2px 7px;white-space:nowrap}
+.nexus-label.live .nm{font-weight:600}
+.nexus-label .sub{display:block;font-size:10px;color:var(--n-ink-muted)}
+.nexus-hud{position:absolute;top:10px;left:12px;font-size:12px;color:var(--n-ink);
+  background:color-mix(in srgb,var(--n-panel) 80%,transparent);border:1px solid var(--n-border);
+  border-radius:8px;padding:6px 10px}
+.nexus-legend{position:absolute;bottom:10px;left:12px;font-size:12px;color:var(--n-ink);
+  display:flex;gap:12px;align-items:center;background:color-mix(in srgb,var(--n-panel) 80%,transparent);border:1px solid var(--n-border);
+  border-radius:8px;padding:5px 10px}
+.nexus-legend .dot{display:inline-block;width:8px;height:8px;border-radius:50%}
+.nexus-legend .dot.live{background:var(--n-live)} .nexus-legend .dot.cold{background:var(--n-cold)}
+.nexus-legend .dashline{display:inline-block;width:22px;border-top:2px dashed #6366f1}
+.nexus-legend .act{display:inline-block;width:22px;border-top:2px solid var(--n-act)}
+.nexus-inspector{position:absolute;top:10px;right:12px;font-size:12px;color:var(--n-ink);
+  background:color-mix(in srgb,var(--n-panel) 88%,transparent);border:1px solid var(--n-border);
+  border-radius:8px;padding:8px 12px;display:none}
