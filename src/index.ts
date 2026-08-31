@@ -46,10 +46,13 @@ import type { } from '@deepseek-ai/dsh-session-title'
 // `ctx.sessionPersistence` on Context; the provider is mounted by app
 // compositions and stays optional here (cold listing degrades without it).
 import type { } from '@deepseek-ai/dsh-session-persistence'
-// Type-only: the api gateway's declaration merging puts `ctx.apiProxy` on
-// Context; the service is mounted by app compositions and stays optional
-// here (boot wake and wake-on-route degrade without it).
-import type { } from '@deepseek-ai/dsh-host-apiproxy'
+// The session controller is the wake face's owner, mounted by app
+// compositions and stays optional here (boot wake and wake-on-route degrade
+// without it). Successor of the removed ApiProxy seam
+// (@deepseek-ai/dsh-host-apiproxy was deleted upstream in
+// 4f00a8b82a "refactor(api): remove ApiProxy package"; resolveAgent is the
+// materializeSession face's current home). Looked up by service key at
+// runtime — no compile-time dependency on the controller package.
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import s from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -746,14 +749,21 @@ export function apply(ctx: Context, config: Config): void {
   let lastWakeDemandAt = 0
 
   /**
-   * The api gateway's wake face, when composed: materializing a persisted
-   * session's agent (log replay plus composed preset world) is web-app
-   * knowledge, so both wake paths ride the one service that owns it.
+   * The session controller's wake face, when composed: materializing a
+   * persisted session's agent (log replay plus composed preset world) is
+   * web-app knowledge, so both wake paths ride the one service that owns it.
+   * resolveAgent resolves { agent } or { error }; a structured error becomes
+   * a thrown one so the wake paths' existing failure handling applies.
    */
   const materialize = (id: string): Promise<Agent> | undefined => {
-    const apiProxy = ctx.get('apiProxy') as { materializeSession?: (sessionId: SessionId) => Promise<Agent> } | undefined
-    if (apiProxy?.materializeSession === undefined) return undefined
-    return apiProxy.materializeSession(SessionId(id))
+    const controller = ctx.get('sessionController') as {
+      resolveAgent?: (sessionId: SessionId) => Promise<{ agent: Agent } | { error: { message: string } }>
+    } | undefined
+    if (controller?.resolveAgent === undefined) return undefined
+    return controller.resolveAgent(SessionId(id)).then((result) => {
+      if ('agent' in result) return result.agent
+      throw new Error(`session "${id}" did not materialize: ${result.error.message}`)
+    })
   }
 
   // Per-id single-flight: a materialization is a full log replay (seconds of
@@ -1061,7 +1071,7 @@ export function apply(ctx: Context, config: Config): void {
 
     /** F-observability: the boot prewarm's lifecycle, surfaced on the state route (F: prewarm not running was invisible). */
     const prewarmStatus: {
-      state: 'off' | 'skipped:apiProxy-missing' | 'draining' | 'done' | 'cancelled'
+      state: 'off' | 'skipped:sessionController-missing' | 'draining' | 'done' | 'cancelled'
       attempted: number
       woken: number
       failed: Array<{ id: string; error: string }>
@@ -1105,7 +1115,7 @@ export function apply(ctx: Context, config: Config): void {
     const reconcileTick = (): void => {
       if (reconcileCancelled || ctx.fiber.uid === null) return
       const interval = Math.max(50, config.wakeReconcileIntervalMs)
-      if (!config.wakeReconcile || ctx.get('apiProxy') === undefined) {
+      if (!config.wakeReconcile || ctx.get('sessionController') === undefined) {
         // Late-mounting gateway: keep the cadence so a proxy that appears
         // after apply still starts reconciling (the P3 apply-time snapshot
         // lesson, on a loop instead of a one-shot).
@@ -1190,11 +1200,11 @@ export function apply(ctx: Context, config: Config): void {
           prewarmStatus.state = 'off'
           return
         }
-        if (ctx.get('apiProxy') === undefined) {
+        if (ctx.get('sessionController') === undefined) {
           // F-observability: this skip used to be console-only — the state
           // route now carries it so a dead prewarm is a reading, not a rumor.
-          prewarmStatus.state = 'skipped:apiProxy-missing'
-          logger.warn('wakeJoinedOnBoot is on but no api gateway is composed; cold joined sessions stay asleep')
+          prewarmStatus.state = 'skipped:sessionController-missing'
+          logger.warn('wakeJoinedOnBoot is on but no session controller is composed; cold joined sessions stay asleep')
           return
         }
         // Low-priority prewarm instead of an eager serial chain: each wake
@@ -1911,7 +1921,7 @@ export function apply(ctx: Context, config: Config): void {
    */
   const nudgeBudget = new Map<string, number>()
   const escalateQueuePrompt = (agent: Agent, team: string, taskId: string): void => {
-    const apiProxy = ctx.get('apiProxy') as
+    const controller = ctx.get('sessionController') as
       | { prompt?: (request: {
           requestId: string
           sessionId: Agent['id']
@@ -1919,10 +1929,10 @@ export function apply(ctx: Context, config: Config): void {
           content: ReadonlyArray<{ type: 'text'; text: string }>
         }) => Promise<unknown> }
       | undefined
-    if (typeof apiProxy?.prompt !== 'function') return
+    if (typeof controller?.prompt !== 'function') return
     logger.info(`a2a: async nudge escalates to queue-mode prompt for ${team} (task ${taskId})`)
     try {
-      void apiProxy.prompt({
+      void controller.prompt({
         requestId: `a2a-nudge-${taskId}`,
         sessionId: agent.id,
         mode: 'queue',

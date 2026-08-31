@@ -128,7 +128,9 @@ describe('F8 desired-state reconciliation', () => {
       ctx.emit('agent/created', { agent: woken })
       return woken
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    ctx.provide('sessionController', {
+      resolveAgent: async (sessionId: SessionId) => ({ agent: await materialize(String(sessionId)) }),
+    } as never)
     apply(ctx, makeConfig({ dshHome: home }))
     await vi.waitFor(async () => {
       expect(materialize).toHaveBeenCalledWith('agent-1')
@@ -154,7 +156,9 @@ describe('F8 desired-state reconciliation', () => {
     const materialize = vi.fn(async () => {
       throw new Error('replay interrupted')
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    ctx.provide('sessionController', {
+      resolveAgent: async (sessionId: SessionId) => ({ agent: await materialize(String(sessionId)) }),
+    } as never)
     apply(ctx, makeConfig({ dshHome: home, wakeReconcileBackoffBaseMs: 400 }))
     // First failure recorded with a reason and a future retry instant; the
     // 400ms base keeps attempts at 1 long enough to observe the pause.
@@ -185,7 +189,9 @@ describe('F8 desired-state reconciliation', () => {
     const materialize = vi.fn(async () => {
       throw new Error('corrupt session log: seq gap in committed region')
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    ctx.provide('sessionController', {
+      resolveAgent: async (sessionId: SessionId) => ({ agent: await materialize(String(sessionId)) }),
+    } as never)
     apply(ctx, makeConfig({ dshHome: home }))
     let row: ReconcileRow | undefined
     await vi.waitFor(async () => {
@@ -206,10 +212,10 @@ describe('F8 desired-state reconciliation', () => {
     const home = tmpHome()
     writeIntents(home, ['agent-1', 'session-2-0000-0000-0000-000000000000'])
     const { ctx, port } = await mountStack()
-    // apiProxy present but without the materialize face: materializeOnce
+    // sessionController present but without the resolveAgent face: materializeOnce
     // answers undefined — the input that used to end the boot prewarm's
     // queue mid-drain with the state stuck at 'draining' forever.
-    ctx.provide('apiProxy', {} as never)
+    ctx.provide('sessionController', {} as never)
     apply(ctx, makeConfig({ dshHome: home, wakeJoinedOnBoot: true, wakeBootStaggerMs: 5 }))
     await vi.waitFor(async () => {
       const state = await getState(port())
