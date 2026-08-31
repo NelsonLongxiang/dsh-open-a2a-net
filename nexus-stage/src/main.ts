@@ -305,7 +305,20 @@ function runCanvasAction(a: CanvasAction): Promise<boolean> {
     case 'remove-member': return canvasWire.removeMembers(a.team, a.ids)
     case 'remove-team': return canvasWire.removeTeam(a.name)
     case 'reorder': return canvasWire.runRosterOps(a.team, a.ops)
+    case 'join-network':
+    case 'leave-network': return postNetworkJoin(a.type === 'join-network' ? 'join' : 'leave', a.id)
   }
+}
+
+/** Network join/leave for one session (the panel-slim migration: this affordance left the sidebar panel for the planning view). */
+async function postNetworkJoin(action: 'join' | 'leave', id: string): Promise<boolean> {
+  const r = await fetch(`/__dsh_a2a/${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+    cache: 'no-store',
+  }).catch(() => undefined)
+  return r !== undefined && r.ok
 }
 
 const planning = createPlanningView({

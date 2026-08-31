@@ -207,6 +207,13 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     mkButton('＋', '放大', () => zoomCenter(1.2)),
     mkButton('建队', '组成团队（G）：先框选至少 2 个节点', () => startCreateFromSelection()),
   )
+  // Unjoined sessions ride a toolbar chip + dropdown: the panel-slim
+  // migration made the planning view the join surface — without this, an
+  // unjoined session had no GUI path into the mesh at all.
+  const netBtn = mkButton('未入网', '未入网会话（点击选择入网）', () => toggleNetMenu())
+  netBtn.className = 'p-netbtn'
+  netBtn.setAttribute('aria-haspopup', 'menu')
+  toolbar.appendChild(netBtn)
   const lamp = document.createElement('span')
   lamp.setAttribute('aria-live', 'polite')
   lamp.className = 'p-lamp'
@@ -698,6 +705,41 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   let menuLevel: 'root' | 'join' | 'leave' | 'promote' = 'root'
   let menuAnchor: HTMLElement | null = null
 
+  // ── 未入网会话 dropdown（面板瘦身后迁入的入网面）──
+  let netMenu: HTMLDivElement | null = null
+  let lastUnjoined: ReadonlyArray<PlanningSession> = []
+  function closeNetMenu(): void {
+    netMenu?.remove()
+    netMenu = null
+  }
+  function toggleNetMenu(): void {
+    if (netMenu !== null) { closeNetMenu(); return }
+    if (lastUnjoined.length === 0) return
+    const el = document.createElement('div')
+    el.className = 'p-menu p-netmenu'
+    el.setAttribute('role', 'menu')
+    el.setAttribute('aria-label', '未入网会话')
+    for (const s of lastUnjoined) {
+      el.appendChild(menuItem(`${s.name !== undefined && s.name !== '' ? s.name : s.label} — 入网`, true, () => {
+        closeNetMenu()
+        emitAction({ type: 'join-network', id: s.id })
+      }))
+    }
+    netMenu = el
+    document.body.appendChild(el)
+    const rect = netBtn.getBoundingClientRect()
+    el.style.left = `${String(Math.min(rect.left, window.innerWidth - 220))}px`
+    el.style.top = `${String(Math.max(8, rect.top - (lastUnjoined.length * 30 + 10)))}px`
+    el.addEventListener('keydown', (ev) => {
+      if ((ev as KeyboardEvent).key === 'Escape') {
+        ev.stopPropagation()
+        closeNetMenu()
+        netBtn.focus()
+      }
+    })
+    el.querySelector('button')?.focus()
+  }
+
   function closeMenu(): void {
     menu?.remove()
     menu = null
@@ -752,6 +794,12 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
             items.push(menuItem('置顶路由 ▸', true, () => openMenu(x, y, target, 'promote')))
             items.push(menuItem('离队 ▸', true, () => openMenu(x, y, target, 'leave')))
           }
+        }
+        // Network-level leave (distinct from canvas-team membership): the
+        // panel-slim migration moved the join/leave toggle here. Remote
+        // nodes are read-only entries — never a leave target.
+        if (model.getNode(id)?.remote !== true) {
+          items.push(menuItem('退网', true, () => emitAction({ type: 'leave-network', id })))
         }
       } else {
         items.push(menuItem('‹ 返回', true, () => openMenu(x, y, target, 'root')))
@@ -1199,6 +1247,14 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     lastTeams = input.teams
     lastPeers = input.peers ?? []
     lastInFlight = input.inFlight ?? []
+    // Unjoined sessions have no node on the canvas — the panel-slim
+    // migration made this view the join surface, so they ride a compact
+    // toolbar chip instead of vanishing entirely.
+    lastUnjoined = input.sessions.filter(s => s.joined !== true && !s.id.startsWith('peer-'))
+    netBtn.textContent = `未入网${lastUnjoined.length > 0 ? `(${String(lastUnjoined.length)})` : ''}`
+    netBtn.disabled = lastUnjoined.length === 0
+    netBtn.setAttribute('aria-disabled', String(lastUnjoined.length === 0))
+    if (lastUnjoined.length === 0) closeNetMenu()
     const memberships = new Map<string, Array<{ team: string; index: number }>>()
     for (const team of input.teams) {
       for (let i = 0; i < team.members.length; i++) {

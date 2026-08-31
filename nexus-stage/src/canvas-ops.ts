@@ -17,7 +17,7 @@ import { nodeRect, deriveInitialFrame, type WorldModel } from './world'
 /** One pre-computed host op (remove = remove-member, add = add-member). */
 export type RosterOp = { op: 'remove' | 'add'; id: string }
 
-/** The five user-facing write actions (one per design.md §3.3 row). */
+/** The five user-facing write actions (one per design.md §3.3 row), plus the two network join/leave actions the panel-slim migration moved into the planning view. */
 export type CanvasAction =
   | { type: 'create-team'; name: string; ids: readonly string[]; /** true when the model had no such team before this action (a serial failure then leaves a ghost EMPTY team on the host — the wire compensates with a remove). */ created?: boolean }
   | { type: 'add-member'; team: string; ids: readonly string[] }
@@ -25,12 +25,18 @@ export type CanvasAction =
   | { type: 'remove-team'; name: string }
   /** `ops` comes from reorderOps() at emit time; the wire stays model-free. */
   | { type: 'reorder'; team: string; ops: ReadonlyArray<RosterOp> }
+  /** Network-level join/leave (the session joins the A2A mesh) — distinct from canvas-team membership. */
+  | { type: 'join-network'; id: string }
+  | { type: 'leave-network'; id: string }
 
 /** Reverts exactly what one applyAction did (team-scoped). */
 export type Undo = () => void
 
 /** The team whose writes this action touches (queue key for the wire). */
 export function actionTeam(a: CanvasAction): string {
+  // Network join/leave are session-scoped, not team-scoped: one shared
+  // queue key keeps them serial against each other.
+  if (a.type === 'join-network' || a.type === 'leave-network') return '$network'
   return a.type === 'create-team' || a.type === 'remove-team' ? a.name : a.team
 }
 
@@ -82,6 +88,12 @@ export function applyAction(model: WorldModel, a: CanvasAction): Undo {
       if (preRect !== undefined) model.setFrame(a.name, preRect)
       model.setTeamMembers(a.name, preIds)
     }
+  }
+  // Network join/leave: no optimistic canvas mutation — the next inventory
+  // poll absorbs the host's truth (the node appears/disappears on the
+  // reconcile after the host accepts), so the undo is a no-op.
+  if (a.type === 'join-network' || a.type === 'leave-network') {
+    return () => {}
   }
   // reorder: apply the pre-computed ops to the current roster (remove
   // anywhere, append). The undo WALKS the current roster back to the

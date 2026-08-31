@@ -200,8 +200,10 @@ describe('planning view DOM', () => {
   it('toolbar carries the PR-C 建队 control (4 buttons)', () => {
     const { v } = view()
     const buttons = Array.from(v.root.querySelectorAll<HTMLButtonElement>('.p-toolbar button'))
-    expect(buttons).toHaveLength(4)
+    // 5th button = 未入网 chip (panel-slim migration: the join surface moved here).
+    expect(buttons).toHaveLength(5)
     expect(buttons.some(b => b.textContent === '建队')).toBe(true)
+    expect(buttons.some(b => (b.textContent ?? '').startsWith('未入网'))).toBe(true)
   })
 
   it('attacker-shaped labels land as text, never as markup', () => {

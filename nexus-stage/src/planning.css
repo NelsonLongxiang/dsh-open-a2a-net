@@ -206,3 +206,8 @@
 .nexus-modes button:active{background:rgba(139,92,246,.15)}
 .nexus-modes button[aria-selected=true]{color:#dde3f0; border-color:#8b5cf6; background:rgba(139,92,246,.12)}
 .nexus-modes button:focus-visible{outline:2px solid #8b5cf6; outline-offset:1px}
+
+/* Panel-slim migration: the unjoined-sessions join affordance on the toolbar. */
+#dsh-plan .p-netbtn{color:var(--ink-muted)}
+#dsh-plan .p-netbtn:not([disabled]){color:var(--ink)}
+#dsh-plan .p-netmenu{max-height:240px; overflow:auto}
