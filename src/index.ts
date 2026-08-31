@@ -1090,7 +1090,12 @@ export function apply(ctx: Context, config: Config): void {
       const attempts = (reconcileFailures.get(id)?.attempts ?? 0) + 1
       const needsRepair = CORRUPT_LOG_SIGNATURE.test(error)
       const backoff = needsRepair
-        ? Number.MAX_SAFE_INTEGER
+        ? // Re-armable slow probe: corrupt rows re-check at the cap cadence
+          // instead of parking forever — a repaired log re-materializes on
+          // its own and clears the flag, and the row stays flagged until
+          // then. The old never-retry park left repaired sessions cold
+          // forever with no observable way back.
+          Math.max(config.wakeReconcileMaxBackoffMs, config.wakeReconcileBackoffBaseMs)
         : Math.min(
           Math.max(config.wakeReconcileBackoffBaseMs, 1) * 2 ** Math.min(attempts - 1, 20),
           Math.max(config.wakeReconcileMaxBackoffMs, config.wakeReconcileBackoffBaseMs),
@@ -1498,6 +1503,9 @@ export function apply(ctx: Context, config: Config): void {
                     live: members.filter(member => liveRoots.has(member)).length,
                   }))
                 })(),
+                // S4 audit face: join/leave attempts with outcomes — the
+                // queryable half that rotating log lines cannot be.
+                teamAudit: [...teamAuditRing],
               },
             })
             res.writeHead(200, {
@@ -2882,9 +2890,27 @@ ${message}`
   // publishes it), so the default allowlist denies everything: a refused
   // join says why and names the curation surface instead of failing
   // silently. Leaving is always allowed — it only shrinks exposure.
+  // S4 audit: every join/leave attempt — allowed or refused — lands in a
+  // bounded ring the state route serves. Refusals are the audit-worthy
+  // half (each one is widening pressure on the allowlist); log lines
+  // rotate away, this face is queryable.
+  const teamAuditRing: Array<{ at: number; action: 'join' | 'leave'; team: string; id: string; ok: boolean; reason?: string }> = []
+  const recordTeamAudit = (action: 'join' | 'leave', team: string, id: string, ok: boolean, reason?: string): void => {
+    teamAuditRing.push({ at: Date.now(), action, team, id, ok, ...(reason !== undefined ? { reason } : {}) })
+    if (teamAuditRing.length > 32) teamAuditRing.splice(0, teamAuditRing.length - 32)
+  }
   const teamJoinAllowed = (team: string): boolean =>
-    (config.teamJoinAllowlist ?? []).some(pattern =>
-      pattern === '*' || (pattern.endsWith('*') ? team.startsWith(pattern.slice(0, -1)) : pattern === team))
+    (config.teamJoinAllowlist ?? []).some(pattern => {
+      if (pattern === '*') return true
+      if (pattern.endsWith('*')) {
+        // Boundary: the wildcard consumes at most the remainder of one
+        // '/'-delimited segment — `dsh*` matches `dsh/agent-1`, never
+        // `dshield`; `dsh/canvas/*` matches the canvas subtree only.
+        const prefix = pattern.slice(0, -1)
+        return team.startsWith(prefix) && (prefix.endsWith('/') || (team.length > prefix.length && team[prefix.length] === '/'))
+      }
+      return team === pattern
+    })
   const joinedNodeOrNone = (id: string): string | undefined =>
     joinedSessions.has(id) || sessionNodes.has(id) ? id : undefined
 
@@ -2924,14 +2950,22 @@ ${message}`
       a2aJoinGateRefusal(exec)
       const team = String(args.team ?? '').trim()
       const id = String(args.id ?? '').trim()
-      if (team === '' || id === '') return { ok: false, error: 'both team and id are required' }
+      if (team === '' || id === '') {
+        recordTeamAudit('join', team, id, false, 'both team and id are required')
+        return { ok: false, error: 'both team and id are required' }
+      }
       if (joinedNodeOrNone(id) === undefined) {
-        return { ok: false, error: `session ${id} is not a joined node on this host — join the network first (sidebar control or a2a-collab), then declare team membership` }
+        const reason = `session ${id} is not a joined node on this host — join the network first (sidebar control or a2a-collab), then declare team membership`
+        recordTeamAudit('join', team, id, false, reason)
+        return { ok: false, error: reason }
       }
       if (!teamJoinAllowed(team)) {
-        return { ok: false, error: `team "${team}" is not in this host's teamJoinAllowlist — the owner curates joinable teams (exact names or trailing-* prefixes); ask them to add the pattern` }
+        const reason = `team "${team}" is not in this host's teamJoinAllowlist — the owner curates joinable teams (exact names or trailing-* prefixes); ask them to add the pattern`
+        recordTeamAudit('join', team, id, false, reason)
+        return { ok: false, error: reason }
       }
       teamMemberships.add(id, team)
+      recordTeamAudit('join', team, id, true)
       logger.info(`a2a: ${id8(id)} declared membership in ${team}`)
       return { ok: true, team, id, teams: [...teamMemberships.teamsOf(id)] }
     },
@@ -2970,14 +3004,22 @@ ${message}`
       a2aJoinGateRefusal(exec)
       const team = String(args.team ?? '').trim()
       const id = String(args.id ?? '').trim()
-      if (team === '' || id === '') return { ok: false, error: 'both team and id are required' }
+      if (team === '' || id === '') {
+        recordTeamAudit('leave', team, id, false, 'both team and id are required')
+        return { ok: false, error: 'both team and id are required' }
+      }
       if (joinedNodeOrNone(id) === undefined) {
-        return { ok: false, error: `session ${id} is not a joined node on this host` }
+        const reason = `session ${id} is not a joined node on this host`
+        recordTeamAudit('leave', team, id, false, reason)
+        return { ok: false, error: reason }
       }
       if (!teamMemberships.teamsOf(id).includes(team)) {
-        return { ok: false, error: `session ${id} declares no membership in "${team}" — nothing to leave` }
+        const reason = `session ${id} declares no membership in "${team}" — nothing to leave`
+        recordTeamAudit('leave', team, id, false, reason)
+        return { ok: false, error: reason }
       }
       teamMemberships.remove(id, team)
+      recordTeamAudit('leave', team, id, true)
       logger.info(`a2a: ${id8(id)} retracted membership in ${team}`)
       return { ok: true, team, id, teams: [...teamMemberships.teamsOf(id)] }
     },
