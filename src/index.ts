@@ -184,6 +184,19 @@ export interface Config {
    * never waits on this queue.
    */
   readonly wakeBootStaggerMs: number
+  /**
+   * F8: continuous desired-state reconciliation. The boot prewarm is a
+   * one-shot queue; the reconciler re-derives the due set every tick and
+   * wakes one cold intent per pass — covering post-boot drift, failed
+   * wakes, and gateways that mounted late. Default on.
+   */
+  readonly wakeReconcile: boolean
+  /** Cadence between reconciliation ticks (floored at 50ms). */
+  readonly wakeReconcileIntervalMs: number
+  /** First-retry delay after a failed reconcile wake; doubles per attempt. */
+  readonly wakeReconcileBackoffBaseMs: number
+  /** Backoff ceiling; corrupt-log rows park as needs-repair and never retry. */
+  readonly wakeReconcileMaxBackoffMs: number
 
   /**
    * v0.5.23 (async-stall): see the schema comment on asyncNudgeDelayMs.
@@ -257,6 +270,10 @@ export const Config: s<Config> = s.object({
   wakePrewarmDelayMs: s.number().default(10_000),
   wakePrewarmQuietMs: s.number().default(5_000),
   wakeBootStaggerMs: s.number().default(3_000),
+  wakeReconcile: s.boolean().default(true),
+  wakeReconcileIntervalMs: s.number().default(60_000),
+  wakeReconcileBackoffBaseMs: s.number().default(5_000),
+  wakeReconcileMaxBackoffMs: s.number().default(600_000),
 
   /**
    * v0.5.23 (async-stall): delay before a delivered-but-unconsumed async
@@ -1021,6 +1038,108 @@ export function apply(ctx: Context, config: Config): void {
       failed: Array<{ id: string; error: string }>
     } = { state: 'off', attempted: 0, woken: 0, failed: [] }
 
+    // F8: continuous desired-state reconciliation. The boot prewarm is a
+    // one-shot snapshot over a queue — a session that goes cold later, a
+    // wake that failed once, or a gateway absent at that instant never got
+    // a second look (the live shapes behind "auto-wake is crippled":
+    // silent stalls, unretried failures, post-boot drift). The reconciler
+    // re-derives the due set every tick from the join intents and wakes at
+    // most one id per pass, with per-id exponential backoff and a parked
+    // needs-repair state for corrupt logs. Scoped beside prewarmStatus:
+    // the state route reads both, and its cancel flag is its own.
+    const reconcileStatus: {
+      state: 'off' | 'idle' | 'draining'
+      lastTickAt: number
+      lastChecked: number
+      woken: number
+      rows: Array<{ id: string; error: string; attempts: number; nextRetryAt: number; needsRepair: boolean }>
+    } = { state: 'off', lastTickAt: 0, lastChecked: 0, woken: 0, rows: [] }
+    const reconcileFailures = new Map<string, { attempts: number; nextRetryAt: number; error: string; needsRepair: boolean }>()
+    const CORRUPT_LOG_SIGNATURE = /corrupt/i
+    const RECONCILE_YIELD_MS = 1_000
+    const recordWakeFailure = (id: string, error: string): void => {
+      const attempts = (reconcileFailures.get(id)?.attempts ?? 0) + 1
+      const needsRepair = CORRUPT_LOG_SIGNATURE.test(error)
+      const backoff = needsRepair
+        ? Number.MAX_SAFE_INTEGER
+        : Math.min(
+          Math.max(config.wakeReconcileBackoffBaseMs, 1) * 2 ** Math.min(attempts - 1, 20),
+          Math.max(config.wakeReconcileMaxBackoffMs, config.wakeReconcileBackoffBaseMs),
+        )
+      reconcileFailures.set(id, { attempts, nextRetryAt: Date.now() + backoff, error, needsRepair })
+    }
+    let reconcileCancelled = false
+    ctx.effect(() => () => {
+      reconcileCancelled = true
+    })
+    let reconcilePostponed = 0
+    const reconcileTick = (): void => {
+      if (reconcileCancelled || ctx.fiber.uid === null) return
+      const interval = Math.max(50, config.wakeReconcileIntervalMs)
+      if (!config.wakeReconcile || ctx.get('apiProxy') === undefined) {
+        // Late-mounting gateway: keep the cadence so a proxy that appears
+        // after apply still starts reconciling (the P3 apply-time snapshot
+        // lesson, on a loop instead of a one-shot).
+        reconcileStatus.state = 'off'
+        schedule(reconcileTick, interval)
+        return
+      }
+      const now = Date.now()
+      for (const id of reconcileFailures.keys()) {
+        if (liveRoots.has(id) || !joinedSessions.has(id)) reconcileFailures.delete(id)
+      }
+      const due = joinedSessions.list().filter(id =>
+        !liveRoots.has(id)
+        && joinedSessions.has(id)
+        && archivedSessionFilter()?.(id) !== true
+        && !materializeInFlight.has(id)
+        && (reconcileFailures.get(id)?.nextRetryAt ?? 0) <= now)
+      reconcileStatus.lastTickAt = now
+      reconcileStatus.lastChecked = due.length
+      reconcileStatus.rows = [...reconcileFailures.entries()]
+        .map(([rowId, row]) => ({ id: rowId, error: row.error, attempts: row.attempts, nextRetryAt: row.nextRetryAt, needsRepair: row.needsRepair }))
+      if (due.length === 0) {
+        reconcileStatus.state = 'idle'
+        schedule(reconcileTick, interval)
+        return
+      }
+      // Foreground demand postpones a pass — but at most five one-second
+      // yields per pass, then the reconciler proceeds anyway. The boot
+      // prewarm could starve forever under steady traffic; a convergence
+      // loop must not.
+      if ((Date.now() - lastWakeDemandAt < config.wakePrewarmQuietMs || inFlightRoutes.size > 0) && reconcilePostponed < 5) {
+        reconcilePostponed += 1
+        schedule(reconcileTick, RECONCILE_YIELD_MS)
+        return
+      }
+      reconcilePostponed = 0
+      reconcileStatus.state = 'draining'
+      const id = due[0]!
+      const flight = materializeOnce(id)
+      if (flight === undefined) {
+        // The shape that silently killed the boot prewarm mid-queue: here
+        // it records a reason and the next pass re-derives the set.
+        recordWakeFailure(id, 'materializer-unavailable')
+        schedule(reconcileTick, Math.min(RECONCILE_YIELD_MS, interval))
+        return
+      }
+      void flight
+        .then(() => {
+          reconcileFailures.delete(id)
+          reconcileStatus.woken += 1
+        })
+        .catch(error => {
+          recordWakeFailure(id, String(error).slice(0, 200))
+          logger.warn(`reconcile wake of ${id} failed: ${String(error).slice(0, 200)}`)
+        })
+        .finally(() => {
+          // A quick re-check after each attempt keeps a multi-id drain
+          // moving at the yield cadence; the interval cadence resumes as
+          // soon as a pass finds nothing due.
+          if (!reconcileCancelled && ctx.fiber.uid !== null) schedule(reconcileTick, Math.min(RECONCILE_YIELD_MS, interval))
+        })
+    }
+
     {
       // Archive pruning and boot wake both ride the loader tree's
       // settlement: the workspace registry and the api gateway may activate
@@ -1035,6 +1154,9 @@ export function apply(ctx: Context, config: Config): void {
       const pruneThenWake = (): void => {
         pruneArchivedJoins()
         pruneCanvasMemberships()
+        // F8: the reconciler runs regardless of the boot prewarm flag —
+        // it is the durable convergence loop, not a boot-time courtesy.
+        if (config.wakeReconcile) schedule(reconcileTick, Math.max(50, config.wakeReconcileIntervalMs))
         if (!config.wakeJoinedOnBoot) {
           prewarmStatus.state = 'off'
           return
@@ -1089,11 +1211,20 @@ export function apply(ctx: Context, config: Config): void {
           const flight = materializeOnce(id)
           if (flight === undefined) {
             prewarmStatus.failed.push({ id, error: 'materializer-unavailable' })
+            // F8 fix: a bare return here used to kill the drain mid-queue —
+            // the remaining ids never got a pass and the state stayed
+            // 'draining' forever (the silent-stall shape). Record the
+            // failure, keep the queue moving.
+            recordWakeFailure(id, 'materializer-unavailable')
+            schedule(step, config.wakeBootStaggerMs)
             return
           }
           void flight
             .catch(error => {
               prewarmStatus.failed.push({ id, error: String(error).slice(0, 200) })
+              // Feed the reconciler's backoff bookkeeping so a boot-time
+              // failure does not get hammered again without a pause.
+              recordWakeFailure(id, String(error).slice(0, 200))
               logger.warn(`boot wake of ${id} failed: ${String(error)}`)
             })
             .then(() => {
@@ -1290,6 +1421,10 @@ export function apply(ctx: Context, config: Config): void {
               // skipped prewarm is the root shape behind "cold rows pile up
               // after restart" and must be readable, not a console rumor.
               prewarm: { ...prewarmStatus, failed: [...prewarmStatus.failed] },
+              // F8 observability: reconciliation cadence, wake outcomes,
+              // and per-row failure reasons with backoff and the parked
+              // needs-repair state — the cold row's "why am I still cold".
+              reconcile: { ...reconcileStatus, rows: [...reconcileStatus.rows] },
             })
             res.writeHead(200, {
               'Content-Type': 'application/json',
