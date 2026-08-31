@@ -606,6 +606,13 @@ export function apply(ctx: Context, config: Config): void {
   // team-roster iteration. Joins ride the allowlist-gated tools; the store
   // is the durable declaration the card publishes and the state face reads.
   const teamMemberships = new TeamMembershipStore(join(home, 'a2a', 'teams.json'))
+  // S4 audit ring, hoisted beside the stores: the boot-settlement prune runs
+  // before the tools section initializes, and it records archive-prune events.
+  const teamAuditRing: Array<{ at: number; action: 'join' | 'leave' | 'archive-prune'; team: string; id: string; ok: boolean; reason?: string }> = []
+  const recordTeamAudit = (action: 'join' | 'leave' | 'archive-prune', team: string, id: string, ok: boolean, reason?: string): void => {
+    teamAuditRing.push({ at: Date.now(), action, team, id, ok, ...(reason !== undefined ? { reason } : {}) })
+    if (teamAuditRing.length > 32) teamAuditRing.splice(0, teamAuditRing.length - 32)
+  }
 
   /**
    * Recent routing activity for the network panel: a bounded ring of the
@@ -833,12 +840,20 @@ export function apply(ctx: Context, config: Config): void {
     for (const id of joinedSessions.list()) {
       if (!isArchived(id)) continue
       sessionNodes.delete(id)
-      joinedSessions.remove(id)
+      // The archived session's JOIN INTENT is retained: deleting it was the
+      // 3081 wake-defect root cause (a transient archived-window reading
+      // wiped intents at boot, and cold sessions then never woke — "no cold
+      // joined session matches"). Safety without the deletion: wake refuses
+      // archived intents (:804), card assembly and the state cold rows filter
+      // them, the reconciler skips them, and JOIN_CAP bounds the file.
       canvasStore.dropMember(id)
       // S2 consistency: an archived node's roster declarations die with it
       // — a left node keeps no team membership.
       teamMemberships.dropSession(id)
-      logger.info(`a2a: archived session ${id8(id)} left the node network`)
+      // S4 audit face: record the prune-visible event (silent intent
+      // deletion is exactly what made this incident hard to evidence).
+      recordTeamAudit('archive-prune', `archived node pruned from join surface: ${id8(id)}`, id, true)
+      logger.info(`a2a: archived session ${id8(id)} left the node network (intent retained)`)
     }
   }
 
@@ -1398,7 +1413,10 @@ export function apply(ctx: Context, config: Config): void {
             const persisted = persistence !== undefined && coldCandidates.length > 0 ? await coldJoinedIds() : new Set<string>()
             const tCold = Date.now()
             for (const id of coldCandidates) {
-              if (!persisted.has(id)) continue
+              // Archived intents are retained on disk (an archived window is
+              // transient; the 3081 wake defect came from deleting them), so
+              // the join surface must skip them here instead.
+              if (!persisted.has(id) || isArchived?.(id) === true) continue
               sessions.push({
                 id,
                 label: `${session}-${id8(id)}`,
@@ -2891,14 +2909,10 @@ ${message}`
   // join says why and names the curation surface instead of failing
   // silently. Leaving is always allowed — it only shrinks exposure.
   // S4 audit: every join/leave attempt — allowed or refused — lands in a
-  // bounded ring the state route serves. Refusals are the audit-worthy
-  // half (each one is widening pressure on the allowlist); log lines
-  // rotate away, this face is queryable.
-  const teamAuditRing: Array<{ at: number; action: 'join' | 'leave'; team: string; id: string; ok: boolean; reason?: string }> = []
-  const recordTeamAudit = (action: 'join' | 'leave', team: string, id: string, ok: boolean, reason?: string): void => {
-    teamAuditRing.push({ at: Date.now(), action, team, id, ok, ...(reason !== undefined ? { reason } : {}) })
-    if (teamAuditRing.length > 32) teamAuditRing.splice(0, teamAuditRing.length - 32)
-  }
+  // bounded ring the state route serves (the ring itself is declared with
+  // the stores: the boot-settlement prune records before this section
+  // initializes). Refusals are the audit-worthy half (each one is widening
+  // pressure on the allowlist); log lines rotate away, this face is queryable.
   const teamJoinAllowed = (team: string): boolean =>
     (config.teamJoinAllowlist ?? []).some(pattern => {
       if (pattern === '*') return true
