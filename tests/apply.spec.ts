@@ -2386,7 +2386,7 @@ describe('a2a plugin archive pruning (archived sessions leave the network)', () 
   const readJoined = (home: string): string[] =>
     JSON.parse(readFileSync(join(home, 'a2a', 'joined.json'), 'utf8')).sessions
 
-  it('prunes the join intent at boot when the registry reports the session archived', async () => {
+  it('retains the join intent when the registry reports the session archived (3081 wake-defect fix)', async () => {
     const home = tmpHome()
     writeJoined(home, [archivedId])
     const ctx = new Context()
@@ -2401,15 +2401,18 @@ describe('a2a plugin archive pruning (archived sessions leave the network)', () 
     ctx.provide('workspaceRegistry', { archivedSessionIds: [archivedId] })
     apply(ctx, makeConfig({ sessionNodes: true, dshHome: home }))
     const port = (ctx as unknown as { webServer: WebServer }).webServer.port
-    // Boot settlement pruned the intent: no cold row, and the durable
-    // joined.json lost the id with it.
-    const state = await (await globalThis.fetch('http://127.0.0.1:' + String(port) + '/__dsh_a2a/state')).json() as { sessions: unknown[] }
+    // Boot settlement no longer deletes the intent: the cold row is hidden
+    // by the state filter, the durable joined.json keeps the id (a transient
+    // archived window must not wipe the network posture), and the prune is
+    // visible in the audit face.
+    const state = await (await globalThis.fetch('http://127.0.0.1:' + String(port) + '/__dsh_a2a/state')).json() as { sessions: unknown[]; registry: { teamAudit: Array<{ action: string; id: string }> } }
     expect(state.sessions).toEqual([])
-    expect(readJoined(home)).toEqual([])
+    expect(readJoined(home)).toEqual([archivedId])
+    expect(state.registry.teamAudit.some(entry => entry.action === 'archive-prune' && entry.id === archivedId)).toBe(true)
     await ctx.fiber.dispose()
   })
 
-  it('prunes on state reads when the archive happens mid-session', async () => {
+  it('hides the row on state reads when the archive happens mid-session, but keeps the intent', async () => {
     const home = tmpHome()
     writeJoined(home, [archivedId])
     const ctx = new Context()
@@ -2429,11 +2432,11 @@ describe('a2a plugin archive pruning (archived sessions leave the network)', () 
       await (await globalThis.fetch('http://127.0.0.1:' + String(port) + '/__dsh_a2a/state')).json() as { sessions: { id: string; live?: boolean }[] }
     // Before the archive the cold joined row is listed as usual.
     await expect(readState()).resolves.toMatchObject({ sessions: [{ id: archivedId, joined: true, live: false }] })
-    // The registry flips mid-session; the next panel poll prunes the row
-    // and the durable intent together.
+    // The registry flips mid-session; the next poll hides the row while the
+    // durable intent survives (the transient window no longer prunes it).
     archived.push(archivedId)
     await expect(readState()).resolves.toMatchObject({ sessions: [] })
-    expect(readJoined(home)).toEqual([])
+    expect(readJoined(home)).toEqual([archivedId])
     await ctx.fiber.dispose()
   })
 
