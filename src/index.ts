@@ -20,6 +20,7 @@ import { CanvasStore } from './canvas-store.ts'
 import { LayoutStore } from './layout-store.ts'
 import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
+import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
@@ -197,6 +198,13 @@ export interface Config {
   readonly wakeReconcileBackoffBaseMs: number
   /** Backoff ceiling; corrupt-log rows park as needs-repair and never retry. */
   readonly wakeReconcileMaxBackoffMs: number
+  /**
+   * S4: joinable-team patterns for a2a_team_join — exact names or
+   * trailing-`*` prefixes. Empty list denies every join (default).
+   */
+  readonly teamJoinAllowlist: string[]
+  /** S3 (queued): team-scoped routing admission. Enforcement off by default. */
+  readonly teamScopeRouting: boolean
 
   /**
    * v0.5.23 (async-stall): see the schema comment on asyncNudgeDelayMs.
@@ -274,6 +282,20 @@ export const Config: s<Config> = s.object({
   wakeReconcileIntervalMs: s.number().default(60_000),
   wakeReconcileBackoffBaseMs: s.number().default(5_000),
   wakeReconcileMaxBackoffMs: s.number().default(600_000),
+  /**
+   * S4: the joinable-team curation list. A model calling a2a_team_join may
+   * only declare membership in a team matching one of these patterns — an
+   * exact name or a trailing-`*` prefix (`dsh/canvas/*`). Default empty:
+   * the owner's no-self-join ruling, institutionalized as default-deny;
+   * a refused join carries guidance instead of failing silently.
+   */
+  teamJoinAllowlist: s.array(s.string()).default([]),
+  /**
+   * S3 (queued): when true, route dispatch checks caller↔target shared
+   * team membership before addressing. Default off — enforcement that
+   * touches live nodes is reported to the decision seat before enabling.
+   */
+  teamScopeRouting: s.boolean().default(false),
 
   /**
    * v0.5.23 (async-stall): delay before a delivered-but-unconsumed async
@@ -580,6 +602,10 @@ export function apply(ctx: Context, config: Config): void {
   // host restarts silently dropped every join. The store remounts the node
   // whenever the Agent comes back, until the user leaves.
   const joinedSessions = new JoinedSessions(join(home, 'a2a', 'joined.json'))
+  // S2: node-declared team memberships — the roster half of the
+  // team-roster iteration. Joins ride the allowlist-gated tools; the store
+  // is the durable declaration the card publishes and the state face reads.
+  const teamMemberships = new TeamMembershipStore(join(home, 'a2a', 'teams.json'))
 
   /**
    * Recent routing activity for the network panel: a bounded ring of the
@@ -809,6 +835,9 @@ export function apply(ctx: Context, config: Config): void {
       sessionNodes.delete(id)
       joinedSessions.remove(id)
       canvasStore.dropMember(id)
+      // S2 consistency: an archived node's roster declarations die with it
+      // — a left node keeps no team membership.
+      teamMemberships.dropSession(id)
       logger.info(`a2a: archived session ${id8(id)} left the node network`)
     }
   }
@@ -1425,6 +1454,51 @@ export function apply(ctx: Context, config: Config): void {
               // and per-row failure reasons with backoff and the parked
               // needs-repair state — the cold row's "why am I still cold".
               reconcile: { ...reconcileStatus, rows: [...reconcileStatus.rows] },
+              // S1: flat node registry — local sessions and remote card
+              // nodes in one table, zone-qualified team handles as the
+              // stable cross-host addresses. Local ids are the session
+              // UUIDs; remote ids are the publishing team handles. (The
+              // `nodes` boolean above is the capability flag the panel
+              // already consumes; this face rides its own key.)
+              registry: {
+                nodes: [
+                  ...sessions.map(row => ({
+                    id: String(row.id),
+                    label: String(row.label ?? ''),
+                    team: String(row.team ?? ''),
+                    zone: config.team,
+                    live: row.live === true,
+                    joined: row.joined === true,
+                    ...(typeof row.workspace === 'string' && row.workspace !== '' ? { workspace: row.workspace } : {}),
+                    teams: [...teamMemberships.teamsOf(String(row.id))],
+                  })),
+                  ...(remoteRowsCache?.rows ?? []).map(row => ({
+                    id: String(row.team),
+                    label: String(row.name ?? ''),
+                    team: String(row.team),
+                    zone: String(row.team).split('/')[0] ?? config.team,
+                    host: String(row.origin ?? ''),
+                    ...(row.workspace !== undefined && row.workspace !== '' ? { workspace: row.workspace } : {}),
+                    remote: true,
+                  })),
+                ],
+                // S2: local team rosters rebuilt from member declarations.
+                teams: (() => {
+                  const roster = new Map<string, string[]>()
+                  for (const entry of teamMemberships.list()) {
+                    for (const team of entry.teams) {
+                      const members = roster.get(team) ?? []
+                      members.push(entry.session)
+                      roster.set(team, members)
+                    }
+                  }
+                  return [...roster.entries()].map(([team, members]) => ({
+                    team,
+                    members,
+                    live: members.filter(member => liveRoots.has(member)).length,
+                  }))
+                })(),
+              },
             })
             res.writeHead(200, {
               'Content-Type': 'application/json',
@@ -1466,8 +1540,10 @@ export function apply(ctx: Context, config: Config): void {
             if (id !== '') sessionNodes.delete(id)
             joinedSessions.remove(id)
             // Leaving the network leaves every canvas team too: membership
-            // without join consent would be a routing backdoor.
+            // without join consent would be a routing backdoor. Team
+            // roster declarations die the same way (S2 consistency).
             canvasStore.dropMember(id)
+            teamMemberships.dropSession(id)
             const payload = JSON.stringify({ id })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
@@ -1719,7 +1795,17 @@ export function apply(ctx: Context, config: Config): void {
               .filter(id => !liveRoots.has(id) && isArchived?.(id) !== true)
               .map(id => ({ team: `${config.team}/${id8(id)}`, name: `${session}-${id8(id)}`, description: 'cold — not loaded; routing here wakes the session' })),
           ]
-          const body = JSON.stringify({ ...currentCard, peers: peerStore.list(), ...(sessionTeams.length > 0 ? { sessionTeams } : {}), ...(lanIp !== '' ? { lanIp } : {}), ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}), description: `A2A node exposing team ${config.team}` })
+          const memberships = teamMemberships.list().flatMap(entry =>
+            entry.teams.map(team => ({ node: `${config.team}/${id8(entry.session)}`, team })))
+          const body = JSON.stringify({
+            ...currentCard,
+            peers: peerStore.list(),
+            ...(sessionTeams.length > 0 ? { sessionTeams } : {}),
+            ...(memberships.length > 0 ? { teamMemberships: memberships } : {}),
+            ...(lanIp !== '' ? { lanIp } : {}),
+            ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}),
+            description: `A2A node exposing team ${config.team}`,
+          })
           res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) })
           res.end(body)
         },
@@ -2790,6 +2876,112 @@ ${message}`
     // loud, structured, and schema-free (no success shape is produced).
     throw new Error('你被禁止使用 a2a 网络：本会话未加入 A2A 网络（join 是用户手势）。Join via the sidebar control to enable, then retry.')
   }
+
+  // S4: team-membership tools — node-declared rosters under the owner's
+  // allowlist curation. Joining is a network-visible declaration (the card
+  // publishes it), so the default allowlist denies everything: a refused
+  // join says why and names the curation surface instead of failing
+  // silently. Leaving is always allowed — it only shrinks exposure.
+  const teamJoinAllowed = (team: string): boolean =>
+    (config.teamJoinAllowlist ?? []).some(pattern =>
+      pattern === '*' || (pattern.endsWith('*') ? team.startsWith(pattern.slice(0, -1)) : pattern === team))
+  const joinedNodeOrNone = (id: string): string | undefined =>
+    joinedSessions.has(id) || sessionNodes.has(id) ? id : undefined
+
+  ctx.tools.register(defineTool({
+    name: 'a2a_team_join',
+    description:
+      'Declare one of this host\'s joined session nodes a member of a routable team '
+      + '(node-declared roster; the host card publishes it and peers rebuild team rosters as the union of '
+      + 'member declarations). Gated by the owner\'s teamJoinAllowlist — an empty list denies every join; '
+      + 'patterns are exact names or trailing-`*` prefixes. Collaboration itself stays within teams '
+      + '(team-scoped routing is a separate, default-off enforcement).',
+    parameters: {
+      team: { type: 'string', description: 'The routable team to join (full form, e.g. dsh/canvas/review-gate).' },
+      id: { type: 'string', description: 'The joined session node id on this host that declares the membership.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          team: { type: 'string' },
+          id: { type: 'string' },
+          teams: { type: 'array', items: { type: 'string' } },
+          error: { type: 'string', description: 'Refusal reason when ok is false: unknown node or team not allowlisted.' },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok === true
+          ? `Node ${String(value.id)} joined team ${String(value.team)}; its teams: ${Array.isArray(value.teams) ? value.teams.join(', ') : String(value.team)}`
+          : `Join refused: ${String(value.error)}`,
+      }],
+    },
+    presentCall: () => ({ card: 'generic', title: 'A2A team join', kind: 'other', rawInput: null }),
+    execute: async (args, exec): Promise<{ ok: boolean; team?: string; id?: string; teams?: string[]; error?: string }> => {
+      a2aJoinGateRefusal(exec)
+      const team = String(args.team ?? '').trim()
+      const id = String(args.id ?? '').trim()
+      if (team === '' || id === '') return { ok: false, error: 'both team and id are required' }
+      if (joinedNodeOrNone(id) === undefined) {
+        return { ok: false, error: `session ${id} is not a joined node on this host — join the network first (sidebar control or a2a-collab), then declare team membership` }
+      }
+      if (!teamJoinAllowed(team)) {
+        return { ok: false, error: `team "${team}" is not in this host's teamJoinAllowlist — the owner curates joinable teams (exact names or trailing-* prefixes); ask them to add the pattern` }
+      }
+      teamMemberships.add(id, team)
+      logger.info(`a2a: ${id8(id)} declared membership in ${team}`)
+      return { ok: true, team, id, teams: [...teamMemberships.teamsOf(id)] }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'a2a_team_leave',
+    description:
+      'Retract one team-membership declaration previously made by a2a_team_join. Always allowed — leaving only '
+      + 'shrinks the node\'s visible collaboration surface.',
+    parameters: {
+      team: { type: 'string', description: 'The routable team to leave.' },
+      id: { type: 'string', description: 'The session node id retracting the membership.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          team: { type: 'string' },
+          id: { type: 'string' },
+          teams: { type: 'array', items: { type: 'string' } },
+          error: { type: 'string', description: 'Refusal reason when ok is false: node unknown or membership absent.' },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok === true
+          ? `Node ${String(value.id)} left team ${String(value.team)}; remaining teams: ${Array.isArray(value.teams) && value.teams.length > 0 ? value.teams.join(', ') : 'none'}`
+          : `Leave refused: ${String(value.error)}`,
+      }],
+    },
+    presentCall: () => ({ card: 'generic', title: 'A2A team leave', kind: 'other', rawInput: null }),
+    execute: async (args, exec): Promise<{ ok: boolean; team?: string; id?: string; teams?: string[]; error?: string }> => {
+      a2aJoinGateRefusal(exec)
+      const team = String(args.team ?? '').trim()
+      const id = String(args.id ?? '').trim()
+      if (team === '' || id === '') return { ok: false, error: 'both team and id are required' }
+      if (joinedNodeOrNone(id) === undefined) {
+        return { ok: false, error: `session ${id} is not a joined node on this host` }
+      }
+      if (!teamMemberships.teamsOf(id).includes(team)) {
+        return { ok: false, error: `session ${id} declares no membership in "${team}" — nothing to leave` }
+      }
+      teamMemberships.remove(id, team)
+      logger.info(`a2a: ${id8(id)} retracted membership in ${team}`)
+      return { ok: true, team, id, teams: [...teamMemberships.teamsOf(id)] }
+    },
+  }))
 
   ctx.tools.register(defineTool({
     name: 'a2a_teams',
