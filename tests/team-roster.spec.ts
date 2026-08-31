@@ -177,16 +177,39 @@ describe('a2a_team_join / a2a_team_leave tools', () => {
       registry: {
         teams: Array<{ team: string; members: string[]; live: number }>
         nodes: Array<{ id: string; teams: string[]; zone: string }>
+        teamAudit: Array<{ action: string; team: string; id: string; ok: boolean }>
       }
     }
     expect(state.registry.teams).toEqual([{ team: 'dsh/canvas/review-gate', members: ['agent-1'], live: 1 }])
     expect(state.registry.nodes.find(node => node.id === 'agent-1')).toMatchObject({ teams: ['dsh/canvas/review-gate'], zone: 'dsh' })
+    expect(state.registry.teamAudit).toHaveLength(2)
+    expect(state.registry.teamAudit[0]).toMatchObject({ action: 'join', team: 'dsh/private-ops', id: 'agent-1', ok: false })
+    expect(state.registry.teamAudit[0]?.reason).toContain('teamJoinAllowlist')
+    expect(state.registry.teamAudit[1]).toMatchObject({ action: 'join', team: 'dsh/canvas/review-gate', id: 'agent-1', ok: true })
     const card = JSON.parse(await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).text()) as {
       teamMemberships?: Array<{ node: string; team: string }>
     }
     expect(card.teamMemberships).toHaveLength(1)
     expect(card.teamMemberships?.[0]?.team).toBe('dsh/canvas/review-gate')
     expect(card.teamMemberships?.[0]?.node).toBe('dsh/agent-1')
+    await ctx.fiber.dispose()
+  })
+
+  it('wildcard boundaries stop segment smuggling and join attempts land in the audit face', async () => {
+    const { ctx, port, join } = await mounted({ teamJoinAllowlist: ['dsh*'] })
+    // `dsh*` must not smuggle `dshield` — the wildcard consumes at most one
+    // '/'-delimited segment.
+    const smuggle = await join?.execute({ team: 'dshield', id: 'agent-1' }, {}) as { ok: boolean; error?: string }
+    expect(smuggle?.ok).toBe(false)
+    expect(smuggle?.error).toContain('teamJoinAllowlist')
+    const subtree = await join?.execute({ team: 'dsh/agent-team', id: 'agent-1' }, {}) as { ok: boolean }
+    expect(subtree?.ok).toBe(true)
+    const state = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as {
+      registry: { teamAudit: Array<{ action: string; team: string; ok: boolean; reason?: string }> }
+    }
+    const audit = state.registry.teamAudit
+    expect(audit.some(entry => entry.action === 'join' && entry.ok === false && entry.team === 'dshield')).toBe(true)
+    expect(audit.some(entry => entry.action === 'join' && entry.ok === true && entry.team === 'dsh/agent-team')).toBe(true)
     await ctx.fiber.dispose()
   })
 

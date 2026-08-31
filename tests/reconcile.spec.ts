@@ -178,7 +178,7 @@ describe('F8 desired-state reconciliation', () => {
     await ctx.fiber.dispose()
   })
 
-  it('parks a corrupt session log as needs-repair and never retries it', async () => {
+  it('keeps needs-repair rows flagged but re-arms them at the cap cadence (a repaired log can return)', async () => {
     const home = tmpHome()
     writeIntents(home, ['agent-1'])
     const { ctx, port } = await mountStack()
@@ -186,7 +186,7 @@ describe('F8 desired-state reconciliation', () => {
       throw new Error('corrupt session log: seq gap in committed region')
     })
     ctx.provide('apiProxy', { materializeSession: materialize } as never)
-    apply(ctx, makeConfig({ dshHome: home }))
+    apply(ctx, makeConfig({ dshHome: home, wakeReconcileBackoffBaseMs: 200, wakeReconcileMaxBackoffMs: 200 }))
     let row: ReconcileRow | undefined
     await vi.waitFor(async () => {
       const state = await getState(port())
@@ -194,11 +194,18 @@ describe('F8 desired-state reconciliation', () => {
       expect(found?.needsRepair ?? false).toBe(true)
       row = found
     }, { timeout: 5_000 })
-    const calls = materialize.mock.calls.length
-    expect(calls).toBeGreaterThanOrEqual(1)
-    await new Promise(resolve => setTimeout(resolve, 300))
-    expect(materialize.mock.calls.length).toBe(calls)
-    expect(row!).toMatchObject({ id: 'agent-1', needsRepair: true, attempts: 1 })
+    // Re-armable: the retry instant is finite, not a forever park.
+    expect(row!.nextRetryAt).toBeLessThan(Number.MAX_SAFE_INTEGER)
+    // The corrupt row re-probes at the cap cadence — the flag stays up
+    // while the log stays corrupt, but the old never-retry park left a
+    // repaired session cold forever with no way back.
+    await vi.waitFor(async () => {
+      const state = await getState(port())
+      const attempts = state.reconcile.rows.find(item => item.id === 'agent-1')?.attempts ?? 0
+      expect(attempts).toBeGreaterThanOrEqual(2)
+    }, { timeout: 5_000 })
+    const after = (await getState(port())).reconcile.rows.find(item => item.id === 'agent-1')!
+    expect(after.needsRepair).toBe(true)
     await ctx.fiber.dispose()
   })
 
