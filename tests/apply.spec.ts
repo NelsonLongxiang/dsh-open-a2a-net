@@ -700,8 +700,8 @@ describe('a2a plugin decentralized routing (peers)', () => {
       // pending row with its routing facts (F2' adds the wire-side marker:
       // outbound rows are debts this node collects, inbound rows debts it
       // owes).
-      const owing = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { tasks: { taskId: string; team: string; peer: string; status: string; direction: string; receiptExpected: boolean }[] }
-      expect(owing.tasks).toEqual([{ taskId: delivered.task_id, team: 'dsh/agent-1', peer: 'local', status: 'pending', startedAt: expect.any(Number), direction: 'outbound', receiptExpected: true }])
+      const owing = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { tasks: { taskId: string; team: string; peer: string; status: string; direction: string; receiptExpected: boolean; settleable: boolean }[] }
+      expect(owing.tasks).toEqual([{ taskId: delivered.task_id, team: 'dsh/agent-1', peer: 'local', status: 'pending', startedAt: expect.any(Number), direction: 'outbound', receiptExpected: true, settleable: true }])
       // Correlation clears the pending row within one poll.
       await postJson(port, '/a2a/direct', { team: 'dsh', message: `[A2A receipt] task ${String(delivered.task_id)} tests green` })
       const settled = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { tasks: unknown[] }
@@ -816,6 +816,68 @@ describe('a2a plugin decentralized routing (peers)', () => {
     } finally {
       await ctx.fiber.dispose()
     }
+  })
+
+  it('a caller-aborted sync wait (ABORTED_WAIT) does NOT book an owed row (A ruling)', async () => {
+    const { ctx, agents, port } = await mountJoinHarness()
+    try {
+      // A silent agent again: steer delivers but never answers; the caller
+      // aborts its own wait — a conversational exchange, not an async task.
+      const silent = makeAgent()
+      agents.agent = silent
+      ctx.emit('agent/created', { agent: silent })
+      await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+      const route = ctx.tools.get('a2a_route')
+      const ac = new AbortController()
+      const pending = route?.execute({ team: 'dsh/agent-1', message: 'slow target' }, { ...runContext(), signal: ac.signal } as never) as Promise<unknown>
+      // Condition-based, never a fixed sleep: the abort lands only after the
+      // local dispatch provably fired the steer (load-independent).
+      await vi.waitFor(() => { expect(silent.steer).toHaveBeenCalled() })
+      ac.abort()
+      const result = await pending as { ok: boolean; task_status: string }
+      expect(result.ok).toBe(true)
+      expect(result.task_status).toBe('TASK_STATE_ABORTED_WAIT')
+      expect(silent.steer).toHaveBeenCalledTimes(1)
+      // A ruling: a sync wait released by the caller's own abort books
+      // nothing — conversation noise no receipt can ever settle.
+      const state = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { tasks: Array<{ status: string }> }
+      expect(state.tasks.filter(task => task.status === 'pending')).toEqual([])
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('the state face splits pending debt into settleable rows + a stale count (C ruling)', async () => {
+    // Seed a persisted ledger: one young row (settleable) + one 2h-old row
+    // (stale noise) — the split face must render them differently.
+    const home = tmpHome()
+    mkdirSync(join(home, 'a2a'), { recursive: true })
+    const young = Date.now() - 2 * 60_000
+    const old = Date.now() - 2 * 60 * 60_000
+    writeFileSync(join(home, 'a2a', 'tasks.json'), JSON.stringify({
+      tasks: [
+        { taskId: 'direct-young', team: 'dsh/agent-1', peer: 'local', startedAt: young, status: 'pending', direction: 'outbound' },
+        { taskId: 'direct-old', team: 'dsh/agent-1', peer: 'local', startedAt: old, status: 'pending', direction: 'outbound' },
+      ],
+      archived: [],
+    }))
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    apply(ctx, makeConfig({ sessionNodes: true, dshHome: home }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    const state = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as {
+      tasks: Array<{ taskId: string; settleable?: boolean }>
+      tasksStaleCount?: number
+    }
+    const byId = new Map(state.tasks.map(task => [task.taskId, task]))
+    expect(byId.get('direct-young')?.settleable).toBe(true)
+    expect(byId.get('direct-old')?.settleable).toBe(false)
+    expect(state.tasksStaleCount).toBe(1)
+    await ctx.fiber.dispose()
   })
 
   it('a2a_route fails over to the next peer publishing the team when the first candidate fails', async () => {
@@ -2047,7 +2109,8 @@ describe('a2a plugin outbound tools', () => {
       text: [
         'Owed receipts:',
         '  - direct-aa → research (via http://peer:1), waiting 2m, follow-up context ctx-1',
-        '  - direct-cc → research (via http://peer:2), waiting 2h, follow-up context ctx-2, still no receipt — the target may be gone; probe it or follow up with the context id',
+        // C split: the 2h-old row is conversational noise — counted, not listed.
+        'Delivered conversationally without a formal receipt (1) — not debts; they auto-dead-letter at the stale TTL.',
         'Dead-lettered (auto-flagged past the stale TTL; a revived target can still settle with a late receipt):',
         '  - direct-dd → dsh (via this host), dispatched 25h ago',
         'Archived (7), most recent first:',

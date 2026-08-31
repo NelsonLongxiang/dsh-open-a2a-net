@@ -572,3 +572,10 @@
   font-size: 11px;
   flex-shrink: 0;
 }
+
+/* C face: the stale conversational tail is a count line, never a row. */
+.staleNote {
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--dsh-text-muted, rgb(148 163 184 / 70%));
+}
