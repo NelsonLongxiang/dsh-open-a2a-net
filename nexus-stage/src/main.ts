@@ -15,6 +15,7 @@ import { updateCensus } from './census'
 import { createStageKeyboardHandler, wireReducedRendering } from './interaction'
 import { createPlanningView } from './planning-view'
 import { requestedBootMode } from './stage-mode'
+import { displayName } from './stage-name'
 import { createSaveLoop, type LampState } from './layout-wire'
 import { projectFleet } from './reproject'
 import { createCanvasWire } from './canvas-wire'
@@ -198,11 +199,11 @@ async function cycle(): Promise<void> {
     if (!mesh) {
       const color = isLive ? S.nodeLive : S.nodeCold
       mesh = makeNode(color, isLive ? 0.9 : 0.5)
-      mesh.userData = { label: s.name ?? s.label, sid }
+      mesh.userData = { label: displayName(s), sid }
       nodeGroup.add(mesh)
       meshesById.set(sid, mesh)
     }
-    if (!labelByNode.has(sid)) labelByNode.set(sid, attachLabel(mesh, s.name ?? s.label, isLive, s.team))
+    if (!labelByNode.has(sid)) labelByNode.set(sid, attachLabel(mesh, displayName(s), isLive, s.team))
     sessionTeam.set(sid, s.team)
     // Real normalized row: interaction handlers read this, never MOCK.
     sessionById.set(sid, s)
