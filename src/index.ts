@@ -3210,6 +3210,36 @@ ${message}`
       // node team when it has joined, else the node label), so the receiver
       // can answer with one a2a_route instead of an unroutable display label.
       a2aJoinGateRefusal(exec)
+      // S3 (team-scoped routing, off by default): when the owner turns it
+      // on, collaboration happens inside teams. A session caller must have
+      // declared membership in the target team before it may address it,
+      // and a caller with no teams at all has no network — a teamless node
+      // is, by the same ruling, an unjoined one. Host-side calls (no agent)
+      // and the initiator face stay exempt, like the join gate; discovery
+      // (a2a_teams) stays open so a teamless node can still see what to join.
+      if (config.teamScopeRouting && exec.agent !== undefined) {
+        const scopeCaller = String(exec.agent.id)
+        let initiator = false
+        try {
+          initiator = ctx.get('agents')?.requireInitiator() === exec.agent
+        } catch { /* no initiator in this fiber */ }
+        if (!initiator) {
+          const callerTeams = teamMemberships.teamsOf(scopeCaller)
+          const team = String(args.team ?? '').trim()
+          if (callerTeams.length === 0) {
+            return {
+              ok: false,
+              error: `team-scoped routing is on and this session (${id8(scopeCaller)}) has declared no team membership — a teamless node has no network. Declare one with a2a_team_join (subject to the owner's teamJoinAllowlist)`,
+            }
+          }
+          if (!callerTeams.includes(team)) {
+            return {
+              ok: false,
+              error: `team-scoped routing is on: routing to "${team}" requires declared membership. This session's teams: ${callerTeams.join(', ')}. a2a_team_join can declare it (subject to the owner's teamJoinAllowlist)`,
+            }
+          }
+        }
+      }
       const callerSession = exec.agent === undefined ? undefined
         : sessionNodes.has(String(exec.agent.id)) ? sessionTeamOf(exec.agent) : sessionLabelOf(exec.agent)
       // P2 receipt-callback: the caller's routable address rides the wire so
