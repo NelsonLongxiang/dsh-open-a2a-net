@@ -682,6 +682,13 @@ export function apply(ctx: Context, config: Config): void {
   // resolves it — the caller-side half of the receipt contract, persisted so
   // a restart does not orphan the reconciliation.
   const taskLedger = new TaskLedger(join(home, 'a2a', 'tasks.json'))
+  // Unjoined-node reporting ingress (design: docs/design/unjoined-report-ingress.md):
+  // a one-way signal channel for sessions with no network membership — a
+  // fallen-off or never-joined session reports "I exist / I have a task"
+  // here. It grants no presence: reports land in a bounded ring the state
+  // route serves, never in any routable surface.
+  const reportRing: Array<{ at: number; level: 'info' | 'warning' | 'error'; message: string; session: string; task?: string }> = []
+  const reportLastAt = new Map<string, number>()
 
   /**
    * Settle one message through the ledger and announce what it correlated
@@ -1525,6 +1532,9 @@ export function apply(ctx: Context, config: Config): void {
                 // queryable half that rotating log lines cannot be.
                 teamAudit: [...teamAuditRing],
               },
+              // Unjoined-node reports: the one-way signal ring (design:
+              // docs/design/unjoined-report-ingress.md), newest first.
+              reports: [...reportRing].reverse(),
             })
             res.writeHead(200, {
               'Content-Type': 'application/json',
@@ -3036,6 +3046,61 @@ ${message}`
       recordTeamAudit('leave', team, id, true)
       logger.info(`a2a: ${id8(id)} retracted membership in ${team}`)
       return { ok: true, team, id, teams: [...teamMemberships.teamsOf(id)] }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'a2a_report',
+    description:
+      'Report a task or status to this host\'s A2A network — the ONE ingress a session WITHOUT network '
+      + 'membership may use (deliberately exempt from the join gate: one-way reporting grants no presence, '
+      + 'no discovery, no routing rights; the report lands in the state face\'s reports ring for '
+      + 'supervision to read and act on, e.g. adopt or re-join the reporter). Use when you are off the '
+      + 'mesh and need to say so. Rate limited to one report per 30s per session; messages cap at 2000 chars.',
+    parameters: {
+      message: { type: 'string', required: true, description: 'The report text (≤2000 chars).' },
+      level: { type: 'string', enum: ['info', 'warning', 'error'], description: 'Severity; error also warns the host log.' },
+      task: { type: 'string', description: 'Optional task reference (id/link).' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          reportId: { type: 'string' },
+          error: { type: 'string', description: 'Refusal reason when ok is false (empty message, over-cap, or rate limited).' },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok === true ? `Report registered (${String(value.reportId)})` : `Report refused: ${String(value.error)}`,
+      }],
+    },
+    presentCall: () => ({ card: 'generic', title: 'A2A report', kind: 'other', rawInput: null }),
+    execute: async (args, exec): Promise<{ ok: boolean; reportId?: string; error?: string }> => {
+      // Deliberately NO a2aJoinGateRefusal: reporting is the one thing an
+      // unjoined session may do — that is the tool's entire purpose.
+      const message = String(args.message ?? '').trim()
+      if (message === '') return { ok: false, error: 'message is required' }
+      if (message.length > 2000) return { ok: false, error: 'message exceeds the 2000-char cap' }
+      const session = exec?.agent !== undefined ? String(exec.agent.id) : 'host'
+      const now = Date.now()
+      const last = reportLastAt.get(session) ?? 0
+      if (now - last < 30_000) return { ok: false, error: 'rate limited: one report per 30s per session' }
+      reportLastAt.set(session, now)
+      const level = args.level === 'error' || args.level === 'warning' ? args.level : 'info'
+      const reportId = `report-${Math.random().toString(16).slice(2, 10)}`
+      reportRing.push({
+        at: now,
+        level,
+        message: message.slice(0, 2000),
+        session,
+        ...(typeof args.task === 'string' && args.task.trim() !== '' ? { task: args.task.trim() } : {}),
+      })
+      if (reportRing.length > 64) reportRing.splice(0, reportRing.length - 64)
+      if (level === 'error') logger.warn(`a2a report (${id8(session)}): ${message.slice(0, 200)}`)
+      return { ok: true, reportId }
     },
   }))
 
