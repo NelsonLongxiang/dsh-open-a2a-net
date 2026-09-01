@@ -1,0 +1,7 @@
+minimumReleaseAgeExclude:
+  - '@deepseek-ai/dsh-api-session-controller@0.1.2-alpha.3'
+  - '@deepseek-ai/dsh-brand@0.1.2-alpha.3'
+  - '@deepseek-ai/dsh-deque@0.1.2-alpha.3'
+  - '@deepseek-ai/dsh-file-reference@0.1.2-alpha.3'
+  - '@deepseek-ai/dsh-util-time@0.1.2-alpha.3'
+  - '@deepseek-ai/dsh-util-workspace-path@0.1.2-alpha.3'

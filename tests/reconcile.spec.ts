@@ -128,7 +128,7 @@ describe('F8 desired-state reconciliation', () => {
       ctx.emit('agent/created', { agent: woken })
       return woken
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    ctx.provide('sessionController', { resolveAgent: async (id: string) => ({ agent: await materialize(id) }) } as never)
     apply(ctx, makeConfig({ dshHome: home }))
     await vi.waitFor(async () => {
       expect(materialize).toHaveBeenCalledWith('agent-1')
@@ -154,7 +154,7 @@ describe('F8 desired-state reconciliation', () => {
     const materialize = vi.fn(async () => {
       throw new Error('replay interrupted')
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    ctx.provide('sessionController', { resolveAgent: async (id: string) => ({ agent: await materialize(id) }) } as never)
     apply(ctx, makeConfig({ dshHome: home, wakeReconcileBackoffBaseMs: 400 }))
     // First failure recorded with a reason and a future retry instant; the
     // 400ms base keeps attempts at 1 long enough to observe the pause.
@@ -185,7 +185,7 @@ describe('F8 desired-state reconciliation', () => {
     const materialize = vi.fn(async () => {
       throw new Error('corrupt session log: seq gap in committed region')
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    ctx.provide('sessionController', { resolveAgent: async (id: string) => ({ agent: await materialize(id) }) } as never)
     apply(ctx, makeConfig({ dshHome: home, wakeReconcileBackoffBaseMs: 200, wakeReconcileMaxBackoffMs: 200 }))
     let row: ReconcileRow | undefined
     await vi.waitFor(async () => {
@@ -209,29 +209,26 @@ describe('F8 desired-state reconciliation', () => {
     await ctx.fiber.dispose()
   })
 
-  it('a missing materializer records and moves on: the prewarm drains to done and the reconciler carries both rows', async () => {
+  it('a wake face without resolveAgent is no face at all: prewarm skips honestly and the reconciler stays off', async () => {
     const home = tmpHome()
     writeIntents(home, ['agent-1', 'session-2-0000-0000-0000-000000000000'])
     const { ctx, port } = await mountStack()
-    // apiProxy present but without the materialize face: materializeOnce
-    // answers undefined — the input that used to end the boot prewarm's
-    // queue mid-drain with the state stuck at 'draining' forever.
-    ctx.provide('apiProxy', {} as never)
+    // sessionController present but without the resolveAgent face: the wake
+    // paths read that as "no wake face composed" — prewarm reports the skip
+    // on the state route instead of draining into stuck 'draining', and the
+    // reconciler holds its off cadence waiting for the face to appear.
+    ctx.provide('sessionController', {} as never)
     apply(ctx, makeConfig({ dshHome: home, wakeJoinedOnBoot: true, wakeBootStaggerMs: 5 }))
     await vi.waitFor(async () => {
       const state = await getState(port())
-      expect(state.prewarm.state).toBe('done')
-      expect(state.prewarm.failed).toHaveLength(2)
+      expect(state.prewarm.state).toBe('skipped:no-wake-face')
     }, { timeout: 5_000 })
-    // The reconciler's rows snapshot refreshes on its next tick — poll for
-    // both rows instead of reading once.
-    await vi.waitFor(async () => {
-      const state = await getState(port())
-      const failedIds = state.reconcile.rows.map(row => row.id).sort()
-      expect(failedIds).toEqual(['agent-1', 'session-2-0000-0000-0000-000000000000'])
-    }, { timeout: 5_000 })
+    // The reconciler holds its off cadence: no rows are recorded while the
+    // face is missing — they would be noise, since no wake can succeed.
+    await new Promise(resolve => setTimeout(resolve, 300))
     const state = await getState(port())
-    expect(state.reconcile.rows.every(row => row.error === 'materializer-unavailable')).toBe(true)
+    expect(state.reconcile.state).toBe('off')
+    expect(state.reconcile.rows).toEqual([])
     await ctx.fiber.dispose()
   })
 })
