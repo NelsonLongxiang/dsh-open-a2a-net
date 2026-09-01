@@ -29,12 +29,17 @@ const input: PlanningInput = {
   ],
 }
 
-function view() {
+function view(holdWire = false) {
   const actions: CanvasAction[] = []
+  let release: ((ok: boolean) => void) | undefined
   const v = createPlanningView({
     onDirty: vi.fn(),
     onLampClick: vi.fn(),
-    onCanvasAction: (a) => { actions.push(a); return Promise.resolve(true) },
+    onCanvasAction: (a) => {
+      actions.push(a)
+      if (!holdWire) return Promise.resolve(true)
+      return new Promise<boolean>((resolve) => { release = resolve })
+    },
     viewSize: () => ({ w: 1000, h: 800 }),
   })
   document.body.appendChild(v.root)
@@ -137,5 +142,30 @@ describe('teamed-only canvas + node list drawer', () => {
     })
     expect(panel.textContent).toContain('未入网 (0)')
     expect(panel.textContent).toContain('已组队 (2)')
+  })
+
+  it('an in-flight add-member keeps the joining node on the canvas across a racing poll (pendingTeams guard, review 201 hard item)', () => {
+    // u1 starts joined-but-teamless: no canvas card under the teamed gate.
+    const { v, actions } = view(true)
+    v.reconcile(input)
+    expect(v.root.querySelector('.p-node[data-id="u1"]')).toBeNull()
+    // Hold the wire: the drawer's 入队 gesture applies optimistically and
+    // pins the team's pending guard until we release. The optimistic seat
+    // materializes u1 (write actions read and write memberships through
+    // the node table) and earns its card in the same tick…
+    const panel = openPanel(v)
+    const joinBtn = Array.from(panel.querySelectorAll<HTMLButtonElement>('.p-listbtn'))
+      .find(b => b.textContent === '入队▸')!
+    joinBtn.click()
+    const alphaItem = Array.from(v.root.querySelectorAll<HTMLElement>('.p-menu [role=menuitem]'))
+      .find(b => b.textContent === 'alpha')!
+    alphaItem.click()
+    expect(actions).toEqual([{ type: 'add-member', team: 'alpha', ids: ['u1'] }])
+    expect(v.root.querySelector('.p-node[data-id="u1"]')).not.toBeNull()
+    // …and a poll lands BEFORE the wire settles: the stale payload has no
+    // alpha membership for u1, but the pendingTeams guard keeps the
+    // in-flight membership — the card must not pop off the canvas.
+    v.reconcile(input)
+    expect(v.root.querySelector('.p-node[data-id="u1"]')).not.toBeNull()
   })
 })

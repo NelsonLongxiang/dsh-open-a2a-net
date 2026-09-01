@@ -567,6 +567,27 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   }
 
   function emitAction(a: CanvasAction): void {
+    // Optimistic seats: a write may reference a session the teamed gate
+    // keeps OFF the model (no canvas card yet). The write actions read and
+    // write memberships through the node table, so materialize those ids
+    // from the last poll's inventory first — the next reconcile refreshes
+    // label/live/teams and keeps the saved-or-seat position.
+    if (a.type === 'add-member' || a.type === 'remove-member' || a.type === 'reorder' || a.type === 'create-team') {
+      const ids = a.type === 'reorder' ? a.ops.map(op => op.id) : [...a.ids]
+      for (const id of ids) {
+        if (id === '' || id.startsWith('peer-')) continue
+        if (model.getNode(id) !== undefined) continue
+        const s = lastSessions.find(row => row.id === id)
+        if (s === undefined) continue
+        const saved = layoutDoc?.nodes[id]
+        const seat = saved !== undefined ? { x: saved.x, y: saved.y } : seatFor2(id)
+        model.upsertNode({
+          id, x: seat.x, y: seat.y, label: s.label, team: s.team, name: s.name,
+          live: s.live !== false, memberships: [],
+          ...(s.teams !== undefined && s.teams.length > 0 ? { teams: s.teams } : {}),
+        })
+      }
+    }
     const undo = applyAction(model, a)
     const team = actionTeam(a)
     pendingAdd(team)
@@ -1544,7 +1565,17 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       const payload = memberships.get(id) ?? []
       if (pendingTeams.size === 0) return payload
       const keep = payload.filter(m => !pendingTeams.has(m.team))
-      const pending = (model.getNode(id)?.memberships ?? []).filter(m => pendingTeams.has(m.team))
+      // In-flight teams read their in-membership from the team roster
+      // (teamMemberIds), NOT from getNode(id).memberships: an optimistic
+      // add can target a node the teamed gate kept OFF the model (no card
+      // yet) — its membership lives only in the roster map, and dropping
+      // it here would pop the node right back off the canvas mid-flight.
+      const pending: Array<{ team: string; index: number }> = []
+      for (const [team] of pendingTeams) {
+        const roster = model.teamMemberIds(team)
+        const index = roster.indexOf(id)
+        if (index >= 0) pending.push({ team, index })
+      }
       return [...keep, ...pending]
     }
     for (const s of input.sessions) {
