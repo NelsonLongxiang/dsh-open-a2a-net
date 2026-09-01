@@ -3320,12 +3320,8 @@ ${message}`
         rosterOf.set(membership.node, list)
       }
       for (const entry of card.sessionTeams ?? []) {
-<<<<<<< HEAD
-        rows.push({ team: entry.team, session: card.session, name: entry.name, description: entry.description, origin, via: peer, ...(entry.workspace !== undefined ? { workspace: entry.workspace } : {}), ...(legacy ? { legacy } : {}) })
-=======
         const declared = rosterOf.get(entry.team)
-        rows.push({ team: entry.team, session: card.session, name: entry.name, description: entry.description, origin, via: peer, ...(entry.workspace !== undefined ? { workspace: entry.workspace } : {}), ...(declared !== undefined && declared.length > 0 ? { teams: declared } : {}) })
->>>>>>> 518e0d0 (feat(roster): teamed-only canvas + node list drawer + roster reader half)
+        rows.push({ team: entry.team, session: card.session, name: entry.name, description: entry.description, origin, via: peer, ...(entry.workspace !== undefined ? { workspace: entry.workspace } : {}), ...(legacy ? { legacy } : {}), ...(declared !== undefined && declared.length > 0 ? { teams: declared } : {}) })
       }
       return rows
     }
