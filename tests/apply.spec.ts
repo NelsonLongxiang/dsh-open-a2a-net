@@ -939,6 +939,64 @@ describe('a2a plugin decentralized routing (peers)', () => {
     await ctx.fiber.dispose()
   })
 
+  it('the zero-candidate verdict carries the local reason, nearby teams, and caller actions (no ghost tooling)', async () => {
+    const home = tmpHome()
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    const agents = ctx.get('agents') as unknown as FakeAgentsService
+    apply(ctx, makeConfig({ sessionNodes: true, dshHome: home }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    try {
+      // Join, then the agent is gone (host restart shape): the intent stays,
+      // no live node backs the team — a local candidate that MUST fail.
+      const session = replyingAgent(ctx)
+      agents.agent = session
+      ctx.emit('agent/created', { agent: session })
+      await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+      // The host "restarts": the agent is disposed, the intent stays — the
+      // team stays a local candidate whose dial must fail honestly.
+      ctx.emit('agent/disposed', { agent: session })
+      const route = ctx.tools.get('a2a_route')
+      const result = await route?.execute({ team: 'dsh/agent-1', message: 'q' }, runContext()) as { ok: boolean; code?: number; error?: string }
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe(-32004)
+      // The local failure reason is the most diagnostic fact — it must
+      // survive into the verdict instead of being dropped with the class.
+      expect(result.error).toContain('local reason:')
+      // Actions bind to tooling the calling model actually has.
+      expect(result.error).toContain('a2a_teams')
+      // The retired ghost CLI must never come back as guidance.
+      expect(result.error).not.toContain('a2a-collab')
+      // A near-miss team surfaces the locally advertised team as a suggestion.
+      const miss = await route?.execute({ team: 'dsh/agent-1x', message: 'q' }, runContext()) as { ok: boolean; code?: number; error?: string }
+      expect(miss.code).toBe(-32004)
+      expect(miss.error).toContain('nearby advertised teams: dsh/agent-1')
+      expect(miss.error).not.toContain('a2a-collab')
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('the ghost-team verdict keeps the class line and the caller-side action', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    apply(ctx, makeConfig({ peers: ['http://127.0.0.1:1'], dshHome: tmpHome() }))
+    const route = ctx.tools.get('a2a_route')
+    const result = await route?.execute({ team: 'ghost', message: 'q' }, runContext()) as { ok: boolean; code?: number; error?: string }
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe(-32004)
+    expect(result.error).toContain('is not published by any configured peer')
+    expect(result.error).toContain('enumerate live alternatives with a2a_teams')
+    expect(result.error).not.toContain('a2a-collab')
+    await ctx.fiber.dispose()
+  })
+
   it('discovers a second node through a seed card\'s referrals', async () => {
     const nodeB = await mountPeerNode({ team: 'analysis' })
     // Node A's store seeds B, so A's served card carries B's URL as a referral.

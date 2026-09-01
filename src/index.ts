@@ -53,7 +53,14 @@ import type { } from '@deepseek-ai/dsh-host-apiproxy'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import s from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { JsonValue } from '@deepseek-ai/dsh-tools'
+// JsonValue is declared locally instead of imported from @deepseek-ai/dsh-tools
+// or dsh-session: those packages re-export the type through a dsh-session
+// index.d.ts `export type { JsonValue } from './json.ts'` chain that breaks
+// intermittently in fresh installs (TS2614 flip-flopping under concurrent
+// store mutation, 2026-09-01, f2daa7b passed gates 15:0x and failed on the
+// same tree 60 minutes later). The only consumer in this repo is this file —
+// inlining removes the cross-package resolution race surface entirely.
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 import { MessageId } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
@@ -3315,6 +3322,45 @@ ${message}`
     taskLedger.track(taskId, team, peer, result.context_id === '' ? undefined : result.context_id)
   }
 
+  /**
+   * Build the -32004 verdict. The error string is the calling model's ONLY
+   * context for its next decision, so it must carry the failure class, the
+   * local reason (the most diagnostic fact: "not joined" vs "no live node"
+   * vs a wake failure), nearby advertised teams for typo/wrong-seat catches,
+   * and actions the CALLING model can actually take. Joining is the target
+   * session's own gesture — the verdict relays that request instead of
+   * instructing the caller to perform it (and never cites tooling the
+   * caller does not have).
+   */
+  const routeVerdict = (team: string, failures: readonly string[], candidateCount: number): { ok: false; error: string; code: number } => {
+    if (candidateCount > 0) {
+      return {
+        ok: false,
+        error: `team "${team}" failed on every candidate: ${failures.join('; ')} — enumerate live alternatives with a2a_teams instead of retrying unchanged`,
+        code: -32004,
+      }
+    }
+    const remote = failures.filter(entry => !entry.startsWith('local: '))
+    const suffix = team.slice(team.indexOf('/') + 1)
+    const near = [...new Set([
+      ...joinedSessions.list().map(id => `${config.team}/${id8(id)}`),
+      ...[...sessionNodes.values()].map(agent => sessionTeamOf(agent)),
+      ...canvasStore.list().map(name => `${config.team}/canvas/${name}`),
+      config.team,
+    ])].filter(candidate => {
+      if (candidate === team) return false
+      const candidateSuffix = candidate.slice(candidate.indexOf('/') + 1)
+      return candidate.includes(suffix) || suffix.includes(candidateSuffix) || candidateSuffix.startsWith(suffix.slice(0, 4))
+    }).slice(0, 3)
+    const lines = [
+      `team "${team}" is not published by any configured peer${remote.length > 0 ? ` (unresolved delegations: ${remote.join('; ')})` : ''}`,
+      ...failures.filter(entry => entry.startsWith('local: ')).map(entry => `local reason: ${entry.slice('local: '.length)}`),
+      near.length > 0 ? `nearby advertised teams: ${near.join(', ')}` : undefined,
+      'next: enumerate live alternatives with a2a_teams; do not retry unchanged; joining is the target session\'s own gesture (its sidebar) — relay that request to the human',
+    ].filter((line): line is string => line !== undefined)
+    return { ok: false, error: lines.join(' — '), code: -32004 }
+  }
+
   ctx.tools.register(defineTool({
     name: 'a2a_route',
     description:
@@ -3432,13 +3478,7 @@ ${message}`
         failures.push(`${candidate}: ${result.error}`)
       }
       if (failures.length > 0) logger.warn(`route to team "${args.team}" exhausted its candidates: ${failures.join('; ')}`)
-      return {
-        ok: false,
-        error: candidates.length === 0
-          ? `team "${args.team}" is not published by any configured peer${failures.length === 0 ? '' : ` (unresolved delegations: ${failures.join('; ')})`} — 若目标是未加入网络的会话：请其在侧边栏加入（或经 a2a-collab CLI 注册）后重试`
-          : `team "${args.team}" failed on every candidate: ${failures.join('; ')}`,
-        code: -32004,
-      }
+      return routeVerdict(args.team, failures, candidates.length)
     },
   }))
 
