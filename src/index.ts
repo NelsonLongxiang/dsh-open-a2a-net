@@ -2528,13 +2528,14 @@ ${message}`
                 if (`${config.team}/${id8(entry.session)}` === caller) for (const t of entry.teams) declared.add(t)
               }
             } else {
-              for (const url of peerStore.list()) {
-                let host = url
-                try { host = new URL(url).host } catch { /* keep raw */ }
-                if (!host.includes(callerZone)) continue
-                const cached = cardCache.get(url)?.card
-                if (cached !== undefined) {
-                  declared = new Set<string>((cached.teamMemberships ?? []).filter(m => m.node === caller).map(m => m.team))
+              // The caller's zone is a name, not necessarily a hostname —
+              // scan the card cache for the card that actually publishes
+              // this caller handle instead of guessing url↔zone.
+              for (const entry of cardCache.values()) {
+                const cached = entry?.card
+                if (cached === undefined) continue
+                if ((cached.teamMemberships ?? []).some(m => m.node === caller)) {
+                  declared = new Set<string>(cached.teamMemberships!.filter(m => m.node === caller).map(m => m.team))
                   break
                 }
               }

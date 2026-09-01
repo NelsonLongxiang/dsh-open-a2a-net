@@ -468,4 +468,44 @@ describe('S3 phase-3 enforcement (default-on + inbound shared-team admission)', 
     expect(allowed.error).toBeUndefined()
     await ctx.fiber.dispose()
   })
+
+  it('a remote caller with no cached card rides the fail-open window once, then is judged after the sweep learns', async () => {
+    const { generateKeyPairSync } = await import('node:crypto')
+    const { signCard } = await import('../src/card.ts')
+    const { privateKey } = generateKeyPairSync('ed25519')
+    // The remote node's card declares its session into a team this node
+    // does not recognize — after the learning sweep, deliveries from it
+    // must be refused.
+    const remoteCard = {
+      ...signCard({ name: 'remote', session: 'sess-r', team: 'remote-zone', capabilities: { route: true, async: true, roster: true }, expiresAt: Date.now() + 60_000 }, privateKey),
+      sessionTeams: [{ team: 'remote-zone/1234abcd', name: 'remote-session', description: 'd' }],
+      teamMemberships: [{ node: 'remote-zone/1234abcd', team: 'remote-only-team' }],
+    }
+    const realFetch = globalThis.fetch
+    vi.stubGlobal('fetch', (url: string, init?: { method?: string }) => {
+      if (url === 'http://peer-remote/.well-known/agent-card.json' && (init?.method ?? 'GET') === 'GET') {
+        return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify(remoteCard) } as unknown as Response)
+      }
+      return realFetch(url, init as never)
+    })
+    const home = mkdtempSync(join(tmpdir(), 'a2a-s3-p3-remote-'))
+    const { ctx, port } = await mount({ teamScopeRouting: true, dshHome: home, peers: ['http://peer-remote'] })
+    await joinNet(port)
+    // First delivery from the un-cached remote caller: the fail-open
+    // window lets it through (no admission error — the dispatch-layer
+    // text proves the gate did not refuse).
+    const first = await direct(port, callerTeam, 'remote-zone/1234abcd')
+    expect(first.error ?? '').not.toContain('shared-team admission')
+    expect(first.error ?? '').not.toContain('declares no team membership')
+    // Let the background sweep land, then the second delivery is judged:
+    // the learned declaration (remote-only-team) shares nothing here.
+    await vi.waitFor(async () => {
+      const state = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { remote: Array<{ team: string }> }
+      expect(state.remote.find(row => row.team === 'remote-zone/1234abcd')).toBeDefined()
+    }, { timeout: 5_000 })
+    const second = await direct(port, callerTeam, 'remote-zone/1234abcd')
+    expect(second.error ?? '').toContain('none is routable on this node')
+    await ctx.fiber.dispose()
+    vi.unstubAllGlobals()
+  })
 })
