@@ -300,11 +300,14 @@ export const Config: s<Config> = s.object({
    */
   teamJoinAllowlist: s.array(s.string()).default([]),
   /**
-   * S3 (queued): when true, route dispatch checks caller↔target shared
-   * team membership before addressing. Default off — enforcement that
-   * touches live nodes is reported to the decision seat before enabling.
+   * S3 (phase-2 default, owner ruling 2026-09-01): route dispatch checks
+   * caller↔target shared team membership before addressing — a session
+   * with no declared team has no network (the unteamed-peer defect the
+   * owner reproduced on 4080 and locally). Fleet compatibility rides the
+   * roster capability flag (0.5.44 cards advertise roster:true; older
+   * peers read as legacy). Set false to restore the open outbound seam.
    */
-  teamScopeRouting: s.boolean().default(false),
+  teamScopeRouting: s.boolean().default(true),
 
   /**
    * v0.5.23 (async-stall): delay before a delivered-but-unconsumed async
@@ -2504,6 +2507,70 @@ ${message}`
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
             return
+          }
+          // Phase-3 admission (owner ruling 2026-09-01, decision-seat
+          // filed): an inbound direct delivery must show a SHARED team.
+          // Local-zone callers are judged synchronously and exactly — the
+          // declaration lives in this host's own roster store, so the
+          // unteamed/foreign-team caller is refused on the spot (the
+          // local-network half of the owner's reproduction). Remote-zone
+          // callers are judged from the card cache: a cached card decides
+          // synchronously; a cache miss lets THIS delivery through once
+          // while a background fetch learns the caller's declarations for
+          // every later call (honest bound — delivery-origin auth
+          // hardening is the next slice).
+          if (config.teamScopeRouting && /^[a-z0-9-]+\/[0-9a-f]{8}$/i.test(caller)) {
+            const callerZone = caller.slice(0, caller.indexOf('/'))
+            let declared: Set<string> | undefined
+            if (callerZone === config.team) {
+              declared = new Set<string>()
+              for (const entry of teamMemberships.list()) {
+                if (`${config.team}/${id8(entry.session)}` === caller) for (const t of entry.teams) declared.add(t)
+              }
+            } else {
+              // The caller's zone is a name, not necessarily a hostname —
+              // scan the card cache for the card that actually publishes
+              // this caller handle instead of guessing url↔zone.
+              for (const entry of cardCache.values()) {
+                const cached = entry?.card
+                if (cached === undefined) continue
+                if ((cached.teamMemberships ?? []).some(m => m.node === caller)) {
+                  declared = new Set<string>(cached.teamMemberships!.filter(m => m.node === caller).map(m => m.team))
+                  break
+                }
+              }
+              if (declared === undefined) {
+                // Learn in the background: a directory sweep fills the card
+                // cache, so every later call from this caller is judged.
+                void listDirectoryTeams(false).catch(() => {})
+              }
+            }
+            if (declared !== undefined) {
+              // Shared-team semantics: the caller's declaration must meet
+              // THIS node's own network somewhere — a declared team is
+              // shared when some OTHER local session also declared it, or
+              // when it is this node's own handle/canvas team. Counting the
+              // caller's bare declaration itself would be self-admission.
+              const routable = new Set<string>([config.team])
+              for (const id of joinedSessions.list()) routable.add(`${config.team}/${id8(id)}`)
+              for (const name of canvasStore.list()) routable.add(canvasTeamOf(name))
+              const otherLocalDeclarations = new Set<string>()
+              for (const entry of teamMemberships.list()) {
+                if (`${config.team}/${id8(entry.session)}` === caller) continue
+                for (const t of entry.teams) otherLocalDeclarations.add(t)
+              }
+              const shared = [...declared].some(t => routable.has(t) || otherLocalDeclarations.has(t))
+              if (!shared) {
+                recordActivity('in', team, caller, false)
+                const detail = declared.size === 0
+                  ? `caller "${caller}" declares no team membership — a teamless node has no network (S3 phase-3 admission)`
+                  : `caller "${caller}" declares teams [${[...declared].join(', ')}] — none is routable on this node (shared-team admission)`
+                const payload = JSON.stringify({ error: `${detail}. Declare a shared team on both ends, or route through a teamed member.`, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
+                res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+                res.end(payload)
+                return
+              }
+            }
           }
           // Server-side idempotency (P3/B3): one key, one execution inside
           // the window. Same key + same payload fingerprint ⇒ replay (409,

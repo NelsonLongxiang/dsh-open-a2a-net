@@ -55,7 +55,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     wakeReconcileBackoffBaseMs: 5_000,
     wakeReconcileMaxBackoffMs: 600_000,
     teamJoinAllowlist: ['dsh/canvas/*'],
-    teamScopeRouting: false,
+    // teamScopeRouting rides the schema default (phase-2: true) — the
+    // helper must not pin the old default over it.
     stateColdRowsTtlMs: 5_000,
     cardCacheTtlMs: 60_000,
     cardCacheNegativeTtlMs: 30_000,
@@ -232,9 +233,7 @@ describe('a2a_team_join / a2a_team_leave tools', () => {
 
 describe('S3 team-scoped routing admission', () => {
   it('refuses a teamless session caller and a mismatched team when enforcement is on', async () => {
-    const { ctx, join, route, port } = await mountHost({ teamScopeRouting: true })
-    const probe = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { sessions: Array<{ id: string; live?: boolean; joined?: boolean }> }
-    console.log('PROBE sessions:', JSON.stringify(probe.sessions))
+    const { ctx, join, route } = await mountHost({ teamScopeRouting: true })
     const exec = { agent: { id: SessionId('agent-1') } }
     const teamless = await route?.execute({ team: 'dsh/anything', message: 'q' }, exec) as { ok: boolean; error?: string }
     expect(teamless?.ok).toBe(false)
@@ -377,6 +376,135 @@ describe('roster reader half (peer card teamMemberships)', () => {
       expect(state.remote.find(row => row.team === 'peer/aa11bb22')?.teams).toEqual(['dsh/canvas/review-gate'])
       expect(state.registry.nodes.find(node => node.id === 'peer/aa11bb22' && node.remote === true)?.teams).toEqual(['dsh/canvas/review-gate'])
     }, { timeout: 5_000 })
+    await ctx.fiber.dispose()
+    vi.unstubAllGlobals()
+  })
+})
+
+describe('S3 phase-3 enforcement (default-on + inbound shared-team admission)', () => {
+  const mount = async (overrides: Partial<Config> = {}): Promise<{ ctx: Context; port: number }> => {
+    const home = mkdtempSync(join(tmpdir(), 'a2a-s3-p3-'))
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    const agents = ctx.get('agents') as unknown as FakeAgentsService
+    const live = { id: SessionId('agent-1'), session: { events: [] }, steer: vi.fn() } as unknown as Agent
+    agents.agent = live
+    ctx.emit('agent/created', { agent: live })
+    apply(ctx, makeConfig({ dshHome: home, ...overrides }))
+    return { ctx, port: (ctx as unknown as { webServer: WebServer }).webServer.port }
+  }
+  const direct = async (port: number, team: string, caller: string): Promise<{ error?: string; routed?: boolean }> =>
+    await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+      method: 'POST',
+      body: JSON.stringify({ team, message: 'probe', caller_session: caller, wait: false }),
+    })).json() as { error?: string; routed?: boolean }
+  const joinNet = async (port: number): Promise<void> => {
+    await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/join`, { method: 'POST', body: JSON.stringify({ id: 'agent-1' }) })
+  }
+  const declareTeams = (home: string, session: string, teams: string[]): void => {
+    mkdirSync(join(home, 'a2a'), { recursive: true })
+    writeFileSync(join(home, 'a2a', 'teams.json'), JSON.stringify({ memberships: [{ session, teams }] }))
+  }
+
+  // The schema default (teamScopeRouting: true) is injected by the loader
+  // in production; unit tests pass it explicitly to simulate the
+  // loader-resolved runtime config — see the three behavior tests below.
+
+  const sessionId = 'session-abcdef12-0000-0000-0000-000000000000'
+  const callerTeam = 'dsh/abcdef12'
+
+  it('local unteamed caller is refused on the spot; declaring a shared team passes', async () => {
+    // Round 1: no declarations on disk — the caller is teamless.
+    const home = mkdtempSync(join(tmpdir(), 'a2a-s3-p3-local-'))
+    const { ctx, port } = await mount({ teamScopeRouting: true, dshHome: home })
+    await joinNet(port)
+    const refused = await direct(port, callerTeam, callerTeam)
+    // The caller is the joined node itself, but it declares nothing — a
+    // teamless node has no network even against its own host.
+    expect(refused.error).toContain('declares no team membership')
+    await ctx.fiber.dispose()
+    // Round 2: the caller declares this node's own network handle ('dsh',
+    // the process team — a genuinely shared team), and the gate passes.
+    const home2 = mkdtempSync(join(tmpdir(), 'a2a-s3-p3-local2-'))
+    declareTeams(home2, sessionId, ['dsh'])
+    const mounted = await mount({ teamScopeRouting: true, dshHome: home2 })
+    await joinNet(mounted.port)
+    const allowed = await direct(mounted.port, callerTeam, callerTeam)
+    // The gate's verdict is what this test proves: the teamless refusal
+    // must be gone once a shared team is declared. Whatever comes after
+    // (dispatch-layer text) is out of scope here.
+    expect(allowed.error ?? '').not.toContain('declares no team membership')
+    expect(allowed.error ?? '').not.toContain('none is routable on this node')
+    await mounted.ctx.fiber.dispose()
+  })
+
+  it('a local caller whose declared teams are foreign is refused with the shared-team text', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'a2a-s3-p3-foreign-'))
+    // Declare only a foreign team BEFORE the mount: the caller IS teamed,
+    // but none of its teams is routable here.
+    declareTeams(home, sessionId, ['dsh/other-fleet'])
+    const { ctx, port } = await mount({ teamScopeRouting: true, dshHome: home })
+    await joinNet(port)
+    // caller = the joined node itself; target = the process team, which
+    // the foreign declaration does not unlock.
+    const refused = await direct(port, 'dsh', callerTeam)
+    expect(refused.error).toContain('none is routable on this node')
+    await ctx.fiber.dispose()
+  })
+
+  it('a teamed local caller reaches its own shared team (permission half)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'a2a-s3-p3-allow-'))
+    const { ctx, port } = await mount({ teamScopeRouting: true, dshHome: home })
+    await joinNet(port)
+    declareTeams(home, 'session-abcdef12-0000-0000-0000-000000000000', ['dsh/fleet-ops'])
+    // Target the process team (routable set) with a caller that declares a
+    // team in the routable set — the process team itself is always in the
+    // set, and the caller declaring ANY routable team passes the gate.
+    const allowed = await direct(port, 'dsh', 'dsh/agent-1')
+    expect(allowed.error).toBeUndefined()
+    await ctx.fiber.dispose()
+  })
+
+  it('a remote caller with no cached card rides the fail-open window once, then is judged after the sweep learns', async () => {
+    const { generateKeyPairSync } = await import('node:crypto')
+    const { signCard } = await import('../src/card.ts')
+    const { privateKey } = generateKeyPairSync('ed25519')
+    // The remote node's card declares its session into a team this node
+    // does not recognize — after the learning sweep, deliveries from it
+    // must be refused.
+    const remoteCard = {
+      ...signCard({ name: 'remote', session: 'sess-r', team: 'remote-zone', capabilities: { route: true, async: true, roster: true }, expiresAt: Date.now() + 60_000 }, privateKey),
+      sessionTeams: [{ team: 'remote-zone/1234abcd', name: 'remote-session', description: 'd' }],
+      teamMemberships: [{ node: 'remote-zone/1234abcd', team: 'remote-only-team' }],
+    }
+    const realFetch = globalThis.fetch
+    vi.stubGlobal('fetch', (url: string, init?: { method?: string }) => {
+      if (url === 'http://peer-remote/.well-known/agent-card.json' && (init?.method ?? 'GET') === 'GET') {
+        return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify(remoteCard) } as unknown as Response)
+      }
+      return realFetch(url, init as never)
+    })
+    const home = mkdtempSync(join(tmpdir(), 'a2a-s3-p3-remote-'))
+    const { ctx, port } = await mount({ teamScopeRouting: true, dshHome: home, peers: ['http://peer-remote'] })
+    await joinNet(port)
+    // First delivery from the un-cached remote caller: the fail-open
+    // window lets it through (no admission error — the dispatch-layer
+    // text proves the gate did not refuse).
+    const first = await direct(port, callerTeam, 'remote-zone/1234abcd')
+    expect(first.error ?? '').not.toContain('shared-team admission')
+    expect(first.error ?? '').not.toContain('declares no team membership')
+    // Let the background sweep land, then the second delivery is judged:
+    // the learned declaration (remote-only-team) shares nothing here.
+    await vi.waitFor(async () => {
+      const state = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { remote: Array<{ team: string }> }
+      expect(state.remote.find(row => row.team === 'remote-zone/1234abcd')).toBeDefined()
+    }, { timeout: 5_000 })
+    const second = await direct(port, callerTeam, 'remote-zone/1234abcd')
+    expect(second.error ?? '').toContain('none is routable on this node')
     await ctx.fiber.dispose()
     vi.unstubAllGlobals()
   })
