@@ -46,10 +46,12 @@ import type { } from '@deepseek-ai/dsh-session-title'
 // `ctx.sessionPersistence` on Context; the provider is mounted by app
 // compositions and stays optional here (cold listing degrades without it).
 import type { } from '@deepseek-ai/dsh-session-persistence'
-// Type-only: the api gateway's declaration merging puts `ctx.apiProxy` on
-// Context; the service is mounted by app compositions and stays optional
-// here (boot wake and wake-on-route degrade without it).
-import type { } from '@deepseek-ai/dsh-host-apiproxy'
+// Type-only: the session controller's declaration merging puts
+// `ctx.sessionController` on Context; the service is mounted by app
+// compositions and stays optional here (boot wake and wake-on-route
+// degrade without it). It is the successor wake face after core removed
+// the api gateway package (4f00a8b82a).
+import type { } from '@deepseek-ai/dsh-api-session-controller'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import s from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -760,14 +762,30 @@ export function apply(ctx: Context, config: Config): void {
   let lastWakeDemandAt = 0
 
   /**
-   * The api gateway's wake face, when composed: materializing a persisted
-   * session's agent (log replay plus composed preset world) is web-app
-   * knowledge, so both wake paths ride the one service that owns it.
+   * The wake face, when composed: materializing a persisted session's agent
+   * (log replay plus composed preset world) is web-app knowledge, so both
+   * wake paths ride the one service that owns it. The successor of the
+   * removed api gateway package (core 4f00a8b82a) is the session
+   * controller's `resolveAgent` — resolve-or-resume, with failures
+   * reported as a result value instead of a rejection.
    */
+  interface WakeFace {
+    resolveAgent(sessionId: SessionId): Promise<{ readonly agent?: Agent; readonly error?: { readonly message?: string } }>
+  }
+  const wakeFace = (): WakeFace | undefined => {
+    const controller = ctx.get('sessionController') as { resolveAgent?: WakeFace['resolveAgent'] } | undefined
+    return typeof controller?.resolveAgent === 'function' ? controller as WakeFace : undefined
+  }
   const materialize = (id: string): Promise<Agent> | undefined => {
-    const apiProxy = ctx.get('apiProxy') as { materializeSession?: (sessionId: SessionId) => Promise<Agent> } | undefined
-    if (apiProxy?.materializeSession === undefined) return undefined
-    return apiProxy.materializeSession(SessionId(id))
+    const face = wakeFace()
+    if (face === undefined) return undefined
+    // The successor face reports failure as a result value; re-throw it so
+    // every caller's rejection policy (reconciler backoff, route error)
+    // keeps working unchanged.
+    return face.resolveAgent(SessionId(id)).then(result => {
+      if (result.agent !== undefined) return result.agent
+      throw new Error(`materialize refused: ${result.error?.message ?? 'unknown session resolution failure'}`)
+    })
   }
 
   // Per-id single-flight: a materialization is a full log replay (seconds of
@@ -790,14 +808,25 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
+   * Why a cold-team wake produced no flight — the two failure shapes the
+   * route error must tell apart (the misleading single text cost hours of
+   * double-host diagnosis on 2026-08-31): `no-match` means the team names
+   * no cold joined session; `no-face` means one matched but this host
+   * composes no wake face, so the wake could never have succeeded.
+   */
+  type ColdWake =
+    | { readonly kind: 'flight'; readonly flight: Promise<Agent> }
+    | { readonly kind: 'no-face' }
+    | { readonly kind: 'no-match' }
+
+  /**
    * Wake one cold joined session on demand — the route-triggered half:
    * the join consented to network reachability, so a route addressed to
    * its team pays the wake rather than failing.
    * @param team - the routed team name.
-   * @returns a promise resolving with the woken agent, or undefined when
-   * the team names no cold joined session or no wake face is composed.
+   * @returns the wake outcome: a flight, or the reason none was started.
    */
-  const wakeColdTeam = (team: string): Promise<Agent> | undefined => {
+  const wakeColdTeam = (team: string): ColdWake => {
     // F7 (wake-intent self-heal): a boot-time transient can prune the
     // in-memory intent while joined.json still holds it (memory/file
     // divergence — the live repro on 0.5.40). The persisted file is the
@@ -813,13 +842,22 @@ export function apply(ctx: Context, config: Config): void {
     // Canvas teams wake their first cold joined member (member order is
     // the routing priority; an archived member never wakes).
     const id = aliasId ?? canvasColdMemberId(parseCanvasTeamName(team))
-    if (id === undefined) return undefined
-    // An archived session never wakes: archive is closure, not sleep.
-    if (archivedSessionFilter()?.(id) === true) return undefined
+    // An archived session never wakes: archive is closure, not sleep — to
+    // the caller the team simply has no wakeable match.
+    if (id === undefined || archivedSessionFilter()?.(id) === true) return { kind: 'no-match' }
     // Route demand is foreground: boot prewarm yields to it for a quiet window.
     lastWakeDemandAt = Date.now()
-    return materializeOnce(id)
+    const flight = materializeOnce(id)
+    return flight === undefined ? { kind: 'no-face' } : { kind: 'flight', flight }
   }
+
+  /** Route-error text for a team with no live node and no wakeable cold match. */
+  const noColdMatchText = (team: string): string =>
+    `No live DSH session node accepts team "${team}" and no cold joined session matches it.`
+  /** Route-error text for the matched-but-unwakeable shape: names the missing
+   *  face and the manual remedy instead of claiming "no cold match". */
+  const noWakeFaceText = (team: string): string =>
+    `No live DSH session node accepts team "${team}"; a cold joined session matches but this host composes no wake face (sessionController.resolveAgent) — open the session once to make it live.`
 
   /**
    * The workspace registry's archived set, when composed. Archiving is a
@@ -1083,7 +1121,7 @@ export function apply(ctx: Context, config: Config): void {
 
     /** F-observability: the boot prewarm's lifecycle, surfaced on the state route (F: prewarm not running was invisible). */
     const prewarmStatus: {
-      state: 'off' | 'skipped:apiProxy-missing' | 'draining' | 'done' | 'cancelled'
+      state: 'off' | 'skipped:no-wake-face' | 'draining' | 'done' | 'cancelled'
       attempted: number
       woken: number
       failed: Array<{ id: string; error: string }>
@@ -1132,10 +1170,10 @@ export function apply(ctx: Context, config: Config): void {
     const reconcileTick = (): void => {
       if (reconcileCancelled || ctx.fiber.uid === null) return
       const interval = Math.max(50, config.wakeReconcileIntervalMs)
-      if (!config.wakeReconcile || ctx.get('apiProxy') === undefined) {
-        // Late-mounting gateway: keep the cadence so a proxy that appears
-        // after apply still starts reconciling (the P3 apply-time snapshot
-        // lesson, on a loop instead of a one-shot).
+      if (!config.wakeReconcile || wakeFace() === undefined) {
+        // Late-mounting wake face: keep the cadence so a session controller
+        // that appears after apply still starts reconciling (the P3
+        // apply-time snapshot lesson, on a loop instead of a one-shot).
         reconcileStatus.state = 'off'
         schedule(reconcileTick, interval)
         return
@@ -1217,11 +1255,11 @@ export function apply(ctx: Context, config: Config): void {
           prewarmStatus.state = 'off'
           return
         }
-        if (ctx.get('apiProxy') === undefined) {
+        if (wakeFace() === undefined) {
           // F-observability: this skip used to be console-only — the state
           // route now carries it so a dead prewarm is a reading, not a rumor.
-          prewarmStatus.state = 'skipped:apiProxy-missing'
-          logger.warn('wakeJoinedOnBoot is on but no api gateway is composed; cold joined sessions stay asleep')
+          prewarmStatus.state = 'skipped:no-wake-face'
+          logger.warn('wakeJoinedOnBoot is on but no wake face (sessionController) is composed; cold joined sessions stay asleep')
           return
         }
         // Low-priority prewarm instead of an eager serial chain: each wake
@@ -1957,23 +1995,25 @@ export function apply(ctx: Context, config: Config): void {
    */
   const nudgeBudget = new Map<string, number>()
   const escalateQueuePrompt = (agent: Agent, team: string, taskId: string): void => {
-    const apiProxy = ctx.get('apiProxy') as
+    // Queue-mode prompt seam: the session controller owns prompt admission
+    // (successor of the removed api gateway's prompt face).
+    const controller = ctx.get('sessionController') as
       | { prompt?: (request: {
           requestId: string
           sessionId: Agent['id']
           mode: 'queue' | 'steer'
           content: ReadonlyArray<{ type: 'text'; text: string }>
-        }) => Promise<unknown> }
+        }, signal: AbortSignal) => Promise<unknown> }
       | undefined
-    if (typeof apiProxy?.prompt !== 'function') return
+    if (typeof controller?.prompt !== 'function') return
     logger.info(`a2a: async nudge escalates to queue-mode prompt for ${team} (task ${taskId})`)
     try {
-      void apiProxy.prompt({
+      void controller.prompt({
         requestId: `a2a-nudge-${taskId}`,
         sessionId: agent.id,
         mode: 'queue',
         content: [{ type: 'text', text: `[A2A nudge] (task ${taskId}) your earlier routed message was delivered while this session could not start a turn — please consume the inbox backlog now (ignore if there is nothing pending).` }],
-      }).catch(() => {})
+      }, new AbortController().signal).catch(() => {})
     } catch {
       /* queueing is best-effort: the ledger row keeps the debt visible */
     }
@@ -2109,9 +2149,9 @@ export function apply(ctx: Context, config: Config): void {
       return routeIntoAgentFor(agent, team, message, caller, taskId)
     }
     // Wake-on-route: a cold joined team materializes on demand, then steers.
-    const woken = wakeColdTeam(team)
-    if (woken !== undefined) {
-      return woken.then(
+    const wake = wakeColdTeam(team)
+    if (wake.kind === 'flight') {
+      return wake.flight.then(
         agent => routeIntoAgentFor(agent, team, message, caller, taskId),
         (error: unknown) => ({ ok: false, error: `waking the session for team "${team}" failed: ${String(error)}` }) as const,
       )
@@ -2140,7 +2180,7 @@ export function apply(ctx: Context, config: Config): void {
       if (live !== undefined) return routeIntoAgentFor(live, team, message, caller, taskId)
       return { ok: false, error: 'No live DSH agent is available to accept this message.' }
     }
-    return { ok: false, error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.` }
+    return { ok: false, error: wake.kind === 'no-face' ? noWakeFaceText(team) : noColdMatchText(team) }
   }
 
   /**
@@ -2476,7 +2516,7 @@ ${message}`
           // let the receipt contract carry the reply.
           if (noWait) {
             const agent = resolveAgentForTeam(team)
-            const woken = agent !== undefined ? undefined : wakeColdTeam(team)
+            const wake = agent !== undefined ? undefined : wakeColdTeam(team)
             const deliver = (target: Agent): void => {
               const from = caller === '' ? 'an unknown node' : caller
               // The receipt target: the caller's callback address when it
@@ -2548,8 +2588,8 @@ ${message}`
               }
             }
             if (agent !== undefined) { deliver(agent); return }
-            if (woken !== undefined) {
-              void woken.then(deliver, (error: unknown) => {
+            if (wake?.kind === 'flight') {
+              void wake.flight.then(deliver, (error: unknown) => {
                 recordActivity('in', team, caller, false)
                 const payload = JSON.stringify({ error: `waking the session for team "${team}" failed: ${String(error)}`, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
                 res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
@@ -2571,7 +2611,7 @@ ${message}`
                   const live = liveAgent()
                   if (live !== undefined) { deliver(live); return }
                 }
-                const payload = JSON.stringify({ error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.`, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
+                const payload = JSON.stringify({ error: wake?.kind === 'no-face' ? noWakeFaceText(team) : noColdMatchText(team), code: -32000, team, task_status: 'TASK_STATE_FAILED' })
                 res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
                 res.end(payload)
               }
@@ -3479,7 +3519,10 @@ ${message}`
       // steer fires, then delivered answers. The receipt header carries the
       // task id so the target can echo it back verbatim.
       const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(canvasName)
-      let woken = agent !== undefined ? Promise.resolve(agent) : wakeColdTeam(team)
+      const wake = agent !== undefined ? undefined : wakeColdTeam(team)
+      let woken: Promise<Agent> | undefined = agent !== undefined
+        ? Promise.resolve(agent)
+        : wake?.kind === 'flight' ? wake.flight : undefined
       if (woken === undefined) {
         // Bridge BEFORE the bare-team fallback — claim beats the initiator
         // redirect, the same rule routeIntoAgent follows (a bare team name
@@ -3520,7 +3563,7 @@ ${message}`
         const live = team === config.team ? liveAgent() : undefined
         if (live === undefined) {
           endRoute(flight)
-          return { ok: false, error: `No live DSH session node accepts team "${team}" and no cold joined session matches it.`, code: -32000 }
+          return { ok: false, error: wake?.kind === 'no-face' ? noWakeFaceText(team) : noColdMatchText(team), code: -32000 }
         }
         woken = Promise.resolve(live)
       }
@@ -3562,7 +3605,7 @@ ${message}`
       const steerable = resolveAgentForTeam(team) !== undefined
         || canvasLiveAgent(canvasName) !== undefined
         || joinedSessions.list().some(id => `${config.team}/${id8(id)}` === team)
-        || wakeColdTeam(team) !== undefined
+        || wakeColdTeam(team).kind === 'flight'
       if (!steerable && team !== config.team) {
         const prepared = await nativeTeamsPrepare(team)
         if (prepared.ok) {

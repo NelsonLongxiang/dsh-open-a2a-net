@@ -109,7 +109,7 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | `sessionNodes` | `true` | Expose main sessions as joinable network nodes. |
 | `nativeTeamsInbound` | `false` | Dispatch inbound direct routes (and the outbound A2A tools' local candidates) to native-teams registry teams through its routing seam; needs the sibling plugin composed. |
 | `nativeRoundWaitMs` | `180000` | Reply-wait budget for one native-teams round (the bridge's deadline, mirroring the steer path's 180s). A round still running past it answers the honest delivered-unsettled shape and keeps going. |
-| `wakeJoinedOnBoot` | `false` | Prewarm cold joined sessions' agents after mount (needs the api gateway; wake-on-route and the sidebar wake button stay available without it). The prewarm is deferred, foreground-yielding, and cancellable — it never blocks the boot window (see the two knobs below). |
+| `wakeJoinedOnBoot` | `false` | Prewarm cold joined sessions' agents after mount (needs the session controller wake face; wake-on-route and the sidebar wake button stay available without it). The prewarm is deferred, foreground-yielding, and cancellable — it never blocks the boot window (see the two knobs below). |
 | `wakePrewarmDelayMs` | `10000` | Idle delay between loader settlement and the first prewarm wake; `0` restores fire-at-settle. |
 | `wakePrewarmQuietMs` | `5000` | Foreground quiet window: a wake/route demand (or any outbound route in flight) inside this window postpones the next prewarm step; `0` disables the yield. |
 | `cardTtlMs` / `flushTimeoutMs` / `routeTimeoutMs` | see schema | Card lifetime and route timing budgets. |

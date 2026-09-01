@@ -69,7 +69,7 @@
     "@deepseek-ai/dsh-client-ui-sidebar": ">=0.1.0-rc.6",
     "@deepseek-ai/dsh-client-ui-slots": ">=0.1.0-rc.6",
     "@deepseek-ai/dsh-home-paths": ">=0.1.0-rc.6",
-    "@deepseek-ai/dsh-host-apiproxy": ">=0.1.0-rc.6",
+    "@deepseek-ai/dsh-api-session-controller": ">=0.1.2-alpha.3",
     "@deepseek-ai/dsh-host-webserver": ">=0.1.0-rc.6",
     "@deepseek-ai/dsh-invariants": ">=0.1.0-rc.6",
     "@deepseek-ai/dsh-llm": ">=0.1.0-rc.6",
@@ -108,10 +108,10 @@
     "@deepseek-ai/dsh-client-ui-slots": {
       "optional": true
     },
-    "@deepseek-ai/dsh-home-paths": {
+    "@deepseek-ai/dsh-api-session-controller": {
       "optional": true
     },
-    "@deepseek-ai/dsh-host-apiproxy": {
+    "@deepseek-ai/dsh-home-paths": {
       "optional": true
     },
     "@deepseek-ai/dsh-host-webserver": {

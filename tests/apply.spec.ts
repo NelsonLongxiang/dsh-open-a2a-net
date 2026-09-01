@@ -1221,7 +1221,7 @@ describe('a2a session nodes (opt-in join)', () => {
       ctx.emit('agent/created', { agent: woken })
       return woken
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    ctx.provide('sessionController', { resolveAgent: async (id: string) => ({ agent: await materialize(id) }) } as never)
     apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, announce: true, dshHome: home }))
     const port = (ctx as unknown as { webServer: WebServer }).webServer.port
     await vi.waitFor(() => { expect(materialize).toHaveBeenCalledWith('agent-1') })
@@ -1268,7 +1268,7 @@ describe('a2a session nodes (opt-in join)', () => {
     } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
     apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, dshHome: home }))
     const materialize = vi.fn(async () => woken)
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    ctx.provide('sessionController', { resolveAgent: async (id: string) => ({ agent: await materialize(id) }) } as never)
     loader.settle()
     await vi.waitFor(() => { expect(materialize).toHaveBeenCalledWith('agent-1') })
     await ctx.fiber.dispose()
@@ -1314,7 +1314,7 @@ describe('a2a session nodes (opt-in join)', () => {
       events.push('end:' + String(id))
       return makeAgent()
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    ctx.provide('sessionController', { resolveAgent: async (id: string) => ({ agent: await materialize(id) }) } as never)
     apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, wakeBootStaggerMs: 30, dshHome: home }))
     // The first wake starts at once; the second must not start before the
     // first settles (serial) nor before the pause elapses (stagger).
@@ -1354,7 +1354,7 @@ describe('a2a session nodes (opt-in join)', () => {
       ctx.emit('agent/created', { agent: woken })
       return woken
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    ctx.provide('sessionController', { resolveAgent: async (id: string) => ({ agent: await materialize(id) }) } as never)
     // The boot queue's first wake (slowId) is in flight and the long stagger
     // parks agent-1's boot wake — but a route addressed to agent-1 wakes it
     // at once, and when the parked boot wake finally runs it skips the id
@@ -1399,7 +1399,7 @@ describe('a2a session nodes (opt-in join)', () => {
       ctx.emit('agent/created', { agent: woken })
       return woken
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    ctx.provide('sessionController', { resolveAgent: async (id: string) => ({ agent: await materialize(id) }) } as never)
     apply(ctx, makeConfig({ sessionNodes: true, dshHome: home }))
     const port = (ctx as unknown as { webServer: WebServer }).webServer.port
     const route = (team: string): Promise<Response> => globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
@@ -1441,7 +1441,7 @@ describe('a2a session nodes (opt-in join)', () => {
       ctx.emit('agent/created', { agent: woken })
       return woken
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    ctx.provide('sessionController', { resolveAgent: async (id: string) => ({ agent: await materialize(id) }) } as never)
     apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, dshHome: home }))
     const port = (ctx as unknown as { webServer: WebServer }).webServer.port
     // The prewarm is mid-replay (gated) when the route arrives.
@@ -1472,7 +1472,7 @@ describe('a2a session nodes (opt-in join)', () => {
       list: async () => [{ id: SessionId('agent-1') }],
     } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
     const materialize = vi.fn(async () => makeAgent())
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    ctx.provide('sessionController', { resolveAgent: async (id: string) => ({ agent: await materialize(id) }) } as never)
     apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, wakePrewarmDelayMs: 120, dshHome: home }))
     await new Promise(resolve => setTimeout(resolve, 40))
     expect(materialize).not.toHaveBeenCalled()
@@ -1500,7 +1500,7 @@ describe('a2a session nodes (opt-in join)', () => {
       ctx.emit('agent/created', { agent: woken })
       return woken
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    ctx.provide('sessionController', { resolveAgent: async (id: string) => ({ agent: await materialize(id) }) } as never)
     apply(ctx, makeConfig({
       sessionNodes: true,
       wakeJoinedOnBoot: true,
@@ -1542,7 +1542,7 @@ describe('a2a session nodes (opt-in join)', () => {
       list: async () => [{ id: SessionId('agent-1') }, { id: SessionId('agent-2') }],
     } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
     const materialize = vi.fn(async () => makeAgent())
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    ctx.provide('sessionController', { resolveAgent: async (id: string) => ({ agent: await materialize(id) }) } as never)
     apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, wakePrewarmDelayMs: 0, wakeBootStaggerMs: 200, dshHome: home }))
     await vi.waitFor(() => { expect(materialize).toHaveBeenCalledWith('agent-1') })
     await ctx.fiber.dispose()
@@ -1652,7 +1652,7 @@ describe('a2a session nodes (opt-in join)', () => {
       ctx.emit('agent/created', { agent: woken })
       return woken
     })
-    ctx.provide('apiProxy', { materializeSession: materialize } as never)
+    ctx.provide('sessionController', { resolveAgent: async (id: string) => ({ agent: await materialize(id) }) } as never)
     const response = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
       method: 'POST',
       body: JSON.stringify({ team: 'dsh/agent-1', message: 'route to the cold team' }),
@@ -2541,15 +2541,59 @@ describe('a2a plugin archive pruning (archived sessions leave the network)', () 
     // kept the intent, so only the route-time guard stands between the
     // archived id and a wake.
     ctx.provide('workspaceRegistry', { archivedSessionIds: [archivedId] })
-    const materializeSession = vi.fn(() => new Promise<ReturnType<typeof makeAgent>>(() => {}))
-    ctx.provide('apiProxy', { materializeSession })
+    const resolveAgent = vi.fn(() => new Promise<unknown>(() => {}))
+    ctx.provide('sessionController', { resolveAgent } as never)
     const route = ctx.tools.get('a2a_route')
     const result = await route?.execute({ team: 'dsh/archiv01', message: 'hello', async: true }, runContext()) as { ok: boolean; error?: string }
     // Archive is closure: the route answers the honest no-acceptor error
-    // and the api gateway is never asked to materialize the session.
+    // and the wake face is never asked to materialize the session.
     expect(result.ok).toBe(false)
     expect(result.error).toContain('No live DSH session node accepts team')
-    expect(materializeSession).not.toHaveBeenCalled()
+    expect(resolveAgent).not.toHaveBeenCalled()
+    await ctx.fiber.dispose()
+  })
+})
+
+describe('wake-face route error split (no-match vs no-face)', () => {
+  // id8() strips the 'session-' prefix: this id's team is dsh/coldface.
+  const coldFaceId = 'session-coldface-0000-0000-0000-000000000000'
+  const mountCold = async (ids: string[]): Promise<{ ctx: Context; port: number }> => {
+    const home = tmpHome()
+    mkdirSync(join(home, 'a2a'), { recursive: true })
+    writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: ids }))
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    apply(ctx, makeConfig({ sessionNodes: true, dshHome: home }))
+    return { ctx, port: (ctx as unknown as { webServer: WebServer }).webServer.port }
+  }
+  const direct = async (port: number, team: string): Promise<{ error?: string }> =>
+    await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+      method: 'POST',
+      body: JSON.stringify({ team, message: 'probe the error shape' }),
+    })).json() as { error?: string }
+
+  it('a cold joined team with NO wake face composed names the missing face (not "no cold match")', async () => {
+    const { ctx, port } = await mountCold([coldFaceId])
+    // Deliberately no sessionController: the post-4f00a8b82a deployments'
+    // exact shape before this fix — a cold match exists, yet no wake can
+    // ever succeed. The error must say so (the old single text blamed
+    // "no cold match" and cost hours of double-host diagnosis).
+    const result = await direct(port, 'dsh/coldface')
+    expect(result.error).toContain('no wake face')
+    expect(result.error).toContain('sessionController')
+    expect(result.error).not.toContain('no cold joined session matches')
+    await ctx.fiber.dispose()
+  })
+
+  it('a team with no cold match at all keeps the no-match text', async () => {
+    const { ctx, port } = await mountCold([])
+    const result = await direct(port, 'dsh/coldface')
+    expect(result.error).toContain('no cold joined session matches')
+    expect(result.error).not.toContain('no wake face')
     await ctx.fiber.dispose()
   })
 })

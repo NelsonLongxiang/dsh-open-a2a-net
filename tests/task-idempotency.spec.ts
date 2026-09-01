@@ -697,11 +697,11 @@ describe('prewarm observability on the state route (F: prewarm not running)', ()
     return body.prewarm
   }
 
-  it('wakeJoinedOnBoot on with no api gateway reports skipped:apiProxy-missing (the silent kill becomes a reading)', async () => {
+  it('wakeJoinedOnBoot on with no wake face reports skipped:no-wake-face (the silent kill becomes a reading)', async () => {
     const { port, dispose } = await mount({ wakeJoinedOnBoot: true, announce: true, sessionNodes: true })
     try {
       const prewarm = await readPrewarm(port)
-      expect(prewarm).toMatchObject({ state: 'skipped:apiProxy-missing' })
+      expect(prewarm).toMatchObject({ state: 'skipped:no-wake-face' })
       expect(prewarm?.attempted).toBe(0)
     } finally {
       await dispose()
