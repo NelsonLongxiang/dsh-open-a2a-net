@@ -2603,10 +2603,14 @@ describe('a2a plugin archive pruning (archived sessions leave the network)', () 
     ctx.provide('sessionController', { resolveAgent } as never)
     const route = ctx.tools.get('a2a_route')
     const result = await route?.execute({ team: 'dsh/archiv01', message: 'hello', async: true }, runContext()) as { ok: boolean; error?: string }
-    // Archive is closure: the route answers the honest no-acceptor error
-    // and the wake face is never asked to materialize the session.
+    // Archive is closure: the wake face is never asked to materialize the
+    // session, and the route names the archive remedy — the old no-acceptor
+    // text read as "no cold match" and misdirected a double-host diagnosis
+    // (2026-09-01).
     expect(result.ok).toBe(false)
-    expect(result.error).toContain('No live DSH session node accepts team')
+    expect(result.error).toContain('it is archived')
+    expect(result.error).toContain('workspace archive')
+    expect(result.error).not.toContain('no cold joined session matches')
     expect(resolveAgent).not.toHaveBeenCalled()
     await ctx.fiber.dispose()
   })

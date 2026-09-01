@@ -815,15 +815,19 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
-   * Why a cold-team wake produced no flight — the two failure shapes the
+   * Why a cold-team wake produced no flight — the failure shapes the
    * route error must tell apart (the misleading single text cost hours of
-   * double-host diagnosis on 2026-08-31): `no-match` means the team names
-   * no cold joined session; `no-face` means one matched but this host
-   * composes no wake face, so the wake could never have succeeded.
+   * double-host diagnosis on 2026-08-31, and again on 2026-09-01 when the
+   * archived shape read as "no cold match" across two hosts): `no-match`
+   * means the team names no cold joined session; `no-face` means one
+   * matched but this host composes no wake face, so the wake could never
+   * have succeeded; `archived` means one matched but archive is closure —
+   * the session restores from the workspace archive, the route does not.
    */
   type ColdWake =
     | { readonly kind: 'flight'; readonly flight: Promise<Agent> }
     | { readonly kind: 'no-face' }
+    | { readonly kind: 'archived' }
     | { readonly kind: 'no-match' }
 
   /**
@@ -851,7 +855,12 @@ export function apply(ctx: Context, config: Config): void {
     const id = aliasId ?? canvasColdMemberId(parseCanvasTeamName(team))
     // An archived session never wakes: archive is closure, not sleep — to
     // the caller the team simply has no wakeable match.
-    if (id === undefined || archivedSessionFilter()?.(id) === true) return { kind: 'no-match' }
+    if (id === undefined) return { kind: 'no-match' }
+    // An archived match is its own honest signal: the intent and the session
+    // both exist — archive closure is why the wake refuses (the archived
+    // shape reading as "no cold match" cost a double-host diagnosis on
+    // 2026-09-01). Restoring the session, not retrying the route, is the fix.
+    if (archivedSessionFilter()?.(id) === true) return { kind: 'archived' }
     // Route demand is foreground: boot prewarm yields to it for a quiet window.
     lastWakeDemandAt = Date.now()
     const flight = materializeOnce(id)
@@ -861,6 +870,11 @@ export function apply(ctx: Context, config: Config): void {
   /** Route-error text for a team with no live node and no wakeable cold match. */
   const noColdMatchText = (team: string): string =>
     `No live DSH session node accepts team "${team}" and no cold joined session matches it.`
+  /** Route-error text for the matched-but-archived shape: archive is
+   *  closure, so the honest answer names the restore remedy instead of
+   *  claiming "no cold match". */
+  const archivedColdMatchText = (team: string): string =>
+    `A cold joined session matches team "${team}" but it is archived — archive is closure, so archived sessions never wake. Restore the session from the workspace archive to make it routable.`
   /** Route-error text for the matched-but-unwakeable shape: names the missing
    *  face and the manual remedy instead of claiming "no cold match". */
   const noWakeFaceText = (team: string): string =>
@@ -2191,7 +2205,7 @@ export function apply(ctx: Context, config: Config): void {
       if (live !== undefined) return routeIntoAgentFor(live, team, message, caller, taskId)
       return { ok: false, error: 'No live DSH agent is available to accept this message.' }
     }
-    return { ok: false, error: wake.kind === 'no-face' ? noWakeFaceText(team) : noColdMatchText(team) }
+    return { ok: false, error: wake.kind === 'no-face' ? noWakeFaceText(team) : wake.kind === 'archived' ? archivedColdMatchText(team) : noColdMatchText(team) }
   }
 
   /**
@@ -2622,7 +2636,7 @@ ${message}`
                   const live = liveAgent()
                   if (live !== undefined) { deliver(live); return }
                 }
-                const payload = JSON.stringify({ error: wake?.kind === 'no-face' ? noWakeFaceText(team) : noColdMatchText(team), code: -32000, team, task_status: 'TASK_STATE_FAILED' })
+                const payload = JSON.stringify({ error: wake?.kind === 'no-face' ? noWakeFaceText(team) : wake?.kind === 'archived' ? archivedColdMatchText(team) : noColdMatchText(team), code: -32000, team, task_status: 'TASK_STATE_FAILED' })
                 res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
                 res.end(payload)
               }
@@ -3612,7 +3626,7 @@ ${message}`
         const live = team === config.team ? liveAgent() : undefined
         if (live === undefined) {
           endRoute(flight)
-          return { ok: false, error: wake?.kind === 'no-face' ? noWakeFaceText(team) : noColdMatchText(team), code: -32000 }
+          return { ok: false, error: wake?.kind === 'no-face' ? noWakeFaceText(team) : wake?.kind === 'archived' ? archivedColdMatchText(team) : noColdMatchText(team), code: -32000 }
         }
         woken = Promise.resolve(live)
       }
