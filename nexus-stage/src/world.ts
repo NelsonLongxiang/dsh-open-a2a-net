@@ -44,7 +44,7 @@ export function planSeatFor(sid: string): { x: number; y: number } {
 }
 
 /** Minimal session row shape the model needs (topology.SessionRow satisfies it). */
-export interface SessionLite { id: string; label: string; team: string; name?: string; joined: boolean; live?: boolean }
+export interface SessionLite { id: string; label: string; team: string; name?: string; joined: boolean; live?: boolean; teams?: readonly string[] }
 
 /** Minimal team shape (topology.CanvasTeam satisfies it). `team` is the
  * mono route alias `<host>/canvas/<name>` when the payload carries it. */
@@ -71,6 +71,9 @@ export interface WorldNode {
   peerUrl?: string
   /** Reachability score from a2a_probe (peers only). */
   score?: number
+  /** Declared roster teams (a2a/teams.json) — the network-declaration half
+   *  of "teamed"; canvas memberships are the visual half. Peers: never. */
+  teams?: readonly string[]
   memberships: ReadonlyArray<Membership>
 }
 

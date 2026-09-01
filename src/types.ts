@@ -30,6 +30,14 @@ export interface A2aPeerCard {
    */
   readonly sessionTeams?: readonly A2aSessionTeamInfo[]
   /**
+   * Team-roster declarations this peer's joined session nodes published
+   * (`node` = the session's `<team>/<agentId8>` handle). Unsigned and
+   * optional: served fresh at read time like `sessionTeams`, so a team's
+   * cross-host roster rebuilds as the union of member declarations (the
+   * reader half of the team-roster model — docs/design/team-roster-model.md).
+   */
+  readonly teamMemberships?: readonly A2aTeamMembership[]
+  /**
    * The publishing host's LAN IPv4. Unsigned and optional: served fresh, it
    * lets peers group and tell machines apart in a same-team fleet.
    */
@@ -62,6 +70,14 @@ export interface A2aSessionTeamInfo {
   readonly description: string
   /** The session's working directory, when the publishing node shares it. */
   readonly workspace?: string
+}
+
+/** One team-roster declaration on a peer's card: session node → team. */
+export interface A2aTeamMembership {
+  /** The declaring session node's handle (`<team>/<agentId8>`). */
+  readonly node: string
+  /** The declared routable team name. */
+  readonly team: string
 }
 
 /**

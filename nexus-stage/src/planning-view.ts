@@ -215,6 +215,13 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   netBtn.className = 'p-netbtn'
   netBtn.setAttribute('aria-haspopup', 'menu')
   toolbar.appendChild(netBtn)
+  // Node list (network-membership-display): the canvas shows teamed nodes
+  // only; every other session — teamless joined, unjoined, and each peer's
+  // published nodes — is managed from this list, switched by host.
+  const nodesBtn = mkButton('节点', '节点清单：本机与对等节点（未组队/未入网在此管理）', () => toggleNodePanel())
+  nodesBtn.className = 'p-nodebtn'
+  nodesBtn.setAttribute('aria-haspopup', 'dialog')
+  toolbar.appendChild(nodesBtn)
   const lamp = document.createElement('span')
   lamp.setAttribute('aria-live', 'polite')
   lamp.className = 'p-lamp'
@@ -428,6 +435,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         ? remoteSubText(host)
         : (subBase === nmText ? '' : subBase)
           + (n.memberships.length > 1 ? ` · 跨队×${n.memberships.length}` : '')
+          + (n.teams !== undefined && n.teams.length > 0 ? ` · 网络队×${n.teams.length}` : '')
       if (subEl.textContent !== subText) subEl.textContent = subText
       const prioEl = el.querySelector<HTMLElement>('.prio')!
       const prioText = n.remote === true ? 'peer' : (n.memberships[0] !== undefined ? `P${n.memberships[0]!.index}` : '')
@@ -559,6 +567,27 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   }
 
   function emitAction(a: CanvasAction): void {
+    // Optimistic seats: a write may reference a session the teamed gate
+    // keeps OFF the model (no canvas card yet). The write actions read and
+    // write memberships through the node table, so materialize those ids
+    // from the last poll's inventory first — the next reconcile refreshes
+    // label/live/teams and keeps the saved-or-seat position.
+    if (a.type === 'add-member' || a.type === 'remove-member' || a.type === 'reorder' || a.type === 'create-team') {
+      const ids = a.type === 'reorder' ? a.ops.map(op => op.id) : [...a.ids]
+      for (const id of ids) {
+        if (id === '' || id.startsWith('peer-')) continue
+        if (model.getNode(id) !== undefined) continue
+        const s = lastSessions.find(row => row.id === id)
+        if (s === undefined) continue
+        const saved = layoutDoc?.nodes[id]
+        const seat = saved !== undefined ? { x: saved.x, y: saved.y } : seatFor2(id)
+        model.upsertNode({
+          id, x: seat.x, y: seat.y, label: s.label, team: s.team, name: s.name,
+          live: s.live !== false, memberships: [],
+          ...(s.teams !== undefined && s.teams.length > 0 ? { teams: s.teams } : {}),
+        })
+      }
+    }
     const undo = applyAction(model, a)
     const team = actionTeam(a)
     pendingAdd(team)
@@ -727,7 +756,10 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       }))
     }
     netMenu = el
-    document.body.appendChild(el)
+    // Menus append to root (not document.body): the .p-menu styles are
+    // #dsh-plan-scoped, and root has no transformed ancestor, so fixed
+    // positioning stays viewport-relative.
+    root.appendChild(el)
     const rect = netBtn.getBoundingClientRect()
     el.style.left = `${String(Math.min(rect.left, window.innerWidth - 220))}px`
     el.style.top = `${String(Math.max(8, rect.top - (lastUnjoined.length * 30 + 10)))}px`
@@ -740,6 +772,263 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     })
     el.querySelector('button')?.focus()
   }
+
+  // ── 节点列表 drawer（组队节点上画布；单一节点按 host/对等节点在列表管理）──
+  let lastSessions: ReadonlyArray<PlanningSession> = []
+  let lastCanvasMemberIds: ReadonlySet<string> = new Set()
+  let nodePanel: HTMLDivElement | null = null
+  let nodeHost = '' // '' = 本机；否则为 lastRemoteTeams 的 host:port 键
+  let nodeJoinMenu: HTMLDivElement | null = null
+
+  function closeNodeJoinMenu(): void {
+    nodeJoinMenu?.remove()
+    nodeJoinMenu = null
+  }
+  function closeNodePanel(): void {
+    closeNodeJoinMenu()
+    nodePanel?.remove()
+    nodePanel = null
+  }
+  function toggleNodePanel(): void {
+    if (nodePanel !== null) { closeNodePanel(); return }
+    const el = document.createElement('div')
+    el.className = 'p-menu p-nodelist'
+    el.setAttribute('role', 'dialog')
+    el.setAttribute('aria-label', '节点清单')
+    nodePanel = el
+    root.appendChild(el)
+    const rect = nodesBtn.getBoundingClientRect()
+    el.style.left = `${String(Math.min(rect.left, window.innerWidth - 340))}px`
+    el.style.top = `${String(Math.max(8, rect.top - 320))}px`
+    el.addEventListener('keydown', (ev) => {
+      if ((ev as KeyboardEvent).key === 'Escape') {
+        ev.stopPropagation()
+        closeNodePanel()
+        nodesBtn.focus()
+      }
+    })
+    renderNodePanel()
+  }
+
+  /** Rebuild the panel's host selector + body from the latest poll facts. */
+  function renderNodePanel(): void {
+    const el = nodePanel
+    if (el === null) return
+    closeNodeJoinMenu()
+    el.textContent = ''
+    const head = document.createElement('div')
+    head.className = 'p-nodelist-head'
+    const headLabel = document.createElement('span')
+    headLabel.className = 'p-nodelist-title'
+    headLabel.textContent = '节点'
+    const sel = document.createElement('select')
+    sel.className = 'p-nodesel'
+    sel.setAttribute('aria-label', '选择 host 或对等节点')
+    const localOpt = document.createElement('option')
+    localOpt.value = ''
+    localOpt.textContent = '本机'
+    sel.appendChild(localOpt)
+    for (const [host, rows] of lastRemoteTeams) {
+      if (host === '') continue
+      const opt = document.createElement('option')
+      opt.value = host
+      opt.textContent = rows[0]?.origin !== undefined && rows[0].origin !== '' ? `${rows[0].origin}（${host}）` : host
+      sel.appendChild(opt)
+    }
+    if (nodeHost !== '' && !lastRemoteTeams.has(nodeHost)) nodeHost = ''
+    sel.value = nodeHost
+    sel.addEventListener('change', () => { nodeHost = sel.value; renderNodePanel() })
+    head.append(headLabel, sel)
+    const body = document.createElement('div')
+    body.className = 'p-nodelist-body'
+    el.append(head, body)
+    if (nodeHost === '') renderLocalNodeGroups(body)
+    else renderRemoteNodeGroups(body, lastRemoteTeams.get(nodeHost) ?? [])
+  }
+
+  function nodeRowDot(live: boolean | undefined, joined: boolean): HTMLSpanElement {
+    const dot = document.createElement('span')
+    dot.className = 'p-nodedot' + (joined !== true ? ' off' : live === false ? ' cold' : '')
+    return dot
+  }
+
+  function listBtn(label: string, onPick: () => void): HTMLButtonElement {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.className = 'p-listbtn'
+    b.textContent = label
+    b.addEventListener('click', (ev) => { ev.stopPropagation(); onPick() })
+    return b
+  }
+
+  function groupTitle(text: string, note?: string): HTMLDivElement {
+    const t = document.createElement('div')
+    t.className = 'p-nodelist-group'
+    t.textContent = text
+    if (note !== undefined) {
+      const n = document.createElement('span')
+      n.className = 'p-nodelist-note'
+      n.textContent = note
+      t.appendChild(n)
+    }
+    return t
+  }
+
+  /** 入队▸ submenu: existing canvas teams, plus 新团队… for the bootstrap case. */
+  function openNodeJoinMenu(anchor: HTMLElement, id: string): void {
+    closeNodeJoinMenu()
+    const el = document.createElement('div')
+    el.className = 'p-menu'
+    el.setAttribute('role', 'menu')
+    el.setAttribute('aria-label', '加入团队')
+    for (const t of lastTeams) {
+      const already = (model.getNode(id)?.memberships.some(m => m.team === t.name)) ?? false
+      el.appendChild(menuItem(already ? `${t.name}（已加入）` : t.name, !already, () => {
+        closeNodePanel()
+        emitAction({ type: 'add-member', team: t.name, ids: [id] })
+      }))
+    }
+    el.appendChild(menuItem('新团队…', true, () => {
+      closeNodePanel()
+      openNameDialog([id])
+    }))
+    nodeJoinMenu = el
+    root.appendChild(el)
+    const rect = anchor.getBoundingClientRect()
+    el.style.left = `${String(Math.min(rect.right + 4, window.innerWidth - 180))}px`
+    el.style.top = `${String(Math.max(8, rect.top - 60))}px`
+    el.addEventListener('keydown', (ev) => {
+      if ((ev as KeyboardEvent).key === 'Escape') { ev.stopPropagation(); closeNodeJoinMenu(); anchor.focus() }
+    })
+    el.querySelector('button')?.focus()
+  }
+
+  /** Center the viewport on one canvas node (the 已组队 row's 定位). */
+  function locateNode(id: string): void {
+    const n = model.getNode(id)
+    if (n === undefined) return
+    closeNodePanel()
+    const size = deps.viewSize?.() ?? { w: root.clientWidth > 0 ? root.clientWidth : 800, h: root.clientHeight > 0 ? root.clientHeight : 600 }
+    vp = clampViewport({ scale: vp.scale, x: n.x - size.w / (2 * vp.scale), y: n.y - size.h / (2 * vp.scale) })
+    applyViewport()
+    renderedRevision = -1
+    render()
+  }
+
+  function renderLocalNodeGroups(body: HTMLDivElement): void {
+    const teamed = new Set<string>(lastCanvasMemberIds)
+    for (const s of lastSessions) if (s.teams !== undefined && s.teams.length > 0) teamed.add(s.id)
+    const unteamed = lastSessions.filter(s => s.joined === true && !teamed.has(s.id))
+    const unjoined = lastSessions.filter(s => s.joined !== true)
+    const teamedRows = lastSessions.filter(s => s.joined === true && teamed.has(s.id))
+
+    body.appendChild(groupTitle(`未组队 (${String(unteamed.length)})`, '无网络能力'))
+    for (const s of unteamed) {
+      const row = document.createElement('div')
+      row.className = 'p-noderow'
+      const name = document.createElement('span')
+      name.className = 'p-nodename'
+      name.textContent = s.name !== undefined && s.name !== '' ? s.name : s.label
+      name.title = s.team
+      const tag = document.createElement('span')
+      tag.className = 'p-nonet'
+      tag.textContent = '无网络能力'
+      const joinBtn = listBtn('入队▸', () => openNodeJoinMenu(joinBtn, s.id))
+      row.append(nodeRowDot(s.live, true), name, tag, joinBtn,
+        listBtn('退网', () => { closeNodePanel(); emitAction({ type: 'leave-network', id: s.id }) }))
+      body.appendChild(row)
+    }
+
+    body.appendChild(groupTitle(`未入网 (${String(unjoined.length)})`))
+    for (const s of unjoined) {
+      const row = document.createElement('div')
+      row.className = 'p-noderow'
+      const name = document.createElement('span')
+      name.className = 'p-nodename'
+      name.textContent = s.name !== undefined && s.name !== '' ? s.name : s.label
+      name.title = s.id
+      row.append(nodeRowDot(s.live, false), name,
+        listBtn('入网', () => { closeNodePanel(); emitAction({ type: 'join-network', id: s.id }) }))
+      body.appendChild(row)
+    }
+
+    body.appendChild(groupTitle(`已组队 (${String(teamedRows.length)})`, '画布展示'))
+    for (const s of teamedRows) {
+      const row = document.createElement('div')
+      row.className = 'p-noderow'
+      const name = document.createElement('span')
+      name.className = 'p-nodename'
+      name.textContent = s.name !== undefined && s.name !== '' ? s.name : s.label
+      name.title = s.team
+      const canvasCount = model.getNode(s.id)?.memberships.length ?? 0
+      const rosterCount = s.teams?.length ?? 0
+      const badge = document.createElement('span')
+      badge.className = 'p-teamcount'
+      badge.textContent = `队×${String(Math.max(canvasCount, 0) + rosterCount)}`
+      row.append(nodeRowDot(s.live, true), name, badge,
+        listBtn('定位', () => { locateNode(s.id) }))
+      body.appendChild(row)
+    }
+    if (lastSessions.length === 0) {
+      const empty = document.createElement('div')
+      empty.className = 'p-nodelist-empty'
+      empty.textContent = '无会话节点'
+      body.appendChild(empty)
+    }
+  }
+
+  function renderRemoteNodeGroups(body: HTMLDivElement, rows: ReadonlyArray<RemoteTeamRow>): void {
+    const unteamed = rows.filter(r => r.teams === undefined || r.teams.length === 0)
+    const teamedRows = rows.filter(r => r.teams !== undefined && r.teams.length > 0)
+    body.appendChild(groupTitle(`未组队 (${String(unteamed.length)})`, '无网络能力 · 只读'))
+    for (const r of unteamed) {
+      const row = document.createElement('div')
+      row.className = 'p-noderow'
+      const name = document.createElement('span')
+      name.className = 'p-nodename'
+      name.textContent = r.name !== undefined && r.name !== '' ? r.name : r.team
+      name.title = r.team
+      const tag = document.createElement('span')
+      tag.className = 'p-nonet'
+      tag.textContent = '无网络能力'
+      row.append(nodeRowDot(true, true), name, tag)
+      body.appendChild(row)
+    }
+    body.appendChild(groupTitle(`已组队 (${String(teamedRows.length)})`, '只读'))
+    for (const r of teamedRows) {
+      const row = document.createElement('div')
+      row.className = 'p-noderow'
+      const name = document.createElement('span')
+      name.className = 'p-nodename'
+      name.textContent = r.name !== undefined && r.name !== '' ? r.name : r.team
+      name.title = r.team
+      const badge = document.createElement('span')
+      badge.className = 'p-teamcount'
+      badge.textContent = `队×${String(r.teams?.length ?? 0)}`
+      row.append(nodeRowDot(true, true), name, badge)
+      body.appendChild(row)
+    }
+    if (rows.length === 0) {
+      const empty = document.createElement('div')
+      empty.className = 'p-nodelist-empty'
+      empty.textContent = '该节点未发布会话'
+      body.appendChild(empty)
+    }
+  }
+
+  // Outside-click dismissal for the node panel: the popover appends to root
+  // (scoped .p-menu styles apply; no transformed ancestor), so dismissal
+  // rides a document listener — the canvas pointer seam never sees presses
+  // on body-level chrome. The panel, its 入队 submenu, and the trigger are
+  // exempt.
+  document.addEventListener('pointerdown', (ev) => {
+    if (nodePanel === null) return
+    const t = ev.target as Element | null
+    if (t === null) { closeNodePanel(); return }
+    if (t.closest('.p-nodelist') !== null || t.closest('.p-menu') !== null) return
+    if (t === nodesBtn || nodesBtn.contains(t)) return
+    closeNodePanel()
+  }, signal)
 
   function closeMenu(): void {
     menu?.remove()
@@ -1252,6 +1541,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // Unjoined sessions have no node on the canvas — the panel-slim
     // migration made this view the join surface, so they ride a compact
     // toolbar chip instead of vanishing entirely.
+    lastSessions = input.sessions
     lastUnjoined = input.sessions.filter(s => s.joined !== true && !s.id.startsWith('peer-'))
     netBtn.textContent = `未入网${lastUnjoined.length > 0 ? `(${String(lastUnjoined.length)})` : ''}`
     netBtn.disabled = lastUnjoined.length === 0
@@ -1266,6 +1556,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         memberships.set(id, list)
       }
     }
+    lastCanvasMemberIds = new Set(memberships.keys())
     const seen = new Set<string>()
     // In-flight write guard: membership entries of teams with unsettled
     // writes come from the model, not the (stale) payload — a poll racing
@@ -1274,17 +1565,35 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       const payload = memberships.get(id) ?? []
       if (pendingTeams.size === 0) return payload
       const keep = payload.filter(m => !pendingTeams.has(m.team))
-      const pending = (model.getNode(id)?.memberships ?? []).filter(m => pendingTeams.has(m.team))
+      // In-flight teams read their in-membership from the team roster
+      // (teamMemberIds), NOT from getNode(id).memberships: an optimistic
+      // add can target a node the teamed gate kept OFF the model (no card
+      // yet) — its membership lives only in the roster map, and dropping
+      // it here would pop the node right back off the canvas mid-flight.
+      const pending: Array<{ team: string; index: number }> = []
+      for (const [team] of pendingTeams) {
+        const roster = model.teamMemberIds(team)
+        const index = roster.indexOf(id)
+        if (index >= 0) pending.push({ team, index })
+      }
       return [...keep, ...pending]
     }
     for (const s of input.sessions) {
       if (s.joined !== true) continue
+      // Teamed-only canvas (network-membership-display ruling): a joined
+      // session earns a canvas node only with a team — canvas membership
+      // (optimistic-aware) or a declared roster team. Teamless joined
+      // sessions ride the node list's 未组队 group instead; sessions absent
+      // from `seen` are swept from the model below.
+      const effective = resolveMemberships(s.id)
+      if (effective.length === 0 && (s.teams === undefined || s.teams.length === 0)) continue
       seen.add(s.id)
       if (model.getNode(s.id) !== undefined) {
         model.upsertNode({
           id: s.id, x: model.getNode(s.id)!.x, y: model.getNode(s.id)!.y,
           label: s.label, team: s.team, name: s.name, live: s.live !== false,
-          memberships: resolveMemberships(s.id),
+          memberships: effective,
+          ...(s.teams !== undefined && s.teams.length > 0 ? { teams: s.teams } : {}),
         })
       } else {
         const saved = layoutDoc?.nodes[s.id]
@@ -1297,7 +1606,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         }
         model.upsertNode({
           id: s.id, x, y, label: s.label, team: s.team, name: s.name, live: s.live !== false,
-          memberships: resolveMemberships(s.id),
+          memberships: effective,
+          ...(s.teams !== undefined && s.teams.length > 0 ? { teams: s.teams } : {}),
         })
       }
     }
@@ -1355,6 +1665,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       if (pendingTeams.has(name)) continue // an in-flight create/remove owns this name
       if (!input.teams.some(t => t.name === name)) model.removeFrame(name)
     }
+    // An open node panel follows the poll: facts (joins, leaves, team
+    // declarations, peer arrivals) land within one cadence.
+    if (nodePanel !== null) renderNodePanel()
     renderStatus(input)
     render()
   }

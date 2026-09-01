@@ -1410,7 +1410,7 @@ export function apply(ctx: Context, config: Config): void {
     // staying well inside a peer restart\x27s noticeability. Single-flight: a
     // refresh already in flight serves every poll that arrives before it
     // settles — no stacked sweeps.
-    let remoteRowsCache: { at: number; rows: { team: string; name: string; origin?: string; workspace?: string; legacy?: boolean }[] } | undefined
+    let remoteRowsCache: { at: number; rows: { team: string; name: string; origin?: string; via?: string; workspace?: string; legacy?: boolean; teams?: readonly string[] }[] } | undefined
     let remoteRowsInFlight: Promise<void> | undefined
     const refreshRemoteRows = (): void => {
       const now = Date.now()
@@ -1422,7 +1422,7 @@ export function apply(ctx: Context, config: Config): void {
             at: now,
             rows: all
               .filter(row => row.local !== true)
-              .map(row => ({ team: row.team, name: row.name, ...(row.origin !== undefined ? { origin: row.origin } : {}), ...(row.via !== undefined ? { via: row.via } : {}), ...(row.workspace !== undefined ? { workspace: row.workspace } : {}), ...(row.legacy === true ? { legacy: true } : {}) })),
+              .map(row => ({ team: row.team, name: row.name, ...(row.origin !== undefined ? { origin: row.origin } : {}), ...(row.via !== undefined ? { via: row.via } : {}), ...(row.workspace !== undefined ? { workspace: row.workspace } : {}), ...(row.legacy === true ? { legacy: true } : {}), ...(row.teams !== undefined && row.teams.length > 0 ? { teams: [...row.teams] } : {}) })),
           }
         })
         .catch(() => {})
@@ -1463,6 +1463,7 @@ export function apply(ctx: Context, config: Config): void {
                 ...nodeMetadataOf(agent),
                 joined: sessionNodes.has(String(agent.id)),
                 live: true,
+                teams: [...teamMemberships.teamsOf(String(agent.id))],
                 ...(groupOf(String(agent.id)) !== undefined ? { group: groupOf(String(agent.id)) } : {}),
               }))
             // Cold joined sessions: a remembered intent whose Agent is not
@@ -1489,6 +1490,7 @@ export function apply(ctx: Context, config: Config): void {
                 team: `${config.team}/${id8(id)}`,
                 joined: true,
                 live: false,
+                teams: [...teamMemberships.teamsOf(id)],
                 ...(groupOf(id) !== undefined ? { group: groupOf(id) } : {}),
               })
             }
@@ -1579,6 +1581,7 @@ export function apply(ctx: Context, config: Config): void {
                     host: String(row.origin ?? ''),
                     ...(row.workspace !== undefined && row.workspace !== '' ? { workspace: row.workspace } : {}),
                     ...(row.legacy === true ? { legacy: true } : {}),
+                    teams: [...(row.teams ?? [])],
                     remote: true,
                   })),
                 ],
@@ -3258,7 +3261,7 @@ ${message}`
    * while staying bounded (one extra sweep, still under the store cap).
    * @param expand - chase one referral hop beyond the current store walk.
    */
-  type DirectoryTeamRow = { team: string; session: string; name: string; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean }
+  type DirectoryTeamRow = { team: string; session: string; name: string; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean; teams?: readonly string[] }
   async function listDirectoryTeams(expand: boolean): Promise<DirectoryTeamRow[]> {
     const localOrigin = lanIp === '' ? `${session} [this host]` : `${session} [this host, ${lanIp}]`
     const teams: DirectoryTeamRow[] = [
@@ -3321,8 +3324,18 @@ ${message}`
       const rows: DirectoryTeamRow[] = [
         { team: card.team, session: card.session, name: card.name, description: '', origin, via: peer, ...(legacy ? { legacy } : {}) },
       ]
+      // Roster reader half: the card's unsigned teamMemberships map each
+      // published session team to its declared roster teams, so a remote
+      // node's teamed/teamless state is visible without visiting its host.
+      const rosterOf = new Map<string, string[]>()
+      for (const membership of card.teamMemberships ?? []) {
+        const list = rosterOf.get(membership.node) ?? []
+        list.push(membership.team)
+        rosterOf.set(membership.node, list)
+      }
       for (const entry of card.sessionTeams ?? []) {
-        rows.push({ team: entry.team, session: card.session, name: entry.name, description: entry.description, origin, via: peer, ...(entry.workspace !== undefined ? { workspace: entry.workspace } : {}), ...(legacy ? { legacy } : {}) })
+        const declared = rosterOf.get(entry.team)
+        rows.push({ team: entry.team, session: card.session, name: entry.name, description: entry.description, origin, via: peer, ...(entry.workspace !== undefined ? { workspace: entry.workspace } : {}), ...(legacy ? { legacy } : {}), ...(declared !== undefined && declared.length > 0 ? { teams: declared } : {}) })
       }
       return rows
     }

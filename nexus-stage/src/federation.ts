@@ -67,6 +67,10 @@ export interface RemoteTeamRow {
   name?: string
   via?: string
   workspace?: string
+  /** Publishing node's label + LAN IP — the host grouping dimension. */
+  origin?: string
+  /** Roster teams the publishing node declared for this handle (card teamMemberships). */
+  teams?: readonly string[]
 }
 
 /**
