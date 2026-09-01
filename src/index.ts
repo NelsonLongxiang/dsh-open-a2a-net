@@ -1396,7 +1396,7 @@ export function apply(ctx: Context, config: Config): void {
     // staying well inside a peer restart\x27s noticeability. Single-flight: a
     // refresh already in flight serves every poll that arrives before it
     // settles — no stacked sweeps.
-    let remoteRowsCache: { at: number; rows: { team: string; name: string; origin?: string; workspace?: string }[] } | undefined
+    let remoteRowsCache: { at: number; rows: { team: string; name: string; origin?: string; workspace?: string; legacy?: boolean }[] } | undefined
     let remoteRowsInFlight: Promise<void> | undefined
     const refreshRemoteRows = (): void => {
       const now = Date.now()
@@ -1408,7 +1408,7 @@ export function apply(ctx: Context, config: Config): void {
             at: now,
             rows: all
               .filter(row => row.local !== true)
-              .map(row => ({ team: row.team, name: row.name, ...(row.origin !== undefined ? { origin: row.origin } : {}), ...(row.via !== undefined ? { via: row.via } : {}), ...(row.workspace !== undefined ? { workspace: row.workspace } : {}) })),
+              .map(row => ({ team: row.team, name: row.name, ...(row.origin !== undefined ? { origin: row.origin } : {}), ...(row.via !== undefined ? { via: row.via } : {}), ...(row.workspace !== undefined ? { workspace: row.workspace } : {}), ...(row.legacy === true ? { legacy: true } : {}) })),
           }
         })
         .catch(() => {})
@@ -1564,6 +1564,7 @@ export function apply(ctx: Context, config: Config): void {
                     zone: String(row.team).split('/')[0] ?? config.team,
                     host: String(row.origin ?? ''),
                     ...(row.workspace !== undefined && row.workspace !== '' ? { workspace: row.workspace } : {}),
+                    ...(row.legacy === true ? { legacy: true } : {}),
                     remote: true,
                   })),
                 ],
@@ -1856,7 +1857,10 @@ export function apply(ctx: Context, config: Config): void {
         // async: wait:false is honored (steer + delivered, no final hold);
         // the signed capability turns async dialing into a deterministic
         // check instead of a timeout race against pre-0.5.2 peers.
-        capabilities: { route: true, async: true },
+        // roster: the team-roster face (a2a_team_join/leave, card
+        // teamMemberships, team-scope routing admission) ships — peers read
+        // its absence as a pre-roster legacy node (0.5.43 and older).
+        capabilities: { route: true, async: true, roster: true },
         expiresAt: Date.now() + config.cardTtlMs,
         ...(records.length > 0 ? { records: [...records] } : {}),
       })
@@ -3240,7 +3244,7 @@ ${message}`
    * while staying bounded (one extra sweep, still under the store cap).
    * @param expand - chase one referral hop beyond the current store walk.
    */
-  type DirectoryTeamRow = { team: string; session: string; name: string; description: string; local?: boolean; origin?: string; workspace?: string; via?: string }
+  type DirectoryTeamRow = { team: string; session: string; name: string; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean }
   async function listDirectoryTeams(expand: boolean): Promise<DirectoryTeamRow[]> {
     const localOrigin = lanIp === '' ? `${session} [this host]` : `${session} [this host, ${lanIp}]`
     const teams: DirectoryTeamRow[] = [
@@ -3295,11 +3299,16 @@ ${message}`
       // via = the peer URL the card was fetched from: the panel shows which
       // host:port each remote row came from, so an unknown node is traceable
       // to its publishing endpoint at a glance.
+      // legacy: the publisher's card carries no roster capability — a
+      // pre-roster node (0.5.43-). Rows from it are marked so the fleet
+      // audit (and the phase-2 teamed-only default flip) knows which peers
+      // never grow the roster face.
+      const legacy = (card.capabilities as { roster?: unknown } | undefined)?.roster !== true
       const rows: DirectoryTeamRow[] = [
-        { team: card.team, session: card.session, name: card.name, description: '', origin, via: peer },
+        { team: card.team, session: card.session, name: card.name, description: '', origin, via: peer, ...(legacy ? { legacy } : {}) },
       ]
       for (const entry of card.sessionTeams ?? []) {
-        rows.push({ team: entry.team, session: card.session, name: entry.name, description: entry.description, origin, via: peer, ...(entry.workspace !== undefined ? { workspace: entry.workspace } : {}) })
+        rows.push({ team: entry.team, session: card.session, name: entry.name, description: entry.description, origin, via: peer, ...(entry.workspace !== undefined ? { workspace: entry.workspace } : {}), ...(legacy ? { legacy } : {}) })
       }
       return rows
     }

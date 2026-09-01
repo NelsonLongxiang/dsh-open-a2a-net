@@ -274,3 +274,55 @@ describe('S3 team-scoped routing admission', () => {
     await ctx.fiber.dispose()
   })
 })
+
+describe('roster capability flag (phase-2 flip prerequisite)', () => {
+  it('the card advertises roster:true and directory/registry rows mark pre-roster peers legacy', async () => {
+    const { generateKeyPairSync } = await import('node:crypto')
+    const { signCard } = await import('../src/card.ts')
+    const { privateKey } = generateKeyPairSync('ed25519')
+    // A pre-roster peer: capabilities without the roster flag.
+    const legacyCard = {
+      ...signCard({ name: 'old node', session: 'sess-o', team: 'peer', capabilities: { route: true, async: true }, expiresAt: Date.now() + 60_000 }, privateKey),
+      sessionTeams: [{ team: 'peer/eeee0000', name: 'old-session', description: 'd' }],
+    }
+    // A current peer: roster flag present.
+    const newCard = {
+      ...signCard({ name: 'new node', session: 'sess-n', team: 'peer2', capabilities: { route: true, async: true, roster: true }, expiresAt: Date.now() + 60_000 }, privateKey),
+      sessionTeams: [{ team: 'peer2/ffff0000', name: 'new-session', description: 'd' }],
+    }
+    const realFetch = globalThis.fetch
+    vi.stubGlobal('fetch', (url: string, init?: { method?: string }) => {
+      if (url === 'http://peer-old/.well-known/agent-card.json' && (init?.method ?? 'GET') === 'GET') {
+        return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify(legacyCard) } as unknown as Response)
+      }
+      if (url === 'http://peer-new/.well-known/agent-card.json' && (init?.method ?? 'GET') === 'GET') {
+        return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify(newCard) } as unknown as Response)
+      }
+      return realFetch(url, init as never)
+    })
+    const home = mkdtempSync(join(tmpdir(), 'a2a-cap-flag-'))
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    apply(ctx, makeConfig({ peers: ['http://peer-old', 'http://peer-new'], dshHome: home }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    await vi.waitFor(async () => {
+      const state = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as {
+        remote: Array<{ team: string; legacy?: boolean }>
+        registry: { nodes: Array<{ id: string; legacy?: boolean; remote?: boolean }> }
+      }
+      expect(state.remote.find(row => row.team === 'peer2/ffff0000')?.legacy).toBeUndefined()
+      expect(state.remote.find(row => row.team === 'peer/eeee0000')?.legacy).toBe(true)
+      expect(state.registry.nodes.find(node => node.id === 'peer2/ffff0000')?.legacy).toBeUndefined()
+      expect(state.registry.nodes.find(node => node.id === 'peer/eeee0000')?.legacy).toBe(true)
+    }, { timeout: 5_000 })
+    // Our own served card carries the roster capability.
+    const served = JSON.parse(await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).text()) as { capabilities?: { roster?: unknown } }
+    expect(served.capabilities?.roster).toBe(true)
+    await ctx.fiber.dispose()
+    vi.unstubAllGlobals()
+  })
+})
