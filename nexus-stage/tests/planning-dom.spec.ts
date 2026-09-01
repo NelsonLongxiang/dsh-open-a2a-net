@@ -142,11 +142,16 @@ describe('planning view DOM', () => {
     expect(parseFloat(el.style.top)).toBe(top0 + 30)
   })
 
-  it('Ctrl+wheel zooms in on scroll-up', () => {
+  it('wheel zooms pointer-anchored (owner ruling 2026-09-01), Ctrl or not', () => {
     const { v } = view()
     const t = (): string => v.root.querySelector<HTMLElement>('.p-world')!.style.transform
-    v.seam.wheel({ button: 0, shiftKey: false, ctrlKey: true, clientX: 400, clientY: 300, target: v.root, deltaY: -100, preventDefault: () => {} })
-    expect(t()).toContain('scale(1.')
+    v.seam.wheel({ button: 0, shiftKey: false, ctrlKey: false, clientX: 400, clientY: 300, target: v.root, deltaY: -100, preventDefault: () => {} })
+    expect(t()).toContain('scale(1.') // plain wheel zooms in on scroll-up
+    v.seam.wheel({ button: 0, shiftKey: false, ctrlKey: true, clientX: 400, clientY: 300, target: v.root, deltaY: 100, preventDefault: () => {} })
+    // Ctrl+wheel zooms back out — one action both ways. Multiplicative zoom
+    // returns to identity within float dust, never to a literal string.
+    const scale = Number(t().match(/scale\(([\d.]+)\)/)?.[1])
+    expect(Math.abs(scale - 1)).toBeLessThan(1e-9)
   })
 
   it('middle-button drag on a card pans the viewport (no card drag, no roster write)', () => {
@@ -187,13 +192,13 @@ describe('planning view DOM', () => {
     expect(onLampClick).toHaveBeenCalledTimes(1)
   })
 
-  it('wheel pans with the native delta (scroll down reveals lower content)', () => {
+  it('Shift+wheel keeps the pan escape hatch (scroll down reveals lower content)', () => {
     const { v } = view()
     const t = (): string => v.root.querySelector<HTMLElement>('.p-world')!.style.transform
-    v.seam.wheel({ button: 0, shiftKey: false, ctrlKey: false, clientX: 0, clientY: 0, target: v.root, deltaY: 100, preventDefault: () => {} })
+    v.seam.wheel({ button: 0, shiftKey: true, ctrlKey: false, clientX: 0, clientY: 0, target: v.root, deltaY: 100, preventDefault: () => {} })
     const afterDown = t()
     expect(afterDown).toContain('translate(0px, -100px)') // viewport moved down the world
-    v.seam.wheel({ button: 0, shiftKey: false, ctrlKey: false, clientX: 0, clientY: 0, target: v.root, deltaY: -100, preventDefault: () => {} })
+    v.seam.wheel({ button: 0, shiftKey: true, ctrlKey: false, clientX: 0, clientY: 0, target: v.root, deltaY: -100, preventDefault: () => {} })
     expect(t()).toBe('translate(0px, 0px) scale(1)') // and back
   })
 

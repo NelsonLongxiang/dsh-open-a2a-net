@@ -19,7 +19,8 @@
  *   createElement + textContent.
  *
  * Gestures (Figma-style ruling): left-blank drag = marquee; pan = Space+drag
- * or middle-drag; Ctrl+wheel = pointer-anchored zoom; plain wheel pans.
+ * or middle-drag or Shift+wheel; wheel (with or without Ctrl) =
+ * pointer-anchored zoom (owner ruling 2026-09-01).
  * Tests drive the same handlers production binds through `seam`.
  * @module nexus-stage/planning-view
  */
@@ -1085,16 +1086,17 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   function wheel(ev: SeamPointer): void {
     if (menu !== null) closeMenu()
     const p = localXY(ev)
-    if (ev.ctrlKey) {
+    // Wheel = pointer-anchored zoom (owner ruling 2026-09-01: 鼠标滚动 =
+    // 放大缩小), with or without Ctrl — both muscle memories land on the
+    // same action. Shift+wheel keeps the natural-scroll pan as the escape
+    // hatch. Line-mode wheels (Firefox, deltaMode=1) report ~3 per notch.
+    if (ev.shiftKey && !ev.ctrlKey) {
+      const line = ev.deltaMode === 1 ? 16 : 1
+      vp = clampViewport(panBy(vp, (ev.deltaX ?? 0) * line, (ev.deltaY ?? 0) * line))
+    } else {
       const line = ev.deltaMode === 1 ? 16 : 1
       const factor = Math.exp(-((ev.deltaY ?? 0) * line) * 0.0015)
       vp = zoomAt(vp, factor, p.x, p.y)
-    } else {
-      // Natural scrolling: the viewport follows the wheel (scroll down
-      // reveals content further down), same convention as a webpage.
-      // Line-mode wheels (Firefox, deltaMode=1) report ~3 per notch.
-      const line = ev.deltaMode === 1 ? 16 : 1
-      vp = clampViewport(panBy(vp, (ev.deltaX ?? 0) * line, (ev.deltaY ?? 0) * line))
     }
     ev.preventDefault()
     applyViewport()
