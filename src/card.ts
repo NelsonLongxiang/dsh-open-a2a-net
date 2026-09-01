@@ -8,7 +8,7 @@
  */
 
 import { createPublicKey, sign as edSign, verify as edVerify, type KeyObject } from 'node:crypto'
-import type { A2aPeerCard, A2aSessionTeamInfo, ZoneRecord } from './types.ts'
+import type { A2aPeerCard, A2aSessionTeamInfo, A2aTeamMembership, ZoneRecord } from './types.ts'
 
 /** Card validity budget. GNUnet HELLO default (2 days). */
 export const CARD_TTL_MS = 172_800_000
@@ -73,6 +73,7 @@ interface WireCard {
   readonly expiresAt?: unknown
   readonly peers?: unknown
   readonly sessionTeams?: unknown
+  readonly teamMemberships?: unknown
   readonly records?: unknown
   readonly lanIp?: unknown
   readonly version?: unknown
@@ -138,6 +139,26 @@ function sessionTeams(wire: WireCard): readonly A2aSessionTeamInfo[] | undefined
 }
 
 /**
+ * The unsigned `teamMemberships` listing passes through only as an array of
+ * well-formed node→team entries; any other shape drops the field instead of
+ * rejecting the card — same posture as `sessionTeams`, because cards from
+ * nodes that declared no roster teams (or pre-roster versions) carry none.
+ * @param wire - the shape-checked card candidate.
+ * @returns the membership entries, or `undefined` when absent or malformed.
+ */
+function teamMemberships(wire: WireCard): readonly A2aTeamMembership[] | undefined {
+  if (!Array.isArray(wire.teamMemberships)) return undefined
+  const entries: A2aTeamMembership[] = []
+  for (const entry of wire.teamMemberships) {
+    const membership = entry as Partial<A2aTeamMembership> | null
+    if (typeof membership?.node !== 'string' || membership.node === '') continue
+    if (typeof membership.team !== 'string' || membership.team === '') continue
+    entries.push({ node: membership.node, team: membership.team })
+  }
+  return entries
+}
+
+/**
  * Verify a parsed card: shape, signature, and expiry, in that order.
  * @param candidate - the JSON value fetched from a peer's agent-card URL.
  * @param now - evaluation time (epoch ms); injected for tests.
@@ -177,6 +198,7 @@ export function verifyCard(candidate: unknown, now: number): CardVerification {
   }
   const peers = referrals(wire)
   const teams = sessionTeams(wire)
+  const memberships = teamMemberships(wire)
   return {
     ok: true,
     card: {
@@ -184,6 +206,7 @@ export function verifyCard(candidate: unknown, now: number): CardVerification {
       expiresAt: wire.expiresAt,
       ...(peers !== undefined ? { peers } : {}),
       ...(teams !== undefined && teams.length > 0 ? { sessionTeams: teams } : {}),
+      ...(memberships !== undefined && memberships.length > 0 ? { teamMemberships: memberships } : {}),
       ...(typeof wire.lanIp === 'string' && wire.lanIp !== '' ? { lanIp: wire.lanIp } : {}),
       ...(typeof wire.version === 'string' && wire.version !== '' ? { version: wire.version } : {}),
       publicKey: wire.publicKey,

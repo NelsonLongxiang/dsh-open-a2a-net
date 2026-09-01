@@ -11,10 +11,13 @@ import { describe, expect, it, vi } from 'vitest'
 import { createPlanningView, type SeamKey, type SeamPointer, type PlanningInput } from '../src/planning-view.ts'
 import type { CanvasAction } from '../src/canvas-ops.ts'
 
+// Fixture sessions carry a roster team each: the teamed-only canvas ruling
+// (network-membership-display) keeps teamless joined sessions off the canvas,
+// so these three earn their cards by declaration, not by canvas membership.
 const sessions = [
-  { id: 'a', label: 'A', team: 't/a', name: 'alpha', joined: true, live: true },
-  { id: 'b', label: 'B', team: 't/b', name: 'beta', joined: true, live: true },
-  { id: 'c', label: 'C', team: 't/c', name: 'gamma', joined: true, live: true },
+  { id: 'a', label: 'A', team: 't/a', name: 'alpha', joined: true, live: true, teams: ['t/ops'] },
+  { id: 'b', label: 'B', team: 't/b', name: 'beta', joined: true, live: true, teams: ['t/ops'] },
+  { id: 'c', label: 'C', team: 't/c', name: 'gamma', joined: true, live: true, teams: ['t/ops'] },
 ]
 const baseInput: PlanningInput = {
   sessions,

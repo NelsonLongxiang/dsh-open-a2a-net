@@ -202,20 +202,22 @@ describe('planning view DOM', () => {
     expect(t()).toBe('translate(0px, 0px) scale(1)') // and back
   })
 
-  it('toolbar carries the PR-C 建队 control (4 buttons)', () => {
+  it('toolbar carries the 建队 control plus the network surfaces (6 buttons)', () => {
     const { v } = view()
     const buttons = Array.from(v.root.querySelectorAll<HTMLButtonElement>('.p-toolbar button'))
-    // 5th button = 未入网 chip (panel-slim migration: the join surface moved here).
-    expect(buttons).toHaveLength(5)
+    // 5th = 未入网 chip (panel-slim migration); 6th = 节点 list (the
+    // teamed-only canvas ruling moved teamless/unjoined sessions there).
+    expect(buttons).toHaveLength(6)
     expect(buttons.some(b => b.textContent === '建队')).toBe(true)
     expect(buttons.some(b => (b.textContent ?? '').startsWith('未入网'))).toBe(true)
+    expect(buttons.some(b => b.textContent === '节点')).toBe(true)
   })
 
   it('attacker-shaped labels land as text, never as markup', () => {
     const { v } = view()
     const evil = '<img src=x onerror=alert(1)>'
     v.reconcile({
-      sessions: [{ id: 'sx', label: 'x', team: 'dsh/99999999', name: evil, joined: true, live: true }],
+      sessions: [{ id: 'sx', label: 'x', team: 'dsh/99999999', name: evil, joined: true, live: true, teams: ['dsh/ops'] }],
       teams: [],
       peerCount: 0,
     })

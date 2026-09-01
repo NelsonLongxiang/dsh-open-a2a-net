@@ -159,8 +159,19 @@ async function cycle(): Promise<void> {
   }
   // Mock hard-acceptance toggle: five nodes / two teams / one peer for the
   // readability acceptance run without a live fleet.
-  const sessions = useMock ? MOCK.sessions : (body.sessions ?? []).filter((s) => s.joined === true)
+  const allSessions = useMock ? MOCK.sessions : (body.sessions ?? [])
   const teams = useMock ? MOCK.canvas.teams : (body.canvas?.teams ?? [])
+  // Teamed-only display (network-membership-display ruling): the mesh shows
+  // joined sessions that hold a team — canvas membership or a declared
+  // roster team. Joined-but-teamless sessions ride the planning view's node
+  // list instead of the canvas.
+  const teamedIds = new Set<string>()
+  for (const t of teams) for (const m of t.members) teamedIds.add(m.id)
+  for (const s of allSessions) {
+    const declared = (s as { teams?: unknown }).teams
+    if (Array.isArray(declared) && declared.length > 0) teamedIds.add(s.id)
+  }
+  const sessions = allSessions.filter((s) => s.joined === true && teamedIds.has(s.id))
   const peers = useMock ? MOCK.peers : (body.peers ?? []).filter(p => p !== null && typeof p === 'object' && typeof (p as { url?: unknown }).url === 'string')
   // PR D federation rows: pending outbound routes ride the same state
   // payload (top-level inFlight; the mock face has none). Cast only —
@@ -267,10 +278,19 @@ async function cycle(): Promise<void> {
       planning.adoptExternalLayout(layout)
     }
   }
-  const remoteTeams = ((body as { remote?: ReadonlyArray<{ team?: string; name?: string; via?: string; workspace?: string }> }).remote ?? [])
+  const remoteTeams = ((body as { remote?: ReadonlyArray<{ team?: string; name?: string; via?: string; workspace?: string; origin?: string; teams?: readonly string[] }> }).remote ?? [])
     .filter(r => r !== null && typeof r === 'object' && typeof (r as { team?: unknown }).team === 'string' && typeof (r as { via?: unknown }).via === 'string')
-    .map(r => ({ team: r.team as string, name: r.name, via: r.via as string, workspace: r.workspace }))
-  planning.reconcile({ sessions, teams, peerCount: peers.length, peers, inFlight, remoteTeams })
+    .map(r => ({
+      team: r.team as string,
+      name: r.name,
+      via: r.via as string,
+      workspace: r.workspace,
+      ...(typeof r.origin === 'string' && r.origin !== '' ? { origin: r.origin } : {}),
+      ...(Array.isArray(r.teams) && r.teams.length > 0 ? { teams: r.teams.filter((t): t is string => typeof t === 'string' && t !== '') } : {}),
+    }))
+  // The planning view owns the full inventory (joined + unjoined + teamed
+  // grouping for its node list); the 3D mesh above renders the teamed subset.
+  planning.reconcile({ sessions: allSessions, teams, peerCount: peers.length, peers, inFlight, remoteTeams })
   canvasFace = body.canvas !== undefined
   tabPlan.style.display = canvasFace ? '' : 'none'
   if (!canvasFace && mode === 'plan') setMode('scene')

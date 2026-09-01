@@ -131,3 +131,20 @@ describe('card sessionTeams passthrough', () => {
     expect(verifyCard({ ...card, sessionTeams: [7, null] }, NOW)).toEqual({ ok: true, card })
   })
 })
+
+describe('card teamMemberships passthrough (roster reader half)', () => {
+  it('passes well-formed node→team declarations and drops the rest without rejecting the card', () => {
+    const { privateKey } = generateKeyPairSync('ed25519')
+    const card = signCard(core(), privateKey)
+    // Absent and non-array members leave the card untouched.
+    expect(verifyCard(card, NOW)).toEqual({ ok: true, card })
+    expect(verifyCard({ ...card, teamMemberships: 'no' }, NOW)).toEqual({ ok: true, card })
+    // Well-formed entries survive verbatim; malformed ones drop.
+    expect(verifyCard({ ...card, teamMemberships: [{ node: '', team: 'ops' }, 7, { node: 'dsh/abcd1234' }, { node: 'dsh/abcd1234', team: 'ops' }] }, NOW)).toEqual({
+      ok: true,
+      card: { ...card, teamMemberships: [{ node: 'dsh/abcd1234', team: 'ops' }] },
+    })
+    // An all-malformed list passes as no declarations.
+    expect(verifyCard({ ...card, teamMemberships: [null, 'x'] }, NOW)).toEqual({ ok: true, card })
+  })
+})

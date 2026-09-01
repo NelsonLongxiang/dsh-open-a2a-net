@@ -53,7 +53,11 @@ export function applyAction(model: WorldModel, a: CanvasAction): Undo {
       .map(id => model.getNode(id))
       .filter(n => n !== undefined)
       .map(n => nodeRect(n))
-    model.setFrame(a.name, deriveInitialFrame(rects))
+    // Ids not on the canvas yet (a create emitted from the node list for an
+    // unteamed session) resolve no rect: skip the optimistic frame so the
+    // next poll derives it from the member's real seat instead of pinning a
+    // 260x160 placeholder at the origin.
+    if (rects.length > 0) model.setFrame(a.name, deriveInitialFrame(rects))
     model.setTeamMembers(a.name, a.ids)
     return () => {
       // Only the created ids (a later add to this new team must survive).

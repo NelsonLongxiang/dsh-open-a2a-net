@@ -326,3 +326,58 @@ describe('roster capability flag (phase-2 flip prerequisite)', () => {
     vi.unstubAllGlobals()
   })
 })
+
+describe('roster reader half (peer card teamMemberships)', () => {
+  it('a2a_teams rows and the state remote/registry faces carry the peer roster declarations', async () => {
+    const { generateKeyPairSync } = await import('node:crypto')
+    const { signCard } = await import('../src/card.ts')
+    const { privateKey } = generateKeyPairSync('ed25519')
+    // The unsigned serve-fresh members ride the signed core, exactly as the
+    // card route assembles them at read time.
+    const card = {
+      ...signCard({ name: 'peer node', session: 'sess-p', team: 'peer', capabilities: {}, expiresAt: Date.now() + 60_000 }, privateKey),
+      sessionTeams: [{ team: 'peer/aa11bb22', name: 'remote-1', description: 'a remote session' }],
+      teamMemberships: [{ node: 'peer/aa11bb22', team: 'dsh/canvas/review-gate' }],
+    }
+    const realFetch = globalThis.fetch
+    vi.stubGlobal('fetch', (url: string, init?: { method?: string }) => {
+      if (url === 'http://peer-x/.well-known/agent-card.json' && (init?.method ?? 'GET') === 'GET') {
+        return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify(card) } as unknown as Response)
+      }
+      // Everything else (the state route polls inside waitFor) goes through.
+      return realFetch(url, init as never)
+    })
+    const home = mkdtempSync(join(tmpdir(), 'a2a-team-reader-'))
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    apply(ctx, makeConfig({ peers: ['http://peer-x'], dshHome: home }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+
+    // Directory listing: the session-team row carries its declared roster.
+    const listed = await ctx.tools.get('a2a_teams')?.execute({}, { agent: undefined } as never) as {
+      ok: boolean; teams: Array<{ team: string; local?: boolean; teams?: readonly string[] }>
+    }
+    expect(listed.ok).toBe(true)
+    const remoteRow = listed.teams.find(row => row.team === 'peer/aa11bb22')
+    expect(remoteRow?.teams).toEqual(['dsh/canvas/review-gate'])
+    // The peer's own process team row has no roster declaration.
+    expect(listed.teams.find(row => row.team === 'peer')?.teams).toBeUndefined()
+
+    // State faces: remote rows and registry nodes carry the same roster
+    // (the refresh is a background sweep — poll until the window fills).
+    await vi.waitFor(async () => {
+      const state = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as {
+        remote: Array<{ team: string; teams?: readonly string[] }>
+        registry: { nodes: Array<{ id: string; teams?: readonly string[]; remote?: boolean }> }
+      }
+      expect(state.remote.find(row => row.team === 'peer/aa11bb22')?.teams).toEqual(['dsh/canvas/review-gate'])
+      expect(state.registry.nodes.find(node => node.id === 'peer/aa11bb22' && node.remote === true)?.teams).toEqual(['dsh/canvas/review-gate'])
+    }, { timeout: 5_000 })
+    await ctx.fiber.dispose()
+    vi.unstubAllGlobals()
+  })
+})

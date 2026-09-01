@@ -3,7 +3,7 @@
  *  cost grows linearly with roster size instead of O(n²) pairwise lines. */
 import * as THREE from 'three'
 
-export interface SessionRow { id: string; label: string; team: string; name?: string; joined: boolean; live?: boolean; inFlight?: boolean }
+export interface SessionRow { id: string; label: string; team: string; name?: string; joined: boolean; live?: boolean; inFlight?: boolean; teams?: readonly string[] }
 export interface TeamMember { id: string; team: string; joined: boolean; live: boolean }
 export interface CanvasTeam { name: string; team: string; members: TeamMember[] }
 export interface StateBody { sessions?: SessionRow[]; canvas?: { teams: CanvasTeam[] }; peers?: Array<{ url: string; score?: number }> }
@@ -22,6 +22,7 @@ export function normalizeSession(raw: unknown): SessionRow | null {
     joined: c.joined !== false,
     live: c.live !== false,
     inFlight: c.inFlight === true,
+    ...(Array.isArray(c.teams) && c.teams.length > 0 ? { teams: c.teams.filter((t): t is string => typeof t === 'string' && t !== '') } : {}),
   }
 }
 
