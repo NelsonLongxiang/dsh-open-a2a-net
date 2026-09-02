@@ -296,3 +296,55 @@ describe('frame resize (owner ruling: frames stretch and adjust)', () => {
     expect(card.style.left).toBe(left0)
   })
 })
+
+describe('netmenu dismissal (owner-reported stuck dropdown)', () => {
+  const netView = () => {
+    const onCanvasAction = vi.fn(() => Promise.resolve(true))
+    const v = createPlanningView({ onDirty: vi.fn(), onLampClick: vi.fn(), onCanvasAction, viewSize: () => ({ w: 1000, h: 800 }) })
+    document.body.appendChild(v.root)
+    v.reconcile({
+      sessions: [
+        { id: 'j1', label: 'joined', team: 'dsh/aaaaaaa1', name: 'joined-one', joined: true, live: true },
+        { id: 'u1', label: 'unjoined', team: 'dsh/aaaaaaa2', name: 'unjoined-one', joined: false, live: true },
+      ],
+      teams: [],
+      peerCount: 0,
+    })
+    return { v, onCanvasAction }
+  }
+  const openNet = (v: ReturnType<typeof netView>['v']) => {
+    const btn = v.root.querySelector<HTMLElement>('.p-netbtn')!
+    btn.click()
+    return v.root.querySelector<HTMLElement>('.p-netmenu')!
+  }
+  const outside = (v: ReturnType<typeof netView>['v'], x: number, y: number) => {
+    const ev = new MouseEvent('pointerdown', { bubbles: true, clientX: x, clientY: y })
+    Object.defineProperty(ev, 'target', { value: v.root.querySelector('.p-world') })
+    document.dispatchEvent(ev)
+  }
+
+  it('clicking outside the dropdown closes it (stuck-dropdown fix)', () => {
+    const { v } = netView()
+    const menu = openNet(v)
+    expect(menu).not.toBeNull()
+    outside(v, 5, 5) // canvas blank press
+    expect(v.root.querySelector('.p-netmenu')).toBeNull()
+  })
+
+  it('the trigger button still toggles: second click closes', () => {
+    const { v } = netView()
+    openNet(v)
+    const btn = v.root.querySelector<HTMLElement>('.p-netbtn')!
+    btn.click()
+    expect(v.root.querySelector('.p-netmenu')).toBeNull()
+  })
+
+  it('pressing a menu item joins and closes; outside press does not re-open', () => {
+    const { v, onCanvasAction } = netView()
+    const menu = openNet(v)
+    const item = menu.querySelector<HTMLElement>('[role=menuitem]')!
+    item.click()
+    expect(onCanvasAction).toHaveBeenCalledTimes(1)
+    expect(v.root.querySelector('.p-netmenu')).toBeNull()
+  })
+})

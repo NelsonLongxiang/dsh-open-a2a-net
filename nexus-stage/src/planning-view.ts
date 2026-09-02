@@ -782,6 +782,17 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       }
     })
     el.querySelector('button')?.focus()
+    // Outside-click dismissal: the dropdown lives at root level, so canvas
+    // presses never reach a menu-local handler — and focus leaves with the
+    // first outside click, killing the Escape path too (the stuck-dropdown
+    // defect the owner hit). The trigger button stays exempt so its click
+    // still toggles.
+    document.addEventListener('pointerdown', (ev) => {
+      if (netMenu === null) return
+      const t = ev.target as Element | null
+      if (t !== null && (t.closest('.p-netmenu') !== null || t === netBtn || netBtn.contains(t))) return
+      closeNetMenu()
+    }, signal)
   }
 
   // ── 节点列表 drawer（组队节点上画布；单一节点按 host/对等节点在列表管理）──
