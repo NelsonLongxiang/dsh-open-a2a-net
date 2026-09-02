@@ -91,7 +91,7 @@ declare module '@deepseek-ai/cordis' {
 
 export const name = 'a2a'
 
-export const inject = ['tools', 'timer']
+export const inject = ['tools', 'timer', 'systemPrompt']
 
 /** One signed zone delegation published on this node's agent card. */
 export interface DelegateConfig {
@@ -380,6 +380,27 @@ export function directDeliveryExposure(
 
 export function apply(ctx: Context, config: Config): void {
   const logger = ctx.logger('a2a')
+  // Lifecycle guidance section (owner directive 2026-09-02): the network is
+  // self-service — a session that needs cross-session or cross-node work may
+  // join, team up (prefer joining an existing fitting team, create as
+  // fallback), and is expected to leave both once the task is done and no
+  // work is pending. Static section (tool-guidance band, 100-199): the rules
+  // are stable for the fiber lifetime; current membership state belongs to
+  // the a2a_teams tool, not the prompt.
+  ctx.systemPrompt.section({
+    name: 'a2a:lifecycle',
+    order: 150,
+    text: [
+      '## A2A Network Lifecycle',
+      '',
+      'The A2A network is self-service. When a task needs cross-session or cross-node collaboration, you may join the network and team up:',
+      '',
+      '- **Joining**: call `a2a_teams` to discover reachable teams and nodes. Joining (the sidebar entry or the join gate prompt) is the prerequisite for using `a2a_route`; the session that originates a task is exempt from the gate.',
+      '- **Teaming**: prefer joining an existing team that fits the task (visible via `a2a_teams`); create a new team (canvas team) only as a fallback when no existing team fits. A node may participate in multiple teams; collaboration happens inside teams.',
+      '- **Hygiene**: when your task is complete and no work is pending, leave your teams and the network — stale joined nodes and abandoned teams are network debt. Rejoining later is cheap.',
+      '- **Boundaries**: an unjoined session has no network (routing is refused) and is invisible to peer discovery. Membership is visible; leaving removes you from peer discovery too.',
+    ].join('\n'),
+  })
   // F4 slice: say the quiet part at boot instead of leaving the exposure to
   // be discovered from a ledger full of unexplained steering.
   const exposure = directDeliveryExposure(config.peers, config.apiKey)
@@ -1929,8 +1950,20 @@ export function apply(ctx: Context, config: Config): void {
           // without the listing a cross-node caller has no candidate and
           // the wake never fires.
           const isArchived = archivedSessionFilter()
+          // Discovery invisibility for unjoined sessions (owner ruling B,
+          // 2026-09-02): an unjoined session node is not advertised at all —
+          // peers neither see it in the card's sessionTeams nor can address
+          // it through the directory. Visibility follows membership: join
+          // and the node appears; leave and it vanishes from discovery.
+          const isJoinedNode = (agent: Agent): boolean => {
+            try {
+              return joinedSessions.list().includes(agent.id)
+            } catch {
+              return false
+            }
+          }
           const sessionTeams = [
-            ...[...sessionNodes.values()].map(agent => ({ team: sessionTeamOf(agent), ...nodeMetadataOf(agent) })),
+            ...[...sessionNodes.values()].filter(isJoinedNode).map(agent => ({ team: sessionTeamOf(agent), ...nodeMetadataOf(agent) })),
             ...joinedSessions.list()
               .filter(id => !liveRoots.has(id) && isArchived?.(id) !== true)
               .map(id => ({ team: `${config.team}/${id8(id)}`, name: `${session}-${id8(id)}`, description: 'cold — not loaded; routing here wakes the session' })),
@@ -2537,6 +2570,19 @@ ${message}`
           // filed): an inbound direct delivery must show a SHARED team.
           // Local-zone callers are judged synchronously and exactly — the
           // declaration lives in this host's own roster store, so the
+          // Anonymous-delivery refusal (S3 phase-3b, test-seat finding
+          // direct-001649ab): a delivery with NO caller_session field
+          // skips the admission gate entirely (nothing to judge) — that
+          // anonymous hole let any local process or reachable peer inject
+          // into a live session. The protocol contract is caller_session;
+          // its absence is now refused instead of silently waved through.
+          if (config.teamScopeRouting && caller === '') {
+            recordActivity('in', team, 'anonymous', false)
+            const payload = JSON.stringify({ error: 'caller_session is required — anonymous deliveries are refused (S3 phase-3b). Pass caller_session as <zone>/<id8>.', code: -32000, team, task_status: 'TASK_STATE_FAILED' })
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+            return
+          }
           // unteamed/foreign-team caller is refused on the spot (the
           // local-network half of the owner's reproduction). Remote-zone
           // callers are judged from the card cache: a cached card decides
