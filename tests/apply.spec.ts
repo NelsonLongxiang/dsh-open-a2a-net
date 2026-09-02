@@ -101,6 +101,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     agentName: 'test node',
     peers: [],
     delegates: [],
+    peerAllowlist: [],
+    referralLearning: true,
     sessionNodes: false,
     wakeJoinedOnBoot: false,
     wakePrewarmDelayMs: 0,
@@ -376,6 +378,27 @@ describe('a2a plugin decentralized routing (peers)', () => {
       body: JSON.stringify({ team: 'dsh', message: 'q' }),
     })
     await expect(response.json()).resolves.toMatchObject({ error: 'No live DSH agent is available to accept this message.' })
+    await ctx.fiber.dispose()
+  })
+
+  it('peer boundary model: a session-node team target without caller_session is refused', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    apply(ctx, makeConfig({ teamScopeRouting: true }))
+    // The anonymous-injection hole (2026-09-02, probed live four times by the
+    // test seat — S3 phase-3b): a delivery whose caller_session is absent
+    // used to skip the whole admission gate and land in the live session.
+    // The identity layer refuses it up front, session-node target or not.
+    const response = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+      method: 'POST',
+      body: JSON.stringify({ team: 'dsh/abcdef12', message: 'anonymous injection' }),
+    })
+    await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining('caller_session is required') })
     await ctx.fiber.dispose()
   })
 
@@ -2044,6 +2067,8 @@ describe('a2a plugin module surface', () => {
       wakeReconcileMaxBackoffMs: 600_000,
       teamJoinAllowlist: [],
       teamScopeRouting: true,
+      peerAllowlist: [],
+      referralLearning: true,
       stateColdRowsTtlMs: 5_000,
       cardCacheTtlMs: 60_000,
       cardCacheNegativeTtlMs: 30_000,
