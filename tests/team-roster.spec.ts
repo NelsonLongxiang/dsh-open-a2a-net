@@ -525,3 +525,22 @@ describe('a2a_teams output schema covers roster fields (!85 regression pin)', ()
     expect(schemaSection).toContain('teams:')
   })
 })
+
+describe('discovery invisibility for unjoined sessions (owner ruling B)', () => {
+  it('the served card advertises only joined session nodes', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'a2a-invis-'))
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    apply(ctx, makeConfig({ teamScopeRouting: true, dshHome: home, announce: true }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).json() as { sessionTeams?: Array<{ team: string }> }
+    // No session in this bare harness joined the network: the card must not
+    // advertise any session team (unjoined = invisible to peer discovery).
+    expect((card.sessionTeams ?? []).length).toBe(0)
+    await ctx.fiber.dispose()
+  })
+})

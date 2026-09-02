@@ -18,7 +18,7 @@ describe('dsh-a2a real-load-path guard', () => {
     const unwrapped = loader.unwrapExports(a2a) as Record<string, unknown>
     expect(unwrapped).toBe(a2a)
     expect(unwrapped.name).toBe('a2a')
-    expect(unwrapped.inject).toEqual(['tools', 'timer'])
+    expect(unwrapped.inject).toEqual(['tools', 'timer', 'systemPrompt'])
     expect(typeof unwrapped.apply).toBe('function')
     expect(unwrapped.Config).toBeDefined()
   })
