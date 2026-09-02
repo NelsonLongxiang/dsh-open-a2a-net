@@ -241,3 +241,22 @@
 #dsh-plan .p-listbtn:hover{border-color:var(--card-line-hover); background:var(--uupm-wash-8)}
 #dsh-plan .p-listbtn:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
 #dsh-plan .p-nodelist-empty{padding:10px 4px; font-size:11.5px; color:var(--ink-muted)}
+
+/* ── Frame resize handles (owner ruling: frames stretch/adjust) — eight
+   invisible hit zones that show the grip on hover. ── */
+#dsh-plan .p-frame{position:absolute}
+#dsh-plan .p-frame-handle{position:absolute; width:10px; height:10px; z-index:2; opacity:0;
+  transition:opacity 120ms ease}
+#dsh-plan .p-frame:hover .p-frame-handle{opacity:1}
+#dsh-plan .p-frame-handle::after{content:''; position:absolute; inset:2px; background:var(--frame-line);
+  border-radius:2px}
+#dsh-plan .p-h-n{top:-5px; left:calc(50% - 12px); width:24px; height:8px; cursor:ns-resize}
+#dsh-plan .p-h-s{bottom:-5px; left:calc(50% - 12px); width:24px; height:8px; cursor:ns-resize}
+#dsh-plan .p-h-e{right:-5px; top:calc(50% - 12px); width:8px; height:24px; cursor:ew-resize}
+#dsh-plan .p-h-w{left:-5px; top:calc(50% - 12px); width:8px; height:24px; cursor:ew-resize}
+#dsh-plan .p-h-ne{top:-5px; right:-5px; cursor:nesw-resize}
+#dsh-plan .p-h-nw{top:-5px; left:-5px; cursor:nwse-resize}
+#dsh-plan .p-h-se{bottom:-5px; right:-5px; cursor:nwse-resize}
+#dsh-plan .p-h-sw{bottom:-5px; left:-5px; cursor:nesw-resize}
+#dsh-plan .p-h-ne::after, #dsh-plan .p-h-sw::after{transform:rotate(45deg)}
+#dsh-plan .p-h-nw::after, #dsh-plan .p-h-se::after{transform:rotate(-45deg)}
