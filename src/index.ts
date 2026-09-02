@@ -1042,7 +1042,11 @@ export function apply(ctx: Context, config: Config): void {
   const titleCache = new WeakMap<Agent, { length: number; tail: unknown; title: string | undefined }>()
 
   function sessionTitleOf(agent: Agent): string | undefined {
-    const events = agent.session.events
+    // Defensive: an agent whose session is not attached (an adopted or
+    // out-of-band materialized agent) has no events array — reading it
+    // through used to take the whole host down from inside the state
+    // route handler (P0, reproduced on the 3087 scratch deployment).
+    const events = agent.session?.events ?? []
     const length = events.length
     const tail = length > 0 ? events[length - 1] : undefined
     const cached = titleCache.get(agent)
@@ -1081,7 +1085,7 @@ export function apply(ctx: Context, config: Config): void {
   const RECENT_ACTIVITY_SCAN_LIMIT = 500
 
   function recentActivityOf(agent: Agent): string {
-    const events = agent.session.events
+    const events = agent.session?.events ?? []
     const length = events.length
     const tail = length > 0 ? events[length - 1] : undefined
     const cached = recentActivityCache.get(agent)
@@ -2158,7 +2162,7 @@ export function apply(ctx: Context, config: Config): void {
    */
   function registerFinalWaiter(agent: Agent, answer: (text: string, placeholder?: boolean) => void): FinalWaiter {
     const key = String(agent.id)
-    const waiter: FinalWaiter = { answer, sinceEvents: agent.session.events.length }
+    const waiter: FinalWaiter = { answer, sinceEvents: agent.session?.events?.length ?? 0 }
     waiter.timeoutDisposer = armFlushTimeout(key, waiter)
     pendingFinals.set(key, [...(pendingFinals.get(key) ?? []), waiter])
     return waiter
@@ -3330,7 +3334,7 @@ ${message}`
    * while staying bounded (one extra sweep, still under the store cap).
    * @param expand - chase one referral hop beyond the current store walk.
    */
-  type DirectoryTeamRow = { team: string; session: string; name: string; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean; teams?: readonly string[] }
+  type DirectoryTeamRow = { team: string; session: string; name: string; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean; teams?: string[] }
   async function listDirectoryTeams(expand: boolean): Promise<DirectoryTeamRow[]> {
     const localOrigin = lanIp === '' ? `${session} [this host]` : `${session} [this host, ${lanIp}]`
     const teams: DirectoryTeamRow[] = [
@@ -4441,7 +4445,7 @@ ${message}`
       pendingFinals.delete(agentId)
       return
     }
-    const events = agent.session.events
+    const events = agent.session?.events ?? []
     const floor = Math.min(...entries.map(entry => entry.sinceEvents))
     let reply = ''
     for (let index = events.length - 1; index >= floor; index--) {
