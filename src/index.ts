@@ -3940,6 +3940,29 @@ ${message}`
     const result = await client.routeDirect(url, team, message, contextId, signal, callerSession, asyncMode, taskIdFromCaller, callbackAddress)
     endRoute(flight)
     recordActivity('out', team, url, result.ok)
+    // F1 half-transaction compensation (t-mth5gmxy): the client's 15s budget
+    // firing on a SYNC route leaves the transaction half-done — the delivery
+    // landed and the peer keeps executing. One query round-trip asks the
+    // peer for the real state; completed upgrades to the honest result,
+    // failed becomes the real failure, anything else stays the honest
+    // DELIVERED-UNSETTLED (-32005) with the query instruction.
+    if (!asyncMode && !result.ok && result.code === -32005 && taskIdFromCaller !== undefined && taskIdFromCaller !== '') {
+      const fingerprint = peerPayloadFingerprint({ caller: callerSession ?? session, message, noWait: false, team })
+      const answer = await client.queryOutcome(url, taskIdFromCaller, fingerprint, signal)
+      if (answer?.found === true && answer.status === 'completed') {
+        return {
+          ok: true,
+          team,
+          reply: `${answer.reply}\n\n(The direct wait hit its ${'15s'} transport budget; this answer is the peer's settled outcome, recovered through the task query.)`,
+          task_id: taskIdFromCaller,
+          context_id: contextId ?? '',
+          task_status: 'TASK_STATE_COMPLETED',
+        }
+      }
+      if (answer?.found === true && answer.status === 'failed') {
+        return { ok: false, error: answer.error, code: -32000, task_id: taskIdFromCaller }
+      }
+    }
     return result
   }
 

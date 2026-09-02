@@ -209,6 +209,24 @@ describe('routeDirect', () => {
     await expect(makeClient({ fetch: failing }).routeDirect('http://p:1', 't', 'm')).resolves.toMatchObject({ ok: false, code: -32000 })
   })
 
+  it('answers a sync wait-budget timeout as DELIVERED-UNSETTLED (-32005), not failed', async () => {
+    // F1 (t-mth5gmxy): the 15s budget firing does not mean the peer failed —
+    // the delivery landed and the peer keeps executing. The honest shape is
+    // -32005 with the task id and a no-blind-redispatch instruction.
+    const frozen = frozenSchedule()
+    const slow: A2aFetch = (_url, init) => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => { reject(new Error('aborted')) })
+    })
+    const client = new A2aClient({ apiKey: '', sessionId: 's', schedule: frozen.arm, fetch: slow })
+    const pending = client.routeDirect('http://p:1', 't', 'm', undefined, undefined, undefined, false, 'task-77')
+    frozen.armed[0]?.callback()
+    const result = await pending
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe(-32005)
+    expect(result.task_id).toBe('task-77')
+    expect(result.error).toContain('do NOT re-dispatch')
+  })
+
   it('stamps the calling session label over the node label', async () => {
     const { calls, fetch } = stubFetch(() => ({ status: 200, body: { result: { text: 'ok' } } }))
     await makeClient({ fetch }).routeDirect('http://p:1', 't', 'm', undefined, undefined, 'sess-1-agent-1')
@@ -242,7 +260,8 @@ describe('http seam', () => {
     const pending = client.routeDirect('http://p:1', 't', 'm')
     expect(frozen.armed.length).toBe(1)
     frozen.armed[0]?.callback()
-    await expect(pending).resolves.toMatchObject({ ok: false, code: -32000 })
+    // Sync + no caller task id: still the honest DELIVERED-UNSETTLED shape.
+    await expect(pending).resolves.toMatchObject({ ok: false, code: -32005 })
   })
 
   it('rejects a non-2xx answer with the body excerpt', async () => {
