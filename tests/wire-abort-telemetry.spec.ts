@@ -39,7 +39,9 @@ describe('outbound abort telemetry', () => {
     const result = await pending
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.code).toBe(-32000)
+      // F1: an own-budget abort on a sync route is the DELIVERED-UNSETTLED
+      // shape (-32005) — the telemetry members stay, the verdict changes.
+      expect(result.code).toBe(-32005)
       expect(result.ownBudgetExhausted).toBe(true)
       expect(result.abortElapsedMs).toBeGreaterThanOrEqual(0)
     }

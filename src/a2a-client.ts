@@ -244,6 +244,26 @@ export class A2aClient {
       }, baseUrl) as WireRoute
     } catch (error) {
       const ownBudgetExhausted = (error as { ownBudgetExhausted?: unknown }).ownBudgetExhausted === true
+      // F1 half-transaction fix (t-mth5gmxy): the 15s budget firing on a SYNC
+      // route does NOT mean the peer failed — the delivery landed and the
+      // peer keeps executing. The structured -32005 code marks the
+      // DELIVERED-UNSETTLED shape; the caller side (index.ts, which owns the
+      // fingerprint and the peer candidates) runs the query compensation and
+      // upgrades or confirms the honest result there. The budget gate checks
+      // BOTH the flag and the error KIND: an immediate transport rejection
+      // (ECONNREFUSED) racing a scheduled timer is a transport failure, not
+      // a wait timeout — only a genuine abort-class error is the budget.
+      const abortClass = error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError' || /abort/i.test(error.message))
+      if (ownBudgetExhausted && abortClass && !asyncMode && !signal?.aborted) {
+        return {
+          ok: false,
+          error: `route wait timed out after ${String(HTTP_TIMEOUT_MS)}ms but the delivery was dispatched and may still complete — reconcile via the task query (do NOT re-dispatch blindly)`,
+          code: -32005,
+          task_id: taskIdFromCaller,
+          abortElapsedMs: Date.now() - dispatchedAt,
+          ownBudgetExhausted: true,
+        } as Extract<A2aRouteResult, { ok: false }>
+      }
       // The peer's structured wire code rides the HTTP rejection body
       // (idempotency verdicts -32002/-32003 among others): surface it, so a
       // caller can tell a terminal verdict from an ordinary transport miss
