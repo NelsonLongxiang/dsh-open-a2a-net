@@ -109,7 +109,7 @@ export interface SeamKey { key: string; shiftKey: boolean; altKey?: boolean; ctr
 
 type Gesture =
   | { readonly kind: 'none' }
-  | { readonly kind: 'node'; ids: readonly string[]; clicked: string; last: { x: number; y: number }; moved: boolean; el: Element | null; origins: ReadonlyArray<{ team: string; ids: readonly string[] }> }
+  | { readonly kind: 'node'; ids: readonly string[]; clicked: string; last: { x: number; y: number }; moved: boolean; el: Element | null }
   | { readonly kind: 'frame'; name: string; snap: NonNullable<ReturnType<WorldModel['beginFrameDrag']>>; origin: { x: number; y: number }; moved: boolean }
   | { readonly kind: 'frame-resize'; name: string; dir: string; startRect: { x: number; y: number; w: number; h: number }; origin: { x: number; y: number }; moved: boolean }
   | { readonly kind: 'pan'; last: { x: number; y: number }; moved: boolean }
@@ -1182,7 +1182,10 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     return { x: ev.clientX - rect.left, y: ev.clientY - rect.top }
   }
 
-  /** Drop dispatch for a moved node drag: 入队 / 离队 / 队内 y 排序. */
+  /** Drop dispatch for a moved node drag: 入队 / 队内 y 排序. Leaving a team
+   * is an explicit menu action only — dragging out to blank is a position
+   * move (owner removal 2026-09-02: the drag-out-to-blank 离队 path is
+   * removed; accidental blank drops wrote whole-group removals). */
   function dropDispatch(gesture: Extract<Gesture, { kind: 'node' }>, ev: SeamPointer): void {
     const p = localXY(ev)
     const w = screenToWorld(vp, p.x, p.y)
@@ -1205,12 +1208,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
           emitAction({ type: 'reorder', team: f, ops: reorderOps(current, desired) })
         }
       }
-      return
     }
-    // Blank: 离队 from the teams the dragged ids belonged to at drag start.
-    for (const origin of gesture.origins) {
-      emitAction({ type: 'remove-member', team: origin.team, ids: [...origin.ids] })
-    }
+    // Blank drop: a position move only. No roster writes — the explicit
+    // context-menu 离队 (and the node drawer) remain the removal paths.
   }
 
   function pointerDown(ev: SeamPointer): void {
@@ -1268,14 +1268,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       const already = model.isSelected(id)
       if (!already && !ev.shiftKey) model.setSelection([id])
       const ids = ev.shiftKey || already ? (model.isSelected(id) ? model.selectedIds() : [...model.selectedIds(), id]) : [id]
-      // Origin teams (for the drag-out-to-blank 离队 path), captured at down.
-      const byTeam = new Map<string, string[]>()
-      for (const dragged of ids) {
-        for (const m of model.getNode(dragged)?.memberships ?? []) {
-          byTeam.set(m.team, [...(byTeam.get(m.team) ?? []), dragged])
-        }
-      }
-      gesture = { kind: 'node', clicked: id, ids, last: screenToWorld(vp, p.x, p.y), moved: false, el: nodeEl, origins: [...byTeam].map(([team, tIds]) => ({ team, ids: tIds })) }
+      gesture = { kind: 'node', clicked: id, ids, last: screenToWorld(vp, p.x, p.y), moved: false, el: nodeEl }
       nodeEl.classList.add('dragging')
     } else if (headEl !== null) {
       if (ev.button !== 0) return
