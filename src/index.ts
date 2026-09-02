@@ -1048,16 +1048,22 @@ export function apply(ctx: Context, config: Config): void {
    * alpha.4 `snapshotEvents()` (argument-less full frozen snapshot) →
    * legacy `.events` array → empty. An unattached session yields empty.
    */
-  function sessionEventsOf(agent: Agent): readonly unknown[] {
+  /** Minimal event shape the title/activity/receipt-flush readers need. */
+  type SessionEventLike = {
+    readonly type?: string
+    readonly data?: { readonly message?: { readonly content?: ReadonlyArray<{ readonly type?: string; readonly text?: string }> } }
+  }
+
+  function sessionEventsOf(agent: Agent): readonly (SessionEventLike | undefined)[] {
     const session = agent.session as (typeof agent.session & { snapshotEvents?: () => readonly unknown[] }) | undefined
     if (session === undefined) return []
     if (typeof session.snapshotEvents === 'function') {
       try {
         const snapshot = session.snapshotEvents()
-        if (Array.isArray(snapshot)) return snapshot
+        if (Array.isArray(snapshot)) return snapshot as readonly (SessionEventLike | undefined)[]
       } catch { /* fall through to the legacy accessor */ }
     }
-    return Array.isArray(session.events) ? session.events : []
+    return Array.isArray(session.events) ? (session.events as readonly (SessionEventLike | undefined)[]) : []
   }
 
   function sessionTitleOf(agent: Agent): string | undefined {
@@ -1105,7 +1111,7 @@ export function apply(ctx: Context, config: Config): void {
     const tail = length > 0 ? events[length - 1] : undefined
     const cached = recentActivityCache.get(agent)
     if (cached !== undefined && cached.length === length && cached.tail === tail) return cached.value
-    const value = scanRecentActivity(events)
+    const value = scanRecentActivity(events.filter((event): event is { type?: string } => event !== undefined))
     recentActivityCache.set(agent, { length, tail, value })
     return value
   }
@@ -4466,8 +4472,10 @@ ${message}`
     for (let index = events.length - 1; index >= floor; index--) {
       const event = events[index]
       if (event === undefined || event.type !== 'assistant/message') continue
-      reply = event.data.message.content
-        .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+      const content = event.data?.message?.content
+      if (content === undefined) continue
+      reply = content
+        .filter((block): block is { type: 'text'; text: string } => block.type === 'text' && typeof block.text === 'string')
         .map(block => block.text)
         .join('\n')
       break
