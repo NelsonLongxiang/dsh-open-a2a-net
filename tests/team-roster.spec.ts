@@ -509,3 +509,19 @@ describe('S3 phase-3 enforcement (default-on + inbound shared-team admission)', 
     vi.unstubAllGlobals()
   })
 })
+
+describe('a2a_teams output schema covers roster fields (!85 regression pin)', () => {
+  it('the teams-row schema source declares legacy and teams so strict validation never rejects roster rows', async () => {
+    // Behavioral proof already lives in the reader-half test (an execute
+    // carrying legacy/teams rows passes strict validation). This pin reads
+    // the schema source so a future field addition cannot silently skip
+    // the output-schema declaration again (the 0.5.45 all-break defect).
+    const { readFileSync } = await import('node:fs')
+    const source = readFileSync(join(process.cwd(), 'src', 'index.ts'), 'utf8')
+    const schemaStart = source.indexOf("name: 'a2a_teams'")
+    const schemaSection = source.slice(schemaStart, schemaStart + 4000)
+    expect(schemaSection).toContain('via:')
+    expect(schemaSection).toContain('legacy:')
+    expect(schemaSection).toContain('teams:')
+  })
+})
