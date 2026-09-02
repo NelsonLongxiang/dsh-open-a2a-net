@@ -214,6 +214,20 @@ export interface Config {
   readonly teamJoinAllowlist: string[]
   /** S3 (queued): team-scoped routing admission. Enforcement off by default. */
   readonly teamScopeRouting: boolean
+  /**
+   * Peer boundary model (docs/design/peer-boundary-model.md) — connection
+   * layer: an empty list keeps the historical open-referral posture; a
+   * non-empty list admits a referral only when its host matches an entry
+   * (exact host[:port], bare domain suffix, or full URL). Seeds from
+   * `peers` are owner-configured and unaffected.
+   */
+  readonly peerAllowlist: string[]
+  /**
+   * Peer boundary model — connection layer: when false, referral URLs are
+   * neither learned nor offered; the tracked set stays the configured seed
+   * set for the lifetime of the config that named them.
+   */
+  readonly referralLearning: boolean
 
   /**
    * v0.5.23 (async-stall): see the schema comment on asyncNudgeDelayMs.
@@ -308,6 +322,22 @@ export const Config: s<Config> = s.object({
    * peers read as legacy). Set false to restore the open outbound seam.
    */
   teamScopeRouting: s.boolean().default(true),
+
+  /**
+   * Peer boundary model — connection layer: an empty list keeps the
+   * historical open-referral posture; a non-empty list admits a referral
+   * only when its host matches an entry (exact host[:port], bare domain
+   * suffix, or full URL). Seeds from `peers` are owner-configured and
+   * unaffected.
+   */
+  peerAllowlist: s.array(s.string()).default([]),
+
+  /**
+   * Peer boundary model — connection layer: when false, referral URLs are
+   * neither learned nor offered; the tracked set stays the configured seed
+   * set for the lifetime of the config that named them.
+   */
+  referralLearning: s.boolean().default(true),
 
   /**
    * v0.5.23 (async-stall): delay before a delivered-but-unconsumed async
@@ -610,6 +640,28 @@ export function apply(ctx: Context, config: Config): void {
   // the same home as the node key.
   const home = config.dshHome === '' ? resolveDshHome() : resolveDshHome(config.dshHome)
   const peerStore = new PeerStore(config.peers, join(home, 'a2a', 'peers.json'))
+  // Peer boundary model (docs/design/peer-boundary-model.md) — connection
+  // layer. referralLearning off freezes the seed set: referrals are neither
+  // learned nor offered. A non-empty peerAllowlist admits a referral only
+  // when its host matches an entry (exact host[:port], bare domain suffix,
+  // or the full URL); the seeds are owner-configured and unaffected.
+  const peerAdmissible = (url: string): boolean => {
+    // `=== false` and the ?? [] tolerate compositions built without the
+    // schema defaults (older hosts, test literals): an absent gate is open.
+    if (config.referralLearning === false) return false
+    if ((config.peerAllowlist ?? []).length === 0) return true
+    let host = url
+    try {
+      host = new URL(url).host
+    } catch {
+      /* a non-URL string is judged raw against the entries */
+    }
+    return config.peerAllowlist.some((entry) => {
+      if (entry === url || entry === host) return true
+      const domain = entry.startsWith('.') ? entry : `.${entry}`
+      return host.endsWith(domain)
+    })
+  }
   // Graceful disposal lands the debounced peer state on disk before a
   // restart reads it back (fiber teardown awaits effect disposers).
   ctx.effect(() => () => peerStore.flush())
@@ -3039,7 +3091,11 @@ ${message}`
       return undefined
     }
     peerStore.noteSuccess(peer)
-    for (const referral of outcome.card.peers ?? []) if (selfReferrals.shouldOffer(referral)) peerStore.offer(referral)
+    for (const referral of outcome.card.peers ?? []) {
+      if (!selfReferrals.shouldOffer(referral)) continue
+      if (!peerAdmissible(referral)) continue
+      peerStore.offer(referral)
+    }
     return outcome.card
   }
 

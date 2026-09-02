@@ -101,6 +101,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     agentName: 'test node',
     peers: [],
     delegates: [],
+    peerAllowlist: [],
+    referralLearning: true,
     sessionNodes: false,
     wakeJoinedOnBoot: false,
     wakePrewarmDelayMs: 0,
@@ -376,6 +378,32 @@ describe('a2a plugin decentralized routing (peers)', () => {
       body: JSON.stringify({ team: 'dsh', message: 'q' }),
     })
     await expect(response.json()).resolves.toMatchObject({ error: 'No live DSH agent is available to accept this message.' })
+    await ctx.fiber.dispose()
+  })
+
+  it('peer boundary model: a session-node team target without caller_session is refused', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    apply(ctx, makeConfig({ teamScopeRouting: true }))
+    // The anonymous-injection hole (2026-09-02, probed live four times by the
+    // test seat — S3 phase-3b): a delivery whose caller_session is absent
+    // used to skip the whole admission gate and land in the live session.
+    // The identity layer refuses it up front, session-node target or not.
+    // The four bodies replay the live probes verbatim (three test-seat, one
+    // author-line replication): the `caller` field is the decoy — the
+    // protocol field caller_session is what was absent in every one.
+    for (const taskId of ['probe-enf-1', 'probe-enf-v2', 'probe-enf-v3', 'probe-repl-1']) {
+      const probe = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        body: JSON.stringify({ caller: 'dsh/00000000', team: 'dsh/abcdef12', message: `enforcement probe ${taskId}`, task_id: taskId }),
+      })
+      await expect(probe.json()).resolves.toMatchObject({ error: expect.stringContaining('caller_session is required') })
+    }
     await ctx.fiber.dispose()
   })
 
@@ -1017,6 +1045,52 @@ describe('a2a plugin decentralized routing (peers)', () => {
       })
     } finally {
       await ctx.fiber.dispose()
+      await nodeA.dispose()
+      await nodeB.dispose()
+    }
+  })
+
+  it('peer boundary model: peerAllowlist admits matching referral hosts only (three entry forms)', async () => {
+    const nodeB = await mountPeerNode({ team: 'trusted-referral' })
+    const nodeA = await mountPeerNode({ team: 'team-a', peers: [nodeB.baseUrl] })
+    const trustedHost = new URL(nodeB.baseUrl).host
+    const teamsCall = async (ctx: Context): Promise<{ ok: boolean; teams: { team: string }[] }> =>
+      await ctx.tools.get('a2a_teams')?.execute({}, runContext()) as { ok: boolean; teams: { team: string }[] }
+    const mount = async (allowlist: string[]): Promise<Context> => {
+      const ctx = new Context()
+      await ctx.plugin(SystemPrompt)
+      await ctx.plugin(ToolRuntime)
+      await ctx.plugin(TimerService)
+      apply(ctx, makeConfig({ peers: [nodeA.baseUrl], dshHome: tmpHome(), peerAllowlist: allowlist }))
+      return ctx
+    }
+    try {
+      // Form 1 — exact host[:port]: the matching referral is learned.
+      const hostForm = await mount([trustedHost])
+      await teamsCall(hostForm)
+      await expect(teamsCall(hostForm)).resolves.toMatchObject({
+        ok: true,
+        teams: [{ team: 'dsh', local: true }, { team: 'team-a' }, { team: 'trusted-referral' }],
+      })
+      await hostForm.fiber.dispose()
+      // Form 2 — the full URL: same admission, different entry shape.
+      const urlForm = await mount([nodeB.baseUrl])
+      await teamsCall(urlForm)
+      await expect(teamsCall(urlForm)).resolves.toMatchObject({
+        ok: true,
+        teams: [{ team: 'dsh', local: true }, { team: 'team-a' }, { team: 'trusted-referral' }],
+      })
+      await urlForm.fiber.dispose()
+      // The negative: a non-matching entry (domain form that cannot match a
+      // loopback host) keeps the referral unlearned — B never joins the store.
+      const domainForm = await mount(['trusted.example.com'])
+      await teamsCall(domainForm)
+      await expect(teamsCall(domainForm)).resolves.toMatchObject({
+        ok: true,
+        teams: [{ team: 'dsh', local: true }, { team: 'team-a' }],
+      })
+      await domainForm.fiber.dispose()
+    } finally {
       await nodeA.dispose()
       await nodeB.dispose()
     }
@@ -2044,6 +2118,8 @@ describe('a2a plugin module surface', () => {
       wakeReconcileMaxBackoffMs: 600_000,
       teamJoinAllowlist: [],
       teamScopeRouting: true,
+      peerAllowlist: [],
+      referralLearning: true,
       stateColdRowsTtlMs: 5_000,
       cardCacheTtlMs: 60_000,
       cardCacheNegativeTtlMs: 30_000,
