@@ -1041,8 +1041,33 @@ export function apply(ctx: Context, config: Config): void {
   // grows or its tail event object changes.
   const titleCache = new WeakMap<Agent, { length: number; tail: unknown; title: string | undefined }>()
 
+  /**
+   * Session events accessor, dual-API hardened (d42fe125 hot-fix finding on
+   * 4080: alpha.4 removed the `.events` accessor — the null guard alone
+   * kept the host alive but silently broke titles). Resolution order:
+   * alpha.4 `snapshotEvents()` (argument-less full frozen snapshot) →
+   * legacy `.events` array → empty. An unattached session yields empty.
+   */
+  /** Minimal event shape the title/activity/receipt-flush readers need. */
+  type SessionEventLike = {
+    readonly type?: string
+    readonly data?: { readonly message?: { readonly content?: ReadonlyArray<{ readonly type?: string; readonly text?: string }> } }
+  }
+
+  function sessionEventsOf(agent: Agent): readonly (SessionEventLike | undefined)[] {
+    const session = agent.session as (typeof agent.session & { snapshotEvents?: () => readonly unknown[] }) | undefined
+    if (session === undefined) return []
+    if (typeof session.snapshotEvents === 'function') {
+      try {
+        const snapshot = session.snapshotEvents()
+        if (Array.isArray(snapshot)) return snapshot as readonly (SessionEventLike | undefined)[]
+      } catch { /* fall through to the legacy accessor */ }
+    }
+    return Array.isArray(session.events) ? (session.events as readonly (SessionEventLike | undefined)[]) : []
+  }
+
   function sessionTitleOf(agent: Agent): string | undefined {
-    const events = agent.session.events
+    const events = sessionEventsOf(agent)
     const length = events.length
     const tail = length > 0 ? events[length - 1] : undefined
     const cached = titleCache.get(agent)
@@ -1081,12 +1106,12 @@ export function apply(ctx: Context, config: Config): void {
   const RECENT_ACTIVITY_SCAN_LIMIT = 500
 
   function recentActivityOf(agent: Agent): string {
-    const events = agent.session.events
+    const events = sessionEventsOf(agent)
     const length = events.length
     const tail = length > 0 ? events[length - 1] : undefined
     const cached = recentActivityCache.get(agent)
     if (cached !== undefined && cached.length === length && cached.tail === tail) return cached.value
-    const value = scanRecentActivity(events)
+    const value = scanRecentActivity(events.filter((event): event is { type?: string } => event !== undefined))
     recentActivityCache.set(agent, { length, tail, value })
     return value
   }
@@ -2158,7 +2183,7 @@ export function apply(ctx: Context, config: Config): void {
    */
   function registerFinalWaiter(agent: Agent, answer: (text: string, placeholder?: boolean) => void): FinalWaiter {
     const key = String(agent.id)
-    const waiter: FinalWaiter = { answer, sinceEvents: agent.session.events.length }
+    const waiter: FinalWaiter = { answer, sinceEvents: sessionEventsOf(agent).length }
     waiter.timeoutDisposer = armFlushTimeout(key, waiter)
     pendingFinals.set(key, [...(pendingFinals.get(key) ?? []), waiter])
     return waiter
@@ -3330,7 +3355,7 @@ ${message}`
    * while staying bounded (one extra sweep, still under the store cap).
    * @param expand - chase one referral hop beyond the current store walk.
    */
-  type DirectoryTeamRow = { team: string; session: string; name: string; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean; teams?: readonly string[] }
+  type DirectoryTeamRow = { team: string; session: string; name: string; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean; teams?: string[] }
   async function listDirectoryTeams(expand: boolean): Promise<DirectoryTeamRow[]> {
     const localOrigin = lanIp === '' ? `${session} [this host]` : `${session} [this host, ${lanIp}]`
     const teams: DirectoryTeamRow[] = [
@@ -4441,14 +4466,16 @@ ${message}`
       pendingFinals.delete(agentId)
       return
     }
-    const events = agent.session.events
+    const events = sessionEventsOf(agent)
     const floor = Math.min(...entries.map(entry => entry.sinceEvents))
     let reply = ''
     for (let index = events.length - 1; index >= floor; index--) {
       const event = events[index]
       if (event === undefined || event.type !== 'assistant/message') continue
-      reply = event.data.message.content
-        .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+      const content = event.data?.message?.content
+      if (content === undefined) continue
+      reply = content
+        .filter((block): block is { type: 'text'; text: string } => block.type === 'text' && typeof block.text === 'string')
         .map(block => block.text)
         .join('\n')
       break

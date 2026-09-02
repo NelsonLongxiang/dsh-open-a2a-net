@@ -111,6 +111,7 @@ type Gesture =
   | { readonly kind: 'none' }
   | { readonly kind: 'node'; ids: readonly string[]; clicked: string; last: { x: number; y: number }; moved: boolean; el: Element | null; origins: ReadonlyArray<{ team: string; ids: readonly string[] }> }
   | { readonly kind: 'frame'; name: string; snap: NonNullable<ReturnType<WorldModel['beginFrameDrag']>>; origin: { x: number; y: number }; moved: boolean }
+  | { readonly kind: 'frame-resize'; name: string; dir: string; startRect: { x: number; y: number; w: number; h: number }; origin: { x: number; y: number }; moved: boolean }
   | { readonly kind: 'pan'; last: { x: number; y: number }; moved: boolean }
   | { readonly kind: 'marquee'; origin: { x: number; y: number }; last: { x: number; y: number }; additive: boolean }
 
@@ -342,6 +343,16 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         route.className = 'route mono'
         head.append(title, cnt, route)
         el.appendChild(head)
+        // Resize handles (owner ruling: the frame canvas is stretchable and
+        // adjustable): eight directions, pointer seam routes them to the
+        // frame-resize gesture. Purely visual affordance + hit targets.
+        for (const dir of ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']) {
+          const handle = document.createElement('div')
+          handle.className = `p-frame-handle p-h-${dir}`
+          handle.dataset.frame = name
+          handle.dataset.dir = dir
+          el.appendChild(handle)
+        }
         frameLayer.appendChild(el)
         frameEls.set(name, el)
       }
@@ -771,6 +782,17 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       }
     })
     el.querySelector('button')?.focus()
+    // Outside-click dismissal: the dropdown lives at root level, so canvas
+    // presses never reach a menu-local handler — and focus leaves with the
+    // first outside click, killing the Escape path too (the stuck-dropdown
+    // defect the owner hit). The trigger button stays exempt so its click
+    // still toggles.
+    document.addEventListener('pointerdown', (ev) => {
+      if (netMenu === null) return
+      const t = ev.target as Element | null
+      if (t !== null && (t.closest('.p-netmenu') !== null || t === netBtn || netBtn.contains(t))) return
+      closeNetMenu()
+    }, signal)
   }
 
   // ── 节点列表 drawer（组队节点上画布；单一节点按 host/对等节点在列表管理）──
@@ -1227,6 +1249,19 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       try { root.setPointerCapture(ev.pointerId ?? 0) } catch { /* jsdom */ }
       return
     }
+    const handleEl = target !== null ? target.closest<HTMLElement>('.p-frame-handle') : null
+    if (handleEl !== null && ev.button === 0) {
+      // Frame resize (owner ruling): record the frame's current rect and
+      // the world-space origin; the move branch re-solves the rect per
+      // direction with a minimum size clamp.
+      const name = handleEl.dataset.frame ?? ''
+      const rect = model.getFrame(name)
+      if (rect === undefined) return
+      gesture = { kind: 'frame-resize', name, dir: handleEl.dataset.dir ?? 'se', startRect: { ...rect }, origin: screenToWorld(vp, p.x, p.y), moved: false }
+      ev.preventDefault()
+      try { root.setPointerCapture(ev.pointerId ?? 0) } catch { /* jsdom: no capture */ }
+      return
+    }
     if (nodeEl !== null) {
       if (ev.button !== 0) return // right on a card: contextmenu only, never a card drag (F3)
       const id = nodeEl.dataset.id ?? ''
@@ -1306,6 +1341,32 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       gesture.moved = true
       model.applyFrameDrag(gesture.snap, dx, dy)
       render()
+    } else if (gesture.kind === 'frame-resize') {
+      // Re-solve the rect from the start rect plus the world delta, per
+      // direction. Minimum 220x120 keeps the titlebar and成员 badges
+      // readable; the frame rect is independent of member positions, so
+      // no node moves — star edges follow on the next render.
+      const w = screenToWorld(vp, p.x, p.y)
+      const dx = w.x - gesture.origin.x
+      const dy = w.y - gesture.origin.y
+      if (!gesture.moved && dx === 0 && dy === 0) return
+      gesture.moved = true
+      const MIN_W = 220
+      const MIN_H = 120
+      const r = { ...gesture.startRect }
+      let { x, y, w: width, h: height } = r
+      if (gesture.dir.includes('e')) width = Math.max(MIN_W, r.w + dx)
+      if (gesture.dir.includes('s')) height = Math.max(MIN_H, r.h + dy)
+      if (gesture.dir.includes('w')) {
+        width = Math.max(MIN_W, r.w - dx)
+        x = r.x + (r.w - width)
+      }
+      if (gesture.dir.includes('n')) {
+        height = Math.max(MIN_H, r.h - dy)
+        y = r.y + (r.h - height)
+      }
+      model.setFrame(gesture.name, { x: Math.round(x), y: Math.round(y), w: Math.round(width), h: Math.round(height) })
+      render()
     } else if (gesture.kind === 'pan') {
       vp = panBy(vp, p.x - gesture.last.x, p.y - gesture.last.y)
       gesture.last = p
@@ -1358,6 +1419,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       render()
     } else if (gesture.kind === 'frame') {
       if (gesture.moved) deps.onDirty()
+    } else if (gesture.kind === 'frame-resize') {
+      if (gesture.moved) deps.onDirty() // the resized rect persists with the layout
     } else if (gesture.kind === 'pan') {
       if (gesture.moved) deps.onDirty() // the viewport persists with the layout
     } else if (gesture.kind === 'marquee') {

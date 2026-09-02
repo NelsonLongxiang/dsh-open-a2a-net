@@ -226,3 +226,125 @@ describe('planning view DOM', () => {
     expect(v.root.querySelector('img')).toBeNull()
   })
 })
+
+describe('frame resize (owner ruling: frames stretch and adjust)', () => {
+  const resizeView = () => {
+    const onDirty = vi.fn()
+    const onCanvasAction = vi.fn(() => Promise.resolve(true))
+    const v = createPlanningView({ onDirty, onLampClick: vi.fn(), onCanvasAction, viewSize: () => ({ w: 1000, h: 800 }) })
+    document.body.appendChild(v.root)
+    v.reconcile({
+      sessions: [{ id: 's1', label: 'scout', team: 'dsh/11111111', name: 'scout-01', joined: true, live: true }],
+      teams: [{ name: 'alpha', team: 'dsh/canvas/alpha', members: [{ id: 's1' }] }],
+      peerCount: 0,
+    })
+    return { v, onDirty }
+  }
+  const grab = (v: ReturnType<typeof resizeView>['v'], dir: string) =>
+    v.root.querySelector<HTMLElement>(`.p-frame-handle[data-dir="${dir}"]`)!
+
+  function ptr(target: Element, x: number, y: number): any {
+    return { button: 0, shiftKey: false, ctrlKey: false, clientX: x, clientY: y, pointerId: 1, target, preventDefault: () => {} }
+  }
+
+  it('eight handles render per frame', () => {
+    const { v } = resizeView()
+    expect(v.root.querySelectorAll('.p-frame-handle').length).toBe(8)
+  })
+
+  it('dragging the SE handle grows the rect and fires onDirty once on release', () => {
+    const { v, onDirty } = resizeView()
+    const handle = grab(v, 'se')
+    const frame = handle.closest<HTMLElement>('.p-frame')!
+    const w0 = parseFloat(frame.style.width)
+    const h0 = parseFloat(frame.style.height)
+    v.seam.pointerDown(ptr(handle, 300, 300))
+    v.seam.pointerMove(ptr(handle, 380, 340))
+    expect(parseFloat(frame.style.width)).toBe(w0 + 80)
+    expect(parseFloat(frame.style.height)).toBe(h0 + 40)
+    v.seam.pointerUp(ptr(handle, 380, 340))
+    expect(onDirty).toHaveBeenCalledTimes(1)
+    // Poll keeps the resized rect (model state, not a transient style).
+    v.reconcile({
+      sessions: [{ id: 's1', label: 'scout', team: 'dsh/11111111', name: 'scout-01', joined: true, live: true }],
+      teams: [{ name: 'alpha', team: 'dsh/canvas/alpha', members: [{ id: 's1' }] }],
+      peerCount: 0,
+    })
+    expect(parseFloat(frame.style.width)).toBe(w0 + 80)
+  })
+
+  it('dragging the NW handle moves the top-left corner and clamps to the minimum', () => {
+    const { v } = resizeView()
+    const handle = grab(v, 'nw')
+    const frame = handle.closest<HTMLElement>('.p-frame')!
+    const x0 = parseFloat(frame.style.left)
+    v.seam.pointerDown(ptr(handle, 200, 200))
+    v.seam.pointerMove(ptr(handle, 260, 400)) // past the min: x grows, height clamps
+    expect(parseFloat(frame.style.left)).toBeGreaterThan(x0)
+    expect(parseFloat(frame.style.height)).toBeGreaterThanOrEqual(120)
+    v.seam.pointerUp(ptr(handle, 260, 400))
+  })
+
+  it('a resize gesture never moves member cards', () => {
+    const { v } = resizeView()
+    const card = v.root.querySelector<HTMLElement>('.p-node[data-id="s1"]')!
+    const left0 = card.style.left
+    const handle = grab(v, 'e')
+    v.seam.pointerDown(ptr(handle, 300, 300))
+    v.seam.pointerMove(ptr(handle, 500, 300))
+    v.seam.pointerUp(ptr(handle, 500, 300))
+    expect(card.style.left).toBe(left0)
+  })
+})
+
+describe('netmenu dismissal (owner-reported stuck dropdown)', () => {
+  const netView = () => {
+    const onCanvasAction = vi.fn(() => Promise.resolve(true))
+    const v = createPlanningView({ onDirty: vi.fn(), onLampClick: vi.fn(), onCanvasAction, viewSize: () => ({ w: 1000, h: 800 }) })
+    document.body.appendChild(v.root)
+    v.reconcile({
+      sessions: [
+        { id: 'j1', label: 'joined', team: 'dsh/aaaaaaa1', name: 'joined-one', joined: true, live: true },
+        { id: 'u1', label: 'unjoined', team: 'dsh/aaaaaaa2', name: 'unjoined-one', joined: false, live: true },
+      ],
+      teams: [],
+      peerCount: 0,
+    })
+    return { v, onCanvasAction }
+  }
+  const openNet = (v: ReturnType<typeof netView>['v']) => {
+    const btn = v.root.querySelector<HTMLElement>('.p-netbtn')!
+    btn.click()
+    return v.root.querySelector<HTMLElement>('.p-netmenu')!
+  }
+  const outside = (v: ReturnType<typeof netView>['v'], x: number, y: number) => {
+    const ev = new MouseEvent('pointerdown', { bubbles: true, clientX: x, clientY: y })
+    Object.defineProperty(ev, 'target', { value: v.root.querySelector('.p-world') })
+    document.dispatchEvent(ev)
+  }
+
+  it('clicking outside the dropdown closes it (stuck-dropdown fix)', () => {
+    const { v } = netView()
+    const menu = openNet(v)
+    expect(menu).not.toBeNull()
+    outside(v, 5, 5) // canvas blank press
+    expect(v.root.querySelector('.p-netmenu')).toBeNull()
+  })
+
+  it('the trigger button still toggles: second click closes', () => {
+    const { v } = netView()
+    openNet(v)
+    const btn = v.root.querySelector<HTMLElement>('.p-netbtn')!
+    btn.click()
+    expect(v.root.querySelector('.p-netmenu')).toBeNull()
+  })
+
+  it('pressing a menu item joins and closes; outside press does not re-open', () => {
+    const { v, onCanvasAction } = netView()
+    const menu = openNet(v)
+    const item = menu.querySelector<HTMLElement>('[role=menuitem]')!
+    item.click()
+    expect(onCanvasAction).toHaveBeenCalledTimes(1)
+    expect(v.root.querySelector('.p-netmenu')).toBeNull()
+  })
+})
