@@ -3285,6 +3285,8 @@ ${message}`
                 origin: { type: 'string', description: 'The publishing host (node session label, LAN IP when known) — the natural grouping for fleet rows.' },
                 via: { type: 'string', description: 'The peer URL this row was discovered through (host:port), when it came from a peer card.' },
                 workspace: { type: 'string', description: 'The session\'s working directory, when shared.' },
+                legacy: { type: 'boolean', description: 'true when the publishing node advertises no roster capability (pre-roster peer).' },
+                teams: { type: 'array', items: { type: 'string' }, description: 'Roster teams the node declared for this handle (card teamMemberships).' },
               },
             },
           },
