@@ -179,6 +179,17 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   // by targeting cards directly).
   const frameLayer = document.createElement('div')
   frameLayer.className = 'p-layer p-frames'
+  /** The selected frame keeps its resize handles visible without hover. */
+  let selectedFrame: string | undefined
+  const markSelectedFrame = (name: string | undefined): void => {
+    if (selectedFrame !== undefined) {
+      frameEls.get(selectedFrame)?.classList.remove('selected')
+    }
+    selectedFrame = name
+    if (name !== undefined) {
+      frameEls.get(name)?.classList.add('selected')
+    }
+  }
   const nodeLayer = document.createElement('div')
   nodeLayer.className = 'p-layer p-nodes'
   nodeLayer.setAttribute('role', 'listbox')
@@ -1250,11 +1261,21 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       return
     }
     const handleEl = target !== null ? target.closest<HTMLElement>('.p-frame-handle') : null
+    // Selection clearing: any press NOT on the selected frame's own chrome
+    // (head/handle/body) drops the frame selection.
+    if (selectedFrame !== undefined) {
+      const selFrameEl = frameEls.get(selectedFrame)
+      const onSelectedChrome = target !== null && selFrameEl !== undefined &&
+        (selFrameEl.contains(target) || selFrameEl === target)
+      const onSelectedHead = headEl !== null && headEl.dataset.frame === selectedFrame
+      if (!onSelectedChrome && !onSelectedHead) markSelectedFrame(undefined)
+    }
     if (handleEl !== null && ev.button === 0) {
       // Frame resize (owner ruling): record the frame's current rect and
       // the world-space origin; the move branch re-solves the rect per
       // direction with a minimum size clamp.
       const name = handleEl.dataset.frame ?? ''
+      markSelectedFrame(name)
       const rect = model.getFrame(name)
       if (rect === undefined) return
       gesture = { kind: 'frame-resize', name, dir: handleEl.dataset.dir ?? 'se', startRect: { ...rect }, origin: screenToWorld(vp, p.x, p.y), moved: false }
@@ -1280,6 +1301,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     } else if (headEl !== null) {
       if (ev.button !== 0) return
       const name = headEl.dataset.frame ?? ''
+      // Selecting a frame keeps its resize handles visible (hover-only
+      // handles vanished the moment the pointer left).
+      markSelectedFrame(name)
       const snap = model.beginFrameDrag(name)
       if (snap === undefined) return
       gesture = { kind: 'frame', name, snap, origin: screenToWorld(vp, p.x, p.y), moved: false }
