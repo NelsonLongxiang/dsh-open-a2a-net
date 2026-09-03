@@ -29,6 +29,7 @@ import { formatReceipt, parseReceipt } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
+import { registerA2aNetworkSkill } from './skill-registration.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
 // `ctx.timer` on Context; the runtime service is mounted by app compositions.
@@ -410,6 +411,16 @@ export function directDeliveryExposure(
 
 export function apply(ctx: Context, config: Config): void {
   const logger = ctx.logger('a2a')
+  // Plugin-owned agent skill (obelisk pattern): the packaged SKILL.md rides
+  // the standard DSH skill catalog through ctx.skills; uninstall is implicit
+  // — the registration disposer unwinds with the fiber, so the skill lives
+  // and dies with the plugin. Presence-guarded: hosts without the skills
+  // service simply don't get the guidance surface.
+  try {
+    registerA2aNetworkSkill(ctx)
+  } catch (error) {
+    logger.warn('a2a skill surface unavailable: %s', String(error))
+  }
   // Lifecycle guidance section (owner directive 2026-09-02): the network is
   // self-service — a session that needs cross-session or cross-node work may
   // join, team up (prefer joining an existing fitting team, create as
