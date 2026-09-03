@@ -260,3 +260,5 @@
 #dsh-plan .p-h-sw{bottom:-5px; left:-5px; cursor:nesw-resize}
 #dsh-plan .p-h-ne::after, #dsh-plan .p-h-sw::after{transform:rotate(45deg)}
 #dsh-plan .p-h-nw::after, #dsh-plan .p-h-se::after{transform:rotate(-45deg)}
+#dsh-plan .p-frame.selected .p-frame-handle{opacity:1}
+#dsh-plan .p-frame.selected{outline:1px solid var(--frame-line)}

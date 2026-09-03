@@ -348,3 +348,42 @@ describe('netmenu dismissal (owner-reported stuck dropdown)', () => {
     expect(v.root.querySelector('.p-netmenu')).toBeNull()
   })
 })
+
+describe('frame selection keeps handles visible (owner Q&A)', () => {
+  const selView = () => {
+    const v = createPlanningView({ onDirty: vi.fn(), onLampClick: vi.fn(), onCanvasAction: vi.fn(() => Promise.resolve(true)), viewSize: () => ({ w: 1000, h: 800 }) })
+    document.body.appendChild(v.root)
+    v.reconcile({
+      sessions: [{ id: 's1', label: 'scout', team: 'dsh/11111111', name: 'scout-01', joined: true, live: true }],
+      teams: [{ name: 'alpha', team: 'dsh/canvas/alpha', members: [{ id: 's1' }] }],
+      peerCount: 0,
+    })
+    return v
+  }
+  const handlesVisible = (v: ReturnType<typeof selView>): boolean => {
+    const h = v.root.querySelector<HTMLElement>('.p-frame-handle')
+    return h !== null && getComputedStyle(h).opacity !== '0'
+  }
+
+  it('pressing a frame head marks it selected; handles stay visible without hover', () => {
+    const v = selView()
+    const head = v.root.querySelector<HTMLElement>('.p-frame-head')!
+    // Press the head (select) — no hover after.
+    v.seam.pointerDown(ptr({ target: head, clientX: 10, clientY: 10 }))
+    v.seam.pointerUp(ptr({ target: head, clientX: 10, clientY: 10 }))
+    expect(v.root.querySelector('.p-frame.selected')).not.toBeNull()
+    expect(handlesVisible(v)).toBe(true)
+  })
+
+  it('a blank press clears the selection', () => {
+    const v = selView()
+    const head = v.root.querySelector<HTMLElement>('.p-frame-head')!
+    v.seam.pointerDown(ptr({ target: head, clientX: 10, clientY: 10 }))
+    v.seam.pointerUp(ptr({ target: head, clientX: 10, clientY: 10 }))
+    expect(v.root.querySelector('.p-frame.selected')).not.toBeNull()
+    const world = v.root.querySelector<HTMLElement>('.p-world')!
+    v.seam.pointerDown(ptr({ target: world, clientX: 5, clientY: 5 }))
+    v.seam.pointerUp(ptr({ target: world, clientX: 5, clientY: 5 }))
+    expect(v.root.querySelector('.p-frame.selected')).toBeNull()
+  })
+})
