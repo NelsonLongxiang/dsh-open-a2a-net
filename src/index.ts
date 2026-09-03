@@ -92,7 +92,7 @@ declare module '@deepseek-ai/cordis' {
 
 export const name = 'a2a'
 
-export const inject = ['tools', 'timer', 'systemPrompt', 'skills']
+export const inject = ['tools', 'timer', 'systemPrompt']
 
 /** One signed zone delegation published on this node's agent card. */
 export interface DelegateConfig {

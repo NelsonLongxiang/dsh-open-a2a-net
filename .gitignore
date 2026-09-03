@@ -24,3 +24,4 @@ __pycache__/
 feedback/2026-08-27-nexus-canvas-ux/shots/planning-live-*.png
 nexus-stage/pnpm-lock.yaml
 nexus-stage/pnpm-workspace.yaml
+*.tgz

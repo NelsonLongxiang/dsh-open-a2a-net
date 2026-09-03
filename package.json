@@ -51,7 +51,7 @@
   },
   "scripts": {
     "prepare": "pnpm build",
-    "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && tsdown",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && tsdown && node scripts/copy-skill.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "test": "vitest run",
     "test:build-layout": "vitest run tests/build-layout.spec.ts",
