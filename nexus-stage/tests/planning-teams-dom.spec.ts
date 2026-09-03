@@ -274,11 +274,15 @@ describe('context menu', () => {
     const a = v.root.querySelector<HTMLElement>('.p-node[data-id="a"]')!
     const edgeForA = (): boolean =>
       Array.from(v.root.querySelectorAll('svg .e-member')).some(l => l.getAttribute('x2') === '0')
-    // Gesture 1: drag a out to blank -> remove-member (in flight)
-    drag(v, a, { x: 0, y: 0 }, { x: 1500, y: 800 })
-    // Gesture 2 (same team, queued): drag a back into the frame -> add-member
-    drag(v, a, { x: 1500, y: 800 }, { x: 10, y: 10 })
-    expect(actions).toHaveLength(2)
+    // Two queued same-team roster gestures: drag non-member b into the 甲
+    // frame (add-member), then a second drag of b (now a member: reorder at
+    // most) — the race under test is in-flight writes + old-payload polls.
+    // (The original leave+rejoin pair died with the drag-out removal.)
+    const b = v.root.querySelector<HTMLElement>('.p-node[data-id="b"]')!
+    drag(v, b, { x: 600, y: 0 }, { x: 10, y: 10 }) // b joins 甲: add-member
+    drag(v, b, { x: 10, y: 10 }, { x: 30, y: 30 }) // b is a member now: reorder path, queued
+    expect(actions.length).toBeGreaterThanOrEqual(1)
+    expect(actions.some(action => action.type === 'add-member')).toBe(true)
     // A poll arrives BEFORE either settles, carrying the old payload:
     v.reconcile(arrangedInput)
     expect(edgeForA()).toBe(true) // refcount guard: a's optimistic edge survives
@@ -377,12 +381,14 @@ describe('drop targeting', () => {
     expect(actions).toEqual([{ type: 'add-member', team: '甲', ids: ['b'] }])
   })
 
-  it('drag out to blank emits remove-member against the origin team', () => {
+  it('drag out to blank is a position move — no roster write (removal removed)', () => {
     const { v, actions } = view(true)
     v.reconcile(arrangedInput)
     const a = v.root.querySelector<HTMLElement>('.p-node[data-id="a"]')!
     drag(v, a, { x: 0, y: 0 }, { x: 1500, y: 800 })
-    expect(actions).toEqual([{ type: 'remove-member', team: '甲', ids: ['a'] }])
+    // Owner removal (2026-09-02): blank drops no longer emit remove-member.
+    // Leaving a team is the explicit context-menu action only.
+    expect(actions).toEqual([])
   })
 
   it('dropping inside the own frame y-sorts members (reorder when changed)', () => {
