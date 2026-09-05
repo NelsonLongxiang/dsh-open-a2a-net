@@ -2504,6 +2504,41 @@ describe('a2a node facts title source', () => {
     await ctx.fiber.dispose()
   })
 
+  it('peer boundary model: a legacy prewarm probe title falls back to the seat label', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    // The frozen historical residue: the pre-0.5.45 prewarm steered this
+    // exact message into cold sessions, and the session-title service
+    // derived those seats' titles from it — permanently for seats that
+    // never chatted since. The display layer must never surface it as the
+    // node name; the stable seat label shows instead (pure presentation —
+    // the stored title value is untouched).
+    class LegacyProbeTitleService extends Service {
+      get(): { title: string } {
+        return { title: '[prewarm] 请回复 ok。' }
+      }
+    }
+    await ctx.plugin(LegacyProbeTitleService)
+    const agents = ctx.get('agents') as unknown as FakeAgentsService
+    apply(ctx, makeConfig({ sessionNodes: true, announce: true, dshHome: tmpHome() }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    const session = replyingAgent(ctx)
+    agents.agent = session
+    ctx.emit('agent/created', { agent: session })
+    await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
+    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).json() as {
+      sessionTeams: { name: string }[]
+    }
+    expect(card.sessionTeams[0]?.name).toBeDefined()
+    expect(card.sessionTeams[0]?.name).not.toContain('[prewarm]')
+    expect(card.sessionTeams[0]?.name.length).toBeGreaterThan(0)
+    await ctx.fiber.dispose()
+  })
+
   it('memoizes the title per agent: the title service is derived once per log state', async () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
