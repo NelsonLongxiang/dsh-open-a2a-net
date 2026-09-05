@@ -1165,11 +1165,30 @@ export function apply(ctx: Context, config: Config): void {
     return title
   }
 
+  /**
+   * Legacy prewarm probe title (frozen historical marker): the pre-0.5.45
+   * prewarm steered this exact message into cold sessions to force their
+   * first model call, and the session-title service derived those sessions'
+   * titles from it — permanently, for seats that never chatted since. The
+   * injector was removed at 6f13847 (the wake now rides
+   * sessionController.resolveAgent with no message), so the string is a
+   * frozen residue: exact-equality matching cannot drift and cannot mis-hit
+   * a real user message (peer boundary model, docs/design/peer-boundary-
+   * model.md §Layer 2 provenance).
+   */
+  const LEGACY_PREWARM_PROBE_TITLE = '[prewarm] 请回复 ok。'
+
   function nodeMetadataOf(agent: Agent): { name: string; description: string; workspace?: string } {
     const title = sessionTitleOf(agent)
     const cwd = (agent.session as { header?: { cwd?: string } }).header?.cwd
+    // Display-layer fallback (pure presentation, zero data mutation): a title
+    // that IS the legacy probe reads as machine junk in every directory and
+    // card — surface the stable seat label instead. The session-title
+    // service's stored value is untouched.
+    const displayTitle =
+      title !== undefined && title !== '' && title !== LEGACY_PREWARM_PROBE_TITLE ? title : undefined
     return {
-      name: title !== undefined && title !== '' ? title : sessionLabelOf(agent),
+      name: displayTitle !== undefined ? displayTitle : sessionLabelOf(agent),
       description: recentActivityOf(agent),
       ...(cwd !== undefined && cwd !== '' ? { workspace: cwd } : {}),
     }
