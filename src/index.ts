@@ -837,9 +837,10 @@ export function apply(ctx: Context, config: Config): void {
   // refused-but-idempotent, same-key different-payload answers conflict.
   const idempotencyStore = new IdempotencyStore(join(home, 'a2a', 'idempotency.json'))
 
-  // Self-referral suppression: gossip mirrors peer lists back and forth, so
-  // a URL whose fetch just proved it serves this node keeps coming home as
-  // an inbound referral; see src/self-suppress.ts for the shape of the fix.
+  // Unmasked-identity suppression: gossip mirrors peer lists back and forth,
+  // so a URL whose fetch just proved it serves this node — or an already
+  // tracked node (an alias spelling) — keeps coming home as an inbound
+  // referral; see src/self-suppress.ts for the shape of the fix.
   const selfReferrals = new SelfReferralFilter()
 
   // Session nodes: every joined top-level session is its own addressable
@@ -3102,7 +3103,7 @@ ${message}`
    * converges across calls.
    * @param peer - base URL of the peer the outcome belongs to.
    * @param outcome - the detailed fetch outcome (probe and discovery share it).
-   * @returns the verified card, or undefined when the peer is unreachable, rejected, or a self-referral.
+   * @returns the verified card, or undefined when the peer is unreachable, rejected, a self-referral, or a dropped alias.
    */
   function settlePeerCard(peer: string, outcome: CardFetchOutcome): A2aPeerCard | undefined {
     if (!outcome.ok) {
@@ -3120,7 +3121,28 @@ ${message}`
       peerStore.drop(peer)
       return undefined
     }
+    // Alias collapse (same-node dedup): one node reaches the fleet under
+    // several spellings — loopback vs LAN IP vs hostname — and different
+    // gossip sources list different ones, so the store accumulates several
+    // peers for one node and the plan canvas renders one card per spelling.
+    // The signed card session is the node identity: when another tracked
+    // peer already serves it, keep the stronger entry (seed, then score),
+    // learn the identity on it, and forget the alias. The suppression
+    // window stops the dropped spelling from riding the next gossip round
+    // straight back in. A seed alias is config-owned: drop() refuses it and
+    // both spellings stay, exactly as the owner configured.
+    const known = peerStore.bySession(outcome.card.session)
+    if (known !== undefined && known !== peer) {
+      const keep = (peerStore.score(known) ?? 0) >= (peerStore.score(peer) ?? 0) ? known : peer
+      const alias = keep === known ? peer : known
+      peerStore.drop(alias)
+      selfReferrals.remember(alias)
+      peerStore.learnSession(keep, outcome.card.session)
+      peerStore.noteSuccess(keep)
+      return outcome.card
+    }
     peerStore.noteSuccess(peer)
+    peerStore.learnSession(peer, outcome.card.session)
     for (const referral of outcome.card.peers ?? []) {
       if (!selfReferrals.shouldOffer(referral)) continue
       if (!peerAdmissible(referral)) continue

@@ -1,23 +1,27 @@
 /**
- * Self-referral suppression: decentralized gossip mirrors peer lists back
+ * Unmasked-identity suppression: decentralized gossip mirrors peer lists back
  * and forth, so every alias of this node's own address comes home as an
  * inbound referral within minutes of being dropped. Fetching one is the
  * identity check that drops it (the fetched card carries our session id),
  * but the next inbound referral re-offers the same URL seconds later, and
  * the peer store flickers between present and dropped forever.
  *
- * This filter remembers each URL whose fetch revealed selfhood for a window
- * far beyond any realistic offer cadence: offers inside the window are
- * refused without a network round-trip. Shape-agnostic on purpose — alias
- * spellings never seen before (localhost vs 127.0.0.1 vs a hostname) suppress
- * naturally once their first fetch unmasks them.
+ * The same flicker plagues alias spellings of OTHER tracked nodes: a peer
+ * reached as both loopback and LAN IP drops one spelling on the alias
+ * collapse, and the next mirrored referral re-offers it. This filter
+ * therefore remembers each URL whose fetch revealed a settled identity —
+ * self or an already-tracked peer — for a window far beyond any realistic
+ * offer cadence: offers inside the window are refused without a network
+ * round-trip. Shape-agnostic on purpose — alias spellings never seen before
+ * (localhost vs 127.0.0.1 vs a hostname) suppress naturally once their first
+ * fetch unmasks them.
  * @module @nelsonlongxiang/dsh-open-a2a-net/self-suppress
  */
 
-/** How long a self-revealing URL stays suppressed after its unmasking fetch. */
+/** How long an identity-revealing URL stays suppressed after its unmasking fetch. */
 export const SELF_REFERRAL_SUPPRESS_MS = 6 * 60 * 60_000
 
-/** Bounded memory of URLs whose recent fetch proved they serve this node. */
+/** Bounded memory of URLs whose recent fetch proved they serve a known identity. */
 export class SelfReferralFilter {
   private readonly remembered = new Map<string, number>()
   private readonly now: () => number
