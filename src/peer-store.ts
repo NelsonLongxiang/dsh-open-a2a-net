@@ -29,6 +29,8 @@ export interface PeerRecord {
   readonly url: string
   score: number
   readonly seed: boolean
+  /** The signed-card session the peer served last, when a fetch revealed it. */
+  readonly session?: string
 }
 
 /** The persisted store document (whole-file read/write, small by design). */
@@ -145,6 +147,37 @@ export class PeerStore {
     return this.peers.get(url)?.score
   }
 
+  /**
+   * Record the signed-card session a tracked peer served. The session is the
+   * node identity (the same fact the self-referral guard judges), so learning
+   * it per URL is what lets the caller collapse alias spellings of one node
+   * (loopback vs LAN IP) into a single tracked peer.
+   * @param url - the tracked peer the card came from.
+   * @param session - the verified card's session label; empty is ignored.
+   */
+  learnSession(url: string, session: string): void {
+    const peer = this.peers.get(url)
+    if (peer === undefined || session === '') return
+    // PeerRecord fields are readonly: replace the record wholesale.
+    this.peers.set(url, { ...peer, session })
+    this.persist()
+  }
+
+  /**
+   * The strongest tracked URL known to serve one node identity — seeds beat
+   * referrals, then the higher score wins (ties keep first-tracked order).
+   * @param session - the signed-card session to look up.
+   * @returns the winning peer URL, or undefined when none is tracked.
+   */
+  bySession(session: string): string | undefined {
+    let best: PeerRecord | undefined
+    for (const peer of this.peers.values()) {
+      if (peer.session !== session) continue
+      if (best === undefined || (best.seed === peer.seed ? peer.score > best.score : peer.seed)) best = peer
+    }
+    return best?.url
+  }
+
   /** Load a persisted snapshot on construction, if present. */
   private restore(): void {
     if (this.path === '' || !existsSync(this.path)) return
@@ -159,6 +192,7 @@ export class PeerStore {
           url: peer.url,
           score: typeof peer.score === 'number' && Number.isFinite(peer.score) ? peer.score : INITIAL_SCORE,
           seed: peer.seed === true,
+          ...(typeof peer.session === 'string' && peer.session !== '' ? { session: peer.session } : {}),
         })
       }
     } catch {

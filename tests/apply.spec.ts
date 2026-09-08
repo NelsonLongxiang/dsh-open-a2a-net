@@ -541,6 +541,43 @@ describe('a2a plugin decentralized routing (peers)', () => {
       await peer.dispose()
     }
   })
+
+  it('tracks one peer per node: an alias spelling serving the same card is dropped', async () => {
+    // One node, two spellings: both servers serve the same signed identity
+    // (same session label) — the loopback/LAN-IP shape a gossip fleet drifts
+    // into when different sources list different addresses of one host. The
+    // alias must not linger as a second peer once its fetch unmasks it: the
+    // store keeps the stronger entry only, so the plan canvas renders one
+    // card per node instead of one per spelling.
+    const alias = await mountPeerNode({ session: 'peer-node' }, false)
+    // The keeper's card lists the alias as a referral — the gossip shape.
+    const peer = await mountPeerNode({ session: 'peer-node', peers: [alias.baseUrl] }, false)
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    apply(ctx, makeConfig({ peers: [peer.baseUrl], sessionNodes: true, remoteRowsTtlMs: 10, dshHome: tmpHome() }))
+    try {
+      const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+      const readState = async (): Promise<{ peers: { url: string }[] }> =>
+        await (await globalThis.fetch('http://127.0.0.1:' + String(port) + '/__dsh_a2a/state')).json() as { peers: { url: string }[] }
+      // Sweep until exactly the seed survives — the alias joins via the
+      // seed's referral on the first sweep and collapses on the next.
+      let stable = 0
+      for (let i = 0; i < 100 && stable < 3; i++) {
+        const state = await readState()
+        const urls = state.peers.map(p => p.url).filter(u => u === peer.baseUrl || u === alias.baseUrl)
+        stable = urls.length === 1 && urls[0] === peer.baseUrl ? stable + 1 : 0
+        await new Promise(resolve => setImmediate(resolve))
+      }
+      expect(stable).toBe(3)
+    } finally {
+      await ctx.fiber.dispose()
+      await peer.dispose()
+      await alias.dispose()
+    }
+  })
   it('the state route lists peer-side teams as remote rows for the panel', async () => {
     const peer = await mountPeerNode()
     const ctx = new Context()

@@ -201,3 +201,33 @@ describe('PeerStore persistence', () => {
     expect(store.list()).toEqual(['http://a', 'http://b'])
   })
 })
+
+describe('PeerStore node-identity dedup', () => {
+  it('learns a served session and resolves the strongest URL per identity', () => {
+    const store = new PeerStore(['http://seed'], '')
+    store.offer('http://lan')
+    store.offer('http://loop')
+    store.noteSuccess('http://loop')
+    store.learnSession('http://lan', 'node-1')
+    store.learnSession('http://loop', 'node-1')
+    // Among referrals the higher score wins; a seed beats both.
+    expect(store.bySession('node-1')).toBe('http://loop')
+    store.learnSession('http://seed', 'node-1')
+    expect(store.bySession('node-1')).toBe('http://seed')
+    // Unknown identities resolve to nothing, and empty sessions are not learnable.
+    expect(store.bySession('node-2')).toBeUndefined()
+    store.learnSession('http://lan', '')
+    expect(store.bySession('node-1')).toBe('http://seed')
+  })
+
+  it('keeps the learned session across a persistence round-trip', async () => {
+    const path = storePath()
+    const first = new PeerStore([], path, PEER_CAP, 0)
+    first.offer('http://a')
+    first.learnSession('http://a', 'node-1')
+    await first.flush()
+    const snapshot = JSON.parse(readFileSync(path, 'utf8')) as { peers: { session?: string }[] }
+    expect(snapshot.peers[0]?.session).toBe('node-1')
+    expect(new PeerStore([], path).bySession('node-1')).toBe('http://a')
+  })
+})
