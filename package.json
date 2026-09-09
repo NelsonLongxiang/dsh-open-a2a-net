@@ -24,6 +24,7 @@
   "files": [
     "lib",
     "assets/nexusDist",
+    "assets/stageDist",
     "images",
     "README_zh.md",
     "cordis.patch.yml",

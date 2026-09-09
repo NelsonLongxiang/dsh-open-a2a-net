@@ -61,4 +61,23 @@ describe('built package layout', () => {
     for (const name of referenced) expect(present, `missing ${name}`).toContain(name)
     expect(present.slice().sort()).toEqual(referenced.slice().sort())
   })
+
+  it('ships the munder-difflin stage tree the files field promises', async () => {
+    // G1-style guard (the 0.5.31 packaging regression, 2026-09-04): the files
+    // field listed assets/stageDist while the tree itself had been dropped,
+    // so npm pack silently omitted it and every install served 404 on
+    // /__dsh_a2a_canvas. The guard demands the committed stage tree AND the
+    // files-field promise stay in lockstep — drift on either side goes red.
+    const manifest = JSON.parse(await readFile(artifact('package.json'), 'utf8')) as {
+      files: string[]
+    }
+    expect(manifest.files).toContain('assets/stageDist')
+    const shell = await readFile(artifact('assets/stageDist/index.html'), 'utf8')
+    expect(shell).toContain('<')
+    const referenced = [...shell.matchAll(/assets\/([\w.-]+\.js)/g)].map(m => m[1] as string)
+    expect(referenced.length).toBeGreaterThan(0)
+    const present = (await readdir(artifact('assets/stageDist/assets')))
+      .filter(name => name.endsWith('.js'))
+    for (const name of referenced) expect(present, `missing ${name}`).toContain(name)
+  })
 })
