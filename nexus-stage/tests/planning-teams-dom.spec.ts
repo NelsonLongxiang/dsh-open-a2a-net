@@ -402,6 +402,27 @@ describe('drop targeting', () => {
     expect((actions[0] as { team: string }).team).toBe('甲')
   })
 
+  it('boot settlement forward path: persisted canvas membership renders team and members without interaction', () => {
+    // Joined forward path (fast-follow ②): a joined session whose canvas
+    // membership was persisted renders its team frame and member cards at
+    // boot settlement — zero presses, zero drags, zero canvas actions.
+    // Settlement READS state; it never writes.
+    const { v, actions } = view(true)
+    v.reconcile(arrangedInput)
+    const frame = v.root.querySelector<HTMLElement>('.p-frame[data-name="甲"]')!
+    expect(frame).not.toBeNull()
+    // a and c hold memberships: their cards render (inside or outside the
+    // frame box — membership is the semantic, geometry is incidental).
+    expect(v.root.querySelector<HTMLElement>('.p-node[data-id="a"]')).not.toBeNull()
+    expect(v.root.querySelector<HTMLElement>('.p-node[data-id="c"]')).not.toBeNull()
+    // b holds no membership: its roster card still renders (visibility), but
+    // the boot settles with zero canvas actions — no writes at mount.
+    expect(v.root.querySelector<HTMLElement>('.p-node[data-id="b"]')).not.toBeNull()
+    expect(actions).toEqual([])
+    // No boot-time selection side effect: nothing arrives pre-highlighted.
+    expect(frame.classList.contains('selected')).toBe(false)
+  })
+
   it('F1: an unmoved multi-select click never writes a group 离队 (data-loss fix)', () => {
     const { v, actions, onDirty } = view(true)
     v.reconcile(arrangedInput)

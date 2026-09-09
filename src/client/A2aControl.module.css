@@ -529,8 +529,11 @@
 .canvasChipRemove {
   border: none;
   padding: 2px 5px;
-  min-width: 22px;
-  min-height: 22px;
+  /* WCAG 2.2 AA target-size minimum (2.5.8) is 24×24 CSS px; the chip keeps
+     its dense form via padding — the hit target meets the AA floor, while
+     the 44×44 AAA guidance is consciously not adopted for chip density. */
+  min-width: 24px;
+  min-height: 24px;
   font-size: 11px;
   line-height: 1;
   cursor: pointer;
