@@ -73,3 +73,20 @@ agent-loop 的 latch 重放条件 `maintenance.wakeRequested && this.inbox.hasPe
 2. [宿主] F3 提 deepseek-harness 缺陷+PR（借 0.5.x 线）
 3. [缺陷卡] t-mt6nd0sq-hxuhj6 更新：根因实证补充（latch 窗口 + delivered 语义过宽），修复拆 F1/F2/F3
 4. [观察] loop-97 继续盯 3081 验证回执；若再滞留，人工救活路径已验证（sync 探针即触发）
+
+## 四、2026-09-12 新证据:sync 投递也滞留(缺陷升级)
+
+> 现场高于设计:08-26 的实证边界("sync 可靠")已被打破。
+
+- **现场**:3080(0.19.0)17:41 重启后,fcae97b3 首轮投递正常应答(勘误轮,17:4x);
+  P3 实验投递后,后续所有投递(含 sync wait 模式 ×2、alive 探针)全部滞留:
+  `direct-6327e3f2 pending + settleable=true`,120s 超时,会话日志零新增。
+- **时间线含义**:同一宿主进程内**先成功后滞留**——不是冷启动问题,而是会话在某个
+  turn 后进入不可唤醒状态。P3 是长任务(本体解析),吻合主嫌 a(maintenance latch:
+  大 turn 结束点=压缩/快照高发窗口,wake 被 latch 后 `wakeRequested && inbox.hasPending`
+  重放条件失效)。
+- **修复设计影响**:F2(async 兜底复查)救不了 sync 滞留;主嫌 a 指向 **harness 侧
+  agent-loop 的 latch 重放条件**(agent.ts:173-181 一带)——修复重心应移到宿主侧,
+  a2a-net 侧 F1(语义增证)仍然有效(delivered≠consumed 的诚实性)。
+- **下一步**:① harness agent-loop 复现 latch 场景(maintenance 中 steer → 观察 wake
+  重放);② a2a-net F1 先行(consumed 字段);③ 复现脚本进 harness 测试。
