@@ -90,3 +90,16 @@ agent-loop 的 latch 重放条件 `maintenance.wakeRequested && this.inbox.hasPe
   a2a-net 侧 F1(语义增证)仍然有效(delivered≠consumed 的诚实性)。
 - **下一步**:① harness agent-loop 复现 latch 场景(maintenance 中 steer → 观察 wake
   重放);② a2a-net F1 先行(consumed 字段);③ 复现脚本进 harness 测试。
+
+## 五、2026-09-12 勘误：§四的"滞留"定性错误（重要）
+
+§四写推后的现场复核推翻了"唤醒缺陷"判断：目标会话 v3 日志实读显示会话全程活跃
+（turn 10-11+），正在执行 P3 长任务（本体解析，内部经 route_to_team 派发并等待回报）。
+所谓"滞留"= **长 turn 占用**：投递进入 inbox 排队，等当前 turn 收敛后消费——这是
+队列语义的正常行为，不是 latch 缺陷。pending+settleable 只是回执未结算（任务未完）。
+
+教训：判"会话死亡/滞留"前必须先读会话日志尾部（v3 实况），投递超时 ≠ 唤醒失败。
+§四的嫌疑方向修正不成立；F1（delivered≠consumed 增证）价值不变——正是它能把
+"排队中"与"真滞留"区分开。附带发现：ontology 团队 4 个 SOUL.md 声明不存在的
+全局工具 `bash`（应为 `gitbash`）导致派发成员全灭（fail-close 设计内），会话侧已
+紧急修复（工作树 4 行，待正式化）。
