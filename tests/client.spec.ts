@@ -332,3 +332,32 @@ describe('queryOutcome (W7 slice 2)', () => {
     expect(calls).toEqual([])
   })
 })
+
+describe('delivered shape carries the consumed probe (F1 client half, async-stall §三)', () => {
+  it('passes consumed through when the peer reports it true, keeping the async receipt wording', async () => {
+    const { fetch } = stubFetch(() => ({ status: 200, body: { routed: true, delivered: true, consumed: true, task_id: 't-9', context_id: 'ctx-9', task_status: 'TASK_STATE_DELIVERED' } }))
+    await expect(makeClient({ fetch }).routeDirect('http://p:1', 'crew', 'hello')).resolves.toEqual({
+      ok: true,
+      team: 'crew',
+      reply: 'Delivered to crew (async). The target routes a receipt — a message starting "[A2A receipt] task t-9 <outcome summary>" — back to your team when done; watch a2a_status activity or follow up with the context id.',
+      task_id: 't-9',
+      context_id: 'ctx-9',
+      task_status: 'TASK_STATE_DELIVERED',
+      consumed: true,
+    })
+  })
+
+  it('answers consumed:false with the queued-turn wording — follow up, do not resend', async () => {
+    const { fetch } = stubFetch(() => ({ status: 200, body: { routed: true, delivered: true, consumed: false, task_id: 't-8', context_id: 'ctx-8', task_status: 'TASK_STATE_DELIVERED' } }))
+    const result = await makeClient({ fetch }).routeDirect('http://p:1', 'crew', 'hello')
+    expect(result).toMatchObject({ ok: true, consumed: false })
+    expect((result as { reply: string }).reply).toContain('queued behind the session')
+    expect((result as { reply: string }).reply).toContain('do not resend')
+  })
+
+  it('omits consumed when the peer is older and does not report it', async () => {
+    const { fetch } = stubFetch(() => ({ status: 200, body: { routed: true, delivered: true, task_id: 't-7', context_id: 'ctx-7', task_status: 'TASK_STATE_DELIVERED' } }))
+    const result = await makeClient({ fetch }).routeDirect('http://p:1', 'crew', 'hello')
+    expect(result).not.toHaveProperty('consumed')
+  })
+})

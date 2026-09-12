@@ -110,6 +110,15 @@ export interface A2aRouteOk {
   readonly context_id: string
   readonly task_status: string
   /**
+   * Delivered-shape only (wait:false): whether the target's driver had
+   * started a turn by the delivery probe. `false` means the message is
+   * queued (a busy turn holds the inbox) or the wake was latched — the
+   * delivered≠consumed distinction the async-stall analysis (§三 F1) made
+   * the honest signal for; a re-check via a2a_status or the context id is
+   * the caller's follow-up, not a retry.
+   */
+  readonly consumed?: boolean
+  /**
    * Present when the result rode the native-teams bridge: its rounds emit
    * no A2A receipt in this slice, so callers must not book the row as
    * receipt-owed (`trackOwedTask` skips it).

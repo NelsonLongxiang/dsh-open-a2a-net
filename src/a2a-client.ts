@@ -50,6 +50,7 @@ export type CardFetchOutcome =
 type WireRoute = {
   readonly routed?: unknown
   readonly delivered?: unknown
+  readonly consumed?: unknown
   readonly error?: unknown
   readonly code?: unknown
   readonly task_id?: unknown
@@ -304,15 +305,22 @@ export class A2aClient {
     if (raw.routed === true && raw.delivered === true) {
       const taskId = wireText(raw.task_id) !== '' ? wireText(raw.task_id) : taskIdFromCaller ?? ''
       const bridge = wireBridge(raw.bridge)
+      // F1 client half (async-stall §三): the peer's consumed probe rides
+      // through — a delivered-but-unconsumed message is queued (busy turn)
+      // or latched, and the caller should follow up, not assume arrival.
+      const consumed = typeof raw.consumed === 'boolean' ? raw.consumed : undefined
       return {
         ok: true,
         team,
         reply: bridge !== undefined
           ? `Delivered to ${team} (async native-teams round). It settles through the team's own routing chain and routes no A2A receipt in this slice — reconcile via context_id follow-ups.`
-          : `Delivered to ${team} (async). The target routes a receipt — a message starting "[A2A receipt] task ${taskId} <outcome summary>" — back to your team when done; watch a2a_status activity or follow up with the context id.`,
+          : consumed === false
+            ? `Delivered to ${team} (async), but the target had not started a turn on it yet — the message is queued behind the session's current turn. Watch a2a_status activity or follow up with the context id; do not resend.`
+            : `Delivered to ${team} (async). The target routes a receipt — a message starting "[A2A receipt] task ${taskId} <outcome summary>" — back to your team when done; watch a2a_status activity or follow up with the context id.`,
         task_id: taskId,
         context_id: wireText(raw.context_id),
         task_status: wireText(raw.task_status) === '' ? 'TASK_STATE_DELIVERED' : wireText(raw.task_status),
+        ...(consumed !== undefined ? { consumed } : {}),
         ...(bridge !== undefined ? { bridge } : {}),
       }
     }
