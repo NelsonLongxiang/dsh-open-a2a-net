@@ -117,6 +117,8 @@ export interface Config {
   readonly session: string
   /** Team name this node exposes for direct routing. */
   readonly team: string
+  /** S4 fix 3: audit (default) or refuse host-side (agent-less) routing calls. */
+  readonly gateAgentLessCalls: 'audit' | 'refuse'
   /**
    * Publish this node's `/.well-known/agent-card.json` on the shared web
    * server (peer discovery). Requires the web server in the composition;
@@ -706,7 +708,7 @@ export function apply(ctx: Context, config: Config): void {
   const teamMemberships = new TeamMembershipStore(join(home, 'a2a', 'teams.json'))
   // S4 audit ring, hoisted beside the stores: the boot-settlement prune runs
   // before the tools section initializes, and it records archive-prune events.
-  const teamAuditRing: Array<{ at: number; action: 'join' | 'leave' | 'archive-prune'; team: string; id: string; ok: boolean; reason?: string }> = []
+  const teamAuditRing: Array<{ at: number; action: 'join' | 'leave' | 'archive-prune' | 'agent-less'; team: string; id: string; ok: boolean; reason?: string }> = []
   const recordTeamAudit = (action: 'join' | 'leave' | 'archive-prune' | 'agent-less', team: string, id: string, ok: boolean, reason?: string): void => {
     teamAuditRing.push({ at: Date.now(), action, team, id, ok, ...(reason !== undefined ? { reason } : {}) })
     if (teamAuditRing.length > 32) teamAuditRing.splice(0, teamAuditRing.length - 32)
