@@ -1164,7 +1164,12 @@ const reportLoopRing = new Map<string, number[]>()
   }
 
   function sessionEventsOf(agent: Agent): readonly (SessionEventLike | undefined)[] {
-    const session = agent.session as (typeof agent.session & { snapshotEvents?: () => readonly unknown[] }) | undefined
+    // The cast widens to BOTH faces of the accessor: alpha.4 hosts expose
+    // `snapshotEvents()`, legacy hosts the `.events` array — the ambient
+    // `Session` type names whichever face its own package rev shipped, so
+    // the legacy read below needs the widened member to stay type-honest
+    // without a behavioural change.
+    const session = agent.session as (typeof agent.session & { snapshotEvents?: () => readonly unknown[]; events?: readonly (SessionEventLike | undefined)[] }) | undefined
     if (session === undefined) return []
     if (typeof session.snapshotEvents === 'function') {
       try {
@@ -1281,9 +1286,10 @@ const reportLoopRing = new Map<string, number[]>()
     // side-effect-only.
     ctx.on('agent/created', ({ agent }) => {
       const agents = ctx.get('agents')
-      if (agents === undefined || !agents.roots().some(root => root.id === agent.id)) return
+      if (agents === undefined || !agents.roots().some(root => root.id === agent.id)) return undefined
       liveRoots.set(String(agent.id), agent)
       if (joinedSessions.has(String(agent.id))) mountSessionNode(agent)
+      return undefined
     })
     ctx.on('agent/disposed', ({ agent }) => {
       liveRoots.delete(String(agent.id))
@@ -1535,7 +1541,10 @@ const reportLoopRing = new Map<string, number[]>()
       if (persistence === undefined) return Promise.resolve()
       coldRowsRefresh = persistence.list()
         .then(headers => {
-          coldRowsCache = { at: Date.now(), ids: new Set(headers.map(header => String(header.id))) }
+          // The header's `id` is a runtime fact of every generation; the
+          // alpha.4 persistence type simply stopped naming it, so read it
+          // through a widened shape instead of trusting the ambient type.
+          coldRowsCache = { at: Date.now(), ids: new Set(headers.map(header => String((header as { id?: unknown }).id))) }
         })
         .catch(() => {
           // Keep serving the last snapshot; the next expiry retries.
@@ -2450,7 +2459,7 @@ ${message}`
   interface BridgeTeamsRegistry {
     listTeams(): Array<{ name: string; description: string }>
     describeTarget(handle: string): Promise<BridgeTeamsDescriptor>
-    startRound(args: { team?: string; message: string }, parent: { id: string; session: { events: readonly unknown[] } }, signal: AbortSignal): Promise<string>
+    startRound(args: { team?: string; message: string }, parent: { id: string; session: { events?: readonly unknown[] } }, signal: AbortSignal): Promise<string>
   }
 
   function teamsRegistry(): BridgeTeamsRegistry | undefined {
@@ -2503,7 +2512,7 @@ ${message}`
   }
 
   type NativeTeamsPrepared =
-    | { readonly ok: true; readonly teams: BridgeTeamsRegistry; readonly parent: { id: string; session: { events: readonly unknown[] } } }
+    | { readonly ok: true; readonly teams: BridgeTeamsRegistry; readonly parent: { id: string; session: { events?: readonly unknown[] } } }
     | { readonly ok: false; readonly reason: 'not-claimed' }
     | { readonly ok: false; readonly reason: 'error'; readonly error: string }
 
