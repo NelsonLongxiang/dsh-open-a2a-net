@@ -233,6 +233,32 @@ export class TaskLedger {
    * @param peer - the candidate that accepted the delivery ('local' or URL).
    * @param contextId - the delivery's conversation id, kept for follow-up routes (empty omits it).
    */
+  /**
+   * Fix ② (ghost-debt stop): register one delivered async dispatch whose
+   * callback address could not be resolved — the row stays VISIBLE (the
+   * ledger is honest) but carries receiptExpected:false, so neither the
+   * owed book nor the settleable bucket ever counts it. Reconciliation is
+   * via context_id follow-ups (the dispatch reply already says so).
+   * Idempotent by task id like {@link track}.
+   */
+  trackReceiptless(taskId: string, team: string, peer: string, contextId?: string): void {
+    if (taskId === '') return
+    this.sweep(this.now())
+    if (this.tasks.some(entry => entry.taskId === taskId)) return
+    if (this.archived.some(entry => entry.taskId === taskId)) return
+    this.tasks = [{
+      taskId,
+      team,
+      peer,
+      startedAt: this.now(),
+      direction: 'outbound' as const,
+      receiptExpected: false,
+      ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
+      status: 'pending' as const,
+    }, ...this.tasks].slice(0, TASK_CAP)
+    this.persist()
+  }
+
   track(taskId: string, team: string, peer: string, contextId?: string): void {
     if (taskId === '') return
     this.sweep(this.now())
