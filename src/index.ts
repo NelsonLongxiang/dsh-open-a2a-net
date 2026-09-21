@@ -14,6 +14,24 @@ import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 // The package own version, read from package.json at load time so the
 // panel never drifts from the manifest the installer actually resolved.
 const PLUGIN_VERSION: string = String(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version)
+
+/**
+ * Fix 1 (能发即能收): resolve the caller's routable label for one routed
+ * dispatch. Priority: the joined session's node team > the exempt initiator
+ * face (the NODE team — bare, team-name routable) > the session label (not
+ * routable; the dispatch registers receiptless per fix 2).
+ */
+export function resolveCallerLabel(input: {
+  joined: boolean
+  initiatorFace: boolean
+  nodeTeam: string
+  joinedTeam?: string
+  sessionLabel?: string
+}): string | undefined {
+  if (input.joined && input.joinedTeam !== undefined) return input.joinedTeam
+  if (input.initiatorFace) return input.nodeTeam
+  return input.sessionLabel
+}
 import { signCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { CanvasStore } from './canvas-store.ts'
@@ -3691,7 +3709,13 @@ ${message}`
    * instructing the caller to perform it (and never cites tooling the
    * caller does not have).
    */
-  const routeVerdict = (team: string, failures: readonly string[], candidateCount: number): { ok: false; error: string; code: number } => {
+/**
+ * Fix 1 (能发即能收): resolve the caller's routable label for one routed
+ * dispatch. Priority: the joined session's node team > the exempt initiator
+ * face (the NODE team — bare, team-name routable) > the session label (not
+ * routable; the dispatch registers receiptless per fix 2).
+ */
+const routeVerdict = (team: string, failures: readonly string[], candidateCount: number): { ok: false; error: string; code: number } => {
     if (candidateCount > 0) {
       return {
         ok: false,
@@ -3793,15 +3817,13 @@ ${message}`
           }
         }
       }
-      const callerSession = exec.agent === undefined ? undefined
-        : sessionNodes.has(String(exec.agent.id)) ? sessionTeamOf(exec.agent)
-        // Fix ① (能发即能收): the initiator/host face is EXEMPT from the join
-        // gate — it can route out, so its receipts must have a home. The
-        // session label (dsh-host-*) is not routable; the NODE's team (bare
-        // config.team) always is: the target resolves it by team name and
-        // the receipt lands in this node's own team chat.
-        : exemptInitiatorFace(exec.agent) ? config.team
-        : sessionLabelOf(exec.agent)
+      const callerSession = resolveCallerLabel({
+        joined: exec.agent !== undefined && sessionNodes.has(String(exec.agent.id)),
+        initiatorFace: exec.agent !== undefined && exemptInitiatorFace(exec.agent),
+        nodeTeam: config.team,
+        joinedTeam: exec.agent === undefined ? undefined : sessionTeamOf(exec.agent),
+        sessionLabel: exec.agent === undefined ? undefined : sessionLabelOf(exec.agent),
+      })
       // P2 receipt-callback: the caller's routable address rides the wire so
       // a peer routes its receipt to THIS session's node team (not to
       // wherever its caller-label heuristics land). The bare node team is
