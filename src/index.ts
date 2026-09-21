@@ -2528,7 +2528,13 @@ ${message}`
     if (teams === undefined) return { ok: false, reason: 'not-claimed' }
     const parent = liveAgent()
     if (parent === undefined) return { ok: false, reason: 'error', error: 'No live DSH initiator is available to parent the native-teams round.' }
-    return { ok: true, teams, parent }
+    // The alpha.4 Session face dropped the events member (the widened
+    // BridgeTeamsRegistry accepts it optional) — the raw Agent carries the
+    // ambient Session whose shape no longer overlaps, so project through the
+    // widened structural face explicitly (type-level only; the runtime value
+    // is the same live agent).
+    const parentFace = parent as unknown as { id: string; session: { events?: readonly unknown[] } }
+    return { ok: true, teams, parent: parentFace }
   }
 
   /** The A2A envelope rides the round message so the dispatcher sees the network origin. */
