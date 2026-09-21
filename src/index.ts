@@ -14,6 +14,24 @@ import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 // The package own version, read from package.json at load time so the
 // panel never drifts from the manifest the installer actually resolved.
 const PLUGIN_VERSION: string = String(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version)
+
+/**
+ * Fix 1 (能发即能收): resolve the caller's routable label for one routed
+ * dispatch. Priority: the joined session's node team > the exempt initiator
+ * face (the NODE team — bare, team-name routable) > the session label (not
+ * routable; the dispatch registers receiptless per fix 2).
+ */
+export function resolveCallerLabel(input: {
+  joined: boolean
+  initiatorFace: boolean
+  nodeTeam: string
+  joinedTeam?: string
+  sessionLabel?: string
+}): string | undefined {
+  if (input.joined && input.joinedTeam !== undefined) return input.joinedTeam
+  if (input.initiatorFace) return input.nodeTeam
+  return input.sessionLabel
+}
 import { signCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { CanvasStore } from './canvas-store.ts'
@@ -117,6 +135,8 @@ export interface Config {
   readonly session: string
   /** Team name this node exposes for direct routing. */
   readonly team: string
+  /** S4 fix 3: audit (default) or refuse host-side (agent-less) routing calls. */
+  readonly gateAgentLessCalls: 'audit' | 'refuse'
   /**
    * Publish this node's `/.well-known/agent-card.json` on the shared web
    * server (peer discovery). Requires the web server in the composition;
@@ -292,6 +312,8 @@ export const Config: s<Config> = s.object({
   apiKey: s.string().default(''),
   session: s.string().default(''),
   team: s.string().default('dsh'),
+  /** S4 fix ③: host-side (agent-less) routing calls — audit them (default) or refuse outright. */
+  gateAgentLessCalls: s.union(['audit', 'refuse'] as const).default('audit'),
   announce: s.boolean().default(false),
   agentName: s.string().default('DeepSeek Harness A2A node'),
   peers: s.array(s.string()).default([]),
@@ -704,8 +726,8 @@ export function apply(ctx: Context, config: Config): void {
   const teamMemberships = new TeamMembershipStore(join(home, 'a2a', 'teams.json'))
   // S4 audit ring, hoisted beside the stores: the boot-settlement prune runs
   // before the tools section initializes, and it records archive-prune events.
-  const teamAuditRing: Array<{ at: number; action: 'join' | 'leave' | 'archive-prune'; team: string; id: string; ok: boolean; reason?: string }> = []
-  const recordTeamAudit = (action: 'join' | 'leave' | 'archive-prune', team: string, id: string, ok: boolean, reason?: string): void => {
+  const teamAuditRing: Array<{ at: number; action: 'join' | 'leave' | 'archive-prune' | 'agent-less'; team: string; id: string; ok: boolean; reason?: string }> = []
+  const recordTeamAudit = (action: 'join' | 'leave' | 'archive-prune' | 'agent-less', team: string, id: string, ok: boolean, reason?: string): void => {
     teamAuditRing.push({ at: Date.now(), action, team, id, ok, ...(reason !== undefined ? { reason } : {}) })
     if (teamAuditRing.length > 32) teamAuditRing.splice(0, teamAuditRing.length - 32)
   }
@@ -785,6 +807,8 @@ export function apply(ctx: Context, config: Config): void {
   // route serves, never in any routable surface.
   const reportRing: Array<{ at: number; level: 'info' | 'warning' | 'error'; message: string; session: string; task?: string }> = []
   const reportLastAt = new Map<string, number>()
+/** Fix ④ loop circuit-breaker: session+text-hash → accepted-report timestamps (10min window). */
+const reportLoopRing = new Map<string, number[]>()
 
   /**
    * Settle one message through the ledger and announce what it correlated
@@ -3221,17 +3245,25 @@ ${message}`
    * (sessionNodes carries its id) is exempt. appliesToA2aTools returns the
    * refusal error object, or undefined when the call may proceed.
    */
+  /**
+   * Whether this agent is the process's own initiator session — the face the
+   * join gate exempts (it IS the node: its team is config.team, so anything
+   * it can send, this node can receive). Shared by the join gate and the
+   * route's caller-label resolution (fix ①, 能发即能收).
+   */
+  const exemptInitiatorFace = (agent: { id: unknown }): boolean => {
+    if (sessionNodes.has(String(agent.id))) return false
+    try {
+      return ctx.get('agents')?.requireInitiator() === agent
+    } catch { /* no initiator in this fiber — a guest stays gated */ }
+    return false
+  }
+
   const a2aJoinGateRefusal = (exec: { agent?: { id: unknown } } | undefined): void => {
     const agent = exec?.agent
     if (agent === undefined) return
     if (sessionNodes.has(String(agent.id))) return
-    // The process's own initiator session IS the node (its team is this
-    // node's team): routing out from the operator face needs no join. Every
-    // other top-level session is a guest that must join by user gesture.
-    const agents = ctx.get('agents')
-    try {
-      if (agents !== undefined && agents.requireInitiator() === agent) return
-    } catch { /* no initiator in this fiber — a guest stays gated */ }
+    if (exemptInitiatorFace(agent)) return
     // A thrown tool error renders as the model-visible failure surface —
     // loud, structured, and schema-free (no success shape is produced).
     throw new Error('你被禁止使用 a2a 网络：本会话未加入 A2A 网络（join 是用户手势）。Join via the sidebar control to enable, then retry.')
@@ -3412,6 +3444,18 @@ ${message}`
       const now = Date.now()
       const last = reportLastAt.get(session) ?? 0
       if (now - last < 30_000) return { ok: false, error: 'rate limited: one report per 30s per session' }
+      // Fix ④ (loop circuit-breaker, d44efa9f pattern): the SAME session
+      // reporting the SAME text ≥3 times inside a 10-minute window is a
+      // loop, not a situation — refuse with a named reason and audit the
+      // ring (the first copies go through; the bounded ring self-expires).
+      const loopKey = `${session}:${createHash('sha256').update(message).digest('hex').slice(0, 16)}`
+      const loopWindow = (reportLoopRing.get(loopKey) ?? []).filter(at => now - at < 600_000)
+      if (loopWindow.length >= 3) {
+        recordTeamAudit('agent-less', 'a2a_report', session, false, 'loop detected: 3 identical reports in 10min')
+        return { ok: false, error: '循环检测：同会话同文 10 分钟内已上报 3 次，本 report 熔断拒绝。若确需再报请变更内容或等窗口滑出' }
+      }
+      loopWindow.push(now)
+      reportLoopRing.set(loopKey, loopWindow)
       reportLastAt.set(session, now)
       const level = args.level === 'error' || args.level === 'warning' ? args.level : 'info'
       const reportId = `report-${Math.random().toString(16).slice(2, 10)}`
@@ -3636,13 +3680,22 @@ ${message}`
    * receipt-awaiting rows stay on the book). A synchronous completion
    * already carries its answer and owes nothing.
    */
-  const trackOwedTask = (taskId: string, team: string, peer: string, result: A2aRouteResult): void => {
+  const trackOwedTask = (taskId: string, team: string, peer: string, result: A2aRouteResult, callbackAddress?: string): void => {
     if (!result.ok) return
     // Native-teams bridge rounds emit no A2A receipt in this slice: booking
     // them as receipt-owed would fill the owed book with rows no receipt can
     // ever settle (evicting genuinely receivable peer rows past TASK_CAP).
     if (result.bridge !== undefined) return
     if (result.task_status !== 'TASK_STATE_DELIVERED') return
+    // Fix ② (ghost-debt stop): a delivered async dispatch with no routable
+    // callback address can never be settled — register it receiptless
+    // (visible, non-debt; reconcile via context_id) instead of stranding a
+    // row whose only exit was the dead-letter sweep (57 dead letters, half
+    // this shape).
+    if (callbackAddress === undefined) {
+      taskLedger.trackReceiptless(taskId, team, peer, result.context_id === '' ? undefined : result.context_id)
+      return
+    }
     taskLedger.track(taskId, team, peer, result.context_id === '' ? undefined : result.context_id)
   }
 
@@ -3656,7 +3709,13 @@ ${message}`
    * instructing the caller to perform it (and never cites tooling the
    * caller does not have).
    */
-  const routeVerdict = (team: string, failures: readonly string[], candidateCount: number): { ok: false; error: string; code: number } => {
+/**
+ * Fix 1 (能发即能收): resolve the caller's routable label for one routed
+ * dispatch. Priority: the joined session's node team > the exempt initiator
+ * face (the NODE team — bare, team-name routable) > the session label (not
+ * routable; the dispatch registers receiptless per fix 2).
+ */
+const routeVerdict = (team: string, failures: readonly string[], candidateCount: number): { ok: false; error: string; code: number } => {
     if (candidateCount > 0) {
       return {
         ok: false,
@@ -3710,6 +3769,20 @@ ${message}`
     timeoutMs: config.routeTimeoutMs,
     presentCall: args => ({ card: 'generic', title: `A2A route → ${args.team}`, kind: 'other', rawInput: args }),
     execute: async (args: { team: string; message: string; context_id?: string; async?: boolean }, exec): Promise<Record<string, JsonValue>> => {
+      // Fix ③ (S4 audit): host-side calls carry no agent identity — every one
+      // lands in the team audit ring, and the owner can flip the gate from
+      // 'audit' to 'refuse' (config gateAgentLessCalls) when the operator
+      // face should not be a routing principal at all.
+      if (exec.agent === undefined) {
+        recordTeamAudit('agent-less', String(args.team ?? ''), 'host', true,
+          config.gateAgentLessCalls === 'refuse' ? 'refused by gateAgentLessCalls' : 'audited (default)')
+        if (config.gateAgentLessCalls === 'refuse') {
+          return {
+            ok: false,
+            error: 'gateAgentLessCalls=refuse: host-side (agent-less) routing is disabled by configuration — route from a joined session instead',
+          }
+        }
+      }
       // The caller identity travels as a routable team (the calling session's
       // node team when it has joined, else the node label), so the receiver
       // can answer with one a2a_route instead of an unroutable display label.
@@ -3744,12 +3817,21 @@ ${message}`
           }
         }
       }
-      const callerSession = exec.agent === undefined ? undefined
-        : sessionNodes.has(String(exec.agent.id)) ? sessionTeamOf(exec.agent) : sessionLabelOf(exec.agent)
+      const callerSession = resolveCallerLabel({
+        joined: exec.agent !== undefined && sessionNodes.has(String(exec.agent.id)),
+        initiatorFace: exec.agent !== undefined && exemptInitiatorFace(exec.agent),
+        nodeTeam: config.team,
+        joinedTeam: exec.agent === undefined ? undefined : sessionTeamOf(exec.agent),
+        sessionLabel: exec.agent === undefined ? undefined : sessionLabelOf(exec.agent),
+      })
       // P2 receipt-callback: the caller's routable address rides the wire so
       // a peer routes its receipt to THIS session's node team (not to
-      // wherever its caller-label heuristics land).
-      const callbackAddress = routableCallerLabel(callerSession) ? callerSession : undefined
+      // wherever its caller-label heuristics land). The bare node team is
+      // team-name routable on the target even though it lacks the /hash
+      // suffix the regex demands — accepted explicitly here.
+      const callbackAddress = routableCallerLabel(callerSession) || callerSession === config.team
+        ? callerSession
+        : undefined
       const fetch = memoizedCardFetch()
       // The task id is born at the caller (idempotency key semantics): both
       // dispatchers carry the one id, the peer request echoes it, and the
@@ -3763,7 +3845,7 @@ ${message}`
       const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, exec.signal, args.async === true, taskId, callbackAddress)
       if (outcome !== undefined) {
         if (outcome.ok) {
-          trackOwedTask(taskId, args.team, 'local', outcome)
+          trackOwedTask(taskId, args.team, 'local', outcome, callbackAddress)
           return outcome as unknown as Record<string, JsonValue>
         }
         failures.push(`local: ${outcome.error}`)
@@ -3786,7 +3868,7 @@ ${message}`
         }
         const result = await dispatchPeerCandidate(candidate, args.team, args.message, args.context_id, exec.signal, callerSession, peerAsync, taskId, callbackAddress)
         if (result.ok || exec.signal.aborted) {
-          if (result.ok) trackOwedTask(taskId, args.team, candidate, result)
+          if (result.ok) trackOwedTask(taskId, args.team, candidate, result, callbackAddress)
           const notes: string[] = []
           if (result.ok && args.async === true && result.task_status === 'TASK_STATE_DELIVERED' && !routableCallerLabel(callerSession)) {
             notes.push(unroutableCallerNote(String(callerSession ?? session)))
