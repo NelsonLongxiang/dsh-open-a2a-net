@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { Button, IconGlobeOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconGlobeOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import css from './A2aControl.module.css'
 
@@ -209,7 +209,7 @@ export function A2aControl({ wide, t, openSession }: A2aControlProps) {
         onClick={() => { toggleOpen() }}
       >
         <span className={css.trigger}>
-          <IconGlobeOutline14 />
+          <IconGlobeOutlineRegular />
           {wide ? <span>{t('a2a.label')}</span> : null}
           {unread > 0 ? <span className={css.unreadBadge} aria-label={String(unread)}>{unread > 9 ? '9+' : String(unread)}</span> : null}
         </span>

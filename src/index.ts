@@ -83,6 +83,16 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 // inlining removes the cross-package resolution race surface entirely.
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 import { MessageId } from '@deepseek-ai/dsh-llm'
+
+// The a2a relay producer's own message-source kind: upstream 0.1.7 removed the
+// shared catch-all 'plugin' kind, so producers declare their own. Historical
+// sessions carrying the old 'plugin' kind still deserialize (unknown kinds
+// pass through) — only this producer's new writes use the owned kind.
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'a2a-relay': { kind: 'a2a-relay' } & import('@deepseek-ai/dsh-llm').ContextFormed
+  }
+}
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { A2aClient, type A2aFetch, type A2aSchedule, type CardFetchOutcome } from './a2a-client.ts'
@@ -2131,7 +2141,7 @@ const reportLoopRing = new Map<string, number[]>()
       id: MessageId(`a2a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`),
       role: 'user',
       content: [{ type: 'text', text }],
-      source: { kind: 'plugin', plugin: 'a2a', form: 'relay' },
+      source: { kind: 'a2a-relay', form: 'relay' },
     })
   }
 
