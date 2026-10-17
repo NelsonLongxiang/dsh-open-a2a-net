@@ -10,7 +10,7 @@
 |---|---|---|---|---|
 | L0 unit | `tests/unit/` | `pnpm test:unit` | 不挂 cordis fiber、不开真实 socket：纯逻辑（store/codec/几何）、stub 掉 fetch 的客户端缝隙、jsdom 组件 | 秒级 |
 | L1 wire | `tests/wire/` | `pnpm test:wire` | **一个**真实插件实例挂在真实 web server 上（fake agents/loader 服务），对端 peer 可以是 fake 的 | ~30s |
-| L2 mesh | `tests/mesh/` | `pnpm test:mesh` | **≥2 个真实插件实例**，各自独立 DSH home / Ed25519 节点密钥 / peers.json，实例间走真实 HTTP——回环上的跨机器等价物 | ~10s |
+| L2 mesh | `tests/mesh/` | `pnpm test:mesh` | **≥2 个真实插件实例**，各自独立 DSH home / Ed25519 节点密钥 / peers.json，实例间走真实 HTTP——回环上的跨机器等价物 | ~10s（挂死对端用例独占 ~20s：验证真实 15s HTTP 预算切断的必要代价） |
 | L3 gates | `tests/gates/` | `pnpm test:build-layout` | 产物契约（exports 指向的构建布局存在性），不是行为测试 | 秒级 |
 | L4 live | `tests/live/` | `pnpm test:live` + env | **真实远端机器**（env 门控，默认跳过）：真实 RTT、真实防火墙路径、真实 NTP 偏差 | 分钟级，人工触发 |
 
@@ -34,7 +34,8 @@ build-layout 门禁与 nexus-stage 子套件。分层脚本供人按深度迭代
   真签名但已过期（时钟偏差替身）、签名后被篡改（bad-signature 路径）等线上故障。
 - `preseedNodeKey(home)` —— 预置节点密钥并返回公钥，让委托节点的 `delegates` 配置能绑目标密钥。
 - 时间旋钮：mesh 默认 `cardCacheTtlMs: 60` / `cardCacheNegativeTtlMs: 40` / `remoteRowsTtlMs: 100`，
-  故障与恢复窗口保持在百毫秒级。
+  故障与恢复窗口保持在百毫秒级。`taskStaleTtlMs`（默认 24h）可注入亚秒窗口，
+  供死信→复活生命周期在测试内走完，不必等墙钟。
 
 **写新 mesh 场景的准入**：场景必须涉及 ≥2 个真实实例的**交互**（单实例能测的归 L1）；
 故障场景必须断言**失败是闭合的且可观测的**（精确原因串、无 gossip 污染、故障清除后恢复）。
@@ -55,6 +56,12 @@ build-layout 门禁与 nexus-stage 子套件。分层脚本供人按深度迭代
 | referralLearning 关闭（连接层冻结） | mesh-faults「freezes the seed set」 | 不学习不外传；种子自身仍可见 |
 | 回执网络重放 | mesh-baseline「replayed receipt」 | 账本恰好结算一次，不复活债务 |
 | 回环闭环（基线健康） | mesh-baseline 全部 | 互发现 / gossip 扩散 / 同步往返 / 异步回执 / 跨机会话节点可见可路由 |
+| 对端挂死：接受连接但永不应答（楔死进程/挂死代理） | mesh-anomalies「hanging peer」 | 15s HTTP 预算切断（abort/timeout 细节入 probe 行，ms≥15000）；路由对未知团队保持闭合 |
+| 混合舰队一次诊断：活+过期幽灵+死端口 | mesh-anomalies「mixed fleet」 | 单次 probe 报告三形态各就各位：reachable+team / `expired` / `unreachable:`（ECONNREFUSED 层，与卡片裁决不混层） |
+| 非可路由 caller 的 fire-and-forget 路由 | mesh-anomalies「receiptless caller」 | 台账行可见不欠债（`receiptExpected:false, settleable:false`）；迟到正式回执仍结算（诚实优先于记账） |
+| 孤儿回执（未知 task id） | mesh-anomalies「orphan receipt」 | 不崩溃不落 archive，账本前后一致（status<500） |
+| 回声结算 F5：回执不含正式信封但点名 task id | mesh-anomalies「content echo」 | 结算进 archive 且带审计标记 `(settled by content echo)` |
+| 债务老化死信 + 迟到复活 | mesh-anomalies「dead-letter + revival」 | 超 `taskStaleTtlMs` 翻 `dead`（reason `unconsumed`，带 deadAt）；迟到回执把 dead 行结算进 archive |
 
 ## L4 live 层运行手册
 

@@ -42,7 +42,7 @@ import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
-import { TaskLedger, SUMMARY_CAP, type ReceiptResolvedInfo } from './task-ledger.ts'
+import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, type ReceiptResolvedInfo } from './task-ledger.ts'
 import { formatReceipt, parseReceipt } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
@@ -297,6 +297,13 @@ export interface Config {
    */
   readonly routeTimeoutMs: number
   /**
+   * Age at which an unsettled async task auto-dead-letters (exits the owed
+   * view, disarms the nudge, still settles on a late receipt). Default
+   * 24h; the mesh anomaly suite injects sub-second windows to exercise the
+   * dead-letter → revival lifecycle without wall-clock waits.
+   */
+  readonly taskStaleTtlMs: number
+  /**
    * Opt-in native-teams inbound bridge: when composed with
    * `@nelsonlongxiang/dsh-native-teams`, a routed team name that its
    * registry classifies as an unambiguous local claim dispatches through
@@ -385,6 +392,7 @@ export const Config: s<Config> = s.object({
   cardTtlMs: s.number().default(172_800_000),
   flushTimeoutMs: s.number().default(300_000),
   routeTimeoutMs: s.number().default(1_800_000),
+  taskStaleTtlMs: s.number().default(TASK_STALE_TTL_MS),
   nativeTeamsInbound: s.boolean().default(false),
   nativeRoundWaitMs: s.number().default(180_000),
 })
@@ -809,7 +817,7 @@ export function apply(ctx: Context, config: Config): void {
   // queryable here, and the correlating `[A2A receipt] task <id>` message
   // resolves it — the caller-side half of the receipt contract, persisted so
   // a restart does not orphan the reconciliation.
-  const taskLedger = new TaskLedger(join(home, 'a2a', 'tasks.json'))
+  const taskLedger = new TaskLedger(join(home, 'a2a', 'tasks.json'), { staleTtlMs: config.taskStaleTtlMs })
   // Unjoined-node reporting ingress (design: docs/design/unjoined-report-ingress.md):
   // a one-way signal channel for sessions with no network membership — a
   // fallen-off or never-joined session reports "I exist / I have a task"
