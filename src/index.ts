@@ -90,7 +90,12 @@ import { MessageId } from '@deepseek-ai/dsh-llm'
 // pass through) — only this producer's new writes use the owned kind.
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
-    'a2a-relay': { kind: 'a2a-relay' } & import('@deepseek-ai/dsh-llm').ContextFormed
+    'a2a-relay': { kind: 'a2a-relay' } & import('@deepseek-ai/dsh-llm').ContextFormed & {
+      /** The sending peer's routable label (team or session), when known.
+       * ui-chat's relay context body renders "来自 X" + the full text from
+       * this field; without it the row falls back to an opaque body. */
+      senderSessionId?: string
+    }
   }
 }
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -2143,13 +2148,16 @@ const reportLoopRing = new Map<string, number[]>()
    * rejection handling.
    * @param agent - the steering target.
    * @param text - the fully formatted relay message.
+   * @param sender - the sending peer's routable label, recorded on the source
+   * so ui-chat renders the relay body ("来自 X" + full text) instead of an
+   * opaque row; omitted when the sender is not meaningfully addressable.
    */
-  function steerRelay(agent: Agent, text: string): void {
+  function steerRelay(agent: Agent, text: string, sender?: string): void {
     agent.steer({
       id: MessageId(`a2a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`),
       role: 'user',
       content: [{ type: 'text', text }],
-      source: { kind: 'a2a-relay', form: 'relay' },
+      source: { kind: 'a2a-relay', form: 'relay', ...(sender === undefined ? {} : { senderSessionId: sender }) },
     })
   }
 
@@ -2434,7 +2442,7 @@ const reportLoopRing = new Map<string, number[]>()
 
 ${message}`
       try {
-        steerRelay(agent, text)
+        steerRelay(agent, text, caller === '' ? undefined : caller)
       } catch (error) {
         // The waiter was registered above, so the key always holds it; the
         // map-of-arrays stays a plain read.
@@ -2840,7 +2848,7 @@ ${message}`
                 // latched, so the post-steer read alone would answer a false
                 // consumed:true and strand the message.
                 const runningBeforeSteer = probeConsumption(target, taskId)
-                steerRelay(target, `[A2A direct] (task ${taskId}) from "${from}" (routed to ${team}) sent:\n\n${message}\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`)
+                steerRelay(target, `[A2A direct] (task ${taskId}) from "${from}" (routed to ${team}) sent:\n\n${message}\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`, from === 'an unknown node' ? undefined : from)
                 recordActivity('in', team, caller, true)
                 armReceiptAutosend(target, taskId, receiptTarget, message)
                 // v0.5.23 (async-stall): "delivered" only proves the steer call
@@ -4017,7 +4025,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           ? callbackAddress
           : routable ? callerSession : undefined
         const receiptHint = callerTeam === undefined ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${callerTeam}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
-        steerRelay(target, `[A2A direct] (task ${taskId}) from "${callerSession ?? session}" (routed to ${team}) sent:\n\n${message}${receiptHint}`)
+        steerRelay(target, `[A2A direct] (task ${taskId}) from "${callerSession ?? session}" (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam)
         armReceiptAutosend(target, taskId, callerTeam, message)
         endRoute(flight)
         recordActivity('out', team, 'local', true)

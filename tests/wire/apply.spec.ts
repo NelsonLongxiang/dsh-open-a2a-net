@@ -626,8 +626,13 @@ describe('a2a plugin decentralized routing (peers)', () => {
       const result = await route?.execute({ team: 'dsh', message: 'hello peer' }, runContext())
       expect(result).toMatchObject({ ok: true, team: 'dsh', reply: 'peer node replied' })
       expect(peer.steer).toHaveBeenCalledTimes(1)
-      const steered = (peer.steer.mock.calls[0]?.[0] as { content: Array<{ type: string; text: string }> }).content[0]
-      expect(steered?.text).toContain('from "sess-1" (routed to dsh) sent:')
+      const steered = peer.steer.mock.calls[0]?.[0] as { content: Array<{ type: string; text: string }>; source: { kind: string; form?: string; senderSessionId?: string } }
+      expect(steered?.content[0]?.text).toContain('from "sess-1" (routed to dsh) sent:')
+      // The relay source names the sender so ui-chat renders the relay body
+      // ("来自 X" + full text) instead of an opaque row.
+      expect(steered?.source).toMatchObject({ kind: 'a2a-relay', form: 'relay' })
+      expect(typeof steered?.source.senderSessionId).toBe('string')
+      expect(steered?.source.senderSessionId).not.toBe('')
     } finally {
       await ctx.fiber.dispose()
       await peer.dispose()
@@ -649,10 +654,15 @@ describe('a2a plugin decentralized routing (peers)', () => {
       // The steered header carries the node label when the route has no
       // calling session (runContext carries no agent); a joined caller
       // stamps its routable session team instead.
-      const steered = (session.steer.mock.calls[0]?.[0] as { content: Array<{ type: string; text: string }> }).content[0]
-      expect(steered?.text).toContain('from "sess-1" (routed to dsh/agent-1) sent:')
+      const steered = session.steer.mock.calls[0]?.[0] as { content: Array<{ type: string; text: string }>; source: { kind: string; form?: string; senderSessionId?: string } }
+      expect(steered?.content[0]?.text).toContain('from "sess-1" (routed to dsh/agent-1) sent:')
+      // Same contract as the peer face: the source names the sender for the
+      // ui-chat relay body; same-host dispatch stamps the caller's label.
+      expect(steered?.source).toMatchObject({ kind: 'a2a-relay', form: 'relay' })
+      expect(typeof steered?.source.senderSessionId).toBe('string')
+      expect(steered?.source.senderSessionId).not.toBe('')
       // The task id rides the header (receipt correlation key).
-      expect(steered?.text).toMatch(/\(task direct-[0-9a-f]+\) /)
+      expect(steered?.content[0]?.text).toMatch(/\(task direct-[0-9a-f]+\) /)
       // The status tool surfaces the completed route in the activity ring.
       const status = await ctx.tools.get('a2a_status')?.execute({}, runContext()) as { ok: boolean; activity: { dir: string; team: string; ok: boolean }[] }
       expect(status.ok).toBe(true)
