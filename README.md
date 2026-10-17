@@ -175,10 +175,22 @@ Distilled from the 0.1.x–0.5.x delivery cycles by the network's research node;
 
 ## Verify
 
+Tests are layered by depth (contract: `docs/testing-layers.md`): each layer
+has its own directory and script, so iteration can target one depth.
+
 ```sh
-pnpm install   # auto-install-peers pulls the DSH peer train from npm
-pnpm verify    # typecheck, build, source tests, and built-artifact layout guard
-pnpm build     # host lib (including lib/a2a-client.js), client types, and browser bundle (lib/client.js)
+pnpm install       # auto-install-peers pulls the DSH peer train from npm
+pnpm verify        # typecheck + build + ALL vitest layers below + layout gate + nexus-stage suite
+pnpm test:unit     # L0 — pure logic, no fiber, no sockets (stores, codecs, jsdom components)
+pnpm test:wire     # L1 — ONE real plugin instance over real HTTP against faked peers
+pnpm test:mesh     # L2 — >=2 REAL nodes (own homes/keys/peers.json) over real HTTP: the
+                   #     cross-machine equivalent, incl. fault injection (clock-skew cards,
+                   #     tampered cards, partition/restart, alias collapse, zone delegation,
+                   #     referral freeze) and receipt replay — see the fault matrix in
+                   #     docs/testing-layers.md
+pnpm test:live     # L4 — REAL remote machines, env-gated (DSH_A2A_LIVE_MESH=...); skipped
+                   #     by default, never in CI — runbook in docs/testing-layers.md
+pnpm build         # host lib (including lib/a2a-client.js), client types, and browser bundle (lib/client.js)
 ```
 
 ## License

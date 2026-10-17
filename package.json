@@ -55,7 +55,11 @@
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && tsdown && node scripts/copy-skill.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "test": "vitest run",
-    "test:build-layout": "vitest run tests/build-layout.spec.ts",
+    "test:unit": "vitest run tests/unit",
+    "test:wire": "vitest run tests/wire",
+    "test:mesh": "vitest run tests/mesh",
+    "test:live": "vitest run tests/live",
+    "test:build-layout": "vitest run tests/gates/build-layout.spec.ts",
     "verify:nexus": "npm --prefix nexus-stage ci --no-audit --no-fund && npm --prefix nexus-stage run build && npm --prefix nexus-stage run test && git diff --exit-code -- assets/nexusDist/assets && git diff --ignore-cr-at-eol --exit-code -- assets/nexusDist/index.html",
     "verify": "pnpm typecheck && pnpm build && pnpm test && pnpm test:build-layout && pnpm verify:nexus"
   },

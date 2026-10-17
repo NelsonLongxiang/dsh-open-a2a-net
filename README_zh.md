@@ -96,10 +96,20 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 
 ## 验证
 
+测试按深度分层（契约见 `docs/testing-layers.md`）：每层独立目录 + 独立脚本，可按层迭代。
+
 ```sh
-pnpm install   # auto-install-peers 从 npm 拉取 DSH peer 线
-pnpm verify    # typecheck、构建、源码测试与构建产物布局守卫
-pnpm build     # host lib（含 lib/a2a-client.js）、client 类型与浏览器 bundle（lib/client.js）
+pnpm install       # auto-install-peers 从 npm 拉取 DSH peer 线
+pnpm verify        # typecheck + 构建 + 下列全部 vitest 层 + 布局门禁 + nexus-stage 子套件
+pnpm test:unit     # L0 —— 纯逻辑，无 fiber、无 socket（store/codec/jsdom 组件）
+pnpm test:wire     # L1 —— 单个真实插件实例 + 真实 HTTP，对端 peer 为 fake
+pnpm test:mesh     # L2 —— ≥2 个真实节点（独立 home/密钥/peers.json）走真实 HTTP：
+                   #      跨机器等价层，含故障注入（时钟偏差卡片、篡改卡片、分区/重启、
+                   #      别名塌缩、zone 委托、referral 冻结）与回执重放——故障矩阵见
+                   #      docs/testing-layers.md
+pnpm test:live     # L4 —— 真实远端机器，env 门控（DSH_A2A_LIVE_MESH=...），默认跳过、
+                   #      不进 CI——运行手册见 docs/testing-layers.md
+pnpm build         # host lib（含 lib/a2a-client.js）、client 类型与浏览器 bundle（lib/client.js）
 ```
 
 ## 许可证
