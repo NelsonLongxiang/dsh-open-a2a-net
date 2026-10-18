@@ -2143,6 +2143,22 @@ const reportLoopRing = new Map<string, number[]>()
     }
   }
 
+  /** Whether `caller` names exactly this agent's own session team — the
+   * self-route shape. The bare-team fallback must never deliver a session's
+   * dispatch back into itself: the sender would watch its own message
+   * arrive as an [A2A direct], and armReceiptAutosend would bounce its
+   * confused "this is just an echo" reply back as a synthetic receipt —
+   * delivered:true plus a receipt for work nobody did (defect 2026-10-18:
+   * the ygl-trees monitor self-echo). */
+  function callerIsAgent(agent: Agent, caller: string): boolean {
+    return caller === `${config.team}/${agentId8(agent)}`
+  }
+
+  /** Honest refusal text for the self-route shape, shared by the sync and
+   * transport faces so both failures read identically. */
+  const selfRouteText = (team: string): string =>
+    `Self-route refused: team "${team}" resolves to the issuing session itself — dispatching would loop your own message back to you (echo plus a synthetic auto-receipt). Route a concrete session team (e.g. ${team}/<id8>), a canvas team, or do the work inline.`
+
   /**
    * Steer one relay-form user message into the agent; the caller owns
    * rejection handling.
@@ -2306,6 +2322,12 @@ const reportLoopRing = new Map<string, number[]>()
     // Never synthesize a receipt for a receipt: answering an envelope by mail
     // would ping-pong both ledgers.
     if (deliveredText.startsWith('[A2A receipt] task ')) return
+    // Belt and braces for the self-route shape: when the receipt target
+    // names the steered agent itself, the waiter's reply would bounce back
+    // to the sender as a synthetic receipt for its own task. The delivery
+    // guards refuse that shape outright; this keeps the receipt half dead
+    // even if a future path reopens it.
+    if (callerTeam === `${config.team}/${agentId8(target)}`) return
     registerFinalWaiter(target, (finalText, placeholder) => {
       // W7 slice-2: a host-authored placeholder (flush timeout, dead
       // session) must not synthesize a COMPLETION receipt — a wedged
@@ -2405,10 +2427,15 @@ const reportLoopRing = new Map<string, number[]>()
     // Only the bare process team falls back to the live (initiator) agent.
     // A session-node-shaped team that misses is an error, never a silent
     // redirect: a mistyped or stale short id must not reach another session
-    // through the initiator fallback.
+    // through the initiator fallback. A bare-team route whose caller IS the
+    // resolved agent is refused outright: the initiator is the routing
+    // session itself, so delivering would only loop the dispatch home.
     if (team === config.team) {
       const live = liveAgent()
-      if (live !== undefined) return routeIntoAgentFor(live, team, message, caller, taskId)
+      if (live !== undefined) {
+        if (callerIsAgent(live, caller)) return { ok: false, error: selfRouteText(team) }
+        return routeIntoAgentFor(live, team, message, caller, taskId)
+      }
       return { ok: false, error: 'No live DSH agent is available to accept this message.' }
     }
     return { ok: false, error: wake.kind === 'no-face' ? noWakeFaceText(team) : wake.kind === 'archived' ? archivedColdMatchText(team) : noColdMatchText(team) }
@@ -2923,7 +2950,20 @@ ${message}`
               const standardMiss = (): void => {
                 if (team === config.team) {
                   const live = liveAgent()
-                  if (live !== undefined) { deliver(live); return }
+                  if (live !== undefined) {
+                    // Self-route refusal (mirrors the sync face): a caller
+                    // naming the very agent the fallback resolves to must
+                    // get an honest failure, never its own dispatch echoed
+                    // home plus an auto-receipt for work nobody did.
+                    if (callerIsAgent(live, caller)) {
+                      recordActivity('in', team, caller, false)
+                      const payload = JSON.stringify({ error: selfRouteText(team), code: -32000, team, task_status: 'TASK_STATE_FAILED' })
+                      res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+                      res.end(payload)
+                      return
+                    }
+                    deliver(live); return
+                  }
                 }
                 const payload = JSON.stringify({ error: wake?.kind === 'no-face' ? noWakeFaceText(team) : wake?.kind === 'archived' ? archivedColdMatchText(team) : noColdMatchText(team), code: -32000, team, task_status: 'TASK_STATE_FAILED' })
                 res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
@@ -4008,6 +4048,14 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         }
         // Claim declined: the bare process team still steers the live initiator.
         const live = team === config.team ? liveAgent() : undefined
+        if (live !== undefined && callerIsAgent(live, callerSession ?? session)) {
+          // Self-route refusal (same rule as the sync faces): the initiator
+          // resolving to the routing session itself means the dispatch would
+          // only echo home and arm a synthetic receipt for work nobody does.
+          endRoute(flight)
+          recordActivity('out', team, 'local', false)
+          return { ok: false, error: selfRouteText(team), code: -32000 }
+        }
         if (live === undefined) {
           endRoute(flight)
           return { ok: false, error: wake?.kind === 'no-face' ? noWakeFaceText(team) : wake?.kind === 'archived' ? archivedColdMatchText(team) : noColdMatchText(team), code: -32000 }

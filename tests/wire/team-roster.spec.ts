@@ -464,8 +464,14 @@ describe('S3 phase-3 enforcement (default-on + inbound shared-team admission)', 
     // Target the process team (routable set) with a caller that declares a
     // team in the routable set — the process team itself is always in the
     // set, and the caller declaring ANY routable team passes the gate.
+    // 0.5.60: a caller whose label names the node's own live agent is the
+    // self-route shape — the permission gate passes (no admission text)
+    // and the dispatch layer answers the honest self-route refusal instead
+    // of the old echo-home delivery.
     const allowed = await direct(port, 'dsh', 'dsh/agent-1')
-    expect(allowed.error).toBeUndefined()
+    expect(allowed.error ?? '').not.toContain('declares no team membership')
+    expect(allowed.error ?? '').not.toContain('none is routable on this node')
+    expect(allowed.error ?? '').toContain('Self-route refused')
     await ctx.fiber.dispose()
   })
 

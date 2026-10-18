@@ -1941,7 +1941,11 @@ describe('a2a session nodes (opt-in join)', () => {
     // (user gesture) — pre-seed the join intent, mount the caller, then route.
     const home = tmpHome()
     mkdirSync(join(home, 'a2a'), { recursive: true })
-    const caller = makeAgent()
+    // A caller id DISTINCT from the peer fixture's live agent ('agent-1'):
+    // both sides sharing one label would trip the receiver's self-route
+    // refusal (caller label === its own live agent's team) — a cross-host
+    // id8 collision the guard refuses by design.
+    const caller = { ...makeAgent(), id: SessionId('caller77') }
     writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: [String(caller.id)] }), 'utf8')
     apply(ctx, makeConfig({ peers: [peer.baseUrl], dshHome: home, sessionNodes: true }))
     ;(ctx.get('agents') as unknown as FakeAgentsService).agent = caller
@@ -1951,7 +1955,7 @@ describe('a2a session nodes (opt-in join)', () => {
     const steered = (peer.steer.mock.calls[0]?.[0] as { content: Array<{ type: string; text: string }> }).content[0]
     // A joined caller presents its routable team (dsh/<id8>) — not the
     // bare display label — so the receiver can answer with one a2a_route.
-    expect(steered?.text).toContain('from "dsh/agent-1"')
+    expect(steered?.text).toContain('from "dsh/caller77"')
     await ctx.fiber.dispose()
     await peer.dispose()
   })
