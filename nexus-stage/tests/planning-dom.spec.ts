@@ -13,9 +13,10 @@ function view(viewSize?: { w: number; h: number }) {
   const onDirty = vi.fn()
   const onLampClick = vi.fn()
   const onCanvasAction = vi.fn(() => Promise.resolve(true))
-  const v = createPlanningView({ onDirty, onLampClick, onCanvasAction, viewSize: viewSize ? () => viewSize : undefined })
+  const onNodePick = vi.fn()
+  const v = createPlanningView({ onDirty, onLampClick, onCanvasAction, onNodePick, viewSize: viewSize ? () => viewSize : undefined })
   document.body.appendChild(v.root)
-  return { v, onDirty, onLampClick, onCanvasAction }
+  return { v, onDirty, onLampClick, onCanvasAction, onNodePick }
 }
 
 const sessions = [
@@ -51,6 +52,26 @@ describe('planning view DOM', () => {
     expect(parseFloat(el.style.left)).toBe(left0 + 80)
     expect(parseFloat(el.style.top)).toBe(top0 + 30)
     expect(onDirty).toHaveBeenCalledTimes(1)
+  })
+
+  it('a clean click picks the node (0.6.13); shift-click and drag do not', () => {
+    const { v, onNodePick } = view()
+    v.reconcile({ sessions, teams, peerCount: 0 })
+    const el = v.root.querySelector<HTMLElement>('.p-node[data-id="s1"]')!
+    // Clean click: select + notify exactly once with the node id.
+    v.seam.pointerDown(ptr({ target: el, clientX: 100, clientY: 100 }))
+    v.seam.pointerUp(ptr({ target: el, clientX: 100, clientY: 100 }))
+    expect(onNodePick).toHaveBeenCalledTimes(1)
+    expect(onNodePick).toHaveBeenCalledWith('s1')
+    // Shift-click is multi-select bookkeeping, not a pick.
+    v.seam.pointerDown(ptr({ target: el, clientX: 100, clientY: 100, shiftKey: true }))
+    v.seam.pointerUp(ptr({ target: el, clientX: 100, clientY: 100, shiftKey: true }))
+    expect(onNodePick).toHaveBeenCalledTimes(1)
+    // A drag is a move, not a pick.
+    v.seam.pointerDown(ptr({ target: el, clientX: 100, clientY: 100 }))
+    v.seam.pointerMove(ptr({ target: el, clientX: 180, clientY: 130 }))
+    v.seam.pointerUp(ptr({ target: el, clientX: 180, clientY: 130 }))
+    expect(onNodePick).toHaveBeenCalledTimes(1)
   })
 
   it('blank-drag is a marquee (Figma ruling) and selects intersecting cards', () => {

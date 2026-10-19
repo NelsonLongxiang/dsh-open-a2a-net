@@ -33,9 +33,13 @@ const { fault, clear: clearFault } = createFaultReporter(
 )
 
 // ─── Spatial planning board (restored 0.6.1; wiring from the pre-0.6.0 stage) ───
+// 0.6.13: board node picks forward to the workbench chat drawer. The bench
+// is created later (it embeds the board), so the dep is a late-bound slot.
+let openNodeChat: ((id: string) => void) | undefined
 const planning = createPlanningView({
   onDirty: () => saveLoop.markDirty(),
   onLampClick: () => saveLoop.retry(),
+  onNodePick: (id) => { openNodeChat?.(id) },
   onCanvasAction: async (a) => {
     const ok = await runCanvasAction(a)
     // Settled: converge on truth either way — success absorbs the host's
@@ -210,6 +214,8 @@ const bench = createWorkbench({
   },
 })
 app.appendChild(bench.root)
+// 0.6.13: board node picks now resolve against the live bench state.
+openNodeChat = (id) => { bench.openNodeChat(id) }
 
 // Legacy entry compatibility: the old stage link ?mode=plan converges on the
 // board stage — in the merged shell canvas mode is already the default while

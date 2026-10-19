@@ -225,12 +225,17 @@ function textRow(parent: HTMLElement, label: string, value: string): void {
 }
 
 type Selection =
-  | { kind: 'session'; row: SessionRow }
   | { kind: 'remote'; row: RemoteRow }
   | { kind: 'canvas'; row: CanvasTeamRow }
-  | { kind: 'peer'; row: { url: string; score?: number } }
-  | { kind: 'log'; row: { id: string; mtimeMs: number; sizeBytes: number } }
   | undefined
+
+/** Chat drawer target (0.6.13): a node picked on the board or in the
+ * directory — session/log get the local transcript tail, peers get the
+ * honest on-the-other-host note. Reading, not jumping. */
+type ChatTarget =
+  | { kind: 'session'; id: string; title: string; sub: string; team?: string; live?: boolean }
+  | { kind: 'log'; id: string; title: string; sub: string }
+  | { kind: 'peer'; id: string; title: string; sub: string }
 
 /** The four rail sections. */
 export type WorkbenchSection = 'directory' | 'ledger' | 'activity' | 'plan'
@@ -273,6 +278,9 @@ export interface Workbench {
   /** Focus a target: 'board' converges on canvas mode (no-op while the
    *  canvas face is down); a section un-collapses its rail panel. */
   selectTab(key: WorkbenchTab): void
+  /** A node was picked on the planning board (0.6.13): resolve it against
+   *  the latest state and open the right-side chat drawer for it. */
+  openNodeChat(id: string): void
 }
 
 const SECTION_DEFS: ReadonlyArray<{ key: WorkbenchSection; label: string }> = [
@@ -297,6 +305,10 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // Quick-dispatch form (0.6.9), cached per target routing team the same
   // draftForm way: a textarea's draft must survive the 3s poll remount.
   let dispatchForm: { team: string; form: HTMLFormElement; text: HTMLTextAreaElement; note: HTMLElement } | null = null
+  // Chat drawer (0.6.13): the picked node + its own dispatch form cache
+  // (separate from the inspector's so both faces can hold different teams).
+  let chatTarget: ChatTarget | null = null
+  let chatForm: { team: string; form: HTMLFormElement; text: HTMLTextAreaElement; note: HTMLElement } | null = null
   // 0.6.11: inline transcript cache — one fetch per session id, refreshed on
   // demand. renderInspector rebuilds every poll, so the cache keeps the
   // transcript block from refetching on each 3s tick.
@@ -428,10 +440,33 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   const inspectorBody = el('div', 'wb-inspector-body')
   inspector.appendChild(inspectorBody)
 
+  // ── Node chat drawer (0.6.13) ──
+  // Clicking a node — on the planning board or a directory session/log/peer
+  // row — opens the conversation reading face as a right-side chat UI. The
+  // transcript tail is local-only; peers get the honest cross-host note.
+  const chat = el('aside', 'wb-chat')
+  const chatHead = el('div', 'wb-chat-head')
+  const chatDot = el('span', 'wb-chat-dot')
+  const chatTitle = el('span', 'wb-chat-title')
+  const chatSub = el('span', 'wb-chat-sub')
+  const chatClose = el('button', 'wb-icon-btn')
+  chatClose.type = 'button'
+  chatClose.setAttribute('aria-label', '关闭对话')
+  chatClose.textContent = '✕'
+  chatClose.addEventListener('click', () => closeChat())
+  chatHead.appendChild(chatDot)
+  chatHead.appendChild(chatTitle)
+  chatHead.appendChild(chatSub)
+  chatHead.appendChild(chatClose)
+  const chatBody = el('div', 'wb-chat-body')
+  chat.appendChild(chatHead)
+  chat.appendChild(chatBody)
+
   stage.appendChild(dataStack)
   body.appendChild(rail)
   body.appendChild(stage)
   body.appendChild(inspector)
+  body.appendChild(chat)
   root.appendChild(header)
   root.appendChild(body)
 
@@ -529,7 +564,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         item.appendChild(el('span', 'wb-dot wb-dot-live')).textContent = '●'
         item.appendChild(el('span', 'wb-item-label')).textContent = displayName(row)
         badges(item, row.canvasTeams)
-        item.addEventListener('click', () => select({ kind: 'session', row }))
+        item.addEventListener('click', () => openChat({ kind: 'session', id: row.id, title: displayName(row), sub: row.team, team: row.team, live: row.live }))
         box.appendChild(item)
       }
     }
@@ -541,7 +576,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         item.appendChild(el('span', 'wb-dot wb-dot-cold')).textContent = '○'
         item.appendChild(el('span', 'wb-item-label')).textContent = displayName(row)
         badges(item, row.canvasTeams)
-        item.addEventListener('click', () => select({ kind: 'session', row }))
+        item.addEventListener('click', () => openChat({ kind: 'session', id: row.id, title: displayName(row), sub: row.team, team: row.team, live: row.live }))
         box.appendChild(item)
       }
     }
@@ -569,7 +604,10 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         item.appendChild(el('span', 'wb-dot wb-dot-peer')).textContent = '⇄'
         item.appendChild(el('span', 'wb-item-label')).textContent =
           row.url.replace(/^https?:\/\//, '') + (row.score !== undefined ? ` · ${row.score}` : '')
-        item.addEventListener('click', () => select({ kind: 'peer', row }))
+        item.addEventListener('click', () => {
+          const host = row.url.replace(/^https?:\/\//, '').replace(/\/.*$/, '')
+          openChat({ kind: 'peer', id: `peer-${host}`, title: row.url, sub: host })
+        })
         box.appendChild(item)
       }
     }
@@ -603,7 +641,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         label.textContent = `…${row.id.slice(-12)} · ${fmtSize(row.sizeBytes)}`
         item.title = `${row.id}\n${fmtSize(row.sizeBytes)} · ${new Date(row.mtimeMs).toLocaleString()}`
         item.appendChild(label)
-        item.addEventListener('click', () => select({ kind: 'log', row }))
+        item.addEventListener('click', () => openChat({ kind: 'log', id: row.id, title: `…${row.id.slice(-12)}`, sub: '档案' }))
         box.appendChild(item)
       }
     }
@@ -906,23 +944,9 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     if (selection === undefined) return
     const sel = selection
     const card = el('div', 'wb-card')
-    if (sel.kind === 'session') {
-      textRow(card, '名称', displayName(sel.row))
-      textRow(card, '状态', sel.row.live === true ? '现场' : '冷启动')
-      textRow(card, '会话队', sel.row.team)
-      textRow(card, '标签', sel.row.label)
-      if (sel.row.workspace !== undefined) textRow(card, '工作区', sel.row.workspace)
-      if (sel.row.description !== undefined) textRow(card, '说明', sel.row.description)
-      for (const team of sel.row.teams ?? []) textRow(card, '成员队', team)
-      for (const team of sel.row.canvasTeams ?? []) textRow(card, '画布队', team)
-      textRow(card, '会话 ID', sel.row.id)
-      // Inline reading (0.6.11): the tail of this session's own log, on this
-      // page — reading is what jumps used to serve, without the jump.
-      if (deps.sessionLog !== undefined) card.appendChild(transcriptBlock(sel.row.id))
-      // Inline reach (0.6.10): local session teams dispatch through the
-      // same 快派 seam — no jump, the form is the interaction.
-      if (deps.dispatchQuick !== undefined) card.appendChild(dispatchCard(sel.row.team))
-    } else if (sel.kind === 'remote') {
+    // 0.6.13: session/log/peer faces moved to the chat drawer — the
+    // inspector keeps the organizational cards (canvas teams, remote rows).
+    if (sel.kind === 'remote') {
       textRow(card, '名称', displayName(sel.row))
       textRow(card, '队', sel.row.team)
       if (sel.row.origin !== undefined) textRow(card, '来源', sel.row.origin)
@@ -937,15 +961,6 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       card.appendChild(remoteNote)
       // Quick dispatch targets the remote team handle directly (0.6.9).
       if (deps.dispatchQuick !== undefined) card.appendChild(dispatchCard(sel.row.team))
-    } else if (sel.kind === 'log') {
-      // 0.6.12: archive/never-joined session log — reading face, host-scoped.
-      textRow(card, '会话 ID', sel.row.id)
-      textRow(card, '大小', sel.row.sizeBytes >= 1_000_000 ? `${(sel.row.sizeBytes / 1_000_000).toFixed(1)} MB` : `${Math.round(sel.row.sizeBytes / 1_000)} KB`)
-      textRow(card, '最后活动', new Date(sel.row.mtimeMs).toLocaleString())
-      const note = el('div', 'wb-hint')
-      note.textContent = '只读日志 —— 此会话当前不在网络目录（可能已归档或未入网）。'
-      card.appendChild(note)
-      if (deps.sessionLog !== undefined) card.appendChild(transcriptBlock(sel.row.id))
     } else if (sel.kind === 'canvas') {
       // Re-resolve the team from the freshest state: membership changes here
       // must be visible on the next render even though the click-time row is
@@ -1039,9 +1054,6 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       // Quick dispatch targets the canvas ROUTING team (0.6.9): local tiers
       // first, then the remote members in order — the seam's own priority.
       if (deps.dispatchQuick !== undefined) card.appendChild(dispatchCard(fresh.team))
-    } else {
-      textRow(card, 'Peer', sel.row.url)
-      textRow(card, '质量分', sel.row.score !== undefined ? String(sel.row.score) : '—')
     }
     box.appendChild(card)
   }
@@ -1050,43 +1062,45 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // One human-typed message to a routing team, no session opened. The form
   // is cached per target team (draftForm trick) so the textarea draft and
   // the result note survive the 3s poll remount.
+  function buildDispatchForm(target: string): { form: HTMLFormElement; text: HTMLTextAreaElement; note: HTMLElement } {
+    const form = el('form', 'wb-dispatch-form')
+    const text = document.createElement('textarea')
+    text.className = 'wb-dispatch-text'
+    text.placeholder = '一句话任务…（≤4000 字符，异步送达，回执进台账）'
+    text.setAttribute('aria-label', '快派消息')
+    const submit = el('button', 'wb-dispatch-submit')
+    submit.type = 'submit'
+    submit.textContent = '发送'
+    const note = el('div', 'wb-dispatch-note')
+    form.appendChild(text)
+    form.appendChild(submit)
+    form.appendChild(note)
+    form.addEventListener('submit', async ev => {
+      ev.preventDefault()
+      const message = text.value.trim()
+      if (message === '' || submit.disabled) return
+      submit.disabled = true
+      note.textContent = '派发中…'
+      let outcome: { ok: boolean; task_id?: string; reply?: string; error?: string }
+      try {
+        outcome = await (deps.dispatchQuick?.(target, message) ?? Promise.resolve({ ok: false, error: 'dispatch unavailable' }))
+      } catch (error) {
+        outcome = { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
+      submit.disabled = false
+      note.textContent = outcome.ok === true
+        ? `已派发${outcome.task_id !== undefined ? ` · ${outcome.task_id}` : ''} · 回执将入台账（待回执）`
+        : `失败：${outcome.error ?? '未知原因'}`
+    })
+    return { form, text, note }
+  }
+
   function dispatchCard(target: string): HTMLElement {
     const wrap = el('div', 'wb-dispatch')
     const head = el('div', 'wb-side-head')
     head.textContent = '快派'
     wrap.appendChild(head)
-    if (dispatchForm?.team !== target) {
-      const form = el('form', 'wb-dispatch-form')
-      const text = document.createElement('textarea')
-      text.className = 'wb-dispatch-text'
-      text.placeholder = '一句话任务…（≤4000 字符，异步送达，回执进台账）'
-      text.setAttribute('aria-label', '快派消息')
-      const submit = el('button', 'wb-dispatch-submit')
-      submit.type = 'submit'
-      submit.textContent = '发送'
-      const note = el('div', 'wb-dispatch-note')
-      form.appendChild(text)
-      form.appendChild(submit)
-      form.appendChild(note)
-      form.addEventListener('submit', async ev => {
-        ev.preventDefault()
-        const message = text.value.trim()
-        if (message === '' || submit.disabled) return
-        submit.disabled = true
-        note.textContent = '派发中…'
-        let outcome: { ok: boolean; task_id?: string; reply?: string; error?: string }
-        try {
-          outcome = await (deps.dispatchQuick?.(target, message) ?? Promise.resolve({ ok: false, error: 'dispatch unavailable' }))
-        } catch (error) {
-          outcome = { ok: false, error: error instanceof Error ? error.message : String(error) }
-        }
-        submit.disabled = false
-        note.textContent = outcome.ok === true
-          ? `已派发${outcome.task_id !== undefined ? ` · ${outcome.task_id}` : ''} · 回执将入台账（待回执）`
-          : `失败：${outcome.error ?? '未知原因'}`
-      })
-      dispatchForm = { team: target, form, text, note }
-    }
+    if (dispatchForm?.team !== target) dispatchForm = { team: target, ...buildDispatchForm(target) }
     wrap.appendChild(dispatchForm.form)
     return wrap
   }
@@ -1147,6 +1161,74 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     return block
   }
 
+  // ── Node chat drawer (0.6.13) ──
+  // The right-side reading face. The transcript block is cached per id, so
+  // re-rendering across the 3s poll is cheap; the dispatch form has its own
+  // cache slot so the inspector's team and the chat's can coexist.
+  function closeChat(): void {
+    chatTarget = null
+    chatForm = null
+    chat.classList.remove('is-open')
+  }
+
+  function openChat(target: ChatTarget): void {
+    chatTarget = target
+    // Keep the chat form only when it belongs to the same session team.
+    const team = target.kind === 'session' ? target.team : undefined
+    if (chatForm !== null && chatForm.team !== team) chatForm = null
+    renderChat()
+    chat.classList.add('is-open')
+    root.classList.remove('is-rail-open')
+  }
+
+  function renderChat(): void {
+    const t = chatTarget
+    if (t === null) return
+    chatDot.className = `wb-chat-dot ${t.kind === 'peer' ? 'is-peer' : t.kind === 'log' || t.live === false ? 'is-cold' : 'is-live'}`
+    chatTitle.textContent = t.title
+    chatSub.textContent = t.sub
+    clear(chatBody)
+    if (t.kind === 'peer') {
+      const note = el('div', 'wb-chat-note')
+      note.textContent = `对端主机节点（${t.sub}）—— 会话记录存放在对端机器上，本页只读本机会话日志。`
+      chatBody.appendChild(note)
+      return
+    }
+    if (t.kind === 'log') {
+      const note = el('div', 'wb-chat-note')
+      note.textContent = '只读日志 —— 此会话当前不在网络目录（可能已归档或未入网）。'
+      chatBody.appendChild(note)
+    }
+    if (deps.sessionLog !== undefined) chatBody.appendChild(transcriptBlock(t.id))
+    if (t.kind === 'session' && t.team !== undefined && t.team !== '' && deps.dispatchQuick !== undefined) {
+      const wrap = el('div', 'wb-dispatch')
+      const head = el('div', 'wb-side-head')
+      head.textContent = '发送'
+      wrap.appendChild(head)
+      if (chatForm === null) chatForm = { team: t.team, ...buildDispatchForm(t.team) }
+      wrap.appendChild(chatForm.form)
+      chatBody.appendChild(wrap)
+    }
+  }
+
+  /** Board picks (0.6.13): resolve a node id against the latest state. */
+  function openNodeChat(id: string): void {
+    if (last === null) return
+    const session = (last.sessions ?? []).find(row => row.id === id)
+    if (session !== undefined) {
+      openChat({ kind: 'session', id, title: displayName(session), sub: session.team, team: session.team, live: session.live })
+      return
+    }
+    if (id.startsWith('peer-')) {
+      const host = id.slice('peer-'.length)
+      const peer = (last.peers ?? []).find(row => row.url.includes(host))
+      openChat({ kind: 'peer', id, title: peer !== undefined ? peer.url : host, sub: host })
+      return
+    }
+    const log = logRows.find(row => row.id === id)
+    if (log !== undefined) openChat({ kind: 'log', id, title: `…${id.slice(-12)}`, sub: '档案' })
+  }
+
   // ── Header ──
   function renderHeader(): void {
     versionBadge.textContent = last?.version !== undefined ? `v${last.version}` : 'v?'
@@ -1177,6 +1259,9 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     renderSidebar()
     renderDraftTargets()
     renderLedger()
+    // 0.6.13: an open chat drawer re-renders against the fresh state (title
+    // freshness + the transcript block's per-id cache answers instantly).
+    if (chatTarget !== null) renderChat()
     renderActivity()
     renderPlan()
     renderInspector()
@@ -1196,5 +1281,5 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   }
 
   update(null)
-  return { root, update, mode: () => mode, selectTab }
+  return { root, update, mode: () => mode, selectTab, openNodeChat }
 }

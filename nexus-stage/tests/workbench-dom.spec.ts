@@ -280,19 +280,18 @@ describe('workbench panels', () => {
     expect(text(planPane.querySelector('.wb-pane-head'))).toContain('网络健康')
   })
 
-  it('inspector shows a selected session as text only and closes via ✕', () => {
+  it('chat drawer shows a picked session as text only and closes via ✕ (0.6.13)', () => {
     const { v } = bench()
     v.update({ ...state, sessions: [{ ...state.sessions![0]!, name: '<img src=x onerror=1>' }] })
     const item = [...v.root.querySelectorAll('.wb-item-label')].find(n => text(n) === '<img src=x onerror=1>')!
     item.click()
-    const inspector = v.root.querySelector('.wb-inspector')!
-    expect(inspector.classList.contains('is-open')).toBe(true)
-    const card = inspector.querySelector('.wb-card')!
-    expect(text(card.querySelector('.wb-kv-v'))).toBe('<img src=x onerror=1>')
-    expect(card.querySelectorAll('img').length).toBe(0)
-    const close = [...inspector.querySelectorAll('button')].find(b => text(b) === '✕')!
+    const chat = v.root.querySelector('.wb-chat')!
+    expect(chat.classList.contains('is-open')).toBe(true)
+    expect(text(chat.querySelector('.wb-chat-title'))).toBe('<img src=x onerror=1>')
+    expect(chat.querySelectorAll('img').length).toBe(0)
+    const close = [...chat.querySelectorAll('button')].find(b => text(b) === '✕')!
     close.click()
-    expect(v.root.querySelector('.wb-inspector')!.classList.contains('is-open')).toBe(false)
+    expect(v.root.querySelector('.wb-chat')!.classList.contains('is-open')).toBe(false)
   })
 
   it('header shows version and idempotency counters', () => {
@@ -390,22 +389,23 @@ describe('inline-only reach (0.6.10)', () => {
     // 0.6.7/0.6.8's ↗ (openLocal broadcast / openRemote deep link) is gone
     // by ruling — 禁止任何跳转，全部使用响应式布局.
     expect(v.root.querySelector('.wb-item-open')).toBeNull()
-    // Local and remote rows still select — the inspector is the interaction.
+    // Local rows open the chat drawer (0.6.13); remote rows keep the
+    // inspector card — reading in place, nothing navigates.
     const items = [...v.root.querySelectorAll('.wb-directory .wb-item')]
     const scout = items.find(n => text(n).includes('scout-01'))!
     ;(scout.querySelector('.wb-item-label') as HTMLElement).click()
-    expect(v.root.querySelector('.wb-inspector.is-open')).not.toBeNull()
+    expect(v.root.querySelector('.wb-chat.is-open')).not.toBeNull()
     const remote = items.find(n => text(n).includes('remote-host'))!
     ;(remote.querySelector('.wb-item-label') as HTMLElement).click()
     expect(text(v.root.querySelector('.wb-inspector'))).toContain('remote-host')
   })
 
-  it('a local session row dispatches through the same inline 快派 form', async () => {
+  it('a local session row dispatches through the chat drawer\u2019s inline 快派 form', async () => {
     const { v, dispatchQuick } = bench()
     v.update(state)
     const item = [...v.root.querySelectorAll('.wb-item-label')].find(n => text(n).includes('scout-01'))!
     item.click()
-    const form = v.root.querySelector('.wb-inspector .wb-dispatch-form') as HTMLFormElement
+    const form = v.root.querySelector('.wb-chat .wb-dispatch-form') as HTMLFormElement
     expect(form).not.toBeNull()
     ;(form.querySelector('.wb-dispatch-text') as HTMLTextAreaElement).value = 'local hello'
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
@@ -537,7 +537,10 @@ describe('inline transcript (0.6.11)', () => {
   function openSession(v: ReturnType<typeof createWorkbench>): Element {
     const item = [...v.root.querySelectorAll('.wb-item-label')].find(n => text(n).includes('scout-01'))!
     item.click()
-    return v.root.querySelector('.wb-inspector')!
+    // 0.6.13: session rows open the chat drawer (was the inspector card).
+    const chat = v.root.querySelector('.wb-chat')!
+    expect(chat.classList.contains('is-open')).toBe(true)
+    return chat
   }
 
   it('renders the tail of a local session\u2019s log inline after selection', async () => {
@@ -609,7 +612,7 @@ describe('local log archive section (0.6.12)', () => {
     expect(rows.some(l => l.includes('888-archived'))).toBe(true)
     expect(rows.some(l => l.includes('1111-aaaa') && l.includes('KB'))).toBe(false)
     ;([...v.root.querySelectorAll('.wb-item')].find(n => text(n).includes('888-archived')) as HTMLElement).click()
-    expect(text(v.root.querySelector('.wb-inspector'))).toContain('只读日志')
+    expect(text(v.root.querySelector('.wb-chat'))).toContain('只读日志')
     expect(sessionLog).toHaveBeenCalledWith('session-99998888-archived')
     await vi.waitFor(() => expect(text(v.root.querySelector('.wb-transcript-body'))).toContain('开始扫描插件列表'))
   })
@@ -625,5 +628,49 @@ describe('local log archive section (0.6.12)', () => {
     await Promise.resolve()
     const heads = [...bare.root.querySelectorAll('.wb-side-head')].map(n => text(n))
     expect(heads.join('|')).not.toContain('本机日志')
+  })
+})
+
+describe('node chat drawer (0.6.13)', () => {
+  it('a board session pick opens the drawer with transcript and send form', async () => {
+    const { v, sessionLog, dispatchQuick } = bench()
+    v.update(state)
+    v.openNodeChat('session-11111111-aaaa')
+    const chat = v.root.querySelector('.wb-chat')!
+    expect(chat.classList.contains('is-open')).toBe(true)
+    expect(text(chat.querySelector('.wb-chat-title'))).toBe('scout-01')
+    expect(text(chat.querySelector('.wb-chat-sub'))).toBe('dsh/11111111')
+    expect(sessionLog).toHaveBeenCalledWith('session-11111111-aaaa')
+    await vi.waitFor(() => expect(text(chat.querySelector('.wb-transcript-body'))).toContain('开始扫描插件列表'))
+    // The chat face carries its own send form (read + reply in one place).
+    const form = chat.querySelector('.wb-dispatch-form') as HTMLFormElement
+    ;(form.querySelector('.wb-dispatch-text') as HTMLTextAreaElement).value = 'board hello'
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(dispatchQuick).toHaveBeenCalledWith('dsh/11111111', 'board hello'))
+  })
+
+  it('a board peer pick shows the honest cross-host note instead of a transcript', () => {
+    const { v, sessionLog } = bench()
+    v.update(state)
+    v.openNodeChat('peer-192.168.3.157:13080')
+    const chat = v.root.querySelector('.wb-chat')!
+    expect(chat.classList.contains('is-open')).toBe(true)
+    expect(text(chat.querySelector('.wb-chat-title'))).toBe('http://192.168.3.157:13080')
+    expect(text(chat)).toContain('会话记录存放在对端机器上')
+    expect(chat.querySelector('.wb-transcript')).toBeNull()
+    expect(sessionLog).not.toHaveBeenCalled()
+  })
+
+  it('an unknown pick is a no-op and the drawer survives poll remounts', async () => {
+    const { v } = bench()
+    v.update(state)
+    v.openNodeChat('session-00000000-zzzz')
+    expect(v.root.querySelector('.wb-chat')!.classList.contains('is-open')).toBe(false)
+    // Open a real one, then feed the 3s poll: the drawer re-renders in place.
+    v.openNodeChat('session-22222222-bbbb')
+    expect(v.root.querySelector('.wb-chat.is-open')).not.toBeNull()
+    v.update({ ...state, sessions: [...state.sessions] })
+    expect(v.root.querySelector('.wb-chat.is-open')).not.toBeNull()
+    expect(text(v.root.querySelector('.wb-chat-title'))).toBe('cold-02')
   })
 })

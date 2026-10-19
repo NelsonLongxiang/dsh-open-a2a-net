@@ -86,6 +86,11 @@ export interface PlanningDeps {
    * false) — the channel must not leave the team's guard pinned.
    */
   onCanvasAction(a: CanvasAction): Promise<boolean>
+  /** A plain (non-shift, no-drag) left click selected exactly one node
+   * (0.6.13): the host may open the reading face (chat drawer) for it.
+   * Selection itself is already applied — this is a notification, not a
+   * command; the host decides what (if anything) to show. */
+  onNodePick?(id: string): void
   /** Wall clock for the inFlight age labels (tests pin it; default Date.now). */
   now?(): number
 }
@@ -1426,6 +1431,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
           model.setSelection(current.includes(id) ? current.filter(x => x !== id) : [...current, id])
         } else {
           model.setSelection([id])
+          // 0.6.13: a clean single click is also a node pick — the host opens
+          // the chat drawer. Shift-click (multi-select) stays a pure selection.
+          deps.onNodePick?.(id)
         }
       } else {
         dropDispatch(gesture, ev)
