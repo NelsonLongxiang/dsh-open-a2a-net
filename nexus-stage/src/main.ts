@@ -191,6 +191,27 @@ const bench = createWorkbench({
       return false
     }
   },
+  async dispatchQuick(team, message) {
+    // Quick dispatch (0.6.9): host-face POST; the trunk answers with the
+    // canonical route shape ({ok, task_id, task_status, team, ...} on
+    // delivery) or {ok:false, error}.
+    try {
+      const res = await fetch('/__dsh_a2a/dispatch', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ team, message }),
+      })
+      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; task_id?: string; reply?: string; error?: string }
+      return {
+        ok: res.ok && body.ok === true,
+        task_id: body.task_id,
+        reply: body.reply,
+        error: body.error ?? `HTTP ${res.status}`,
+      }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
   board: {
     root: planning.root,
     activate: () => planning.activate(),

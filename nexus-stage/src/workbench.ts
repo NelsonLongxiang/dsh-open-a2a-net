@@ -145,6 +145,10 @@ export interface WorkbenchDeps {
   /** Canvas team member change via the control route (0.6.6): `id` is a
    *  local session id or a zone-qualified remote handle. True on success. */
   canvasOp(action: 'add-member' | 'remove-member', name: string, id: string): Promise<boolean>
+  /** Quick dispatch (0.6.9): POST /__dsh_a2a/dispatch as a human gesture —
+   *  one message to a routing team, async delivery, receipt lands in the
+   *  ledger. Optional — without it the 快派 form hides. */
+  dispatchQuick?(team: string, message: string): Promise<{ ok: boolean; task_id?: string; reply?: string; error?: string }>
   /** Copy text to the clipboard; drafts are pasteable task briefs. */
   copy(text: string): void
   /** Open a local session in the host GUI (0.6.7 L1): the workbench page
@@ -287,6 +291,9 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // Canvas add-member form cache (static DOM re-mounted across polls; keyed
   // by team name — same trick as draftForm so inputs survive the 3s poll).
   let canvasForm: { name: string; form: HTMLFormElement; pick: HTMLSelectElement; manual: HTMLInputElement } | null = null
+  // Quick-dispatch form (0.6.9), cached per target routing team the same
+  // draftForm way: a textarea's draft must survive the 3s poll remount.
+  let dispatchForm: { team: string; form: HTMLFormElement; text: HTMLTextAreaElement; note: HTMLElement } | null = null
 
   const root = el('div', 'wb')
   root.setAttribute('data-testid', 'wb-root')
@@ -459,6 +466,8 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     // Canvas add-member form is cached per team name (draftForm trick):
     // drop it whenever the selection moves off its team.
     if (next?.kind !== 'canvas' || canvasForm?.name !== next.row.name) canvasForm = null
+    // Same for the quick-dispatch form: it is cached per target team.
+    if (next?.kind !== 'canvas' && next?.kind !== 'remote') dispatchForm = null
     renderInspector()
     // Narrow screens: picking from the drawer closes it so the stage shows.
     root.classList.remove('is-rail-open')
@@ -905,6 +914,8 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       if (sel.row.workspace !== undefined) textRow(card, '工作区', sel.row.workspace)
       if (sel.row.legacy === true) textRow(card, '形态', '旧卡片（legacy）')
       for (const team of sel.row.canvasTeams ?? []) textRow(card, '画布队', team)
+      // Quick dispatch targets the remote team handle directly (0.6.9).
+      if (deps.dispatchQuick !== undefined) card.appendChild(dispatchCard(sel.row.team))
     } else if (sel.kind === 'canvas') {
       // Re-resolve the team from the freshest state: membership changes here
       // must be visible on the next render even though the click-time row is
@@ -995,11 +1006,59 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       hint.textContent =
         '成员由人类在此手工分配（agent 不可自组队）。远端成员走对端目录路由，不做本机冷唤醒；地址由目录在派发时重解析。'
       card.appendChild(hint)
+      // Quick dispatch targets the canvas ROUTING team (0.6.9): local tiers
+      // first, then the remote members in order — the seam's own priority.
+      if (deps.dispatchQuick !== undefined) card.appendChild(dispatchCard(fresh.team))
     } else {
       textRow(card, 'Peer', sel.row.url)
       textRow(card, '质量分', sel.row.score !== undefined ? String(sel.row.score) : '—')
     }
     box.appendChild(card)
+  }
+
+  // ── Quick dispatch (0.6.9) ──
+  // One human-typed message to a routing team, no session opened. The form
+  // is cached per target team (draftForm trick) so the textarea draft and
+  // the result note survive the 3s poll remount.
+  function dispatchCard(target: string): HTMLElement {
+    const wrap = el('div', 'wb-dispatch')
+    const head = el('div', 'wb-side-head')
+    head.textContent = '快派'
+    wrap.appendChild(head)
+    if (dispatchForm?.team !== target) {
+      const form = el('form', 'wb-dispatch-form')
+      const text = document.createElement('textarea')
+      text.className = 'wb-dispatch-text'
+      text.placeholder = '一句话任务…（≤4000 字符，异步送达，回执进台账）'
+      text.setAttribute('aria-label', '快派消息')
+      const submit = el('button', 'wb-dispatch-submit')
+      submit.type = 'submit'
+      submit.textContent = '发送'
+      const note = el('div', 'wb-dispatch-note')
+      form.appendChild(text)
+      form.appendChild(submit)
+      form.appendChild(note)
+      form.addEventListener('submit', async ev => {
+        ev.preventDefault()
+        const message = text.value.trim()
+        if (message === '' || submit.disabled) return
+        submit.disabled = true
+        note.textContent = '派发中…'
+        let outcome: { ok: boolean; task_id?: string; reply?: string; error?: string }
+        try {
+          outcome = await (deps.dispatchQuick?.(target, message) ?? Promise.resolve({ ok: false, error: 'dispatch unavailable' }))
+        } catch (error) {
+          outcome = { ok: false, error: error instanceof Error ? error.message : String(error) }
+        }
+        submit.disabled = false
+        note.textContent = outcome.ok === true
+          ? `已派发${outcome.task_id !== undefined ? ` · ${outcome.task_id}` : ''} · 回执将入台账（待回执）`
+          : `失败：${outcome.error ?? '未知原因'}`
+      })
+      dispatchForm = { team: target, form, text, note }
+    }
+    wrap.appendChild(dispatchForm.form)
+    return wrap
   }
 
   // ── Header ──

@@ -17,9 +17,10 @@ function bench() {
   const canvasOp = vi.fn(async () => true)
   const openLocal = vi.fn()
   const openRemote = vi.fn()
-  const v = createWorkbench({ now: () => NOW, abandon, copy, canvasOp, openLocal, openRemote })
+  const dispatchQuick = vi.fn(async () => ({ ok: true, task_id: 'direct-qqqq1111' }))
+  const v = createWorkbench({ now: () => NOW, abandon, copy, canvasOp, openLocal, openRemote, dispatchQuick })
   document.body.appendChild(v.root)
-  return { v, abandon, copy, canvasOp, openLocal, openRemote }
+  return { v, abandon, copy, canvasOp, openLocal, openRemote, dispatchQuick }
 }
 
 const state: StateBody = {
@@ -470,5 +471,68 @@ describe('canvas inspector member management (0.6.6)', () => {
     const manualAfter = v.root.querySelector('.wb-member-manual') as HTMLInputElement
     expect(manualAfter.value).toBe('nel85/9abc1234')
     expect(manualAfter).toBe(manual) // same node re-mounted, not rebuilt
+  })
+})
+
+describe('quick dispatch form (0.6.9)', () => {
+  function openTeam(v: ReturnType<typeof createWorkbench>): HTMLElement {
+    const item = [...v.root.querySelectorAll('.wb-item-label')].find(n => text(n).includes('ygl'))!
+    item.click()
+    return v.root.querySelector('.wb-inspector .wb-card') as HTMLElement
+  }
+
+  function openRemote(v: ReturnType<typeof createWorkbench>): HTMLElement {
+    const item = [...v.root.querySelectorAll('.wb-item-label')].find(n => text(n).includes('remote-host'))!
+    item.click()
+    return v.root.querySelector('.wb-inspector .wb-card') as HTMLElement
+  }
+
+  it('dispatches from the canvas team inspector keyed to the routing team; the note names the task', async () => {
+    const { v, dispatchQuick } = bench()
+    v.update(state)
+    const card = openTeam(v)
+    const form = card.querySelector('.wb-dispatch-form') as HTMLFormElement
+    const area = form.querySelector('.wb-dispatch-text') as HTMLTextAreaElement
+    area.value = 'quick line for ops'
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(dispatchQuick).toHaveBeenCalledWith('dsh/canvas/ygl', 'quick line for ops'))
+    await vi.waitFor(() => expect(text(v.root.querySelector('.wb-dispatch-note'))).toContain('direct-qqqq1111'))
+    // The draft survives a poll (draftForm trick, same as member inputs).
+    area.value = 'second draft'
+    v.update(state)
+    const areaAfter = v.root.querySelector('.wb-dispatch-text') as HTMLTextAreaElement
+    expect(areaAfter.value).toBe('second draft')
+    expect(areaAfter).toBe(area)
+  })
+
+  it('dispatches from the remote row inspector keyed to the remote team handle', async () => {
+    const { v, dispatchQuick } = bench()
+    v.update(state)
+    const card = openRemote(v)
+    const form = card.querySelector('.wb-dispatch-form') as HTMLFormElement
+    const area = form.querySelector('.wb-dispatch-text') as HTMLTextAreaElement
+    area.value = 'across the mesh'
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(dispatchQuick).toHaveBeenCalledWith('dsh-host-ca0c0a8d', 'across the mesh'))
+  })
+
+  it('a refused dispatch surfaces the reason in the note', async () => {
+    const dispatchQuick = vi.fn(async () => ({ ok: false, error: 'rate limited: one quick dispatch per 5s per client' }))
+    const v = createWorkbench({ now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(), canvasOp: vi.fn(async () => true), dispatchQuick })
+    document.body.appendChild(v.root)
+    v.update(state)
+    const card = openTeam(v)
+    const form = card.querySelector('.wb-dispatch-form') as HTMLFormElement
+    ;(form.querySelector('.wb-dispatch-text') as HTMLTextAreaElement).value = 'too fast'
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(text(v.root.querySelector('.wb-dispatch-note'))).toContain('失败：rate limited'))
+  })
+
+  it('hides the form entirely when the dep is absent (graceful degradation)', () => {
+    const v = createWorkbench({ now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(), canvasOp: vi.fn(async () => true) })
+    document.body.appendChild(v.root)
+    v.update(state)
+    openTeam(v)
+    expect(v.root.querySelector('.wb-dispatch')).toBeNull()
   })
 })

@@ -832,6 +832,10 @@ export function apply(ctx: Context, config: Config): void {
   // route serves, never in any routable surface.
   const reportRing: Array<{ at: number; level: 'info' | 'warning' | 'error'; message: string; session: string; task?: string }> = []
   const reportLastAt = new Map<string, number>()
+  // Quick-dispatch face (0.6.9): the workbench POSTs /__dsh_a2a/dispatch as a
+  // human gesture; the window keeps a runaway page (or a stuck autorefresh)
+  // from flooding the mesh. Keyed by client address, mirror of reportLastAt.
+  const dispatchLastAt = new Map<string, number>()
 /** Fix ④ loop circuit-breaker: session+text-hash → accepted-report timestamps (10min window). */
 const reportLoopRing = new Map<string, number[]>()
 
@@ -3243,6 +3247,49 @@ ${message}`
         })
       }),
     }), 'a2a: task cancel route')
+
+    // Quick dispatch (0.6.9, design docs/design/quick-dispatch-l3.md): a
+    // human at the workbench sends one message to a team without opening a
+    // session. Host face by construction — it rides the same routing trunk
+    // as a2a_route with no agent: the agent-less audit gate applies, the
+    // join gate exempts it (a human gesture, not a session), and the caller
+    // label is the bare node team so the target can answer. Async is fixed
+    // (fire-and-forget with the receipt contract); the HTTP wait is bounded
+    // well under routeTimeoutMs because delivery, not the answer, is what
+    // this face returns. Guards: the standard control-plane trust (same
+    // origin / loopback / apiKey), a 4000-char message cap, and a 5s
+    // per-client window — a human cannot click faster than that.
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/__dsh_a2a/dispatch',
+      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+        readJsonBody(req, res, async (body) => {
+          const fields = body as Record<string, unknown>
+          const message = typeof fields.message === 'string' ? fields.message.trim() : ''
+          const target = typeof fields.team === 'string' ? fields.team.trim() : ''
+          const client = req.socket.remoteAddress ?? 'unknown'
+          const now = Date.now()
+          let result: Record<string, JsonValue>
+          if (target === '' || message === '') {
+            result = { ok: false, error: 'team and message are required' }
+          } else if (message.length > 4000) {
+            result = { ok: false, error: 'message exceeds the 4000-char cap' }
+          } else if (now - (dispatchLastAt.get(client) ?? 0) < 5_000) {
+            result = { ok: false, error: 'rate limited: one quick dispatch per 5s per client' }
+          } else {
+            dispatchLastAt.set(client, now)
+            try {
+              result = await routeTrunk({ team: target, message, async: true }, undefined, AbortSignal.timeout(20_000), config.team)
+            } catch (error) {
+              result = { ok: false, error: `dispatch failed: ${error instanceof Error ? error.message : String(error)}` }
+            }
+          }
+          const payload = JSON.stringify(result)
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+          res.end(payload)
+        })
+      }),
+    }), 'a2a: quick-dispatch route')
   })
 
   /**
@@ -3906,12 +3953,27 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     },
     timeoutMs: config.routeTimeoutMs,
     presentCall: args => ({ card: 'generic', title: `A2A route → ${args.team}`, kind: 'other', rawInput: args }),
-    execute: async (args: { team: string; message: string; context_id?: string; async?: boolean }, exec): Promise<Record<string, JsonValue>> => {
+    execute: async (args: { team: string; message: string; context_id?: string; async?: boolean }, exec): Promise<Record<string, JsonValue>> =>
+      routeTrunk(args, exec.agent, exec.signal),
+  }))
+
+  /**
+   * The routing trunk (0.6.9): the one failover sequence behind both the
+   * a2a_route tool (agent face) and the quick-dispatch control route (host
+   * face, no agent). Gates — agent-less audit, join gate, team-scoped
+   * routing — then caller-label resolution, local dispatch, the canvas
+   * remote-member seam, and the directory walk. Faces differ only in who
+   * the caller is; the delivery semantics stay identical by construction.
+   * The host face (agent === undefined) rides the bare node team as its
+   * caller label — the "能发即能收" invariant: whatever it addresses can
+   * answer it with one route.
+   */
+  async function routeTrunk(args: { team: string; message: string; context_id?: string; async?: boolean }, agent: Agent | undefined, signal: AbortSignal, hostCaller?: string): Promise<Record<string, JsonValue>> {
       // Fix ③ (S4 audit): host-side calls carry no agent identity — every one
       // lands in the team audit ring, and the owner can flip the gate from
       // 'audit' to 'refuse' (config gateAgentLessCalls) when the operator
       // face should not be a routing principal at all.
-      if (exec.agent === undefined) {
+      if (agent === undefined) {
         recordTeamAudit('agent-less', String(args.team ?? ''), 'host', true,
           config.gateAgentLessCalls === 'refuse' ? 'refused by gateAgentLessCalls' : 'audited (default)')
         if (config.gateAgentLessCalls === 'refuse') {
@@ -3924,7 +3986,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // The caller identity travels as a routable team (the calling session's
       // node team when it has joined, else the node label), so the receiver
       // can answer with one a2a_route instead of an unroutable display label.
-      a2aJoinGateRefusal(exec)
+      a2aJoinGateRefusal(agent === undefined ? undefined : { agent })
       // S3 (team-scoped routing, off by default): when the owner turns it
       // on, collaboration happens inside teams. A session caller must have
       // declared membership in the target team before it may address it,
@@ -3932,11 +3994,11 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // is, by the same ruling, an unjoined one. Host-side calls (no agent)
       // and the initiator face stay exempt, like the join gate; discovery
       // (a2a_teams) stays open so a teamless node can still see what to join.
-      if (config.teamScopeRouting && exec.agent !== undefined) {
-        const scopeCaller = String(exec.agent.id)
+      if (config.teamScopeRouting && agent !== undefined) {
+        const scopeCaller = String(agent.id)
         let initiator = false
         try {
-          initiator = ctx.get('agents')?.requireInitiator() === exec.agent
+          initiator = ctx.get('agents')?.requireInitiator() === agent
         } catch { /* no initiator in this fiber */ }
         if (!initiator) {
           const callerTeams = teamMemberships.teamsOf(scopeCaller)
@@ -3955,13 +4017,18 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           }
         }
       }
-      const callerSession = resolveCallerLabel({
-        joined: exec.agent !== undefined && sessionNodes.has(String(exec.agent.id)),
-        initiatorFace: exec.agent !== undefined && exemptInitiatorFace(exec.agent),
+      let callerSession = resolveCallerLabel({
+        joined: agent !== undefined && sessionNodes.has(String(agent.id)),
+        initiatorFace: agent !== undefined && exemptInitiatorFace(agent),
         nodeTeam: config.team,
-        joinedTeam: exec.agent === undefined ? undefined : sessionTeamOf(exec.agent),
-        sessionLabel: exec.agent === undefined ? undefined : sessionLabelOf(exec.agent),
+        joinedTeam: agent === undefined ? undefined : sessionTeamOf(agent),
+        sessionLabel: agent === undefined ? undefined : sessionLabelOf(agent),
       })
+      // The quick-dispatch control face (0.6.9) passes the bare node team
+      // explicitly: receipts address it and land on the team face (the
+      // "能发即能收" invariant). Agent-less TOOL calls keep the legacy
+      // fallback (the node session label) — apply.spec pins it.
+      if (agent === undefined && hostCaller !== undefined) callerSession = hostCaller
       // P2 receipt-callback: the caller's routable address rides the wire so
       // a peer routes its receipt to THIS session's node team (not to
       // wherever its caller-label heuristics land). The bare node team is
@@ -3980,7 +4047,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // cheapest possible and immune to nested-signal aborts), then direct
       // publishers, then zone delegations, deduplicated by URL.
       const failures: string[] = []
-      const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, exec.signal, args.async === true, taskId, callbackAddress)
+      const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, signal, args.async === true, taskId, callbackAddress)
       if (outcome !== undefined) {
         if (outcome.ok) {
           trackOwedTask(taskId, args.team, 'local', outcome, callbackAddress, briefOf(args.message))
@@ -4023,8 +4090,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           const caps = card?.capabilities as { async?: unknown } | undefined
           peerAsync = card !== undefined && caps?.async === true
         }
-        const result = await dispatchPeerCandidate(candidate, target, args.message, args.context_id, exec.signal, callerSession, peerAsync, taskId, callbackAddress)
-        if (result.ok || exec.signal.aborted) {
+        const result = await dispatchPeerCandidate(candidate, target, args.message, args.context_id, signal, callerSession, peerAsync, taskId, callbackAddress)
+        if (result.ok || signal.aborted) {
           if (result.ok) trackOwedTask(taskId, args.team, candidate, result, callbackAddress, briefOf(args.message))
           const notes: string[] = []
           if (result.ok && args.async === true && result.task_status === 'TASK_STATE_DELIVERED' && !routableCallerLabel(callerSession)) {
@@ -4042,8 +4109,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       }
       if (failures.length > 0) logger.warn(`route to team "${args.team}" exhausted its candidates: ${failures.join('; ')}`)
       return routeVerdict(args.team, failures, candidatePool.length)
-    },
-  }))
+  }
 
   /**
    * The route dispatcher's local half: same-host candidates dial in-process,
