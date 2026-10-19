@@ -1,7 +1,7 @@
 /**
  * The A2A workbench boot: fetches /__dsh_a2a/state on a poll, feeds the
- * workbench (directory/ledger/activity/plan tabs) AND the restored 2D
- * spatial planning board (board tab, 0.6.1), and keeps the fault discipline
+ * merged workbench (the 2D planning board as the stage + directory/ledger/
+ * activity/plan rail, 0.6.2) and keeps the fault discipline
  * (a fetch failure must never masquerade as an empty fleet — the badge is
  * the honesty surface).
  * @module nexus-stage/main
@@ -141,8 +141,9 @@ const bench = createWorkbench({
 })
 app.appendChild(bench.root)
 
-// Legacy entry compatibility: the old stage link ?mode=plan lands on the
-// board tab (only while the host serves the canvas face).
+// Legacy entry compatibility: the old stage link ?mode=plan converges on the
+// board stage — in the merged shell canvas mode is already the default while
+// the host serves the canvas face, so this only guards the first poll.
 if (new URLSearchParams(window.location.search).get('mode') === 'plan') {
   const tryBoard = window.setInterval(() => {
     if (canvasFace) {

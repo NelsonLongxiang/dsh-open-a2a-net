@@ -141,11 +141,12 @@ callers. Set an `apiKey` before exposing the listener beyond loopback.
 ## Stages (visualization surfaces)
 
 Two full-page stages mount beside the model tools: `/__dsh_a2a_nexus` (the
-A2A workbench — DOM panels for the directory, ledger, activity ring, a
-derived action plan, and the 2D spatial planning board for canvas-team
-composition; the Three.js topology viewer was retired in 0.6.0 and the
-planning board was restored INTO the workbench in 0.6.1, deep-linked by
-`?mode=plan`) and `/__dsh_a2a_canvas`. A bare mount path
+A2A workbench — since 0.6.2 the 2D spatial planning board IS the stage and
+the directory/ledger/activity/plan panels ride a collapsible side rail in
+one merged, responsive shell; while the canvas face is down the panels fall
+back to the main stack; the Three.js topology viewer was retired in 0.6.0;
+`?mode=plan` still converges on the board) and `/__dsh_a2a_canvas`. A bare
+mount path
 redirects (301) onto its trailing-slash form, so both spellings render and
 the shell's relative assets always resolve inside the served tree. For
 offline development, `nexus-stage/scripts/mockhost.py [port]` serves the

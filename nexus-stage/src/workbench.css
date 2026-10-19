@@ -1,30 +1,59 @@
-/* A2A workbench styles: same --n-* token family as the stage it replaces
-   (dark default, light via prefers-color-scheme). Panels are data surfaces,
+/* A2A workbench styles (0.6.2 merged shell): the planning board is the stage,
+   the operational panels ride a collapsible rail, the inspector is an overlay
+   card. Responsive tiers are CSS-only:
+   - ≥1440px  rail 340px, everything docked
+   - 1024–1439 rail 300px
+   - <1024    rail becomes a left drawer (☰), inspector becomes a bottom sheet
+   Dark default, light via prefers-color-scheme. Panels are data surfaces,
    not decoration — rows are monospaced data lines. */
 :root{
   color-scheme:dark;
   --n-bg:#060a12; --n-ink:#dde3f0; --n-ink-muted:#7a86a0; --n-panel:#0d1322;
   --n-live:#4ade80; --n-cold:#7a86a0; --n-border:#223052; --n-act:#f59e0b;
-  --n-danger:#f87171; --n-accent:#8b5cf6;
+  --n-danger:#f87171; --n-accent:#8b5cf6; --n-rail-w:300px;
 }
 @media (prefers-color-scheme: light){
   :root{ --n-bg:#eef2fa; --n-ink:#1a2438; --n-ink-muted:#5a6580; --n-panel:#ffffff;
          --n-live:#16803a; --n-cold:#8a93a8; --n-border:#c6d0e6; --n-act:#b45309;
          --n-danger:#b91c1c; --n-accent:#6d28d9; }
 }
+@media (min-width:1440px){ :root{ --n-rail-w:340px } }
 html,body,#app{height:100%;margin:0}
 body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif}
+
 .wb{display:flex;flex-direction:column;height:100%}
-.wb-header{display:flex;align-items:center;gap:16px;padding:8px 14px;border-bottom:1px solid var(--n-border);background:var(--n-panel)}
-.wb-title{display:flex;align-items:center;gap:10px;font-weight:600;font-size:14px}
+.wb-header{display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid var(--n-border);background:var(--n-panel)}
+.wb-title{display:flex;align-items:center;gap:10px;font-weight:600;font-size:14px;white-space:nowrap}
 .wb-badge{font-size:11px;font-weight:400;color:var(--n-ink-muted);border:1px solid var(--n-border);border-radius:99px;padding:1px 8px}
-.wb-header-stats{display:flex;gap:16px;font-size:12px;color:var(--n-ink-muted);flex-wrap:wrap}
+.wb-header-stats{display:flex;gap:16px;font-size:12px;color:var(--n-ink-muted);flex-wrap:wrap;min-width:0}
 .wb-header-stats .wb-kv{display:flex;gap:6px}
 .wb-header-stats .wb-kv-k{color:var(--n-ink-muted)}
 .wb-header-stats .wb-kv-v{color:var(--n-ink)}
-.wb-body{display:grid;grid-template-columns:230px 1fr 260px;flex:1;min-height:0}
-.wb-sidebar{border-right:1px solid var(--n-border);overflow-y:auto;padding:8px}
-.wb-inspector{border-left:1px solid var(--n-border);overflow-y:auto;padding:10px}
+.wb-icon-btn{background:none;border:1px solid var(--n-border);color:var(--n-ink);border-radius:8px;
+  width:30px;height:30px;display:none;align-items:center;justify-content:center;font:inherit;font-size:14px;
+  cursor:pointer;flex:none}
+.wb-icon-btn:hover{border-color:var(--n-accent)}
+.wb-menu{margin-left:0}
+.wb-rail-toggle{margin-left:auto}
+.wb.is-rail-collapsed .wb-rail{display:none}
+
+.wb-body{position:relative;display:grid;grid-template-columns:minmax(0,var(--n-rail-w)) minmax(0,1fr);flex:1;min-height:0}
+
+/* ── Rail (directory + operational panels in canvas mode) ── */
+.wb-rail{border-right:1px solid var(--n-border);overflow-y:auto;min-width:0;background:color-mix(in srgb,var(--n-panel) 60%,var(--n-bg))}
+.wb-sec{border-bottom:1px solid color-mix(in srgb,var(--n-border) 60%,transparent)}
+.wb-sec-head{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;
+  background:none;border:none;color:var(--n-ink);font:inherit;font-weight:600;font-size:12.5px;
+  padding:8px 12px;cursor:pointer;text-transform:uppercase;letter-spacing:.05em}
+.wb-sec-head:hover{color:var(--n-accent)}
+.wb-sec-count{font-weight:400;font-size:11px;color:var(--n-ink-muted)}
+.wb-sec.is-collapsed .wb-sec-body{display:none}
+.wb-sec-body{padding:2px 10px 10px}
+/* Data mode: the three panels move to the stage — their rail seats hide. */
+.wb[data-mode="data"] .wb-sec[data-sec="ledger"],
+.wb[data-mode="data"] .wb-sec[data-sec="activity"],
+.wb[data-mode="data"] .wb-sec[data-sec="plan"]{display:none}
+
 .wb-side-head{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--n-ink-muted);margin:10px 2px 4px}
 .wb-item{display:flex;gap:7px;align-items:center;width:100%;text-align:left;background:none;border:none;
   color:var(--n-ink);font:inherit;padding:3px 6px;border-radius:6px;cursor:pointer}
@@ -33,18 +62,20 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-dot-live{color:var(--n-live)} .wb-dot-cold{color:var(--n-cold)} .wb-dot-canvas{color:#22d3ee}
 .wb-dot-peer{color:var(--n-accent)} .wb-dot-remote{color:var(--n-act)}
 .wb-item-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wb-main{display:flex;flex-direction:column;min-width:0;overflow-y:auto;padding:10px 14px}
-.wb-tabs{display:flex;gap:6px;margin-bottom:10px}
-.wb-tab{background:none;border:1px solid var(--n-border);color:var(--n-ink-muted);border-radius:8px;
-  padding:4px 14px;font:inherit;cursor:pointer}
-.wb-tab.is-active{color:var(--n-ink);border-color:var(--n-accent);background:color-mix(in srgb,var(--n-accent) 16%,transparent)}
-.wb-pane.is-hidden{display:none}
+
+/* ── Stage: board (canvas mode) or the data stack (data mode) ── */
+.wb-stage{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column}
+.wb-stage-board{position:absolute;inset:0;overflow:hidden}
+.wb-stage-board.is-hidden{display:none}
+.wb-data{display:flex;flex-direction:column;gap:14px;padding:10px 14px;overflow-y:auto;min-height:0}
+.wb-data.is-hidden{display:none}
+
 .wb-pane-head{font-size:12px;color:var(--n-ink-muted);margin:4px 0 8px}
 .wb-pane-subhead{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--n-ink-muted);margin:12px 0 6px}
 .wb-table,.wb-row{display:flex;gap:10px;align-items:baseline}
 .wb-table{flex-direction:column;gap:2px}
 .wb-row{font-family:ui-monospace,Consolas,monospace;font-size:12px;background:color-mix(in srgb,var(--n-panel) 55%,transparent);
-  border:1px solid var(--n-border);border-radius:6px;padding:3px 8px}
+  border:1px solid var(--n-border);border-radius:6px;padding:3px 8px;flex-wrap:wrap}
 .wb-row-id{min-width:130px}
 .wb-row-team{color:var(--n-accent);min-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wb-row-meta{color:var(--n-ink-muted)}
@@ -65,14 +96,38 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
   border-radius:8px;padding:6px 9px;font:inherit}
 .wb-textarea{resize:vertical}
 .wb-select:focus,.wb-textarea:focus{outline:1px solid var(--n-accent)}
+
+/* ── Inspector: overlay card on the stage; bottom sheet when narrow. ── */
+.wb-inspector{position:absolute;top:8px;right:8px;width:280px;max-height:calc(100% - 16px);
+  overflow-y:auto;background:var(--n-panel);border:1px solid var(--n-border);border-radius:10px;
+  padding:10px;z-index:20;box-shadow:0 8px 24px rgba(0,0,0,.35);display:none}
+.wb-inspector.is-open{display:block}
+.wb-inspector-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.wb-inspector-title{font-weight:600;font-size:12.5px}
+.wb-inspector .wb-icon-btn{display:inline-flex;width:24px;height:24px;font-size:12px}
 .wb-card{display:flex;flex-direction:column;gap:6px}
 .wb-kv{display:flex;gap:8px;font-size:12px}
-.wb-kv-k{color:var(--n-ink-muted);min-width:58px}
+.wb-kv-k{color:var(--n-ink-muted);min-width:58px;flex:none}
 .wb-kv-v{word-break:break-all}
 .wb-muted{color:var(--n-ink-muted)}
+
 .nexus-fault{display:none;position:fixed;top:10px;right:12px;z-index:50;max-width:420px;
   font-size:12px;color:#fff;background:#b91c1c;border-radius:8px;padding:6px 10px}
-@media (max-width: 980px){
-  .wb-body{grid-template-columns:1fr}
-  .wb-sidebar,.wb-inspector{display:none}
+
+/* ── Responsive tiers ── */
+@media (max-width:1023px){
+  .wb-menu{display:inline-flex}
+  .wb-rail-toggle{display:none}
+  .wb-body{grid-template-columns:minmax(0,1fr)}
+  .wb-rail{position:fixed;left:0;top:0;bottom:0;width:min(86vw,320px);z-index:40;
+    background:var(--n-panel);border-right:1px solid var(--n-border);
+    transform:translateX(-102%);transition:transform .18s ease;box-shadow:8px 0 24px rgba(0,0,0,.35)}
+  .wb.is-rail-open .wb-rail{transform:translateX(0)}
+  .wb-inspector{left:8px;right:8px;width:auto;top:auto;bottom:8px;max-height:45%}
+}
+@media (max-width:680px){
+  .wb-header{flex-wrap:wrap;row-gap:4px}
+  .wb-header-stats{order:3;width:100%}
+  .wb-row-team{min-width:0;flex:1 1 auto}
+  .wb-data{padding:8px}
 }

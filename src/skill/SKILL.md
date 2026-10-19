@@ -54,10 +54,10 @@ a2a_route { team: "<zone>/<id8 or canvas name>", message, context_id?, async? }
 `__dsh_a2a/state` (per node) carries `sessions` (live/joined), `sessionTeams`,
 `remote` (peer session rows with `origin` = node label + LAN IP and `via` =
 the peer URL), `activity` (routing ring), `tasks` (the ledger: pending /
-stale / archived). The A2A workbench (`/__dsh_a2a_nexus/`, DOM panels —
-directory / ledger / activity / plan / the 2D spatial planning board for
-canvas-team composition; `?mode=plan` deep-links the board) renders the
-same data for humans.
+stale / archived). The A2A workbench (`/__dsh_a2a_nexus/`, merged responsive
+shell since 0.6.2 — the 2D planning board is the stage, directory / ledger /
+activity / plan ride a collapsible rail, narrow screens get a drawer)
+renders the same data for humans.
 
 ## Failure shapes that are contract semantics
 

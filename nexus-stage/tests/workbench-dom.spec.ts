@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 /**
- * Workbench DOM behavior through the production seam: directory sections,
- * ledger rows with the abandon action, the activity ring, derived plan
- * actions, dispatch drafting (input survives polls), tabs, and the
- * inspector's text-only rendering (attacker-shaped labels stay text).
+ * Workbench DOM behavior through the production seam (0.6.2 merged shell):
+ * rail sections, the board stage vs the data stack, ledger rows with the
+ * abandon action, the activity ring, derived plan actions, dispatch
+ * drafting (input survives polls), the inspector overlay's text-only
+ * rendering, and the responsive toggles (rail collapse / drawer).
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createWorkbench, type StateBody } from '../src/workbench.ts'
@@ -19,7 +20,7 @@ function bench() {
 }
 
 const state: StateBody = {
-  version: '0.6.0',
+  version: '0.6.2',
   sessions: [
     { id: 'session-11111111-aaaa', label: 'dsh-host-x-11111111', team: 'dsh/11111111', name: 'scout-01', live: true, joined: true, workspace: '/tmp/scout' },
     { id: 'session-22222222-bbbb', label: 'dsh-host-x-22222222', team: 'dsh/22222222', name: 'cold-02', live: false, joined: true },
@@ -47,7 +48,7 @@ function text(node: Element | null | undefined): string {
   return node?.textContent ?? ''
 }
 
-describe('workbench', () => {
+describe('workbench rail sections', () => {
   it('renders the directory sections with counts', () => {
     const { v } = bench()
     v.update(state)
@@ -62,6 +63,105 @@ describe('workbench', () => {
     expect(labels.some(l => l.includes('192.168.3.157:13080'))).toBe(true)
   })
 
+  it('defaults to data mode without a board: panels stack in the stage, rail keeps the directory', () => {
+    const { v } = bench()
+    v.update(state)
+    expect(v.mode()).toBe('data')
+    expect(v.root.dataset.mode).toBe('data')
+    const stack = v.root.querySelector('.wb-data')!
+    expect(stack.classList.contains('is-hidden')).toBe(false)
+    // The three panes live in the stage stack, not in the rail.
+    for (const pane of [v.root.querySelector('.wb-pane')!]) {
+      expect(pane.closest('.wb-stage')).not.toBeNull()
+      expect(pane.closest('.wb-rail')).toBeNull()
+    }
+    const rail = v.root.querySelector('.wb-rail')!
+    expect(rail.querySelectorAll('.wb-pane').length).toBe(0)
+    // The directory seat stays in the rail in both modes.
+    expect(rail.querySelector('.wb-sec[data-sec="directory"]')).not.toBeNull()
+    expect(rail.querySelector('.wb-directory')).not.toBeNull()
+  })
+})
+
+describe('workbench merged stage (canvas mode)', () => {
+  function boardBench(available = true) {
+    const boardRoot = document.createElement('div')
+    boardRoot.dataset.board = 'plan'
+    const activate = vi.fn()
+    const deactivate = vi.fn()
+    const v = createWorkbench({
+      now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(),
+      board: { root: boardRoot, activate, deactivate, available: () => available },
+    })
+    document.body.appendChild(v.root)
+    return { v, boardRoot, activate, deactivate }
+  }
+
+  it('canvas mode is the default while the board is available: board fills the stage, panels ride the rail', () => {
+    const { v, boardRoot, activate } = boardBench()
+    v.update(state)
+    expect(v.mode()).toBe('canvas')
+    expect(v.root.dataset.mode).toBe('canvas')
+    expect(activate).toHaveBeenCalledTimes(1)
+    const boardPane = v.root.querySelector('.wb-stage-board')!
+    expect(boardPane.classList.contains('is-hidden')).toBe(false)
+    expect(v.root.contains(boardRoot)).toBe(true)
+    // The three panes were re-parented into their rail sections.
+    const rail = v.root.querySelector('.wb-rail')!
+    expect(rail.querySelectorAll('.wb-pane').length).toBe(3)
+    expect(v.root.querySelector('.wb-data')!.classList.contains('is-hidden')).toBe(true)
+  })
+
+  it('canvas face drop: board deactivates once, panes return to the stage stack', () => {
+    let available = true
+    const boardRoot = document.createElement('div')
+    const activate = vi.fn()
+    const deactivate = vi.fn()
+    const v = createWorkbench({
+      now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(),
+      board: { root: boardRoot, activate, deactivate, available: () => available },
+    })
+    document.body.appendChild(v.root)
+    v.update(state)
+    available = false
+    v.update({ ...state, canvas: undefined })
+    expect(v.mode()).toBe('data')
+    expect(deactivate).toHaveBeenCalledTimes(1)
+    const rail = v.root.querySelector('.wb-rail')!
+    expect(rail.querySelectorAll('.wb-pane').length).toBe(0)
+    const stack = v.root.querySelector('.wb-data')!
+    expect(stack.classList.contains('is-hidden')).toBe(false)
+    // selectTab('board') while the face is down stays in data mode.
+    v.selectTab('board')
+    expect(v.mode()).toBe('data')
+  })
+
+  it('selectTab un-collapses a rail section', () => {
+    const { v } = boardBench()
+    v.update(state)
+    const planSec = v.root.querySelector('.wb-sec[data-sec="plan"]')!
+    expect(planSec.classList.contains('is-collapsed')).toBe(true)
+    v.selectTab('plan')
+    expect(planSec.classList.contains('is-collapsed')).toBe(false)
+    // Section head click re-collapses.
+    ;(planSec.querySelector('.wb-sec-head') as HTMLElement).click()
+    expect(planSec.classList.contains('is-collapsed')).toBe(true)
+  })
+
+  it('rail toggle collapses the rail and re-syncs the board view size', () => {
+    const { v, activate } = boardBench()
+    v.update(state)
+    activate.mockClear()
+    const toggle = v.root.querySelector('[data-testid="wb-rail-toggle"]') as HTMLElement
+    toggle.click()
+    expect(v.root.classList.contains('is-rail-collapsed')).toBe(true)
+    expect(activate).toHaveBeenCalledTimes(1) // stage widened → board re-sync
+    toggle.click()
+    expect(v.root.classList.contains('is-rail-collapsed')).toBe(false)
+  })
+})
+
+describe('workbench panels', () => {
   it('renders ledger rows and settles a dead letter through the abandon seam', async () => {
     const { v, abandon } = bench()
     v.update(state)
@@ -83,21 +183,17 @@ describe('workbench', () => {
   it('renders activity: in-flight first, failed inbound marked', () => {
     const { v } = bench()
     v.update(state)
-    const tab = [...v.root.querySelectorAll('.wb-tab')].find(b => text(b) === '活动')!
-    tab.click()
-    const rows = [...v.root.querySelectorAll('.wb-pane')].filter(p => !p.classList.contains('is-hidden'))[0]
-    const html = rows.innerHTML
-    expect(html.indexOf('dsh/11111111')).toBeGreaterThanOrEqual(0)
-    const fail = rows.querySelector('.wb-row-dir.is-fail')
-    expect(fail).not.toBeNull()
+    const panes = [...v.root.querySelectorAll('.wb-pane')]
+    const activityPane = panes.find(p => text(p).includes('活动环'))!
+    expect(activityPane.innerHTML.indexOf('dsh/11111111')).toBeGreaterThanOrEqual(0)
+    expect(activityPane.querySelector('.wb-row-dir.is-fail')).not.toBeNull()
   })
 
   it('derives plan actions: dead cleanup, stale nudge with copy brief, cold wake, repair flag', () => {
     const { v, copy } = bench()
     v.update(state)
-    const tab = [...v.root.querySelectorAll('.wb-tab')].find(b => text(b) === '规划')!
-    tab.click()
-    const pane = [...v.root.querySelectorAll('.wb-pane')].filter(p => !p.classList.contains('is-hidden'))[0]
+    const panes = [...v.root.querySelectorAll('.wb-pane')]
+    const pane = panes.find(p => text(p).includes('待办行动'))!
     const actions = [...pane.querySelectorAll('.wb-action-text')].map(n => text(n))
     expect(actions.some(t => t.includes('清账 1 条死信'))).toBe(true)
     expect(actions.some(t => t.includes('催办 direct-aaaaaaaa'))).toBe(true)
@@ -118,9 +214,8 @@ describe('workbench', () => {
   it('keeps dispatch input across polls and drafts a pasteable brief', () => {
     const { v, copy } = bench()
     v.update(state)
-    const tab = [...v.root.querySelectorAll('.wb-tab')].find(b => text(b) === '规划')!
-    tab.click()
-    const pane = [...v.root.querySelectorAll('.wb-pane')].filter(p => !p.classList.contains('is-hidden'))[0]
+    const panes = [...v.root.querySelectorAll('.wb-pane')]
+    const pane = panes.find(p => p.querySelector('.wb-textarea') !== null)!
     const select = pane.querySelector('.wb-select') as HTMLSelectElement
     const area = pane.querySelector('.wb-textarea') as HTMLTextAreaElement
     select.value = 'dsh/11111111'
@@ -136,25 +231,29 @@ describe('workbench', () => {
   it('healthy state renders the calm banner', () => {
     const { v } = bench()
     v.update({
-      version: '0.6.0',
+      version: '0.6.2',
       sessions: [{ id: 'session-11111111-aaaa', label: 'l', team: 'dsh/11111111', live: true }],
       tasks: [],
       tasksDead: [],
     })
-    const tab = [...v.root.querySelectorAll('.wb-tab')].find(b => text(b) === '规划')!
-    tab.click()
-    const pane = [...v.root.querySelectorAll('.wb-pane')].filter(p => !p.classList.contains('is-hidden'))[0]
-    expect(text(pane.querySelector('.wb-pane-head'))).toContain('网络健康')
+    const panes = [...v.root.querySelectorAll('.wb-pane')]
+    const planPane = panes.find(p => text(p).includes('网络健康'))!
+    expect(text(planPane.querySelector('.wb-pane-head'))).toContain('网络健康')
   })
 
-  it('inspector shows a selected session as text only', () => {
+  it('inspector shows a selected session as text only and closes via ✕', () => {
     const { v } = bench()
     v.update({ ...state, sessions: [{ ...state.sessions![0]!, name: '<img src=x onerror=1>' }] })
     const item = [...v.root.querySelectorAll('.wb-item-label')].find(n => text(n) === '<img src=x onerror=1>')!
     item.click()
-    const card = v.root.querySelector('.wb-card')!
+    const inspector = v.root.querySelector('.wb-inspector')!
+    expect(inspector.classList.contains('is-open')).toBe(true)
+    const card = inspector.querySelector('.wb-card')!
     expect(text(card.querySelector('.wb-kv-v'))).toBe('<img src=x onerror=1>')
     expect(card.querySelectorAll('img').length).toBe(0)
+    const close = [...inspector.querySelectorAll('button')].find(b => text(b) === '✕')!
+    close.click()
+    expect(v.root.querySelector('.wb-inspector')!.classList.contains('is-open')).toBe(false)
   })
 
   it('header shows version and idempotency counters', () => {
@@ -163,64 +262,6 @@ describe('workbench', () => {
     const stats = text(v.root.querySelector('.wb-header-stats'))
     expect(stats).toContain('claims 368')
     expect(stats).toContain('conflicts 0')
-    expect(text(v.root.querySelector('.wb-badge'))).toBe('v0.6.0')
-  })
-})
-
-describe('workbench board tab (restored 0.6.1 seam)', () => {
-  it('renders no board tab when no board is provided', () => {
-    const { v } = bench()
-    v.update(state)
-    const labels = Array.from(v.root.querySelectorAll<HTMLElement>('.wb-tab')).map(b => b.textContent)
-    expect(labels).toEqual(['台账', '活动', '规划'])
-  })
-
-  it('mounts the board root, activates on entry, deactivates on leave', () => {
-    const boardRoot = document.createElement('div')
-    boardRoot.dataset.board = 'plan'
-    const activate = vi.fn()
-    const deactivate = vi.fn()
-    let available = true
-    const v = createWorkbench({
-      now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(),
-      board: { root: boardRoot, activate, deactivate, available: () => available },
-    })
-    document.body.appendChild(v.root)
-    v.update(state)
-    const boardBtn = Array.from(v.root.querySelectorAll<HTMLElement>('.wb-tab')).find(b => b.dataset.tab === 'board')
-    expect(boardBtn).toBeTruthy()
-    expect(boardBtn!.classList.contains('is-hidden')).toBe(false)
-    boardBtn!.click()
-    expect(activate).toHaveBeenCalledTimes(1)
-    expect(v.tab()).toBe('board')
-    expect(v.root.contains(boardRoot)).toBe(true)
-    // leave via another tab
-    ;(Array.from(v.root.querySelectorAll<HTMLElement>('.wb-tab')).find(b => b.dataset.tab === 'ledger') as HTMLElement).click()
-    expect(deactivate).toHaveBeenCalledTimes(1)
-    expect(v.tab()).toBe('ledger')
-  })
-
-  it('selectTab(board) is a no-op while the canvas face is down; focus falls back to ledger', () => {
-    const boardRoot = document.createElement('div')
-    const activate = vi.fn()
-    let available = true
-    const v = createWorkbench({
-      now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(),
-      board: { root: boardRoot, activate, deactivate: () => {}, available: () => available },
-    })
-    document.body.appendChild(v.root)
-    v.update(state)
-    v.selectTab('board')
-    expect(v.tab()).toBe('board')
-    available = false
-    const noCanvas: StateBody = { ...state, canvas: undefined }
-    v.update(noCanvas)
-    // canvas face dropped while the board was focused → ledger fallback,
-    // board tab hidden (the old ?mode=plan master-switch contract).
-    expect(v.tab()).toBe('ledger')
-    v.selectTab('board')
-    expect(v.tab()).toBe('ledger')
-    const boardBtn = Array.from(v.root.querySelectorAll<HTMLElement>('.wb-tab')).find(b => b.dataset.tab === 'board')!
-    expect(boardBtn.classList.contains('is-hidden')).toBe(true)
+    expect(text(v.root.querySelector('.wb-badge'))).toBe('v0.6.2')
   })
 })
