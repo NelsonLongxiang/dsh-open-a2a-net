@@ -223,64 +223,9 @@ describe('A2aControl (activity feed)', () => {
     expect(screen.queryByText('Canvas teams')).toBeNull()
   })
 
-  // 0.6.7 click-to-reach receive face: the workbench's ↗ jumps open a
-  // session here. L1 — same-browser broadcast; L2 — cross-origin window
-  // message carrying the team handle for local resolution.
-  it('opens a session from an L1 workbench broadcast on the dsh-a2a channel', async () => {
-    class MockBroadcastChannel {
-      static instances: MockBroadcastChannel[] = []
-      public onmessage: ((event: { data: unknown }) => void) | null = null
-      public constructor(public readonly name: string) { MockBroadcastChannel.instances.push(this) }
-      public postMessage = vi.fn()
-      public close(): void {}
-    }
-    vi.stubGlobal('BroadcastChannel', MockBroadcastChannel)
-    mountControl()
-    await screen.findByText('A2A network') // mounted, listeners bound
-    const channel = MockBroadcastChannel.instances.at(-1)!
-    expect(channel.name).toBe('dsh-a2a')
-    channel.onmessage?.({ data: { type: 'dsh-a2a:open-session', id: 'agent-1' } })
-    expect(openSession).toHaveBeenCalledWith('agent-1')
-    // Foreign shapes are ignored, not misrouted.
-    channel.onmessage?.({ data: { type: 'something-else', id: 'x' } })
-    channel.onmessage?.({ data: 'plain string' })
-    expect(openSession).toHaveBeenCalledTimes(1)
-  })
-
-  it('resolves an L2 cross-origin team handle against local sessions, ignoring strangers', async () => {
-    stateActivity = [{ ts: Date.now(), dir: 'out', team: 'dsh/agent-1', peer: '', ok: true }]
-    mountControl()
-    openPopover()
-    // An activity row for the same team proves the state poll has landed
-    // and the re-subscribed listener carries the session table.
-    await screen.findByText('dsh/agent-1')
-    fireEvent(window, new MessageEvent('message', { data: { type: 'dsh-a2a:open-session', team: 'dsh/agent-1' } }))
-    expect(openSession).toHaveBeenCalledWith('agent-1')
-    fireEvent(window, new MessageEvent('message', { data: { type: 'dsh-a2a:open-session', team: 'stranger/0123abcd' } }))
-    expect(openSession).toHaveBeenCalledTimes(1)
-  })
-
-  // 0.6.8: the L2 jump is a ?dsh-a2a-open=<handle> deep link — responsive by
-  // construction, no sender-side timers. The panel resolves it once per page
-  // load, waits for the first /state fetch, strips the param, and drops
-  // handles it does not know.
-  it('opens the session named by the ?dsh-a2a-open deep link and strips the param', async () => {
-    stateVersion = '0.6.8'
-    window.history.replaceState(null, '', '/?dsh-a2a-open=dsh%2Fagent-1&keep=1')
-    mountControl()
-    await waitFor(() => { expect(openSession).toHaveBeenCalledWith('agent-1') })
-    // Only its own key is consumed; other query params survive.
-    expect(window.location.search).toBe('?keep=1')
-    // Once per page load: later re-renders do not re-fire it.
-    expect(openSession).toHaveBeenCalledTimes(1)
-  })
-
-  it('drops a ?dsh-a2a-open deep link whose handle is unknown once state lands', async () => {
-    stateVersion = '0.6.8'
-    window.history.replaceState(null, '', '/?dsh-a2a-open=stranger%2F0123abcd')
-    mountControl()
-    await screen.findByText('A2A network')
-    await waitFor(() => { expect(window.location.search).toBe('') })
-    expect(openSession).not.toHaveBeenCalled()
-  })
+  // 0.6.10: the click-to-reach receive face (0.6.7 BroadcastChannel, 0.6.8
+  // ?dsh-a2a-open deep link) is removed by ruling — 禁止任何跳转，全部使用
+  // 响应式布局. The workbench's inline 快派 form is the only cross-surface
+  // reach primitive; this panel keeps its native FeedRow openSession (an
+  // in-place conversation switch inside the GUI, no navigation).
 })

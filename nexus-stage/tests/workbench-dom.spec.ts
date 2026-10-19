@@ -15,12 +15,10 @@ function bench() {
   const abandon = vi.fn(async () => true)
   const copy = vi.fn()
   const canvasOp = vi.fn(async () => true)
-  const openLocal = vi.fn()
-  const openRemote = vi.fn()
   const dispatchQuick = vi.fn(async () => ({ ok: true, task_id: 'direct-qqqq1111' }))
-  const v = createWorkbench({ now: () => NOW, abandon, copy, canvasOp, openLocal, openRemote, dispatchQuick })
+  const v = createWorkbench({ now: () => NOW, abandon, copy, canvasOp, dispatchQuick })
   document.body.appendChild(v.root)
-  return { v, abandon, copy, canvasOp, openLocal, openRemote, dispatchQuick }
+  return { v, abandon, copy, canvasOp, dispatchQuick }
 }
 
 const state: StateBody = {
@@ -375,45 +373,33 @@ describe('directory search & filters (0.6.6)', () => {
   })
 })
 
-describe('directory click-to-reach (0.6.7)', () => {
-  it('local session rows open through openLocal without selecting the row', () => {
-    const { v, openLocal } = bench()
+describe('inline-only reach (0.6.10)', () => {
+  it('no jump affordance exists anywhere: rows select in place, nothing navigates', () => {
+    const { v } = bench()
     v.update(state)
+    // 0.6.7/0.6.8's ↗ (openLocal broadcast / openRemote deep link) is gone
+    // by ruling — 禁止任何跳转，全部使用响应式布局.
+    expect(v.root.querySelector('.wb-item-open')).toBeNull()
+    // Local and remote rows still select — the inspector is the interaction.
     const items = [...v.root.querySelectorAll('.wb-directory .wb-item')]
     const scout = items.find(n => text(n).includes('scout-01'))!
-    const jump = scout.querySelector('.wb-item-open') as HTMLElement
-    expect(jump).not.toBeNull()
-    expect(jump.getAttribute('title')).toContain('GUI')
-    jump.click()
-    expect(openLocal).toHaveBeenCalledWith('session-11111111-aaaa')
-    // stopPropagation: the jump is not a selection — the inspector stays shut.
-    expect(v.root.querySelector('.wb-inspector.is-open')).toBeNull()
-    const cold = items.find(n => text(n).includes('cold-02'))!
-    ;(cold.querySelector('.wb-item-open') as HTMLElement).click()
-    expect(openLocal).toHaveBeenCalledWith('session-22222222-bbbb')
+    ;(scout.querySelector('.wb-item-label') as HTMLElement).click()
+    expect(v.root.querySelector('.wb-inspector.is-open')).not.toBeNull()
+    const remote = items.find(n => text(n).includes('remote-host'))!
+    ;(remote.querySelector('.wb-item-label') as HTMLElement).click()
+    expect(text(v.root.querySelector('.wb-inspector'))).toContain('remote-host')
   })
 
-  it('remote rows open through openRemote only when the row carries a via URL', () => {
-    const { v, openRemote } = bench()
+  it('a local session row dispatches through the same inline 快派 form', async () => {
+    const { v, dispatchQuick } = bench()
     v.update(state)
-    const remote = [...v.root.querySelectorAll('.wb-directory .wb-item')].find(n => text(n).includes('remote-host'))!
-    const jump = remote.querySelector('.wb-item-open') as HTMLElement
-    expect(jump).not.toBeNull()
-    expect(jump.getAttribute('title')).toContain('http://192.168.3.157:13080')
-    jump.click()
-    expect(openRemote).toHaveBeenCalledTimes(1)
-    expect(openRemote.mock.calls[0]![0]).toMatchObject({ team: 'dsh-host-ca0c0a8d', via: 'http://192.168.3.157:13080' })
-    // A remote row learned without a URL gets no affordance at all.
-    v.update({ ...state, remote: [{ team: 'dsh-host-00000000', name: 'via-less' }] })
-    const viaLess = [...v.root.querySelectorAll('.wb-directory .wb-item')].find(n => text(n).includes('via-less'))!
-    expect(viaLess.querySelector('.wb-item-open')).toBeNull()
-  })
-
-  it('the jump affordance hides entirely when the deps are absent', () => {
-    const v = createWorkbench({ now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(), canvasOp: vi.fn(async () => true) })
-    document.body.appendChild(v.root)
-    v.update(state)
-    expect(v.root.querySelector('.wb-directory .wb-item-open')).toBeNull()
+    const item = [...v.root.querySelectorAll('.wb-item-label')].find(n => text(n).includes('scout-01'))!
+    item.click()
+    const form = v.root.querySelector('.wb-inspector .wb-dispatch-form') as HTMLFormElement
+    expect(form).not.toBeNull()
+    ;(form.querySelector('.wb-dispatch-text') as HTMLTextAreaElement).value = 'local hello'
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(dispatchQuick).toHaveBeenCalledWith('dsh/11111111', 'local hello'))
   })
 })
 

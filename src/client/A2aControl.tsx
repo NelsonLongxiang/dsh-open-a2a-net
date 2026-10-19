@@ -133,7 +133,6 @@ export function A2aControl({ wide, t, openSession }: A2aControlProps) {
   const [state, setState] = useState<A2aState>({ sessions: [], activity: [], inFlight: [], tasks: [] })
   const [seenActivity, setSeenActivity] = useState(0)
   const stopped = useRef(false)
-  const deepLinkHandled = useRef(false)
   useEffect(() => () => { stopped.current = true }, [])
   const wrap = useRef<HTMLDivElement>(null)
   // The popover anchors to the trigger's viewport rect: the sidebar column
@@ -194,68 +193,12 @@ export function A2aControl({ wide, t, openSession }: A2aControlProps) {
     return () => { document.removeEventListener('pointerdown', onPointerDown) }
   }, [open])
 
-  useEffect(() => {
-    // 0.6.7 click-to-reach, receive face. The workbench directory's ↗ jumps
-    // here in two shapes: L1 — the same browser's workbench tab broadcasts
-    // {type:'dsh-a2a:open-session', id} on the 'dsh-a2a' BroadcastChannel;
-    // L2 — a peer host's workbench opened this GUI with a
-    // ?dsh-a2a-open=<team handle> deep link (0.6.8: replaces the desktop-only
-    // window.open + postMessage retry, which could not survive narrow or
-    // mobile tabs suspending the sender). The team handle is resolved
-    // against the freshest session rows this panel already polls.
-    const stateRef = { current: state }
-    const openBy = (id: unknown, team: unknown): void => {
-      if (typeof id === 'string' && id !== '') { openSession(id); return }
-      if (typeof team === 'string' && team !== '') {
-        const row = stateRef.current.sessions.find(entry => entry.team === team)
-        if (row !== undefined) openSession(row.id)
-      }
-    }
-    const onMessage = (data: unknown): void => {
-      if (data === null || typeof data !== 'object') return
-      const message = data as { type?: unknown; id?: unknown; team?: unknown }
-      if (message.type === 'dsh-a2a:open-session') openBy(message.id, message.team)
-    }
-    const consumeDeepLink = (): void => {
-      const params = new URLSearchParams(window.location.search)
-      params.delete('dsh-a2a-open')
-      const rest = params.toString()
-      window.history.replaceState(null, '', window.location.pathname + (rest === '' ? '' : `?${rest}`))
-    }
-    // Deep link: once per page load, resolve ?dsh-a2a-open= against the
-    // session table. It waits for the first successful /state fetch (version
-    // becomes defined); unknown handles are dropped once that table is in.
-    if (!deepLinkHandled.current) {
-      const target = new URLSearchParams(window.location.search).get('dsh-a2a-open')
-      if (target !== null) {
-        const row = state.sessions.find(entry => entry.team === target)
-        if (row !== undefined) {
-          deepLinkHandled.current = true
-          consumeDeepLink()
-          openSession(row.id)
-        } else if (state.version !== undefined) {
-          deepLinkHandled.current = true
-          consumeDeepLink()
-        }
-      } else {
-        deepLinkHandled.current = true
-      }
-    }
-    let channel: BroadcastChannel | undefined
-    if (typeof BroadcastChannel !== 'undefined') {
-      channel = new BroadcastChannel('dsh-a2a')
-      channel.onmessage = (event: MessageEvent) => { onMessage(event.data) }
-    }
-    const onWindowMessage = (event: MessageEvent): void => { onMessage(event.data) }
-    window.addEventListener('message', onWindowMessage)
-    return () => {
-      channel?.close()
-      window.removeEventListener('message', onWindowMessage)
-    }
-    // `state` is intentionally not a dependency: the listener closes over
-    // the render's snapshot and this panel re-renders on every poll, so the
-    // resolution table stays fresh without resubscribing.
-  })
+  // 0.6.10: the receive face of click-to-reach (0.6.7 BroadcastChannel,
+  // 0.6.8 ?dsh-a2a-open deep link) is removed by ruling — 禁止任何跳转，
+  // 全部使用响应式布局. The workbench's 快派 form is the only cross-surface
+  // reach primitive and it stays on the workbench page; this panel's
+  // FeedRow openSession remains (it switches a conversation in place inside
+  // the GUI — no navigation).
 
   const { sessions, activity, inFlight, tasks } = state
 

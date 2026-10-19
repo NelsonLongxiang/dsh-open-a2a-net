@@ -137,43 +137,11 @@ const bench = createWorkbench({
   copy(text) {
     void navigator.clipboard?.writeText(text).catch(() => {})
   },
-  // 0.6.7 L1: the workbench page and the GUI are same-origin tabs in one
-  // browser; a broadcast reaches every listening panel, the GUI's A2A
-  // control resolves the session and calls openSession. No-op when the
-  // browser lacks BroadcastChannel (older jsdom) — the button then hides.
-  openLocal(id) {
-    try {
-      if (typeof BroadcastChannel === 'undefined') return
-      const channel = new BroadcastChannel('dsh-a2a')
-      channel.postMessage({ type: 'dsh-a2a:open-session', id })
-      channel.close()
-    } catch (err) {
-      console.warn('a2a openLocal failed', err)
-    }
-  },
-  // 0.6.8 L2: open the peer's GUI with a ?dsh-a2a-open=<team handle> deep
-  // link. The remote A2A control resolves the handle on load — responsive by
-  // construction (no sender-side timers to suspend on narrow/mobile tabs, no
-  // mount race), and the param survives an auth redirect. The handle — not
-  // a URL — remains the contract, so the remote side stays authoritative
-  // about which session it opens. (0.6.7 did window.open + postMessage
-  // retries, which only worked on desktop tabs that stayed foregrounded.)
-  openRemote(row) {
-    const via = row.via
-    if (via === undefined || via === '') return
-    let target: URL
-    try {
-      target = new URL(via)
-    } catch (err) {
-      console.warn(`a2a openRemote: bad via ${via}`, err)
-      return
-    }
-    target.searchParams.set('dsh-a2a-open', row.team)
-    const win = window.open(target.href, '_blank')
-    if (win === null) {
-      console.warn('a2a openRemote: popup blocked')
-    }
-  },
+  // 0.6.10: the ↗ jump affordances (0.6.7 L1 broadcast / 0.6.8 L2 deep
+  // link) are REMOVED by ruling — 禁止任何跳转，全部使用响应式布局.
+  // The only reach primitive is the inline 快派 form: it works for local
+  // session teams, canvas teams and remote rows alike, and never leaves
+  // this page.
   async canvasOp(action, name, id) {
     // Same control route the planning board's wire uses; the inspector's
     // member writes are one id at a time, so no serial fan-out needed.
