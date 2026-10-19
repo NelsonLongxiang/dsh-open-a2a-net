@@ -40,6 +40,7 @@ const state: StateBody = {
   tasksStaleCount: 1,
   tasksDead: [{ taskId: 'direct-cccccccc', team: 'dsh/99999999', startedAt: NOW - 90_000_000, deadAt: NOW - 80_000_000, reason: 'stale TTL' }],
   archivedCount: 12,
+  archivedSplit: { completed: 9, declined: 2, abandoned: 1 },
   idempotency: { claimsFresh: 368, replays: 2, conflicts: 0 },
   reconcile: { state: 'idle', rows: [{ id: 'session-33333333', error: 'corrupt log: boom', attempts: 3, needsRepair: true }] },
 }
@@ -162,12 +163,35 @@ describe('workbench merged stage (canvas mode)', () => {
 })
 
 describe('workbench panels', () => {
+  it('renders the ledger density strip: stats, archive split, age histogram, team load', () => {
+    const { v } = bench()
+    v.update(state)
+    const pane = v.root.querySelector('.wb-pane')!
+    // Stat chips carry the headline numbers plus their definitions as tooltips.
+    const chips = [...pane.querySelectorAll('.wb-stat')].map(n => ({
+      label: text(n.querySelector('.wb-stat-k')),
+      value: text(n.querySelector('.wb-stat-v')),
+      hint: n.getAttribute('title') ?? '',
+    }))
+    expect(chips.map(c => `${c.label}=${c.value}`)).toEqual([
+      '待回执=2', '陈旧=1', '死信=1', '已归档=12',
+    ])
+    for (const chip of chips) expect(chip.hint.length).toBeGreaterThan(10)
+    // Archive verdict split surfaces when the host sends it.
+    expect(text(pane)).toContain('归档结局')
+    // Age histogram buckets the pending rows (3.7e6ms ≈ 1-6h, 10s ≈ <10m).
+    const bars = [...pane.querySelectorAll('.wb-bar-row')].map(n =>
+      `${text(n.querySelector('.wb-bar-k'))}:${text(n.querySelector('.wb-bar-v'))}`)
+    expect(bars).toEqual(['<10m:1', '10m-1h:0', '1-6h:1', '6-24h:0', '>24h:0'])
+    // Team load ranks the teams holding debt.
+    expect(text(pane)).toContain('债务队 Top2')
+    expect(text(pane)).toContain('dsh/11111111 1')
+  })
+
   it('renders ledger rows and settles a dead letter through the abandon seam', async () => {
     const { v, abandon } = bench()
     v.update(state)
     const pane = v.root.querySelector('.wb-pane')!
-    expect(text(pane.querySelector('.wb-pane-head'))).toContain('待回执 2')
-    expect(text(pane.querySelector('.wb-pane-head'))).toContain('死信 1')
     const rows = [...pane.querySelectorAll('.wb-row-id')].map(n => text(n))
     expect(rows).toContain('direct-aaaaaaaa')
     expect(rows).toContain('direct-cccccccc')

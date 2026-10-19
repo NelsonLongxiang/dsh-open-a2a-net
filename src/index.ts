@@ -1729,6 +1729,19 @@ const reportLoopRing = new Map<string, number[]>()
                 .filter(task => task.status === 'dead')
                 .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt, reason: task.reason ?? 'unspecified' })),
               archivedCount: taskLedger.archive().length,
+              // Ledger density face: the settled archive split by verdict, so
+              // the workbench can say WHICH way those rows settled instead of
+              // just how many. Additive and bounded (outcome vocabulary is a
+              // closed set); rows without an envelope outcome count as
+              // 'unclassified' rather than being dropped.
+              archivedSplit: (() => {
+                const split: Record<string, number> = {}
+                for (const row of taskLedger.archive()) {
+                  const key = row.outcome ?? 'unclassified'
+                  split[key] = (split[key] ?? 0) + 1
+                }
+                return split
+              })(),
               // 0.5.36 observability: the idempotency window aggregate —
               // window occupancy, outcome split, and cumulative claim-verdict
               // counters (the data the UNIQUE-ization decision waits on).

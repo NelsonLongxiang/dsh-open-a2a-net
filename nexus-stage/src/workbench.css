@@ -111,6 +111,24 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-kv-v{word-break:break-all}
 .wb-muted{color:var(--n-ink-muted)}
 
+/* ── Ledger density: stat strip, age histogram, load rows ── */
+.wb-stats{display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 10px}
+.wb-stat{display:inline-flex;align-items:baseline;gap:6px;padding:4px 10px;border-radius:8px;
+  border:1px solid var(--n-border);background:color-mix(in srgb,var(--n-panel) 70%,transparent);cursor:help}
+.wb-stat-k{font-size:11px;color:var(--n-ink-muted)}
+.wb-stat-v{font-family:ui-monospace,Consolas,monospace;font-size:14px;font-weight:600}
+.wb-stat-warn{border-color:var(--n-act)}
+.wb-stat-warn .wb-stat-v{color:var(--n-act)}
+.wb-stat-danger{border-color:var(--n-danger)}
+.wb-stat-danger .wb-stat-v{color:var(--n-danger)}
+.wb-hist{display:flex;flex-direction:column;gap:3px;margin:2px 0 8px;max-width:420px}
+.wb-bar-row{display:flex;align-items:center;gap:8px;font-size:11px}
+.wb-bar-k{color:var(--n-ink-muted);min-width:52px;flex:none;text-align:right}
+.wb-bar-track{flex:1;height:9px;border-radius:4px;overflow:hidden;
+  background:color-mix(in srgb,var(--n-border) 55%,transparent)}
+.wb-bar-fill{display:block;height:100%;border-radius:4px;background:var(--n-accent)}
+.wb-bar-v{font-family:ui-monospace,Consolas,monospace;color:var(--n-ink-muted);min-width:28px}
+
 .nexus-fault{display:none;position:fixed;top:10px;right:12px;z-index:50;max-width:420px;
   font-size:12px;color:#fff;background:#b91c1c;border-radius:8px;padding:6px 10px}
 

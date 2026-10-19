@@ -95,6 +95,8 @@ export interface StateBody {
   readonly tasksStaleCount?: number
   readonly tasksDead?: readonly DeadRow[]
   readonly archivedCount?: number
+  /** Settled-archive split by verdict ('completed' | 'declined' | … | 'abandoned' | 'unclassified'). */
+  readonly archivedSplit?: Readonly<Record<string, number>>
   readonly idempotency?: {
     window?: number
     pending?: number
@@ -147,6 +149,30 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): 
   const node = document.createElement(tag)
   if (className !== undefined) node.className = className
   return node
+}
+
+/** One labelled counter in a pane's stat strip; `title` carries the definition
+ *  (native tooltip — the definition lives with the number it explains). */
+function statChip(label: string, value: number, hint: string, tone?: 'warn' | 'danger'): HTMLElement {
+  const chip = el('span', 'wb-stat')
+  if (tone !== undefined) chip.classList.add(`wb-stat-${tone}`)
+  chip.setAttribute('title', hint)
+  chip.appendChild(el('span', 'wb-stat-k')).textContent = label
+  chip.appendChild(el('span', 'wb-stat-v')).textContent = String(value)
+  return chip
+}
+
+/** One proportional bar: label · track · count. Cheap density for a histogram. */
+function barRow(parent: HTMLElement, label: string, count: number, max: number): void {
+  const row = el('div', 'wb-bar-row')
+  row.appendChild(el('span', 'wb-bar-k')).textContent = label
+  const track = el('span', 'wb-bar-track')
+  const fill = el('span', 'wb-bar-fill')
+  fill.style.width = `${max > 0 ? Math.max(count > 0 ? 2 : 0, Math.round((count / max) * 100)) : 0}%`
+  track.appendChild(fill)
+  row.appendChild(track)
+  row.appendChild(el('span', 'wb-bar-v')).textContent = String(count)
+  parent.appendChild(row)
 }
 
 function textRow(parent: HTMLElement, label: string, value: string): void {
@@ -420,6 +446,34 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   }
 
   // ── Ledger pane ──
+  /** Age buckets for debt: what the ledger is actually made of, at a glance.
+   *  Boundaries mirror the C-ruling split (1h = settleable→conversational). */
+  const AGE_BUCKETS: ReadonlyArray<{ label: string; maxMs: number }> = [
+    { label: '<10m', maxMs: 10 * 60_000 },
+    { label: '10m-1h', maxMs: 60 * 60_000 },
+    { label: '1-6h', maxMs: 6 * 60 * 60_000 },
+    { label: '6-24h', maxMs: 24 * 60 * 60_000 },
+    { label: '>24h', maxMs: Number.POSITIVE_INFINITY },
+  ]
+
+  /** Group pending rows by age bucket; returns buckets in age order with counts. */
+  function ageHistogram(rows: readonly PendingRow[], now: number): number[] {
+    const counts = AGE_BUCKETS.map(() => 0)
+    for (const row of rows) {
+      const age = now - row.startedAt
+      const index = AGE_BUCKETS.findIndex(bucket => age < bucket.maxMs)
+      counts[index === -1 ? counts.length - 1 : index]! += 1
+    }
+    return counts
+  }
+
+  /** Top teams by pending-row count, most loaded first (bounded to 5). */
+  function topTeams(rows: readonly PendingRow[]): Array<[string, number]> {
+    const counts = new Map<string, number>()
+    for (const row of rows) counts.set(row.team, (counts.get(row.team) ?? 0) + 1)
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
+  }
+
   function renderLedger(): void {
     const pane = clear(ledgerPane)
     if (last === null) return
@@ -427,10 +481,49 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     const pending = last.tasks ?? []
     const dead = last.tasksDead ?? []
     const stale = last.tasksStaleCount ?? 0
+    const archived = last.archivedCount ?? 0
     sectionCounts.get('ledger')!.textContent = `待 ${pending.length} · 死 ${dead.length}`
-    const head = el('div', 'wb-pane-head')
-    head.textContent = `待回执 ${pending.length}（陈旧 ${stale}） · 死信 ${dead.length} · 已归档 ${last.archivedCount ?? 0}`
-    pane.appendChild(head)
+
+    // Stat strip: the four headline numbers, each carrying its definition.
+    const stats = el('div', 'wb-stats')
+    stats.appendChild(statChip('待回执', pending.length,
+      '等待回执的任务（pending）。其中「陈旧」= 超过 1 小时仍未回执，或本就无回执债（fire-and-forget）'))
+    stats.appendChild(statChip('陈旧', stale,
+      '陈旧尾：≥1h 无回执的旧账 + receiptExpected:false 的免回执行。它们到 24h TTL 自动转死信，不算可催办债务',
+      stale > 0 ? 'warn' : undefined))
+    stats.appendChild(statChip('死信', dead.length,
+      '超过 24h TTL 仍未结算，或目标早已离开。需清账（abandon）才能移出',
+      dead.length > 0 ? 'danger' : undefined))
+    stats.appendChild(statChip('已归档', archived,
+      '已结算并留档的任务（回执已关联）。用于审计，不再占待回执名额'))
+    pane.appendChild(stats)
+
+    // Archive verdict split: how those settled rows actually ended.
+    const split = last.archivedSplit
+    if (archived > 0 && split !== undefined) {
+      const entries = Object.entries(split).sort((a, b) => b[1] - a[1])
+      if (entries.length > 0) {
+        const line = el('div', 'wb-pane-head')
+        line.textContent = `归档结局 · ${entries.map(([key, count]) => `${key} ${count}`).join(' · ')}`
+        pane.appendChild(line)
+      }
+    }
+
+    if (pending.length > 0) {
+      // Age histogram + team load: WHERE the debt sits and how old it is.
+      const counts = ageHistogram(pending, now)
+      const max = Math.max(...counts, 1)
+      const hist = el('div', 'wb-hist')
+      for (let i = 0; i < AGE_BUCKETS.length; i += 1) {
+        barRow(hist, AGE_BUCKETS[i]!.label, counts[i]!, max)
+      }
+      pane.appendChild(hist)
+      const teams = topTeams(pending)
+      const teamLine = el('div', 'wb-pane-head')
+      teamLine.textContent = `债务队 Top${teams.length} · ${teams.map(([team, count]) => `${team} ${count}`).join(' · ')}`
+      pane.appendChild(teamLine)
+    }
+
     const table = el('div', 'wb-table')
     for (const row of pending) {
       const line = el('div', 'wb-row')
