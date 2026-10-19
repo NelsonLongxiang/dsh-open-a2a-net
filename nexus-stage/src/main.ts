@@ -137,6 +137,50 @@ const bench = createWorkbench({
   copy(text) {
     void navigator.clipboard?.writeText(text).catch(() => {})
   },
+  // 0.6.7 L1: the workbench page and the GUI are same-origin tabs in one
+  // browser; a broadcast reaches every listening panel, the GUI's A2A
+  // control resolves the session and calls openSession. No-op when the
+  // browser lacks BroadcastChannel (older jsdom) — the button then hides.
+  openLocal(id) {
+    try {
+      if (typeof BroadcastChannel === 'undefined') return
+      const channel = new BroadcastChannel('dsh-a2a')
+      channel.postMessage({ type: 'dsh-a2a:open-session', id })
+      channel.close()
+    } catch (err) {
+      console.warn('a2a openLocal failed', err)
+    }
+  },
+  // 0.6.7 L2: open the peer's GUI at its root and keep posting the team
+  // handle until the remote A2A control mounts (up to ~6s). The handle —
+  // not a URL — is the contract, so the remote side stays authoritative
+  // about which session it opens. postMessage targets the exact origin.
+  openRemote(row) {
+    const via = row.via
+    if (via === undefined || via === '') return
+    let target: URL
+    try {
+      target = new URL(via)
+    } catch (err) {
+      console.warn(`a2a openRemote: bad via ${via}`, err)
+      return
+    }
+    const win = window.open(target.href, '_blank')
+    if (win === null) {
+      console.warn('a2a openRemote: popup blocked')
+      return
+    }
+    const message = { type: 'dsh-a2a:open-session', team: row.team }
+    const startedAt = Date.now()
+    const post = (): void => {
+      try { win.postMessage(message, target.origin) } catch { /* retry next tick */ }
+    }
+    post()
+    const timer = setInterval(() => {
+      if (win.closed || Date.now() - startedAt > 6_000) { clearInterval(timer); return }
+      post()
+    }, 500)
+  },
   async canvasOp(action, name, id) {
     // Same control route the planning board's wire uses; the inspector's
     // member writes are one id at a time, so no serial fan-out needed.

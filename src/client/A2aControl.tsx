@@ -193,6 +193,42 @@ export function A2aControl({ wide, t, openSession }: A2aControlProps) {
     return () => { document.removeEventListener('pointerdown', onPointerDown) }
   }, [open])
 
+  useEffect(() => {
+    // 0.6.7 click-to-reach, receive face. The workbench directory's ↗ jumps
+    // here in two shapes: L1 — the same browser's workbench tab broadcasts
+    // {type:'dsh-a2a:open-session', id} on the 'dsh-a2a' BroadcastChannel;
+    // L2 — a peer host's workbench opened this GUI in a new tab and posts
+    // {…, team} at this window until we mount. The team handle is resolved
+    // against the freshest session rows this panel already polls.
+    const stateRef = { current: state }
+    const openBy = (id: unknown, team: unknown): void => {
+      if (typeof id === 'string' && id !== '') { openSession(id); return }
+      if (typeof team === 'string' && team !== '') {
+        const row = stateRef.current.sessions.find(entry => entry.team === team)
+        if (row !== undefined) openSession(row.id)
+      }
+    }
+    const onMessage = (data: unknown): void => {
+      if (data === null || typeof data !== 'object') return
+      const message = data as { type?: unknown; id?: unknown; team?: unknown }
+      if (message.type === 'dsh-a2a:open-session') openBy(message.id, message.team)
+    }
+    let channel: BroadcastChannel | undefined
+    if (typeof BroadcastChannel !== 'undefined') {
+      channel = new BroadcastChannel('dsh-a2a')
+      channel.onmessage = (event: MessageEvent) => { onMessage(event.data) }
+    }
+    const onWindowMessage = (event: MessageEvent): void => { onMessage(event.data) }
+    window.addEventListener('message', onWindowMessage)
+    return () => {
+      channel?.close()
+      window.removeEventListener('message', onWindowMessage)
+    }
+    // `state` is intentionally not a dependency: the listener closes over
+    // the render's snapshot and this panel re-renders on every poll, so the
+    // resolution table stays fresh without resubscribing.
+  })
+
   const { sessions, activity, inFlight, tasks } = state
 
   return (

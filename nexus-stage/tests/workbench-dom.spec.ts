@@ -15,9 +15,11 @@ function bench() {
   const abandon = vi.fn(async () => true)
   const copy = vi.fn()
   const canvasOp = vi.fn(async () => true)
-  const v = createWorkbench({ now: () => NOW, abandon, copy, canvasOp })
+  const openLocal = vi.fn()
+  const openRemote = vi.fn()
+  const v = createWorkbench({ now: () => NOW, abandon, copy, canvasOp, openLocal, openRemote })
   document.body.appendChild(v.root)
-  return { v, abandon, copy, canvasOp }
+  return { v, abandon, copy, canvasOp, openLocal, openRemote }
 }
 
 const state: StateBody = {
@@ -31,7 +33,7 @@ const state: StateBody = {
     { id: 'nel157/a1b2c3d4', team: 'nel157/a1b2c3d4', remote: true },
   ] }] },
   peers: [{ url: 'http://192.168.3.157:13080', score: 687700 }],
-  remote: [{ team: 'dsh-host-ca0c0a8d', name: 'remote-host', origin: 'node 192.168.3.157', canvasTeams: ['dsh/canvas/ygl'] }],
+  remote: [{ team: 'dsh-host-ca0c0a8d', name: 'remote-host', origin: 'node 192.168.3.157', via: 'http://192.168.3.157:13080', canvasTeams: ['dsh/canvas/ygl'] }],
   activity: [
     { ts: NOW - 60_000, dir: 'out', team: 'dsh/11111111', peer: '192.168.3.157:13080', ok: true },
     { ts: NOW - 120_000, dir: 'in', team: 'dsh/22222222', peer: '192.168.3.157:13080', ok: false },
@@ -369,6 +371,48 @@ describe('directory search & filters (0.6.6)', () => {
     // The cold session has no canvas membership → no badge node at all.
     const cold = items.find(n => text(n).includes('cold-02'))!
     expect(cold.querySelector('.wb-item-badge')).toBeNull()
+  })
+})
+
+describe('directory click-to-reach (0.6.7)', () => {
+  it('local session rows open through openLocal without selecting the row', () => {
+    const { v, openLocal } = bench()
+    v.update(state)
+    const items = [...v.root.querySelectorAll('.wb-directory .wb-item')]
+    const scout = items.find(n => text(n).includes('scout-01'))!
+    const jump = scout.querySelector('.wb-item-open') as HTMLElement
+    expect(jump).not.toBeNull()
+    expect(jump.getAttribute('title')).toContain('GUI')
+    jump.click()
+    expect(openLocal).toHaveBeenCalledWith('session-11111111-aaaa')
+    // stopPropagation: the jump is not a selection — the inspector stays shut.
+    expect(v.root.querySelector('.wb-inspector.is-open')).toBeNull()
+    const cold = items.find(n => text(n).includes('cold-02'))!
+    ;(cold.querySelector('.wb-item-open') as HTMLElement).click()
+    expect(openLocal).toHaveBeenCalledWith('session-22222222-bbbb')
+  })
+
+  it('remote rows open through openRemote only when the row carries a via URL', () => {
+    const { v, openRemote } = bench()
+    v.update(state)
+    const remote = [...v.root.querySelectorAll('.wb-directory .wb-item')].find(n => text(n).includes('remote-host'))!
+    const jump = remote.querySelector('.wb-item-open') as HTMLElement
+    expect(jump).not.toBeNull()
+    expect(jump.getAttribute('title')).toContain('http://192.168.3.157:13080')
+    jump.click()
+    expect(openRemote).toHaveBeenCalledTimes(1)
+    expect(openRemote.mock.calls[0]![0]).toMatchObject({ team: 'dsh-host-ca0c0a8d', via: 'http://192.168.3.157:13080' })
+    // A remote row learned without a URL gets no affordance at all.
+    v.update({ ...state, remote: [{ team: 'dsh-host-00000000', name: 'via-less' }] })
+    const viaLess = [...v.root.querySelectorAll('.wb-directory .wb-item')].find(n => text(n).includes('via-less'))!
+    expect(viaLess.querySelector('.wb-item-open')).toBeNull()
+  })
+
+  it('the jump affordance hides entirely when the deps are absent', () => {
+    const v = createWorkbench({ now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(), canvasOp: vi.fn(async () => true) })
+    document.body.appendChild(v.root)
+    v.update(state)
+    expect(v.root.querySelector('.wb-directory .wb-item-open')).toBeNull()
   })
 })
 

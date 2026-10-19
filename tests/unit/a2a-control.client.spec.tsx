@@ -222,4 +222,41 @@ describe('A2aControl (activity feed)', () => {
     expect(screen.queryByPlaceholderText(/Search sessions/)).toBeNull()
     expect(screen.queryByText('Canvas teams')).toBeNull()
   })
+
+  // 0.6.7 click-to-reach receive face: the workbench's ↗ jumps open a
+  // session here. L1 — same-browser broadcast; L2 — cross-origin window
+  // message carrying the team handle for local resolution.
+  it('opens a session from an L1 workbench broadcast on the dsh-a2a channel', async () => {
+    class MockBroadcastChannel {
+      static instances: MockBroadcastChannel[] = []
+      public onmessage: ((event: { data: unknown }) => void) | null = null
+      public constructor(public readonly name: string) { MockBroadcastChannel.instances.push(this) }
+      public postMessage = vi.fn()
+      public close(): void {}
+    }
+    vi.stubGlobal('BroadcastChannel', MockBroadcastChannel)
+    mountControl()
+    await screen.findByText('A2A network') // mounted, listeners bound
+    const channel = MockBroadcastChannel.instances.at(-1)!
+    expect(channel.name).toBe('dsh-a2a')
+    channel.onmessage?.({ data: { type: 'dsh-a2a:open-session', id: 'agent-1' } })
+    expect(openSession).toHaveBeenCalledWith('agent-1')
+    // Foreign shapes are ignored, not misrouted.
+    channel.onmessage?.({ data: { type: 'something-else', id: 'x' } })
+    channel.onmessage?.({ data: 'plain string' })
+    expect(openSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('resolves an L2 cross-origin team handle against local sessions, ignoring strangers', async () => {
+    stateActivity = [{ ts: Date.now(), dir: 'out', team: 'dsh/agent-1', peer: '', ok: true }]
+    mountControl()
+    openPopover()
+    // An activity row for the same team proves the state poll has landed
+    // and the re-subscribed listener carries the session table.
+    await screen.findByText('dsh/agent-1')
+    fireEvent(window, new MessageEvent('message', { data: { type: 'dsh-a2a:open-session', team: 'dsh/agent-1' } }))
+    expect(openSession).toHaveBeenCalledWith('agent-1')
+    fireEvent(window, new MessageEvent('message', { data: { type: 'dsh-a2a:open-session', team: 'stranger/0123abcd' } }))
+    expect(openSession).toHaveBeenCalledTimes(1)
+  })
 })

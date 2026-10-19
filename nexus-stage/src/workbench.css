@@ -75,7 +75,12 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-filter.is-active{border-color:var(--n-accent);color:var(--n-ink);
   background:color-mix(in srgb,var(--n-accent) 16%,transparent)}
 .wb-item-badge{flex:none;font-size:10.5px;color:#22d3ee;border:1px solid color-mix(in srgb,#22d3ee 45%,transparent);
-  border-radius:99px;padding:0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:46%}
+  border-radius:99px;padding:0 6px;line-height:17px;white-space:nowrap}
+.wb-item-open{flex:none;margin-left:auto;font-size:12px;line-height:18px;padding:0 6px;border-radius:6px;
+  color:var(--n-accent);cursor:pointer;border:1px solid transparent;white-space:nowrap}
+.wb-item-open:hover{border-color:var(--n-accent);
+  background:color-mix(in srgb,var(--n-accent) 14%,transparent)}
+.wb-item-label{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:46%}
 
 /* ── Canvas member management (inspector, 0.6.6) ── */
 .wb-member-row{display:flex;align-items:center;gap:8px;padding:3px 2px;border-radius:6px}

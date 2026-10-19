@@ -147,6 +147,14 @@ export interface WorkbenchDeps {
   canvasOp(action: 'add-member' | 'remove-member', name: string, id: string): Promise<boolean>
   /** Copy text to the clipboard; drafts are pasteable task briefs. */
   copy(text: string): void
+  /** Open a local session in the host GUI (0.6.7 L1): the workbench page
+   *  broadcasts on the 'dsh-a2a' channel; the GUI's A2A panel receives and
+   *  calls openSession. Optional — without it the row-end ↗ hides. */
+  openLocal?(id: string): void
+  /** Open a remote team's home GUI at that session (0.6.7 L2): opens the
+   *  peer GUI tab and posts the team handle until the remote panel loads.
+   *  Optional — without it the remote ↗ hides. */
+  openRemote?(row: RemoteRow): void
   /** The spatial planning board. Optional: without it the shell stays in
    *  data mode permanently. `available()` mirrors the host's canvas face
    *  (state.canvas !== undefined) and gates canvas mode. */
@@ -483,6 +491,19 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       chip.title = `画布队：${teams.join(' · ')}`
       item.appendChild(chip)
     }
+    /** 0.6.7 click-to-reach: the row-end ↗ jumps into the conversation. */
+    const jump = (title: string, onJump: () => void): HTMLElement => {
+      const chip = el('span', 'wb-item-open')
+      chip.setAttribute('role', 'button')
+      chip.tabIndex = 0
+      chip.textContent = '↗'
+      chip.title = title
+      chip.addEventListener('click', ev => { ev.stopPropagation(); onJump() })
+      chip.addEventListener('keydown', ev => {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.stopPropagation(); onJump() }
+      })
+      return chip
+    }
     const section = (label: string, count: number): HTMLElement => {
       const head = el('div', 'wb-side-head')
       head.textContent = `${label} · ${count}`
@@ -501,6 +522,9 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         item.appendChild(el('span', 'wb-dot wb-dot-live')).textContent = '●'
         item.appendChild(el('span', 'wb-item-label')).textContent = displayName(row)
         badges(item, row.canvasTeams)
+        if (deps.openLocal !== undefined) {
+          item.appendChild(jump('在 GUI 会话页打开', () => deps.openLocal?.(row.id)))
+        }
         item.addEventListener('click', () => select({ kind: 'session', row }))
         box.appendChild(item)
       }
@@ -513,6 +537,9 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         item.appendChild(el('span', 'wb-dot wb-dot-cold')).textContent = '○'
         item.appendChild(el('span', 'wb-item-label')).textContent = displayName(row)
         badges(item, row.canvasTeams)
+        if (deps.openLocal !== undefined) {
+          item.appendChild(jump('在 GUI 会话页打开', () => deps.openLocal?.(row.id)))
+        }
         item.addEventListener('click', () => select({ kind: 'session', row }))
         box.appendChild(item)
       }
@@ -554,6 +581,9 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         item.appendChild(el('span', 'wb-dot wb-dot-remote')).textContent = '◇'
         item.appendChild(el('span', 'wb-item-label')).textContent = displayName(row)
         badges(item, row.canvasTeams)
+        if (deps.openRemote !== undefined && row.via !== undefined && row.via !== '') {
+          item.appendChild(jump(`在对端 GUI 打开（${row.via}）`, () => deps.openRemote?.(row)))
+        }
         item.addEventListener('click', () => select({ kind: 'remote', row }))
         box.appendChild(item)
       }
