@@ -55,6 +55,10 @@ node $YGL verify run spec_bae507ea0520 --db verify/snapshot.sqlite --submission 
 + V11–V14 ERROR（工作树 .claude/worktrees 的 pnpm junction 环致 walk ELOOP）——
 后者促成 submission 面改为 **git ls-files 提交树导出**（语义也更对：提交物≠工作树）。
 
+提交验证器（72c43d2）并重采证据后：**14/14 overall PASS**
+（run_695a106d18d6ca61：四门禁 exit 0、3081 探针 0.6.13 peers 7、
+candidate_on_3081 ✓ unpublished ✓ worktree_clean ✓、提交树 249 文件全过）。
+
 ## 何时跑
 
 - 每个候选版本完成 `pnpm verify` 并部署 3081 之后、报给用户校验之前——
