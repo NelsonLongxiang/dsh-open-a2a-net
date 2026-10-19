@@ -151,10 +151,13 @@ const bench = createWorkbench({
       console.warn('a2a openLocal failed', err)
     }
   },
-  // 0.6.7 L2: open the peer's GUI at its root and keep posting the team
-  // handle until the remote A2A control mounts (up to ~6s). The handle —
-  // not a URL — is the contract, so the remote side stays authoritative
-  // about which session it opens. postMessage targets the exact origin.
+  // 0.6.8 L2: open the peer's GUI with a ?dsh-a2a-open=<team handle> deep
+  // link. The remote A2A control resolves the handle on load — responsive by
+  // construction (no sender-side timers to suspend on narrow/mobile tabs, no
+  // mount race), and the param survives an auth redirect. The handle — not
+  // a URL — remains the contract, so the remote side stays authoritative
+  // about which session it opens. (0.6.7 did window.open + postMessage
+  // retries, which only worked on desktop tabs that stayed foregrounded.)
   openRemote(row) {
     const via = row.via
     if (via === undefined || via === '') return
@@ -165,21 +168,11 @@ const bench = createWorkbench({
       console.warn(`a2a openRemote: bad via ${via}`, err)
       return
     }
+    target.searchParams.set('dsh-a2a-open', row.team)
     const win = window.open(target.href, '_blank')
     if (win === null) {
       console.warn('a2a openRemote: popup blocked')
-      return
     }
-    const message = { type: 'dsh-a2a:open-session', team: row.team }
-    const startedAt = Date.now()
-    const post = (): void => {
-      try { win.postMessage(message, target.origin) } catch { /* retry next tick */ }
-    }
-    post()
-    const timer = setInterval(() => {
-      if (win.closed || Date.now() - startedAt > 6_000) { clearInterval(timer); return }
-      post()
-    }, 500)
   },
   async canvasOp(action, name, id) {
     // Same control route the planning board's wire uses; the inspector's

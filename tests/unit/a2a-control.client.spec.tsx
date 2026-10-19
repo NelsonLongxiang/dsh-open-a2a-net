@@ -259,4 +259,28 @@ describe('A2aControl (activity feed)', () => {
     fireEvent(window, new MessageEvent('message', { data: { type: 'dsh-a2a:open-session', team: 'stranger/0123abcd' } }))
     expect(openSession).toHaveBeenCalledTimes(1)
   })
+
+  // 0.6.8: the L2 jump is a ?dsh-a2a-open=<handle> deep link — responsive by
+  // construction, no sender-side timers. The panel resolves it once per page
+  // load, waits for the first /state fetch, strips the param, and drops
+  // handles it does not know.
+  it('opens the session named by the ?dsh-a2a-open deep link and strips the param', async () => {
+    stateVersion = '0.6.8'
+    window.history.replaceState(null, '', '/?dsh-a2a-open=dsh%2Fagent-1&keep=1')
+    mountControl()
+    await waitFor(() => { expect(openSession).toHaveBeenCalledWith('agent-1') })
+    // Only its own key is consumed; other query params survive.
+    expect(window.location.search).toBe('?keep=1')
+    // Once per page load: later re-renders do not re-fire it.
+    expect(openSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops a ?dsh-a2a-open deep link whose handle is unknown once state lands', async () => {
+    stateVersion = '0.6.8'
+    window.history.replaceState(null, '', '/?dsh-a2a-open=stranger%2F0123abcd')
+    mountControl()
+    await screen.findByText('A2A network')
+    await waitFor(() => { expect(window.location.search).toBe('') })
+    expect(openSession).not.toHaveBeenCalled()
+  })
 })
