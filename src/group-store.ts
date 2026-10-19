@@ -3,6 +3,12 @@
  * session listing, stored under the a2a home so they survive restarts and
  * follow the node (not the browser). Plain JSON, one writer (the control
  * routes), read fresh by the state route.
+ *
+ * @deprecated 0.6.6 — the unified team model supersedes manual grouping:
+ * canvas teams are the human-assigned grouping face and remote rows already
+ * cluster by publishing host (`origin`). The store stays readable so old
+ * panels keep working, but it is not developed further; use canvas teams
+ * for anything new.
  * @module @nelsonlongxiang/dsh-open-a2a-net/group-store
  */
 

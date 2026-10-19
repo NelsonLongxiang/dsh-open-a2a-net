@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { CanvasStore, CANVAS_MEMBER_CAP, CANVAS_TEAM_CAP } from '../../src/canvas-store.ts'
+import { CanvasStore, CANVAS_MEMBER_CAP, CANVAS_TEAM_CAP, isRemoteMemberRef, validRemoteMemberRef } from '../../src/canvas-store.ts'
 
 function tmpFile(): string {
   return join(mkdtempSync(join(tmpdir(), 'a2a-canvas-')), 'a2a', 'canvas.json')
@@ -114,5 +114,58 @@ describe('CanvasStore', () => {
     store.create('alpha')
     store.addMember('alpha', 'session-a')
     expect(store.membersOf('alpha')).toEqual(['session-a'])
+  })
+
+  it('remote member refs ride alongside local ids, order intact', () => {
+    const store = new CanvasStore(tmpFile())
+    store.create('alpha')
+    expect(store.addMember('alpha', 'nel157/a1b2c3d4')).toBe(true)
+    expect(store.addMember('alpha', 'session-aaa')).toBe(true)
+    expect(store.addMember('alpha', 'other-node/import-deadbeef')).toBe(true)
+    expect(store.membersOf('alpha')).toEqual(['nel157/a1b2c3d4', 'session-aaa', 'other-node/import-deadbeef'])
+    expect(store.remoteMembersOf('alpha')).toEqual(['nel157/a1b2c3d4', 'other-node/import-deadbeef'])
+    expect(store.teamsOf('nel157/a1b2c3d4')).toEqual(['alpha'])
+  })
+
+  it('isRemoteMemberRef: local ids never carry a slash, handles always do', () => {
+    expect(isRemoteMemberRef('session-ec4ce7f8-a29a')).toBe(false)
+    expect(isRemoteMemberRef('import-deadbeef')).toBe(false)
+    expect(isRemoteMemberRef('nel157/a1b2c3d4')).toBe(true)
+    expect(isRemoteMemberRef('dsh/canvas/deep')).toBe(true)
+  })
+
+  it('validRemoteMemberRef gates shape: needs segments, no whitespace, no edge or doubled slashes', () => {
+    expect(validRemoteMemberRef('nel157/a1b2c3d4')).toBe(true)
+    expect(validRemoteMemberRef('z/a/b')).toBe(true)
+    expect(validRemoteMemberRef('/a1b2c3d4')).toBe(false)
+    expect(validRemoteMemberRef('nel157/')).toBe(false)
+    expect(validRemoteMemberRef('nel157//a1')).toBe(false)
+    expect(validRemoteMemberRef('nel 157/a1')).toBe(false)
+    expect(validRemoteMemberRef(' nel157/a1')).toBe(false)
+    expect(validRemoteMemberRef('session-plain')).toBe(false)
+  })
+
+  it('remote refs persist and restore verbatim alongside local ids', () => {
+    const path = tmpFile()
+    const first = new CanvasStore(path)
+    first.create('alpha')
+    first.addMember('alpha', 'nel157/a1b2c3d4')
+    first.addMember('alpha', 'session-b')
+    const second = new CanvasStore(path)
+    expect(second.membersOf('alpha')).toEqual(['nel157/a1b2c3d4', 'session-b'])
+    expect(second.remoteMembersOf('alpha')).toEqual(['nel157/a1b2c3d4'])
+  })
+
+  it('removeMember drops a remote ref like a local id; dropMember purges refs from every team', () => {
+    const store = new CanvasStore(tmpFile())
+    store.create('alpha')
+    store.create('beta')
+    store.addMember('alpha', 'nel157/a1b2c3d4')
+    store.addMember('beta', 'nel157/a1b2c3d4')
+    expect(store.removeMember('alpha', 'nel157/a1b2c3d4')).toBe(true)
+    expect(store.membersOf('alpha')).toEqual([])
+    expect(store.membersOf('beta')).toEqual(['nel157/a1b2c3d4'])
+    store.dropMember('nel157/a1b2c3d4')
+    expect(store.membersOf('beta')).toEqual([])
   })
 })

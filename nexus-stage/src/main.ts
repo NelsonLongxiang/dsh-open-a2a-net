@@ -107,11 +107,16 @@ async function postNetworkJoin(action: 'join' | 'leave', id: string): Promise<bo
 let lampState: LampState = 'idle'
 let canvasFace = false
 let lastLayoutJson: string | undefined
+/** True once any layout answer (saved doc or an explicit null) has been
+ * seen; the board build waits for that answer on the very first poll. */
+let layoutSeen = false
 
+/** Fetch the persisted layout; throws on transport failure so the poll can
+ * hold the board build instead of silently building on ring seats. */
 async function fetchLayout(): Promise<unknown> {
-  const r = await fetch('/__dsh_a2a/canvas-layout', { cache: 'no-store' })
-    .then(async (res) => await res.json() as { layout?: unknown }).catch(() => undefined)
-  return r?.layout
+  const res = await fetch('/__dsh_a2a/canvas-layout', { cache: 'no-store' })
+  if (!res.ok) throw new Error(`/__dsh_a2a/canvas-layout ${res.status}`)
+  return ((await res.json()) as { layout?: unknown }).layout ?? null
 }
 
 // ─── The workbench ───
@@ -131,6 +136,23 @@ const bench = createWorkbench({
   },
   copy(text) {
     void navigator.clipboard?.writeText(text).catch(() => {})
+  },
+  async canvasOp(action, name, id) {
+    // Same control route the planning board's wire uses; the inspector's
+    // member writes are one id at a time, so no serial fan-out needed.
+    try {
+      const res = await fetch('/__dsh_a2a/canvas', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action, name, id }),
+      })
+      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string }
+      if (res.ok && body.ok !== false) return true
+      console.warn(`canvas ${action} ${name}: ${body.error ?? `HTTP ${res.status}`}`)
+      return false
+    } catch {
+      return false
+    }
   },
   board: {
     root: planning.root,
@@ -161,8 +183,41 @@ async function poll(): Promise<void> {
     const body = (await res.json()) as StateBody
     clearFault()
     bench.update(body)
+    canvasFace = body.canvas !== undefined
 
-    // ── Planning board shares this poll: same state payload, same layout GET. ──
+    // ── The layout answer precedes the first reconcile on purpose ──
+    // The board's first build reads `layoutDoc` for saved positions and
+    // frame rects; every later pass keeps live geometry ("live rect wins").
+    // A layout landing AFTER the build therefore never displaces the ring
+    // seats — the refresh-reset-to-middle bug. Until any answer (doc or
+    // null) has been seen, a failed GET holds the board one poll rather
+    // than building on seats; after that, failures leave the last doc in
+    // place and the poll continues.
+    if (canvasFace) {
+      try {
+        const layout = await fetchLayout()
+        const layoutJson = JSON.stringify(layout ?? null)
+        if (layoutJson !== lastLayoutJson) {
+          lastLayoutJson = layoutJson
+          // Adopt poll-sourced layouts only while nothing is unsaved/in
+          // flight — otherwise a slow GET would revert positions the user
+          // is still dragging.
+          if ((lampState === 'idle' || lampState === 'saved') && !saveLoop.isBusy()) {
+            planning.adoptExternalLayout(layout)
+          }
+        }
+        layoutSeen = true
+      } catch (err) {
+        if (!layoutSeen) {
+          fault(`canvas layout 获取失败：${String(err)}`)
+          return
+        }
+      }
+    } else {
+      layoutSeen = true
+    }
+
+    // ── Planning board shares this poll: same state payload. ──
     // SessionLite needs `joined: boolean` (workbench rows carry `joined?`):
     // tri-state → boolean without losing the unjoined node-list population.
     const allSessions = (body.sessions ?? []).map(s => ({ ...s, joined: s.joined === true }))
@@ -180,18 +235,6 @@ async function poll(): Promise<void> {
         ...(Array.isArray(r.teams) && r.teams.length > 0 ? { teams: r.teams.filter((t): t is string => typeof t === 'string' && t !== '') } : {}),
       }))
     planning.reconcile({ sessions: allSessions, teams, peerCount: peers.length, peers, inFlight, remoteTeams })
-    canvasFace = body.canvas !== undefined
-
-    const layout = canvasFace ? await fetchLayout() : null
-    const layoutJson = JSON.stringify(layout ?? null)
-    if (layoutJson !== lastLayoutJson) {
-      lastLayoutJson = layoutJson
-      // Adopt poll-sourced layouts only while nothing is unsaved/in flight —
-      // otherwise a slow GET would revert positions the user is still dragging.
-      if ((lampState === 'idle' || lampState === 'saved') && !saveLoop.isBusy()) {
-        planning.adoptExternalLayout(layout)
-      }
-    }
   } catch (err) {
     fault(`state 轮询失败：${String(err)}`)
   }

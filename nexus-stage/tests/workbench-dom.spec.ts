@@ -14,20 +14,24 @@ const NOW = 1_700_000_000_000
 function bench() {
   const abandon = vi.fn(async () => true)
   const copy = vi.fn()
-  const v = createWorkbench({ now: () => NOW, abandon, copy })
+  const canvasOp = vi.fn(async () => true)
+  const v = createWorkbench({ now: () => NOW, abandon, copy, canvasOp })
   document.body.appendChild(v.root)
-  return { v, abandon, copy }
+  return { v, abandon, copy, canvasOp }
 }
 
 const state: StateBody = {
   version: '0.6.2',
   sessions: [
-    { id: 'session-11111111-aaaa', label: 'dsh-host-x-11111111', team: 'dsh/11111111', name: 'scout-01', live: true, joined: true, workspace: '/tmp/scout' },
+    { id: 'session-11111111-aaaa', label: 'dsh-host-x-11111111', team: 'dsh/11111111', name: 'scout-01', live: true, joined: true, workspace: '/tmp/scout', canvasTeams: ['dsh/canvas/ygl'] },
     { id: 'session-22222222-bbbb', label: 'dsh-host-x-22222222', team: 'dsh/22222222', name: 'cold-02', live: false, joined: true },
   ],
-  canvas: { teams: [{ name: 'ygl', team: 'dsh/canvas/ygl', members: [{ id: 'session-11111111-aaaa', live: true }] }] },
+  canvas: { teams: [{ name: 'ygl', team: 'dsh/canvas/ygl', members: [
+    { id: 'session-11111111-aaaa', live: true },
+    { id: 'nel157/a1b2c3d4', team: 'nel157/a1b2c3d4', remote: true },
+  ] }] },
   peers: [{ url: 'http://192.168.3.157:13080', score: 687700 }],
-  remote: [{ team: 'dsh-host-ca0c0a8d', name: 'remote-host', origin: 'node 192.168.3.157' }],
+  remote: [{ team: 'dsh-host-ca0c0a8d', name: 'remote-host', origin: 'node 192.168.3.157', canvasTeams: ['dsh/canvas/ygl'] }],
   activity: [
     { ts: NOW - 60_000, dir: 'out', team: 'dsh/11111111', peer: '192.168.3.157:13080', ok: true },
     { ts: NOW - 120_000, dir: 'in', team: 'dsh/22222222', peer: '192.168.3.157:13080', ok: false },
@@ -91,7 +95,7 @@ describe('workbench merged stage (canvas mode)', () => {
     const activate = vi.fn()
     const deactivate = vi.fn()
     const v = createWorkbench({
-      now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(),
+      now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(), canvasOp: vi.fn(async () => true),
       board: { root: boardRoot, activate, deactivate, available: () => available },
     })
     document.body.appendChild(v.root)
@@ -119,7 +123,7 @@ describe('workbench merged stage (canvas mode)', () => {
     const activate = vi.fn()
     const deactivate = vi.fn()
     const v = createWorkbench({
-      now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(),
+      now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(), canvasOp: vi.fn(async () => true),
       board: { root: boardRoot, activate, deactivate, available: () => available },
     })
     document.body.appendChild(v.root)
@@ -287,5 +291,140 @@ describe('workbench panels', () => {
     expect(stats).toContain('claims 368')
     expect(stats).toContain('conflicts 0')
     expect(text(v.root.querySelector('.wb-badge'))).toBe('v0.6.2')
+  })
+})
+
+describe('directory search & filters (0.6.6)', () => {
+  function visibleLabels(v: ReturnType<typeof createWorkbench>): string[] {
+    return [...v.root.querySelectorAll('.wb-directory .wb-item .wb-item-label')].map(n => text(n))
+  }
+
+  it('unified search narrows rows across sections and reports no matches', () => {
+    const { v } = bench()
+    v.update(state)
+    const search = v.root.querySelector('.wb-search') as HTMLInputElement
+    search.value = 'cold'
+    search.dispatchEvent(new Event('input'))
+    let labels = visibleLabels(v)
+    expect(labels.some(l => l.includes('cold-02'))).toBe(true)
+    expect(labels.some(l => l.includes('scout-01'))).toBe(false)
+    // Searching by remote name hits the remote section.
+    search.value = 'remote-host'
+    search.dispatchEvent(new Event('input'))
+    labels = visibleLabels(v)
+    expect(labels.length).toBe(1)
+    expect(labels[0]!).toContain('remote-host')
+    // Nothing matches → explicit empty state, sections hidden.
+    search.value = 'zzz-no-such-thing'
+    search.dispatchEvent(new Event('input'))
+    expect(visibleLabels(v).length).toBe(0)
+    expect(text(v.root.querySelector('.wb-directory'))).toContain('无匹配条目')
+  })
+
+  it('search survives a poll and matches canvas teams and remote handles', () => {
+    const { v } = bench()
+    v.update(state)
+    const search = v.root.querySelector('.wb-search') as HTMLInputElement
+    search.value = 'nel157/a1b2c3d4'
+    search.dispatchEvent(new Event('input'))
+    v.update(state) // a poll must not wipe the input
+    expect((v.root.querySelector('.wb-search') as HTMLInputElement).value).toBe('nel157/a1b2c3d4')
+    const labels = visibleLabels(v)
+    expect(labels.length).toBe(1)
+    expect(labels[0]!).toContain('ygl')
+  })
+
+  it('category chips narrow the directory to one group', () => {
+    const { v } = bench()
+    v.update(state)
+    const chip = (label: string): HTMLElement => {
+      const found = [...v.root.querySelectorAll('.wb-filter')].find(n => text(n) === label)
+      expect(found).toBeDefined()
+      return found as HTMLElement
+    }
+    chip('本机').click()
+    let labels = visibleLabels(v)
+    expect(labels.some(l => l.includes('scout-01'))).toBe(true)
+    expect(labels.some(l => l.includes('cold-02'))).toBe(true)
+    expect(labels.some(l => l.includes('remote-host'))).toBe(false)
+    expect(labels.some(l => l.includes('ygl'))).toBe(false)
+    expect(chip('本机').classList.contains('is-active')).toBe(true)
+    chip('远端').click()
+    labels = visibleLabels(v)
+    expect(labels.length).toBe(1)
+    expect(labels[0]!).toContain('remote-host')
+    chip('全部').click()
+    expect(visibleLabels(v).length).toBe(5) // 2 sessions + 1 canvas + 1 peer + 1 remote
+  })
+
+  it('canvas-team badges annotate session and remote rows', () => {
+    const { v } = bench()
+    v.update(state)
+    const items = [...v.root.querySelectorAll('.wb-directory .wb-item')]
+    const scout = items.find(n => text(n).includes('scout-01'))!
+    expect(text(scout.querySelector('.wb-item-badge'))).toBe('▤ ygl')
+    expect(scout.querySelector('.wb-item-badge')!.getAttribute('title')).toContain('dsh/canvas/ygl')
+    const remote = items.find(n => text(n).includes('remote-host'))!
+    expect(text(remote.querySelector('.wb-item-badge'))).toBe('▤ ygl')
+    // The cold session has no canvas membership → no badge node at all.
+    const cold = items.find(n => text(n).includes('cold-02'))!
+    expect(cold.querySelector('.wb-item-badge')).toBeNull()
+  })
+})
+
+describe('canvas inspector member management (0.6.6)', () => {
+  function openTeam(v: ReturnType<typeof createWorkbench>): HTMLElement {
+    const item = [...v.root.querySelectorAll('.wb-item-label')].find(n => text(n).includes('ygl'))!
+    item.click()
+    return v.root.querySelector('.wb-inspector .wb-card') as HTMLElement
+  }
+
+  it('lists members with local/remote dots and removes through canvasOp', () => {
+    const { v, canvasOp } = bench()
+    v.update(state)
+    const card = openTeam(v)
+    const rows = [...card.querySelectorAll('.wb-member-row')]
+    expect(rows.length).toBe(2)
+    expect(text(rows[0]!.querySelector('.wb-member-dot'))).toContain('● 现场')
+    expect(text(rows[1]!.querySelector('.wb-member-dot'))).toContain('◇ 远端')
+    // Local member shows the session label, remote shows the raw handle.
+    expect(text(rows[0]!.querySelector('.wb-member-label'))).toContain('scout-01')
+    expect(text(rows[1]!.querySelector('.wb-member-label'))).toBe('nel157/a1b2c3d4')
+    ;([...rows[0]!.querySelectorAll('button')].find(b => text(b) === '移除') as HTMLElement).click()
+    expect(canvasOp).toHaveBeenCalledWith('remove-member', 'ygl', 'session-11111111-aaaa')
+  })
+
+  it('adds members by picker (local session) and by manual remote handle', async () => {
+    const { v, canvasOp } = bench()
+    v.update(state)
+    const card = openTeam(v)
+    const form = card.querySelector('.wb-member-add') as HTMLFormElement
+    const pick = form.querySelector('.wb-member-pick') as HTMLSelectElement
+    const manual = form.querySelector('.wb-member-manual') as HTMLInputElement
+    // Existing members are not pickable; the cold session is.
+    const values = [...pick.options].map(o => o.value)
+    expect(values).not.toContain('session-11111111-aaaa')
+    expect(values).toContain('session-22222222-bbbb')
+    expect(values).toContain('dsh-host-ca0c0a8d')
+    pick.value = 'session-22222222-bbbb'
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(canvasOp).toHaveBeenCalledWith('add-member', 'ygl', 'session-22222222-bbbb'))
+    // Manual handle wins over the picker when filled.
+    manual.value = 'nel85/9abc1234'
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(canvasOp).toHaveBeenCalledWith('add-member', 'ygl', 'nel85/9abc1234'))
+    expect(manual.value).toBe('') // cleared on success
+  })
+
+  it('add-member inputs survive polls (draftForm trick)', () => {
+    const { v } = bench()
+    v.update(state)
+    const card = openTeam(v)
+    const manual = card.querySelector('.wb-member-manual') as HTMLInputElement
+    manual.value = 'nel85/9abc1234'
+    v.update(state) // a poll must not rebuild the form
+    const manualAfter = v.root.querySelector('.wb-member-manual') as HTMLInputElement
+    expect(manualAfter.value).toBe('nel85/9abc1234')
+    expect(manualAfter).toBe(manual) // same node re-mounted, not rebuilt
   })
 })

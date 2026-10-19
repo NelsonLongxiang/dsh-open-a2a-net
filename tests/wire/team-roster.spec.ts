@@ -54,7 +54,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     wakeReconcileIntervalMs: 60_000,
     wakeReconcileBackoffBaseMs: 5_000,
     wakeReconcileMaxBackoffMs: 600_000,
-    teamJoinAllowlist: ['dsh/canvas/*'],
+    teamJoinAllowlist: ['dsh/review-gate'],
     // teamScopeRouting rides the schema default (phase-2: true) — the
     // helper must not pin the old default over it.
     stateColdRowsTtlMs: 5_000,
@@ -171,9 +171,9 @@ describe('a2a_team_join / a2a_team_leave tools', () => {
     const refused = await join?.execute({ team: 'dsh/private-ops', id: 'agent-1' }, {}) as { ok: boolean; error?: string }
     expect(refused?.ok).toBe(false)
     expect(refused?.error).toContain('teamJoinAllowlist')
-    const ok = await join?.execute({ team: 'dsh/canvas/review-gate', id: 'agent-1' }, {}) as { ok: boolean; teams?: string[] }
+    const ok = await join?.execute({ team: 'dsh/review-gate', id: 'agent-1' }, {}) as { ok: boolean; teams?: string[] }
     expect(ok?.ok).toBe(true)
-    expect(ok?.teams).toEqual(['dsh/canvas/review-gate'])
+    expect(ok?.teams).toEqual(['dsh/review-gate'])
     const state = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as {
       registry: {
         teams: Array<{ team: string; members: string[]; live: number }>
@@ -181,18 +181,30 @@ describe('a2a_team_join / a2a_team_leave tools', () => {
         teamAudit: Array<{ action: string; team: string; id: string; ok: boolean }>
       }
     }
-    expect(state.registry.teams).toEqual([{ team: 'dsh/canvas/review-gate', members: ['agent-1'], live: 1 }])
-    expect(state.registry.nodes.find(node => node.id === 'agent-1')).toMatchObject({ teams: ['dsh/canvas/review-gate'], zone: 'dsh' })
+    expect(state.registry.teams).toEqual([{ team: 'dsh/review-gate', members: ['agent-1'], live: 1 }])
+    expect(state.registry.nodes.find(node => node.id === 'agent-1')).toMatchObject({ teams: ['dsh/review-gate'], zone: 'dsh' })
     expect(state.registry.teamAudit).toHaveLength(2)
     expect(state.registry.teamAudit[0]).toMatchObject({ action: 'join', team: 'dsh/private-ops', id: 'agent-1', ok: false })
     expect(state.registry.teamAudit[0]?.reason).toContain('teamJoinAllowlist')
-    expect(state.registry.teamAudit[1]).toMatchObject({ action: 'join', team: 'dsh/canvas/review-gate', id: 'agent-1', ok: true })
+    expect(state.registry.teamAudit[1]).toMatchObject({ action: 'join', team: 'dsh/review-gate', id: 'agent-1', ok: true })
     const card = JSON.parse(await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).text()) as {
       teamMemberships?: Array<{ node: string; team: string }>
     }
     expect(card.teamMemberships).toHaveLength(1)
-    expect(card.teamMemberships?.[0]?.team).toBe('dsh/canvas/review-gate')
+    expect(card.teamMemberships?.[0]?.team).toBe('dsh/review-gate')
     expect(card.teamMemberships?.[0]?.node).toBe('dsh/agent-1')
+    await ctx.fiber.dispose()
+  })
+
+  it('refuses canvas-team names with workbench guidance (human-assigned, 0.6.6)', async () => {
+    const { ctx, join } = await mounted({ teamJoinAllowlist: ['*'] })
+    const refused = await join?.execute({ team: 'dsh/canvas/review-gate', id: 'agent-1' }, {}) as { ok: boolean; error?: string }
+    expect(refused?.ok).toBe(false)
+    expect(refused?.error).toContain('canvas team')
+    expect(refused?.error).toContain('/__dsh_a2a_nexus/')
+    // Even a wildcard allowlist cannot open the canvas namespace to agents.
+    const second = await join?.execute({ team: 'dsh/canvas/ops', id: 'agent-1' }, {}) as { ok: boolean }
+    expect(second?.ok).toBe(false)
     await ctx.fiber.dispose()
   })
 
@@ -238,12 +250,12 @@ describe('S3 team-scoped routing admission', () => {
     const teamless = await route?.execute({ team: 'dsh/anything', message: 'q' }, exec) as { ok: boolean; error?: string }
     expect(teamless?.ok).toBe(false)
     expect(teamless?.error).toContain('has declared no team membership')
-    const joined = await join?.execute({ team: 'dsh/canvas/review-gate', id: 'agent-1' }, {}) as { ok: boolean }
+    const joined = await join?.execute({ team: 'dsh/review-gate', id: 'agent-1' }, {}) as { ok: boolean }
     expect(joined?.ok).toBe(true)
     const mismatched = await route?.execute({ team: 'dsh/other-team', message: 'q' }, exec) as { ok: boolean; error?: string }
     expect(mismatched?.ok).toBe(false)
     expect(mismatched?.error).toContain('requires declared membership')
-    expect(mismatched?.error).toContain('dsh/canvas/review-gate')
+    expect(mismatched?.error).toContain('dsh/review-gate')
     await ctx.fiber.dispose()
   })
 

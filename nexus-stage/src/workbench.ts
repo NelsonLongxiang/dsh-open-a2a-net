@@ -61,6 +61,9 @@ export interface SessionRow {
   readonly joined?: boolean
   readonly live?: boolean
   readonly teams?: readonly string[]
+  /** Canvas teams this session is a member of (0.6.6 roster annotation). */
+  readonly canvasTeams?: readonly string[]
+  /** @deprecated 0.6.6 — display-only taxonomy superseded by canvas teams. */
   readonly group?: string
 }
 
@@ -73,13 +76,26 @@ export interface RemoteRow {
   readonly workspace?: string
   readonly legacy?: boolean
   readonly teams?: readonly string[]
+  /** Canvas teams on this host that carry this remote handle as a member. */
+  readonly canvasTeams?: readonly string[]
+}
+
+/** One canvas member: a local bare session id or a zone-qualified remote
+ *  handle (`zone/id8`) — remote members are routed by the directory, never
+ *  woken locally (0.6.6 unified team model). */
+export interface CanvasMemberRow {
+  readonly id: string
+  readonly team?: string
+  readonly joined?: boolean
+  readonly live?: boolean
+  readonly remote?: boolean
 }
 
 /** One canvas team from /state `canvas.teams`. */
 export interface CanvasTeamRow {
   readonly name: string
   readonly team: string
-  readonly members: ReadonlyArray<{ id: string; team?: string; joined?: boolean; live?: boolean }>
+  readonly members: readonly CanvasMemberRow[]
 }
 
 /** One activity-ring entry. */
@@ -126,6 +142,9 @@ export interface WorkbenchDeps {
   now(): number
   /** Abandon one dead-lettered task via the control route. True on success. */
   abandon(taskId: string, reason: string): Promise<boolean>
+  /** Canvas team member change via the control route (0.6.6): `id` is a
+   *  local session id or a zone-qualified remote handle. True on success. */
+  canvasOp(action: 'add-member' | 'remove-member', name: string, id: string): Promise<boolean>
   /** Copy text to the clipboard; drafts are pasteable task briefs. */
   copy(text: string): void
   /** The spatial planning board. Optional: without it the shell stays in
@@ -201,6 +220,29 @@ type Selection =
 /** The four rail sections. */
 export type WorkbenchSection = 'directory' | 'ledger' | 'activity' | 'plan'
 
+/** Directory category filter (0.6.6): one chip per directory section group. */
+type DirFilter = 'all' | 'local' | 'canvas' | 'peers' | 'remote'
+
+const DIRECTORY_FILTERS: ReadonlyArray<{ key: DirFilter; label: string; hint: string }> = [
+  { key: 'all', label: '全部', hint: '不过滤：目录全部条目' },
+  { key: 'local', label: '本机', hint: '本机会话节点（现场 + 冷启动）' },
+  { key: 'canvas', label: '队', hint: '画布队（人类手工分配的组队）' },
+  { key: 'peers', label: 'Peers', hint: '对等节点（peer 池）' },
+  { key: 'remote', label: '远端', hint: '远端会话队（来自对端卡片）' },
+]
+
+/** Lowercased haystack for the unified search: name/team/label/id/url/teams. */
+function rowHaystack(...parts: ReadonlyArray<string | readonly string[] | undefined>): string {
+  const flat: string[] = []
+  for (const part of parts) {
+    if (part === undefined) continue
+    if (typeof part === 'string') {
+      if (part !== '') flat.push(part)
+    } else for (const entry of part) if (entry !== '') flat.push(entry)
+  }
+  return flat.join(' ').toLowerCase()
+}
+
 /** Legacy deep-link targets: 'board' focuses the stage, sections open a rail section. */
 export type WorkbenchTab = 'board' | WorkbenchSection
 
@@ -231,6 +273,12 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   let selection: Selection
   let last: StateBody | null = null
   const collapsed = new Set<WorkbenchSection>(['activity', 'plan'])
+  // Directory view state (survives polls): unified search + category filter.
+  let searchText = ''
+  let dirFilter: DirFilter = 'all'
+  // Canvas add-member form cache (static DOM re-mounted across polls; keyed
+  // by team name — same trick as draftForm so inputs survive the 3s poll).
+  let canvasForm: { name: string; form: HTMLFormElement; pick: HTMLSelectElement; manual: HTMLInputElement } | null = null
 
   const root = el('div', 'wb')
   root.setAttribute('data-testid', 'wb-root')
@@ -293,6 +341,35 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   }
 
   const directoryBody = el('div', 'wb-directory')
+  // Directory toolbar: unified search + category filter chips (0.6.6). Built
+  // once above the re-rendered list so the input keeps focus and its text
+  // across polls; filtering is pure frontend over /state.
+  const directoryTools = el('div', 'wb-dir-tools')
+  const searchInput = document.createElement('input')
+  searchInput.className = 'wb-search'
+  searchInput.type = 'search'
+  searchInput.placeholder = '搜索：名称 / 队 / 会话 / 节点'
+  searchInput.setAttribute('aria-label', '统一搜索目录')
+  searchInput.addEventListener('input', () => {
+    searchText = searchInput.value.trim().toLowerCase()
+    renderSidebar()
+  })
+  directoryTools.appendChild(searchInput)
+  const filterRow = el('div', 'wb-filters')
+  for (const def of DIRECTORY_FILTERS) {
+    const chip = el('button', 'wb-filter')
+    chip.type = 'button'
+    chip.textContent = def.label
+    chip.dataset.filter = def.key
+    chip.title = def.hint
+    chip.addEventListener('click', () => {
+      dirFilter = def.key
+      renderSidebar()
+    })
+    filterRow.appendChild(chip)
+  }
+  directoryTools.appendChild(filterRow)
+  sectionBodies.get('directory')!.appendChild(directoryTools)
   sectionBodies.get('directory')!.appendChild(directoryBody)
 
   const ledgerPane = el('section', 'wb-pane')
@@ -371,6 +448,9 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
 
   function select(next: Selection): void {
     selection = next
+    // Canvas add-member form is cached per team name (draftForm trick):
+    // drop it whenever the selection moves off its team.
+    if (next?.kind !== 'canvas' || canvasForm?.name !== next.row.name) canvasForm = null
     renderInspector()
     // Narrow screens: picking from the drawer closes it so the stage shows.
     root.classList.remove('is-rail-open')
@@ -379,12 +459,30 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // ── Directory section ──
   function renderSidebar(): void {
     const box = clear(directoryBody)
+    // Filter chips reflect the live view state (built once, toggled here).
+    for (let i = 0; i < filterRow.children.length; i++) {
+      const node = filterRow.children[i] as HTMLElement
+      node.classList.toggle('is-active', node.dataset.filter === dirFilter)
+    }
     if (last === null) {
       box.appendChild(el('div', 'wb-muted')).textContent = '载入中…'
       sectionCounts.get('directory')!.textContent = ''
       return
     }
     const state = last
+    const filtering = searchText !== '' || dirFilter !== 'all'
+    /** One directory row factory with the shared search+filter gate. */
+    const admit = (cat: DirFilter, haystack: string): boolean =>
+      (dirFilter === 'all' || dirFilter === cat) && (searchText === '' || haystack.includes(searchText))
+    /** Canvas-team badge for roster annotation (▤ + short name). */
+    const badges = (item: HTMLElement, teams: readonly string[] | undefined): void => {
+      if (teams === undefined || teams.length === 0) return
+      const chip = el('span', 'wb-item-badge')
+      const names = teams.map(t => t.slice(t.lastIndexOf('/') + 1))
+      chip.textContent = `▤ ${names.slice(0, 3).join(' ')}${names.length > 3 ? ` +${names.length - 3}` : ''}`
+      chip.title = `画布队：${teams.join(' · ')}`
+      item.appendChild(chip)
+    }
     const section = (label: string, count: number): HTMLElement => {
       const head = el('div', 'wb-side-head')
       head.textContent = `${label} · ${count}`
@@ -392,17 +490,20 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       return box
     }
     const sessions = state.sessions ?? []
-    const live = sessions.filter(row => row.live === true)
-    const cold = sessions.filter(row => row.live !== true)
+    const live = sessions.filter(row => row.live === true && admit('local', rowHaystack(displayName(row), row.team, row.label, row.id, row.canvasTeams)))
+    const cold = sessions.filter(row => row.live !== true && admit('local', rowHaystack(displayName(row), row.team, row.label, row.id, row.canvasTeams)))
     sectionCounts.get('directory')!.textContent = `${live.length}/${cold.length}`
-    section('本机 · 现场', live.length)
-    for (const row of live) {
-      const item = el('button', 'wb-item')
-      item.type = 'button'
-      item.appendChild(el('span', 'wb-dot wb-dot-live')).textContent = '●'
-      item.appendChild(el('span', 'wb-item-label')).textContent = displayName(row)
-      item.addEventListener('click', () => select({ kind: 'session', row }))
-      box.appendChild(item)
+    if (live.length > 0) {
+      section('本机 · 现场', live.length)
+      for (const row of live) {
+        const item = el('button', 'wb-item')
+        item.type = 'button'
+        item.appendChild(el('span', 'wb-dot wb-dot-live')).textContent = '●'
+        item.appendChild(el('span', 'wb-item-label')).textContent = displayName(row)
+        badges(item, row.canvasTeams)
+        item.addEventListener('click', () => select({ kind: 'session', row }))
+        box.appendChild(item)
+      }
     }
     if (cold.length > 0) {
       section('本机 · 冷启动', cold.length)
@@ -411,23 +512,27 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         item.type = 'button'
         item.appendChild(el('span', 'wb-dot wb-dot-cold')).textContent = '○'
         item.appendChild(el('span', 'wb-item-label')).textContent = displayName(row)
+        badges(item, row.canvasTeams)
         item.addEventListener('click', () => select({ kind: 'session', row }))
         box.appendChild(item)
       }
     }
-    const canvases = state.canvas?.teams ?? []
+    const canvases = (state.canvas?.teams ?? []).filter(row =>
+      admit('canvas', rowHaystack(row.name, row.team, row.members.map(member => member.team ?? member.id))))
     if (canvases.length > 0) {
       section('Canvas 队', canvases.length)
       for (const row of canvases) {
         const item = el('button', 'wb-item')
         item.type = 'button'
         item.appendChild(el('span', 'wb-dot wb-dot-canvas')).textContent = '▤'
-        item.appendChild(el('span', 'wb-item-label')).textContent = `${row.name} · ${row.members.length}`
+        const remote = row.members.filter(member => member.remote === true).length
+        item.appendChild(el('span', 'wb-item-label')).textContent =
+          `${row.name} · ${row.members.length}${remote > 0 ? `（远端 ${remote}）` : ''}`
         item.addEventListener('click', () => select({ kind: 'canvas', row }))
         box.appendChild(item)
       }
     }
-    const peers = state.peers ?? []
+    const peers = (state.peers ?? []).filter(row => admit('peers', rowHaystack(row.url)))
     if (peers.length > 0) {
       section('Peers', peers.length)
       for (const row of peers) {
@@ -440,7 +545,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         box.appendChild(item)
       }
     }
-    const remote = state.remote ?? []
+    const remote = (state.remote ?? []).filter(row => admit('remote', rowHaystack(displayName(row), row.team, row.origin, row.workspace, row.canvasTeams)))
     if (remote.length > 0) {
       section('远端节点', remote.length)
       for (const row of remote) {
@@ -448,9 +553,13 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         item.type = 'button'
         item.appendChild(el('span', 'wb-dot wb-dot-remote')).textContent = '◇'
         item.appendChild(el('span', 'wb-item-label')).textContent = displayName(row)
+        badges(item, row.canvasTeams)
         item.addEventListener('click', () => select({ kind: 'remote', row }))
         box.appendChild(item)
       }
+    }
+    if (filtering && live.length + cold.length + canvases.length + peers.length + remote.length === 0) {
+      box.appendChild(el('div', 'wb-muted')).textContent = '无匹配条目'
     }
   }
 
@@ -756,6 +865,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       if (sel.row.workspace !== undefined) textRow(card, '工作区', sel.row.workspace)
       if (sel.row.description !== undefined) textRow(card, '说明', sel.row.description)
       for (const team of sel.row.teams ?? []) textRow(card, '成员队', team)
+      for (const team of sel.row.canvasTeams ?? []) textRow(card, '画布队', team)
       textRow(card, '会话 ID', sel.row.id)
     } else if (sel.kind === 'remote') {
       textRow(card, '名称', displayName(sel.row))
@@ -764,12 +874,97 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       if (sel.row.via !== undefined) textRow(card, '经', sel.row.via)
       if (sel.row.workspace !== undefined) textRow(card, '工作区', sel.row.workspace)
       if (sel.row.legacy === true) textRow(card, '形态', '旧卡片（legacy）')
+      for (const team of sel.row.canvasTeams ?? []) textRow(card, '画布队', team)
     } else if (sel.kind === 'canvas') {
-      textRow(card, 'Canvas 队', sel.row.name)
-      textRow(card, '路由队', sel.row.team)
-      for (const member of sel.row.members) {
-        textRow(card, member.live === true ? '成员（现场）' : '成员', `${member.team ?? member.id}`)
+      // Re-resolve the team from the freshest state: membership changes here
+      // must be visible on the next render even though the click-time row is
+      // a stale snapshot.
+      const fresh = (last?.canvas?.teams ?? []).find(t => t.name === sel.row.name) ?? sel.row
+      textRow(card, 'Canvas 队', fresh.name)
+      textRow(card, '路由队', fresh.team)
+      const head = el('div', 'wb-side-head')
+      head.textContent = `成员 · ${fresh.members.length}`
+      card.appendChild(head)
+      if (fresh.members.length === 0) {
+        const empty = el('div', 'wb-muted')
+        empty.textContent = '空队——用下方表单添加成员'
+        card.appendChild(empty)
       }
+      for (const member of fresh.members) {
+        const row = el('div', 'wb-member-row')
+        const dot = member.remote === true ? '◇ 远端' : member.live === true ? '● 现场' : member.joined === true ? '○ 冷启' : '· 未入网'
+        row.appendChild(el('span', 'wb-member-dot')).textContent = dot
+        const label = el('span', 'wb-member-label')
+        const session = (last?.sessions ?? []).find(s => s.id === member.id)
+        label.textContent = member.remote === true ? member.id : (session !== undefined ? displayName(session) : member.id)
+        label.title = member.team ?? member.id
+        row.appendChild(label)
+        const remove = el('button', 'wb-member-remove')
+        remove.type = 'button'
+        remove.textContent = '移除'
+        remove.addEventListener('click', async () => {
+          remove.disabled = true
+          if (!(await deps.canvasOp('remove-member', fresh.name, member.id))) remove.disabled = false
+        })
+        row.appendChild(remove)
+        card.appendChild(row)
+      }
+      // Add-member form: static DOM re-mounted per poll (draftForm trick) —
+      // rebuilt only when the inspected team changes.
+      if (canvasForm?.name !== fresh.name) {
+        const form = el('form', 'wb-member-add')
+        const pick = document.createElement('select')
+        pick.className = 'wb-member-pick'
+        pick.setAttribute('aria-label', '选择成员')
+        const manual = document.createElement('input')
+        manual.type = 'text'
+        manual.className = 'wb-member-manual'
+        manual.placeholder = '或输入远端句柄 zone/id8'
+        manual.setAttribute('aria-label', '远端成员句柄')
+        const submit = el('button', 'wb-member-submit')
+        submit.type = 'submit'
+        submit.textContent = '添加'
+        form.appendChild(pick)
+        form.appendChild(manual)
+        form.appendChild(submit)
+        form.addEventListener('submit', async ev => {
+          ev.preventDefault()
+          const handle = manual.value.trim()
+          const id = handle !== '' ? handle : pick.value
+          if (id === '') return
+          submit.disabled = true
+          const ok = await deps.canvasOp('add-member', fresh.name, id)
+          submit.disabled = false
+          if (ok) manual.value = ''
+        })
+        canvasForm = { name: fresh.name, form, pick, manual }
+      }
+      // Refresh the picker's options from the freshest state, preserving the
+      // current choice (sessions/remote rows churn across polls).
+      const pick = canvasForm.pick
+      const keep = pick.value
+      clear(pick)
+      pick.appendChild(new Option('本机会话（现场/冷启动）…', '', true, true))
+      const memberIds = new Set(fresh.members.map(member => member.id))
+      for (const session of last?.sessions ?? []) {
+        if (memberIds.has(session.id)) continue
+        pick.appendChild(new Option(`${displayName(session)} — 本机`, session.id))
+      }
+      let remoteLabeled = false
+      for (const remote of last?.remote ?? []) {
+        if (memberIds.has(remote.team)) continue
+        if (!remoteLabeled) {
+          pick.appendChild(new Option('远端会话队（目录卡片）…', '', true, false))
+          remoteLabeled = true
+        }
+        pick.appendChild(new Option(`${displayName(remote)} — 远端`, remote.team))
+      }
+      if (keep !== '' && Array.from(pick.options).some(option => option.value === keep)) pick.value = keep
+      card.appendChild(canvasForm.form)
+      const hint = el('div', 'wb-hint')
+      hint.textContent =
+        '成员由人类在此手工分配（agent 不可自组队）。远端成员走对端目录路由，不做本机冷唤醒；地址由目录在派发时重解析。'
+      card.appendChild(hint)
     } else {
       textRow(card, 'Peer', sel.row.url)
       textRow(card, '质量分', sel.row.score !== undefined ? String(sel.row.score) : '—')

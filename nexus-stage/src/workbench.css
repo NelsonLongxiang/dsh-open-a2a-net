@@ -63,6 +63,37 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-dot-peer{color:var(--n-accent)} .wb-dot-remote{color:var(--n-act)}
 .wb-item-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
+/* ── Directory toolbar: unified search + category filters (0.6.6) ── */
+.wb-dir-tools{display:flex;flex-direction:column;gap:6px;padding:8px 6px 4px}
+.wb-search{background:var(--n-panel);border:1px solid var(--n-border);color:var(--n-ink);
+  border-radius:6px;padding:4px 8px;font:inherit;font-size:12.5px;min-width:0}
+.wb-search:focus{outline:1px solid var(--n-accent)}
+.wb-filters{display:flex;flex-wrap:wrap;gap:4px}
+.wb-filter{background:none;border:1px solid var(--n-border);color:var(--n-ink-muted);
+  border-radius:99px;padding:1px 9px;font:inherit;font-size:11.5px;cursor:pointer}
+.wb-filter:hover{border-color:var(--n-accent);color:var(--n-ink)}
+.wb-filter.is-active{border-color:var(--n-accent);color:var(--n-ink);
+  background:color-mix(in srgb,var(--n-accent) 16%,transparent)}
+.wb-item-badge{flex:none;font-size:10.5px;color:#22d3ee;border:1px solid color-mix(in srgb,#22d3ee 45%,transparent);
+  border-radius:99px;padding:0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:46%}
+
+/* ── Canvas member management (inspector, 0.6.6) ── */
+.wb-member-row{display:flex;align-items:center;gap:8px;padding:3px 2px;border-radius:6px}
+.wb-member-row:hover{background:color-mix(in srgb,var(--n-accent) 10%,transparent)}
+.wb-member-dot{flex:none;font-size:11px;color:var(--n-ink-muted);min-width:44px}
+.wb-member-label{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wb-member-remove,.wb-member-submit{background:none;border:1px solid var(--n-border);color:var(--n-ink);
+  border-radius:6px;padding:1px 8px;font:inherit;font-size:11.5px;cursor:pointer;flex:none}
+.wb-member-remove:hover:not(:disabled),.wb-member-submit:hover:not(:disabled){border-color:var(--n-danger)}
+.wb-member-submit:hover:not(:disabled){border-color:var(--n-accent)}
+.wb-member-add{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.wb-member-pick,.wb-member-manual{background:var(--n-panel);border:1px solid var(--n-border);color:var(--n-ink);
+  border-radius:6px;padding:3px 8px;font:inherit;font-size:12px;min-width:0}
+.wb-member-pick{flex:1 1 150px}
+.wb-member-manual{flex:1 1 130px}
+.wb-member-pick:focus,.wb-member-manual:focus{outline:1px solid var(--n-accent)}
+.wb-hint{margin-top:10px;font-size:11px;color:var(--n-ink-muted);line-height:1.5}
+
 /* ── Stage: board (canvas mode) or the data stack (data mode) ── */
 .wb-stage{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column}
 .wb-stage-board{position:absolute;inset:0;overflow:hidden}

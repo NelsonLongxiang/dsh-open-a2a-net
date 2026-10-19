@@ -34,7 +34,7 @@ export function resolveCallerLabel(input: {
 }
 import { signCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
-import { CanvasStore } from './canvas-store.ts'
+import { CanvasStore, isRemoteMemberRef, validRemoteMemberRef } from './canvas-store.ts'
 import { LayoutStore } from './layout-store.ts'
 import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
@@ -810,6 +810,8 @@ export function apply(ctx: Context, config: Config): void {
 
   // Session groups: user-named buckets for the panel's session listing,
   // persisted beside the join intents so they survive restarts.
+  // Deprecated as of 0.6.6 — canvas teams are the grouping face now; this
+  // store only stays readable for old panels.
   const groupStore = new GroupStore(join(home, 'a2a', 'groups.json'))
   // Canvas teams: user-composed multi-member routing groups. A session node
   // may sit in many teams; routing to <team>/canvas/<name> resolves the
@@ -1072,6 +1074,10 @@ const reportLoopRing = new Map<string, number[]>()
   const pruneCanvasMemberships = (): void => {
     for (const name of canvasStore.list()) {
       for (const id of canvasStore.membersOf(name)) {
+        // Remote member refs (zone-qualified team handles) have no local
+        // join intent by design — their liveness is the directory's question
+        // at route time, so the prune never touches them.
+        if (isRemoteMemberRef(id)) continue
         if (sessionNodes.has(id) || joinedSessions.has(id)) continue
         canvasStore.removeMember(name, id)
         logger.info(`a2a: canvas team "${name}" dropped stale member ${id8(id)} (no live node, no join intent)`)
@@ -1652,6 +1658,7 @@ const reportLoopRing = new Map<string, number[]>()
                 joined: sessionNodes.has(String(agent.id)),
                 live: true,
                 teams: [...teamMemberships.teamsOf(String(agent.id))],
+                ...(canvasStore.teamsOf(String(agent.id)).length > 0 ? { canvasTeams: [...canvasStore.teamsOf(String(agent.id))] } : {}),
                 ...(groupOf(String(agent.id)) !== undefined ? { group: groupOf(String(agent.id)) } : {}),
               }))
             // Cold joined sessions: a remembered intent whose Agent is not
@@ -1679,6 +1686,7 @@ const reportLoopRing = new Map<string, number[]>()
                 joined: true,
                 live: false,
                 teams: [...teamMemberships.teamsOf(id)],
+                ...(canvasStore.teamsOf(id).length > 0 ? { canvasTeams: [...canvasStore.teamsOf(id)] } : {}),
                 ...(groupOf(id) !== undefined ? { group: groupOf(id) } : {}),
               })
             }
@@ -1691,17 +1699,29 @@ const reportLoopRing = new Map<string, number[]>()
                 teams: canvasStore.list().map(name => ({
                   name,
                   team: canvasTeamOf(name),
-                  members: canvasStore.membersOf(name).map(id => ({
-                    id,
-                    team: `${config.team}/${id8(id)}`,
-                    joined: sessionNodes.has(id) || joinedSessions.has(id),
-                    live: sessionNodes.has(id),
-                  })),
+                  members: canvasStore.membersOf(name).map(id => {
+                    // Dual shape: local members report this zone's join/live
+                    // facts; remote refs are opaque team handles — the state
+                    // face passes them through with remote:true for the
+                    // workbench's member chips and pickers.
+                    if (isRemoteMemberRef(id)) {
+                      return { id, team: id, remote: true }
+                    }
+                    return {
+                      id,
+                      team: `${config.team}/${id8(id)}`,
+                      joined: sessionNodes.has(id) || joinedSessions.has(id),
+                      live: sessionNodes.has(id),
+                    }
+                  }),
                 })),
               },
               host: lanIp === '' ? {} : { lanIp },
               peers: peerStore.list().map(url => ({ url, score: peerStore.score(url) })),
-              remote: (refreshRemoteRows(), remoteRowsCache?.rows ?? []),
+              remote: (refreshRemoteRows(), (remoteRowsCache?.rows ?? []).map(row => {
+                const canvasTeams = canvasStore.teamsOf(row.team)
+                return canvasTeams.length > 0 ? { ...row, canvasTeams: [...canvasTeams] } : row
+              })),
               activity: recentActivity.slice(),
               inFlight: [...inFlightRoutes.values()].map(route => ({
                 team: route.team,
@@ -1867,6 +1887,8 @@ const reportLoopRing = new Map<string, number[]>()
       // Groups control: create/remove named groups and assign sessions to
       // them (an empty name unassigns). Same guard as join/leave — the
       // group taxonomy enumerates session ids, so it stays behind the key.
+      // Deprecated as of 0.6.6 (canvas teams supersede manual grouping);
+      // kept working for old panels.
       ctx.effect(() => webServer.register({
         kind: 'exact',
         path: '/__dsh_a2a/groups',
@@ -1920,9 +1942,15 @@ const reportLoopRing = new Map<string, number[]>()
             } else if (action === 'add-member') {
               const name = typeof body.name === 'string' ? body.name : ''
               const id = typeof body.id === 'string' ? body.id : ''
-              const memberJoined = id !== '' && (sessionNodes.has(id) || joinedSessions.has(id))
-              if (name === '' || !memberJoined) {
-                payload = JSON.stringify({ ok: false, error: 'name and a joined session id are required' })
+              // Dual member shape: a local session id must be a joined node;
+              // a remote ref is a zone-qualified team handle whose shape this
+              // gate checks and whose existence the UI picker (directory
+              // rows) vouches for. Humans compose both via the workbench.
+              const memberValid = isRemoteMemberRef(id)
+                ? validRemoteMemberRef(id)
+                : id !== '' && (sessionNodes.has(id) || joinedSessions.has(id))
+              if (name === '' || !memberValid) {
+                payload = JSON.stringify({ ok: false, error: 'name and a member (joined session id, or a zone-qualified remote team handle like zone/a1b2c3d4) are required' })
               } else {
                 canvasStore.create(name)
                 payload = JSON.stringify({ ok: canvasStore.addMember(name, id), teams: canvasStore.list(), members: canvasStore.membersOf(name) })
@@ -3398,10 +3426,11 @@ ${message}`
       'Declare one of this host\'s joined session nodes a member of a routable team '
       + '(node-declared roster; the host card publishes it and peers rebuild team rosters as the union of '
       + 'member declarations). Gated by the owner\'s teamJoinAllowlist — an empty list denies every join; '
-      + 'patterns are exact names or trailing-`*` prefixes. Collaboration itself stays within teams '
-      + '(team-scoped routing is a separate, default-off enforcement).',
+      + 'patterns are exact names or trailing-`*` prefixes. Canvas teams are out of scope here: their '
+      + 'membership is assigned by hand in the A2A workbench, and the tool refuses `/canvas/` names. '
+      + 'Collaboration itself stays within teams (team-scoped routing is the separate teamScopeRouting switch).',
     parameters: {
-      team: { type: 'string', description: 'The routable team to join (full form, e.g. dsh/canvas/review-gate).' },
+      team: { type: 'string', description: 'The routable team to join (full form, e.g. dsh/review-gate).' },
       id: { type: 'string', description: 'The joined session node id on this host that declares the membership.' },
     },
     output: {
@@ -3437,8 +3466,19 @@ ${message}`
         recordTeamAudit('join', team, id, false, reason)
         return { ok: false, error: reason }
       }
+      // Unified teaming (0.6.6): canvas teams are the human-composed surface.
+      // A session may not self-join one through the roster tool — membership
+      // there is assigned by hand, so the refusal names the surface where the
+      // assignment happens. Any `/canvas/` name (this zone's or a peer's) is
+      // refused: remote canvas membership is the owning host's store, and a
+      // roster declaration here would neither feed it nor be read by it.
+      if (team.includes('/canvas/')) {
+        const reason = `team "${team}" is a canvas team — canvas membership is assigned by hand in the A2A workbench (open /__dsh_a2a_nexus/, pick the team, add or remove members there); the roster tool manages allowlisted teams only`
+        recordTeamAudit('join', team, id, false, reason)
+        return { ok: false, error: reason }
+      }
       if (!teamJoinAllowed(team)) {
-        const reason = `team "${team}" is not in this host's teamJoinAllowlist — the owner curates joinable teams (exact names or trailing-* prefixes); ask them to add the pattern`
+        const reason = `team "${team}" is not in this host's teamJoinAllowlist — the owner curates joinable teams (exact names or trailing-* patterns; human-composed groups live in the workbench's canvas teams); ask them to add the pattern`
         recordTeamAudit('join', team, id, false, reason)
         return { ok: false, error: reason }
       }
@@ -3948,11 +3988,30 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         }
         failures.push(`local: ${outcome.error}`)
       }
-      const candidates = await directoryPeerCandidates(fetch, args.team, failures)
+      // Failover seam for canvas teams: after the local tiers miss, the
+      // canvas team's remote members (zone-qualified team handles) are dialed
+      // in member order — the same priority rule the local live/cold tiers
+      // follow. Each remote handle is a routable team name on its own host,
+      // so the directory walk runs per target and the candidate pool is the
+      // union in member order. Non-canvas teams keep the single-walk shape
+      // unchanged. The ledger stays keyed to the canvas team the caller
+      // named; the peer request carries the member handle it must resolve.
+      const canvasName = parseCanvasTeamName(args.team)
+      const remoteTargets = canvasName !== undefined ? canvasStore.remoteMembersOf(canvasName) : []
+      const targets = remoteTargets.length > 0 ? [...remoteTargets] : [args.team]
+      if (remoteTargets.length > 0) {
+        failures.push(`local: canvas team "${args.team}" has no live or wakeable local member`)
+      }
+      const candidatePool: Array<{ candidate: string; target: string }> = []
+      for (const target of targets) {
+        for (const candidate of await directoryPeerCandidates(fetch, target, failures)) {
+          candidatePool.push({ candidate, target })
+        }
+      }
       // Failover: try every candidate in order — an offline path falls back
       // to the next alternate without a caller-visible error; only
       // exhaustion surfaces, with each candidate's reason.
-      for (const candidate of candidates) {
+      for (const { candidate, target } of candidatePool) {
         // Capability gate: wait:false only dials peers whose signed card
         // declares async — against a pre-0.5.2 peer the flag would silently
         // degrade into a minutes-long blocking hold (an async intent must
@@ -3964,7 +4023,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           const caps = card?.capabilities as { async?: unknown } | undefined
           peerAsync = card !== undefined && caps?.async === true
         }
-        const result = await dispatchPeerCandidate(candidate, args.team, args.message, args.context_id, exec.signal, callerSession, peerAsync, taskId, callbackAddress)
+        const result = await dispatchPeerCandidate(candidate, target, args.message, args.context_id, exec.signal, callerSession, peerAsync, taskId, callbackAddress)
         if (result.ok || exec.signal.aborted) {
           if (result.ok) trackOwedTask(taskId, args.team, candidate, result, callbackAddress, briefOf(args.message))
           const notes: string[] = []
@@ -3975,14 +4034,14 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
             notes.push('\n(Note: the peer does not advertise async; the call waited synchronously.)')
           }
           if (result.ok && notes.length > 0) {
-            return { ...result, reply: `${result.reply}${notes.join('')}` } as unknown as Record<string, JsonValue>
+            return { ...result, team: args.team, reply: `${result.reply}${notes.join('')}` } as unknown as Record<string, JsonValue>
           }
-          return result as unknown as Record<string, JsonValue>
+          return { ...result, ...(result.ok ? { team: args.team } : {}) } as unknown as Record<string, JsonValue>
         }
         failures.push(`${candidate}: ${result.error}`)
       }
       if (failures.length > 0) logger.warn(`route to team "${args.team}" exhausted its candidates: ${failures.join('; ')}`)
-      return routeVerdict(args.team, failures, candidates.length)
+      return routeVerdict(args.team, failures, candidatePool.length)
     },
   }))
 

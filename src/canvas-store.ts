@@ -1,11 +1,15 @@
 /**
  * Persisted canvas teams: user-composed multi-member routing groups under
- * the a2a home (`a2a/canvas.json`). A canvas team is a named set of joined
- * session ids — one atomic session node may sit in many teams, and routing
- * to `<team>/canvas/<name>` resolves the first live member or wakes the
- * first cold one. Membership order is the routing priority (member list
- * order), preserved verbatim on disk. Plain JSON, one writer (the control
- * routes), read fresh by the state route.
+ * the a2a home (`a2a/canvas.json`). A canvas team is a named set of member
+ * references in one of two shapes: a local session id (a joined session
+ * node on this host) or a remote team handle (`<zone>/<id8>`, a session
+ * node published by a peer — one member may sit in many teams). Routing to
+ * `<team>/canvas/<name>` resolves the first live local member, wakes the
+ * first cold local one, then falls through to the remote members in order
+ * (the directory resolves their handles; remote nodes never wake from
+ * here). Membership order is the routing priority (member list order),
+ * preserved verbatim on disk. Plain JSON, one writer (the control routes),
+ * read fresh by the state route.
  * @module @nelsonlongxiang/dsh-open-a2a-net/canvas-store
  */
 
@@ -23,6 +27,29 @@ export const CANVAS_MEMBER_CAP = 32
 
 /** Longest accepted team name (same budget as group names). */
 export const CANVAS_NAME_MAX = 40
+
+/**
+ * Whether one member entry references a remote node rather than a local
+ * session id. Remote refs are zone-qualified team handles (`<zone>/<id8>`),
+ * so the '/'-test is deterministic: local session ids (`session-<uuid>`,
+ * `import-<uuid>`) never contain one, and canvas team names — the only other
+ * strings in a member slot — are barred from '/' at creation.
+ */
+export function isRemoteMemberRef(id: string): boolean {
+  return id.includes('/')
+}
+
+/**
+ * Shape-gate for a remote member reference at the control-route seam: at
+ * least one '/'-delimited segment on each side, no whitespace. The registry
+ * cross-check lives in the UI (the picker offers discovered rows only);
+ * this gate keeps malformed strings out of the persisted file.
+ */
+export function validRemoteMemberRef(id: string): boolean {
+  const trimmed = id.trim()
+  return trimmed === id && isRemoteMemberRef(id) && !/\s/.test(id)
+    && !id.startsWith('/') && !id.endsWith('/') && !id.includes('//')
+}
 
 function validName(raw: string): string | undefined {
   const clean = raw.trim()
@@ -101,6 +128,16 @@ export class CanvasStore {
   membersOf(name: string): readonly string[] {
     const entry = this.teams.find(t => t.name === name)
     return entry === undefined ? [] : [...entry.members]
+  }
+
+  /**
+   * The named team's remote member refs (zone-qualified team handles) in
+   * routing-priority order — the failover tier after the local live/cold
+   * tiers miss. Shape test only: whether the handle currently resolves is
+   * the directory's question at route time, not the store's.
+   */
+  remoteMembersOf(name: string): readonly string[] {
+    return this.membersOf(name).filter(isRemoteMemberRef)
   }
 
   /** Every team name the id is a member of, in team creation order. */
