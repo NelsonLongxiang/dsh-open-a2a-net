@@ -16,9 +16,13 @@ function bench() {
   const copy = vi.fn()
   const canvasOp = vi.fn(async () => true)
   const dispatchQuick = vi.fn(async () => ({ ok: true, task_id: 'direct-qqqq1111' }))
-  const v = createWorkbench({ now: () => NOW, abandon, copy, canvasOp, dispatchQuick })
+  const sessionLog = vi.fn(async () => ({ ok: true, messages: [
+    { role: 'user', text: '检查默认 profile 插件' },
+    { role: 'assistant', text: '开始扫描插件列表' },
+  ] }))
+  const v = createWorkbench({ now: () => NOW, abandon, copy, canvasOp, dispatchQuick, sessionLog })
   document.body.appendChild(v.root)
-  return { v, abandon, copy, canvasOp, dispatchQuick }
+  return { v, abandon, copy, canvasOp, dispatchQuick, sessionLog }
 }
 
 const state: StateBody = {
@@ -520,5 +524,66 @@ describe('quick dispatch form (0.6.9)', () => {
     v.update(state)
     openTeam(v)
     expect(v.root.querySelector('.wb-dispatch')).toBeNull()
+  })
+})
+
+describe('inline transcript (0.6.11)', () => {
+  function openSession(v: ReturnType<typeof createWorkbench>): Element {
+    const item = [...v.root.querySelectorAll('.wb-item-label')].find(n => text(n).includes('scout-01'))!
+    item.click()
+    return v.root.querySelector('.wb-inspector')!
+  }
+
+  it('renders the tail of a local session\u2019s log inline after selection', async () => {
+    const { v, sessionLog } = bench()
+    v.update(state)
+    openSession(v)
+    expect(sessionLog).toHaveBeenCalledWith('session-11111111-aaaa')
+    await vi.waitFor(() => {
+      const body = v.root.querySelector('.wb-transcript-body')!
+      expect(text(body)).toContain('检查默认 profile 插件')
+      expect(text(body)).toContain('开始扫描插件列表')
+    })
+    const roles = [...v.root.querySelectorAll('.wb-transcript-role')].map(n => text(n))
+    expect(roles).toEqual(['问', '答'])
+  })
+
+  it('serves the cached tail across poll remounts without refetching', async () => {
+    const { v, sessionLog } = bench()
+    v.update(state)
+    openSession(v)
+    await vi.waitFor(() => expect(v.root.querySelector('.wb-transcript-body')!.textContent).toContain('开始扫描'))
+    // The 3s poll rebuilds the inspector; the cache answers, not the route.
+    v.update({ ...state, sessions: [...state.sessions] })
+    await vi.waitFor(() => expect(v.root.querySelector('.wb-transcript-body')!.textContent).toContain('开始扫描'))
+    expect(sessionLog).toHaveBeenCalledTimes(1)
+    // The refresh button forces exactly one re-read.
+    ;(v.root.querySelector('.wb-transcript-refresh') as HTMLElement).click()
+    await vi.waitFor(() => expect(sessionLog).toHaveBeenCalledTimes(2))
+  })
+
+  it('explains failure and hides entirely when the dep is absent', async () => {
+    const failing = vi.fn(async () => ({ ok: false, error: 'no log artifact for this session' }))
+    const v = createWorkbench({ now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(), canvasOp: vi.fn(async () => true), sessionLog: failing })
+    document.body.appendChild(v.root)
+    v.update(state)
+    openSession(v)
+    await vi.waitFor(() => expect(text(v.root.querySelector('.wb-transcript-body'))).toContain('无法读取（no log artifact'))
+
+    const bare = createWorkbench({ now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(), canvasOp: vi.fn(async () => true) })
+    document.body.appendChild(bare.root)
+    bare.update(state)
+    const item = [...bare.root.querySelectorAll('.wb-item-label')].find(n => text(n).includes('scout-01'))!
+    item.click()
+    expect(bare.root.querySelector('.wb-transcript')).toBeNull()
+  })
+
+  it('remote rows show the on-the-other-host note instead of a transcript', () => {
+    const { v } = bench()
+    v.update(state)
+    const item = [...v.root.querySelectorAll('.wb-item-label')].find(n => text(n).includes('remote-host'))!
+    item.click()
+    expect(text(v.root.querySelector('.wb-inspector'))).toContain('远端节点的对话记录在对端机器上')
+    expect(v.root.querySelector('.wb-transcript')).toBeNull()
   })
 })

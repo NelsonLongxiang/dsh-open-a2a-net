@@ -180,6 +180,17 @@ const bench = createWorkbench({
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }
   },
+  async sessionLog(id) {
+    // Inline transcript (0.6.11): read-only tail of a local session's own
+    // log from the host control face. Caps live server-side.
+    try {
+      const res = await fetch(`/__dsh_a2a/session-log?id=${encodeURIComponent(id)}`)
+      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; messages?: Array<{ role: string; text: string }>; error?: string }
+      return { ok: res.ok && body.ok === true, messages: body.messages, error: body.error ?? `HTTP ${res.status}` }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
   board: {
     root: planning.root,
     activate: () => planning.activate(),

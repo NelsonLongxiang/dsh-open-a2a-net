@@ -149,6 +149,9 @@ export interface WorkbenchDeps {
    *  one message to a routing team, async delivery, receipt lands in the
    *  ledger. Optional — without it the 快派 form hides. */
   dispatchQuick?(team: string, message: string): Promise<{ ok: boolean; task_id?: string; reply?: string; error?: string }>
+  /** Inline transcript (0.6.11): the tail of a LOCAL session's own
+   *  conversation log, read-only. Optional — without it the block hides. */
+  sessionLog?(id: string): Promise<{ ok: boolean; messages?: Array<{ role: string; text: string }>; error?: string }>
   /** Copy text to the clipboard; drafts are pasteable task briefs. */
   copy(text: string): void
   // 0.6.10: openLocal/openRemote (0.6.7/0.6.8 jump affordances) removed by
@@ -289,6 +292,10 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // Quick-dispatch form (0.6.9), cached per target routing team the same
   // draftForm way: a textarea's draft must survive the 3s poll remount.
   let dispatchForm: { team: string; form: HTMLFormElement; text: HTMLTextAreaElement; note: HTMLElement } | null = null
+  // 0.6.11: inline transcript cache — one fetch per session id, refreshed on
+  // demand. renderInspector rebuilds every poll, so the cache keeps the
+  // transcript block from refetching on each 3s tick.
+  const transcriptCache = new Map<string, { ok: boolean; messages?: Array<{ role: string; text: string }>; error?: string } | undefined>()
 
   const root = el('div', 'wb')
   root.setAttribute('data-testid', 'wb-root')
@@ -879,6 +886,9 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       for (const team of sel.row.teams ?? []) textRow(card, '成员队', team)
       for (const team of sel.row.canvasTeams ?? []) textRow(card, '画布队', team)
       textRow(card, '会话 ID', sel.row.id)
+      // Inline reading (0.6.11): the tail of this session's own log, on this
+      // page — reading is what jumps used to serve, without the jump.
+      if (deps.sessionLog !== undefined) card.appendChild(transcriptBlock(sel.row.id))
       // Inline reach (0.6.10): local session teams dispatch through the
       // same 快派 seam — no jump, the form is the interaction.
       if (deps.dispatchQuick !== undefined) card.appendChild(dispatchCard(sel.row.team))
@@ -890,6 +900,11 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       if (sel.row.workspace !== undefined) textRow(card, '工作区', sel.row.workspace)
       if (sel.row.legacy === true) textRow(card, '形态', '旧卡片（legacy）')
       for (const team of sel.row.canvasTeams ?? []) textRow(card, '画布队', team)
+      // 0.6.11: remote conversations live on the remote host — this face
+      // reads only this machine's log tree, so say so instead of guessing.
+      const remoteNote = el('div', 'wb-hint')
+      remoteNote.textContent = '远端节点的对话记录在对端机器上；本页只读本机会话日志。'
+      card.appendChild(remoteNote)
       // Quick dispatch targets the remote team handle directly (0.6.9).
       if (deps.dispatchQuick !== undefined) card.appendChild(dispatchCard(sel.row.team))
     } else if (sel.kind === 'canvas') {
@@ -1035,6 +1050,62 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     }
     wrap.appendChild(dispatchForm.form)
     return wrap
+  }
+
+  // ── Inline transcript (0.6.11) ──
+  // The tail of a LOCAL session's own conversation log, read-only, on this
+  // page. Cached per session id across the 3s poll remounts; the refresh
+  // button forces one re-read. Reading — not jumping — is the interaction.
+  function transcriptBlock(id: string): HTMLElement {
+    const block = el('div', 'wb-transcript')
+    const head = el('div', 'wb-side-head')
+    head.textContent = '最近对话'
+    const refresh = el('button', 'wb-transcript-refresh')
+    refresh.type = 'button'
+    refresh.textContent = '刷新'
+    head.appendChild(refresh)
+    block.appendChild(head)
+    const body = el('div', 'wb-transcript-body')
+    block.appendChild(body)
+    type TranscriptState = { ok: boolean; messages?: Array<{ role: string; text: string }>; error?: string } | undefined
+    const paint = (state: TranscriptState): void => {
+      body.replaceChildren()
+      if (state === undefined) {
+        body.appendChild(el('div', 'wb-muted')).textContent = '读取中…'
+        return
+      }
+      if (state.ok !== true || state.messages === undefined) {
+        body.appendChild(el('div', 'wb-muted')).textContent = `无法读取（${state.error ?? '未知错误'}）`
+        return
+      }
+      if (state.messages.length === 0) {
+        body.appendChild(el('div', 'wb-muted')).textContent = '暂无对话记录'
+        return
+      }
+      for (const message of state.messages) {
+        const row = el('div', `wb-transcript-row wb-transcript-${message.role === 'user' ? 'user' : 'assistant'}`)
+        row.appendChild(el('span', 'wb-transcript-role')).textContent = message.role === 'user' ? '问' : '答'
+        row.appendChild(el('span', 'wb-transcript-text')).textContent = message.text
+        body.appendChild(row)
+      }
+    }
+    const load = (force: boolean): void => {
+      if (!force && transcriptCache.has(id)) {
+        paint(transcriptCache.get(id))
+        return
+      }
+      transcriptCache.set(id, undefined)
+      paint(undefined)
+      void deps.sessionLog?.(id).then(result => {
+        transcriptCache.set(id, result)
+        // The poll may have remounted the inspector since; only the live
+        // body repaints, the cache carries the result to the next mount.
+        if (body.isConnected) paint(result)
+      })
+    }
+    refresh.addEventListener('click', () => load(true))
+    load(false)
+    return block
   }
 
   // ── Header ──

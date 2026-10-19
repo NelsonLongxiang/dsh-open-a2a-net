@@ -7,7 +7,7 @@
  */
 
 import { createHash, createPrivateKey, generateKeyPairSync, randomBytes, timingSafeEqual } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 import { dirname, join } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
@@ -35,6 +35,7 @@ export function resolveCallerLabel(input: {
 import { signCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { CanvasStore, isRemoteMemberRef, validRemoteMemberRef } from './canvas-store.ts'
+import { decodeSessionLog, extractTranscript, TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_MAX_FILE_BYTES, TRANSCRIPT_MAX_LIMIT } from './session-transcript.ts'
 import { LayoutStore } from './layout-store.ts'
 import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
@@ -3290,6 +3291,68 @@ ${message}`
         })
       }),
     }), 'a2a: quick-dispatch route')
+
+    // Session transcript reader (0.6.11): the workbench inspector shows the
+    // tail of a LOCAL node's own conversation log inline — owner ruling
+    // 2026-10-20 banned navigation, and reading is the need jumps used to
+    // serve. The id gate admits only sessions this node already knows (live
+    // sessionNodes or joined cold sessions), never an arbitrary path: this
+    // face serves this host's <dshHome>/sessions tree and nothing else.
+    // Caps mirror session-transcript.ts (file bytes, limit).
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/__dsh_a2a/session-log',
+      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+        const url = new URL(req.url ?? '/', 'http://x')
+        const id = url.searchParams.get('id') ?? ''
+        const limitArg = Number(url.searchParams.get('limit') ?? TRANSCRIPT_DEFAULT_LIMIT)
+        const limit = Number.isFinite(limitArg) ? Math.max(1, Math.min(TRANSCRIPT_MAX_LIMIT, Math.floor(limitArg))) : TRANSCRIPT_DEFAULT_LIMIT
+        let result: Record<string, JsonValue>
+        if (id === '' || id.includes('/') || id.includes('\\') || id.includes('..')) {
+          result = { ok: false, error: 'id is required' }
+        } else if (!sessionNodes.has(id) && !joinedSessions.has(id)) {
+          result = { ok: false, error: 'unknown session on this node' }
+        } else {
+          try {
+            // Generation artifacts: session.v{N}.jsonl[.zstd] is the newest
+            // format generation — read the highest N, falling back to the
+            // base artifact. Buckets are cwd slugs; the session id names
+            // the child directory, so scan buckets for a matching child.
+            const sessionsRoot = join(home, 'sessions')
+            let logPath: string | undefined
+            if (existsSync(sessionsRoot)) {
+              for (const entry of readdirSync(sessionsRoot, { withFileTypes: true })) {
+                if (!entry.isDirectory()) continue
+                const candidate = join(sessionsRoot, entry.name, id)
+                if (!existsSync(candidate)) continue
+                const files = readdirSync(candidate).filter(name => name.startsWith('session.') && (name.endsWith('.jsonl.zstd') || name.endsWith('.jsonl')))
+                const generation = (name: string): number => Number(name.match(/\.v(\d+)\./)?.[1] ?? 0)
+                const rank = (name: string): number => generation(name) * 2 + (name.endsWith('.zstd') ? 1 : 0)
+                files.sort((a, b) => rank(b) - rank(a))
+                logPath = files[0] !== undefined ? join(candidate, files[0]) : undefined
+                break
+              }
+            }
+            if (logPath === undefined) {
+              result = { ok: false, error: 'no log artifact for this session' }
+            } else {
+              const stat = statSync(logPath)
+              if (stat.size > TRANSCRIPT_MAX_FILE_BYTES) {
+                result = { ok: false, error: 'session log exceeds the size cap' }
+              } else {
+                const entries = extractTranscript(decodeSessionLog(readFileSync(logPath)), limit)
+                result = { ok: true, id, count: entries.length, messages: entries.map(entry => ({ role: entry.role, text: entry.text, ...(entry.time !== undefined ? { time: entry.time } : {}) })) }
+              }
+            }
+          } catch (error) {
+            result = { ok: false, error: `transcript failed: ${error instanceof Error ? error.message : String(error)}` }
+          }
+        }
+        const payload = JSON.stringify(result)
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+        res.end(payload)
+      }),
+    }), 'a2a: session-log route')
   })
 
   /**
