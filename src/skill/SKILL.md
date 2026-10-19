@@ -55,7 +55,9 @@ a2a_route { team: "<zone>/<id8 or canvas name>", message, context_id?, async? }
 `remote` (peer session rows with `origin` = node label + LAN IP and `via` =
 the peer URL), `activity` (routing ring), `tasks` (the ledger: pending /
 stale / archived). The A2A workbench (`/__dsh_a2a_nexus/`, DOM panels —
-directory / ledger / activity / plan) renders the same data for humans.
+directory / ledger / activity / plan / the 2D spatial planning board for
+canvas-team composition; `?mode=plan` deep-links the board) renders the
+same data for humans.
 
 ## Failure shapes that are contract semantics
 

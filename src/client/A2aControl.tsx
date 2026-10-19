@@ -232,6 +232,11 @@ export function A2aControl({ wide, t, openSession }: A2aControlProps) {
                 <a className={css.stageLink} href="/__dsh_a2a_nexus/" target="_blank" rel="noreferrer" title={t('a2a.stageWorkbench')}>
                   {t('a2a.stageWorkbench')}
                 </a>
+                {state.hasCanvas ? (
+                  <a className={css.stageLink} href="/__dsh_a2a_nexus/?mode=plan" target="_blank" rel="noreferrer" title={t('a2a.stageBoard')}>
+                    {t('a2a.stageBoard')}
+                  </a>
+                ) : null}
               </span>
             </div>
             <div aria-live="polite">

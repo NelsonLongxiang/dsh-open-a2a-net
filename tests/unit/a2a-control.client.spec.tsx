@@ -203,16 +203,18 @@ describe('A2aControl (activity feed)', () => {
     expect(link.getAttribute('href')).toBe('/__dsh_a2a_nexus/')
   })
 
-  it('renders exactly one workbench link regardless of the canvas face', async () => {
+  it('adds the planning-board deep link only while the canvas face is up', async () => {
     mountControl()
     openPopover()
     await screen.findByTitle('Open workbench')
-    expect(screen.queryByTitle('Open workbench')?.getAttribute('href')).toBe('/__dsh_a2a_nexus/')
+    expect(screen.queryByTitle('Open planning board')).toBeNull()
+    expect(document.querySelectorAll('a[href="/__dsh_a2a_nexus/"]').length).toBe(1)
     cleanup()
     stateHasCanvas = true
     mountControl()
     openPopover()
-    await screen.findByTitle('Open workbench')
+    const board = await screen.findByTitle('Open planning board')
+    expect(board.getAttribute('href')).toBe('/__dsh_a2a_nexus/?mode=plan')
     expect(document.querySelectorAll('a[href="/__dsh_a2a_nexus/"]').length).toBe(1)
   })
 

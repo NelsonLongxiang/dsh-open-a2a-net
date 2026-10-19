@@ -14,6 +14,7 @@ export type A2aNetKey =
   | 'a2a.jump'
   | 'a2a.stageTitle'
   | 'a2a.stageWorkbench'
+  | 'a2a.stageBoard'
 
 /** Simplified Chinese dictionary. */
 export const zh: Record<A2aNetKey, string> = {
@@ -29,6 +30,7 @@ export const zh: Record<A2aNetKey, string> = {
   'a2a.jump': '点击跳转到该会话',
   'a2a.stageTitle': 'A2A 工作台（目录 · 台账 · 活动 · 规划）',
   'a2a.stageWorkbench': '打开工作台',
+  'a2a.stageBoard': '打开规划板',
 }
 
 /** English dictionary. */
@@ -45,4 +47,5 @@ export const en: Record<A2aNetKey, string> = {
   'a2a.jump': 'Click to open this session',
   'a2a.stageTitle': 'A2A workbench (directory · ledger · activity · plan)',
   'a2a.stageWorkbench': 'Open workbench',
+  'a2a.stageBoard': 'Open planning board',
 }

@@ -166,3 +166,61 @@ describe('workbench', () => {
     expect(text(v.root.querySelector('.wb-badge'))).toBe('v0.6.0')
   })
 })
+
+describe('workbench board tab (restored 0.6.1 seam)', () => {
+  it('renders no board tab when no board is provided', () => {
+    const { v } = bench()
+    v.update(state)
+    const labels = Array.from(v.root.querySelectorAll<HTMLElement>('.wb-tab')).map(b => b.textContent)
+    expect(labels).toEqual(['台账', '活动', '规划'])
+  })
+
+  it('mounts the board root, activates on entry, deactivates on leave', () => {
+    const boardRoot = document.createElement('div')
+    boardRoot.dataset.board = 'plan'
+    const activate = vi.fn()
+    const deactivate = vi.fn()
+    let available = true
+    const v = createWorkbench({
+      now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(),
+      board: { root: boardRoot, activate, deactivate, available: () => available },
+    })
+    document.body.appendChild(v.root)
+    v.update(state)
+    const boardBtn = Array.from(v.root.querySelectorAll<HTMLElement>('.wb-tab')).find(b => b.dataset.tab === 'board')
+    expect(boardBtn).toBeTruthy()
+    expect(boardBtn!.classList.contains('is-hidden')).toBe(false)
+    boardBtn!.click()
+    expect(activate).toHaveBeenCalledTimes(1)
+    expect(v.tab()).toBe('board')
+    expect(v.root.contains(boardRoot)).toBe(true)
+    // leave via another tab
+    ;(Array.from(v.root.querySelectorAll<HTMLElement>('.wb-tab')).find(b => b.dataset.tab === 'ledger') as HTMLElement).click()
+    expect(deactivate).toHaveBeenCalledTimes(1)
+    expect(v.tab()).toBe('ledger')
+  })
+
+  it('selectTab(board) is a no-op while the canvas face is down; focus falls back to ledger', () => {
+    const boardRoot = document.createElement('div')
+    const activate = vi.fn()
+    let available = true
+    const v = createWorkbench({
+      now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(),
+      board: { root: boardRoot, activate, deactivate: () => {}, available: () => available },
+    })
+    document.body.appendChild(v.root)
+    v.update(state)
+    v.selectTab('board')
+    expect(v.tab()).toBe('board')
+    available = false
+    const noCanvas: StateBody = { ...state, canvas: undefined }
+    v.update(noCanvas)
+    // canvas face dropped while the board was focused → ledger fallback,
+    // board tab hidden (the old ?mode=plan master-switch contract).
+    expect(v.tab()).toBe('ledger')
+    v.selectTab('board')
+    expect(v.tab()).toBe('ledger')
+    const boardBtn = Array.from(v.root.querySelectorAll<HTMLElement>('.wb-tab')).find(b => b.dataset.tab === 'board')!
+    expect(boardBtn.classList.contains('is-hidden')).toBe(true)
+  })
+})

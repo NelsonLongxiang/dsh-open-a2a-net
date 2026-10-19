@@ -1,8 +1,10 @@
 /**
  * The A2A workbench: one DOM client UI for human AI researchers and agents
  * to OPERATE the network — directory, ledger, activity, and a derived
- * action plan. Replaces the 3D observation scene and the spatial planning
- * canvas (2026-10-19 user ruling: 3D 观测不需要，统一成一个 client ui 工作台).
+ * action plan, plus the RESTORED 2D spatial planning canvas as the board
+ * tab (2026-10-19 rulings: 3D 观测不需要，删除；规划板保留，结合规划统一
+ * 成一个 client ui 工作台 — the board is mounted inside the workbench,
+ * not a separate mode page).
  *
  * Discipline (inherited from the planning view it replaces):
  * - Pure DOM, no WebGL, no three, no framework: every row is a textContent
@@ -113,6 +115,15 @@ export interface WorkbenchDeps {
   abandon(taskId: string, reason: string): Promise<boolean>
   /** Copy text to the clipboard; drafts are pasteable task briefs. */
   copy(text: string): void
+  /** The spatial planning board (restored 0.6.1). Optional: without it the
+   *  workbench renders the three operational tabs only. `available()` gates
+   *  the tab on the host's canvas face (state.canvas !== undefined). */
+  board?: {
+    readonly root: HTMLElement
+    activate(): void
+    deactivate(): void
+    available(): boolean
+  }
 }
 
 /** Display name for one node: session title, then team, then label. */
@@ -150,16 +161,22 @@ type Selection =
   | { kind: 'peer'; row: { url: string; score?: number } }
   | undefined
 
+export type WorkbenchTab = 'ledger' | 'activity' | 'plan' | 'board'
+
 export interface Workbench {
   readonly root: HTMLElement
   /** Feed one /state poll (or null while the first fetch is out). */
   update(state: StateBody | null): void
-  /** Currently active main tab ('ledger' | 'activity' | 'plan'). */
-  readonly tab: () => 'ledger' | 'activity' | 'plan'
+  /** Currently active main tab. */
+  readonly tab: () => WorkbenchTab
+  /** Focus a tab programmatically (?mode=plan → 'board'); a no-op when the
+   *  board is absent or the canvas face is down. */
+  selectTab(key: WorkbenchTab): void
 }
 
 export function createWorkbench(deps: WorkbenchDeps): Workbench {
-  let tab: 'ledger' | 'activity' | 'plan' = 'ledger'
+  const board = deps.board
+  let tab: WorkbenchTab = 'ledger'
   let selection: Selection
   let last: StateBody | null = null
 
@@ -182,14 +199,13 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   sidebar.appendChild(sidebarBody)
   const main = el('main', 'wb-main')
   const tabs = el('nav', 'wb-tabs')
-  const tabDefs: Array<{ key: 'ledger' | 'activity' | 'plan'; label: string }[]> = [
-    [
-      { key: 'ledger', label: '台账' },
-      { key: 'activity', label: '活动' },
-      { key: 'plan', label: '规划' },
-    ],
+  const tabDefs: Array<{ key: WorkbenchTab; label: string }> = [
+    { key: 'ledger', label: '台账' },
+    { key: 'activity', label: '活动' },
+    { key: 'plan', label: '规划' },
+    ...(board !== undefined ? [{ key: 'board' as const, label: '空间' }] : []),
   ]
-  for (const def of tabDefs[0]!) {
+  for (const def of tabDefs) {
     const btn = el('button', 'wb-tab')
     btn.type = 'button'
     btn.textContent = def.label
@@ -200,13 +216,24 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     })
     tabs.appendChild(btn)
   }
-  const panes: Record<'ledger' | 'activity' | 'plan', HTMLElement> = {
-    ledger: el('section', 'wb-pane'),
-    activity: el('section', 'wb-pane'),
-    plan: el('section', 'wb-pane'),
+  const ledgerPane = el('section', 'wb-pane')
+  const activityPane = el('section', 'wb-pane')
+  const planPane = el('section', 'wb-pane')
+  const panes: Partial<Record<WorkbenchTab, HTMLElement>> = {
+    ledger: ledgerPane,
+    activity: activityPane,
+    plan: planPane,
+  }
+  if (board !== undefined) {
+    const pane = el('section', 'wb-pane wb-pane-board')
+    pane.appendChild(board.root)
+    panes.board = pane
   }
   main.appendChild(tabs)
-  for (const key of ['ledger', 'activity', 'plan'] as const) main.appendChild(panes[key])
+  main.appendChild(ledgerPane)
+  main.appendChild(activityPane)
+  main.appendChild(planPane)
+  if (panes.board !== undefined) main.appendChild(panes.board)
   const inspector = el('aside', 'wb-inspector')
   const inspectorBody = el('div', 'wb-inspector-body')
   inspector.appendChild(inspectorBody)
@@ -220,11 +247,28 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   function syncTabs(): void {
     for (const btn of Array.from(tabs.children) as HTMLElement[]) {
       btn.classList.toggle('is-active', btn.dataset.tab === tab)
+      // Canvas face down → the board tab hides (same contract as the old
+      // ?mode=plan tab: state.canvas === undefined is the master switch).
+      if (btn.dataset.tab === 'board') {
+        btn.classList.toggle('is-hidden', board !== undefined && !board.available())
+      }
     }
-    for (const key of ['ledger', 'activity', 'plan'] as const) {
-      panes[key].classList.toggle('is-hidden', key !== tab)
+    for (const [key, pane] of Object.entries(panes) as Array<[WorkbenchTab, HTMLElement]>) {
+      pane.classList.toggle('is-hidden', key !== tab)
+    }
+    // Board activation fires on tab TRANSITIONS only (the old stage's
+    // setMode contract), not on every syncTabs poll re-render.
+    if (board !== undefined) {
+      const next = tab === 'board'
+      if (next !== boardActive) {
+        boardActive = next
+        if (next) board.activate()
+        else board.deactivate()
+      }
     }
   }
+
+  let boardActive = false
 
   function clear(node: HTMLElement): HTMLElement {
     while (node.firstChild !== null) node.removeChild(node.firstChild)
@@ -314,7 +358,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
 
   // ── Ledger pane ──
   function renderLedger(): void {
-    const pane = clear(panes.ledger)
+    const pane = clear(ledgerPane)
     if (last === null) return
     const now = deps.now()
     const pending = last.tasks ?? []
@@ -369,7 +413,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
 
   // ── Activity pane ──
   function renderActivity(): void {
-    const pane = clear(panes.activity)
+    const pane = clear(activityPane)
     if (last === null) return
     const now = deps.now()
     const flights = last.inFlight ?? []
@@ -442,7 +486,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   }
 
   function renderPlan(): void {
-    const pane = clear(panes.plan)
+    const pane = clear(planPane)
     if (last === null) return
     const actions = planActions(last)
     const head = el('div', 'wb-pane-head')
@@ -572,9 +616,18 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     renderActivity()
     renderPlan()
     renderInspector()
+    // Canvas face dropped while the board is focused → fall back to the
+    // ledger (the old stage left plan mode the same way).
+    if (tab === 'board' && (board === undefined || !board.available())) tab = 'ledger'
+    syncTabs()
+  }
+
+  function selectTab(key: WorkbenchTab): void {
+    if (key === 'board' && (panes.board === undefined || (board !== undefined && !board.available()))) return
+    tab = key
     syncTabs()
   }
 
   update(null)
-  return { root, update, tab: () => tab }
+  return { root, update, tab: () => tab, selectTab }
 }
