@@ -42,7 +42,7 @@ import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
-import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, type ReceiptResolvedInfo } from './task-ledger.ts'
+import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, briefOf, type ReceiptResolvedInfo } from './task-ledger.ts'
 import { formatReceipt, parseReceipt } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
@@ -1717,6 +1717,10 @@ const reportLoopRing = new Map<string, number[]>()
                 .map(task => ({
                   taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, status: task.status,
                   direction: task.direction ?? 'outbound', receiptExpected: task.receiptExpected !== false,
+                  // The dispatch brief rides every row: a task id and a team
+                  // say nothing about WHAT is owed — supervision cannot tell
+                  // a nudge from an abandon without it.
+                  ...(task.brief !== undefined ? { brief: task.brief } : {}),
                   // C-ruling bucket split: a pending row is settleable while
                   // it is young, expected, and answerable; past the stale
                   // hour it is conversational noise waiting on the dead TTL.
@@ -1727,7 +1731,7 @@ const reportLoopRing = new Map<string, number[]>()
               tasksStaleCount: taskLedger.list().filter(task => task.status === 'pending' && (task.receiptExpected === false || Date.now() - task.startedAt >= 60 * 60_000)).length,
               tasksDead: taskLedger.list()
                 .filter(task => task.status === 'dead')
-                .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt, reason: task.reason ?? 'unspecified' })),
+                .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt, reason: task.reason ?? 'unspecified', ...(task.brief !== undefined ? { brief: task.brief } : {}) })),
               archivedCount: taskLedger.archive().length,
               // Ledger density face: the settled archive split by verdict, so
               // the workbench can say WHICH way those rows settled instead of
@@ -2918,7 +2922,7 @@ ${message}`
                 // settle. The row itself stays: stall visibility and the
                 // nudge still apply to the TARGET side.
                 const receiptExpectation = receiptExpectationOf(receiptTarget)
-                taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label')
+                taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message))
                 armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
                 const payload = JSON.stringify({
                   routed: true,
@@ -3774,7 +3778,7 @@ ${message}`
    * receipt-awaiting rows stay on the book). A synchronous completion
    * already carries its answer and owes nothing.
    */
-  const trackOwedTask = (taskId: string, team: string, peer: string, result: A2aRouteResult, callbackAddress?: string): void => {
+  const trackOwedTask = (taskId: string, team: string, peer: string, result: A2aRouteResult, callbackAddress?: string, brief?: string): void => {
     if (!result.ok) return
     // Native-teams bridge rounds emit no A2A receipt in this slice: booking
     // them as receipt-owed would fill the owed book with rows no receipt can
@@ -3787,10 +3791,10 @@ ${message}`
     // row whose only exit was the dead-letter sweep (57 dead letters, half
     // this shape).
     if (callbackAddress === undefined) {
-      taskLedger.trackReceiptless(taskId, team, peer, result.context_id === '' ? undefined : result.context_id)
+      taskLedger.trackReceiptless(taskId, team, peer, result.context_id === '' ? undefined : result.context_id, brief)
       return
     }
-    taskLedger.track(taskId, team, peer, result.context_id === '' ? undefined : result.context_id)
+    taskLedger.track(taskId, team, peer, result.context_id === '' ? undefined : result.context_id, brief)
   }
 
   /**
@@ -3939,7 +3943,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, exec.signal, args.async === true, taskId, callbackAddress)
       if (outcome !== undefined) {
         if (outcome.ok) {
-          trackOwedTask(taskId, args.team, 'local', outcome, callbackAddress)
+          trackOwedTask(taskId, args.team, 'local', outcome, callbackAddress, briefOf(args.message))
           return outcome as unknown as Record<string, JsonValue>
         }
         failures.push(`local: ${outcome.error}`)
@@ -3962,7 +3966,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         }
         const result = await dispatchPeerCandidate(candidate, args.team, args.message, args.context_id, exec.signal, callerSession, peerAsync, taskId, callbackAddress)
         if (result.ok || exec.signal.aborted) {
-          if (result.ok) trackOwedTask(taskId, args.team, candidate, result, callbackAddress)
+          if (result.ok) trackOwedTask(taskId, args.team, candidate, result, callbackAddress, briefOf(args.message))
           const notes: string[] = []
           if (result.ok && args.async === true && result.task_status === 'TASK_STATE_DELIVERED' && !routableCallerLabel(callerSession)) {
             notes.push(unroutableCallerNote(String(callerSession ?? session)))
@@ -4421,7 +4425,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           if (abort.aborted) break
           continue
         }
-        trackOwedTask(taskId, request.handle, candidate, result)
+        trackOwedTask(taskId, request.handle, candidate, result, callbackAddress, briefOf(request.message))
         const contextId = request.contextId ?? (result.context_id !== '' ? result.context_id : `ctx-${Math.random().toString(16).slice(2, 10)}`)
         if (result.task_status === 'TASK_STATE_COMPLETED') {
           return { kind: 'completed', text: result.reply, taskId, contextId }
@@ -4652,6 +4656,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
                 peer: { type: 'string', required: true },
                 startedAt: { type: 'number', required: true },
                 contextId: { type: 'string' },
+                brief: { type: 'string' },
                 status: { type: 'string', required: true },
                 deadAt: { type: 'number' },
                 direction: { type: 'string', enum: ['inbound', 'outbound'] },
@@ -4672,6 +4677,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
                 startedAt: { type: 'number', required: true },
                 resolvedAt: { type: 'number', required: true },
                 summary: { type: 'string' },
+                brief: { type: 'string' },
               },
             },
           },
@@ -4693,32 +4699,37 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
               const staleCount = pending.length - settleable.length
               return [
                 ...(settleable.length > 0 ? ['Owed receipts:'] : []),
-                ...settleable.map((task: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string }) => {
+                ...settleable.map((task: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string }) => {
                   const context = task.contextId === undefined || task.contextId === '' ? '' : `, follow-up context ${task.contextId}`
-                  return `  - ${task.taskId} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}), waiting ${describeAge(Date.now() - task.startedAt)}${context}`
+                  const brief = task.brief === undefined || task.brief === '' ? '' : ` — "${task.brief}"`
+                  return `  - ${task.taskId}${brief} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}), waiting ${describeAge(Date.now() - task.startedAt)}${context}`
                 }),
                 ...(staleCount > 0 ? [`Delivered conversationally without a formal receipt (${String(staleCount)}) — not debts; they auto-dead-letter at the stale TTL.`] : []),
               ]
             })(),
             ...(value.tasks.some((task: { status: string }) => task.status === 'dead') ? ['Dead-lettered (auto-flagged past the stale TTL; a revived target can still settle with a late receipt):'] : []),
-            ...value.tasks.filter((task: { status: string }) => task.status === 'dead').map((task: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string }) => {
+            ...value.tasks.filter((task: { status: string }) => task.status === 'dead').map((task: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string }) => {
               const context = task.contextId === undefined || task.contextId === '' ? '' : `, follow-up context ${task.contextId}`
-              return `  - ${task.taskId} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}), dispatched ${describeAge(Date.now() - task.startedAt)} ago${context}`
+              const brief = task.brief === undefined || task.brief === '' ? '' : ` — "${task.brief}"`
+              return `  - ${task.taskId}${brief} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}), dispatched ${describeAge(Date.now() - task.startedAt)} ago${context}`
             }),
             ...(value.archivedTotal > 0 ? [`Archived (${String(value.archivedTotal)}), most recent first:`] : []),
-            ...value.archive.map((entry: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string }) => `  - ${entry.taskId} → ${entry.team}: after ${describeAge(entry.resolvedAt - entry.startedAt)}, ${entry.summary === undefined || entry.summary === '' ? 'resolved' : entry.summary}`),
+            ...value.archive.map((entry: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string }) => {
+              const brief = entry.brief === undefined || entry.brief === '' ? '' : ` — "${entry.brief}"`
+              return `  - ${entry.taskId}${brief} → ${entry.team}: after ${describeAge(entry.resolvedAt - entry.startedAt)}, ${entry.summary === undefined || entry.summary === '' ? 'resolved' : entry.summary}`
+            }),
             ...(value.archivedTotal > value.archive.length ? [`  (+${String(value.archivedTotal - value.archive.length)} older not shown)`] : []),
           ].join('\n'),
       }],
     },
     presentCall: () => ({ card: 'generic', title: 'A2A task ledger', kind: 'other', rawInput: null }),
-    execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; status: 'pending' | 'dead'; deadAt?: number; reason?: 'fire-forget' | 'unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean }[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string }[]; archivedTotal: number }> => {
+    execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; status: 'pending' | 'dead'; deadAt?: number; reason?: 'fire-forget' | 'unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean }[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string }[]; archivedTotal: number }> => {
       a2aJoinGateRefusal(exec)
       const archiveAll = taskLedger.archive()
       return {
         ok: true,
         tasks: taskLedger.list().map(task => ({ ...task })),
-        archive: archiveAll.slice(0, 5).map(({ taskId, team, startedAt, resolvedAt, summary }) => ({ taskId, team, startedAt, resolvedAt, ...(summary !== undefined && summary !== '' ? { summary } : {}) })),
+        archive: archiveAll.slice(0, 5).map(({ taskId, team, startedAt, resolvedAt, summary, brief }) => ({ taskId, team, startedAt, resolvedAt, ...(summary !== undefined && summary !== '' ? { summary } : {}), ...(brief !== undefined ? { brief } : {}) })),
         archivedTotal: archiveAll.length,
       }
     },

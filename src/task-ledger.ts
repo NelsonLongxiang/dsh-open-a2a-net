@@ -40,6 +40,25 @@ export const ARCHIVE_CAP = 64
 export const SUMMARY_CAP = 200
 
 /**
+ * Longest dispatch brief kept per row. A ledger row without its payload is
+ * unreadable to supervision — "direct-8f3a1c2b → dsh/ec4ce7f8, 3h old" says
+ * nothing about whether to nudge, abandon, or read the receipt. The brief is
+ * the first non-empty line of the message, capped; the full body never enters
+ * the ledger (it can be arbitrarily large and may quote another session's log).
+ */
+export const BRIEF_CAP = 120
+
+/** Reduce a dispatch body to one readable line: first non-empty line, collapsed, capped. */
+export function briefOf(message: string | undefined): string | undefined {
+  if (message === undefined) return undefined
+  for (const raw of message.split('\n')) {
+    const line = raw.trim().replace(/\s+/g, ' ')
+    if (line !== '') return line.length <= BRIEF_CAP ? line : `${line.slice(0, BRIEF_CAP - 1)}…`
+  }
+  return undefined
+}
+
+/**
  * Age at which an unsettled task auto-dead-letters. A dead row exits the
  * owed view, disarms its async-nudge retry (a cold session cannot consume a
  * re-steer anyway), and still accepts a late receipt from a revived target.
@@ -81,6 +100,12 @@ export interface TaskRecord {
   readonly receiptExpected?: boolean
   /** The conversation the delivery steered, for follow-up routes. */
   readonly contextId?: string
+  /**
+   * Head of the dispatched message (first non-empty line, {@link BRIEF_CAP}).
+   * What the row is ABOUT — the fact that makes the ledger readable without
+   * replaying the conversation. Absent on rows persisted before this field.
+   */
+  readonly brief?: string
   status: TaskStatus
   /** When the row was swept to dead-letter (absent while pending). */
   deadAt?: number
@@ -102,6 +127,8 @@ export interface ArchivedRecord {
   readonly contextId?: string
   readonly resolvedAt: number
   readonly summary?: string
+  /** Head of the dispatched message that this row settled (see {@link TaskRecord.brief}). */
+  readonly brief?: string
   /** Controlled vocabulary verdict when the settling receipt carried a v2 envelope; forced 'abandoned' for caller-abandoned rows. */
   readonly outcome?: ReceiptOutcomeV2 | 'abandoned'
   /** Remote-turn wall-clock cost, when the settling envelope carried it. */
@@ -241,7 +268,7 @@ export class TaskLedger {
    * via context_id follow-ups (the dispatch reply already says so).
    * Idempotent by task id like {@link track}.
    */
-  trackReceiptless(taskId: string, team: string, peer: string, contextId?: string): void {
+  trackReceiptless(taskId: string, team: string, peer: string, contextId?: string, brief?: string): void {
     if (taskId === '') return
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
@@ -254,12 +281,13 @@ export class TaskLedger {
       direction: 'outbound' as const,
       receiptExpected: false,
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
+      ...(brief !== undefined && brief !== '' ? { brief } : {}),
       status: 'pending' as const,
     }, ...this.tasks].slice(0, TASK_CAP)
     this.persist()
   }
 
-  track(taskId: string, team: string, peer: string, contextId?: string): void {
+  track(taskId: string, team: string, peer: string, contextId?: string, brief?: string): void {
     if (taskId === '') return
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
@@ -271,6 +299,7 @@ export class TaskLedger {
       startedAt: this.now(),
       direction: 'outbound' as const,
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
+      ...(brief !== undefined && brief !== '' ? { brief } : {}),
       status: 'pending' as const,
     }, ...this.tasks].slice(0, TASK_CAP)
     this.persist()
@@ -289,7 +318,7 @@ export class TaskLedger {
    * @param from - the caller's receipt target (label or callback address).
    * @param contextId - the delivery's conversation id, kept for follow-up routes (empty omits it).
    */
-  trackInbound(taskId: string, team: string, from: string, contextId?: string, receiptExpected?: boolean): void {
+  trackInbound(taskId: string, team: string, from: string, contextId?: string, receiptExpected?: boolean, brief?: string): void {
     if (taskId === '') return
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
@@ -302,6 +331,7 @@ export class TaskLedger {
       direction: 'inbound' as const,
       ...(receiptExpected === false ? { receiptExpected: false } : {}),
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
+      ...(brief !== undefined && brief !== '' ? { brief } : {}),
       status: 'pending' as const,
     }, ...this.tasks].slice(0, TASK_CAP)
     this.persist()
@@ -350,6 +380,7 @@ export class TaskLedger {
         peer: record.peer,
         startedAt: record.startedAt,
         ...(record.contextId !== undefined ? { contextId: record.contextId } : {}),
+        ...(record.brief !== undefined ? { brief: record.brief } : {}),
         resolvedAt,
         summary: `caller-abandoned${cause}`,
         outcome: 'abandoned',
@@ -387,6 +418,7 @@ export class TaskLedger {
         peer: record.peer,
         startedAt: record.startedAt,
         ...(record.contextId !== undefined ? { contextId: record.contextId } : {}),
+        ...(record.brief !== undefined ? { brief: record.brief } : {}),
         resolvedAt,
         summary: `caller-cancelled${cause}`,
         outcome: 'abandoned',
@@ -433,6 +465,7 @@ export class TaskLedger {
         peer: record.peer,
         startedAt: record.startedAt,
         ...(record.contextId !== undefined ? { contextId: record.contextId } : {}),
+        ...(record.brief !== undefined ? { brief: record.brief } : {}),
         resolvedAt: this.now(),
         ...(summary !== '' ? { summary } : {}),
         ...(envelopeOutcome !== undefined ? { outcome: envelopeOutcome } : {}),
@@ -563,6 +596,7 @@ export class TaskLedger {
               peer: typeof entry.peer === 'string' ? entry.peer : '',
               startedAt: typeof entry.startedAt === 'number' && Number.isFinite(entry.startedAt) ? entry.startedAt : this.now(),
               ...(typeof entry.contextId === 'string' && entry.contextId !== '' ? { contextId: entry.contextId } : {}),
+              ...(typeof entry.brief === 'string' && entry.brief !== '' ? { brief: entry.brief } : {}),
               resolvedAt: typeof entry.resolvedAt === 'number' && Number.isFinite(entry.resolvedAt) ? entry.resolvedAt : this.now(),
               ...(typeof entry.summary === 'string' && entry.summary !== '' ? { summary: entry.summary } : {}),
               ...(typeof entry.outcome === 'string' && (RECEIPT_OUTCOMES as readonly string[]).includes(entry.outcome) ? { outcome: entry.outcome as ReceiptOutcomeV2 } : {}),
@@ -576,9 +610,15 @@ export class TaskLedger {
             peer: typeof entry.peer === 'string' ? entry.peer : '',
             startedAt: typeof entry.startedAt === 'number' && Number.isFinite(entry.startedAt) ? entry.startedAt : this.now(),
             ...(typeof entry.contextId === 'string' && entry.contextId !== '' ? { contextId: entry.contextId } : {}),
+            ...(typeof entry.brief === 'string' && entry.brief !== '' ? { brief: entry.brief } : {}),
+            ...(entry.direction === 'inbound' ? { direction: 'inbound' as const } : {}),
+            ...(entry.receiptExpected === false ? { receiptExpected: false } : {}),
             status: entry.status === 'dead' ? 'dead' : 'pending',
             ...(entry.status === 'dead'
-              ? { deadAt: typeof entry.deadAt === 'number' && Number.isFinite(entry.deadAt) ? entry.deadAt : this.now() }
+              ? {
+                  deadAt: typeof entry.deadAt === 'number' && Number.isFinite(entry.deadAt) ? entry.deadAt : this.now(),
+                  ...(entry.reason === 'fire-forget' || entry.reason === 'unconsumed' ? { reason: entry.reason } : {}),
+                }
               : {}),
           })
         }
@@ -595,6 +635,7 @@ export class TaskLedger {
             peer: typeof entry.peer === 'string' ? entry.peer : '',
             startedAt: typeof entry.startedAt === 'number' && Number.isFinite(entry.startedAt) ? entry.startedAt : this.now(),
             ...(typeof entry.contextId === 'string' && entry.contextId !== '' ? { contextId: entry.contextId } : {}),
+            ...(typeof entry.brief === 'string' && entry.brief !== '' ? { brief: entry.brief } : {}),
             resolvedAt: typeof entry.resolvedAt === 'number' && Number.isFinite(entry.resolvedAt) ? entry.resolvedAt : this.now(),
             ...(typeof entry.summary === 'string' && entry.summary !== '' ? { summary: entry.summary } : {}),
             ...(typeof entry.outcome === 'string' && (RECEIPT_OUTCOMES as readonly string[]).includes(entry.outcome) ? { outcome: entry.outcome as ReceiptOutcomeV2 } : {}),

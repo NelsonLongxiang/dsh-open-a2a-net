@@ -79,6 +79,12 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-row-id{min-width:130px}
 .wb-row-team{color:var(--n-accent);min-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wb-row-meta{color:var(--n-ink-muted)}
+/* The dispatch brief is the row's only human-readable payload — give it the
+   remaining width and clip rather than wrapping the table into unreadability
+   (full text stays in the title tooltip). */
+.wb-row-brief{flex:1 1 160px;min-width:0;color:var(--n-ink);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.wb-row-brief:empty{flex:0 0 0;display:none}
 .wb-row-badges{color:var(--n-live)}
 .wb-row-dir{min-width:16px}
 .wb-row-dir.is-fail{color:var(--n-danger)}

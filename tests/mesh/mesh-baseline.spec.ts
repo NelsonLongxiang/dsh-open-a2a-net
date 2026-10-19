@@ -96,7 +96,7 @@ describe('mesh baseline — real cross-machine closed loops', () => {
       expect(delivered.ok).toBe(true)
       // The owed receipt rides the panel state with the peer candidate recorded.
       const owed = await stateTasks(alpha)
-      expect(owed).toEqual([{ taskId: delivered.task_id, team: 'cargo', peer: cargo.baseUrl, status: 'pending', startedAt: expect.any(Number), direction: 'outbound', receiptExpected: true, settleable: true }])
+      expect(owed).toEqual([{ taskId: delivered.task_id, team: 'cargo', peer: cargo.baseUrl, status: 'pending', startedAt: expect.any(Number), direction: 'outbound', receiptExpected: true, settleable: true, brief: 'long task' }])
 
       // The peer's receipt arrives over the real wire; a network replay of
       // the very same receipt body must not double-settle or resurrect debt.

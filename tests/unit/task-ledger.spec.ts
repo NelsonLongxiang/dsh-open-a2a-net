@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { ARCHIVE_CAP, TASK_CAP, TaskLedger } from '../../src/task-ledger.ts'
+import { ARCHIVE_CAP, BRIEF_CAP, TASK_CAP, TaskLedger, briefOf } from '../../src/task-ledger.ts'
 
 /** A fresh persistence path under a per-test directory. */
 function ledgerPath(): string {
@@ -249,5 +249,58 @@ describe('dead-letter aging reason (F5 layer-3)', () => {
     ledger.resolveFromMessage('[A2A receipt] task direct-legacy settled')
     const archived = ledger.archive()[0]
     expect(archived?.reason).toBeUndefined()
+  })
+})
+
+describe('dispatch brief (payload carriage)', () => {
+  it('reduces a body to its first non-empty line, collapsed and capped', () => {
+    expect(briefOf(undefined)).toBeUndefined()
+    expect(briefOf('')).toBeUndefined()
+    expect(briefOf('\n\n   \n')).toBeUndefined()
+    expect(briefOf('\n  Please  review\nPR 42\nbody line')).toBe('Please review')
+    const long = briefOf('x'.repeat(BRIEF_CAP + 40))
+    expect(long).toHaveLength(BRIEF_CAP)
+    expect(long?.endsWith('…')).toBe(true)
+    // Exactly at the cap is kept verbatim (no gratuitous ellipsis).
+    expect(briefOf('y'.repeat(BRIEF_CAP))).toBe('y'.repeat(BRIEF_CAP))
+  })
+
+  it('carries the brief through pending, dead, and archive tiers', async () => {
+    let clock = Date.now()
+    const ledger = new TaskLedger('', { staleTtlMs: 20, now: () => clock })
+    ledger.track('direct-live', 'dsh', 'local', undefined, 'Review PR 42')
+    ledger.track('direct-dies', 'dsh', 'local', undefined, 'Deploy staging')
+    expect(ledger.list().map(entry => entry.brief)).toEqual(['Deploy staging', 'Review PR 42'])
+    clock += 100
+    // Sweep flips both to dead; the brief must survive the tier change.
+    expect(ledger.list().map(entry => [entry.taskId, entry.status, entry.brief])).toEqual([
+      ['direct-dies', 'dead', 'Deploy staging'],
+      ['direct-live', 'dead', 'Review PR 42'],
+    ])
+    ledger.resolveFromMessage('[A2A receipt] task direct-live kept')
+    expect(ledger.archive()[0]?.brief).toBe('Review PR 42')
+  })
+
+  it('round-trips the brief through persistence, inbound rows included', async () => {
+    const path = ledgerPath()
+    const ledger = new TaskLedger(path)
+    ledger.track('direct-out', 'dsh', 'local', 'ctx-1', 'Outbound ask')
+    ledger.trackInbound('direct-in', 'dsh', 'dsh-host-x-00000000', undefined, true, 'Inbound ask')
+    ledger.track('direct-settled', 'dsh', 'local', undefined, 'Settled ask')
+    ledger.resolveFromMessage('[A2A receipt] task direct-settled done')
+    const reloaded = new TaskLedger(path)
+    const rows = reloaded.list().map(entry => [entry.taskId, entry.brief])
+    expect(rows).toEqual([['direct-in', 'Inbound ask'], ['direct-out', 'Outbound ask']])
+    expect(reloaded.archive()[0]?.brief).toBe('Settled ask')
+  })
+
+  it('renders brief-less rows without the field (pre-upgrade files)', async () => {
+    const path = ledgerPath()
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, JSON.stringify({ version: 2, tasks: [{ taskId: 'direct-old', team: 'dsh', peer: 'local', startedAt: 1, status: 'pending' }], archived: [] }))
+    const ledger = new TaskLedger(path)
+    expect(ledger.list()[0]?.brief).toBeUndefined()
+    expect(existsSync(path)).toBe(true)
+    expect(JSON.parse(readFileSync(path, 'utf8')).tasks[0].brief).toBeUndefined()
   })
 })

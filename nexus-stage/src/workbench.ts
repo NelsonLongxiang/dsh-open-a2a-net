@@ -29,6 +29,13 @@ export interface PendingRow {
   readonly direction?: string
   readonly receiptExpected?: boolean
   readonly settleable?: boolean
+  /**
+   * First line of the dispatched message. A row without it is unreadable:
+   * `direct-8f3a1c2b · dsh · 3h` says nothing about whether to nudge,
+   * abandon, or go read the receipt — the operator's whole question is
+   * WHAT is owed. Absent on rows persisted before the field existed.
+   */
+  readonly brief?: string
 }
 
 /** One dead-lettered row from /state `tasksDead`. */
@@ -39,6 +46,8 @@ export interface DeadRow {
   readonly startedAt: number
   readonly deadAt: number
   readonly reason?: string
+  /** First line of the dispatched message (see {@link PendingRow.brief}). */
+  readonly brief?: string
 }
 
 /** One session row from /state `sessions` (live or cold joined). */
@@ -533,6 +542,11 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       if (row.direction === 'inbound') badges.push('入站')
       line.appendChild(el('span', 'wb-row-id')).textContent = row.taskId
       line.appendChild(el('span', 'wb-row-team')).textContent = row.team
+      const briefText = row.brief ?? ''
+      const brief = el('span', 'wb-row-brief')
+      brief.textContent = briefText
+      brief.title = briefText
+      line.appendChild(brief)
       line.appendChild(el('span', 'wb-row-meta')).textContent = ageText(row.startedAt, now)
       line.appendChild(el('span', 'wb-row-badges')).textContent = badges.join(' ')
       table.appendChild(line)
@@ -547,6 +561,11 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         const line = el('div', 'wb-row')
         line.appendChild(el('span', 'wb-row-id')).textContent = row.taskId
         line.appendChild(el('span', 'wb-row-team')).textContent = row.team
+        const deadBriefText = row.brief ?? ''
+        const deadBrief = el('span', 'wb-row-brief')
+        deadBrief.textContent = deadBriefText
+        deadBrief.title = deadBriefText
+        line.appendChild(deadBrief)
         line.appendChild(el('span', 'wb-row-meta')).textContent = ageText(row.deadAt, now)
         const reason = el('span', 'wb-row-meta wb-muted')
         reason.textContent = row.reason ?? ''
@@ -622,10 +641,14 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     for (const row of state.tasks ?? []) {
       const age = now - row.startedAt
       if (age > 60 * 60_000 && row.settleable === true) {
+        // Quote the original ask: a nudge that only repeats a task id makes
+        // the target re-derive WHAT was owed, and the target is exactly the
+        // session that already failed to answer once.
+        const subject = row.brief === undefined || row.brief === '' ? '' : `「${row.brief}」`
         actions.push({
           severity: 'normal',
-          text: `催办 ${row.taskId} → ${row.team}（等待 ${ageText(row.startedAt, now)} 无回执）`,
-          brief: `a2a_route 催收回执：task ${row.taskId}（team ${row.team}）已派发 ${ageText(row.startedAt, now)}，请回报结果或回执。`,
+          text: `催办 ${row.taskId} → ${row.team}（等待 ${ageText(row.startedAt, now)} 无回执）${subject}`,
+          brief: `a2a_route 催收回执：task ${row.taskId}（team ${row.team}）${subject === '' ? '' : `原任务「${row.brief}」`}已派发 ${ageText(row.startedAt, now)}，请回报结果或回执。`,
         })
       }
     }
