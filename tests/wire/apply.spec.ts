@@ -2173,6 +2173,9 @@ describe('a2a plugin module surface', () => {
       gateAgentLessCalls: 'audit',
       teamJoinAllowlist: [],
       teamScopeRouting: true,
+      // S5 (owner directive 2026-10-20): info-plane tools disclose
+      // joined-team info only; default-on like phase-2 teamScopeRouting.
+      teamScopeInfo: true,
       peerAllowlist: [],
       referralLearning: true,
       stateColdRowsTtlMs: 5_000,

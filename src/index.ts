@@ -252,6 +252,14 @@ export interface Config {
   /** S3 (queued): team-scoped routing admission. Enforcement off by default. */
   readonly teamScopeRouting: boolean
   /**
+   * S5 (owner directive 2026-10-20): information-plane scoping — the
+   * read-only fleet tools (a2a_teams / a2a_status / a2a_probe) disclose
+   * only teams joined by this host's nodes (the union of local roster
+   * declarations). [this host] rows stay visible; a2a_tasks (this host's
+   * own ledger) stays unscoped. Set false for the open plane.
+   */
+  readonly teamScopeInfo: boolean
+  /**
    * Peer boundary model (docs/design/peer-boundary-model.md) — connection
    * layer: an empty list keeps the historical open-referral posture; a
    * non-empty list admits a referral only when its host matches an entry
@@ -368,6 +376,18 @@ export const Config: s<Config> = s.object({
    * peers read as legacy). Set false to restore the open outbound seam.
    */
   teamScopeRouting: s.boolean().default(true),
+  /**
+   * S5 (default-on, owner directive 2026-10-20): the information-plane
+   * tools answer from the joined-team scope only — a2a_teams lists
+   * [this host] rows plus peer rows serving a joined team (note field
+   * explains the scope); a2a_status narrows peers / in-flight / activity
+   * to that scope (local traffic and idempotency aggregates stay);
+   * a2a_probe sweeps serving peers and refuses a single URL whose
+   * verified card cannot prove service. A host whose nodes declare no
+   * teams keeps host-internal facts only. Set false to restore
+   * fleet-wide disclosure.
+   */
+  teamScopeInfo: s.boolean().default(true),
 
   /**
    * Peer boundary model — connection layer: an empty list keeps the
@@ -4033,6 +4053,35 @@ ${message}`
     },
   }))
 
+  // S5 (owner directive 2026-10-20): information-plane scoping. The host's
+  // joined-team scope is the union of every local node's roster
+  // declarations — a host-level set, not per-session: supervisor seats need
+  // the cross-team overview, and 「加入的团队」 reads as the teams this
+  // host's nodes joined. The information-plane tools (a2a_teams /
+  // a2a_status / a2a_probe) disclose remote facts only inside that scope;
+  // a2a_tasks — this host's own dispatch ledger and receipt-reconciliation
+  // surface, including initiator-exempt dispatches — stays unscoped by
+  // ruling (its rows name teams this host itself routed to, never a fleet
+  // census).
+  const joinedTeamScope = (): ReadonlySet<string> => {
+    const joined = new Set<string>()
+    for (const entry of teamMemberships.list()) {
+      for (const team of entry.teams) joined.add(team)
+    }
+    return joined
+  }
+  /**
+   * Whether a peer card proves service to any joined team — its own zone
+   * team, a published session team, or any roster declaration. A card that
+   * proves nothing serves nothing: under scoping it is withheld, which is
+   * the legacy-peer cost the directive accepts (pre-roster peers cannot
+   * prove service either way).
+   */
+  const cardServesJoined = (card: A2aPeerCard, joined: ReadonlySet<string>): boolean =>
+    joined.has(card.team)
+    || (card.sessionTeams ?? []).some(entry => joined.has(entry.team))
+    || (card.teamMemberships ?? []).some(membership => joined.has(membership.team))
+
   ctx.tools.register(defineTool({
     name: 'a2a_teams',
     description:
@@ -4043,6 +4092,7 @@ ${message}`
       + 'by keyword (case-insensitive substring over team name, title, excerpt, origin, or workspace) — searching '
       + 'discovers one extra referral hop within the call. Canvas teams (<team>/canvas/<name>, user-composed multi-member groups) '
       + 'list as local rows; routing to one resolves the first live member or wakes the first cold one. '
+      + 'While teamScopeInfo is on (default), peer rows serve only teams joined by this host\'s nodes — [this host] rows always show and the note field explains the scope. '
       + 'Call this before a2a_route to pick a target team.',
     parameters: {
       query: { type: 'string', description: 'Optional keyword filter (case-insensitive substring over team/name/description).' },
@@ -4074,26 +4124,40 @@ ${message}`
               },
             },
           },
+          note: { type: 'string', description: 'Present while teamScopeInfo scoping is on: the joined-team scope and how many remote rows it withheld ([this host] rows always show).' },
         },
       },
       render: (args, value) => [{
         type: 'text',
-        text: value.teams.length === 0
+        text: (value.teams.length === 0
           ? `No A2A teams${(value.query ?? '') === '' ? '' : ` matching "${String(args.query)}"`} are currently reachable.`
-          : value.teams.map(team => `- ${team.team}${team.local === true ? ' [this host]' : ''}${team.name === '' ? '' : ` (${team.name})`}${team.description === '' ? '' : ` — ${team.description}`}${typeof team.origin === 'string' && team.origin !== '' && team.local !== true ? ` @ ${team.origin}` : ''}${typeof team.workspace === 'string' && team.workspace !== '' ? ` [${team.workspace}]` : ''}`).join('\n'),
+          : value.teams.map(team => `- ${team.team}${team.local === true ? ' [this host]' : ''}${team.name === '' ? '' : ` (${team.name})`}${team.description === '' ? '' : ` — ${team.description}`}${typeof team.origin === 'string' && team.origin !== '' && team.local !== true ? ` @ ${team.origin}` : ''}${typeof team.workspace === 'string' && team.workspace !== '' ? ` [${team.workspace}]` : ''}`).join('\n'))
+          + (value.note === undefined ? '' : `\n${value.note}`),
       }],
     },
     presentCall: args => ({ card: 'generic', title: args.query === undefined || args.query === '' ? 'List reachable A2A teams' : `Search A2A teams: ${args.query}`, kind: 'other', rawInput: args }),
-    execute: async (args: { query?: string }, exec): Promise<{ ok: boolean; query: string; teams: DirectoryTeamRow[] }> => {
+    execute: async (args: { query?: string }, exec): Promise<{ ok: boolean; query: string; teams: DirectoryTeamRow[]; note?: string }> => {
       a2aJoinGateRefusal(exec)
       const query = args.query?.trim().toLowerCase() ?? ''
-      const teams = await listDirectoryTeams(query !== '')
-      if (query === '') return { ok: true, query: '', teams }
+      let teams = await listDirectoryTeams(query !== '')
+      // S5: remote rows survive only when they serve a joined team (the
+      // row's own name or any roster declaration it carries); local rows
+      // are host-internal facts and always survive. The note keeps the
+      // model from reading a scoped listing as an empty fleet.
+      let note: string | undefined
+      if (config.teamScopeInfo) {
+        const joined = joinedTeamScope()
+        const remoteBefore = teams.filter(row => row.local !== true).length
+        teams = teams.filter(row => row.local === true || joined.has(row.team) || (row.teams ?? []).some(name => joined.has(name)))
+        const hidden = remoteBefore - teams.filter(row => row.local !== true).length
+        note = `teamScopeInfo on: ${String(joined.size)} joined team${joined.size === 1 ? '' : 's'} on this host — ${String(hidden)} remote row${hidden === 1 ? '' : 's'} outside the joined scope withheld ([this host] rows always show). To widen the scope: declare membership with a2a_team_join (subject to the owner's teamJoinAllowlist), or ask the owner to set teamScopeInfo: false for the open plane`
+      }
+      if (query === '') return { ok: true, query: '', teams, ...(note !== undefined ? { note } : {}) }
       const matches = (team: DirectoryTeamRow): boolean =>
         team.team.toLowerCase().includes(query) || team.name.toLowerCase().includes(query) || team.description.toLowerCase().includes(query)
         || team.session.toLowerCase().includes(query)
         || (team.origin ?? '').toLowerCase().includes(query) || (team.workspace ?? '').toLowerCase().includes(query) || (team.via ?? '').toLowerCase().includes(query)
-      return { ok: true, query, teams: teams.filter(matches) }
+      return { ok: true, query, teams: teams.filter(matches), ...(note !== undefined ? { note } : {}) }
     },
   }))
 
@@ -5027,6 +5091,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       + '(who is waiting on whom), and the recent routing activity ring (inbound and outbound outcomes). '
       + 'Includes the idempotency window occupancy (claims, replays, conflicts) behind the UNIQUE-ization '
       + 'traffic watch. '
+      + 'While teamScopeInfo is on (default), peers / in-flight / activity narrow to the joined-team scope — local traffic and idempotency aggregates stay. '
       + 'Use it to observe an ongoing collaboration or diagnose delivery instead of re-routing.',
     parameters: {},
     output: {
@@ -5113,11 +5178,45 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       idempotency: IdempotencyStats
     }> => {
       a2aJoinGateRefusal(exec)
+      // S5 open plane: the unscoped snapshot, as before.
+      if (!config.teamScopeInfo) {
+        return {
+          ok: true,
+          peers: peerStore.list().map(url => ({ url, score: peerStore.score(url) })),
+          inFlight: [...inFlightRoutes.values()].map(route => ({ team: route.team, peer: route.peer, startedAt: route.startedAt })),
+          activity: recentActivity.slice(),
+          idempotency: idempotencyStore.stats(),
+        }
+      }
+      // S5 scoped plane: the tracked fleet narrows to peers whose verified
+      // card serves a joined team (bounded-concurrency memoized fetch — a
+      // warm sweep costs no extra round trips); routing facts keep
+      // host-internal traffic (peer 'local') and drop remote rows whose
+      // team is outside the scope, so cross-fleet collaborations stay
+      // unread here. The idempotency aggregate is host machinery, not
+      // attribution — it stays unscoped like the ledger it serves.
+      const joined = joinedTeamScope()
+      const visibleTeams = new Set(joined)
+      for (const agent of sessionNodes.values()) {
+        if (teamMemberships.teamsOf(String(agent.id)).some(team => joined.has(team))) visibleTeams.add(sessionTeamOf(agent))
+      }
+      // The host's own process-team face is host-internal ALWAYS — a
+      // zero-roster host must still see inbound deliveries and outbound
+      // attempts addressed to itself (review M2: gating this on
+      // joined.size > 0 self-blinded exactly that traffic).
+      visibleTeams.add(config.team)
+      const fetch = memoizedCardFetch()
+      const peerRows = await mapBounded(peerStore.list(), SWEEP_CONCURRENCY, async (url: string): Promise<{ url: string; score?: number } | undefined> => {
+        const card = await fetch(url)
+        return card !== undefined && cardServesJoined(card, joined) ? { url, score: peerStore.score(url) } : undefined
+      })
+      const peers = peerRows.filter((row): row is { url: string; score?: number } => row !== undefined)
+      const inScope = (entry: { team: string; peer: string }): boolean => entry.peer === 'local' || visibleTeams.has(entry.team)
       return {
         ok: true,
-        peers: peerStore.list().map(url => ({ url, score: peerStore.score(url) })),
-        inFlight: [...inFlightRoutes.values()].map(route => ({ team: route.team, peer: route.peer, startedAt: route.startedAt })),
-        activity: recentActivity.slice(),
+        peers,
+        inFlight: [...inFlightRoutes.values()].map(route => ({ team: route.team, peer: route.peer, startedAt: route.startedAt })).filter(inScope),
+        activity: recentActivity.filter(inScope),
         idempotency: idempotencyStore.stats(),
       }
     },
@@ -5131,6 +5230,11 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     return `${String(Math.floor(minutes / 60))}h${minutes % 60 === 0 ? '' : `${String(minutes % 60)}m`}`
   }
 
+  // S5 ruling: a2a_tasks stays unscoped — it is this host's own dispatch
+  // ledger (pending / dead / archived), the receipt-reconciliation surface
+  // for work this host itself routed, initiator-exempt dispatches included.
+  // Its rows name teams this host already talked to; reading them back is
+  // bookkeeping, not fleet disclosure.
   ctx.tools.register(defineTool({
     name: 'a2a_tasks',
     description:
@@ -5241,8 +5345,9 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     description:
       'Probe the tracked peer fleet for reachability and round-trip latency: one verified-card fetch per peer '
       + '(the same fetch discovery uses), reporting reachable peers with their team and latency and unreachable '
-      + 'ones with the failure reason. Pass url to probe one target instead of the whole fleet. Use it before '
-      + 'dispatching verification work or when routes fail over, instead of guessing which node is down.',
+      + 'ones with the failure reason. Pass url to probe one target instead of the whole fleet. '
+      + 'While teamScopeInfo is on (default), the sweep covers only peers serving a joined team, and a single URL is refused unless its verified card proves service. '
+      + 'Use it before dispatching verification work or when routes fail over, instead of guessing which node is down.',
     parameters: {
       url: { type: 'string', description: 'Optional single peer base URL to probe; empty probes every tracked peer.' },
     },
@@ -5283,7 +5388,6 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     presentCall: args => ({ card: 'generic', title: args.url === undefined || args.url === '' ? 'Probe the A2A fleet' : `Probe A2A peer: ${args.url}`, kind: 'other', rawInput: args }),
     execute: async (args: { url?: string }, exec): Promise<{ ok: boolean; results: { url: string; reachable: boolean; ms: number; team?: string; error?: string }[] }> => {
       a2aJoinGateRefusal(exec)
-      const targets = args.url !== undefined && args.url !== '' ? [args.url] : peerStore.list()
       const probeOne = async (url: string): Promise<{ url: string; reachable: boolean; ms: number; team?: string; error?: string }> => {
         const startedAt = Date.now()
         const outcome = await client.fetchCardDetail(url)
@@ -5298,6 +5402,37 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           ? { url, reachable: false, ms, error: `unreachable: ${outcome.detail}` }
           : { url, reachable: false, ms, error: `rejected: ${outcome.reason} card` }
       }
+      // S5: a reachability report is fleet disclosure too. The sweep probes
+      // only peers whose verified card serves a joined team (memoized —
+      // warm cards cost nothing); a single-URL probe needs proof of service
+      // — a FRESH card, or a stale cached one: a peer that once served a
+      // joined team and is now down gets the normal down report (that
+      // reachability fact belongs to the team), while a URL that never
+      // proved service is refused without a probe (its reachability is
+      // exactly the fact scoping withholds).
+      const joined = joinedTeamScope()
+      const fetch = memoizedCardFetch()
+      const serves = async (url: string): Promise<boolean> => {
+        const card = await fetch(url)
+        return card !== undefined && cardServesJoined(card, joined)
+      }
+      if (args.url !== undefined && args.url !== '') {
+        if (config.teamScopeInfo && !(await serves(args.url))) {
+          const stale = cardCache.get(args.url)?.card
+          if (stale !== undefined && cardServesJoined(stale, joined)) {
+            // Was serving, now unverifiable fresh — probe and report the
+            // down state through the normal path.
+            return { ok: true, results: await Promise.all([args.url].map(probeOne)) }
+          }
+          return { ok: true, results: [{ url: args.url, reachable: false, ms: 0, error: stale === undefined
+            ? 'refused (not probed): teamScopeInfo on — no verified card for this URL proves service to a joined team'
+            : 'refused (not probed): teamScopeInfo on — this URL\'s verified card shows no team joined by this host\'s nodes' }] }
+        }
+        return { ok: true, results: await Promise.all([args.url].map(probeOne)) }
+      }
+      const targets = config.teamScopeInfo
+        ? await mapBounded(peerStore.list(), SWEEP_CONCURRENCY, async (url: string) => await serves(url) ? url : undefined).then(rows => rows.filter((url): url is string => url !== undefined))
+        : peerStore.list()
       // Promise.all keeps the report in the store's preference order.
       return { ok: true, results: await Promise.all(targets.map(probeOne)) }
     },

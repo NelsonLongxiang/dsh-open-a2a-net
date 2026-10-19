@@ -29,6 +29,20 @@
   routable set. Refusal text names the missing membership.
 - Anonymous deliveries (no `caller_session`) are refused outright.
 
+## Information-plane scoping (S5, default on)
+
+- The read-only fleet tools answer from the joined-team scope only
+  (`teamScopeInfo`, default true; the union of this host's roster
+  declarations): `a2a_teams` lists `[this host]` rows plus peer rows
+  serving a joined team (own name or roster declaration — the `note`
+  field explains the scope), `a2a_status` narrows peers/routes/activity
+  to that scope (local traffic stays), `a2a_probe` sweeps serving peers
+  and refuses a single URL whose card cannot prove service.
+- `a2a_tasks` (this host's own dispatch ledger) stays unscoped — it is
+  the receipt-reconciliation surface for this host's own dispatches.
+- A host whose nodes declare no teams keeps host-internal facts only;
+  explicit `teamScopeInfo: false` restores the open plane.
+
 ## Leaving
 
 - `a2a_team_leave` per team; the network-level leave (退网) removes the
