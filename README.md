@@ -141,15 +141,14 @@ callers. Set an `apiKey` before exposing the listener beyond loopback.
 ## Stages (visualization surfaces)
 
 Two full-page stages mount beside the model tools: `/__dsh_a2a_nexus` (the
-Three.js topology viewer) and `/__dsh_a2a_canvas`. A bare mount path
+A2A workbench — DOM panels for the directory, ledger, activity ring, and a
+derived action plan; replaced the Three.js topology viewer and the spatial
+planning canvas in 0.6.0) and `/__dsh_a2a_canvas`. A bare mount path
 redirects (301) onto its trailing-slash form, so both spellings render and
 the shell's relative assets always resolve inside the served tree. For
 offline development, `nexus-stage/scripts/mockhost.py [port]` serves the
 built stage with canned state; open `/?fault=500` on it to exercise the
-on-page fault badge. The planning canvas persists its layout document
-**last-write-wins** — two browsers (or tabs) arranging the same fleet
-will overwrite each other's arrangements; one planner at a time (see
-`feedback/2026-08-27-nexus-canvas-ux/multi-tab-analysis.md`). `pnpm verify` needs no manual bootstrap on a fresh
+on-page fault badge. `pnpm verify` needs no manual bootstrap on a fresh
 checkout: its `verify:nexus` step installs the subpackage dependencies
 itself before building.
 

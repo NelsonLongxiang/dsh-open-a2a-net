@@ -1,6 +1,6 @@
 ---
 name: a2a-network
-description: Use when a task needs cross-session or cross-node collaboration over the DSH A2A network — joining and teaming, routing work to remote teams and agents, reconciling receipts and the task ledger, and reading the plan/nexus views. Covers admission rules, the receipt contract, and the failure shapes that look like bugs but are contract semantics.
+description: Use when a task needs cross-session or cross-node collaboration over the DSH A2A network — joining and teaming, routing work to remote teams and agents, reconciling receipts and the task ledger, and reading the A2A workbench (/__dsh_a2a_nexus/). Covers admission rules, the receipt contract, and the failure shapes that look like bugs but are contract semantics.
 ---
 
 # DSH A2A Network
@@ -54,8 +54,8 @@ a2a_route { team: "<zone>/<id8 or canvas name>", message, context_id?, async? }
 `__dsh_a2a/state` (per node) carries `sessions` (live/joined), `sessionTeams`,
 `remote` (peer session rows with `origin` = node label + LAN IP and `via` =
 the peer URL), `activity` (routing ring), `tasks` (the ledger: pending /
-stale / archived). The nexus `?mode=plan` view renders the same data as the
-planning canvas.
+stale / archived). The A2A workbench (`/__dsh_a2a_nexus/`, DOM panels —
+directory / ledger / activity / plan) renders the same data for humans.
 
 ## Failure shapes that are contract semantics
 

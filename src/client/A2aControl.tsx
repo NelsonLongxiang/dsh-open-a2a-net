@@ -229,14 +229,9 @@ export function A2aControl({ wide, t, openSession }: A2aControlProps) {
             <div className={css.stageRow}>
               <span className={css.stageTitle}>{t('a2a.stageTitle')}</span>
               <span className={css.stageLinks}>
-                <a className={css.stageLink} href="/__dsh_a2a_nexus/" target="_blank" rel="noreferrer" title={t('a2a.stageScene')}>
-                  {t('a2a.stageScene')}
+                <a className={css.stageLink} href="/__dsh_a2a_nexus/" target="_blank" rel="noreferrer" title={t('a2a.stageWorkbench')}>
+                  {t('a2a.stageWorkbench')}
                 </a>
-                {state.hasCanvas && (
-                  <a className={css.stageLink} href="/__dsh_a2a_nexus/?mode=plan" target="_blank" rel="noreferrer" title={t('a2a.stagePlan')}>
-                    {t('a2a.stagePlan')}
-                  </a>
-                )}
               </span>
             </div>
             <div aria-live="polite">
