@@ -203,19 +203,14 @@ describe('A2aControl (activity feed)', () => {
     expect(link.getAttribute('href')).toBe('/__dsh_a2a_nexus/')
   })
 
-  it('adds the planning-board deep link only while the canvas face is up', async () => {
-    mountControl()
-    openPopover()
-    await screen.findByTitle('Open workbench')
-    expect(screen.queryByTitle('Open planning board')).toBeNull()
-    expect(document.querySelectorAll('a[href="/__dsh_a2a_nexus/"]').length).toBe(1)
-    cleanup()
+  it('keeps a single workbench entry point even while the canvas face is up', async () => {
     stateHasCanvas = true
     mountControl()
     openPopover()
-    const board = await screen.findByTitle('Open planning board')
-    expect(board.getAttribute('href')).toBe('/__dsh_a2a_nexus/?mode=plan')
-    expect(document.querySelectorAll('a[href="/__dsh_a2a_nexus/"]').length).toBe(1)
+    const link = await screen.findByTitle('Open workbench')
+    expect(link.getAttribute('href')).toBe('/__dsh_a2a_nexus/')
+    expect(screen.queryByTitle('Open planning board')).toBeNull()
+    expect(document.querySelectorAll('a[href^="/__dsh_a2a_nexus/"]').length).toBe(1)
   })
 
   it('no longer renders session management sections (migrated to the planning view)', async () => {
