@@ -20,9 +20,15 @@ function bench() {
     { role: 'user', text: '检查默认 profile 插件' },
     { role: 'assistant', text: '开始扫描插件列表' },
   ] }))
-  const v = createWorkbench({ now: () => NOW, abandon, copy, canvasOp, dispatchQuick, sessionLog })
+  const sessionLogList = vi.fn(async () => ({ ok: true, sessions: [
+    // One row shadowing a network row (must be deduplicated) + one archived
+    // row with no network presence (the 0.6.12 reachability fix).
+    { id: 'session-11111111-aaaa', mtimeMs: NOW - 1_000, sizeBytes: 2048 },
+    { id: 'session-99998888-archived', mtimeMs: NOW - 2_000, sizeBytes: 5_500_000 },
+  ] }))
+  const v = createWorkbench({ now: () => NOW, abandon, copy, canvasOp, dispatchQuick, sessionLog, sessionLogList })
   document.body.appendChild(v.root)
-  return { v, abandon, copy, canvasOp, dispatchQuick, sessionLog }
+  return { v, abandon, copy, canvasOp, dispatchQuick, sessionLog, sessionLogList }
 }
 
 const state: StateBody = {
@@ -585,5 +591,39 @@ describe('inline transcript (0.6.11)', () => {
     item.click()
     expect(text(v.root.querySelector('.wb-inspector'))).toContain('远端节点的对话记录在对端机器上')
     expect(v.root.querySelector('.wb-transcript')).toBeNull()
+  })
+})
+
+describe('local log archive section (0.6.12)', () => {
+  it('lists archived sessions with no network row and opens their transcript', async () => {
+    const { v, sessionLog } = bench()
+    v.update(state)
+    // The listing lands async; the section appears when rows resolve.
+    await vi.waitFor(() => {
+      const head = [...v.root.querySelectorAll('.wb-side-head')].map(n => text(n))
+      expect(head.join('|')).toContain('本机日志 · 1')
+    })
+    // The network row session-11111111-aaaa is deduplicated: only the
+    // archived session-99998888-archived remains.
+    const rows = [...v.root.querySelectorAll('.wb-item-label')].map(n => text(n))
+    expect(rows.some(l => l.includes('888-archived'))).toBe(true)
+    expect(rows.some(l => l.includes('1111-aaaa') && l.includes('KB'))).toBe(false)
+    ;([...v.root.querySelectorAll('.wb-item')].find(n => text(n).includes('888-archived')) as HTMLElement).click()
+    expect(text(v.root.querySelector('.wb-inspector'))).toContain('只读日志')
+    expect(sessionLog).toHaveBeenCalledWith('session-99998888-archived')
+    await vi.waitFor(() => expect(text(v.root.querySelector('.wb-transcript-body'))).toContain('开始扫描插件列表'))
+  })
+
+  it('counts the archive in the directory header and hides the section without the dep', async () => {
+    const { v } = bench()
+    v.update(state)
+    await vi.waitFor(() => expect(text(v.root.querySelector('.wb-sec[data-sec="directory"] .wb-sec-count'))).toContain('档'))
+    const bare = createWorkbench({ now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(), canvasOp: vi.fn(async () => true), sessionLog: vi.fn(async () => ({ ok: true, messages: [] })) })
+    document.body.appendChild(bare.root)
+    bare.update(state)
+    await Promise.resolve()
+    await Promise.resolve()
+    const heads = [...bare.root.querySelectorAll('.wb-side-head')].map(n => text(n))
+    expect(heads.join('|')).not.toContain('本机日志')
   })
 })

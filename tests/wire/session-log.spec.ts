@@ -2,12 +2,13 @@
  * Session transcript route (0.6.11): GET /__dsh_a2a/session-log serves the
  * tail of a LOCAL node's own conversation log for the workbench inspector —
  * inline reading, no navigation (owner ruling 2026-10-20). These specs pin
- * the control-plane contract: the trust window, the id gate (only sessions
- * this node knows), generation-artifact discovery, multi-frame zstd decode,
- * the limit cap, and honest errors for absent artifacts.
+ * the control-plane contract: the trust window, the artifact-existence gate
+ * (host-scoped reading — network visibility is not the reading gate, 0.6.12),
+ * the no-id listing face, generation-artifact discovery, multi-frame zstd
+ * decode, the limit cap, and honest errors for absent artifacts.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { zstdCompressSync } from 'node:zlib'
@@ -135,12 +136,38 @@ describe('session-log route (0.6.11)', () => {
     expect(body.messages.map(message => message.text)).toEqual(['2', '3'])
   })
 
-  it('rejects ids this node does not know', async () => {
+  it('serves logs for sessions the network faces never see (0.6.12 reading is host-scoped)', async () => {
+    // Archived or never-joined sessions hold real conversation logs; the
+    // workbench reading face admits them while network visibility stays
+    // governed by its own rules (the 3081 'no chat records reachable'
+    // defect: cold rows filtered, transcript entry point gone).
+    const id = 'session-ffff6666-0000-4000-8000-000000000000'
     const m = await mount()
     mounted.push(m.dispose)
-    const body = await (await get(m.port, 'session-stranger-0000-4000-8000-000000000000')).json() as { ok: boolean; error: string }
-    expect(body.ok).toBe(false)
-    expect(body.error).toContain('unknown session')
+    writeLog(m.home, id, ['离档会话的对话'])
+    const body = await (await get(m.port, id)).json() as { ok: boolean; messages: Array<{ text: string }> }
+    expect(body.ok).toBe(true)
+    expect(body.messages.map(message => message.text)).toEqual(['离档会话的对话'])
+  })
+
+  it('lists readable sessions newest-first without an id (0.6.12)', async () => {
+    const m = await mount()
+    mounted.push(m.dispose)
+    const older = 'session-11111111-0000-4000-8000-000000000000'
+    const newer = 'session-22222222-0000-4000-8000-000000000000'
+    writeLog(m.home, older, ['旧'])
+    writeLog(m.home, newer, ['新'])
+    // Force distinct mtimes: same-tick writes can tie, and the sort must not
+    // depend on scan order.
+    utimesSync(join(m.home, 'sessions', '--D-workspace-bucket--', older, 'session.jsonl.zstd'), new Date(1), new Date(1))
+    const body = await (await fetch(`http://127.0.0.1:${m.port}/__dsh_a2a/session-log`)).json() as {
+      ok: boolean
+      count: number
+      sessions: Array<{ id: string; mtimeMs: number; sizeBytes: number }>
+    }
+    expect(body.ok).toBe(true)
+    expect(body.sessions.map(row => row.id)).toEqual([newer, older])
+    expect(body.sessions[0]!.sizeBytes).toBeGreaterThan(0)
   })
 
   it('rejects path-shaped ids even for known prefixes', async () => {

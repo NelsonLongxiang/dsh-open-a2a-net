@@ -152,6 +152,10 @@ export interface WorkbenchDeps {
   /** Inline transcript (0.6.11): the tail of a LOCAL session's own
    *  conversation log, read-only. Optional — without it the block hides. */
   sessionLog?(id: string): Promise<{ ok: boolean; messages?: Array<{ role: string; text: string }>; error?: string }>
+  /** 0.6.12: list every local session holding a log artifact (newest first) —
+   *  the reading face is host-scoped, so archived and never-joined sessions
+   *  appear here even when the network directory shows no local rows. */
+  sessionLogList?(): Promise<{ ok: boolean; sessions?: Array<{ id: string; mtimeMs: number; sizeBytes: number }>; error?: string }>
   /** Copy text to the clipboard; drafts are pasteable task briefs. */
   copy(text: string): void
   // 0.6.10: openLocal/openRemote (0.6.7/0.6.8 jump affordances) removed by
@@ -225,6 +229,7 @@ type Selection =
   | { kind: 'remote'; row: RemoteRow }
   | { kind: 'canvas'; row: CanvasTeamRow }
   | { kind: 'peer'; row: { url: string; score?: number } }
+  | { kind: 'log'; row: { id: string; mtimeMs: number; sizeBytes: number } }
   | undefined
 
 /** The four rail sections. */
@@ -296,6 +301,10 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // demand. renderInspector rebuilds every poll, so the cache keeps the
   // transcript block from refetching on each 3s tick.
   const transcriptCache = new Map<string, { ok: boolean; messages?: Array<{ role: string; text: string }>; error?: string } | undefined>()
+  // 0.6.12: readable local logs (host-scope list, newest first). Refreshed
+  // opportunistically per poll; rows render in the directory's 本机日志 section.
+  let logRows: Array<{ id: string; mtimeMs: number; sizeBytes: number }> = []
+  let logRowsBusy = false
 
   const root = el('div', 'wb')
   root.setAttribute('data-testid', 'wb-root')
@@ -511,7 +520,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     const sessions = state.sessions ?? []
     const live = sessions.filter(row => row.live === true && admit('local', rowHaystack(displayName(row), row.team, row.label, row.id, row.canvasTeams)))
     const cold = sessions.filter(row => row.live !== true && admit('local', rowHaystack(displayName(row), row.team, row.label, row.id, row.canvasTeams)))
-    sectionCounts.get('directory')!.textContent = `${live.length}/${cold.length}`
+    sectionCounts.get('directory')!.textContent = `${live.length}/${cold.length}${logRows.length > 0 ? ` · 档 ${logRows.length}` : ''}`
     if (live.length > 0) {
       section('本机 · 现场', live.length)
       for (const row of live) {
@@ -577,7 +586,28 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         box.appendChild(item)
       }
     }
-    if (filtering && live.length + cold.length + canvases.length + peers.length + remote.length === 0) {
+    // 0.6.12: 本机日志 — every local session artifact EXCEPT ids already shown
+    // as network rows (those open the same transcript from their own cards).
+    // This is the reachability fix for hosts whose cold rows are all archived:
+    // reading is host-scoped, the network directory is not the reading gate.
+    const networkIds = new Set(sessions.map(row => row.id))
+    const fmtSize = (n: number): string => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)} MB` : n >= 1_000 ? `${Math.round(n / 1_000)} KB` : `${n} B`
+    const logs = logRows.filter(row => !networkIds.has(row.id) && admit('local', rowHaystack(row.id)))
+    if (logs.length > 0) {
+      section('本机日志', logs.length)
+      for (const row of logs) {
+        const item = el('button', 'wb-item')
+        item.type = 'button'
+        item.appendChild(el('span', 'wb-dot')).textContent = '❐'
+        const label = el('span', 'wb-item-label')
+        label.textContent = `…${row.id.slice(-12)} · ${fmtSize(row.sizeBytes)}`
+        item.title = `${row.id}\n${fmtSize(row.sizeBytes)} · ${new Date(row.mtimeMs).toLocaleString()}`
+        item.appendChild(label)
+        item.addEventListener('click', () => select({ kind: 'log', row }))
+        box.appendChild(item)
+      }
+    }
+    if (filtering && live.length + cold.length + canvases.length + peers.length + remote.length + logs.length === 0) {
       box.appendChild(el('div', 'wb-muted')).textContent = '无匹配条目'
     }
   }
@@ -907,6 +937,15 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       card.appendChild(remoteNote)
       // Quick dispatch targets the remote team handle directly (0.6.9).
       if (deps.dispatchQuick !== undefined) card.appendChild(dispatchCard(sel.row.team))
+    } else if (sel.kind === 'log') {
+      // 0.6.12: archive/never-joined session log — reading face, host-scoped.
+      textRow(card, '会话 ID', sel.row.id)
+      textRow(card, '大小', sel.row.sizeBytes >= 1_000_000 ? `${(sel.row.sizeBytes / 1_000_000).toFixed(1)} MB` : `${Math.round(sel.row.sizeBytes / 1_000)} KB`)
+      textRow(card, '最后活动', new Date(sel.row.mtimeMs).toLocaleString())
+      const note = el('div', 'wb-hint')
+      note.textContent = '只读日志 —— 此会话当前不在网络目录（可能已归档或未入网）。'
+      card.appendChild(note)
+      if (deps.sessionLog !== undefined) card.appendChild(transcriptBlock(sel.row.id))
     } else if (sel.kind === 'canvas') {
       // Re-resolve the team from the freshest state: membership changes here
       // must be visible on the next render even though the click-time row is
@@ -1123,6 +1162,17 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
 
   function update(state: StateBody | null): void {
     last = state
+    // 0.6.12: refresh the readable-log list opportunistically (single flight;
+    // the sidebar re-renders when rows land, mid-poll remount is idempotent).
+    if (deps.sessionLogList !== undefined && !logRowsBusy) {
+      logRowsBusy = true
+      deps.sessionLogList().then(result => {
+        logRows = result.ok && result.sessions !== undefined ? result.sessions : []
+      }).catch(() => {}).finally(() => {
+        logRowsBusy = false
+        renderSidebar()
+      })
+    }
     renderHeader()
     renderSidebar()
     renderDraftTargets()

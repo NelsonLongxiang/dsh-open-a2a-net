@@ -3295,10 +3295,14 @@ ${message}`
     // Session transcript reader (0.6.11): the workbench inspector shows the
     // tail of a LOCAL node's own conversation log inline — owner ruling
     // 2026-10-20 banned navigation, and reading is the need jumps used to
-    // serve. The id gate admits only sessions this node already knows (live
-    // sessionNodes or joined cold sessions), never an arbitrary path: this
-    // face serves this host's <dshHome>/sessions tree and nothing else.
-    // Caps mirror session-transcript.ts (file bytes, limit).
+    // serve. The id gate is artifact existence under this host's sessions
+    // tree — reading is a host-workbench concern, not a network-membership
+    // concern, so archived and never-joined sessions stay readable while the
+    // network faces keep their own visibility rules. Path shape is still
+    // checked (no '/', '\', '..') and the tree never leaves <dshHome>/sessions.
+    // Without an id the same face lists readable sessions (newest activity
+    // first, capped) so the workbench directory can offer log rows even when
+    // the network directory shows none. Caps mirror session-transcript.ts.
     ctx.effect(() => webServer.register({
       kind: 'exact',
       path: '/__dsh_a2a/session-log',
@@ -3308,10 +3312,35 @@ ${message}`
         const limitArg = Number(url.searchParams.get('limit') ?? TRANSCRIPT_DEFAULT_LIMIT)
         const limit = Number.isFinite(limitArg) ? Math.max(1, Math.min(TRANSCRIPT_MAX_LIMIT, Math.floor(limitArg))) : TRANSCRIPT_DEFAULT_LIMIT
         let result: Record<string, JsonValue>
-        if (id === '' || id.includes('/') || id.includes('\\') || id.includes('..')) {
+        if (id.includes('/') || id.includes('\\') || id.includes('..')) {
           result = { ok: false, error: 'id is required' }
-        } else if (!sessionNodes.has(id) && !joinedSessions.has(id)) {
-          result = { ok: false, error: 'unknown session on this node' }
+        } else if (id === '') {
+          // Listing face: every session directory holding a log artifact.
+          try {
+            const sessionsRoot = join(home, 'sessions')
+            const rows: Array<{ id: string; mtimeMs: number; sizeBytes: number }> = []
+            if (existsSync(sessionsRoot)) {
+              for (const bucket of readdirSync(sessionsRoot, { withFileTypes: true })) {
+                if (!bucket.isDirectory()) continue
+                for (const child of readdirSync(join(sessionsRoot, bucket.name), { withFileTypes: true })) {
+                  if (!child.isDirectory()) continue
+                  const dir = join(sessionsRoot, bucket.name, child.name)
+                  const files = readdirSync(dir).filter(name => name.startsWith('session.') && (name.endsWith('.jsonl.zstd') || name.endsWith('.jsonl')))
+                  if (files.length === 0) continue
+                  let newest: { mtimeMs: number; sizeBytes: number } | undefined
+                  for (const name of files) {
+                    const st = statSync(join(dir, name))
+                    if (newest === undefined || st.mtimeMs > newest.mtimeMs) newest = { mtimeMs: st.mtimeMs, sizeBytes: st.size }
+                  }
+                  if (newest !== undefined) rows.push({ id: child.name, ...newest })
+                }
+              }
+            }
+            rows.sort((a, b) => b.mtimeMs - a.mtimeMs)
+            result = { ok: true, count: rows.length, sessions: rows.slice(0, 50) }
+          } catch (error) {
+            result = { ok: false, error: `transcript list failed: ${error instanceof Error ? error.message : String(error)}` }
+          }
         } else {
           try {
             // Generation artifacts: session.v{N}.jsonl[.zstd] is the newest

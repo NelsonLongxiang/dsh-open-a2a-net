@@ -191,6 +191,17 @@ const bench = createWorkbench({
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }
   },
+  async sessionLogList() {
+    // 0.6.12: host-scope readable-log listing — archived and never-joined
+    // sessions included; the network directory is not the reading gate.
+    try {
+      const res = await fetch('/__dsh_a2a/session-log')
+      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; sessions?: Array<{ id: string; mtimeMs: number; sizeBytes: number }>; error?: string }
+      return { ok: res.ok && body.ok === true, sessions: body.sessions, error: body.error ?? `HTTP ${res.status}` }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
   board: {
     root: planning.root,
     activate: () => planning.activate(),
