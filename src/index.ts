@@ -4068,6 +4068,18 @@ ${message}`
     for (const entry of teamMemberships.list()) {
       for (const team of entry.teams) joined.add(team)
     }
+    // G4 (review artifact 688c0354d3 v2): canvas membership is join intent
+    // too. This host's canvas teams — and every member handle they name
+    // (remote zone-qualified handles as-is, local session ids as their
+    // session-team handle) — belong to the scope, so canvas teammates stay
+    // visible to each other under teamScopeInfo instead of the roster-only
+    // reading splitting them apart.
+    for (const name of canvasStore.list()) {
+      joined.add(canvasTeamOf(name))
+      for (const member of canvasStore.membersOf(name)) {
+        joined.add(member.includes('/') ? member : `${config.team}/${id8(member)}`)
+      }
+    }
     return joined
   }
   /**
@@ -5205,6 +5217,13 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // attempts addressed to itself (review M2: gating this on
       // joined.size > 0 self-blinded exactly that traffic).
       visibleTeams.add(config.team)
+      // G2 (review artifact 688c0354d3 v2): the host-synthetic face rows —
+      // the /a2a/log telemetry records under the synthetic team label
+      // 'log' (recordActivity('in', 'log', caller) on both admission
+      // outcomes) — are THIS host's own face facts, not fleet observation.
+      // Scoping filtered them like foreign traffic and hid the host's own
+      // inbound log-face telemetry from its own supervisor; they pass.
+      visibleTeams.add('log')
       const fetch = memoizedCardFetch()
       const peerRows = await mapBounded(peerStore.list(), SWEEP_CONCURRENCY, async (url: string): Promise<{ url: string; score?: number } | undefined> => {
         const card = await fetch(url)
