@@ -18,7 +18,6 @@
     "rewriteRelativeImportExtensions": true,
     "types": ["node"],
     "ignoreDeprecations": "5.0",
-    "baseUrl": ".",
     "paths": {
       "@deepseek-ai/cordis": ["../deepseek-harness/vendor/cordis/lib/types/index.d.ts"],
       "@deepseek-ai/cordis/*": ["../deepseek-harness/vendor/cordis/lib/types/*.d.ts"],

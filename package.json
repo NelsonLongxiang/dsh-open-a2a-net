@@ -150,6 +150,7 @@
   "devDependencies": {
     "@deepseek-ai/dsh-client-store": "0.2.0-rc.2",
     "@deepseek-ai/dsh-client-ui-primitives": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-scope": "0.0.1-rc.1",
     "@deepseek-ai/dsh-system-prompt": "0.1.0-rc.6",
     "@deepseek-ai/dsh-util-code-language": "0.1.7-rc.2",
     "@deepseek-ai/dsh-util-workspace-path": "0.1.2-alpha.2",
@@ -187,5 +188,11 @@
   "repository": {
     "type": "git",
     "url": "git+https://gitee.com/NelsonLongXiang/dsh-open-a2a-net.git"
+  },
+  "pnpm": {
+    "overrides": {
+      "@deepseek-ai/cordis": "4.0.5",
+      "@deepseek-ai/cordis-plugin-loader": "1.0.5"
+    }
   }
 }
