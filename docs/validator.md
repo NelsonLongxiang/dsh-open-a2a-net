@@ -80,6 +80,12 @@ nexus 116 全 exit 0、3081 v0.6.15 peers 6 dead 14、三闸门 ✓、工作树�
 插曲：首探针撞上 k3 遗留冒烟脚本 tmp-0616-fixcheck.py 致 worktree_clean=false——清掉重采后过；
 纪律提醒：冒烟脚本一律放 tmp/（已 gitignore），不要落仓库根。
 
+0.6.17 周期（2026-10-21）：chat 惯例修复（焦点/滚动跨轮询保持、Enter 发送、Esc 关抽屉），
+amend 进单一 rc 提交（24513c2）——**14/14 overall PASS**（run_6e15cf91fb1dbc4e：
+unit 300/wire 291/nexus 120 全 exit 0、3081 v0.6.17、三闸门 ✓）。
+部署坑：同版本号 file: tgz 重装会被 pnpm 缓存吞掉（3081 一直跑旧 bundle）——
+候选修订重装必须 `pnpm remove` + `pnpm add`，并以 index.html 引用的 bundle hash 为准核验。
+
 ## 何时跑
 
 - 每个候选版本完成 `pnpm verify` 并部署 3081 之后、报给用户校验之前——
