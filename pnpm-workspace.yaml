@@ -1,3 +1,12 @@
+# pnpm ≥11.24 no longer reads package.json#pnpm — the overrides live HERE so
+# lock regeneration keeps the cordis unification on every pnpm version. The
+# SAME two values are mirrored in package.json#pnpm.overrides for pre-11.24
+# readers still in the fleet (.157 runs 11.23); keep both in sync (cordis
+# incident 0e32ae1, K3 follow-up ①).
+overrides:
+  '@deepseek-ai/cordis': 4.0.5
+  '@deepseek-ai/cordis-plugin-loader': 1.0.5
+
 minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-api-session-controller@0.1.2-alpha.3'
   - '@deepseek-ai/dsh-brand@0.1.2-alpha.3'
