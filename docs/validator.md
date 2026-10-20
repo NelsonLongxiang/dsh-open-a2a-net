@@ -74,6 +74,12 @@ nexus 116 全 exit 0、3081 v0.6.15 peers 6 dead 14、三闸门 ✓、工作树�
 注：probe 计数与本地手跑（564+4/111）口径不同（探针分别跑 test:unit 与 verify:nexus，
 后者含 dist 门禁前置构建），以探针快照为准。
 
+0.6.16 周期（2026-10-21）：k3 席修复幻影 'HTTP 200'（team 柄读取解析实会话 + 成功响应不再涂 error），glm 席验收——
+**14/14 overall PASS**（run_e39265222ce7a807，head eedf3ca6：unit 300/wire 291/nexus 116 全 exit 0、
+3081 v0.6.16 peers 6 dead 18、candidate ✓ unpublished ✓ clean ✓）。
+插曲：首探针撞上 k3 遗留冒烟脚本 tmp-0616-fixcheck.py 致 worktree_clean=false——清掉重采后过；
+纪律提醒：冒烟脚本一律放 tmp/（已 gitignore），不要落仓库根。
+
 ## 何时跑
 
 - 每个候选版本完成 `pnpm verify` 并部署 3081 之后、报给用户校验之前——
