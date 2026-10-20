@@ -26,9 +26,24 @@ function bench() {
     { id: 'session-11111111-aaaa', mtimeMs: NOW - 1_000, sizeBytes: 2048 },
     { id: 'session-99998888-archived', mtimeMs: NOW - 2_000, sizeBytes: 5_500_000 },
   ] }))
-  const v = createWorkbench({ now: () => NOW, abandon, copy, canvasOp, dispatchQuick, sessionLog, sessionLogList })
+  // 0.6.15: the /a2a/log proxy — used by remote-row and peer chat faces.
+  const remoteSessionLog = vi.fn(async (query: { team?: string; peer?: string; id?: string }) => {
+    if (query.team !== undefined) {
+      return { ok: true, messages: [
+        { role: 'user', text: '评审一下这个 PR' },
+        { role: 'assistant', text: '已读 diff，开始评审' },
+      ] }
+    }
+    if (query.id !== undefined) {
+      return { ok: true, messages: [{ role: 'assistant', text: '对端会话正文' }] }
+    }
+    return { ok: true, sessions: [
+      { id: 'session-77777777-peer', mtimeMs: NOW - 3_000, sizeBytes: 4096 },
+    ] }
+  })
+  const v = createWorkbench({ now: () => NOW, abandon, copy, canvasOp, dispatchQuick, sessionLog, sessionLogList, remoteSessionLog })
   document.body.appendChild(v.root)
-  return { v, abandon, copy, canvasOp, dispatchQuick, sessionLog, sessionLogList }
+  return { v, abandon, copy, canvasOp, dispatchQuick, sessionLog, sessionLogList, remoteSessionLog }
 }
 
 const state: StateBody = {
@@ -389,15 +404,16 @@ describe('inline-only reach (0.6.10)', () => {
     // 0.6.7/0.6.8's ↗ (openLocal broadcast / openRemote deep link) is gone
     // by ruling — 禁止任何跳转，全部使用响应式布局.
     expect(v.root.querySelector('.wb-item-open')).toBeNull()
-    // Local rows open the chat drawer (0.6.13); remote rows keep the
-    // inspector card — reading in place, nothing navigates.
+    // Local rows open the chat drawer (0.6.13); remote rows do too (0.6.15,
+    // transcript through the proxy) — reading in place, nothing navigates.
     const items = [...v.root.querySelectorAll('.wb-directory .wb-item')]
     const scout = items.find(n => text(n).includes('scout-01'))!
     ;(scout.querySelector('.wb-item-label') as HTMLElement).click()
     expect(v.root.querySelector('.wb-chat.is-open')).not.toBeNull()
     const remote = items.find(n => text(n).includes('remote-host'))!
     ;(remote.querySelector('.wb-item-label') as HTMLElement).click()
-    expect(text(v.root.querySelector('.wb-inspector'))).toContain('remote-host')
+    expect(v.root.querySelector('.wb-chat.is-open')).not.toBeNull()
+    expect(text(v.root.querySelector('.wb-chat'))).toContain('remote-host')
   })
 
   it('a local session row dispatches through the chat drawer\u2019s inline 快派 form', async () => {
@@ -480,8 +496,20 @@ describe('quick dispatch form (0.6.9)', () => {
   function openRemote(v: ReturnType<typeof createWorkbench>): HTMLElement {
     const item = [...v.root.querySelectorAll('.wb-item-label')].find(n => text(n).includes('remote-host'))!
     item.click()
-    return v.root.querySelector('.wb-inspector .wb-card') as HTMLElement
+    // 0.6.15: remote rows open the chat drawer — the dispatch form rides it.
+    return v.root.querySelector('.wb-chat') as HTMLElement
   }
+
+  it('dispatches from the remote row chat drawer keyed to the remote team handle', async () => {
+    const { v, dispatchQuick } = bench()
+    v.update(state)
+    const card = openRemote(v)
+    const form = card.querySelector('.wb-dispatch-form') as HTMLFormElement
+    const area = form.querySelector('.wb-dispatch-text') as HTMLTextAreaElement
+    area.value = 'across the mesh'
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(dispatchQuick).toHaveBeenCalledWith('dsh-host-ca0c0a8d', 'across the mesh'))
+  })
 
   it('dispatches from the canvas team inspector keyed to the routing team; the note names the task', async () => {
     const { v, dispatchQuick } = bench()
@@ -587,12 +615,15 @@ describe('inline transcript (0.6.11)', () => {
     expect(bare.root.querySelector('.wb-transcript')).toBeNull()
   })
 
-  it('remote rows show the on-the-other-host note instead of a transcript', () => {
-    const { v } = bench()
+  it('remote rows without the proxy dep keep the honest note instead of a transcript', () => {
+    // 0.6.15: the proxy read face is opt-in — without the dep the chat says
+    // where the records live instead of guessing.
+    const v = createWorkbench({ now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(), canvasOp: vi.fn(async () => true), sessionLog: vi.fn(async () => ({ ok: true, messages: [] })) })
+    document.body.appendChild(v.root)
     v.update(state)
     const item = [...v.root.querySelectorAll('.wb-item-label')].find(n => text(n).includes('remote-host'))!
     item.click()
-    expect(text(v.root.querySelector('.wb-inspector'))).toContain('远端节点的对话记录在对端机器上')
+    expect(text(v.root.querySelector('.wb-chat'))).toContain('远端节点的对话记录在对端机器上')
     expect(v.root.querySelector('.wb-transcript')).toBeNull()
   })
 })
@@ -649,8 +680,12 @@ describe('node chat drawer (0.6.13)', () => {
     await vi.waitFor(() => expect(dispatchQuick).toHaveBeenCalledWith('dsh/11111111', 'board hello'))
   })
 
-  it('a board peer pick shows the honest cross-host note instead of a transcript', () => {
-    const { v, sessionLog } = bench()
+  it('a board peer pick without the proxy dep shows the honest cross-host note', () => {
+    // 0.6.15: with remoteSessionLog wired the peer face becomes a drill-down
+    // (see the 0.6.15 describe); the honest note remains the no-dep fallback.
+    const sessionLog = vi.fn(async () => ({ ok: true, messages: [] }))
+    const v = createWorkbench({ now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(), canvasOp: vi.fn(async () => true), sessionLog })
+    document.body.appendChild(v.root)
     v.update(state)
     v.openNodeChat('peer-192.168.3.157:13080')
     const chat = v.root.querySelector('.wb-chat')!
@@ -672,5 +707,58 @@ describe('node chat drawer (0.6.13)', () => {
     v.update({ ...state, sessions: [...state.sessions] })
     expect(v.root.querySelector('.wb-chat.is-open')).not.toBeNull()
     expect(text(v.root.querySelector('.wb-chat-title'))).toBe('cold-02')
+  })
+})
+
+describe('remote chat through the proxy (0.6.15)', () => {
+  it('a remote row loads its transcript via remoteSessionLog(team) in the drawer', async () => {
+    const { v, remoteSessionLog } = bench()
+    v.update(state)
+    const item = [...v.root.querySelectorAll('.wb-item-label')].find(n => text(n).includes('remote-host'))!
+    item.click()
+    const chat = v.root.querySelector('.wb-chat')!
+    expect(chat.classList.contains('is-open')).toBe(true)
+    // Card metadata rides the chat head area (0.6.15 moved the remote card).
+    expect(text(chat)).toContain('node 192.168.3.157')
+    await vi.waitFor(() => expect(remoteSessionLog).toHaveBeenCalledWith({ team: 'dsh-host-ca0c0a8d' }))
+    await vi.waitFor(() => {
+      const body = chat.querySelector('.wb-transcript-body')!
+      expect(text(body)).toContain('评审一下这个 PR')
+      expect(text(body)).toContain('已读 diff，开始评审')
+    })
+  })
+
+  it('a peer pick drills: session list from the peer, then the picked transcript, then back', async () => {
+    const { v, remoteSessionLog } = bench()
+    v.update(state)
+    v.openNodeChat('peer-192.168.3.157:13080')
+    const chat = v.root.querySelector('.wb-chat')!
+    expect(chat.classList.contains('is-open')).toBe(true)
+    // Phase 1: the listing (via the proxy, never a direct dial).
+    await vi.waitFor(() => expect(remoteSessionLog).toHaveBeenCalledWith({ peer: 'http://192.168.3.157:13080' }))
+    await vi.waitFor(() => {
+      const rows = [...chat.querySelectorAll('.wb-member-row')].map(n => text(n))
+      expect(rows.some(r => r.includes('-peer'))).toBe(true)
+    })
+    // Phase 2: pick a session → transcript keyed peer:url:id.
+    ;(chat.querySelector('.wb-member-row') as HTMLElement).click()
+    await vi.waitFor(() => expect(remoteSessionLog).toHaveBeenLastCalledWith({ peer: 'http://192.168.3.157:13080', id: 'session-77777777-peer' }))
+    await vi.waitFor(() => expect(text(chat.querySelector('.wb-transcript-body'))).toContain('对端会话正文'))
+    // Phase 3: back to the listing.
+    ;(chat.querySelector('.wb-transcript-refresh') as HTMLElement).click()
+    await vi.waitFor(() => {
+      const rows = [...chat.querySelectorAll('.wb-member-row')].map(n => text(n))
+      expect(rows.some(r => r.includes('-peer'))).toBe(true)
+    })
+  })
+
+  it('a peer listing failure surfaces the proxy error inline', async () => {
+    const failing = vi.fn(async () => ({ ok: false, error: 'remote log unavailable — http://192.168.3.157:13080' }))
+    const v = createWorkbench({ now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(), canvasOp: vi.fn(async () => true), remoteSessionLog: failing })
+    document.body.appendChild(v.root)
+    v.update(state)
+    v.openNodeChat('peer-192.168.3.157:13080')
+    const chat = v.root.querySelector('.wb-chat')!
+    await vi.waitFor(() => expect(text(chat)).toContain('无法读取（remote log unavailable'))
   })
 })

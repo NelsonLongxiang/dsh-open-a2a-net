@@ -206,6 +206,29 @@ const bench = createWorkbench({
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }
   },
+  async remoteSessionLog(query) {
+    // 0.6.15: proxy read of a remote host's /a2a/log — by tracked peer url or
+    // by team handle (directory-resolved). The proxy is the only reader; the
+    // browser never dials the peer directly.
+    try {
+      const params = new URLSearchParams()
+      if (query.team !== undefined) params.set('team', query.team)
+      if (query.peer !== undefined) params.set('peer', query.peer)
+      if (query.id !== undefined) params.set('id', query.id)
+      if (query.limit !== undefined) params.set('limit', String(query.limit))
+      const res = await fetch(`/__dsh_a2a/remote-session-log?${params.toString()}`)
+      const body = (await res.json().catch(() => ({}))) as {
+        ok?: boolean
+        messages?: Array<{ role: string; text: string }>
+        sessions?: Array<{ id: string; mtimeMs: number; sizeBytes: number }>
+        error?: string
+        via?: string
+      }
+      return { ok: res.ok && body.ok === true, messages: body.messages, sessions: body.sessions, error: body.error ?? `HTTP ${res.status}`, via: body.via }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  },
   board: {
     root: planning.root,
     activate: () => planning.activate(),

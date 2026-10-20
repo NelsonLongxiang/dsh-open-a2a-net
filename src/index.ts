@@ -2709,6 +2709,120 @@ ${message}`
     return { ok: false, error: `the native-teams round for "${team}" failed: ${String(roundError)}` }
   }
 
+  /* ── Inbound admission shared by the peer faces (/a2a/direct,
+     /a2a/log): caller_session is the protocol contract. Anonymous is
+     refused, and a zone/id8 caller must declare a team shared with this
+     node. Returns the refusal detail, or undefined when admissible.
+     Functionally identical to the checks that used to live inline in the
+     direct handler — extracted so the read-only log face admits callers
+     by exactly the same rule as message delivery. */
+  function a2aCallerRefusal(caller: string): string | undefined {
+    if (!config.teamScopeRouting) return undefined
+    if (caller === '') {
+      return 'caller_session is required — anonymous deliveries are refused (S3 phase-3b). Pass caller_session as <zone>/<id8>.'
+    }
+    if (!/^[a-z0-9-]+\/[0-9a-f]{8}$/i.test(caller)) return undefined
+    const callerZone = caller.slice(0, caller.indexOf('/'))
+    let declared: Set<string> | undefined
+    if (callerZone === config.team) {
+      declared = new Set<string>()
+      for (const entry of teamMemberships.list()) {
+        if (`${config.team}/${id8(entry.session)}` === caller) for (const t of entry.teams) declared.add(t)
+      }
+    } else {
+      // The caller's zone is a name, not necessarily a hostname — scan the
+      // card cache for the card that actually publishes this caller handle
+      // instead of guessing url↔zone.
+      for (const entry of cardCache.values()) {
+        const cached = entry?.card
+        if (cached === undefined) continue
+        if ((cached.teamMemberships ?? []).some(m => m.node === caller)) {
+          declared = new Set<string>(cached.teamMemberships!.filter(m => m.node === caller).map(m => m.team))
+          break
+        }
+      }
+      if (declared === undefined) {
+        // Learn in the background: a directory sweep fills the card cache,
+        // so every later call from this caller is judged.
+        void listDirectoryTeams(false).catch(() => {})
+      }
+    }
+    if (declared !== undefined) {
+      // Shared-team semantics: the caller's declaration must meet THIS
+      // node's own network somewhere. Counting the caller's bare
+      // declaration itself would be self-admission.
+      const routable = new Set<string>([config.team])
+      for (const id of joinedSessions.list()) routable.add(`${config.team}/${id8(id)}`)
+      for (const name of canvasStore.list()) routable.add(canvasTeamOf(name))
+      const otherLocalDeclarations = new Set<string>()
+      for (const entry of teamMemberships.list()) {
+        if (`${config.team}/${id8(entry.session)}` === caller) continue
+        for (const t of entry.teams) otherLocalDeclarations.add(t)
+      }
+      const shared = [...declared].some(t => routable.has(t) || otherLocalDeclarations.has(t))
+      if (!shared) {
+        return declared.size === 0
+          ? `caller "${caller}" declares no team membership — a teamless node has no network (S3 phase-3 admission). Declare a shared team on both ends, or route through a teamed member.`
+          : `caller "${caller}" declares teams [${[...declared].join(', ')}] — none is routable on this node (shared-team admission). Declare a shared team on both ends, or route through a teamed member.`
+      }
+    }
+    return undefined
+  }
+
+  /* ── Session-log read faces (shared by the local control route and the
+     peer /a2a/log face): both answer from <dshHome>/sessions with
+     identical semantics — artifact existence is the only gate (archived
+     and never-joined sessions stay readable), caps mirror
+     session-transcript.ts. */
+  function scanSessionLogList(): Array<{ id: string; mtimeMs: number; sizeBytes: number }> {
+    const rows: Array<{ id: string; mtimeMs: number; sizeBytes: number }> = []
+    const sessionsRoot = join(home, 'sessions')
+    if (!existsSync(sessionsRoot)) return rows
+    for (const bucket of readdirSync(sessionsRoot, { withFileTypes: true })) {
+      if (!bucket.isDirectory()) continue
+      for (const child of readdirSync(join(sessionsRoot, bucket.name), { withFileTypes: true })) {
+        if (!child.isDirectory()) continue
+        const dir = join(sessionsRoot, bucket.name, child.name)
+        const files = readdirSync(dir).filter(name => name.startsWith('session.') && (name.endsWith('.jsonl.zstd') || name.endsWith('.jsonl')))
+        if (files.length === 0) continue
+        let newest: { mtimeMs: number; sizeBytes: number } | undefined
+        for (const name of files) {
+          const st = statSync(join(dir, name))
+          if (newest === undefined || st.mtimeMs > newest.mtimeMs) newest = { mtimeMs: st.mtimeMs, sizeBytes: st.size }
+        }
+        if (newest !== undefined) rows.push({ id: child.name, ...newest })
+      }
+    }
+    rows.sort((a, b) => b.mtimeMs - a.mtimeMs)
+    return rows
+  }
+
+  function readSessionLogTail(id: string, limit: number): { ok: true; id: string; messages: Array<{ role: string; text: string; time?: number }> } | { ok: false; error: string } {
+    const sessionsRoot = join(home, 'sessions')
+    let logPath: string | undefined
+    if (existsSync(sessionsRoot)) {
+      for (const entry of readdirSync(sessionsRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue
+        const candidate = join(sessionsRoot, entry.name, id)
+        if (!existsSync(candidate)) continue
+        const files = readdirSync(candidate).filter(name => name.startsWith('session.') && (name.endsWith('.jsonl.zstd') || name.endsWith('.jsonl')))
+        // Generation artifacts: session.v{N}.jsonl[.zstd] is the newest
+        // format generation — read the highest N, preferring zstd at the
+        // same generation.
+        const generation = (name: string): number => Number(name.match(/\.v(\d+)\./)?.[1] ?? 0)
+        const rank = (name: string): number => generation(name) * 2 + (name.endsWith('.zstd') ? 1 : 0)
+        files.sort((a, b) => rank(b) - rank(a))
+        logPath = files[0] !== undefined ? join(candidate, files[0]) : undefined
+        break
+      }
+    }
+    if (logPath === undefined) return { ok: false, error: 'no log artifact for this session' }
+    const stat = statSync(logPath)
+    if (stat.size > TRANSCRIPT_MAX_FILE_BYTES) return { ok: false, error: 'session log exceeds the size cap' }
+    const entries = extractTranscript(decodeSessionLog(readFileSync(logPath)), limit)
+    return { ok: true, id, messages: entries.map(entry => ({ role: entry.role, text: entry.text, ...(entry.time !== undefined ? { time: entry.time } : {}) })) }
+  }
+
   whenWebServerSettled((webServer) => {
     ctx.effect(() => webServer.register({
       kind: 'exact',
@@ -2801,72 +2915,16 @@ ${message}`
           // anonymous hole let any local process or reachable peer inject
           // into a live session. The protocol contract is caller_session;
           // its absence is now refused instead of silently waved through.
-          if (config.teamScopeRouting && caller === '') {
-            recordActivity('in', team, 'anonymous', false)
-            const payload = JSON.stringify({ error: 'caller_session is required — anonymous deliveries are refused (S3 phase-3b). Pass caller_session as <zone>/<id8>.', code: -32000, team, task_status: 'TASK_STATE_FAILED' })
+          // (0.6.15: the rule now lives in a2aCallerRefusal so the
+          // read-only /a2a/log face admits callers by exactly the same
+          // standard as message delivery.)
+          const callerRefusal = a2aCallerRefusal(caller)
+          if (callerRefusal !== undefined) {
+            recordActivity('in', team, caller === '' ? 'anonymous' : caller, false)
+            const payload = JSON.stringify({ error: callerRefusal, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
             return
-          }
-          // unteamed/foreign-team caller is refused on the spot (the
-          // local-network half of the owner's reproduction). Remote-zone
-          // callers are judged from the card cache: a cached card decides
-          // synchronously; a cache miss lets THIS delivery through once
-          // while a background fetch learns the caller's declarations for
-          // every later call (honest bound — delivery-origin auth
-          // hardening is the next slice).
-          if (config.teamScopeRouting && /^[a-z0-9-]+\/[0-9a-f]{8}$/i.test(caller)) {
-            const callerZone = caller.slice(0, caller.indexOf('/'))
-            let declared: Set<string> | undefined
-            if (callerZone === config.team) {
-              declared = new Set<string>()
-              for (const entry of teamMemberships.list()) {
-                if (`${config.team}/${id8(entry.session)}` === caller) for (const t of entry.teams) declared.add(t)
-              }
-            } else {
-              // The caller's zone is a name, not necessarily a hostname —
-              // scan the card cache for the card that actually publishes
-              // this caller handle instead of guessing url↔zone.
-              for (const entry of cardCache.values()) {
-                const cached = entry?.card
-                if (cached === undefined) continue
-                if ((cached.teamMemberships ?? []).some(m => m.node === caller)) {
-                  declared = new Set<string>(cached.teamMemberships!.filter(m => m.node === caller).map(m => m.team))
-                  break
-                }
-              }
-              if (declared === undefined) {
-                // Learn in the background: a directory sweep fills the card
-                // cache, so every later call from this caller is judged.
-                void listDirectoryTeams(false).catch(() => {})
-              }
-            }
-            if (declared !== undefined) {
-              // Shared-team semantics: the caller's declaration must meet
-              // THIS node's own network somewhere — a declared team is
-              // shared when some OTHER local session also declared it, or
-              // when it is this node's own handle/canvas team. Counting the
-              // caller's bare declaration itself would be self-admission.
-              const routable = new Set<string>([config.team])
-              for (const id of joinedSessions.list()) routable.add(`${config.team}/${id8(id)}`)
-              for (const name of canvasStore.list()) routable.add(canvasTeamOf(name))
-              const otherLocalDeclarations = new Set<string>()
-              for (const entry of teamMemberships.list()) {
-                if (`${config.team}/${id8(entry.session)}` === caller) continue
-                for (const t of entry.teams) otherLocalDeclarations.add(t)
-              }
-              const shared = [...declared].some(t => routable.has(t) || otherLocalDeclarations.has(t))
-              if (!shared) {
-                recordActivity('in', team, caller, false)
-                const detail = declared.size === 0
-                  ? `caller "${caller}" declares no team membership — a teamless node has no network (S3 phase-3 admission)`
-                  : `caller "${caller}" declares teams [${[...declared].join(', ')}] — none is routable on this node (shared-team admission)`
-                const payload = JSON.stringify({ error: `${detail}. Declare a shared team on both ends, or route through a teamed member.`, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
-                res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
-                res.end(payload)
-                return
-              }
-            }
           }
           // Server-side idempotency (P3/B3): one key, one execution inside
           // the window. Same key + same payload fingerprint ⇒ replay (409,
@@ -3096,6 +3154,66 @@ ${message}`
         })
       },
     }), 'a2a: direct route endpoint')
+
+    // 0.6.15: the read-only peer log face — a peer asks for THIS node's
+    // session transcript tail (or, without id, the readable-session
+    // listing) so a remote workbench can show "what has this node been
+    // talking about". Admission is a2aCallerRefusal — exactly the rule
+    // /a2a/direct applies to message delivery: caller_session required,
+    // zone/id8 callers judged on shared teams. Read semantics are the
+    // local /__dsh_a2a/session-log face verbatim (artifact existence is
+    // the only gate; archived and never-joined sessions stay readable;
+    // caps mirror session-transcript.ts). Nothing here steers a session,
+    // claims a task, or writes state — the only side effects are the
+    // activity-ring record and the admission path's background
+    // directory learn.
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/a2a/log',
+      handler: (req: IncomingMessage, res: ServerResponse) => {
+        const send = (status: number, body: Record<string, JsonValue>): void => {
+          const payload = JSON.stringify(body)
+          res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+          res.end(payload)
+        }
+        if (req.method !== 'GET') {
+          send(405, { ok: false, error: 'GET is the only method on this face' })
+          return
+        }
+        const url = new URL(req.url ?? '/', 'http://x')
+        const caller = url.searchParams.get('caller_session') ?? ''
+        const id = url.searchParams.get('id') ?? ''
+        const limitArg = Number(url.searchParams.get('limit') ?? TRANSCRIPT_DEFAULT_LIMIT)
+        const limit = Number.isFinite(limitArg) ? Math.max(1, Math.min(TRANSCRIPT_MAX_LIMIT, Math.floor(limitArg))) : TRANSCRIPT_DEFAULT_LIMIT
+        const refusal = a2aCallerRefusal(caller)
+        if (refusal !== undefined) {
+          recordActivity('in', 'log', caller === '' ? 'anonymous' : caller, false)
+          send(200, { ok: false, error: refusal, code: -32000 })
+          return
+        }
+        recordActivity('in', 'log', caller, true)
+        if (id.includes('/') || id.includes('\\') || id.includes('..')) {
+          send(200, { ok: false, error: 'id is required' })
+          return
+        }
+        if (id === '') {
+          try {
+            const rows = scanSessionLogList()
+            send(200, { ok: true, count: rows.length, sessions: rows.slice(0, 50) })
+          } catch (error) {
+            send(200, { ok: false, error: `transcript list failed: ${error instanceof Error ? error.message : String(error)}` })
+          }
+          return
+        }
+        try {
+          const tail = readSessionLogTail(id, limit)
+          if (!tail.ok) send(200, { ok: false, error: tail.error })
+          else send(200, { ok: true, id: tail.id, count: tail.messages.length, messages: tail.messages })
+        } catch (error) {
+          send(200, { ok: false, error: `transcript failed: ${error instanceof Error ? error.message : String(error)}` })
+        }
+      },
+    }), 'a2a: peer log face endpoint')
   })
 
   whenWebServerSettled((webServer) => {
@@ -3317,62 +3435,16 @@ ${message}`
         } else if (id === '') {
           // Listing face: every session directory holding a log artifact.
           try {
-            const sessionsRoot = join(home, 'sessions')
-            const rows: Array<{ id: string; mtimeMs: number; sizeBytes: number }> = []
-            if (existsSync(sessionsRoot)) {
-              for (const bucket of readdirSync(sessionsRoot, { withFileTypes: true })) {
-                if (!bucket.isDirectory()) continue
-                for (const child of readdirSync(join(sessionsRoot, bucket.name), { withFileTypes: true })) {
-                  if (!child.isDirectory()) continue
-                  const dir = join(sessionsRoot, bucket.name, child.name)
-                  const files = readdirSync(dir).filter(name => name.startsWith('session.') && (name.endsWith('.jsonl.zstd') || name.endsWith('.jsonl')))
-                  if (files.length === 0) continue
-                  let newest: { mtimeMs: number; sizeBytes: number } | undefined
-                  for (const name of files) {
-                    const st = statSync(join(dir, name))
-                    if (newest === undefined || st.mtimeMs > newest.mtimeMs) newest = { mtimeMs: st.mtimeMs, sizeBytes: st.size }
-                  }
-                  if (newest !== undefined) rows.push({ id: child.name, ...newest })
-                }
-              }
-            }
-            rows.sort((a, b) => b.mtimeMs - a.mtimeMs)
+            const rows = scanSessionLogList()
             result = { ok: true, count: rows.length, sessions: rows.slice(0, 50) }
           } catch (error) {
             result = { ok: false, error: `transcript list failed: ${error instanceof Error ? error.message : String(error)}` }
           }
         } else {
           try {
-            // Generation artifacts: session.v{N}.jsonl[.zstd] is the newest
-            // format generation — read the highest N, falling back to the
-            // base artifact. Buckets are cwd slugs; the session id names
-            // the child directory, so scan buckets for a matching child.
-            const sessionsRoot = join(home, 'sessions')
-            let logPath: string | undefined
-            if (existsSync(sessionsRoot)) {
-              for (const entry of readdirSync(sessionsRoot, { withFileTypes: true })) {
-                if (!entry.isDirectory()) continue
-                const candidate = join(sessionsRoot, entry.name, id)
-                if (!existsSync(candidate)) continue
-                const files = readdirSync(candidate).filter(name => name.startsWith('session.') && (name.endsWith('.jsonl.zstd') || name.endsWith('.jsonl')))
-                const generation = (name: string): number => Number(name.match(/\.v(\d+)\./)?.[1] ?? 0)
-                const rank = (name: string): number => generation(name) * 2 + (name.endsWith('.zstd') ? 1 : 0)
-                files.sort((a, b) => rank(b) - rank(a))
-                logPath = files[0] !== undefined ? join(candidate, files[0]) : undefined
-                break
-              }
-            }
-            if (logPath === undefined) {
-              result = { ok: false, error: 'no log artifact for this session' }
-            } else {
-              const stat = statSync(logPath)
-              if (stat.size > TRANSCRIPT_MAX_FILE_BYTES) {
-                result = { ok: false, error: 'session log exceeds the size cap' }
-              } else {
-                const entries = extractTranscript(decodeSessionLog(readFileSync(logPath)), limit)
-                result = { ok: true, id, count: entries.length, messages: entries.map(entry => ({ role: entry.role, text: entry.text, ...(entry.time !== undefined ? { time: entry.time } : {}) })) }
-              }
-            }
+            const tail = readSessionLogTail(id, limit)
+            if (!tail.ok) result = { ok: false, error: tail.error }
+            else result = { ok: true, id: tail.id, count: tail.messages.length, messages: tail.messages }
           } catch (error) {
             result = { ok: false, error: `transcript failed: ${error instanceof Error ? error.message : String(error)}` }
           }
@@ -3382,6 +3454,75 @@ ${message}`
         res.end(payload)
       }),
     }), 'a2a: session-log route')
+
+    // 0.6.15: the local proxy for REMOTE session logs. The workbench runs
+    // in this host's browser page, so cross-host reads must originate from
+    // this host (no CORS, one trust boundary). ?team=<zone/id8> resolves
+    // directory candidates that publish that team (same walk as routing);
+    // ?peer=<base-url> targets one tracked peer directly and MUST name a
+    // URL already in the peer store — the proxy never fetches an
+    // arbitrary address. The caller label we present is config.team (this
+    // node's own zone handle, the same host face quick-dispatch uses).
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/__dsh_a2a/remote-session-log',
+      handler: controlRoute(async (req: IncomingMessage, res: ServerResponse) => {
+        const url = new URL(req.url ?? '/', 'http://x')
+        const team = url.searchParams.get('team') ?? ''
+        const peer = url.searchParams.get('peer') ?? ''
+        const id = url.searchParams.get('id') ?? ''
+        const limitArg = Number(url.searchParams.get('limit') ?? TRANSCRIPT_DEFAULT_LIMIT)
+        const limit = Number.isFinite(limitArg) ? Math.max(1, Math.min(TRANSCRIPT_MAX_LIMIT, Math.floor(limitArg))) : TRANSCRIPT_DEFAULT_LIMIT
+        const finish = (body: Record<string, JsonValue>): void => {
+          const payload = JSON.stringify(body)
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+          res.end(payload)
+        }
+        if (id.includes('/') || id.includes('\\') || id.includes('..')) {
+          finish({ ok: false, error: 'id is required' })
+          return
+        }
+        const trackedPeers = new Set(peerStore.list().map(entry => entry.replace(/\/+$/, '')))
+        let targets: string[]
+        if (peer !== '') {
+          const normalized = peer.replace(/\/+$/, '')
+          if (!trackedPeers.has(normalized)) {
+            finish({ ok: false, error: 'unknown peer on this node — the proxy only reads tracked peers' })
+            return
+          }
+          targets = [normalized]
+        } else if (team !== '') {
+          const failures: string[] = []
+          targets = await directoryPeerCandidates(memoizedCardFetch(), team, failures)
+          if (targets.length === 0) {
+            finish({ ok: false, error: `no directory candidate publishes team "${team}"${failures.length > 0 ? ` (${failures.slice(0, 3).join('; ')})` : ''}` })
+            return
+          }
+        } else {
+          finish({ ok: false, error: 'team or peer is required' })
+          return
+        }
+        const attempts: string[] = []
+        for (const base of targets) {
+          const target = new URL('/a2a/log', base)
+          target.searchParams.set('caller_session', config.team)
+          if (id !== '') target.searchParams.set('id', id)
+          target.searchParams.set('limit', String(limit))
+          try {
+            const response = await globalThis.fetch(target, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } })
+            const body = await response.json().catch(() => ({ ok: false, error: `peer answered HTTP ${response.status}` })) as { ok?: boolean; error?: string }
+            if (response.ok && body.ok === true) {
+              finish({ ...body, via: base } as Record<string, JsonValue>)
+              return
+            }
+            attempts.push(`${base}: ${body.error ?? `HTTP ${response.status}`}`)
+          } catch (error) {
+            attempts.push(`${base}: ${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
+        finish({ ok: false, error: `remote log unavailable — ${attempts.join(' | ')}` })
+      }),
+    }), 'a2a: remote-session-log proxy route')
   })
 
   /**

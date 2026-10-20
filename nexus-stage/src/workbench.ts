@@ -156,6 +156,12 @@ export interface WorkbenchDeps {
    *  the reading face is host-scoped, so archived and never-joined sessions
    *  appear here even when the network directory shows no local rows. */
   sessionLogList?(): Promise<{ ok: boolean; sessions?: Array<{ id: string; mtimeMs: number; sizeBytes: number }>; error?: string }>
+  /** 0.6.15: remote transcript via the local proxy — ?team=<zone/id8>
+   *  resolves the publishing peer through the directory, ?peer=<base-url>
+   *  reads one tracked peer directly. Without id the peer answers its
+   *  readable-session listing. Optional — without it remote/peer chat
+   *  shows the honest where-the-records-live note. */
+  remoteSessionLog?(query: { team?: string; peer?: string; id?: string; limit?: number }): Promise<{ ok: boolean; messages?: Array<{ role: string; text: string }>; sessions?: Array<{ id: string; mtimeMs: number; sizeBytes: number }>; error?: string; via?: string }>
   /** Copy text to the clipboard; drafts are pasteable task briefs. */
   copy(text: string): void
   // 0.6.10: openLocal/openRemote (0.6.7/0.6.8 jump affordances) removed by
@@ -225,17 +231,17 @@ function textRow(parent: HTMLElement, label: string, value: string): void {
 }
 
 type Selection =
-  | { kind: 'remote'; row: RemoteRow }
   | { kind: 'canvas'; row: CanvasTeamRow }
   | undefined
 
-/** Chat drawer target (0.6.13): a node picked on the board or in the
- * directory — session/log get the local transcript tail, peers get the
- * honest on-the-other-host note. Reading, not jumping. */
+/** Chat drawer target (0.6.13, remote 0.6.15): a node picked on the board or in the
+ * directory — session/log get the local transcript tail, remote rows and peers
+ * read through the /a2a/log proxy. Reading, not jumping. */
 type ChatTarget =
   | { kind: 'session'; id: string; title: string; sub: string; team?: string; live?: boolean }
   | { kind: 'log'; id: string; title: string; sub: string }
-  | { kind: 'peer'; id: string; title: string; sub: string }
+  | { kind: 'peer'; id: string; title: string; sub: string; url?: string; picked?: string }
+  | { kind: 'remote'; team: string; title: string; sub: string; row?: RemoteRow }
 
 /** The four rail sections. */
 export type WorkbenchSection = 'directory' | 'ledger' | 'activity' | 'plan'
@@ -313,6 +319,8 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // demand. renderInspector rebuilds every poll, so the cache keeps the
   // transcript block from refetching on each 3s tick.
   const transcriptCache = new Map<string, { ok: boolean; messages?: Array<{ role: string; text: string }>; error?: string } | undefined>()
+  /** 0.6.15: peer-host session listings, cached per peer url. */
+  const peerListCache = new Map<string, { ok: boolean; sessions?: Array<{ id: string; sizeBytes: number }>; error?: string } | undefined>()
   // 0.6.12: readable local logs (host-scope list, newest first). Refreshed
   // opportunistically per poll; rows render in the directory's 本机日志 section.
   let logRows: Array<{ id: string; mtimeMs: number; sizeBytes: number }> = []
@@ -512,8 +520,9 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     // Canvas add-member form is cached per team name (draftForm trick):
     // drop it whenever the selection moves off its team.
     if (next?.kind !== 'canvas' || canvasForm?.name !== next.row.name) canvasForm = null
-    // Same for the quick-dispatch form: it is cached per target team.
-    if (next?.kind !== 'canvas' && next?.kind !== 'remote') dispatchForm = null
+    // Same for the quick-dispatch form: it is cached per target team
+    // (0.6.15: remote dispatch moved to the chat drawer's own form).
+    if (next?.kind !== 'canvas') dispatchForm = null
     renderInspector()
     // Narrow screens: picking from the drawer closes it so the stage shows.
     root.classList.remove('is-rail-open')
@@ -606,7 +615,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
           row.url.replace(/^https?:\/\//, '') + (row.score !== undefined ? ` · ${row.score}` : '')
         item.addEventListener('click', () => {
           const host = row.url.replace(/^https?:\/\//, '').replace(/\/.*$/, '')
-          openChat({ kind: 'peer', id: `peer-${host}`, title: row.url, sub: host })
+          openChat({ kind: 'peer', id: `peer-${host}`, title: row.url, sub: host, url: row.url })
         })
         box.appendChild(item)
       }
@@ -620,7 +629,9 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         item.appendChild(el('span', 'wb-dot wb-dot-remote')).textContent = '◇'
         item.appendChild(el('span', 'wb-item-label')).textContent = displayName(row)
         badges(item, row.canvasTeams)
-        item.addEventListener('click', () => select({ kind: 'remote', row }))
+        // 0.6.15: remote rows open the chat drawer — the transcript now
+        // reads through the proxy instead of the where-the-records-live note.
+        item.addEventListener('click', () => openChat({ kind: 'remote', team: row.team, title: displayName(row), sub: row.team, row }))
         box.appendChild(item)
       }
     }
@@ -944,24 +955,10 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     if (selection === undefined) return
     const sel = selection
     const card = el('div', 'wb-card')
-    // 0.6.13: session/log/peer faces moved to the chat drawer — the
-    // inspector keeps the organizational cards (canvas teams, remote rows).
-    if (sel.kind === 'remote') {
-      textRow(card, '名称', displayName(sel.row))
-      textRow(card, '队', sel.row.team)
-      if (sel.row.origin !== undefined) textRow(card, '来源', sel.row.origin)
-      if (sel.row.via !== undefined) textRow(card, '经', sel.row.via)
-      if (sel.row.workspace !== undefined) textRow(card, '工作区', sel.row.workspace)
-      if (sel.row.legacy === true) textRow(card, '形态', '旧卡片（legacy）')
-      for (const team of sel.row.canvasTeams ?? []) textRow(card, '画布队', team)
-      // 0.6.11: remote conversations live on the remote host — this face
-      // reads only this machine's log tree, so say so instead of guessing.
-      const remoteNote = el('div', 'wb-hint')
-      remoteNote.textContent = '远端节点的对话记录在对端机器上；本页只读本机会话日志。'
-      card.appendChild(remoteNote)
-      // Quick dispatch targets the remote team handle directly (0.6.9).
-      if (deps.dispatchQuick !== undefined) card.appendChild(dispatchCard(sel.row.team))
-    } else if (sel.kind === 'canvas') {
+    // 0.6.13: session/log/peer faces moved to the chat drawer; 0.6.15 took
+    // the remote rows with them (their metadata rides the chat head) — the
+    // inspector keeps the canvas team card.
+    if (sel.kind === 'canvas') {
       // Re-resolve the team from the freshest state: membership changes here
       // must be visible on the next render even though the click-time row is
       // a stale snapshot.
@@ -1105,11 +1102,15 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     return wrap
   }
 
-  // ── Inline transcript (0.6.11) ──
-  // The tail of a LOCAL session's own conversation log, read-only, on this
-  // page. Cached per session id across the 3s poll remounts; the refresh
-  // button forces one re-read. Reading — not jumping — is the interaction.
-  function transcriptBlock(id: string): HTMLElement {
+  // ── Inline transcript (0.6.11, remote 0.6.15) ──
+  // The tail of a session's conversation log, read-only, on this page —
+  // local sessions read the host log face; remote sessions read through
+  // the proxy. Cached per cache key across the 3s poll remounts; the
+  // refresh button forces one re-read. Reading — not jumping — is the
+  // interaction.
+  type TranscriptState = { ok: boolean; messages?: Array<{ role: string; text: string }>; error?: string } | undefined
+
+  function transcriptBlock(cacheKey: string, load: () => Promise<TranscriptState>): HTMLElement {
     const block = el('div', 'wb-transcript')
     const head = el('div', 'wb-side-head')
     head.textContent = '最近对话'
@@ -1120,7 +1121,6 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     block.appendChild(head)
     const body = el('div', 'wb-transcript-body')
     block.appendChild(body)
-    type TranscriptState = { ok: boolean; messages?: Array<{ role: string; text: string }>; error?: string } | undefined
     const paint = (state: TranscriptState): void => {
       body.replaceChildren()
       if (state === undefined) {
@@ -1142,22 +1142,78 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         body.appendChild(row)
       }
     }
-    const load = (force: boolean): void => {
-      if (!force && transcriptCache.has(id)) {
-        paint(transcriptCache.get(id))
+    const run = (force: boolean): void => {
+      if (!force && transcriptCache.has(cacheKey)) {
+        paint(transcriptCache.get(cacheKey))
         return
       }
-      transcriptCache.set(id, undefined)
+      transcriptCache.set(cacheKey, undefined)
       paint(undefined)
-      void deps.sessionLog?.(id).then(result => {
-        transcriptCache.set(id, result)
-        // The poll may have remounted the inspector since; only the live
+      void load().then(result => {
+        transcriptCache.set(cacheKey, result)
+        // The poll may have remounted the drawer since; only the live
         // body repaints, the cache carries the result to the next mount.
         if (body.isConnected) paint(result)
       })
     }
-    refresh.addEventListener('click', () => load(true))
-    load(false)
+    refresh.addEventListener('click', () => run(true))
+    run(false)
+    return block
+  }
+
+  function localTranscript(id: string): HTMLElement {
+    return transcriptBlock(`local:${id}`, async () => await deps.sessionLog?.(id) ?? { ok: false, error: 'sessionLog unavailable' })
+  }
+
+  function remoteTranscript(cacheKey: string, query: { team?: string; peer?: string; id?: string }): HTMLElement {
+    return transcriptBlock(cacheKey, async () => await deps.remoteSessionLog?.(query) ?? { ok: false, error: 'remoteSessionLog unavailable' })
+  }
+
+  /** Peer-host session listing (0.6.15): the list face of /a2a/log through
+   *  the proxy — recent readable sessions on that peer, click to drill. */
+  function peerLogList(url: string): HTMLElement {
+    const block = el('div', 'wb-transcript')
+    const head = el('div', 'wb-side-head')
+    head.textContent = '对端最近会话'
+    block.appendChild(head)
+    const body = el('div', 'wb-transcript-body')
+    block.appendChild(body)
+    const cacheKey = `peerlist:${url}`
+    const paint = (state: { ok: boolean; sessions?: Array<{ id: string; sizeBytes: number }>; error?: string } | undefined): void => {
+      body.replaceChildren()
+      if (state === undefined) {
+        body.appendChild(el('div', 'wb-muted')).textContent = '读取中…'
+        return
+      }
+      if (state.ok !== true || state.sessions === undefined) {
+        body.appendChild(el('div', 'wb-muted')).textContent = `无法读取（${state.error ?? '未知错误'}）`
+        return
+      }
+      if (state.sessions.length === 0) {
+        body.appendChild(el('div', 'wb-muted')).textContent = '对端没有可读会话'
+        return
+      }
+      const fmtSize = (n: number): string => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)} MB` : n >= 1_000 ? `${Math.round(n / 1_000)} KB` : `${n} B`
+      for (const row of state.sessions) {
+        const item = el('button', 'wb-member-row')
+        item.type = 'button'
+        item.appendChild(el('span', 'wb-chat-dot is-cold')).textContent = '❐'
+        item.appendChild(el('span', 'wb-item-label')).textContent = `…${row.id.slice(-12)} · ${fmtSize(row.sizeBytes)}`
+        item.addEventListener('click', () => {
+          if (chatTarget?.kind === 'peer') chatTarget.picked = row.id
+          renderChat()
+        })
+        body.appendChild(item)
+      }
+    }
+    if (peerListCache.has(cacheKey)) paint(peerListCache.get(cacheKey))
+    else {
+      paint(undefined)
+      void deps.remoteSessionLog?.({ peer: url }).then(result => {
+        peerListCache.set(cacheKey, result)
+        if (body.isConnected) paint(result)
+      })
+    }
     return block
   }
 
@@ -1174,7 +1230,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   function openChat(target: ChatTarget): void {
     chatTarget = target
     // Keep the chat form only when it belongs to the same session team.
-    const team = target.kind === 'session' ? target.team : undefined
+    const team = target.kind === 'session' || target.kind === 'remote' ? target.team : undefined
     if (chatForm !== null && chatForm.team !== team) chatForm = null
     renderChat()
     chat.classList.add('is-open')
@@ -1184,28 +1240,72 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   function renderChat(): void {
     const t = chatTarget
     if (t === null) return
-    chatDot.className = `wb-chat-dot ${t.kind === 'peer' ? 'is-peer' : t.kind === 'log' || t.live === false ? 'is-cold' : 'is-live'}`
+    chatDot.className = `wb-chat-dot ${t.kind === 'peer' ? 'is-peer' : t.kind === 'log' || t.kind === 'remote' || t.live === false ? 'is-cold' : 'is-live'}`
     chatTitle.textContent = t.title
     chatSub.textContent = t.sub
     clear(chatBody)
     if (t.kind === 'peer') {
+      // 0.6.15: the peer host is readable through the proxy — list its
+      // recent sessions, then drill into one. Without the proxy dep the
+      // honest where-the-records-live note stays.
+      const url = t.url ?? (t.title.startsWith('http') ? t.title : '')
+      if (url === '' || deps.remoteSessionLog === undefined) {
+        const note = el('div', 'wb-chat-note')
+        note.textContent = `对端主机节点（${t.sub}）—— 会话记录存放在对端机器上，本页只读本机会话日志。`
+        chatBody.appendChild(note)
+        return
+      }
       const note = el('div', 'wb-chat-note')
-      note.textContent = `对端主机节点（${t.sub}）—— 会话记录存放在对端机器上，本页只读本机会话日志。`
+      note.textContent = '对端主机节点 —— 以下会话列表经本机代理从对端 /a2a/log 读取。'
       chatBody.appendChild(note)
+      if (t.picked !== undefined) {
+        const back = el('button', 'wb-transcript-refresh')
+        back.type = 'button'
+        back.textContent = '← 返回会话列表'
+        back.addEventListener('click', () => {
+          if (chatTarget?.kind === 'peer') chatTarget.picked = undefined
+          renderChat()
+        })
+        chatBody.appendChild(back)
+        chatBody.appendChild(remoteTranscript(`peer:${url}:${t.picked}`, { peer: url, id: t.picked }))
+      } else {
+        chatBody.appendChild(peerLogList(url))
+      }
       return
     }
-    if (t.kind === 'log') {
-      const note = el('div', 'wb-chat-note')
-      note.textContent = '只读日志 —— 此会话当前不在网络目录（可能已归档或未入网）。'
-      chatBody.appendChild(note)
+    if (t.kind === 'remote') {
+      // Card metadata the old inspector face carried (origin/via/workspace),
+      // kept readable in the drawer head area.
+      const meta = el('div')
+      if (t.row?.origin !== undefined) textRow(meta, '来源', t.row.origin)
+      if (t.row?.via !== undefined) textRow(meta, '经', t.row.via)
+      if (t.row?.workspace !== undefined) textRow(meta, '工作区', t.row.workspace)
+      if (meta.childElementCount > 0) chatBody.appendChild(meta)
+      if (deps.remoteSessionLog !== undefined) {
+        const note = el('div', 'wb-chat-note')
+        note.textContent = '远端会话节点 —— 经本机代理从对端 /a2a/log 读取最近对话。'
+        chatBody.appendChild(note)
+        chatBody.appendChild(remoteTranscript(`remote:${t.team}`, { team: t.team }))
+      } else {
+        const note = el('div', 'wb-chat-note')
+        note.textContent = '远端节点的对话记录在对端机器上；本页的代理读取面未启用。'
+        chatBody.appendChild(note)
+      }
+    } else {
+      if (t.kind === 'log') {
+        const note = el('div', 'wb-chat-note')
+        note.textContent = '只读日志 —— 此会话当前不在网络目录（可能已归档或未入网）。'
+        chatBody.appendChild(note)
+      }
+      if (deps.sessionLog !== undefined) chatBody.appendChild(localTranscript(t.id))
     }
-    if (deps.sessionLog !== undefined) chatBody.appendChild(transcriptBlock(t.id))
-    if (t.kind === 'session' && t.team !== undefined && t.team !== '' && deps.dispatchQuick !== undefined) {
+    const dispatchTeam = t.kind === 'session' || t.kind === 'remote' ? t.team : undefined
+    if (dispatchTeam !== undefined && dispatchTeam !== '' && deps.dispatchQuick !== undefined) {
       const wrap = el('div', 'wb-dispatch')
       const head = el('div', 'wb-side-head')
       head.textContent = '发送'
       wrap.appendChild(head)
-      if (chatForm === null) chatForm = { team: t.team, ...buildDispatchForm(t.team) }
+      if (chatForm === null) chatForm = { team: dispatchTeam, ...buildDispatchForm(dispatchTeam) }
       wrap.appendChild(chatForm.form)
       chatBody.appendChild(wrap)
     }
@@ -1222,7 +1322,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     if (id.startsWith('peer-')) {
       const host = id.slice('peer-'.length)
       const peer = (last.peers ?? []).find(row => row.url.includes(host))
-      openChat({ kind: 'peer', id, title: peer !== undefined ? peer.url : host, sub: host })
+      openChat({ kind: 'peer', id, title: peer !== undefined ? peer.url : host, sub: host, url: peer?.url })
       return
     }
     const log = logRows.find(row => row.id === id)
