@@ -28,7 +28,7 @@ ygl-trees verify run              确定性判定（只在快照+提交树上，
 全部由探针先冻结进 snapshot.sqlite，验证器只对冻结数据做 SQL 谓词判定。
 同一份 spec 可以反复重跑新快照（候选期每轮重新 probe → run），判定可重放。
 
-## 覆盖面（baseline 1 = spec_bae507ea0520，14 单元）
+## 覆盖面（baseline 1 = spec_c8b6350c5034，14 单元；1.0 时代 spec_bae507ea0520 同判据）
 
 | 面 | 单元 | 检查 |
 |---|---|---|
@@ -48,7 +48,7 @@ node scripts/verify-probe.mjs
 # 2. 判定（YGL_HOME 指向仓库内自包含工作区）
 export YGL_HOME=D:/workspace/dsh-open-a2a-net/tmp/ygl-verify
 YGL=D:/workspace/ygl-trees/dist/apps/cli/src/bin.js
-node $YGL verify run spec_bae507ea0520 --db verify/snapshot.sqlite --submission "$(node -p "require('os').tmpdir()")/dsh-a2a-submission" --json
+node $YGL verify run spec_c8b6350c5034 --db verify/snapshot.sqlite --submission "$(node -p "require('os').tmpdir()")/dsh-a2a-submission" --json
 # （submission 路径以 probe 日志行「submission exported: N tracked files -> <path>」为准）
 # overall 在报告 JSON 里；rc=0 只表示「跑完出报告」，FAIL 也是有效结论
 ```
@@ -60,6 +60,13 @@ node $YGL verify run spec_bae507ea0520 --db verify/snapshot.sqlite --submission 
 提交验证器（72c43d2）并重采证据后：**14/14 overall PASS**
 （run_695a106d18d6ca61：四门禁 exit 0、3081 探针 0.6.13 peers 7、
 candidate_on_3081 ✓ unpublished ✓ worktree_clean ✓、提交树 249 文件全过）。
+
+0.6.14 周期（2026-10-20）：ygl-trees 引擎升 contract 1.1，冻结的 1.0 spec 被拒
+（run 报 `unsupported contract_version 1.0 — this engine implements 1.1`）——
+按维护路径重新 submit（mat_c08af0de2907）→ prepare → **spec_c8b6350c5034**；
+同材料同判据在新引擎下 14/14 overall PASS（run_62d3da86d0444a26，0.6.14 快照：
+四门禁 exit 0、3081 v0.6.14 peers 6、三闸门 ✓）。判据与单元数不变（14），
+spec id 更替属引擎版本驱动，非语义变更。
 
 ## 何时跑
 
