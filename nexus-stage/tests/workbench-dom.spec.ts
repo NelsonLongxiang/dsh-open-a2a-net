@@ -762,3 +762,86 @@ describe('remote chat through the proxy (0.6.15)', () => {
     await vi.waitFor(() => expect(text(chat)).toContain('无法读取（remote log unavailable'))
   })
 })
+
+describe('chat UI conventions (0.6.17)', () => {
+  function openScoutChat(v: ReturnType<typeof createWorkbench>): HTMLElement {
+    const item = [...v.root.querySelectorAll('.wb-item-label')].find(n => text(n).includes('scout-01'))!
+    item.click()
+    return v.root.querySelector('.wb-chat') as HTMLElement
+  }
+
+  it('Enter sends, Shift+Enter inserts a newline instead', async () => {
+    const { v, dispatchQuick } = bench()
+    v.update(state)
+    const chat = openScoutChat(v)
+    const area = chat.querySelector('.wb-dispatch-text') as HTMLTextAreaElement
+    area.focus()
+    area.value = 'enter line'
+    area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(dispatchQuick).toHaveBeenCalledWith('dsh/11111111', 'enter line'))
+    // Shift+Enter: soft newline, no submit.
+    dispatchQuick.mockClear()
+    area.value = 'first'
+    area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true, cancelable: true }))
+    expect(dispatchQuick).not.toHaveBeenCalled()
+    expect(area.value).toBe('first')
+    // IME composition is never hijacked: a composing Enter does not submit.
+    area.value = ' composing'
+    area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, isComposing: true }))
+    expect(dispatchQuick).not.toHaveBeenCalled()
+  })
+
+  it('clears the composer after a successful send and keeps focus through poll remounts', async () => {
+    const { v, dispatchQuick } = bench()
+    v.update(state)
+    const chat = openScoutChat(v)
+    const area = chat.querySelector('.wb-dispatch-text') as HTMLTextAreaElement
+    expect(document.activeElement).toBe(area)
+    area.value = 'clear me'
+    area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(text(v.root.querySelector('.wb-dispatch-note'))).toContain('已派发'))
+    expect(area.value).toBe('')
+    // The 3s poll remounts the drawer; the cached form node keeps focus —
+    // this is the focus-loss bug the owner hit.
+    expect(document.activeElement).toBe(area)
+    v.update({ ...state, sessions: [...state.sessions] })
+    const areaAfter = v.root.querySelector('.wb-dispatch-text') as HTMLTextAreaElement
+    expect(areaAfter).toBe(area)
+    expect(document.activeElement).toBe(areaAfter)
+    // Caret position survives the poll too — typing continues in place.
+    areaAfter.value = 'typing more'
+    areaAfter.setSelectionRange(4, 4)
+    v.update({ ...state, sessions: [...state.sessions] })
+    const areaThird = v.root.querySelector('.wb-dispatch-text') as HTMLTextAreaElement
+    expect(document.activeElement).toBe(areaThird)
+    expect(areaThird.selectionStart).toBe(4)
+  })
+
+  it('Escape closes the drawer; focus lands in the composer on open only', () => {
+    const { v } = bench()
+    v.update(state)
+    const chat = openScoutChat(v)
+    expect(chat.classList.contains('is-open')).toBe(true)
+    const area = chat.querySelector('.wb-dispatch-text') as HTMLTextAreaElement
+    expect(document.activeElement).toBe(area)
+    area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    expect(chat.classList.contains('is-open')).toBe(false)
+  })
+
+  it('transcript scroll position survives poll remounts instead of jumping to top', async () => {
+    const { v } = bench()
+    v.update(state)
+    const chat = openScoutChat(v)
+    await vi.waitFor(() => expect(text(chat.querySelector('.wb-transcript-body'))).toContain('开始扫描插件列表'))
+    const body = chat.querySelector('.wb-transcript-body') as HTMLElement
+    // The user scrolled up while reading; the poll fires. The settle runs
+    // on the next frame (scroll writes only stick on attached elements).
+    body.scrollTop = 120
+    body.dispatchEvent(new Event('scroll', { bubbles: false }))
+    v.update({ ...state, sessions: [...state.sessions] })
+    await new Promise(resolve => { requestAnimationFrame(() => { resolve(null) }) })
+    const bodyAfter = v.root.querySelector('.wb-chat .wb-transcript-body') as HTMLElement
+    expect(bodyAfter).not.toBe(body)
+    expect(bodyAfter.scrollTop).toBe(120)
+  })
+})

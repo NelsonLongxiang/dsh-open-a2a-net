@@ -314,11 +314,16 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // Chat drawer (0.6.13): the picked node + its own dispatch form cache
   // (separate from the inspector's so both faces can hold different teams).
   let chatTarget: ChatTarget | null = null
+  /** 0.6.17: one-shot composer focus on drawer open (consumed by renderChat). */
+  let chatFocusPending = false
   let chatForm: { team: string; form: HTMLFormElement; text: HTMLTextAreaElement; note: HTMLElement } | null = null
   // 0.6.11: inline transcript cache — one fetch per session id, refreshed on
   // demand. renderInspector rebuilds every poll, so the cache keeps the
   // transcript block from refetching on each 3s tick.
   const transcriptCache = new Map<string, { ok: boolean; messages?: Array<{ role: string; text: string }>; error?: string } | undefined>()
+  /** 0.6.17 chat-UI convention: reading position per transcript key — the
+   *  3s poll rebuilds the body, the scroll restores instead of jumping top. */
+  const transcriptScroll = new Map<string, number>()
   /** 0.6.15: peer-host session listings, cached per peer url. */
   const peerListCache = new Map<string, { ok: boolean; sessions?: Array<{ id: string; sizeBytes: number }>; error?: string } | undefined>()
   // 0.6.12: readable local logs (host-scope list, newest first). Refreshed
@@ -469,6 +474,22 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   const chatBody = el('div', 'wb-chat-body')
   chat.appendChild(chatHead)
   chat.appendChild(chatBody)
+  // 0.6.17 chat-UI convention: Escape closes the drawer. Document-scoped
+  // (a reading drawer often holds no focusable element), but it never
+  // steals Escape from another surface's text field or from the planning
+  // board's own deselect gesture.
+  document.addEventListener('keydown', ev => {
+    if (ev.key !== 'Escape' || !chat.classList.contains('is-open')) return
+    const target = ev.target
+    if (!(target instanceof HTMLElement)) return
+    const insideChat = chat.contains(target)
+    if (!insideChat) {
+      const typingElsewhere = target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement || target.isContentEditable
+      const onBoard = target.closest('.wb-stage-board') !== null
+      if (typingElsewhere || onBoard) return
+    }
+    closeChat()
+  })
 
   stage.appendChild(dataStack)
   body.appendChild(rail)
@@ -1072,6 +1093,14 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     form.appendChild(text)
     form.appendChild(submit)
     form.appendChild(note)
+    // 0.6.17 chat-UI conventions (deepseek-harness composer): Enter sends,
+    // Shift+Enter is a soft newline, IME composition is never hijacked.
+    text.addEventListener('keydown', ev => {
+      if (ev.key !== 'Enter' || ev.shiftKey || ev.ctrlKey || ev.altKey || ev.metaKey) return
+      if (ev.isComposing) return
+      ev.preventDefault()
+      if (!submit.disabled) form.requestSubmit()
+    })
     form.addEventListener('submit', async ev => {
       ev.preventDefault()
       const message = text.value.trim()
@@ -1085,6 +1114,12 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         outcome = { ok: false, error: error instanceof Error ? error.message : String(error) }
       }
       submit.disabled = false
+      if (outcome.ok === true) {
+        // Sent: clear the composer like every chat surface and hand the
+        // caret back — the submit round-trip must not strand focus.
+        text.value = ''
+      }
+      text.focus({ preventScroll: true })
       note.textContent = outcome.ok === true
         ? `已派发${outcome.task_id !== undefined ? ` · ${outcome.task_id}` : ''} · 回执将入台账（待回执）`
         : `失败：${outcome.error ?? '未知原因'}`
@@ -1121,6 +1156,24 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     block.appendChild(head)
     const body = el('div', 'wb-transcript-body')
     block.appendChild(body)
+    // 0.6.17 chat-UI conventions: the reading position survives the 3s poll
+    // remount (scroll captured on scroll, restored after every paint), and a
+    // FIRST successful load lands on the newest turn (bottom) like every
+    // chat surface. Refresh explicitly re-lands on the bottom.
+    let landed = transcriptScroll.has(cacheKey)
+    let landOnBottom = !landed
+    const settle = (): void => {
+      if (landOnBottom) {
+        body.scrollTop = body.scrollHeight
+        landOnBottom = false
+        landed = true
+      } else if (transcriptScroll.has(cacheKey)) {
+        body.scrollTop = transcriptScroll.get(cacheKey) ?? 0
+      }
+    }
+    body.addEventListener('scroll', () => {
+      if (body.scrollTop > 0 || landed) transcriptScroll.set(cacheKey, body.scrollTop)
+    })
     const paint = (state: TranscriptState): void => {
       body.replaceChildren()
       if (state === undefined) {
@@ -1141,8 +1194,15 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         row.appendChild(el('span', 'wb-transcript-text')).textContent = message.text
         body.appendChild(row)
       }
+      // Scroll writes only stick on ATTACHED elements: the synchronous
+      // cache-hit path paints before the block joins the DOM, so the
+      // settle must run on the next frame, after append + layout.
+      requestAnimationFrame(() => {
+        if (body.isConnected) settle()
+      })
     }
     const run = (force: boolean): void => {
+      if (force) landOnBottom = true
       if (!force && transcriptCache.has(cacheKey)) {
         paint(transcriptCache.get(cacheKey))
         return
@@ -1232,12 +1292,34 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     // Keep the chat form only when it belongs to the same session team.
     const team = target.kind === 'session' || target.kind === 'remote' ? target.team : undefined
     if (chatForm !== null && chatForm.team !== team) chatForm = null
+    // 0.6.17: focus the composer ONCE per open — never on poll remounts,
+    // which would steal focus every 3s (the focus bug the owner hit).
+    chatFocusPending = true
     renderChat()
     chat.classList.add('is-open')
     root.classList.remove('is-rail-open')
   }
 
+  /** 0.6.17 focus law: the 3s poll rebuilds the drawer, and MOVING a
+   *  focused node (re-append) blurs it in every browser — the composer
+   *  would lose the caret mid-typing. Capture focus + selection around the
+   *  face render and restore it on the same node after (cached nodes come
+   *  back; throwaway nodes just lose focus as before). */
   function renderChat(): void {
+    const activeBefore = document.activeElement
+    const focusWasInside = activeBefore instanceof HTMLElement && chatBody.contains(activeBefore)
+    const selection = activeBefore instanceof HTMLTextAreaElement || activeBefore instanceof HTMLInputElement
+      ? { start: activeBefore.selectionStart, end: activeBefore.selectionEnd }
+      : undefined
+    renderChatFace()
+    if (!focusWasInside || !(activeBefore instanceof HTMLElement) || !chatBody.contains(activeBefore)) return
+    activeBefore.focus({ preventScroll: true })
+    if (selection !== undefined && activeBefore instanceof HTMLTextAreaElement) {
+      activeBefore.setSelectionRange(selection.start, selection.end)
+    }
+  }
+
+  function renderChatFace(): void {
     const t = chatTarget
     if (t === null) return
     chatDot.className = `wb-chat-dot ${t.kind === 'peer' ? 'is-peer' : t.kind === 'log' || t.kind === 'remote' || t.live === false ? 'is-cold' : 'is-live'}`
@@ -1308,6 +1390,14 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       if (chatForm === null) chatForm = { team: dispatchTeam, ...buildDispatchForm(dispatchTeam) }
       wrap.appendChild(chatForm.form)
       chatBody.appendChild(wrap)
+      if (chatFocusPending) {
+        chatFocusPending = false
+        // preventScroll: focusing must not fight the transcript's own
+        // landing scroll (bottom on first read).
+        chatForm.text.focus({ preventScroll: true })
+      }
+    } else {
+      chatFocusPending = false
     }
   }
 
