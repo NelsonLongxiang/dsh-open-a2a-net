@@ -9,6 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { generateKeyPairSync } from 'node:crypto'
+import * as net from 'node:net'
 import { bootNode, craftCard, ghostNode, preseedNodeKey, postJson, reservePort, runContext, steerText, tmpHome, type MeshNode } from './harness.ts'
 
 beforeEach(() => {
@@ -113,9 +114,24 @@ describe('mesh faults — partition, restart, and recovery', () => {
   it('one node under two loopback spellings collapses to a single tracked peer (learned alias, not seed)', async () => {
     const portC = await reservePort()
     const ipSpelling = `http://127.0.0.1:${String(portC)}`
-    const aliasSpelling = `http://127.0.0.2:${String(portC)}`
     // cargo listens on all interfaces so both loopback spellings reach it.
     const cargo = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo', host: '0.0.0.0', port: portC })
+    // gh#3 (macOS 26.5 arm64): the whole-127/8 loopback assumption is
+    // Linux/Windows — macOS lo0 carries only 127.0.0.1, so a 127.0.0.2
+    // connect hangs the test. Detect the second loopback address at
+    // runtime; fall back to the `localhost` spelling, which reaches a
+    // 0.0.0.0-bound server on every platform (different string, same node
+    // — exactly what alias collapse operates on).
+    const aliasReachable = await new Promise<boolean>(resolve => {
+      const socket = net.connect(portC, '127.0.0.2')
+      const done = (ok: boolean): void => { socket.destroy(); resolve(ok) }
+      socket.setTimeout(800, () => done(false))
+      socket.once('connect', () => done(true))
+      socket.once('error', () => done(false))
+    })
+    const aliasSpelling = aliasReachable
+      ? `http://127.0.0.2:${String(portC)}`
+      : `http://localhost:${String(portC)}`
     // relay knows cargo under the SECOND spelling only; alpha seeds the first
     // spelling plus relay — the alias arrives as a referral (non-seed), which
     // is the only shape alias collapse may drop.
