@@ -190,7 +190,10 @@ const bench = createWorkbench({
     try {
       const res = await fetch(`/__dsh_a2a/session-log?id=${encodeURIComponent(id)}`)
       const body = (await res.json().catch(() => ({}))) as { ok?: boolean; messages?: Array<{ role: string; text: string }>; error?: string }
-      return { ok: res.ok && body.ok === true, messages: body.messages, error: body.error ?? `HTTP ${res.status}` }
+      // 0.6.16: error stays undefined on success — an unconditional
+      // `body.error ?? HTTP ${status}` painted "HTTP 200" on listing-shaped
+      // successes that lacked a messages field.
+      return { ok: res.ok && body.ok === true, messages: body.messages, error: body.error ?? (res.ok ? undefined : `HTTP ${res.status}`) }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }
@@ -201,7 +204,7 @@ const bench = createWorkbench({
     try {
       const res = await fetch('/__dsh_a2a/session-log')
       const body = (await res.json().catch(() => ({}))) as { ok?: boolean; sessions?: Array<{ id: string; mtimeMs: number; sizeBytes: number }>; error?: string }
-      return { ok: res.ok && body.ok === true, sessions: body.sessions, error: body.error ?? `HTTP ${res.status}` }
+      return { ok: res.ok && body.ok === true, sessions: body.sessions, error: body.error ?? (res.ok ? undefined : `HTTP ${res.status}`) }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }
@@ -224,7 +227,7 @@ const bench = createWorkbench({
         error?: string
         via?: string
       }
-      return { ok: res.ok && body.ok === true, messages: body.messages, sessions: body.sessions, error: body.error ?? `HTTP ${res.status}`, via: body.via }
+      return { ok: res.ok && body.ok === true, messages: body.messages, sessions: body.sessions, error: body.error ?? (res.ok ? undefined : `HTTP ${res.status}`), via: body.via }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }

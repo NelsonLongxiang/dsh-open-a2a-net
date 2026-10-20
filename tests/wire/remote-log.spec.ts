@@ -198,7 +198,7 @@ describe('control proxy /__dsh_a2a/remote-session-log (0.6.15)', () => {
     expect(body.error).toContain('unknown peer on this node')
   })
 
-  it('resolves ?team= through the directory walk and reads the publisher', async () => {
+  it('resolves ?team= through the directory walk and reads the matching session (0.6.16)', async () => {
     const { generateKeyPairSync } = await import('node:crypto')
     const { signCard } = await import('../../src/card.ts')
     const { privateKey } = generateKeyPairSync('ed25519')
@@ -210,12 +210,22 @@ describe('control proxy /__dsh_a2a/remote-session-log (0.6.15)', () => {
     const m = await mount({ peers: ['http://peer-x'] })
     mounted.push(m.dispose)
     const realFetch = globalThis.fetch
+    let tailAskedId = ''
     vi.stubGlobal('fetch', (url: string, init?: { method?: string }) => {
       if (String(url) === 'http://peer-x/.well-known/agent-card.json' && (init?.method ?? 'GET') === 'GET') {
         return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify(card) } as unknown as Response)
       }
       if (String(url).startsWith('http://peer-x/a2a/log')) {
-        return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true, messages: [{ role: 'user', text: '对端最近的问题' }] }) } as unknown as Response)
+        const u = new URL(String(url))
+        if (u.searchParams.get('id') === null) {
+          // listing face — the suffix a1b2c3d4 must resolve to this session
+          return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true, count: 2, sessions: [
+            { id: 'session-ffffffff-0000-0000-0000-000000000000', mtimeMs: 2, sizeBytes: 10 },
+            { id: 'session-a1b2c3d4-1111-2222-3333-444455556666', mtimeMs: 1, sizeBytes: 20 },
+          ] }) } as unknown as Response)
+        }
+        tailAskedId = u.searchParams.get('id') ?? ''
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true, id: tailAskedId, count: 1, messages: [{ role: 'user', text: '对端最近的问题' }] }) } as unknown as Response)
       }
       return realFetch(url, init as never)
     })
@@ -226,7 +236,50 @@ describe('control proxy /__dsh_a2a/remote-session-log (0.6.15)', () => {
     }
     expect(body.ok).toBe(true)
     expect(body.via).toBe('http://peer-x')
+    // the handle suffix resolved to the a1b2c3d4 session, not the newest ffffffff one
+    expect(tailAskedId).toBe('session-a1b2c3d4-1111-2222-3333-444455556666')
     expect(body.messages[0]!.text).toBe('对端最近的问题')
+  })
+
+  it('falls back to the newest session for a bare zone team and fails honestly on no match (0.6.16)', async () => {
+    const { generateKeyPairSync } = await import('node:crypto')
+    const { signCard } = await import('../../src/card.ts')
+    const { privateKey } = generateKeyPairSync('ed25519')
+    const card = {
+      ...signCard({ name: 'zone host', session: 'sess-z', team: 'nel157', capabilities: { route: true }, expiresAt: Date.now() + 60_000 }, privateKey),
+      sessionTeams: [{ team: 'nel157', name: 'zone roster', description: 'bare zone team' }, { team: 'nel157/aaaabbbb', name: 'ghost session', description: 'publishes a handle with no log' }],
+    }
+    const m = await mount({ peers: ['http://peer-x'] })
+    mounted.push(m.dispose)
+    const realFetch = globalThis.fetch
+    let listingCalls = 0
+    let tailAskedId = ''
+    vi.stubGlobal('fetch', (url: string, init?: { method?: string }) => {
+      if (String(url) === 'http://peer-x/.well-known/agent-card.json' && (init?.method ?? 'GET') === 'GET') {
+        return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify(card) } as unknown as Response)
+      }
+      if (String(url).startsWith('http://peer-x/a2a/log')) {
+        const u = new URL(String(url))
+        if (u.searchParams.get('id') === null) {
+          listingCalls += 1
+          return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true, count: 1, sessions: [
+            { id: 'session-9999aaaa-bbbb', mtimeMs: 5, sizeBytes: 30 },
+          ] }) } as unknown as Response)
+        }
+        tailAskedId = u.searchParams.get('id') ?? ''
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true, id: tailAskedId, count: 0, messages: [] }) } as unknown as Response)
+      }
+      return realFetch(url, init as never)
+    })
+    // bare zone team → newest session
+    let body = await (await fetch(`http://127.0.0.1:${m.port}/__dsh_a2a/remote-session-log?team=nel157`)).json() as { ok: boolean }
+    expect(body.ok).toBe(true)
+    expect(tailAskedId).toBe('session-9999aaaa-bbbb')
+    // handle whose suffix matches nothing in the listing → honest refusal
+    body = await (await fetch(`http://127.0.0.1:${m.port}/__dsh_a2a/remote-session-log?team=nel157%2Faaaabbbb`)).json() as { ok: boolean; error: string }
+    expect(body.ok).toBe(false)
+    expect(body.error).toContain('no readable session')
+    expect(listingCalls).toBe(2)
   })
 
   it('aggregates candidate failures honestly', async () => {

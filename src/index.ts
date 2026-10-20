@@ -3502,11 +3502,42 @@ ${message}`
           finish({ ok: false, error: 'team or peer is required' })
           return
         }
+        // 0.6.16: a team-handle read without an explicit id names a NODE, not
+        // a session. The handle suffix (zone/<id8>) is the first 8 hex of the
+        // peer-side session id (sessionTeamOf), so resolve the listing once
+        // and pick that session — bare zone teams fall back to the newest.
+        // An explicit id (peer drill) short-circuits this.
+        let resolvedId = id
+        if (resolvedId === '' && team !== '') {
+          const suffix = team.includes('/') ? team.slice(team.lastIndexOf('/') + 1) : ''
+          for (const base of targets) {
+            const listUrl = new URL('/a2a/log', base)
+            listUrl.searchParams.set('caller_session', config.team)
+            try {
+              const listResponse = await globalThis.fetch(listUrl, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } })
+              const listBody = await listResponse.json().catch(() => ({ ok: false, error: `peer answered HTTP ${listResponse.status}` })) as { ok?: boolean; error?: string; sessions?: Array<{ id: string }> }
+              if (listResponse.ok && listBody.ok === true && Array.isArray(listBody.sessions)) {
+                const picked = suffix !== '' ? listBody.sessions.find(row => row.id.includes(suffix)) : listBody.sessions[0]
+                if (picked !== undefined) {
+                  resolvedId = picked.id
+                  break
+                }
+              }
+            } catch {
+              // listing failed on this candidate — the tail attempt below
+              // will surface the honest error for the same base
+            }
+          }
+          if (resolvedId === '') {
+            finish({ ok: false, error: `no readable session on this peer matches "${team}"` })
+            return
+          }
+        }
         const attempts: string[] = []
         for (const base of targets) {
           const target = new URL('/a2a/log', base)
           target.searchParams.set('caller_session', config.team)
-          if (id !== '') target.searchParams.set('id', id)
+          if (resolvedId !== '') target.searchParams.set('id', resolvedId)
           target.searchParams.set('limit', String(limit))
           try {
             const response = await globalThis.fetch(target, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } })
