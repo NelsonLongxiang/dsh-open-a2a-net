@@ -86,6 +86,23 @@ unit 300/wire 291/nexus 120 全 exit 0、3081 v0.6.17、三闸门 ✓）。
 部署坑：同版本号 file: tgz 重装会被 pnpm 缓存吞掉（3081 一直跑旧 bundle）——
 候选修订重装必须 `pnpm remove` + `pnpm add`，并以 index.html 引用的 bundle hash 为准核验。
 
+## 递归验证器（scripts/verify-recursive.mjs，2026-10-21 开发席指令）
+
+一层入口三层递归，退出码 0 = 三层全绿：
+
+| 层 | 验证对象 | 机制 |
+|---|---|---|
+| L·引擎 | 判官自己 | `verify self-check`（canonical 向量→语料摘要→形状→全语料实跑→归档链，六环） |
+| L·判定 | 候选 | 冻结 spec 在当前快照上的 14 单元 run |
+| L·证据 | 判定本身的证据链 | 最新 run 归档 `archive verify` 全 hash 链逐字节重算 |
+
+```bash
+node scripts/verify-recursive.mjs [--fresh]   # --fresh 先跑探针重采快照再判定
+```
+
+产出 verify/recursive-summary.json（gitignore 再生产物）。首跑实绩：引擎 6 ok/0 skip/0 fail、
+spec-run PASS 14/14（run_60ff8d9aa34e5a6e）、归档链 5 items 无问题。
+
 ## 何时跑
 
 - 每个候选版本完成 `pnpm verify` 并部署 3081 之后、报给用户校验之前——
