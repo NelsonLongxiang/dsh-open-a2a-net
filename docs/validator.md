@@ -103,6 +103,11 @@ node scripts/verify-recursive.mjs [--fresh]   # --fresh 先跑探针重采快照
 产出 verify/recursive-summary.json（gitignore 再生产物）。首跑实绩：引擎 6 ok/0 skip/0 fail、
 spec-run PASS 14/14（run_60ff8d9aa34e5a6e）、归档链 5 items 无问题。
 
+**gh#5 评审证据请求的标准答案**：评审席/监督席要「候选运行时证据」时，开发席交付三件套——
+① `node scripts/verify-recursive.mjs --fresh` 的 recursive-summary.json（引擎自证+判定+证据链）；
+② verify/probe-summary.json（四门禁退出码+3081 探针+闸门推导）；③ 最新 run 报告
+（tmp/ygl-verify/verify/reports/run_*.json，含每 VU witness）。三件同 commit 出，缺一不可。
+
 ## 何时跑
 
 - 每个候选版本完成 `pnpm verify` 并部署 3081 之后、报给用户校验之前——

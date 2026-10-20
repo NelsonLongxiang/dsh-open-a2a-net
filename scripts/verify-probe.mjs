@@ -40,10 +40,13 @@ const run = (label, command, args, timeoutMs) => {
   const res = spawnSync(command, args, { cwd: REPO, encoding: "utf8", timeout: timeoutMs, maxBuffer: 64 << 20, shell: SHELL });
   const duration = Date.now() - t0;
   const out = `${res.stdout ?? ""}\n${res.stderr ?? ""}`;
-  // vitest 汇总行：`Tests  123 passed | 4 skipped`（多段跑取全部求和）
-  const passed = [...out.matchAll(/(\d+) passed/g)].reduce((a, m) => a + Number(m[1]), 0);
-  const failed = [...out.matchAll(/(\d+) failed/g)].reduce((a, m) => a + Number(m[1]), 0);
-  const skipped = [...out.matchAll(/(\d+) skipped/g)].reduce((a, m) => a + Number(m[1]), 0);
+  // gh#4: vitest prints one summary line per project plus a grand total —
+  // summing every match double-counts. The LAST "N passed" line is the
+  // grand total (single-project runs have exactly one).
+  const last = (re) => Number([...out.matchAll(re)].at(-1)?.[1] ?? 0);
+  const passed = last(/(\d+) passed/g);
+  const failed = last(/(\d+) failed/g);
+  const skipped = last(/(\d+) skipped/g);
   const killed = res.error?.code === "ETIMEDOUT";
   console.error(`[probe] ${label}: exit=${res.status ?? -1} ${duration}ms passed=${passed} failed=${failed}${killed ? " (TIMEOUT)" : ""}`);
   return { gate: label, exit_code: res.status ?? -1, passed, failed, skipped, duration_ms: duration, stdout_tail: out.slice(-500) };
