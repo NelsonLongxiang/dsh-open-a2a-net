@@ -329,4 +329,53 @@ describe('S5 information-plane scoping (teamScopeInfo)', () => {
       await open.ctx.fiber.dispose()
     })
   })
+
+  describe('scope follow-up G2/G4 (review artifact 688c0354d3 v2)', () => {
+    it('G2: scoped a2a_status keeps the host-synthetic log-face rows (real-driven)', async () => {
+    const home = tmpHome()
+    // This one test needs the real HTTP face: mount WITH a WebServer so the
+    // /a2a/log route exists and records the host-synthetic activity rows.
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    apply(ctx, makeConfig({ teamScopeInfo: true, dshHome: home }))
+    const port = (ctx as unknown as { webServer: { port: number } }).webServer.port
+    stubFleet()
+    // Drive the /a2a/log face twice: an admitted caller (activity row
+    // dir=in team='log' peer=caller) and an anonymous pass (gate off in
+    // this harness) — both are host-synthetic face telemetry.
+    await fetch(`http://127.0.0.1:${String(port)}/a2a/log?caller_session=home-zone`)
+    await fetch(`http://127.0.0.1:${String(port)}/a2a/log`)
+    const status = await ctx.tools.get('a2a_status')!.execute({}, runContext()) as { activity: Array<{ dir: string; team: string; peer: string; ok: boolean }> }
+    const logRows = status.activity.filter(entry => entry.team === 'log')
+    expect(logRows.length).toBe(2)
+    expect(logRows.some(entry => entry.peer === 'home-zone' && entry.ok)).toBe(true)
+    // The control: nothing about the pass-through widens real fleet rows —
+    // with zero roster and zero canvas the peers list stays empty.
+    expect((status.peers as unknown[]).length).toBe(0)
+    await ctx.fiber.dispose()
+  })
+
+  it('G4: canvas membership widens the scope — the canvas remote teammate becomes visible', async () => {
+    const home = tmpHome()
+    mkdirSync(join(home, 'a2a'), { recursive: true })
+    // Local member agent-1 (no roster declaration at all) + the remote
+    // handle peer-b publishes (zone-b/hub). Canvas is the ONLY join intent.
+    writeFileSync(join(home, 'a2a', 'canvas.json'), JSON.stringify({ teams: [{ name: 'ops', members: ['agent-1', 'zone-b/hub'] }] }))
+    const ctx = await mount({ teamScopeInfo: true, dshHome: home })
+    stubFleet()
+    // a2a_teams: peer-b's hub row serves a scope member handle — visible;
+    // peer-a and the legacy peer-c stay withheld.
+    const listed = await ctx.tools.get('a2a_teams')!.execute({}, runContext()) as { teams: TeamRow[]; note: string }
+    expect(listed.teams.some(row => row.team === 'zone-b/hub')).toBe(true)
+    expect(listed.teams.some(row => row.team === 'zone-a/cargo')).toBe(false)
+    expect(listed.teams.some(row => row.team === 'zone-c')).toBe(false)
+    // a2a_status: the same card serves the scope, so the peer is visible.
+    const status = await ctx.tools.get('a2a_status')!.execute({}, runContext()) as { peers: Array<{ url: string }> }
+    expect(status.peers.map(peer => peer.url)).toEqual(['http://peer-b'])
+    await ctx.fiber.dispose()
+  })
+  })
 })
