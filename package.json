@@ -36,6 +36,10 @@
     "nexus-stage/tsconfig.json",
     "nexus-stage/vite.config.ts"
   ],
+  "packageManager": "pnpm@11.28.5",
+  "engines": {
+    "pnpm": ">=11.24 <12"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -184,15 +188,15 @@
     "typescript": "^5.9.3",
     "vitest": "^4.1.8"
   },
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://gitee.com/NelsonLongXiang/dsh-open-a2a-net.git"
-  },
   "pnpm": {
     "overrides": {
       "@deepseek-ai/cordis": "4.0.5",
       "@deepseek-ai/cordis-plugin-loader": "1.0.5"
     }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://gitee.com/NelsonLongXiang/dsh-open-a2a-net.git"
   }
 }
