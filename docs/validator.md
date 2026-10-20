@@ -68,6 +68,12 @@ candidate_on_3081 ✓ unpublished ✓ worktree_clean ✓、提交树 249 文件�
 四门禁 exit 0、3081 v0.6.14 peers 6、三闸门 ✓）。判据与单元数不变（14），
 spec id 更替属引擎版本驱动，非语义变更。
 
+0.6.15 周期（2026-10-20）：判据面不变，spec_c8b6350c5034 直接重放新快照——
+**14/14 overall PASS**（run_79c48f54b257b0b3，head 252504d4：unit 300/wire 290/
+nexus 116 全 exit 0、3081 v0.6.15 peers 6 dead 14、三闸门 ✓、工作树净）。
+注：probe 计数与本地手跑（564+4/111）口径不同（探针分别跑 test:unit 与 verify:nexus，
+后者含 dist 门禁前置构建），以探针快照为准。
+
 ## 何时跑
 
 - 每个候选版本完成 `pnpm verify` 并部署 3081 之后、报给用户校验之前——
