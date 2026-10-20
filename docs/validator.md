@@ -11,7 +11,8 @@ scripts/verify-probe.mjs          证据采集面（验证器之外，真命令/
    ├─ 质量门禁：pnpm run typecheck / test:unit / test:wire / verify:nexus（退出码+用例计数）
    ├─ 运行时：3081 /__dsh_a2a_nexus/ 与 /__dsh_a2a/state 探针
    ├─ 闸门推导：candidate_on_3081 / unpublished_in_registry / worktree_clean
-   ├─ 产出：verify/snapshot.sqlite（快照）+ tmp/submission/（git ls-files 提交树导出）
+   ├─ 产出：verify/snapshot.sqlite（快照）+ 提交树导出（os tmpdir/dsh-a2a-submission，
+   │   仓库外——放 repo 的 tmp/ 会被 vitest 收进测试树，实测踩坑 0.6.14）
    └─ 产出：verify/probe-summary.json（人读摘要）
 
 verify/material.md                判据源（14 条判据句，逐字被验证单元引用）
@@ -47,7 +48,8 @@ node scripts/verify-probe.mjs
 # 2. 判定（YGL_HOME 指向仓库内自包含工作区）
 export YGL_HOME=D:/workspace/dsh-open-a2a-net/tmp/ygl-verify
 YGL=D:/workspace/ygl-trees/dist/apps/cli/src/bin.js
-node $YGL verify run spec_bae507ea0520 --db verify/snapshot.sqlite --submission tmp/submission --json
+node $YGL verify run spec_bae507ea0520 --db verify/snapshot.sqlite --submission "$(node -p "require('os').tmpdir()")/dsh-a2a-submission" --json
+# （submission 路径以 probe 日志行「submission exported: N tracked files -> <path>」为准）
 # overall 在报告 JSON 里；rc=0 只表示「跑完出报告」，FAIL 也是有效结论
 ```
 

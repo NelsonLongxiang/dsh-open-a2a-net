@@ -102,7 +102,7 @@ describe('a2a_report unjoined-node ingress', () => {
     await ctx.fiber.dispose()
   })
 
-  it('rate limits to one report per 30s per session and caps the message at 2000 chars', async () => {
+  it('rate limits to one report per 30s per session and caps the message at 4000 chars (K3 P2, 0.6.14)', async () => {
     const { ctx, report } = await mountHost()
     const exec = { agent: { id: SessionId('ghost-2') } }
     const first = await report?.execute({ message: 'first' }, exec) as { ok: boolean }
@@ -110,9 +110,11 @@ describe('a2a_report unjoined-node ingress', () => {
     const second = await report?.execute({ message: 'second', level: 'error' }, exec) as { ok: boolean; error?: string }
     expect(second?.ok).toBe(false)
     expect(second?.error).toContain('rate limited')
-    const oversized = await report?.execute({ message: 'x'.repeat(2001) }, { agent: { id: SessionId('ghost-3') } }) as { ok: boolean; error?: string }
+    // 3999 fits where 2001 used to refuse — long verdicts (K3's five-gate reports) need no trimming now.
+    const roomy = await report?.execute({ message: 'x'.repeat(3999) }, { agent: { id: SessionId('ghost-2b') } }) as { ok: boolean }; expect(roomy?.ok).toBe(true)
+    const oversized = await report?.execute({ message: 'x'.repeat(4001) }, { agent: { id: SessionId('ghost-3') } }) as { ok: boolean; error?: string }
     expect(oversized?.ok).toBe(false)
-    expect(oversized?.error).toContain('2000-char cap')
+    expect(oversized?.error).toContain('4000-char cap')
     const empty = await report?.execute({ message: '  ' }, { agent: { id: SessionId('ghost-4') } }) as { ok: boolean; error?: string }
     expect(empty?.ok).toBe(false)
     await ctx.fiber.dispose()

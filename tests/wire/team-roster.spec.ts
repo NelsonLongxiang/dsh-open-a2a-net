@@ -562,3 +562,88 @@ describe('discovery invisibility for unjoined sessions (owner ruling B)', () => 
     await ctx.fiber.dispose()
   })
 })
+
+describe('a2a_whoami + structured join refusals (K3 feedback, 0.6.14)', () => {
+  async function mountedWhoami(overrides: Partial<Config> = {}): Promise<{ ctx: Context; join: ToolDefinition | undefined; whoami: ToolDefinition | undefined }> {
+    const home = mkdtempSync(join(tmpdir(), 'a2a-whoami-'))
+    mkdirSync(join(home, 'a2a'), { recursive: true })
+    writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: ['agent-1'] }))
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    ctx.provide('sessionPersistence', {
+      list: async () => [{ id: SessionId('agent-1') }],
+    } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
+    apply(ctx, makeConfig({ dshHome: home, ...overrides }))
+    const agents = ctx.get('agents') as unknown as FakeAgentsService
+    const live = { id: SessionId('agent-1'), session: { events: [] }, steer: vi.fn() } as unknown as Agent
+    agents.agent = live
+    ctx.emit('agent/created', { agent: live })
+    return { ctx, join: ctx.tools.get('a2a_team_join'), whoami: ctx.tools.get('a2a_whoami') }
+  }
+
+  it('answers an UNJOINED session without any gate: joined=false, no handle, allowlist visible, initiator-face note', async () => {
+    const { ctx, whoami } = await mountedWhoami()
+    const answer = await whoami?.execute({}, { agent: { id: SessionId('agent-outside-0000-0000') } }) as {
+      ok: boolean; face: string; node: { id: string; team?: string; joined: boolean; live: boolean }
+      allowlist: { patterns: string[]; effect: string }; note: string
+    }
+    expect(answer?.ok).toBe(true)
+    expect(answer?.face).toBe('session')
+    expect(answer?.node.joined).toBe(false)
+    expect(answer?.node.live).toBe(false)
+    expect(answer?.node.team).toBeUndefined()
+    expect(answer?.allowlist.patterns).toEqual(['dsh/review-gate'])
+    expect(answer?.allowlist.effect).toBe('curated')
+    expect(answer?.note).toContain('outbound routing still works')
+    await ctx.fiber.dispose()
+  })
+
+  it('answers a joined+declared node with handle, roster teams, and its latest refusal reason', async () => {
+    const { ctx, join, whoami } = await mountedWhoami()
+    const refused = await join?.execute({ team: 'dsh/private-ops', id: 'agent-1' }, {}) as { ok: boolean; error?: string }
+    expect(refused?.error).toContain('[ALLOWLIST_DENY]')
+    const ok = await join?.execute({ team: 'dsh/review-gate', id: 'agent-1' }, {}) as { ok: boolean }
+    expect(ok?.ok).toBe(true)
+    const answer = await whoami?.execute({}, { agent: { id: SessionId('agent-1') } }) as {
+      node: { team?: string; joined: boolean; live: boolean }
+      teams: { roster: string[]; canvas: string[] }
+      lastRefusals: Array<{ team: string; reason: string }>
+    }
+    expect(answer?.node.joined).toBe(true)
+    expect(answer?.node.live).toBe(true)
+    // id8 passes short labels through ('agent-1') and hashes UUID-shaped ids —
+    // the guarantee under test is the zone-qualified handle shape, not the tail.
+    expect(answer?.node.team).toMatch(/^dsh\//)
+    expect(answer?.teams.roster).toEqual(['dsh/review-gate'])
+    expect(answer?.teams.canvas).toEqual([])
+    expect(answer?.lastRefusals[0]?.team).toBe('dsh/private-ops')
+    expect(answer?.lastRefusals[0]?.reason).toContain('[ALLOWLIST_DENY]')
+    await ctx.fiber.dispose()
+  })
+
+  it('join refusals carry reason codes with model-executable next steps (no CLI pointers)', async () => {
+    const { ctx, join } = await mountedWhoami({ teamJoinAllowlist: ['*'] })
+    const notJoined = await join?.execute({ team: 'dsh/anything', id: 'session-ghost-0000-0000-0000-000000000000' }, {}) as { ok: boolean; error?: string }
+    expect(notJoined?.error).toContain('[NOT_JOINED]')
+    expect(notJoined?.error).toContain('a2a_whoami')
+    expect(notJoined?.error).not.toContain('a2a-collab')
+    expect(notJoined?.error).toContain('human operator')
+    const canvas = await join?.execute({ team: 'dsh/canvas/ops', id: 'agent-1' }, {}) as { ok: boolean; error?: string }
+    expect(canvas?.error).toContain('[CANVAS_TEAM]')
+    const empty = await join?.execute({ team: '', id: '' }, {}) as { ok: boolean; error?: string }
+    expect(empty?.error).toContain('[BAD_ARGUMENTS]')
+    await ctx.fiber.dispose()
+  })
+
+  it('host face answers with the bare node team (the 能发即能收 invariant)', async () => {
+    const { ctx, whoami } = await mountedWhoami()
+    const answer = await whoami?.execute({}, {}) as { ok: boolean; face: string; node: { team: string } }
+    expect(answer?.face).toBe('host')
+    expect(answer?.node.team).toBe('dsh')
+    await ctx.fiber.dispose()
+  })
+})

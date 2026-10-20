@@ -17,6 +17,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -130,7 +131,8 @@ const gateRows = [
 /* ── 5. 导出提交树（验证器 file 检查的 submission 面） ──── */
 // 不用工作树本身：.claude/worktrees 里有 pnpm junction 环（walk ELOOP），且 node_modules 是非提交物。
 // 提交面 = git ls-files 的导出 —— 与「提交物」语义严格一致。
-const SUBMISSION = resolve(REPO, "tmp/submission");
+// 位置必须在仓库外（os tmpdir）：放进 repo 的 tmp/ 会被 vitest 当测试树收进 test:wire（实测踩坑 0.6.14）。
+const SUBMISSION = resolve(tmpdir(), "dsh-a2a-submission");
 rmSync(SUBMISSION, { recursive: true, force: true });
 mkdirSync(SUBMISSION, { recursive: true });
 const tracked = git(["ls-files"]).split("\n").filter(Boolean);
@@ -139,7 +141,7 @@ for (const rel of tracked) {
   mkdirSync(dirname(dest), { recursive: true });
   try { writeFileSync(dest, readFileSync(resolve(REPO, rel))); } catch { /* 跳过读不了的边角 */ }
 }
-console.error(`[probe] submission exported: ${tracked.length} tracked files -> tmp/submission`);
+console.error(`[probe] submission exported: ${tracked.length} tracked files -> ${SUBMISSION}`);
 
 /* ── 6. 冻结成 sqlite ───────────────────────────────────── */
 const { DatabaseSync } = await import("node:sqlite");

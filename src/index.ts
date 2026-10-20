@@ -482,10 +482,10 @@ export function apply(ctx: Context, config: Config): void {
       '',
       'The A2A network is self-service. When a task needs cross-session or cross-node collaboration, you may join the network and team up:',
       '',
-      '- **Joining**: call `a2a_teams` to discover reachable teams and nodes. Joining (the sidebar entry or the join gate prompt) is the prerequisite for using `a2a_route`; the session that originates a task is exempt from the gate.',
+      '- **Joining**: call `a2a_teams` to discover reachable teams and nodes. Outbound routing NEVER requires join — the session that originates a task is always exempt (initiator face); join buys presence, discovery, and being routed to. Joining itself is a host-side human control (the GUI sidebar A2A panel); check your state anytime with `a2a_whoami`.',
       '- **Teaming**: prefer joining an existing team that fits the task (visible via `a2a_teams`); create a new team (canvas team) only as a fallback when no existing team fits. A node may participate in multiple teams; collaboration happens inside teams.',
       '- **Hygiene**: when your task is complete and no work is pending, leave your teams and the network — stale joined nodes and abandoned teams are network debt. Rejoining later is cheap.',
-      '- **Boundaries**: an unjoined session has no network (routing is refused) and is invisible to peer discovery. Membership is visible; leaving removes you from peer discovery too.',
+      '- **Boundaries**: an unjoined session can still route out (initiator face) and report (`a2a_report`), but has no presence — it is invisible to peer discovery and cannot be routed to. Membership is visible; leaving removes you from peer discovery too. Team-scoped admission (`teamScopeRouting`) applies to joined session callers, never to the originating face.',
     ].join('\n'),
   })
   // F4 slice: say the quiet part at boot instead of leaving the exposure to
@@ -3559,6 +3559,112 @@ ${message}`
   const joinedNodeOrNone = (id: string): string | undefined =>
     joinedSessions.has(id) || sessionNodes.has(id) ? id : undefined
 
+  // K3 feedback P0 (2026-10-20): a session could appear in a2a_teams, route
+  // fine, and still be refused by a2a_team_join — with no way to ask "what am
+  // I, actually?". whoami is that one-call answer. Deliberately NOT gated by
+  // a2aJoinGateRefusal: the unjoined session is precisely the caller that
+  // needs it.
+  ctx.tools.register(defineTool({
+    name: 'a2a_whoami',
+    description:
+      'One-call self-introspection on this host\'s A2A network: the calling session\'s node id, joined/live '
+      + 'state, routable team handle, declared team memberships (roster + canvas), the owner\'s teamJoinAllowlist, '
+      + 'the teamScopeRouting switch, and this node\'s most recent refused join/leave attempts with reasons. '
+      + 'Note: outbound routing never requires join — the originating session is always exempt (initiator face); '
+      + 'join buys presence, discovery, and being routed to.',
+    parameters: {},
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          face: { type: 'string', required: true, description: 'session | host' },
+          node: {
+            type: 'object',
+            additionalProperties: true,
+            description: 'id, joined, live, and the routable team handle (zone/id8) once joined.',
+          },
+          teams: {
+            type: 'object',
+            additionalProperties: true,
+            description: 'roster: allowlisted teams declared via a2a_team_join; canvas: workbench-assigned teams.',
+          },
+          allowlist: {
+            type: 'object',
+            additionalProperties: true,
+            description: 'The owner-curated teamJoinAllowlist patterns and their net effect (deny-all / curated / allow-all).',
+          },
+          teamScopeRouting: { type: 'boolean' },
+          note: { type: 'string', description: 'What join does and does not gate, in one sentence.' },
+          lastRefusals: {
+            type: 'array',
+            description: 'Most recent refused join/leave attempts for this node (newest first, ≤3), with reason codes.',
+            items: { type: 'object', additionalProperties: true },
+          },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.face === 'host'
+          ? `Host face on team ${String((value.node as Record<string, unknown> | undefined)?.team ?? '?')}: routing rides the bare node team (能发即能收)`
+          : `Node ${String((value.node as Record<string, unknown> | undefined)?.id ?? '?')}: joined=${String((value.node as Record<string, unknown> | undefined)?.joined)}, live=${String((value.node as Record<string, unknown> | undefined)?.live)}; roster teams: ${((value.teams as Record<string, unknown> | undefined)?.roster as string[] | undefined ?? []).join(', ') || 'none'}; canvas: ${((value.teams as Record<string, unknown> | undefined)?.canvas as string[] | undefined ?? []).join(', ') || 'none'}; allowlist effect: ${String((value.allowlist as Record<string, unknown> | undefined)?.effect ?? '?')}`,
+      }],
+    },
+    presentCall: () => ({ card: 'generic', title: 'A2A whoami', kind: 'other', rawInput: null }),
+    execute: async (_args, exec): Promise<{
+      ok: boolean
+      face: string
+      node?: Record<string, JsonValue>
+      teams?: Record<string, JsonValue>
+      allowlist?: Record<string, JsonValue>
+      teamScopeRouting?: boolean
+      lastRefusals?: Array<Record<string, JsonValue>>
+      note?: string
+    }> => {
+      const agentId = exec?.agent !== undefined ? String(exec.agent.id) : ''
+      if (agentId === '') {
+        return {
+          ok: true,
+          face: 'host',
+          node: { team: config.team },
+          note: 'host face — routing rides the bare node team (能发即能收); joins are session-node concerns',
+        }
+      }
+      const joined = joinedSessions.has(agentId)
+      const live = sessionNodes.has(agentId)
+      const refusals = teamAuditRing
+        .filter(entry => entry.id === agentId && !entry.ok)
+        .slice(-3)
+        .reverse()
+        .map(entry => ({ at: entry.at, action: entry.action, team: entry.team, reason: entry.reason ?? '' }))
+      const patterns = [...config.teamJoinAllowlist]
+      return {
+        ok: true,
+        face: 'session',
+        node: {
+          id: agentId,
+          ...(joined ? { team: `${config.team}/${id8(agentId)}` } : {}),
+          joined,
+          live,
+        },
+        teams: {
+          roster: [...teamMemberships.teamsOf(agentId)],
+          canvas: [...canvasStore.teamsOf(agentId)],
+        },
+        allowlist: {
+          patterns,
+          effect: patterns.length === 0 ? 'deny-all (empty allowlist refuses every join)' : patterns.includes('*') ? 'allow-all' : 'curated',
+        },
+        teamScopeRouting: config.teamScopeRouting === true,
+        ...(refusals.length > 0 ? { lastRefusals: refusals } : {}),
+        note: joined
+          ? 'join buys presence + being routed to; outbound routing needs no join (initiator face is exempt)'
+          : 'NOT joined: no presence/discovery and cannot be routed to; outbound routing still works (initiator face), and joining is a host-side human control (GUI sidebar A2A panel)',
+      }
+    },
+  }))
+
   ctx.tools.register(defineTool({
     name: 'a2a_team_join',
     description:
@@ -3597,11 +3703,17 @@ ${message}`
       const team = String(args.team ?? '').trim()
       const id = String(args.id ?? '').trim()
       if (team === '' || id === '') {
-        recordTeamAudit('join', team, id, false, 'both team and id are required')
-        return { ok: false, error: 'both team and id are required' }
+        const reason = '[BAD_ARGUMENTS] both team and id are required'
+        recordTeamAudit('join', team, id, false, reason)
+        return { ok: false, error: reason }
       }
       if (joinedNodeOrNone(id) === undefined) {
-        const reason = `session ${id} is not a joined node on this host — join the network first (sidebar control or a2a-collab), then declare team membership`
+        // K3 feedback (2026-10-20): reason code + a step the MODEL can take.
+        // The old text pointed at a sidebar control and a CLI — neither is
+        // executable by a session agent. Joining is a host-side human
+        // control; the model's executable step is to ask its operator and
+        // to self-check state with a2a_whoami.
+        const reason = `[NOT_JOINED] session ${id} is not a joined node on this host — network joining is a host-side human control (the GUI sidebar A2A panel), so relay the request to your human operator; once the node is joined, retry this declaration. Your current state (joined/live, teams, allowlist) is one a2a_whoami call away`
         recordTeamAudit('join', team, id, false, reason)
         return { ok: false, error: reason }
       }
@@ -3612,12 +3724,12 @@ ${message}`
       // refused: remote canvas membership is the owning host's store, and a
       // roster declaration here would neither feed it nor be read by it.
       if (team.includes('/canvas/')) {
-        const reason = `team "${team}" is a canvas team — canvas membership is assigned by hand in the A2A workbench (open /__dsh_a2a_nexus/, pick the team, add or remove members there); the roster tool manages allowlisted teams only`
+        const reason = `[CANVAS_TEAM] team "${team}" is a canvas team — canvas membership is assigned by hand in the A2A workbench (open /__dsh_a2a_nexus/, pick the team, add or remove members there); the roster tool manages allowlisted teams only. If this membership must change now, relay the request to your human operator`
         recordTeamAudit('join', team, id, false, reason)
         return { ok: false, error: reason }
       }
       if (!teamJoinAllowed(team)) {
-        const reason = `team "${team}" is not in this host's teamJoinAllowlist — the owner curates joinable teams (exact names or trailing-* patterns; human-composed groups live in the workbench's canvas teams); ask them to add the pattern`
+        const reason = `[ALLOWLIST_DENY] team "${team}" is not in this host's teamJoinAllowlist — the owner curates joinable teams (exact names or trailing-* patterns; human-composed groups live in the workbench's canvas teams); ask them to add the pattern. The live list is visible in a2a_whoami`
         recordTeamAudit('join', team, id, false, reason)
         return { ok: false, error: reason }
       }
@@ -3666,7 +3778,7 @@ ${message}`
         return { ok: false, error: 'both team and id are required' }
       }
       if (joinedNodeOrNone(id) === undefined) {
-        const reason = `session ${id} is not a joined node on this host`
+        const reason = `[NOT_JOINED] session ${id} is not a joined node on this host — check current state with a2a_whoami`
         recordTeamAudit('leave', team, id, false, reason)
         return { ok: false, error: reason }
       }
@@ -3689,9 +3801,9 @@ ${message}`
       + 'membership may use (deliberately exempt from the join gate: one-way reporting grants no presence, '
       + 'no discovery, no routing rights; the report lands in the state face\'s reports ring for '
       + 'supervision to read and act on, e.g. adopt or re-join the reporter). Use when you are off the '
-      + 'mesh and need to say so. Rate limited to one report per 30s per session; messages cap at 2000 chars.',
+      + 'mesh and need to say so. Rate limited to one report per 30s per session; messages cap at 4000 chars.',
     parameters: {
-      message: { type: 'string', required: true, description: 'The report text (≤2000 chars).' },
+      message: { type: 'string', required: true, description: 'The report text (≤4000 chars).' },
       level: { type: 'string', enum: ['info', 'warning', 'error'], description: 'Severity; error also warns the host log.' },
       task: { type: 'string', description: 'Optional task reference (id/link).' },
     },
@@ -3716,7 +3828,7 @@ ${message}`
       // unjoined session may do — that is the tool's entire purpose.
       const message = String(args.message ?? '').trim()
       if (message === '') return { ok: false, error: 'message is required' }
-      if (message.length > 2000) return { ok: false, error: 'message exceeds the 2000-char cap' }
+      if (message.length > 4000) return { ok: false, error: 'message exceeds the 4000-char cap' }
       const session = exec?.agent !== undefined ? String(exec.agent.id) : 'host'
       const now = Date.now()
       const last = reportLastAt.get(session) ?? 0
@@ -3739,7 +3851,7 @@ ${message}`
       reportRing.push({
         at: now,
         level,
-        message: message.slice(0, 2000),
+        message: message.slice(0, 4000),
         session,
         ...(typeof args.task === 'string' && args.task.trim() !== '' ? { task: args.task.trim() } : {}),
       })
@@ -4032,7 +4144,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       + '(message starting "[A2A receipt] task <task_id> <outcome summary>") back to your team.',
     parameters: {
       team: { type: 'string', required: true, description: 'Target team name, from a2a_teams.' },
-      message: { type: 'string', required: true, description: 'The request text to send.' },
+      message: { type: 'string', required: true, description: 'The request text to send. For long verdict-style payloads, split into parts and label each "1/N", "2/N"… so the receiver can reassemble.' },
       context_id: { type: 'string', description: 'Context id from a previous a2a_route reply, to continue that conversation.' },
       async: { type: 'boolean', description: 'Fire-and-forget: deliver and return immediately (delivered:true + task_id) without waiting for the target\'s reply. The target answers by routing a receipt — a message starting "[A2A receipt] task <task_id> <outcome summary>" — back to your team (visible in a2a_status activity), or follow up with the context_id. Prefer async for long-running tasks (minutes to hours).' },
     },
