@@ -86,6 +86,11 @@ unit 300/wire 291/nexus 120 全 exit 0、3081 v0.6.17、三闸门 ✓）。
 部署坑：同版本号 file: tgz 重装会被 pnpm 缓存吞掉（3081 一直跑旧 bundle）——
 候选修订重装必须 `pnpm remove` + `pnpm add`，并以 index.html 引用的 bundle hash 为准核验。
 
+0.6.18/0.6.19（2026-10-21，台账补行）：master 线直推（无 npm 候选），无 RC 周期——
+覆盖证据引用合并门禁输出：PR #107（REVIEW-66abc2cf-d31a6a1-PASS + TEST-ea2aad88 零回归
+归因，575/4/0 逐字）与 PR #108（REVIEW-74555a36-957dcfa-PASS + TEST-ea2aad88-PASS，
+577/4/0 逐字）双章合入；触发条件=npm 发布候选时恢复周期。
+
 ## 递归验证器（scripts/verify-recursive.mjs，2026-10-21 开发席指令）
 
 一层入口三层递归，退出码 0 = 三层全绿：
@@ -107,6 +112,21 @@ spec-run PASS 14/14（run_60ff8d9aa34e5a6e）、归档链 5 items 无问题。
 ① `node scripts/verify-recursive.mjs --fresh` 的 recursive-summary.json（引擎自证+判定+证据链）；
 ② verify/probe-summary.json（四门禁退出码+3081 探针+闸门推导）；③ 最新 run 报告
 （tmp/ygl-verify/verify/reports/run_*.json，含每 VU witness）。三件同 commit 出，缺一不可。
+
+## 监督席 S 层（scripts/supervisor-verify.mjs，2026-10-21 监督席就任）
+
+与上方 RC 验证器/递归验证器互补：RC 验证器面向**发布候选闸门**，递归验证器面向**引擎与
+证据链自证**，S 层面向**监督台账与仓库事实的诚实性**。九层（S1 validator-records /
+S2 repo-facts 血统断言 / S3 ygl-trees-health / S4 docs-crosscheck / S5 self-recursion /
+S6 public-triage 双镜像清点 / S7 deps-dual-mirror / S8 scope-fix-anchors /
+S9 layer-docs-contract），上一轮监督记录是本轮被验对象（递归闭环）。
+
+```bash
+node scripts/supervisor-verify.mjs   # 退出码 0=九层全绿；FAIL=1
+```
+
+运行记录落 tmp/supervisor/runs/（gitignore，保留最新 200 条）。维护者：监督席
+（open-a2a-net--监督席会话）；红项处置纪律见 kb《open-a2a-net 监督席 SOP 与递归验证器契约》。
 
 ## 何时跑
 
