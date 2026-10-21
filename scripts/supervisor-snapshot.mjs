@@ -11,7 +11,7 @@
 //   recursion / public_triage / deps_mirror / scope_anchors / layer_contract
 import { execFileSync } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
-import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync, unlinkSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 const REPO = 'D:/workspace/dsh-open-a2a-net'
@@ -162,6 +162,47 @@ function collectLayerContract() {
   ]
 }
 
+// ---------- 0.6.23/0.6.24 治理面锚（REVIEW-205964730/205992804 双章面收编） ----------
+
+function collectOriginClaimAnchors() {
+  const src = readFileSync(join(REPO, 'src/index.ts'), 'utf8')
+  return [
+    { name: 'verify-fn', ok: /verifyOriginClaim/.test(src) ? 1 : 0, detail: '三面共享验签入口' },
+    { name: 'bare-zone-shape', ok: /originClaimCallerShape\s*=\s*\/\^\[a-z0-9-\]\+\$\//.test(src) ? 1 : 0, detail: '信封 shape 收窄 bare zone（M2 第三轮裁决）' },
+    { name: 'window-config', ok: /originClaimWindow/.test(src) ? 1 : 0, detail: 'M1 窗口态配置（默认开=legacyInbound 计量）' },
+    { name: 'fail-closed-minimal', ok: /untrusted-origin/.test(src) ? 1 : 0, detail: '验签败/关窗→untrusted-origin 与最小卡同码' },
+  ]
+}
+
+function collectControlFaceGate() {
+  const src = readFileSync(join(REPO, 'src/index.ts'), 'utf8')
+  return [
+    { name: 'trusted-gate', ok: /controlTrustedWithoutKey/.test(src) ? 1 : 0, detail: '钥注入分支 loopback 门（REVIEW M3 修复）' },
+    { name: 'leniency-warning', ok: /controlFaceLeniencyWarning/.test(src) ? 1 : 0, detail: 'boot 告警：loopback 信任=减速带非门（N7）' },
+  ]
+}
+
+function collectOwnerSignalUi() {
+  // 遍历 nexus-stage 源码聚合文本（UI 字符串锚）
+  const agg = (dir) => {
+    let text = ''
+    if (!existsSync(dir)) return text
+    for (const name of readdirSync(dir)) {
+      const full = join(dir, name)
+      try {
+        if (statSync(full).isDirectory()) { text += agg(full) } else if (/\.(ts|tsx|vue|svelte|js)$/.test(name)) { text += readFileSync(full, 'utf8') }
+      } catch { /* skip */ }
+    }
+    return text
+  }
+  const ui = agg(join(REPO, 'nexus-stage/src'))
+  const rows = []
+  rows.push({ name: 'alert-class', ok: /wb-row-alert/.test(ui) ? 1 : 0, detail: '异常驱动标红（pending>1h+死信）' })
+  rows.push({ name: 'forensics-toggle', ok: /展开取证/.test(ui) ? 1 : 0, detail: '日志入口降级折叠（属主视线外，席位一键可达）' })
+  rows.push({ name: 'brief-first', ok: /无摘要——派发未带 brief|brief/.test(ui) ? 1 : 0, detail: '订单卡 brief 主文案' })
+  return rows
+}
+
 // ---------- snapshot writer ----------
 
 const TABLES = {
@@ -174,6 +215,9 @@ const TABLES = {
   deps_mirror: collectDepsMirror,
   scope_anchors: collectScopeAnchors,
   layer_contract: collectLayerContract,
+  originclaim_anchors: collectOriginClaimAnchors,
+  controlface_gate: collectControlFaceGate,
+  owner_signal_ui: collectOwnerSignalUi,
 }
 
 mkdirSync(join(REPO, 'tmp/supervisor'), { recursive: true })
