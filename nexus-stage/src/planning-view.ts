@@ -35,7 +35,7 @@ import {
   type RemoteTeamRow,
 } from './federation'
 import { clampViewport, fitView, panBy, screenToWorld, worldTransformCss, zoomAt, type LayoutViewport } from './viewport'
-import { NODE_H, WorldModel, nodeRect, deriveInitialFrame, planSeatFor, type SessionLite, type TeamLite } from './world'
+import { NODE_H, WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, planTeamClusters, type SessionLite, type TeamLite } from './world'
 import { applyAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction, type RosterOp } from './canvas-ops'
 import { FRAME_HUES } from './tokens'
 import './planning.css'
@@ -151,6 +151,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   let gesture: Gesture = { kind: 'none' }
   let spaceDown = false
   let renderedRevision = -1
+  /** Until the first reconcile with nodes (or any saved layout), frame the content once. */
+  let firstFitPending = true
   const clock = deps.now ?? Date.now
   const ac = new AbortController()
   const noticeTimers: Array<ReturnType<typeof setTimeout>> = []
@@ -219,7 +221,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     return b
   }
   toolbar.append(
-    mkButton('适配(0)', '适配视图（0）', () => fitToContent()),
+    mkButton('适配', '适配视图（快捷键 0）', () => fitToContent()),
     mkButton('－', '缩小', () => zoomCenter(1 / 1.2)),
     zoomLabel,
     mkButton('＋', '放大', () => zoomCenter(1.2)),
@@ -1666,6 +1668,17 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       }
       return [...keep, ...pending]
     }
+    // First build with nothing saved: seat the fleet team by team (see
+    // planTeamClusters). Later arrivals, or any board with a saved layout,
+    // keep the ring fallback.
+    let clusterSeats: Map<string, { x: number; y: number }> | undefined
+    if (layoutDoc === undefined && !model.allNodes().some(n => n.remote !== true)) {
+      const seatIds = input.sessions
+        .filter(s => s.joined === true && (resolveMemberships(s.id).length > 0 || (s.teams?.length ?? 0) > 0))
+        .map(s => s.id)
+      syncViewSize()
+      clusterSeats = planTeamClusters(input.teams, seatIds, viewW > 0 ? viewW : undefined)
+    }
     for (const s of input.sessions) {
       if (s.joined !== true) continue
       // Teamed-only canvas (network-membership-display ruling): a joined
@@ -1688,7 +1701,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         let x: number
         let y: number
         if (saved !== undefined) { x = saved.x; y = saved.y } else {
-          const seat = seatFor2(s.id)
+          const seat = clusterSeats?.get(s.id) ?? seatFor2(s.id)
           x = seat.x
           y = seat.y
         }
@@ -1737,17 +1750,26 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     for (const id of model.nodeIds()) {
       if (id.startsWith('peer-') && !peerSeen.has(id)) model.removeNode(id)
     }
+    const homes = homeTeams(input.teams)
     for (const team of input.teams) {
       if (model.getFrame(team.name) !== undefined) continue // live rect wins
       if (pendingTeams.has(team.name)) continue // 散队 in flight: don't resurrect
       const saved = layoutDoc?.frames[team.name]
       if (saved !== undefined) { model.setFrame(team.name, { ...saved }); continue }
+      // A derived frame wraps its HOME members only: a cross-team member is
+      // reached by its dashed edge, not by stretching this frame over its
+      // home frame. A team made only of members homed elsewhere falls back
+      // to wrapping them all.
       const rects: LayoutRect[] = []
+      const all: LayoutRect[] = []
       for (const m of team.members) {
         const n = model.getNode(m.id)
-        if (n !== undefined) rects.push(nodeRect(n))
+        if (n === undefined) continue
+        all.push(nodeRect(n))
+        if (homes.get(m.id) === team.name) rects.push(nodeRect(n))
       }
-      if (rects.length > 0) model.setFrame(team.name, deriveInitialFrame(rects))
+      const wrap = rects.length > 0 ? rects : all
+      if (wrap.length > 0) model.setFrame(team.name, deriveInitialFrame(wrap))
     }
     for (const [name] of model.allFrames()) {
       if (pendingTeams.has(name)) continue // an in-flight create/remove owns this name
@@ -1757,18 +1779,42 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // declarations, peer arrivals) land within one cadence.
     if (nodePanel !== null) renderNodePanel()
     renderStatus(input)
+    // First-run framing: with no saved layout the ring seats are centered on
+    // world (0,0) while the viewport origin is the board's top-left corner,
+    // so half the fleet landed above/left of the view and a healthy board
+    // opened empty. Fit once, the first time there is something to frame.
+    // Not marked dirty — nothing the user arranged changed; a saved layout
+    // (adopted at any point) keeps its own viewport and cancels this.
+    if (firstFitPending && layoutDoc === undefined && gesture.kind === 'none' && model.nodeIds().length > 0) {
+      syncViewSize()
+      if (viewW > 0 && viewH > 0) {
+        firstFitPending = false
+        // Peer cards hang outside the local content bounds — frame them too,
+        // or the federation column opens clipped at the board's edge.
+        let bounds = model.contentBounds()
+        for (const n of model.allNodes()) {
+          if (n.remote !== true) continue
+          const r = nodeRect(n)
+          bounds = bounds === null
+            ? { minX: r.x, minY: r.y, maxX: r.x + r.w, maxY: r.y + r.h }
+            : { minX: Math.min(bounds.minX, r.x), minY: Math.min(bounds.minY, r.y), maxX: Math.max(bounds.maxX, r.x + r.w), maxY: Math.max(bounds.maxY, r.y + r.h) }
+        }
+        vp = fitView(bounds, viewW, viewH, 1) // frame, never magnify
+      }
+    }
     render()
   }
 
   // Same fallback contract as WorldModel.fromState: the card-scaled ring.
   function seatFor2(id: string): { x: number; y: number } {
-    return planSeatFor(id)
+    return planSeatClear(id, model.allNodes().filter(n => n.remote !== true))
   }
 
   function adoptExternalLayout(layout: unknown): void {
     const doc = clampDoc(layout)
     if (doc === undefined) return
     layoutDoc = doc
+    firstFitPending = false
     if (gesture.kind === 'none') {
       vp = clampViewport({ ...doc.viewport })
     }
