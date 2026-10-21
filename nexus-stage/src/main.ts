@@ -16,6 +16,13 @@ import './workbench.css'
 
 const app = document.getElementById('app')!
 
+// gh#9 §10: the host injects the control-plane key into the shell when
+// apiKey is configured — stamp it on every /__dsh_a2a write so the GUI
+// survives a keyed host (same-origin disclosure only, see the serve site).
+const CONTROL_KEY = (window as unknown as { __DSH_A2A_KEY__?: string }).__DSH_A2A_KEY__ ?? ''
+const controlFetch = (path: string, init: RequestInit = {}): Promise<Response> =>
+  fetch(path, { ...init, headers: { ...(init.headers as Record<string, string> | undefined ?? {}), ...(CONTROL_KEY !== '' ? { 'X-API-Key': CONTROL_KEY } : {}) } })
+
 const faultBadge = document.createElement('div')
 faultBadge.className = 'nexus-fault'
 app.appendChild(faultBadge)
@@ -51,7 +58,7 @@ const planning = createPlanningView({
 
 const saveLoop = createSaveLoop({
   snapshot: () => planning.snapshotDoc(),
-  send: (doc, opts) => fetch('/__dsh_a2a/canvas-layout', {
+  send: (doc, opts) => controlFetch('/__dsh_a2a/canvas-layout', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'save', layout: doc }),
@@ -73,7 +80,7 @@ window.addEventListener('pagehide', () => saveLoop.flush())
 
 const canvasWire = createCanvasWire({
   send: async (body) => {
-    const r = await fetch('/__dsh_a2a/canvas', {
+    const r = await controlFetch('/__dsh_a2a/canvas', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -99,7 +106,7 @@ function runCanvasAction(a: CanvasAction): Promise<boolean> {
 /** Network join/leave for one session (the panel-slim migration: this
  *  affordance lives on the planning view's node list). */
 async function postNetworkJoin(action: 'join' | 'leave', id: string): Promise<boolean> {
-  const r = await fetch(`/__dsh_a2a/${action}`, {
+  const r = await controlFetch(`/__dsh_a2a/${action}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id }),
@@ -118,7 +125,7 @@ let layoutSeen = false
 /** Fetch the persisted layout; throws on transport failure so the poll can
  * hold the board build instead of silently building on ring seats. */
 async function fetchLayout(): Promise<unknown> {
-  const res = await fetch('/__dsh_a2a/canvas-layout', { cache: 'no-store' })
+  const res = await controlFetch('/__dsh_a2a/canvas-layout', { cache: 'no-store' })
   if (!res.ok) throw new Error(`/__dsh_a2a/canvas-layout ${res.status}`)
   return ((await res.json()) as { layout?: unknown }).layout ?? null
 }
@@ -128,7 +135,7 @@ const bench = createWorkbench({
   now: () => Date.now(),
   async abandon(taskId, reason) {
     try {
-      const res = await fetch('/__dsh_a2a/tasks/abandon', {
+      const res = await controlFetch('/__dsh_a2a/tasks/abandon', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ task_id: taskId, reason }),
@@ -150,7 +157,7 @@ const bench = createWorkbench({
     // Same control route the planning board's wire uses; the inspector's
     // member writes are one id at a time, so no serial fan-out needed.
     try {
-      const res = await fetch('/__dsh_a2a/canvas', {
+      const res = await controlFetch('/__dsh_a2a/canvas', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action, name, id }),
@@ -168,7 +175,7 @@ const bench = createWorkbench({
     // canonical route shape ({ok, task_id, task_status, team, ...} on
     // delivery) or {ok:false, error}.
     try {
-      const res = await fetch('/__dsh_a2a/dispatch', {
+      const res = await controlFetch('/__dsh_a2a/dispatch', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ team, message }),
@@ -188,7 +195,7 @@ const bench = createWorkbench({
     // Inline transcript (0.6.11): read-only tail of a local session's own
     // log from the host control face. Caps live server-side.
     try {
-      const res = await fetch(`/__dsh_a2a/session-log?id=${encodeURIComponent(id)}`)
+      const res = await controlFetch(`/__dsh_a2a/session-log?id=${encodeURIComponent(id)}`)
       const body = (await res.json().catch(() => ({}))) as { ok?: boolean; messages?: Array<{ role: string; text: string }>; error?: string }
       // 0.6.16: error stays undefined on success — an unconditional
       // `body.error ?? HTTP ${status}` painted "HTTP 200" on listing-shaped
@@ -202,7 +209,7 @@ const bench = createWorkbench({
     // 0.6.12: host-scope readable-log listing — archived and never-joined
     // sessions included; the network directory is not the reading gate.
     try {
-      const res = await fetch('/__dsh_a2a/session-log')
+      const res = await controlFetch('/__dsh_a2a/session-log')
       const body = (await res.json().catch(() => ({}))) as { ok?: boolean; sessions?: Array<{ id: string; mtimeMs: number; sizeBytes: number }>; error?: string }
       return { ok: res.ok && body.ok === true, sessions: body.sessions, error: body.error ?? (res.ok ? undefined : `HTTP ${res.status}`) }
     } catch (error) {
@@ -219,7 +226,7 @@ const bench = createWorkbench({
       if (query.peer !== undefined) params.set('peer', query.peer)
       if (query.id !== undefined) params.set('id', query.id)
       if (query.limit !== undefined) params.set('limit', String(query.limit))
-      const res = await fetch(`/__dsh_a2a/remote-session-log?${params.toString()}`)
+      const res = await controlFetch(`/__dsh_a2a/remote-session-log?${params.toString()}`)
       const body = (await res.json().catch(() => ({}))) as {
         ok?: boolean
         messages?: Array<{ role: string; text: string }>
@@ -258,7 +265,7 @@ if (new URLSearchParams(window.location.search).get('mode') === 'plan') {
 
 async function poll(): Promise<void> {
   try {
-    const res = await fetch('/__dsh_a2a/state', { cache: 'no-store' })
+    const res = await controlFetch('/__dsh_a2a/state', { cache: 'no-store' })
     if (!res.ok) throw new Error(`/__dsh_a2a/state ${res.status}`)
     const body = (await res.json()) as StateBody
     clearFault()

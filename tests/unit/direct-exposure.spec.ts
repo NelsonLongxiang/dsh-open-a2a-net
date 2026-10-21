@@ -4,6 +4,10 @@
  * so the matrix is testable without mounting the node.
  */
 import { describe, expect, it } from 'vitest'
+import { mkdtempSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { Context } from '@deepseek-ai/cordis'
 import { directDeliveryExposure } from '../../src/index.ts'
 
 describe('directDeliveryExposure', () => {
@@ -41,5 +45,14 @@ describe('directDeliveryExposure', () => {
     const { nonLoopbackPeers, warning } = directDeliveryExposure(['not a url', 'http://192.168.3.157:13080'], '')
     expect(nonLoopbackPeers).toEqual(['http://192.168.3.157:13080'])
     expect(warning).toBeDefined()
+  })
+})
+
+describe('gh#9 control-face leniency warning', () => {
+  it('warns only for keyless hosts with session nodes', async () => {
+    const { controlFaceLeniencyWarning } = await import('../../src/index.ts')
+    expect(controlFaceLeniencyWarning('', true)).toContain('speed bump')
+    expect(controlFaceLeniencyWarning('sekrit', true)).toBeUndefined()
+    expect(controlFaceLeniencyWarning('', false)).toBeUndefined()
   })
 })

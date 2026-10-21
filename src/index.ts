@@ -483,6 +483,22 @@ function renderRoute(_args: unknown, value: Record<string, JsonValue>): { type: 
  * @param config - deployment's A2A node facts.
  */
 /**
+ * gh#9 control-face leniency audit (docs/protocol/delivery-origin-auth.md
+ * §10): a keyless host that runs session nodes rides loopback leniency for
+ * every control write — on a host that grants sessions a shell that is a
+ * speed bump, not authentication. Pure logic so the boot warning is
+ * testable without a mount.
+ * @param apiKey - the configured API key ('' disables header auth).
+ * @param sessionNodes - whether session nodes are enabled.
+ * @returns the warning to log, or undefined.
+ */
+export function controlFaceLeniencyWarning(apiKey: string, sessionNodes: boolean): string | undefined {
+  return apiKey === '' && sessionNodes
+    ? 'a2a: control-face leniency — apiKey is empty and session nodes are enabled: on a host that grants sessions a shell, loopback trust is a speed bump, not authentication (gh#9 N7). Set apiKey for the control-plane norm; see docs/protocol/delivery-origin-auth.md §10'
+    : undefined
+}
+
+/**
  * Exposure audit for unauthenticated direct deliveries (defect card F4, the
  * zero-risk slice). `/a2a/direct` carries no per-call caller identity yet
  * (docs/protocol/delivery-origin-auth.md stays best-effort until the
@@ -499,8 +515,7 @@ function renderRoute(_args: unknown, value: Record<string, JsonValue>): { type: 
 export function directDeliveryExposure(
   peers: readonly string[],
   apiKey: string,
-): { nonLoopbackPeers: string[]; warning: string | undefined } {
-  const nonLoopbackPeers = peers.filter((peer) => {
+): { nonLoopbackPeers: string[]; warning: string | undefined } {  const nonLoopbackPeers = peers.filter((peer) => {
     try {
       const { hostname } = new URL(peer)
       const host = hostname.replace(/^\[|\]$/g, '').toLowerCase()
@@ -553,6 +568,13 @@ export function apply(ctx: Context, config: Config): void {
   // be discovered from a ledger full of unexplained steering.
   const exposure = directDeliveryExposure(config.peers, config.apiKey)
   if (exposure.warning !== undefined) logger.warn(exposure.warning)
+  // gh#9 control-face norm (docs/protocol/delivery-origin-auth.md §10): on a
+  // host that runs agent sessions WITHOUT an apiKey, the loopback leniency
+  // is a speed bump, not a gate — a session with a shell reaches every
+  // control write. Name it at boot so the operator configures with eyes
+  // open; the GUI key plumbing rides the same release.
+  const leniencyWarning = controlFaceLeniencyWarning(config.apiKey ?? '', config.sessionNodes === true)
+  if (leniencyWarning !== undefined) logger.warn(leniencyWarning)
   // The production seams: Node's globals. Tests inject their own A2aClient
   // seams through src/a2a-client.ts directly. During fiber teardown the timer
   // service is already gone; a timer armed then belongs to nobody, so the
@@ -2179,6 +2201,16 @@ const reportLoopRing = new Map<string, number[]>()
               svg: 'image/svg+xml',
             }
             res.writeHead(200, { 'Content-Type': types[ext] ?? 'application/octet-stream', 'Cache-Control': 'no-store' })
+            // gh#9 §10 GUI key plumbing: the shell learns the control-plane
+            // key so its control writes survive an apiKey-configured host.
+            // Same-origin disclosure only — the page is served by the very
+            // host whose config holds the key, and the gh#9 threat (a
+            // session with a shell) reads it from disk regardless.
+            if (ext === 'html' && config.apiKey !== '') {
+              const injected = file.toString('utf8').replace('</head>', `<script>window.__DSH_A2A_KEY__=${JSON.stringify(config.apiKey)};</script></head>`)
+              res.end(Buffer.from(injected, 'utf8'))
+              return
+            }
             res.end(file)
           } catch {
             res.writeHead(404, { 'Content-Type': 'text/plain' })

@@ -171,16 +171,17 @@ the control face must serve. And on a host that gives sessions a shell
 | Peer face (`/a2a/direct`, `/a2a/log`, card GET) | other NODES | card key (held by design) | OriginClaim envelope (this doc) |
 | Control face (`/__dsh_a2a/*` writes) | operator browser + local tools | **apiKey, promoted from optional to the control-plane norm** | header secret; loopback demoted from "authentication" to **explicit leniency for keyless deployments** |
 
-Control-face design (gh#9 disposition):
+Control-face design (gh#9 disposition — **implemented 0.6.23**):
 
-1. `apiKey` becomes the documented REQUIRED configuration for control
-   writes on any host that also runs agent sessions; the boot warning fires
-   when a keyless host has session nodes enabled.
+1. `apiKey` is the documented control-plane norm for any host that also
+   runs agent sessions: the boot warning fires when a keyless host enables
+   session nodes, naming the loopback leniency for what it is.
 2. Loopback-without-key remains functional (GUI on localhost, operator
-   CLIs) but is documented as **leniency, not authentication** — honest
-   naming of gh#9's residue: on a shell-granting host it is a speed bump,
-   not a gate. Hosts that need the gate set the key; the GUI gains key
-   plumbing (injected into the served page) in the same release.
+   CLIs) as **leniency, not authentication** — on a shell-granting host it
+   is a speed bump. The GUI ships key plumbing: the host injects the key
+   into the served workbench shell (same-origin disclosure only; the gh#9
+   threat reads it from disk regardless), and every `/__dsh_a2a` fetch the
+   shell makes carries the `X-API-Key` header.
 3. The model's own tools never learn the key (not in any tool description,
    state face, or session-visible environment).
 
