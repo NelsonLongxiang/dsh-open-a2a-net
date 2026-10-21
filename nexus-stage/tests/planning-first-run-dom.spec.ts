@@ -5,10 +5,14 @@
  * (0,0) with the viewport at the board's top-left, so a healthy 8-node
  * fleet opened on an empty board, and colliding hash slots stacked cards
  * pixel-for-pixel. A saved layout keeps its own viewport untouched.
+ * Seats are grouped by team so the derived frames sit side by side; a
+ * cross-team member lives in its home frame only (first team in state
+ * order, the solid-edge one) and the other team reaches it by its dashed
+ * edge instead of stretching its frame over the home frame.
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createPlanningView } from '../src/planning-view.ts'
-import { NODE_H, NODE_W, planSeatClear } from '../src/world.ts'
+import { NODE_H, NODE_W, planSeatClear, planTeamClusters } from '../src/world.ts'
 
 const VIEW = { w: 1100, h: 860 }
 const ids = ['a1b2c3d4', 'e5f6a7b8', 'c9d0e1f2', '11223344', '55667788', '99aabbcc', 'ddeeff00', '0badcafe']
@@ -16,6 +20,11 @@ const sessions = ids.map((id, i) => ({ id, label: `n${i}`, team: `mac/${id}`, na
 const teams = [
   { name: 'alpha', team: 'mac/canvas/alpha', members: ids.slice(0, 4).map(id => ({ id })) },
   { name: 'beta', team: 'mac/canvas/beta', members: ids.slice(4).map(id => ({ id })) },
+]
+/** The mock fleet's real shape: e5f6a7b8 sits in both teams (home = alpha). */
+const sharedTeams = [
+  teams[0]!,
+  { name: 'beta', team: 'mac/canvas/beta', members: [...ids.slice(4), 'e5f6a7b8'].map(id => ({ id })) },
 ]
 
 function view() {
@@ -66,6 +75,22 @@ describe('first-run board', () => {
     expect(onDirty).not.toHaveBeenCalled()
   })
 
+  it('peer cards are framed too, not clipped at the board edge', () => {
+    const { v } = view()
+    v.reconcile({ sessions, teams, peerCount: 2, peers: [{ url: 'http://10.0.0.5:8787', score: 4 }, { url: 'http://10.0.0.6:8787', score: 2 }] })
+    const { tx, ty, s } = transformOf(v.root)
+    const cards = [...v.root.querySelectorAll<HTMLElement>('.p-node.remote')]
+    expect(cards.length).toBe(2)
+    for (const el of cards) {
+      const left = parseFloat(el.style.left) * s + tx
+      const top = parseFloat(el.style.top) * s + ty
+      expect(left).toBeGreaterThanOrEqual(0)
+      expect(top).toBeGreaterThanOrEqual(0)
+      expect(left + NODE_W * s).toBeLessThanOrEqual(VIEW.w)
+      expect(top + NODE_H * s).toBeLessThanOrEqual(VIEW.h)
+    }
+  })
+
   it('fits once: a later poll does not yank a viewport the user moved', () => {
     const { v } = view()
     v.reconcile({ sessions, teams, peerCount: 0 })
@@ -88,4 +113,52 @@ describe('first-run board', () => {
     expect(fit.textContent).toBe('适配')
     expect(fit.title).toContain('快捷键 0')
   })
+
+  it('frames of a fresh board sit side by side, never nested', () => {
+    const { v } = view()
+    v.reconcile({ sessions, teams: sharedTeams, peerCount: 0 })
+    const a = frameRect(v.root, 'alpha')
+    const b = frameRect(v.root, 'beta')
+    const overlapX = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)
+    const overlapY = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y)
+    expect(overlapX > 0 && overlapY > 0, 'alpha and beta frames overlap').toBe(false)
+    // Centered titles need the frame centers apart by at least one frame's width.
+    expect(Math.abs((a.x + a.w / 2) - (b.x + b.w / 2))).toBeGreaterThanOrEqual(Math.min(a.w, b.w))
+  })
+
+  it('every home member sits inside its home frame; the shared one only in alpha', () => {
+    const { v } = view()
+    v.reconcile({ sessions, teams: sharedTeams, peerCount: 0 })
+    const inside = (id: string, name: string): boolean => {
+      const el = v.root.querySelector<HTMLElement>(`.p-node[data-id="${id}"]`)!
+      const x = parseFloat(el.style.left)
+      const y = parseFloat(el.style.top)
+      const f = frameRect(v.root, name)
+      return x >= f.x && y >= f.y && x + NODE_W <= f.x + f.w && y + NODE_H <= f.y + f.h
+    }
+    for (const id of ids.slice(0, 4)) expect(inside(id, 'alpha'), id).toBe(true)
+    for (const id of ids.slice(4)) expect(inside(id, 'beta'), id).toBe(true)
+    expect(inside('e5f6a7b8', 'beta')).toBe(false)
+  })
+
+  it('a narrow board stacks the team clusters instead of one long strip', () => {
+    const wide = planTeamClusters(teams, ids)
+    const narrow = planTeamClusters(teams, ids, 375)
+    expect(wide.get(ids[4]!)!.y).toBe(wide.get(ids[0]!)!.y) // side by side
+    expect(narrow.get(ids[4]!)!.x).toBe(narrow.get(ids[0]!)!.x) // stacked: same column
+    expect(narrow.get(ids[4]!)!.y).toBeGreaterThan(narrow.get(ids[3]!)!.y)
+  })
+
+  it('planTeamClusters seats roster-only sessions in a trailing cluster, clear of the teams', () => {
+    const seats = planTeamClusters(teams, [...ids, 'roster-only'])
+    expect(seats.size).toBe(ids.length + 1)
+    const lone = seats.get('roster-only')!
+    for (const id of ids) expect(seats.get(id)!.x).toBeLessThan(lone.x)
+  })
 })
+
+/** A frame's world rect from its inline style. */
+function frameRect(root: HTMLElement, name: string): { x: number; y: number; w: number; h: number } {
+  const el = [...root.querySelectorAll<HTMLElement>('.p-frame')].find(f => f.querySelector('.ttl')?.textContent === name)!
+  return { x: parseFloat(el.style.left), y: parseFloat(el.style.top), w: parseFloat(el.style.width), h: parseFloat(el.style.height) }
+}

@@ -262,8 +262,12 @@ async function poll(): Promise<void> {
     if (!res.ok) throw new Error(`/__dsh_a2a/state ${res.status}`)
     const body = (await res.json()) as StateBody
     clearFault()
-    bench.update(body)
+    // canvasFace first: bench.update reads board.available() to pick the
+    // mode, so assigning it afterwards held the very first paint in data
+    // mode (board display:none, 0px wide) until the next 3s poll — and the
+    // board's first reconcile measured a zero-width view.
     canvasFace = body.canvas !== undefined
+    bench.update(body)
 
     // ── The layout answer precedes the first reconcile on purpose ──
     // The board's first build reads `layoutDoc` for saved positions and

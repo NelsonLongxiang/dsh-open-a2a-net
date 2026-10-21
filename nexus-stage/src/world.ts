@@ -43,6 +43,77 @@ export function planSeatFor(sid: string): { x: number; y: number } {
   return { x: Math.round(Math.cos(angle) * r), y: Math.round(Math.sin(angle) * r * 0.6) }
 }
 
+/**
+ * Home team per member id: the first team in state order that lists it.
+ * That is the team whose membership edge is solid (edges.ts); every later
+ * membership is a dashed 跨队 edge. A cross-team member therefore sits in
+ * its home frame only — the other frames reach it by the dashed edge
+ * instead of stretching over the home frame.
+ */
+export function homeTeams(teams: ReadonlyArray<TeamLite>): Map<string, string> {
+  const home = new Map<string, string>()
+  for (const team of teams) {
+    for (const m of team.members) if (!home.has(m.id)) home.set(m.id, team.name)
+  }
+  return home
+}
+
+const CLUSTER_GAP = 64
+const CLUSTER_COL_GAP = 24
+const CLUSTER_ROW_GAP = 20
+const CLUSTERS_PER_ROW = 4
+/** Same padding deriveInitialFrame wraps around member cards. */
+const FRAME_PAD_X = 24
+const FRAME_PAD_TOP = 44
+const FRAME_PAD_BOTTOM = 24
+
+/**
+ * First-run seats grouped by team: each team's home members fill a small
+ * grid (2–3 columns), clusters sit side by side with a 64px gutter and wrap
+ * every four teams; members with no canvas team (declared roster teams
+ * only) form a trailing cluster. Hash ring seats ignored teams, so the
+ * frames derived from scattered members nested inside each other and their
+ * centered titles printed on top of one another. A row also wraps before it
+ * outgrows `maxRowW` (the board width), so a portrait phone stacks teams
+ * instead of fitting one long strip at ~30%. Deterministic for a fixed
+ * state order and width. Only ids in `ids` are seated.
+ */
+export function planTeamClusters(teams: ReadonlyArray<TeamLite>, ids: ReadonlyArray<string>, maxRowW = Number.POSITIVE_INFINITY): Map<string, { x: number; y: number }> {
+  const want = new Set(ids)
+  const home = homeTeams(teams)
+  const groups: string[][] = teams.map(t => [...new Set(t.members.map(m => m.id))].filter(id => want.has(id) && home.get(id) === t.name))
+  groups.push(ids.filter(id => !home.has(id)))
+  const seats = new Map<string, { x: number; y: number }>()
+  let cursorX = 0
+  let cursorY = 0
+  let rowH = 0
+  let placed = 0
+  for (const group of groups) {
+    if (group.length === 0) continue
+    const cols = Math.min(3, Math.max(group.length > 1 ? 2 : 1, Math.ceil(Math.sqrt(group.length))))
+    const rows = Math.ceil(group.length / cols)
+    const w = Math.max(260, cols * NODE_W + (cols - 1) * CLUSTER_COL_GAP + FRAME_PAD_X * 2)
+    const h = Math.max(160, rows * NODE_H + (rows - 1) * CLUSTER_ROW_GAP + FRAME_PAD_TOP + FRAME_PAD_BOTTOM)
+    if (placed > 0 && (placed % CLUSTERS_PER_ROW === 0 || cursorX + w > maxRowW)) {
+      cursorX = 0
+      cursorY += rowH + CLUSTER_GAP
+      rowH = 0
+    }
+    group.forEach((id, i) => {
+      const c = i % cols
+      const r = Math.floor(i / cols)
+      seats.set(id, {
+        x: cursorX + FRAME_PAD_X + NODE_W / 2 + c * (NODE_W + CLUSTER_COL_GAP),
+        y: cursorY + FRAME_PAD_TOP + NODE_H / 2 + r * (NODE_H + CLUSTER_ROW_GAP),
+      })
+    })
+    cursorX += w + CLUSTER_GAP
+    rowH = Math.max(rowH, h)
+    placed += 1
+  }
+  return seats
+}
+
 /** Breathing room kept between two unarranged cards. */
 const SEAT_GAP = 12
 
