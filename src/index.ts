@@ -757,6 +757,7 @@ export function apply(ctx: Context, config: Config): void {
   const client = new A2aClient({
     apiKey: config.apiKey,
     sessionId: session,
+    cardCaller: config.team,
     schedule,
     fetch: fetchImpl,
   })
@@ -2150,7 +2151,23 @@ const reportLoopRing = new Map<string, number[]>()
       ctx.effect(() => webServer.register({
         kind: 'exact',
         path: '/.well-known/agent-card.json',
-        handler: (_req: IncomingMessage, res: ServerResponse) => {
+        handler: (req: IncomingMessage, res: ServerResponse) => {
+          // gh#7 G1 (review-seat R2 ruling): the card serves two faces.
+          // A NAMED caller — ?caller_session= or the X-A2A-Caller header in
+          // the zone or zone/id8 shape — gets the FULL card. An anonymous
+          // fetcher (or an invalid shape, fail-closed) gets the MINIMAL
+          // card: name/team/session/capabilities/records/peers/signature
+          // stay (discovery, gossip, delegation, capability negotiation
+          // unbroken), while sessionTeams/teamMemberships/lanIp are
+          // omitted — session membership and rosters are collaboration
+          // facts, not discovery facts. Named determination does NOT
+          // require a shared team: demanding roster symmetry before the
+          // roster exchange would self-lock (ruling text). The signature
+          // covers the same signed core either way; only the unsigned
+          // served-fresh fields differ.
+          const cardUrl = new URL(req.url ?? '/', 'http://x')
+          const namedRaw = String(req.headers['x-a2a-caller'] ?? cardUrl.searchParams.get('caller_session') ?? '')
+          const named = /^[a-z0-9-]+(\/[0-9a-f]{8})?$/i.test(namedRaw)
           // The unsigned peers and sessionTeams fields carry this node's
           // current peer set and joined sessions at serve time (between
           // re-signs), so each card read spreads the publisher's latest
@@ -2184,11 +2201,11 @@ const reportLoopRing = new Map<string, number[]>()
           const body = JSON.stringify({
             ...currentCard,
             peers: peerStore.list(),
-            ...(sessionTeams.length > 0 ? { sessionTeams } : {}),
-            ...(memberships.length > 0 ? { teamMemberships: memberships } : {}),
-            ...(lanIp !== '' ? { lanIp } : {}),
+            ...(named && sessionTeams.length > 0 ? { sessionTeams } : {}),
+            ...(named && memberships.length > 0 ? { teamMemberships: memberships } : {}),
+            ...(named && lanIp !== '' ? { lanIp } : {}),
             ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}),
-            description: `A2A node exposing team ${config.team}`,
+            description: `A2A node exposing team ${config.team}${named ? '' : ' (minimal card — name yourself via ?caller_session=<zone> or X-A2A-Caller for the full card)'}`,
           })
           res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) })
           res.end(body)

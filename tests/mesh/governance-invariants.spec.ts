@@ -136,7 +136,7 @@ describe('V4 inverted (N2): a model tool declares membership for its own node on
       expect(other.error).toContain('[NOT_SELF]')
       const self = await joinTool?.execute({ team: 'dsh/review-gate', id: 'agent-1' }, runContext(live)) as { ok: boolean }
       expect(self.ok).toBe(true)
-      const card = JSON.parse(await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).text()) as { teamMemberships?: Array<{ node: string; team: string }> }
+      const card = JSON.parse(await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`, { headers: { 'X-A2A-Caller': 'probe' } })).text()) as { teamMemberships?: Array<{ node: string; team: string }> }
       expect(card.teamMemberships).toEqual([{ node: 'dsh/agent-1', team: 'dsh/review-gate' }])
     } finally {
       await ctx.fiber.dispose()

@@ -187,7 +187,7 @@ describe('a2a_team_join / a2a_team_leave tools', () => {
     expect(state.registry.teamAudit[0]).toMatchObject({ action: 'join', team: 'dsh/private-ops', id: 'agent-1', ok: false })
     expect(state.registry.teamAudit[0]?.reason).toContain('teamJoinAllowlist')
     expect(state.registry.teamAudit[1]).toMatchObject({ action: 'join', team: 'dsh/review-gate', id: 'agent-1', ok: true })
-    const card = JSON.parse(await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).text()) as {
+    const card = JSON.parse(await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).text()) as {
       teamMemberships?: Array<{ node: string; team: string }>
     }
     expect(card.teamMemberships).toHaveLength(1)
@@ -331,7 +331,7 @@ describe('roster capability flag (phase-2 flip prerequisite)', () => {
       expect(state.registry.nodes.find(node => node.id === 'peer/eeee0000')?.legacy).toBe(true)
     }, { timeout: 5_000 })
     // Our own served card carries the roster capability.
-    const served = JSON.parse(await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).text()) as { capabilities?: { roster?: unknown } }
+    const served = JSON.parse(await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).text()) as { capabilities?: { roster?: unknown } }
     expect(served.capabilities?.roster).toBe(true)
     await ctx.fiber.dispose()
     vi.unstubAllGlobals()
@@ -553,7 +553,7 @@ describe('discovery invisibility for unjoined sessions (owner ruling B)', () => 
     await ctx.plugin(FakeAgentsService)
     apply(ctx, makeConfig({ teamScopeRouting: true, dshHome: home, announce: true }))
     const port = (ctx as unknown as { webServer: WebServer }).webServer.port
-    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).json() as { sessionTeams?: Array<{ team: string }> }
+    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).json() as { sessionTeams?: Array<{ team: string }> }
     // No session in this bare harness joined the network: the card must not
     // advertise any session team (unjoined = invisible to peer discovery).
     expect((card.sessionTeams ?? []).length).toBe(0)

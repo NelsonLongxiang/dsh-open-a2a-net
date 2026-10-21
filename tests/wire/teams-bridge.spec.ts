@@ -639,7 +639,7 @@ describe('P2 receipt-callback routing', () => {
     m.agents.agents.push(live)
     m.ctx.emit('agent/created', { agent: live })
     await postJson(m.port, '/__dsh_a2a/join', { id: 'session-live1' })
-    const card = await (await fetch(`http://127.0.0.1:${String(m.port)}/.well-known/agent-card.json`)).json() as { sessionTeams?: Array<{ team: string; description?: string }> }
+    const card = await (await fetch(`http://127.0.0.1:${String(m.port)}/.well-known/agent-card.json?caller_session=probe`)).json() as { sessionTeams?: Array<{ team: string; description?: string }> }
     const teams = (card.sessionTeams ?? []).map(entry => entry.team)
     expect(teams).toContain('dsh/live1')
     expect(teams).toContain('dsh/cold9')

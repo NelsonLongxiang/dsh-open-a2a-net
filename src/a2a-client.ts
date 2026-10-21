@@ -27,6 +27,13 @@ export interface A2aClientOptions {
   readonly apiKey: string
   /** This node's caller label stamped on outbound routes. */
   readonly sessionId: string
+  /**
+   * Zone handle stamped as `X-A2A-Caller` on card GETs (gh#7 G1): peers
+   * serve the FULL card only to named callers — anonymous fetchers get the
+   * minimal discovery card without sessionTeams/teamMemberships/lanIp.
+   * Empty omits the header (anonymous posture).
+   */
+  readonly cardCaller: string
   /** Delayed-callback seam (HTTP timeouts). */
   readonly schedule: A2aSchedule
   /** HTTP seam. */
@@ -88,6 +95,9 @@ export class A2aClient {
     const headers: Record<string, string> = {}
     if (json) headers['Content-Type'] = 'application/json'
     if (this.options.apiKey !== '') headers['X-API-Key'] = this.options.apiKey
+    // GETs are card fetches: name ourselves so the peer serves the full
+    // card (gh#7 G1). POSTs carry caller_session in the body already.
+    if (!json && this.options.cardCaller !== '') headers['X-A2A-Caller'] = this.options.cardCaller
     return headers
   }
 

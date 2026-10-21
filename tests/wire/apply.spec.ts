@@ -199,7 +199,7 @@ describe('a2a plugin announce (peer discovery)', () => {
     await ctx.plugin(ToolRuntime)
     apply(ctx, makeConfig({ announce: true, agentName: 'peer-a', dshHome: home, cardTtlMs: 200 }))
     const port = (ctx as unknown as { webServer: WebServer }).webServer.port
-    const url = `http://127.0.0.1:${String(port)}/.well-known/agent-card.json`
+    const url = `http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`
     const response = await globalThis.fetch(url)
     expect(response.status).toBe(200)
     const card = await response.json() as {
@@ -229,7 +229,7 @@ describe('a2a plugin announce (peer discovery)', () => {
     await second.plugin(ToolRuntime)
     apply(second, makeConfig({ announce: true, agentName: 'peer-a', dshHome: home }))
     const port2 = (second as unknown as { webServer: WebServer }).webServer.port
-    const reread = await (await globalThis.fetch(`http://127.0.0.1:${String(port2)}/.well-known/agent-card.json`)).json() as { publicKey: string }
+    const reread = await (await globalThis.fetch(`http://127.0.0.1:${String(port2)}/.well-known/agent-card.json?caller_session=probe`)).json() as { publicKey: string }
     expect(reread.publicKey).toBe(card.publicKey)
     await second.fiber.dispose()
     await ctx.fiber.dispose()
@@ -246,7 +246,7 @@ describe('a2a plugin announce (peer discovery)', () => {
       await ctx.plugin(ToolRuntime)
       apply(ctx, makeConfig({ announce: true }))
       const port = (ctx as unknown as { webServer: WebServer }).webServer.port
-      expect((await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).status).toBe(200)
+      expect((await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).status).toBe(200)
       await ctx.fiber.dispose()
     } finally {
       if (prev === undefined) delete process.env.DSH_HOME
@@ -266,11 +266,11 @@ describe('a2a plugin announce (peer discovery)', () => {
       return { ctx, port: (ctx as unknown as { webServer: WebServer }).webServer.port }
     }
     const first = await mount()
-    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(first.port)}/.well-known/agent-card.json`)).json() as { session: string }
+    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(first.port)}/.well-known/agent-card.json?caller_session=probe`)).json() as { session: string }
     expect(card.session).toMatch(/^dsh-host-[0-9a-f]{8}$/)
     await first.ctx.fiber.dispose()
     const second = await mount()
-    const again = await (await globalThis.fetch(`http://127.0.0.1:${String(second.port)}/.well-known/agent-card.json`)).json() as { session: string }
+    const again = await (await globalThis.fetch(`http://127.0.0.1:${String(second.port)}/.well-known/agent-card.json?caller_session=probe`)).json() as { session: string }
     expect(again.session).toBe(card.session)
     await second.ctx.fiber.dispose()
   })
@@ -285,7 +285,7 @@ describe('a2a plugin announce (peer discovery)', () => {
     const loader = ctx.get('loader') as unknown as FakeLoaderService
     apply(ctx, makeConfig({ announce: true, dshHome: tmpHome() }))
     const port = (ctx as unknown as { webServer: WebServer }).webServer.port
-    const url = `http://127.0.0.1:${String(port)}/.well-known/agent-card.json`
+    const url = `http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`
     // Before settlement the sibling web-server row is not assumed ready.
     expect((await globalThis.fetch(url)).status).toBe(404)
     loader.settle()
@@ -306,7 +306,7 @@ describe('a2a plugin announce (peer discovery)', () => {
     loader.fail()
     await new Promise(resolve => setTimeout(resolve, 0))
     const port = (ctx as unknown as { webServer: WebServer }).webServer.port
-    expect((await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).status).toBe(404)
+    expect((await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).status).toBe(404)
     await ctx.fiber.dispose()
   })
 
@@ -1231,7 +1231,7 @@ describe('a2a session nodes (opt-in join)', () => {
     await cardCtx.plugin(ToolRuntime)
     apply(cardCtx, makeConfig({ sessionNodes: true, announce: true, dshHome: cardHome }))
     const cardPort = (cardCtx as unknown as { webServer: WebServer }).webServer.port
-    expect((await (await globalThis.fetch(`http://127.0.0.1:${String(cardPort)}/.well-known/agent-card.json`)).text())).not.toContain('sessionTeams')
+    expect((await (await globalThis.fetch(`http://127.0.0.1:${String(cardPort)}/.well-known/agent-card.json?caller_session=probe`)).text())).not.toContain('sessionTeams')
     await cardCtx.fiber.dispose()
     await ctx.fiber.dispose()
   })
@@ -1254,7 +1254,7 @@ describe('a2a session nodes (opt-in join)', () => {
     await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
     // The card carries the joined session team with its title fallback and
     // the activity excerpt, served fresh at read time.
-    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).json() as {
+    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).json() as {
       sessionTeams: { team: string; name: string; description: string }[]
     }
     expect(card.sessionTeams).toEqual([{ team: 'dsh/agent-1', name: 'sess-1-agent-1', description: 'help me port the parser' }])
@@ -1268,13 +1268,13 @@ describe('a2a session nodes (opt-in join)', () => {
     // The excerpt follows the session: a newer message is served on the
     // next card read without any re-join.
     ;(session.session.events as unknown[]).push({ type: 'user/message', data: { content: [{ type: 'text', text: 'now porting the serializer' }], source: { kind: 'user' } } })
-    const refreshed = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).json() as {
+    const refreshed = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).json() as {
       sessionTeams: { description: string }[]
     }
     expect(refreshed.sessionTeams[0]?.description).toBe('now porting the serializer')
     // Leaving removes the team from the card and stops dispatch.
     await postJson(port, '/__dsh_a2a/leave', { id: 'agent-1' })
-    const left = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).text()
+    const left = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).text()
     expect(left).not.toContain('sessionTeams')
     await ctx.fiber.dispose()
   })
@@ -1359,7 +1359,7 @@ describe('a2a session nodes (opt-in join)', () => {
     await new Promise(resolve => setImmediate(resolve))
     const state = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { sessions: { id: string; joined: boolean; live?: boolean }[] }
     expect(state.sessions[0]).toMatchObject({ id: 'agent-1', joined: true, live: true })
-    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).text()
+    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).text()
     expect(card).toContain('dsh/agent-1')
     await ctx.fiber.dispose()
   })
@@ -2342,7 +2342,7 @@ describe('a2a persisted join intent', () => {
     // still advertised — as COLD (its routes are wake-on-route's to honor),
     // which is what keeps it discoverable cross-node while asleep.
     ctx.emit('agent/disposed', { agent: first })
-    const afterDispose = JSON.parse(await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).text()) as {
+    const afterDispose = JSON.parse(await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).text()) as {
       sessionTeams: { team: string; description: string }[]
     }
     expect(afterDispose.sessionTeams).toEqual([{ team: 'dsh/agent-1', name: 'sess-1-agent-1', description: 'cold — not loaded; routing here wakes the session' }])
@@ -2351,7 +2351,7 @@ describe('a2a persisted join intent', () => {
     const second = replyingAgent(ctx)
     agents.agent = second
     ctx.emit('agent/created', { agent: second })
-    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).json() as {
+    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).json() as {
       sessionTeams: { team: string }[]
     }
     expect(card.sessionTeams).toEqual([{ team: 'dsh/agent-1', name: 'sess-1-agent-1', description: 'no activity yet' }])
@@ -2376,7 +2376,7 @@ describe('a2a persisted join intent', () => {
     const second = replyingAgent(ctx)
     agents.agent = second
     ctx.emit('agent/created', { agent: second })
-    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).text()
+    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).text()
     expect(card).not.toContain('sessionTeams')
     await ctx.fiber.dispose()
   })
@@ -2447,7 +2447,7 @@ describe('a2a removal-regression edges', () => {
   it('serves signed delegate records on the announced card', async () => {
     const { ctx, agents, port } = await mountJoinHarness({ announce: true, delegates: [{ name: 'solo', url: 'http://10.0.0.2:1', publicKey: '' }] })
     agents.agent = makeAgent()
-    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).json() as {
+    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).json() as {
       records: { type: string; name: string }[]
     }
     expect(card.records).toEqual([{ type: 'delegate', name: 'solo', url: 'http://10.0.0.2:1' }])
@@ -2484,7 +2484,7 @@ describe('a2a removal-regression edges', () => {
     agents.agent = session
     ctx.emit('agent/created', { agent: session })
     await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
-    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).json() as {
+    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).json() as {
       sessionTeams: { description: string }[]
     }
     expect(card.sessionTeams[0]?.description).toBe('ported the parser already')
@@ -2501,7 +2501,7 @@ describe('a2a removal-regression edges', () => {
     agents.agent = session
     ctx.emit('agent/created', { agent: session })
     await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
-    const readCard = async (): Promise<string> => (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).text()
+    const readCard = async (): Promise<string> => (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).text()
     await expect(readCard()).resolves.toContain('no activity yet')
     // A text landing in the tail window invalidates the memo on the next serve.
     ;(session.session.events as unknown[]).push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'fresh tail text' }] } } })
@@ -2517,7 +2517,7 @@ describe('a2a removal-regression edges', () => {
     ctx.emit('agent/created', { agent: session })
     await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
     const readCard = async (): Promise<{ sessionTeams: { description: string }[] }> =>
-      await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).json() as { sessionTeams: { description: string }[] }
+      await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).json() as { sessionTeams: { description: string }[] }
     const first = await readCard()
     expect(first.sessionTeams[0]?.description).toBe('stable line')
     const second = await readCard()
@@ -2570,7 +2570,7 @@ describe('a2a node facts title source', () => {
     agents.agent = session
     ctx.emit('agent/created', { agent: session })
     await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
-    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).json() as {
+    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).json() as {
       sessionTeams: { name: string }[]
     }
     expect(card.sessionTeams[0]?.name).toBe('Parser porting session')
@@ -2603,7 +2603,7 @@ describe('a2a node facts title source', () => {
     agents.agent = session
     ctx.emit('agent/created', { agent: session })
     await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
-    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).json() as {
+    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).json() as {
       sessionTeams: { name: string }[]
     }
     expect(card.sessionTeams[0]?.name).toBeDefined()
@@ -2629,7 +2629,7 @@ describe('a2a node facts title source', () => {
     ctx.emit('agent/created', { agent: session })
     await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
     const readCard = async (): Promise<{ sessionTeams: { name: string }[] }> =>
-      await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).json() as { sessionTeams: { name: string }[] }
+      await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).json() as { sessionTeams: { name: string }[] }
     await readCard()
     await readCard()
     // Two serves over an unchanged log: one derivation.
@@ -2669,7 +2669,7 @@ describe('a2a node facts title source', () => {
     ctx.emit('agent/created', { agent: session })
     await postJson(port, '/__dsh_a2a/join', { id: 'agent-1' })
     const readCard = async (): Promise<{ sessionTeams: { name: string }[] }> =>
-      await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).json() as { sessionTeams: { name: string }[] }
+      await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json?caller_session=probe`)).json() as { sessionTeams: { name: string }[] }
     await readCard()
     expect(flaky.calls).toBe(1)
     // The service recovers: the unchanged log still re-reads (undefined is
