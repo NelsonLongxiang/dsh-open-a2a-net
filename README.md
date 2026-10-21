@@ -195,6 +195,24 @@ pnpm test:live     # L4 — REAL remote machines, env-gated (DSH_A2A_LIVE_MESH=.
 pnpm build         # host lib (including lib/a2a-client.js), client types, and browser bundle (lib/client.js)
 ```
 
+## Non-DSH interop (protocol modules)
+
+A node that is NOT a DeepSeek Harness host can still speak the protocol. The
+four dependency-free protocol modules are exported subpaths (gh#13) — import
+them without pulling the DSH peer train:
+
+```js
+import { signCard, verifyCard } from '@nelsonlongxiang/dsh-open-a2a-net/card'
+import { formatReceipt, parseReceipt } from '@nelsonlongxiang/dsh-open-a2a-net/receipt'
+import { withinRouteBodyCap } from '@nelsonlongxiang/dsh-open-a2a-net/transport-caps'
+import { A2aClient } from '@nelsonlongxiang/dsh-open-a2a-net/a2a-client'
+```
+
+Implement your own signed card, `GET /.well-known/agent-card.json` (the
+minimal face is served anonymously; name yourself via `X-A2A-Caller` for the
+full card), and `POST /a2a/direct` — the wire shapes these modules encode are
+the contract. See `docs/protocol/` for the envelope details.
+
 ## License
 
 MIT

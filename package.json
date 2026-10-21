@@ -18,6 +18,22 @@
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
     },
+    "./card": {
+      "types": "./lib/types/card.d.ts",
+      "default": "./lib/card.js"
+    },
+    "./receipt": {
+      "types": "./lib/types/receipt.d.ts",
+      "default": "./lib/receipt.js"
+    },
+    "./transport-caps": {
+      "types": "./lib/types/transport-caps.d.ts",
+      "default": "./lib/transport-caps.js"
+    },
+    "./a2a-client": {
+      "types": "./lib/types/a2a-client.d.ts",
+      "default": "./lib/a2a-client.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
