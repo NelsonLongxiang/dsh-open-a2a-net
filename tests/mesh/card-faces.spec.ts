@@ -9,7 +9,7 @@
  * cannot even see it listed.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context } from '@deepseek-ai/cordis'
@@ -95,6 +95,27 @@ describe('G1 card faces: minimal for anonymous, full for named', () => {
     const stale: Record<string, string> = { ...envelopeFor(home, port, 'g1-zone'), 'X-A2A-Caller-Ts': String(Date.now() - 6 * 60_000) }
     const badTs = await getCard(port, stale)
     expect(badTs.sessionTeams).toBeUndefined()
+  })
+
+  it('REVIEW M2: a zone/id8 caller derives by zone prefix — not structurally refused', async () => {
+    // The envelope names g1-zone/01234567 (a session-shaped caller) signed
+    // with the same card key: the zone prefix matches card.team on the
+    // minimal card, so the full face serves. Pre-fix this shape was
+    // rejected not-derivable from every cold cache.
+    const ts = Date.now()
+    const { sign: edSign } = await import('node:crypto')
+    const { createPrivateKey } = await import('node:crypto')
+    const key = createPrivateKey(readFileSync(join(home, 'a2a', 'node-key.pem'), 'utf8'))
+    const callerUrl = `http://127.0.0.1:${String(port)}`
+    const claim = 'g1-zone/01234567'
+    const sig = edSign(undefined, Buffer.from(JSON.stringify([claim, callerUrl, ts]), 'utf8'), key).toString('base64')
+    const card = await getCard(port, { 'X-A2A-Caller': claim, 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Caller-Ts': String(ts), 'X-A2A-Caller-Sig': sig })
+    expect(Array.isArray(card.sessionTeams)).toBe(true)
+    // A foreign zone prefix still fails closed.
+    const ts2 = Date.now()
+    const sig2 = edSign(undefined, Buffer.from(JSON.stringify(['evil-zone/01234567', callerUrl, ts2]), 'utf8'), key).toString('base64')
+    const foreign = await getCard(port, { 'X-A2A-Caller': 'evil-zone/01234567', 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Caller-Ts': String(ts2), 'X-A2A-Caller-Sig': sig2 })
+    expect(foreign.sessionTeams).toBeUndefined()
   })
 
   it('the signed core is identical across faces (same key, same signature mechanism)', async () => {

@@ -820,6 +820,24 @@ export function apply(ctx: Context, config: Config): void {
   const nodePrivateKey = loadOrCreateNodeKey(join(home, 'a2a', 'node-key.pem'))
   /** Our own card URL once the web server settles — the OriginClaim anchor. */
   let ownCardUrl = ''
+  /**
+   * The OriginClaim envelope headers (gh#9+gh#10): canonical form
+   * JSON.stringify([caller, callerUrl, ts]) signed with the node card key.
+   * Shared by the a2a client (every peer request) and verifyOriginClaim's
+   * own verification fetch (REVIEW M2: the cold-cache fetch must carry the
+   * envelope so a zone/id8 caller derives from the FULL card — a bare-zone
+   * caller derives from the minimal card's team either way).
+   */
+  function originClaimHeaders(): Record<string, string> {
+    const ts = Date.now()
+    const signature = edSign(undefined, Buffer.from(JSON.stringify([config.team, ownCardUrl, ts]), 'utf8'), nodePrivateKey).toString('base64')
+    return {
+      'X-A2A-Caller': config.team,
+      'X-A2A-Caller-Url': ownCardUrl,
+      'X-A2A-Caller-Ts': String(ts),
+      'X-A2A-Caller-Sig': signature,
+    }
+  }
   const client = new A2aClient({
     apiKey: config.apiKey,
     sessionId: session,
@@ -829,17 +847,7 @@ export function apply(ctx: Context, config: Config): void {
     // ruled JSON.stringify([caller, callerUrl, ts]), signed with the node
     // card key (single identity anchor). Until the server settles the URL
     // is unknown; the signer returns plain naming for that brief window.
-    originClaim: (): Record<string, string> => {
-      const ts = Date.now()
-      const signature = edSign(undefined, Buffer.from(JSON.stringify([config.team, ownCardUrl, ts]), 'utf8'), nodePrivateKey).toString('base64')
-      const headers: Record<string, string> = {
-        'X-A2A-Caller': config.team,
-        'X-A2A-Caller-Url': ownCardUrl,
-        'X-A2A-Caller-Ts': String(ts),
-        'X-A2A-Caller-Sig': signature,
-      }
-      return headers
-    },
+    originClaim: originClaimHeaders,
     schedule,
     fetch: fetchImpl,
   })
@@ -2201,12 +2209,16 @@ const reportLoopRing = new Map<string, number[]>()
               svg: 'image/svg+xml',
             }
             res.writeHead(200, { 'Content-Type': types[ext] ?? 'application/octet-stream', 'Cache-Control': 'no-store' })
-            // gh#9 §10 GUI key plumbing: the shell learns the control-plane
-            // key so its control writes survive an apiKey-configured host.
-            // Same-origin disclosure only — the page is served by the very
-            // host whose config holds the key, and the gh#9 threat (a
-            // session with a shell) reads it from disk regardless.
-            if (ext === 'html' && config.apiKey !== '') {
+            // gh#9 §10 GUI key plumbing (REVIEW M3 fix): the shell learns
+            // the control-plane key ONLY on the loopback leniency face —
+            // a remote bare GET of the page serves the shell WITHOUT the
+            // key (the reviewer proved the pre-fix shape leaked the
+            // credential to any network-reachable fetcher on a
+            // 0.0.0.0-bound host, contradicting §10's purpose). Loopback
+            // localhost is exactly §10.2's stated leniency posture; keyed
+            // hosts behind tunnels use originClaimUrl-style operator
+            // plumbing instead.
+            if (ext === 'html' && config.apiKey !== '' && controlTrustedWithoutKey(req)) {
               const injected = file.toString('utf8').replace('</head>', `<script>window.__DSH_A2A_KEY__=${JSON.stringify(config.apiKey)};</script></head>`)
               res.end(Buffer.from(injected, 'utf8'))
               return
@@ -2884,13 +2896,14 @@ ${message}`
     if (caller === '' || callerUrl === '' || !Number.isFinite(ts) || ts <= 0 || signature === '') return { ok: false, reason: 'absent' }
     if (!originClaimCallerShape.test(caller)) return { ok: false, reason: 'bad-caller-shape' }
     if (Math.abs(Date.now() - ts) > ORIGIN_CLAIM_SKEW_MS) return { ok: false, reason: 'bad-ts' }
-    // Fetch the caller's card PLAIN (anonymous GET): the minimal face
-    // carries the signed core (publicKey/team/signature) — everything
-    // signature verification needs — and an envelope-less request returns
-    // immediately without recursing (self-referential fetch loops were the
-    // v1 draft's deadlock). Session-team derivability prefers a warm FULL
-    // card from the cache (R1: sweeps fetch full-form through our own
-    // envelope).
+    // Fetch the caller's card WITH OUR OWN ENVELOPE (REVIEW M2): the full
+    // face then carries sessionTeams, so a zone/id8 caller derives — a
+    // cold-cache bare fetch returned the minimal card, where zone/id8 was
+    // structurally not-derivable. Recursion is bounded: the target's own
+    // verification of OUR envelope fetches OUR card with a PLAIN request
+    // (no envelope), which our card face serves minimal immediately —
+    // depth two, terminates. A warm full-form cache entry short-circuits
+    // even that (R1).
     let card: A2aPeerCard | undefined = cardCache.get(callerUrl)?.card
     if (card === undefined) {
       try {
@@ -2913,7 +2926,16 @@ ${message}`
     } catch {
       return { ok: false, reason: 'bad-sig' }
     }
-    if (card.team !== caller && !(card.sessionTeams ?? []).some(entry => entry.team === caller)) {
+    // Derivation (REVIEW M2, closed without a second fetch): bare zone
+    // derives from card.team directly; zone/id8 derives by ZONE-PREFIX
+    // match against card.team — the id8 names a session ON the caller's
+    // own host, the zone is the signed-core fact, and the envelope
+    // signature binds the claim to the card key. (The pre-fix shape
+    // required the full card's sessionTeams, structurally rejecting every
+    // zone/id8 caller from a cold cache; re-fetching enveloped re-opens
+    // the mutual-recursion the plain fetch closed, so derivation stays on
+    // the minimal card's signed core.)
+    if (card.team !== caller && !(card.team === caller.slice(0, caller.indexOf('/')))) {
       return { ok: false, reason: 'not-derivable' }
     }
     return { ok: true, caller }
