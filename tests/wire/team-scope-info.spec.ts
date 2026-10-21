@@ -377,5 +377,64 @@ describe('S5 information-plane scoping (teamScopeInfo)', () => {
     expect(status.peers.map(peer => peer.url)).toEqual(['http://peer-b'])
     await ctx.fiber.dispose()
   })
+
+  it('G4 live pin: canvas local-member conversion admits the local session handle — its own inbound activity survives scope (real-driven)', async () => {
+    // n2 (review round PR #108): the LOCAL id→handle conversion branch in
+    // joinedTeamScope (`${config.team}/${id8(member)}`) had only a static
+    // shape assertion. This pin drives a REAL inbound delivery addressed to
+    // the local session-team handle through the full path: canvas ops lists
+    // local member agent-1 → scope ∋ home-zone/agent-1 → the inbound
+    // activity row (team=home-zone/agent-1) survives scoping. Control: a
+    // home without the canvas withholds the same row.
+    const mountScoped = async (withCanvas: boolean): Promise<{ ctx: Context; port: number }> => {
+      const home = tmpHome()
+      mkdirSync(join(home, 'a2a'), { recursive: true })
+      if (withCanvas) writeFileSync(join(home, 'a2a', 'canvas.json'), JSON.stringify({ teams: [{ name: 'ops', members: ['agent-1'] }] }))
+      writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: ['agent-1'] }))
+      const ctx = new Context()
+      await ctx.plugin(SystemPrompt)
+      await ctx.plugin(ToolRuntime)
+      await ctx.plugin(TimerService)
+      await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+      await ctx.plugin(FakeAgentsService)
+      ctx.provide('sessionPersistence', { list: async () => [{ id: SessionId('agent-1') }] } as never)
+      apply(ctx, makeConfig({ announce: true, dshHome: home, teamScopeInfo: true }))
+      const agents = ctx.get('agents') as unknown as FakeAgentsService
+      const live = { id: SessionId('agent-1'), session: { events: [] }, steer: vi.fn() }
+      agents.agent = live
+      ctx.emit('agent/created', { agent: live })
+      // Wake face stub: session-team deliveries (team=home-zone/agent-1)
+      // resolve the cold joined session through sessionController.resolveAgent.
+      ctx.provide('sessionController', { resolveAgent: async () => agents.agent } as never)
+      const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+      return { ctx, port }
+    }
+    const inbound = async (port: number): Promise<void> => {
+      await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        body: JSON.stringify({ team: 'home-zone/agent-1', message: 'live pin', caller_session: 'ops-caller', wait: false }),
+      })
+    }
+
+    // With canvas: the local handle is in scope — the row survives.
+    const withCanvas = await mountScoped(true)
+    await inbound(withCanvas.port)
+    let statusWith = await withCanvas.ctx.tools.get('a2a_status')!.execute({}, runContext()) as { activity: { dir: string; team: string }[] }
+    const deadline = Date.now() + 3_000
+    while (!statusWith.activity.some(entry => entry.team === 'home-zone/agent-1') && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 50))
+      statusWith = await withCanvas.ctx.tools.get('a2a_status')!.execute({}, runContext()) as typeof statusWith
+    }
+    expect(statusWith.activity.some(entry => entry.team === 'home-zone/agent-1')).toBe(true)
+    await withCanvas.ctx.fiber.dispose()
+
+
+    // Control: no canvas → the same inbound row is out of scope.
+    const withoutCanvas = await mountScoped(false)
+    await inbound(withoutCanvas.port)
+    const statusWithout = await withoutCanvas.ctx.tools.get('a2a_status')!.execute({}, runContext()) as { activity: { dir: string; team: string }[] }
+    expect(statusWithout.activity.some(entry => entry.team === 'home-zone/agent-1')).toBe(false)
+    await withoutCanvas.ctx.fiber.dispose()
+  })
   })
 })
