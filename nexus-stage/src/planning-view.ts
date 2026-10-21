@@ -35,7 +35,7 @@ import {
   type RemoteTeamRow,
 } from './federation'
 import { clampViewport, fitView, panBy, screenToWorld, worldTransformCss, zoomAt, type LayoutViewport } from './viewport'
-import { NODE_H, WorldModel, nodeRect, deriveInitialFrame, planSeatFor, type SessionLite, type TeamLite } from './world'
+import { NODE_H, WorldModel, nodeRect, deriveInitialFrame, planSeatClear, type SessionLite, type TeamLite } from './world'
 import { applyAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction, type RosterOp } from './canvas-ops'
 import { FRAME_HUES } from './tokens'
 import './planning.css'
@@ -151,6 +151,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   let gesture: Gesture = { kind: 'none' }
   let spaceDown = false
   let renderedRevision = -1
+  /** Until the first reconcile with nodes (or any saved layout), frame the content once. */
+  let firstFitPending = true
   const clock = deps.now ?? Date.now
   const ac = new AbortController()
   const noticeTimers: Array<ReturnType<typeof setTimeout>> = []
@@ -219,7 +221,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     return b
   }
   toolbar.append(
-    mkButton('适配(0)', '适配视图（0）', () => fitToContent()),
+    mkButton('适配', '适配视图（快捷键 0）', () => fitToContent()),
     mkButton('－', '缩小', () => zoomCenter(1 / 1.2)),
     zoomLabel,
     mkButton('＋', '放大', () => zoomCenter(1.2)),
@@ -1757,18 +1759,32 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // declarations, peer arrivals) land within one cadence.
     if (nodePanel !== null) renderNodePanel()
     renderStatus(input)
+    // First-run framing: with no saved layout the ring seats are centered on
+    // world (0,0) while the viewport origin is the board's top-left corner,
+    // so half the fleet landed above/left of the view and a healthy board
+    // opened empty. Fit once, the first time there is something to frame.
+    // Not marked dirty — nothing the user arranged changed; a saved layout
+    // (adopted at any point) keeps its own viewport and cancels this.
+    if (firstFitPending && layoutDoc === undefined && gesture.kind === 'none' && model.nodeIds().length > 0) {
+      syncViewSize()
+      if (viewW > 0 && viewH > 0) {
+        firstFitPending = false
+        vp = fitView(model.contentBounds(), viewW, viewH, 1) // frame, never magnify
+      }
+    }
     render()
   }
 
   // Same fallback contract as WorldModel.fromState: the card-scaled ring.
   function seatFor2(id: string): { x: number; y: number } {
-    return planSeatFor(id)
+    return planSeatClear(id, model.allNodes().filter(n => n.remote !== true))
   }
 
   function adoptExternalLayout(layout: unknown): void {
     const doc = clampDoc(layout)
     if (doc === undefined) return
     layoutDoc = doc
+    firstFitPending = false
     if (gesture.kind === 'none') {
       vp = clampViewport({ ...doc.viewport })
     }

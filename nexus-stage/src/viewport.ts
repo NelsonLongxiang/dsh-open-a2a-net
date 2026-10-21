@@ -64,12 +64,12 @@ export interface WorldBounds { readonly minX: number; readonly minY: number; rea
  * Fit the content bounds into a viewW x viewH viewport at 90% fill,
  * clamped to the persisted scale envelope; empty bounds reset to identity.
  */
-export function fitView(bounds: WorldBounds | null, viewW: number, viewH: number): LayoutViewport {
+export function fitView(bounds: WorldBounds | null, viewW: number, viewH: number, maxScale = Number.POSITIVE_INFINITY): LayoutViewport {
   if (bounds === null || viewW <= 0 || viewH <= 0) return IDENTITY_VIEWPORT
   const bw = bounds.maxX - bounds.minX
   const bh = bounds.maxY - bounds.minY
   if (!(bw > 0) || !(bh > 0)) return IDENTITY_VIEWPORT
-  const scale = clampScale(0.9 * Math.min(viewW / bw, viewH / bh))
+  const scale = clampScale(Math.min(maxScale, 0.9 * Math.min(viewW / bw, viewH / bh)))
   return {
     x: (bounds.minX + bounds.maxX) / 2 - viewW / (2 * scale),
     y: (bounds.minY + bounds.maxY) / 2 - viewH / (2 * scale),

@@ -11,11 +11,17 @@
   --n-bg:#060a12; --n-ink:#dde3f0; --n-ink-muted:#7a86a0; --n-panel:#0d1322;
   --n-live:#4ade80; --n-cold:#7a86a0; --n-border:#223052; --n-act:#f59e0b;
   --n-danger:#f87171; --n-accent:#8b5cf6; --n-rail-w:300px;
+  --n-canvas:#22d3ee; --n-line:var(--n-border);
+  --n-role-user:#7dd3fc; --n-role-user-bg:rgba(56,189,248,.16);
+  --n-role-assistant:#6ee7b7; --n-role-assistant-bg:rgba(52,211,153,.14);
 }
 @media (prefers-color-scheme: light){
   :root{ --n-bg:#eef2fa; --n-ink:#1a2438; --n-ink-muted:#5a6580; --n-panel:#ffffff;
          --n-live:#16803a; --n-cold:#8a93a8; --n-border:#c6d0e6; --n-act:#b45309;
-         --n-danger:#b91c1c; --n-accent:#6d28d9; }
+         --n-danger:#b91c1c; --n-accent:#6d28d9;
+         --n-canvas:#0e7490; --n-cold:#6b7489;
+         --n-role-user:#075985; --n-role-user-bg:rgba(14,116,144,.12);
+         --n-role-assistant:#065f46; --n-role-assistant-bg:rgba(5,150,105,.12); }
 }
 @media (min-width:1440px){ :root{ --n-rail-w:340px } }
 html,body,#app{height:100%;margin:0}
@@ -59,7 +65,7 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
   color:var(--n-ink);font:inherit;padding:3px 6px;border-radius:6px;cursor:pointer}
 .wb-item:hover{background:color-mix(in srgb,var(--n-accent) 14%,transparent)}
 .wb-dot{font-size:10px}
-.wb-dot-live{color:var(--n-live)} .wb-dot-cold{color:var(--n-cold)} .wb-dot-canvas{color:#22d3ee}
+.wb-dot-live{color:var(--n-live)} .wb-dot-cold{color:var(--n-cold)} .wb-dot-canvas{color:var(--n-canvas)}
 .wb-dot-peer{color:var(--n-accent)} .wb-dot-remote{color:var(--n-act)}
 .wb-item-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
@@ -74,7 +80,7 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-filter:hover{border-color:var(--n-accent);color:var(--n-ink)}
 .wb-filter.is-active{border-color:var(--n-accent);color:var(--n-ink);
   background:color-mix(in srgb,var(--n-accent) 16%,transparent)}
-.wb-item-badge{flex:none;font-size:10.5px;color:#22d3ee;border:1px solid color-mix(in srgb,#22d3ee 45%,transparent);
+.wb-item-badge{flex:none;font-size:10.5px;color:var(--n-canvas);border:1px solid color-mix(in srgb,var(--n-canvas) 45%,transparent);
   border-radius:99px;padding:0 6px;line-height:17px;white-space:nowrap}
 /* 0.6.10: .wb-item-open (the ↗ jump affordance) removed by ruling —
    禁止任何跳转，全部使用响应式布局. */
@@ -112,8 +118,8 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-transcript-body{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto}
 .wb-transcript-row{display:flex;gap:6px;align-items:flex-start;font-size:12px;line-height:1.45}
 .wb-transcript-role{flex:0 0 auto;font-size:10px;padding:0 5px;border-radius:999px;margin-top:2px}
-.wb-transcript-user .wb-transcript-role{background:rgba(56,189,248,.16);color:#7dd3fc}
-.wb-transcript-assistant .wb-transcript-role{background:rgba(52,211,153,.14);color:#6ee7b7}
+.wb-transcript-user .wb-transcript-role{background:var(--n-role-user-bg);color:var(--n-role-user)}
+.wb-transcript-assistant .wb-transcript-role{background:var(--n-role-assistant-bg);color:var(--n-role-assistant)}
 .wb-transcript-text{flex:1 1 auto;min-width:0;color:var(--n-ink);word-break:break-word}
 
 /* ── Stage: board (canvas mode) or the data stack (data mode) ── */
@@ -223,6 +229,10 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
   .wb-chat{left:8px;right:8px;width:auto;top:auto;bottom:8px;max-height:70%;
     transform:translateY(102%)}
   .wb-chat.is-open{transform:translateY(0)}
+}
+@media (pointer:coarse){
+  .wb-filter,.wb-item,.wb-sec-head{min-height:36px}
+  .wb-icon-btn,.wb-inspector .wb-icon-btn,.wb-chat .wb-icon-btn{width:36px;height:36px}
 }
 @media (max-width:680px){
   .wb-header{flex-wrap:wrap;row-gap:4px}

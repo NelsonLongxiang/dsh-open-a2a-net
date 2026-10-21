@@ -102,7 +102,7 @@
 #dsh-plan .p-tabs [role=tab][aria-selected=true]{color:var(--ink); border-color:var(--accent); background:rgba(139,92,246,.12)}
 #dsh-plan .p-tabs [role=tab]:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
 #dsh-plan .p-toolbar button{background:transparent; color:var(--ink); border:1px solid var(--card-line); border-radius:6px;
-  padding:4px 10px; font:inherit; cursor:pointer}
+  padding:4px 10px; font:inherit; cursor:pointer; white-space:nowrap}
 #dsh-plan .p-toolbar button:hover{border-color:var(--accent)}
 #dsh-plan .p-toolbar button:active{background:var(--uupm-wash-15)}
 #dsh-plan .p-toolbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
@@ -126,6 +126,21 @@
 #dsh-plan .p-legend i{display:inline-block; width:18px; border-top:2px solid var(--uupm-edge-member);
   vertical-align:middle; margin-right:6px}
 #dsh-plan .p-legend i.dashed{border-top-style:dashed}
+
+/* ── narrow board (<680px): the HUD stacks instead of colliding ──
+   The toolbar, status chip and legend are absolutely placed for a wide
+   board; on a phone they overlapped each other and the toolbar's CJK
+   labels wrapped one glyph per line. Toolbar scrolls sideways on one row,
+   the status chip drops under it, the legend (reference, not state) hides. */
+@media (max-width:680px){
+  #dsh-plan .p-toolbar{left:8px; right:8px; top:8px; overflow-x:auto; scrollbar-width:none}
+  #dsh-plan .p-toolbar > *{flex:none}
+  #dsh-plan .p-status{left:8px; right:auto; top:58px; padding:6px 10px; gap:10px; flex-wrap:wrap}
+  #dsh-plan .p-legend{display:none}
+}
+@media (pointer:coarse){
+  #dsh-plan .p-toolbar button{min-height:36px; min-width:36px}
+}
 
 /* ── reduced motion: zero animation, state carried by text (hard baseline) ── */
 @media (prefers-reduced-motion: reduce){

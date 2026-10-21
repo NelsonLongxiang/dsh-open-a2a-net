@@ -43,6 +43,44 @@ export function planSeatFor(sid: string): { x: number; y: number } {
   return { x: Math.round(Math.cos(angle) * r), y: Math.round(Math.sin(angle) * r * 0.6) }
 }
 
+/** Breathing room kept between two unarranged cards. */
+const SEAT_GAP = 12
+
+/**
+ * Collision-free fallback seat: the hashed ring seat when it is clear of
+ * every card in `occupied`, else the next clear slot walking the rings
+ * outward from the hashed one. The bare hash put 8 sessions into 48
+ * slots and stacked pairs pixel-for-pixel on top of each other (and the
+ * inner ring's slots sit ~60px apart, so neighbours overlapped too) —
+ * a fresh board read as fewer nodes than the fleet had. Deterministic for
+ * a fixed input order; when every ring slot is taken, cards queue on a
+ * grid row under the outer ring.
+ */
+export function planSeatClear(sid: string, occupied: ReadonlyArray<{ readonly x: number; readonly y: number }>): { x: number; y: number } {
+  const clear = (p: { x: number; y: number }): boolean => occupied.every(o =>
+    Math.abs(o.x - p.x) >= NODE_W + SEAT_GAP || Math.abs(o.y - p.y) >= NODE_H + SEAT_GAP)
+  const first = planSeatFor(sid)
+  if (clear(first)) return first
+  const h = hashId(sid)
+  const total = PLAN_SLOTS * PLAN_RINGS.length
+  const start = (Math.floor(h / PLAN_SLOTS) % PLAN_RINGS.length) * PLAN_SLOTS + (h % PLAN_SLOTS)
+  for (let k = 1; k < total; k++) {
+    const i = (start + k) % total
+    const ring = Math.floor(i / PLAN_SLOTS)
+    const angle = ((i % PLAN_SLOTS) / PLAN_SLOTS) * Math.PI * 2 + ring * (Math.PI / PLAN_SLOTS)
+    const r = PLAN_RINGS[ring]!
+    const p = { x: Math.round(Math.cos(angle) * r), y: Math.round(Math.sin(angle) * r * 0.6) }
+    if (clear(p)) return p
+  }
+  const outer = PLAN_RINGS[PLAN_RINGS.length - 1]!
+  for (let row = 0; ; row++) {
+    for (let col = 0; col < 6; col++) {
+      const p = { x: Math.round(-outer + col * (NODE_W + SEAT_GAP)), y: Math.round(outer * 0.6 + NODE_H * 2 + row * (NODE_H + SEAT_GAP)) }
+      if (clear(p)) return p
+    }
+  }
+}
+
 /** Minimal session row shape the model needs (topology.SessionRow satisfies it). */
 export interface SessionLite { id: string; label: string; team: string; name?: string; joined: boolean; live?: boolean; teams?: readonly string[] }
 
@@ -355,7 +393,7 @@ export class WorldModel {
         x = saved.x
         y = saved.y
       } else {
-        const p = planSeatFor(s.id)
+        const p = planSeatClear(s.id, [...model.nodes.values()])
         x = p.x
         y = p.y
       }
