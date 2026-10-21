@@ -50,7 +50,10 @@ interface OriginClaim {
  *  X-A2A-Caller:     <caller>
  *  X-A2A-Caller-Url: <callerUrl>
  *  X-A2A-Caller-Ts:  <ts>
- *  X-A2A-Caller-Sig: base64(ed25519-sign(canonical(caller|callerUrl|ts)))
+ *  X-A2A-Caller-Sig: base64(ed25519-sign(canonical(claim)))
+ *  — canonical(claim) = JSON.stringify([caller, callerUrl, ts]) (R2:
+ *  a structured canonical form, not naive '|' concatenation — delimiter
+ *  ambiguity between fields is unforgeable by construction).
  * The signing key is the CALLER'S CARD KEY (single identity anchor).
  */
 ```
@@ -60,6 +63,15 @@ interface OriginClaim {
 1. Receiver consults its card cache for `claim.callerUrl`
    (60 s positive / 30 s negative TTLs already deployed); cache miss ⇒ one
    verified-card fetch via `verifyCard` (existing infra, shared cache).
+   **R1 — cache forms**: the cache stores BOTH card faces separately
+   (minimal vs full, keyed by fetch-time envelope presence). Signature
+   verification needs only the minimal face (publicKey is signed core);
+   caller-derivation for a `zone/id8` shape needs the FULL face
+   (sessionTeams is unsigned served-fresh). A cache hit on the minimal face
+   during an envelope verification MUST trigger one re-fetch of the full
+   card through our own envelope (warm cost: one round trip, cache-warm
+   signature) — otherwise a legitimately named caller fails closed on a
+   form mismatch that proves nothing.
 2. Verified card ⇒ the envelope signature MUST verify against THAT card's
    `publicKey`, and `claim.caller` must be derivable from the card
    (`card.team`, or a session team the card publishes). Mismatch or
@@ -81,13 +93,19 @@ certifies only itself, an unlinked nobody that N3/N9 already gate.
 
 | Condition | Card face (gh#10) | Delivery face |
 |---|---|---|
-| envelope absent | minimal card (G1 v1 posture) | N3 admission as today |
+| envelope absent, transition window open | minimal card (G1 v1 posture) | N3 admission as today + `legacyInbound` warn metric |
+| envelope absent, window CLOSED | minimal card | **reject `untrusted-origin`** — same code as signature failure (M1) |
 | envelope present, key mismatch / unreachable / rejected card / bad `ts` | **minimal card** | reject `untrusted-origin` |
 | envelope present, verified, caller linked (N3/N9 basis) | full card | accept |
 
 No dual-track: a valid SHAPE never substitutes for a valid SIGNATURE
 (ruling: "shape-valid or signature-valid" leaves m1's self-asserted zone
-open — forbidden).
+open — forbidden). **M1 closes the envelope-absent hole on the delivery
+face**: N3 checks the LINKABILITY of a caller NAME, not possession of the
+key behind it — after the window, an attacker who merely self-asserts an
+already-linked name with no envelope must land on `untrusted-origin`,
+exactly like a failed signature; during the window the legacy path stays
+with a counted warn so operators can see the tail drain.
 
 ## 5. Caller-side construction
 
@@ -123,6 +141,14 @@ document's machinery.
 5. One restart window flips the whole fleet (same version both sides);
    before the flip, cross-version full-card reads degrade to minimal —
    never to open.
+6. (M1) After the window closes, a delivery with a shape-valid,
+   already-linked caller name but NO envelope rejects `untrusted-origin`
+   (regression pin: the attacker-asserts-a-linked-name shape); during the
+   window the same delivery passes N3 and increments the `legacyInbound`
+   warn metric.
+7. (R1) A minimal-face cache hit during envelope verification re-fetches
+   the full card through the caller's own envelope — a legitimately named
+   caller is never fail-closed on a cache-form mismatch.
 
 ## 9. Explicit non-goals
 
