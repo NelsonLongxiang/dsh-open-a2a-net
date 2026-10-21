@@ -34,6 +34,13 @@ export interface A2aClientOptions {
    * Empty omits the header (anonymous posture).
    */
   readonly cardCaller: string
+  /**
+   * gh#9+gh#10 OriginClaim signer (docs/protocol/delivery-origin-auth.md):
+   * produces the four envelope headers with the NODE'S CARD KEY. Present ⇒
+   * every card GET and direct POST carries a verifiable origin claim;
+   * absent ⇒ the caller stays at the named-only posture (transition).
+   */
+  readonly originClaim?: () => Record<string, string>
   /** Delayed-callback seam (HTTP timeouts). */
   readonly schedule: A2aSchedule
   /** HTTP seam. */
@@ -98,6 +105,12 @@ export class A2aClient {
     // GETs are card fetches: name ourselves so the peer serves the full
     // card (gh#7 G1). POSTs carry caller_session in the body already.
     if (!json && this.options.cardCaller !== '') headers['X-A2A-Caller'] = this.options.cardCaller
+    // gh#9+gh#10: the OriginClaim envelope — a verifiable origin on every
+    // peer request when the signer is wired (full-card reads and delivery
+    // verification both ride it).
+    if (this.options.originClaim !== undefined) {
+      for (const [key, value] of Object.entries(this.options.originClaim())) headers[key] = value
+    }
     return headers
   }
 

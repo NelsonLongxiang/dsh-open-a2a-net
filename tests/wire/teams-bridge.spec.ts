@@ -22,6 +22,7 @@ import WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, type Config } from '../../src/index.ts'
+import { envelopeFor } from './envelope.ts'
 import { peerPayloadFingerprint } from '../../src/idempotency-store.ts'
 import { signCard } from '../../src/card.ts'
 import { NATIVE_TEAMS_A2A_FACE_KEY } from '../../src/teams-bridge.ts'
@@ -639,7 +640,7 @@ describe('P2 receipt-callback routing', () => {
     m.agents.agents.push(live)
     m.ctx.emit('agent/created', { agent: live })
     await postJson(m.port, '/__dsh_a2a/join', { id: 'session-live1' })
-    const card = await (await fetch(`http://127.0.0.1:${String(m.port)}/.well-known/agent-card.json?caller_session=probe`)).json() as { sessionTeams?: Array<{ team: string; description?: string }> }
+    const card = await (await fetch(`http://127.0.0.1:${String(m.port)}/.well-known/agent-card.json`, { headers: envelopeFor(m.home, m.port, 'dsh') })).json() as { sessionTeams?: Array<{ team: string; description?: string }> }
     const teams = (card.sessionTeams ?? []).map(entry => entry.team)
     expect(teams).toContain('dsh/live1')
     expect(teams).toContain('dsh/cold9')

@@ -20,6 +20,7 @@ import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { apply, type Config } from '../../src/index.ts'
+import { envelopeFor } from '../wire/envelope.ts'
 import { bootNode, runContext } from './harness.ts'
 
 const lanIp = (): string => {
@@ -136,7 +137,7 @@ describe('V4 inverted (N2): a model tool declares membership for its own node on
       expect(other.error).toContain('[NOT_SELF]')
       const self = await joinTool?.execute({ team: 'dsh/review-gate', id: 'agent-1' }, runContext(live)) as { ok: boolean }
       expect(self.ok).toBe(true)
-      const card = JSON.parse(await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`, { headers: { 'X-A2A-Caller': 'probe' } })).text()) as { teamMemberships?: Array<{ node: string; team: string }> }
+      const card = JSON.parse(await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`, { headers: envelopeFor(home, port, 'dsh') })).text()) as { teamMemberships?: Array<{ node: string; team: string }> }
       expect(card.teamMemberships).toEqual([{ node: 'dsh/agent-1', team: 'dsh/review-gate' }])
     } finally {
       await ctx.fiber.dispose()

@@ -18,6 +18,7 @@ import ToolRuntime from '@deepseek-ai/dsh-tools'
 import TimerService from '@deepseek-ai/cordis-plugin-timer'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { apply, type Config } from '../../src/index.ts'
+import { envelopeFor } from '../wire/envelope.ts'
 import { bootNode } from './harness.ts'
 
 async function getCard(port: number, headers: Record<string, string> = {}, query = ''): Promise<Record<string, unknown>> {
@@ -35,8 +36,9 @@ const baseConfig: Partial<Config> = {
 describe('G1 card faces: minimal for anonymous, full for named', () => {
   let ctx: Context
   let port: number
+  let home: string
   beforeEach(async () => {
-    const home = mkdtempSync(join(tmpdir(), 'a2a-g1-card-'))
+    home = mkdtempSync(join(tmpdir(), 'a2a-g1-card-'))
     mkdirSync(join(home, 'a2a'), { recursive: true })
     // Seed one joined session + a roster declaration so the FULL face has
     // sessionTeams and teamMemberships to carry.
@@ -69,20 +71,35 @@ describe('G1 card faces: minimal for anonymous, full for named', () => {
     expect(String(card.description)).toContain('minimal card')
   })
 
-  it('a named caller via query or header gets the full card; invalid shapes stay minimal', async () => {
+  it('gh#9/10 flip: only a VERIFIED envelope gets the full card — shape-only naming and queries stay minimal', async () => {
+    // The v1 named face (bare X-A2A-Caller / ?caller_session=, no
+    // signature) closed with the envelope flip: shape never substitutes
+    // for signature.
     const viaQuery = await getCard(port, {}, '?caller_session=other-zone')
-    expect(Array.isArray(viaQuery.sessionTeams)).toBe(true)
+    expect(viaQuery.sessionTeams).toBeUndefined()
     const viaHeader = await getCard(port, { 'X-A2A-Caller': 'other-zone/deadbeef' })
-    expect(Array.isArray(viaHeader.sessionTeams)).toBe(true)
-    expect(viaHeader.teamMemberships).toBeDefined()
-    // Invalid shapes fail closed to the minimal face.
+    expect(viaHeader.sessionTeams).toBeUndefined()
     const bogus = await getCard(port, { 'X-A2A-Caller': 'not a valid/// shape!' })
     expect(bogus.sessionTeams).toBeUndefined()
+    // The node's own signed envelope gets the full card (self-named zone:
+    // derivable from card.team).
+    const enveloped = await getCard(port, envelopeFor(home, port, 'g1-zone'))
+    expect(Array.isArray(enveloped.sessionTeams)).toBe(true)
+    expect(enveloped.teamMemberships).toBeDefined()
+    // A well-formed envelope with a BAD signature fails closed to minimal.
+    const forged: Record<string, string> = { ...envelopeFor(home, port, 'g1-zone') }
+    forged['X-A2A-Caller-Sig'] = Buffer.from('forged').toString('base64')
+    const badSig = await getCard(port, forged)
+    expect(badSig.sessionTeams).toBeUndefined()
+    // A stale ts (outside ±5min) fails closed too.
+    const stale: Record<string, string> = { ...envelopeFor(home, port, 'g1-zone'), 'X-A2A-Caller-Ts': String(Date.now() - 6 * 60_000) }
+    const badTs = await getCard(port, stale)
+    expect(badTs.sessionTeams).toBeUndefined()
   })
 
   it('the signed core is identical across faces (same key, same signature mechanism)', async () => {
     const anon = await getCard(port)
-    const named = await getCard(port, { 'X-A2A-Caller': 'other-zone' })
+    const named = await getCard(port, envelopeFor(home, port, 'g1-zone'))
     for (const field of ['name', 'team', 'session', 'capabilities', 'expiresAt', 'publicKey', 'signature']) {
       expect(anon[field]).toEqual(named[field])
     }
@@ -99,6 +116,8 @@ describe('G1 wake-on-route regression: cold rows stay reachable for named caller
 
   it('the caller node (named via X-A2A-Caller) resolves and delivers to a cold session; an anonymous curl cannot even see the listing', async () => {
     const target = await bootNode({ name: 'target', session: 'mesh-target', team: 'target-zone', sessionNodes: true })
+    // Loopback-bound harness nodes: the plugin derives 127.0.0.1 from the
+    // actual bind (production pocket tunnels override via originClaimUrl).
     const caller = await bootNode({ name: 'caller', session: 'mesh-caller', team: 'caller-zone', peers: [target.baseUrl] })
     try {
       // The target's operator joins a session that then goes cold.

@@ -6,7 +6,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net
  */
 
-import { createHash, createPrivateKey, generateKeyPairSync, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign as edSign, timingSafeEqual, verify as edVerify } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -32,7 +32,7 @@ export function resolveCallerLabel(input: {
   if (input.initiatorFace) return input.nodeTeam
   return input.sessionLabel
 }
-import { signCard, type CardCore } from './card.ts'
+import { signCard, verifyCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { CanvasStore, isRemoteMemberRef, validRemoteMemberRef } from './canvas-store.ts'
 import { decodeSessionLog, extractTranscript, TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_MAX_FILE_BYTES, TRANSCRIPT_MAX_LIMIT } from './session-transcript.ts'
@@ -177,6 +177,22 @@ export interface Config {
    * fail closed).
    */
   readonly delegates: DelegateConfig[]
+  /**
+   * gh#9+gh#10 OriginClaim window (docs/protocol/delivery-origin-auth.md §4):
+   * while true (default), a delivery/log request with NO envelope still
+   * walks N3 admission and increments the legacyInbound warn metric; when
+   * the operator closes it (post fleet flip), an absent envelope rejects
+   * `untrusted-origin` — same code as a failed signature (M1: a
+   * self-asserted already-linked name must not pass on shape alone).
+   */
+  readonly originClaimWindow: boolean
+  /**
+   * Override for the OriginClaim callerUrl anchor. Loopback-bound hosts
+   * behind a pocket tunnel must name the card URL peers can actually
+   * fetch (e.g. http://192.168.3.157:13080); empty uses the web server's
+   * own address.
+   */
+  readonly originClaimUrl: string
   /**
    * gh#8 (N9) escape hatch: when true, team-name resolution also considers
    * the referral-learned peer tail (the legacy whole-store basis) instead
@@ -420,6 +436,15 @@ export const Config: s<Config> = s.object({
    * the legacy whole-store basis (fleet migration window).
    */
   referralTeamResolution: s.boolean().default(false),
+
+  /**
+   * gh#9+gh#10 OriginClaim window: absent envelopes still walk N3 during
+   * the window (counted as legacyInbound); closing it rejects them like
+   * failed signatures. See docs/protocol/delivery-origin-auth.md §4.
+   */
+  originClaimWindow: s.boolean().default(true),
+  /** OriginClaim callerUrl override for pocket-tunneled hosts; '' = auto. */
+  originClaimUrl: s.string().default(''),
 
   /**
    * v0.5.23 (async-stall): delay before a delivered-but-unconsumed async
@@ -770,10 +795,29 @@ export function apply(ctx: Context, config: Config): void {
     ...(delegate.publicKey !== '' ? { publicKey: delegate.publicKey } : {}),
   }))
 
+  const nodePrivateKey = loadOrCreateNodeKey(join(home, 'a2a', 'node-key.pem'))
+  /** Our own card URL once the web server settles — the OriginClaim anchor. */
+  let ownCardUrl = ''
   const client = new A2aClient({
     apiKey: config.apiKey,
     sessionId: session,
     cardCaller: config.team,
+    // gh#9+gh#10 OriginClaim (docs/protocol/delivery-origin-auth.md): every
+    // peer request carries a verifiable origin — canonical form is the
+    // ruled JSON.stringify([caller, callerUrl, ts]), signed with the node
+    // card key (single identity anchor). Until the server settles the URL
+    // is unknown; the signer returns plain naming for that brief window.
+    originClaim: (): Record<string, string> => {
+      const ts = Date.now()
+      const signature = edSign(undefined, Buffer.from(JSON.stringify([config.team, ownCardUrl, ts]), 'utf8'), nodePrivateKey).toString('base64')
+      const headers: Record<string, string> = {
+        'X-A2A-Caller': config.team,
+        'X-A2A-Caller-Url': ownCardUrl,
+        'X-A2A-Caller-Ts': String(ts),
+        'X-A2A-Caller-Sig': signature,
+      }
+      return headers
+    },
     schedule,
     fetch: fetchImpl,
   })
@@ -1816,6 +1860,10 @@ const reportLoopRing = new Map<string, number[]>()
               // Read-only; no fingerprints cross here (they are /a2a/query's
               // only auth material).
               idempotency: idempotencyStore.stats(),
+              // gh#9+gh#10 M1: envelope-absent deliveries during the
+              // OriginClaim window — the operator watches this drain to
+              // zero before closing the window.
+              legacyInbound: legacyInboundCount,
               // F-observability: the boot prewarm's lifecycle — a dead or
               // skipped prewarm is the root shape behind "cold rows pile up
               // after restart" and must be readable, not a console rumor.
@@ -2143,7 +2191,14 @@ const reportLoopRing = new Map<string, number[]>()
 
   if (config.announce) {
     whenWebServerSettled((webServer) => {
-      const privateKey = loadOrCreateNodeKey(join(home, 'a2a', 'node-key.pem'))
+      const privateKey = nodePrivateKey
+      // The OriginClaim anchor URL: explicit config wins (loopback-bound
+      // hosts behind a pocket tunnel must name their reachable card URL),
+      // else the web server's own address.
+      const bound = (webServer as { host?: '127.0.0.1' | '0.0.0.0' }).host
+      const urlOverride = config.originClaimUrl ?? ''
+      const reachHost = urlOverride !== '' ? '' : bound === '0.0.0.0' && lanIp !== '' ? lanIp : '127.0.0.1'
+      ownCardUrl = urlOverride !== '' ? urlOverride : `http://${reachHost}:${String((webServer as { port: number }).port)}`
       const cardCore = (): CardCore => ({
         name: config.agentName,
         session,
@@ -2167,7 +2222,20 @@ const reportLoopRing = new Map<string, number[]>()
       ctx.effect(() => webServer.register({
         kind: 'exact',
         path: '/.well-known/agent-card.json',
-        handler: (req: IncomingMessage, res: ServerResponse) => {
+        // gh#9+gh#10: the FULL card now requires a VERIFIED OriginClaim
+        // envelope (four headers, card-key signature) — the v1 shape-only
+        // named face (self-asserted zone via ?caller_session=/header)
+        // closed with the envelope flip: shape NEVER substitutes for
+        // signature (ruling's no-dual-track). Everything else gets the
+        // MINIMAL discovery card.
+        handler: async (req: IncomingMessage, res: ServerResponse) => {
+          const send = (named: boolean, body_: string): void => {
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body_) })
+            res.end(body_)
+            void named
+          }
+          const claim = await verifyOriginClaim(req)
+          const named = claim.ok
           // gh#7 G1 (review-seat R2 ruling): the card serves two faces.
           // A NAMED caller — ?caller_session= or the X-A2A-Caller header in
           // the zone or zone/id8 shape — gets the FULL card. An anonymous
@@ -2182,8 +2250,7 @@ const reportLoopRing = new Map<string, number[]>()
           // covers the same signed core either way; only the unsigned
           // served-fresh fields differ.
           const cardUrl = new URL(req.url ?? '/', 'http://x')
-          const namedRaw = String(req.headers['x-a2a-caller'] ?? cardUrl.searchParams.get('caller_session') ?? '')
-          const named = /^[a-z0-9-]+(\/[0-9a-f]{8})?$/i.test(namedRaw)
+          void cardUrl
           // The unsigned peers and sessionTeams fields carry this node's
           // current peer set and joined sessions at serve time (between
           // re-signs), so each card read spreads the publisher's latest
@@ -2221,10 +2288,9 @@ const reportLoopRing = new Map<string, number[]>()
             ...(named && memberships.length > 0 ? { teamMemberships: memberships } : {}),
             ...(named && lanIp !== '' ? { lanIp } : {}),
             ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}),
-            description: `A2A node exposing team ${config.team}${named ? '' : ' (minimal card — name yourself via ?caller_session=<zone> or X-A2A-Caller for the full card)'}`,
+            description: `A2A node exposing team ${config.team}${named ? '' : ' (minimal card — OriginClaim envelope required for the full card: X-A2A-Caller/-Url/-Ts/-Sig signed with your card key)'}`,
           })
-          res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) })
-          res.end(body)
+          send(named, body)
         },
       }), 'a2a: agent card route')
       ctx.effect(() => refresh, 'a2a: card refresh timer')
@@ -2764,6 +2830,63 @@ ${message}`
     return { ok: false, error: `the native-teams round for "${team}" failed: ${String(roundError)}` }
   }
 
+  /* ── gh#9+gh#10 OriginClaim (docs/protocol/delivery-origin-auth.md).
+     Envelope: X-A2A-Caller / -Url / -Ts / -Sig — canonical form is
+     JSON.stringify([caller, callerUrl, ts]) (R2), signed with the CALLER'S
+     CARD KEY; verification fetches the caller's card at callerUrl through
+     our own enveloped memoized fetch (R1: our fetches are full-form by
+     construction — the client stamps the envelope on every GET), then
+     verifies the signature against THAT card's key and derives the caller
+     name from the card (team or a published session team). ts skew ±5 min,
+     stateless (no nonce ring — ruling refinement). Fail-closed everywhere. */
+  const ORIGIN_CLAIM_SKEW_MS = 5 * 60_000
+  /** legacyInbound warn metric (M1): envelope-absent deliveries during the
+   *  window — the operator watches the tail drain before closing it. */
+  let legacyInboundCount = 0
+  const originClaimCallerShape = /^[a-z0-9-]+(\/[0-9a-f]{8})?$/i
+  async function verifyOriginClaim(req: IncomingMessage): Promise<{ ok: true; caller: string } | { ok: false; reason: 'absent' | 'bad-caller-shape' | 'bad-ts' | 'no-card' | 'bad-sig' | 'not-derivable' }> {
+    const caller = String(req.headers['x-a2a-caller'] ?? '')
+    const callerUrl = String(req.headers['x-a2a-caller-url'] ?? '')
+    const ts = Number(req.headers['x-a2a-caller-ts'] ?? '')
+    const signature = String(req.headers['x-a2a-caller-sig'] ?? '')
+    if (caller === '' || callerUrl === '' || !Number.isFinite(ts) || ts <= 0 || signature === '') return { ok: false, reason: 'absent' }
+    if (!originClaimCallerShape.test(caller)) return { ok: false, reason: 'bad-caller-shape' }
+    if (Math.abs(Date.now() - ts) > ORIGIN_CLAIM_SKEW_MS) return { ok: false, reason: 'bad-ts' }
+    // Fetch the caller's card PLAIN (anonymous GET): the minimal face
+    // carries the signed core (publicKey/team/signature) — everything
+    // signature verification needs — and an envelope-less request returns
+    // immediately without recursing (self-referential fetch loops were the
+    // v1 draft's deadlock). Session-team derivability prefers a warm FULL
+    // card from the cache (R1: sweeps fetch full-form through our own
+    // envelope).
+    let card: A2aPeerCard | undefined = cardCache.get(callerUrl)?.card
+    if (card === undefined) {
+      try {
+        // callerUrl is the caller's BASE URL — the card lives at the
+        // well-known path under it.
+        const cardUrl = callerUrl.endsWith('/') ? `${callerUrl}.well-known/agent-card.json` : `${callerUrl}/.well-known/agent-card.json`
+        const response = await fetchImpl(cardUrl, { method: 'GET', headers: {} })
+        const text = await response.text()
+        const verdict = verifyCard(JSON.parse(text), Date.now())
+        if (verdict.ok) card = verdict.card
+      } catch (error) {
+        card = undefined
+      }
+    }
+    if (card === undefined) return { ok: false, reason: 'no-card' }
+    try {
+      const publicKey = createPublicKey({ key: Buffer.from(card.publicKey, 'base64'), format: 'der', type: 'spki' })
+      const valid = edVerify(undefined, Buffer.from(JSON.stringify([caller, callerUrl, ts]), 'utf8'), publicKey, Buffer.from(signature, 'base64'))
+      if (!valid) return { ok: false, reason: 'bad-sig' }
+    } catch {
+      return { ok: false, reason: 'bad-sig' }
+    }
+    if (card.team !== caller && !(card.sessionTeams ?? []).some(entry => entry.team === caller)) {
+      return { ok: false, reason: 'not-derivable' }
+    }
+    return { ok: true, caller }
+  }
+
   /* ── Inbound admission shared by the peer faces (/a2a/direct,
      /a2a/log): caller_session is the protocol contract. Anonymous is
      refused, and admission is decided by THIS host's own records — never
@@ -2890,7 +3013,7 @@ ${message}`
     ctx.effect(() => webServer.register({
       kind: 'exact',
       path: '/a2a/direct',
-      handler: (req: IncomingMessage, res: ServerResponse) => {
+      handler: async (req: IncomingMessage, res: ServerResponse) => {
         const chunks: Buffer[] = []
         let size = 0
         // B5 enforcement: 512 KiB hard cap. An oversized body is rejected,
@@ -2921,7 +3044,7 @@ ${message}`
             res.end()
           }
         })
-        req.on('end', () => {
+        req.on('end', async () => {
           if (overflowed) {
             if (!res.writableEnded && !res.headersSent) {
               const payload = JSON.stringify({ error: 'payload too large', code: WIRE_ERROR_PAYLOAD_TOO_LARGE })
@@ -3003,6 +3126,24 @@ ${message}`
             res.end(payload)
             return
           }
+          // gh#9+gh#10 OriginClaim on the delivery face (M1): an envelope
+          // that is present but unverifiable rejects untrusted-origin; an
+          // ABSENT envelope during the window walks on with a counted
+          // legacyInbound warn (the operator watches the tail drain), and
+          // after the window closes it rejects like a failed signature —
+          // N3 proves a NAME's linkability, never key possession.
+          const claim = await verifyOriginClaim(req)
+          if (!claim.ok) {
+            if (claim.reason !== 'absent' || config.originClaimWindow === false) {
+              recordActivity('in', team, caller, false)
+              const payload = JSON.stringify({ error: `untrusted-origin: OriginClaim verification failed (${claim.reason}) — present a signed envelope (X-A2A-Caller/-Url/-Ts/-Sig with your card key) or upgrade your node`, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
+              res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+              return
+            }
+            legacyInboundCount += 1
+          }
+
           // Server-side idempotency (P3/B3): one key, one execution inside
           // the window. Same key + same payload fingerprint ⇒ replay (409,
           // -32003, replay:true — the prior attempt stays authoritative);
@@ -3247,7 +3388,7 @@ ${message}`
     ctx.effect(() => webServer.register({
       kind: 'exact',
       path: '/a2a/log',
-      handler: (req: IncomingMessage, res: ServerResponse) => {
+      handler: async (req: IncomingMessage, res: ServerResponse) => {
         const send = (status: number, body: Record<string, JsonValue>): void => {
           const payload = JSON.stringify(body)
           res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
@@ -3276,6 +3417,17 @@ ${message}`
           recordActivity('in', 'log', caller === '' ? 'anonymous' : caller, false)
           send(200, { ok: false, error: refusal, code: -32000 })
           return
+        }
+        // gh#9+gh#10: the log face reuses the exact OriginClaim
+        // verification (§8.3) — same window semantics as delivery.
+        const logClaim = await verifyOriginClaim(req)
+        if (!logClaim.ok) {
+          if (logClaim.reason !== 'absent' || config.originClaimWindow === false) {
+            recordActivity('in', 'log', caller, false)
+            send(200, { ok: false, error: `untrusted-origin: OriginClaim verification failed (${logClaim.reason}) — present a signed envelope or upgrade your node`, code: -32000 })
+            return
+          }
+          legacyInboundCount += 1
         }
         recordActivity('in', 'log', caller, true)
         if (id.includes('/') || id.includes('\\') || id.includes('..')) {
