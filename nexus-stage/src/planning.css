@@ -12,27 +12,36 @@
 #dsh-plan *,#dsh-plan *::before,#dsh-plan *::after{box-sizing:border-box}
 
 #dsh-plan{
-  /* primitive */
-  --uupm-ink-0:#dde3f0; --uupm-ink-1:#7a86a0; --uupm-bg-0:#060a12; --uupm-bg-1:#0d1322; --uupm-bg-2:#131b2e;
-  --uupm-accent:#8B5CF6; --uupm-live:#4ade80; --uupm-cold:#64748b; --uupm-edge-member:#22d3ee;
-  --uupm-warn:#f59e0b; --uupm-error:#ef4444;
+  /* primitive — bound to the workbench tokens (--n-*, workbench.css) so the
+     board follows the same dark/light theme as the rail; the literal after
+     each comma is the stage's own dark value, kept so the board still
+     renders on a host that ships without workbench.css (token sovereignty). */
+  --uupm-ink-0:var(--n-ink,#dde3f0); --uupm-ink-1:var(--n-ink-muted,#7a86a0);
+  --uupm-bg-0:var(--n-bg,#060a12); --uupm-bg-1:var(--n-panel,#0d1322); --uupm-bg-2:var(--n-raised,#131b2e);
+  --uupm-accent:var(--n-accent,#9673f7); --uupm-live:var(--n-live,#4ade80); --uupm-cold:var(--n-cold,#7a86a0);
+  --uupm-edge-member:var(--n-canvas,#22d3ee);
+  --uupm-warn:var(--n-act,#f59e0b); --uupm-error:var(--n-danger,#f87171); --uupm-indigo:var(--n-federal,#6366f1);
   /* accent washes (hover 8% / active 12-18% / tint 5-10%), one definition each */
-  --uupm-wash-5:rgba(139,92,246,.05); --uupm-wash-8:rgba(139,92,246,.08);
-  --uupm-wash-12:rgba(139,92,246,.12); --uupm-wash-15:rgba(139,92,246,.15);
-  --uupm-wash-18:rgba(139,92,246,.18); --uupm-indigo:#6366f1;
+  --uupm-wash-5:color-mix(in srgb,var(--uupm-accent) 5%,transparent);
+  --uupm-wash-8:color-mix(in srgb,var(--uupm-accent) 8%,transparent);
+  --uupm-wash-12:color-mix(in srgb,var(--uupm-accent) 12%,transparent);
+  --uupm-wash-15:color-mix(in srgb,var(--uupm-accent) 15%,transparent);
+  --uupm-wash-18:color-mix(in srgb,var(--uupm-accent) 18%,transparent);
   /* semantic */
   --surface:var(--uupm-bg-1); --ink:var(--uupm-ink-0); --ink-muted:var(--uupm-ink-1);
   --accent:var(--uupm-accent); --edge-live:var(--uupm-live); --edge-cold:var(--uupm-cold);
   --federal:var(--uupm-indigo);
   /* component */
-  --card-bg:var(--surface); --card-line:#5c6680; --card-line-hover:#7a86a0; --toolbar-bg:rgba(13,19,34,.92);
-  --grid-dot:rgba(122,134,160,.22); --scrim:rgba(6,10,18,.6);
-  --error-ink:#fecaca; --error-panel:#2a0d10f2; --federal:#6366f1;
+  --card-bg:var(--surface); --card-line:var(--n-card-line,#5c6680); --card-line-hover:var(--uupm-ink-1);
+  --toolbar-bg:color-mix(in srgb,var(--uupm-bg-1) 92%,transparent);
+  --grid-dot:color-mix(in srgb,var(--uupm-ink-1) 22%,transparent);
+  --scrim:color-mix(in srgb,var(--uupm-bg-0) 60%,transparent);
+  --error-ink:var(--n-error-ink,#fecaca); --error-panel:var(--n-error-panel,#2a0d10f2);
 }
 
 #dsh-plan{
   position:absolute; inset:0; overflow:hidden; background:var(--uupm-bg-0); color:var(--ink);
-  font:13px/1.5 "Avenir Next","Segoe UI Variable","Segoe UI",sans-serif; outline:none;
+  font-size:13px; line-height:1.5; outline:none;
 }
 #dsh-plan .mono{font-family:ui-monospace,Cascadia,Consolas,monospace}
 #dsh-plan:focus-visible{outline:2px solid var(--accent); outline-offset:-2px}
@@ -56,11 +65,18 @@
 #dsh-plan .e-member.dashed{stroke-dasharray:3 4}
 
 /* ── team frame ── */
-#dsh-plan .p-frame{position:absolute; border:1px solid var(--frame-line,#8B5CF6); border-radius:10px;
+/* --frame-line is the team hue set inline per frame (frameHue); --frame-ink is
+   what the frame actually paints with — the hue itself on dark, shaded 72%
+   toward black on light, where amber/lime/teal outlines fell to 1.8-2.2:1. */
+#dsh-plan .p-frame{--frame-ink:var(--frame-line,#8B5CF6)}
+@media (prefers-color-scheme: light){
+  #dsh-plan .p-frame{--frame-ink:color-mix(in srgb,var(--frame-line,#8B5CF6) 72%,black)}
+}
+#dsh-plan .p-frame{position:absolute; border:1px solid var(--frame-ink); border-radius:10px;
   background:var(--frame-bg,var(--uupm-wash-5)); min-width:120px; min-height:60px}
 #dsh-plan .p-frame-head{position:absolute; top:-13px; left:50%; transform:translateX(-50%);
   height:24px; padding:0 10px; border-radius:6px; display:flex; gap:8px; align-items:center;
-  background:var(--uupm-bg-2); border:1px solid var(--frame-line,#8B5CF6);
+  background:var(--uupm-bg-2); border:1px solid var(--frame-ink);
   font-size:12px; font-weight:600; letter-spacing:.02em; white-space:nowrap; cursor:grab}
 #dsh-plan .p-frame-head:active{cursor:grabbing}
 #dsh-plan .p-frame-head:hover{border-color:var(--card-line-hover)}
@@ -99,7 +115,7 @@
 #dsh-plan .p-tabs [role=tab]{background:transparent; color:var(--ink-muted); border:1px solid transparent; border-radius:6px;
   padding:4px 12px; font:inherit; cursor:pointer}
 #dsh-plan .p-tabs [role=tab]:hover{color:var(--ink); border-color:var(--card-line)}
-#dsh-plan .p-tabs [role=tab][aria-selected=true]{color:var(--ink); border-color:var(--accent); background:rgba(139,92,246,.12)}
+#dsh-plan .p-tabs [role=tab][aria-selected=true]{color:var(--ink); border-color:var(--accent); background:var(--uupm-wash-12)}
 #dsh-plan .p-tabs [role=tab]:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
 #dsh-plan .p-toolbar button{background:transparent; color:var(--ink); border:1px solid var(--card-line); border-radius:6px;
   padding:4px 10px; font:inherit; cursor:pointer; white-space:nowrap}
@@ -185,7 +201,7 @@
 #dsh-plan .p-dialog-title{font-weight:600; font-size:12.5px; color:var(--ink)}
 #dsh-plan .p-dialog-input{font:inherit; color:var(--ink); background:var(--uupm-bg-0);
   border:1px solid var(--card-line); border-radius:6px; padding:7px 10px}
-#dsh-plan .p-dialog-input:hover{border-color:rgba(122,134,160,.55)}
+#dsh-plan .p-dialog-input:hover{border-color:color-mix(in srgb,var(--uupm-ink-1) 55%,transparent)}
 #dsh-plan .p-dialog-input:focus-visible{outline:2px solid var(--accent); outline-offset:1px; border-color:var(--accent)}
 #dsh-plan .p-dialog-err{min-height:1.2em; font-size:11px; color:var(--uupm-error)}
 #dsh-plan .p-dialog-row{display:flex; gap:8px; justify-content:flex-end}
@@ -201,26 +217,6 @@
   background:var(--toolbar-bg); border:1px solid var(--card-line); border-radius:8px; white-space:nowrap;
   overflow:hidden; text-overflow:ellipsis}
 #dsh-plan .p-notice.error{color:var(--error-ink); border-color:var(--uupm-error); background:var(--error-panel)}
-
-/* ── fault badge (unscoped: lives on #app, outside #dsh-plan's token scope —
-   carries its own component tokens; font follows the design-system mono stack) ── */
-.nexus-fault{position:fixed;top:10px;right:10px;max-width:48ch;padding:6px 10px;
-  border:1px solid #ef4444;background:#2a0d10cc;color:#fecaca;
-  font:12px/1.5 ui-monospace,Cascadia,Consolas,monospace;border-radius:4px;
-  display:none;z-index:9;pointer-events:none}
-
-/* ── mode tabs (unscoped: visible in BOTH stage modes, so it cannot live
-   inside #dsh-plan's token scope — it carries its own component tokens,
-   same precedent as overlay.css's :root block) ── */
-.nexus-modes{position:absolute; top:16px; left:50%; transform:translateX(-50%); z-index:20;
-  display:flex; gap:4px; background:rgba(13,19,34,.92); border:1px solid rgba(122,134,160,.28);
-  border-radius:8px; padding:4px}
-.nexus-modes button{background:transparent; color:#7a86a0; border:1px solid transparent; border-radius:6px;
-  padding:4px 12px; font:inherit; cursor:pointer}
-.nexus-modes button:hover{color:#dde3f0; border-color:rgba(122,134,160,.28)}
-.nexus-modes button:active{background:rgba(139,92,246,.15)}
-.nexus-modes button[aria-selected=true]{color:#dde3f0; border-color:#8b5cf6; background:rgba(139,92,246,.12)}
-.nexus-modes button:focus-visible{outline:2px solid #8b5cf6; outline-offset:1px}
 
 /* Panel-slim migration: the unjoined-sessions join affordance on the toolbar. */
 #dsh-plan .p-netbtn{color:var(--ink-muted)}
@@ -263,7 +259,7 @@
 #dsh-plan .p-frame-handle{position:absolute; pointer-events:auto; width:10px; height:10px; z-index:2; opacity:0;
   transition:opacity 120ms ease}
 #dsh-plan .p-frame:hover .p-frame-handle{opacity:1}
-#dsh-plan .p-frame-handle::after{content:''; position:absolute; inset:2px; background:var(--frame-line);
+#dsh-plan .p-frame-handle::after{content:''; position:absolute; inset:2px; background:var(--frame-ink);
   border-radius:2px}
 #dsh-plan .p-h-n{top:-5px; left:calc(50% - 12px); width:24px; height:8px; cursor:ns-resize}
 #dsh-plan .p-h-s{bottom:-5px; left:calc(50% - 12px); width:24px; height:8px; cursor:ns-resize}
@@ -276,4 +272,4 @@
 #dsh-plan .p-h-ne::after, #dsh-plan .p-h-sw::after{transform:rotate(45deg)}
 #dsh-plan .p-h-nw::after, #dsh-plan .p-h-se::after{transform:rotate(-45deg)}
 #dsh-plan .p-frame.selected .p-frame-handle{opacity:1}
-#dsh-plan .p-frame.selected{outline:1px solid var(--frame-line)}
+#dsh-plan .p-frame.selected{outline:1px solid var(--frame-ink)}

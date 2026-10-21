@@ -12,6 +12,8 @@
   --n-live:#4ade80; --n-cold:#7a86a0; --n-border:#223052; --n-act:#f59e0b;
   --n-danger:#f87171; --n-accent:#9673f7; --n-rail-w:300px;
   --n-canvas:#22d3ee; --n-line:var(--n-border);
+  --n-raised:#131b2e; --n-federal:#6366f1; --n-card-line:#5c6680;
+  --n-error-ink:#fecaca; --n-error-panel:#2a0d10f2;
   --n-role-user:#7dd3fc; --n-role-user-bg:rgba(56,189,248,.16);
   --n-role-assistant:#6ee7b7; --n-role-assistant-bg:rgba(52,211,153,.14);
 }
@@ -20,6 +22,8 @@
          --n-live:#157a37; --n-border:#c6d0e6; --n-act:#a84d08;
          --n-danger:#b91c1c; --n-accent:#6d28d9;
          --n-cold:#636c81; --n-canvas:#0e7490;
+         --n-raised:#ffffff; --n-federal:#4f46e5; --n-card-line:#8a95ae;
+         --n-error-ink:#b91c1c; --n-error-panel:#fef2f2f2;
          --n-role-user:#075985; --n-role-user-bg:rgba(14,116,144,.12);
          --n-role-assistant:#065f46; --n-role-assistant-bg:rgba(5,150,105,.12); }
 }
@@ -213,8 +217,11 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-bar-fill{display:block;height:100%;border-radius:4px;background:var(--n-accent)}
 .wb-bar-v{font-family:ui-monospace,Consolas,monospace;color:var(--n-ink-muted);min-width:28px}
 
+/* The one fault badge (planning.css carried a second, conflicting copy —
+   the cascade mixed the two). Honesty surface: always above the board. */
 .nexus-fault{display:none;position:fixed;top:10px;right:12px;z-index:50;max-width:420px;
-  font-size:12px;color:#fff;background:#b91c1c;border-radius:8px;padding:6px 10px}
+  font:12px/1.5 ui-monospace,Consolas,monospace;color:var(--n-error-ink);background:var(--n-error-panel);
+  border:1px solid var(--n-danger);border-radius:8px;padding:6px 10px;pointer-events:none}
 
 /* ── Responsive tiers ── */
 @media (max-width:1023px){
