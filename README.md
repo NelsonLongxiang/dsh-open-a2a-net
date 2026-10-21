@@ -208,10 +208,35 @@ import { withinRouteBodyCap } from '@nelsonlongxiang/dsh-open-a2a-net/transport-
 import { A2aClient } from '@nelsonlongxiang/dsh-open-a2a-net/a2a-client'
 ```
 
-Implement your own signed card, `GET /.well-known/agent-card.json` (the
-minimal face is served anonymously; name yourself via `X-A2A-Caller` for the
-full card), and `POST /a2a/direct` — the wire shapes these modules encode are
-the contract. See `docs/protocol/` for the envelope details.
+Implement your own signed card, `GET /.well-known/agent-card.json`, and
+`POST /a2a/direct`. The wire shapes these modules encode are the contract.
+Anonymous card fetches get the minimal discovery face. The full card needs a
+verified OriginClaim envelope (`X-A2A-Caller` / `-Url` / `-Ts` / `-Sig`,
+signed with your own card key); see `docs/protocol/delivery-origin-auth.md`
+and the rest of `docs/protocol/` for the envelope details.
+
+**Which artifact to build against.** The subpath exports landed in commit
+`9cb3852`. Identify them by commit, not by version: 0.6.21 builds exist both
+with and without them. The public npm package behind the badge above
+(`latest`: 0.5.15) predates them, and it also predates the admission rules and
+the OriginClaim envelope above. Importing these subpaths from it fails with
+`ERR_PACKAGE_PATH_NOT_EXPORTED`. Stable releases go out through the
+release gate (`docs/release-gate.md`), not to public npm. Until a release
+carrying the subpaths reaches the registry you install from, build the
+package from a pinned commit and depend on the tarball:
+
+```bash
+git clone https://github.com/NelsonLongxiang/dsh-open-a2a-net && cd dsh-open-a2a-net
+git checkout <commit>              # pin one; any commit at or after 9cb3852 exports the subpaths
+pnpm install --frozen-lockfile     # pnpm version from package.json "packageManager"
+pnpm build
+npm pack                           # → nelsonlongxiang-dsh-open-a2a-net-<version>.tgz
+# in your project:
+npm install /path/to/nelsonlongxiang-dsh-open-a2a-net-<version>.tgz
+```
+
+Installing that tarball pulls no `@deepseek-ai/*` package: the DSH peers are
+optional and the four subpaths import only each other and `node:crypto`.
 
 ## License
 

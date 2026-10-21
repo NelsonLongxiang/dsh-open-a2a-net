@@ -10,8 +10,9 @@
  * order, the solid-edge one) and the other team reaches it by its dashed
  * edge instead of stretching its frame over the home frame.
  */
+import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
-import { createPlanningView } from '../src/planning-view.ts'
+import { createPlanningView, viewportBucket, type ViewportBucket } from '../src/planning-view.ts'
 import { NODE_H, NODE_W, planSeatClear, planTeamClusters } from '../src/world.ts'
 
 const VIEW = { w: 1100, h: 860 }
@@ -154,6 +155,75 @@ describe('first-run board', () => {
     expect(seats.size).toBe(ids.length + 1)
     const lone = seats.get('roster-only')!
     for (const id of ids) expect(seats.get(id)!.x).toBeLessThan(lone.x)
+  })
+
+  describe('per-device viewport memory', () => {
+    const saved = { version: 1, viewport: { x: 40, y: 30, scale: 1 }, nodes: {}, frames: {} }
+    function withStore(width: number, slots: Partial<Record<ViewportBucket, unknown>> = {}) {
+      const writes: Array<[ViewportBucket, { x: number; y: number; scale: number }]> = []
+      const store = { get: (b: ViewportBucket) => slots[b], set: (b: ViewportBucket, vp: { x: number; y: number; scale: number }) => { writes.push([b, { ...vp }]) } }
+      const prev = globalThis.innerWidth
+      Object.defineProperty(globalThis, 'innerWidth', { value: width, configurable: true })
+      const onDirty = vi.fn()
+      const v = createPlanningView({ onDirty, onLampClick: vi.fn(), onCanvasAction: () => Promise.resolve(true), viewSize: () => VIEW, viewportStore: store })
+      document.body.appendChild(v.root)
+      const restore = () => { Object.defineProperty(globalThis, 'innerWidth', { value: prev, configurable: true }) }
+      return { v, writes, restore }
+    }
+    const transform = (root: HTMLElement) => root.querySelector<HTMLElement>('.p-world')!.style.transform
+
+    it('buckets by window width', () => {
+      expect(viewportBucket(375)).toBe('narrow')
+      expect(viewportBucket(800)).toBe('medium')
+      expect(viewportBucket(1440)).toBe('wide')
+    })
+
+    it('a phone with no memory frames the content instead of the desktop viewport', () => {
+      const { v, restore } = withStore(375)
+      v.adoptExternalLayout(saved)
+      v.reconcile({ sessions, teams, peerCount: 0 })
+      expect(transform(v.root)).not.toBe('translate(-40px, -30px) scale(1)')
+      expect(transformOf(v.root).s).toBeLessThanOrEqual(1)
+      restore()
+    })
+
+    it("a device's own memory wins over the host viewport", () => {
+      const { v, restore } = withStore(375, { narrow: { x: 5, y: 6, scale: 0.5 } })
+      v.adoptExternalLayout(saved)
+      v.reconcile({ sessions, teams, peerCount: 0 })
+      expect(transform(v.root)).toBe('translate(-2.5px, -3px) scale(0.5)')
+      restore()
+    })
+
+    it('a wide screen with no memory keeps the host viewport (legacy layouts)', () => {
+      const { v, restore } = withStore(1440)
+      v.adoptExternalLayout(saved)
+      v.reconcile({ sessions, teams, peerCount: 0 })
+      expect(transform(v.root)).toBe('translate(-40px, -30px) scale(1)')
+      restore()
+    })
+
+    it("another device's save does not yank this view; edits write this bucket", () => {
+      const { v, writes, restore } = withStore(1440)
+      v.adoptExternalLayout(saved)
+      v.reconcile({ sessions, teams, peerCount: 0 })
+      v.adoptExternalLayout({ ...saved, viewport: { x: 900, y: 900, scale: 2 } })
+      expect(transform(v.root)).toBe('translate(-40px, -30px) scale(1)')
+      v.seam.key({ key: '+', shiftKey: false, target: v.root, preventDefault: () => {} })
+      expect(writes.at(-1)?.[0]).toBe('wide')
+      expect(writes.at(-1)?.[1].scale).toBeCloseTo(1.2)
+      restore()
+    })
+  })
+
+  it("peer cards leave room for their 'peer' tag", () => {
+    // jsdom's import.meta.url is not file:, so resolve from the run directory (package or repo root).
+    const css = readFileSync(['src/planning.css', 'nexus-stage/src/planning.css'].find(f => existsSync(f))!, 'utf8')
+    const rule = /#dsh-plan \.p-node\.remote\{([^}]*)\}/.exec(css)?.[1] ?? ''
+    const pad = Number(/padding-right:(\d+)px/.exec(rule)?.[1] ?? 0)
+    expect(pad).toBeGreaterThanOrEqual(44) // 'peer' at 10px mono + tag padding/border + 8px inset
+    // and a long address ends in an ellipsis rather than a hard mid-digit cut
+    expect(/#dsh-plan \.p-node \.nm-text\{[^}]*text-overflow:ellipsis/.test(css)).toBe(true)
   })
 })
 

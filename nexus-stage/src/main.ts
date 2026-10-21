@@ -43,7 +43,28 @@ const { fault, clear: clearFault } = createFaultReporter(
 // 0.6.13: board node picks forward to the workbench chat drawer. The bench
 // is created later (it embeds the board), so the dep is a late-bound slot.
 let openNodeChat: ((id: string) => void) | undefined
+// Per-device viewport memory: browser-local, one slot per screen bucket.
+// Storage can be absent or throw (private windows, blocked site data) —
+// every access is guarded and the board falls back to the host/fit path.
+const VIEWPORT_KEY = 'dsh-a2a.viewport.'
+const viewportStore = {
+  get(bucket: string): unknown {
+    try {
+      const raw = window.localStorage.getItem(VIEWPORT_KEY + bucket)
+      return raw === null ? undefined : JSON.parse(raw)
+    } catch {
+      return undefined
+    }
+  },
+  set(bucket: string, vp: { x: number; y: number; scale: number }): void {
+    try {
+      window.localStorage.setItem(VIEWPORT_KEY + bucket, JSON.stringify({ x: vp.x, y: vp.y, scale: vp.scale }))
+    } catch { /* presentation memory only */ }
+  },
+}
+
 const planning = createPlanningView({
+  viewportStore,
   onDirty: () => saveLoop.markDirty(),
   onLampClick: () => saveLoop.retry(),
   onNodePick: (id) => { openNodeChat?.(id) },

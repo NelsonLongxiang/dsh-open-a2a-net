@@ -69,6 +69,13 @@ export interface PlanningInput {
   remoteTeams?: ReadonlyArray<RemoteTeamRow>
 }
 
+/** Screen-width class a viewport is remembered under (window width, not board width — collapsing the rail must not switch buckets). */
+export type ViewportBucket = 'narrow' | 'medium' | 'wide'
+
+export function viewportBucket(width: number): ViewportBucket {
+  return width < 680 ? 'narrow' : width < 1024 ? 'medium' : 'wide'
+}
+
 export interface PlanningDeps {
   /** An edit that should persist happened (drag/nudge/pan/zoom/marquee end). */
   onDirty(): void
@@ -77,6 +84,16 @@ export interface PlanningDeps {
   /** Viewport size in CSS px (defaults to the root element's box; tests
    *  inject fixed sizes so fit math is assertable without layout). */
   viewSize?(): { w: number; h: number }
+  /**
+   * Per-device viewport memory. The saved layout's viewport is the LAST
+   * saver's screen, so a desktop pan landed on a phone (and any other
+   * device's save yanked this one's view). When present, the first adopted
+   * layout takes this screen bucket's own viewport — else, on a wide screen,
+   * the host's (where it was most likely saved), else a fit — later
+   * adoptions leave the viewport alone, and every persisted edit writes the
+   * bucket back. Optional: without it the host viewport wins as before.
+   */
+  viewportStore?: { get(bucket: ViewportBucket): unknown; set(bucket: ViewportBucket, vp: LayoutViewport): void }
   /**
    * A team write action (optimistic state already applied by the view).
    * Resolves true when the host accepted it — or it was an idempotent
@@ -151,8 +168,14 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   let gesture: Gesture = { kind: 'none' }
   let spaceDown = false
   let renderedRevision = -1
-  /** Until the first reconcile with nodes (or any saved layout), frame the content once. */
+  /** Until the first reconcile with nodes (or an adopted viewport), frame the content once. */
   let firstFitPending = true
+  let viewportAdopted = false
+  const bucket = (): ViewportBucket => viewportBucket(globalThis.innerWidth || viewW)
+  const markDirty = (): void => {
+    deps.viewportStore?.set(bucket(), vp)
+    deps.onDirty()
+  }
   const clock = deps.now ?? Date.now
   const ac = new AbortController()
   const noticeTimers: Array<ReturnType<typeof setTimeout>> = []
@@ -561,7 +584,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   function flyToFederation(): void {
     vp = fitView(flyBounds(model.contentBounds(), lastPlacements), root.clientWidth || viewW, root.clientHeight || viewH)
     applyViewport()
-    deps.onDirty()
+    markDirty()
   }
 
   // ── status counts ──
@@ -1416,7 +1439,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       rightPress = null
       if (wasPan) {
         suppressNextMenu = true
-        deps.onDirty() // the viewport persists with the layout
+        markDirty() // the viewport persists with the layout
       } else if (pressTarget !== null) {
         contextMenuAt(x, y, pressTarget) // clean right-click: context menu
       }
@@ -1439,17 +1462,17 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         }
       } else {
         dropDispatch(gesture, ev)
-        deps.onDirty()
+        markDirty()
       }
       for (const el of frameEls.values()) el.classList.remove('drop-target')
       gesture.el?.classList.remove('dragging')
       render()
     } else if (gesture.kind === 'frame') {
-      if (gesture.moved) deps.onDirty()
+      if (gesture.moved) markDirty()
     } else if (gesture.kind === 'frame-resize') {
-      if (gesture.moved) deps.onDirty() // the resized rect persists with the layout
+      if (gesture.moved) markDirty() // the resized rect persists with the layout
     } else if (gesture.kind === 'pan') {
-      if (gesture.moved) deps.onDirty() // the viewport persists with the layout
+      if (gesture.moved) markDirty() // the viewport persists with the layout
     } else if (gesture.kind === 'marquee') {
       const p = gesture.last
       const a = screenToWorld(vp, Math.min(gesture.origin.x, p.x), Math.min(gesture.origin.y, p.y))
@@ -1479,21 +1502,21 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
     ev.preventDefault()
     applyViewport()
-    deps.onDirty()
+    markDirty()
   }
 
   function zoomCenter(factor: number): void {
     syncViewSize()
     vp = zoomAt(vp, factor, viewW / 2, viewH / 2)
     applyViewport()
-    deps.onDirty()
+    markDirty()
   }
 
   function fitToContent(): void {
     syncViewSize()
     vp = fitView(model.contentBounds(), viewW, viewH)
     applyViewport()
-    deps.onDirty()
+    markDirty()
   }
 
   function key(ev: SeamKey): void {
@@ -1553,7 +1576,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       if (ids.length > 0) {
         model.nudge(ids, d[0]!, d[1]!)
         render()
-        deps.onDirty()
+        markDirty()
       }
     }
   }
@@ -1785,7 +1808,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // opened empty. Fit once, the first time there is something to frame.
     // Not marked dirty — nothing the user arranged changed; a saved layout
     // (adopted at any point) keeps its own viewport and cancels this.
-    if (firstFitPending && layoutDoc === undefined && gesture.kind === 'none' && model.nodeIds().length > 0) {
+    if (firstFitPending && gesture.kind === 'none' && model.nodeIds().length > 0) {
       syncViewSize()
       if (viewW > 0 && viewH > 0) {
         firstFitPending = false
@@ -1814,9 +1837,20 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     const doc = clampDoc(layout)
     if (doc === undefined) return
     layoutDoc = doc
-    firstFitPending = false
-    if (gesture.kind === 'none') {
-      vp = clampViewport({ ...doc.viewport })
+    const store = deps.viewportStore
+    if (store === undefined) {
+      firstFitPending = false
+      if (gesture.kind === 'none') vp = clampViewport({ ...doc.viewport })
+    } else if (!viewportAdopted && gesture.kind === 'none') {
+      viewportAdopted = true
+      const local = store.get(bucket()) as Partial<LayoutViewport> | null | undefined
+      if (local != null && Number.isFinite(local.x) && Number.isFinite(local.y) && Number.isFinite(local.scale)) {
+        vp = clampViewport({ x: local.x!, y: local.y!, scale: local.scale! })
+        firstFitPending = false
+      } else if (bucket() === 'wide') {
+        vp = clampViewport({ ...doc.viewport })
+        firstFitPending = false
+      } // narrow/medium with no memory of its own: keep firstFitPending, frame on reconcile
     }
     renderedRevision = -1 // force a repaint of frames/edges on next render
     render()
