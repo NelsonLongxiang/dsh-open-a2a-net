@@ -17,7 +17,9 @@ describe('directDeliveryExposure', () => {
     const { nonLoopbackPeers, warning } = directDeliveryExposure(['http://192.168.3.157:13080'], '')
     expect(nonLoopbackPeers).toEqual(['http://192.168.3.157:13080'])
     expect(warning).toContain('apiKey')
-    expect(warning).toContain('unauthenticated direct deliveries')
+    // gh#7 V2: the warning names both faces the key would gate.
+    expect(warning).toContain('/a2a/direct and /a2a/log')
+    expect(warning).toContain('X-API-Key')
   })
 
   it('a non-loopback peer with a configured key is deliberate, not an exposure', () => {

@@ -88,7 +88,7 @@
 
 - **阶段一（本 PR 范围）**：展示等价 + 明示。未组队节点在列表标记"无网络能力"；`teamScopeRouting` 文档化为 teamed-only 网络的开关。不动默认。
 - **阶段二（独立 PR，需决策）**：`teamScopeRouting` 默认翻 ON（teamed-only 出站）。配套旧节点能力旗标（backlog 已有 P2 卡片"旧节点能力旗标"）——无 roster 面的旧版本节点在目录中标记降级。
-- **阶段三（独立 PR，依赖硬化）**：入站校验——`/a2a/direct` 拒投与本机任何队伍无交集的 caller。前置：caller 身份可信化（docs/protocol/delivery-origin-auth.md 今天仍是 best-effort；无身份硬化的入站队伍校验只能挡自报 label，如实告知）。
+- **阶段三（已落地，gh#7 N3 2026-10-21）**：入站校验——`/a2a/direct` 与 `/a2a/log` 的准入由**本宿记录**裁决（本 zone 裸队=宿面；同 zone 句柄查 roster；外 zone 句柄仅认本宿 operator 手工添加的 canvas 远端成员 ref；自由形态仅认本宿已 join 会话的事实）。caller 的自述（label 拼法、自己卡上的队声明、首触默认）一律不再是准入依据——身份可信化的**传输层**强化（证明发送方是其声称的主机）仍属 docs/protocol/delivery-origin-auth.md 的未落地范围。
 
 ### 3.5 管理手势总表（贯通画布与列表）
 

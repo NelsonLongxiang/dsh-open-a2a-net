@@ -10,10 +10,18 @@
 > the LAN Gitea server, not the reporting machine) hand-POSTed
 > `wait:false` deliveries — no credentials — to a
 > loopback bind and across hosts to `192.168.3.157:13080`; both answered
-> `routed/delivered/consumed:true`. Until the envelope lands, the honest
-> mitigations are: set `apiKey` (header-authenticates control **and** direct
-> routes), or bind to loopback only. Nodes seeded with non-loopback peers and
-> an empty key now log a boot warning (`directDeliveryExposure`).
+> `routed/delivered/consumed:true`.
+>
+> **Update (2026-10-21, gh#7).** Two layers landed since:
+> - **V2**: `apiKey` now gates `/a2a/direct` and `/a2a/log` exactly like the
+>   control routes — "set apiKey" is a real mitigation at last, not an
+>   aspirational parenthetical.
+> - **N3**: inbound admission is decided by the receiver's own records
+>   (roster, canvas remote refs) — the caller's self-description (label
+>   spelling, its own card's team claims, first-contact defaults) no longer
+>   admits anyone. This document's remaining scope is TRANSPORT origin
+>   authentication (proving the sender IS the host its claim names) —
+>   still proposed, unchanged below.
 
 ## 1. Motivation
 

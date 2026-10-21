@@ -2027,7 +2027,7 @@ describe('a2a control-route authorization', () => {
     socket: { remoteAddress: remote },
   })
 
-  it('trusts a user-initiated navigational request (sec-fetch-site: none)', async () => {
+  it('gh#7 N1/V1: sec-fetch-site alone is not authentication — non-loopback is refused, loopback passes', async () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
@@ -2042,13 +2042,24 @@ describe('a2a control-route authorization', () => {
     apply(ctx, makeConfig({ sessionNodes: true }))
     const stateRoute = routes.find(route => route.path === '/__dsh_a2a/state')
     if (stateRoute === undefined) throw new Error('state route missing')
-    const res = {
-      status: 0,
-      writeHead(code: number) { this.status = code; return this },
-      end() { return this },
+    const probe = (headers: Record<string, string>, remote: string): { status: number } => {
+      const res = {
+        status: 0,
+        writeHead(code: number) { this.status = code; return this },
+        end() { return this },
+      }
+      stateRoute.handler({ method: 'GET', headers, socket: { remoteAddress: remote } }, res)
+      return res
     }
-    stateRoute.handler({ method: 'GET', headers: { 'sec-fetch-site': 'none' }, socket: { remoteAddress: '10.0.0.9' } }, res)
-    expect(res.status).toBe(200)
+    // The OLD trust (any reachable host with Sec-Fetch-Site: none) is gone:
+    // headers are attacker-written bytes, not authentication.
+    expect(probe({ 'sec-fetch-site': 'none' }, '10.0.0.9').status).toBe(403)
+    expect(probe({ 'sec-fetch-site': 'same-origin' }, '10.0.0.9').status).toBe(403)
+    // Loopback keeps the no-key trust — the local GUI and operator CLIs.
+    expect(probe({ 'sec-fetch-site': 'none' }, '127.0.0.1').status).toBe(200)
+    expect(probe({}, '127.0.0.1').status).toBe(200)
+    // A cross-site page stays rejected even from loopback.
+    expect(probe({ 'sec-fetch-site': 'cross-site' }, '127.0.0.1').status).toBe(403)
     await ctx.fiber.dispose()
   })
 
@@ -2084,13 +2095,17 @@ describe('a2a control-route authorization', () => {
     await ctx.fiber.dispose()
   })
 
-  it('rejects a cross-site caller without a key and accepts same-origin', async () => {
+  it('gh#7 N1: cross-site is rejected everywhere; same-origin counts only from loopback', async () => {
     const { ctx, state } = await mountControlRoutes()
     const denied = state(request({ 'sec-fetch-site': 'cross-site' }))
     expect(denied.state.status).toBe(403)
     expect(denied.state.body).toContain('untrusted origin')
-    const allowed = state(request({ 'sec-fetch-site': 'same-origin' }))
-    expect(allowed.state.status).toBe(200)
+    // Same-origin from a NON-loopback socket is no longer key-free trust.
+    const offHost = state(request({ 'sec-fetch-site': 'same-origin' }))
+    expect(offHost.state.status).toBe(403)
+    // From loopback it passes as before.
+    const local = state(request({ 'sec-fetch-site': 'same-origin' }, '127.0.0.1'))
+    expect(local.state.status).toBe(200)
     await ctx.fiber.dispose()
   })
 

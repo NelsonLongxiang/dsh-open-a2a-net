@@ -21,6 +21,10 @@ export default defineConfig({
       // Path filters resolve against the process cwd, so runs from inside a
       // worktree never match this pattern and keep seeing their own tests.
       '**/.claude/**',
+      // Scratch space (supervisor/review repro drops, probe logs). The
+      // review repro spec is intentionally NOT part of the gate: it pins
+      // the pre-fix violation shape and expects the fixed tree to diverge.
+      '**/tmp/**',
       ...configDefaults.exclude,
     ],
   },

@@ -472,32 +472,32 @@ describe('S3 phase-3 enforcement (default-on + inbound shared-team admission)', 
     const home = mkdtempSync(join(tmpdir(), 'a2a-s3-p3-allow-'))
     const { ctx, port } = await mount({ teamScopeRouting: true, dshHome: home })
     await joinNet(port)
-    declareTeams(home, 'session-abcdef12-0000-0000-0000-000000000000', ['dsh/fleet-ops'])
-    // Target the process team (routable set) with a caller that declares a
-    // team in the routable set — the process team itself is always in the
-    // set, and the caller declaring ANY routable team passes the gate.
-    // 0.5.60: a caller whose label names the node's own live agent is the
-    // self-route shape — the permission gate passes (no admission text)
-    // and the dispatch layer answers the honest self-route refusal instead
-    // of the old echo-home delivery.
+    // gh#7 N3: admission reads THIS host's roster. The caller handle
+    // dsh/agent-1 is a local joined node's pseudo-handle (id8 passes short
+    // ids through) — declare the process team (always routable) for it so
+    // the same-zone roster branch admits, then the dispatch layer answers
+    // the honest self-route refusal.
+    declareTeams(home, 'agent-1', ['dsh'])
     const allowed = await direct(port, 'dsh', 'dsh/agent-1')
     expect(allowed.error ?? '').not.toContain('declares no team membership')
     expect(allowed.error ?? '').not.toContain('none is routable on this node')
+    expect(allowed.error ?? '').not.toContain('no operator-established link')
     expect(allowed.error ?? '').toContain('Self-route refused')
     await ctx.fiber.dispose()
   })
 
-  it('a remote caller with no cached card rides the fail-open window once, then is judged after the sweep learns', async () => {
+  it('gh#7 N3/V5: a remote caller is refused on first contact and after the sweep — its own card never admits it', async () => {
     const { generateKeyPairSync } = await import('node:crypto')
     const { signCard } = await import('../../src/card.ts')
     const { privateKey } = generateKeyPairSync('ed25519')
-    // The remote node's card declares its session into a team this node
-    // does not recognize — after the learning sweep, deliveries from it
-    // must be refused.
+    // The remote node's card declares its session into the TARGET's own
+    // team — the self-serve-admission shape (V5b). Under N3 the card is the
+    // caller's claim about itself: no basis. Only an operator-added canvas
+    // remote member ref admits a foreign-zone handle.
     const remoteCard = {
       ...signCard({ name: 'remote', session: 'sess-r', team: 'remote-zone', capabilities: { route: true, async: true, roster: true }, expiresAt: Date.now() + 60_000 }, privateKey),
       sessionTeams: [{ team: 'remote-zone/1234abcd', name: 'remote-session', description: 'd' }],
-      teamMemberships: [{ node: 'remote-zone/1234abcd', team: 'remote-only-team' }],
+      teamMemberships: [{ node: 'remote-zone/1234abcd', team: 'dsh' }],
     }
     const realFetch = globalThis.fetch
     vi.stubGlobal('fetch', (url: string, init?: { method?: string }) => {
@@ -509,20 +509,18 @@ describe('S3 phase-3 enforcement (default-on + inbound shared-team admission)', 
     const home = mkdtempSync(join(tmpdir(), 'a2a-s3-p3-remote-'))
     const { ctx, port } = await mount({ teamScopeRouting: true, dshHome: home, peers: ['http://peer-remote'] })
     await joinNet(port)
-    // First delivery from the un-cached remote caller: the fail-open
-    // window lets it through (no admission error — the dispatch-layer
-    // text proves the gate did not refuse).
+    // First contact: no operator link exists — refused immediately. The
+    // old fail-open window (learn-and-admit-once) is gone with N3.
     const first = await direct(port, callerTeam, 'remote-zone/1234abcd')
-    expect(first.error ?? '').not.toContain('shared-team admission')
-    expect(first.error ?? '').not.toContain('declares no team membership')
-    // Let the background sweep land, then the second delivery is judged:
-    // the learned declaration (remote-only-team) shares nothing here.
+    expect(first.error ?? '').toContain('no operator-established link')
+    // The sweep still learns the card (the directory row appears)…
     await vi.waitFor(async () => {
       const state = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { remote: Array<{ team: string }> }
       expect(state.remote.find(row => row.team === 'remote-zone/1234abcd')).toBeDefined()
     }, { timeout: 5_000 })
+    // …but the learned card's team claims still do not admit the caller.
     const second = await direct(port, callerTeam, 'remote-zone/1234abcd')
-    expect(second.error ?? '').toContain('none is routable on this node')
+    expect(second.error ?? '').toContain('no operator-established link')
     await ctx.fiber.dispose()
     vi.unstubAllGlobals()
   })

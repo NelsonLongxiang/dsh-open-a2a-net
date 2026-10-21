@@ -470,7 +470,7 @@ export function directDeliveryExposure(
   })
   const warning =
     nonLoopbackPeers.length > 0 && apiKey === ''
-      ? 'a2a: unauthenticated direct deliveries are accepted from any host that can reach this node (non-loopback peers configured, apiKey empty) — any local process or reachable peer can steer every joined session; set apiKey to require the X-API-Key header, or see docs/protocol/delivery-origin-auth.md for the enforcement plan'
+      ? 'a2a: apiKey empty with non-loopback peers — the open posture is deliberate: /a2a/direct and /a2a/log admit by caller identity (N3 records), not by key, and any reachable peer can attempt delivery; set apiKey to require X-API-Key on BOTH the control routes and the peer faces (gh#7 V2 closed the delivery-face gap)'
       : undefined
   return { nonLoopbackPeers, warning }
 }
@@ -536,21 +536,23 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
-   * Same-origin / loopback trust for the control routes when no API key is
-   * configured (the sidebar's browser fetches carry no secret): a
-   * same-origin or user-initiated navigational request passes, an Origin
-   * matching the Host passes, and any loopback caller passes. A cross-site
-   * page is rejected even when it reaches a loopback bind (the web-app
-   * restart-control trust rule).
+   * No-key trust for the control routes (gh#7 N1, V1): ONLY a loopback
+   * socket — header-only trust (Sec-Fetch-Site, Origin) admitted any
+   * reachable process that forged two headers. Deployments that must
+   * drive control routes from off-host set apiKey; the local GUI and
+   * operator CLIs ride loopback as before. A cross-site page is still
+   * rejected even on loopback binds (the web-app restart-control rule).
    * @param req - the inbound control request.
    * @returns whether the caller is trusted without a key.
    */
   function controlTrustedWithoutKey(req: IncomingMessage): boolean {
+    // gh#7 N1 (V1): header-only trust is NOT authentication — Sec-Fetch-Site
+    // and Origin are attacker-written bytes. Without a key, only a loopback
+    // socket is trusted (the local GUI and operator CLIs); a cross-site
+    // page is still rejected even on loopback binds. Off-host control
+    // callers must present apiKey.
     const site = req.headers['sec-fetch-site']
-    if (site === 'same-origin' || site === 'none') return true
-    const origin = req.headers.origin
-    const host = req.headers.host
-    if (typeof origin === 'string' && typeof host === 'string' && origin === `http://${host}`) return true
+    if (typeof site === 'string' && site !== 'same-origin' && site !== 'none') return false
     const remote = req.socket.remoteAddress
     return remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
   }
@@ -2731,62 +2733,70 @@ ${message}`
 
   /* ── Inbound admission shared by the peer faces (/a2a/direct,
      /a2a/log): caller_session is the protocol contract. Anonymous is
-     refused, and a zone/id8 caller must declare a team shared with this
-     node. Returns the refusal detail, or undefined when admissible.
-     Functionally identical to the checks that used to live inline in the
-     direct handler — extracted so the read-only log face admits callers
-     by exactly the same rule as message delivery. */
+     refused, and admission is decided by THIS host's own records — never
+     by the caller's self-description (gh#7 N3, V3/V5): not its
+     caller_session spelling, not its own card's team claims, not
+     first-contact defaults. Returns the refusal detail, or undefined
+     when admissible. */
   function a2aCallerRefusal(caller: string): string | undefined {
     if (!config.teamScopeRouting) return undefined
     if (caller === '') {
       return 'caller_session is required — anonymous deliveries are refused (S3 phase-3b). Pass caller_session as <zone>/<id8>.'
     }
-    if (!/^[a-z0-9-]+\/[0-9a-f]{8}$/i.test(caller)) return undefined
-    const callerZone = caller.slice(0, caller.indexOf('/'))
-    let declared: Set<string> | undefined
-    if (callerZone === config.team) {
-      declared = new Set<string>()
-      for (const entry of teamMemberships.list()) {
-        if (`${config.team}/${id8(entry.session)}` === caller) for (const t of entry.teams) declared.add(t)
-      }
-    } else {
-      // The caller's zone is a name, not necessarily a hostname — scan the
-      // card cache for the card that actually publishes this caller handle
-      // instead of guessing url↔zone.
-      for (const entry of cardCache.values()) {
-        const cached = entry?.card
-        if (cached === undefined) continue
-        if ((cached.teamMemberships ?? []).some(m => m.node === caller)) {
-          declared = new Set<string>(cached.teamMemberships!.filter(m => m.node === caller).map(m => m.team))
-          break
+    // Host face: the node's own bare zone team is a host fact, always
+    // admissible to itself.
+    if (caller === config.team) return undefined
+    const zoneShaped = /^[a-z0-9-]+\/[0-9a-f]{8}$/i.test(caller)
+    if (zoneShaped) {
+      const callerZone = caller.slice(0, caller.indexOf('/'))
+      if (callerZone === config.team) {
+        // Same-zone handle: judged by this host's own roster — the
+        // operator-established link record for local nodes.
+        const declared = new Set<string>()
+        for (const entry of teamMemberships.list()) {
+          if (`${config.team}/${id8(entry.session)}` === caller) for (const t of entry.teams) declared.add(t)
         }
+        const routable = new Set<string>([config.team])
+        for (const id of joinedSessions.list()) routable.add(`${config.team}/${id8(id)}`)
+        for (const name of canvasStore.list()) routable.add(canvasTeamOf(name))
+        const otherLocalDeclarations = new Set<string>()
+        for (const entry of teamMemberships.list()) {
+          if (`${config.team}/${id8(entry.session)}` === caller) continue
+          for (const t of entry.teams) otherLocalDeclarations.add(t)
+        }
+        const shared = [...declared].some(t => routable.has(t) || otherLocalDeclarations.has(t))
+        if (!shared) {
+          return declared.size === 0
+            ? `caller "${caller}" declares no team membership on this host's roster — a teamless node has no network (S3 phase-3 admission). Declare a shared team on both ends, or route through a teamed member.`
+            : `caller "${caller}" declares teams [${[...declared].join(', ')}] — none is routable on this node (shared-team admission). Declare a shared team on both ends, or route through a teamed member.`
+        }
+        return undefined
       }
-      if (declared === undefined) {
-        // Learn in the background: a directory sweep fills the card cache,
-        // so every later call from this caller is judged.
-        void listDirectoryTeams(false).catch(() => {})
+      // Foreign-zone handle (N3/N4): admitted ONLY through this host's
+      // operator-established cross-host links — a canvas remote member ref
+      // the operator added by hand. The card cache used to be a basis; a
+      // card is the CALLER'S own claim about itself (V5: any host could
+      // declare the target's team on its own card and self-serve
+      // admission), so it no longer decides anything here. First-contact
+      // learn-and-admit dies with it.
+      for (const name of canvasStore.list()) {
+        if (canvasStore.remoteMembersOf(name).includes(caller)) return undefined
       }
+      return `caller "${caller}" has no operator-established link on this node — cross-host admission requires a canvas remote membership this host's operator added (N3/N4: the caller's own card claims are self-description, not links). Ask this host's operator to add the member in the A2A workbench, or route through a linked member.`
     }
-    if (declared !== undefined) {
-      // Shared-team semantics: the caller's declaration must meet THIS
-      // node's own network somewhere. Counting the caller's bare
-      // declaration itself would be self-admission.
-      const routable = new Set<string>([config.team])
-      for (const id of joinedSessions.list()) routable.add(`${config.team}/${id8(id)}`)
-      for (const name of canvasStore.list()) routable.add(canvasTeamOf(name))
-      const otherLocalDeclarations = new Set<string>()
-      for (const entry of teamMemberships.list()) {
-        if (`${config.team}/${id8(entry.session)}` === caller) continue
-        for (const t of entry.teams) otherLocalDeclarations.add(t)
-      }
-      const shared = [...declared].some(t => routable.has(t) || otherLocalDeclarations.has(t))
-      if (!shared) {
-        return declared.size === 0
-          ? `caller "${caller}" declares no team membership — a teamless node has no network (S3 phase-3 admission). Declare a shared team on both ends, or route through a teamed member.`
-          : `caller "${caller}" declares teams [${[...declared].join(', ')}] — none is routable on this node (shared-team admission). Declare a shared team on both ends, or route through a teamed member.`
-      }
+    // Free-form label (not zone/id8): only THIS host's own node facts — a
+    // joined session id, its zone-qualified pseudo-handle (id8 passes
+    // short ids through, so dsh/agent-1 is a local shape), or a live
+    // node's label. Anything else is an unverifiable self-description
+    // (V3: 'anyone-at-all' used to pass).
+    if (joinedSessions.list().includes(caller)) return undefined
+    for (const id of joinedSessions.list()) {
+      if (`${config.team}/${id8(id)}` === caller) return undefined
     }
-    return undefined
+    for (const agent of sessionNodes.values()) {
+      if (String(agent.id) === caller) return undefined
+    }
+    return `caller_session "${caller}" matches no node fact on this host (joined session id or live node label) — free-form caller labels are self-description and are not admissible (N3). Pass caller_session as <zone>/<id8> with an operator-established link.`
   }
 
   /* ── Session-log read faces (shared by the local control route and the
@@ -2903,6 +2913,20 @@ ${message}`
             res.writeHead(400, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
             return
+          }
+          // V2 (gh#7, S1): the delivery face honors the apiKey gate exactly
+          // like the control face — a configured key without this header
+          // used to let anyone reachable steer sessions while the control
+          // routes demanded the key, making it decorative for delivery.
+          // Empty-key deployments keep the documented open posture.
+          if (config.apiKey !== '') {
+            const presented = String(req.headers['x-api-key'] ?? '')
+            if (!secretEqual(presented, config.apiKey)) {
+              const payload = JSON.stringify({ error: 'unauthorized: X-API-Key required on the delivery face (apiKey is configured)', code: -32000 })
+              res.writeHead(401, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+              return
+            }
           }
           const team = typeof body.team === 'string' ? body.team : ''
           const message = typeof body.message === 'string' ? body.message : ''
@@ -3199,6 +3223,15 @@ ${message}`
         if (req.method !== 'GET') {
           send(405, { ok: false, error: 'GET is the only method on this face' })
           return
+        }
+        // V2 (gh#7, S1): the read-only log face rides the same apiKey gate
+        // as delivery — a configured key must be presented here too.
+        if (config.apiKey !== '') {
+          const presented = String(req.headers['x-api-key'] ?? '')
+          if (!secretEqual(presented, config.apiKey)) {
+            send(401, { ok: false, error: 'unauthorized: X-API-Key required (apiKey is configured)', code: -32000 })
+            return
+          }
         }
         const url = new URL(req.url ?? '/', 'http://x')
         const caller = url.searchParams.get('caller_session') ?? ''
@@ -3909,6 +3942,16 @@ ${message}`
         recordTeamAudit('join', team, id, false, reason)
         return { ok: false, error: reason }
       }
+      // V4 (gh#7, N2): a model tool changes membership for the CALLING
+      // session only — agent-1 declaring agent-2 into a team was an agent
+      // creating a link for another node, published to the whole fleet via
+      // the card. The host face (agent-less, operator surface) may still
+      // act for any joined node.
+      if (exec?.agent !== undefined && String(exec.agent.id) !== id) {
+        const reason = `[NOT_SELF] a model tool may only declare membership for its own session node (${String(exec.agent.id)}) — membership for other nodes is your operator's gesture (the workbench or the host face); N2: agents use links, they do not create them for others`
+        recordTeamAudit('join', team, id, false, reason)
+        return { ok: false, error: reason }
+      }
       // Unified teaming (0.6.6): canvas teams are the human-composed surface.
       // A session may not self-join one through the roster tool — membership
       // there is assigned by hand, so the refusal names the surface where the
@@ -3971,6 +4014,13 @@ ${message}`
       }
       if (joinedNodeOrNone(id) === undefined) {
         const reason = `[NOT_JOINED] session ${id} is not a joined node on this host — check current state with a2a_whoami`
+        recordTeamAudit('leave', team, id, false, reason)
+        return { ok: false, error: reason }
+      }
+      // V4 (gh#7, N2): same self-only rule as join — narrowing another
+      // node's surface is still a link change by a third party.
+      if (exec?.agent !== undefined && String(exec.agent.id) !== id) {
+        const reason = `[NOT_SELF] a model tool may only retract membership for its own session node (${String(exec.agent.id)}); N2 — use links, do not reshape another node's`
         recordTeamAudit('leave', team, id, false, reason)
         return { ok: false, error: reason }
       }
