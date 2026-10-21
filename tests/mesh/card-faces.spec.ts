@@ -97,25 +97,32 @@ describe('G1 card faces: minimal for anonymous, full for named', () => {
     expect(badTs.sessionTeams).toBeUndefined()
   })
 
-  it('REVIEW M2: a zone/id8 caller derives by zone prefix — not structurally refused', async () => {
-    // The envelope names g1-zone/01234567 (a session-shaped caller) signed
-    // with the same card key: the zone prefix matches card.team on the
-    // minimal card, so the full face serves. Pre-fix this shape was
-    // rejected not-derivable from every cold cache.
+  it('REVIEW M2 third-round: zone/id8 envelopes are bad-caller-shape — the impersonation vector stays closed', async () => {
+    // Narrowed ruling: the envelope names a BARE ZONE only. A session-
+    // shaped claim — even validly signed by a same-zone host's own key
+    // (the reviewer's impersonation chain: sign the TARGET's session
+    // handle, prefix-match in) — rejects at the shape gate. Session-level
+    // identity rides the body's caller_session, judged by N3/S3 against
+    // the published roster.
     const ts = Date.now()
-    const { sign: edSign } = await import('node:crypto')
-    const { createPrivateKey } = await import('node:crypto')
+    const { sign: edSign, createPrivateKey } = await import('node:crypto')
     const key = createPrivateKey(readFileSync(join(home, 'a2a', 'node-key.pem'), 'utf8'))
     const callerUrl = `http://127.0.0.1:${String(port)}`
     const claim = 'g1-zone/01234567'
     const sig = edSign(undefined, Buffer.from(JSON.stringify([claim, callerUrl, ts]), 'utf8'), key).toString('base64')
-    const card = await getCard(port, { 'X-A2A-Caller': claim, 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Caller-Ts': String(ts), 'X-A2A-Caller-Sig': sig })
-    expect(Array.isArray(card.sessionTeams)).toBe(true)
-    // A foreign zone prefix still fails closed.
+    const sessionShaped = await getCard(port, { 'X-A2A-Caller': claim, 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Caller-Ts': String(ts), 'X-A2A-Caller-Sig': sig })
+    expect(sessionShaped.sessionTeams).toBeUndefined()
+    // Foreign zone fails closed identically.
     const ts2 = Date.now()
     const sig2 = edSign(undefined, Buffer.from(JSON.stringify(['evil-zone/01234567', callerUrl, ts2]), 'utf8'), key).toString('base64')
     const foreign = await getCard(port, { 'X-A2A-Caller': 'evil-zone/01234567', 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Caller-Ts': String(ts2), 'X-A2A-Caller-Sig': sig2 })
     expect(foreign.sessionTeams).toBeUndefined()
+    // A bare-zone envelope with a MISMATCHED zone also stays closed even
+    // with a valid signature over it.
+    const ts3 = Date.now()
+    const sig3 = edSign(undefined, Buffer.from(JSON.stringify(['evil-zone', callerUrl, ts3]), 'utf8'), key).toString('base64')
+    const mismatched = await getCard(port, { 'X-A2A-Caller': 'evil-zone', 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Caller-Ts': String(ts3), 'X-A2A-Caller-Sig': sig3 })
+    expect(mismatched.sessionTeams).toBeUndefined()
   })
 
   it('the signed core is identical across faces (same key, same signature mechanism)', async () => {

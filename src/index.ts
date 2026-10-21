@@ -2887,7 +2887,7 @@ ${message}`
   /** legacyInbound warn metric (M1): envelope-absent deliveries during the
    *  window — the operator watches the tail drain before closing it. */
   let legacyInboundCount = 0
-  const originClaimCallerShape = /^[a-z0-9-]+(\/[0-9a-f]{8})?$/i
+  const originClaimCallerShape = /^[a-z0-9-]+$/i
   async function verifyOriginClaim(req: IncomingMessage): Promise<{ ok: true; caller: string } | { ok: false; reason: 'absent' | 'bad-caller-shape' | 'bad-ts' | 'no-card' | 'bad-sig' | 'not-derivable' }> {
     const caller = String(req.headers['x-a2a-caller'] ?? '')
     const callerUrl = String(req.headers['x-a2a-caller-url'] ?? '')
@@ -2896,14 +2896,13 @@ ${message}`
     if (caller === '' || callerUrl === '' || !Number.isFinite(ts) || ts <= 0 || signature === '') return { ok: false, reason: 'absent' }
     if (!originClaimCallerShape.test(caller)) return { ok: false, reason: 'bad-caller-shape' }
     if (Math.abs(Date.now() - ts) > ORIGIN_CLAIM_SKEW_MS) return { ok: false, reason: 'bad-ts' }
-    // Fetch the caller's card WITH OUR OWN ENVELOPE (REVIEW M2): the full
-    // face then carries sessionTeams, so a zone/id8 caller derives — a
-    // cold-cache bare fetch returned the minimal card, where zone/id8 was
-    // structurally not-derivable. Recursion is bounded: the target's own
-    // verification of OUR envelope fetches OUR card with a PLAIN request
-    // (no envelope), which our card face serves minimal immediately —
-    // depth two, terminates. A warm full-form cache entry short-circuits
-    // even that (R1).
+    // Fetch the caller's card PLAIN (REVIEW M2 third-round ruling: the
+    // envelope names a BARE ZONE, and derivation is the exact match
+    // card.team === caller below — both ride the minimal card's signed
+    // core, so a single envelope-less fetch suffices). An envelope-less
+    // request returns immediately without recursing (the enveloped variant
+    // re-opened mutual recursion); a warm full-form cache entry (R1)
+    // short-circuits the fetch entirely.
     let card: A2aPeerCard | undefined = cardCache.get(callerUrl)?.card
     if (card === undefined) {
       try {
@@ -2926,16 +2925,17 @@ ${message}`
     } catch {
       return { ok: false, reason: 'bad-sig' }
     }
-    // Derivation (REVIEW M2, closed without a second fetch): bare zone
-    // derives from card.team directly; zone/id8 derives by ZONE-PREFIX
-    // match against card.team — the id8 names a session ON the caller's
-    // own host, the zone is the signed-core fact, and the envelope
-    // signature binds the claim to the card key. (The pre-fix shape
-    // required the full card's sessionTeams, structurally rejecting every
-    // zone/id8 caller from a cold cache; re-fetching enveloped re-opens
-    // the mutual-recursion the plain fetch closed, so derivation stays on
-    // the minimal card's signed core.)
-    if (card.team !== caller && !(card.team === caller.slice(0, caller.indexOf('/')))) {
+    // Derivation (REVIEW M2, third-round ruling — shape narrowed to bare
+    // zone): card.team === caller EXACT match. A zone/id8 envelope is
+    // rejected as bad-caller-shape at the gate — session-level identity
+    // rides the body's caller_session, judged by N3/S3 against the PUBLISHED
+    // roster. (The prefix-derivation variant admitted an impersonation
+    // chain: a same-zone foreign host signs the target's session handle
+    // with its own key — prefix matches, signature verifies, full card
+    // serves, and N3 then judges the body by the impersonated roster.
+    // Fleet senders stamp bare zone only; the narrowed shape kills the
+    // false rejections AND the impersonation vector with zero recursion.)
+    if (card.team !== caller) {
       return { ok: false, reason: 'not-derivable' }
     }
     return { ok: true, caller }

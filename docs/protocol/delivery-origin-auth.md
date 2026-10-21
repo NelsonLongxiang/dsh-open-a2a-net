@@ -42,7 +42,13 @@ primitives.
 ```ts
 /** Rides every cross-host delivery payload and the full-card request. */
 interface OriginClaim {
-  readonly caller: string       // zone or zone/id8 — the caller's identity
+  readonly caller: string       // BARE ZONE only (third-round ruling: a
+                                // zone/id8 envelope is bad-caller-shape —
+                                // session-level identity rides the body's
+                                // caller_session, judged by N3/S3 against
+                                // the published roster; a same-zone foreign
+                                // host must not be able to sign a session
+                                // handle and prefix-match its way in)
   readonly callerUrl: string    // the caller's own card base URL
   readonly ts: number           // epoch ms at send time
 }
@@ -73,8 +79,8 @@ interface OriginClaim {
    signature) — otherwise a legitimately named caller fails closed on a
    form mismatch that proves nothing.
 2. Verified card ⇒ the envelope signature MUST verify against THAT card's
-   `publicKey`, and `claim.caller` must be derivable from the card
-   (`card.team`, or a session team the card publishes). Mismatch or
+   `publicKey`, and `claim.caller` must equal `card.team` EXACTLY (bare
+   zone; the third-round ruling narrowed the shape — see §2). Mismatch or
    unverifiable ⇒ **fail closed** — minimal card on the card face (G1 v1
    posture), `untrusted-origin` rejection on the delivery face.
 3. `ts` within **±5 min** of the receiver clock (stateless window — the
