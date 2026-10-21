@@ -208,13 +208,17 @@ describe('a2a_team_join / a2a_team_leave tools', () => {
     await ctx.fiber.dispose()
   })
 
-  it('wildcard boundaries stop segment smuggling and join attempts land in the audit face', async () => {
-    const { ctx, port, join } = await mounted({ teamJoinAllowlist: ['dsh*'] })
-    // `dsh*` must not smuggle `dshield` — the wildcard consumes at most one
-    // '/'-delimited segment.
+  it('gh#11 N7: wildcard boundaries stop smuggling AND stop minting; exact entries are the only join basis', async () => {
+    const { ctx, port, join } = await mounted({ teamJoinAllowlist: ['dsh*', 'dsh/agent-team'] })
+    // `dsh*` must not smuggle `dshield` (segment boundary) — and under
+    // gh#11 it does not authorize ANY new name either: patterns carry no
+    // mint rights. Only the exact entry joins.
     const smuggle = await join?.execute({ team: 'dshield', id: 'agent-1' }, {}) as { ok: boolean; error?: string }
     expect(smuggle?.ok).toBe(false)
     expect(smuggle?.error).toContain('teamJoinAllowlist')
+    const patternOnly = await join?.execute({ team: 'dsh/minted-by-model', id: 'agent-1' }, {}) as { ok: boolean; error?: string }
+    expect(patternOnly?.ok).toBe(false)
+    expect(patternOnly?.error).toContain('[PATTERN_NO_MINT]')
     const subtree = await join?.execute({ team: 'dsh/agent-team', id: 'agent-1' }, {}) as { ok: boolean }
     expect(subtree?.ok).toBe(true)
     const state = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as {
@@ -227,7 +231,7 @@ describe('a2a_team_join / a2a_team_leave tools', () => {
   })
 
   it('refuses joins for unknown nodes, duplicate noise is idempotent, and leave retracts', async () => {
-    const { ctx, join, leave } = await mounted({ teamJoinAllowlist: ['*'] })
+    const { ctx, join, leave } = await mounted({ teamJoinAllowlist: ['dsh/anything'] })
     const unknown = await join?.execute({ team: 'dsh/anything', id: 'session-ghost-0000-0000-0000-000000000000' }, {}) as { ok: boolean; error?: string }
     expect(unknown?.ok).toBe(false)
     expect(unknown?.error).toContain('not a joined node')
@@ -260,7 +264,7 @@ describe('S3 team-scoped routing admission', () => {
   })
 
   it('a member caller passes admission (fails later on resolution) and host-side callers stay exempt', async () => {
-    const { ctx, join, route } = await mountHost({ teamScopeRouting: true, teamJoinAllowlist: ['*'] })
+    const { ctx, join, route } = await mountHost({ teamScopeRouting: true, teamJoinAllowlist: ['dsh/nowhere-0000'] })
     const exec = { agent: { id: SessionId('agent-1') } }
     const declared = await join?.execute({ team: 'dsh/nowhere-0000', id: 'agent-1' }, {}) as { ok: boolean }
     expect(declared?.ok).toBe(true)

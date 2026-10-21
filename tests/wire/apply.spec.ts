@@ -1175,24 +1175,43 @@ describe('a2a plugin decentralized routing (peers)', () => {
     }
   })
 
-  it('a2a_route skips a reachable peer that publishes another team', async () => {
+  it('gh#8 N9: a referral-discovered peer is no resolution basis by default; seeded peers are', async () => {
     const nodeB = await mountPeerNode()
     const nodeA = await mountPeerNode({ team: 'team-a', peers: [nodeB.baseUrl] })
+    // Only A is seeded; B arrives through A's referral (the squatter shape).
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(TimerService)
     apply(ctx, makeConfig({ peers: [nodeA.baseUrl], dshHome: tmpHome() }))
     try {
-      // Discover B first; the route then walks A (wrong team) before B.
       await ctx.tools.get('a2a_teams')?.execute({}, runContext())
-      const result = await ctx.tools.get('a2a_route')?.execute({ team: 'dsh', message: 'hello' }, runContext())
-      expect(result).toMatchObject({ ok: true, team: 'dsh', reply: 'peer node replied' })
-      expect(nodeB.steer).toHaveBeenCalledTimes(1)
-    } finally {
+      const refused = await ctx.tools.get('a2a_route')?.execute({ team: 'dsh', message: 'hello' }, runContext()) as { ok: boolean; error?: string }
+      expect(refused.ok).toBe(false)
+      expect(refused.error).toContain('not published by any configured peer')
+      expect(nodeB.steer).toHaveBeenCalledTimes(0)
       await ctx.fiber.dispose()
+    } finally {
       await nodeA.dispose()
       await nodeB.dispose()
+    }
+    // The operator-linked basis: both seeded. The route walks A (wrong
+    // team) before B — the original ordering intent, on the legal basis.
+    const nodeB2 = await mountPeerNode()
+    const nodeA2 = await mountPeerNode({ team: 'team-a', peers: [nodeB2.baseUrl] })
+    const ctx2 = new Context()
+    await ctx2.plugin(SystemPrompt)
+    await ctx2.plugin(ToolRuntime)
+    await ctx2.plugin(TimerService)
+    apply(ctx2, makeConfig({ peers: [nodeA2.baseUrl, nodeB2.baseUrl], dshHome: tmpHome() }))
+    try {
+      const result = await ctx2.tools.get('a2a_route')?.execute({ team: 'dsh', message: 'hello' }, runContext())
+      expect(result).toMatchObject({ ok: true, team: 'dsh', reply: 'peer node replied' })
+      expect(nodeB2.steer).toHaveBeenCalledTimes(1)
+      await ctx2.fiber.dispose()
+    } finally {
+      await nodeA2.dispose()
+      await nodeB2.dispose()
     }
   })
 })
@@ -2193,6 +2212,8 @@ describe('a2a plugin module surface', () => {
       teamScopeInfo: true,
       peerAllowlist: [],
       referralLearning: true,
+      // gh#8 (N9): team resolution rides the seeded/delegate basis only.
+      referralTeamResolution: false,
       stateColdRowsTtlMs: 5_000,
       cardCacheTtlMs: 60_000,
       cardCacheNegativeTtlMs: 30_000,

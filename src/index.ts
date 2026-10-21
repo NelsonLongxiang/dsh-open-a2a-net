@@ -178,6 +178,14 @@ export interface Config {
    */
   readonly delegates: DelegateConfig[]
   /**
+   * gh#8 (N9) escape hatch: when true, team-name resolution also considers
+   * the referral-learned peer tail (the legacy whole-store basis) instead
+   * of the seeded/delegate subset only. Default false — a team name binds
+   * to hosts the operator linked; fleets relying on referral discovery for
+   * routing migrate by adding explicit seeds, then leave this off.
+   */
+  readonly referralTeamResolution: boolean
+  /**
    * Harness home slice for the node keypair and peer store; `''` (the
    * default) uses the process DSH home. The Ed25519 key lives at
    * `<home>/a2a/node-key.pem` and is generated on first announce; a
@@ -404,6 +412,14 @@ export const Config: s<Config> = s.object({
    * set for the lifetime of the config that named them.
    */
   referralLearning: s.boolean().default(true),
+
+  /**
+   * gh#8 (N9): team-name resolution rides the operator-established peer
+   * basis (config seeds + delegates) only; the referral-learned tail's
+   * self-published card claims do not bind team names. Set true to restore
+   * the legacy whole-store basis (fleet migration window).
+   */
+  referralTeamResolution: s.boolean().default(false),
 
   /**
    * v0.5.23 (async-stall): delay before a delivered-but-unconsumed async
@@ -3781,12 +3797,20 @@ ${message}`
   // publishes it), so the default allowlist denies everything: a refused
   // join says why and names the curation surface instead of failing
   // silently. Leaving is always allowed — it only shrinks exposure.
-  // S4 audit: every join/leave attempt — allowed or refused — lands in a
-  // bounded ring the state route serves (the ring itself is declared with
+  // S4 audit: every join/leave attempt — allowed or refused — lands in
+  // a bounded ring the state route serves (the ring itself is declared with
   // the stores: the boot-settlement prune records before this section
   // initializes). Refusals are the audit-worthy half (each one is widening
   // pressure on the allowlist); log lines rotate away, this face is queryable.
-  const teamJoinAllowed = (team: string): boolean =>
+  // gh#11 (N7, operator directive: team creation is a human act): only an
+  // EXACT allowlist entry authorizes a join — each exact name is a
+  // deliberate operator act of creation. Wildcard/prefix patterns match
+  // nothing at join time: a pattern pre-authorizing every future name
+  // under it would let a model mint teams nobody created. Pattern entries
+  // remain readable (whoami shows them) but carry no mint rights.
+  const teamJoinExactAllowed = (team: string): boolean =>
+    (config.teamJoinAllowlist ?? []).includes(team)
+  const teamJoinPatternMatches = (team: string): boolean =>
     (config.teamJoinAllowlist ?? []).some(pattern => {
       if (pattern === '*') return true
       if (pattern.endsWith('*')) {
@@ -3980,8 +4004,10 @@ ${message}`
         recordTeamAudit('join', team, id, false, reason)
         return { ok: false, error: reason }
       }
-      if (!teamJoinAllowed(team)) {
-        const reason = `[ALLOWLIST_DENY] team "${team}" is not in this host's teamJoinAllowlist — the owner curates joinable teams (exact names or trailing-* patterns; human-composed groups live in the workbench's canvas teams); ask them to add the pattern. The live list is visible in a2a_whoami`
+      if (!teamJoinExactAllowed(team)) {
+        const reason = teamJoinPatternMatches(team)
+          ? `[PATTERN_NO_MINT] team "${team}" matches only a wildcard/pattern entry of this host's teamJoinAllowlist — patterns carry no mint rights (gh#11/N7: team creation is a human act); ask the owner to add the EXACT team name, which is the act of creating it`
+          : `[ALLOWLIST_DENY] team "${team}" is not in this host's teamJoinAllowlist — the owner curates joinable teams with exact names (patterns match nothing at join time; human-composed groups live in the workbench's canvas teams); ask them to add the exact name. The live list is visible in a2a_whoami`
         recordTeamAudit('join', team, id, false, reason)
         return { ok: false, error: reason }
       }
@@ -4229,7 +4255,7 @@ ${message}`
         const remoteBefore = teams.filter(row => row.local !== true).length
         teams = teams.filter(row => row.local === true || joined.has(row.team) || (row.teams ?? []).some(name => joined.has(name)))
         const hidden = remoteBefore - teams.filter(row => row.local !== true).length
-        note = `teamScopeInfo on: ${String(joined.size)} joined team${joined.size === 1 ? '' : 's'} on this host — ${String(hidden)} remote row${hidden === 1 ? '' : 's'} outside the joined scope withheld ([this host] rows always show). To widen the scope: declare membership with a2a_team_join (subject to the owner's teamJoinAllowlist), or ask the owner to set teamScopeInfo: false for the open plane`
+        note = `teamScopeInfo on: ${String(joined.size)} joined team${joined.size === 1 ? '' : 's'} on this host — ${String(hidden)} remote row${hidden === 1 ? '' : 's'} outside the joined scope withheld ([this host] rows always show). To widen the scope: the owner adds the EXACT team name to teamJoinAllowlist (patterns carry no mint rights, gh#11) and a session declares membership with a2a_team_join, or the owner sets teamScopeInfo: false for the open plane`
       }
       if (query === '') return { ok: true, query: '', teams, ...(note !== undefined ? { note } : {}) }
       const matches = (team: DirectoryTeamRow): boolean =>
@@ -4962,7 +4988,15 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   }
 
   async function directoryPeerCandidates(fetch: (url: string) => Promise<A2aPeerCard | undefined>, team: string, failures: string[]): Promise<string[]> {
-    const peers = peerStore.list()
+    // gh#8 (N9): a team name resolves only to hosts an operator linked —
+    // the seeded subset of the peer store (config seeds, eviction-immune)
+    // plus the delegate records (config-time operator acts). The
+    // referral-learned tail stays in the store for probing and visibility,
+    // but its self-published card claims no longer bind team names
+    // (gh#8: a squatter two gossip hops away captured routes by naming
+    // itself after the target). referralTeamResolution restores the legacy
+    // whole-store basis for fleets mid-migration.
+    const peers = config.referralTeamResolution === true ? peerStore.list() : [...new Set([...peerStore.listSeeded(), ...config.delegates.map(delegate => delegate.url)])]
     const candidates: string[] = []
     const cards = await mapBounded(peers, CANDIDATE_CONCURRENCY, async peer => ({ peer, card: await fetch(peer) }))
     for (const entry of cards) {

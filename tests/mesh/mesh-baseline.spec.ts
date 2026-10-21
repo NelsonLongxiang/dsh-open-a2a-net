@@ -63,22 +63,44 @@ describe('mesh baseline — real cross-machine closed loops', () => {
     }
   })
 
-  it('gossip: a third node is learned through a middle peer and routable', async () => {
+  it('gh#8 N9: a third node is learned through a middle peer — visible via gossip, but routable only when seeded (or via the migration flag)', async () => {
     const cargo = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo' })
     const relay = await bootNode({ name: 'relay', session: 'mesh-relay', team: 'relay', peers: [cargo.baseUrl] })
     const alpha = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', peers: [relay.baseUrl] })
     try {
       // The search pass chases one referral hop: relay's card offers cargo.
+      // VISIBILITY still rides the whole tracked set (gh#8 scoped the fix
+      // to resolution, not listing).
       const found = await alpha.ctx.tools.get('a2a_teams')?.execute({ query: 'cargo' }, runContext()) as { ok: boolean; teams: { team: string; via?: string }[] }
       expect(found.ok).toBe(true)
       expect(found.teams.some(row => row.team === 'cargo' && row.via === cargo.baseUrl)).toBe(true)
 
-      const result = await alpha.ctx.tools.get('a2a_route')?.execute({ team: 'cargo', message: 'via gossip' }, runContext()) as { ok: boolean; reply?: string }
-      expect(result.ok).toBe(true)
-      expect(result.reply).toContain('ok from cargo:')
-      expect(cargo.steered).toHaveLength(1)
-    } finally {
+      // RESOLUTION under the default (N9): cargo is referral-learned, not
+      // operator-linked — a self-naming host two hops away must not capture
+      // routes. The route fails closed with the honest resolution error.
+      const refused = await alpha.ctx.tools.get('a2a_route')?.execute({ team: 'cargo', message: 'via gossip' }, runContext()) as { ok: boolean; error?: string }
+      expect(refused.ok).toBe(false)
+      expect(refused.error).toContain('not published by any configured peer')
+      expect(cargo.steered).toHaveLength(0)
       await alpha.dispose()
+
+      // The migration flag restores the legacy whole-store basis (the
+      // sweep first learns cargo through relay's referral, as originally).
+      const alphaLegacy = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', peers: [relay.baseUrl], referralTeamResolution: true })
+      await alphaLegacy.ctx.tools.get('a2a_teams')?.execute({ query: 'cargo' }, runContext())
+      const legacy = await alphaLegacy.ctx.tools.get('a2a_route')?.execute({ team: 'cargo', message: 'via gossip' }, runContext()) as { ok: boolean; reply?: string }
+      expect(legacy.ok).toBe(true)
+      expect(legacy.reply).toContain('ok from cargo:')
+      expect(cargo.steered).toHaveLength(1)
+      await alphaLegacy.dispose()
+
+      // And the operator-linked basis: seed cargo directly.
+      const alphaSeeded = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', peers: [relay.baseUrl, cargo.baseUrl] })
+      const seeded = await alphaSeeded.ctx.tools.get('a2a_route')?.execute({ team: 'cargo', message: 'seeded basis' }, runContext()) as { ok: boolean; reply?: string }
+      expect(seeded.ok).toBe(true)
+      expect(seeded.reply).toContain('ok from cargo:')
+      await alphaSeeded.dispose()
+    } finally {
       await relay.dispose()
       await cargo.dispose()
     }

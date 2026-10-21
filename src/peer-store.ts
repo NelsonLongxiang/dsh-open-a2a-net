@@ -80,6 +80,16 @@ export class PeerStore {
       .map(peer => peer.url)
   }
 
+  /**
+   * The operator-established subset (gh#8 N9): URLs that came from the
+   * config seed set — never the referral-learned tail. Team-name resolution
+   * rides this basis so a self-naming host nobody linked cannot capture
+   * routes; probing and visibility keep the full list.
+   */
+  listSeeded(): readonly string[] {
+    return [...this.peers.values()].filter(peer => peer.seed).map(peer => peer.url)
+  }
+
   /** Whether the store has room for one more peer. */
   private hasRoom(): boolean {
     return this.peers.size < this.cap
