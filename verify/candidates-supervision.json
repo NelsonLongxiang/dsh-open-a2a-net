@@ -1,0 +1,292 @@
+{
+  "candidates": [
+    {
+      "source_clause": "S1 docs/validator.md 声称的每个 PASS run 报告必须存在（tmp/ygl-verify/verify/reports/）且 overall 必须为 PASS。",
+      "anchor": {
+        "quote": "S1 docs/validator.md 声称的每个 PASS run 报告必须存在（tmp/ygl-verify/verify/reports/）且 overall 必须为 PASS。",
+        "locator": "material-s-layer.md §判据 S1"
+      },
+      "title": "validator 周期记录全对账",
+      "severity": "S2",
+      "checker": {
+        "type": "sql",
+        "expect": "none",
+        "authored": "mechanical",
+        "predicate": {
+          "from": "validator_reports",
+          "select": [
+            "name",
+            "ok",
+            "detail"
+          ],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "ok",
+                "op": "=",
+                "value": 0
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "source_clause": "S2 战役提交（f124eee、c65416d、8b8efeb）必须是 master 血统的祖先；package.json 版本必须为 0.6.x；工作树必须为净（无 tracked 改动）。",
+      "anchor": {
+        "quote": "S2 战役提交（f124eee、c65416d、8b8efeb）必须是 master 血统的祖先；package.json 版本必须为 0.6.x；工作树必须为净（无 tracked 改动）。",
+        "locator": "material-s-layer.md §判据 S2"
+      },
+      "title": "仓库事实（血统/版本线/工作树净）",
+      "severity": "S2",
+      "checker": {
+        "type": "sql",
+        "expect": "none",
+        "authored": "mechanical",
+        "predicate": {
+          "from": "repo_facts",
+          "select": [
+            "name",
+            "ok",
+            "detail"
+          ],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "ok",
+                "op": "=",
+                "value": 0
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "source_clause": "S3 ygl-trees doctor 必须 0 fail；监督域树（v2-roadmap、time-capsule）node validate 必须无 issues。",
+      "anchor": {
+        "quote": "S3 ygl-trees doctor 必须 0 fail；监督域树（v2-roadmap、time-capsule）node validate 必须无 issues。",
+        "locator": "material-s-layer.md §判据 S3"
+      },
+      "title": "ygl-trees 健康（doctor 0 fail + 监督域树净）",
+      "severity": "S2",
+      "checker": {
+        "type": "sql",
+        "expect": "none",
+        "authored": "mechanical",
+        "predicate": {
+          "from": "ygl_health",
+          "select": [
+            "name",
+            "ok",
+            "detail"
+          ],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "ok",
+                "op": "=",
+                "value": 0
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "source_clause": "S4 docs/validator.md 逐周期声明的 head 必须在 git 历史可追；spec_c8b6350c5034 必须在案。",
+      "anchor": {
+        "quote": "S4 docs/validator.md 逐周期声明的 head 必须在 git 历史可追；spec_c8b6350c5034 必须在案。",
+        "locator": "material-s-layer.md §判据 S4"
+      },
+      "title": "文档周期声明与 git 史对账",
+      "severity": "S3",
+      "checker": {
+        "type": "sql",
+        "expect": "none",
+        "authored": "mechanical",
+        "predicate": {
+          "from": "docs_crosscheck",
+          "select": [
+            "name",
+            "ok",
+            "detail"
+          ],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "ok",
+                "op": "=",
+                "value": 0
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "source_clause": "S5 上一轮监督运行记录的静态事实（战役提交血统）本轮必须仍成立（递归持久性，血统断言）。",
+      "anchor": {
+        "quote": "S5 上一轮监督运行记录的静态事实（战役提交血统）本轮必须仍成立（递归持久性，血统断言）。",
+        "locator": "material-s-layer.md §判据 S5"
+      },
+      "title": "监督记录递归持久性",
+      "severity": "S3",
+      "checker": {
+        "type": "sql",
+        "expect": "none",
+        "authored": "mechanical",
+        "predicate": {
+          "from": "recursion",
+          "select": [
+            "name",
+            "ok",
+            "detail"
+          ],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "ok",
+                "op": "=",
+                "value": 0
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "source_clause": "S6 GitHub 公开仓与 gitee 镜像的开放 issue/PR 计数必须为 0（公共面零开放项）。",
+      "anchor": {
+        "quote": "S6 GitHub 公开仓与 gitee 镜像的开放 issue/PR 计数必须为 0（公共面零开放项）。",
+        "locator": "material-s-layer.md §判据 S6"
+      },
+      "title": "公共面零开放项",
+      "severity": "S2",
+      "checker": {
+        "type": "sql",
+        "expect": "none",
+        "authored": "mechanical",
+        "predicate": {
+          "from": "public_triage",
+          "select": [
+            "name",
+            "ok",
+            "detail"
+          ],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "ok",
+                "op": "=",
+                "value": 0
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "source_clause": "S7 pnpm overrides 双镜像（package.json#pnpm 与 pnpm-workspace.yaml）值必须一致；packageManager 必须钉 pnpm@11.28.5；engines.pnpm 必须含 >=11.24 范围。",
+      "anchor": {
+        "quote": "S7 pnpm overrides 双镜像（package.json#pnpm 与 pnpm-workspace.yaml）值必须一致；packageManager 必须钉 pnpm@11.28.5；engines.pnpm 必须含 >=11.24 范围。",
+        "locator": "material-s-layer.md §判据 S7"
+      },
+      "title": "依赖双镜像一致 + 钉版在位",
+      "severity": "S1",
+      "checker": {
+        "type": "sql",
+        "expect": "none",
+        "authored": "mechanical",
+        "predicate": {
+          "from": "deps_mirror",
+          "select": [
+            "name",
+            "ok",
+            "detail"
+          ],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "ok",
+                "op": "=",
+                "value": 0
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "source_clause": "S8 src/index.ts 必须保留三修复锚（visibleTeams.add(config.team) 无条件 / visibleTeams.add('log') / joinedTeamScope 含 canvasTeamOf）；M2 反形状（if (joined.size > 0) visibleTeams.add(config.team)）必须不存在。",
+      "anchor": {
+        "quote": "S8 src/index.ts 必须保留三修复锚（visibleTeams.add(config.team) 无条件 / visibleTeams.add('log') / joinedTeamScope 含 canvasTeamOf）；M2 反形状（if (joined.size > 0) visibleTeams.add(config.team)）必须不存在。",
+        "locator": "material-s-layer.md §判据 S8"
+      },
+      "title": "scope 修复锚在位防回归",
+      "severity": "S1",
+      "checker": {
+        "type": "sql",
+        "expect": "none",
+        "authored": "mechanical",
+        "predicate": {
+          "from": "scope_anchors",
+          "select": [
+            "name",
+            "ok",
+            "detail"
+          ],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "ok",
+                "op": "=",
+                "value": 0
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "source_clause": "S9 docs/testing-layers.md 的五层目录名、package.json 的五个分层脚本、磁盘 tests/{unit,wire,mesh,gates,live} 三方必须一致。",
+      "anchor": {
+        "quote": "S9 docs/testing-layers.md 的五层目录名、package.json 的五个分层脚本、磁盘 tests/{unit,wire,mesh,gates,live} 三方必须一致。",
+        "locator": "material-s-layer.md §判据 S9"
+      },
+      "title": "分层文档契约三方一致",
+      "severity": "S3",
+      "checker": {
+        "type": "sql",
+        "expect": "none",
+        "authored": "mechanical",
+        "predicate": {
+          "from": "layer_contract",
+          "select": [
+            "name",
+            "ok",
+            "detail"
+          ],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "ok",
+                "op": "=",
+                "value": 0
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}
