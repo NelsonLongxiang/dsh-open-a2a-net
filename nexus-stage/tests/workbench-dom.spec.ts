@@ -318,13 +318,34 @@ describe('workbench panels', () => {
     expect(v.root.querySelector('.wb-chat')!.classList.contains('is-open')).toBe(false)
   })
 
-  it('header shows version and idempotency counters', () => {
+  it('header carries the verdict: exceptions only, forensics on the ledger', () => {
     const { v } = bench()
     v.update(state)
-    const stats = text(v.root.querySelector('.wb-header-stats'))
-    expect(stats).toContain('claims 368')
-    expect(stats).toContain('conflicts 0')
+    const stats = v.root.querySelector('.wb-header-stats')!
+    const pills = [...stats.querySelectorAll('.wb-alert')].map(p => text(p))
+    // fixture: 1 dead letter, 1 stale row, 0 conflicts, 1 reconcile row needing repair
+    expect(pills).toEqual(['死信 1', '陈旧 1', '需修复 1'])
+    expect(stats.querySelector('.wb-alert-danger')).not.toBeNull()
+    expect(text(stats)).not.toContain('claims')
+    const forensics = text(v.root.querySelector('.wb-forensics'))
+    expect(forensics).toContain('claims 368')
+    expect(forensics).toContain('conflicts 0')
+    expect(forensics).toContain('reconcile idle')
     expect(text(v.root.querySelector('.wb-badge'))).toBe('v0.6.2')
+  })
+
+  it('a healthy host shows a quiet header', () => {
+    const { v } = bench()
+    v.update({ ...state, tasksDead: [], tasksStaleCount: 0, reconcile: { state: 'idle', rows: [] }, idempotency: { claimsFresh: 1, replays: 0, conflicts: 0 } })
+    const stats = v.root.querySelector('.wb-header-stats')!
+    expect(stats.querySelectorAll('.wb-alert').length).toBe(0)
+    expect(text(stats)).toContain('无异常')
+  })
+
+  it('idempotency conflicts escalate to the header', () => {
+    const { v } = bench()
+    v.update({ ...state, idempotency: { claimsFresh: 1, replays: 0, conflicts: 2 } })
+    expect([...v.root.querySelectorAll('.wb-header-stats .wb-alert')].map(p => text(p))).toContain('幂等冲突 2')
   })
 })
 

@@ -749,6 +749,19 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       }
     }
 
+    // Forensics (moved off the header): the plumbing counters a seat reads
+    // when something looks off — muted, never the owner's first line.
+    const idem = last.idempotency
+    const reconcileState = last.reconcile?.state
+    if (idem !== undefined || reconcileState !== undefined) {
+      const parts: string[] = []
+      if (idem !== undefined) parts.push(`幂等 claims ${idem.claimsFresh ?? 0} · replays ${idem.replays ?? 0} · conflicts ${idem.conflicts ?? 0}`)
+      if (reconcileState !== undefined) parts.push(`reconcile ${reconcileState}`)
+      const line = el('div', 'wb-pane-head wb-forensics')
+      line.textContent = `取证 · ${parts.join(' · ')}`
+      pane.appendChild(line)
+    }
+
     if (pending.length > 0) {
       // Age histogram + team load: WHERE the debt sits and how old it is.
       const counts = ageHistogram(pending, now)
@@ -1445,16 +1458,33 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   }
 
   // ── Header ──
+  // Results first (owner signal, 0.6.24): the header carries the verdict —
+  // exceptions only, one pill each; a healthy host says so quietly. The
+  // forensic counters that used to sit here (idempotency claims/replays,
+  // reconcile state) read on the ledger's 取证 line instead.
   function renderHeader(): void {
     versionBadge.textContent = last?.version !== undefined ? `v${last.version}` : 'v?'
     const box = clear(headerStats)
     if (last === null) return
-    const idem = last.idempotency
-    if (idem !== undefined) {
-      textRow(box, '幂等', `claims ${idem.claimsFresh ?? 0} · replays ${idem.replays ?? 0} · conflicts ${idem.conflicts ?? 0}`)
+    const alerts: Array<{ text: string; tone: 'warn' | 'danger'; title: string }> = []
+    const dead = last.tasksDead?.length ?? 0
+    if (dead > 0) alerts.push({ text: `死信 ${dead}`, tone: 'danger', title: '超过 24h TTL 仍未结算的任务，需在台账清账' })
+    const stale = last.tasksStaleCount ?? 0
+    if (stale > 0) alerts.push({ text: `陈旧 ${stale}`, tone: 'warn', title: '≥1h 无回执的旧账（含免回执行），到 24h TTL 自动转死信' })
+    const conflicts = last.idempotency?.conflicts ?? 0
+    if (conflicts > 0) alerts.push({ text: `幂等冲突 ${conflicts}`, tone: 'danger', title: '同一幂等键对应了不同载荷，需人工核查' })
+    const repair = (last.reconcile?.rows ?? []).filter(row => row.needsRepair === true).length
+    if (repair > 0) alerts.push({ text: `需修复 ${repair}`, tone: 'danger', title: 'reconcile 无法自动恢复的会话，见行动计划' })
+    if (alerts.length === 0) {
+      box.appendChild(el('span', 'wb-header-ok')).textContent = '● 无异常'
+      return
     }
-    const reconcileState = last.reconcile?.state
-    if (reconcileState !== undefined) textRow(box, 'reconcile', reconcileState)
+    for (const a of alerts) {
+      const pill = el('span', `wb-alert wb-alert-${a.tone}`)
+      pill.textContent = a.text
+      pill.title = a.title
+      box.appendChild(pill)
+    }
   }
 
   function update(state: StateBody | null): void {

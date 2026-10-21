@@ -13,7 +13,7 @@
   --n-danger:#f87171; --n-accent:#9673f7; --n-rail-w:300px;
   --n-canvas:#22d3ee; --n-line:var(--n-border);
   --n-raised:#131b2e; --n-federal:#6366f1; --n-card-line:#5c6680;
-  --n-error-ink:#fecaca; --n-error-panel:#2a0d10f2;
+  --n-error-ink:#fecaca; --n-error-panel:#2a0d10f2; --n-shadow:rgba(0,0,0,.35);
   --n-role-user:#7dd3fc; --n-role-user-bg:rgba(56,189,248,.16);
   --n-role-assistant:#6ee7b7; --n-role-assistant-bg:rgba(52,211,153,.14);
 }
@@ -23,7 +23,7 @@
          --n-danger:#b91c1c; --n-accent:#6d28d9;
          --n-cold:#636c81; --n-canvas:#0e7490;
          --n-raised:#ffffff; --n-federal:#4f46e5; --n-card-line:#8a95ae;
-         --n-error-ink:#b91c1c; --n-error-panel:#fef2f2f2;
+         --n-error-ink:#b91c1c; --n-error-panel:#fef2f2f2; --n-shadow:rgba(26,36,56,.16);
          --n-role-user:#075985; --n-role-user-bg:rgba(14,116,144,.12);
          --n-role-assistant:#065f46; --n-role-assistant-bg:rgba(5,150,105,.12); }
 }
@@ -39,6 +39,12 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-header-stats .wb-kv{display:flex;gap:6px}
 .wb-header-stats .wb-kv-k{color:var(--n-ink-muted)}
 .wb-header-stats .wb-kv-v{color:var(--n-ink)}
+/* Header verdict: exceptions only (results-first). Quiet when healthy. */
+.wb-header-ok{color:var(--n-ink-muted)}
+.wb-alert{border:1px solid currentColor;border-radius:99px;padding:0 9px;line-height:20px;white-space:nowrap;cursor:help}
+.wb-alert-danger{color:var(--n-danger)}
+.wb-alert-warn{color:var(--n-act)}
+.wb-forensics{font-family:ui-monospace,Consolas,monospace;font-size:11px}
 .wb-icon-btn{background:none;border:1px solid var(--n-border);color:var(--n-ink);border-radius:8px;
   width:30px;height:30px;display:none;align-items:center;justify-content:center;font:inherit;font-size:14px;
   cursor:pointer;flex:none}
@@ -181,7 +187,7 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 /* ── Inspector: overlay card on the stage; bottom sheet when narrow. ── */
 .wb-inspector{position:absolute;top:8px;right:8px;width:280px;max-height:calc(100% - 16px);
   overflow-y:auto;background:var(--n-panel);border:1px solid var(--n-border);border-radius:10px;
-  padding:10px;z-index:20;box-shadow:0 8px 24px rgba(0,0,0,.35);display:none}
+  padding:10px;z-index:20;box-shadow:0 8px 24px var(--n-shadow);display:none}
 .wb-inspector.is-open{display:block}
 .wb-inspector-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
 .wb-inspector-title{font-weight:600;font-size:12.5px}
@@ -195,7 +201,7 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 /* ── Node chat drawer (0.6.13): right-side conversation face. ── */
 .wb-chat{position:absolute;top:8px;right:8px;bottom:8px;width:360px;max-width:calc(100% - 16px);
   display:flex;flex-direction:column;background:var(--n-panel);border:1px solid var(--n-border);
-  border-radius:10px;z-index:22;box-shadow:0 8px 24px rgba(0,0,0,.35);
+  border-radius:10px;z-index:22;box-shadow:0 8px 24px var(--n-shadow);
   transform:translateX(calc(100% + 12px));transition:transform .18s ease;pointer-events:none}
 .wb-chat.is-open{transform:translateX(0);pointer-events:auto}
 .wb-chat-head{display:flex;align-items:center;gap:8px;padding:10px 10px 8px;border-bottom:1px solid var(--n-border)}
@@ -242,7 +248,7 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
   .wb-body{grid-template-columns:minmax(0,1fr)}
   .wb-rail{position:fixed;left:0;top:0;bottom:0;width:min(86vw,320px);z-index:40;
     background:var(--n-panel);border-right:1px solid var(--n-border);
-    transform:translateX(-102%);transition:transform .18s ease;box-shadow:8px 0 24px rgba(0,0,0,.35)}
+    transform:translateX(-102%);transition:transform .18s ease;box-shadow:8px 0 24px var(--n-shadow)}
   .wb.is-rail-open .wb-rail{transform:translateX(0)}
   .wb-inspector{left:8px;right:8px;width:auto;top:auto;bottom:8px;max-height:45%}
   .wb-chat{left:8px;right:8px;width:auto;top:auto;bottom:8px;max-height:70%;
