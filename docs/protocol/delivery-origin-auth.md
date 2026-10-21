@@ -1,27 +1,24 @@
 # Protocol: Delivery Origin Authentication — Minimal OriginClaim Envelope
 
-- **Status**: proposed (work-order P5 / ROUND-2 Cluster C1); field evidence
-  2026-08-30 confirms tier three is still unenforced (see below)
+- **Status**: **adopted (review-seat R2+gh#10 ruling, 2026-10-21; claims 59038996d0/50162f7aa7)** —
+  v1 shape below as ruled; implementation rides the gh#9+gh#10 release
+  (same version both sides + one fleet restart window; **no dual-track** —
+  never "shape-valid OR signature-valid")
 - **Owner**: dsh-open-a2a-net (protocol face)
 - **Gate**: hub-strategy GA precondition — see §6
 
-> **Field evidence (2026-08-30, defect card F4).** An unjoined session on the
-> 192.168.3.156 host (source attribution corrected by the reporter; .88 is
-> the LAN Gitea server, not the reporting machine) hand-POSTed
-> `wait:false` deliveries — no credentials — to a
-> loopback bind and across hosts to `192.168.3.157:13080`; both answered
-> `routed/delivered/consumed:true`.
->
-> **Update (2026-10-21, gh#7).** Two layers landed since:
-> - **V2**: `apiKey` now gates `/a2a/direct` and `/a2a/log` exactly like the
->   control routes — "set apiKey" is a real mitigation at last, not an
->   aspirational parenthetical.
-> - **N3**: inbound admission is decided by the receiver's own records
->   (roster, canvas remote refs) — the caller's self-description (label
->   spelling, its own card's team claims, first-contact defaults) no longer
->   admits anyone. This document's remaining scope is TRANSPORT origin
->   authentication (proving the sender IS the host its claim names) —
->   still proposed, unchanged below.
+> **Provenance.** Field evidence 2026-08-30 (defect card F4): an unjoined
+> session hand-POSTed credential-less `wait:false` deliveries to a loopback
+> bind and across hosts; both answered delivered. Since then, three layers
+> landed on this line — gh#7 V2 (apiKey gates `/a2a/direct` + `/a2a/log`),
+> gh#7 V3 (N3 record-based admission), and G1 (two card faces: minimal for
+> anonymous, full for "named"). G1's named face is self-asserted — exactly
+> the hole this ruling closes. The ruling adopts this envelope with two
+> refinements over the 2026-10 proposal: (i) the **timestamp window
+> replaces nonce dedup** (§3/§7) — the receiver stays stateless; (ii) §10
+> adds the CONTROL-face counterpart (gh#9) with its own mechanism — the two
+> faces differ by who can hold a credential, and the ruling requires that
+> difference be stated, never conflated.
 
 ## 1. Motivation
 
@@ -31,80 +28,136 @@ visible-not-addressable members) rests on three enforcement tiers:
 | Tier | Mechanism | Strength |
 |---|---|---|
 | Discovery | internal member names never published as routable | structural |
-| Resolution | member names are team-private; zone walk fails closed (`not-found`, no existence leak) | structural |
-| Delivery | `/a2a/direct` validates caller ∈ inbound-edge set of verified cards | **best-effort today** |
+| Resolution | member names are team-private; zone walk fails closed (`not-found`, no existence leak); team names bind only to operator-linked hosts (gh#8 N9) | structural |
+| Delivery | the caller proves it is the host it names — this envelope | **signed-envelope (this doc)** |
 
-Tiers one and two cannot be bypassed remotely by construction. Tier three is
-honest debt: there is no out-of-band caller identity on the wire, so a
-network-positioned sender can claim any granted URL. This document closes
-that debt with the smallest envelope that composes with existing primitives.
+Tiers one and two cannot be bypassed remotely by construction. Tier three
+was honest debt: a network-positioned sender could claim any granted URL —
+and, since G1, type any zone name to read the full card. This document
+closes that debt with the smallest envelope that composes with existing
+primitives.
 
 ## 2. Object
 
 ```ts
-/** Rides every cross-host delivery payload. Absent ⇒ legacy behavior. */
+/** Rides every cross-host delivery payload and the full-card request. */
 interface OriginClaim {
-  readonly url: string        // claiming base URL (the granted anchor)
-  readonly publicKey: string  // base64 SPKI of that node's card key
-  readonly nonce: string      // ≥16 bytes random hex, unique per delivery
-  readonly ts: number         // epoch ms at send time
+  readonly caller: string       // zone or zone/id8 — the caller's identity
+  readonly callerUrl: string    // the caller's own card base URL
+  readonly ts: number           // epoch ms at send time
 }
+/** HTTP headers carrying it (bodyless GETs need headers):
+ *  X-A2A-Caller:     <caller>
+ *  X-A2A-Caller-Url: <callerUrl>
+ *  X-A2A-Caller-Ts:  <ts>
+ *  X-A2A-Caller-Sig: base64(ed25519-sign(canonical(caller|callerUrl|ts)))
+ * The signing key is the CALLER'S CARD KEY (single identity anchor).
+ */
 ```
 
 ## 3. Verification flow (verification against published keys, not handshakes)
 
-1. Receiver consults its card cache for `claim.url`
-   (60 s positive / 30 s negative TTLs already deployed).
-2. Cache hit with a verified card ⇒ require `claim.publicKey === card.publicKey`;
-   mismatch ⇒ reject `untrusted-origin`, **fail closed**.
-3. Cache miss ⇒ one verified-card fetch, then rule 2; negative outcomes reject
-   `untrusted-origin`.
-4. Replayed nonce within the receiver's dedup window (§7) ⇒ reject
-   `replayed-claim`.
+1. Receiver consults its card cache for `claim.callerUrl`
+   (60 s positive / 30 s negative TTLs already deployed); cache miss ⇒ one
+   verified-card fetch via `verifyCard` (existing infra, shared cache).
+2. Verified card ⇒ the envelope signature MUST verify against THAT card's
+   `publicKey`, and `claim.caller` must be derivable from the card
+   (`card.team`, or a session team the card publishes). Mismatch or
+   unverifiable ⇒ **fail closed** — minimal card on the card face (G1 v1
+   posture), `untrusted-origin` rejection on the delivery face.
+3. `ts` within **±5 min** of the receiver clock (stateless window — the
+   ruling's refinement over nonce dedup: no receiver-side replay ring; a
+   replayed envelope inside the window is a re-authenticated same-caller
+   retry, which the idempotency layer already dedups where it matters).
+4. No second round trip in steady state. Challenge–response stays a v2
+   escalation path only.
 
-No second round trip is added in steady state. A full challenge–response
-(receiver-issued nonce) is reserved for the v2 escalation path and triggers
-only when a claim verification is inconclusive but the source is plausible.
+The caller's card at `callerUrl` is **self-proving**: it is signed by the
+same key that must sign the envelope, so a fake URL serving a real key's
+card is impossible without that key, and a fake key gains nothing — its card
+certifies only itself, an unlinked nobody that N3/N9 already gate.
 
 ## 4. Fail-closed matrix
 
-| Condition | Outcome |
-|---|---|
-| claim absent, node policy `requireOriginClaim=true` | reject `untrusted-origin` |
-| claim absent, legacy window (policy off) | accept + flag `legacyInbound:true` in state facts |
-| claim present, key mismatch / unreachable / rejected card | reject `untrusted-origin` |
-| claim present, fresh cache hit, keys equal | accept |
+| Condition | Card face (gh#10) | Delivery face |
+|---|---|---|
+| envelope absent | minimal card (G1 v1 posture) | N3 admission as today |
+| envelope present, key mismatch / unreachable / rejected card / bad `ts` | **minimal card** | reject `untrusted-origin` |
+| envelope present, verified, caller linked (N3/N9 basis) | full card | accept |
+
+No dual-track: a valid SHAPE never substitutes for a valid SIGNATURE
+(ruling: "shape-valid or signature-valid" leaves m1's self-asserted zone
+open — forbidden).
 
 ## 5. Caller-side construction
 
-Senders already hold the peer's verified card before routing (card cache);
-claim fields are read from that cached object. No new secrets are exchanged:
-the Ed25519 card key remains the single identity anchor, matching the
-delegation model's key-pinning semantics.
+Senders already hold their own card key (the node keypair) and know their
+base URL; claim fields cost one local signature. No new secrets are
+exchanged: the Ed25519 card key remains the single identity anchor, matching
+the delegation model's key-pinning semantics. The a2a client stamps the
+envelope on card GETs and direct POSTs alike.
 
 ## 6. Hub gating rule
 
-Hub-strategy groups whose members span more than one host MUST run behind an
-origin-claim-enforcing receiver (policy `requireOriginClaim=true`) to leave
-same-host-only status. Same-host membership needs no wire identity and is
-explicitly allowed without this document's machinery.
+Hub-strategy groups whose members span more than one host MUST run behind
+an origin-claim-verifying receiver to leave same-host-only status.
+Same-host membership needs no wire identity and stays allowed without this
+document's machinery.
 
 ## 7. State and TTLs
 
-- Nonce dedup window: 10 minutes in-memory ring per receiver.
-- `ts` skew tolerance: ±120 s against receiver clock.
-- Both values are protocol constants here; implementation knobs only widen
-  them for tests.
+- `ts` skew tolerance: **±5 min** (protocol constant; test knobs may widen).
+- No nonce ring, no receiver-side state (ruling refinement).
 
 ## 8. Acceptance criteria
 
-1. Forged origin URL delivery rejected at cache-hit speed with machine-checkable code; zero additional HTTP requests in the cache-hit path (cache metrics comparison).
-2. Legacy peers (no claim) keep flowing during the transition window and their deliveries appear flagged in `/__dsh_a2a/state`.
-3. Cancellation route (`/a2a/cancel`) reuses this exact verification — no separate auth story.
-4. Zone walk and discovery tiers are untouched (structural tiers stand alone).
+1. Forged origin URL delivery rejected at cache-hit speed with a
+   machine-checkable code; zero additional HTTP requests in the cache-hit
+   path.
+2. Card face: an anonymous or self-asserted name never reads
+   sessionTeams/teamMemberships/lanIp; a verified linked caller always does.
+3. Cancellation (`/a2a/cancel`) and the log face reuse this exact
+   verification — no separate auth story.
+4. Zone walk and discovery tiers are untouched (structural tiers stand
+   alone).
+5. One restart window flips the whole fleet (same version both sides);
+   before the flip, cross-version full-card reads degrade to minimal —
+   never to open.
 
 ## 9. Explicit non-goals
 
 - Mutual TLS or key rotation ceremony.
 - Federation-wide PKI beyond the existing signed-card web.
-- Per-user identity: the unit of trust stays the node.
+
+## 10. The CONTROL face is a DIFFERENT mechanism (gh#9) — never conflated
+
+The ruling requires this section to exist. **Why the peer-face mechanism
+cannot serve the control face:** `/__dsh_a2a/*` callers are the operator's
+BROWSER and local operator tooling — neither holds the node's Ed25519 card
+key (that key lives in the plugin's home, deliberately not extractable into
+a browser), so an OriginClaim envelope is unsignable by exactly the parties
+the control face must serve. And on a host that gives sessions a shell
+(gh#9's threat), ANY static secret readable from the filesystem — including
+`apiKey` in config — is readable by the model. Therefore:
+
+| Face | Callers | Credential | Mechanism |
+|---|---|---|---|
+| Peer face (`/a2a/direct`, `/a2a/log`, card GET) | other NODES | card key (held by design) | OriginClaim envelope (this doc) |
+| Control face (`/__dsh_a2a/*` writes) | operator browser + local tools | **apiKey, promoted from optional to the control-plane norm** | header secret; loopback demoted from "authentication" to **explicit leniency for keyless deployments** |
+
+Control-face design (gh#9 disposition):
+
+1. `apiKey` becomes the documented REQUIRED configuration for control
+   writes on any host that also runs agent sessions; the boot warning fires
+   when a keyless host has session nodes enabled.
+2. Loopback-without-key remains functional (GUI on localhost, operator
+   CLIs) but is documented as **leniency, not authentication** — honest
+   naming of gh#9's residue: on a shell-granting host it is a speed bump,
+   not a gate. Hosts that need the gate set the key; the GUI gains key
+   plumbing (injected into the served page) in the same release.
+3. The model's own tools never learn the key (not in any tool description,
+   state face, or session-visible environment).
+
+Sequencing note: peer-face envelope and control-face key norm ship as one
+design (this document) but land as independent commits — the faces share
+the threat model, not the code.
