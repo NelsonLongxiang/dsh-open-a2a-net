@@ -108,6 +108,8 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-dispatch-note{font-size:11px;color:var(--n-ink-muted);line-height:1.4;min-height:0}
 /* 0.6.11 inline transcript: read-only tail of a local session's own log. */
 .wb-transcript{display:flex;flex-direction:column;gap:6px}
+.wb-transcript-title{font-size:12px;color:var(--n-ink-muted)}
+.wb-transcript-body.is-folded{display:none}
 .wb-transcript-refresh{margin-left:auto;font-size:11px;padding:1px 8px;border-radius:999px;border:1px solid var(--n-line);background:transparent;color:var(--n-ink-muted);cursor:pointer}
 .wb-transcript-body{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto}
 .wb-transcript-row{display:flex;gap:6px;align-items:flex-start;font-size:12px;line-height:1.45}
@@ -132,6 +134,16 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-row-id{min-width:130px}
 .wb-row-team{color:var(--n-accent);min-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wb-row-meta{color:var(--n-ink-muted)}
+/* Owner signal (2026-10-21): the ledger is a RESULTS face — brief-first
+   rows, exception-driven color, quiet normals. */
+.wb-row-result{flex-direction:column;align-items:stretch;gap:2px;flex-wrap:nowrap}
+.wb-row-head{color:var(--n-ink);font-size:12.5px;font-family:Avenir Next,Segoe UI Variable,Segoe UI,sans-serif;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wb-row-meta-line{color:var(--n-ink-muted);font-family:ui-monospace,Consolas,monospace;font-size:11px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wb-row-result:not(.wb-row-alert) .wb-row-head{color:var(--n-ink-muted)}
+.wb-row-alert{border-color:var(--n-danger)}
+.wb-row-alert .wb-row-head{color:var(--n-danger)}
 /* The dispatch brief is the row's only human-readable payload — give it the
    remaining width and clip rather than wrapping the table into unreadability
    (full text stays in the title tooltip). */

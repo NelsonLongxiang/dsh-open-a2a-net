@@ -324,6 +324,9 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   /** 0.6.17 chat-UI convention: reading position per transcript key — the
    *  3s poll rebuilds the body, the scroll restores instead of jumping top. */
   const transcriptScroll = new Map<string, number>()
+  /** Owner signal (2026-10-21): transcripts default to a collapsed detail —
+   *  the seats' forensics face, not the owner's. Expansion persists per key. */
+  const expandedTranscripts = new Set<string>()
   /** 0.6.15: peer-host session listings, cached per peer url. */
   const peerListCache = new Map<string, { ok: boolean; sessions?: Array<{ id: string; sizeBytes: number }>; error?: string } | undefined>()
   // 0.6.12: readable local logs (host-scope list, newest first). Refreshed
@@ -763,20 +766,24 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
 
     const table = el('div', 'wb-table')
     for (const row of pending) {
-      const line = el('div', 'wb-row')
+      // Owner signal (2026-10-21): the ledger is a RESULTS face — the brief
+      // is the primary copy, ids/teams/ages are muted forensics underneath.
+      // Exception-driven: only overdue (>1h) rows raise their voice; normal
+      // rows stay quiet so the debt that needs eyes stands out.
+      const overdue = now - row.startedAt > 60 * 60_000
+      const line = el('div', `wb-row wb-row-result${overdue ? ' wb-row-alert' : ''}`)
+      const briefText = row.brief ?? '（无摘要——派发未带 brief）'
+      const brief = el('span', 'wb-row-head')
+      brief.textContent = briefText
+      brief.title = briefText
+      line.appendChild(brief)
       const badges: string[] = []
       if (row.settleable === true) badges.push('可结算')
       if (row.receiptExpected === false) badges.push('无回执债')
       if (row.direction === 'inbound') badges.push('入站')
-      line.appendChild(el('span', 'wb-row-id')).textContent = row.taskId
-      line.appendChild(el('span', 'wb-row-team')).textContent = row.team
-      const briefText = row.brief ?? ''
-      const brief = el('span', 'wb-row-brief')
-      brief.textContent = briefText
-      brief.title = briefText
-      line.appendChild(brief)
-      line.appendChild(el('span', 'wb-row-meta')).textContent = ageText(row.startedAt, now)
-      line.appendChild(el('span', 'wb-row-badges')).textContent = badges.join(' ')
+      const meta = el('span', 'wb-row-meta-line')
+      meta.textContent = `${row.taskId} · ${row.team} · ${ageText(row.startedAt, now)}${badges.length > 0 ? ` · ${badges.join(' ')}` : ''}`
+      line.appendChild(meta)
       table.appendChild(line)
     }
     pane.appendChild(table)
@@ -786,18 +793,17 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       pane.appendChild(deadHead)
       const deadTable = el('div', 'wb-table wb-table-dead')
       for (const row of dead) {
-        const line = el('div', 'wb-row')
-        line.appendChild(el('span', 'wb-row-id')).textContent = row.taskId
-        line.appendChild(el('span', 'wb-row-team')).textContent = row.team
-        const deadBriefText = row.brief ?? ''
-        const deadBrief = el('span', 'wb-row-brief')
+        // Same results-first shape, always exception-colored: dead letters
+        // ARE the alarm.
+        const line = el('div', 'wb-row wb-row-result wb-row-alert')
+        const deadBriefText = row.brief ?? '（无摘要）'
+        const deadBrief = el('span', 'wb-row-head')
         deadBrief.textContent = deadBriefText
         deadBrief.title = deadBriefText
         line.appendChild(deadBrief)
-        line.appendChild(el('span', 'wb-row-meta')).textContent = ageText(row.deadAt, now)
-        const reason = el('span', 'wb-row-meta wb-muted')
-        reason.textContent = row.reason ?? ''
-        line.appendChild(reason)
+        const meta = el('span', 'wb-row-meta-line')
+        meta.textContent = `${row.taskId} · ${row.team} · ${ageText(row.deadAt, now)}${row.reason !== undefined && row.reason !== '' ? ` · ${row.reason}` : ''}`
+        line.appendChild(meta)
         const btn = el('button', 'wb-btn')
         btn.type = 'button'
         btn.textContent = '清账'
@@ -1148,13 +1154,32 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   function transcriptBlock(cacheKey: string, load: () => Promise<TranscriptState>): HTMLElement {
     const block = el('div', 'wb-transcript')
     const head = el('div', 'wb-side-head')
-    head.textContent = '最近对话'
+    // Owner signal (2026-10-21): log reading is the SEAT's forensics face —
+    // it defaults to a collapsed detail (展开 once per transcript; the
+    // expansion persists across the 3s poll remounts). The owner reads
+    // results in the ledger; seats click 展开 when they need the record.
+    const expand = el('button', 'wb-transcript-refresh')
+    expand.type = 'button'
+    const paintExpand = (): void => {
+      expand.textContent = expandedTranscripts.has(cacheKey) ? '收起取证' : '展开取证'
+    }
+    expand.addEventListener('click', () => {
+      if (expandedTranscripts.has(cacheKey)) expandedTranscripts.delete(cacheKey)
+      else expandedTranscripts.add(cacheKey)
+      paintExpand()
+      body.classList.toggle('is-folded', !expandedTranscripts.has(cacheKey))
+      if (expandedTranscripts.has(cacheKey)) settle()
+    })
+    paintExpand()
+    head.appendChild(expand)
+    head.appendChild(el('span', 'wb-transcript-title')).textContent = '最近对话'
     const refresh = el('button', 'wb-transcript-refresh')
     refresh.type = 'button'
     refresh.textContent = '刷新'
     head.appendChild(refresh)
     block.appendChild(head)
     const body = el('div', 'wb-transcript-body')
+    if (!expandedTranscripts.has(cacheKey)) body.classList.add('is-folded')
     block.appendChild(body)
     // 0.6.17 chat-UI conventions: the reading position survives the 3s poll
     // remount (scroll captured on scroll, restored after every paint), and a

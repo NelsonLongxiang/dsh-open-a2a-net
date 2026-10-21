@@ -222,12 +222,21 @@ describe('workbench panels', () => {
     const { v, abandon } = bench()
     v.update(state)
     const pane = v.root.querySelector('.wb-pane')!
-    const rows = [...pane.querySelectorAll('.wb-row-id')].map(n => text(n))
-    expect(rows).toContain('direct-aaaaaaaa')
-    expect(rows).toContain('direct-cccccccc')
-    const badges = [...pane.querySelectorAll('.wb-row-badges')].map(n => text(n))
-    expect(badges.join('|')).toContain('可结算')
-    expect(badges.join('|')).toContain('无回执债')
+    // Owner signal (2026-10-21): results-first rows — the brief is the
+    // primary copy; task ids live in the muted meta line.
+    const heads = [...pane.querySelectorAll('.wb-row-head')].map(n => text(n))
+    const metaLines = [...pane.querySelectorAll('.wb-row-meta-line')].map(n => text(n))
+    expect(metaLines.some(m => m.includes('direct-aaaaaaaa'))).toBe(true)
+    expect(metaLines.some(m => m.includes('direct-cccccccc'))).toBe(true)
+    expect(metaLines.join('|')).toContain('可结算')
+    expect(metaLines.join('|')).toContain('无回执债')
+    // Exception-driven: the stale pending row (3.7h old) and every dead
+    // letter carry the alert class; the fresh one stays quiet.
+    const alertMetas = [...pane.querySelectorAll('.wb-row-alert .wb-row-meta-line')].map(n => text(n))
+    expect(alertMetas.some(m => m.includes('direct-aaaaaaaa'))).toBe(true)
+    expect(alertMetas.some(m => m.includes('direct-cccccccc'))).toBe(true)
+    expect(alertMetas.some(m => m.includes('direct-bbbbbbbb'))).toBe(false)
+    expect(heads.length).toBeGreaterThan(0)
     const btn = [...pane.querySelectorAll('button')].find(b => text(b) === '清账')!
     btn.click()
     await vi.waitFor(() => expect(text(btn)).toBe('已清'))
@@ -584,7 +593,6 @@ describe('inline transcript (0.6.11)', () => {
     const roles = [...v.root.querySelectorAll('.wb-transcript-role')].map(n => text(n))
     expect(roles).toEqual(['问', '答'])
   })
-
   it('serves the cached tail across poll remounts without refetching', async () => {
     const { v, sessionLog } = bench()
     v.update(state)
@@ -594,8 +602,9 @@ describe('inline transcript (0.6.11)', () => {
     v.update({ ...state, sessions: [...state.sessions] })
     await vi.waitFor(() => expect(v.root.querySelector('.wb-transcript-body')!.textContent).toContain('开始扫描'))
     expect(sessionLog).toHaveBeenCalledTimes(1)
-    // The refresh button forces exactly one re-read.
-    ;(v.root.querySelector('.wb-transcript-refresh') as HTMLElement).click()
+    // The refresh button forces exactly one re-read (the fold toggle is a
+    // separate button — select by label, not position).
+    ;([...v.root.querySelectorAll('.wb-transcript-refresh')].find(b => text(b) === '刷新') as HTMLElement).click()
     await vi.waitFor(() => expect(sessionLog).toHaveBeenCalledTimes(2))
   })
 
@@ -834,6 +843,10 @@ describe('chat UI conventions (0.6.17)', () => {
     const chat = openScoutChat(v)
     await vi.waitFor(() => expect(text(chat.querySelector('.wb-transcript-body'))).toContain('开始扫描插件列表'))
     const body = chat.querySelector('.wb-transcript-body') as HTMLElement
+    // Owner signal: transcripts start FOLDED (the seat forensics face) —
+    // expand first, then the scroll contract applies as before.
+    const expand = [...chat.querySelectorAll('.wb-transcript-refresh')].find(b => text(b) === '展开取证') as HTMLElement
+    expand.click()
     // The user scrolled up while reading; the poll fires. The settle runs
     // on the next frame (scroll writes only stick on attached elements).
     body.scrollTop = 120
