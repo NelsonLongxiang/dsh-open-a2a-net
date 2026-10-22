@@ -7,7 +7,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createPrivateKey, sign as edSign } from 'node:crypto'
-import { bootNode, type MeshNode } from './harness.ts'
+import { bootNode, reservePort, type MeshNode } from './harness.ts'
 
 beforeEach(() => {
   vi.stubGlobal('WebSocket', function throwOnSocket() { throw new Error('no socket') })
@@ -67,24 +67,39 @@ describe('W2: cross-host canvas link on the wire face', () => {
 })
 
 describe('W3: full card = verify ∧ link (#18 X1)', () => {
-  it('a verified stranger with a fresh key gets the minimal card; a caller whose card seeds the target gets the full card; a canvas ref links', async () => {
+  it('a verified stranger gets the minimal card; one-sided seeding does NOT link; bilateral seeding links; a canvas ref links', async () => {
     const target = await bootNode({ name: 'w3t', session: 'mesh-w3t', team: 'target-zone', sessionNodes: true })
     const stranger = await bootNode({ name: 'stranger', session: 'mesh-stranger', team: 'stranger-zone' })
-    const seeder = await bootNode({ name: 'seeder', session: 'mesh-seeder', team: 'seeder-zone', peers: [target.baseUrl] })
+    // Review M1 adversarial probe, pinned: the one-sided seeder lists the
+    // TARGET in its own config.peers (one line, zero commitment from the
+    // target) — card shadows alone are self-description, not links.
+    const oneSided = await bootNode({ name: 'oneside', session: 'mesh-one', team: 'one-zone', peers: [target.baseUrl] })
+    // Bilateral: a twin target and a caller that seed EACH OTHER — both
+    // operators made the gesture. Ports are reserved up front because the
+    // two configs cross-reference each other's URLs.
+    const biPort = await reservePort()
+    const twinPort = await reservePort()
+    const targetSeeded = await bootNode({ name: 'w3t2', session: 'mesh-w3t', team: 'target-zone', sessionNodes: true, port: twinPort, peers: [`http://127.0.0.1:${String(biPort)}`] })
+    const bilateral = await bootNode({ name: 'bilateral', session: 'mesh-bi', team: 'bi-zone', port: biPort, peers: [`http://127.0.0.1:${String(twinPort)}`] })
     try {
       // target's operator joins the live session so the full card carries
       // sessionTeams — the field the X1 probe checks for.
       await joinSession(target, 'session-0123456789abcdef')
+      await joinSession(targetSeeded, 'session-0123456789abcdef')
       // X1: stranger's envelope VERIFIES (fresh node, own key, real card)
-      // but no link exists — canvas empty, not same-host, its card does
-      // not seed the target. Minimal card.
+      // but no link exists — canvas empty, not same-host, no seeding at
+      // all. Minimal card.
       const strangerCard = await (await globalThis.fetch(`http://127.0.0.1:${String(target.port)}/.well-known/agent-card.json`, { headers: rawEnvelope(stranger, 'stranger-zone') })).json() as { sessionTeams?: unknown }
       expect(strangerCard.sessionTeams).toBeUndefined()
-      // Paired pin: seeder's card lists the target (peers seeded) — the
-      // link basis — so the same verified shape serves the full card.
-      const seederCard = await (await globalThis.fetch(`http://127.0.0.1:${String(target.port)}/.well-known/agent-card.json`, { headers: rawEnvelope(seeder, 'seeder-zone') })).json() as { sessionTeams?: Array<{ team: string }> }
-      expect(Array.isArray(seederCard.sessionTeams)).toBe(true)
-      expect(seederCard.sessionTeams?.some(entry => entry.team === 'target-zone/01234567')).toBe(true)
+      // Adversarial probe pin: the one-sided seeder STILL gets the minimal
+      // card from a target that does not seed it back.
+      const oneCard = await (await globalThis.fetch(`http://127.0.0.1:${String(target.port)}/.well-known/agent-card.json`, { headers: rawEnvelope(oneSided, 'one-zone') })).json() as { sessionTeams?: unknown }
+      expect(oneCard.sessionTeams).toBeUndefined()
+      // Bilateral pin: the target-seeded twin serves the full card to the
+      // caller whose own card reciprocates.
+      const biCard = await (await globalThis.fetch(`http://127.0.0.1:${String(targetSeeded.port)}/.well-known/agent-card.json`, { headers: rawEnvelope(bilateral, 'bi-zone') })).json() as { sessionTeams?: Array<{ team: string }> }
+      expect(Array.isArray(biCard.sessionTeams)).toBe(true)
+      expect(biCard.sessionTeams?.some(entry => entry.team === 'target-zone/01234567')).toBe(true)
       // And a canvas remote ref links too (the operator-side basis): a
       // node whose ZONE the ref names gets the full card — the ref proves
       // the zone, the envelope signature proves the key.
@@ -97,9 +112,12 @@ describe('W3: full card = verify ∧ link (#18 X1)', () => {
         await refNode.dispose()
       }
     } finally {
-      await seeder.dispose()
+      await targetSeeded.dispose()
+      await bilateral.dispose()
+      await oneSided.dispose()
       await stranger.dispose()
       await target.dispose()
     }
-  })
+  }, 30_000)
 })
+

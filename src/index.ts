@@ -2289,7 +2289,7 @@ const reportLoopRing = new Map<string, number[]>()
           // Interaction with the OriginClaim narrowing: the caller is a
           // bare zone; linkage judges that zone face against our canvas
           // remote refs, joined handles, and the caller card's peers.
-          const named = claim.ok && callerLinkedToThisHost(claim.caller, claim.ok ? claim.card : undefined)
+          const named = claim.ok && callerLinkedToThisHost(claim.caller, claim.ok ? claim.callerUrl : '', claim.ok ? claim.card : undefined)
           // gh#7 G1 (review-seat R2 ruling): the card serves two faces.
           // A NAMED caller — ?caller_session= or the X-A2A-Caller header in
           // the zone or zone/id8 shape — gets the FULL card. An anonymous
@@ -2898,7 +2898,7 @@ ${message}`
    *  window — the operator watches the tail drain before closing it. */
   let legacyInboundCount = 0
   const originClaimCallerShape = /^[a-z0-9-]+$/i
-  async function verifyOriginClaim(req: IncomingMessage): Promise<{ ok: true; caller: string; card: A2aPeerCard } | { ok: false; reason: 'absent' | 'bad-caller-shape' | 'bad-ts' | 'no-card' | 'bad-sig' | 'not-derivable' }> {
+  async function verifyOriginClaim(req: IncomingMessage): Promise<{ ok: true; caller: string; callerUrl: string; card: A2aPeerCard } | { ok: false; reason: 'absent' | 'bad-caller-shape' | 'bad-ts' | 'no-card' | 'bad-sig' | 'not-derivable' }> {
     const caller = String(req.headers['x-a2a-caller'] ?? '')
     const callerUrl = String(req.headers['x-a2a-caller-url'] ?? '')
     const ts = Number(req.headers['x-a2a-caller-ts'] ?? '')
@@ -2948,7 +2948,7 @@ ${message}`
     if (card.team !== caller) {
       return { ok: false, reason: 'not-derivable' }
     }
-    return { ok: true, caller, card }
+    return { ok: true, caller, callerUrl, card }
   }
 
   /**
@@ -2960,15 +2960,23 @@ ${message}`
    *      pseudo-handles;
    *   2. a canvas remote ref — exact handle, or the sibling zone face of a
    *      linked host (a bare-zone caller names only its zone; the ref
-   *      proves the zone);
-   *   3. the caller's OWN card (fetched fresh during verification) seeds
-   *      US — its peers list carries our base URL. The caller's operator
-   *      established the link on their side; we cannot see their config,
-   *      only its card shadow. (Unsigned served-fresh field: a hostile
-   *      host could list us — the exposure is the collaboration roster,
-   *      not secrets; N3 admission stays untouched by this.)
+   *      proves the zone). OBSERVATION (review seat, explicitly ruled
+   *      acceptable): refs carry ZONE granularity — in a fleet where
+   *      several hosts share one zone name, any one ref links every host
+   *      of that zone. Zones are host-unique by convention, so this reads
+   *      as "a linked host links its whole zone face"; a fleet sharing a
+   *      zone name opts into that transitively-open posture knowingly;
+   *   3. BILATERAL seeding (review M1 fix): our config.peers contains the
+   *      caller's URL **and** the caller's card (fetched fresh during
+   *      verification) carries our origin among its peers — both
+   *      operators made the gesture, each on their own side. The single-
+   *      sided card-claims variant was a hole the reviewer's adversarial
+   *      probe walked through (one config.peers line → full card with
+   *      zero commitment from us): peers is an unsigned served-fresh
+   *      field, exactly the self-description trust class N3/V5 abolished.
+   *      Our operator's config anchors; the card shadow corroborates.
    */
-  function callerLinkedToThisHost(caller: string, callerCard: A2aPeerCard | undefined): boolean {
+  function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {
     if (caller === config.team) return true
     for (const id of joinedSessions.list()) {
       if (`${config.team}/${id8(id)}` === caller) return true
@@ -2981,13 +2989,26 @@ ${message}`
         if (refZone === zone) return true
       }
     }
+    // Basis 3, BILATERAL (review M1 fix): OUR config.peers seeds a URL
+    // whose origin matches the caller's card URL, AND the caller's card
+    // reciprocates by carrying OUR origin among its peers — both
+    // operators made the gesture, each on their own side. The single-
+    // sided card-claims variant was a hole the reviewer's adversarial
+    // probe walked through (one config.peers line on the CALLER → full
+    // card with zero commitment from us): peers is an unsigned
+    // served-fresh field, exactly the self-description trust class
+    // N3/V5 abolished. Our operator's own config anchors; the card
+    // shadow only corroborates.
     if (callerCard !== undefined && ownCardUrl !== '') {
       const ourOrigin = new URL(ownCardUrl).origin
-      for (const peer of callerCard.peers ?? []) {
-        try {
-          if (new URL(peer).origin === ourOrigin) return true
-        } catch { /* malformed peer entry — skip */ }
-      }
+      const callerOrigin = new URL(callerUrl).origin
+      const weSeedThem = config.peers.some(peer => {
+        try { return new URL(peer).origin === callerOrigin } catch { return false }
+      })
+      const theySeedUs = (callerCard.peers ?? []).some(peer => {
+        try { return new URL(peer).origin === ourOrigin } catch { return false }
+      })
+      if (weSeedThem && theySeedUs) return true
     }
     return false
   }
