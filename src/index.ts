@@ -2956,8 +2956,10 @@ ${message}`
    * possession proves the caller is a real host; it says nothing about a
    * relationship with US. The full card carries collaboration facts
    * (sessionTeams/rosters), so it additionally requires a link:
-   *   1. same-host membership — our own bare zone or one of our session
-   *      pseudo-handles;
+   *   1. same-host membership — the caller's card URL origin equals OUR
+   *      card URL origin (the loopback self-fetch face: true self is an
+   *      ORIGIN equality; zone-name equality carries no identity in a
+   *      single-zone fleet), or one of our session pseudo-handles;
    *   2. a canvas remote ref — exact handle, or the sibling zone face of a
    *      linked host (a bare-zone caller names only its zone; the ref
    *      proves the zone). OBSERVATION (review seat, explicitly ruled
@@ -2977,7 +2979,15 @@ ${message}`
    *      Our operator's config anchors; the card shadow corroborates.
    */
   function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {
-    if (caller === config.team) return true
+    // Basis 1, same-host membership (review second-round M-fix): "self" is
+    // an ORIGIN equality, not a zone-name equality. `caller === config.team`
+    // granted unconditionally in a single-zone fleet (the deployment
+    // reality: every host named 'dsh') — any verified caller naming the
+    // shared zone string was "us". True self is the loopback self-fetch
+    // face: the caller's card URL origin equals OUR card URL origin.
+    try {
+      if (callerUrl !== '' && new URL(callerUrl).origin === new URL(ownCardUrl).origin) return true
+    } catch { /* malformed callerUrl — falls through to the record bases */ }
     for (const id of joinedSessions.list()) {
       if (`${config.team}/${id8(id)}` === caller) return true
     }

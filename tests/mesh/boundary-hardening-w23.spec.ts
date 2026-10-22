@@ -66,6 +66,32 @@ describe('W2: cross-host canvas link on the wire face', () => {
   })
 })
 
+describe('W3 basis-1 origin equality: single-zone fleet shapes', () => {
+  it('a same-zone-named caller from a FOREIGN origin gets the minimal card; the true self face (own origin) gets the full card', async () => {
+    // Deployment reality: every host's zone is 'dsh'. The pre-fix basis 1
+    // (`caller === config.team`) granted unconditionally here — the
+    // reviewer's probe named the shared zone string and walked in. Self
+    // is now an ORIGIN equality on the card URL.
+    const target = await bootNode({ name: 'w3sz', session: 'mesh-w3sz', team: 'dsh', sessionNodes: true })
+    const sameZoneStranger = await bootNode({ name: 'szstranger', session: 'mesh-szs', team: 'dsh' })
+    try {
+      await joinSession(target, 'session-0123456789abcdef')
+      // Same-zone stranger: envelope verifies (its card genuinely says
+      // team 'dsh'), but its origin is foreign and no record links it —
+      // MINIMAL card.
+      const foreign = await (await globalThis.fetch(`http://127.0.0.1:${String(target.port)}/.well-known/agent-card.json`, { headers: rawEnvelope(sameZoneStranger, 'dsh') })).json() as { sessionTeams?: unknown }
+      expect(foreign.sessionTeams).toBeUndefined()
+      // The true self face: our own card URL origin — full card.
+      const self = await (await globalThis.fetch(`http://127.0.0.1:${String(target.port)}/.well-known/agent-card.json`, { headers: rawEnvelope(target, 'dsh') })).json() as { sessionTeams?: Array<{ team: string }> }
+      expect(Array.isArray(self.sessionTeams)).toBe(true)
+      expect(self.sessionTeams?.some(entry => entry.team === 'dsh/01234567')).toBe(true)
+    } finally {
+      await sameZoneStranger.dispose()
+      await target.dispose()
+    }
+  })
+})
+
 describe('W3: full card = verify ∧ link (#18 X1)', () => {
   it('a verified stranger gets the minimal card; one-sided seeding does NOT link; bilateral seeding links; a canvas ref links', async () => {
     const target = await bootNode({ name: 'w3t', session: 'mesh-w3t', team: 'target-zone', sessionNodes: true })
