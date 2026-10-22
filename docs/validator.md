@@ -91,6 +91,19 @@ unit 300/wire 291/nexus 120 全 exit 0、3081 v0.6.17、三闸门 ✓）。
 归因，575/4/0 逐字）与 PR #108（REVIEW-74555a36-957dcfa-PASS + TEST-ea2aad88-PASS，
 577/4/0 逐字）双章合入；触发条件=npm 发布候选时恢复周期。
 
+**引擎迁移注记（2026-10-22，0.113+ 破坏性变更）**：ygl-trees 0.113.0 起 verify meta 闸
+默认硬化，0.110 时代冻结的材料/spec 在 0.114.x 引擎上掉档（预期行为，非缺陷）——
+**重冻材料即正解**（监督席已代重冻 mat_39e6cb557daf 系列 + spec_2b4fb653a3b2 v1）。
+引擎 510aaef 起 `--attach` 可重复（多文件检查器 spec 的 P4 红队门解锁）；RC 仓提交
+双附件命令形：`verify submit --text verify/material.md --attach assets/nexusDist/assets/<bundle>.js
+--attach docs/release-gate.md --no-meta`。运行态 file 检查器 scanned=0 的 4-ERROR 形态
+为引擎运行面随访项（候选判定以 V1-V10 + 直连事实背书为准）。
+
+0.6.24 发布周期（2026-10-22）：**公网 npmjs latest=0.6.24**（PUT 202，shasum 07142d55cf67
+逐字节符）；候选期快照 10 PASS/0 FAIL/4 ERROR 为有效候选态判定；发布后 V6 翻红=预期
+正确行为（下次候选升 spec_version 重出材料）。私仓 Gitea（latest=0.6.15）未同步——
+双 registry 纪律下按属主指令补发。
+
 ## 递归验证器（scripts/verify-recursive.mjs，2026-10-21 开发席指令）
 
 一层入口三层递归，退出码 0 = 三层全绿：
