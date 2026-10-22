@@ -35,10 +35,16 @@ import {
   type RemoteTeamRow,
 } from './federation'
 import { clampViewport, fitView, panBy, screenToWorld, worldTransformCss, zoomAt, type LayoutViewport } from './viewport'
-import { NODE_H, WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, planTeamClusters, type SessionLite, type TeamLite } from './world'
-import { applyAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction, type RosterOp } from './canvas-ops'
+import { WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, planTeamClusters } from './world'
+import { applyAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction } from './canvas-ops'
 import { FRAME_HUES } from './tokens'
+import { createPlanningMenus } from './planning-menus'
+import { createNodeList } from './planning-nodelist'
+import { viewportBucket, type PlanningDeps, type PlanningInput, type PlanningSession, type PlanningTeam, type PlanningView, type SeamKey, type SeamPointer, type ViewportBucket } from './planning-types'
 import './planning.css'
+
+export { viewportBucket } from './planning-types'
+export type { PlanningDeps, PlanningInput, PlanningSession, PlanningTeam, PlanningView, SeamKey, SeamPointer, ViewportBucket } from './planning-types'
 
 /** Team-name hue, same 31-polynomial family as the 3D scene's getHue. */
 function frameHue(name: string): { line: string; bg: string } {
@@ -53,81 +59,6 @@ function frameHue(name: string): { line: string; bg: string } {
   return { line, bg: `rgba(${r},${g},${b},0.05)` }
 }
 
-/** Minimal session/team shapes consumed here (topology rows satisfy them). */
-export interface PlanningSession extends SessionLite {}
-export interface PlanningTeam extends TeamLite {}
-
-export interface PlanningInput {
-  sessions: ReadonlyArray<PlanningSession>
-  teams: ReadonlyArray<PlanningTeam>
-  peerCount: number
-  /** Federation peers (PR D): rows for the badge column right of the content. */
-  peers?: ReadonlyArray<PeerRow>
-  /** Pending outbound routes (PR D): the accent activity edges. */
-  inFlight?: ReadonlyArray<InFlightRow>
-  /** Remote team directory rows (PR D v1 ruling): grouped under peer cards. */
-  remoteTeams?: ReadonlyArray<RemoteTeamRow>
-}
-
-/** Screen-width class a viewport is remembered under (window width, not board width — collapsing the rail must not switch buckets). */
-export type ViewportBucket = 'narrow' | 'medium' | 'wide'
-
-export function viewportBucket(width: number): ViewportBucket {
-  return width < 680 ? 'narrow' : width < 1024 ? 'medium' : 'wide'
-}
-
-export interface PlanningDeps {
-  /** An edit that should persist happened (drag/nudge/pan/zoom/marquee end). */
-  onDirty(): void
-  /** The save lamp was clicked (error state -> retry). */
-  onLampClick(): void
-  /** Viewport size in CSS px (defaults to the root element's box; tests
-   *  inject fixed sizes so fit math is assertable without layout). */
-  viewSize?(): { w: number; h: number }
-  /**
-   * Per-device viewport memory. The saved layout's viewport is the LAST
-   * saver's screen, so a desktop pan landed on a phone (and any other
-   * device's save yanked this one's view). When present, the first adopted
-   * layout takes this screen bucket's own viewport — else, on a wide screen,
-   * the host's (where it was most likely saved), else a fit — later
-   * adoptions leave the viewport alone, and every persisted edit writes the
-   * bucket back. Optional: without it the host viewport wins as before.
-   */
-  viewportStore?: { get(bucket: ViewportBucket): unknown; set(bucket: ViewportBucket, vp: LayoutViewport): void }
-  /**
-   * A team write action (optimistic state already applied by the view).
-   * Resolves true when the host accepted it — or it was an idempotent
-   * no-op (ok:false without an error string). Resolves false when the
-   * write was refused/failed: the view then rolls the action's scoped
-   * undo back itself. Rejecting the promise is also handled (treated as
-   * false) — the channel must not leave the team's guard pinned.
-   */
-  onCanvasAction(a: CanvasAction): Promise<boolean>
-  /** A plain (non-shift, no-drag) left click selected exactly one node
-   * (0.6.13): the host may open the reading face (chat drawer) for it.
-   * Selection itself is already applied — this is a notification, not a
-   * command; the host decides what (if anything) to show. */
-  onNodePick?(id: string): void
-  /** Wall clock for the inFlight age labels (tests pin it; default Date.now). */
-  now?(): number
-}
-
-/** Pointer-like event surface the handlers consume (real events satisfy it). */
-export interface SeamPointer {
-  button: number
-  shiftKey: boolean
-  ctrlKey: boolean
-  clientX: number
-  clientY: number
-  pointerId?: number
-  target: Element | null
-  deltaX?: number
-  deltaY?: number
-  deltaMode?: number
-  preventDefault(): void
-}
-
-export interface SeamKey { key: string; shiftKey: boolean; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; target: Element | null; preventDefault(): void }
 
 type Gesture =
   | { readonly kind: 'none' }
@@ -136,30 +67,6 @@ type Gesture =
   | { readonly kind: 'frame-resize'; name: string; dir: string; startRect: { x: number; y: number; w: number; h: number }; origin: { x: number; y: number }; moved: boolean }
   | { readonly kind: 'pan'; last: { x: number; y: number }; moved: boolean }
   | { readonly kind: 'marquee'; origin: { x: number; y: number }; last: { x: number; y: number }; additive: boolean }
-
-export interface PlanningView {
-  root: HTMLElement
-  reconcile(input: PlanningInput): void
-  activate(): void
-  deactivate(): void
-  /** Adopt a (possibly normalized) layout document when the save loop allows. */
-  adoptExternalLayout(layout: unknown): void
-  /** The current document for the save loop, read at send time. */
-  snapshotDoc(): unknown
-  setLamp(state: LampState, savedAt?: string): void
-  /** A transient notice (host error verbatim or an info hint). */
-  notice(kind: 'error' | 'info', text: string): void
-  seam: {
-    pointerDown(ev: SeamPointer): void
-    pointerMove(ev: SeamPointer): void
-    pointerUp(ev: SeamPointer): void
-    wheel(ev: SeamPointer): void
-    key(ev: SeamKey): void
-    keyUp(ev: SeamKey): void
-    contextMenu(ev: SeamPointer): void
-  }
-  destroy(): void
-}
 
 export function createPlanningView(deps: PlanningDeps): PlanningView {
   const model = new WorldModel()
@@ -248,19 +155,19 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     mkButton('－', '缩小', () => zoomCenter(1 / 1.2)),
     zoomLabel,
     mkButton('＋', '放大', () => zoomCenter(1.2)),
-    mkButton('建队', '组成团队（G）：先框选至少 2 个节点', () => startCreateFromSelection()),
+    mkButton('建队', '组成团队（G）：先框选至少 2 个节点', () => menus.startCreateFromSelection()),
   )
   // Unjoined sessions ride a toolbar chip + dropdown: the panel-slim
   // migration made the planning view the join surface — without this, an
   // unjoined session had no GUI path into the mesh at all.
-  const netBtn = mkButton('未入网', '未入网会话（点击选择入网）', () => toggleNetMenu())
+  const netBtn = mkButton('未入网', '未入网会话（点击选择入网）', () => menus.toggleNetMenu())
   netBtn.className = 'p-netbtn'
   netBtn.setAttribute('aria-haspopup', 'menu')
   toolbar.appendChild(netBtn)
   // Node list (network-membership-display): the canvas shows teamed nodes
   // only; every other session — teamless joined, unjoined, and each peer's
   // published nodes — is managed from this list, switched by host.
-  const nodesBtn = mkButton('节点', '节点清单：本机与对等节点（未组队/未入网在此管理）', () => toggleNodePanel())
+  const nodesBtn = mkButton('节点', '节点清单：本机与对等节点（未组队/未入网在此管理）', () => nodes.toggle())
   nodesBtn.className = 'p-nodebtn'
   nodesBtn.setAttribute('aria-haspopup', 'dialog')
   toolbar.appendChild(nodesBtn)
@@ -673,548 +580,37 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     noticeTimers.push(setTimeout(() => item.remove(), 4000))
   }
 
-  // ── 建队：selection → 命名对话框 → create-team ──
-  function selectedByY(): string[] {
-    return model
-      .selectedIds()
-      .map(id => ({ id, y: model.getNode(id)?.y ?? 0 }))
-      .sort((a, b) => a.y - b.y)
-      .map(r => r.id)
-  }
+  // ── popovers: 建队 dialog, context menu, 未入网 dropdown (planning-menus) ──
+  const menus = createPlanningMenus({
+    root, netBtn, signal, model,
+    teams: () => lastTeams,
+    anchorFor: (t) => (t.kind === 'node' ? nodeEls.get(t.id) : frameEls.get(t.name)) ?? null,
+    emit: emitAction,
+    notice,
+  })
 
-  function startCreateFromSelection(): void {
-    if (dialog !== null) return
-    // Peer cards are not joinable sessions: they never enter 建队 ids.
-    const ids = selectedByY().filter(id => model.getNode(id)?.remote !== true)
-    if (ids.length < 2) { notice('info', '框选至少 2 个会话节点'); return }
-    openNameDialog(ids)
-  }
-
-  let dialog: {
-    wrap: HTMLDivElement
-    restoreFocus: HTMLElement | null
-  } | null = null
-
-  function openNameDialog(ids: readonly string[]): void {
-    const wrap = document.createElement('div')
-    wrap.className = 'p-dialog'
-    const panel = document.createElement('div')
-    panel.className = 'p-dialog-panel'
-    panel.setAttribute('role', 'dialog')
-    panel.setAttribute('aria-modal', 'true')
-    panel.setAttribute('aria-labelledby', 'p-dialog-title')
-    const title = document.createElement('div')
-    title.id = 'p-dialog-title'
-    title.className = 'p-dialog-title'
-    title.textContent = `组建团队（${ids.length} 个节点，自上而下即优先级）`
-    const input = document.createElement('input')
-    input.className = 'p-dialog-input'
-    input.maxLength = 40
-    input.setAttribute('aria-label', '团队名')
-    const err = document.createElement('div')
-    err.className = 'p-dialog-err'
-    err.setAttribute('aria-live', 'polite')
-    const row = document.createElement('div')
-    row.className = 'p-dialog-row'
-    const okBtn = document.createElement('button')
-    okBtn.type = 'button'
-    okBtn.textContent = '组建'
-    const cancelBtn = document.createElement('button')
-    cancelBtn.type = 'button'
-    cancelBtn.textContent = '取消'
-    row.append(okBtn, cancelBtn)
-    panel.append(title, input, err, row)
-    wrap.appendChild(panel)
-    root.appendChild(wrap)
-
-    const restoreFocus = document.activeElement as HTMLElement | null
-    const close = (): void => {
-      wrap.remove()
-      dialog = null
-      restoreFocus?.focus()
-    }
-    const nameError = (): string | null => {
-      const name = input.value.trim()
-      if (name === '' || name.length > 40 || name.includes('/') || /^\d+$/.test(name)) {
-        return '队名需 1..40 字，不含“/”，不为纯数字'
-      }
-      return null
-    }
-    const confirm = (): void => {
-      const problem = nameError()
-      if (problem !== null) { err.textContent = problem; input.focus(); return }
-      const name = input.value.trim()
-      close()
-      if (model.getFrame(name) !== undefined) {
-        // Duplicate name: host create is idempotent-ok, but the optimistic
-        // create-team would WIPE the existing roster and overwrite its saved
-        // frame rect. Join instead — same wire result, nothing destroyed.
-        notice('info', `已加入现有团队「${name}」`)
-        emitAction({ type: 'add-member', team: name, ids })
-        return
-      }
-      emitAction({ type: 'create-team', name, ids, created: true })
-    }
-    okBtn.addEventListener('click', confirm)
-    cancelBtn.addEventListener('click', close)
-    input.addEventListener('keydown', (ev) => {
-      const e = ev as KeyboardEvent
-      if (e.key === 'Enter') { e.preventDefault(); confirm() }
-      if (e.key === 'Escape') { e.preventDefault(); close() }
-    })
-    // Focus trap (aria-modal must not be a false promise): Tab cycles the
-    // three focusables; Esc anywhere in the panel cancels.
-    wrap.addEventListener('keydown', (ev) => {
-      const e = ev as KeyboardEvent
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return }
-      if (e.key !== 'Tab') return
-      e.preventDefault()
-      const focusables = Array.from(panel.querySelectorAll<HTMLElement>('input, button'))
-      const idx = focusables.indexOf(document.activeElement as HTMLElement)
-      const next = e.shiftKey
-        ? focusables[(idx - 1 + focusables.length) % focusables.length]
-        : focusables[(idx + 1) % focusables.length]
-      next?.focus()
-    }, signal)
-    dialog = { wrap, restoreFocus }
-    input.focus()
-  }
-
-  // ── context menu（节点/框头；下钻单层；键盘全等）──
-  type MenuTarget = { kind: 'node'; id: string } | { kind: 'frame'; name: string }
-  let menu: HTMLDivElement | null = null
-  let menuTarget: MenuTarget | undefined
-  let menuLevel: 'root' | 'join' | 'leave' | 'promote' = 'root'
-  let menuAnchor: HTMLElement | null = null
-
-  // ── 未入网会话 dropdown（面板瘦身后迁入的入网面）──
-  let netMenu: HTMLDivElement | null = null
-  let lastUnjoined: ReadonlyArray<PlanningSession> = []
-  function closeNetMenu(): void {
-    netMenu?.remove()
-    netMenu = null
-  }
-  function toggleNetMenu(): void {
-    if (netMenu !== null) { closeNetMenu(); return }
-    if (lastUnjoined.length === 0) return
-    const el = document.createElement('div')
-    el.className = 'p-menu p-netmenu'
-    el.setAttribute('role', 'menu')
-    el.setAttribute('aria-label', '未入网会话')
-    for (const s of lastUnjoined) {
-      el.appendChild(menuItem(`${s.name !== undefined && s.name !== '' ? s.name : s.label} — 入网`, true, () => {
-        closeNetMenu()
-        emitAction({ type: 'join-network', id: s.id })
-      }))
-    }
-    netMenu = el
-    // Menus append to root (not document.body): the .p-menu styles are
-    // #dsh-plan-scoped, and root has no transformed ancestor, so fixed
-    // positioning stays viewport-relative.
-    root.appendChild(el)
-    const rect = netBtn.getBoundingClientRect()
-    el.style.left = `${String(Math.min(rect.left, window.innerWidth - 220))}px`
-    el.style.top = `${String(Math.max(8, rect.top - (lastUnjoined.length * 30 + 10)))}px`
-    el.addEventListener('keydown', (ev) => {
-      if ((ev as KeyboardEvent).key === 'Escape') {
-        ev.stopPropagation()
-        closeNetMenu()
-        netBtn.focus()
-      }
-    })
-    el.querySelector('button')?.focus()
-    // Outside-click dismissal: the dropdown lives at root level, so canvas
-    // presses never reach a menu-local handler — and focus leaves with the
-    // first outside click, killing the Escape path too (the stuck-dropdown
-    // defect the owner hit). The trigger button stays exempt so its click
-    // still toggles.
-    document.addEventListener('pointerdown', (ev) => {
-      if (netMenu === null) return
-      const t = ev.target as Element | null
-      if (t !== null && (t.closest('.p-netmenu') !== null || t === netBtn || netBtn.contains(t))) return
-      closeNetMenu()
-    }, signal)
-  }
-
-  // ── 节点列表 drawer（组队节点上画布；单一节点按 host/对等节点在列表管理）──
+  // ── 节点列表 drawer (planning-nodelist) ──
   let lastSessions: ReadonlyArray<PlanningSession> = []
   let lastCanvasMemberIds: ReadonlySet<string> = new Set()
-  let nodePanel: HTMLDivElement | null = null
-  let nodeHost = '' // '' = 本机；否则为 lastRemoteTeams 的 host:port 键
-  let nodeJoinMenu: HTMLDivElement | null = null
-
-  function closeNodeJoinMenu(): void {
-    nodeJoinMenu?.remove()
-    nodeJoinMenu = null
-  }
-  function closeNodePanel(): void {
-    closeNodeJoinMenu()
-    nodePanel?.remove()
-    nodePanel = null
-  }
-  function toggleNodePanel(): void {
-    if (nodePanel !== null) { closeNodePanel(); return }
-    const el = document.createElement('div')
-    el.className = 'p-menu p-nodelist'
-    el.setAttribute('role', 'dialog')
-    el.setAttribute('aria-label', '节点清单')
-    nodePanel = el
-    root.appendChild(el)
-    const rect = nodesBtn.getBoundingClientRect()
-    el.style.left = `${String(Math.min(rect.left, window.innerWidth - 340))}px`
-    el.style.top = `${String(Math.max(8, rect.top - 320))}px`
-    el.addEventListener('keydown', (ev) => {
-      if ((ev as KeyboardEvent).key === 'Escape') {
-        ev.stopPropagation()
-        closeNodePanel()
-        nodesBtn.focus()
-      }
-    })
-    renderNodePanel()
-  }
-
-  /** Rebuild the panel's host selector + body from the latest poll facts. */
-  function renderNodePanel(): void {
-    const el = nodePanel
-    if (el === null) return
-    closeNodeJoinMenu()
-    el.textContent = ''
-    const head = document.createElement('div')
-    head.className = 'p-nodelist-head'
-    const headLabel = document.createElement('span')
-    headLabel.className = 'p-nodelist-title'
-    headLabel.textContent = '节点'
-    const sel = document.createElement('select')
-    sel.className = 'p-nodesel'
-    sel.setAttribute('aria-label', '选择 host 或对等节点')
-    const localOpt = document.createElement('option')
-    localOpt.value = ''
-    localOpt.textContent = '本机'
-    sel.appendChild(localOpt)
-    for (const [host, rows] of lastRemoteTeams) {
-      if (host === '') continue
-      const opt = document.createElement('option')
-      opt.value = host
-      opt.textContent = rows[0]?.origin !== undefined && rows[0].origin !== '' ? `${rows[0].origin}（${host}）` : host
-      sel.appendChild(opt)
-    }
-    if (nodeHost !== '' && !lastRemoteTeams.has(nodeHost)) nodeHost = ''
-    sel.value = nodeHost
-    sel.addEventListener('change', () => { nodeHost = sel.value; renderNodePanel() })
-    head.append(headLabel, sel)
-    const body = document.createElement('div')
-    body.className = 'p-nodelist-body'
-    el.append(head, body)
-    if (nodeHost === '') renderLocalNodeGroups(body)
-    else renderRemoteNodeGroups(body, lastRemoteTeams.get(nodeHost) ?? [])
-  }
-
-  function nodeRowDot(live: boolean | undefined, joined: boolean): HTMLSpanElement {
-    const dot = document.createElement('span')
-    dot.className = 'p-nodedot' + (joined !== true ? ' off' : live === false ? ' cold' : '')
-    return dot
-  }
-
-  function listBtn(label: string, onPick: () => void): HTMLButtonElement {
-    const b = document.createElement('button')
-    b.type = 'button'
-    b.className = 'p-listbtn'
-    b.textContent = label
-    b.addEventListener('click', (ev) => { ev.stopPropagation(); onPick() })
-    return b
-  }
-
-  function groupTitle(text: string, note?: string): HTMLDivElement {
-    const t = document.createElement('div')
-    t.className = 'p-nodelist-group'
-    t.textContent = text
-    if (note !== undefined) {
-      const n = document.createElement('span')
-      n.className = 'p-nodelist-note'
-      n.textContent = note
-      t.appendChild(n)
-    }
-    return t
-  }
-
-  /** 入队▸ submenu: existing canvas teams, plus 新团队… for the bootstrap case. */
-  function openNodeJoinMenu(anchor: HTMLElement, id: string): void {
-    closeNodeJoinMenu()
-    const el = document.createElement('div')
-    el.className = 'p-menu'
-    el.setAttribute('role', 'menu')
-    el.setAttribute('aria-label', '加入团队')
-    for (const t of lastTeams) {
-      const already = (model.getNode(id)?.memberships.some(m => m.team === t.name)) ?? false
-      el.appendChild(menuItem(already ? `${t.name}（已加入）` : t.name, !already, () => {
-        closeNodePanel()
-        emitAction({ type: 'add-member', team: t.name, ids: [id] })
-      }))
-    }
-    el.appendChild(menuItem('新团队…', true, () => {
-      closeNodePanel()
-      openNameDialog([id])
-    }))
-    nodeJoinMenu = el
-    root.appendChild(el)
-    const rect = anchor.getBoundingClientRect()
-    el.style.left = `${String(Math.min(rect.right + 4, window.innerWidth - 180))}px`
-    el.style.top = `${String(Math.max(8, rect.top - 60))}px`
-    el.addEventListener('keydown', (ev) => {
-      if ((ev as KeyboardEvent).key === 'Escape') { ev.stopPropagation(); closeNodeJoinMenu(); anchor.focus() }
-    })
-    el.querySelector('button')?.focus()
-  }
+  const nodes = createNodeList({
+    root, trigger: nodesBtn, signal, model,
+    facts: () => ({ sessions: lastSessions, canvasMemberIds: lastCanvasMemberIds, remoteTeams: lastRemoteTeams, teams: lastTeams }),
+    menuItem: menus.menuItem,
+    emit: emitAction,
+    openNameDialog: menus.openNameDialog,
+    locate: locateNode,
+  })
 
   /** Center the viewport on one canvas node (the 已组队 row's 定位). */
   function locateNode(id: string): void {
     const n = model.getNode(id)
     if (n === undefined) return
-    closeNodePanel()
+    nodes.close()
     const size = deps.viewSize?.() ?? { w: root.clientWidth > 0 ? root.clientWidth : 800, h: root.clientHeight > 0 ? root.clientHeight : 600 }
     vp = clampViewport({ scale: vp.scale, x: n.x - size.w / (2 * vp.scale), y: n.y - size.h / (2 * vp.scale) })
     applyViewport()
     renderedRevision = -1
     render()
-  }
-
-  function renderLocalNodeGroups(body: HTMLDivElement): void {
-    const teamed = new Set<string>(lastCanvasMemberIds)
-    for (const s of lastSessions) if (s.teams !== undefined && s.teams.length > 0) teamed.add(s.id)
-    const unteamed = lastSessions.filter(s => s.joined === true && !teamed.has(s.id))
-    const unjoined = lastSessions.filter(s => s.joined !== true)
-    const teamedRows = lastSessions.filter(s => s.joined === true && teamed.has(s.id))
-
-    body.appendChild(groupTitle(`未组队 (${String(unteamed.length)})`, '无网络能力'))
-    for (const s of unteamed) {
-      const row = document.createElement('div')
-      row.className = 'p-noderow'
-      const name = document.createElement('span')
-      name.className = 'p-nodename'
-      name.textContent = s.name !== undefined && s.name !== '' ? s.name : s.label
-      name.title = s.team
-      const tag = document.createElement('span')
-      tag.className = 'p-nonet'
-      tag.textContent = '无网络能力'
-      const joinBtn = listBtn('入队▸', () => openNodeJoinMenu(joinBtn, s.id))
-      row.append(nodeRowDot(s.live, true), name, tag, joinBtn,
-        listBtn('退网', () => { closeNodePanel(); emitAction({ type: 'leave-network', id: s.id }) }))
-      body.appendChild(row)
-    }
-
-    body.appendChild(groupTitle(`未入网 (${String(unjoined.length)})`))
-    for (const s of unjoined) {
-      const row = document.createElement('div')
-      row.className = 'p-noderow'
-      const name = document.createElement('span')
-      name.className = 'p-nodename'
-      name.textContent = s.name !== undefined && s.name !== '' ? s.name : s.label
-      name.title = s.id
-      row.append(nodeRowDot(s.live, false), name,
-        listBtn('入网', () => { closeNodePanel(); emitAction({ type: 'join-network', id: s.id }) }))
-      body.appendChild(row)
-    }
-
-    body.appendChild(groupTitle(`已组队 (${String(teamedRows.length)})`, '画布展示'))
-    for (const s of teamedRows) {
-      const row = document.createElement('div')
-      row.className = 'p-noderow'
-      const name = document.createElement('span')
-      name.className = 'p-nodename'
-      name.textContent = s.name !== undefined && s.name !== '' ? s.name : s.label
-      name.title = s.team
-      const canvasCount = model.getNode(s.id)?.memberships.length ?? 0
-      const rosterCount = s.teams?.length ?? 0
-      const badge = document.createElement('span')
-      badge.className = 'p-teamcount'
-      badge.textContent = `队×${String(Math.max(canvasCount, 0) + rosterCount)}`
-      row.append(nodeRowDot(s.live, true), name, badge,
-        listBtn('定位', () => { locateNode(s.id) }))
-      body.appendChild(row)
-    }
-    if (lastSessions.length === 0) {
-      const empty = document.createElement('div')
-      empty.className = 'p-nodelist-empty'
-      empty.textContent = '无会话节点'
-      body.appendChild(empty)
-    }
-  }
-
-  function renderRemoteNodeGroups(body: HTMLDivElement, rows: ReadonlyArray<RemoteTeamRow>): void {
-    const unteamed = rows.filter(r => r.teams === undefined || r.teams.length === 0)
-    const teamedRows = rows.filter(r => r.teams !== undefined && r.teams.length > 0)
-    body.appendChild(groupTitle(`未组队 (${String(unteamed.length)})`, '无网络能力 · 只读'))
-    for (const r of unteamed) {
-      const row = document.createElement('div')
-      row.className = 'p-noderow'
-      const name = document.createElement('span')
-      name.className = 'p-nodename'
-      name.textContent = r.name !== undefined && r.name !== '' ? r.name : r.team
-      name.title = r.team
-      const tag = document.createElement('span')
-      tag.className = 'p-nonet'
-      tag.textContent = '无网络能力'
-      row.append(nodeRowDot(true, true), name, tag)
-      body.appendChild(row)
-    }
-    body.appendChild(groupTitle(`已组队 (${String(teamedRows.length)})`, '只读'))
-    for (const r of teamedRows) {
-      const row = document.createElement('div')
-      row.className = 'p-noderow'
-      const name = document.createElement('span')
-      name.className = 'p-nodename'
-      name.textContent = r.name !== undefined && r.name !== '' ? r.name : r.team
-      name.title = r.team
-      const badge = document.createElement('span')
-      badge.className = 'p-teamcount'
-      badge.textContent = `队×${String(r.teams?.length ?? 0)}`
-      row.append(nodeRowDot(true, true), name, badge)
-      body.appendChild(row)
-    }
-    if (rows.length === 0) {
-      const empty = document.createElement('div')
-      empty.className = 'p-nodelist-empty'
-      empty.textContent = '该节点未发布会话'
-      body.appendChild(empty)
-    }
-  }
-
-  // Outside-click dismissal for the node panel: the popover appends to root
-  // (scoped .p-menu styles apply; no transformed ancestor), so dismissal
-  // rides a document listener — the canvas pointer seam never sees presses
-  // on body-level chrome. The panel, its 入队 submenu, and the trigger are
-  // exempt.
-  document.addEventListener('pointerdown', (ev) => {
-    if (nodePanel === null) return
-    const t = ev.target as Element | null
-    if (t === null) { closeNodePanel(); return }
-    if (t.closest('.p-nodelist') !== null || t.closest('.p-menu') !== null) return
-    if (t === nodesBtn || nodesBtn.contains(t)) return
-    closeNodePanel()
-  }, signal)
-
-  function closeMenu(): void {
-    menu?.remove()
-    menu = null
-    menuTarget = undefined
-    menuLevel = 'root'
-    // The anchor may have been detached by a poll while the menu was open —
-    // focus() on a detached node drops focus to body and the canvas goes deaf.
-    if (menuAnchor !== null && menuAnchor.isConnected) menuAnchor.focus()
-    else root.focus()
-    menuAnchor = null
-  }
-
-  function menuItem(label: string, enabled: boolean, onPick: () => void): HTMLButtonElement {
-    const b = document.createElement('button')
-    b.type = 'button'
-    b.setAttribute('role', 'menuitem')
-    b.textContent = label
-    if (!enabled) { b.disabled = true; b.setAttribute('aria-disabled', 'true') }
-    else b.addEventListener('click', () => { closeMenu(); onPick() })
-    return b
-  }
-
-  function openMenu(x: number, y: number, target: MenuTarget, level: 'root' | 'join' | 'leave' | 'promote' = 'root'): void {
-    // Re-seed the anchor after a drill-down: closeMenu focuses whatever this
-    // menu was anchored to, or keyboard focus falls to body and the canvas
-    // goes deaf.
-    if (menuAnchor === null) {
-      menuAnchor = target.kind === 'node'
-        ? nodeEls.get(target.id) ?? null
-        : frameEls.get(target.name) ?? null
-    }
-    menu?.remove()
-    menuTarget = target
-    menuLevel = level
-    const el = document.createElement('div')
-    el.className = 'p-menu'
-    el.setAttribute('role', 'menu')
-    el.setAttribute('aria-label', '团队操作')
-    let items: HTMLButtonElement[] = []
-    if (target.kind === 'frame') {
-      items = [menuItem(`解散团队「${target.name}」`, true, () => emitAction({ type: 'remove-team', name: target.name }))]
-    } else {
-      const id = target.id
-      if (level === 'root') {
-        const create = menuItem('组成团队…', model.selectedIds().length >= 2, () => openNameDialog(selectedByY()))
-        create.title = '先框选或 Shift 加选至少 2 个节点'
-        items.push(create)
-        if (lastTeams.length > 0) {
-          items.push(menuItem('加入团队 ▸', true, () => openMenu(x, y, target, 'join')))
-          const teamsOf = model.getNode(id)?.memberships.map(m => m.team) ?? []
-          if (teamsOf.length > 0) {
-            items.push(menuItem('置顶路由 ▸', true, () => openMenu(x, y, target, 'promote')))
-            items.push(menuItem('离队 ▸', true, () => openMenu(x, y, target, 'leave')))
-          }
-        }
-        // Network-level leave (distinct from canvas-team membership): the
-        // panel-slim migration moved the join/leave toggle here. Remote
-        // nodes are read-only entries — never a leave target.
-        if (model.getNode(id)?.remote !== true) {
-          items.push(menuItem('退网', true, () => emitAction({ type: 'leave-network', id })))
-        }
-      } else {
-        items.push(menuItem('‹ 返回', true, () => openMenu(x, y, target, 'root')))
-        for (const t of lastTeams) {
-          if (level === 'join') {
-            const already = (model.getNode(id)?.memberships.some(m => m.team === t.name)) ?? true
-            items.push(menuItem(already ? `${t.name}（已加入）` : t.name, !already, () => emitAction({ type: 'add-member', team: t.name, ids: [id] })))
-          } else if (level === 'leave') {
-            const member = (model.getNode(id)?.memberships.some(m => m.team === t.name)) ?? false
-            items.push(menuItem(t.name, member, () => emitAction({ type: 'remove-member', team: t.name, ids: [id] })))
-          } else {
-            const member = (model.getNode(id)?.memberships.some(m => m.team === t.name)) ?? false
-            items.push(menuItem(t.name, member, () => {
-              const current = model.teamMemberIds(t.name)
-              const desired = [id, ...current.filter(x => x !== id)]
-              emitAction({ type: 'reorder', team: t.name, ops: reorderOps(current, desired) })
-            }))
-          }
-        }
-      }
-    }
-    el.append(...items)
-    el.style.left = `${Math.min(x, window.innerWidth - 200)}px`
-    const menuH = items.length * 30 + 8
-    el.style.top = `${Math.max(8, Math.min(y, window.innerHeight - menuH - 8))}px`
-    el.addEventListener('keydown', (ev) => {
-      const e = ev as KeyboardEvent
-      const buttons = Array.from(el.querySelectorAll<HTMLButtonElement>('[role=menuitem]'))
-      const idx = buttons.indexOf(document.activeElement as HTMLButtonElement)
-      if (e.key === 'ArrowDown') { e.preventDefault(); buttons[(idx + 1 + buttons.length) % buttons.length]?.focus() }
-      else if (e.key === 'ArrowUp') { e.preventDefault(); buttons[(idx - 1 + buttons.length) % buttons.length]?.focus() }
-      else if (e.key === 'Home') { e.preventDefault(); buttons[0]?.focus() }
-      else if (e.key === 'End') { e.preventDefault(); buttons[buttons.length - 1]?.focus() }
-      else if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation() // drill-back is menu-internal; root must not double-close
-        if (menuLevel !== 'root') openMenu(x, y, target, 'root')
-        else closeMenu()
-      }
-    })
-    root.appendChild(el)
-    menu = el
-    items[0]?.focus()
-  }
-
-  /** Context menu from a real contextmenu event or the keyboard equivalent. */
-  function contextMenuAt(x: number, y: number, target: Element | null): void {
-    if (dialog !== null) return
-    // Peer endpoints are read-only entries: no roster menu for them.
-    const probeNode = target?.closest<HTMLElement>('.p-node') ?? null
-    if (probeNode !== null && model.getNode(probeNode.dataset.id ?? '')?.remote === true) return
-    const nodeEl = probeNode
-    const headEl = target?.closest<HTMLElement>('.p-frame-head') ?? null
-    if (nodeEl !== null) {
-      const id = nodeEl.dataset.id ?? ''
-      if (!model.isSelected(id)) model.setSelection([id])
-      menuAnchor = nodeEl
-      openMenu(x, y, { kind: 'node', id })
-    } else if (headEl !== null) {
-      menuAnchor = headEl
-      openMenu(x, y, { kind: 'frame', name: headEl.dataset.frame ?? '' })
-    }
   }
 
   // ── gestures ──
@@ -1256,14 +652,14 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
 
   function pointerDown(ev: SeamPointer): void {
     if (viewW === 0) syncViewSize()
-    if (dialog !== null) { ev.preventDefault(); return } // modal: no gestures behind the dialog
+    if (menus.isDialogOpen()) { ev.preventDefault(); return } // modal: no gestures behind the dialog
     const target = ev.target as Element | null
     // Context-menu dismissal: the first pointerdown outside an open menu
     // closes it and is swallowed; a press on the menu's own chrome is
     // swallowed too — only its items act.
-    if (menu !== null) {
+    if (menus.isMenuOpen()) {
       if (target !== null && target.closest('.p-menu') !== null) return
-      closeMenu()
+      menus.closeMenu()
       ev.preventDefault()
       return
     }
@@ -1441,7 +837,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         suppressNextMenu = true
         markDirty() // the viewport persists with the layout
       } else if (pressTarget !== null) {
-        contextMenuAt(x, y, pressTarget) // clean right-click: context menu
+        menus.contextMenuAt(x, y, pressTarget) // clean right-click: context menu
       }
       return
     }
@@ -1486,7 +882,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   }
 
   function wheel(ev: SeamPointer): void {
-    if (menu !== null) closeMenu()
+    if (menus.isMenuOpen()) menus.closeMenu()
     const p = localXY(ev)
     // Wheel = pointer-anchored zoom (owner ruling 2026-09-01: 鼠标滚动 =
     // 放大缩小), with or without Ctrl — both muscle memories land on the
@@ -1520,12 +916,12 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   }
 
   function key(ev: SeamKey): void {
-    if (dialog !== null) return // modal: the dialog input handles Enter/Esc itself
+    if (menus.isDialogOpen()) return // modal: the dialog input handles Enter/Esc itself
     if (ev.ctrlKey || ev.metaKey) return // browser/OS chords stay browser/OS
-    if (menu !== null) {
+    if (menus.isMenuOpen()) {
       // The menu owns most keys (its own handler navigates); Escape still
       // closes from here so a seam/keyboard Esc never gets lost.
-      if (ev.key === 'Escape') { closeMenu(); ev.preventDefault() }
+      if (ev.key === 'Escape') { menus.closeMenu(); ev.preventDefault() }
       return
     }
     if (ev.key === ' ' && ev.target === root) { spaceDown = true; ev.preventDefault(); return }
@@ -1534,7 +930,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     if ((ev.key === 'Enter' || ev.key === ' ') && headTarget !== null) {
       ev.preventDefault()
       const r = headTarget.getBoundingClientRect()
-      contextMenuAt(r.left + r.width / 2, r.top + r.height / 2, headTarget)
+      menus.contextMenuAt(r.left + r.width / 2, r.top + r.height / 2, headTarget)
       return
     }
     if (ev.key === ' ' && (ev.target as Element | null)?.classList?.contains('p-node')) {
@@ -1550,17 +946,17 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       ev.preventDefault()
       const fe = (document.activeElement as Element | null) ?? null
       const r = fe?.getBoundingClientRect?.() ?? { left: 0, top: 0, width: 0, height: 0 }
-      contextMenuAt(r.left + r.width / 2, r.top + r.height / 2, fe)
+      menus.contextMenuAt(r.left + r.width / 2, r.top + r.height / 2, fe)
       return
     }
     if (ev.key === 'Delete' || ev.key === 'Backspace') { ev.preventDefault(); deleteFocused(); return }
     if (ev.altKey && (ev.key === 'ArrowUp' || ev.key === 'ArrowDown')) { ev.preventDefault(); altMove(ev.key === 'ArrowUp'); return }
-    if (ev.key === 'g' || ev.key === 'G') { startCreateFromSelection(); return }
+    if (ev.key === 'g' || ev.key === 'G') { menus.startCreateFromSelection(); return }
     if (ev.key === '0') { fitToContent(); return }
     if (ev.key === '=' || ev.key === '+') { zoomCenter(1.2); return }
     if (ev.key === '-') { zoomCenter(1 / 1.2); return }
     if (ev.key === 'Escape') {
-      if (menu !== null) { closeMenu(); render(); return } // menu > clear selection
+      if (menus.isMenuOpen()) { menus.closeMenu(); render(); return } // menu > clear selection
       model.setSelection([])
       render()
       return
@@ -1598,8 +994,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         emitAction({ type: 'remove-member', team: teams[0]!, ids: [id] })
         return
       }
-      menuAnchor = nodeEl
-      openMenu(window.innerWidth / 2, window.innerHeight / 2, { kind: 'node', id }, 'leave')
+      menus.openMenu(window.innerWidth / 2, window.innerHeight / 2, { kind: 'node', id }, 'leave', nodeEl)
       return
     }
     notice('info', '焦点不在节点或团队框上')
@@ -1641,7 +1036,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // menu programmatically at pointerup. Either way the native menu dies.
     e.preventDefault()
     if (suppressNextMenu) { suppressNextMenu = false; return }
-    contextMenuAt(e.clientX, e.clientY, e.target)
+    menus.contextMenuAt(e.clientX, e.clientY, e.target)
   }, signal)
 
   // ── poll reconcile: incremental, never repositions existing nodes ──
@@ -1655,11 +1050,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // migration made this view the join surface, so they ride a compact
     // toolbar chip instead of vanishing entirely.
     lastSessions = input.sessions
-    lastUnjoined = input.sessions.filter(s => s.joined !== true && !s.id.startsWith('peer-'))
-    netBtn.textContent = `未入网${lastUnjoined.length > 0 ? `(${String(lastUnjoined.length)})` : ''}`
-    netBtn.disabled = lastUnjoined.length === 0
-    netBtn.setAttribute('aria-disabled', String(lastUnjoined.length === 0))
-    if (lastUnjoined.length === 0) closeNetMenu()
+    menus.setUnjoined(input.sessions.filter(s => s.joined !== true && !s.id.startsWith('peer-')))
     const memberships = new Map<string, Array<{ team: string; index: number }>>()
     for (const team of input.teams) {
       for (let i = 0; i < team.members.length; i++) {
@@ -1800,7 +1191,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
     // An open node panel follows the poll: facts (joins, leaves, team
     // declarations, peer arrivals) land within one cadence.
-    if (nodePanel !== null) renderNodePanel()
+    nodes.refresh()
     renderStatus(input)
     // First-run framing: with no saved layout the ring seats are centered on
     // world (0,0) while the viewport origin is the board's top-left corner,
@@ -1915,7 +1306,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       keyUp,
       contextMenu(ev: SeamPointer): void {
         ev.preventDefault()
-        contextMenuAt(ev.clientX, ev.clientY, ev.target)
+        menus.contextMenuAt(ev.clientX, ev.clientY, ev.target)
       },
     },
   }
