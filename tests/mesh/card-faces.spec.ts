@@ -19,7 +19,7 @@ import TimerService from '@deepseek-ai/cordis-plugin-timer'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { apply, type Config } from '../../src/index.ts'
 import { envelopeFor } from '../wire/envelope.ts'
-import { bootNode } from './harness.ts'
+import { bootNode, reservePort } from './harness.ts'
 
 async function getCard(port: number, headers: Record<string, string> = {}, query = ''): Promise<Record<string, unknown>> {
   return JSON.parse(await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json${query}`, { headers })).text()) as Record<string, unknown>
@@ -143,10 +143,15 @@ describe('G1 wake-on-route regression: cold rows stay reachable for named caller
   })
 
   it('the caller node (named via X-A2A-Caller) resolves and delivers to a cold session; an anonymous curl cannot even see the listing', async () => {
-    const target = await bootNode({ name: 'target', session: 'mesh-target', team: 'target-zone', sessionNodes: true })
+    // 0.6.25 W3 bilateral link policy: full-card linkage between hosts
+    // requires BOTH operators' seeding gestures — the harness wires the
+    // peers mutually (reserved ports, cross-referenced URLs).
+    const targetPort = await reservePort()
+    const callerPort = await reservePort()
+    const target = await bootNode({ name: 'target', session: 'mesh-target', team: 'target-zone', sessionNodes: true, port: targetPort, peers: [`http://127.0.0.1:${String(callerPort)}`] })
     // Loopback-bound harness nodes: the plugin derives 127.0.0.1 from the
     // actual bind (production pocket tunnels override via originClaimUrl).
-    const caller = await bootNode({ name: 'caller', session: 'mesh-caller', team: 'caller-zone', peers: [target.baseUrl] })
+    const caller = await bootNode({ name: 'caller', session: 'mesh-caller', team: 'caller-zone', port: callerPort, peers: [`http://127.0.0.1:${String(targetPort)}`] })
     try {
       // The target's operator joins a session that then goes cold.
       const joinRes = await globalThis.fetch(`http://127.0.0.1:${String(target.port)}/__dsh_a2a/join`, {

@@ -136,8 +136,12 @@ describe('mesh baseline — real cross-machine closed loops', () => {
   })
 
   it('a joined session node on a remote host is listed with its facts and routable cross-node', async () => {
-    const cargo = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo', sessionNodes: true })
-    const alpha = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', peers: [cargo.baseUrl] })
+    // 0.6.25 W3 bilateral link policy: mutual seeding (reserved ports,
+    // cross-referenced URLs) — both operators made the gesture.
+    const cargoPort = await reservePort()
+    const alphaPort = await reservePort()
+    const cargo = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo', sessionNodes: true, port: cargoPort, peers: [`http://127.0.0.1:${String(alphaPort)}`] })
+    const alpha = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', port: alphaPort, peers: [`http://127.0.0.1:${String(cargoPort)}`] })
     try {
       // cargo's agent went live at boot (harness) and now joins the network
       // from its own host.
