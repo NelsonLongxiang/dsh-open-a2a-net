@@ -49,6 +49,18 @@ export interface DeadRow {
   readonly reason?: string
   /** First line of the dispatched message (see {@link PendingRow.brief}). */
   readonly brief?: string
+  /** gh#31: which side of the wire this row served (absent on old hosts). */
+  readonly direction?: 'inbound' | 'outbound'
+}
+
+/** gh#31: one archived row from /state `archived` — the per-task outcome
+ *  for a task that left the ledger (completed / abandoned / cancelled…). */
+export interface ArchivedRow {
+  readonly taskId: string
+  readonly team: string
+  readonly resolvedAt: number
+  readonly outcome: string
+  readonly summary?: string
 }
 
 /** One session row from /state `sessions` (live or cold joined). */
@@ -132,6 +144,8 @@ export interface StateBody {
   readonly tasks?: readonly PendingRow[]
   readonly tasksStaleCount?: number
   readonly tasksDead?: readonly DeadRow[]
+  /** gh#31: per-task outcomes for rows that left the ledger (bounded). */
+  readonly archived?: readonly ArchivedRow[]
   readonly archivedCount?: number
   /** Settled-archive split by verdict ('completed' | 'declined' | … | 'abandoned' | 'unclassified'). */
   readonly archivedSplit?: Readonly<Record<string, number>>

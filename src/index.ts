@@ -1922,7 +1922,12 @@ const reportLoopRing = new Map<string, number[]>()
               tasksStaleCount: taskLedger.list().filter(task => task.status === 'pending' && (task.receiptExpected === false || Date.now() - task.startedAt >= 60 * 60_000)).length,
               tasksDead: taskLedger.list()
                 .filter(task => task.status === 'dead')
-                .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt, reason: task.reason ?? 'unspecified', ...(task.brief !== undefined ? { brief: task.brief } : {}) })),
+                .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt, reason: task.reason ?? 'unspecified', ...(task.brief !== undefined ? { brief: task.brief } : {}), ...(task.direction !== undefined ? { direction: task.direction } : {}) })),
+              // gh#31: per-task outcomes for rows that LEFT the ledger — the
+              // chat drawer used to guess (settled, abandoned or cancelled).
+              // Bounded to the archive (≤64), newest first, with the
+              // controlled-vocabulary verdict each row settled by.
+              archived: taskLedger.archive().map(row => ({ taskId: row.taskId, team: row.team, resolvedAt: row.resolvedAt, outcome: row.outcome ?? 'unclassified', ...(row.summary !== undefined && row.summary !== '' ? { summary: row.summary.slice(0, 160) } : {}) })).slice(-64).reverse(),
               archivedCount: taskLedger.archive().length,
               // Ledger density face: the settled archive split by verdict, so
               // the workbench can say WHICH way those rows settled instead of
