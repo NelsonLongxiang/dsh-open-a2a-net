@@ -195,10 +195,12 @@ function collectOwnerSignalUi() {
     }
     return text
   }
-  const ui = agg(join(REPO, 'nexus-stage/src'))
+  const ui = agg(join(REPO, 'nexus-stage/src')) + agg(join(REPO, 'nexus-stage/tests'))
   const rows = []
   rows.push({ name: 'alert-class', ok: /wb-row-alert/.test(ui) ? 1 : 0, detail: '异常驱动标红（pending>1h+死信）' })
-  rows.push({ name: 'forensics-toggle', ok: /展开取证/.test(ui) ? 1 : 0, detail: '日志入口降级折叠（属主视线外，席位一键可达）' })
+  // 2026-10-23 属主裁定（PR#28）：对话默认展开——推翻 b324460 折叠，取证开关随折叠退役。
+  // 新锚=chat-drawer-dom.spec 首例「shows the conversation by default as bubbles」。
+  rows.push({ name: 'chat-default-expanded', ok: /shows the conversation by default/.test(ui) ? 1 : 0, detail: '对话默认展开（属主裁定 PR#28，取代折叠取证开关）' })
   rows.push({ name: 'brief-first', ok: /无摘要——派发未带 brief|brief/.test(ui) ? 1 : 0, detail: '订单卡 brief 主文案' })
   return rows
 }
