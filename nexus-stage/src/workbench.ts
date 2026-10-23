@@ -18,6 +18,7 @@
  *   state, and the active mode are view state kept across updates.
  * @module nexus-stage/workbench
  */
+import { createChatDrawer, type ChatTarget } from './wb-chat'
 
 /** One pending ledger row from /state `tasks`. */
 export interface PendingRow {
@@ -246,15 +247,6 @@ type Selection =
   | { kind: 'canvas'; row: CanvasTeamRow }
   | undefined
 
-/** Chat drawer target (0.6.13, remote 0.6.15): a node picked on the board or in the
- * directory — session/log get the local transcript tail, remote rows and peers
- * read through the /a2a/log proxy. Reading, not jumping. */
-type ChatTarget =
-  | { kind: 'session'; id: string; title: string; sub: string; team?: string; live?: boolean }
-  | { kind: 'log'; id: string; title: string; sub: string }
-  | { kind: 'peer'; id: string; title: string; sub: string; url?: string; picked?: string }
-  | { kind: 'remote'; team: string; title: string; sub: string; row?: RemoteRow }
-
 /** The rail sections. */
 export type WorkbenchSection = 'directory' | 'hosts' | 'ledger' | 'activity' | 'plan'
 
@@ -336,24 +328,6 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // Quick-dispatch form (0.6.9), cached per target routing team the same
   // draftForm way: a textarea's draft must survive the 3s poll remount.
   let dispatchForm: { team: string; form: HTMLFormElement; text: HTMLTextAreaElement; note: HTMLElement } | null = null
-  // Chat drawer (0.6.13): the picked node + its own dispatch form cache
-  // (separate from the inspector's so both faces can hold different teams).
-  let chatTarget: ChatTarget | null = null
-  /** 0.6.17: one-shot composer focus on drawer open (consumed by renderChat). */
-  let chatFocusPending = false
-  let chatForm: { team: string; form: HTMLFormElement; text: HTMLTextAreaElement; note: HTMLElement } | null = null
-  // 0.6.11: inline transcript cache — one fetch per session id, refreshed on
-  // demand. renderInspector rebuilds every poll, so the cache keeps the
-  // transcript block from refetching on each 3s tick.
-  const transcriptCache = new Map<string, { ok: boolean; messages?: Array<{ role: string; text: string }>; error?: string } | undefined>()
-  /** 0.6.17 chat-UI convention: reading position per transcript key — the
-   *  3s poll rebuilds the body, the scroll restores instead of jumping top. */
-  const transcriptScroll = new Map<string, number>()
-  /** Owner signal (2026-10-21): transcripts default to a collapsed detail —
-   *  the seats' forensics face, not the owner's. Expansion persists per key. */
-  const expandedTranscripts = new Set<string>()
-  /** 0.6.15: peer-host session listings, cached per peer url. */
-  const peerListCache = new Map<string, { ok: boolean; sessions?: Array<{ id: string; sizeBytes: number }>; error?: string } | undefined>()
   // 0.6.12: readable local logs (host-scope list, newest first). Refreshed
   // opportunistically per poll; rows render in the directory's 本机日志 section.
   let logRows: Array<{ id: string; mtimeMs: number; sizeBytes: number }> = []
@@ -484,49 +458,21 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   const inspectorBody = el('div', 'wb-inspector-body')
   inspector.appendChild(inspectorBody)
 
-  // ── Node chat drawer (0.6.13) ──
-  // Clicking a node — on the planning board or a directory session/log/peer
-  // row — opens the conversation reading face as a right-side chat UI. The
-  // transcript tail is local-only; peers get the honest cross-host note.
-  const chat = el('aside', 'wb-chat')
-  const chatHead = el('div', 'wb-chat-head')
-  const chatDot = el('span', 'wb-chat-dot')
-  const chatTitle = el('span', 'wb-chat-title')
-  const chatSub = el('span', 'wb-chat-sub')
-  const chatClose = el('button', 'wb-icon-btn')
-  chatClose.type = 'button'
-  chatClose.setAttribute('aria-label', '关闭对话')
-  chatClose.textContent = '✕'
-  chatClose.addEventListener('click', () => closeChat())
-  chatHead.appendChild(chatDot)
-  chatHead.appendChild(chatTitle)
-  chatHead.appendChild(chatSub)
-  chatHead.appendChild(chatClose)
-  const chatBody = el('div', 'wb-chat-body')
-  chat.appendChild(chatHead)
-  chat.appendChild(chatBody)
-  // 0.6.17 chat-UI convention: Escape closes the drawer. Document-scoped
-  // (a reading drawer often holds no focusable element), but it never
-  // steals Escape from another surface's text field or from the planning
-  // board's own deselect gesture.
-  document.addEventListener('keydown', ev => {
-    if (ev.key !== 'Escape' || !chat.classList.contains('is-open')) return
-    const target = ev.target
-    if (!(target instanceof HTMLElement)) return
-    const insideChat = chat.contains(target)
-    if (!insideChat) {
-      const typingElsewhere = target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement || target.isContentEditable
-      const onBoard = target.closest('.wb-stage-board') !== null
-      if (typingElsewhere || onBoard) return
-    }
-    closeChat()
+  // ── Node chat drawer (0.6.13; rewritten 2026-10-23 as wb-chat) ──
+  // Clicking a node — on the planning board or a directory row — opens the
+  // conversation as a right-side chat: thread + composer + receipt tracking.
+  const chat = createChatDrawer({
+    now: deps.now,
+    sessionLog: deps.sessionLog,
+    remoteSessionLog: deps.remoteSessionLog,
+    dispatchQuick: deps.dispatchQuick,
   })
 
   stage.appendChild(dataStack)
   body.appendChild(rail)
   body.appendChild(stage)
   body.appendChild(inspector)
-  body.appendChild(chat)
+  body.appendChild(chat.root)
   root.appendChild(header)
   root.appendChild(body)
 
@@ -1256,287 +1202,9 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     return wrap
   }
 
-  // ── Inline transcript (0.6.11, remote 0.6.15) ──
-  // The tail of a session's conversation log, read-only, on this page —
-  // local sessions read the host log face; remote sessions read through
-  // the proxy. Cached per cache key across the 3s poll remounts; the
-  // refresh button forces one re-read. Reading — not jumping — is the
-  // interaction.
-  type TranscriptState = { ok: boolean; messages?: Array<{ role: string; text: string }>; error?: string } | undefined
-
-  function transcriptBlock(cacheKey: string, load: () => Promise<TranscriptState>): HTMLElement {
-    const block = el('div', 'wb-transcript')
-    const head = el('div', 'wb-side-head')
-    // Owner signal (2026-10-21): log reading is the SEAT's forensics face —
-    // it defaults to a collapsed detail (展开 once per transcript; the
-    // expansion persists across the 3s poll remounts). The owner reads
-    // results in the ledger; seats click 展开 when they need the record.
-    const expand = el('button', 'wb-transcript-refresh')
-    expand.type = 'button'
-    const paintExpand = (): void => {
-      expand.textContent = expandedTranscripts.has(cacheKey) ? '收起取证' : '展开取证'
-    }
-    expand.addEventListener('click', () => {
-      if (expandedTranscripts.has(cacheKey)) expandedTranscripts.delete(cacheKey)
-      else expandedTranscripts.add(cacheKey)
-      paintExpand()
-      body.classList.toggle('is-folded', !expandedTranscripts.has(cacheKey))
-      if (expandedTranscripts.has(cacheKey)) settle()
-    })
-    paintExpand()
-    head.appendChild(expand)
-    head.appendChild(el('span', 'wb-transcript-title')).textContent = '最近对话'
-    const refresh = el('button', 'wb-transcript-refresh')
-    refresh.type = 'button'
-    refresh.textContent = '刷新'
-    head.appendChild(refresh)
-    block.appendChild(head)
-    const body = el('div', 'wb-transcript-body')
-    if (!expandedTranscripts.has(cacheKey)) body.classList.add('is-folded')
-    block.appendChild(body)
-    // 0.6.17 chat-UI conventions: the reading position survives the 3s poll
-    // remount (scroll captured on scroll, restored after every paint), and a
-    // FIRST successful load lands on the newest turn (bottom) like every
-    // chat surface. Refresh explicitly re-lands on the bottom.
-    let landed = transcriptScroll.has(cacheKey)
-    let landOnBottom = !landed
-    const settle = (): void => {
-      if (landOnBottom) {
-        body.scrollTop = body.scrollHeight
-        landOnBottom = false
-        landed = true
-      } else if (transcriptScroll.has(cacheKey)) {
-        body.scrollTop = transcriptScroll.get(cacheKey) ?? 0
-      }
-    }
-    body.addEventListener('scroll', () => {
-      if (body.scrollTop > 0 || landed) transcriptScroll.set(cacheKey, body.scrollTop)
-    })
-    const paint = (state: TranscriptState): void => {
-      body.replaceChildren()
-      if (state === undefined) {
-        body.appendChild(el('div', 'wb-muted')).textContent = '读取中…'
-        return
-      }
-      if (state.ok !== true || state.messages === undefined) {
-        body.appendChild(el('div', 'wb-muted')).textContent = `无法读取（${state.error ?? '未知错误'}）`
-        return
-      }
-      if (state.messages.length === 0) {
-        body.appendChild(el('div', 'wb-muted')).textContent = '暂无对话记录'
-        return
-      }
-      for (const message of state.messages) {
-        const row = el('div', `wb-transcript-row wb-transcript-${message.role === 'user' ? 'user' : 'assistant'}`)
-        row.appendChild(el('span', 'wb-transcript-role')).textContent = message.role === 'user' ? '问' : '答'
-        row.appendChild(el('span', 'wb-transcript-text')).textContent = message.text
-        body.appendChild(row)
-      }
-      // Scroll writes only stick on ATTACHED elements: the synchronous
-      // cache-hit path paints before the block joins the DOM, so the
-      // settle must run on the next frame, after append + layout.
-      requestAnimationFrame(() => {
-        if (body.isConnected) settle()
-      })
-    }
-    const run = (force: boolean): void => {
-      if (force) landOnBottom = true
-      if (!force && transcriptCache.has(cacheKey)) {
-        paint(transcriptCache.get(cacheKey))
-        return
-      }
-      transcriptCache.set(cacheKey, undefined)
-      paint(undefined)
-      void load().then(result => {
-        transcriptCache.set(cacheKey, result)
-        // The poll may have remounted the drawer since; only the live
-        // body repaints, the cache carries the result to the next mount.
-        if (body.isConnected) paint(result)
-      })
-    }
-    refresh.addEventListener('click', () => run(true))
-    run(false)
-    return block
-  }
-
-  function localTranscript(id: string): HTMLElement {
-    return transcriptBlock(`local:${id}`, async () => await deps.sessionLog?.(id) ?? { ok: false, error: 'sessionLog unavailable' })
-  }
-
-  function remoteTranscript(cacheKey: string, query: { team?: string; peer?: string; id?: string }): HTMLElement {
-    return transcriptBlock(cacheKey, async () => await deps.remoteSessionLog?.(query) ?? { ok: false, error: 'remoteSessionLog unavailable' })
-  }
-
-  /** Peer-host session listing (0.6.15): the list face of /a2a/log through
-   *  the proxy — recent readable sessions on that peer, click to drill. */
-  function peerLogList(url: string): HTMLElement {
-    const block = el('div', 'wb-transcript')
-    const head = el('div', 'wb-side-head')
-    head.textContent = '对端最近会话'
-    block.appendChild(head)
-    const body = el('div', 'wb-transcript-body')
-    block.appendChild(body)
-    const cacheKey = `peerlist:${url}`
-    const paint = (state: { ok: boolean; sessions?: Array<{ id: string; sizeBytes: number }>; error?: string } | undefined): void => {
-      body.replaceChildren()
-      if (state === undefined) {
-        body.appendChild(el('div', 'wb-muted')).textContent = '读取中…'
-        return
-      }
-      if (state.ok !== true || state.sessions === undefined) {
-        body.appendChild(el('div', 'wb-muted')).textContent = `无法读取（${state.error ?? '未知错误'}）`
-        return
-      }
-      if (state.sessions.length === 0) {
-        body.appendChild(el('div', 'wb-muted')).textContent = '对端没有可读会话'
-        return
-      }
-      const fmtSize = (n: number): string => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)} MB` : n >= 1_000 ? `${Math.round(n / 1_000)} KB` : `${n} B`
-      for (const row of state.sessions) {
-        const item = el('button', 'wb-member-row')
-        item.type = 'button'
-        item.appendChild(el('span', 'wb-chat-dot is-cold')).textContent = '❐'
-        item.appendChild(el('span', 'wb-item-label')).textContent = `…${row.id.slice(-12)} · ${fmtSize(row.sizeBytes)}`
-        item.addEventListener('click', () => {
-          if (chatTarget?.kind === 'peer') chatTarget.picked = row.id
-          renderChat()
-        })
-        body.appendChild(item)
-      }
-    }
-    if (peerListCache.has(cacheKey)) paint(peerListCache.get(cacheKey))
-    else {
-      paint(undefined)
-      void deps.remoteSessionLog?.({ peer: url }).then(result => {
-        peerListCache.set(cacheKey, result)
-        if (body.isConnected) paint(result)
-      })
-    }
-    return block
-  }
-
-  // ── Node chat drawer (0.6.13) ──
-  // The right-side reading face. The transcript block is cached per id, so
-  // re-rendering across the 3s poll is cheap; the dispatch form has its own
-  // cache slot so the inspector's team and the chat's can coexist.
-  function closeChat(): void {
-    chatTarget = null
-    chatForm = null
-    chat.classList.remove('is-open')
-  }
-
   function openChat(target: ChatTarget): void {
-    chatTarget = target
-    // Keep the chat form only when it belongs to the same session team.
-    const team = target.kind === 'session' || target.kind === 'remote' ? target.team : undefined
-    if (chatForm !== null && chatForm.team !== team) chatForm = null
-    // 0.6.17: focus the composer ONCE per open — never on poll remounts,
-    // which would steal focus every 3s (the focus bug the owner hit).
-    chatFocusPending = true
-    renderChat()
-    chat.classList.add('is-open')
+    chat.open(target)
     root.classList.remove('is-rail-open')
-  }
-
-  /** 0.6.17 focus law: the 3s poll rebuilds the drawer, and MOVING a
-   *  focused node (re-append) blurs it in every browser — the composer
-   *  would lose the caret mid-typing. Capture focus + selection around the
-   *  face render and restore it on the same node after (cached nodes come
-   *  back; throwaway nodes just lose focus as before). */
-  function renderChat(): void {
-    const activeBefore = document.activeElement
-    const focusWasInside = activeBefore instanceof HTMLElement && chatBody.contains(activeBefore)
-    const selection = activeBefore instanceof HTMLTextAreaElement || activeBefore instanceof HTMLInputElement
-      ? { start: activeBefore.selectionStart, end: activeBefore.selectionEnd }
-      : undefined
-    renderChatFace()
-    if (!focusWasInside || !(activeBefore instanceof HTMLElement) || !chatBody.contains(activeBefore)) return
-    activeBefore.focus({ preventScroll: true })
-    if (selection !== undefined && activeBefore instanceof HTMLTextAreaElement) {
-      activeBefore.setSelectionRange(selection.start, selection.end)
-    }
-  }
-
-  function renderChatFace(): void {
-    const t = chatTarget
-    if (t === null) return
-    chatDot.className = `wb-chat-dot ${t.kind === 'peer' ? 'is-peer' : t.kind === 'log' || t.kind === 'remote' || t.live === false ? 'is-cold' : 'is-live'}`
-    chatTitle.textContent = t.title
-    chatSub.textContent = t.sub
-    clear(chatBody)
-    if (t.kind === 'peer') {
-      // 0.6.15: the peer host is readable through the proxy — list its
-      // recent sessions, then drill into one. Without the proxy dep the
-      // honest where-the-records-live note stays.
-      const url = t.url ?? (t.title.startsWith('http') ? t.title : '')
-      if (url === '' || deps.remoteSessionLog === undefined) {
-        const note = el('div', 'wb-chat-note')
-        note.textContent = `对端主机节点（${t.sub}）—— 会话记录存放在对端机器上，本页只读本机会话日志。`
-        chatBody.appendChild(note)
-        return
-      }
-      const note = el('div', 'wb-chat-note')
-      note.textContent = '对端主机节点 —— 以下会话列表经本机代理从对端 /a2a/log 读取。'
-      chatBody.appendChild(note)
-      if (t.picked !== undefined) {
-        const back = el('button', 'wb-transcript-refresh')
-        back.type = 'button'
-        back.textContent = '← 返回会话列表'
-        back.addEventListener('click', () => {
-          if (chatTarget?.kind === 'peer') chatTarget.picked = undefined
-          renderChat()
-        })
-        chatBody.appendChild(back)
-        chatBody.appendChild(remoteTranscript(`peer:${url}:${t.picked}`, { peer: url, id: t.picked }))
-      } else {
-        chatBody.appendChild(peerLogList(url))
-      }
-      return
-    }
-    if (t.kind === 'remote') {
-      // Card metadata the old inspector face carried (origin/via/workspace),
-      // kept readable in the drawer head area.
-      const meta = el('div')
-      if (t.row?.origin !== undefined) textRow(meta, '来源', t.row.origin)
-      if (t.row?.via !== undefined) textRow(meta, '经', t.row.via)
-      if (t.row?.workspace !== undefined) textRow(meta, '工作区', t.row.workspace)
-      if (meta.childElementCount > 0) chatBody.appendChild(meta)
-      if (deps.remoteSessionLog !== undefined) {
-        const note = el('div', 'wb-chat-note')
-        note.textContent = '远端会话节点 —— 经本机代理从对端 /a2a/log 读取最近对话。'
-        chatBody.appendChild(note)
-        chatBody.appendChild(remoteTranscript(`remote:${t.team}`, { team: t.team }))
-      } else {
-        const note = el('div', 'wb-chat-note')
-        note.textContent = '远端节点的对话记录在对端机器上；本页的代理读取面未启用。'
-        chatBody.appendChild(note)
-      }
-    } else {
-      if (t.kind === 'log') {
-        const note = el('div', 'wb-chat-note')
-        note.textContent = '只读日志 —— 此会话当前不在网络目录（可能已归档或未入网）。'
-        chatBody.appendChild(note)
-      }
-      if (deps.sessionLog !== undefined) chatBody.appendChild(localTranscript(t.id))
-    }
-    const dispatchTeam = t.kind === 'session' || t.kind === 'remote' ? t.team : undefined
-    if (dispatchTeam !== undefined && dispatchTeam !== '' && deps.dispatchQuick !== undefined) {
-      const wrap = el('div', 'wb-dispatch')
-      const head = el('div', 'wb-side-head')
-      head.textContent = '发送'
-      wrap.appendChild(head)
-      if (chatForm === null) chatForm = { team: dispatchTeam, ...buildDispatchForm(dispatchTeam) }
-      wrap.appendChild(chatForm.form)
-      chatBody.appendChild(wrap)
-      if (chatFocusPending) {
-        chatFocusPending = false
-        // preventScroll: focusing must not fight the transcript's own
-        // landing scroll (bottom on first read).
-        chatForm.text.focus({ preventScroll: true })
-      }
-    } else {
-      chatFocusPending = false
-    }
   }
 
   /** Board picks (0.6.13): resolve a node id against the latest state. */
@@ -1605,9 +1273,9 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     renderDraftTargets()
     renderHosts()
     renderLedger()
-    // 0.6.13: an open chat drawer re-renders against the fresh state (title
-    // freshness + the transcript block's per-id cache answers instantly).
-    if (chatTarget !== null) renderChat()
+    // The open chat drawer refreshes in place (head + receipt statuses); its
+    // thread and composer are never rebuilt by the poll.
+    chat.update(state)
     renderActivity()
     renderPlan()
     renderInspector()

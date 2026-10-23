@@ -687,42 +687,53 @@ describe('inline transcript (0.6.11)', () => {
     openSession(v)
     expect(sessionLog).toHaveBeenCalledWith('session-11111111-aaaa')
     await vi.waitFor(() => {
-      const body = v.root.querySelector('.wb-transcript-body')!
+      const body = v.root.querySelector('.wb-chat-log')!
       expect(text(body)).toContain('检查默认 profile 插件')
       expect(text(body)).toContain('开始扫描插件列表')
     })
-    const roles = [...v.root.querySelectorAll('.wb-transcript-role')].map(n => text(n))
+    // 2026-10-23 chat rewrite: turns are bubbles; the role rides a
+    // screen-reader label (side + tint carry it visually).
+    const roles = [...v.root.querySelectorAll('.wb-chat-log .wb-msg-who')].map(n => text(n))
     expect(roles).toEqual(['问', '答'])
+    expect(v.root.querySelector('.wb-chat-log .wb-msg-user')).not.toBeNull()
+    expect(v.root.querySelector('.wb-chat-log .wb-msg-assistant')).not.toBeNull()
   })
   it('serves the cached tail across poll remounts without refetching', async () => {
     const { v, sessionLog } = bench()
     v.update(state)
     openSession(v)
-    await vi.waitFor(() => expect(v.root.querySelector('.wb-transcript-body')!.textContent).toContain('开始扫描'))
-    // The 3s poll rebuilds the inspector; the cache answers, not the route.
+    await vi.waitFor(() => expect(v.root.querySelector('.wb-chat-log')!.textContent).toContain('开始扫描'))
+    // The 3s poll never rebuilds the drawer; the transcript is not refetched.
     v.update({ ...state, sessions: [...state.sessions] })
-    await vi.waitFor(() => expect(v.root.querySelector('.wb-transcript-body')!.textContent).toContain('开始扫描'))
+    await vi.waitFor(() => expect(v.root.querySelector('.wb-chat-log')!.textContent).toContain('开始扫描'))
     expect(sessionLog).toHaveBeenCalledTimes(1)
-    // The refresh button forces exactly one re-read (the fold toggle is a
-    // separate button — select by label, not position).
-    ;([...v.root.querySelectorAll('.wb-transcript-refresh')].find(b => text(b) === '刷新') as HTMLElement).click()
+    // Reopening the same session answers from the cache too.
+    ;(v.root.querySelector('.wb-chat-close') as HTMLElement).click()
+    openSession(v)
+    expect(sessionLog).toHaveBeenCalledTimes(1)
+    // The head's refresh button forces exactly one re-read.
+    ;(v.root.querySelector('.wb-chat-refresh') as HTMLElement).click()
     await vi.waitFor(() => expect(sessionLog).toHaveBeenCalledTimes(2))
   })
 
-  it('explains failure and hides entirely when the dep is absent', async () => {
+  it('explains failure, and says so when the transcript dep is absent', async () => {
     const failing = vi.fn(async () => ({ ok: false, error: 'no log artifact for this session' }))
     const v = createWorkbench({ now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(), canvasOp: vi.fn(async () => true), sessionLog: failing })
     document.body.appendChild(v.root)
     v.update(state)
     openSession(v)
-    await vi.waitFor(() => expect(text(v.root.querySelector('.wb-transcript-body'))).toContain('无法读取（no log artifact'))
+    await vi.waitFor(() => expect(text(v.root.querySelector('.wb-chat-log'))).toContain('无法读取（no log artifact'))
+    expect(v.root.querySelector('.wb-chat-log .wb-chat-empty.is-error')).not.toBeNull()
 
     const bare = createWorkbench({ now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(), canvasOp: vi.fn(async () => true) })
     document.body.appendChild(bare.root)
     bare.update(state)
     const item = [...bare.root.querySelectorAll('.wb-item-label')].find(n => text(n).includes('scout-01'))!
     item.click()
-    expect(bare.root.querySelector('.wb-transcript')).toBeNull()
+    // No transcript is read; the ledger's owed row for this team still shows
+    // (receipts are facts, independent of which deps are wired).
+    expect(bare.root.querySelectorAll('.wb-chat-log .wb-msg').length).toBe(0)
+    expect(text(bare.root.querySelector('.wb-chat-notice'))).toContain('本页未接入会话日志读取')
   })
 
   it('remote rows without the proxy dep keep the honest note instead of a transcript', () => {
@@ -734,7 +745,7 @@ describe('inline transcript (0.6.11)', () => {
     const item = [...v.root.querySelectorAll('.wb-item-label')].find(n => text(n).includes('remote-host'))!
     item.click()
     expect(text(v.root.querySelector('.wb-chat'))).toContain('远端节点的对话记录在对端机器上')
-    expect(v.root.querySelector('.wb-transcript')).toBeNull()
+    expect(v.root.querySelectorAll('.wb-chat-log .wb-msg').length).toBe(0)
   })
 })
 
@@ -755,7 +766,10 @@ describe('local log archive section (0.6.12)', () => {
     ;([...v.root.querySelectorAll('.wb-item')].find(n => text(n).includes('888-archived')) as HTMLElement).click()
     expect(text(v.root.querySelector('.wb-chat'))).toContain('只读日志')
     expect(sessionLog).toHaveBeenCalledWith('session-99998888-archived')
-    await vi.waitFor(() => expect(text(v.root.querySelector('.wb-transcript-body'))).toContain('开始扫描插件列表'))
+    await vi.waitFor(() => expect(text(v.root.querySelector('.wb-chat-log'))).toContain('开始扫描插件列表'))
+    // A read-only log: no composer, an explicit read-only footer instead.
+    expect(v.root.querySelector('.wb-chat .wb-dispatch-form')).toBeNull()
+    expect(text(v.root.querySelector('.wb-chat-readonly'))).toContain('只读日志')
   })
 
   it('counts the archive in the directory header and hides the section without the dep', async () => {
@@ -782,7 +796,7 @@ describe('node chat drawer (0.6.13)', () => {
     expect(text(chat.querySelector('.wb-chat-title'))).toBe('scout-01')
     expect(text(chat.querySelector('.wb-chat-sub'))).toBe('dsh/11111111')
     expect(sessionLog).toHaveBeenCalledWith('session-11111111-aaaa')
-    await vi.waitFor(() => expect(text(chat.querySelector('.wb-transcript-body'))).toContain('开始扫描插件列表'))
+    await vi.waitFor(() => expect(text(chat.querySelector('.wb-chat-log'))).toContain('开始扫描插件列表'))
     // The chat face carries its own send form (read + reply in one place).
     const form = chat.querySelector('.wb-dispatch-form') as HTMLFormElement
     ;(form.querySelector('.wb-dispatch-text') as HTMLTextAreaElement).value = 'board hello'
@@ -802,7 +816,7 @@ describe('node chat drawer (0.6.13)', () => {
     expect(chat.classList.contains('is-open')).toBe(true)
     expect(text(chat.querySelector('.wb-chat-title'))).toBe('http://192.168.3.157:13080')
     expect(text(chat)).toContain('会话记录存放在对端机器上')
-    expect(chat.querySelector('.wb-transcript')).toBeNull()
+    expect(chat.querySelectorAll('.wb-chat-log .wb-msg').length).toBe(0)
     expect(sessionLog).not.toHaveBeenCalled()
   })
 
@@ -832,7 +846,7 @@ describe('remote chat through the proxy (0.6.15)', () => {
     expect(text(chat)).toContain('node 192.168.3.157')
     await vi.waitFor(() => expect(remoteSessionLog).toHaveBeenCalledWith({ team: 'dsh-host-ca0c0a8d' }))
     await vi.waitFor(() => {
-      const body = chat.querySelector('.wb-transcript-body')!
+      const body = chat.querySelector('.wb-chat-log')!
       expect(text(body)).toContain('评审一下这个 PR')
       expect(text(body)).toContain('已读 diff，开始评审')
     })
@@ -847,17 +861,20 @@ describe('remote chat through the proxy (0.6.15)', () => {
     // Phase 1: the listing (via the proxy, never a direct dial).
     await vi.waitFor(() => expect(remoteSessionLog).toHaveBeenCalledWith({ peer: 'http://192.168.3.157:13080' }))
     await vi.waitFor(() => {
-      const rows = [...chat.querySelectorAll('.wb-member-row')].map(n => text(n))
+      const rows = [...chat.querySelectorAll('.wb-chat-session')].map(n => text(n))
       expect(rows.some(r => r.includes('-peer'))).toBe(true)
     })
+    expect((chat.querySelector('.wb-chat-back') as HTMLElement).hidden).toBe(true)
     // Phase 2: pick a session → transcript keyed peer:url:id.
-    ;(chat.querySelector('.wb-member-row') as HTMLElement).click()
+    ;(chat.querySelector('.wb-chat-session') as HTMLElement).click()
     await vi.waitFor(() => expect(remoteSessionLog).toHaveBeenLastCalledWith({ peer: 'http://192.168.3.157:13080', id: 'session-77777777-peer' }))
-    await vi.waitFor(() => expect(text(chat.querySelector('.wb-transcript-body'))).toContain('对端会话正文'))
-    // Phase 3: back to the listing.
-    ;(chat.querySelector('.wb-transcript-refresh') as HTMLElement).click()
+    await vi.waitFor(() => expect(text(chat.querySelector('.wb-chat-log'))).toContain('对端会话正文'))
+    // Phase 3: back to the listing through the head's back button.
+    const backBtn = chat.querySelector('.wb-chat-back') as HTMLElement
+    expect(backBtn.hidden).toBe(false)
+    backBtn.click()
     await vi.waitFor(() => {
-      const rows = [...chat.querySelectorAll('.wb-member-row')].map(n => text(n))
+      const rows = [...chat.querySelectorAll('.wb-chat-session')].map(n => text(n))
       expect(rows.some(r => r.includes('-peer'))).toBe(true)
     })
   })
@@ -938,24 +955,23 @@ describe('chat UI conventions (0.6.17)', () => {
     expect(chat.classList.contains('is-open')).toBe(false)
   })
 
-  it('transcript scroll position survives poll remounts instead of jumping to top', async () => {
+  it('the conversation is shown by default and its scroll position survives polls', async () => {
     const { v } = bench()
     v.update(state)
     const chat = openScoutChat(v)
-    await vi.waitFor(() => expect(text(chat.querySelector('.wb-transcript-body'))).toContain('开始扫描插件列表'))
-    const body = chat.querySelector('.wb-transcript-body') as HTMLElement
-    // Owner signal: transcripts start FOLDED (the seat forensics face) —
-    // expand first, then the scroll contract applies as before.
-    const expand = [...chat.querySelectorAll('.wb-transcript-refresh')].find(b => text(b) === '展开取证') as HTMLElement
-    expand.click()
-    // The user scrolled up while reading; the poll fires. The settle runs
-    // on the next frame (scroll writes only stick on attached elements).
-    body.scrollTop = 120
-    body.dispatchEvent(new Event('scroll', { bubbles: false }))
+    await vi.waitFor(() => expect(text(chat.querySelector('.wb-chat-log'))).toContain('开始扫描插件列表'))
+    // User ruling 2026-10-23 (reverses b324460's folded default for this face):
+    // no fold toggle, the thread is the conversation.
+    expect([...chat.querySelectorAll('button')].some(b => text(b) === '展开取证')).toBe(false)
+    const thread = chat.querySelector('.wb-chat-thread') as HTMLElement
+    expect(thread.getAttribute('role')).toBe('log')
+    // The user scrolled up while reading; the poll fires. The drawer is
+    // never rebuilt, so the same node keeps the same position.
+    thread.scrollTop = 120
+    thread.dispatchEvent(new Event('scroll', { bubbles: false }))
     v.update({ ...state, sessions: [...state.sessions] })
     await new Promise(resolve => { requestAnimationFrame(() => { resolve(null) }) })
-    const bodyAfter = v.root.querySelector('.wb-chat .wb-transcript-body') as HTMLElement
-    expect(bodyAfter).not.toBe(body)
-    expect(bodyAfter.scrollTop).toBe(120)
+    expect(v.root.querySelector('.wb-chat .wb-chat-thread')).toBe(thread)
+    expect(thread.scrollTop).toBe(120)
   })
 })
