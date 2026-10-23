@@ -117,8 +117,12 @@ export function createChatDrawer(deps: ChatDrawerDeps): ChatDrawer {
   const peerLists = new Map<string, PeerListing>()
   /** Messages sent from this page, per routing team. */
   const outbox = new Map<string, Outgoing[]>()
-  /** Task ids the ledger has shown as pending (a vanished one has settled). */
+  /** Task ids the ledger has shown as pending (a vanished one has left the ledger). */
   const seenPending = new Set<string>()
+  /** Direction per task id, learned from pending rows: /state's dead rows carry
+   *  none, and an inbound row (a peer's delivery to this session) shares this
+   *  session's team — without this it would read as our own message. */
+  const directions = new Map<string, 'inbound' | 'outbound'>()
   /** One composer per routing team: a half-typed draft survives switching nodes. */
   const composers = new Map<string, Composer>()
 
@@ -389,18 +393,37 @@ export function createChatDrawer(deps: ChatDrawerDeps): ChatDrawer {
 
   /** What the outgoing area shows, as data first: a poll that changes
    *  nothing must not touch the DOM (or the reader's scroll position). */
-  type SentRow = { at: number; text: string; status: { text: string; tone: 'wait' | 'ok' | 'warn' | 'danger' | 'muted'; hint?: string }; taskId?: string }
+  type Tone = 'wait' | 'ok' | 'warn' | 'danger' | 'muted'
+  /** One ledger-area row. `side`: whose words it is — ours (sent to this
+   *  team), theirs (a peer's delivery to this session, receipt owed by us), or
+   *  a neutral ledger line when the direction cannot be known. */
+  type SentRow = { at: number; side: 'mine' | 'theirs' | 'system'; text: string; status: { text: string; tone: Tone; hint?: string }; taskId?: string }
   let sentSig = ''
 
+  function deadStatus(row: DeadRow): SentRow['status'] {
+    // 'fire-forget' is a receiptless row expiring — expected bookkeeping,
+    // not a failure (task-ledger sweep); only 'unconsumed' is a dead letter.
+    if (row.reason === 'fire-forget') return { text: '已过期（免回执）', tone: 'muted', hint: '免回执消息到 24h TTL 归档，属正常记账' }
+    return { text: '死信', tone: 'danger', hint: row.reason !== undefined && row.reason !== 'unspecified' ? `${row.reason}：超过 24h TTL 仍未结算，需在台账清账` : '超过 24h TTL 仍未结算，需在台账清账' }
+  }
+
+  function pendingStatus(row: PendingRow, now: number): SentRow['status'] {
+    const inbound = row.direction === 'inbound'
+    if (row.receiptExpected === false) return { text: inbound ? '来信 · 无需回执' : '已送达 · 无回执', tone: 'muted', hint: '免回执消息：不等回执，24h 后自动归档' }
+    const stale = now - row.startedAt > STALE_MS
+    const label = inbound ? '待本机回执' : '待回执'
+    return { text: `${stale ? '陈旧' : label} · ${row.status}`, tone: stale ? 'warn' : 'wait', hint: `${inbound ? '对方等待本机回执；' : ''}派发于 ${ago(row.startedAt, now)}` }
+  }
+
+  /** Status of a send this page made, by task id. */
   function receiptOf(taskId: string, team: string, now: number): SentRow['status'] {
     const dead = deadFor(team).find(r => r.taskId === taskId)
-    if (dead !== undefined) return { text: '死信', tone: 'danger', hint: dead.reason ?? '超过 24h TTL 仍未结算，需在台账清账' }
+    if (dead !== undefined) return deadStatus(dead)
     const pending = pendingFor(team).find(r => r.taskId === taskId)
-    if (pending !== undefined) {
-      const stale = now - pending.startedAt > STALE_MS
-      return { text: `${stale ? '陈旧' : '待回执'} · ${pending.status}`, tone: stale ? 'warn' : 'wait', hint: `派发于 ${ago(pending.startedAt, now)}` }
-    }
-    if (seenPending.has(taskId)) return { text: '已结算', tone: 'ok', hint: '回执已关联，任务已归档' }
+    if (pending !== undefined) return pendingStatus(pending, now)
+    // Gone from the ledger: settled, abandoned or cancelled all archive the
+    // row, and /state has no per-task outcome — so say only that it left.
+    if (seenPending.has(taskId)) return { text: '已离开台账', tone: 'muted', hint: '已结算、放弃或撤回之一，见台账归档' }
     return { text: '已派发', tone: 'muted', hint: '异步送达；回执到达后进台账' }
   }
 
@@ -410,38 +433,44 @@ export function createChatDrawer(deps: ChatDrawerDeps): ChatDrawer {
     const mineIds = new Set(mine.map(o => o.taskId).filter((id): id is string => id !== undefined))
     const brief = (b?: string): string => (b !== undefined && b !== '' ? b : '（无摘要）')
     // Ledger rows for this team that this page did not send (earlier session,
-    // another tab, a reload): shown by their brief so nothing owed is hidden.
-    const owed: SentRow[] = [
-      ...pendingFor(team).filter(r => !mineIds.has(r.taskId)).map(r => ({ at: r.startedAt, text: brief(r.brief), status: receiptOf(r.taskId, team, now), taskId: r.taskId })),
-      ...deadFor(team).filter(r => !mineIds.has(r.taskId)).map(r => ({ at: r.startedAt, text: brief(r.brief), status: receiptOf(r.taskId, team, now), taskId: r.taskId })),
-    ]
+    // another tab, a reload): shown by their brief so nothing owed is hidden —
+    // on the side of whoever said it.
+    const owed: SentRow[] = pendingFor(team).filter(r => !mineIds.has(r.taskId)).map(r => ({
+      at: r.startedAt, side: r.direction === 'inbound' ? 'theirs' : 'mine', text: brief(r.brief), status: pendingStatus(r, now), taskId: r.taskId,
+    }))
+    const dead: SentRow[] = deadFor(team).filter(r => !mineIds.has(r.taskId)).map(r => {
+      const dir = directions.get(r.taskId)
+      return { at: r.startedAt, side: dir === 'inbound' ? 'theirs' : dir === 'outbound' ? 'mine' : 'system', text: brief(r.brief), status: deadStatus(r), taskId: r.taskId }
+    })
     const local: SentRow[] = mine.map(o => ({
       at: o.at,
+      side: 'mine',
       text: o.text,
       status: o.state === 'sending' ? { text: '发送中…', tone: 'muted' }
         : o.state === 'failed' ? { text: `失败：${o.error ?? '未知原因'}`, tone: 'danger' }
           : o.taskId !== undefined ? receiptOf(o.taskId, team, now) : { text: '已派发', tone: 'muted' },
       taskId: o.taskId,
     }))
-    return [...owed, ...local].sort((a, b) => a.at - b.at)
+    return [...owed, ...dead, ...local].sort((a, b) => a.at - b.at)
   }
 
   function paintSent(force = false): void {
     const t = target
     const team = t !== null ? dispatchTeamOf(t) : undefined
     const rows = team !== undefined ? sentRows(team) : []
-    const sig = JSON.stringify([team ?? '', ...rows.map(r => [r.taskId ?? '', r.text, r.status.text])])
+    const sig = JSON.stringify([team ?? '', ...rows.map(r => [r.taskId ?? '', r.side, r.text, r.status.text])])
     if (!force && sig === sentSig) return
     sentSig = sig
     const stick = atBottom()
     sent.replaceChildren()
     if (rows.length === 0) return
     const divider = el('div', 'wb-chat-divider')
-    divider.textContent = '从这里发出 · 异步送达，回执进台账'
+    divider.textContent = '台账往来 · 异步送达，回执进台账'
     sent.appendChild(divider)
     for (const r of rows) {
-      const b = el('div', 'wb-msg wb-msg-user wb-msg-out')
-      b.appendChild(el('span', 'wb-msg-who')).textContent = '我'
+      const cls = r.side === 'mine' ? 'wb-msg wb-msg-user wb-msg-out' : r.side === 'theirs' ? 'wb-msg wb-msg-assistant wb-msg-in' : 'wb-msg wb-msg-ledger'
+      const b = el('div', cls)
+      b.appendChild(el('span', 'wb-msg-who')).textContent = r.side === 'mine' ? '我' : r.side === 'theirs' ? '对方' : '台账记录'
       b.appendChild(el('div', 'wb-msg-text')).textContent = r.text
       const meta = el('div', 'wb-msg-meta')
       if (r.taskId !== undefined) meta.appendChild(el('span', 'wb-msg-task')).textContent = r.taskId
@@ -583,7 +612,10 @@ export function createChatDrawer(deps: ChatDrawerDeps): ChatDrawer {
 
   function update(state: StateBody | null): void {
     last = state
-    for (const r of state?.tasks ?? []) seenPending.add(r.taskId)
+    for (const r of state?.tasks ?? []) {
+      seenPending.add(r.taskId)
+      directions.set(r.taskId, r.direction === 'inbound' ? 'inbound' : 'outbound')
+    }
     const t = target
     if (t === null) return
     // Title / liveness freshness for sessions; everything else is static per open.
