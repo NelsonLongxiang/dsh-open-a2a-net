@@ -39,6 +39,8 @@ export interface ChatDrawerDeps {
   sessionLog?(id: string): Promise<{ ok: boolean; messages?: Message[]; error?: string }>
   remoteSessionLog?(query: { team?: string; peer?: string; id?: string; limit?: number }): Promise<{ ok: boolean; messages?: Message[]; sessions?: Array<{ id: string; mtimeMs: number; sizeBytes: number }>; error?: string; via?: string }>
   dispatchQuick?(team: string, message: string): Promise<{ ok: boolean; task_id?: string; reply?: string; error?: string }>
+  /** A transcript loaded for `target` (the directory learns 本机日志 titles from it). */
+  onTranscript?(target: ChatTarget, messages: ReadonlyArray<Message>): void
 }
 
 export interface ChatDrawer {
@@ -372,6 +374,7 @@ export function createChatDrawer(deps: ChatDrawerDeps): ChatDrawer {
     paintSent(true)
     void loadTranscript(t).then(result => {
       transcripts.set(key, result)
+      if (result?.ok === true && result.messages !== undefined) deps.onTranscript?.(t, result.messages)
       if (target === null || transcriptKey(target) !== key) return
       paintLog(result)
       paintSent()

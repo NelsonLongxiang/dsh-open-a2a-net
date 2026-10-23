@@ -231,8 +231,10 @@ const bench = createWorkbench({
     // sessions included; the network directory is not the reading gate.
     try {
       const res = await controlFetch('/__dsh_a2a/session-log')
-      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; sessions?: Array<{ id: string; mtimeMs: number; sizeBytes: number }>; error?: string }
-      return { ok: res.ok && body.ok === true, sessions: body.sessions, error: body.error ?? (res.ok ? undefined : `HTTP ${res.status}`) }
+      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; sessions?: Array<{ id: string; mtimeMs: number; sizeBytes: number }>; count?: number; error?: string }
+      // count: how many logs the host holds — the list face caps at 50, so the
+      // directory can say it is showing 50 of N instead of silently truncating.
+      return { ok: res.ok && body.ok === true, sessions: body.sessions, count: typeof body.count === 'number' ? body.count : undefined, error: body.error ?? (res.ok ? undefined : `HTTP ${res.status}`) }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }

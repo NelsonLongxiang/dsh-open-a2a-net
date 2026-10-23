@@ -19,6 +19,9 @@
  * @module nexus-stage/workbench
  */
 import { createChatDrawer, type ChatTarget } from './wb-chat'
+import { createRailTabs } from './wb-rail'
+import { DIRECTORY_FILTERS, learnLogTitle, loadLogTitles, renderDirectory, type DirFilter } from './wb-directory'
+import { ledgerFacts, renderLedger as paintLedger } from './wb-ledger'
 
 /** One pending ledger row from /state `tasks`. */
 export interface PendingRow {
@@ -182,7 +185,7 @@ export interface WorkbenchDeps {
   /** 0.6.12: list every local session holding a log artifact (newest first) —
    *  the reading face is host-scoped, so archived and never-joined sessions
    *  appear here even when the network directory shows no local rows. */
-  sessionLogList?(): Promise<{ ok: boolean; sessions?: Array<{ id: string; mtimeMs: number; sizeBytes: number }>; error?: string }>
+  sessionLogList?(): Promise<{ ok: boolean; sessions?: Array<{ id: string; mtimeMs: number; sizeBytes: number }>; count?: number; error?: string }>
   /** 0.6.15: remote transcript via the local proxy — ?team=<zone/id8>
    *  resolves the publishing peer through the directory, ?peer=<base-url>
    *  reads one tracked peer directly. Without id the peer answers its
@@ -226,30 +229,6 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): 
   return node
 }
 
-/** One labelled counter in a pane's stat strip; `title` carries the definition
- *  (native tooltip — the definition lives with the number it explains). */
-function statChip(label: string, value: number, hint: string, tone?: 'warn' | 'danger'): HTMLElement {
-  const chip = el('span', 'wb-stat')
-  if (tone !== undefined) chip.classList.add(`wb-stat-${tone}`)
-  chip.setAttribute('title', hint)
-  chip.appendChild(el('span', 'wb-stat-k')).textContent = label
-  chip.appendChild(el('span', 'wb-stat-v')).textContent = String(value)
-  return chip
-}
-
-/** One proportional bar: label · track · count. Cheap density for a histogram. */
-function barRow(parent: HTMLElement, label: string, count: number, max: number): void {
-  const row = el('div', 'wb-bar-row')
-  row.appendChild(el('span', 'wb-bar-k')).textContent = label
-  const track = el('span', 'wb-bar-track')
-  const fill = el('span', 'wb-bar-fill')
-  fill.style.width = `${max > 0 ? Math.max(count > 0 ? 2 : 0, Math.round((count / max) * 100)) : 0}%`
-  track.appendChild(fill)
-  row.appendChild(track)
-  row.appendChild(el('span', 'wb-bar-v')).textContent = String(count)
-  parent.appendChild(row)
-}
-
 function textRow(parent: HTMLElement, label: string, value: string): void {
   const row = el('div', 'wb-kv')
   row.appendChild(el('span', 'wb-kv-k')).textContent = label
@@ -264,28 +243,6 @@ type Selection =
 /** The rail sections. */
 export type WorkbenchSection = 'directory' | 'hosts' | 'ledger' | 'activity' | 'plan'
 
-/** Directory category filter (0.6.6): one chip per directory section group. */
-type DirFilter = 'all' | 'local' | 'canvas' | 'peers' | 'remote'
-
-const DIRECTORY_FILTERS: ReadonlyArray<{ key: DirFilter; label: string; hint: string }> = [
-  { key: 'all', label: '全部', hint: '不过滤：目录全部条目' },
-  { key: 'local', label: '本机', hint: '本机会话节点（现场 + 冷启动）' },
-  { key: 'canvas', label: '队', hint: '画布队（人类手工分配的组队）' },
-  { key: 'peers', label: 'Peers', hint: '对等节点（peer 池）' },
-  { key: 'remote', label: '远端', hint: '远端会话队（来自对端卡片）' },
-]
-
-/** Lowercased haystack for the unified search: name/team/label/id/url/teams. */
-function rowHaystack(...parts: ReadonlyArray<string | readonly string[] | undefined>): string {
-  const flat: string[] = []
-  for (const part of parts) {
-    if (part === undefined) continue
-    if (typeof part === 'string') {
-      if (part !== '') flat.push(part)
-    } else for (const entry of part) if (entry !== '') flat.push(entry)
-  }
-  return flat.join(' ').toLowerCase()
-}
 
 /** Legacy deep-link targets: 'board' focuses the stage, sections open a rail section. */
 export type WorkbenchTab = 'board' | WorkbenchSection
@@ -317,14 +274,14 @@ function peerHostOf(url: string): string {
   }
 }
 
+/** Rail tabs (2026-10-23): 主机 moved up next to 目录 — host health was the
+ *  last accordion section and sat below the fold. */
 const SECTION_DEFS: ReadonlyArray<{ key: WorkbenchSection; label: string }> = [
   { key: 'directory', label: '目录' },
+  { key: 'hosts', label: '主机' },
   { key: 'ledger', label: '台账' },
   { key: 'activity', label: '活动' },
   { key: 'plan', label: '规划' },
-  // gh#20 W-C: the host rail — one row per tracked peer host. Appended so
-  // the existing rail order and first-pane assumptions stay untouched.
-  { key: 'hosts', label: '主机轨' },
 ]
 
 export function createWorkbench(deps: WorkbenchDeps): Workbench {
@@ -332,7 +289,6 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   let mode: WorkbenchMode = 'data'
   let selection: Selection
   let last: StateBody | null = null
-  const collapsed = new Set<WorkbenchSection>(['activity', 'plan'])
   // Directory view state (survives polls): unified search + category filter.
   let searchText = ''
   let dirFilter: DirFilter = 'all'
@@ -345,6 +301,11 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // 0.6.12: readable local logs (host-scope list, newest first). Refreshed
   // opportunistically per poll; rows render in the directory's 本机日志 section.
   let logRows: Array<{ id: string; mtimeMs: number; sizeBytes: number }> = []
+  /** How many logs the host holds (the list face caps at 50); from the listing's count. */
+  let logTotal: number | undefined
+  /** Learned 本机日志 titles: the first user line of a transcript, captured
+   *  when the chat drawer loads it (the list face carries no titles). */
+  const logTitles = loadLogTitles()
   let logRowsBusy = false
 
   const root = el('div', 'wb')
@@ -380,32 +341,11 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   header.appendChild(railToggle)
 
   const body = el('div', 'wb-body')
-  const rail = el('aside', 'wb-rail')
-
-  // Rail sections (accordion). Panes are created once and re-parented
-  // between section bodies (canvas mode) and the stage stack (data mode).
-  const sectionBodies = new Map<WorkbenchSection, HTMLElement>()
-  const sectionCounts = new Map<WorkbenchSection, HTMLElement>()
-  for (const def of SECTION_DEFS) {
-    const sec = el('section', 'wb-sec')
-    sec.dataset.sec = def.key
-    const head = el('button', 'wb-sec-head')
-    head.type = 'button'
-    head.appendChild(el('span', 'wb-sec-label')).textContent = def.label
-    const count = el('span', 'wb-sec-count')
-    head.appendChild(count)
-    head.addEventListener('click', () => {
-      if (collapsed.has(def.key)) collapsed.delete(def.key)
-      else collapsed.add(def.key)
-      syncSections()
-    })
-    sec.appendChild(head)
-    const secBody = el('div', 'wb-sec-body')
-    sec.appendChild(secBody)
-    rail.appendChild(sec)
-    sectionBodies.set(def.key, secBody)
-    sectionCounts.set(def.key, count)
-  }
+  // Rail tabs (2026-10-23, wb-rail): one panel per pane, each with its own
+  // scroll. Panes are created once and re-parented between tab panels
+  // (canvas mode) and the stage stack (data mode).
+  const railTabs = createRailTabs(SECTION_DEFS)
+  const rail = railTabs.root
 
   const directoryBody = el('div', 'wb-directory')
   // Directory toolbar: unified search + category filter chips (0.6.6). Built
@@ -436,8 +376,8 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     filterRow.appendChild(chip)
   }
   directoryTools.appendChild(filterRow)
-  sectionBodies.get('directory')!.appendChild(directoryTools)
-  sectionBodies.get('directory')!.appendChild(directoryBody)
+  railTabs.panel('directory').appendChild(directoryTools)
+  railTabs.panel('directory').appendChild(directoryBody)
 
   const ledgerPane = el('section', 'wb-pane')
   const activityPane = el('section', 'wb-pane')
@@ -480,6 +420,10 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     sessionLog: deps.sessionLog,
     remoteSessionLog: deps.remoteSessionLog,
     dispatchQuick: deps.dispatchQuick,
+    onTranscript: (target, messages) => {
+      if (target.kind !== 'log' && target.kind !== 'session') return
+      if (learnLogTitle(logTitles, target.id, messages)) renderSidebar()
+    },
   })
 
   stage.appendChild(dataStack)
@@ -490,18 +434,13 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   root.appendChild(header)
   root.appendChild(body)
 
-  function syncSections(): void {
-    for (const def of SECTION_DEFS) {
-      const sec = sectionBodies.get(def.key)!.parentElement!
-      sec.classList.toggle('is-collapsed', collapsed.has(def.key))
-    }
-  }
-
   /** Move the data panes to their mode home: rail sections while the board
    *  owns the stage, the stage stack when the board is out. */
   function placePanes(m: WorkbenchMode): void {
     for (const [key, pane] of dataPanes) {
-      const home = m === 'canvas' ? sectionBodies.get(key)! : dataStack
+      const home = m === 'canvas' ? railTabs.panel(key) : dataStack
+      // Data mode: the pane lives on the stage, so its tab steps aside.
+      railTabs.setHidden(key, m !== 'canvas')
       if (pane.parentElement !== home) home.appendChild(pane)
     }
   }
@@ -542,164 +481,29 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
 
   // ── Directory section ──
   function renderSidebar(): void {
-    const box = clear(directoryBody)
     // Filter chips reflect the live view state (built once, toggled here).
     for (let i = 0; i < filterRow.children.length; i++) {
       const node = filterRow.children[i] as HTMLElement
       node.classList.toggle('is-active', node.dataset.filter === dirFilter)
     }
     if (last === null) {
-      box.appendChild(el('div', 'wb-muted')).textContent = '载入中…'
-      sectionCounts.get('directory')!.textContent = ''
+      directoryBody.replaceChildren(el('div', 'wb-muted'))
+      directoryBody.firstElementChild!.textContent = '载入中…'
+      railTabs.setBadge('directory', '')
       return
     }
-    const state = last
-    const filtering = searchText !== '' || dirFilter !== 'all'
-    /** One directory row factory with the shared search+filter gate. */
-    const admit = (cat: DirFilter, haystack: string): boolean =>
-      (dirFilter === 'all' || dirFilter === cat) && (searchText === '' || haystack.includes(searchText))
-    /** Canvas-team badge for roster annotation (▤ + short name). */
-    const badges = (item: HTMLElement, teams: readonly string[] | undefined): void => {
-      if (teams === undefined || teams.length === 0) return
-      const chip = el('span', 'wb-item-badge')
-      const names = teams.map(t => t.slice(t.lastIndexOf('/') + 1))
-      chip.textContent = `▤ ${names.slice(0, 3).join(' ')}${names.length > 3 ? ` +${names.length - 3}` : ''}`
-      chip.title = `画布队：${teams.join(' · ')}`
-      item.appendChild(chip)
-    }
-    const section = (label: string, count: number): HTMLElement => {
-      const head = el('div', 'wb-side-head')
-      head.textContent = `${label} · ${count}`
-      box.appendChild(head)
-      return box
-    }
-    const sessions = state.sessions ?? []
-    const live = sessions.filter(row => row.live === true && admit('local', rowHaystack(displayName(row), row.team, row.label, row.id, row.canvasTeams)))
-    const cold = sessions.filter(row => row.live !== true && admit('local', rowHaystack(displayName(row), row.team, row.label, row.id, row.canvasTeams)))
-    sectionCounts.get('directory')!.textContent = `${live.length}/${cold.length}${logRows.length > 0 ? ` · 档 ${logRows.length}` : ''}`
-    if (live.length > 0) {
-      section('本机 · 现场', live.length)
-      for (const row of live) {
-        const item = el('button', 'wb-item')
-        item.type = 'button'
-        item.appendChild(el('span', 'wb-dot wb-dot-live')).textContent = '●'
-        item.appendChild(el('span', 'wb-item-label')).textContent = displayName(row)
-        badges(item, row.canvasTeams)
-        item.addEventListener('click', () => openChat({ kind: 'session', id: row.id, title: displayName(row), sub: row.team, team: row.team, live: row.live }))
-        box.appendChild(item)
-      }
-    }
-    if (cold.length > 0) {
-      section('本机 · 冷启动', cold.length)
-      for (const row of cold) {
-        const item = el('button', 'wb-item')
-        item.type = 'button'
-        item.appendChild(el('span', 'wb-dot wb-dot-cold')).textContent = '○'
-        item.appendChild(el('span', 'wb-item-label')).textContent = displayName(row)
-        badges(item, row.canvasTeams)
-        item.addEventListener('click', () => openChat({ kind: 'session', id: row.id, title: displayName(row), sub: row.team, team: row.team, live: row.live }))
-        box.appendChild(item)
-      }
-    }
-    const canvases = (state.canvas?.teams ?? []).filter(row =>
-      admit('canvas', rowHaystack(row.name, row.team, row.members.map(member => member.team ?? member.id))))
-    if (canvases.length > 0) {
-      section('Canvas 队', canvases.length)
-      for (const row of canvases) {
-        const item = el('button', 'wb-item')
-        item.type = 'button'
-        item.appendChild(el('span', 'wb-dot wb-dot-canvas')).textContent = '▤'
-        const remote = row.members.filter(member => member.remote === true).length
-        item.appendChild(el('span', 'wb-item-label')).textContent =
-          `${row.name} · ${row.members.length}${remote > 0 ? `（远端 ${remote}）` : ''}`
-        item.addEventListener('click', () => select({ kind: 'canvas', row }))
-        box.appendChild(item)
-      }
-    }
-    const peers = (state.peers ?? []).filter(row => admit('peers', rowHaystack(row.url)))
-    if (peers.length > 0) {
-      section('Peers', peers.length)
-      for (const row of peers) {
-        const item = el('button', 'wb-item')
-        item.type = 'button'
-        item.appendChild(el('span', 'wb-dot wb-dot-peer')).textContent = '⇄'
-        item.appendChild(el('span', 'wb-item-label')).textContent =
-          row.url.replace(/^https?:\/\//, '') + (row.score !== undefined ? ` · ${row.score}` : '')
-        item.addEventListener('click', () => {
-          const host = row.url.replace(/^https?:\/\//, '').replace(/\/.*$/, '')
-          openChat({ kind: 'peer', id: `peer-${host}`, title: row.url, sub: host, url: row.url })
-        })
-        box.appendChild(item)
-      }
-    }
-    const remote = (state.remote ?? []).filter(row => admit('remote', rowHaystack(displayName(row), row.team, row.origin, row.workspace, row.canvasTeams)))
-    if (remote.length > 0) {
-      section('远端节点', remote.length)
-      for (const row of remote) {
-        const item = el('button', 'wb-item')
-        item.type = 'button'
-        item.appendChild(el('span', 'wb-dot wb-dot-remote')).textContent = '◇'
-        item.appendChild(el('span', 'wb-item-label')).textContent = displayName(row)
-        badges(item, row.canvasTeams)
-        // 0.6.15: remote rows open the chat drawer — the transcript now
-        // reads through the proxy instead of the where-the-records-live note.
-        item.addEventListener('click', () => openChat({ kind: 'remote', team: row.team, title: displayName(row), sub: row.team, row }))
-        box.appendChild(item)
-      }
-    }
-    // 0.6.12: 本机日志 — every local session artifact EXCEPT ids already shown
-    // as network rows (those open the same transcript from their own cards).
-    // This is the reachability fix for hosts whose cold rows are all archived:
-    // reading is host-scoped, the network directory is not the reading gate.
-    const networkIds = new Set(sessions.map(row => row.id))
-    const fmtSize = (n: number): string => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)} MB` : n >= 1_000 ? `${Math.round(n / 1_000)} KB` : `${n} B`
-    const logs = logRows.filter(row => !networkIds.has(row.id) && admit('local', rowHaystack(row.id)))
-    if (logs.length > 0) {
-      section('本机日志', logs.length)
-      for (const row of logs) {
-        const item = el('button', 'wb-item')
-        item.type = 'button'
-        item.appendChild(el('span', 'wb-dot')).textContent = '❐'
-        const label = el('span', 'wb-item-label')
-        label.textContent = `…${row.id.slice(-12)} · ${fmtSize(row.sizeBytes)}`
-        item.title = `${row.id}\n${fmtSize(row.sizeBytes)} · ${new Date(row.mtimeMs).toLocaleString()}`
-        item.appendChild(label)
-        item.addEventListener('click', () => openChat({ kind: 'log', id: row.id, title: `…${row.id.slice(-12)}`, sub: '档案' }))
-        box.appendChild(item)
-      }
-    }
-    if (filtering && live.length + cold.length + canvases.length + peers.length + remote.length + logs.length === 0) {
-      box.appendChild(el('div', 'wb-muted')).textContent = '无匹配条目'
-    }
-  }
-
-  // ── Ledger pane ──
-  /** Age buckets for debt: what the ledger is actually made of, at a glance.
-   *  Boundaries mirror the C-ruling split (1h = settleable→conversational). */
-  const AGE_BUCKETS: ReadonlyArray<{ label: string; maxMs: number }> = [
-    { label: '<10m', maxMs: 10 * 60_000 },
-    { label: '10m-1h', maxMs: 60 * 60_000 },
-    { label: '1-6h', maxMs: 6 * 60 * 60_000 },
-    { label: '6-24h', maxMs: 24 * 60 * 60_000 },
-    { label: '>24h', maxMs: Number.POSITIVE_INFINITY },
-  ]
-
-  /** Group pending rows by age bucket; returns buckets in age order with counts. */
-  function ageHistogram(rows: readonly PendingRow[], now: number): number[] {
-    const counts = AGE_BUCKETS.map(() => 0)
-    for (const row of rows) {
-      const age = now - row.startedAt
-      const index = AGE_BUCKETS.findIndex(bucket => age < bucket.maxMs)
-      counts[index === -1 ? counts.length - 1 : index]! += 1
-    }
-    return counts
-  }
-
-  /** Top teams by pending-row count, most loaded first (bounded to 5). */
-  function topTeams(rows: readonly PendingRow[]): Array<[string, number]> {
-    const counts = new Map<string, number>()
-    for (const row of rows) counts.set(row.team, (counts.get(row.team) ?? 0) + 1)
-    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
+    const badge = renderDirectory(directoryBody, {
+      state: last,
+      logs: logRows,
+      logTotal,
+      titles: logTitles,
+      search: searchText,
+      filter: dirFilter,
+      now: deps.now(),
+      openChat,
+      selectCanvas: (row) => select({ kind: 'canvas', row }),
+    })
+    railTabs.setBadge('directory', badge)
   }
 
   /**
@@ -714,7 +518,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   function renderHosts(): void {
     const pane = clear(hostsPane)
     if (last === null) {
-      sectionCounts.get('hosts')!.textContent = ''
+      railTabs.setBadge('hosts', '')
       return
     }
     const now = deps.now()
@@ -722,7 +526,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       const rank = (row: { link?: string }): number => row.link === 'linked' ? 0 : 1
       return rank(a) - rank(b) || (b.score ?? 0) - (a.score ?? 0)
     })
-    sectionCounts.get('hosts')!.textContent = `${peers.filter(row => row.link === 'linked').length}/${peers.length}`
+    railTabs.setBadge('hosts', peers.length > 0 ? `${peers.filter(row => row.link === 'linked').length}/${peers.length}` : '')
     if (peers.length === 0) {
       pane.appendChild(el('div', 'wb-nodelist-empty')).textContent = '暂无 tracked peer——配 peers 种子或等 referral 到达'
       return
@@ -774,124 +578,30 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     }
   }
 
+  // ── Ledger pane (wb-ledger) ──
   function renderLedger(): void {
-    const pane = clear(ledgerPane)
-    if (last === null) return
-    const now = deps.now()
-    const pending = last.tasks ?? []
-    const dead = last.tasksDead ?? []
-    const stale = last.tasksStaleCount ?? 0
-    const archived = last.archivedCount ?? 0
-    sectionCounts.get('ledger')!.textContent = `待 ${pending.length} · 死 ${dead.length}`
-
-    // Stat strip: the four headline numbers, each carrying its definition.
-    const stats = el('div', 'wb-stats')
-    stats.appendChild(statChip('待回执', pending.length,
-      '等待回执的任务（pending）。其中「陈旧」= 超过 1 小时仍未回执，或本就无回执债（fire-and-forget）'))
-    stats.appendChild(statChip('陈旧', stale,
-      '陈旧尾：≥1h 无回执的旧账 + receiptExpected:false 的免回执行。它们到 24h TTL 自动转死信，不算可催办债务',
-      stale > 0 ? 'warn' : undefined))
-    stats.appendChild(statChip('死信', dead.length,
-      '超过 24h TTL 仍未结算，或目标早已离开。需清账（abandon）才能移出',
-      dead.length > 0 ? 'danger' : undefined))
-    stats.appendChild(statChip('已归档', archived,
-      '已结算并留档的任务（回执已关联）。用于审计，不再占待回执名额'))
-    pane.appendChild(stats)
-
-    // Archive verdict split: how those settled rows actually ended.
-    const split = last.archivedSplit
-    if (archived > 0 && split !== undefined) {
-      const entries = Object.entries(split).sort((a, b) => b[1] - a[1])
-      if (entries.length > 0) {
-        const line = el('div', 'wb-pane-head')
-        line.textContent = `归档结局 · ${entries.map(([key, count]) => `${key} ${count}`).join(' · ')}`
-        pane.appendChild(line)
-      }
+    if (last === null) { ledgerPane.replaceChildren(); railTabs.setBadge('ledger', ''); return }
+    const state = last
+    const resolve = (team: string): ChatTarget | undefined => {
+      const session = (state.sessions ?? []).find(row => row.team === team)
+      if (session !== undefined) return { kind: 'session', id: session.id, title: displayName(session), sub: session.team, team: session.team, live: session.live }
+      const remote = (state.remote ?? []).find(row => row.team === team)
+      if (remote !== undefined) return { kind: 'remote', team: remote.team, title: displayName(remote), sub: remote.team, row: remote }
+      return undefined
     }
-
-    // Forensics (moved off the header): the plumbing counters a seat reads
-    // when something looks off — muted, never the owner's first line.
-    const idem = last.idempotency
-    const reconcileState = last.reconcile?.state
-    if (idem !== undefined || reconcileState !== undefined) {
-      const parts: string[] = []
-      if (idem !== undefined) parts.push(`幂等 claims ${idem.claimsFresh ?? 0} · replays ${idem.replays ?? 0} · conflicts ${idem.conflicts ?? 0}`)
-      if (reconcileState !== undefined) parts.push(`reconcile ${reconcileState}`)
-      const line = el('div', 'wb-pane-head wb-forensics')
-      line.textContent = `取证 · ${parts.join(' · ')}`
-      pane.appendChild(line)
-    }
-
-    if (pending.length > 0) {
-      // Age histogram + team load: WHERE the debt sits and how old it is.
-      const counts = ageHistogram(pending, now)
-      const max = Math.max(...counts, 1)
-      const hist = el('div', 'wb-hist')
-      for (let i = 0; i < AGE_BUCKETS.length; i += 1) {
-        barRow(hist, AGE_BUCKETS[i]!.label, counts[i]!, max)
-      }
-      pane.appendChild(hist)
-      const teams = topTeams(pending)
-      const teamLine = el('div', 'wb-pane-head')
-      teamLine.textContent = `债务队 Top${teams.length} · ${teams.map(([team, count]) => `${team} ${count}`).join(' · ')}`
-      pane.appendChild(teamLine)
-    }
-
-    const table = el('div', 'wb-table')
-    for (const row of pending) {
-      // Owner signal (2026-10-21): the ledger is a RESULTS face — the brief
-      // is the primary copy, ids/teams/ages are muted forensics underneath.
-      // Exception-driven: only overdue (>1h) rows raise their voice; normal
-      // rows stay quiet so the debt that needs eyes stands out.
-      const overdue = now - row.startedAt > 60 * 60_000
-      const line = el('div', `wb-row wb-row-result${overdue ? ' wb-row-alert' : ''}`)
-      const briefText = row.brief ?? '（无摘要——派发未带 brief）'
-      const brief = el('span', 'wb-row-head')
-      brief.textContent = briefText
-      brief.title = briefText
-      line.appendChild(brief)
-      const badges: string[] = []
-      if (row.settleable === true) badges.push('可结算')
-      if (row.receiptExpected === false) badges.push('无回执债')
-      if (row.direction === 'inbound') badges.push('入站')
-      const meta = el('span', 'wb-row-meta-line')
-      meta.textContent = `${row.taskId} · ${row.team} · ${ageText(row.startedAt, now)}${badges.length > 0 ? ` · ${badges.join(' ')}` : ''}`
-      line.appendChild(meta)
-      table.appendChild(line)
-    }
-    pane.appendChild(table)
-    if (dead.length > 0) {
-      const deadHead = el('div', 'wb-pane-subhead')
-      deadHead.textContent = '死信（可清账）'
-      pane.appendChild(deadHead)
-      const deadTable = el('div', 'wb-table wb-table-dead')
-      for (const row of dead) {
-        // Same results-first shape, always exception-colored: dead letters
-        // ARE the alarm.
-        const line = el('div', 'wb-row wb-row-result wb-row-alert')
-        const deadBriefText = row.brief ?? '（无摘要）'
-        const deadBrief = el('span', 'wb-row-head')
-        deadBrief.textContent = deadBriefText
-        deadBrief.title = deadBriefText
-        line.appendChild(deadBrief)
-        const meta = el('span', 'wb-row-meta-line')
-        meta.textContent = `${row.taskId} · ${row.team} · ${ageText(row.deadAt, now)}${row.reason !== undefined && row.reason !== '' ? ` · ${row.reason}` : ''}`
-        line.appendChild(meta)
-        const btn = el('button', 'wb-btn')
-        btn.type = 'button'
-        btn.textContent = '清账'
-        btn.addEventListener('click', () => {
-          btn.disabled = true
-          void deps.abandon(row.taskId, 'workbench dead-letter cleanup').then(ok => {
-            btn.disabled = false
-            btn.textContent = ok ? '已清' : '失败'
-          })
-        })
-        line.appendChild(btn)
-        deadTable.appendChild(line)
-      }
-      pane.appendChild(deadTable)
-    }
+    const out = paintLedger(ledgerPane, {
+      state,
+      now: deps.now(),
+      abandon: (taskId, reason) => deps.abandon(taskId, reason),
+      canOpenTeam: (team) => resolve(team) !== undefined,
+      openTeam: (team) => {
+        const target = resolve(team)
+        if (target === undefined) return false
+        openChat(target)
+        return true
+      },
+    })
+    railTabs.setBadge('ledger', out.badge, out.tone)
   }
 
   // ── Activity pane ──
@@ -900,7 +610,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     if (last === null) return
     const now = deps.now()
     const flights = last.inFlight ?? []
-    sectionCounts.get('activity')!.textContent = `${flights.length}+${last.activity?.length ?? 0}`
+    railTabs.setBadge('activity', flights.length > 0 ? String(flights.length) : '', flights.length > 0 ? 'accent' : undefined)
     const head = el('div', 'wb-pane-head')
     head.textContent = `在途 ${flights.length} · 活动 ${last.activity?.length ?? 0}`
     pane.appendChild(head)
@@ -941,23 +651,24 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   function planActions(state: StateBody): Array<{ severity: 'high' | 'normal'; text: string; brief?: string }> {
     const now = deps.now()
     const actions: Array<{ severity: 'high' | 'normal'; text: string; brief?: string }> = []
-    const dead = state.tasksDead ?? []
-    if (dead.length > 0) {
-      actions.push({ severity: 'high', text: `清账 ${dead.length} 条死信（目标早已离开或死信化，无回执可期）` })
+    // One definition with the 台账 tab: fire-forget expiries are bookkeeping,
+    // not dead letters (review L1), and only OUR stale sends are nudgeable.
+    const facts = ledgerFacts(state, now)
+    if (facts.deadLetters.length > 0) {
+      actions.push({ severity: 'high', text: `清账 ${facts.deadLetters.length} 条死信（目标早已离开或死信化，无回执可期）` })
     }
-    for (const row of state.tasks ?? []) {
-      const age = now - row.startedAt
-      if (age > 60 * 60_000 && row.settleable === true) {
-        // Quote the original ask: a nudge that only repeats a task id makes
-        // the target re-derive WHAT was owed, and the target is exactly the
-        // session that already failed to answer once.
-        const subject = row.brief === undefined || row.brief === '' ? '' : `「${row.brief}」`
-        actions.push({
-          severity: 'normal',
-          text: `催办 ${row.taskId} → ${row.team}（等待 ${ageText(row.startedAt, now)} 无回执）${subject}`,
-          brief: `a2a_route 催收回执：task ${row.taskId}（team ${row.team}）${subject === '' ? '' : `原任务「${row.brief}」`}已派发 ${ageText(row.startedAt, now)}，请回报结果或回执。`,
-        })
-      }
+    // (The old `age > 1h && settleable === true` never fired against a real
+    // host — the server's settleable means receipt-expected AND age < 1h.)
+    for (const row of facts.stale) {
+      // Quote the original ask: a nudge that only repeats a task id makes
+      // the target re-derive WHAT was owed, and the target is exactly the
+      // session that already failed to answer once.
+      const subject = row.brief === undefined || row.brief === '' ? '' : `「${row.brief}」`
+      actions.push({
+        severity: 'normal',
+        text: `催办 ${row.taskId} → ${row.team}（等待 ${ageText(row.startedAt, now)} 无回执）${subject}`,
+        brief: `a2a_route 催收回执：task ${row.taskId}（team ${row.team}）${subject === '' ? '' : `原任务「${row.brief}」`}已派发 ${ageText(row.startedAt, now)}，请回报结果或回执。`,
+      })
     }
     for (const row of state.sessions ?? []) {
       if (row.live !== true) {
@@ -980,7 +691,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     const pane = clear(planPane)
     if (last === null) return
     const actions = planActions(last)
-    sectionCounts.get('plan')!.textContent = `${actions.length}`
+    railTabs.setBadge('plan', actions.length > 0 ? String(actions.length) : '', actions.some(a => a.severity === 'high') ? 'danger' : undefined)
     const head = el('div', 'wb-pane-head')
     head.textContent = actions.length === 0 ? '网络健康——无待办行动' : `待办行动 ${actions.length}`
     pane.appendChild(head)
@@ -1249,10 +960,15 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     const box = clear(headerStats)
     if (last === null) return
     const alerts: Array<{ text: string; tone: 'warn' | 'danger'; title: string }> = []
-    const dead = last.tasksDead?.length ?? 0
-    if (dead > 0) alerts.push({ text: `死信 ${dead}`, tone: 'danger', title: '超过 24h TTL 仍未结算的任务，需在台账清账' })
-    const stale = last.tasksStaleCount ?? 0
-    if (stale > 0) alerts.push({ text: `陈旧 ${stale}`, tone: 'warn', title: '≥1h 无回执的旧账（含免回执行），到 24h TTL 自动转死信' })
+    // Same definitions as the 台账 tab (wb-ledger ledgerFacts): fire-forget
+    // expiries are not dead letters, receiptless rows are never stale.
+    const facts = ledgerFacts(last, deps.now())
+    const dead = facts.deadLetters.length
+    if (dead > 0) alerts.push({ text: `死信 ${dead}`, tone: 'danger', title: '超过 24h TTL 仍未结算的任务（unconsumed），需在台账清账' })
+    const stale = facts.stale.length
+    if (stale > 0) alerts.push({ text: `陈旧 ${stale}`, tone: 'warn', title: '我方派发、要回执、已等待 ≥1h 仍未回执（可催办；免回执行不算）' })
+    const owed = facts.owedOverdue.length
+    if (owed > 0) alerts.push({ text: `欠回执 ${owed}`, tone: 'warn', title: '对方投递给本机、已等待本机回执超过 1 小时' })
     const conflicts = last.idempotency?.conflicts ?? 0
     if (conflicts > 0) alerts.push({ text: `幂等冲突 ${conflicts}`, tone: 'danger', title: '同一幂等键对应了不同载荷，需人工核查' })
     const repair = (last.reconcile?.rows ?? []).filter(row => row.needsRepair === true).length
@@ -1277,6 +993,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       logRowsBusy = true
       deps.sessionLogList().then(result => {
         logRows = result.ok && result.sessions !== undefined ? result.sessions : []
+        logTotal = result.ok ? result.count : undefined
       }).catch(() => {}).finally(() => {
         logRowsBusy = false
         renderSidebar()
@@ -1296,7 +1013,6 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     // Mode is availability-derived every poll: canvas face down → data mode,
     // the board deactivates and the panes return to the stage stack.
     syncMode()
-    syncSections()
   }
 
   function selectTab(key: WorkbenchTab): void {
@@ -1304,8 +1020,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       syncMode()
       return
     }
-    collapsed.delete(key)
-    syncSections()
+    railTabs.select(key)
   }
 
   update(null)

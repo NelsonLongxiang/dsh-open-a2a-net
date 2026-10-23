@@ -52,28 +52,15 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-body{position:relative;display:grid;grid-template-columns:minmax(0,var(--n-rail-w)) minmax(0,1fr);flex:1;min-height:0}
 
 /* ── Rail (directory + operational panels in canvas mode) ── */
-.wb-rail{border-right:1px solid var(--n-border);overflow-y:auto;min-width:0;background:color-mix(in srgb,var(--n-panel) 60%,var(--n-bg))}
-.wb-sec{border-bottom:1px solid color-mix(in srgb,var(--n-border) 60%,transparent)}
-.wb-sec-head{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;
-  background:none;border:none;color:var(--n-ink);font:inherit;font-weight:600;font-size:12.5px;
-  padding:8px 12px;cursor:pointer;text-transform:uppercase;letter-spacing:.05em}
-.wb-sec-head:hover{color:var(--n-accent)}
-.wb-sec-count{font-weight:400;font-size:11px;color:var(--n-ink-muted)}
-.wb-sec.is-collapsed .wb-sec-body{display:none}
-.wb-sec-body{padding:2px 10px 10px}
-/* Data mode: the three panels move to the stage — their rail seats hide. */
-.wb[data-mode="data"] .wb-sec[data-sec="ledger"],
-.wb[data-mode="data"] .wb-sec[data-sec="activity"],
-.wb[data-mode="data"] .wb-sec[data-sec="plan"]{display:none}
+.wb-rail{border-right:1px solid var(--n-border);min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;
+  background:color-mix(in srgb,var(--n-panel) 60%,var(--n-bg))}
 
 .wb-side-head{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--n-ink-muted);margin:10px 2px 4px}
 .wb-item{display:flex;gap:7px;align-items:center;width:100%;text-align:left;background:none;border:none;
   color:var(--n-ink);font:inherit;padding:3px 6px;border-radius:6px;cursor:pointer}
 .wb-item:hover{background:color-mix(in srgb,var(--n-accent) 14%,transparent)}
 .wb-dot{font-size:10px}
-.wb-dot-live{color:var(--n-live)} .wb-dot-cold{color:var(--n-cold)} .wb-dot-canvas{color:var(--n-canvas)}
-.wb-dot-peer{color:var(--n-accent)} .wb-dot-remote{color:var(--n-act)}
-.wb-item-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wb-dot-live{color:var(--n-live)} .wb-dot-cold{color:var(--n-cold)} .wb-dot-canvas{color:var(--n-canvas)} .wb-dot-remote{color:var(--n-act)}
 
 /* ── Directory toolbar: unified search + category filters (0.6.6) ── */
 .wb-dir-tools{display:flex;flex-direction:column;gap:6px;padding:8px 6px 4px}
@@ -90,7 +77,7 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
   border-radius:99px;padding:0 6px;line-height:17px;white-space:nowrap}
 /* 0.6.10: .wb-item-open (the ↗ jump affordance) removed by ruling —
    禁止任何跳转，全部使用响应式布局. */
-.wb-item-label{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:46%}
+.wb-item-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* ── Canvas member management (inspector, 0.6.6) ── */
 .wb-member-row{display:flex;align-items:center;gap:8px;padding:3px 2px;border-radius:6px}
@@ -130,28 +117,10 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-pane-head{font-size:12px;color:var(--n-ink-muted);margin:4px 0 8px}
 .wb-pane-subhead{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--n-ink-muted);margin:12px 0 6px}
 .wb-table,.wb-row{display:flex;gap:10px;align-items:baseline}
-.wb-table{flex-direction:column;gap:2px}
 .wb-row{font-family:ui-monospace,Consolas,monospace;font-size:12px;background:color-mix(in srgb,var(--n-panel) 55%,transparent);
   border:1px solid var(--n-border);border-radius:6px;padding:3px 8px;flex-wrap:wrap}
-.wb-row-id{min-width:130px}
 .wb-row-team{color:var(--n-accent);min-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wb-row-meta{color:var(--n-ink-muted)}
-/* Owner signal (2026-10-21): the ledger is a RESULTS face — brief-first
-   rows, exception-driven color, quiet normals. */
-.wb-row-result{flex-direction:column;align-items:stretch;gap:2px;flex-wrap:nowrap}
-.wb-row-head{color:var(--n-ink);font-size:12.5px;font-family:Avenir Next,Segoe UI Variable,Segoe UI,sans-serif;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wb-row-meta-line{color:var(--n-ink-muted);font-family:ui-monospace,Consolas,monospace;font-size:11px;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wb-row-result:not(.wb-row-alert) .wb-row-head{color:var(--n-ink-muted)}
-.wb-row-alert{border-color:var(--n-danger)}
-.wb-row-alert .wb-row-head{color:var(--n-danger)}
-/* The dispatch brief is the row's only human-readable payload — give it the
-   remaining width and clip rather than wrapping the table into unreadability
-   (full text stays in the title tooltip). */
-.wb-row-brief{flex:1 1 160px;min-width:0;color:var(--n-ink);overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap}
-.wb-row-brief:empty{flex:0 0 0;display:none}
 .wb-row-badges{color:var(--n-live)}
 .wb-row-dir{min-width:16px}
 .wb-row-dir.is-fail{color:var(--n-danger)}
@@ -261,24 +230,6 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-chat-composer .wb-dispatch-note.is-error{color:var(--n-danger)}
 .wb-chat-readonly{font-size:12px;color:var(--n-ink-muted);text-align:center;padding:4px 0}
 
-/* ── Ledger density: stat strip, age histogram, load rows ── */
-.wb-stats{display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 10px}
-.wb-stat{display:inline-flex;align-items:baseline;gap:6px;padding:4px 10px;border-radius:8px;
-  border:1px solid var(--n-border);background:color-mix(in srgb,var(--n-panel) 70%,transparent);cursor:help}
-.wb-stat-k{font-size:11px;color:var(--n-ink-muted)}
-.wb-stat-v{font-family:ui-monospace,Consolas,monospace;font-size:14px;font-weight:600}
-.wb-stat-warn{border-color:var(--n-act)}
-.wb-stat-warn .wb-stat-v{color:var(--n-act)}
-.wb-stat-danger{border-color:var(--n-danger)}
-.wb-stat-danger .wb-stat-v{color:var(--n-danger)}
-.wb-hist{display:flex;flex-direction:column;gap:3px;margin:2px 0 8px;max-width:420px}
-.wb-bar-row{display:flex;align-items:center;gap:8px;font-size:11px}
-.wb-bar-k{color:var(--n-ink-muted);min-width:52px;flex:none;text-align:right}
-.wb-bar-track{flex:1;height:9px;border-radius:4px;overflow:hidden;
-  background:color-mix(in srgb,var(--n-border) 55%,transparent)}
-.wb-bar-fill{display:block;height:100%;border-radius:4px;background:var(--n-accent)}
-.wb-bar-v{font-family:ui-monospace,Consolas,monospace;color:var(--n-ink-muted);min-width:28px}
-
 /* The one fault badge (planning.css carried a second, conflicting copy —
    the cascade mixed the two). Honesty surface: always above the board. */
 .nexus-fault{display:none;position:fixed;top:10px;right:12px;z-index:50;max-width:420px;
@@ -300,7 +251,7 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
   .wb-chat.is-open{transform:translateY(0)}
 }
 @media (pointer:coarse){
-  .wb-filter,.wb-item,.wb-sec-head{min-height:36px}
+  .wb-filter,.wb-item,.wb-tab{min-height:36px}
   .wb-icon-btn,.wb-inspector .wb-icon-btn,.wb-chat .wb-icon-btn{width:36px;height:36px}
 }
 @media (max-width:680px){
@@ -327,3 +278,95 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-host-badge.is-stranger{color:var(--n-ink-muted);border-color:var(--n-border)}
 .wb-host-ver{flex:none;font-size:10px;color:var(--n-ink-muted);border:1px solid var(--n-border);border-radius:4px;padding:0 4px}
 .wb-host-url{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--n-ink-muted);font-size:10.5px}
+
+/* ── Rail tabs (wb-rail, 2026-10-23): 目录 · 主机 · 台账 · 活动 · 规划, each panel
+   with its own scroll. Badges count; color only when something needs a hand. ── */
+.wb-tabs{flex:none;display:flex;gap:2px;padding:6px 6px 0;border-bottom:1px solid var(--n-border);overflow-x:auto;scrollbar-width:none}
+.wb-tab{flex:1 1 auto;display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:0;
+  background:none;border:none;border-bottom:2px solid transparent;color:var(--n-ink-muted);font:inherit;font-size:12.5px;
+  padding:6px 6px 7px;cursor:pointer;white-space:nowrap}
+.wb-tab:hover{color:var(--n-ink)}
+.wb-tab.is-active{color:var(--n-ink);border-bottom-color:var(--n-accent);font-weight:600}
+.wb-tab:focus-visible{outline:2px solid var(--n-accent);outline-offset:-2px;border-radius:6px 6px 0 0}
+.wb-tab[hidden]{display:none}
+.wb-tab-badge{font:10.5px/16px ui-monospace,Consolas,monospace;color:var(--n-ink-muted);font-weight:400}
+.wb-tab-badge:empty{display:none}
+.wb-tab-badge.is-danger,.wb-tab-badge.is-warn,.wb-tab-badge.is-accent{padding:0 6px;border-radius:99px;border:1px solid currentColor}
+.wb-tab-badge.is-danger{color:var(--n-danger)}
+.wb-tab-badge.is-warn{color:var(--n-act)}
+.wb-tab-badge.is-accent{color:var(--n-accent)}
+.wb-tabpanels{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.wb-tabpanel{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:8px 10px 16px}
+.wb-tabpanel[hidden]{display:none}
+.wb-tabpanel:focus-visible{outline:2px solid var(--n-accent);outline-offset:-2px}
+.wb-tabpanel .wb-pane{display:flex;flex-direction:column;gap:8px}
+
+/* ── 目录 (wb-directory) ── */
+.wb-tabpanel .wb-dir-tools{padding:0 0 6px}
+.wb-dir-group{display:flex;flex-direction:column;gap:1px;margin-top:10px}
+.wb-dir-group:first-child{margin-top:2px}
+.wb-dir-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:0 6px 4px;
+  font-size:11px;letter-spacing:.04em;color:var(--n-ink-muted)}
+.wb-dir-head-label{font-weight:600;color:var(--n-ink)}
+.wb-dir-head-note{font-size:10.5px}
+.wb-dir-day{padding:6px 6px 2px;font-size:10.5px;color:var(--n-ink-muted)}
+.wb-dir-empty{padding:24px 8px;text-align:center;font-size:12px;color:var(--n-ink-muted)}
+.wb-directory .wb-item{gap:9px;padding:5px 6px;border-radius:8px}
+.wb-directory .wb-item:focus-visible{outline:2px solid var(--n-accent);outline-offset:-2px}
+.wb-item-text{display:flex;flex-direction:column;flex:1 1 auto;min-width:0;line-height:1.35}
+.wb-item-sub{font:11px/1.35 ui-monospace,Consolas,monospace;color:var(--n-ink-muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wb-item.is-untitled .wb-item-label{color:var(--n-ink-muted);font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.wb-dot-log{color:var(--n-ink-muted)}
+
+/* ── 台账 (wb-ledger) ── */
+.wb-led-tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.wb-led-tile{display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:7px 8px;border-radius:8px;
+  border:1px solid var(--n-border);background:var(--n-raised);cursor:help;min-width:0}
+.wb-led-tile-v{font:600 17px/1.15 ui-monospace,Consolas,monospace;color:var(--n-ink)}
+.wb-led-tile-k{font-size:11px;color:var(--n-ink-muted)}
+.wb-led-tile.is-warn{border-color:var(--n-act)}
+.wb-led-tile.is-warn .wb-led-tile-v{color:var(--n-act)}
+.wb-led-tile.is-danger{border-color:var(--n-danger)}
+.wb-led-tile.is-danger .wb-led-tile-v{color:var(--n-danger)}
+.wb-led-split{display:flex;flex-direction:column;gap:4px}
+.wb-led-split-bar{display:flex;height:6px;border-radius:99px;overflow:hidden;background:var(--n-border)}
+.wb-led-seg{display:block;height:100%}
+.wb-led-split-legend{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:11px;color:var(--n-ink-muted)}
+.wb-led-split-item{display:inline-flex;align-items:center;gap:4px}
+.wb-led-swatch{display:inline-block;width:8px;height:8px;border-radius:2px}
+.wb-led-seg.is-completed,.wb-led-swatch.is-completed{background:var(--n-live)}
+.wb-led-seg.is-declined,.wb-led-swatch.is-declined{background:var(--n-act)}
+.wb-led-seg.is-abandoned,.wb-led-swatch.is-abandoned{background:var(--n-ink-muted)}
+.wb-led-seg.is-unclassified,.wb-led-swatch.is-unclassified,.wb-led-seg.is-other,.wb-led-swatch.is-other{background:color-mix(in srgb,var(--n-ink-muted) 45%,var(--n-border))}
+.wb-led-group{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+.wb-led-group-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-size:11.5px;font-weight:600;color:var(--n-ink)}
+.wb-led-group-hint{font-size:10.5px;font-weight:400;color:var(--n-ink-muted)}
+.wb-led-group.is-danger .wb-led-group-head{color:var(--n-danger)}
+.wb-led-group.is-warn .wb-led-group-head{color:var(--n-act)}
+.wb-led-card{position:relative;display:flex;flex-direction:column;gap:3px;padding:7px 9px;border-radius:8px;
+  border:1px solid var(--n-border);background:var(--n-raised);min-width:0}
+.wb-led-card.is-danger{border-color:var(--n-danger)}
+.wb-led-card.is-warn{border-left:3px solid var(--n-act)}
+.wb-led-card.is-muted,.wb-led-card.is-quiet{background:transparent}
+.wb-led-card.is-link{cursor:pointer}
+.wb-led-card.is-link:hover{border-color:var(--n-accent)}
+.wb-led-card.is-link:focus-visible{outline:2px solid var(--n-accent);outline-offset:1px}
+.wb-led-card-head{display:flex;align-items:flex-start;gap:6px;min-width:0}
+.wb-led-dir{flex:none;font-size:12px;color:var(--n-ink-muted);line-height:1.45}
+.wb-led-dir.is-in{color:var(--n-federal)}
+.wb-led-brief{flex:1 1 auto;min-width:0;font-size:12.5px;line-height:1.45;color:var(--n-ink);
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.wb-led-card.is-muted .wb-led-brief,.wb-led-card.is-quiet .wb-led-brief{color:var(--n-ink-muted)}
+.wb-led-card.is-danger .wb-led-brief{color:var(--n-danger)}
+.wb-led-brief.is-missing{font-style:italic}
+.wb-led-meta{display:flex;flex-wrap:wrap;gap:2px 8px;font:11px/1.45 ui-monospace,Consolas,monospace;color:var(--n-ink-muted);min-width:0}
+.wb-led-meta > span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.wb-led-chip{border:1px solid var(--n-border);border-radius:99px;padding:0 6px;font-family:inherit}
+.wb-led-abandon{position:absolute;top:6px;right:6px;margin-left:0;padding:1px 9px;font-size:11.5px}
+.wb-led-card:has(.wb-led-abandon) .wb-led-card-head{padding-right:52px}
+.wb-led-empty{padding:24px 8px;text-align:center;font-size:12px;color:var(--n-ink-muted)}
+.wb-led-forensics{font-size:11px;color:var(--n-ink-muted);border-top:1px dashed var(--n-border);padding-top:6px;margin-top:4px}
+.wb-led-forensics summary{cursor:pointer}
+.wb-led-forensics summary:focus-visible{outline:2px solid var(--n-accent);outline-offset:1px}
+.wb-led-forensics-body{display:flex;flex-direction:column;gap:2px;padding:4px 0 0 12px;font-family:ui-monospace,Consolas,monospace}
