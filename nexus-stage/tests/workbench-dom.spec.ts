@@ -249,6 +249,35 @@ describe('workbench panels', () => {
     expect(v.root.querySelector('.wb-chat.is-open')).not.toBeNull()
   })
 
+  it('gh#24: the lamp tells failure from success — red on a fresh failure, and all four states pinned', () => {
+    const { v } = bench()
+    // gh#24 core semantics: a FRESH FAILED contact is red (recency alone
+    // used to glow green); plus the full regression matrix in one poll —
+    // live (fresh success), fail (fresh failure), warm (~3m success),
+    // cold (stale), unknown (never contacted).
+    v.update({
+      ...state,
+      peers: [
+        { url: 'http://10.0.0.1:13080', score: 100, lastContactAt: NOW - 5_000, lastContactOk: false },
+        { url: 'http://10.0.0.2:13080', score: 100, lastContactAt: NOW - 10_000, lastContactOk: true },
+        { url: 'http://10.0.0.3:13080', score: 100, lastContactAt: NOW - 3 * 60_000, lastContactOk: true },
+        { url: 'http://10.0.0.4:13080', score: 100, lastContactAt: NOW - 20 * 60_000, lastContactOk: true },
+        { url: 'http://10.0.0.5:13080', score: 100 },
+      ],
+    })
+    const lampOf = (host: string): HTMLElement => [...v.root.querySelectorAll<HTMLElement>('.wb-host-row')]
+      .find(row => row.textContent?.includes(host))!
+      .querySelector('.wb-host-lamp')!
+    expect(lampOf('10.0.0.1:13080').classList.contains('is-fail')).toBe(true)
+    expect(lampOf('10.0.0.1:13080').classList.contains('is-live')).toBe(false)
+    expect(lampOf('10.0.0.2:13080').classList.contains('is-live')).toBe(true)
+    expect(lampOf('10.0.0.3:13080').classList.contains('is-warm')).toBe(true)
+    expect(lampOf('10.0.0.4:13080').classList.contains('is-cold')).toBe(true)
+    expect(lampOf('10.0.0.5:13080').classList.contains('is-unknown')).toBe(true)
+    // The tooltip names the outcome, so red explains itself.
+    expect(lampOf('10.0.0.1:13080').title).toContain('失败')
+  })
+
   it('renders ledger rows and settles a dead letter through the abandon seam', async () => {
     const { v, abandon } = bench()
     v.update(state)

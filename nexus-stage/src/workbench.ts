@@ -771,18 +771,19 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       const host = peerHostOf(row.url)
       const lineEl = el('div', 'wb-host-row')
       // Health lamp (gh#24 semantics): recency alone lied — a FAILED fresh
-      // contact glowed green. Now: green = recent AND the last attempt
-      // succeeded; red = recent AND it failed; gray = stale or never.
+      // contact glowed green. Tiers by age: ≤60s live / ≤5min warm /
+      // beyond cold, overridden by the OUTCOME: a recent failure (≤5min)
+      // is red regardless of the live/warm band, and a never-contacted
+      // peer is the hollow unknown state.
       const lamp = el('span', 'wb-host-lamp')
       const last = row.lastContactAt
       const age = last === undefined ? undefined : now - last
-      const fresh = age !== undefined && age <= 60_000
       const ok = row.lastContactOk
       if (age === undefined) lamp.classList.add('is-unknown')
-      else if (!fresh) lamp.classList.add('is-cold')
-      else if (ok === false) lamp.classList.add('is-fail')
-      else if (age <= 5 * 60_000) lamp.classList.add('is-live')
-      else lamp.classList.add('is-warm')
+      else if (ok === false && age <= 5 * 60_000) lamp.classList.add('is-fail')
+      else if (age <= 60_000) lamp.classList.add('is-live')
+      else if (age <= 5 * 60_000) lamp.classList.add('is-warm')
+      else lamp.classList.add('is-cold')
       lamp.title = last === undefined
         ? '尚无接触记录'
         : `最近接触 ${ageText(last, now)}${ok === false ? '（失败）' : ok === true ? '（成功）' : ''}`
