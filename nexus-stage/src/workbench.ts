@@ -637,23 +637,24 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   function planActions(state: StateBody): Array<{ severity: 'high' | 'normal'; text: string; brief?: string }> {
     const now = deps.now()
     const actions: Array<{ severity: 'high' | 'normal'; text: string; brief?: string }> = []
-    const dead = state.tasksDead ?? []
-    if (dead.length > 0) {
-      actions.push({ severity: 'high', text: `清账 ${dead.length} 条死信（目标早已离开或死信化，无回执可期）` })
+    // One definition with the 台账 tab: fire-forget expiries are bookkeeping,
+    // not dead letters (review L1), and only OUR stale sends are nudgeable.
+    const facts = ledgerFacts(state, now)
+    if (facts.deadLetters.length > 0) {
+      actions.push({ severity: 'high', text: `清账 ${facts.deadLetters.length} 条死信（目标早已离开或死信化，无回执可期）` })
     }
-    for (const row of state.tasks ?? []) {
-      const age = now - row.startedAt
-      if (age > 60 * 60_000 && row.settleable === true) {
-        // Quote the original ask: a nudge that only repeats a task id makes
-        // the target re-derive WHAT was owed, and the target is exactly the
-        // session that already failed to answer once.
-        const subject = row.brief === undefined || row.brief === '' ? '' : `「${row.brief}」`
-        actions.push({
-          severity: 'normal',
-          text: `催办 ${row.taskId} → ${row.team}（等待 ${ageText(row.startedAt, now)} 无回执）${subject}`,
-          brief: `a2a_route 催收回执：task ${row.taskId}（team ${row.team}）${subject === '' ? '' : `原任务「${row.brief}」`}已派发 ${ageText(row.startedAt, now)}，请回报结果或回执。`,
-        })
-      }
+    // (The old `age > 1h && settleable === true` never fired against a real
+    // host — the server's settleable means receipt-expected AND age < 1h.)
+    for (const row of facts.stale) {
+      // Quote the original ask: a nudge that only repeats a task id makes
+      // the target re-derive WHAT was owed, and the target is exactly the
+      // session that already failed to answer once.
+      const subject = row.brief === undefined || row.brief === '' ? '' : `「${row.brief}」`
+      actions.push({
+        severity: 'normal',
+        text: `催办 ${row.taskId} → ${row.team}（等待 ${ageText(row.startedAt, now)} 无回执）${subject}`,
+        brief: `a2a_route 催收回执：task ${row.taskId}（team ${row.team}）${subject === '' ? '' : `原任务「${row.brief}」`}已派发 ${ageText(row.startedAt, now)}，请回报结果或回执。`,
+      })
     }
     for (const row of state.sessions ?? []) {
       if (row.live !== true) {
@@ -951,7 +952,9 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     const dead = facts.deadLetters.length
     if (dead > 0) alerts.push({ text: `死信 ${dead}`, tone: 'danger', title: '超过 24h TTL 仍未结算的任务（unconsumed），需在台账清账' })
     const stale = facts.stale.length
-    if (stale > 0) alerts.push({ text: `陈旧 ${stale}`, tone: 'warn', title: '要回执、已等待 ≥1h 仍未回执的任务（免回执行不算）' })
+    if (stale > 0) alerts.push({ text: `陈旧 ${stale}`, tone: 'warn', title: '我方派发、要回执、已等待 ≥1h 仍未回执（可催办；免回执行不算）' })
+    const owed = facts.owedOverdue.length
+    if (owed > 0) alerts.push({ text: `欠回执 ${owed}`, tone: 'warn', title: '对方投递给本机、已等待本机回执超过 1 小时' })
     const conflicts = last.idempotency?.conflicts ?? 0
     if (conflicts > 0) alerts.push({ text: `幂等冲突 ${conflicts}`, tone: 'danger', title: '同一幂等键对应了不同载荷，需人工核查' })
     const repair = (last.reconcile?.rows ?? []).filter(row => row.needsRepair === true).length

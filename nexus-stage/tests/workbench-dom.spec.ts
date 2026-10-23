@@ -64,7 +64,7 @@ const state: StateBody = {
   ],
   inFlight: [{ team: 'dsh/11111111', peer: '192.168.3.157:13080', startedAt: NOW - 5_000 }],
   tasks: [
-    { taskId: 'direct-aaaaaaaa', team: 'dsh/11111111', startedAt: NOW - 3_700_000, status: 'pending', direction: 'outbound', receiptExpected: true, settleable: true },
+    { taskId: 'direct-aaaaaaaa', team: 'dsh/11111111', startedAt: NOW - 3_700_000, status: 'pending', direction: 'outbound', receiptExpected: true, settleable: false },
     { taskId: 'direct-bbbbbbbb', team: 'dsh/22222222', startedAt: NOW - 10_000, status: 'pending', receiptExpected: false, settleable: false },
   ],
   tasksStaleCount: 1,
@@ -337,7 +337,8 @@ describe('workbench panels', () => {
     expect(groups[1]!.tasks).toEqual(['direct-aaaaaaaa'])
     expect(groups[2]!.tasks).toEqual(['direct-bbbbbbbb'])
     const metas = [...pane.querySelectorAll('.wb-led-meta')].map(n => text(n)).join('|')
-    expect(metas).toContain('可结算')
+    // Past its hour the server stops calling the row settleable — no 可结算 chip.
+    expect(metas).not.toContain('可结算')
     expect(metas).toContain('无回执债')
     // Color only where a hand is needed: dead red, stale amber, receiptless quiet.
     expect(pane.querySelector('.wb-led-card.is-danger .wb-led-task')!.textContent).toBe('direct-cccccccc')
@@ -460,6 +461,21 @@ describe('workbench panels', () => {
     })
     expect(v.root.querySelectorAll('.wb-header-stats .wb-alert').length).toBe(0)
     expect(text(v.root.querySelector('.wb-header-stats'))).toContain('无异常')
+  })
+
+  it('an inbound receipt we owe past its hour reads 欠回执, never 陈旧, and is not nudged; fire-forget is not cleanup', () => {
+    const { v } = bench()
+    v.update({
+      ...state,
+      tasks: [{ taskId: 'direct-in000009', team: 'dsh/11111111', peer: 'local:cargo/22222222', startedAt: NOW - 2 * 3_600_000, status: 'pending', direction: 'inbound', receiptExpected: true, settleable: false }],
+      tasksDead: [{ taskId: 'direct-ffff0003', team: 'dsh/22222222', startedAt: NOW - 90_000_000, deadAt: NOW - 1_000, reason: 'fire-forget' }],
+      reconcile: { state: 'idle', rows: [] },
+    })
+    expect([...v.root.querySelectorAll('.wb-header-stats .wb-alert')].map(p => text(p))).toEqual(['欠回执 1'])
+    const pane = [...v.root.querySelectorAll('.wb-pane')].find(p => text(p).includes('待办行动'))!
+    const actions = [...pane.querySelectorAll('.wb-action-text')].map(n => text(n))
+    expect(actions.some(t => t.includes('催办'))).toBe(false)
+    expect(actions.some(t => t.includes('清账'))).toBe(false)
   })
 
   it('idempotency conflicts escalate to the header', () => {

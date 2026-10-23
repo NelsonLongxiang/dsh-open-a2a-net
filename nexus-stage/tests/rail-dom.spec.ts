@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRailTabs } from '../src/wb-rail.ts'
 import { learnLogTitle, loadLogTitles, renderDirectory, type DirectoryContext } from '../src/wb-directory.ts'
-import { renderLedger, type LedgerContext } from '../src/wb-ledger.ts'
+import { ledgerFacts, renderLedger, type LedgerContext } from '../src/wb-ledger.ts'
 import type { StateBody } from '../src/workbench.ts'
 
 // 2026-10-23 12:00 local time: "today" / "yesterday" buckets are calendar days.
@@ -186,7 +186,7 @@ describe('台账 (wb-ledger)', () => {
     expect(text(inbound.querySelector('.wb-led-to'))).toBe('至 dsh/11111111')
     expect(text(inbound)).toContain('入站')
     // A receipt WE owe is never "可催办".
-    expect(text(pane.querySelector('.wb-led-group .wb-led-group-hint'))).toBe('对方在等本机回执')
+    expect(text(pane.querySelector('.wb-led-group .wb-led-group-hint'))).toBe('对方在等本机回执 · 1 条超过 1 小时')
     // Owed = receipts still expected (2); receiptless rows owe nothing. The
     // 2h-old inbound row makes it amber.
     expect(out).toEqual({ badge: '2', tone: 'warn' })
@@ -224,6 +224,43 @@ describe('台账 (wb-ledger)', () => {
     const group = [...pane.querySelectorAll('.wb-led-group-head span:first-child')].map(n => text(n)).find(h => h.startsWith('陈旧'))
     expect(tileV).toBe('1')
     expect(group).toBe('陈旧 · 1') // exactly 1h old is stale (≥1h)
+  })
+
+  it('an inbound row past its hour is owed overdue, never stale: tile, groups and header agree (review P3)', () => {
+    const s: StateBody = {
+      tasks: [{ taskId: 'direct-in000003', team: 'dsh/11111111', peer: 'local:cargo/22222222', startedAt: NOW - 2 * HOUR, status: 'pending', direction: 'inbound', receiptExpected: true, settleable: false }],
+      tasksDead: [],
+    }
+    const { pane, out } = render({}, s)
+    const tileV = text([...pane.querySelectorAll('.wb-led-tile')].find(t => text(t).includes('陈旧'))!.querySelector('.wb-led-tile-v'))
+    const heads = [...pane.querySelectorAll('.wb-led-group-head span:first-child')].map(n => text(n))
+    expect(tileV).toBe('0')
+    expect(heads).toEqual(['待本机回执 · 1'])
+    expect(text(pane.querySelector('.wb-led-group-hint'))).toBe('对方在等本机回执 · 1 条超过 1 小时')
+    expect(out).toEqual({ badge: '1', tone: 'warn' })
+    const facts = ledgerFacts(s, NOW)
+    expect([facts.stale.length, facts.owedOverdue.length]).toEqual([0, 1])
+  })
+
+  it('the hour boundary follows the server’s settleable verdict over the browser clock', () => {
+    // A browser clock 2h ahead of the host: by our clock both rows are old,
+    // but the host still calls one settleable (young) — trust the host.
+    const s: StateBody = {
+      tasks: [
+        { taskId: 'direct-sk000001', team: 'dsh/99999999', startedAt: NOW - 2 * HOUR, status: 'pending', direction: 'outbound', receiptExpected: true, settleable: true },
+        { taskId: 'direct-sk000002', team: 'dsh/99999999', startedAt: NOW - 3 * HOUR, status: 'pending', direction: 'outbound', receiptExpected: true, settleable: false },
+        // An older host without the field: the browser clock decides.
+        { taskId: 'direct-sk000003', team: 'dsh/99999999', startedAt: NOW - 2 * HOUR, status: 'pending', direction: 'outbound', receiptExpected: true },
+      ],
+      tasksDead: [],
+    }
+    const { pane } = render({}, s)
+    const byGroup = Object.fromEntries([...pane.querySelectorAll('.wb-led-group')].map(g => [
+      text(g.querySelector('.wb-led-group-head span:first-child')).split(' · ')[0],
+      [...g.querySelectorAll('.wb-led-task')].map(n => text(n)),
+    ]))
+    expect(byGroup['陈旧']).toEqual(['direct-sk000002', 'direct-sk000003'])
+    expect(byGroup['等待回执']).toEqual(['direct-sk000001'])
   })
 
   it('a card opens its team’s conversation when the team resolves; otherwise it is not a link', () => {

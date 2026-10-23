@@ -9,7 +9,7 @@
  *   死信        red, 'unconsumed' (or unspecified) dead rows, with 清账;
  *   陈旧        amber, our receipt-expected sends ≥1h old — 可催办;
  *   待本机回执  a peer's delivery to this host whose receipt WE owe
- *               (amber from 1h); never "可催办";
+ *               (amber from 1h, its own overdue count); never "可催办";
  *   等待回执    quiet, our sends still within their hour;
  *   免回执      muted, receiptExpected:false rows (no receipt will ever come);
  *   已过期（免回执） muted, 'fire-forget' expiries — expected bookkeeping
@@ -50,14 +50,25 @@ function senderOf(row: { peer?: string }): string | undefined {
   return row.peer?.startsWith('local:') === true ? row.peer.slice('local:'.length) : undefined
 }
 
+/** Past its hour, by the host's clock when the row carries the server's
+ *  settleable verdict (receiptExpected && age < 1h, computed host-side), else
+ *  by ours — a workbench opened from another machine with a skewed clock then
+ *  still draws the boundary where the server does (at most one poll late). */
+function overHour(r: PendingRow, now: number): boolean {
+  return r.settleable !== undefined ? r.settleable === false : now - r.startedAt >= HOUR
+}
+
 /** The ledger's action counts, one definition for the 台账 tab and the header:
- *  stale = receipt-expected pending rows at least an hour old (server boundary
- *  ≥1h; receiptless rows are never stale — no receipt is coming), dead letters
- *  = dead rows that are not a 'fire-forget' expiry. */
-export function ledgerFacts(state: StateBody, now: number): { stale: PendingRow[]; deadLetters: DeadRow[]; expired: DeadRow[] } {
-  const stale = (state.tasks ?? []).filter(r => r.receiptExpected !== false && now - r.startedAt >= HOUR)
+ *  stale = OUR receipt-expected sends past their hour (receiptless rows are
+ *  never stale — no receipt is coming); owedOverdue = peers' deliveries whose
+ *  receipt WE have owed for over an hour (their own count, never mixed into
+ *  stale); dead letters = dead rows that are not a 'fire-forget' expiry. */
+export function ledgerFacts(state: StateBody, now: number): { stale: PendingRow[]; owedOverdue: PendingRow[]; deadLetters: DeadRow[]; expired: DeadRow[] } {
+  const expected = (state.tasks ?? []).filter(r => r.receiptExpected !== false)
+  const stale = expected.filter(r => !isInbound(r) && overHour(r, now))
+  const owedOverdue = expected.filter(r => isInbound(r) && overHour(r, now))
   const dead = state.tasksDead ?? []
-  return { stale, deadLetters: dead.filter(r => r.reason !== 'fire-forget'), expired: dead.filter(r => r.reason === 'fire-forget') }
+  return { stale, owedOverdue, deadLetters: dead.filter(r => r.reason !== 'fire-forget'), expired: dead.filter(r => r.reason === 'fire-forget') }
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): HTMLElementTagNameMap[K] {
@@ -130,13 +141,13 @@ export function renderLedger(pane: HTMLElement, ctx: LedgerContext): { badge: st
   const expected = pending.filter(r => r.receiptExpected !== false)
   const inbound = expected.filter(r => isInbound(r))
   const outbound = expected.filter(r => !isInbound(r))
-  const stale = outbound.filter(r => now - r.startedAt >= HOUR)
-  const young = outbound.filter(r => now - r.startedAt < HOUR)
+  const stale = facts.stale
+  const young = outbound.filter(r => !overHour(r, now))
   const staleCount = facts.stale.length
 
   const tiles = el('div', 'wb-led-tiles')
   tile(tiles, '待回执', pending.length, '等待回执的任务（pending），含陈旧与免回执行')
-  tile(tiles, '陈旧', staleCount, '要回执、已等待 ≥1h 仍未回执（含本机欠对方的入站行）；免回执行不算陈旧', staleCount > 0 ? 'warn' : undefined)
+  tile(tiles, '陈旧', staleCount, '我方派发、要回执、已等待 ≥1h 仍未回执（可催办）；本机欠对方的入站行在「待本机回执」组另计，免回执行不算陈旧', staleCount > 0 ? 'warn' : undefined)
   tile(tiles, '死信', facts.deadLetters.length, '超过 24h TTL 仍未结算（unconsumed）；需清账（abandon）才能移出。免回执到期另列，不算死信', facts.deadLetters.length > 0 ? 'danger' : undefined)
   tile(tiles, '已归档', archived, '已离开台账并留档的任务（结算、拒绝或放弃），用于审计')
   pane.appendChild(tiles)
@@ -212,8 +223,9 @@ export function renderLedger(pane: HTMLElement, ctx: LedgerContext): { badge: st
   if (gDead !== null) for (const r of [...facts.deadLetters].sort((a, b) => b.deadAt - a.deadAt)) card(gDead, deadCard(r, 'danger', '死信'))
   const gStale = section('陈旧', stale.length, 'warn', '我方派发 ≥1 小时仍无回执，可催办')
   if (gStale !== null) for (const r of [...stale].sort((a, b) => a.startedAt - b.startedAt)) card(gStale, pendingCard(r, 'warn'))
-  const gOwe = section('待本机回执', inbound.length, inbound.some(r => now - r.startedAt >= HOUR) ? 'warn' : 'quiet', '对方在等本机回执')
-  if (gOwe !== null) for (const r of [...inbound].sort((a, b) => a.startedAt - b.startedAt)) card(gOwe, pendingCard(r, now - r.startedAt >= HOUR ? 'warn' : 'quiet'))
+  const overdue = facts.owedOverdue.length
+  const gOwe = section('待本机回执', inbound.length, overdue > 0 ? 'warn' : 'quiet', overdue > 0 ? `对方在等本机回执 · ${overdue} 条超过 1 小时` : '对方在等本机回执')
+  if (gOwe !== null) for (const r of [...inbound].sort((a, b) => a.startedAt - b.startedAt)) card(gOwe, pendingCard(r, overHour(r, now) ? 'warn' : 'quiet'))
   const gWait = section('等待回执', young.length, 'quiet', '1 小时内')
   if (gWait !== null) for (const r of [...young].sort((a, b) => b.startedAt - a.startedAt)) card(gWait, pendingCard(r, 'quiet'))
   const gFree = section('免回执', receiptless.length, 'muted', '不等回执，24h 后自动归档')
@@ -241,5 +253,5 @@ export function renderLedger(pane: HTMLElement, ctx: LedgerContext): { badge: st
   // Owed = receipts still expected + dead letters to clean; receiptless rows
   // and fire-forget expiries owe nothing.
   const owed = expected.length + facts.deadLetters.length
-  return { badge: owed > 0 ? String(owed) : '', tone: facts.deadLetters.length > 0 ? 'danger' : staleCount > 0 ? 'warn' : undefined }
+  return { badge: owed > 0 ? String(owed) : '', tone: facts.deadLetters.length > 0 ? 'danger' : staleCount > 0 || overdue > 0 ? 'warn' : undefined }
 }
