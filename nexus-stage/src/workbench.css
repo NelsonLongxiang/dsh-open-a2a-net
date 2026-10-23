@@ -225,6 +225,10 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-msg-user{align-self:flex-end;background:color-mix(in srgb,var(--n-accent) 16%,var(--n-panel));
   border:1px solid color-mix(in srgb,var(--n-accent) 35%,transparent);border-bottom-right-radius:4px}
 /* Role label for screen readers; side and tint carry it visually. */
+.wb-msg-ledger{align-self:center;max-width:92%;background:transparent;border:1px dashed var(--n-border);font-size:12px}
+.wb-msg-ledger .wb-msg-text{color:var(--n-ink-muted)}
+.wb-msg-ledger .wb-msg-meta{justify-content:center}
+.wb-msg-in .wb-msg-meta{justify-content:flex-start}
 .wb-msg-who{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .wb-msg-text{color:var(--n-ink);white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
 .wb-msg-meta{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:6px;font-size:11px}

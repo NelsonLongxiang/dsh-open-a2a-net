@@ -58,7 +58,7 @@ describe('chat drawer (wb-chat)', () => {
     expect(q(d.root, '.wb-chat-info').hidden).toBe(true)
   })
 
-  it('echoes a send and tracks it: 发送中 → 已派发 → 待回执 → 已结算', async () => {
+  it('echoes a send and tracks it: 发送中 → 已派发 → 待回执 → 已离开台账', async () => {
     const { d, dispatchQuick, resolve } = drawer()
     d.update(baseState)
     d.open(session)
@@ -70,11 +70,14 @@ describe('chat drawer (wb-chat)', () => {
     resolve({ ok: true, task_id: 'direct-12345678' })
     await vi.waitFor(() => expect(statuses(d.root)).toEqual(['已派发']))
     expect(q(d.root, '.wb-msg-task').textContent).toBe('direct-12345678')
-    // The ledger picks it up as pending, then it disappears (settled).
-    d.update({ ...baseState, tasks: [{ taskId: 'direct-12345678', team: TEAM, startedAt: NOW - 5_000, status: 'pending' }] })
+    // The ledger picks it up as pending, then it leaves the ledger. /state has
+    // no per-task outcome (settled, abandoned and cancelled all archive), so
+    // the drawer claims only that it left (review C3, PR #28).
+    d.update({ ...baseState, tasks: [{ taskId: 'direct-12345678', team: TEAM, startedAt: NOW - 5_000, status: 'pending', direction: 'outbound', receiptExpected: true }] })
     expect(statuses(d.root)).toEqual(['待回执 · pending'])
     d.update(baseState)
-    expect(statuses(d.root)).toEqual(['已结算'])
+    expect(statuses(d.root)).toEqual(['已离开台账'])
+    expect(q(d.root, '.wb-msg-status').title).toContain('放弃或撤回')
     // Only one bubble: the ledger row and the local echo are the same message.
     expect(d.root.querySelectorAll('.wb-chat-sent .wb-msg').length).toBe(1)
   })
@@ -103,6 +106,43 @@ describe('chat drawer (wb-chat)', () => {
     expect(bubbles).toEqual(['复核 Q3 选品清单', '（无摘要）'])
     expect(statuses(d.root)).toEqual(['陈旧 · working', '待回执 · pending'])
     expect(q(d.root, '.wb-msg-status').classList.contains('is-warn')).toBe(true)
+  })
+
+  it('an inbound delivery to this session sits on their side, owed by us (review C1)', () => {
+    const { d } = drawer()
+    d.update({ ...baseState, tasks: [{ taskId: 'direct-aaaa0001', team: TEAM, peer: 'peer/22222222', startedAt: NOW - 30_000, status: 'pending', direction: 'inbound', receiptExpected: true, brief: '请帮我核一下晨光报价' }] })
+    d.open(session)
+    const b = q(d.root, '.wb-chat-sent .wb-msg')
+    expect(b.classList.contains('wb-msg-in')).toBe(true)
+    expect(b.classList.contains('wb-msg-out')).toBe(false)
+    expect(q(b, '.wb-msg-who').textContent).toBe('对方')
+    expect(q(b, '.wb-msg-text').textContent).toBe('请帮我核一下晨光报价')
+    expect(statuses(d.root)).toEqual(['待本机回执 · pending'])
+    // Once it dead-letters (/state dead rows carry no direction), the learned
+    // direction keeps it on their side.
+    d.update({ ...baseState, tasksDead: [{ taskId: 'direct-aaaa0001', team: TEAM, startedAt: NOW - 25 * 3_600_000, deadAt: NOW, reason: 'unconsumed', brief: '请帮我核一下晨光报价' }] })
+    expect(q(d.root, '.wb-chat-sent .wb-msg').classList.contains('wb-msg-in')).toBe(true)
+  })
+
+  it('a dead row of unknown direction is a neutral ledger line, never our words', () => {
+    const { d } = drawer()
+    d.update({ ...baseState, tasksDead: [{ taskId: 'direct-unk00001', team: TEAM, startedAt: NOW - 25 * 3_600_000, deadAt: NOW, reason: 'unconsumed', brief: '谁说的？' }] })
+    d.open(session)
+    const b = q(d.root, '.wb-chat-sent .wb-msg')
+    expect(b.classList.contains('wb-msg-ledger')).toBe(true)
+    expect(q(b, '.wb-msg-who').textContent).toBe('台账记录')
+    expect(statuses(d.root)).toEqual(['死信'])
+  })
+
+  it('a receiptless send never waits for a receipt, and its expiry is not a dead letter (review C2)', () => {
+    const { d } = drawer()
+    d.update({ ...baseState, tasks: [{ taskId: 'direct-bbbb0001', team: TEAM, peer: 'local', startedAt: NOW - 30_000, status: 'pending', direction: 'outbound', receiptExpected: false, brief: 'fire and forget' }] })
+    d.open(session)
+    expect(statuses(d.root)).toEqual(['已送达 · 无回执'])
+    d.update({ ...baseState, tasksDead: [{ taskId: 'direct-bbbb0001', team: TEAM, peer: 'local', startedAt: NOW - 25 * 3_600_000, deadAt: NOW, reason: 'fire-forget', brief: 'fire and forget' }] })
+    expect(statuses(d.root)).toEqual(['已过期（免回执）'])
+    expect(q(d.root, '.wb-msg-status').classList.contains('is-muted')).toBe(true)
+    expect(q(d.root, '.wb-chat-sent .wb-msg').classList.contains('wb-msg-out')).toBe(true)
   })
 
   it('a refused send hands the text back to the composer and says why', async () => {
