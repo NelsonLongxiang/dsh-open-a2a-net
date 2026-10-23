@@ -2734,7 +2734,7 @@ const reportLoopRing = new Map<string, number[]>()
       // <id>" answer correlates with the caller's own route result.
       const from = caller === '' ? 'an unknown node' : caller
       const taskPrefix = taskId === undefined ? '' : `(task ${taskId}) `
-      const text = `[A2A direct] ${taskPrefix}from "${from}" (routed to ${team}) sent:
+      const text = `[A2A direct] ${taskPrefix}${fromClause(from)} (routed to ${team}) sent:
 
 ${message}`
       try {
@@ -2863,7 +2863,7 @@ ${message}`
   function bridgeEnvelope(team: string, caller: string, message: string, taskId: string | undefined): string {
     const from = caller === '' ? 'an unknown node' : caller
     const taskPrefix = taskId === undefined ? '' : `(task ${taskId}) `
-    return `[A2A direct] ${taskPrefix}from "${from}" (routed to ${team}) sent:\n\n${message}`
+    return `[A2A direct] ${taskPrefix}${fromClause(from)} (routed to ${team}) sent:\n\n${message}`
   }
 
   type NativeTeamsRoundOutcome =
@@ -3421,7 +3421,7 @@ ${message}`
                 // latched, so the post-steer read alone would answer a false
                 // consumed:true and strand the message.
                 const runningBeforeSteer = probeConsumption(target, taskId)
-                steerRelay(target, `[A2A direct] (task ${taskId}) from "${from}" (routed to ${team}) sent:\n\n${message}\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`, from === 'an unknown node' ? undefined : from)
+                steerRelay(target, `[A2A direct] (task ${taskId}) ${fromClause(from)} (routed to ${team}) sent:\n\n${message}\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`, from === 'an unknown node' ? undefined : from)
                 recordActivity('in', team, caller, true)
                 armReceiptAutosend(target, taskId, receiptTarget, message)
                 // v0.5.23 (async-stall): "delivered" only proves the steer call
@@ -4094,6 +4094,56 @@ ${message}`
   interface CardCacheEntry { at: number; card: A2aPeerCard | undefined }
   const cardCache = new Map<string, CardCacheEntry>()
   const cardCacheInFlight = new Map<string, Promise<A2aPeerCard | undefined>>()
+
+  /**
+   * The from-line display name (owner ruling, claim 8ea4150f94): a bare
+   * routing handle (`dsh/74555a36`) carries zero semantics for the reader.
+   * Resolve what the handle NAMES, cheaply and read-only:
+   *   1. a local handle — a joined/live session id, its zone/id8 pseudo-team,
+   *      or a live node label → nodeMetadataOf(agent).name (the session-title
+   *      product, exactly what the directory shows);
+   *   2. a remote bare-zone caller → the warmest cached card whose team
+   *      equals the zone (the publisher's own card NAME is the display name);
+   *   3. a remote zone/id8 caller → the cached card whose sessionTeams row
+   *      matches the handle → that row's name;
+   *   4. nothing resolves → '' (the from line stays bare — no false names).
+   * Read-only over warm caches: never fetches, so a cold cache degrades to
+   * the bare handle, never to a stall.
+   */
+  function callerDisplayName(caller: string): string {
+    if (caller === '' || caller === 'an unknown node') return ''
+    // Local: joined/live session facts on THIS host.
+    for (const [id, agent] of sessionNodes) {
+      if (id === caller || sessionLabelOf(agent) === caller || `${config.team}/${id8(id)}` === caller) {
+        return nodeMetadataOf(agent).name
+      }
+    }
+    for (const [id, agent] of liveRoots) {
+      if (id === caller || sessionLabelOf(agent) === caller || `${config.team}/${id8(id)}` === caller) {
+        return nodeMetadataOf(agent).name
+      }
+    }
+    // Remote: warm card cache only.
+    const zone = caller.includes('/') ? caller.slice(0, caller.indexOf('/')) : caller
+    let zoneName = ''
+    for (const entry of cardCache.values()) {
+      const card = entry.card
+      if (card === undefined) continue
+      if (card.team === zone && zoneName === '') zoneName = card.name
+      if (caller.includes('/')) {
+        const row = (card.sessionTeams ?? []).find(item => item.team === caller)
+        if (row !== undefined && row.name !== '') return row.name
+      }
+    }
+    if (!caller.includes('/') && zoneName !== '') return zoneName
+    return ''
+  }
+
+  /** The from clause with the display name in full-width parens when resolved. */
+  function fromClause(from: string): string {
+    const display = callerDisplayName(from)
+    return `from "${from}"${display !== '' ? `（${display}）` : ''}`
+  }
 
   function cachedCardFetch(url: string): Promise<A2aPeerCard | undefined> {
     const hit = cardCache.get(url)
@@ -5191,7 +5241,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           ? callbackAddress
           : routable ? callerSession : undefined
         const receiptHint = callerTeam === undefined ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${callerTeam}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
-        steerRelay(target, `[A2A direct] (task ${taskId}) from "${callerSession ?? session}" (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam)
+        steerRelay(target, `[A2A direct] (task ${taskId}) ${fromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam)
         armReceiptAutosend(target, taskId, callerTeam, message)
         endRoute(flight)
         recordActivity('out', team, 'local', true)
