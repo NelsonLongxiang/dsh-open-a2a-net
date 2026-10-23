@@ -197,7 +197,7 @@ function collectOwnerSignalUi() {
   }
   const ui = agg(join(REPO, 'nexus-stage/src')) + agg(join(REPO, 'nexus-stage/tests'))
   const rows = []
-  rows.push({ name: 'alert-class', ok: /wb-row-alert/.test(ui) ? 1 : 0, detail: '异常驱动标红（pending>1h+死信）' })
+  rows.push({ name: 'alert-chips', ok: /死信.*tone.*danger|tone: 'warn' \| 'danger'/.test(ui) ? 1 : 0, detail: '异常驱动 alerts 芯片（死信 danger/陈旧 warn/欠回执 warn——PR#30 取代 wb-row-alert 行类）' })
   // 2026-10-23 属主裁定（PR#28）：对话默认展开——推翻 b324460 折叠，取证开关随折叠退役。
   // 新锚=chat-drawer-dom.spec 首例「shows the conversation by default as bubbles」。
   rows.push({ name: 'chat-default-expanded', ok: /shows the conversation by default/.test(ui) ? 1 : 0, detail: '对话默认展开（属主裁定 PR#28，取代折叠取证开关）' })
