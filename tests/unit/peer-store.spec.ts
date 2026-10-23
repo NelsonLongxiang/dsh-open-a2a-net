@@ -261,8 +261,7 @@ describe('gh#24 contact outcome (host-rail lamp semantics)', () => {
     const path = storePath()
     const store = new PeerStore(['http://ok'], path, PEER_CAP, 0)
     store.noteSuccess('http://ok')
-    // A LEARNED peer takes the failure stamp: seeds are immune to penalties
-    // by design (noteFailure returns early for them).
+    // A learned peer here; the seed failure path has its own case below.
     store.offer('http://bad')
     store.noteFailure('http://bad')
     await store.flush()
@@ -275,5 +274,35 @@ describe('gh#24 contact outcome (host-rail lamp semantics)', () => {
     expect(reloaded.lastContactOk('http://bad')).toBe(false)
     expect(typeof reloaded.lastContact('http://ok')).toBe('number')
     expect(Date.now() - (reloaded.lastContact('http://ok') ?? 0)).toBeLessThan(60_000)
+  })
+
+  it('a seed failure records !ok but takes no penalty', () => {
+    const store = new PeerStore(['http://seed'], '')
+    store.noteSuccess('http://seed')
+    const scored = store.score('http://seed')
+    store.noteFailure('http://seed')
+    // Same outage, same lamp as a learned peer: red, not the last success.
+    expect(store.lastContactOk('http://seed')).toBe(false)
+    expect(Date.now() - (store.lastContact('http://seed') ?? 0)).toBeLessThan(60_000)
+    // Seeds stay config-owned: no penalty, never evicted.
+    expect(store.score('http://seed')).toBe(scored)
+    expect(store.list()).toEqual(['http://seed'])
+  })
+
+  it('a seed that stays configured keeps both stamps across a restart', async () => {
+    const path = storePath()
+    const store = new PeerStore(['http://up', 'http://down'], path, PEER_CAP, 0)
+    store.noteSuccess('http://up')
+    store.noteFailure('http://down')
+    await store.flush()
+    const stamp = store.lastContact('http://up')
+    // The same seed list again: the (re)mark resets the score but must not
+    // drop the observed stamps.
+    const reloaded = new PeerStore(['http://up', 'http://down'], path)
+    expect(reloaded.lastContact('http://up')).toBe(stamp)
+    expect(reloaded.lastContactOk('http://up')).toBe(true)
+    expect(reloaded.lastContactOk('http://down')).toBe(false)
+    expect(typeof reloaded.lastContact('http://down')).toBe('number')
+    expect(reloaded.score('http://up')).toBe(INITIAL_SCORE)
   })
 })

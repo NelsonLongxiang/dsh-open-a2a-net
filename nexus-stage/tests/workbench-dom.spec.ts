@@ -278,6 +278,26 @@ describe('workbench panels', () => {
     expect(lampOf('10.0.0.1:13080').title).toContain('失败')
   })
 
+  it('gh#24: the linked badge tooltip follows the verified mark', () => {
+    const { v } = bench()
+    v.update({
+      ...state,
+      peers: [
+        { url: 'http://10.0.0.1:13080', score: 100, link: 'linked', verified: true },
+        { url: 'http://10.0.0.2:13080', score: 100, link: 'linked', verified: false },
+      ],
+    })
+    const badgeOf = (host: string): HTMLElement => [...v.root.querySelectorAll<HTMLElement>('.wb-host-row')]
+      .find(row => row.textContent?.includes(host))!
+      .querySelector('.wb-host-badge')!
+    expect(badgeOf('10.0.0.1:13080').textContent).toContain('✓')
+    expect(badgeOf('10.0.0.1:13080').title).toContain('验签有效')
+    // linked ✗: the tooltip must not claim a valid signature.
+    expect(badgeOf('10.0.0.2:13080').textContent).toContain('✗')
+    expect(badgeOf('10.0.0.2:13080').title).not.toContain('验签有效')
+    expect(badgeOf('10.0.0.2:13080').title).toContain('尚未持有验签通过的卡片')
+  })
+
   it('renders ledger rows and settles a dead letter through the abandon seam', async () => {
     const { v, abandon } = bench()
     v.update(state)
