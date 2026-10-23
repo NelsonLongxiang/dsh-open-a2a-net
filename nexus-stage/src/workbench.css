@@ -14,8 +14,6 @@
   --n-canvas:#22d3ee; --n-line:var(--n-border);
   --n-raised:#131b2e; --n-federal:#6366f1; --n-card-line:#5c6680;
   --n-error-ink:#fecaca; --n-error-panel:#2a0d10f2; --n-shadow:rgba(0,0,0,.35);
-  --n-role-user:#7dd3fc; --n-role-user-bg:rgba(56,189,248,.16);
-  --n-role-assistant:#6ee7b7; --n-role-assistant-bg:rgba(52,211,153,.14);
 }
 @media (prefers-color-scheme: light){
   :root{ --n-bg:#eef2fa; --n-ink:#1a2438; --n-ink-muted:#5a6580; --n-panel:#ffffff;
@@ -23,9 +21,7 @@
          --n-danger:#b91c1c; --n-accent:#6d28d9;
          --n-cold:#636c81; --n-canvas:#0e7490;
          --n-raised:#ffffff; --n-federal:#4f46e5; --n-card-line:#8a95ae;
-         --n-error-ink:#b91c1c; --n-error-panel:#fef2f2f2; --n-shadow:rgba(26,36,56,.16);
-         --n-role-user:#075985; --n-role-user-bg:rgba(14,116,144,.12);
-         --n-role-assistant:#065f46; --n-role-assistant-bg:rgba(5,150,105,.12); }
+         --n-error-ink:#b91c1c; --n-error-panel:#fef2f2f2; --n-shadow:rgba(26,36,56,.16); }
 }
 @media (min-width:1440px){ :root{ --n-rail-w:340px } }
 html,body,#app{height:100%;margin:0}
@@ -123,16 +119,6 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-dispatch-submit:hover:not(:disabled){border-color:var(--n-accent)}
 .wb-dispatch-note{font-size:11px;color:var(--n-ink-muted);line-height:1.4;min-height:0}
 /* 0.6.11 inline transcript: read-only tail of a local session's own log. */
-.wb-transcript{display:flex;flex-direction:column;gap:6px}
-.wb-transcript-title{font-size:12px;color:var(--n-ink-muted)}
-.wb-transcript-body.is-folded{display:none}
-.wb-transcript-refresh{margin-left:auto;font-size:11px;padding:1px 8px;border-radius:999px;border:1px solid var(--n-line);background:transparent;color:var(--n-ink-muted);cursor:pointer}
-.wb-transcript-body{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto}
-.wb-transcript-row{display:flex;gap:6px;align-items:flex-start;font-size:12px;line-height:1.45}
-.wb-transcript-role{flex:0 0 auto;font-size:10px;padding:0 5px;border-radius:999px;margin-top:2px}
-.wb-transcript-user .wb-transcript-role{background:var(--n-role-user-bg);color:var(--n-role-user)}
-.wb-transcript-assistant .wb-transcript-role{background:var(--n-role-assistant-bg);color:var(--n-role-assistant)}
-.wb-transcript-text{flex:1 1 auto;min-width:0;color:var(--n-ink);word-break:break-word}
 
 /* ── Stage: board (canvas mode) or the data stack (data mode) ── */
 .wb-stage{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column}
@@ -198,24 +184,78 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-kv-v{word-break:break-all}
 .wb-muted{color:var(--n-ink-muted)}
 
-/* ── Node chat drawer (0.6.13): right-side conversation face. ── */
-.wb-chat{position:absolute;top:8px;right:8px;bottom:8px;width:360px;max-width:calc(100% - 16px);
+/* ── Node chat drawer (wb-chat, rewritten 2026-10-23): head · info · thread · composer.
+   The thread is the conversation (shown by default); the composer is pinned
+   to the bottom; sends from this page track their receipts in the thread. ── */
+.wb-chat{position:absolute;top:8px;right:8px;bottom:8px;width:400px;max-width:calc(100% - 16px);
   display:flex;flex-direction:column;background:var(--n-panel);border:1px solid var(--n-border);
-  border-radius:10px;z-index:22;box-shadow:0 8px 24px var(--n-shadow);
+  border-radius:12px;z-index:22;box-shadow:0 8px 24px var(--n-shadow);overflow:hidden;
   transform:translateX(calc(100% + 12px));transition:transform .18s ease;pointer-events:none}
 .wb-chat.is-open{transform:translateX(0);pointer-events:auto}
-.wb-chat-head{display:flex;align-items:center;gap:8px;padding:10px 10px 8px;border-bottom:1px solid var(--n-border)}
-.wb-chat-dot{flex:none;font-size:11px}
-.wb-chat-dot.is-live{color:var(--n-accent)}
-.wb-chat-dot.is-cold{color:var(--n-ink-muted)}
-.wb-chat-dot.is-peer{color:var(--n-act)}
-.wb-chat-title{font-weight:600;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wb-chat-sub{flex:1 1 auto;min-width:0;font-size:11px;color:var(--n-ink-muted);
+.wb-chat-head{display:flex;align-items:center;gap:8px;padding:10px 10px 10px 12px;border-bottom:1px solid var(--n-border);flex:none}
+.wb-chat-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--n-ink-muted)}
+.wb-chat-dot.is-live{background:var(--n-live)}
+.wb-chat-dot.is-cold{background:transparent;border:1.5px solid var(--n-ink-muted)}
+.wb-chat-dot.is-peer{background:var(--n-federal)}
+.wb-chat-titles{display:flex;flex-direction:column;flex:1 1 auto;min-width:0;line-height:1.3}
+.wb-chat-title{font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wb-chat-sub{font:11px/1.4 ui-monospace,Consolas,monospace;color:var(--n-ink-muted);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wb-chat .wb-icon-btn{display:inline-flex;width:24px;height:24px;font-size:12px;flex:none}
-.wb-chat-body{flex:1 1 auto;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:10px}
-.wb-chat-note{font-size:12px;color:var(--n-ink-muted);border:1px dashed var(--n-border);
-  border-radius:8px;padding:8px 10px}
+.wb-chat .wb-icon-btn{display:inline-flex;width:28px;height:28px;font-size:13px;flex:none;border-color:transparent}
+.wb-chat .wb-icon-btn:hover{border-color:var(--n-border)}
+.wb-chat .wb-icon-btn:focus-visible{outline:2px solid var(--n-accent);outline-offset:1px}
+.wb-chat .wb-chat-back[hidden]{display:none}
+.wb-chat-info-btn[aria-expanded="true"]{border-color:var(--n-accent);color:var(--n-accent)}
+.wb-chat-info{flex:none;display:flex;flex-direction:column;gap:4px;padding:8px 12px;font-size:12px;
+  border-bottom:1px solid var(--n-border);background:color-mix(in srgb,var(--n-bg) 55%,var(--n-panel))}
+.wb-chat-info[hidden]{display:none}
+.wb-chat-info .wb-kv-v{font-family:ui-monospace,Consolas,monospace;font-size:11.5px}
+.wb-chat-thread{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;
+  display:flex;flex-direction:column;gap:10px;padding:12px}
+.wb-chat-thread:focus-visible{outline:2px solid var(--n-accent);outline-offset:-2px}
+.wb-chat-log,.wb-chat-sent{display:flex;flex-direction:column;gap:10px}
+.wb-chat-notice{align-self:center;max-width:92%;text-align:center;font-size:11.5px;line-height:1.5;
+  color:var(--n-ink-muted);border:1px dashed var(--n-border);border-radius:8px;padding:6px 10px}
+.wb-chat-notice[hidden]{display:none}
+.wb-chat-empty{align-self:center;padding:24px 8px;font-size:12px;color:var(--n-ink-muted);text-align:center}
+.wb-chat-empty.is-error{color:var(--n-danger)}
+.wb-msg{display:flex;flex-direction:column;gap:4px;max-width:86%;padding:8px 11px;border-radius:12px;
+  font-size:13px;line-height:1.55}
+.wb-msg-assistant{align-self:flex-start;background:var(--n-raised);border:1px solid var(--n-border);border-bottom-left-radius:4px}
+.wb-msg-user{align-self:flex-end;background:color-mix(in srgb,var(--n-accent) 16%,var(--n-panel));
+  border:1px solid color-mix(in srgb,var(--n-accent) 35%,transparent);border-bottom-right-radius:4px}
+/* Role label for screen readers; side and tint carry it visually. */
+.wb-msg-who{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.wb-msg-text{color:var(--n-ink);white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
+.wb-msg-meta{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:6px;font-size:11px}
+.wb-msg-task{font-family:ui-monospace,Consolas,monospace;color:var(--n-ink-muted)}
+.wb-msg-status{border:1px solid currentColor;border-radius:99px;padding:0 7px;line-height:18px;white-space:nowrap}
+.wb-msg-status.is-wait,.wb-msg-status.is-muted{color:var(--n-ink-muted)}
+.wb-msg-status.is-ok{color:var(--n-live)}
+.wb-msg-status.is-warn{color:var(--n-act)}
+.wb-msg-status.is-danger{color:var(--n-danger)}
+.wb-chat-divider{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--n-ink-muted);margin-top:4px}
+.wb-chat-divider::before,.wb-chat-divider::after{content:'';flex:1;border-top:1px solid var(--n-border)}
+.wb-chat-sessions{display:flex;flex-direction:column;gap:6px}
+.wb-chat-session{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;text-align:left;
+  background:var(--n-raised);border:1px solid var(--n-border);border-radius:8px;padding:7px 10px;
+  color:var(--n-ink);font:inherit;cursor:pointer}
+.wb-chat-session:hover{border-color:var(--n-accent)}
+.wb-chat-session:focus-visible{outline:2px solid var(--n-accent);outline-offset:1px}
+.wb-chat-session-id{font:12px ui-monospace,Consolas,monospace}
+.wb-chat-session-meta{font-size:11px;color:var(--n-ink-muted)}
+.wb-chat-foot{flex:none;border-top:1px solid var(--n-border);padding:8px 10px 10px;background:var(--n-panel)}
+.wb-chat-composer{display:flex;flex-direction:column;gap:4px}
+.wb-chat-composer-row{display:flex;align-items:flex-end;gap:8px}
+.wb-chat-composer .wb-dispatch-text{flex:1 1 auto;min-height:38px;max-height:160px;resize:none;
+  border-radius:10px;padding:8px 10px;font-size:13px;line-height:1.5}
+.wb-chat-composer .wb-dispatch-submit{align-self:auto;height:38px;padding:0 16px;border-radius:10px;
+  background:var(--n-accent);border-color:var(--n-accent);color:var(--n-bg);font-size:13px;font-weight:600}
+.wb-chat-composer .wb-dispatch-submit:hover:not(:disabled){border-color:var(--n-accent);filter:brightness(1.08)}
+.wb-chat-composer .wb-dispatch-submit:disabled{opacity:.45;cursor:default}
+.wb-chat-composer .wb-dispatch-note{font-size:11px;padding-left:2px}
+.wb-chat-composer .wb-dispatch-note.is-error{color:var(--n-danger)}
+.wb-chat-readonly{font-size:12px;color:var(--n-ink-muted);text-align:center;padding:4px 0}
 
 /* ── Ledger density: stat strip, age histogram, load rows ── */
 .wb-stats{display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 10px}
@@ -251,7 +291,7 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
     transform:translateX(-102%);transition:transform .18s ease;box-shadow:8px 0 24px var(--n-shadow)}
   .wb.is-rail-open .wb-rail{transform:translateX(0)}
   .wb-inspector{left:8px;right:8px;width:auto;top:auto;bottom:8px;max-height:45%}
-  .wb-chat{left:8px;right:8px;width:auto;top:auto;bottom:8px;max-height:70%;
+  .wb-chat{left:8px;right:8px;width:auto;top:auto;bottom:8px;height:85%;max-height:85%;
     transform:translateY(102%)}
   .wb-chat.is-open{transform:translateY(0)}
 }
