@@ -3099,7 +3099,7 @@ ${message}`
    * sessions' declarations. Used by both the inbound faces and the local
    * dispatch candidate so the two paths can never diverge.
    */
-  function sameZoneSharedTeamRefusal(caller: string): string | undefined {
+  function sameZoneSharedTeamRefusal(caller: string, targetTeam?: string): string | undefined {
     const declared = new Set<string>()
     let callerSessionId: string | undefined
     for (const entry of teamMemberships.list()) {
@@ -3127,6 +3127,47 @@ ${message}`
       for (const t of entry.teams) otherLocalDeclarations.add(t)
     }
     const shared = [...declared].some(t => routable.has(t) || otherLocalDeclarations.has(t))
+    // F5 (gh#26, attribute-owner ruling): same-host admission needs a
+    // TARGET-level intersection — a canvas member used to reach ANY session
+    // team on this host through a host-level link alone. The target's link
+    // set = its roster declarations ∪ its canvas teams. EXCEPTION (ruling,
+    // 成文): the PROCESS face (target === config.team) is the owner face,
+    // not a member face — any shared team clears it.
+    if (targetTeam !== undefined && targetTeam !== config.team) {
+      let targetLinks: Set<string> | undefined
+      const targetId8 = targetTeam.startsWith(`${config.team}/`) ? targetTeam.slice(config.team.length + 1) : undefined
+      if (targetId8 !== undefined) {
+        // Only a KNOWN local session earns target-level judgement; an
+        // unresolvable handle (archived/foreign spelling) keeps the
+        // host-level basis — an empty target set must not refuse everyone.
+        // The handle carries the id8 SLICE, so resolve it back to the
+        // session id before asking the stores (canvas teamsOf keys by id).
+        const targetSession = joinedSessions.list().find(sessionId => id8(sessionId) === targetId8)
+          ?? teamMemberships.list().find(entry => id8(entry.session) === targetId8)?.session
+        if (targetSession !== undefined) {
+          targetLinks = new Set<string>()
+          for (const entry of teamMemberships.list()) {
+            if (entry.session === targetSession) for (const t of entry.teams) targetLinks.add(t)
+          }
+          for (const name of canvasStore.teamsOf(targetSession)) targetLinks.add(canvasTeamOf(name))
+        }
+      } else {
+        const canvasName = canvasStore.list().find(name => canvasTeamOf(name) === targetTeam)
+        if (canvasName !== undefined) {
+          targetLinks = new Set<string>([targetTeam])
+          for (const memberId of canvasStore.membersOf(canvasName)) {
+            for (const entry of teamMemberships.list()) if (entry.session === memberId) for (const t of entry.teams) targetLinks.add(t)
+          }
+        }
+      }
+      if (targetLinks !== undefined) {
+        if ([...declared].some(t => targetLinks!.has(t))) return undefined
+        return declared.size === 0
+          ? `caller "${caller}" declares no team membership on this host's roster — a teamless node has no network (S3 phase-3 admission). Declare a shared team on both ends, or route through a teamed member.`
+          : `caller "${caller}" shares no team with target "${targetTeam}" — declared [${[...declared].join(', ')}], target links [${[...targetLinks].join(', ')}] (F5 target-level admission: a host-level link alone does not open every session team).`
+      }
+      // Unresolvable target (foreign/zone delegation): host-level basis.
+    }
     if (shared) return undefined
     return declared.size === 0
       ? `caller "${caller}" declares no team membership on this host's roster — a teamless node has no network (S3 phase-3 admission). Declare a shared team on both ends, or route through a teamed member.`
@@ -3141,14 +3182,14 @@ ${message}`
    * rules; the foreign branch below) and stay untouched.
    */
   const joinedFaceCallerShape = /^[a-z0-9-]+\/[0-9a-f]{8}$/i
-  function joinedFaceAdmissionRefusal(callerSession: string | undefined): string | undefined {
+  function joinedFaceAdmissionRefusal(callerSession: string | undefined, targetTeam?: string): string | undefined {
     if (callerSession === undefined || callerSession === '') return undefined
     if (!joinedFaceCallerShape.test(callerSession)) return undefined
     if (callerSession.slice(0, callerSession.indexOf('/')) !== config.team) return undefined
-    return sameZoneSharedTeamRefusal(callerSession)
+    return sameZoneSharedTeamRefusal(callerSession, targetTeam)
   }
 
-  function a2aCallerRefusal(caller: string): string | undefined {
+  function a2aCallerRefusal(caller: string, targetTeam?: string): string | undefined {
     if (!config.teamScopeRouting) return undefined
     if (caller === '') {
       return 'caller_session is required — anonymous deliveries are refused (S3 phase-3b). Pass caller_session as <zone>/<id8>.'
@@ -3163,7 +3204,9 @@ ${message}`
         // Same-zone handle: the W1/W2 shared admission core — roster
         // declarations UNION canvas memberships against this host's
         // records (canvas names are link records too; see the helper).
-        return sameZoneSharedTeamRefusal(caller)
+        // F5: the routed team rides along so admission can require a
+        // TARGET-level intersection.
+        return sameZoneSharedTeamRefusal(caller, targetTeam)
       }
       // Foreign-zone handle (N3/N4): admitted ONLY through this host's
       // operator-established cross-host links — a canvas remote member ref
@@ -3355,7 +3398,7 @@ ${message}`
           // (0.6.15: the rule now lives in a2aCallerRefusal so the
           // read-only /a2a/log face admits callers by exactly the same
           // standard as message delivery.)
-          const callerRefusal = a2aCallerRefusal(caller)
+          const callerRefusal = a2aCallerRefusal(caller, team)
           if (callerRefusal !== undefined) {
             recordActivity('in', team, caller === '' ? 'anonymous' : caller, false)
             const payload = JSON.stringify({ error: callerRefusal, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
@@ -5224,7 +5267,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // the cheapest path. The initiator face (bare node team) and
     // foreign-zone labels are NOT gated here (F1b host-face rules, R-C
     // pending) — only the joined face closes.
-    const joinedRefusal = joinedFaceAdmissionRefusal(callerSession)
+    const joinedRefusal = joinedFaceAdmissionRefusal(callerSession, team)
     if (joinedRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: joinedRefusal, code: -32000 }
