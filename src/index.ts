@@ -39,6 +39,7 @@ import { decodeSessionLog, extractTranscript, TRANSCRIPT_DEFAULT_LIMIT, TRANSCRI
 import { LayoutStore } from './layout-store.ts'
 import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
+import { ExposureStore } from './exposure-store.ts'
 import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
@@ -872,6 +873,11 @@ export function apply(ctx: Context, config: Config): void {
   // host restarts silently dropped every join. The store remounts the node
   // whenever the Agent comes back, until the user leaves.
   const joinedSessions = new JoinedSessions(join(home, 'a2a', 'joined.json'))
+  // #19 D3/D4: per-session exposure tiers — 'linked' floor (the absence
+  // default, so existing members transfer automatically) with a voluntary
+  // 'fleet' opt-up. D4 (成文): group visibility = strictest member tier;
+  // v1 ships no group-level knob by design.
+  const exposureStore = new ExposureStore(join(home, 'a2a', 'exposure.json'))
   // S2: node-declared team memberships — the roster half of the
   // team-roster iteration. Joins ride the allowlist-gated tools; the store
   // is the durable declaration the card publishes and the state face reads.
@@ -1803,6 +1809,9 @@ const reportLoopRing = new Map<string, number[]>()
                 joined: sessionNodes.has(String(agent.id)),
                 live: true,
                 teams: [...teamMemberships.teamsOf(String(agent.id))],
+                // #19 D3: the session's exposure tier (linked floor /
+                // fleet opt-up) — readable on the state face.
+                exposure: exposureStore.tierOf(String(agent.id)),
                 ...(canvasStore.teamsOf(String(agent.id)).length > 0 ? { canvasTeams: [...canvasStore.teamsOf(String(agent.id))] } : {}),
                 ...(groupOf(String(agent.id)) !== undefined ? { group: groupOf(String(agent.id)) } : {}),
               }))
@@ -4439,6 +4448,53 @@ ${message}`
       recordTeamAudit('leave', team, id, true)
       logger.info(`a2a: ${id8(id)} retracted membership in ${team}`)
       return { ok: true, team, id, teams: [...teamMemberships.teamsOf(id)] }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'a2a_exposure',
+    description:
+      '#19 exposure tiers: set THIS session\'s network visibility. \'linked\' (the default '
+      + 'floor) — visible to linked callers per the card-face link gate; \'fleet\' — a voluntary '
+      + 'opt-UP making the session\'s team visible to any fleet peer. Members may raise and lower '
+      + 'their own tier freely; nothing exists below linked (no private tier in v1), and group '
+      + 'visibility always derives from the strictest member (no group knobs). Requires the '
+      + 'session to be joined to the network.',
+    parameters: {
+      tier: { type: 'string', enum: ['linked', 'fleet'], required: true, description: 'The exposure tier to set for this session.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          id: { type: 'string' },
+          tier: { type: 'string' },
+          error: { type: 'string', description: 'Refusal reason when ok is false (not joined, or no agent context).' },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok === true
+          ? `Session ${String(value.id)} exposure tier set to ${String(value.tier)}`
+          : `Exposure refused: ${String(value.error)}`,
+      }],
+    },
+    presentCall: () => ({ card: 'generic', title: 'A2A exposure tier', kind: 'other', rawInput: null }),
+    execute: async (args, exec): Promise<{ ok: boolean; id?: string; tier?: string; error?: string }> => {
+      const agent = exec.agent
+      if (agent === undefined) {
+        return { ok: false, error: 'no agent context — the exposure tier is a per-session fact; call from a session' }
+      }
+      const id = String(agent.id)
+      if (!joinedSessions.has(id)) {
+        return { ok: false, error: 'session is not joined to the A2A network — join first (the sidebar control or the host join route)' }
+      }
+      const tier = args.tier === 'fleet' ? 'fleet' : 'linked'
+      exposureStore.setTier(id, tier)
+      logger.info(`a2a: ${id8(id)} exposure tier -> ${tier}`)
+      return { ok: true, id, tier }
     },
   }))
 

@@ -42,7 +42,7 @@ class FakeAgentsService extends Service {
 
 interface SessionTeamRow { team?: string; name?: string; description?: string }
 
-interface Mounted { port: number; home: string; dispose: () => Promise<void> }
+interface Mounted { ctx: Context; port: number; home: string; agent: Agent; dispose: () => Promise<void> }
 
 async function mount(exposureExcerpt: 'full' | 'masked' | 'off'): Promise<Mounted> {
   const home = mkdtempSync(join(tmpdir(), 'a2a-19exp-'))
@@ -80,7 +80,7 @@ async function mount(exposureExcerpt: 'full' | 'masked' | 'off'): Promise<Mounte
   await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/join`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: String(session.id) }),
   })).json()
-  return { port, home, dispose: async () => { await ctx.fiber.dispose() } }
+  return { ctx, port, home, agent: session, dispose: async () => { await ctx.fiber.dispose() } }
 }
 
 async function fullCard(m: Mounted): Promise<SessionTeamRow[]> {
@@ -92,6 +92,46 @@ beforeEach(() => {
   vi.stubGlobal('WebSocket', function throwOnSocket() { throw new Error('no socket') })
 })
 afterEach(() => { vi.unstubAllGlobals() })
+
+describe('#19 D3: join exposure tiers — linked floor, fleet opt-up', () => {
+  it('a joined session defaults to linked, may raise to fleet and lower back; the state face carries the tier', async () => {
+    const m = await mount('full')
+    try {
+      const before = await (await globalThis.fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { sessions: Array<{ id: string; joined?: boolean; exposure?: string }> }
+      const joinedRow = before.sessions.find(s => s.joined === true)
+      expect(joinedRow?.exposure).toBe('linked')
+      // Opt up — the member's own gesture via the tool.
+      const up = await m.ctx.tools.get('a2a_exposure')?.execute({ tier: 'fleet' }, { signal: new AbortController().signal, agent: m.agent } as never) as { ok: boolean; tier?: string }
+      expect(up?.ok).toBe(true)
+      expect(up?.tier).toBe('fleet')
+      const raised = await (await globalThis.fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { sessions: Array<{ id: string; exposure?: string }> }
+      expect(raised.sessions.find(s => s.id === joinedRow?.id)?.exposure).toBe('fleet')
+      // Lower back — linked is the floor, not a ceiling.
+      const down = await m.ctx.tools.get('a2a_exposure')?.execute({ tier: 'linked' }, { signal: new AbortController().signal, agent: m.agent } as never) as { ok: boolean; tier?: string }
+      expect(down?.ok).toBe(true)
+      const lowered = await (await globalThis.fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { sessions: Array<{ id: string; exposure?: string }> }
+      expect(lowered.sessions.find(s => s.id === joinedRow?.id)?.exposure).toBe('linked')
+    } finally {
+      await m.dispose()
+    }
+  }, 20_000)
+
+  it('an UNJOINED session or agent-less call refuses with join-first guidance', async () => {
+    const m = await mount('full')
+    try {
+      const noAgent = await m.ctx.tools.get('a2a_exposure')?.execute({ tier: 'fleet' }, { signal: new AbortController().signal } as never) as { ok: boolean; error?: string }
+      expect(noAgent?.ok).toBe(false)
+      expect(String(noAgent?.error)).toContain('no agent context')
+      // A joined-but-different session id is not this caller's fact to set;
+      // the tool applies only to the calling session (exec.agent).
+      const stranger = await m.ctx.tools.get('a2a_exposure')?.execute({ tier: 'fleet' }, { signal: new AbortController().signal, agent: { id: 'session-ffffffffffffffff' } as never } as never) as { ok: boolean; error?: string }
+      expect(stranger?.ok).toBe(false)
+      expect(String(stranger?.error)).toContain('not joined')
+    } finally {
+      await m.dispose()
+    }
+  }, 20_000)
+})
 
 describe('#19 D2: card-face excerpt exposure knob', () => {
   it('full (default): the verbatim excerpt rides the sessionTeams row', async () => {
