@@ -265,3 +265,20 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
   .wb-row-team{min-width:0;flex:1 1 auto}
   .wb-data{padding:8px}
 }
+
+/* gh#20 W-C: host rail rows — lamp + label + link badge + version + url. */
+.wb-host-row{display:flex;align-items:center;gap:7px;padding:4px 6px;border:1px solid var(--n-border);
+  border-radius:7px;margin-bottom:4px;cursor:pointer;font-size:12px}
+.wb-host-row:hover{border-color:var(--n-accent);background:color-mix(in srgb,var(--n-accent) 8%,transparent)}
+.wb-host-row:focus-visible{outline:2px solid var(--n-accent);outline-offset:1px}
+.wb-host-lamp{flex:none;width:8px;height:8px;border-radius:50%;background:var(--n-ink-muted)}
+.wb-host-lamp.is-live{background:var(--n-live)}
+.wb-host-lamp.is-warm{background:var(--n-act)}
+.wb-host-lamp.is-cold{background:var(--n-ink-muted)}
+.wb-host-lamp.is-unknown{background:transparent;border:1px solid var(--n-ink-muted)}
+.wb-host-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--n-ink)}
+.wb-host-badge{flex:none;font-size:10.5px;border-radius:99px;padding:0 7px;line-height:17px;border:1px solid var(--n-border)}
+.wb-host-badge.is-linked{color:var(--n-live);border-color:var(--n-live)}
+.wb-host-badge.is-stranger{color:var(--n-ink-muted);border-color:var(--n-border)}
+.wb-host-ver{flex:none;font-size:10px;color:var(--n-ink-muted);border:1px solid var(--n-border);border-radius:4px;padding:0 4px}
+.wb-host-url{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--n-ink-muted);font-size:10.5px}

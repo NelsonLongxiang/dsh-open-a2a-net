@@ -1871,14 +1871,22 @@ const reportLoopRing = new Map<string, number[]>()
                 })),
               },
               host: lanIp === '' ? {} : { lanIp },
-              // gh#20 W-A: each tracked peer carries its LINK STATE from this
-              // host's view — 'linked' (an operator-established basis holds:
-              // bilateral seeding, or a canvas remote ref names this peer's
-              // zone or one of its session teams), 'stranger' (no link —
-              // key possession may be proven, relationship is not), and
-              // 'verified' (we hold a signature-valid cached card for it —
-              // the display face renders the tick/cross on the badge).
-              peers: peerStore.list().map(url => ({ url, score: peerStore.score(url), ...peerLinkState(url) })),
+              // gh#20 W-C (host rail): each peer row also carries its display
+              // name and version from the warm card (absent until a fetch),
+              // and the last-contact timestamp for the health lamp. W-A's
+              // link/verified ride along for the badge.
+              peers: peerStore.list().map(url => {
+                const card = cardCache.get(url)?.card
+                const lastContact = peerStore.lastContact(url)
+                return {
+                  url,
+                  score: peerStore.score(url),
+                  ...(card?.name !== undefined && card.name !== '' ? { name: card.name } : {}),
+                  ...(typeof card?.version === 'string' && card.version !== '' ? { version: card.version } : {}),
+                  ...(lastContact !== undefined ? { lastContactAt: lastContact } : {}),
+                  ...peerLinkState(url),
+                }
+              }),
               remote: (refreshRemoteRows(), (remoteRowsCache?.rows ?? []).map(row => {
                 const canvasTeams = canvasStore.teamsOf(row.team)
                 return canvasTeams.length > 0 ? { ...row, canvasTeams: [...canvasTeams] } : row
@@ -4162,6 +4170,13 @@ ${message}`
    *     relationship);
    *   · verified — we hold a signature-valid cached card (the badge's
    *     tick/cross: reachable-and-authentic vs unknown/bad).
+   * NOTE (gh#20 review observation, ruling-accepted): the UI's third
+   * colour — fleet blue — has no v1 data source: a peer's #19 exposure
+   * tier is that host's state-face private fact and is NOT published on
+   * its card, so we cannot classify a peer as fleet-visible. The badge
+   * renders two colours (linked green / stranger gray) and the blue slot
+   * lights up the day the card face carries a tier field (or an
+   * a2a_exposure state query is added to fetch it).
    * Pure over warm caches and config; never fetches.
    */
   function peerLinkState(peerUrl: string): { link: 'linked' | 'stranger'; verified: boolean } {

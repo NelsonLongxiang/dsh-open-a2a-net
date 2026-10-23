@@ -139,7 +139,8 @@ describe('workbench merged stage (canvas mode)', () => {
     expect(v.root.contains(boardRoot)).toBe(true)
     // The three panes were re-parented into their rail sections.
     const rail = v.root.querySelector('.wb-rail')!
-    expect(rail.querySelectorAll('.wb-pane').length).toBe(3)
+    // gh#20 W-C added the host rail pane (appended, existing order intact).
+    expect(rail.querySelectorAll('.wb-pane').length).toBe(4)
     expect(v.root.querySelector('.wb-data')!.classList.contains('is-hidden')).toBe(true)
   })
 
@@ -216,6 +217,36 @@ describe('workbench panels', () => {
     // Team load ranks the teams holding debt.
     expect(text(pane)).toContain('债务队 Top2')
     expect(text(pane)).toContain('dsh/11111111 1')
+  })
+
+  it('gh#20 W-C: the host rail renders one card per peer — lamp, label, link badge, version, and the drill-down opens the peer chat', async () => {
+    const { v, remoteSessionLog } = bench()
+    // A dedicated state: two peers with the W-A/W-C facts (the shared
+    // fixture stays single-peer so the directory/count pins stay intact).
+    v.update({
+      ...state,
+      peers: [
+        { url: 'http://192.168.3.157:13080', score: 687700, link: 'linked', verified: true, name: '评审主机', version: '0.6.26', lastContactAt: NOW - 10_000 },
+        { url: 'http://192.168.3.9:13080', score: 1200, link: 'stranger', verified: false, lastContactAt: NOW - 20 * 60_000 },
+      ],
+    })
+    const rows = [...v.root.querySelectorAll<HTMLElement>('.wb-host-row')]
+    expect(rows).toHaveLength(2)
+    // Sorted: linked first. Row 1 carries the published name, the linked
+    // badge with the verified tick, the version chip and a fresh lamp.
+    expect(rows[0]!.textContent).toContain('评审主机')
+    expect(rows[0]!.querySelector('.wb-host-badge.is-linked')).not.toBeNull()
+    expect(rows[0]!.querySelector('.wb-host-badge')!.textContent).toContain('✓')
+    expect(rows[0]!.querySelector('.wb-host-ver')!.textContent).toBe('0.6.26')
+    expect(rows[0]!.querySelector('.wb-host-lamp')!.classList.contains('is-live')).toBe(true)
+    // Row 2: stranger + failed verification + a stale lamp (20 min).
+    expect(rows[1]!.querySelector('.wb-host-badge.is-stranger')).not.toBeNull()
+    expect(rows[1]!.querySelector('.wb-host-badge')!.textContent).toContain('✗')
+    expect(rows[1]!.querySelector('.wb-host-lamp')!.classList.contains('is-cold')).toBe(true)
+    // Drill-down: clicking the row opens the peer chat and reads its remote log.
+    rows[0]!.click()
+    await vi.waitFor(() => expect(remoteSessionLog).toHaveBeenCalled())
+    expect(v.root.querySelector('.wb-chat.is-open')).not.toBeNull()
   })
 
   it('renders ledger rows and settles a dead letter through the abandon seam', async () => {

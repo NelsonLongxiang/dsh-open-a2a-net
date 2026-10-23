@@ -31,6 +31,9 @@ export interface PeerRecord {
   readonly seed: boolean
   /** The signed-card session the peer served last, when a fetch revealed it. */
   readonly session?: string
+  /** Epoch ms of the last contact attempt (success or failure) — the host
+   *  rail's health lamp reads the recency of this (#20 W-C). */
+  lastContactAt?: number
 }
 
 /** The persisted store document (whole-file read/write, small by design). */
@@ -146,6 +149,9 @@ export class PeerStore {
     const peer = this.peers.get(url)
     if (peer === undefined || peer.seed) return
     peer.score -= FAILURE_PENALTY
+    // Seeds keep their record through failures; learned peers stamp the
+    // attempt either way so the health lamp shows staleness honestly.
+    peer.lastContactAt = Date.now()
     if (peer.score <= EVICTION_FLOOR) this.peers.delete(url)
     this.persist()
   }
@@ -158,7 +164,16 @@ export class PeerStore {
     const peer = this.peers.get(url)
     if (peer === undefined) return
     peer.score += SUCCESS_REWARD
+    peer.lastContactAt = Date.now()
     this.persist()
+  }
+
+  /**
+   * The epoch ms of the last contact attempt with one tracked peer (#20 W-C
+   * host-rail health lamp), or undefined when the store never touched it.
+   */
+  lastContact(url: string): number | undefined {
+    return this.peers.get(url)?.lastContactAt
   }
 
   /**

@@ -112,7 +112,17 @@ export interface StateBody {
   readonly version?: string
   readonly sessions?: readonly SessionRow[]
   readonly canvas?: { teams?: readonly CanvasTeamRow[] }
-  readonly peers?: ReadonlyArray<{ url: string; score?: number }>
+  /** gh#20 W-A/W-C: the peer row carries the link badge source, the host
+   *  rail's label/version/last-contact facts (absent on older hosts). */
+  readonly peers?: ReadonlyArray<{
+    url: string
+    score?: number
+    link?: 'linked' | 'stranger'
+    verified?: boolean
+    name?: string
+    version?: string
+    lastContactAt?: number
+  }>
   readonly remote?: readonly RemoteRow[]
   readonly activity?: readonly ActivityRow[]
   readonly inFlight?: ReadonlyArray<{ team: string; peer: string; startedAt: number }>
@@ -243,8 +253,8 @@ type ChatTarget =
   | { kind: 'peer'; id: string; title: string; sub: string; url?: string; picked?: string }
   | { kind: 'remote'; team: string; title: string; sub: string; row?: RemoteRow }
 
-/** The four rail sections. */
-export type WorkbenchSection = 'directory' | 'ledger' | 'activity' | 'plan'
+/** The rail sections. */
+export type WorkbenchSection = 'directory' | 'hosts' | 'ledger' | 'activity' | 'plan'
 
 /** Directory category filter (0.6.6): one chip per directory section group. */
 type DirFilter = 'all' | 'local' | 'canvas' | 'peers' | 'remote'
@@ -289,11 +299,24 @@ export interface Workbench {
   openNodeChat(id: string): void
 }
 
+/** Bare host:port of a peer url (workbench-local twin of federation's
+ *  helper — this module keeps a zero-import posture). */
+function peerHostOf(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return url
+  }
+}
+
 const SECTION_DEFS: ReadonlyArray<{ key: WorkbenchSection; label: string }> = [
   { key: 'directory', label: '目录' },
   { key: 'ledger', label: '台账' },
   { key: 'activity', label: '活动' },
   { key: 'plan', label: '规划' },
+  // gh#20 W-C: the host rail — one row per tracked peer host. Appended so
+  // the existing rail order and first-pane assumptions stay untouched.
+  { key: 'hosts', label: '主机轨' },
 ]
 
 export function createWorkbench(deps: WorkbenchDeps): Workbench {
@@ -429,10 +452,13 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   const ledgerPane = el('section', 'wb-pane')
   const activityPane = el('section', 'wb-pane')
   const planPane = el('section', 'wb-pane')
+  // gh#20 W-C: the host rail pane (one row per tracked peer).
+  const hostsPane = el('section', 'wb-pane')
   const dataPanes: ReadonlyArray<[WorkbenchSection, HTMLElement]> = [
     ['ledger', ledgerPane],
     ['activity', activityPane],
     ['plan', planPane],
+    ['hosts', hostsPane],
   ]
 
   const stage = el('main', 'wb-stage')
@@ -712,6 +738,65 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     const counts = new Map<string, number>()
     for (const row of rows) counts.set(row.team, (counts.get(row.team) ?? 0) + 1)
     return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
+  }
+
+  /**
+   * gh#20 W-C: the host rail — one row per tracked peer host. Each row is a
+   * HOST card: operator-facing label (the peer's published card name, host
+   * fallback), the W-A tri-state badge (link class + verified mark), a
+   * health lamp driven by the last-contact recency (green ≤60s, amber
+   * ≤5min, gray older/never — tooltip carries the exact timestamp), and the
+   * peer's published version chip. Clicking drills down: the peer chat
+   * drawer (remote log entry) rides the existing face.
+   */
+  function renderHosts(): void {
+    const pane = clear(hostsPane)
+    if (last === null) {
+      sectionCounts.get('hosts')!.textContent = ''
+      return
+    }
+    const now = deps.now()
+    const peers = [...(last.peers ?? [])].sort((a, b) => {
+      const rank = (row: { link?: string }): number => row.link === 'linked' ? 0 : 1
+      return rank(a) - rank(b) || (b.score ?? 0) - (a.score ?? 0)
+    })
+    sectionCounts.get('hosts')!.textContent = `${peers.filter(row => row.link === 'linked').length}/${peers.length}`
+    if (peers.length === 0) {
+      pane.appendChild(el('div', 'wb-nodelist-empty')).textContent = '暂无 tracked peer——配 peers 种子或等 referral 到达'
+      return
+    }
+    for (const row of peers) {
+      const host = peerHostOf(row.url)
+      const lineEl = el('div', 'wb-host-row')
+      // Health lamp: recency of the last contact attempt.
+      const lamp = el('span', 'wb-host-lamp')
+      const last = row.lastContactAt
+      const age = last === undefined ? undefined : now - last
+      lamp.classList.add(age === undefined ? 'is-unknown' : age <= 60_000 ? 'is-live' : age <= 5 * 60_000 ? 'is-warm' : 'is-cold')
+      lamp.title = last === undefined ? '尚无接触记录' : `最近接触 ${ageText(last, now)}`
+      lineEl.appendChild(lamp)
+      // Label: the peer's published name, host fallback.
+      lineEl.appendChild(el('span', 'wb-host-name')).textContent = row.name !== undefined && row.name !== '' ? row.name : host
+      // W-A badge: link class + verified mark.
+      const badge = el('span', `wb-host-badge ${row.link === 'linked' ? 'is-linked' : 'is-stranger'}`)
+      badge.textContent = `${row.link === 'linked' ? 'linked' : 'stranger'} ${row.verified === true ? '✓' : '✗'}`
+      badge.title = row.link === 'linked'
+        ? '已建立运营者链接（互种或 canvas 引用）；验签有效'
+        : '无运营者关系（验签 ≠ 关系）'
+      lineEl.appendChild(badge)
+      // Version chip from the warm card.
+      if (row.version !== undefined && row.version !== '') {
+        lineEl.appendChild(el('span', 'wb-host-ver')).textContent = row.version
+      }
+      lineEl.appendChild(el('span', 'wb-host-url mono')).textContent = host
+      lineEl.setAttribute('role', 'button')
+      lineEl.tabIndex = 0
+      lineEl.title = `${row.url} · score ${String(row.score ?? 0)}`
+      const drill = (): void => { openChat({ kind: 'peer', id: `peer-${host}`, title: row.name !== undefined && row.name !== '' ? row.name : host, sub: host, url: row.url }) }
+      lineEl.addEventListener('click', drill)
+      lineEl.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); drill() } })
+      pane.appendChild(lineEl)
+    }
   }
 
   function renderLedger(): void {
@@ -1503,6 +1588,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     renderHeader()
     renderSidebar()
     renderDraftTargets()
+    renderHosts()
     renderLedger()
     // 0.6.13: an open chat drawer re-renders against the fresh state (title
     // freshness + the transcript block's per-id cache answers instantly).

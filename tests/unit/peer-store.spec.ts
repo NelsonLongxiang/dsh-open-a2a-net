@@ -88,8 +88,13 @@ describe('PeerStore quality scoring', () => {
     const store = new PeerStore(['http://a'], path, PEER_CAP, 0)
     store.noteSuccess('http://a')
     await store.flush()
-    const snapshot = JSON.parse(readFileSync(path, 'utf8')) as { peers: { url: string; score: number }[] }
-    expect(snapshot.peers).toEqual([{ url: 'http://a', score: INITIAL_SCORE + SUCCESS_REWARD, seed: true }])
+    const snapshot = JSON.parse(readFileSync(path, 'utf8')) as { peers: { url: string; score: number; lastContactAt?: number }[] }
+    // #20 W-C: noteSuccess also stamps the last-contact time (host-rail
+    // lamp) — assert the identity fields and that the stamp is recent.
+    expect(snapshot.peers).toHaveLength(1)
+    expect(snapshot.peers[0]).toMatchObject({ url: 'http://a', score: INITIAL_SCORE + SUCCESS_REWARD, seed: true })
+    expect(typeof snapshot.peers[0]!.lastContactAt).toBe('number')
+    expect(Date.now() - (snapshot.peers[0]!.lastContactAt ?? 0)).toBeLessThan(60_000)
   })
 
   it('coalesces a burst of changes into one debounced write', async () => {
