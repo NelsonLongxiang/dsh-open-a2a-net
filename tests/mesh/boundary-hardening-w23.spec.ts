@@ -126,14 +126,18 @@ describe('W3: full card = verify ∧ link (#18 X1)', () => {
       const biCard = await (await globalThis.fetch(`http://127.0.0.1:${String(targetSeeded.port)}/.well-known/agent-card.json`, { headers: rawEnvelope(bilateral, 'bi-zone') })).json() as { sessionTeams?: Array<{ team: string }> }
       expect(Array.isArray(biCard.sessionTeams)).toBe(true)
       expect(biCard.sessionTeams?.some(entry => entry.team === 'target-zone/01234567')).toBe(true)
-      // And a canvas remote ref links too (the operator-side basis): a
-      // node whose ZONE the ref names gets the full card — the ref proves
-      // the zone, the envelope signature proves the key.
+      // #19 D1 (ruling final) FLIPPED pin: canvas remote refs link by
+      // EXACT HANDLE only. A bare-zone caller (the only envelope shape
+      // since the 0.6.23 narrowing) can never equal a zone/id8 ref, so a
+      // canvas ref alone does NOT link a bare-zone caller on the card
+      // face — the zone-sibling blanket that any one ref opened to a
+      // whole zone's hosts is gone. Canvas refs stay live for the WIRE
+      // admission path (a2aCallerRefusal's exact-handle foreign branch).
       await canvasAddMember(target, 'fleet', 'ref-zone/11112222')
       const refNode = await bootNode({ name: 'refnode', session: 'mesh-ref', team: 'ref-zone' })
       try {
         const refCard = await (await globalThis.fetch(`http://127.0.0.1:${String(target.port)}/.well-known/agent-card.json`, { headers: rawEnvelope(refNode, 'ref-zone') })).json() as { sessionTeams?: unknown }
-        expect(Array.isArray(refCard.sessionTeams)).toBe(true)
+        expect(refCard.sessionTeams).toBeUndefined()
       } finally {
         await refNode.dispose()
       }

@@ -187,6 +187,11 @@ export interface Config {
    */
   readonly originClaimWindow: boolean
   /**
+   * #19 D2: card-face sessionTeams excerpt exposure — 'full' | 'masked'
+   * | 'off' (owner-level; default full). See the schema comment.
+   */
+  readonly exposureExcerpt: 'full' | 'masked' | 'off'
+  /**
    * Override for the OriginClaim callerUrl anchor. Loopback-bound hosts
    * behind a pocket tunnel must name the card URL peers can actually
    * fetch (e.g. http://192.168.3.157:13080); empty uses the web server's
@@ -436,6 +441,16 @@ export const Config: s<Config> = s.object({
    * the legacy whole-store basis (fleet migration window).
    */
   referralTeamResolution: s.boolean().default(false),
+
+  /**
+   * #19 D2 (ruling final, owner-level knob): how much of a session team's
+   * activity EXCERPT the card face publishes in sessionTeams descriptions.
+   * 'full' (default) keeps the verbatim tail excerpt; 'masked' truncates
+   * to a shape-only prefix; 'off' omits the description field entirely.
+   * Titles and team handles stay in every tier — the knob is the excerpt,
+   * not the listing.
+   */
+  exposureExcerpt: s.union(['full', 'masked', 'off'] as const).default('full'),
 
   /**
    * gh#9+gh#10 OriginClaim window: absent envelopes still walk N3 during
@@ -1418,6 +1433,18 @@ const reportLoopRing = new Map<string, number[]>()
   }
 
   /**
+   * #19 D2: apply the owner-level excerpt knob to a session-team
+   * description at the card face. 'full' keeps the verbatim excerpt;
+   * 'masked' reduces to a shape-only prefix (16 chars — enough to
+   * recognize, not enough to read); 'off' omits the field entirely.
+   */
+  function exposureDescription(description: string): string | undefined {
+    if (config.exposureExcerpt === 'off') return undefined
+    if (config.exposureExcerpt === 'masked') return `${description.slice(0, 16)}${description.length > 16 ? '…' : ''}`
+    return description
+  }
+
+  /**
    * Join one live top-level session: its team dispatches direct routes and
    * rides the announced card from this moment.
    * @param agent - the session to join.
@@ -2327,11 +2354,19 @@ const reportLoopRing = new Map<string, number[]>()
               return false
             }
           }
+          // #19 D2: the excerpt knob rides the served-fresh rows at the
+          // card face — live nodes (nodeMetadataOf description) and cold
+          // rows alike. 'off' omits the field (undefined drops out).
+          const exposureRow = (team: string, meta: Record<string, unknown>): Record<string, unknown> => {
+            const { description, ...rest } = meta as { description?: string }
+            const excerpt = exposureDescription(description ?? '')
+            return { team, ...rest, ...(excerpt !== undefined ? { description: excerpt } : {}) }
+          }
           const sessionTeams = [
-            ...[...sessionNodes.values()].filter(isJoinedNode).map(agent => ({ team: sessionTeamOf(agent), ...nodeMetadataOf(agent) })),
+            ...[...sessionNodes.values()].filter(isJoinedNode).map(agent => exposureRow(sessionTeamOf(agent), nodeMetadataOf(agent) as unknown as Record<string, unknown>)),
             ...joinedSessions.list()
               .filter(id => !liveRoots.has(id) && isArchived?.(id) !== true)
-              .map(id => ({ team: `${config.team}/${id8(id)}`, name: `${session}-${id8(id)}`, description: 'cold — not loaded; routing here wakes the session' })),
+              .map(id => exposureRow(`${config.team}/${id8(id)}`, { name: `${session}-${id8(id)}`, description: 'cold — not loaded; routing here wakes the session' })),
           ]
           const memberships = teamMemberships.list().flatMap(entry =>
             entry.teams.map(team => ({ node: `${config.team}/${id8(entry.session)}`, team })))
@@ -2960,14 +2995,10 @@ ${message}`
    *      card URL origin (the loopback self-fetch face: true self is an
    *      ORIGIN equality; zone-name equality carries no identity in a
    *      single-zone fleet), or one of our session pseudo-handles;
-   *   2. a canvas remote ref — exact handle, or the sibling zone face of a
-   *      linked host (a bare-zone caller names only its zone; the ref
-   *      proves the zone). OBSERVATION (review seat, explicitly ruled
-   *      acceptable): refs carry ZONE granularity — in a fleet where
-   *      several hosts share one zone name, any one ref links every host
-   *      of that zone. Zones are host-unique by convention, so this reads
-   *      as "a linked host links its whole zone face"; a fleet sharing a
-   *      zone name opts into that transitively-open posture knowingly;
+   *   2. a canvas remote ref — the EXACT handle only (#19 D1, ruling
+   *      final: the zone-sibling variant was a blanket fallback that any
+   *      one ref opened to a whole zone's hosts in single-zone fleets; the
+   *      operator names THAT node, that node links);
    *   3. BILATERAL seeding (review M1 fix): our config.peers contains the
    *      caller's URL **and** the caller's card (fetched fresh during
    *      verification) carries our origin among its peers — both
@@ -2991,12 +3022,14 @@ ${message}`
     for (const id of joinedSessions.list()) {
       if (`${config.team}/${id8(id)}` === caller) return true
     }
-    const zone = caller.includes('/') ? caller.slice(0, caller.indexOf('/')) : caller
+    // #19 D1 (ruling final): canvas remote refs admit by EXACT HANDLE only.
+    // The zone-sibling variant (`refZone === zone`) was a blanket fallback —
+    // in a single-zone fleet any one ref linked the whole zone face, the
+    // exact trust shape the exposure ruling removed. Exact handle in, the
+    // operator named THAT node.
     for (const name of canvasStore.list()) {
       for (const ref of canvasStore.remoteMembersOf(name)) {
         if (ref === caller) return true
-        const refZone = ref.includes('/') ? ref.slice(0, ref.indexOf('/')) : ref
-        if (refZone === zone) return true
       }
     }
     // Basis 3, BILATERAL (review M1 fix): OUR config.peers seeds a URL
