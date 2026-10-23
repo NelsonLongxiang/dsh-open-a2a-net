@@ -131,7 +131,11 @@ describe('a2a self-route refusal (bare team resolves to the routing session itse
       // The caller IS agent-1 (joined, live, initiator fallback target).
       const result = await route?.execute({ team: 'dsh', message: 'route to the process team myself' }, runContext(session)) as { ok: boolean; error?: string }
       expect(result.ok).toBe(false)
-      expect(result.error).toContain('Self-route refused')
+      // Owner ruling (tool-layer interception): the bare process face is
+      // refused at the TOOL seam before the self-route guard runs — the
+      // guarantee under test (refused, no echo) is unchanged; the deeper
+      // self-route guard keeps covering the host/inner dispatch paths.
+      expect(String(result.error)).toMatch(/process face|Self-route refused/)
       // No echo: nothing was steered anywhere.
       expect(session.steer).not.toHaveBeenCalled()
     } finally {
@@ -167,7 +171,7 @@ describe('a2a self-route refusal (bare team resolves to the routing session itse
       const route = ctx.tools.get('a2a_route')
       const result = await route?.execute({ team: 'dsh', message: 'async dispatch to myself', async: true }, runContext(session)) as { ok: boolean; error?: string }
       expect(result.ok).toBe(false)
-      expect(result.error).toContain('Self-route refused')
+      expect(String(result.error)).toMatch(/process face|Self-route refused/)
       expect(session.steer).not.toHaveBeenCalled()
       // The ledger owes nothing: a refused dispatch must not register a
       // pending row that could later dead-letter as a ghost debt.

@@ -5087,8 +5087,25 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     },
     timeoutMs: config.routeTimeoutMs,
     presentCall: args => ({ card: 'generic', title: `A2A route → ${args.team}`, kind: 'other', rawInput: args }),
-    execute: async (args: { team: string; message: string; context_id?: string; async?: boolean }, exec): Promise<Record<string, JsonValue>> =>
-      routeTrunk(args, exec.agent, exec.signal),
+    execute: async (args: { team: string; message: string; context_id?: string; async?: boolean }, exec): Promise<Record<string, JsonValue>> => {
+      // Owner ruling (tool-layer interception): the PROCESS face (bare
+      // zone === config.team) keeps its host-level EXEMPTION on the network
+      // admission layer — receipts, quick dispatch and host-side routing
+      // still target it internally — but a MODEL TOOL call must not address
+      // it: the machine's own mailbox is not a member face, and letting a
+      // session route there would turn the host entrance into a group-free
+      // hop. Host-face entry (agent-less control routes, receipt ladders)
+      // never passes through this tool and stays untouched.
+      const requestedTeam = String(args.team ?? '').trim()
+      if (exec.agent !== undefined && requestedTeam === config.team) {
+        return {
+          ok: false,
+          error: `the process face "${config.team}" is the host's own mailbox — model tools must target a member face. Route to a session team handle ("${config.team}/<id8>" from a2a_teams) or a canvas team; receipts and quick dispatch reach the host face on their own paths.`,
+          code: -32000,
+        }
+      }
+      return routeTrunk(args, exec.agent, exec.signal)
+    },
   }))
 
   /**

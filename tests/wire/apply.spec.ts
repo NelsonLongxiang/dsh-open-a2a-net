@@ -1954,7 +1954,11 @@ describe('a2a session nodes (opt-in join)', () => {
   })
 
   it('stamps the calling session label on outbound direct routes', async () => {
-    const peer = await mountPeerNode()
+    // Owner ruling (tool-layer interception): a MODEL TOOL call may not
+    // target the bare process face — so this fixture gives the peer a
+    // member-visible zone team and routes there; the from-label contract
+    // under test is unchanged.
+    const peer = await mountPeerNode({ team: 'peer-zone' })
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
@@ -1974,7 +1978,7 @@ describe('a2a session nodes (opt-in join)', () => {
     ;(ctx.get('agents') as unknown as FakeAgentsService).agent = caller
     ctx.emit('agent/created', { agent: caller })
     const route = ctx.tools.get('a2a_route')
-    await route?.execute({ team: 'dsh', message: 'hello peer' }, { signal: new AbortController().signal, agent: caller } as unknown as ToolRunContext)
+    await route?.execute({ team: 'peer-zone', message: 'hello peer' }, { signal: new AbortController().signal, agent: caller } as unknown as ToolRunContext)
     const steered = (peer.steer.mock.calls[0]?.[0] as { content: Array<{ type: string; text: string }> }).content[0]
     // A joined caller presents its routable team (dsh/<id8>) — not the
     // bare display label — so the receiver can answer with one a2a_route.
