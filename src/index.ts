@@ -39,6 +39,7 @@ import { decodeSessionLog, extractTranscript, TRANSCRIPT_DEFAULT_LIMIT, TRANSCRI
 import { LayoutStore } from './layout-store.ts'
 import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
+import { ExposureStore } from './exposure-store.ts'
 import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
@@ -186,6 +187,11 @@ export interface Config {
    * self-asserted already-linked name must not pass on shape alone).
    */
   readonly originClaimWindow: boolean
+  /**
+   * #19 D2: card-face sessionTeams excerpt exposure — 'full' | 'masked'
+   * | 'off' (owner-level; default full). See the schema comment.
+   */
+  readonly exposureExcerpt: 'full' | 'masked' | 'off'
   /**
    * Override for the OriginClaim callerUrl anchor. Loopback-bound hosts
    * behind a pocket tunnel must name the card URL peers can actually
@@ -436,6 +442,16 @@ export const Config: s<Config> = s.object({
    * the legacy whole-store basis (fleet migration window).
    */
   referralTeamResolution: s.boolean().default(false),
+
+  /**
+   * #19 D2 (ruling final, owner-level knob): how much of a session team's
+   * activity EXCERPT the card face publishes in sessionTeams descriptions.
+   * 'full' (default) keeps the verbatim tail excerpt; 'masked' truncates
+   * to a shape-only prefix; 'off' omits the description field entirely.
+   * Titles and team handles stay in every tier — the knob is the excerpt,
+   * not the listing.
+   */
+  exposureExcerpt: s.union(['full', 'masked', 'off'] as const).default('full'),
 
   /**
    * gh#9+gh#10 OriginClaim window: absent envelopes still walk N3 during
@@ -857,6 +873,11 @@ export function apply(ctx: Context, config: Config): void {
   // host restarts silently dropped every join. The store remounts the node
   // whenever the Agent comes back, until the user leaves.
   const joinedSessions = new JoinedSessions(join(home, 'a2a', 'joined.json'))
+  // #19 D3/D4: per-session exposure tiers — 'linked' floor (the absence
+  // default, so existing members transfer automatically) with a voluntary
+  // 'fleet' opt-up. D4 (成文): group visibility = strictest member tier;
+  // v1 ships no group-level knob by design.
+  const exposureStore = new ExposureStore(join(home, 'a2a', 'exposure.json'))
   // S2: node-declared team memberships — the roster half of the
   // team-roster iteration. Joins ride the allowlist-gated tools; the store
   // is the durable declaration the card publishes and the state face reads.
@@ -1418,6 +1439,18 @@ const reportLoopRing = new Map<string, number[]>()
   }
 
   /**
+   * #19 D2: apply the owner-level excerpt knob to a session-team
+   * description at the card face. 'full' keeps the verbatim excerpt;
+   * 'masked' reduces to a shape-only prefix (16 chars — enough to
+   * recognize, not enough to read); 'off' omits the field entirely.
+   */
+  function exposureDescription(description: string): string | undefined {
+    if (config.exposureExcerpt === 'off') return undefined
+    if (config.exposureExcerpt === 'masked') return `${description.slice(0, 16)}${description.length > 16 ? '…' : ''}`
+    return description
+  }
+
+  /**
    * Join one live top-level session: its team dispatches direct routes and
    * rides the announced card from this moment.
    * @param agent - the session to join.
@@ -1776,6 +1809,9 @@ const reportLoopRing = new Map<string, number[]>()
                 joined: sessionNodes.has(String(agent.id)),
                 live: true,
                 teams: [...teamMemberships.teamsOf(String(agent.id))],
+                // #19 D3: the session's exposure tier (linked floor /
+                // fleet opt-up) — readable on the state face.
+                exposure: exposureStore.tierOf(String(agent.id)),
                 ...(canvasStore.teamsOf(String(agent.id)).length > 0 ? { canvasTeams: [...canvasStore.teamsOf(String(agent.id))] } : {}),
                 ...(groupOf(String(agent.id)) !== undefined ? { group: groupOf(String(agent.id)) } : {}),
               }))
@@ -2327,11 +2363,19 @@ const reportLoopRing = new Map<string, number[]>()
               return false
             }
           }
+          // #19 D2: the excerpt knob rides the served-fresh rows at the
+          // card face — live nodes (nodeMetadataOf description) and cold
+          // rows alike. 'off' omits the field (undefined drops out).
+          const exposureRow = (team: string, meta: Record<string, unknown>): Record<string, unknown> => {
+            const { description, ...rest } = meta as { description?: string }
+            const excerpt = exposureDescription(description ?? '')
+            return { team, ...rest, ...(excerpt !== undefined ? { description: excerpt } : {}) }
+          }
           const sessionTeams = [
-            ...[...sessionNodes.values()].filter(isJoinedNode).map(agent => ({ team: sessionTeamOf(agent), ...nodeMetadataOf(agent) })),
+            ...[...sessionNodes.values()].filter(isJoinedNode).map(agent => exposureRow(sessionTeamOf(agent), nodeMetadataOf(agent) as unknown as Record<string, unknown>)),
             ...joinedSessions.list()
               .filter(id => !liveRoots.has(id) && isArchived?.(id) !== true)
-              .map(id => ({ team: `${config.team}/${id8(id)}`, name: `${session}-${id8(id)}`, description: 'cold — not loaded; routing here wakes the session' })),
+              .map(id => exposureRow(`${config.team}/${id8(id)}`, { name: `${session}-${id8(id)}`, description: 'cold — not loaded; routing here wakes the session' })),
           ]
           const memberships = teamMemberships.list().flatMap(entry =>
             entry.teams.map(team => ({ node: `${config.team}/${id8(entry.session)}`, team })))
@@ -2960,14 +3004,10 @@ ${message}`
    *      card URL origin (the loopback self-fetch face: true self is an
    *      ORIGIN equality; zone-name equality carries no identity in a
    *      single-zone fleet), or one of our session pseudo-handles;
-   *   2. a canvas remote ref — exact handle, or the sibling zone face of a
-   *      linked host (a bare-zone caller names only its zone; the ref
-   *      proves the zone). OBSERVATION (review seat, explicitly ruled
-   *      acceptable): refs carry ZONE granularity — in a fleet where
-   *      several hosts share one zone name, any one ref links every host
-   *      of that zone. Zones are host-unique by convention, so this reads
-   *      as "a linked host links its whole zone face"; a fleet sharing a
-   *      zone name opts into that transitively-open posture knowingly;
+   *   2. a canvas remote ref — the EXACT handle only (#19 D1, ruling
+   *      final: the zone-sibling variant was a blanket fallback that any
+   *      one ref opened to a whole zone's hosts in single-zone fleets; the
+   *      operator names THAT node, that node links);
    *   3. BILATERAL seeding (review M1 fix): our config.peers contains the
    *      caller's URL **and** the caller's card (fetched fresh during
    *      verification) carries our origin among its peers — both
@@ -2991,12 +3031,14 @@ ${message}`
     for (const id of joinedSessions.list()) {
       if (`${config.team}/${id8(id)}` === caller) return true
     }
-    const zone = caller.includes('/') ? caller.slice(0, caller.indexOf('/')) : caller
+    // #19 D1 (ruling final): canvas remote refs admit by EXACT HANDLE only.
+    // The zone-sibling variant (`refZone === zone`) was a blanket fallback —
+    // in a single-zone fleet any one ref linked the whole zone face, the
+    // exact trust shape the exposure ruling removed. Exact handle in, the
+    // operator named THAT node.
     for (const name of canvasStore.list()) {
       for (const ref of canvasStore.remoteMembersOf(name)) {
         if (ref === caller) return true
-        const refZone = ref.includes('/') ? ref.slice(0, ref.indexOf('/')) : ref
-        if (refZone === zone) return true
       }
     }
     // Basis 3, BILATERAL (review M1 fix): OUR config.peers seeds a URL
@@ -4406,6 +4448,53 @@ ${message}`
       recordTeamAudit('leave', team, id, true)
       logger.info(`a2a: ${id8(id)} retracted membership in ${team}`)
       return { ok: true, team, id, teams: [...teamMemberships.teamsOf(id)] }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'a2a_exposure',
+    description:
+      '#19 exposure tiers: set THIS session\'s network visibility. \'linked\' (the default '
+      + 'floor) — visible to linked callers per the card-face link gate; \'fleet\' — a voluntary '
+      + 'opt-UP making the session\'s team visible to any fleet peer. Members may raise and lower '
+      + 'their own tier freely; nothing exists below linked (no private tier in v1), and group '
+      + 'visibility always derives from the strictest member (no group knobs). Requires the '
+      + 'session to be joined to the network.',
+    parameters: {
+      tier: { type: 'string', enum: ['linked', 'fleet'], required: true, description: 'The exposure tier to set for this session.' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          id: { type: 'string' },
+          tier: { type: 'string' },
+          error: { type: 'string', description: 'Refusal reason when ok is false (not joined, or no agent context).' },
+        },
+      },
+      render: (_args, value) => [{
+        type: 'text',
+        text: value.ok === true
+          ? `Session ${String(value.id)} exposure tier set to ${String(value.tier)}`
+          : `Exposure refused: ${String(value.error)}`,
+      }],
+    },
+    presentCall: () => ({ card: 'generic', title: 'A2A exposure tier', kind: 'other', rawInput: null }),
+    execute: async (args, exec): Promise<{ ok: boolean; id?: string; tier?: string; error?: string }> => {
+      const agent = exec.agent
+      if (agent === undefined) {
+        return { ok: false, error: 'no agent context — the exposure tier is a per-session fact; call from a session' }
+      }
+      const id = String(agent.id)
+      if (!joinedSessions.has(id)) {
+        return { ok: false, error: 'session is not joined to the A2A network — join first (the sidebar control or the host join route)' }
+      }
+      const tier = args.tier === 'fleet' ? 'fleet' : 'linked'
+      exposureStore.setTier(id, tier)
+      logger.info(`a2a: ${id8(id)} exposure tier -> ${tier}`)
+      return { ok: true, id, tier }
     },
   }))
 

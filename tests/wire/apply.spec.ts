@@ -2219,6 +2219,8 @@ describe('a2a plugin module surface', () => {
       // gh#9+gh#10 OriginClaim window (default open during migration).
       originClaimWindow: true,
       originClaimUrl: '',
+      // #19 D2: card-face excerpt exposure (owner-level; default full).
+      exposureExcerpt: 'full',
       stateColdRowsTtlMs: 5_000,
       cardCacheTtlMs: 60_000,
       cardCacheNegativeTtlMs: 30_000,
