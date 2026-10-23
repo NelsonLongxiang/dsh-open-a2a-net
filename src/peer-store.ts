@@ -71,8 +71,16 @@ export class PeerStore {
       // The config is authoritative for a seed: it is (re)marked as one —
       // immune to eviction — and restarts from the initial score regardless
       // of the persisted one. Replacing the record wholesale keeps PeerRecord
-      // fields readonly.
-      this.peers.set(seed, { url: seed, score: INITIAL_SCORE, seed: true })
+      // fields readonly. The contact stamps are observations, not config:
+      // they carry over, so a restart does not blank a seed's lamp (gh#24).
+      const prior = this.peers.get(seed)
+      this.peers.set(seed, {
+        url: seed,
+        score: INITIAL_SCORE,
+        seed: true,
+        ...(prior?.lastContactAt !== undefined ? { lastContactAt: prior.lastContactAt } : {}),
+        ...(prior?.lastContactOk !== undefined ? { lastContactOk: prior.lastContactOk } : {}),
+      })
     }
     // The config is authoritative BOTH ways (board-stale-peer fix, 0.6.26):
     // a persisted record may carry seed:true from an OLD config generation
@@ -153,20 +161,22 @@ export class PeerStore {
   }
 
   /**
-   * Note a failed fetch of one peer. A non-seed's score drops; an
-   * at-or-below-floor peer is evicted, so a bad referral disappears rather
-   * than degrading forever. Seeds are config-owned and never penalized.
+   * Note a failed fetch of one peer. Every peer records the failed attempt
+   * (the host-rail lamp turns red for a seed and a learned peer alike,
+   * gh#24); only a non-seed's score drops, and an at-or-below-floor peer is
+   * evicted, so a bad referral disappears rather than degrading forever.
+   * Seeds are config-owned and never penalized.
    * @param url - the peer that failed.
    */
   noteFailure(url: string): void {
     const peer = this.peers.get(url)
-    if (peer === undefined || peer.seed) return
-    peer.score -= FAILURE_PENALTY
-    // Seeds keep their record through failures; learned peers stamp the
-    // attempt either way so the health lamp shows staleness honestly.
+    if (peer === undefined) return
     peer.lastContactAt = Date.now()
     peer.lastContactOk = false
-    if (peer.score <= EVICTION_FLOOR) this.peers.delete(url)
+    if (!peer.seed) {
+      peer.score -= FAILURE_PENALTY
+      if (peer.score <= EVICTION_FLOOR) this.peers.delete(url)
+    }
     this.persist()
   }
 

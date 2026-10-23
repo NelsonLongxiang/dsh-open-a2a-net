@@ -793,8 +793,10 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       // W-A badge: link class + verified mark.
       const badge = el('span', `wb-host-badge ${row.link === 'linked' ? 'is-linked' : 'is-stranger'}`)
       badge.textContent = `${row.link === 'linked' ? 'linked' : 'stranger'} ${row.verified === true ? '✓' : '✗'}`
+      // The tooltip follows the verified mark (gh#24): a linked ✗ must not
+      // claim a valid signature.
       badge.title = row.link === 'linked'
-        ? '已建立运营者链接（互种或 canvas 引用）；验签有效'
+        ? `已建立运营者链接（互种或 canvas 引用）；${row.verified === true ? '验签有效' : '尚未持有验签通过的卡片'}`
         : '无运营者关系（验签 ≠ 关系）'
       lineEl.appendChild(badge)
       // Version chip from the warm card.
