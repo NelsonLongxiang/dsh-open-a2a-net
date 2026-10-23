@@ -122,6 +122,8 @@ export interface StateBody {
     name?: string
     version?: string
     lastContactAt?: number
+    /** gh#24: whether the last contact attempt succeeded. */
+    lastContactOk?: boolean
   }>
   readonly remote?: readonly RemoteRow[]
   readonly activity?: readonly ActivityRow[]
@@ -768,12 +770,22 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     for (const row of peers) {
       const host = peerHostOf(row.url)
       const lineEl = el('div', 'wb-host-row')
-      // Health lamp: recency of the last contact attempt.
+      // Health lamp (gh#24 semantics): recency alone lied — a FAILED fresh
+      // contact glowed green. Now: green = recent AND the last attempt
+      // succeeded; red = recent AND it failed; gray = stale or never.
       const lamp = el('span', 'wb-host-lamp')
       const last = row.lastContactAt
       const age = last === undefined ? undefined : now - last
-      lamp.classList.add(age === undefined ? 'is-unknown' : age <= 60_000 ? 'is-live' : age <= 5 * 60_000 ? 'is-warm' : 'is-cold')
-      lamp.title = last === undefined ? '尚无接触记录' : `最近接触 ${ageText(last, now)}`
+      const fresh = age !== undefined && age <= 60_000
+      const ok = row.lastContactOk
+      if (age === undefined) lamp.classList.add('is-unknown')
+      else if (!fresh) lamp.classList.add('is-cold')
+      else if (ok === false) lamp.classList.add('is-fail')
+      else if (age <= 5 * 60_000) lamp.classList.add('is-live')
+      else lamp.classList.add('is-warm')
+      lamp.title = last === undefined
+        ? '尚无接触记录'
+        : `最近接触 ${ageText(last, now)}${ok === false ? '（失败）' : ok === true ? '（成功）' : ''}`
       lineEl.appendChild(lamp)
       // Label: the peer's published name, host fallback.
       lineEl.appendChild(el('span', 'wb-host-name')).textContent = row.name !== undefined && row.name !== '' ? row.name : host

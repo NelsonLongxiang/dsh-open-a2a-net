@@ -275,6 +275,7 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-host-lamp.is-live{background:var(--n-live)}
 .wb-host-lamp.is-warm{background:var(--n-act)}
 .wb-host-lamp.is-cold{background:var(--n-ink-muted)}
+.wb-host-lamp.is-fail{background:var(--n-danger)}
 .wb-host-lamp.is-unknown{background:transparent;border:1px solid var(--n-ink-muted)}
 .wb-host-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--n-ink)}
 .wb-host-badge{flex:none;font-size:10.5px;border-radius:99px;padding:0 7px;line-height:17px;border:1px solid var(--n-border)}

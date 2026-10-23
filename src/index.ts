@@ -1878,12 +1878,14 @@ const reportLoopRing = new Map<string, number[]>()
               peers: peerStore.list().map(url => {
                 const card = cardCache.get(url)?.card
                 const lastContact = peerStore.lastContact(url)
+                const lastContactOk = peerStore.lastContactOk(url)
                 return {
                   url,
                   score: peerStore.score(url),
                   ...(card?.name !== undefined && card.name !== '' ? { name: card.name } : {}),
                   ...(typeof card?.version === 'string' && card.version !== '' ? { version: card.version } : {}),
                   ...(lastContact !== undefined ? { lastContactAt: lastContact } : {}),
+                  ...(lastContactOk !== undefined ? { lastContactOk } : {}),
                   ...peerLinkState(url),
                 }
               }),

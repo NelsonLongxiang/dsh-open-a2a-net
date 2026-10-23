@@ -255,3 +255,25 @@ describe('PeerStore node-identity dedup', () => {
     expect(new PeerStore([], path).bySession('node-1')).toBe('http://a')
   })
 })
+
+describe('gh#24 contact outcome (host-rail lamp semantics)', () => {
+  it('stamps success/failure and round-trips BOTH through persistence', async () => {
+    const path = storePath()
+    const store = new PeerStore(['http://ok'], path, PEER_CAP, 0)
+    store.noteSuccess('http://ok')
+    // A LEARNED peer takes the failure stamp: seeds are immune to penalties
+    // by design (noteFailure returns early for them).
+    store.offer('http://bad')
+    store.noteFailure('http://bad')
+    await store.flush()
+    expect(store.lastContactOk('http://ok')).toBe(true)
+    expect(store.lastContactOk('http://bad')).toBe(false)
+    // The restart must remember outcome AND time — the pre-fix restore
+    // dropped the stamp silently (gh#24 H2 residual).
+    const reloaded = new PeerStore([], path)
+    expect(reloaded.lastContactOk('http://ok')).toBe(true)
+    expect(reloaded.lastContactOk('http://bad')).toBe(false)
+    expect(typeof reloaded.lastContact('http://ok')).toBe('number')
+    expect(Date.now() - (reloaded.lastContact('http://ok') ?? 0)).toBeLessThan(60_000)
+  })
+})

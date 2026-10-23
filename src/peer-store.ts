@@ -34,6 +34,10 @@ export interface PeerRecord {
   /** Epoch ms of the last contact attempt (success or failure) — the host
    *  rail's health lamp reads the recency of this (#20 W-C). */
   lastContactAt?: number
+  /** Whether that last attempt SUCCEEDED (gh#24): the lamp distinguishes a
+   *  fresh success (green) from a fresh failure (red); recency alone made
+   *  a dead peer glow green. */
+  lastContactOk?: boolean
 }
 
 /** The persisted store document (whole-file read/write, small by design). */
@@ -80,7 +84,16 @@ export class PeerStore {
     const current = new Set(seeds.filter(seed => seed !== ''))
     for (const [url, peer] of this.peers) {
       if (peer.seed && !current.has(url)) {
-        this.peers.set(url, { url, score: peer.score, seed: false })
+        // Downgrade keeps every learned fact (score, session, contact
+        // stamps) — only the immunity bit changes.
+        this.peers.set(url, {
+          url,
+          score: peer.score,
+          seed: false,
+          ...(peer.session !== undefined ? { session: peer.session } : {}),
+          ...(peer.lastContactAt !== undefined ? { lastContactAt: peer.lastContactAt } : {}),
+          ...(peer.lastContactOk !== undefined ? { lastContactOk: peer.lastContactOk } : {}),
+        })
       }
     }
   }
@@ -152,6 +165,7 @@ export class PeerStore {
     // Seeds keep their record through failures; learned peers stamp the
     // attempt either way so the health lamp shows staleness honestly.
     peer.lastContactAt = Date.now()
+    peer.lastContactOk = false
     if (peer.score <= EVICTION_FLOOR) this.peers.delete(url)
     this.persist()
   }
@@ -165,6 +179,7 @@ export class PeerStore {
     if (peer === undefined) return
     peer.score += SUCCESS_REWARD
     peer.lastContactAt = Date.now()
+    peer.lastContactOk = true
     this.persist()
   }
 
@@ -174,6 +189,14 @@ export class PeerStore {
    */
   lastContact(url: string): number | undefined {
     return this.peers.get(url)?.lastContactAt
+  }
+
+  /**
+   * Whether the last contact attempt succeeded (gh#24) — undefined when no
+   * attempt was ever recorded.
+   */
+  lastContactOk(url: string): boolean | undefined {
+    return this.peers.get(url)?.lastContactOk
   }
 
   /**
@@ -231,6 +254,10 @@ export class PeerStore {
           score: typeof peer.score === 'number' && Number.isFinite(peer.score) ? peer.score : INITIAL_SCORE,
           seed: peer.seed === true,
           ...(typeof peer.session === 'string' && peer.session !== '' ? { session: peer.session } : {}),
+          // gh#24: the contact stamp round-trips (a restart must not forget
+          // when we last reached the peer, nor whether it answered).
+          ...(typeof peer.lastContactAt === 'number' && Number.isFinite(peer.lastContactAt) ? { lastContactAt: peer.lastContactAt } : {}),
+          ...(typeof peer.lastContactOk === 'boolean' ? { lastContactOk: peer.lastContactOk } : {}),
         })
       }
     } catch {
