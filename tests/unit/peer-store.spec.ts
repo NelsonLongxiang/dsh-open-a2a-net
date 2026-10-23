@@ -27,6 +27,25 @@ describe('PeerStore seeding and ordering', () => {
     const store = new PeerStore(['', 'http://a'], '')
     expect(store.list()).toEqual(['http://a'])
   })
+
+  it('downgrades a persisted seed whose URL left the config — the config is authoritative both ways (board-stale-peer fix)', () => {
+    const path = storePath()
+    mkdirSync(dirname(path), { recursive: true })
+    // An old config generation seeded 'http://stale' and the store persisted
+    // it; the operator removed the URL from config days ago. The stale seed
+    // bit must NOT survive: the record downgrades to referral-learned so
+    // noteFailure can decay and evict it — otherwise a dead URL renders on
+    // the workbench board forever (owner sighting: .157:13082).
+    writeFileSync(path, JSON.stringify({ peers: [{ url: 'http://stale', score: 4321, seed: true }, { url: 'http://keep', score: 4321, seed: true }] }))
+    const store = new PeerStore(['http://keep'], path)
+    expect(store.listSeeded()).toEqual(['http://keep'])
+    // The downgrade persisted: a fresh boot over the same file agrees.
+    const reloaded = new PeerStore(['http://keep'], path)
+    expect(reloaded.listSeeded()).toEqual(['http://keep'])
+    // And the downgraded record is now evictable: failures decay it out.
+    for (let i = 0; i < 44; i += 1) reloaded.noteFailure('http://stale')
+    expect(reloaded.list()).toEqual(['http://keep'])
+  })
 })
 
 describe('PeerStore bounds and offers', () => {

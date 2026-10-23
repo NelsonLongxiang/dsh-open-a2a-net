@@ -87,7 +87,11 @@ describe('mesh faults — partition, restart, and recovery', () => {
         return result
       }, { timeout: 4_000 })
       // Closed failure: either no candidate resolves or every candidate fails.
-      expect(String(down.error)).toMatch(/no route to "cargo"|failed on every candidate/)
+      // Three legitimate shapes: the candidate list resolved the team but the
+      // delivery failed; the walk found candidates but none published the
+      // team (cache-expired kill — the richer directory guidance); or no
+      // route existed at all. All are closed failures with ok:false.
+      expect(String(down.error)).toMatch(/no route to "cargo"|failed on every candidate|not published by any configured peer/)
       const probed = await probe(alpha)
       expect(probed.find(row => row.url === `http://127.0.0.1:${String(portC)}`)?.reachable).toBe(false)
 

@@ -67,6 +67,19 @@ export class PeerStore {
       // fields readonly.
       this.peers.set(seed, { url: seed, score: INITIAL_SCORE, seed: true })
     }
+    // The config is authoritative BOTH ways (board-stale-peer fix, 0.6.26):
+    // a persisted record may carry seed:true from an OLD config generation
+    // whose operator already removed the URL — left alone, a dead URL keeps
+    // its immunity forever and the workbench board shows a peer that can
+    // never evict (owner sighting: `.157:13082` survived its config removal
+    // for days). Downgrade those to referral-learned, keeping the score so
+    // noteFailure can decay and evict them honestly.
+    const current = new Set(seeds.filter(seed => seed !== ''))
+    for (const [url, peer] of this.peers) {
+      if (peer.seed && !current.has(url)) {
+        this.peers.set(url, { url, score: peer.score, seed: false })
+      }
+    }
   }
 
   /**
