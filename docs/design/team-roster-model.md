@@ -8,8 +8,10 @@
    `sessionTeams[]`；队名按 zone 前缀（`dsh/<id8>`）命名，跨主机同 id8 会撞名。
 2. **队伍形态异构**：进程队（`dsh`）、会话队（与会话 1:1）、canvas 队（唯一有成员表，
    但成员表是宿主本地的、由"队"声明成员）、native-teams 桥（opt-in 入站）。
-3. **加入语义错位**：加入 = 会话加入**网络**（joined.json 意图 + 侧边栏/a2a-collab CLI），
-   不是加入队伍；模型工具面无任何 join/leave 工具。
+3. **加入语义错位**：加入 = 会话加入**网络**（joined.json 意图 + Web 侧边栏手势），
+   不是加入队伍；网络层入网/退网无模型工具面（用户手势专属）。团队 roster 声明
+   另有 `a2a_team_join`/`a2a_team_leave`（S4，allowlist 管）——那是声明面，不是入网面。
+   （2026-10-23 订正：原「侧边栏/a2a-collab CLI」的 CLI 路径已退役。）
 
 ## 二、目标模型
 
