@@ -26,6 +26,12 @@ export interface InFlightRow {
 export interface PeerRow {
   url: string
   score?: number
+  /** gh#20 W-A: this host's link view — 'linked' (operator-established
+   * basis holds) | 'stranger' (no link); absent = the host predates the
+   * field (render neutral). */
+  link?: 'linked' | 'stranger'
+  /** Signature-valid cached card held (the badge tick/cross). */
+  verified?: boolean
 }
 
 /** A team frame's titlebar anchor {fx + fw/2, fy + 11} (edges.ts lockstep). */

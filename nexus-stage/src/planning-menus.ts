@@ -57,8 +57,15 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
 
   function startCreateFromSelection(): void {
     if (dialog !== null) return
-    // Peer cards are not joinable sessions: they never enter 建队 ids.
-    const ids = selectedByY().filter(id => model.getNode(id)?.remote !== true)
+    // gh#20 W-B: a mixed local+remote selection composes a cross-host team —
+    // peers ride their zone/id8 handle at the server boundary. A peer
+    // without a handle yet (no remote team rows) cannot join; drop it and
+    // let the ≥2 floor judge the rest.
+    const ids = selectedByY().filter(id => {
+      const node = model.getNode(id)
+      if (node === undefined) return false
+      return node.remote !== true || (node.remoteHandle !== undefined && node.remoteHandle !== '')
+    })
     if (ids.length < 2) { d.notice('info', '框选至少 2 个会话节点'); return }
     openNameDialog(ids)
   }
@@ -313,9 +320,14 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
   /** Context menu from a real contextmenu event or the keyboard equivalent. */
   function contextMenuAt(x: number, y: number, target: Element | null): void {
     if (dialog !== null) return
-    // Peer endpoints are read-only entries: no roster menu for them.
+    // gh#20 W-B: a peer WITH a remote handle gets the roster menu (加入团队
+    // composes a cross-host team through the handle boundary); a peer
+    // WITHOUT one stays a read-only entry (nothing the server would accept).
     const probeNode = target?.closest<HTMLElement>('.p-node') ?? null
-    if (probeNode !== null && model.getNode(probeNode.dataset.id ?? '')?.remote === true) return
+    if (probeNode !== null) {
+      const probe = model.getNode(probeNode.dataset.id ?? '')
+      if (probe?.remote === true && (probe.remoteHandle === undefined || probe.remoteHandle === '')) return
+    }
     const nodeEl = probeNode
     const headEl = target?.closest<HTMLElement>('.p-frame-head') ?? null
     if (nodeEl !== null) {

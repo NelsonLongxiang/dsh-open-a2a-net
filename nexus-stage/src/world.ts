@@ -174,10 +174,14 @@ export interface WorldNode {
   name?: string
   live: boolean
   /** Peer node (PR D v1 ruling): a remote host entry rendered as a card.
-   *  Excluded from local content bounds; no memberships, ever. */
+   *  Excluded from local content bounds; canvas memberships allowed since
+   *  gh#20 W-B (the peer rides its zone/id8 handle at the server boundary). */
   remote?: boolean
   /** Full peer URL (identity is the bare host:port in the node id). */
   peerUrl?: string
+  /** gh#20 W-B: the peer's zone/id8 remote handle (its first remote team
+   *  row) — the server's canvas member form for cross-host teams. */
+  remoteHandle?: string
   /** Reachability score from a2a_probe (peers only). */
   score?: number
   /** Declared roster teams (a2a/teams.json) — the network-declaration half

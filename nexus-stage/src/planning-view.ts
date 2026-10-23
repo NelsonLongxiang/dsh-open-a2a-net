@@ -397,8 +397,21 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
           + (n.teams !== undefined && n.teams.length > 0 ? ` · 网络队×${n.teams.length}` : '')
       if (subEl.textContent !== subText) subEl.textContent = subText
       const prioEl = el.querySelector<HTMLElement>('.prio')!
-      const prioText = n.remote === true ? 'peer' : (n.memberships[0] !== undefined ? `P${n.memberships[0]!.index}` : '')
-      if (prioEl.textContent !== prioText) prioEl.textContent = prioText
+      if (n.remote === true) {
+        // gh#20 W-A: the peer badge — link class colors the chip (linked
+        // green / stranger gray), the verified tick/cross rides after it.
+        // An absent link field (older host) renders the neutral 'peer'.
+        const info = peerInfoByHost.get(host)
+        const cls = info?.link === 'linked' ? 'lnk-linked' : info?.link === 'stranger' ? 'lnk-stranger' : ''
+        if (prioEl.className !== `prio mono ${cls}`.trim()) prioEl.className = `prio mono ${cls}`.trim()
+        const mark = info === undefined ? '' : info.verified === true ? '✓' : '✗'
+        const badge = (info?.link ?? 'peer') + mark
+        if (prioEl.textContent !== badge) prioEl.textContent = badge
+      } else {
+        if (prioEl.className !== 'prio mono') prioEl.className = 'prio mono'
+        const prioText = n.memberships[0] !== undefined ? `P${n.memberships[0]!.index}` : ''
+        if (prioEl.textContent !== prioText) prioEl.textContent = prioText
+      }
     }
     for (const [id, el] of [...nodeEls]) {
       if (!seen.has(id)) { el.remove(); nodeEls.delete(id) }
@@ -433,6 +446,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   let lastPeers: ReadonlyArray<PeerRow> = []
   let lastRemoteTeams: ReadonlyMap<string, RemoteTeamRow[]> = new Map()
   const peerScoreByText = new Map<string, number | undefined>()
+  /** gh#20 W-A: per-host link/verified info for the peer badges. */
+  const peerInfoByHost = new Map<string, { link?: 'linked' | 'stranger'; verified?: boolean }>()
   let lastInFlight: ReadonlyArray<InFlightRow> = []
 
   function renderFederation(): void {
@@ -526,6 +541,29 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   }
 
   function emitAction(a: CanvasAction): void {
+    // gh#20 W-B: the SERVER sees zone/id8 remote handles where the model
+    // keeps its peer-<host> node id — the canvas member contract is
+    // session-id-or-remote-ref. Translation happens here, one boundary;
+    // the model action keeps board-local ids so rendering and undo stay
+    // node-keyed. A peer without a known handle (no remote team rows yet)
+    // is filtered out — the server would refuse the raw peer- id.
+    function serverAction(act: CanvasAction): CanvasAction {
+      const mapIds = (ids: readonly string[]): string[] => {
+        const out: string[] = []
+        for (const id of ids) {
+          if (!id.startsWith('peer-')) { out.push(id); continue }
+          const handle = model.getNode(id)?.remoteHandle
+          if (handle !== undefined && handle !== '') out.push(handle)
+        }
+        return out
+      }
+      if (act.type === 'add-member' || act.type === 'remove-member' || act.type === 'create-team') {
+        const ids = mapIds(act.ids)
+        return ids.length > 0 ? { ...act, ids } : act
+      }
+      return act
+    }
+
     // Optimistic seats: a write may reference a session the teamed gate
     // keeps OFF the model (no canvas card yet). The write actions read and
     // write memberships through the node table, so materialize those ids
@@ -551,7 +589,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     const team = actionTeam(a)
     pendingAdd(team)
     render()
-    void deps.onCanvasAction(a).then(
+    void deps.onCanvasAction(serverAction(a)).then(
       ok => {
         pendingRelease(team)
         if (!ok) undo() // host refused: roll this action's optimistic delta back
@@ -627,10 +665,18 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     const p = localXY(ev)
     const w = screenToWorld(vp, p.x, p.y)
     const f = innermostFrameAt(new Map(model.allFrames()), w)
-    // 契约不变量 1：成员必须 joined session——对等卡永远不进名单写面。
-    const localIds = gesture.ids.filter(id => model.getNode(id)?.remote !== true)
+    // gh#20 W-B: peer cards join canvas teams too — a mixed local+remote
+    // drop composes a cross-host team; the server boundary translates
+    // peer ids to zone/id8 handles (emitAction's serverAction). Reorder
+    // stays local-only (roster priority is a local-session fact).
+    const memberIds = gesture.ids.filter(id => {
+      const node = model.getNode(id)
+      if (node === undefined) return false
+      if (node.remote !== true) return true
+      return node.remoteHandle !== undefined && node.remoteHandle !== ''
+    })
     if (f !== undefined) {
-      const fresh = localIds.filter(id => !(model.getNode(id)?.memberships.some(m => m.team === f)))
+      const fresh = memberIds.filter(id => !(model.getNode(id)?.memberships.some(m => m.team === f)))
       if (fresh.length > 0) {
         emitAction({ type: 'add-member', team: f, ids: fresh }) // 入队：不自动离原队（多对多）
         return
@@ -772,7 +818,12 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       // Drop-target highlight: the innermost frame under the pointer, but
       // only when the drop would change something (some id not yet member).
       const f = innermostFrameAt(new Map(model.allFrames()), w)
-      const joinables = gesture.ids.filter(id => model.getNode(id)?.remote !== true)
+      // W-B: peers with a remote handle are droppable members too.
+      const joinables = gesture.ids.filter(id => {
+        const node = model.getNode(id)
+        if (node === undefined) return false
+        return node.remote !== true || (node.remoteHandle !== undefined && node.remoteHandle !== '')
+      })
       const relevant = f !== undefined && joinables.length > 0
       for (const [name, el] of frameEls) el.classList.toggle('drop-target', relevant && name === f)
       render()
@@ -1139,6 +1190,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     peerScoreByText.clear()
     for (const p of input.peers ?? []) {
       peerScoreByText.set(peerHostOf(p.url), p.score)
+      peerInfoByHost.set(peerHostOf(p.url), { link: p.link, verified: p.verified })
     }
     if (input.peers !== undefined) {
       const localBounds = model.contentBounds()
@@ -1153,9 +1205,15 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
           : saved !== undefined
             ? { x: saved.x, y: saved.y }
             : { x: placements[i]?.x ?? 200, y: placements[i]?.y ?? 0 }
+        // gh#20 W-B: the peer's server-side member form — its first remote
+        // team row's zone/id8 handle (canvas remote refs are exact handles
+        // per the D1 ruling). Absent until the first remote team row lands.
+        const host = peerHostOf(p.url)
+        const handle = lastRemoteTeams.get(host)?.[0]?.team
         model.upsertNode({
           id, x: base.x, y: base.y,
           label: p.url, team: '', name: p.url, peerUrl: p.url,
+          remoteHandle: handle,
           live: true, remote: true, memberships: [],
         })
         model.upsertScore(id, p.score)
@@ -1163,6 +1221,13 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
     for (const id of model.nodeIds()) {
       if (id.startsWith('peer-') && !peerSeen.has(id)) model.removeNode(id)
+    }
+    // gh#20 W-B: the server echoes cross-host members as zone/id8 handles —
+    // map each handle back onto the peer node that carries it, so the
+    // reconcile keeps remote memberships instead of dropping them.
+    const handleToPeer = new Map<string, string>()
+    for (const n of model.allNodes()) {
+      if (n.remote === true && n.remoteHandle !== undefined && n.remoteHandle !== '') handleToPeer.set(n.remoteHandle, n.id)
     }
     const homes = homeTeams(input.teams)
     for (const team of input.teams) {
@@ -1177,10 +1242,10 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       const rects: LayoutRect[] = []
       const all: LayoutRect[] = []
       for (const m of team.members) {
-        const n = model.getNode(m.id)
+        const n = model.getNode(handleToPeer.get(m.id) ?? m.id)
         if (n === undefined) continue
         all.push(nodeRect(n))
-        if (homes.get(m.id) === team.name) rects.push(nodeRect(n))
+        if (homes.get(n.id) === team.name) rects.push(nodeRect(n))
       }
       const wrap = rects.length > 0 ? rects : all
       if (wrap.length > 0) model.setFrame(team.name, deriveInitialFrame(wrap))

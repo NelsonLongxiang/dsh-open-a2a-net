@@ -1871,7 +1871,14 @@ const reportLoopRing = new Map<string, number[]>()
                 })),
               },
               host: lanIp === '' ? {} : { lanIp },
-              peers: peerStore.list().map(url => ({ url, score: peerStore.score(url) })),
+              // gh#20 W-A: each tracked peer carries its LINK STATE from this
+              // host's view — 'linked' (an operator-established basis holds:
+              // bilateral seeding, or a canvas remote ref names this peer's
+              // zone or one of its session teams), 'stranger' (no link —
+              // key possession may be proven, relationship is not), and
+              // 'verified' (we hold a signature-valid cached card for it —
+              // the display face renders the tick/cross on the badge).
+              peers: peerStore.list().map(url => ({ url, score: peerStore.score(url), ...peerLinkState(url) })),
               remote: (refreshRemoteRows(), (remoteRowsCache?.rows ?? []).map(row => {
                 const canvasTeams = canvasStore.teamsOf(row.team)
                 return canvasTeams.length > 0 ? { ...row, canvasTeams: [...canvasTeams] } : row
@@ -4143,6 +4150,59 @@ ${message}`
   function fromClause(from: string): string {
     const display = callerDisplayName(from)
     return `from "${from}"${display !== '' ? `（${display}）` : ''}`
+  }
+
+  /**
+   * gh#20 W-A: THIS host's view of one tracked peer's link state (the
+   * mirror of callerLinkedToThisHost, judged from our side about THEM):
+   *   · linked — bilateral seeding (our config.peers carries a URL of the
+   *     peer's origin AND the peer's card carries ours), or a canvas remote
+   *     ref naming the peer's zone or one of its session teams;
+   *   · stranger — no operator-established basis (a verified key is not a
+   *     relationship);
+   *   · verified — we hold a signature-valid cached card (the badge's
+   *     tick/cross: reachable-and-authentic vs unknown/bad).
+   * Pure over warm caches and config; never fetches.
+   */
+  function peerLinkState(peerUrl: string): { link: 'linked' | 'stranger'; verified: boolean } {
+    const cached = cardCache.get(peerUrl)?.card
+    const verified = cached !== undefined
+    const zone = cached?.team ?? ''
+    const handles = new Set<string>()
+    if (zone !== '') handles.add(zone)
+    for (const row of cached?.sessionTeams ?? []) handles.add(row.team)
+    let linked = false
+    // Basis 1: bilateral seeds (origin match both ways).
+    if (cached !== undefined && ownCardUrl !== '') {
+      try {
+        const peerOrigin = new URL(peerUrl).origin
+        const ourOrigin = new URL(ownCardUrl).origin
+        const weSeedThem = config.peers.some(peer => {
+          try { return new URL(peer).origin === peerOrigin } catch { return false }
+        })
+        const theySeedUs = (cached.peers ?? []).some(peer => {
+          try { return new URL(peer).origin === ourOrigin } catch { return false }
+        })
+        if (weSeedThem && theySeedUs) linked = true
+      } catch { /* malformed peer URL — falls through to the canvas basis */ }
+    }
+    // Basis 2: a canvas remote ref names the peer's zone or one of its
+    // session teams. Exact-handle match first (the admission basis); the
+    // ref's ZONE prefix against card.team accepts the common compose form
+    // (the operator added the peer's session-team handle; we see the
+    // minimal card without sessionTeams until linked — display-level
+    // zone matching is exact-host here: the ref names a handle of THAT
+    // zone, and the tracked peer IS that zone's card).
+    if (!linked && handles.size > 0 && zone !== '') {
+      outer: for (const name of canvasStore.list()) {
+        for (const ref of canvasStore.remoteMembersOf(name)) {
+          if (handles.has(ref)) { linked = true; break outer }
+          const refZone = ref.includes('/') ? ref.slice(0, ref.indexOf('/')) : ref
+          if (refZone === zone) { linked = true; break outer }
+        }
+      }
+    }
+    return { link: linked ? 'linked' : 'stranger', verified }
   }
 
   function cachedCardFetch(url: string): Promise<A2aPeerCard | undefined> {
