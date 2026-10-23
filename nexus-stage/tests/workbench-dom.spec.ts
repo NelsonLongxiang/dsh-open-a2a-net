@@ -238,7 +238,8 @@ describe('workbench panels', () => {
     expect(text(forensics)).toContain('claims 368')
     // The tab badge counts what is owed and turns red on a dead letter.
     const badge = v.root.querySelector('.wb-tab[data-sec="ledger"] .wb-tab-badge')!
-    expect(text(badge)).toBe('3')
+    // Owed = 1 receipt still expected + 1 dead letter; the receiptless row owes nothing.
+    expect(text(badge)).toBe('2')
     expect(badge.classList.contains('is-danger')).toBe(true)
   })
 
@@ -441,10 +442,24 @@ describe('workbench panels', () => {
 
   it('a healthy host shows a quiet header', () => {
     const { v } = bench()
-    v.update({ ...state, tasksDead: [], tasksStaleCount: 0, reconcile: { state: 'idle', rows: [] }, idempotency: { claimsFresh: 1, replays: 0, conflicts: 0 } })
+    // Healthy = no stale rows (the header derives 陈旧 from the rows, as the 台账 tab does), no dead letters.
+    v.update({ ...state, tasks: [], tasksDead: [], tasksStaleCount: 0, reconcile: { state: 'idle', rows: [] }, idempotency: { claimsFresh: 1, replays: 0, conflicts: 0 } })
     const stats = v.root.querySelector('.wb-header-stats')!
     expect(stats.querySelectorAll('.wb-alert').length).toBe(0)
     expect(text(stats)).toContain('无异常')
+  })
+
+  it('a fire-forget expiry never lights the header red, and fresh receiptless rows are not stale', () => {
+    const { v } = bench()
+    v.update({
+      ...state,
+      tasks: [{ taskId: 'direct-ffff0001', team: 'dsh/22222222', startedAt: NOW - 60_000, status: 'pending', receiptExpected: false }],
+      tasksStaleCount: 1, // the server count would call this fresh receiptless row stale
+      tasksDead: [{ taskId: 'direct-ffff0002', team: 'dsh/22222222', startedAt: NOW - 90_000_000, deadAt: NOW - 1_000, reason: 'fire-forget' }],
+      reconcile: { state: 'idle', rows: [] },
+    })
+    expect(v.root.querySelectorAll('.wb-header-stats .wb-alert').length).toBe(0)
+    expect(text(v.root.querySelector('.wb-header-stats'))).toContain('无异常')
   })
 
   it('idempotency conflicts escalate to the header', () => {

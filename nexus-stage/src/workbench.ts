@@ -21,7 +21,7 @@
 import { createChatDrawer, type ChatTarget } from './wb-chat'
 import { createRailTabs } from './wb-rail'
 import { DIRECTORY_FILTERS, learnLogTitle, loadLogTitles, renderDirectory, type DirFilter } from './wb-directory'
-import { renderLedger as paintLedger } from './wb-ledger'
+import { ledgerFacts, renderLedger as paintLedger } from './wb-ledger'
 
 /** One pending ledger row from /state `tasks`. */
 export interface PendingRow {
@@ -945,10 +945,13 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     const box = clear(headerStats)
     if (last === null) return
     const alerts: Array<{ text: string; tone: 'warn' | 'danger'; title: string }> = []
-    const dead = last.tasksDead?.length ?? 0
-    if (dead > 0) alerts.push({ text: `死信 ${dead}`, tone: 'danger', title: '超过 24h TTL 仍未结算的任务，需在台账清账' })
-    const stale = last.tasksStaleCount ?? 0
-    if (stale > 0) alerts.push({ text: `陈旧 ${stale}`, tone: 'warn', title: '≥1h 无回执的旧账（含免回执行），到 24h TTL 自动转死信' })
+    // Same definitions as the 台账 tab (wb-ledger ledgerFacts): fire-forget
+    // expiries are not dead letters, receiptless rows are never stale.
+    const facts = ledgerFacts(last, deps.now())
+    const dead = facts.deadLetters.length
+    if (dead > 0) alerts.push({ text: `死信 ${dead}`, tone: 'danger', title: '超过 24h TTL 仍未结算的任务（unconsumed），需在台账清账' })
+    const stale = facts.stale.length
+    if (stale > 0) alerts.push({ text: `陈旧 ${stale}`, tone: 'warn', title: '要回执、已等待 ≥1h 仍未回执的任务（免回执行不算）' })
     const conflicts = last.idempotency?.conflicts ?? 0
     if (conflicts > 0) alerts.push({ text: `幂等冲突 ${conflicts}`, tone: 'danger', title: '同一幂等键对应了不同载荷，需人工核查' })
     const repair = (last.reconcile?.rows ?? []).filter(row => row.needsRepair === true).length

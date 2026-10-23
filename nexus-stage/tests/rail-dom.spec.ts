@@ -158,7 +158,7 @@ describe('台账 (wb-ledger)', () => {
   const state: StateBody = {
     tasks: [
       { taskId: 'direct-young001', team: 'dsh/11111111', startedAt: NOW - 5 * 60_000, status: 'pending', direction: 'outbound', receiptExpected: true, brief: '刚派的活' },
-      { taskId: 'direct-in000001', team: 'dsh/11111111', startedAt: NOW - 2 * HOUR, status: 'pending', direction: 'inbound', receiptExpected: true, brief: '对方来的请求' },
+      { taskId: 'direct-in000001', team: 'dsh/11111111', peer: 'local:cargo/22222222', startedAt: NOW - 2 * HOUR, status: 'pending', direction: 'inbound', receiptExpected: true, brief: '对方来的请求' },
       { taskId: 'direct-free0001', team: 'dsh/99999999', startedAt: NOW - 10 * 60_000, status: 'pending', receiptExpected: false },
     ],
     tasksDead: [],
@@ -175,16 +175,55 @@ describe('台账 (wb-ledger)', () => {
     return { pane, ctx, out: renderLedger(pane, ctx) }
   }
 
-  it('groups stale, waiting and receiptless rows; inbound reads as coming from the team', () => {
+  it('groups our waiting sends, receipts we owe, and receiptless rows; inbound names its sender', () => {
     const { pane, out } = render()
     const groups = [...pane.querySelectorAll('.wb-led-group-head')].map(n => text(n).split(' · ')[0])
-    expect(groups).toEqual(['陈旧', '等待回执', '免回执'])
+    expect(groups).toEqual(['待本机回执', '等待回执', '免回执'])
     const inbound = [...pane.querySelectorAll('.wb-led-card')].find(c => text(c).includes('对方来的请求'))!
     expect(inbound.querySelector('.wb-led-dir')!.classList.contains('is-in')).toBe(true)
-    expect(text(inbound.querySelector('.wb-led-team'))).toBe('来自 dsh/11111111')
+    // The sender is the peer (local:<sender>); the team is this host's own (review L2).
+    expect(text(inbound.querySelector('.wb-led-team'))).toBe('来自 cargo/22222222')
+    expect(text(inbound.querySelector('.wb-led-to'))).toBe('至 dsh/11111111')
     expect(text(inbound)).toContain('入站')
-    // No dead letters: the badge is amber (stale), not red.
-    expect(out).toEqual({ badge: '3', tone: 'warn' })
+    // A receipt WE owe is never "可催办".
+    expect(text(pane.querySelector('.wb-led-group .wb-led-group-hint'))).toBe('对方在等本机回执')
+    // Owed = receipts still expected (2); receiptless rows owe nothing. The
+    // 2h-old inbound row makes it amber.
+    expect(out).toEqual({ badge: '2', tone: 'warn' })
+  })
+
+  it('a fire-forget expiry is bookkeeping, not a dead letter (review L1)', () => {
+    const s: StateBody = { tasks: [], tasksDead: [{ taskId: 'direct-ff000001', team: 'dsh/99999999', peer: 'http://x', startedAt: NOW - 25 * HOUR, deadAt: NOW - HOUR, reason: 'fire-forget', brief: 'fyi only' }] }
+    const { pane, out } = render({}, s)
+    expect([...pane.querySelectorAll('.wb-led-group-head span:first-child')].map(n => text(n))).toEqual(['已过期（免回执） · 1'])
+    expect(text([...pane.querySelectorAll('.wb-led-tile')].find(t => text(t).includes('死信'))!.querySelector('.wb-led-tile-v'))).toBe('0')
+    expect(pane.querySelector('.wb-led-card.is-danger')).toBeNull()
+    expect(out).toEqual({ badge: '', tone: undefined })
+  })
+
+  it('an inbound dead letter keeps its direction from the peer prefix (review L2)', () => {
+    const s: StateBody = { tasks: [], tasksDead: [{ taskId: 'direct-in000002', team: 'dsh/11111111', peer: 'local:cargo/22222222', startedAt: NOW - 25 * HOUR, deadAt: NOW - HOUR, reason: 'unconsumed', brief: '请核报价' }] }
+    const { pane } = render({}, s)
+    const c = pane.querySelector('.wb-led-card')!
+    expect(text(c.querySelector('.wb-led-dir'))).toBe('↙')
+    expect(text(c.querySelector('.wb-led-team'))).toBe('来自 cargo/22222222')
+  })
+
+  it('the 陈旧 tile counts exactly the stale rows shown, at the server ≥1h boundary (review L3)', () => {
+    const s: StateBody = {
+      tasks: [
+        { taskId: 'direct-st000001', team: 'dsh/99999999', startedAt: NOW - HOUR, status: 'pending', direction: 'outbound', receiptExpected: true },
+        { taskId: 'direct-rl000001', team: 'dsh/99999999', startedAt: NOW - 5 * 60_000, status: 'pending', direction: 'outbound', receiptExpected: false },
+        { taskId: 'direct-rl000002', team: 'dsh/99999999', startedAt: NOW - 5 * 60_000, status: 'pending', direction: 'outbound', receiptExpected: false },
+      ],
+      tasksStaleCount: 3, // server count includes receiptless rows; the tab does not
+      tasksDead: [],
+    }
+    const { pane } = render({}, s)
+    const tileV = text([...pane.querySelectorAll('.wb-led-tile')].find(t => text(t).includes('陈旧'))!.querySelector('.wb-led-tile-v'))
+    const group = [...pane.querySelectorAll('.wb-led-group-head span:first-child')].map(n => text(n)).find(h => h.startsWith('陈旧'))
+    expect(tileV).toBe('1')
+    expect(group).toBe('陈旧 · 1') // exactly 1h old is stale (≥1h)
   })
 
   it('a card opens its team’s conversation when the team resolves; otherwise it is not a link', () => {
