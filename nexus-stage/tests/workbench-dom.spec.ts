@@ -80,18 +80,23 @@ function text(node: Element | null | undefined): string {
 }
 
 describe('workbench rail sections', () => {
-  it('renders the directory sections with counts', () => {
+  it('renders the directory groups with counts; peer hosts live on the 主机 tab only', () => {
     const { v } = bench()
     v.update(state)
-    const heads = [...v.root.querySelectorAll('.wb-side-head')].map(n => text(n))
-    expect(heads.join('|')).toContain('本机 · 现场 · 1')
-    expect(heads.join('|')).toContain('本机 · 冷启动 · 1')
-    expect(heads.join('|')).toContain('Canvas 队 · 1')
-    expect(heads.join('|')).toContain('Peers · 1')
+    const heads = [...v.root.querySelectorAll('.wb-dir-head')].map(n => text(n))
+    expect(heads.join('|')).toContain('本机会话 · 2')
+    expect(heads.join('|')).toContain('1 在线 · 1 冷')
+    expect(heads.join('|')).toContain('画布队 · 1')
     expect(heads.join('|')).toContain('远端节点 · 1')
-    const labels = [...v.root.querySelectorAll('.wb-item-label')].map(n => text(n))
+    // 2026-10-23: the directory listed peer hosts twice (Peers + host rail).
+    expect(heads.join('|')).not.toContain('Peers')
+    const labels = [...v.root.querySelectorAll('.wb-directory .wb-item-label')].map(n => text(n))
     expect(labels).toContain('scout-01')
-    expect(labels.some(l => l.includes('192.168.3.157:13080'))).toBe(true)
+    expect(labels.some(l => l.includes('192.168.3.157:13080'))).toBe(false)
+    // Live before cold, the cold row says so in its sub line.
+    const subs = [...v.root.querySelectorAll('.wb-directory .wb-item-sub')].map(n => text(n))
+    expect(subs.some(t => t.startsWith('冷 · '))).toBe(true)
+    expect(labels.indexOf('scout-01')).toBeLessThan(labels.indexOf('cold-02'))
   })
 
   it('defaults to data mode without a board: panels stack in the stage, rail keeps the directory', () => {
@@ -108,9 +113,13 @@ describe('workbench rail sections', () => {
     }
     const rail = v.root.querySelector('.wb-rail')!
     expect(rail.querySelectorAll('.wb-pane').length).toBe(0)
-    // The directory seat stays in the rail in both modes.
-    expect(rail.querySelector('.wb-sec[data-sec="directory"]')).not.toBeNull()
-    expect(rail.querySelector('.wb-directory')).not.toBeNull()
+    // The directory tab stays in the rail in both modes; the moved panes'
+    // tabs step aside so no tab opens an empty panel.
+    expect(rail.querySelector('.wb-tabpanel[data-sec="directory"] .wb-directory')).not.toBeNull()
+    for (const key of ['ledger', 'activity', 'plan', 'hosts']) {
+      expect((rail.querySelector(`.wb-tab[data-sec="${key}"]`) as HTMLElement).hidden).toBe(true)
+    }
+    expect((rail.querySelector('.wb-tab[data-sec="directory"]') as HTMLElement).hidden).toBe(false)
   })
 })
 
@@ -168,16 +177,26 @@ describe('workbench merged stage (canvas mode)', () => {
     expect(v.mode()).toBe('data')
   })
 
-  it('selectTab un-collapses a rail section', () => {
+  it('selectTab switches rail tabs; tabs follow WAI-ARIA and the arrow keys', () => {
     const { v } = boardBench()
     v.update(state)
-    const planSec = v.root.querySelector('.wb-sec[data-sec="plan"]')!
-    expect(planSec.classList.contains('is-collapsed')).toBe(true)
+    const tab = (key: string) => v.root.querySelector(`.wb-tab[data-sec="${key}"]`) as HTMLElement
+    const panel = (key: string) => v.root.querySelector(`.wb-tabpanel[data-sec="${key}"]`) as HTMLElement
     v.selectTab('plan')
-    expect(planSec.classList.contains('is-collapsed')).toBe(false)
-    // Section head click re-collapses.
-    ;(planSec.querySelector('.wb-sec-head') as HTMLElement).click()
-    expect(planSec.classList.contains('is-collapsed')).toBe(true)
+    expect(tab('plan').getAttribute('aria-selected')).toBe('true')
+    expect(panel('plan').hidden).toBe(false)
+    expect(panel('directory').hidden).toBe(true)
+    expect(panel('plan').querySelector('.wb-pane')).not.toBeNull()
+    // Roving tabindex + arrows: → from 规划 wraps to 目录, ← goes back.
+    expect(tab('plan').tabIndex).toBe(0)
+    expect(tab('directory').tabIndex).toBe(-1)
+    tab('plan').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    expect(tab('directory').getAttribute('aria-selected')).toBe('true')
+    tab('directory').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
+    expect(tab('plan').getAttribute('aria-selected')).toBe('true')
+    // A click selects too.
+    tab('hosts').click()
+    expect(panel('hosts').hidden).toBe(false)
   })
 
   it('rail toggle collapses the rail and re-syncs the board view size', () => {
@@ -194,29 +213,33 @@ describe('workbench merged stage (canvas mode)', () => {
 })
 
 describe('workbench panels', () => {
-  it('renders the ledger density strip: stats, archive split, age histogram, team load', () => {
+  it('renders the ledger tiles and the archive verdict bar (2026-10-23 redesign)', () => {
     const { v } = bench()
     v.update(state)
     const pane = v.root.querySelector('.wb-pane')!
-    // Stat chips carry the headline numbers plus their definitions as tooltips.
-    const chips = [...pane.querySelectorAll('.wb-stat')].map(n => ({
-      label: text(n.querySelector('.wb-stat-k')),
-      value: text(n.querySelector('.wb-stat-v')),
+    // Tiles carry the headline numbers plus their definitions as tooltips.
+    const tiles = [...pane.querySelectorAll('.wb-led-tile')].map(n => ({
+      label: text(n.querySelector('.wb-led-tile-k')),
+      value: text(n.querySelector('.wb-led-tile-v')),
       hint: n.getAttribute('title') ?? '',
+      tone: n.classList.contains('is-danger') ? 'danger' : n.classList.contains('is-warn') ? 'warn' : '',
     }))
-    expect(chips.map(c => `${c.label}=${c.value}`)).toEqual([
-      '待回执=2', '陈旧=1', '死信=1', '已归档=12',
-    ])
-    for (const chip of chips) expect(chip.hint.length).toBeGreaterThan(10)
-    // Archive verdict split surfaces when the host sends it.
-    expect(text(pane)).toContain('归档结局')
-    // Age histogram buckets the pending rows (3.7e6ms ≈ 1-6h, 10s ≈ <10m).
-    const bars = [...pane.querySelectorAll('.wb-bar-row')].map(n =>
-      `${text(n.querySelector('.wb-bar-k'))}:${text(n.querySelector('.wb-bar-v'))}`)
-    expect(bars).toEqual(['<10m:1', '10m-1h:0', '1-6h:1', '6-24h:0', '>24h:0'])
-    // Team load ranks the teams holding debt.
-    expect(text(pane)).toContain('债务队 Top2')
-    expect(text(pane)).toContain('dsh/11111111 1')
+    expect(tiles.map(c => `${c.label}=${c.value}`)).toEqual(['待回执=2', '陈旧=1', '死信=1', '已归档=12'])
+    for (const t of tiles) expect(t.hint.length).toBeGreaterThan(10)
+    expect(tiles.map(t => t.tone)).toEqual(['', 'warn', 'danger', ''])
+    // The archive split is one proportional bar with a labelled legend.
+    const bar = pane.querySelector('.wb-led-split-bar')!
+    expect(bar.querySelectorAll('.wb-led-seg').length).toBe(3)
+    expect(bar.getAttribute('aria-label')).toContain('完成 9')
+    expect(text(pane.querySelector('.wb-led-split-legend'))).toContain('放弃 1')
+    // Forensics fold away by default.
+    const forensics = pane.querySelector('details.wb-led-forensics') as HTMLDetailsElement
+    expect(forensics.open).toBe(false)
+    expect(text(forensics)).toContain('claims 368')
+    // The tab badge counts what is owed and turns red on a dead letter.
+    const badge = v.root.querySelector('.wb-tab[data-sec="ledger"] .wb-tab-badge')!
+    expect(text(badge)).toBe('3')
+    expect(badge.classList.contains('is-danger')).toBe(true)
   })
 
   it('gh#20 W-C: the host rail renders one card per peer — lamp, label, link badge, version, and the drill-down opens the peer chat', async () => {
@@ -302,21 +325,23 @@ describe('workbench panels', () => {
     const { v, abandon } = bench()
     v.update(state)
     const pane = v.root.querySelector('.wb-pane')!
-    // Owner signal (2026-10-21): results-first rows — the brief is the
-    // primary copy; task ids live in the muted meta line.
-    const heads = [...pane.querySelectorAll('.wb-row-head')].map(n => text(n))
-    const metaLines = [...pane.querySelectorAll('.wb-row-meta-line')].map(n => text(n))
-    expect(metaLines.some(m => m.includes('direct-aaaaaaaa'))).toBe(true)
-    expect(metaLines.some(m => m.includes('direct-cccccccc'))).toBe(true)
-    expect(metaLines.join('|')).toContain('可结算')
-    expect(metaLines.join('|')).toContain('无回执债')
-    // Exception-driven: the stale pending row (3.7h old) and every dead
-    // letter carry the alert class; the fresh one stays quiet.
-    const alertMetas = [...pane.querySelectorAll('.wb-row-alert .wb-row-meta-line')].map(n => text(n))
-    expect(alertMetas.some(m => m.includes('direct-aaaaaaaa'))).toBe(true)
-    expect(alertMetas.some(m => m.includes('direct-cccccccc'))).toBe(true)
-    expect(alertMetas.some(m => m.includes('direct-bbbbbbbb'))).toBe(false)
-    expect(heads.length).toBeGreaterThan(0)
+    // Results first: the brief heads each card; ids and teams sit in the meta line.
+    const groups = [...pane.querySelectorAll('.wb-led-group')].map(g => ({
+      head: text(g.querySelector('.wb-led-group-head')),
+      tasks: [...g.querySelectorAll('.wb-led-task')].map(n => text(n)),
+    }))
+    // Grouped by what to do: dead letters (red) → stale (amber) → receiptless (muted).
+    expect(groups.map(g => g.head.split(' · ')[0])).toEqual(['死信', '陈旧', '免回执'])
+    expect(groups[0]!.tasks).toEqual(['direct-cccccccc'])
+    expect(groups[1]!.tasks).toEqual(['direct-aaaaaaaa'])
+    expect(groups[2]!.tasks).toEqual(['direct-bbbbbbbb'])
+    const metas = [...pane.querySelectorAll('.wb-led-meta')].map(n => text(n)).join('|')
+    expect(metas).toContain('可结算')
+    expect(metas).toContain('无回执债')
+    // Color only where a hand is needed: dead red, stale amber, receiptless quiet.
+    expect(pane.querySelector('.wb-led-card.is-danger .wb-led-task')!.textContent).toBe('direct-cccccccc')
+    expect(pane.querySelector('.wb-led-card.is-warn .wb-led-task')!.textContent).toBe('direct-aaaaaaaa')
+    expect(pane.querySelector('.wb-led-card.is-muted .wb-led-task')!.textContent).toBe('direct-bbbbbbbb')
     const btn = [...pane.querySelectorAll('button')].find(b => text(b) === '清账')!
     btn.click()
     await vi.waitFor(() => expect(text(btn)).toBe('已清'))
@@ -489,7 +514,8 @@ describe('directory search & filters (0.6.6)', () => {
     expect(labels.length).toBe(1)
     expect(labels[0]!).toContain('remote-host')
     chip('全部').click()
-    expect(visibleLabels(v).length).toBe(5) // 2 sessions + 1 canvas + 1 peer + 1 remote
+    expect(visibleLabels(v).length).toBe(4) // 2 sessions + 1 canvas + 1 remote (peers moved to 主机)
+    expect([...v.root.querySelectorAll('.wb-filter')].map(n => text(n))).toEqual(['全部', '本机', '队', '远端', '日志'])
   })
 
   it('canvas-team badges annotate session and remote rows', () => {
@@ -755,9 +781,14 @@ describe('local log archive section (0.6.12)', () => {
     v.update(state)
     // The listing lands async; the section appears when rows resolve.
     await vi.waitFor(() => {
-      const head = [...v.root.querySelectorAll('.wb-side-head')].map(n => text(n))
+      const head = [...v.root.querySelectorAll('.wb-dir-head')].map(n => text(n))
       expect(head.join('|')).toContain('本机日志 · 1')
     })
+    // Day bucket + relative time instead of a bare size.
+    expect(text(v.root.querySelector('.wb-dir-day'))).toBe('今天')
+    const logRow = [...v.root.querySelectorAll('.wb-item')].find(n => text(n).includes('888-archived'))!
+    expect(text(logRow.querySelector('.wb-item-sub'))).toMatch(/^(刚刚|\d+ (分钟|小时|天)前) · [\d.]+ (B|KB|MB)$/)
+    expect(logRow.classList.contains('is-untitled')).toBe(true)
     // The network row session-11111111-aaaa is deduplicated: only the
     // archived session-99998888-archived remains.
     const rows = [...v.root.querySelectorAll('.wb-item-label')].map(n => text(n))
@@ -770,18 +801,25 @@ describe('local log archive section (0.6.12)', () => {
     // A read-only log: no composer, an explicit read-only footer instead.
     expect(v.root.querySelector('.wb-chat .wb-dispatch-form')).toBeNull()
     expect(text(v.root.querySelector('.wb-chat-readonly'))).toContain('只读日志')
+    // Opening it taught the directory its title (first user line).
+    await vi.waitFor(() => {
+      const titled = [...v.root.querySelectorAll('.wb-directory .wb-item')].find(n => text(n).includes('检查默认 profile 插件'))
+      expect(titled).toBeDefined()
+      expect(titled!.classList.contains('is-untitled')).toBe(false)
+    })
   })
 
   it('counts the archive in the directory header and hides the section without the dep', async () => {
     const { v } = bench()
     v.update(state)
-    await vi.waitFor(() => expect(text(v.root.querySelector('.wb-sec[data-sec="directory"] .wb-sec-count'))).toContain('档'))
+    await vi.waitFor(() => expect(text(v.root.querySelector('.wb-directory')).includes('本机日志 · 1')).toBe(true))
+    expect(text(v.root.querySelector('.wb-tab[data-sec="directory"] .wb-tab-badge'))).toBe('1/2')
     const bare = createWorkbench({ now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(), canvasOp: vi.fn(async () => true), sessionLog: vi.fn(async () => ({ ok: true, messages: [] })) })
     document.body.appendChild(bare.root)
     bare.update(state)
     await Promise.resolve()
     await Promise.resolve()
-    const heads = [...bare.root.querySelectorAll('.wb-side-head')].map(n => text(n))
+    const heads = [...bare.root.querySelectorAll('.wb-dir-head')].map(n => text(n))
     expect(heads.join('|')).not.toContain('本机日志')
   })
 })
