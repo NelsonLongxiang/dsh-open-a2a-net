@@ -215,17 +215,20 @@ verified OriginClaim envelope (`X-A2A-Caller` / `-Url` / `-Ts` / `-Sig`,
 signed with your own card key); see `docs/protocol/delivery-origin-auth.md`
 and the rest of `docs/protocol/` for the envelope details.
 
-**Which artifact to build against.** The subpath exports landed in commit
-`9cb3852`. Identify them by commit, not by version: 0.6.21 builds exist both
-with and without them. The public npm package behind the badge above
-(`latest`: 0.5.15) predates them, and it also predates the admission rules and
-the OriginClaim envelope above. Importing these subpaths from it fails with
-`ERR_PACKAGE_PATH_NOT_EXPORTED`. Stable releases go out through the
-release gate (`docs/release-gate.md`), not to public npm. Until a release
-carrying the subpaths reaches the registry you install from, build the
-package from a pinned commit and depend on the tarball:
+**Which artifact to build against.** npm direct install already includes the
+four subpaths: releases from 0.6.25 (badge `latest`) carry them, so
+`npm install @nelsonlongxiang/dsh-open-a2a-net` works out of the box —
+see `examples/external-node/` for a runnable external-node example that
+exercises all four subpaths against an embedded mock peer. The subpath
+exports landed in commit `9cb3852`; versions before that (public 0.5.15
+included) predate the admission rules and the OriginClaim envelope above,
+and importing the subpaths from them fails with
+`ERR_PACKAGE_PATH_NOT_EXPORTED` — the historical recipe (pin a commit,
+`pnpm build`, `npm pack`, depend on the tarball) survives below for
+pre-0.6.25 deployments only:
 
 ```bash
+# HISTORICAL (0.5.15 and earlier): build the package from a pinned commit
 git clone https://github.com/NelsonLongxiang/dsh-open-a2a-net && cd dsh-open-a2a-net
 git checkout <commit>              # pin one; any commit at or after 9cb3852 exports the subpaths
 pnpm install --frozen-lockfile     # pnpm version from package.json "packageManager"
@@ -235,8 +238,9 @@ npm pack                           # → nelsonlongxiang-dsh-open-a2a-net-<versi
 npm install /path/to/nelsonlongxiang-dsh-open-a2a-net-<version>.tgz
 ```
 
-Installing that tarball pulls no `@deepseek-ai/*` package: the DSH peers are
-optional and the four subpaths import only each other and `node:crypto`.
+Installing the package (npm or the historical tarball) pulls no
+`@deepseek-ai/*` package: the DSH peers are optional and the four
+subpaths import only each other and `node:crypto`.
 
 ## License
 

@@ -125,9 +125,10 @@ import { A2aClient } from '@nelsonlongxiang/dsh-open-a2a-net/a2a-client'
 
 外部节点需要自己实现三样东西：签名卡片、`GET /.well-known/agent-card.json` 和 `POST /a2a/direct`，这些模块编码的线上格式就是契约。匿名取卡只能拿到最小发现面。要拿完整卡片，必须带上通过验证的 OriginClaim 信封，即用你自己的卡片密钥签名的 `X-A2A-Caller` / `-Url` / `-Ts` / `-Sig`，细节见 `docs/protocol/delivery-origin-auth.md` 及 `docs/protocol/` 下其余文档。
 
-**按哪个产物实现。** 子路径导出随提交 `9cb3852` 落地。请按提交认，不要按版本号认：同为 0.6.21 的构建，有的带这批导出，有的不带。上方徽章指向的公开 npm 包（`latest` 为 0.5.15）早于这批导出，也早于上述准入规则和 OriginClaim 信封，从它引入这些子路径会报 `ERR_PACKAGE_PATH_NOT_EXPORTED`。正式版按发版闸门（`docs/release-gate.md`）发布，不发到公开 npm。在带这些子路径的正式版进入你所用的仓库之前，请从钉住的提交自行构建，再依赖打出的 tarball：
+**按哪个产物实现。** npm 直装已含四个子路径：自 0.6.25 起（徽章 `latest`）的正式版带齐这批导出，`npm install @nelsonlongxiang/dsh-open-a2a-net` 开箱即用——`examples/external-node/` 有一个可对内嵌 mock peer 跑通全部四个子路径的外部节点参考实现。子路径导出随提交 `9cb3852` 落地；更早的版本（含公开 0.5.15）早于这批导出，也早于上述准入规则和 OriginClaim 信封，从它们引入会报 `ERR_PACKAGE_PATH_NOT_EXPORTED`——历史上的做法（钉提交、`pnpm build`、`npm pack`、依赖 tarball）仅留作 0.6.25 之前部署的历史注：
 
 ```bash
+# 历史做法（0.5.15 及更早）：从钉住的提交自行构建
 git clone https://github.com/NelsonLongxiang/dsh-open-a2a-net && cd dsh-open-a2a-net
 git checkout <commit>              # 钉一个提交；9cb3852 及之后的提交都导出这四个子路径
 pnpm install --frozen-lockfile     # pnpm 版本以 package.json 的 "packageManager" 为准
@@ -137,7 +138,7 @@ npm pack                           # → nelsonlongxiang-dsh-open-a2a-net-<versi
 npm install /path/to/nelsonlongxiang-dsh-open-a2a-net-<version>.tgz
 ```
 
-安装这个 tarball 不会拉入任何 `@deepseek-ai/*` 包：DSH peer 依赖都是可选的，四个子路径只互相引用，外加 `node:crypto`。
+安装这个包（npm 或历史 tarball）不会拉入任何 `@deepseek-ai/*` 包：DSH peer 依赖都是可选的，四个子路径只互相引用，外加 `node:crypto`。
 
 ## 许可证
 
