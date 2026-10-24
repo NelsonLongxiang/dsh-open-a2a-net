@@ -1324,7 +1324,15 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
           if (team.name === '' || localNames.has(team.name)) continue
           const memberIds = team.members.map(memberBoardId).filter(id => model.getNode(id) !== undefined)
           const saved = layoutDoc?.frames?.[team.name]
-          model.setFrame(team.name, saved !== undefined ? { x: saved.x, y: saved.y, w: saved.w, h: saved.h } : { x: 200 + (slot % 4) * 280, y: 940 + Math.floor(slot / 4) * 160, w: 250, h: 130 })
+          // gh#44 (owner: frame position/size never sticks): the LOCAL-team
+          // path keeps an existing frame's live rect ("live rect wins" — a
+          // poll must not snap a frame the user just dragged, the save loop
+          // persists it a beat later). Remote frames re-set unconditionally
+          // every poll, so every drag snapped back before the save landed.
+          // Same contract here: only place the frame when it is absent.
+          if (model.getFrame(team.name) === undefined) {
+            model.setFrame(team.name, saved !== undefined ? { x: saved.x, y: saved.y, w: saved.w, h: saved.h } : { x: 200 + (slot % 4) * 280, y: 940 + Math.floor(slot / 4) * 160, w: 250, h: 130 })
+          }
           model.setTeamMembers(team.name, memberIds)
           remoteFrames.set(team.name, row.url)
           slot += 1
