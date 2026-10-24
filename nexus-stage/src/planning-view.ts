@@ -1270,6 +1270,28 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     for (const id of model.nodeIds()) {
       if (id.startsWith('member-') && !memberSeen.has(id)) model.removeNode(id)
     }
+    // gh#42 (owner report: dragged a remote peer into base, no edge): team
+    // edges derive from NODE memberships, but remote cards carried hardcoded
+    // empty memberships — the server truth (base contains dsh/d659a8f9)
+    // never re-attached after a poll or reload. Re-attach here: every local
+    // team's remote member handles resolve onto their cards (member- card
+    // preferred, the peer HOST card as fallback), in-flight teams excluded.
+    const handleToNode = new Map<string, string>()
+    for (const n of model.allNodes()) {
+      if (n.remote !== true || n.remoteHandle === undefined || n.remoteHandle === '') continue
+      if (!handleToNode.has(n.remoteHandle) || n.id.startsWith('member-')) handleToNode.set(n.remoteHandle, n.id)
+    }
+    for (const team of input.teams) {
+      if (pendingTeams.has(team.name)) continue
+      const resolved: string[] = []
+      for (const m of team.members) {
+        const id = handleToNode.get(m.id) ?? m.id
+        if (model.getNode(id) !== undefined) resolved.push(id)
+      }
+      const current = [...model.teamMemberIds(team.name)].sort().join('|')
+      const next = [...resolved].sort().join('|')
+      if (current !== next) model.setTeamMembers(team.name, resolved)
+    }
     // gh#41 fleet planning: the peers' published canvas org renders as
     // REMOTE team frames — the owner reads the other side's grouping from
     // ANY node and regulates it in place. Members attach as board
