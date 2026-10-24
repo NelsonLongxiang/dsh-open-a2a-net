@@ -4890,7 +4890,7 @@ ${message}`
       + 'by keyword (case-insensitive substring over team name, title, excerpt, origin, or workspace) — searching '
       + 'discovers one extra referral hop within the call. Canvas teams (<team>/canvas/<name>, user-composed multi-member groups) '
       + 'list as local rows; routing to one resolves the first live member or wakes the first cold one. '
-      + 'While teamScopeInfo is on (default), peer rows serve only teams joined by this host\'s nodes — [this host] rows always show and the note field explains the scope. '
+      + 'While teamScopeInfo is on (default), the listing follows YOUR collaboration circle: remote rows serve only teams joined by this host\'s nodes, and [this host] session rows show only your own row, your canvas teams, and sessions sharing a team with you — an exposed node id invites mis-routing, so the directory does not advertise strangers. The owner\'s GUI panel keeps the full plane; teamScopeInfo: false opens it for tools too. '
       + 'Call this before a2a_route to pick a target team.',
     parameters: {
       query: { type: 'string', description: 'Optional keyword filter (case-insensitive substring over team/name/description).' },
@@ -4947,8 +4947,38 @@ ${message}`
         const joined = joinedTeamScope()
         const remoteBefore = teams.filter(row => row.local !== true).length
         teams = teams.filter(row => row.local === true || joined.has(row.team) || (row.teams ?? []).some(name => joined.has(name)))
-        const hidden = remoteBefore - teams.filter(row => row.local !== true).length
-        note = `teamScopeInfo on: ${String(joined.size)} joined team${joined.size === 1 ? '' : 's'} on this host — ${String(hidden)} remote row${hidden === 1 ? '' : 's'} outside the joined scope withheld ([this host] rows always show). To widen the scope: the owner adds the EXACT team name to teamJoinAllowlist (patterns carry no mint rights, gh#11) and a session declares membership with a2a_team_join, or the owner sets teamScopeInfo: false for the open plane`
+        const hiddenRemote = remoteBefore - teams.filter(row => row.local !== true).length
+        // gh#39 (owner ruling: the listing ADVERTISES targets — an exposed
+        // node id invites a session with no collaboration relationship to
+        // route at it): [this host] session rows follow the CALLER's
+        // collaboration circle. The host's own GUI/panel keeps the full
+        // plane (the owner's eyes); the model-tool face is scoped.
+        let hiddenLocal = 0
+        const callerAgent = exec.agent
+        if (callerAgent !== undefined) {
+          const callerId = String(callerAgent.id)
+          const ownHandle = sessionTeamOf(callerAgent)
+          const myCanvas = new Set(canvasStore.teamsOf(callerId))
+          const myRoster = new Set(teamMemberships.teamsOf(callerId))
+          const before = teams.length
+          teams = teams.filter(row => {
+            if (row.local !== true) return true
+            if (row.team === config.team || row.team === ownHandle) return true
+            if (row.team.startsWith(`${config.team}/canvas/`)) return myCanvas.has(row.name)
+            // Another session's team row: visible only when we share a
+            // canvas or a declared team with that session.
+            const targetId8 = row.team.slice(config.team.length + 1)
+            const target = [...sessionNodes.values()].find(agent => id8(String(agent.id)) === targetId8)
+            if (target === undefined) return true // unresolvable: keep (host fact)
+            const targetId = String(target.id)
+            const shares = [...canvasStore.teamsOf(targetId)].some(name => myCanvas.has(name))
+              || [...teamMemberships.teamsOf(targetId)].some(name => myRoster.has(name))
+            return shares
+          })
+          hiddenLocal = before - teams.length
+        }
+        const hidden = hiddenRemote + hiddenLocal
+        note = `teamScopeInfo on: ${String(joined.size)} joined team${joined.size === 1 ? '' : 's'} on this host — ${String(hidden)} row${hidden === 1 ? '' : 's'} outside your collaboration circle withheld (${String(hiddenRemote)} remote, ${String(hiddenLocal)} local [this host] session rows; the process team, your own row, and your canvas teams always show). To widen the scope: a human composes the shared canvas team (the board drag), the owner adds the EXACT team name to teamJoinAllowlist (patterns carry no mint rights, gh#11), or the owner sets teamScopeInfo: false for the open plane`
       }
       if (query === '') return { ok: true, query: '', teams, ...(note !== undefined ? { note } : {}) }
       const matches = (team: DirectoryTeamRow): boolean =>
