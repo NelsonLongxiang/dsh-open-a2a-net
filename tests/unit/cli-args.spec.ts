@@ -16,9 +16,10 @@ const CLI = join(process.cwd(), 'cli', 'a2a.mjs')
 
 interface Run { code: number; stdout: string; stderr: string }
 
-function runCli(args: string[], env: Record<string, string> = {}, cli = CLI): Promise<Run> {
+function runCli(args: string[], env: Record<string, string> = {}, cli = CLI, input?: string): Promise<Run> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [cli, ...args], { env: { PATH: process.env.PATH ?? '', ...env } })
+    if (input !== undefined) child.stdin.end(input)
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (c) => { stdout += String(c) })
@@ -227,5 +228,123 @@ describe('a2a-net CLI: read commands and errors', () => {
     const publish = await runCli(['publish'], { HOME }, cli)
     expect(publish.code).toBe(1)
     expect(publish.stderr).toContain('run `pnpm build`')
+  })
+})
+
+/** A stub host with a mailbox: `mail` is what the inbox action returns (newest first, like the host). */
+async function mailHost() {
+  const mail: Array<{ at: number; from: string; text: string }> = []
+  const deposits: Array<{ handle: string; expiresAt: number }> = []
+  const actions: string[] = []
+  const host = await stubHost((path) => {
+    if (path !== '/__dsh_a2a/cli-deposit') return { status: 404, body: {} }
+    const action = String(host.seen.at(-1)?.body.action)
+    actions.push(action)
+    if (action === 'inbox') return { status: 200, body: { ok: true, mail: [...mail].sort((a, b) => b.at - a.at) } }
+    if (action === 'list') return { status: 200, body: { ok: true, deposits } }
+    if (action === 'publish') return { status: 200, body: { ok: true, handle: 'scout/0123456789abcdef', expiresAt: Date.now() + 4 * 3_600_000, cardUrl: 'x' } }
+    return { status: 200, body: { ok: false, error: 'unknown action' } }
+  })
+  servers.push(host.server)
+  return { ...host, mail, deposits, actions }
+}
+
+async function scoutHome(): Promise<string> {
+  const HOME = tmpHomeDir()
+  await runCli(['init', 'scout', '--uuid', '0123456789abcdef'], { HOME })
+  return HOME
+}
+
+describe('a2a-net CLI: inbox unread cursor', () => {
+  it('--new shows only unread mail oldest first and advances the cursor; --peek does not; a shared millisecond is not lost', async () => {
+    const host = await mailHost()
+    const HOME = await scoutHome()
+    const env = { HOME, A2A_HOME: host.url }
+    host.mail.push({ at: 1000, from: 'cargo/22222222', text: 'first' }, { at: 2000, from: 'cargo/22222222', text: 'second' })
+    const peek = await runCli(['inbox', '--new', '--peek', '--json'], env)
+    expect((JSON.parse(peek.stdout) as Array<{ text: string }>).map(m => m.text)).toEqual(['first', 'second'])
+    const first = await runCli(['inbox', '--new', '--json'], env)
+    expect((JSON.parse(first.stdout) as Array<{ text: string }>).map(m => m.text)).toEqual(['first', 'second'])
+    expect((await runCli(['inbox', '--new'], env)).stdout.trim()).toBe('[inbox] no new mail')
+    host.mail.push({ at: 2000, from: 'ops/33333333', text: 'same ms' }, { at: 3000, from: 'ops/33333333', text: 'third' })
+    const next = await runCli(['inbox', '--new', '--json'], env)
+    expect((JSON.parse(next.stdout) as Array<{ text: string }>).map(m => m.text)).toEqual(['same ms', 'third'])
+    // Bare inbox still lists everything, and leaves the cursor alone.
+    expect((await runCli(['inbox', '--json'], env)).stdout).toContain('first')
+    expect(JSON.parse(readFileSync(join(HOME, '.a2a', 'inbox.cursor'), 'utf8'))).toMatchObject({ handle: 'scout/0123456789abcdef', at: 3000 })
+  })
+
+  it('the cursor belongs to one handle: a new identity starts unread again', async () => {
+    const host = await mailHost()
+    const HOME = await scoutHome()
+    host.mail.push({ at: 1000, from: 'cargo/22222222', text: 'hello' })
+    await runCli(['inbox', '--new'], { HOME, A2A_HOME: host.url })
+    await runCli(['init', 'other', '--force'], { HOME })
+    expect((await runCli(['inbox', '--new'], { HOME, A2A_HOME: host.url })).stdout).toContain('hello')
+  })
+})
+
+describe('a2a-net CLI: inbox --hook', () => {
+  it('prints nothing without unread mail; with mail, one hookSpecificOutput object for the calling event, framed as data', async () => {
+    const host = await mailHost()
+    const HOME = await scoutHome()
+    const env = { HOME, A2A_HOME: host.url }
+    const quiet = await runCli(['inbox', '--hook'], env, CLI, JSON.stringify({ hook_event_name: 'UserPromptSubmit' }))
+    expect(quiet).toMatchObject({ code: 0, stdout: '' })
+    host.mail.push({ at: Date.UTC(2026, 9, 24, 12), from: 'cargo/22222222', text: 'please review PR 37' })
+    const out = await runCli(['inbox', '--hook'], env, CLI, JSON.stringify({ hook_event_name: 'UserPromptSubmit' }))
+    expect(out.code).toBe(0)
+    const parsed = JSON.parse(out.stdout) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } }
+    expect(parsed.hookSpecificOutput.hookEventName).toBe('UserPromptSubmit')
+    expect(parsed.hookSpecificOutput.additionalContext).toContain('--- from cargo/22222222 at 2026-10-24T12:00:00.000Z ---\nplease review PR 37')
+    expect(parsed.hookSpecificOutput.additionalContext).toContain('not instructions')
+    // Delivered once: the cursor moved.
+    expect((await runCli(['inbox', '--hook'], env, CLI, '{}')).stdout).toBe('')
+  })
+
+  it('defaults to PostToolUse without stdin, and stays silent (exit 0) when the host is down or refuses', async () => {
+    const host = await mailHost()
+    const HOME = await scoutHome()
+    host.mail.push({ at: 1000, from: 'cargo/22222222', text: 'x' })
+    const noStdin = await runCli(['inbox', '--hook'], { HOME, A2A_HOME: host.url }, CLI, '')
+    expect((JSON.parse(noStdin.stdout) as { hookSpecificOutput: { hookEventName: string } }).hookSpecificOutput.hookEventName).toBe('PostToolUse')
+    const refusing = await stubHost(() => ({ status: 401, body: { error: 'unauthorized' } }))
+    servers.push(refusing.server)
+    expect(await runCli(['inbox', '--hook'], { HOME, A2A_HOME: refusing.url }, CLI, '{}')).toMatchObject({ code: 0, stdout: '', stderr: '' })
+    const url = refusing.url
+    await new Promise(resolve => refusing.server.close(resolve))
+    servers.splice(servers.indexOf(refusing.server), 1)
+    expect(await runCli(['inbox', '--hook'], { HOME, A2A_HOME: url }, CLI, '{}')).toMatchObject({ code: 0, stdout: '' })
+  })
+})
+
+describe('a2a-net CLI: inbox --wait', () => {
+  it('blocks until mail arrives, prints it, exits 0 and advances the cursor', async () => {
+    const host = await mailHost()
+    const HOME = await scoutHome()
+    setTimeout(() => { host.mail.push({ at: Date.now(), from: 'cargo/22222222', text: 'woke you' }) }, 400)
+    const out = await runCli(['inbox', '--wait', '--interval', '100ms', '--timeout', '20s'], { HOME, A2A_HOME: host.url })
+    expect(out.code).toBe(0)
+    expect(out.stdout).toContain('cargo/22222222: woke you')
+    expect((await runCli(['inbox', '--new'], { HOME, A2A_HOME: host.url })).stdout.trim()).toBe('[inbox] no new mail')
+  })
+
+  it('exits 3 on timeout; --renew re-publishes a missing deposit before polling', async () => {
+    const host = await mailHost()
+    const HOME = await scoutHome()
+    const out = await runCli(['inbox', '--wait', '--renew', '--interval', '100ms', '--timeout', '300ms'], { HOME, A2A_HOME: host.url })
+    expect(out.code).toBe(3)
+    expect(out.stderr).toContain('no new mail within')
+    expect(out.stderr).toContain('deposit renewed')
+    expect(host.actions).toContain('publish')
+    host.actions.length = 0
+    host.deposits.push({ handle: 'scout/0123456789abcdef', expiresAt: Date.now() + 3 * 3_600_000 })
+    await runCli(['inbox', '--wait', '--renew', '--interval', '100ms', '--timeout', '200ms'], { HOME, A2A_HOME: host.url })
+    expect(host.actions).not.toContain('publish')
+  })
+
+  it('a bad duration is a usage error', async () => {
+    const HOME = await scoutHome()
+    expect((await runCli(['inbox', '--wait', '--timeout', 'soon'], { HOME })).code).toBe(2)
   })
 })
