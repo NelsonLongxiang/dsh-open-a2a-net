@@ -1305,9 +1305,24 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       let slot = 0
       const localNames = new Set(input.teams.map(t => t.name))
       for (const row of input.peerOrg) {
+        // The peer's zone comes from its directory rows ('dsh/xxxx' →
+        // 'dsh'); the org's members are stored verbatim — LOCAL members as
+        // session ids, remote members as zone/id8 handles. Both must
+        // resolve onto that host's session cards: id-form members become
+        // `member-<zone>-<id8>` (id8 = strip 'session-' prefix, first 8
+        // chars — the repo's id8 derivation), handle members sanitize
+        // directly. The old sanitize-only pass misresolved every local
+        // member (owner: 数据对不上).
+        const peerZone = input.remoteTeams?.find(r => r.via === row.url)?.team.split('/')[0] ?? 'dsh'
+        const id8of = (id: string): string => id.replace(/^session-/, '').slice(0, 8)
+        // The server now canonicalizes org members to handles (gh#41 wire
+        // form); the id-form branch stays as the defensive path for peers
+        // on an older build that still publish raw session ids.
+        const memberBoardId = (m: string): string =>
+          m.includes('/') ? `member-${m.replace(/[^a-z0-9-]/gi, '-')}` : `member-${peerZone}-${id8of(m)}`
         for (const team of row.org) {
           if (team.name === '' || localNames.has(team.name)) continue
-          const memberIds = team.members.map(m => `member-${m.replace(/[^a-z0-9-]/gi, '-')}`).filter(id => model.getNode(id) !== undefined)
+          const memberIds = team.members.map(memberBoardId).filter(id => model.getNode(id) !== undefined)
           const saved = layoutDoc?.frames?.[team.name]
           model.setFrame(team.name, saved !== undefined ? { x: saved.x, y: saved.y, w: saved.w, h: saved.h } : { x: 200 + (slot % 4) * 280, y: 940 + Math.floor(slot / 4) * 160, w: 250, h: 130 })
           model.setTeamMembers(team.name, memberIds)

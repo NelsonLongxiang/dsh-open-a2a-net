@@ -2562,8 +2562,11 @@ const reportLoopRing = new Map<string, number[]>()
             // regulates): the host's own canvas org rides the FULL card as a
             // served-fresh unsigned field — linked peers render each other's
             // team structure on the planning board; the minimal face omits
-            // it exactly like sessionTeams.
-            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: canvasStore.membersOf(name) })) } : {}),
+            // it exactly like sessionTeams. Members are CANONICALIZED to
+            // zone/id8 handles (local session ids translate to the node's
+            // session-team handle) — one form on the wire, so readers never
+            // mix id/handle shapes (owner: 数据对不上).
+            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: canvasStore.membersOf(name).map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) })) } : {}),
             ...(named && lanIp !== '' ? { lanIp } : {}),
             ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}),
             description: `A2A node exposing team ${config.team}${named ? '' : ' (minimal card — OriginClaim envelope required for the full card: X-A2A-Caller/-Url/-Ts/-Sig signed with your card key)'}`,
