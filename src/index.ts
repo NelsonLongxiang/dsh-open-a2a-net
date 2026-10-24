@@ -2140,8 +2140,15 @@ const reportLoopRing = new Map<string, number[]>()
                 body: JSON.stringify({ op: opV, name: nameV, ...(opV !== 'create' ? { id: idV } : {}) }),
                 signal: AbortSignal.timeout(15_000),
               })
-              const out = await reply.json() as Record<string, unknown>
-              send(JSON.stringify(out))
+              const raw = await reply.text()
+              try {
+                const out = JSON.parse(raw) as Record<string, unknown>
+                send(JSON.stringify(out))
+              } catch {
+                // A non-JSON reply is a peer WITHOUT the canvas-op face (a
+                // pre-gh41 build) or a proxy page — name the shape honestly.
+                send(JSON.stringify({ ok: false, error: `peer ${peerUrl} answered HTTP ${String(reply.status)} without JSON — it likely runs a build without the fleet canvas-op face (pre gh#41); upgrade it, or regulate its teams on that host directly` }))
+              }
             } catch (error) {
               send(JSON.stringify({ ok: false, error: `fleet op failed: ${error instanceof Error ? error.message : String(error)}` }))
             }
