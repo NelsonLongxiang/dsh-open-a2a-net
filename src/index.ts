@@ -4011,7 +4011,16 @@ ${message}`
           } else {
             dispatchLastAt.set(client, now)
             try {
-              result = await routeTrunk({ team: target, message, async: true }, undefined, AbortSignal.timeout(20_000), config.team)
+              // gh#36: a quick dispatch rides a LIVE joined session's node
+              // team as its caller face when one exists — receipts then
+              // route back to that session and the owner SEES the answer in
+              // its chat drawer. Bare-zone callers (the old shape) cannot
+              // receive: the receipt ladder failed every lane and the owner
+              // read it as 派发异常没有收信. No live session keeps the
+              // host face (the reply's reconciliation note still applies).
+              const liveJoined = joinedSessions.list().find(id => liveRoots.has(id))
+              const hostFace = liveJoined !== undefined ? `${config.team}/${id8(liveJoined)}` : config.team
+              result = await routeTrunk({ team: target, message, async: true }, undefined, AbortSignal.timeout(20_000), hostFace)
             } catch (error) {
               result = { ok: false, error: `dispatch failed: ${error instanceof Error ? error.message : String(error)}` }
             }
