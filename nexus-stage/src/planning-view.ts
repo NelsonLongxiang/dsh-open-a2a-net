@@ -383,18 +383,24 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       el.classList.toggle('selected', model.isSelected(n.id))
       el.setAttribute('aria-selected', String(model.isSelected(n.id)))
       const host = n.id.slice('peer-'.length)
-      const nmText = n.remote === true ? host : displayName(n)
+      // gh#38: member cards show their display NAME as the title (the whole
+      // point is picking a person); peer HOST cards keep the host spelling.
+      const nmText = n.id.startsWith('member-')
+        ? (n.name !== undefined && n.name !== '' ? n.name : n.team)
+        : n.remote === true ? host : displayName(n)
       const nmEl = el.querySelector<HTMLElement>('.nm-text')!
       if (nmEl.textContent !== nmText) nmEl.textContent = nmText
       const subEl = el.querySelector<HTMLElement>('.sub')!
       const subBase = n.team + (n.name !== undefined && n.name !== '' ? ' · ' + n.name : '')
       // When the title fell back to the team label the sub line would repeat
       // it verbatim; collapse to the cross-team suffix alone in that case.
-      const subText = n.remote === true
-        ? remoteSubText(host)
-        : (subBase === nmText ? '' : subBase)
-          + (n.memberships.length > 1 ? ` · 跨队×${n.memberships.length}` : '')
-          + (n.teams !== undefined && n.teams.length > 0 ? ` · 网络队×${n.teams.length}` : '')
+      const subText = n.id.startsWith('member-')
+        ? n.team
+        : n.remote === true
+          ? remoteSubText(host)
+          : (subBase === nmText ? '' : subBase)
+            + (n.memberships.length > 1 ? ` · 跨队×${n.memberships.length}` : '')
+            + (n.teams !== undefined && n.teams.length > 0 ? ` · 网络队×${n.teams.length}` : '')
       if (subEl.textContent !== subText) subEl.textContent = subText
       const prioEl = el.querySelector<HTMLElement>('.prio')!
       if (n.remote === true) {
@@ -551,7 +557,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       const mapIds = (ids: readonly string[]): string[] => {
         const out: string[] = []
         for (const id of ids) {
-          if (!id.startsWith('peer-')) { out.push(id); continue }
+          // Both remote card families translate to their zone/id8 handle
+          // (gh#38: member- cards join teams like peer- cards do).
+          if (!id.startsWith('peer-') && !id.startsWith('member-')) { out.push(id); continue }
           const handle = model.getNode(id)?.remoteHandle
           if (handle !== undefined && handle !== '') out.push(handle)
         }
@@ -572,7 +580,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     if (a.type === 'add-member' || a.type === 'remove-member' || a.type === 'reorder' || a.type === 'create-team') {
       const ids = a.type === 'reorder' ? a.ops.map(op => op.id) : [...a.ids]
       for (const id of ids) {
-        if (id === '' || id.startsWith('peer-')) continue
+        if (id === '' || id.startsWith('peer-') || id.startsWith('member-')) continue
         if (model.getNode(id) !== undefined) continue
         const s = lastSessions.find(row => row.id === id)
         if (s === undefined) continue
@@ -1178,7 +1186,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       }
     }
     for (const id of model.nodeIds()) {
-      if (!seen.has(id) && !id.startsWith('peer-')) model.removeNode(id)
+      // peer- and member- cards are reconciled by their own blocks below.
+      if (!seen.has(id) && !id.startsWith('peer-') && !id.startsWith('member-')) model.removeNode(id)
     }
 
     // Peer nodes (v1 ruling): same model pipeline as sessions, `remote` flag
@@ -1221,6 +1230,36 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
     for (const id of model.nodeIds()) {
       if (id.startsWith('peer-') && !peerSeen.has(id)) model.removeNode(id)
+    }
+    // gh#38 (owner ruling 「统一到画布里面拖拽」): every remote session-team
+    // HANDLE renders as its own draggable card, stacked beside its host's
+    // peer card — pulling a specific remote member into a local team is a
+    // plain drag (no picker, no hand-typed handle). Host cards stay for
+    // federation context; the member cards carry the actual join gesture.
+    const memberSeen = new Set<string>()
+    for (const [host, rows] of lastRemoteTeams) {
+      const hostNode = model.allNodes().find(n => n.remote === true && peerHostOf(n.peerUrl ?? '') === host && !n.id.startsWith('member-'))
+      const baseX = (hostNode?.x ?? 400) + 190
+      let y = hostNode?.y ?? 0
+      for (const row of rows) {
+        if (!row.team.includes('/')) continue
+        const id = `member-${row.team.replace(/[^a-z0-9-]/gi, '-')}`
+        if (memberSeen.has(id)) continue
+        memberSeen.add(id)
+        const saved = layoutDoc?.nodes[id]
+        const existing = model.getNode(id)
+        const pos = existing !== undefined ? { x: existing.x, y: existing.y } : saved !== undefined ? { x: saved.x, y: saved.y } : { x: baseX, y }
+        y += 92
+        model.upsertNode({
+          id, x: pos.x, y: pos.y,
+          label: row.team, team: row.team, name: row.name !== undefined && row.name !== '' ? row.name : row.team,
+          remoteHandle: row.team,
+          live: true, remote: true, memberships: [],
+        })
+      }
+    }
+    for (const id of model.nodeIds()) {
+      if (id.startsWith('member-') && !memberSeen.has(id)) model.removeNode(id)
     }
     // gh#20 W-B: the server echoes cross-host members as zone/id8 handles —
     // map each handle back onto the peer node that carries it, so the
