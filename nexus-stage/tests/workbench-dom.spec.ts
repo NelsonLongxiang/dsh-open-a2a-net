@@ -57,7 +57,12 @@ const state: StateBody = {
     { id: 'nel157/a1b2c3d4', team: 'nel157/a1b2c3d4', remote: true },
   ] }] },
   peers: [{ url: 'http://192.168.3.157:13080', score: 687700 }],
-  remote: [{ team: 'dsh-host-ca0c0a8d', name: 'remote-host', origin: 'node 192.168.3.157', via: 'http://192.168.3.157:13080', canvasTeams: ['dsh/canvas/ygl'] }],
+  remote: [
+    { team: 'dsh-host-ca0c0a8d', name: 'remote-host', origin: 'node 192.168.3.157', via: 'http://192.168.3.157:13080', canvasTeams: ['dsh/canvas/ygl'] },
+    // gh#37: a zone/id8 HANDLE row (the only addable remote member shape);
+    // the bare host row above must NOT appear in the member picker.
+    { team: 'nel85/9abc1234', name: '测试席-远端', origin: 'node 192.168.3.85', via: 'http://192.168.3.85:13080' },
+  ],
   activity: [
     { ts: NOW - 60_000, dir: 'out', team: 'dsh/11111111', peer: '192.168.3.157:13080', ok: true },
     { ts: NOW - 120_000, dir: 'in', team: 'dsh/22222222', peer: '192.168.3.157:13080', ok: false },
@@ -87,7 +92,7 @@ describe('workbench rail sections', () => {
     expect(heads.join('|')).toContain('本机会话 · 2')
     expect(heads.join('|')).toContain('1 在线 · 1 冷')
     expect(heads.join('|')).toContain('画布队 · 1')
-    expect(heads.join('|')).toContain('远端节点 · 1')
+    expect(heads.join('|')).toContain('远端节点 · 2')
     // 2026-10-23: the directory listed peer hosts twice (Peers + host rail).
     expect(heads.join('|')).not.toContain('Peers')
     const labels = [...v.root.querySelectorAll('.wb-directory .wb-item-label')].map(n => text(n))
@@ -544,10 +549,11 @@ describe('directory search & filters (0.6.6)', () => {
     expect(chip('本机').classList.contains('is-active')).toBe(true)
     chip('远端').click()
     labels = visibleLabels(v)
-    expect(labels.length).toBe(1)
-    expect(labels[0]!).toContain('remote-host')
+    expect(labels.length).toBe(2) // gh#37 fixture: the bare host row + the handle row
+    expect(labels.some(l => l.includes('remote-host'))).toBe(true)
+    expect(labels.some(l => l.includes('测试席-远端'))).toBe(true)
     chip('全部').click()
-    expect(visibleLabels(v).length).toBe(4) // 2 sessions + 1 canvas + 1 remote (peers moved to 主机)
+    expect(visibleLabels(v).length).toBe(5) // 2 sessions + 1 canvas + 2 remote (peers moved to 主机)
     expect([...v.root.querySelectorAll('.wb-filter')].map(n => text(n))).toEqual(['全部', '本机', '队', '远端', '日志'])
   })
 
@@ -631,7 +637,10 @@ describe('canvas inspector member management (0.6.6)', () => {
     const values = [...pick.options].map(o => o.value)
     expect(values).not.toContain('session-11111111-aaaa')
     expect(values).toContain('session-22222222-bbbb')
-    expect(values).toContain('dsh-host-ca0c0a8d')
+    // gh#37: handle rows are offered; bare host rows are not (they fail
+    // the backend shape gate — the old picker offered dead options).
+    expect(values).toContain('nel85/9abc1234')
+    expect(values).not.toContain('dsh-host-ca0c0a8d')
     pick.value = 'session-22222222-bbbb'
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     await vi.waitFor(() => expect(canvasOp).toHaveBeenCalledWith('add-member', 'ygl', 'session-22222222-bbbb'))

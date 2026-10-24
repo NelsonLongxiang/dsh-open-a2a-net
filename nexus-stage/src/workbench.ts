@@ -987,6 +987,14 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       }
       let remoteLabeled = false
       for (const remote of last?.remote ?? []) {
+        // gh#37: only zone/id8 HANDLES are addable members — a bare zone row
+        // (the peer's own team card, e.g. 'dsh') fails the backend shape
+        // gate and the old picker offered it anyway: the owner clicked 远端,
+        // got refused, and read the feature as broken. Rows without a '/'
+        // are skipped; when the directory carries no handles at all the
+        // hint explains why (unlinked peers serve the minimal card, which
+        // carries no session teams) instead of offering dead options.
+        if (!remote.team.includes('/')) continue
         if (memberIds.has(remote.team)) continue
         if (!remoteLabeled) {
           pick.appendChild(new Option('远端会话队（目录卡片）…', '', true, false))
@@ -994,11 +1002,14 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         }
         pick.appendChild(new Option(`${displayName(remote)} — 远端`, remote.team))
       }
+      if (!remoteLabeled) {
+        pick.appendChild(new Option('（暂无可拉入的远端会话队——见下方说明）', '', true, false))
+      }
       if (keep !== '' && Array.from(pick.options).some(option => option.value === keep)) pick.value = keep
       card.appendChild(canvasForm.form)
       const hint = el('div', 'wb-hint')
       hint.textContent =
-        '成员由人类在此手工分配（agent 不可自组队）。远端成员走对端目录路由，不做本机冷唤醒；地址由目录在派发时重解析。'
+        '成员由人类在此手工分配（agent 不可自组队）。远端成员走对端目录路由，不做本机冷唤醒；地址由目录在派发时重解析。远端下拉只列 zone/id8 会话句柄——若为空，说明目录里还没有已链接对端的会话队（未链接的对端只给最小卡）；此时可在输入框手输句柄（如 dsh/xxxxxxxx）先把人拉进来，句柄本身即链接手势。'
       card.appendChild(hint)
       // Quick dispatch targets the canvas ROUTING team (0.6.9): local tiers
       // first, then the remote members in order — the seam's own priority.
