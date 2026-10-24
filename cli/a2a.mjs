@@ -41,6 +41,7 @@ CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) 
 
 host:     --home > $A2A_HOME > the home saved by 'a2a init --home URL' > ${DEFAULT_HOME}
 key:      --key > $A2A_KEY (prefer the env var: a --key value stays in shell history)
+pocket:   $A2A_POCKET_TOKEN (or $A2A_TOKEN) rides as the dsh_pocket_token cookie, for a host behind dsh-pocket
 message:  everything after <team> that is not a flag; put a message that starts with '-' after '--'
 --json:   teams / tasks / probe / route / report print the raw rows instead of the table`
 
@@ -122,19 +123,37 @@ function originClaimFor(base) {
   }
 }
 
-const keyHeaders = () => {
-  const key = apiKey()
-  return key !== undefined ? { 'X-API-Key': key } : {}
+/** A host behind dsh-pocket also wants its session token, as the dsh_pocket_token cookie. */
+const pocketToken = () => {
+  const token = process.env.A2A_POCKET_TOKEN ?? process.env.A2A_TOKEN
+  return token !== undefined && token !== '' ? token : undefined
 }
 
-/** Read a JSON reply; a non-JSON body (a proxy page, an old host) becomes an error object. */
+const keyHeaders = () => {
+  const key = apiKey()
+  const pocket = pocketToken()
+  return {
+    ...(key !== undefined ? { 'X-API-Key': key } : {}),
+    ...(pocket !== undefined ? { Cookie: `dsh_pocket_token=${pocket}` } : {}),
+  }
+}
+
+/**
+ * Read a JSON object reply. A non-JSON or non-object body (a proxy page, an
+ * empty 405 from a front proxy, an old host) becomes an error object, and an
+ * HTTP error without its own `error` field carries the status.
+ */
 async function replyOf(res) {
   const text = await res.text()
+  let body
   try {
-    return JSON.parse(text)
+    body = JSON.parse(text)
   } catch {
-    return { error: `HTTP ${String(res.status)}, not JSON: ${text.slice(0, 120)}` }
+    return { error: `HTTP ${String(res.status)}, not JSON${text === '' ? ' (empty body)' : `: ${text.slice(0, 120)}`}` }
   }
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return { error: `HTTP ${String(res.status)}, not a JSON object` }
+  if (!res.ok && body.error === undefined) return { ...body, error: `HTTP ${String(res.status)}` }
+  return body
 }
 
 async function control(body) {
@@ -146,7 +165,8 @@ async function control(body) {
 }
 
 function keyHint(status) {
-  return `host ${home()} answered ${String(status)} — ${apiKey() === undefined ? 'it is keyed: set $A2A_KEY (or pass --key)' : 'the key was refused: check $A2A_KEY / --key'}`
+  const pocket = pocketToken() === undefined ? '; behind dsh-pocket also set $A2A_POCKET_TOKEN' : ''
+  return `host ${home()} answered ${String(status)} — ${apiKey() === undefined ? 'it is keyed: set $A2A_KEY (or pass --key)' : 'the key was refused: check $A2A_KEY / --key'}${pocket}`
 }
 
 async function state() {
@@ -253,6 +273,13 @@ async function loadSignCard() {
 
 const hoursLeft = (expiresAt) => ((expiresAt - Date.now()) / 3_600_000).toFixed(2)
 
+/** The deposit line for whoami/status: an unreadable deposit face is reported, not shown as OFFLINE. */
+function depositLine(list, handle, offline) {
+  if (!Array.isArray(list.deposits)) return `UNKNOWN — deposit face unreadable: ${String(list.error ?? 'no deposits list in the reply')}`
+  const mine = list.deposits.find(d => d.handle === handle)
+  return mine === undefined ? offline : `ONLINE, ${hoursLeft(mine.expiresAt)}h left`
+}
+
 /** Print the first `cap` rows and say how many were left out. */
 function listCapped(rows, cap, line) {
   for (const row of rows.slice(0, cap)) console.log(line(row))
@@ -334,10 +361,9 @@ async function main() {
   if (cmd === 'whoami') {
     const id = identity()
     const list = await control({ action: 'list' })
-    const mine = (list.deposits ?? []).find(d => d.handle === id.handle)
     console.log(`handle      ${id.handle}`)
     console.log(`identity    ~/.a2a/cli.json (own Ed25519 key — the card's team = "${id.name}" is its own zone)`)
-    console.log(`deposit     ${mine === undefined ? 'OFFLINE (expired or never published — run: a2a publish)' : `ONLINE, ${hoursLeft(mine.expiresAt)}h left`}`)
+    console.log(`deposit     ${depositLine(list, id.handle, 'OFFLINE (expired or never published — run: a2a publish)')}`)
     console.log(`host        ${home()}`)
     console.log(`card url    ${home()}/a2a/cli/${encodeURIComponent(id.handle)}`)
     console.log(`capability  route via signed envelope; receive via mailbox (poll: a2a inbox)`)
@@ -381,7 +407,6 @@ async function main() {
   if (cmd === 'status') {
     const s = await state()
     const list = await control({ action: 'list' })
-    const mine = (list.deposits ?? []).find(d => d.handle === identity().handle)
     console.log(`host        ${home()}  version=${String(s.version ?? '?')}  peers=${String((s.peers ?? []).length)}`)
     for (const p of s.peers ?? []) console.log(`  peer ${String(p.url).padEnd(34)} link=${String(p.link ?? 'stranger')}`)
     const inflight = s.inFlight ?? []
@@ -389,7 +414,7 @@ async function main() {
       console.log('in-flight:')
       for (const r of inflight) console.log(`  ${String(r.team)} → ${String(r.peer)}`)
     }
-    console.log(`deposit     ${mine === undefined ? 'OFFLINE' : `ONLINE, ${hoursLeft(mine.expiresAt)}h left`}`)
+    console.log(`deposit     ${depositLine(list, identity().handle, 'OFFLINE')}`)
     return
   }
   if (cmd === 'report') {

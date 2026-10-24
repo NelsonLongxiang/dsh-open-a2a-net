@@ -164,6 +164,33 @@ describe('a2a-net CLI: route / report talk to the right host with the right mess
   })
 })
 
+describe('a2a-net CLI: a host behind dsh-pocket', () => {
+  it('sends the pocket token as the dsh_pocket_token cookie next to X-API-Key ($A2A_POCKET_TOKEN wins over $A2A_TOKEN)', async () => {
+    const host = await stubHost(() => ({ status: 200, body: { sessions: [], remote: [] } }))
+    servers.push(host.server)
+    const HOME = tmpHomeDir()
+    expect((await runCli(['teams'], { HOME, A2A_HOME: host.url, A2A_KEY: 'K', A2A_TOKEN: 'T1' })).code).toBe(0)
+    expect((await runCli(['teams'], { HOME, A2A_HOME: host.url, A2A_TOKEN: 'T1', A2A_POCKET_TOKEN: 'T2' })).code).toBe(0)
+    expect((await runCli(['teams'], { HOME, A2A_HOME: host.url })).code).toBe(0)
+    const [both, pocketOnly, neither] = host.seen
+    expect(both?.headers['x-api-key']).toBe('K')
+    expect(both?.headers.cookie).toBe('dsh_pocket_token=T1')
+    expect(pocketOnly?.headers.cookie).toBe('dsh_pocket_token=T2')
+    expect(pocketOnly?.headers['x-api-key']).toBeUndefined()
+    expect(neither?.headers.cookie).toBeUndefined()
+  })
+
+  it('whoami reports an unreadable deposit face instead of claiming OFFLINE', async () => {
+    const host = await stubHost(() => ({ status: 405, body: '' }))
+    servers.push(host.server)
+    const HOME = tmpHomeDir()
+    await runCli(['init', 'scout'], { HOME })
+    const out = await runCli(['whoami', '--home', host.url], { HOME })
+    expect(out.stdout).toMatch(/deposit\s+UNKNOWN — deposit face unreadable: HTTP 405/)
+    expect(out.stdout).not.toContain('OFFLINE')
+  })
+})
+
 describe('a2a-net CLI: read commands and errors', () => {
   it('a keyed host says which knob to set; tasks --json lists every row', async () => {
     const rows = Array.from({ length: 25 }, (_, i) => ({ taskId: `direct-${String(i).padStart(8, '0')}`, team: 'ops', status: 'pending' }))
