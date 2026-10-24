@@ -44,7 +44,7 @@ import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
-import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, briefOf, type ReceiptResolvedInfo } from './task-ledger.ts'
+import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type ReceiptResolvedInfo } from './task-ledger.ts'
 import { formatReceipt, parseReceipt } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
@@ -1927,7 +1927,26 @@ const reportLoopRing = new Map<string, number[]>()
               // chat drawer used to guess (settled, abandoned or cancelled).
               // Bounded to the archive (≤64), newest first, with the
               // controlled-vocabulary verdict each row settled by.
-              archived: taskLedger.archive().map(row => ({ taskId: row.taskId, team: row.team, resolvedAt: row.resolvedAt, outcome: row.outcome ?? 'unclassified', ...(row.summary !== undefined && row.summary !== '' ? { summary: row.summary.slice(0, 160) } : {}) })).slice(-64).reverse(),
+              // gh#31 follow-up: archive() is already newest first (settles
+              // prepend), so the projection keeps that order — the earlier
+              // .reverse() served it oldest first. Each row also says HOW it
+              // ended (endedBy: abandon and cancel both record outcome
+              // 'abandoned', and so does a peer's own 'abandoned' receipt),
+              // whether a receipt came after the caller ended it (late), and
+              // its direction when known.
+              archived: taskLedger.archive().slice(0, ARCHIVE_CAP).map(row => ({
+                taskId: row.taskId,
+                team: row.team,
+                peer: row.peer,
+                startedAt: row.startedAt,
+                resolvedAt: row.resolvedAt,
+                outcome: row.outcome ?? 'unclassified',
+                endedBy: archivedEndedBy(row),
+                ...(row.direction !== undefined ? { direction: row.direction } : {}),
+                ...(row.lateReceiptAt !== undefined ? { late: true } : {}),
+                ...(row.brief !== undefined ? { brief: row.brief } : {}),
+                ...(row.summary !== undefined && row.summary !== '' ? { summary: row.summary.slice(0, 160) } : {}),
+              })),
               archivedCount: taskLedger.archive().length,
               // Ledger density face: the settled archive split by verdict, so
               // the workbench can say WHICH way those rows settled instead of

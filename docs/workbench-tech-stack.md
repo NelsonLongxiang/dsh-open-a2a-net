@@ -56,7 +56,7 @@ WorkbenchMode = 'canvas' | 'data'（依 board.available() 每 poll 派生；canv
 
 | 端点 | 方法 | 消费方 |
 |---|---|---|
-| `/__dsh_a2a/state` | GET | 两面全量：sessions（live/cold）/canvas/peers（分数）/remote/activity 环/inFlight/tasks（pending+settleable+stale 计数）/tasksDead/idempotency（claims/replays/conflicts）/reconcile/registry/version |
+| `/__dsh_a2a/state` | GET | 两面全量：sessions（live/cold）/canvas/peers（分数）/remote/activity 环/inFlight/tasks（pending+settleable+stale 计数）/tasksDead（带 direction）/archived（≤64 条、最新在前：outcome + endedBy receipt·echo·abandoned·cancelled + late，gh#31）/idempotency（claims/replays/conflicts）/reconcile/registry/version |
 | `/__dsh_a2a/tasks/abandon` | POST `{task_id,reason}` | 工作台台账死信清账 seam |
 | `/__dsh_a2a/canvas-layout` | GET/POST | 规划板布局持久化 |
 | `/__dsh_a2a/canvas` | POST | CanvasAction 七写 |
