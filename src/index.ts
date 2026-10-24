@@ -40,6 +40,7 @@ import { LayoutStore } from './layout-store.ts'
 import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
+import { applyOwnerSettings, type OwnerSettings } from './owner-settings.ts'
 import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
@@ -878,6 +879,15 @@ export function apply(ctx: Context, config: Config): void {
   // 'fleet' opt-up. D4 (成文): group visibility = strictest member tier;
   // v1 ships no group-level knob by design.
   const exposureStore = new ExposureStore(join(home, 'a2a', 'exposure.json'))
+  // gh#34 owner three-key panel hot-apply state: allowlist and teamScopeInfo
+  // are read at call time, so the panel's write applies WITHOUT a restart;
+  // announce is boot-time publishing (restart pending flag for the UI).
+  let ownerAllowlist: string[] = [...(config.teamJoinAllowlist ?? [])]
+  // Truthiness matches the ORIGINAL read site (`if (config.teamScopeInfo)`):
+  // literal compositions without the schema default carry undefined, which
+  // reads as the OPEN plane — `!== false` would silently scope them.
+  let ownerTeamScopeInfo = config.teamScopeInfo === true
+  let ownerAnnounceRestartPending = false
   // S2: node-declared team memberships — the roster half of the
   // team-roster iteration. Joins ride the allowlist-gated tools; the store
   // is the durable declaration the card publishes and the state face reads.
@@ -2083,6 +2093,67 @@ const reportLoopRing = new Map<string, number[]>()
           })
         }),
       }), 'a2a: session-node leave route')
+      // gh#34 owner three-key panel: the remote build-out unlock knobs,
+      // surfaced as a control face instead of "翻配置文件". GET reads the
+      // effective values; POST writes the HOME patch layer (the
+      // authoritative surface) AND hot-applies the two call-time keys
+      // (teamJoinAllowlist / teamScopeInfo); announce is boot-time
+      // publishing, so its change lands on the next host restart and the
+      // reply says so. Same key gate as every write face.
+      ctx.effect(() => webServer.register({
+        kind: 'exact',
+        path: '/__dsh_a2a/owner-settings',
+        handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+          if (req.method === 'GET') {
+            const payload = JSON.stringify({
+              ok: true,
+              teamJoinAllowlist: [...ownerAllowlist],
+              teamScopeInfo: ownerTeamScopeInfo,
+              announce: config.announce === true,
+              announceRestartPending: ownerAnnounceRestartPending,
+            })
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+            return
+          }
+          readJsonBody(req, res, (rawBody) => {
+            const body = rawBody as Record<string, unknown>
+            const changes: OwnerSettings = {}
+            if (Array.isArray(body.teamJoinAllowlist)) {
+              const list = (body.teamJoinAllowlist as unknown[]).filter((name): name is string => typeof name === 'string' && name !== '' && name.length <= 128)
+              changes.teamJoinAllowlist = [...new Set(list)]
+            }
+            if (typeof body.teamScopeInfo === 'boolean') changes.teamScopeInfo = body.teamScopeInfo
+            if (typeof body.announce === 'boolean') changes.announce = body.announce
+            if (Object.keys(changes).length === 0) {
+              const payload = JSON.stringify({ ok: false, error: 'no recognized keys: teamJoinAllowlist (string[]), teamScopeInfo (bool), announce (bool)' })
+              res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+              return
+            }
+            try {
+              const patchPath = join(home, 'cordis.patch.yml')
+              const current = existsSync(patchPath) ? readFileSync(patchPath, 'utf8') : ''
+              const { yaml, restartNeeded } = applyOwnerSettings(current, changes)
+              mkdirSync(home, { recursive: true })
+              writeFileSync(patchPath, yaml, 'utf8')
+              // Hot-apply the two call-time keys.
+              if (changes.teamJoinAllowlist !== undefined) ownerAllowlist = [...changes.teamJoinAllowlist]
+              if (changes.teamScopeInfo !== undefined) ownerTeamScopeInfo = changes.teamScopeInfo
+              if (changes.announce !== undefined && changes.announce !== (config.announce === true)) ownerAnnounceRestartPending = true
+              if (changes.announce !== undefined && changes.announce === (config.announce === true)) ownerAnnounceRestartPending = false
+              logger.info(`a2a: owner settings updated (${Object.keys(changes).join(', ')}${restartNeeded ? ' — restart pending for announce' : ''})`)
+              const payload = JSON.stringify({ ok: true, restartNeeded, keys: Object.keys(changes) })
+              res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+            } catch (error) {
+              const payload = JSON.stringify({ ok: false, error: `patch-layer write failed: ${error instanceof Error ? error.message : String(error)}` })
+              res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+            }
+          })
+        }),
+      }), 'a2a: owner-settings route')
       // Groups control: create/remove named groups and assign sessions to
       // them (an empty name unassigns). Same guard as join/leave — the
       // group taxonomy enumerates session ids, so it stays behind the key.
@@ -4375,9 +4446,9 @@ ${message}`
   // under it would let a model mint teams nobody created. Pattern entries
   // remain readable (whoami shows them) but carry no mint rights.
   const teamJoinExactAllowed = (team: string): boolean =>
-    (config.teamJoinAllowlist ?? []).includes(team)
+    ownerAllowlist.includes(team)
   const teamJoinPatternMatches = (team: string): boolean =>
-    (config.teamJoinAllowlist ?? []).some(pattern => {
+    ownerAllowlist.some(pattern => {
       if (pattern === '*') return true
       if (pattern.endsWith('*')) {
         // Boundary: the wildcard consumes at most the remainder of one
@@ -4470,7 +4541,7 @@ ${message}`
         .slice(-3)
         .reverse()
         .map(entry => ({ at: entry.at, action: entry.action, team: entry.team, reason: entry.reason ?? '' }))
-      const patterns = [...config.teamJoinAllowlist]
+      const patterns = [...ownerAllowlist]
       return {
         ok: true,
         face: 'session',
@@ -4863,7 +4934,7 @@ ${message}`
       // are host-internal facts and always survive. The note keeps the
       // model from reading a scoped listing as an empty fleet.
       let note: string | undefined
-      if (config.teamScopeInfo) {
+      if (ownerTeamScopeInfo) {
         const joined = joinedTeamScope()
         const remoteBefore = teams.filter(row => row.local !== true).length
         teams = teams.filter(row => row.local === true || joined.has(row.team) || (row.teams ?? []).some(name => joined.has(name)))

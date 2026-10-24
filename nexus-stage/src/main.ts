@@ -154,6 +154,27 @@ async function fetchLayout(): Promise<unknown> {
 // ─── The workbench ───
 const bench = createWorkbench({
   now: () => Date.now(),
+  // gh#34: the owner three-key panel rides the control face.
+  async ownerSettingsRead() {
+    try {
+      const res = await controlFetch('/__dsh_a2a/owner-settings')
+      return await res.json()
+    } catch {
+      return { ok: false, error: 'unreachable' }
+    }
+  },
+  async ownerSettingsWrite(changes) {
+    try {
+      const res = await controlFetch('/__dsh_a2a/owner-settings', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(changes),
+      })
+      return await res.json()
+    } catch {
+      return { ok: false, error: 'unreachable' }
+    }
+  },
   async abandon(taskId, reason) {
     try {
       const res = await controlFetch('/__dsh_a2a/tasks/abandon', {

@@ -180,6 +180,10 @@ export interface StateBody {
 /** What the workbench can DO — the seams tests drive. */
 export interface WorkbenchDeps {
   now(): number
+  /** gh#34: read the owner three-key panel state (GET /__dsh_a2a/owner-settings). */
+  ownerSettingsRead?(): Promise<{ ok: boolean; teamJoinAllowlist?: string[]; teamScopeInfo?: boolean; announce?: boolean; announceRestartPending?: boolean; error?: string }>
+  /** gh#34: write owner panel changes; true on success (POST the same face). */
+  ownerSettingsWrite?(changes: { teamJoinAllowlist?: string[]; teamScopeInfo?: boolean; announce?: boolean }): Promise<{ ok: boolean; restartNeeded?: boolean; error?: string }>
   /** Abandon one dead-lettered task via the control route. True on success. */
   abandon(taskId: string, reason: string): Promise<boolean>
   /** Canvas team member change via the control route (0.6.6): `id` is a
@@ -335,6 +339,16 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   const versionBadge = el('span', 'wb-badge')
   title.appendChild(versionBadge)
   header.appendChild(title)
+  // gh#34 owner three-key panel: the header gear opens the inspector panel
+  // (teamJoinAllowlist / teamScopeInfo / announce) — 远程建联三件不再翻配置文件。
+  const ownerBtn = el('button', 'wb-icon-btn wb-owner-btn')
+  ownerBtn.type = 'button'
+  ownerBtn.dataset.testid = 'wb-owner-btn'
+  ownerBtn.setAttribute('aria-label', '主人设置（三键面板）')
+  ownerBtn.title = '主人设置：入网白名单 / 可见性 / 发布'
+  ownerBtn.textContent = '⚙'
+  ownerBtn.addEventListener('click', () => { ownerPanelOpen = !ownerPanelOpen; renderOwnerPanel() })
+  header.appendChild(ownerBtn)
   const headerStats = el('div', 'wb-header-stats')
   header.appendChild(headerStats)
   const railToggle = el('button', 'wb-icon-btn wb-rail-toggle')
@@ -770,8 +784,125 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   }
 
   // ── Inspector (overlay card over the stage; bottom sheet on narrow) ──
+  // gh#34 owner panel state + render (the gear toggles; the inspector hosts).
+  let ownerPanelOpen = false
+  let ownerState: { teamJoinAllowlist: string[]; teamScopeInfo: boolean; announce: boolean; announceRestartPending: boolean } | null = null
+  function renderOwnerPanel(): void {
+    renderInspector()
+    if (!ownerPanelOpen) return
+    void deps.ownerSettingsRead?.().then(result => {
+      if (!ownerPanelOpen) return
+      if (result.ok !== true) { ownerState = null; renderInspector(); return }
+      ownerState = {
+        teamJoinAllowlist: result.teamJoinAllowlist ?? [],
+        teamScopeInfo: result.teamScopeInfo !== false,
+        announce: result.announce === true,
+        announceRestartPending: result.announceRestartPending === true,
+      }
+      renderInspector()
+    })
+  }
+  function renderOwnerPanelInto(box: HTMLElement): void {
+    const card = el('div', 'wb-card')
+    const head = el('div', 'wb-inspector-head')
+    head.appendChild(el('span', 'wb-inspector-title')).textContent = '主人设置'
+    const closeBtn = el('button', 'wb-icon-btn')
+    closeBtn.type = 'button'
+    closeBtn.setAttribute('aria-label', '关闭主人设置')
+    closeBtn.textContent = '✕'
+    closeBtn.addEventListener('click', () => { ownerPanelOpen = false; renderInspector() })
+    head.appendChild(closeBtn)
+    card.appendChild(head)
+    if (deps.ownerSettingsRead === undefined) {
+      const note = el('div', 'wb-hint')
+      note.textContent = '此宿主未提供主人设置面（旧版本）——升级后可用。'
+      card.appendChild(note)
+      box.appendChild(card)
+      return
+    }
+    if (ownerState === null) {
+      const note = el('div', 'wb-hint')
+      note.textContent = '读取中…'
+      card.appendChild(note)
+      box.appendChild(card)
+      return
+    }
+    const st = ownerState
+    // ① 入网白名单（精确团队名增删）
+    const alHead = el('div', 'wb-side-head')
+    alHead.textContent = '入网白名单（精确团队名）'
+    card.appendChild(alHead)
+    for (const name of st.teamJoinAllowlist) {
+      const row = el('div', 'wb-member-row')
+      row.appendChild(el('span', 'wb-member-label')).textContent = name
+      const del = el('button', 'wb-member-remove')
+      del.type = 'button'
+      del.textContent = '移除'
+      del.addEventListener('click', () => {
+        void deps.ownerSettingsWrite?.({ teamJoinAllowlist: st.teamJoinAllowlist.filter(n => n !== name) }).then(() => renderOwnerPanel())
+      })
+      row.appendChild(del)
+      card.appendChild(row)
+    }
+    const addForm = el('div', 'wb-member-add')
+    const input = el('input', 'wb-member-manual')
+    input.type = 'text'
+    input.placeholder = 'dsh/团队名（精确，无通配）'
+    input.setAttribute('aria-label', '新增白名单团队名')
+    const addBtn = el('button', 'wb-member-submit')
+    addBtn.type = 'button'
+    addBtn.textContent = '加入'
+    const doAdd = (): void => {
+      const v = input.value.trim()
+      if (v === '' || st.teamJoinAllowlist.includes(v)) return
+      void deps.ownerSettingsWrite?.({ teamJoinAllowlist: [...st.teamJoinAllowlist, v] }).then(() => renderOwnerPanel())
+    }
+    addBtn.addEventListener('click', doAdd)
+    input.addEventListener('keydown', ev => { if (ev.key === 'Enter') doAdd() })
+    addForm.append(input, addBtn)
+    card.appendChild(addForm)
+    // ② 可见性开关 + 精度固化文案
+    const tsHead = el('div', 'wb-side-head')
+    tsHead.textContent = '目录可见性（teamScopeInfo）'
+    card.appendChild(tsHead)
+    const tsRow = el('div', 'wb-member-row')
+    const tsBtn = el('button', 'wb-member-submit')
+    tsBtn.type = 'button'
+    tsBtn.textContent = st.teamScopeInfo ? '已开：仅显示已加入团队（点击放开为全舰队可见）' : '已关：全舰队可见（点击收窄为已加入团队）'
+    tsBtn.addEventListener('click', () => {
+      void deps.ownerSettingsWrite?.({ teamScopeInfo: !st.teamScopeInfo }).then(() => renderOwnerPanel())
+    })
+    tsRow.appendChild(tsBtn)
+    card.appendChild(tsRow)
+    const tsNote = el('div', 'wb-hint')
+    tsNote.textContent = '精度说明：teamScopeInfo 只管「目录显示范围」。关上它不会解锁任何通信准入——会话入网（S3）与目标级路由（F5）规则原样生效。'
+    card.appendChild(tsNote)
+    // ③ 发布开关（重启生效）
+    const anHead = el('div', 'wb-side-head')
+    anHead.textContent = '节点发布（announce）'
+    card.appendChild(anHead)
+    const anRow = el('div', 'wb-member-row')
+    const anBtn = el('button', 'wb-member-submit')
+    anBtn.type = 'button'
+    anBtn.textContent = st.announce ? '已开：本节点发布签名卡（点击关闭）' : '已关：本节点不发布（点击开启——重启宿主后生效）'
+    anBtn.addEventListener('click', () => {
+      void deps.ownerSettingsWrite?.({ announce: !st.announce }).then(() => renderOwnerPanel())
+    })
+    anRow.appendChild(anBtn)
+    card.appendChild(anRow)
+    if (st.announceRestartPending) {
+      const anNote = el('div', 'wb-hint')
+      anNote.textContent = '有 announce 变更待生效：重启宿主后按新配置发布。'
+      card.appendChild(anNote)
+    }
+    box.appendChild(card)
+  }
+
   function renderInspector(): void {
     const box = clear(inspectorBody)
+    // gh#34: the owner panel owns the inspector when open (selection cards
+    // yield; the gear closes it back).
+    if (ownerPanelOpen) { inspector.classList.add('is-open'); renderOwnerPanelInto(box); return }
     inspector.classList.toggle('is-open', selection !== undefined)
     if (selection === undefined) return
     const sel = selection
