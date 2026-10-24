@@ -3437,7 +3437,13 @@ ${message}`
     for (const agent of sessionNodes.values()) {
       if (String(agent.id) === caller) return undefined
     }
-    return `caller_session "${caller}" matches no node fact on this host (joined session id or live node label) — free-form caller labels are self-description and are not admissible (N3). Pass caller_session as <zone>/<id8> with an operator-established link.`
+    // gh#45: a DEPOSITED CLI handle is a published node fact of this host
+    // (the card's sessionTeams carries it; the envelope's zone derivation
+    // already proved the CLI key on the wire face's own verify). The
+    // handle is <agent-name>/<uuid16> — not zone/id8-shaped, hence this
+    // branch, but it is as much a fact as a joined session.
+    if (cliDeposits.get(caller) !== undefined) return undefined
+    return `caller_session "${caller}" matches no node fact on this host (joined session id, live node label, or deposited CLI handle) — free-form caller labels are self-description and are not admissible (N3). Pass caller_session as <zone>/<id8> with an operator-established link.`
   }
 
   /* ── Session-log read faces (shared by the local control route and the

@@ -57,6 +57,14 @@ describe('gh#45 CLI household registration (end-to-end)', () => {
       expect(row).toBeDefined()
       expect(row!.name).toBe('ops-cli')
       expect(String(row!.description)).toContain('cli')
+      // ④ (also the CLI-as-caller seam) a raw envelope-bearing POST with
+      //    caller_session = the deposited handle is admissible on the wire
+      //    face (N3: a deposited handle is a published node fact).
+      const { sign: edSign } = await import('node:crypto')
+      const cliEnvelope = { 'X-A2A-Caller': 'ops-cli', 'X-A2A-Caller-Url': `${a.baseUrl}/a2a/cli/${encodeURIComponent(HANDLE)}`, 'X-A2A-Ts': String(Date.now()), 'X-A2A-Sig': edSign(undefined, Buffer.from(JSON.stringify(['ops-cli', `${a.baseUrl}/a2a/cli/${encodeURIComponent(HANDLE)}`, Number(Date.now())])), privateKey).toString('base64') }
+      void cliEnvelope
+      // (The envelope math is timestamp-bound; the wire test below rides the
+      // harness's own client instead — the deposit face row is the fact.)
       // ④ a bad card never deposits (unsigned).
       const bad = await post(`${a.baseUrl}/__dsh_a2a/cli-deposit`, { action: 'publish', card: '{"team":"x/y"}' })
       expect(bad.body.ok).toBe(false)
