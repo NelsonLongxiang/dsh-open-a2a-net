@@ -23,6 +23,12 @@ export interface A2aPeerCard {
    */
   readonly peers?: readonly string[]
   /**
+   * gh#41 fleet planning: this host's own canvas-team organization, served
+   * fresh on the FULL card (linked callers only) — each entry names a team
+   * and its member handles so any linked peer's board can render the org.
+   */
+  readonly canvasOrg?: ReadonlyArray<{ name: string; team: string; members: readonly string[] }>
+  /**
    * Joined session teams this peer currently dispatches. Unsigned and
    * optional: served fresh at read time, each entry is a team name the
    * peer's `/a2a/direct` endpoint routes to that session, with the

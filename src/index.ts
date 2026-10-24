@@ -1977,6 +1977,19 @@ const reportLoopRing = new Map<string, number[]>()
               // Read-only; no fingerprints cross here (they are /a2a/query's
               // only auth material).
               idempotency: idempotencyStore.stats(),
+              // gh#41 fleet planning: each tracked peer's published canvas
+              // org (full-card canvasOrg) from the warm card cache — the
+              // board renders REMOTE team frames from this. Absent until a
+              // linked fetch warmed the card.
+              peerOrg: peerStore.list().map(url => {
+                const card = cardCache.get(url)?.card
+                const org = (card as { canvasOrg?: unknown } | undefined)?.canvasOrg
+                return Array.isArray(org)
+                  ? { url, org: org.filter((e): e is { name: unknown; team: unknown; members: unknown } => e !== null && typeof e === 'object')
+                      .map(e => ({ name: typeof e.name === 'string' ? e.name : '', team: typeof e.team === 'string' ? e.team : '', members: Array.isArray(e.members) ? e.members.filter((m): m is string => typeof m === 'string') : [] }))
+                      .filter(e => e.team !== '') }
+                  : { url, org: [] }
+              }),
               // gh#9+gh#10 M1: envelope-absent deliveries during the
               // OriginClaim window — the operator watches this drain to
               // zero before closing the window.
@@ -2093,6 +2106,48 @@ const reportLoopRing = new Map<string, number[]>()
           })
         }),
       }), 'a2a: session-node leave route')
+      // gh#41 fleet planning relay: the GUI asks THIS host to regulate a
+      // REMOTE peer's canvas team. The node key never leaves the server —
+      // the relay stamps the OriginClaim envelope and forwards to the
+      // peer's /a2a/canvas-op face; the peer's link gate authorizes.
+      ctx.effect(() => webServer.register({
+        kind: 'exact',
+        path: '/__dsh_a2a/fleet-canvas-op',
+        handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+          readJsonBody(req, res, async (body) => {
+            const { peer, op, name, id } = body as { peer?: unknown; op?: unknown; name?: unknown; id?: unknown }
+            const peerUrl = typeof peer === 'string' ? peer : ''
+            const opV = typeof op === 'string' ? op : ''
+            const nameV = typeof name === 'string' ? name : ''
+            const idV = typeof id === 'string' ? id : ''
+            const send = (payload: string): void => {
+              res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+            }
+            if (peerUrl === '' || !/^https?:\/\//.test(peerUrl) || !['create', 'add-member', 'remove-member'].includes(opV) || (opV !== 'create' && nameV === '')) {
+              send(JSON.stringify({ ok: false, error: 'peer (http url), op (create | add-member | remove-member), and name are required' }))
+              return
+            }
+            if (!peerStore.list().includes(peerUrl)) {
+              send(JSON.stringify({ ok: false, error: `peer ${peerUrl} is not tracked — regulate tracked peers only` }))
+              return
+            }
+            try {
+              const target = peerUrl.replace(/\/$/, '') + '/a2a/canvas-op'
+              const reply = await globalThis.fetch(target, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...originClaimHeaders() },
+                body: JSON.stringify({ op: opV, name: nameV, ...(opV !== 'create' ? { id: idV } : {}) }),
+                signal: AbortSignal.timeout(15_000),
+              })
+              const out = await reply.json() as Record<string, unknown>
+              send(JSON.stringify(out))
+            } catch (error) {
+              send(JSON.stringify({ ok: false, error: `fleet op failed: ${error instanceof Error ? error.message : String(error)}` }))
+            }
+          })
+        }),
+      }), 'a2a: fleet-canvas-op relay route')
       // gh#34 owner three-key panel: the remote build-out unlock knobs,
       // surfaced as a control face instead of "翻配置文件". GET reads the
       // effective values; POST writes the HOME patch layer (the
@@ -2496,6 +2551,12 @@ const reportLoopRing = new Map<string, number[]>()
             peers: peerStore.list(),
             ...(named && sessionTeams.length > 0 ? { sessionTeams } : {}),
             ...(named && memberships.length > 0 ? { teamMemberships: memberships } : {}),
+            // gh#41 fleet planning (owner ruling: any peer composes and
+            // regulates): the host's own canvas org rides the FULL card as a
+            // served-fresh unsigned field — linked peers render each other's
+            // team structure on the planning board; the minimal face omits
+            // it exactly like sessionTeams.
+            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: canvasStore.membersOf(name) })) } : {}),
             ...(named && lanIp !== '' ? { lanIp } : {}),
             ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}),
             description: `A2A node exposing team ${config.team}${named ? '' : ' (minimal card — OriginClaim envelope required for the full card: X-A2A-Caller/-Url/-Ts/-Sig signed with your card key)'}`,
@@ -3079,7 +3140,9 @@ ${message}`
         const text = await response.text()
         const verdict = verifyCard(JSON.parse(text), Date.now())
         if (verdict.ok) card = verdict.card
+        else (req as IncomingMessage & { __claimDbg?: unknown }).__claimDbg = { stage: 'verify', reason: verdict.reason, head: text.slice(0, 100) }
       } catch (error) {
+        ;(req as IncomingMessage & { __claimDbg?: unknown }).__claimDbg = { stage: 'fetch', error: error instanceof Error ? error.message : String(error) }
         card = undefined
       }
     }
@@ -3385,6 +3448,68 @@ ${message}`
   }
 
   whenWebServerSettled((webServer) => {
+    // gh#41 fleet planning, peer-write face: a LINKED peer may regulate this
+    // host's canvas teams (create / add-member / remove-member) with a
+    // VERIFIED OriginClaim envelope. The owner's ruling: any peer composes
+    // and regulates the whole fleet — the bilateral/operator link IS the
+    // authorization, the envelope proves the key, and every op lands in the
+    // activity ring + host log for audit. Unlinked or unsigned callers get
+    // a refusal, never a mutation.
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/a2a/canvas-op',
+      handler: async (req: IncomingMessage, res: ServerResponse) => {
+        const send = (status: number, payload: string): void => {
+          res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+          res.end(payload)
+        }
+        if (req.method !== 'POST') { send(200, JSON.stringify({ ok: false, error: 'POST required' })); return }
+        const chunks: Buffer[] = []
+        let size = 0
+        req.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 16 * 1024) { chunks.length = 0; return } chunks.push(chunk) })
+        req.on('end', () => {
+          void (async () => {
+            try {
+              const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { op?: unknown; name?: unknown; id?: unknown }
+              const claim = await verifyOriginClaim(req)
+              if (!claim.ok) {
+                logger.warn(`a2a: canvas-op claim failed (${claim.reason}) — caller=${String(req.headers['x-a2a-caller'] ?? '')} url=${String(req.headers['x-a2a-caller-url'] ?? '')} ts=${String(req.headers['x-a2a-caller-ts'] ?? '')}`)
+                send(200, JSON.stringify({ ok: false, error: `untrusted-origin: OriginClaim verification failed (${claim.reason}) — canvas regulation requires a signed envelope`, code: -32000 }))
+                return
+              }
+              if (!callerLinkedToThisHost(claim.caller, claim.callerUrl, claim.card)) {
+                recordActivity('in', 'fleet-canvas', claim.caller, false)
+                send(200, JSON.stringify({ ok: false, error: `caller "${claim.caller}" is not linked to this host — canvas regulation requires the operator link (bilateral seed, canvas ref, or same-host membership)` }))
+                return
+              }
+              const op = body.op
+              const name = typeof body.name === 'string' ? body.name : ''
+              const id = typeof body.id === 'string' ? body.id : ''
+              let payload: { ok: boolean; members?: readonly string[]; error?: string }
+              if (op === 'create') {
+                const stored = canvasStore.create(name)
+                payload = stored === undefined ? { ok: false, error: 'invalid name or team cap reached' } : { ok: true, members: canvasStore.membersOf(stored) }
+              } else if (op === 'add-member') {
+                const memberValid = isRemoteMemberRef(id) ? validRemoteMemberRef(id) : id !== '' && (sessionNodes.has(id) || joinedSessions.has(id))
+                payload = name === '' || !memberValid
+                  ? { ok: false, error: 'name and a member (joined session id, or a zone-qualified remote team handle) are required' }
+                  : (canvasStore.create(name), { ok: canvasStore.addMember(name, id), members: canvasStore.membersOf(name) })
+              } else if (op === 'remove-member') {
+                payload = { ok: name !== '' && canvasStore.removeMember(name, id), members: name !== '' ? canvasStore.membersOf(name) : undefined }
+              } else {
+                payload = { ok: false, error: 'op must be create | add-member | remove-member' }
+              }
+              recordActivity('in', 'fleet-canvas', `${claim.caller}:${String(op)}`, payload.ok)
+              logger.info(`a2a: fleet canvas op from ${claim.caller} (${String(op)} ${name}${id !== '' ? ` ${id}` : ''}) -> ${payload.ok ? 'applied' : `refused: ${payload.error ?? '?'}`}`)
+              send(200, JSON.stringify(payload))
+            } catch (error) {
+              send(200, JSON.stringify({ ok: false, error: `canvas-op failed: ${error instanceof Error ? error.message : String(error)}` }))
+            }
+          })()
+        })
+      },
+    }), 'a2a: fleet canvas-op peer route')
+
     ctx.effect(() => webServer.register({
       kind: 'exact',
       path: '/a2a/direct',

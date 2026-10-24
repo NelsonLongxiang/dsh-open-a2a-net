@@ -76,6 +76,13 @@ export interface ArchivedRow {
   readonly brief?: string
 }
 
+/** gh#41: one tracked peer's published canvas organization (full-card
+ *  canvasOrg) — the board renders REMOTE team frames from these rows. */
+export interface PeerOrgRow {
+  readonly url: string
+  readonly org: ReadonlyArray<{ name: string; team: string; members: readonly string[] }>
+}
+
 /** One session row from /state `sessions` (live or cold joined). */
 export interface SessionRow {
   readonly id: string
@@ -159,6 +166,8 @@ export interface StateBody {
   readonly tasksDead?: readonly DeadRow[]
   /** gh#31: per-task outcomes for rows that left the ledger (bounded). */
   readonly archived?: readonly ArchivedRow[]
+  /** gh#41 fleet planning: each tracked peer's published canvas org. */
+  readonly peerOrg?: readonly PeerOrgRow[]
   readonly archivedCount?: number
   /** Settled-archive split by verdict (the receipt outcome vocabulary — 'completed' | 'rejected' | 'failed' | … | 'abandoned' — or 'unclassified'). */
   readonly archivedSplit?: Readonly<Record<string, number>>
@@ -180,10 +189,15 @@ export interface StateBody {
 /** What the workbench can DO — the seams tests drive. */
 export interface WorkbenchDeps {
   now(): number
+  /** gh#41 fleet planning: each tracked peer's published canvas org. */
+  peerOrg?: readonly PeerOrgRow[]
   /** gh#34: read the owner three-key panel state (GET /__dsh_a2a/owner-settings). */
   ownerSettingsRead?(): Promise<{ ok: boolean; teamJoinAllowlist?: string[]; teamScopeInfo?: boolean; announce?: boolean; announceRestartPending?: boolean; error?: string }>
   /** gh#34: write owner panel changes; true on success (POST the same face). */
   ownerSettingsWrite?(changes: { teamJoinAllowlist?: string[]; teamScopeInfo?: boolean; announce?: boolean }): Promise<{ ok: boolean; restartNeeded?: boolean; error?: string }>
+  /** gh#41 fleet planning: regulate a REMOTE peer's canvas team (this host
+   *  signs the envelope and forwards; the peer's link gate authorizes). */
+  fleetCanvasOp?(peer: string, op: 'create' | 'add-member' | 'remove-member', name: string, id?: string): Promise<{ ok: boolean; members?: string[]; error?: string }>
   /** Abandon one dead-lettered task via the control route. True on success. */
   abandon(taskId: string, reason: string): Promise<boolean>
   /** Canvas team member change via the control route (0.6.6): `id` is a

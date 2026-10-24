@@ -155,6 +155,23 @@ const canvasWire = createCanvasWire({
 })
 
 function runCanvasAction(a: CanvasAction): Promise<boolean> {
+  // gh#41: a remote-frame drop forks to the fleet relay — THIS host signs
+  // the envelope and forwards; the peer's link gate authorizes the write.
+  if ((a.type === 'add-member' || a.type === 'remove-member') && a.fleetPeer !== undefined) {
+    return (async () => {
+      for (const id of a.ids) {
+        const r = await controlFetch('/__dsh_a2a/fleet-canvas-op', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ peer: a.fleetPeer, op: a.type === 'add-member' ? 'add-member' : 'remove-member', name: a.team, id }),
+          cache: 'no-store',
+        }).catch(() => undefined)
+        const body = r !== undefined ? await r.json().catch(() => undefined) : undefined
+        if (body?.ok !== true) return false
+      }
+      return true
+    })()
+  }
   switch (a.type) {
     case 'create-team': return canvasWire.createTeam(a.name, a.ids, a.created)
     case 'add-member': return canvasWire.addMembers(a.team, a.ids)
@@ -411,7 +428,18 @@ async function poll(): Promise<void> {
         ...(typeof r.origin === 'string' && r.origin !== '' ? { origin: r.origin } : {}),
         ...(Array.isArray(r.teams) && r.teams.length > 0 ? { teams: r.teams.filter((t): t is string => typeof t === 'string' && t !== '') } : {}),
       }))
-    planning.reconcile({ sessions: allSessions, teams, peerCount: peers.length, peers, inFlight, remoteTeams })
+    // gh#41: the peers' published canvas org rides the board (remote frames).
+    const peerOrg = (body.peerOrg as unknown[] ?? [])
+      .filter((r): r is { url?: unknown; org?: unknown } => r !== null && typeof r === 'object')
+      .filter(r => typeof r.url === 'string' && Array.isArray(r.org))
+      .map(r => ({
+        url: r.url as string,
+        org: (r.org as unknown[])
+          .filter((e): e is { name?: unknown; team?: unknown; members?: unknown } => e !== null && typeof e === 'object')
+          .filter(e => typeof e.team === 'string' && e.team !== '')
+          .map(e => ({ name: typeof e.name === 'string' ? e.name : '', team: e.team as string, members: Array.isArray(e.members) ? e.members.filter((m): m is string => typeof m === 'string') : [] })),
+      }))
+    planning.reconcile({ sessions: allSessions, teams, peerCount: peers.length, peers, inFlight, remoteTeams, peerOrg })
   } catch (err) {
     fault(`state 轮询失败：${String(err)}`)
   }

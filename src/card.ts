@@ -199,6 +199,21 @@ export function verifyCard(candidate: unknown, now: number): CardVerification {
   const peers = referrals(wire)
   const teams = sessionTeams(wire)
   const memberships = teamMemberships(wire)
+  // gh#41: the unsigned canvas-org listing (full card only) passes through
+  // with the same drop-on-malformed posture as sessionTeams — cards from
+  // pre-0.6.26 nodes carry none.
+  const canvasOrg: Array<{ name: string; team: string; members: string[] }> = []
+  if (Array.isArray((wire as { canvasOrg?: unknown }).canvasOrg)) {
+    for (const entry of (wire as { canvasOrg: unknown[] }).canvasOrg) {
+      const org = entry as Partial<{ name: unknown; team: unknown; members: unknown }> | null
+      if (typeof org?.team !== 'string' || org.team === '') continue
+      canvasOrg.push({
+        name: typeof org.name === 'string' ? org.name : '',
+        team: org.team,
+        members: Array.isArray(org.members) ? org.members.filter((m): m is string => typeof m === 'string') : [],
+      })
+    }
+  }
   return {
     ok: true,
     card: {
@@ -207,6 +222,7 @@ export function verifyCard(candidate: unknown, now: number): CardVerification {
       ...(peers !== undefined ? { peers } : {}),
       ...(teams !== undefined && teams.length > 0 ? { sessionTeams: teams } : {}),
       ...(memberships !== undefined && memberships.length > 0 ? { teamMemberships: memberships } : {}),
+      ...(canvasOrg.length > 0 ? { canvasOrg } : {}),
       ...(typeof wire.lanIp === 'string' && wire.lanIp !== '' ? { lanIp: wire.lanIp } : {}),
       ...(typeof wire.version === 'string' && wire.version !== '' ? { version: wire.version } : {}),
       publicKey: wire.publicKey,

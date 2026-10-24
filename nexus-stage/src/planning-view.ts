@@ -545,6 +545,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     if (n <= 0) pendingTeams.delete(team)
     else pendingTeams.set(team, n)
   }
+  // gh#41: remote-frame registry (frame name → peer URL), refreshed by
+  // reconcile and read by emitAction's serverAction to fork remote drops.
+  let remoteFramesRef = new Map<string, string>()
 
   function emitAction(a: CanvasAction): void {
     // gh#20 W-B: the SERVER sees zone/id8 remote handles where the model
@@ -567,7 +570,12 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       }
       if (act.type === 'add-member' || act.type === 'remove-member' || act.type === 'create-team') {
         const ids = mapIds(act.ids)
-        return ids.length > 0 ? { ...act, ids } : act
+        // gh#41: a drop into a REMOTE frame carries the peer URL — main.ts
+        // forks it to the fleet relay instead of the local canvas control.
+        const fleetPeer = act.type !== 'create-team' ? remoteFramesRef.get(act.team) : undefined
+        return ids.length > 0 || fleetPeer !== undefined
+          ? { ...act, ids, ...(fleetPeer !== undefined ? { fleetPeer } : {}) }
+          : act
       }
       return act
     }
@@ -1102,6 +1110,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   let lastTeams: ReadonlyArray<PlanningTeam> = []
 
   function reconcile(input: PlanningInput): void {
+    // gh#41: remote-frame registry shared with serverAction (drop fork).
     lastTeams = input.teams
     lastPeers = input.peers ?? []
     lastInFlight = input.inFlight ?? []
@@ -1261,6 +1270,36 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     for (const id of model.nodeIds()) {
       if (id.startsWith('member-') && !memberSeen.has(id)) model.removeNode(id)
     }
+    // gh#41 fleet planning: the peers' published canvas org renders as
+    // REMOTE team frames — the owner reads the other side's grouping from
+    // ANY node and regulates it in place. Members attach as board
+    // memberships; drops into a remote frame fork to the host relay (see
+    // serverAction: the action carries fleetPeer, and main.ts routes it to
+    // /__dsh_a2a/fleet-canvas-op instead of the local canvas control).
+    const remoteFrames = new Map<string, string>()
+    const prevRemoteFrames = remoteFramesRef
+    remoteFramesRef = remoteFrames
+    if (input.peerOrg !== undefined) {
+      let slot = 0
+      const localNames = new Set(input.teams.map(t => t.name))
+      for (const row of input.peerOrg) {
+        for (const team of row.org) {
+          if (team.name === '' || localNames.has(team.name)) continue
+          const memberIds = team.members.map(m => `member-${m.replace(/[^a-z0-9-]/gi, '-')}`).filter(id => model.getNode(id) !== undefined)
+          const saved = layoutDoc?.frames?.[team.name]
+          model.setFrame(team.name, saved !== undefined ? { x: saved.x, y: saved.y, w: saved.w, h: saved.h } : { x: 200 + (slot % 4) * 280, y: 940 + Math.floor(slot / 4) * 160, w: 250, h: 130 })
+          model.setTeamMembers(team.name, memberIds)
+          remoteFrames.set(team.name, row.url)
+          slot += 1
+        }
+      }
+    }
+    for (const [name, url] of prevRemoteFrames) {
+      if (!remoteFrames.has(name)) {
+        model.removeFrame(name)
+        void url
+      }
+    }
     // gh#20 W-B: the server echoes cross-host members as zone/id8 handles —
     // map each handle back onto the peer node that carries it, so the
     // reconcile keeps remote memberships instead of dropping them.
@@ -1291,7 +1330,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
     for (const [name] of model.allFrames()) {
       if (pendingTeams.has(name)) continue // an in-flight create/remove owns this name
-      if (!input.teams.some(t => t.name === name)) model.removeFrame(name)
+      // gh#41: remote org frames are reconciled by the peerOrg block above —
+      // the local-team cleanup must not remove them.
+      if (!input.teams.some(t => t.name === name) && !remoteFrames.has(name)) model.removeFrame(name)
     }
     // An open node panel follows the poll: facts (joins, leaves, team
     // declarations, peer arrivals) land within one cadence.
