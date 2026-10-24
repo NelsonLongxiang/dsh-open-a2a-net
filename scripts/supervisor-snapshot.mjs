@@ -205,7 +205,8 @@ function collectLiveHostBuild() {
   try {
     const rc = execFileSync('curl', ['-s', '-o', 'NUL', '-w', '%{http_code}', '--max-time', '5', '-X', 'POST', 'http://127.0.0.1:3080/a2a/canvas-op'], { encoding: 'utf8' })
     rcText = rc.trim()
-    face = (rcText === '404' || rcText === '401' || rcText === '403' || rcText === '405' || rcText === '400') ? 1 : 0 // 路由存在（哪怕拒）即非陈旧
+    // 路由存在=非全局 404（200=面在且执行；401/403/405=面在但拒；仅 404=进程未换构建）
+    face = (rcText !== '' && rcText !== '000' && rcText !== '404') ? 1 : 0
   } catch { face = 0 }
   rows.push({ name: 'newest-face-live', ok: face, detail: `canvas-op 路由指纹 http=${rcText}｜${bundleNote}` })
   return rows
