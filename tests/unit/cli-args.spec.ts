@@ -372,6 +372,9 @@ describe('a2a-net CLI: inbox --wait', () => {
 
   it('a bad duration is a usage error', async () => {
     const HOME = await scoutHome()
-    expect((await runCli(['inbox', '--wait', '--timeout', 'soon'], { HOME })).code).toBe(2)
+    // POSIX shape note: without the anchor a HOME-only env leaves the CLI
+    // reading the REAL profile on Windows (USERPROFILE) — the tenth leak of
+    // the PR#36 family; the anchor makes the run platform-uniform.
+    expect((await runCli(['inbox', '--wait', '--timeout', 'soon'], { HOME, A2A_CLI_HOME: HOME })).code).toBe(2)
   })
 })
