@@ -27,8 +27,15 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-const IDENTITY = join(homedir(), '.a2a', 'cli.json')
-const INBOX_CURSOR = join(homedir(), '.a2a', 'inbox.cursor')
+// The identity home: A2A_CLI_HOME overrides the base directory (the
+// testability anchor — os.homedir() reads USERPROFILE on Windows, so a
+// HOME-only override leaks the real profile and breaks double runs; the
+// explicit env var is platform-uniform). Default: ~/.a2a/cli.json.
+const IDENTITY_DIR = process.env.A2A_CLI_HOME !== undefined && process.env.A2A_CLI_HOME !== ''
+  ? process.env.A2A_CLI_HOME
+  : join(homedir(), '.a2a')
+const IDENTITY = join(IDENTITY_DIR, 'cli.json')
+const INBOX_CURSOR = join(IDENTITY_DIR, 'inbox.cursor')
 const DEFAULT_HOME = 'http://127.0.0.1:3080'
 const DEFAULT_SKILL_ROOTS = [join(homedir(), '.agents', 'skills')]
 
@@ -481,7 +488,7 @@ async function main() {
     if (!/^[0-9a-f]{16}$/.test(uuid)) usage('--uuid must be 16 hex chars (8 bytes)')
     const savedHome = flag('--home')?.replace(/\/$/, '')
     const { privateKey } = generateKeyPairSync('ed25519')
-    mkdirSync(join(homedir(), '.a2a'), { recursive: true })
+    mkdirSync(IDENTITY_DIR, { recursive: true })
     writeFileSync(IDENTITY, JSON.stringify({
       name, uuid, handle: `${name}/${uuid}`,
       ...(savedHome !== undefined ? { home: savedHome } : {}),

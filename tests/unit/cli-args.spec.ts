@@ -6,9 +6,9 @@
  * records what the CLI sent, so nothing here touches a real DSH or ~/.a2a.
  */
 import { spawn } from 'node:child_process'
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync } from 'node:fs'
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -64,10 +64,10 @@ afterEach(async () => {
 describe('a2a-net CLI: exit codes and help', () => {
   it('no command and an unknown command are usage errors (exit 2); help exits 0 on stdout', async () => {
     const HOME = tmpHomeDir()
-    const empty = await runCli([], { HOME })
-    const unknown = await runCli(['frobnicate'], { HOME })
-    const help = await runCli(['help'], { HOME })
-    const dashHelp = await runCli(['--help'], { HOME })
+    const empty = await runCli([], { HOME, A2A_CLI_HOME: HOME })
+    const unknown = await runCli(['frobnicate'], { HOME, A2A_CLI_HOME: HOME })
+    const help = await runCli(['help'], { HOME, A2A_CLI_HOME: HOME })
+    const dashHelp = await runCli(['--help'], { HOME, A2A_CLI_HOME: HOME })
     expect(empty.code).toBe(2)
     expect(unknown.code).toBe(2)
     expect(unknown.stderr).toContain('unknown command "frobnicate"')
@@ -78,8 +78,8 @@ describe('a2a-net CLI: exit codes and help', () => {
 
   it('an unknown flag and a value flag without its value are usage errors', async () => {
     const HOME = tmpHomeDir()
-    expect((await runCli(['teams', '--hmoe', 'x'], { HOME })).code).toBe(2)
-    const missing = await runCli(['teams', '--home'], { HOME })
+    expect((await runCli(['teams', '--hmoe', 'x'], { HOME, A2A_CLI_HOME: HOME })).code).toBe(2)
+    const missing = await runCli(['teams', '--home'], { HOME, A2A_CLI_HOME: HOME })
     expect(missing.code).toBe(2)
     expect(missing.stderr).toContain('--home needs a value')
   })
@@ -88,22 +88,24 @@ describe('a2a-net CLI: exit codes and help', () => {
 describe('a2a-net CLI: init', () => {
   it('writes a 0600 identity, refuses to overwrite it without --force, and replaces it with --force', async () => {
     const HOME = tmpHomeDir()
-    const file = join(HOME, '.a2a', 'cli.json')
-    expect((await runCli(['init', 'scout', '--uuid', '0123456789abcdef'], { HOME })).code).toBe(0)
+    const file = join(HOME, 'cli.json')
+    expect((await runCli(['init', 'scout', '--uuid', '0123456789abcdef'], { HOME, A2A_CLI_HOME: HOME })).code).toBe(0)
     const first = readFileSync(file, 'utf8')
-    expect(statSync(file).mode & 0o777).toBe(0o600)
-    const again = await runCli(['init', 'other'], { HOME })
+    // 0600 is a POSIX permission bit; Windows stat reports 0666 and guards
+    // via ACLs instead — assert the bit where it exists.
+    if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600)
+    const again = await runCli(['init', 'other'], { HOME, A2A_CLI_HOME: HOME })
     expect(again.code).toBe(1)
     expect(again.stderr).toContain('already exists: scout/0123456789abcdef')
     expect(readFileSync(file, 'utf8')).toBe(first)
-    expect((await runCli(['init', 'other', '--force'], { HOME })).code).toBe(0)
+    expect((await runCli(['init', 'other', '--force'], { HOME, A2A_CLI_HOME: HOME })).code).toBe(0)
     expect(JSON.parse(readFileSync(file, 'utf8')).name).toBe('other')
   })
 
   it('a bad name or uuid is a usage error', async () => {
     const HOME = tmpHomeDir()
-    expect((await runCli(['init', 'Bad Name'], { HOME })).code).toBe(2)
-    expect((await runCli(['init', 'scout', '--uuid', 'xyz'], { HOME })).code).toBe(2)
+    expect((await runCli(['init', 'Bad Name'], { HOME, A2A_CLI_HOME: HOME })).code).toBe(2)
+    expect((await runCli(['init', 'scout', '--uuid', 'xyz'], { HOME, A2A_CLI_HOME: HOME })).code).toBe(2)
   })
 })
 
@@ -112,9 +114,9 @@ describe('a2a-net CLI: route / report talk to the right host with the right mess
     const host = await stubHost(() => delivered)
     servers.push(host.server)
     const HOME = tmpHomeDir()
-    await runCli(['init', 'scout', '--uuid', '0123456789abcdef'], { HOME })
-    const spaced = await runCli(['route', 'ops', 'hello', 'there', '--key', 'K1', '--home', host.url], { HOME })
-    const equals = await runCli(['route', '--home=' + host.url, 'ops', 'second', 'try', '--key=K2'], { HOME })
+    await runCli(['init', 'scout', '--uuid', '0123456789abcdef'], { HOME, A2A_CLI_HOME: HOME })
+    const spaced = await runCli(['route', 'ops', 'hello', 'there', '--key', 'K1', '--home', host.url], { HOME, A2A_CLI_HOME: HOME })
+    const equals = await runCli(['route', '--home=' + host.url, 'ops', 'second', 'try', '--key=K2'], { HOME, A2A_CLI_HOME: HOME })
     expect(spaced.code).toBe(0)
     expect(equals.code).toBe(0)
     const [a, b] = host.seen.filter(s => s.path === '/a2a/direct')
@@ -129,8 +131,8 @@ describe('a2a-net CLI: route / report talk to the right host with the right mess
     const host = await stubHost(() => delivered)
     servers.push(host.server)
     const HOME = tmpHomeDir()
-    await runCli(['init', 'scout'], { HOME })
-    expect((await runCli(['route', 'ops', '--home', host.url, '--', '-1', 'is', 'the', 'answer'], { HOME })).code).toBe(0)
+    await runCli(['init', 'scout'], { HOME, A2A_CLI_HOME: HOME })
+    expect((await runCli(['route', 'ops', '--home', host.url, '--', '-1', 'is', 'the', 'answer'], { HOME, A2A_CLI_HOME: HOME })).code).toBe(0)
     expect(host.seen.find(s => s.path === '/a2a/direct')?.body.message).toBe('-1 is the answer')
   })
 
@@ -138,16 +140,16 @@ describe('a2a-net CLI: route / report talk to the right host with the right mess
     const host = await stubHost(() => delivered)
     servers.push(host.server)
     const HOME = tmpHomeDir()
-    await runCli(['init', 'scout'], { HOME })
-    expect((await runCli(['report', 'all', 'good'], { HOME, A2A_HOME: host.url, A2A_KEY: 'ENVKEY' })).code).toBe(0)
+    await runCli(['init', 'scout'], { HOME, A2A_CLI_HOME: HOME })
+    expect((await runCli(['report', 'all', 'good'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url, A2A_KEY: 'ENVKEY' })).code).toBe(0)
     const report = host.seen.find(s => s.path === '/a2a/direct')
     expect(report?.headers['x-api-key']).toBe('ENVKEY')
     expect(report?.body.message).toBe('[a2a-net cli report] all good')
     const SAVED = tmpHomeDir()
-    await runCli(['init', 'scout', '--home', `${host.url}/`], { HOME: SAVED })
-    expect(JSON.parse(readFileSync(join(SAVED, '.a2a', 'cli.json'), 'utf8')).home).toBe(host.url)
+    await runCli(['init', 'scout', '--home', `${host.url}/`], { HOME: SAVED, A2A_CLI_HOME: SAVED })
+    expect(JSON.parse(readFileSync(join(SAVED, 'cli.json'), 'utf8')).home).toBe(host.url)
     host.seen.length = 0
-    expect((await runCli(['route', 'ops', 'via', 'saved'], { HOME: SAVED })).code).toBe(0)
+    expect((await runCli(['route', 'ops', 'via', 'saved'], { HOME: SAVED, A2A_CLI_HOME: SAVED })).code).toBe(0)
     expect(host.seen.map(s => s.path)).toEqual(['/a2a/direct'])
   })
 
@@ -155,11 +157,11 @@ describe('a2a-net CLI: route / report talk to the right host with the right mess
     const host = await stubHost(() => ({ status: 403, body: { error: 'caller not admitted' } }))
     servers.push(host.server)
     const HOME = tmpHomeDir()
-    await runCli(['init', 'scout'], { HOME })
-    const refused = await runCli(['route', 'ops', 'hi', '--home', host.url], { HOME })
+    await runCli(['init', 'scout'], { HOME, A2A_CLI_HOME: HOME })
+    const refused = await runCli(['route', 'ops', 'hi', '--home', host.url], { HOME, A2A_CLI_HOME: HOME })
     expect(refused.code).toBe(1)
     expect(refused.stderr).toContain('caller not admitted')
-    const raw = await runCli(['route', 'ops', 'hi', '--home', host.url, '--json'], { HOME })
+    const raw = await runCli(['route', 'ops', 'hi', '--home', host.url, '--json'], { HOME, A2A_CLI_HOME: HOME })
     expect(raw.code).toBe(1)
     expect(JSON.parse(raw.stdout)).toEqual({ error: 'caller not admitted' })
   })
@@ -172,7 +174,7 @@ describe('a2a-net CLI: a host behind dsh-pocket', () => {
     const HOME = tmpHomeDir()
     expect((await runCli(['teams'], { HOME, A2A_HOME: host.url, A2A_KEY: 'K', A2A_TOKEN: 'T1' })).code).toBe(0)
     expect((await runCli(['teams'], { HOME, A2A_HOME: host.url, A2A_TOKEN: 'T1', A2A_POCKET_TOKEN: 'T2' })).code).toBe(0)
-    expect((await runCli(['teams'], { HOME, A2A_HOME: host.url })).code).toBe(0)
+    expect((await runCli(['teams'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url })).code).toBe(0)
     const [both, pocketOnly, neither] = host.seen
     expect(both?.headers['x-api-key']).toBe('K')
     expect(both?.headers.cookie).toBe('dsh_pocket_token=T1')
@@ -185,8 +187,8 @@ describe('a2a-net CLI: a host behind dsh-pocket', () => {
     const host = await stubHost(() => ({ status: 405, body: '' }))
     servers.push(host.server)
     const HOME = tmpHomeDir()
-    await runCli(['init', 'scout'], { HOME })
-    const out = await runCli(['whoami', '--home', host.url], { HOME })
+    await runCli(['init', 'scout'], { HOME, A2A_CLI_HOME: HOME })
+    const out = await runCli(['whoami', '--home', host.url], { HOME, A2A_CLI_HOME: HOME })
     expect(out.stdout).toMatch(/deposit\s+UNKNOWN — deposit face unreadable: HTTP 405/)
     expect(out.stdout).not.toContain('OFFLINE')
   })
@@ -199,14 +201,39 @@ describe('a2a-net CLI: read commands and errors', () => {
     const host = await stubHost(() => keyed ? { status: 401, body: { error: 'unauthorized: X-API-Key required' } } : { status: 200, body: { tasks: rows, tasksDead: [], archived: [] } })
     servers.push(host.server)
     const HOME = tmpHomeDir()
-    const denied = await runCli(['tasks', '--home', host.url], { HOME })
+    const denied = await runCli(['tasks', '--home', host.url], { HOME, A2A_CLI_HOME: HOME })
     expect(denied.code).toBe(1)
     expect(denied.stderr).toContain('set $A2A_KEY')
     keyed = false
-    const table = await runCli(['tasks', '--home', host.url], { HOME })
+    const table = await runCli(['tasks', '--home', host.url], { HOME, A2A_CLI_HOME: HOME })
     expect(table.stdout).toContain('… 5 more (--json lists all)')
-    const json = await runCli(['tasks', '--home', host.url, '--json'], { HOME })
+    const json = await runCli(['tasks', '--home', host.url, '--json'], { HOME, A2A_CLI_HOME: HOME })
     expect((JSON.parse(json.stdout) as { pending: unknown[] }).pending).toHaveLength(25)
+  })
+
+  it('double-run idempotency under one A2A_CLI_HOME (Windows isolation round)', async () => {
+    // The review FAIL: HOME-only isolation leaked the real profile on
+    // Windows (os.homedir() reads USERPROFILE) — a second run collided with
+    // the machine's own identity. With A2A_CLI_HOME the anchor is
+    // platform-uniform; two inits in ONE home are exactly as safe as two
+    // homes: the overwrite guard refuses, the key never moves.
+    const home = tmpHomeDir()
+    const first = await runCli(['init', 'scout', '--uuid', '0123456789abcdef'], { HOME: home, A2A_CLI_HOME: home })
+    expect(first.code).toBe(0)
+    const before = readFileSync(join(home, 'cli.json'), 'utf8')
+    const second = await runCli(['init', 'scout', '--uuid', '0123456789abcdef'], { HOME: home, A2A_CLI_HOME: home })
+    expect(second.code).not.toBe(0)
+    expect(second.stderr).toContain('already exists')
+    const after = readFileSync(join(home, 'cli.json'), 'utf8')
+    expect(after).toBe(before)
+  })
+
+  it('the identity lands inside A2A_CLI_HOME — never in a stray .a2a spelling of the temp home', async () => {
+    const home = tmpHomeDir()
+    const out = await runCli(['init', 'scout'], { HOME: home, A2A_CLI_HOME: home })
+    expect(out.code).toBe(0)
+    expect(existsSync(join(home, 'cli.json'))).toBe(true)
+    expect(existsSync(join(home, '.a2a'))).toBe(false)
   })
 
   it('an unreachable host names itself and the fix', async () => {
@@ -224,8 +251,8 @@ describe('a2a-net CLI: read commands and errors', () => {
     copyFileSync(CLI, join(dir, 'cli', 'a2a.mjs'))
     const HOME = tmpHomeDir()
     const cli = join(dir, 'cli', 'a2a.mjs')
-    expect((await runCli(['init', 'scout'], { HOME }, cli)).code).toBe(0)
-    const publish = await runCli(['publish'], { HOME }, cli)
+    expect((await runCli(['init', 'scout'], { HOME, A2A_CLI_HOME: HOME }, cli)).code).toBe(0)
+    const publish = await runCli(['publish'], { HOME, A2A_CLI_HOME: HOME }, cli)
     expect(publish.code).toBe(1)
     expect(publish.stderr).toContain('run `pnpm build`')
   })
@@ -251,7 +278,7 @@ async function mailHost() {
 
 async function scoutHome(): Promise<string> {
   const HOME = tmpHomeDir()
-  await runCli(['init', 'scout', '--uuid', '0123456789abcdef'], { HOME })
+  await runCli(['init', 'scout', '--uuid', '0123456789abcdef'], { HOME, A2A_CLI_HOME: HOME })
   return HOME
 }
 
@@ -259,7 +286,7 @@ describe('a2a-net CLI: inbox unread cursor', () => {
   it('--new shows only unread mail oldest first and advances the cursor; --peek does not; a shared millisecond is not lost', async () => {
     const host = await mailHost()
     const HOME = await scoutHome()
-    const env = { HOME, A2A_HOME: host.url }
+    const env = { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url }
     host.mail.push({ at: 1000, from: 'cargo/22222222', text: 'first' }, { at: 2000, from: 'cargo/22222222', text: 'second' })
     const peek = await runCli(['inbox', '--new', '--peek', '--json'], env)
     expect((JSON.parse(peek.stdout) as Array<{ text: string }>).map(m => m.text)).toEqual(['first', 'second'])
@@ -271,16 +298,16 @@ describe('a2a-net CLI: inbox unread cursor', () => {
     expect((JSON.parse(next.stdout) as Array<{ text: string }>).map(m => m.text)).toEqual(['same ms', 'third'])
     // Bare inbox still lists everything, and leaves the cursor alone.
     expect((await runCli(['inbox', '--json'], env)).stdout).toContain('first')
-    expect(JSON.parse(readFileSync(join(HOME, '.a2a', 'inbox.cursor'), 'utf8'))).toMatchObject({ handle: 'scout/0123456789abcdef', at: 3000 })
+    expect(JSON.parse(readFileSync(join(HOME, 'inbox.cursor'), 'utf8'))).toMatchObject({ handle: 'scout/0123456789abcdef', at: 3000 })
   })
 
   it('the cursor belongs to one handle: a new identity starts unread again', async () => {
     const host = await mailHost()
     const HOME = await scoutHome()
     host.mail.push({ at: 1000, from: 'cargo/22222222', text: 'hello' })
-    await runCli(['inbox', '--new'], { HOME, A2A_HOME: host.url })
-    await runCli(['init', 'other', '--force'], { HOME })
-    expect((await runCli(['inbox', '--new'], { HOME, A2A_HOME: host.url })).stdout).toContain('hello')
+    await runCli(['inbox', '--new'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url })
+    await runCli(['init', 'other', '--force'], { HOME, A2A_CLI_HOME: HOME })
+    expect((await runCli(['inbox', '--new'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url })).stdout).toContain('hello')
   })
 })
 
@@ -288,7 +315,7 @@ describe('a2a-net CLI: inbox --hook', () => {
   it('prints nothing without unread mail; with mail, one hookSpecificOutput object for the calling event, framed as data', async () => {
     const host = await mailHost()
     const HOME = await scoutHome()
-    const env = { HOME, A2A_HOME: host.url }
+    const env = { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url }
     const quiet = await runCli(['inbox', '--hook'], env, CLI, JSON.stringify({ hook_event_name: 'UserPromptSubmit' }))
     expect(quiet).toMatchObject({ code: 0, stdout: '' })
     host.mail.push({ at: Date.UTC(2026, 9, 24, 12), from: 'cargo/22222222', text: 'please review PR 37' })
@@ -306,15 +333,15 @@ describe('a2a-net CLI: inbox --hook', () => {
     const host = await mailHost()
     const HOME = await scoutHome()
     host.mail.push({ at: 1000, from: 'cargo/22222222', text: 'x' })
-    const noStdin = await runCli(['inbox', '--hook'], { HOME, A2A_HOME: host.url }, CLI, '')
+    const noStdin = await runCli(['inbox', '--hook'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url }, CLI, '')
     expect((JSON.parse(noStdin.stdout) as { hookSpecificOutput: { hookEventName: string } }).hookSpecificOutput.hookEventName).toBe('PostToolUse')
     const refusing = await stubHost(() => ({ status: 401, body: { error: 'unauthorized' } }))
     servers.push(refusing.server)
-    expect(await runCli(['inbox', '--hook'], { HOME, A2A_HOME: refusing.url }, CLI, '{}')).toMatchObject({ code: 0, stdout: '', stderr: '' })
+    expect(await runCli(['inbox', '--hook'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: refusing.url }, CLI, '{}')).toMatchObject({ code: 0, stdout: '', stderr: '' })
     const url = refusing.url
     await new Promise(resolve => refusing.server.close(resolve))
     servers.splice(servers.indexOf(refusing.server), 1)
-    expect(await runCli(['inbox', '--hook'], { HOME, A2A_HOME: url }, CLI, '{}')).toMatchObject({ code: 0, stdout: '' })
+    expect(await runCli(['inbox', '--hook'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: url }, CLI, '{}')).toMatchObject({ code: 0, stdout: '' })
   })
 })
 
@@ -323,23 +350,23 @@ describe('a2a-net CLI: inbox --wait', () => {
     const host = await mailHost()
     const HOME = await scoutHome()
     setTimeout(() => { host.mail.push({ at: Date.now(), from: 'cargo/22222222', text: 'woke you' }) }, 400)
-    const out = await runCli(['inbox', '--wait', '--interval', '100ms', '--timeout', '20s'], { HOME, A2A_HOME: host.url })
+    const out = await runCli(['inbox', '--wait', '--interval', '100ms', '--timeout', '20s'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url })
     expect(out.code).toBe(0)
     expect(out.stdout).toContain('cargo/22222222: woke you')
-    expect((await runCli(['inbox', '--new'], { HOME, A2A_HOME: host.url })).stdout.trim()).toBe('[inbox] no new mail')
+    expect((await runCli(['inbox', '--new'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url })).stdout.trim()).toBe('[inbox] no new mail')
   })
 
   it('exits 3 on timeout; --renew re-publishes a missing deposit before polling', async () => {
     const host = await mailHost()
     const HOME = await scoutHome()
-    const out = await runCli(['inbox', '--wait', '--renew', '--interval', '100ms', '--timeout', '300ms'], { HOME, A2A_HOME: host.url })
+    const out = await runCli(['inbox', '--wait', '--renew', '--interval', '100ms', '--timeout', '300ms'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url })
     expect(out.code).toBe(3)
     expect(out.stderr).toContain('no new mail within')
     expect(out.stderr).toContain('deposit renewed')
     expect(host.actions).toContain('publish')
     host.actions.length = 0
     host.deposits.push({ handle: 'scout/0123456789abcdef', expiresAt: Date.now() + 3 * 3_600_000 })
-    await runCli(['inbox', '--wait', '--renew', '--interval', '100ms', '--timeout', '200ms'], { HOME, A2A_HOME: host.url })
+    await runCli(['inbox', '--wait', '--renew', '--interval', '100ms', '--timeout', '200ms'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url })
     expect(host.actions).not.toContain('publish')
   })
 
