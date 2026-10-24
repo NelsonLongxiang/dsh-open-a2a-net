@@ -128,10 +128,13 @@ function collectDepsMirror() {
   const ws = readFileSync(join(REPO, 'pnpm-workspace.yaml'), 'utf8')
   const wsBlock = ws.slice(ws.indexOf('overrides:'))
   const wsOverrides = Object.fromEntries([...wsBlock.matchAll(/'([^']+)':\s*(\S+)/g)].map(m => [m[1], m[2]]))
-  const pkgOverrides = pkg.pnpm?.overrides ?? {}
-  const keys = new Set([...Object.keys(pkgOverrides), ...Object.keys(wsOverrides)])
-  const drift = [...keys].filter(k => pkgOverrides[k] !== wsOverrides[k])
-  rows.push({ name: 'mirror-drift', ok: drift.length === 0 ? 1 : 0, detail: drift.join(',') || 'none' })
+  // 2026-10-25（gh#46 修复轮 a3a57b8）：镜像退役——A/B 实证镜像字段与 11.28 开发机互斥
+  // （字段在场=verify-deps 拒跑一切 pnpm 脚本）；舰队三机归一 11.28.5 后零 pre-11.24 读者。
+  // S7 锚演进：单一归属=workspace.yaml 携 overrides 且 package.json#pnpm 必须缺席。
+  const pkgPnpmAbsent = pkg.pnpm === undefined
+  const singleSource = pkgPnpmAbsent && Object.keys(wsOverrides).length > 0
+  const drift = singleSource ? [] : ['mirror contract violated: expect workspace.yaml-only overrides with package.json#pnpm absent']
+  rows.push({ name: 'mirror-drift', ok: drift.length === 0 ? 1 : 0, detail: drift.length === 0 ? `single-source (${Object.keys(wsOverrides).length} overrides, pkg#pnpm absent)` : drift.join(',') })
   rows.push({ name: 'packageManager-pin', ok: /^pnpm@11\.28\.5$/.test(pkg.packageManager ?? '') ? 1 : 0, detail: String(pkg.packageManager ?? 'missing') })
   rows.push({ name: 'engines-range', ok: />=11\.24/.test(pkg.engines?.pnpm ?? '') ? 1 : 0, detail: String(pkg.engines?.pnpm ?? 'missing') })
   return rows
