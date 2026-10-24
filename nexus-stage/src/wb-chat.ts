@@ -420,17 +420,29 @@ export function createChatDrawer(deps: ChatDrawerDeps): ChatDrawer {
     return { text: `${stale ? '陈旧' : label} · ${row.status}`, tone: stale ? 'warn' : 'wait', hint: `${inbound ? '对方等待本机回执；' : ''}派发于 ${ago(row.startedAt, now)}` }
   }
 
-  /** A send that left the ledger, by the verdict it archived under (gh#31).
-   *  The summary is the peer's free text: a tooltip, never markup. */
+  /** A send that left the ledger, by how it ended (gh#31). `endedBy` says
+   *  who ended it; an older host omits it, and then only the outcome is
+   *  known. The summary is the peer's free text only on a receipt-settled
+   *  row (a tooltip, never markup) — caller-ended and echo rows carry the
+   *  ledger's own markers, which are not shown. */
   function settledStatus(row: ArchivedRow, now: number): SentRow['status'] {
     const when = `结算于 ${ago(row.resolvedAt, now)}`
-    // 'abandoned' is ambiguous here: this host abandoning or cancelling the
-    // send, or the peer's receipt reporting that IT abandoned the task — the
-    // archive row's outcome alone cannot tell which, so claim neither side.
-    if (row.outcome === 'abandoned') return { text: '已放弃（本机或对方）', tone: 'muted', hint: `${when}；本机放弃或撤回，或对方回执报告放弃` }
+    if (row.endedBy === 'abandoned' || row.endedBy === 'cancelled') {
+      const act = row.endedBy === 'cancelled' ? '撤回' : '放弃'
+      // The peer answered after we ended it: the verdict stays ours (late
+      // receipts never rewrite it), but the reader should know it came.
+      if (row.late === true) return { text: `已${act} · 回执迟到`, tone: 'warn', hint: `${when}；本机${act}之后对方回执才到，结局不改写` }
+      return { text: `已${act}`, tone: 'muted', hint: `${when}；本机${act}，未等到回执` }
+    }
+    if (row.endedBy === 'echo') return { text: '已结算 · 内容回显', tone: 'ok', hint: `${when}；对方回了内容但未带正式回执，按内容回显结算` }
+    // An older host without endedBy: 'abandoned' may be ours (abandon or
+    // cancel) or the peer's receipt verdict — claim neither side.
+    if (row.endedBy === undefined && row.outcome === 'abandoned') return { text: '已放弃（本机或对方）', tone: 'muted', hint: `${when}；本机放弃或撤回，或对方回执报告放弃` }
+    // Settled by the peer's receipt: its own verdict.
+    const summary = row.summary !== undefined && row.summary !== '' ? ` · ${row.summary}` : ''
+    if (row.outcome === 'abandoned') return { text: '已回执 · 对方放弃', tone: 'warn', hint: `${when}；对方回执报告放弃${summary}` }
     const v = VERDICTS.find(x => x.key === row.outcome)
     const tone: Tone = v?.tone === 'completed' ? 'ok' : v?.tone === 'failed' ? 'danger' : v?.tone === 'rejected' ? 'warn' : 'muted'
-    const summary = row.summary !== undefined && row.summary !== '' ? ` · ${row.summary}` : ''
     if (row.outcome === 'unclassified') return { text: '已回执', tone: 'ok', hint: `${when}；回执未带结论${summary}` }
     return { text: `已回执 · ${v?.label ?? row.outcome}`, tone, hint: `${when}${summary}` }
   }

@@ -9,7 +9,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createChatDrawer, type ChatDrawerDeps } from '../src/wb-chat.ts'
-import type { StateBody } from '../src/workbench.ts'
+import type { ArchivedRow, StateBody } from '../src/workbench.ts'
 
 const NOW = 1_800_000_000_000
 const TEAM = 'dsh/11111111'
@@ -121,6 +121,33 @@ describe('chat drawer (wb-chat)', () => {
     // Another team's archive row with the same id is not ours.
     d.update({ ...baseState, archived: [{ taskId: 'direct-arch0002', team: 'dsh/99999999', resolvedAt: NOW, outcome: 'completed' }] })
     expect(statuses(d.root)).toEqual(['已派发'])
+  })
+
+  it('endedBy tells who ended it: 对方放弃 vs 已放弃 / 已撤回, and a late receipt is flagged (gh#31 / #32)', async () => {
+    const { d, resolve } = drawer()
+    d.update(baseState)
+    d.open(session)
+    send(d.root, 'x')
+    resolve({ ok: true, task_id: 'direct-end00001' })
+    await vi.waitFor(() => expect(statuses(d.root)).toEqual(['已派发']))
+    const ended = (row: Partial<ArchivedRow>) => {
+      d.update({ ...baseState, archived: [{ taskId: 'direct-end00001', team: TEAM, resolvedAt: NOW - 1_000, outcome: 'abandoned', ...row }] })
+      const chip = q(d.root, '.wb-msg-status')
+      return `${chip.textContent}|${[...chip.classList].find(c => c.startsWith('is-'))}`
+    }
+    expect(ended({ endedBy: 'receipt', summary: '资源不足，放弃' })).toBe('已回执 · 对方放弃|is-warn')
+    expect(q(d.root, '.wb-msg-status').title).toContain('资源不足，放弃')
+    expect(ended({ endedBy: 'abandoned', summary: 'caller-abandoned: workbench' })).toBe('已放弃|is-muted')
+    // The ledger's own caller marker is not the peer's words — never shown.
+    expect(q(d.root, '.wb-msg-status').title).not.toContain('caller-abandoned')
+    expect(ended({ endedBy: 'cancelled' })).toBe('已撤回|is-muted')
+    expect(ended({ endedBy: 'cancelled', late: true })).toBe('已撤回 · 回执迟到|is-warn')
+    expect(ended({ endedBy: 'abandoned', late: true })).toBe('已放弃 · 回执迟到|is-warn')
+    expect(ended({ endedBy: 'echo', outcome: 'unclassified', summary: '(settled by content echo)' })).toBe('已结算 · 内容回显|is-ok')
+    expect(q(d.root, '.wb-msg-status').title).not.toContain('settled by content echo')
+    // An older host without endedBy keeps the neutral reading.
+    expect(ended({})).toBe('已放弃（本机或对方）|is-muted')
+    expect(ended({ outcome: 'completed' })).toBe('已回执 · 完成|is-ok')
   })
 
   it('a dead row says its own direction (gh#31): an inbound one sits on their side unseen before', () => {
