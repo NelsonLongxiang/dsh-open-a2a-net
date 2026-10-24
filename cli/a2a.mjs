@@ -26,34 +26,90 @@ import { generateKeyPairSync, randomUUID, sign as edSign, createPrivateKey } fro
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { signCard } from '../lib/card.js'
 
 const IDENTITY = join(homedir(), '.a2a', 'cli.json')
 const DEFAULT_HOME = 'http://127.0.0.1:3080'
 const DEFAULT_SKILL_ROOTS = [join(homedir(), '.agents', 'skills')]
 
-const args = process.argv.slice(2)
-const cmd = args[0] ?? ''
-const flag = (name) => {
-  const i = args.indexOf(name)
-  return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined
-}
-const positionals = () => {
-  const out = []
-  for (let i = 1; i < args.length; i += 1) {
-    if (String(args[i]).startsWith('--')) { i += 1; continue }
-    if (i > 1 && String(args[i - 1]).startsWith('--')) continue
-    out.push(args[i])
-  }
-  return out
-}
-const home = () => (flag('--home') ?? DEFAULT_HOME).replace(/\/$/, '')
+const USAGE = `a2a-net CLI — aligned with the plugin's ten model tools ('a2a tools' prints the full map)
+
+usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
+
+户口制:   init <name> [--uuid 16hex] [--force] · publish · inbox · revoke
+对齐面:   whoami · teams [query] · route <team> <msg…> · status · tasks · probe · report <msg…>
+CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
+
+host:     --home > $A2A_HOME > the home saved by 'a2a init --home URL' > ${DEFAULT_HOME}
+key:      --key > $A2A_KEY (prefer the env var: a --key value stays in shell history)
+message:  everything after <team> that is not a flag; put a message that starts with '-' after '--'
+--json:   teams / tasks / probe / route / report print the raw rows instead of the table`
+
+/** Flags that take a value (both '--home URL' and '--home=URL'); the rest are switches. */
+const VALUE_FLAGS = new Set(['--home', '--key', '--uuid', '--root'])
+const SWITCHES = new Set(['--json', '--force', '--help', '-h'])
+
 const die = (msg) => { console.error(String(msg)); process.exit(1) }
+/** A usage error: exit 2, so scripts can tell "you called it wrong" from "the host said no". */
+const usage = (msg) => { console.error(String(msg)); process.exit(2) }
+
+/**
+ * Split argv into flags and positionals in one pass. Flag VALUES never leak
+ * into positionals, so 'a2a route ops hi --key K' sends "hi", not "hi K".
+ */
+function parseArgs(argv) {
+  const flags = new Map()
+  const positional = []
+  let rest = false
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = String(argv[i])
+    if (rest) { positional.push(arg); continue }
+    if (arg === '--') { rest = true; continue }
+    const eq = arg.indexOf('=')
+    const name = arg.startsWith('--') && eq > 0 ? arg.slice(0, eq) : arg
+    if (VALUE_FLAGS.has(name)) {
+      if (eq > 0 && name !== arg) { flags.set(name, arg.slice(eq + 1)); continue }
+      if (i + 1 >= argv.length) usage(`${name} needs a value`)
+      flags.set(name, String(argv[i + 1]))
+      i += 1
+      continue
+    }
+    if (SWITCHES.has(arg)) { flags.set(arg, true); continue }
+    if (arg.startsWith('-') && arg.length > 1) usage(`unknown flag ${arg} — a message that starts with '-' goes after '--'`)
+    positional.push(arg)
+  }
+  return { flags, positional }
+}
+
+const parsed = parseArgs(process.argv.slice(2))
+const cmd = parsed.positional[0] ?? ''
+const flag = (name) => {
+  const value = parsed.flags.get(name)
+  return typeof value === 'string' ? value : undefined
+}
+const has = (name) => parsed.flags.has(name)
+const positionals = () => parsed.positional.slice(1)
+
+/** The saved identity, or undefined when 'a2a init' never ran. */
+function storedIdentity() {
+  if (!existsSync(IDENTITY)) return undefined
+  try {
+    return JSON.parse(readFileSync(IDENTITY, 'utf8'))
+  } catch {
+    die(`${IDENTITY} is not valid JSON — fix it, or replace it with: a2a init <agent-name> --force`)
+  }
+}
 
 function identity() {
-  if (!existsSync(IDENTITY)) die('no identity — run: a2a init <agent-name>')
-  return JSON.parse(readFileSync(IDENTITY, 'utf8'))
+  const id = storedIdentity()
+  if (id === undefined) die('no identity — run: a2a init <agent-name>')
+  return id
 }
+
+const home = () => {
+  const saved = storedIdentity()?.home
+  return String(flag('--home') ?? process.env.A2A_HOME ?? saved ?? DEFAULT_HOME).replace(/\/$/, '')
+}
+const apiKey = () => flag('--key') ?? (process.env.A2A_KEY !== undefined && process.env.A2A_KEY !== '' ? process.env.A2A_KEY : undefined)
 
 function originClaimFor(base) {
   const id = identity()
@@ -67,21 +123,37 @@ function originClaimFor(base) {
 }
 
 const keyHeaders = () => {
-  const key = flag('--key')
+  const key = apiKey()
   return key !== undefined ? { 'X-API-Key': key } : {}
+}
+
+/** Read a JSON reply; a non-JSON body (a proxy page, an old host) becomes an error object. */
+async function replyOf(res) {
+  const text = await res.text()
+  try {
+    return JSON.parse(text)
+  } catch {
+    return { error: `HTTP ${String(res.status)}, not JSON: ${text.slice(0, 120)}` }
+  }
 }
 
 async function control(body) {
   const res = await fetch(`${home()}/__dsh_a2a/cli-deposit`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', ...keyHeaders() }, body: JSON.stringify(body),
   })
-  return await res.json()
+  if (res.status === 401 || res.status === 403) die(keyHint(res.status))
+  return await replyOf(res)
+}
+
+function keyHint(status) {
+  return `host ${home()} answered ${String(status)} — ${apiKey() === undefined ? 'it is keyed: set $A2A_KEY (or pass --key)' : 'the key was refused: check $A2A_KEY / --key'}`
 }
 
 async function state() {
   const res = await fetch(`${home()}/__dsh_a2a/state`, { headers: keyHeaders() })
-  if (res.status !== 200) die(`state face ${String(res.status)} — ${flag('--key') === undefined ? 'pass --key <apiKey>' : 'wrong key?'}`)
-  return await res.json()
+  if (res.status === 401 || res.status === 403) die(keyHint(res.status))
+  if (res.status !== 200) die(`state face ${String(res.status)} on ${home()}`)
+  return await replyOf(res)
 }
 
 // ── the plugin's ten tools, one line each (mirrors src registration) ─────
@@ -160,7 +232,7 @@ function cmdSkills() {
     process.stdout.write(hit.text)
     return
   }
-  if (args.includes('--json')) {
+  if (has('--json')) {
     console.log(JSON.stringify(skills.map(({ name, description, path }) => ({ name, description, path })), null, 2))
     return
   }
@@ -169,40 +241,85 @@ function cmdSkills() {
 }
 
 // ── commands ────────────────────────────────────────────────────────────
+/** The card signer lives in the built lib/: load it only for 'publish', and say how to get it. */
+async function loadSignCard() {
+  try {
+    return (await import('../lib/card.js')).signCard
+  } catch (error) {
+    if (error?.code === 'ERR_MODULE_NOT_FOUND') die('[publish] lib/card.js is missing — run `pnpm build` in this checkout first (the published package ships it)')
+    throw error
+  }
+}
+
+const hoursLeft = (expiresAt) => ((expiresAt - Date.now()) / 3_600_000).toFixed(2)
+
+/** Print the first `cap` rows and say how many were left out. */
+function listCapped(rows, cap, line) {
+  for (const row of rows.slice(0, cap)) console.log(line(row))
+  if (rows.length > cap) console.log(`  … ${String(rows.length - cap)} more (--json lists all)`)
+}
+
+/** One readable line for a /a2a/direct reply; the raw reply stays one --json away. */
+async function printDelivery(verb, res) {
+  const out = await replyOf(res)
+  if (has('--json')) {
+    console.log(JSON.stringify(out, null, 2))
+    if (out.delivered !== true) process.exitCode = 1
+    return
+  }
+  if (res.status === 401 || res.status === 403) die(`[${verb}] ${keyHint(res.status)}${out.error !== undefined ? ` (${String(out.error)})` : ''}`)
+  if (out.delivered !== true) die(`[${verb}] not delivered (HTTP ${String(res.status)}): ${String(out.error ?? out.task_status ?? 'no reason given')}`)
+  const receipt = out.receipt === 'none' ? 'no receipt will come' : 'receipt arrives in: a2a inbox'
+  console.log(`[${verb}] delivered → ${String(out.team)} · task ${String(out.task_id)} · ${receipt}`)
+}
+
 async function main() {
+  if (cmd === 'help' || has('--help') || has('-h')) {
+    console.log(USAGE)
+    return
+  }
   if (cmd === 'init') {
     const name = positionals()[0]
-    if (name === undefined || !/^[a-z0-9-]{1,32}$/.test(name)) die('usage: a2a init <agent-name>  (name: [a-z0-9-]{1,32})')
+    if (name === undefined || !/^[a-z0-9-]{1,32}$/.test(name)) usage('usage: a2a init <agent-name> [--uuid 16hex] [--home URL] [--force]  (name: [a-z0-9-]{1,32})')
+    const existing = storedIdentity()
+    if (existing !== undefined && !has('--force')) {
+      die(`[init] an identity already exists: ${String(existing.handle)} (${IDENTITY}).\n       --force replaces its key; the old handle's deposit then no longer verifies.`)
+    }
     let uuid = flag('--uuid')
     if (uuid === undefined) uuid = randomUUID().replace(/-/g, '').slice(0, 16)
-    if (!/^[0-9a-f]{16}$/.test(uuid)) die('--uuid must be 16 hex chars (8 bytes)')
+    if (!/^[0-9a-f]{16}$/.test(uuid)) usage('--uuid must be 16 hex chars (8 bytes)')
+    const savedHome = flag('--home')?.replace(/\/$/, '')
     const { privateKey } = generateKeyPairSync('ed25519')
     mkdirSync(join(homedir(), '.a2a'), { recursive: true })
-    writeFileSync(IDENTITY, JSON.stringify({ name, uuid, handle: `${name}/${uuid}`, privateKeyPem: privateKey.export({ format: 'pem', type: 'pkcs8' }) }, null, 2))
-    console.log(`[init] ${name}/${uuid} — key at ${IDENTITY}`)
+    writeFileSync(IDENTITY, JSON.stringify({
+      name, uuid, handle: `${name}/${uuid}`,
+      ...(savedHome !== undefined ? { home: savedHome } : {}),
+      privateKeyPem: privateKey.export({ format: 'pem', type: 'pkcs8' }),
+    }, null, 2), { mode: 0o600 })
+    console.log(`[init] ${name}/${uuid} — key at ${IDENTITY}${savedHome !== undefined ? ` · default host ${savedHome}` : ''}`)
     return
   }
   if (cmd === 'publish') {
+    const signCard = await loadSignCard()
     const id = identity()
     const privateKey = createPrivateKey(id.privateKeyPem)
     const card = signCard({ name: id.name, session: `cli-${id.name}`, team: id.handle, capabilities: { route: true, async: true }, expiresAt: Date.now() + 2 * 24 * 60 * 60 * 1000 }, privateKey)
     const out = await control({ action: 'publish', card: JSON.stringify(card) })
     if (out.ok !== true) die(`[publish] refused: ${String(out.error)}`)
-    console.log(`[publish] ${String(out.handle)} online — ${((out.expiresAt - Date.now()) / 3_600_000).toFixed(2)}h left (auto-deregister then; re-publish returns)`)
+    console.log(`[publish] ${String(out.handle)} online — ${hoursLeft(out.expiresAt)}h left (auto-deregister then; re-publish returns)`)
     console.log(`[publish] card url: ${String(out.cardUrl)}`)
     return
   }
   if (cmd === 'route') {
-    const pos = positionals()
-    const team = pos[0]
-    const message = args.slice(args.indexOf(team) + 1).filter(a => !String(a).startsWith('--')).join(' ')
-    if (team === undefined || message === '') die('usage: a2a route <team> <message…>')
+    const [team, ...words] = positionals()
+    const message = words.join(' ')
+    if (team === undefined || message === '') usage('usage: a2a route <team> <message…>')
     const res = await fetch(`${home()}/a2a/direct`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...originClaimFor(home())(), ...keyHeaders() },
       body: JSON.stringify({ team, message, caller_session: identity().handle, wait: false }),
     })
-    console.log(JSON.stringify(await res.json(), null, 2))
+    await printDelivery('route', res)
     return
   }
   if (cmd === 'inbox') {
@@ -220,7 +337,8 @@ async function main() {
     const mine = (list.deposits ?? []).find(d => d.handle === id.handle)
     console.log(`handle      ${id.handle}`)
     console.log(`identity    ~/.a2a/cli.json (own Ed25519 key — the card's team = "${id.name}" is its own zone)`)
-    console.log(`deposit     ${mine === undefined ? 'OFFLINE (expired or never published — run: a2a publish)' : `ONLINE, ${((mine.expiresAt - Date.now()) / 3_600_000).toFixed(2)}h left`}`)
+    console.log(`deposit     ${mine === undefined ? 'OFFLINE (expired or never published — run: a2a publish)' : `ONLINE, ${hoursLeft(mine.expiresAt)}h left`}`)
+    console.log(`host        ${home()}`)
     console.log(`card url    ${home()}/a2a/cli/${encodeURIComponent(id.handle)}`)
     console.log(`capability  route via signed envelope; receive via mailbox (poll: a2a inbox)`)
     return
@@ -233,13 +351,16 @@ async function main() {
       ...(s.sessions ?? []).map(x => ({ team: String(x.team ?? ''), name: String(x.label ?? ''), where: 'local' })),
       ...(s.remote ?? []).map(x => ({ team: String(x.team ?? ''), name: String(x.name ?? ''), where: `remote · ${String(x.via ?? '')}` })),
     ]
-    for (const r of rows.filter(r => q === '' || r.team.toLowerCase().includes(q) || r.name.toLowerCase().includes(q))) {
-      console.log(`${r.team.padEnd(28)} ${r.name.slice(0, 24).padEnd(26)} [${r.where}]`)
-    }
+    const hits = rows.filter(r => q === '' || r.team.toLowerCase().includes(q) || r.name.toLowerCase().includes(q))
+    if (has('--json')) { console.log(JSON.stringify(hits, null, 2)); return }
+    for (const r of hits) console.log(`${r.team.padEnd(28)} ${r.name.slice(0, 24).padEnd(26)} [${r.where}]`)
+    if (hits.length === 0) console.log(q === '' ? '(no teams)' : `(no team matches "${q}")`)
     return
   }
   if (cmd === 'probe') {
     const s = await state()
+    if (has('--json')) { console.log(JSON.stringify(s.peers ?? [], null, 2)); return }
+    if ((s.peers ?? []).length === 0) console.log('(no tracked peers)')
     for (const p of s.peers ?? []) console.log(`${String(p.url).padEnd(36)} score=${String(p.score).padEnd(9)} link=${String(p.link ?? 'stranger').padEnd(8)} verified=${p.verified === true ? '✓' : '✗'}`)
     return
   }
@@ -248,12 +369,13 @@ async function main() {
     const pending = s.tasks ?? []
     const dead = s.tasksDead ?? []
     const archived = s.archived ?? []
+    if (has('--json')) { console.log(JSON.stringify({ pending, dead, archived }, null, 2)); return }
     console.log(`pending (${String(pending.length)}):`)
-    for (const t of pending.slice(0, 20)) console.log(`  ${String(t.taskId)} → ${String(t.team)} ${String(t.direction ?? '')}`)
+    listCapped(pending, 20, t => `  ${String(t.taskId)} → ${String(t.team)} ${String(t.direction ?? '')}`)
     console.log(`dead (${String(dead.length)}):`)
-    for (const t of dead.slice(0, 20)) console.log(`  ${String(t.taskId)} → ${String(t.team)} (${String(t.reason ?? '?')})`)
+    listCapped(dead, 20, t => `  ${String(t.taskId)} → ${String(t.team)} (${String(t.reason ?? '?')})`)
     console.log(`archived (${String(archived.length)}):`)
-    for (const t of archived.slice(0, 20)) console.log(`  ${String(t.taskId)} ${String(t.outcome ?? '?')}`)
+    listCapped(archived, 20, t => `  ${String(t.taskId)} ${String(t.outcome ?? '?')}${t.endedBy !== undefined && t.endedBy !== 'receipt' ? ` (${String(t.endedBy)})` : ''}`)
     return
   }
   if (cmd === 'status') {
@@ -267,19 +389,18 @@ async function main() {
       console.log('in-flight:')
       for (const r of inflight) console.log(`  ${String(r.team)} → ${String(r.peer)}`)
     }
-    console.log(`deposit     ${mine === undefined ? 'OFFLINE' : `ONLINE, ${((mine.expiresAt - Date.now()) / 3_600_000).toFixed(2)}h left`}`)
+    console.log(`deposit     ${mine === undefined ? 'OFFLINE' : `ONLINE, ${hoursLeft(mine.expiresAt)}h left`}`)
     return
   }
   if (cmd === 'report') {
-    const text = args.slice(1).filter(a => !String(a).startsWith('--')).join(' ')
-    if (text === '') die('usage: a2a report <message…> — one-way report into the host process-team mailbox')
+    const text = positionals().join(' ')
+    if (text === '') usage('usage: a2a report <message…> — one-way report into the host process-team mailbox')
     const res = await fetch(`${home()}/a2a/direct`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...originClaimFor(home())(), ...keyHeaders() },
       body: JSON.stringify({ team: 'dsh', message: `[a2a-net cli report] ${text}`, caller_session: identity().handle, wait: false }),
     })
-    const out = await res.json()
-    console.log(JSON.stringify(out, null, 2))
+    await printDelivery('report', res)
     return
   }
   if (cmd === 'revoke') {
@@ -287,14 +408,18 @@ async function main() {
     console.log(`[revoke] ${out.ok === true ? 'deregistered' : 'nothing to revoke'}`)
     return
   }
-  console.error(`a2a-net CLI — aligned with the plugin's ten model tools ('a2a tools' prints the full map)
-
-usage: a2a <command> [args] [--home URL] [--key <apiKey>]
-
-户口制:   init <name> [--uuid 16hex] · publish · inbox · revoke
-对齐面:   whoami · teams [query] · route <team> <msg> · status · tasks · probe · report <msg>
-CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table)`)
-  process.exit(cmd === '' ? 1 : 0)
+  // No command, or one this CLI does not know: usage error (exit 2), help on stderr.
+  console.error(cmd === '' ? USAGE : `unknown command "${cmd}"\n\n${USAGE}`)
+  process.exit(2)
 }
 
-void main().catch(error => { console.error(String(error)); process.exit(1) })
+void main().catch(error => {
+  // fetch() rejects with a bare "fetch failed"; name the host and the fix instead.
+  const code = error?.cause?.code
+  if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EHOSTUNREACH' || code === 'ETIMEDOUT') {
+    console.error(`cannot reach host ${home()} (${String(code)}) — is DSH running there? set --home or $A2A_HOME`)
+  } else {
+    console.error(String(error))
+  }
+  process.exit(1)
+})
