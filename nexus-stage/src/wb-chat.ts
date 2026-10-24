@@ -424,7 +424,10 @@ export function createChatDrawer(deps: ChatDrawerDeps): ChatDrawer {
    *  The summary is the peer's free text: a tooltip, never markup. */
   function settledStatus(row: ArchivedRow, now: number): SentRow['status'] {
     const when = `结算于 ${ago(row.resolvedAt, now)}`
-    if (row.outcome === 'abandoned') return { text: '已放弃或撤回', tone: 'muted', hint: `${when}；本机放弃或撤回，未等到回执` }
+    // 'abandoned' is ambiguous here: this host abandoning or cancelling the
+    // send, or the peer's receipt reporting that IT abandoned the task — the
+    // archive row's outcome alone cannot tell which, so claim neither side.
+    if (row.outcome === 'abandoned') return { text: '已放弃（本机或对方）', tone: 'muted', hint: `${when}；本机放弃或撤回，或对方回执报告放弃` }
     const v = VERDICTS.find(x => x.key === row.outcome)
     const tone: Tone = v?.tone === 'completed' ? 'ok' : v?.tone === 'failed' ? 'danger' : v?.tone === 'rejected' ? 'warn' : 'muted'
     const summary = row.summary !== undefined && row.summary !== '' ? ` · ${row.summary}` : ''

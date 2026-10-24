@@ -114,7 +114,9 @@ describe('chat drawer (wb-chat)', () => {
     // Never seen pending, yet not stuck on 已派发.
     expect(verdict('rejected')).toBe('已回执 · 拒绝|is-warn')
     expect(verdict('failed')).toBe('已回执 · 失败|is-danger')
-    expect(verdict('abandoned')).toBe('已放弃或撤回|is-muted')
+    // Ours or theirs is unknowable from outcome alone (review A2): neutral.
+    expect(verdict('abandoned')).toBe('已放弃（本机或对方）|is-muted')
+    expect(q(d.root, '.wb-msg-status').title).toContain('对方回执报告放弃')
     expect(verdict('unclassified')).toBe('已回执|is-ok')
     // Another team's archive row with the same id is not ours.
     d.update({ ...baseState, archived: [{ taskId: 'direct-arch0002', team: 'dsh/99999999', resolvedAt: NOW, outcome: 'completed' }] })
