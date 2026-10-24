@@ -959,6 +959,58 @@ describe('a2a plugin decentralized routing (peers)', () => {
     await ctx.fiber.dispose()
   })
 
+  it('the state face gives dead rows a direction and serves archived rows newest first with how each ended (gh#31)', async () => {
+    const home = tmpHome()
+    mkdirSync(join(home, 'a2a'), { recursive: true })
+    const now = Date.now()
+    const archived = Array.from({ length: 22 }, (_, index) => ({
+      taskId: `direct-arch${String(index).padStart(2, '0')}`, team: 'dsh/agent-1', peer: 'local', startedAt: now - 60_000, resolvedAt: now - index * 1_000,
+      ...(index === 0 ? { summary: 'caller-cancelled: stop', outcome: 'abandoned', endedBy: 'cancelled', direction: 'inbound', lateReceiptAt: now } : {}),
+      ...(index === 1 ? { summary: 'peer-written receipt text', outcome: 'completed', endedBy: 'receipt', brief: 'ship it' } : {}),
+    }))
+    writeFileSync(join(home, 'a2a', 'tasks.json'), JSON.stringify({
+      tasks: [
+        { taskId: 'direct-deadin', team: 'dsh/agent-1', peer: 'local:cargo/22222222', startedAt: now - 30 * 3_600_000, status: 'dead', deadAt: now, reason: 'unconsumed', direction: 'inbound' },
+        { taskId: 'direct-deadout', team: 'cargo/22222222', peer: 'http://peer', startedAt: now - 30 * 3_600_000, status: 'dead', deadAt: now, reason: 'unconsumed', direction: 'outbound' },
+        { taskId: 'direct-deadold', team: 'cargo/22222222', peer: 'http://peer', startedAt: now - 30 * 3_600_000, status: 'dead', deadAt: now, reason: 'unconsumed' },
+      ],
+      archived,
+    }))
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(FakeAgentsService)
+    apply(ctx, makeConfig({ sessionNodes: true, dshHome: home }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    const state = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as {
+      tasksDead: Array<{ taskId: string; direction?: string }>
+      archived?: Array<Record<string, unknown>>
+      archivedCount: number
+      archivedSplit: Record<string, number>
+    }
+    const dead = new Map(state.tasksDead.map(row => [row.taskId, row.direction]))
+    expect(dead.get('direct-deadin')).toBe('inbound')
+    // Survives the restore (the seed file IS a restart) — and stays absent
+    // only where the row never said.
+    expect(dead.get('direct-deadout')).toBe('outbound')
+    expect(dead.has('direct-deadold') && dead.get('direct-deadold') === undefined).toBe(true)
+    // Bounded to the archive, newest first; the archive counts are unchanged.
+    expect(state.archived).toHaveLength(22)
+    expect(state.archived?.map(row => row.taskId).slice(0, 3)).toEqual(['direct-arch00', 'direct-arch01', 'direct-arch02'])
+    expect(state.archivedCount).toBe(22)
+    expect(state.archivedSplit).toEqual({ abandoned: 1, completed: 1, unclassified: 20 })
+    expect(state.archived?.[0]).toEqual({
+      taskId: 'direct-arch00', team: 'dsh/agent-1', peer: 'local', startedAt: now - 60_000, resolvedAt: now,
+      outcome: 'abandoned', endedBy: 'cancelled', direction: 'inbound', late: true, summary: 'caller-cancelled: stop',
+    })
+    expect(state.archived?.[1]).toMatchObject({ taskId: 'direct-arch01', endedBy: 'receipt', outcome: 'completed', brief: 'ship it', summary: 'peer-written receipt text' })
+    expect(state.archived?.[2]).toMatchObject({ endedBy: 'receipt', outcome: 'unclassified' })
+    expect('direction' in (state.archived?.[2] ?? {})).toBe(false)
+    await ctx.fiber.dispose()
+  })
+
   it('a2a_route fails over to the next peer publishing the team when the first candidate fails', async () => {
     // Both peers publish `shared`; the first has no live agent, so its direct
     // route answers an error and the caller must fall through to the second.

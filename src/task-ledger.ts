@@ -79,6 +79,14 @@ export type TaskStatus = 'pending' | 'dead'
 /** F5 layer-3: why a dead row aged out (stamped by the sweep at flip time). */
 export type DeadReason = 'fire-forget' | 'unconsumed'
 
+/** gh#31: which archive path ended a row — a receipt, a content echo, or the caller. */
+export type ArchiveEnd = 'receipt' | 'echo' | 'abandoned' | 'cancelled'
+
+const ARCHIVE_ENDS: readonly string[] = ['receipt', 'echo', 'abandoned', 'cancelled']
+
+/** Summary marker {@link TaskLedger.resolveEcho} writes on echo-settled rows. */
+const ECHO_SUMMARY = '(settled by content echo)'
+
 /** One tracked outbound task still in the owed book (unsettled). */
 export interface TaskRecord {
   readonly taskId: string
@@ -139,6 +147,30 @@ export interface ArchivedRecord {
    * recorded as metadata only, never promoted to resolution.
    */
   readonly lateReceiptAt?: number
+  /**
+   * gh#31: which archive path ended the row, recorded at archive time. Absent
+   * on rows archived before the field — {@link archivedEndedBy} derives it.
+   */
+  readonly endedBy?: ArchiveEnd
+  /** gh#31: which side of the wire the row served, copied from the owed row (absent on rows archived before the field). */
+  readonly direction?: 'inbound' | 'outbound'
+}
+
+/**
+ * How one archived row ended (gh#31). The recorded field wins; legacy rows
+ * fall back to the summary markers this ledger writes itself. The fallback
+ * reads a receipt-settled row's summary, which is the peer's text, so it is
+ * only as exact as the legacy data allows.
+ * @param row - the archived record.
+ * @returns the archive path that ended it.
+ */
+export function archivedEndedBy(row: ArchivedRecord): ArchiveEnd {
+  if (row.endedBy !== undefined) return row.endedBy
+  const summary = row.summary ?? ''
+  if (summary.startsWith('caller-cancelled')) return 'cancelled'
+  if (summary.startsWith('caller-abandoned')) return 'abandoned'
+  if (summary === ECHO_SUMMARY) return 'echo'
+  return 'receipt'
 }
 
 /** Result of an explicit caller-side abandon. Total and never-thrown. */
@@ -384,6 +416,8 @@ export class TaskLedger {
         resolvedAt,
         summary: `caller-abandoned${cause}`,
         outcome: 'abandoned',
+        endedBy: 'abandoned',
+        ...(record.direction !== undefined ? { direction: record.direction } : {}),
       })
       this.persist()
       return { outcome: 'cleared', taskId, archivedAt: resolvedAt }
@@ -422,6 +456,8 @@ export class TaskLedger {
         resolvedAt,
         summary: `caller-cancelled${cause}`,
         outcome: 'abandoned',
+        endedBy: 'cancelled',
+        ...(record.direction !== undefined ? { direction: record.direction } : {}),
       })
       this.persist()
       return {
@@ -470,6 +506,8 @@ export class TaskLedger {
         ...(summary !== '' ? { summary } : {}),
         ...(envelopeOutcome !== undefined ? { outcome: envelopeOutcome } : {}),
         ...(elapsedMs !== undefined ? { elapsedMs } : {}),
+        endedBy: 'receipt',
+        ...(record.direction !== undefined ? { direction: record.direction } : {}),
       })
       this.persist()
       return {
@@ -489,7 +527,11 @@ export class TaskLedger {
     // rewrite the abandonment outcome — the caller stopped waiting by choice.
     // Record that the target did answer later; keep the decision verbatim and
     // pin the projected verdict to 'abandoned'.
-    const callerEnded = CALLER_ENDED_PREFIX.test(settled.summary ?? '')
+    // gh#31: the recorded end wins; the summary prefix only decides legacy
+    // rows (a receipt-settled row's summary is the peer's own text).
+    const callerEnded = settled.endedBy !== undefined
+      ? settled.endedBy === 'abandoned' || settled.endedBy === 'cancelled'
+      : CALLER_ENDED_PREFIX.test(settled.summary ?? '')
     this.archived = [
       {
         ...settled,
@@ -543,7 +585,9 @@ export class TaskLedger {
         startedAt: record.startedAt,
         ...(record.contextId !== undefined ? { contextId: record.contextId } : {}),
         resolvedAt: this.now(),
-        summary: '(settled by content echo)',
+        summary: ECHO_SUMMARY,
+        endedBy: 'echo',
+        ...(record.direction !== undefined ? { direction: record.direction } : {}),
       })
       settled.push(record.taskId)
     }
@@ -601,6 +645,8 @@ export class TaskLedger {
               ...(typeof entry.summary === 'string' && entry.summary !== '' ? { summary: entry.summary } : {}),
               ...(typeof entry.outcome === 'string' && (RECEIPT_OUTCOMES as readonly string[]).includes(entry.outcome) ? { outcome: entry.outcome as ReceiptOutcomeV2 } : {}),
               ...(typeof entry.lateReceiptAt === 'number' && Number.isFinite(entry.lateReceiptAt) ? { lateReceiptAt: entry.lateReceiptAt } : {}),
+              ...(typeof entry.endedBy === 'string' && ARCHIVE_ENDS.includes(entry.endedBy) ? { endedBy: entry.endedBy as ArchiveEnd } : {}),
+              ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
             })
             continue
           }
@@ -611,7 +657,9 @@ export class TaskLedger {
             startedAt: typeof entry.startedAt === 'number' && Number.isFinite(entry.startedAt) ? entry.startedAt : this.now(),
             ...(typeof entry.contextId === 'string' && entry.contextId !== '' ? { contextId: entry.contextId } : {}),
             ...(typeof entry.brief === 'string' && entry.brief !== '' ? { brief: entry.brief } : {}),
-            ...(entry.direction === 'inbound' ? { direction: 'inbound' as const } : {}),
+            // gh#31: both sides round-trip — /state omits direction only when
+            // it is unknown, so a restored outbound row must not lose it.
+            ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
             ...(entry.receiptExpected === false ? { receiptExpected: false } : {}),
             status: entry.status === 'dead' ? 'dead' : 'pending',
             ...(entry.status === 'dead'
@@ -640,6 +688,8 @@ export class TaskLedger {
             ...(typeof entry.summary === 'string' && entry.summary !== '' ? { summary: entry.summary } : {}),
             ...(typeof entry.outcome === 'string' && (RECEIPT_OUTCOMES as readonly string[]).includes(entry.outcome) ? { outcome: entry.outcome as ReceiptOutcomeV2 } : {}),
             ...(typeof entry.lateReceiptAt === 'number' && Number.isFinite(entry.lateReceiptAt) ? { lateReceiptAt: entry.lateReceiptAt } : {}),
+            ...(typeof entry.endedBy === 'string' && ARCHIVE_ENDS.includes(entry.endedBy) ? { endedBy: entry.endedBy as ArchiveEnd } : {}),
+            ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
           })
         }
       }

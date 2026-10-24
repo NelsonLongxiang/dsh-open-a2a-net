@@ -56,14 +56,24 @@ export interface DeadRow {
   readonly direction?: 'inbound' | 'outbound'
 }
 
-/** gh#31: one archived row from /state `archived` — the per-task outcome
- *  for a task that left the ledger (completed / abandoned / cancelled…). */
+/** gh#31: one archived row from /state `archived` (newest first) — the
+ *  per-task outcome for a task that left the ledger. Fields past `summary`
+ *  are absent on hosts that predate them. */
 export interface ArchivedRow {
   readonly taskId: string
   readonly team: string
   readonly resolvedAt: number
   readonly outcome: string
   readonly summary?: string
+  readonly peer?: string
+  readonly startedAt?: number
+  /** How the row left the book: a receipt, a content echo, or the caller
+   *  (abandon / cancel — both archive with outcome 'abandoned'). */
+  readonly endedBy?: 'receipt' | 'echo' | 'abandoned' | 'cancelled'
+  /** A receipt arrived after the caller had already ended the row. */
+  readonly late?: boolean
+  readonly direction?: 'inbound' | 'outbound'
+  readonly brief?: string
 }
 
 /** One session row from /state `sessions` (live or cold joined). */
