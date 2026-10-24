@@ -4922,7 +4922,7 @@ ${message}`
               },
             },
           },
-          note: { type: 'string', description: 'Present while teamScopeInfo scoping is on: the joined-team scope and how many remote rows it withheld ([this host] rows always show).' },
+          note: { type: 'string', description: 'Present while teamScopeInfo scoping is on: the joined-team scope plus how many rows outside YOUR collaboration circle were withheld (remote/local split; the process team, your own row, and your canvas teams always show).' },
         },
       },
       render: (args, value) => [{
