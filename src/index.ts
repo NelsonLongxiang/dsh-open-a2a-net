@@ -41,6 +41,7 @@ import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
 import { applyOwnerSettings, type OwnerSettings } from './owner-settings.ts'
+import { CliDepositStore } from './cli-deposit.ts'
 import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
@@ -892,6 +893,9 @@ export function apply(ctx: Context, config: Config): void {
   // team-roster iteration. Joins ride the allowlist-gated tools; the store
   // is the durable declaration the card publishes and the state face reads.
   const teamMemberships = new TeamMembershipStore(join(home, 'a2a', 'teams.json'))
+  // gh#45 CLI 户口: deposited CLI identities (one key, multiple registrations,
+  // ≤4h online by owner ruling — expiry auto-deregisters).
+  const cliDeposits = new CliDepositStore(join(home, 'a2a', 'cli-deposits.json'))
   // S4 audit ring, hoisted beside the stores: the boot-settlement prune runs
   // before the tools section initializes, and it records archive-prune events.
   const teamAuditRing: Array<{ at: number; action: 'join' | 'leave' | 'archive-prune' | 'agent-less'; team: string; id: string; ok: boolean; reason?: string }> = []
@@ -2106,6 +2110,35 @@ const reportLoopRing = new Map<string, number[]>()
           })
         }),
       }), 'a2a: session-node leave route')
+      // gh#45 CLI 户口 control face (loopback/key gated like every write):
+      // publish (deposit a signed CLI card, ≤4h by ruling), revoke, list,
+      // and mailbox readout — the CLI polls this while alive.
+      ctx.effect(() => webServer.register({
+        kind: 'exact',
+        path: '/__dsh_a2a/cli-deposit',
+        handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+          readJsonBody(req, res, (body) => {
+            const action = (body as { action?: unknown }).action
+            let payload: string
+            if (action === 'publish') {
+              const card = typeof (body as { card?: unknown }).card === 'string' ? (body as { card: string }).card : ''
+              const out = cliDeposits.deposit(card)
+              payload = JSON.stringify(out.ok
+                ? { ok: true, handle: out.handle, expiresAt: out.expiresAt, cardUrl: `${ownCardUrl}/a2a/cli/${encodeURIComponent(out.handle)}` }
+                : { ok: false, error: out.error })
+            } else if (action === 'revoke') {
+              payload = JSON.stringify({ ok: cliDeposits.revoke(typeof (body as { handle?: unknown }).handle === 'string' ? (body as { handle: string }).handle : '') })
+            } else if (action === 'inbox') {
+              const handle = typeof (body as { handle?: unknown }).handle === 'string' ? (body as { handle: string }).handle : ''
+              payload = JSON.stringify({ ok: true, mail: cliDeposits.readMail(handle) })
+            } else {
+              payload = JSON.stringify({ ok: true, deposits: cliDeposits.list().map(row => ({ handle: row.handle, name: row.name, depositedAt: row.depositedAt, expiresAt: row.expiresAt })) })
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+          })
+        }),
+      }), 'a2a: cli-deposit route')
       // gh#41 fleet planning relay: the GUI asks THIS host to regulate a
       // REMOTE peer's canvas team. The node key never leaves the server —
       // the relay stamps the OriginClaim envelope and forwards to the
@@ -2550,6 +2583,10 @@ const reportLoopRing = new Map<string, number[]>()
             ...joinedSessions.list()
               .filter(id => !liveRoots.has(id) && isArchived?.(id) !== true)
               .map(id => exposureRow(`${config.team}/${id8(id)}`, { name: `${session}-${id8(id)}`, description: 'cold — not loaded; routing here wakes the session' })),
+            // gh#45: deposited CLI identities publish as directory rows —
+            // the fleet sees them as member cards (draggable = the operator
+            // link). Their "zone" is the agent-name; expiry drops the row.
+            ...cliDeposits.cardRows().map(row => exposureRow(row.team, { name: row.name, description: row.description })),
           ]
           const memberships = teamMemberships.list().flatMap(entry =>
             entry.teams.map(team => ({ node: `${config.team}/${id8(entry.session)}`, team })))
@@ -3458,6 +3495,36 @@ ${message}`
   }
 
   whenWebServerSettled((webServer) => {
+    // gh#45 CLI 户口卡面 (peer face, unsigned card serve): the deposited
+    // CLI's SIGNED card is served verbatim under its own base URL — an
+    // OriginClaim verification of a CLI envelope fetches exactly here
+    // (callerUrl + /.well-known/agent-card.json). Expired or unknown
+    // handles 404 (auto-deregistered — the identity is dead until
+    // re-publish).
+    ctx.effect(() => webServer.register({
+      kind: 'prefix',
+      path: '/a2a/cli',
+      handler: (req: IncomingMessage, res: ServerResponse) => {
+        const MOUNT = '/a2a/cli'
+        const rest = (req.url ?? '').slice(MOUNT.length)
+        const m = /^\/([^/]+)\/\.well-known\/agent-card\.json$/.exec(rest)
+        if (req.method !== 'GET' || m === null) {
+          res.writeHead(404, { 'Content-Type': 'text/plain' })
+          res.end()
+          return
+        }
+        const handle = decodeURIComponent(m[1]!)
+        const row = cliDeposits.get(handle)
+        if (row === undefined) {
+          res.writeHead(404, { 'Content-Type': 'text/plain' })
+          res.end()
+          return
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+        res.end(row.cardJson)
+      },
+    }), 'a2a: cli deposit card face')
+
     // gh#41 fleet planning, peer-write face: a LINKED peer may regulate this
     // host's canvas teams (create / add-member / remove-member) with a
     // VERIFIED OriginClaim envelope. The owner's ruling: any peer composes
@@ -3684,6 +3751,20 @@ ${message}`
           // carried it here. Correlation is bookkeeping only — the message
           // steers on exactly as before.
           settleAndAnnounce(message)
+          // gh#45 CLI mailbox (wire face): a delivery targeting a DEPOSITED
+          // CLI handle never resolves a session and never wakes — it lands
+          // in the deposit's mailbox and answers delivered. Placement here
+          // keeps the idempotency claim (above) exactly as for sessions.
+          const cliRow = cliDeposits.get(team)
+          if (cliRow !== undefined) {
+            cliDeposits.mail(team, caller, message)
+            recordActivity('in', team, caller, true)
+            logger.info(`a2a: cli mailbox delivery for ${team} (from ${caller})`)
+            const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, task_status: 'TASK_STATE_COMPLETED', note: `delivered to the mailbox of ${team} — the CLI polls while online` })
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+            return
+          }
           // Inbound routing is foreground demand: boot prewarm yields for a
           // quiet window around it.
           lastWakeDemandAt = Date.now()
@@ -5563,6 +5644,16 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       || resolveAgentForTeam(team) !== undefined
       || joinedSessions.list().some(id => `${config.team}/${id8(id)}` === team)
       || (canvasName !== undefined && (canvasLiveAgent(canvasName) !== undefined || canvasColdMemberId(canvasName) !== undefined))
+    // gh#45 CLI mailbox: a delivery targeting a DEPOSITED CLI handle is
+    // local by definition — it lands in the deposit's mailbox (the CLI
+    // polls while alive; receipts and messages never wake anything).
+    const cliRow = cliDeposits.get(team)
+    if (cliRow !== undefined) {
+      cliDeposits.mail(team, callerSession ?? 'unknown', message)
+      recordActivity('in', team, callerSession ?? 'peer', true)
+      logger.info(`a2a: cli mailbox delivery for ${team} (from ${callerSession ?? 'unknown'})`)
+      return { ok: true, team, reply: `delivered to the mailbox of ${team} — the CLI polls while online`, task_id: taskIdFromCaller ?? '', context_id: contextId ?? '', task_status: 'TASK_STATE_COMPLETED' }
+    }
     // The native-teams claim probe is an await: pay it only when the four
     // cheap synchronous locality checks missed (a registry team is a local
     // candidate even though no session node backs it).

@@ -39,6 +39,7 @@
   },
   "files": [
     "lib",
+    "cli",
     "assets/nexusDist",
     "assets/stageDist",
     "images",
@@ -52,6 +53,9 @@
     "nexus-stage/tsconfig.json",
     "nexus-stage/vite.config.ts"
   ],
+  "bin": {
+    "a2a-net": "cli/a2a.mjs"
+  },
   "packageManager": "pnpm@11.28.5",
   "engines": {
     "pnpm": ">=11.24 <12"
