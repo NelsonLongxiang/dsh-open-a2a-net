@@ -378,3 +378,17 @@ describe('a2a-net CLI: inbox --wait', () => {
     expect((await runCli(['inbox', '--wait', '--timeout', 'soon'], { HOME, A2A_CLI_HOME: HOME })).code).toBe(2)
   })
 })
+
+describe('a2a-net CLI: the inbox cursor stays inside A2A_CLI_HOME', () => {
+  it('advancing the cursor writes A2A_CLI_HOME/inbox.cursor and creates no .a2a under the real home', async () => {
+    const host = await mailHost()
+    const HOME = tmpHomeDir()
+    const ANCHOR = tmpHomeDir()
+    const env = { HOME, A2A_CLI_HOME: ANCHOR, A2A_HOME: host.url }
+    expect((await runCli(['init', 'scout', '--uuid', '0123456789abcdef'], env)).code).toBe(0)
+    host.mail.push({ at: 1000, from: 'cargo/22222222', text: 'hello' })
+    expect((await runCli(['inbox', '--new'], env)).stdout).toContain('hello')
+    expect(existsSync(join(ANCHOR, 'inbox.cursor'))).toBe(true)
+    expect(existsSync(join(HOME, '.a2a'))).toBe(false)
+  })
+})
