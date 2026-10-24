@@ -314,7 +314,7 @@ function writeCursor(handle, unread, cursor) {
   if (unread.length === 0) return
   const at = Math.max(cursor.at, ...unread.map(m => m.at))
   const seen = [...(at === cursor.at ? cursor.seen : []), ...unread.filter(m => m.at === at).map(mailKey)]
-  mkdirSync(join(homedir(), '.a2a'), { recursive: true })
+  mkdirSync(IDENTITY_DIR, { recursive: true })
   writeFileSync(INBOX_CURSOR, JSON.stringify({ handle, at, seen }), { mode: 0o600 })
 }
 
