@@ -152,13 +152,14 @@ async function main() {
   }
   if (cmd === 'route') {
     const home = flag('--home') ?? DEFAULT_HOME
+    const key = flag('--key')
     const pos = positionals()
     const team = pos[0]
     const message = args.slice(args.indexOf(team) + 1).filter(a => !a.startsWith('--')).join(' ')
     if (team === undefined || message === '') { console.error('usage: a2a route <team> <message…>'); process.exit(1) }
     const res = await fetch(`${home.replace(/\/$/, '')}/a2a/direct`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...originClaimFor(home)() },
+      headers: { 'Content-Type': 'application/json', ...originClaimFor(home)(), ...(key !== undefined ? { 'X-API-Key': key } : {}) },
       body: JSON.stringify({ team, message, caller_session: identity().handle, async: false }),
     })
     console.log(JSON.stringify(await res.json(), null, 2))
