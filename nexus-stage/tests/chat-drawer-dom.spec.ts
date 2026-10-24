@@ -70,9 +70,9 @@ describe('chat drawer (wb-chat)', () => {
     resolve({ ok: true, task_id: 'direct-12345678' })
     await vi.waitFor(() => expect(statuses(d.root)).toEqual(['已派发']))
     expect(q(d.root, '.wb-msg-task').textContent).toBe('direct-12345678')
-    // The ledger picks it up as pending, then it leaves the ledger. /state has
-    // no per-task outcome (settled, abandoned and cancelled all archive), so
-    // the drawer claims only that it left (review C3, PR #28).
+    // The ledger picks it up as pending, then it leaves the ledger. A host
+    // without the archive face (pre-gh#31) gives no per-task outcome, so the
+    // drawer claims only that it left (review C3, PR #28).
     d.update({ ...baseState, tasks: [{ taskId: 'direct-12345678', team: TEAM, startedAt: NOW - 5_000, status: 'pending', direction: 'outbound', receiptExpected: true }] })
     expect(statuses(d.root)).toEqual(['待回执 · pending'])
     d.update(baseState)
@@ -80,6 +80,55 @@ describe('chat drawer (wb-chat)', () => {
     expect(q(d.root, '.wb-msg-status').title).toContain('放弃或撤回')
     // Only one bubble: the ledger row and the local echo are the same message.
     expect(d.root.querySelectorAll('.wb-chat-sent .wb-msg').length).toBe(1)
+  })
+
+  it('a send that left the ledger reads its archived verdict (gh#31)', async () => {
+    const { d, resolve } = drawer()
+    d.update(baseState)
+    d.open(session)
+    send(d.root, '复核报价')
+    resolve({ ok: true, task_id: 'direct-arch0001' })
+    await vi.waitFor(() => expect(statuses(d.root)).toEqual(['已派发']))
+    d.update({ ...baseState, tasks: [{ taskId: 'direct-arch0001', team: TEAM, startedAt: NOW - 5_000, status: 'pending', direction: 'outbound', receiptExpected: true }] })
+    d.update({ ...baseState, archived: [{ taskId: 'direct-arch0001', team: TEAM, resolvedAt: NOW - 60_000, outcome: 'completed', summary: '<b>3 个 SKU</b> 已调价' }] })
+    expect(statuses(d.root)).toEqual(['已回执 · 完成'])
+    const chip = q(d.root, '.wb-msg-status')
+    expect(chip.classList.contains('is-ok')).toBe(true)
+    // The peer's summary is a tooltip, text only.
+    expect(chip.title).toContain('<b>3 个 SKU</b> 已调价')
+    expect(d.root.querySelectorAll('.wb-chat-sent b').length).toBe(0)
+  })
+
+  it('a send settled between two polls is found by id; each verdict has its tone', async () => {
+    const { d, resolve } = drawer()
+    d.update(baseState)
+    d.open(session)
+    send(d.root, 'x')
+    resolve({ ok: true, task_id: 'direct-arch0002' })
+    await vi.waitFor(() => expect(statuses(d.root)).toEqual(['已派发']))
+    const verdict = (outcome: string) => {
+      d.update({ ...baseState, archived: [{ taskId: 'direct-arch0002', team: TEAM, resolvedAt: NOW - 1_000, outcome }] })
+      const chip = q(d.root, '.wb-msg-status')
+      return `${chip.textContent}|${[...chip.classList].find(c => c.startsWith('is-'))}`
+    }
+    // Never seen pending, yet not stuck on 已派发.
+    expect(verdict('rejected')).toBe('已回执 · 拒绝|is-warn')
+    expect(verdict('failed')).toBe('已回执 · 失败|is-danger')
+    expect(verdict('abandoned')).toBe('已放弃或撤回|is-muted')
+    expect(verdict('unclassified')).toBe('已回执|is-ok')
+    // Another team's archive row with the same id is not ours.
+    d.update({ ...baseState, archived: [{ taskId: 'direct-arch0002', team: 'dsh/99999999', resolvedAt: NOW, outcome: 'completed' }] })
+    expect(statuses(d.root)).toEqual(['已派发'])
+  })
+
+  it('a dead row says its own direction (gh#31): an inbound one sits on their side unseen before', () => {
+    const { d } = drawer()
+    d.update({ ...baseState, tasksDead: [{ taskId: 'direct-in000010', team: TEAM, peer: 'http://192.168.3.157:13080', direction: 'inbound', startedAt: NOW - 25 * 3_600_000, deadAt: NOW, reason: 'unconsumed', brief: '远端的请求' }] })
+    d.open(session)
+    const b = q(d.root, '.wb-chat-sent .wb-msg')
+    expect(b.classList.contains('wb-msg-ledger')).toBe(false)
+    expect(b.classList.contains('wb-msg-out')).toBe(false)
+    expect(statuses(d.root)).toEqual(['死信'])
   })
 
   it('a dead-lettered send turns red', async () => {

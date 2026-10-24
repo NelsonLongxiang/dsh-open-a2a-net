@@ -209,6 +209,15 @@ describe('台账 (wb-ledger)', () => {
     expect(text(c.querySelector('.wb-led-team'))).toBe('来自 cargo/22222222')
   })
 
+  it('a dead letter reads its direction from the row (gh#31), the peer prefix only on older hosts', () => {
+    const s: StateBody = { tasks: [], tasksDead: [{ taskId: 'direct-in000004', team: 'dsh/11111111', peer: 'http://192.168.3.157:13080', direction: 'inbound', startedAt: NOW - 25 * HOUR, deadAt: NOW - HOUR, reason: 'unconsumed', brief: '远端来的请求' }] }
+    const { pane } = render({}, s)
+    const c = pane.querySelector('.wb-led-card')!
+    expect(text(c.querySelector('.wb-led-dir'))).toBe('↙')
+    expect(text(c.querySelector('.wb-led-team'))).toBe('来自 对端')
+    expect(text(c.querySelector('.wb-led-to'))).toBe('至 dsh/11111111')
+  })
+
   it('the 陈旧 tile counts exactly the stale rows shown, at the server ≥1h boundary (review L3)', () => {
     const s: StateBody = {
       tasks: [

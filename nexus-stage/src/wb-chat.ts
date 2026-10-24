@@ -18,7 +18,8 @@
  * Data is attacker-shaped (session titles, log text): textContent only.
  * @module nexus-stage/wb-chat
  */
-import type { DeadRow, PendingRow, RemoteRow, StateBody } from './workbench'
+import type { ArchivedRow, DeadRow, PendingRow, RemoteRow, StateBody } from './workbench'
+import { VERDICTS } from './wb-ledger'
 import { displayName } from './stage-name'
 
 /** Chat target: a node picked on the board or in the directory. Session and
@@ -121,9 +122,10 @@ export function createChatDrawer(deps: ChatDrawerDeps): ChatDrawer {
   const outbox = new Map<string, Outgoing[]>()
   /** Task ids the ledger has shown as pending (a vanished one has left the ledger). */
   const seenPending = new Set<string>()
-  /** Direction per task id, learned from pending rows: /state's dead rows carry
-   *  none, and an inbound row (a peer's delivery to this session) shares this
-   *  session's team — without this it would read as our own message. */
+  /** Direction per task id, learned from pending rows — the fallback for an
+   *  older host whose dead rows carry none (gh#31 added it). An inbound row (a
+   *  peer's delivery to this session) shares this session's team; without a
+   *  direction it would read as our own message. */
   const directions = new Map<string, 'inbound' | 'outbound'>()
   /** One composer per routing team: a half-typed draft survives switching nodes. */
   const composers = new Map<string, Composer>()
@@ -418,15 +420,31 @@ export function createChatDrawer(deps: ChatDrawerDeps): ChatDrawer {
     return { text: `${stale ? '陈旧' : label} · ${row.status}`, tone: stale ? 'warn' : 'wait', hint: `${inbound ? '对方等待本机回执；' : ''}派发于 ${ago(row.startedAt, now)}` }
   }
 
+  /** A send that left the ledger, by the verdict it archived under (gh#31).
+   *  The summary is the peer's free text: a tooltip, never markup. */
+  function settledStatus(row: ArchivedRow, now: number): SentRow['status'] {
+    const when = `结算于 ${ago(row.resolvedAt, now)}`
+    if (row.outcome === 'abandoned') return { text: '已放弃或撤回', tone: 'muted', hint: `${when}；本机放弃或撤回，未等到回执` }
+    const v = VERDICTS.find(x => x.key === row.outcome)
+    const tone: Tone = v?.tone === 'completed' ? 'ok' : v?.tone === 'failed' ? 'danger' : v?.tone === 'rejected' ? 'warn' : 'muted'
+    const summary = row.summary !== undefined && row.summary !== '' ? ` · ${row.summary}` : ''
+    if (row.outcome === 'unclassified') return { text: '已回执', tone: 'ok', hint: `${when}；回执未带结论${summary}` }
+    return { text: `已回执 · ${v?.label ?? row.outcome}`, tone, hint: `${when}${summary}` }
+  }
+
   /** Status of a send this page made, by task id. */
   function receiptOf(taskId: string, team: string, now: number): SentRow['status'] {
     const dead = deadFor(team).find(r => r.taskId === taskId)
     if (dead !== undefined) return deadStatus(dead)
     const pending = pendingFor(team).find(r => r.taskId === taskId)
     if (pending !== undefined) return pendingStatus(pending, now)
-    // Gone from the ledger: settled, abandoned or cancelled all archive the
-    // row, and /state has no per-task outcome — so say only that it left.
-    if (seenPending.has(taskId)) return { text: '已离开台账', tone: 'muted', hint: '已结算、放弃或撤回之一，见台账归档' }
+    // Gone from the ledger: the archive says how it ended — also for a send
+    // that settled between two polls and was never seen pending.
+    const settled = (last?.archived ?? []).find(r => r.taskId === taskId && r.team === team)
+    if (settled !== undefined) return settledStatus(settled, now)
+    // No archived row: an older host without the archive face, or a row past
+    // its newest-64 window — say only that it left.
+    if (seenPending.has(taskId)) return { text: '已离开台账', tone: 'muted', hint: '已结算、放弃或撤回之一；主机未给出这条的结局（旧主机，或已超出最近 64 条归档）' }
     return { text: '已派发', tone: 'muted', hint: '异步送达；回执到达后进台账' }
   }
 
@@ -442,7 +460,7 @@ export function createChatDrawer(deps: ChatDrawerDeps): ChatDrawer {
       at: r.startedAt, side: r.direction === 'inbound' ? 'theirs' : 'mine', text: brief(r.brief), status: pendingStatus(r, now), taskId: r.taskId,
     }))
     const dead: SentRow[] = deadFor(team).filter(r => !mineIds.has(r.taskId)).map(r => {
-      const dir = directions.get(r.taskId)
+      const dir = r.direction ?? directions.get(r.taskId) ?? (r.peer?.startsWith('local:') === true ? 'inbound' : undefined)
       return { at: r.startedAt, side: dir === 'inbound' ? 'theirs' : dir === 'outbound' ? 'mine' : 'system', text: brief(r.brief), status: deadStatus(r), taskId: r.taskId }
     })
     const local: SentRow[] = mine.map(o => ({

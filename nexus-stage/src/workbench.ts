@@ -150,7 +150,7 @@ export interface StateBody {
   /** gh#31: per-task outcomes for rows that left the ledger (bounded). */
   readonly archived?: readonly ArchivedRow[]
   readonly archivedCount?: number
-  /** Settled-archive split by verdict ('completed' | 'declined' | … | 'abandoned' | 'unclassified'). */
+  /** Settled-archive split by verdict (the receipt outcome vocabulary — 'completed' | 'rejected' | 'failed' | … | 'abandoned' — or 'unclassified'). */
   readonly archivedSplit?: Readonly<Record<string, number>>
   readonly idempotency?: {
     window?: number

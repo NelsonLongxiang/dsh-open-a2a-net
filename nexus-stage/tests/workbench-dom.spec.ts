@@ -70,7 +70,7 @@ const state: StateBody = {
   tasksStaleCount: 1,
   tasksDead: [{ taskId: 'direct-cccccccc', team: 'dsh/99999999', startedAt: NOW - 90_000_000, deadAt: NOW - 80_000_000, reason: 'stale TTL' }],
   archivedCount: 12,
-  archivedSplit: { completed: 9, declined: 2, abandoned: 1 },
+  archivedSplit: { completed: 9, rejected: 1, failed: 1, abandoned: 1 },
   idempotency: { claimsFresh: 368, replays: 2, conflicts: 0 },
   reconcile: { state: 'idle', rows: [{ id: 'session-33333333', error: 'corrupt log: boom', attempts: 3, needsRepair: true }] },
 }
@@ -229,9 +229,11 @@ describe('workbench panels', () => {
     expect(tiles.map(t => t.tone)).toEqual(['', 'warn', 'danger', ''])
     // The archive split is one proportional bar with a labelled legend.
     const bar = pane.querySelector('.wb-led-split-bar')!
-    expect(bar.querySelectorAll('.wb-led-seg').length).toBe(3)
-    expect(bar.getAttribute('aria-label')).toContain('完成 9')
-    expect(text(pane.querySelector('.wb-led-split-legend'))).toContain('放弃 1')
+    expect(bar.querySelectorAll('.wb-led-seg').length).toBe(4)
+    expect(bar.getAttribute('aria-label')).toBe('归档结局：完成 9，拒绝 1，失败 1，放弃 1')
+    // The server's receipt vocabulary ('rejected', 'failed'), never a
+    // made-up 'declined' — each with its own tone, none lumped into "other".
+    expect([...bar.querySelectorAll('.wb-led-seg')].map(s => s.className)).toEqual(['wb-led-seg is-completed', 'wb-led-seg is-rejected', 'wb-led-seg is-failed', 'wb-led-seg is-abandoned'])
     // Forensics fold away by default.
     const forensics = pane.querySelector('details.wb-led-forensics') as HTMLDetailsElement
     expect(forensics.open).toBe(false)
