@@ -22,6 +22,10 @@ surface on every node.
   (`<zone>/canvas/<name>`, user-composed multi-member groups).
 - **Task** — one routed round. Carries a task id, an idempotency fingerprint,
   and a receipt contract.
+- **CLI identity** — a transient caller outside any session (the `a2a-net`
+  command, 0.6.27+): its own Ed25519 key and a handle `<name>/<16 hex>`,
+  deposited on ONE home host for up to 4h, with a mailbox instead of a
+  wakeable session. See [cli.md](references/cli.md).
 
 ## Routing (a2a_route)
 
@@ -66,8 +70,15 @@ renders the same data for humans.
 - `-32000` with "caller_session is required" — the delivery had no caller
   identity; the protocol contract requires it.
 - `-32005` — sync wait budget fired; delivery landed, reconcile the task id.
-- "No live DSH session node accepts team X" — the team resolved but no
-  session node accepted the round; check whether the target session is live.
+- "No live DSH session node accepts team X" — no session node on the host
+  that received the delivery accepted the round. Either the target session is
+  not live/joined there, or X lives on ANOTHER host and the caller delivered
+  straight to this host's `/a2a/direct` (the `a2a-net` CLI does this):
+  direct delivery never relays to peers — `a2a_route` from a session does.
+- `[PATTERN_NO_MINT]` / `[ALLOWLIST_DENY]` on `a2a_team_join` — only an EXACT
+  allowlisted name joins; adding that name is the owner's act of creating
+  the team. `[CANVAS_TEAM]` — canvas membership is assigned in the workbench,
+  never by the roster tool.
 
 ## Details
 
@@ -75,3 +86,4 @@ renders the same data for humans.
 - [discovery.md](references/discovery.md) — cards, peer boundary model, invisibility
 - [membership.md](references/membership.md) — join/leave, allowlist, canvas teams
 - [pitfalls.md](references/pitfalls.md) — operational pitfalls observed in production
+- [cli.md](references/cli.md) — the `a2a-net` CLI: deposit, mailbox, inbox hooks, limits

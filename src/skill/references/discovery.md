@@ -2,10 +2,18 @@
 
 ## Cards
 
-Each node serves `/.well-known/agent-card.json` (unsigned serve-fresh fields:
-`peers`, `sessionTeams`, `teamMemberships`, `version`, `lanIp`; signed core:
-identity + capability flags). Peers poll cards and aggregate `sessionTeams`
-into their `remote` rows — this is how the planning canvas shows other nodes.
+Each node serves `/.well-known/agent-card.json`: a signed core (identity +
+capability flags) plus unsigned serve-fresh fields.
+
+- An anonymous fetch gets the MINIMAL card: no `sessionTeams`,
+  `teamMemberships`, `canvasOrg` or `lanIp`.
+- The full card goes only to a caller that presents an OriginClaim envelope
+  (`X-A2A-Caller` / `-Url` / `-Ts` / `-Sig`, signed with the caller's card
+  key) AND that this host links: the same origin (self-fetch), one of its
+  joined session handles, or an exact canvas remote member ref the operator
+  added (#18, #19 D1). Proving a key is not a link.
+- Peers poll cards and aggregate the `sessionTeams` they are entitled to into
+  their `remote` rows — this is how the planning canvas shows other nodes.
 
 ## Visibility follows membership
 
