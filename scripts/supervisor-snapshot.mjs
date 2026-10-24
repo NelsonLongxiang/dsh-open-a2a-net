@@ -182,6 +182,35 @@ function collectControlFaceGate() {
   ]
 }
 
+// ── live_host_build：活宿主构建指纹（S13）────────────────────────────
+// dc64eb1 三层根因教训：插件升级=换 lib+换进程两步缺一不可；判据=路由指纹非安装输出。
+// 主检出=路由指纹：最新控制面须在面集（404 全局=进程未换构建）。
+// bundle 哈希对比=尽力信息面（401 无钥面不可达时以路由指纹为准）。
+function collectLiveHostBuild() {
+  const rows = []
+  let bundleNote = ''
+  try {
+    const headJs = readdirSync(join(REPO, 'assets/nexusDist/assets')).filter(f => f.startsWith('index-') && f.endsWith('.js')).sort().pop() ?? ''
+    const headHash = headJs.replace(/^index-/, '').replace(/\.js$/, '')
+    let liveHash = ''
+    try {
+      const html = execFileSync('curl', ['-s', '--max-time', '5', 'http://127.0.0.1:3080/nexus/'], { encoding: 'utf8' })
+      const m = html.match(/index-([A-Za-z0-9_-]+)\.js/)
+      liveHash = m ? m[1] : ''
+    } catch { liveHash = '' }
+    bundleNote = liveHash ? `bundle live=${liveHash} head=${headHash}${liveHash === headHash ? ' ✓' : ' ⚠漂移'}` : `bundle 不可达（401 无钥面）·head=${headHash}`
+  } catch { bundleNote = 'bundle probe skipped' }
+  let face = 0
+  let rcText = 'unreachable'
+  try {
+    const rc = execFileSync('curl', ['-s', '-o', 'NUL', '-w', '%{http_code}', '--max-time', '5', '-X', 'POST', 'http://127.0.0.1:3080/a2a/canvas-op'], { encoding: 'utf8' })
+    rcText = rc.trim()
+    face = (rcText === '404' || rcText === '401' || rcText === '403' || rcText === '405' || rcText === '400') ? 1 : 0 // 路由存在（哪怕拒）即非陈旧
+  } catch { face = 0 }
+  rows.push({ name: 'newest-face-live', ok: face, detail: `canvas-op 路由指纹 http=${rcText}｜${bundleNote}` })
+  return rows
+}
+
 function collectOwnerSignalUi() {
   // 遍历 nexus-stage 源码聚合文本（UI 字符串锚）
   const agg = (dir) => {
@@ -220,6 +249,7 @@ const TABLES = {
   originclaim_anchors: collectOriginClaimAnchors,
   controlface_gate: collectControlFaceGate,
   owner_signal_ui: collectOwnerSignalUi,
+  live_host_build: collectLiveHostBuild,
 }
 
 mkdirSync(join(REPO, 'tmp/supervisor'), { recursive: true })
