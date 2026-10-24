@@ -23,6 +23,23 @@ export const FAILURE_PENALTY = 100
 export const SUCCESS_REWARD = 100
 /** Score floor: at or below this a non-seed peer is evicted. */
 export const EVICTION_FLOOR = 0
+/**
+ * Eviction cooldown (the zombie-referral breaker): an evicted dead address
+ * is refused by {@link PeerStore.offer} for this long — without it the
+ * address comes straight back through a linked peer's card advertising
+ * (evict → learn → fail → evict forever; observed grinding .156:3081 down
+ * 3400 points). v1 keeps the window FIXED at 24h (dead-letter TTL
+ * convention); progressive backoff is a future note, not this slice.
+ */
+export const EVICTION_COOLDOWN_MS = 24 * 60 * 60 * 1000
+/** Ledger bound: the newest 64 evictions survive (LRU by evictedAt). */
+export const EVICTION_LEDGER_CAP = 64
+
+/** One eviction-ledger row: when a URL was evicted (epoch ms). */
+export interface EvictionRecord {
+  readonly url: string
+  readonly evictedAt: number
+}
 
 /** One tracked peer. */
 export interface PeerRecord {
@@ -43,6 +60,8 @@ export interface PeerRecord {
 /** The persisted store document (whole-file read/write, small by design). */
 export interface PeerStoreSnapshot {
   readonly peers: readonly PeerRecord[]
+  /** Eviction ledger (gh#46): absent on pre-cooldown files = empty. */
+  readonly evictions?: readonly EvictionRecord[]
 }
 
 /**
@@ -53,6 +72,9 @@ export interface PeerStoreSnapshot {
  */
 export class PeerStore {
   private readonly peers = new Map<string, PeerRecord>()
+  /** Eviction ledger (gh#46): url → when it was evicted. Seeds never enter. */
+  private readonly evictions = new Map<string, number>()
+  private readonly now: () => number
 
   /**
    * @param seeds - the configured seed URLs; always retained (never evicted).
@@ -64,7 +86,9 @@ export class PeerStore {
     private readonly path: string,
     private readonly cap = PEER_CAP,
     private readonly persistDebounceMs = 1_000,
+    now?: () => number,
   ) {
+    this.now = now ?? (() => Date.now())
     this.restore()
     for (const seed of seeds) {
       if (seed === '') continue
@@ -141,6 +165,15 @@ export class PeerStore {
   offer(url: string): boolean {
     if (url === '') return false
     if (this.peers.has(url)) return true
+    // gh#46 cooldown: an address we EVICTED is refused while the window
+    // holds (a linked peer's card still advertising it must not re-admit a
+    // proven-dead address). Past the window it re-enters fresh — the peer
+    // fixed within a day heals naturally at INITIAL_SCORE.
+    const evictedAt = this.evictions.get(url)
+    if (evictedAt !== undefined) {
+      if (this.now() - evictedAt < EVICTION_COOLDOWN_MS) return false
+      this.evictions.delete(url)
+    }
     if (!this.hasRoom()) return false
     this.peers.set(url, { url, score: INITIAL_SCORE, seed: false })
     this.persist()
@@ -171,11 +204,18 @@ export class PeerStore {
   noteFailure(url: string): void {
     const peer = this.peers.get(url)
     if (peer === undefined) return
-    peer.lastContactAt = Date.now()
+    peer.lastContactAt = this.now()
     peer.lastContactOk = false
     if (!peer.seed) {
       peer.score -= FAILURE_PENALTY
-      if (peer.score <= EVICTION_FLOOR) this.peers.delete(url)
+      if (peer.score <= EVICTION_FLOOR) {
+        this.peers.delete(url)
+        // gh#46: the eviction lands in the cooldown ledger — offer() refuses
+        // the URL while the window holds. Seeds never reach this branch
+        // (they are never evicted, so never ledgered: config stays exempt).
+        this.evictions.set(url, this.now())
+        this.pruneLedger()
+      }
     }
     this.persist()
   }
@@ -188,8 +228,11 @@ export class PeerStore {
     const peer = this.peers.get(url)
     if (peer === undefined) return
     peer.score += SUCCESS_REWARD
-    peer.lastContactAt = Date.now()
+    peer.lastContactAt = this.now()
     peer.lastContactOk = true
+    // A re-admitted URL that answers has proven itself again — its ledger
+    // row (if any survived) is moot.
+    this.evictions.delete(url)
     this.persist()
   }
 
@@ -270,9 +313,29 @@ export class PeerStore {
           ...(typeof peer.lastContactOk === 'boolean' ? { lastContactOk: peer.lastContactOk } : {}),
         })
       }
+      // gh#46: the eviction ledger round-trips (absent = empty, pre-cooldown
+      // files stay fully compatible).
+      const evictions = (snapshot as { evictions?: unknown }).evictions
+      if (Array.isArray(evictions)) {
+        for (const row of evictions) {
+          const e = row as Partial<EvictionRecord> | null
+          if (typeof e?.url === 'string' && e.url !== '' && typeof e.evictedAt === 'number' && Number.isFinite(e.evictedAt)) {
+            this.evictions.set(e.url, e.evictedAt)
+          }
+        }
+        this.pruneLedger()
+      }
     } catch {
       // A corrupt store is not fatal: fall back to seeds only.
     }
+  }
+
+  /** Keep the ledger at its LRU bound: the oldest evictions fall off. */
+  private pruneLedger(): void {
+    if (this.evictions.size <= EVICTION_LEDGER_CAP) return
+    const byAge = [...this.evictions.entries()].sort((a, b) => a[1] - b[1])
+    const excess = this.evictions.size - EVICTION_LEDGER_CAP
+    for (let i = 0; i < excess; i += 1) this.evictions.delete(byAge[i]![0])
   }
 
   /**
@@ -307,6 +370,7 @@ export class PeerStore {
           await mkdir(dirname(this.path), { recursive: true })
           const snapshot: PeerStoreSnapshot = {
             peers: [...this.peers.values()].map(peer => ({ ...peer })),
+            evictions: [...this.evictions.entries()].map(([url, evictedAt]) => ({ url, evictedAt })),
           }
           await writeFile(this.path, JSON.stringify(snapshot), { mode: 0o600 })
         } catch {

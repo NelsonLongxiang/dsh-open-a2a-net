@@ -208,12 +208,6 @@
     "typescript": "^5.9.3",
     "vitest": "^4.1.8"
   },
-  "pnpm": {
-    "overrides": {
-      "@deepseek-ai/cordis": "4.0.5",
-      "@deepseek-ai/cordis-plugin-loader": "1.0.5"
-    }
-  },
   "license": "MIT",
   "repository": {
     "type": "git",
