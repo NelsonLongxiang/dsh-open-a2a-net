@@ -19,9 +19,51 @@ const app = document.getElementById('app')!
 // gh#9 §10: the host injects the control-plane key into the shell when
 // apiKey is configured — stamp it on every /__dsh_a2a write so the GUI
 // survives a keyed host (same-origin disclosure only, see the serve site).
-const CONTROL_KEY = (window as unknown as { __DSH_A2A_KEY__?: string }).__DSH_A2A_KEY__ ?? ''
+// gh#40: a REMOTE face (LAN-bound test host, tunnel) serves the shell
+// WITHOUT the injected key by design — the credential must not leak to any
+// network fetcher. The operator still needs the panel there, so the key
+// can be typed once: sessionStorage is browser-local (never transmitted in
+// the page), stamped on the same X-API-Key header thereafter.
+const storedKey = (() => { try { return window.sessionStorage.getItem('dsh_a2a_key') ?? '' } catch { return '' } })()
+const CONTROL_KEY = (window as unknown as { __DSH_A2A_KEY__?: string }).__DSH_A2A_KEY__ ?? storedKey
 const controlFetch = (path: string, init: RequestInit = {}): Promise<Response> =>
   fetch(path, { ...init, headers: { ...(init.headers as Record<string, string> | undefined ?? {}), ...(CONTROL_KEY !== '' ? { 'X-API-Key': CONTROL_KEY } : {}) } })
+
+// gh#40: key-entry affordance — mounts BEFORE the panel when the shell came
+// keyless (remote face) and the control plane answers 401. One input, one
+// submit; the stored key survives until the tab closes.
+if (CONTROL_KEY === '') {
+  void controlFetch('/__dsh_a2a/owner-settings').then(res => {
+    if (res.status !== 401) return
+    const gate = document.createElement('div')
+    gate.className = 'nexus-keygate'
+    gate.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;background:#fff;z-index:9999;font:14px/1.5 system-ui,sans-serif;color:#000'
+    const label = document.createElement('div')
+    label.textContent = '此面板经远程面打开（密钥不随页面下发）——输入控制密钥'
+    const input = document.createElement('input')
+    input.type = 'password'
+    input.placeholder = 'X-API-Key'
+    input.setAttribute('aria-label', '控制密钥')
+    const submit = document.createElement('button')
+    submit.type = 'button'
+    submit.textContent = '进入面板'
+    const err = document.createElement('div')
+    err.style.color = '#b00'
+    const tryKey = (): void => {
+      const v = input.value.trim()
+      if (v === '') return
+      void fetch('/__dsh_a2a/owner-settings', { headers: { 'X-API-Key': v } }).then(r => {
+        if (r.status === 401) { err.textContent = '密钥不对，再试一次'; return }
+        try { window.sessionStorage.setItem('dsh_a2a_key', v) } catch { /* blocked site data: keep in-page */ }
+        window.location.reload()
+      })
+    }
+    submit.addEventListener('click', tryKey)
+    input.addEventListener('keydown', ev => { if (ev.key === 'Enter') tryKey() })
+    gate.append(label, input, submit, err)
+    document.body.appendChild(gate)
+  })
+}
 
 const faultBadge = document.createElement('div')
 faultBadge.className = 'nexus-fault'
