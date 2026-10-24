@@ -336,7 +336,8 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-led-split-item{display:inline-flex;align-items:center;gap:4px}
 .wb-led-swatch{display:inline-block;width:8px;height:8px;border-radius:2px}
 .wb-led-seg.is-completed,.wb-led-swatch.is-completed{background:var(--n-live)}
-.wb-led-seg.is-declined,.wb-led-swatch.is-declined{background:var(--n-act)}
+.wb-led-seg.is-rejected,.wb-led-swatch.is-rejected{background:var(--n-act)}
+.wb-led-seg.is-failed,.wb-led-swatch.is-failed{background:var(--n-danger)}
 .wb-led-seg.is-abandoned,.wb-led-swatch.is-abandoned{background:var(--n-ink-muted)}
 .wb-led-seg.is-unclassified,.wb-led-swatch.is-unclassified,.wb-led-seg.is-other,.wb-led-swatch.is-other{background:color-mix(in srgb,var(--n-ink-muted) 45%,var(--n-border))}
 .wb-led-group{display:flex;flex-direction:column;gap:6px;margin-top:4px}

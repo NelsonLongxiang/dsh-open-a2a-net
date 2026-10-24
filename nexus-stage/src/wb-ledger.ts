@@ -39,9 +39,9 @@ export interface LedgerContext {
 const HOUR = 60 * 60_000
 
 /** Inbound rows carry this host's own team; the sender is in `peer` as
- *  `local:<sender>`. /state dead rows have no direction field, so the peer
- *  prefix is the only tell there (outbound local sends read 'local', remote
- *  ones a URL). */
+ *  `local:<sender>`. Rows say their direction (dead rows too since gh#31);
+ *  on an older host whose dead rows omit it, the peer prefix is the tell
+ *  (outbound local sends read 'local', remote ones a URL). */
 function isInbound(row: { direction?: string; peer?: string }): boolean {
   return row.direction === 'inbound' || (row.direction === undefined && row.peer?.startsWith('local:') === true)
 }
@@ -95,12 +95,21 @@ function tile(parent: HTMLElement, label: string, value: number, hint: string, t
   parent.appendChild(t)
 }
 
-/** Archive verdicts in a fixed order, each with its token-driven tone class. */
-const VERDICTS: ReadonlyArray<{ key: string; label: string }> = [
-  { key: 'completed', label: '完成' },
-  { key: 'declined', label: '拒绝' },
-  { key: 'abandoned', label: '放弃' },
-  { key: 'unclassified', label: '未分类' },
+/** The archive's verdict vocabulary, in a fixed order: the receipt
+ *  envelope's controlled outcomes (src/receipt.ts RECEIPT_OUTCOMES) plus the
+ *  projection's 'unclassified' (a receipt that rode no envelope outcome).
+ *  'abandoned' also covers a caller's cancel — the ledger archives both the
+ *  same way. Each verdict has a token-driven tone class, shared by the split
+ *  bar here and the chat drawer's settled status. */
+export const VERDICTS: ReadonlyArray<{ key: string; label: string; tone: 'completed' | 'rejected' | 'failed' | 'abandoned' | 'unclassified' }> = [
+  { key: 'completed', label: '完成', tone: 'completed' },
+  { key: 'sync_completed', label: '同步完成', tone: 'completed' },
+  { key: 'rejected', label: '拒绝', tone: 'rejected' },
+  { key: 'failed', label: '失败', tone: 'failed' },
+  { key: 'expired', label: '过期', tone: 'abandoned' },
+  { key: 'abandoned', label: '放弃', tone: 'abandoned' },
+  { key: 'unknown', label: '结论不明', tone: 'unclassified' },
+  { key: 'unclassified', label: '未分类', tone: 'unclassified' },
 ]
 
 function splitBar(parent: HTMLElement, split: Readonly<Record<string, number>>, total: number): void {
@@ -109,16 +118,16 @@ function splitBar(parent: HTMLElement, split: Readonly<Record<string, number>>, 
   bar.setAttribute('role', 'img')
   const legend = el('div', 'wb-led-split-legend')
   const known = new Set(VERDICTS.map(v => v.key))
-  const entries: Array<[string, string, number]> = VERDICTS.map(v => [v.key, v.label, split[v.key] ?? 0])
-  for (const [k, n] of Object.entries(split)) if (!known.has(k)) entries.push([k, k, n])
+  const entries: Array<[string, string, number]> = VERDICTS.map(v => [v.tone, v.label, split[v.key] ?? 0])
+  for (const [k, n] of Object.entries(split)) if (!known.has(k)) entries.push(['other', k, n])
   const parts: string[] = []
-  for (const [key, label, n] of entries) {
+  for (const [tone, label, n] of entries) {
     if (n <= 0) continue
-    const seg = el('span', `wb-led-seg is-${known.has(key) ? key : 'other'}`)
+    const seg = el('span', `wb-led-seg is-${tone}`)
     seg.style.width = `${Math.max(2, (n / total) * 100)}%`
     bar.appendChild(seg)
     const item = el('span', 'wb-led-split-item')
-    item.appendChild(el('i', `wb-led-swatch is-${known.has(key) ? key : 'other'}`))
+    item.appendChild(el('i', `wb-led-swatch is-${tone}`))
     item.appendChild(document.createTextNode(`${label} ${n}`))
     legend.appendChild(item)
     parts.push(`${label} ${n}`)
