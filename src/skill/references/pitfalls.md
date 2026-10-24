@@ -14,9 +14,16 @@
 - **Do not blindly re-dispatch after a sync timeout.** -32005 means the
   delivery landed; the peer may still be executing. Reconcile the task id
   first (receipt or query), or you will double-execute.
-- **Unroutable caller labels** (e.g. CLI-initiated `cli-manager/...`) cannot
-  receive receipts — use the initiating session's own node team, or expect
-  the receipt to be dropped. Deliveries still land.
+- **Unroutable caller labels** (a free-form `caller_session` such as
+  `cli-manager/...`) cannot receive receipts — use the initiating session's
+  own node team, or expect the receipt to be dropped. Deliveries still land.
+  The `a2a-net` CLI (0.6.27+) is the supported exception: a DEPOSITED handle
+  is routable on its home host and receives into its mailbox
+  ([cli.md](cli.md)).
+- **Direct delivery does not relay.** `POST /a2a/direct` only serves teams on
+  the host that receives it; a team on another host answers "No live DSH
+  session node accepts team". `a2a_route` resolves peers and forwards;
+  direct callers (the CLI included) must target their home host's teams.
 - A sync route's 15s transport budget is shorter than most model turns. For
   anything that runs long, prefer `async: true` and the receipt contract.
 
