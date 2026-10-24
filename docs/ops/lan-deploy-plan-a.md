@@ -170,5 +170,28 @@ Start-Process -FilePath 'D:\node-v24.12.0-win-x64\dsh.cmd' -ArgumentList 'web','
 | `EADDRINUSE :9811` | 残留实例 | 精确 PID kill（§5.3），勿双起 |
 | 链接绿但目录无对端会话 | 暖卡缓存未刷 | 等 60s（cardCacheTtl）或轮询两次 state |
 
+## 9. 附录：远程节点经宿主 portproxy 接入（VM 实测 2026-10-24）
+
+**场景**：远程机（如 NAT 后的 VM、点对点隧道对端）仅宿主一台可达。**实测结论**：发现层 gossip 自动让全网知道它；建联层只需把它的落点经宿主面向 LAN 转发——一条 portproxy，无 VPN、无中继代码。
+
+```
+①宿主(.156)开转发（管理员，规则持久跨重启）：
+  netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=<LAN口> connectaddress=<远程内网址> connectport=<远程a2a口>
+  实测：13909 → 192.168.29.136:3091
+
+②远程节点侧（三条配置）：
+  originClaimUrl: 'http://<宿主LAN-IP>:<LAN口>'   ← 声明地址=代理地址
+  peers: [ '<任一舰队节点可达地址>' ]              ← 它出站可达内网，种一台即可
+  announce: true + apiKey
+
+③舰队各机：peers 加 'http://<宿主LAN-IP>:<LAN口>' → 互种
+
+④暖目录（各机轮询两次 state 或等 60s）→ linked ✓ verified ✓
+```
+
+**实测验收**：.157 → VM(13909) linked✓ verified✓ · .85 → VM linked✓ verified✓ · VM 经 gossip 自学全网 8 peer。VM 常驻=用户级 systemd + `loginctl enable-linger`（免 sudo）。
+
+**语义要点**：种子地址即「运营者链接」——各机种的是代理地址，信任落在宿主转发这个运营行为上；远程机的卡签名仍是它自己的钥（验签不受代理影响）。
+
 ---
 *方案随 0.6.26 rc 演进；后续版本如改端口/配置语义，以仓内 README 为准。*
