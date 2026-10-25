@@ -3340,6 +3340,18 @@ ${message}`
     }
     if (callerSessionId !== undefined) {
       for (const name of canvasStore.teamsOf(callerSessionId)) declared.add(canvasTeamOf(name))
+    } else {
+      // Issue #43: a same-zone handle that resolves to NO local session is a
+      // CROSS-HOST member (two nodes sharing one zone name — the fleet's
+      // common `dsh` spelling). The canvas link record exists on this host
+      // as a REMOTE MEMBER REF the operator added; the foreign-zone branch
+      // (a2aCallerRefusal) already honors that basis — the same-zone path
+      // must too, or a linked remote member is refused as teamless. The
+      // trust basis is unchanged: this host's operator-composed canvas,
+      // never the caller's self-description (V5).
+      for (const name of canvasStore.list()) {
+        if (canvasStore.remoteMembersOf(name).includes(caller)) declared.add(canvasTeamOf(name))
+      }
     }
     const routable = new Set<string>([config.team])
     for (const id of joinedSessions.list()) routable.add(`${config.team}/${id8(id)}`)
