@@ -28,6 +28,7 @@
 import type { LampState } from './layout-wire'
 import { buildLayoutDoc, clampDoc, type LayoutDoc, type LayoutRect } from './layout-doc'
 import { FRAME_HEAD_LIFT, starEdges } from './edges'
+import { createFederationOverlay } from './federation-overlay'
 import { displayName } from './stage-name'
 import {
   activityEdges, federalEdges, flyBounds, groupRemoteTeams, peerNodeId, peerHostOf, placePeers,
@@ -488,76 +489,28 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
   }
 
-  // ── federation overlay (PR D): peer chips + activity/federal edges ──
+  // ── federation overlay (PR D): peer cards' activity/federal edges ──
   // Runs on EVERY render, outside the model-revision gate: the poll's
   // inFlight ages must tick even when the model is unchanged, and the
   // badge column tracks the content bounds each reconcile. Its SVG
   // children are tracked separately because renderEdges clears the svg
   // wholesale - this appends after it (render() orders the two).
-  let fedSvg: SVGElement[] = []
-  let lastPlacements: PeerPlacement[] = []
+  // gh#49: the DOM drawing lives in federation-overlay.ts (module-size
+  // ruling); this view keeps only the seams (facts + fly).
+  const federation = createFederationOverlay(svg, model)
   let lastPeers: ReadonlyArray<PeerRow> = []
   let lastRemoteTeams: ReadonlyMap<string, RemoteTeamRow[]> = new Map()
   const peerScoreByText = new Map<string, number | undefined>()
   /** gh#20 W-A: per-host link/verified info for the peer badges. */
   const peerInfoByHost = new Map<string, { link?: 'linked' | 'stranger'; verified?: boolean }>()
-  let lastInFlight: ReadonlyArray<InFlightRow> = []
 
   function renderFederation(): void {
-    for (const el of fedSvg) el.remove()
-    fedSvg = []
-    // Peer placements come from the MODEL's remote nodes (v1 ruling: peers
-    // are cards in the same pipeline, dragged/saved like sessions) — the
-    // old chip column is gone.
-    const placements: PeerPlacement[] = model.allNodes()
-      .filter(n => n.remote === true)
-      .map(n => ({ url: n.peerUrl ?? n.id.slice(5), score: n.score, x: n.x, y: n.y }))
-    lastPlacements = placements
-    const bounds = model.contentBounds()
-    if (bounds !== null) {
-      // Edges: titlebar anchors (fx + fw/2, fy + 11, edges.ts lockstep).
-      const anchors = new Map<string, FrameAnchor>()
-      for (const [name, rect] of model.allFrames()) {
-        anchors.set(name, { name, x: rect.x + rect.w / 2, y: rect.y + FRAME_HEAD_LIFT })
-      }
-      for (const e of activityEdges(lastInFlight, anchors, placements, clock())) {
-        fedSvg.push(...fedEdge(e, 'e-activity', e.label))
-      }
-      for (const e of federalEdges(placements, bounds)) {
-        fedSvg.push(...fedEdge(e, 'e-federal', e.label))
-      }
-    }
-  }
-
-  /** One overlay line + its optional midpoint label (offset +14/+18). */
-  function fedEdge(
-    e: { x1: number; y1: number; x2: number; y2: number },
-    cls: string,
-    label: string,
-  ): SVGElement[] {
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
-    line.setAttribute('class', cls)
-    line.setAttribute('x1', String(e.x1))
-    line.setAttribute('y1', String(e.y1))
-    line.setAttribute('x2', String(e.x2))
-    line.setAttribute('y2', String(e.y2))
-    svg.appendChild(line)
-    const out: SVGElement[] = [line]
-    if (label !== '') {
-      const t = document.createElementNS('http://www.w3.org/2000/svg', 'text')
-      t.setAttribute('class', 'edge-label mono')
-      t.setAttribute('x', String((e.x1 + e.x2) / 2 + 14))
-      t.setAttribute('y', String((e.y1 + e.y2) / 2 + 18))
-      t.textContent = label
-      svg.appendChild(t)
-      out.push(t)
-    }
-    return out
+    federation.render(clock())
   }
 
   /** Statusbar fly: fit the frames ∪ peers region (flyBounds pads it). */
   function flyToFederation(): void {
-    vp = fitView(flyBounds(model.contentBounds(), lastPlacements), root.clientWidth || viewW, root.clientHeight || viewH)
+    vp = fitView(flyBounds(model.contentBounds(), federation.placements()), root.clientWidth || viewW, root.clientHeight || viewH)
     applyViewport()
     markDirty()
   }
@@ -1160,7 +1113,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // gh#41: remote-frame registry shared with serverAction (drop fork).
     lastTeams = input.teams
     lastPeers = input.peers ?? []
-    lastInFlight = input.inFlight ?? []
+    federation.setInFlight(input.inFlight ?? [])
     // Unjoined sessions have no node on the canvas — the panel-slim
     // migration made this view the join surface, so they ride a compact
     // toolbar chip instead of vanishing entirely.
