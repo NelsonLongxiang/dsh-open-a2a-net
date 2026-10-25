@@ -35,7 +35,7 @@ import {
   type RemoteTeamRow,
 } from './federation'
 import { clampViewport, fitView, panBy, screenToWorld, worldTransformCss, zoomAt, type LayoutViewport } from './viewport'
-import { WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, planTeamClusters } from './world'
+import { WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, planTeamClusters, NODE_W, NODE_H } from './world'
 import { applyAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction } from './canvas-ops'
 import { FRAME_HUES } from './tokens'
 import { createPlanningMenus } from './planning-menus'
@@ -156,6 +156,14 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     zoomLabel,
     mkButton('＋', '放大', () => zoomCenter(1.2)),
     mkButton('建队', '组成团队（G）：先框选至少 2 个节点', () => menus.startCreateFromSelection()),
+    // gh#48 (owner order, review-seat spec): one-click tidy — inside every
+    // team frame, the members that belong to EXACTLY that one team re-seat
+    // into a padded grid flow (the frame grows downward, bounded); members
+    // of 2+ teams keep their positions (the dashed edges express their
+    // membership). Idempotent; empty frames untouched; remote member cards
+    // ride the same rule; the move persists through the ordinary layout
+    // save loop exactly like a hand drag.
+    mkButton('整理成员', '每队框内仅属一队的成员自动排齐（多队成员不动）', () => tidyTeamMembers()),
   )
   // Unjoined sessions ride a toolbar chip + dropdown: the panel-slim
   // migration made the planning view the join surface — without this, an
@@ -248,6 +256,45 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     grid.style.backgroundSize = `${step}px ${step}px`
     grid.style.backgroundPosition = `${-vp.x * vp.scale}px ${-vp.y * vp.scale}px`
     zoomLabel.textContent = `${Math.round(vp.scale * 100)}%`
+  }
+
+  /**
+   * gh#48 (owner order): one-click member tidy. For every team frame, the
+   * members belonging to EXACTLY that one team re-seat into a padded grid
+   * flow inside the frame (the frame grows downward if the members need
+   * more rows — bounded); members of 2+ teams stay put (their dashed edges
+   * express membership). Remote member cards (member-) are ordinary board
+   * cards and ride the same rule. The move goes through markDirty()/render()
+   * — the same persistence path a hand drag takes.
+   */
+  function tidyTeamMembers(): void {
+    const PAD = 28
+    const GAP_X = 16
+    const GAP_Y = 14
+    for (const [name, rect] of model.allFrames()) {
+      const members = model.teamMemberIds(name)
+      const sole = members
+        .map(id => model.getNode(id))
+        .filter((n): n is NonNullable<typeof n> => n !== undefined)
+        .filter(n => n.memberships.length === 1)
+      if (sole.length === 0) continue // empty frame / only shared members: untouched
+      const perRow = Math.max(1, Math.floor((rect.w - 2 * PAD + GAP_X) / (NODE_W + GAP_X)))
+      const rows = Math.ceil(sole.length / perRow)
+      const needed = PAD * 2 + rows * NODE_H + (rows - 1) * GAP_Y
+      if (needed > rect.h) {
+        model.setFrame(name, { ...rect, h: Math.min(needed, rect.h + 400) })
+      }
+      const startX = rect.x + PAD + NODE_W / 2
+      let y = rect.y + PAD + NODE_H / 2
+      sole.forEach((n, i) => {
+        const col = i % perRow
+        if (i > 0 && col === 0) y += NODE_H + GAP_Y
+        const x = startX + col * (NODE_W + GAP_X)
+        model.dragNodes([n.id], x - n.x, y - n.y)
+      })
+    }
+    markDirty()
+    render()
   }
 
   function render(): void {
