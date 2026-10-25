@@ -215,6 +215,22 @@ function collectLiveHostBuild() {
   return rows
 }
 
+// ── admission_remote_ref：S14 同 zone 准入的 remote-ref 信任基（gh#43/PR#44）──
+// declared 扩容唯一来源=operator 手工组 remoteMembersOf（caller 自述不进——V5 不破）。
+function collectAdmissionRemoteRef() {
+  const rows = []
+  try {
+    const src = readFileSync(join(REPO, 'src/index.ts'), 'utf8')
+    const hasChannel = /remoteMembersOf/.test(src)
+    const inSameZone = /sameZoneSharedTeamRefusal[\s\S]{0,2000}remoteMembersOf/.test(src)
+    rows.push({ name: 'remote-ref-channel', ok: (hasChannel && inSameZone) ? 1 : 0, detail: 'sameZoneSharedTeamRefusal 经 remoteMembersOf 解析 operator 手工组（PR#44 对称补齐）' })
+    // V5 信任基：渠道须读 canvasStore（宿主权威面）非请求体——caller 自述不进 declared
+    const readsStore = /remoteMembersOf/.test(src) && /canvasStore/.test(src.slice(Math.max(0, src.indexOf('remoteMembersOf') - 1500), src.indexOf('remoteMembersOf') + 1500))
+    rows.push({ name: 'operator-only-source', ok: readsStore ? 1 : 0, detail: 'declared 扩容邻域含 canvasStore 读（宿主 operator 面）' })
+  } catch (e) { rows.push({ name: 'admission-remote-ref', ok: 0, detail: String(e).slice(0, 80) }) }
+  return rows
+}
+
 function collectOwnerSignalUi() {
   // 遍历 nexus-stage 源码聚合文本（UI 字符串锚）
   const agg = (dir) => {
@@ -254,6 +270,7 @@ const TABLES = {
   controlface_gate: collectControlFaceGate,
   owner_signal_ui: collectOwnerSignalUi,
   live_host_build: collectLiveHostBuild,
+  admission_remote_ref: collectAdmissionRemoteRef,
 }
 
 mkdirSync(join(REPO, 'tmp/supervisor'), { recursive: true })
