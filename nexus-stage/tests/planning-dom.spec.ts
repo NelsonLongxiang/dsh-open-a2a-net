@@ -228,8 +228,10 @@ describe('planning view DOM', () => {
     const buttons = Array.from(v.root.querySelectorAll<HTMLButtonElement>('.p-toolbar button'))
     // 5th = 未入网 chip (panel-slim migration); 6th = 节点 list (the
     // teamed-only canvas ruling moved teamless/unjoined sessions there);
-    // 7th = 整理成员 (gh#48 one-click member tidy).
-    expect(buttons).toHaveLength(7)
+    // 7th = 整理成员 (gh#48 one-click member tidy);
+    // 8th = 一键重排 (supervisor order v2: whole-board relayout).
+    expect(buttons).toHaveLength(8)
+    expect(buttons.some(b => b.textContent === '一键重排')).toBe(true)
     expect(buttons.some(b => b.textContent === '建队')).toBe(true)
     expect(buttons.some(b => (b.textContent ?? '').startsWith('未入网'))).toBe(true)
     expect(buttons.some(b => b.textContent === '节点')).toBe(true)

@@ -40,6 +40,7 @@ import { WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, pla
 import { applyAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction } from './canvas-ops'
 import { FRAME_HUES } from './tokens'
 import { createPlanningMenus } from './planning-menus'
+import { applyBoardRelayout } from './planning-relayout'
 import { createNodeList } from './planning-nodelist'
 import { viewportBucket, type PlanningDeps, type PlanningInput, type PlanningSession, type PlanningTeam, type PlanningView, type SeamKey, type SeamPointer, type ViewportBucket } from './planning-types'
 import './planning.css'
@@ -165,6 +166,13 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // ride the same rule; the move persists through the ordinary layout
     // save loop exactly like a hand drag.
     mkButton('整理成员', '每队框内仅属一队的成员自动排齐（多队成员不动）', () => tidyTeamMembers()),
+    // Supervisor order v2 (upgrades gh#48): one-click WHOLE-BOARD relayout —
+    // the two buttons split the job (整理成员 = cards inside one frame;
+    // 一键重排 = every local frame AND its cards). Frame size derives from
+    // content (width and height both); frames tile in a row flow
+    // (constructively disjoint); multi-team members never enter the size
+    // math and never move; remote org frames and frameless nodes stay put.
+    mkButton('一键重排', '全板队框+成员重排：框尺寸随内容自适应、框位行流式平铺（远端队框与多归属成员不动）', () => relayoutBoard()),
   )
   // Unjoined sessions ride a toolbar chip + dropdown: the panel-slim
   // migration made the planning view the join surface — without this, an
@@ -294,6 +302,19 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         model.dragNodes([n.id], x - n.x, y - n.y)
       })
     }
+    markDirty()
+    render()
+  }
+
+  /**
+   * Supervisor order v2: whole-board deterministic relayout (the planner
+   * and the model adapter live in planning-relayout.ts): LOCAL frames +
+   * sole members only — remote org frames keep gh#44 live-rect-wins,
+   * frameless nodes and multi-team members never move; the same
+   * markDirty()/render() persistence path a hand drag takes.
+   */
+  function relayoutBoard(): void {
+    if (!applyBoardRelayout(model, new Set(remoteFramesRef.keys()))) return
     markDirty()
     render()
   }
