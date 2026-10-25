@@ -2583,10 +2583,13 @@ const reportLoopRing = new Map<string, number[]>()
             ...joinedSessions.list()
               .filter(id => !liveRoots.has(id) && isArchived?.(id) !== true)
               .map(id => exposureRow(`${config.team}/${id8(id)}`, { name: `${session}-${id8(id)}`, description: 'cold — not loaded; routing here wakes the session' })),
-            // gh#45: deposited CLI identities publish as directory rows —
+            // gh#45/47: deposited CLI identities publish as directory rows —
             // the fleet sees them as member cards (draggable = the operator
-            // link). Their "zone" is the agent-name; expiry drops the row.
-            ...cliDeposits.cardRows().map(row => exposureRow(row.team, { name: row.name, description: row.description })),
+            // link). Their "zone" is the agent-name. gh#47: an EXPIRED
+            // deposit stays as an OFFLINE row (tombstone) so the board keeps
+            // the member card grayed-but-present and canvas refs never
+            // dangle silently; re-publish (same handle) un-tombstones.
+            ...cliDeposits.directoryRows().map(row => exposureRow(row.team, { name: row.name, description: row.description })),
           ]
           const memberships = teamMemberships.list().flatMap(entry =>
             entry.teams.map(team => ({ node: `${config.team}/${id8(entry.session)}`, team })))
