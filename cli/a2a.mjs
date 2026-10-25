@@ -44,13 +44,15 @@ const USAGE = `a2a-net CLI — aligned with the plugin's ten model tools ('a2a t
 usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 
 户口制:   init <name> [--uuid 16hex] [--force] · publish · inbox [--new|--wait|--hook] · revoke
-对齐面:   whoami · teams [query] · route <team> <msg…> · status · tasks · probe · report <msg…>
+对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] · status · tasks · probe · report <msg…>
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
 
 host:     --home > $A2A_HOME > the home saved by 'a2a init --home URL' > ${DEFAULT_HOME}
 key:      --key > $A2A_KEY (prefer the env var: a --key value stays in shell history)
 pocket:   $A2A_POCKET_TOKEN (or $A2A_TOKEN) rides as the dsh_pocket_token cookie, for a host behind dsh-pocket
 message:  everything after <team> that is not a flag; put a message that starts with '-' after '--'
+route:    async by default (delivered + task id; the receipt comes to 'a2a inbox');
+          --sync waits for the target's reply and prints it; --context ID continues that conversation
 --json:   teams / tasks / probe / route / report / inbox print the raw rows instead of the table
 
 inbox:    bare 'inbox' lists the whole mailbox (newest first, the host keeps 64)
@@ -62,8 +64,8 @@ inbox:    bare 'inbox' lists the whole mailbox (newest first, the host keeps 64)
                         nothing at all when there is none or the host is unreachable (always exit 0)`
 
 /** Flags that take a value (both '--home URL' and '--home=URL'); the rest are switches. */
-const VALUE_FLAGS = new Set(['--home', '--key', '--uuid', '--root', '--timeout', '--interval'])
-const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew'])
+const VALUE_FLAGS = new Set(['--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context'])
+const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
 const HOOK_MODE = process.argv.includes('--hook')
@@ -466,6 +468,13 @@ async function printDelivery(verb, res) {
     return
   }
   if (res.status === 401 || res.status === 403) die(`[${verb}] ${keyHint(res.status)}${out.error !== undefined ? ` (${String(out.error)})` : ''}`)
+  // A sync round answers with the target's reply instead of a delivery marker.
+  if (out.routed === true && typeof out.result?.text === 'string') {
+    console.log(`[${verb}] reply from ${String(out.team)} · task ${String(out.task_id)}${typeof out.context_id === 'string' && out.context_id !== '' ? ` · context ${out.context_id}` : ''}`)
+    console.log(out.result.text)
+    if (out.task_status !== undefined && out.task_status !== 'TASK_STATE_COMPLETED') console.error(`[${verb}] status ${String(out.task_status)} — the round has not settled; reconcile by task id before re-sending`)
+    return
+  }
   if (out.delivered !== true) die(`[${verb}] not delivered (HTTP ${String(res.status)}): ${String(out.error ?? out.task_status ?? 'no reason given')}`)
   const receipt = out.receipt === 'none' ? 'no receipt will come' : 'receipt arrives in: a2a inbox'
   console.log(`[${verb}] delivered → ${String(out.team)} · task ${String(out.task_id)} · ${receipt}`)
@@ -511,7 +520,10 @@ async function main() {
     const res = await fetch(`${home()}/a2a/direct`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...originClaimFor(home())(), ...keyHeaders() },
-      body: JSON.stringify({ team, message, caller_session: identity().handle, wait: false }),
+      body: JSON.stringify({
+        team, message, caller_session: identity().handle, wait: has('--sync'),
+        ...(flag('--context') !== undefined ? { context_id: flag('--context') } : {}),
+      }),
     })
     await printDelivery('route', res)
     return
