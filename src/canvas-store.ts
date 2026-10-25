@@ -7,7 +7,11 @@
  * `<team>/canvas/<name>` resolves the first live local member, wakes the
  * first cold local one, then falls through to the remote members in order
  * (the directory resolves their handles; remote nodes never wake from
- * here). Membership order is the routing priority (member list order),
+ * here). The dispatching session itself is exempt from the local tiers
+ * (issue #41: the self-route rule extends to canvas — an initiator
+ * occupying a member slot never captures its own dispatch, which would
+ * only echo home; the seam lives in the dispatch layer, the store stays
+ * pure). Membership order is the routing priority (member list order),
  * preserved verbatim on disk. Plain JSON, one writer (the control routes),
  * read fresh by the state route.
  * @module @nelsonlongxiang/dsh-open-a2a-net/canvas-store
