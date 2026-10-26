@@ -1,35 +1,28 @@
-// @vitest-environment node
 /**
- * #71 cross-host wiring (direct-f0523f9d) — criteria written RED first.
- *
- * Field evidence (2026-10-26): the owner wired 工作台市场--功能测试组 on
- * node .157's workbench with members from BOTH hosts; .157's inbound
- * delivered fine, but the REPLY leg (.157 → .156) was refused by the
- * receiving host's shared-team admission — the org lives only on the
- * peer's records, and admission never consulted the warm card cache
- * (which DID hold the peer's full card, canvasOrg included).
- *
- * Fix contract (总工 dispatch, two halves):
- *  ① an envelope full-face pull that succeeds persists its full fields
- *     back into the warm card cache (the probe path fetches but drops);
- *  ② admission's remote-ref channel reads the warm cached peer canvasOrg:
- *     an org entry naming BOTH the caller's handle and one of THIS host's
- *     own handles is a shared team (双向识别 — the operator gesture
- *     happened on the OTHER host's workbench; both ends are named).
- *
- * Guards: an org entry WITHOUT a local handle keeps refusing (a caller
- * adding itself to its own org changes nothing here); admission stays
- * read-only over the warm cache.
+ * Issue #43 (same-zone cross-host caller): a zone/id8 handle that resolves
+ * to NO local session is a cross-host member (two nodes sharing one zone
+ * name). Its link record on THIS host is the canvas remote member ref the
+ * operator added — the foreign-zone branch already honors that basis; the
+ * same-zone path must too, or a linked remote member is refused as
+ * teamless (production repro: the WSL node dispatching after PR#42 skip).
+ * gh#71 (总工席 dispatch): the warm card cache peer canvasOrg joins the
+ * same basis (双向识别), the probe face persists the full card, and the
+ * TOOL-face team-scoped gate credits shared canvas + warm-org bases.
  */
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { bootNode, reservePort, type MeshNode } from './harness.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { Context, Service } from '@deepseek-ai/cordis'
+import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import ToolRuntime from '@deepseek-ai/dsh-tools'
+import TimerService from '@deepseek-ai/cordis-plugin-timer'
+import WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { apply, type Config } from '../../src/index.ts'
 
-beforeEach(() => {
-  vi.stubGlobal('WebSocket', function throwOnSocket() { throw new Error('no socket') })
-})
-afterEach(() => { vi.unstubAllGlobals() })
+import { bootNode, reservePort, type MeshNode } from './harness.ts'
 
 const post = async (url: string, body?: unknown): Promise<Record<string, any>> =>
   await globalThis.fetch(url, {
@@ -38,13 +31,6 @@ const post = async (url: string, body?: unknown): Promise<Record<string, any>> =
     body: body === undefined ? undefined : JSON.stringify(body),
   }).then(async r => await r.json() as Record<string, any>)
 
-/**
- * Swap the harness's fixed-id fake agent for one with a DISTINCT session id
- * (the gh26-f5 pattern adapted to bootNode): the steer/reply shape mirrors
- * harness.ts so the final-reply flush reads the answer. Emitted AFTER boot
- * so the session-node face registers the new live root; the fixed-id agent
- * stays live-but-unjoined (invisible by design).
- */
 function swapAgent(node: MeshNode, id: string, name: string): void {
   const agent = {
     id: SessionId(id),
@@ -60,75 +46,159 @@ function swapAgent(node: MeshNode, id: string, name: string): void {
   node.ctx.emit('agent/created', { agent: agent as unknown as Agent })
 }
 
-describe('gh#71 peer-org admission (fix ②)', () => {
-  it('a warm cached peer org naming caller + a local handle admits the delivery; an org without a local handle still refuses', { timeout: 30_000 }, async () => {
-    const portA = await reservePort()
-    const portB = await reservePort()
-    // cardCacheTtlMs override: mesh default is 60ms — admission reads the
-    // warm cache READ-ONLY, so the org must still be warm when the route
-    // lands (the product default TTL is 60s).
-    // teamScopeRouting: true EXPLICIT — the review FAIL's false-green trap:
-    // the mesh harness bootNode builds Config literally, so an omitted key
-    // is undefined (falsy) and the whole a2aCallerRefusal gate no-ops —
-    // the admission under test never ran (both symptoms: positive green
-    // pre-fix, guard bare.error undefined). The product schema default is
-    // true; the spec must say so out loud.
-    const a = await bootNode({ name: 'A', session: 'mesh-gh71-a', team: 'dsh', sessionNodes: true, port: portA, peers: [`http://127.0.0.1:${String(portB)}`], cardCacheTtlMs: 10_000, teamScopeInfo: false, teamScopeRouting: true })
-    const b = await bootNode({ name: 'B', session: 'mesh-gh71-b', team: 'dsh', sessionNodes: true, port: portB, peers: [`http://127.0.0.1:${String(portA)}`], cardCacheTtlMs: 10_000, teamScopeInfo: false, teamScopeRouting: true })
-    try {
-      swapAgent(a, 'session-aaaa1111zzzz0000', 'A-开发席')
-      swapAgent(b, 'session-bbbb2222zzzz0000', 'B-测试席')
-      const joinA = await post(`${a.baseUrl}/__dsh_a2a/join`, { id: 'session-aaaa1111zzzz0000' })
-      expect(joinA.team).toBe('dsh/aaaa1111')
-      const joinB = await post(`${b.baseUrl}/__dsh_a2a/join`, { id: 'session-bbbb2222zzzz0000' })
-      expect(joinB.team).toBe('dsh/bbbb2222')
 
-      // A's workbench composition — the FIELD shape: handle-form members.
-      // 跨机组 names BOTH ends (the link); 孤组 names a nobody handle
-      // only (the guard — no local handle on B, no admission).
-      expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: '跨机组' })).ok).toBe(true)
-      expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: '跨机组', id: 'dsh/aaaa1111' })).ok).toBe(true)
-      expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: '跨机组', id: 'dsh/bbbb2222' })).ok).toBe(true)
-      expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: '孤组' })).ok).toBe(true)
-      expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: '孤组', id: 'dsh/cccc3333' })).ok).toBe(true)
+class FakeMultiAgents extends Service {
+  readonly agents: Agent[] = []
+  constructor(ctx: Context) { super(ctx, 'agents') }
+  requireInitiator(): Agent { throw new Error('no initiator in this fiber') }
+  roots(): Agent[] { return [...this.agents] }
+  get(id: Agent['id']): Agent | undefined { return this.agents.find(a => a.id === id) }
+}
 
-      // Warm BOTH caches the way the live product does: a2a_teams sweeps
-      // (envelope-stamped client fetches → full faces). B must hold A's
-      // canvasOrg; A must hold B's sessionTeams to resolve the target.
-      const teamsToolA = a.ctx.tools.get('a2a_teams')
-      const teamsToolB = b.ctx.tools.get('a2a_teams')
-      const agentA = (a as unknown as { agents: { agent: unknown } }).agents.agent
-      const agentB = (b as unknown as { agents: { agent: unknown } }).agents.agent
-      let bSawOrg = false
-      for (let i = 0; i < 20 && !bSawOrg; i += 1) {
-        await teamsToolA?.execute({}, { signal: new AbortController().signal, agent: agentA } as never)
-        await teamsToolB?.execute({}, { signal: new AbortController().signal, agent: agentB } as never)
-        const bState = await post(`${b.baseUrl}/__dsh_a2a/state`)
-        const rows = (bState.peerOrg ?? []) as Array<{ url: string; org: Array<{ name: string; members: string[] }> }>
-        const row = rows.find((r: { url: string }) => r.url === `http://127.0.0.1:${String(portA)}`)
-        bSawOrg = row?.org.some(t => t.name === '跨机组' && t.members.includes('dsh/bbbb2222')) === true
-        if (!bSawOrg) await new Promise(resolve => setTimeout(resolve, 300))
-      }
-      expect(bSawOrg).toBe(true) // precondition: the warm cache holds the org
+type Mounted = {
+  ctx: Context
+  agents: FakeMultiAgents
+  port: number
+  dispose: () => Promise<void>
+}
 
-      // ── Positive (RED until fix ②): A routes to B's session team through
-      // the real client path — envelope stamped, caller_session = A's handle.
-      const routeTool = a.ctx.tools.get('a2a_route')
-      const res = await routeTool?.execute({ team: 'dsh/bbbb2222', message: 'org-link ping' }, { signal: new AbortController().signal, agent: agentA } as never) as Record<string, any>
-      expect(res?.ok).toBe(true)
-      expect(String(res?.reply)).toContain('ok from B-测试席')
+async function mount(canvas: Array<{ name: string; members: string[] }>, joined: string[]): Promise<Mounted> {
+  const ctx = new Context()
+  await ctx.plugin(SystemPrompt)
+  await ctx.plugin(ToolRuntime)
+  await ctx.plugin(TimerService)
+  await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+  const agents = new FakeMultiAgents(ctx)
+  const home = mkdtempSync(join(tmpdir(), 'a2a-i43-'))
+  mkdirSync(join(home, 'a2a'), { recursive: true })
+  writeFileSync(join(home, 'a2a', 'canvas.json'), JSON.stringify({ teams: canvas }), 'utf8')
+  writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: joined }), 'utf8')
+  apply(ctx, {
+    apiKey: '',
+    session: 'i43-test-node',
+    team: 'dsh',
+    routeTimeoutMs: 60_000,
+    flushTimeoutMs: 300_000,
+    announce: false,
+    agentName: 'i43 node',
+    teamScopeRouting: true,
+    peers: [],
+    delegates: [],
+    sessionNodes: true,
+    wakeJoinedOnBoot: false,
+    wakePrewarmDelayMs: 0,
+    wakePrewarmQuietMs: 0,
+    wakeBootStaggerMs: 3_000,
+    stateColdRowsTtlMs: 5_000,
+    cardCacheTtlMs: 60_000,
+    cardCacheNegativeTtlMs: 30_000,
+    remoteRowsTtlMs: 15_000,
+    dshHome: home,
+    cardTtlMs: 172_800_000,
+  } satisfies Config)
+  return {
+    ctx,
+    agents,
+    port: (ctx as unknown as { webServer: WebServer }).webServer.port,
+    dispose: async () => { await ctx.fiber.dispose() },
+  }
+}
 
-      // ── Guard (green before AND after): 孤组 has no local handle — the
-      // caller it names must keep refusing (双向识别 is required, and the
-      // 跨机组 link must not spill over to a different caller).
-      const bare = await post(`${b.baseUrl}/a2a/direct`, { team: 'dsh/bbbb2222', message: 'loner ping', caller_session: 'dsh/cccc3333' })
-      expect(bare.error).toBeDefined()
-      expect(String(bare.error)).toMatch(/shared-team|no team membership|no operator-established link/)
-    } finally {
-      await a.dispose()
-      await b.dispose()
-    }
-  })
+const mounted: Array<() => Promise<void>> = []
+afterEach(async () => {
+  while (mounted.length > 0) await (mounted.pop() as () => Promise<void>)()
+  vi.unstubAllGlobals()
+})
+
+const LOCAL_MEMBER = 'session-0123456789abcdef'
+const REMOTE_CALLER = 'dsh/cccccccc' // same-zone handle, NOT a local session
+
+describe('issue #43 same-zone cross-host admission', () => {
+  it('a same-zone handle listed as a canvas remote member clears admission and delivers to the local member', async () => {
+    const m = await mount([{ name: '品味组', members: [LOCAL_MEMBER, REMOTE_CALLER] }], [LOCAL_MEMBER])
+    mounted.push(m.dispose)
+    const member = {
+      id: SessionId(LOCAL_MEMBER),
+      session: { events: [] as unknown[] },
+      steer: vi.fn(),
+    } as unknown as Agent & { steer: ReturnType<typeof vi.fn> }
+    m.agents.agents.push(member)
+    m.ctx.emit('agent/created', { agent: member })
+    const res = await fetch(`http://127.0.0.1:${String(m.port)}/a2a/direct`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ team: 'dsh/01234567', message: '建联：同 zone 跨节点成员', caller_session: REMOTE_CALLER, wait: false }),
+    }).then(async r => await r.json() as Record<string, any>)
+    expect(res.error).toBeUndefined()
+    expect(res.delivered).toBe(true)
+    expect(member.steer).toHaveBeenCalledTimes(1)
+  }, 30_000)
+
+  it('a same-zone handle with NO canvas remote ref on this host is still refused as teamless', async () => {
+    const m = await mount([{ name: '品味组', members: [LOCAL_MEMBER, REMOTE_CALLER] }], [LOCAL_MEMBER])
+    mounted.push(m.dispose)
+    const res = await fetch(`http://127.0.0.1:${String(m.port)}/a2a/direct`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ team: 'dsh/01234567', message: '未链接的同 zone 外来者', caller_session: 'dsh/dddddddd', wait: false }),
+    }).then(async r => await r.json() as Record<string, any>)
+    expect(res.error).toContain('declares no team membership')
+  }, 30_000)
+
+  it('the remote-ref basis is target-scoped: the caller still cannot reach a session OUTSIDE the shared canvas team (F5)', async () => {
+    const other = 'session-9999888877776666'
+    const m = await mount([{ name: '品味组', members: [LOCAL_MEMBER, REMOTE_CALLER] }], [LOCAL_MEMBER, other])
+    mounted.push(m.dispose)
+    const first = { id: SessionId(LOCAL_MEMBER), session: { events: [] as unknown[] }, steer: vi.fn() } as unknown as Agent & { steer: ReturnType<typeof vi.fn> }
+    const second = { id: SessionId(other), session: { events: [] as unknown[] }, steer: vi.fn() } as unknown as Agent & { steer: ReturnType<typeof vi.fn> }
+    m.agents.agents.push(first, second)
+    m.ctx.emit('agent/created', { agent: first })
+    m.ctx.emit('agent/created', { agent: second })
+    const toMember = await fetch(`http://127.0.0.1:${String(m.port)}/a2a/direct`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ team: 'dsh/01234567', message: '成员可达', caller_session: REMOTE_CALLER, wait: false }),
+    }).then(async r => await r.json() as Record<string, any>)
+    expect(toMember.delivered).toBe(true)
+    const toOutsider = await fetch(`http://127.0.0.1:${String(m.port)}/a2a/direct`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ team: 'dsh/99998888', message: '非成员不可达', caller_session: REMOTE_CALLER, wait: false }),
+    }).then(async r => await r.json() as Record<string, any>)
+    expect(String(toOutsider.error)).toContain('shares no team with target')
+    expect(second.steer).not.toHaveBeenCalled()
+  }, 30_000)
+
+  it('a group member dispatches to the CANVAS GROUP NAME (whole-group); a stranger to the group name is refused', { timeout: 30_000 }, async () => {
+    const m = await mount([{ name: '品味组', members: [LOCAL_MEMBER, REMOTE_CALLER] }], [LOCAL_MEMBER])
+    mounted.push(m.dispose)
+    const member = { id: SessionId(LOCAL_MEMBER), session: { events: [] as unknown[] }, steer: vi.fn() } as unknown as Agent & { steer: ReturnType<typeof vi.fn> }
+    m.agents.agents.push(member)
+    m.ctx.emit('agent/created', { agent: member })
+
+    // 66abc2cf defect pin: the remote caller (a 品味组 member by THIS host's
+    // canvas record) addresses the GROUP NAME — whole-group dispatch. The
+    // tool-face gate must credit the group the same way the picker does
+    // (members.includes(team) never matches a canvas group-name string;
+    // canvasTeamOf(name) === team is the match).
+    const toGroup = await fetch(`http://127.0.0.1:${String(m.port)}/a2a/direct`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ team: 'dsh/canvas/品味组', message: '整组派发', caller_session: REMOTE_CALLER, wait: false }),
+    }).then(async r => await r.json() as Record<string, any>)
+    expect(toGroup.error).toBeUndefined()
+    expect(toGroup.delivered).toBe(true)
+    expect(member.steer).toHaveBeenCalledTimes(1)
+
+    // Negative control: a handle in NO group cannot ride the group name.
+    const stranger = await fetch(`http://127.0.0.1:${String(m.port)}/a2a/direct`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ team: 'dsh/canvas/品味组', message: '非组员整组派发', caller_session: 'dsh/dddddddd', wait: false }),
+    }).then(async r => await r.json() as Record<string, any>)
+    expect(String(stranger.error)).toBeDefined()
+    expect(member.steer).toHaveBeenCalledTimes(1)
+  }, 30_000)
 })
 
 describe('gh#71 probe full-face persist (fix ①)', () => {
@@ -144,15 +214,10 @@ describe('gh#71 probe full-face persist (fix ①)', () => {
       expect((await post(`${q.baseUrl}/__dsh_a2a/join`, { id: 'session-dddd4444zzzz0000' })).team).toBe('dsh/dddd4444')
       expect((await post(`${q.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: '探针组' })).ok).toBe(true)
       expect((await post(`${q.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: '探针组', id: 'dsh/dddd4444' })).ok).toBe(true)
-
-      // The probe sweep is P's FIRST card contact with Q (no a2a_teams
-      // call before it) — the fetch must persist for the state face to
-      // surface the org.
       const probeTool = p.ctx.tools.get('a2a_probe')
       const agentP = (p as unknown as { agents: { agent: unknown } }).agents.agent
       const probe = await probeTool?.execute({}, { signal: new AbortController().signal, agent: agentP } as never) as Record<string, any>
       expect(probe?.ok).toBe(true)
-
       let sawOrg = false
       for (let i = 0; i < 10 && !sawOrg; i += 1) {
         const pState = await post(`${p.baseUrl}/__dsh_a2a/state`)
@@ -165,62 +230,6 @@ describe('gh#71 probe full-face persist (fix ①)', () => {
     } finally {
       await p.dispose()
       await q.dispose()
-    }
-  })
-})
-
-// gh#71 fix ③ — the TOOL-GATE dual basis (routeTrunk's team-scoped refusal
-// honors sharedCanvas + orgShared). TEST-seat pin (chief order
-// direct-55665230): the NEGATIVE control is the point — a warm org entry
-// that does NOT name the caller keeps the tool gate refusing; the same
-// org naming caller + target opens it (the route may then fail LATER on
-// reachability, which is a different error class and proves the gate let
-// it through).
-describe('gh#71 tool-gate dual basis (fix ③)', () => {
-  it('sharedCanvas (dual member shape) and orgShared open the gate; an org without the caller keeps refusing', { timeout: 30_000 }, async () => {
-    const portA = await reservePort()
-    const portB = await reservePort()
-    const a = await bootNode({ name: 'A', session: 'mesh-gh71g-a', team: 'dsh', sessionNodes: true, port: portA, peers: [`http://127.0.0.1:${String(portB)}`], teamScopeInfo: false, teamScopeRouting: true })
-    const b = await bootNode({ name: 'B', session: 'mesh-gh71g-b', team: 'dsh', sessionNodes: true, port: portB, peers: [`http://127.0.0.1:${String(portA)}`] })
-    try {
-      swapAgent(a, 'session-aaaa1111zzzz0000', 'A-门席')
-      swapAgent(b, 'session-bbbb2222zzzz0000', 'B-远端席')
-      expect((await post(`${a.baseUrl}/__dsh_a2a/join`, { id: 'session-aaaa1111zzzz0000' })).team).toBe('dsh/aaaa1111')
-      expect((await post(`${b.baseUrl}/__dsh_a2a/join`, { id: 'session-bbbb2222zzzz0000' })).team).toBe('dsh/bbbb2222')
-      // B's org names A's handle + a target handle 'dsh/cccc3333' — the
-      // dual-recognition shape the gate must honor.
-      expect((await post(`${b.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: '跨机组' })).ok).toBe(true)
-      expect((await post(`${b.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: '跨机组', id: 'dsh/aaaa1111' })).ok).toBe(true)
-      expect((await post(`${b.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: '跨机组', id: 'dsh/cccc3333' })).ok).toBe(true)
-      // Warm A's cache with B's full card (linked via the bilateral seed).
-      const teamsTool = a.ctx.tools.get('a2a_teams')
-      const agentA = (a as unknown as { agents: { agent: unknown } }).agents.agent
-      await teamsTool?.execute({}, { signal: new AbortController().signal, agent: agentA } as never)
-
-      const route = a.ctx.tools.get('a2a_route')
-      const run = async (team: string): Promise<string> =>
-        String(((await route?.execute({ team, message: 'gate probe' }, { signal: new AbortController().signal, agent: agentA } as never) as Record<string, any>) ?? {}).error ?? 'no-error')
-      // Positive: the org names caller + target — the gate opens (the
-      // later failure, if any, must NOT be the team-scoped refusal).
-      const pos = await run('dsh/cccc3333')
-      expect(pos).not.toContain('team-scoped routing is on')
-      // Negative: an unrelated target is in NO basis (org names neither it,
-      // no local canvas, no declaration) — the gate refuses.
-      const neg = await run('dsh/99998888')
-      expect(neg).toContain('team-scoped routing is on')
-      // sharedCanvas dual shape: A's OWN canvas names the caller by handle —
-      // the gate opens for a TEAMMATE handle the canvas also names (the
-      // implemented semantics; routing the GROUP NAME itself is a separate
-      // gap the TEST receipt records — members.includes(team) never matches
-      // a <team>/canvas/<name> string).
-      expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: '本机共享' })).ok).toBe(true)
-      expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: '本机共享', id: 'dsh/aaaa1111' })).ok).toBe(true)
-      expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: '本机共享', id: 'dsh/eeee5555' })).ok).toBe(true)
-      const viaCanvas = await run('dsh/eeee5555')
-      expect(viaCanvas).not.toContain('team-scoped routing is on')
-    } finally {
-      await a.dispose()
-      await b.dispose()
     }
   })
 })

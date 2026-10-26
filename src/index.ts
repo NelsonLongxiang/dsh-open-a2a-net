@@ -5583,9 +5583,15 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           // Canvas members mix two shapes: LOCAL sessions sit by session
           // id, cross-host members by zone/id8 handle — match either.
           const callerHandle = `${config.team}/${id8(scopeCaller)}`
+          // gh#45 末修 (66abc2cf defect): a CANVAS GROUP NAME target
+          // (`<team>/canvas/<name>`) never matches member handles — a
+          // whole-group dispatch from a group member was refused. The
+          // group's own team handle (canvasTeamOf(name)) is the match
+          // (the caller sits in the very group being addressed).
           const sharedCanvas = canvasStore.list().some(name => {
             const members = canvasStore.membersOf(name)
-            return members.includes(scopeCaller) || members.includes(callerHandle) ? members.includes(team) : false
+            const inGroup = members.includes(scopeCaller) || members.includes(callerHandle)
+            return inGroup ? members.includes(team) || canvasTeamOf(name) === team : false
           })
           let orgShared = false
           for (const cached of cardCache.values()) {
@@ -5593,7 +5599,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
             if (!Array.isArray(org)) continue
             for (const e of org) {
               if (typeof e.team !== 'string' || e.team === '' || !Array.isArray(e.members)) continue
-              if ((e.members.includes(scopeCaller) || e.members.includes(callerHandle)) && e.members.includes(team)) { orgShared = true; break }
+              const inOrg = e.members.includes(scopeCaller) || e.members.includes(callerHandle)
+              if (inOrg && (e.members.includes(team) || e.team === team)) { orgShared = true; break }
             }
             if (orgShared) break
           }
