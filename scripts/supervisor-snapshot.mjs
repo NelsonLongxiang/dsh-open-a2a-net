@@ -227,6 +227,9 @@ function collectAdmissionRemoteRef() {
     // V5 信任基：渠道须读 canvasStore（宿主权威面）非请求体——caller 自述不进 declared
     const readsStore = /remoteMembersOf/.test(src) && /canvasStore/.test(src.slice(Math.max(0, src.indexOf('remoteMembersOf') - 1500), src.indexOf('remoteMembersOf') + 1500))
     rows.push({ name: 'operator-only-source', ok: readsStore ? 1 : 0, detail: 'declared 扩容邻域含 canvasStore 读（宿主 operator 面）' })
+    // S18（PR#46/gh#71 v9）：准入双向识别——暖缓存对端 canvasOrg 供共享队判定（信封拉取回灌）
+    const warmOrg = /peerOrg/.test(src) && /canvasOrg/.test(src)
+    rows.push({ name: 'warm-cache-bidirectional', ok: warmOrg ? 1 : 0, detail: '暖缓存对端 canvasOrg 双向识别（PR#46 信封回灌+准入增读）' })
   } catch (e) { rows.push({ name: 'admission-remote-ref', ok: 0, detail: String(e).slice(0, 80) }) }
   return rows
 }
