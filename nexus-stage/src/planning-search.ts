@@ -78,6 +78,27 @@ export function createNodeFlyer(spec: NodeFlyerSpec): (id: string) => void {
   }
 }
 
+export interface SearchMount extends PlanningSearch {
+  /** Rebuild the index from the model (call from the node reconcile). */
+  refresh(): void
+}
+
+/**
+ * Mount the whole search surface into the toolbar — the wiring lines the
+ * view used to carry live here (create + append + index builder), keeping
+ * the view under the M1 ratchet; the view keeps ONE call.
+ */
+export function mountBoardSearch(
+  toolbar: HTMLElement,
+  model: Parameters<typeof hitsFromModel>[0],
+  displayName: Parameters<typeof hitsFromModel>[1],
+  onPick: (id: string) => void,
+): SearchMount {
+  const search = createPlanningSearch({ onPick })
+  toolbar.appendChild(search.root)
+  return { ...search, refresh: () => search.setIndex(hitsFromModel(model, displayName)) }
+}
+
 export interface PlanningSearch {
   readonly root: HTMLElement
   /** Refresh the searchable index (called from the node reconcile). */
