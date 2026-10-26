@@ -40,6 +40,7 @@ import { WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, pla
 import { applyAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction } from './canvas-ops'
 import { FRAME_HUES } from './tokens'
 import { createPlanningMenus } from './planning-menus'
+import { createPlanningSearch, createNodeFlyer, hitsFromModel } from './planning-search'
 import { applyBoardRelayout } from './planning-relayout'
 import { createNodeList } from './planning-nodelist'
 import { viewportBucket, type PlanningDeps, type PlanningInput, type PlanningSession, type PlanningTeam, type PlanningView, type SeamKey, type SeamPointer, type ViewportBucket } from './planning-types'
@@ -181,6 +182,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   netBtn.className = 'p-netbtn'
   netBtn.setAttribute('aria-haspopup', 'menu')
   toolbar.appendChild(netBtn)
+  const search = createPlanningSearch({ onPick: id => flyToNode(id) })
+  toolbar.appendChild(search.root)
   // Node list (network-membership-display): the canvas shows teamed nodes
   // only; every other session — teamless joined, unjoined, and each peer's
   // published nodes — is managed from this list, switched by host.
@@ -491,7 +494,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     for (const [id, el] of [...nodeEls]) {
       if (!seen.has(id)) { el.remove(); nodeEls.delete(id) }
     }
-  }
+    // W1 index: the same display facts the cards render.
+    search.setIndex(hitsFromModel(model, displayName))  }
 
   // ── edges: stateless, rebuilt wholesale ──
   // Derived from the MODEL (not lastTeams): optimistic membership changes
@@ -535,6 +539,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     applyViewport()
     markDirty()
   }
+
+  /** W1 pick: frame one node at ~100% and pulse its card. */
+  const flyToNode = createNodeFlyer({ model, viewSize: measure, setVp: next => { vp = next }, applyViewport, markDirty, cardEl: id => nodeEls.get(id) })
 
   // ── status counts ──
   function renderStatus(input: PlanningInput): void {
@@ -1004,7 +1011,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   }
 
   function key(ev: SeamKey): void {
-    if (menus.isDialogOpen()) return // modal: the dialog input handles Enter/Esc itself
+    if (menus.isDialogOpen() || (ev.target as Element | null)?.closest?.('.p-search') !== null) return // modal / search box own their keys
+    // W1: Ctrl+K focuses the board search before the OS-chord bail.
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k') { ev.preventDefault(); search.focus(); return }
     if (ev.ctrlKey || ev.metaKey) return // browser/OS chords stay browser/OS
     if (menus.isMenuOpen()) {
       // The menu owns most keys (its own handler navigates); Escape still
