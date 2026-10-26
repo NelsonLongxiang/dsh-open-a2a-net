@@ -614,6 +614,20 @@
      }
     }
    }
+  },
+  {
+   "source_clause": "S18 M1 棘轮机锚（gh#48 裁定）：nexus-stage/src/planning-view.ts 行数 ≤1530——棘轮收口纪律的机器化（超一行即 FAIL）。",
+   "anchor": {
+    "quote": "mountBoardSearch",
+    "locator": "nexus-stage/src/planning-view.ts"
+   }
+  },
+  {
+   "source_clause": "S19 飞行签名锚（PR#48 飞行真 bug 根防）：planning-search.ts 的 fitView 调用必须使用 WorldBounds（minX/minY/maxX/maxY）形态——{x,y,w,h} 直传=静默 IDENTITY 不回落。",
+   "anchor": {
+    "quote": "minX",
+    "locator": "nexus-stage/src/planning-search.ts"
+   }
   }
  ]
 }
