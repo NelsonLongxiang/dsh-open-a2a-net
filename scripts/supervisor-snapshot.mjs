@@ -256,6 +256,20 @@ function collectV8Anchors() {
   return rows
 }
 
+// ── S18b/S19（PR#48 落地锚）：M1 棘轮 + flyer WorldBounds 签名 ──
+function collectBoardHardening() {
+  const rows = []
+  try {
+    const raw = readFileSync(join(REPO, 'nexus-stage/src/planning-view.ts'), 'utf8')
+    const lines = raw.endsWith('\n') ? raw.split('\n').length - 1 : raw.split('\n').length
+    rows.push({ name: 'm1-ratchet-1530', ok: lines <= 1530 ? 1 : 0, detail: 'planning-view ' + lines + '行 ≤1530（M1 棘轮·gh#48 裁定）' })
+    const search = readFileSync(join(REPO, 'nexus-stage/src/planning-search.ts'), 'utf8')
+    const conv = /minX|minY/.test(search) && /fitView/.test(search)
+    rows.push({ name: 'flyer-worldbounds', ok: conv ? 1 : 0, detail: 'flyer 以 WorldBounds(min/max) 调 fitView（PR#48 真 bug 根防）' })
+  } catch (e) { rows.push({ name: 'board-hardening', ok: 0, detail: String(e).slice(0, 80) }) }
+  return rows
+}
+
 function collectOwnerSignalUi() {
   // 遍历 nexus-stage 源码聚合文本（UI 字符串锚）
   const agg = (dir) => {
@@ -297,6 +311,7 @@ const TABLES = {
   live_host_build: collectLiveHostBuild,
   admission_remote_ref: collectAdmissionRemoteRef,
   v8_anchors: collectV8Anchors,
+  board_hardening: collectBoardHardening,
 }
 
 mkdirSync(join(REPO, 'tmp/supervisor'), { recursive: true })
