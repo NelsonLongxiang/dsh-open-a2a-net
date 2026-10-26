@@ -392,3 +392,34 @@ describe('a2a-net CLI: the inbox cursor stays inside A2A_CLI_HOME', () => {
     expect(existsSync(join(HOME, '.a2a'))).toBe(false)
   })
 })
+
+describe('a2a-net CLI: route --sync', () => {
+  it('sends wait:true and prints the reply; --context continues a conversation; async stays wait:false', async () => {
+    const host = await stubHost(() => ({ status: 200, body: { routed: true, team: 'dsh/66abc2cf', session: 's', result: { text: '你好，收到。' }, task_id: 'direct-aa11bb22', context_id: 'ctx-1', task_status: 'TASK_STATE_COMPLETED', artifacts: [] } }))
+    servers.push(host.server)
+    const HOME = await scoutHome()
+    const env = { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url }
+    const sync = await runCli(['route', 'dsh/66abc2cf', '打个招呼', '--sync'], env)
+    expect(sync.code).toBe(0)
+    expect(sync.stdout).toBe('[route] reply from dsh/66abc2cf · task direct-aa11bb22 · context ctx-1\n你好，收到。\n')
+    await runCli(['route', 'dsh/66abc2cf', '再聊一句', '--sync', '--context', 'ctx-1'], env)
+    const [first, second] = host.seen.filter(s => s.path === '/a2a/direct')
+    expect(first?.body).toMatchObject({ team: 'dsh/66abc2cf', message: '打个招呼', wait: true })
+    expect(first?.body.context_id).toBeUndefined()
+    expect(second?.body).toMatchObject({ message: '再聊一句', wait: true, context_id: 'ctx-1' })
+  })
+
+  it('an unsettled sync status is flagged; async route still sends wait:false', async () => {
+    let reply: unknown = { routed: true, team: 'ops', result: { text: '(still running)' }, task_id: 'direct-cc33dd44', task_status: 'TASK_STATE_DELIVERED' }
+    const host = await stubHost(() => ({ status: 200, body: reply }))
+    servers.push(host.server)
+    const HOME = await scoutHome()
+    const env = { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url }
+    const unsettled = await runCli(['route', 'ops', 'hi', '--sync'], env)
+    expect(unsettled.code).toBe(0)
+    expect(unsettled.stderr).toContain('status TASK_STATE_DELIVERED')
+    reply = { routed: true, delivered: true, team: 'ops', task_id: 'direct-ee55ff66', task_status: 'TASK_STATE_DELIVERED', receipt: 'routed' }
+    await runCli(['route', 'ops', 'hi'], env)
+    expect(host.seen.filter(s => s.path === '/a2a/direct').at(-1)?.body.wait).toBe(false)
+  })
+})

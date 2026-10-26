@@ -21,6 +21,13 @@ import { verifyCard } from './card.ts'
 /** Owner ruling ③: the default AND maximum online window. */
 export const CLI_DEPOSIT_TTL_MS = 4 * 60 * 60 * 1000
 
+/**
+ * gh#47 tombstone bound: expired deposits stay visible as OFFLINE rows
+ * (newest TOMBSTONE_CAP keep their handle/name so team refs never dangle
+ * silently) — the owner manages CLI nodes like session nodes.
+ */
+export const CLI_TOMBSTONE_CAP = 16
+
 /** Owner ruling ①: <agent-name>/<uuid·8B>. The name is [a-z0-9-]{1,32}. */
 export const CLI_HANDLE_RE = /^([a-z0-9-]{1,32})\/([0-9a-f]{16})$/
 
@@ -33,6 +40,12 @@ export interface CliDeposit {
   readonly cardJson: string
   readonly depositedAt: number
   readonly expiresAt: number
+  /**
+   * gh#47 tombstone: set when the deposit expired — the row stays (offline)
+   * so the directory/board keeps the member visible and team refs never
+   * dangle silently. A re-publish (same handle, same key) un-tombstones.
+   */
+  expiredAt?: number
 }
 
 /** One mailbox entry for a deposited handle. */
@@ -77,8 +90,13 @@ export class CliDepositStore {
     if (verdict.card.team !== `${name}/${CLI_HANDLE_RE.exec(handle)![2]}`) return { ok: false, error: 'handle mismatch' }
     const ttl = Math.min(CLI_DEPOSIT_TTL_MS, CLI_DEPOSIT_TTL_MS)
     const at = this.now()
+    const prior = this.deposits.get(handle)
+    // gh#47: a re-publish un-tombstones (expiredAt clears) and refreshes
+    // the card — same handle, same key, back online.
     const row: CliDeposit = { handle, name, cardJson, depositedAt: at, expiresAt: at + ttl }
     this.deposits.set(handle, row)
+    void prior
+    this.pruneTombstones()
     this.persist()
     return { ok: true, handle, expiresAt: row.expiresAt }
   }
@@ -90,25 +108,52 @@ export class CliDepositStore {
   }
 
   /** Active deposits (sweeping expired ones — ruling ③ auto-deregister). */
+  /** LIVE deposits only (tombstones excluded — the control list is the
+   *  online roster; offline rows ride directoryRows for the board). */
   list(): readonly CliDeposit[] {
     this.sweep()
-    return [...this.deposits.values()]
+    return [...this.deposits.values()].filter(row => row.expiredAt === undefined && row.expiresAt > this.now())
   }
 
   get(handle: string): CliDeposit | undefined {
     const row = this.deposits.get(handle)
     if (row === undefined) return undefined
     if (row.expiresAt <= this.now()) {
-      this.deposits.delete(handle)
-      this.persist()
+      if (row.expiredAt === undefined) {
+        // gh#47: expire into a TOMBSTONE (offline) instead of deleting —
+        // the handle stays visible; only the LIVE row is gone.
+        this.markExpired(row)
+      }
       return undefined
     }
     return row
   }
 
-  /** Card-serve rows: the handle + display name, marked cli (no wake). */
+  /** Card-serve rows: LIVE deposits only (an expired card 404s). */
   cardRows(): Array<{ team: string; name: string; description: string }> {
-    return this.list().map(row => ({ team: row.handle, name: row.name, description: 'cli — deposited identity (no wake; mailbox)' }))
+    return this.list().filter(row => row.expiredAt === undefined && row.expiresAt > this.now())
+      .map(row => ({ team: row.handle, name: row.name, description: `cli — deposited identity (no wake; mailbox)${row.expiredAt !== undefined ? ' [offline]' : ''}` }))
+  }
+
+  /**
+   * gh#47 directory rows: LIVE + TOMBSTONE (offline) — the board renders
+   * offline member cards grayed but PRESENT, so a canvas ref to an expired
+   * CLI never dangles silently. Re-publish un-tombstones (same handle).
+   */
+  directoryRows(): Array<{ team: string; name: string; description: string; offline: boolean }> {
+    this.sweep()
+    const rows = [...this.deposits.values()]
+      .map(row => row.expiresAt <= this.now()
+        ? (row.expiredAt === undefined ? this.markExpired(row) : row)
+        : row)
+    return rows.map(row => ({
+      team: row.handle,
+      name: row.name,
+      description: row.expiredAt !== undefined
+        ? 'cli — offline (deposit expired; re-publish to return)'
+        : 'cli — deposited identity (no wake; mailbox)',
+      offline: row.expiredAt !== undefined,
+    }))
   }
 
   mail(handle: string, from: string, text: string): void {
@@ -124,11 +169,26 @@ export class CliDepositStore {
 
   private sweep(): void {
     const now = this.now()
-    let changed = false
     for (const [handle, row] of this.deposits) {
-      if (row.expiresAt <= now) { this.deposits.delete(handle); changed = true }
+      if (row.expiresAt <= now && row.expiredAt === undefined) this.markExpired(row)
     }
-    if (changed) this.persist()
+  }
+
+  /** Mark one row expired (tombstone) and persist. */
+  private markExpired(row: CliDeposit): CliDeposit {
+    const tomb: CliDeposit = { ...row, expiredAt: this.now() }
+    this.deposits.set(tomb.handle, tomb)
+    this.pruneTombstones()
+    this.persist()
+    return tomb
+  }
+
+  /** Keep at most TOMBSTONE_CAP offline rows — oldest evictions fall off. */
+  private pruneTombstones(): void {
+    const tombstones = [...this.deposits.values()].filter(row => row.expiredAt !== undefined)
+    if (tombstones.length <= CLI_TOMBSTONE_CAP) return
+    tombstones.sort((a, b) => (a.expiredAt ?? 0) - (b.expiredAt ?? 0))
+    for (let i = 0; i < tombstones.length - CLI_TOMBSTONE_CAP; i += 1) this.deposits.delete(tombstones[i]!.handle)
   }
 
   private persist(): void {

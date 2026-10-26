@@ -1125,9 +1125,13 @@ const reportLoopRing = new Map<string, number[]>()
    * the join consented to network reachability, so a route addressed to
    * its team pays the wake rather than failing.
    * @param team - the routed team name.
+   * @param skipId - the dispatching session's id (issue #41): a canvas
+   * team's cold tier skips the initiator — waking the author would loop the
+   * dispatch home. Bare session-team matches ignore it (an exact team match
+   * is the addressed target by definition).
    * @returns the wake outcome: a flight, or the reason none was started.
    */
-  const wakeColdTeam = (team: string): ColdWake => {
+  const wakeColdTeam = (team: string, skipId?: string): ColdWake => {
     // F7 (wake-intent self-heal): a boot-time transient can prune the
     // in-memory intent while joined.json still holds it (memory/file
     // divergence — the live repro on 0.5.40). The persisted file is the
@@ -1141,8 +1145,9 @@ const reportLoopRing = new Map<string, number[]>()
       aliasId = matchJoined()
     }
     // Canvas teams wake their first cold joined member (member order is
-    // the routing priority; an archived member never wakes).
-    const id = aliasId ?? canvasColdMemberId(parseCanvasTeamName(team))
+    // the routing priority; an archived member never wakes; the initiator
+    // itself is skipped — issue #41, the self-route rule on canvas tiers).
+    const id = aliasId ?? canvasColdMemberId(parseCanvasTeamName(team), skipId)
     // An archived session never wakes: archive is closure, not sleep — to
     // the caller the team simply has no wakeable match.
     if (id === undefined) return { kind: 'no-match' }
@@ -1296,10 +1301,17 @@ const reportLoopRing = new Map<string, number[]>()
     return canvasStore.hasTeam(name) ? name : undefined
   }
 
-  /** The canvas team's first live member agent (member order = priority). */
-  function canvasLiveAgent(name: string | undefined): Agent | undefined {
+  /**
+   * The canvas team's first live member agent (member order = priority).
+   * `skipId` (issue #41, self-route rule on the canvas tiers): the
+   * dispatching session's own id — a live initiator occupying a member slot
+   * must not capture the dispatch, or the message only echoes home. Inbound
+   * faces pass no skip (a remote caller never equals a local member id).
+   */
+  function canvasLiveAgent(name: string | undefined, skipId?: string): Agent | undefined {
     if (name === undefined) return undefined
     for (const id of canvasStore.membersOf(name)) {
+      if (id === skipId) continue
       const agent = sessionNodes.get(id)
       if (agent !== undefined) return agent
     }
@@ -1309,12 +1321,15 @@ const reportLoopRing = new Map<string, number[]>()
   /**
    * The canvas team's first cold joined member id — the wake candidate.
    * Cold means: joined intent remembered, no live root, not archived.
+   * `skipId` skips the initiating session for the same self-route reason as
+   * {@link canvasLiveAgent}: waking the initiator would only loop the
+   * dispatch back to its author.
    */
-  function canvasColdMemberId(name: string | undefined): string | undefined {
+  function canvasColdMemberId(name: string | undefined, skipId?: string): string | undefined {
     if (name === undefined) return undefined
     const isArchived = archivedSessionFilter()
     return canvasStore.membersOf(name).find(id =>
-      joinedSessions.has(id) && !liveRoots.has(id) && isArchived?.(id) !== true)
+      id !== skipId && joinedSessions.has(id) && !liveRoots.has(id) && isArchived?.(id) !== true)
   }
 
   /**
@@ -2583,10 +2598,13 @@ const reportLoopRing = new Map<string, number[]>()
             ...joinedSessions.list()
               .filter(id => !liveRoots.has(id) && isArchived?.(id) !== true)
               .map(id => exposureRow(`${config.team}/${id8(id)}`, { name: `${session}-${id8(id)}`, description: 'cold — not loaded; routing here wakes the session' })),
-            // gh#45: deposited CLI identities publish as directory rows —
+            // gh#45/47: deposited CLI identities publish as directory rows —
             // the fleet sees them as member cards (draggable = the operator
-            // link). Their "zone" is the agent-name; expiry drops the row.
-            ...cliDeposits.cardRows().map(row => exposureRow(row.team, { name: row.name, description: row.description })),
+            // link). Their "zone" is the agent-name. gh#47: an EXPIRED
+            // deposit stays as an OFFLINE row (tombstone) so the board keeps
+            // the member card grayed-but-present and canvas refs never
+            // dangle silently; re-publish (same handle) un-tombstones.
+            ...cliDeposits.directoryRows().map(row => exposureRow(row.team, { name: row.name, description: row.description })),
           ]
           const memberships = teamMemberships.list().flatMap(entry =>
             entry.teams.map(team => ({ node: `${config.team}/${id8(entry.session)}`, team })))
@@ -3322,6 +3340,33 @@ ${message}`
     }
     if (callerSessionId !== undefined) {
       for (const name of canvasStore.teamsOf(callerSessionId)) declared.add(canvasTeamOf(name))
+    } else {
+      // Issue #43: a same-zone handle that resolves to NO local session is a
+      // CROSS-HOST member (two nodes sharing one zone name — the fleet's
+      // common `dsh` spelling). The canvas link record exists on this host
+      // as a REMOTE MEMBER REF the operator added; the foreign-zone branch
+      // (a2aCallerRefusal) already honors that basis — the same-zone path
+      // must too, or a linked remote member is refused as teamless. The
+      // trust basis is unchanged: this host's operator-composed canvas,
+      // never the caller's self-description (V5).
+      for (const name of canvasStore.list()) {
+        if (canvasStore.remoteMembersOf(name).includes(caller)) declared.add(canvasTeamOf(name))
+      }
+      // gh#71 fix ②: the warm card cache's peer canvasOrg is the same-zone
+      // cross-host basis too — an org entry naming BOTH the caller's handle
+      // and one of THIS host's own handles is a shared team (双向识别: the
+      // composition gesture happened on the other host's board; both ends
+      // are named). Read-only over the cache; a caller org that never names
+      // an own handle still refuses (V5 preserved).
+      const ownHandles = new Set<string>([config.team, ...joinedSessions.list().map(id => `${config.team}/${id8(id)}`)])
+      for (const cached of cardCache.values()) {
+        const org = (cached.card as { canvasOrg?: Array<{ team?: unknown; members?: unknown }> } | undefined)?.canvasOrg
+        if (!Array.isArray(org)) continue
+        for (const e of org) {
+          if (typeof e.team !== 'string' || e.team === '' || !Array.isArray(e.members)) continue
+          if (e.members.includes(caller) && e.members.some(m => typeof m === 'string' && ownHandles.has(m))) declared.add(e.team)
+        }
+      }
     }
     const routable = new Set<string>([config.team])
     for (const id of joinedSessions.list()) routable.add(`${config.team}/${id8(id)}`)
@@ -3355,6 +3400,17 @@ ${message}`
             if (entry.session === targetSession) for (const t of entry.teams) targetLinks.add(t)
           }
           for (const name of canvasStore.teamsOf(targetSession)) targetLinks.add(canvasTeamOf(name))
+          // gh#71 fix ②: the warm cache's org basis at target level too —
+          // an org entry naming BOTH the caller and the target handle is
+          // the shared team (same 双向识别 rule as the host-level basis).
+          for (const cached of cardCache.values()) {
+            const org = (cached.card as { canvasOrg?: Array<{ team?: unknown; members?: unknown }> } | undefined)?.canvasOrg
+            if (!Array.isArray(org)) continue
+            for (const e of org) {
+              if (typeof e.team !== 'string' || e.team === '' || !Array.isArray(e.members)) continue
+              if (e.members.includes(caller) && e.members.includes(targetTeam)) targetLinks.add(e.team)
+            }
+          }
         }
       } else {
         const canvasName = canvasStore.list().find(name => canvasTeamOf(name) === targetTeam)
@@ -3779,7 +3835,14 @@ ${message}`
           // lookup settles the message is already in — answer delivered and
           // let the receipt contract carry the reply.
           if (noWait) {
-            const agent = resolveAgentForTeam(team)
+            // Issue #41 companion fix: the no-wait inbound branch resolved
+            // only bare session teams — a canvas team delivery (wait:false)
+            // fell through to the cold tier and answered a bogus
+            // no-match although a live member existed. Same resolution as
+            // the waiting face (routeIntoAgent), and likewise NO initiator
+            // skip: the wire face delivers faithfully to the first live
+            // member, whoever the caller is.
+            const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
             const wake = agent !== undefined ? undefined : wakeColdTeam(team)
             const deliver = (target: Agent): void => {
               const from = caller === '' ? 'an unknown node' : caller
@@ -5111,7 +5174,9 @@ ${message}`
       + 'grouping when a fleet spans machines), and the session\'s working directory when shared. Pass query to filter '
       + 'by keyword (case-insensitive substring over team name, title, excerpt, origin, or workspace) — searching '
       + 'discovers one extra referral hop within the call. Canvas teams (<team>/canvas/<name>, user-composed multi-member groups) '
-      + 'list as local rows; routing to one resolves the first live member or wakes the first cold one. '
+      + 'list as local rows; routing to one resolves the first live member or wakes the first cold one — the dispatching session '
+      + 'itself is skipped on the local tiers, falling through to the other members (issue #41: a member routing to its own group '
+      + 'never loops home). '
       + 'While teamScopeInfo is on (default), the listing follows YOUR collaboration circle: remote rows serve only teams joined by this host\'s nodes, and [this host] session rows show only your own row, your canvas teams, and sessions sharing a team with you — an exposed node id invites mis-routing, so the directory does not advertise strangers. The owner\'s GUI panel keeps the full plane; teamScopeInfo: false opens it for tools too. '
       + 'Call this before a2a_route to pick a target team.',
     parameters: {
@@ -5510,13 +5575,42 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         if (!initiator) {
           const callerTeams = teamMemberships.teamsOf(scopeCaller)
           const team = String(args.team ?? '').trim()
-          if (callerTeams.length === 0) {
+          // gh#71: the SHARED-CANVAS basis and the warm cache's peer-org
+          // basis (an org entry naming BOTH the caller and the target
+          // handle) count as declared here too — the same link the
+          // admission core honors on the receiving side; without this the
+          // tool face refused routes the canvas itself had authorized.
+          // Canvas members mix two shapes: LOCAL sessions sit by session
+          // id, cross-host members by zone/id8 handle — match either.
+          const callerHandle = `${config.team}/${id8(scopeCaller)}`
+          // gh#45 末修 (66abc2cf defect): a CANVAS GROUP NAME target
+          // (`<team>/canvas/<name>`) never matches member handles — a
+          // whole-group dispatch from a group member was refused. The
+          // group's own team handle (canvasTeamOf(name)) is the match
+          // (the caller sits in the very group being addressed).
+          const sharedCanvas = canvasStore.list().some(name => {
+            const members = canvasStore.membersOf(name)
+            const inGroup = members.includes(scopeCaller) || members.includes(callerHandle)
+            return inGroup ? members.includes(team) || canvasTeamOf(name) === team : false
+          })
+          let orgShared = false
+          for (const cached of cardCache.values()) {
+            const org = (cached.card as { canvasOrg?: Array<{ team?: unknown; members?: unknown }> } | undefined)?.canvasOrg
+            if (!Array.isArray(org)) continue
+            for (const e of org) {
+              if (typeof e.team !== 'string' || e.team === '' || !Array.isArray(e.members)) continue
+              const inOrg = e.members.includes(scopeCaller) || e.members.includes(callerHandle)
+              if (inOrg && (e.members.includes(team) || e.team === team)) { orgShared = true; break }
+            }
+            if (orgShared) break
+          }
+          if (callerTeams.length === 0 && !sharedCanvas && !orgShared) {
             return {
               ok: false,
               error: `team-scoped routing is on and this session (${id8(scopeCaller)}) has declared no team membership — a teamless node has no network. Declare one with a2a_team_join (subject to the owner's teamJoinAllowlist)`,
             }
           }
-          if (!callerTeams.includes(team)) {
+          if (!callerTeams.includes(team) && !sharedCanvas && !orgShared) {
             return {
               ok: false,
               error: `team-scoped routing is on: routing to "${team}" requires declared membership. This session's teams: ${callerTeams.join(', ')}. a2a_team_join can declare it (subject to the owner's teamJoinAllowlist)`,
@@ -5554,7 +5648,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // cheapest possible and immune to nested-signal aborts), then direct
       // publishers, then zone delegations, deduplicated by URL.
       const failures: string[] = []
-      const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, signal, args.async === true, taskId, callbackAddress)
+      const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, signal, args.async === true, taskId, callbackAddress, agent === undefined ? undefined : String(agent.id))
       if (outcome !== undefined) {
         if (outcome.ok) {
           trackOwedTask(taskId, args.team, 'local', outcome, callbackAddress, briefOf(args.message))
@@ -5575,6 +5669,12 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const targets = remoteTargets.length > 0 ? [...remoteTargets] : [args.team]
       if (remoteTargets.length > 0) {
         failures.push(`local: canvas team "${args.team}" has no live or wakeable local member`)
+      } else if (canvasName !== undefined && canvasStore.hasTeam(canvasName)) {
+        // Issue #41: no remote members and no usable local tier — the only
+        // remaining candidate shape is the initiator itself, and routing
+        // there would loop. Name it instead of letting the directory walk
+        // report an unrelated miss.
+        failures.push(`local: canvas team "${args.team}" has no live or wakeable member besides the initiating session — routing to a canvas team whose only member is the caller itself would loop; target another member's team handle directly`)
       }
       const candidatePool: Array<{ candidate: string; target: string }> = []
       for (const target of targets) {
@@ -5631,7 +5731,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
    * and the caller gets the delivered shape with the receipt contract.
    * @returns the canonical result, or undefined when the team is not local.
    */
-  async function dispatchLocalCandidate(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode = false, taskIdFromCaller?: string, callbackAddress?: string): Promise<A2aRouteResult | undefined> {
+  async function dispatchLocalCandidate(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode = false, taskIdFromCaller?: string, callbackAddress?: string, originAgentId?: string): Promise<A2aRouteResult | undefined> {
     const webServer = ctx.get('webServer')
     // W1 (boundary hardening): the local in-process candidate is an
     // admission seam like any other — a JOINED session (zone/id8 caller
@@ -5646,10 +5746,20 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       return { ok: false, error: joinedRefusal, code: -32000 }
     }
     const canvasName = parseCanvasTeamName(team)
+    // Issue #41 shape note: the caller label is the WIRE form (<zone>/<id8>
+    // or a session label) and quick-dispatch BORROWS a live session's team
+    // as its host face — so the label alone cannot tell an initiating agent
+    // from a borrowed one. The exemption keys on the ORIGINATING agent's id
+    // (same shape as a member slot) passed down by routeTrunk; the host face
+    // passes none and never exempts.
+    const callerNodeId = originAgentId
     let teamIsLocal = team === config.team
       || resolveAgentForTeam(team) !== undefined
       || joinedSessions.list().some(id => `${config.team}/${id8(id)}` === team)
-      || (canvasName !== undefined && (canvasLiveAgent(canvasName) !== undefined || canvasColdMemberId(canvasName) !== undefined))
+      // Issue #41 (self-route rule on canvas tiers): the initiator's own
+      // member slot never makes the team local — an exempt local tier must
+      // fall through to the remote members instead of echoing home.
+      || (canvasName !== undefined && (canvasLiveAgent(canvasName, callerNodeId) !== undefined || canvasColdMemberId(canvasName, callerNodeId) !== undefined))
     // gh#45 CLI mailbox: a delivery targeting a DEPOSITED CLI handle is
     // local by definition — it lands in the deposit's mailbox (the CLI
     // polls while alive; receipts and messages never wake anything).
@@ -5676,8 +5786,10 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // materializes first (the wake settles, or fails honestly), then the
       // steer fires, then delivered answers. The receipt header carries the
       // task id so the target can echo it back verbatim.
-      const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(canvasName)
-      const wake = agent !== undefined ? undefined : wakeColdTeam(team)
+      // Issue #41: the canvas live tier skips the initiating session, so a
+      // dispatch from a member never resolves back to its author.
+      const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(canvasName, callerNodeId)
+      const wake = agent !== undefined ? undefined : wakeColdTeam(team, callerNodeId)
       let woken: Promise<Agent> | undefined = agent !== undefined
         ? Promise.resolve(agent)
         : wake?.kind === 'flight' ? wake.flight : undefined
@@ -5768,10 +5880,13 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // registry claim must never shadow a live local session team. The
       // caller's abort cancels the round through its own signal; the 180s
       // deadline restores the bound the steer machinery observes.
+      // Issue #41: same initiator exemption on the sync path — the canvas
+      // live/cold tiers skip the dispatching session before steerable is
+      // decided, so a self-member falls through to remote members.
       const steerable = resolveAgentForTeam(team) !== undefined
-        || canvasLiveAgent(canvasName) !== undefined
+        || canvasLiveAgent(canvasName, callerNodeId) !== undefined
         || joinedSessions.list().some(id => `${config.team}/${id8(id)}` === team)
-        || wakeColdTeam(team).kind === 'flight'
+        || wakeColdTeam(team, callerNodeId).kind === 'flight'
       if (!steerable && team !== config.team) {
         const prepared = await nativeTeamsPrepare(team)
         if (prepared.ok) {
@@ -6500,7 +6615,13 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         // and learns its referrals, exactly like a discovery sweep would,
         // while the outcome's stage names the failure for the report.
         const card = settlePeerCard(url, outcome)
-        if (card !== undefined) return { url, reachable: true, ms, team: card.team }
+        if (card !== undefined) {
+          // gh#71 fix ①: a successful full-face fetch persists into the warm
+          // cache — the probe is often the FIRST contact (no directory sweep
+          // has run), and the state face's peerOrg reads exactly this cache.
+          cardCache.set(url, { at: Date.now(), card })
+          return { url, reachable: true, ms, team: card.team }
+        }
         if (outcome.ok) return { url, reachable: false, ms, error: 'dropped: the card lists this node back as its own referral' }
         return outcome.stage === 'unreachable'
           ? { url, reachable: false, ms, error: `unreachable: ${outcome.detail}` }

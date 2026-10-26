@@ -222,8 +222,10 @@ describe('first-run board', () => {
     const rule = /#dsh-plan \.p-node\.remote\{([^}]*)\}/.exec(css)?.[1] ?? ''
     const pad = Number(/padding-right:(\d+)px/.exec(rule)?.[1] ?? 0)
     expect(pad).toBeGreaterThanOrEqual(44) // 'peer' at 10px mono + tag padding/border + 8px inset
-    // and a long address ends in an ellipsis rather than a hard mid-digit cut
-    expect(/#dsh-plan \.p-node \.nm-text\{[^}]*text-overflow:ellipsis/.test(css)).toBe(true)
+    // and a long address wraps to TWO clamped lines instead of a hard
+    // mid-digit cut (owner order W2: the single-line ellipsis became a
+    // two-line clamp; the card geometry is untouched).
+    expect(/#dsh-plan \.p-node \.nm-text\{[^}]*-webkit-line-clamp:2/.test(css)).toBe(true)
   })
 })
 

@@ -28,6 +28,7 @@
 import type { LampState } from './layout-wire'
 import { buildLayoutDoc, clampDoc, type LayoutDoc, type LayoutRect } from './layout-doc'
 import { FRAME_HEAD_LIFT, starEdges } from './edges'
+import { createFederationOverlay } from './federation-overlay'
 import { displayName } from './stage-name'
 import {
   activityEdges, federalEdges, flyBounds, groupRemoteTeams, peerNodeId, peerHostOf, placePeers,
@@ -35,10 +36,12 @@ import {
   type RemoteTeamRow,
 } from './federation'
 import { clampViewport, fitView, panBy, screenToWorld, worldTransformCss, zoomAt, type LayoutViewport } from './viewport'
-import { WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, planTeamClusters } from './world'
+import { WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, planTeamClusters, NODE_W, NODE_H } from './world'
 import { applyAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction } from './canvas-ops'
 import { FRAME_HUES } from './tokens'
 import { createPlanningMenus } from './planning-menus'
+import { createNodeFlyer, mountBoardSearch } from './planning-search'
+import { applyBoardRelayout } from './planning-relayout'
 import { createNodeList } from './planning-nodelist'
 import { viewportBucket, type PlanningDeps, type PlanningInput, type PlanningSession, type PlanningTeam, type PlanningView, type SeamKey, type SeamPointer, type ViewportBucket } from './planning-types'
 import './planning.css'
@@ -156,6 +159,21 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     zoomLabel,
     mkButton('＋', '放大', () => zoomCenter(1.2)),
     mkButton('建队', '组成团队（G）：先框选至少 2 个节点', () => menus.startCreateFromSelection()),
+    // gh#48 (owner order, review-seat spec): one-click tidy — inside every
+    // team frame, the members that belong to EXACTLY that one team re-seat
+    // into a padded grid flow (the frame grows downward, bounded); members
+    // of 2+ teams keep their positions (the dashed edges express their
+    // membership). Idempotent; empty frames untouched; remote member cards
+    // ride the same rule; the move persists through the ordinary layout
+    // save loop exactly like a hand drag.
+    mkButton('整理成员', '每队框内仅属一队的成员自动排齐（多队成员不动）', () => tidyTeamMembers()),
+    // Supervisor order v2 (upgrades gh#48): one-click WHOLE-BOARD relayout —
+    // the two buttons split the job (整理成员 = cards inside one frame;
+    // 一键重排 = every local frame AND its cards). Frame size derives from
+    // content (width and height both); frames tile in a row flow
+    // (constructively disjoint); multi-team members never enter the size
+    // math and never move; remote org frames and frameless nodes stay put.
+    mkButton('一键重排', '全板队框+成员重排：框尺寸随内容自适应、框位行流式平铺（远端队框与多归属成员不动）', () => relayoutBoard()),
   )
   // Unjoined sessions ride a toolbar chip + dropdown: the panel-slim
   // migration made the planning view the join surface — without this, an
@@ -164,6 +182,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   netBtn.className = 'p-netbtn'
   netBtn.setAttribute('aria-haspopup', 'menu')
   toolbar.appendChild(netBtn)
+  const search = mountBoardSearch(toolbar, model, displayName, id => flyToNode(id))
   // Node list (network-membership-display): the canvas shows teamed nodes
   // only; every other session — teamless joined, unjoined, and each peer's
   // published nodes — is managed from this list, switched by host.
@@ -248,6 +267,58 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     grid.style.backgroundSize = `${step}px ${step}px`
     grid.style.backgroundPosition = `${-vp.x * vp.scale}px ${-vp.y * vp.scale}px`
     zoomLabel.textContent = `${Math.round(vp.scale * 100)}%`
+  }
+
+  /**
+   * gh#48 (owner order): one-click member tidy. For every team frame, the
+   * members belonging to EXACTLY that one team re-seat into a padded grid
+   * flow inside the frame (the frame grows downward if the members need
+   * more rows — bounded); members of 2+ teams stay put (their dashed edges
+   * express membership). Remote member cards (member-) are ordinary board
+   * cards and ride the same rule. The move goes through markDirty()/render()
+   * — the same persistence path a hand drag takes.
+   */
+  function tidyTeamMembers(): void {
+    const PAD = 28
+    const GAP_X = 16
+    const GAP_Y = 14
+    for (const [name, rect] of model.allFrames()) {
+      const members = model.teamMemberIds(name)
+      const sole = members
+        .map(id => model.getNode(id))
+        .filter((n): n is NonNullable<typeof n> => n !== undefined)
+        .filter(n => n.memberships.length === 1)
+      if (sole.length === 0) continue // empty frame / only shared members: untouched
+      const perRow = Math.max(1, Math.floor((rect.w - 2 * PAD + GAP_X) / (NODE_W + GAP_X)))
+      const rows = Math.ceil(sole.length / perRow)
+      const needed = PAD * 2 + rows * NODE_H + (rows - 1) * GAP_Y
+      if (needed > rect.h) {
+        model.setFrame(name, { ...rect, h: Math.min(needed, rect.h + 400) })
+      }
+      const startX = rect.x + PAD + NODE_W / 2
+      let y = rect.y + PAD + NODE_H / 2
+      sole.forEach((n, i) => {
+        const col = i % perRow
+        if (i > 0 && col === 0) y += NODE_H + GAP_Y
+        const x = startX + col * (NODE_W + GAP_X)
+        model.dragNodes([n.id], x - n.x, y - n.y)
+      })
+    }
+    markDirty()
+    render()
+  }
+
+  /**
+   * Supervisor order v2: whole-board deterministic relayout (the planner
+   * and the model adapter live in planning-relayout.ts): LOCAL frames +
+   * sole members only — remote org frames keep gh#44 live-rect-wins,
+   * frameless nodes and multi-team members never move; the same
+   * markDirty()/render() persistence path a hand drag takes.
+   */
+  function relayoutBoard(): void {
+    if (!applyBoardRelayout(model, new Set(remoteFramesRef.keys()))) return
+    markDirty()
+    render()
   }
 
   function render(): void {
@@ -422,6 +493,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     for (const [id, el] of [...nodeEls]) {
       if (!seen.has(id)) { el.remove(); nodeEls.delete(id) }
     }
+    search.refresh()
   }
 
   // ── edges: stateless, rebuilt wholesale ──
@@ -441,80 +513,34 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
   }
 
-  // ── federation overlay (PR D): peer chips + activity/federal edges ──
+  // ── federation overlay (PR D): peer cards' activity/federal edges ──
   // Runs on EVERY render, outside the model-revision gate: the poll's
   // inFlight ages must tick even when the model is unchanged, and the
   // badge column tracks the content bounds each reconcile. Its SVG
   // children are tracked separately because renderEdges clears the svg
   // wholesale - this appends after it (render() orders the two).
-  let fedSvg: SVGElement[] = []
-  let lastPlacements: PeerPlacement[] = []
+  // gh#49: the DOM drawing lives in federation-overlay.ts (module-size
+  // ruling); this view keeps only the seams (facts + fly).
+  const federation = createFederationOverlay(svg, model)
   let lastPeers: ReadonlyArray<PeerRow> = []
   let lastRemoteTeams: ReadonlyMap<string, RemoteTeamRow[]> = new Map()
   const peerScoreByText = new Map<string, number | undefined>()
   /** gh#20 W-A: per-host link/verified info for the peer badges. */
   const peerInfoByHost = new Map<string, { link?: 'linked' | 'stranger'; verified?: boolean }>()
-  let lastInFlight: ReadonlyArray<InFlightRow> = []
 
   function renderFederation(): void {
-    for (const el of fedSvg) el.remove()
-    fedSvg = []
-    // Peer placements come from the MODEL's remote nodes (v1 ruling: peers
-    // are cards in the same pipeline, dragged/saved like sessions) — the
-    // old chip column is gone.
-    const placements: PeerPlacement[] = model.allNodes()
-      .filter(n => n.remote === true)
-      .map(n => ({ url: n.peerUrl ?? n.id.slice(5), score: n.score, x: n.x, y: n.y }))
-    lastPlacements = placements
-    const bounds = model.contentBounds()
-    if (bounds !== null) {
-      // Edges: titlebar anchors (fx + fw/2, fy + 11, edges.ts lockstep).
-      const anchors = new Map<string, FrameAnchor>()
-      for (const [name, rect] of model.allFrames()) {
-        anchors.set(name, { name, x: rect.x + rect.w / 2, y: rect.y + FRAME_HEAD_LIFT })
-      }
-      for (const e of activityEdges(lastInFlight, anchors, placements, clock())) {
-        fedSvg.push(...fedEdge(e, 'e-activity', e.label))
-      }
-      for (const e of federalEdges(placements, bounds)) {
-        fedSvg.push(...fedEdge(e, 'e-federal', e.label))
-      }
-    }
-  }
-
-  /** One overlay line + its optional midpoint label (offset +14/+18). */
-  function fedEdge(
-    e: { x1: number; y1: number; x2: number; y2: number },
-    cls: string,
-    label: string,
-  ): SVGElement[] {
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
-    line.setAttribute('class', cls)
-    line.setAttribute('x1', String(e.x1))
-    line.setAttribute('y1', String(e.y1))
-    line.setAttribute('x2', String(e.x2))
-    line.setAttribute('y2', String(e.y2))
-    svg.appendChild(line)
-    const out: SVGElement[] = [line]
-    if (label !== '') {
-      const t = document.createElementNS('http://www.w3.org/2000/svg', 'text')
-      t.setAttribute('class', 'edge-label mono')
-      t.setAttribute('x', String((e.x1 + e.x2) / 2 + 14))
-      t.setAttribute('y', String((e.y1 + e.y2) / 2 + 18))
-      t.textContent = label
-      svg.appendChild(t)
-      out.push(t)
-    }
-    return out
+    federation.render(clock())
   }
 
   /** Statusbar fly: fit the frames ∪ peers region (flyBounds pads it). */
   function flyToFederation(): void {
-    vp = fitView(flyBounds(model.contentBounds(), lastPlacements), root.clientWidth || viewW, root.clientHeight || viewH)
+    vp = fitView(flyBounds(model.contentBounds(), federation.placements()), root.clientWidth || viewW, root.clientHeight || viewH)
     applyViewport()
     markDirty()
   }
 
+  /** W1 pick: frame one node at ~100% and pulse its card. */
+  const flyToNode = createNodeFlyer({ model, viewSize: measure, setVp: next => { vp = next }, applyViewport, markDirty, cardEl: id => nodeEls.get(id) })
   // ── status counts ──
   function renderStatus(input: PlanningInput): void {
     const live = input.sessions.filter(s => s.live !== false).length
@@ -983,7 +1009,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   }
 
   function key(ev: SeamKey): void {
-    if (menus.isDialogOpen()) return // modal: the dialog input handles Enter/Esc itself
+    if (menus.isDialogOpen() || (ev.target as Element | null)?.closest?.('.p-search') !== null) return // modal / search box own their keys
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k') { ev.preventDefault(); search.focus(); return } // W1 Ctrl+K
     if (ev.ctrlKey || ev.metaKey) return // browser/OS chords stay browser/OS
     if (menus.isMenuOpen()) {
       // The menu owns most keys (its own handler navigates); Escape still
@@ -1113,7 +1140,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // gh#41: remote-frame registry shared with serverAction (drop fork).
     lastTeams = input.teams
     lastPeers = input.peers ?? []
-    lastInFlight = input.inFlight ?? []
+    federation.setInFlight(input.inFlight ?? [])
     // Unjoined sessions have no node on the canvas — the panel-slim
     // migration made this view the join surface, so they ride a compact
     // toolbar chip instead of vanishing entirely.
