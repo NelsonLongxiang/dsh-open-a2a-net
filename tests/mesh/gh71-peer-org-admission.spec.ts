@@ -168,3 +168,59 @@ describe('gh#71 probe full-face persist (fix ①)', () => {
     }
   })
 })
+
+// gh#71 fix ③ — the TOOL-GATE dual basis (routeTrunk's team-scoped refusal
+// honors sharedCanvas + orgShared). TEST-seat pin (chief order
+// direct-55665230): the NEGATIVE control is the point — a warm org entry
+// that does NOT name the caller keeps the tool gate refusing; the same
+// org naming caller + target opens it (the route may then fail LATER on
+// reachability, which is a different error class and proves the gate let
+// it through).
+describe('gh#71 tool-gate dual basis (fix ③)', () => {
+  it('sharedCanvas (dual member shape) and orgShared open the gate; an org without the caller keeps refusing', { timeout: 30_000 }, async () => {
+    const portA = await reservePort()
+    const portB = await reservePort()
+    const a = await bootNode({ name: 'A', session: 'mesh-gh71g-a', team: 'dsh', sessionNodes: true, port: portA, peers: [`http://127.0.0.1:${String(portB)}`], teamScopeInfo: false, teamScopeRouting: true })
+    const b = await bootNode({ name: 'B', session: 'mesh-gh71g-b', team: 'dsh', sessionNodes: true, port: portB, peers: [`http://127.0.0.1:${String(portA)}`] })
+    try {
+      swapAgent(a, 'session-aaaa1111zzzz0000', 'A-门席')
+      swapAgent(b, 'session-bbbb2222zzzz0000', 'B-远端席')
+      expect((await post(`${a.baseUrl}/__dsh_a2a/join`, { id: 'session-aaaa1111zzzz0000' })).team).toBe('dsh/aaaa1111')
+      expect((await post(`${b.baseUrl}/__dsh_a2a/join`, { id: 'session-bbbb2222zzzz0000' })).team).toBe('dsh/bbbb2222')
+      // B's org names A's handle + a target handle 'dsh/cccc3333' — the
+      // dual-recognition shape the gate must honor.
+      expect((await post(`${b.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: '跨机组' })).ok).toBe(true)
+      expect((await post(`${b.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: '跨机组', id: 'dsh/aaaa1111' })).ok).toBe(true)
+      expect((await post(`${b.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: '跨机组', id: 'dsh/cccc3333' })).ok).toBe(true)
+      // Warm A's cache with B's full card (linked via the bilateral seed).
+      const teamsTool = a.ctx.tools.get('a2a_teams')
+      const agentA = (a as unknown as { agents: { agent: unknown } }).agents.agent
+      await teamsTool?.execute({}, { signal: new AbortController().signal, agent: agentA } as never)
+
+      const route = a.ctx.tools.get('a2a_route')
+      const run = async (team: string): Promise<string> =>
+        String(((await route?.execute({ team, message: 'gate probe' }, { signal: new AbortController().signal, agent: agentA } as never) as Record<string, any>) ?? {}).error ?? 'no-error')
+      // Positive: the org names caller + target — the gate opens (the
+      // later failure, if any, must NOT be the team-scoped refusal).
+      const pos = await run('dsh/cccc3333')
+      expect(pos).not.toContain('team-scoped routing is on')
+      // Negative: an unrelated target is in NO basis (org names neither it,
+      // no local canvas, no declaration) — the gate refuses.
+      const neg = await run('dsh/99998888')
+      expect(neg).toContain('team-scoped routing is on')
+      // sharedCanvas dual shape: A's OWN canvas names the caller by handle —
+      // the gate opens for a TEAMMATE handle the canvas also names (the
+      // implemented semantics; routing the GROUP NAME itself is a separate
+      // gap the TEST receipt records — members.includes(team) never matches
+      // a <team>/canvas/<name> string).
+      expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: '本机共享' })).ok).toBe(true)
+      expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: '本机共享', id: 'dsh/aaaa1111' })).ok).toBe(true)
+      expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: '本机共享', id: 'dsh/eeee5555' })).ok).toBe(true)
+      const viaCanvas = await run('dsh/eeee5555')
+      expect(viaCanvas).not.toContain('team-scoped routing is on')
+    } finally {
+      await a.dispose()
+      await b.dispose()
+    }
+  })
+})
