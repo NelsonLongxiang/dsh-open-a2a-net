@@ -3352,6 +3352,21 @@ ${message}`
       for (const name of canvasStore.list()) {
         if (canvasStore.remoteMembersOf(name).includes(caller)) declared.add(canvasTeamOf(name))
       }
+      // gh#71 fix ②: the warm card cache's peer canvasOrg is the same-zone
+      // cross-host basis too — an org entry naming BOTH the caller's handle
+      // and one of THIS host's own handles is a shared team (双向识别: the
+      // composition gesture happened on the other host's board; both ends
+      // are named). Read-only over the cache; a caller org that never names
+      // an own handle still refuses (V5 preserved).
+      const ownHandles = new Set<string>([config.team, ...joinedSessions.list().map(id => `${config.team}/${id8(id)}`)])
+      for (const cached of cardCache.values()) {
+        const org = (cached.card as { canvasOrg?: Array<{ team?: unknown; members?: unknown }> } | undefined)?.canvasOrg
+        if (!Array.isArray(org)) continue
+        for (const e of org) {
+          if (typeof e.team !== 'string' || e.team === '' || !Array.isArray(e.members)) continue
+          if (e.members.includes(caller) && e.members.some(m => typeof m === 'string' && ownHandles.has(m))) declared.add(e.team)
+        }
+      }
     }
     const routable = new Set<string>([config.team])
     for (const id of joinedSessions.list()) routable.add(`${config.team}/${id8(id)}`)
@@ -3385,6 +3400,17 @@ ${message}`
             if (entry.session === targetSession) for (const t of entry.teams) targetLinks.add(t)
           }
           for (const name of canvasStore.teamsOf(targetSession)) targetLinks.add(canvasTeamOf(name))
+          // gh#71 fix ②: the warm cache's org basis at target level too —
+          // an org entry naming BOTH the caller and the target handle is
+          // the shared team (same 双向识别 rule as the host-level basis).
+          for (const cached of cardCache.values()) {
+            const org = (cached.card as { canvasOrg?: Array<{ team?: unknown; members?: unknown }> } | undefined)?.canvasOrg
+            if (!Array.isArray(org)) continue
+            for (const e of org) {
+              if (typeof e.team !== 'string' || e.team === '' || !Array.isArray(e.members)) continue
+              if (e.members.includes(caller) && e.members.includes(targetTeam)) targetLinks.add(e.team)
+            }
+          }
         }
       } else {
         const canvasName = canvasStore.list().find(name => canvasTeamOf(name) === targetTeam)
@@ -5549,13 +5575,42 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         if (!initiator) {
           const callerTeams = teamMemberships.teamsOf(scopeCaller)
           const team = String(args.team ?? '').trim()
-          if (callerTeams.length === 0) {
+          // gh#71: the SHARED-CANVAS basis and the warm cache's peer-org
+          // basis (an org entry naming BOTH the caller and the target
+          // handle) count as declared here too — the same link the
+          // admission core honors on the receiving side; without this the
+          // tool face refused routes the canvas itself had authorized.
+          // Canvas members mix two shapes: LOCAL sessions sit by session
+          // id, cross-host members by zone/id8 handle — match either.
+          const callerHandle = `${config.team}/${id8(scopeCaller)}`
+          // gh#45 末修 (66abc2cf defect): a CANVAS GROUP NAME target
+          // (`<team>/canvas/<name>`) never matches member handles — a
+          // whole-group dispatch from a group member was refused. The
+          // group's own team handle (canvasTeamOf(name)) is the match
+          // (the caller sits in the very group being addressed).
+          const sharedCanvas = canvasStore.list().some(name => {
+            const members = canvasStore.membersOf(name)
+            const inGroup = members.includes(scopeCaller) || members.includes(callerHandle)
+            return inGroup ? members.includes(team) || canvasTeamOf(name) === team : false
+          })
+          let orgShared = false
+          for (const cached of cardCache.values()) {
+            const org = (cached.card as { canvasOrg?: Array<{ team?: unknown; members?: unknown }> } | undefined)?.canvasOrg
+            if (!Array.isArray(org)) continue
+            for (const e of org) {
+              if (typeof e.team !== 'string' || e.team === '' || !Array.isArray(e.members)) continue
+              const inOrg = e.members.includes(scopeCaller) || e.members.includes(callerHandle)
+              if (inOrg && (e.members.includes(team) || e.team === team)) { orgShared = true; break }
+            }
+            if (orgShared) break
+          }
+          if (callerTeams.length === 0 && !sharedCanvas && !orgShared) {
             return {
               ok: false,
               error: `team-scoped routing is on and this session (${id8(scopeCaller)}) has declared no team membership — a teamless node has no network. Declare one with a2a_team_join (subject to the owner's teamJoinAllowlist)`,
             }
           }
-          if (!callerTeams.includes(team)) {
+          if (!callerTeams.includes(team) && !sharedCanvas && !orgShared) {
             return {
               ok: false,
               error: `team-scoped routing is on: routing to "${team}" requires declared membership. This session's teams: ${callerTeams.join(', ')}. a2a_team_join can declare it (subject to the owner's teamJoinAllowlist)`,
@@ -6560,7 +6615,13 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         // and learns its referrals, exactly like a discovery sweep would,
         // while the outcome's stage names the failure for the report.
         const card = settlePeerCard(url, outcome)
-        if (card !== undefined) return { url, reachable: true, ms, team: card.team }
+        if (card !== undefined) {
+          // gh#71 fix ①: a successful full-face fetch persists into the warm
+          // cache — the probe is often the FIRST contact (no directory sweep
+          // has run), and the state face's peerOrg reads exactly this cache.
+          cardCache.set(url, { at: Date.now(), card })
+          return { url, reachable: true, ms, team: card.team }
+        }
         if (outcome.ok) return { url, reachable: false, ms, error: 'dropped: the card lists this node back as its own referral' }
         return outcome.stage === 'unreachable'
           ? { url, reachable: false, ms, error: `unreachable: ${outcome.detail}` }
