@@ -36,6 +36,7 @@ import {
   type RemoteTeamRow,
 } from './federation'
 import { clampViewport, fitView, panBy, screenToWorld, worldTransformCss, zoomAt, type LayoutViewport } from './viewport'
+import { boardBounds, fitBelowHud, hudBottomOf } from './planning-fit'
 import { WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, planTeamClusters, NODE_W, NODE_H } from './world'
 import { applyAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction } from './canvas-ops'
 import { FRAME_HUES } from './tokens'
@@ -982,7 +983,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
 
   function fitToContent(): void {
     syncViewSize()
-    vp = fitView(model.contentBounds(), viewW, viewH)
+    vp = fitBelowHud(boardBounds(model.contentBounds(), model.allNodes()), viewW, viewH, hudBottomOf(toolbar, status))
     applyViewport()
     markDirty()
   }
@@ -1400,16 +1401,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       if (viewW > 0 && viewH > 0) {
         firstFitPending = false
         // Peer cards hang outside the local content bounds — frame them too,
-        // or the federation column opens clipped at the board's edge.
-        let bounds = model.contentBounds()
-        for (const n of model.allNodes()) {
-          if (n.remote !== true) continue
-          const r = nodeRect(n)
-          bounds = bounds === null
-            ? { minX: r.x, minY: r.y, maxX: r.x + r.w, maxY: r.y + r.h }
-            : { minX: Math.min(bounds.minX, r.x), minY: Math.min(bounds.minY, r.y), maxX: Math.max(bounds.maxX, r.x + r.w), maxY: Math.max(bounds.maxY, r.y + r.h) }
-        }
-        vp = fitView(bounds, viewW, viewH, 1) // frame, never magnify
+        // or the federation column opens clipped at the board's edge. Same
+        // framing as 适配 (planning-fit): ≤100%, below the HUD.
+        vp = fitBelowHud(boardBounds(model.contentBounds(), model.allNodes()), viewW, viewH, hudBottomOf(toolbar, status))
       }
     }
     render()

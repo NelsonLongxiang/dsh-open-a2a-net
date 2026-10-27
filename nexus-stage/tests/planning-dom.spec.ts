@@ -103,7 +103,7 @@ describe('planning view DOM', () => {
     expect(onDirty).toHaveBeenCalledTimes(1)
   })
 
-  it('keyboard: 0 fits (transform moves off identity, dirty fires)', () => {
+  it('keyboard: 0 fits (transform returns to the first-run framing, dirty fires)', () => {
     // Injected viewport size: jsdom has no layout, so fit math needs a
     // deterministic box to produce a non-identity transform.
     const onDirty = vi.fn()
@@ -113,11 +113,14 @@ describe('planning view DOM', () => {
     })
     document.body.appendChild(v.root)
     v.reconcile({ sessions, teams, peerCount: 0 })
-    const before = v.root.querySelector<HTMLElement>('.p-world')!.style.transform
+    // 适配 frames exactly what the first-run fit framed (planning-fit): zoom
+    // away first, then 0 brings the same framing back.
+    const fitted = v.root.querySelector<HTMLElement>('.p-world')!.style.transform
+    expect(fitted).toContain('scale(')
+    ;[...v.root.querySelectorAll<HTMLButtonElement>('.p-toolbar button')].find(b => b.textContent === '＋')!.click()
+    expect(v.root.querySelector<HTMLElement>('.p-world')!.style.transform).not.toBe(fitted)
     v.seam.key(key({ key: '0', target: v.root }))
-    const after = v.root.querySelector<HTMLElement>('.p-world')!.style.transform
-    expect(after).not.toBe(before)
-    expect(after).toContain('scale(')
+    expect(v.root.querySelector<HTMLElement>('.p-world')!.style.transform).toBe(fitted)
     expect(onDirty).toHaveBeenCalled()
   })
 
