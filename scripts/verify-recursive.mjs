@@ -19,10 +19,10 @@ import { resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 const REPO = resolve(import.meta.dirname, "..");
-const YGL_BIN = process.env.YGL_BIN ?? "D:/workspace/ygl-trees/dist/apps/cli/src/bin.js";
+const YGL_BIN = process.env.YGL_BIN ?? resolve(REPO, "..", "ygl-trees", "dist/apps/cli/src/bin.js");
 const YGL_HOME = process.env.YGL_HOME ?? resolve(REPO, "tmp/ygl-verify");
 const SPEC_ID = process.env.A2A_SPEC_ID ?? "spec_c8b6350c5034";
-const CORPUS = process.env.YGL_VERIFY_CORPUS ?? "D:/workspace/ygl-trees/packages/verify/core/corpus";
+const CORPUS = process.env.YGL_VERIFY_CORPUS ?? resolve(REPO, "..", "ygl-trees", "packages/verify/core/corpus");
 const ARCHIVES = resolve(YGL_HOME, "verify/archives");
 
 const argv = process.argv.slice(2);
