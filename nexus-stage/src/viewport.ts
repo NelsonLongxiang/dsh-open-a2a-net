@@ -60,28 +60,37 @@ export function zoomAt(vp: LayoutViewport, factor: number, ax: number, ay: numbe
 /** Content bounds in world space (null = nothing to fit). */
 export interface WorldBounds { readonly minX: number; readonly minY: number; readonly maxX: number; readonly maxY: number }
 
-/** Below this viewport width (the board's phone breakpoint) a fit never
- *  shrinks past {@link NARROW_FIT_FLOOR}: fitting a whole board into a phone
- *  drew 13px card names at ~7px. Past the floor the fit anchors the content's
- *  top-left corner instead of its centre, and the rest is a pan away. */
+/** A fit never shrinks past a readable floor: below {@link NARROW_FIT_WIDTH}
+ *  (the board's phone breakpoint) {@link NARROW_FIT_FLOOR}, at any wider
+ *  viewport {@link WIDE_FIT_FLOOR}. Fitting a whole board drew 13px card
+ *  names at ~7px on a phone, and a real 66-card board at 30% on a desktop
+ *  (review 2026-10-27, real-host check). Past the floor the fit anchors the
+ *  content's top-left corner instead of its centre; the rest is a pan away. */
 export const NARROW_FIT_WIDTH = 680
 export const NARROW_FIT_FLOOR = 0.8
-const NARROW_FIT_MARGIN = 16
+export const WIDE_FIT_FLOOR = 0.6
+const FIT_MARGIN = 16
 
 /**
  * Fit the content bounds into a viewW x viewH viewport at 90% fill,
  * clamped to the persisted scale envelope; empty bounds reset to identity.
- * On a narrow viewport the scale is floored (see {@link NARROW_FIT_FLOOR}).
+ * The scale is floored (see {@link WIDE_FIT_FLOOR}); an explicit maxScale
+ * below the floor still wins.
  */
 export function fitView(bounds: WorldBounds | null, viewW: number, viewH: number, maxScale = Number.POSITIVE_INFINITY): LayoutViewport {
   if (bounds === null || viewW <= 0 || viewH <= 0) return IDENTITY_VIEWPORT
   const bw = bounds.maxX - bounds.minX
   const bh = bounds.maxY - bounds.minY
   if (!(bw > 0) || !(bh > 0)) return IDENTITY_VIEWPORT
-  const fitted = Math.min(maxScale, 0.9 * Math.min(viewW / bw, viewH / bh))
-  if (viewW < NARROW_FIT_WIDTH && fitted < NARROW_FIT_FLOOR) {
-    const scale = clampScale(Math.min(maxScale, NARROW_FIT_FLOOR))
-    return { x: bounds.minX - NARROW_FIT_MARGIN / scale, y: bounds.minY - NARROW_FIT_MARGIN / scale, scale }
+  // The floor is about content that does not FIT at a readable scale, so it
+  // is judged on the natural fit — a caller's maxScale cap below the floor
+  // must not turn a board that fits into a top-left-anchored one (PR #79 review).
+  const natural = 0.9 * Math.min(viewW / bw, viewH / bh)
+  const fitted = Math.min(maxScale, natural)
+  const floor = viewW < NARROW_FIT_WIDTH ? NARROW_FIT_FLOOR : WIDE_FIT_FLOOR
+  if (natural < floor) {
+    const scale = clampScale(Math.min(maxScale, floor))
+    return { x: bounds.minX - FIT_MARGIN / scale, y: bounds.minY - FIT_MARGIN / scale, scale }
   }
   const scale = clampScale(fitted)
   return {

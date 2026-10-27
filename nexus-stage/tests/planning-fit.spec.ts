@@ -24,14 +24,23 @@ describe('planning-fit', () => {
   })
 
   it('the content is centred in the area below the HUD, not under it', () => {
-    const big = { minX: 0, minY: 0, maxX: 2400, maxY: 1600 }
+    const big = { minX: 0, minY: 0, maxX: 1600, maxY: 1000 }
     const hud = 60
     const vp = fitBelowHud(big, 1200, 800, hud)
     // Top of the content lands below the HUD's bottom edge.
     const topPx = (big.minY - vp.y) * vp.scale
     expect(topPx).toBeGreaterThanOrEqual(hud)
     // And it fits the reduced height at 90% fill.
-    expect(vp.scale).toBeCloseTo(0.9 * Math.min(1200 / 2400, (800 - hud) / 1600), 5)
+    expect(vp.scale).toBeCloseTo(0.9 * Math.min(1200 / 1600, (800 - hud) / 1000), 5)
+  })
+
+  it('a board too big to read whole floors at 60% and anchors its top-left corner just below the HUD', () => {
+    const huge = { minX: 100, minY: 50, maxX: 6100, maxY: 4050 }
+    const hud = 60
+    const vp = fitBelowHud(huge, 1500, 800, hud)
+    expect(vp.scale).toBe(0.6)
+    expect((huge.minX - vp.x) * vp.scale).toBeCloseTo(16, 5)
+    expect((huge.minY - vp.y) * vp.scale).toBeCloseTo(hud + 16, 5)
   })
 
   it('no HUD (not laid out) or an implausible one fits the whole board', () => {
