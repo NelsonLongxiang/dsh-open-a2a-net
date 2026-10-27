@@ -4,7 +4,7 @@
    "source_clause": "S1 docs/validator.md 声称的每个 PASS run 报告必须存在（tmp/ygl-verify/verify/reports/）且 overall 必须为 PASS。",
    "anchor": {
     "quote": "S1 docs/validator.md 声称的每个 PASS run 报告必须存在（tmp/ygl-verify/verify/reports/）且 overall 必须为 PASS。",
-    "locator": "material-s-layer-v13.md §判据 S1"
+    "locator": "material-s-layer-v14.md §判据 S1"
    },
    "title": "S1 判据单元",
    "severity": "S2",
@@ -36,7 +36,7 @@
    "source_clause": "S2 战役提交（f124eee、c65416d、8b8efeb）必须是 master 血统的祖先；package.json 版本必须为 0.6.x；工作树必须为净（无 tracked 改动）。",
    "anchor": {
     "quote": "S2 战役提交（f124eee、c65416d、8b8efeb）必须是 master 血统的祖先；package.json 版本必须为 0.6.x；工作树必须为净（无 tracked 改动）。",
-    "locator": "material-s-layer-v13.md §判据 S2"
+    "locator": "material-s-layer-v14.md §判据 S2"
    },
    "title": "S2 判据单元",
    "severity": "S2",
@@ -68,7 +68,7 @@
    "source_clause": "S3 ygl-trees doctor 必须 0 fail；监督域树（v2-roadmap、time-capsule）node validate 必须无 issues。",
    "anchor": {
     "quote": "S3 ygl-trees doctor 必须 0 fail；监督域树（v2-roadmap、time-capsule）node validate 必须无 issues。",
-    "locator": "material-s-layer-v13.md §判据 S3"
+    "locator": "material-s-layer-v14.md §判据 S3"
    },
    "title": "S3 判据单元",
    "severity": "S2",
@@ -100,7 +100,7 @@
    "source_clause": "S4 docs/validator.md 逐周期声明的 head 必须在 git 历史可追；spec_c8b6350c5034 必须在案。",
    "anchor": {
     "quote": "S4 docs/validator.md 逐周期声明的 head 必须在 git 历史可追；spec_c8b6350c5034 必须在案。",
-    "locator": "material-s-layer-v13.md §判据 S4"
+    "locator": "material-s-layer-v14.md §判据 S4"
    },
    "title": "S4 判据单元",
    "severity": "S3",
@@ -132,7 +132,7 @@
    "source_clause": "S5 上一轮监督运行记录的静态事实（战役提交血统）本轮必须仍成立（递归持久性，血统断言）。",
    "anchor": {
     "quote": "S5 上一轮监督运行记录的静态事实（战役提交血统）本轮必须仍成立（递归持久性，血统断言）。",
-    "locator": "material-s-layer-v13.md §判据 S5"
+    "locator": "material-s-layer-v14.md §判据 S5"
    },
    "title": "S5 判据单元",
    "severity": "S3",
@@ -164,7 +164,7 @@
    "source_clause": "S6 GitHub 公开仓与 gitee 镜像的开放 issue/PR 中，非路线图项计数必须为 0（公共面零垃圾开放——v12 演进：路线图 issue[标题含「路线图」/「总表」]=属主 2026-Q4 工作项底账，正当规划不判红；判据随属主行为演进，两轮冲突实录 2026-10-27）。",
    "anchor": {
     "quote": "S6 GitHub 公开仓与 gitee 镜像的开放 issue/PR 中，非路线图项计数必须为 0（公共面零垃圾开放——v12 演进：路线图 issue[标题含「路线图」/「总表」]=属主 2026-Q4 工作项底账，正当规划不判红；判据随属主行为演进，两轮冲突实录 2026-10-27）。",
-    "locator": "material-s-layer-v13.md §判据 S6"
+    "locator": "material-s-layer-v14.md §判据 S6"
    },
    "title": "S6 判据单元",
    "severity": "S2",
@@ -196,7 +196,7 @@
    "source_clause": "S7 pnpm overrides 单一归属（2026-10-25 gh#46 修复轮 a3a57b8 演进）：pnpm-workspace.yaml overrides 为唯一归属且非空，package.json#pnpm 必须缺席（镜像字段与 11.28 开发机互斥——A/B 实证字段在场=verify-deps 拒跑一切 pnpm 脚本）；packageManager 必须钉 pnpm@11.28.5；engines.pnpm 必须含 >=11.24 范围。",
    "anchor": {
     "quote": "S7 pnpm overrides 单一归属（2026-10-25 gh#46 修复轮 a3a57b8 演进）：pnpm-workspace.yaml overrides 为唯一归属且非空，package.json#pnpm 必须缺席（镜像字段与 11.28 开发机互斥——A/B 实证字段在场=verify-deps 拒跑一切 pnpm 脚本）；packageManager 必须钉 pnpm@11.28.5；engines.pnpm 必须含 >=11.24 范围。",
-    "locator": "material-s-layer-v13.md §判据 S7"
+    "locator": "material-s-layer-v14.md §判据 S7"
    },
    "title": "S7 判据单元",
    "severity": "S1",
@@ -228,7 +228,7 @@
    "source_clause": "S8 src/index.ts 必须保留三修复锚（visibleTeams.add(config.team) 无条件 / visibleTeams.add('log') / joinedTeamScope 含 canvasTeamOf）；M2 反形状（if (joined.size > 0) visibleTeams.add(config.team)）必须不存在。",
    "anchor": {
     "quote": "S8 src/index.ts 必须保留三修复锚（visibleTeams.add(config.team) 无条件 / visibleTeams.add('log') / joinedTeamScope 含 canvasTeamOf）；M2 反形状（if (joined.size > 0) visibleTeams.add(config.team)）必须不存在。",
-    "locator": "material-s-layer-v13.md §判据 S8"
+    "locator": "material-s-layer-v14.md §判据 S8"
    },
    "title": "S8 判据单元",
    "severity": "S1",
@@ -260,7 +260,7 @@
    "source_clause": "S9 docs/testing-layers.md 的五层目录名、package.json 的五个分层脚本、磁盘 tests/{unit,wire,mesh,gates,live} 三方必须一致。",
    "anchor": {
     "quote": "S9 docs/testing-layers.md 的五层目录名、package.json 的五个分层脚本、磁盘 tests/{unit,wire,mesh,gates,live} 三方必须一致。",
-    "locator": "material-s-layer-v13.md §判据 S9"
+    "locator": "material-s-layer-v14.md §判据 S9"
    },
    "title": "S9 判据单元",
    "severity": "S3",
@@ -292,7 +292,7 @@
    "source_clause": "S10 OriginClaim 三面验签必须复用 verifyOriginClaim 入口；信封 shape 必须收窄 bare zone（originClaimCallerShape）；M1 窗口配置 originClaimWindow 必须在位；验签失败必须 fail-closed 归最小卡（untrusted-origin 同码）。",
    "anchor": {
     "quote": "S10 OriginClaim 三面验签必须复用 verifyOriginClaim 入口；信封 shape 必须收窄 bare zone（originClaimCallerShape）；M1 窗口配置 originClaimWindow 必须在位；验签失败必须 fail-closed 归最小卡（untrusted-origin 同码）。",
-    "locator": "material-s-layer-v13.md §判据 S10"
+    "locator": "material-s-layer-v14.md §判据 S10"
    },
    "title": "S10 判据单元",
    "severity": "S1",
@@ -324,7 +324,7 @@
    "source_clause": "S11 控制面钥规范必须落地：钥注入分支必须带 controlTrustedWithoutKey loopback 门；controlFaceLeniencyWarning boot 告警必须在场（loopback 信任=减速带非门）。",
    "anchor": {
     "quote": "S11 控制面钥规范必须落地：钥注入分支必须带 controlTrustedWithoutKey loopback 门；controlFaceLeniencyWarning boot 告警必须在场（loopback 信任=减速带非门）。",
-    "locator": "material-s-layer-v13.md §判据 S11"
+    "locator": "material-s-layer-v14.md §判据 S11"
    },
    "title": "S11 判据单元",
    "severity": "S1",
@@ -356,7 +356,7 @@
    "source_clause": "S12 属主信号 UI 锚必须在场：异常驱动 alerts 芯片（死信 danger/陈旧 warn/欠回执 warn，PR#30 台账重设计取代 wb-row-alert 行类）、订单卡 brief 主文案、对话默认展开（属主裁定 PR#28）三锚齐备。",
    "anchor": {
     "quote": "S12 属主信号 UI 锚必须在场：异常驱动 alerts 芯片（死信 danger/陈旧 warn/欠回执 warn，PR#30 台账重设计取代 wb-row-alert 行类）、订单卡 brief 主文案、对话默认展开（属主裁定 PR#28）三锚齐备。",
-    "locator": "material-s-layer-v13.md §判据 S12"
+    "locator": "material-s-layer-v14.md §判据 S12"
    },
    "title": "S12 判据单元",
    "severity": "S2",
@@ -388,7 +388,7 @@
    "source_clause": "S13 活宿主构建指纹必须鲜活：当前最新控制面（/a2a/canvas-op，gh#41 锚）必须在活宿主路由集内（404 全局=进程未换构建即红，dc64eb1 三层根因教训——判据=路由指纹非安装输出）；nexus bundle 哈希对比为尽力信息面（401 无钥面不可达时以路由指纹为准）。",
    "anchor": {
     "quote": "S13 活宿主构建指纹必须鲜活：当前最新控制面（/a2a/canvas-op，gh#41 锚）必须在活宿主路由集内（404 全局=进程未换构建即红，dc64eb1 三层根因教训——判据=路由指纹非安装输出）；nexus bundle 哈希对比为尽力信息面（401 无钥面不可达时以路由指纹为准）。",
-    "locator": "material-s-layer-v13.md §判据 S13"
+    "locator": "material-s-layer-v14.md §判据 S13"
    },
    "title": "S13 判据单元",
    "severity": "S1",
@@ -420,7 +420,7 @@
    "source_clause": "S14 同 zone 准入的 remote-ref 信任基（PR#44/gh#43）：sameZoneSharedTeamRefusal 须经 remoteMembersOf 解析 operator 手工 canvas 组（与 foreign-zone 分支对称）；declared 扩容唯一来源=宿主 canvasStore（caller 自述永不入——V5 信任基不破）。",
    "anchor": {
     "quote": "S14 同 zone 准入的 remote-ref 信任基（PR#44/gh#43）：sameZoneSharedTeamRefusal 须经 remoteMembersOf 解析 operator 手工 canvas 组（与 foreign-zone 分支对称）；declared 扩容唯一来源=宿主 canvasStore（caller 自述永不入——V5 信任基不破）。",
-    "locator": "material-s-layer-v13.md §判据 S14"
+    "locator": "material-s-layer-v14.md §判据 S14"
    },
    "title": "S14 判据单元",
    "severity": "S1",
@@ -452,7 +452,7 @@
    "source_clause": "S15 一键重排几何不变量（PR#45）：sole 成员 bbox ⊆ 其框、框两两构造性不相交（行流式平铺）、框宽随成员数变化（perRow=min(4,ceil√n)）——三不变量钉在 planning-relayout 面。",
    "anchor": {
     "quote": "S15 一键重排几何不变量（PR#45）：sole 成员 bbox ⊆ 其框、框两两构造性不相交（行流式平铺）、框宽随成员数变化（perRow=min(4,ceil√n)）——三不变量钉在 planning-relayout 面。",
-    "locator": "material-s-layer-v13.md §判据 S15"
+    "locator": "material-s-layer-v14.md §判据 S15"
    },
    "title": "S15 判据单元",
    "severity": "S2",
@@ -489,7 +489,7 @@
    "source_clause": "S16 CLI 墓碑（gh#47）：过期户口标记不删（expiredAt）+目录留痕+同句柄同钥 re-publish 复活——身份面死/目录可追溯两面分离。",
    "anchor": {
     "quote": "S16 CLI 墓碑（gh#47）：过期户口标记不删（expiredAt）+目录留痕+同句柄同钥 re-publish 复活——身份面死/目录可追溯两面分离。",
-    "locator": "material-s-layer-v13.md §判据 S16"
+    "locator": "material-s-layer-v14.md §判据 S16"
    },
    "title": "S16 判据单元",
    "severity": "S2",
@@ -526,7 +526,7 @@
    "source_clause": "S17 canvas 自环豁免（PR#42/gh#41）：dispatch 路径传 originAgentId 经 skipId 跳过真发起者（借脸不豁免由 wire 钉承载）；纯自环组 would loop 拒绝。",
    "anchor": {
     "quote": "S17 canvas 自环豁免（PR#42/gh#41）：dispatch 路径传 originAgentId 经 skipId 跳过真发起者（借脸不豁免由 wire 钉承载）；纯自环组 would loop 拒绝。",
-    "locator": "material-s-layer-v13.md §判据 S17"
+    "locator": "material-s-layer-v14.md §判据 S17"
    },
    "title": "S17 判据单元",
    "severity": "S1",
@@ -563,7 +563,7 @@
    "source_clause": "S18 准入双向识别（PR#46/gh#71）：暖缓存对端 canvasOrg 供共享队判定（信封拉取全量面回灌+准入增读对端 org——匿名最小卡永无 canvasOrg 的设计下唯一全量通道）；工具门组名匹配不扩边界（负例钉）。",
    "anchor": {
     "quote": "S18 准入双向识别（PR#46/gh#71）：暖缓存对端 canvasOrg 供共享队判定（信封拉取全量面回灌+准入增读对端 org——匿名最小卡永无 canvasOrg 的设计下唯一全量通道）；工具门组名匹配不扩边界（负例钉）。",
-    "locator": "material-s-layer-v13.md §判据 S18"
+    "locator": "material-s-layer-v14.md §判据 S18"
    },
    "title": "S18 判据单元",
    "severity": "S1",
@@ -600,7 +600,7 @@
    "source_clause": "S19 画板加固双锚（PR#48）：planning-view.ts 行数 ≤1507（M1 棘轮收紧·属主令 2026-10-27 d9946e8 与 a2a-frontend-verifier 一致——上限失守一次即失效，mountBoardSearch 一次包圆接线纪律）；flyer 必须以 WorldBounds(min/max) 形调 fitView（{x,y,w,h} 直传=静默 IDENTITY 根防）。",
    "anchor": {
     "quote": "S19 画板加固双锚（PR#48）：planning-view.ts 行数 ≤1507（M1 棘轮收紧·属主令 2026-10-27 d9946e8 与 a2a-frontend-verifier 一致——上限失守一次即失效，mountBoardSearch 一次包圆接线纪律）；flyer 必须以 WorldBounds(min/max) 形调 fitView（{x,y,w,h} 直传=静默 IDENTITY 根防）。",
-    "locator": "material-s-layer-v13.md §判据 S19"
+    "locator": "material-s-layer-v14.md §判据 S19"
    },
    "title": "S19 判据单元",
    "severity": "S1",
@@ -637,7 +637,7 @@
    "source_clause": "S20 npm latest 必须等于 package.json version（#55 发布定案——npmjs 主仓 Gitea 镜像；latest 落后 master 即红）。",
    "anchor": {
     "quote": "S20 npm latest 必须等于 package.json version（#55 发布定案——npmjs 主仓 Gitea 镜像；latest 落后 master 即红）。",
-    "locator": "material-s-layer-v13.md §判据 S20"
+    "locator": "material-s-layer-v14.md §判据 S20"
    },
    "title": "S20 判据单元",
    "severity": "S1",
@@ -674,7 +674,7 @@
    "source_clause": "S21 文档漂移核心对照（#56）：docs 工具面计数与 ctx.tools.register 源计数一致（十枚基线）。",
    "anchor": {
     "quote": "S21 文档漂移核心对照（#56）：docs 工具面计数与 ctx.tools.register 源计数一致（十枚基线）。",
-    "locator": "material-s-layer-v13.md §判据 S21"
+    "locator": "material-s-layer-v14.md §判据 S21"
    },
    "title": "S21 判据单元",
    "severity": "S2",
@@ -711,7 +711,7 @@
    "source_clause": "S22 legacyInbound 基线计量（#64）：探针面逐轮记录本机计数（关窗条件=舰队连续 7 天零增量+外部示例带信封——关窗动作为属主裁，计量先行）。",
    "anchor": {
     "quote": "S22 legacyInbound 基线计量（#64）：探针面逐轮记录本机计数（关窗条件=舰队连续 7 天零增量+外部示例带信封——关窗动作为属主裁，计量先行）。",
-    "locator": "material-s-layer-v13.md §判据 S22"
+    "locator": "material-s-layer-v14.md §判据 S22"
    },
    "title": "S22 判据单元",
    "severity": "S2",
@@ -738,6 +738,43 @@
         "col": "name",
         "op": "=",
         "value": "legacy-inbound-metered"
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "source_clause": "S23 src/index.ts 两段式 M1 第一段（#77 裁定 2026-10-27）：行数 ≤6776 即刻冻结（随批拆分收紧·S19 族 src 侧；互锁：#57/#60 先落、#77 B3-B5 随后、B1/B2 可先行）。",
+   "anchor": {
+    "quote": "S23 src/index.ts 两段式 M1 第一段（#77 裁定 2026-10-27）：行数 ≤6776 即刻冻结（随批拆分收紧·S19 族 src 侧；互锁：#57/#60 先落、#77 B3-B5 随后、B1/B2 可先行）。",
+    "locator": "material-s-layer-v14.md §判据 S23"
+   },
+   "title": "S23 判据单元",
+   "severity": "S1",
+   "checker": {
+    "type": "sql",
+    "expect": "none",
+    "authored": "mechanical",
+    "predicate": {
+     "from": "index_m1",
+     "select": [
+      "name",
+      "ok",
+      "detail"
+     ],
+     "where": {
+      "op": "and",
+      "conditions": [
+       {
+        "col": "ok",
+        "op": "=",
+        "value": 0
+       },
+       {
+        "col": "name",
+        "op": "=",
+        "value": "index-m1-ratchet-6776"
        }
       ]
      }

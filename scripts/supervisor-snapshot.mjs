@@ -276,6 +276,17 @@ function collectBoardHardening() {
   return rows
 }
 
+// ── S23（#77 裁定·两段式 M1 第二段）：src/index.ts ≤6776 冻结（随批收紧·S19 族 src 侧）──
+function collectIndexM1() {
+  const rows = []
+  try {
+    const raw = readFileSync(join(REPO, 'src/index.ts'), 'utf8')
+    const lines = raw.endsWith('\n') ? raw.split('\n').length - 1 : raw.split('\n').length
+    rows.push({ name: 'index-m1-ratchet-6776', ok: lines <= 6776 ? 1 : 0, detail: 'src/index.ts ' + lines + '行 ≤6776（#77 两段式 M1 即刻冻结·随批收紧）' })
+  } catch (e) { rows.push({ name: 'index-m1-ratchet-6776', ok: 0, detail: String(e).slice(0, 60) }) }
+  return rows
+}
+
 // ── S20/S21/S22（路线图 #55/#56/#64 v11）：npm 追平/文档漂移/legacyInbound 计量 ──
 function collectRoadmapAnchors() {
   const rows = []
@@ -350,6 +361,7 @@ const TABLES = {
   v8_anchors: collectV8Anchors,
   board_hardening: collectBoardHardening,
   roadmap_anchors: collectRoadmapAnchors,
+  index_m1: collectIndexM1,
 }
 
 mkdirSync(join(REPO, 'tmp/supervisor'), { recursive: true })
