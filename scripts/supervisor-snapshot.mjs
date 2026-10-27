@@ -274,6 +274,37 @@ function collectBoardHardening() {
   return rows
 }
 
+// ── S20/S21/S22（路线图 #55/#56/#64 v11）：npm 追平/文档漂移/legacyInbound 计量 ──
+function collectRoadmapAnchors() {
+  const rows = []
+  try {
+    // S20（#55）：npm latest == package.json version（网络 curl，S13 先例）
+    let npmLatest = ''
+    try {
+      const out = execFileSync('curl', ['-s', '--noproxy', '*', '--max-time', '8', 'https://registry.npmjs.org/@nelsonlongxiang%2Fdsh-open-a2a-net'], { encoding: 'utf8' })
+      npmLatest = JSON.parse(out)['dist-tags']?.latest ?? ''
+    } catch { npmLatest = '' }
+    const pkgV = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')).version
+    rows.push({ name: 'npm-latest-follows-master', ok: (npmLatest !== '' && npmLatest === pkgV) ? 1 : 0, detail: 'npm latest=' + (npmLatest || 'unreachable') + ' pkg=' + pkgV })
+    // S21（#56）：文档漂移核心标记——工具数十枚在 docs 与源一致
+    const srcIdx = readFileSync(join(REPO, 'src/index.ts'), 'utf8')
+    const toolCount = [...srcIdx.matchAll(/ctx\.tools\.register\(defineTool/g)].length
+    const runbook = readFileSync(join(REPO, 'src/skill/references/routing.md'), 'utf8')
+    const docSaysTen = /ten|十/.test(runbook) || /10/.test(runbook)
+    rows.push({ name: 'doc-tool-count', ok: (toolCount >= 10 && docSaysTen) ? 1 : 0, detail: 'src tools=' + toolCount + ' docs say ten=' + docSaysTen })
+    // S22（#64）：legacyInbound 基线计量——探针面记录计数（关窗条件=舰队 7 天零增量，属主裁）
+    let legacy = -1
+    try {
+      const st = execFileSync('curl', ['-s', '--max-time', '5', 'http://127.0.0.1:3080/__dsh_a2a/state'], { encoding: 'utf8' })
+      const m = st.match(/"legacyInbound"[^,}]*/g)
+      if (m && m.length) legacy = Number(m[0].replace(/[^0-9]/g, '')) || 0
+      else legacy = 0
+    } catch { legacy = -1 }
+    rows.push({ name: 'legacy-inbound-metered', ok: legacy >= 0 ? 1 : 0, detail: 'legacyInbound=' + legacy + '（#64 关窗=舰队 7 天零增量·属主裁）' })
+  } catch (e) { rows.push({ name: 'roadmap-anchors', ok: 0, detail: String(e).slice(0, 80) }) }
+  return rows
+}
+
 function collectOwnerSignalUi() {
   // 遍历 nexus-stage 源码聚合文本（UI 字符串锚）
   const agg = (dir) => {
@@ -316,6 +347,7 @@ const TABLES = {
   admission_remote_ref: collectAdmissionRemoteRef,
   v8_anchors: collectV8Anchors,
   board_hardening: collectBoardHardening,
+  roadmap_anchors: collectRoadmapAnchors,
 }
 
 mkdirSync(join(REPO, 'tmp/supervisor'), { recursive: true })
