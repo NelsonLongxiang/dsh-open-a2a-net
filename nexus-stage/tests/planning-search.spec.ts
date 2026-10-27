@@ -143,3 +143,34 @@ describe('card second line (review 2026-10-27)', () => {
     expect(el.querySelector<HTMLElement>('.sub')!.textContent).toBe('复核报价')
   })
 })
+
+describe('search box takes focus and typing (review 2026-10-27: it could not be typed into)', () => {
+  it('a press on the search box or its hit list is not swallowed as a board gesture', () => {
+    const v = bench(INPUT)
+    const box = v.root.querySelector<HTMLInputElement>('.p-search-input')!
+    const press = (target: Element): MouseEvent => {
+      const ev = new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, clientX: 10, clientY: 10 })
+      target.dispatchEvent(ev)
+      return ev
+    }
+    // Before the fix the board started a marquee and preventDefault()ed the
+    // press, so the input never received focus.
+    expect(press(box).defaultPrevented).toBe(false)
+    expect(v.root.querySelector<HTMLElement>('.p-marquee')!.style.display).not.toBe('block')
+    box.focus()
+    box.value = '林'
+    box.dispatchEvent(new Event('input', { bubbles: true }))
+    const hit = v.root.querySelector<HTMLElement>('.p-search-hit')!
+    expect(hit).not.toBeNull()
+    expect(press(hit).defaultPrevented).toBe(false)
+    // The toolbar's own padding is chrome too, not a place to start a marquee.
+    expect(press(v.root.querySelector('.p-toolbar')!).defaultPrevented).toBe(false)
+  })
+
+  it('a press on empty board still starts a marquee', () => {
+    const v = bench(INPUT)
+    const ev = new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, clientX: 600, clientY: 600 })
+    v.root.dispatchEvent(ev)
+    expect(ev.defaultPrevented).toBe(true)
+  })
+})

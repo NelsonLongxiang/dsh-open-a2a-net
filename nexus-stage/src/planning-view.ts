@@ -745,7 +745,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       try { root.setPointerCapture(ev.pointerId ?? 0) } catch { /* jsdom */ }
       return
     }
-    if (target !== null && (target.closest('button') !== null || target.closest('.p-lamp') !== null || target.closest('.p-status') !== null)) return
+    if (target !== null && target.closest('button, input, textarea, select, .p-toolbar, .p-search, .p-lamp, .p-status, .p-legend') !== null) return // HUD chrome owns its presses (no marquee / preventDefault: that stole the search box's focus)
     const nodeEl = target !== null ? target.closest<HTMLElement>('.p-node') : null
     const headEl = target !== null ? target.closest<HTMLElement>('.p-frame-head') : null
     if ((nodeEl !== null || headEl !== null) && ev.button === 1) {
