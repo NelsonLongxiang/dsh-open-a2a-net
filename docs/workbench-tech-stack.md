@@ -24,7 +24,7 @@
 | 构建 | **Vite 5.4**（rollup 产物 hash 命名） | 产物 `assets/nexusDist/`（index-*.js/css），随插件 tarball 分发；bundle JS ≈122KB + CSS ≈40KB（0.6.28；0.6.0 时为 ~11.7KB） |
 | runtime dependencies | **0 个** | `nexus-stage/package.json` dependencies: {} |
 | 样式 | 手写 CSS + 自定义属性 token（`--n-*`） | `workbench.css`（shell/rail/抽屉）、`planning.css`（画布）；响应式断点 **1024 / 680** |
-| 规划板图形 | **SVG**（星形边/团队框/节点卡），非 Canvas/WebGL | `planning-view.ts`（1530 行，M1 棘轮上限：单文件不得超 1530 行，只降不升）；dot-grid、marquee 框选、Space+drag 平移、Shift+wheel 纵深、Ctrl zoom |
+| 规划板图形 | **SVG**（星形边/团队框/节点卡），非 Canvas/WebGL | `planning-view.ts`（1507 行，M1 棘轮上限：单文件不得超 1507 行，只降不升）；dot-grid、marquee 框选、Space+drag 平移、Shift+wheel 纵深、Ctrl zoom |
 | 状态管理 | 无库：**WorldModel keyed-diff** 跨轮询保留拖拽位移 | 轮询 3s（`main.ts`，visibilitychange 暂停）；`?mode=plan` 等待 canvas face（300ms×30s 上限） |
 | 画布持久化 | LayoutDoc v1（JSON 快照，双侧 clamp） | 宿主路由 `GET/POST /__dsh_a2a/canvas-layout`；saveLoop 防抖 + lamp 状态 + pagehide flush |
 | CanvasAction | 七种乐观写（create-team/add-member/remove-member/remove-team/reorder/join-network/leave-network） | `canvas-ops.ts`，team-scoped undo，串行 settle；前五种经 `canvas-wire.ts` 映射为 `POST /__dsh_a2a/canvas` 的四个 action（create/remove/add-member/remove-member），join/leave-network 走 `POST /__dsh_a2a/join` / `/leave` |

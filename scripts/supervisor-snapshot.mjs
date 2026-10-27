@@ -268,7 +268,7 @@ function collectBoardHardening() {
   try {
     const raw = readFileSync(join(REPO, 'nexus-stage/src/planning-view.ts'), 'utf8')
     const lines = raw.endsWith('\n') ? raw.split('\n').length - 1 : raw.split('\n').length
-    rows.push({ name: 'm1-ratchet-1530', ok: lines <= 1530 ? 1 : 0, detail: 'planning-view ' + lines + '行 ≤1530（M1 棘轮·gh#48 裁定）' })
+    rows.push({ name: 'm1-ratchet-1507', ok: lines <= 1507 ? 1 : 0, detail: 'planning-view ' + lines + '行 ≤1507（M1 棘轮·gh#48 裁定→属主令 d9946e8 收紧一致）' })
     const search = readFileSync(join(REPO, 'nexus-stage/src/planning-search.ts'), 'utf8')
     const conv = /minX|minY/.test(search) && /fitView/.test(search)
     rows.push({ name: 'flyer-worldbounds', ok: conv ? 1 : 0, detail: 'flyer 以 WorldBounds(min/max) 调 fitView（PR#48 真 bug 根防）' })

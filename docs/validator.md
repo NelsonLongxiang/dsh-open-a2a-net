@@ -158,7 +158,7 @@ ygl-trees verify run spec_4de5f3b9d48d --db <snapshot>      # 判定：overall �
   S5 self-recursion / S6 public-triage / S7 deps-mirror（含 `package.json#pnpm` 镜像已退役的缺席断言）/
   S8 scope-fix-anchors / S9 layer-docs-contract，及其后增补的 OriginClaim 锚、控制面门禁、属主信号 UI、
   在跑宿主构建、remote-ref 准入、v8 锚（重排不变量 / CLI 墓碑 / 自环豁免）、warm-cache 双向识别、
-  看板加固双锚（M1 棘轮 planning-view ≤1530 行 + flyer WorldBounds 签名）。逐条编号以 spec 材料为准。
+  看板加固双锚（M1 棘轮 planning-view ≤1507 行 + flyer WorldBounds 签名）。逐条编号以 spec 材料为准。
 - **本文档本身是 S1/S4 的被验对象**：S1 逐个核对文中 `run_<16hex>` 报告存在且 PASS，
   S4 核对文中 `head <8hex>` 均为真实提交、`spec_c8b6350c5034` 仍被提及——编辑本文时这三类锚只增不删。
 - 已知限制：探针的 `REPO` / `YGL_BIN` 等路径常量写死开发席 Windows 机（`D:/…`），他机运行需改常量。
