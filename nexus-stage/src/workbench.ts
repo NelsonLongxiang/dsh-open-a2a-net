@@ -72,6 +72,9 @@ export interface ArchivedRow {
   readonly endedBy?: 'receipt' | 'echo' | 'abandoned' | 'cancelled'
   /** A receipt arrived after the caller had already ended the row. */
   readonly late?: boolean
+  /** gh#68: present (false) only when the row never expected a receipt — a
+   *  fire-forget send; absent on receipt-expected rows and older hosts. */
+  readonly receiptExpected?: false
   readonly direction?: 'inbound' | 'outbound'
   readonly brief?: string
 }

@@ -123,6 +123,27 @@ describe('chat drawer (wb-chat)', () => {
     expect(statuses(d.root)).toEqual(['已派发'])
   })
 
+  it('a receiptless send moved out of the ledger reads 已移出（免回执）, never 已放弃 (gh#68)', async () => {
+    const { d, resolve } = drawer()
+    d.update(baseState)
+    d.open(session)
+    send(d.root, 'FYI：库存阈值已调')
+    resolve({ ok: true, task_id: 'direct-ff000009' })
+    await vi.waitFor(() => expect(statuses(d.root)).toEqual(['已派发']))
+    const ended = (row: Partial<ArchivedRow>) => {
+      d.update({ ...baseState, archived: [{ taskId: 'direct-ff000009', team: TEAM, resolvedAt: NOW - 1_000, outcome: 'abandoned', endedBy: 'abandoned', ...row }] })
+      const chip = q(d.root, '.wb-msg-status')
+      return `${chip.textContent}|${[...chip.classList].find(c => c.startsWith('is-'))}`
+    }
+    expect(ended({ receiptExpected: false })).toBe('已移出（免回执）|is-muted')
+    expect(q(d.root, '.wb-msg-status').title).toContain('不是失败')
+    expect(ended({ receiptExpected: false, endedBy: 'cancelled' })).toBe('已移出（免回执）|is-muted')
+    // A receipt-expected abandon (field absent) still reads 已放弃.
+    expect(ended({})).toBe('已放弃|is-muted')
+    // A receiptless row the peer answered anyway reads its verdict as before.
+    expect(ended({ receiptExpected: false, endedBy: 'receipt', outcome: 'completed' })).toBe('已回执 · 完成|is-ok')
+  })
+
   it('endedBy tells who ended it: 对方放弃 vs 已放弃 / 已撤回, and a late receipt is flagged (gh#31 / #32)', async () => {
     const { d, resolve } = drawer()
     d.update(baseState)
