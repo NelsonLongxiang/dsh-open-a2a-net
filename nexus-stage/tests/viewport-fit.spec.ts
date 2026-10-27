@@ -38,4 +38,12 @@ describe('fitView narrow floor', () => {
     // Between the floor and 100% the fit stays centred.
     expect(fitView({ minX: 0, minY: 0, maxX: 2000, maxY: 1000 }, 1500, 800).scale).toBeCloseTo(0.675, 5)
   })
+
+  it('a maxScale cap below the floor never anchors a board that fits — it stays centred (PR #79 review)', () => {
+    const fits = { minX: 0, minY: 0, maxX: 1000, maxY: 600 }
+    const vp = fitView(fits, 1500, 800, 0.5)
+    expect(vp.scale).toBe(0.5)
+    expect(vp.x + 1500 / (2 * vp.scale)).toBeCloseTo(500, 5)
+    expect(vp.y + 800 / (2 * vp.scale)).toBeCloseTo(300, 5)
+  })
 })

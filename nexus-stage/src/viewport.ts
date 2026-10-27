@@ -82,9 +82,13 @@ export function fitView(bounds: WorldBounds | null, viewW: number, viewH: number
   const bw = bounds.maxX - bounds.minX
   const bh = bounds.maxY - bounds.minY
   if (!(bw > 0) || !(bh > 0)) return IDENTITY_VIEWPORT
-  const fitted = Math.min(maxScale, 0.9 * Math.min(viewW / bw, viewH / bh))
+  // The floor is about content that does not FIT at a readable scale, so it
+  // is judged on the natural fit — a caller's maxScale cap below the floor
+  // must not turn a board that fits into a top-left-anchored one (PR #79 review).
+  const natural = 0.9 * Math.min(viewW / bw, viewH / bh)
+  const fitted = Math.min(maxScale, natural)
   const floor = viewW < NARROW_FIT_WIDTH ? NARROW_FIT_FLOOR : WIDE_FIT_FLOOR
-  if (fitted < floor) {
+  if (natural < floor) {
     const scale = clampScale(Math.min(maxScale, floor))
     return { x: bounds.minX - FIT_MARGIN / scale, y: bounds.minY - FIT_MARGIN / scale, scale }
   }
