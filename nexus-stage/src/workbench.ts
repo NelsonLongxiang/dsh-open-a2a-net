@@ -22,6 +22,7 @@ import { createChatDrawer, type ChatTarget } from './wb-chat'
 import { createRailTabs } from './wb-rail'
 import { DIRECTORY_FILTERS, learnLogTitle, loadLogTitles, renderDirectory, type DirFilter } from './wb-directory'
 import { ledgerFacts, renderLedger as paintLedger } from './wb-ledger'
+import { nameInto, teamLabel } from './wb-names'
 
 /** One pending ledger row from /state `tasks`. */
 export interface PendingRow {
@@ -646,37 +647,9 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   }
 
   // ── Activity pane ──
-  /** The readable name behind a routing team id — a session, a remote node
-   *  or a canvas team on the last state — or undefined when none matches
-   *  (review 2026-10-27: activity and plan rows read bare `dsh/1111…` ids).
-   *  An empty name counts as no match: displayName's `??` keeps '', and a
-   *  peer can publish one. `remote` marks a name the PEER chose — it can
-   *  collide with a local session's, so callers must show where it is from. */
-  function teamName(state: StateBody, team: string): { name: string; remote: boolean } | undefined {
-    const named = (name: string | undefined, remote: boolean) => name !== undefined && name.trim() !== '' ? { name, remote } : undefined
-    const s = (state.sessions ?? []).find(r => r.team === team)
-    if (s !== undefined) return named(displayName(s), false)
-    const r = (state.remote ?? []).find(x => x.team === team)
-    if (r !== undefined) return named(displayName(r), true)
-    return named((state.canvas?.teams ?? []).find(t => t.team === team)?.name, false)
-  }
-  /** A name for plain text: a peer-published one says it is remote. */
-  function teamLabel(state: StateBody, team: string): string {
-    const n = teamName(state, team)
-    return n === undefined ? team : n.remote ? `${n.name}（远端）` : n.name
-  }
-  /** A team cell: the name when known (the id rides the tooltip), else the
-   *  id; a peer-published name carries a visible 远端 chip. */
+  /** A team cell: the name when known (wb-names), else the id. */
   function teamCell(line: HTMLElement, state: StateBody, team: string): void {
-    const cell = line.appendChild(el('span', 'wb-row-team'))
-    const n = teamName(state, team)
-    cell.textContent = n?.name ?? team
-    cell.title = team
-    if (n?.remote === true) {
-      const chip = cell.appendChild(el('span', 'wb-row-remote'))
-      chip.textContent = '远端'
-      chip.title = '名字由对端自行发布'
-    }
+    nameInto(line.appendChild(el('span', 'wb-row-team')), state, team)
   }
 
   function renderActivity(): void {

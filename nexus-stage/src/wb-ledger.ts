@@ -25,6 +25,7 @@
  */
 import type { DeadRow, PendingRow, StateBody } from './workbench'
 import type { RailTone } from './wb-rail'
+import { nameInto } from './wb-names'
 
 export interface LedgerContext {
   readonly state: StateBody
@@ -175,8 +176,13 @@ export function renderLedger(pane: HTMLElement, ctx: LedgerContext): { badge: st
     head.appendChild(brief)
     node.appendChild(head)
     const meta = el('div', 'wb-led-meta')
-    meta.appendChild(el('span', 'wb-led-team')).textContent = c.inbound ? `来自 ${c.sender ?? '对端'}` : `发往 ${c.team}`
-    if (c.inbound) meta.appendChild(el('span', 'wb-led-to')).textContent = `至 ${c.team}`
+    // Names, not bare ids (wb-names; the id rides each span's tooltip). An
+    // inbound row's sender is the peer handle; an unknown one reads 对端.
+    const who = meta.appendChild(el('span', 'wb-led-team'))
+    if (!c.inbound) nameInto(who, state, c.team, '发往 ')
+    else if (c.sender !== undefined) nameInto(who, state, c.sender, '来自 ')
+    else who.textContent = '来自 对端'
+    if (c.inbound) nameInto(meta.appendChild(el('span', 'wb-led-to')), state, c.team, '至 ')
     meta.appendChild(el('span')).textContent = c.atText
     meta.appendChild(el('span', 'wb-led-task')).textContent = c.taskId
     for (const chip of c.chips) meta.appendChild(el('span', 'wb-led-chip')).textContent = chip
