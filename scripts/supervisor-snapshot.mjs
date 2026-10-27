@@ -355,6 +355,17 @@ function collectHopBudget() {
   return rows
 }
 
+// ── S26（评审席建议·PR#78 落地面）：wb-names.ts 零 innerHTML（textContent-only 注入防线）──
+function collectNameInjectionGuard() {
+  const rows = []
+  try {
+    const src = readFileSync(join(REPO, 'nexus-stage/src/stage-name.ts'), 'utf8')
+    const hasInner = /innerHTML/.test(src)
+    rows.push({ name: 'stage-name-no-innerhtml', ok: hasInner ? 0 : 1, detail: hasInner ? 'innerHTML 在场=注入面' : '零 innerHTML（textContent-only·名字=对端可控数据的注入防线）' })
+  } catch (e) { rows.push({ name: 'stage-name-no-innerhtml', ok: 0, detail: String(e).slice(0, 60) }) }
+  return rows
+}
+
 function collectOwnerSignalUi() {
   // 遍历 nexus-stage 源码聚合文本（UI 字符串锚）
   const agg = (dir) => {
@@ -401,6 +412,7 @@ const TABLES = {
   index_m1: collectIndexM1,
   src_module_cap: collectSrcModuleCap,
   hop_budget: collectHopBudget,
+  name_injection_guard: collectNameInjectionGuard,
 }
 
 mkdirSync(join(REPO, 'tmp/supervisor'), { recursive: true })
