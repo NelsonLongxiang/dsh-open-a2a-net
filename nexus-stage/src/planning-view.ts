@@ -724,6 +724,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       ev.preventDefault()
       return
     }
+    if (target !== null && target.closest('button, input, textarea, select, .p-toolbar, .p-search, .p-lamp, .p-status, .p-legend') !== null) return // HUD chrome owns its presses (no marquee / preventDefault: that stole the search box's focus — and, first, its native right-click menu)
     const p = localXY(ev)
     // 右键按下：按住拖动 = 平移（Figma 惯例），原地抬起 = 上下文菜单。
     // Pan actually starts on the first move beyond RIGHT_DRAG_THRESHOLD px;
@@ -734,7 +735,6 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       try { root.setPointerCapture(ev.pointerId ?? 0) } catch { /* jsdom */ }
       return
     }
-    if (target !== null && (target.closest('button') !== null || target.closest('.p-lamp') !== null || target.closest('.p-status') !== null)) return
     const nodeEl = target !== null ? target.closest<HTMLElement>('.p-node') : null
     const headEl = target !== null ? target.closest<HTMLElement>('.p-frame-head') : null
     if ((nodeEl !== null || headEl !== null) && ev.button === 1) {
@@ -1098,7 +1098,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   root.addEventListener('keyup', (ev) => keyUp(ev as unknown as SeamKey), signal)
   root.addEventListener('contextmenu', (ev) => {
     const e = ev as unknown as SeamPointer
-    e.preventDefault()
+    if ((e.target as Element | null)?.closest?.('input, textarea, .p-search') != null) return // text fields keep the native menu (paste)
     // Right-drag pans (suppressNextMenu); a clean right-click opens the
     // menu programmatically at pointerup. Either way the native menu dies.
     e.preventDefault()
