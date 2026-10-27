@@ -43,6 +43,7 @@ import { FRAME_HUES } from './tokens'
 import { createPlanningMenus } from './planning-menus'
 import { createNodeFlyer, mountBoardSearch } from './planning-search'
 import { applyBoardRelayout } from './planning-relayout'
+import { settleBoard, tidyMembers } from './planning-overlap'
 import { createNodeList } from './planning-nodelist'
 import { cardText } from './planning-card-text'
 import { viewportBucket, type PlanningDeps, type PlanningInput, type PlanningSession, type PlanningTeam, type PlanningView, type SeamKey, type SeamPointer, type ViewportBucket } from './planning-types'
@@ -82,6 +83,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   let renderedRevision = -1
   /** Until the first reconcile with nodes (or an adopted viewport), frame the content once. */
   let firstFitPending = true
+  let settledOnce = false
   let viewportAdopted = false
   const bucket = (): ViewportBucket => viewportBucket(globalThis.innerWidth || viewW)
   const markDirty = (): void => {
@@ -285,31 +287,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
    * — the same persistence path a hand drag takes.
    */
   function tidyTeamMembers(): void {
-    const PAD = 28
-    const GAP_X = 16
-    const GAP_Y = 14
-    for (const [name, rect] of model.allFrames()) {
-      const members = model.teamMemberIds(name)
-      const sole = members
-        .map(id => model.getNode(id))
-        .filter((n): n is NonNullable<typeof n> => n !== undefined)
-        .filter(n => n.memberships.length === 1)
-      if (sole.length === 0) continue // empty frame / only shared members: untouched
-      const perRow = Math.max(1, Math.floor((rect.w - 2 * PAD + GAP_X) / (NODE_W + GAP_X)))
-      const rows = Math.ceil(sole.length / perRow)
-      const needed = PAD * 2 + rows * NODE_H + (rows - 1) * GAP_Y
-      if (needed > rect.h) {
-        model.setFrame(name, { ...rect, h: Math.min(needed, rect.h + 400) })
-      }
-      const startX = rect.x + PAD + NODE_W / 2
-      let y = rect.y + PAD + NODE_H / 2
-      sole.forEach((n, i) => {
-        const col = i % perRow
-        if (i > 0 && col === 0) y += NODE_H + GAP_Y
-        const x = startX + col * (NODE_W + GAP_X)
-        model.dragNodes([n.id], x - n.x, y - n.y)
-      })
-    }
+    tidyMembers(model) // gh#48 grid (planning-overlap); then nothing may overlap
+    settleBoard(model, new Set(remoteFramesRef.keys()))
     markDirty()
     render()
   }
@@ -323,6 +302,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
    */
   function relayoutBoard(): void {
     if (!applyBoardRelayout(model, new Set(remoteFramesRef.keys()))) return
+    settleBoard(model, new Set(remoteFramesRef.keys())) // vs remote frames + stray cards
     markDirty()
     render()
   }
@@ -940,10 +920,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       for (const el of frameEls.values()) el.classList.remove('drop-target')
       gesture.el?.classList.remove('dragging')
       render()
-    } else if (gesture.kind === 'frame') {
-      if (gesture.moved) markDirty()
-    } else if (gesture.kind === 'frame-resize') {
-      if (gesture.moved) markDirty() // the resized rect persists with the layout
+    } else if (gesture.kind === 'frame' || gesture.kind === 'frame-resize') {
+      // The frame stays where it was put; neighbours and stray cards yield (planning-overlap).
+      if (gesture.moved) { settleBoard(model, new Set(remoteFramesRef.keys()), gesture.name); markDirty(); render() }
     } else if (gesture.kind === 'pan') {
       if (gesture.moved) markDirty() // the viewport persists with the layout
     } else if (gesture.kind === 'marquee') {
@@ -1400,6 +1379,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // opened empty. Fit once, the first time there is something to frame.
     // Not marked dirty — nothing the user arranged changed; a saved layout
     // (adopted at any point) keeps its own viewport and cancels this.
+    // Once per load, a board that arrives overlapped is shown settled (not
+    // saved: no write without a user action; the next edit persists it).
+    if (!settledOnce && gesture.kind === 'none' && model.nodeIds().length > 0) { settledOnce = true; settleBoard(model, new Set(remoteFramesRef.keys())) }
     if (firstFitPending && gesture.kind === 'none' && model.nodeIds().length > 0) {
       syncViewSize()
       if (viewW > 0 && viewH > 0) {
