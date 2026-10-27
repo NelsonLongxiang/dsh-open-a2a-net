@@ -237,4 +237,14 @@ describe('federation overlay DOM', () => {
     const bars = legend.querySelectorAll('i')
     expect(bars.length).toBeGreaterThanOrEqual(4)
   })
+
+  it('the legend is a fold, closed by default, so it covers no content (review 2026-10-27)', () => {
+    const { v } = view()
+    const legend = v.root.querySelector<HTMLDetailsElement>('details.p-legend')!
+    expect(legend.open).toBe(false)
+    expect(legend.querySelector('summary')!.textContent).toBe('图例')
+    legend.open = true
+    legend.dispatchEvent(new Event('toggle'))
+    expect(legend.querySelectorAll('.p-legend-rows > span').length).toBe(4)
+  })
 })

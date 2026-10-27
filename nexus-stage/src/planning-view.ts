@@ -45,6 +45,7 @@ import { createNodeFlyer, mountBoardSearch } from './planning-search'
 import { applyBoardRelayout } from './planning-relayout'
 import { createNodeList } from './planning-nodelist'
 import { cardText } from './planning-card-text'
+import { createLegend } from './planning-legend'
 import { viewportBucket, type PlanningDeps, type PlanningInput, type PlanningSession, type PlanningTeam, type PlanningView, type SeamKey, type SeamPointer, type ViewportBucket } from './planning-types'
 import './planning.css'
 
@@ -234,20 +235,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flyToFederation() }
   }, signal)
 
-  const legend = document.createElement('div')
-  legend.className = 'p-legend'
-  const legendRow = (dashed: boolean, text: string, color?: string): void => {
-    const row = document.createElement('span')
-    const bar = document.createElement('i')
-    if (dashed) bar.className = 'dashed'
-    if (color !== undefined) bar.style.borderTopColor = color
-    row.append(bar, document.createTextNode(text))
-    legend.appendChild(row)
-  }
-  legendRow(false, '成员边（星形，框→成员）')
-  legendRow(true, '跨队多属（虚线）')
-  legendRow(false, '活动边（inFlight 路由，瞬时）', 'var(--accent)')
-  legendRow(true, '联邦线（→peer）', 'var(--federal)')
+  // Edge key: a closed-by-default fold (planning-legend), not a fixed panel.
+  const legend = createLegend()
 
   const noticeStack = document.createElement('div')
   noticeStack.className = 'p-notice-stack'

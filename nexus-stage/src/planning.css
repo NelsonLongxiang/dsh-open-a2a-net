@@ -161,8 +161,11 @@
 #dsh-plan .ok{color:var(--edge-live)} #dsh-plan .warn{color:var(--uupm-warn)} #dsh-plan .mut{color:var(--ink-muted)}
 
 #dsh-plan .p-legend{position:absolute; bottom:16px; left:16px; z-index:3; font-size:11px; color:var(--ink-muted);
-  background:var(--toolbar-bg); border:1px solid var(--card-line); border-radius:8px; padding:8px 12px;
-  display:grid; gap:4px}
+  background:var(--toolbar-bg); border:1px solid var(--card-line); border-radius:8px; padding:4px 10px}
+#dsh-plan .p-legend summary{cursor:pointer; padding:2px 0; user-select:none}
+#dsh-plan .p-legend summary:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+#dsh-plan .p-legend[open]{padding-bottom:8px}
+#dsh-plan .p-legend-rows{display:grid; gap:4px; margin-top:4px}
 #dsh-plan .p-legend i{display:inline-block; width:18px; border-top:2px solid var(--uupm-edge-member);
   vertical-align:middle; margin-right:6px}
 #dsh-plan .p-legend i.dashed{border-top-style:dashed}

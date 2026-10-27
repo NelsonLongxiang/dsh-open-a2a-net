@@ -4,7 +4,7 @@
  * fit floors its scale and anchors the content's top-left corner.
  */
 import { describe, expect, it } from 'vitest'
-import { fitView, NARROW_FIT_FLOOR } from '../src/viewport.ts'
+import { fitView, NARROW_FIT_FLOOR, WIDE_FIT_FLOOR } from '../src/viewport.ts'
 
 const board = { minX: 0, minY: 0, maxX: 1200, maxY: 900 }
 
@@ -27,5 +27,15 @@ describe('fitView narrow floor', () => {
     const small = { minX: 0, minY: 0, maxX: 300, maxY: 200 }
     expect(fitView(small, 375, 700).scale).toBeCloseTo(0.9 * 375 / 300, 5)
     expect(fitView(board, 375, 700, 0.5).scale).toBe(0.5)
+  })
+
+  it('a wide viewport floors at 60% too (a real 66-card board fitted to 30%) and anchors the top-left corner', () => {
+    const huge = { minX: 0, minY: 0, maxX: 6000, maxY: 4000 }
+    const vp = fitView(huge, 1500, 800)
+    expect(vp.scale).toBe(WIDE_FIT_FLOOR)
+    expect((huge.minX - vp.x) * vp.scale).toBeCloseTo(16, 5)
+    expect((huge.minY - vp.y) * vp.scale).toBeCloseTo(16, 5)
+    // Between the floor and 100% the fit stays centred.
+    expect(fitView({ minX: 0, minY: 0, maxX: 2000, maxY: 1000 }, 1500, 800).scale).toBeCloseTo(0.675, 5)
   })
 })
