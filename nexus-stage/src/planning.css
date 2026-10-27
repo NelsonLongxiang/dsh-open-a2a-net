@@ -145,6 +145,8 @@
 #dsh-plan .p-toolbar button:active{background:var(--uupm-wash-15)}
 #dsh-plan .p-toolbar button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
 #dsh-plan .p-zoom{min-width:44px; text-align:center; font-size:11px; color:var(--ink-muted)}
+/* Toolbar groups (view | arrange | network): a hairline between them. */
+#dsh-plan .p-sep{align-self:stretch; width:1px; margin:2px 4px; background:var(--card-line)}
 #dsh-plan .p-lamp{display:flex; align-items:center; gap:6px; font-size:11px; color:var(--ink-muted); padding:0 6px}
 #dsh-plan .p-lamp i{width:7px; height:7px; border-radius:50%; background:var(--ink-muted); transition:background 140ms ease}
 #dsh-plan .p-lamp.saved i{background:var(--edge-live)}
@@ -178,6 +180,7 @@
   #dsh-plan .p-toolbar{position:relative; top:auto; left:auto; margin:8px 8px 0; flex-wrap:wrap; row-gap:6px}
   #dsh-plan .p-toolbar > *{flex:none}
   #dsh-plan .p-toolbar .p-search{order:-1; flex:1 1 100%}
+  #dsh-plan .p-toolbar .p-sep{display:none}
   #dsh-plan .p-toolbar .p-search-input{width:100%; box-sizing:border-box}
   #dsh-plan .p-status{position:relative; top:auto; right:auto; left:auto; width:fit-content; margin:6px 8px 0; padding:6px 10px; gap:10px; flex-wrap:wrap}
   #dsh-plan .p-legend{display:none}

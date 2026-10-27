@@ -116,8 +116,11 @@ export function createPlanningSearch(opts: { onPick: (id: string) => void }): Pl
   const input = document.createElement('input')
   input.type = 'search'
   input.className = 'p-search-input'
-  input.placeholder = '🔍 搜索名字/句柄/宿主（Ctrl+K）'
-  input.setAttribute('aria-label', '搜索画板节点')
+  // Short enough to read whole in the 170px box (review 2026-10-27); the
+  // full scope rides the tooltip and the accessible name.
+  input.placeholder = '🔍 搜索（Ctrl+K）'
+  input.title = '搜索名字 / 句柄 / 宿主（Ctrl+K 聚焦，Esc 清空）'
+  input.setAttribute('aria-label', '搜索画板节点：名字、句柄或宿主')
   const list = document.createElement('div')
   list.className = 'p-search-list'
   let rows: ReadonlyArray<SearchHit> = []

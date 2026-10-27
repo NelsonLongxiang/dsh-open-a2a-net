@@ -155,11 +155,15 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     b.addEventListener('click', onClick, signal)
     return b
   }
+  // Review 2026-10-27: the toolbar reads as three groups — view | arrange |
+  // network — split by separators; every action stays one click (owner orders).
+  const sep = (): HTMLElement => { const s = document.createElement('span'); s.className = 'p-sep'; s.setAttribute('role', 'separator'); s.setAttribute('aria-orientation', 'vertical'); return s }
   toolbar.append(
     mkButton('适配', '适配视图（快捷键 0）', () => fitToContent()),
     mkButton('－', '缩小', () => zoomCenter(1 / 1.2)),
     zoomLabel,
     mkButton('＋', '放大', () => zoomCenter(1.2)),
+    sep(),
     mkButton('建队', '组成团队（G）：先框选至少 2 个节点', () => menus.startCreateFromSelection()),
     // gh#48 (owner order, review-seat spec): one-click tidy — inside every
     // team frame, the members that belong to EXACTLY that one team re-seat
@@ -183,7 +187,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   const netBtn = mkButton('未入网', '未入网会话（点击选择入网）', () => menus.toggleNetMenu())
   netBtn.className = 'p-netbtn'
   netBtn.setAttribute('aria-haspopup', 'menu')
-  toolbar.appendChild(netBtn)
+  toolbar.append(sep(), netBtn)
   const search = mountBoardSearch(toolbar, model, displayName, id => flyToNode(id))
   // Node list (network-membership-display): the canvas shows teamed nodes
   // only; every other session — teamless joined, unjoined, and each peer's

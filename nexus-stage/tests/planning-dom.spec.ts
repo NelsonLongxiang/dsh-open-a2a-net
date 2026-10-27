@@ -241,6 +241,17 @@ describe('planning view DOM', () => {
     expect(buttons.some(b => b.textContent === '整理成员')).toBe(true)
   })
 
+  it('toolbar reads as three groups split by separators; every action stays a one-click button (review 2026-10-27)', () => {
+    const { v } = view()
+    const bar = v.root.querySelector<HTMLElement>('.p-toolbar')!
+    const seq = [...bar.children].map(c => c.classList.contains('p-sep') ? '|' : (c as HTMLElement).tagName === 'BUTTON' ? c.textContent : null).filter(x => x !== null)
+    expect(seq.slice(0, 10)).toEqual(['适配', '－', '＋', '|', '建队', '整理成员', '一键重排', '|', '未入网', '节点'])
+    for (const s of bar.querySelectorAll('.p-sep')) expect(s.getAttribute('role')).toBe('separator')
+    const box = bar.querySelector<HTMLInputElement>('.p-search-input')!
+    expect(box.placeholder).toBe('🔍 搜索（Ctrl+K）')
+    expect(box.title).toContain('名字 / 句柄 / 宿主')
+  })
+
   it('attacker-shaped labels land as text, never as markup', () => {
     const { v } = view()
     const evil = '<img src=x onerror=alert(1)>'
