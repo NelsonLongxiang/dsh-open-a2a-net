@@ -318,6 +318,22 @@ function collectRoadmapAnchors() {
   return rows
 }
 
+// ── S24（#77 属主终裁·R-mod）：src/ 除 index.ts 外任一 .ts ≤1200 行（只降不升·S23 族）──
+function collectSrcModuleCap() {
+  const rows = []
+  try {
+    let max = 0, maxFile = ''
+    for (const name of readdirSync(join(REPO, 'src'))) {
+      if (!name.endsWith('.ts') || name === 'index.ts') continue
+      const raw = readFileSync(join(REPO, 'src', name), 'utf8')
+      const n = raw.endsWith('\n') ? raw.split('\n').length - 1 : raw.split('\n').length
+      if (n > max) { max = n; maxFile = name }
+    }
+    rows.push({ name: 'src-module-cap-1200', ok: max <= 1200 ? 1 : 0, detail: 'max=' + maxFile + ' ' + max + '行 ≤1200（R-mod·只降不升）' })
+  } catch (e) { rows.push({ name: 'src-module-cap-1200', ok: 0, detail: String(e).slice(0, 60) }) }
+  return rows
+}
+
 function collectOwnerSignalUi() {
   // 遍历 nexus-stage 源码聚合文本（UI 字符串锚）
   const agg = (dir) => {
@@ -362,6 +378,7 @@ const TABLES = {
   board_hardening: collectBoardHardening,
   roadmap_anchors: collectRoadmapAnchors,
   index_m1: collectIndexM1,
+  src_module_cap: collectSrcModuleCap,
 }
 
 mkdirSync(join(REPO, 'tmp/supervisor'), { recursive: true })
