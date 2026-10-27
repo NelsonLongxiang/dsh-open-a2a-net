@@ -17,14 +17,24 @@ polling `a2a_teams` cannot see another host's ledger.
 
 ## The ledger
 
-`__dsh_a2a/state` → `tasks`:
+`__dsh_a2a/state` splits the ledger into separate fields:
 
-- **pending** — routed, receipt still owed. An owed task with a delivered
-  marker is waiting on the target's turn, not lost.
-- **stale/dead** — past the stale TTL, auto-dead-lettered. A dead task that
-  actually completed at the peer is a reconciliation candidate, not a rerun.
-- **archived** — settled with a correlated receipt. The archive is bounded
-  (oldest-first eviction).
+- **`tasks`** — pending rows: routed, receipt still owed. An owed task with a
+  delivered marker is waiting on the target's turn, not lost. Each row
+  carries `settleable` (young, expected and answerable).
+- **`tasksStaleCount`** — how many pending rows are past the one-hour
+  settleable window or expect no receipt: conversational tail, not debt.
+- **`tasksDead`** — past the stale TTL (`taskStaleTtlMs`, 24h), auto-dead-
+  lettered, with `reason` and `direction` when known. A dead task that
+  actually completed at the peer is a reconciliation candidate, not a rerun;
+  a late receipt still settles it.
+- **`archived`** — rows that left the ledger, newest 64, newest first. Each
+  has `outcome` and `endedBy`: `receipt` (a correlated receipt), `echo`,
+  `abandoned` or `cancelled` (the caller ended it through
+  `/__dsh_a2a/tasks/abandon` or `/tasks/cancel`). `late: true` marks a
+  receipt that arrived after the caller ended the row; `direction` appears
+  when known. `archivedCount` and `archivedSplit` (count per outcome) cover
+  the whole archive.
 
 ## Idempotency
 

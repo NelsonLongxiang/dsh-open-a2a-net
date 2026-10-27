@@ -24,7 +24,8 @@
   the host that receives it; a team on another host answers "No live DSH
   session node accepts team". `a2a_route` resolves peers and forwards;
   direct callers (the CLI included) must target their home host's teams.
-- A sync route's 15s transport budget is shorter than most model turns. For
+- A sync route to a remote peer rides a 15s transport budget (a target on
+  this host gets 180s) — both are shorter than many model turns. For
   anything that runs long, prefer `async: true` and the receipt contract.
 
 ## Names and prefixes

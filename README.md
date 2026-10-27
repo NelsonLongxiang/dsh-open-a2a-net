@@ -35,7 +35,8 @@ shared tool runtime.
 
 ## What you get
 
-- **Model tools** — `a2a_teams` lists the teams this node can see (own, peers', joined sessions'); `a2a_route`
+- **Model tools** (ten; see the table below) — `a2a_teams` lists the teams this node can see (its own rows
+  plus peer teams inside the joined-team scope); `a2a_route`
   sends one message to a team, reuses `context_id` to continue a remote conversation, and fails over across
   candidates when a peer is unreachable. `a2a_tasks` reconciles the receipt contract across three tiers: every route that leaves a
   task owed a reply (async delivery, a released wait) stays in the owed book as pending until its
@@ -65,15 +66,40 @@ shared tool runtime.
 
 ## Model tools at a glance
 
+Ten tools. With `teamScopeInfo` on (the default), `a2a_teams`, `a2a_status` and `a2a_probe` answer from
+this host's joined-team scope: `[this host]` rows plus peers serving a team this host's nodes declared.
+`a2a_tasks` (this host's own dispatch ledger) stays unscoped.
+
 | Tool | Answers | Notes |
 | --- | --- | --- |
-| `a2a_teams` | Which teams can I route to? | Own, peers', and joined sessions' teams, with activity excerpts. |
+| `a2a_whoami` | Who am I on this network? | The calling session's node id, joined/live state, routable handle, roster + canvas memberships, the owner's `teamJoinAllowlist`, the `teamScopeRouting` switch, and recent refused join/leave attempts. |
+| `a2a_teams` | Which teams can I route to? | `[this host]` rows plus in-scope peer teams, with activity excerpts. |
 | `a2a_route` | Send a message to a team. | `context_id` continues a conversation; `async: true` delivers without waiting; fails over across candidates. |
 | `a2a_tasks` | Which async tasks still owe a receipt? | Three tiers: owed rows keep the follow-up `context_id`; past-TTL rows auto-dead-letter (still settleable); outcomes land in the bounded archive; persisted across restarts. |
-| `a2a_probe` | Is the fleet healthy? | One verified-card fetch per peer (or one given url); `N reachable, M down`; misses classified `unreachable` vs `rejected`. |
-| `a2a_team_join` | Declare one joined node a member of a team. | Allowlist-gated (`teamJoinAllowlist`: exact names or trailing-`*` prefixes; empty list denies every join); refusals carry guidance; attempts land in the state face's `registry.teamAudit`. |
+| `a2a_probe` | Is the fleet healthy? | One verified-card fetch per in-scope peer (or one given url); `N reachable, M down`; misses classified `unreachable` vs `rejected`. |
+| `a2a_team_join` | Declare one joined node a member of a team. | Allowlist-gated: only an **exact** name in `teamJoinAllowlist` authorizes a join (empty list denies every join). A wildcard/prefix entry is shown by `a2a_whoami` but authorizes nothing (`[PATTERN_NO_MINT]`); canvas teams are assigned in the workbench, never here (`[CANVAS_TEAM]`). Attempts land in the state face's `registry.teamAudit`. |
 | `a2a_team_leave` | Retract a team membership. | Always allowed — leaving only shrinks exposure. |
-| `a2a_status` | What is this node doing right now? | Tracked peers with quality scores, in-flight routes, recent routing activity, and the idempotency window aggregate (occupancy + claim/replay/conflict counters). |
+| `a2a_exposure` | How visible is this session? | Sets the session's own tier: `linked` (the default floor) or `fleet` (a voluntary opt-up); a group's visibility follows its strictest member. Requires a joined session. |
+| `a2a_report` | Tell this host's supervision something while off the network. | The one ingress exempt from the join gate: one-way, lands in the state face's reports ring, grants no presence or routing. One report per 30s per session, ≤4000 chars, identical text 3× in 10 min is refused as a loop. |
+| `a2a_status` | What is this node doing right now? | In-scope tracked peers with quality scores, in-flight routes, recent routing activity, and the idempotency window aggregate (occupancy + claim/replay/conflict counters). |
+
+## a2a-net CLI (callers outside a session)
+
+The package also ships a command, `a2a-net` (`bin` → `cli/a2a.mjs`, 0.6.27+), for scripts, terminals
+and other agent harnesses that are not a DSH session. It creates its own Ed25519 identity
+(`<name>/<16 hex>`), deposits a signed card on one home host for up to 4h (`publish`; an expired deposit
+stays listed as an offline row until re-published), and receives into a mailbox on that host (64
+entries kept) instead of being woken:
+
+```sh
+a2a-net init review-seat --home http://127.0.0.1:3080   # identity + home host
+A2A_KEY=... a2a-net publish                              # deposit (key-gated host)
+a2a-net route dsh/1a2b3c4d "status?"                     # async by default; --sync waits for the reply
+a2a-net inbox --new                                      # unread mail; --wait blocks, --hook feeds a Claude Code hook
+```
+
+It delivers only to teams on its home host (direct delivery never relays). Commands, flags, environment
+variables and exit codes: [`src/skill/references/cli.md`](src/skill/references/cli.md).
 
 ## Canvas teams (arbitrary grouping, v0.5.25)
 
@@ -82,9 +108,14 @@ A canvas team is a user-composed, named, multi-member routing group: **one atomi
 - Storage: `<dsh-home>/a2a/canvas.json` (ordered team entries; caps: 64 teams × 32 members)
 - Control API: `POST /__dsh_a2a/canvas` with `action: create | remove | add-member | remove-member`
 - Membership requires a joined session (live node or remembered intent) — no routing backdoor over unjoined sessions; leaving the network (leave/archive) drops every canvas membership
-- `a2a_teams` lists canvas teams as local rows with member/live counts; `/__dsh_a2a/state` serves per-member `joined`/`live` flags
+- A member may also be a **remote** zone-qualified team handle (`zone/a1b2c3d4`) the operator adds by hand — the link that admits that remote caller here and entitles it to the full card
+- `a2a_teams` lists canvas teams as local rows with member/live counts; `/__dsh_a2a/state` serves per-member `joined`/`live` flags for local members and `{ id, team, remote: true }` for remote ones
 
-## Native-teams bridge (node unification, P1)
+## Native-teams bridge (node unification, P1) — deprecated
+
+> **Deprecated.** `@nelsonlongxiang/dsh-native-teams` is deprecated. The bridge code still ships
+> (`src/teams-bridge.ts`; `nativeTeamsInbound` defaults to `false`), kept for existing deployments;
+> new deployments should not rely on it. The section below describes it as it stands.
 
 Two half-bridges to `@nelsonlongxiang/dsh-native-teams` (structural contract mirror: `src/teams-bridge.ts`; the frozen contract lives in that package's `src/a2a-face.ts`):
 
@@ -112,7 +143,23 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | `wakeJoinedOnBoot` | `false` | Prewarm cold joined sessions' agents after mount (needs the session controller wake face; wake-on-route and the sidebar wake button stay available without it). The prewarm is deferred, foreground-yielding, and cancellable — it never blocks the boot window (see the two knobs below). |
 | `wakePrewarmDelayMs` | `10000` | Idle delay between loader settlement and the first prewarm wake; `0` restores fire-at-settle. |
 | `wakePrewarmQuietMs` | `5000` | Foreground quiet window: a wake/route demand (or any outbound route in flight) inside this window postpones the next prewarm step; `0` disables the yield. |
-| `cardTtlMs` / `flushTimeoutMs` / `routeTimeoutMs` | see schema | Card lifetime and route timing budgets. |
+| `wakeBootStaggerMs` | `3000` | Pause between serial boot-prewarm wakes (caps log-decode saturation after a restart; wake-on-route never waits on it). |
+| `wakeReconcile` | `true` | Continuous desired-state reconciliation: each tick re-derives the cold joined intents due and wakes one per pass (post-boot drift, failed wakes, late gateways). Tuned by `wakeReconcileIntervalMs` (`60000`), `wakeReconcileBackoffBaseMs` (`5000`) and `wakeReconcileMaxBackoffMs` (`600000`). |
+| `teamJoinAllowlist` | `[]` | Teams `a2a_team_join` may declare: **exact names only** (a `*`/prefix entry authorizes nothing). Empty denies every join. The owner can also edit it from the workbench owner panel (`/__dsh_a2a/owner-settings`). |
+| `teamScopeRouting` | `true` | S3 admission: routing checks caller↔target shared team membership; a session with no declared team has no network. `false` restores the open outbound seam. |
+| `teamScopeInfo` | `true` | S5 information-plane scope for `a2a_teams` / `a2a_status` / `a2a_probe` (see the tools section). `false` restores fleet-wide disclosure. |
+| `peerAllowlist` | `[]` | Non-empty: a referral is admitted only when its host matches an entry (exact `host[:port]`, bare domain suffix, or full URL). Seeds are never filtered. |
+| `referralLearning` | `true` | `false` freezes the tracked set to the configured seeds: referrals are neither learned nor offered. |
+| `referralTeamResolution` | `false` | gh#8: team names resolve over seeds + delegates only; `true` restores the legacy whole-store basis (referral-learned peers included). |
+| `exposureExcerpt` | `'full'` | How much of a session's activity excerpt the card publishes: `full`, `masked` (shape-only prefix) or `off`. Titles and handles stay. |
+| `originClaimWindow` | `true` | OriginClaim transition window: deliveries without an envelope still walk the caller gate (counted as `legacyInbound`); `false` rejects them like failed signatures. |
+| `originClaimUrl` | `''` | Override for the envelope's `callerUrl` (pocket-tunneled hosts); `''` derives it. |
+| `gateAgentLessCalls` | `'audit'` | Host-side (agent-less) routing calls: audit them, or `refuse`. |
+| `asyncNudgeDelayMs` | `120000` | Delay before a delivered-but-unconsumed async route re-wakes its target with a one-line nudge; `0` disables. |
+| `taskStaleTtlMs` | `86400000` | Owed-task stale TTL (24h): past it a pending row auto-dead-letters (a late receipt can still settle it). |
+| `dshHome` | `''` | DSH home directory override for the plugin's state (`<home>/a2a/…`); `''` resolves the default home. |
+| `cardTtlMs` / `flushTimeoutMs` / `routeTimeoutMs` | see schema | Card lifetime (48h) and route timing budgets. |
+| `cardCacheTtlMs` / `cardCacheNegativeTtlMs` / `remoteRowsTtlMs` / `stateColdRowsTtlMs` | `60000` / `30000` / `15000` / `5000` | Peer card cache (hit / miss), remote session rows refresh window, and cold-row refresh window of the state face. |
 
 Example — one announcing node with a seed:
 
@@ -126,7 +173,7 @@ Example — one announcing node with a seed:
 
 ## Leave semantics (bounded staleness)
 
-`leave` is a per-session, per-host gesture: it removes the join intent locally and unmounts the node. There is **no network-wide revocation broadcast** — peer directories keep publishing the team until their card TTL expires, and inbound deliveries during that window fail honestly (the host no longer resolves the team). Remote targets that already implemented the receipt contract are unaffected. A formal revocation-broadcast protocol is tracked in upstream note `2026-08-27-a2a-leave-no-revocation-broadcast.md` (proposed).
+`leave` is a per-session, per-host gesture: it removes the join intent locally and unmounts the node. There is **no network-wide revocation broadcast** — peers keep listing the team until their cached copy of this node's card refreshes (`cardCacheTtlMs`, 60s by default — `sessionTeams` is an unsigned serve-fresh field, so the card's own 48h TTL does not hold it), and inbound deliveries during that window fail honestly (the host no longer resolves the team). Remote targets that already implemented the receipt contract are unaffected. A formal revocation-broadcast protocol is tracked in upstream note `2026-08-27-a2a-leave-no-revocation-broadcast.md` (proposed).
 
 ## Trust model
 
@@ -134,9 +181,28 @@ Cards are Ed25519-signed and expire; `peers` referrals, `sessionTeams` listings,
 are unsigned and read fresh — the last two exist so operators can audit which build every fleet node actually runs
 without visiting each host. A referral URL whose own fetch just proved it serves this node's card is remembered,
 and re-offers of it within a suppression window are ignored instead of flickering in and out of the peer store.
-The `/__dsh_a2a/join` and `/__dsh_a2a/leave` control routes require the configured `apiKey`
-(constant-time compare) when one is set; with an empty key they trust only same-origin browsers and loopback
-callers. Set an `apiKey` before exposing the listener beyond loopback.
+Every `/__dsh_a2a/*` control route — reads included — requires the configured `apiKey` (`X-API-Key`,
+constant-time compare) when one is set. With an empty key only a loopback socket is trusted; a
+`Sec-Fetch-Site` header can only refuse (a cross-site page is rejected even on loopback), never grant.
+Set an `apiKey` before exposing the listener beyond loopback.
+
+| Control route | Purpose |
+| --- | --- |
+| `GET /__dsh_a2a/state` | The state face the panel and workbench poll (sessions, canvas, peers, remote rows, activity, ledger). |
+| `POST /__dsh_a2a/join` · `/leave` | Join or leave one session node. |
+| `/__dsh_a2a/canvas` · `/canvas-layout` | Canvas teams (create/remove/add-member/remove-member) and the board layout. |
+| `/__dsh_a2a/groups` | Manual session grouping — deprecated since 0.6.6 (canvas teams supersede it), kept for old panels. |
+| `POST /__dsh_a2a/dispatch` | Workbench quick dispatch into a team. |
+| `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | Settle an owed task from the caller side (cancel also steers a stop notice to a live local target); the row lands in `archived[]`. |
+| `/__dsh_a2a/session-log` · `/remote-session-log` | Session log reads for the workbench. |
+| `/__dsh_a2a/owner-settings` | The owner panel: read (GET) or write (POST) `teamJoinAllowlist`, `teamScopeInfo` and `announce` into the home patch layer (the first two apply immediately; `announce` on the next restart). |
+| `/__dsh_a2a/fleet-canvas-op` | Relay a canvas operation to a peer's `/a2a/canvas-op`, stamped with this node's OriginClaim; the peer's link gate decides. |
+| `/__dsh_a2a/cli-deposit` | Deposit, list, revoke and mailbox reads for `a2a-net` CLI identities. |
+
+The state face's ledger: `tasks` (pending, each with `settleable`), `tasksStaleCount`, `tasksDead` (with
+`direction` when known), and `archived` — the newest 64 settled rows, newest first, each with `outcome`,
+`endedBy` (`receipt` | `echo` | `abandoned` | `cancelled`), `late: true` when a receipt arrived after the
+caller ended it, and `direction` when known — plus `archivedCount` and `archivedSplit` (count per outcome).
 
 ## Stages (visualization surfaces)
 
@@ -212,8 +278,13 @@ Implement your own signed card, `GET /.well-known/agent-card.json`, and
 `POST /a2a/direct`. The wire shapes these modules encode are the contract.
 Anonymous card fetches get the minimal discovery face. The full card needs a
 verified OriginClaim envelope (`X-A2A-Caller` / `-Url` / `-Ts` / `-Sig`,
-signed with your own card key); see `docs/protocol/delivery-origin-auth.md`
-and the rest of `docs/protocol/` for the envelope details.
+signed with your own card key) **and** a link to the serving host: your card
+URL shares its origin, your handle is one of its joined session handles, its
+operator added your exact handle as a canvas remote member, or both operators
+seeded each other (its `peers` names your origin and your card's `peers` names
+its origin). A verified but unlinked caller still gets the minimal card. See
+`docs/protocol/delivery-origin-auth.md` and the rest of `docs/protocol/` for
+the envelope details.
 
 **Which artifact to build against.** npm direct install already includes the
 four subpaths: releases from 0.6.25 (badge `latest`) carry them, so

@@ -24,12 +24,42 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 
 ## 你能得到什么
 
-- **模型工具** —— `a2a_teams` 列出本节点可见的团队（自有、peers 的、已加入会话的）；`a2a_route` 向一个团队发送消息，用 `context_id` 继续远端会话，peer 不可达时在候选间故障切换。
-- **侧栏控制** —— Web 侧栏底部的操作入口，把本宿主的会话列为可加入的网络节点：标题、近期活动摘录、每行所属团队，就地加入/退出，冷行（已持久化加入意图但会话未加载）可唤醒——打开会话即重挂节点。会话团队名为 `<team>/<id8>`；Web 会话取 id 前 8 位，导入会话（`import-<uuid>`）保留 `import-` 前缀加 uuid 前 8 位十六进制，避免导入 id 塌缩成少数几个团队。
+- **模型工具**（共十个，见下表）—— `a2a_teams` 列出本节点可见的团队（本机行，加上已加入团队作用域内的 peer 团队）；`a2a_route` 向一个团队发送消息，用 `context_id` 继续远端会话，peer 不可达时在候选间故障切换。`a2a_tasks` 按三层对账回执契约：每个让任务欠回复的路由（异步投递、已释放的等待）都以 pending 留在欠账本里，直到其 `[A2A receipt] task <task_id>` 消息关联上——超过 stale TTL 的逾期行自动转死信（复活的目标仍可用迟到回执结清），每次结清都落入有界归档而不是被静默淘汰，每行保留续聊用的 `context_id`，跨重启持久化。`a2a_probe` 测量受跟踪舰队的可达性与往返延迟（每个 peer 一次验签取卡，可收窄到单个 url），供派单前健康检查，并标明每次失败的阶段——`unreachable`（传输/HTTP）或 `rejected`（卡片不可信）。
+- **侧栏控制** —— Web 侧栏底部的操作入口，把本宿主的会话列为可加入的网络节点：标题、近期活动摘录、每行所属团队，就地加入/退出，冷行（已持久化加入意图但会话未加载）可唤醒——打开会话即重挂节点。会话团队名为 `<team>/<id8>`；Web 会话取 id 前 8 位，导入会话（`import-<uuid>`）保留 `import-` 前缀加 uuid 前 8 位十六进制，避免导入 id 塌缩成少数几个团队。面板的活动区还列出欠回执——已投递但尚未被其 `[A2A receipt]` 消息关联的异步任务——与在途等待并列，跨轮等待无需询问模型即可看见。
 - **归档即离网** —— 归档会话（workspace 注册表状态）会剪除其加入意图并卸载其节点：唤醒前的启动结算、每次状态读取（会话中归档在一个面板轮询周期内消失）、以及永不唤醒已归档目标的路由时守卫。
 - **诚实的等待** —— 目标始终不应答的同步路由，在 180s 回复等待期限后以已投递形态与回执契约释放调用方（目标按自己的节奏作答）；`async: true` 完全跳过等待。网络面板对超过 120s 的在途行降亮度标记为过期等待而非暗示活跃进度，标题带包版本徽标。
 - **A2A 工作台** —— `/__dsh_a2a_nexus/` 全页 DOM 工作台（0.6.0 取代 Three.js 3D 观测；0.6.2 合并：规划板即主舞台，目录/台账/活动/规划乘可折叠侧栏，响应式三档——窄屏侧栏变抽屉、详情变底部浮层；canvas 面掉线时面板自动回落主区）：目录（本机现场/冷启动、canvas 队、peers、远端节点）、台账（待回执/死信+就地清账）、活动环、规划（衍生行动清单+催办/派单起草）、空间规划板（canvas 队组建/成员编排/网络加入退出，布局持久化，`?mode=plan` 直达）。
 - **通告** —— `announce: true` 发布本节点卡片（团队、能力、引荐、已加入会话团队），peers 无需任何目录即可发现它。
+
+## 模型工具一览
+
+共十个工具。`teamScopeInfo` 开启时（默认），`a2a_teams`、`a2a_status`、`a2a_probe` 只在本宿主的已加入团队作用域内作答：`[this host]` 本机行，加上服务于本宿主节点所声明团队的 peers。`a2a_tasks`（本宿主自己的派单账本）不受作用域限制。
+
+| 工具 | 回答什么 | 说明 |
+| --- | --- | --- |
+| `a2a_whoami` | 我在网络里是谁？ | 调用会话的节点 id、加入/在线状态、可路由句柄、roster + canvas 成员关系、属主的 `teamJoinAllowlist`、`teamScopeRouting` 开关，以及最近被拒的加入/退出尝试。 |
+| `a2a_teams` | 我能路由到哪些团队？ | `[this host]` 本机行加上作用域内的 peer 团队，带活动摘录。 |
+| `a2a_route` | 向一个团队发消息。 | `context_id` 续聊；`async: true` 投递不等待；在候选间故障切换。 |
+| `a2a_tasks` | 哪些异步任务还欠回执？ | 三层：欠账行保留续聊 `context_id`；过 TTL 的行自动转死信（仍可结清）；结局落入有界归档；跨重启持久化。 |
+| `a2a_probe` | 舰队健康吗？ | 每个作用域内 peer 一次验签取卡（或指定一个 url）；`N reachable, M down`；失败分为 `unreachable` 与 `rejected`。 |
+| `a2a_team_join` | 把一个已加入节点声明为某团队成员。 | 白名单门禁：只有 `teamJoinAllowlist` 里的**精确名**才授权加入（空列表拒绝一切加入）。通配/前缀条目会在 `a2a_whoami` 里显示，但不授权任何加入（`[PATTERN_NO_MINT]`）；画布队伍在工作台分配，从不经此工具（`[CANVAS_TEAM]`）。尝试记录进状态面的 `registry.teamAudit`。 |
+| `a2a_team_leave` | 撤回一个团队成员关系。 | 总是允许——退出只会缩小暴露面。 |
+| `a2a_exposure` | 本会话有多可见？ | 设置会话自己的暴露档：`linked`（默认下限）或 `fleet`（自愿上调）；组的可见性取最严成员。需会话已加入网络。 |
+| `a2a_report` | 不在网时向本宿主监督面报告。 | 唯一不受加入门约束的入口：单向，落入状态面的 reports 环，不授予在场或路由权。每会话 30s 一次、≤4000 字，同文 10 分钟内 3 次按循环拒绝。 |
+| `a2a_status` | 本节点此刻在做什么？ | 作用域内受跟踪 peers 及质量分、在途路由、近期路由活动，以及幂等窗口汇总（占用 + claim/replay/conflict 计数）。 |
+
+## a2a-net CLI（会话之外的调用方）
+
+本包还附带一个命令 `a2a-net`（`bin` → `cli/a2a.mjs`，0.6.27+），供脚本、终端和其他 agent 工具链这类非 DSH 会话的调用方使用。它生成自己的 Ed25519 身份（`<name>/<16 位十六进制>`），把签名卡片寄存到一台 home 宿主上，最长 4 小时（`publish`；过期的寄存以离线行保留，重新 publish 即恢复），并在该宿主上用信箱收件（保留 64 条），而不是被唤醒：
+
+```sh
+a2a-net init review-seat --home http://127.0.0.1:3080   # 身份 + home 宿主
+A2A_KEY=... a2a-net publish                              # 寄存（有密钥的宿主）
+a2a-net route dsh/1a2b3c4d "status?"                     # 默认异步；--sync 等待回复
+a2a-net inbox --new                                      # 未读来信；--wait 阻塞等待，--hook 供 Claude Code hook 使用
+```
+
+它只能投递到 home 宿主上的团队（直连投递不转发）。命令、参数、环境变量与退出码见 [`src/skill/references/cli.md`](src/skill/references/cli.md)。
 
 ## 画布队伍（任意组队，v0.5.25）
 
@@ -38,9 +68,12 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 - 存储：`<dsh-home>/a2a/canvas.json`（有序队伍条目；上限：64 队 × 32 成员）
 - 控制 API：`POST /__dsh_a2a/canvas`，`action: create | remove | add-member | remove-member`
 - 成员必须是 joined 会话（活节点或已记意图）——未加入会话没有路由后门；退出网络（leave/archive）自动清空全部画布成员关系
-- `a2a_teams` 以本地行列出画布队伍（含成员数/活数）；`/__dsh_a2a/state` 提供每成员 `joined`/`live` 标记
+- 成员也可以是操作者手工加入的**远端**带 zone 团队句柄（`zone/a1b2c3d4`）——这就是让该远端调用方在本机获准入、并有权拿完整卡片的链接
+- `a2a_teams` 以本地行列出画布队伍（含成员数/活数）；`/__dsh_a2a/state` 对本地成员提供 `joined`/`live` 标记，对远端成员提供 `{ id, team, remote: true }`
 
-## Native-teams 桥（节点统一，P1）
+## Native-teams 桥（节点统一，P1）——已弃用
+
+> **已弃用。** `@nelsonlongxiang/dsh-native-teams` 已弃用。桥接代码仍随包发布（`src/teams-bridge.ts`；`nativeTeamsInbound` 默认 `false`），仅为既有部署保留；新部署不应依赖它。下文按其现状描述。
 
 通往 `@nelsonlongxiang/dsh-native-teams` 的两条半桥（结构契约镜像：`src/teams-bridge.ts`；冻结契约原文在该包 `src/a2a-face.ts`）：
 
@@ -68,7 +101,23 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 | `wakeJoinedOnBoot` | `false` | 挂载后预热冷加入会话的 agent（需要 session controller 唤醒面；无它时路由唤醒与侧栏唤醒按钮仍可用）。预热是延迟启动、前台让路、可取消的——不会阻塞启动窗口（见下方两个参数）。 |
 | `wakePrewarmDelayMs` | `10000` | loader 树就绪到第一次预热唤醒之间的空闲延迟；`0` 恢复就绪即唤醒的旧行为。 |
 | `wakePrewarmQuietMs` | `5000` | 前台静默窗口：窗口内有唤醒/路由需求（或有出站路由在途）则推迟下一步预热；`0` 关闭让路。 |
-| `cardTtlMs` / `flushTimeoutMs` / `routeTimeoutMs` | 见 schema | 卡片生命周期与路由时序预算。 |
+| `wakeBootStaggerMs` | `3000` | 启动预热串行唤醒之间的停顿（压住重启后的日志解码饱和；路由唤醒不排此队）。 |
+| `wakeReconcile` | `true` | 持续的期望态对账：每个 tick 重新推导到期的冷加入意图，每轮唤醒一个（覆盖启动后漂移、唤醒失败、晚挂载的网关）。由 `wakeReconcileIntervalMs`（`60000`）、`wakeReconcileBackoffBaseMs`（`5000`）、`wakeReconcileMaxBackoffMs`（`600000`）调节。 |
+| `teamJoinAllowlist` | `[]` | `a2a_team_join` 可声明的团队：**只认精确名**（`*`/前缀条目不授权任何加入）。空列表拒绝一切加入。属主也可在工作台属主面板（`/__dsh_a2a/owner-settings`）编辑。 |
+| `teamScopeRouting` | `true` | S3 准入：路由检查调用方与目标是否共享团队；未声明任何团队的会话没有网络。`false` 恢复开放出站缝。 |
+| `teamScopeInfo` | `true` | S5 信息面作用域，作用于 `a2a_teams` / `a2a_status` / `a2a_probe`（见工具一览）。`false` 恢复全舰队披露。 |
+| `peerAllowlist` | `[]` | 非空时，引荐只有在主机匹配某条目时才被接纳（精确 `host[:port]`、裸域名后缀或完整 URL）。种子从不过滤。 |
+| `referralLearning` | `true` | `false` 把跟踪集冻结为配置的种子：既不学习也不提供引荐。 |
+| `referralTeamResolution` | `false` | gh#8：团队名只在种子 + 委托上解析；`true` 恢复旧的全 store 基础（含引荐学到的 peers）。 |
+| `exposureExcerpt` | `'full'` | 卡片发布会话活动摘录的程度：`full`、`masked`（仅形状前缀）或 `off`。标题与句柄始终保留。 |
+| `originClaimWindow` | `true` | OriginClaim 过渡窗口：不带信封的投递仍走调用方门（计入 `legacyInbound`）；`false` 则按验签失败拒绝。 |
+| `originClaimUrl` | `''` | 信封 `callerUrl` 的覆盖值（pocket 隧道宿主用）；`''` 自动推导。 |
+| `gateAgentLessCalls` | `'audit'` | 宿主侧（无 agent）路由调用：审计，或 `refuse` 拒绝。 |
+| `asyncNudgeDelayMs` | `120000` | 已投递但未被消费的异步路由，在此延迟后用一行催办重新唤醒目标；`0` 关闭。 |
+| `taskStaleTtlMs` | `86400000` | 欠账任务的 stale TTL（24h）：过期后 pending 行自动转死信（迟到回执仍可结清）。 |
+| `dshHome` | `''` | 插件状态所用的 DSH home 目录覆盖（`<home>/a2a/…`）；`''` 解析默认 home。 |
+| `cardTtlMs` / `flushTimeoutMs` / `routeTimeoutMs` | 见 schema | 卡片生命周期（48h）与路由时序预算。 |
+| `cardCacheTtlMs` / `cardCacheNegativeTtlMs` / `remoteRowsTtlMs` / `stateColdRowsTtlMs` | `60000` / `30000` / `15000` / `5000` | peer 卡片缓存（命中/未命中）、远端会话行刷新窗口、状态面冷行刷新窗口。 |
 
 示例——一个带种子的通告节点：
 
@@ -80,9 +129,34 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
     peers: ['http://127.0.0.1:41243']
 ```
 
+## 退出语义（有界的陈旧期）
+
+`leave` 是按会话、按宿主的动作：在本地移除加入意图并卸载节点。**没有全网撤销广播**——peers 会继续列出该团队，直到它们缓存的本节点卡片刷新（`cardCacheTtlMs`，默认 60s；`sessionTeams` 是未签名的现读字段，不受卡片自身 48h TTL 约束），这段时间内的入站投递会诚实失败（宿主已不再解析该团队）。已实现回执契约的远端目标不受影响。正式的撤销广播协议记录在上游笔记 `2026-08-27-a2a-leave-no-revocation-broadcast.md`（提案）。
+
 ## 信任模型
 
-卡片经 Ed25519 签名且会过期；卡片上的 `peers` 引荐与 `sessionTeams` 列表未签名、每次现读。`/__dsh_a2a/join` 与 `/__dsh_a2a/leave` 控制路由在配置了 `apiKey` 时要求之（常数时间比较）；密钥为空时仅信任同源浏览器与 loopback 调用方。把监听器暴露到 loopback 之外前请先设置 `apiKey`。
+卡片经 Ed25519 签名且会过期；卡片上的 `peers` 引荐、`sessionTeams` 列表、`lanIp` 与 `version` 未签名、每次现读——后两项让运维无需逐台登录即可核对每个舰队节点实际运行的构建。若某引荐 URL 自身的取卡刚证明它提供的就是本节点的卡片，该 URL 会被记住，抑制窗口内再次被引荐时直接忽略，不会在 peer store 里反复闪现。
+
+每个 `/__dsh_a2a/*` 控制路由（读也算）在配置了 `apiKey` 时都要求之（`X-API-Key`，常数时间比较）。密钥为空时只信任 loopback socket；`Sec-Fetch-Site` 头只能否决、不能授权（跨站页面即使在 loopback 上也会被拒）。把监听器暴露到 loopback 之外前请先设置 `apiKey`。
+
+| 控制路由 | 用途 |
+| --- | --- |
+| `GET /__dsh_a2a/state` | 面板与工作台轮询的状态面（会话、画布、peers、远端行、活动、账本）。 |
+| `POST /__dsh_a2a/join` · `/leave` | 加入或退出一个会话节点。 |
+| `/__dsh_a2a/canvas` · `/canvas-layout` | 画布队伍（create/remove/add-member/remove-member）与规划板布局。 |
+| `/__dsh_a2a/groups` | 手工会话分组——自 0.6.6 起弃用（被画布队伍取代），为旧面板保留。 |
+| `POST /__dsh_a2a/dispatch` | 工作台快速派单到一个团队。 |
+| `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | 从调用方一侧结清一个欠账任务（cancel 还会向在线的本地目标转达停止通知）；该行落入 `archived[]`。 |
+| `/__dsh_a2a/session-log` · `/remote-session-log` | 供工作台读取会话日志。 |
+| `/__dsh_a2a/owner-settings` | 属主面板：读取（GET）或写入（POST）`teamJoinAllowlist`、`teamScopeInfo` 与 `announce` 到 home patch 层（前两项即时生效；`announce` 下次重启生效）。 |
+| `/__dsh_a2a/fleet-canvas-op` | 把画布操作中继到某 peer 的 `/a2a/canvas-op`，盖上本节点的 OriginClaim；由对端的链接门裁决。 |
+| `/__dsh_a2a/cli-deposit` | `a2a-net` CLI 身份的寄存、列表、撤销与信箱读取。 |
+
+状态面的账本：`tasks`（pending，每行带 `settleable`）、`tasksStaleCount`、`tasksDead`（已知时带 `direction`），以及 `archived`——最新 64 条已结清行，最新在前，每行带 `outcome`、`endedBy`（`receipt` | `echo` | `abandoned` | `cancelled`）、回执在调用方结束之后才到时带 `late: true`、已知时带 `direction`——另有 `archivedCount` 与 `archivedSplit`（按结局计数）。
+
+## 舞台（可视化面）
+
+两个全页舞台与模型工具并列挂载：`/__dsh_a2a_nexus`（A2A 工作台——自 0.6.2 起 2D 空间规划板即舞台，目录/台账/活动/规划面板乘可折叠侧栏，合并为一个响应式外壳；canvas 面掉线时面板回落主区；Three.js 拓扑观测在 0.6.0 退役；`?mode=plan` 仍汇聚到规划板）与 `/__dsh_a2a_canvas`。不带斜杠的挂载路径会 301 重定向到带尾斜杠形式，两种写法都能渲染，外壳的相对资源总在服务树内解析。离线开发时，`nexus-stage/scripts/mockhost.py [port]` 用预置状态服务已构建的舞台；在其上打开 `/?fault=500` 可演练页内故障徽标。新检出的仓库上 `pnpm verify` 无需手工引导：其 `verify:nexus` 步骤会自行安装子包依赖再构建。
 
 ## 协作 SOP（网络实践，v0.1）
 
@@ -123,7 +197,7 @@ import { withinRouteBodyCap } from '@nelsonlongxiang/dsh-open-a2a-net/transport-
 import { A2aClient } from '@nelsonlongxiang/dsh-open-a2a-net/a2a-client'
 ```
 
-外部节点需要自己实现三样东西：签名卡片、`GET /.well-known/agent-card.json` 和 `POST /a2a/direct`，这些模块编码的线上格式就是契约。匿名取卡只能拿到最小发现面。要拿完整卡片，必须带上通过验证的 OriginClaim 信封，即用你自己的卡片密钥签名的 `X-A2A-Caller` / `-Url` / `-Ts` / `-Sig`，细节见 `docs/protocol/delivery-origin-auth.md` 及 `docs/protocol/` 下其余文档。
+外部节点需要自己实现三样东西：签名卡片、`GET /.well-known/agent-card.json` 和 `POST /a2a/direct`，这些模块编码的线上格式就是契约。匿名取卡只能拿到最小发现面。要拿完整卡片，必须带上通过验证的 OriginClaim 信封（即用你自己的卡片密钥签名的 `X-A2A-Caller` / `-Url` / `-Ts` / `-Sig`），**并且**与提供卡片的宿主有链接：你的卡片 URL 与它同源、你的句柄是它的已加入会话句柄之一、它的操作者把你的精确句柄加成了画布远端成员，或双方操作者互相种了对方（它的 `peers` 列有你的源，你卡片的 `peers` 也列有它的源）。验签通过但没有链接的调用方仍只拿到最小卡片。细节见 `docs/protocol/delivery-origin-auth.md` 及 `docs/protocol/` 下其余文档。
 
 **按哪个产物实现。** npm 直装已含四个子路径：自 0.6.25 起（徽章 `latest`）的正式版带齐这批导出，`npm install @nelsonlongxiang/dsh-open-a2a-net` 开箱即用——`examples/external-node/` 有一个可对内嵌 mock peer 跑通全部四个子路径的外部节点参考实现。子路径导出随提交 `9cb3852` 落地；更早的版本（含公开 0.5.15）早于这批导出，也早于上述准入规则和 OriginClaim 信封，从它们引入会报 `ERR_PACKAGE_PATH_NOT_EXPORTED`——历史上的做法（钉提交、`pnpm build`、`npm pack`、依赖 tarball）仅留作 0.6.25 之前部署的历史注：
 

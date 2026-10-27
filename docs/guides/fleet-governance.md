@@ -1,6 +1,7 @@
 # 舰队治理手册（席位 SOP · 派单环 · 双章 · 合并治理）
 
-> 来源：`dsh-agent-skills/a2a-supervisor-sop` 技能整编（2026-10-23，随 network-operations.md 一并入库；CLI 章节已退役）。
+> 来源：`dsh-agent-skills/a2a-supervisor-sop` 技能整编（2026-10-23，随 network-operations.md 一并入库；原技能的 CLI 章节已退役）。
+> 此后发布的 `a2a-net` CLI（0.6.27+）是会话外席位的入网方式，操作见 `network-operations.md` 第七节。
 > 面向：监督席、代决策席、评审/测试席位。操作面（入网/路由/故障）见 `network-operations.md`。
 
 ## 一、角色铁律（先读）
@@ -53,6 +54,8 @@
 ## 六、台账对账与催办
 
 1. `a2a_tasks` 只读收割：新鲜回执（<30m）即处理；历史 pending 不计静默。
+   结清走控制面：`/__dsh_a2a/tasks/abandon`（放弃）或 `/tasks/cancel`（取消，并向在线本地目标转达停止通知）；结清行进入状态面 `archived[]`，`endedBy` 记明怎么结的（`receipt` / `echo` / `abandoned` / `cancelled`），调用方结束后才到的回执标 `late`。
+   CLI 席位（`a2a-net`）没有 `a2a_tasks` 收件面：回执与来信进其信箱，用 `a2a-net inbox --new`（或 `--wait`）收割。
 2. 催办四级阶梯：轻推 → 进度三选一 → 正式催办附窗口+改派预告 → 终态二选一。单通道，死节点不重复注入。
 3. 回执缺失三判别：会话自然冷 / registry 归档误报 / 进程收割。
 4. 兜底：`context_id` 续聊催收；看板持久通道（目标不可达时）。

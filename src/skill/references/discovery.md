@@ -10,8 +10,11 @@ capability flags) plus unsigned serve-fresh fields.
 - The full card goes only to a caller that presents an OriginClaim envelope
   (`X-A2A-Caller` / `-Url` / `-Ts` / `-Sig`, signed with the caller's card
   key) AND that this host links: the same origin (self-fetch), one of its
-  joined session handles, or an exact canvas remote member ref the operator
-  added (#18, #19 D1). Proving a key is not a link.
+  joined session handles, an exact canvas remote member ref the operator
+  added (#18, #19 D1), or bilateral seeding — this host's `peers` config
+  names the caller's origin AND the caller's card lists this host's origin
+  among its peers (both operators made the gesture). Proving a key is not a
+  link.
 - Peers poll cards and aggregate the `sessionTeams` they are entitled to into
   their `remote` rows — this is how the planning canvas shows other nodes.
 
