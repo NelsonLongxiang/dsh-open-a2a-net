@@ -376,6 +376,24 @@ describe('workbench panels', () => {
     expect(cells[0]!.title).toBe('dsh/11111111')
   })
 
+  it('an empty published name falls back to the id; a peer-published name carries a visible 远端 chip (review #72)', () => {
+    const { v } = bench()
+    v.update({ ...state,
+      remote: [{ team: 'dsh-host-ca0c0a8d', name: 'scout-01', origin: 'node 192.168.3.157' }, { team: 'dsh-host-00000000', name: '' }],
+      inFlight: [],
+      activity: [
+        { ts: NOW - 1_000, dir: 'in', team: 'dsh/11111111', peer: 'x', ok: true },
+        { ts: NOW - 2_000, dir: 'in', team: 'dsh-host-ca0c0a8d', peer: 'x', ok: true },
+        { ts: NOW - 3_000, dir: 'in', team: 'dsh-host-00000000', peer: 'x', ok: true },
+      ] })
+    const pane = [...v.root.querySelectorAll('.wb-pane')].find(p => text(p).includes('活动环'))!
+    const cells = [...pane.querySelectorAll<HTMLElement>('.wb-row-team')]
+    // The local scout-01 and the peer that also calls itself scout-01 no longer read alike.
+    expect(cells.map(c => text(c))).toEqual(['scout-01', 'scout-01远端', 'dsh-host-00000000'])
+    expect(cells[1]!.querySelector('.wb-row-remote')).not.toBeNull()
+    expect(cells[0]!.querySelector('.wb-row-remote')).toBeNull()
+  })
+
   it('cold sessions collapse into one action; a repair row names its session; an unknown version shows no badge', () => {
     const { v } = bench()
     const colds = ['c-1', 'c-2', 'c-3', 'c-4'].map((n, i) => ({ id: `session-c${i}`, label: `l${i}`, team: `dsh/c000000${i}`, name: n, live: false, joined: true }))

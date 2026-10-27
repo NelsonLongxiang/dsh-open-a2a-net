@@ -645,20 +645,35 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // ── Activity pane ──
   /** The readable name behind a routing team id — a session, a remote node
    *  or a canvas team on the last state — or undefined when none matches
-   *  (review 2026-10-27: activity and plan rows read bare `dsh/1111…` ids). */
-  function teamName(state: StateBody, team: string): string | undefined {
+   *  (review 2026-10-27: activity and plan rows read bare `dsh/1111…` ids).
+   *  An empty name counts as no match: displayName's `??` keeps '', and a
+   *  peer can publish one. `remote` marks a name the PEER chose — it can
+   *  collide with a local session's, so callers must show where it is from. */
+  function teamName(state: StateBody, team: string): { name: string; remote: boolean } | undefined {
+    const named = (name: string | undefined, remote: boolean) => name !== undefined && name.trim() !== '' ? { name, remote } : undefined
     const s = (state.sessions ?? []).find(r => r.team === team)
-    if (s !== undefined) return displayName(s)
+    if (s !== undefined) return named(displayName(s), false)
     const r = (state.remote ?? []).find(x => x.team === team)
-    if (r !== undefined) return displayName(r)
-    return (state.canvas?.teams ?? []).find(t => t.team === team)?.name
+    if (r !== undefined) return named(displayName(r), true)
+    return named((state.canvas?.teams ?? []).find(t => t.team === team)?.name, false)
   }
-  /** A team cell: the name when known (the id rides the tooltip), else the id. */
+  /** A name for plain text: a peer-published one says it is remote. */
+  function teamLabel(state: StateBody, team: string): string {
+    const n = teamName(state, team)
+    return n === undefined ? team : n.remote ? `${n.name}（远端）` : n.name
+  }
+  /** A team cell: the name when known (the id rides the tooltip), else the
+   *  id; a peer-published name carries a visible 远端 chip. */
   function teamCell(line: HTMLElement, state: StateBody, team: string): void {
     const cell = line.appendChild(el('span', 'wb-row-team'))
-    const name = teamName(state, team)
-    cell.textContent = name ?? team
+    const n = teamName(state, team)
+    cell.textContent = n?.name ?? team
     cell.title = team
+    if (n?.remote === true) {
+      const chip = cell.appendChild(el('span', 'wb-row-remote'))
+      chip.textContent = '远端'
+      chip.title = '名字由对端自行发布'
+    }
   }
 
   function renderActivity(): void {
@@ -722,7 +737,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       const subject = row.brief === undefined || row.brief === '' ? '' : `「${row.brief}」`
       actions.push({
         severity: 'normal',
-        text: `催办 ${row.taskId} → ${teamName(state, row.team) ?? row.team}（等待 ${ageText(row.startedAt, now)} 无回执）${subject}`,
+        text: `催办 ${row.taskId} → ${teamLabel(state, row.team)}（等待 ${ageText(row.startedAt, now)} 无回执）${subject}`,
         brief: `a2a_route 催收回执：task ${row.taskId}（team ${row.team}）${subject === '' ? '' : `原任务「${row.brief}」`}已派发 ${ageText(row.startedAt, now)}，请回报结果或回执。`,
       })
     }
