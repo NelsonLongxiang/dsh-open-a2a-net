@@ -229,6 +229,28 @@ describe('台账 (wb-ledger)', () => {
     expect(text(c.querySelector('.wb-led-to'))).toBe('至 dsh/11111111')
   })
 
+  it('cards name the session behind each team id; a peer-published name carries 远端; unknown ids stay ids', () => {
+    const s: StateBody = {
+      sessions: [{ id: 'session-1', label: 'l1', team: 'dsh/11111111', name: 'scout-01', live: true, joined: true }],
+      remote: [{ team: 'cargo/22222222', name: 'scout-01' }],
+      tasks: [
+        { taskId: 'direct-nm000001', team: 'dsh/11111111', peer: 'local', startedAt: NOW - 60_000, status: 'pending', direction: 'outbound', receiptExpected: true, brief: '发给本机会话' },
+        { taskId: 'direct-nm000002', team: 'dsh/11111111', peer: 'local:cargo/22222222', startedAt: NOW - 60_000, status: 'pending', direction: 'inbound', receiptExpected: true, brief: '对端来的' },
+        { taskId: 'direct-nm000003', team: 'dsh/99999999', peer: 'local', startedAt: NOW - 60_000, status: 'pending', direction: 'outbound', receiptExpected: true, brief: '无名队' },
+      ],
+      tasksDead: [],
+    }
+    const { pane } = render({}, s)
+    const card = (brief: string) => [...pane.querySelectorAll('.wb-led-card')].find(c => text(c).includes(brief))!
+    expect(text(card('发给本机会话').querySelector('.wb-led-team'))).toBe('发往 scout-01')
+    expect(card('发给本机会话').querySelector<HTMLElement>('.wb-led-team')!.title).toBe('dsh/11111111')
+    // The peer that also calls itself scout-01 reads differently from the local one.
+    const inbound = card('对端来的')
+    expect(text(inbound.querySelector('.wb-led-team'))).toBe('来自 scout-01远端')
+    expect(text(inbound.querySelector('.wb-led-to'))).toBe('至 scout-01')
+    expect(text(card('无名队').querySelector('.wb-led-team'))).toBe('发往 dsh/99999999')
+  })
+
   it('the 陈旧 tile counts exactly the stale rows shown, at the server ≥1h boundary (review L3)', () => {
     const s: StateBody = {
       tasks: [

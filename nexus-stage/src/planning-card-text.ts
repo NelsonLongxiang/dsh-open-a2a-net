@@ -18,6 +18,26 @@ import type { WorldNode } from './world'
 
 export interface CardText { readonly title: string; readonly sub: string; readonly tip: string }
 
+/**
+ * A description as one plain line. /state `description` is the session's
+ * recent-activity excerpt — the head of its last reply, newlines folded,
+ * capped at 160 chars — so on a real host it reads `# ✅ 已纠正——…`,
+ * `**全绿**`, `` `direct-…` `` and folded tables (`| 环节 | 结果 | |---|`).
+ * The card keeps the prose: it stops at the first table or code fence and
+ * drops heading, emphasis, code and link markup.
+ */
+export function plainLine(text: string): string {
+  let s = text
+  const stop = s.search(/\|| ```|^```/)
+  if (stop >= 0) s = s.slice(0, stop)
+  return s
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // [text](url) → text
+    .replace(/(^|\s)#{1,6}\s+/g, '$1') // headings
+    .replace(/\*\*|__|`/g, '') // bold, code
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 /** The remote-team summary a peer card carries: score + count + first names. */
 function remoteSummary(rows: ReadonlyArray<RemoteTeamRow>, score: number | undefined): string {
   const names = rows.map(r => r.name !== undefined && r.name !== '' ? r.name : r.team)
@@ -43,7 +63,7 @@ export function cardText(n: WorldNode, remoteRows: ReadonlyArray<RemoteTeamRow>,
   }
   const title = displayName(n)
   const handle = n.team + (n.name !== undefined && n.name !== '' ? ' · ' + n.name : '')
-  const desc = n.description?.trim() ?? ''
+  const desc = plainLine(n.description ?? '')
   // When the title fell back to the team label the handle would repeat it
   // verbatim; then only the suffixes remain.
   const base = desc !== '' ? desc : handle === title ? '' : n.team
