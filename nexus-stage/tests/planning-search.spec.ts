@@ -167,6 +167,20 @@ describe('search box takes focus and typing (review 2026-10-27: it could not be 
     expect(press(v.root.querySelector('.p-toolbar')!).defaultPrevented).toBe(false)
   })
 
+  it('a right-click in the search box keeps the native menu (paste); elsewhere the board menu takes over', () => {
+    const v = bench(INPUT)
+    const box = v.root.querySelector<HTMLInputElement>('.p-search-input')!
+    const down = new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 2, clientX: 10, clientY: 10 })
+    box.dispatchEvent(down)
+    const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 10, clientY: 10 })
+    box.dispatchEvent(menu)
+    expect([down.defaultPrevented, menu.defaultPrevented]).toEqual([false, false])
+    expect(v.root.querySelector('.p-menu')).toBeNull()
+    const onBoard = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 600, clientY: 600 })
+    v.root.dispatchEvent(onBoard)
+    expect(onBoard.defaultPrevented).toBe(true)
+  })
+
   it('a press on empty board still starts a marquee', () => {
     const v = bench(INPUT)
     const ev = new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, clientX: 600, clientY: 600 })
