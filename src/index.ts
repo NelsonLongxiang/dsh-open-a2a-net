@@ -50,6 +50,7 @@ import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedB
 import { formatReceipt, parseReceipt } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
+import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
 import type { Context } from '@deepseek-ai/cordis'
@@ -3113,13 +3114,11 @@ ${message}`
             }
             legacyInboundCount += 1
           }
-
+          if (refuseIfBudgetExhausted(req, res, team, caller, taskId, taskLedger)) return
           // Server-side idempotency (P3/B3): one key, one execution inside
-          // the window. Same key + same payload fingerprint ⇒ replay (409,
-          // -32003, replay:true — the prior attempt stays authoritative);
-          // same key + different payload ⇒ hard conflict (409, -32002).
-          // Checked BEFORE any steering or ledger correlation: a replay must
-          // never re-enter the target session, no matter how it settles.
+          // the window. Same key + same payload ⇒ replay; different payload
+          // ⇒ hard conflict (both 409). A replay must never re-enter the
+          // target session, no matter how it settles.
           const idemFingerprint = peerPayloadFingerprint({ caller, message, noWait, team })
           const idemVerdict = idempotencyStore.claim(taskId, idemFingerprint)
           if (idemVerdict !== 'fresh') {
