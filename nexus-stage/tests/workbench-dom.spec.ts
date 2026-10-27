@@ -366,6 +366,30 @@ describe('workbench panels', () => {
     expect(activityPane.querySelector('.wb-row-dir.is-fail')).not.toBeNull()
   })
 
+  it('activity rows name the session behind a team; the id rides the tooltip, unknown teams stay ids', () => {
+    const { v } = bench()
+    v.update({ ...state, activity: [...(state.activity ?? []), { ts: NOW - 1_000, dir: 'in', team: 'dsh/abcdef00', peer: '192.168.3.157:13080', ok: true }] })
+    const pane = [...v.root.querySelectorAll('.wb-pane')].find(p => text(p).includes('活动环'))!
+    const cells = [...pane.querySelectorAll<HTMLElement>('.wb-row-team')]
+    // in-flight + 3 ring rows
+    expect(cells.map(c => text(c))).toEqual(['scout-01', 'scout-01', 'cold-02', 'dsh/abcdef00'])
+    expect(cells[0]!.title).toBe('dsh/11111111')
+  })
+
+  it('cold sessions collapse into one action; a repair row names its session; an unknown version shows no badge', () => {
+    const { v } = bench()
+    const colds = ['c-1', 'c-2', 'c-3', 'c-4'].map((n, i) => ({ id: `session-c${i}`, label: `l${i}`, team: `dsh/c000000${i}`, name: n, live: false, joined: true }))
+    v.update({ ...state, version: undefined, sessions: [...(state.sessions ?? []), ...colds],
+      reconcile: { state: 'idle', rows: [{ id: 'session-c0', error: 'corrupt log: eof', attempts: 3, needsRepair: true }] } })
+    const pane = [...v.root.querySelectorAll('.wb-pane')].find(p => text(p).includes('待办行动'))!
+    const actions = [...pane.querySelectorAll('.wb-action-text')].map(n => text(n))
+    expect(actions.filter(t => t.startsWith('冷会话'))).toEqual(['冷会话 5 个（cold-02、c-1、c-2 等 5 个）：在 GUI 打开即可唤醒加入面'])
+    expect(actions).toContain('reconcile 需修复：c-1（session-c0） corrupt log: eof')
+    const badge = v.root.querySelector<HTMLElement>('.wb-badge')!
+    expect(badge.hidden).toBe(true)
+    expect(text(badge)).toBe('')
+  })
+
   it('derives plan actions: dead cleanup, stale nudge with copy brief, cold wake, repair flag', () => {
     const { v, copy } = bench()
     v.update(state)
@@ -374,8 +398,10 @@ describe('workbench panels', () => {
     const actions = [...pane.querySelectorAll('.wb-action-text')].map(n => text(n))
     expect(actions.some(t => t.includes('清账 1 条死信'))).toBe(true)
     expect(actions.some(t => t.includes('催办 direct-aaaaaaaa'))).toBe(true)
-    expect(actions.some(t => t.includes('冷会话 cold-02'))).toBe(true)
+    expect(actions.some(t => t.includes('冷会话 1 个（cold-02）'))).toBe(true)
     expect(actions.some(t => t.includes('corrupt log: boom'))).toBe(true)
+    // The nudge names its target.
+    expect(actions.some(t => t.includes('→ scout-01（等待'))).toBe(true)
     const nudge = [...pane.querySelectorAll('button')].find(b => text(b) === '复制催办')!
     nudge.click()
     expect(copy).toHaveBeenCalledTimes(1)
