@@ -327,15 +327,15 @@ function unreadOf(mail, cursor) {
     .sort((a, b) => a.at - b.at)
 }
 
-async function fetchMail(handle) {
+async function fetchMail(handle, { transientOk = false } = {}) {
   const out = await control({ action: 'inbox', handle })
   if (out.ok !== true || !Array.isArray(out.mail)) {
     const message = String(out.error ?? 'no mail list in the reply')
-    // A host restarting answers 405 with an empty body, a proxy 5xx, a
-    // stall 408/429 — transient states that wait like a dropped
-    // connection instead of killing the wait; auth and protocol refusals
-    // still exit.
-    if (/^HTTP (405|408|429|5\d\d)\b/.test(message)) return []
+    // Wait/hook callers tolerate a host restarting (405 with an empty
+    // body, a proxy 5xx, a stall 408/429) the way they tolerate a dropped
+    // connection; one-shot listings still fail loudly, so a broken host
+    // is never reported as an empty mailbox.
+    if (transientOk && /^HTTP (405|408|429|5\d\d)\b/.test(message)) return []
     die(`[inbox] ${message}`)
   }
   return out.mail
@@ -424,7 +424,7 @@ async function cmdInbox() {
       if (has('--renew')) await renewIfExpiring(handle)
       try {
         const cursor = readCursor(handle)
-        const unread = unreadOf(await fetchMail(handle), cursor)
+        const unread = unreadOf(await fetchMail(handle, { transientOk: true }), cursor)
         if (unread.length > 0) {
           printMail(unread)
           if (!has('--peek')) writeCursor(handle, unread, cursor)
