@@ -154,6 +154,12 @@ export interface ArchivedRecord {
   readonly endedBy?: ArchiveEnd
   /** gh#31: which side of the wire the row served, copied from the owed row (absent on rows archived before the field). */
   readonly direction?: 'inbound' | 'outbound'
+  /**
+   * gh#68: copied from the owed row when it awaited no receipt, so a tidied
+   * fire-forget expiry is not read as a send we gave up on. Only `false` is
+   * ever stored; absent means a receipt was owed (or the row predates the field).
+   */
+  readonly receiptExpected?: false
 }
 
 /**
@@ -418,6 +424,7 @@ export class TaskLedger {
         outcome: 'abandoned',
         endedBy: 'abandoned',
         ...(record.direction !== undefined ? { direction: record.direction } : {}),
+        ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
       })
       this.persist()
       return { outcome: 'cleared', taskId, archivedAt: resolvedAt }
@@ -458,6 +465,7 @@ export class TaskLedger {
         outcome: 'abandoned',
         endedBy: 'cancelled',
         ...(record.direction !== undefined ? { direction: record.direction } : {}),
+        ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
       })
       this.persist()
       return {
@@ -508,6 +516,7 @@ export class TaskLedger {
         ...(elapsedMs !== undefined ? { elapsedMs } : {}),
         endedBy: 'receipt',
         ...(record.direction !== undefined ? { direction: record.direction } : {}),
+        ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
       })
       this.persist()
       return {
@@ -588,6 +597,7 @@ export class TaskLedger {
         summary: ECHO_SUMMARY,
         endedBy: 'echo',
         ...(record.direction !== undefined ? { direction: record.direction } : {}),
+        ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
       })
       settled.push(record.taskId)
     }
@@ -647,6 +657,7 @@ export class TaskLedger {
               ...(typeof entry.lateReceiptAt === 'number' && Number.isFinite(entry.lateReceiptAt) ? { lateReceiptAt: entry.lateReceiptAt } : {}),
               ...(typeof entry.endedBy === 'string' && ARCHIVE_ENDS.includes(entry.endedBy) ? { endedBy: entry.endedBy as ArchiveEnd } : {}),
               ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
+              ...(entry.receiptExpected === false ? { receiptExpected: false as const } : {}),
             })
             continue
           }
@@ -690,6 +701,7 @@ export class TaskLedger {
             ...(typeof entry.lateReceiptAt === 'number' && Number.isFinite(entry.lateReceiptAt) ? { lateReceiptAt: entry.lateReceiptAt } : {}),
             ...(typeof entry.endedBy === 'string' && ARCHIVE_ENDS.includes(entry.endedBy) ? { endedBy: entry.endedBy as ArchiveEnd } : {}),
             ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
+            ...(entry.receiptExpected === false ? { receiptExpected: false as const } : {}),
           })
         }
       }

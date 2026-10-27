@@ -967,6 +967,7 @@ describe('a2a plugin decentralized routing (peers)', () => {
       taskId: `direct-arch${String(index).padStart(2, '0')}`, team: 'dsh/agent-1', peer: 'local', startedAt: now - 60_000, resolvedAt: now - index * 1_000,
       ...(index === 0 ? { summary: 'caller-cancelled: stop', outcome: 'abandoned', endedBy: 'cancelled', direction: 'inbound', lateReceiptAt: now } : {}),
       ...(index === 1 ? { summary: 'peer-written receipt text', outcome: 'completed', endedBy: 'receipt', brief: 'ship it' } : {}),
+      ...(index === 3 ? { receiptExpected: false } : {}),
     }))
     writeFileSync(join(home, 'a2a', 'tasks.json'), JSON.stringify({
       tasks: [
@@ -1008,6 +1009,9 @@ describe('a2a plugin decentralized routing (peers)', () => {
     expect(state.archived?.[1]).toMatchObject({ taskId: 'direct-arch01', endedBy: 'receipt', outcome: 'completed', brief: 'ship it', summary: 'peer-written receipt text' })
     expect(state.archived?.[2]).toMatchObject({ endedBy: 'receipt', outcome: 'unclassified' })
     expect('direction' in (state.archived?.[2] ?? {})).toBe(false)
+    // gh#68: a receiptless row says so after it leaves the ledger; owed rows stay silent.
+    expect(state.archived?.[3]?.receiptExpected).toBe(false)
+    expect('receiptExpected' in (state.archived?.[1] ?? {})).toBe(false)
     await ctx.fiber.dispose()
   })
 
