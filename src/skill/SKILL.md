@@ -1,6 +1,6 @@
 ---
 name: a2a-network
-description: Use when a task needs cross-session or cross-node collaboration over the DSH A2A network — joining and teaming, routing work to remote teams and agents, reconciling receipts and the task ledger, and reading the A2A workbench (/__dsh_a2a_nexus/). Covers admission rules, the receipt contract, and the failure shapes that look like bugs but are contract semantics.
+description: Use when a task needs cross-session or cross-node collaboration over the DSH A2A network — setting it up (install, config, apiKey, peers, canvas links for one host, two peers, or hosts that cannot reach each other), joining and teaming, routing work to remote teams and agents, reconciling receipts and the task ledger, and reading the A2A workbench (/__dsh_a2a_nexus/). Covers admission rules, the receipt contract, and the failure shapes that look like bugs but are contract semantics.
 ---
 
 # DSH A2A Network
@@ -26,6 +26,20 @@ surface on every node.
   command, 0.6.27+): its own Ed25519 key and a handle `<name>/<16 hex>`,
   deposited on ONE home host for up to 4h, with a mailbox instead of a
   wakeable session. See [cli.md](references/cli.md).
+
+## Setting up
+
+Start with [setup.md](references/setup.md). It is a checked path for three
+network shapes:
+- **one host**: install, join the sessions, give them a shared team;
+- **two hosts that reach each other**: one shared `apiKey`, `announce` plus
+  peers seeded both ways, and a canvas team naming both handles;
+- **hosts that cannot reach each other**: host forwarding is not shipped
+  yet (#57), so tunnel or delegate per hop.
+
+The owner does the gestures (install, config, join, allowlist, canvas). The
+agent prepares the exact config and verifies each step with `a2a_whoami`,
+`a2a_probe`, `a2a_teams` and one round with a receipt.
 
 ## Routing (a2a_route)
 
@@ -92,6 +106,7 @@ renders the same data for humans.
 
 ## Details
 
+- [setup.md](references/setup.md) — setup and checks: one host, two peers, beyond direct peers
 - [routing.md](references/routing.md) — receipts, idempotency, ledger anatomy
 - [discovery.md](references/discovery.md) — cards, peer boundary model, invisibility
 - [membership.md](references/membership.md) — join/leave, allowlist, canvas teams
