@@ -1,6 +1,8 @@
 # 网络成员展示与管理设计——组队节点画布 + 单节点列表
 
-> 状态：设计稿（待龙翔批准后进 worktree+PR 实现）
+> **实现状态（2026-10-27，按 ae7e24d / 0.6.28 核对）：已实现。** PR-A（数据面 + 展示：只画组队节点、节点列表抽屉、roster 读取半边）随 37ef7b7（2026-09-01）落地。PR-B 的阶段二（`teamScopeRouting` 默认翻 ON）和入站共享队准入随 655eb83（同日）落地。阶段三的传输层身份（OriginClaim）随 0.6.23 落地（docs/protocol/delivery-origin-auth.md）。§2 里的 `src/index.ts` 行号是 2026-08-31 的取证快照，已全部失效（例如 `collectPeer` 已不存在，`a2aJoinGateRefusal` 现在约在 4716 行）。下文与现状矛盾处以 *[2026-10-27 注]* 标出。
+>
+> 原状态：设计稿（待龙翔批准后进 worktree+PR 实现）
 > 日期：2026-08-31 · 基于 master 2e11b6f（!73–!80 全部合并后）
 > 关联：docs/design/team-roster-model.md（S1–S4）、docs/design/panel-activity-feed.md（面板瘦身）
 
@@ -18,7 +20,7 @@
 | 闸 | 位置 | 管什么 | 现状 |
 |---|---|---|---|
 | Join gate（v0.5.24） | `a2aJoinGateRefusal`（src/index.ts:2890） | 本机**未 joined** 会话禁用全部 a2a 出站工具（initiator 豁免） | ✅ 默认生效 |
-| S3 队伍域路由 | `teamScopeRouting`（src/index.ts:3276） | 开启后：无 roster 队伍的会话 caller = 无网络；路由目标必须在已声明队伍内 | ⚠️ **默认 OFF**，只管出站、只管道具调用方 |
+| S3 队伍域路由 | `teamScopeRouting`（src/index.ts:3276） | 开启后：无 roster 队伍的会话 caller = 无网络；路由目标必须在已声明队伍内 | ⚠️ **默认 OFF**，只管出站、只管道具调用方 *[2026-10-27 注：655eb83 起默认 ON（`teamScopeRouting: true`），并配有入站共享队准入]* |
 | 入站解析 | `/a2a/direct` 派发（src/index.ts:2091–2123） | 按 team 名解析：进程 team / 会话 team / canvas team / native-teams 桥 | ❌ **roster 不参与入站** |
 
 ### 2.2 对龙翔断言的核对结论
@@ -87,8 +89,8 @@
 断言今天不成立（§2.2），使其成立的三步：
 
 - **阶段一（本 PR 范围）**：展示等价 + 明示。未组队节点在列表标记"无网络能力"；`teamScopeRouting` 文档化为 teamed-only 网络的开关。不动默认。
-- **阶段二（独立 PR，需决策）**：`teamScopeRouting` 默认翻 ON（teamed-only 出站）。配套旧节点能力旗标（backlog 已有 P2 卡片"旧节点能力旗标"）——无 roster 面的旧版本节点在目录中标记降级。
-- **阶段三（已落地，gh#7 N3 2026-10-21）**：入站校验——`/a2a/direct` 与 `/a2a/log` 的准入由**本宿记录**裁决（本 zone 裸队=宿面；同 zone 句柄查 roster；外 zone 句柄仅认本宿 operator 手工添加的 canvas 远端成员 ref；自由形态仅认本宿已 join 会话的事实）。caller 的自述（label 拼法、自己卡上的队声明、首触默认）一律不再是准入依据——身份可信化的**传输层**强化（证明发送方是其声称的主机）仍属 docs/protocol/delivery-origin-auth.md 的未落地范围。
+- **阶段二（独立 PR，需决策）**：`teamScopeRouting` 默认翻 ON（teamed-only 出站）。*[2026-10-27 注：已于 655eb83（2026-09-01）落地，默认 ON。]*配套旧节点能力旗标（backlog 已有 P2 卡片"旧节点能力旗标"）——无 roster 面的旧版本节点在目录中标记降级。
+- **阶段三（已落地，gh#7 N3 2026-10-21）**：入站校验——`/a2a/direct` 与 `/a2a/log` 的准入由**本宿记录**裁决（本 zone 裸队=宿面；同 zone 句柄查 roster；外 zone 句柄仅认本宿 operator 手工添加的 canvas 远端成员 ref；自由形态仅认本宿已 join 会话的事实）。caller 的自述（label 拼法、自己卡上的队声明、首触默认）一律不再是准入依据——身份可信化的**传输层**强化（证明发送方是其声称的主机）仍属 docs/protocol/delivery-origin-auth.md 的未落地范围。*[2026-10-27 注：已随 0.6.23 落地（`verifyOriginClaim`）。另外同 zone 的准入现由 `sameZoneSharedTeamRefusal` 裁决：roster 与 canvas 成员取并集，且同时核对目标队（F5）。]*
 
 ### 3.5 管理手势总表（贯通画布与列表）
 

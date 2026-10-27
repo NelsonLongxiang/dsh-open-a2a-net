@@ -1,5 +1,7 @@
 # L3 Quick-Dispatch — 设计与实现记录（0.6.9；0.6.10 裁决更新）
 
+> **实现状态（2026-10-27，按 ae7e24d / 0.6.28 核对）：已实现，有两处后续变化。** 一是无钥时的信任规则：gh#7 N1 之后只信 loopback 套接字，不再认同源，见下文 *[2026-10-27 注]*。二是宿主面 caller：gh#36 之后有活跃的已入网会话时，用它的 `zone/id8` 句柄。派发主干 `routeTrunk`、5s 限速、4000 字上限、`async: true` 均与原文一致。
+
 状态：**已实现**（0.6.9 候选，在 3081 等用户校验，发布闸门不变）。前史：L1/L2 随 0.6.7
 落地（点击即达），0.6.8 把 L2 的 window.open+postMessage 重试改为 `?dsh-a2a-open=<句柄>`
 深链（响应式正确形态）。L3 是第三档：不打开任何会话，从工作台直接把一句话任务派给某个队。
@@ -29,24 +31,25 @@ GUI 开会话）与 L2（深链开对端 GUI）连同接收面一并撤除——
 dispatch 路由的同一套闸与派发序（agent-less 审计 → join gate → teamScopeRouting →
 caller 解析 → 本机派发 → canvas 远端缝 → 目录派发 → routeVerdict）。宿主面
 （agent === undefined）caller label 回落裸节点队——「能发即能收」不变量（0.5.57 修复 #1
-同族）。`async: true` 固定（fire-and-forget 语义），成功即返回 taskId。
+同族）。*[2026-10-27 注：gh#36 起，有活跃（live）的已入网会话时，caller 改用该会话的 `${zone}/${id8}` 句柄，回执路由回该会话，属主能在它的对话抽屉里看到回复；没有活跃会话时才回落裸节点队。]*`async: true` 固定（fire-and-forget 语义），成功即返回 taskId。
 
 ## 四个评审点的裁决（与原提案的差异）
 
 1. **身份与授权**。原提案「apiKey 为空时拒发」**被否**——既有控制面信任模型
    （`controlAuthorized`：apiKey 非空则常时比较 X-API-Key；空则同源或 loopback 放行）
+   *[2026-10-27 注：gh#7 N1 后，key 为空时只信任 loopback 套接字。`Sec-Fetch-Site`/`Origin` 是请求方可伪造的字节，只能用来拒绝跨站请求，不再作为放行依据（`controlTrustedWithoutKey`）。]*
    已覆盖 join/leave/canvas 全部控制路由，dispatch 单独更严只会造成事实上的双标准。
    dispatch 照走 `controlRoute` 包装：与 canvas 同姿态。agent-less 面**有审计**
    （`recordTeamAudit('agent-less', …)`），且 owner 可用 `gateAgentLessCalls:'refuse'`
    一键关停宿主面路由——比 apiKey 拒发更精准（拒的是身份面，不是整个控制面）。
 2. **CSRF 面**。原提案的同源检查**已在既有实现里**（`controlTrustedWithoutKey`：
    Origin 必须等于 `http://<host>`，loopback 客户端豁免）——无需新代码，canvas 路由
-   同样早已受益。apiKey 非空时浏览器须带 X-API-Key（同源页面无钥仍拒）。
+   同样早已受益。*[2026-10-27 注：现实现不读 `Origin`。key 为空时，`Sec-Fetch-Site` 不是 `same-origin`/`none` 的一律拒绝，其余请求也必须来自 loopback 套接字才放行。]*apiKey 非空时浏览器须带 X-API-Key（同源页面无钥仍拒）。
 3. **审计与限速**。限速取简：**同客户端 5s 窗口一条**（`dispatchLastAt`，镜像
    a2a_report 的 reportLastAt 模式）——本面是人类手势，防的是失控页面而非会话循环，
    故未搬 10min 同文熔断。消息上限 4000 字符。账本照常记账（taskId/team/peer），
    活动环照常记录。
-4. **回执语义**。宿主面 caller=裸节点队 → callbackAddress 生效、receiptExpected 正常
+4. **回执语义**。宿主面 caller=裸节点队（*2026-10-27 注：有活跃会话时为其句柄，见上*）→ callbackAddress 生效、receiptExpected 正常
    ——回执可路由回节点队面。原提案「全免回执」作废：0.5.57 修复 #1 之后宿主面
    本就有可路由回宿。
 

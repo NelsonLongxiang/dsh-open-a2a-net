@@ -1,5 +1,15 @@
 # Protocol: Exposure Grants — Composite Declaration Anchors
 
+> **Implementation status (2026-10-27, as of ae7e24d / 0.6.28): not
+> implemented here; superseded for this plugin by the #19 exposure tiers.**
+> No `CompositeAnchor`, `ExposureGrant`, `projection-stale` or
+> `internalFacts` exists in `src/`. The native-teams slice it targeted
+> (`@nelsonlongxiang/dsh-native-teams`) is deprecated. Exposure today is a
+> per-session tier, `linked` (the default floor) or `fleet` (opt-up), set
+> through `a2a_exposure`. A group's visibility is its strictest member's
+> tier (`src/exposure-store.ts`). The text below is kept as the A4 ruling
+> record.
+
 - **Status**: accepted-codification of ROUND-2 ruling A4 (the free addendum promised alongside the chair's ACK-A4-SPLIT-DONE); implementation lands with native-teams slice 2 (0.14.0) against `mount`/`TeamDeclaration`
 - **Owner**: dsh-open-a2a-net (protocol face)
 - **Baselines**: governance-rulings-round2.md §A4 (this repo) · tool-face card v7 design notes (native-teams ledger)

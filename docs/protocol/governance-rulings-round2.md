@@ -1,5 +1,22 @@
 # Protocol Face Ruling Dossier — ROUND-2 Clusters A/C
 
+> **Implementation status (2026-10-27, as of ae7e24d / 0.6.28): archived
+> ruling record, mostly not implemented as written.** The rulings below
+> are kept verbatim; this table records what the code does today.
+>
+> | Item | Status in `src/` |
+> |---|---|
+> | A1 hub/anycast `strategy`, `protoVersion` gate | not implemented (no `strategy` enum, no `protoVersion`) |
+> | A2 group `visibility: public\|private` | not implemented; superseded by the #19 per-session tiers (`linked`/`fleet`; a group takes its strictest member's tier) |
+> | A3 `captain-frozen`, `autoPromoteOnLoss` | not implemented |
+> | A4 composite anchors | not implemented here; see exposure-grants.md (superseded by #19) |
+> | C1 OriginClaim | **implemented 0.6.23** with a different shape: `{caller, callerUrl, ts}`, bare-zone caller, ±5 min window, no nonce; `legacyInbound` is a counter on the state face, not a per-row flag. See delivery-origin-auth.md |
+> | C2 hop guard | not implemented; see recursion-guard.md |
+> | C3 excerpt modes | implemented as `exposureExcerpt: full\|masked\|off` (default `full`); no `internalFacts` surface |
+> | §4.1 abandon / cancel | both implemented as control routes (`/__dsh_a2a/tasks/abandon\|cancel`; `a2a_tasks` only reads); archive summaries are `caller-abandoned…` / `caller-cancelled…` with `endedBy`, not `'cancelled-by-caller'`; a remote cancel is a stop-notice over `/a2a/direct`; no `ignored` late-settlement state (a late receipt stamps `late`) |
+> | §4.2 `resolve()` predicate, probe `thresholds` | not implemented; `a2a_probe` takes only `url` and returns `reachable: boolean` |
+> | §5 `internal-not-routable` | not implemented (no `internalFacts` surface exists) |
+
 - **Status**: submitted for chair adjudication ledger (work-order direct-dc3f67d6 wave, canonical archive of the ROUND-2 submission)
 - **Author**: dsh-open-a2a-net protocol face
 - **Format**: one-line ruling sentence + breaking-change marker per item; acceptance criteria and rationale live in §3 and the sibling protocol documents

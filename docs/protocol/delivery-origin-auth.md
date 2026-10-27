@@ -1,7 +1,16 @@
 # Protocol: Delivery Origin Authentication — Minimal OriginClaim Envelope
 
+> **Implementation status (2026-10-27, as of ae7e24d / 0.6.28): implemented** —
+> shipped in 0.6.23. Code: `verifyOriginClaim` and `callerLinkedToThisHost`
+> in `src/index.ts`; the client stamps the envelope in `src/a2a-client.ts`.
+> Drift from the text below is marked inline as *[2026-10-27 note]*: R1
+> (two cache forms) was superseded by the M2 third-round ruling, the
+> "linked" basis is the three bases of `callerLinkedToThisHost`, and there
+> is no `/a2a/cancel` route. The transition window is still open by default
+> (`originClaimWindow: true`).
+
 - **Status**: **adopted (review-seat R2+gh#10 ruling, 2026-10-21; claims 59038996d0/50162f7aa7)** —
-  v1 shape below as ruled; implementation rides the gh#9+gh#10 release
+  v1 shape below as ruled; implementation rode the gh#9+gh#10 release (0.6.23)
   (same version both sides + one fleet restart window; **no dual-track** —
   never "shape-valid OR signature-valid")
 - **Owner**: dsh-open-a2a-net (protocol face)
@@ -78,6 +87,12 @@ interface OriginClaim {
    card through our own envelope (warm cost: one round trip, cache-warm
    signature) — otherwise a legitimately named caller fails closed on a
    form mismatch that proves nothing.
+   *[2026-10-27 note: superseded by the M2 third-round ruling. The envelope
+   names a bare zone and derivation is the exact match `card.team ===
+   caller`, which the minimal card's signed core already answers. The code
+   fetches the caller card plain, with one URL-keyed card cache and no
+   second cache form and no full-card re-fetch (`verifyOriginClaim`,
+   `src/index.ts`).]*
 2. Verified card ⇒ the envelope signature MUST verify against THAT card's
    `publicKey`, and `claim.caller` must equal `card.team` EXACTLY (bare
    zone; the third-round ruling narrowed the shape — see §2). Mismatch or
@@ -103,6 +118,14 @@ certifies only itself, an unlinked nobody that N3/N9 already gate.
 | envelope absent, window CLOSED | minimal card | **reject `untrusted-origin`** — same code as signature failure (M1) |
 | envelope present, key mismatch / unreachable / rejected card / bad `ts` | **minimal card** | reject `untrusted-origin` |
 | envelope present, verified, caller linked (N3/N9 basis) | full card | accept |
+
+*[2026-10-27 note: "linked" on the card face is `callerLinkedToThisHost`,
+which has three bases: (1) same-host membership, meaning the caller's card
+URL origin equals ours or the caller is one of our joined session handles;
+(2) the caller is an exact remote ref on one of our canvas teams (#19 D1,
+exact handle only); (3) bilateral seeding, meaning our `config.peers`
+seeds the caller's origin and the caller's card lists ours. A verified
+caller with none of these gets the minimal card.]*
 
 No dual-track: a valid SHAPE never substitutes for a valid SIGNATURE
 (ruling: "shape-valid or signature-valid" leaves m1's self-asserted zone
@@ -140,8 +163,12 @@ document's machinery.
    path.
 2. Card face: an anonymous or self-asserted name never reads
    sessionTeams/teamMemberships/lanIp; a verified linked caller always does.
+   *[2026-10-27 note: the minimal face also withholds `canvasOrg` (gh#41).]*
 3. Cancellation (`/a2a/cancel`) and the log face reuse this exact
    verification — no separate auth story.
+   *[2026-10-27 note: no `/a2a/cancel` route exists. A remote cancel is a
+   stop-notice delivered through `/a2a/direct` (`client.routeDirect`), so it
+   rides the direct face's envelope check.]*
 4. Zone walk and discovery tiers are untouched (structural tiers stand
    alone).
 5. One restart window flips the whole fleet (same version both sides);
@@ -155,6 +182,8 @@ document's machinery.
 7. (R1) A minimal-face cache hit during envelope verification re-fetches
    the full card through the caller's own envelope — a legitimately named
    caller is never fail-closed on a cache-form mismatch.
+   *[2026-10-27 note: superseded with R1, see §3.1; there is only one
+   cache form.]*
 
 ## 9. Explicit non-goals
 
@@ -176,6 +205,12 @@ the control face must serve. And on a host that gives sessions a shell
 |---|---|---|---|
 | Peer face (`/a2a/direct`, `/a2a/log`, card GET) | other NODES | card key (held by design) | OriginClaim envelope (this doc) |
 | Control face (`/__dsh_a2a/*` writes) | operator browser + local tools | **apiKey, promoted from optional to the control-plane norm** | header secret; loopback demoted from "authentication" to **explicit leniency for keyless deployments** |
+| Fleet canvas face (`/a2a/canvas-op`, gh#41) | linked peer NODES | card key | OriginClaim envelope **plus** `callerLinkedToThisHost`; unlinked → refused |
+| Outcome query (`/a2a/query`, W7) | peer NODES | none | no envelope: the submit payload's fingerprint match is the authorization; read-only, constant-200 |
+
+*[2026-10-27 note: the last two rows were added to match the code; the
+control face is key-gated on reads too (e.g. GET `/__dsh_a2a/state`), not
+only on writes.]*
 
 Control-face design (gh#9 disposition — **implemented 0.6.23**):
 
@@ -188,6 +223,9 @@ Control-face design (gh#9 disposition — **implemented 0.6.23**):
    into the served workbench shell (same-origin disclosure only; the gh#9
    threat reads it from disk regardless), and every `/__dsh_a2a` fetch the
    shell makes carries the `X-API-Key` header.
+   *[2026-10-27 note (REVIEW M3 fix): the key is injected only when the
+   shell is served on the loopback leniency face; a remote GET of the page
+   gets the shell without the key.]*
 3. The model's own tools never learn the key (not in any tool description,
    state face, or session-visible environment).
 

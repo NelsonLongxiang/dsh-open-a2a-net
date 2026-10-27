@@ -1,5 +1,13 @@
 # Protocol Note: Organizational Fingerprint Aggregation — Residual Risk Criteria
 
+> **Implementation status (2026-10-27, as of ae7e24d / 0.6.28): criteria
+> stand; the §4 knobs shipped under different names.** The excerpt knob is
+> `exposureExcerpt: 'full' | 'masked' | 'off'` (default `full`; #19 D2).
+> `internalFacts`/`publishInternalFacts` and group `visibility:'private'`
+> do not exist. Visibility is a per-session `linked`/`fleet` tier, and a
+> group takes its strictest member's tier (`src/exposure-store.ts`). The
+> knobs table is annotated below.
+
 - **Status**: accepted-as-criteria (work-order P5 / ROUND-2 Cluster C3)
 - **Owner**: dsh-open-a2a-net (protocol face)
 
@@ -36,6 +44,14 @@ future surface changes have a stable rubric to argue against.
 | Group visibility | `visibility:'private'` for governed groups | facts travel in-task, not on durable public cards |
 | Excerpt emission | `excerptMode:'full'` (compatibility) | MUST add `'redacted'`,`'off'` modes; document risk; change does NOT block governance rollout |
 | Handle stability | derived id8 today | rotation hook listed in exposure doc appendix; not blocking |
+
+*[2026-10-27 note — shipped equivalents: excerpt emission is
+`exposureExcerpt` with modes `full` / `masked` / `off` (`masked` plays the
+`'redacted'` role), default `full`. There is no internalFacts publication
+surface, so F1 has nothing to aggregate. Group visibility is not a knob:
+it follows the strictest member tier (`linked` is the default floor;
+`fleet` is a member opt-up via `a2a_exposure`). Handles are still derived
+id8.]*
 
 ## 5. Residual statement
 

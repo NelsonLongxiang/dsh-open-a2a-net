@@ -1,5 +1,11 @@
 # Protocol: Cross-Machine Recursion Guard — Sender-Gossip Hop Accounting
 
+> **Implementation status (2026-10-27, as of ae7e24d / 0.6.28): not
+> implemented.** No `hopBudget`, `visited` payload set, `budget-exhausted`
+> code, `guardMode` or `DEFAULT_HOP_BUDGET` exists in `src/`. The only
+> traversal bound is still the local zone walk (`ZONE_DEPTH_CAP = 5`,
+> `src/zone.ts`), which does not travel with the payload.
+
 - **Status**: proposed (work-order P5 / ROUND-2 Cluster C2)
 - **Owner**: dsh-open-a2a-net (protocol face)
 
