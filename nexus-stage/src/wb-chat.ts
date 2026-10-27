@@ -431,10 +431,15 @@ export function createChatDrawer(deps: ChatDrawerDeps): ChatDrawer {
   function settledStatus(row: ArchivedRow, now: number): SentRow['status'] {
     const when = `结算于 ${ago(row.resolvedAt, now)}`
     // gh#68: a fire-forget send this host moved out of the ledger (移出 on
-    // the 已过期（免回执） card) is bookkeeping, not a failure — it never
-    // waited on a receipt, so 已放弃 would contradict the button that did it.
-    if (row.receiptExpected === false && (row.endedBy === 'abandoned' || row.endedBy === 'cancelled')) {
-      return { text: '已移出（免回执）', tone: 'muted', hint: `${when}；免回执消息，本机移出台账，不是失败` }
+    // the 已过期（免回执） card, an abandon) is bookkeeping, not a failure — it
+    // never waited on a receipt, so 已放弃 would contradict the button that
+    // did it. A cancel stays 已撤回: it is a deliberate recall that also
+    // tells the peer to stop (API / tool path; the workbench offers none).
+    // A receipt that arrives after the move keeps its 回执迟到 flag.
+    if (row.receiptExpected === false && row.endedBy === 'abandoned') {
+      return row.late === true
+        ? { text: '已移出（免回执） · 回执迟到', tone: 'warn', hint: `${when}；免回执消息本机移出后对方回执才到，结局不改写` }
+        : { text: '已移出（免回执）', tone: 'muted', hint: `${when}；免回执消息，本机移出台账，不是失败` }
     }
     if (row.endedBy === 'abandoned' || row.endedBy === 'cancelled') {
       const act = row.endedBy === 'cancelled' ? '撤回' : '放弃'

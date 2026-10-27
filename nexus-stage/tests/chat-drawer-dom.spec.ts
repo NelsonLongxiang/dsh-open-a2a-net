@@ -137,7 +137,11 @@ describe('chat drawer (wb-chat)', () => {
     }
     expect(ended({ receiptExpected: false })).toBe('已移出（免回执）|is-muted')
     expect(q(d.root, '.wb-msg-status').title).toContain('不是失败')
-    expect(ended({ receiptExpected: false, endedBy: 'cancelled' })).toBe('已移出（免回执）|is-muted')
+    // A late receipt after the move is still flagged (review #73).
+    expect(ended({ receiptExpected: false, late: true })).toBe('已移出（免回执） · 回执迟到|is-warn')
+    // A cancel is a deliberate recall that notifies the peer: 已撤回, not 移出 (review #73).
+    expect(ended({ receiptExpected: false, endedBy: 'cancelled' })).toBe('已撤回|is-muted')
+    expect(ended({ receiptExpected: false, endedBy: 'cancelled', late: true })).toBe('已撤回 · 回执迟到|is-warn')
     // A receipt-expected abandon (field absent) still reads 已放弃.
     expect(ended({})).toBe('已放弃|is-muted')
     // A receiptless row the peer answered anyway reads its verdict as before.
