@@ -60,16 +60,30 @@ export function zoomAt(vp: LayoutViewport, factor: number, ax: number, ay: numbe
 /** Content bounds in world space (null = nothing to fit). */
 export interface WorldBounds { readonly minX: number; readonly minY: number; readonly maxX: number; readonly maxY: number }
 
+/** Below this viewport width (the board's phone breakpoint) a fit never
+ *  shrinks past {@link NARROW_FIT_FLOOR}: fitting a whole board into a phone
+ *  drew 13px card names at ~7px. Past the floor the fit anchors the content's
+ *  top-left corner instead of its centre, and the rest is a pan away. */
+export const NARROW_FIT_WIDTH = 680
+export const NARROW_FIT_FLOOR = 0.8
+const NARROW_FIT_MARGIN = 16
+
 /**
  * Fit the content bounds into a viewW x viewH viewport at 90% fill,
  * clamped to the persisted scale envelope; empty bounds reset to identity.
+ * On a narrow viewport the scale is floored (see {@link NARROW_FIT_FLOOR}).
  */
 export function fitView(bounds: WorldBounds | null, viewW: number, viewH: number, maxScale = Number.POSITIVE_INFINITY): LayoutViewport {
   if (bounds === null || viewW <= 0 || viewH <= 0) return IDENTITY_VIEWPORT
   const bw = bounds.maxX - bounds.minX
   const bh = bounds.maxY - bounds.minY
   if (!(bw > 0) || !(bh > 0)) return IDENTITY_VIEWPORT
-  const scale = clampScale(Math.min(maxScale, 0.9 * Math.min(viewW / bw, viewH / bh)))
+  const fitted = Math.min(maxScale, 0.9 * Math.min(viewW / bw, viewH / bh))
+  if (viewW < NARROW_FIT_WIDTH && fitted < NARROW_FIT_FLOOR) {
+    const scale = clampScale(Math.min(maxScale, NARROW_FIT_FLOOR))
+    return { x: bounds.minX - NARROW_FIT_MARGIN / scale, y: bounds.minY - NARROW_FIT_MARGIN / scale, scale }
+  }
+  const scale = clampScale(fitted)
   return {
     x: (bounds.minX + bounds.maxX) / 2 - viewW / (2 * scale),
     y: (bounds.minY + bounds.maxY) / 2 - viewH / (2 * scale),

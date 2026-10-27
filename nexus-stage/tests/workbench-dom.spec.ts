@@ -229,7 +229,7 @@ describe('workbench panels', () => {
       hint: n.getAttribute('title') ?? '',
       tone: n.classList.contains('is-danger') ? 'danger' : n.classList.contains('is-warn') ? 'warn' : '',
     }))
-    expect(tiles.map(c => `${c.label}=${c.value}`)).toEqual(['待回执=2', '陈旧=1', '死信=1', '已归档=12'])
+    expect(tiles.map(c => `${c.label}=${c.value}`)).toEqual(['待回执=1', '陈旧=1', '死信=1', '已归档=12']) // the receiptless row is not owed
     for (const t of tiles) expect(t.hint.length).toBeGreaterThan(10)
     expect(tiles.map(t => t.tone)).toEqual(['', 'warn', 'danger', ''])
     // The archive split is one proportional bar with a labelled legend.
@@ -430,6 +430,30 @@ describe('workbench panels', () => {
     const close = [...chat.querySelectorAll('button')].find(b => text(b) === '✕')!
     close.click()
     expect(v.root.querySelector('.wb-chat')!.classList.contains('is-open')).toBe(false)
+  })
+
+  it('each header pill is a button that opens the tab — and ledger group — behind its count', () => {
+    const { v } = bench()
+    v.update(state)
+    const pill = (t: string) => [...v.root.querySelectorAll<HTMLButtonElement>('.wb-header-stats .wb-alert')].find(p => text(p) === t)!
+    expect(pill('死信 1').tagName).toBe('BUTTON')
+    // Data mode (no board): the panes sit on the stage — the pill scrolls to
+    // the group behind its count.
+    const scrolled: string[] = []
+    // jsdom has no scrollIntoView: stand one in for the test only.
+    const proto = HTMLElement.prototype as unknown as { scrollIntoView?: unknown }
+    proto.scrollIntoView = function (this: HTMLElement) { scrolled.push(this.dataset.group ?? this.className) }
+    try {
+      pill('陈旧 1').click()
+      pill('需修复 1').click()
+    } finally {
+      delete proto.scrollIntoView
+    }
+    expect(scrolled[0]).toBe('陈旧')
+    expect(scrolled[1]).toContain('wb-pane')
+    const groups = [...v.root.querySelectorAll<HTMLElement>('.wb-led-group')].map(g => g.dataset.group)
+    expect(groups).toContain('死信')
+    expect(groups).toContain('陈旧')
   })
 
   it('header carries the verdict: exceptions only, forensics on the ledger', () => {

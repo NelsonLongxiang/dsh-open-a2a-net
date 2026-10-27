@@ -199,6 +199,17 @@ describe('台账 (wb-ledger)', () => {
     expect(text([...pane.querySelectorAll('.wb-led-tile')].find(t => text(t).includes('死信'))!.querySelector('.wb-led-tile-v'))).toBe('0')
     expect(pane.querySelector('.wb-led-card.is-danger')).toBeNull()
     expect(out).toEqual({ badge: '', tone: undefined })
+    // Moving it out is an optional tidy, never 清账.
+    const btn = pane.querySelector('.wb-led-abandon')!
+    expect([text(btn), btn.classList.contains('is-quiet')]).toEqual(['移出', true])
+  })
+
+  it('the 待回执 tile counts exactly the receipt-owed rows the groups show; receiptless ones owe nothing', () => {
+    const { pane } = render()
+    const tileV = text([...pane.querySelectorAll('.wb-led-tile')].find(t => text(t).includes('待回执'))!.querySelector('.wb-led-tile-v'))
+    // fixture: 1 young outbound + 1 inbound expected, 1 receiptless
+    expect(tileV).toBe('2')
+    expect([...pane.querySelectorAll('.wb-led-tile')].find(t => text(t).includes('待回执'))!.getAttribute('title')).toContain('免回执 1 条不计')
   })
 
   it('an inbound dead letter keeps its direction from the peer prefix (review L2)', () => {

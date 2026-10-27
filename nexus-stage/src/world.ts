@@ -153,7 +153,7 @@ export function planSeatClear(sid: string, occupied: ReadonlyArray<{ readonly x:
 }
 
 /** Minimal session row shape the model needs (topology.SessionRow satisfies it). */
-export interface SessionLite { id: string; label: string; team: string; name?: string; joined: boolean; live?: boolean; teams?: readonly string[] }
+export interface SessionLite { id: string; label: string; team: string; name?: string; description?: string; joined: boolean; live?: boolean; teams?: readonly string[] }
 
 /** Minimal team shape (topology.CanvasTeam satisfies it). `team` is the
  * mono route alias `<host>/canvas/<name>` when the payload carries it. */
@@ -172,6 +172,8 @@ export interface WorldNode {
   /** The route alias `<team>/<id8>` the state payload provides. */
   team: string
   name?: string
+  /** What the session is for (/state `description`) — the card's second line. */
+  description?: string
   live: boolean
   /** Peer node (PR D v1 ruling): a remote host entry rendered as a card.
    *  Excluded from local content bounds; canvas memberships allowed since
@@ -338,6 +340,7 @@ export class WorldModel {
     }
     existing.label = n.label
     existing.name = n.name
+    existing.description = n.description
     existing.live = n.live
     existing.memberships = n.memberships
     this.bump()
@@ -479,6 +482,7 @@ export class WorldModel {
         label: s.label,
         team: s.team,
         name: s.name,
+        description: s.description,
         live: s.live !== false,
         memberships: memberships.get(s.id) ?? [],
       })

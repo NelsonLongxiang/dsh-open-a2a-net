@@ -132,3 +132,14 @@ describe('W2 name wrapping — geometry contract', () => {
     expect(el.querySelector<HTMLElement>('.sub')!.textContent).toContain('dsh/aaaa1111')
   })
 })
+
+describe('card second line (review 2026-10-27)', () => {
+  it('a session card shows its description, refreshes it on the next poll, and keeps the handle in the tooltip', () => {
+    const v = bench({ ...INPUT, sessions: [{ ...INPUT.sessions[0]!, description: '整理海外工厂报告' }, INPUT.sessions[1]!] })
+    const el = v.root.querySelector<HTMLElement>('.p-node[data-id="lin"]')!
+    expect(el.querySelector<HTMLElement>('.sub')!.textContent).toBe('整理海外工厂报告')
+    expect(el.title).toContain('dsh/aaaa1111')
+    v.reconcile({ ...INPUT, sessions: [{ ...INPUT.sessions[0]!, description: '复核报价' }, INPUT.sessions[1]!] })
+    expect(el.querySelector<HTMLElement>('.sub')!.textContent).toBe('复核报价')
+  })
+})

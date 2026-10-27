@@ -74,7 +74,7 @@ describe('chat drawer (wb-chat)', () => {
     // without the archive face (pre-gh#31) gives no per-task outcome, so the
     // drawer claims only that it left (review C3, PR #28).
     d.update({ ...baseState, tasks: [{ taskId: 'direct-12345678', team: TEAM, startedAt: NOW - 5_000, status: 'pending', direction: 'outbound', receiptExpected: true }] })
-    expect(statuses(d.root)).toEqual(['待回执 · pending'])
+    expect(statuses(d.root)).toEqual(['待回执'])
     d.update(baseState)
     expect(statuses(d.root)).toEqual(['已离开台账'])
     expect(q(d.root, '.wb-msg-status').title).toContain('放弃或撤回')
@@ -182,7 +182,7 @@ describe('chat drawer (wb-chat)', () => {
     d.open(session)
     const bubbles = [...d.root.querySelectorAll('.wb-chat-sent .wb-msg-text')].map(n => n.textContent)
     expect(bubbles).toEqual(['复核 Q3 选品清单', '（无摘要）'])
-    expect(statuses(d.root)).toEqual(['陈旧 · working', '待回执 · pending'])
+    expect(statuses(d.root)).toEqual(['陈旧 · working', '待回执'])
     expect(q(d.root, '.wb-msg-status').classList.contains('is-warn')).toBe(true)
   })
 
@@ -195,11 +195,26 @@ describe('chat drawer (wb-chat)', () => {
     expect(b.classList.contains('wb-msg-out')).toBe(false)
     expect(q(b, '.wb-msg-who').textContent).toBe('对方')
     expect(q(b, '.wb-msg-text').textContent).toBe('请帮我核一下晨光报价')
-    expect(statuses(d.root)).toEqual(['待本机回执 · pending'])
+    expect(statuses(d.root)).toEqual(['待本机回执'])
     // Once it dead-letters (/state dead rows carry no direction), the learned
     // direction keeps it on their side.
     d.update({ ...baseState, tasksDead: [{ taskId: 'direct-aaaa0001', team: TEAM, startedAt: NOW - 25 * 3_600_000, deadAt: NOW, reason: 'unconsumed', brief: '请帮我核一下晨光报价' }] })
     expect(q(d.root, '.wb-chat-sent .wb-msg').classList.contains('wb-msg-in')).toBe(true)
+  })
+
+  it('past its hour, a receipt we owe reads 超 1 小时, never 陈旧; the boundary is the host’s settleable', () => {
+    const { d } = drawer()
+    const row = { taskId: 'direct-aaaa0002', team: TEAM, peer: 'local:peer/22222222', status: 'pending', direction: 'inbound' as const, receiptExpected: true, brief: '请确认新价格表' }
+    d.update({ ...baseState, tasks: [{ ...row, startedAt: NOW - 2 * 3_600_000, settleable: false }] })
+    d.open(session)
+    expect(statuses(d.root)).toEqual(['待本机回执 · 超 1 小时'])
+    expect(q(d.root, '.wb-msg-status').classList.contains('is-warn')).toBe(true)
+    // A skewed browser clock calls it old; the host still calls it settleable.
+    d.update({ ...baseState, tasks: [{ ...row, startedAt: NOW - 2 * 3_600_000, settleable: true }] })
+    expect(statuses(d.root)).toEqual(['待本机回执'])
+    // Our own send past the hour is the one that is 陈旧.
+    d.update({ ...baseState, tasks: [{ ...row, direction: 'outbound', peer: 'local', startedAt: NOW - 2 * 3_600_000, settleable: false }] })
+    expect(statuses(d.root)).toEqual(['陈旧'])
   })
 
   it('a dead row of unknown direction is a neutral ledger line, never our words', () => {

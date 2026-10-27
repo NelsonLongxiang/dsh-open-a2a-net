@@ -54,7 +54,7 @@ function senderOf(row: { peer?: string }): string | undefined {
  *  settleable verdict (receiptExpected && age < 1h, computed host-side), else
  *  by ours — a workbench opened from another machine with a skewed clock then
  *  still draws the boundary where the server does (at most one poll late). */
-function overHour(r: PendingRow, now: number): boolean {
+export function overHour(r: PendingRow, now: number): boolean {
   return r.settleable !== undefined ? r.settleable === false : now - r.startedAt >= HOUR
 }
 
@@ -155,7 +155,10 @@ export function renderLedger(pane: HTMLElement, ctx: LedgerContext): { badge: st
   const staleCount = facts.stale.length
 
   const tiles = el('div', 'wb-led-tiles')
-  tile(tiles, '待回执', pending.length, '等待回执的任务（pending），含陈旧与免回执行')
+  // 待回执 counts only rows a receipt is owed on — the same rows as the
+  // 陈旧 / 待本机回执 / 等待回执 groups below; receiptless rows are their own
+  // 免回执 group and owe nothing.
+  tile(tiles, '待回执', expected.length, `要回执、仍未结算的任务（含陈旧与本机欠对方的入站行）${receiptless.length > 0 ? `；另有免回执 ${receiptless.length} 条不计` : ''}`)
   tile(tiles, '陈旧', staleCount, '我方派发、要回执、已等待 ≥1h 仍未回执（可催办）；本机欠对方的入站行在「待本机回执」组另计，免回执行不算陈旧', staleCount > 0 ? 'warn' : undefined)
   tile(tiles, '死信', facts.deadLetters.length, '超过 24h TTL 仍未结算（unconsumed）；需清账（abandon）才能移出。免回执到期另列，不算死信', facts.deadLetters.length > 0 ? 'danger' : undefined)
   tile(tiles, '已归档', archived, '已离开台账并留档的任务（结算、拒绝或放弃），用于审计')
@@ -181,10 +184,13 @@ export function renderLedger(pane: HTMLElement, ctx: LedgerContext): { badge: st
     node.title = `${c.taskId}\n${c.team}`
     if (c.dead !== undefined) {
       const row = c.dead
-      const btn = el('button', 'wb-btn wb-led-abandon')
+      // A fire-forget expiry is normal bookkeeping, not a failure: moving it
+      // out is an optional tidy, so it gets a quiet control, not 清账.
+      const expiry = row.reason === 'fire-forget'
+      const btn = el('button', `wb-btn wb-led-abandon${expiry ? ' is-quiet' : ''}`)
       btn.type = 'button'
-      btn.textContent = '清账'
-      btn.title = '从台账移出这条死信（abandon）'
+      btn.textContent = expiry ? '移出' : '清账'
+      btn.title = expiry ? '可选：把这条已过期的免回执记录移出台账（不是失败，不处理也无妨）' : '从台账移出这条死信（abandon）'
       btn.addEventListener('click', ev => {
         ev.stopPropagation()
         btn.disabled = true
@@ -209,6 +215,7 @@ export function renderLedger(pane: HTMLElement, ctx: LedgerContext): { badge: st
   const section = (label: string, rows: number, tone: string, hint: string): HTMLElement | null => {
     if (rows === 0) return null
     const g = el('div', `wb-led-group is-${tone}`)
+    g.dataset.group = label
     const head = el('div', 'wb-led-group-head')
     head.appendChild(el('span')).textContent = `${label} · ${rows}`
     head.appendChild(el('span', 'wb-led-group-hint')).textContent = hint
