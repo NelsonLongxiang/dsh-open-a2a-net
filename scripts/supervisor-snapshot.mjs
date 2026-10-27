@@ -12,15 +12,19 @@
 import { execFileSync } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
 import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync, unlinkSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve, dirname } from 'node:path'
 
-const REPO = 'D:/workspace/dsh-open-a2a-net'
+// Repo root derived from THIS script's location — no machine-specific paths
+// (gh#52 ④): scripts/ lives directly under the repo root.
+const REPO = resolve(import.meta.dirname, '..')
 const RUNS_DIR = join(REPO, 'tmp/supervisor/runs')
 const REPORTS_DIR = join(REPO, 'tmp/ygl-verify/verify/reports')
 const SUPERVISED_TREES = ['v2-roadmap', 'time-capsule']
 const CAMPAIGN_COMMITS = ['f124eee', 'c65416d', '8b8efeb']
-const YGL_BIN = 'D:/workspace/ygl-trees/dist/apps/cli/src/bin.js'
-const GITEE_BIN = 'D:/node-v24.12.0-win-x64/node_modules/@gitee/gitee-cli/bin/index.js'
+// Tool binaries by convention, overridable by env: ygl-trees is the repo's
+// sibling checkout; the Gitea CLI ships in the node installation's modules.
+const YGL_BIN = process.env.YGL_BIN ?? resolve(REPO, '..', 'ygl-trees', 'dist/apps/cli/src/bin.js')
+const GITEE_BIN = process.env.GITEE_BIN ?? resolve(dirname(process.execPath), 'node_modules/@gitee/gitee-cli/bin/index.js')
 const SNAPSHOT_PATH = process.argv.includes('--snapshot')
   ? process.argv[process.argv.indexOf('--snapshot') + 1]
   : join(REPO, 'tmp/supervisor/snapshot.sqlite')

@@ -277,11 +277,19 @@ export interface Config {
   /** Backoff ceiling; corrupt-log rows park as needs-repair and never retry. */
   readonly wakeReconcileMaxBackoffMs: number
   /**
-   * S4: joinable-team patterns for a2a_team_join — exact names or
-   * trailing-`*` prefixes. Empty list denies every join (default).
+   * S4 (gh#11 N7, operator directive: team creation is a human act): the
+   * joinable-team curation list for a2a_team_join. ONLY an EXACT entry
+   * authorizes a join; trailing-`*` pattern entries stay readable here
+   * (whoami shows them) but carry no mint rights — a pattern that
+   * pre-authorized every future name under it would let a model mint teams
+   * nobody created. Empty list denies every join (default).
    */
   readonly teamJoinAllowlist: string[]
-  /** S3 (queued): team-scoped routing admission. Enforcement off by default. */
+  /**
+   * S3 (phase-2 default-ON, owner ruling 2026-09-01): route dispatch checks
+   * caller↔target shared team membership before addressing; set false to
+   * restore the open outbound seam. (Kept in sync with the schema comment.)
+   */
   readonly teamScopeRouting: boolean
   /**
    * S5 (owner directive 2026-10-20): information-plane scoping — the
@@ -392,11 +400,13 @@ export const Config: s<Config> = s.object({
   wakeReconcileBackoffBaseMs: s.number().default(5_000),
   wakeReconcileMaxBackoffMs: s.number().default(600_000),
   /**
-   * S4: the joinable-team curation list. A model calling a2a_team_join may
-   * only declare membership in a team matching one of these patterns — an
-   * exact name or a trailing-`*` prefix (`dsh/canvas/*`). Default empty:
-   * the owner's no-self-join ruling, institutionalized as default-deny;
-   * a refused join carries guidance instead of failing silently.
+   * S4 (gh#11 N7): the joinable-team curation list. A model calling
+   * a2a_team_join may only declare membership in a team with an EXACT
+   * entry here — trailing-`*` patterns are readable but authorize nothing
+   * (no mint rights: a pattern pre-authorizing every future name under it
+   * would let a model mint teams nobody created). Default empty: the
+   * owner's no-self-join ruling, institutionalized as default-deny; a
+   * refused join carries guidance instead of failing silently.
    */
   teamJoinAllowlist: s.array(s.string()).default([]),
   /**
@@ -691,10 +701,10 @@ export function apply(ctx: Context, config: Config): void {
    * @param res - the response for the malformed-body rejection.
    * @param use - receives the parsed body.
    */
-  // Wire code for boundary-refused corrupted text. -32004 is intentionally
-  // left as a reservation gap for the client-abort telemetry family seen in
-  // the wild; this lands at -32005 (cluster-C error-code registry).
-  const WIRE_ERROR_TEXT_CORRUPTED = -32005
+  // Wire code for boundary-refused corrupted text (cluster-C error-code
+  // registry): -32004 belongs to the route verdict, -32005 to the client's
+  // DELIVERED-UNSETTLED family, so the corrupted-text guard owns -32006.
+  const WIRE_ERROR_TEXT_CORRUPTED = -32006
 
   /**
    * Boundary guard for undecodable text (consumed by the readJsonBody
@@ -4790,7 +4800,7 @@ ${message}`
           allowlist: {
             type: 'object',
             additionalProperties: true,
-            description: 'The owner-curated teamJoinAllowlist patterns and their net effect (deny-all / curated / allow-all).',
+            description: 'The owner-curated teamJoinAllowlist: exact entries (the only join authority, gh#11) plus pattern entries kept readable but carrying no mint rights (deny-all / curated; allow-all only via explicit exact entries).',
           },
           teamScopeRouting: { type: 'boolean' },
           note: { type: 'string', description: 'What join does and does not gate, in one sentence.' },

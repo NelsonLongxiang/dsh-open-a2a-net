@@ -81,7 +81,7 @@ async function mount(): Promise<{ port: number; dispose: () => Promise<void> }> 
 }
 
 describe('garbled-text boundary guard', () => {
-  it('canvas create with U+FFFD in the name answers 422/-32005 and stores nothing', async () => {
+  it('canvas create with U+FFFD in the name answers 422/-32006 and stores nothing', async () => {
     const { port, dispose } = await mount()
     try {
       const response = await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/canvas`, {
@@ -91,7 +91,7 @@ describe('garbled-text boundary guard', () => {
       })
       expect(response.status).toBe(422)
       const parsed = await response.json() as { error: string; code: number }
-      expect(parsed.code).toBe(-32005)
+      expect(parsed.code).toBe(-32006)
       expect(parsed.error).toContain('undecodable')
     } finally {
       await dispose()
@@ -127,7 +127,7 @@ describe('garbled-text boundary guard', () => {
       })
       expect(response.status).toBe(422)
       const parsed = await response.json() as { code: number }
-      expect(parsed.code).toBe(-32005)
+      expect(parsed.code).toBe(-32006)
     } finally {
       await dispose()
     }
