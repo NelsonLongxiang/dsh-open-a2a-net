@@ -37,6 +37,7 @@
 
 ## 三、提交 PR 前门禁（强制）
 
+- **本仓（dsh-open-a2a-net）**：门禁是 `pnpm verify`（typecheck → build → test → test:build-layout → verify:nexus）；下两行是其它仓库的工具，本仓不存在。
 - **Windows worktree**：`powershell -ExecutionPolicy Bypass -File scripts/check-core.ps1`（ruff check + format + tsc；加 `-WithPytest` 含测试）。
 - **Linux/CI**：`npm run check` 全量。
 - 实战教训（2026-08-14）：main.ts 悬空残留（bun build 全挂）、unused imports、16 文件 format drift 均因跳过门禁直接合入 main。

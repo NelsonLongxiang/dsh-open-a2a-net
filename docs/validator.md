@@ -1,8 +1,12 @@
 # 发布候选验证器（ygl-trees M13 snapshot 模式）
 
 > 2026-10-20 立项（用户令：为本项目构建一个全面覆盖的验证器）。
-> 复用 [ygl-trees](https://gitee.com/) 0.97.x 的 M13 spec-validator 引擎：
+> 复用 ygl-trees 的 M13 spec-validator 引擎（立项时 0.97.x；0.113+ 起材料须重冻，见下方「引擎迁移注记」）：
 > 材料 → spec（冻结）→ 报告（可重放、无时间函数、fail-closed）。
+>
+> **现行 id 速查（2026-10-27 复核）**：RC 判据 spec 在 0.114 引擎上已重冻为 `spec_2b4fb653a3b2`
+> （下文 `spec_c8b6350c5034` / `spec_bae507ea0520` 为 0.6.14–0.6.17 周期的历史 id，保留作台账）；
+> 监督域 S 层现行 spec 为 `spec_4de5f3b9d48d`（S1–S19，19 单元，见文末）。
 
 ## 架构（三层分工）
 
@@ -28,7 +32,7 @@ ygl-trees verify run              确定性判定（只在快照+提交树上，
 全部由探针先冻结进 snapshot.sqlite，验证器只对冻结数据做 SQL 谓词判定。
 同一份 spec 可以反复重跑新快照（候选期每轮重新 probe → run），判定可重放。
 
-## 覆盖面（baseline 1 = spec_c8b6350c5034，14 单元；1.0 时代 spec_bae507ea0520 同判据）
+## 覆盖面（baseline 1 = spec_c8b6350c5034，14 单元；1.0 时代 spec_bae507ea0520 同判据；0.114 引擎重冻为 spec_2b4fb653a3b2，判据不变）
 
 | 面 | 单元 | 检查 |
 |---|---|---|
@@ -45,10 +49,11 @@ severity：V1–V6=S1（闸门面）V7–V10=S2（运行时）V11–V14=S3（提
 # 1. 采集证据（≈3–6 分钟：四道门禁全真跑 + 3081 探针 + 提交树导出）
 node scripts/verify-probe.mjs
 
-# 2. 判定（YGL_HOME 指向仓库内自包含工作区）
+# 2. 判定（YGL_HOME 指向仓库内自包含工作区；路径按本机替换，下例为开发席 Windows 机）
 export YGL_HOME=D:/workspace/dsh-open-a2a-net/tmp/ygl-verify
 YGL=D:/workspace/ygl-trees/dist/apps/cli/src/bin.js
-node $YGL verify run spec_c8b6350c5034 --db verify/snapshot.sqlite --submission "$(node -p "require('os').tmpdir()")/dsh-a2a-submission" --json
+# 现行 RC spec：spec_2b4fb653a3b2（0.114 引擎重冻；历史周期用 spec_c8b6350c5034）
+node $YGL verify run spec_2b4fb653a3b2 --db verify/snapshot.sqlite --submission "$(node -p "require('os').tmpdir()")/dsh-a2a-submission" --json
 # （submission 路径以 probe 日志行「submission exported: N tracked files -> <path>」为准）
 # overall 在报告 JSON 里；rc=0 只表示「跑完出报告」，FAIL 也是有效结论
 ```
@@ -118,6 +123,10 @@ unit 300/wire 291/nexus 120 全 exit 0、3081 v0.6.17、三闸门 ✓）。
 node scripts/verify-recursive.mjs [--fresh]   # --fresh 先跑探针重采快照再判定
 ```
 
+环境变量（脚本默认值写死开发席 Windows 路径与历史 spec id，换机或换引擎须覆盖）：
+`YGL_BIN`（引擎 bin.js）、`YGL_HOME`（默认仓库 `tmp/ygl-verify`）、`A2A_SPEC_ID`
+（**默认仍是历史 `spec_c8b6350c5034`，现行应设 `spec_2b4fb653a3b2`**）、`YGL_VERIFY_CORPUS`。
+
 产出 verify/recursive-summary.json（gitignore 再生产物）。首跑实绩：引擎 6 ok/0 skip/0 fail、
 spec-run PASS 14/14（run_60ff8d9aa34e5a6e）、归档链 5 items 无问题。
 
@@ -126,19 +135,35 @@ spec-run PASS 14/14（run_60ff8d9aa34e5a6e）、归档链 5 items 无问题。
 ② verify/probe-summary.json（四门禁退出码+3081 探针+闸门推导）；③ 最新 run 报告
 （tmp/ygl-verify/verify/reports/run_*.json，含每 VU witness）。三件同 commit 出，缺一不可。
 
-## 监督席 S 层（scripts/supervisor-verify.mjs，2026-10-21 监督席就任）
+## 监督席 S 层（scripts/supervisor-snapshot.mjs + ygl-trees verify run）
 
 与上方 RC 验证器/递归验证器互补：RC 验证器面向**发布候选闸门**，递归验证器面向**引擎与
-证据链自证**，S 层面向**监督台账与仓库事实的诚实性**。九层（S1 validator-records /
-S2 repo-facts 血统断言 / S3 ygl-trees-health / S4 docs-crosscheck / S5 self-recursion /
-S6 public-triage 双镜像清点 / S7 deps-dual-mirror / S8 scope-fix-anchors /
-S9 layer-docs-contract），上一轮监督记录是本轮被验对象（递归闭环）。
+证据链自证**，S 层面向**监督台账与仓库事实的诚实性**。
+
+> 沿革：2026-10-21 监督席就任时为单脚本 `scripts/supervisor-verify.mjs`（九层 S1–S9，退出码即判定）。
+> 同日按《验证器协同规范》铁律一（CLI 是唯一判定面）迁移：该脚本退役，改为
+> **探针 `scripts/supervisor-snapshot.mjs` 只采集事实** → **`ygl-trees verify run` 出判定**。
+
+两步用法：
 
 ```bash
-node scripts/supervisor-verify.mjs   # 退出码 0=九层全绿；FAIL=1
+node scripts/supervisor-snapshot.mjs [--snapshot <path>]   # 采集：写 snapshot.sqlite，恒 exit 0（不出判定）
+ygl-trees verify run spec_4de5f3b9d48d --db <snapshot>      # 判定：overall 在报告 JSON 里
 ```
 
-运行记录落 tmp/supervisor/runs/（gitignore，保留最新 200 条）。维护者：监督席
+- 快照每表 `(name, ok, detail)`，`ok=0` 行即违例；判据材料与候选单元见
+  `verify/candidates-supervision.json` / `verify/reviews-supervision.json`。
+- 判据域已由 S1–S9 扩至 **S1–S19**（2026-10-27 v10，`spec_4de5f3b9d48d`，19 单元）：
+  S1 validator-records / S2 repo-facts 血统断言 / S3 ygl-trees-health / S4 docs-crosscheck /
+  S5 self-recursion / S6 public-triage / S7 deps-mirror（含 `package.json#pnpm` 镜像已退役的缺席断言）/
+  S8 scope-fix-anchors / S9 layer-docs-contract，及其后增补的 OriginClaim 锚、控制面门禁、属主信号 UI、
+  在跑宿主构建、remote-ref 准入、v8 锚（重排不变量 / CLI 墓碑 / 自环豁免）、warm-cache 双向识别、
+  看板加固双锚（M1 棘轮 planning-view ≤1530 行 + flyer WorldBounds 签名）。逐条编号以 spec 材料为准。
+- **本文档本身是 S1/S4 的被验对象**：S1 逐个核对文中 `run_<16hex>` 报告存在且 PASS，
+  S4 核对文中 `head <8hex>` 均为真实提交、`spec_c8b6350c5034` 仍被提及——编辑本文时这三类锚只增不删。
+- 已知限制：探针的 `REPO` / `YGL_BIN` 等路径常量写死开发席 Windows 机（`D:/…`），他机运行需改常量。
+
+运行记录落 tmp/supervisor/runs/（gitignore，保留最新 200 条，审计轨迹而非判定面）。维护者：监督席
 （open-a2a-net--监督席会话）；红项处置纪律见 kb《open-a2a-net 监督席 SOP 与递归验证器契约》。
 
 ## 何时跑
