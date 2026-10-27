@@ -1,6 +1,16 @@
 # Protocol: Receipt Envelope v2 — Structured Body over the Immutable Header
 
-- **Status**: design frozen with the orchestration face (co-design round, pure-spec slice ahead of implementation)
+> **Implementation status (2026-10-27, as of ae7e24d / 0.6.28): partly implemented.**
+> The §1 wire format and its parser/formatter shipped in 3555f8b
+> (`src/receipt.ts`: `formatReceipt` / `parseReceipt`). The codec carries
+> `outcome`, `idempotencyKey`, `sessionKey` and `elapsedMs`.
+> **Not implemented:** the envelope `taskId` field (the id rides only the
+> header line), `artifacts`, the §3 4096-byte overflow rule, and the §5
+> T1/T2 liveness ladder. The ledger never writes the `expired` outcome.
+> The §4 table is annotated below with what the ledger records today
+> (`archived[].endedBy`, `late`).
+
+- **Status**: design frozen with the orchestration face (co-design round, pure-spec slice ahead of implementation) — codec since shipped; see the status note above
 - **Owner**: dsh-open-a2a-net (protocol face) · Co-signer: graph_loop orchestration face (pending_remote W3 consumer)
 - **Depends on**: transport cap (docs pairing: 512 KiB body limit, B5); P3 idempotency keys (W4) for the key's distinct life; abandon primitive (PR !21) for the `abandoned` outcome
 
@@ -35,7 +45,7 @@ interface ReceiptEnvelopeV2 {
     | 'completed' | 'failed' | 'abandoned'
     | 'expired' | 'rejected' | 'sync_completed' | 'unknown'
   /** Correlation triple echoed back — crash-storm rehydration skips N ledger lookups. */
-  taskId: string
+  taskId: string   // [2026-10-27: not implemented — not parsed or emitted; the header carries the id]
   /**
    * Idempotency key. v1 equivalence: identical to taskId (caller-born,
    * single-use). P3 (W4) may widen its lifetime independently WITHOUT any
@@ -45,13 +55,16 @@ interface ReceiptEnvelopeV2 {
   /** Tool-face conversation identity echo. */
   sessionKey?: string
   /** B5 artifact references; REQUIRED once any field overflows (see §3). */
-  artifacts?: Array<{ kind: string; ref: string; digest: string }>
+  artifacts?: Array<{ kind: string; ref: string; digest: string }>   // [2026-10-27: not implemented — tolerated as an unknown key]
   /** Telemetry slot #4: wall-clock cost of the remote turn. */
   elapsedMs?: number
 }
 ```
 
 ## 3. Atomic overflow rule (no illegal tails, ever)
+
+*[2026-10-27: not implemented — `formatReceipt` serializes the four known
+fields inline with no size budget.]*
 
 Threshold: **4096 bytes** total structured payload.
 
@@ -74,7 +87,24 @@ Threshold: **4096 bytes** total structured payload.
 Migration law: consumers branch ONLY on this enum. Free-text `summary` is
 display material, never a dispatch predicate.
 
+*[2026-10-27 note — what the ledger actually records (`src/task-ledger.ts`,
+state face in `src/index.ts`):*
+- *Natural expiry never yields `expired`: a past-TTL row turns `dead` with
+  reason `fire-forget` (no receipt was expected) or `unconsumed`, and stays
+  in the owed book, still settleable (`tasksDead[]`).*
+- *Archived rows carry `endedBy`: `receipt` | `echo` | `abandoned` |
+  `cancelled` (gh#31). A caller cancel archives with outcome `abandoned`
+  and `endedBy: 'cancelled'`, so `endedBy` is what tells abandon from
+  cancel.*
+- *The state face projects a receipt that lands after the caller ended the
+  row as `late: true`; the stored record keeps `lateReceiptAt`.]*
+
 ## 5. Target-liveness ladder (three tiers, upgrade not replace)
+
+*[2026-10-27: not implemented as a ladder. `a2a_probe` takes only `url` and
+returns `reachable: boolean` (plus `ms`, `team`, `error`), with no
+thresholds and no four-value verdict. T2 is not wired. Only the T3 signal
+exists: the `/a2a/direct` response carries `consumed`.]*
 
 | Tier | Signal | Source | Meaning |
 |---|---|---|---|

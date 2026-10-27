@@ -1,5 +1,15 @@
 # Incident Signature: Direct-Wait Abort × Delivery Success
 
+> **Implementation status (2026-10-27, as of ae7e24d / 0.6.28): archived
+> incident record; its instrumentation ask shipped.** `abortElapsedMs`
+> landed in 3555f8b (2026-08-27) and `ownBudgetExhausted` with it
+> (`src/types.ts`, `src/a2a-client.ts`). Since 2cc364e (2026-09-02) this
+> plugin's own sync wait-budget expiry (15 s) answers **`-32005`
+> DELIVERED-UNSETTLED** with a task-query compensation. In this plugin
+> `-32004` is the route-verdict refusal, not a wait abort. The `-32004`
+> AbortError rows below describe the external client in the 2026-08-27
+> sample. `targetBusyAtDispatch` was not implemented.
+
 - **Status**: archived incident fingerprint (await-abort classification law companion to receipt-envelope-v2.md §5.1)
 - **Author / credit**: graph_loop orchestration face (`dsh/08189fb1`) — live-fire sample, four-run controlled matrix
 - **Mirrored**: will appear with acknowledgment notes in the orchestration face's G1–G3 docs bundle (joint sign-off odoo-dev)
@@ -30,7 +40,7 @@ ledger reconciliation first, always.
 
 | Ask | Disposition |
 |---|---|
-| `abortElapsedMs` in the error shell | **Scheduled, W2 (P2 implementation)**: `A2aRouteError` gains optional `abortElapsedMs`, stamped from dispatch→abort inside `a2a-client` (own-timeout vs caller-signal distinguished). Pin-the-180s becomes measure-the-N. |
+| `abortElapsedMs` in the error shell | **Shipped** (3555f8b, 2026-08-27; was "Scheduled, W2"): `A2aRouteError` carries optional `abortElapsedMs`, stamped from dispatch→abort inside `a2a-client`, plus `ownBudgetExhausted` (own-timeout vs caller-signal distinguished). Pin-the-180s becomes measure-the-N. |
 | `targetBusyAtDispatch` boolean | Design-stage, deliberately: truthfully knowing in-turn state pre-dispatch needs the T2 thread-tier fact exchange (per-send state reads would tax every route with an extra RTT). Lands with the ladder seam (envelope v2 §5), not as a blind boolean on today's wire. |
 
 ## 5. Operational guidance until code lands
@@ -38,5 +48,9 @@ ledger reconciliation first, always.
 - Prefer `async:true` for any seat you have seen answer slowly (R3 immunity).
 - On `-32004`: reconcile the owed book BEFORE declaring failure (§3 law);
   the row may settle while your patience did not.
+  *[2026-10-27 note: that is the external client's abort code. With this
+  plugin's own client, the wait-budget shape is `-32005`
+  DELIVERED-UNSETTLED: reconcile through the task query, do not
+  re-dispatch. A `-32004` from this plugin is a route-verdict refusal.]*
 - Family triage quick rule: context-id-bearing graceful timeout → local flow;
   `-32004` abort → cross-host wait-window end; both may still succeed remotely.

@@ -1,6 +1,8 @@
 # 设计卡：节点平铺 + 多队成员制（allowlist 准入）+ F8 期望态对账
 
-日期：2026-08-31。状态：迭代窗实现中。裁定：allowlist 起步（代决策席 2026-08-31 裁决，依据主人既有指令"未加入的节点不能自主加入，且拒绝一切 a2a 相关 tools 访问"的制度化）。
+> **实现状态（2026-10-27，按 ae7e24d / 0.6.28 核对）：已实现。** S1 节点注册表、S2 成员声明 store、S4 join/leave 工具随 e3b92f8（2026-08-31）落地；S3 入站/出站准入随 655eb83（2026-09-01）落地，且默认开启。与下文不符之处以 *[2026-10-27 注]* 标出：默认值、`teamJoinPolicy`、节点 ID 形态、join 拒绝码。
+
+日期：2026-08-31。状态：迭代窗实现中（原文）。裁定：allowlist 起步（代决策席 2026-08-31 裁决，依据主人既有指令"未加入的节点不能自主加入，且拒绝一切 a2a 相关 tools 访问"的制度化）。
 
 ## 一、现状三处碎片化（2026-08-31 代码取证 @ f6c777b）
 
@@ -21,6 +23,7 @@
   live / teams[] / workspace / label`。
 - 节点稳定 ID：zone 限定 `dsh-host-<node>/<id8>`（card key 派生），本地节点同样以
   zone 限定形态呈现，消除跨主机撞名。
+  *[2026-10-27 注：实际形态不同。会话句柄是 `${config.team}/${id8}`（zone 名 + 会话 id 前 8 位，不由 card key 派生）；state 面 `registry.nodes` 里本地行的 `id` 是原始会话 id（另带 `zone`），远端行的 `id` 是对方的会话队句柄（`remote: true`）。]*
 
 ### R2 多队成员制（S2）
 
@@ -33,12 +36,14 @@
 - 路由 admission：调用方与目标须**共享 ≥1 队**；无队节点不可路由、不可发现。
 - 政策：`teamJoinPolicy: 'allowlist'`（起步，默认）；宿主配置 `teamJoinAllowlist`。
 - enforcement 默认关（`teamScopeRouting: false`）；开启前须经代决策席报备。
+  *[2026-10-27 注：没有 `teamJoinPolicy` 这个配置键，allowlist 是唯一政策，只有 `teamJoinAllowlist`。enforcement 自 655eb83 起默认开（`teamScopeRouting: true`），信息面另有 `teamScopeInfo: true`。]*
 
 ### R4 团队工具（S4）
 
 - `a2a_teams` 升级：花名册感知（每队成员数/成员节点摘要）。
 - 新增 `a2a_team_join` / `a2a_team_leave`：模型可自主调用，受 allowlist 政策闸门，
   state 面审计留痕（谁、何时、加入/退出、政策判定）。
+  *[2026-10-27 注：allowlist 只认精确队名（gh#11/N7：建队是人的行为）。join 被拒时带三种标签：`[ALLOWLIST_DENY]`（不在名单）、`[PATTERN_NO_MINT]`（只命中通配/前缀条目，模式不授予建队权）、`[CANVAS_TEAM]`（`/canvas/` 队的成员只能在工作台画布手工分配）。审计记录在 `registry.teamAudit`。]*
 
 ## 三、F8 期望态对账器（与本迭代同窗实现）
 
@@ -62,7 +67,7 @@
 |---|---|---|
 | S1 | 节点注册表 state 面 | 重启后 T+60s 内 state.nodes[] 覆盖本地+远端全部节点 |
 | S2 | team store + card 发布 memberships | 双节点互见花名册一致 |
-| S3 | 队内路由准入（默认关） | 开启后非共享队路由被拒且错误码可读 |
+| S3 | 队内路由准入（默认关；*2026-10-27 注：现默认开*） | 开启后非共享队路由被拒且错误码可读 |
 | S4 | join/leave 工具 | allowlist 外 join 被拒且提示入册路径；审计留痕 |
 | F8 | 对账器 + prewarm 加固 | 重启后 T+N 分钟全部非 archived 意图物化或带原因码；corrupt 行标 needs-repair |
 

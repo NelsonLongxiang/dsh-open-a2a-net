@@ -1,5 +1,7 @@
 # 设计卡：未加入节点的 A2A 上报入口（a2a_report）
 
+> **实现状态（2026-10-27，按 ae7e24d / 0.6.28 核对）：已实现**（5328798，2026-09-01）。之后有两处变化：消息上限提到 4000 字；新增循环熔断，同会话同文 10 分钟内满 3 次即拒绝，并记入审计环。其余与原文一致：join gate 豁免、30s 限频、reports 环、state 面 `reports` 块。
+
 日期：2026-09-01。主人指令：「给未加入节点的一个 a2a task 上报入口，调查和分析」。
 
 ## 调查（现状入口面盘点）
@@ -17,6 +19,7 @@
 
 - 新工具 `a2a_report`（join gate 豁免，文档化豁免理由：单向写、无网络存在、无路由权）
 - 入参 `{ message, level?: info|warning|error, task?: string }`；消息上限 2000 字；每会话 30s 限频
+  *[2026-10-27 注：上限现为 4000 字（`message exceeds the 4000-char cap`）。另加循环熔断：同会话、同文（sha256 前 16 位）在 10 分钟内已报 3 次的，第 4 次被拒，并以 `agent-less` 动作记入 `registry.teamAudit`。]*
 - 上报落 **reports 环**（内存，cap 64）+ state 面 `reports` 块（监督席/面板读）
 - 携带报告者身份（调用会话 id+label）——离册席位的报告自带"请收养我"信号
 - error 级入 logger.warn
