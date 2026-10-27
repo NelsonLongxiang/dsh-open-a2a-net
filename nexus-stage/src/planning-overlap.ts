@@ -61,10 +61,12 @@ export function separateFrames(model: WorldModel, remote: ReadonlySet<string>, t
     }
     if (pair === undefined) return changed
     const [a, ra, b, rb] = pair
-    // Who yields: never a remote frame, never the frame just placed;
-    // otherwise the later one in board order.
-    const aStays = remote.has(a) || a === touched
-    const [mover, mr, fixed] = aStays ? [b, rb, ra] : remote.has(b) || b === touched ? [a, ra, rb] : [b, rb, ra]
+    // Who yields: the lower stay score moves — remote 2 (never moves on its
+    // own), the frame just placed 1, any other 0; a tie moves the later one
+    // in board order. (A plain "a stays" check moved a remote b whenever a
+    // was the frame just placed — order-dependent: PR #83 review.)
+    const stay = (n: string): number => remote.has(n) ? 2 : n === touched ? 1 : 0
+    const [mover, mr, fixed] = stay(a) < stay(b) ? [a, ra, rb] : [b, rb, ra]
     const { dx, dy } = stepAside(mr, fixed)
     moveFrame(model, mover, dx, dy)
     changed = true

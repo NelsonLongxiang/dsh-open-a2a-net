@@ -56,6 +56,20 @@ describe('planning-overlap', () => {
     expect(separateFrames(r, new Set(['A', 'B']))).toBe(false)
   })
 
+  it('a just-placed local frame yields to a remote frame whichever was added first (PR #83 review)', () => {
+    for (const order of [['L', 'R'], ['R', 'L']] as const) {
+      const m = new WorldModel()
+      const rect = { L: { x: 300, y: 50, w: 400, h: 200 }, R: { x: 0, y: 0, w: 400, h: 200 } }
+      for (const name of order) m.setFrame(name, rect[name])
+      m.upsertNode(node('r1', 100, 100))
+      m.setTeamMembers('R', ['r1'])
+      separateFrames(m, new Set(['R']), 'L')
+      expect(m.getFrame('R')).toEqual({ x: 0, y: 0, w: 400, h: 200 })
+      expect(m.getNode('r1')!.x).toBe(100)
+      expect(noOverlaps(m)).toBe(true)
+    }
+  })
+
   it('a chain of overlaps settles with no overlap left', () => {
     const m = new WorldModel()
     for (let i = 0; i < 6; i++) m.setFrame(`F${i}`, { x: i * 50, y: i * 30, w: 300, h: 160 })
