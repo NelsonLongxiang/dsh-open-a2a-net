@@ -334,6 +334,20 @@ function collectSrcModuleCap() {
   return rows
 }
 
+// ── S25（#60 第一步·576de3e）：recursion-guard 模块+ingress 单缝 ──
+function collectHopBudget() {
+  const rows = []
+  try {
+    const guard = readFileSync(join(REPO, 'src/recursion-guard.ts'), 'utf8')
+    const hasConst = /DEFAULT_HOP_BUDGET\s*=\s*4/.test(guard)
+    const hasRefuse = /refuseIfBudgetExhausted/.test(guard)
+    const idx = readFileSync(join(REPO, 'src/index.ts'), 'utf8')
+    const singleSeam = (idx.match(/refuseIfBudgetExhausted/g) || []).length >= 1 && /recursion-guard/.test(idx)
+    rows.push({ name: 'hop-budget-first-step', ok: (hasConst && hasRefuse && singleSeam) ? 1 : 0, detail: 'guard 模块（budget=4+refuse 助手）+ingress 接线（#60 第一步·576de3e）' })
+  } catch (e) { rows.push({ name: 'hop-budget-first-step', ok: 0, detail: String(e).slice(0, 60) }) }
+  return rows
+}
+
 function collectOwnerSignalUi() {
   // 遍历 nexus-stage 源码聚合文本（UI 字符串锚）
   const agg = (dir) => {
@@ -379,6 +393,7 @@ const TABLES = {
   roadmap_anchors: collectRoadmapAnchors,
   index_m1: collectIndexM1,
   src_module_cap: collectSrcModuleCap,
+  hop_budget: collectHopBudget,
 }
 
 mkdirSync(join(REPO, 'tmp/supervisor'), { recursive: true })
