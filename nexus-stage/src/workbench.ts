@@ -643,6 +643,39 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   }
 
   // ── Activity pane ──
+  /** The readable name behind a routing team id — a session, a remote node
+   *  or a canvas team on the last state — or undefined when none matches
+   *  (review 2026-10-27: activity and plan rows read bare `dsh/1111…` ids).
+   *  An empty name counts as no match: displayName's `??` keeps '', and a
+   *  peer can publish one. `remote` marks a name the PEER chose — it can
+   *  collide with a local session's, so callers must show where it is from. */
+  function teamName(state: StateBody, team: string): { name: string; remote: boolean } | undefined {
+    const named = (name: string | undefined, remote: boolean) => name !== undefined && name.trim() !== '' ? { name, remote } : undefined
+    const s = (state.sessions ?? []).find(r => r.team === team)
+    if (s !== undefined) return named(displayName(s), false)
+    const r = (state.remote ?? []).find(x => x.team === team)
+    if (r !== undefined) return named(displayName(r), true)
+    return named((state.canvas?.teams ?? []).find(t => t.team === team)?.name, false)
+  }
+  /** A name for plain text: a peer-published one says it is remote. */
+  function teamLabel(state: StateBody, team: string): string {
+    const n = teamName(state, team)
+    return n === undefined ? team : n.remote ? `${n.name}（远端）` : n.name
+  }
+  /** A team cell: the name when known (the id rides the tooltip), else the
+   *  id; a peer-published name carries a visible 远端 chip. */
+  function teamCell(line: HTMLElement, state: StateBody, team: string): void {
+    const cell = line.appendChild(el('span', 'wb-row-team'))
+    const n = teamName(state, team)
+    cell.textContent = n?.name ?? team
+    cell.title = team
+    if (n?.remote === true) {
+      const chip = cell.appendChild(el('span', 'wb-row-remote'))
+      chip.textContent = '远端'
+      chip.title = '名字由对端自行发布'
+    }
+  }
+
   function renderActivity(): void {
     const pane = clear(activityPane)
     if (last === null) return
@@ -659,7 +692,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       for (const row of flights) {
         const line = el('div', 'wb-row')
         line.appendChild(el('span', 'wb-row-dir')).textContent = '→'
-        line.appendChild(el('span', 'wb-row-team')).textContent = row.team
+        teamCell(line, last, row.team)
         line.appendChild(el('span', 'wb-row-meta')).textContent = `${row.peer} · ${ageText(row.startedAt, now)}`
         pane.appendChild(line)
       }
@@ -678,7 +711,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       dir.textContent = row.dir === 'out' ? '→' : '←'
       if (row.ok !== true) dir.classList.add('is-fail')
       line.appendChild(dir)
-      line.appendChild(el('span', 'wb-row-team')).textContent = row.team
+      teamCell(line, last, row.team)
       line.appendChild(el('span', 'wb-row-meta')).textContent = `${row.peer} · ${ageText(row.ts, now)}`
       line.appendChild(el('span', 'wb-row-badges')).textContent = row.ok === true ? '' : '失败'
       pane.appendChild(line)
@@ -704,18 +737,24 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       const subject = row.brief === undefined || row.brief === '' ? '' : `「${row.brief}」`
       actions.push({
         severity: 'normal',
-        text: `催办 ${row.taskId} → ${row.team}（等待 ${ageText(row.startedAt, now)} 无回执）${subject}`,
+        text: `催办 ${row.taskId} → ${teamLabel(state, row.team)}（等待 ${ageText(row.startedAt, now)} 无回执）${subject}`,
         brief: `a2a_route 催收回执：task ${row.taskId}（team ${row.team}）${subject === '' ? '' : `原任务「${row.brief}」`}已派发 ${ageText(row.startedAt, now)}，请回报结果或回执。`,
       })
     }
-    for (const row of state.sessions ?? []) {
-      if (row.live !== true) {
-        actions.push({ severity: 'normal', text: `冷会话 ${displayName(row)}：在 GUI 打开该会话即可唤醒加入面` })
-      }
+    // Cold sessions are one action, not one per session: they share the same
+    // remedy (open them in the GUI), and a list of identical lines buried the
+    // actions that differ.
+    const cold = (state.sessions ?? []).filter(row => row.live !== true).map(row => displayName(row))
+    if (cold.length > 0) {
+      const names = cold.slice(0, 3).join('、') + (cold.length > 3 ? ` 等 ${cold.length} 个` : '')
+      actions.push({ severity: 'normal', text: `冷会话 ${cold.length} 个（${names}）：在 GUI 打开即可唤醒加入面` })
     }
     for (const row of state.reconcile?.rows ?? []) {
       if (row.needsRepair === true) {
-        actions.push({ severity: 'high', text: `reconcile 需修复：${row.id} ${row.error}` })
+        // Name the session; the id stays for the operator who greps logs.
+        const s = (state.sessions ?? []).find(x => x.id === row.id)
+        const who = s !== undefined ? `${displayName(s)}（${row.id}）` : row.id
+        actions.push({ severity: 'high', text: `reconcile 需修复：${who} ${row.error}` })
       }
     }
     const conflicts = state.idempotency?.conflicts ?? 0
@@ -1122,7 +1161,9 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // forensic counters that used to sit here (idempotency claims/replays,
   // reconcile state) read on the ledger's 取证 line instead.
   function renderHeader(): void {
-    versionBadge.textContent = last?.version !== undefined ? `v${last.version}` : 'v?'
+    // An unknown version says nothing: hide the badge rather than print 'v?'.
+    versionBadge.textContent = last?.version !== undefined ? `v${last.version}` : ''
+    versionBadge.hidden = last?.version === undefined
     const box = clear(headerStats)
     if (last === null) return
     // Each pill is a way in: it opens the tab (and ledger group) that holds
