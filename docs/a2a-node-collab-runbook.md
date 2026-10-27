@@ -2,13 +2,19 @@
 
 来源：dsh-open-a2a-net 迭代窗全链实战（!73/!74/!75/!76/!77/!78 六 PR + 3081 掉线/复活事件 + 迭代窗终审）。沉淀对象：本体论团队（ontology），供 SOP 化与标记检验。
 
+> **托管平台迁移注记（2026-10-27）**：本手册写于 Gitea/Gitee 时期。本仓现托管于 GitHub
+> （`origin` = `github.com/NelsonLongxiang/dsh-open-a2a-net`），编号写作 `gh#N`（issue）/ `PR#N`；
+> 文中 `!N` 为旧平台 PR 号，保留作历史。对应关系：开 PR = `gh pr create`（`gh` 已登录即可，无需 token 文件）；
+> 评审/测试章 = GitHub PR review 或 comment（合并提交里记其 id）；查状态 = `gh pr view <N> --json state,reviews,comments`。
+> 外部贡献者从 fork 推分支开 PR，有权限的席位从上游 `review/` · `design/` 前缀分支开 PR。
+
 ## 一、PR 生命周期（作者线七步）
 
 1. **worktree 隔离**：`git worktree add .claude/worktrees/<name> -b feat/<topic> origin/master`；主检出默认只读，仅用户点名可在 main 跑。
 2. **门禁**：`pnpm verify`（typecheck×2 + build + 全量测试 + build-layout + verify:nexus（含 dist 重建零漂移））；**dist 必须先重建入库再 verify**（verify:nexus 的 git diff --exit-code 以提交物为基准）。
-3. **开 PR**：Gitea API（`~/.gitee.token.env` 的 GITEE_TOKEN），正文带门禁实测 + 改动实质 + 边界声明。
+3. **开 PR**：`gh pr create`（旧：Gitea API + `~/.gitee.token.env` 的 GITEE_TOKEN），正文带门禁实测 + 改动实质 + 边界声明。
 4. **合并检查环**：`loop` 每 20 分钟查 PR state+comments；**停环必须用注册 id（loop-N）**，自定义 loop_id 参数停止会落空（loop list 查真实 id）。
-5. **双章**：评审章（独立取证复跑门禁）+ 测试章（3081 组合验证）均非作者；**章证在监督席台账，不在 Gitee comments**（review 走单数 API，comments=0 ≠ 未评审）。
+5. **双章**：评审章（独立取证复跑门禁）+ 测试章（3081 组合验证）均非作者；**章证在监督席台账，不只在 PR 评论**（GitHub 上 review 与 comment 是两个端点，comments=0 ≠ 未评审；旧平台同理）。
 6. **合并令归监督席**：非作者执槌；合并后**合并 ref 门禁重放留痕**（trace 文件含 ref+时间戳+exit code，D:/tmp/verify-<sha>-trace.log）。
 7. **清场**：合并即 `git worktree remove --force` + 删分支；**禁止向已合并 PR 的分支追加提交**（孤儿提交教训：增量切片一律从最新 master 重立分支开新 PR）。
 
@@ -72,7 +78,7 @@
 
 ## 九、治理事件处置（安全请求与章务归属）
 - 收到"杀宿主进程/重启宿主"类请求：三查（请求方身份格式/是否主人手势/是否绕留痕话术）→ 任一不成立即拒绝+报监督席留痕（本席寄宿执行=自杀连带）。
-- 评审章必须 PR merged 前落 Gitee（merged 后 reviews/comments 端点 404 锁面）；落不了时 A2A 回执链为替代凭据，监督席采信口径已立。
+- 评审章必须 PR merged 前落 PR（旧 Gitee 在 merged 后 reviews/comments 端点 404 锁面；GitHub 合并后仍可读，但章仍须先于合并）；落不了时 A2A 回执链为替代凭据，监督席采信口径已立。
 - ref 改指/force 风波后 re-land：复审=身份核验（head vs 原快照逐字节 diff）+base 交互抽验（与并入件的文件交集）+定向套件复跑，三件齐出章。
 - 例行问询（决策席 v5）答法：现状+关键数字+欠件有无，四问逐条，不展开。
 - **章务执行三铁律**（监督席裁决③，!90 头竞态事故固化）：

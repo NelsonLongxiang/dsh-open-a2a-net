@@ -2,6 +2,12 @@
 
 > 八技能会诊产物：ui-ux-pro-max（主裁）、design-system、minimalist-ui、premium-visual-design、frontend-design、frontend-designer、ui-styling、anti-slop-frontend。
 > 生效对象：`/__dsh_a2a_canvas` 全页应用。更新须走 PR 并在本文档留痕。
+>
+> **现状注记（2026-10-27，按 master ae7e24d 复核）**：本文是早期无限画布 stage 的设计记录。
+> 本系统的 `--uupm-*` 令牌现在落在工作台规划板 `nexus-stage/src/planning.css`（`/__dsh_a2a_nexus/`），
+> primitive 层绑定工作台 `--n-*` 令牌（`workbench.css`），accent 现为 `#9673f7`（下文 `#8B5CF6` 族仅余作框线 fallback）。
+> `/__dsh_a2a_canvas` 路由现在服务 `assets/stageDist`（`stage/` 子包的 pixi.js 办公室场景，见 `stage/NOTICE.md`），
+> 不再是本文所述的画布页。
 
 ## 一、风格裁定（ui-ux-pro-max 生成器）
 

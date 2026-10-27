@@ -1,22 +1,33 @@
 # Canvas UI 契约（锁定 v1）
 
 > 目的：PR A 合并后、PR B 开发期，host 面不得破坏本契约；UI 以本契约为准，防裸 API 路径依赖与地基漂移。变更须走 PR 并双侧同步。
+>
+> **v1.1 对齐注记（2026-10-27，按 master ae7e24d 代码复核）**：v1 锁定后 host 已做两处 shape 扩展而未升文档版本——
+> ① 成员数组为**双形**：本机成员 `{id, team, joined, live}`，远端成员 `{id, team, remote: true}`（0.6.6 c858050 统一画布队模型引入）；
+> ② `canvas` 字段由 host **恒下发**（不再以存在性作开关）。下文 shape 已按现状改写；按本文第 5 条，这属于事后补登的契约变更。
 
 ## 读面：`GET /__dsh_a2a/state` → `canvas` 载荷
 
-存在性：host 实现 canvas face 时才下发 `canvas` 字段——**client 以 `state.canvas !== undefined` 为整个画布区的显隐开关**。
+存在性：v1 时 host 实现 canvas face 才下发 `canvas` 字段，client 以 `state.canvas !== undefined` 为画布区显隐开关；现行 host 恒下发该字段（client 的存在性判断保留作旧 host 兼容）。
 
 ```ts
 canvas?: {
   teams: Array<{
     name: string                       // 队伍名（创建时的原始名）
     team: string                       // 线名 <host-team>/canvas/<name>
-    members: Array<{
-      id: string                       // 成员 session id
-      team: string                     // 成员节点别名 <host-team>/<id8>
-      joined: boolean                  // 在网上（活节点或已记 join 意图）
-      live: boolean                    // agent 当前挂载
-    }>
+    members: Array<
+      | {                              // 本机成员
+          id: string                   // 成员 session id
+          team: string                 // 成员节点别名 <host-team>/<id8>
+          joined: boolean              // 在网上（活节点或已记 join 意图）
+          live: boolean                // agent 当前挂载
+        }
+      | {                              // 远端成员（v1.1）
+          id: string                   // zone 限定的远端队句柄，如 zone/a1b2c3d4
+          team: string                 // 同 id（不透明句柄，host 原样透传）
+          remote: true                 // 无 joined/live：远端事实不在本机
+        }
+    >
   }>
 }
 ```
@@ -27,12 +38,12 @@ canvas?: {
 |---|---|---|
 | `create` | `{ action, name }`（trim 后 1..40，拒 `/` 与纯数字） | `{ ok, name, teams }`；拒绝时 `{ ok:false, error }` |
 | `remove` | `{ action, name }` | `{ ok, teams }`（连成员一起消失） |
-| `add-member` | `{ action, name, id }`（id 必须 joined：live 节点或已记意图；否则 `ok:false`） | `{ ok, teams, members }`（重复添加幂等 ok:true） |
+| `add-member` | `{ action, name, id }`（id 为本机 session 时必须 joined：live 节点或已记意图；id 含 `/` 时视为远端句柄，只做形状校验：无首尾 `/`、无 `//`、无空白；否则 `ok:false`） | `{ ok, teams, members }`（重复添加幂等 ok:true） |
 | `remove-member` | `{ action, name, id }` | `{ ok, teams, members }` |
 
 ## 不变量（双侧共同遵守）
 
-1. **同意不变量**：成员资格必须绑定 joined 会话——UI 的加成员选择器只列 joined 行；leave/archive/host 清扫会移除成员关系，UI 随轮询自然反映。
+1. **同意不变量**：本机成员资格必须绑定 joined 会话——UI 的加成员选择器只列 joined 行（远端句柄由目录行背书）；leave/archive/host 清扫会移除本机成员关系，UI 随轮询自然反映。
 2. **多对多**：一个 session 可出现在任意多队的 members 中；UI 以队行为主视图（成员 chip 在每个所属队行内重复出现），不做单属假设。
 3. **上限**：64 队 × 32 成员/队；超限 host 拒绝且 `ok:false`——UI 不预校验上限数字，以 host 判定为准。
 4. **确定性路由语义**：成员序=优先级；路由解析活成员优先→冷 joined 唤醒。UI 用 live 标记着色（实心=活，空心=cold），不承诺"下一个投给谁"之外的语义。

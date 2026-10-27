@@ -3,10 +3,9 @@
 > 2026-10-21 立，源自 K3 测试章前瞻（cordis 事故线收尾）：两项与「锁重生成 × 环境策略」
 > 交互的坑，已实测咬人，故入档为纪律。
 
-## 1. cordis 归一 override 的双文件纪律
+## 1. cordis 归一 override 的单一归属纪律
 
-`package.json#pnpm.overrides`（pnpm <11.24 读取）与 `pnpm-workspace.yaml#overrides`
-（pnpm ≥11.24 读取）承载**同一对值**：
+overrides **只在 `pnpm-workspace.yaml#overrides`**（pnpm ≥11.24 读取）：
 
 ```yaml
 '@deepseek-ai/cordis': 4.0.5
@@ -15,8 +14,14 @@
 
 动机：图内 102 个 dsh-\* 包 peer 钉死 cordis 精确 4.0.1、61 个插件线 peer 要求 ~4.0.4，
 范围互斥——无 override 的任何锁重生成都会双实例回潮（类型增广裂解 → 干净检出必红，
-事故 0e32ae1）。**改任一侧必须同步另一侧**；锁重生成后以
+事故 0e32ae1）。锁重生成后以
 `grep -cE "^@deepseek-ai\+cordis@4" node_modules/.pnpm`（期望 1）复核。
+
+沿革：2026-10-21 立规时为「`package.json#pnpm.overrides`（pnpm <11.24 读取）+ workspace.yaml 双文件同值」。
+**2026-10-25 起 `package.json#pnpm` 镜像退役**（gh#46 修复轮 a3a57b8）：pnpm 11.28 的 verify-deps
+在该字段存在时拒跑一切 pnpm 脚本，且舰队三机已归一 pnpm 11.28.5、无 pre-11.24 读者。
+现行约束（监督 S7 机器核对）：`package.json` **不得**再出现 `pnpm` 字段；`packageManager`
+钉 `pnpm@11.28.5`，`engines.pnpm` 为 `>=11.24 <12`。
 
 ## 2. minimumReleaseAge × 锁重生成发布窗口
 

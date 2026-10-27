@@ -1,5 +1,9 @@
 # Native-teams 桥：映射、边界与切片范围
 
+> **⚠ 已弃用（2026-10-27 注记）**：`@nelsonlongxiang/dsh-native-teams` 插件已弃用，不再是现行协作路径，
+> 也不在评审范围内。本仓的桥代码（`src/teams-bridge.ts`，配置 `nativeTeamsInbound` 默认 `false`）仍在，
+> 仅为兼容保留；新协作请走 A2A 原生路径（`a2a_route` / canvas 队 / a2a-net CLI）。下文为历史设计记录，不再随代码更新。
+
 > 状态：implemented slice P1（出站传输面 + 入站分发，`nativeTeamsInbound` 门禁）。
 > 契约权威：`@nelsonlongxiang/dsh-native-teams/src/a2a-face.ts`（0.14.0，冻结）；
 > 本仓结构镜像：`src/teams-bridge.ts`（常量/形状逐字镜像，争议按协议文档仲裁）。
