@@ -67,11 +67,20 @@ claim; the original claim travels inside the guard payload.
    judges the **ORIGINAL caller** — its declared roster (via its card's
    canvasOrg, #71's bidirectional rule: own handles ∧ caller on both sides)
    — exactly as today. Forwarding NEVER widens the declared set.
-2. The **forwarding hop** is judged separately as legal transport: it must
+2. **CLI-origin callers (gh#45)**: when the origin caller is a deposited
+   CLI handle (`<agent-name>/<uuid·16hex>`, not a zone/id8 session team),
+   its admission basis is the gh#45 deposit fact — a PUBLISHED node fact of
+   the host it deposited onto (`cli-deposits.json`, served as the CLI's
+   signed card under `/a2a/cli/<handle>/.well-known/agent-card.json`). The
+   N3 caller gate admits exactly that handle; the forwarding chain neither
+   re-derives nor dilutes it. A CLI origin whose deposit has expired
+   (tombstoned, 4h TTL) is DEAD on every leg — the relay must not revive
+   it (no orphaned forwarding).
+3. The **forwarding hop** is judged separately as legal transport: it must
    prove possession of its key (OriginClaim ✓) and be **linked to this
    host** (`callerLinkedToThisHost`) — an unlinked host cannot relay
    traffic through us. Failure ⇒ `untrusted-origin` and no steering.
-3. The ledger row records `via` (the transport chain) so the caller/origin
+4. The ledger row records `via` (the transport chain) so the caller/origin
    distinction is auditable, never conflated.
 
 Consequence: a linked-but-unrelated peer relaying a stranger's message gets
@@ -85,7 +94,12 @@ The receiving host's receipt targets the **origin caller** (the existing
 sets it to the origin caller's handle when absent). If the origin caller's
 host is itself unreachable from the receiver, the receipt rides the reverse
 of `X-A2A-Via` — each returning hop delivers to the next address in the
-chain. Receipt failure falls back to the existing three-tier ledger
+chain. **Reverse-path validation**: every returning hop must find ITSELF
+inside `X-A2A-Via` (the recorded chain) — a host outside the chain may not
+claim a relay slot (`untrusted-origin`, no delivery), so a receipt cannot
+be redirected through arbitrary hosts. The chain is consumed oldest→newest
+in reverse and each hop re-signs its own OriginClaim exactly like the
+outbound leg. Receipt failure falls back to the existing three-tier ledger
 (pending → dead-letter → archive).
 
 ### 3.5 Hop budget — the chief's constraint (b), binding
@@ -106,7 +120,7 @@ chain. Receipt failure falls back to the existing three-tier ledger
 
 | File | Change |
 |---|---|
-| `src/recursion-guard.ts` (new) | guard payload build/parse/validate; O(len) parse per protocol §7.4 |
+| `src/recursion-guard.ts` (new) | guard payload build/parse/validate; O(len) parse per protocol §7 acceptance list |
 | `src/index.ts` dispatch seam | local miss → directory walk → forward with guard + origin fields |
 | `src/index.ts` ingress | origin-caller admission + hop check + transport-link check |
 | `src/index.ts` receipt | origin-caller callback default; reverse-via fallback |
