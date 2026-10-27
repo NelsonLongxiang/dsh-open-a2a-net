@@ -106,3 +106,32 @@ describe('gh#31 follow-up: how a row ended, and its direction, on the record', (
     expect(row?.lateReceiptAt).toBeUndefined()
   })
 })
+
+describe('gh#68: a receiptless row stays receiptless in the archive', () => {
+  it('⑧ tidying a fire-forget expiry keeps receiptExpected:false; owed rows carry nothing', () => {
+    let t = 1_700_000_000_000
+    const ledger = new TaskLedger('', { now: () => t })
+    ledger.trackReceiptless('t-ff', 'dsh/target', 'http://peer')
+    ledger.track('t-owed', 'dsh/target', 'http://peer')
+    t += 25 * 60 * 60 * 1000
+    expect(ledger.list().find(r => r.taskId === 't-ff')?.reason).toBe('fire-forget')
+    ledger.abandon('t-ff')
+    ledger.abandon('t-owed')
+    const byId = new Map(ledger.archive().map(row => [row.taskId, row]))
+    expect(byId.get('t-ff')).toMatchObject({ endedBy: 'abandoned', receiptExpected: false })
+    expect(byId.get('t-owed') !== undefined && 'receiptExpected' in byId.get('t-owed')!).toBe(false)
+  })
+
+  it('⑨ every archive path carries it, and it survives a restart', () => {
+    const path = ledgerPath()
+    const first = new TaskLedger(path)
+    for (const id of ['r-receipt', 'r-echo', 'r-cancel']) first.trackReceiptless(id, 'dsh/target', 'http://peer')
+    first.resolveFromMessage('[A2A receipt] task r-receipt done')
+    first.resolveEcho('about task r-echo: answered')
+    first.cancel('r-cancel')
+    const reloaded = new TaskLedger(path)
+    expect(reloaded.archive().map(row => [row.taskId, row.receiptExpected])).toEqual([
+      ['r-cancel', false], ['r-echo', false], ['r-receipt', false],
+    ])
+  })
+})

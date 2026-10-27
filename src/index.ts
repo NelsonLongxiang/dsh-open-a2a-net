@@ -1982,6 +1982,8 @@ const reportLoopRing = new Map<string, number[]>()
                 outcome: row.outcome ?? 'unclassified',
                 endedBy: archivedEndedBy(row),
                 ...(row.direction !== undefined ? { direction: row.direction } : {}),
+                // gh#68: present only when the row awaited no receipt.
+                ...(row.receiptExpected === false ? { receiptExpected: false } : {}),
                 ...(row.lateReceiptAt !== undefined ? { late: true } : {}),
                 ...(row.brief !== undefined ? { brief: row.brief } : {}),
                 ...(row.summary !== undefined && row.summary !== '' ? { summary: row.summary.slice(0, 160) } : {}),
