@@ -116,7 +116,14 @@ async function collectPublicTriage() {
     const gh = await fetch('https://api.github.com/repos/NelsonLongxiang/dsh-open-a2a-net/issues?state=open&per_page=50', { headers: { 'User-Agent': 'open-a2a-net-supervisor', Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(15_000) })
     const items = gh.ok ? (await gh.json()) : []
     // v12：路线图 issue（标题含「路线图」/「总表」）=属主工作项底账非垃圾开放项
-    ghOpen = items.filter(i => !i.pull_request && !((i.title ?? '').includes('路线图') || (i.title ?? '').includes('总表'))).length
+    const now = Date.now()
+    // v18：在途豁免——非路线图 issue >72h 零活动才计红（在途=工作，陈旧=真垃圾）
+    ghOpen = items.filter(i => {
+      if (i.pull_request) return false
+      if ((i.title ?? '').includes('路线图') || (i.title ?? '').includes('总表')) return false
+      const updated = Date.parse(i.updated_at ?? '') || 0
+      return (now - updated) > 72 * 3600 * 1000
+    }).length
   } catch { ghOpen = -1 }
   rows.push({ name: 'github-open', ok: ghOpen === 0 ? 1 : 0, detail: `open=${String(ghOpen)}` })
   let giteePrs = -1
