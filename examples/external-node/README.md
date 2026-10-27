@@ -29,5 +29,5 @@ exports. `node index.mjs` runs against an embedded mock peer.
 npm install && node index.mjs
 ```
 
-Expected: four log lines — `[card]`, `[client]`, `[caps]`, `[route]`,
+Expected: five log lines — `[card]`, `[client]`, `[caps]`, `[route]`,
 `[receipt]` — and exit 0.

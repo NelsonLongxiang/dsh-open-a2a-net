@@ -36,10 +36,15 @@ a2a_route { team: "<zone>/<id8 or canvas name>", message, context_id?, async? }
 - `async: true` delivers without waiting (`delivered:true` + task id); the
   target routes a receipt — a message starting `[A2A receipt] task <id>` —
   back to your team.
-- Sync (default) waits for the round's final answer. If the 15s transport
-  budget fires first, the result is **-32005 DELIVERED-UNSETTLED**: the
-  delivery landed and the peer keeps executing. **Never re-dispatch blindly**
-  — reconcile via the task id (the receipt or `a2a_teams` coordinates) instead.
+- Sync (default) waits for the round's final answer. A target on this host
+  gets up to 180s; past that the tool answers the delivered shape
+  (`TASK_STATE_DELIVERED`) and the receipt contract carries the rest. A
+  remote peer's delivery rides a 15s transport budget; if it fires first, the
+  result is **-32005 DELIVERED-UNSETTLED**: the delivery landed and the peer
+  keeps executing. Either way, **never re-dispatch blindly** — reconcile via
+  the task id (the receipt, `a2a_status` activity, or `a2a_tasks`) instead.
+- Model tools cannot route to the bare process team (`<zone>` alone, the
+  host's own mailbox): target a session handle or a canvas team.
 - `context_id` from a previous reply continues that conversation.
 
 ## Membership rules
@@ -55,10 +60,15 @@ a2a_route { team: "<zone>/<id8 or canvas name>", message, context_id?, async? }
 
 ## Reading the state
 
-`__dsh_a2a/state` (per node) carries `sessions` (live/joined), `sessionTeams`,
-`remote` (peer session rows with `origin` = node label + LAN IP and `via` =
-the peer URL), `activity` (routing ring), `tasks` (the ledger: pending /
-stale / archived). The A2A workbench (`/__dsh_a2a_nexus/`, merged responsive
+`__dsh_a2a/state` (per node, key-gated like every control route) carries
+`sessions` (live/joined, with their teams), `canvas` (canvas teams; remote
+members show `remote: true`), `remote` (peer session rows with `origin` =
+node label + LAN IP and `via` = the peer URL), `activity` (routing ring),
+and the ledger: `tasks` (pending, each with `settleable`),
+`tasksStaleCount`, `tasksDead`, and `archived` (newest 64 settled rows, each
+with `outcome`, `endedBy` and `late`) plus `archivedCount` /
+`archivedSplit`. `sessionTeams` is a card field, not a state field. The A2A
+workbench (`/__dsh_a2a_nexus/`, merged responsive
 shell since 0.6.2 — the 2D planning board is the stage, directory / ledger /
 activity / plan ride a collapsible rail, narrow screens get a drawer)
 renders the same data for humans.

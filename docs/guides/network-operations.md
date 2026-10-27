@@ -1,14 +1,15 @@
 # 网络操作手册（节点部署 · 路由协作 · 故障形态）
 
-> 来源：`dsh-agent-skills/dsh-a2a-nodes` 技能整编（CLI 章节按属主指令退役，2026-10-23）。
-> 本文按「功能 → 应用方法 → 使用场景」组织，全部断言已对 0.6.25+#19 源码校对；
+> 来源：`dsh-agent-skills/dsh-a2a-nodes` 技能整编（原技能的 CLI 章节按属主指令退役，2026-10-23）。
+> 本文按「功能 → 应用方法 → 使用场景」组织，2026-10-27 已对 0.6.28（ae7e24d）源码复校；
 > 配置逐字段契约见仓库 README，协议语义见 `docs/protocol/`。
+> 此后发布的 `a2a-net` CLI（0.6.27+，gh#45/#47）是本仓自带的另一件事，见第七节与 `src/skill/references/cli.md`。
 
 ## 一、拓扑与发现（功能）
 
 去中心化：无中心服务器。节点互相拉取**签名 agent card**（Ed25519，`<home>/a2a/node-key.pem`，TTL/4 重签），直接向对方 `/a2a/direct` 投递。
 
-- **peer 集合**：`peers: [<种子 URL>]` 配置出发，卡片 referral 扩散学习（上限 30、质量评分、持久化 `<home>/a2a/peers.json`；种子永不驱逐）。
+- **peer 集合**：`peers: [<种子 URL>]` 配置出发，卡片 referral 扩散学习（上限 30、质量评分、持久化 `<home>/a2a/peers.json`；种子永不驱逐）。评分驱逐的地址进入 **24h 冷却**（gh#46）：冷却期内再被引荐一律拒收，防止死地址经他人卡片反复回流。
 - **发布**：`announce: true` 发布本节点卡片（`/.well-known/agent-card.json`）。
 - **zone 委派**：`delegates` 发布签名命名记录，名字可穿 zone 解析（≤5 跳，成环失败关闭）。
 - **卡片双面**（0.6.21+ G1）：匿名取卡得**最小发现面**（name/team/session/capabilities/records/peers/签名）；全量面（sessionTeams/teamMemberships/lanIp）需 **OriginClaim 信封**（`X-A2A-Caller/-Url/-Ts/-Sig`，卡钥签名）且**验签 ∧ 链接**双过（0.6.23-25：链接=同宿成员/canvas 句柄 ref/双边互种——单边自申报不成链接）。
@@ -53,7 +54,7 @@
 | 链接 | canvas refs（句柄精确）/ roster / 双边互种 | 谁与我有运营者建立的链接 |
 | 内容 | 暴露档（#19：linked 下限/fleet 自愿上调） | 链接者看多少 |
 
-准入要点：投递面（/a2a/direct）要求共享队（roster ∪ canvas 同队，W1 环路同规）；未验签信封在窗口关闭后按 `untrusted-origin` 拒（与验签败同码）；匿名投递直接拒。
+准入要点：投递面（/a2a/direct）要求共享队（roster ∪ canvas 同队，W1 环路同规）；未验签信封在窗口关闭后按 `untrusted-origin` 拒（与验签败同码）；匿名投递直接拒。已寄存的 `a2a-net` CLI 句柄是本宿主已发布的节点事实，可通过调用方门（f879f0d），其收件进信箱。跨宿画布操作（`/a2a/canvas-op`，由本机 `/__dsh_a2a/fleet-canvas-op` 中继并盖信封）同样要求验签 ∧ 链接。
 
 ### 应用方法
 组链接=在 A2A 工作台建 canvas team 加远端句柄（操作者手势），或双边 peers 互种；成员暴露档经 `a2a_exposure` 工具调（缺席=linked 下限）。
@@ -64,7 +65,7 @@
 
 ## 四、路由与协作（功能）
 
-模型工具十枚：`a2a_whoami`（自内省）、`a2a_team_join`/`a2a_team_leave`（roster 声明，allowlist 门）、`a2a_report`（匿名单向上报通道）、`a2a_teams`（目录，teamScopeInfo 作用域内）、`a2a_route`（阻塞至远端回复，`context_id` 续聊）、`a2a_status`（舰队/在途/活动环，作用域内）、`a2a_tasks`（三层账本）、`a2a_probe`（可达性探测，作用域内）、`a2a_exposure`（暴露档调档，#19）。
+模型工具十枚：`a2a_whoami`（自内省）、`a2a_team_join`/`a2a_team_leave`（roster 声明，allowlist 门）、`a2a_report`（未入网会话的单向上报通道：免加入门、记录发送会话、每会话 30s 一次、≤4000 字、同文 10 分钟 3 次熔断）、`a2a_teams`（目录，teamScopeInfo 作用域内）、`a2a_route`（同步时本机目标最多等 180s 回复，超时以「已投递」形态释放并转回执契约；`async: true` 不等；`context_id` 续聊；模型工具不能直接路由裸进程队）、`a2a_status`（舰队/在途/活动环，作用域内）、`a2a_tasks`（三层账本）、`a2a_probe`（可达性探测，作用域内）、`a2a_exposure`（暴露档调档，#19）。
 
 收件方看到 `[A2A direct] (task <id>) from "<caller>"` 前缀的用户消息；回执契约 `[A2A receipt] task <id> <一行结局>` 经账本对账。
 
@@ -77,7 +78,7 @@
 
 ## 五、控制面鉴权（功能）
 
-控制操作（join/leave/canvas/dispatch/state 写面）在 `controlRoute` 闸后：设 `apiKey` 则全量密钥鉴权（常数时间比对，凌驾回环）；未设则 **loopback-socket 信任**（sec-fetch-site 仅否决不授予——0.6.23 重写后语义）。
+全部 `/__dsh_a2a/*` 控制路由——state（含 GET 读）、join/leave、canvas/canvas-layout/groups、dispatch、tasks/abandon|cancel、owner-settings、cli-deposit、fleet-canvas-op、session-log/remote-session-log——都在 `controlRoute` 闸后：设 `apiKey` 则全量密钥鉴权（常数时间比对，凌驾回环）；未设则 **loopback-socket 信任**（sec-fetch-site 仅否决不授予——0.6.23 重写后语义）。
 
 ### 应用方法
 出回环绑定必须设 apiKey；keyed 部署的 GUI 面板注入 `window.__DSH_A2A_KEY__`（loopback 限）。
@@ -93,13 +94,28 @@
 | 同机短 id 误投 | `dsh/<id8>` 撞同宿另一会话 | 以 state 复核目标行；关键协调走共享文件兜底 |
 | final 超时 ≠ 未送达 | steering 已注入 | 查活动环/回执，勿重发 |
 | 冷会话唤不醒 | 多为 session 日志损坏（seq gap 带行号） | 查 `sessions/<桶>/<uuid>/session.jsonl.zstd`；间歇性可重启重试 |
-| peer 消失 | 评分驱逐（≤0），种子除外 | 设计行为，无需手工清 |
+| peer 消失 | 评分驱逐（≤0），种子除外；被驱逐地址 24h 冷却内不再收（gh#46） | 设计行为，无需手工清；确需立即恢复就把它写进 `peers` 种子 |
 | 回执收不到 | caller 标签不可路由 | `context_id` 主动跟进，勿干等 |
 | 全新会话首轮静默 | 激活窗内 steer 被 latch | 先经 /api/session/prompt 预热（活动事实非空后委派即正常） |
 | **禁重启宿主铁律** | worker 会话随宿主死=任务自杀回环 | 确需重启用分离拉起（先派新再杀旧） |
 | untrusted-origin 拒 | 信封缺席（窗口关）或验签败 | 带四头信封或升级节点 |
 | 卡片只有最小面 | 未验签或未链接 | 链接经 canvas/双边互种，非自申报 |
 
+## 七、a2a-net CLI（会话外调用方，0.6.27+）
+
+脚本、终端或其他 agent 工具链不是 DSH 会话，用本包自带的 `a2a-net` 命令入网：自有 Ed25519 身份（`<name>/<16 位十六进制>`），在**一台** home 宿主寄存签名卡片（户口，最长 4h；过期以离线行保留，重新 `publish` 恢复），收件进该宿主上的信箱（64 条，读不删除），不会被唤醒。
+
+### 应用方法
+- 凭据只走环境变量：`A2A_HOME`（宿主）、`A2A_KEY`（`X-API-Key`）、pocket 后的宿主另需 `A2A_POCKET_TOKEN`（`dsh_pocket_token` cookie）。
+- `init <name>` → `publish` → `route <team> <msg>`（默认异步；`--sync` 等回复，`--context ID` 续聊）→ `inbox --new` 读回执与来信；`inbox --wait` 阻塞等信，`inbox --hook` 供 Claude Code hook 注入上下文。
+- `whoami` / `status` 看户口剩余时长；`teams` / `tasks` / `probe` 读宿主状态面。
+
+### 使用场景
+- 远端席位协作：评审/测试席经 CLI 给宿主上的开发席会话派单，回执进信箱。
+- 边界：只能投递 home 宿主上的团队（直连不转发）；户口按宿主计，在 A 宿主 publish 不能在 B 宿主路由。
+
+完整命令、退出码与注意事项见 `src/skill/references/cli.md`。
+
 ## 指针
 
-- 配置契约：README / README_zh；协议：`docs/protocol/`（delivery-origin-auth 等）；治理流程：`docs/guides/fleet-governance.md`。
+- 配置契约：README / README_zh；CLI：`src/skill/references/cli.md`；协议：`docs/protocol/`（delivery-origin-auth 等）；治理流程：`docs/guides/fleet-governance.md`。

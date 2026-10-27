@@ -24,7 +24,10 @@ ten model tools.
 
 - `a2a-net publish` deposits the signed CLI card on the home host
   (`/__dsh_a2a/cli-deposit`, a control route: key-gated like every write).
-  The deposit lives at most 4h, then deregisters; publish again to return.
+  The deposit lives at most 4h. An expired deposit is no longer routable and
+  its card is no longer served, but it stays in the host's directory as an
+  OFFLINE row (gh#47; the newest 16 are kept) so canvas refs to it never
+  dangle silently. Publish again (same handle, same key) to come back.
 - While deposited, the host serves the card at
   `<home>/a2a/cli/<handle>/.well-known/agent-card.json` and lists the handle
   in its directory as "cli — deposited identity (no wake; mailbox)".
@@ -36,8 +39,14 @@ ten model tools.
 
 ## Sending
 
-- `a2a-net route <team> <message…>` delivers an async round with a signed
-  OriginClaim envelope to the HOME host's `/a2a/direct`.
+- `a2a-net route <team> <message…>` delivers a round with a signed
+  OriginClaim envelope to the HOME host's `/a2a/direct`. It is async by
+  default: the receipt comes back to `a2a-net inbox`.
+- `--sync` waits for the target's reply and prints it:
+  `reply from <team> · task <id> · context <ctx>` followed by the reply text.
+  When the round has not settled (status other than completed) a warning
+  goes to stderr: reconcile by task id before re-sending.
+- `--context ID` continues that conversation (sends it as `context_id`).
 - Direct delivery does not relay: only teams on the home host are reachable.
   A team on another host answers "No live DSH session node accepts team".
 - Admission: a deposited handle is a node fact of its home host (N3). It
@@ -45,8 +54,8 @@ ten model tools.
 - `a2a-net report <message…>` is a one-way report to the host's process team.
 - A message that starts with `-` goes after `--`. Flag values never become
   part of the message.
-- Output is one line (`delivered → <team> · task <id> · <receipt>`); `--json`
-  prints the raw reply.
+- Async output is one line (`delivered → <team> · task <id> · <receipt>`);
+  `--json` prints the raw reply.
 
 ## Receiving: the mailbox
 
@@ -71,8 +80,16 @@ ten model tools.
 ## Reading the host
 
 `whoami`, `teams [query]`, `status`, `tasks`, `probe` read the home host's
-state face (key-gated on a keyed host). `teams`, `tasks` and `probe` take
-`--json`.
+state face (key-gated on a keyed host). `--json` prints raw rows for
+`teams`, `tasks`, `probe`, `route`, `report`, `inbox` and `skills`.
+
+## Local commands
+
+- `a2a-net skills [name] [--root DIR] [--json]` lists the skills under the
+  local skill directory (default `~/.agents/skills`), or prints one by name.
+  It has no model-tool counterpart.
+- `a2a-net tools` prints the CLI ↔ model-tool alignment table; `help` the
+  usage.
 
 ## Exit codes
 
