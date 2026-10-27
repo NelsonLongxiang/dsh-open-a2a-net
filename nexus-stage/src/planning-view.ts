@@ -43,6 +43,7 @@ import { createPlanningMenus } from './planning-menus'
 import { createNodeFlyer, mountBoardSearch } from './planning-search'
 import { applyBoardRelayout } from './planning-relayout'
 import { createNodeList } from './planning-nodelist'
+import { cardText } from './planning-card-text'
 import { viewportBucket, type PlanningDeps, type PlanningInput, type PlanningSession, type PlanningTeam, type PlanningView, type SeamKey, type SeamPointer, type ViewportBucket } from './planning-types'
 import './planning.css'
 
@@ -404,16 +405,6 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
   }
 
-  /** Remote card sub line: score + remote team count/names behind this peer. */
-  function remoteSubText(host: string): string {
-    const rows = lastRemoteTeams.get(host) ?? []
-    const names = rows.map(r => r.name !== undefined && r.name !== '' ? r.name : r.team)
-    const head = names.slice(0, 2).join('、')
-    const more = names.length > 2 ? ` +${names.length - 2}` : ''
-    const score = peerScoreByText.get(host)
-    return (score !== undefined ? `score ${score} · ` : '') + `${rows.length} 远端团队` + (head !== '' ? `：${head}${more}` : '')
-  }
-
   /** The mono route line `<host>/canvas/<name>` when the payload carries it. */
   function routeText(name: string): string {
     const t = lastTeams.find(x => x.name === name)
@@ -454,25 +445,13 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       el.classList.toggle('selected', model.isSelected(n.id))
       el.setAttribute('aria-selected', String(model.isSelected(n.id)))
       const host = n.id.slice('peer-'.length)
-      // gh#38: member cards show their display NAME as the title (the whole
-      // point is picking a person); peer HOST cards keep the host spelling.
-      const nmText = n.id.startsWith('member-')
-        ? (n.name !== undefined && n.name !== '' ? n.name : n.team)
-        : n.remote === true ? host : displayName(n)
+      // Title / second line / tooltip rules: planning-card-text.
+      const txt = cardText(n, n.remote === true ? lastRemoteTeams.get(host) ?? [] : [], peerScoreByText.get(host))
       const nmEl = el.querySelector<HTMLElement>('.nm-text')!
-      if (nmEl.textContent !== nmText) nmEl.textContent = nmText
+      if (nmEl.textContent !== txt.title) nmEl.textContent = txt.title
       const subEl = el.querySelector<HTMLElement>('.sub')!
-      const subBase = n.team + (n.name !== undefined && n.name !== '' ? ' · ' + n.name : '')
-      // When the title fell back to the team label the sub line would repeat
-      // it verbatim; collapse to the cross-team suffix alone in that case.
-      const subText = n.id.startsWith('member-')
-        ? n.team
-        : n.remote === true
-          ? remoteSubText(host)
-          : (subBase === nmText ? '' : subBase)
-            + (n.memberships.length > 1 ? ` · 跨队×${n.memberships.length}` : '')
-            + (n.teams !== undefined && n.teams.length > 0 ? ` · 网络队×${n.teams.length}` : '')
-      if (subEl.textContent !== subText) subEl.textContent = subText
+      if (subEl.textContent !== txt.sub) subEl.textContent = txt.sub
+      if (el.title !== txt.tip) el.title = txt.tip
       const prioEl = el.querySelector<HTMLElement>('.prio')!
       if (n.remote === true) {
         // gh#20 W-A: the peer badge — link class colors the chip (linked
@@ -621,7 +600,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         const saved = layoutDoc?.nodes[id]
         const seat = saved !== undefined ? { x: saved.x, y: saved.y } : seatFor2(id)
         model.upsertNode({
-          id, x: seat.x, y: seat.y, label: s.label, team: s.team, name: s.name,
+          id, x: seat.x, y: seat.y, label: s.label, team: s.team, name: s.name, description: s.description,
           live: s.live !== false, memberships: [],
           ...(s.teams !== undefined && s.teams.length > 0 ? { teams: s.teams } : {}),
         })
@@ -1201,7 +1180,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       if (model.getNode(s.id) !== undefined) {
         model.upsertNode({
           id: s.id, x: model.getNode(s.id)!.x, y: model.getNode(s.id)!.y,
-          label: s.label, team: s.team, name: s.name, live: s.live !== false,
+          label: s.label, team: s.team, name: s.name, description: s.description, live: s.live !== false,
           memberships: effective,
           ...(s.teams !== undefined && s.teams.length > 0 ? { teams: s.teams } : {}),
         })
@@ -1215,7 +1194,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
           y = seat.y
         }
         model.upsertNode({
-          id: s.id, x, y, label: s.label, team: s.team, name: s.name, live: s.live !== false,
+          id: s.id, x, y, label: s.label, team: s.team, name: s.name, description: s.description, live: s.live !== false,
           memberships: effective,
           ...(s.teams !== undefined && s.teams.length > 0 ? { teams: s.teams } : {}),
         })

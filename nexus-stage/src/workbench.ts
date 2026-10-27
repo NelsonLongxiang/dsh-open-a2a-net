@@ -1125,30 +1125,51 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     versionBadge.textContent = last?.version !== undefined ? `v${last.version}` : 'v?'
     const box = clear(headerStats)
     if (last === null) return
-    const alerts: Array<{ text: string; tone: 'warn' | 'danger'; title: string }> = []
+    // Each pill is a way in: it opens the tab (and ledger group) that holds
+    // the rows behind its count.
+    const alerts: Array<{ text: string; tone: 'warn' | 'danger'; title: string; tab: 'ledger' | 'plan' | 'activity'; group?: string }> = []
     // Same definitions as the 台账 tab (wb-ledger ledgerFacts): fire-forget
     // expiries are not dead letters, receiptless rows are never stale.
     const facts = ledgerFacts(last, deps.now())
     const dead = facts.deadLetters.length
-    if (dead > 0) alerts.push({ text: `死信 ${dead}`, tone: 'danger', title: '超过 24h TTL 仍未结算的任务（unconsumed），需在台账清账' })
+    if (dead > 0) alerts.push({ text: `死信 ${dead}`, tone: 'danger', title: '超过 24h TTL 仍未结算的任务（unconsumed），需在台账清账', tab: 'ledger', group: '死信' })
     const stale = facts.stale.length
-    if (stale > 0) alerts.push({ text: `陈旧 ${stale}`, tone: 'warn', title: '我方派发、要回执、已等待 ≥1h 仍未回执（可催办；免回执行不算）' })
+    if (stale > 0) alerts.push({ text: `陈旧 ${stale}`, tone: 'warn', title: '我方派发、要回执、已等待 ≥1h 仍未回执（可催办；免回执行不算）', tab: 'ledger', group: '陈旧' })
     const owed = facts.owedOverdue.length
-    if (owed > 0) alerts.push({ text: `欠回执 ${owed}`, tone: 'warn', title: '对方投递给本机、已等待本机回执超过 1 小时' })
+    if (owed > 0) alerts.push({ text: `欠回执 ${owed}`, tone: 'warn', title: '对方投递给本机、已等待本机回执超过 1 小时', tab: 'ledger', group: '待本机回执' })
     const conflicts = last.idempotency?.conflicts ?? 0
-    if (conflicts > 0) alerts.push({ text: `幂等冲突 ${conflicts}`, tone: 'danger', title: '同一幂等键对应了不同载荷，需人工核查' })
+    if (conflicts > 0) alerts.push({ text: `幂等冲突 ${conflicts}`, tone: 'danger', title: '同一幂等键对应了不同载荷，需人工核查', tab: 'ledger', group: '取证' })
     const repair = (last.reconcile?.rows ?? []).filter(row => row.needsRepair === true).length
-    if (repair > 0) alerts.push({ text: `需修复 ${repair}`, tone: 'danger', title: 'reconcile 无法自动恢复的会话，见行动计划' })
+    if (repair > 0) alerts.push({ text: `需修复 ${repair}`, tone: 'danger', title: 'reconcile 无法自动恢复的会话，见行动计划', tab: 'plan' })
     if (alerts.length === 0) {
       box.appendChild(el('span', 'wb-header-ok')).textContent = '● 无异常'
       return
     }
     for (const a of alerts) {
-      const pill = el('span', `wb-alert wb-alert-${a.tone}`)
+      const pill = el('button', `wb-alert wb-alert-${a.tone}`)
+      pill.type = 'button'
       pill.textContent = a.text
-      pill.title = a.title
+      pill.title = `${a.title}（点击查看）`
+      pill.addEventListener('click', () => openAlert(a.tab, a.group))
       box.appendChild(pill)
     }
+  }
+
+  /** Open the pane behind a header pill. With the board up the panes are
+   *  rail tabs (on a narrow screen the rail slides in first); without it they
+   *  sit on the stage. A ledger group (or the 取证 fold) scrolls into view. */
+  function openAlert(tab: 'ledger' | 'plan' | 'activity', group?: string): void {
+    const pane = dataPanes.find(([k]) => k === tab)![1]
+    if (mode === 'canvas') {
+      root.classList.add('is-rail-open')
+      railTabs.select(tab, { focus: false })
+    }
+    const target = group === undefined ? pane
+      : group === '取证' ? pane.querySelector<HTMLDetailsElement>('details.wb-led-forensics')
+        : Array.from(pane.querySelectorAll<HTMLElement>('.wb-led-group')).find(g => g.dataset.group === group) ?? null
+    if (target === null) return
+    if (target instanceof HTMLDetailsElement) target.open = true
+    target.scrollIntoView?.({ block: 'start', behavior: 'smooth' })
   }
 
   function update(state: StateBody | null): void {

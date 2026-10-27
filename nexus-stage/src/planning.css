@@ -103,6 +103,9 @@
    overflow. The handle line (.sub) stays single-line ellipsis below. */
 #dsh-plan .p-node .nm-text{min-width:0; overflow:hidden; white-space:normal;
   display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; line-height:1.25}
+/* A peer address has no break point, so the two-line clamp clipped it to one
+   line under the badge; let it wrap anywhere onto the second line. */
+#dsh-plan .p-node.remote .nm-text{overflow-wrap:anywhere}
 #dsh-plan .p-node .dot{width:8px; height:8px; border-radius:50%; background:var(--edge-live); flex:none}
 #dsh-plan .p-node.cold .dot{background:transparent; border:1.5px solid var(--edge-cold)}
 #dsh-plan .p-node .sub{font-size:11px; color:var(--ink-muted); margin-top:2px;
@@ -165,12 +168,18 @@
 /* ── narrow board (<680px): the HUD stacks instead of colliding ──
    The toolbar, status chip and legend are absolutely placed for a wide
    board; on a phone they overlapped each other and the toolbar's CJK
-   labels wrapped one glyph per line. Toolbar scrolls sideways on one row,
-   the status chip drops under it, the legend (reference, not state) hides. */
+   labels wrapped one glyph per line. The one-row sideways scroll that
+   followed hid the search box and half the actions off-screen (review
+   2026-10-27), so the toolbar and status chip now flow at the top of the
+   board instead: the toolbar wraps, search first on its own row, and the
+   status chip sits under whatever height that takes. The legend (reference,
+   not state) hides. */
 @media (max-width:680px){
-  #dsh-plan .p-toolbar{left:8px; right:8px; top:8px; overflow-x:auto; scrollbar-width:none}
+  #dsh-plan .p-toolbar{position:relative; top:auto; left:auto; margin:8px 8px 0; flex-wrap:wrap; row-gap:6px}
   #dsh-plan .p-toolbar > *{flex:none}
-  #dsh-plan .p-status{left:8px; right:auto; top:58px; padding:6px 10px; gap:10px; flex-wrap:wrap}
+  #dsh-plan .p-toolbar .p-search{order:-1; flex:1 1 100%}
+  #dsh-plan .p-toolbar .p-search-input{width:100%; box-sizing:border-box}
+  #dsh-plan .p-status{position:relative; top:auto; right:auto; left:auto; width:fit-content; margin:6px 8px 0; padding:6px 10px; gap:10px; flex-wrap:wrap}
   #dsh-plan .p-legend{display:none}
 }
 @media (pointer:coarse){

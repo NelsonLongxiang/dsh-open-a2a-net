@@ -19,7 +19,7 @@
  * @module nexus-stage/wb-chat
  */
 import type { ArchivedRow, DeadRow, PendingRow, RemoteRow, StateBody } from './workbench'
-import { VERDICTS } from './wb-ledger'
+import { overHour, VERDICTS } from './wb-ledger'
 import { displayName } from './stage-name'
 
 /** Chat target: a node picked on the board or in the directory. Session and
@@ -55,8 +55,6 @@ export interface ChatDrawer {
 
 /** The composer's hard limit (dispatch route contract). */
 const MAX_CHARS = 4000
-/** A pending receipt older than this is 陈旧 (same definition as the ledger). */
-const STALE_MS = 60 * 60 * 1000
 /** Within this many px of the bottom, a repaint keeps the thread pinned there. */
 const STICK_PX = 32
 
@@ -415,9 +413,14 @@ export function createChatDrawer(deps: ChatDrawerDeps): ChatDrawer {
   function pendingStatus(row: PendingRow, now: number): SentRow['status'] {
     const inbound = row.direction === 'inbound'
     if (row.receiptExpected === false) return { text: inbound ? '来信 · 无需回执' : '已送达 · 无回执', tone: 'muted', hint: '免回执消息：不等回执，24h 后自动归档' }
-    const stale = now - row.startedAt > STALE_MS
-    const label = inbound ? '待本机回执' : '待回执'
-    return { text: `${stale ? '陈旧' : label} · ${row.status}`, tone: stale ? 'warn' : 'wait', hint: `${inbound ? '对方等待本机回执；' : ''}派发于 ${ago(row.startedAt, now)}` }
+    // One hour boundary with the 台账 tab (the host's settleable verdict,
+    // browser clock only on older hosts). Past it, OUR send is 陈旧 (can be
+    // nudged); a peer's delivery is a receipt WE owe — never 陈旧 (#30 P3).
+    const late = overHour(row, now)
+    const text = inbound ? (late ? '待本机回执 · 超 1 小时' : '待本机回执') : late ? '陈旧' : '待回执'
+    // The row's own status only when it says more than 'pending'.
+    const extra = row.status !== 'pending' ? ` · ${row.status}` : ''
+    return { text: `${text}${extra}`, tone: late ? 'warn' : 'wait', hint: `${inbound ? '对方等待本机回执；' : ''}${inbound ? '收到' : '派发'}于 ${ago(row.startedAt, now)}` }
   }
 
   /** A send that left the ledger, by how it ended (gh#31). `endedBy` says
