@@ -5571,11 +5571,12 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // node team when it has joined, else the node label), so the receiver
       // can answer with one a2a_route instead of an unroutable display label.
       a2aJoinGateRefusal(agent === undefined ? undefined : { agent })
-      // S3 (team-scoped routing, off by default): when the owner turns it
-      // on, collaboration happens inside teams. A session caller must have
-      // declared membership in the target team before it may address it,
-      // and a caller with no teams at all has no network — a teamless node
-      // is, by the same ruling, an unjoined one. Host-side calls (no agent)
+      // S3 (team-scoped routing, phase-2 default ON per the 2026-09-01 owner
+      // ruling; set false to restore the open outbound seam): a session
+      // caller must have declared membership in the target team before it
+      // may address it, and a caller with no teams at all has no network —
+      // a teamless node is, by the same ruling, an unjoined one. Host-side
+      // calls (no agent)
       // and the initiator face stay exempt, like the join gate; discovery
       // (a2a_teams) stays open so a teamless node can still see what to join.
       if (config.teamScopeRouting && agent !== undefined) {
