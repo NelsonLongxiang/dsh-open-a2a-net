@@ -329,7 +329,15 @@ function unreadOf(mail, cursor) {
 
 async function fetchMail(handle) {
   const out = await control({ action: 'inbox', handle })
-  if (out.ok !== true || !Array.isArray(out.mail)) die(`[inbox] ${String(out.error ?? 'no mail list in the reply')}`)
+  if (out.ok !== true || !Array.isArray(out.mail)) {
+    const message = String(out.error ?? 'no mail list in the reply')
+    // A host restarting answers 405 with an empty body, a proxy 5xx, a
+    // stall 408/429 — transient states that wait like a dropped
+    // connection instead of killing the wait; auth and protocol refusals
+    // still exit.
+    if (/^HTTP (405|408|429|5\d\d)\b/.test(message)) return []
+    die(`[inbox] ${message}`)
+  }
   return out.mail
 }
 
