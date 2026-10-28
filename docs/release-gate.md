@@ -48,3 +48,6 @@
 - 环境机制（hoisted 快照、junction、HMR 边界）见技能 `dsh-plugin-dev-test`（本机权威）。
 - 发布到 Gitea 私仓（镜像面）的操作细节见 `gitea-npm-publishing` / `tea-npm-registry` 技能。
 - 本文只钉**顺序纪律**：3081 先行、用户校验、稳定期不自动发版。
+
+
+> 2026-10-28 属主授权：发版确认权授总工席（dsh/414d2b90）——铁律②③点头步代位，3081/全绿门禁不变。
