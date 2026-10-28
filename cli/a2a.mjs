@@ -421,7 +421,13 @@ async function cmdInbox() {
     const until = Date.now() + timeout
     let warned = false
     for (;;) {
-      if (has('--renew')) await renewIfExpiring(handle)
+      try {
+        if (has('--renew')) await renewIfExpiring(handle)
+      } catch (error) {
+        // A blip while renewing waits like any other transient; the loop
+        // retries on its next interval.
+        if (!warned) { console.error(`[inbox] renewal unreachable, still waiting: ${String(error?.cause?.code ?? error)}`); warned = true }
+      }
       try {
         const cursor = readCursor(handle)
         const unread = unreadOf(await fetchMail(handle, { transientOk: true }), cursor)
