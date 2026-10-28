@@ -65,10 +65,9 @@ describe('buildWorld', () => {
   })
 })
 
-describe('group drag', () => {
-  it('moves the frame rect and member centers from the pointerdown snapshot', () => {
+describe('frame drag (owner ruling 2026-10-28: a frame moves only itself)', () => {
+  it('moves the frame rect from the pointerdown snapshot; members stay put', () => {
     const m = buildWorld({ sessions, teams, layout: null })
-    // Copies, not references - applyFrameDrag mutates the live geometry.
     const before = { ...m.getFrame('选品')! }
     const s1 = { ...m.getNode('s1')! }
     const s3 = { ...m.getNode('s3')! } // non-member: must stay put
@@ -77,19 +76,20 @@ describe('group drag', () => {
     const after = m.getFrame('选品')!
     expect(after.x).toBeCloseTo(before.x + 30, 9)
     expect(after.y).toBeCloseTo(before.y - 20, 9)
-    expect(m.getNode('s1')!.x).toBeCloseTo(s1.x + 30, 9)
-    expect(m.getNode('s1')!.y).toBeCloseTo(s1.y - 20, 9)
-    // The non-member node's position is untouched by the group drag.
+    // Owner ruling: the member's position is unchanged — a frame moves only itself.
+    expect(m.getNode('s1')!.x).toBeCloseTo(s1.x, 9)
+    expect(m.getNode('s1')!.y).toBeCloseTo(s1.y, 9)
+    // The non-member node's position is also untouched.
     expect(m.getNode('s3')!.x).toBeCloseTo(s3.x, 9)
     expect(m.getNode('s3')!.y).toBeCloseTo(s3.y, 9)
   })
 
-  it('repeated applies from the same snapshot do not drift', () => {
+  it('repeated applies from the same snapshot do not drift (rect only)', () => {
     const m = buildWorld({ sessions, teams, layout: null })
     const snap = m.beginFrameDrag('选品')!
-    const centerBefore = { x: m.getNode('s1')!.x, y: m.getNode('s1')!.y }
+    const rectBefore = { x: m.getFrame('选品')!.x, y: m.getFrame('选品')!.y }
     for (let i = 1; i <= 50; i++) m.applyFrameDrag(snap, i * 0.1, i * 0.1)
-    expect(m.getNode('s1')!.x).toBeCloseTo(centerBefore.x + 5, 6)
+    expect(m.getFrame('选品')!.x).toBeCloseTo(rectBefore.x + 5, 6)
   })
 
   it('returns undefined for an unknown frame', () => {
