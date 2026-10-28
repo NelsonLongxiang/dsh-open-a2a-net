@@ -78,9 +78,10 @@ describe('planning-overlap', () => {
     expect(noOverlaps(m)).toBe(true)
   })
 
-  it('a card on a frame it does not belong to moves just outside it; members stay', () => {
+  it('a card with no frame of its own moves just outside the frame it sat on; members stay', () => {
     const m = board()
     m.setFrame('B', { x: 900, y: 0, w: 400, h: 200 }) // no frame overlap now
+    m.dragNodes(['b1'], 500, -50) // keep B's member inside B, off the landing spot (upsert never repositions)
     m.upsertNode(node('peer-x', 200, 120, { remote: true }))
     m.upsertNode(node('a2', 150, 60))
     m.setTeamMembers('A', ['a1', 'a2'])
@@ -114,5 +115,93 @@ describe('planning-overlap', () => {
       for (const [name, f] of m.allFrames()) if (!own.has(name)) expect(hit(nodeRect(n), f)).toBe(false)
     }
     expect(settleBoard(m, new Set())).toBe(false)
+  })
+
+  describe('home first, never stacked (PR#85 follow-up)', () => {
+    const inside = (m: WorldModel, id: string, f: string): boolean => {
+      const r = nodeRect(m.getNode(id)!), g = m.getFrame(f)!
+      return r.x >= g.x && r.y >= g.y && r.x + r.w <= g.x + g.w && r.y + r.h <= g.y + g.h
+    }
+    const noCardOverlaps = (m: WorldModel): boolean => {
+      const ns = m.allNodes()
+      for (let i = 0; i < ns.length; i++) for (let j = i + 1; j < ns.length; j++) if (hit(nodeRect(ns[i]!), nodeRect(ns[j]!))) return false
+      return true
+    }
+    function dropAOnB(): WorldModel {
+      const m = new WorldModel()
+      m.setFrame('A', { x: 0, y: 0, w: 400, h: 240 })
+      m.setFrame('B', { x: 600, y: 0, w: 400, h: 240 })
+      m.upsertNode(node('a1', 120, 100))
+      m.upsertNode(node('b1', 720, 100))
+      m.upsertNode(node('b2', 880, 100))
+      m.setTeamMembers('A', ['a1'])
+      m.setTeamMembers('B', ['b1', 'b2'])
+      const snap = m.beginFrameDrag('A')!
+      m.applyFrameDrag(snap, 500, 0) // the user drops A onto B (the rect only, PR#85)
+      return m
+    }
+
+    it('dropping a frame onto another: the yielding frame\'s members go back inside it, not stacked beside the dropped one', () => {
+      const m = dropAOnB()
+      settleBoard(m, new Set(), 'A')
+      expect(noOverlaps(m)).toBe(true)
+      expect(inside(m, 'b1', 'B')).toBe(true)
+      expect(inside(m, 'b2', 'B')).toBe(true)
+      expect(noCardOverlaps(m)).toBe(true)
+      expect(settleBoard(m, new Set(), 'A')).toBe(false) // stable
+    })
+
+    it('eviction never moves or resizes a frame, and leaves a member merely outside its own frame alone', () => {
+      const m = dropAOnB()
+      separateFrames(m, new Set(), 'A')
+      const before = new Map(m.allFrames().map(([k, f]) => [k, { ...f }]))
+      evictStrangers(m)
+      for (const [k, f] of m.allFrames()) expect(f).toEqual(before.get(k))
+      expect(m.getNode('a1')!.x).toBe(120) // left behind by A's drag (PR#85): not a stranger anywhere, untouched
+      expect(inside(m, 'a1', 'A')).toBe(false)
+    })
+
+    it('a card in two frames goes to the first of its memberships (state order), whatever the frame order', () => {
+      for (const order of [['H', 'K'], ['K', 'H']]) {
+        const m = new WorldModel()
+        m.setFrame('S', { x: 0, y: 0, w: 400, h: 240 })
+        for (const k of order) m.setFrame(k, k === 'H' ? { x: 600, y: 0, w: 400, h: 240 } : { x: 0, y: 400, w: 400, h: 240 })
+        m.upsertNode(node('x', 200, 120, { memberships: [{ team: 'K', index: 0 }, { team: 'H', index: 0 }] }))
+        evictStrangers(m)
+        expect(inside(m, 'x', 'K')).toBe(true)
+      }
+    })
+
+    it('a remote frame\'s member follows the same rule', () => {
+      const m = new WorldModel()
+      m.setFrame('local', { x: 0, y: 0, w: 400, h: 240 })
+      m.setFrame('org-remote', { x: 600, y: 0, w: 400, h: 240 })
+      m.upsertNode(node('r1', 200, 120, { remote: true }))
+      m.setTeamMembers('org-remote', ['r1'])
+      evictStrangers(m)
+      expect(inside(m, 'r1', 'org-remote')).toBe(true)
+    })
+
+    it('a full home frame sends the card outside, and two strangers never land on the same spot', () => {
+      const m = new WorldModel()
+      m.setFrame('A', { x: 0, y: 0, w: 400, h: 240 })
+      m.setFrame('T', { x: 600, y: 0, w: 120, h: 60 }) // too small for any seat
+      m.upsertNode(node('s1', 150, 100))
+      m.upsertNode(node('s2', 250, 160))
+      m.setTeamMembers('T', ['s1'])
+      evictStrangers(m)
+      for (const id of ['s1', 's2']) for (const [name, f] of m.allFrames()) if (!(id === 's1' && name === 'T')) expect(hit(nodeRect(m.getNode(id)!), f)).toBe(false)
+      expect(noCardOverlaps(m)).toBe(true)
+    })
+
+    it('a crowded board still ends: every stranger finds a free spot, none stacked', () => {
+      const m = new WorldModel()
+      m.setFrame('A', { x: 0, y: 0, w: 400, h: 240 })
+      m.setFrame('R', { x: 400 + OVERLAP_GAP, y: 0, w: 400, h: 2000 }) // blocks the right side
+      for (let i = 0; i < 12; i++) m.upsertNode(node(`s${i}`, 100 + (i % 3) * 100, 60 + Math.floor(i / 3) * 40))
+      expect(evictStrangers(m)).toBe(true)
+      for (const n of m.allNodes()) for (const [, f] of m.allFrames()) expect(hit(nodeRect(n), f)).toBe(false)
+      expect(noCardOverlaps(m)).toBe(true)
+    })
   })
 })

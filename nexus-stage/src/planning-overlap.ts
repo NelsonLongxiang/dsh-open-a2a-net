@@ -9,9 +9,14 @@
  *   frame the user just touched stays where it was put; a remote org frame
  *   never moves on its own (gh#44: its rect is the user's), so a local frame
  *   yields to it; two remote frames are left alone.
- * - Card vs frame: a card lying on a frame it does not belong to moves just
- *   outside that frame (right of it, else below it, else right of every
- *   frame). Members are never moved off their own frame.
+ * - Card vs frame: a card lying on a frame it does not belong to goes home
+ *   first — the first free grid seat inside its own frame (memberships in
+ *   state order) — and only a card with no frame (or no free seat) goes
+ *   outside: right of that frame, else below it, else down a column right of
+ *   every frame. No landing spot covers another card or a foreign frame, and
+ *   frames are never moved or resized by this step. Members are never moved
+ *   off their own frame; a member merely outside its frame (PR#85: a frame
+ *   moves only itself) is left where it is.
  * Callers run it after a frame drag or resize, after 整理成员 / 一键重排,
  * and once when the board first has content — never on every poll (a poll
  * does not reposition what the user arranged).
@@ -74,22 +79,45 @@ export function separateFrames(model: WorldModel, remote: ReadonlySet<string>, t
   return changed
 }
 
+/** Grid of the 整理成员 layout, shared by eviction seats. */
+const PAD = 28
+const GAP_X = 16
+const GAP_Y = 14
+
+/** Card-centred seats inside a frame, row by row (the 整理成员 grid). */
+function seatsIn(f: Rect): Array<{ x: number; y: number }> {
+  const out: Array<{ x: number; y: number }> = []
+  for (let y = f.y + PAD; y + NODE_H <= f.y + f.h - PAD; y += NODE_H + GAP_Y) {
+    for (let x = f.x + PAD; x + NODE_W <= f.x + f.w - PAD; x += NODE_W + GAP_X) out.push({ x: x + NODE_W / 2, y: y + NODE_H / 2 })
+  }
+  return out
+}
+
 /** Move cards off frames they do not belong to; true when anything moved. */
 export function evictStrangers(model: WorldModel): boolean {
   let changed = false
   const frames = model.allFrames()
-  const clear = (r: Rect, own: ReadonlySet<string>): boolean => frames.every(([name, f]) => own.has(name) || !hit(r, f))
+  const rectOf = new Map(frames)
   for (const n of model.allNodes()) {
     const own = new Set(n.memberships.map(m => m.team))
-    const r = nodeRect(n)
-    const host = frames.find(([name, f]) => !own.has(name) && hit(r, f))
+    const host = frames.find(([name, f]) => !own.has(name) && hit(nodeRect(n), f))
     if (host === undefined) continue
     const f = host[1]
-    const at = (x: number, y: number): Rect => ({ x: x - NODE_W / 2, y: y - NODE_H / 2, w: NODE_W, h: NODE_H })
+    // Free = no foreign frame and no other card under it (cards read live: earlier evictions count).
+    const free = (p: { x: number; y: number }): boolean => {
+      const r = nodeRect(p)
+      return frames.every(([name, g]) => own.has(name) || !hit(r, g)) &&
+        model.allNodes().every(o => o.id === n.id || !hit(r, nodeRect(o)))
+    }
+    const home = n.memberships.map(m => rectOf.get(m.team)).filter((g): g is FrameGeom => g !== undefined)
+    const seat = home.flatMap(seatsIn).find(free)
     const right = { x: f.x + f.w + OVERLAP_GAP + NODE_W / 2, y: n.y }
     const below = { x: n.x, y: f.y + f.h + OVERLAP_GAP + NODE_H / 2 }
+    // Last resort: a column right of every frame, top-down from this frame. A card blocks
+    // at most two seats of this pitch, so 2·cards+1 seats always hold a free one.
     const farX = Math.max(...frames.map(([, g]) => g.x + g.w)) + OVERLAP_GAP + NODE_W / 2
-    const to = clear(at(right.x, right.y), own) ? right : clear(at(below.x, below.y), own) ? below : { x: farX, y: n.y }
+    const column = Array.from({ length: 2 * model.allNodes().length + 1 }, (_, i) => ({ x: farX, y: f.y + NODE_H / 2 + i * (NODE_H + GAP_Y) }))
+    const to = seat ?? [right, below, ...column].find(free) ?? column[column.length - 1]!
     model.dragNodes([n.id], to.x - n.x, to.y - n.y)
     changed = true
   }
@@ -109,9 +137,6 @@ export function settleBoard(model: WorldModel, remote: ReadonlySet<string>, touc
  * fit them. Members of 2+ teams keep their positions.
  */
 export function tidyMembers(model: WorldModel): void {
-  const PAD = 28
-  const GAP_X = 16
-  const GAP_Y = 14
   for (const [name, rect] of model.allFrames()) {
     const sole = model.teamMemberIds(name)
       .map(id => model.getNode(id))
