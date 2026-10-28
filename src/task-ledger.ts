@@ -80,9 +80,9 @@ export type TaskStatus = 'pending' | 'dead'
 export type DeadReason = 'fire-forget' | 'unconsumed'
 
 /** gh#31: which archive path ended a row — a receipt, a content echo, or the caller. */
-export type ArchiveEnd = 'receipt' | 'echo' | 'abandoned' | 'cancelled'
+export type ArchiveEnd = 'receipt' | 'echo' | 'abandoned' | 'cancelled' | 'evicted'
 
-const ARCHIVE_ENDS: readonly string[] = ['receipt', 'echo', 'abandoned', 'cancelled']
+const ARCHIVE_ENDS: readonly string[] = ['receipt', 'echo', 'abandoned', 'cancelled', 'evicted']
 
 /** Summary marker {@link TaskLedger.resolveEcho} writes on echo-settled rows. */
 const ECHO_SUMMARY = '(settled by content echo)'
@@ -321,7 +321,8 @@ export class TaskLedger {
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
       ...(brief !== undefined && brief !== '' ? { brief } : {}),
       status: 'pending' as const,
-    }, ...this.tasks].slice(0, TASK_CAP)
+    }, ...this.tasks]
+    this.trimOwed()
     this.persist()
   }
 
@@ -339,7 +340,8 @@ export class TaskLedger {
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
       ...(brief !== undefined && brief !== '' ? { brief } : {}),
       status: 'pending' as const,
-    }, ...this.tasks].slice(0, TASK_CAP)
+    }, ...this.tasks]
+    this.trimOwed()
     this.persist()
   }
 
@@ -371,7 +373,8 @@ export class TaskLedger {
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
       ...(brief !== undefined && brief !== '' ? { brief } : {}),
       status: 'pending' as const,
-    }, ...this.tasks].slice(0, TASK_CAP)
+    }, ...this.tasks]
+    this.trimOwed()
     this.persist()
   }
 
@@ -608,6 +611,33 @@ export class TaskLedger {
   /** Move one settled record to the archive head, trimming at the cap. */
   private archiveSettled(record: ArchivedRecord): void {
     this.archived = [record, ...this.archived].slice(0, this.archiveCap)
+  }
+
+  /**
+   * gh#86 (chief order direct-4f596524): when the owed book exceeds
+   * TASK_CAP, the overflow rows go to the ARCHIVE as evicted - visible
+   * for audit, never silently dropped. The review seat's recommendation,
+   * chief-endorsed: the silent cap slice lost the oldest pending rows
+   * with no trace. L8 criterion: zero silently-dropped.
+   */
+  private trimOwed(): void {
+    if (this.tasks.length <= TASK_CAP) return
+    const overflow = this.tasks.slice(TASK_CAP)
+    this.tasks = this.tasks.slice(0, TASK_CAP)
+    const now = this.now()
+    for (const row of overflow) {
+      this.archiveSettled({
+        taskId: row.taskId,
+        team: row.team,
+        peer: row.peer,
+        startedAt: row.startedAt,
+        ...(row.contextId !== undefined ? { contextId: row.contextId } : {}),
+        resolvedAt: now,
+        ...(row.brief !== undefined ? { brief: row.brief } : {}),
+        endedBy: 'evicted' as const,
+        ...(row.direction !== undefined ? { direction: row.direction } : {}),
+      })
+    }
   }
 
   /** Lazy dead-letter sweep: overdue pending rows flip status, at most once. */
