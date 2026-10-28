@@ -28,13 +28,14 @@ const noOverlaps = (m: WorldModel): boolean => {
 }
 
 describe('planning-overlap', () => {
-  it('overlapping frames are separated by the shortest step, members riding along', () => {
+  it('overlapping frames are separated by the shortest step; the moved frame carries NO members (owner ruling 2026-10-28)', () => {
     const m = board()
     expect(separateFrames(m, new Set())).toBe(true)
     expect(noOverlaps(m)).toBe(true)
-    // B (later in board order) stepped right by 100 + gap; its member moved with it.
+    // B (later in board order) stepped right by 100 + gap; its member STAYS.
     expect(m.getFrame('B')).toEqual({ x: 400 + OVERLAP_GAP, y: 50, w: 400, h: 200 })
-    expect(m.getNode('b1')!.x).toBe(500 + 100 + OVERLAP_GAP)
+    expect(m.getNode('b1')!.x).toBe(500) // unchanged — a frame moves only itself
+    expect(m.getNode('a1')!.x).toBe(100) // untouched frame's member untouched
     expect(m.getFrame('A')).toEqual({ x: 0, y: 0, w: 400, h: 200 })
   })
 

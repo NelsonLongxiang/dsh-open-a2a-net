@@ -87,7 +87,7 @@ describe('planning view DOM', () => {
     expect(onDirty).not.toHaveBeenCalled() // selection is not persisted state
   })
 
-  it('frame-head drag moves the whole group (rect + members), onDirty once', () => {
+  it('frame-head drag moves the rect only; members stay put (owner ruling 2026-10-28), onDirty once', () => {
     const { v, onDirty } = view()
     v.reconcile({ sessions, teams, peerCount: 0 })
     const head = v.root.querySelector<HTMLElement>('.p-frame-head[data-frame="alpha"]')!
@@ -99,7 +99,7 @@ describe('planning view DOM', () => {
     v.seam.pointerMove(ptr({ target: head, clientX: 110, clientY: 10 }))
     v.seam.pointerUp(ptr({ target: head, clientX: 110, clientY: 10 }))
     expect(parseFloat(frame.style.left)).toBe(fx0 + 100)
-    expect(parseFloat(s1.style.left)).toBe(s1x0 + 100)
+    expect(parseFloat(s1.style.left)).toBe(s1x0) // unchanged — a frame moves only itself
     expect(onDirty).toHaveBeenCalledTimes(1)
   })
 

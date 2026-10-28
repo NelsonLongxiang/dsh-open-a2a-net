@@ -195,11 +195,10 @@ export interface WorldNode {
 /** A team frame rectangle in world space (top-left + size). */
 export interface FrameGeom { x: number; y: number; w: number; h: number }
 
-/** Snapshot for group drag: the frame rect plus member centers at pointerdown. */
+/** Snapshot for a frame drag: the frame rect at pointerdown (owner ruling 2026-10-28: a frame always moves only itself — members never ride along). */
 export interface FrameDragSnapshot {
   readonly name: string
   readonly rect: FrameGeom
-  readonly centers: ReadonlyArray<readonly [string, number, number]>
 }
 
 /** The card rectangle (top-left + size) for a node centered at (x, y). */
@@ -274,38 +273,27 @@ export class WorldModel {
   }
 
   /**
-   * Start a frame group drag: snapshot the rect and member centers so the
-   * drag applies total deltas from this origin (no float drift). Returns
-   * undefined for an unknown frame.
+   * Start a frame drag: snapshot the rect so the drag applies total deltas
+   * from this origin (no float drift). Returns undefined for an unknown
+   * frame. Owner ruling 2026-10-28: the snapshot carries NO member state —
+   * a frame drag moves only the rect; members stay where the user put them.
    */
   beginFrameDrag(name: string): FrameDragSnapshot | undefined {
     const rect = this.frames.get(name)
     if (rect === undefined) return undefined
-    const centers: Array<readonly [string, number, number]> = []
-    for (const n of this.nodes.values()) {
-      for (const m of n.memberships) {
-        if (m.team === name) { centers.push([n.id, n.x, n.y] as const); break }
-      }
-    }
-    return { name, rect: { ...rect }, centers }
+    return { name, rect: { ...rect } }
   }
 
-  /** Apply a total world-space delta from the drag origin to rect + members. */
+  /** Apply a total world-space delta from the drag origin to the rect ONLY. */
   applyFrameDrag(snap: FrameDragSnapshot, dx: number, dy: number): void {
     const rect = this.frames.get(snap.name)
     if (rect === undefined) return
     rect.x = snap.rect.x + dx
     rect.y = snap.rect.y + dy
-    for (const [id, cx, cy] of snap.centers) {
-      const n = this.nodes.get(id)
-      if (n === undefined) continue
-      n.x = cx + dx
-      n.y = cy + dy
-    }
     this.bump()
   }
 
-  /** Nudge (keyboard micro-move) - same math as drag, kept as a named act. */
+  /** Nudge (keyboard micro-move): moves the SELECTED CARDS only — frames are never in the card selection, so nudging already honours the owner ruling (a frame always moves only itself). */
   nudge(ids: ReadonlyArray<string>, dx: number, dy: number): void { this.dragNodes(ids, dx, dy) }
 
   /** Set selection: nodes whose card rect intersects the world-space marquee. */
