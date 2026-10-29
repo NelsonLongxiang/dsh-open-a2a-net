@@ -167,7 +167,11 @@ function runCanvasAction(a: CanvasAction): Promise<boolean> {
           cache: 'no-store',
         }).catch(() => undefined)
         const body = r !== undefined ? await r.json().catch(() => undefined) : undefined
-        if (body?.ok !== true) return false
+        if (body?.ok !== true) {
+          // Say WHY the peer refused (not linked, untrusted origin, unknown member…), not just that it did.
+          planning.notice('error', `跨主机团队操作失败：${String(body?.error ?? '对端无响应')}`)
+          return false
+        }
       }
       return true
     })()
