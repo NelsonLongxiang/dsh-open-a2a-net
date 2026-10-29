@@ -931,7 +931,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   function pointerCancel(ev: SeamPointer): void {
     for (const el of frameEls.values()) el.classList.remove('drop-target')
     if (gesture.kind === 'node') gesture.el?.classList.remove('dragging')
-    const panned = gesture.kind === 'pan' && gesture.moved
+    const panned = (gesture.kind === 'pan' && gesture.moved) || rightPress?.moved === true // right-drag pans live in rightPress
     marquee.style.display = 'none'
     rightPress = null
     gesture = { kind: 'none' }

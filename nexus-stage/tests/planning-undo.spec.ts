@@ -176,6 +176,11 @@ describe('撤销 on the board', () => {
     onDirty.mockClear()
     v.seam.pointerCancel(ptr({ target: v.root, button: 1, clientX: 760, clientY: 760 }))
     expect(onDirty).toHaveBeenCalled()
+    v.seam.pointerDown(ptr({ target: v.root, button: 2, clientX: 700, clientY: 700 })) // right-drag pan
+    v.seam.pointerMove(ptr({ target: v.root, button: 2, clientX: 760, clientY: 760 }))
+    onDirty.mockClear()
+    v.seam.pointerCancel(ptr({ target: v.root, button: 2, clientX: 760, clientY: 760 }))
+    expect(onDirty).toHaveBeenCalled()
   })
 
   it('Ctrl+Z in the search box stays the input\'s own undo', () => {
