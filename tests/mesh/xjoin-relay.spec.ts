@@ -55,4 +55,41 @@ describe('cross-instance join through the fleet relay', () => {
       await b.dispose()
     }
   }, 60_000)
+
+  it('PR#96 P2-1: a hanging owner CARD face never gates the relay reply — the op answer returns as soon as it lands', async () => {
+    const [pa, pb] = [await reservePort(), await reservePort()]
+    const url = (p: number) => `http://127.0.0.1:${String(p)}`
+    const a = await bootNode({ name: 'A2', session: 'mesh-xjoin-a2', team: 'dsh', sessionNodes: true, port: pa, peers: [url(pb)] })
+    const b = await bootNode({ name: 'B2', session: 'mesh-xjoin-b2', team: 'dsh', sessionNodes: true, port: pb, peers: [url(pa)] })
+    const ids = { a: 'session-aaaaaaaa55556666', b: 'session-bbbbbbbb77778888' }
+    ownSession(a, ids.a)
+    ownSession(b, ids.b)
+    try {
+      await post(`${a.baseUrl}/__dsh_a2a/join`, { id: ids.a })
+      await post(`${b.baseUrl}/__dsh_a2a/join`, { id: ids.b })
+      expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: '挂起队' })).ok).toBe(true)
+      // Warm the link and B's card cache for A with one landed relay op first.
+      expect((await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'add-member', name: '挂起队', id: ids.b })).ok).toBe(true)
+      // Now hang ONLY A's card face: every other route (the op face, the ping
+      // face, the test's own post()) still goes through the real network.
+      const real = globalThis.fetch
+      vi.stubGlobal('fetch', ((input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === `${a.baseUrl}/.well-known/agent-card.json` && (init?.method ?? 'GET') === 'GET') {
+          return new Promise<Response>(() => { /* never settles: the card face hangs */ })
+        }
+        return real(input, init)
+      }) as typeof fetch)
+      const t0 = Date.now()
+      const relayed = await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'remove-member', name: '挂起队', id: ids.b })
+      // With the old `await refreshPeerCard` this reply waited on the hung
+      // card face (two serial 15s fetch budgets); the pin fails on timeout.
+      expect(relayed.ok).toBe(true)
+      expect(relayed.members ?? []).not.toContain('dsh/bbbbbbbb')
+      expect(Date.now() - t0).toBeLessThan(3_000)
+    } finally {
+      vi.unstubAllGlobals()
+      await a.dispose()
+      await b.dispose()
+    }
+  }, 15_000)
 })

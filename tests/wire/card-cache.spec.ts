@@ -74,6 +74,44 @@ describe('shared TTL card cache', () => {
     await ctx.fiber.dispose()
   })
 
+  it('PR#96 P2-2: a refetch failure keeps the OLD card for callers joining the single flight (the mirror never blanks)', async () => {
+    const { privateKey } = generateKeyPairSync('ed25519')
+    const card = cardBody({ privateKey }, 'http://peer-a')
+    let calls = 0
+    let serving = true
+    vi.stubGlobal('fetch', (url: string, init?: { method?: string }) => {
+      if (String(url).startsWith('http://peer-a') && (init?.method ?? 'GET') === 'GET') {
+        calls += 1
+        if (serving) return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify(card) } as unknown as Response)
+        return Promise.reject(new Error('peer-a went down'))
+      }
+      return Promise.reject(new Error('unreachable'))
+    })
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    // Tiny positive TTL so the good entry is genuinely expired when we refetch.
+    apply(ctx, makeConfig({ peers: ['http://peer-a'], dshHome: tmpHome(), cardCacheTtlMs: 40 }))
+    const teams = ctx.tools.get('a2a_teams')
+    const prime = await teams?.execute({}, runContext()) as { teams: { team: string }[] }
+    expect(prime.teams.some(t => t.session === 'peer-host')).toBe(true)
+    const callsWhenGood = calls
+    serving = false
+    await new Promise(resolve => setTimeout(resolve, 60))
+    // Two concurrent calls join the SAME single flight over the expired entry;
+    // the fetch fails — both must still surface the OLD card, not undefined.
+    const [first, second] = await Promise.all([
+      teams?.execute({}, runContext()) as Promise<{ teams: { team: string }[] }>,
+      teams?.execute({}, runContext()) as Promise<{ teams: { team: string }[] }>,
+    ])
+    expect(first.teams.some(t => t.session === 'peer-host')).toBe(true)
+    expect(second.teams.some(t => t.session === 'peer-host')).toBe(true)
+    // Single-flight: the two joined calls shared ONE new fetch attempt.
+    expect(calls).toBe(callsWhenGood + 1)
+    await ctx.fiber.dispose()
+  })
+
   it('caches negative results so dead peers are not re-punished per poll', async () => {
     let calls = 0
     vi.stubGlobal('fetch', (url: string) => {

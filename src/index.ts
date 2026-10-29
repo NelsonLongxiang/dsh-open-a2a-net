@@ -3914,6 +3914,15 @@ ${message}`
     if (inFlight !== undefined) return inFlight
     const fetch = fetchPeerCard(url)
       .then(card => {
+        // PR#96 post-merge review (P2-2): a miss must not blank the mirror for
+        // callers joining this single flight, nor for cache readers before any
+        // restorer runs — when a last good entry exists, keep it verbatim (its
+        // own age: no fake freshness, and peers that NEVER had a card keep the
+        // negative-TTL backoff below) and hand the old card to every joiner.
+        if (card === undefined) {
+          const old = cardCache.get(url)
+          if (old !== undefined && old.card !== undefined) return old.card
+        }
         cardCache.set(url, { at: Date.now(), card })
         return card
       })
