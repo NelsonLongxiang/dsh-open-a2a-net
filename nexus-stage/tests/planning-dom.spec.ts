@@ -226,14 +226,15 @@ describe('planning view DOM', () => {
     expect(t()).toBe('translate(0px, 0px) scale(1)') // and back
   })
 
-  it('toolbar carries the 建队 control plus the network surfaces (7 buttons)', () => {
+  it('toolbar carries the 建队 control, 撤销, plus the network surfaces', () => {
     const { v } = view()
     const buttons = Array.from(v.root.querySelectorAll<HTMLButtonElement>('.p-toolbar button'))
     // 5th = 未入网 chip (panel-slim migration); 6th = 节点 list (the
     // teamed-only canvas ruling moved teamless/unjoined sessions there);
     // 7th = 整理成员 (gh#48 one-click member tidy);
     // 8th = 一键重排 (supervisor order v2: whole-board relayout).
-    expect(buttons).toHaveLength(8)
+    expect(buttons).toHaveLength(9)
+    expect(buttons.some(b => b.textContent === '撤销')).toBe(true)
     expect(buttons.some(b => b.textContent === '一键重排')).toBe(true)
     expect(buttons.some(b => b.textContent === '建队')).toBe(true)
     expect(buttons.some(b => (b.textContent ?? '').startsWith('未入网'))).toBe(true)
@@ -245,7 +246,7 @@ describe('planning view DOM', () => {
     const { v } = view()
     const bar = v.root.querySelector<HTMLElement>('.p-toolbar')!
     const seq = [...bar.children].map(c => c.classList.contains('p-sep') ? '|' : (c as HTMLElement).tagName === 'BUTTON' ? c.textContent : null).filter(x => x !== null)
-    expect(seq.slice(0, 10)).toEqual(['适配', '－', '＋', '|', '建队', '整理成员', '一键重排', '|', '未入网', '节点'])
+    expect(seq.slice(0, 11)).toEqual(['适配', '－', '＋', '|', '建队', '整理成员', '一键重排', '撤销', '|', '未入网', '节点'])
     for (const s of bar.querySelectorAll('.p-sep')) expect(s.getAttribute('role')).toBe('separator')
     const box = bar.querySelector<HTMLInputElement>('.p-search-input')!
     expect(box.placeholder).toBe('🔍 搜索（Ctrl+K）')

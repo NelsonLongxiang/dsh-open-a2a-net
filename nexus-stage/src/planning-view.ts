@@ -43,6 +43,7 @@ import { FRAME_HUES } from './tokens'
 import { createPlanningMenus } from './planning-menus'
 import { createNodeFlyer, mountBoardSearch } from './planning-search'
 import { applyBoardRelayout } from './planning-relayout'
+import { createLayoutUndo, type LayoutSnap } from './planning-undo'
 import { settleBoard, tidyMembers } from './planning-overlap'
 import { createNodeList } from './planning-nodelist'
 import { cardText } from './planning-card-text'
@@ -85,6 +86,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   /** Until the first reconcile with nodes (or an adopted viewport), frame the content once. */
   let firstFitPending = true
   let settledOnce = false
+  const layoutUndo = createLayoutUndo(model) // 撤销 (planning-undo)
+  let undoBefore: LayoutSnap | undefined
   let viewportAdopted = false
   const bucket = (): ViewportBucket => viewportBucket(globalThis.innerWidth || viewW)
   const markDirty = (): void => {
@@ -183,6 +186,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // (constructively disjoint); multi-team members never enter the size
     // math and never move; remote org frames and frameless nodes stay put.
     mkButton('一键重排', '全板队框+成员重排：框尺寸随内容自适应、框位行流式平铺（远端队框与多归属成员不动）', () => relayoutBoard()),
+    mkButton('撤销', '撤销上一次布局改动：拖动、缩放、整理、重排、载入时避让（Ctrl+Z；入队离队不撤销）', () => undoLayout()),
   )
   // Unjoined sessions ride a toolbar chip + dropdown: the panel-slim
   // migration made the planning view the join surface — without this, an
@@ -276,8 +280,10 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
    * — the same persistence path a hand drag takes.
    */
   function tidyTeamMembers(): void {
+    const before = layoutUndo.capture()
     tidyMembers(model) // gh#48 grid (planning-overlap); then nothing may overlap
     settleBoard(model, new Set(remoteFramesRef.keys()))
+    layoutUndo.commit(before)
     markDirty()
     render()
   }
@@ -290,8 +296,10 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
    * markDirty()/render() persistence path a hand drag takes.
    */
   function relayoutBoard(): void {
+    const before = layoutUndo.capture()
     if (!applyBoardRelayout(model, new Set(remoteFramesRef.keys()))) return
     settleBoard(model, new Set(remoteFramesRef.keys())) // vs remote frames + stray cards
+    layoutUndo.commit(before)
     markDirty()
     render()
   }
@@ -705,6 +713,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       return
     }
     if (target !== null && target.closest('button, input, textarea, select, .p-toolbar, .p-search, .p-lamp, .p-status, .p-legend') !== null) return // HUD chrome owns its presses (no marquee / preventDefault: that stole the search box's focus — and, first, its native right-click menu)
+    undoBefore = layoutUndo.capture() // committed at pointerUp only if this press moved something
     const p = localXY(ev)
     // 右键按下：按住拖动 = 平移（Figma 惯例），原地抬起 = 上下文菜单。
     // Pan actually starts on the first move beyond RIGHT_DRAG_THRESHOLD px;
@@ -923,6 +932,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       render()
     }
     gesture = { kind: 'none' }
+    if (undoBefore !== undefined) { layoutUndo.commit(undoBefore); undoBefore = undefined }
     try { root.releasePointerCapture(ev.pointerId ?? 0) } catch { /* not captured */ }
   }
 
@@ -953,6 +963,10 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     markDirty()
   }
 
+  function undoLayout(): void {
+    if (layoutUndo.undo()) { markDirty(); render() } else notice('info', '没有可撤销的布局改动')
+  }
+
   function fitToContent(): void {
     syncViewSize()
     vp = fitBelowHud(boardBounds(model.contentBounds(), model.allNodes()), viewW, viewH, hudBottomOf(toolbar, status))
@@ -963,6 +977,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   function key(ev: SeamKey): void {
     if (menus.isDialogOpen() || (ev.target as Element | null)?.closest?.('.p-search') !== null) return // modal / search box own their keys
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k') { ev.preventDefault(); search.focus(); return } // W1 Ctrl+K
+    if ((ev.ctrlKey || ev.metaKey) && !ev.shiftKey && ev.key.toLowerCase() === 'z') { ev.preventDefault(); undoLayout(); return }
     if (ev.ctrlKey || ev.metaKey) return // browser/OS chords stay browser/OS
     if (menus.isMenuOpen()) {
       // The menu owns most keys (its own handler navigates); Escape still
@@ -1016,7 +1031,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       ev.preventDefault()
       const ids = model.selectedIds()
       if (ids.length > 0) {
+        const before = layoutUndo.capture()
         model.nudge(ids, d[0]!, d[1]!)
+        layoutUndo.commit(before)
         render()
         markDirty()
       }
@@ -1370,7 +1387,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // (adopted at any point) keeps its own viewport and cancels this.
     // Once per load, a board that arrives overlapped is shown settled (not
     // saved: no write without a user action; the next edit persists it).
-    if (!settledOnce && gesture.kind === 'none' && model.nodeIds().length > 0) { settledOnce = true; settleBoard(model, new Set(remoteFramesRef.keys())) }
+    if (!settledOnce && gesture.kind === 'none' && model.nodeIds().length > 0) { settledOnce = true; const b = layoutUndo.capture(); settleBoard(model, new Set(remoteFramesRef.keys())); layoutUndo.commit(b) }
     if (firstFitPending && gesture.kind === 'none' && model.nodeIds().length > 0) {
       syncViewSize()
       if (viewW > 0 && viewH > 0) {
