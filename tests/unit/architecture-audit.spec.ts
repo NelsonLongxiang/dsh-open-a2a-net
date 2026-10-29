@@ -8,6 +8,10 @@ const xml = readFileSync(resolve('docs/arch/a2a-architecture.drawio'), 'utf8')
 const manifest = JSON.parse(readFileSync(resolve('docs/arch/a2a-architecture.anchors.json'), 'utf8'))
 const source = (file: string) => readFileSync(resolve(file), 'utf8')
 const run = (x = xml, m = manifest, s = source) => auditArchitecture(x, m, s)
+// Mutations below sample a LIVE index.ts anchor from the manifest, never a
+// hardcoded line number — a re-anchor must not silently no-op the tests.
+const sample = manifest.anchors.find((a: {ref: string}) => a.ref.startsWith('src/index.ts:'))!.ref as string
+const shifted = sample.replace(/:(\d+)$/, (_, n: string) => ':' + String(Number(n) + 1))
 
 describe('architecture full-anchor audit', () => {
   it('covers every long/short numeric reference with exact current source and digest', () => {
@@ -17,17 +21,17 @@ describe('architecture full-anchor audit', () => {
     expect(result.sourceFiles).toBe(16)
   })
   it('detects changed anchor line, not a nearby semantic match', () => {
-    expect(run(xml.replace('src/index.ts:4094', 'src/index.ts:4095')).ok).toBe(false)
+    expect(run(xml.replace(sample, shifted)).ok).toBe(false)
   })
   it('does not overlook short :NN anchors', () => {
-    const result = run(xml.replace('src/index.ts:4094', ':4094'))
+    const result = run(xml.replace(sample, ':' + sample.split(':')[1]!))
     expect(result.errors.some((s: string) => s.includes('unscoped numeric'))).toBe(true)
   })
   it('detects out-of-range endpoints and requires both range witnesses', () => {
     const m = structuredClone(manifest)
-    const item = m.anchors.find((a: {ref: string}) => a.ref === 'src/index.ts:4094')
-    item.ref += '-99999'; item.endExpect = 'no such line'
-    expect(run(xml.replace('src/index.ts:4094','src/index.ts:4094-99999'),m).errors.some((s: string) => s.includes('range end mismatch'))).toBe(true)
+    const item = m.anchors.find((a: {ref: string}) => a.ref === sample)!
+    item.ref = sample + '-99999'; item.endExpect = 'no such line'
+    expect(run(xml.replace(sample, sample + '-99999'),m).errors.some((s: string) => s.includes('range end mismatch'))).toBe(true)
   })
   it('detects any drift inside an anchored source file', () => {
     expect(run(xml,manifest,(f: string) => source(f) + '\n// injected drift').ok).toBe(false)
@@ -41,7 +45,7 @@ describe('architecture full-anchor audit', () => {
     expect(run(xml.replace('模型工具面', 'model--tools')).ok).toBe(false)
   })
   it('detects nonblack ink, broken edges, outside-page shapes and stale source pin', () => {
-    for (const x of [xml.replace('fontColor=#000000','fontColor=#999999'),xml.replace('target="b1"','target="missing"'),xml.replace('pageWidth="2300"','pageWidth="200"'),xml.replace('SOURCE 5736a4a','SOURCE 0000000')]) expect(run(x).ok).toBe(false)
+    for (const x of [xml.replace('fontColor=#000000','fontColor=#999999'),xml.replace('target="b1"','target="missing"'),xml.replace('pageWidth="2300"','pageWidth="200"'),xml.replace('SOURCE ' + manifest.sourceCommit.slice(0, 7), 'SOURCE 0000000')]) expect(run(x).ok).toBe(false)
   })
   it('refuses an empty inventory and a missing diagram page', () => {
     expect(run(xml, { ...manifest, sources: {}, anchors: [] }).ok).toBe(false)
