@@ -366,6 +366,20 @@ function collectNameInjectionGuard() {
   return rows
 }
 
+// ── S27（gh#91 防洪闸·PR#92）：flood-guard 模块+线码+15 律 ──
+function collectFloodGuard() {
+  const rows = []
+  try {
+    const guard = readFileSync(join(REPO, 'src/flood-guard.ts'), 'utf8')
+    const hasCode = /32008/.test(guard)
+    const hasRate = /RATE|16/.test(guard) && /WINDOW|60_000|60000/.test(guard)
+    const idx = readFileSync(join(REPO, 'src/index.ts'), 'utf8')
+    const wired = /flood-guard/.test(idx)
+    rows.push({ name: 'flood-guard-present', ok: (hasCode && hasRate && wired) ? 1 : 0, detail: 'flood-guard.ts（-32008+16/min 窗+index 接线）' })
+  } catch (e) { rows.push({ name: 'flood-guard-present', ok: 0, detail: String(e).slice(0, 60) }) }
+  return rows
+}
+
 function collectOwnerSignalUi() {
   // 遍历 nexus-stage 源码聚合文本（UI 字符串锚）
   const agg = (dir) => {
@@ -413,6 +427,7 @@ const TABLES = {
   src_module_cap: collectSrcModuleCap,
   hop_budget: collectHopBudget,
   name_injection_guard: collectNameInjectionGuard,
+  flood_guard: collectFloodGuard,
 }
 
 mkdirSync(join(REPO, 'tmp/supervisor'), { recursive: true })
