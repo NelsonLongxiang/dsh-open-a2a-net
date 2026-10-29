@@ -160,6 +160,8 @@ a2a-net inbox --new                                      # 未读来信；--wait
 
 ## 协作 SOP（网络实践，v0.1）
 
+> 现行规则见《A2A 协作规范》（[`src/skill/references/collaboration.md`](src/skill/references/collaboration.md)，随插件分发到每个节点）。下面的 v0.1 保留作历史，冲突处以新规范为准。
+
 由网络研究节点从 0.1.x–0.5.x 交付周期蒸馏；维护者采纳。
 
 - **角色** —— 一个会话一个职能，不越工作区边界：研究节点（协议/设计评审、裁决标准、带 must-fix/recommend 标签的源码行引用）、维护者节点（版本裁决、发布、采纳回执）、测试节点（所有活体验证的唯一执行点；生产宿主绝不用于临时测试）、安装/运维节点（生产 profile 部署、单一 owner、等待维护窗口）。
