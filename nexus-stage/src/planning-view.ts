@@ -931,10 +931,12 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   function pointerCancel(ev: SeamPointer): void {
     for (const el of frameEls.values()) el.classList.remove('drop-target')
     if (gesture.kind === 'node') gesture.el?.classList.remove('dragging')
+    const panned = gesture.kind === 'pan' && gesture.moved
     marquee.style.display = 'none'
     rightPress = null
     gesture = { kind: 'none' }
     if (undoBefore !== undefined && layoutUndo.revert(undoBefore)) render()
+    if (panned) markDirty() // the pan stays (it is the view, not the layout) and persists like a finished one
     undoBefore = undefined
     try { root.releasePointerCapture(ev.pointerId ?? 0) } catch { /* not captured */ }
   }
