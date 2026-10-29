@@ -18,9 +18,10 @@
  * - RECEIVE: a verified OriginClaim from a TRACKED peer marks that peer's
  *   cached card stale (the card stays readable — no frame flicker) and
  *   refetches it through the shared single-flight cache; the board's next
- *   3s poll renders the new org. Per-peer rate limit; an untracked caller is
- *   refused before its claim is verified (no fetch on a stranger's say-so),
- *   an unsigned one right after.
+ *   3s poll renders the new org. Per-peer rate limit; a caller whose claimed
+ *   URL is not exactly a tracked peer with a cached card is refused before
+ *   its claim is verified (nothing is fetched on its say-so), an unsigned one
+ *   right after.
  * @module src/faces/canvas-notify
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -63,17 +64,13 @@ export async function refreshPeerCard(d: Pick<CanvasNotifyDeps, 'cardCache' | 'c
   for (let pass = 0; pass < 2; pass += 1) {
     const hit = d.cardCache.get(url)
     if (hit !== undefined) d.cardCache.set(url, { at: 0, card: hit.card })
-    // A failed refetch must not blank the mirror: keep the last good card
-    // (the normal TTL tries again) rather than caching the miss.
+    // A failed refetch must not blank the mirror: put the last good card
+    // back with its OWN age (no extra trust in an old key), not the miss.
     if (await d.cachedCardFetch(url) === undefined && hit?.card !== undefined) {
-      d.cardCache.set(url, { at: Date.now(), card: hit.card })
+      d.cardCache.set(url, hit)
       return
     }
   }
-}
-
-const originOf = (url: string): string => {
-  try { return new URL(url).origin } catch { return '' }
 }
 
 /**
@@ -146,14 +143,15 @@ export function registerCanvasNotify(webServer: WebServer, d: CanvasNotifyDeps):
       req.on('end', () => {
         void (async () => {
           if (req.method !== 'POST') { send({ ok: false, error: 'POST required' }); return }
-          // Tracked first, from the claimed URL: verifying a stranger's claim
-          // would fetch a card from wherever the stranger points.
-          const origin = originOf(String(req.headers['x-a2a-caller-url'] ?? ''))
-          const tracked = origin === '' ? [] : peerStore.list().filter(url => originOf(url) === origin)
+          // Tracked first, from the claimed URL: it must BE a tracked peer URL
+          // whose card is already cached, so verifying the claim never fetches
+          // anything a caller chose (no stranger host, no path on a peer).
+          const claimed = String(req.headers['x-a2a-caller-url'] ?? '').replace(/\/$/, '')
+          const tracked = claimed === '' ? [] : peerStore.list().filter(url => url.replace(/\/$/, '') === claimed && d.cardCache.get(url)?.card !== undefined)
           if (tracked.length === 0) { send({ ok: false, error: 'caller is not a tracked peer of this host' }); return }
           const claim = await verifyOriginClaim(req)
           if (!claim.ok) { send({ ok: false, error: `untrusted-origin: OriginClaim verification failed (${claim.reason})` }); return }
-          if (originOf(claim.callerUrl) !== origin || disposed) { send({ ok: false, error: 'caller is not a tracked peer of this host' }); return }
+          if (disposed) { send({ ok: false, error: 'host is shutting down' }); return }
           // Rate limit without losing an update: a ping inside the gap is
           // deferred to one trailing refresh at the gap's end, never dropped.
           let refreshed = 0

@@ -53,7 +53,7 @@ async function until(check: () => Promise<boolean>, ms = 4_000): Promise<boolean
 }
 
 /** A signed stand-in peer that records which paths it was POSTed. */
-async function fakePeer(port: number, peers: string[]): Promise<{ server: Server; posts: string[]; envelope: () => Record<string, string>; cardReads: () => number }> {
+async function fakePeer(port: number, peers: string[]): Promise<{ server: Server; posts: string[]; envelope: (as?: string) => Record<string, string>; cardReads: () => number }> {
   const { privateKey } = generateKeyPairSync('ed25519')
   const base = url(port)
   const card = signCard({ name: 'M', session: 'm-session', team: 'dsh', capabilities: {}, expiresAt: Date.now() + 3_600_000 } as never, privateKey)
@@ -74,13 +74,13 @@ async function fakePeer(port: number, peers: string[]): Promise<{ server: Server
     })
   })
   await new Promise<void>(r => server.listen(port, '127.0.0.1', () => r()))
-  const envelope = (): Record<string, string> => {
+  const envelope = (as = base): Record<string, string> => {
     const ts = Date.now()
     return {
       'X-A2A-Caller': 'dsh',
-      'X-A2A-Caller-Url': base,
+      'X-A2A-Caller-Url': as,
       'X-A2A-Caller-Ts': String(ts),
-      'X-A2A-Caller-Sig': sign(undefined, Buffer.from(JSON.stringify(['dsh', base, ts]), 'utf8'), privateKey).toString('base64'),
+      'X-A2A-Caller-Sig': sign(undefined, Buffer.from(JSON.stringify(['dsh', as, ts]), 'utf8'), privateKey).toString('base64'),
     }
   }
   return { server, posts, envelope, cardReads: () => reads }
@@ -151,6 +151,12 @@ describe('canvas single owner + mirror: change notification', () => {
       expect(stranger.ok).toBe(false)
       expect(String(stranger.error)).toMatch(/not a tracked peer/)
       expect(x.cardReads()).toBe(before)
+
+      // A path under a tracked peer's origin is not that peer: refused, and nothing is fetched there.
+      const readsM = m.cardReads()
+      const pathed = await post(`${a.baseUrl}/a2a/canvas-changed`, {}, m.envelope(`${url(pm)}/probe1`))
+      expect(pathed.ok).toBe(false)
+      expect(m.cardReads()).toBe(readsM)
 
       // A tracked peer's signed ping is taken (it only makes A re-read M's card).
       const tracked = await post(`${a.baseUrl}/a2a/canvas-changed`, {}, m.envelope())

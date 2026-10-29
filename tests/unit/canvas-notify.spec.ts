@@ -39,7 +39,7 @@ describe('refreshPeerCard', () => {
     const d = deps([undefined], card('good'))
     await refreshPeerCard(d, URL_A)
     expect(d.cardCache.get(URL_A)?.card?.name).toBe('good')
-    expect(d.cardCache.get(URL_A)!.at).toBeGreaterThan(0)
+    expect(d.cardCache.get(URL_A)!.at).toBeGreaterThan(0) // its original age, not the stale marker
   })
 
   it('with nothing cached, a miss stays a miss', async () => {
