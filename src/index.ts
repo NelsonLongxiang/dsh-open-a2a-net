@@ -51,6 +51,7 @@ import { formatReceipt, parseReceipt } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { refuseIfBudgetExhausted } from './recursion-guard.ts'
+import { createFloodGuard } from './flood-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
 import type { Context } from '@deepseek-ai/cordis'
@@ -1038,6 +1039,7 @@ const reportLoopRing = new Map<string, number[]>()
   // executes at most once inside the 24h window — same-key replays answer
   // refused-but-idempotent, same-key different-payload answers conflict.
   const idempotencyStore = new IdempotencyStore(join(home, 'a2a', 'idempotency.json'))
+  const refuseIfFlooded = createFloodGuard(idempotencyStore, recordActivity)
 
   // Unmasked-identity suppression: gossip mirrors peer lists back and forth,
   // so a URL whose fetch just proved it serves this node — or an already
@@ -3123,10 +3125,7 @@ ${message}`
           const idemVerdict = idempotencyStore.claim(taskId, idemFingerprint)
           if (idemVerdict !== 'fresh') {
             const replay = idemVerdict === 'replay'
-            // 0.5.36 observability: conflict = caller bug (graph-loop prompt
-            // minting / key management) — warn loudly so it is never misread
-            // as the normal-depth-defense zero-traffic shape. Replays stay
-            // silent by design.
+            // Conflicts warn (caller key reuse bugs); harmless replays stay silent.
             if (!replay) logger.warn(`a2a: idempotency CONFLICT on task ${taskId.slice(0, 80)} — same key reused with a different payload (caller bug; never auto-retry)`)
             const payload = JSON.stringify({
               error: replay ? 'duplicate task id within the idempotency window' : 'task id reused with a different payload',
@@ -3138,6 +3137,7 @@ ${message}`
             res.end(payload)
             return
           }
+          if (refuseIfFlooded(caller, message, team, taskId, res)) return
           // The caller-side receipt correlation: a message shaped as a
           // receipt resolves the task it echoes, whichever wait semantics
           // carried it here. Correlation is bookkeeping only — the message
