@@ -18,8 +18,9 @@
  * - RECEIVE: a verified OriginClaim from a TRACKED peer marks that peer's
  *   cached card stale (the card stays readable — no frame flicker) and
  *   refetches it through the shared single-flight cache; the board's next
- *   3s poll renders the new org. Per-peer rate limit; untracked or unsigned
- *   callers are refused without a fetch.
+ *   3s poll renders the new org. Per-peer rate limit; an untracked caller is
+ *   refused before its claim is verified (no fetch on a stranger's say-so),
+ *   an unsigned one right after.
  * @module src/faces/canvas-notify
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -62,7 +63,12 @@ export async function refreshPeerCard(d: Pick<CanvasNotifyDeps, 'cardCache' | 'c
   for (let pass = 0; pass < 2; pass += 1) {
     const hit = d.cardCache.get(url)
     if (hit !== undefined) d.cardCache.set(url, { at: 0, card: hit.card })
-    await d.cachedCardFetch(url)
+    // A failed refetch must not blank the mirror: keep the last good card
+    // (the normal TTL tries again) rather than caching the miss.
+    if (await d.cachedCardFetch(url) === undefined && hit?.card !== undefined) {
+      d.cardCache.set(url, { at: Date.now(), card: hit.card })
+      return
+    }
   }
 }
 
@@ -118,7 +124,9 @@ export function registerCanvasNotify(webServer: WebServer, d: CanvasNotifyDeps):
     lastRefresh.set(url, Date.now())
     void refreshPeerCard(d, url)
   }
+  let disposed = false
   ctx.effect(() => () => {
+    disposed = true
     for (const handle of trailing.values()) clearTimeout(handle)
     trailing.clear()
   }, 'a2a: canvas-changed trailing refreshes')
@@ -138,11 +146,14 @@ export function registerCanvasNotify(webServer: WebServer, d: CanvasNotifyDeps):
       req.on('end', () => {
         void (async () => {
           if (req.method !== 'POST') { send({ ok: false, error: 'POST required' }); return }
-          const claim = await verifyOriginClaim(req)
-          if (!claim.ok) { send({ ok: false, error: `untrusted-origin: OriginClaim verification failed (${claim.reason})` }); return }
-          const origin = originOf(claim.callerUrl)
+          // Tracked first, from the claimed URL: verifying a stranger's claim
+          // would fetch a card from wherever the stranger points.
+          const origin = originOf(String(req.headers['x-a2a-caller-url'] ?? ''))
           const tracked = origin === '' ? [] : peerStore.list().filter(url => originOf(url) === origin)
           if (tracked.length === 0) { send({ ok: false, error: 'caller is not a tracked peer of this host' }); return }
+          const claim = await verifyOriginClaim(req)
+          if (!claim.ok) { send({ ok: false, error: `untrusted-origin: OriginClaim verification failed (${claim.reason})` }); return }
+          if (originOf(claim.callerUrl) !== origin || disposed) { send({ ok: false, error: 'caller is not a tracked peer of this host' }); return }
           // Rate limit without losing an update: a ping inside the gap is
           // deferred to one trailing refresh at the gap's end, never dropped.
           let refreshed = 0

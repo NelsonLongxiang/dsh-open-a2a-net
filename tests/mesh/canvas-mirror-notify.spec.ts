@@ -53,13 +53,15 @@ async function until(check: () => Promise<boolean>, ms = 4_000): Promise<boolean
 }
 
 /** A signed stand-in peer that records which paths it was POSTed. */
-async function fakePeer(port: number, peers: string[]): Promise<{ server: Server; posts: string[]; envelope: () => Record<string, string> }> {
+async function fakePeer(port: number, peers: string[]): Promise<{ server: Server; posts: string[]; envelope: () => Record<string, string>; cardReads: () => number }> {
   const { privateKey } = generateKeyPairSync('ed25519')
   const base = url(port)
   const card = signCard({ name: 'M', session: 'm-session', team: 'dsh', capabilities: {}, expiresAt: Date.now() + 3_600_000 } as never, privateKey)
   const posts: string[] = []
+  let reads = 0
   const server = createServer((req, res) => {
     if (req.url === '/.well-known/agent-card.json') {
+      reads += 1
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ ...card, peers }))
       return
@@ -81,7 +83,7 @@ async function fakePeer(port: number, peers: string[]): Promise<{ server: Server
       'X-A2A-Caller-Sig': sign(undefined, Buffer.from(JSON.stringify(['dsh', base, ts]), 'utf8'), privateKey).toString('base64'),
     }
   }
-  return { server, posts, envelope }
+  return { server, posts, envelope, cardReads: () => reads }
 }
 
 describe('canvas single owner + mirror: change notification', () => {
@@ -136,13 +138,19 @@ describe('canvas single owner + mirror: change notification', () => {
       await new Promise(r => setTimeout(r, 1_200))
       expect(m.posts).not.toContain('/a2a/canvas-changed')
 
-      const unsigned = await post(`${a.baseUrl}/a2a/canvas-changed`, {})
-      expect(unsigned.ok).toBe(false)
-      expect(String(unsigned.error)).toMatch(/untrusted-origin/)
+      // No envelope at all: no caller URL, so not a tracked peer.
+      expect((await post(`${a.baseUrl}/a2a/canvas-changed`, {})).ok).toBe(false)
+      // M's URL with a bad signature: tracked, so the claim is checked — and fails.
+      const forged = await post(`${a.baseUrl}/a2a/canvas-changed`, {}, { ...m.envelope(), 'X-A2A-Caller-Sig': Buffer.alloc(64).toString('base64') })
+      expect(forged.ok).toBe(false)
+      expect(String(forged.error)).toMatch(/untrusted-origin/)
 
+      // A signed stranger is refused before A fetches anything from it.
+      const before = x.cardReads()
       const stranger = await post(`${a.baseUrl}/a2a/canvas-changed`, {}, x.envelope())
       expect(stranger.ok).toBe(false)
       expect(String(stranger.error)).toMatch(/not a tracked peer/)
+      expect(x.cardReads()).toBe(before)
 
       // A tracked peer's signed ping is taken (it only makes A re-read M's card).
       const tracked = await post(`${a.baseUrl}/a2a/canvas-changed`, {}, m.envelope())
