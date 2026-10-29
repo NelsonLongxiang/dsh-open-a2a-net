@@ -1,0 +1,118 @@
+{
+  "candidates": [
+    {
+      "id": "A1",
+      "source_clause": "A1 全图全部数字源码锚点必须被清单覆盖且精确命中，anchors 必须等于 50。",
+      "anchor": {
+        "quote": "A1 全图全部数字源码锚点必须被清单覆盖且精确命中，anchors 必须等于 50。",
+        "locator": "material-architecture.md A1"
+      },
+      "title": "Architecture fact anchors",
+      "severity": "S2",
+      "checker": {
+        "type": "exists",
+        "expect": true,
+        "authored": "mechanical",
+        "predicate": {
+          "from": "architecture_facts",
+          "select": [
+            "name",
+            "value",
+            "detail"
+          ],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "name",
+                "op": "=",
+                "value": "anchors"
+              },
+              {
+                "col": "value",
+                "op": "=",
+                "value": 50
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "A2",
+      "source_clause": "A2 所有被引用源码文件摘要必须匹配，sources 必须等于 16。",
+      "anchor": {
+        "quote": "A2 所有被引用源码文件摘要必须匹配，sources 必须等于 16。",
+        "locator": "material-architecture.md A2"
+      },
+      "title": "Architecture fact sources",
+      "severity": "S2",
+      "checker": {
+        "type": "exists",
+        "expect": true,
+        "authored": "mechanical",
+        "predicate": {
+          "from": "architecture_facts",
+          "select": [
+            "name",
+            "value",
+            "detail"
+          ],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "name",
+                "op": "=",
+                "value": "sources"
+              },
+              {
+                "col": "value",
+                "op": "=",
+                "value": 16
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "A3",
+      "source_clause": "A3 XML、边端点、页面边界、纯黑文字、短锚漏扫、精确源码串与源码摘要核验的 errors 必须等于 0。",
+      "anchor": {
+        "quote": "A3 XML、边端点、页面边界、纯黑文字、短锚漏扫、精确源码串与源码摘要核验的 errors 必须等于 0。",
+        "locator": "material-architecture.md A3"
+      },
+      "title": "Architecture fact errors",
+      "severity": "S2",
+      "checker": {
+        "type": "exists",
+        "expect": true,
+        "authored": "mechanical",
+        "predicate": {
+          "from": "architecture_facts",
+          "select": [
+            "name",
+            "value",
+            "detail"
+          ],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "name",
+                "op": "=",
+                "value": "errors"
+              },
+              {
+                "col": "value",
+                "op": "=",
+                "value": 0
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

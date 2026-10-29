@@ -1,0 +1,76 @@
+{
+  "reviews": [
+    {
+      "source_clause": "A1 全图全部数字源码锚点必须被清单覆盖且精确命中，anchors 必须等于 50。",
+      "findings": [
+        {
+          "question": "faithful",
+          "verdict": "ok",
+          "reason": "执行坐席自核（非独立盲审）：逐字源句，未扩展机器判据范围。",
+          "anchor": {
+            "quote": "A1 全图全部数字源码锚点必须被清单覆盖且精确命中，anchors 必须等于 50。",
+            "locator": "material-architecture.md A1"
+          }
+        },
+        {
+          "question": "decidable",
+          "verdict": "ok",
+          "reason": "冻结快照中 name/value 等值存在性判断。"
+        },
+        {
+          "question": "not-vacuous",
+          "verdict": "ok",
+          "reason": "缺行即失败；错误数需显式0行。变异用例可复现拒绝。"
+        }
+      ]
+    },
+    {
+      "source_clause": "A2 所有被引用源码文件摘要必须匹配，sources 必须等于 16。",
+      "findings": [
+        {
+          "question": "faithful",
+          "verdict": "ok",
+          "reason": "执行坐席自核（非独立盲审）：逐字源句，未扩展机器判据范围。",
+          "anchor": {
+            "quote": "A2 所有被引用源码文件摘要必须匹配，sources 必须等于 16。",
+            "locator": "material-architecture.md A2"
+          }
+        },
+        {
+          "question": "decidable",
+          "verdict": "ok",
+          "reason": "冻结快照中 name/value 等值存在性判断。"
+        },
+        {
+          "question": "not-vacuous",
+          "verdict": "ok",
+          "reason": "缺行即失败；错误数需显式0行。变异用例可复现拒绝。"
+        }
+      ]
+    },
+    {
+      "source_clause": "A3 XML、边端点、页面边界、纯黑文字、短锚漏扫、精确源码串与源码摘要核验的 errors 必须等于 0。",
+      "findings": [
+        {
+          "question": "faithful",
+          "verdict": "ok",
+          "reason": "执行坐席自核（非独立盲审）：逐字源句，未扩展机器判据范围。",
+          "anchor": {
+            "quote": "A3 XML、边端点、页面边界、纯黑文字、短锚漏扫、精确源码串与源码摘要核验的 errors 必须等于 0。",
+            "locator": "material-architecture.md A3"
+          }
+        },
+        {
+          "question": "decidable",
+          "verdict": "ok",
+          "reason": "冻结快照中 name/value 等值存在性判断。"
+        },
+        {
+          "question": "not-vacuous",
+          "verdict": "ok",
+          "reason": "缺行即失败；错误数需显式0行。变异用例可复现拒绝。"
+        }
+      ]
+    }
+  ]
+}
