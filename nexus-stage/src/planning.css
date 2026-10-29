@@ -82,6 +82,8 @@
 #dsh-plan .p-frame-head:hover{border-color:var(--card-line-hover)}
 #dsh-plan .p-frame-head .cnt{color:var(--ink-muted); font-weight:400}
 #dsh-plan .p-frame-head .route{font-size:10.5px; color:var(--ink-muted)}
+#dsh-plan .p-frame.is-mirror{border-style:dashed}
+#dsh-plan .p-frame.is-syncing .p-frame-head .route{color:var(--accent)}
 
 /* ── node card (fixed 56px border-box height = world.NODE_H) ── */
 #dsh-plan .p-node{position:absolute; width:172px; height:56px; padding:8px 26px 8px 14px;
