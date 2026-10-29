@@ -528,7 +528,9 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           const reply = await globalThis.fetch(target, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...originClaimHeaders() },
-            body: JSON.stringify({ op: opV, name: nameV, ...(opV !== 'create' ? { id: idV } : {}) }),
+            // A local session id means nothing on the peer: send its zone/id8 handle (the workbench
+            // drops a local card into a remote frame with its raw session id, which the peer refused).
+            body: JSON.stringify({ op: opV, name: nameV, ...(opV !== 'create' ? { id: idV !== '' && !isRemoteMemberRef(idV) && (sessionNodes.has(idV) || joinedSessions.has(idV)) ? `${config.team}/${id8(idV)}` : idV } : {}) }),
             signal: AbortSignal.timeout(15_000),
           })
           const raw = await reply.text()
