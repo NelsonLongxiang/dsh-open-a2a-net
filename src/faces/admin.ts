@@ -25,6 +25,7 @@ import type WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Config } from '../index.ts'
 import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from '../runtime.ts'
 import { CanvasStore, isRemoteMemberRef, validRemoteMemberRef } from '../canvas-store.ts'
+import { refreshPeerCard, registerCanvasNotify, type CanvasNotifyDeps } from './canvas-notify.ts'
 import type { CliDepositStore } from '../cli-deposit.ts'
 import type { ExposureStore } from '../exposure-store.ts'
 import type { GroupStore } from '../group-store.ts'
@@ -42,7 +43,7 @@ import { MAX_LAYOUT_BODY_BYTES } from '../transport-caps.ts'
 export type RemoteRowsCache = { at: number; rows: { team: string; name: string; origin?: string; via?: string; workspace?: string; legacy?: boolean; teams?: readonly string[] }[] } | undefined
 
 /** Everything the admin faces used to capture from `apply()`. */
-export interface AdminFaceDeps {
+export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim' | 'callerLinkedToThisHost' | 'cachedCardFetch'> {
   readonly ctx: Context
   readonly config: Config
   readonly logger: ReturnType<Context['logger']>
@@ -536,6 +537,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           const raw = await reply.text()
           try {
             const out = JSON.parse(raw) as Record<string, unknown>
+            // Single owner + mirror: the op landed on the owner, so re-read its card now.
+            if (out.ok === true) await refreshPeerCard(d, peerUrl)
             send(JSON.stringify(out))
           } catch {
             // A non-JSON reply is a peer WITHOUT the canvas-op face (a
@@ -548,6 +551,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
       })
     }),
   }), 'a2a: fleet-canvas-op relay route')
+  // Owner ruling 2026-10-29 (single owner + mirror): tell linked peers to re-read this host's card on any canvas change.
+  registerCanvasNotify(webServer, d)
   // gh#34 owner three-key panel: the remote build-out unlock knobs,
   // surfaced as a control face instead of "翻配置文件". GET reads the
   // effective values; POST writes the HOME patch layer (the

@@ -3,9 +3,9 @@
   "sourceCommit": "5736a4a6e207e72721fcaeb18f9015911a83650f",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "a2cceebc9ce5c420f152ff1d6a90c576ad7af072272db133db483e977b2b80eb",
-    "src/faces/admin.ts": "f934aa9d1d21373f91bce31ecdf9286b46de2620fceeb7c539f955106e634cb4",
-    "src/canvas-store.ts": "ff839eb996fff7216380bd3ca880e855eb3eba39e86470675de78ad9b15013dd",
+    "src/index.ts": "a4925fc9674f4b452cbd8f69b3f90b33ef296876b9563da8bbe926b907c30bb2",
+    "src/faces/admin.ts": "bb916c9fd9489a2edfbbd8ca191b5112b22630fa43e38eec533b7464e99b6053",
+    "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "3d6b63bed2bc418f7d927c27b7bb6c81f712de1997f5327ce07509257205ec42",
     "nexus-stage/src/workbench.ts": "fbfe7cf0062fbd7adc5db5650f37bb508308e7580ea08ae6434e45d82a11eb93",
@@ -114,13 +114,13 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:434",
+      "ref": "src/faces/admin.ts:435",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:151",
+      "ref": "src/faces/admin.ts:152",
       "expect": "path: '/__dsh_a2a/state',"
     },
     {
@@ -168,7 +168,7 @@
     {
       "page": "p1-arch",
       "cell": "d7",
-      "ref": "src/faces/admin.ts:266",
+      "ref": "src/faces/admin.ts:267",
       "expect": "activity: recentActivity.slice(),"
     },
     {
@@ -276,7 +276,7 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/admin.ts:104",
+      "ref": "src/faces/admin.ts:105",
       "expect": "export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void {"
     },
     {

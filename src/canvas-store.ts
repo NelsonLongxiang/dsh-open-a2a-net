@@ -73,6 +73,7 @@ export class CanvasStore {
   /** Team entries in creation order; members in add order (routing priority). */
   private teams: Array<{ name: string; members: string[] }> = []
   private readonly path: string
+  private readonly listeners = new Set<() => void>()
 
   /**
    * @param path - the snapshot file; an empty path keeps the store in memory.
@@ -80,6 +81,17 @@ export class CanvasStore {
   constructor(path: string) {
     this.path = path
     this.restore()
+  }
+
+  /**
+   * Observe changes: the listener runs after every write that changed the
+   * store (never on restore). A throwing listener cannot break the write.
+   * @param listener - called with no arguments.
+   * @returns the unsubscribe function.
+   */
+  onChange(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
   }
 
   /** Load a persisted snapshot, if present and well-formed. */
@@ -105,8 +117,15 @@ export class CanvasStore {
     }
   }
 
-  /** Persist the current snapshot (no-op without a path). */
+  /** Persist the current snapshot (no-op without a path), then tell the listeners. */
   private persist(): void {
+    this.write()
+    for (const listener of this.listeners) {
+      try { listener() } catch { /* a listener's failure is its own */ }
+    }
+  }
+
+  private write(): void {
     if (this.path === '') return
     try {
       mkdirSync(dirname(this.path), { recursive: true })
