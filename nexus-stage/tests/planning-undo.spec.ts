@@ -80,6 +80,16 @@ describe('planning-undo (model)', () => {
     while (u.undo()) { /* drain */ }
     expect(m.getNode('n')!.x).toBe(5) // the 5 oldest steps fell off
   })
+  it('revert puts the layout back without recording a step', () => {
+    const m = new WorldModel()
+    m.upsertNode(node('n', 10, 10))
+    const u = createLayoutUndo(m)
+    const before = u.capture()
+    expect(u.revert(before)).toBe(false) // nothing moved
+    m.dragNodes(['n'], 40, 0)
+    expect(u.revert(before)).toBe(true)
+    expect([m.getNode('n')!.x, u.depth]).toEqual([10, 0])
+  })
 })
 
 describe('撤销 on the board', () => {
@@ -136,5 +146,33 @@ describe('撤销 on the board', () => {
     v.seam.pointerUp(ptr({ target: v.root, clientX: 760, clientY: 760 }))
     ctrlZ(v)
     expect(v.root.querySelector('.p-notice')?.textContent).toBe('没有可撤销的布局改动')
+  })
+
+  it('a cancelled drag (pointercancel) never drops: card back, no write, nothing to undo', async () => {
+    const { v, onCanvasAction } = bench(apart)
+    const card = v.root.querySelector<HTMLElement>('.p-node[data-id="a"]')!
+    const at = cardOf(v, 'a')
+    v.seam.pointerDown(ptr({ target: card, clientX: 100, clientY: 100 }))
+    v.seam.pointerMove(ptr({ target: card, clientX: 1300, clientY: 60 })) // over T2
+    v.seam.pointerCancel(ptr({ target: card, clientX: 1300, clientY: 60 }))
+    expect(cardOf(v, 'a')).toEqual(at)
+    expect(card.classList.contains('dragging')).toBe(false)
+    expect(v.root.querySelector('.p-frame.drop-target')).toBeNull()
+    await Promise.resolve()
+    expect(onCanvasAction).not.toHaveBeenCalled()
+    ctrlZ(v)
+    expect(v.root.querySelector('.p-notice')?.textContent).toBe('没有可撤销的布局改动')
+    v.seam.pointerUp(ptr({ target: card, clientX: 1300, clientY: 60 })) // a late pointerup is inert
+    expect(cardOf(v, 'a')).toEqual(at)
+  })
+
+  it('Ctrl+Z in the search box stays the input\'s own undo', () => {
+    const { v } = bench(apart)
+    button(v, '一键重排').click()
+    const moved = rectOf(v, 'T2')
+    const box = v.root.querySelector<HTMLInputElement>('.p-search-input')!
+    let prevented = false
+    v.seam.key({ key: 'z', shiftKey: false, ctrlKey: true, target: box, preventDefault: () => { prevented = true } })
+    expect([rectOf(v, 'T2'), prevented]).toEqual([moved, false])
   })
 })

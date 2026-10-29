@@ -27,7 +27,8 @@
 
 import type { LampState } from './layout-wire'
 import { buildLayoutDoc, clampDoc, type LayoutDoc, type LayoutRect } from './layout-doc'
-import { FRAME_HEAD_LIFT, starEdges } from './edges'
+import { FRAME_HEAD_LIFT } from './edges'
+import { drawMemberEdges } from './planning-edges'
 import { createFederationOverlay } from './federation-overlay'
 import { displayName } from './stage-name'
 import {
@@ -311,7 +312,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       renderedRevision = model.revision
       renderFrames()
       renderNodes()
-      renderEdges()
+      drawMemberEdges(svg, model) // planning-edges
     }
     renderFederation()
   }
@@ -386,7 +387,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       route.title = mirror?.title ?? ''
       el.classList.toggle('is-mirror', mirror !== undefined)
       el.classList.toggle('is-syncing', mirror?.syncing === true)
-      el.querySelector('.p-frame-head')!.setAttribute('aria-label', `团队框 ${name}${mirror !== undefined ? `（${mirror.text}）` : ''}（拖动整组，回车菜单）`)
+      const label = `团队框 ${name}${mirror !== undefined ? `（${mirror.text}）` : ''}（拖动整组，回车菜单）`
+      const headEl = el.querySelector('.p-frame-head')!
+      if (headEl.getAttribute('aria-label') !== label) headEl.setAttribute('aria-label', label) // a rewrite re-announces
     }
     for (const [name, el] of [...frameEls]) {
       if (!seen.has(name)) { el.remove(); frameEls.delete(name) }
@@ -463,28 +466,11 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     search.refresh()
   }
 
-  // ── edges: stateless, rebuilt wholesale ──
-  // Derived from the MODEL (not lastTeams): optimistic membership changes
-  // must repaint their edges immediately, before the host confirms.
-  function renderEdges(): void {
-    while (svg.firstChild !== null) svg.firstChild.remove()
-    const teams = model.allFrames().map(([name]) => ({ name, members: model.teamMemberIds(name).map(id => ({ id })) }))
-    for (const e of starEdges(teams, new Map(model.allFrames()), model.positions())) {
-      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
-      line.setAttribute('class', 'e-member' + (e.dashed ? ' dashed' : ''))
-      line.setAttribute('x1', String(e.x1))
-      line.setAttribute('y1', String(e.y1))
-      line.setAttribute('x2', String(e.x2))
-      line.setAttribute('y2', String(e.y2))
-      svg.appendChild(line)
-    }
-  }
-
   // ── federation overlay (PR D): peer cards' activity/federal edges ──
   // Runs on EVERY render, outside the model-revision gate: the poll's
   // inFlight ages must tick even when the model is unchanged, and the
   // badge column tracks the content bounds each reconcile. Its SVG
-  // children are tracked separately because renderEdges clears the svg
+  // children are tracked separately because drawMemberEdges clears the svg
   // wholesale - this appends after it (render() orders the two).
   // gh#49: the DOM drawing lives in federation-overlay.ts (module-size
   // ruling); this view keeps only the seams (facts + fly).
@@ -511,17 +497,14 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   // ── status counts ──
   function renderStatus(input: PlanningInput): void {
     const live = input.sessions.filter(s => s.live !== false).length
-    const cold = input.sessions.length - live
-    statusLive.textContent = ''
-    const bLive = document.createElement('b')
-    bLive.className = 'ok'
-    bLive.textContent = `● ${live} live`
-    statusLive.appendChild(bLive)
-    statusCold.textContent = ''
-    const bCold = document.createElement('b')
-    bCold.className = 'warn'
-    bCold.textContent = `● ${cold} cold`
-    statusCold.appendChild(bCold)
+    const dot = (host: HTMLElement, cls: string, text: string): void => {
+      const b = document.createElement('b')
+      b.className = cls
+      b.textContent = text
+      host.replaceChildren(b)
+    }
+    dot(statusLive, 'ok', `● ${live} live`)
+    dot(statusCold, 'warn', `● ${input.sessions.length - live} cold`)
     statusAct.textContent = `${input.inFlight?.length ?? 0} inFlight`
     statusMut.className = 'mut'
     statusMut.textContent = `${input.teams.length} 队 · ${input.peerCount} peer`
@@ -944,6 +927,18 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     try { root.releasePointerCapture(ev.pointerId ?? 0) } catch { /* not captured */ }
   }
 
+  /** The OS took the pointer (touch scroll, system gesture): abandon the press — no drop, no menu, layout back. */
+  function pointerCancel(ev: SeamPointer): void {
+    for (const el of frameEls.values()) el.classList.remove('drop-target')
+    if (gesture.kind === 'node') gesture.el?.classList.remove('dragging')
+    marquee.style.display = 'none'
+    rightPress = null
+    gesture = { kind: 'none' }
+    if (undoBefore !== undefined && layoutUndo.revert(undoBefore)) render()
+    undoBefore = undefined
+    try { root.releasePointerCapture(ev.pointerId ?? 0) } catch { /* not captured */ }
+  }
+
   function wheel(ev: SeamPointer): void {
     if (menus.isMenuOpen()) menus.closeMenu()
     const p = localXY(ev)
@@ -1097,6 +1092,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   root.addEventListener('pointerdown', (ev) => pointerDown(ev as unknown as SeamPointer), signal)
   root.addEventListener('pointermove', (ev) => pointerMove(ev as unknown as SeamPointer), signal)
   root.addEventListener('pointerup', (ev) => pointerUp(ev as unknown as SeamPointer), signal)
+  root.addEventListener('pointercancel', (ev) => pointerCancel(ev as unknown as SeamPointer), signal)
   root.addEventListener('wheel', (ev) => wheel(ev as unknown as SeamPointer), { ...signal, passive: false })
   root.addEventListener('keydown', (ev) => key(ev as unknown as SeamKey), signal)
   root.addEventListener('keyup', (ev) => keyUp(ev as unknown as SeamKey), signal)
@@ -1491,6 +1487,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       pointerDown,
       pointerMove,
       pointerUp,
+      pointerCancel,
       wheel,
       key,
       keyUp,

@@ -105,6 +105,7 @@ export interface PlanningView {
     pointerDown(ev: SeamPointer): void
     pointerMove(ev: SeamPointer): void
     pointerUp(ev: SeamPointer): void
+    pointerCancel(ev: SeamPointer): void
     wheel(ev: SeamPointer): void
     key(ev: SeamKey): void
     keyUp(ev: SeamKey): void
