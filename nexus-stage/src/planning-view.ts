@@ -43,6 +43,7 @@ import { FRAME_HUES } from './tokens'
 import { createPlanningMenus } from './planning-menus'
 import { createNodeFlyer, mountBoardSearch } from './planning-search'
 import { applyBoardRelayout } from './planning-relayout'
+import { mirrorRoute } from './planning-mirror'
 import { settleBoard, tidyMembers } from './planning-overlap'
 import { createNodeList } from './planning-nodelist'
 import { cardText } from './planning-card-text'
@@ -371,8 +372,13 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       }
       const cntText = `${members} 成员` + (cross > 0 ? ` +${cross} 跨队` : '')
       if (cnt.textContent !== cntText) cnt.textContent = cntText
-      const routeText0 = routeText(name)
+      const mirror = mirrorRoute(remoteFramesRef.get(name), pendingTeams.has(name)) // PR#96 single owner + mirror
+      const routeText0 = mirror?.text ?? routeText(name)
       if (route.textContent !== routeText0) route.textContent = routeText0
+      route.title = mirror?.title ?? ''
+      el.classList.toggle('is-mirror', mirror !== undefined)
+      el.classList.toggle('is-syncing', mirror?.syncing === true)
+      el.querySelector('.p-frame-head')!.setAttribute('aria-label', `团队框 ${name}${mirror !== undefined ? `（${mirror.text}）` : ''}（拖动整组，回车菜单）`)
     }
     for (const [name, el] of [...frameEls]) {
       if (!seen.has(name)) { el.remove(); frameEls.delete(name) }
@@ -518,8 +524,10 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   // up until BOTH settle (a Set deleted per action let a mid-queue poll wipe
   // the second action's optimistic membership).
   const pendingTeams = new Map<string, number>()
-  const pendingAdd = (team: string): void => { pendingTeams.set(team, (pendingTeams.get(team) ?? 0) + 1) }
+  // Each change re-renders frames: the mirror 「同步中…」 marker reads pendingTeams, not the model revision.
+  const pendingAdd = (team: string): void => { pendingTeams.set(team, (pendingTeams.get(team) ?? 0) + 1); renderedRevision = -1 }
   const pendingRelease = (team: string): void => {
+    renderedRevision = -1
     const n = (pendingTeams.get(team) ?? 0) - 1
     if (n <= 0) pendingTeams.delete(team)
     else pendingTeams.set(team, n)
