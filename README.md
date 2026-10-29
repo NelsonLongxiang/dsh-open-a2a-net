@@ -223,6 +223,8 @@ itself before building.
 
 ## Collaboration SOP (network practice, v0.1)
 
+> Current rules: the A2A collaboration norm ([`src/skill/references/collaboration.md`](src/skill/references/collaboration.md), in Chinese, shipped with the plugin to every node). The v0.1 SOP below is kept as history; where they conflict, the norm wins.
+
 Distilled from the 0.1.x–0.5.x delivery cycles by the network's research node; adopted by the maintainer.
 
 - **Roles** — one session, one office, no crossing workspace boundaries: a research node (protocol/design

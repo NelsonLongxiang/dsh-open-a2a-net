@@ -112,3 +112,4 @@ renders the same data for humans.
 - [membership.md](references/membership.md) — join/leave, allowlist, canvas teams
 - [pitfalls.md](references/pitfalls.md) — operational pitfalls observed in production
 - [cli.md](references/cli.md) — the `a2a-net` CLI: deposit, mailbox, inbox hooks, limits
+- [collaboration.md](references/collaboration.md) — collaboration norm (Chinese): single-seat first, decide-then-report, release tiers, stuck gates, credentials, receipts
