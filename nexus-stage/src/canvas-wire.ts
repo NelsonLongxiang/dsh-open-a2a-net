@@ -104,10 +104,13 @@ export function createCanvasWire(deps: CanvasWireDeps): CanvasWire {
     // A bare false can mean a capacity refusal, not just an idempotent no-op.
     // Accept a no-op only when the host's returned state proves the effect.
     const name = String(body.name ?? ''), id = String(body.id ?? '')
+    const members = res.body?.members, teams = res.body?.teams
+    const memberProof = Array.isArray(members) && members.every(v => typeof v === 'string')
+    const teamProof = Array.isArray(teams) && teams.every(v => typeof v === 'string')
     if (res.body?.ok === false && (
-      (body.action === 'add-member' && res.body.members?.includes(id)) ||
-      (body.action === 'remove-member' && res.body.members !== undefined && !res.body.members.includes(id)) ||
-      (body.action === 'remove' && res.body.teams !== undefined && !res.body.teams.includes(name))
+      (body.action === 'add-member' && memberProof && members.includes(id)) ||
+      (body.action === 'remove-member' && memberProof && !members.includes(id)) ||
+      (body.action === 'remove' && teamProof && !teams.includes(name))
     )) return true
     deps.onNotice('error', '画布操作未确认：' + String(body.action) + '（可能队伍/成员已达上限，请重试）')
     return false

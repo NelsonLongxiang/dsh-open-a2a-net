@@ -106,6 +106,18 @@ describe('canvas wire', () => {
     expect(f.notices[0]?.kind).toBe('error')
   })
 
+  it.each(['a', { includes: true }, [null]])('gh108: malformed membership proof %s cannot acknowledge a join', async members => {
+    const { f, wire } = fixture({ status: 200, body: { ok: false, members } as unknown as CanvasWireResult['body'] })
+    expect(await wire.addMembers('甲', ['a'])).toBe(false)
+    expect(f.notices[0]?.kind).toBe('error')
+  })
+
+  it('gh108: malformed team list cannot acknowledge a dissolve', async () => {
+    const { f, wire } = fixture({ status: 200, body: { ok: false, teams: 'other' } as unknown as CanvasWireResult['body'] })
+    expect(await wire.removeTeam('甲')).toBe(false)
+    expect(f.notices[0]?.kind).toBe('error')
+  })
+
   it('gh108: an acknowledged duplicate member is a verified idempotent join', async () => {
     const { f, wire } = fixture({ status: 200, body: { ok: false, teams: ['甲'], members: ['a'] } })
     expect(await wire.addMembers('甲', ['a'])).toBe(true)
