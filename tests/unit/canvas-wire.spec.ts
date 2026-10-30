@@ -1,7 +1,7 @@
 /**
  * The canvas wire over an injected transport: sequencing (create → add per
  * id, first failure stops), notice classification (error verbatim,
- * error-less ok:false = idempotent silent success, transport throws, HTTP
+ * error-less ok:false requires state-proven idempotence, transport throws, HTTP
  * >= 400), the reorder op channel, and per-team serialization with
  * cross-team parallelism.
  */
@@ -88,6 +88,51 @@ describe('canvas wire', () => {
     expect(f.notices).toEqual([])
   })
 
+  it('gh108: a bare false member-cap refusal is NOT a successful join', async () => {
+    const { f, wire } = fixture({ status: 200, body: { ok: false, teams: ['甲'], members: ['existing'] } })
+    expect(await wire.addMembers('甲', ['new-member'])).toBe(false)
+    expect(f.notices[0]?.kind).toBe('error')
+  })
+
+  it('gh108: a missing or malformed success body is not proof of a write', async () => {
+    const { f, wire } = fixture({ status: 200, body: {} })
+    expect(await wire.createTeam('新队', [])).toBe(false)
+    expect(f.notices).toHaveLength(1)
+  })
+
+  it('gh108: a null JSON body is a visible refusal, not an uncaught action failure', async () => {
+    const { f, wire } = fixture({ status: 200, body: null as unknown as CanvasWireResult['body'] })
+    expect(await wire.createTeam('新队', [])).toBe(false)
+    expect(f.notices[0]?.kind).toBe('error')
+  })
+
+  it.each(['a', { includes: true }, [null]])('gh108: malformed membership proof %s cannot acknowledge a join', async members => {
+    const { f, wire } = fixture({ status: 200, body: { ok: false, members } as unknown as CanvasWireResult['body'] })
+    expect(await wire.addMembers('甲', ['a'])).toBe(false)
+    expect(f.notices[0]?.kind).toBe('error')
+  })
+
+  it('gh108: malformed team list cannot acknowledge a dissolve', async () => {
+    const { f, wire } = fixture({ status: 200, body: { ok: false, teams: 'other' } as unknown as CanvasWireResult['body'] })
+    expect(await wire.removeTeam('甲')).toBe(false)
+    expect(f.notices[0]?.kind).toBe('error')
+  })
+
+  it('gh108: an acknowledged duplicate member is a verified idempotent join', async () => {
+    const { f, wire } = fixture({ status: 200, body: { ok: false, teams: ['甲'], members: ['a'] } })
+    expect(await wire.addMembers('甲', ['a'])).toBe(true)
+    expect(f.notices).toEqual([])
+  })
+
+  it('gh108: a cap refusal never authorizes destructive compensation from a local created hint', async () => {
+    const { f, wire } = fixture()
+    const result = wire.createTeam('新队', ['a'], true)
+    await f.respond(ok)
+    await f.respond({ status: 200, body: { ok: false, teams: ['新队'], members: [] } })
+    expect(await result).toBe(false)
+    expect(f.bodies).toEqual([{ action: 'create', name: '新队' }, { action: 'add-member', name: '新队', id: 'a' }])
+  })
+
   it('classifies transport throws and bare HTTP errors', async () => {
     const { f, wire } = fixture()
     const first = wire.removeTeam('甲')
@@ -154,15 +199,13 @@ describe('canvas wire', () => {
     expect(wire.hasPending()).toBe(false)
   })
 
-  it('create-team compensates a ghost empty team when the first add fails on a created team', async () => {
+  it('create-team keeps server state on first-add failure even when the local model said created=true', async () => {
     const { f, wire } = fixture()
     const done = wire.createTeam('新队', ['a', 'b'], true)
     await f.respond(ok) // create ok
     await f.respond({ status: 200, body: { ok: false, error: 'name and a joined session id are required' } }) // first add fails
-    await f.respond(ok) // the compensating remove round-trips too
     expect(await done).toBe(false)
-    expect(f.bodies).toHaveLength(3) // create, add, compensating remove
-    expect(f.bodies[2]).toEqual({ action: 'remove', name: '新队' })
+    expect(f.bodies).toHaveLength(2) // create + refused add, NO remove of unowned data
     expect(f.notices).toHaveLength(1) // the original error, verbatim
   })
 

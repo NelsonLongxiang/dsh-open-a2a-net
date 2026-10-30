@@ -7,14 +7,12 @@
  * Classification per request:
  * - `ok:true`                                    → success (silent)
  * - `ok:false` WITH an `error` string            → error notice, verbatim
- * - `ok:false` without `error` (absent target,   → idempotent no-op,
- *   member cap hit)                                silent success
+ * - `ok:false` without `error` → success only when returned members/teams
+ *   prove the requested idempotent effect; cap/unknown results are failures
  * - HTTP >= 400                                  → body error verbatim, else `HTTP <status>`
  * - send() throws                                → `画布不可达：<message>`
- * - 200 + ok:false WITHOUT an error string       → idempotent no-op
- *   (absent target, member/team cap hit) — silent success
- * - 200 + non-JSON body (proxy artifact)         → classified as success
- *   (known limitation: nothing parseable to classify)
+ * - missing success acknowledgement (including non-JSON transport errors)
+ *   → visible failure, never a confirmed join
  *
  * Ops on the same team run through a serial queue (a later gesture waits
  * instead of racing; cross-team ops run in parallel) - mirrors the
@@ -38,10 +36,9 @@ export interface CanvasWireDeps {
 }
 
 export interface CanvasWire {
-  /** create → add-member per id, serial, first failure stops. `created`:
-   *  the team did not exist model-side before this action — a first-add
-   *  failure would then leave a ghost EMPTY team on the host, compensated
-   *  with a best-effort remove. */
+  /** create → add-member per id, serial, first failure stops. `created` is
+   * a model-side hint ONLY, never server creation provenance. A failed add
+   * cannot authorize deleting a same-name team; preserve it for retry. */
   createTeam(name: string, ids: readonly string[], created?: boolean): Promise<boolean>
   addMembers(team: string, ids: readonly string[]): Promise<boolean>
   removeMembers(team: string, ids: readonly string[]): Promise<boolean>
@@ -54,7 +51,7 @@ export interface CanvasWire {
 type RosterOp = { op: 'remove' | 'add'; id: string }
 
 function errorText(body: CanvasWireResult['body']): string | undefined {
-  return typeof body.error === 'string' ? body.error : undefined
+  return body != null && typeof body.error === 'string' ? body.error : undefined
 }
 
 export function createCanvasWire(deps: CanvasWireDeps): CanvasWire {
@@ -97,13 +94,25 @@ export function createCanvasWire(deps: CanvasWireDeps): CanvasWire {
       deps.onNotice('error', errorText(res.body) ?? `HTTP ${res.status}`)
       return false
     }
-    if (res.body.ok === true) return true
-    const text = errorText(res.body)
+    if (res.body?.ok === true) return true
+    const text = res.body != null && typeof res.body === 'object' ? errorText(res.body) : undefined
     if (text !== undefined) {
       deps.onNotice('error', text)
       return false
     }
-    return true // ok:false without error: idempotent no-op (absent target / cap)
+    // A bare false can mean a capacity refusal, not just an idempotent no-op.
+    // Accept a no-op only when the host's returned state proves the effect.
+    const name = String(body.name ?? ''), id = String(body.id ?? '')
+    const members = res.body?.members, teams = res.body?.teams
+    const memberProof = Array.isArray(members) && members.every(v => typeof v === 'string')
+    const teamProof = Array.isArray(teams) && teams.every(v => typeof v === 'string')
+    if (res.body?.ok === false && (
+      (body.action === 'add-member' && memberProof && members.includes(id)) ||
+      (body.action === 'remove-member' && memberProof && !members.includes(id)) ||
+      (body.action === 'remove' && teamProof && !teams.includes(name))
+    )) return true
+    deps.onNotice('error', '画布操作未确认：' + String(body.action) + '（可能队伍/成员已达上限，请重试）')
+    return false
   }
 
   async function serial(body: Record<string, unknown>, ids: readonly string[]): Promise<boolean> {
@@ -114,15 +123,14 @@ export function createCanvasWire(deps: CanvasWireDeps): CanvasWire {
   }
 
   return {
-    createTeam(name, ids, created = false) {
+    createTeam(name, ids) {
       return enqueue(name, async () => {
         if (!(await raw({ action: 'create', name }))) return false
         for (let i = 0; i < ids.length; i++) {
           if (!(await raw({ action: 'add-member', name, id: ids[i]! }))) {
-            // A failure on the FIRST add of a team this action created leaves
-            // a ghost EMPTY team on the host — compensate with a remove.
-            // Later failures keep whatever members genuinely joined.
-            if (created && i === 0) await raw({ action: 'remove', name })
+            // Local absence does not prove server-side creation. Never issue
+            // an unconditional compensating remove: an idempotent create may
+            // have reused an existing team (including one already at capacity).
             return false
           }
         }
