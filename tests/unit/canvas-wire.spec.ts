@@ -124,14 +124,13 @@ describe('canvas wire', () => {
     expect(f.notices).toEqual([])
   })
 
-  it('gh108: a cap refusal on the first add compensates the new empty team', async () => {
+  it('gh108: a cap refusal never authorizes destructive compensation from a local created hint', async () => {
     const { f, wire } = fixture()
     const result = wire.createTeam('新队', ['a'], true)
     await f.respond(ok)
     await f.respond({ status: 200, body: { ok: false, teams: ['新队'], members: [] } })
-    await f.respond(ok)
     expect(await result).toBe(false)
-    expect(f.bodies).toEqual([{ action: 'create', name: '新队' }, { action: 'add-member', name: '新队', id: 'a' }, { action: 'remove', name: '新队' }])
+    expect(f.bodies).toEqual([{ action: 'create', name: '新队' }, { action: 'add-member', name: '新队', id: 'a' }])
   })
 
   it('classifies transport throws and bare HTTP errors', async () => {
@@ -200,15 +199,13 @@ describe('canvas wire', () => {
     expect(wire.hasPending()).toBe(false)
   })
 
-  it('create-team compensates a ghost empty team when the first add fails on a created team', async () => {
+  it('create-team keeps server state on first-add failure even when the local model said created=true', async () => {
     const { f, wire } = fixture()
     const done = wire.createTeam('新队', ['a', 'b'], true)
     await f.respond(ok) // create ok
     await f.respond({ status: 200, body: { ok: false, error: 'name and a joined session id are required' } }) // first add fails
-    await f.respond(ok) // the compensating remove round-trips too
     expect(await done).toBe(false)
-    expect(f.bodies).toHaveLength(3) // create, add, compensating remove
-    expect(f.bodies[2]).toEqual({ action: 'remove', name: '新队' })
+    expect(f.bodies).toHaveLength(2) // create + refused add, NO remove of unowned data
     expect(f.notices).toHaveLength(1) // the original error, verbatim
   })
 

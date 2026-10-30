@@ -36,10 +36,9 @@ export interface CanvasWireDeps {
 }
 
 export interface CanvasWire {
-  /** create → add-member per id, serial, first failure stops. `created`:
-   *  the team did not exist model-side before this action — a first-add
-   *  failure would then leave a ghost EMPTY team on the host, compensated
-   *  with a best-effort remove. */
+  /** create → add-member per id, serial, first failure stops. `created` is
+   * a model-side hint ONLY, never server creation provenance. A failed add
+   * cannot authorize deleting a same-name team; preserve it for retry. */
   createTeam(name: string, ids: readonly string[], created?: boolean): Promise<boolean>
   addMembers(team: string, ids: readonly string[]): Promise<boolean>
   removeMembers(team: string, ids: readonly string[]): Promise<boolean>
@@ -124,15 +123,14 @@ export function createCanvasWire(deps: CanvasWireDeps): CanvasWire {
   }
 
   return {
-    createTeam(name, ids, created = false) {
+    createTeam(name, ids) {
       return enqueue(name, async () => {
         if (!(await raw({ action: 'create', name }))) return false
         for (let i = 0; i < ids.length; i++) {
           if (!(await raw({ action: 'add-member', name, id: ids[i]! }))) {
-            // A failure on the FIRST add of a team this action created leaves
-            // a ghost EMPTY team on the host — compensate with a remove.
-            // Later failures keep whatever members genuinely joined.
-            if (created && i === 0) await raw({ action: 'remove', name })
+            // Local absence does not prove server-side creation. Never issue
+            // an unconditional compensating remove: an idempotent create may
+            // have reused an existing team (including one already at capacity).
             return false
           }
         }

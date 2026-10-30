@@ -23,11 +23,16 @@ it('gh108 real HTTP: a full host team refuses a new member visibly; duplicate/re
   const wire = createCanvasWire({ send, onNotice: (_kind, text) => notices.push(text) })
   expect(await wire.addMembers('Capacity', ['peer/eeeeffff'])).toBe(false)
   expect(notices).toHaveLength(1)
+  // Local absence is not creation provenance: idempotent create on a full
+  // existing team must never trigger removal of that team on failed add.
+  expect(await wire.createTeam('Capacity', ['peer/eeeeffff'], true)).toBe(false)
+  const preserved = await fetch(node.baseUrl + '/__dsh_a2a/state').then(r => r.json()) as { canvas: { teams: Array<{ name: string; members: unknown[] }> } }
+  expect(preserved.canvas.teams.find(t => t.name === 'Capacity')?.members).toHaveLength(CANVAS_MEMBER_CAP)
   expect(await wire.addMembers('Capacity', [ids[0]!])).toBe(true)
   expect(await wire.removeMembers('Capacity', ['peer/eeeeffff'])).toBe(true)
   expect(await wire.removeTeam('Capacity')).toBe(true)
   expect(await wire.removeTeam('Capacity')).toBe(true)
-  expect(notices).toHaveLength(1)
+  expect(notices).toHaveLength(2)
   const state = await fetch(node.baseUrl + '/__dsh_a2a/state').then(r => r.json()) as { canvas: { teams: Array<{ name: string }> } }
   expect(state.canvas.teams.some(t => t.name === 'Capacity')).toBe(false)
 }, 30_000)

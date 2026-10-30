@@ -20,7 +20,7 @@ export type RosterOp = { op: 'remove' | 'add'; id: string }
 
 /** The five user-facing write actions (one per design.md §3.3 row), plus the two network join/leave actions the panel-slim migration moved into the planning view. */
 export type CanvasAction =
-  | { type: 'create-team'; name: string; ids: readonly string[]; /** true when the model had no such team before this action (a serial failure then leaves a ghost EMPTY team on the host — the wire compensates with a remove). */ created?: boolean }
+  | { type: 'create-team'; name: string; ids: readonly string[]; /** true when the model had no such team before this action; NOT server creation provenance and never authority to delete on failure. */ created?: boolean }
   | { type: 'add-member'; team: string; ids: readonly string[]; /** gh#41: set when the target frame is a REMOTE peer's team — the wire routes the op through the host fleet relay. */ fleetPeer?: string }
   | { type: 'remove-member'; team: string; ids: readonly string[]; /** gh#41: see add-member. */ fleetPeer?: string }
   | { type: 'remove-team'; name: string }
