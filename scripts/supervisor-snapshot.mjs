@@ -289,7 +289,7 @@ function collectIndexM1() {
   try {
     const raw = readFileSync(join(REPO, 'src/index.ts'), 'utf8')
     const lines = raw.endsWith('\n') ? raw.split('\n').length - 1 : raw.split('\n').length
-    rows.push({ name: 'index-m1-ratchet-6776', ok: lines <= 6094 ? 1 : 0, detail: 'src/index.ts ' + lines + '行 ≤6094（#77 随批收紧·B1 e1b79ae 后 6776→6094）' })
+    rows.push({ name: 'index-m1-ratchet-6776', ok: lines <= 5513 ? 1 : 0, detail: 'src/index.ts ' + lines + '行 ≤5513（#77 B2 批末 6094→5513·三 slice 后）' })
   } catch (e) { rows.push({ name: 'index-m1-ratchet-6776', ok: 0, detail: String(e).slice(0, 60) }) }
   return rows
 }
