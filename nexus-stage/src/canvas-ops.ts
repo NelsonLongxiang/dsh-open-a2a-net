@@ -13,6 +13,7 @@
  */
 
 import { nodeRect, deriveInitialFrame, type WorldModel } from './world'
+import type { LayoutDoc } from './layout-doc'
 
 /** One pre-computed host op (remove = remove-member, add = add-member). */
 export type RosterOp = { op: 'remove' | 'add'; id: string }
@@ -121,6 +122,20 @@ export function applyAction(model: WorldModel, a: CanvasAction): Undo {
     }
     model.setTeamMembers(a.team, back)
   }
+}
+
+/** Settle the optimistic delta and forget geometry only for a removed frame.
+ * Never prune all saved frames: remote/offline teams may be absent this poll.
+ * The caller schedules a correcting save even on rollback, so an earlier
+ * in-flight layout POST cannot leave optimistic geometry persisted forever.
+ */
+export function settleAction(model: WorldModel, a: CanvasAction, ok: boolean, undo: Undo, layout: LayoutDoc | undefined): LayoutDoc | undefined {
+  if (!ok) undo()
+  const removed = (a.type === 'remove-team' && ok) || (a.type === 'create-team' && !ok && a.created === true)
+  if (!removed || layout === undefined || model.getFrame(actionTeam(a)) !== undefined) return layout
+  const frames = { ...layout.frames }
+  delete frames[actionTeam(a)]
+  return { ...layout, frames }
 }
 
 /**

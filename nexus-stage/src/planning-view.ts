@@ -39,7 +39,7 @@ import {
 import { clampViewport, fitView, panBy, screenToWorld, worldTransformCss, zoomAt, type LayoutViewport } from './viewport'
 import { boardBounds, fitBelowHud, hudBottomOf } from './planning-fit'
 import { WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, planTeamClusters, NODE_W, NODE_H } from './world'
-import { applyAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction } from './canvas-ops'
+import { applyAction, settleAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction } from './canvas-ops'
 import { FRAME_HUES } from './tokens'
 import { createPlanningMenus } from './planning-menus'
 import { createNodeFlyer, mountBoardSearch } from './planning-search'
@@ -586,7 +586,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     void deps.onCanvasAction(serverAction(a)).then(
       ok => {
         pendingRelease(team)
-        if (!ok) undo() // host refused: roll this action's optimistic delta back
+        layoutDoc = settleAction(model, a, ok, undo, layoutDoc); markDirty()
         render()
       },
       () => {
@@ -594,7 +594,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         // team's guard (and its optimistic state) forever — and per §3.4
         // 不吞错, the rollback surfaces to the user.
         pendingRelease(team)
-        undo()
+        layoutDoc = settleAction(model, a, false, undo, layoutDoc); markDirty()
         notice('error', '操作通道异常，已回滚')
         render()
       },

@@ -1,7 +1,7 @@
 /**
  * The canvas wire over an injected transport: sequencing (create → add per
  * id, first failure stops), notice classification (error verbatim,
- * error-less ok:false = idempotent silent success, transport throws, HTTP
+ * error-less ok:false requires state-proven idempotence, transport throws, HTTP
  * >= 400), the reorder op channel, and per-team serialization with
  * cross-team parallelism.
  */
@@ -86,6 +86,40 @@ describe('canvas wire', () => {
     expect(await wire.removeTeam('不存在')).toBe(true)
     expect(await wire.removeMembers('甲', ['ghost'])).toBe(true)
     expect(f.notices).toEqual([])
+  })
+
+  it('gh108: a bare false member-cap refusal is NOT a successful join', async () => {
+    const { f, wire } = fixture({ status: 200, body: { ok: false, teams: ['甲'], members: ['existing'] } })
+    expect(await wire.addMembers('甲', ['new-member'])).toBe(false)
+    expect(f.notices[0]?.kind).toBe('error')
+  })
+
+  it('gh108: a missing or malformed success body is not proof of a write', async () => {
+    const { f, wire } = fixture({ status: 200, body: {} })
+    expect(await wire.createTeam('新队', [])).toBe(false)
+    expect(f.notices).toHaveLength(1)
+  })
+
+  it('gh108: a null JSON body is a visible refusal, not an uncaught action failure', async () => {
+    const { f, wire } = fixture({ status: 200, body: null as unknown as CanvasWireResult['body'] })
+    expect(await wire.createTeam('新队', [])).toBe(false)
+    expect(f.notices[0]?.kind).toBe('error')
+  })
+
+  it('gh108: an acknowledged duplicate member is a verified idempotent join', async () => {
+    const { f, wire } = fixture({ status: 200, body: { ok: false, teams: ['甲'], members: ['a'] } })
+    expect(await wire.addMembers('甲', ['a'])).toBe(true)
+    expect(f.notices).toEqual([])
+  })
+
+  it('gh108: a cap refusal on the first add compensates the new empty team', async () => {
+    const { f, wire } = fixture()
+    const result = wire.createTeam('新队', ['a'], true)
+    await f.respond(ok)
+    await f.respond({ status: 200, body: { ok: false, teams: ['新队'], members: [] } })
+    await f.respond(ok)
+    expect(await result).toBe(false)
+    expect(f.bodies).toEqual([{ action: 'create', name: '新队' }, { action: 'add-member', name: '新队', id: 'a' }, { action: 'remove', name: '新队' }])
   })
 
   it('classifies transport throws and bare HTTP errors', async () => {
