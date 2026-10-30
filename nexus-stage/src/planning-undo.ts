@@ -9,7 +9,8 @@
  * capture() before an edit, commit(before) after it: only an edit that
  * actually moved something already on the board is recorded, so a click,
  * a pan or a marquee leaves the stack alone, and a card that arrived by
- * poll mid-gesture is not counted as a move.
+ * poll mid-gesture is not counted as a move. revert(before) is for a
+ * gesture the OS cancelled (pointercancel): layout back, nothing recorded.
  * @module nexus-stage/planning-undo
  */
 import type { FrameGeom, WorldModel } from './world'
@@ -32,6 +33,16 @@ export function createLayoutUndo(model: WorldModel) {
   const moved = (before: LayoutSnap): boolean =>
     model.allNodes().some(n => { const b = before.nodes.get(n.id); return b !== undefined && (b.x !== n.x || b.y !== n.y) }) ||
     model.allFrames().some(([name, f]) => { const b = before.frames.get(name); return b !== undefined && (b.x !== f.x || b.y !== f.y || b.w !== f.w || b.h !== f.h) })
+  const restore = (snap: LayoutSnap): void => {
+    for (const n of model.allNodes()) {
+      const b = snap.nodes.get(n.id)
+      if (b !== undefined && (b.x !== n.x || b.y !== n.y)) model.dragNodes([n.id], b.x - n.x, b.y - n.y)
+    }
+    for (const [name, f] of model.allFrames()) {
+      const b = snap.frames.get(name)
+      if (b !== undefined && (b.x !== f.x || b.y !== f.y || b.w !== f.w || b.h !== f.h)) model.setFrame(name, { ...b })
+    }
+  }
   return {
     capture,
     commit(before: LayoutSnap): void {
@@ -43,14 +54,13 @@ export function createLayoutUndo(model: WorldModel) {
     undo(): boolean {
       const snap = stack.pop()
       if (snap === undefined) return false
-      for (const n of model.allNodes()) {
-        const b = snap.nodes.get(n.id)
-        if (b !== undefined && (b.x !== n.x || b.y !== n.y)) model.dragNodes([n.id], b.x - n.x, b.y - n.y)
-      }
-      for (const [name, f] of model.allFrames()) {
-        const b = snap.frames.get(name)
-        if (b !== undefined && (b.x !== f.x || b.y !== f.y || b.w !== f.w || b.h !== f.h)) model.setFrame(name, { ...b })
-      }
+      restore(snap)
+      return true
+    },
+    /** Put back `before` without recording a step (an abandoned gesture); true when something moved. */
+    revert(before: LayoutSnap): boolean {
+      if (!moved(before)) return false
+      restore(before)
       return true
     },
     get depth(): number { return stack.length },

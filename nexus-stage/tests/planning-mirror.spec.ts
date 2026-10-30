@@ -62,4 +62,15 @@ describe('owner vs mirror frames (PR#96)', () => {
     await vi.waitFor(() => expect(route('远端研发').textContent).toBe('镜像 · 10.0.0.5:8787'))
     expect(frame('远端研发').classList.contains('is-syncing')).toBe(false)
   }, 15_000)
+
+  it('a re-render leaves an unchanged frame-head label alone (no screen-reader re-announce)', () => {
+    const { v, frame } = mount(async () => true)
+    const head = frame('远端研发').querySelector<HTMLElement>('.p-frame-head')!
+    const writes = vi.spyOn(head, 'setAttribute')
+    const local = frame('本地队').querySelector<HTMLElement>('.p-frame-head')!
+    v.seam.pointerDown(ptr({ target: local, clientX: 0, clientY: 0 }))
+    v.seam.pointerMove(ptr({ target: local, clientX: -40, clientY: 0 })) // a frame drag re-renders every frame
+    v.seam.pointerUp(ptr({ target: local, clientX: -40, clientY: 0 }))
+    expect(writes.mock.calls.filter(c => c[0] === 'aria-label')).toEqual([])
+  })
 })
