@@ -3,7 +3,7 @@
   "sourceCommit": "5736a4a6e207e72721fcaeb18f9015911a83650f",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "dd7128435878a5de0db5357fd165b3398ddb5132a7a3ac6619fbc0115e4f7508",
+    "src/index.ts": "2d7f3c64269f4ee85a83cf54274a177119074fa5b29a00ba381b4f75487f4680",
     "src/faces/admin.ts": "6d3bd09c230d35c29a58a95b1df8b181f17f6d1d63c9f74c47636db54f079013",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
@@ -18,25 +18,26 @@
     "nexus-stage/src/world.ts": "1c6308555b65e8316cda38cf97dc43120b979be3e30792a12b893faf845cb934",
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
-    "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac"
+    "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
+    "src/faces/wire.ts": "9f6e7987fd9595bc2587ec808fa74f575845884d68b41ffafc3d397114bbca6a"
   },
   "anchors": [
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/index.ts:4033",
+      "ref": "src/index.ts:3869",
       "expect": "name: 'a2a_whoami',"
     },
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/index.ts:5832",
+      "ref": "src/index.ts:5668",
       "expect": "name: 'a2a_probe',"
     },
     {
       "page": "p1-arch",
       "cell": "a2",
-      "ref": "src/index.ts:4792",
+      "ref": "src/index.ts:4628",
       "expect": "error: `the process face \"${config.team}\" is the host's own mailbox — model tools must target a member face. Route to a session team handle (\"${config.team}/<id8>\" from a2a_teams) or a canvas team; receipts and quick dispatch reach the host face on their own paths.`,"
     },
     {
@@ -66,7 +67,7 @@
     {
       "page": "p1-arch",
       "cell": "b4",
-      "ref": "src/index.ts:4282",
+      "ref": "src/index.ts:4118",
       "expect": "name: 'a2a_exposure',"
     },
     {
@@ -78,13 +79,13 @@
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:4860",
+      "ref": "src/index.ts:4696",
       "expect": "const sharedCanvas = canvasStore.list().some(name => {"
     },
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:4865",
+      "ref": "src/index.ts:4701",
       "expect": "let orgShared = false"
     },
     {
@@ -96,19 +97,19 @@
     {
       "page": "p1-arch",
       "cell": "c2",
-      "ref": "src/index.ts:2909",
+      "ref": "src/index.ts:2916",
       "expect": "path: '/a2a/direct',"
     },
     {
       "page": "p1-arch",
       "cell": "c3",
-      "ref": "src/index.ts:3301",
+      "ref": "src/faces/wire.ts:180",
       "expect": "path: '/a2a/log',"
     },
     {
       "page": "p1-arch",
       "cell": "c4",
-      "ref": "src/index.ts:3382",
+      "ref": "src/faces/wire.ts:259",
       "expect": "path: '/a2a/query',"
     },
     {
@@ -126,7 +127,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:3532",
+      "ref": "src/index.ts:3368",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -204,7 +205,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:5024",
+      "ref": "src/index.ts:4860",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -246,7 +247,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3950",
+      "ref": "src/index.ts:3786",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
@@ -312,7 +313,7 @@
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/index.ts:3061",
+      "ref": "src/index.ts:3068",
       "expect": "if (refuseIfFlooded(caller, message, team, taskId, res)) return"
     },
     {

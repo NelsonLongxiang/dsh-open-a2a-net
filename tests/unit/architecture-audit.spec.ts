@@ -17,8 +17,8 @@ describe('architecture full-anchor audit', () => {
   it('covers every long/short numeric reference with exact current source and digest', () => {
     const result = run()
     expect(result.errors).toEqual([])
-    expect(result.anchorCount).toBe(50)
-    expect(result.sourceFiles).toBe(16)
+    expect(result.anchorCount).toBe(manifest.anchors.length)
+    expect(result.sourceFiles).toBe(Object.keys(manifest.sources).length)
   })
   it('detects changed anchor line, not a nearby semantic match', () => {
     expect(run(xml.replace(sample, shifted)).ok).toBe(false)
