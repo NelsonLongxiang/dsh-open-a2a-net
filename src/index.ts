@@ -2895,13 +2895,20 @@ ${message}`
     registerWireFaces(webServer, {
       ctx,
       logger,
+      config,
       cliDeposits,
       canvasStore,
       sessionNodes,
       joinedSessions,
+      idempotencyStore,
       verifyOriginClaim,
       callerLinkedToThisHost,
       recordActivity,
+      bumpLegacyInbound: () => { legacyInboundCount += 1 },
+      secretEqual,
+      a2aCallerRefusal,
+      scanSessionLogList,
+      readSessionLogTail,
     })
 
     ctx.effect(() => webServer.register({
@@ -3284,177 +3291,6 @@ ${message}`
       },
     }), 'a2a: direct route endpoint')
 
-    // 0.6.15: the read-only peer log face — a peer asks for THIS node's
-    // session transcript tail (or, without id, the readable-session
-    // listing) so a remote workbench can show "what has this node been
-    // talking about". Admission is a2aCallerRefusal — exactly the rule
-    // /a2a/direct applies to message delivery: caller_session required,
-    // zone/id8 callers judged on shared teams. Read semantics are the
-    // local /__dsh_a2a/session-log face verbatim (artifact existence is
-    // the only gate; archived and never-joined sessions stay readable;
-    // caps mirror session-transcript.ts). Nothing here steers a session,
-    // claims a task, or writes state — the only side effects are the
-    // activity-ring record and the admission path's background
-    // directory learn.
-    ctx.effect(() => webServer.register({
-      kind: 'exact',
-      path: '/a2a/log',
-      handler: async (req: IncomingMessage, res: ServerResponse) => {
-        const send = (status: number, body: Record<string, JsonValue>): void => {
-          const payload = JSON.stringify(body)
-          res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
-          res.end(payload)
-        }
-        if (req.method !== 'GET') {
-          send(405, { ok: false, error: 'GET is the only method on this face' })
-          return
-        }
-        // V2 (gh#7, S1): the read-only log face rides the same apiKey gate
-        // as delivery — a configured key must be presented here too.
-        if (config.apiKey !== '') {
-          const presented = String(req.headers['x-api-key'] ?? '')
-          if (!secretEqual(presented, config.apiKey)) {
-            send(401, { ok: false, error: 'unauthorized: X-API-Key required (apiKey is configured)', code: -32000 })
-            return
-          }
-        }
-        const url = new URL(req.url ?? '/', 'http://x')
-        const caller = url.searchParams.get('caller_session') ?? ''
-        const id = url.searchParams.get('id') ?? ''
-        const limitArg = Number(url.searchParams.get('limit') ?? TRANSCRIPT_DEFAULT_LIMIT)
-        const limit = Number.isFinite(limitArg) ? Math.max(1, Math.min(TRANSCRIPT_MAX_LIMIT, Math.floor(limitArg))) : TRANSCRIPT_DEFAULT_LIMIT
-        const refusal = a2aCallerRefusal(caller)
-        if (refusal !== undefined) {
-          recordActivity('in', 'log', caller === '' ? 'anonymous' : caller, false)
-          send(200, { ok: false, error: refusal, code: -32000 })
-          return
-        }
-        // gh#9+gh#10: the log face reuses the exact OriginClaim
-        // verification (§8.3) — same window semantics as delivery.
-        const logClaim = await verifyOriginClaim(req)
-        if (!logClaim.ok) {
-          if (logClaim.reason !== 'absent' || config.originClaimWindow === false) {
-            recordActivity('in', 'log', caller, false)
-            send(200, { ok: false, error: `untrusted-origin: OriginClaim verification failed (${logClaim.reason}) — present a signed envelope or upgrade your node`, code: -32000 })
-            return
-          }
-          legacyInboundCount += 1
-        }
-        recordActivity('in', 'log', caller, true)
-        if (id.includes('/') || id.includes('\\') || id.includes('..')) {
-          send(200, { ok: false, error: 'id is required' })
-          return
-        }
-        if (id === '') {
-          try {
-            const rows = scanSessionLogList()
-            send(200, { ok: true, count: rows.length, sessions: rows.slice(0, 50) })
-          } catch (error) {
-            send(200, { ok: false, error: `transcript list failed: ${error instanceof Error ? error.message : String(error)}` })
-          }
-          return
-        }
-        try {
-          const tail = readSessionLogTail(id, limit)
-          if (!tail.ok) send(200, { ok: false, error: tail.error })
-          else send(200, { ok: true, id: tail.id, count: tail.messages.length, messages: tail.messages })
-        } catch (error) {
-          send(200, { ok: false, error: `transcript failed: ${error instanceof Error ? error.message : String(error)}` })
-        }
-      },
-    }), 'a2a: peer log face endpoint')
-  })
-
-  whenWebServerSettled((webServer) => {
-    // W7 slice 2: the S1 outcome-retrieval surface — a READ-ONLY lookup of
-    // one claimed task's settled outcome. The body carries ONLY the task id
-    // and the submit payload's fingerprint (peerPayloadFingerprint, the
-    // gate's own shared implementation): the fingerprint match is the
-    // authorization, and the fan-out probe never leaks the original message
-    // to peers that never saw it. Constant-200 semantics — a query NEVER
-    // produces a wire error code (the frozen -32002/-32003 vocabulary stays
-    // submit-only), never claims, never steers, never enters a session: the
-    // gate's "verdict before steer" has its mirror in "a query executes
-    // nothing". Malformed fields degrade to unknown-task rather than
-    // guessing; an unparseable body answers 400 like /a2a/direct.
-    ctx.effect(() => webServer.register({
-      kind: 'exact',
-      path: '/a2a/query',
-      handler: (req: IncomingMessage, res: ServerResponse) => {
-        const chunks: Buffer[] = []
-        let size = 0
-        let overflowed = false
-        req.on('data', (chunk: Buffer) => {
-          if (overflowed) return
-          const next = size + chunk.length
-          if (next > 65_536) {
-            overflowed = true
-            chunks.length = 0
-            return
-          }
-          size = next
-          chunks.push(chunk)
-        })
-        req.on('error', () => {
-          if (!res.headersSent) {
-            res.writeHead(400)
-            res.end()
-          }
-        })
-        req.on('end', () => {
-          if (overflowed) {
-            if (!res.writableEnded && !res.headersSent) {
-              const payload = JSON.stringify({ error: 'payload too large', code: WIRE_ERROR_PAYLOAD_TOO_LARGE })
-              res.writeHead(413, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
-              res.end(payload)
-            }
-            return
-          }
-          let body: {
-            readonly task_id?: unknown
-            readonly fingerprint?: unknown
-          }
-          try {
-            body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof body
-          } catch {
-            const payload = JSON.stringify({ error: 'malformed body', code: -32000 })
-            res.writeHead(400, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
-            res.end(payload)
-            return
-          }
-          const taskId = typeof body.task_id === 'string' ? body.task_id : ''
-          const fingerprint = typeof body.fingerprint === 'string' ? body.fingerprint : ''
-          const verdict = taskId === '' || fingerprint === ''
-            ? { found: false as const, reason: 'unknown-task' as const }
-            : idempotencyStore.query(taskId, fingerprint)
-          const payload = JSON.stringify(
-            verdict.found
-              ? verdict.status === 'pending'
-                ? { found: true, status: 'pending', task_id: taskId }
-                : verdict.status === 'completed'
-                  ? {
-                    found: true,
-                    status: 'completed',
-                    reply: verdict.reply,
-                    settled_at: new Date(verdict.settledAt).toISOString(),
-                    task_id: taskId,
-                    ...(verdict.truncated === true ? { truncated: true } : {}),
-                  }
-                  : {
-                    found: true,
-                    status: 'failed',
-                    error: verdict.error,
-                    settled_at: new Date(verdict.settledAt).toISOString(),
-                    task_id: taskId,
-                    ...(verdict.truncated === true ? { truncated: true } : {}),
-                  }
-              : { found: false, reason: verdict.reason, task_id: taskId },
-          )
-          res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
-          res.end(payload)
-        })
-      },
-    }), 'a2a: query endpoint')
   })
 
   whenWebServerSettled((webServer) => {
