@@ -31,4 +31,4 @@ export interface InFlightRoute {
 }
 
 /** One peer-card cache entry: when it was fetched and what came back. */
-export interface CardCacheEntry { at: number; card: A2aPeerCard | undefined }
+export interface CardCacheEntry { at: number; card: A2aPeerCard | undefined; missAt?: number }

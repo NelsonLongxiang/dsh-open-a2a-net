@@ -35,11 +35,13 @@ describe('refreshPeerCard', () => {
     expect(d.cardCache.get(URL_A)?.card?.name).toBe('new')
   })
 
-  it('a failed refetch keeps the last good card instead of blanking the mirror', async () => {
+  it('a miss no longer restores mid-loop — both passes run genuine refetches; keeping the old card belongs to cachedCardFetch (integration-pinned)', async () => {
     const d = deps([undefined], card('good'))
     await refreshPeerCard(d, URL_A)
-    expect(d.cardCache.get(URL_A)?.card?.name).toBe('good')
-    expect(d.cardCache.get(URL_A)!.at).toBeGreaterThan(0) // its original age, not the stale marker
+    // This mock writes the miss itself; production cachedCardFetch keeps the
+    // last good card through the missAt window (pinned in card-cache.spec).
+    expect(d.calls()).toBe(2)
+    expect(d.cardCache.get(URL_A)?.card).toBeUndefined()
   })
 
   it('with nothing cached, a miss stays a miss', async () => {
