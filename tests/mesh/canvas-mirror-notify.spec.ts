@@ -111,10 +111,13 @@ describe('canvas single owner + mirror: change notification', () => {
       expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: '镜像队', id: ids.a })).ok).toBe(true)
       expect(await until(async () => (await mirrored(b, a.baseUrl)).find(e => e.name === '镜像队')?.members.includes('dsh/aaaaaaaa') === true)).toBe(true)
 
-      // 3. B edits A's team through the relay: B's mirror is current when the relay returns.
+      // 3. B edits A's team through the relay: the reply only proves the op
+      // landed on the owner (the refresh runs detached, pr96-review P2-1);
+      // B's mirror updates once the owner's canvas-changed ping or the local
+      // detached refresh lands — settle it the same way as steps 2 and 4.
       const relayed = await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'add-member', name: '镜像队', id: ids.b })
       expect(relayed.ok).toBe(true)
-      expect((await mirrored(b, a.baseUrl)).find(e => e.name === '镜像队')?.members).toContain('dsh/bbbbbbbb')
+      expect(await until(async () => (await mirrored(b, a.baseUrl)).find(e => e.name === '镜像队')?.members.includes('dsh/bbbbbbbb') === true)).toBe(true)
 
       // 4. Removal propagates the same way (no tombstones: the owner's store is the truth).
       expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'remove-member', name: '镜像队', id: 'dsh/bbbbbbbb' })).ok).toBe(true)
