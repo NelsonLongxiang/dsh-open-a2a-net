@@ -3907,13 +3907,31 @@ ${message}`
   function cachedCardFetch(url: string): Promise<A2aPeerCard | undefined> {
     const hit = cardCache.get(url)
     const now = Date.now()
-    if (hit !== undefined && now - hit.at < (hit.card !== undefined ? config.cardCacheTtlMs : config.cardCacheNegativeTtlMs)) {
+    if (hit !== undefined && hit.card !== undefined && hit.missAt !== undefined) {
+      // Kept through a miss (PR#96 review P2-2 round 2): serve the old card
+      // for the negative window — a dead peer is refetched once per window,
+      // the same cadence as a peer that never had a card — and never past the
+      // card's own expiresAt: an old key gets no extra trust, and a dead peer
+      // leaves the directory when its card lapses.
+      if (now - hit.missAt < config.cardCacheNegativeTtlMs && hit.card.expiresAt > now) return Promise.resolve(hit.card)
+    } else if (hit !== undefined && now - hit.at < (hit.card !== undefined ? config.cardCacheTtlMs : config.cardCacheNegativeTtlMs)) {
       return Promise.resolve(hit.card)
     }
     const inFlight = cardCacheInFlight.get(url)
     if (inFlight !== undefined) return inFlight
     const fetch = fetchPeerCard(url)
       .then(card => {
+        // P2-2: a miss must not blank the mirror for callers joining this
+        // single flight nor for later readers — keep the last good entry,
+        // stamped missAt so the window above bounds the retries; a card past
+        // its own expiresAt is not kept (undefined, honest exit).
+        if (card === undefined) {
+          const old = cardCache.get(url)
+          if (old !== undefined && old.card !== undefined && old.card.expiresAt > Date.now()) {
+            cardCache.set(url, { at: old.at, card: old.card, missAt: Date.now() })
+            return old.card
+          }
+        }
         cardCache.set(url, { at: Date.now(), card })
         return card
       })

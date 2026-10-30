@@ -52,11 +52,12 @@ export interface CanvasNotifyDeps {
 }
 
 /**
- * Re-read one peer's card now. The entry goes stale, not away (the board keeps
- * rendering the old org until the refetch lands). The shared cache is
- * single-flight, so the first fetch may JOIN one that started before the
- * peer's change; the second always starts after the first settled, i.e. after
- * the change — that one is the answer.
+ * Re-read one peer's card now. Each pass pre-stales the entry (the literal
+ * carries no missAt) so it is a GENUINE refetch: pass 1 may join a flight
+ * that started before the peer's change; pass 2 always starts after the
+ * first settled — that one is the answer. A miss keeps the last good card
+ * inside cachedCardFetch itself (the missAt window); there is nothing to
+ * restore here.
  * @param d - the card cache and its single-flight fetch.
  * @param url - the tracked peer URL.
  */
@@ -64,12 +65,7 @@ export async function refreshPeerCard(d: Pick<CanvasNotifyDeps, 'cardCache' | 'c
   for (let pass = 0; pass < 2; pass += 1) {
     const hit = d.cardCache.get(url)
     if (hit !== undefined) d.cardCache.set(url, { at: 0, card: hit.card })
-    // A failed refetch must not blank the mirror: put the last good card
-    // back with its OWN age (no extra trust in an old key), not the miss.
-    if (await d.cachedCardFetch(url) === undefined && hit?.card !== undefined) {
-      d.cardCache.set(url, hit)
-      return
-    }
+    await d.cachedCardFetch(url)
   }
 }
 

@@ -537,8 +537,11 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           const raw = await reply.text()
           try {
             const out = JSON.parse(raw) as Record<string, unknown>
-            // Single owner + mirror: the op landed on the owner, so re-read its card now.
-            if (out.ok === true) await refreshPeerCard(d, peerUrl)
+            // Single owner + mirror: the op landed on the owner — re-read its
+            // card, but never gate the reply on it (two serial card fetches can
+            // hang the workbench ~30s past a landed op; the owner's own
+            // canvas-changed ping is the freshness backstop). PR#96 review P2-1.
+            if (out.ok === true) void refreshPeerCard(d, peerUrl)
             send(JSON.stringify(out))
           } catch {
             // A non-JSON reply is a peer WITHOUT the canvas-op face (a

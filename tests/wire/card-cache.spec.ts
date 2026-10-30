@@ -33,10 +33,10 @@ function runContext(): { signal: AbortSignal } {
   return { signal: new AbortController().signal } as { signal: AbortSignal }
 }
 
-const cardBody = (key: NodeJS.KeyPairKeyObjectReturnType, url: string) => {
+const cardBody = (key: NodeJS.KeyPairKeyObjectReturnType, url: string, expiresAt = Date.now() + 3_600_000) => {
   const { privateKey } = key as { privateKey: NodeJS.KeyPairKeyObjectReturnType }
   void url
-  return signCard({ name: 'peer-a', session: 'peer-host', team: 'dsh', capabilities: {}, expiresAt: Date.now() + 3_600_000 }, privateKey)
+  return signCard({ name: 'peer-a', session: 'peer-host', team: 'dsh', capabilities: {}, expiresAt }, privateKey)
 }
 
 describe('shared TTL card cache', () => {
@@ -71,6 +71,109 @@ describe('shared TTL card cache', () => {
     // A second call inside the window reuses the cached card: no new fetches.
     await teams?.execute({}, runContext())
     expect(calls).toBe(callsAfterFirst)
+    await ctx.fiber.dispose()
+  })
+
+  it('PR#96 P2-2: a refetch failure keeps the OLD card for callers joining the single flight (the mirror never blanks)', async () => {
+    const { privateKey } = generateKeyPairSync('ed25519')
+    const card = cardBody({ privateKey }, 'http://peer-a')
+    let calls = 0
+    let serving = true
+    vi.stubGlobal('fetch', (url: string, init?: { method?: string }) => {
+      if (String(url).startsWith('http://peer-a') && (init?.method ?? 'GET') === 'GET') {
+        calls += 1
+        if (serving) return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify(card) } as unknown as Response)
+        return Promise.reject(new Error('peer-a went down'))
+      }
+      return Promise.reject(new Error('unreachable'))
+    })
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    // Tiny positive TTL so the good entry is genuinely expired when we refetch.
+    apply(ctx, makeConfig({ peers: ['http://peer-a'], dshHome: tmpHome(), cardCacheTtlMs: 40 }))
+    const teams = ctx.tools.get('a2a_teams')
+    const prime = await teams?.execute({}, runContext()) as { teams: { team: string }[] }
+    expect(prime.teams.some(t => t.session === 'peer-host')).toBe(true)
+    const callsWhenGood = calls
+    serving = false
+    await new Promise(resolve => setTimeout(resolve, 60))
+    // Two concurrent calls join the SAME single flight over the expired entry;
+    // the fetch fails — both must still surface the OLD card, not undefined.
+    const [first, second] = await Promise.all([
+      teams?.execute({}, runContext()) as Promise<{ teams: { team: string }[] }>,
+      teams?.execute({}, runContext()) as Promise<{ teams: { team: string }[] }>,
+    ])
+    expect(first.teams.some(t => t.session === 'peer-host')).toBe(true)
+    expect(second.teams.some(t => t.session === 'peer-host')).toBe(true)
+    // Single-flight: the two joined calls shared ONE new fetch attempt.
+    expect(calls).toBe(callsWhenGood + 1)
+    await ctx.fiber.dispose()
+  })
+
+  it('PR#96 P2-2 r2: after the peer dies, SERIAL polls refetch once per negative window while the old card keeps serving', async () => {
+    const { privateKey } = generateKeyPairSync('ed25519')
+    const card = cardBody({ privateKey }, 'http://peer-a')
+    let calls = 0
+    let serving = true
+    vi.stubGlobal('fetch', (url: string, init?: { method?: string }) => {
+      if (String(url).startsWith('http://peer-a') && (init?.method ?? 'GET') === 'GET') {
+        calls += 1
+        if (serving) return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify(card) } as unknown as Response)
+        return Promise.reject(new Error('peer-a went down'))
+      }
+      return Promise.reject(new Error('unreachable'))
+    })
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    apply(ctx, makeConfig({ peers: ['http://peer-a'], dshHome: tmpHome(), cardCacheTtlMs: 40 }))
+    const teams = ctx.tools.get('a2a_teams')
+    await teams?.execute({}, runContext())
+    const callsWhenGood = calls
+    serving = false
+    await new Promise(resolve => setTimeout(resolve, 60))
+    for (let i = 0; i < 5; i += 1) {
+      const poll = await teams?.execute({}, runContext()) as { teams: { team: string }[] }
+      expect(poll.teams.some(t => t.session === 'peer-host')).toBe(true)
+    }
+    expect(calls).toBe(callsWhenGood + 1)
+    await ctx.fiber.dispose()
+  })
+
+  it('PR#96 P2-2 r2: past the card\'s own expiresAt the old card stops answering — the dead peer leaves the directory', async () => {
+    const { privateKey } = generateKeyPairSync('ed25519')
+    const card = cardBody({ privateKey }, 'http://peer-a', Date.now() + 120)
+    let calls = 0
+    let serving = true
+    vi.stubGlobal('fetch', (url: string, init?: { method?: string }) => {
+      if (String(url).startsWith('http://peer-a') && (init?.method ?? 'GET') === 'GET') {
+        calls += 1
+        if (serving) return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify(card) } as unknown as Response)
+        return Promise.reject(new Error('peer-a went down'))
+      }
+      return Promise.reject(new Error('unreachable'))
+    })
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    apply(ctx, makeConfig({ peers: ['http://peer-a'], dshHome: tmpHome(), cardCacheTtlMs: 40 }))
+    const teams = ctx.tools.get('a2a_teams')
+    await teams?.execute({}, runContext())
+    const callsWhenGood = calls
+    serving = false
+    // Past the card's own expiry AND the cache TTL: the kept card is refused.
+    await new Promise(resolve => setTimeout(resolve, 220))
+    const gone = await teams?.execute({}, runContext()) as { teams: { team: string }[] }
+    expect(gone.teams.some(t => t.session === 'peer-host')).toBe(false)
+    expect(calls).toBe(callsWhenGood + 1)
+    // The negative window now holds: no refetch per poll.
+    const callsAtExit = calls
+    await teams?.execute({}, runContext())
+    expect(calls).toBe(callsAtExit)
     await ctx.fiber.dispose()
   })
 
