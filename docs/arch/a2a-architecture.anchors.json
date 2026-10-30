@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceCommit": "5736a4a6e207e72721fcaeb18f9015911a83650f",
+  "sourceCommit": "0b466643b27120878ceeab9a2ebf087ae3854605",
   "scope": "Committed source only; no deployment inference",
   "sources": {
     "src/index.ts": "7162d4cfb586d0178041803c33b8cc6ace3804a00f41ceae6092a2586ba7f8ea",
@@ -19,7 +19,8 @@
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
-    "src/faces/wire.ts": "5d238ba0ee4b859f41cbc6eeca4bffe0a06604e06cfa5ce7e9d4607f2d4cfcb9"
+    "src/faces/wire.ts": "5d238ba0ee4b859f41cbc6eeca4bffe0a06604e06cfa5ce7e9d4607f2d4cfcb9",
+    "src/faces/canvas-notify.ts": "252202b494f60587662e2ec7542cb29119c066d36cc5843f846d6052760a224e"
   },
   "anchors": [
     {
@@ -321,6 +322,18 @@
       "cell": "f6",
       "ref": "src/flood-guard.ts:86",
       "expect": "export function createFloodGuard("
+    },
+    {
+      "page": "p1-arch",
+      "cell": "c6",
+      "ref": "src/faces/wire.ts:110",
+      "expect": "export function registerWireFaces(webServer: WebServer, d: WireDeps): void {"
+    },
+    {
+      "page": "p1-arch",
+      "cell": "c6",
+      "ref": "src/faces/canvas-notify.ts:77",
+      "expect": "export function registerCanvasNotify(webServer: WebServer, d: CanvasNotifyDeps): void {"
     }
   ]
 }
