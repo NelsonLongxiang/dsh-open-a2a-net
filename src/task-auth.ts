@@ -393,6 +393,41 @@ export function buildAuthorization(admission: Extract<Admission, { ok: true }>, 
   })
 }
 
+/**
+ * #114 S5: the canonical JSON of one authorization record — the single
+ * implementation `authRef` hashes. Fixed key order (the {@link
+ * TaskAuthorization} declaration order), absent optional fields omitted,
+ * `basis` sorted and deduplicated (it is a set: the order admission found its
+ * teams in is not part of the authority), no whitespace. Persisted key order
+ * never matters, so a restored record yields the same ref as its original.
+ */
+export function canonicalAuthorization(auth: TaskAuthorization): string {
+  return JSON.stringify({
+    v: auth.v,
+    caller: auth.caller,
+    proof: auth.proof,
+    ...(auth.claim !== undefined ? { claim: { caller: auth.claim.caller, origin: auth.claim.origin } } : {}),
+    ingress: auth.ingress,
+    via: auth.via,
+    admission_rule: auth.admission_rule,
+    basis: sortedUnique(auth.basis),
+    allowlist_version: auth.allowlist_version,
+    target: auth.target,
+    receipt_target: auth.receipt_target,
+    received_at: auth.received_at,
+    ...(auth.target_busy === true ? { target_busy: true } : {}),
+  })
+}
+
+/**
+ * #114 S5: the auto-receipt envelope's `authRef` — the first 16 hex of
+ * sha256 over {@link canonicalAuthorization}. Pins which inbound record a
+ * host-synthesized receipt answers; recorded for audit, judged by S4.
+ */
+export function authorizationRef(auth: TaskAuthorization): string {
+  return createHash('sha256').update(canonicalAuthorization(auth)).digest('hex').slice(0, 16)
+}
+
 const boundedString = (v: unknown, allowEmpty = false): v is string =>
   typeof v === 'string' && (allowEmpty || v !== '') && v.length <= AUTH_STRING_CAP
 

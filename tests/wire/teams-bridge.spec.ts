@@ -663,6 +663,9 @@ describe('P2 receipt-callback routing', () => {
     const initiator = makeAgent('session-main1')
     const steer = vi.fn((message: { content: Array<{ type: string; text?: string }> }) => {
       setTimeout(() => {
+        // A real turn records the steer it consumed (#114 S5 attributes the
+        // receipt to the final AFTER this event), then answers.
+        initiator.session.events.push({ type: 'user/message', data: { content: message.content } })
         initiator.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'all done' }] } } })
         m.ctx.emit('agent/status', { agent: initiator, status: 'idle' })
       }, 30)
@@ -678,6 +681,11 @@ describe('P2 receipt-callback routing', () => {
     const receipt = peer.seen.find(entry => String(entry.message ?? '').startsWith('[A2A receipt]'))
     expect(receipt).toBeDefined()
     expect(String(receipt?.message)).toContain('all done')
+    // #114 S5 binding: the envelope names the session the host spoke for and
+    // pins the inbound authorization record the delivery was born with.
+    const envelope = JSON.parse(String(receipt?.message).split('\n')[1] ?? '{}') as Record<string, unknown>
+    expect(envelope).toMatchObject({ outcome: 'completed', onBehalfOf: 'dsh/main1' })
+    expect(envelope.authRef).toMatch(/^[0-9a-f]{16}$/)
   })
 
   it('cold joined teams are advertised on the card so cross-node wake-on-route is discoverable', async () => {
@@ -900,4 +908,100 @@ describe('inbound outcome ledger (W7 slice 2 hooks)', () => {
     // The placeholder prose rode the wire — but the ledger says pending.
     await expect(query(m.port, { task_id: 'hook-1a', fingerprint })).resolves.toEqual({ found: true, status: 'pending', task_id: 'hook-1a' })
   }, 15_000)
+})
+
+/**
+ * #114 S5 (#123): an auto-receipt belongs to the final the target produced
+ * AFTER consuming that task's steer (its `[A2A direct] (task <id>)`
+ * user/message), and each waiter is answered from its own consumption point.
+ * The fake target below plays a DSH session turn by turn: `consume` records a
+ * steer the way the session log does, `final` ends the turn with an answer.
+ */
+describe('#114 S5 auto-receipt turn attribution', () => {
+  async function busyTarget(): Promise<{
+    deliver: (message: string) => Promise<string>
+    consume: (taskId: string) => void
+    step: (text: string) => void
+    final: (text: string) => void
+    receiptFor: (taskId: string) => Promise<string | undefined>
+  }> {
+    const peer = await startPeer({ asyncCap: true })
+    const m = await mount({ peers: [peer.url] })
+    mounted.push(async () => { await m.dispose(); await peer.close() })
+    const target = makeAgent('session-busy1') as Agent & { session: { events: unknown[] } }
+    const steered = new Map<string, Array<{ type: string; text?: string }>>()
+    ;(target as unknown as { steer: unknown }).steer = vi.fn((message: { content: Array<{ type: string; text?: string }> }) => {
+      const id = /^\[A2A direct\] \(task (\S+)\)/.exec(message.content[0]?.text ?? '')?.[1]
+      if (id !== undefined) steered.set(id, message.content)
+    })
+    m.agents.agents.push(target)
+    // The target is mid-turn on another work line before anything arrives.
+    target.session.events.push({ type: 'user/message', data: { content: [{ type: 'text', text: 'procurement hook correction' }] } })
+    target.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'looking at the hook' }] } } })
+    const assistant = (text: string): void => {
+      target.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text }] } } })
+    }
+    return {
+      deliver: async (message) => {
+        const res = await postJson(m.port, '/a2a/direct', { team: 'dsh', message, caller_session: 'caller-x', callback: 'peer-team', wait: false })
+        const body = await res.json() as { delivered?: boolean; task_id?: string }
+        expect(body.delivered).toBe(true)
+        return String(body.task_id)
+      },
+      consume: (taskId) => { target.session.events.push({ type: 'user/message', data: { content: steered.get(taskId) } }) },
+      step: assistant,
+      final: (text) => {
+        assistant(text)
+        m.ctx.emit('agent/status', { agent: target, status: 'idle' })
+      },
+      receiptFor: async (taskId) => {
+        const find = (): Record<string, unknown> | undefined => peer.seen.find(entry => String(entry.message ?? '').startsWith(`[A2A receipt] task ${taskId} `))
+        for (let i = 0; i < 25 && find() === undefined; i++) await new Promise(resolve => { setTimeout(resolve, 20) })
+        const hit = find()
+        return hit === undefined ? undefined : String(hit.message)
+      },
+    }
+  }
+
+  it('(a) a busy target that consumes the steer within the same turn: that turn\'s final is the receipt', async () => {
+    const t = await busyTarget()
+    const taskId = await t.deliver('map the ten verifiers to their Mac owners')
+    // The running turn reads the steer at its next step and answers it.
+    t.consume(taskId)
+    t.final('mapping recorded; hook fix also done')
+    const receipt = await t.receiptFor(taskId)
+    expect(receipt).toBeDefined()
+    expect(receipt).toContain('mapping recorded; hook fix also done (auto)')
+  })
+
+  it('(b) a steer consumed only in the next turn: the current final produces no receipt, the next one does', async () => {
+    const t = await busyTarget()
+    const taskId = await t.deliver('map the ten verifiers to their Mac owners')
+    // The current turn ends on the OTHER work line without reading the steer.
+    t.final('procurement hook notification fixed')
+    expect(await t.receiptFor(taskId)).toBeUndefined()
+    // The next turn consumes it and answers.
+    t.consume(taskId)
+    t.step('reading the mapping')
+    t.final('mapping recorded')
+    const receipt = await t.receiptFor(taskId)
+    expect(receipt).toContain('mapping recorded (auto)')
+    expect(receipt).not.toContain('procurement')
+  })
+
+  it('#61 shape: one idle answers only the consumed task; the unconsumed one waits for its own final', async () => {
+    const t = await busyTarget()
+    const first = await t.deliver('first task')
+    const second = await t.deliver('second task')
+    t.consume(first)
+    t.final('first answered')
+    expect(await t.receiptFor(first)).toContain('first answered (auto)')
+    // The shared-floor flush used to hand the same text to every waiter.
+    expect(await t.receiptFor(second)).toBeUndefined()
+    t.consume(second)
+    t.final('second answered')
+    const receipt = await t.receiptFor(second)
+    expect(receipt).toContain('second answered (auto)')
+    expect(receipt).not.toContain('first answered')
+  })
 })

@@ -54,7 +54,7 @@ import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
-import { allowlistVersion, callerAdmission, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type PeerOrgEntry } from './task-auth.ts'
+import { allowlistVersion, authorizationRef, callerAdmission, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type PeerOrgEntry } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
 // `ctx.timer` on Context; the runtime service is mounted by app compositions.
@@ -1361,7 +1361,11 @@ const reportLoopRing = new Map<string, number[]>()
   /** Minimal event shape the title/activity/receipt-flush readers need. */
   type SessionEventLike = {
     readonly type?: string
-    readonly data?: { readonly message?: { readonly content?: ReadonlyArray<{ readonly type?: string; readonly text?: string }> } }
+    readonly data?: {
+      readonly message?: { readonly content?: ReadonlyArray<{ readonly type?: string; readonly text?: string }> }
+      /** user/message events carry their blocks here (session-transcript.ts). */
+      readonly content?: ReadonlyArray<{ readonly type?: string; readonly text?: string }>
+    }
   }
 
   function sessionEventsOf(agent: Agent): readonly (SessionEventLike | undefined)[] {
@@ -2171,6 +2175,10 @@ const reportLoopRing = new Map<string, number[]>()
     // guards refuse that shape outright; this keeps the receipt half dead
     // even if a future path reopens it.
     if (callerTeam === `${config.team}/${agentId8(target)}`) return
+    // #114 S5: the waiter is tied to THIS task's steer — only a final the
+    // target produced after consuming `[A2A direct] (task <id>)` answers it
+    // (flushFinals). A busy target's other work line can no longer settle
+    // a task it has not read yet (the #61 direct-bb27ec94 shape).
     registerFinalWaiter(target, (finalText, placeholder) => {
       // W7 slice-2: a host-authored placeholder (flush timeout, dead
       // session) must not synthesize a COMPLETION receipt — a wedged
@@ -2186,7 +2194,15 @@ const reportLoopRing = new Map<string, number[]>()
       const summary = `${finalText.trim().replace(/\s+/g, ' ').slice(0, SUMMARY_CAP) || 'done'} (auto)`
       // v2 envelope projection: header stays byte-compatible for every
       // legacy correlator; the machine JSON rides exactly one following line.
-      const receipt = formatReceipt(taskId, summary, { outcome: 'completed', idempotencyKey: taskId })
+      // #114 S5 binding: onBehalfOf names the session that did the work (the
+      // host is only its courier); authRef pins the inbound authorization
+      // record the delivery was born with — recorded for audit, judged by S4.
+      const receipt = formatReceipt(taskId, summary, {
+        outcome: 'completed',
+        idempotencyKey: taskId,
+        onBehalfOf: sessionTeamOf(target),
+        ...(row?.auth !== undefined ? { authRef: authorizationRef(row.auth) } : {}),
+      })
       // Three-tier hard order (work-order P2): caller lane first; on failure
       // escalate ONCE to the owner mailbox — the outcome never evaporates
       // just because the original waiter died. Archive holds truth regardless.
@@ -2212,18 +2228,20 @@ const reportLoopRing = new Map<string, number[]>()
       ).catch(() => {
         // Ladder exhausted: the throttled breadcrumbs above already said why.
       })
-    })
+    }, taskId)
   }
 
   /**
    * Register one final-reply waiter for the agent and arm its flush timeout.
    * @param agent - the agent whose next assistant message answers the waiter.
    * @param answer - how the waiter's reply is delivered.
+   * @param taskId - #114 S5: attribute by consumption — only a final after
+   *   the `[A2A direct] (task <id>)` user message answers this waiter.
    * @returns the registered waiter (for callers that may retract it).
    */
-  function registerFinalWaiter(agent: Agent, answer: (text: string, placeholder?: boolean) => void): FinalWaiter {
+  function registerFinalWaiter(agent: Agent, answer: (text: string, placeholder?: boolean) => void, taskId?: string): FinalWaiter {
     const key = String(agent.id)
-    const waiter: FinalWaiter = { answer, sinceEvents: sessionEventsOf(agent).length }
+    const waiter: FinalWaiter = { answer, sinceEvents: sessionEventsOf(agent).length, ...(taskId !== undefined && taskId !== '' ? { taskId } : {}) }
     waiter.timeoutDisposer = armFlushTimeout(key, waiter)
     pendingFinals.set(key, [...(pendingFinals.get(key) ?? []), waiter])
     return waiter
@@ -5347,13 +5365,20 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
      * stand-in (flush timeout, dead session), NOT the session's product. */
     readonly answer: (text: string, placeholder?: boolean) => void
     readonly sinceEvents: number
+    /** #114 S5: set ⇒ attributed by the consumption of this task's steer, not by {@link sinceEvents}. */
+    readonly taskId?: string
+    /** #114 S5: index of the user/message that consumed the steer, once seen. */
+    consumedAt?: number
+    /** #114 S5: events below this index were already searched for the consumption. */
+    scannedTo?: number
     timeoutDisposer?: () => void
   }
   const pendingFinals = new Map<string, FinalWaiter[]>()
   const armFlushTimeout = (agentId: string, waiter: FinalWaiter): (() => void) => {
     return ctx.timer.timeout(() => {
       const entries = pendingFinals.get(agentId)
-      if (entries === undefined) return
+      // An already-answered waiter is gone from the list: never answer twice.
+      if (entries === undefined || !entries.includes(waiter)) return
       const kept = entries.filter(entry => entry !== waiter)
       if (kept.length === 0) pendingFinals.delete(agentId)
       else pendingFinals.set(agentId, kept)
@@ -5373,24 +5398,70 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       pendingFinals.delete(agentId)
       return
     }
+    // #114 S5: each waiter is answered from its OWN floor. The old shared
+    // floor (the minimum sinceEvents) answered every waiter with one text, so
+    // a busy target's other work line settled tasks it had not read yet.
     const events = sessionEventsOf(agent)
-    const floor = Math.min(...entries.map(entry => entry.sinceEvents))
-    let reply = ''
+    const answered: Array<{ entry: FinalWaiter; reply: string }> = []
+    for (const entry of entries) {
+      let floor = entry.sinceEvents
+      if (entry.taskId !== undefined) {
+        entry.consumedAt ??= consumptionIndex(events, entry.taskId, entry.scannedTo ?? 0)
+        if (entry.consumedAt === undefined) {
+          // Not consumed yet (the steer waits for the running turn's next
+          // step, or the next turn): no final belongs to it — keep waiting.
+          entry.scannedTo = events.length
+          continue
+        }
+        floor = entry.consumedAt + 1
+      }
+      const reply = latestAssistantText(events, floor)
+      if (reply !== '') answered.push({ entry, reply })
+    }
+    if (answered.length === 0) return
+    const kept = entries.filter(entry => !answered.some(done => done.entry === entry))
+    if (kept.length === 0) pendingFinals.delete(agentId)
+    else pendingFinals.set(agentId, kept)
+    for (const { entry, reply } of answered) {
+      entry.timeoutDisposer?.()
+      entry.answer(reply)
+    }
+  }
+
+  /**
+   * #114 S5: the index of the user/message that consumed one task's steer —
+   * the first whose first text block starts with the wire header
+   * `[A2A direct] (task <id>)` both delivery paths write.
+   * @param from - first index not yet searched.
+   * @returns the index, or undefined while the steer is still unconsumed.
+   */
+  function consumptionIndex(events: readonly (SessionEventLike | undefined)[], taskId: string, from: number): number | undefined {
+    const header = `[A2A direct] (task ${taskId})`
+    for (let index = from; index < events.length; index++) {
+      const event = events[index]
+      if (event?.type !== 'user/message') continue
+      const first = event.data?.content?.find(block => block.type === 'text' && typeof block.text === 'string')
+      if (first?.text?.startsWith(header) === true) return index
+    }
+    return undefined
+  }
+
+  /**
+   * The newest assistant text at or after `floor`: at an idle flush that is
+   * the final of the turn that just ended. '' when none has text yet.
+   */
+  function latestAssistantText(events: readonly (SessionEventLike | undefined)[], floor: number): string {
     for (let index = events.length - 1; index >= floor; index--) {
       const event = events[index]
       if (event === undefined || event.type !== 'assistant/message') continue
       const content = event.data?.message?.content
       if (content === undefined) continue
-      reply = content
+      return content
         .filter((block): block is { type: 'text'; text: string } => block.type === 'text' && typeof block.text === 'string')
         .map(block => block.text)
         .join('\n')
-      break
     }
-    if (reply !== '') {
-      for (const entry of entries) entry.answer(reply)
-      pendingFinals.delete(agentId)
-    }
+    return ''
   }
 
   // Every inbound route is a direct route (final semantics), so the idle

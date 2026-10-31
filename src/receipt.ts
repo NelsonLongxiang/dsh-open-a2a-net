@@ -28,7 +28,7 @@ export const RECEIPT_OUTCOMES = [
 
 export type ReceiptOutcomeV2 = (typeof RECEIPT_OUTCOMES)[number]
 
-const KNOWN_ENVELOPE_KEYS: readonly string[] = ['outcome', 'idempotencyKey', 'sessionKey', 'elapsedMs', 'artifacts']
+const KNOWN_ENVELOPE_KEYS: readonly string[] = ['outcome', 'idempotencyKey', 'sessionKey', 'elapsedMs', 'artifacts', 'onBehalfOf', 'authRef']
 void KNOWN_ENVELOPE_KEYS
 
 /** Envelope fields this codec extracts; anything else rides through ignored (append-only). */
@@ -37,6 +37,13 @@ export interface ReceiptEnvelopeV2Fields {
   idempotencyKey?: string
   sessionKey?: string
   elapsedMs?: number
+  /**
+   * #114 S5: the session a host-synthesized receipt speaks for (the host is
+   * only its courier). Additive: parsers that predate it ignore it.
+   */
+  onBehalfOf?: string
+  /** #114 S5: 16-hex ref of the inbound authorization record (task-auth.ts authorizationRef); audit only. */
+  authRef?: string
 }
 
 export interface ParsedReceipt {
@@ -68,6 +75,8 @@ function tryEnvelopeLine(line: string): ReceiptEnvelopeV2Fields | undefined {
     if (typeof record['idempotencyKey'] === 'string') fields.idempotencyKey = record['idempotencyKey']
     if (typeof record['sessionKey'] === 'string') fields.sessionKey = record['sessionKey']
     if (typeof record['elapsedMs'] === 'number' && Number.isFinite(record['elapsedMs'])) fields.elapsedMs = record['elapsedMs']
+    if (typeof record['onBehalfOf'] === 'string' && record['onBehalfOf'] !== '') fields.onBehalfOf = record['onBehalfOf']
+    if (typeof record['authRef'] === 'string' && /^[0-9a-f]{16}$/.test(record['authRef'])) fields.authRef = record['authRef']
     if (Object.keys(fields).length === 0) return undefined
     return fields
   } catch {
@@ -116,6 +125,8 @@ export function formatReceipt(
   if (fields.idempotencyKey !== undefined) ordered['idempotencyKey'] = fields.idempotencyKey
   if (fields.sessionKey !== undefined) ordered['sessionKey'] = fields.sessionKey
   if (fields.elapsedMs !== undefined) ordered['elapsedMs'] = fields.elapsedMs
+  if (fields.onBehalfOf !== undefined) ordered['onBehalfOf'] = fields.onBehalfOf
+  if (fields.authRef !== undefined) ordered['authRef'] = fields.authRef
   const keys = Object.keys(ordered)
   if (keys.length === 0) return header
   return `${header}\n${JSON.stringify(ordered)}`
