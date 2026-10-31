@@ -491,7 +491,10 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
         let payload: string
         if (action === 'publish') {
           const card = typeof (body as { card?: unknown }).card === 'string' ? (body as { card: string }).card : ''
-          const out = cliDeposits.deposit(card)
+          // Review of PR #135: a CLI may not be named after this host's zone —
+          // its handle would read as one of the zone's own faces.
+          const name = (() => { try { const team = (JSON.parse(card) as { team?: unknown }).team; return typeof team === 'string' ? team.split('/')[0] : '' } catch { return '' } })()
+          const out = name === config.team ? { ok: false as const, error: `a CLI identity may not be named after this host's zone "${config.team}" — choose another agent name` } : cliDeposits.deposit(card)
           payload = JSON.stringify(out.ok
             ? { ok: true, handle: out.handle, expiresAt: out.expiresAt, cardUrl: `${d.ownCardUrl}/a2a/cli/${encodeURIComponent(out.handle)}` }
             : { ok: false, error: out.error })
