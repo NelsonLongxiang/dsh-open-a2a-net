@@ -112,7 +112,7 @@ describe('#114 S2 inbound authorization record (real host)', () => {
         const ts = Date.now()
         return { 'X-A2A-Caller': 'far', 'X-A2A-Caller-Url': farUrl, 'X-A2A-Caller-Ts': String(ts), 'X-A2A-Caller-Sig': edSign(undefined, Buffer.from(JSON.stringify(['far', farUrl, ts])), far).toString('base64') }
       }
-      // Owed rows and settled ones: a host-face receipt settles at once (the harness agent replies on steer).
+      // Owed rows and settled ones alike (a receipt may settle a row before it is read).
       const rows = async (): Promise<Array<Record<string, any>>> => {
         const state = (await globalThis.fetch(`${a.baseUrl}/__dsh_a2a/state`).then(async r => await r.json())) as { tasks: Array<Record<string, any>>; archived?: Array<Record<string, any>> }
         return [...state.tasks, ...(state.archived ?? [])]

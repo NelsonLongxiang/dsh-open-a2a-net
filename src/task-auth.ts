@@ -531,19 +531,25 @@ const originOfUrl = (url: string): string | undefined => {
 /**
  * Is this settler on the task's authorization chain? Pure. The chain:
  * - `target`: the settler IS the team the task went to (an inbound row: its
- *   record's target);
- * - `target-member`: the team is a canvas and the settler one of its members;
+ *   record's target). Where that target lives decides how it may speak: a
+ *   LOCAL row's target (an inbound row, or an outbound row delivered on this
+ *   host) lives here, so it settles in-process only; a REMOTE row's target
+ *   settles over the wire with an OriginClaim that covers it AND comes from
+ *   the row's peer origin (a zone name alone is self-signable — review of
+ *   PR #140 P1-1/P1-3);
+ * - `target-member`: the team is a canvas and the settler one of its current
+ *   members, under the same where-it-lives rule;
  * - `host-face`: the target's host settling on its behalf — an envelope
- *   `onBehalfOf` naming the target (or a member), carried locally by THIS
- *   host's process label, or across hosts by a verified claim from the row's
- *   peer origin;
- * - `compat`: an older host's auto-receipt (no onBehalfOf) with a verified
- *   claim from the row's peer origin (design §6);
+ *   `onBehalfOf` naming the target (a member, or for a bare zone team one of
+ *   that zone's faces), carried locally by THIS host's process label, or
+ *   across hosts by a verified claim from the row's peer origin;
+ * - `compat`: an older host's auto-receipt (no onBehalfOf, its process label —
+ *   never a session face) with a verified claim from the row's peer origin
+ *   (design §6);
  * - `legacy`: an inbound row born before S2 (no record) — allowed, counted.
- * A target or member reached over the wire without an OriginClaim that
- * proves it is `settler-unverified`; an onBehalfOf for someone else is
- * `on-behalf-mismatch`; anything else is off-chain (`echo-off-chain` for
- * an echo match).
+ * A remote target or member without a covering claim is `settler-unverified`;
+ * an onBehalfOf for someone else is `on-behalf-mismatch`; anything else is
+ * off-chain (`echo-off-chain` for an echo match).
  */
 export function judgeSettlement(row: SettlementRow, settler: Settler, facts: SettlementFacts): SettlementVerdict {
   const inbound = row.direction === 'inbound'
@@ -555,14 +561,24 @@ export function judgeSettlement(row: SettlementRow, settler: Settler, facts: Set
   const fromPeerOrigin = settler.ingress === 'wire' && peerOrigin !== undefined && settler.claimOrigin === peerOrigin
   const offChain = (): SettlementVerdict => ({ ok: false, reason: facts.echo === true ? 'echo-off-chain' : 'settler-off-chain' })
   if (facts.onBehalfOf !== undefined) {
-    const forTarget = facts.onBehalfOf === target || members.includes(facts.onBehalfOf)
+    // A bare zone team (the process face) is answered by one of that zone's session faces.
+    const forTarget = facts.onBehalfOf === target || members.includes(facts.onBehalfOf) ||
+      (!target.includes('/') && facts.onBehalfOf.startsWith(`${target}/`))
     const asHost = local ? settler.ingress === 'local' && settler.caller === facts.hostLabel : fromPeerOrigin
     if (forTarget && asHost) return { ok: true, role: 'host-face' }
     if (!forTarget && asHost) return { ok: false, reason: 'on-behalf-mismatch' }
   }
-  const unverified = settler.ingress === 'wire' && settler.proof !== 'origin-claim'
-  if (settler.caller === target) return unverified ? { ok: false, reason: 'settler-unverified' } : { ok: true, role: 'target' }
-  if (members.includes(settler.caller)) return unverified ? { ok: false, reason: 'settler-unverified' } : { ok: true, role: 'target-member' }
-  if (facts.onBehalfOf === undefined && fromPeerOrigin) return { ok: true, role: 'compat' }
+  const isTarget = settler.caller === target
+  const isMember = !isTarget && members.includes(settler.caller)
+  if (isTarget || isMember) {
+    const role: ChainRole = isTarget ? 'target' : 'target-member'
+    if (local) return settler.ingress === 'local' ? { ok: true, role } : offChain()
+    if (settler.ingress !== 'wire') return offChain()
+    if (settler.proof !== 'origin-claim') return { ok: false, reason: 'settler-unverified' }
+    return fromPeerOrigin ? { ok: true, role } : offChain()
+  }
+  // compat is an older HOST's own auto-receipt: its process label, never a
+  // session face (another session on the peer host is not the target).
+  if (facts.onBehalfOf === undefined && fromPeerOrigin && !settler.caller.includes('/')) return { ok: true, role: 'compat' }
   return offChain()
 }

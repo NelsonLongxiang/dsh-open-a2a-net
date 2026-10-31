@@ -625,8 +625,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // receipt resolves the task it echoes, whichever wait semantics
           // carried it here. Correlation is bookkeeping only — the message
           // steers on exactly as before.
-          // #114 S4: the settler is this delivery's caller, as proven here.
-          settleAndAnnounce(message, { caller, proof: callerProof, ...(claim.ok ? { claimOrigin: originOf(claim.callerUrl) } : {}), ingress: 'wire' })
+          // #114 S4: the settler is this delivery's caller, as proven here. A CLI identity's claim URL
+          // is not a host's origin (its origin is unconstrained), so it never vouches for one (review of PR #140 P1-2).
+          settleAndAnnounce(message, { caller, proof: callerProof, ...(claim.ok && claim.cli !== true ? { claimOrigin: originOf(claim.callerUrl) } : {}), ingress: 'wire' })
           // gh#45 CLI mailbox (wire face): a delivery targeting a DEPOSITED
           // CLI handle never resolves a session and never wakes — it lands
           // in the deposit's mailbox and answers delivered. Placement here

@@ -4,7 +4,7 @@
   "scope": "Committed source only; no deployment inference",
   "sources": {
     "src/index.ts": "284c398f3283ec214d75bc8c6296e23756f415da952a2830580bb5b1ce724f7c",
-    "src/faces/admin.ts": "a3244003ab22644cdb9f3cafe1e1f5afe978703b7fa1f556888fdd91364eea3c",
+    "src/faces/admin.ts": "a05836ec01e7a987f7d6bbff847182eca803ed3a778037a3d550b5059597c273",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "fded04a5bd4e0443f096874a9a0495786272ddb63d7e5ddf72e89b4502fad333",
@@ -14,14 +14,14 @@
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
     "nexus-stage/src/planning-card-text.ts": "31403071229c5dde4af545ded1a8eaebb1c329a52df3169fae868a57119225d9",
     "nexus-stage/src/planning-fit.ts": "cbda0255062632bd412deb2131c7a01e1e16ab9c72d2a70a32c362e108f8c07a",
-    "src/task-ledger.ts": "17b05daa4a0f2e51d7ca7c7b8c2953d1cc27b3bdfe0744111280574d846e5694",
+    "src/task-ledger.ts": "a6c8336ec09163ff81433cce39e2717fd36ec44ad380cae2f2b99ff866bb4824",
     "nexus-stage/src/world.ts": "1c6308555b65e8316cda38cf97dc43120b979be3e30792a12b893faf845cb934",
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
-    "src/faces/wire.ts": "dee47b8f0b8660d73be8a0323ab92d29bf43718303d082e8cbdd4c19202ed3c9",
+    "src/faces/wire.ts": "f6c97fd7c2c92c0c6a67695f65c0e27a1f062aa7d6892ba09c98ea1c3b0936b1",
     "src/faces/canvas-notify.ts": "10a79ab13d69746268269f0bf8c100464832316e39498ba6ec4aeeae961ec0dd",
-    "src/task-auth.ts": "0217aaf44ad25a248693edb11aa57c5559425de674d426e37a026a834ad61d44"
+    "src/task-auth.ts": "672cc1e958bd3909caeb9565075d32af752ffc8b0c0f5b52ba18124f5a42744f"
   },
   "anchors": [
     {
@@ -117,7 +117,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:461",
+      "ref": "src/faces/admin.ts:464",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
@@ -291,7 +291,7 @@
     {
       "page": "p1-arch",
       "cell": "d10",
-      "ref": "src/task-ledger.ts:807",
+      "ref": "src/task-ledger.ts:845",
       "expect": "private trimOwed(): void {"
     },
     {

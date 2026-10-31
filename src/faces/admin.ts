@@ -285,8 +285,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               ...(task.brief !== undefined ? { brief: task.brief } : {}),
               // #114 S3: the real sender, so supervision buckets by seat, not "home".
               ...(task.sender !== undefined ? { sender: task.sender } : {}),
-              // #114 S2: the authority an inbound row was born with; a pre-S2 inbound row reads 'legacy' (S4).
-              ...(task.auth !== undefined ? { auth: task.auth } : task.direction === 'inbound' ? { auth: 'legacy' as const } : {}),
+              // #114 S2: the authority an inbound row was born with; a pre-S2 inbound row says so (S4).
+              ...(task.auth !== undefined ? { auth: task.auth } : task.direction === 'inbound' ? { authLegacy: true } : {}),
               // C-ruling bucket split: a pending row is settleable while
               // it is young, expected, and answerable; past the stale
               // hour it is conversational noise waiting on the dead TTL.
@@ -297,7 +297,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           tasksStaleCount: taskLedger.list().filter(task => task.status === 'pending' && (task.receiptExpected === false || Date.now() - task.startedAt >= 60 * 60_000)).length,
           tasksDead: taskLedger.list()
             .filter(task => task.status === 'dead')
-            .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt, reason: task.reason ?? 'unspecified', ...(task.brief !== undefined ? { brief: task.brief } : {}), ...(task.direction !== undefined ? { direction: task.direction } : {}), ...(task.sender !== undefined ? { sender: task.sender } : {}), ...(task.auth !== undefined ? { auth: task.auth } : {}) })),
+            .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt, reason: task.reason ?? 'unspecified', ...(task.brief !== undefined ? { brief: task.brief } : {}), ...(task.direction !== undefined ? { direction: task.direction } : {}), ...(task.sender !== undefined ? { sender: task.sender } : {}), ...(task.auth !== undefined ? { auth: task.auth } : task.direction === 'inbound' ? { authLegacy: true } : {}) })),
           // gh#31: per-task outcomes for rows that LEFT the ledger — the
           // chat drawer used to guess (settled, abandoned or cancelled).
           // Bounded to the archive (≤64), newest first, with the
@@ -330,8 +330,9 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           })),
           archivedCount: taskLedger.archive().length,
           // #114 S4: settlement authorization. The team verifier holds
-          // `offChain` (settled while off-chain under observe) and the
-          // `refusals` ring to zero; `legacy` drains as pre-S2 rows age out.
+          // `refusalsTotal` (monotonic) to zero; `offChain`, `legacy` and
+          // `compat` count the bounded archive window (ARCHIVE_CAP rows), so
+          // they are a window, not a lifetime total.
           settlement: (() => {
             const archive = taskLedger.archive()
             const roles = archive.flatMap(row => (row.settledBy !== undefined ? [row.settledBy.chain_role] : []))
@@ -341,6 +342,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               legacy: roles.filter(r => r === 'legacy').length,
               compat: roles.filter(r => r === 'compat').length,
               refusals: taskLedger.settlementRefusals(),
+              // Monotonic: every refusal noted, including repeats folded into one ring entry.
+              refusalsTotal: taskLedger.settlementRefusalsTotal(),
             }
           })(),
           // Ledger density face: the settled archive split by verdict, so

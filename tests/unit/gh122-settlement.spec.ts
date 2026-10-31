@@ -28,18 +28,34 @@ describe('#122 judgeSettlement', () => {
     expect(judgeSettlement({ ...inbound, auth: undefined }, wire('anyone'), facts())).toEqual({ ok: true, role: 'legacy' })
   })
 
-  it('target: the team the task went to (proven on the wire, or in-process)', () => {
+  it('target: a LOCAL row\'s target settles in-process only; a REMOTE row\'s target needs a covering claim from the row\'s peer origin', () => {
     expect(judgeSettlement(inbound, local(TARGET), facts())).toEqual({ ok: true, role: 'target' })
-    expect(judgeSettlement(outbound, wire('dsh/bbbbbbbb'), facts())).toEqual({ ok: true, role: 'target' })
+    // Review of PR #140 P1-1: a self-signed zone card naming the local target over the wire is off-chain.
+    expect(judgeSettlement(inbound, wire(TARGET, 'origin-claim', 'http://impostor:1'), facts())).toEqual({ ok: false, reason: 'settler-off-chain' })
+    expect(judgeSettlement(outbound, wire('dsh/bbbbbbbb', 'origin-claim', 'http://100.75.181.127:13080'), facts())).toEqual({ ok: true, role: 'target' })
+    // Review of PR #140 P1-3: the right name from another origin is not the peer.
+    expect(judgeSettlement(outbound, wire('dsh/bbbbbbbb', 'origin-claim', 'http://impostor:1'), facts())).toEqual({ ok: false, reason: 'settler-off-chain' })
+    expect(judgeSettlement(outbound, wire('dsh/bbbbbbbb', 'origin-claim'), facts())).toEqual({ ok: false, reason: 'settler-off-chain' })
     expect(judgeSettlement(outbound, wire('dsh/bbbbbbbb', 'legacy-window'), facts())).toEqual({ ok: false, reason: 'settler-unverified' })
-    expect(judgeSettlement(outbound, wire('dsh/bbbbbbbb', 'claim-mismatch', 'http://x'), facts())).toEqual({ ok: false, reason: 'settler-unverified' })
+    expect(judgeSettlement(outbound, wire('dsh/bbbbbbbb', 'claim-mismatch', 'http://100.75.181.127:13080'), facts())).toEqual({ ok: false, reason: 'settler-unverified' })
+    expect(judgeSettlement(outbound, local('dsh/bbbbbbbb'), facts())).toEqual({ ok: false, reason: 'settler-off-chain' })
+    const localRow = { ...outbound, peer: 'local' }
+    expect(judgeSettlement(localRow, local('dsh/bbbbbbbb'), facts())).toEqual({ ok: true, role: 'target' })
+    expect(judgeSettlement(localRow, wire('dsh/bbbbbbbb', 'origin-claim', 'http://x'), facts())).toEqual({ ok: false, reason: 'settler-off-chain' })
   })
 
-  it('target-member: a member of the canvas team (by session id or handle, local or remote)', () => {
+  it('target-member: a current member of the canvas team, under the same where-it-lives rule', () => {
     const row = { ...outbound, team: 'dsh/canvas/ops' }
-    expect(judgeSettlement(row, wire('qa/11112222'), facts())).toEqual({ ok: true, role: 'target-member' })
-    expect(judgeSettlement(row, wire('dsh/aaaaaaaa'), facts())).toEqual({ ok: true, role: 'target-member' })
-    expect(judgeSettlement(row, wire('dsh/zzzzzzzz'), facts())).toEqual({ ok: false, reason: 'settler-off-chain' })
+    expect(judgeSettlement(row, wire('qa/11112222', 'origin-claim', 'http://100.75.181.127:13080'), facts())).toEqual({ ok: true, role: 'target-member' })
+    expect(judgeSettlement(row, wire('dsh/aaaaaaaa', 'origin-claim', 'http://100.75.181.127:13080'), facts())).toEqual({ ok: true, role: 'target-member' })
+    expect(judgeSettlement(row, wire('dsh/aaaaaaaa', 'origin-claim', 'http://impostor:1'), facts())).toEqual({ ok: false, reason: 'settler-off-chain' })
+    expect(judgeSettlement(row, wire('dsh/zzzzzzzz', 'origin-claim', 'http://100.75.181.127:13080'), facts())).toEqual({ ok: false, reason: 'settler-off-chain' })
+  })
+
+  it('review of PR #140 P2-1: an auto-receipt for a bare zone team names one of that zone\'s faces', () => {
+    expect(judgeSettlement({ ...inbound, auth: { ...auth, target: 'dsh' } }, local(HOST), facts({ onBehalfOf: 'dsh/01234567' }))).toEqual({ ok: true, role: 'host-face' })
+    expect(judgeSettlement({ ...outbound, team: 'cargo' }, wire('cargo-host', 'claim-mismatch', 'http://100.75.181.127:13080'), facts({ onBehalfOf: 'cargo/89abcdef' }))).toEqual({ ok: true, role: 'host-face' })
+    expect(judgeSettlement({ ...outbound, team: 'cargo' }, wire('cargo-host', 'claim-mismatch', 'http://100.75.181.127:13080'), facts({ onBehalfOf: 'cargox/89abcdef' }))).toEqual({ ok: false, reason: 'on-behalf-mismatch' })
   })
 
   it('host-face: the target\'s host on its behalf — locally by this host\'s label, across hosts by a claim from the row\'s peer origin', () => {
@@ -100,6 +116,46 @@ describe('#122 the ledger under a judge', () => {
     ledger.resolveFromMessage('[A2A receipt] task direct-n done')
     expect(ledger.archive()[0]).not.toHaveProperty('settledBy')
     expect(ledger.settlementRefusals()).toEqual([])
+  })
+
+  it('review of PR #140 P2-3: a late off-chain receipt under enforce marks lateness only — the settled summary and outcome stay', () => {
+    const ledger = new TaskLedger('')
+    ledger.track('direct-l', 'dsh/bbbbbbbb', 'local')
+    ledger.resolveFromMessage('[A2A receipt] task direct-l genuine answer', judgeOf(true, true))
+    const before = ledger.archive()[0]!
+    expect(ledger.resolveFromMessage('[A2A receipt] task direct-l forged rewrite\n{"outcome":"failed"}', judgeOf(true, false))).toBeUndefined()
+    const after = ledger.archive()[0]!
+    expect(after.summary).toBe(before.summary)
+    expect(after.outcome).toBe(before.outcome)
+    expect(after.settledBy).toEqual(before.settledBy)
+    expect(after.lateReceiptAt).toBeDefined()
+    expect(ledger.settlementRefusals()[0]).toMatchObject({ taskId: 'direct-l', enforced: true })
+  })
+
+  it('review of PR #140 P2-4: repeats fold into one entry with a count, so one row\'s flood cannot push other evidence out', () => {
+    const ledger = new TaskLedger('')
+    ledger.track('direct-keep', 'dsh/bbbbbbbb', 'local')
+    ledger.resolveFromMessage('[A2A receipt] task direct-keep x', judgeOf(true, false))
+    ledger.track('direct-flood', 'dsh/bbbbbbbb', 'local')
+    for (let i = 0; i < SETTLEMENT_REFUSAL_CAP * 2; i += 1) ledger.resolveFromMessage('[A2A receipt] task direct-flood x', judgeOf(true, false))
+    const ring = ledger.settlementRefusals()
+    expect(ring).toHaveLength(2)
+    expect(ring[0]).toMatchObject({ taskId: 'direct-flood', count: SETTLEMENT_REFUSAL_CAP * 2 })
+    expect(ring[1]).toMatchObject({ taskId: 'direct-keep', count: 1 })
+    expect(ledger.settlementRefusalsTotal()).toBe(SETTLEMENT_REFUSAL_CAP * 2 + 1)
+  })
+
+  it('review of PR #140 P3: an oversized caller is cut on write and an oversized one refused on restore', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'dsh-a2a-s4cap-')), 'a2a', 'tasks.json')
+    const ledger = new TaskLedger(path)
+    ledger.track('direct-c', 'dsh/bbbbbbbb', 'local')
+    const big: SettlementJudge = { ...judgeOf(false, false), settler: { caller: 'x'.repeat(5000), proof: 'none', ingress: 'wire' } }
+    ledger.resolveFromMessage('[A2A receipt] task direct-c x', big)
+    expect(ledger.settlementRefusals()[0]?.settler.caller).toHaveLength(256)
+    expect(ledger.archive()[0]?.settledBy?.caller).toHaveLength(256)
+    const again = new TaskLedger(path)
+    expect(again.archive()[0]?.settledBy?.caller).toHaveLength(256)
+    expect(again.settlementRefusals()).toHaveLength(1)
   })
 
   it('the ring is bounded, and it and settledBy survive a restart; a malformed entry is dropped', () => {
