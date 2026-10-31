@@ -1,13 +1,21 @@
 # Protocol: Delivery Origin Authentication — Minimal OriginClaim Envelope
 
 > **Implementation status (2026-10-27, as of ae7e24d / 0.6.28): implemented** —
-> shipped in 0.6.23. Code: `verifyOriginClaim` and `callerLinkedToThisHost`
-> in `src/index.ts`; the client stamps the envelope in `src/a2a-client.ts`.
+> shipped in 0.6.23. Code: `verifyOriginClaim` and the signer in
+> `src/origin-claim.ts` (moved from `src/index.ts` with §2.1),
+> `callerLinkedToThisHost` in `src/index.ts`; the client stamps the envelope
+> in `src/a2a-client.ts`.
 > Drift from the text below is marked inline as *[2026-10-27 note]*: R1
 > (two cache forms) was superseded by the M2 third-round ruling, the
 > "linked" basis is the three bases of `callerLinkedToThisHost`, and there
 > is no `/a2a/cancel` route. The transition window is still open by default
 > (`originClaimWindow: true`).
+>
+> **Audience binding (§2.1, proposed 2026-10-31 — awaiting the owner's
+> ruling):** the envelope gains a bound form that names the target origin,
+> method and path; the code moved to `src/origin-claim.ts`. This revisits
+> the §3/§7 "stateless, no nonce ring" refinement only in what the
+> signature covers — the receiver stays stateless.
 
 - **Status**: **adopted (review-seat R2+gh#10 ruling, 2026-10-21; claims 59038996d0/50162f7aa7)** —
   v1 shape below as ruled; implementation rode the gh#9+gh#10 release (0.6.23)
@@ -73,6 +81,72 @@ interface OriginClaim {
  */
 ```
 
+## 2.1 Audience binding (bound form)
+
+> **Status: proposed, needs the owner's explicit ruling.** The original
+> ruling made the claim stateless with no nonce (§3 step 3, §7). The bound
+> form keeps that — no receiver state, no nonce — and changes only what the
+> signature covers.
+
+**Purpose.** The §2 canonical form names the caller; the bound form also
+names the target, so an envelope verifies only at the host, method and
+path it was made for.
+
+**Bound form.** Two more headers ride the same three base headers:
+
+```
+X-A2A-Caller-Aud:  <audience>   origin of the URL the sender dialed (URL.origin form)
+X-A2A-Caller-Sig2: base64(ed25519-sign(
+  JSON.stringify(['a2a-origin-claim/2', caller, callerUrl, ts, audience, METHOD, path])))
+```
+
+`path` is the request path without its query. The leading tag separates
+the two forms: an unbound signature never verifies as a bound one.
+
+**Verification.** When `X-A2A-Caller-Sig2` is present, the receiver
+verifies the bound form and only the bound form — never a fallback to
+`X-A2A-Caller-Sig`:
+
+1. `audience` must be one of this host's own origins, else
+   `wrong-audience`, answered before any card fetch. Own origins are: the
+   card URL (`originClaimUrl` or the bound address), the operator's
+   `originClaimAudiences` list, and the address the request arrived on
+   (the socket's LOCAL end, plus the other loopback spellings of the same
+   port when that address is loopback). The `Host` header is never read,
+   because the sender sets it.
+2. The signature covers the receiver's own `req.method` and path, so an
+   envelope made for one route does not verify on another.
+3. Card fetch, key check, `card.team === caller` and ts skew are as in §3.
+
+**Unbound window** (`originClaimUnboundWindow`, default `true`):
+
+| | window open | window closed |
+|---|---|---|
+| sender signs | bound + unbound (`X-A2A-Caller-Sig`) | bound only |
+| receiver, Sig2 present | bound form only | bound form only |
+| receiver, Sig only | unbound form verified, `unboundInbound` +1 (state face) | **`unbound-closed`** (rejected like any failed claim) |
+
+Pre-upgrade receivers ignore the new headers and keep verifying
+`X-A2A-Caller-Sig`, so an upgraded fleet keeps working through a mixed
+rollout (a sender with the window closed reads as an absent claim to a
+pre-upgrade receiver, so close it only after every peer is upgraded). While the window is open the unbound form carries no audience,
+so the binding holds for a pair of hosts once the sender stops signing the
+unbound form or the receiver stops accepting it. Rollout: upgrade every host, watch
+`unboundInbound` drain to zero, then close the window everywhere.
+
+**Scope notes.**
+- The body is not signed; a body hash in the bound form is a possible
+  later addition.
+- Hosts that answer at the same origin from different vantage points share
+  an audience: loopback (for example tunnels that end on the same local
+  port) or a private address reused on both sides.
+- A port-mapped or proxied host (the URL peers dial is not its card URL
+  and not the address the request arrives on) must list that URL in
+  `originClaimAudiences` or set `originClaimUrl`, or bound envelopes to it
+  are `wrong-audience`.
+- The CLI (`cli/a2a.mjs`) signs only its home host's requests and is not
+  changed here.
+
 ## 3. Verification flow (verification against published keys, not handshakes)
 
 1. Receiver consults its card cache for `claim.callerUrl`
@@ -102,6 +176,8 @@ interface OriginClaim {
    ruling's refinement over nonce dedup: no receiver-side replay ring; a
    replayed envelope inside the window is a re-authenticated same-caller
    retry, which the idempotency layer already dedups where it matters).
+   *[2026-10-31 note: with the bound form (§2.1) the envelope also names
+   its audience, method and path; still no receiver-side state.]*
 4. No second round trip in steady state. Challenge–response stays a v2
    escalation path only.
 
@@ -154,7 +230,11 @@ document's machinery.
 ## 7. State and TTLs
 
 - `ts` skew tolerance: **±5 min** (protocol constant; test knobs may widen).
-- No nonce ring, no receiver-side state (ruling refinement).
+- No nonce ring, no receiver-side state (ruling refinement). The bound
+  form (§2.1) keeps this: it binds the audience instead of remembering what
+  was seen.
+- `originClaimUnboundWindow` (default `true`) and `originClaimAudiences`
+  (default `[]`): see §2.1.
 
 ## 8. Acceptance criteria
 

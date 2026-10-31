@@ -154,6 +154,8 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | `exposureExcerpt` | `'full'` | How much of a session's activity excerpt the card publishes: `full`, `masked` (shape-only prefix) or `off`. Titles and handles stay. |
 | `originClaimWindow` | `true` | OriginClaim transition window: deliveries without an envelope still walk the caller gate (counted as `legacyInbound`); `false` rejects them like failed signatures. |
 | `originClaimUrl` | `''` | Override for the envelope's `callerUrl` (pocket-tunneled hosts); `''` derives it. |
+| `originClaimUnboundWindow` | `true` | OriginClaim audience-binding window: also sign and accept the legacy envelope that names no audience (accepted ones counted as `unboundInbound`); `false` signs and accepts the audience-bound form only. |
+| `originClaimAudiences` | `[]` | Extra origins this host answers to as an envelope audience, for port-mapped or proxied hosts whose dialed URL is neither the card URL nor the arrival address. |
 | `gateAgentLessCalls` | `'audit'` | Host-side (agent-less) routing calls: audit them, or `refuse`. |
 | `asyncNudgeDelayMs` | `120000` | Delay before a delivered-but-unconsumed async route re-wakes its target with a one-line nudge; `0` disables. |
 | `taskStaleTtlMs` | `86400000` | Owed-task stale TTL (24h): past it a pending row auto-dead-letters (a late receipt can still settle it). |

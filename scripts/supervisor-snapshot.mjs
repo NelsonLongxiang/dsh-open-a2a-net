@@ -181,7 +181,8 @@ function collectLayerContract() {
 // ---------- 0.6.23/0.6.24 治理面锚（REVIEW-205964730/205992804 双章面收编） ----------
 
 function collectOriginClaimAnchors() {
-  const src = readFileSync(join(REPO, 'src/index.ts'), 'utf8')
+  // The envelope verifier lives in src/origin-claim.ts since audience binding.
+  const src = ['src/index.ts', 'src/origin-claim.ts'].filter(f => existsSync(join(REPO, f))).map(f => readFileSync(join(REPO, f), 'utf8')).join('\n')
   return [
     { name: 'verify-fn', ok: /verifyOriginClaim/.test(src) ? 1 : 0, detail: '三面共享验签入口' },
     { name: 'bare-zone-shape', ok: /originClaimCallerShape\s*=\s*\/\^\[a-z0-9-\]\+\$\//.test(src) ? 1 : 0, detail: '信封 shape 收窄 bare zone（M2 第三轮裁决）' },

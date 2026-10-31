@@ -112,6 +112,8 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | `exposureExcerpt` | `'full'` | 卡片发布会话活动摘录的程度：`full`、`masked`（仅形状前缀）或 `off`。标题与句柄始终保留。 |
 | `originClaimWindow` | `true` | OriginClaim 过渡窗口：不带信封的投递仍走调用方门（计入 `legacyInbound`）；`false` 则按验签失败拒绝。 |
 | `originClaimUrl` | `''` | 信封 `callerUrl` 的覆盖值（pocket 隧道宿主用）；`''` 自动推导。 |
+| `originClaimUnboundWindow` | `true` | OriginClaim 受众绑定过渡窗口：同时签发并接受不带受众的旧信封（接受数计入 `unboundInbound`）；`false` 只签发、只接受绑定受众的信封。 |
+| `originClaimAudiences` | `[]` | 本宿主额外认作信封受众的 origin，用于端口映射或反向代理宿主（对端拨号的 URL 既不是卡片 URL 也不是到达地址）。 |
 | `gateAgentLessCalls` | `'audit'` | 宿主侧（无 agent）路由调用：审计，或 `refuse` 拒绝。 |
 | `asyncNudgeDelayMs` | `120000` | 已投递但未被消费的异步路由，在此延迟后用一行催办重新唤醒目标；`0` 关闭。 |
 | `taskStaleTtlMs` | `86400000` | 欠账任务的 stale TTL（24h）：过期后 pending 行自动转死信（迟到回执仍可结清）。 |

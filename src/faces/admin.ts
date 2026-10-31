@@ -38,6 +38,7 @@ import { resolveStageMount } from '../stage-mount.ts'
 import { ARCHIVE_CAP, archivedEndedBy, type TaskLedger } from '../task-ledger.ts'
 import type { TeamMembershipStore } from '../team-store.ts'
 import { MAX_LAYOUT_BODY_BYTES } from '../transport-caps.ts'
+import type { OriginClaimTarget } from '../origin-claim.ts'
 
 /** Remote-team rows cached for the state face (see refreshRemoteRows). */
 export type RemoteRowsCache = { at: number; rows: { team: string; name: string; origin?: string; via?: string; workspace?: string; legacy?: boolean; teams?: readonly string[] }[] } | undefined
@@ -58,7 +59,7 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly readJsonBody: (req: IncomingMessage, res: ServerResponse, use: (body: { readonly id?: unknown; readonly name?: unknown; readonly action?: unknown }) => void, maxBytes?: number) => void
   readonly peerStore: PeerStore
   readonly peerLinkState: (peerUrl: string) => { link: 'linked' | 'stranger'; verified: boolean }
-  readonly originClaimHeaders: () => Record<string, string>
+  readonly originClaimHeaders: (target: OriginClaimTarget) => Record<string, string>
   readonly refreshRemoteRows: () => void
   readonly joinedSessions: JoinedSessions
   readonly exposureStore: ExposureStore
@@ -91,6 +92,7 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly cardCache: Map<string, CardCacheEntry>
   readonly remoteRowsCache: RemoteRowsCache
   readonly legacyInboundCount: number
+  readonly unboundInboundCount: number
   readonly ownCardUrl: string
   ownerAllowlist: string[]
   ownerTeamScopeInfo: boolean
@@ -357,6 +359,9 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // OriginClaim window — the operator watches this drain to
           // zero before closing the window.
           legacyInbound: d.legacyInboundCount,
+          // Accepted unbound (no-audience) OriginClaim envelopes — the
+          // drain gauge for closing originClaimUnboundWindow.
+          unboundInbound: d.unboundInboundCount,
           // gh#113: CLI mailbox loss, all handles — mail the 64-row cap
           // pushed out, and mail cut at 4000 chars. The team verifier
           // holds `dropped` to zero.
@@ -535,7 +540,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           const target = peerUrl.replace(/\/$/, '') + '/a2a/canvas-op'
           const reply = await globalThis.fetch(target, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...originClaimHeaders() },
+            headers: { 'Content-Type': 'application/json', ...originClaimHeaders({ url: target, method: 'POST' }) },
             // A local session id means nothing on the peer: send its zone/id8 handle (the workbench
             // drops a local card into a remote frame with its raw session id, which the peer refused).
             body: JSON.stringify({ op: opV, name: nameV, ...(opV === 'add-member' || opV === 'remove-member' ? { id: idV !== '' && !isRemoteMemberRef(idV) && (sessionNodes.has(idV) || joinedSessions.has(idV)) ? `${config.team}/${id8(idV)}` : idV } : {}) }),
