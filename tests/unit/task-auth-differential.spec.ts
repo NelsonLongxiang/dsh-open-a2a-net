@@ -87,7 +87,9 @@ function makeOld(w: W) {
     const shared = [...declared].some(t => routable.has(t) || otherLocalDeclarations.has(t))
     if (targetTeam !== undefined && targetTeam !== config.team) {
       let targetLinks: Set<string> | undefined
-      const targetId8 = targetTeam.startsWith(`${config.team}/`) ? targetTeam.slice(config.team.length + 1) : undefined
+      // Deliberate update (gh#128): a canvas target resolves as a canvas before the id8 slice.
+      const targetIsCanvas = canvasStore.list().some(name => canvasTeamOf(name) === targetTeam)
+      const targetId8 = !targetIsCanvas && targetTeam.startsWith(`${config.team}/`) ? targetTeam.slice(config.team.length + 1) : undefined
       if (targetId8 !== undefined) {
         const targetSession = joinedSessions.list().find(sessionId => id8(sessionId) === targetId8)
           ?? teamMemberships.list().find(entry => id8(entry.session) === targetId8)?.session

@@ -21,7 +21,7 @@
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
     "src/faces/wire.ts": "4fe0893a95b69eface5178e26b54289719e85da0e089f740cc62976a49c6933f",
     "src/faces/canvas-notify.ts": "252202b494f60587662e2ec7542cb29119c066d36cc5843f846d6052760a224e",
-    "src/task-auth.ts": "76e14299a8b2ecf8cade9c19b3f29077783be8eea82ebe558ada9a2fab618e57"
+    "src/task-auth.ts": "d30a766022699efbc0032b15cee1b4b3f25df0573a4d531fdde823501aa44994"
   },
   "anchors": [
     {

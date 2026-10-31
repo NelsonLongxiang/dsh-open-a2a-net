@@ -155,7 +155,13 @@ export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTea
   }
   if (targetTeam !== undefined && targetTeam !== r.zone) {
     let targetLinks: Set<string> | undefined
-    const targetId8 = targetTeam.startsWith(`${r.zone}/`) ? targetTeam.slice(r.zone.length + 1) : undefined
+    // gh#128: a canvas team (`<zone>/canvas/<name>`) also starts with
+    // `<zone>/`. Resolve it as a canvas FIRST — read as a session id8 it
+    // matched no session, the canvas branch below was unreachable, and a
+    // canvas target fell back to the host-level basis (any shared link
+    // opened every canvas team).
+    const targetCanvas = r.canvasNames().find(name => r.canvasTeamOf(name) === targetTeam)
+    const targetId8 = targetCanvas === undefined && targetTeam.startsWith(`${r.zone}/`) ? targetTeam.slice(r.zone.length + 1) : undefined
     if (targetId8 !== undefined) {
       const targetSession = r.joined().find(sessionId => r.id8(sessionId) === targetId8)
         ?? r.memberships().find(entry => r.id8(entry.session) === targetId8)?.session
@@ -176,7 +182,7 @@ export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTea
         }
       }
     } else {
-      const canvasName = r.canvasNames().find(name => r.canvasTeamOf(name) === targetTeam)
+      const canvasName = targetCanvas
       if (canvasName !== undefined) {
         targetLinks = new Set<string>([targetTeam])
         for (const memberId of r.canvasMembersOf(canvasName)) {

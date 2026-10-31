@@ -133,6 +133,28 @@ describe('gh#114 S1: refusal texts are the faces\' texts, byte for byte', () => 
   })
 })
 
+describe('gh#128: a canvas target is judged at target level (F5), not host level', () => {
+  it('a member of another canvas no longer reaches a canvas team it is not in', () => {
+    const r = records({ joined: [A, B], canvas: { ops: [A, B], qa: [B] } })
+    // Before gh#128 this was ok (rule canvas-shared) on the host-level basis.
+    expect(refusalOf(callerAdmission(r, 'dsh/aaaaaaaa', 'dsh/canvas/qa')))
+      .toBe('caller "dsh/aaaaaaaa" shares no team with target "dsh/canvas/qa" — declared [dsh/canvas/ops], target links [dsh/canvas/qa] (F5 target-level admission: a host-level link alone does not open every session team).')
+  })
+
+  it('a member of the canvas, and a caller sharing a roster team with one of its members, still get in', () => {
+    const r = records({ joined: [A, B, C], canvas: { ops: [A, B], qa: [B] }, memberships: [{ session: B, teams: ['dsh/team-x'] }, { session: C, teams: ['dsh/team-x'] }] })
+    expect(callerAdmission(r, 'dsh/bbbbbbbb', 'dsh/canvas/qa')).toMatchObject({ ok: true, rule: 'roster-shared' })
+    expect(callerAdmission(r, 'dsh/aaaaaaaa', 'dsh/canvas/ops')).toEqual({ ok: true, via: 'canvas-member', rule: 'canvas-shared', basis: ['dsh/canvas/ops'] })
+    expect(callerAdmission(r, 'dsh/cccccccc', 'dsh/canvas/qa')).toMatchObject({ ok: true, rule: 'roster-shared', basis: ['dsh/team-x'] })
+  })
+
+  it('a remote member ref of the canvas gets in; an unknown canvas name keeps the host-level basis', () => {
+    const r = records({ joined: [A], canvas: { ops: [A, 'dsh/dddddddd'] } })
+    expect(callerAdmission(r, 'dsh/dddddddd', 'dsh/canvas/ops')).toMatchObject({ ok: true, rule: 'remote-ref-samezone' })
+    expect(callerAdmission(r, 'dsh/aaaaaaaa', 'dsh/canvas/none')).toMatchObject({ ok: true, rule: 'canvas-shared' })
+  })
+})
+
 describe('gh#114 S1: allowlist version (golden vectors)', () => {
   const inputs: AllowlistInputs = {
     zone: 'dsh',
