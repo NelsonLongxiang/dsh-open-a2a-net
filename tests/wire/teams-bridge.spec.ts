@@ -1052,19 +1052,18 @@ describe('#114 S5 auto-receipt turn attribution', () => {
     expect(await t.receiptFor(id)).toBeUndefined()
   })
 
-  it('a consuming turn that ends with an EMPTY final closes its waiter with `done` — the next turn never answers it (review R4)', async () => {
+  it('a consuming turn that ends with an EMPTY final closes its waiter with NO receipt — the next turn never answers it (review R4)', async () => {
     const t = await busyTarget()
     const a = await t.deliver('task a')
     const b = await t.deliver('task b')
     t.consume(a)
     t.final('')
-    const ra = await t.receiptFor(a)
-    expect(ra).toContain(`[A2A receipt] task ${a} done (auto)`)
     t.consume(b)
     t.final('b answered')
     expect(await t.receiptFor(b)).toContain('b answered (auto)')
-    expect(ra).not.toContain('b answered')
-    expect(t.receiptsFor(a)).toHaveLength(1)
+    // A's turn said nothing: no completion is claimed, and B's text never
+    // reaches A — the row stays owed for the nudge / dead-letter path.
+    expect(t.receiptsFor(a)).toHaveLength(0)
   })
 
   it('a consuming turn that ends on a tool-only message answers with its last text — never a later turn (review R5)', async () => {
@@ -1081,5 +1080,66 @@ describe('#114 S5 auto-receipt turn attribution', () => {
     await new Promise(resolve => { setTimeout(resolve, 60) })
     expect(receipt).not.toContain('unrelated')
     expect(t.receiptsFor(a)).toHaveLength(1)
+  })
+
+  // Real session logs bracket turns with `turn/start` / `turn/end` (dsh-session
+  // SessionEventMap; TurnEndReason.kind is completed | aborted | blocked |
+  // error | max-tokens | interrupted | forked).
+  it('back-to-back turns with no idle between: each task closes on its OWN turn\'s text (review N1)', async () => {
+    const t = await busyTarget()
+    const a = await t.deliver('task a')
+    const b = await t.deliver('task b')
+    t.raw({ type: 'turn/start', data: { turn: 1 } })
+    t.consume(a)
+    t.step('A answer')
+    t.raw({ type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+    t.raw({ type: 'turn/start', data: { turn: 2 } })
+    t.consume(b)
+    t.step('B answer')
+    t.raw({ type: 'turn/end', data: { turn: 2, reason: { kind: 'completed' } } })
+    t.idle()
+    const ra = await t.receiptFor(a)
+    expect(ra).toContain('A answer (auto)')
+    expect(ra).not.toContain('B answer')
+    expect(await t.receiptFor(b)).toContain('B answer (auto)')
+  })
+
+  it('a consuming turn that ends aborted, failed or blocked claims nothing — no receipt, even with text (review N2)', async () => {
+    for (const kind of ['aborted', 'error', 'blocked', 'max-tokens']) {
+      const t = await busyTarget()
+      const a = await t.deliver(`task ${kind}`)
+      t.raw({ type: 'turn/start', data: { turn: 1 } })
+      t.consume(a)
+      t.step('half-way note')
+      t.raw({ type: 'assistant/message', data: { message: { content: [{ type: 'tool_use', id: 'x', name: 'bash', input: {} }] } } })
+      t.raw({ type: 'turn/end', data: { turn: 1, reason: { kind } } })
+      t.idle()
+      await new Promise(resolve => { setTimeout(resolve, 60) })
+      expect(t.receiptsFor(a), kind).toHaveLength(0)
+      // The waiter is closed, not carried: a later completed turn on another
+      // line still produces no receipt for it.
+      t.raw({ type: 'turn/start', data: { turn: 2 } })
+      t.user('unrelated next turn')
+      t.step('unrelated final')
+      t.raw({ type: 'turn/end', data: { turn: 2, reason: { kind: 'completed' } } })
+      t.idle()
+      await new Promise(resolve => { setTimeout(resolve, 60) })
+      expect(t.receiptsFor(a), kind).toHaveLength(0)
+    }
+  })
+
+  it('an idle while the consuming turn is still open (marked log, no turn/end yet) waits for that turn\'s end', async () => {
+    const t = await busyTarget()
+    const a = await t.deliver('task a')
+    t.raw({ type: 'turn/start', data: { turn: 1 } })
+    t.consume(a)
+    t.step('interim')
+    t.idle()
+    await new Promise(resolve => { setTimeout(resolve, 60) })
+    expect(t.receiptsFor(a)).toHaveLength(0)
+    t.step('the real answer')
+    t.raw({ type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+    t.idle()
+    expect(await t.receiptFor(a)).toContain('the real answer (auto)')
   })
 })

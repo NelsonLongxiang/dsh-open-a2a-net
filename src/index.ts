@@ -1365,6 +1365,8 @@ const reportLoopRing = new Map<string, number[]>()
       readonly message?: { readonly content?: ReadonlyArray<{ readonly type?: string; readonly text?: string }> }
       /** user/message events carry their blocks here (session-transcript.ts). */
       readonly content?: ReadonlyArray<{ readonly type?: string; readonly text?: string }>
+      /** turn/end: why the turn ended (dsh-session TurnEndReason; `completed` is success). */
+      readonly reason?: { readonly kind?: string }
     }
   }
 
@@ -5467,7 +5469,10 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // floor (the minimum sinceEvents) answered every waiter with one text, so
     // a busy target's other work line settled tasks it had not read yet.
     const events = sessionEventsOf(agent)
-    const answered: Array<{ entry: FinalWaiter; reply: string }> = []
+    const answered: Array<{ entry: FinalWaiter; reply: string; placeholder?: true }> = []
+    // Logs that record turn boundaries bound each waiter to its consuming
+    // turn; a log without any marker falls back to "this idle ends it".
+    const turnMarked = events.some(event => event?.type === 'turn/start' || event?.type === 'turn/end')
     for (const entry of entries) {
       if (entry.taskId !== undefined) {
         entry.consumedAt ??= consumptionIndex(events, entry.taskId, entry.scannedTo ?? entry.sinceEvents)
@@ -5477,11 +5482,25 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           entry.scannedTo = events.length
           continue
         }
-        // This idle ends the turn that consumed the steer: the waiter closes
-        // HERE, with that turn's last text — or '' when the turn produced
-        // none (the autosend's `done` path). It is never carried into a later
-        // turn, whose final would belong to some other work line.
-        answered.push({ entry, reply: latestAssistantText(events, entry.consumedAt + 1) })
+        // The consuming turn's window: up to its own `turn/end`, never into a
+        // following turn (back-to-back turns can run with no idle between).
+        // Without turn markers, this idle is the turn's end.
+        let end = events.length
+        let completed = true
+        if (turnMarked) {
+          const close = turnEndIndex(events, entry.consumedAt + 1)
+          if (close === undefined) {
+            // The consuming turn is still open: wait for its turn/end.
+            continue
+          }
+          end = close
+          completed = events[close]?.data?.reason?.kind === 'completed'
+        }
+        // The waiter closes HERE with that turn's last text. A turn that said
+        // nothing, or ended aborted/failed/blocked, did no work this host can
+        // vouch for: close as a placeholder — no receipt, the row stays owed.
+        const reply = latestAssistantText(events, entry.consumedAt + 1, end)
+        answered.push(reply !== '' && completed ? { entry, reply } : { entry, reply: '', placeholder: true })
         continue
       }
       const reply = latestAssistantText(events, entry.sinceEvents)
@@ -5491,10 +5510,19 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     const kept = entries.filter(entry => !answered.some(done => done.entry === entry))
     if (kept.length === 0) pendingFinals.delete(agentId)
     else pendingFinals.set(agentId, kept)
-    for (const { entry, reply } of answered) {
+    for (const { entry, reply, placeholder } of answered) {
       entry.timeoutDisposer?.()
-      entry.answer(reply)
+      if (placeholder === true) entry.answer('The consuming turn produced no completed reply.', true)
+      else entry.answer(reply)
     }
+  }
+
+  /** #114 S5: the index of the first `turn/end` at or after `from`, or undefined while the turn is open. */
+  function turnEndIndex(events: readonly (SessionEventLike | undefined)[], from: number): number | undefined {
+    for (let index = from; index < events.length; index++) {
+      if (events[index]?.type === 'turn/end') return index
+    }
+    return undefined
   }
 
   /** #114 S5: the steer header both delivery paths write; the id is captured whole, never prefix-matched. */
@@ -5522,9 +5550,10 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
    * the final of the turn that just ended. Textless messages (tool-only, or
    * empty/whitespace text) are skipped, so a turn ending on a tool call still
    * answers with the last thing it said. '' when no message has text.
+   * @param end - exclusive upper bound (default: the whole log).
    */
-  function latestAssistantText(events: readonly (SessionEventLike | undefined)[], floor: number): string {
-    for (let index = events.length - 1; index >= floor; index--) {
+  function latestAssistantText(events: readonly (SessionEventLike | undefined)[], floor: number, end: number = events.length): string {
+    for (let index = end - 1; index >= floor; index--) {
       const event = events[index]
       if (event === undefined || event.type !== 'assistant/message') continue
       const content = event.data?.message?.content
