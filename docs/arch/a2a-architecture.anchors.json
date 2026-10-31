@@ -3,7 +3,7 @@
   "sourceCommit": "0b466643b27120878ceeab9a2ebf087ae3854605",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "c232d6199abf6e5c33849d23f1b2181460906a1e70c329727c6803e322fa0914",
+    "src/index.ts": "448437dfc4accab699872185be7738181b72292d33bc20a93b4c168bda402bce",
     "src/faces/admin.ts": "37a242e7d70136d7c8ceef937d81661169622dfa753cfed95145335586ba5b15",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
@@ -27,19 +27,19 @@
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/index.ts:3567",
+      "ref": "src/index.ts:3569",
       "expect": "name: 'a2a_whoami',"
     },
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/index.ts:5418",
+      "ref": "src/index.ts:5420",
       "expect": "name: 'a2a_probe',"
     },
     {
       "page": "p1-arch",
       "cell": "a2",
-      "ref": "src/index.ts:4327",
+      "ref": "src/index.ts:4329",
       "expect": "error: `the process face \"${config.team}\" is the host's own mailbox — model tools must target a member face. Route to a session team handle (\"${config.team}/<id8>\" from a2a_teams) or a canvas team; receipts and quick dispatch reach the host face on their own paths.`,"
     },
     {
@@ -69,7 +69,7 @@
     {
       "page": "p1-arch",
       "cell": "b4",
-      "ref": "src/index.ts:3816",
+      "ref": "src/index.ts:3818",
       "expect": "name: 'a2a_exposure',"
     },
     {
@@ -81,13 +81,13 @@
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:4395",
+      "ref": "src/index.ts:4397",
       "expect": "const sharedCanvas = canvasStore.list().some(name => {"
     },
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:4400",
+      "ref": "src/index.ts:4402",
       "expect": "let orgShared = false"
     },
     {
@@ -207,7 +207,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:4575",
+      "ref": "src/index.ts:4577",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -249,7 +249,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3484",
+      "ref": "src/index.ts:3486",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {

@@ -452,4 +452,22 @@ describe('#114 S6 affected tasks on a canvas change', () => {
     expect(view.authorization.history.length).toBeGreaterThan(1)
     expect(view.authorization.affected).toEqual([])
   })
+  it('#138 R3: one /leave gesture (three store writes) lists the task once', async () => {
+    const { m, taskId } = await seated()
+    await postJson(m.port, '/__dsh_a2a/leave', { id: 'session-aaaa1111' })
+    const after = await state(m.port)
+    expect(after.authorization.history.length).toBeGreaterThan(2)
+    expect(after.authorization.affected.filter(entry => entry.tasks.some(task => task.taskId === taskId))).toHaveLength(1)
+  })
+
+  it('#138 R3: an unrelated later change does not list an already-reported task again', async () => {
+    const { m, taskId } = await seated()
+    await postJson(m.port, '/__dsh_a2a/canvas', { action: 'remove-member', name: 'ops', id: 'session-aaaa1111' })
+    expect((await state(m.port)).authorization.affected).toHaveLength(1)
+    const before = (await state(m.port)).authorization.version
+    await postJson(m.port, '/__dsh_a2a/canvas', { action: 'create', name: 'unrelated' })
+    const after = await state(m.port)
+    expect(after.authorization.version).not.toBe(before)
+    expect(after.authorization.affected.filter(entry => entry.tasks.some(task => task.taskId === taskId))).toHaveLength(1)
+  })
 })

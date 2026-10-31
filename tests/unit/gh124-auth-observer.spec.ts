@@ -4,7 +4,7 @@
  * peer-org recheck, and the persisted rings (round trip, corrupt file
  * dropped whole, malformed entries dropped one by one). Observe mode only.
  */
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -23,7 +23,7 @@ function auth(over: { via?: 'canvas-member' | 'peer-org' | 'cli-deposit'; basis?
 }
 
 const row = (taskId: string, a?: TaskAuthorization): JudgedRow => ({ taskId, direction: 'inbound', ...(a !== undefined ? { auth: a } : {}) })
-const pass = (rule: 'canvas-shared' | 'roster-shared' | 'peer-org' | 'cli-deposit', basis: string[]): Admission => ({ ok: true, via: rule === 'peer-org' ? 'peer-org' : rule === 'cli-deposit' ? 'cli-deposit' : rule === 'roster-shared' ? 'joined-session' : 'canvas-member', rule, basis })
+const pass = (rule: 'canvas-shared' | 'roster-shared' | 'peer-org' | 'cli-deposit' | 'remote-ref-samezone', basis: string[]): Admission => ({ ok: true, via: rule === 'peer-org' ? 'peer-org' : rule === 'cli-deposit' ? 'cli-deposit' : rule === 'roster-shared' ? 'joined-session' : 'canvas-member', rule, basis })
 const refuse = (text: string): Admission => ({ ok: false, refusal: text })
 
 function observerPath(): string {
@@ -108,10 +108,9 @@ describe('#124 AuthObserver', () => {
 
   it('both rings are capped at AUTH_HISTORY_CAP, newest first', () => {
     const obs = new AuthObserver('')
-    // The row's own version never recurs, so every move judges (and refuses) it.
-    const rows = [row('t-1', auth({ version: V1 }))]
+    // A fresh task per move (one already reported the same way is not listed again).
     for (let i = 0; i < AUTH_HISTORY_CAP + 5; i++) {
-      obs.observe(input(`al1:${(0x1000 + i).toString(16).padStart(16, '0')}`, rows, () => refuse(`r${String(i)}`)))
+      obs.observe(input(`al1:${(0x1000 + i).toString(16).padStart(16, '0')}`, [row(`t-${String(i)}`, auth({ version: V1 }))], () => refuse(`r${String(i)}`)))
     }
     expect(obs.history()).toHaveLength(AUTH_HISTORY_CAP)
     expect(obs.entries()).toHaveLength(AUTH_HISTORY_CAP)
@@ -158,5 +157,73 @@ describe('#124 AuthObserver', () => {
     const obs = new AuthObserver(path)
     expect(obs.history()).toEqual([good])
     expect(obs.entries()).toEqual([{ at: 2, from_version: null, to_version: V1, cause: 'boot', tasks: [goodTask] }])
+  })
+})
+
+describe('#138 review fixes', () => {
+  const input = (version: string, rows: JudgedRow[], judge: () => Admission, cause = 'lazy') => ({
+    version, cause, inputs: () => ({}), rows: () => rows, judge,
+  })
+  const orgRow = row('t-org', auth({ via: 'peer-org', basis: ['peer-org:dsh/canvas/far'], version: V1 }))
+
+  it('R1: a boot observation never judges cache-resting rows — the cold peer-card cache would read them as refused', () => {
+    const path = observerPath()
+    expect(new AuthObserver(path).observe(input(V1, [orgRow], () => pass('peer-org', ['peer-org:dsh/canvas/far']), 'boot'))).toBeUndefined()
+    const cold = (): Admission => refuse('caller declares no team membership (cache cold)')
+    const rebooted = new AuthObserver(path)
+    // Same version after the restart, and a moved one: neither lists the row.
+    expect(rebooted.observe(input(V1, [orgRow], cold, 'boot'))).toBeUndefined()
+    expect(new AuthObserver(observerPath()).observe(input(V2, [orgRow], cold, 'boot'))).toBeUndefined()
+    // The first read after boot does recheck it.
+    expect(rebooted.observe(input(V1, [orgRow], cold))?.tasks.map(task => task.verdict)).toEqual(['would-revoke'])
+  })
+
+  it('R2: the recheck keys on the latest judged rule, not the birth via', () => {
+    const obs = new AuthObserver('')
+    const rows = [row('t-ref', auth({ basis: ['dsh/canvas/ops'], version: V1 }))]
+    obs.observe(input(V1, rows, () => pass('remote-ref-samezone', ['dsh/canvas/ops']), 'boot'))
+    // The remote ref is removed; only the warm cache still pairs the two.
+    const moved = obs.observe(input(V2, rows, () => pass('peer-org', ['peer-org:dsh/canvas/ops']), 'canvas'))
+    expect(moved?.tasks[0]?.verdict).toBe('basis-changed')
+    // The cache entry expires: same version, today's records refuse the caller.
+    const after = obs.observe(input(V2, rows, () => refuse('no link')))
+    expect(after?.cause).toBe('peer-org-recheck')
+    expect(after?.tasks[0]?.verdict).toBe('would-revoke')
+    // A firm rule admits it again: no longer cache-resting, so a same-version read judges nothing.
+    obs.observe(input('al1:3333333333333333', rows, () => pass('canvas-shared', ['dsh/canvas/ops']), 'canvas'))
+    let judged = 0
+    obs.observe(input('al1:3333333333333333', rows, () => { judged++; return refuse('x') }))
+    expect(judged).toBe(0)
+  })
+
+  it('R3: a task still affected the same way is not listed again on a later move; a changed verdict is', () => {
+    const obs = new AuthObserver('')
+    const rows = [row('t-1', auth())]
+    obs.observe(input(V1, rows, () => pass('canvas-shared', ['dsh/canvas/ops']), 'boot'))
+    expect(obs.observe(input(V2, rows, () => refuse('caller is not joined'), 'joined'))?.tasks).toHaveLength(1)
+    // Same gesture, another store, other wording: still would-revoke → no second entry.
+    expect(obs.observe(input('al1:3333333333333333', rows, () => refuse('caller shares no team with target'), 'canvas'))).toBeUndefined()
+    // Recovers on a new basis: that is a new report.
+    expect(obs.observe(input('al1:4444444444444444', rows, () => pass('roster-shared', ['dsh/team-x']), 'roster'))?.tasks[0]?.verdict).toBe('basis-changed')
+    expect(obs.entries()).toHaveLength(2)
+  })
+
+  it('P3: a task gone from the rows is forgotten, so a later report for the same id is not swallowed', () => {
+    const obs = new AuthObserver('')
+    const rows = [row('t-1', auth())]
+    obs.observe(input(V1, rows, () => pass('canvas-shared', ['dsh/canvas/ops']), 'boot'))
+    expect(obs.observe(input(V2, rows, () => refuse('gone'), 'canvas'))).toBeDefined()
+    obs.observe(input('al1:3333333333333333', [], () => refuse('gone'), 'canvas'))
+    expect(obs.observe(input('al1:4444444444444444', rows, () => refuse('gone'), 'canvas'))?.tasks).toHaveLength(1)
+  })
+
+  it('P3: auth-versions.json is replaced by rename (a read-only old file does not block the write; no tmp left behind)', () => {
+    const path = observerPath()
+    const obs = new AuthObserver(path)
+    obs.observe(input(V1, [], () => refuse('x'), 'boot'))
+    chmodSync(path, 0o400)
+    obs.observe(input(V2, [], () => refuse('x'), 'canvas'))
+    expect((JSON.parse(readFileSync(path, 'utf8')) as { versions: Array<{ version: string }> }).versions.map(entry => entry.version)).toEqual([V2, V1])
+    expect(readdirSync(dirname(path))).toEqual(['auth-versions.json'])
   })
 })
