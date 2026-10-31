@@ -282,7 +282,7 @@ describe('gh#114 S1 differential: the replaced closures vs task-auth', () => {
     expect(callerAdmission(rec, 'dsh/eeeeeeee')).toMatchObject({ ok: true, rule: 'peer-org' })
   })
 
-  it('an admission that would vanish without the peer-card cache is always labelled peer-org (review of PR #126 P2)', () => {
+  it('peer-org labels exactly the admissions that would vanish without the peer-card cache (review of PR #126 P2)', () => {
     let checked = 0
     for (let k = 0; k < 500; k++) {
       const w = world()
@@ -290,9 +290,16 @@ describe('gh#114 S1 differential: the replaced closures vs task-auth', () => {
       const noOrgs = makeRecords({ ...w, cardCache: new Map() })
       for (const caller of CALLERS) for (const target of TARGETS) {
         const v = callerAdmission(rec, caller, target)
-        if (!v.ok || v.via === 'peer-org') continue
+        if (!v.ok) continue
         checked += 1
-        expect(callerAdmission(noOrgs, caller, target).ok, JSON.stringify({ caller, target, v })).toBe(true)
+        const without = callerAdmission(noOrgs, caller, target).ok
+        if (v.via === 'peer-org') {
+          // Reverse: a peer-org label is never put on a firm admission, and all its basis is cache-owed.
+          expect(without, JSON.stringify({ caller, target, v })).toBe(false)
+          expect(v.basis.every(team => team.startsWith('peer-org:')), JSON.stringify(v)).toBe(true)
+        } else {
+          expect(without, JSON.stringify({ caller, target, v })).toBe(true)
+        }
       }
     }
     expect(checked).toBeGreaterThan(1000)
