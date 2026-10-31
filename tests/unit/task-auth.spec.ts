@@ -79,7 +79,7 @@ describe('gh#114 S1: every admission rule, with its basis', () => {
 
   it('peer-org: a warm card org naming the caller and one of this host\'s handles (gh#71 ②)', () => {
     const r = records({ joined: [A], orgs: [[{ team: 'dsh/canvas/far', members: ['dsh/eeeeeeee', 'dsh/aaaaaaaa'] }]], memberships: [{ session: A, teams: ['dsh/canvas/far'] }] })
-    expect(callerAdmission(r, 'dsh/eeeeeeee')).toEqual({ ok: true, via: 'peer-org', rule: 'peer-org', basis: ['dsh/canvas/far'] })
+    expect(callerAdmission(r, 'dsh/eeeeeeee')).toEqual({ ok: true, via: 'peer-org', rule: 'peer-org', basis: ['peer-org:dsh/canvas/far'] })
   })
 
   it('remote-ref-foreign: a foreign-zone handle the operator added as a remote member (N3/N4)', () => {
@@ -121,9 +121,13 @@ describe('gh#114 S1: refusal texts are the faces\' texts, byte for byte', () => 
     expect(refusalOf(callerAdmission(records(), 'someone'))).toBe('caller_session "someone" matches no node fact on this host (joined session id, live node label, or deposited CLI handle) — free-form caller labels are self-description and are not admissible (N3). Pass caller_session as <zone>/<id8> with an operator-established link.')
   })
 
-  it('a target-level peer-org link opens the target, but does not add to the caller\'s declared list', () => {
+  it('a target-level peer-org link opens the target, is labelled peer-org, and never adds to the caller\'s declared list', () => {
     const r = records({ joined: [A, B], memberships: [{ session: A, teams: ['dsh/canvas/far'] }], orgs: [[{ team: 'dsh/canvas/far', members: ['dsh/aaaaaaaa', 'dsh/bbbbbbbb'] }]] })
-    expect(sameZoneAdmission(r, 'dsh/aaaaaaaa', 'dsh/bbbbbbbb')).toMatchObject({ ok: true, rule: 'roster-shared', basis: ['dsh/canvas/far'] })
+    // Only the cached org links the target: without the cache this is refused, so the rule is peer-org (review of PR #126 P2).
+    expect(sameZoneAdmission(r, 'dsh/aaaaaaaa', 'dsh/bbbbbbbb')).toEqual({ ok: true, via: 'peer-org', rule: 'peer-org', basis: ['peer-org:dsh/canvas/far'] })
+    // When the target's own roster also holds the team, the firm basis wins.
+    const firm = records({ joined: [A, B], memberships: [{ session: A, teams: ['dsh/canvas/far'] }, { session: B, teams: ['dsh/canvas/far'] }], orgs: [[{ team: 'dsh/canvas/far', members: ['dsh/aaaaaaaa', 'dsh/bbbbbbbb'] }]] })
+    expect(sameZoneAdmission(firm, 'dsh/aaaaaaaa', 'dsh/bbbbbbbb')).toMatchObject({ rule: 'roster-shared', basis: ['dsh/canvas/far'] })
     const lonely = records({ joined: [A, B], orgs: [[{ team: 'dsh/canvas/far', members: ['dsh/aaaaaaaa', 'dsh/bbbbbbbb'] }]] })
     expect(refusalOf(sameZoneAdmission(lonely, 'dsh/aaaaaaaa', 'dsh/bbbbbbbb'))).toMatch(/^caller "dsh\/aaaaaaaa" declares no team membership/)
   })
@@ -150,5 +154,20 @@ describe('gh#114 S1: allowlist version (golden vectors)', () => {
     expect(allowlistVersion({ ...inputs, joined: [...inputs.joined].reverse(), canvas: [['dsh/canvas/ops', ['dsh/aaaaaaaa', 'dsh/bbbbbbbb']]] })).toBe(v)
     expect(allowlistVersion({ ...inputs, cli: [] })).not.toBe(v)
     expect(allowlistVersion({ ...inputs, scope: [true, false] })).not.toBe(v)
+  })
+
+  it('a canvas team listed twice is one team: members are unioned, so order never matters (review of PR #126 P2)', () => {
+    const base = { zone: 'dsh', scope: [true, true] as const, joined: [], roster: [], cli: [], links: [] }
+    const ab = allowlistVersion({ ...base, canvas: [['dsh/canvas/ops', ['dsh/a']], ['dsh/canvas/ops', ['dsh/b']]] })
+    expect(allowlistVersion({ ...base, canvas: [['dsh/canvas/ops', ['dsh/b']], ['dsh/canvas/ops', ['dsh/a']]] })).toBe(ab)
+    expect(allowlistVersion({ ...base, canvas: [['dsh/canvas/ops', ['dsh/a', 'dsh/b']]] })).toBe(ab)
+  })
+
+  it('non-ASCII: UTF-16 code-unit order, no normalization (golden vector)', () => {
+    const v = allowlistVersion({ zone: 'dsh', scope: [true, false], joined: ['dsh/😀', 'dsh/！', 'dsh/é'], roster: [], canvas: [['dsh/canvas/ops', ['dsh/b', 'dsh/a']]], cli: [], links: [] })
+    // Computed independently: python3, sorted by s.encode('utf-16-be'), json.dumps(ensure_ascii=False, separators=(',', ':')), sha256.
+    expect(v).toBe('al1:7bba72a05146248e')
+    expect(allowlistVersion({ zone: 'dsh', scope: [true, false], joined: ['dsh/cafe\u0301'], roster: [], canvas: [], cli: [], links: [] }))
+      .not.toBe(allowlistVersion({ zone: 'dsh', scope: [true, false], joined: ['dsh/café'], roster: [], canvas: [], cli: [], links: [] }))
   })
 })

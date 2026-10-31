@@ -128,9 +128,22 @@ export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTea
       }
     }
   }
+  // Target links → whether only the warm peer-card cache supplied them.
+  const viaCacheOnly = new Map<string, boolean>()
+  /**
+   * Admit on the declared teams that `holds`. A team the decision owes to the
+   * peer-card cache alone (declared from a cached org, or linked to the
+   * target only by one) is basis `peer-org:<team>`, and an admission that
+   * would vanish without the cache is labelled `peer-org` — the record (S2)
+   * must re-judge it on every change, since the cache is not in the
+   * allowlist version (design §2.3; review of PR #126 P2).
+   */
   const pass = (holds: (team: string) => boolean): Admission | undefined => {
-    const basis = [...declared.keys()].filter(holds)
-    return basis.length === 0 ? undefined : admitted(declared.get(basis[0]!)!, basis)
+    const hits = [...declared.keys()].filter(holds)
+    if (hits.length === 0) return undefined
+    const cached = (team: string): boolean => declared.get(team) === 'peer-org' || viaCacheOnly.get(team) === true
+    const firm = hits.find(team => !cached(team))
+    return admitted(firm === undefined ? 'peer-org' : declared.get(firm)!, hits.map(team => (cached(team) ? `peer-org:${team}` : team)))
   }
   const routable = new Set<string>([r.zone])
   for (const id of r.joined()) routable.add(`${r.zone}/${r.id8(id)}`)
@@ -155,7 +168,10 @@ export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTea
         for (const org of r.peerOrgs()) {
           for (const e of org) {
             if (typeof e.team !== 'string' || e.team === '' || !Array.isArray(e.members)) continue
-            if (e.members.includes(caller) && e.members.includes(targetTeam)) targetLinks.add(e.team)
+            if (e.members.includes(caller) && e.members.includes(targetTeam) && !targetLinks.has(e.team)) {
+              targetLinks.add(e.team)
+              viaCacheOnly.set(e.team, true)
+            }
           }
         }
       }
@@ -241,11 +257,19 @@ export interface AllowlistInputs {
 const sortedUnique = (values: readonly string[]): string[] => [...new Set(values)].sort()
 const pairKey = (pair: readonly [string, string]): string => JSON.stringify(pair)
 
-/** The canonical JSON the version hashes: fixed key order, arrays sorted and deduplicated, no whitespace. */
+/**
+ * The canonical JSON the version hashes: fixed key order, arrays sorted and
+ * deduplicated, no whitespace. Strings sort by UTF-16 code unit (JavaScript's
+ * default `sort`) and are NOT Unicode-normalized: another implementation must
+ * do the same to reproduce a version.
+ */
 export function canonicalAllowlist(inputs: AllowlistInputs): string {
   const roster = [...new Map(inputs.roster.map(p => [pairKey(p), [p[0], p[1]] as const])).values()]
     .sort((a, b) => (pairKey(a) < pairKey(b) ? -1 : pairKey(a) > pairKey(b) ? 1 : 0))
-  const canvas = [...new Map(inputs.canvas.map(([team, members]) => [team, sortedUnique(members)] as const)).entries()]
+  // A canvas team listed twice is one team: union its members, so input order never matters.
+  const members = new Map<string, string[]>()
+  for (const [team, list] of inputs.canvas) members.set(team, [...(members.get(team) ?? []), ...list])
+  const canvas = [...members.entries()].map(([team, list]) => [team, sortedUnique(list)] as const)
     .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
   return JSON.stringify({
     zone: inputs.zone,
