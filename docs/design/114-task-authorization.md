@@ -209,7 +209,11 @@ allowlist_version = "al1:" + sha256(canonicalJSON(inputs)).slice(0, 16)
 
 **不进版本的**：名片缓存里的 `canvasOrg`（gh#71）。它是远端自述，缓存每次冷热交替都会变，计入会让
 版本无意义地抖动。代价由记录本身承担：`via: 'peer-org'` 的记录把命中的组织条目写进 `basis`
-（`peer-org:<team>`），§5 对这类记录总是重新判定。
+（`peer-org:<team>`），§5 对这类记录总是重新判定（判据见 §5"靠缓存的行"）。
+
+**同样不进版本的**：`liveNodeIds`（节点事实 `node-fact` 依据的在线节点集合）。它随节点上下线抖动，计入同样会让版本
+无意义地跳。代价：只靠 `node-fact` 放行的行，节点下线后**不会立即**被重判，要等下一次名单变化（版本移动）时才重判。
+这是 observe 阶段接受的滞后；`enforce` 若要求即时性，需另行把它纳入重判触发。
 
 规范化 JSON：键按上表固定顺序、数组排序、无空白，规则写成 `src/task-auth.ts` 里的唯一实现，
 并用黄金向量单测钉死（同 `peerPayloadFingerprint` "一处实现" 的纪律）。
@@ -375,8 +379,15 @@ wire 面先结算再分流到 CLI 信箱（`wire.ts:572` → `:577`）；本机�
   - 仍通过且 `basis` 有交集 → 不列出；
   - 仍通过但依据换了 → `basis-changed`；
   - 不再通过 → `would-revoke`，带当前拒绝文本。
-  `via: 'peer-org'` 的行每次都重判（其依据不在版本里，§2.3）。
-- **产出**：有界环 `affectedTasks`（cap 32，持久化于 `auth-versions.json`），每条
+  **靠缓存的行**每次读取都重判（其依据不在版本里，§2.3）。"靠缓存"按**最近一次通过的判定**的规则认定，
+  没有判定过才看出生记录的 `via`：出生是 `remote-ref-samezone`、远端引用被删后只靠热缓存以 `peer-org` 通过的行
+  （列为 `basis-changed`）从此也每次重判，缓存过期后即列为 `would-revoke`；反之重新被固定规则放行后就不再每次重判。
+  **启动那一次（cause `boot`）不判靠缓存的行**：启动时名片缓存是空的，判出来必然全是 `would-revoke` 假阳性；
+  启动后第一次惰性读取再重判它们。
+- **去重**：每个任务记住最近一次上报（`would-revoke` 只认判决，不认拒绝文本；`basis-changed` 认新规则与新依据）。
+  同一判决不再重复列出——一次 `/leave` 连写三个存储、或之后一次无关的名单变化，都不会把同一任务再列一遍；
+  判决变了（恢复、换依据、再撤）才再列。任务不在未结算行里了即忘掉它的记录。此记忆不跨重启：重启后下一次版本移动重新上报。
+- **产出**：有界环 `affectedTasks`（cap 32，持久化于 `auth-versions.json`，tmp+rename 原子替换），每条
   `{at, from_version, to_version, cause, tasks:[{taskId, direction, caller, target, verdict, reason}]}`；
   `/state` 新块、`logger.info`、事件 `a2a/authorization-affected`。
 - **不做**：不取消、不改行状态、不 nudge、不阻止回执。`enforce`（恢复/结算前按当前名单重校验）
