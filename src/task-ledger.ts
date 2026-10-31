@@ -19,6 +19,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/task-ledger
  */
 
+import { parseAuthorization, type TaskAuthorization } from './task-auth.ts'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { parseReceipt, RECEIPT_OUTCOMES, type ReceiptOutcomeV2 } from './receipt.ts'
@@ -142,6 +143,20 @@ function withSender(raw: unknown, direction: unknown): { sender?: Sender } {
   return sender === undefined ? {} : { sender }
 }
 
+/**
+ * #114 S2: `{ auth }` when a persisted INBOUND row carries a record that
+ * parses whole (parseAuthorization) and belongs to THIS row — its target is
+ * the row's team and its receipt target the row's peer — else nothing: the
+ * row survives as a pre-S2 row, never with a partially adopted or borrowed
+ * record.
+ */
+function withAuth(raw: unknown, entry: { direction?: unknown; team?: unknown; peer?: unknown }, now: number): { auth?: TaskAuthorization } {
+  if (entry.direction !== 'inbound') return {}
+  const auth = parseAuthorization(raw, now)
+  if (auth === undefined || auth.target !== entry.team || `local:${auth.receipt_target}` !== entry.peer) return {}
+  return { auth }
+}
+
 /** One tracked outbound task still in the owed book (unsettled). */
 export interface TaskRecord {
   readonly taskId: string
@@ -171,6 +186,8 @@ export interface TaskRecord {
   readonly brief?: string
   /** #114 S3: the real sender of an outbound row (absent on inbound rows and rows persisted before the field). */
   readonly sender?: Sender
+  /** #114 S2: the immutable authorization an inbound row was born with (absent on outbound and pre-S2 rows). */
+  readonly auth?: TaskAuthorization
   status: TaskStatus
   /** When the row was swept to dead-letter (absent while pending). */
   deadAt?: number
@@ -219,6 +236,8 @@ export interface ArchivedRecord {
   readonly receiptExpected?: false
   /** #114 S3: copied from the owed row (absent on inbound rows and rows archived before the field). */
   readonly sender?: Sender
+  /** #114 S2: carried over from the live row unchanged. */
+  readonly auth?: TaskAuthorization
 }
 
 /**
@@ -419,7 +438,7 @@ export class TaskLedger {
    * @param from - the caller's receipt target (label or callback address).
    * @param contextId - the delivery's conversation id, kept for follow-up routes (empty omits it).
    */
-  trackInbound(taskId: string, team: string, from: string, contextId?: string, receiptExpected?: boolean, brief?: string): void {
+  trackInbound(taskId: string, team: string, from: string, contextId?: string, receiptExpected?: boolean, brief?: string, auth?: TaskAuthorization): void {
     if (taskId === '') return
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
@@ -433,6 +452,8 @@ export class TaskLedger {
       ...(receiptExpected === false ? { receiptExpected: false } : {}),
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
       ...(brief !== undefined && brief !== '' ? { brief } : {}),
+      // #114 S2: frozen at birth; a replayed id never reaches here (first record wins above).
+      ...(auth !== undefined ? { auth } : {}),
       status: 'pending' as const,
     }, ...this.tasks]
     this.trimOwed()
@@ -490,6 +511,7 @@ export class TaskLedger {
         ...(record.direction !== undefined ? { direction: record.direction } : {}),
         ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
         ...(record.sender !== undefined ? { sender: record.sender } : {}),
+        ...(record.auth !== undefined ? { auth: record.auth } : {}),
       })
       this.persist()
       return { outcome: 'cleared', taskId, archivedAt: resolvedAt }
@@ -532,6 +554,7 @@ export class TaskLedger {
         ...(record.direction !== undefined ? { direction: record.direction } : {}),
         ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
         ...(record.sender !== undefined ? { sender: record.sender } : {}),
+        ...(record.auth !== undefined ? { auth: record.auth } : {}),
       })
       this.persist()
       return {
@@ -584,6 +607,7 @@ export class TaskLedger {
         ...(record.direction !== undefined ? { direction: record.direction } : {}),
         ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
         ...(record.sender !== undefined ? { sender: record.sender } : {}),
+        ...(record.auth !== undefined ? { auth: record.auth } : {}),
       })
       this.persist()
       return {
@@ -666,6 +690,7 @@ export class TaskLedger {
         ...(record.direction !== undefined ? { direction: record.direction } : {}),
         ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
         ...(record.sender !== undefined ? { sender: record.sender } : {}),
+        ...(record.auth !== undefined ? { auth: record.auth } : {}),
       })
       settled.push(record.taskId)
     }
@@ -702,6 +727,7 @@ export class TaskLedger {
         endedBy: 'evicted' as const,
         ...(row.direction !== undefined ? { direction: row.direction } : {}),
         ...(row.sender !== undefined ? { sender: row.sender } : {}),
+        ...(row.auth !== undefined ? { auth: row.auth } : {}),
       })
     }
   }
@@ -755,6 +781,7 @@ export class TaskLedger {
               ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
               ...(entry.receiptExpected === false ? { receiptExpected: false as const } : {}),
               ...withSender(entry.sender, entry.direction),
+              ...withAuth(entry.auth, entry, this.now()),
             })
             continue
           }
@@ -771,6 +798,7 @@ export class TaskLedger {
             ...(entry.receiptExpected === false ? { receiptExpected: false } : {}),
             // #114 S3: a malformed sender is dropped whole; the row survives.
             ...withSender(entry.sender, entry.direction),
+            ...withAuth(entry.auth, entry, this.now()),
             status: entry.status === 'dead' ? 'dead' : 'pending',
             ...(entry.status === 'dead'
               ? {
@@ -802,6 +830,7 @@ export class TaskLedger {
             ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
             ...(entry.receiptExpected === false ? { receiptExpected: false as const } : {}),
             ...withSender(entry.sender, entry.direction),
+            ...withAuth(entry.auth, entry, this.now()),
           })
         }
       }

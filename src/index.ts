@@ -54,7 +54,7 @@ import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
-import { callerAdmission, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type PeerOrgEntry } from './task-auth.ts'
+import { allowlistVersion, callerAdmission, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type PeerOrgEntry } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
 // `ctx.timer` on Context; the runtime service is mounted by app compositions.
@@ -2703,6 +2703,25 @@ ${message}`
     return refusalOf(a2aCallerAdmission(caller, targetTeam))
   }
 
+  /**
+   * #114 S2: the allowlist version over the operator-controlled records the
+   * admission rules read (design §2.3). The peer-card canvasOrg is left out:
+   * a record admitted by it carries `peer-org:<team>` in its basis instead.
+   */
+  function allowlistVersionNow(): string {
+    const handle = (session: string): string => `${config.team}/${id8(session)}`
+    return allowlistVersion({
+      zone: config.team,
+      scope: [config.teamScopeRouting, config.originClaimWindow !== false],
+      joined: joinedSessions.list().map(handle),
+      roster: teamMemberships.list().flatMap(entry => entry.teams.map(team => [handle(entry.session), team] as const)),
+      // Local members by their handle (design §2.3), remote refs as they are stored.
+      canvas: canvasStore.list().map(name => [canvasTeamOf(name), canvasStore.membersOf(name).map(m => (m.includes('/') ? m : handle(m)))] as const),
+      cli: cliDeposits.list().map(row => row.handle),
+      links: config.peers.map(peer => { try { return new URL(peer).origin } catch { return peer } }),
+    })
+  }
+
   /* ── Session-log read faces (shared by the local control route and the
      peer /a2a/log face): both answer from <dshHome>/sessions with
      identical semantics — artifact existence is the only gate (archived
@@ -2773,6 +2792,8 @@ ${message}`
       bumpLegacyInbound: () => { legacyInboundCount += 1 },
       secretEqual,
       a2aCallerRefusal,
+      a2aCallerAdmission,
+      allowlistVersionNow,
       scanSessionLogList,
       readSessionLogTail,
       taskLedger,

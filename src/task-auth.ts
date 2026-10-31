@@ -304,3 +304,142 @@ export function canonicalAllowlist(inputs: AllowlistInputs): string {
 export function allowlistVersion(inputs: AllowlistInputs): string {
   return `al1:${createHash('sha256').update(canonicalAllowlist(inputs)).digest('hex').slice(0, 16)}`
 }
+
+// ── S2: the immutable per-task authorization record (design §2.1, §2.4, §2.5) ──
+
+/**
+ * How strongly the caller's identity was proven at birth:
+ * - `origin-claim`: an OriginClaim verified AND its signed zone covers the
+ *   judged caller (the same name, or `<zone>/…`). It proves possession of a
+ *   key whose card names that zone — not that the zone is who it says.
+ * - `claim-mismatch`: an OriginClaim verified, but for a zone that does not
+ *   cover the judged caller (the claim is kept for audit; review of PR #134 P1).
+ * - `legacy-window`: no envelope, admitted inside the OriginClaim window.
+ * - `in-process`: a local delivery inside this host (S4).
+ * - `none`: no identity evidence at all.
+ */
+export type AuthProof = 'origin-claim' | 'claim-mismatch' | 'legacy-window' | 'in-process' | 'none'
+
+/**
+ * Frozen on an inbound ledger row when it is born, archived with it, never
+ * mutated: the answer to "on what authority did this host take this task".
+ */
+export interface TaskAuthorization {
+  readonly v: 1
+  /** The caller_session the admission rules judged. */
+  readonly caller: string
+  readonly proof: AuthProof
+  /** proof = origin-claim: the name the signed card derived, and its card URL's origin. */
+  readonly claim?: { readonly caller: string; readonly origin: string }
+  readonly ingress: 'wire' | 'local'
+  readonly via: Via
+  readonly admission_rule: AdmissionRule
+  /** Every shared team that held (cache-owed ones as `peer-org:<team>`). */
+  readonly basis: readonly string[]
+  readonly allowlist_version: string
+  /** The team the task was delivered to. */
+  readonly target: string
+  /** Where the receipt is owed. */
+  readonly receipt_target: string
+  readonly received_at: number
+  /** Audit only: the target was running another turn when the task arrived (never used to attribute turns). */
+  readonly target_busy?: true
+}
+
+/** Bounds a persisted record must respect; anything outside them is malformed, not truncated. */
+export const AUTH_STRING_CAP = 256
+export const AUTH_BASIS_CAP = 64
+
+const PROOFS: readonly string[] = ['origin-claim', 'claim-mismatch', 'legacy-window', 'in-process', 'none']
+const RULES = Object.keys(VIA_OF)
+/** Rules that admit on shared teams: their basis lists at least one, each once. Every other rule has an empty basis. */
+const SHARED_RULES: readonly AdmissionRule[] = ['roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'peer-org']
+/** A record born more than this far in the future is a forgery or a broken clock, not a birth. */
+export const AUTH_CLOCK_SKEW_MS = 24 * 60 * 60 * 1000
+
+/** Does a verified claim's signed zone cover the judged caller (the same name, or `<zone>/…`)? */
+export const claimCovers = (caller: string, claimCaller: string): boolean =>
+  claimCaller !== '' && (caller === claimCaller || caller.startsWith(`${claimCaller}/`))
+
+/** The facts of one delivery that the admission decision does not carry. */
+export interface AuthorizationFacts {
+  readonly caller: string
+  readonly proof: AuthProof
+  readonly claim?: { readonly caller: string; readonly origin: string }
+  readonly ingress: 'wire' | 'local'
+  readonly allowlistVersion: string
+  readonly target: string
+  readonly receiptTarget: string
+  readonly receivedAt: number
+  readonly targetBusy?: boolean
+}
+
+/** The one constructor of a record: from an admitted decision and the delivery's facts. Frozen. */
+export function buildAuthorization(admission: Extract<Admission, { ok: true }>, facts: AuthorizationFacts): TaskAuthorization {
+  return Object.freeze({
+    v: 1 as const,
+    caller: facts.caller,
+    proof: facts.proof,
+    ...(facts.claim !== undefined ? { claim: Object.freeze({ caller: facts.claim.caller, origin: facts.claim.origin }) } : {}),
+    ingress: facts.ingress,
+    via: admission.via,
+    admission_rule: admission.rule,
+    basis: Object.freeze([...admission.basis]),
+    allowlist_version: facts.allowlistVersion,
+    target: facts.target,
+    receipt_target: facts.receiptTarget,
+    received_at: facts.receivedAt,
+    ...(facts.targetBusy === true ? { target_busy: true as const } : {}),
+  })
+}
+
+const boundedString = (v: unknown, allowEmpty = false): v is string =>
+  typeof v === 'string' && (allowEmpty || v !== '') && v.length <= AUTH_STRING_CAP
+
+/**
+ * Restore-side allowlist for one persisted record (design §2.5): all of it or
+ * none of it — a record with any field outside its closed set or bounds, or
+ * any combination admission could never have produced, is dropped whole (the
+ * row is kept, as a pre-S2 row), never partially adopted. Later slices (S4
+ * settlement) trust what survives, so a corrupt or hand-edited tasks.json
+ * must not be able to plant a plausible record.
+ * @param now - the restore clock, for the future-birth bound.
+ */
+export function parseAuthorization(raw: unknown, now: number = Date.now()): TaskAuthorization | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const r = raw as Record<string, unknown>
+  if (r.v !== 1) return undefined
+  // Admission always refuses an anonymous caller, and a receipt is always owed to someone.
+  if (!boundedString(r.caller) || !boundedString(r.target) || !boundedString(r.receipt_target)) return undefined
+  if (typeof r.proof !== 'string' || !PROOFS.includes(r.proof)) return undefined
+  if (r.ingress !== 'wire' && r.ingress !== 'local') return undefined
+  if (typeof r.admission_rule !== 'string' || !RULES.includes(r.admission_rule)) return undefined
+  const rule = r.admission_rule as AdmissionRule
+  if (r.via !== VIA_OF[rule]) return undefined
+  if (!Array.isArray(r.basis) || r.basis.length > AUTH_BASIS_CAP || !r.basis.every(b => boundedString(b))) return undefined
+  if (new Set(r.basis).size !== r.basis.length) return undefined
+  if (SHARED_RULES.includes(rule) ? r.basis.length === 0 : r.basis.length !== 0) return undefined
+  // The wire proves identity by envelope or not at all; an in-process birth is local, and local-exempt only exists there.
+  if (r.ingress === 'wire' ? !['origin-claim', 'claim-mismatch', 'legacy-window'].includes(r.proof) : r.proof !== 'in-process') return undefined
+  if (rule === 'local-exempt' && r.ingress !== 'local') return undefined
+  if (typeof r.allowlist_version !== 'string' || !/^al1:[0-9a-f]{16}$/.test(r.allowlist_version)) return undefined
+  if (typeof r.received_at !== 'number' || !Number.isInteger(r.received_at) || r.received_at < 0 || r.received_at > now + AUTH_CLOCK_SKEW_MS) return undefined
+  if (r.target_busy !== undefined && r.target_busy !== true) return undefined
+  let claim: { caller: string; origin: string } | undefined
+  if (r.claim !== undefined) {
+    const c = r.claim as Record<string, unknown> | null
+    if (c === null || typeof c !== 'object' || !boundedString(c.caller) || !boundedString(c.origin)) return undefined
+    claim = { caller: c.caller as string, origin: c.origin as string }
+  }
+  // A claim rides exactly the two claim proofs, and which one is decided by coverage — never by the record's say-so.
+  if ((claim !== undefined) !== (r.proof === 'origin-claim' || r.proof === 'claim-mismatch')) return undefined
+  if (claim !== undefined && claimCovers(r.caller as string, claim.caller) !== (r.proof === 'origin-claim')) return undefined
+  return buildAuthorization(
+    { ok: true, via: VIA_OF[rule], rule, basis: r.basis as string[] },
+    {
+      caller: r.caller as string, proof: r.proof as AuthProof, ...(claim !== undefined ? { claim } : {}),
+      ingress: r.ingress, allowlistVersion: r.allowlist_version, target: r.target as string,
+      receiptTarget: r.receipt_target as string, receivedAt: r.received_at, targetBusy: r.target_busy === true,
+    },
+  )
+}

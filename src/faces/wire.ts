@@ -23,8 +23,14 @@ import { TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_MAX_LIMIT } from '../session-trans
 import { refuseIfBudgetExhausted } from '../recursion-guard.ts'
 import { peerPayloadFingerprint, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from '../idempotency-store.ts'
 import { briefOf, type TaskLedger } from '../task-ledger.ts'
+import { buildAuthorization, claimCovers, refusalOf, type Admission } from '../task-auth.ts'
 import type { Config } from '../index.ts'
 import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from '../transport-caps.ts'
+
+/** The origin of a card URL for the authorization record; the raw text, bounded, when it does not parse. */
+const originOf = (url: string): string => {
+  try { return new URL(url).origin } catch { return url.slice(0, 256) }
+}
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
@@ -81,6 +87,10 @@ export interface WireDeps {
   readonly bumpLegacyInbound: () => void
   readonly secretEqual: (a: string, b: string) => boolean
   readonly a2aCallerRefusal: (caller: string, targetTeam?: string) => string | undefined
+  /** #114 S2: the same decision with the rule and basis that admitted the caller. */
+  readonly a2aCallerAdmission: (caller: string, targetTeam?: string) => Admission
+  /** #114 S2: this host's allowlist version right now (design §2.3). */
+  readonly allowlistVersionNow: () => string
   readonly scanSessionLogList: () => Array<{ id: string; mtimeMs: number; sizeBytes: number }>
   readonly readSessionLogTail: (id: string, limit: number) => { ok: true; id: string; messages: Array<{ role: string; text: string; time?: number }> } | { ok: false; error: string }
   readonly taskLedger: TaskLedger
@@ -129,6 +139,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     recordActivity,
     secretEqual,
     a2aCallerRefusal,
+    a2aCallerAdmission,
+    allowlistVersionNow,
     scanSessionLogList,
     readSessionLogTail,
     taskLedger,
@@ -540,14 +552,17 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // (0.6.15: the rule now lives in a2aCallerRefusal so the
           // read-only /a2a/log face admits callers by exactly the same
           // standard as message delivery.)
-          const callerRefusal = a2aCallerRefusal(caller, team)
-          if (callerRefusal !== undefined) {
+          const admission = a2aCallerAdmission(caller, team)
+          const callerRefusal = refusalOf(admission)
+          if (callerRefusal !== undefined || !admission.ok) {
             recordActivity('in', team, caller === '' ? 'anonymous' : caller, false)
             const payload = JSON.stringify({ error: callerRefusal, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
             return
           }
+          // #114 S2: the version is read at admission time, beside the decision it explains.
+          const admittedAt = { version: allowlistVersionNow(), at: Date.now() }
           // gh#9+gh#10 OriginClaim on the delivery face (M1): an envelope
           // that is present but unverifiable rejects untrusted-origin; an
           // ABSENT envelope during the window walks on with a counted
@@ -693,7 +708,24 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // settle. The row itself stays: stall visibility and the
                 // nudge still apply to the TARGET side.
                 const receiptExpectation = receiptExpectationOf(receiptTarget)
-                taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message))
+                // #114 S2: the row is born with its immutable authorization record.
+                const auth = buildAuthorization(admission, {
+                  caller,
+                  // A verified claim proves the caller only when its signed zone covers it (review of PR #134 P1),
+                  // and the host face only when it was signed from this very host (round 2: a zone name is not an origin).
+                  proof: !claim.ok ? 'legacy-window'
+                    : claimCovers(caller, claim.caller) && (admission.rule !== 'host-face' || originOf(claim.callerUrl) === originOf(d.ownCardUrl))
+                      ? 'origin-claim' : 'claim-mismatch',
+                  ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}),
+                  ingress: 'wire',
+                  allowlistVersion: admittedAt.version,
+                  target: team,
+                  receiptTarget,
+                  receivedAt: admittedAt.at,
+                  // Audit only: a cold session's activation window also reads as running.
+                  targetBusy: runningBeforeSteer,
+                })
+                taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message), auth)
                 armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
                 const payload = JSON.stringify({
                   routed: true,
