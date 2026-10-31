@@ -46,7 +46,7 @@ import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
-import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type ReceiptResolvedInfo } from './task-ledger.ts'
+import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type ReceiptResolvedInfo, type Sender } from './task-ledger.ts'
 import { formatReceipt, parseReceipt } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
@@ -4034,8 +4034,9 @@ ${message}`
    * decision seat: sync Q&A must not enter pending; only real
    * receipt-awaiting rows stay on the book). A synchronous completion
    * already carries its answer and owes nothing.
+   * #114 S3: `sender` is the real originator the row is attributed to.
    */
-  const trackOwedTask = (taskId: string, team: string, peer: string, result: A2aRouteResult, callbackAddress?: string, brief?: string): void => {
+  const trackOwedTask = (taskId: string, team: string, peer: string, result: A2aRouteResult, callbackAddress: string | undefined, brief: string | undefined, sender: Sender): void => {
     if (!result.ok) return
     // Native-teams bridge rounds emit no A2A receipt in this slice: booking
     // them as receipt-owed would fill the owed book with rows no receipt can
@@ -4048,10 +4049,10 @@ ${message}`
     // row whose only exit was the dead-letter sweep (57 dead letters, half
     // this shape).
     if (callbackAddress === undefined) {
-      taskLedger.trackReceiptless(taskId, team, peer, result.context_id === '' ? undefined : result.context_id, brief)
+      taskLedger.trackReceiptless(taskId, team, peer, result.context_id === '' ? undefined : result.context_id, brief, sender)
       return
     }
-    taskLedger.track(taskId, team, peer, result.context_id === '' ? undefined : result.context_id, brief)
+    taskLedger.track(taskId, team, peer, result.context_id === '' ? undefined : result.context_id, brief, sender)
   }
 
   /**
@@ -4254,6 +4255,16 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const callbackAddress = routableCallerLabel(callerSession) || callerSession === config.team
         ? callerSession
         : undefined
+      // #114 S3: the outbound row records who really sent it instead of
+      // every row reading as "home". A session is always its own node team
+      // (<zone>/<id8>) — joined or not, initiator or not — so one seat keeps
+      // one bucket. An agent-less call is the host process itself; the label
+      // it borrowed on the wire (quick dispatch rides a live joined session's
+      // team) is kept apart as `face`, so a human's workbench gesture never
+      // lands in that session's seat.
+      const sender: Sender = agent !== undefined
+        ? { kind: 'session', id: sessionTeamOf(agent) }
+        : { kind: 'host', id: session, ...(callerSession !== undefined && callerSession !== session ? { face: callerSession } : {}) }
       const fetch = memoizedCardFetch()
       // The task id is born at the caller (idempotency key semantics): both
       // dispatchers carry the one id, the peer request echoes it, and the
@@ -4267,7 +4278,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, signal, args.async === true, taskId, callbackAddress, agent === undefined ? undefined : String(agent.id))
       if (outcome !== undefined) {
         if (outcome.ok) {
-          trackOwedTask(taskId, args.team, 'local', outcome, callbackAddress, briefOf(args.message))
+          trackOwedTask(taskId, args.team, 'local', outcome, callbackAddress, briefOf(args.message), sender)
           return outcome as unknown as Record<string, JsonValue>
         }
         failures.push(`local: ${outcome.error}`)
@@ -4315,7 +4326,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         }
         const result = await dispatchPeerCandidate(candidate, target, args.message, args.context_id, signal, callerSession, peerAsync, taskId, callbackAddress)
         if (result.ok || signal.aborted) {
-          if (result.ok) trackOwedTask(taskId, args.team, candidate, result, callbackAddress, briefOf(args.message))
+          if (result.ok) trackOwedTask(taskId, args.team, candidate, result, callbackAddress, briefOf(args.message), sender)
           const notes: string[] = []
           if (result.ok && args.async === true && result.task_status === 'TASK_STATE_DELIVERED' && !routableCallerLabel(callerSession)) {
             notes.push(unroutableCallerNote(String(callerSession ?? session)))
@@ -4776,6 +4787,14 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         const parent = request.callbackTarget.parentSessionId
         if (sessionNodes.has(parent) || joinedSessions.has(parent)) callbackAddress = `${config.team}/${id8(parent)}`
       }
+      // #114 S3: the submitting session's node team, but only when the
+      // transport names a session this host knows (a node, a join, or a live
+      // root) — an unchecked id would let any submitter mint a seat. Anything
+      // else (absent, unknown, non-string) is attributed to the host label.
+      const parentSession: unknown = request.callbackTarget?.parentSessionId
+      const knownParent = typeof parentSession === 'string' && parentSession !== ''
+        && (sessionNodes.has(parentSession) || joinedSessions.has(parentSession) || liveRoots.has(parentSession))
+      const sender: Sender = { kind: 'bridge', id: knownParent ? `${config.team}/${id8(parentSession)}` : session }
       for (const candidate of candidates) {
         // Capability gate per candidate, like a2a_route's loop: a
         // delivery:async submit never dials a peer whose signed card does
@@ -4818,7 +4837,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           if (abort.aborted) break
           continue
         }
-        trackOwedTask(taskId, request.handle, candidate, result, callbackAddress, briefOf(request.message))
+        trackOwedTask(taskId, request.handle, candidate, result, callbackAddress, briefOf(request.message), sender)
         const contextId = request.contextId ?? (result.context_id !== '' ? result.context_id : `ctx-${Math.random().toString(16).slice(2, 10)}`)
         if (result.task_status === 'TASK_STATE_COMPLETED') {
           return { kind: 'completed', text: result.reply, taskId, contextId }
@@ -5102,6 +5121,15 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
                 direction: { type: 'string', enum: ['inbound', 'outbound'] },
                 receiptExpected: { type: 'boolean' },
                 reason: { type: 'string', enum: ['fire-forget', 'unconsumed'] },
+                sender: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    kind: { type: 'string', required: true, enum: ['session', 'host', 'bridge'] },
+                    id: { type: 'string', required: true },
+                    face: { type: 'string' },
+                  },
+                },
               },
             },
           },
@@ -5118,6 +5146,15 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
                 resolvedAt: { type: 'number', required: true },
                 summary: { type: 'string' },
                 brief: { type: 'string' },
+                sender: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    kind: { type: 'string', required: true, enum: ['session', 'host', 'bridge'] },
+                    id: { type: 'string', required: true },
+                    face: { type: 'string' },
+                  },
+                },
               },
             },
           },
@@ -5163,13 +5200,13 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       }],
     },
     presentCall: () => ({ card: 'generic', title: 'A2A task ledger', kind: 'other', rawInput: null }),
-    execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; status: 'pending' | 'dead'; deadAt?: number; reason?: 'fire-forget' | 'unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean }[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string }[]; archivedTotal: number }> => {
+    execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; status: 'pending' | 'dead'; deadAt?: number; reason?: 'fire-forget' | 'unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean; sender?: Sender }[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; sender?: Sender }[]; archivedTotal: number }> => {
       a2aJoinGateRefusal(exec)
       const archiveAll = taskLedger.archive()
       return {
         ok: true,
         tasks: taskLedger.list().map(task => ({ ...task })),
-        archive: archiveAll.slice(0, 5).map(({ taskId, team, startedAt, resolvedAt, summary, brief }) => ({ taskId, team, startedAt, resolvedAt, ...(summary !== undefined && summary !== '' ? { summary } : {}), ...(brief !== undefined ? { brief } : {}) })),
+        archive: archiveAll.slice(0, 5).map(({ taskId, team, startedAt, resolvedAt, summary, brief, sender }) => ({ taskId, team, startedAt, resolvedAt, ...(summary !== undefined && summary !== '' ? { summary } : {}), ...(brief !== undefined ? { brief } : {}), ...(sender !== undefined ? { sender } : {}) })),
         archivedTotal: archiveAll.length,
       }
     },

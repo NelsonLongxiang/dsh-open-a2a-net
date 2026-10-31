@@ -116,8 +116,10 @@ describe.skip('receipt auto-synthesis', () => {
     // And the original debt is settled by correlation of that very receipt
     // leg passing through dispatchLocalCandidate's scan.
     const tasks = ctx.tools.get('a2a_tasks')!
-    const ledgerView = (await tasks.execute({}, noAgent())) as { archive: Array<{ taskId: string; summary?: string }>; tasks: unknown[] }
+    const ledgerView = (await tasks.execute({}, noAgent())) as { archive: Array<{ taskId: string; summary?: string; sender?: unknown }>; tasks: unknown[] }
     expect(ledgerView.tasks).toEqual([])
     expect(ledgerView.archive.some(a => a.taskId === taskId && a.summary === 'work done, tests green (auto)')).toBe(true)
+    // #121: the local-candidate row records the routing session, not "home".
+    expect(ledgerView.archive.find(a => a.taskId === taskId)?.sender).toEqual({ kind: 'session', id: 'dsh/caller01' })
   })
 })

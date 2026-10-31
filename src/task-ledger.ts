@@ -87,6 +87,56 @@ const ARCHIVE_ENDS: readonly string[] = ['receipt', 'echo', 'abandoned', 'cancel
 /** Summary marker {@link TaskLedger.resolveEcho} writes on echo-settled rows. */
 const ECHO_SUMMARY = '(settled by content echo)'
 
+/**
+ * #114 S3: who really sent one outbound task — the routing session, the
+ * agent-less host face, or a native-teams bridge submitter. Before this
+ * field every outbound row was attributable only to the host ("home"), so
+ * same-host seats could not be told apart.
+ */
+export interface Sender {
+  readonly kind: 'session' | 'host' | 'bridge'
+  /** The bucket key: a session's `<zone>/<id8>` node team, or the host process label. */
+  readonly id: string
+  /**
+   * Host senders only: the label the call borrowed on the wire when it
+   * differs from {@link id} (quick dispatch rides a live joined session's
+   * team). Display context, never a bucket key.
+   */
+  readonly face?: string
+}
+
+const SENDER_KINDS: readonly string[] = ['session', 'host', 'bridge']
+
+/** Longest sender id kept; anything longer is malformed, not truncated. */
+export const SENDER_ID_CAP = 256
+
+/**
+ * Restore-side allowlist for one persisted sender: a well-formed value comes
+ * back as a fresh object holding only kind, id and (when present) face; anything else is dropped whole (the row
+ * itself survives — a bad sender never costs the debt record).
+ * @param raw - the persisted value.
+ * @returns the sender, or undefined when absent or malformed.
+ */
+export function parseSender(raw: unknown): Sender | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const { kind, id, face } = raw as Record<string, unknown>
+  if (typeof kind !== 'string' || !SENDER_KINDS.includes(kind)) return undefined
+  if (typeof id !== 'string' || id === '' || id.length > SENDER_ID_CAP) return undefined
+  if (face !== undefined && (typeof face !== 'string' || face === '' || face.length > SENDER_ID_CAP)) return undefined
+  return { kind: kind as Sender['kind'], id, ...(face !== undefined ? { face } : {}) }
+}
+
+/**
+ * Spread helper for restore: `{ sender }` when the persisted value parses and
+ * the row is not inbound (an inbound row's originator is its caller, never a
+ * sender this host recorded), else nothing.
+ */
+function withSender(raw: unknown, direction: unknown): { sender?: Sender } {
+  if (direction === 'inbound') return {}
+  const sender = parseSender(raw)
+  return sender === undefined ? {} : { sender }
+}
+
 /** One tracked outbound task still in the owed book (unsettled). */
 export interface TaskRecord {
   readonly taskId: string
@@ -114,6 +164,8 @@ export interface TaskRecord {
    * replaying the conversation. Absent on rows persisted before this field.
    */
   readonly brief?: string
+  /** #114 S3: the real sender of an outbound row (absent on inbound rows and rows persisted before the field). */
+  readonly sender?: Sender
   status: TaskStatus
   /** When the row was swept to dead-letter (absent while pending). */
   deadAt?: number
@@ -160,6 +212,8 @@ export interface ArchivedRecord {
    * ever stored; absent means a receipt was owed (or the row predates the field).
    */
   readonly receiptExpected?: false
+  /** #114 S3: copied from the owed row (absent on inbound rows and rows archived before the field). */
+  readonly sender?: Sender
 }
 
 /**
@@ -306,7 +360,7 @@ export class TaskLedger {
    * via context_id follow-ups (the dispatch reply already says so).
    * Idempotent by task id like {@link track}.
    */
-  trackReceiptless(taskId: string, team: string, peer: string, contextId?: string, brief?: string): void {
+  trackReceiptless(taskId: string, team: string, peer: string, contextId?: string, brief?: string, sender?: Sender): void {
     if (taskId === '') return
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
@@ -320,13 +374,14 @@ export class TaskLedger {
       receiptExpected: false,
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
       ...(brief !== undefined && brief !== '' ? { brief } : {}),
+      ...(sender !== undefined ? { sender } : {}),
       status: 'pending' as const,
     }, ...this.tasks]
     this.trimOwed()
     this.persist()
   }
 
-  track(taskId: string, team: string, peer: string, contextId?: string, brief?: string): void {
+  track(taskId: string, team: string, peer: string, contextId?: string, brief?: string, sender?: Sender): void {
     if (taskId === '') return
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
@@ -339,6 +394,7 @@ export class TaskLedger {
       direction: 'outbound' as const,
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
       ...(brief !== undefined && brief !== '' ? { brief } : {}),
+      ...(sender !== undefined ? { sender } : {}),
       status: 'pending' as const,
     }, ...this.tasks]
     this.trimOwed()
@@ -428,6 +484,7 @@ export class TaskLedger {
         endedBy: 'abandoned',
         ...(record.direction !== undefined ? { direction: record.direction } : {}),
         ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
+        ...(record.sender !== undefined ? { sender: record.sender } : {}),
       })
       this.persist()
       return { outcome: 'cleared', taskId, archivedAt: resolvedAt }
@@ -469,6 +526,7 @@ export class TaskLedger {
         endedBy: 'cancelled',
         ...(record.direction !== undefined ? { direction: record.direction } : {}),
         ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
+        ...(record.sender !== undefined ? { sender: record.sender } : {}),
       })
       this.persist()
       return {
@@ -520,6 +578,7 @@ export class TaskLedger {
         endedBy: 'receipt',
         ...(record.direction !== undefined ? { direction: record.direction } : {}),
         ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
+        ...(record.sender !== undefined ? { sender: record.sender } : {}),
       })
       this.persist()
       return {
@@ -601,6 +660,7 @@ export class TaskLedger {
         endedBy: 'echo',
         ...(record.direction !== undefined ? { direction: record.direction } : {}),
         ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
+        ...(record.sender !== undefined ? { sender: record.sender } : {}),
       })
       settled.push(record.taskId)
     }
@@ -636,6 +696,7 @@ export class TaskLedger {
         ...(row.brief !== undefined ? { brief: row.brief } : {}),
         endedBy: 'evicted' as const,
         ...(row.direction !== undefined ? { direction: row.direction } : {}),
+        ...(row.sender !== undefined ? { sender: row.sender } : {}),
       })
     }
   }
@@ -688,6 +749,7 @@ export class TaskLedger {
               ...(typeof entry.endedBy === 'string' && ARCHIVE_ENDS.includes(entry.endedBy) ? { endedBy: entry.endedBy as ArchiveEnd } : {}),
               ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
               ...(entry.receiptExpected === false ? { receiptExpected: false as const } : {}),
+              ...withSender(entry.sender, entry.direction),
             })
             continue
           }
@@ -702,6 +764,8 @@ export class TaskLedger {
             // it is unknown, so a restored outbound row must not lose it.
             ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
             ...(entry.receiptExpected === false ? { receiptExpected: false } : {}),
+            // #114 S3: a malformed sender is dropped whole; the row survives.
+            ...withSender(entry.sender, entry.direction),
             status: entry.status === 'dead' ? 'dead' : 'pending',
             ...(entry.status === 'dead'
               ? {
@@ -732,6 +796,7 @@ export class TaskLedger {
             ...(typeof entry.endedBy === 'string' && ARCHIVE_ENDS.includes(entry.endedBy) ? { endedBy: entry.endedBy as ArchiveEnd } : {}),
             ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
             ...(entry.receiptExpected === false ? { receiptExpected: false as const } : {}),
+            ...withSender(entry.sender, entry.direction),
           })
         }
       }

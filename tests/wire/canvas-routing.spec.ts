@@ -158,6 +158,32 @@ describe('canvas team routing', () => {
     expect(steered?.text).toContain('routed to dsh/canvas/alpha')
   })
 
+  it('a joined session routing through the local candidate is recorded as its own seat (#121)', async () => {
+    const m = await mount({ joined: ['session-aaaa1111', 'session-bbbb2222'], canvas: [{ name: 'alpha', members: ['session-aaaa1111', 'session-bbbb2222'] }] })
+    mounted.push(m.dispose)
+    const a = makeAgent('session-aaaa1111', [])
+    const b = makeAgent('session-bbbb2222', [])
+    answering(m.ctx, a)
+    answering(m.ctx, b)
+    goLive(m, a, b)
+    await postJson(m.port, '/__dsh_a2a/join', { id: 'session-aaaa1111' })
+    await postJson(m.port, '/__dsh_a2a/join', { id: 'session-bbbb2222' })
+    // A routes async to its own canvas team: the live tier skips the
+    // initiating member (issue #41) and steers B in-process.
+    const result = await m.ctx.tools.get('a2a_route')!.execute(
+      { team: 'dsh/canvas/alpha', message: 'local seat check', async: true },
+      { signal: new AbortController().signal, agent: a } as unknown as ToolRunContext,
+    ) as { ok: boolean; task_id?: string; task_status?: string }
+    expect(result.ok).toBe(true)
+    expect(result.task_status).toBe('TASK_STATE_DELIVERED')
+    expect(b.steer).toHaveBeenCalledTimes(1)
+    expect(a.steer).not.toHaveBeenCalled()
+    const state = await (await fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { tasks: Array<{ taskId: string; peer: string; sender?: unknown }> }
+    const row = state.tasks.find(task => task.taskId === result.task_id)
+    expect(row?.peer).toBe('local')
+    expect(row?.sender).toEqual({ kind: 'session', id: 'dsh/aaaa1111' })
+  })
+
   it('fails over to the next member after remove-member', async () => {
     const m = await mount({ joined: ['session-aaa', 'session-bbb'], canvas: [{ name: 'alpha', members: ['session-aaa', 'session-bbb'] }] })
     mounted.push(m.dispose)
