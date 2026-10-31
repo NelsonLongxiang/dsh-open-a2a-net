@@ -579,7 +579,13 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             cliDeposits.mail(team, caller, message)
             recordActivity('in', team, caller, true)
             logger.info(`a2a: cli mailbox delivery for ${team} (from ${caller})`)
-            const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, task_status: 'TASK_STATE_COMPLETED', note: `delivered to the mailbox of ${team} — the CLI polls while online` })
+            const note = `delivered to the mailbox of ${team} — the CLI polls while online`
+            // gh#112 review: a mailbox delivery is final from this host's
+            // side, so a resend of this id reads `completed`. A receipt the
+            // CLI routes back later still reaches its caller, but does not
+            // replace this outcome (recordOutcome is first-writer-wins).
+            idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: note })
+            const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, task_status: 'TASK_STATE_COMPLETED', note })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
             return
@@ -592,6 +598,17 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // lookup settles the message is already in — answer delivered and
           // let the receipt contract carry the reply.
           if (noWait) {
+            // gh#112 review P1: a no-wait refusal AFTER the idempotency
+            // claim records its failed outcome — otherwise a resend of the
+            // same id reads `pending` from /a2a/query forever and the
+            // caller is told an undelivered message already landed.
+            const refuseNoWait = (error: string, activity = true): void => {
+              if (activity) recordActivity('in', team, caller, false)
+              idempotencyStore.recordOutcome(taskId, { status: 'failed', error })
+              const payload = JSON.stringify({ error, code: -32000, team, task_id: taskId, task_status: 'TASK_STATE_FAILED' })
+              res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+            }
             // Issue #41 companion fix: the no-wait inbound branch resolved
             // only bare session teams — a canvas team delivery (wait:false)
             // fell through to the cold tier and answered a bogus
@@ -607,6 +624,11 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
               // supplied one (a session node team — wake-on-route covers a
               // cold one), else the caller label as before.
               const receiptTarget = callback !== '' ? callback : from
+              // gh#112 review: only a failed steer is a refusal. Once the
+              // message is in the session, a failure in the bookkeeping that
+              // follows must not record `failed` (a resend would read
+              // "already ran and failed" and invite a second execution).
+              let steered = false
               try {
                 // The receipt header carries the task id: the target echoes
                 // it verbatim in "[A2A receipt] task <id> ...", closing the
@@ -619,6 +641,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // consumed:true and strand the message.
                 const runningBeforeSteer = probeConsumption(target, taskId)
                 steerRelay(target, `[A2A direct] (task ${taskId}) ${fromClause(from)} (routed to ${team}) sent:\n\n${message}\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`, from === 'an unknown node' ? undefined : from)
+                steered = true
                 recordActivity('in', team, caller, true)
                 armReceiptAutosend(target, taskId, receiptTarget, message)
                 // v0.5.23 (async-stall): "delivered" only proves the steer call
@@ -665,19 +688,19 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
                 res.end(payload)
               } catch (error) {
-                recordActivity('in', team, caller, false)
-                const payload = JSON.stringify({ error: `The DSH session rejected the message: ${String(error)}`, code: -32000, team, task_id: taskId, task_status: 'TASK_STATE_FAILED' })
-                res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
-                res.end(payload)
+                if (!steered) { refuseNoWait(`The DSH session rejected the message: ${String(error)}`); return }
+                logger.warn(`a2a: task ${taskId.slice(0, 80)} was delivered to ${team}, but its bookkeeping failed: ${String(error)}`)
+                if (!res.headersSent) {
+                  const payload = JSON.stringify({ routed: true, delivered: true, team, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_DELIVERED', artifacts: [], consumed: false, receipt: 'routed' })
+                  res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+                  res.end(payload)
+                }
               }
             }
             if (agent !== undefined) { deliver(agent); return }
             if (wake?.kind === 'flight') {
               void wake.flight.then(deliver, (error: unknown) => {
-                recordActivity('in', team, caller, false)
-                const payload = JSON.stringify({ error: `waking the session for team "${team}" failed: ${String(error)}`, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
-                res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
-                res.end(payload)
+                refuseNoWait(`waking the session for team "${team}" failed: ${String(error)}`)
               })
               return
             }
@@ -699,26 +722,18 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                     // get an honest failure, never its own dispatch echoed
                     // home plus an auto-receipt for work nobody did.
                     if (callerIsAgent(live, caller)) {
-                      recordActivity('in', team, caller, false)
-                      const payload = JSON.stringify({ error: selfRouteText(team), code: -32000, team, task_status: 'TASK_STATE_FAILED' })
-                      res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
-                      res.end(payload)
+                      refuseNoWait(selfRouteText(team))
                       return
                     }
                     deliver(live); return
                   }
                 }
-                const payload = JSON.stringify({ error: wake?.kind === 'no-face' ? noWakeFaceText(team) : wake?.kind === 'archived' ? archivedColdMatchText(team) : noColdMatchText(team), code: -32000, team, task_status: 'TASK_STATE_FAILED' })
-                res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
-                res.end(payload)
+                refuseNoWait(wake?.kind === 'no-face' ? noWakeFaceText(team) : wake?.kind === 'archived' ? archivedColdMatchText(team) : noColdMatchText(team), false)
               }
               const prepared = await nativeTeamsPrepare(team)
               if (!prepared.ok) {
                 if (prepared.reason === 'error') {
-                  recordActivity('in', team, caller, false)
-                  const payload = JSON.stringify({ error: prepared.error, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
-                  res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
-                  res.end(payload)
+                  refuseNoWait(prepared.error)
                   return
                 }
                 standardMiss()

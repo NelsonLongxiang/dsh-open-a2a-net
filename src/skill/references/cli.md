@@ -47,6 +47,23 @@ ten model tools.
   When the round has not settled (status other than completed) a warning
   goes to stderr: reconcile by task id before re-sending.
 - `--context ID` continues that conversation (sends it as `context_id`).
+- Every route and report carries a task id born in the CLI
+  (`direct-<12 hex>`). The host runs one task id at most once (same id and
+  same message: 409 replay; different message: 409 conflict). Resending is
+  therefore safe:
+  - A dropped connection or a 5xx is resent automatically, up to 3 times,
+    with the SAME id (backoff 1s, 2s, 4s).
+  - If it still fails, stderr names the id: rerun with `--task <id>` to
+    resend it without risking a second execution.
+  - A resend the host already has prints `already received … — not sent a
+    second time` with the earlier outcome from `/a2a/query`: `pending` (an
+    async delivery waiting for its receipt) or `completed` (with its reply).
+    If that earlier attempt failed, the CLI exits 1 with its reason.
+  - A `--sync` resend whose round has no reply yet exits 1: rerun later
+    with `--task <id> --sync` to fetch the reply.
+  - Reusing an id for a different message, or switching `--sync` on or off,
+    is refused (exit 1): drop `--task` to send it as a new task.
+  - `report` takes `--task` the same way.
 - Direct delivery does not relay: only teams on the home host are reachable.
   A team on another host answers "No live DSH session node accepts team".
 - Admission: a deposited handle is a node fact of its home host (N3). It
