@@ -47,6 +47,23 @@ ten model tools.
   When the round has not settled (status other than completed) a warning
   goes to stderr: reconcile by task id before re-sending.
 - `--context ID` continues that conversation (sends it as `context_id`).
+- Every route and report carries a task id born in the CLI
+  (`direct-<12 hex>`). The host runs one task id at most once (same id and
+  same message: 409 replay; different message: 409 conflict). Resending is
+  therefore safe:
+  - A dropped connection or a 5xx is resent automatically, up to 3 times,
+    with the SAME id (backoff 1s, 2s, 4s).
+  - If it still fails, stderr names the id: rerun with `--task <id>` to
+    resend it without risking a second execution.
+  - A resend the host already has prints `already received … — not sent a
+    second time` with the earlier outcome from `/a2a/query`: `pending` (an
+    async delivery waiting for its receipt) or `completed` (with its reply).
+    If that earlier attempt failed, the CLI exits 1 with its reason.
+  - A `--sync` resend whose round has no reply yet exits 1: rerun later
+    with `--task <id> --sync` to fetch the reply.
+  - Reusing an id for a different message, or switching `--sync` on or off,
+    is refused (exit 1): drop `--task` to send it as a new task.
+  - `report` takes `--task` the same way.
 - Direct delivery does not relay: only teams on the home host are reachable.
   A team on another host answers "No live DSH session node accepts team".
 - Admission: a deposited handle is a node fact of its home host (N3). It
@@ -61,12 +78,27 @@ ten model tools.
 
 - Deliveries addressed to a deposited handle, receipts included, land in its
   mailbox on the home host and answer `receipt: "mailbox"`. Entries are
-  `{at, from, text}` (text ≤4000 chars), newest first, 64 kept. A read does
-  not remove anything.
+  `{at, from, text, seq}`, newest first, 64 kept. A read does not remove
+  anything.
+- `seq` numbers a handle's mail 1, 2, 3 … in arrival order. It is never
+  reused and survives restarts. The read also carries `epoch`; `next_seq`;
+  `oldest_seq`; and `dropped`, the count of mail the 64-row cap pushed out.
+  `epoch` changes whenever seq numbers could repeat: the store starts empty,
+  its snapshot is unreadable or renumbered, or a write to disk failed (the
+  next restart would reload older numbers).
+- Text over 4000 chars is cut and marked `truncated: true, chars: <original>`.
+- The host's state face totals both losses for every handle as
+  `cliMailbox: {dropped, truncated}`.
 - `a2a-net inbox` lists the whole mailbox.
 - `inbox --new [--peek]` shows unread mail, oldest first. "Unread" is a local
   cursor (`$A2A_CLI_HOME/inbox.cursor`, tied to the handle) that advances
-  unless `--peek`.
+  unless `--peek`. On a host with `seq` the cursor is the last seq read:
+  - Mail the cap pushed out before you read it is reported once, by
+    `--new`, `--wait` and `--hook` alike (stderr, or inside the hook frame):
+    `N messages were pushed out of the mailbox before they were read`. It
+    cannot be recovered; tell the user.
+  - On an older host, or after the store starts over (a new `epoch`), the
+    cursor falls back to the newest `at` seen.
 - `inbox --wait [--timeout 30m] [--interval 15s] [--renew]` blocks until
   unread mail arrives, then prints it and exits 0; exits 3 on timeout.
   `--renew` re-publishes the deposit when it is gone or under 10 minutes from

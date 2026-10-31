@@ -6,11 +6,13 @@
  * records what the CLI sent, so nothing here touches a real DSH or ~/.a2a.
  */
 import { spawn } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { CliDepositStore } from '../../src/cli-deposit.ts'
+import { peerPayloadFingerprint } from '../../src/idempotency-store.ts'
 
 const CLI = join(process.cwd(), 'cli', 'a2a.mjs')
 
@@ -421,5 +423,240 @@ describe('a2a-net CLI: route --sync', () => {
     reply = { routed: true, delivered: true, team: 'ops', task_id: 'direct-ee55ff66', task_status: 'TASK_STATE_DELIVERED', receipt: 'routed' }
     await runCli(['route', 'ops', 'hi'], env)
     expect(host.seen.filter(s => s.path === '/a2a/direct').at(-1)?.body.wait).toBe(false)
+  })
+})
+
+describe('a2a-net CLI: inbox reads by seq and reports mail the cap pushed out (gh#113)', () => {
+  const SCOUT = 'scout/0123456789abcdef'
+  /** A host whose cli-deposit face is the REAL store, so the CLI reads the host's own gh#113 shape. */
+  async function storeHost(dir = mkdtempSync(join(tmpdir(), 'cli113-host-')), now?: () => number) {
+    let store = new CliDepositStore(join(dir, 'deposits.json'), now === undefined ? undefined : { now })
+    const server = createServer((req, res) => {
+      let text = ''
+      req.on('data', (c) => { text += String(c) })
+      req.on('end', () => {
+        const body = text === '' ? {} : JSON.parse(text) as { action?: string; handle?: string; after_seq?: number }
+        const payload = JSON.stringify(body.action === 'inbox' ? { ok: true, ...store.readMailbox(String(body.handle), body.after_seq) } : { ok: true, deposits: [] })
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+        res.end(payload)
+      })
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    servers.push(server)
+    return {
+      url: `http://127.0.0.1:${String((server.address() as { port: number }).port)}`,
+      mail: (n: number, text = 'm') => { for (let i = 0; i < n; i += 1) store.mail(SCOUT, 'dsh/2772468a', `${text}${String(i)}`) },
+      store: () => store,
+      /** A store that lost its snapshot starts over: new epoch, seq from 1. */
+      reset: () => { store = new CliDepositStore(join(mkdtempSync(join(tmpdir(), 'cli113-reset-')), 'deposits.json')) },
+    }
+  }
+
+  it('--new keeps a seq cursor; mail pushed out between reads is reported on stderr, never silent', async () => {
+    const host = await storeHost()
+    const HOME = await scoutHome()
+    const env = { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url }
+    host.mail(1, 'first')
+    expect((await runCli(['inbox', '--new'], env)).stdout).toContain('first0')
+    expect(JSON.parse(readFileSync(join(HOME, 'inbox.cursor'), 'utf8'))).toMatchObject({ handle: SCOUT, seq: 1, epoch: host.store().readMailbox(SCOUT).epoch })
+    // 70 more arrive: seq 2..71, the host keeps 8..71, so 2..7 (six) were never read.
+    host.mail(70, 'burst')
+    const next = await runCli(['inbox', '--new', '--json'], env)
+    expect(next.code).toBe(0)
+    expect(next.stderr).toContain('[inbox] 6 messages were pushed out of the mailbox before they were read (the host keeps the newest 64)')
+    const rows = JSON.parse(next.stdout) as Array<{ seq: number }>
+    expect(rows).toHaveLength(64)
+    expect(rows[0]!.seq).toBe(8)
+    expect(rows.at(-1)!.seq).toBe(71)
+    expect((await runCli(['inbox', '--new'], env)).stdout.trim()).toBe('[inbox] no new mail')
+    // Bare inbox names the host-side counter too.
+    expect((await runCli(['inbox'], env)).stderr).toContain('the host has pushed 7 older messages out of this mailbox')
+  })
+
+  it('two mails in one millisecond are both read; a truncated text says so', async () => {
+    const host = await storeHost(undefined, () => 5_000)
+    const HOME = await scoutHome()
+    const env = { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url }
+    host.mail(1, 'seed')
+    await runCli(['inbox', '--new'], env)
+    host.store().mail(SCOUT, 'ops/33333333', 'x'.repeat(4500))
+    host.store().mail(SCOUT, 'ops/33333333', 'same ms twin')
+    const out = await runCli(['inbox', '--new'], env)
+    expect(out.stdout).toContain('[truncated: 4500 chars]')
+    expect(out.stdout).toContain('same ms twin')
+    expect(out.stderr).toBe('')
+  })
+
+  it('a store that restarted empty (new epoch) falls back to the at cursor instead of hiding new mail', async () => {
+    const host = await storeHost()
+    const HOME = await scoutHome()
+    const env = { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url }
+    host.mail(5, 'old')
+    await runCli(['inbox', '--new'], env)
+    host.reset()
+    host.mail(1, 'after reset')
+    const out = await runCli(['inbox', '--new'], env)
+    expect(out.stdout).toContain('after reset0')
+    expect(out.stderr).toBe('')
+  })
+
+  it('review P3: a loss with nothing unread is reported once, then the cursor moves past it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli113-lossonly-'))
+    writeFileSync(join(dir, 'deposits.json'), JSON.stringify({ deposits: [], mailbox: {}, epoch: 'e1', nextSeq: { [SCOUT]: 20 } }))
+    const host = await storeHost(dir)
+    const HOME = await scoutHome()
+    writeFileSync(join(HOME, 'inbox.cursor'), JSON.stringify({ handle: SCOUT, at: 1, seen: [], epoch: 'e1', seq: 5 }))
+    const env = { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url }
+    const first = await runCli(['inbox', '--hook'], env, CLI, '{}')
+    expect(first.stdout).toContain('no new messages')
+    expect(first.stdout).toContain('14 messages were pushed out')
+    expect((await runCli(['inbox', '--hook'], env, CLI, '{}')).stdout).toBe('')
+    expect(JSON.parse(readFileSync(join(HOME, 'inbox.cursor'), 'utf8'))).toMatchObject({ epoch: 'e1', seq: 19 })
+  })
+
+  it('--hook names the loss inside the data frame', async () => {
+    const host = await storeHost()
+    const HOME = await scoutHome()
+    const env = { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url }
+    host.mail(1, 'seed')
+    await runCli(['inbox', '--new'], env)
+    host.mail(66, 'burst')
+    const out = await runCli(['inbox', '--hook'], env, CLI, '{"hook_event_name":"UserPromptSubmit"}')
+    const context = (JSON.parse(out.stdout) as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext
+    expect(context).toContain('2 messages were pushed out of the mailbox before they were read')
+  })
+})
+
+describe('a2a-net CLI: route carries its own task id and resends it safely (gh#112)', () => {
+  /** A host whose /a2a/direct answers come from `script`, one per request; `drop` tears the socket down unanswered. */
+  async function scriptedHost(script: Array<{ status: number; body: unknown } | 'drop'>, query: unknown = { found: false, reason: 'unknown-task' }) {
+    const seen: Seen[] = []
+    const server = createServer((req, res) => {
+      let text = ''
+      req.on('data', (c) => { text += String(c) })
+      req.on('end', () => {
+        const path = req.url ?? '/'
+        seen.push({ path, headers: req.headers, body: text === '' ? {} : JSON.parse(text) as Record<string, unknown> })
+        const next = path === '/a2a/query' ? { status: 200, body: query } : (script.shift() ?? delivered)
+        if (next === 'drop') { req.socket.destroy(); return }
+        const payload = JSON.stringify(next.body)
+        res.writeHead(next.status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+        res.end(payload)
+      })
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    servers.push(server)
+    return { url: `http://127.0.0.1:${String((server.address() as { port: number }).port)}`, seen, direct: () => seen.filter(s => s.path === '/a2a/direct') }
+  }
+  const fast = (HOME: string, url: string) => ({ HOME, A2A_CLI_HOME: HOME, A2A_HOME: url, A2A_RETRY_BASE_MS: '1' })
+
+  it('every route and report sends a fresh caller-born task id', async () => {
+    const host = await scriptedHost([])
+    const HOME = await scoutHome()
+    expect((await runCli(['route', 'ops', 'one'], fast(HOME, host.url))).code).toBe(0)
+    expect((await runCli(['route', 'ops', 'two'], fast(HOME, host.url))).code).toBe(0)
+    expect((await runCli(['report', 'three'], fast(HOME, host.url))).code).toBe(0)
+    const ids = host.direct().map(s => s.body.task_id)
+    for (const id of ids) expect(id).toMatch(/^direct-[0-9a-f]{12}$/)
+    expect(new Set(ids).size).toBe(3)
+  })
+
+  it('a dropped connection and a 5xx are resent with the SAME task id until the host answers', async () => {
+    const host = await scriptedHost(['drop', { status: 503, body: { error: 'restarting' } }])
+    const HOME = await scoutHome()
+    const out = await runCli(['route', 'ops', 'hi'], fast(HOME, host.url))
+    expect(out.code).toBe(0)
+    const sent = host.direct()
+    expect(sent).toHaveLength(3)
+    expect(new Set(sent.map(s => s.body.task_id)).size).toBe(1)
+    expect(new Set(sent.map(s => s.headers['x-a2a-sig'])).size).toBe(3)
+  })
+
+  it('a host that never answers gives up after 3 resends and names the --task that resends safely', async () => {
+    const host = await scriptedHost(['drop', 'drop', 'drop', 'drop', 'drop'])
+    const HOME = await scoutHome()
+    const out = await runCli(['route', 'ops', 'hi'], fast(HOME, host.url))
+    expect(out.code).toBe(1)
+    expect(host.direct()).toHaveLength(4)
+    const id = String(host.direct()[0]?.body.task_id)
+    expect(out.stderr).toContain(`resend safely with: --task ${id}`)
+  })
+
+  it('--task resends an earlier id; a replay reports the prior outcome from /a2a/query and runs nothing twice', async () => {
+    const replay = { status: 409, body: { error: 'duplicate task id within the idempotency window', code: -32003, task_id: 'direct-aaaabbbbcccc', replay: true } }
+    const host = await scriptedHost([replay], { found: true, status: 'pending', task_id: 'direct-aaaabbbbcccc' })
+    const HOME = await scoutHome()
+    const out = await runCli(['route', 'ops', 'hi', '--task', 'direct-aaaabbbbcccc'], fast(HOME, host.url))
+    expect(out.code).toBe(0)
+    expect(out.stdout.trim()).toBe('[route] already received → ops · task direct-aaaabbbbcccc · pending — not sent a second time')
+    expect(host.direct()).toHaveLength(1)
+    const query = host.seen.find(s => s.path === '/a2a/query')
+    const sent = host.direct()[0]!.body
+    // The fingerprint is the host's own function, not a copy of the CLI's formula.
+    const fingerprint = peerPayloadFingerprint({ caller: String(sent.caller_session), message: 'hi', noWait: true, team: 'ops' })
+    expect(query?.body).toEqual({ task_id: 'direct-aaaabbbbcccc', fingerprint })
+  })
+
+  it('a replay whose earlier attempt failed exits 1 with the reason and is not sent again', async () => {
+    const replay = { status: 409, body: { code: -32003, task_id: 'direct-aaaabbbbcccc', replay: true, error: 'duplicate' } }
+    const host = await scriptedHost([replay], { found: true, status: 'failed', error: 'flooded: per-sender rate', task_id: 'direct-aaaabbbbcccc' })
+    const HOME = await scoutHome()
+    const out = await runCli(['route', 'ops', 'hi', '--task', 'direct-aaaabbbbcccc'], fast(HOME, host.url))
+    expect(out.code).toBe(1)
+    expect(out.stderr).toContain('already ran and failed: flooded: per-sender rate')
+    expect(host.direct()).toHaveLength(1)
+  })
+
+  it('a task id reused for a different message is a conflict: exit 1, nothing resent', async () => {
+    const conflict = { status: 409, body: { error: 'task id reused with a different payload', code: -32002, task_id: 'direct-aaaabbbbcccc', replay: false } }
+    const host = await scriptedHost([conflict])
+    const HOME = await scoutHome()
+    const out = await runCli(['route', 'ops', 'other text', '--task', 'direct-aaaabbbbcccc'], fast(HOME, host.url))
+    expect(out.code).toBe(1)
+    expect(out.stderr).toContain('already used for a different message')
+    expect(host.direct()).toHaveLength(1)
+    expect(host.seen.some(s => s.path === '/a2a/query')).toBe(false)
+  })
+
+  it('a --sync resend whose round is still pending exits 1 and says how to fetch the reply later', async () => {
+    const replay = { status: 409, body: { code: -32003, task_id: 'direct-aaaabbbbcccc', replay: true, error: 'duplicate' } }
+    const host = await scriptedHost([replay], { found: true, status: 'pending', task_id: 'direct-aaaabbbbcccc' })
+    const HOME = await scoutHome()
+    const out = await runCli(['route', 'ops', 'hi', '--sync', '--task', 'direct-aaaabbbbcccc'], fast(HOME, host.url))
+    expect(out.code).toBe(1)
+    expect(out.stderr).toContain('rerun later with --task direct-aaaabbbbcccc --sync')
+    const sent = host.direct()[0]!.body
+    expect(host.seen.find(s => s.path === '/a2a/query')?.body.fingerprint).toBe(peerPayloadFingerprint({ caller: String(sent.caller_session), message: 'hi', noWait: false, team: 'ops' }))
+  })
+
+  it('a --sync resend whose round completed prints the reply it already produced', async () => {
+    const replay = { status: 409, body: { code: -32003, task_id: 'direct-aaaabbbbcccc', replay: true, error: 'duplicate' } }
+    const host = await scriptedHost([replay], { found: true, status: 'completed', reply: '已完成', task_id: 'direct-aaaabbbbcccc' })
+    const HOME = await scoutHome()
+    const out = await runCli(['route', 'ops', 'hi', '--sync', '--task', 'direct-aaaabbbbcccc'], fast(HOME, host.url))
+    expect(out.code).toBe(0)
+    expect(out.stdout).toBe('[route] already received → ops · task direct-aaaabbbbcccc · completed — not sent a second time\n已完成\n')
+  })
+
+  it('report honours --task, so its resend hint is true', async () => {
+    const host = await scriptedHost([])
+    const HOME = await scoutHome()
+    expect((await runCli(['report', 'r1', '--task', 'direct-111122223333'], fast(HOME, host.url))).code).toBe(0)
+    expect(host.direct()[0]?.body.task_id).toBe('direct-111122223333')
+  })
+
+  it('5xx until resends run out still names the safe resend', async () => {
+    const busy = { status: 502, body: { error: 'bad gateway' } }
+    const host = await scriptedHost([busy, busy, busy, busy])
+    const HOME = await scoutHome()
+    const out = await runCli(['route', 'ops', 'hi'], fast(HOME, host.url))
+    expect(out.code).toBe(1)
+    expect(host.direct()).toHaveLength(4)
+    expect(out.stderr).toContain(`resend safely with: --task ${String(host.direct()[0]?.body.task_id)}`)
+  })
+
+  it('a malformed --task is a usage error', async () => {
+    const HOME = await scoutHome()
+    expect((await runCli(['route', 'ops', 'hi', '--task', 'bad id!'], { HOME, A2A_CLI_HOME: HOME })).code).toBe(2)
   })
 })

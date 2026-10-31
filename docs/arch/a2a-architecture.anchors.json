@@ -4,10 +4,10 @@
   "scope": "Committed source only; no deployment inference",
   "sources": {
     "src/index.ts": "cca9be8d393bff19396f7952a2a4d316c517ffef42baee5d37c78b74aa8484eb",
-    "src/faces/admin.ts": "ce08936ad6a785a5cc4cb282fd2303d3f29366a813c3b94077f57a61c71dad98",
+    "src/faces/admin.ts": "df03da5798d6a45f43fec1a9bf00366cfe44d051e9965a022b89631f5998aff0",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
-    "src/cli-deposit.ts": "3d6b63bed2bc418f7d927c27b7bb6c81f712de1997f5327ce07509257205ec42",
+    "src/cli-deposit.ts": "fded04a5bd4e0443f096874a9a0495786272ddb63d7e5ddf72e89b4502fad333",
     "nexus-stage/src/workbench.ts": "db77d8c241f08dd7bb84825c7c085769d209d0bd17fd7521d194718e679add7e",
     "nexus-stage/src/federation.ts": "d499312360a0ee4ddc5fa42f45675bfe0dba4f68c40e976c38036f8f06150148",
     "nexus-stage/src/planning-relayout.ts": "7ce77ba2bc95fcbee62af752f22969b726511d8988133e74123a5e04a7a6a571",
@@ -19,7 +19,7 @@
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
-    "src/faces/wire.ts": "49c16090378047764379c917bd24f5a23a0137195dc54af168e39ee86a87b78a",
+    "src/faces/wire.ts": "e2ca4b9c7779ed86b6e5fa63c4b145bd64aabc4abac310950b518732d313b792",
     "src/faces/canvas-notify.ts": "10a79ab13d69746268269f0bf8c100464832316e39498ba6ec4aeeae961ec0dd"
   },
   "anchors": [
@@ -116,7 +116,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:435",
+      "ref": "src/faces/admin.ts:439",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
@@ -182,7 +182,7 @@
     {
       "page": "p1-arch",
       "cell": "d9",
-      "ref": "src/cli-deposit.ts:22",
+      "ref": "src/cli-deposit.ts:23",
       "expect": "export const CLI_DEPOSIT_TTL_MS = 4 * 60 * 60 * 1000"
     },
     {

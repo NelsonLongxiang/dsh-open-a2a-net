@@ -357,6 +357,10 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // OriginClaim window — the operator watches this drain to
           // zero before closing the window.
           legacyInbound: d.legacyInboundCount,
+          // gh#113: CLI mailbox loss, all handles — mail the 64-row cap
+          // pushed out, and mail cut at 4000 chars. The team verifier
+          // holds `dropped` to zero.
+          cliMailbox: cliDeposits.mailStats(),
           // F-observability: the boot prewarm's lifecycle — a dead or
           // skipped prewarm is the root shape behind "cold rows pile up
           // after restart" and must be readable, not a console rumor.
@@ -489,7 +493,10 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           payload = JSON.stringify({ ok: cliDeposits.revoke(typeof (body as { handle?: unknown }).handle === 'string' ? (body as { handle: string }).handle : '') })
         } else if (action === 'inbox') {
           const handle = typeof (body as { handle?: unknown }).handle === 'string' ? (body as { handle: string }).handle : ''
-          payload = JSON.stringify({ ok: true, mail: cliDeposits.readMail(handle) })
+          // gh#113: seq bounds and the loss counter ride beside the rows; after_seq trims to newer rows.
+          const after = (body as { after_seq?: unknown }).after_seq
+          const box = cliDeposits.readMailbox(handle, typeof after === 'number' && Number.isInteger(after) && after >= 0 ? after : undefined)
+          payload = JSON.stringify({ ok: true, ...box })
         } else {
           payload = JSON.stringify({ ok: true, deposits: cliDeposits.list().map(row => ({ handle: row.handle, name: row.name, depositedAt: row.depositedAt, expiresAt: row.expiresAt })) })
         }
