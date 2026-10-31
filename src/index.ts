@@ -2715,7 +2715,8 @@ ${message}`
       scope: [config.teamScopeRouting, config.originClaimWindow !== false],
       joined: joinedSessions.list().map(handle),
       roster: teamMemberships.list().flatMap(entry => entry.teams.map(team => [handle(entry.session), team] as const)),
-      canvas: canvasStore.list().map(name => [canvasTeamOf(name), canvasStore.membersOf(name)] as const),
+      // Local members by their handle (design §2.3), remote refs as they are stored.
+      canvas: canvasStore.list().map(name => [canvasTeamOf(name), canvasStore.membersOf(name).map(m => (m.includes('/') ? m : handle(m)))] as const),
       cli: cliDeposits.list().map(row => row.handle),
       links: config.peers.map(peer => { try { return new URL(peer).origin } catch { return peer } }),
     })

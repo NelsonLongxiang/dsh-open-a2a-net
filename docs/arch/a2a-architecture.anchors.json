@@ -3,7 +3,7 @@
   "sourceCommit": "0b466643b27120878ceeab9a2ebf087ae3854605",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "1f2d95903272fd0348cfd0531e0da2274eab46de07689bb6fe1b2ca4b0ff63ba",
+    "src/index.ts": "3e3fde60e41c25668376b175d01d43f743f60d8755412b931c0f334fd3501abd",
     "src/faces/admin.ts": "3ce6f873164d3087446372e9e23bc11ad4ea70c4f9b23c92beb3d1d6b766494a",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
@@ -14,32 +14,32 @@
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
     "nexus-stage/src/planning-card-text.ts": "31403071229c5dde4af545ded1a8eaebb1c329a52df3169fae868a57119225d9",
     "nexus-stage/src/planning-fit.ts": "cbda0255062632bd412deb2131c7a01e1e16ab9c72d2a70a32c362e108f8c07a",
-    "src/task-ledger.ts": "8cb0ed501a056d33753e38eaf21b3c678da8574053b3e37b73b7ef84c38f2b94",
+    "src/task-ledger.ts": "ab3d4d1c7795b4b6f9404274e7f467891d1de0661c23375633e6ac9a6e443ed1",
     "nexus-stage/src/world.ts": "1c6308555b65e8316cda38cf97dc43120b979be3e30792a12b893faf845cb934",
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
-    "src/faces/wire.ts": "ac1422b5948d2795e22abd25debe71d0deea3ab1cde17b445a8af381627090b2",
+    "src/faces/wire.ts": "3d5c1ec856e4cf54a50906f6245231739e51d4806fde8313e27f328f9118c571",
     "src/faces/canvas-notify.ts": "10a79ab13d69746268269f0bf8c100464832316e39498ba6ec4aeeae961ec0dd",
-    "src/task-auth.ts": "6bdd876ec34b8c2e1a01b7bf65a8b2bad525b3f3673c68b5d08d39709bc26ed1"
+    "src/task-auth.ts": "f9c8962677b643301a99329ef29b98cc56612ce022585dc1a49080862ea6af3c"
   },
   "anchors": [
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/index.ts:3400",
+      "ref": "src/index.ts:3401",
       "expect": "name: 'a2a_whoami',"
     },
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/index.ts:5236",
+      "ref": "src/index.ts:5237",
       "expect": "name: 'a2a_probe',"
     },
     {
       "page": "p1-arch",
       "cell": "a2",
-      "ref": "src/index.ts:4160",
+      "ref": "src/index.ts:4161",
       "expect": "error: `the process face \"${config.team}\" is the host's own mailbox — model tools must target a member face. Route to a session team handle (\"${config.team}/<id8>\" from a2a_teams) or a canvas team; receipts and quick dispatch reach the host face on their own paths.`,"
     },
     {
@@ -69,7 +69,7 @@
     {
       "page": "p1-arch",
       "cell": "b4",
-      "ref": "src/index.ts:3649",
+      "ref": "src/index.ts:3650",
       "expect": "name: 'a2a_exposure',"
     },
     {
@@ -81,13 +81,13 @@
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:4228",
+      "ref": "src/index.ts:4229",
       "expect": "const sharedCanvas = canvasStore.list().some(name => {"
     },
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:4233",
+      "ref": "src/index.ts:4234",
       "expect": "let orgShared = false"
     },
     {
@@ -129,7 +129,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:2899",
+      "ref": "src/index.ts:2900",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -207,7 +207,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:4402",
+      "ref": "src/index.ts:4403",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -249,7 +249,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3317",
+      "ref": "src/index.ts:3318",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
@@ -291,7 +291,7 @@
     {
       "page": "p1-arch",
       "cell": "d10",
-      "ref": "src/task-ledger.ts:710",
+      "ref": "src/task-ledger.ts:713",
       "expect": "private trimOwed(): void {"
     },
     {

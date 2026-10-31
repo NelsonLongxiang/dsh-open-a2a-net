@@ -8,6 +8,7 @@
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { generateKeyPairSync, sign as edSign } from 'node:crypto'
+import { createServer } from 'node:http'
 import { bootNode, reservePort, tmpHome } from './harness.ts'
 import { signCard } from '../../src/card.ts'
 
@@ -91,6 +92,48 @@ describe('#114 S2 inbound authorization record (real host)', () => {
       expect((await rowOf('direct-aaaa00000001'))?.auth.allowlist_version).toBe(born)
     } finally {
       await a.dispose()
+    }
+  }, 60_000)
+
+  it('review of PR #134 P1: origin-claim only when the signed zone covers the caller; otherwise claim-mismatch', async () => {
+    // A foreign host's card, signed with its own key (correct OriginClaim header names).
+    const far = generateKeyPairSync('ed25519').privateKey
+    const card = signCard({ name: 'far', session: 'far-s', team: 'far', capabilities: { route: true }, expiresAt: Date.now() + 3_600_000 }, far)
+    const srv = createServer((_req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(card)) })
+    await new Promise<void>(resolve => srv.listen(0, '127.0.0.1', () => resolve()))
+    const farUrl = `http://127.0.0.1:${String((srv.address() as { port: number }).port)}`
+    const a = await bootNode({ name: 'A', session: 'mesh-gh120-claim', team: 'dsh', sessionNodes: true, teamScopeRouting: true, port: await reservePort(), home: tmpHome() })
+    try {
+      expect((await post(`${a.baseUrl}/__dsh_a2a/join`, { id: 'session-0123456789abcdef' })).status).toBe(200)
+      // The operator links far/aaaaaaaa as a remote member (N3/N4).
+      expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: 'ops' })).body.ok).toBe(true)
+      expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: 'ops', id: 'far/aaaaaaaa' })).body.ok).toBe(true)
+      const signed = (): Record<string, string> => {
+        const ts = Date.now()
+        return { 'X-A2A-Caller': 'far', 'X-A2A-Caller-Url': farUrl, 'X-A2A-Caller-Ts': String(ts), 'X-A2A-Caller-Sig': edSign(undefined, Buffer.from(JSON.stringify(['far', farUrl, ts])), far).toString('base64') }
+      }
+      // Owed rows and settled ones: a host-face receipt settles at once (the harness agent replies on steer).
+      const rows = async (): Promise<Array<Record<string, any>>> => {
+        const state = (await globalThis.fetch(`${a.baseUrl}/__dsh_a2a/state`).then(async r => await r.json())) as { tasks: Array<Record<string, any>>; archived?: Array<Record<string, any>> }
+        return [...state.tasks, ...(state.archived ?? [])]
+      }
+
+      const covered = await post(`${a.baseUrl}/a2a/direct`, { team: TARGET, message: 'covered', caller_session: 'far/aaaaaaaa', wait: false, task_id: 'direct-claim0001' }, signed())
+      expect(covered.body.delivered, JSON.stringify(covered.body)).toBe(true)
+      expect((await rows()).find(t => t.taskId === 'direct-claim0001')?.auth).toMatchObject({
+        caller: 'far/aaaaaaaa', proof: 'origin-claim', claim: { caller: 'far', origin: new URL(farUrl).origin },
+        via: 'canvas-member', admission_rule: 'remote-ref-foreign', basis: ['dsh/canvas/ops'],
+      })
+
+      // The signed zone "far" does not cover the host face "dsh": delivered (admission is unchanged), but never recorded as proven.
+      const mismatched = await post(`${a.baseUrl}/a2a/direct`, { team: TARGET, message: 'mismatch', caller_session: 'dsh', wait: false, task_id: 'direct-claim0002' }, signed())
+      expect(mismatched.body.delivered, JSON.stringify(mismatched.body)).toBe(true)
+      expect((await rows()).find(t => t.taskId === 'direct-claim0002')?.auth).toMatchObject({
+        caller: 'dsh', proof: 'claim-mismatch', claim: { caller: 'far' }, admission_rule: 'host-face',
+      })
+    } finally {
+      await a.dispose()
+      srv.close()
     }
   }, 60_000)
 })

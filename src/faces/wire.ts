@@ -23,14 +23,14 @@ import { TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_MAX_LIMIT } from '../session-trans
 import { refuseIfBudgetExhausted } from '../recursion-guard.ts'
 import { peerPayloadFingerprint, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from '../idempotency-store.ts'
 import { briefOf, type TaskLedger } from '../task-ledger.ts'
-import { buildAuthorization, refusalOf, type Admission } from '../task-auth.ts'
+import { buildAuthorization, claimCovers, refusalOf, type Admission } from '../task-auth.ts'
+import type { Config } from '../index.ts'
+import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from '../transport-caps.ts'
 
 /** The origin of a card URL for the authorization record; the raw text, bounded, when it does not parse. */
 const originOf = (url: string): string => {
   try { return new URL(url).origin } catch { return url.slice(0, 256) }
 }
-import type { Config } from '../index.ts'
-import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from '../transport-caps.ts'
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
@@ -711,13 +711,15 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // #114 S2: the row is born with its immutable authorization record.
                 const auth = buildAuthorization(admission, {
                   caller,
-                  proof: claim.ok ? 'origin-claim' : 'legacy-window',
+                  // A verified claim proves the caller only when its signed zone covers it (review of PR #134 P1).
+                  proof: claim.ok ? (claimCovers(caller, claim.caller) ? 'origin-claim' : 'claim-mismatch') : 'legacy-window',
                   ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}),
                   ingress: 'wire',
                   allowlistVersion: admittedAt.version,
                   target: team,
                   receiptTarget,
                   receivedAt: admittedAt.at,
+                  // Audit only: a cold session's activation window also reads as running.
                   targetBusy: runningBeforeSteer,
                 })
                 taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message), auth)

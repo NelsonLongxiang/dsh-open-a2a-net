@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { AUTH_BASIS_CAP, AUTH_STRING_CAP, buildAuthorization, parseAuthorization, type TaskAuthorization } from '../../src/task-auth.ts'
+import { AUTH_BASIS_CAP, AUTH_CLOCK_SKEW_MS, AUTH_STRING_CAP, buildAuthorization, claimCovers, parseAuthorization, type TaskAuthorization } from '../../src/task-auth.ts'
 import { TaskLedger } from '../../src/task-ledger.ts'
 
 function ledgerPath(): string {
@@ -44,8 +44,22 @@ describe('#120 buildAuthorization / parseAuthorization', () => {
     expect(quiet).not.toHaveProperty('target_busy')
   })
 
-  it('round-trips through JSON exactly', () => {
+  it('round-trips through JSON exactly, including a claim-mismatch record', () => {
     expect(parseAuthorization(JSON.parse(JSON.stringify(AUTH)))).toEqual(AUTH)
+    const mismatch = buildAuthorization({ ok: true, via: 'host-face', rule: 'host-face', basis: [] }, {
+      caller: 'dsh', proof: 'claim-mismatch', claim: { caller: 'far', origin: 'http://far' }, ingress: 'wire',
+      allowlistVersion: 'al1:0123456789abcdef', target: 'dsh/bbbbbbbb', receiptTarget: 'dsh', receivedAt: 1,
+    })
+    expect(parseAuthorization(JSON.parse(JSON.stringify(mismatch)))).toEqual(mismatch)
+  })
+
+  it('claimCovers: the same zone, or a handle under it — never a prefix without the slash', () => {
+    expect(claimCovers('dsh', 'dsh')).toBe(true)
+    expect(claimCovers('dsh/aaaaaaaa', 'dsh')).toBe(true)
+    expect(claimCovers('ops-cli/a1b2c3d4e5f60718', 'ops-cli')).toBe(true)
+    expect(claimCovers('dsh', 'far')).toBe(false)
+    expect(claimCovers('dshx/aaaaaaaa', 'dsh')).toBe(false)
+    expect(claimCovers('dsh', '')).toBe(false)
   })
 
   it('drops the whole record when any field is out of its closed set or bounds — never a partial adoption', () => {
@@ -67,6 +81,20 @@ describe('#120 buildAuthorization / parseAuthorization', () => {
       { ...json, claim: undefined }, // origin-claim without its claim
       { ...json, proof: 'legacy-window' }, // a claim without origin-claim proof
       { ...json, claim: { caller: 'dsh' } },
+      // Review of PR #134 P2: combinations admission could never have produced.
+      { ...json, caller: '' }, // admission refuses anonymous callers
+      { ...json, receipt_target: '' },
+      { ...json, basis: [] }, // a shared-team rule with no shared team
+      { ...json, basis: ['dsh/canvas/ops', 'dsh/canvas/ops'] },
+      { ...json, admission_rule: 'cli-deposit', via: 'cli-deposit' }, // a non-shared rule with a basis
+      { ...json, proof: 'in-process', claim: undefined }, // in-process on the wire
+      { ...json, ingress: 'local' }, // local is in-process only
+      { ...json, admission_rule: 'local-exempt', via: 'host-face', basis: [], proof: 'legacy-window', claim: undefined },
+      { ...json, received_at: Date.now() + AUTH_CLOCK_SKEW_MS + 60_000 },
+      { ...json, received_at: 1.5 },
+      // Review of PR #134 P1: coverage, not the record, decides origin-claim vs claim-mismatch.
+      { ...json, claim: { caller: 'far', origin: 'http://far' } },
+      { ...json, proof: 'claim-mismatch' },
     ]
     for (const raw of bad) expect(parseAuthorization(raw), JSON.stringify(raw)).toBeUndefined()
     expect(parseAuthorization(null)).toBeUndefined()
@@ -100,6 +128,23 @@ describe('#120 auth on ledger rows', () => {
     const second = new TaskLedger(path)
     expect(second.list().find(r => r.taskId === 'direct-live')?.auth).toEqual(AUTH)
     expect(new Map(second.archive().map(row => [row.taskId, row])).get('direct-r')?.auth).toEqual(AUTH)
+  })
+
+  it('restore drops a record that belongs to another row (target or receipt target differ)', () => {
+    const path = ledgerPath()
+    const good = JSON.parse(JSON.stringify(AUTH)) as Record<string, unknown>
+    writeSnapshot(path, {
+      tasks: [
+        { taskId: 'direct-t', team: 'dsh/cccccccc', peer: 'local:dsh/aaaaaaaa', startedAt: Date.now(), status: 'pending', direction: 'inbound', auth: good },
+        { taskId: 'direct-p', team: 'dsh/bbbbbbbb', peer: 'local:dsh/zzzzzzzz', startedAt: Date.now(), status: 'pending', direction: 'inbound', auth: good },
+        { taskId: 'direct-ok', team: 'dsh/bbbbbbbb', peer: 'local:dsh/aaaaaaaa', startedAt: Date.now(), status: 'pending', direction: 'inbound', auth: good },
+      ],
+      archived: [],
+    })
+    const byId = new Map(new TaskLedger(path).list().map(row => [row.taskId, row]))
+    expect(byId.get('direct-t')).not.toHaveProperty('auth')
+    expect(byId.get('direct-p')).not.toHaveProperty('auth')
+    expect(byId.get('direct-ok')?.auth).toEqual(AUTH)
   })
 
   it('restore drops a malformed record whole and keeps the row; outbound rows never take one; pre-S2 files load unchanged', () => {
