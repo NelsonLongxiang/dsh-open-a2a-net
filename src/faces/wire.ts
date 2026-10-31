@@ -580,8 +580,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             recordActivity('in', team, caller, true)
             logger.info(`a2a: cli mailbox delivery for ${team} (from ${caller})`)
             const note = `delivered to the mailbox of ${team} — the CLI polls while online`
-            // gh#112 review: a mailbox delivery is final here (no receipt
-            // ever follows), so a resend of this id reads `completed`.
+            // gh#112 review: a mailbox delivery is final from this host's
+            // side, so a resend of this id reads `completed`. A receipt the
+            // CLI routes back later still reaches its caller, but does not
+            // replace this outcome (recordOutcome is first-writer-wins).
             idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: note })
             const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, task_status: 'TASK_STATE_COMPLETED', note })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
