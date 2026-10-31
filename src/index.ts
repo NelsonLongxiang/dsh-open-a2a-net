@@ -46,7 +46,7 @@ import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
-import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type ReceiptResolvedInfo, type Sender } from './task-ledger.ts'
+import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type ReceiptResolvedInfo, type Sender, type TaskRecord } from './task-ledger.ts'
 import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
@@ -54,7 +54,7 @@ import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
-import { allowlistVersion, authorizationRef, callerAdmission, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type PeerOrgEntry } from './task-auth.ts'
+import { allowlistVersion, authorizationRef, callerAdmission, judgeSettlement, type SettlementMode, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type PeerOrgEntry } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
 // `ctx.timer` on Context; the runtime service is mounted by app compositions.
@@ -162,6 +162,8 @@ export interface Config {
   readonly team: string
   /** S4 fix 3: audit (default) or refuse host-side (agent-less) routing calls. */
   readonly gateAgentLessCalls: 'audit' | 'refuse'
+  /** #114 S4: settlement authorization — off, observe (record would-refuse, settle as before), enforce. */
+  readonly settlementAuth: SettlementMode
   /**
    * Publish this node's `/.well-known/agent-card.json` on the shared web
    * server (peer discovery). Requires the web server in the composition;
@@ -391,6 +393,7 @@ export const Config: s<Config> = s.object({
   team: s.string().default('dsh'),
   /** S4 fix ③: host-side (agent-less) routing calls — audit them (default) or refuse outright. */
   gateAgentLessCalls: s.union(['audit', 'refuse'] as const).default('audit'),
+  settlementAuth: s.union(['off', 'observe', 'enforce'] as const).default('observe'),
   announce: s.boolean().default(false),
   agentName: s.string().default('DeepSeek Harness A2A node'),
   peers: s.array(s.string()).default([]),
@@ -1001,7 +1004,27 @@ const reportLoopRing = new Map<string, number[]>()
    * the consumer's own discipline — keep seam listeners synchronous.
    * @param message - the inbound or relayed message text.
    */
-  function settleAndAnnounce(message: string): void {
+  function settleAndAnnounce(message: string, settler?: Settler): void {
+    // #114 S4: judge the settler against each correlated row's authorization
+    // chain (design §4.2). `observe` records what enforce would refuse and
+    // settles as before; `enforce` keeps a refused row owed. A call with no
+    // settler (a path that knows none) is not judged.
+    const parsedForJudge = parseReceipt(message)
+    const judge = settler === undefined || config.settlementAuth === 'off' ? undefined : {
+      enforce: config.settlementAuth === 'enforce',
+      settler: { caller: settler.caller, proof: settler.proof, ingress: settler.ingress },
+      check: (row: TaskRecord, echo: boolean) => judgeSettlement(row, settler, {
+        hostLabel: session,
+        membersOf: (team: string) => {
+          const name = parseCanvasTeamName(team)
+          if (name === undefined) return undefined
+          // Canvas members by session id and by handle, as the faces store them.
+          return canvasStore.membersOf(name).flatMap(m => (m.includes('/') ? [m] : [m, `${config.team}/${id8(m)}`]))
+        },
+        ...(parsedForJudge?.envelope?.onBehalfOf !== undefined ? { onBehalfOf: parsedForJudge.envelope.onBehalfOf } : {}),
+        echo,
+      }),
+    }
     // W7 slice-2 hook 3: a receipt that correlates an id THIS node's
     // idempotency ledger claimed records the receipt's human line as that
     // key's outcome. Parsed DIRECTLY off the receipt codec — a claimed key
@@ -1011,20 +1034,31 @@ const reportLoopRing = new Map<string, number[]>()
     // the envelope's controlled-vocabulary outcome is never a product and
     // must not be recorded as one. First-write wins inside the store, so a
     // late receipt never overwrites a precise sync-hook record.
-    const parsed = parseReceipt(message)
+    const parsed = parsedForJudge
     if (parsed !== null && parsed.taskId !== '') {
       const line = parsed.summary.trim()
-      if (line !== '') {
+      // #114 S4 (design §4.2.2): under enforce, the receipt hook writes the
+      // outcome a /a2a/query answers only for a row THIS ledger owes and
+      // whose settler is on the chain — anyone sending a receipt line could
+      // otherwise rewrite another caller's answer.
+      const row = judge?.enforce === true ? taskLedger.find(parsed.taskId) : undefined
+      const allowed = judge?.enforce !== true || (row !== undefined && judge.check(row, false).ok)
+      if (line !== '' && allowed) {
         idempotencyStore.recordOutcome(parsed.taskId, { status: 'completed', reply: line.slice(0, SUMMARY_CAP) })
       }
     }
-    const resolved = taskLedger.resolveFromMessage(message)
+    // A header that names an owed row and comes back unresolved was refused
+    // (enforce): that is the verdict — the echo fallback must not judge the
+    // same message a second time.
+    const owedByHeader = parsed !== null && parsed.taskId !== '' && taskLedger.find(parsed.taskId) !== undefined
+    const resolved = taskLedger.resolveFromMessage(message, judge)
+    if (resolved === undefined && owedByHeader) return
     if (resolved === undefined) {
       // F5 (settlement integrity): the formal envelope missed — an inbound
       // message that still echoes a pending task id means the peer
       // demonstrably responded to it, which settles the debt even when the
       // receipt formality never rode the reply.
-      const echoed = taskLedger.resolveEcho(message)
+      const echoed = taskLedger.resolveEcho(message, judge)
       if (echoed.length > 0) {
         logger.info(`a2a: ${String(echoed.length)} pending task(s) settled by content echo (${echoed.join(', ')})`)
       }
@@ -4494,8 +4528,14 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // gh#45 CLI mailbox: a delivery targeting a DEPOSITED CLI handle is
     // local by definition — it lands in the deposit's mailbox (the CLI
     // polls while alive; receipts and messages never wake anything).
+    // The settler of any receipt on this path: this host's own caller (in-process).
+    const localSettler: Settler = { caller: callerSession ?? '', proof: 'in-process', ingress: 'local' }
     const cliRow = cliDeposits.get(team)
     if (cliRow !== undefined) {
+      // #114 S4 (design §4.5): a receipt dropped into a local CLI mailbox is
+      // exactly the settlement a CLI-originated task waits for — settle it,
+      // as the wire face settles before ITS mailbox split.
+      settleAndAnnounce(message, localSettler)
       cliDeposits.mail(team, callerSession ?? 'unknown', message)
       recordActivity('in', team, callerSession ?? 'peer', true)
       logger.info(`a2a: cli mailbox delivery for ${team} (from ${callerSession ?? 'unknown'})`)
@@ -4509,7 +4549,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // A receipt relayed between same-host sessions (the answering session
     // routing its `[A2A receipt]` back over the in-process candidate)
     // correlates here too — same contract, no HTTP on the path.
-    settleAndAnnounce(message)
+    settleAndAnnounce(message, localSettler)
     const taskId = taskIdFromCaller ?? `direct-${Math.random().toString(16).slice(2, 10)}`
     const flight = beginRoute(team, 'local')
     if (asyncMode) {
