@@ -63,6 +63,8 @@ describe('#122 judgeSettlement', () => {
     expect(judgeSettlement(inbound, local(HOST), facts({ onBehalfOf: 'dsh/zzzzzzzz' }))).toEqual({ ok: false, reason: 'on-behalf-mismatch' })
     expect(judgeSettlement(outbound, wire('dsh-host-b', 'claim-mismatch', 'http://100.75.181.127:13080'), facts({ onBehalfOf: 'dsh/bbbbbbbb' }))).toEqual({ ok: true, role: 'host-face' })
     expect(judgeSettlement(outbound, wire('dsh-host-b', 'claim-mismatch', 'http://elsewhere:1'), facts({ onBehalfOf: 'dsh/bbbbbbbb' }))).toEqual({ ok: false, reason: 'settler-off-chain' })
+    // Round 2 N1: a session face on the peer host is not its host face, whatever onBehalfOf it writes.
+    expect(judgeSettlement(outbound, wire('dsh/cccccccc', 'origin-claim', 'http://100.75.181.127:13080'), facts({ onBehalfOf: 'dsh/bbbbbbbb' }))).toEqual({ ok: false, reason: 'settler-off-chain' })
   })
 
   it('compat: an older host\'s auto-receipt (no onBehalfOf) with a claim from the row\'s peer origin', () => {

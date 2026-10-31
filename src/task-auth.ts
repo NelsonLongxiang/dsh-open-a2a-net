@@ -564,7 +564,10 @@ export function judgeSettlement(row: SettlementRow, settler: Settler, facts: Set
     // A bare zone team (the process face) is answered by one of that zone's session faces.
     const forTarget = facts.onBehalfOf === target || members.includes(facts.onBehalfOf) ||
       (!target.includes('/') && facts.onBehalfOf.startsWith(`${target}/`))
-    const asHost = local ? settler.ingress === 'local' && settler.caller === facts.hostLabel : fromPeerOrigin
+    // Across hosts the peer signs for ALL its sessions with one zone claim, so the
+    // origin alone cannot tell its host from another session on it: the host face
+    // is a process label, never a session face (review of PR #140 round 2, N1).
+    const asHost = local ? settler.ingress === 'local' && settler.caller === facts.hostLabel : fromPeerOrigin && !settler.caller.includes('/')
     if (forTarget && asHost) return { ok: true, role: 'host-face' }
     if (!forTarget && asHost) return { ok: false, reason: 'on-behalf-mismatch' }
   }
