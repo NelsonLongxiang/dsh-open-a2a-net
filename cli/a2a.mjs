@@ -44,7 +44,7 @@ const USAGE = `a2a-net CLI — aligned with the plugin's ten model tools ('a2a t
 usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 
 户口制:   init <name> [--uuid 16hex] [--force] · publish · inbox [--new|--wait|--hook] · revoke
-对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] · status · tasks · probe · report <msg…>
+对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · report <msg…>
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
 
 host:     --home > $A2A_HOME > the home saved by 'a2a init --home URL' > ${DEFAULT_HOME}
@@ -53,6 +53,8 @@ pocket:   $A2A_POCKET_TOKEN (or $A2A_TOKEN) rides as the dsh_pocket_token cookie
 message:  everything after <team> that is not a flag; put a message that starts with '-' after '--'
 route:    async by default (delivered + task id; the receipt comes to 'a2a inbox');
           --sync waits for the target's reply and prints it; --context ID continues that conversation
+          every route carries a task id born here; a transport failure is retried up to 3 times with
+          the SAME id, and --task ID resends an earlier one — the host runs one task id at most once
 --json:   teams / tasks / probe / route / report / inbox print the raw rows instead of the table
 
 inbox:    bare 'inbox' lists the whole mailbox (newest first, the host keeps 64)
@@ -64,7 +66,7 @@ inbox:    bare 'inbox' lists the whole mailbox (newest first, the host keeps 64)
                         nothing at all when there is none or the host is unreachable (always exit 0)`
 
 /** Flags that take a value (both '--home URL' and '--home=URL'); the rest are switches. */
-const VALUE_FLAGS = new Set(['--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context'])
+const VALUE_FLAGS = new Set(['--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task'])
 const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
@@ -459,6 +461,94 @@ function listCapped(rows, cap, line) {
   if (rows.length > cap) console.log(`  … ${String(rows.length - cap)} more (--json lists all)`)
 }
 
+// ── route: caller-born task ids, safe resend (gh#112) ───────────────────
+// The host's idempotency store runs one task id at most once: the same id
+// with the same payload answers 409 replay, a different payload 409
+// conflict. A CLI that let the host mint the id could never resend safely —
+// a lost reply meant either dropping the message or running it twice.
+
+/** A fresh task id, the shape the host mints itself. */
+const newTaskId = () => `direct-${randomUUID().replace(/-/g, '').slice(0, 12)}`
+
+/** The host's payload fingerprint (src/idempotency-store.ts peerPayloadFingerprint); it also authorizes /a2a/query. */
+const payloadFingerprint = (body) => createHash('sha256')
+  .update(JSON.stringify({ caller: body.caller_session, message: body.message, noWait: body.wait === false, team: body.team }))
+  .digest('hex')
+
+/** Failures where the request may or may not have landed: resend with the same id. */
+const TRANSIENT_CODES = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN',
+  'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'])
+const transientError = (error) => TRANSIENT_CODES.has(error?.cause?.code) || TRANSIENT_CODES.has(error?.code) ||
+  String(error?.message ?? '') === 'fetch failed'
+const RETRY_DELAYS_MS = (() => {
+  const base = Number.parseInt(process.env.A2A_RETRY_BASE_MS ?? '', 10)
+  const unit = Number.isFinite(base) && base >= 0 ? base : 1000
+  return [unit, unit * 2, unit * 4]
+})()
+
+/**
+ * POST one envelope to /a2a/direct, retrying transport failures and 5xx with
+ * the same task id. Answers the last response, or rethrows the last error.
+ */
+async function postDirect(body) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const res = await fetch(`${home()}/a2a/direct`, {
+        method: 'POST',
+        // A fresh OriginClaim per attempt: the signature carries its own timestamp.
+        headers: { 'Content-Type': 'application/json', ...originClaimFor(home())(), ...keyHeaders() },
+        body: JSON.stringify(body),
+      })
+      if (res.status < 500 || attempt >= RETRY_DELAYS_MS.length) return { res, attempts: attempt + 1 }
+      await res.text().catch(() => '')
+    } catch (error) {
+      if (!transientError(error) || attempt >= RETRY_DELAYS_MS.length) {
+        console.error(`[${String(body.task_id)}] not confirmed after ${String(attempt + 1)} attempt${attempt === 0 ? '' : 's'} — resend safely with: --task ${String(body.task_id)}`)
+        throw error
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS_MS[attempt]))
+  }
+}
+
+/** Ask the host how an earlier attempt of this task id settled. */
+async function queryOutcome(body) {
+  try {
+    const res = await fetch(`${home()}/a2a/query`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...keyHeaders() },
+      body: JSON.stringify({ task_id: body.task_id, fingerprint: payloadFingerprint(body) }),
+    })
+    return await replyOf(res)
+  } catch {
+    return { found: false, reason: 'unreachable' }
+  }
+}
+
+/**
+ * Send one route/report envelope and print the outcome. A 409 replay means an
+ * earlier attempt of this id already landed: it is reported from /a2a/query,
+ * never sent a second time.
+ */
+async function sendDirect(verb, body) {
+  const { res } = await postDirect(body)
+  if (res.status !== 409) return await printDelivery(verb, res)
+  const out = await replyOf(res)
+  if (out.replay !== true) {
+    if (has('--json')) console.log(JSON.stringify(out, null, 2))
+    die(`[${verb}] task ${String(body.task_id)} was already used for a different message — not sent; drop --task to send it as a new task`)
+  }
+  const prior = await queryOutcome(body)
+  if (has('--json')) {
+    console.log(JSON.stringify({ ...out, delivered: prior.status !== 'failed', prior }, null, 2))
+    if (prior.status === 'failed') process.exitCode = 1
+    return
+  }
+  if (prior.status === 'failed') die(`[${verb}] task ${String(body.task_id)} already ran and failed: ${String(prior.error ?? 'no reason given')} — not sent again`)
+  const state = prior.found === true ? String(prior.status) : `outcome unknown (${String(prior.reason ?? 'not found')})`
+  console.log(`[${verb}] already delivered → ${String(body.team)} · task ${String(body.task_id)} · ${state} — not sent a second time`)
+  if (prior.status === 'completed' && typeof prior.reply === 'string' && prior.reply !== '') console.log(prior.reply)
+}
+
 /** One readable line for a /a2a/direct reply; the raw reply stays one --json away. */
 async function printDelivery(verb, res) {
   const out = await replyOf(res)
@@ -517,15 +607,12 @@ async function main() {
     const [team, ...words] = positionals()
     const message = words.join(' ')
     if (team === undefined || message === '') usage('usage: a2a route <team> <message…>')
-    const res = await fetch(`${home()}/a2a/direct`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...originClaimFor(home())(), ...keyHeaders() },
-      body: JSON.stringify({
-        team, message, caller_session: identity().handle, wait: has('--sync'),
-        ...(flag('--context') !== undefined ? { context_id: flag('--context') } : {}),
-      }),
+    const task = flag('--task')
+    if (task !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(task)) usage('--task takes the task id printed by an earlier route (letters, digits, . _ : -; at most 80)')
+    await sendDirect('route', {
+      team, message, caller_session: identity().handle, wait: has('--sync'), task_id: task ?? newTaskId(),
+      ...(flag('--context') !== undefined ? { context_id: flag('--context') } : {}),
     })
-    await printDelivery('route', res)
     return
   }
   if (cmd === 'inbox') { await cmdInbox(); return }
@@ -593,12 +680,7 @@ async function main() {
   if (cmd === 'report') {
     const text = positionals().join(' ')
     if (text === '') usage('usage: a2a report <message…> — one-way report into the host process-team mailbox')
-    const res = await fetch(`${home()}/a2a/direct`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...originClaimFor(home())(), ...keyHeaders() },
-      body: JSON.stringify({ team: 'dsh', message: `[a2a-net cli report] ${text}`, caller_session: identity().handle, wait: false }),
-    })
-    await printDelivery('report', res)
+    await sendDirect('report', { team: 'dsh', message: `[a2a-net cli report] ${text}`, caller_session: identity().handle, wait: false, task_id: newTaskId() })
     return
   }
   if (cmd === 'revoke') {
