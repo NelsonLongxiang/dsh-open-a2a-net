@@ -68,6 +68,8 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly canvasStore: CanvasStore
   readonly layoutStore: LayoutStore
   readonly taskLedger: TaskLedger
+  /** #114 S6: observe (lazily) and return the /state `authorization` block. */
+  readonly authorizationView: () => unknown
   readonly idempotencyStore: IdempotencyStore
   readonly inFlightRoutes: Map<number, InFlightRoute>
   readonly recentActivity: RouteActivityEntry[]
@@ -127,6 +129,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
     canvasStore,
     layoutStore,
     taskLedger,
+    authorizationView,
     idempotencyStore,
     inFlightRoutes,
     recentActivity,
@@ -327,6 +330,10 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             ...(row.auth !== undefined ? { auth: row.auth } : {}),
           })),
           archivedCount: taskLedger.archive().length,
+          // #114 S6: allowlist version history and the affected-task entries
+          // (observe mode: a record of what an allowlist change put on another
+          // footing — nothing was cancelled).
+          authorization: authorizationView(),
           // Ledger density face: the settled archive split by verdict, so
           // the workbench can say WHICH way those rows settled instead of
           // just how many. Additive and bounded (outcome vocabulary is a

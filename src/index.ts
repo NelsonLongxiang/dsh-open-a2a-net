@@ -54,7 +54,8 @@ import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
-import { allowlistVersion, authorizationRef, callerAdmission, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type PeerOrgEntry } from './task-auth.ts'
+import { AuthObserver, type AffectedEntry } from './auth-observer.ts'
+import { allowlistVersion, authorizationRef, callerAdmission, canonicalAllowlist, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
 // `ctx.timer` on Context; the runtime service is mounted by app compositions.
@@ -130,6 +131,8 @@ export type { ReceiptResolvedInfo } from './task-ledger.ts'
 declare module '@deepseek-ai/cordis' {
   interface Events {
     'a2a/receipt-resolved'(payload: ReceiptResolvedInfo): void
+    /** #114 S6: an allowlist change left unsettled tasks on another footing (observe mode — nothing is cancelled). */
+    'a2a/authorization-affected'(payload: AffectedEntry): void
   }
 }
 
@@ -1817,7 +1820,7 @@ const reportLoopRing = new Map<string, number[]>()
     whenWebServerSettled((webServer) => {
       // gh#77 B1: the admin faces live in src/faces/admin.ts.
       registerAdminFaces(webServer, {
-        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch,
+        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url,
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
@@ -2785,8 +2788,13 @@ ${message}`
    * a record admitted by it carries `peer-org:<team>` in its basis instead.
    */
   function allowlistVersionNow(): string {
+    return allowlistVersion(allowlistInputsNow())
+  }
+
+  /** The records allowlistVersionNow hashes (design §2.3), read live. */
+  function allowlistInputsNow(): AllowlistInputs {
     const handle = (session: string): string => `${config.team}/${id8(session)}`
-    return allowlistVersion({
+    return {
       zone: config.team,
       scope: [config.teamScopeRouting, config.originClaimWindow !== false],
       joined: joinedSessions.list().map(handle),
@@ -2795,8 +2803,48 @@ ${message}`
       canvas: canvasStore.list().map(name => [canvasTeamOf(name), canvasStore.membersOf(name).map(m => (m.includes('/') ? m : handle(m)))] as const),
       cli: cliDeposits.list().map(row => row.handle),
       links: config.peers.map(peer => { try { return new URL(peer).origin } catch { return peer } }),
-    })
+    }
   }
+
+  /*
+   * #114 S6 (design §5): when the version moves, the unsettled tasks born
+   * under another one are re-judged against today's records and the
+   * affected ones recorded — OBSERVE ONLY: nothing is cancelled, no row's
+   * state changes, no session is nudged, no receipt is blocked. Called
+   * lazily (state/tasks reads, inbound admission) and at the known change
+   * points (the stores' onChange hooks below); never on a timer.
+   */
+  const authObserver = new AuthObserver(join(home, 'a2a', 'auth-versions.json'))
+
+  function observeAuthorization(cause: string): void {
+    const inputs = allowlistInputsNow()
+    const entry = authObserver.observe({
+      version: allowlistVersion(inputs),
+      inputs: () => JSON.parse(canonicalAllowlist(inputs)) as unknown,
+      cause,
+      rows: () => taskLedger.list(),
+      judge: (caller, target) => callerAdmission(admissionRecords, caller, target),
+    })
+    if (entry === undefined) return
+    const revoke = entry.tasks.filter(task => task.verdict === 'would-revoke').length
+    logger.info(`a2a: allowlist ${entry.from_version ?? '(none)'} → ${entry.to_version} (${entry.cause}): ${String(entry.tasks.length)} affected task(s), ${String(revoke)} would-revoke — observe only, nothing cancelled`)
+    try {
+      ctx.emit('a2a/authorization-affected', entry)
+    } catch (error) {
+      logger.warn(`a2a: authorization-affected listener rejected: ${String(error)}`)
+    }
+  }
+
+  /** The /state `authorization` block: the version history (newest first, inputs omitted) and the affected entries. */
+  function authorizationView(): { version: string; history: Array<{ version: string; at: number; cause: string }>; affected: readonly AffectedEntry[] } {
+    observeAuthorization('lazy')
+    return {
+      version: allowlistVersionNow(),
+      history: authObserver.history().map(({ version, at, cause }) => ({ version, at, cause })),
+      affected: authObserver.entries(),
+    }
+  }
+
 
   /* ── Session-log read faces (shared by the local control route and the
      peer /a2a/log face): both answer from <dshHome>/sessions with
@@ -2870,6 +2918,7 @@ ${message}`
       a2aCallerRefusal,
       a2aCallerAdmission,
       allowlistVersionNow,
+      observeAuthorization,
       scanSessionLogList,
       readSessionLogTail,
       taskLedger,
@@ -3238,6 +3287,12 @@ ${message}`
    */
   const cardCache = new Map<string, CardCacheEntry>()
   const cardCacheInFlight = new Map<string, Promise<A2aPeerCard | undefined>>()
+  // #114 S6: the change hooks and the boot observation start only once every
+  // record admission reads exists (the peer-org basis reads cardCache above).
+  ctx.effect(() => canvasStore.onChange(() => observeAuthorization('canvas')), 'a2a: S6 canvas observer')
+  ctx.effect(() => joinedSessions.onChange(() => observeAuthorization('joined')), 'a2a: S6 joined observer')
+  ctx.effect(() => teamMemberships.onChange(() => observeAuthorization('roster')), 'a2a: S6 roster observer')
+  observeAuthorization('boot')
 
   /**
    * The from-line display name (owner ruling, claim 8ea4150f94): a bare
@@ -5308,6 +5363,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     presentCall: () => ({ card: 'generic', title: 'A2A task ledger', kind: 'other', rawInput: null }),
     execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; status: 'pending' | 'dead'; deadAt?: number; reason?: 'fire-forget' | 'unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean; sender?: Sender }[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; sender?: Sender }[]; archivedTotal: number }> => {
       a2aJoinGateRefusal(exec)
+      observeAuthorization('lazy')
       const archiveAll = taskLedger.archive()
       return {
         ok: true,
