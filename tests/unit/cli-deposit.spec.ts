@@ -4,11 +4,11 @@
  * 4h auto-deregister, mailbox round-trip.
  */
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { generateKeyPairSync } from 'node:crypto'
-import { CliDepositStore, CLI_HANDLE_RE } from '../../src/cli-deposit.ts'
+import { CliDepositStore, CLI_HANDLE_RE, MAILBOX_CAP, MAILBOX_TEXT_CAP } from '../../src/cli-deposit.ts'
 import { signCard } from '../../src/card.ts'
 
 const { privateKey } = generateKeyPairSync('ed25519')
@@ -65,5 +65,61 @@ describe('gh#45 CLI deposit store', () => {
     expect(s.deposit(cliCard('ops-cli/a1b2c3d4e5f60718')).ok).toBe(true)
     expect(s.deposit(cliCard('nightly-job/f00dcafe12345678')).ok).toBe(true)
     expect(s.list()).toHaveLength(2)
+  })
+})
+
+describe('gh#113 CLI mailbox: seq, loss and truncation are visible', () => {
+  const H = 'ops-cli/a1b2c3d4e5f60718'
+
+  it('numbers mail 1, 2, 3 … and counts what the 64-row cap pushes out', () => {
+    const { s } = store()
+    for (let i = 1; i <= 70; i += 1) s.mail(H, 'dsh/2772468a', `m${String(i)}`)
+    const box = s.readMailbox(H)
+    expect(box.mail).toHaveLength(MAILBOX_CAP)
+    expect(box.mail[0]).toMatchObject({ seq: 70, text: 'm70' })
+    expect(box.mail.at(-1)).toMatchObject({ seq: 7, text: 'm7' })
+    expect(box).toMatchObject({ next_seq: 71, oldest_seq: 7, dropped: 6 })
+    expect(s.readMailbox(H, 68).mail.map(m => m.seq)).toEqual([70, 69])
+    expect(s.mailStats()).toEqual({ dropped: 6, truncated: 0 })
+  })
+
+  it('an empty mailbox reports oldest_seq = next_seq', () => {
+    const { s } = store()
+    expect(s.readMailbox(H)).toMatchObject({ mail: [], next_seq: 1, oldest_seq: 1, dropped: 0 })
+  })
+
+  it('marks a cut text with its original length', () => {
+    const { s } = store()
+    s.mail(H, 'dsh/2772468a', 'x'.repeat(5000))
+    const [row] = s.readMailbox(H).mail
+    expect(row!.text).toHaveLength(MAILBOX_TEXT_CAP)
+    expect(row).toMatchObject({ truncated: true, chars: 5000, seq: 1 })
+    s.mail(H, 'dsh/2772468a', 'short')
+    expect(s.readMailbox(H).mail[0]!.truncated).toBeUndefined()
+    expect(s.mailStats().truncated).toBe(1)
+  })
+
+  it('seq, epoch and the counters survive a restart; a fresh store gets a new epoch', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli113-'))
+    const a = store(dir).s
+    for (let i = 1; i <= 66; i += 1) a.mail(H, 'dsh/2772468a', `m${String(i)}`)
+    const before = a.readMailbox(H)
+    const b = store(dir).s
+    const after = b.readMailbox(H)
+    expect(after).toMatchObject({ epoch: before.epoch, next_seq: 67, oldest_seq: 3, dropped: 2 })
+    b.mail(H, 'dsh/2772468a', 'next')
+    expect(b.readMailbox(H).mail[0]!.seq).toBe(67)
+    expect(store().s.readMailbox(H).epoch).not.toBe(before.epoch)
+  })
+
+  it('a pre-gh#113 snapshot (no seq) is numbered oldest first on restore', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli113-legacy-'))
+    writeFileSync(join(dir, 'deposits.json'), JSON.stringify({
+      deposits: [], mailbox: { [H]: [{ at: 3, from: 'x', text: 'newest' }, { at: 2, from: 'x', text: 'middle' }, { at: 1, from: 'x', text: 'oldest' }] },
+    }))
+    const { s } = store(dir)
+    expect(s.readMailbox(H).mail.map(m => [m.seq, m.text])).toEqual([[3, 'newest'], [2, 'middle'], [1, 'oldest']])
+    s.mail(H, 'x', 'later')
+    expect(s.readMailbox(H)).toMatchObject({ next_seq: 5, oldest_seq: 1 })
   })
 })

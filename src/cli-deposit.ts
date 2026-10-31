@@ -14,6 +14,7 @@
  * and holds a mailbox for inbound deliveries (receipts land here; the CLI
  * polls while alive).
  */
+import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { verifyCard } from './card.ts'
@@ -53,18 +54,52 @@ export interface CliMail {
   readonly at: number
   readonly from: string
   readonly text: string
+  /**
+   * gh#113: the entry's place in its handle's mailbox — 1, 2, 3, … in
+   * arrival order, never reused, kept across restarts. A reader that keeps
+   * the last seq it read sees exactly what is new, and any gap below
+   * `oldest_seq` is mail the cap pushed out before it was read.
+   */
+  readonly seq: number
+  /** gh#113: set when `text` was cut to MAILBOX_TEXT_CAP; `chars` is the original length. */
+  readonly truncated?: true
+  readonly chars?: number
+}
+
+/** gh#113: one mailbox read — the rows plus what a reader needs to notice loss. */
+export interface CliMailbox {
+  /** Newest first, as before gh#113. */
+  readonly mail: readonly CliMail[]
+  /** Changes when the store starts empty (no snapshot, or a corrupt one): seq restarted at 1. */
+  readonly epoch: string
+  /** The seq the next delivery will get; `next_seq - 1` is the newest ever written. */
+  readonly next_seq: number
+  /** The oldest seq still held, or `next_seq` when the mailbox is empty. */
+  readonly oldest_seq: number
+  /** Entries the cap pushed out for this handle, all time. */
+  readonly dropped: number
 }
 
 interface Snapshot {
   deposits: CliDeposit[]
   mailbox: Record<string, CliMail[]>
+  /** gh#113: absent in pre-gh#113 snapshots. */
+  epoch?: string
+  nextSeq?: Record<string, number>
+  dropped?: Record<string, number>
+  truncated?: Record<string, number>
 }
 
-const MAILBOX_CAP = 64
+export const MAILBOX_CAP = 64
+export const MAILBOX_TEXT_CAP = 4000
 
 export class CliDepositStore {
   private deposits = new Map<string, CliDeposit>()
   private mailbox = new Map<string, CliMail[]>()
+  private nextSeq = new Map<string, number>()
+  private dropped = new Map<string, number>()
+  private truncated = new Map<string, number>()
+  private epoch = randomUUID().slice(0, 8)
   private now: () => number
 
   constructor(private readonly path: string, options?: { now?: () => number }) {
@@ -158,13 +193,41 @@ export class CliDepositStore {
 
   mail(handle: string, from: string, text: string): void {
     const list = this.mailbox.get(handle) ?? []
-    list.unshift({ at: this.now(), from, text: text.slice(0, 4000) })
+    const seq = this.nextSeq.get(handle) ?? 1
+    this.nextSeq.set(handle, seq + 1)
+    const cut = text.length > MAILBOX_TEXT_CAP
+    if (cut) this.truncated.set(handle, (this.truncated.get(handle) ?? 0) + 1)
+    list.unshift({ at: this.now(), from, text: cut ? text.slice(0, MAILBOX_TEXT_CAP) : text, seq, ...(cut ? { truncated: true as const, chars: text.length } : {}) })
+    // gh#113: the cap still holds, but what it pushes out is counted, not lost silently.
+    if (list.length > MAILBOX_CAP) this.dropped.set(handle, (this.dropped.get(handle) ?? 0) + list.length - MAILBOX_CAP)
     this.mailbox.set(handle, list.slice(0, MAILBOX_CAP))
     this.persist()
   }
 
   readMail(handle: string): readonly CliMail[] {
     return [...(this.mailbox.get(handle) ?? [])]
+  }
+
+  /** gh#113: the mailbox with its seq bounds and loss counter; `afterSeq` keeps only newer rows. */
+  readMailbox(handle: string, afterSeq?: number): CliMailbox {
+    const all = this.mailbox.get(handle) ?? []
+    const next = this.nextSeq.get(handle) ?? 1
+    return {
+      mail: afterSeq === undefined ? [...all] : all.filter(m => m.seq > afterSeq),
+      epoch: this.epoch,
+      next_seq: next,
+      oldest_seq: all.length === 0 ? next : all[all.length - 1]!.seq,
+      dropped: this.dropped.get(handle) ?? 0,
+    }
+  }
+
+  /** gh#113: fleet-wide loss counters for the state face (the team verifier reads them). */
+  mailStats(): { dropped: number; truncated: number } {
+    let dropped = 0
+    let truncated = 0
+    for (const n of this.dropped.values()) dropped += n
+    for (const n of this.truncated.values()) truncated += n
+    return { dropped, truncated }
   }
 
   private sweep(): void {
@@ -194,7 +257,10 @@ export class CliDepositStore {
   private persist(): void {
     const mailbox: Record<string, CliMail[]> = {}
     for (const [handle, list] of this.mailbox) mailbox[handle] = [...list]
-    const snapshot: Snapshot = { deposits: [...this.deposits.values()], mailbox }
+    const snapshot: Snapshot = {
+      deposits: [...this.deposits.values()], mailbox, epoch: this.epoch,
+      nextSeq: Object.fromEntries(this.nextSeq), dropped: Object.fromEntries(this.dropped), truncated: Object.fromEntries(this.truncated),
+    }
     try {
       mkdirSync(join(this.path, '..'), { recursive: true })
       writeFileSync(this.path, JSON.stringify(snapshot), 'utf8')
@@ -212,8 +278,21 @@ export class CliDepositStore {
           this.deposits.set(row.handle, row as CliDeposit)
         }
       }
+      if (typeof snapshot.epoch === 'string' && snapshot.epoch !== '') this.epoch = snapshot.epoch
+      const counts = (record: unknown, into: Map<string, number>): void => {
+        for (const [handle, n] of Object.entries(record ?? {})) if (typeof n === 'number' && Number.isInteger(n) && n >= 0) into.set(handle, n)
+      }
+      counts(snapshot.nextSeq, this.nextSeq)
+      counts(snapshot.dropped, this.dropped)
+      counts(snapshot.truncated, this.truncated)
       for (const [handle, list] of Object.entries(snapshot.mailbox ?? {})) {
-        if (Array.isArray(list)) this.mailbox.set(handle, list.filter(m => m !== null && typeof m === 'object'))
+        if (!Array.isArray(list)) continue
+        const rows = list.filter((m): m is CliMail => m !== null && typeof m === 'object')
+        // A pre-gh#113 snapshot has no seq: number its rows oldest first, after any seq it knew.
+        let next = Math.max(this.nextSeq.get(handle) ?? 1, ...rows.map(m => (typeof m.seq === 'number' ? m.seq + 1 : 1)))
+        const numbered = [...rows].reverse().map(m => (typeof m.seq === 'number' ? m : { ...m, seq: next++ })).reverse()
+        this.mailbox.set(handle, numbered)
+        this.nextSeq.set(handle, Math.max(next, ...numbered.map(m => m.seq + 1)))
       }
       this.sweep()
     } catch {

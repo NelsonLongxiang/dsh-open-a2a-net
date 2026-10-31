@@ -4,10 +4,10 @@
   "scope": "Committed source only; no deployment inference",
   "sources": {
     "src/index.ts": "7162d4cfb586d0178041803c33b8cc6ace3804a00f41ceae6092a2586ba7f8ea",
-    "src/faces/admin.ts": "6d3bd09c230d35c29a58a95b1df8b181f17f6d1d63c9f74c47636db54f079013",
+    "src/faces/admin.ts": "79bdf83e5a0866507e7e249b25d5c999c1a1fba9d5fc11509ed4d72d424ffb16",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
-    "src/cli-deposit.ts": "3d6b63bed2bc418f7d927c27b7bb6c81f712de1997f5327ce07509257205ec42",
+    "src/cli-deposit.ts": "0a920ff3f0a9cfdd6f5ad5ccd8afde3fc20b5452000d6b04de4cedbde9c2a6da",
     "nexus-stage/src/workbench.ts": "fbfe7cf0062fbd7adc5db5650f37bb508308e7580ea08ae6434e45d82a11eb93",
     "nexus-stage/src/federation.ts": "d499312360a0ee4ddc5fa42f45675bfe0dba4f68c40e976c38036f8f06150148",
     "nexus-stage/src/planning-relayout.ts": "7ce77ba2bc95fcbee62af752f22969b726511d8988133e74123a5e04a7a6a571",
@@ -116,7 +116,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:435",
+      "ref": "src/faces/admin.ts:439",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
@@ -182,7 +182,7 @@
     {
       "page": "p1-arch",
       "cell": "d9",
-      "ref": "src/cli-deposit.ts:22",
+      "ref": "src/cli-deposit.ts:23",
       "expect": "export const CLI_DEPOSIT_TTL_MS = 4 * 60 * 60 * 1000"
     },
     {
