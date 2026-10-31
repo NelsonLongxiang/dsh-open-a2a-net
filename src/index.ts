@@ -2734,7 +2734,7 @@ ${message}`
       joinedSessions,
       idempotencyStore,
       verifyOriginClaim,
-      callerLinkedToThisHost,
+      callerLinkedToThisHost, get ownCardUrl() { return ownCardUrl },
       recordActivity,
       bumpLegacyInbound: () => { legacyInboundCount += 1 },
       secretEqual,

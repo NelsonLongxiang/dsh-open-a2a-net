@@ -23,7 +23,7 @@ export type CanvasAction =
   | { type: 'create-team'; name: string; ids: readonly string[]; /** true when the model had no such team before this action; NOT server creation provenance and never authority to delete on failure. */ created?: boolean }
   | { type: 'add-member'; team: string; ids: readonly string[]; /** gh#41: set when the target frame is a REMOTE peer's team — the wire routes the op through the host fleet relay. */ fleetPeer?: string }
   | { type: 'remove-member'; team: string; ids: readonly string[]; /** gh#41: see add-member. */ fleetPeer?: string }
-  | { type: 'remove-team'; name: string }
+  | { type: 'remove-team'; name: string; /** set when the frame is a REMOTE peer's team: the owner dissolves it, through the relay. */ fleetPeer?: string }
   /** `ops` comes from reorderOps() at emit time; the wire stays model-free. */
   | { type: 'reorder'; team: string; ops: ReadonlyArray<RosterOp> }
   /** Network-level join/leave (the session joins the A2A mesh) — distinct from canvas-team membership. */
