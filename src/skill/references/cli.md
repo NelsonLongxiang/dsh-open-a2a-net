@@ -61,12 +61,27 @@ ten model tools.
 
 - Deliveries addressed to a deposited handle, receipts included, land in its
   mailbox on the home host and answer `receipt: "mailbox"`. Entries are
-  `{at, from, text}` (text ≤4000 chars), newest first, 64 kept. A read does
-  not remove anything.
+  `{at, from, text, seq}`, newest first, 64 kept. A read does not remove
+  anything.
+- `seq` numbers a handle's mail 1, 2, 3 … in arrival order. It is never
+  reused and survives restarts. The read also carries `epoch`; `next_seq`;
+  `oldest_seq`; and `dropped`, the count of mail the 64-row cap pushed out.
+  `epoch` changes whenever seq numbers could repeat: the store starts empty,
+  its snapshot is unreadable or renumbered, or a write to disk failed (the
+  next restart would reload older numbers).
+- Text over 4000 chars is cut and marked `truncated: true, chars: <original>`.
+- The host's state face totals both losses for every handle as
+  `cliMailbox: {dropped, truncated}`.
 - `a2a-net inbox` lists the whole mailbox.
 - `inbox --new [--peek]` shows unread mail, oldest first. "Unread" is a local
   cursor (`$A2A_CLI_HOME/inbox.cursor`, tied to the handle) that advances
-  unless `--peek`.
+  unless `--peek`. On a host with `seq` the cursor is the last seq read:
+  - Mail the cap pushed out before you read it is reported once, by
+    `--new`, `--wait` and `--hook` alike (stderr, or inside the hook frame):
+    `N messages were pushed out of the mailbox before they were read`. It
+    cannot be recovered; tell the user.
+  - On an older host, or after the store starts over (a new `epoch`), the
+    cursor falls back to the newest `at` seen.
 - `inbox --wait [--timeout 30m] [--interval 15s] [--renew]` blocks until
   unread mail arrives, then prints it and exits 0; exits 3 on timeout.
   `--renew` re-publishes the deposit when it is gone or under 10 minutes from
