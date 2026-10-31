@@ -690,6 +690,18 @@ describe('a2a-net CLI: route carries its own task id and resends it safely (gh#1
     expect(unsigned?.headers['x-a2a-caller-sig']).toBeUndefined()
     expect(unsigned?.body.task_id).toBe(signed?.body.task_id)
     expect(host.direct()).toHaveLength(2)
+    // The downgrade is said out loud (review of PR #135 P2).
+    expect(out.stderr).toContain('resending once unsigned')
+  })
+
+  it('review of PR #135 P2: a --sync reply that merely quotes the not-derivable text is not a refusal', async () => {
+    const quoting = { status: 200, body: { routed: true, team: 'ops', result: { text: 'it said: untrusted-origin: OriginClaim verification failed (not-derivable)' }, task_id: 'direct-x', task_status: 'TASK_STATE_COMPLETED' } }
+    const host = await scriptedHost([quoting])
+    const HOME = await scoutHome()
+    const out = await runCli(['route', 'ops', 'hi', '--sync'], fast(HOME, host.url))
+    expect(out.code).toBe(0)
+    expect(host.direct()).toHaveLength(1)
+    expect(out.stderr).toBe('')
   })
 
   it('a malformed --task is a usage error', async () => {

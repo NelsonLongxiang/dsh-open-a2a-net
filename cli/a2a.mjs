@@ -565,6 +565,17 @@ const RETRY_DELAYS_MS = (() => {
   return [unit, unit * 2, unit * 4]
 })()
 
+/** A refusal of the envelope itself as not derivable — never a reply that merely quotes that text. */
+function notDerivable(text) {
+  try {
+    const out = JSON.parse(text)
+    return out !== null && typeof out === 'object' && out.routed !== true && out.delivered !== true &&
+      typeof out.error === 'string' && out.error.startsWith('untrusted-origin: OriginClaim verification failed (not-derivable)')
+  } catch {
+    return false
+  }
+}
+
 /** Resends ran out: the task may or may not have landed, and the same id is the safe way to try again. */
 function notConfirmed(body, attempt) {
   console.error(`[${String(body.task_id)}] not confirmed after ${String(attempt + 1)} attempt${attempt === 0 ? '' : 's'} — resend safely with: --task ${String(body.task_id)}${body.wait === true ? ' --sync' : ''}`)
@@ -589,7 +600,8 @@ async function postDirect(body) {
       // refusal comes before the host records the task id, so resending the
       // same id unsigned once — as every older CLI sent — is safe: it rides
       // the OriginClaim window exactly as before.
-      if (signed && res.status === 200 && (await res.clone().text()).includes('OriginClaim verification failed (not-derivable)')) {
+      if (signed && res.status === 200 && notDerivable(await res.clone().text())) {
+        console.error(`[${String(body.task_id)}] the host cannot verify this identity's signature (not-derivable: an older host, or a home address it cannot map) — resending once unsigned; it is accepted only while the host's OriginClaim window is open`)
         signed = false
         attempt -= 1
         continue

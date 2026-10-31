@@ -61,14 +61,15 @@ describe('gh#133 CLI OriginClaim (real host)', () => {
       expect(out.code, out.stderr).toBe(0)
       const state = await globalThis.fetch(`${a.baseUrl}/__dsh_a2a/state`).then(async r => await r.json()) as { legacyInbound: number; tasks: Array<Record<string, any>>; archived?: Array<Record<string, any>> }
       const row = [...state.tasks, ...(state.archived ?? [])].find(t => t.taskId === 'direct-gh133000001')
-      expect(row?.auth).toMatchObject({ caller: HANDLE, proof: 'origin-claim', claim: { caller: 'ops-cli', origin: new URL(a.baseUrl).origin }, via: 'cli-deposit' })
+      // The claim names the full handle, so it covers exactly this identity (review of PR #135 P1).
+      expect(row?.auth).toMatchObject({ caller: HANDLE, proof: 'origin-claim', claim: { caller: HANDLE, origin: new URL(a.baseUrl).origin }, via: 'cli-deposit' })
       expect(state.legacyInbound).toBe(legacyBefore)
     } finally {
       await a.dispose()
     }
   }, 60_000)
 
-  it('the derivation stays narrow: wrong key, a wrong name, a look-alike card under another key, and the canvas face all refuse', async () => {
+  it('the derivation stays narrow: wrong key, a wrong name, a look-alike card under another key, and the canvas and log faces all refuse', async () => {
     const a = await bootNode({ name: 'A', session: 'mesh-gh133-b', team: 'dsh', sessionNodes: true, teamScopeRouting: true, port: await reservePort(), home: tmpHome() })
     try {
       expect((await post(`${a.baseUrl}/__dsh_a2a/join`, { id: 'session-0123456789abcdef' })).status).toBe(200)
@@ -86,19 +87,65 @@ describe('gh#133 CLI OriginClaim (real host)', () => {
       expect(String((await deliver(sign(other, 'ops-cli', face), 'direct-gh133-k')).error)).toMatch(/OriginClaim verification failed \(bad-sig\)/)
       // A name that is not the handle's own: not derivable.
       expect(String((await deliver(sign(privateKey, 'someone', face), 'direct-gh133-n')).error)).toMatch(/\(not-derivable\)/)
-      // Another origin's look-alike face serving a card for the same handle under ANOTHER key: not the deposit, not derivable.
+      // Another origin's look-alike face serving a card for the same handle under ANOTHER key: the host never
+      // fetches it — the deposited card decides, so the other key's signature fails.
       const lookalike = signCard({ name: 'ops-cli', session: 'cli-ops-cli', team: HANDLE, capabilities: { route: true, async: true }, expiresAt: Date.now() + 172_800_000 }, other)
       const mirror = createServer((_req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(lookalike)) })
       await new Promise<void>(resolve => mirror.listen(0, '127.0.0.1', () => resolve()))
       try {
         const foreignFace = `http://127.0.0.1:${String((mirror.address() as { port: number }).port)}/a2a/cli/${encodeURIComponent(HANDLE)}`
-        expect(String((await deliver(sign(other, 'ops-cli', foreignFace), 'direct-gh133-o')).error)).toMatch(/\(not-derivable\)/)
+        expect(String((await deliver(sign(other, 'ops-cli', foreignFace), 'direct-gh133-o')).error)).toMatch(/\(bad-sig\)/)
       } finally {
         mirror.close()
       }
-      // The canvas face does not accept CLI derivation (only delivery and log do).
+      // The canvas face does not accept CLI derivation (only delivery does).
       const op = await post(`${a.baseUrl}/a2a/canvas-op`, { op: 'create', name: 'x' }, sign(privateKey, 'ops-cli', face))
       expect(String(op.body.error)).toMatch(/OriginClaim verification failed \(not-derivable\)/)
+    } finally {
+      await a.dispose()
+    }
+  }, 60_000)
+
+  it('review of PR #135: a namesake CLI cannot claim another handle, no CLI may take the zone\'s name, and an unreachable home address still verifies', async () => {
+    const a = await bootNode({ name: 'A', session: 'mesh-gh133-c', team: 'dsh', sessionNodes: true, teamScopeRouting: true, port: await reservePort(), home: tmpHome() })
+    try {
+      expect((await post(`${a.baseUrl}/__dsh_a2a/join`, { id: 'session-0123456789abcdef' })).status).toBe(200)
+      const keyA = generateKeyPairSync('ed25519').privateKey
+      const keyB = generateKeyPairSync('ed25519').privateKey
+      const handleA = 'ops-cli/aaaaaaaaaaaaaaaa'
+      const handleB = 'ops-cli/bbbbbbbbbbbbbbbb'
+      for (const [handle, key] of [[handleA, keyA], [handleB, keyB]] as const) {
+        const card = signCard({ name: 'ops-cli', session: 'cli-ops-cli', team: handle, capabilities: { route: true, async: true }, expiresAt: Date.now() + 172_800_000 }, key)
+        expect((await post(`${a.baseUrl}/__dsh_a2a/cli-deposit`, { action: 'publish', card: JSON.stringify(card) })).body.ok).toBe(true)
+      }
+      const rows = async (): Promise<Array<Record<string, any>>> => {
+        const state = await globalThis.fetch(`${a.baseUrl}/__dsh_a2a/state`).then(async r => await r.json()) as { tasks: Array<Record<string, any>>; archived?: Array<Record<string, any>> }
+        return [...state.tasks, ...(state.archived ?? [])]
+      }
+      // P1-a: A signs over its own face but names B as caller_session: delivered (B is deposited), never proven as B.
+      const faceA = `${a.baseUrl}/a2a/cli/${encodeURIComponent(handleA)}`
+      const namesake = await post(`${a.baseUrl}/a2a/direct`, { team: TARGET, message: 'as B', caller_session: handleB, wait: false, task_id: 'direct-gh133-ns' }, sign(keyA, 'ops-cli', faceA))
+      expect(namesake.body.delivered, JSON.stringify(namesake.body)).toBe(true)
+      expect((await rows()).find(t => t.taskId === 'direct-gh133-ns')?.auth).toMatchObject({ caller: handleB, proof: 'claim-mismatch', claim: { caller: handleA } })
+
+      // P1-b: a CLI named after this host's zone is refused at deposit.
+      const zoneKey = generateKeyPairSync('ed25519').privateKey
+      const zoneCard = signCard({ name: 'dsh', session: 'cli-dsh', team: 'dsh/cccccccccccccccc', capabilities: { route: true }, expiresAt: Date.now() + 172_800_000 }, zoneKey)
+      const zoneDeposit = await post(`${a.baseUrl}/__dsh_a2a/cli-deposit`, { action: 'publish', card: JSON.stringify(zoneCard) })
+      expect(zoneDeposit.body.ok).toBe(false)
+      expect(String(zoneDeposit.body.error)).toMatch(/may not be named after this host's zone/)
+
+      // P1-c: a home address the host cannot dial back (a proxy behind a cookie, a tailnet IP): still origin-claim.
+      const unreachable = `http://127.0.0.1:1/behind/a/proxy/a2a/cli/${encodeURIComponent(handleA)}`
+      const far = await post(`${a.baseUrl}/a2a/direct`, { team: TARGET, message: 'via proxy', caller_session: handleA, wait: false, task_id: 'direct-gh133-px' }, sign(keyA, 'ops-cli', unreachable))
+      expect(far.body.delivered, JSON.stringify(far.body)).toBe(true)
+      expect((await rows()).find(t => t.taskId === 'direct-gh133-px')?.auth).toMatchObject({ caller: handleA, proof: 'origin-claim', claim: { caller: handleA } })
+
+      // The log face no longer accepts CLI derivation (least privilege: the CLI never reads it).
+      const log = await globalThis.fetch(`${a.baseUrl}/a2a/log?id=session-0123456789abcdef&caller_session=${encodeURIComponent(handleA)}`, { headers: sign(keyA, 'ops-cli', faceA) })
+        .then(async r => await r.json() as Record<string, any>)
+      expect(log.ok).toBe(false)
+      expect(String(log.error)).toMatch(/OriginClaim verification failed \(not-derivable\)/)
     } finally {
       await a.dispose()
     }

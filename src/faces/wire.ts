@@ -321,8 +321,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
       }
       // gh#9+gh#10: the log face reuses the exact OriginClaim
       // verification (§8.3) — same window semantics as delivery.
-      // gh#133: a deposited CLI identity may read the log face it already uses.
-      const logClaim = await verifyOriginClaim(req, { cli: true })
+      const logClaim = await verifyOriginClaim(req)
       if (!logClaim.ok) {
         if (logClaim.reason !== 'absent' || config.originClaimWindow === false) {
           recordActivity('in', 'log', caller, false)
