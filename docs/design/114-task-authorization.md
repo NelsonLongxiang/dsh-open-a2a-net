@@ -148,7 +148,7 @@ interface TaskAuthorization {
   readonly receipt_target: string
   /** 出生时刻（epoch ms）。 */
   readonly received_at: number
-  /** 投递时目标是否正在跑别的 turn（wire.ts:620 runningBeforeSteer），§4.3 用。 */
+  /** 投递时目标是否正在跑别的 turn（wire.ts:620 runningBeforeSteer）。仅审计事实，不参与 §4.3 判定。 */
   readonly target_busy?: true
 }
 ```
@@ -156,7 +156,7 @@ interface TaskAuthorization {
 与 issue 建议的 `{caller, via, admission_rule, allowlist_version, received_at}` 相比，多出的字段各有用途：
 `proof`/`claim` 让结算判定分得清"签过名的身份"与"自报标签"；`basis` 让 §5 能判断哪一次名单变化
 真正影响到这条任务；`target`/`receipt_target` 让 §4 的授权链不依赖行上其他可变字段；`target_busy`
-给 §4.3。
+留作审计：事后能看出投递时目标是否正忙（不参与 §4.3 判定，见评审 @8a961dc P2）。
 
 ### 2.2 `via` 与 `admission_rule`——由真实分支导出的封闭集
 
@@ -212,6 +212,11 @@ allowlist_version = "al1:" + sha256(canonicalJSON(inputs)).slice(0, 16)
 
 规范化 JSON：键按上表固定顺序、数组排序、无空白，规则写成 `src/task-auth.ts` 里的唯一实现，
 并用黄金向量单测钉死（同 `peerPayloadFingerprint` "一处实现" 的纪律）。
+
+**`cli` 带来的版本抖动在预期之内**：CLI 户口最长 4h 一续（`CLI_DEPOSIT_TTL_MS`，`cli-deposit.ts:22`），
+过期与重新上线都会改变集合，从而改变版本、触发 §5。这是有意为之：户口下线正是"发送方是否仍在名单上"的事实变化。
+两条约束保证它不成为噪声：**同一句柄在过期前续期不改变集合**（集合只含句柄，不含 `expiresAt`），版本不变；
+**版本未变时 §5 零产出**。
 
 ### 2.4 写入点（唯一写者）与不可变性
 
@@ -288,6 +293,9 @@ interface Settler {
 2. 幂等结果写入 `recordOutcome`（`index.ts:1017`）——**只在本机台账有该 id 的行且判定合格时写**；
    没有行（纯认领侧）时不写，`/a2a/query` 继续如实答 `pending`。这堵住"任何人发一句回执就改写别人
    `queryOutcome` 答案"的口子。`queryOutcome` / `/a2a/query` 的线协议不变。
+   **此门控只管"回执钩子"这一个写入方**（`settleAndAnnounce` 里的 `recordOutcome`）。宿主自己在认领侧的
+   结果写入不经过回执路径，不受此门控：flood-guard 拒绝时记 `failed`（`flood-guard.ts:95`），以及 #115 新增的
+   `refuseNoWait` 对异步拒绝记 `failed`。它们的写入方就是本机，没有"结算方"可比对。
 3. CLI 信箱分流（§4.5）。
 
 ### 4.3 自动回执的 turn 归属（#61 的直接成因）
@@ -295,11 +303,19 @@ interface Settler {
 授权链只回答"谁有资格结"。#61 里结算方本身有资格（目标宿主的进程面），错在**拿错了 turn 的文本**。
 补两条规则：
 
-- **归属**：`armReceiptAutosend` 接收 `target_busy`（= `runningBeforeSteer`）。目标投递前正忙时，
-  steer 会排在当前 turn 之后才被消费，所以**当前 turn 的 final 不归属本任务**：跳过第一次 final，
-  在下一次 final 上合成回执（最多跳一次；再无 final 则走既有 flush 超时的占位路径，占位不产出回执，
-  `index.ts:2178`）。`flushFinals` 一次回答全部 waiter 的行为（`:5466`）也要改为：只回答
-  `sinceEvents` 不晚于该 final 所在 turn 起点的 waiter。
+- **归属锚点 = steer 被消费的事件**，而不是"投递时目标忙不忙"。DSH 把 steer 投给正在运行的 turn 时，
+  会在该 turn 的**下一步**消费它，未必排到下一个 turn；所以"目标忙 → 跳过当前 final"会吞掉真正的答复。
+  如果之后再没有 final，就会走 flush 超时的占位路径（`index.ts:2178`），**不产出回执**。（评审 @8a961dc P2）
+  - 消费点：steer 落成目标 Session 的一条 `user/message` 事件（`src/invariant.ts:15-17`：relay 消息即普通
+    `user/message`），正文以 wire 面写入的头部 `[A2A direct] (task <id>)` 开头（`wire.ts:621`）。waiter 记下自己的
+    `taskId`，在 `sessionEventsOf(agent)` 中定位**带该头部的那条 `user/message`**，其下标即该 waiter 的
+    `consumedAt`。注意：今天的 `probeConsumption`（`index.ts:2041-2048`）只读 `agent.status`，**不看事件**，
+    S5 需要新增这一定位，而不是复用探针。
+  - 规则：只有 `consumedAt` **之后的第一条** assistant final 归属本任务；消费事件尚未出现时，该 waiter 不被任何
+    final 回答（继续挂起，flush 超时语义不变）。
+  - `flushFinals`（`:5440`）不再用全体 waiter 的最小 `sinceEvents` 取一条 final、一次答全部（`:5453-5468`），
+    而是**逐 waiter** 从各自的 `consumedAt` 往后找第一条 final；找到的答复、未找到的留下。
+  - `target_busy` 只保留在 `auth` 里作审计事实，**不参与判定**。
 - **绑定**：自动回执的信封追加两个键：`onBehalfOf`（目标句柄）与 `authRef`（入站授权记录的
   `sha256(canonicalJSON(auth)).slice(0,16)`）。`receipt.ts` 的信封是追加式的（`:31-34`，未知键被忽略），
   旧解析器不受影响。接收方用 `onBehalfOf` 判 `host-face`；`authRef` 先只记录，供审计对账。
@@ -327,15 +343,15 @@ interface Settler {
 
 wire 面先结算再分流到 CLI 信箱（`wire.ts:572` → `:577`）；本机候选先分流后结算（`index.ts:4516` → `:4531`），
 **投进本机 CLI 信箱的回执不结算任何行**。CLI 发出的任务在宿主上只有入站行，所以它的结算恰恰该在这里发生。
-本设计把本机候选的结算移到 CLI 分流之前，与 wire 面一致，并在信箱行上记结算判定（与 #113 的信箱行 id
-合并设计：信箱行增加 `taskId?` 与 `settlement?`）。
+本设计把本机候选的结算移到 CLI 分流之前，与 wire 面一致，并在信箱行上记结算判定：#117 的信箱行已带 `seq`，
+`taskId?` 与 `settlement?` **直接加在那一行上**，不另立结构。
 
 ### 4.6 放到 #61 上会怎样
 
 | 步骤 | 今天 | 本设计 |
 |---|---|---|
 | 投递 | 入站行只有 `peer=local:review-seat/f62b…` | `auth = {caller: review-seat/f62b…, proof: origin-claim, ingress: wire, via: cli-deposit, admission_rule: cli-deposit, target: dsh/414d2b90, receipt_target: review-seat/f62b…, target_busy: true, …}` |
-| 目标在另一条工作线上完成一个 turn | 该 turn 的 final 被当成 bb27ec94 的答复 | `target_busy` → 跳过该 final；回执等到真正消费 bb27ec94 的 turn |
+| 目标在另一条工作线上完成一个 turn | 该 turn 的 final 被当成 bb27ec94 的答复 | 只认 bb27ec94 的 steer 消费事件之后的第一条 final：若该 turn 在消费 steer 之前就结束，它的 final 不归属；若在同一 turn 内消费，消费之后的 final 才是答复 |
 | 宿主发 `(auto)` 回执 | 内容无关、`completed` | 内容来自正确 turn，信封带 `onBehalfOf: dsh/414d2b90`、`authRef` |
 | 若有别的会话发出 `[A2A receipt] task direct-bb27ec94` | 照样结算 | `settler-off-chain` 拒绝、入环、可见 |
 | 事后审计 | 无法回答 | 归档行有 `settledBy:{caller, chain_role}`，入站行有完整授权 |
@@ -399,9 +415,9 @@ wire 面先结算再分流到 CLI 信箱（`wire.ts:572` → `:577`）；本机�
 | S2 | 入站授权记录：wire 面与本机候选在出生时挂 `auth`；台账持久化/恢复/归档带 `auth`；`auth-versions.json`；`/state` 投影 | **高**（台账） | 升级后新生入站行 `auth` 覆盖率 100%；`restore` 往返与坏块丢弃测试；旧 `tasks.json` 原样加载 |
 | S3 | 出站 `sender`：`trackOwedTask` 三处调用传入；`/state`、`a2a_tasks`、CLI `a2a tasks` 显示 | **高**（台账） | 升级后新生出站行 `sender` 覆盖率 100%；团队验证器 L9 改按 `sender.id`/`auth.caller` 分桶，**"home" 桶 = 0**（`legacy` 桶单列，24h 后为 0） |
 | S4 | 结算判定（`observe` 默认）：`settleAndAnnounce(message, settler)`；授权链；`settledBy` 入归档；`settlementRefusals` 环；`recordOutcome` 门控；本机 CLI 信箱路径结算顺序对齐 | **高**（协议+台账） | 各原因码单测；`observe` 下现有测试零改动通过；**评审席团队验证器新判据："结算方不在授权链上的结算数 = 0"**（数据源：`/state` 归档行 `settledBy.chain_role === 'off-chain'` 计数 + `settlementRefusals` 中 `would-refuse` 计数，两者均为 0 才算通过） |
-| S5 | 自动回执 turn 归属与绑定：`target_busy` 透传、跳过首个 final、`flushFinals` 按 turn 回答、信封 `onBehalfOf`/`authRef` | **高**（协议） | #61 形态回归测试：目标忙时回执文本来自消费该任务的 turn；新键对旧解析器无影响（`receipt-envelope-v2.spec.ts` 扩例） |
+| S5 | 自动回执 turn 归属与绑定：waiter 按 steer 头部定位自己的消费事件（`consumedAt`）；`flushFinals` 逐 waiter 从 `consumedAt` 之后取第一条 final；信封 `onBehalfOf`/`authRef`；`target_busy` 仅审计 | **高**（协议） | 两条回归：**(a)** 目标正忙、steer 在同一 turn 内被消费 → 该 turn 的 final 产出回执；**(b)** 目标正忙、steer 到下一 turn 才被消费 → 当前 turn 的 final 不产出回执，下一 turn 的 final 产出。另：新键对旧解析器无影响（`receipt-envelope-v2.spec.ts` 扩例） |
 | S6 | 受影响任务清单（observe）：惰性 + 变更点触发；重判；`affectedTasks` 环 | 中 | 移除画布成员 → 出现 `would-revoke` 条目；断言**无任何行状态变化**；版本未变时零产出 |
 | S7 | `settlementAuth` 默认切 `enforce` | **高**，需属主裁定 | 三台主机均 ≥ S4/S5 版本；S4 判据连续 7 天为 0；`legacy` 计数为 0 |
 
-S1 与 S3 互不依赖、可并行；S2 依赖 S1；S4 依赖 S2+S3；S5 只依赖 S2（`target_busy` 记在 `auth` 上），可与 S4 并行；
-S6 依赖 S1+S2。S3/S4 的 CLI 部分与 #112/#113 同改 `cli/a2a.mjs`，排在协调席的 #112/#113 合入之后。
+S1 与 S3 互不依赖、可并行；S2 依赖 S1；S4 依赖 S2+S3；S5 只依赖 S2（`onBehalfOf`/`authRef` 取自 `auth`），可与 S4 并行；
+S6 依赖 S1+S2。S3/S4 的 CLI 部分与 #112/#113 同改 `cli/a2a.mjs`，排在协调席的 #112/#113 以及 #115、#117 合入之后。
