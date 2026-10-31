@@ -711,8 +711,11 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // #114 S2: the row is born with its immutable authorization record.
                 const auth = buildAuthorization(admission, {
                   caller,
-                  // A verified claim proves the caller only when its signed zone covers it (review of PR #134 P1).
-                  proof: claim.ok ? (claimCovers(caller, claim.caller) ? 'origin-claim' : 'claim-mismatch') : 'legacy-window',
+                  // A verified claim proves the caller only when its signed zone covers it (review of PR #134 P1),
+                  // and the host face only when it was signed from this very host (round 2: a zone name is not an origin).
+                  proof: !claim.ok ? 'legacy-window'
+                    : claimCovers(caller, claim.caller) && (admission.rule !== 'host-face' || originOf(claim.callerUrl) === originOf(d.ownCardUrl))
+                      ? 'origin-claim' : 'claim-mismatch',
                   ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}),
                   ingress: 'wire',
                   allowlistVersion: admittedAt.version,

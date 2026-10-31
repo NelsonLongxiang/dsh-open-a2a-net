@@ -131,6 +131,21 @@ describe('#114 S2 inbound authorization record (real host)', () => {
       expect((await rows()).find(t => t.taskId === 'direct-claim0002')?.auth).toMatchObject({
         caller: 'dsh', proof: 'claim-mismatch', claim: { caller: 'far' }, admission_rule: 'host-face',
       })
+
+      // Round 2: a card that self-signs THIS host's zone name from another origin is still not the host face.
+      const impostor = signCard({ name: 'dsh', session: 'imp-s', team: 'dsh', capabilities: { route: true }, expiresAt: Date.now() + 3_600_000 }, far)
+      const imp = createServer((_req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(impostor)) })
+      await new Promise<void>(resolve => imp.listen(0, '127.0.0.1', () => resolve()))
+      try {
+        const impUrl = `http://127.0.0.1:${String((imp.address() as { port: number }).port)}`
+        const ts = Date.now()
+        const env = { 'X-A2A-Caller': 'dsh', 'X-A2A-Caller-Url': impUrl, 'X-A2A-Caller-Ts': String(ts), 'X-A2A-Caller-Sig': edSign(undefined, Buffer.from(JSON.stringify(['dsh', impUrl, ts])), far).toString('base64') }
+        const sent = await post(`${a.baseUrl}/a2a/direct`, { team: TARGET, message: 'impostor', caller_session: 'dsh', wait: false, task_id: 'direct-claim0003' }, env)
+        expect(sent.body.delivered, JSON.stringify(sent.body)).toBe(true)
+        expect((await rows()).find(t => t.taskId === 'direct-claim0003')?.auth).toMatchObject({ caller: 'dsh', proof: 'claim-mismatch', claim: { caller: 'dsh', origin: new URL(impUrl).origin }, admission_rule: 'host-face' })
+      } finally {
+        imp.close()
+      }
     } finally {
       await a.dispose()
       srv.close()

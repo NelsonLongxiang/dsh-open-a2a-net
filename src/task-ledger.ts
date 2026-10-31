@@ -150,9 +150,9 @@ function withSender(raw: unknown, direction: unknown): { sender?: Sender } {
  * row survives as a pre-S2 row, never with a partially adopted or borrowed
  * record.
  */
-function withAuth(raw: unknown, entry: { direction?: unknown; team?: unknown; peer?: unknown }): { auth?: TaskAuthorization } {
+function withAuth(raw: unknown, entry: { direction?: unknown; team?: unknown; peer?: unknown }, now: number): { auth?: TaskAuthorization } {
   if (entry.direction !== 'inbound') return {}
-  const auth = parseAuthorization(raw)
+  const auth = parseAuthorization(raw, now)
   if (auth === undefined || auth.target !== entry.team || `local:${auth.receipt_target}` !== entry.peer) return {}
   return { auth }
 }
@@ -781,7 +781,7 @@ export class TaskLedger {
               ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
               ...(entry.receiptExpected === false ? { receiptExpected: false as const } : {}),
               ...withSender(entry.sender, entry.direction),
-              ...withAuth(entry.auth, entry),
+              ...withAuth(entry.auth, entry, this.now()),
             })
             continue
           }
@@ -798,7 +798,7 @@ export class TaskLedger {
             ...(entry.receiptExpected === false ? { receiptExpected: false } : {}),
             // #114 S3: a malformed sender is dropped whole; the row survives.
             ...withSender(entry.sender, entry.direction),
-            ...withAuth(entry.auth, entry),
+            ...withAuth(entry.auth, entry, this.now()),
             status: entry.status === 'dead' ? 'dead' : 'pending',
             ...(entry.status === 'dead'
               ? {
@@ -830,7 +830,7 @@ export class TaskLedger {
             ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
             ...(entry.receiptExpected === false ? { receiptExpected: false as const } : {}),
             ...withSender(entry.sender, entry.direction),
-            ...withAuth(entry.auth, entry),
+            ...withAuth(entry.auth, entry, this.now()),
           })
         }
       }

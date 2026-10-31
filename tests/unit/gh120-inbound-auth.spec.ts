@@ -130,6 +130,17 @@ describe('#120 auth on ledger rows', () => {
     expect(new Map(second.archive().map(row => [row.taskId, row])).get('direct-r')?.auth).toEqual(AUTH)
   })
 
+  it('re-review P3: restore bounds received_at by the ledger\'s own clock, not the wall clock', () => {
+    const path = ledgerPath()
+    const ahead = Date.now() + 10 * 24 * 60 * 60 * 1000
+    const born = buildAuthorization({ ok: true, via: 'cli-deposit', rule: 'cli-deposit', basis: [] }, {
+      caller: 'ops-cli/a1b2c3d4e5f60718', proof: 'legacy-window', ingress: 'wire', allowlistVersion: 'al1:0123456789abcdef',
+      target: 'dsh/bbbbbbbb', receiptTarget: 'ops-cli/a1b2c3d4e5f60718', receivedAt: ahead,
+    })
+    new TaskLedger(path, { now: () => ahead }).trackInbound('direct-clock', 'dsh/bbbbbbbb', 'ops-cli/a1b2c3d4e5f60718', undefined, true, 'b', born)
+    expect(new TaskLedger(path, { now: () => ahead }).list()[0]?.auth).toEqual(born)
+  })
+
   it('restore drops a record that belongs to another row (target or receipt target differ)', () => {
     const path = ledgerPath()
     const good = JSON.parse(JSON.stringify(AUTH)) as Record<string, unknown>
