@@ -137,8 +137,9 @@ unbound form or the receiver stops accepting it. Rollout: upgrade every host, wa
 **Scope notes.**
 - The body is not signed; a body hash in the bound form is a possible
   later addition.
-- Hosts reachable at the same loopback origin (for example through tunnels
-  that end on the same local port) share an audience.
+- Hosts that answer at the same origin from different vantage points share
+  an audience: loopback (for example tunnels that end on the same local
+  port) or a private address reused on both sides.
 - A port-mapped or proxied host (the URL peers dial is not its card URL
   and not the address the request arrives on) must list that URL in
   `originClaimAudiences` or set `originClaimUrl`, or bound envelopes to it
