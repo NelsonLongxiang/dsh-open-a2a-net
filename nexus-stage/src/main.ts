@@ -154,28 +154,33 @@ const canvasWire = createCanvasWire({
   onNotice: (kind, text) => planning.notice(kind, text),
 })
 
+/** One relayed op on a REMOTE peer's team. THIS host signs the envelope
+ *  and forwards; the peer's link gate authorizes the write. */
+async function fleetOp(peer: string, op: 'add-member' | 'remove-member' | 'remove', name: string, id?: string): Promise<boolean> {
+  const r = await controlFetch('/__dsh_a2a/fleet-canvas-op', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ peer, op, name, ...(id !== undefined ? { id } : {}) }),
+    cache: 'no-store',
+  }).catch(() => undefined)
+  const body = r !== undefined ? await r.json().catch(() => undefined) : undefined
+  if (body?.ok === true) return true
+  // Say WHY the peer refused (not linked, untrusted origin, unknown member…), not just that it did.
+  planning.notice('error', `跨主机团队操作失败：${String(body?.error ?? '对端无响应')}`)
+  return false
+}
+
 function runCanvasAction(a: CanvasAction): Promise<boolean> {
-  // gh#41: a remote-frame drop forks to the fleet relay — THIS host signs
-  // the envelope and forwards; the peer's link gate authorizes the write.
+  // gh#41: a remote-frame drop forks to the fleet relay; so does dissolving
+  // a mirror frame (single owner + mirror: the owner's store is the truth).
   if ((a.type === 'add-member' || a.type === 'remove-member') && a.fleetPeer !== undefined) {
+    const peer = a.fleetPeer
     return (async () => {
-      for (const id of a.ids) {
-        const r = await controlFetch('/__dsh_a2a/fleet-canvas-op', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ peer: a.fleetPeer, op: a.type === 'add-member' ? 'add-member' : 'remove-member', name: a.team, id }),
-          cache: 'no-store',
-        }).catch(() => undefined)
-        const body = r !== undefined ? await r.json().catch(() => undefined) : undefined
-        if (body?.ok !== true) {
-          // Say WHY the peer refused (not linked, untrusted origin, unknown member…), not just that it did.
-          planning.notice('error', `跨主机团队操作失败：${String(body?.error ?? '对端无响应')}`)
-          return false
-        }
-      }
+      for (const id of a.ids) if (!(await fleetOp(peer, a.type, a.team, id))) return false
       return true
     })()
   }
+  if (a.type === 'remove-team' && a.fleetPeer !== undefined) return fleetOp(a.fleetPeer, 'remove', a.name)
   switch (a.type) {
     case 'create-team': return canvasWire.createTeam(a.name, a.ids, a.created)
     case 'add-member': return canvasWire.addMembers(a.team, a.ids)

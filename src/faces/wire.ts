@@ -179,7 +179,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
   }), 'a2a: cli deposit card face')
 
   // gh#41 fleet planning, peer-write face: a LINKED peer may regulate this
-  // host's canvas teams (create / add-member / remove-member) with a
+  // host's canvas teams (create / add-member / remove-member / remove) with a
   // VERIFIED OriginClaim envelope. The owner's ruling: any peer composes
   // and regulates the whole fleet — the bilateral/operator link IS the
   // authorization, the envelope proves the key, and every op lands in the
@@ -226,8 +226,12 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 : (canvasStore.create(name), { ok: canvasStore.addMember(name, id), members: canvasStore.membersOf(name) })
             } else if (op === 'remove-member') {
               payload = { ok: name !== '' && canvasStore.removeMember(name, id), members: name !== '' ? canvasStore.membersOf(name) : undefined }
+            } else if (op === 'remove') {
+              // Dissolve. Idempotent: a team already gone (another peer got
+              // there first) is the outcome the caller asked for.
+              payload = name === '' ? { ok: false, error: 'name is required' } : { ok: canvasStore.remove(name) || !canvasStore.list().includes(name) }
             } else {
-              payload = { ok: false, error: 'op must be create | add-member | remove-member' }
+              payload = { ok: false, error: 'op must be create | add-member | remove-member | remove' }
             }
             recordActivity('in', 'fleet-canvas', `${claim.caller}:${String(op)}`, payload.ok)
             logger.info(`a2a: fleet canvas op from ${claim.caller} (${String(op)} ${name}${id !== '' ? ` ${id}` : ''}) -> ${payload.ok ? 'applied' : `refused: ${payload.error ?? '?'}`}`)

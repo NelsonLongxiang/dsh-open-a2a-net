@@ -92,7 +92,8 @@ Do section 1 on both hosts first. Then the **owner**, on BOTH hosts:
 
    Admission is target-scoped (F5): the remote member reaches only the
    sessions inside that canvas team. A linked peer can also edit your canvas
-   through `/__dsh_a2a/fleet-canvas-op`; your host's link gate decides.
+   (add or remove members, dissolve a team) through
+   `/__dsh_a2a/fleet-canvas-op`; your host's link gate decides.
 
 **Agent, verify on each host:**
 - `a2a_probe`: the peer is reachable. A miss is classified as `unreachable`

@@ -63,4 +63,38 @@ describe('gh#41 remote org frames + fleet drop fork', () => {
       expect(add?.team).toBe('远端研发')
     })
   }, 15_000)
+
+  // Single owner + mirror: dissolving a mirror frame is the OWNER's write.
+  // It used to go to the LOCAL canvas control, which has no such team, and
+  // the wire read its {ok:false, teams:[…without it]} as "already gone" —
+  // the frame vanished, the owner never heard, and the next poll put it back.
+  function dissolve(v: ReturnType<typeof createPlanningView>, name: string): void {
+    const head = v.root.querySelector<HTMLElement>(`.p-frame-head[data-frame="${name}"]`)!
+    v.seam.contextMenu(ptr({ target: head, clientX: 10, clientY: 10 }))
+    Array.from(v.root.querySelectorAll<HTMLButtonElement>('[role=menuitem]')).find(b => b.textContent!.includes('解散团队'))!.click()
+  }
+
+  it('解散 on a REMOTE frame carries fleetPeer; on a local frame it does not', async () => {
+    const actions: unknown[] = []
+    const v = createPlanningView({ onDirty: vi.fn(), onLampClick: vi.fn(), onCanvasAction: async a => { actions.push(a); return true }, now: () => NOW })
+    document.body.appendChild(v.root)
+    v.adoptExternalLayout({ version: 1, viewport: { x: 0, y: 0, scale: 1 }, nodes: { a: { x: 0, y: 0 } }, frames: { 本地队: { x: -200, y: -200, w: 500, h: 400 } } })
+    v.reconcile(input)
+    dissolve(v, '远端研发')
+    dissolve(v, '本地队')
+    await vi.waitFor(() => expect(actions).toEqual([
+      { type: 'remove-team', name: '远端研发', fleetPeer: 'https://10.0.0.5:8787' },
+      { type: 'remove-team', name: '本地队' },
+    ]))
+  })
+
+  it('an owner refusal puts the mirror frame back', async () => {
+    const v = createPlanningView({ onDirty: vi.fn(), onLampClick: vi.fn(), onCanvasAction: async () => false, now: () => NOW })
+    document.body.appendChild(v.root)
+    v.adoptExternalLayout({ version: 1, viewport: { x: 0, y: 0, scale: 1 }, nodes: { a: { x: 0, y: 0 } }, frames: { 本地队: { x: -200, y: -200, w: 500, h: 400 } } })
+    v.reconcile(input)
+    dissolve(v, '远端研发')
+    expect(v.root.querySelector('.p-frame[data-name="远端研发"]')).toBeNull() // optimistic
+    await vi.waitFor(() => expect(v.root.querySelector('.p-frame[data-name="远端研发"]')).not.toBeNull())
+  })
 })

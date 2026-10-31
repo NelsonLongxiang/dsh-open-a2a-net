@@ -4,11 +4,11 @@
   "scope": "Committed source only; no deployment inference",
   "sources": {
     "src/index.ts": "7162d4cfb586d0178041803c33b8cc6ace3804a00f41ceae6092a2586ba7f8ea",
-    "src/faces/admin.ts": "6d3bd09c230d35c29a58a95b1df8b181f17f6d1d63c9f74c47636db54f079013",
+    "src/faces/admin.ts": "ce08936ad6a785a5cc4cb282fd2303d3f29366a813c3b94077f57a61c71dad98",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "3d6b63bed2bc418f7d927c27b7bb6c81f712de1997f5327ce07509257205ec42",
-    "nexus-stage/src/workbench.ts": "fbfe7cf0062fbd7adc5db5650f37bb508308e7580ea08ae6434e45d82a11eb93",
+    "nexus-stage/src/workbench.ts": "db77d8c241f08dd7bb84825c7c085769d209d0bd17fd7521d194718e679add7e",
     "nexus-stage/src/federation.ts": "d499312360a0ee4ddc5fa42f45675bfe0dba4f68c40e976c38036f8f06150148",
     "nexus-stage/src/planning-relayout.ts": "7ce77ba2bc95fcbee62af752f22969b726511d8988133e74123a5e04a7a6a571",
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
@@ -19,7 +19,7 @@
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
-    "src/faces/wire.ts": "5d238ba0ee4b859f41cbc6eeca4bffe0a06604e06cfa5ce7e9d4607f2d4cfcb9",
+    "src/faces/wire.ts": "f6d28c04e820bcbb44ae09a5cf208609da03a95ab5754165039934053dca1343",
     "src/faces/canvas-notify.ts": "252202b494f60587662e2ec7542cb29119c066d36cc5843f846d6052760a224e"
   },
   "anchors": [
@@ -98,19 +98,19 @@
     {
       "page": "p1-arch",
       "cell": "c2",
-      "ref": "src/faces/wire.ts:415",
+      "ref": "src/faces/wire.ts:419",
       "expect": "path: '/a2a/direct',"
     },
     {
       "page": "p1-arch",
       "cell": "c3",
-      "ref": "src/faces/wire.ts:257",
+      "ref": "src/faces/wire.ts:261",
       "expect": "path: '/a2a/log',"
     },
     {
       "page": "p1-arch",
       "cell": "c4",
-      "ref": "src/faces/wire.ts:336",
+      "ref": "src/faces/wire.ts:340",
       "expect": "path: '/a2a/query',"
     },
     {
@@ -314,7 +314,7 @@
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/faces/wire.ts:567",
+      "ref": "src/faces/wire.ts:571",
       "expect": "if (refuseIfFlooded(caller, message, team, taskId, res)) return"
     },
     {

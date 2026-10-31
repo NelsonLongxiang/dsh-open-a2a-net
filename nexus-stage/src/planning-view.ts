@@ -555,7 +555,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
           ? { ...act, ids, ...(fleetPeer !== undefined ? { fleetPeer } : {}) }
           : act
       }
-      return act
+      // Dissolving a mirror frame is the owner's write as well (relay op 'remove').
+      return act.type === 'remove-team' && remoteFramesRef.has(act.name) ? { ...act, fleetPeer: remoteFramesRef.get(act.name)! } : act
     }
 
     // Optimistic seats: a write may reference a session the teamed gate

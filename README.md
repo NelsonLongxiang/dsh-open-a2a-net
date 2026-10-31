@@ -196,7 +196,7 @@ Set an `apiKey` before exposing the listener beyond loopback.
 | `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | Settle an owed task from the caller side (cancel also steers a stop notice to a live local target); the row lands in `archived[]`. |
 | `/__dsh_a2a/session-log` · `/remote-session-log` | Session log reads for the workbench. |
 | `/__dsh_a2a/owner-settings` | The owner panel: read (GET) or write (POST) `teamJoinAllowlist`, `teamScopeInfo` and `announce` into the home patch layer (the first two apply immediately; `announce` on the next restart). |
-| `/__dsh_a2a/fleet-canvas-op` | Relay a canvas operation to a peer's `/a2a/canvas-op`, stamped with this node's OriginClaim; the peer's link gate decides. |
+| `/__dsh_a2a/fleet-canvas-op` | Relay a canvas operation (`create`, `add-member`, `remove-member`, `remove`) to a peer's `/a2a/canvas-op`, stamped with this node's OriginClaim; the peer's link gate decides. |
 | `/__dsh_a2a/cli-deposit` | Deposit, list, revoke and mailbox reads for `a2a-net` CLI identities. |
 
 The state face's ledger: `tasks` (pending, each with `settleable`), `tasksStaleCount`, `tasksDead` (with
