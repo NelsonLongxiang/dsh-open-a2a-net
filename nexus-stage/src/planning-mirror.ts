@@ -32,31 +32,43 @@ export function mirrorRoute(ownerUrl: string | undefined, syncing: boolean): Mir
 
 type MirrorOrg = ReadonlyArray<{ readonly url: string; readonly org: ReadonlyArray<{ readonly name: string }> }>
 
+/** After the owner accepted a dissolve, hide its team at most this long: a
+ *  peer's late add-member re-creates the team on the owner, and then it is
+ *  real again even though the owner's org never stopped listing it. */
+export const DISSOLVE_HIDE_MS = 10_000
+
 /**
  * 解散 on a mirror frame: the frame stays gone from the moment the dissolve
- * is sent until the owner's published org stops listing the team. Without
- * this, a poll that lands while the relay is in flight — or before the
- * owner's card is re-read — draws the frame again (and keeps its saved rect
- * for a later team of the same name).
+ * is sent until the owner's published org stops listing the team (or
+ * DISSOLVE_HIDE_MS after the owner accepted). Without this, a poll that lands
+ * while the relay is in flight — or before the owner's card is re-read —
+ * draws the frame again (and keeps its saved rect for a later team of the
+ * same name). Keyed by owner AND name: two owners may both have a team X.
  */
-export function createDissolveGuard() {
-  const dissolving = new Map<string, string>() // team name → owner URL
+export function createDissolveGuard(now: () => number = Date.now) {
+  const key = (ownerUrl: string, name: string): string => `${ownerUrl}\u0000${name}`
+  const dissolving = new Map<string, { url: string; name: string; acceptedAt?: number }>()
   return {
     /** Mark the dissolve and return the action carrying its owner (the relay fork). */
     fork<A extends { type: 'remove-team'; name: string }>(act: A, ownerUrl: string): A & { fleetPeer: string } {
-      dissolving.set(act.name, ownerUrl)
+      dissolving.set(key(ownerUrl, act.name), { url: ownerUrl, name: act.name })
       return { ...act, fleetPeer: ownerUrl }
     },
-    /** The owner refused (or the channel failed): the frame may come back. */
-    settled(act: { type: string; name?: string }, ok: boolean): void {
-      if (!ok && act.type === 'remove-team' && act.name !== undefined) dissolving.delete(act.name)
+    /** The owner answered: a refusal (or a failed channel) lets the frame back now, an acceptance starts the clock. */
+    settled(act: { type: string; name?: string; fleetPeer?: string }, ok: boolean): void {
+      if (act.type !== 'remove-team' || act.name === undefined || act.fleetPeer === undefined) return
+      const entry = dissolving.get(key(act.fleetPeer, act.name))
+      if (entry === undefined) return
+      if (ok) entry.acceptedAt = now()
+      else dissolving.delete(key(act.fleetPeer, act.name))
     },
     /** True while this owner's team is being (or has just been) dissolved here. */
-    hides(name: string, ownerUrl: string): boolean { return dissolving.get(name) === ownerUrl },
-    /** Forget a dissolve once its owner's org no longer lists the team. */
+    hides(name: string, ownerUrl: string): boolean { return dissolving.has(key(ownerUrl, name)) },
+    /** Forget a dissolve once its owner's org no longer lists the team, or once its time is up. */
     sweep(peerOrg: MirrorOrg): void {
-      for (const [name, url] of dissolving) {
-        if (peerOrg.find(row => row.url === url)?.org.some(t => t.name === name) !== true) dissolving.delete(name)
+      for (const [k, e] of dissolving) {
+        const listed = peerOrg.find(row => row.url === e.url)?.org.some(t => t.name === e.name) === true
+        if (!listed || (e.acceptedAt !== undefined && now() - e.acceptedAt > DISSOLVE_HIDE_MS)) dissolving.delete(k)
       }
     },
   }

@@ -526,7 +526,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   // gh#41: remote-frame registry (frame name → peer URL), refreshed by
   // reconcile and read by emitAction's serverAction to fork remote drops.
   let remoteFramesRef = new Map<string, string>()
-  const dissolving = createDissolveGuard()
+  const dissolving = createDissolveGuard(deps.now)
 
   function emitAction(a: CanvasAction): void {
     // gh#20 W-B: the SERVER sees zone/id8 remote handles where the model
@@ -585,10 +585,11 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     const team = actionTeam(a)
     pendingAdd(team)
     render()
-    void deps.onCanvasAction(serverAction(a)).then(
+    const sent = serverAction(a)
+    void deps.onCanvasAction(sent).then(
       ok => {
         pendingRelease(team)
-        layoutDoc = settleAction(model, a, ok, undo, layoutDoc); markDirty(); dissolving.settled(a, ok)
+        layoutDoc = settleAction(model, a, ok, undo, layoutDoc); markDirty(); dissolving.settled(sent, ok)
         render()
       },
       () => {
@@ -596,7 +597,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         // team's guard (and its optimistic state) forever — and per §3.4
         // 不吞错, the rollback surfaces to the user.
         pendingRelease(team)
-        layoutDoc = settleAction(model, a, false, undo, layoutDoc); markDirty(); dissolving.settled(a, false)
+        layoutDoc = settleAction(model, a, false, undo, layoutDoc); markDirty(); dissolving.settled(sent, false)
         notice('error', '操作通道异常，已回滚')
         render()
       },

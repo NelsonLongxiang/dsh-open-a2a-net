@@ -164,6 +164,7 @@ async function fleetOp(peer: string, op: 'add-member' | 'remove-member' | 'remov
     cache: 'no-store',
   }).catch(() => undefined)
   const body = r !== undefined ? await r.json().catch(() => undefined) : undefined
+  if (body?.ok === true && op === 'remove' && body.removed === false) planning.notice('info', `属主那边已没有「${name}」，无需解散`)
   if (body?.ok === true) return true
   // Say WHY the peer refused (not linked, untrusted origin, unknown member…), not just that it did.
   planning.notice('error', `跨主机团队操作失败：${String(body?.error ?? '对端无响应')}`)

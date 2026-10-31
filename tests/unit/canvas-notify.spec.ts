@@ -54,17 +54,18 @@ describe('refreshPeerCard', () => {
 describe('change ping recipients', () => {
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
 
-  it('a peer whose link the change just ended still hears about that change, once', async () => {
+  async function harness() {
     vi.useFakeTimers()
     const pinged: string[] = []
     vi.stubGlobal('fetch', async (url: string) => { pinged.push(url); return new Response('{"ok":true}') })
     const linked = new Set([URL_A])
+    const tracked = [URL_A]
     let change: () => void = () => {}
     const cardCache = new Map<string, CardCacheEntry>([[URL_A, { at: Date.now(), card: card('A') }]])
     const d = {
       ctx: { effect: (fn: () => unknown) => { fn() } },
       logger: { debug: () => {} },
-      peerStore: { list: () => [URL_A] },
+      peerStore: { list: () => tracked },
       canvasStore: { onChange: (fn: () => void) => { change = fn; return () => {} } },
       cardCache,
       originClaimHeaders: () => ({}),
@@ -74,6 +75,11 @@ describe('change ping recipients', () => {
     } as unknown as CanvasNotifyDeps
     registerCanvasNotify({ register: () => () => {} } as never, d)
     const flush = async (): Promise<void> => { change(); await vi.advanceTimersByTimeAsync(CANVAS_NOTIFY_DEBOUNCE_MS + 10) }
+    return { pinged, linked, tracked, flush }
+  }
+
+  it('a peer whose link the change just ended still hears about that change, once', async () => {
+    const { pinged, linked, flush } = await harness()
     await flush()
     expect(pinged).toEqual([`${URL_A}/a2a/canvas-changed`])
     linked.clear() // e.g. the dissolved team was the only one naming A's handle
@@ -81,5 +87,14 @@ describe('change ping recipients', () => {
     expect(pinged).toHaveLength(2) // told once more: its next card read drops the mirror
     await flush()
     expect(pinged).toHaveLength(2) // and no longer after that
+  })
+
+  it('…but not once the operator stopped tracking it', async () => {
+    const { pinged, linked, tracked, flush } = await harness()
+    await flush()
+    linked.clear()
+    tracked.length = 0
+    await flush()
+    expect(pinged).toHaveLength(1)
   })
 })

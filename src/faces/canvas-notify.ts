@@ -92,7 +92,8 @@ export function registerCanvasNotify(webServer: WebServer, d: CanvasNotifyDeps):
   const flush = (): void => {
     timer = undefined
     const now = recipients()
-    const targets = new Set([...now, ...lastRecipients])
+    const tracked = new Set(peerStore.list()) // an untracked peer gets no more envelopes
+    const targets = new Set([...now, ...lastRecipients.filter(url => tracked.has(url))])
     lastRecipients = now
     for (const url of targets) {
       void globalThis.fetch(url.replace(/\/$/, '') + '/a2a/canvas-changed', {

@@ -20,7 +20,7 @@
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
     "src/faces/wire.ts": "49c16090378047764379c917bd24f5a23a0137195dc54af168e39ee86a87b78a",
-    "src/faces/canvas-notify.ts": "268c6b8e1d2797494b6c4b9ccd375b10ca15464e99878a147666d94a7249258d"
+    "src/faces/canvas-notify.ts": "10a79ab13d69746268269f0bf8c100464832316e39498ba6ec4aeeae961ec0dd"
   },
   "anchors": [
     {
