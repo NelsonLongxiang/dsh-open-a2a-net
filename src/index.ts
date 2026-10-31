@@ -54,6 +54,7 @@ import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
+import { callerAdmission, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type PeerOrgEntry } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
 // `ctx.timer` on Context; the runtime service is mounted by app compositions.
@@ -2657,184 +2658,49 @@ ${message}`
    * sessions' declarations. Used by both the inbound faces and the local
    * dispatch candidate so the two paths can never diverge.
    */
-  function sameZoneSharedTeamRefusal(caller: string, targetTeam?: string): string | undefined {
-    const declared = new Set<string>()
-    let callerSessionId: string | undefined
-    for (const entry of teamMemberships.list()) {
-      if (`${config.team}/${id8(entry.session)}` === caller) {
-        callerSessionId = entry.session
-        for (const t of entry.teams) declared.add(t)
-      }
-    }
-    // W2②: canvas membership is a link record too — the caller's session
-    // sitting in a canvas team declares that team as much as a roster line.
-    if (callerSessionId === undefined) {
-      for (const id of joinedSessions.list()) {
-        if (`${config.team}/${id8(id)}` === caller) { callerSessionId = id; break }
-      }
-    }
-    if (callerSessionId !== undefined) {
-      for (const name of canvasStore.teamsOf(callerSessionId)) declared.add(canvasTeamOf(name))
-    } else {
-      // Issue #43: a same-zone handle that resolves to NO local session is a
-      // CROSS-HOST member (two nodes sharing one zone name — the fleet's
-      // common `dsh` spelling). The canvas link record exists on this host
-      // as a REMOTE MEMBER REF the operator added; the foreign-zone branch
-      // (a2aCallerRefusal) already honors that basis — the same-zone path
-      // must too, or a linked remote member is refused as teamless. The
-      // trust basis is unchanged: this host's operator-composed canvas,
-      // never the caller's self-description (V5).
-      for (const name of canvasStore.list()) {
-        if (canvasStore.remoteMembersOf(name).includes(caller)) declared.add(canvasTeamOf(name))
-      }
-      // gh#71 fix ②: the warm card cache's peer canvasOrg is the same-zone
-      // cross-host basis too — an org entry naming BOTH the caller's handle
-      // and one of THIS host's own handles is a shared team (双向识别: the
-      // composition gesture happened on the other host's board; both ends
-      // are named). Read-only over the cache; a caller org that never names
-      // an own handle still refuses (V5 preserved).
-      const ownHandles = new Set<string>([config.team, ...joinedSessions.list().map(id => `${config.team}/${id8(id)}`)])
+  // gh#114 S1: the admission rules live in src/task-auth.ts as one pure
+  // decision over these records; the closures below are thin wrappers, so
+  // the faces' refusal texts and the authorization record (S2) can never
+  // disagree. Records are read at decision time, never copied.
+  const admissionRecords: AdmissionRecords = {
+    zone: config.team,
+    get teamScopeRouting() { return config.teamScopeRouting },
+    id8,
+    canvasTeamOf,
+    memberships: () => teamMemberships.list(),
+    joined: () => joinedSessions.list(),
+    canvasNames: () => canvasStore.list(),
+    canvasTeamsOf: sessionId => canvasStore.teamsOf(sessionId),
+    canvasMembersOf: name => canvasStore.membersOf(name),
+    canvasRemoteMembersOf: name => canvasStore.remoteMembersOf(name),
+    peerOrgs: function * () {
       for (const cached of cardCache.values()) {
-        const org = (cached.card as { canvasOrg?: Array<{ team?: unknown; members?: unknown }> } | undefined)?.canvasOrg
-        if (!Array.isArray(org)) continue
-        for (const e of org) {
-          if (typeof e.team !== 'string' || e.team === '' || !Array.isArray(e.members)) continue
-          if (e.members.includes(caller) && e.members.some(m => typeof m === 'string' && ownHandles.has(m))) declared.add(e.team)
-        }
+        const org = (cached.card as { canvasOrg?: PeerOrgEntry[] } | undefined)?.canvasOrg
+        if (Array.isArray(org)) yield org
       }
-    }
-    const routable = new Set<string>([config.team])
-    for (const id of joinedSessions.list()) routable.add(`${config.team}/${id8(id)}`)
-    for (const name of canvasStore.list()) routable.add(canvasTeamOf(name))
-    const otherLocalDeclarations = new Set<string>()
-    for (const entry of teamMemberships.list()) {
-      if (`${config.team}/${id8(entry.session)}` === caller) continue
-      for (const t of entry.teams) otherLocalDeclarations.add(t)
-    }
-    const shared = [...declared].some(t => routable.has(t) || otherLocalDeclarations.has(t))
-    // F5 (gh#26, attribute-owner ruling): same-host admission needs a
-    // TARGET-level intersection — a canvas member used to reach ANY session
-    // team on this host through a host-level link alone. The target's link
-    // set = its roster declarations ∪ its canvas teams. EXCEPTION (ruling,
-    // 成文): the PROCESS face (target === config.team) is the owner face,
-    // not a member face — any shared team clears it.
-    if (targetTeam !== undefined && targetTeam !== config.team) {
-      let targetLinks: Set<string> | undefined
-      const targetId8 = targetTeam.startsWith(`${config.team}/`) ? targetTeam.slice(config.team.length + 1) : undefined
-      if (targetId8 !== undefined) {
-        // Only a KNOWN local session earns target-level judgement; an
-        // unresolvable handle (archived/foreign spelling) keeps the
-        // host-level basis — an empty target set must not refuse everyone.
-        // The handle carries the id8 SLICE, so resolve it back to the
-        // session id before asking the stores (canvas teamsOf keys by id).
-        const targetSession = joinedSessions.list().find(sessionId => id8(sessionId) === targetId8)
-          ?? teamMemberships.list().find(entry => id8(entry.session) === targetId8)?.session
-        if (targetSession !== undefined) {
-          targetLinks = new Set<string>()
-          for (const entry of teamMemberships.list()) {
-            if (entry.session === targetSession) for (const t of entry.teams) targetLinks.add(t)
-          }
-          for (const name of canvasStore.teamsOf(targetSession)) targetLinks.add(canvasTeamOf(name))
-          // gh#71 fix ②: the warm cache's org basis at target level too —
-          // an org entry naming BOTH the caller and the target handle is
-          // the shared team (same 双向识别 rule as the host-level basis).
-          for (const cached of cardCache.values()) {
-            const org = (cached.card as { canvasOrg?: Array<{ team?: unknown; members?: unknown }> } | undefined)?.canvasOrg
-            if (!Array.isArray(org)) continue
-            for (const e of org) {
-              if (typeof e.team !== 'string' || e.team === '' || !Array.isArray(e.members)) continue
-              if (e.members.includes(caller) && e.members.includes(targetTeam)) targetLinks.add(e.team)
-            }
-          }
-        }
-      } else {
-        const canvasName = canvasStore.list().find(name => canvasTeamOf(name) === targetTeam)
-        if (canvasName !== undefined) {
-          targetLinks = new Set<string>([targetTeam])
-          for (const memberId of canvasStore.membersOf(canvasName)) {
-            for (const entry of teamMemberships.list()) if (entry.session === memberId) for (const t of entry.teams) targetLinks.add(t)
-          }
-        }
-      }
-      if (targetLinks !== undefined) {
-        if ([...declared].some(t => targetLinks!.has(t))) return undefined
-        return declared.size === 0
-          ? `caller "${caller}" declares no team membership on this host's roster — a teamless node has no network (S3 phase-3 admission). Declare a shared team on both ends, or route through a teamed member.`
-          : `caller "${caller}" shares no team with target "${targetTeam}" — declared [${[...declared].join(', ')}], target links [${[...targetLinks].join(', ')}] (F5 target-level admission: a host-level link alone does not open every session team).`
-      }
-      // Unresolvable target (foreign/zone delegation): host-level basis.
-    }
-    if (shared) return undefined
-    return declared.size === 0
-      ? `caller "${caller}" declares no team membership on this host's roster — a teamless node has no network (S3 phase-3 admission). Declare a shared team on both ends, or route through a teamed member.`
-      : `caller "${caller}" declares teams [${[...declared].join(', ')}] — none is routable on this node (shared-team admission). Declare a shared team on both ends, or route through a teamed member.`
+    },
+    liveNodeIds: () => [...sessionNodes.values()].map(agent => String(agent.id)),
+    cliDeposited: handle => cliDeposits.get(handle) !== undefined,
   }
 
-  /**
-   * W1: does a caller label fall under the joined-face admission gate? The
-   * zone/id8 shape with THIS zone names a joined session node — the face
-   * the boundary-hardening wave closes. The initiator face (bare node
-   * team) and foreign-zone labels are judged elsewhere (F1b host-face
-   * rules; the foreign branch below) and stay untouched.
-   */
-  const joinedFaceCallerShape = /^[a-z0-9-]+\/[0-9a-f]{8}$/i
+  /** W1/W2 shared-team admission (see sameZoneAdmission in src/task-auth.ts). */
+  function sameZoneSharedTeamRefusal(caller: string, targetTeam?: string): string | undefined {
+    return refusalOf(sameZoneAdmission(admissionRecords, caller, targetTeam))
+  }
+
+  /** W1: the joined-face gate of the local dispatch candidate (see joinedFaceAdmission). */
   function joinedFaceAdmissionRefusal(callerSession: string | undefined, targetTeam?: string): string | undefined {
-    if (callerSession === undefined || callerSession === '') return undefined
-    if (!joinedFaceCallerShape.test(callerSession)) return undefined
-    if (callerSession.slice(0, callerSession.indexOf('/')) !== config.team) return undefined
-    return sameZoneSharedTeamRefusal(callerSession, targetTeam)
+    const verdict = joinedFaceAdmission(admissionRecords, callerSession, targetTeam)
+    return verdict === undefined ? undefined : refusalOf(verdict)
+  }
+
+  /** Inbound admission with the rule and shared teams that admitted the caller (gh#114 S1). */
+  function a2aCallerAdmission(caller: string, targetTeam?: string): Admission {
+    return callerAdmission(admissionRecords, caller, targetTeam)
   }
 
   function a2aCallerRefusal(caller: string, targetTeam?: string): string | undefined {
-    if (!config.teamScopeRouting) return undefined
-    if (caller === '') {
-      return 'caller_session is required — anonymous deliveries are refused (S3 phase-3b). Pass caller_session as <zone>/<id8>.'
-    }
-    // Host face: the node's own bare zone team is a host fact, always
-    // admissible to itself.
-    if (caller === config.team) return undefined
-    const zoneShaped = /^[a-z0-9-]+\/[0-9a-f]{8}$/i.test(caller)
-    if (zoneShaped) {
-      const callerZone = caller.slice(0, caller.indexOf('/'))
-      if (callerZone === config.team) {
-        // Same-zone handle: the W1/W2 shared admission core — roster
-        // declarations UNION canvas memberships against this host's
-        // records (canvas names are link records too; see the helper).
-        // F5: the routed team rides along so admission can require a
-        // TARGET-level intersection.
-        return sameZoneSharedTeamRefusal(caller, targetTeam)
-      }
-      // Foreign-zone handle (N3/N4): admitted ONLY through this host's
-      // operator-established cross-host links — a canvas remote member ref
-      // the operator added by hand. The card cache used to be a basis; a
-      // card is the CALLER'S own claim about itself (V5: any host could
-      // declare the target's team on its own card and self-serve
-      // admission), so it no longer decides anything here. First-contact
-      // learn-and-admit dies with it.
-      for (const name of canvasStore.list()) {
-        if (canvasStore.remoteMembersOf(name).includes(caller)) return undefined
-      }
-      return `caller "${caller}" has no operator-established link on this node — cross-host admission requires a canvas remote membership this host's operator added (N3/N4: the caller's own card claims are self-description, not links). Ask this host's operator to add the member in the A2A workbench, or route through a linked member.`
-    }
-    // Free-form label (not zone/id8): only THIS host's own node facts — a
-    // joined session id, its zone-qualified pseudo-handle (id8 passes
-    // short ids through, so dsh/agent-1 is a local shape), or a live
-    // node's label. Anything else is an unverifiable self-description
-    // (V3: 'anyone-at-all' used to pass).
-    if (joinedSessions.list().includes(caller)) return undefined
-    for (const id of joinedSessions.list()) {
-      if (`${config.team}/${id8(id)}` === caller) return undefined
-    }
-    for (const agent of sessionNodes.values()) {
-      if (String(agent.id) === caller) return undefined
-    }
-    // gh#45: a DEPOSITED CLI handle is a published node fact of this host
-    // (the card's sessionTeams carries it; the envelope's zone derivation
-    // already proved the CLI key on the wire face's own verify). The
-    // handle is <agent-name>/<uuid16> — not zone/id8-shaped, hence this
-    // branch, but it is as much a fact as a joined session.
-    if (cliDeposits.get(caller) !== undefined) return undefined
-    return `caller_session "${caller}" matches no node fact on this host (joined session id, live node label, or deposited CLI handle) — free-form caller labels are self-description and are not admissible (N3). Pass caller_session as <zone>/<id8> with an operator-established link.`
+    return refusalOf(a2aCallerAdmission(caller, targetTeam))
   }
 
   /* ── Session-log read faces (shared by the local control route and the
