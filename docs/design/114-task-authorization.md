@@ -224,7 +224,7 @@ allowlist_version = "al1:" + sha256(canonicalJSON(inputs)).slice(0, 16)
 - **构造只有一处**：新纯模块 `src/task-auth.ts` 的 `buildAuthorization(verdict, facts)`。
 - **挂载只在行出生时**：
   - wire 面：`trackInbound(taskId, team, from, contextId, receiptExpected, brief, auth)`（今天 `wire.ts:651`）；
-  - 本机候选（**移入 S4 #122**，S2 只做 wire 面；S4 是它唯一的消费方）：本机投递在同一本台账里只有调用方的出站行（§1.1），`auth`（`ingress: 'local'`）由
+  - 本机候选（S2 只做 wire 面；S4 的链判定按 `row.team` 判本机出站行，**用不到这份记录**，故再转后续 issue，作纯审计补齐）：本机投递在同一本台账里只有调用方的出站行（§1.1），`auth`（`ingress: 'local'`）由
     `dispatchLocalCandidate` 算出、随结果交给 `trackOwedTask` 挂在**那一行**上。一行一个 task id，不新增行。
 - `TaskLedger` 不提供任何修改 `auth` 的方法；`Object.freeze` 后入行；`abandon/cancel/resolve*/trimOwed`
   归档时原样复制。task id 已存在时 `track*` 本来就保持首条记录不变（`task-ledger.ts:332-333`），
@@ -286,7 +286,7 @@ interface Settler {
 | chain_role | 条件 |
 |---|---|
 | `target` | `S.caller === R.team`（出站行：我们派给谁；入站行：`R.auth.target`） |
-| `target-member` | R.team 是画布队，且 S.caller 是**派发时实际投中的成员**（出站行新增 `deliveredTo`，由 `dispatchPeerCandidate` 的 `target` / 本机 canvas tier 的 agent 句柄填入） |
+| `target-member` | R.team 是画布队，且 S.caller 是该画布**当前**的成员（会话 id 或句柄，本机或远端引用）。S4 实现取当前成员；`deliveredTo`（派发时实际投中的成员）转后续 issue，届时收紧为"实际投中者" |
 | `host-face` | S 是目标所在宿主的进程面**代目标结算**：自动回执（§4.3 的 `onBehalfOf` 等于 R.team / `deliveredTo`），且（跨主机时）`S.claimOrigin` 等于 R.peer 的 origin，（本机时）`S.caller === session` 且 `S.ingress === 'local'` |
 | `legacy` | R 无 `auth`/`deliveredTo`（旧行）——兼容放行，单独计数 |
 
@@ -331,7 +331,7 @@ interface Settler {
 - 写入有界环 `settlementRefusals`（cap 64，随 `tasks.json` 持久化）：
   `{taskId, at, settler:{caller, proof, ingress}, reason, head}`（`head` = 回执首行，`SUMMARY_CAP`）；
 - `logger.warn` + 事件 `a2a/receipt-refused`；`/state` 新块 `settlementRefusals`；
-- wire 面响应体追加 `settlement: {status: 'refused', reason}`（追加字段；送达结果不变）。
+- wire 面响应体追加 `settlement: {status: 'refused', reason}`（追加字段；送达结果不变）——**S4 未做，转后续 issue**（observe 默认下从不拒绝，enforce 前补）。
 
 封闭原因码：
 
