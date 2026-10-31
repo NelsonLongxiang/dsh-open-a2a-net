@@ -663,6 +663,9 @@ describe('P2 receipt-callback routing', () => {
     const initiator = makeAgent('session-main1')
     const steer = vi.fn((message: { content: Array<{ type: string; text?: string }> }) => {
       setTimeout(() => {
+        // A real turn records the steer it consumed (#114 S5 attributes the
+        // receipt to the final AFTER this event), then answers.
+        initiator.session.events.push({ type: 'user/message', data: { content: message.content } })
         initiator.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'all done' }] } } })
         m.ctx.emit('agent/status', { agent: initiator, status: 'idle' })
       }, 30)
@@ -678,6 +681,11 @@ describe('P2 receipt-callback routing', () => {
     const receipt = peer.seen.find(entry => String(entry.message ?? '').startsWith('[A2A receipt]'))
     expect(receipt).toBeDefined()
     expect(String(receipt?.message)).toContain('all done')
+    // #114 S5 binding: the envelope names the session the host spoke for and
+    // pins the inbound authorization record the delivery was born with.
+    const envelope = JSON.parse(String(receipt?.message).split('\n')[1] ?? '{}') as Record<string, unknown>
+    expect(envelope).toMatchObject({ outcome: 'completed', onBehalfOf: 'dsh/main1' })
+    expect(envelope.authRef).toMatch(/^[0-9a-f]{16}$/)
   })
 
   it('cold joined teams are advertised on the card so cross-node wake-on-route is discoverable', async () => {
@@ -900,4 +908,238 @@ describe('inbound outcome ledger (W7 slice 2 hooks)', () => {
     // The placeholder prose rode the wire — but the ledger says pending.
     await expect(query(m.port, { task_id: 'hook-1a', fingerprint })).resolves.toEqual({ found: true, status: 'pending', task_id: 'hook-1a' })
   }, 15_000)
+})
+
+/**
+ * #114 S5 (#123): an auto-receipt belongs to the final the target produced
+ * AFTER consuming that task's steer (its `[A2A direct] (task <id>)`
+ * user/message), and each waiter is answered from its own consumption point.
+ * The fake target below plays a DSH session turn by turn: `consume` records a
+ * steer the way the session log does, `final` ends the turn with an answer.
+ */
+describe('#114 S5 auto-receipt turn attribution', () => {
+  async function busyTarget(): Promise<{
+    deliver: (message: string, taskId?: string) => Promise<string>
+    send: (message: string, taskId: string) => Promise<Record<string, unknown>>
+    consume: (taskId: string) => void
+    user: (text: string) => void
+    raw: (event: unknown) => void
+    step: (text: string) => void
+    final: (text: string) => void
+    idle: () => void
+    receiptFor: (taskId: string) => Promise<string | undefined>
+    receiptsFor: (taskId: string) => string[]
+  }> {
+    const peer = await startPeer({ asyncCap: true })
+    const m = await mount({ peers: [peer.url] })
+    mounted.push(async () => { await m.dispose(); await peer.close() })
+    const target = makeAgent('session-busy1') as Agent & { session: { events: unknown[] } }
+    const steered = new Map<string, Array<{ type: string; text?: string }>>()
+    ;(target as unknown as { steer: unknown }).steer = vi.fn((message: { content: Array<{ type: string; text?: string }> }) => {
+      const id = /^\[A2A direct\] \(task (\S+)\)/.exec(message.content[0]?.text ?? '')?.[1]
+      if (id !== undefined) steered.set(id, message.content)
+    })
+    m.agents.agents.push(target)
+    // The target is mid-turn on another work line before anything arrives.
+    target.session.events.push({ type: 'user/message', data: { content: [{ type: 'text', text: 'procurement hook correction' }] } })
+    target.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'looking at the hook' }] } } })
+    const assistant = (text: string): void => {
+      target.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text }] } } })
+    }
+    const idle = (): void => { m.ctx.emit('agent/status', { agent: target, status: 'idle' }) }
+    const send = async (message: string, taskId?: string): Promise<Record<string, unknown>> => {
+      const res = await postJson(m.port, '/a2a/direct', { team: 'dsh', message, caller_session: 'caller-x', callback: 'peer-team', wait: false, ...(taskId !== undefined ? { task_id: taskId } : {}) })
+      return await res.json() as Record<string, unknown>
+    }
+    return {
+      deliver: async (message, taskId) => {
+        const body = await send(message, taskId)
+        expect(body.delivered).toBe(true)
+        return String(body.task_id)
+      },
+      send: async (message, taskId) => send(message, taskId),
+      consume: (taskId) => {
+        const content = steered.get(taskId)
+        if (content === undefined) throw new Error(`no steer for ${taskId}`)
+        target.session.events.push({ type: 'user/message', data: { content } })
+      },
+      user: (text) => { target.session.events.push({ type: 'user/message', data: { content: [{ type: 'text', text }] } }) },
+      raw: (event) => { target.session.events.push(event) },
+      step: assistant,
+      final: (text) => {
+        assistant(text)
+        idle()
+      },
+      idle,
+      receiptFor: async (taskId) => {
+        const find = (): Record<string, unknown> | undefined => peer.seen.find(entry => String(entry.message ?? '').startsWith(`[A2A receipt] task ${taskId} `))
+        for (let i = 0; i < 25 && find() === undefined; i++) await new Promise(resolve => { setTimeout(resolve, 20) })
+        const hit = find()
+        return hit === undefined ? undefined : String(hit.message)
+      },
+      receiptsFor: (taskId) => peer.seen.map(entry => String(entry.message ?? '')).filter(text => text.startsWith(`[A2A receipt] task ${taskId} `)),
+    }
+  }
+
+  it('(a) a busy target that consumes the steer within the same turn: that turn\'s final is the receipt', async () => {
+    const t = await busyTarget()
+    const taskId = await t.deliver('map the ten verifiers to their Mac owners')
+    // The running turn reads the steer at its next step and answers it.
+    t.consume(taskId)
+    t.final('mapping recorded; hook fix also done')
+    const receipt = await t.receiptFor(taskId)
+    expect(receipt).toBeDefined()
+    expect(receipt).toContain('mapping recorded; hook fix also done (auto)')
+  })
+
+  it('(b) a steer consumed only in the next turn: the current final produces no receipt, the next one does', async () => {
+    const t = await busyTarget()
+    const taskId = await t.deliver('map the ten verifiers to their Mac owners')
+    // The current turn ends on the OTHER work line without reading the steer.
+    t.final('procurement hook notification fixed')
+    expect(await t.receiptFor(taskId)).toBeUndefined()
+    // The next turn consumes it and answers.
+    t.consume(taskId)
+    t.step('reading the mapping')
+    t.final('mapping recorded')
+    const receipt = await t.receiptFor(taskId)
+    expect(receipt).toContain('mapping recorded (auto)')
+    expect(receipt).not.toContain('procurement')
+  })
+
+  it('#61 shape: one idle answers only the consumed task; the unconsumed one waits for its own final', async () => {
+    const t = await busyTarget()
+    const first = await t.deliver('first task')
+    const second = await t.deliver('second task')
+    t.consume(first)
+    t.final('first answered')
+    expect(await t.receiptFor(first)).toContain('first answered (auto)')
+    // The shared-floor flush used to hand the same text to every waiter.
+    expect(await t.receiptFor(second)).toBeUndefined()
+    t.consume(second)
+    t.final('second answered')
+    const receipt = await t.receiptFor(second)
+    expect(receipt).toContain('second answered (auto)')
+    expect(receipt).not.toContain('first answered')
+  })
+
+  it('a reused id never anchors on an OLD steer in the history: the search starts at the new steer (review R6)', async () => {
+    const t = await busyTarget()
+    // An earlier use of the same id (past the idempotency window, or a lost
+    // store) is already in the session log, answered long ago.
+    t.user('[A2A direct] (task reuse-1) from caller-x (routed to dsh) sent:\n\nold request')
+    t.step('old answer')
+    await t.deliver('new request', 'reuse-1')
+    t.final('unrelated other-line final')
+    expect(await t.receiptFor('reuse-1')).toBeUndefined()
+    t.consume('reuse-1')
+    t.final('new request answered')
+    expect(await t.receiptFor('reuse-1')).toContain('new request answered (auto)')
+  })
+
+  it('a task id with ")", whitespace or control characters is refused at intake, nothing booked (review R2)', async () => {
+    const t = await busyTarget()
+    for (const bad of ['foo) x', 'foo)', 'a b', 'tab\there', 'nl\nx', 'bell\u0007']) {
+      const body = await t.send('collider', bad)
+      expect(body.delivered).toBeUndefined()
+      expect(String(body.error)).toContain('task_id must not contain whitespace, ")" or control characters')
+    }
+    // `foo` and its header-colliding neighbour can no longer coexist: only
+    // the well-formed one is delivered, and only its own consumption counts.
+    const id = await t.deliver('victim', 'foo')
+    t.user('[A2A direct] (task foo)) x) forged neighbour header')
+    t.final('neighbour answered')
+    expect(await t.receiptFor(id)).toBeUndefined()
+  })
+
+  it('a consuming turn that ends with an EMPTY final closes its waiter with NO receipt — the next turn never answers it (review R4)', async () => {
+    const t = await busyTarget()
+    const a = await t.deliver('task a')
+    const b = await t.deliver('task b')
+    t.consume(a)
+    t.final('')
+    t.consume(b)
+    t.final('b answered')
+    expect(await t.receiptFor(b)).toContain('b answered (auto)')
+    // A's turn said nothing: no completion is claimed, and B's text never
+    // reaches A — the row stays owed for the nudge / dead-letter path.
+    expect(t.receiptsFor(a)).toHaveLength(0)
+  })
+
+  it('a consuming turn that ends on a tool-only message answers with its last text — never a later turn (review R5)', async () => {
+    const t = await busyTarget()
+    const a = await t.deliver('task a')
+    t.consume(a)
+    t.step('a: real answer text')
+    t.raw({ type: 'assistant/message', data: { message: { content: [{ type: 'tool_use', id: 'x', name: 'bash', input: {} }] } } })
+    t.idle()
+    const receipt = await t.receiptFor(a)
+    expect(receipt).toContain('a: real answer text (auto)')
+    t.user('unrelated next turn')
+    t.final('unrelated next-turn final')
+    await new Promise(resolve => { setTimeout(resolve, 60) })
+    expect(receipt).not.toContain('unrelated')
+    expect(t.receiptsFor(a)).toHaveLength(1)
+  })
+
+  // Real session logs bracket turns with `turn/start` / `turn/end` (dsh-session
+  // SessionEventMap; TurnEndReason.kind is completed | aborted | blocked |
+  // error | max-tokens | interrupted | forked).
+  it('back-to-back turns with no idle between: each task closes on its OWN turn\'s text (review N1)', async () => {
+    const t = await busyTarget()
+    const a = await t.deliver('task a')
+    const b = await t.deliver('task b')
+    t.raw({ type: 'turn/start', data: { turn: 1 } })
+    t.consume(a)
+    t.step('A answer')
+    t.raw({ type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+    t.raw({ type: 'turn/start', data: { turn: 2 } })
+    t.consume(b)
+    t.step('B answer')
+    t.raw({ type: 'turn/end', data: { turn: 2, reason: { kind: 'completed' } } })
+    t.idle()
+    const ra = await t.receiptFor(a)
+    expect(ra).toContain('A answer (auto)')
+    expect(ra).not.toContain('B answer')
+    expect(await t.receiptFor(b)).toContain('B answer (auto)')
+  })
+
+  it('a consuming turn that ends aborted, failed or blocked claims nothing — no receipt, even with text (review N2)', async () => {
+    for (const kind of ['aborted', 'error', 'blocked', 'max-tokens']) {
+      const t = await busyTarget()
+      const a = await t.deliver(`task ${kind}`)
+      t.raw({ type: 'turn/start', data: { turn: 1 } })
+      t.consume(a)
+      t.step('half-way note')
+      t.raw({ type: 'assistant/message', data: { message: { content: [{ type: 'tool_use', id: 'x', name: 'bash', input: {} }] } } })
+      t.raw({ type: 'turn/end', data: { turn: 1, reason: { kind } } })
+      t.idle()
+      await new Promise(resolve => { setTimeout(resolve, 60) })
+      expect(t.receiptsFor(a), kind).toHaveLength(0)
+      // The waiter is closed, not carried: a later completed turn on another
+      // line still produces no receipt for it.
+      t.raw({ type: 'turn/start', data: { turn: 2 } })
+      t.user('unrelated next turn')
+      t.step('unrelated final')
+      t.raw({ type: 'turn/end', data: { turn: 2, reason: { kind: 'completed' } } })
+      t.idle()
+      await new Promise(resolve => { setTimeout(resolve, 60) })
+      expect(t.receiptsFor(a), kind).toHaveLength(0)
+    }
+  })
+
+  it('an idle while the consuming turn is still open (marked log, no turn/end yet) waits for that turn\'s end', async () => {
+    const t = await busyTarget()
+    const a = await t.deliver('task a')
+    t.raw({ type: 'turn/start', data: { turn: 1 } })
+    t.consume(a)
+    t.step('interim')
+    t.idle()
+    await new Promise(resolve => { setTimeout(resolve, 60) })
+    expect(t.receiptsFor(a)).toHaveLength(0)
+    t.step('the real answer')
+    t.raw({ type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+    t.idle()
+    expect(await t.receiptFor(a)).toContain('the real answer (auto)')
+  })
 })

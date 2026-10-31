@@ -47,14 +47,14 @@ import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type ReceiptResolvedInfo, type Sender } from './task-ledger.ts'
-import { formatReceipt, parseReceipt } from './receipt.ts'
+import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
-import { allowlistVersion, callerAdmission, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type PeerOrgEntry } from './task-auth.ts'
+import { allowlistVersion, authorizationRef, callerAdmission, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type PeerOrgEntry } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
 // `ctx.timer` on Context; the runtime service is mounted by app compositions.
@@ -1361,7 +1361,13 @@ const reportLoopRing = new Map<string, number[]>()
   /** Minimal event shape the title/activity/receipt-flush readers need. */
   type SessionEventLike = {
     readonly type?: string
-    readonly data?: { readonly message?: { readonly content?: ReadonlyArray<{ readonly type?: string; readonly text?: string }> } }
+    readonly data?: {
+      readonly message?: { readonly content?: ReadonlyArray<{ readonly type?: string; readonly text?: string }> }
+      /** user/message events carry their blocks here (session-transcript.ts). */
+      readonly content?: ReadonlyArray<{ readonly type?: string; readonly text?: string }>
+      /** turn/end: why the turn ended (dsh-session TurnEndReason; `completed` is success). */
+      readonly reason?: { readonly kind?: string }
+    }
   }
 
   function sessionEventsOf(agent: Agent): readonly (SessionEventLike | undefined)[] {
@@ -2160,7 +2166,7 @@ const reportLoopRing = new Map<string, number[]>()
    */
   const receiptWarnAt = new Map<string, number>()
 
-  function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string): void {
+  function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {
     if (!callerTeam || callerTeam === '') return
     // Never synthesize a receipt for a receipt: answering an envelope by mail
     // would ping-pong both ledgers.
@@ -2171,6 +2177,10 @@ const reportLoopRing = new Map<string, number[]>()
     // guards refuse that shape outright; this keeps the receipt half dead
     // even if a future path reopens it.
     if (callerTeam === `${config.team}/${agentId8(target)}`) return
+    // #114 S5: the waiter is tied to THIS task's steer — only a final the
+    // target produced after consuming `[A2A direct] (task <id>)` answers it
+    // (flushFinals). A busy target's other work line can no longer settle
+    // a task it has not read yet (the #61 direct-bb27ec94 shape).
     registerFinalWaiter(target, (finalText, placeholder) => {
       // W7 slice-2: a host-authored placeholder (flush timeout, dead
       // session) must not synthesize a COMPLETION receipt — a wedged
@@ -2186,7 +2196,15 @@ const reportLoopRing = new Map<string, number[]>()
       const summary = `${finalText.trim().replace(/\s+/g, ' ').slice(0, SUMMARY_CAP) || 'done'} (auto)`
       // v2 envelope projection: header stays byte-compatible for every
       // legacy correlator; the machine JSON rides exactly one following line.
-      const receipt = formatReceipt(taskId, summary, { outcome: 'completed', idempotencyKey: taskId })
+      // #114 S5 binding: onBehalfOf names the session that did the work (the
+      // host is only its courier); authRef pins the inbound authorization
+      // record the delivery was born with — recorded for audit, judged by S4.
+      const receipt = formatReceipt(taskId, summary, {
+        outcome: 'completed',
+        idempotencyKey: taskId,
+        onBehalfOf: sessionTeamOf(target),
+        ...(row?.auth !== undefined ? { authRef: authorizationRef(row.auth) } : {}),
+      })
       // Three-tier hard order (work-order P2): caller lane first; on failure
       // escalate ONCE to the owner mailbox — the outcome never evaporates
       // just because the original waiter died. Archive holds truth regardless.
@@ -2212,18 +2230,27 @@ const reportLoopRing = new Map<string, number[]>()
       ).catch(() => {
         // Ladder exhausted: the throttled breadcrumbs above already said why.
       })
-    })
+    }, { taskId, steerFloor })
   }
 
   /**
    * Register one final-reply waiter for the agent and arm its flush timeout.
    * @param agent - the agent whose next assistant message answers the waiter.
    * @param answer - how the waiter's reply is delivered.
+   * @param attribution - #114 S5: attribute by consumption — only the turn
+   *   that consumed this task's `[A2A direct] (task <id>)` user message
+   *   answers the waiter; the search starts at `steerFloor`, the log length
+   *   read just before the steer, so an older steer of a reused id never
+   *   anchors it.
    * @returns the registered waiter (for callers that may retract it).
    */
-  function registerFinalWaiter(agent: Agent, answer: (text: string, placeholder?: boolean) => void): FinalWaiter {
+  function registerFinalWaiter(agent: Agent, answer: (text: string, placeholder?: boolean) => void, attribution?: { taskId: string; steerFloor: number }): FinalWaiter {
     const key = String(agent.id)
-    const waiter: FinalWaiter = { answer, sinceEvents: sessionEventsOf(agent).length }
+    const waiter: FinalWaiter = {
+      answer,
+      sinceEvents: sessionEventsOf(agent).length,
+      ...(attribution !== undefined && attribution.taskId !== '' ? { taskId: attribution.taskId, scannedTo: attribution.steerFloor } : {}),
+    }
     waiter.timeoutDisposer = armFlushTimeout(key, waiter)
     pendingFinals.set(key, [...(pendingFinals.get(key) ?? []), waiter])
     return waiter
@@ -2858,6 +2885,7 @@ ${message}`
       steerRelay,
       fromClause,
       armReceiptAutosend,
+      eventCountOf: (agent: Agent) => sessionEventsOf(agent).length,
       receiptExpectationOf,
       armAsyncNudge,
       liveAgent,
@@ -4442,6 +4470,12 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: joinedRefusal, code: -32000 }
     }
+    // #114 S5: the same header-safe id rule the wire face enforces.
+    const idRefusal = taskIdFromCaller === undefined ? undefined : taskIdRefusal(taskIdFromCaller)
+    if (idRefusal !== undefined) {
+      recordActivity('out', team, callerSession ?? 'local', false)
+      return { ok: false, error: idRefusal, code: -32000 }
+    }
     const canvasName = parseCanvasTeamName(team)
     // Issue #41 shape note: the caller label is the WIRE form (<zone>/<id8>
     // or a session label) and quick-dispatch BORROWS a live session's team
@@ -4553,8 +4587,10 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           ? callbackAddress
           : routable ? callerSession : undefined
         const receiptHint = callerTeam === undefined ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${callerTeam}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
+        // #114 S5: the consumption search starts at the pre-steer log length.
+        const steerFloor = sessionEventsOf(target).length
         steerRelay(target, `[A2A direct] (task ${taskId}) ${fromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam)
-        armReceiptAutosend(target, taskId, callerTeam, message)
+        armReceiptAutosend(target, taskId, callerTeam, message, steerFloor)
         endRoute(flight)
         recordActivity('out', team, 'local', true)
         return {
@@ -5396,13 +5432,20 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
      * stand-in (flush timeout, dead session), NOT the session's product. */
     readonly answer: (text: string, placeholder?: boolean) => void
     readonly sinceEvents: number
+    /** #114 S5: set ⇒ attributed by the consumption of this task's steer, not by {@link sinceEvents}. */
+    readonly taskId?: string
+    /** #114 S5: index of the user/message that consumed the steer, once seen. */
+    consumedAt?: number
+    /** #114 S5: events below this index were already searched for the consumption. */
+    scannedTo?: number
     timeoutDisposer?: () => void
   }
   const pendingFinals = new Map<string, FinalWaiter[]>()
   const armFlushTimeout = (agentId: string, waiter: FinalWaiter): (() => void) => {
     return ctx.timer.timeout(() => {
       const entries = pendingFinals.get(agentId)
-      if (entries === undefined) return
+      // An already-answered waiter is gone from the list: never answer twice.
+      if (entries === undefined || !entries.includes(waiter)) return
       const kept = entries.filter(entry => entry !== waiter)
       if (kept.length === 0) pendingFinals.delete(agentId)
       else pendingFinals.set(agentId, kept)
@@ -5422,24 +5465,106 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       pendingFinals.delete(agentId)
       return
     }
+    // #114 S5: each waiter is answered from its OWN floor. The old shared
+    // floor (the minimum sinceEvents) answered every waiter with one text, so
+    // a busy target's other work line settled tasks it had not read yet.
     const events = sessionEventsOf(agent)
-    const floor = Math.min(...entries.map(entry => entry.sinceEvents))
-    let reply = ''
-    for (let index = events.length - 1; index >= floor; index--) {
+    const answered: Array<{ entry: FinalWaiter; reply: string; placeholder?: true }> = []
+    // Logs that record turn boundaries bound each waiter to its consuming
+    // turn; a log without any marker falls back to "this idle ends it".
+    const turnMarked = events.some(event => event?.type === 'turn/start' || event?.type === 'turn/end')
+    for (const entry of entries) {
+      if (entry.taskId !== undefined) {
+        entry.consumedAt ??= consumptionIndex(events, entry.taskId, entry.scannedTo ?? entry.sinceEvents)
+        if (entry.consumedAt === undefined) {
+          // Not consumed yet (the steer waits for the running turn's next
+          // step, or the next turn): no final belongs to it — keep waiting.
+          entry.scannedTo = events.length
+          continue
+        }
+        // The consuming turn's window: up to its own `turn/end`, never into a
+        // following turn (back-to-back turns can run with no idle between).
+        // Without turn markers, this idle is the turn's end.
+        let end = events.length
+        let completed = true
+        if (turnMarked) {
+          const close = turnEndIndex(events, entry.consumedAt + 1)
+          if (close === undefined) {
+            // The consuming turn is still open: wait for its turn/end.
+            continue
+          }
+          end = close
+          completed = events[close]?.data?.reason?.kind === 'completed'
+        }
+        // The waiter closes HERE with that turn's last text. A turn that said
+        // nothing, or ended aborted/failed/blocked, did no work this host can
+        // vouch for: close as a placeholder — no receipt, the row stays owed.
+        const reply = latestAssistantText(events, entry.consumedAt + 1, end)
+        answered.push(reply !== '' && completed ? { entry, reply } : { entry, reply: '', placeholder: true })
+        continue
+      }
+      const reply = latestAssistantText(events, entry.sinceEvents)
+      if (reply !== '') answered.push({ entry, reply })
+    }
+    if (answered.length === 0) return
+    const kept = entries.filter(entry => !answered.some(done => done.entry === entry))
+    if (kept.length === 0) pendingFinals.delete(agentId)
+    else pendingFinals.set(agentId, kept)
+    for (const { entry, reply, placeholder } of answered) {
+      entry.timeoutDisposer?.()
+      if (placeholder === true) entry.answer('The consuming turn produced no completed reply.', true)
+      else entry.answer(reply)
+    }
+  }
+
+  /** #114 S5: the index of the first `turn/end` at or after `from`, or undefined while the turn is open. */
+  function turnEndIndex(events: readonly (SessionEventLike | undefined)[], from: number): number | undefined {
+    for (let index = from; index < events.length; index++) {
+      if (events[index]?.type === 'turn/end') return index
+    }
+    return undefined
+  }
+
+  /** #114 S5: the steer header both delivery paths write; the id is captured whole, never prefix-matched. */
+  const STEER_HEADER = /^\[A2A direct\] \(task ([^\s)]+)\) /
+
+  /**
+   * #114 S5: the index of the user/message that consumed one task's steer —
+   * the first at or after `from` whose first text block opens with the
+   * `[A2A direct] (task <id>)` header for exactly this id.
+   * @param from - first index not yet searched (starts at the pre-steer log length).
+   * @returns the index, or undefined while the steer is still unconsumed.
+   */
+  function consumptionIndex(events: readonly (SessionEventLike | undefined)[], taskId: string, from: number): number | undefined {
+    for (let index = from; index < events.length; index++) {
+      const event = events[index]
+      if (event?.type !== 'user/message') continue
+      const first = event.data?.content?.find(block => block.type === 'text' && typeof block.text === 'string')
+      if (STEER_HEADER.exec(first?.text ?? '')?.[1] === taskId) return index
+    }
+    return undefined
+  }
+
+  /**
+   * The newest assistant text at or after `floor`: at an idle flush that is
+   * the final of the turn that just ended. Textless messages (tool-only, or
+   * empty/whitespace text) are skipped, so a turn ending on a tool call still
+   * answers with the last thing it said. '' when no message has text.
+   * @param end - exclusive upper bound (default: the whole log).
+   */
+  function latestAssistantText(events: readonly (SessionEventLike | undefined)[], floor: number, end: number = events.length): string {
+    for (let index = end - 1; index >= floor; index--) {
       const event = events[index]
       if (event === undefined || event.type !== 'assistant/message') continue
       const content = event.data?.message?.content
       if (content === undefined) continue
-      reply = content
+      const text = content
         .filter((block): block is { type: 'text'; text: string } => block.type === 'text' && typeof block.text === 'string')
         .map(block => block.text)
         .join('\n')
-      break
+      if (text.trim() !== '') return text
     }
-    if (reply !== '') {
-      for (const entry of entries) entry.answer(reply)
-      pendingFinals.delete(agentId)
-    }
+    return ''
   }
 
   // Every inbound route is a direct route (final semantics), so the idle

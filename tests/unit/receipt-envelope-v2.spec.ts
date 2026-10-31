@@ -8,7 +8,8 @@ import { describe, expect, it } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { formatReceipt, parseReceipt } from '../../src/receipt.ts'
+import { formatReceipt, parseReceipt, taskIdRefusal } from '../../src/receipt.ts'
+import { parseReceipt as parsePreS5 } from './fixtures/receipt-pre-s5.ts'
 import { TaskLedger } from '../../src/task-ledger.ts'
 
 describe('receipt codec', () => {
@@ -42,6 +43,38 @@ describe('receipt codec', () => {
     // keys qualify — 'customField' alone must NOT demote this into an envelope.
     expect(parsed?.envelope).toBeUndefined()
     expect(parsed?.summary).toContain('"outcome"')
+  })
+
+  it('#114 S5: onBehalfOf and authRef round-trip, ordered after the v2 keys', () => {
+    const text = formatReceipt('t-5', 'done (auto)', { outcome: 'completed', idempotencyKey: 't-5', onBehalfOf: 'dsh/414d2b90', authRef: '6b8957a6f02206de' })
+    expect(text.split('\n')[1]).toBe('{"outcome":"completed","idempotencyKey":"t-5","onBehalfOf":"dsh/414d2b90","authRef":"6b8957a6f02206de"}')
+    expect(parseReceipt(text)?.envelope).toEqual({ outcome: 'completed', idempotencyKey: 't-5', onBehalfOf: 'dsh/414d2b90', authRef: '6b8957a6f02206de' })
+  })
+
+  it('#114 S5: malformed onBehalfOf/authRef values are dropped; a valid one qualifies the line like any known key', () => {
+    const parsed = parseReceipt('[A2A receipt] task t-6 ok\n{"outcome":"completed","onBehalfOf":"","authRef":"NOT-HEX"}')
+    expect(parsed?.envelope).toEqual({ outcome: 'completed' })
+    // Only garbage values for the new keys: the line stays human prose.
+    expect(parseReceipt('[A2A receipt] task t-7 ok\n{"authRef":12,"onBehalfOf":""}')?.envelope).toBeUndefined()
+    // A valid value alone qualifies, exactly as sessionKey alone always has.
+    expect(parseReceipt('[A2A receipt] task t-8 ok\n{"onBehalfOf":"dsh/x"}')?.envelope).toEqual({ onBehalfOf: 'dsh/x' })
+  })
+
+  it('#114 S5: taskIdRefusal rejects ")", whitespace and control characters, nothing else', () => {
+    for (const ok of ['direct-bb27ec94', 'wb-1', 'reuse-1', 'a(b', 'ids.with_dots:and/slashes']) expect(taskIdRefusal(ok)).toBeUndefined()
+    for (const bad of ['foo) x', 'foo)', 'a b', 'tab\tx', 'nl\nx', 'nul\u0000', 'del\u007f']) expect(taskIdRefusal(bad)).toContain('task_id must not contain')
+  })
+
+  it('#114 S5: the pre-S5 codec (master c9e3a89, verbatim fixture) reads a new receipt unchanged', () => {
+    const text = formatReceipt('direct-bb27ec94', 'mapping recorded (auto)', { outcome: 'completed', idempotencyKey: 'direct-bb27ec94', onBehalfOf: 'dsh/414d2b90', authRef: '6b8957a6f02206de' })
+    // The old parser keeps its four keys and ignores the two new ones.
+    expect(parsePreS5(text)).toEqual({ taskId: 'direct-bb27ec94', summary: 'mapping recorded (auto)', envelope: { outcome: 'completed', idempotencyKey: 'direct-bb27ec94' } })
+    // The header line — what every legacy correlator matches — is byte-identical.
+    expect(text.split('\n')[0]).toBe('[A2A receipt] task direct-bb27ec94 mapping recorded (auto)')
+    // And the ledger settles it exactly as before.
+    const ledger = new TaskLedger('')
+    ledger.track('direct-bb27ec94', 'dsh/414d2b90', 'local')
+    expect(ledger.resolveFromMessage(text)?.outcome).toBe('completed')
   })
 
   it('malformed JSON on the second line degrades to a plain v1 summary', () => {
