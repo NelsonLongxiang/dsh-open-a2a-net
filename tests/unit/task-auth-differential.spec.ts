@@ -62,6 +62,8 @@ function makeOld(w: W) {
     }
     if (callerSessionId !== undefined) {
       for (const name of canvasStore.teamsOf(callerSessionId)) declared.add(canvasTeamOf(name))
+      // Deliberate update (review of PR #129): a member stored by its zone/id8 handle counts too.
+      for (const name of canvasStore.list()) if (canvasStore.membersOf(name).includes(caller)) declared.add(canvasTeamOf(name))
     } else {
       for (const name of canvasStore.list()) {
         if (canvasStore.remoteMembersOf(name).includes(caller)) declared.add(canvasTeamOf(name))
@@ -99,6 +101,7 @@ function makeOld(w: W) {
             if (entry.session === targetSession) for (const t of entry.teams) targetLinks.add(t)
           }
           for (const name of canvasStore.teamsOf(targetSession)) targetLinks.add(canvasTeamOf(name))
+          for (const name of canvasStore.list()) if (canvasStore.membersOf(name).includes(targetTeam)) targetLinks.add(canvasTeamOf(name))
           for (const cached of cardCache.values()) {
             const org = (cached.card as { canvasOrg?: Array<{ team?: unknown; members?: unknown }> } | undefined)?.canvasOrg
             if (!Array.isArray(org)) continue
@@ -113,7 +116,7 @@ function makeOld(w: W) {
         if (canvasName !== undefined) {
           targetLinks = new Set<string>([targetTeam])
           for (const memberId of canvasStore.membersOf(canvasName)) {
-            for (const entry of teamMemberships.list()) if (entry.session === memberId) for (const t of entry.teams) targetLinks.add(t)
+            for (const entry of teamMemberships.list()) if (entry.session === memberId || `${config.team}/${id8(entry.session)}` === memberId) for (const t of entry.teams) targetLinks.add(t)
           }
         }
       }

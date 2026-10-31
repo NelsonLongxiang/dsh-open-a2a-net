@@ -114,8 +114,17 @@ export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTea
       if (`${r.zone}/${r.id8(id)}` === caller) { callerSessionId = id; break }
     }
   }
+  // Canvas members mix two shapes: a local session sits by session id, but a
+  // member added across hosts (gh#41 fleet editing) is stored by its
+  // zone/id8 handle even when the session is local here. Match either — the
+  // sending side's gate already does (review of PR #129).
+  const sessionOrHandleIn = (members: readonly string[], sessionId: string, handle: string): boolean =>
+    members.includes(sessionId) || members.includes(handle)
   if (callerSessionId !== undefined) {
     for (const name of r.canvasTeamsOf(callerSessionId)) declare(r.canvasTeamOf(name), 'canvas-shared')
+    for (const name of r.canvasNames()) {
+      if (r.canvasMembersOf(name).includes(caller)) declare(r.canvasTeamOf(name), 'canvas-shared')
+    }
   } else {
     for (const name of r.canvasNames()) {
       if (r.canvasRemoteMembersOf(name).includes(caller)) declare(r.canvasTeamOf(name), 'remote-ref-samezone')
@@ -171,6 +180,9 @@ export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTea
           if (entry.session === targetSession) for (const t of entry.teams) targetLinks.add(t)
         }
         for (const name of r.canvasTeamsOf(targetSession)) targetLinks.add(r.canvasTeamOf(name))
+        for (const name of r.canvasNames()) {
+          if (r.canvasMembersOf(name).includes(targetTeam)) targetLinks.add(r.canvasTeamOf(name))
+        }
         for (const org of r.peerOrgs()) {
           for (const e of org) {
             if (typeof e.team !== 'string' || e.team === '' || !Array.isArray(e.members)) continue
@@ -186,7 +198,9 @@ export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTea
       if (canvasName !== undefined) {
         targetLinks = new Set<string>([targetTeam])
         for (const memberId of r.canvasMembersOf(canvasName)) {
-          for (const entry of r.memberships()) if (entry.session === memberId) for (const t of entry.teams) targetLinks.add(t)
+          for (const entry of r.memberships()) {
+            if (sessionOrHandleIn([memberId], entry.session, `${r.zone}/${r.id8(entry.session)}`)) for (const t of entry.teams) targetLinks.add(t)
+          }
         }
       }
     }

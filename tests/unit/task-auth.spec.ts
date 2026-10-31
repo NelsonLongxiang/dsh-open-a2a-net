@@ -148,6 +148,16 @@ describe('gh#128: a canvas target is judged at target level (F5), not host level
     expect(callerAdmission(r, 'dsh/cccccccc', 'dsh/canvas/qa')).toMatchObject({ ok: true, rule: 'roster-shared', basis: ['dsh/team-x'] })
   })
 
+  it('review of PR #129: a local session the canvas stores by handle (gh#41 fleet edit) is a member, as caller and as target', () => {
+    const r = records({ joined: [A, B], canvas: { ops: ['dsh/aaaaaaaa', 'dsh/bbbbbbbb'], qa: [A] } })
+    expect(joinedFaceAdmission(r, 'dsh/aaaaaaaa', 'dsh/canvas/ops')).toMatchObject({ ok: true, rule: 'canvas-shared', basis: ['dsh/canvas/ops'] })
+    expect(callerAdmission(r, 'dsh/bbbbbbbb', 'dsh/canvas/ops')).toMatchObject({ ok: true, rule: 'canvas-shared' })
+    expect(callerAdmission(r, 'dsh/aaaaaaaa', 'dsh/bbbbbbbb')).toMatchObject({ ok: true, rule: 'canvas-shared', basis: ['dsh/canvas/ops'] })
+    // A handle-stored member's roster teams link the canvas target too.
+    const roster = records({ joined: [A, B, C], canvas: { ops: ['dsh/bbbbbbbb'] }, memberships: [{ session: B, teams: ['dsh/team-x'] }, { session: C, teams: ['dsh/team-x'] }] })
+    expect(callerAdmission(roster, 'dsh/cccccccc', 'dsh/canvas/ops')).toMatchObject({ ok: true, rule: 'roster-shared', basis: ['dsh/team-x'] })
+  })
+
   it('a remote member ref of the canvas gets in; an unknown canvas name keeps the host-level basis', () => {
     const r = records({ joined: [A], canvas: { ops: [A, 'dsh/dddddddd'] } })
     expect(callerAdmission(r, 'dsh/dddddddd', 'dsh/canvas/ops')).toMatchObject({ ok: true, rule: 'remote-ref-samezone' })
