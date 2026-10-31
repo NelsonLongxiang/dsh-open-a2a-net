@@ -523,8 +523,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
           res.end(payload)
         }
-        if (peerUrl === '' || !/^https?:\/\//.test(peerUrl) || !['create', 'add-member', 'remove-member'].includes(opV) || (opV !== 'create' && nameV === '')) {
-          send(JSON.stringify({ ok: false, error: 'peer (http url), op (create | add-member | remove-member), and name are required' }))
+        if (peerUrl === '' || !/^https?:\/\//.test(peerUrl) || !['create', 'add-member', 'remove-member', 'remove'].includes(opV) || (opV !== 'create' && nameV === '')) {
+          send(JSON.stringify({ ok: false, error: 'peer (http url), op (create | add-member | remove-member | remove), and name are required' }))
           return
         }
         if (!peerStore.list().includes(peerUrl)) {
@@ -538,7 +538,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             headers: { 'Content-Type': 'application/json', ...originClaimHeaders() },
             // A local session id means nothing on the peer: send its zone/id8 handle (the workbench
             // drops a local card into a remote frame with its raw session id, which the peer refused).
-            body: JSON.stringify({ op: opV, name: nameV, ...(opV !== 'create' ? { id: idV !== '' && !isRemoteMemberRef(idV) && (sessionNodes.has(idV) || joinedSessions.has(idV)) ? `${config.team}/${id8(idV)}` : idV } : {}) }),
+            body: JSON.stringify({ op: opV, name: nameV, ...(opV === 'add-member' || opV === 'remove-member' ? { id: idV !== '' && !isRemoteMemberRef(idV) && (sessionNodes.has(idV) || joinedSessions.has(idV)) ? `${config.team}/${id8(idV)}` : idV } : {}) }),
             signal: AbortSignal.timeout(15_000),
           })
           const raw = await reply.text()

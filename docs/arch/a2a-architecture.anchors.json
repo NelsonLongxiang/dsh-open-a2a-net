@@ -3,12 +3,12 @@
   "sourceCommit": "0b466643b27120878ceeab9a2ebf087ae3854605",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "d3035eed61edeb81973c166269fccb6abc3fb3869d511d8735c0e5decd8f1122",
-    "src/faces/admin.ts": "79bdf83e5a0866507e7e249b25d5c999c1a1fba9d5fc11509ed4d72d424ffb16",
+    "src/index.ts": "1188fee82f1895a38c723092a4f0b52657bf167076aa125f2dc721ddc235e444",
+    "src/faces/admin.ts": "df03da5798d6a45f43fec1a9bf00366cfe44d051e9965a022b89631f5998aff0",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "fded04a5bd4e0443f096874a9a0495786272ddb63d7e5ddf72e89b4502fad333",
-    "nexus-stage/src/workbench.ts": "fbfe7cf0062fbd7adc5db5650f37bb508308e7580ea08ae6434e45d82a11eb93",
+    "nexus-stage/src/workbench.ts": "db77d8c241f08dd7bb84825c7c085769d209d0bd17fd7521d194718e679add7e",
     "nexus-stage/src/federation.ts": "d499312360a0ee4ddc5fa42f45675bfe0dba4f68c40e976c38036f8f06150148",
     "nexus-stage/src/planning-relayout.ts": "7ce77ba2bc95fcbee62af752f22969b726511d8988133e74123a5e04a7a6a571",
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
@@ -19,8 +19,8 @@
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
-    "src/faces/wire.ts": "4fe0893a95b69eface5178e26b54289719e85da0e089f740cc62976a49c6933f",
-    "src/faces/canvas-notify.ts": "252202b494f60587662e2ec7542cb29119c066d36cc5843f846d6052760a224e",
+    "src/faces/wire.ts": "e2ca4b9c7779ed86b6e5fa63c4b145bd64aabc4abac310950b518732d313b792",
+    "src/faces/canvas-notify.ts": "10a79ab13d69746268269f0bf8c100464832316e39498ba6ec4aeeae961ec0dd",
     "src/task-auth.ts": "76e14299a8b2ecf8cade9c19b3f29077783be8eea82ebe558ada9a2fab618e57"
   },
   "anchors": [
@@ -99,19 +99,19 @@
     {
       "page": "p1-arch",
       "cell": "c2",
-      "ref": "src/faces/wire.ts:415",
+      "ref": "src/faces/wire.ts:437",
       "expect": "path: '/a2a/direct',"
     },
     {
       "page": "p1-arch",
       "cell": "c3",
-      "ref": "src/faces/wire.ts:257",
+      "ref": "src/faces/wire.ts:279",
       "expect": "path: '/a2a/log',"
     },
     {
       "page": "p1-arch",
       "cell": "c4",
-      "ref": "src/faces/wire.ts:336",
+      "ref": "src/faces/wire.ts:358",
       "expect": "path: '/a2a/query',"
     },
     {
@@ -315,7 +315,7 @@
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/faces/wire.ts:567",
+      "ref": "src/faces/wire.ts:589",
       "expect": "if (refuseIfFlooded(caller, message, team, taskId, res)) return"
     },
     {
@@ -327,7 +327,7 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/wire.ts:110",
+      "ref": "src/faces/wire.ts:117",
       "expect": "export function registerWireFaces(webServer: WebServer, d: WireDeps): void {"
     },
     {

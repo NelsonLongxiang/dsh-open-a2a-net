@@ -201,7 +201,7 @@ export interface WorkbenchDeps {
   ownerSettingsWrite?(changes: { teamJoinAllowlist?: string[]; teamScopeInfo?: boolean; announce?: boolean }): Promise<{ ok: boolean; restartNeeded?: boolean; error?: string }>
   /** gh#41 fleet planning: regulate a REMOTE peer's canvas team (this host
    *  signs the envelope and forwards; the peer's link gate authorizes). */
-  fleetCanvasOp?(peer: string, op: 'create' | 'add-member' | 'remove-member', name: string, id?: string): Promise<{ ok: boolean; members?: string[]; error?: string }>
+  fleetCanvasOp?(peer: string, op: 'create' | 'add-member' | 'remove-member' | 'remove', name: string, id?: string): Promise<{ ok: boolean; members?: string[]; error?: string }>
   /** Abandon one dead-lettered task via the control route. True on success. */
   abandon(taskId: string, reason: string): Promise<boolean>
   /** Canvas team member change via the control route (0.6.6): `id` is a
