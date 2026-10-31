@@ -4,7 +4,7 @@
  * 4h auto-deregister, mailbox round-trip.
  */
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { generateKeyPairSync } from 'node:crypto'
@@ -110,6 +110,57 @@ describe('gh#113 CLI mailbox: seq, loss and truncation are visible', () => {
     b.mail(H, 'dsh/2772468a', 'next')
     expect(b.readMailbox(H).mail[0]!.seq).toBe(67)
     expect(store().s.readMailbox(H).epoch).not.toBe(before.epoch)
+  })
+
+  it('review P2: a failed write rotates the epoch, so a restart from the older disk state cannot reuse seq under the same name', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli113-ro-'))
+    const a = store(dir).s
+    a.mail(H, 'x', 'on disk')
+    const diskEpoch = a.readMailbox(H).epoch
+    chmodSync(join(dir, 'deposits.json'), 0o444)
+    try {
+      a.mail(H, 'x', 'memory only')
+      const memory = a.readMailbox(H)
+      expect(memory.next_seq).toBe(3)
+      expect(memory.epoch).not.toBe(diskEpoch)
+      a.mail(H, 'x', 'still memory only')
+      expect(a.readMailbox(H).epoch).toBe(memory.epoch) // one rotation per failure streak
+      const restarted = store(dir).s.readMailbox(H)
+      expect(restarted).toMatchObject({ epoch: diskEpoch, next_seq: 2 })
+      expect(restarted.epoch).not.toBe(memory.epoch)
+    } finally {
+      chmodSync(join(dir, 'deposits.json'), 0o644)
+    }
+  })
+
+  it('review P3: unsound seqs (fractional, duplicate, negative, mixed) are renumbered under a new epoch', () => {
+    for (const rows of [
+      [{ at: 3, from: 'x', text: 'c', seq: 2.5 }, { at: 1, from: 'x', text: 'a', seq: 1 }],
+      [{ at: 3, from: 'x', text: 'c', seq: 5 }, { at: 1, from: 'x', text: 'a', seq: 5 }],
+      [{ at: 3, from: 'x', text: 'c', seq: -7 }],
+      [{ at: 3, from: 'x', text: 'c', seq: 10 }, { at: 1, from: 'x', text: 'a' }],
+    ]) {
+      const dir = mkdtempSync(join(tmpdir(), 'cli113-bad-'))
+      writeFileSync(join(dir, 'deposits.json'), JSON.stringify({ deposits: [], mailbox: { [H]: rows }, epoch: 'e1', nextSeq: { [H]: 11 } }))
+      const box = store(dir).s.readMailbox(H)
+      expect(box.epoch).not.toBe('e1')
+      expect(box.mail.map(m => m.seq)).toEqual(rows.map((_, i) => rows.length - i))
+      expect(box).toMatchObject({ next_seq: rows.length + 1, oldest_seq: 1 })
+    }
+  })
+
+  it('review P3: an epoch whose nextSeq record is missing is not kept', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli113-partial-'))
+    writeFileSync(join(dir, 'deposits.json'), JSON.stringify({ deposits: [], epoch: 'e1' }))
+    expect(store(dir).s.readMailbox(H).epoch).not.toBe('e1')
+  })
+
+  it('review P3: a restored or renumbered store pins its epoch on disk at once', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli113-pin-'))
+    writeFileSync(join(dir, 'deposits.json'), JSON.stringify({ deposits: [], mailbox: { [H]: [{ at: 1, from: 'x', text: 'a' }] } }))
+    const first = store(dir).s.readMailbox(H).epoch
+    expect((JSON.parse(readFileSync(join(dir, 'deposits.json'), 'utf8')) as { epoch: string }).epoch).toBe(first)
+    expect(store(dir).s.readMailbox(H).epoch).toBe(first)
   })
 
   it('a pre-gh#113 snapshot (no seq) is numbered oldest first on restore', () => {

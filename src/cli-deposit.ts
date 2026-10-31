@@ -90,6 +90,11 @@ interface Snapshot {
   truncated?: Record<string, number>
 }
 
+/** A fresh mailbox epoch: any reader's seq cursor from another epoch is void. */
+const newEpoch = (): string => randomUUID().replace(/-/g, '').slice(0, 12)
+
+const isSeq = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 1
+
 export const MAILBOX_CAP = 64
 export const MAILBOX_TEXT_CAP = 4000
 
@@ -99,7 +104,9 @@ export class CliDepositStore {
   private nextSeq = new Map<string, number>()
   private dropped = new Map<string, number>()
   private truncated = new Map<string, number>()
-  private epoch = randomUUID().slice(0, 8)
+  private epoch = newEpoch()
+  /** gh#113 review: true while the last write failed — the epoch on disk no longer matches memory. */
+  private unpersisted = false
   private now: () => number
 
   constructor(private readonly path: string, options?: { now?: () => number }) {
@@ -216,7 +223,7 @@ export class CliDepositStore {
       mail: afterSeq === undefined ? [...all] : all.filter(m => m.seq > afterSeq),
       epoch: this.epoch,
       next_seq: next,
-      oldest_seq: all.length === 0 ? next : all[all.length - 1]!.seq,
+      oldest_seq: all.length === 0 ? next : Math.min(...all.map(m => m.seq)),
       dropped: this.dropped.get(handle) ?? 0,
     }
   }
@@ -264,8 +271,18 @@ export class CliDepositStore {
     try {
       mkdirSync(join(this.path, '..'), { recursive: true })
       writeFileSync(this.path, JSON.stringify(snapshot), 'utf8')
+      this.unpersisted = false
     } catch {
-      // persistence best-effort; the deposit re-publishes self-heal
+      // Persistence stays best-effort (re-publishes self-heal), but a seq
+      // handed out from memory must never be handed out again after a
+      // restart under the same epoch: the disk still holds the older
+      // nextSeq, so a reader holding a newer seq would skip new mail.
+      // Leave the epoch on disk behind — readers of this memory-only run
+      // fall back to their `at` cursor after a restart (gh#113 review P2).
+      if (!this.unpersisted) {
+        this.unpersisted = true
+        this.epoch = newEpoch()
+      }
     }
   }
 
@@ -278,23 +295,36 @@ export class CliDepositStore {
           this.deposits.set(row.handle, row as CliDeposit)
         }
       }
-      if (typeof snapshot.epoch === 'string' && snapshot.epoch !== '') this.epoch = snapshot.epoch
+      // The epoch is kept only when the seq record that goes with it survived:
+      // an epoch without nextSeq would restart seq at 1 under the same name.
+      let keepEpoch = typeof snapshot.epoch === 'string' && snapshot.epoch !== '' && snapshot.nextSeq !== null && typeof snapshot.nextSeq === 'object'
       const counts = (record: unknown, into: Map<string, number>): void => {
         for (const [handle, n] of Object.entries(record ?? {})) if (typeof n === 'number' && Number.isInteger(n) && n >= 0) into.set(handle, n)
       }
       counts(snapshot.nextSeq, this.nextSeq)
       counts(snapshot.dropped, this.dropped)
       counts(snapshot.truncated, this.truncated)
+      let renumbered = false
       for (const [handle, list] of Object.entries(snapshot.mailbox ?? {})) {
         if (!Array.isArray(list)) continue
         const rows = list.filter((m): m is CliMail => m !== null && typeof m === 'object')
-        // A pre-gh#113 snapshot has no seq: number its rows oldest first, after any seq it knew.
-        let next = Math.max(this.nextSeq.get(handle) ?? 1, ...rows.map(m => (typeof m.seq === 'number' ? m.seq + 1 : 1)))
-        const numbered = [...rows].reverse().map(m => (typeof m.seq === 'number' ? m : { ...m, seq: next++ })).reverse()
+        const seqs = rows.map(m => m.seq)
+        const sound = seqs.every(isSeq) && new Set(seqs).size === seqs.length &&
+          seqs.every((n, i) => i === 0 || n < seqs[i - 1]!) && (this.nextSeq.get(handle) ?? 0) > Math.max(0, ...seqs)
+        if (sound) { this.mailbox.set(handle, rows); continue }
+        // A pre-gh#113 snapshot (no seq), or one whose seqs are not unique
+        // positive integers in newest-first order: number the whole handle
+        // afresh, oldest first, under a new epoch.
+        renumbered = true
+        const numbered = [...rows].reverse().map((m, i) => ({ ...m, seq: i + 1 })).reverse()
         this.mailbox.set(handle, numbered)
-        this.nextSeq.set(handle, Math.max(next, ...numbered.map(m => m.seq + 1)))
+        this.nextSeq.set(handle, numbered.length + 1)
       }
+      if (renumbered) keepEpoch = false
+      if (keepEpoch) this.epoch = snapshot.epoch!
       this.sweep()
+      // Pin the epoch (and any renumbering) on disk now, so it does not change on every start.
+      if (!keepEpoch) this.persist()
     } catch {
       // corrupt file: start empty (re-publish heals)
     }

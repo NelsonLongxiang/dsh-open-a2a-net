@@ -6,7 +6,7 @@
  * records what the CLI sent, so nothing here touches a real DSH or ~/.a2a.
  */
 import { spawn } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -428,8 +428,8 @@ describe('a2a-net CLI: route --sync', () => {
 describe('a2a-net CLI: inbox reads by seq and reports mail the cap pushed out (gh#113)', () => {
   const SCOUT = 'scout/0123456789abcdef'
   /** A host whose cli-deposit face is the REAL store, so the CLI reads the host's own gh#113 shape. */
-  async function storeHost(dir = mkdtempSync(join(tmpdir(), 'cli113-host-'))) {
-    let store = new CliDepositStore(join(dir, 'deposits.json'))
+  async function storeHost(dir = mkdtempSync(join(tmpdir(), 'cli113-host-')), now?: () => number) {
+    let store = new CliDepositStore(join(dir, 'deposits.json'), now === undefined ? undefined : { now })
     const server = createServer((req, res) => {
       let text = ''
       req.on('data', (c) => { text += String(c) })
@@ -473,7 +473,7 @@ describe('a2a-net CLI: inbox reads by seq and reports mail the cap pushed out (g
   })
 
   it('two mails in one millisecond are both read; a truncated text says so', async () => {
-    const host = await storeHost()
+    const host = await storeHost(undefined, () => 5_000)
     const HOME = await scoutHome()
     const env = { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url }
     host.mail(1, 'seed')
@@ -497,6 +497,20 @@ describe('a2a-net CLI: inbox reads by seq and reports mail the cap pushed out (g
     const out = await runCli(['inbox', '--new'], env)
     expect(out.stdout).toContain('after reset0')
     expect(out.stderr).toBe('')
+  })
+
+  it('review P3: a loss with nothing unread is reported once, then the cursor moves past it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli113-lossonly-'))
+    writeFileSync(join(dir, 'deposits.json'), JSON.stringify({ deposits: [], mailbox: {}, epoch: 'e1', nextSeq: { [SCOUT]: 20 } }))
+    const host = await storeHost(dir)
+    const HOME = await scoutHome()
+    writeFileSync(join(HOME, 'inbox.cursor'), JSON.stringify({ handle: SCOUT, at: 1, seen: [], epoch: 'e1', seq: 5 }))
+    const env = { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url }
+    const first = await runCli(['inbox', '--hook'], env, CLI, '{}')
+    expect(first.stdout).toContain('no new messages')
+    expect(first.stdout).toContain('14 messages were pushed out')
+    expect((await runCli(['inbox', '--hook'], env, CLI, '{}')).stdout).toBe('')
+    expect(JSON.parse(readFileSync(join(HOME, 'inbox.cursor'), 'utf8'))).toMatchObject({ epoch: 'e1', seq: 19 })
   })
 
   it('--hook names the loss inside the data frame', async () => {
