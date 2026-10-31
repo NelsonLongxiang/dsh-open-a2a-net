@@ -24,7 +24,7 @@ import { refuseIfBudgetExhausted } from '../recursion-guard.ts'
 import { peerPayloadFingerprint, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from '../idempotency-store.ts'
 import { briefOf, type TaskLedger } from '../task-ledger.ts'
 import { taskIdRefusal } from '../receipt.ts'
-import { buildAuthorization, claimCovers, refusalOf, type Admission } from '../task-auth.ts'
+import { buildAuthorization, claimCovers, refusalOf, type Admission, type AuthProof, type Settler } from '../task-auth.ts'
 import type { Config } from '../index.ts'
 import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from '../transport-caps.ts'
 
@@ -96,7 +96,7 @@ export interface WireDeps {
   readonly readSessionLogTail: (id: string, limit: number) => { ok: true; id: string; messages: Array<{ role: string; text: string; time?: number }> } | { ok: false; error: string }
   readonly taskLedger: TaskLedger
   readonly refuseIfFlooded: (caller: string, message: string, team: string, taskId: string, res: ServerResponse) => boolean
-  readonly settleAndAnnounce: (message: string) => void
+  readonly settleAndAnnounce: (message: string, settler?: Settler) => void
   readonly touchWakeDemand: () => void
   readonly session: string
   readonly resolveAgentForTeam: (team: string) => Agent | undefined
@@ -594,6 +594,11 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             }
             d.bumpLegacyInbound()
           }
+          // A verified claim proves the caller only when its signed zone covers it (review of PR #134 P1),
+          // and the host face only when it was signed from this very host (round 2: a zone name is not an origin).
+          const callerProof: AuthProof = !claim.ok ? 'legacy-window'
+            : claimCovers(caller, claim.caller) && (admission.rule !== 'host-face' || originOf(claim.callerUrl) === originOf(d.ownCardUrl))
+              ? 'origin-claim' : 'claim-mismatch'
           if (refuseIfBudgetExhausted(req, res, team, caller, taskId, taskLedger)) return
           // Server-side idempotency (P3/B3): one key, one execution inside
           // the window. Same key + same payload ⇒ replay; different payload
@@ -620,7 +625,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // receipt resolves the task it echoes, whichever wait semantics
           // carried it here. Correlation is bookkeeping only — the message
           // steers on exactly as before.
-          settleAndAnnounce(message)
+          // #114 S4: the settler is this delivery's caller, as proven here.
+          settleAndAnnounce(message, { caller, proof: callerProof, ...(claim.ok ? { claimOrigin: originOf(claim.callerUrl) } : {}), ingress: 'wire' })
           // gh#45 CLI mailbox (wire face): a delivery targeting a DEPOSITED
           // CLI handle never resolves a session and never wakes — it lands
           // in the deposit's mailbox and answers delivered. Placement here
@@ -728,11 +734,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // #114 S2: the row is born with its immutable authorization record.
                 const auth = buildAuthorization(admission, {
                   caller,
-                  // A verified claim proves the caller only when its signed zone covers it (review of PR #134 P1),
-                  // and the host face only when it was signed from this very host (round 2: a zone name is not an origin).
-                  proof: !claim.ok ? 'legacy-window'
-                    : claimCovers(caller, claim.caller) && (admission.rule !== 'host-face' || originOf(claim.callerUrl) === originOf(d.ownCardUrl))
-                      ? 'origin-claim' : 'claim-mismatch',
+                  proof: callerProof,
                   ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}),
                   ingress: 'wire',
                   allowlistVersion: admittedAt.version,

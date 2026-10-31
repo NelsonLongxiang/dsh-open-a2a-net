@@ -2267,6 +2267,7 @@ describe('a2a plugin module surface', () => {
       wakeReconcileBackoffBaseMs: 5_000,
       wakeReconcileMaxBackoffMs: 600_000,
       gateAgentLessCalls: 'audit',
+      settlementAuth: 'observe',
       teamJoinAllowlist: [],
       teamScopeRouting: true,
       // S5 (owner directive 2026-10-20): info-plane tools disclose

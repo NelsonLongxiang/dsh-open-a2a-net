@@ -478,3 +478,91 @@ export function parseAuthorization(raw: unknown, now: number = Date.now()): Task
     },
   )
 }
+
+// ── S4: who may settle a task (design §4.1, §4.2, §4.4) ──────────────────────
+
+/** `off`: no judgement. `observe` (default): judge and record, settle as before. `enforce`: an off-chain settlement is refused. */
+export type SettlementMode = 'off' | 'observe' | 'enforce'
+
+/** How a settler stands on the task's authorization chain. */
+export type ChainRole = 'target' | 'target-member' | 'host-face' | 'compat' | 'legacy'
+
+/** Why a settlement is (or would be) refused — closed set (design §4.4). */
+export type SettlementReason = 'settler-off-chain' | 'settler-unverified' | 'on-behalf-mismatch' | 'echo-off-chain'
+
+/** Who carried the receipt to this host (design §4.1). */
+export interface Settler {
+  /** The caller_session of the message that carries the receipt. */
+  readonly caller: string
+  readonly proof: AuthProof
+  /** The origin of a VERIFIED OriginClaim's card URL (claim-mismatch included), absent without one. */
+  readonly claimOrigin?: string
+  readonly ingress: 'wire' | 'local'
+}
+
+/** The ledger row a receipt correlates, as far as the judgement reads it. */
+export interface SettlementRow {
+  readonly team: string
+  readonly peer: string
+  readonly direction?: 'inbound' | 'outbound'
+  readonly auth?: TaskAuthorization
+}
+
+/** Facts from outside the row. */
+export interface SettlementFacts {
+  /** This host's process label: the caller its own auto-receipts carry. */
+  readonly hostLabel: string
+  /** A canvas team's members (session ids and handles), undefined for any other team. */
+  membersOf(team: string): readonly string[] | undefined
+  /** The receipt envelope's onBehalfOf (S5), when present. */
+  readonly onBehalfOf?: string
+  /** The row was matched by a content echo, not a receipt header (weak evidence). */
+  readonly echo?: boolean
+}
+
+export type SettlementVerdict =
+  | { readonly ok: true; readonly role: ChainRole }
+  | { readonly ok: false; readonly reason: SettlementReason }
+
+const originOfUrl = (url: string): string | undefined => {
+  try { return new URL(url).origin } catch { return undefined }
+}
+
+/**
+ * Is this settler on the task's authorization chain? Pure. The chain:
+ * - `target`: the settler IS the team the task went to (an inbound row: its
+ *   record's target);
+ * - `target-member`: the team is a canvas and the settler one of its members;
+ * - `host-face`: the target's host settling on its behalf — an envelope
+ *   `onBehalfOf` naming the target (or a member), carried locally by THIS
+ *   host's process label, or across hosts by a verified claim from the row's
+ *   peer origin;
+ * - `compat`: an older host's auto-receipt (no onBehalfOf) with a verified
+ *   claim from the row's peer origin (design §6);
+ * - `legacy`: an inbound row born before S2 (no record) — allowed, counted.
+ * A target or member reached over the wire without an OriginClaim that
+ * proves it is `settler-unverified`; an onBehalfOf for someone else is
+ * `on-behalf-mismatch`; anything else is off-chain (`echo-off-chain` for
+ * an echo match).
+ */
+export function judgeSettlement(row: SettlementRow, settler: Settler, facts: SettlementFacts): SettlementVerdict {
+  const inbound = row.direction === 'inbound'
+  if (inbound && row.auth === undefined) return { ok: true, role: 'legacy' }
+  const target = inbound ? row.auth!.target : row.team
+  const members = facts.membersOf(target) ?? []
+  const local = inbound || row.peer === 'local' || row.peer.startsWith('local:')
+  const peerOrigin = local ? undefined : originOfUrl(row.peer)
+  const fromPeerOrigin = settler.ingress === 'wire' && peerOrigin !== undefined && settler.claimOrigin === peerOrigin
+  const offChain = (): SettlementVerdict => ({ ok: false, reason: facts.echo === true ? 'echo-off-chain' : 'settler-off-chain' })
+  if (facts.onBehalfOf !== undefined) {
+    const forTarget = facts.onBehalfOf === target || members.includes(facts.onBehalfOf)
+    const asHost = local ? settler.ingress === 'local' && settler.caller === facts.hostLabel : fromPeerOrigin
+    if (forTarget && asHost) return { ok: true, role: 'host-face' }
+    if (!forTarget && asHost) return { ok: false, reason: 'on-behalf-mismatch' }
+  }
+  const unverified = settler.ingress === 'wire' && settler.proof !== 'origin-claim'
+  if (settler.caller === target) return unverified ? { ok: false, reason: 'settler-unverified' } : { ok: true, role: 'target' }
+  if (members.includes(settler.caller)) return unverified ? { ok: false, reason: 'settler-unverified' } : { ok: true, role: 'target-member' }
+  if (facts.onBehalfOf === undefined && fromPeerOrigin) return { ok: true, role: 'compat' }
+  return offChain()
+}

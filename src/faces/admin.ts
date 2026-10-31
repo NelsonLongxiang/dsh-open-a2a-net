@@ -285,8 +285,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               ...(task.brief !== undefined ? { brief: task.brief } : {}),
               // #114 S3: the real sender, so supervision buckets by seat, not "home".
               ...(task.sender !== undefined ? { sender: task.sender } : {}),
-              // #114 S2: the authority an inbound row was born with.
-              ...(task.auth !== undefined ? { auth: task.auth } : {}),
+              // #114 S2: the authority an inbound row was born with; a pre-S2 inbound row reads 'legacy' (S4).
+              ...(task.auth !== undefined ? { auth: task.auth } : task.direction === 'inbound' ? { auth: 'legacy' as const } : {}),
               // C-ruling bucket split: a pending row is settleable while
               // it is young, expected, and answerable; past the stale
               // hour it is conversational noise waiting on the dead TTL.
@@ -325,8 +325,24 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             ...(row.summary !== undefined && row.summary !== '' ? { summary: row.summary.slice(0, 160) } : {}),
             ...(row.sender !== undefined ? { sender: row.sender } : {}),
             ...(row.auth !== undefined ? { auth: row.auth } : {}),
+            // #114 S4: who settled it and how they stood on the chain.
+            ...(row.settledBy !== undefined ? { settledBy: row.settledBy } : {}),
           })),
           archivedCount: taskLedger.archive().length,
+          // #114 S4: settlement authorization. The team verifier holds
+          // `offChain` (settled while off-chain under observe) and the
+          // `refusals` ring to zero; `legacy` drains as pre-S2 rows age out.
+          settlement: (() => {
+            const archive = taskLedger.archive()
+            const roles = archive.flatMap(row => (row.settledBy !== undefined ? [row.settledBy.chain_role] : []))
+            return {
+              mode: config.settlementAuth,
+              offChain: roles.filter(r => r === 'off-chain').length,
+              legacy: roles.filter(r => r === 'legacy').length,
+              compat: roles.filter(r => r === 'compat').length,
+              refusals: taskLedger.settlementRefusals(),
+            }
+          })(),
           // Ledger density face: the settled archive split by verdict, so
           // the workbench can say WHICH way those rows settled instead of
           // just how many. Additive and bounded (outcome vocabulary is a

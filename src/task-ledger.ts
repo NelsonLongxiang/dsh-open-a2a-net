@@ -19,7 +19,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/task-ledger
  */
 
-import { parseAuthorization, type TaskAuthorization } from './task-auth.ts'
+import { parseAuthorization, type AuthProof, type ChainRole, type SettlementReason, type SettlementVerdict, type TaskAuthorization } from './task-auth.ts'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { parseReceipt, RECEIPT_OUTCOMES, type ReceiptOutcomeV2 } from './receipt.ts'
@@ -238,6 +238,8 @@ export interface ArchivedRecord {
   readonly sender?: Sender
   /** #114 S2: carried over from the live row unchanged. */
   readonly auth?: TaskAuthorization
+  /** #114 S4: who settled the row (receipt and echo ends), and their chain role. */
+  readonly settledBy?: SettledBy
 }
 
 /**
@@ -316,6 +318,64 @@ export interface ReceiptResolvedInfo {
 export interface TaskLedgerSnapshot {
   readonly tasks: readonly TaskRecord[]
   readonly archived?: readonly ArchivedRecord[]
+  /** #114 S4: the bounded ring of refused / would-be-refused settlements. */
+  readonly settlementRefusals?: readonly SettlementRefusalRecord[]
+}
+
+/** #114 S4: who settled an archived row, and how they stood on its authorization chain. */
+export interface SettledBy {
+  readonly caller: string
+  readonly chain_role: ChainRole | 'off-chain'
+}
+
+/** #114 S4: one settlement the judgement refused (enforce) or would have refused (observe). */
+export interface SettlementRefusalRecord {
+  readonly taskId: string
+  readonly at: number
+  readonly settler: { readonly caller: string; readonly proof: AuthProof; readonly ingress: 'wire' | 'local' }
+  readonly reason: SettlementReason
+  /** The receipt's first line, bounded. */
+  readonly head: string
+  /** true: the settlement was refused (enforce); false: recorded only (observe). */
+  readonly enforced: boolean
+}
+
+/** Bound of the refusal ring (design §4.4). */
+export const SETTLEMENT_REFUSAL_CAP = 64
+
+/**
+ * #114 S4: how the ledger asks whether a settler may settle a row. `check`
+ * is the pure judgement (task-auth.ts judgeSettlement) bound to this
+ * receipt's facts; `enforce` decides whether an off-chain verdict blocks
+ * the settlement or is only recorded.
+ */
+export interface SettlementJudge {
+  readonly enforce: boolean
+  readonly settler: SettlementRefusalRecord['settler']
+  check(row: TaskRecord, echo: boolean): SettlementVerdict
+}
+
+const SETTLEMENT_REASONS: readonly string[] = ['settler-off-chain', 'settler-unverified', 'on-behalf-mismatch', 'echo-off-chain']
+const CHAIN_ROLES: readonly string[] = ['target', 'target-member', 'host-face', 'compat', 'legacy', 'off-chain']
+const PROOF_VALUES: readonly string[] = ['origin-claim', 'claim-mismatch', 'legacy-window', 'in-process', 'none']
+
+/** Restore-side allowlist for settledBy: whole or nothing. */
+function withSettledBy(raw: unknown): { settledBy?: SettledBy } {
+  if (raw === null || typeof raw !== 'object') return {}
+  const r = raw as Record<string, unknown>
+  if (typeof r.caller !== 'string' || r.caller.length > 256 || typeof r.chain_role !== 'string' || !CHAIN_ROLES.includes(r.chain_role)) return {}
+  return { settledBy: { caller: r.caller, chain_role: r.chain_role as SettledBy['chain_role'] } }
+}
+
+/** Restore-side allowlist for one refusal record: whole or nothing. */
+function parseRefusal(raw: unknown): SettlementRefusalRecord | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined
+  const r = raw as Record<string, unknown>
+  const st = r.settler as Record<string, unknown> | null | undefined
+  if (typeof r.taskId !== 'string' || r.taskId === '' || typeof r.at !== 'number' || !Number.isFinite(r.at)) return undefined
+  if (typeof r.reason !== 'string' || !SETTLEMENT_REASONS.includes(r.reason) || typeof r.head !== 'string' || typeof r.enforced !== 'boolean') return undefined
+  if (st === null || typeof st !== 'object' || typeof st.caller !== 'string' || typeof st.proof !== 'string' || !PROOF_VALUES.includes(st.proof) || (st.ingress !== 'wire' && st.ingress !== 'local')) return undefined
+  return { taskId: r.taskId, at: r.at, settler: { caller: st.caller, proof: st.proof as AuthProof, ingress: st.ingress }, reason: r.reason as SettlementReason, head: r.head.slice(0, SUMMARY_CAP), enforced: r.enforced }
 }
 
 /**
@@ -329,6 +389,8 @@ export class TaskLedger {
   private tasks: TaskRecord[] = []
   /** Settled rows, most recently resolved first; bounded by the archive cap. */
   private archived: ArchivedRecord[] = []
+  /** #114 S4: refused / would-be-refused settlements, newest first. */
+  private refusals: SettlementRefusalRecord[] = []
   private readonly staleTtlMs: number
   private readonly archiveCap: number
   /** Injectable clock (option `now`). */
@@ -580,7 +642,7 @@ export class TaskLedger {
    * @returns what the receipt settled, or `undefined` when the message
    *   correlated nothing.
    */
-  resolveFromMessage(message: string): ReceiptResolvedInfo | undefined {
+  resolveFromMessage(message: string, judge?: SettlementJudge): ReceiptResolvedInfo | undefined {
     const parsed = parseReceipt(message)
     if (parsed === null) return undefined
     const taskId = parsed.taskId
@@ -591,6 +653,12 @@ export class TaskLedger {
     this.sweep(this.now())
     const record = this.tasks.find(entry => entry.taskId === taskId)
     if (record !== undefined) {
+      // #114 S4: judge the settler before the row moves; enforce keeps a refused row owed.
+      const verdict = judge?.check(record, false)
+      if (verdict !== undefined && !verdict.ok) {
+        this.noteRefusal(taskId, judge!, verdict.reason, message)
+        if (judge!.enforce) { this.persist(); return undefined }
+      }
       this.tasks = this.tasks.filter(entry => entry.taskId !== taskId)
       this.archiveSettled({
         taskId: record.taskId,
@@ -608,6 +676,7 @@ export class TaskLedger {
         ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
         ...(record.sender !== undefined ? { sender: record.sender } : {}),
         ...(record.auth !== undefined ? { auth: record.auth } : {}),
+        ...(verdict !== undefined ? { settledBy: { caller: judge!.settler.caller, chain_role: verdict.ok ? verdict.role : 'off-chain' } } : {}),
       })
       this.persist()
       return {
@@ -671,12 +740,20 @@ export class TaskLedger {
    * @param message - the inbound message text.
    * @returns the task ids this message settled (usually none or one).
    */
-  resolveEcho(message: string): string[] {
+  resolveEcho(message: string, judge?: SettlementJudge): string[] {
     const settled: string[] = []
+    let refused = false
     this.sweep(this.now())
     for (const record of [...this.tasks]) {
       if (record.status !== 'pending') continue
       if (!message.includes(`task ${record.taskId}`)) continue
+      // #114 S4: an echo is weak evidence — only an on-chain settler's echo counts under enforce.
+      const verdict = judge?.check(record, true)
+      if (verdict !== undefined && !verdict.ok) {
+        this.noteRefusal(record.taskId, judge!, verdict.reason, message)
+        refused = true
+        if (judge!.enforce) continue
+      }
       this.tasks = this.tasks.filter(entry => entry.taskId !== record.taskId)
       this.archiveSettled({
         taskId: record.taskId,
@@ -691,11 +768,28 @@ export class TaskLedger {
         ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
         ...(record.sender !== undefined ? { sender: record.sender } : {}),
         ...(record.auth !== undefined ? { auth: record.auth } : {}),
+        ...(verdict !== undefined ? { settledBy: { caller: judge!.settler.caller, chain_role: verdict.ok ? verdict.role : 'off-chain' } } : {}),
       })
       settled.push(record.taskId)
     }
-    if (settled.length > 0) this.persist()
+    if (settled.length > 0 || refused) this.persist()
     return settled
+  }
+
+  /** #114 S4: the owed row for a task id, if any (read-only; for the settlement gate). */
+  find(taskId: string): TaskRecord | undefined {
+    return this.tasks.find(entry => entry.taskId === taskId)
+  }
+
+  /** #114 S4: refused / would-be-refused settlements, newest first. */
+  settlementRefusals(): readonly SettlementRefusalRecord[] {
+    return [...this.refusals]
+  }
+
+  /** Record one refused / would-be-refused settlement in the bounded ring (persisted by the caller). */
+  private noteRefusal(taskId: string, judge: SettlementJudge, reason: SettlementReason, message: string): void {
+    const head = (message.split('\n')[0] ?? '').slice(0, SUMMARY_CAP)
+    this.refusals = [{ taskId, at: this.now(), settler: { ...judge.settler }, reason, head, enforced: judge.enforce }, ...this.refusals].slice(0, SETTLEMENT_REFUSAL_CAP)
   }
 
   /** Move one settled record to the archive head, trimming at the cap. */
@@ -782,6 +876,7 @@ export class TaskLedger {
               ...(entry.receiptExpected === false ? { receiptExpected: false as const } : {}),
               ...withSender(entry.sender, entry.direction),
               ...withAuth(entry.auth, entry, this.now()),
+              ...withSettledBy((entry as { settledBy?: unknown }).settledBy),
             })
             continue
           }
@@ -831,11 +926,14 @@ export class TaskLedger {
             ...(entry.receiptExpected === false ? { receiptExpected: false as const } : {}),
             ...withSender(entry.sender, entry.direction),
             ...withAuth(entry.auth, entry, this.now()),
+            ...withSettledBy((entry as { settledBy?: unknown }).settledBy),
           })
         }
       }
       this.tasks = restored.slice(0, TASK_CAP)
       this.archived = this.archived.slice(0, this.archiveCap)
+      const refusals = (snapshot as { settlementRefusals?: unknown } | null)?.settlementRefusals
+      if (Array.isArray(refusals)) this.refusals = refusals.map(parseRefusal).filter((r): r is SettlementRefusalRecord => r !== undefined).slice(0, SETTLEMENT_REFUSAL_CAP)
     } catch {
       // A corrupt ledger is not fatal: routing never depends on it; the
       // reconciliation simply starts fresh.
@@ -850,6 +948,7 @@ export class TaskLedger {
       const snapshot: TaskLedgerSnapshot = {
         tasks: this.tasks.map(task => ({ ...task })),
         ...(this.archived.length > 0 ? { archived: this.archived.map(entry => ({ ...entry })) } : {}),
+        ...(this.refusals.length > 0 ? { settlementRefusals: this.refusals.map(entry => ({ ...entry, settler: { ...entry.settler } })) } : {}),
       }
       writeFileSync(this.path, JSON.stringify(snapshot), { mode: 0o600 })
     } catch {
