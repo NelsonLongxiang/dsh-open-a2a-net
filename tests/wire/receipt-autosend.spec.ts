@@ -120,6 +120,6 @@ describe.skip('receipt auto-synthesis', () => {
     expect(ledgerView.tasks).toEqual([])
     expect(ledgerView.archive.some(a => a.taskId === taskId && a.summary === 'work done, tests green (auto)')).toBe(true)
     // #121: the local-candidate row records the routing session, not "home".
-    expect(ledgerView.archive.find(a => a.taskId === taskId)?.sender).toEqual({ kind: 'session', id: 'dsh/caller1' })
+    expect(ledgerView.archive.find(a => a.taskId === taskId)?.sender).toEqual({ kind: 'session', id: 'dsh/caller01' })
   })
 })

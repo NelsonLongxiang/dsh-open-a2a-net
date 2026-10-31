@@ -127,9 +127,9 @@ describe('canvas team remote-member routing', () => {
     expect(owed).toBeDefined()
     expect(owed!.team).toBe('dsh/canvas/ops')
     expect(owed!.peer).toBe('http://peer-x')
-    // #121: the peer-candidate row from an agent-less call is the host face.
-    expect(owed!.sender?.kind).toBe('host')
-    expect(owed!.sender?.id).not.toBe('')
+    // #121: the peer-candidate row from an agent-less call is the host
+    // process label, with no borrowed face.
+    expect(owed!.sender).toEqual({ kind: 'host', id: 'canvas-remote-test' })
   })
 
   it('reports honest exhaustion when no peer publishes the member handle', async () => {

@@ -3,7 +3,7 @@
   "sourceCommit": "0b466643b27120878ceeab9a2ebf087ae3854605",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "6d659ae14098f6fd721ade6bc8a638d5545d7cd70ad52d3a923b41d89f092ec4",
+    "src/index.ts": "ef99f49a6c8318fe608bb611d3ba665546cd7f19f1acafdcf835eaf5facf0ddb",
     "src/faces/admin.ts": "4e4a6db06d53c159523bbc40ad3b8d13b822659d7af140e19abfe98edb01b92a",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
@@ -14,7 +14,7 @@
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
     "nexus-stage/src/planning-card-text.ts": "31403071229c5dde4af545ded1a8eaebb1c329a52df3169fae868a57119225d9",
     "nexus-stage/src/planning-fit.ts": "cbda0255062632bd412deb2131c7a01e1e16ab9c72d2a70a32c362e108f8c07a",
-    "src/task-ledger.ts": "8e676ad1479e5b23d5e12bb1c6cca558b896ebb455aa94e03f51608bd60511a1",
+    "src/task-ledger.ts": "8d75440e1c5661f39021f06af1b06aba3dd955af3550405e7ae082aad1690dee",
     "nexus-stage/src/world.ts": "1c6308555b65e8316cda38cf97dc43120b979be3e30792a12b893faf845cb934",
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
@@ -32,7 +32,7 @@
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/index.ts:5340",
+      "ref": "src/index.ts:5350",
       "expect": "name: 'a2a_probe',"
     },
     {
@@ -206,7 +206,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:4512",
+      "ref": "src/index.ts:4516",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -290,7 +290,7 @@
     {
       "page": "p1-arch",
       "cell": "d10",
-      "ref": "src/task-ledger.ts:671",
+      "ref": "src/task-ledger.ts:683",
       "expect": "private trimOwed(): void {"
     },
     {

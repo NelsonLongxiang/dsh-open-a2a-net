@@ -515,16 +515,21 @@ function depositLine(list, handle, offline) {
 }
 
 /** Print the first `cap` rows and say how many were left out. */
-// #114 S3: a row's real sender rides the end of its line; rows from older
-// hosts (or inbound rows) carry none and print nothing extra.
-function senderTail(row) {
-  const s = row.sender
-  return s !== null && typeof s === 'object' && typeof s.kind === 'string' && typeof s.id === 'string' ? ` · sender ${s.kind}:${s.id}` : ''
-}
-
 function listCapped(rows, cap, line) {
   for (const row of rows.slice(0, cap)) console.log(line(row))
   if (rows.length > cap) console.log(`  … ${String(rows.length - cap)} more (--json lists all)`)
+}
+
+// #114 S3: a row's real sender rides the end of its line; rows from older
+// hosts (or inbound rows) carry none and print nothing extra. A host sender's
+// borrowed wire label (face) follows in parentheses. Control characters are
+// stripped — the ids come from the host's state face, not from this CLI.
+function senderTail(row) {
+  const s = row.sender
+  if (s === null || typeof s !== 'object' || typeof s.kind !== 'string' || typeof s.id !== 'string') return ''
+  const clean = text => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+  const face = typeof s.face === 'string' && s.face !== '' ? ` (face ${clean(s.face)})` : ''
+  return ` · sender ${clean(s.kind)}:${clean(s.id)}${face}`
 }
 
 // ── route: caller-born task ids, safe resend (gh#112) ───────────────────

@@ -77,6 +77,9 @@ describe('#121 restore allowlist', () => {
       { kind: 'session', id: '' },
       { kind: 'session', id: 7 },
       { kind: 'session', id: 'x'.repeat(SENDER_ID_CAP + 1) },
+      { kind: 'host', id: 'dsh-host', face: '' },
+      { kind: 'host', id: 'dsh-host', face: 7 },
+      { kind: 'host', id: 'dsh-host', face: 'x'.repeat(SENDER_ID_CAP + 1) },
     ]
     const path = ledgerPath()
     writeSnapshot(path, {
@@ -91,6 +94,27 @@ describe('#121 restore allowlist', () => {
     expect(ledger.list()).toHaveLength(bad.length)
     for (const row of ledger.list()) expect(row).not.toHaveProperty('sender')
     expect(ledger.archive()).toHaveLength(bad.length + 1)
+    for (const row of ledger.archive()) expect(row).not.toHaveProperty('sender')
+  })
+
+  it('round-trips a host sender\'s borrowed face', () => {
+    const path = ledgerPath()
+    new TaskLedger(path).track('direct-f', 'ops', 'local', undefined, undefined, { kind: 'host', id: 'dsh-host-1a2b3c4d', face: 'dsh/aaaabbbb' })
+    expect(new TaskLedger(path).list()[0]?.sender).toEqual({ kind: 'host', id: 'dsh-host-1a2b3c4d', face: 'dsh/aaaabbbb' })
+  })
+
+  it('never restores a sender onto an inbound row, in all three restore branches', () => {
+    const path = ledgerPath()
+    writeSnapshot(path, {
+      tasks: [
+        { taskId: 'direct-in', team: 'ops', peer: 'local:dsh/99999999', startedAt: Date.now(), direction: 'inbound', status: 'pending', sender: SEAT },
+        { taskId: 'direct-in-legacy', team: 'ops', peer: 'local', startedAt: 1, resolvedAt: 2, direction: 'inbound', status: 'resolved', sender: SEAT },
+      ],
+      archived: [{ taskId: 'direct-in-arch', team: 'ops', peer: 'local', startedAt: 1, resolvedAt: 2, direction: 'inbound', sender: SEAT }],
+    })
+    const ledger = new TaskLedger(path)
+    expect(ledger.list()[0]).not.toHaveProperty('sender')
+    expect(ledger.archive()).toHaveLength(2)
     for (const row of ledger.archive()) expect(row).not.toHaveProperty('sender')
   })
 
@@ -130,5 +154,6 @@ describe('#121 parseSender', () => {
     expect(parseSender({ kind: 'bridge', id: 'x'.repeat(SENDER_ID_CAP) })).toEqual({ kind: 'bridge', id: 'x'.repeat(SENDER_ID_CAP) })
     expect(parseSender(undefined)).toBeUndefined()
     expect(parseSender({ kind: 'cli', id: 'scout/0123456789abcdef' })).toBeUndefined()
+    expect(parseSender({ kind: 'host', id: 'dsh-host', face: 'dsh/aaaabbbb' })).toEqual({ kind: 'host', id: 'dsh-host', face: 'dsh/aaaabbbb' })
   })
 })

@@ -242,9 +242,7 @@ describe('outbound nativeTeamsA2a face', () => {
     const state = await (await fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { tasks: Array<{ taskId: string; sender?: { kind: string; id: string } }> }
     expect(state.tasks.map(task => task.taskId)).toContain('wb-2')
     // #121: no submitting session named → the bridge row is the host's label.
-    const row = state.tasks.find(task => task.taskId === 'wb-2')
-    expect(row?.sender?.kind).toBe('bridge')
-    expect(row?.sender?.id).not.toBe('')
+    expect(state.tasks.find(task => task.taskId === 'wb-2')?.sender).toEqual({ kind: 'bridge', id: 'bridge-test' })
   })
 
   it('submit async without a declared async capability waits sync instead of silently degrading', async () => {
@@ -575,6 +573,48 @@ describe('P2 receipt-callback routing', () => {
       callbackTarget: null,
     })
     expect(peer.seen[1]?.callback).toBeUndefined()
+    // #121: neither an unknown parent nor a null target mints a seat — both
+    // rows are attributed to the host label.
+    const state = await (await fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { tasks: Array<{ taskId: string; sender?: unknown }> }
+    expect(state.tasks.find(task => task.taskId === 'p2-2')?.sender).toEqual({ kind: 'bridge', id: 'bridge-test' })
+    expect(state.tasks.find(task => task.taskId === 'p2-3')?.sender).toEqual({ kind: 'bridge', id: 'bridge-test' })
+  })
+
+  it('a non-string parentSessionId neither throws nor names a seat (#121)', async () => {
+    const peer = await startPeer({ asyncCap: true })
+    const m = await mount({ peers: [peer.url] })
+    mounted.push(async () => { await m.dispose(); await peer.close() })
+    const face = m.face() as { submit: (request: Record<string, unknown>) => Promise<Record<string, unknown>> }
+    const outcome = await face.submit({
+      handle: 'peer-team',
+      message: 'numeric parent',
+      delivery: 'async',
+      idempotencyKey: 'p2-4',
+      callbackTarget: { label: 'team', parentSessionId: 42 },
+    })
+    expect(outcome).toMatchObject({ kind: 'accepted', taskId: 'p2-4' })
+    expect(peer.seen[0]?.callback).toBeUndefined()
+    const state = await (await fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { tasks: Array<{ taskId: string; sender?: unknown }> }
+    expect(state.tasks.find(task => task.taskId === 'p2-4')?.sender).toEqual({ kind: 'bridge', id: 'bridge-test' })
+  })
+
+  it('an unjoined initiator session records its own node team, never the bare zone (#121)', async () => {
+    const peer = await startPeer({ asyncCap: true })
+    const m = await mount({ peers: [peer.url] })
+    mounted.push(async () => { await m.dispose(); await peer.close() })
+    const initiator = makeAgent('session-1a2b3c4d5e6f')
+    m.agents.agents.push(initiator)
+    m.ctx.emit('agent/created', { agent: initiator })
+    const result = await m.ctx.tools.get('a2a_route')!.execute(
+      { team: 'peer-team', message: 'from the initiator', async: true },
+      { signal: new AbortController().signal, agent: initiator } as unknown as ToolRunContext,
+    ) as { ok: boolean; task_id?: string }
+    expect(result.ok).toBe(true)
+    // The wire still carries the initiator face (the bare zone) — routing is
+    // unchanged; only the ledger attribution names the seat.
+    expect(peer.seen[0]?.caller_session).toBe('dsh')
+    const state = await (await fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { tasks: Array<{ taskId: string; sender?: unknown }> }
+    expect(state.tasks.find(task => task.taskId === result.task_id)?.sender).toEqual({ kind: 'session', id: 'dsh/1a2b3c4d' })
   })
 
   it('an inbound noWait route honors the callback address in its receipt hint', async () => {

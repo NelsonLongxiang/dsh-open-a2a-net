@@ -4389,12 +4389,16 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const callbackAddress = routableCallerLabel(callerSession) || callerSession === config.team
         ? callerSession
         : undefined
-      // #114 S3: the outbound row records who really sent it — the routing
-      // session's own label, or the host face for agent-less calls — instead
-      // of every row reading as "home".
+      // #114 S3: the outbound row records who really sent it instead of
+      // every row reading as "home". A session is always its own node team
+      // (<zone>/<id8>) — joined or not, initiator or not — so one seat keeps
+      // one bucket. An agent-less call is the host process itself; the label
+      // it borrowed on the wire (quick dispatch rides a live joined session's
+      // team) is kept apart as `face`, so a human's workbench gesture never
+      // lands in that session's seat.
       const sender: Sender = agent !== undefined
-        ? { kind: 'session', id: callerSession ?? String(agent.id) }
-        : { kind: 'host', id: callerSession ?? session }
+        ? { kind: 'session', id: sessionTeamOf(agent) }
+        : { kind: 'host', id: session, ...(callerSession !== undefined && callerSession !== session ? { face: callerSession } : {}) }
       const fetch = memoizedCardFetch()
       // The task id is born at the caller (idempotency key semantics): both
       // dispatchers carry the one id, the peer request echoes it, and the
@@ -4917,10 +4921,14 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         const parent = request.callbackTarget.parentSessionId
         if (sessionNodes.has(parent) || joinedSessions.has(parent)) callbackAddress = `${config.team}/${id8(parent)}`
       }
-      // #114 S3: the submitting session's handle when the transport names
-      // one (routable or not — attribution is not routing), else the host.
-      const parentSession = request.callbackTarget?.parentSessionId
-      const sender: Sender = { kind: 'bridge', id: parentSession !== undefined && parentSession !== '' ? `${config.team}/${id8(parentSession)}` : session }
+      // #114 S3: the submitting session's node team, but only when the
+      // transport names a session this host knows (a node, a join, or a live
+      // root) — an unchecked id would let any submitter mint a seat. Anything
+      // else (absent, unknown, non-string) is attributed to the host label.
+      const parentSession: unknown = request.callbackTarget?.parentSessionId
+      const knownParent = typeof parentSession === 'string' && parentSession !== ''
+        && (sessionNodes.has(parentSession) || joinedSessions.has(parentSession) || liveRoots.has(parentSession))
+      const sender: Sender = { kind: 'bridge', id: knownParent ? `${config.team}/${id8(parentSession)}` : session }
       for (const candidate of candidates) {
         // Capability gate per candidate, like a2a_route's loop: a
         // delivery:async submit never dials a peer whose signed card does
@@ -5253,6 +5261,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
                   properties: {
                     kind: { type: 'string', required: true, enum: ['session', 'host', 'bridge'] },
                     id: { type: 'string', required: true },
+                    face: { type: 'string' },
                   },
                 },
               },
@@ -5277,6 +5286,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
                   properties: {
                     kind: { type: 'string', required: true, enum: ['session', 'host', 'bridge'] },
                     id: { type: 'string', required: true },
+                    face: { type: 'string' },
                   },
                 },
               },

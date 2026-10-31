@@ -95,8 +95,14 @@ const ECHO_SUMMARY = '(settled by content echo)'
  */
 export interface Sender {
   readonly kind: 'session' | 'host' | 'bridge'
-  /** The sender's label: `<zone>/<id8>`, the node team, or the host session label. */
+  /** The bucket key: a session's `<zone>/<id8>` node team, or the host process label. */
   readonly id: string
+  /**
+   * Host senders only: the label the call borrowed on the wire when it
+   * differs from {@link id} (quick dispatch rides a live joined session's
+   * team). Display context, never a bucket key.
+   */
+  readonly face?: string
 }
 
 const SENDER_KINDS: readonly string[] = ['session', 'host', 'bridge']
@@ -106,21 +112,27 @@ export const SENDER_ID_CAP = 256
 
 /**
  * Restore-side allowlist for one persisted sender: a well-formed value comes
- * back as a fresh two-field object; anything else is dropped whole (the row
+ * back as a fresh object holding only kind, id and (when present) face; anything else is dropped whole (the row
  * itself survives — a bad sender never costs the debt record).
  * @param raw - the persisted value.
  * @returns the sender, or undefined when absent or malformed.
  */
 export function parseSender(raw: unknown): Sender | undefined {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
-  const { kind, id } = raw as Record<string, unknown>
+  const { kind, id, face } = raw as Record<string, unknown>
   if (typeof kind !== 'string' || !SENDER_KINDS.includes(kind)) return undefined
   if (typeof id !== 'string' || id === '' || id.length > SENDER_ID_CAP) return undefined
-  return { kind: kind as Sender['kind'], id }
+  if (face !== undefined && (typeof face !== 'string' || face === '' || face.length > SENDER_ID_CAP)) return undefined
+  return { kind: kind as Sender['kind'], id, ...(face !== undefined ? { face } : {}) }
 }
 
-/** Spread helper for restore: `{ sender }` when the persisted value parses, else nothing. */
-function withSender(raw: unknown): { sender?: Sender } {
+/**
+ * Spread helper for restore: `{ sender }` when the persisted value parses and
+ * the row is not inbound (an inbound row's originator is its caller, never a
+ * sender this host recorded), else nothing.
+ */
+function withSender(raw: unknown, direction: unknown): { sender?: Sender } {
+  if (direction === 'inbound') return {}
   const sender = parseSender(raw)
   return sender === undefined ? {} : { sender }
 }
@@ -737,7 +749,7 @@ export class TaskLedger {
               ...(typeof entry.endedBy === 'string' && ARCHIVE_ENDS.includes(entry.endedBy) ? { endedBy: entry.endedBy as ArchiveEnd } : {}),
               ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
               ...(entry.receiptExpected === false ? { receiptExpected: false as const } : {}),
-              ...withSender(entry.sender),
+              ...withSender(entry.sender, entry.direction),
             })
             continue
           }
@@ -753,7 +765,7 @@ export class TaskLedger {
             ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
             ...(entry.receiptExpected === false ? { receiptExpected: false } : {}),
             // #114 S3: a malformed sender is dropped whole; the row survives.
-            ...withSender(entry.sender),
+            ...withSender(entry.sender, entry.direction),
             status: entry.status === 'dead' ? 'dead' : 'pending',
             ...(entry.status === 'dead'
               ? {
@@ -784,7 +796,7 @@ export class TaskLedger {
             ...(typeof entry.endedBy === 'string' && ARCHIVE_ENDS.includes(entry.endedBy) ? { endedBy: entry.endedBy as ArchiveEnd } : {}),
             ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
             ...(entry.receiptExpected === false ? { receiptExpected: false as const } : {}),
-            ...withSender(entry.sender),
+            ...withSender(entry.sender, entry.direction),
           })
         }
       }
