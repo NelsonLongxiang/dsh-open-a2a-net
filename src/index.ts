@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
 import { applyOwnerSettings, type OwnerSettings } from './owner-settings.ts'
-import { CliDepositStore } from './cli-deposit.ts'
+import { CLI_HANDLE_RE, CliDepositStore } from './cli-deposit.ts'
 import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
@@ -2541,7 +2541,7 @@ ${message}`
    *  window — the operator watches the tail drain before closing it. */
   let legacyInboundCount = 0
   const originClaimCallerShape = /^[a-z0-9-]+$/i
-  async function verifyOriginClaim(req: IncomingMessage): Promise<{ ok: true; caller: string; callerUrl: string; card: A2aPeerCard } | { ok: false; reason: 'absent' | 'bad-caller-shape' | 'bad-ts' | 'no-card' | 'bad-sig' | 'not-derivable' }> {
+  async function verifyOriginClaim(req: IncomingMessage, options?: { readonly cli?: boolean }): Promise<{ ok: true; caller: string; callerUrl: string; card: A2aPeerCard; cli?: true } | { ok: false; reason: 'absent' | 'bad-caller-shape' | 'bad-ts' | 'no-card' | 'bad-sig' | 'not-derivable' }> {
     const caller = String(req.headers['x-a2a-caller'] ?? '')
     const callerUrl = String(req.headers['x-a2a-caller-url'] ?? '')
     const ts = Number(req.headers['x-a2a-caller-ts'] ?? '')
@@ -2549,6 +2549,14 @@ ${message}`
     if (caller === '' || callerUrl === '' || !Number.isFinite(ts) || ts <= 0 || signature === '') return { ok: false, reason: 'absent' }
     if (!originClaimCallerShape.test(caller)) return { ok: false, reason: 'bad-caller-shape' }
     if (Math.abs(Date.now() - ts) > ORIGIN_CLAIM_SKEW_MS) return { ok: false, reason: 'bad-ts' }
+    // gh#133: a deposited CLI identity, on the faces that opt in. Decided
+    // from THIS host's deposit table, before any fetch: the card is the one
+    // deposited here, so the claim needs no reachable callerUrl (a CLI may
+    // reach its home through a proxy the host cannot dial back).
+    if (options?.cli === true) {
+      const cli = cliDepositClaim(caller, callerUrl, ts, signature)
+      if (cli !== undefined) return cli
+    }
     // Fetch the caller's card PLAIN (REVIEW M2 third-round ruling: the
     // envelope names a BARE ZONE, and derivation is the exact match
     // card.team === caller below — both ride the minimal card's signed
@@ -2597,6 +2605,45 @@ ${message}`
   }
 
   /**
+   * gh#133: the claim of a CLI identity deposited on THIS host, or undefined
+   * when the claim URL is not a deposit face of a handle held here (the
+   * ordinary zone path then decides). The URL's last path segments must be
+   * `/a2a/cli/<handle>` (any prefix or origin: the CLI dials its home under
+   * whatever address it can — the deposited key, not the address, is the
+   * proof); the signature must verify under the DEPOSITED card; the signed
+   * name must be the handle's own. The claim's caller is the full HANDLE, not
+   * the bare name, so it covers exactly that handle — never a namesake CLI,
+   * a zone session, or the host face (review of PR #135 P1).
+   */
+  function cliDepositClaim(caller: string, callerUrl: string, ts: number, signature: string): { ok: true; caller: string; callerUrl: string; card: A2aPeerCard; cli: true } | { ok: false; reason: 'no-card' | 'bad-sig' | 'not-derivable' } | undefined {
+    let path: string
+    try { path = new URL(callerUrl).pathname } catch { return undefined }
+    const segment = /\/a2a\/cli\/([^/]+)\/?$/.exec(path)?.[1]
+    if (segment === undefined) return undefined
+    let handle: string
+    try { handle = decodeURIComponent(segment) } catch { return undefined }
+    const shape = CLI_HANDLE_RE.exec(handle)
+    const deposit = shape === null ? undefined : cliDeposits.get(handle)
+    if (shape === null || deposit === undefined) return undefined
+    let card: A2aPeerCard
+    try {
+      const verdict = verifyCard(JSON.parse(deposit.cardJson), Date.now())
+      if (!verdict.ok || verdict.card.team !== handle) return { ok: false, reason: 'no-card' }
+      card = verdict.card
+    } catch {
+      return { ok: false, reason: 'no-card' }
+    }
+    try {
+      const publicKey = createPublicKey({ key: Buffer.from(card.publicKey, 'base64'), format: 'der', type: 'spki' })
+      if (!edVerify(undefined, Buffer.from(JSON.stringify([caller, callerUrl, ts]), 'utf8'), publicKey, Buffer.from(signature, 'base64'))) return { ok: false, reason: 'bad-sig' }
+    } catch {
+      return { ok: false, reason: 'bad-sig' }
+    }
+    if (shape[1] !== caller) return { ok: false, reason: 'not-derivable' }
+    return { ok: true, caller: handle, callerUrl, card, cli: true }
+  }
+
+  /**
    * W3 (#18 half-side): is a VERIFIED caller LINKED to this host? Key
    * possession proves the caller is a real host; it says nothing about a
    * relationship with US. The full card carries collaboration facts
@@ -2620,6 +2667,8 @@ ${message}`
    *      Our operator's config anchors; the card shadow corroborates.
    */
   function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {
+    // gh#133 review: a CLI identity's card (team = its handle) is never a host link, whatever face asks.
+    if (callerCard !== undefined && CLI_HANDLE_RE.test(callerCard.team)) return false
     // Basis 1, same-host membership (review second-round M-fix): "self" is
     // an ORIGIN equality, not a zone-name equality. `caller === config.team`
     // granted unconditionally in a single-zone fleet (the deployment

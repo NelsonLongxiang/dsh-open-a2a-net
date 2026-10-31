@@ -591,7 +591,7 @@ describe('a2a-net CLI: route carries its own task id and resends it safely (gh#1
     const sent = host.direct()
     expect(sent).toHaveLength(3)
     expect(new Set(sent.map(s => s.body.task_id)).size).toBe(1)
-    expect(new Set(sent.map(s => s.headers['x-a2a-sig'])).size).toBe(3)
+    expect(new Set(sent.map(s => s.headers['x-a2a-caller-sig'])).size).toBe(3)
   })
 
   it('a host that never answers gives up after 3 resends and names the --task that resends safely', async () => {
@@ -675,6 +675,33 @@ describe('a2a-net CLI: route carries its own task id and resends it safely (gh#1
     expect(out.code).toBe(1)
     expect(host.direct()).toHaveLength(4)
     expect(out.stderr).toContain(`resend safely with: --task ${String(host.direct()[0]?.body.task_id)}`)
+  })
+
+  it('gh#133: the envelope uses the header names the host verifies; a pre-fix host\'s not-derivable refusal is resent once unsigned, same id', async () => {
+    const notDerivable = { status: 200, body: { error: 'untrusted-origin: OriginClaim verification failed (not-derivable) — present a signed envelope', code: -32000, task_status: 'TASK_STATE_FAILED' } }
+    const host = await scriptedHost([notDerivable])
+    const HOME = await scoutHome()
+    const out = await runCli(['route', 'ops', 'hi'], fast(HOME, host.url))
+    expect(out.code).toBe(0)
+    const [signed, unsigned] = host.direct()
+    expect(signed?.headers['x-a2a-caller-ts']).toBeDefined()
+    expect(signed?.headers['x-a2a-caller-sig']).toBeDefined()
+    expect(signed?.headers['x-a2a-ts']).toBeUndefined()
+    expect(unsigned?.headers['x-a2a-caller-sig']).toBeUndefined()
+    expect(unsigned?.body.task_id).toBe(signed?.body.task_id)
+    expect(host.direct()).toHaveLength(2)
+    // The downgrade is said out loud (review of PR #135 P2).
+    expect(out.stderr).toContain('resending once unsigned')
+  })
+
+  it('review of PR #135 P2: a --sync reply that merely quotes the not-derivable text is not a refusal', async () => {
+    const quoting = { status: 200, body: { routed: true, team: 'ops', result: { text: 'it said: untrusted-origin: OriginClaim verification failed (not-derivable)' }, task_id: 'direct-x', task_status: 'TASK_STATE_COMPLETED' } }
+    const host = await scriptedHost([quoting])
+    const HOME = await scoutHome()
+    const out = await runCli(['route', 'ops', 'hi', '--sync'], fast(HOME, host.url))
+    expect(out.code).toBe(0)
+    expect(host.direct()).toHaveLength(1)
+    expect(out.stderr).toBe('')
   })
 
   it('a malformed --task is a usage error', async () => {

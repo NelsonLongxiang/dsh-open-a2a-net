@@ -3,8 +3,8 @@
   "sourceCommit": "0b466643b27120878ceeab9a2ebf087ae3854605",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "a1e05de1f03b0b2e0b29498a793de23c5b819be20ebea22c1192b414a46b4b0d",
-    "src/faces/admin.ts": "3ce6f873164d3087446372e9e23bc11ad4ea70c4f9b23c92beb3d1d6b766494a",
+    "src/index.ts": "ae608da447a0457197314202fc38c6faffa591448a72c5266accaf8ba1b35ec1",
+    "src/faces/admin.ts": "fe4c6901ddb5a08cd2c9b7a4a706e446b19c729a50b19f1c916399d026a2eee1",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "fded04a5bd4e0443f096874a9a0495786272ddb63d7e5ddf72e89b4502fad333",
@@ -19,7 +19,7 @@
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
-    "src/faces/wire.ts": "8288f6f04d899b89d1d96d41a644edf3f405a03ff1faaaefa70d42583c13f0e1",
+    "src/faces/wire.ts": "12957eb5588eb347ef8fdb52cf6509bea602b0cd26b5e69052535c1326ed2c72",
     "src/faces/canvas-notify.ts": "10a79ab13d69746268269f0bf8c100464832316e39498ba6ec4aeeae961ec0dd",
     "src/task-auth.ts": "561997471a3c19b21efa4ed50b4fb20a1615cceca85da067ce29a53d6a509bac"
   },
@@ -27,19 +27,19 @@
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/index.ts:3419",
+      "ref": "src/index.ts:3476",
       "expect": "name: 'a2a_whoami',"
     },
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/index.ts:5255",
+      "ref": "src/index.ts:5320",
       "expect": "name: 'a2a_probe',"
     },
     {
       "page": "p1-arch",
       "cell": "a2",
-      "ref": "src/index.ts:4179",
+      "ref": "src/index.ts:4236",
       "expect": "error: `the process face \"${config.team}\" is the host's own mailbox — model tools must target a member face. Route to a session team handle (\"${config.team}/<id8>\" from a2a_teams) or a canvas team; receipts and quick dispatch reach the host face on their own paths.`,"
     },
     {
@@ -51,13 +51,13 @@
     {
       "page": "p1-arch",
       "cell": "b2",
-      "ref": "src/index.ts:2537",
-      "expect": "async function verifyOriginClaim(req: IncomingMessage): Promise<{ ok: true; caller: string; callerUrl: string; card: A2aPeerCard } | { ok: false; reason: 'absent' | 'bad-caller-shape' | 'bad-ts' | 'no-card' | 'bad-sig' | 'not-derivable' }> {"
+      "ref": "src/index.ts:2544",
+      "expect": "async function verifyOriginClaim(req: IncomingMessage, options?: { readonly cli?: boolean }): Promise<{ ok: true; caller: string; callerUrl: string; card: A2aPeerCard; cli?: true } | { ok: false; reason: 'absent' | 'bad-caller-shape' | 'bad-ts' | 'no-card' | 'bad-sig' | 'not-derivable' }> {"
     },
     {
       "page": "p1-arch",
       "cell": "b3",
-      "ref": "src/index.ts:2615",
+      "ref": "src/index.ts:2669",
       "expect": "function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {"
     },
     {
@@ -69,7 +69,7 @@
     {
       "page": "p1-arch",
       "cell": "b4",
-      "ref": "src/index.ts:3668",
+      "ref": "src/index.ts:3725",
       "expect": "name: 'a2a_exposure',"
     },
     {
@@ -81,13 +81,13 @@
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:4247",
+      "ref": "src/index.ts:4304",
       "expect": "const sharedCanvas = canvasStore.list().some(name => {"
     },
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:4252",
+      "ref": "src/index.ts:4309",
       "expect": "let orgShared = false"
     },
     {
@@ -99,19 +99,19 @@
     {
       "page": "p1-arch",
       "cell": "c2",
-      "ref": "src/faces/wire.ts:449",
+      "ref": "src/faces/wire.ts:453",
       "expect": "path: '/a2a/direct',"
     },
     {
       "page": "p1-arch",
       "cell": "c3",
-      "ref": "src/faces/wire.ts:291",
+      "ref": "src/faces/wire.ts:295",
       "expect": "path: '/a2a/log',"
     },
     {
       "page": "p1-arch",
       "cell": "c4",
-      "ref": "src/faces/wire.ts:370",
+      "ref": "src/faces/wire.ts:374",
       "expect": "path: '/a2a/query',"
     },
     {
@@ -129,7 +129,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:2918",
+      "ref": "src/index.ts:2975",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -207,7 +207,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:4421",
+      "ref": "src/index.ts:4484",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -249,7 +249,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3336",
+      "ref": "src/index.ts:3393",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
@@ -268,7 +268,7 @@
       "page": "p1-arch",
       "cell": "f3",
       "ref": "src/index.ts:2167",
-      "expect": "function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string): void {"
+      "expect": "function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {"
     },
     {
       "page": "p1-arch",
@@ -315,7 +315,7 @@
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/faces/wire.ts:604",
+      "ref": "src/faces/wire.ts:618",
       "expect": "if (refuseIfFlooded(caller, message, team, taskId, res)) return"
     },
     {
@@ -327,7 +327,7 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/wire.ts:127",
+      "ref": "src/faces/wire.ts:130",
       "expect": "export function registerWireFaces(webServer: WebServer, d: WireDeps): void {"
     },
     {
