@@ -298,10 +298,18 @@ export class CliDepositStore {
       // The epoch is kept only when the seq record that goes with it survived:
       // an epoch without nextSeq would restart seq at 1 under the same name.
       let keepEpoch = typeof snapshot.epoch === 'string' && snapshot.epoch !== '' && snapshot.nextSeq !== null && typeof snapshot.nextSeq === 'object'
-      const counts = (record: unknown, into: Map<string, number>): void => {
-        for (const [handle, n] of Object.entries(record ?? {})) if (typeof n === 'number' && Number.isInteger(n) && n >= 0) into.set(handle, n)
+      const counts = (record: unknown, into: Map<string, number>): boolean => {
+        let clean = true
+        for (const [handle, n] of Object.entries(record ?? {})) {
+          if (typeof n === 'number' && Number.isInteger(n) && n >= 0) into.set(handle, n)
+          else clean = false
+        }
+        return clean
       }
-      counts(snapshot.nextSeq, this.nextSeq)
+      // A nextSeq value we cannot read, or a mailbox handle with no nextSeq,
+      // could hand out seq again under the kept epoch: start a new one.
+      if (!counts(snapshot.nextSeq, this.nextSeq)) keepEpoch = false
+      for (const handle of Object.keys(snapshot.mailbox ?? {})) if (!this.nextSeq.has(handle)) keepEpoch = false
       counts(snapshot.dropped, this.dropped)
       counts(snapshot.truncated, this.truncated)
       let renumbered = false

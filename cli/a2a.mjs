@@ -490,9 +490,13 @@ async function cmdInbox() {
     const cursor = readCursor(handle)
     const { unread, lost } = unreadOf(box, cursor)
     reportLost(lost)
-    if (!has('--peek')) writeCursor(handle, unread, cursor, box, lost)
-    if (unread.length === 0) { if (!has('--json')) console.log('[inbox] no new mail'); else console.log('[]'); return }
+    if (unread.length === 0) {
+      if (!has('--peek')) writeCursor(handle, unread, cursor, box, lost)
+      if (!has('--json')) console.log('[inbox] no new mail'); else console.log('[]')
+      return
+    }
     printMail(unread)
+    if (!has('--peek')) writeCursor(handle, unread, cursor, box, lost)
     return
   }
   const mail = box.mail

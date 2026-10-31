@@ -155,6 +155,17 @@ describe('gh#113 CLI mailbox: seq, loss and truncation are visible', () => {
     expect(store(dir).s.readMailbox(H).epoch).not.toBe('e1')
   })
 
+  it('re-review P3: an unreadable nextSeq value, or a mailbox handle without one, voids the epoch', () => {
+    for (const snap of [
+      { deposits: [], epoch: 'e1', nextSeq: { [H]: 'x' }, mailbox: {} },
+      { deposits: [], epoch: 'e1', nextSeq: {}, mailbox: { [H]: [] } },
+    ]) {
+      const dir = mkdtempSync(join(tmpdir(), 'cli113-nextseq-'))
+      writeFileSync(join(dir, 'deposits.json'), JSON.stringify(snap))
+      expect(store(dir).s.readMailbox(H).epoch).not.toBe('e1')
+    }
+  })
+
   it('review P3: a restored or renumbered store pins its epoch on disk at once', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cli113-pin-'))
     writeFileSync(join(dir, 'deposits.json'), JSON.stringify({ deposits: [], mailbox: { [H]: [{ at: 1, from: 'x', text: 'a' }] } }))
