@@ -79,12 +79,38 @@ describe('gh#112 CLI resend through a lost reply (end-to-end)', () => {
       expect(out.stderr).toBe('')
       expect(out.code).toBe(0)
       expect(proxy.directs()).toBe(2)
-      expect(out.stdout).toMatch(/^\[route\] already delivered → ops-cli\/a1b2c3d4e5f60718 · task direct-[0-9a-f]{12} · .* — not sent a second time\n$/)
+      // `pending` (not `outcome unknown (payload-mismatch)`) proves the CLI's fingerprint is the host's.
+      expect(out.stdout).toMatch(/^\[route\] already received → ops-cli\/a1b2c3d4e5f60718 · task direct-[0-9a-f]{12} · pending — not sent a second time\n$/)
 
       const inbox = await globalThis.fetch(`${a.baseUrl}/__dsh_a2a/cli-deposit`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'inbox', handle: HANDLE }),
       }).then(async r => await r.json() as { mail: Array<{ text: string }> })
       expect(inbox.mail.filter(m => m.text.includes('resend probe gh112'))).toHaveLength(1)
+    } finally {
+      await new Promise(resolve => proxy.server.close(resolve))
+      await a.dispose()
+    }
+  }, 60_000)
+
+  it('review P1: a refused async round whose reply was lost is reported as failed, never as delivered', async () => {
+    const port = await reservePort()
+    const a = await bootNode({ name: 'A', session: 'mesh-gh112-p1', team: 'dsh', sessionNodes: true, port })
+    const proxy = await lossyProxy(a.baseUrl)
+    try {
+      const HOME = mkdtempSync(join(tmpdir(), 'a2a-gh112-p1-'))
+      const env = { HOME, A2A_CLI_HOME: HOME, A2A_HOME: proxy.url, A2A_RETRY_BASE_MS: '10' }
+      expect((await runCli(['init', 'ops-cli', '--uuid', 'a1b2c3d4e5f60718'], env)).code).toBe(0)
+      const id = JSON.parse(readFileSync(join(HOME, 'cli.json'), 'utf8')) as { privateKeyPem: string }
+      const card = signCard({ name: 'ops-cli', session: 'cli-ops-cli', team: HANDLE, capabilities: { route: true, async: true }, expiresAt: Date.now() + 172_800_000 }, createPrivateKey(id.privateKeyPem))
+      await globalThis.fetch(`${a.baseUrl}/__dsh_a2a/cli-deposit`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'publish', card: JSON.stringify(card) }),
+      })
+      // No session node serves ghost-team: the host claims the id, then refuses.
+      const out = await runCli(['route', 'dsh/ghost000', 'nobody home'], env)
+      expect(proxy.directs()).toBe(2)
+      expect(out.code).toBe(1)
+      expect(out.stderr).toMatch(/already ran and failed: .*No live DSH session node accepts team/)
+      expect(out.stdout).not.toContain('already received')
     } finally {
       await new Promise(resolve => proxy.server.close(resolve))
       await a.dispose()

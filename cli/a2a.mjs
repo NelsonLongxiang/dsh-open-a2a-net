@@ -44,7 +44,7 @@ const USAGE = `a2a-net CLI — aligned with the plugin's ten model tools ('a2a t
 usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 
 户口制:   init <name> [--uuid 16hex] [--force] · publish · inbox [--new|--wait|--hook] · revoke
-对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · report <msg…>
+对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · report <msg…> [--task ID]
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
 
 host:     --home > $A2A_HOME > the home saved by 'a2a init --home URL' > ${DEFAULT_HOME}
@@ -467,6 +467,13 @@ function listCapped(rows, cap, line) {
 // conflict. A CLI that let the host mint the id could never resend safely —
 // a lost reply meant either dropping the message or running it twice.
 
+/** `--task <id>`, checked; undefined when absent. */
+function taskFlag() {
+  const task = flag('--task')
+  if (task !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(task)) usage('--task takes the task id printed by an earlier route or report (letters, digits, . _ : -; at most 80)')
+  return task
+}
+
 /** A fresh task id, the shape the host mints itself. */
 const newTaskId = () => `direct-${randomUUID().replace(/-/g, '').slice(0, 12)}`
 
@@ -486,6 +493,11 @@ const RETRY_DELAYS_MS = (() => {
   return [unit, unit * 2, unit * 4]
 })()
 
+/** Resends ran out: the task may or may not have landed, and the same id is the safe way to try again. */
+function notConfirmed(body, attempt) {
+  console.error(`[${String(body.task_id)}] not confirmed after ${String(attempt + 1)} attempt${attempt === 0 ? '' : 's'} — resend safely with: --task ${String(body.task_id)}${body.wait === true ? ' --sync' : ''}`)
+}
+
 /**
  * POST one envelope to /a2a/direct, retrying transport failures and 5xx with
  * the same task id. Answers the last response, or rethrows the last error.
@@ -499,13 +511,17 @@ async function postDirect(body) {
         headers: { 'Content-Type': 'application/json', ...originClaimFor(home())(), ...keyHeaders() },
         body: JSON.stringify(body),
       })
-      if (res.status < 500 || attempt >= RETRY_DELAYS_MS.length) return { res, attempts: attempt + 1 }
+      if (res.status < 500) return { res, attempts: attempt + 1 }
+      if (attempt >= RETRY_DELAYS_MS.length) {
+        // A 5xx comes from a proxy or a crash, never from the host's own
+        // refusals: the task may have landed, so the caller gets the resend.
+        notConfirmed(body, attempt)
+        return { res, attempts: attempt + 1 }
+      }
       await res.text().catch(() => '')
     } catch (error) {
-      if (!transientError(error) || attempt >= RETRY_DELAYS_MS.length) {
-        console.error(`[${String(body.task_id)}] not confirmed after ${String(attempt + 1)} attempt${attempt === 0 ? '' : 's'} — resend safely with: --task ${String(body.task_id)}`)
-        throw error
-      }
+      if (!transientError(error)) throw error
+      if (attempt >= RETRY_DELAYS_MS.length) { notConfirmed(body, attempt); throw error }
     }
     await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS_MS[attempt]))
   }
@@ -535,17 +551,24 @@ async function sendDirect(verb, body) {
   const out = await replyOf(res)
   if (out.replay !== true) {
     if (has('--json')) console.log(JSON.stringify(out, null, 2))
-    die(`[${verb}] task ${String(body.task_id)} was already used for a different message — not sent; drop --task to send it as a new task`)
+    die(`[${verb}] task ${String(body.task_id)} was already used for a different message (or with${body.wait === true ? 'out' : ''} --sync) — not sent; drop --task to send it as a new task`)
   }
   const prior = await queryOutcome(body)
+  // "received" is all a replay proves: the host holds the id. Only an
+  // outcome on record says more — completed, failed, or still pending (an
+  // async delivery waits for its receipt; a host before the gh#112 fix also
+  // leaves refused async rounds pending).
   if (has('--json')) {
-    console.log(JSON.stringify({ ...out, delivered: prior.status !== 'failed', prior }, null, 2))
-    if (prior.status === 'failed') process.exitCode = 1
+    console.log(JSON.stringify({ ...out, received: true, ...(prior.status === 'completed' ? { delivered: true } : prior.status === 'failed' ? { delivered: false } : {}), prior }, null, 2))
+    if (prior.status === 'failed' || (body.wait === true && prior.status !== 'completed')) process.exitCode = 1
     return
   }
   if (prior.status === 'failed') die(`[${verb}] task ${String(body.task_id)} already ran and failed: ${String(prior.error ?? 'no reason given')} — not sent again`)
   const state = prior.found === true ? String(prior.status) : `outcome unknown (${String(prior.reason ?? 'not found')})`
-  console.log(`[${verb}] already delivered → ${String(body.team)} · task ${String(body.task_id)} · ${state} — not sent a second time`)
+  if (body.wait === true && prior.status !== 'completed') {
+    die(`[${verb}] task ${String(body.task_id)} is already with the host (${state}); its reply is not in yet — rerun later with --task ${String(body.task_id)} --sync`)
+  }
+  console.log(`[${verb}] already received → ${String(body.team)} · task ${String(body.task_id)} · ${state} — not sent a second time`)
   if (prior.status === 'completed' && typeof prior.reply === 'string' && prior.reply !== '') console.log(prior.reply)
 }
 
@@ -607,10 +630,8 @@ async function main() {
     const [team, ...words] = positionals()
     const message = words.join(' ')
     if (team === undefined || message === '') usage('usage: a2a route <team> <message…>')
-    const task = flag('--task')
-    if (task !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(task)) usage('--task takes the task id printed by an earlier route (letters, digits, . _ : -; at most 80)')
     await sendDirect('route', {
-      team, message, caller_session: identity().handle, wait: has('--sync'), task_id: task ?? newTaskId(),
+      team, message, caller_session: identity().handle, wait: has('--sync'), task_id: taskFlag() ?? newTaskId(),
       ...(flag('--context') !== undefined ? { context_id: flag('--context') } : {}),
     })
     return
@@ -680,7 +701,7 @@ async function main() {
   if (cmd === 'report') {
     const text = positionals().join(' ')
     if (text === '') usage('usage: a2a report <message…> — one-way report into the host process-team mailbox')
-    await sendDirect('report', { team: 'dsh', message: `[a2a-net cli report] ${text}`, caller_session: identity().handle, wait: false, task_id: newTaskId() })
+    await sendDirect('report', { team: 'dsh', message: `[a2a-net cli report] ${text}`, caller_session: identity().handle, wait: false, task_id: taskFlag() ?? newTaskId() })
     return
   }
   if (cmd === 'revoke') {

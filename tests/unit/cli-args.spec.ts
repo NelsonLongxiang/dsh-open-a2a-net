@@ -6,12 +6,12 @@
  * records what the CLI sent, so nothing here touches a real DSH or ~/.a2a.
  */
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync } from 'node:fs'
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { peerPayloadFingerprint } from '../../src/idempotency-store.ts'
 
 const CLI = join(process.cwd(), 'cli', 'a2a.mjs')
 
@@ -486,12 +486,12 @@ describe('a2a-net CLI: route carries its own task id and resends it safely (gh#1
     const HOME = await scoutHome()
     const out = await runCli(['route', 'ops', 'hi', '--task', 'direct-aaaabbbbcccc'], fast(HOME, host.url))
     expect(out.code).toBe(0)
-    expect(out.stdout.trim()).toBe('[route] already delivered → ops · task direct-aaaabbbbcccc · pending — not sent a second time')
+    expect(out.stdout.trim()).toBe('[route] already received → ops · task direct-aaaabbbbcccc · pending — not sent a second time')
     expect(host.direct()).toHaveLength(1)
     const query = host.seen.find(s => s.path === '/a2a/query')
     const sent = host.direct()[0]!.body
-    // The fingerprint is the host's own: sha256 over {caller, message, noWait, team}.
-    const fingerprint = createHash('sha256').update(JSON.stringify({ caller: sent.caller_session, message: 'hi', noWait: true, team: 'ops' })).digest('hex')
+    // The fingerprint is the host's own function, not a copy of the CLI's formula.
+    const fingerprint = peerPayloadFingerprint({ caller: String(sent.caller_session), message: 'hi', noWait: true, team: 'ops' })
     expect(query?.body).toEqual({ task_id: 'direct-aaaabbbbcccc', fingerprint })
   })
 
@@ -514,6 +514,43 @@ describe('a2a-net CLI: route carries its own task id and resends it safely (gh#1
     expect(out.stderr).toContain('already used for a different message')
     expect(host.direct()).toHaveLength(1)
     expect(host.seen.some(s => s.path === '/a2a/query')).toBe(false)
+  })
+
+  it('a --sync resend whose round is still pending exits 1 and says how to fetch the reply later', async () => {
+    const replay = { status: 409, body: { code: -32003, task_id: 'direct-aaaabbbbcccc', replay: true, error: 'duplicate' } }
+    const host = await scriptedHost([replay], { found: true, status: 'pending', task_id: 'direct-aaaabbbbcccc' })
+    const HOME = await scoutHome()
+    const out = await runCli(['route', 'ops', 'hi', '--sync', '--task', 'direct-aaaabbbbcccc'], fast(HOME, host.url))
+    expect(out.code).toBe(1)
+    expect(out.stderr).toContain('rerun later with --task direct-aaaabbbbcccc --sync')
+    const sent = host.direct()[0]!.body
+    expect(host.seen.find(s => s.path === '/a2a/query')?.body.fingerprint).toBe(peerPayloadFingerprint({ caller: String(sent.caller_session), message: 'hi', noWait: false, team: 'ops' }))
+  })
+
+  it('a --sync resend whose round completed prints the reply it already produced', async () => {
+    const replay = { status: 409, body: { code: -32003, task_id: 'direct-aaaabbbbcccc', replay: true, error: 'duplicate' } }
+    const host = await scriptedHost([replay], { found: true, status: 'completed', reply: '已完成', task_id: 'direct-aaaabbbbcccc' })
+    const HOME = await scoutHome()
+    const out = await runCli(['route', 'ops', 'hi', '--sync', '--task', 'direct-aaaabbbbcccc'], fast(HOME, host.url))
+    expect(out.code).toBe(0)
+    expect(out.stdout).toBe('[route] already received → ops · task direct-aaaabbbbcccc · completed — not sent a second time\n已完成\n')
+  })
+
+  it('report honours --task, so its resend hint is true', async () => {
+    const host = await scriptedHost([])
+    const HOME = await scoutHome()
+    expect((await runCli(['report', 'r1', '--task', 'direct-111122223333'], fast(HOME, host.url))).code).toBe(0)
+    expect(host.direct()[0]?.body.task_id).toBe('direct-111122223333')
+  })
+
+  it('5xx until resends run out still names the safe resend', async () => {
+    const busy = { status: 502, body: { error: 'bad gateway' } }
+    const host = await scriptedHost([busy, busy, busy, busy])
+    const HOME = await scoutHome()
+    const out = await runCli(['route', 'ops', 'hi'], fast(HOME, host.url))
+    expect(out.code).toBe(1)
+    expect(host.direct()).toHaveLength(4)
+    expect(out.stderr).toContain(`resend safely with: --task ${String(host.direct()[0]?.body.task_id)}`)
   })
 
   it('a malformed --task is a usage error', async () => {
