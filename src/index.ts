@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
 import { applyOwnerSettings, type OwnerSettings } from './owner-settings.ts'
-import { CliDepositStore } from './cli-deposit.ts'
+import { CLI_HANDLE_RE, CliDepositStore } from './cli-deposit.ts'
 import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
@@ -2516,7 +2516,7 @@ ${message}`
    *  window — the operator watches the tail drain before closing it. */
   let legacyInboundCount = 0
   const originClaimCallerShape = /^[a-z0-9-]+$/i
-  async function verifyOriginClaim(req: IncomingMessage): Promise<{ ok: true; caller: string; callerUrl: string; card: A2aPeerCard } | { ok: false; reason: 'absent' | 'bad-caller-shape' | 'bad-ts' | 'no-card' | 'bad-sig' | 'not-derivable' }> {
+  async function verifyOriginClaim(req: IncomingMessage, options?: { readonly cli?: boolean }): Promise<{ ok: true; caller: string; callerUrl: string; card: A2aPeerCard; cli?: true } | { ok: false; reason: 'absent' | 'bad-caller-shape' | 'bad-ts' | 'no-card' | 'bad-sig' | 'not-derivable' }> {
     const caller = String(req.headers['x-a2a-caller'] ?? '')
     const callerUrl = String(req.headers['x-a2a-caller-url'] ?? '')
     const ts = Number(req.headers['x-a2a-caller-ts'] ?? '')
@@ -2566,9 +2566,36 @@ ${message}`
     // Fleet senders stamp bare zone only; the narrowed shape kills the
     // false rejections AND the impersonation vector with zero recursion.)
     if (card.team !== caller) {
+      // gh#133: a deposited CLI identity signs its bare agent name, while its
+      // card's team is the handle <name>/<16hex>. Only the faces a CLI uses
+      // (delivery, log) accept it, and only for a deposit THIS host holds:
+      // the claim URL names that handle's deposit face, and the card is the
+      // deposited card (same key) — the signature then proves the deposited
+      // key. The URL's origin is not required to be ours: a CLI reaches its
+      // home under whatever address it can (a proxy, a tailnet IP), and the
+      // key, not the address, is the proof. Nothing else derives — the M2
+      // prefix impersonation stays closed.
+      if (options?.cli === true && cliClaimDerivable(caller, callerUrl, card)) return { ok: true, caller, callerUrl, card, cli: true }
       return { ok: false, reason: 'not-derivable' }
     }
     return { ok: true, caller, callerUrl, card }
+  }
+
+  /** gh#133: is (caller, callerUrl, card) a CLI identity deposited on this host? */
+  function cliClaimDerivable(caller: string, callerUrl: string, card: A2aPeerCard): boolean {
+    const handle = card.team
+    const shape = CLI_HANDLE_RE.exec(handle)
+    if (shape === null || shape[1] !== caller) return false
+    let url: URL
+    try { url = new URL(callerUrl) } catch { return false }
+    if (url.pathname.replace(/\/$/, '') !== `/a2a/cli/${encodeURIComponent(handle)}`) return false
+    const deposit = cliDeposits.get(handle)
+    if (deposit === undefined) return false
+    try {
+      return (JSON.parse(deposit.cardJson) as { publicKey?: unknown }).publicKey === card.publicKey
+    } catch {
+      return false
+    }
   }
 
   /**

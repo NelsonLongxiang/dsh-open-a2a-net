@@ -145,7 +145,8 @@ function originClaimFor(base) {
   return () => {
     const ts = Date.now()
     const signature = edSign(undefined, Buffer.from(JSON.stringify([id.name, callerUrl, ts])), privateKey).toString('base64')
-    return { 'X-A2A-Caller': id.name, 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Ts': String(ts), 'X-A2A-Sig': signature }
+    // gh#133: the header names the host verifies (X-A2A-Ts/-Sig were never read, so every envelope looked absent).
+    return { 'X-A2A-Caller': id.name, 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Caller-Ts': String(ts), 'X-A2A-Caller-Sig': signature }
   }
 }
 
@@ -574,14 +575,25 @@ function notConfirmed(body, attempt) {
  * the same task id. Answers the last response, or rethrows the last error.
  */
 async function postDirect(body) {
+  let signed = true
   for (let attempt = 0; ; attempt += 1) {
     try {
       const res = await fetch(`${home()}/a2a/direct`, {
         method: 'POST',
         // A fresh OriginClaim per attempt: the signature carries its own timestamp.
-        headers: { 'Content-Type': 'application/json', ...originClaimFor(home())(), ...keyHeaders() },
+        headers: { 'Content-Type': 'application/json', ...(signed ? originClaimFor(home())() : {}), ...keyHeaders() },
         body: JSON.stringify(body),
       })
+      // gh#133 compatibility: a host from before the fix cannot derive a CLI
+      // identity and refuses the now-readable envelope as not-derivable. That
+      // refusal comes before the host records the task id, so resending the
+      // same id unsigned once — as every older CLI sent — is safe: it rides
+      // the OriginClaim window exactly as before.
+      if (signed && res.status === 200 && (await res.clone().text()).includes('OriginClaim verification failed (not-derivable)')) {
+        signed = false
+        attempt -= 1
+        continue
+      }
       if (res.status < 500) return { res, attempts: attempt + 1 }
       if (attempt >= RETRY_DELAYS_MS.length) {
         // A 5xx comes from a proxy or a crash, never from the host's own

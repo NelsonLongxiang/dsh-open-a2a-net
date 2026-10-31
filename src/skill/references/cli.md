@@ -42,6 +42,13 @@ ten model tools.
 - `a2a-net route <team> <message…>` delivers a round with a signed
   OriginClaim envelope to the HOME host's `/a2a/direct`. It is async by
   default: the receipt comes back to `a2a-net inbox`.
+- The envelope (`X-A2A-Caller`, `X-A2A-Caller-Url`, `X-A2A-Caller-Ts`,
+  `X-A2A-Caller-Sig`) is signed with the identity key, over the identity's
+  deposit face on the home host. A host with gh#133 verifies it: the
+  delivery's authorization record says `proof: origin-claim`, and it does
+  not count as a legacy delivery. An older host refuses it as
+  `not-derivable`; the CLI then resends the same task id once unsigned, the
+  way earlier CLIs always sent (it rides the OriginClaim window).
 - `--sync` waits for the target's reply and prints it:
   `reply from <team> · task <id> · context <ctx>` followed by the reply text.
   When the round has not settled (status other than completed) a warning

@@ -62,7 +62,7 @@ export type NativeRoundOutcome =
   | { readonly ok: false; readonly error: string; readonly phase?: 'pre-dispatch'; readonly aborted?: boolean }
 
 /** What verifyOriginClaim answers (see index.ts; reason widens to string here — the faces only interpolate it). */
-export type OriginClaimResult = { ok: true; caller: string; callerUrl: string; card: A2aPeerCard } | { ok: false; reason: string }
+export type OriginClaimResult = { ok: true; caller: string; callerUrl: string; card: A2aPeerCard; cli?: true } | { ok: false; reason: string }
 
 /** Same scheme/host/port; false when either side is empty or malformed. */
 function sameOrigin(a: string, b: string): boolean {
@@ -79,7 +79,7 @@ export interface WireDeps {
   readonly sessionNodes: Map<string, Agent>
   readonly joinedSessions: JoinedSessions
   readonly idempotencyStore: IdempotencyStore
-  readonly verifyOriginClaim: (req: IncomingMessage) => Promise<OriginClaimResult>
+  readonly verifyOriginClaim: (req: IncomingMessage, options?: { readonly cli?: boolean }) => Promise<OriginClaimResult>
   readonly callerLinkedToThisHost: (caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined) => boolean
   /** This host's own card URL (read when a request lands; set once the web server settles). */
   readonly ownCardUrl: string
@@ -321,7 +321,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
       }
       // gh#9+gh#10: the log face reuses the exact OriginClaim
       // verification (§8.3) — same window semantics as delivery.
-      const logClaim = await verifyOriginClaim(req)
+      // gh#133: a deposited CLI identity may read the log face it already uses.
+      const logClaim = await verifyOriginClaim(req, { cli: true })
       if (!logClaim.ok) {
         if (logClaim.reason !== 'absent' || config.originClaimWindow === false) {
           recordActivity('in', 'log', caller, false)
@@ -569,7 +570,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // legacyInbound warn (the operator watches the tail drain), and
           // after the window closes it rejects like a failed signature —
           // N3 proves a NAME's linkability, never key possession.
-          const claim = await verifyOriginClaim(req)
+          // gh#133: the delivery face is where a deposited CLI identity signs its routes.
+          const claim = await verifyOriginClaim(req, { cli: true })
           if (!claim.ok) {
             if (claim.reason !== 'absent' || config.originClaimWindow === false) {
               recordActivity('in', team, caller, false)

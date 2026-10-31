@@ -35,10 +35,10 @@ describe('#114 S2 inbound authorization record (real host)', () => {
       const card = signCard({ name: 'ops-cli', session: 'cli-ops-cli', team: HANDLE, capabilities: { route: true, async: true }, expiresAt: Date.now() + 172_800_000 }, privateKey)
       expect((await post(`${a.baseUrl}/__dsh_a2a/cli-deposit`, { action: 'publish', card: JSON.stringify(card) })).body.ok).toBe(true)
       const callerUrl = `${a.baseUrl}/a2a/cli/${encodeURIComponent(HANDLE)}`
-      // The envelope exactly as cli/a2a.mjs sends it today. Its header names
-      // are not the ones the host verifies (#133), so the claim reads as
-      // absent and the delivery rides the OriginClaim window: the record must
-      // say so honestly (proof legacy-window, no claim).
+      // The envelope as a CLI from before gh#133 sent it. Its header names are
+      // not the ones the host verifies, so the claim reads as absent and the
+      // delivery rides the OriginClaim window: the record must say so honestly
+      // (proof legacy-window, no claim). gh133-cli-origin-claim covers the fixed CLI.
       const envelope = (): Record<string, string> => {
         const ts = Date.now()
         return { 'X-A2A-Caller': 'ops-cli', 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Ts': String(ts), 'X-A2A-Sig': edSign(undefined, Buffer.from(JSON.stringify(['ops-cli', callerUrl, ts])), privateKey).toString('base64') }
