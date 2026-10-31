@@ -12,6 +12,25 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/receipt
  */
 
+/**
+ * #114 S5: what a task id may not contain. The id is spliced into the
+ * `[A2A direct] (task <id>)` steer header and the `[A2A receipt] task <id>`
+ * correlation header; a `)` would let one id's header start with another's
+ * (`foo) x` → `(task foo) x)`), and whitespace or control characters break
+ * the `\S+` correlation and the header's one-line shape.
+ */
+const TASK_ID_FORBIDDEN = /[\s)\u0000-\u001f\u007f]/
+
+/**
+ * Refusal text for an unusable task id, or undefined when the id is fine.
+ * Both delivery paths (wire face, local candidate) refuse at intake.
+ */
+export function taskIdRefusal(taskId: string): string | undefined {
+  return TASK_ID_FORBIDDEN.test(taskId)
+    ? 'task_id must not contain whitespace, ")" or control characters — it is spliced into the [A2A direct] (task <id>) and [A2A receipt] task <id> headers'
+    : undefined
+}
+
 /** The network's fixed, case-sensitive correlation template. */
 export const RECEIPT_PATTERN = /^\[A2A receipt\] task (\S+)\s*([\s\S]*)$/
 

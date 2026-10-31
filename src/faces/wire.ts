@@ -23,6 +23,7 @@ import { TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_MAX_LIMIT } from '../session-trans
 import { refuseIfBudgetExhausted } from '../recursion-guard.ts'
 import { peerPayloadFingerprint, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from '../idempotency-store.ts'
 import { briefOf, type TaskLedger } from '../task-ledger.ts'
+import { taskIdRefusal } from '../receipt.ts'
 import { buildAuthorization, claimCovers, refusalOf, type Admission } from '../task-auth.ts'
 import type { Config } from '../index.ts'
 import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from '../transport-caps.ts'
@@ -105,7 +106,9 @@ export interface WireDeps {
   readonly probeConsumption: (agent: Agent, taskId: string) => boolean
   readonly steerRelay: (agent: Agent, text: string, sender?: string) => void
   readonly fromClause: (from: string) => string
-  readonly armReceiptAutosend: (target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string) => void
+  readonly armReceiptAutosend: (target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number) => void
+  /** #114 S5: the target's session-log length, read just before a steer. */
+  readonly eventCountOf: (agent: Agent) => number
   readonly receiptExpectationOf: (receiptTarget: string) => 'receivable' | 'process-label'
   readonly armAsyncNudge: (agent: Agent, team: string, taskId: string, delayMs: number) => void
   readonly liveAgent: () => Agent | undefined
@@ -155,6 +158,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     steerRelay,
     fromClause,
     armReceiptAutosend,
+    eventCountOf,
     receiptExpectationOf,
     armAsyncNudge,
     liveAgent,
@@ -539,6 +543,15 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             res.end(payload)
             return
           }
+          // #114 S5: a caller-born id must be header-safe — refused before
+          // admission, claim or steer, so nothing is booked under it.
+          const idRefusal = taskIdRefusal(taskId)
+          if (idRefusal !== undefined) {
+            const payload = JSON.stringify({ error: idRefusal, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+            return
+          }
           // Phase-3 admission (owner ruling 2026-09-01, decision-seat
           // filed): an inbound direct delivery must show a SHARED team.
           // Local-zone callers are judged synchronously and exactly — the
@@ -677,10 +690,13 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // latched, so the post-steer read alone would answer a false
                 // consumed:true and strand the message.
                 const runningBeforeSteer = probeConsumption(target, taskId)
+                // #114 S5: the receipt's consumption search starts here, so an
+                // older steer of a reused id in the history never anchors it.
+                const steerFloor = eventCountOf(target)
                 steerRelay(target, `[A2A direct] (task ${taskId}) ${fromClause(from)} (routed to ${team}) sent:\n\n${message}\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`, from === 'an unknown node' ? undefined : from)
                 steered = true
                 recordActivity('in', team, caller, true)
-                armReceiptAutosend(target, taskId, receiptTarget, message)
+                armReceiptAutosend(target, taskId, receiptTarget, message, steerFloor)
                 // v0.5.23 (async-stall): "delivered" only proves the steer call
                 // returned — not that a turn started. An idle-phase steer wakes
                 // the driver, but a maintenance/abort window latches the wake for

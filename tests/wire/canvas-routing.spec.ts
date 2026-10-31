@@ -184,6 +184,46 @@ describe('canvas team routing', () => {
     expect(row?.sender).toEqual({ kind: 'session', id: 'dsh/aaaa1111' })
   })
 
+  it('a local auto-receipt from a row without auth names onBehalfOf and omits authRef (#123)', async () => {
+    const m = await mount({ joined: ['session-aaaa1111', 'session-bbbb2222'], canvas: [{ name: 'alpha', members: ['session-aaaa1111', 'session-bbbb2222'] }] })
+    mounted.push(m.dispose)
+    const a = makeAgent('session-aaaa1111', [])
+    const b = makeAgent('session-bbbb2222', [])
+    // B plays a real turn: the session log records the steer it consumed,
+    // then the turn answers and goes idle.
+    // The turn runs after the steer call returns, as a real driver's does.
+    ;(b as unknown as { steer: unknown }).steer = vi.fn((message: { content: Array<{ type: string; text?: string }> }) => {
+      setTimeout(() => {
+        b.session.events.push({ type: 'user/message', data: { content: message.content } })
+        b.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'local work done' }] } } })
+        m.ctx.emit('agent/status', { agent: b, status: 'idle' })
+      }, 10)
+    })
+    goLive(m, a, b)
+    await postJson(m.port, '/__dsh_a2a/join', { id: 'session-aaaa1111' })
+    await postJson(m.port, '/__dsh_a2a/join', { id: 'session-bbbb2222' })
+    const result = await m.ctx.tools.get('a2a_route')!.execute(
+      { team: 'dsh/canvas/alpha', message: 'local receipt check', async: true },
+      { signal: new AbortController().signal, agent: a } as unknown as ToolRunContext,
+    ) as { ok: boolean; task_id?: string }
+    expect(result.ok).toBe(true)
+    // The receipt rides the in-process candidate back to A's node team,
+    // framed by the local steer header like any delivery.
+    const header = `[A2A receipt] task ${String(result.task_id)} `
+    const receiptText = (): string | undefined => {
+      const framed = a.steer.mock.calls
+        .map(call => ((call[0] as { content: Array<{ text?: string }> }).content[0]?.text ?? ''))
+        .find(text => text.includes(header))
+      return framed === undefined ? undefined : framed.slice(framed.indexOf(header))
+    }
+    for (let i = 0; i < 25 && receiptText() === undefined; i++) await new Promise(resolve => { setTimeout(resolve, 20) })
+    const text = receiptText()
+    expect(text).toContain('local work done (auto)')
+    // The local path births no inbound authorization record: no authRef.
+    const envelope = JSON.parse(String(text).split('\n')[1] ?? '{}') as Record<string, unknown>
+    expect(envelope).toEqual({ outcome: 'completed', idempotencyKey: result.task_id, onBehalfOf: 'dsh/bbbb2222' })
+  })
+
   it('fails over to the next member after remove-member', async () => {
     const m = await mount({ joined: ['session-aaa', 'session-bbb'], canvas: [{ name: 'alpha', members: ['session-aaa', 'session-bbb'] }] })
     mounted.push(m.dispose)
