@@ -118,8 +118,6 @@ export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTea
   // member added across hosts (gh#41 fleet editing) is stored by its
   // zone/id8 handle even when the session is local here. Match either — the
   // sending side's gate already does (review of PR #129).
-  const sessionOrHandleIn = (members: readonly string[], sessionId: string, handle: string): boolean =>
-    members.includes(sessionId) || members.includes(handle)
   if (callerSessionId !== undefined) {
     for (const name of r.canvasTeamsOf(callerSessionId)) declare(r.canvasTeamOf(name), 'canvas-shared')
     for (const name of r.canvasNames()) {
@@ -199,7 +197,7 @@ export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTea
         targetLinks = new Set<string>([targetTeam])
         for (const memberId of r.canvasMembersOf(canvasName)) {
           for (const entry of r.memberships()) {
-            if (sessionOrHandleIn([memberId], entry.session, `${r.zone}/${r.id8(entry.session)}`)) for (const t of entry.teams) targetLinks.add(t)
+            if (entry.session === memberId || `${r.zone}/${r.id8(entry.session)}` === memberId) for (const t of entry.teams) targetLinks.add(t)
           }
         }
       }
