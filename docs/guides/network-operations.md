@@ -54,7 +54,7 @@
 | 链接 | canvas refs（句柄精确）/ roster / 双边互种 | 谁与我有运营者建立的链接 |
 | 内容 | 暴露档（#19：linked 下限/fleet 自愿上调） | 链接者看多少 |
 
-准入要点：投递面（/a2a/direct）要求共享队（roster ∪ canvas 同队，W1 环路同规）；未验签信封在窗口关闭后按 `untrusted-origin` 拒（与验签败同码）；匿名投递直接拒。已寄存的 `a2a-net` CLI 句柄是本宿主已发布的节点事实，可通过调用方门（f879f0d），其收件进信箱。跨宿画布操作（`/a2a/canvas-op`，由本机 `/__dsh_a2a/fleet-canvas-op` 中继并盖信封）同样要求验签 ∧ 链接。
+准入要点：投递面（/a2a/direct）要求共享队（roster ∪ canvas 同队，W1 环路同规）；未验签信封在窗口关闭后按 `untrusted-origin` 拒（与验签败同码）；匿名投递直接拒。已寄存的 `a2a-net` CLI 句柄是本宿主已发布的节点事实，可通过调用方门（f879f0d），其收件进信箱。跨宿画布操作（`/a2a/canvas-op`：create / add-member / remove-member / remove 解散，由本机 `/__dsh_a2a/fleet-canvas-op` 中继并盖信封）同样要求验签 ∧ 链接。
 
 ### 应用方法
 组链接=在 A2A 工作台建 canvas team 加远端句柄（操作者手势），或双边 peers 互种；成员暴露档经 `a2a_exposure` 工具调（缺席=linked 下限）。
