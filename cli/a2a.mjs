@@ -601,7 +601,7 @@ async function postDirect(body) {
       // same id unsigned once — as every older CLI sent — is safe: it rides
       // the OriginClaim window exactly as before.
       if (signed && res.status === 200 && notDerivable(await res.clone().text())) {
-        console.error(`[${String(body.task_id)}] the host cannot verify this identity's signature (not-derivable: an older host, or a home address it cannot map) — resending once unsigned; it is accepted only while the host's OriginClaim window is open`)
+        console.error(`[${String(body.task_id)}] the host cannot verify this identity's signature (not-derivable: most likely a host from before gh#133) — resending once unsigned; it is accepted only while the host's OriginClaim window is open`)
         signed = false
         attempt -= 1
         continue
