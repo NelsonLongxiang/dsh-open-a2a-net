@@ -5,7 +5,7 @@
  * edit waits for the owner; a local frame carries no marker.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { mirrorRoute } from '../src/planning-mirror.ts'
+import { createDissolveGuard, DISSOLVE_HIDE_MS, mirrorRoute } from '../src/planning-mirror.ts'
 import { createPlanningView, type PlanningInput, type SeamPointer } from '../src/planning-view.ts'
 
 const ptr = (o: Partial<SeamPointer>): SeamPointer =>
@@ -72,5 +72,39 @@ describe('owner vs mirror frames (PR#96)', () => {
     v.seam.pointerMove(ptr({ target: local, clientX: -40, clientY: 0 })) // a frame drag re-renders every frame
     v.seam.pointerUp(ptr({ target: local, clientX: -40, clientY: 0 }))
     expect(writes.mock.calls.filter(c => c[0] === 'aria-label')).toEqual([])
+  })
+})
+
+describe('dissolve guard (解散 on a mirror frame)', () => {
+  const U1 = 'http://10.0.0.5:8787'
+  const U2 = 'http://10.0.0.6:8787'
+  const org = (url: string, ...names: string[]) => ({ url, org: names.map(name => ({ name })) })
+
+  it('is keyed by owner AND name: another owner\'s team X is not touched', () => {
+    const g = createDissolveGuard(() => 0)
+    expect(g.fork({ type: 'remove-team', name: 'X' }, U1)).toEqual({ type: 'remove-team', name: 'X', fleetPeer: U1 })
+    expect([g.hides('X', U1), g.hides('X', U2)]).toEqual([true, false])
+    g.settled({ type: 'remove-team', name: 'X', fleetPeer: U2 }, false) // U2's refusal is not U1's
+    expect(g.hides('X', U1)).toBe(true)
+    g.settled({ type: 'remove-team', name: 'X', fleetPeer: U1 }, false)
+    expect(g.hides('X', U1)).toBe(false)
+  })
+
+  it('an accepted dissolve stops hiding once the owner drops the team, or after DISSOLVE_HIDE_MS at the latest', () => {
+    let clock = 0
+    const g = createDissolveGuard(() => clock)
+    g.fork({ type: 'remove-team', name: 'X' }, U1)
+    g.sweep([org(U1, 'X')])
+    expect(g.hides('X', U1)).toBe(true) // in flight, owner still lists it
+    g.settled({ type: 'remove-team', name: 'X', fleetPeer: U1 }, true)
+    clock += DISSOLVE_HIDE_MS
+    g.sweep([org(U1, 'X')])
+    expect(g.hides('X', U1)).toBe(true) // card not re-read yet
+    clock += 1
+    g.sweep([org(U1, 'X')]) // a late add-member re-created X on the owner: it is real again
+    expect(g.hides('X', U1)).toBe(false)
+    g.fork({ type: 'remove-team', name: 'Y' }, U1)
+    g.sweep([org(U1)]) // the owner dropped Y
+    expect(g.hides('Y', U1)).toBe(false)
   })
 })

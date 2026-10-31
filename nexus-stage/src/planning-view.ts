@@ -44,7 +44,7 @@ import { FRAME_HUES } from './tokens'
 import { createPlanningMenus } from './planning-menus'
 import { createNodeFlyer, mountBoardSearch } from './planning-search'
 import { applyBoardRelayout } from './planning-relayout'
-import { mirrorRoute } from './planning-mirror'
+import { createDissolveGuard, mirrorRoute } from './planning-mirror'
 import { settleBoard, tidyMembers } from './planning-overlap'
 import { createLayoutUndo, type LayoutSnap } from './planning-undo'
 import { createNodeList } from './planning-nodelist'
@@ -526,6 +526,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   // gh#41: remote-frame registry (frame name → peer URL), refreshed by
   // reconcile and read by emitAction's serverAction to fork remote drops.
   let remoteFramesRef = new Map<string, string>()
+  const dissolving = createDissolveGuard(deps.now)
 
   function emitAction(a: CanvasAction): void {
     // gh#20 W-B: the SERVER sees zone/id8 remote handles where the model
@@ -555,7 +556,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
           ? { ...act, ids, ...(fleetPeer !== undefined ? { fleetPeer } : {}) }
           : act
       }
-      return act
+      // Dissolving a mirror frame is the owner's write as well (relay op 'remove').
+      return act.type === 'remove-team' && remoteFramesRef.has(act.name) ? dissolving.fork(act, remoteFramesRef.get(act.name)!) : act
     }
 
     // Optimistic seats: a write may reference a session the teamed gate
@@ -583,10 +585,11 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     const team = actionTeam(a)
     pendingAdd(team)
     render()
-    void deps.onCanvasAction(serverAction(a)).then(
+    const sent = serverAction(a)
+    void deps.onCanvasAction(sent).then(
       ok => {
         pendingRelease(team)
-        layoutDoc = settleAction(model, a, ok, undo, layoutDoc); markDirty()
+        layoutDoc = settleAction(model, a, ok, undo, layoutDoc); markDirty(); dissolving.settled(sent, ok)
         render()
       },
       () => {
@@ -594,7 +597,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         // team's guard (and its optimistic state) forever — and per §3.4
         // 不吞错, the rollback surfaces to the user.
         pendingRelease(team)
-        layoutDoc = settleAction(model, a, false, undo, layoutDoc); markDirty()
+        layoutDoc = settleAction(model, a, false, undo, layoutDoc); markDirty(); dissolving.settled(sent, false)
         notice('error', '操作通道异常，已回滚')
         render()
       },
@@ -1306,6 +1309,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     if (input.peerOrg !== undefined) {
       let slot = 0
       const localNames = new Set(input.teams.map(t => t.name))
+      dissolving.sweep(input.peerOrg)
       for (const row of input.peerOrg) {
         // The peer's zone comes from its directory rows ('dsh/xxxx' →
         // 'dsh'); the org's members are stored verbatim — LOCAL members as
@@ -1323,7 +1327,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         const memberBoardId = (m: string): string =>
           m.includes('/') ? `member-${m.replace(/[^a-z0-9-]/gi, '-')}` : `member-${peerZone}-${id8of(m)}`
         for (const team of row.org) {
-          if (team.name === '' || localNames.has(team.name)) continue
+          if (team.name === '' || localNames.has(team.name) || dissolving.hides(team.name, row.url)) continue
           const memberIds = team.members.map(memberBoardId).filter(id => model.getNode(id) !== undefined)
           const saved = layoutDoc?.frames?.[team.name]
           // gh#44 (owner: frame position/size never sticks): the LOCAL-team

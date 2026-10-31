@@ -114,8 +114,15 @@ export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTea
       if (`${r.zone}/${r.id8(id)}` === caller) { callerSessionId = id; break }
     }
   }
+  // Canvas members mix two shapes: a local session sits by session id, but a
+  // member added across hosts (gh#41 fleet editing) is stored by its
+  // zone/id8 handle even when the session is local here. Match either — the
+  // sending side's gate already does (review of PR #129).
   if (callerSessionId !== undefined) {
     for (const name of r.canvasTeamsOf(callerSessionId)) declare(r.canvasTeamOf(name), 'canvas-shared')
+    for (const name of r.canvasNames()) {
+      if (r.canvasMembersOf(name).includes(caller)) declare(r.canvasTeamOf(name), 'canvas-shared')
+    }
   } else {
     for (const name of r.canvasNames()) {
       if (r.canvasRemoteMembersOf(name).includes(caller)) declare(r.canvasTeamOf(name), 'remote-ref-samezone')
@@ -155,7 +162,13 @@ export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTea
   }
   if (targetTeam !== undefined && targetTeam !== r.zone) {
     let targetLinks: Set<string> | undefined
-    const targetId8 = targetTeam.startsWith(`${r.zone}/`) ? targetTeam.slice(r.zone.length + 1) : undefined
+    // gh#128: a canvas team (`<zone>/canvas/<name>`) also starts with
+    // `<zone>/`. Resolve it as a canvas FIRST — read as a session id8 it
+    // matched no session, the canvas branch below was unreachable, and a
+    // canvas target fell back to the host-level basis (any shared link
+    // opened every canvas team).
+    const targetCanvas = r.canvasNames().find(name => r.canvasTeamOf(name) === targetTeam)
+    const targetId8 = targetCanvas === undefined && targetTeam.startsWith(`${r.zone}/`) ? targetTeam.slice(r.zone.length + 1) : undefined
     if (targetId8 !== undefined) {
       const targetSession = r.joined().find(sessionId => r.id8(sessionId) === targetId8)
         ?? r.memberships().find(entry => r.id8(entry.session) === targetId8)?.session
@@ -165,6 +178,9 @@ export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTea
           if (entry.session === targetSession) for (const t of entry.teams) targetLinks.add(t)
         }
         for (const name of r.canvasTeamsOf(targetSession)) targetLinks.add(r.canvasTeamOf(name))
+        for (const name of r.canvasNames()) {
+          if (r.canvasMembersOf(name).includes(targetTeam)) targetLinks.add(r.canvasTeamOf(name))
+        }
         for (const org of r.peerOrgs()) {
           for (const e of org) {
             if (typeof e.team !== 'string' || e.team === '' || !Array.isArray(e.members)) continue
@@ -176,11 +192,13 @@ export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTea
         }
       }
     } else {
-      const canvasName = r.canvasNames().find(name => r.canvasTeamOf(name) === targetTeam)
+      const canvasName = targetCanvas
       if (canvasName !== undefined) {
         targetLinks = new Set<string>([targetTeam])
         for (const memberId of r.canvasMembersOf(canvasName)) {
-          for (const entry of r.memberships()) if (entry.session === memberId) for (const t of entry.teams) targetLinks.add(t)
+          for (const entry of r.memberships()) {
+            if (entry.session === memberId || `${r.zone}/${r.id8(entry.session)}` === memberId) for (const t of entry.teams) targetLinks.add(t)
+          }
         }
       }
     }
