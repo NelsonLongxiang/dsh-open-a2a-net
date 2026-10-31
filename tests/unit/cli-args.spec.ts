@@ -213,6 +213,21 @@ describe('a2a-net CLI: read commands and errors', () => {
     expect((JSON.parse(json.stdout) as { pending: unknown[] }).pending).toHaveLength(25)
   })
 
+  it('tasks prints each row\'s sender at the end of its line; rows without one print nothing extra (#121)', async () => {
+    const host = await stubHost(() => ({ status: 200, body: {
+      tasks: [{ taskId: 'direct-00000001', team: 'ops', direction: 'outbound', sender: { kind: 'session', id: 'dsh/1a2b3c4d' } }, { taskId: 'direct-00000002', team: 'ops', direction: 'inbound' }],
+      tasksDead: [{ taskId: 'direct-00000003', team: 'ops', reason: 'unconsumed', sender: { kind: 'host', id: 'dsh' } }],
+      archived: [{ taskId: 'direct-00000004', outcome: 'completed', endedBy: 'receipt', sender: { kind: 'bridge', id: 'dsh/feedf00d' } }],
+    } }))
+    servers.push(host.server)
+    const HOME = tmpHomeDir()
+    const out = (await runCli(['tasks', '--home', host.url], { HOME, A2A_CLI_HOME: HOME })).stdout
+    expect(out).toContain('direct-00000001 → ops outbound · sender session:dsh/1a2b3c4d\n')
+    expect(out).toContain('direct-00000002 → ops inbound\n')
+    expect(out).toContain('direct-00000003 → ops (unconsumed) · sender host:dsh\n')
+    expect(out).toContain('direct-00000004 completed · sender bridge:dsh/feedf00d')
+  })
+
   it('double-run idempotency under one A2A_CLI_HOME (Windows isolation round)', async () => {
     // The review FAIL: HOME-only isolation leaked the real profile on
     // Windows (os.homedir() reads USERPROFILE) — a second run collided with

@@ -3,8 +3,8 @@
   "sourceCommit": "0b466643b27120878ceeab9a2ebf087ae3854605",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "7162d4cfb586d0178041803c33b8cc6ace3804a00f41ceae6092a2586ba7f8ea",
-    "src/faces/admin.ts": "79bdf83e5a0866507e7e249b25d5c999c1a1fba9d5fc11509ed4d72d424ffb16",
+    "src/index.ts": "6d659ae14098f6fd721ade6bc8a638d5545d7cd70ad52d3a923b41d89f092ec4",
+    "src/faces/admin.ts": "4e4a6db06d53c159523bbc40ad3b8d13b822659d7af140e19abfe98edb01b92a",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "fded04a5bd4e0443f096874a9a0495786272ddb63d7e5ddf72e89b4502fad333",
@@ -14,7 +14,7 @@
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
     "nexus-stage/src/planning-card-text.ts": "31403071229c5dde4af545ded1a8eaebb1c329a52df3169fae868a57119225d9",
     "nexus-stage/src/planning-fit.ts": "cbda0255062632bd412deb2131c7a01e1e16ab9c72d2a70a32c362e108f8c07a",
-    "src/task-ledger.ts": "9a87337cf4282fa0730f6ced611f2fb385e3175219a3e5e51451e42ed69c6f98",
+    "src/task-ledger.ts": "8e676ad1479e5b23d5e12bb1c6cca558b896ebb455aa94e03f51608bd60511a1",
     "nexus-stage/src/world.ts": "1c6308555b65e8316cda38cf97dc43120b979be3e30792a12b893faf845cb934",
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
@@ -32,13 +32,13 @@
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/index.ts:5313",
+      "ref": "src/index.ts:5340",
       "expect": "name: 'a2a_probe',"
     },
     {
       "page": "p1-arch",
       "cell": "a2",
-      "ref": "src/index.ts:4273",
+      "ref": "src/index.ts:4274",
       "expect": "error: `the process face \"${config.team}\" is the host's own mailbox — model tools must target a member face. Route to a session team handle (\"${config.team}/<id8>\" from a2a_teams) or a canvas team; receipts and quick dispatch reach the host face on their own paths.`,"
     },
     {
@@ -80,13 +80,13 @@
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:4341",
+      "ref": "src/index.ts:4342",
       "expect": "const sharedCanvas = canvasStore.list().some(name => {"
     },
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:4346",
+      "ref": "src/index.ts:4347",
       "expect": "let orgShared = false"
     },
     {
@@ -116,7 +116,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:439",
+      "ref": "src/faces/admin.ts:442",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
@@ -206,7 +206,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:4505",
+      "ref": "src/index.ts:4512",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -290,7 +290,7 @@
     {
       "page": "p1-arch",
       "cell": "d10",
-      "ref": "src/task-ledger.ts:623",
+      "ref": "src/task-ledger.ts:671",
       "expect": "private trimOwed(): void {"
     },
     {

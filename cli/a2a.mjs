@@ -515,6 +515,13 @@ function depositLine(list, handle, offline) {
 }
 
 /** Print the first `cap` rows and say how many were left out. */
+// #114 S3: a row's real sender rides the end of its line; rows from older
+// hosts (or inbound rows) carry none and print nothing extra.
+function senderTail(row) {
+  const s = row.sender
+  return s !== null && typeof s === 'object' && typeof s.kind === 'string' && typeof s.id === 'string' ? ` · sender ${s.kind}:${s.id}` : ''
+}
+
 function listCapped(rows, cap, line) {
   for (const row of rows.slice(0, cap)) console.log(line(row))
   if (rows.length > cap) console.log(`  … ${String(rows.length - cap)} more (--json lists all)`)
@@ -739,11 +746,11 @@ async function main() {
     const archived = s.archived ?? []
     if (has('--json')) { console.log(JSON.stringify({ pending, dead, archived }, null, 2)); return }
     console.log(`pending (${String(pending.length)}):`)
-    listCapped(pending, 20, t => `  ${String(t.taskId)} → ${String(t.team)} ${String(t.direction ?? '')}`)
+    listCapped(pending, 20, t => `  ${String(t.taskId)} → ${String(t.team)} ${String(t.direction ?? '')}${senderTail(t)}`)
     console.log(`dead (${String(dead.length)}):`)
-    listCapped(dead, 20, t => `  ${String(t.taskId)} → ${String(t.team)} (${String(t.reason ?? '?')})`)
+    listCapped(dead, 20, t => `  ${String(t.taskId)} → ${String(t.team)} (${String(t.reason ?? '?')})${senderTail(t)}`)
     console.log(`archived (${String(archived.length)}):`)
-    listCapped(archived, 20, t => `  ${String(t.taskId)} ${String(t.outcome ?? '?')}${t.endedBy !== undefined && t.endedBy !== 'receipt' ? ` (${String(t.endedBy)})` : ''}`)
+    listCapped(archived, 20, t => `  ${String(t.taskId)} ${String(t.outcome ?? '?')}${t.endedBy !== undefined && t.endedBy !== 'receipt' ? ` (${String(t.endedBy)})` : ''}${senderTail(t)}`)
     return
   }
   if (cmd === 'status') {

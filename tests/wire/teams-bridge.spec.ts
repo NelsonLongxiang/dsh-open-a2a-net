@@ -239,8 +239,12 @@ describe('outbound nativeTeamsA2a face', () => {
     const outcome = await face.submit({ handle: 'peer-team', message: 'long job', delivery: 'async', idempotencyKey: 'wb-2' })
     expect(outcome).toMatchObject({ kind: 'accepted', taskId: 'wb-2', contextId: 'ctx-peer' })
     expect(peer.seen[0]).toMatchObject({ wait: false })
-    const state = await (await fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { tasks: Array<{ taskId: string }> }
+    const state = await (await fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { tasks: Array<{ taskId: string; sender?: { kind: string; id: string } }> }
     expect(state.tasks.map(task => task.taskId)).toContain('wb-2')
+    // #121: no submitting session named → the bridge row is the host's label.
+    const row = state.tasks.find(task => task.taskId === 'wb-2')
+    expect(row?.sender?.kind).toBe('bridge')
+    expect(row?.sender?.id).not.toBe('')
   })
 
   it('submit async without a declared async capability waits sync instead of silently degrading', async () => {
@@ -541,6 +545,9 @@ describe('P2 receipt-callback routing', () => {
       callbackTarget: { label: 'team', parentSessionId: 'session-aaaa' },
     })
     expect(peer.seen[0]).toMatchObject({ callback: 'dsh/aaaa' })
+    // #121: the bridge row names the submitting session in /state.
+    const state = await (await fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { tasks: Array<{ taskId: string; sender?: unknown }> }
+    expect(state.tasks.find(task => task.taskId === 'p2-1')?.sender).toEqual({ kind: 'bridge', id: 'dsh/aaaa' })
   })
 
   it('an unjoined callbackTarget parent rides NO callback — a bare-team address would be intercepted local-first by a same-named peer', async () => {

@@ -122,11 +122,14 @@ describe('canvas team remote-member routing', () => {
     expect(result.team).toBe('dsh/canvas/ops')
     expect(result.reply).toContain('Delivered to ' + MEMBER_HANDLE + ' (async)')
     // The owed-task ledger keys the canvas team (not the member handle).
-    const tasks = await m.ctx.tools.get('a2a_tasks')!.execute({}, noAgent()) as { tasks: Array<{ taskId: string; team: string; peer: string; status: string }> }
+    const tasks = await m.ctx.tools.get('a2a_tasks')!.execute({}, noAgent()) as { tasks: Array<{ taskId: string; team: string; peer: string; status: string; sender?: { kind: string; id: string } }> }
     const owed = tasks.tasks.find(task => task.taskId === result.task_id)
     expect(owed).toBeDefined()
     expect(owed!.team).toBe('dsh/canvas/ops')
     expect(owed!.peer).toBe('http://peer-x')
+    // #121: the peer-candidate row from an agent-less call is the host face.
+    expect(owed!.sender?.kind).toBe('host')
+    expect(owed!.sender?.id).not.toBe('')
   })
 
   it('reports honest exhaustion when no peer publishes the member handle', async () => {

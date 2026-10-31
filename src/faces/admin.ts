@@ -283,6 +283,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               // say nothing about WHAT is owed — supervision cannot tell
               // a nudge from an abandon without it.
               ...(task.brief !== undefined ? { brief: task.brief } : {}),
+              // #114 S3: the real sender, so supervision buckets by seat, not "home".
+              ...(task.sender !== undefined ? { sender: task.sender } : {}),
               // C-ruling bucket split: a pending row is settleable while
               // it is young, expected, and answerable; past the stale
               // hour it is conversational noise waiting on the dead TTL.
@@ -293,7 +295,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           tasksStaleCount: taskLedger.list().filter(task => task.status === 'pending' && (task.receiptExpected === false || Date.now() - task.startedAt >= 60 * 60_000)).length,
           tasksDead: taskLedger.list()
             .filter(task => task.status === 'dead')
-            .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt, reason: task.reason ?? 'unspecified', ...(task.brief !== undefined ? { brief: task.brief } : {}), ...(task.direction !== undefined ? { direction: task.direction } : {}) })),
+            .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt, reason: task.reason ?? 'unspecified', ...(task.brief !== undefined ? { brief: task.brief } : {}), ...(task.direction !== undefined ? { direction: task.direction } : {}), ...(task.sender !== undefined ? { sender: task.sender } : {}) })),
           // gh#31: per-task outcomes for rows that LEFT the ledger — the
           // chat drawer used to guess (settled, abandoned or cancelled).
           // Bounded to the archive (≤64), newest first, with the
@@ -319,6 +321,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             ...(row.lateReceiptAt !== undefined ? { late: true } : {}),
             ...(row.brief !== undefined ? { brief: row.brief } : {}),
             ...(row.summary !== undefined && row.summary !== '' ? { summary: row.summary.slice(0, 160) } : {}),
+            ...(row.sender !== undefined ? { sender: row.sender } : {}),
           })),
           archivedCount: taskLedger.archive().length,
           // Ledger density face: the settled archive split by verdict, so
