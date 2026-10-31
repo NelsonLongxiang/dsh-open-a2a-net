@@ -547,6 +547,8 @@ async function queryOutcome(body) {
  */
 async function sendDirect(verb, body) {
   const { res } = await postDirect(body)
+  // Exhausted 5xx resends: the outcome is unknown, not "not delivered" (the hint above names the safe resend).
+  if (res.status >= 500 && !has('--json')) die(`[${verb}] not confirmed (HTTP ${String(res.status)}) — the task may have landed; use the --task resend above`)
   if (res.status !== 409) return await printDelivery(verb, res)
   const out = await replyOf(res)
   if (out.replay !== true) {

@@ -79,8 +79,17 @@ describe('gh#112 CLI resend through a lost reply (end-to-end)', () => {
       expect(out.stderr).toBe('')
       expect(out.code).toBe(0)
       expect(proxy.directs()).toBe(2)
-      // `pending` (not `outcome unknown (payload-mismatch)`) proves the CLI's fingerprint is the host's.
-      expect(out.stdout).toMatch(/^\[route\] already received → ops-cli\/a1b2c3d4e5f60718 · task direct-[0-9a-f]{12} · pending — not sent a second time\n$/)
+      // `completed` (not `outcome unknown (payload-mismatch)`) proves the CLI's fingerprint is the host's;
+      // a mailbox delivery is final, so the host recorded it as completed.
+      expect(out.stdout).toMatch(/^\[route\] already received → ops-cli\/a1b2c3d4e5f60718 · task direct-[0-9a-f]{12} · completed — not sent a second time\ndelivered to the mailbox of ops-cli\/a1b2c3d4e5f60718 — the CLI polls while online\n$/)
+
+      // review P3: a --sync resend to a mailbox is answered from that recorded outcome, never "rerun later".
+      const task = /task (direct-[0-9a-f]{12})/.exec(out.stdout)![1]!
+      const sync1 = await runCli(['route', HANDLE, 'sync mailbox probe', '--sync', '--task', `${task}s`], env)
+      expect(sync1.code).toBe(0)
+      const sync2 = await runCli(['route', HANDLE, 'sync mailbox probe', '--sync', '--task', `${task}s`], env)
+      expect(sync2.code).toBe(0)
+      expect(sync2.stdout).toContain('· completed — not sent a second time')
 
       const inbox = await globalThis.fetch(`${a.baseUrl}/__dsh_a2a/cli-deposit`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'inbox', handle: HANDLE }),

@@ -579,7 +579,11 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             cliDeposits.mail(team, caller, message)
             recordActivity('in', team, caller, true)
             logger.info(`a2a: cli mailbox delivery for ${team} (from ${caller})`)
-            const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, task_status: 'TASK_STATE_COMPLETED', note: `delivered to the mailbox of ${team} — the CLI polls while online` })
+            const note = `delivered to the mailbox of ${team} — the CLI polls while online`
+            // gh#112 review: a mailbox delivery is final here (no receipt
+            // ever follows), so a resend of this id reads `completed`.
+            idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: note })
+            const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, task_status: 'TASK_STATE_COMPLETED', note })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
             return
@@ -618,6 +622,11 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
               // supplied one (a session node team — wake-on-route covers a
               // cold one), else the caller label as before.
               const receiptTarget = callback !== '' ? callback : from
+              // gh#112 review: only a failed steer is a refusal. Once the
+              // message is in the session, a failure in the bookkeeping that
+              // follows must not record `failed` (a resend would read
+              // "already ran and failed" and invite a second execution).
+              let steered = false
               try {
                 // The receipt header carries the task id: the target echoes
                 // it verbatim in "[A2A receipt] task <id> ...", closing the
@@ -630,6 +639,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // consumed:true and strand the message.
                 const runningBeforeSteer = probeConsumption(target, taskId)
                 steerRelay(target, `[A2A direct] (task ${taskId}) ${fromClause(from)} (routed to ${team}) sent:\n\n${message}\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`, from === 'an unknown node' ? undefined : from)
+                steered = true
                 recordActivity('in', team, caller, true)
                 armReceiptAutosend(target, taskId, receiptTarget, message)
                 // v0.5.23 (async-stall): "delivered" only proves the steer call
@@ -676,7 +686,13 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
                 res.end(payload)
               } catch (error) {
-                refuseNoWait(`The DSH session rejected the message: ${String(error)}`)
+                if (!steered) { refuseNoWait(`The DSH session rejected the message: ${String(error)}`); return }
+                logger.warn(`a2a: task ${taskId.slice(0, 80)} was delivered to ${team}, but its bookkeeping failed: ${String(error)}`)
+                if (!res.headersSent) {
+                  const payload = JSON.stringify({ routed: true, delivered: true, team, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_DELIVERED', artifacts: [], consumed: false, receipt: 'routed' })
+                  res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+                  res.end(payload)
+                }
               }
             }
             if (agent !== undefined) { deliver(agent); return }
