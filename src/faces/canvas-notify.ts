@@ -85,9 +85,16 @@ export function registerCanvasNotify(webServer: WebServer, d: CanvasNotifyDeps):
     // signs it): only a peer that is served the full card ever sees canvasOrg.
     return card !== undefined && callerLinkedToThisHost(card.team, url, card)
   })
+  // Who was linked at the last flush. A change can end a link (dissolving
+  // the only team that names a peer's handle), and that peer must still
+  // hear about it — its next card read is what drops the mirror.
+  let lastRecipients: readonly string[] = []
   const flush = (): void => {
     timer = undefined
-    for (const url of recipients()) {
+    const now = recipients()
+    const targets = new Set([...now, ...lastRecipients])
+    lastRecipients = now
+    for (const url of targets) {
       void globalThis.fetch(url.replace(/\/$/, '') + '/a2a/canvas-changed', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...originClaimHeaders() },

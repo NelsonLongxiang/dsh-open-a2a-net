@@ -48,12 +48,18 @@ async function until(check: () => Promise<boolean>, ms = 4_000): Promise<boolean
   return false
 }
 
-/** A signed peer whose card does not seed A back: tracked by A, NOT linked. */
-async function unlinkedPeer(port: number): Promise<{ server: Server; envelope: () => Record<string, string> }> {
+/** A signed peer whose card does not seed A back: tracked by A, NOT linked.
+ *  It keeps the envelope A stamps on its card reads (every outbound request
+ *  carries one). */
+async function unlinkedPeer(port: number): Promise<{ server: Server; envelope: () => Record<string, string>; seen: () => Record<string, string> | undefined }> {
   const { privateKey } = generateKeyPairSync('ed25519')
   const base = url(port)
   const card = signCard({ name: 'M', session: 'm-session', team: 'dsh', capabilities: {}, expiresAt: Date.now() + 3_600_000 } as never, privateKey)
+  let seen: Record<string, string> | undefined
   const server = createServer((req, res) => {
+    if (req.url === '/.well-known/agent-card.json' && req.headers['x-a2a-caller-sig'] !== undefined) {
+      seen = Object.fromEntries(['x-a2a-caller', 'x-a2a-caller-url', 'x-a2a-caller-ts', 'x-a2a-caller-sig'].map(h => [h, String(req.headers[h])]))
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(req.url === '/.well-known/agent-card.json' ? JSON.stringify({ ...card, peers: [] }) : '{"ok":true}')
   })
@@ -67,7 +73,7 @@ async function unlinkedPeer(port: number): Promise<{ server: Server; envelope: (
       'X-A2A-Caller-Sig': sign(undefined, Buffer.from(JSON.stringify(['dsh', base, ts]), 'utf8'), privateKey).toString('base64'),
     }
   }
-  return { server, envelope }
+  return { server, envelope, seen: () => seen }
 }
 
 describe('fleet dissolve: a linked peer dissolves a team it does not own', () => {
@@ -91,14 +97,14 @@ describe('fleet dissolve: a linked peer dissolves a team it does not own', () =>
       expect(await ownTeams(b)).not.toContain('共建队')
 
       const dissolved = await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'remove', name: '共建队' })
-      expect(dissolved).toMatchObject({ ok: true })
+      expect(dissolved).toMatchObject({ ok: true, removed: true })
       expect(await ownTeams(a)).not.toContain('共建队')
       // B runs a 10-minute card cache: the mirror clears from the relay's
       // refresh / A's change ping, not from the TTL.
       expect(await until(async () => !(await mirrored(b, a.baseUrl)).includes('共建队'))).toBe(true)
 
-      // Two peers dissolving at once: the second finds it gone — still ok.
-      expect((await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'remove', name: '共建队' })).ok).toBe(true)
+      // Two peers dissolving at once: the second finds it gone — still ok, and says so.
+      expect(await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'remove', name: '共建队' })).toMatchObject({ ok: true, removed: false })
       // A team name is required.
       const nameless = await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'remove' })
       expect(nameless.ok).toBe(false)
@@ -109,7 +115,7 @@ describe('fleet dissolve: a linked peer dissolves a team it does not own', () =>
     }
   }, 60_000)
 
-  it('an unsigned or unlinked caller cannot dissolve; the team stays', async () => {
+  it('an unsigned or unlinked caller cannot dissolve, not even by replaying A\'s own envelope; the team stays', async () => {
     const [pa, pm] = [await reservePort(), await reservePort()]
     const m = await unlinkedPeer(pm)
     const a = await bootNode({ name: 'A', session: 'mesh-dissolve-c', team: 'dsh', sessionNodes: true, port: pa, peers: [url(pm)] })
@@ -121,6 +127,16 @@ describe('fleet dissolve: a linked peer dissolves a team it does not own', () =>
       const unlinked = await post(`${a.baseUrl}/a2a/canvas-op`, { op: 'remove', name: '私有队' }, m.envelope())
       expect(unlinked.ok).toBe(false)
       expect(String(unlinked.error)).toMatch(/not linked/)
+      // A reads M's card (any tracked peer, linked or not) and stamps its
+      // envelope on that read. The claim binds no target, so M can replay it
+      // at A — where it names A itself.
+      ownSession(a, 'session-cccccccc55556666')
+      await post(`${a.baseUrl}/__dsh_a2a/join`, { id: 'session-cccccccc55556666' })
+      for (let i = 0; i < 20 && m.seen() === undefined; i += 1) { await sweep(a); await new Promise(r => setTimeout(r, 100)) }
+      expect(m.seen()?.['x-a2a-caller-url']).toBe(a.baseUrl)
+      const replayed = await post(`${a.baseUrl}/a2a/canvas-op`, { op: 'remove', name: '私有队' }, m.seen()!)
+      expect(replayed.ok).toBe(false)
+      expect(String(replayed.error)).toMatch(/replayed self envelope/)
       expect(await ownTeams(a)).toContain('私有队')
     } finally {
       await a.dispose()

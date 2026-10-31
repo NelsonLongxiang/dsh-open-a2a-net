@@ -97,4 +97,23 @@ describe('gh#41 remote org frames + fleet drop fork', () => {
     expect(v.root.querySelector('.p-frame[data-name="远端研发"]')).toBeNull() // optimistic
     await vi.waitFor(() => expect(v.root.querySelector('.p-frame[data-name="远端研发"]')).not.toBeNull())
   })
+
+  it('a stale poll never draws a dissolved mirror frame back; the name is free again once the owner drops it', async () => {
+    let answer!: (ok: boolean) => void
+    const v = createPlanningView({ onDirty: vi.fn(), onLampClick: vi.fn(), onCanvasAction: () => new Promise<boolean>(r => { answer = r }), now: () => NOW })
+    document.body.appendChild(v.root)
+    v.adoptExternalLayout({ version: 1, viewport: { x: 0, y: 0, scale: 1 }, nodes: { a: { x: 0, y: 0 } }, frames: { 本地队: { x: -200, y: -200, w: 500, h: 400 } } })
+    v.reconcile(input)
+    const shown = (): boolean => v.root.querySelector('.p-frame[data-name="远端研发"]') !== null
+    dissolve(v, '远端研发')
+    v.reconcile(input) // a poll while the relay is in flight: the owner still lists it
+    expect(shown()).toBe(false)
+    answer(true)
+    await vi.waitFor(() => expect(v.root.querySelector('.p-frame.is-syncing')).toBeNull())
+    v.reconcile(input) // the owner's card not re-read yet: still listed
+    expect(shown()).toBe(false)
+    v.reconcile({ ...input, peerOrg: [{ url: 'https://10.0.0.5:8787', org: [] }] }) // the owner dropped it
+    v.reconcile(input) // a NEW team of that name on the owner later: drawn again
+    expect(shown()).toBe(true)
+  })
 })

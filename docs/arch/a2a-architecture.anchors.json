@@ -3,7 +3,7 @@
   "sourceCommit": "0b466643b27120878ceeab9a2ebf087ae3854605",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "7162d4cfb586d0178041803c33b8cc6ace3804a00f41ceae6092a2586ba7f8ea",
+    "src/index.ts": "cca9be8d393bff19396f7952a2a4d316c517ffef42baee5d37c78b74aa8484eb",
     "src/faces/admin.ts": "ce08936ad6a785a5cc4cb282fd2303d3f29366a813c3b94077f57a61c71dad98",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
@@ -19,8 +19,8 @@
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
-    "src/faces/wire.ts": "f6d28c04e820bcbb44ae09a5cf208609da03a95ab5754165039934053dca1343",
-    "src/faces/canvas-notify.ts": "252202b494f60587662e2ec7542cb29119c066d36cc5843f846d6052760a224e"
+    "src/faces/wire.ts": "49c16090378047764379c917bd24f5a23a0137195dc54af168e39ee86a87b78a",
+    "src/faces/canvas-notify.ts": "268c6b8e1d2797494b6c4b9ccd375b10ca15464e99878a147666d94a7249258d"
   },
   "anchors": [
     {
@@ -98,19 +98,19 @@
     {
       "page": "p1-arch",
       "cell": "c2",
-      "ref": "src/faces/wire.ts:419",
+      "ref": "src/faces/wire.ts:437",
       "expect": "path: '/a2a/direct',"
     },
     {
       "page": "p1-arch",
       "cell": "c3",
-      "ref": "src/faces/wire.ts:261",
+      "ref": "src/faces/wire.ts:279",
       "expect": "path: '/a2a/log',"
     },
     {
       "page": "p1-arch",
       "cell": "c4",
-      "ref": "src/faces/wire.ts:340",
+      "ref": "src/faces/wire.ts:358",
       "expect": "path: '/a2a/query',"
     },
     {
@@ -314,7 +314,7 @@
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/faces/wire.ts:571",
+      "ref": "src/faces/wire.ts:589",
       "expect": "if (refuseIfFlooded(caller, message, team, taskId, res)) return"
     },
     {
@@ -326,7 +326,7 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/wire.ts:110",
+      "ref": "src/faces/wire.ts:117",
       "expect": "export function registerWireFaces(webServer: WebServer, d: WireDeps): void {"
     },
     {

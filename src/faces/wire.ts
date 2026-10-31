@@ -58,6 +58,11 @@ export type NativeRoundOutcome =
 /** What verifyOriginClaim answers (see index.ts; reason widens to string here — the faces only interpolate it). */
 export type OriginClaimResult = { ok: true; caller: string; callerUrl: string; card: A2aPeerCard } | { ok: false; reason: string }
 
+/** Same scheme/host/port; false when either side is empty or malformed. */
+function sameOrigin(a: string, b: string): boolean {
+  try { return a !== '' && b !== '' && new URL(a).origin === new URL(b).origin } catch { return false }
+}
+
 /** The closure captures the wire faces read (grows with each extracted face). */
 export interface WireDeps {
   readonly ctx: Context
@@ -70,6 +75,8 @@ export interface WireDeps {
   readonly idempotencyStore: IdempotencyStore
   readonly verifyOriginClaim: (req: IncomingMessage) => Promise<OriginClaimResult>
   readonly callerLinkedToThisHost: (caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined) => boolean
+  /** This host's own card URL (read when a request lands; set once the web server settles). */
+  readonly ownCardUrl: string
   readonly recordActivity: (dir: 'in' | 'out', team: string, peer: string, ok: boolean) => void
   readonly bumpLegacyInbound: () => void
   readonly secretEqual: (a: string, b: string) => boolean
@@ -207,6 +214,16 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
               send(200, JSON.stringify({ ok: false, error: `untrusted-origin: OriginClaim verification failed (${claim.reason}) — canvas regulation requires a signed envelope`, code: -32000 }))
               return
             }
+            // This host edits its own canvas through the local control, never
+            // through this peer face. A claim naming OUR origin is an envelope
+            // we stamped on some outbound request (a card fetch to any tracked
+            // peer, linked or not) being replayed at us: the claim is stateless
+            // and binds no target, so the same-host basis must not admit it here.
+            if (sameOrigin(claim.callerUrl, d.ownCardUrl)) {
+              recordActivity('in', 'fleet-canvas', claim.caller, false)
+              send(200, JSON.stringify({ ok: false, error: 'a host does not regulate its own canvas through the peer face (replayed self envelope refused)' }))
+              return
+            }
             if (!callerLinkedToThisHost(claim.caller, claim.callerUrl, claim.card)) {
               recordActivity('in', 'fleet-canvas', claim.caller, false)
               send(200, JSON.stringify({ ok: false, error: `caller "${claim.caller}" is not linked to this host — canvas regulation requires the operator link (bilateral seed, canvas ref, or same-host membership)` }))
@@ -215,7 +232,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const op = body.op
             const name = typeof body.name === 'string' ? body.name : ''
             const id = typeof body.id === 'string' ? body.id : ''
-            let payload: { ok: boolean; members?: readonly string[]; error?: string }
+            let payload: { ok: boolean; members?: readonly string[]; removed?: boolean; error?: string }
             if (op === 'create') {
               const stored = canvasStore.create(name)
               payload = stored === undefined ? { ok: false, error: 'invalid name or team cap reached' } : { ok: true, members: canvasStore.membersOf(stored) }
@@ -227,9 +244,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             } else if (op === 'remove-member') {
               payload = { ok: name !== '' && canvasStore.removeMember(name, id), members: name !== '' ? canvasStore.membersOf(name) : undefined }
             } else if (op === 'remove') {
-              // Dissolve. Idempotent: a team already gone (another peer got
-              // there first) is the outcome the caller asked for.
-              payload = name === '' ? { ok: false, error: 'name is required' } : { ok: canvasStore.remove(name) || !canvasStore.list().includes(name) }
+              // Dissolve. Idempotent: a team that is not here (another peer got
+              // there first) is the outcome the caller asked for — `removed`
+              // says which it was.
+              payload = name === '' ? { ok: false, error: 'name is required' } : { ok: true, removed: canvasStore.remove(name) }
             } else {
               payload = { ok: false, error: 'op must be create | add-member | remove-member | remove' }
             }

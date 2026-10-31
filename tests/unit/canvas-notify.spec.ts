@@ -2,8 +2,8 @@
  * refreshPeerCard (single owner + mirror): the mirror re-reads a peer's card
  * after a change ping or a relayed edit.
  */
-import { describe, expect, it } from 'vitest'
-import { refreshPeerCard } from '../../src/faces/canvas-notify.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { refreshPeerCard, registerCanvasNotify, CANVAS_NOTIFY_DEBOUNCE_MS, type CanvasNotifyDeps } from '../../src/faces/canvas-notify.ts'
 import type { CardCacheEntry } from '../../src/runtime.ts'
 import type { A2aPeerCard } from '../../src/types.ts'
 
@@ -48,5 +48,38 @@ describe('refreshPeerCard', () => {
     const d = deps([undefined, undefined])
     await refreshPeerCard(d, URL_A)
     expect(d.cardCache.get(URL_A)?.card).toBeUndefined()
+  })
+})
+
+describe('change ping recipients', () => {
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
+
+  it('a peer whose link the change just ended still hears about that change, once', async () => {
+    vi.useFakeTimers()
+    const pinged: string[] = []
+    vi.stubGlobal('fetch', async (url: string) => { pinged.push(url); return new Response('{"ok":true}') })
+    const linked = new Set([URL_A])
+    let change: () => void = () => {}
+    const cardCache = new Map<string, CardCacheEntry>([[URL_A, { at: Date.now(), card: card('A') }]])
+    const d = {
+      ctx: { effect: (fn: () => unknown) => { fn() } },
+      logger: { debug: () => {} },
+      peerStore: { list: () => [URL_A] },
+      canvasStore: { onChange: (fn: () => void) => { change = fn; return () => {} } },
+      cardCache,
+      originClaimHeaders: () => ({}),
+      verifyOriginClaim: async () => ({ ok: false, reason: 'absent' }),
+      callerLinkedToThisHost: (_c: string, url: string) => linked.has(url),
+      cachedCardFetch: async () => undefined,
+    } as unknown as CanvasNotifyDeps
+    registerCanvasNotify({ register: () => () => {} } as never, d)
+    const flush = async (): Promise<void> => { change(); await vi.advanceTimersByTimeAsync(CANVAS_NOTIFY_DEBOUNCE_MS + 10) }
+    await flush()
+    expect(pinged).toEqual([`${URL_A}/a2a/canvas-changed`])
+    linked.clear() // e.g. the dissolved team was the only one naming A's handle
+    await flush()
+    expect(pinged).toHaveLength(2) // told once more: its next card read drops the mirror
+    await flush()
+    expect(pinged).toHaveLength(2) // and no longer after that
   })
 })
