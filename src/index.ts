@@ -6,7 +6,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net
  */
 
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign as edSign, timingSafeEqual, verify as edVerify } from 'node:crypto'
+import { createHash, createPrivateKey, generateKeyPairSync, randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -54,6 +54,7 @@ import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
+import { signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
 import { callerAdmission, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type PeerOrgEntry } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
@@ -195,6 +196,19 @@ export interface Config {
    * self-asserted already-linked name must not pass on shape alone).
    */
   readonly originClaimWindow: boolean
+  /**
+   * OriginClaim unbound window (docs/protocol/delivery-origin-auth.md §2.1):
+   * while true (default), this host also signs the legacy unbound form and
+   * accepts a peer's unbound-only envelope (counted as unboundInbound);
+   * closed, it signs and accepts the audience-bound form only.
+   */
+  readonly originClaimUnboundWindow: boolean
+  /**
+   * Extra origins this host answers to as an OriginClaim audience, beyond
+   * its card URL and the address a request arrives on (port-mapped or
+   * proxied hosts name the URL peers dial).
+   */
+  readonly originClaimAudiences: string[]
   /**
    * #19 D2: card-face sessionTeams excerpt exposure — 'full' | 'masked'
    * | 'off' (owner-level; default full). See the schema comment.
@@ -477,6 +491,14 @@ export const Config: s<Config> = s.object({
    * failed signatures. See docs/protocol/delivery-origin-auth.md §4.
    */
   originClaimWindow: s.boolean().default(true),
+  /**
+   * OriginClaim unbound window: also sign/accept the legacy envelope that
+   * names no audience (counted as unboundInbound); closing it leaves the
+   * audience-bound form only. See docs/protocol/delivery-origin-auth.md §2.1.
+   */
+  originClaimUnboundWindow: s.boolean().default(true),
+  /** Extra OriginClaim audience origins (port-mapped/proxied hosts). */
+  originClaimAudiences: s.array(s.string()).default([]),
   /** OriginClaim callerUrl override for pocket-tunneled hosts; '' = auto. */
   originClaimUrl: s.string().default(''),
 
@@ -855,32 +877,23 @@ export function apply(ctx: Context, config: Config): void {
   /** Our own card URL once the web server settles — the OriginClaim anchor. */
   let ownCardUrl = ''
   /**
-   * The OriginClaim envelope headers (gh#9+gh#10): canonical form
-   * JSON.stringify([caller, callerUrl, ts]) signed with the node card key.
-   * Shared by the a2a client (every peer request) and verifyOriginClaim's
-   * own verification fetch (REVIEW M2: the cold-cache fetch must carry the
-   * envelope so a zone/id8 caller derives from the FULL card — a bare-zone
-   * caller derives from the minimal card's team either way).
+   * The OriginClaim envelope headers (gh#9+gh#10, src/origin-claim.ts): the
+   * bound form names the target's origin, method and path; the unbound
+   * legacy form rides along only while originClaimUnboundWindow is open.
+   * Signed with the node card key; shared by the a2a client (every peer
+   * request) and the relay/notify faces.
    */
-  function originClaimHeaders(): Record<string, string> {
-    const ts = Date.now()
-    const signature = edSign(undefined, Buffer.from(JSON.stringify([config.team, ownCardUrl, ts]), 'utf8'), nodePrivateKey).toString('base64')
-    return {
-      'X-A2A-Caller': config.team,
-      'X-A2A-Caller-Url': ownCardUrl,
-      'X-A2A-Caller-Ts': String(ts),
-      'X-A2A-Caller-Sig': signature,
-    }
+  function originClaimHeaders(target: OriginClaimTarget): Record<string, string> {
+    return signOriginClaim(target, { caller: config.team, callerUrl: ownCardUrl, privateKey: nodePrivateKey, unbound: config.originClaimUnboundWindow !== false, now: Date.now() })
   }
   const client = new A2aClient({
     apiKey: config.apiKey,
     sessionId: session,
     cardCaller: config.team,
     // gh#9+gh#10 OriginClaim (docs/protocol/delivery-origin-auth.md): every
-    // peer request carries a verifiable origin — canonical form is the
-    // ruled JSON.stringify([caller, callerUrl, ts]), signed with the node
-    // card key (single identity anchor). Until the server settles the URL
-    // is unknown; the signer returns plain naming for that brief window.
+    // peer request carries a verifiable origin bound to its target, signed
+    // with the node card key (single identity anchor). Until the server
+    // settles the URL is unknown; receivers read that as an absent claim.
     originClaim: originClaimHeaders,
     schedule,
     fetch: fetchImpl,
@@ -1816,6 +1829,7 @@ const reportLoopRing = new Map<string, number[]>()
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
         get legacyInboundCount() { return legacyInboundCount },
+        get unboundInboundCount() { return unboundInboundCount },
         get ownCardUrl() { return ownCardUrl },
         get ownerAllowlist() { return ownerAllowlist },
         set ownerAllowlist(v) { ownerAllowlist = v },
@@ -2502,73 +2516,25 @@ ${message}`
     return { ok: false, error: `the native-teams round for "${team}" failed: ${String(roundError)}` }
   }
 
-  /* ── gh#9+gh#10 OriginClaim (docs/protocol/delivery-origin-auth.md).
-     Envelope: X-A2A-Caller / -Url / -Ts / -Sig — canonical form is
-     JSON.stringify([caller, callerUrl, ts]) (R2), signed with the CALLER'S
-     CARD KEY; verification fetches the caller's card at callerUrl through
-     our own enveloped memoized fetch (R1: our fetches are full-form by
-     construction — the client stamps the envelope on every GET), then
-     verifies the signature against THAT card's key and derives the caller
-     name from the card (team or a published session team). ts skew ±5 min,
-     stateless (no nonce ring — ruling refinement). Fail-closed everywhere. */
-  const ORIGIN_CLAIM_SKEW_MS = 5 * 60_000
+  /* ── gh#9+gh#10 OriginClaim (docs/protocol/delivery-origin-auth.md,
+     src/origin-claim.ts): the caller's card key signs the envelope; the
+     bound form must name one of OUR origins and the route it hits. ts skew
+     ±5 min, no receiver-side state. Fail-closed everywhere. */
   /** legacyInbound warn metric (M1): envelope-absent deliveries during the
    *  window — the operator watches the tail drain before closing it. */
   let legacyInboundCount = 0
-  const originClaimCallerShape = /^[a-z0-9-]+$/i
-  async function verifyOriginClaim(req: IncomingMessage): Promise<{ ok: true; caller: string; callerUrl: string; card: A2aPeerCard } | { ok: false; reason: 'absent' | 'bad-caller-shape' | 'bad-ts' | 'no-card' | 'bad-sig' | 'not-derivable' }> {
-    const caller = String(req.headers['x-a2a-caller'] ?? '')
-    const callerUrl = String(req.headers['x-a2a-caller-url'] ?? '')
-    const ts = Number(req.headers['x-a2a-caller-ts'] ?? '')
-    const signature = String(req.headers['x-a2a-caller-sig'] ?? '')
-    if (caller === '' || callerUrl === '' || !Number.isFinite(ts) || ts <= 0 || signature === '') return { ok: false, reason: 'absent' }
-    if (!originClaimCallerShape.test(caller)) return { ok: false, reason: 'bad-caller-shape' }
-    if (Math.abs(Date.now() - ts) > ORIGIN_CLAIM_SKEW_MS) return { ok: false, reason: 'bad-ts' }
-    // Fetch the caller's card PLAIN (REVIEW M2 third-round ruling: the
-    // envelope names a BARE ZONE, and derivation is the exact match
-    // card.team === caller below — both ride the minimal card's signed
-    // core, so a single envelope-less fetch suffices). An envelope-less
-    // request returns immediately without recursing (the enveloped variant
-    // re-opened mutual recursion); a warm full-form cache entry (R1)
-    // short-circuits the fetch entirely.
-    let card: A2aPeerCard | undefined = cardCache.get(callerUrl)?.card
-    if (card === undefined) {
-      try {
-        // callerUrl is the caller's BASE URL — the card lives at the
-        // well-known path under it.
-        const cardUrl = callerUrl.endsWith('/') ? `${callerUrl}.well-known/agent-card.json` : `${callerUrl}/.well-known/agent-card.json`
-        const response = await fetchImpl(cardUrl, { method: 'GET', headers: {} })
-        const text = await response.text()
-        const verdict = verifyCard(JSON.parse(text), Date.now())
-        if (verdict.ok) card = verdict.card
-        else (req as IncomingMessage & { __claimDbg?: unknown }).__claimDbg = { stage: 'verify', reason: verdict.reason, head: text.slice(0, 100) }
-      } catch (error) {
-        ;(req as IncomingMessage & { __claimDbg?: unknown }).__claimDbg = { stage: 'fetch', error: error instanceof Error ? error.message : String(error) }
-        card = undefined
-      }
-    }
-    if (card === undefined) return { ok: false, reason: 'no-card' }
-    try {
-      const publicKey = createPublicKey({ key: Buffer.from(card.publicKey, 'base64'), format: 'der', type: 'spki' })
-      const valid = edVerify(undefined, Buffer.from(JSON.stringify([caller, callerUrl, ts]), 'utf8'), publicKey, Buffer.from(signature, 'base64'))
-      if (!valid) return { ok: false, reason: 'bad-sig' }
-    } catch {
-      return { ok: false, reason: 'bad-sig' }
-    }
-    // Derivation (REVIEW M2, third-round ruling — shape narrowed to bare
-    // zone): card.team === caller EXACT match. A zone/id8 envelope is
-    // rejected as bad-caller-shape at the gate — session-level identity
-    // rides the body's caller_session, judged by N3/S3 against the PUBLISHED
-    // roster. (The prefix-derivation variant admitted an impersonation
-    // chain: a same-zone foreign host signs the target's session handle
-    // with its own key — prefix matches, signature verifies, full card
-    // serves, and N3 then judges the body by the impersonated roster.
-    // Fleet senders stamp bare zone only; the narrowed shape kills the
-    // false rejections AND the impersonation vector with zero recursion.)
-    if (card.team !== caller) {
-      return { ok: false, reason: 'not-derivable' }
-    }
-    return { ok: true, caller, callerUrl, card }
+  /** unboundInbound: accepted unbound (v1) envelopes — the drain gauge for
+   *  closing originClaimUnboundWindow. */
+  let unboundInboundCount = 0
+  function verifyOriginClaim(req: IncomingMessage): Promise<OriginClaimVerdict> {
+    return verifyOriginClaimOf(req, {
+      cardCache,
+      fetch: fetchImpl,
+      audiences: [ownCardUrl, ...config.originClaimAudiences ?? []],
+      unboundOpen: config.originClaimUnboundWindow !== false,
+      onUnbound: () => { unboundInboundCount += 1 },
+      now: Date.now(),
+    })
   }
 
   /**

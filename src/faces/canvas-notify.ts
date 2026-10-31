@@ -31,6 +31,7 @@ import type { A2aPeerCard } from '../types.ts'
 import type { CanvasStore } from '../canvas-store.ts'
 import type { PeerStore } from '../peer-store.ts'
 import type { CardCacheEntry } from '../runtime.ts'
+import type { OriginClaimTarget } from '../origin-claim.ts'
 
 /** Coalesce a burst of store writes (a drag that adds three members) into one ping. */
 export const CANVAS_NOTIFY_DEBOUNCE_MS = 400
@@ -45,7 +46,7 @@ export interface CanvasNotifyDeps {
   readonly peerStore: PeerStore
   readonly canvasStore: CanvasStore
   readonly cardCache: Map<string, CardCacheEntry>
-  readonly originClaimHeaders: () => Record<string, string>
+  readonly originClaimHeaders: (target: OriginClaimTarget) => Record<string, string>
   readonly verifyOriginClaim: (req: IncomingMessage) => Promise<{ ok: true; caller: string; callerUrl: string; card: A2aPeerCard } | { ok: false; reason: string }>
   readonly callerLinkedToThisHost: (caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined) => boolean
   readonly cachedCardFetch: (url: string) => Promise<A2aPeerCard | undefined>
@@ -88,9 +89,10 @@ export function registerCanvasNotify(webServer: WebServer, d: CanvasNotifyDeps):
   const flush = (): void => {
     timer = undefined
     for (const url of recipients()) {
-      void globalThis.fetch(url.replace(/\/$/, '') + '/a2a/canvas-changed', {
+      const target = url.replace(/\/$/, '') + '/a2a/canvas-changed'
+      void globalThis.fetch(target, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...originClaimHeaders() },
+        headers: { 'Content-Type': 'application/json', ...originClaimHeaders({ url: target, method: 'POST' }) },
         body: '{}',
         signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
       }).then(async (reply) => {

@@ -2278,6 +2278,9 @@ describe('a2a plugin module surface', () => {
       referralTeamResolution: false,
       // gh#9+gh#10 OriginClaim window (default open during migration).
       originClaimWindow: true,
+      // OriginClaim audience binding: unbound window open, no extra audiences.
+      originClaimUnboundWindow: true,
+      originClaimAudiences: [],
       originClaimUrl: '',
       // #19 D2: card-face excerpt exposure (owner-level; default full).
       exposureExcerpt: 'full',
