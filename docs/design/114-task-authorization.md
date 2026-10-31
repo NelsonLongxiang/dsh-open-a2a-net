@@ -247,15 +247,17 @@ allowlist_version = "al1:" + sha256(canonicalJSON(inputs)).slice(0, 16)
 ```ts
 type Sender =
   | { kind: 'session'; id: string }   // <zone>/<id8>，routeTrunk 的 callerSession（有 agent）
-  | { kind: 'host'; id: string }      // 无 agent 的宿主面：quick-dispatch / 宿主工具调用 → hostCaller 或 session 标签
+  | { kind: 'host'; id: string; face?: string }  // 无 agent 的宿主面：quick-dispatch / 宿主工具调用 → 宿主进程标签；
+                                                  // face = 线面上借用的句柄（quick-dispatch 借活跃 joined 会话的队），只作展示
   | { kind: 'bridge'; id: string }    // native-teams 传输面提交（index.ts:4955），id = 提交方句柄
 ```
 
 - 写入点：`trackOwedTask`（`index.ts:4172`）多收一个 `sender`，三处调用（`:4404`、`:4452`、`:4955`）
   传入各自已在手的 caller 身份。`routeTrunk` 已经算好 `callerSession`（`:4371` 起），无需新判定。
 - CLI 不在宿主上产生出站行：CLI 的发送在宿主侧是一条**入站**行，其发送方就是 `auth.caller`（CLI 句柄）。
-  所以 L9 的分桶键统一为：**出站行用 `sender.id`，入站行用 `auth.caller`，两者都缺才落 `legacy`**——
-  不再有 "home"。
+  所以 L9 的分桶键统一为：**出站行用 `sender.kind:sender.id`，入站行用 `auth.caller`，两者都缺才落 `legacy`**——
+  不再有 "home"。分桶必须带上 `kind`：运营者手设的宿主标签可能长得像 `<zone>/<id8>`，只按 `id` 会与该会话的席位混桶。
+  `face` 永不参与分桶。（S3 实现评审，PR #127；quick-dispatch 记宿主标签 + `face` 为任务属主裁定。）
 - `/state`（`src/faces/admin.ts:277` 起的 `tasks/tasksDead/archived` 投影）与 `a2a_tasks` 工具
   （`index.ts:5300`）追加 `sender`；CLI `a2a tasks`（`cli/a2a.mjs:566` 起）在行尾显示。均为追加字段。
 
@@ -413,7 +415,7 @@ wire 面先结算再分流到 CLI 信箱（`wire.ts:572` → `:577`）；本机�
 |---|---|---|---|
 | S1 | `src/task-auth.ts` 纯模块：类型、封闭枚举、`allowlistVersion()`；准入三函数改为返回结构化判定的 `a2aCallerAdmission`，旧函数做包装 | 中 | 现有拒绝文本逐字不变（全量测试绿）；版本哈希黄金向量；§2.2 每条规则一例单测；锚点重锚、`verify-architecture` 通过 |
 | S2 | 入站授权记录：wire 面与本机候选在出生时挂 `auth`；台账持久化/恢复/归档带 `auth`；`auth-versions.json`；`/state` 投影 | **高**（台账） | 升级后新生入站行 `auth` 覆盖率 100%；`restore` 往返与坏块丢弃测试；旧 `tasks.json` 原样加载 |
-| S3 | 出站 `sender`：`trackOwedTask` 三处调用传入；`/state`、`a2a_tasks`、CLI `a2a tasks` 显示 | **高**（台账） | 升级后新生出站行 `sender` 覆盖率 100%；团队验证器 L9 改按 `sender.id`/`auth.caller` 分桶，**"home" 桶 = 0**（`legacy` 桶单列，24h 后为 0） |
+| S3 | 出站 `sender`：`trackOwedTask` 三处调用传入；`/state`、`a2a_tasks`、CLI `a2a tasks` 显示 | **高**（台账） | 升级后新生出站行 `sender` 覆盖率 100%；团队验证器 L9 改按 `sender.kind:sender.id`/`auth.caller` 分桶，**"home" 桶 = 0**（`legacy` 桶单列，24h 后为 0） |
 | S4 | 结算判定（`observe` 默认）：`settleAndAnnounce(message, settler)`；授权链；`settledBy` 入归档；`settlementRefusals` 环；`recordOutcome` 门控；本机 CLI 信箱路径结算顺序对齐 | **高**（协议+台账） | 各原因码单测；`observe` 下现有测试零改动通过；**评审席团队验证器新判据："结算方不在授权链上的结算数 = 0"**（数据源：`/state` 归档行 `settledBy.chain_role === 'off-chain'` 计数 + `settlementRefusals` 中 `would-refuse` 计数，两者均为 0 才算通过） |
 | S5 | 自动回执 turn 归属与绑定：waiter 按 steer 头部定位自己的消费事件（`consumedAt`）；`flushFinals` 逐 waiter 从 `consumedAt` 之后取第一条 final；信封 `onBehalfOf`/`authRef`；`target_busy` 仅审计 | **高**（协议） | 两条回归：**(a)** 目标正忙、steer 在同一 turn 内被消费 → 该 turn 的 final 产出回执；**(b)** 目标正忙、steer 到下一 turn 才被消费 → 当前 turn 的 final 不产出回执，下一 turn 的 final 产出。另：新键对旧解析器无影响（`receipt-envelope-v2.spec.ts` 扩例） |
 | S6 | 受影响任务清单（observe）：惰性 + 变更点触发；重判；`affectedTasks` 环 | 中 | 移除画布成员 → 出现 `would-revoke` 条目；断言**无任何行状态变化**；版本未变时零产出 |

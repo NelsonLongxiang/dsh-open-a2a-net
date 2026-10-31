@@ -95,7 +95,11 @@ const ECHO_SUMMARY = '(settled by content echo)'
  */
 export interface Sender {
   readonly kind: 'session' | 'host' | 'bridge'
-  /** The bucket key: a session's `<zone>/<id8>` node team, or the host process label. */
+  /**
+   * A session's `<zone>/<id8>` node team, the host process label, or the
+   * bridge submitter. Group senders by `kind:id`, never by `id` alone: a host
+   * label set by hand may look like a session handle.
+   */
   readonly id: string
   /**
    * Host senders only: the label the call borrowed on the wire when it
@@ -123,7 +127,8 @@ export function parseSender(raw: unknown): Sender | undefined {
   if (typeof kind !== 'string' || !SENDER_KINDS.includes(kind)) return undefined
   if (typeof id !== 'string' || id === '' || id.length > SENDER_ID_CAP) return undefined
   if (face !== undefined && (typeof face !== 'string' || face === '' || face.length > SENDER_ID_CAP)) return undefined
-  return { kind: kind as Sender['kind'], id, ...(face !== undefined ? { face } : {}) }
+  // `face` belongs to host senders only; on any other kind it is dropped, the sender kept.
+  return { kind: kind as Sender['kind'], id, ...(face !== undefined && kind === 'host' ? { face } : {}) }
 }
 
 /**

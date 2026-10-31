@@ -156,4 +156,9 @@ describe('#121 parseSender', () => {
     expect(parseSender({ kind: 'cli', id: 'scout/0123456789abcdef' })).toBeUndefined()
     expect(parseSender({ kind: 'host', id: 'dsh-host', face: 'dsh/aaaabbbb' })).toEqual({ kind: 'host', id: 'dsh-host', face: 'dsh/aaaabbbb' })
   })
+
+  it('re-review P3: face is kept on host senders only; on other kinds it is dropped and the sender kept', () => {
+    expect(parseSender({ kind: 'session', id: 'dsh/1a2b3c4d', face: 'dsh/forged00' })).toEqual(SEAT)
+    expect(parseSender({ kind: 'bridge', id: 'bridge-test', face: 'x' })).toEqual({ kind: 'bridge', id: 'bridge-test' })
+  })
 })
