@@ -21,7 +21,7 @@
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
     "src/faces/wire.ts": "e2ca4b9c7779ed86b6e5fa63c4b145bd64aabc4abac310950b518732d313b792",
     "src/faces/canvas-notify.ts": "10a79ab13d69746268269f0bf8c100464832316e39498ba6ec4aeeae961ec0dd",
-    "src/task-auth.ts": "76e14299a8b2ecf8cade9c19b3f29077783be8eea82ebe558ada9a2fab618e57"
+    "src/task-auth.ts": "3ee34dcc96699b4c1c59fef6f8af050f536b6b714cc6fd854606befa77deaa9c"
   },
   "anchors": [
     {
@@ -213,13 +213,13 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/task-auth.ts:121",
+      "ref": "src/task-auth.ts:128",
       "expect": "if (r.canvasRemoteMembersOf(name).includes(caller)) declare(r.canvasTeamOf(name), 'remote-ref-samezone')"
     },
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/task-auth.ts:123",
+      "ref": "src/task-auth.ts:130",
       "expect": "const ownHandles = new Set<string>([r.zone, ...r.joined().map(id => `${r.zone}/${r.id8(id)}`)])"
     },
     {
