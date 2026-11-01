@@ -52,7 +52,6 @@ export interface InfoToolsDeps {
   readonly teamAuditRing: { at: number; action: 'join' | 'leave' | 'archive-prune' | 'agent-less'; team: string; id: string; ok: boolean; reason?: string }[]
   readonly reportRing: { at: number; level: 'info' | 'warning' | 'error'; message: string; session: string; task?: string }[]
   readonly sessionNodes: Map<string, Agent>
-  readonly legacyInboundCount: number
   // Hot-applied owner settings: the caller passes these as getters over the
   // apply-scope lets, so every call-time read must go through `deps.X` — a
   // destructured copy would freeze the boot value.
@@ -82,7 +81,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
     ctx, config, logger, session, lanIp, ownCardUrl, peerStore, taskLedger,
     joinedSessions, teamMemberships, canvasStore, exposureStore, idempotencyStore,
     cardCache, inFlightRoutes, recentActivity, teamAuditRing, reportRing,
-    sessionNodes, legacyInboundCount,
+    sessionNodes,
     id8, sessionTeamOf, nodeMetadataOf, canvasTeamOf, memoizedCardFetch,
     mapBounded, SWEEP_CONCURRENCY, a2aJoinGateRefusal, observeAuthorization,
     settlePeerCard, client, listDirectoryTeams,
