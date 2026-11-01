@@ -412,6 +412,11 @@ wire 面先结算再分流到 CLI 信箱（`wire.ts:572` → `:577`）；本机�
   - 因此**判定开关分三档** `settlementAuth: 'off' | 'observe' | 'enforce'`（与 `gateAgentLessCalls` 的
     `audit`/`refuse` 同风格）。首个版本默认 `observe`：照常结算，但把本应拒绝的记为 `would-refuse`
     （同一个环、同一套原因码）。三台主机都升到含 S4 的版本、且验证器判据连续达标后，才另行裁定切 `enforce`。
+  - **例外（gh#141 / PR #149）：本机为自己欠的入站行"付款"时，三档一律按 `enforce` 判。**
+    回执经 wire 发往他机后，本机要结掉那条入站行，这条路径此前不存在，没有"照常结算"可言。
+    付款方不在链上时行保持欠账，并在环里记一条 `enforced: true` 的拒绝；`off` 主机也会记，
+    `refusalsTotal` 因此可能非零。这类拒绝出现，说明本机另一会话在替别人回执，应当被看见。
+    对端（债权方）在 wire 响应里明确拒绝这张回执时，本机同样不结。
 - **`/state` 与面板**：全部是追加字段/新块，旧面板忽略。
 - **`queryOutcome` / `idempotency-store`**：线协议、指纹、`ClaimVerdict` 词表都不变；唯一的行为变化是
   `recordOutcome` 的回执钩子在 `enforce` 下多一道判定（§4.2 第 2 点），`observe` 下照写并计 `would-refuse`。
