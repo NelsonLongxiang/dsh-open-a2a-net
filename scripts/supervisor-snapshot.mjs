@@ -86,9 +86,8 @@ function collectDocsCrosscheck() {
   const rows = []
   const doc = readFileSync(join(REPO, 'docs/validator.md'), 'utf8')
   const heads = [...doc.matchAll(/head ([0-9a-f]{8})/g)].map(m => m[1])
-  const full = git(['log', '--format=%H', '-300']).split('\n')
-  const unknown = heads.filter(h => !full.some(f => f.startsWith(h))).length
-  rows.push({ name: 'unknown-heads', ok: unknown === 0 ? 1 : 0, detail: `unknown=${String(unknown)} of ${String(heads.length)}` })
+  const unknown2 = heads.filter(h => { try { execFileSync('git', ['-C', REPO, 'merge-base', '--is-ancestor', h, 'HEAD']); return false } catch { return true } }).length
+  rows.push({ name: 'unknown-heads', ok: unknown2 === 0 ? 1 : 0, detail: `unknown=${String(unknown2)} of ${String(heads.length)}` })
   rows.push({ name: 'spec-mentioned', ok: doc.includes('spec_c8b6350c5034') ? 1 : 0, detail: 'spec id present in docs' })
   return rows
 }
@@ -235,7 +234,9 @@ function collectAdmissionRemoteRef() {
   try {
     const src = readFileSync(join(REPO, 'src/index.ts'), 'utf8')
     const hasChannel = /remoteMembersOf/.test(src)
-    const inSameZone = /sameZoneSharedTeamRefusal[\s\S]{0,2000}remoteMembersOf/.test(src)
+    const idx14 = src.indexOf('sameZoneSharedTeamRefusal')
+    const near = src.slice(Math.max(0, idx14 - 2000), idx14 + 2000)
+    const inSameZone = idx14 >= 0 && /remoteMembersOf/.test(near)
     rows.push({ name: 'remote-ref-channel', ok: (hasChannel && inSameZone) ? 1 : 0, detail: 'sameZoneSharedTeamRefusal 经 remoteMembersOf 解析 operator 手工组（PR#44 对称补齐）' })
     // V5 信任基：渠道须读 canvasStore（宿主权威面）非请求体——caller 自述不进 declared
     const readsStore = /remoteMembersOf/.test(src) && /canvasStore/.test(src.slice(Math.max(0, src.indexOf('remoteMembersOf') - 1500), src.indexOf('remoteMembersOf') + 1500))
