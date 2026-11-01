@@ -65,6 +65,8 @@ export interface MeshNodeOptions extends Partial<Config> {
   home?: string
   /** This node's agent reply behavior; defaults to `ok from <name>: <message>`. */
   reply?: ReplyFn
+  /** The fake agent's session id (default session-0123456789abcdef): two hosts need distinct ones to tell their sessions apart. */
+  agentId?: string
 }
 
 export interface MeshNode {
@@ -187,7 +189,7 @@ export async function bootNode(options: MeshNodeOptions): Promise<MeshNode> {
     // slices 8 hex chars, so the published session team is `<team>/01234567`
     // — and `01234567` satisfies the routable-caller regex a bare word
     // like `agent-1` does not.
-    id: SessionId('session-0123456789abcdef'),
+    id: SessionId(options.agentId ?? 'session-0123456789abcdef'),
     session: { events: [] as unknown[] },
     steer: (payload: unknown) => {
       const out = reply(steerText(payload), options.name)
@@ -205,7 +207,9 @@ export async function bootNode(options: MeshNodeOptions): Promise<MeshNode> {
     steerCalls.push(payload)
     originalSteer(payload)
   }
-  apply(ctx, meshConfig({ ...options, home }))
+  const { agentId: _agentId, ...configOptions } = options
+  void _agentId
+  apply(ctx, meshConfig({ ...configOptions, home }))
   const port = (ctx as unknown as { webServer: WebServer }).webServer.port
   return {
     name: options.name,

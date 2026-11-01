@@ -33,6 +33,7 @@ export interface JoinedSnapshot {
 export class JoinedSessions {
   /** Session ids, most recently joined first. */
   private ids: string[] = []
+  private readonly listeners = new Set<() => void>()
 
   /**
    * @param path - persistence file (`<dsh-home>/a2a/joined.json`); empty = no persistence.
@@ -64,8 +65,10 @@ export class JoinedSessions {
    * @param id - the joined session id.
    */
   add(id: string): void {
+    const before = this.ids.join('\n')
     this.ids = [id, ...this.ids.filter(entry => entry !== id)].slice(0, JOIN_CAP)
     this.persist()
+    if (this.ids.join('\n') !== before) this.notify()
   }
 
   /**
@@ -76,6 +79,24 @@ export class JoinedSessions {
     if (!this.has(id)) return
     this.ids = this.ids.filter(entry => entry !== id)
     this.persist()
+    this.notify()
+  }
+
+  /**
+   * #114 S6: observe changes — the listener runs after every write that
+   * changed the store (never on restore or reload). A throwing listener
+   * cannot break the write.
+   * @returns the unsubscribe function.
+   */
+  onChange(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
+
+  private notify(): void {
+    for (const listener of this.listeners) {
+      try { listener() } catch { /* a listener's failure is its own */ }
+    }
   }
 
   /**

@@ -19,6 +19,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/task-ledger
  */
 
+import { parseAuthorization, type AuthProof, type ChainRole, type SettlementReason, type SettlementVerdict, type TaskAuthorization } from './task-auth.ts'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { parseReceipt, RECEIPT_OUTCOMES, type ReceiptOutcomeV2 } from './receipt.ts'
@@ -87,6 +88,127 @@ const ARCHIVE_ENDS: readonly string[] = ['receipt', 'echo', 'abandoned', 'cancel
 /** Summary marker {@link TaskLedger.resolveEcho} writes on echo-settled rows. */
 const ECHO_SUMMARY = '(settled by content echo)'
 
+/**
+ * #114 S3: who really sent one outbound task — the routing session, the
+ * agent-less host face, or a native-teams bridge submitter. Before this
+ * field every outbound row was attributable only to the host ("home"), so
+ * same-host seats could not be told apart.
+ */
+export interface Sender {
+  readonly kind: 'session' | 'host' | 'bridge'
+  /**
+   * A session's `<zone>/<id8>` node team, the host process label, or the
+   * bridge submitter. Group senders by `kind:id`, never by `id` alone: a host
+   * label set by hand may look like a session handle.
+   */
+  readonly id: string
+  /**
+   * Host senders only: the label the call borrowed on the wire when it
+   * differs from {@link id} (quick dispatch rides a live joined session's
+   * team). Display context, never a bucket key.
+   */
+  readonly face?: string
+}
+
+const SENDER_KINDS: readonly string[] = ['session', 'host', 'bridge']
+
+/** Longest sender id kept; anything longer is malformed, not truncated. */
+export const SENDER_ID_CAP = 256
+
+/**
+ * Restore-side allowlist for one persisted sender: a well-formed value comes
+ * back as a fresh object holding only kind, id and (when present) face; anything else is dropped whole (the row
+ * itself survives — a bad sender never costs the debt record).
+ * @param raw - the persisted value.
+ * @returns the sender, or undefined when absent or malformed.
+ */
+export function parseSender(raw: unknown): Sender | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const { kind, id, face } = raw as Record<string, unknown>
+  if (typeof kind !== 'string' || !SENDER_KINDS.includes(kind)) return undefined
+  if (typeof id !== 'string' || id === '' || id.length > SENDER_ID_CAP) return undefined
+  if (face !== undefined && (typeof face !== 'string' || face === '' || face.length > SENDER_ID_CAP)) return undefined
+  // `face` belongs to host senders only; on any other kind it is dropped, the sender kept.
+  return { kind: kind as Sender['kind'], id, ...(face !== undefined && kind === 'host' ? { face } : {}) }
+}
+
+/**
+ * Spread helper for restore: `{ sender }` when the persisted value parses and
+ * the row is not inbound (an inbound row's originator is its caller, never a
+ * sender this host recorded), else nothing.
+ */
+function withSender(raw: unknown, direction: unknown): { sender?: Sender } {
+  if (direction === 'inbound') return {}
+  const sender = parseSender(raw)
+  return sender === undefined ? {} : { sender }
+}
+
+/**
+ * #114 S2: `{ auth }` when a persisted INBOUND row carries a record that
+ * parses whole (parseAuthorization) and belongs to THIS row — its target is
+ * the row's team and its receipt target the row's peer — else nothing: the
+ * row survives as a pre-S2 row, never with a partially adopted or borrowed
+ * record.
+ */
+function withAuth(raw: unknown, entry: { direction?: unknown; team?: unknown; peer?: unknown }, now: number): { auth?: TaskAuthorization } {
+  if (entry.direction !== 'inbound' && entry.direction !== 'outbound') return {}
+  const auth = parseAuthorization(raw, now)
+  if (auth === undefined || auth.target !== entry.team) return {}
+  if (entry.direction === 'inbound') return auth.ingress === 'wire' && `local:${auth.receipt_target}` === entry.peer ? { auth } : {}
+  // #139: an outbound row carries only its local-candidate admission.
+  return auth.ingress === 'local' && entry.peer === 'local' ? { auth } : {}
+}
+
+/** #139: the routing facts settlement reads, copied between a row and its archive entry. */
+function routingOf(row: Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo'>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo'> {
+  return {
+    ...(row.peerKey !== undefined ? { peerKey: row.peerKey } : {}),
+    ...(row.peerHost !== undefined ? { peerHost: row.peerHost } : {}),
+    ...(row.deliveredTo !== undefined ? { deliveredTo: row.deliveredTo } : {}),
+  }
+}
+
+/** #139: what an outbound row is born with besides its sender. */
+export interface OutboundBirth {
+  /** The local-candidate admission (ingress local); kept only on a row whose peer is 'local'. */
+  readonly auth?: TaskAuthorization
+  readonly peerKey?: string
+  readonly peerHost?: string
+  readonly deliveredTo?: string
+}
+
+/** The facts of one outbound birth that fit the row (see {@link withRouting} for the same shape on restore). */
+function birthFacts(peer: string, birth: OutboundBirth | undefined): Pick<TaskRecord, 'auth' | 'peerKey' | 'peerHost' | 'deliveredTo'> {
+  if (birth === undefined) return {}
+  const fact = (v: string | undefined): v is string => v !== undefined && v !== '' && v.length <= ROUTING_FACT_CAP
+  const remote = peer !== 'local' && !peer.startsWith('local:')
+  return {
+    ...(!remote && birth.auth !== undefined && birth.auth.ingress === 'local' ? { auth: birth.auth } : {}),
+    ...(remote && fact(birth.peerKey) ? { peerKey: birth.peerKey } : {}),
+    ...(remote && fact(birth.peerHost) ? { peerHost: birth.peerHost } : {}),
+    ...(fact(birth.deliveredTo) ? { deliveredTo: birth.deliveredTo } : {}),
+  }
+}
+
+/** Bound on a persisted routing fact; anything longer (or empty, or not a string) is dropped on restore. */
+const ROUTING_FACT_CAP = 256
+
+/**
+ * #139: restore-side allowlist for the routing facts. Each is kept only in
+ * its shape — a non-empty string within the cap — and the peer facts only on
+ * a remote outbound row; anything else is dropped (the row survives as one
+ * born before the fields, judged by current membership and origin).
+ */
+function withRouting(entry: Record<string, unknown>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo'> {
+  const fact = (v: unknown): v is string => typeof v === 'string' && v !== '' && v.length <= ROUTING_FACT_CAP
+  const remoteOutbound = entry.direction === 'outbound' && typeof entry.peer === 'string' && entry.peer !== 'local' && !entry.peer.startsWith('local:')
+  return {
+    ...(remoteOutbound && fact(entry.peerKey) ? { peerKey: entry.peerKey } : {}),
+    ...(remoteOutbound && fact(entry.peerHost) ? { peerHost: entry.peerHost } : {}),
+    ...(fact(entry.deliveredTo) ? { deliveredTo: entry.deliveredTo } : {}),
+  }
+}
+
 /** One tracked outbound task still in the owed book (unsettled). */
 export interface TaskRecord {
   readonly taskId: string
@@ -114,6 +236,20 @@ export interface TaskRecord {
    * replaying the conversation. Absent on rows persisted before this field.
    */
   readonly brief?: string
+  /** #114 S3: the real sender of an outbound row (absent on inbound rows and rows persisted before the field). */
+  readonly sender?: Sender
+  /**
+   * #114 S2: the immutable authorization the row was born with — an inbound
+   * row's wire admission, or (#139) an outbound row's local-candidate
+   * admission (`ingress: 'local'`). Absent on remote outbound and older rows.
+   */
+  readonly auth?: TaskAuthorization
+  /** #139: the public key of the peer card a remote outbound row was dispatched to. */
+  readonly peerKey?: string
+  /** #139: that card's session label (the peer host's process label). */
+  readonly peerHost?: string
+  /** #139: the member that actually received the task (canvas / bare-zone deliveries). */
+  readonly deliveredTo?: string
   status: TaskStatus
   /** When the row was swept to dead-letter (absent while pending). */
   deadAt?: number
@@ -160,6 +296,16 @@ export interface ArchivedRecord {
    * ever stored; absent means a receipt was owed (or the row predates the field).
    */
   readonly receiptExpected?: false
+  /** #114 S3: copied from the owed row (absent on inbound rows and rows archived before the field). */
+  readonly sender?: Sender
+  /** #114 S2: carried over from the live row unchanged. */
+  readonly auth?: TaskAuthorization
+  /** #139: carried over from the live row unchanged (a late receipt is judged against them). */
+  readonly peerKey?: string
+  readonly peerHost?: string
+  readonly deliveredTo?: string
+  /** #114 S4: who settled the row (receipt and echo ends), and their chain role. */
+  readonly settledBy?: SettledBy
 }
 
 /**
@@ -238,6 +384,73 @@ export interface ReceiptResolvedInfo {
 export interface TaskLedgerSnapshot {
   readonly tasks: readonly TaskRecord[]
   readonly archived?: readonly ArchivedRecord[]
+  /** #114 S4: the bounded ring of refused / would-be-refused settlements. */
+  readonly settlementRefusals?: readonly SettlementRefusalRecord[]
+  /** #114 S4: monotonic count of every refusal noted. */
+  readonly settlementRefusalsTotal?: number
+}
+
+/** #114 S4: who settled an archived row, and how they stood on its authorization chain. */
+export interface SettledBy {
+  readonly caller: string
+  readonly chain_role: ChainRole | 'off-chain'
+}
+
+/** #114 S4: one settlement the judgement refused (enforce) or would have refused (observe). */
+export interface SettlementRefusalRecord {
+  readonly taskId: string
+  readonly at: number
+  readonly settler: { readonly caller: string; readonly proof: AuthProof; readonly ingress: 'wire' | 'local' }
+  readonly reason: SettlementReason
+  /** The receipt's first line, bounded. */
+  readonly head: string
+  /** true: the settlement was refused (enforce); false: recorded only (observe). */
+  readonly enforced: boolean
+  /** Repeats of the same (task, settler, reason) folded into this entry, so a flood cannot push older evidence out (review of PR #140 P2-4). */
+  readonly count: number
+}
+
+/** Bound on ids and callers kept in settlement records; longer values are cut on write and refused on restore. */
+const SETTLEMENT_ID_CAP = 256
+
+/** Bound of the refusal ring (design §4.4). */
+export const SETTLEMENT_REFUSAL_CAP = 64
+
+/**
+ * #114 S4: how the ledger asks whether a settler may settle a row. `check`
+ * is the pure judgement (task-auth.ts judgeSettlement) bound to this
+ * receipt's facts; `enforce` decides whether an off-chain verdict blocks
+ * the settlement or is only recorded.
+ */
+export interface SettlementJudge {
+  readonly enforce: boolean
+  readonly settler: SettlementRefusalRecord['settler']
+  check(row: Pick<TaskRecord, 'team' | 'peer' | 'direction' | 'auth' | 'peerKey' | 'peerHost' | 'deliveredTo'>, echo: boolean): SettlementVerdict
+}
+
+const SETTLEMENT_REASONS: readonly string[] = ['settler-off-chain', 'settler-unverified', 'on-behalf-mismatch', 'echo-off-chain']
+const CHAIN_ROLES: readonly string[] = ['target', 'target-member', 'host-face', 'compat', 'legacy', 'off-chain']
+const PROOF_VALUES: readonly string[] = ['origin-claim', 'claim-mismatch', 'legacy-window', 'in-process', 'none']
+
+/** Restore-side allowlist for settledBy: whole or nothing. */
+function withSettledBy(raw: unknown): { settledBy?: SettledBy } {
+  if (raw === null || typeof raw !== 'object') return {}
+  const r = raw as Record<string, unknown>
+  if (typeof r.caller !== 'string' || r.caller.length > SETTLEMENT_ID_CAP || typeof r.chain_role !== 'string' || !CHAIN_ROLES.includes(r.chain_role)) return {}
+  return { settledBy: { caller: r.caller, chain_role: r.chain_role as SettledBy['chain_role'] } }
+}
+
+/** Restore-side allowlist for one refusal record: whole or nothing. */
+function parseRefusal(raw: unknown): SettlementRefusalRecord | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined
+  const r = raw as Record<string, unknown>
+  const st = r.settler as Record<string, unknown> | null | undefined
+  if (typeof r.taskId !== 'string' || r.taskId === '' || r.taskId.length > SETTLEMENT_ID_CAP || typeof r.at !== 'number' || !Number.isFinite(r.at)) return undefined
+  if (typeof r.reason !== 'string' || !SETTLEMENT_REASONS.includes(r.reason) || typeof r.head !== 'string' || typeof r.enforced !== 'boolean') return undefined
+  if (st === null || typeof st !== 'object' || typeof st.caller !== 'string' || st.caller.length > SETTLEMENT_ID_CAP || typeof st.proof !== 'string' || !PROOF_VALUES.includes(st.proof) || (st.ingress !== 'wire' && st.ingress !== 'local')) return undefined
+  const count = r.count === undefined ? 1 : r.count
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < 1) return undefined
+  return { taskId: r.taskId, at: r.at, settler: { caller: st.caller, proof: st.proof as AuthProof, ingress: st.ingress }, reason: r.reason as SettlementReason, head: r.head.slice(0, SUMMARY_CAP), enforced: r.enforced, count }
 }
 
 /**
@@ -251,6 +464,10 @@ export class TaskLedger {
   private tasks: TaskRecord[] = []
   /** Settled rows, most recently resolved first; bounded by the archive cap. */
   private archived: ArchivedRecord[] = []
+  /** #114 S4: refused / would-be-refused settlements, newest first. */
+  private refusals: SettlementRefusalRecord[] = []
+  /** #114 S4: every refusal ever noted (monotonic; survives the ring's bound). */
+  private refusalsTotal = 0
   private readonly staleTtlMs: number
   private readonly archiveCap: number
   /** Injectable clock (option `now`). */
@@ -306,7 +523,7 @@ export class TaskLedger {
    * via context_id follow-ups (the dispatch reply already says so).
    * Idempotent by task id like {@link track}.
    */
-  trackReceiptless(taskId: string, team: string, peer: string, contextId?: string, brief?: string): void {
+  trackReceiptless(taskId: string, team: string, peer: string, contextId?: string, brief?: string, sender?: Sender, birth?: OutboundBirth): void {
     if (taskId === '') return
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
@@ -320,13 +537,15 @@ export class TaskLedger {
       receiptExpected: false,
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
       ...(brief !== undefined && brief !== '' ? { brief } : {}),
+      ...(sender !== undefined ? { sender } : {}),
+      ...birthFacts(peer, birth),
       status: 'pending' as const,
     }, ...this.tasks]
     this.trimOwed()
     this.persist()
   }
 
-  track(taskId: string, team: string, peer: string, contextId?: string, brief?: string): void {
+  track(taskId: string, team: string, peer: string, contextId?: string, brief?: string, sender?: Sender, birth?: OutboundBirth): void {
     if (taskId === '') return
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
@@ -339,6 +558,8 @@ export class TaskLedger {
       direction: 'outbound' as const,
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
       ...(brief !== undefined && brief !== '' ? { brief } : {}),
+      ...(sender !== undefined ? { sender } : {}),
+      ...birthFacts(peer, birth),
       status: 'pending' as const,
     }, ...this.tasks]
     this.trimOwed()
@@ -358,7 +579,7 @@ export class TaskLedger {
    * @param from - the caller's receipt target (label or callback address).
    * @param contextId - the delivery's conversation id, kept for follow-up routes (empty omits it).
    */
-  trackInbound(taskId: string, team: string, from: string, contextId?: string, receiptExpected?: boolean, brief?: string): void {
+  trackInbound(taskId: string, team: string, from: string, contextId?: string, receiptExpected?: boolean, brief?: string, auth?: TaskAuthorization, deliveredTo?: string): void {
     if (taskId === '') return
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
@@ -372,6 +593,9 @@ export class TaskLedger {
       ...(receiptExpected === false ? { receiptExpected: false } : {}),
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
       ...(brief !== undefined && brief !== '' ? { brief } : {}),
+      // #114 S2: frozen at birth; a replayed id never reaches here (first record wins above).
+      ...(auth !== undefined ? { auth } : {}),
+      ...(deliveredTo !== undefined && deliveredTo !== '' ? { deliveredTo: deliveredTo.slice(0, ROUTING_FACT_CAP) } : {}),
       status: 'pending' as const,
     }, ...this.tasks]
     this.trimOwed()
@@ -428,6 +652,9 @@ export class TaskLedger {
         endedBy: 'abandoned',
         ...(record.direction !== undefined ? { direction: record.direction } : {}),
         ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
+        ...(record.sender !== undefined ? { sender: record.sender } : {}),
+        ...(record.auth !== undefined ? { auth: record.auth } : {}),
+        ...routingOf(record),
       })
       this.persist()
       return { outcome: 'cleared', taskId, archivedAt: resolvedAt }
@@ -469,6 +696,9 @@ export class TaskLedger {
         endedBy: 'cancelled',
         ...(record.direction !== undefined ? { direction: record.direction } : {}),
         ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
+        ...(record.sender !== undefined ? { sender: record.sender } : {}),
+        ...(record.auth !== undefined ? { auth: record.auth } : {}),
+        ...routingOf(record),
       })
       this.persist()
       return {
@@ -494,7 +724,7 @@ export class TaskLedger {
    * @returns what the receipt settled, or `undefined` when the message
    *   correlated nothing.
    */
-  resolveFromMessage(message: string): ReceiptResolvedInfo | undefined {
+  resolveFromMessage(message: string, judge?: SettlementJudge): ReceiptResolvedInfo | undefined {
     const parsed = parseReceipt(message)
     if (parsed === null) return undefined
     const taskId = parsed.taskId
@@ -505,6 +735,12 @@ export class TaskLedger {
     this.sweep(this.now())
     const record = this.tasks.find(entry => entry.taskId === taskId)
     if (record !== undefined) {
+      // #114 S4: judge the settler before the row moves; enforce keeps a refused row owed.
+      const verdict = judge?.check(record, false)
+      if (verdict !== undefined && !verdict.ok) {
+        this.noteRefusal(taskId, judge!, verdict.reason, message)
+        if (judge!.enforce) { this.persist(); return undefined }
+      }
       this.tasks = this.tasks.filter(entry => entry.taskId !== taskId)
       this.archiveSettled({
         taskId: record.taskId,
@@ -520,6 +756,10 @@ export class TaskLedger {
         endedBy: 'receipt',
         ...(record.direction !== undefined ? { direction: record.direction } : {}),
         ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
+        ...(record.sender !== undefined ? { sender: record.sender } : {}),
+        ...(record.auth !== undefined ? { auth: record.auth } : {}),
+        ...routingOf(record),
+        ...(verdict !== undefined ? { settledBy: { caller: judge!.settler.caller.slice(0, SETTLEMENT_ID_CAP), chain_role: verdict.ok ? verdict.role : 'off-chain' } } : {}),
       })
       this.persist()
       return {
@@ -535,6 +775,18 @@ export class TaskLedger {
     }
     const settled = this.archived.find(entry => entry.taskId === taskId)
     if (settled === undefined) return undefined
+    // #114 S4 (review of PR #140 P2-3): a late receipt is judged too. Under
+    // enforce, an off-chain one only marks that an answer came late — it
+    // never rewrites the settled summary or outcome.
+    const lateVerdict = judge?.check(settled, false)
+    if (lateVerdict !== undefined && !lateVerdict.ok) {
+      this.noteRefusal(taskId, judge!, lateVerdict.reason, message)
+      if (judge!.enforce) {
+        this.archived = [{ ...settled, lateReceiptAt: this.now() }, ...this.archived.filter(entry => entry.taskId !== taskId)]
+        this.persist()
+        return undefined
+      }
+    }
     // Orphan isolation: a receipt for an explicitly abandoned row must not
     // rewrite the abandonment outcome — the caller stopped waiting by choice.
     // Record that the target did answer later; keep the decision verbatim and
@@ -583,12 +835,20 @@ export class TaskLedger {
    * @param message - the inbound message text.
    * @returns the task ids this message settled (usually none or one).
    */
-  resolveEcho(message: string): string[] {
+  resolveEcho(message: string, judge?: SettlementJudge): string[] {
     const settled: string[] = []
+    let refused = false
     this.sweep(this.now())
     for (const record of [...this.tasks]) {
       if (record.status !== 'pending') continue
       if (!message.includes(`task ${record.taskId}`)) continue
+      // #114 S4: an echo is weak evidence — only an on-chain settler's echo counts under enforce.
+      const verdict = judge?.check(record, true)
+      if (verdict !== undefined && !verdict.ok) {
+        this.noteRefusal(record.taskId, judge!, verdict.reason, message)
+        refused = true
+        if (judge!.enforce) continue
+      }
       this.tasks = this.tasks.filter(entry => entry.taskId !== record.taskId)
       this.archiveSettled({
         taskId: record.taskId,
@@ -601,11 +861,46 @@ export class TaskLedger {
         endedBy: 'echo',
         ...(record.direction !== undefined ? { direction: record.direction } : {}),
         ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
+        ...(record.sender !== undefined ? { sender: record.sender } : {}),
+        ...(record.auth !== undefined ? { auth: record.auth } : {}),
+        ...routingOf(record),
+        ...(verdict !== undefined ? { settledBy: { caller: judge!.settler.caller.slice(0, SETTLEMENT_ID_CAP), chain_role: verdict.ok ? verdict.role : 'off-chain' } } : {}),
       })
       settled.push(record.taskId)
     }
-    if (settled.length > 0) this.persist()
+    if (settled.length > 0 || refused) this.persist()
     return settled
+  }
+
+  /** #114 S4: the owed row for a task id, if any (read-only; for the settlement gate). */
+  find(taskId: string): TaskRecord | undefined {
+    return this.tasks.find(entry => entry.taskId === taskId)
+  }
+
+  /** #114 S4: refused / would-be-refused settlements, newest first. */
+  settlementRefusals(): readonly SettlementRefusalRecord[] {
+    return [...this.refusals]
+  }
+
+  /** #114 S4: every refusal ever noted, including those folded or pushed out of the ring. */
+  settlementRefusalsTotal(): number {
+    return this.refusalsTotal
+  }
+
+  /**
+   * Record one refused / would-be-refused settlement in the bounded ring
+   * (persisted by the caller). A repeat of the same (task, settler, reason)
+   * folds into its entry and moves it to the head, so one row's flood cannot
+   * push other evidence out.
+   */
+  private noteRefusal(taskId: string, judge: SettlementJudge, reason: SettlementReason, message: string): void {
+    const head = (message.split('\n')[0] ?? '').slice(0, SUMMARY_CAP)
+    const id = taskId.slice(0, SETTLEMENT_ID_CAP)
+    const settler = { ...judge.settler, caller: judge.settler.caller.slice(0, SETTLEMENT_ID_CAP) }
+    const same = (r: SettlementRefusalRecord): boolean => r.taskId === id && r.settler.caller === settler.caller && r.reason === reason && r.enforced === judge.enforce
+    const prior = this.refusals.find(same)
+    this.refusalsTotal += 1
+    this.refusals = [{ taskId: id, at: this.now(), settler, reason, head, enforced: judge.enforce, count: (prior?.count ?? 0) + 1 }, ...this.refusals.filter(r => !same(r))].slice(0, SETTLEMENT_REFUSAL_CAP)
   }
 
   /** Move one settled record to the archive head, trimming at the cap. */
@@ -636,6 +931,9 @@ export class TaskLedger {
         ...(row.brief !== undefined ? { brief: row.brief } : {}),
         endedBy: 'evicted' as const,
         ...(row.direction !== undefined ? { direction: row.direction } : {}),
+        ...(row.sender !== undefined ? { sender: row.sender } : {}),
+        ...(row.auth !== undefined ? { auth: row.auth } : {}),
+        ...routingOf(row),
       })
     }
   }
@@ -688,6 +986,10 @@ export class TaskLedger {
               ...(typeof entry.endedBy === 'string' && ARCHIVE_ENDS.includes(entry.endedBy) ? { endedBy: entry.endedBy as ArchiveEnd } : {}),
               ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
               ...(entry.receiptExpected === false ? { receiptExpected: false as const } : {}),
+              ...withSender(entry.sender, entry.direction),
+              ...withAuth(entry.auth, entry, this.now()),
+            ...withRouting(entry as Record<string, unknown>),
+              ...withSettledBy((entry as { settledBy?: unknown }).settledBy),
             })
             continue
           }
@@ -702,6 +1004,10 @@ export class TaskLedger {
             // it is unknown, so a restored outbound row must not lose it.
             ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
             ...(entry.receiptExpected === false ? { receiptExpected: false } : {}),
+            // #114 S3: a malformed sender is dropped whole; the row survives.
+            ...withSender(entry.sender, entry.direction),
+            ...withAuth(entry.auth, entry, this.now()),
+            ...withRouting(entry as Record<string, unknown>),
             status: entry.status === 'dead' ? 'dead' : 'pending',
             ...(entry.status === 'dead'
               ? {
@@ -732,11 +1038,19 @@ export class TaskLedger {
             ...(typeof entry.endedBy === 'string' && ARCHIVE_ENDS.includes(entry.endedBy) ? { endedBy: entry.endedBy as ArchiveEnd } : {}),
             ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
             ...(entry.receiptExpected === false ? { receiptExpected: false as const } : {}),
+            ...withSender(entry.sender, entry.direction),
+            ...withAuth(entry.auth, entry, this.now()),
+            ...withRouting(entry as Record<string, unknown>),
+            ...withSettledBy((entry as { settledBy?: unknown }).settledBy),
           })
         }
       }
       this.tasks = restored.slice(0, TASK_CAP)
       this.archived = this.archived.slice(0, this.archiveCap)
+      const refusals = (snapshot as { settlementRefusals?: unknown } | null)?.settlementRefusals
+      if (Array.isArray(refusals)) this.refusals = refusals.map(parseRefusal).filter((r): r is SettlementRefusalRecord => r !== undefined).slice(0, SETTLEMENT_REFUSAL_CAP)
+      const total = (snapshot as { settlementRefusalsTotal?: unknown } | null)?.settlementRefusalsTotal
+      this.refusalsTotal = Math.max(typeof total === 'number' && Number.isInteger(total) && total >= 0 ? total : 0, this.refusals.reduce((n, r) => n + r.count, 0))
     } catch {
       // A corrupt ledger is not fatal: routing never depends on it; the
       // reconciliation simply starts fresh.
@@ -751,6 +1065,8 @@ export class TaskLedger {
       const snapshot: TaskLedgerSnapshot = {
         tasks: this.tasks.map(task => ({ ...task })),
         ...(this.archived.length > 0 ? { archived: this.archived.map(entry => ({ ...entry })) } : {}),
+        ...(this.refusals.length > 0 ? { settlementRefusals: this.refusals.map(entry => ({ ...entry, settler: { ...entry.settler } })) } : {}),
+        ...(this.refusalsTotal > 0 ? { settlementRefusalsTotal: this.refusalsTotal } : {}),
       }
       writeFileSync(this.path, JSON.stringify(snapshot), { mode: 0o600 })
     } catch {

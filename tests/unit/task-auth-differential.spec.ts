@@ -62,6 +62,8 @@ function makeOld(w: W) {
     }
     if (callerSessionId !== undefined) {
       for (const name of canvasStore.teamsOf(callerSessionId)) declared.add(canvasTeamOf(name))
+      // Deliberate update (review of PR #129): a member stored by its zone/id8 handle counts too.
+      for (const name of canvasStore.list()) if (canvasStore.membersOf(name).includes(caller)) declared.add(canvasTeamOf(name))
     } else {
       for (const name of canvasStore.list()) {
         if (canvasStore.remoteMembersOf(name).includes(caller)) declared.add(canvasTeamOf(name))
@@ -87,7 +89,9 @@ function makeOld(w: W) {
     const shared = [...declared].some(t => routable.has(t) || otherLocalDeclarations.has(t))
     if (targetTeam !== undefined && targetTeam !== config.team) {
       let targetLinks: Set<string> | undefined
-      const targetId8 = targetTeam.startsWith(`${config.team}/`) ? targetTeam.slice(config.team.length + 1) : undefined
+      // Deliberate update (gh#128): a canvas target resolves as a canvas before the id8 slice.
+      const targetIsCanvas = canvasStore.list().some(name => canvasTeamOf(name) === targetTeam)
+      const targetId8 = !targetIsCanvas && targetTeam.startsWith(`${config.team}/`) ? targetTeam.slice(config.team.length + 1) : undefined
       if (targetId8 !== undefined) {
         const targetSession = joinedSessions.list().find(sessionId => id8(sessionId) === targetId8)
           ?? teamMemberships.list().find(entry => id8(entry.session) === targetId8)?.session
@@ -97,6 +101,7 @@ function makeOld(w: W) {
             if (entry.session === targetSession) for (const t of entry.teams) targetLinks.add(t)
           }
           for (const name of canvasStore.teamsOf(targetSession)) targetLinks.add(canvasTeamOf(name))
+          for (const name of canvasStore.list()) if (canvasStore.membersOf(name).includes(targetTeam)) targetLinks.add(canvasTeamOf(name))
           for (const cached of cardCache.values()) {
             const org = (cached.card as { canvasOrg?: Array<{ team?: unknown; members?: unknown }> } | undefined)?.canvasOrg
             if (!Array.isArray(org)) continue
@@ -111,7 +116,7 @@ function makeOld(w: W) {
         if (canvasName !== undefined) {
           targetLinks = new Set<string>([targetTeam])
           for (const memberId of canvasStore.membersOf(canvasName)) {
-            for (const entry of teamMemberships.list()) if (entry.session === memberId) for (const t of entry.teams) targetLinks.add(t)
+            for (const entry of teamMemberships.list()) if (entry.session === memberId || `${config.team}/${id8(entry.session)}` === memberId) for (const t of entry.teams) targetLinks.add(t)
           }
         }
       }

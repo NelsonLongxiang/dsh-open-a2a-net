@@ -142,7 +142,7 @@ describe('mesh anomalies — receipt-ledger honesty under odd settlement shapes'
       const delivered = await alpha.ctx.tools.get('a2a_route')?.execute({ team: 'cargo', message: 'fire and forget', async: true }, runContext()) as { ok: boolean; task_id: string; reply?: string }
       expect(delivered.ok).toBe(true)
       const rows = await stateTasks(alpha)
-      expect(rows).toEqual([{ taskId: delivered.task_id, team: 'cargo', peer: cargo.baseUrl, status: 'pending', startedAt: expect.any(Number), direction: 'outbound', receiptExpected: false, settleable: false, brief: 'fire and forget' }])
+      expect(rows).toEqual([{ taskId: delivered.task_id, team: 'cargo', peer: cargo.baseUrl, status: 'pending', startedAt: expect.any(Number), direction: 'outbound', receiptExpected: false, settleable: false, brief: 'fire and forget', sender: { kind: 'host', id: 'mesh-anom-e' } }])
       // The tasks ledger agrees: visible, not debt.
       const book = await ledger(alpha)
       expect(book.tasks.find(row => row.taskId === delivered.task_id)).toMatchObject({ status: 'pending', receiptExpected: false, direction: 'outbound' })

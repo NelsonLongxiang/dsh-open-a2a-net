@@ -12,6 +12,25 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/receipt
  */
 
+/**
+ * #114 S5: what a task id may not contain. The id is spliced into the
+ * `[A2A direct] (task <id>)` steer header and the `[A2A receipt] task <id>`
+ * correlation header; a `)` would let one id's header start with another's
+ * (`foo) x` → `(task foo) x)`), and whitespace or control characters break
+ * the `\S+` correlation and the header's one-line shape.
+ */
+const TASK_ID_FORBIDDEN = /[\s)\u0000-\u001f\u007f]/
+
+/**
+ * Refusal text for an unusable task id, or undefined when the id is fine.
+ * Both delivery paths (wire face, local candidate) refuse at intake.
+ */
+export function taskIdRefusal(taskId: string): string | undefined {
+  return TASK_ID_FORBIDDEN.test(taskId)
+    ? 'task_id must not contain whitespace, ")" or control characters — it is spliced into the [A2A direct] (task <id>) and [A2A receipt] task <id> headers'
+    : undefined
+}
+
 /** The network's fixed, case-sensitive correlation template. */
 export const RECEIPT_PATTERN = /^\[A2A receipt\] task (\S+)\s*([\s\S]*)$/
 
@@ -28,7 +47,7 @@ export const RECEIPT_OUTCOMES = [
 
 export type ReceiptOutcomeV2 = (typeof RECEIPT_OUTCOMES)[number]
 
-const KNOWN_ENVELOPE_KEYS: readonly string[] = ['outcome', 'idempotencyKey', 'sessionKey', 'elapsedMs', 'artifacts']
+const KNOWN_ENVELOPE_KEYS: readonly string[] = ['outcome', 'idempotencyKey', 'sessionKey', 'elapsedMs', 'artifacts', 'onBehalfOf', 'authRef']
 void KNOWN_ENVELOPE_KEYS
 
 /** Envelope fields this codec extracts; anything else rides through ignored (append-only). */
@@ -37,6 +56,13 @@ export interface ReceiptEnvelopeV2Fields {
   idempotencyKey?: string
   sessionKey?: string
   elapsedMs?: number
+  /**
+   * #114 S5: the session a host-synthesized receipt speaks for (the host is
+   * only its courier). Additive: parsers that predate it ignore it.
+   */
+  onBehalfOf?: string
+  /** #114 S5: 16-hex ref of the inbound authorization record (task-auth.ts authorizationRef); audit only. */
+  authRef?: string
 }
 
 export interface ParsedReceipt {
@@ -68,6 +94,8 @@ function tryEnvelopeLine(line: string): ReceiptEnvelopeV2Fields | undefined {
     if (typeof record['idempotencyKey'] === 'string') fields.idempotencyKey = record['idempotencyKey']
     if (typeof record['sessionKey'] === 'string') fields.sessionKey = record['sessionKey']
     if (typeof record['elapsedMs'] === 'number' && Number.isFinite(record['elapsedMs'])) fields.elapsedMs = record['elapsedMs']
+    if (typeof record['onBehalfOf'] === 'string' && record['onBehalfOf'] !== '') fields.onBehalfOf = record['onBehalfOf']
+    if (typeof record['authRef'] === 'string' && /^[0-9a-f]{16}$/.test(record['authRef'])) fields.authRef = record['authRef']
     if (Object.keys(fields).length === 0) return undefined
     return fields
   } catch {
@@ -116,6 +144,8 @@ export function formatReceipt(
   if (fields.idempotencyKey !== undefined) ordered['idempotencyKey'] = fields.idempotencyKey
   if (fields.sessionKey !== undefined) ordered['sessionKey'] = fields.sessionKey
   if (fields.elapsedMs !== undefined) ordered['elapsedMs'] = fields.elapsedMs
+  if (fields.onBehalfOf !== undefined) ordered['onBehalfOf'] = fields.onBehalfOf
+  if (fields.authRef !== undefined) ordered['authRef'] = fields.authRef
   const keys = Object.keys(ordered)
   if (keys.length === 0) return header
   return `${header}\n${JSON.stringify(ordered)}`

@@ -129,7 +129,8 @@ interface TaskAuthorization {
   /** 准入时被判定的 caller（caller_session 原文，即 a2aCallerRefusal 的入参）。 */
   readonly caller: string
   /** caller 身份的证明强度。 */
-  readonly proof: 'origin-claim' | 'legacy-window' | 'in-process' | 'none'
+  /** caller 身份的证明强度：OriginClaim 验过、且签名的 zone 覆盖 caller（同名或 `<zone>/…`）才是 origin-claim；验过但不覆盖记 claim-mismatch（claim 保留供审计）——S2 实现评审 PR #134 P1。 */
+  readonly proof: 'origin-claim' | 'claim-mismatch' | 'legacy-window' | 'in-process' | 'none'
   /** proof = origin-claim 时：签名名片推导出的名字与名片 URL 的 origin。 */
   readonly claim?: { readonly caller: string; readonly origin: string }
   /** 入口面（封闭集，§2.2）。 */
@@ -208,7 +209,11 @@ allowlist_version = "al1:" + sha256(canonicalJSON(inputs)).slice(0, 16)
 
 **不进版本的**：名片缓存里的 `canvasOrg`（gh#71）。它是远端自述，缓存每次冷热交替都会变，计入会让
 版本无意义地抖动。代价由记录本身承担：`via: 'peer-org'` 的记录把命中的组织条目写进 `basis`
-（`peer-org:<team>`），§5 对这类记录总是重新判定。
+（`peer-org:<team>`），§5 对这类记录总是重新判定（判据见 §5"靠缓存的行"）。
+
+**同样不进版本的**：`liveNodeIds`（节点事实 `node-fact` 依据的在线节点集合）。它随节点上下线抖动，计入同样会让版本
+无意义地跳。代价：只靠 `node-fact` 放行的行，节点下线后**不会立即**被重判，要等下一次名单变化（版本移动）时才重判。
+这是 observe 阶段接受的滞后；`enforce` 若要求即时性，需另行把它纳入重判触发。
 
 规范化 JSON：键按上表固定顺序、数组排序、无空白，规则写成 `src/task-auth.ts` 里的唯一实现，
 并用黄金向量单测钉死（同 `peerPayloadFingerprint` "一处实现" 的纪律）。
@@ -223,12 +228,12 @@ allowlist_version = "al1:" + sha256(canonicalJSON(inputs)).slice(0, 16)
 - **构造只有一处**：新纯模块 `src/task-auth.ts` 的 `buildAuthorization(verdict, facts)`。
 - **挂载只在行出生时**：
   - wire 面：`trackInbound(taskId, team, from, contextId, receiptExpected, brief, auth)`（今天 `wire.ts:651`）；
-  - 本机候选：本机投递在同一本台账里只有调用方的出站行（§1.1），`auth`（`ingress: 'local'`）由
+  - 本机候选（S2 只做 wire 面；S4 的链判定按 `row.team` 判本机出站行，**用不到这份记录**，故再转后续 issue，作纯审计补齐）：本机投递在同一本台账里只有调用方的出站行（§1.1），`auth`（`ingress: 'local'`）由
     `dispatchLocalCandidate` 算出、随结果交给 `trackOwedTask` 挂在**那一行**上。一行一个 task id，不新增行。
 - `TaskLedger` 不提供任何修改 `auth` 的方法；`Object.freeze` 后入行；`abandon/cancel/resolve*/trimOwed`
   归档时原样复制。task id 已存在时 `track*` 本来就保持首条记录不变（`task-ledger.ts:332-333`），
   所以**重放无法覆盖授权**。
-- 名单版本历史：新文件 `<dsh-home>/a2a/auth-versions.json`，环形 32 条
+- 名单版本历史（**移入 S6 #124**，它是唯一的消费方）：新文件 `<dsh-home>/a2a/auth-versions.json`，环形 32 条
   `{version, at, cause, inputs}`，供 §5 解释"变了什么"。
 
 ### 2.5 持久化与迁移
@@ -236,7 +241,7 @@ allowlist_version = "al1:" + sha256(canonicalJSON(inputs)).slice(0, 16)
 - `tasks.json` 行上新增可选字段 `auth`（与 gh#31 的 `direction`/`endedBy` 同一先例：加字段、不升文件版本）。
 - `restore()` 增加 `auth` 的白名单解析：`v === 1`、枚举值在封闭集内、字符串长度有上限；不合格则**整块丢弃**
   （行照常恢复，按旧行处理），绝不部分采纳。
-- 旧行无 `auth`：投影为 `auth: 'legacy'`，§4 按兼容规则处理。旧行最多 24h（`TASK_STALE_TTL_MS`）离开欠账簿，
+- 旧行无 `auth`：S2 在 `/state` 上直接省略该字段；`legacy` 投影随 S4 的兼容判定一起做。旧行最多 24h（`TASK_STALE_TTL_MS`）离开欠账簿，
   归档 64 条上限内自然淘汰——**升级后约一天，遗留尾巴排空**，无需迁移脚本。
 - 降级：旧版 `restore()` 逐字段白名单，会在下一次写盘时丢掉 `auth`。可接受，文档写明。
 
@@ -247,15 +252,17 @@ allowlist_version = "al1:" + sha256(canonicalJSON(inputs)).slice(0, 16)
 ```ts
 type Sender =
   | { kind: 'session'; id: string }   // <zone>/<id8>，routeTrunk 的 callerSession（有 agent）
-  | { kind: 'host'; id: string }      // 无 agent 的宿主面：quick-dispatch / 宿主工具调用 → hostCaller 或 session 标签
+  | { kind: 'host'; id: string; face?: string }  // 无 agent 的宿主面：quick-dispatch / 宿主工具调用 → 宿主进程标签；
+                                                  // face = 线面上借用的句柄（quick-dispatch 借活跃 joined 会话的队），只作展示
   | { kind: 'bridge'; id: string }    // native-teams 传输面提交（index.ts:4955），id = 提交方句柄
 ```
 
 - 写入点：`trackOwedTask`（`index.ts:4172`）多收一个 `sender`，三处调用（`:4404`、`:4452`、`:4955`）
   传入各自已在手的 caller 身份。`routeTrunk` 已经算好 `callerSession`（`:4371` 起），无需新判定。
 - CLI 不在宿主上产生出站行：CLI 的发送在宿主侧是一条**入站**行，其发送方就是 `auth.caller`（CLI 句柄）。
-  所以 L9 的分桶键统一为：**出站行用 `sender.id`，入站行用 `auth.caller`，两者都缺才落 `legacy`**——
-  不再有 "home"。
+  所以 L9 的分桶键统一为：**出站行用 `sender.kind:sender.id`，入站行用 `auth.caller`，两者都缺才落 `legacy`**——
+  不再有 "home"。分桶必须带上 `kind`：运营者手设的宿主标签可能长得像 `<zone>/<id8>`，只按 `id` 会与该会话的席位混桶。
+  `face` 永不参与分桶。（S3 实现评审，PR #127；quick-dispatch 记宿主标签 + `face` 为任务属主裁定。）
 - `/state`（`src/faces/admin.ts:277` 起的 `tasks/tasksDead/archived` 投影）与 `a2a_tasks` 工具
   （`index.ts:5300`）追加 `sender`；CLI `a2a tasks`（`cli/a2a.mjs:566` 起）在行尾显示。均为追加字段。
 
@@ -283,8 +290,8 @@ interface Settler {
 | chain_role | 条件 |
 |---|---|
 | `target` | `S.caller === R.team`（出站行：我们派给谁；入站行：`R.auth.target`） |
-| `target-member` | R.team 是画布队，且 S.caller 是**派发时实际投中的成员**（出站行新增 `deliveredTo`，由 `dispatchPeerCandidate` 的 `target` / 本机 canvas tier 的 agent 句柄填入） |
-| `host-face` | S 是目标所在宿主的进程面**代目标结算**：自动回执（§4.3 的 `onBehalfOf` 等于 R.team / `deliveredTo`），且（跨主机时）`S.claimOrigin` 等于 R.peer 的 origin，（本机时）`S.caller === session` 且 `S.ingress === 'local'` |
+| `target-member` | R.team 是画布队，且 S.caller 是**实际投中的成员** `R.deliveredTo`（#139）；`deliveredTo` 出生前的旧行仍取该画布**当前**的成员（会话 id 或句柄，本机或远端引用） |
+| `host-face` | S 是目标所在宿主的进程面**代目标结算**：自动回执（§4.3 的 `onBehalfOf` 等于 R.team / `deliveredTo`），且（跨主机时）S 是对端的进程标签（R 记有 `peerHost` 时必须等于它，#139 收掉 N1 在 scope 关闭下的残余），且 claim 来自 R 的对端：`S.claimOrigin` 等于 R.peer 的 origin，**或** claim 名片的公钥等于 R 出生时记下的 `peerKey`（#139：同一台主机绑 0.0.0.0 时以局域网 URL 签名、却被经 Tailscale 拨入，地址写法不同但密钥相同），（本机时）`S.caller === session` 且 `S.ingress === 'local'` |
 | `legacy` | R 无 `auth`/`deliveredTo`（旧行）——兼容放行，单独计数 |
 
 其余一律 **`off-chain`**。三条结算路径都过同一判定：
@@ -297,6 +304,14 @@ interface Settler {
    结果写入不经过回执路径，不受此门控：flood-guard 拒绝时记 `failed`（`flood-guard.ts:95`），以及 #115 新增的
    `refuseNoWait` 对异步拒绝记 `failed`。它们的写入方就是本机，没有"结算方"可比对。
 3. CLI 信箱分流（§4.5）。
+
+#139 补齐的出生事实（行上可选字段，归档原样复制，`restore()` 逐字段白名单、不合形即丢、行照常恢复）：
+
+- `peerKey` / `peerHost`：远端出站行派发时对端签名名片的公钥与 session 标签（只在远端出站行上）；
+- `deliveredTo`：实际投中的成员——远端画布行取请求携带的成员句柄，本机候选取被 steer 的会话句柄，
+  入站行取接收会话的句柄（与 target 相同时省略）；
+- 本机候选的出站行带 `auth`（`ingress: 'local'`、`proof: 'in-process'`，规则取 joined 面的同队判定，
+  不设闸的调用者记 `local-exempt`），`restore()` 对出站行只接受这种记录。
 
 ### 4.3 自动回执的 turn 归属（#61 的直接成因）
 
@@ -328,7 +343,7 @@ interface Settler {
 - 写入有界环 `settlementRefusals`（cap 64，随 `tasks.json` 持久化）：
   `{taskId, at, settler:{caller, proof, ingress}, reason, head}`（`head` = 回执首行，`SUMMARY_CAP`）；
 - `logger.warn` + 事件 `a2a/receipt-refused`；`/state` 新块 `settlementRefusals`；
-- wire 面响应体追加 `settlement: {status: 'refused', reason}`（追加字段；送达结果不变）。
+- wire 面响应体追加 `settlement: {status: 'refused', reason, task_id}`（追加字段；送达结果不变；#139 已补，只在 enforce 拒绝回执头所指的行时出现，observe 下从不出现）。
 
 封闭原因码：
 
@@ -372,8 +387,15 @@ wire 面先结算再分流到 CLI 信箱（`wire.ts:572` → `:577`）；本机�
   - 仍通过且 `basis` 有交集 → 不列出；
   - 仍通过但依据换了 → `basis-changed`；
   - 不再通过 → `would-revoke`，带当前拒绝文本。
-  `via: 'peer-org'` 的行每次都重判（其依据不在版本里，§2.3）。
-- **产出**：有界环 `affectedTasks`（cap 32，持久化于 `auth-versions.json`），每条
+  **靠缓存的行**每次读取都重判（其依据不在版本里，§2.3）。"靠缓存"按**最近一次通过的判定**的规则认定，
+  没有判定过才看出生记录的 `via`：出生是 `remote-ref-samezone`、远端引用被删后只靠热缓存以 `peer-org` 通过的行
+  （列为 `basis-changed`）从此也每次重判，缓存过期后即列为 `would-revoke`；反之重新被固定规则放行后就不再每次重判。
+  **启动那一次（cause `boot`）不判靠缓存的行**：启动时名片缓存是空的，判出来必然全是 `would-revoke` 假阳性；
+  启动后第一次惰性读取再重判它们。
+- **去重**：每个任务记住最近一次上报（`would-revoke` 只认判决，不认拒绝文本；`basis-changed` 认新规则与新依据）。
+  同一判决不再重复列出——一次 `/leave` 连写三个存储、或之后一次无关的名单变化，都不会把同一任务再列一遍；
+  判决变了（恢复、换依据、再撤）才再列。任务不在未结算行里了即忘掉它的记录。此记忆不跨重启：重启后下一次版本移动重新上报。
+- **产出**：有界环 `affectedTasks`（cap 32，持久化于 `auth-versions.json`，tmp+rename 原子替换），每条
   `{at, from_version, to_version, cause, tasks:[{taskId, direction, caller, target, verdict, reason}]}`；
   `/state` 新块、`logger.info`、事件 `a2a/authorization-affected`。
 - **不做**：不取消、不改行状态、不 nudge、不阻止回执。`enforce`（恢复/结算前按当前名单重校验）
@@ -412,8 +434,8 @@ wire 面先结算再分流到 CLI 信箱（`wire.ts:572` → `:577`）；本机�
 | # | 切片 | 档位 | 完成判据 |
 |---|---|---|---|
 | S1 | `src/task-auth.ts` 纯模块：类型、封闭枚举、`allowlistVersion()`；准入三函数改为返回结构化判定的 `a2aCallerAdmission`，旧函数做包装 | 中 | 现有拒绝文本逐字不变（全量测试绿）；版本哈希黄金向量；§2.2 每条规则一例单测；锚点重锚、`verify-architecture` 通过 |
-| S2 | 入站授权记录：wire 面与本机候选在出生时挂 `auth`；台账持久化/恢复/归档带 `auth`；`auth-versions.json`；`/state` 投影 | **高**（台账） | 升级后新生入站行 `auth` 覆盖率 100%；`restore` 往返与坏块丢弃测试；旧 `tasks.json` 原样加载 |
-| S3 | 出站 `sender`：`trackOwedTask` 三处调用传入；`/state`、`a2a_tasks`、CLI `a2a tasks` 显示 | **高**（台账） | 升级后新生出站行 `sender` 覆盖率 100%；团队验证器 L9 改按 `sender.id`/`auth.caller` 分桶，**"home" 桶 = 0**（`legacy` 桶单列，24h 后为 0） |
+| S2 | 入站授权记录：wire 面在出生时挂 `auth`（本机候选移入 S4，`auth-versions.json` 移入 S6）；台账持久化/恢复/归档带 `auth`；`/state` 投影 | **高**（台账） | 升级后新生入站行 `auth` 覆盖率 100%；`restore` 往返与坏块丢弃测试；旧 `tasks.json` 原样加载 |
+| S3 | 出站 `sender`：`trackOwedTask` 三处调用传入；`/state`、`a2a_tasks`、CLI `a2a tasks` 显示 | **高**（台账） | 升级后新生出站行 `sender` 覆盖率 100%；团队验证器 L9 改按 `sender.kind:sender.id`/`auth.caller` 分桶，**"home" 桶 = 0**（`legacy` 桶单列，24h 后为 0） |
 | S4 | 结算判定（`observe` 默认）：`settleAndAnnounce(message, settler)`；授权链；`settledBy` 入归档；`settlementRefusals` 环；`recordOutcome` 门控；本机 CLI 信箱路径结算顺序对齐 | **高**（协议+台账） | 各原因码单测；`observe` 下现有测试零改动通过；**评审席团队验证器新判据："结算方不在授权链上的结算数 = 0"**（数据源：`/state` 归档行 `settledBy.chain_role === 'off-chain'` 计数 + `settlementRefusals` 中 `would-refuse` 计数，两者均为 0 才算通过） |
 | S5 | 自动回执 turn 归属与绑定：waiter 按 steer 头部定位自己的消费事件（`consumedAt`）；`flushFinals` 逐 waiter 从 `consumedAt` 之后取第一条 final；信封 `onBehalfOf`/`authRef`；`target_busy` 仅审计 | **高**（协议） | 两条回归：**(a)** 目标正忙、steer 在同一 turn 内被消费 → 该 turn 的 final 产出回执；**(b)** 目标正忙、steer 到下一 turn 才被消费 → 当前 turn 的 final 不产出回执，下一 turn 的 final 产出。另：新键对旧解析器无影响（`receipt-envelope-v2.spec.ts` 扩例） |
 | S6 | 受影响任务清单（observe）：惰性 + 变更点触发；重判；`affectedTasks` 环 | 中 | 移除画布成员 → 出现 `would-revoke` 条目；断言**无任何行状态变化**；版本未变时零产出 |

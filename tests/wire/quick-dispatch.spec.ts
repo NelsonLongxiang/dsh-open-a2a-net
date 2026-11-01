@@ -124,10 +124,14 @@ describe('quick dispatch control route (0.6.9)', () => {
     expect(body.task_status).toBe('TASK_STATE_DELIVERED')
     expect(member.steer).toHaveBeenCalled()
     // The ledger row is keyed to the canvas team and visible to a2a_tasks.
-    const tasks = await m.ctx.tools.get('a2a_tasks')!.execute({}, { signal: new AbortController().signal } as never) as { tasks: Array<{ taskId: string; team: string }> }
+    const tasks = await m.ctx.tools.get('a2a_tasks')!.execute({}, { signal: new AbortController().signal } as never) as { tasks: Array<{ taskId: string; team: string; sender?: unknown }> }
     const owed = tasks.tasks.find(task => task.taskId === body.task_id)
     expect(owed).toBeDefined()
     expect(owed!.team).toBe('dsh/canvas/ops')
+    // #121: quick dispatch is the host's own gesture — bucketed under the
+    // host process label; the live session team it borrows on the wire rides
+    // apart as `face`, so the dispatch never lands in that session's seat.
+    expect(owed!.sender).toEqual({ kind: 'host', id: 'quick-dispatch-test', face: 'dsh/aaaabbbb' })
   })
 
   it('fails over to a remote canvas member with the member handle on the wire', async () => {

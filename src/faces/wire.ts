@@ -23,8 +23,46 @@ import { TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_MAX_LIMIT } from '../session-trans
 import { refuseIfBudgetExhausted } from '../recursion-guard.ts'
 import { peerPayloadFingerprint, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from '../idempotency-store.ts'
 import { briefOf, type TaskLedger } from '../task-ledger.ts'
+import { taskIdRefusal } from '../receipt.ts'
+import { buildAuthorization, claimCovers, refusalOf, type Admission, type AuthProof, type SettlementRefusal, type Settler } from '../task-auth.ts'
 import type { Config } from '../index.ts'
 import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from '../transport-caps.ts'
+
+/**
+ * #139 (design §4.4): add `settlement: {status:'refused', reason, task_id}`
+ * to whatever JSON object this response ends with. The delivery face has
+ * many exits (mailbox, no-wait, waiting, refusals); deferring the head until
+ * the body is known keeps one rule for all of them. A non-JSON or non-object
+ * body is sent unchanged.
+ */
+export function withSettlementField(res: ServerResponse, settlement: SettlementRefusal): void {
+  const writeHead = res.writeHead.bind(res) as (status: number, headers?: Record<string, string | number>) => ServerResponse
+  const end = res.end.bind(res) as (body?: string) => ServerResponse
+  let head: { status: number; headers: Record<string, string | number> } | undefined
+  ;(res as unknown as { writeHead: unknown }).writeHead = (status: number, headers?: Record<string, string | number>) => {
+    head = { status, headers: { ...(headers ?? {}) } }
+    return res
+  }
+  ;(res as unknown as { end: unknown }).end = (body?: string) => {
+    let out = body
+    if (typeof body === 'string') {
+      try {
+        const parsed: unknown = JSON.parse(body)
+        if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) out = JSON.stringify({ ...parsed, settlement })
+      } catch { /* not JSON: unchanged */ }
+    }
+    if (head !== undefined) {
+      if (out !== undefined && 'Content-Length' in head.headers) head.headers['Content-Length'] = Buffer.byteLength(out)
+      writeHead(head.status, head.headers)
+    }
+    return end(out)
+  }
+}
+
+/** The origin of a card URL for the authorization record; the raw text, bounded, when it does not parse. */
+const originOf = (url: string): string => {
+  try { return new URL(url).origin } catch { return url.slice(0, 256) }
+}
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
@@ -56,7 +94,7 @@ export type NativeRoundOutcome =
   | { readonly ok: false; readonly error: string; readonly phase?: 'pre-dispatch'; readonly aborted?: boolean }
 
 /** What verifyOriginClaim answers (see index.ts; reason widens to string here — the faces only interpolate it). */
-export type OriginClaimResult = { ok: true; caller: string; callerUrl: string; card: A2aPeerCard } | { ok: false; reason: string }
+export type OriginClaimResult = { ok: true; caller: string; callerUrl: string; card: A2aPeerCard; cli?: true } | { ok: false; reason: string }
 
 /** Same scheme/host/port; false when either side is empty or malformed. */
 function sameOrigin(a: string, b: string): boolean {
@@ -73,7 +111,7 @@ export interface WireDeps {
   readonly sessionNodes: Map<string, Agent>
   readonly joinedSessions: JoinedSessions
   readonly idempotencyStore: IdempotencyStore
-  readonly verifyOriginClaim: (req: IncomingMessage) => Promise<OriginClaimResult>
+  readonly verifyOriginClaim: (req: IncomingMessage, options?: { readonly cli?: boolean }) => Promise<OriginClaimResult>
   readonly callerLinkedToThisHost: (caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined) => boolean
   /** This host's own card URL (read when a request lands; set once the web server settles). */
   readonly ownCardUrl: string
@@ -81,11 +119,18 @@ export interface WireDeps {
   readonly bumpLegacyInbound: () => void
   readonly secretEqual: (a: string, b: string) => boolean
   readonly a2aCallerRefusal: (caller: string, targetTeam?: string) => string | undefined
+  /** #114 S2: the same decision with the rule and basis that admitted the caller. */
+  readonly a2aCallerAdmission: (caller: string, targetTeam?: string) => Admission
+  /** #114 S2: this host's allowlist version right now (design §2.3). */
+  readonly allowlistVersionNow: () => string
+  /** #114 S6: record the version if it moved and re-judge affected tasks (observe only). */
+  readonly observeAuthorization: (cause: string) => void
   readonly scanSessionLogList: () => Array<{ id: string; mtimeMs: number; sizeBytes: number }>
   readonly readSessionLogTail: (id: string, limit: number) => { ok: true; id: string; messages: Array<{ role: string; text: string; time?: number }> } | { ok: false; error: string }
   readonly taskLedger: TaskLedger
   readonly refuseIfFlooded: (caller: string, message: string, team: string, taskId: string, res: ServerResponse) => boolean
-  readonly settleAndAnnounce: (message: string) => void
+  /** Settles a receipt; returns the enforce refusal of the row its header names (#139), if any. */
+  readonly settleAndAnnounce: (message: string, settler?: Settler) => SettlementRefusal | undefined
   readonly touchWakeDemand: () => void
   readonly session: string
   readonly resolveAgentForTeam: (team: string) => Agent | undefined
@@ -93,9 +138,13 @@ export interface WireDeps {
   readonly canvasLiveAgent: (name: string | undefined, skipId?: string) => Agent | undefined
   readonly wakeColdTeam: (team: string, skipId?: string) => ColdWake
   readonly probeConsumption: (agent: Agent, taskId: string) => boolean
+  /** A session's own node team (`<zone>/<id8>`), the handle a member is known by. */
+  readonly sessionTeamOf: (agent: Agent) => string
   readonly steerRelay: (agent: Agent, text: string, sender?: string) => void
   readonly fromClause: (from: string) => string
-  readonly armReceiptAutosend: (target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string) => void
+  readonly armReceiptAutosend: (target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number) => void
+  /** #114 S5: the target's session-log length, read just before a steer. */
+  readonly eventCountOf: (agent: Agent) => number
   readonly receiptExpectationOf: (receiptTarget: string) => 'receivable' | 'process-label'
   readonly armAsyncNudge: (agent: Agent, team: string, taskId: string, delayMs: number) => void
   readonly liveAgent: () => Agent | undefined
@@ -129,6 +178,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     recordActivity,
     secretEqual,
     a2aCallerRefusal,
+    a2aCallerAdmission,
+    allowlistVersionNow,
+    observeAuthorization,
     scanSessionLogList,
     readSessionLogTail,
     taskLedger,
@@ -140,9 +192,11 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     canvasLiveAgent,
     wakeColdTeam,
     probeConsumption,
+    sessionTeamOf,
     steerRelay,
     fromClause,
     armReceiptAutosend,
+    eventCountOf,
     receiptExpectationOf,
     armAsyncNudge,
     liveAgent,
@@ -527,6 +581,15 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             res.end(payload)
             return
           }
+          // #114 S5: a caller-born id must be header-safe — refused before
+          // admission, claim or steer, so nothing is booked under it.
+          const idRefusal = taskIdRefusal(taskId)
+          if (idRefusal !== undefined) {
+            const payload = JSON.stringify({ error: idRefusal, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+            return
+          }
           // Phase-3 admission (owner ruling 2026-09-01, decision-seat
           // filed): an inbound direct delivery must show a SHARED team.
           // Local-zone callers are judged synchronously and exactly — the
@@ -540,21 +603,27 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // (0.6.15: the rule now lives in a2aCallerRefusal so the
           // read-only /a2a/log face admits callers by exactly the same
           // standard as message delivery.)
-          const callerRefusal = a2aCallerRefusal(caller, team)
-          if (callerRefusal !== undefined) {
+          const admission = a2aCallerAdmission(caller, team)
+          const callerRefusal = refusalOf(admission)
+          if (callerRefusal !== undefined || !admission.ok) {
             recordActivity('in', team, caller === '' ? 'anonymous' : caller, false)
             const payload = JSON.stringify({ error: callerRefusal, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
             return
           }
+          // #114 S6: a version an inbound record is born under is always in the history.
+          observeAuthorization('lazy')
+          // #114 S2: the version is read at admission time, beside the decision it explains.
+          const admittedAt = { version: allowlistVersionNow(), at: Date.now() }
           // gh#9+gh#10 OriginClaim on the delivery face (M1): an envelope
           // that is present but unverifiable rejects untrusted-origin; an
           // ABSENT envelope during the window walks on with a counted
           // legacyInbound warn (the operator watches the tail drain), and
           // after the window closes it rejects like a failed signature —
           // N3 proves a NAME's linkability, never key possession.
-          const claim = await verifyOriginClaim(req)
+          // gh#133: the delivery face is where a deposited CLI identity signs its routes.
+          const claim = await verifyOriginClaim(req, { cli: true })
           if (!claim.ok) {
             if (claim.reason !== 'absent' || config.originClaimWindow === false) {
               recordActivity('in', team, caller, false)
@@ -565,6 +634,11 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             }
             d.bumpLegacyInbound()
           }
+          // A verified claim proves the caller only when its signed zone covers it (review of PR #134 P1),
+          // and the host face only when it was signed from this very host (round 2: a zone name is not an origin).
+          const callerProof: AuthProof = !claim.ok ? 'legacy-window'
+            : claimCovers(caller, claim.caller) && (admission.rule !== 'host-face' || originOf(claim.callerUrl) === originOf(d.ownCardUrl))
+              ? 'origin-claim' : 'claim-mismatch'
           if (refuseIfBudgetExhausted(req, res, team, caller, taskId, taskLedger)) return
           // Server-side idempotency (P3/B3): one key, one execution inside
           // the window. Same key + same payload ⇒ replay; different payload
@@ -591,7 +665,12 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // receipt resolves the task it echoes, whichever wait semantics
           // carried it here. Correlation is bookkeeping only — the message
           // steers on exactly as before.
-          settleAndAnnounce(message)
+          // #114 S4: the settler is this delivery's caller, as proven here. A CLI identity's claim URL
+          // is not a host's origin (its origin is unconstrained), so it never vouches for one (review of PR #140 P1-2).
+          // #139: the claim's card key names the host whatever address spelling it signed with.
+          const refusedSettlement = settleAndAnnounce(message, { caller, proof: callerProof, ...(claim.ok && claim.cli !== true ? { claimOrigin: originOf(claim.callerUrl), claimKey: claim.card.publicKey } : {}), ingress: 'wire' })
+          // #139 (design §4.4): every answer this delivery gets carries the refusal.
+          if (refusedSettlement !== undefined) withSettlementField(res, refusedSettlement)
           // gh#45 CLI mailbox (wire face): a delivery targeting a DEPOSITED
           // CLI handle never resolves a session and never wakes — it lands
           // in the deposit's mailbox and answers delivered. Placement here
@@ -662,10 +741,13 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // latched, so the post-steer read alone would answer a false
                 // consumed:true and strand the message.
                 const runningBeforeSteer = probeConsumption(target, taskId)
+                // #114 S5: the receipt's consumption search starts here, so an
+                // older steer of a reused id in the history never anchors it.
+                const steerFloor = eventCountOf(target)
                 steerRelay(target, `[A2A direct] (task ${taskId}) ${fromClause(from)} (routed to ${team}) sent:\n\n${message}\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`, from === 'an unknown node' ? undefined : from)
                 steered = true
                 recordActivity('in', team, caller, true)
-                armReceiptAutosend(target, taskId, receiptTarget, message)
+                armReceiptAutosend(target, taskId, receiptTarget, message, steerFloor)
                 // v0.5.23 (async-stall): "delivered" only proves the steer call
                 // returned — not that a turn started. An idle-phase steer wakes
                 // the driver, but a maintenance/abort window latches the wake for
@@ -693,7 +775,22 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // settle. The row itself stays: stall visibility and the
                 // nudge still apply to the TARGET side.
                 const receiptExpectation = receiptExpectationOf(receiptTarget)
-                taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message))
+                // #114 S2: the row is born with its immutable authorization record.
+                const auth = buildAuthorization(admission, {
+                  caller,
+                  proof: callerProof,
+                  ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}),
+                  ingress: 'wire',
+                  allowlistVersion: admittedAt.version,
+                  target: team,
+                  receiptTarget,
+                  receivedAt: admittedAt.at,
+                  // Audit only: a cold session's activation window also reads as running.
+                  targetBusy: runningBeforeSteer,
+                })
+                // #139: the member that actually received it answers for a canvas or bare-zone team.
+                const deliveredTo = sessionTeamOf(target)
+                taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message), auth, deliveredTo === team ? undefined : deliveredTo)
                 armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
                 const payload = JSON.stringify({
                   routed: true,

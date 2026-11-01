@@ -62,7 +62,7 @@ type Mounted = {
   dispose: () => Promise<void>
 }
 
-async function mount(seeds: { joined?: string[]; canvas?: Array<{ name: string; members: string[] }> } = {}): Promise<Mounted> {
+async function mount(seeds: { joined?: string[]; canvas?: Array<{ name: string; members: string[] }> } = {}, overrides: Partial<Config> = {}): Promise<Mounted> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
@@ -96,6 +96,7 @@ async function mount(seeds: { joined?: string[]; canvas?: Array<{ name: string; 
     remoteRowsTtlMs: 15_000,
     dshHome: home,
     cardTtlMs: 172_800_000,
+    ...overrides,
   } satisfies Config)
   return {
     ctx,
@@ -156,6 +157,73 @@ describe('canvas team routing', () => {
     expect(b.steer).not.toHaveBeenCalled()
     const steered = (a.steer.mock.calls[0]?.[0] as { content: Array<{ type: string; text: string }> }).content[0]
     expect(steered?.text).toContain('routed to dsh/canvas/alpha')
+  })
+
+  it('a joined session routing through the local candidate is recorded as its own seat (#121)', async () => {
+    const m = await mount({ joined: ['session-aaaa1111', 'session-bbbb2222'], canvas: [{ name: 'alpha', members: ['session-aaaa1111', 'session-bbbb2222'] }] })
+    mounted.push(m.dispose)
+    const a = makeAgent('session-aaaa1111', [])
+    const b = makeAgent('session-bbbb2222', [])
+    answering(m.ctx, a)
+    answering(m.ctx, b)
+    goLive(m, a, b)
+    await postJson(m.port, '/__dsh_a2a/join', { id: 'session-aaaa1111' })
+    await postJson(m.port, '/__dsh_a2a/join', { id: 'session-bbbb2222' })
+    // A routes async to its own canvas team: the live tier skips the
+    // initiating member (issue #41) and steers B in-process.
+    const result = await m.ctx.tools.get('a2a_route')!.execute(
+      { team: 'dsh/canvas/alpha', message: 'local seat check', async: true },
+      { signal: new AbortController().signal, agent: a } as unknown as ToolRunContext,
+    ) as { ok: boolean; task_id?: string; task_status?: string }
+    expect(result.ok).toBe(true)
+    expect(result.task_status).toBe('TASK_STATE_DELIVERED')
+    expect(b.steer).toHaveBeenCalledTimes(1)
+    expect(a.steer).not.toHaveBeenCalled()
+    const state = await (await fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { tasks: Array<{ taskId: string; peer: string; sender?: unknown }> }
+    const row = state.tasks.find(task => task.taskId === result.task_id)
+    expect(row?.peer).toBe('local')
+    expect(row?.sender).toEqual({ kind: 'session', id: 'dsh/aaaa1111' })
+  })
+
+  it('a local auto-receipt names onBehalfOf and pins the outbound row authorization by authRef (#123, #139)', async () => {
+    const m = await mount({ joined: ['session-aaaa1111', 'session-bbbb2222'], canvas: [{ name: 'alpha', members: ['session-aaaa1111', 'session-bbbb2222'] }] })
+    mounted.push(m.dispose)
+    const a = makeAgent('session-aaaa1111', [])
+    const b = makeAgent('session-bbbb2222', [])
+    // B plays a real turn: the session log records the steer it consumed,
+    // then the turn answers and goes idle.
+    // The turn runs after the steer call returns, as a real driver's does.
+    ;(b as unknown as { steer: unknown }).steer = vi.fn((message: { content: Array<{ type: string; text?: string }> }) => {
+      setTimeout(() => {
+        b.session.events.push({ type: 'user/message', data: { content: message.content } })
+        b.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'local work done' }] } } })
+        m.ctx.emit('agent/status', { agent: b, status: 'idle' })
+      }, 10)
+    })
+    goLive(m, a, b)
+    await postJson(m.port, '/__dsh_a2a/join', { id: 'session-aaaa1111' })
+    await postJson(m.port, '/__dsh_a2a/join', { id: 'session-bbbb2222' })
+    const result = await m.ctx.tools.get('a2a_route')!.execute(
+      { team: 'dsh/canvas/alpha', message: 'local receipt check', async: true },
+      { signal: new AbortController().signal, agent: a } as unknown as ToolRunContext,
+    ) as { ok: boolean; task_id?: string }
+    expect(result.ok).toBe(true)
+    // The receipt rides the in-process candidate back to A's node team,
+    // framed by the local steer header like any delivery.
+    const header = `[A2A receipt] task ${String(result.task_id)} `
+    const receiptText = (): string | undefined => {
+      const framed = a.steer.mock.calls
+        .map(call => ((call[0] as { content: Array<{ text?: string }> }).content[0]?.text ?? ''))
+        .find(text => text.includes(header))
+      return framed === undefined ? undefined : framed.slice(framed.indexOf(header))
+    }
+    for (let i = 0; i < 25 && receiptText() === undefined; i++) await new Promise(resolve => { setTimeout(resolve, 20) })
+    const text = receiptText()
+    expect(text).toContain('local work done (auto)')
+    // #139: the local path records its admission on the caller's outbound
+    // row (design §2.4), so the auto-receipt pins that record by authRef.
+    const envelope = JSON.parse(String(text).split('\n')[1] ?? '{}') as Record<string, unknown>
+    expect(envelope).toEqual({ outcome: 'completed', idempotencyKey: result.task_id, onBehalfOf: 'dsh/bbbb2222', authRef: expect.stringMatching(/^[0-9a-f]{16}$/) })
   })
 
   it('fails over to the next member after remove-member', async () => {
@@ -290,5 +358,117 @@ describe('canvas team routing', () => {
     const state = await (await fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { canvas: { teams: Array<{ name: string; members: string[] }> } }
     const alpha = state.canvas.teams.find(t => t.name === 'alpha')
     expect(alpha?.members).toEqual([])
+  })
+})
+
+/**
+ * #124 (#114 S6): an allowlist change re-judges unsettled inbound tasks and
+ * records the affected ones — observe only. Removing the caller from the
+ * shared canvas leaves its in-flight task `would-revoke`, while no ledger row
+ * changes and nothing is cancelled, nudged or blocked.
+ */
+describe('#114 S6 affected tasks on a canvas change', () => {
+  type StateView = {
+    tasks: Array<Record<string, unknown>>
+    tasksDead: Array<Record<string, unknown>>
+    archived: Array<Record<string, unknown>>
+    authorization: {
+      version: string
+      history: Array<{ version: string; cause: string }>
+      affected: Array<{ from_version: string | null; to_version: string; cause: string; tasks: Array<{ taskId: string; direction: string; caller: string; target: string; verdict: string; reason: string }> }>
+    }
+  }
+  const state = async (port: number): Promise<StateView> => (await (await fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json()) as StateView
+
+  async function seated(): Promise<{ m: Mounted; a: ReturnType<typeof makeAgent>; b: ReturnType<typeof makeAgent>; taskId: string }> {
+    // Team-scoped admission on, as the production default: the record must
+    // name a real rule for a change to be able to revoke it.
+    const m = await mount({ joined: ['session-aaaa1111', 'session-bbbb2222'], canvas: [{ name: 'ops', members: ['session-aaaa1111', 'session-bbbb2222'] }] }, { teamScopeRouting: true })
+    mounted.push(m.dispose)
+    const a = makeAgent('session-aaaa1111', [])
+    const b = makeAgent('session-bbbb2222', [])
+    goLive(m, a, b)
+    await postJson(m.port, '/__dsh_a2a/join', { id: 'session-aaaa1111' })
+    await postJson(m.port, '/__dsh_a2a/join', { id: 'session-bbbb2222' })
+    // A delivers to B through the wire face: admitted as a canvas member.
+    const res = await postJson(m.port, '/a2a/direct', { team: 'dsh/bbbb2222', message: 'please review', caller_session: 'dsh/aaaa1111', wait: false })
+    const body = await res.json() as { delivered?: boolean; task_id?: string; error?: string }
+    expect(body.error).toBeUndefined()
+    expect(body.delivered).toBe(true)
+    const born = (await state(m.port)).tasks.find(task => task.taskId === body.task_id) as { auth?: { via?: string; basis?: string[] } } | undefined
+    expect(born?.auth).toMatchObject({ via: 'canvas-member', basis: ['dsh/canvas/ops'] })
+    return { m, a, b, taskId: String(body.task_id) }
+  }
+
+  it('removing the caller from the canvas records a would-revoke entry, and no row changes', async () => {
+    const { m, b, taskId } = await seated()
+    const before = await state(m.port)
+    const row = before.tasks.find(task => task.taskId === taskId)
+    expect(row?.direction).toBe('inbound')
+    expect(before.authorization.affected).toEqual([])
+    const steersBefore = b.steer.mock.calls.length
+
+    const removed = await postJson(m.port, '/__dsh_a2a/canvas', { action: 'remove-member', name: 'ops', id: 'session-aaaa1111' })
+    expect((await removed.json() as { ok?: boolean }).ok).toBe(true)
+
+    const after = await state(m.port)
+    expect(after.authorization.version).not.toBe(before.authorization.version)
+    expect(after.authorization.history[0]?.cause).toBe('canvas')
+    const entry = after.authorization.affected[0]
+    expect(entry).toMatchObject({ from_version: before.authorization.version, to_version: after.authorization.version, cause: 'canvas' })
+    expect(entry?.tasks).toEqual([{
+      taskId, direction: 'inbound', caller: 'dsh/aaaa1111', target: 'dsh/bbbb2222', verdict: 'would-revoke',
+      reason: expect.stringContaining('caller "dsh/aaaa1111"') as unknown as string,
+    }])
+    // Observe only: every ledger row is exactly as it was, nothing archived,
+    // nothing dead-lettered, and the target was not steered again.
+    expect(after.tasks).toEqual(before.tasks)
+    expect(after.tasksDead).toEqual(before.tasksDead)
+    expect(after.archived).toEqual(before.archived)
+    expect(b.steer.mock.calls.length).toBe(steersBefore)
+  })
+
+  it('an unchanged allowlist produces no entries however often it is read', async () => {
+    const { m } = await seated()
+    const first = await state(m.port)
+    for (let i = 0; i < 3; i++) {
+      const again = await state(m.port)
+      expect(again.authorization.version).toBe(first.authorization.version)
+      expect(again.authorization.affected).toEqual([])
+      expect(again.authorization.history).toEqual(first.authorization.history)
+    }
+    // A write that changes nothing the admission reads (a duplicate add) moves nothing either.
+    await postJson(m.port, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: 'session-bbbb2222' })
+    expect((await state(m.port)).authorization.affected).toEqual([])
+  })
+
+  it('a change that keeps the caller admitted on the same canvas lists nothing', async () => {
+    const { m } = await seated()
+    // A third member joins the canvas: the version moves, but A and B still share ops.
+    const c = makeAgent('session-cccc3333', [])
+    goLive(m, c)
+    await postJson(m.port, '/__dsh_a2a/join', { id: 'session-cccc3333' })
+    await postJson(m.port, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: 'session-cccc3333' })
+    const view = await state(m.port)
+    expect(view.authorization.history.length).toBeGreaterThan(1)
+    expect(view.authorization.affected).toEqual([])
+  })
+  it('#138 R3: one /leave gesture (three store writes) lists the task once', async () => {
+    const { m, taskId } = await seated()
+    await postJson(m.port, '/__dsh_a2a/leave', { id: 'session-aaaa1111' })
+    const after = await state(m.port)
+    expect(after.authorization.history.length).toBeGreaterThan(2)
+    expect(after.authorization.affected.filter(entry => entry.tasks.some(task => task.taskId === taskId))).toHaveLength(1)
+  })
+
+  it('#138 R3: an unrelated later change does not list an already-reported task again', async () => {
+    const { m, taskId } = await seated()
+    await postJson(m.port, '/__dsh_a2a/canvas', { action: 'remove-member', name: 'ops', id: 'session-aaaa1111' })
+    expect((await state(m.port)).authorization.affected).toHaveLength(1)
+    const before = (await state(m.port)).authorization.version
+    await postJson(m.port, '/__dsh_a2a/canvas', { action: 'create', name: 'unrelated' })
+    const after = await state(m.port)
+    expect(after.authorization.version).not.toBe(before)
+    expect(after.authorization.affected.filter(entry => entry.tasks.some(task => task.taskId === taskId))).toHaveLength(1)
   })
 })

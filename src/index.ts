@@ -41,21 +41,22 @@ import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
 import { applyOwnerSettings, type OwnerSettings } from './owner-settings.ts'
-import { CliDepositStore } from './cli-deposit.ts'
+import { CLI_HANDLE_RE, CliDepositStore } from './cli-deposit.ts'
 import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
-import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type ReceiptResolvedInfo } from './task-ledger.ts'
-import { formatReceipt, parseReceipt } from './receipt.ts'
+import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type OutboundBirth, type ReceiptResolvedInfo, type Sender, type TaskRecord } from './task-ledger.ts'
+import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
-import { signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
-import { callerAdmission, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type PeerOrgEntry } from './task-auth.ts'
+import { signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
+import { AuthObserver, type AffectedEntry } from './auth-observer.ts'
+import { allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type SettlementMode, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
 // `ctx.timer` on Context; the runtime service is mounted by app compositions.
@@ -131,6 +132,8 @@ export type { ReceiptResolvedInfo } from './task-ledger.ts'
 declare module '@deepseek-ai/cordis' {
   interface Events {
     'a2a/receipt-resolved'(payload: ReceiptResolvedInfo): void
+    /** #114 S6: an allowlist change left unsettled tasks on another footing (observe mode — nothing is cancelled). */
+    'a2a/authorization-affected'(payload: AffectedEntry): void
   }
 }
 
@@ -163,6 +166,8 @@ export interface Config {
   readonly team: string
   /** S4 fix 3: audit (default) or refuse host-side (agent-less) routing calls. */
   readonly gateAgentLessCalls: 'audit' | 'refuse'
+  /** #114 S4: settlement authorization — off, observe (record would-refuse, settle as before), enforce. */
+  readonly settlementAuth: SettlementMode
   /**
    * Publish this node's `/.well-known/agent-card.json` on the shared web
    * server (peer discovery). Requires the web server in the composition;
@@ -405,6 +410,7 @@ export const Config: s<Config> = s.object({
   team: s.string().default('dsh'),
   /** S4 fix ③: host-side (agent-less) routing calls — audit them (default) or refuse outright. */
   gateAgentLessCalls: s.union(['audit', 'refuse'] as const).default('audit'),
+  settlementAuth: s.union(['off', 'observe', 'enforce'] as const).default('observe'),
   announce: s.boolean().default(false),
   agentName: s.string().default('DeepSeek Harness A2A node'),
   peers: s.array(s.string()).default([]),
@@ -1014,7 +1020,27 @@ const reportLoopRing = new Map<string, number[]>()
    * the consumer's own discipline — keep seam listeners synchronous.
    * @param message - the inbound or relayed message text.
    */
-  function settleAndAnnounce(message: string): void {
+  function settleAndAnnounce(message: string, settler?: Settler): SettlementRefusal | undefined {
+    // #114 S4: judge the settler against each correlated row's authorization
+    // chain (design §4.2). `observe` records what enforce would refuse and
+    // settles as before; `enforce` keeps a refused row owed. A call with no
+    // settler (a path that knows none) is not judged.
+    const parsedForJudge = parseReceipt(message)
+    const judge = settler === undefined || config.settlementAuth === 'off' ? undefined : {
+      enforce: config.settlementAuth === 'enforce',
+      settler: { caller: settler.caller, proof: settler.proof, ingress: settler.ingress },
+      check: (row: TaskRecord, echo: boolean) => judgeSettlement(row, settler, {
+        hostLabel: session,
+        membersOf: (team: string) => {
+          const name = parseCanvasTeamName(team)
+          if (name === undefined) return undefined
+          // Canvas members by session id and by handle, as the faces store them.
+          return canvasStore.membersOf(name).flatMap(m => (m.includes('/') ? [m] : [m, `${config.team}/${id8(m)}`]))
+        },
+        ...(parsedForJudge?.envelope?.onBehalfOf !== undefined ? { onBehalfOf: parsedForJudge.envelope.onBehalfOf } : {}),
+        echo,
+      }),
+    }
     // W7 slice-2 hook 3: a receipt that correlates an id THIS node's
     // idempotency ledger claimed records the receipt's human line as that
     // key's outcome. Parsed DIRECTLY off the receipt codec — a claimed key
@@ -1024,30 +1050,48 @@ const reportLoopRing = new Map<string, number[]>()
     // the envelope's controlled-vocabulary outcome is never a product and
     // must not be recorded as one. First-write wins inside the store, so a
     // late receipt never overwrites a precise sync-hook record.
-    const parsed = parseReceipt(message)
+    const parsed = parsedForJudge
     if (parsed !== null && parsed.taskId !== '') {
       const line = parsed.summary.trim()
-      if (line !== '') {
+      // #114 S4 (design §4.2.2): under enforce, the receipt hook writes the
+      // outcome a /a2a/query answers only for a row THIS ledger owes and
+      // whose settler is on the chain — anyone sending a receipt line could
+      // otherwise rewrite another caller's answer.
+      const row = judge?.enforce === true ? taskLedger.find(parsed.taskId) : undefined
+      const allowed = judge?.enforce !== true || (row !== undefined && judge.check(row, false).ok)
+      if (line !== '' && allowed) {
         idempotencyStore.recordOutcome(parsed.taskId, { status: 'completed', reply: line.slice(0, SUMMARY_CAP) })
       }
     }
-    const resolved = taskLedger.resolveFromMessage(message)
+    // A header that names an owed row and comes back unresolved was refused
+    // (enforce): that is the verdict — the echo fallback must not judge the
+    // same message a second time.
+    const owedRow = parsed !== null && parsed.taskId !== '' ? taskLedger.find(parsed.taskId) : undefined
+    const owedByHeader = owedRow !== undefined
+    // #139 (design §4.4): an enforce refusal of the row the header names is
+    // told to the sender on the wire response, not only in /state.
+    const headerVerdict = judge?.enforce === true && owedRow !== undefined ? judge.check(owedRow, false) : undefined
+    const resolved = taskLedger.resolveFromMessage(message, judge)
+    if (resolved === undefined && owedByHeader) {
+      return headerVerdict !== undefined && !headerVerdict.ok ? { status: 'refused', reason: headerVerdict.reason, task_id: parsed!.taskId } : undefined
+    }
     if (resolved === undefined) {
       // F5 (settlement integrity): the formal envelope missed — an inbound
       // message that still echoes a pending task id means the peer
       // demonstrably responded to it, which settles the debt even when the
       // receipt formality never rode the reply.
-      const echoed = taskLedger.resolveEcho(message)
+      const echoed = taskLedger.resolveEcho(message, judge)
       if (echoed.length > 0) {
         logger.info(`a2a: ${String(echoed.length)} pending task(s) settled by content echo (${echoed.join(', ')})`)
       }
-      return
+      return undefined
     }
     try {
       ctx.emit('a2a/receipt-resolved', resolved)
     } catch (error) {
       logger.warn(`a2a: receipt-resolved listener rejected: ${String(error)}`)
     }
+    return undefined
   }
 
   // Server-side idempotency keys (work-order P3): a caller-born task id
@@ -1374,7 +1418,13 @@ const reportLoopRing = new Map<string, number[]>()
   /** Minimal event shape the title/activity/receipt-flush readers need. */
   type SessionEventLike = {
     readonly type?: string
-    readonly data?: { readonly message?: { readonly content?: ReadonlyArray<{ readonly type?: string; readonly text?: string }> } }
+    readonly data?: {
+      readonly message?: { readonly content?: ReadonlyArray<{ readonly type?: string; readonly text?: string }> }
+      /** user/message events carry their blocks here (session-transcript.ts). */
+      readonly content?: ReadonlyArray<{ readonly type?: string; readonly text?: string }>
+      /** turn/end: why the turn ended (dsh-session TurnEndReason; `completed` is success). */
+      readonly reason?: { readonly kind?: string }
+    }
   }
 
   function sessionEventsOf(agent: Agent): readonly (SessionEventLike | undefined)[] {
@@ -1824,7 +1874,7 @@ const reportLoopRing = new Map<string, number[]>()
     whenWebServerSettled((webServer) => {
       // gh#77 B1: the admin faces live in src/faces/admin.ts.
       registerAdminFaces(webServer, {
-        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch,
+        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url,
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
@@ -2174,7 +2224,7 @@ const reportLoopRing = new Map<string, number[]>()
    */
   const receiptWarnAt = new Map<string, number>()
 
-  function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string): void {
+  function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {
     if (!callerTeam || callerTeam === '') return
     // Never synthesize a receipt for a receipt: answering an envelope by mail
     // would ping-pong both ledgers.
@@ -2185,6 +2235,10 @@ const reportLoopRing = new Map<string, number[]>()
     // guards refuse that shape outright; this keeps the receipt half dead
     // even if a future path reopens it.
     if (callerTeam === `${config.team}/${agentId8(target)}`) return
+    // #114 S5: the waiter is tied to THIS task's steer — only a final the
+    // target produced after consuming `[A2A direct] (task <id>)` answers it
+    // (flushFinals). A busy target's other work line can no longer settle
+    // a task it has not read yet (the #61 direct-bb27ec94 shape).
     registerFinalWaiter(target, (finalText, placeholder) => {
       // W7 slice-2: a host-authored placeholder (flush timeout, dead
       // session) must not synthesize a COMPLETION receipt — a wedged
@@ -2200,7 +2254,15 @@ const reportLoopRing = new Map<string, number[]>()
       const summary = `${finalText.trim().replace(/\s+/g, ' ').slice(0, SUMMARY_CAP) || 'done'} (auto)`
       // v2 envelope projection: header stays byte-compatible for every
       // legacy correlator; the machine JSON rides exactly one following line.
-      const receipt = formatReceipt(taskId, summary, { outcome: 'completed', idempotencyKey: taskId })
+      // #114 S5 binding: onBehalfOf names the session that did the work (the
+      // host is only its courier); authRef pins the inbound authorization
+      // record the delivery was born with — recorded for audit, judged by S4.
+      const receipt = formatReceipt(taskId, summary, {
+        outcome: 'completed',
+        idempotencyKey: taskId,
+        onBehalfOf: sessionTeamOf(target),
+        ...(row?.auth !== undefined ? { authRef: authorizationRef(row.auth) } : {}),
+      })
       // Three-tier hard order (work-order P2): caller lane first; on failure
       // escalate ONCE to the owner mailbox — the outcome never evaporates
       // just because the original waiter died. Archive holds truth regardless.
@@ -2226,18 +2288,27 @@ const reportLoopRing = new Map<string, number[]>()
       ).catch(() => {
         // Ladder exhausted: the throttled breadcrumbs above already said why.
       })
-    })
+    }, { taskId, steerFloor })
   }
 
   /**
    * Register one final-reply waiter for the agent and arm its flush timeout.
    * @param agent - the agent whose next assistant message answers the waiter.
    * @param answer - how the waiter's reply is delivered.
+   * @param attribution - #114 S5: attribute by consumption — only the turn
+   *   that consumed this task's `[A2A direct] (task <id>)` user message
+   *   answers the waiter; the search starts at `steerFloor`, the log length
+   *   read just before the steer, so an older steer of a reused id never
+   *   anchors it.
    * @returns the registered waiter (for callers that may retract it).
    */
-  function registerFinalWaiter(agent: Agent, answer: (text: string, placeholder?: boolean) => void): FinalWaiter {
+  function registerFinalWaiter(agent: Agent, answer: (text: string, placeholder?: boolean) => void, attribution?: { taskId: string; steerFloor: number }): FinalWaiter {
     const key = String(agent.id)
-    const waiter: FinalWaiter = { answer, sinceEvents: sessionEventsOf(agent).length }
+    const waiter: FinalWaiter = {
+      answer,
+      sinceEvents: sessionEventsOf(agent).length,
+      ...(attribution !== undefined && attribution.taskId !== '' ? { taskId: attribution.taskId, scannedTo: attribution.steerFloor } : {}),
+    }
     waiter.timeoutDisposer = armFlushTimeout(key, waiter)
     pendingFinals.set(key, [...(pendingFinals.get(key) ?? []), waiter])
     return waiter
@@ -2526,7 +2597,7 @@ ${message}`
   /** unboundInbound: accepted unbound (v1) envelopes — the drain gauge for
    *  closing originClaimUnboundWindow. */
   let unboundInboundCount = 0
-  function verifyOriginClaim(req: IncomingMessage): Promise<OriginClaimVerdict> {
+  function verifyOriginClaim(req: IncomingMessage, options?: { readonly cli?: boolean }): Promise<OriginClaimVerdict> {
     return verifyOriginClaimOf(req, {
       cardCache,
       fetch: fetchImpl,
@@ -2534,7 +2605,37 @@ ${message}`
       unboundOpen: config.originClaimUnboundWindow !== false,
       onUnbound: () => { unboundInboundCount += 1 },
       now: Date.now(),
+      ...(options?.cli === true ? { cliDeposit: cliDepositCard } : {}),
     })
+  }
+
+  /**
+   * gh#133: the deposited card a CLI claim is judged by, or undefined when
+   * the claim URL is not a deposit face of a handle held here (the ordinary
+   * zone path then decides). The URL's last path segments must be
+   * `/a2a/cli/<handle>` (any prefix or origin: the CLI dials its home under
+   * whatever address it can — the deposited key, not the address, is the
+   * proof). origin-claim.ts verifies the signature under that card and the
+   * signed name against the handle's own; the claim's caller is the full
+   * HANDLE, so it covers exactly that handle — never a namesake CLI, a zone
+   * session, or the host face (review of PR #135 P1).
+   */
+  function cliDepositCard(callerUrl: string): CliDepositCard | undefined {
+    let path: string
+    try { path = new URL(callerUrl).pathname } catch { return undefined }
+    const segment = /\/a2a\/cli\/([^/]+)\/?$/.exec(path)?.[1]
+    if (segment === undefined) return undefined
+    let handle: string
+    try { handle = decodeURIComponent(segment) } catch { return undefined }
+    const shape = CLI_HANDLE_RE.exec(handle)
+    const deposit = shape === null ? undefined : cliDeposits.get(handle)
+    if (shape === null || deposit === undefined) return undefined
+    try {
+      const verdict = verifyCard(JSON.parse(deposit.cardJson), Date.now())
+      return { handle, name: shape[1]!, card: verdict.ok && verdict.card.team === handle ? verdict.card : undefined }
+    } catch {
+      return { handle, name: shape[1]!, card: undefined }
+    }
   }
 
   /**
@@ -2561,6 +2662,8 @@ ${message}`
    *      Our operator's config anchors; the card shadow corroborates.
    */
   function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {
+    // gh#133 review: a CLI identity's card (team = its handle) is never a host link, whatever face asks.
+    if (callerCard !== undefined && CLI_HANDLE_RE.test(callerCard.team)) return false
     // Basis 1, same-host membership (review second-round M-fix): "self" is
     // an ORIGIN equality, not a zone-name equality. `caller === config.team`
     // granted unconditionally in a single-zone fleet (the deployment
@@ -2669,6 +2772,71 @@ ${message}`
     return refusalOf(a2aCallerAdmission(caller, targetTeam))
   }
 
+  /**
+   * #114 S2: the allowlist version over the operator-controlled records the
+   * admission rules read (design §2.3). The peer-card canvasOrg is left out:
+   * a record admitted by it carries `peer-org:<team>` in its basis instead.
+   */
+  function allowlistVersionNow(): string {
+    return allowlistVersion(allowlistInputsNow())
+  }
+
+  /** The records allowlistVersionNow hashes (design §2.3), read live. */
+  function allowlistInputsNow(): AllowlistInputs {
+    const handle = (session: string): string => `${config.team}/${id8(session)}`
+    return {
+      zone: config.team,
+      scope: [config.teamScopeRouting, config.originClaimWindow !== false],
+      joined: joinedSessions.list().map(handle),
+      roster: teamMemberships.list().flatMap(entry => entry.teams.map(team => [handle(entry.session), team] as const)),
+      // Local members by their handle (design §2.3), remote refs as they are stored.
+      canvas: canvasStore.list().map(name => [canvasTeamOf(name), canvasStore.membersOf(name).map(m => (m.includes('/') ? m : handle(m)))] as const),
+      cli: cliDeposits.list().map(row => row.handle),
+      links: config.peers.map(peer => { try { return new URL(peer).origin } catch { return peer } }),
+    }
+  }
+
+  /*
+   * #114 S6 (design §5): when the version moves, the unsettled tasks born
+   * under another one are re-judged against today's records and the
+   * affected ones recorded — OBSERVE ONLY: nothing is cancelled, no row's
+   * state changes, no session is nudged, no receipt is blocked. Called
+   * lazily (state/tasks reads, inbound admission) and at the known change
+   * points (the stores' onChange hooks below); never on a timer.
+   */
+  const authObserver = new AuthObserver(join(home, 'a2a', 'auth-versions.json'))
+
+  function observeAuthorization(cause: string): void {
+    const inputs = allowlistInputsNow()
+    const entry = authObserver.observe({
+      version: allowlistVersion(inputs),
+      inputs: () => JSON.parse(canonicalAllowlist(inputs)) as unknown,
+      cause,
+      rows: () => taskLedger.list(),
+      // A local-candidate record (#139) is judged as the local candidate admits; every other one by the wire face.
+      judge: (caller, target, ingress) => (ingress === 'local' ? localCandidateAdmission(admissionRecords, caller, target) : callerAdmission(admissionRecords, caller, target)),
+    })
+    if (entry === undefined) return
+    const revoke = entry.tasks.filter(task => task.verdict === 'would-revoke').length
+    logger.info(`a2a: allowlist ${entry.from_version ?? '(none)'} → ${entry.to_version} (${entry.cause}): ${String(entry.tasks.length)} affected task(s), ${String(revoke)} would-revoke — observe only, nothing cancelled`)
+    try {
+      ctx.emit('a2a/authorization-affected', entry)
+    } catch (error) {
+      logger.warn(`a2a: authorization-affected listener rejected: ${String(error)}`)
+    }
+  }
+
+  /** The /state `authorization` block: the version history (newest first, inputs omitted) and the affected entries. */
+  function authorizationView(): { version: string; history: Array<{ version: string; at: number; cause: string }>; affected: readonly AffectedEntry[] } {
+    observeAuthorization('lazy')
+    return {
+      version: allowlistVersionNow(),
+      history: authObserver.history().map(({ version, at, cause }) => ({ version, at, cause })),
+      affected: authObserver.entries(),
+    }
+  }
+
+
   /* ── Session-log read faces (shared by the local control route and the
      peer /a2a/log face): both answer from <dshHome>/sessions with
      identical semantics — artifact existence is the only gate (archived
@@ -2739,6 +2907,9 @@ ${message}`
       bumpLegacyInbound: () => { legacyInboundCount += 1 },
       secretEqual,
       a2aCallerRefusal,
+      a2aCallerAdmission,
+      allowlistVersionNow,
+      observeAuthorization,
       scanSessionLogList,
       readSessionLogTail,
       taskLedger,
@@ -2751,9 +2922,11 @@ ${message}`
       canvasLiveAgent,
       wakeColdTeam,
       probeConsumption,
+      sessionTeamOf,
       steerRelay,
       fromClause,
       armReceiptAutosend,
+      eventCountOf: (agent: Agent) => sessionEventsOf(agent).length,
       receiptExpectationOf,
       armAsyncNudge,
       liveAgent,
@@ -3106,6 +3279,14 @@ ${message}`
    */
   const cardCache = new Map<string, CardCacheEntry>()
   const cardCacheInFlight = new Map<string, Promise<A2aPeerCard | undefined>>()
+  // #114 S6: the change hooks and the boot observation start only once every
+  // record admission reads exists (the peer-org basis reads cardCache above).
+  // The cache is still empty here, so the observer skips cache-resting rows
+  // on 'boot' (#138 R1); the first lazy read rechecks them.
+  ctx.effect(() => canvasStore.onChange(() => observeAuthorization('canvas')), 'a2a: S6 canvas observer')
+  ctx.effect(() => joinedSessions.onChange(() => observeAuthorization('joined')), 'a2a: S6 joined observer')
+  ctx.effect(() => teamMemberships.onChange(() => observeAuthorization('roster')), 'a2a: S6 roster observer')
+  observeAuthorization('boot')
 
   /**
    * The from-line display name (owner ruling, claim 8ea4150f94): a bare
@@ -4000,8 +4181,38 @@ ${message}`
    * decision seat: sync Q&A must not enter pending; only real
    * receipt-awaiting rows stay on the book). A synchronous completion
    * already carries its answer and owes nothing.
+   * #114 S3: `sender` is the real originator the row is attributed to.
    */
-  const trackOwedTask = (taskId: string, team: string, peer: string, result: A2aRouteResult, callbackAddress?: string, brief?: string): void => {
+  /**
+   * #139: what an in-process async delivery learned about its own birth —
+   * the admission it ran under (design §2.4) and the member that received it
+   * — handed from dispatchLocalCandidate to the caller's outbound row, keyed
+   * by task id and taken (deleted) by whoever dispatched.
+   */
+  const localBirths = new Map<string, OutboundBirth>()
+  const localBirthOf = (team: string, callerSession: string | undefined, receiptTarget: string | undefined, deliveredTo: string): OutboundBirth => {
+    const admission = localCandidateAdmission(admissionRecords, callerSession, team)
+    const caller = callerSession ?? session
+    const auth = admission.ok && caller !== ''
+      ? buildAuthorization(admission, { caller, proof: 'in-process', ingress: 'local', allowlistVersion: allowlistVersionNow(), target: team, receiptTarget: receiptTarget ?? caller, receivedAt: Date.now() })
+      : undefined
+    return { ...(auth !== undefined ? { auth } : {}), ...(deliveredTo !== team ? { deliveredTo } : {}) }
+  }
+  /**
+   * #139: the peer facts a remote outbound row is born with — the signed
+   * card's key and session label (the host identity whatever spelling of its
+   * address dialed it) and, for a canvas row, the member handle the request
+   * carried. The memo makes the card read free after the directory walk.
+   */
+  const peerBirth = async (fetch: ZoneCardFetch, candidate: string, member: string | undefined): Promise<OutboundBirth> => {
+    const card = await fetch(candidate).catch(() => undefined)
+    return {
+      ...(card !== undefined && card.publicKey !== '' ? { peerKey: card.publicKey } : {}),
+      ...(card !== undefined && card.session !== '' ? { peerHost: card.session } : {}),
+      ...(member !== undefined ? { deliveredTo: member } : {}),
+    }
+  }
+  const trackOwedTask = (taskId: string, team: string, peer: string, result: A2aRouteResult, callbackAddress: string | undefined, brief: string | undefined, sender: Sender, birth?: OutboundBirth): void => {
     if (!result.ok) return
     // Native-teams bridge rounds emit no A2A receipt in this slice: booking
     // them as receipt-owed would fill the owed book with rows no receipt can
@@ -4014,10 +4225,10 @@ ${message}`
     // row whose only exit was the dead-letter sweep (57 dead letters, half
     // this shape).
     if (callbackAddress === undefined) {
-      taskLedger.trackReceiptless(taskId, team, peer, result.context_id === '' ? undefined : result.context_id, brief)
+      taskLedger.trackReceiptless(taskId, team, peer, result.context_id === '' ? undefined : result.context_id, brief, sender, birth)
       return
     }
-    taskLedger.track(taskId, team, peer, result.context_id === '' ? undefined : result.context_id, brief)
+    taskLedger.track(taskId, team, peer, result.context_id === '' ? undefined : result.context_id, brief, sender, birth)
   }
 
   /**
@@ -4220,6 +4431,16 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const callbackAddress = routableCallerLabel(callerSession) || callerSession === config.team
         ? callerSession
         : undefined
+      // #114 S3: the outbound row records who really sent it instead of
+      // every row reading as "home". A session is always its own node team
+      // (<zone>/<id8>) — joined or not, initiator or not — so one seat keeps
+      // one bucket. An agent-less call is the host process itself; the label
+      // it borrowed on the wire (quick dispatch rides a live joined session's
+      // team) is kept apart as `face`, so a human's workbench gesture never
+      // lands in that session's seat.
+      const sender: Sender = agent !== undefined
+        ? { kind: 'session', id: sessionTeamOf(agent) }
+        : { kind: 'host', id: session, ...(callerSession !== undefined && callerSession !== session ? { face: callerSession } : {}) }
       const fetch = memoizedCardFetch()
       // The task id is born at the caller (idempotency key semantics): both
       // dispatchers carry the one id, the peer request echoes it, and the
@@ -4231,9 +4452,11 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // publishers, then zone delegations, deduplicated by URL.
       const failures: string[] = []
       const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, signal, args.async === true, taskId, callbackAddress, agent === undefined ? undefined : String(agent.id))
+      const localBirth = localBirths.get(taskId)
+      localBirths.delete(taskId)
       if (outcome !== undefined) {
         if (outcome.ok) {
-          trackOwedTask(taskId, args.team, 'local', outcome, callbackAddress, briefOf(args.message))
+          trackOwedTask(taskId, args.team, 'local', outcome, callbackAddress, briefOf(args.message), sender, localBirth)
           return outcome as unknown as Record<string, JsonValue>
         }
         failures.push(`local: ${outcome.error}`)
@@ -4281,7 +4504,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         }
         const result = await dispatchPeerCandidate(candidate, target, args.message, args.context_id, signal, callerSession, peerAsync, taskId, callbackAddress)
         if (result.ok || signal.aborted) {
-          if (result.ok) trackOwedTask(taskId, args.team, candidate, result, callbackAddress, briefOf(args.message))
+          if (result.ok) trackOwedTask(taskId, args.team, candidate, result, callbackAddress, briefOf(args.message), sender, await peerBirth(fetch, candidate, target === args.team ? undefined : target))
           const notes: string[] = []
           if (result.ok && args.async === true && result.task_status === 'TASK_STATE_DELIVERED' && !routableCallerLabel(callerSession)) {
             notes.push(unroutableCallerNote(String(callerSession ?? session)))
@@ -4327,6 +4550,12 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: joinedRefusal, code: -32000 }
     }
+    // #114 S5: the same header-safe id rule the wire face enforces.
+    const idRefusal = taskIdFromCaller === undefined ? undefined : taskIdRefusal(taskIdFromCaller)
+    if (idRefusal !== undefined) {
+      recordActivity('out', team, callerSession ?? 'local', false)
+      return { ok: false, error: idRefusal, code: -32000 }
+    }
     const canvasName = parseCanvasTeamName(team)
     // Issue #41 shape note: the caller label is the WIRE form (<zone>/<id8>
     // or a session label) and quick-dispatch BORROWS a live session's team
@@ -4345,8 +4574,14 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // gh#45 CLI mailbox: a delivery targeting a DEPOSITED CLI handle is
     // local by definition — it lands in the deposit's mailbox (the CLI
     // polls while alive; receipts and messages never wake anything).
+    // The settler of any receipt on this path: this host's own caller (in-process).
+    const localSettler: Settler = { caller: callerSession ?? '', proof: 'in-process', ingress: 'local' }
     const cliRow = cliDeposits.get(team)
     if (cliRow !== undefined) {
+      // #114 S4 (design §4.5): a receipt dropped into a local CLI mailbox is
+      // exactly the settlement a CLI-originated task waits for — settle it,
+      // as the wire face settles before ITS mailbox split.
+      settleAndAnnounce(message, localSettler)
       cliDeposits.mail(team, callerSession ?? 'unknown', message)
       recordActivity('in', team, callerSession ?? 'peer', true)
       logger.info(`a2a: cli mailbox delivery for ${team} (from ${callerSession ?? 'unknown'})`)
@@ -4360,7 +4595,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // A receipt relayed between same-host sessions (the answering session
     // routing its `[A2A receipt]` back over the in-process candidate)
     // correlates here too — same contract, no HTTP on the path.
-    settleAndAnnounce(message)
+    settleAndAnnounce(message, localSettler)
     const taskId = taskIdFromCaller ?? `direct-${Math.random().toString(16).slice(2, 10)}`
     const flight = beginRoute(team, 'local')
     if (asyncMode) {
@@ -4438,8 +4673,12 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           ? callbackAddress
           : routable ? callerSession : undefined
         const receiptHint = callerTeam === undefined ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${callerTeam}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
+        // #114 S5: the consumption search starts at the pre-steer log length.
+        const steerFloor = sessionEventsOf(target).length
         steerRelay(target, `[A2A direct] (task ${taskId}) ${fromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam)
-        armReceiptAutosend(target, taskId, callerTeam, message)
+        armReceiptAutosend(target, taskId, callerTeam, message, steerFloor)
+        // #139: the caller's outbound row is born with this admission and the member that received it.
+        if (taskIdFromCaller !== undefined) localBirths.set(taskIdFromCaller, localBirthOf(team, callerSession, callerTeam, sessionTeamOf(target)))
         endRoute(flight)
         recordActivity('out', team, 'local', true)
         return {
@@ -4623,6 +4862,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
    */
   async function dispatchAnywhere(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode: boolean, taskId?: string): Promise<void> {
     const local = await dispatchLocalCandidate(team, message, callerSession, contextId, signal, asyncMode, taskId)
+    // A background send books no outbound row: its birth facts have no row to go on.
+    if (taskId !== undefined) localBirths.delete(taskId)
     if (local !== undefined) {
       if (!local.ok) throw new Error(local.error)
       return
@@ -4742,6 +4983,14 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         const parent = request.callbackTarget.parentSessionId
         if (sessionNodes.has(parent) || joinedSessions.has(parent)) callbackAddress = `${config.team}/${id8(parent)}`
       }
+      // #114 S3: the submitting session's node team, but only when the
+      // transport names a session this host knows (a node, a join, or a live
+      // root) — an unchecked id would let any submitter mint a seat. Anything
+      // else (absent, unknown, non-string) is attributed to the host label.
+      const parentSession: unknown = request.callbackTarget?.parentSessionId
+      const knownParent = typeof parentSession === 'string' && parentSession !== ''
+        && (sessionNodes.has(parentSession) || joinedSessions.has(parentSession) || liveRoots.has(parentSession))
+      const sender: Sender = { kind: 'bridge', id: knownParent ? `${config.team}/${id8(parentSession)}` : session }
       for (const candidate of candidates) {
         // Capability gate per candidate, like a2a_route's loop: a
         // delivery:async submit never dials a peer whose signed card does
@@ -4784,7 +5033,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           if (abort.aborted) break
           continue
         }
-        trackOwedTask(taskId, request.handle, candidate, result, callbackAddress, briefOf(request.message))
+        trackOwedTask(taskId, request.handle, candidate, result, callbackAddress, briefOf(request.message), sender, await peerBirth(fetch, candidate, undefined))
         const contextId = request.contextId ?? (result.context_id !== '' ? result.context_id : `ctx-${Math.random().toString(16).slice(2, 10)}`)
         if (result.task_status === 'TASK_STATE_COMPLETED') {
           return { kind: 'completed', text: result.reply, taskId, contextId }
@@ -5068,6 +5317,15 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
                 direction: { type: 'string', enum: ['inbound', 'outbound'] },
                 receiptExpected: { type: 'boolean' },
                 reason: { type: 'string', enum: ['fire-forget', 'unconsumed'] },
+                sender: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    kind: { type: 'string', required: true, enum: ['session', 'host', 'bridge'] },
+                    id: { type: 'string', required: true },
+                    face: { type: 'string' },
+                  },
+                },
               },
             },
           },
@@ -5084,6 +5342,15 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
                 resolvedAt: { type: 'number', required: true },
                 summary: { type: 'string' },
                 brief: { type: 'string' },
+                sender: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    kind: { type: 'string', required: true, enum: ['session', 'host', 'bridge'] },
+                    id: { type: 'string', required: true },
+                    face: { type: 'string' },
+                  },
+                },
               },
             },
           },
@@ -5129,13 +5396,14 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       }],
     },
     presentCall: () => ({ card: 'generic', title: 'A2A task ledger', kind: 'other', rawInput: null }),
-    execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; status: 'pending' | 'dead'; deadAt?: number; reason?: 'fire-forget' | 'unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean }[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string }[]; archivedTotal: number }> => {
+    execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; status: 'pending' | 'dead'; deadAt?: number; reason?: 'fire-forget' | 'unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean; sender?: Sender }[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; sender?: Sender }[]; archivedTotal: number }> => {
       a2aJoinGateRefusal(exec)
+      observeAuthorization('lazy')
       const archiveAll = taskLedger.archive()
       return {
         ok: true,
         tasks: taskLedger.list().map(task => ({ ...task })),
-        archive: archiveAll.slice(0, 5).map(({ taskId, team, startedAt, resolvedAt, summary, brief }) => ({ taskId, team, startedAt, resolvedAt, ...(summary !== undefined && summary !== '' ? { summary } : {}), ...(brief !== undefined ? { brief } : {}) })),
+        archive: archiveAll.slice(0, 5).map(({ taskId, team, startedAt, resolvedAt, summary, brief, sender }) => ({ taskId, team, startedAt, resolvedAt, ...(summary !== undefined && summary !== '' ? { summary } : {}), ...(brief !== undefined ? { brief } : {}), ...(sender !== undefined ? { sender } : {}) })),
         archivedTotal: archiveAll.length,
       }
     },
@@ -5255,13 +5523,20 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
      * stand-in (flush timeout, dead session), NOT the session's product. */
     readonly answer: (text: string, placeholder?: boolean) => void
     readonly sinceEvents: number
+    /** #114 S5: set ⇒ attributed by the consumption of this task's steer, not by {@link sinceEvents}. */
+    readonly taskId?: string
+    /** #114 S5: index of the user/message that consumed the steer, once seen. */
+    consumedAt?: number
+    /** #114 S5: events below this index were already searched for the consumption. */
+    scannedTo?: number
     timeoutDisposer?: () => void
   }
   const pendingFinals = new Map<string, FinalWaiter[]>()
   const armFlushTimeout = (agentId: string, waiter: FinalWaiter): (() => void) => {
     return ctx.timer.timeout(() => {
       const entries = pendingFinals.get(agentId)
-      if (entries === undefined) return
+      // An already-answered waiter is gone from the list: never answer twice.
+      if (entries === undefined || !entries.includes(waiter)) return
       const kept = entries.filter(entry => entry !== waiter)
       if (kept.length === 0) pendingFinals.delete(agentId)
       else pendingFinals.set(agentId, kept)
@@ -5281,24 +5556,106 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       pendingFinals.delete(agentId)
       return
     }
+    // #114 S5: each waiter is answered from its OWN floor. The old shared
+    // floor (the minimum sinceEvents) answered every waiter with one text, so
+    // a busy target's other work line settled tasks it had not read yet.
     const events = sessionEventsOf(agent)
-    const floor = Math.min(...entries.map(entry => entry.sinceEvents))
-    let reply = ''
-    for (let index = events.length - 1; index >= floor; index--) {
+    const answered: Array<{ entry: FinalWaiter; reply: string; placeholder?: true }> = []
+    // Logs that record turn boundaries bound each waiter to its consuming
+    // turn; a log without any marker falls back to "this idle ends it".
+    const turnMarked = events.some(event => event?.type === 'turn/start' || event?.type === 'turn/end')
+    for (const entry of entries) {
+      if (entry.taskId !== undefined) {
+        entry.consumedAt ??= consumptionIndex(events, entry.taskId, entry.scannedTo ?? entry.sinceEvents)
+        if (entry.consumedAt === undefined) {
+          // Not consumed yet (the steer waits for the running turn's next
+          // step, or the next turn): no final belongs to it — keep waiting.
+          entry.scannedTo = events.length
+          continue
+        }
+        // The consuming turn's window: up to its own `turn/end`, never into a
+        // following turn (back-to-back turns can run with no idle between).
+        // Without turn markers, this idle is the turn's end.
+        let end = events.length
+        let completed = true
+        if (turnMarked) {
+          const close = turnEndIndex(events, entry.consumedAt + 1)
+          if (close === undefined) {
+            // The consuming turn is still open: wait for its turn/end.
+            continue
+          }
+          end = close
+          completed = events[close]?.data?.reason?.kind === 'completed'
+        }
+        // The waiter closes HERE with that turn's last text. A turn that said
+        // nothing, or ended aborted/failed/blocked, did no work this host can
+        // vouch for: close as a placeholder — no receipt, the row stays owed.
+        const reply = latestAssistantText(events, entry.consumedAt + 1, end)
+        answered.push(reply !== '' && completed ? { entry, reply } : { entry, reply: '', placeholder: true })
+        continue
+      }
+      const reply = latestAssistantText(events, entry.sinceEvents)
+      if (reply !== '') answered.push({ entry, reply })
+    }
+    if (answered.length === 0) return
+    const kept = entries.filter(entry => !answered.some(done => done.entry === entry))
+    if (kept.length === 0) pendingFinals.delete(agentId)
+    else pendingFinals.set(agentId, kept)
+    for (const { entry, reply, placeholder } of answered) {
+      entry.timeoutDisposer?.()
+      if (placeholder === true) entry.answer('The consuming turn produced no completed reply.', true)
+      else entry.answer(reply)
+    }
+  }
+
+  /** #114 S5: the index of the first `turn/end` at or after `from`, or undefined while the turn is open. */
+  function turnEndIndex(events: readonly (SessionEventLike | undefined)[], from: number): number | undefined {
+    for (let index = from; index < events.length; index++) {
+      if (events[index]?.type === 'turn/end') return index
+    }
+    return undefined
+  }
+
+  /** #114 S5: the steer header both delivery paths write; the id is captured whole, never prefix-matched. */
+  const STEER_HEADER = /^\[A2A direct\] \(task ([^\s)]+)\) /
+
+  /**
+   * #114 S5: the index of the user/message that consumed one task's steer —
+   * the first at or after `from` whose first text block opens with the
+   * `[A2A direct] (task <id>)` header for exactly this id.
+   * @param from - first index not yet searched (starts at the pre-steer log length).
+   * @returns the index, or undefined while the steer is still unconsumed.
+   */
+  function consumptionIndex(events: readonly (SessionEventLike | undefined)[], taskId: string, from: number): number | undefined {
+    for (let index = from; index < events.length; index++) {
+      const event = events[index]
+      if (event?.type !== 'user/message') continue
+      const first = event.data?.content?.find(block => block.type === 'text' && typeof block.text === 'string')
+      if (STEER_HEADER.exec(first?.text ?? '')?.[1] === taskId) return index
+    }
+    return undefined
+  }
+
+  /**
+   * The newest assistant text at or after `floor`: at an idle flush that is
+   * the final of the turn that just ended. Textless messages (tool-only, or
+   * empty/whitespace text) are skipped, so a turn ending on a tool call still
+   * answers with the last thing it said. '' when no message has text.
+   * @param end - exclusive upper bound (default: the whole log).
+   */
+  function latestAssistantText(events: readonly (SessionEventLike | undefined)[], floor: number, end: number = events.length): string {
+    for (let index = end - 1; index >= floor; index--) {
       const event = events[index]
       if (event === undefined || event.type !== 'assistant/message') continue
       const content = event.data?.message?.content
       if (content === undefined) continue
-      reply = content
+      const text = content
         .filter((block): block is { type: 'text'; text: string } => block.type === 'text' && typeof block.text === 'string')
         .map(block => block.text)
         .join('\n')
-      break
+      if (text.trim() !== '') return text
     }
-    if (reply !== '') {
-      for (const entry of entries) entry.answer(reply)
-      pendingFinals.delete(agentId)
-    }
+    return ''
   }
 
   // Every inbound route is a direct route (final semantics), so the idle

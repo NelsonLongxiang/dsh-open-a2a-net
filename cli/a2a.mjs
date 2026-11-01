@@ -145,7 +145,8 @@ function originClaimFor(base) {
   return () => {
     const ts = Date.now()
     const signature = edSign(undefined, Buffer.from(JSON.stringify([id.name, callerUrl, ts])), privateKey).toString('base64')
-    return { 'X-A2A-Caller': id.name, 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Ts': String(ts), 'X-A2A-Sig': signature }
+    // gh#133: the header names the host verifies (X-A2A-Ts/-Sig were never read, so every envelope looked absent).
+    return { 'X-A2A-Caller': id.name, 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Caller-Ts': String(ts), 'X-A2A-Caller-Sig': signature }
   }
 }
 
@@ -520,6 +521,18 @@ function listCapped(rows, cap, line) {
   if (rows.length > cap) console.log(`  … ${String(rows.length - cap)} more (--json lists all)`)
 }
 
+// #114 S3: a row's real sender rides the end of its line; rows from older
+// hosts (or inbound rows) carry none and print nothing extra. A host sender's
+// borrowed wire label (face) follows in parentheses. Control characters are
+// stripped — the ids come from the host's state face, not from this CLI.
+function senderTail(row) {
+  const s = row.sender
+  if (s === null || typeof s !== 'object' || typeof s.kind !== 'string' || typeof s.id !== 'string') return ''
+  const clean = text => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+  const face = typeof s.face === 'string' && s.face !== '' ? ` (face ${clean(s.face)})` : ''
+  return ` · sender ${clean(s.kind)}:${clean(s.id)}${face}`
+}
+
 // ── route: caller-born task ids, safe resend (gh#112) ───────────────────
 // The host's idempotency store runs one task id at most once: the same id
 // with the same payload answers 409 replay, a different payload 409
@@ -552,6 +565,17 @@ const RETRY_DELAYS_MS = (() => {
   return [unit, unit * 2, unit * 4]
 })()
 
+/** A refusal of the envelope itself as not derivable — never a reply that merely quotes that text. */
+function notDerivable(text) {
+  try {
+    const out = JSON.parse(text)
+    return out !== null && typeof out === 'object' && out.routed !== true && out.delivered !== true &&
+      typeof out.error === 'string' && out.error.startsWith('untrusted-origin: OriginClaim verification failed (not-derivable)')
+  } catch {
+    return false
+  }
+}
+
 /** Resends ran out: the task may or may not have landed, and the same id is the safe way to try again. */
 function notConfirmed(body, attempt) {
   console.error(`[${String(body.task_id)}] not confirmed after ${String(attempt + 1)} attempt${attempt === 0 ? '' : 's'} — resend safely with: --task ${String(body.task_id)}${body.wait === true ? ' --sync' : ''}`)
@@ -562,14 +586,26 @@ function notConfirmed(body, attempt) {
  * the same task id. Answers the last response, or rethrows the last error.
  */
 async function postDirect(body) {
+  let signed = true
   for (let attempt = 0; ; attempt += 1) {
     try {
       const res = await fetch(`${home()}/a2a/direct`, {
         method: 'POST',
         // A fresh OriginClaim per attempt: the signature carries its own timestamp.
-        headers: { 'Content-Type': 'application/json', ...originClaimFor(home())(), ...keyHeaders() },
+        headers: { 'Content-Type': 'application/json', ...(signed ? originClaimFor(home())() : {}), ...keyHeaders() },
         body: JSON.stringify(body),
       })
+      // gh#133 compatibility: a host from before the fix cannot derive a CLI
+      // identity and refuses the now-readable envelope as not-derivable. That
+      // refusal comes before the host records the task id, so resending the
+      // same id unsigned once — as every older CLI sent — is safe: it rides
+      // the OriginClaim window exactly as before.
+      if (signed && res.status === 200 && notDerivable(await res.clone().text())) {
+        console.error(`[${String(body.task_id)}] the host cannot verify this identity's signature (not-derivable: most likely a host from before gh#133) — resending once unsigned; it is accepted only while the host's OriginClaim window is open`)
+        signed = false
+        attempt -= 1
+        continue
+      }
       if (res.status < 500) return { res, attempts: attempt + 1 }
       if (attempt >= RETRY_DELAYS_MS.length) {
         // A 5xx comes from a proxy or a crash, never from the host's own
@@ -739,11 +775,11 @@ async function main() {
     const archived = s.archived ?? []
     if (has('--json')) { console.log(JSON.stringify({ pending, dead, archived }, null, 2)); return }
     console.log(`pending (${String(pending.length)}):`)
-    listCapped(pending, 20, t => `  ${String(t.taskId)} → ${String(t.team)} ${String(t.direction ?? '')}`)
+    listCapped(pending, 20, t => `  ${String(t.taskId)} → ${String(t.team)} ${String(t.direction ?? '')}${senderTail(t)}`)
     console.log(`dead (${String(dead.length)}):`)
-    listCapped(dead, 20, t => `  ${String(t.taskId)} → ${String(t.team)} (${String(t.reason ?? '?')})`)
+    listCapped(dead, 20, t => `  ${String(t.taskId)} → ${String(t.team)} (${String(t.reason ?? '?')})${senderTail(t)}`)
     console.log(`archived (${String(archived.length)}):`)
-    listCapped(archived, 20, t => `  ${String(t.taskId)} ${String(t.outcome ?? '?')}${t.endedBy !== undefined && t.endedBy !== 'receipt' ? ` (${String(t.endedBy)})` : ''}`)
+    listCapped(archived, 20, t => `  ${String(t.taskId)} ${String(t.outcome ?? '?')}${t.endedBy !== undefined && t.endedBy !== 'receipt' ? ` (${String(t.endedBy)})` : ''}${senderTail(t)}`)
     return
   }
   if (cmd === 'status') {

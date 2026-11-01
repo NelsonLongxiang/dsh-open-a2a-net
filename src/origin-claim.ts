@@ -37,7 +37,7 @@ export interface OriginClaimTarget {
 
 export type OriginClaimRefusal = 'absent' | 'bad-caller-shape' | 'bad-ts' | 'no-card' | 'bad-sig' | 'not-derivable' | 'wrong-audience' | 'unbound-closed'
 export type OriginClaimVerdict =
-  | { ok: true; caller: string; callerUrl: string; card: A2aPeerCard; bound: boolean }
+  | { ok: true; caller: string; callerUrl: string; card: A2aPeerCard; bound: boolean; cli?: true }
   | { ok: false; reason: OriginClaimRefusal }
 
 /** The unbound (v1) canonical form. */
@@ -134,6 +134,17 @@ export function requestAudiences(req: IncomingMessage, configured: readonly stri
 const originClaimCallerShape = /^[a-z0-9-]+$/i
 
 /**
+ * gh#133: a CLI identity deposited on the verifying host — the full handle,
+ * the bare name it signs as, and its deposited card (undefined when the
+ * deposit no longer verifies).
+ */
+export interface CliDepositCard {
+  readonly handle: string
+  readonly name: string
+  readonly card: A2aPeerCard | undefined
+}
+
+/**
  * Verify one request's envelope. Cheap refusals (shape, ts, audience,
  * closed window) answer before any card fetch; the card is then read from
  * the shared cache or fetched PLAIN from the caller's well-known URL.
@@ -148,6 +159,8 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   /** Count one accepted unbound envelope (the drain gauge). */
   readonly onUnbound: () => void
   readonly now: number
+  /** On the faces that admit CLI identities: the deposit a claim URL names. */
+  readonly cliDeposit?: (callerUrl: string) => CliDepositCard | undefined
 }): Promise<OriginClaimVerdict> {
   const header = (name: string): string => String(req.headers[name] ?? '')
   const caller = header('x-a2a-caller')
@@ -164,6 +177,28 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
     if (!requestAudiences(req, d.audiences).has(originOf(audience))) return { ok: false, reason: 'wrong-audience' }
   } else if (!d.unboundOpen) {
     return { ok: false, reason: 'unbound-closed' }
+  }
+  const canonical = bound
+    ? boundCanonical(caller, callerUrl, ts, audience, req.method ?? '', pathOf(req.url ?? ''))
+    : unboundCanonical(caller, callerUrl, ts)
+  const signedBy = (card: A2aPeerCard): boolean => {
+    try {
+      const publicKey = createPublicKey({ key: Buffer.from(card.publicKey, 'base64'), format: 'der', type: 'spki' })
+      return edVerify(undefined, Buffer.from(canonical, 'utf8'), publicKey, Buffer.from(bound ? boundSig : unboundSig, 'base64'))
+    } catch {
+      return false
+    }
+  }
+  // gh#133: a CLI identity deposited HERE, decided from the deposit table
+  // before any fetch (the CLI may reach its home through a proxy the host
+  // cannot dial back). Same forms, audience and window as a zone claim.
+  const cli = d.cliDeposit?.(callerUrl)
+  if (cli !== undefined) {
+    if (cli.card === undefined) return { ok: false, reason: 'no-card' }
+    if (!signedBy(cli.card)) return { ok: false, reason: 'bad-sig' }
+    if (cli.name !== caller) return { ok: false, reason: 'not-derivable' }
+    if (!bound) d.onUnbound()
+    return { ok: true, caller: cli.handle, callerUrl, card: cli.card, bound, cli: true }
   }
   // Fetch the caller's card PLAIN (REVIEW M2 third-round ruling: the
   // envelope names a BARE ZONE, and derivation is the exact match
@@ -183,15 +218,7 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
     }
   }
   if (card === undefined) return { ok: false, reason: 'no-card' }
-  const canonical = bound
-    ? boundCanonical(caller, callerUrl, ts, audience, req.method ?? '', pathOf(req.url ?? ''))
-    : unboundCanonical(caller, callerUrl, ts)
-  try {
-    const publicKey = createPublicKey({ key: Buffer.from(card.publicKey, 'base64'), format: 'der', type: 'spki' })
-    if (!edVerify(undefined, Buffer.from(canonical, 'utf8'), publicKey, Buffer.from(bound ? boundSig : unboundSig, 'base64'))) return { ok: false, reason: 'bad-sig' }
-  } catch {
-    return { ok: false, reason: 'bad-sig' }
-  }
+  if (!signedBy(card)) return { ok: false, reason: 'bad-sig' }
   // Derivation (REVIEW M2, third-round ruling): card.team === caller EXACT.
   // A zone/id8 envelope is bad-caller-shape at the gate — session identity
   // rides the body's caller_session, judged by N3/S3 against the PUBLISHED

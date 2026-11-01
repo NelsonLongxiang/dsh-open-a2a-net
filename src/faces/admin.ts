@@ -69,6 +69,8 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly canvasStore: CanvasStore
   readonly layoutStore: LayoutStore
   readonly taskLedger: TaskLedger
+  /** #114 S6: observe (lazily) and return the /state `authorization` block. */
+  readonly authorizationView: () => unknown
   readonly idempotencyStore: IdempotencyStore
   readonly inFlightRoutes: Map<number, InFlightRoute>
   readonly recentActivity: RouteActivityEntry[]
@@ -129,6 +131,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
     canvasStore,
     layoutStore,
     taskLedger,
+    authorizationView,
     idempotencyStore,
     inFlightRoutes,
     recentActivity,
@@ -285,6 +288,10 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               // say nothing about WHAT is owed — supervision cannot tell
               // a nudge from an abandon without it.
               ...(task.brief !== undefined ? { brief: task.brief } : {}),
+              // #114 S3: the real sender, so supervision buckets by seat, not "home".
+              ...(task.sender !== undefined ? { sender: task.sender } : {}),
+              // #114 S2: the authority an inbound row was born with; a pre-S2 inbound row says so (S4).
+              ...(task.auth !== undefined ? { auth: task.auth } : task.direction === 'inbound' ? { authLegacy: true } : {}),
               // C-ruling bucket split: a pending row is settleable while
               // it is young, expected, and answerable; past the stale
               // hour it is conversational noise waiting on the dead TTL.
@@ -295,7 +302,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           tasksStaleCount: taskLedger.list().filter(task => task.status === 'pending' && (task.receiptExpected === false || Date.now() - task.startedAt >= 60 * 60_000)).length,
           tasksDead: taskLedger.list()
             .filter(task => task.status === 'dead')
-            .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt, reason: task.reason ?? 'unspecified', ...(task.brief !== undefined ? { brief: task.brief } : {}), ...(task.direction !== undefined ? { direction: task.direction } : {}) })),
+            .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt, reason: task.reason ?? 'unspecified', ...(task.brief !== undefined ? { brief: task.brief } : {}), ...(task.direction !== undefined ? { direction: task.direction } : {}), ...(task.sender !== undefined ? { sender: task.sender } : {}), ...(task.auth !== undefined ? { auth: task.auth } : task.direction === 'inbound' ? { authLegacy: true } : {}) })),
           // gh#31: per-task outcomes for rows that LEFT the ledger — the
           // chat drawer used to guess (settled, abandoned or cancelled).
           // Bounded to the archive (≤64), newest first, with the
@@ -321,8 +328,33 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             ...(row.lateReceiptAt !== undefined ? { late: true } : {}),
             ...(row.brief !== undefined ? { brief: row.brief } : {}),
             ...(row.summary !== undefined && row.summary !== '' ? { summary: row.summary.slice(0, 160) } : {}),
+            ...(row.sender !== undefined ? { sender: row.sender } : {}),
+            ...(row.auth !== undefined ? { auth: row.auth } : {}),
+            // #114 S4: who settled it and how they stood on the chain.
+            ...(row.settledBy !== undefined ? { settledBy: row.settledBy } : {}),
           })),
           archivedCount: taskLedger.archive().length,
+          // #114 S4: settlement authorization. The team verifier holds
+          // `refusalsTotal` (monotonic) to zero; `offChain`, `legacy` and
+          // `compat` count the bounded archive window (ARCHIVE_CAP rows), so
+          // they are a window, not a lifetime total.
+          settlement: (() => {
+            const archive = taskLedger.archive()
+            const roles = archive.flatMap(row => (row.settledBy !== undefined ? [row.settledBy.chain_role] : []))
+            return {
+              mode: config.settlementAuth,
+              offChain: roles.filter(r => r === 'off-chain').length,
+              legacy: roles.filter(r => r === 'legacy').length,
+              compat: roles.filter(r => r === 'compat').length,
+              refusals: taskLedger.settlementRefusals(),
+              // Monotonic: every refusal noted, including repeats folded into one ring entry.
+              refusalsTotal: taskLedger.settlementRefusalsTotal(),
+            }
+          })(),
+          // #114 S6: allowlist version history and the affected-task entries
+          // (observe mode: a record of what an allowlist change put on another
+          // footing — nothing was cancelled).
+          authorization: authorizationView(),
           // Ledger density face: the settled archive split by verdict, so
           // the workbench can say WHICH way those rows settled instead of
           // just how many. Additive and bounded (outcome vocabulary is a
@@ -490,7 +522,10 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
         let payload: string
         if (action === 'publish') {
           const card = typeof (body as { card?: unknown }).card === 'string' ? (body as { card: string }).card : ''
-          const out = cliDeposits.deposit(card)
+          // Review of PR #135: a CLI may not be named after this host's zone —
+          // its handle would read as one of the zone's own faces.
+          const name = (() => { try { const team = (JSON.parse(card) as { team?: unknown }).team; return typeof team === 'string' ? team.split('/')[0] : '' } catch { return '' } })()
+          const out = name === config.team ? { ok: false as const, error: `a CLI identity may not be named after this host's zone "${config.team}" — choose another agent name` } : cliDeposits.deposit(card)
           payload = JSON.stringify(out.ok
             ? { ok: true, handle: out.handle, expiresAt: out.expiresAt, cardUrl: `${d.ownCardUrl}/a2a/cli/${encodeURIComponent(out.handle)}` }
             : { ok: false, error: out.error })
