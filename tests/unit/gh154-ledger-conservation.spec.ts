@@ -268,4 +268,38 @@ describe('#154 ledger conservation identity', () => {
     expect(verdict.restoreTrimmed).toBe(6)
     expect(verdict.conserved, JSON.stringify(verdict)).toBe(true)
   })
+
+  it('review r4 P1: a non-array archived stamps damage but the owed rows still load', () => {
+    const home = mkdtempSync(join(tmpdir(), 'gh154-arch-'))
+    const path = join(home, 'tasks.json')
+    writeFileSync(path, JSON.stringify({
+      tasks: [
+        { taskId: 'direct-v0001', team: 'dsh/target', peer: 'peer', startedAt: 1, status: 'pending' },
+        { taskId: 'direct-v0002', team: 'dsh/target', peer: 'peer', startedAt: 2, status: 'pending' },
+      ],
+      archived: 'corrupt',
+    }))
+    const ledger = new TaskLedger(path)
+    expect(ledger.list()).toHaveLength(2)
+    const verdict = ledger.conservation()
+    expect(verdict.conserved).toBe(false)
+    expect(verdict.damaged).toBe('snapshot-shape-invalid')
+    // The rows survive a mutation + reload (no wholesale loss on persist).
+    ledger.track('direct-v0003', 'dsh/target', 'peer')
+    const reloaded = new TaskLedger(path)
+    expect(reloaded.list().length).toBe(3)
+    expect(reloaded.conservation().damaged).toBe('snapshot-shape-invalid')
+  })
+
+  it('review r4 P2: an unsafe-integer counter is damage, never a balanced lifetime', () => {
+    const home = mkdtempSync(join(tmpdir(), 'gh154-unsafe-'))
+    const path = join(home, 'tasks.json')
+    writeFileSync(path, JSON.stringify({
+      tasks: [],
+      conservation: { trackedTotal: 1e100, archivedByEnd: { receipt: 0, echo: 0, abandoned: 0, cancelled: 0, evicted: 0 }, archiveTrimmed: 0, restoreTrimmed: 0 },
+    }))
+    const verdict = new TaskLedger(path).conservation()
+    expect(verdict.conserved).toBe(false)
+    expect(verdict.damaged).toBe('conservation-block-invalid')
+  })
 })

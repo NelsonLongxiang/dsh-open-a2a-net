@@ -41,7 +41,7 @@ export interface ConservationVerdict {
 /** The archive-row shape the bootstrap classifier reads (endedBy optional pre-gh#31; generic so the ledger passes its own row type). */
 export type ArchiveClassifiable = { readonly endedBy?: ArchiveEnd }
 
-const intAtLeast0 = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0
+const intAtLeast0 = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= Number.MAX_SAFE_INTEGER
 
 /** The parsed outcome of restoring counters from one snapshot. */
 export type ConservationRestore =

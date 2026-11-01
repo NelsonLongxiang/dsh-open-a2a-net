@@ -1003,10 +1003,11 @@ export class TaskLedger {
         this.counters.damaged = 'snapshot-shape-invalid'
         return
       }
-      // The optional archive array: present-but-not-an-array is damage too.
+      // The optional archive array: present-but-not-an-array stamps damage —
+      // but the REQUIRED tasks rows still load (review r4 P1: an early return
+      // here would drop parseable owed rows wholesale on the next persist).
       if (snapshot.archived !== undefined && !Array.isArray(snapshot.archived)) {
         this.counters.damaged = 'snapshot-shape-invalid'
-        return
       }
       const entries = snapshot.tasks
       const restored: TaskRecord[] = []
