@@ -11,8 +11,7 @@
 > is no `/a2a/cancel` route. The transition window is still open by default
 > (`originClaimWindow: true`).
 >
-> **Audience binding (§2.1, proposed 2026-10-31 — awaiting the owner's
-> ruling):** the envelope gains a bound form that names the target origin,
+> **Audience binding (§2.1, adopted — owner ruling 2026-11-01):** the envelope gains a bound form that names the target origin,
 > method and path; the code moved to `src/origin-claim.ts`. This revisits
 > the §3/§7 "stateless, no nonce ring" refinement only in what the
 > signature covers — the receiver stays stateless.
@@ -83,10 +82,10 @@ interface OriginClaim {
 
 ## 2.1 Audience binding (bound form)
 
-> **Status: proposed, needs the owner's explicit ruling.** The original
-> ruling made the claim stateless with no nonce (§3 step 3, §7). The bound
-> form keeps that — no receiver state, no nonce — and changes only what the
-> signature covers.
+> **Status: adopted (owner ruling 2026-11-01: audience binding accepted;
+> the claim stays stateless with no nonce).** The original ruling made the
+> claim stateless with no nonce (§3 step 3, §7). The bound form keeps that —
+> no receiver state, no nonce — and changes only what the signature covers.
 
 **Purpose.** The §2 canonical form names the caller; the bound form also
 names the target, so an envelope verifies only at the host, method and
