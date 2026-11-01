@@ -747,6 +747,25 @@ describe('a2a-net CLI: route carries its own task id and resends it safely (gh#1
     expect(plain.stderr).not.toContain('OriginClaim bad-sig:')
   })
 
+  it('review of PR #146 P3: a redirect is never followed — the claim and the API key stay with the address dialled, and nothing is resent', async () => {
+    const landing = await stubHost(() => delivered)
+    servers.push(landing.server)
+    let hits = 0
+    const redirector = createServer((req, res) => {
+      hits += 1
+      req.resume()
+      req.on('end', () => { res.writeHead(307, { Location: `${landing.url}/a2a/direct` }); res.end() })
+    })
+    await new Promise<void>(resolve => redirector.listen(0, '127.0.0.1', resolve))
+    servers.push(redirector)
+    const url = `http://127.0.0.1:${String((redirector.address() as { port: number }).port)}`
+    const out = await runCli(['route', 'ops', 'hi'], { ...fast(await scoutHome(), url), A2A_KEY: 'k-test' })
+    expect(out.code).toBe(1)
+    expect(landing.seen).toHaveLength(0)
+    expect(hits).toBe(1)
+    expect(out.stderr).toContain('answered with a redirect — not followed and not resent')
+  })
+
   it('review of PR #135 P2: a --sync reply that merely quotes the not-derivable text is not a refusal', async () => {
     const quoting = { status: 200, body: { routed: true, team: 'ops', result: { text: 'it said: untrusted-origin: OriginClaim verification failed (not-derivable)' }, task_id: 'direct-x', task_status: 'TASK_STATE_COMPLETED' } }
     const host = await scriptedHost([quoting])

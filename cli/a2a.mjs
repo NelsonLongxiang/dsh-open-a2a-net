@@ -647,6 +647,10 @@ async function postDirect(body) {
         // A fresh OriginClaim per attempt: the signature carries its own timestamp.
         headers: { 'Content-Type': 'application/json', ...(signed ? originClaimFor(home())(url, 'POST') : {}), ...keyHeaders() },
         body: JSON.stringify(body),
+        // Never followed: the bound signature names the address dialled, and
+        // a followed redirect would carry the claim and the API key to
+        // wherever Location points (review of PR #146).
+        redirect: 'error',
       })
       const refusal = signed && res.status === 200 ? claimRefusal(await res.clone().text()) : undefined
       // gh#133 compatibility: a host from before the fix cannot derive a CLI
@@ -675,6 +679,9 @@ async function postDirect(body) {
       }
       await res.text().catch(() => '')
     } catch (error) {
+      if (error?.cause?.message === 'unexpected redirect') {
+        throw new Error(`[${String(body.task_id)}] ${url} answered with a redirect — not followed and not resent: the bound OriginClaim names the address dialled, and the claim and API key would travel to the new address. Point --home / $A2A_HOME at the address the host itself serves`)
+      }
       if (!transientError(error)) throw error
       if (attempt >= RETRY_DELAYS_MS.length) { notConfirmed(body, attempt); throw error }
     }

@@ -65,7 +65,9 @@ ten model tools.
   operator adds it to `originClaimAudiences`, or `--home` / `$A2A_HOME`
   points at an address the host lists. A proxy that rewrites the path
   (`<home>` with a path prefix) fails the same way as `bad-sig`. These
-  refusals are never resent unsigned.
+  refusals are never resent unsigned. A redirect from the dialled address
+  is never followed either (the claim and the API key would travel with
+  it): the route fails and is not resent.
 - An identity may not be named after the host's zone (the deposit is refused).
 - `--sync` waits for the target's reply and prints it:
   `reply from <team> · task <id> · context <ctx>` followed by the reply text.
