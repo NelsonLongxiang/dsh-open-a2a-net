@@ -153,7 +153,9 @@ function collectDepsMirror() {
 }
 
 function collectScopeAnchors() {
-  const src = readFileSync(join(REPO, 'src/index.ts'), 'utf8')
+  // v23 重指：B3 迁移后锚语义在 src/tools/info.ts——合并 index+tools 读面
+  let src = readFileSync(join(REPO, 'src/index.ts'), 'utf8')
+  try { src += readFileSync(join(REPO, 'src/tools/info.ts'), 'utf8') } catch {}
   return [
     { name: 'm2-unconditional', ok: /visibleTeams\.add\(config\.team\)/.test(src) ? 1 : 0, detail: 'M2 unconditional anchor' },
     { name: 'm2-regressive-absent', ok: !/if \(joined\.size > 0\) visibleTeams\.add\(config\.team\)/.test(src) ? 1 : 0, detail: 'M2 regressive shape must be absent' },
