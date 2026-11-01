@@ -394,6 +394,8 @@ export interface TaskLedgerSnapshot {
     readonly archivedByEnd: Record<ArchiveEnd, number>
     readonly archiveTrimmed: number
     readonly restoreTrimmed: number
+    /** gh#154 review r2: a damage marker PERSISTS — once stamped, restarts keep refusing conserved until an explicit reseed policy clears it. */
+    readonly damaged?: string
   }
 }
 
@@ -1039,7 +1041,16 @@ export class TaskLedger {
     if (this.path === '' || !existsSync(this.path)) return
     try {
       const snapshot = JSON.parse(readFileSync(this.path, 'utf8')) as Partial<TaskLedgerSnapshot> | null
-      const entries = snapshot?.tasks
+      // gh#154 review r2: a non-object top level ("null", a string, a number)
+      // is a malformed snapshot, not a healthy empty ledger — fail closed.
+      if (snapshot === null || typeof snapshot !== 'object') {
+        this.conservationDamaged = 'snapshot-shape-invalid'
+        return
+      }
+      // Same for the row arrays: present-but-not-an-array is damage.
+      if (snapshot.tasks !== undefined && !Array.isArray(snapshot.tasks)) this.conservationDamaged = 'snapshot-shape-invalid'
+      if (snapshot.archived !== undefined && !Array.isArray(snapshot.archived)) this.conservationDamaged = 'snapshot-shape-invalid'
+      const entries = snapshot.tasks
       const restored: TaskRecord[] = []
       if (Array.isArray(entries)) {
         for (const raw of entries) {
@@ -1139,9 +1150,11 @@ export class TaskLedger {
       // conserved for this process lifetime (no silent re-seed). Every
       // persisted field must be a non-negative integer, and archiveTrimmed
       // cannot exceed the lifetime archived total (review P2).
-      const savedRaw = snapshot?.conservation
+      const savedRaw = snapshot.conservation
       const saved = savedRaw !== null && typeof savedRaw === 'object' ? savedRaw as Record<string, unknown> : undefined
-      const blockPresent = savedRaw !== undefined && savedRaw !== null
+      // gh#154 review r2: conservation:null is an authored shape, not legacy
+      // absence — the field's presence with a null body is damage.
+      const blockPresent = savedRaw !== undefined
       const intAtLeast0 = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0
       if (!blockPresent) {
         this.conservationTracked = this.tasks.length + this.archived.length + this.restoreTrimmed
@@ -1164,6 +1177,10 @@ export class TaskLedger {
           this.archiveTrimmed = saved!.archiveTrimmed as number
           this.restoreTrimmed = Math.max(saved!.restoreTrimmed as number, this.restoreTrimmed)
           for (const key of ARCHIVE_ENDS) this.archivedByEnd[key as ArchiveEnd] = byEnd![key] as number
+          // gh#154 review r2: a persisted damage marker outlives the restart —
+          // valid counters with a stamped marker still refuse conserved.
+          const savedDamaged = saved!.damaged
+          if (typeof savedDamaged === 'string' && savedDamaged !== '') this.conservationDamaged = savedDamaged
         } else {
           this.conservationDamaged = 'conservation-block-invalid'
           this.conservationTracked = 0
@@ -1195,7 +1212,8 @@ export class TaskLedger {
         ...(this.refusalsTotal > 0 ? { settlementRefusalsTotal: this.refusalsTotal } : {}),
         // gh#154: the conservation counters ride every snapshot once any work
         // has been tracked (zero-work ledgers stay byte-identical to before).
-        ...(this.conservationTracked > 0 ? { conservation: { trackedTotal: this.conservationTracked, archivedByEnd: { ...this.archivedByEnd }, archiveTrimmed: this.archiveTrimmed, restoreTrimmed: this.restoreTrimmed } } : {}),
+        // A damage marker rides too — review r2: it must survive restarts.
+        ...(this.conservationTracked > 0 || this.conservationDamaged !== undefined ? { conservation: { trackedTotal: this.conservationTracked, archivedByEnd: { ...this.archivedByEnd }, archiveTrimmed: this.archiveTrimmed, restoreTrimmed: this.restoreTrimmed, ...(this.conservationDamaged !== undefined ? { damaged: this.conservationDamaged } : {}) } } : {}),
       }
       writeFileSync(this.path, JSON.stringify(snapshot), { mode: 0o600 })
     } catch {

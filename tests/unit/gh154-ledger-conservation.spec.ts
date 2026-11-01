@@ -171,4 +171,43 @@ describe('#154 ledger conservation identity', () => {
     expect(verdict.archivedByEnd.receipt).toBe(1)
     expect(verdict.trackedTotal).toBe(2)
   })
+
+  it('review r2 P1: a damage marker survives mutation, persist, and restart', () => {
+    const home = mkdtempSync(join(tmpdir(), 'gh154-sticky-'))
+    const path = join(home, 'tasks.json')
+    writeFileSync(path, JSON.stringify({
+      tasks: [{ taskId: 'direct-s0001', team: 'dsh/target', peer: 'peer', startedAt: 1, status: 'pending' }],
+      conservation: { trackedTotal: 1 },
+    }))
+    const damaged = new TaskLedger(path)
+    expect(damaged.conservation().conserved).toBe(false)
+    // Normal work after the damaged load: the row + new work persist WITH the marker.
+    damaged.track('direct-s0002', 'dsh/target', 'peer')
+    const persisted = JSON.parse(readFileSync(path, 'utf8')) as { conservation?: { damaged?: string } }
+    expect(persisted.conservation?.damaged).toBe('conservation-block-invalid')
+    // Restart: the marker reloads, the verdict stays red — no re-baseline.
+    const reloaded = new TaskLedger(path)
+    const verdict = reloaded.conservation()
+    expect(verdict.conserved).toBe(false)
+    expect(verdict.damaged).toBe('conservation-block-invalid')
+    // Rows stay loadable — routing never depends on the verdict.
+    expect(reloaded.list().length).toBe(2)
+  })
+
+  it('review r2 P1: malformed top-level shapes never report a healthy ledger', () => {
+    const home = mkdtempSync(join(tmpdir(), 'gh154-shape-'))
+    const verdictFor = (name: string, text: string) => {
+      const path = join(home, name)
+      writeFileSync(path, text)
+      return new TaskLedger(path).conservation()
+    }
+    expect(verdictFor('null.json', 'null').conserved).toBe(false)
+    expect(verdictFor('null.json', 'null').damaged).toBe('snapshot-shape-invalid')
+    const tasksCorrupt = verdictFor('tasks.json', JSON.stringify({ tasks: 'corrupt' }))
+    expect(tasksCorrupt.conserved).toBe(false)
+    expect(tasksCorrupt.damaged).toBe('snapshot-shape-invalid')
+    const conservationNull = verdictFor('cnull.json', JSON.stringify({ tasks: [], conservation: null }))
+    expect(conservationNull.conserved).toBe(false)
+    expect(conservationNull.damaged).toBe('conservation-block-invalid')
+  })
 })
