@@ -138,7 +138,36 @@ describe('gh#131 a local session named by handle is a local canvas member', () =
       await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'add-member', name: 'solo', id: 'dsh/aaaaaaaa' })
       const res = await a.ctx.tools.get('a2a_route')?.execute({ team: 'dsh/canvas/solo', message: 'loop?' }, runContext(a.agents.agent as never)) as Record<string, any>
       expect(res.ok).toBe(false)
+      expect(String(res.error)).toContain('would loop')
       expect(steeredA.some(t => t.includes('loop?'))).toBe(false)
+    } finally { await a.dispose(); await b.dispose() }
+  }, 60_000)
+  it('review P2: leaving drops a handle-stored membership too — a rejoin is not routed through it', async () => {
+    const { a, b, steeredA } = await pairAB('leave', IDS)
+    try {
+      await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: 'ops' })
+      await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'add-member', name: 'ops', id: 'dsh/aaaaaaaa' })
+      await post(`${a.baseUrl}/__dsh_a2a/leave`, { id: IDS.a })
+      await post(`${a.baseUrl}/__dsh_a2a/join`, { id: IDS.a })
+      // The membership left with the session: listing it re-creates nothing, and a dispatch finds no member.
+      expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: 'ops' })).ok).toBe(true)
+      const res = await post(`${a.baseUrl}/__dsh_a2a/dispatch`, { team: 'dsh/canvas/ops', message: 'after rejoin' })
+      expect(res.ok).toBe(false)
+      expect(steeredA.some(t => t.includes('after rejoin'))).toBe(false)
+    } finally { await a.dispose(); await b.dispose() }
+  }, 60_000)
+
+  it('review P3-a: removing a local session by id from a team holding both shapes removes both', async () => {
+    const { a, b, steeredA } = await pairAB('mixed', IDS)
+    try {
+      await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: 'mix' })
+      await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: 'mix', id: IDS.a })
+      await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'add-member', name: 'mix', id: 'dsh/aaaaaaaa' })
+      const removed = await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'remove-member', name: 'mix', id: IDS.a })
+      expect(removed).toMatchObject({ ok: true, members: [] })
+      const res = await post(`${a.baseUrl}/__dsh_a2a/dispatch`, { team: 'dsh/canvas/mix', message: 'after removal' })
+      expect(res.ok).toBe(false)
+      expect(steeredA.some(t => t.includes('after removal'))).toBe(false)
     } finally { await a.dispose(); await b.dispose() }
   }, 60_000)
 })

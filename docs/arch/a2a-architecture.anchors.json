@@ -3,8 +3,8 @@
   "sourceCommit": "88162aeebc4a1764d4638dbb1d1f74e1f9bd129f",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "0a7d1d85d1b77902cb0e36155f1a0be64b51b1fbe982684fe8da281de9e2605e",
-    "src/faces/admin.ts": "33c07a0234f4df4caae78baa92b0e196b99c4058c5d160c2929df29575167a93",
+    "src/index.ts": "58bd0071116d192a63f6c8ca1960e227f61f7d6375382c4f1fbaaee5140b3875",
+    "src/faces/admin.ts": "dc23a240bf3161f639e90cdb2bac369f2b64f934583c0fc416f38e9dde1bcda0",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "fded04a5bd4e0443f096874a9a0495786272ddb63d7e5ddf72e89b4502fad333",
@@ -60,13 +60,13 @@
     {
       "page": "p1-arch",
       "cell": "b3",
-      "ref": "src/index.ts:2730",
+      "ref": "src/index.ts:2762",
       "expect": "function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {"
     },
     {
       "page": "p1-arch",
       "cell": "b4",
-      "ref": "src/index.ts:1598",
+      "ref": "src/index.ts:1630",
       "expect": "function exposureDescription(description: string): string | undefined {"
     },
     {
@@ -84,19 +84,19 @@
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:3892",
+      "ref": "src/index.ts:3924",
       "expect": "const sharedCanvas = canvasStore.list().some(name => {"
     },
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:3897",
+      "ref": "src/index.ts:3929",
       "expect": "let orgShared = false"
     },
     {
       "page": "p1-arch",
       "cell": "c1",
-      "ref": "src/index.ts:1982",
+      "ref": "src/index.ts:2014",
       "expect": "path: '/.well-known/agent-card.json',"
     },
     {
@@ -120,19 +120,19 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:480",
+      "ref": "src/faces/admin.ts:483",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:158",
+      "ref": "src/faces/admin.ts:161",
       "expect": "path: '/__dsh_a2a/state',"
     },
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:3085",
+      "ref": "src/index.ts:3117",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -174,7 +174,7 @@
     {
       "page": "p1-arch",
       "cell": "d7",
-      "ref": "src/faces/admin.ts:273",
+      "ref": "src/faces/admin.ts:276",
       "expect": "activity: recentActivity.slice(),"
     },
     {
@@ -210,7 +210,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:4079",
+      "ref": "src/index.ts:4111",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -252,7 +252,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3511",
+      "ref": "src/index.ts:3543",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
@@ -264,13 +264,13 @@
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2331",
+      "ref": "src/index.ts:2363",
       "expect": "void runReceiptLadder("
     },
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2283",
+      "ref": "src/index.ts:2315",
       "expect": "function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {"
     },
     {
@@ -282,13 +282,13 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/admin.ts:110",
+      "ref": "src/faces/admin.ts:112",
       "expect": "export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void {"
     },
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/index.ts:1931",
+      "ref": "src/index.ts:1963",
       "expect": "registerAdminFaces(webServer, {"
     },
     {
