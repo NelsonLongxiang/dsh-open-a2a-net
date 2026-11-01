@@ -157,14 +157,35 @@ all still walks the caller gate on the faces that accept legacy deliveries.
   `originClaimUrl` for a second reason: without it, its loopback arrivals
   answer to the loopback audience, which other hosts on a peer's machine
   share (`originClaimAudiences` alone does not turn that off).
-- The CLI (`cli/a2a.mjs`) signs only its home host's requests and is not
-  changed here: it still signs the unbound form only. Its claims (gh#133,
-  decided from the home host's deposit table) take the same rules as a zone
-  claim: a bound one is audience-checked, an unbound one is counted in
-  `unboundInbound` and refused once the window closes. So `unboundInbound`
-  cannot drain while CLIs route, and closing the window cuts them off until
-  the CLI signs the bound form. A CLI that dials its home through a proxy
-  will then also need that address in `originClaimAudiences`.
+- The CLI (`cli/a2a.mjs`) signs only its home host's requests. It signs
+  the bound form over the URL it actually dials (`<home>/a2a/direct`,
+  `POST`; the audience is that URL's origin, the path is signed as dialled,
+  prefix included) and keeps signing the unbound form beside it, which a
+  host from before the bound form reads and a host with the window closed
+  never consults. Its claims (gh#133, decided from the home host's deposit
+  table) take the same rules as a zone claim, so CLI traffic verifies bound
+  at its home and no longer holds `unboundInbound` up: the window can close
+  while CLIs route.
+- A CLI that dials its home through an address the host does not list (a
+  tailnet address, a card-proxy port such as 13080, a pocket tunnel, or
+  loopback on a host whose `originClaimUrl` declares a tunnel) misses: while
+  the window is open it is accepted as unbound and counted in
+  `boundMissInbound`; once closed it is `wrong-audience` unless the host
+  lists that address in `originClaimAudiences`. A proxy that rewrites the
+  path also breaks the bound signature (`bad-sig` once closed). The CLI
+  names the dialled origin and the fix on stderr, and `a2a status` prints
+  the host's two gauges beside the address it dials.
+- The CLI resends a refusal unsigned only for `not-derivable` (a host from
+  before gh#133). It does not resend `wrong-audience`, `unbound-closed` or
+  `bad-sig`: they come from a host that closed the window, and an unsigned
+  resend would walk around that closure through `originClaimWindow` (the
+  absent-envelope window). The fix is the host's audience list or the
+  address the CLI dials.
+- The CLI never follows a redirect on a signed POST (`redirect: 'error'`).
+  The bound signature names the address dialled, and a followed 307/308
+  would carry the claim and the API key to wherever `Location` points. The
+  route fails, is not resent, and stderr asks for `--home` / `$A2A_HOME`
+  to name the address the host itself serves.
 
 ## 3. Verification flow (verification against published keys, not handshakes)
 

@@ -6,12 +6,14 @@
  * records what the CLI sent, so nothing here touches a real DSH or ~/.a2a.
  */
 import { spawn } from 'node:child_process'
+import { createPrivateKey, createPublicKey, verify as edVerify } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CliDepositStore } from '../../src/cli-deposit.ts'
+import { boundCanonical, unboundCanonical } from '../../src/origin-claim.ts'
 import { peerPayloadFingerprint } from '../../src/idempotency-store.ts'
 
 const CLI = join(process.cwd(), 'cli', 'a2a.mjs')
@@ -692,6 +694,76 @@ describe('a2a-net CLI: route carries its own task id and resends it safely (gh#1
     expect(host.direct()).toHaveLength(2)
     // The downgrade is said out loud (review of PR #135 P2).
     expect(out.stderr).toContain('resending once unsigned')
+  })
+
+  it('§2.1: the envelope carries the bound form over the origin, method and path dialled, beside the unbound one', async () => {
+    const host = await scriptedHost([])
+    const HOME = await scoutHome()
+    // A path prefix (a proxied home) is signed as dialled; the audience is the origin alone.
+    expect((await runCli(['route', 'ops', 'hi'], fast(HOME, `${host.url}/pfx`))).code).toBe(0)
+    const h = host.seen.find(s => s.path === '/pfx/a2a/direct')!.headers
+    const id = JSON.parse(readFileSync(join(HOME, 'cli.json'), 'utf8')) as { privateKeyPem: string }
+    const publicKey = createPublicKey(createPrivateKey(id.privateKeyPem))
+    const ok = (canonical: string, sig: unknown) => edVerify(undefined, Buffer.from(canonical, 'utf8'), publicKey, Buffer.from(String(sig), 'base64'))
+    const callerUrl = `${host.url}/pfx/a2a/cli/${encodeURIComponent('scout/0123456789abcdef')}`
+    const ts = Number(h['x-a2a-caller-ts'])
+    expect(h['x-a2a-caller']).toBe('scout')
+    expect(h['x-a2a-caller-url']).toBe(callerUrl)
+    expect(h['x-a2a-caller-aud']).toBe(new URL(host.url).origin)
+    // Byte-for-byte the host's canonical forms (src/origin-claim.ts).
+    expect(ok(boundCanonical('scout', callerUrl, ts, new URL(host.url).origin, 'POST', '/pfx/a2a/direct'), h['x-a2a-caller-sig2'])).toBe(true)
+    expect(ok(unboundCanonical('scout', callerUrl, ts), h['x-a2a-caller-sig'])).toBe(true)
+    // Bound to this route: the same signature does not cover another path or method.
+    expect(ok(boundCanonical('scout', callerUrl, ts, new URL(host.url).origin, 'POST', '/a2a/direct'), h['x-a2a-caller-sig2'])).toBe(false)
+    expect(ok(boundCanonical('scout', callerUrl, ts, new URL(host.url).origin, 'GET', '/pfx/a2a/direct'), h['x-a2a-caller-sig2'])).toBe(false)
+  })
+
+  it('§2.1: a bound miss the host refuses (wrong-audience, unbound-closed) is NOT resent unsigned; stderr names the dialled origin and originClaimAudiences', async () => {
+    const refused = (reason: string) => ({ status: 200, body: { error: `untrusted-origin: OriginClaim verification failed (${reason}) — present a signed envelope`, code: -32000, task_status: 'TASK_STATE_FAILED' } })
+    for (const reason of ['wrong-audience', 'unbound-closed']) {
+      const host = await scriptedHost([refused(reason)])
+      const HOME = await scoutHome()
+      const out = await runCli(['route', 'ops', 'hi'], fast(HOME, host.url))
+      expect(out.code).toBe(1)
+      expect(host.direct()).toHaveLength(1)
+      expect(out.stderr).toContain(`OriginClaim ${reason}:`)
+      expect(out.stderr).toContain(new URL(host.url).origin)
+      expect(out.stderr).toContain('boundMissInbound')
+      expect(out.stderr).toContain('not resent')
+      if (reason === 'wrong-audience') expect(out.stderr).toContain(`add "${new URL(host.url).origin}" to originClaimAudiences`)
+      expect(out.stderr).not.toContain('resending once unsigned')
+    }
+  })
+
+  it('§2.1: a bad-sig behind a path prefix says the bound form signs the path; at the bare route it adds nothing', async () => {
+    const badSig = { status: 200, body: { error: 'untrusted-origin: OriginClaim verification failed (bad-sig) — present a signed envelope', code: -32000, task_status: 'TASK_STATE_FAILED' } }
+    const prefixed = await scriptedHost([badSig])
+    const out = await runCli(['route', 'ops', 'hi'], fast(await scoutHome(), `${prefixed.url}/pfx`))
+    expect(out.code).toBe(1)
+    expect(out.stderr).toContain('signed the path /pfx/a2a/direct')
+    const bare = await scriptedHost([badSig])
+    const plain = await runCli(['route', 'ops', 'hi'], fast(await scoutHome(), bare.url))
+    expect(plain.code).toBe(1)
+    expect(plain.stderr).not.toContain('OriginClaim bad-sig:')
+  })
+
+  it('review of PR #146 P3: a redirect is never followed — the claim and the API key stay with the address dialled, and nothing is resent', async () => {
+    const landing = await stubHost(() => delivered)
+    servers.push(landing.server)
+    let hits = 0
+    const redirector = createServer((req, res) => {
+      hits += 1
+      req.resume()
+      req.on('end', () => { res.writeHead(307, { Location: `${landing.url}/a2a/direct` }); res.end() })
+    })
+    await new Promise<void>(resolve => redirector.listen(0, '127.0.0.1', resolve))
+    servers.push(redirector)
+    const url = `http://127.0.0.1:${String((redirector.address() as { port: number }).port)}`
+    const out = await runCli(['route', 'ops', 'hi'], { ...fast(await scoutHome(), url), A2A_KEY: 'k-test' })
+    expect(out.code).toBe(1)
+    expect(landing.seen).toHaveLength(0)
+    expect(hits).toBe(1)
+    expect(out.stderr).toContain('answered with a redirect — not followed and not resent')
   })
 
   it('review of PR #135 P2: a --sync reply that merely quotes the not-derivable text is not a refusal', async () => {
