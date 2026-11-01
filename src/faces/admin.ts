@@ -85,6 +85,8 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly id8: (id: string) => string
   readonly sessionLabelOf: (agent: Agent) => string
   readonly sessionTeamOf: (agent: Agent) => string
+  /** gh#131: the `<zone>/<id8>` handle a canvas may hold for this local session, if it reads as this session. */
+  readonly ownCanvasHandleOf: (id: string) => string | undefined
   readonly nodeMetadataOf: (agent: Agent) => { name: string; description: string; workspace?: string }
   readonly canvasTeamOf: (name: string) => string
   readonly archivedSessionFilter: () => ((id: string) => boolean) | undefined
@@ -147,6 +149,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
     id8,
     sessionLabelOf,
     sessionTeamOf,
+    ownCanvasHandleOf,
     nodeMetadataOf,
     canvasTeamOf,
     archivedSessionFilter,
@@ -501,12 +504,16 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
     handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
       readJsonBody(req, res, (body) => {
         const id = typeof body.id === 'string' ? body.id : ''
+        // gh#131: read while the session is still joined — its own handle reads as it only then.
+        const ownHandle = id !== '' ? ownCanvasHandleOf(id) : undefined
         if (id !== '') sessionNodes.delete(id)
         joinedSessions.remove(id)
         // Leaving the network leaves every canvas team too: membership
         // without join consent would be a routing backdoor. Team
-        // roster declarations die the same way (S2 consistency).
+        // roster declarations die the same way (S2 consistency) — and so
+        // does a membership a fleet edit stored by the session's handle.
         canvasStore.dropMember(id)
+        if (ownHandle !== undefined) canvasStore.dropMember(ownHandle)
         teamMemberships.dropSession(id)
         const payload = JSON.stringify({ id })
         res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
@@ -745,7 +752,10 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           if (name === '' || id === '') {
             payload = JSON.stringify({ ok: false, error: 'name and id are required' })
           } else {
-            payload = JSON.stringify({ ok: canvasStore.removeMember(name, id), teams: canvasStore.list(), members: canvasStore.membersOf(name) })
+            // gh#131: removing a local session removes its handle-stored slot too.
+            const ownHandle = isRemoteMemberRef(id) ? undefined : ownCanvasHandleOf(id)
+            const removed = [id, ...(ownHandle !== undefined ? [ownHandle] : [])].map(each => canvasStore.removeMember(name, each)).some(Boolean)
+            payload = JSON.stringify({ ok: removed, teams: canvasStore.list(), members: canvasStore.membersOf(name) })
           }
         } else {
           payload = JSON.stringify({ ok: false, error: 'unknown action' })

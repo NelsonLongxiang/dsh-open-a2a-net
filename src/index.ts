@@ -1280,6 +1280,7 @@ export function apply(ctx: Context, config: Config): void {
     if (isArchived === undefined) return
     for (const id of joinedSessions.list()) {
       if (!isArchived(id)) continue
+      const ownHandle = ownCanvasHandleOf(id, true)
       sessionNodes.delete(id)
       // The archived session's JOIN INTENT is retained: deleting it was the
       // 3081 wake-defect root cause (a transient archived-window reading
@@ -1288,6 +1289,7 @@ export function apply(ctx: Context, config: Config): void {
       // archived intents (:804), card assembly and the state cold rows filter
       // them, the reconciler skips them, and JOIN_CAP bounds the file.
       canvasStore.dropMember(id)
+      if (ownHandle !== undefined) canvasStore.dropMember(ownHandle)
       // S2 consistency: an archived node's roster declarations die with it
       // — a left node keeps no team membership.
       teamMemberships.dropSession(id)
@@ -1337,6 +1339,72 @@ export function apply(ctx: Context, config: Config): void {
     const imported = bare.match(/^import-([0-9a-fA-F]+)/)
     if (imported !== null) return `import-${imported[1]!.slice(0, 8)}`
     return bare.slice(0, 8)
+  }
+
+  /**
+   * gh#131: the local session one of this host's own handles names — the
+   * `<zone>/<id8>` of a joined or live, unarchived session here — when that
+   * is the only reading. An id8 shared by two local sessions names neither,
+   * and a handle a configured peer's card also publishes (an id8 collision
+   * across hosts: the operator may mean the peer's session) stays remote.
+   * Only the peers the directory resolves through count (seeded and
+   * delegates, review of PR #151 P3-1): a host learned by referral cannot
+   * veto the local reading with an unsigned sessionTeams row.
+   * @param ref - a remote-shaped member ref.
+   * @returns the local session id, or undefined.
+   */
+  function localSessionOfHandle(ref: string): string | undefined {
+    return localHandleResolver()(ref)
+  }
+
+  /**
+   * One snapshot of {@link localSessionOfHandle} for many lookups: the
+   * archived filter, the local id8 index and the seeded peers' cards are
+   * read once (review of PR #151 P3-e).
+   * @param includeArchived - count archived sessions too (the archive prune
+   *   drops an archived session's own handle).
+   */
+  function localHandleResolver(includeArchived = false): (ref: string) => string | undefined {
+    const isArchived = includeArchived ? undefined : archivedSessionFilter()
+    const byHandle = new Map<string, string[]>()
+    for (const id of new Set([...joinedSessions.list(), ...sessionNodes.keys()])) {
+      if (isArchived?.(id) === true) continue
+      const handle = `${config.team}/${id8(id)}`
+      byHandle.set(handle, [...(byHandle.get(handle) ?? []), id])
+    }
+    const published = new Set<string>()
+    for (const url of new Set([...peerStore.listSeeded(), ...config.delegates.map(delegate => delegate.url)])) {
+      const card = cardCache.get(url)?.card
+      if (card !== undefined && card.session !== session) for (const row of card.sessionTeams ?? []) published.add(row.team)
+    }
+    return (ref) => {
+      const hits = byHandle.get(ref)
+      return hits?.length === 1 && !published.has(ref) ? hits[0] : undefined
+    }
+  }
+
+  /**
+   * gh#131: the handle a canvas may hold for one local session — its own
+   * `<zone>/<id8>` when that handle reads as this session — so leave,
+   * archive and removal drop it with the id (review of PR #151 P2: a
+   * handle-stored membership must not outlive the session's consent).
+   * @param id - the local session id (still joined when this is read).
+   */
+  function ownCanvasHandleOf(id: string, includeArchived = false): string | undefined {
+    const handle = `${config.team}/${id8(id)}`
+    return localHandleResolver(includeArchived)(handle) === id ? handle : undefined
+  }
+
+  /**
+   * gh#131: a canvas team's members as the local routing tiers read them —
+   * one of this host's own handles stands for the session it names (a fleet
+   * edit stored it by handle). Read at route time, never written back: a
+   * reading that depends on which peer cards are cached must not rewrite
+   * the store (review of PR #151 P2-2).
+   */
+  function canvasLocalMembersOf(name: string): string[] {
+    const resolve = localHandleResolver()
+    return canvasStore.membersOf(name).map(id => (isRemoteMemberRef(id) ? resolve(id) ?? id : id))
   }
 
   /** The 8-char suffix of one agent's id. */
@@ -1390,7 +1458,7 @@ export function apply(ctx: Context, config: Config): void {
    */
   function canvasLiveAgent(name: string | undefined, skipId?: string): Agent | undefined {
     if (name === undefined) return undefined
-    for (const id of canvasStore.membersOf(name)) {
+    for (const id of canvasLocalMembersOf(name)) {
       if (id === skipId) continue
       const agent = sessionNodes.get(id)
       if (agent !== undefined) return agent
@@ -1408,7 +1476,7 @@ export function apply(ctx: Context, config: Config): void {
   function canvasColdMemberId(name: string | undefined, skipId?: string): string | undefined {
     if (name === undefined) return undefined
     const isArchived = archivedSessionFilter()
-    return canvasStore.membersOf(name).find(id =>
+    return canvasLocalMembersOf(name).find(id =>
       id !== skipId && joinedSessions.has(id) && !liveRoots.has(id) && isArchived?.(id) !== true)
   }
 
@@ -1893,7 +1961,7 @@ export function apply(ctx: Context, config: Config): void {
     whenWebServerSettled((webServer) => {
       // gh#77 B1: the admin faces live in src/faces/admin.ts.
       registerAdminFaces(webServer, {
-        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
+        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url,
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
@@ -2953,6 +3021,7 @@ ${message}`
       wakeColdTeam,
       probeConsumption,
       sessionTeamOf,
+      localSessionOfHandle,
       steerRelay,
       fromClause,
       armReceiptAutosend,
@@ -3943,7 +4012,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // unchanged. The ledger stays keyed to the canvas team the caller
       // named; the peer request carries the member handle it must resolve.
       const canvasName = parseCanvasTeamName(args.team)
-      const remoteTargets = canvasName !== undefined ? canvasStore.remoteMembersOf(canvasName) : []
+      // gh#131: one of this host's own handles is a local member, never a directory target.
+      const remoteTargets = canvasName !== undefined ? ((resolve) => canvasStore.remoteMembersOf(canvasName).filter(ref => resolve(ref) === undefined))(localHandleResolver()) : []
       const targets = remoteTargets.length > 0 ? [...remoteTargets] : [args.team]
       if (remoteTargets.length > 0) {
         failures.push(`local: canvas team "${args.team}" has no live or wakeable local member`)
