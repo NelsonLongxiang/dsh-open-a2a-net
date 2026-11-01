@@ -337,6 +337,11 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // controlled-vocabulary verdict each row settled by.
           // gh#31 follow-up: archive() is already newest first (settles
           // prepend), so the projection keeps that order — the earlier
+          // gh#154: the conservation verdict rides the state face — lifetime
+          // counters (restart-safe), duplicates checked before the count
+          // identity, delta naming any gap. L8 can read this directly instead
+          // of cross-round bookkeeping.
+          conservation: taskLedger.conservation(),
           // .reverse() served it oldest first. Each row also says HOW it
           // ended (endedBy: abandon and cancel both record outcome
           // 'abandoned', and so does a peer's own 'abandoned' receipt),

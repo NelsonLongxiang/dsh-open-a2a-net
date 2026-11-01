@@ -23,6 +23,7 @@ import { parseAuthorization, type AuthProof, type ChainRole, type SettlementReas
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { parseReceipt, RECEIPT_OUTCOMES, type ReceiptOutcomeV2 } from './receipt.ts'
+import { classifyConservationBlock, ConservationCounters, type ConservationSnapshot, type ConservationVerdict } from './ledger-conservation.ts'
 
 /**
  * Caller-ended summaries (abandon / cancel) share one isolation law: late
@@ -388,6 +389,8 @@ export interface TaskLedgerSnapshot {
   readonly settlementRefusals?: readonly SettlementRefusalRecord[]
   /** #114 S4: monotonic count of every refusal noted. */
   readonly settlementRefusalsTotal?: number
+  /** gh#154: lifetime conservation counters (persisted; absent = pre-#154 legacy) — the module contract, shared by classifier, counters, and this schema (review P3). */
+  readonly conservation?: ConservationSnapshot
 }
 
 /** #114 S4: who settled an archived row, and how they stood on its authorization chain. */
@@ -468,6 +471,8 @@ export class TaskLedger {
   private refusals: SettlementRefusalRecord[] = []
   /** #114 S4: every refusal ever noted (monotonic; survives the ring's bound). */
   private refusalsTotal = 0
+  /** gh#154: lifetime conservation counters (persisted; never reset by cap trims or restarts) and the durable damage marker — the machinery lives in src/ledger-conservation.ts (R-mod); the ledger's seams delegate. */
+  private readonly counters = new ConservationCounters()
   private readonly staleTtlMs: number
   private readonly archiveCap: number
   /** Injectable clock (option `now`). */
@@ -528,6 +533,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
+    this.counters.trackedTotal += 1
     this.tasks = [{
       taskId,
       team,
@@ -550,6 +556,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
+    this.counters.trackedTotal += 1
     this.tasks = [{
       taskId,
       team,
@@ -584,6 +591,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
+    this.counters.trackedTotal += 1
     this.tasks = [{
       taskId,
       team,
@@ -906,9 +914,32 @@ export class TaskLedger {
     this.refusals = [{ taskId: id, at: this.now(), settler, reason, head, enforced: judge.enforce, count: (prior?.count ?? 0) + 1 }, ...this.refusals.filter(r => !same(r))].slice(0, SETTLEMENT_REFUSAL_CAP)
   }
 
-  /** Move one settled record to the archive head, trimming at the cap. */
+  /**
+   * Move one settled record to the archive head, trimming at the cap.
+   * gh#154: every arrival and every cap-trimmed row is counted — the trim
+   * itself stays exactly as it was, only visible now.
+   */
   private archiveSettled(record: ArchivedRecord): void {
-    this.archived = [record, ...this.archived].slice(0, this.archiveCap)
+    const next = [record, ...this.archived]
+    const kept = next.slice(0, this.archiveCap)
+    this.counters.archiveTrimmed += next.length - kept.length
+    if (record.endedBy !== undefined) this.counters.archivedByEnd[record.endedBy] += 1
+    this.archived = kept
+  }
+
+  /**
+   * gh#154 conservation verdict — duplicates first, then the count identity
+   * (a duplicated row can still make the counts balance; the Harness²
+   * assert_identity lesson). The counters module answers the count half.
+   */
+  conservation(): ConservationVerdict {
+    const seen = new Set<string>()
+    const duplicateTaskIds: string[] = []
+    for (const row of [...this.tasks, ...this.archived]) {
+      if (seen.has(row.taskId)) duplicateTaskIds.push(row.taskId)
+      else seen.add(row.taskId)
+    }
+    return this.counters.verdict(this.tasks.length, this.archived.length, duplicateTaskIds)
   }
 
   /**
@@ -964,14 +995,33 @@ export class TaskLedger {
     if (this.path === '' || !existsSync(this.path)) return
     try {
       const snapshot = JSON.parse(readFileSync(this.path, 'utf8')) as Partial<TaskLedgerSnapshot> | null
-      const entries = snapshot?.tasks
+      // gh#154 review r3: a non-object OR ARRAY top level, and a missing or
+      // non-array required `tasks` member, are malformed snapshots — never a
+      // healthy empty ledger (an array is typeof 'object'; absence of the
+      // one required member is damage, not an empty legacy snapshot).
+      if (snapshot === null || typeof snapshot !== 'object' || Array.isArray(snapshot) || !Array.isArray(snapshot.tasks)) {
+        this.counters.damaged = 'snapshot-shape-invalid'
+        return
+      }
+      // The optional archive array: present-but-not-an-array stamps damage —
+      // but the REQUIRED tasks rows still load (review r4 P1: an early return
+      // here would drop parseable owed rows wholesale on the next persist).
+      if (snapshot.archived !== undefined && !Array.isArray(snapshot.archived)) {
+        this.counters.damaged = 'snapshot-shape-invalid'
+      }
+      const entries = snapshot.tasks
       const restored: TaskRecord[] = []
       if (Array.isArray(entries)) {
         for (const raw of entries) {
           // Unparsed on purpose: the legacy shape carries a 'resolved' status
           // and inline outcome fields that TaskRecord no longer declares.
           const entry = raw as Record<string, unknown> | null
-          if (typeof entry?.taskId !== 'string' || entry.taskId === '') continue
+          if (typeof entry?.taskId !== 'string' || entry.taskId === '') {
+            // gh#154 review r3: a malformed row never vanishes into a balanced
+            // baseline — the parseable rows still load, the verdict refuses.
+            this.counters.damaged = this.counters.damaged ?? 'row-shape-invalid'
+            continue
+          }
           // Legacy two-state files carried resolved rows inline; they migrate
           // into the archive so pre-upgrade outcomes survive the upgrade.
           if (entry.status === 'resolved') {
@@ -1025,7 +1075,11 @@ export class TaskLedger {
       if (Array.isArray(legacyArchive)) {
         for (const raw of legacyArchive) {
           const entry = raw as Partial<ArchivedRecord> | null
-          if (typeof entry?.taskId !== 'string' || entry.taskId === '') continue
+          if (typeof entry?.taskId !== 'string' || entry.taskId === '') {
+            // gh#154 review r3: same refusal for a malformed archived row.
+            this.counters.damaged = this.counters.damaged ?? 'row-shape-invalid'
+            continue
+          }
           if (this.archived.some(existing => existing.taskId === entry.taskId)) continue
           this.archived.push({
             taskId: entry.taskId,
@@ -1048,15 +1102,37 @@ export class TaskLedger {
           })
         }
       }
+      // gh#154: the load path's cap cuts are COUNTED, never silent. Rows this
+      // snapshot carried beyond the caps leave the live view but remain in the
+      // identity through restoreTrimmed.
       this.tasks = restored.slice(0, TASK_CAP)
+      this.counters.restoreTrimmed += Math.max(0, restored.length - this.tasks.length)
+      this.counters.restoreTrimmed += Math.max(0, this.archived.length - this.archiveCap)
       this.archived = this.archived.slice(0, this.archiveCap)
+      // gh#154: restore the lifetime counters through the conservation
+      // module's classifier - absent block = pre-#154 legacy bootstrap
+      // (kept rows + this load's cuts, endedBy via the legacy classifier);
+      // present-but-invalid (partial/negative/fractional/null body/
+      // unbounded trim) = damage: counters zero, verdict refuses conserved;
+      // valid = counters as persisted, a persisted damage marker riding
+      // along (review r2: it outlives the restart).
+      const classified = classifyConservationBlock(snapshot.conservation)
+      if (classified.kind === 'legacy') {
+        this.counters.legacyBootstrap(this.tasks.length, this.archived, this.counters.restoreTrimmed, archivedEndedBy)
+      } else if (classified.kind === 'valid') {
+        this.counters.loadFrom(classified.snapshot, this.tasks.length, this.archived.length)
+      } else {
+        this.counters.damaged = classified.reason
+      }
       const refusals = (snapshot as { settlementRefusals?: unknown } | null)?.settlementRefusals
       if (Array.isArray(refusals)) this.refusals = refusals.map(parseRefusal).filter((r): r is SettlementRefusalRecord => r !== undefined).slice(0, SETTLEMENT_REFUSAL_CAP)
       const total = (snapshot as { settlementRefusalsTotal?: unknown } | null)?.settlementRefusalsTotal
       this.refusalsTotal = Math.max(typeof total === 'number' && Number.isInteger(total) && total >= 0 ? total : 0, this.refusals.reduce((n, r) => n + r.count, 0))
     } catch {
       // A corrupt ledger is not fatal: routing never depends on it; the
-      // reconciliation simply starts fresh.
+      // reconciliation simply starts fresh. gh#154 review P1: a fresh start
+      // is NOT a conserved state — the unreadable history may have held work.
+      this.counters.damaged = 'snapshot-unreadable'
     }
   }
 
@@ -1070,6 +1146,10 @@ export class TaskLedger {
         ...(this.archived.length > 0 ? { archived: this.archived.map(entry => ({ ...entry })) } : {}),
         ...(this.refusals.length > 0 ? { settlementRefusals: this.refusals.map(entry => ({ ...entry, settler: { ...entry.settler } })) } : {}),
         ...(this.refusalsTotal > 0 ? { settlementRefusalsTotal: this.refusalsTotal } : {}),
+        // gh#154: the conservation counters ride every snapshot once any work
+        // has been tracked (zero-work ledgers stay byte-identical to before).
+        // A damage marker rides too — review r2: it must survive restarts.
+        ...(this.counters.trackedTotal > 0 || this.counters.damaged !== undefined ? { conservation: this.counters.toSnapshot() } : {}),
       }
       writeFileSync(this.path, JSON.stringify(snapshot), { mode: 0o600 })
     } catch {
