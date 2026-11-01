@@ -23,7 +23,7 @@ import { TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_MAX_LIMIT } from '../session-trans
 import { refuseIfBudgetExhausted } from '../recursion-guard.ts'
 import { peerPayloadFingerprint, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from '../idempotency-store.ts'
 import { briefOf, type TaskLedger } from '../task-ledger.ts'
-import { taskIdRefusal } from '../receipt.ts'
+import { parseReceipt, taskIdRefusal } from '../receipt.ts'
 import { buildAuthorization, claimCovers, refusalOf, type Admission, type AuthProof, type SettlementRefusal, type Settler } from '../task-auth.ts'
 import type { Config } from '../index.ts'
 import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from '../transport-caps.ts'
@@ -744,7 +744,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // #114 S5: the receipt's consumption search starts here, so an
                 // older steer of a reused id in the history never anchors it.
                 const steerFloor = eventCountOf(target)
-                steerRelay(target, `[A2A direct] (task ${taskId}) ${fromClause(from)} (routed to ${team}) sent:\n\n${message}\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`, from === 'an unknown node' ? undefined : from)
+                const deliveredReceipt = parseReceipt(message) !== null
+                // gh#141: a receipt is answered by nobody — its steer asks for no receipt back.
+                const receiptRequest = deliveredReceipt ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
+                steerRelay(target, `[A2A direct] (task ${taskId}) ${fromClause(from)} (routed to ${team}) sent:\n\n${message}${receiptRequest}`, from === 'an unknown node' ? undefined : from)
                 steered = true
                 recordActivity('in', team, caller, true)
                 armReceiptAutosend(target, taskId, receiptTarget, message, steerFloor)
@@ -790,8 +793,13 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 })
                 // #139: the member that actually received it answers for a canvas or bare-zone team.
                 const deliveredTo = sessionTeamOf(target)
-                taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message), auth, deliveredTo === team ? undefined : deliveredTo)
-                armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
+                // gh#141: a receipt owes no receipt — it is settlement traffic,
+                // recorded on the row it settled. Booking it would leave a debt
+                // nothing can pay, and a nudge chasing an answer nobody owes.
+                if (!deliveredReceipt) {
+                  taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message), auth, deliveredTo === team ? undefined : deliveredTo)
+                  armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
+                }
                 const payload = JSON.stringify({
                   routed: true,
                   delivered: true,
@@ -802,7 +810,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                   task_status: 'TASK_STATE_DELIVERED',
                   artifacts: [],
                   consumed: consumedProbe,
-                  receipt: receiptExpectation === 'process-label' ? 'none' : 'routed',
+                  receipt: receiptExpectation === 'process-label' || deliveredReceipt ? 'none' : 'routed',
                 })
                 res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
                 res.end(payload)
