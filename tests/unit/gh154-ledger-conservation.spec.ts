@@ -122,4 +122,53 @@ describe('#154 ledger conservation identity', () => {
     expect(verdict.delta).toBe(-1)
     expect(verdict.conserved).toBe(false)
   })
+
+  it('review P1: a present-but-invalid conservation block is damage, never a silent re-seed', () => {
+    const home = mkdtempSync(join(tmpdir(), 'gh154-dmg-'))
+    const writeVariant = (name: string, block: unknown): string => {
+      const path = join(home, name)
+      writeFileSync(path, JSON.stringify({ tasks: [{ taskId: 'direct-z0001', team: 'dsh/target', peer: 'peer', startedAt: 1, status: 'pending' }], conservation: block }))
+      return path
+    }
+    // Partial, negative, fractional, non-integer trim, out-of-bounds trim.
+    for (const [name, block] of [
+      ['partial.json', { trackedTotal: 2 }],
+      ['negative.json', { trackedTotal: -1, archivedByEnd: { receipt: 1, echo: 0, abandoned: 0, cancelled: 0, evicted: 0 }, archiveTrimmed: 0, restoreTrimmed: 0 }],
+      ['fractional.json', { trackedTotal: 2.5, archivedByEnd: { receipt: 1, echo: 0, abandoned: 0, cancelled: 0, evicted: 0 }, archiveTrimmed: 0, restoreTrimmed: 0 }],
+      ['trim-999.json', { trackedTotal: 2, archivedByEnd: { receipt: 1, echo: 0, abandoned: 0, cancelled: 0, evicted: 0 }, archiveTrimmed: 999, restoreTrimmed: 0 }],
+    ] as Array<[string, unknown]>) {
+      const ledger = new TaskLedger(writeVariant(name, block))
+      const verdict = ledger.conservation()
+      expect(verdict.conserved, name).toBe(false)
+      expect(verdict.damaged, name).toBe('conservation-block-invalid')
+      // The row still loads — routing never depends on the verdict.
+      expect(ledger.list()).toHaveLength(1)
+    }
+  })
+
+  it('review P1: an unreadable snapshot never reports a healthy empty ledger', () => {
+    const home = mkdtempSync(join(tmpdir(), 'gh154-json-'))
+    const path = join(home, 'tasks.json')
+    writeFileSync(path, '{not json')
+    const ledger = new TaskLedger(path)
+    const verdict = ledger.conservation()
+    expect(verdict.conserved).toBe(false)
+    expect(verdict.damaged).toBe('snapshot-unreadable')
+    expect(verdict.trackedTotal).toBe(0)
+  })
+
+  it('review P2: legacy archive rows without endedBy bootstrap through the classifier', () => {
+    const home = mkdtempSync(join(tmpdir(), 'gh154-legacy-'))
+    const path = join(home, 'tasks.json')
+    // A pre-gh#31 archive row: no endedBy, plain summary → classified receipt.
+    writeFileSync(path, JSON.stringify({
+      tasks: [{ taskId: 'direct-y0001', team: 'dsh/target', peer: 'peer', startedAt: 1, status: 'pending' }],
+      archived: [{ taskId: 'direct-y0002', team: 'dsh/target', peer: 'peer', startedAt: 1, resolvedAt: 2, summary: 'done' }],
+    }))
+    const ledger = new TaskLedger(path)
+    const verdict = ledger.conservation()
+    expect(verdict.conserved, JSON.stringify(verdict)).toBe(true)
+    expect(verdict.archivedByEnd.receipt).toBe(1)
+    expect(verdict.trackedTotal).toBe(2)
+  })
 })

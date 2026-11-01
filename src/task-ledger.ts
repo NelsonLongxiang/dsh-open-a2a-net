@@ -388,6 +388,13 @@ export interface TaskLedgerSnapshot {
   readonly settlementRefusals?: readonly SettlementRefusalRecord[]
   /** #114 S4: monotonic count of every refusal noted. */
   readonly settlementRefusalsTotal?: number
+  /** gh#154: lifetime conservation counters (persisted; absent = pre-#154 legacy). */
+  readonly conservation?: {
+    readonly trackedTotal: number
+    readonly archivedByEnd: Record<ArchiveEnd, number>
+    readonly archiveTrimmed: number
+    readonly restoreTrimmed: number
+  }
 }
 
 /** #114 S4: who settled an archived row, and how they stood on its authorization chain. */
@@ -480,6 +487,14 @@ export class TaskLedger {
   private readonly archivedByEnd: Record<ArchiveEnd, number> = { receipt: 0, echo: 0, abandoned: 0, cancelled: 0, evicted: 0 }
   private archiveTrimmed = 0
   private restoreTrimmed = 0
+  /**
+   * gh#154 review P1: a PRESENT-but-invalid conservation block (or an
+   * unreadable snapshot) is DAMAGE, not legacy absence — the verdict stays
+   * conserved:false for this process lifetime instead of silently re-seeding
+   * a balanced baseline. Cleared only by the next successful restore of a
+   * valid block (a fresh lifetime starts there, like any corrupt ledger).
+   */
+  private conservationDamaged: string | undefined
   private readonly staleTtlMs: number
   private readonly archiveCap: number
   /** Injectable clock (option `now`). */
@@ -939,7 +954,7 @@ export class TaskLedger {
    * (a duplicated row can still make the counts balance; the Harness²
    * assert_identity lesson). Never mutates; pure read over current state.
    */
-  conservation(): { conserved: boolean; delta: number; trackedTotal: number; owed: number; archivedByEnd: Record<ArchiveEnd, number>; archivedTotal: number; archiveTrimmed: number; restoreTrimmed: number; duplicateTaskIds: string[] } {
+  conservation(): { conserved: boolean; delta: number; trackedTotal: number; owed: number; archivedByEnd: Record<ArchiveEnd, number>; archivedTotal: number; archiveTrimmed: number; restoreTrimmed: number; duplicateTaskIds: string[]; damaged?: string } {
     const seen = new Set<string>()
     const duplicateTaskIds: string[] = []
     for (const row of [...this.tasks, ...this.archived]) {
@@ -948,8 +963,17 @@ export class TaskLedger {
     }
     const archivedTotal = (Object.keys(this.archivedByEnd) as ArchiveEnd[]).reduce((n, key) => n + this.archivedByEnd[key]!, 0)
     const delta = this.conservationTracked - (this.tasks.length + archivedTotal + this.restoreTrimmed)
+    // gh#154 review P2: archiveTrimmed participates — the rows the archive
+    // lost to its live cap plus the rows the LOAD path cut from the archive
+    // must account for every archived row that is no longer present:
+    // archivedTotal − |archived| − archiveTrimmed lies in [0, restoreTrimmed].
+    const archiveLoss = archivedTotal - this.archived.length - this.archiveTrimmed
+    const trimConsistent = archiveLoss >= 0 && archiveLoss <= this.restoreTrimmed
+    const damaged = this.conservationDamaged !== undefined
+      ? this.conservationDamaged
+      : trimConsistent ? undefined : 'archive-trim-inconsistent'
     return {
-      conserved: duplicateTaskIds.length === 0 && delta === 0,
+      conserved: duplicateTaskIds.length === 0 && delta === 0 && damaged === undefined,
       delta,
       trackedTotal: this.conservationTracked,
       owed: this.tasks.length,
@@ -958,6 +982,7 @@ export class TaskLedger {
       archiveTrimmed: this.archiveTrimmed,
       restoreTrimmed: this.restoreTrimmed,
       ...(duplicateTaskIds.length > 0 ? { duplicateTaskIds } : { duplicateTaskIds: [] }),
+      ...(damaged !== undefined ? { damaged } : {}),
     }
   }
 
@@ -1108,23 +1133,43 @@ export class TaskLedger {
       // gh#154: restore the lifetime counters when the snapshot carries them
       // (validated like refusalsTotal), else bootstrap from what this
       // snapshot proves: the kept rows plus this load's cuts.
-      const saved = (snapshot as { conservation?: { trackedTotal?: unknown; archivedByEnd?: unknown; archiveTrimmed?: unknown; restoreTrimmed?: unknown } | undefined } | null)?.conservation
-      const savedTracked = saved !== null && typeof saved === 'object' && typeof saved.trackedTotal === 'number' && Number.isInteger(saved.trackedTotal) && saved.trackedTotal >= 0 ? saved.trackedTotal : undefined
-      const savedTrimmed = saved !== null && typeof saved === 'object' && typeof saved.archiveTrimmed === 'number' && Number.isInteger(saved.archiveTrimmed) && saved.archiveTrimmed >= 0 ? saved.archiveTrimmed : undefined
-      const savedRestore = saved !== null && typeof saved === 'object' && typeof saved.restoreTrimmed === 'number' && Number.isInteger(saved.restoreTrimmed) && saved.restoreTrimmed >= 0 ? saved.restoreTrimmed : undefined
-      const savedByEnd = saved !== null && typeof saved === 'object' && saved.archivedByEnd !== null && typeof saved.archivedByEnd === 'object' ? saved.archivedByEnd as Record<string, unknown> : undefined
-      if (savedTracked !== undefined && savedTrimmed !== undefined && savedRestore !== undefined && savedByEnd !== undefined) {
-        this.conservationTracked = Math.max(savedTracked, this.tasks.length + this.archived.length)
-        this.archiveTrimmed = savedTrimmed
-        this.restoreTrimmed = Math.max(savedRestore, this.restoreTrimmed)
-        for (const key of ARCHIVE_ENDS) {
-          const value = savedByEnd[key]
-          this.archivedByEnd[key as ArchiveEnd] = typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0
-        }
-      } else {
+      // gh#154 review P1: ABSENT conservation block = pre-#154 legacy
+      // snapshot → bootstrap from what the rows prove. PRESENT-but-invalid
+      // block = damage → the counters stay zeroed and the verdict refuses
+      // conserved for this process lifetime (no silent re-seed). Every
+      // persisted field must be a non-negative integer, and archiveTrimmed
+      // cannot exceed the lifetime archived total (review P2).
+      const savedRaw = snapshot?.conservation
+      const saved = savedRaw !== null && typeof savedRaw === 'object' ? savedRaw as Record<string, unknown> : undefined
+      const blockPresent = savedRaw !== undefined && savedRaw !== null
+      const intAtLeast0 = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0
+      if (!blockPresent) {
         this.conservationTracked = this.tasks.length + this.archived.length + this.restoreTrimmed
         this.archiveTrimmed = 0
-        for (const entry of this.archived) if (entry.endedBy !== undefined) this.archivedByEnd[entry.endedBy] += 1
+        // gh#154 review P2: pre-gh#31 rows carry no endedBy — the existing
+        // archivedEndedBy classifier derives it (summary prefix, default
+        // receipt), so retained legacy archive rows bootstrap into the sum.
+        for (const entry of this.archived) this.archivedByEnd[archivedEndedBy(entry)] += 1
+      } else {
+        const trackedOk = intAtLeast0(saved?.trackedTotal)
+        const trimmedOk = intAtLeast0(saved?.archiveTrimmed)
+        const restoreOk = intAtLeast0(saved?.restoreTrimmed)
+        const byEndRaw = saved?.archivedByEnd
+        const byEnd = byEndRaw !== null && typeof byEndRaw === 'object' ? byEndRaw as Record<string, unknown> : undefined
+        const byEndOk = byEnd !== undefined && ARCHIVE_ENDS.every(key => intAtLeast0(byEnd[key]))
+        const savedArchivedTotal = byEnd !== undefined && byEndOk ? ARCHIVE_ENDS.reduce((n, key) => n + (byEnd[key] as number), 0) : -1
+        const trimBounded = trimmedOk && savedArchivedTotal >= 0 && (saved?.archiveTrimmed as number) <= savedArchivedTotal
+        if (trackedOk && trimmedOk && restoreOk && byEndOk && trimBounded) {
+          this.conservationTracked = Math.max(saved!.trackedTotal as number, this.tasks.length + this.archived.length)
+          this.archiveTrimmed = saved!.archiveTrimmed as number
+          this.restoreTrimmed = Math.max(saved!.restoreTrimmed as number, this.restoreTrimmed)
+          for (const key of ARCHIVE_ENDS) this.archivedByEnd[key as ArchiveEnd] = byEnd![key] as number
+        } else {
+          this.conservationDamaged = 'conservation-block-invalid'
+          this.conservationTracked = 0
+          this.archiveTrimmed = 0
+          this.restoreTrimmed = 0
+        }
       }
       const refusals = (snapshot as { settlementRefusals?: unknown } | null)?.settlementRefusals
       if (Array.isArray(refusals)) this.refusals = refusals.map(parseRefusal).filter((r): r is SettlementRefusalRecord => r !== undefined).slice(0, SETTLEMENT_REFUSAL_CAP)
@@ -1132,7 +1177,9 @@ export class TaskLedger {
       this.refusalsTotal = Math.max(typeof total === 'number' && Number.isInteger(total) && total >= 0 ? total : 0, this.refusals.reduce((n, r) => n + r.count, 0))
     } catch {
       // A corrupt ledger is not fatal: routing never depends on it; the
-      // reconciliation simply starts fresh.
+      // reconciliation simply starts fresh. gh#154 review P1: a fresh start
+      // is NOT a conserved state — the unreadable history may have held work.
+      this.conservationDamaged = 'snapshot-unreadable'
     }
   }
 
