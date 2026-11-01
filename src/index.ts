@@ -1311,21 +1311,38 @@ export function apply(ctx: Context, config: Config): void {
 
   /**
    * gh#131: the local session one of this host's own handles names — the
-   * `<zone>/<id8>` of a joined or live session here — when that is the only
-   * reading. An id8 shared by two local sessions names neither, and a handle
-   * a cached peer card also publishes (an id8 collision across hosts: the
-   * operator may mean the peer's session) stays the remote ref it was.
+   * `<zone>/<id8>` of a joined or live, unarchived session here — when that
+   * is the only reading. An id8 shared by two local sessions names neither,
+   * and a handle a configured peer's card also publishes (an id8 collision
+   * across hosts: the operator may mean the peer's session) stays remote.
+   * Only the peers the directory resolves through count (seeded and
+   * delegates, review of PR #151 P3-1): a host learned by referral cannot
+   * veto the local reading with an unsigned sessionTeams row.
    * @param ref - a remote-shaped member ref.
    * @returns the local session id, or undefined.
    */
   function localSessionOfHandle(ref: string): string | undefined {
     if (!ref.startsWith(`${config.team}/`)) return undefined
-    const hits = [...new Set([...joinedSessions.list(), ...sessionNodes.keys()])].filter(id => `${config.team}/${id8(id)}` === ref)
+    const isArchived = archivedSessionFilter()
+    const hits = [...new Set([...joinedSessions.list(), ...sessionNodes.keys()])]
+      .filter(id => `${config.team}/${id8(id)}` === ref && isArchived?.(id) !== true)
     if (hits.length !== 1) return undefined
-    for (const entry of cardCache.values()) {
-      if (entry.card !== undefined && entry.card.session !== session && entry.card.sessionTeams?.some(row => row.team === ref) === true) return undefined
+    for (const url of new Set([...peerStore.listSeeded(), ...config.delegates.map(delegate => delegate.url)])) {
+      const card = cardCache.get(url)?.card
+      if (card !== undefined && card.session !== session && card.sessionTeams?.some(row => row.team === ref) === true) return undefined
     }
     return hits[0]
+  }
+
+  /**
+   * gh#131: a canvas team's members as the local routing tiers read them —
+   * one of this host's own handles stands for the session it names (a fleet
+   * edit stored it by handle). Read at route time, never written back: a
+   * reading that depends on which peer cards are cached must not rewrite
+   * the store (review of PR #151 P2-2).
+   */
+  function canvasLocalMembersOf(name: string): string[] {
+    return canvasStore.membersOf(name).map(id => (isRemoteMemberRef(id) ? localSessionOfHandle(id) ?? id : id))
   }
 
   /** The 8-char suffix of one agent's id. */
@@ -1379,7 +1396,7 @@ export function apply(ctx: Context, config: Config): void {
    */
   function canvasLiveAgent(name: string | undefined, skipId?: string): Agent | undefined {
     if (name === undefined) return undefined
-    for (const id of canvasStore.membersOf(name)) {
+    for (const id of canvasLocalMembersOf(name)) {
       if (id === skipId) continue
       const agent = sessionNodes.get(id)
       if (agent !== undefined) return agent
@@ -1397,7 +1414,7 @@ export function apply(ctx: Context, config: Config): void {
   function canvasColdMemberId(name: string | undefined, skipId?: string): string | undefined {
     if (name === undefined) return undefined
     const isArchived = archivedSessionFilter()
-    return canvasStore.membersOf(name).find(id =>
+    return canvasLocalMembersOf(name).find(id =>
       id !== skipId && joinedSessions.has(id) && !liveRoots.has(id) && isArchived?.(id) !== true)
   }
 
@@ -3298,11 +3315,6 @@ ${message}`
   // on 'boot' (#138 R1); the first lazy read rechecks them.
   ctx.effect(() => canvasStore.onChange(() => observeAuthorization('canvas')), 'a2a: S6 canvas observer')
   ctx.effect(() => joinedSessions.onChange(() => observeAuthorization('joined')), 'a2a: S6 joined observer')
-  // gh#131: a canvas member stored by one of this host's own handles (a
-  // fleet edit, gh#41) is rewritten to its session id — at startup, and when
-  // the session it names joins later — so the local routing tiers reach it.
-  canvasStore.localizeMembers(localSessionOfHandle)
-  ctx.effect(() => joinedSessions.onChange(() => { canvasStore.localizeMembers(localSessionOfHandle) }), 'a2a: gh131 canvas handle localizer')
   ctx.effect(() => teamMemberships.onChange(() => observeAuthorization('roster')), 'a2a: S6 roster observer')
   observeAuthorization('boot')
 
@@ -3929,7 +3941,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // unchanged. The ledger stays keyed to the canvas team the caller
       // named; the peer request carries the member handle it must resolve.
       const canvasName = parseCanvasTeamName(args.team)
-      const remoteTargets = canvasName !== undefined ? canvasStore.remoteMembersOf(canvasName) : []
+      // gh#131: one of this host's own handles is a local member, never a directory target.
+      const remoteTargets = canvasName !== undefined ? canvasStore.remoteMembersOf(canvasName).filter(ref => localSessionOfHandle(ref) === undefined) : []
       const targets = remoteTargets.length > 0 ? [...remoteTargets] : [args.team]
       if (remoteTargets.length > 0) {
         failures.push(`local: canvas team "${args.team}" has no live or wakeable local member`)

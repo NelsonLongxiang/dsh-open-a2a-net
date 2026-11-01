@@ -289,19 +289,23 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const op = body.op
             const name = typeof body.name === 'string' ? body.name : ''
             const rawId = typeof body.id === 'string' ? body.id : ''
-            // gh#131: a peer names our sessions by handle; the store keeps a local member by its session id.
+            // gh#131: a peer names our sessions by handle — the session it names, for removal.
             const id = (isRemoteMemberRef(rawId) ? localSessionOfHandle(rawId) : undefined) ?? rawId
             let payload: { ok: boolean; members?: readonly string[]; removed?: boolean; error?: string }
             if (op === 'create') {
               const stored = canvasStore.create(name)
               payload = stored === undefined ? { ok: false, error: 'invalid name or team cap reached' } : { ok: true, members: canvasStore.membersOf(stored) }
             } else if (op === 'add-member') {
-              const memberValid = isRemoteMemberRef(id) ? validRemoteMemberRef(id) : id !== '' && (sessionNodes.has(id) || joinedSessions.has(id))
+              // gh#131: a handle is stored as sent, even one of this host's own — the
+              // local tiers read it as the session it names at route time.
+              const memberValid = isRemoteMemberRef(rawId) ? validRemoteMemberRef(rawId) : rawId !== '' && (sessionNodes.has(rawId) || joinedSessions.has(rawId))
               payload = name === '' || !memberValid
                 ? { ok: false, error: 'name and a member (joined session id, or a zone-qualified remote team handle) are required' }
-                : (canvasStore.create(name), { ok: canvasStore.addMember(name, id), members: canvasStore.membersOf(name) })
+                : (canvasStore.create(name), { ok: canvasStore.addMember(name, rawId), members: canvasStore.membersOf(name) })
             } else if (op === 'remove-member') {
-              payload = { ok: name !== '' && canvasStore.removeMember(name, id), members: name !== '' ? canvasStore.membersOf(name) : undefined }
+              // Either shape may be stored (an older edit kept the handle): remove both (review of PR #151 P2-1).
+              const removed = name !== '' && [...new Set([id, rawId])].map(each => canvasStore.removeMember(name, each)).some(Boolean)
+              payload = { ok: removed, members: name !== '' ? canvasStore.membersOf(name) : undefined }
             } else if (op === 'remove') {
               // Dissolve. Idempotent: a team that is not here (another peer got
               // there first) is the outcome the caller asked for — `removed`

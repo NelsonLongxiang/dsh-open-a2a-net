@@ -227,30 +227,6 @@ export class CanvasStore {
   }
 
   /**
-   * gh#131: rewrite every remote-shaped member that `resolve` maps to a local
-   * session id into that id, in its priority slot (when the team also holds
-   * the id, the earlier of the two slots wins). A fleet edit stores members by handle, which the
-   * local routing tiers never match.
-   * @param resolve - the local session id one handle names, or undefined.
-   * @returns how many member slots were rewritten or dropped.
-   */
-  localizeMembers(resolve: (ref: string) => string | undefined): number {
-    let changed = 0
-    for (const entry of this.teams) {
-      const next: string[] = []
-      for (const id of entry.members) {
-        const local = isRemoteMemberRef(id) ? resolve(id) : undefined
-        if (local === undefined) { if (!next.includes(id)) next.push(id); continue }
-        changed += 1
-        if (!next.includes(local)) next.push(local)
-      }
-      entry.members = next
-    }
-    if (changed > 0) this.persist()
-    return changed
-  }
-
-  /**
    * Drop one id from every team — the leave and archive paths: a session
    * leaving the network keeps no canvas membership anywhere.
    * @param id - the departing session id.
