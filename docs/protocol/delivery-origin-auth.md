@@ -145,7 +145,13 @@ unbound form or the receiver stops accepting it. Rollout: upgrade every host, wa
   `originClaimAudiences` or set `originClaimUrl`, or bound envelopes to it
   are `wrong-audience`.
 - The CLI (`cli/a2a.mjs`) signs only its home host's requests and is not
-  changed here.
+  changed here: it still signs the unbound form only. Its claims (gh#133,
+  decided from the home host's deposit table) take the same rules as a zone
+  claim: a bound one is audience-checked, an unbound one is counted in
+  `unboundInbound` and refused once the window closes. So `unboundInbound`
+  cannot drain while CLIs route, and closing the window cuts them off until
+  the CLI signs the bound form. A CLI that dials its home through a proxy
+  will then also need that address in `originClaimAudiences`.
 
 ## 3. Verification flow (verification against published keys, not handshakes)
 

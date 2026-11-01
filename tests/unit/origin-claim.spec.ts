@@ -10,6 +10,7 @@ import type { IncomingMessage } from 'node:http'
 import { signCard } from '../../src/card.ts'
 import { requestAudiences, signOriginClaim, unboundCanonical, verifyOriginClaim } from '../../src/origin-claim.ts'
 import type { CardCacheEntry } from '../../src/runtime.ts'
+import type { A2aPeerCard } from '../../src/types.ts'
 
 const { privateKey } = generateKeyPairSync('ed25519')
 const CALLER_URL = 'http://10.0.0.1:13080'
@@ -103,5 +104,63 @@ describe('OriginClaim audience binding', () => {
   it('the arrival socket names the audience, never the Host header', () => {
     const r = req({ host: 'evil.example:80' }, { url: '/', local: '::ffff:192.168.1.5', port: 13080 })
     expect([...requestAudiences(r, ['', 'not a url'])]).toEqual(['http://192.168.1.5:13080'])
+  })
+})
+
+describe('OriginClaim — a CLI identity deposited here (gh#133)', () => {
+  const { privateKey: cliKey } = generateKeyPairSync('ed25519')
+  const HANDLE = 'alice/0123456789abcdef'
+  const CLI_URL = 'http://100.64.0.1:13080/a2a/cli/alice%2F0123456789abcdef'
+  const cliCard = signCard({ name: 'alice', session: 'cli', team: HANDLE, capabilities: { route: true, async: true }, expiresAt: Date.now() + 3_600_000 }, cliKey)
+  const cliV1 = (name = 'alice'): Record<string, string> => {
+    const ts = Date.now()
+    return { 'X-A2A-Caller': name, 'X-A2A-Caller-Url': CLI_URL, 'X-A2A-Caller-Ts': String(ts), 'X-A2A-Caller-Sig': edSign(undefined, Buffer.from(unboundCanonical(name, CLI_URL, ts), 'utf8'), cliKey).toString('base64') }
+  }
+  const cliV2 = (url: string): Record<string, string> =>
+    signOriginClaim({ url, method: 'POST' }, { caller: 'alice', callerUrl: CLI_URL, privateKey: cliKey, unbound: false, now: Date.now() })
+  function verifyCli(request: IncomingMessage, options: { unboundOpen?: boolean; deposit?: A2aPeerCard | undefined; optIn?: boolean } = {}) {
+    let unbound = 0
+    let fetched = 0
+    const deposit = { handle: HANDLE, name: 'alice', card: 'deposit' in options ? options.deposit as A2aPeerCard | undefined : cliCard }
+    return verifyOriginClaim(request, {
+      cardCache: new Map(),
+      fetch: () => { fetched += 1; throw new Error('unreachable CLI address') },
+      audiences: [],
+      unboundOpen: options.unboundOpen ?? true,
+      onUnbound: () => { unbound += 1 },
+      now: Date.now(),
+      ...(options.optIn === false ? {} : { cliDeposit: (url: string) => (url === CLI_URL ? deposit : undefined) }),
+    }).then(v => ({ v, unbound, fetched }))
+  }
+
+  it('an unbound CLI claim is decided from the deposit, names the full handle, and is counted', async () => {
+    const { v, unbound, fetched } = await verifyCli(req(cliV1(), { url: '/a2a/direct' }))
+    expect(v).toMatchObject({ ok: true, caller: HANDLE, cli: true, bound: false })
+    expect(unbound).toBe(1)
+    expect(fetched).toBe(0)
+  })
+
+  it('an unbound CLI claim is refused once the window closes', async () => {
+    expect((await verifyCli(req(cliV1(), { url: '/a2a/direct' }), { unboundOpen: false })).v).toEqual({ ok: false, reason: 'unbound-closed' })
+  })
+
+  it('a bound CLI claim verifies at its audience and is wrong-audience elsewhere', async () => {
+    expect((await verifyCli(req(cliV2('http://127.0.0.1:4000/a2a/direct'), { url: '/a2a/direct' }), { unboundOpen: false })).v).toMatchObject({ ok: true, caller: HANDLE, cli: true, bound: true })
+    expect((await verifyCli(req(cliV2('http://127.0.0.1:5000/a2a/direct'), { url: '/a2a/direct' }))).v).toEqual({ ok: false, reason: 'wrong-audience' })
+  })
+
+  it('a deposit that no longer verifies is no-card; a namesake signer is not-derivable; another key is bad-sig', async () => {
+    expect((await verifyCli(req(cliV1(), { url: '/a2a/direct' }), { deposit: undefined })).v).toEqual({ ok: false, reason: 'no-card' })
+    const { privateKey: other } = generateKeyPairSync('ed25519')
+    const ts = Date.now()
+    const forged = { ...cliV1(), 'X-A2A-Caller-Ts': String(ts), 'X-A2A-Caller-Sig': edSign(undefined, Buffer.from(unboundCanonical('alice', CLI_URL, ts), 'utf8'), other).toString('base64') }
+    expect((await verifyCli(req(forged, { url: '/a2a/direct' }))).v).toEqual({ ok: false, reason: 'bad-sig' })
+    expect((await verifyCli(req(cliV1('bob'), { url: '/a2a/direct' }))).v).toEqual({ ok: false, reason: 'not-derivable' })
+  })
+
+  it('a face that does not admit CLI identities takes the zone path (fetch), never the deposit', async () => {
+    const { v, fetched } = await verifyCli(req(cliV1(), { url: '/a2a/direct' }), { optIn: false })
+    expect(v).toEqual({ ok: false, reason: 'no-card' })
+    expect(fetched).toBe(1)
   })
 })
