@@ -539,7 +539,9 @@ describe('a2a_teams output schema covers roster fields (!85 regression pin)', ()
     // the schema source so a future field addition cannot silently skip
     // the output-schema declaration again (the 0.5.45 all-break defect).
     const { readFileSync } = await import('node:fs')
-    const source = readFileSync(join(process.cwd(), 'src', 'index.ts'), 'utf8')
+    // gh#77 B3-R moved the a2a_teams registration to src/tools/info.ts — the
+    // pin follows the schema's new home (path-only change, same assertions).
+    const source = readFileSync(join(process.cwd(), 'src', 'tools', 'info.ts'), 'utf8')
     const schemaStart = source.indexOf("name: 'a2a_teams'")
     const schemaSection = source.slice(schemaStart, schemaStart + 4000)
     expect(schemaSection).toContain('via:')

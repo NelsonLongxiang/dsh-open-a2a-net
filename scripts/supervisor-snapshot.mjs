@@ -308,7 +308,15 @@ function collectRoadmapAnchors() {
     const pkgV = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')).version
     rows.push({ name: 'npm-latest-follows-master', ok: (npmLatest !== '' && npmLatest === pkgV) ? 1 : 0, detail: 'npm latest=' + (npmLatest || 'unreachable') + ' pkg=' + pkgV })
     // S21（#56）：文档漂移核心标记——工具数十枚在 docs 与源一致
-    const srcIdx = readFileSync(join(REPO, 'src/index.ts'), 'utf8')
+    // gh#77 B3-R: the tool registrations split out of apply() live in
+    // src/tools/*.ts — count them across the composition root AND the
+    // tool modules (same ten-tool criterion, wider scan surface).
+    let srcIdx = readFileSync(join(REPO, 'src/index.ts'), 'utf8')
+    try {
+      for (const name of readdirSync(join(REPO, 'src/tools'))) {
+        if (name.endsWith('.ts')) srcIdx += '\n' + readFileSync(join(REPO, 'src/tools', name), 'utf8')
+      }
+    } catch { /* src/tools absent before B3 — index-only count stands */ }
     const toolCount = [...srcIdx.matchAll(/ctx\.tools\.register\(defineTool/g)].length
     const runbook = readFileSync(join(REPO, 'src/skill/references/routing.md'), 'utf8')
     const docSaysTen = /ten|十/.test(runbook) || /10/.test(runbook)
