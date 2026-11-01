@@ -111,11 +111,12 @@ function hostForm(address: string): string {
  * The origins this host answers to for one request: the configured ones
  * (own card URL, operator aliases) plus the address the request actually
  * arrived on — the socket's LOCAL end, which a sender cannot choose (unlike
- * the Host header). A loopback arrival names no host (every tunnelled or
- * proxied request arrives there), so it counts only when a configured
- * origin is loopback at that port, and then in all its loopback spellings.
+ * the Host header). A loopback arrival answers to all its loopback
+ * spellings — unless `loopbackArrival` is off (the operator declared a
+ * tunnel or proxy, whose requests all arrive on loopback), and then only
+ * when a configured origin is loopback at that port.
  */
-export function requestAudiences(req: IncomingMessage, configured: readonly string[]): Set<string> {
+export function requestAudiences(req: IncomingMessage, configured: readonly string[], loopbackArrival = true): Set<string> {
   const out = new Set<string>()
   for (const url of configured) {
     const origin = originOf(url)
@@ -129,7 +130,7 @@ export function requestAudiences(req: IncomingMessage, configured: readonly stri
     const host = hostForm(local)
     const loopback = host === '[::1]' || /^127\./.test(host)
     const spellings = [host, '127.0.0.1', 'localhost', '[::1]'].map(name => originOf(`${scheme}://${name}:${String(port)}`))
-    const names = loopback ? (spellings.some(origin => out.has(origin)) ? spellings : []) : [spellings[0]!]
+    const names = loopback ? (loopbackArrival || spellings.some(origin => out.has(origin)) ? spellings : []) : [spellings[0]!]
     for (const origin of names) if (origin !== '') out.add(origin)
   }
   return out
@@ -164,6 +165,8 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   readonly onUnbound: () => void
   /** Count one bound form that missed and fell back to the unbound one. */
   readonly onBoundMiss?: () => void
+  /** A loopback arrival is an audience of its own (default); off behind a declared tunnel or proxy. */
+  readonly loopbackArrival?: boolean
   readonly now: number
   /** On the faces that admit CLI identities: the deposit a claim URL names. */
   readonly cliDeposit?: (callerUrl: string) => CliDepositCard | undefined
@@ -179,7 +182,7 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   if (!originClaimCallerShape.test(caller)) return { ok: false, reason: 'bad-caller-shape' }
   if (Math.abs(d.now - ts) > ORIGIN_CLAIM_SKEW_MS) return { ok: false, reason: 'bad-ts' }
   const hasBound = boundSig !== ''
-  const audienceOk = hasBound && requestAudiences(req, d.audiences).has(originOf(audience))
+  const audienceOk = hasBound && requestAudiences(req, d.audiences, d.loopbackArrival ?? true).has(originOf(audience))
   const fallback = d.unboundOpen && unboundSig !== ''
   if (hasBound && !audienceOk && !fallback) return { ok: false, reason: 'wrong-audience' }
   if (!hasBound && !d.unboundOpen) return { ok: false, reason: 'unbound-closed' }

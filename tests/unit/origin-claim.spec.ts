@@ -30,7 +30,7 @@ const req = (headers: Record<string, string>, at: { url: string; method?: string
 /** The receiving host's own card URL — always among its configured audiences. */
 const OWN = 'http://127.0.0.1:4000'
 
-function verify(request: IncomingMessage, options: { unboundOpen?: boolean; audiences?: string[]; now?: number } = {}) {
+function verify(request: IncomingMessage, options: { unboundOpen?: boolean; audiences?: string[]; loopbackArrival?: boolean; now?: number } = {}) {
   const cardCache = new Map<string, CardCacheEntry>([[CALLER_URL, { at: Date.now(), card }]])
   let unbound = 0
   let boundMiss = 0
@@ -41,6 +41,7 @@ function verify(request: IncomingMessage, options: { unboundOpen?: boolean; audi
     unboundOpen: options.unboundOpen ?? true,
     onUnbound: () => { unbound += 1 },
     onBoundMiss: () => { boundMiss += 1 },
+    ...(options.loopbackArrival === undefined ? {} : { loopbackArrival: options.loopbackArrival }),
     now: options.now ?? Date.now(),
   })
   return verdict.then(v => ({ v, unbound, boundMiss }))
@@ -140,15 +141,22 @@ describe('OriginClaim audience binding', () => {
     expect((await verify(req(sign('http://localhost:4000/a2a/direct', 'POST', false), { url: '/a2a/direct', local: '::ffff:127.0.0.1' }))).v.ok).toBe(true)
   })
 
-  it('a loopback arrival is no audience of its own: behind a tunnel only the configured origins count', async () => {
-    // Every proxied request arrives on loopback; that address names no host.
+  it('a loopback arrival answers to its loopback spellings — a host with no card URL yet, or bound to 0.0.0.0 and dialled locally', async () => {
+    const local = { url: '/a2a/direct', local: '::ffff:127.0.0.1', port: 3080 }
+    expect([...requestAudiences(req({}, local), [])].sort()).toEqual(['http://127.0.0.1:3080', 'http://[::1]:3080', 'http://localhost:3080'])
+    expect((await verify(req(sign('http://localhost:3080/a2a/direct', 'POST', false), local), { audiences: [''] })).v.ok).toBe(true)
+    expect((await verify(req(sign('http://127.0.0.1:3080/a2a/direct', 'POST', false), local), { audiences: ['http://192.168.1.5:3080'] })).v.ok).toBe(true)
+  })
+
+  it('behind a declared tunnel or proxy (originClaimUrl / originClaimAudiences set) a loopback arrival is no audience of its own', async () => {
+    // Every tunnelled request arrives on loopback; that address names no host.
     const tunnelled = { url: '/a2a/direct', local: '127.0.0.1', port: 13080 }
     const loopbackAud = sign('http://127.0.0.1:13080/a2a/direct', 'POST', false)
-    expect((await verify(req(loopbackAud, tunnelled), { audiences: ['https://pub.example.com'] })).v).toEqual({ ok: false, reason: 'wrong-audience' })
-    expect((await verify(req(sign('https://pub.example.com/a2a/direct', 'POST', false), tunnelled), { audiences: ['https://pub.example.com'] })).v.ok).toBe(true)
-    expect([...requestAudiences(req({}, tunnelled), ['https://pub.example.com'])]).toEqual(['https://pub.example.com'])
-    // A loopback-bound host (its card URL is loopback) still answers to the other spellings of that port.
-    expect([...requestAudiences(req({}, tunnelled), ['http://127.0.0.1:13080'])].sort()).toEqual(['http://127.0.0.1:13080', 'http://[::1]:13080', 'http://localhost:13080'])
+    expect((await verify(req(loopbackAud, tunnelled), { audiences: ['https://pub.example.com'], loopbackArrival: false })).v).toEqual({ ok: false, reason: 'wrong-audience' })
+    expect((await verify(req(sign('https://pub.example.com/a2a/direct', 'POST', false), tunnelled), { audiences: ['https://pub.example.com'], loopbackArrival: false })).v.ok).toBe(true)
+    expect([...requestAudiences(req({}, tunnelled), ['https://pub.example.com'], false)]).toEqual(['https://pub.example.com'])
+    // A configured loopback origin still brings the other spellings of its port.
+    expect([...requestAudiences(req({}, tunnelled), ['http://127.0.0.1:13080'], false)].sort()).toEqual(['http://127.0.0.1:13080', 'http://[::1]:13080', 'http://localhost:13080'])
   })
 
   it('a TLS arrival names an https audience', () => {

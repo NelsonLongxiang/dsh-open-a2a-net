@@ -3,7 +3,7 @@
   "sourceCommit": "0b466643b27120878ceeab9a2ebf087ae3854605",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "91577ce846ac26924761069afbabdf4c73263aecc13088366d437707cf43b3f1",
+    "src/index.ts": "0b5a2fe5eb556699c303aeb4ca01cb1c2b1a8389fa139c1a8355a9de127a2e8d",
     "src/faces/admin.ts": "33c07a0234f4df4caae78baa92b0e196b99c4058c5d160c2929df29575167a93",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
@@ -22,25 +22,25 @@
     "src/faces/wire.ts": "96c7e50969a58c3ec613dfa10b9e7f8c7776821c8b5b092482c7351cffcd867f",
     "src/faces/canvas-notify.ts": "5120c3828d5a9b8928006059fc516d88ac6813afecc9ae0464223b598a4b6850",
     "src/task-auth.ts": "7398ba1cc1f3635c18c9ba5d8979e3aefea03ca131c851ae28a0411087ff2bdf",
-    "src/origin-claim.ts": "26cf67333155dd66c5d893b1814e0372c2f9b3617b4b32b5df8a48f605cf6dc7"
+    "src/origin-claim.ts": "bcff5549b350ad1a168248ae79a83ced6a7646f34221d5ad4ffd6d3e2fb3eb59"
   },
   "anchors": [
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/index.ts:3530",
+      "ref": "src/index.ts:3531",
       "expect": "name: 'a2a_whoami',"
     },
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/index.ts:5416",
+      "ref": "src/index.ts:5417",
       "expect": "name: 'a2a_probe',"
     },
     {
       "page": "p1-arch",
       "cell": "a2",
-      "ref": "src/index.ts:4319",
+      "ref": "src/index.ts:4320",
       "expect": "error: `the process face \"${config.team}\" is the host's own mailbox — model tools must target a member face. Route to a session team handle (\"${config.team}/<id8>\" from a2a_teams) or a canvas team; receipts and quick dispatch reach the host face on their own paths.`,"
     },
     {
@@ -52,13 +52,13 @@
     {
       "page": "p1-arch",
       "cell": "b2",
-      "ref": "src/origin-claim.ts:156",
+      "ref": "src/origin-claim.ts:157",
       "expect": "export async function verifyOriginClaim(req: IncomingMessage, d: {"
     },
     {
       "page": "p1-arch",
       "cell": "b3",
-      "ref": "src/index.ts:2667",
+      "ref": "src/index.ts:2668",
       "expect": "function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {"
     },
     {
@@ -70,7 +70,7 @@
     {
       "page": "p1-arch",
       "cell": "b4",
-      "ref": "src/index.ts:3779",
+      "ref": "src/index.ts:3780",
       "expect": "name: 'a2a_exposure',"
     },
     {
@@ -82,13 +82,13 @@
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:4387",
+      "ref": "src/index.ts:4388",
       "expect": "const sharedCanvas = canvasStore.list().some(name => {"
     },
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:4392",
+      "ref": "src/index.ts:4393",
       "expect": "let orgShared = false"
     },
     {
@@ -130,7 +130,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:3021",
+      "ref": "src/index.ts:3022",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -208,7 +208,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:4569",
+      "ref": "src/index.ts:4570",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -250,7 +250,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3447",
+      "ref": "src/index.ts:3448",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
