@@ -12,7 +12,7 @@
 import { execFileSync } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
 import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync, unlinkSync, statSync } from 'node:fs'
-import { join, resolve, dirname } from 'node:path'
+import { join, resolve, dirname, relative } from 'node:path'
 
 // Repo root derived from THIS script's location — no machine-specific paths
 // (gh#52 ④): scripts/ lives directly under the repo root.
@@ -332,9 +332,16 @@ function collectSrcModuleCap() {
   const rows = []
   try {
     let max = 0, maxFile = ''
-    for (const name of readdirSync(join(REPO, 'src'))) {
-      if (!name.endsWith('.ts') || name === 'index.ts') continue
-      const raw = readFileSync(join(REPO, 'src', name), 'utf8')
+    // gh#77 R-mod wording is "src/ 下（不含 index.ts）任一 .ts" — that reading is
+    // recursive. The original walk listed src/ only, so every src/faces/* and
+    // src/tools/* module was invisible to the cap (the exact hole the ruling's
+    // "新文件一出生就受约束" line exists to close). Walk the whole subtree.
+    const walk = dir => readdirSync(dir, { withFileTypes: true }).flatMap(entry =>
+      entry.isDirectory() ? walk(join(dir, entry.name)) : (entry.name.endsWith('.ts') ? [join(dir, entry.name)] : []))
+    for (const file of walk(join(REPO, 'src'))) {
+      const name = relative(join(REPO, 'src'), file).replaceAll('\\', '/')
+      if (name === 'index.ts') continue
+      const raw = readFileSync(file, 'utf8')
       const n = raw.endsWith('\n') ? raw.split('\n').length - 1 : raw.split('\n').length
       if (n > max) { max = n; maxFile = name }
     }
