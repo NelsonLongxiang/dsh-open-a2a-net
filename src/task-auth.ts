@@ -230,6 +230,16 @@ export function joinedFaceAdmission(r: AdmissionRecords, callerSession: string |
   return sameZoneAdmission(r, callerSession, targetTeam)
 }
 
+/**
+ * #139: the admission an in-process dispatch is recorded under (design §2.4):
+ * the joined face's shared-team verdict, or `local-exempt` for the callers
+ * dispatchLocalCandidate does not gate (the initiator face, a foreign-zone
+ * label, an agent-less call). A refused joined face never dispatches.
+ */
+export function localCandidateAdmission(r: AdmissionRecords, callerSession: string | undefined, targetTeam?: string): Admission {
+  return joinedFaceAdmission(r, callerSession, targetTeam) ?? admitted('local-exempt')
+}
+
 /** Inbound admission for the peer faces (/a2a/direct, /a2a/log): caller_session is the contract. */
 export function callerAdmission(r: AdmissionRecords, caller: string, targetTeam?: string): Admission {
   if (!r.teamScopeRouting) return admitted('scope-off')
@@ -497,6 +507,8 @@ export interface Settler {
   readonly proof: AuthProof
   /** The origin of a VERIFIED OriginClaim's card URL (claim-mismatch included), absent without one. */
   readonly claimOrigin?: string
+  /** The public key of that claim's verified card (#139): the host identity, whatever address spelling signed it. */
+  readonly claimKey?: string
   readonly ingress: 'wire' | 'local'
 }
 
@@ -506,6 +518,12 @@ export interface SettlementRow {
   readonly peer: string
   readonly direction?: 'inbound' | 'outbound'
   readonly auth?: TaskAuthorization
+  /** #139: the public key of the peer card the row was dispatched to (remote outbound rows). */
+  readonly peerKey?: string
+  /** #139: that card's session label, the peer host's process label. */
+  readonly peerHost?: string
+  /** #139: the member that actually received the task (canvas and bare-zone deliveries). */
+  readonly deliveredTo?: string
 }
 
 /** Facts from outside the row. */
@@ -518,6 +536,13 @@ export interface SettlementFacts {
   readonly onBehalfOf?: string
   /** The row was matched by a content echo, not a receipt header (weak evidence). */
   readonly echo?: boolean
+}
+
+/** #139 (design §4.4): what the wire response tells a sender whose receipt enforce refused. */
+export interface SettlementRefusal {
+  readonly status: 'refused'
+  readonly reason: SettlementReason
+  readonly task_id: string
 }
 
 export type SettlementVerdict =
@@ -537,12 +562,15 @@ const originOfUrl = (url: string): string | undefined => {
  *   settles over the wire with an OriginClaim that covers it AND comes from
  *   the row's peer origin (a zone name alone is self-signable — review of
  *   PR #140 P1-1/P1-3);
- * - `target-member`: the team is a canvas and the settler one of its current
- *   members, under the same where-it-lives rule;
+ * - `target-member`: the team is a canvas and the settler the member that
+ *   received the task (`deliveredTo`, #139) — one of its current members for
+ *   a row born before the field — under the same where-it-lives rule;
  * - `host-face`: the target's host settling on its behalf — an envelope
  *   `onBehalfOf` naming the target (a member, or for a bare zone team one of
- *   that zone's faces), carried locally by THIS host's process label, or
- *   across hosts by a verified claim from the row's peer origin;
+ *   that zone's faces — the one that received it once `deliveredTo` is
+ *   known), carried locally by THIS host's process label, or across hosts by
+ *   the peer's process label (its card's session once recorded) with a
+ *   verified claim from the row's peer: its origin, or its card key (#139);
  * - `compat`: an older host's auto-receipt (no onBehalfOf, its process label —
  *   never a session face) with a verified claim from the row's peer origin
  *   (design §6);
@@ -555,19 +583,27 @@ export function judgeSettlement(row: SettlementRow, settler: Settler, facts: Set
   const inbound = row.direction === 'inbound'
   if (inbound && row.auth === undefined) return { ok: true, role: 'legacy' }
   const target = inbound ? row.auth!.target : row.team
-  const members = facts.membersOf(target) ?? []
+  // #139: once the member that received the task is known, it alone answers for the team.
+  const members = row.deliveredTo !== undefined ? [row.deliveredTo] : facts.membersOf(target) ?? []
   const local = inbound || row.peer === 'local' || row.peer.startsWith('local:')
   const peerOrigin = local ? undefined : originOfUrl(row.peer)
-  const fromPeerOrigin = settler.ingress === 'wire' && peerOrigin !== undefined && settler.claimOrigin === peerOrigin
+  // #139: the peer is its signing key, not one spelling of its address — a host
+  // bound to 0.0.0.0 signs with its LAN URL while it was dialed over Tailscale.
+  const fromPeerOrigin = settler.ingress === 'wire' && peerOrigin !== undefined &&
+    (settler.claimOrigin === peerOrigin || (row.peerKey !== undefined && settler.claimKey === row.peerKey))
+  // #139 (scope-off residual of N1): across hosts the process label is the
+  // peer card's session label when the row recorded it; another bare label
+  // on that host (an unjoined session) is not its host face.
+  const peerHostLabel = (caller: string): boolean => !caller.includes('/') && (row.peerHost === undefined || caller === row.peerHost)
   const offChain = (): SettlementVerdict => ({ ok: false, reason: facts.echo === true ? 'echo-off-chain' : 'settler-off-chain' })
   if (facts.onBehalfOf !== undefined) {
     // A bare zone team (the process face) is answered by one of that zone's session faces.
     const forTarget = facts.onBehalfOf === target || members.includes(facts.onBehalfOf) ||
-      (!target.includes('/') && facts.onBehalfOf.startsWith(`${target}/`))
+      (row.deliveredTo === undefined && !target.includes('/') && facts.onBehalfOf.startsWith(`${target}/`))
     // Across hosts the peer signs for ALL its sessions with one zone claim, so the
     // origin alone cannot tell its host from another session on it: the host face
     // is a process label, never a session face (review of PR #140 round 2, N1).
-    const asHost = local ? settler.ingress === 'local' && settler.caller === facts.hostLabel : fromPeerOrigin && !settler.caller.includes('/')
+    const asHost = local ? settler.ingress === 'local' && settler.caller === facts.hostLabel : fromPeerOrigin && peerHostLabel(settler.caller)
     if (forTarget && asHost) return { ok: true, role: 'host-face' }
     if (!forTarget && asHost) return { ok: false, reason: 'on-behalf-mismatch' }
   }
@@ -582,6 +618,6 @@ export function judgeSettlement(row: SettlementRow, settler: Settler, facts: Set
   }
   // compat is an older HOST's own auto-receipt: its process label, never a
   // session face (another session on the peer host is not the target).
-  if (facts.onBehalfOf === undefined && fromPeerOrigin && !settler.caller.includes('/')) return { ok: true, role: 'compat' }
+  if (facts.onBehalfOf === undefined && fromPeerOrigin && peerHostLabel(settler.caller)) return { ok: true, role: 'compat' }
   return offChain()
 }

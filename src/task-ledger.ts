@@ -151,10 +151,62 @@ function withSender(raw: unknown, direction: unknown): { sender?: Sender } {
  * record.
  */
 function withAuth(raw: unknown, entry: { direction?: unknown; team?: unknown; peer?: unknown }, now: number): { auth?: TaskAuthorization } {
-  if (entry.direction !== 'inbound') return {}
+  if (entry.direction !== 'inbound' && entry.direction !== 'outbound') return {}
   const auth = parseAuthorization(raw, now)
-  if (auth === undefined || auth.target !== entry.team || `local:${auth.receipt_target}` !== entry.peer) return {}
-  return { auth }
+  if (auth === undefined || auth.target !== entry.team) return {}
+  if (entry.direction === 'inbound') return auth.ingress === 'wire' && `local:${auth.receipt_target}` === entry.peer ? { auth } : {}
+  // #139: an outbound row carries only its local-candidate admission.
+  return auth.ingress === 'local' && entry.peer === 'local' ? { auth } : {}
+}
+
+/** #139: the routing facts settlement reads, copied between a row and its archive entry. */
+function routingOf(row: Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo'>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo'> {
+  return {
+    ...(row.peerKey !== undefined ? { peerKey: row.peerKey } : {}),
+    ...(row.peerHost !== undefined ? { peerHost: row.peerHost } : {}),
+    ...(row.deliveredTo !== undefined ? { deliveredTo: row.deliveredTo } : {}),
+  }
+}
+
+/** #139: what an outbound row is born with besides its sender. */
+export interface OutboundBirth {
+  /** The local-candidate admission (ingress local); kept only on a row whose peer is 'local'. */
+  readonly auth?: TaskAuthorization
+  readonly peerKey?: string
+  readonly peerHost?: string
+  readonly deliveredTo?: string
+}
+
+/** The facts of one outbound birth that fit the row (see {@link withRouting} for the same shape on restore). */
+function birthFacts(peer: string, birth: OutboundBirth | undefined): Pick<TaskRecord, 'auth' | 'peerKey' | 'peerHost' | 'deliveredTo'> {
+  if (birth === undefined) return {}
+  const fact = (v: string | undefined): v is string => v !== undefined && v !== '' && v.length <= ROUTING_FACT_CAP
+  const remote = peer !== 'local' && !peer.startsWith('local:')
+  return {
+    ...(!remote && birth.auth !== undefined && birth.auth.ingress === 'local' ? { auth: birth.auth } : {}),
+    ...(remote && fact(birth.peerKey) ? { peerKey: birth.peerKey } : {}),
+    ...(remote && fact(birth.peerHost) ? { peerHost: birth.peerHost } : {}),
+    ...(fact(birth.deliveredTo) ? { deliveredTo: birth.deliveredTo } : {}),
+  }
+}
+
+/** Bound on a persisted routing fact; anything longer (or empty, or not a string) is dropped on restore. */
+const ROUTING_FACT_CAP = 256
+
+/**
+ * #139: restore-side allowlist for the routing facts. Each is kept only in
+ * its shape — a non-empty string within the cap — and the peer facts only on
+ * a remote outbound row; anything else is dropped (the row survives as one
+ * born before the fields, judged by current membership and origin).
+ */
+function withRouting(entry: Record<string, unknown>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo'> {
+  const fact = (v: unknown): v is string => typeof v === 'string' && v !== '' && v.length <= ROUTING_FACT_CAP
+  const remoteOutbound = entry.direction === 'outbound' && typeof entry.peer === 'string' && entry.peer !== 'local' && !entry.peer.startsWith('local:')
+  return {
+    ...(remoteOutbound && fact(entry.peerKey) ? { peerKey: entry.peerKey } : {}),
+    ...(remoteOutbound && fact(entry.peerHost) ? { peerHost: entry.peerHost } : {}),
+    ...(fact(entry.deliveredTo) ? { deliveredTo: entry.deliveredTo } : {}),
+  }
 }
 
 /** One tracked outbound task still in the owed book (unsettled). */
@@ -186,8 +238,18 @@ export interface TaskRecord {
   readonly brief?: string
   /** #114 S3: the real sender of an outbound row (absent on inbound rows and rows persisted before the field). */
   readonly sender?: Sender
-  /** #114 S2: the immutable authorization an inbound row was born with (absent on outbound and pre-S2 rows). */
+  /**
+   * #114 S2: the immutable authorization the row was born with — an inbound
+   * row's wire admission, or (#139) an outbound row's local-candidate
+   * admission (`ingress: 'local'`). Absent on remote outbound and older rows.
+   */
   readonly auth?: TaskAuthorization
+  /** #139: the public key of the peer card a remote outbound row was dispatched to. */
+  readonly peerKey?: string
+  /** #139: that card's session label (the peer host's process label). */
+  readonly peerHost?: string
+  /** #139: the member that actually received the task (canvas / bare-zone deliveries). */
+  readonly deliveredTo?: string
   status: TaskStatus
   /** When the row was swept to dead-letter (absent while pending). */
   deadAt?: number
@@ -238,6 +300,10 @@ export interface ArchivedRecord {
   readonly sender?: Sender
   /** #114 S2: carried over from the live row unchanged. */
   readonly auth?: TaskAuthorization
+  /** #139: carried over from the live row unchanged (a late receipt is judged against them). */
+  readonly peerKey?: string
+  readonly peerHost?: string
+  readonly deliveredTo?: string
   /** #114 S4: who settled the row (receipt and echo ends), and their chain role. */
   readonly settledBy?: SettledBy
 }
@@ -359,7 +425,7 @@ export const SETTLEMENT_REFUSAL_CAP = 64
 export interface SettlementJudge {
   readonly enforce: boolean
   readonly settler: SettlementRefusalRecord['settler']
-  check(row: Pick<TaskRecord, 'team' | 'peer' | 'direction' | 'auth'>, echo: boolean): SettlementVerdict
+  check(row: Pick<TaskRecord, 'team' | 'peer' | 'direction' | 'auth' | 'peerKey' | 'peerHost' | 'deliveredTo'>, echo: boolean): SettlementVerdict
 }
 
 const SETTLEMENT_REASONS: readonly string[] = ['settler-off-chain', 'settler-unverified', 'on-behalf-mismatch', 'echo-off-chain']
@@ -457,7 +523,7 @@ export class TaskLedger {
    * via context_id follow-ups (the dispatch reply already says so).
    * Idempotent by task id like {@link track}.
    */
-  trackReceiptless(taskId: string, team: string, peer: string, contextId?: string, brief?: string, sender?: Sender): void {
+  trackReceiptless(taskId: string, team: string, peer: string, contextId?: string, brief?: string, sender?: Sender, birth?: OutboundBirth): void {
     if (taskId === '') return
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
@@ -472,13 +538,14 @@ export class TaskLedger {
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
       ...(brief !== undefined && brief !== '' ? { brief } : {}),
       ...(sender !== undefined ? { sender } : {}),
+      ...birthFacts(peer, birth),
       status: 'pending' as const,
     }, ...this.tasks]
     this.trimOwed()
     this.persist()
   }
 
-  track(taskId: string, team: string, peer: string, contextId?: string, brief?: string, sender?: Sender): void {
+  track(taskId: string, team: string, peer: string, contextId?: string, brief?: string, sender?: Sender, birth?: OutboundBirth): void {
     if (taskId === '') return
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
@@ -492,6 +559,7 @@ export class TaskLedger {
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
       ...(brief !== undefined && brief !== '' ? { brief } : {}),
       ...(sender !== undefined ? { sender } : {}),
+      ...birthFacts(peer, birth),
       status: 'pending' as const,
     }, ...this.tasks]
     this.trimOwed()
@@ -511,7 +579,7 @@ export class TaskLedger {
    * @param from - the caller's receipt target (label or callback address).
    * @param contextId - the delivery's conversation id, kept for follow-up routes (empty omits it).
    */
-  trackInbound(taskId: string, team: string, from: string, contextId?: string, receiptExpected?: boolean, brief?: string, auth?: TaskAuthorization): void {
+  trackInbound(taskId: string, team: string, from: string, contextId?: string, receiptExpected?: boolean, brief?: string, auth?: TaskAuthorization, deliveredTo?: string): void {
     if (taskId === '') return
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
@@ -527,6 +595,7 @@ export class TaskLedger {
       ...(brief !== undefined && brief !== '' ? { brief } : {}),
       // #114 S2: frozen at birth; a replayed id never reaches here (first record wins above).
       ...(auth !== undefined ? { auth } : {}),
+      ...(deliveredTo !== undefined && deliveredTo !== '' ? { deliveredTo: deliveredTo.slice(0, ROUTING_FACT_CAP) } : {}),
       status: 'pending' as const,
     }, ...this.tasks]
     this.trimOwed()
@@ -585,6 +654,7 @@ export class TaskLedger {
         ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
         ...(record.sender !== undefined ? { sender: record.sender } : {}),
         ...(record.auth !== undefined ? { auth: record.auth } : {}),
+        ...routingOf(record),
       })
       this.persist()
       return { outcome: 'cleared', taskId, archivedAt: resolvedAt }
@@ -628,6 +698,7 @@ export class TaskLedger {
         ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
         ...(record.sender !== undefined ? { sender: record.sender } : {}),
         ...(record.auth !== undefined ? { auth: record.auth } : {}),
+        ...routingOf(record),
       })
       this.persist()
       return {
@@ -687,6 +758,7 @@ export class TaskLedger {
         ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
         ...(record.sender !== undefined ? { sender: record.sender } : {}),
         ...(record.auth !== undefined ? { auth: record.auth } : {}),
+        ...routingOf(record),
         ...(verdict !== undefined ? { settledBy: { caller: judge!.settler.caller.slice(0, SETTLEMENT_ID_CAP), chain_role: verdict.ok ? verdict.role : 'off-chain' } } : {}),
       })
       this.persist()
@@ -791,6 +863,7 @@ export class TaskLedger {
         ...(record.receiptExpected === false ? { receiptExpected: false as const } : {}),
         ...(record.sender !== undefined ? { sender: record.sender } : {}),
         ...(record.auth !== undefined ? { auth: record.auth } : {}),
+        ...routingOf(record),
         ...(verdict !== undefined ? { settledBy: { caller: judge!.settler.caller.slice(0, SETTLEMENT_ID_CAP), chain_role: verdict.ok ? verdict.role : 'off-chain' } } : {}),
       })
       settled.push(record.taskId)
@@ -860,6 +933,7 @@ export class TaskLedger {
         ...(row.direction !== undefined ? { direction: row.direction } : {}),
         ...(row.sender !== undefined ? { sender: row.sender } : {}),
         ...(row.auth !== undefined ? { auth: row.auth } : {}),
+        ...routingOf(row),
       })
     }
   }
@@ -914,6 +988,7 @@ export class TaskLedger {
               ...(entry.receiptExpected === false ? { receiptExpected: false as const } : {}),
               ...withSender(entry.sender, entry.direction),
               ...withAuth(entry.auth, entry, this.now()),
+            ...withRouting(entry as Record<string, unknown>),
               ...withSettledBy((entry as { settledBy?: unknown }).settledBy),
             })
             continue
@@ -932,6 +1007,7 @@ export class TaskLedger {
             // #114 S3: a malformed sender is dropped whole; the row survives.
             ...withSender(entry.sender, entry.direction),
             ...withAuth(entry.auth, entry, this.now()),
+            ...withRouting(entry as Record<string, unknown>),
             status: entry.status === 'dead' ? 'dead' : 'pending',
             ...(entry.status === 'dead'
               ? {
@@ -964,6 +1040,7 @@ export class TaskLedger {
             ...(entry.receiptExpected === false ? { receiptExpected: false as const } : {}),
             ...withSender(entry.sender, entry.direction),
             ...withAuth(entry.auth, entry, this.now()),
+            ...withRouting(entry as Record<string, unknown>),
             ...withSettledBy((entry as { settledBy?: unknown }).settledBy),
           })
         }

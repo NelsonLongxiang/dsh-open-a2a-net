@@ -185,7 +185,7 @@ describe('canvas team routing', () => {
     expect(row?.sender).toEqual({ kind: 'session', id: 'dsh/aaaa1111' })
   })
 
-  it('a local auto-receipt from a row without auth names onBehalfOf and omits authRef (#123)', async () => {
+  it('a local auto-receipt names onBehalfOf and pins the outbound row authorization by authRef (#123, #139)', async () => {
     const m = await mount({ joined: ['session-aaaa1111', 'session-bbbb2222'], canvas: [{ name: 'alpha', members: ['session-aaaa1111', 'session-bbbb2222'] }] })
     mounted.push(m.dispose)
     const a = makeAgent('session-aaaa1111', [])
@@ -220,9 +220,10 @@ describe('canvas team routing', () => {
     for (let i = 0; i < 25 && receiptText() === undefined; i++) await new Promise(resolve => { setTimeout(resolve, 20) })
     const text = receiptText()
     expect(text).toContain('local work done (auto)')
-    // The local path births no inbound authorization record: no authRef.
+    // #139: the local path records its admission on the caller's outbound
+    // row (design §2.4), so the auto-receipt pins that record by authRef.
     const envelope = JSON.parse(String(text).split('\n')[1] ?? '{}') as Record<string, unknown>
-    expect(envelope).toEqual({ outcome: 'completed', idempotencyKey: result.task_id, onBehalfOf: 'dsh/bbbb2222' })
+    expect(envelope).toEqual({ outcome: 'completed', idempotencyKey: result.task_id, onBehalfOf: 'dsh/bbbb2222', authRef: expect.stringMatching(/^[0-9a-f]{16}$/) })
   })
 
   it('fails over to the next member after remove-member', async () => {
