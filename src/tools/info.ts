@@ -52,7 +52,9 @@ export interface InfoToolsDeps {
   readonly teamAuditRing: { at: number; action: 'join' | 'leave' | 'archive-prune' | 'agent-less'; team: string; id: string; ok: boolean; reason?: string }[]
   readonly reportRing: { at: number; level: 'info' | 'warning' | 'error'; message: string; session: string; task?: string }[]
   readonly sessionNodes: Map<string, Agent>
-  readonly legacyInboundCount: number
+  // Live-read bindings: owner-settings hot-applies REBINDS these apply-scope
+  // lets, so the tools read them through `deps.X` at call time — never a
+  // destructured snapshot.
   readonly ownerAllowlist: readonly string[]
   readonly ownerTeamScopeInfo: boolean
   readonly id8: (id: string) => string
@@ -79,7 +81,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
     ctx, config, logger, session, lanIp, ownCardUrl, peerStore, taskLedger,
     joinedSessions, teamMemberships, canvasStore, exposureStore, idempotencyStore,
     cardCache, inFlightRoutes, recentActivity, teamAuditRing, reportRing,
-    sessionNodes, legacyInboundCount, ownerAllowlist, ownerTeamScopeInfo,
+    sessionNodes,
     id8, sessionTeamOf, nodeMetadataOf, canvasTeamOf, memoizedCardFetch,
     mapBounded, SWEEP_CONCURRENCY, a2aJoinGateRefusal, observeAuthorization,
     settlePeerCard, client, listDirectoryTeams,
@@ -222,7 +224,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
           .slice(-3)
           .reverse()
           .map(entry => ({ at: entry.at, action: entry.action, team: entry.team, reason: entry.reason ?? '' }))
-        const patterns = [...ownerAllowlist]
+        const patterns = [...deps.ownerAllowlist]
         return {
           ok: true,
           face: 'session',
@@ -316,7 +318,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         // are host-internal facts and always survive. The note keeps the
         // model from reading a scoped listing as an empty fleet.
         let note: string | undefined
-        if (ownerTeamScopeInfo) {
+        if (deps.ownerTeamScopeInfo) {
           const joined = joinedTeamScope()
           const remoteBefore = teams.filter(row => row.local !== true).length
           teams = teams.filter(row => row.local === true || joined.has(row.team) || (row.teams ?? []).some(name => joined.has(name)))
