@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceCommit": "02c2e4b92ddf45d72c6afe6f97150c922b1b2198",
+  "sourceCommit": "912b30abbeee80c6350cae4ab1d36f4a95bc55ad",
   "scope": "Committed source only; no deployment inference",
   "sources": {
     "src/index.ts": "5d5dd13eac1cf644d6fb8994ae7480cb2109cf7761a241bb90f4b0a51437c760",
@@ -14,7 +14,7 @@
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
     "nexus-stage/src/planning-card-text.ts": "31403071229c5dde4af545ded1a8eaebb1c329a52df3169fae868a57119225d9",
     "nexus-stage/src/planning-fit.ts": "cbda0255062632bd412deb2131c7a01e1e16ab9c72d2a70a32c362e108f8c07a",
-    "src/task-ledger.ts": "94285bcc4880aebdd517d609dede64a95909d584e0ce08816d859d6da1c950b7",
+    "src/task-ledger.ts": "a3510ca43b7e9c0ec29ba21f6928e5ff30e389a5d7e83359ed9ee85dda00fdaf",
     "nexus-stage/src/world.ts": "1c6308555b65e8316cda38cf97dc43120b979be3e30792a12b893faf845cb934",
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
@@ -294,7 +294,7 @@
     {
       "page": "p1-arch",
       "cell": "d10",
-      "ref": "src/task-ledger.ts:959",
+      "ref": "src/task-ledger.ts:952",
       "expect": "private trimOwed(): void {"
     },
     {
