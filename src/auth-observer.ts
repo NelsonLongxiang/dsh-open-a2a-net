@@ -79,7 +79,7 @@ export interface JudgedRow {
  * default: the birth record's `via`).
  * @returns the affected rows, in ledger order; unaffected rows are omitted.
  */
-export function judgeAffected(rows: readonly JudgedRow[], version: string, judge: (caller: string, target: string) => Admission, cacheResting: (row: JudgedRow) => boolean = bornOnCache): AffectedTask[] {
+export function judgeAffected(rows: readonly JudgedRow[], version: string, judge: (caller: string, target: string, ingress: 'wire' | 'local') => Admission, cacheResting: (row: JudgedRow) => boolean = bornOnCache): AffectedTask[] {
   const affected: AffectedTask[] = []
   for (const row of rows) {
     const outcome = judgeRow(row, version, judge, cacheResting)
@@ -91,11 +91,12 @@ export function judgeAffected(rows: readonly JudgedRow[], version: string, judge
 const bornOnCache = (row: JudgedRow): boolean => row.auth?.via === 'peer-org'
 
 /** One row's re-judgement: undefined when the row is not judged; `task` only when it is affected. */
-function judgeRow(row: JudgedRow, version: string, judge: (caller: string, target: string) => Admission, cacheResting: (row: JudgedRow) => boolean): { admission: Admission; task?: AffectedTask } | undefined {
+function judgeRow(row: JudgedRow, version: string, judge: (caller: string, target: string, ingress: 'wire' | 'local') => Admission, cacheResting: (row: JudgedRow) => boolean): { admission: Admission; task?: AffectedTask } | undefined {
   const auth = row.auth
   if (auth === undefined) return undefined
   if (auth.allowlist_version === version && !cacheResting(row)) return undefined
-  const verdict = judge(auth.caller, auth.target)
+  // #142 review P2: a record is re-judged by the rule of the face that admitted it.
+  const verdict = judge(auth.caller, auth.target, auth.ingress)
   const base = { taskId: row.taskId, direction: row.direction ?? 'inbound', caller: auth.caller, target: auth.target }
   if (!verdict.ok) {
     const reason = verdict.refusal.length <= AFFECTED_REASON_CAP ? verdict.refusal : `${verdict.refusal.slice(0, AFFECTED_REASON_CAP - 1)}…`
@@ -129,7 +130,7 @@ export interface ObserveInput {
   readonly inputs: () => unknown
   readonly cause: string
   readonly rows: () => readonly JudgedRow[]
-  readonly judge: (caller: string, target: string) => Admission
+  readonly judge: (caller: string, target: string, ingress: 'wire' | 'local') => Admission
 }
 
 interface Snapshot {

@@ -2864,7 +2864,8 @@ ${message}`
       inputs: () => JSON.parse(canonicalAllowlist(inputs)) as unknown,
       cause,
       rows: () => taskLedger.list(),
-      judge: (caller, target) => callerAdmission(admissionRecords, caller, target),
+      // A local-candidate record (#139) is judged as the local candidate admits; every other one by the wire face.
+      judge: (caller, target, ingress) => (ingress === 'local' ? localCandidateAdmission(admissionRecords, caller, target) : callerAdmission(admissionRecords, caller, target)),
     })
     if (entry === undefined) return
     const revoke = entry.tasks.filter(task => task.verdict === 'would-revoke').length
