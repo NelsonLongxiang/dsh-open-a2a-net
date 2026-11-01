@@ -1309,6 +1309,25 @@ export function apply(ctx: Context, config: Config): void {
     return bare.slice(0, 8)
   }
 
+  /**
+   * gh#131: the local session one of this host's own handles names — the
+   * `<zone>/<id8>` of a joined or live session here — when that is the only
+   * reading. An id8 shared by two local sessions names neither, and a handle
+   * a cached peer card also publishes (an id8 collision across hosts: the
+   * operator may mean the peer's session) stays the remote ref it was.
+   * @param ref - a remote-shaped member ref.
+   * @returns the local session id, or undefined.
+   */
+  function localSessionOfHandle(ref: string): string | undefined {
+    if (!ref.startsWith(`${config.team}/`)) return undefined
+    const hits = [...new Set([...joinedSessions.list(), ...sessionNodes.keys()])].filter(id => `${config.team}/${id8(id)}` === ref)
+    if (hits.length !== 1) return undefined
+    for (const entry of cardCache.values()) {
+      if (entry.card !== undefined && entry.card.session !== session && entry.card.sessionTeams?.some(row => row.team === ref) === true) return undefined
+    }
+    return hits[0]
+  }
+
   /** The 8-char suffix of one agent's id. */
   function agentId8(agent: Agent): string {
     return id8(String(agent.id))
@@ -2916,6 +2935,7 @@ ${message}`
       wakeColdTeam,
       probeConsumption,
       sessionTeamOf,
+      localSessionOfHandle,
       steerRelay,
       fromClause,
       armReceiptAutosend,
@@ -3278,6 +3298,11 @@ ${message}`
   // on 'boot' (#138 R1); the first lazy read rechecks them.
   ctx.effect(() => canvasStore.onChange(() => observeAuthorization('canvas')), 'a2a: S6 canvas observer')
   ctx.effect(() => joinedSessions.onChange(() => observeAuthorization('joined')), 'a2a: S6 joined observer')
+  // gh#131: a canvas member stored by one of this host's own handles (a
+  // fleet edit, gh#41) is rewritten to its session id — at startup, and when
+  // the session it names joins later — so the local routing tiers reach it.
+  canvasStore.localizeMembers(localSessionOfHandle)
+  ctx.effect(() => joinedSessions.onChange(() => { canvasStore.localizeMembers(localSessionOfHandle) }), 'a2a: gh131 canvas handle localizer')
   ctx.effect(() => teamMemberships.onChange(() => observeAuthorization('roster')), 'a2a: S6 roster observer')
   observeAuthorization('boot')
 

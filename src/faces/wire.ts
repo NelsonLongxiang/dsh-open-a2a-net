@@ -140,6 +140,8 @@ export interface WireDeps {
   readonly probeConsumption: (agent: Agent, taskId: string) => boolean
   /** A session's own node team (`<zone>/<id8>`), the handle a member is known by. */
   readonly sessionTeamOf: (agent: Agent) => string
+  /** gh#131: the local session one of this host's own `<zone>/<id8>` handles names, if exactly one. */
+  readonly localSessionOfHandle: (ref: string) => string | undefined
   readonly steerRelay: (agent: Agent, text: string, sender?: string) => void
   readonly fromClause: (from: string) => string
   readonly armReceiptAutosend: (target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number) => void
@@ -193,6 +195,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     wakeColdTeam,
     probeConsumption,
     sessionTeamOf,
+    localSessionOfHandle,
     steerRelay,
     fromClause,
     armReceiptAutosend,
@@ -285,7 +288,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             }
             const op = body.op
             const name = typeof body.name === 'string' ? body.name : ''
-            const id = typeof body.id === 'string' ? body.id : ''
+            const rawId = typeof body.id === 'string' ? body.id : ''
+            // gh#131: a peer names our sessions by handle; the store keeps a local member by its session id.
+            const id = (isRemoteMemberRef(rawId) ? localSessionOfHandle(rawId) : undefined) ?? rawId
             let payload: { ok: boolean; members?: readonly string[]; removed?: boolean; error?: string }
             if (op === 'create') {
               const stored = canvasStore.create(name)
