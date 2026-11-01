@@ -52,9 +52,9 @@ export interface InfoToolsDeps {
   readonly teamAuditRing: { at: number; action: 'join' | 'leave' | 'archive-prune' | 'agent-less'; team: string; id: string; ok: boolean; reason?: string }[]
   readonly reportRing: { at: number; level: 'info' | 'warning' | 'error'; message: string; session: string; task?: string }[]
   readonly sessionNodes: Map<string, Agent>
-  // Live-read bindings: owner-settings hot-applies REBINDS these apply-scope
-  // lets, so the tools read them through `deps.X` at call time — never a
-  // destructured snapshot.
+  // Hot-applied owner settings: the caller passes these as getters over the
+  // apply-scope lets, so every call-time read must go through `deps.X` — a
+  // destructured copy would freeze the boot value.
   readonly ownerAllowlist: readonly string[]
   readonly ownerTeamScopeInfo: boolean
   readonly id8: (id: string) => string
