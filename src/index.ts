@@ -1880,6 +1880,7 @@ const reportLoopRing = new Map<string, number[]>()
         get remoteRowsCache() { return remoteRowsCache },
         get legacyInboundCount() { return legacyInboundCount },
         get unboundInboundCount() { return unboundInboundCount },
+        get boundMissInboundCount() { return boundMissInboundCount },
         get ownCardUrl() { return ownCardUrl },
         get ownerAllowlist() { return ownerAllowlist },
         set ownerAllowlist(v) { ownerAllowlist = v },
@@ -2595,8 +2596,9 @@ ${message}`
    *  window — the operator watches the tail drain before closing it. */
   let legacyInboundCount = 0
   /** unboundInbound: accepted unbound (v1) envelopes — the drain gauge for
-   *  closing originClaimUnboundWindow. */
-  let unboundInboundCount = 0
+   *  closing originClaimUnboundWindow; boundMissInbound: those of them whose
+   *  bound form missed (a peer dials us by a name not in our audiences). */
+  let unboundInboundCount = 0, boundMissInboundCount = 0
   function verifyOriginClaim(req: IncomingMessage, options?: { readonly cli?: boolean }): Promise<OriginClaimVerdict> {
     return verifyOriginClaimOf(req, {
       cardCache,
@@ -2604,6 +2606,7 @@ ${message}`
       audiences: [ownCardUrl, ...config.originClaimAudiences ?? []],
       unboundOpen: config.originClaimUnboundWindow !== false,
       onUnbound: () => { unboundInboundCount += 1 },
+      onBoundMiss: () => { boundMissInboundCount += 1 },
       now: Date.now(),
       ...(options?.cli === true ? { cliDeposit: cliDepositCard } : {}),
     })

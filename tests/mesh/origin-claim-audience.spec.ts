@@ -95,7 +95,7 @@ describe('OriginClaim audience binding (mesh)', () => {
       const card = await call(`${b.baseUrl}/.well-known/agent-card.json`, { headers: forM })
       expect(card.sessionTeams).toBeUndefined()
       expect(card.canvasOrg).toBeUndefined()
-      expect((await call(`${b.baseUrl}/__dsh_a2a/state`)).unboundInbound).toBe(0)
+      expect(await call(`${b.baseUrl}/__dsh_a2a/state`)).toMatchObject({ unboundInbound: 0, boundMissInbound: 0 })
     } finally {
       await a.dispose()
       await b.dispose()
@@ -103,16 +103,19 @@ describe('OriginClaim audience binding (mesh)', () => {
     }
   }, 60_000)
 
-  it('with both windows open the unbound form verifies at B (counted); a sender with its window closed signs no unbound form', async () => {
+  it('with both windows open the unbound form verifies at B (counted, the bound miss too); a sender with its window closed signs no unbound form', async () => {
     const m = await capturingHost()
     const [a, b] = await linkedPair(m, { aOpen: true, bOpen: true })
     try {
       await call(`${a.baseUrl}/__dsh_a2a/fleet-canvas-op`, { body: { peer: m.baseUrl, op: 'create', name: 'for-m' } })
       const forM = capturedEnvelope(m.seen)
-      expect(String((await call(`${b.baseUrl}/a2a/canvas-op`, { body: { op: 'create', name: 'other' }, headers: forM })).error)).toContain('wrong-audience')
-      const unboundAtB = await call(`${b.baseUrl}/a2a/canvas-op`, { body: { op: 'create', name: 'other' }, headers: without(forM, 'x-a2a-caller-aud', 'x-a2a-caller-sig2') })
+      // The open window is the legacy contract: the bound form misses at B,
+      // the unbound one it also carries decides — as if Sig2 were stripped.
+      expect((await call(`${b.baseUrl}/a2a/canvas-op`, { body: { op: 'create', name: 'other' }, headers: forM })).ok).toBe(true)
+      expect(await call(`${b.baseUrl}/__dsh_a2a/state`)).toMatchObject({ unboundInbound: 1, boundMissInbound: 1 })
+      const unboundAtB = await call(`${b.baseUrl}/a2a/canvas-op`, { body: { op: 'create', name: 'other2' }, headers: without(forM, 'x-a2a-caller-aud', 'x-a2a-caller-sig2') })
       expect(unboundAtB.ok).toBe(true)
-      expect((await call(`${b.baseUrl}/__dsh_a2a/state`)).unboundInbound).toBe(1)
+      expect(await call(`${b.baseUrl}/__dsh_a2a/state`)).toMatchObject({ unboundInbound: 2, boundMissInbound: 1 })
     } finally {
       await a.dispose()
       await b.dispose()

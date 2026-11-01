@@ -95,6 +95,7 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly remoteRowsCache: RemoteRowsCache
   readonly legacyInboundCount: number
   readonly unboundInboundCount: number
+  readonly boundMissInboundCount: number
   readonly ownCardUrl: string
   ownerAllowlist: string[]
   ownerTeamScopeInfo: boolean
@@ -394,6 +395,9 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // Accepted unbound (no-audience) OriginClaim envelopes — the
           // drain gauge for closing originClaimUnboundWindow.
           unboundInbound: d.unboundInboundCount,
+          // Of those, envelopes whose bound form missed here: the sender
+          // dials an origin missing from originClaimAudiences.
+          boundMissInbound: d.boundMissInboundCount,
           // gh#113: CLI mailbox loss, all handles — mail the 64-row cap
           // pushed out, and mail cut at 4000 chars. The team verifier
           // holds `dropped` to zero.

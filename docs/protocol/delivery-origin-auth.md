@@ -104,16 +104,21 @@ X-A2A-Caller-Sig2: base64(ed25519-sign(
 the two forms: an unbound signature never verifies as a bound one.
 
 **Verification.** When `X-A2A-Caller-Sig2` is present, the receiver
-verifies the bound form and only the bound form — never a fallback to
-`X-A2A-Caller-Sig`:
+verifies the bound form. Once the unbound window is closed that is the
+only form it verifies. While the window is open, a bound form that misses
+(steps 1–2) falls back to the `X-A2A-Caller-Sig` the envelope also
+carries — no more than stripping `Sig2` would give — and the miss is
+counted as `boundMissInbound` besides `unboundInbound`:
 
 1. `audience` must be one of this host's own origins, else
    `wrong-audience`, answered before any card fetch. Own origins are: the
    card URL (`originClaimUrl` or the bound address), the operator's
    `originClaimAudiences` list, and the address the request arrived on
-   (the socket's LOCAL end, plus the other loopback spellings of the same
-   port when that address is loopback). The `Host` header is never read,
-   because the sender sets it.
+   (the socket's LOCAL end). A loopback arrival names no host — every
+   tunnelled or proxied request arrives there — so it counts only when a
+   configured origin is loopback at that port, and then in all its
+   loopback spellings. The `Host` header is never read, because the
+   sender sets it.
 2. The signature covers the receiver's own `req.method` and path, so an
    envelope made for one route does not verify on another.
 3. Card fetch, key check, `card.team === caller` and ts skew are as in §3.
@@ -123,7 +128,7 @@ verifies the bound form and only the bound form — never a fallback to
 | | window open | window closed |
 |---|---|---|
 | sender signs | bound + unbound (`X-A2A-Caller-Sig`) | bound only |
-| receiver, Sig2 present | bound form only | bound form only |
+| receiver, Sig2 present | bound form; on a miss the Sig it also carries (`unboundInbound` +1, `boundMissInbound` +1) | bound form only |
 | receiver, Sig only | unbound form verified, `unboundInbound` +1 (state face) | **`unbound-closed`** (rejected like any failed claim) |
 
 Pre-upgrade receivers ignore the new headers and keep verifying
@@ -132,7 +137,11 @@ rollout (a sender with the window closed reads as an absent claim to a
 pre-upgrade receiver, so close it only after every peer is upgraded). While the window is open the unbound form carries no audience,
 so the binding holds for a pair of hosts once the sender stops signing the
 unbound form or the receiver stops accepting it. Rollout: upgrade every host, watch
-`unboundInbound` drain to zero, then close the window everywhere.
+`unboundInbound` drain to zero, then close the window everywhere. A
+non-zero `boundMissInbound` names a peer that dials this host by an origin
+missing from `originClaimAudiences`: add it before closing. Close
+`originClaimWindow` too: while it is open, a delivery with no envelope at
+all still walks the caller gate on the faces that accept legacy deliveries.
 
 **Scope notes.**
 - The body is not signed; a body hash in the bound form is a possible

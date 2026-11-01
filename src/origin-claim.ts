@@ -14,7 +14,11 @@
  *   · unbound (v1, legacy): JSON.stringify([caller, callerUrl, ts]) in
  *     X-A2A-Caller-Sig. Emitted and accepted only while the unbound window
  *     is open (originClaimUnboundWindow); accepted ones are counted.
- * A present Sig2 is the only thing verified — never a fallback to Sig.
+ * Once the window closes a present Sig2 is the only thing verified. While
+ * it is open, a Sig2 that misses (audience or signature) falls back to the
+ * Sig the envelope also carries — no more than stripping Sig2 would give —
+ * and the miss is counted, so a peer dialled by an unlisted name keeps
+ * working through the rollout and shows on the gauge.
  */
 import { createPublicKey, sign as edSign, verify as edVerify, type KeyObject } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
@@ -107,8 +111,9 @@ function hostForm(address: string): string {
  * The origins this host answers to for one request: the configured ones
  * (own card URL, operator aliases) plus the address the request actually
  * arrived on — the socket's LOCAL end, which a sender cannot choose (unlike
- * the Host header). A loopback arrival also answers to the other loopback
- * spellings of the same port.
+ * the Host header). A loopback arrival names no host (every tunnelled or
+ * proxied request arrives there), so it counts only when a configured
+ * origin is loopback at that port, and then in all its loopback spellings.
  */
 export function requestAudiences(req: IncomingMessage, configured: readonly string[]): Set<string> {
   const out = new Set<string>()
@@ -123,10 +128,9 @@ export function requestAudiences(req: IncomingMessage, configured: readonly stri
     const scheme = socket?.encrypted === true ? 'https' : 'http'
     const host = hostForm(local)
     const loopback = host === '[::1]' || /^127\./.test(host)
-    for (const name of loopback ? [host, '127.0.0.1', 'localhost', '[::1]'] : [host]) {
-      const origin = originOf(`${scheme}://${name}:${String(port)}`)
-      if (origin !== '') out.add(origin)
-    }
+    const spellings = [host, '127.0.0.1', 'localhost', '[::1]'].map(name => originOf(`${scheme}://${name}:${String(port)}`))
+    const names = loopback ? (spellings.some(origin => out.has(origin)) ? spellings : []) : [spellings[0]!]
+    for (const origin of names) if (origin !== '') out.add(origin)
   }
   return out
 }
@@ -158,6 +162,8 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   readonly unboundOpen: boolean
   /** Count one accepted unbound envelope (the drain gauge). */
   readonly onUnbound: () => void
+  /** Count one bound form that missed and fell back to the unbound one. */
+  readonly onBoundMiss?: () => void
   readonly now: number
   /** On the faces that admit CLI identities: the deposit a claim URL names. */
   readonly cliDeposit?: (callerUrl: string) => CliDepositCard | undefined
@@ -172,22 +178,30 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   if (caller === '' || callerUrl === '' || !Number.isFinite(ts) || ts <= 0 || (unboundSig === '' && boundSig === '')) return { ok: false, reason: 'absent' }
   if (!originClaimCallerShape.test(caller)) return { ok: false, reason: 'bad-caller-shape' }
   if (Math.abs(d.now - ts) > ORIGIN_CLAIM_SKEW_MS) return { ok: false, reason: 'bad-ts' }
-  const bound = boundSig !== ''
-  if (bound) {
-    if (!requestAudiences(req, d.audiences).has(originOf(audience))) return { ok: false, reason: 'wrong-audience' }
-  } else if (!d.unboundOpen) {
-    return { ok: false, reason: 'unbound-closed' }
-  }
-  const canonical = bound
-    ? boundCanonical(caller, callerUrl, ts, audience, req.method ?? '', pathOf(req.url ?? ''))
-    : unboundCanonical(caller, callerUrl, ts)
-  const signedBy = (card: A2aPeerCard): boolean => {
+  const hasBound = boundSig !== ''
+  const audienceOk = hasBound && requestAudiences(req, d.audiences).has(originOf(audience))
+  const fallback = d.unboundOpen && unboundSig !== ''
+  if (hasBound && !audienceOk && !fallback) return { ok: false, reason: 'wrong-audience' }
+  if (!hasBound && !d.unboundOpen) return { ok: false, reason: 'unbound-closed' }
+  const verifies = (card: A2aPeerCard, canonical: string, signature: string): boolean => {
     try {
       const publicKey = createPublicKey({ key: Buffer.from(card.publicKey, 'base64'), format: 'der', type: 'spki' })
-      return edVerify(undefined, Buffer.from(canonical, 'utf8'), publicKey, Buffer.from(bound ? boundSig : unboundSig, 'base64'))
+      return edVerify(undefined, Buffer.from(canonical, 'utf8'), publicKey, Buffer.from(signature, 'base64'))
     } catch {
       return false
     }
+  }
+  // The form that verifies under `card`: bound when it is at its audience
+  // and signed; else the unbound one when the window allows (a bound miss).
+  let bound = false
+  const signedBy = (card: A2aPeerCard): boolean => {
+    bound = audienceOk && verifies(card, boundCanonical(caller, callerUrl, ts, audience, req.method ?? '', pathOf(req.url ?? '')), boundSig)
+    return bound || ((!hasBound || fallback) && verifies(card, unboundCanonical(caller, callerUrl, ts), unboundSig))
+  }
+  const accepted = (): void => {
+    if (bound) return
+    d.onUnbound()
+    if (hasBound) d.onBoundMiss?.()
   }
   // gh#133: a CLI identity deposited HERE, decided from the deposit table
   // before any fetch (the CLI may reach its home through a proxy the host
@@ -197,7 +211,7 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
     if (cli.card === undefined) return { ok: false, reason: 'no-card' }
     if (!signedBy(cli.card)) return { ok: false, reason: 'bad-sig' }
     if (cli.name !== caller) return { ok: false, reason: 'not-derivable' }
-    if (!bound) d.onUnbound()
+    accepted()
     return { ok: true, caller: cli.handle, callerUrl, card: cli.card, bound, cli: true }
   }
   // Fetch the caller's card PLAIN (REVIEW M2 third-round ruling: the
@@ -225,6 +239,6 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   // roster (the prefix variant let a same-zone foreign host sign a target's
   // session handle with its own key).
   if (card.team !== caller) return { ok: false, reason: 'not-derivable' }
-  if (!bound) d.onUnbound()
+  accepted()
   return { ok: true, caller, callerUrl, card, bound }
 }

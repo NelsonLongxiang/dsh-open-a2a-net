@@ -20,25 +20,30 @@ const sign = (url: string, method = 'POST', unbound = true): Record<string, stri
   signOriginClaim({ url, method }, { caller: 'dsh', callerUrl: CALLER_URL, privateKey, unbound, now: Date.now() })
 
 /** A request as the receiving host sees it: lower-cased headers, its own socket end. */
-const req = (headers: Record<string, string>, at: { url: string; method?: string; local?: string; port?: number }): IncomingMessage => ({
+const req = (headers: Record<string, string>, at: { url: string; method?: string; local?: string; port?: number; tls?: boolean }): IncomingMessage => ({
   headers: Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v])),
   method: at.method ?? 'POST',
   url: at.url,
-  socket: { localAddress: at.local ?? '127.0.0.1', localPort: at.port ?? 4000 },
+  socket: { localAddress: at.local ?? '127.0.0.1', localPort: at.port ?? 4000, ...(at.tls === true ? { encrypted: true } : {}) },
 }) as unknown as IncomingMessage
 
-function verify(request: IncomingMessage, options: { unboundOpen?: boolean; audiences?: string[] } = {}) {
+/** The receiving host's own card URL — always among its configured audiences. */
+const OWN = 'http://127.0.0.1:4000'
+
+function verify(request: IncomingMessage, options: { unboundOpen?: boolean; audiences?: string[]; now?: number } = {}) {
   const cardCache = new Map<string, CardCacheEntry>([[CALLER_URL, { at: Date.now(), card }]])
   let unbound = 0
+  let boundMiss = 0
   const verdict = verifyOriginClaim(request, {
     cardCache,
     fetch: () => { throw new Error('no fetch: the card is cached') },
-    audiences: options.audiences ?? [],
+    audiences: options.audiences ?? [OWN],
     unboundOpen: options.unboundOpen ?? true,
     onUnbound: () => { unbound += 1 },
-    now: Date.now(),
+    onBoundMiss: () => { boundMiss += 1 },
+    now: options.now ?? Date.now(),
   })
-  return verdict.then(v => ({ v, unbound }))
+  return verdict.then(v => ({ v, unbound, boundMiss }))
 }
 
 const strip = (headers: Record<string, string>, ...names: string[]): Record<string, string> =>
@@ -52,22 +57,56 @@ describe('OriginClaim audience binding', () => {
   })
 
   it('the same envelope presented at another host is wrong-audience', async () => {
-    const headers = sign('http://127.0.0.1:5000/a2a/canvas-op')
+    const headers = sign('http://127.0.0.1:5000/a2a/canvas-op', 'POST', false)
     expect((await verify(req(headers, { url: '/a2a/canvas-op', port: 4000 }))).v).toEqual({ ok: false, reason: 'wrong-audience' })
     expect((await verify(req(headers, { url: '/a2a/canvas-op', local: '10.0.0.9', port: 5000 }))).v).toEqual({ ok: false, reason: 'wrong-audience' })
+    // A receiver with the window open has no unbound form to fall back to either.
+    expect((await verify(req(headers, { url: '/a2a/canvas-op', local: '10.0.0.9', port: 5000 }), { unboundOpen: true })).v).toEqual({ ok: false, reason: 'wrong-audience' })
+  })
+
+  it('while the window is open a bound miss falls back to the unbound form the envelope also carries (counted twice); once it closes it does not', async () => {
+    // A peer dialled by a name this host does not list (hostname, port map):
+    // during the rollout it keeps working, and the miss shows on the gauge.
+    const headers = sign('http://b.local:13080/a2a/direct')
+    const open = await verify(req(headers, { url: '/a2a/direct' }))
+    expect(open.v).toMatchObject({ ok: true, caller: 'dsh', bound: false })
+    expect([open.unbound, open.boundMiss]).toEqual([1, 1])
+    const closed = await verify(req(headers, { url: '/a2a/direct' }), { unboundOpen: false })
+    expect(closed.v).toEqual({ ok: false, reason: 'wrong-audience' })
+    expect([closed.unbound, closed.boundMiss]).toEqual([0, 0])
   })
 
   it('another path or method at the right host does not verify', async () => {
-    const headers = sign('http://127.0.0.1:4000/.well-known/agent-card.json', 'GET')
+    const headers = sign('http://127.0.0.1:4000/.well-known/agent-card.json', 'GET', false)
     expect((await verify(req(headers, { url: '/a2a/canvas-op' }))).v).toEqual({ ok: false, reason: 'bad-sig' })
     expect((await verify(req(headers, { url: '/.well-known/agent-card.json', method: 'POST' }))).v).toEqual({ ok: false, reason: 'bad-sig' })
     // The query is not signed: the card face's ?caller_session= still verifies.
     expect((await verify(req(headers, { url: '/.well-known/agent-card.json?caller_session=x', method: 'GET' }))).v.ok).toBe(true)
   })
 
-  it('a present bound signature never falls back to the unbound one', async () => {
+  it('a failed bound signature falls back to the unbound one only while the window is open', async () => {
     const headers = { ...sign('http://127.0.0.1:4000/a2a/direct'), 'X-A2A-Caller-Sig2': Buffer.from('forged').toString('base64') }
-    expect((await verify(req(headers, { url: '/a2a/direct' }))).v).toEqual({ ok: false, reason: 'bad-sig' })
+    expect((await verify(req(headers, { url: '/a2a/direct' }), { unboundOpen: false })).v).toEqual({ ok: false, reason: 'bad-sig' })
+    // Open window: no more than stripping Sig2 would give, and it is counted.
+    const open = await verify(req(headers, { url: '/a2a/direct' }))
+    expect(open.v).toMatchObject({ ok: true, bound: false })
+    expect([open.unbound, open.boundMiss]).toEqual([1, 1])
+    // No valid unbound form either: still refused.
+    expect((await verify(req({ ...headers, 'X-A2A-Caller-Sig': headers['X-A2A-Caller-Sig2'] }, { url: '/a2a/direct' }))).v).toEqual({ ok: false, reason: 'bad-sig' })
+  })
+
+  it('an empty Sig2 header is no bound form: the unbound one decides', async () => {
+    const headers = { ...strip(sign('http://127.0.0.1:4000/a2a/direct'), 'X-A2A-Caller-Sig2'), 'X-A2A-Caller-Sig2': '' }
+    const { v, unbound, boundMiss } = await verify(req(headers, { url: '/a2a/direct' }))
+    expect(v).toMatchObject({ ok: true, bound: false })
+    expect([unbound, boundMiss]).toEqual([1, 0])
+  })
+
+  it('a correctly signed stale or future ts is bad-ts', async () => {
+    const at = (now: number) => signOriginClaim({ url: 'http://127.0.0.1:4000/a2a/direct', method: 'POST' }, { caller: 'dsh', callerUrl: CALLER_URL, privateKey, unbound: true, now })
+    expect((await verify(req(at(Date.now() - 6 * 60_000), { url: '/a2a/direct' }))).v).toEqual({ ok: false, reason: 'bad-ts' })
+    expect((await verify(req(at(Date.now() + 6 * 60_000), { url: '/a2a/direct' }))).v).toEqual({ ok: false, reason: 'bad-ts' })
+    expect((await verify(req(at(Date.now() - 4 * 60_000), { url: '/a2a/direct' }))).v.ok).toBe(true)
   })
 
   it('an unbound signature does not verify as a bound one (domain-separated forms)', async () => {
@@ -94,11 +133,26 @@ describe('OriginClaim audience binding', () => {
     expect(headers['X-A2A-Caller-Aud']).toBe('http://127.0.0.1:4000')
   })
 
-  it('a configured alias (proxy / port map) is an audience; loopback spellings of the arrival port are too', async () => {
-    const proxied = sign('https://b.example.com/a2a/direct')
+  it('a configured alias (proxy / port map) is an audience; loopback spellings of a configured loopback origin are too', async () => {
+    const proxied = sign('https://b.example.com/a2a/direct', 'POST', false)
     expect((await verify(req(proxied, { url: '/a2a/direct', local: '172.17.0.2', port: 3000 }))).v).toEqual({ ok: false, reason: 'wrong-audience' })
     expect((await verify(req(proxied, { url: '/a2a/direct', local: '172.17.0.2', port: 3000 }), { audiences: ['https://b.example.com/'] })).v.ok).toBe(true)
-    expect((await verify(req(sign('http://localhost:4000/a2a/direct'), { url: '/a2a/direct', local: '::ffff:127.0.0.1' }))).v.ok).toBe(true)
+    expect((await verify(req(sign('http://localhost:4000/a2a/direct', 'POST', false), { url: '/a2a/direct', local: '::ffff:127.0.0.1' }))).v.ok).toBe(true)
+  })
+
+  it('a loopback arrival is no audience of its own: behind a tunnel only the configured origins count', async () => {
+    // Every proxied request arrives on loopback; that address names no host.
+    const tunnelled = { url: '/a2a/direct', local: '127.0.0.1', port: 13080 }
+    const loopbackAud = sign('http://127.0.0.1:13080/a2a/direct', 'POST', false)
+    expect((await verify(req(loopbackAud, tunnelled), { audiences: ['https://pub.example.com'] })).v).toEqual({ ok: false, reason: 'wrong-audience' })
+    expect((await verify(req(sign('https://pub.example.com/a2a/direct', 'POST', false), tunnelled), { audiences: ['https://pub.example.com'] })).v.ok).toBe(true)
+    expect([...requestAudiences(req({}, tunnelled), ['https://pub.example.com'])]).toEqual(['https://pub.example.com'])
+    // A loopback-bound host (its card URL is loopback) still answers to the other spellings of that port.
+    expect([...requestAudiences(req({}, tunnelled), ['http://127.0.0.1:13080'])].sort()).toEqual(['http://127.0.0.1:13080', 'http://[::1]:13080', 'http://localhost:13080'])
+  })
+
+  it('a TLS arrival names an https audience', () => {
+    expect([...requestAudiences(req({}, { url: '/', local: '192.168.1.5', port: 443, tls: true }), [])]).toEqual(['https://192.168.1.5'])
   })
 
   it('the arrival socket names the audience, never the Host header', () => {
@@ -125,7 +179,7 @@ describe('OriginClaim — a CLI identity deposited here (gh#133)', () => {
     return verifyOriginClaim(request, {
       cardCache: new Map(),
       fetch: () => { fetched += 1; throw new Error('unreachable CLI address') },
-      audiences: [],
+      audiences: [OWN],
       unboundOpen: options.unboundOpen ?? true,
       onUnbound: () => { unbound += 1 },
       now: Date.now(),
@@ -145,7 +199,9 @@ describe('OriginClaim — a CLI identity deposited here (gh#133)', () => {
   })
 
   it('a bound CLI claim verifies at its audience and is wrong-audience elsewhere', async () => {
-    expect((await verifyCli(req(cliV2('http://127.0.0.1:4000/a2a/direct'), { url: '/a2a/direct' }), { unboundOpen: false })).v).toMatchObject({ ok: true, caller: HANDLE, cli: true, bound: true })
+    const boundCli = await verifyCli(req(cliV2('http://127.0.0.1:4000/a2a/direct'), { url: '/a2a/direct' }), { unboundOpen: false })
+    expect(boundCli.v).toMatchObject({ ok: true, caller: HANDLE, cli: true, bound: true })
+    expect(boundCli.unbound).toBe(0)
     expect((await verifyCli(req(cliV2('http://127.0.0.1:5000/a2a/direct'), { url: '/a2a/direct' }))).v).toEqual({ ok: false, reason: 'wrong-audience' })
   })
 
