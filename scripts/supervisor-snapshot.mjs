@@ -293,7 +293,7 @@ function collectIndexM1() {
   try {
     const raw = readFileSync(join(REPO, 'src/index.ts'), 'utf8')
     const lines = raw.endsWith('\n') ? raw.split('\n').length - 1 : raw.split('\n').length
-    rows.push({ name: 'index-m1-ratchet-6776', ok: lines <= 4753 ? 1 : 0, detail: 'src/index.ts ' + lines + '行 ≤4753（#77 B3 批末 5513→4753·B3-R+B3-W 两 slice 后·dispatchLastAt 注释保留）' })
+    rows.push({ name: 'index-m1-ratchet-6776', ok: lines <= 4717 ? 1 : 0, detail: 'src/index.ts ' + lines + '行 ≤4717（#77 G-in 批末 4753→4717·+132 波债经 native-teams 入站桥拆分偿还·EOF 空行清理）' })
   } catch (e) { rows.push({ name: 'index-m1-ratchet-6776', ok: 0, detail: String(e).slice(0, 60) }) }
   return rows
 }
