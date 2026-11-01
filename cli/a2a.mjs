@@ -532,6 +532,8 @@ async function cmdInbox() {
           return
         }
       } catch (error) {
+        // A redirect is the home's configuration, not an outage: waiting would only end in "no mail".
+        if (error instanceof RedirectRefused) die(`[inbox] ${error.message}`)
         // A dropped connection mid-wait is retried; auth failures already exited via die().
         if (!warned) { console.error(`[inbox] host unreachable, still waiting: ${String(error?.cause?.code ?? error)}`); warned = true }
       }
@@ -719,7 +721,7 @@ async function queryOutcome(body) {
     })
     return await replyOf(res)
   } catch (error) {
-    return { found: false, reason: error instanceof RedirectRefused ? 'redirect' : 'unreachable' }
+    return error instanceof RedirectRefused ? { found: false, reason: 'redirect', error: error.message } : { found: false, reason: 'unreachable' }
   }
 }
 
@@ -750,6 +752,12 @@ async function sendDirect(verb, body) {
   }
   if (prior.status === 'failed') die(`[${verb}] task ${String(body.task_id)} already ran and failed: ${String(prior.error ?? 'no reason given')} — not sent again`)
   const state = prior.found === true ? String(prior.status) : `outcome unknown (${String(prior.reason ?? 'not found')})`
+  // gh#148: a redirected lookup stays unknown until the home is fixed — say so, never "rerun later".
+  if (prior.reason === 'redirect') {
+    const lookup = `the outcome lookup was refused: ${String(prior.error)}`
+    if (body.wait === true) die(`[${verb}] task ${String(body.task_id)} is already with the host; ${lookup}`)
+    console.error(`[${verb}] ${lookup}`)
+  }
   if (body.wait === true && prior.status !== 'completed') {
     die(`[${verb}] task ${String(body.task_id)} is already with the host (${state}); its reply is not in yet — rerun later with --task ${String(body.task_id)} --sync`)
   }
