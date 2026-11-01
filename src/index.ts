@@ -1005,9 +1005,9 @@ export function apply(ctx: Context, config: Config): void {
    * refuse and settles as before; `enforce` keeps a refused row owed. No
    * settler (a path that knows none), or settlementAuth off, judges nothing.
    */
-  function settlementJudgeFor(settler: Settler | undefined, parsedForJudge: ReturnType<typeof parseReceipt>): SettlementJudge | undefined {
-    return settler === undefined || config.settlementAuth === 'off' ? undefined : {
-      enforce: config.settlementAuth === 'enforce',
+  function settlementJudgeFor(settler: Settler | undefined, parsedForJudge: ReturnType<typeof parseReceipt>, alwaysEnforce = false): SettlementJudge | undefined {
+    return settler === undefined || (config.settlementAuth === 'off' && !alwaysEnforce) ? undefined : {
+      enforce: alwaysEnforce || config.settlementAuth === 'enforce',
       settler: { caller: settler.caller, proof: settler.proof, ingress: settler.ingress },
       check: (row: TaskRecord, echo: boolean) => judgeSettlement(row, settler, {
         hostLabel: session,
@@ -1096,7 +1096,11 @@ export function apply(ctx: Context, config: Config): void {
    * receipt that leaves over the wire never passed this ledger, so the row
    * stayed owed (and kept the async nudge armed) until its dead TTL. Only
    * an inbound row whose receipt target is the team the receipt reached
-   * settles, and the payer is judged like any in-process settler.
+   * settles, and only for an on-chain payer, whatever settlementAuth says:
+   * this path is new, so "observe settles as before" has no before to keep
+   * (review of PR #149 P2-1) — another session on this host never pays a
+   * row it was not delivered. A settled row records the receipt's line as
+   * its claimed key's outcome, as the in-process path does (hook 3).
    * @param message - the receipt text as delivered.
    * @param creditor - the team the receipt was delivered to.
    * @param payer - who sent it on this host.
@@ -1104,7 +1108,9 @@ export function apply(ctx: Context, config: Config): void {
   function settleOwnInbound(message: string, creditor: string, payer: Settler): void {
     const parsed = parseReceipt(message)
     if (parsed === null || parsed.taskId === '') return
-    taskLedger.resolveFromMessage(message, settlementJudgeFor(payer, parsed), row => row.direction === 'inbound' && row.peer === `local:${creditor}`)
+    const settled = taskLedger.resolveFromMessage(message, settlementJudgeFor(payer, parsed, true), row => row.direction === 'inbound' && row.peer === `local:${creditor}`)
+    const line = parsed.summary.trim()
+    if (settled !== undefined && line !== '') idempotencyStore.recordOutcome(parsed.taskId, { status: 'completed', reply: line.slice(0, SUMMARY_CAP) })
   }
 
   // Server-side idempotency keys (work-order P3): a caller-born task id
@@ -2289,10 +2295,12 @@ export function apply(ctx: Context, config: Config): void {
       void runReceiptLadder(
         {
           deliver: async (team) => {
-            await dispatchAnywhere(team, receipt, session, undefined, new AbortController().signal, true)
-            // gh#141: the caller lane pays this delivery's inbound row (a same-host
-            // receipt already settled it in-process); the owner mailbox does not.
-            if (team === callerTeam) settleOwnInbound(receipt, callerTeam, { caller: session, proof: 'in-process', ingress: 'local' })
+            const delivered = await dispatchAnywhere(team, receipt, session, undefined, new AbortController().signal, true)
+            // gh#141: the caller lane pays this delivery's inbound row across hosts (a
+            // same-host receipt already settled it in-process), unless the caller
+            // refused it. The owner tier is no payment here — but an owner mailbox
+            // on THIS host settles the row in-process, as it always has.
+            if (team === callerTeam && delivered.settlementRefused !== true) settleOwnInbound(receipt, callerTeam, { caller: session, proof: 'in-process', ingress: 'local' })
           },
           ownerTeam: config.team,
           log: (stage, error) => {
@@ -3969,7 +3977,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         }
         const result = await dispatchPeerCandidate(candidate, target, args.message, args.context_id, signal, callerSession, peerAsync, taskId, callbackAddress)
         if (result.ok || signal.aborted) {
-          if (result.ok && routedReceipt) settleOwnInbound(args.message, args.team, { caller: callerSession ?? '', proof: 'in-process', ingress: 'local' })
+          // A receipt the creditor refused (its enforce verdict) pays nothing here either (review of PR #149 P2-2).
+          if (result.ok && routedReceipt) { if (result.settlementRefused !== true) settleOwnInbound(args.message, args.team, { caller: callerSession ?? '', proof: 'in-process', ingress: 'local' }) }
           else if (result.ok) trackOwedTask(taskId, args.team, candidate, result, callbackAddress, briefOf(args.message), sender, await peerBirth(fetch, candidate, target === args.team ? undefined : target))
           const notes: string[] = []
           if (result.ok && args.async === true && result.task_status === 'TASK_STATE_DELIVERED' && !routableCallerLabel(callerSession)) {
@@ -4326,13 +4335,13 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
    * receipt ladder can distinguish "delivered" from "no route" and its
    * owner escalation actually fires for cross-node callback addresses.
    */
-  async function dispatchAnywhere(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode: boolean, taskId?: string): Promise<void> {
+  async function dispatchAnywhere(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode: boolean, taskId?: string): Promise<A2aRouteResult & { ok: true }> {
     const local = await dispatchLocalCandidate(team, message, callerSession, contextId, signal, asyncMode, taskId)
     // A background send books no outbound row: its birth facts have no row to go on.
     if (taskId !== undefined) localBirths.delete(taskId)
     if (local !== undefined) {
       if (!local.ok) throw new Error(local.error)
-      return
+      return local
     }
     const failures: string[] = []
     const candidates = await directoryPeerCandidates(memoizedCardFetch(), team, failures)
@@ -4342,7 +4351,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     let lastError = 'no candidate delivered'
     for (const candidate of candidates) {
       const result = await dispatchPeerCandidate(candidate, team, message, contextId, signal, callerSession, asyncMode, taskId)
-      if (result.ok) return
+      if (result.ok) return result
       lastError = result.error
       if (signal.aborted) break
     }

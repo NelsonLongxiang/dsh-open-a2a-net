@@ -744,7 +744,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // #114 S5: the receipt's consumption search starts here, so an
                 // older steer of a reused id in the history never anchors it.
                 const steerFloor = eventCountOf(target)
-                steerRelay(target, `[A2A direct] (task ${taskId}) ${fromClause(from)} (routed to ${team}) sent:\n\n${message}\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`, from === 'an unknown node' ? undefined : from)
+                const deliveredReceipt = parseReceipt(message) !== null
+                // gh#141: a receipt is answered by nobody — its steer asks for no receipt back.
+                const receiptRequest = deliveredReceipt ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
+                steerRelay(target, `[A2A direct] (task ${taskId}) ${fromClause(from)} (routed to ${team}) sent:\n\n${message}${receiptRequest}`, from === 'an unknown node' ? undefined : from)
                 steered = true
                 recordActivity('in', team, caller, true)
                 armReceiptAutosend(target, taskId, receiptTarget, message, steerFloor)
@@ -775,7 +778,6 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // settle. The row itself stays: stall visibility and the
                 // nudge still apply to the TARGET side.
                 const receiptExpectation = receiptExpectationOf(receiptTarget)
-                const deliveredReceipt = parseReceipt(message) !== null
                 // #114 S2: the row is born with its immutable authorization record.
                 const auth = buildAuthorization(admission, {
                   caller,

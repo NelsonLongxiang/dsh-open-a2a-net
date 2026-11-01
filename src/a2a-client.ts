@@ -73,6 +73,8 @@ type WireRoute = {
   readonly task_status?: unknown
   readonly result?: unknown
   readonly bridge?: unknown
+  /** #139: the peer's enforce verdict on a receipt this delivery carried. */
+  readonly settlement?: unknown
 }
 
 /** The native-teams bridge marker, when the peer's answer carries one: its
@@ -327,6 +329,8 @@ export class A2aClient {
     // the receipt contract back to the caller's team instead. A bridged
     // native round carries the peer's `bridge` marker and promises NO
     // receipt: the text must not claim one the slice will never send.
+    // gh#141: the peer's enforce verdict on a receipt this message carried (#139).
+    const settlementRefused = (raw.settlement as { status?: unknown } | null | undefined)?.status === 'refused'
     if (raw.routed === true && raw.delivered === true) {
       const taskId = wireText(raw.task_id) !== '' ? wireText(raw.task_id) : taskIdFromCaller ?? ''
       const bridge = wireBridge(raw.bridge)
@@ -347,6 +351,7 @@ export class A2aClient {
         task_status: wireText(raw.task_status) === '' ? 'TASK_STATE_DELIVERED' : wireText(raw.task_status),
         ...(consumed !== undefined ? { consumed } : {}),
         ...(bridge !== undefined ? { bridge } : {}),
+        ...(settlementRefused ? { settlementRefused: true as const } : {}),
       }
     }
     const reply = this.replyText(raw.result, '')
@@ -361,6 +366,7 @@ export class A2aClient {
       context_id: wireText(raw.context_id),
       task_status: wireText(raw.task_status),
       ...(bridge !== undefined ? { bridge } : {}),
+      ...(settlementRefused ? { settlementRefused: true as const } : {}),
     }
   }
 
