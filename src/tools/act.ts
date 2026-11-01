@@ -22,11 +22,6 @@ import type { TeamMembershipStore } from '../team-store.ts'
 // src/index.ts / src/tools/info.ts: the d.ts re-export chain noted there).
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
-// A bounded per-client ring of recent report timestamps keeps a chatty peer
-// from flooding the mesh (reportLastAt itself is per-apply state, in the
-// factory below). Keyed by client address.
-const reportLoopRing = new Map<string, number[]>()
-
 /** Model-facing text for one route result. */
 function renderRoute(_args: unknown, value: Record<string, JsonValue>): { type: 'text'; text: string }[] {
   const result = value as unknown as A2aRouteResult
@@ -44,7 +39,6 @@ export interface ActToolsDeps {
   readonly ctx: Context
   readonly config: Config
   readonly logger: ReturnType<Context['logger']>
-  readonly session: string
   // Live-read: owner-settings hot-applies REBINDS the apply-scope let; the
   // join gate reads it through `deps.ownerAllowlist` at call time.
   readonly ownerAllowlist: readonly string[]
@@ -52,7 +46,6 @@ export interface ActToolsDeps {
   readonly joinedSessions: JoinedSessions
   readonly teamMemberships: TeamMembershipStore
   readonly exposureStore: ExposureStore
-  readonly teamAuditRing: { at: number; action: 'join' | 'leave' | 'archive-prune' | 'agent-less'; team: string; id: string; ok: boolean; reason?: string }[]
   readonly reportRing: { at: number; level: 'info' | 'warning' | 'error'; message: string; session: string; task?: string }[]
   readonly recordTeamAudit: (action: 'join' | 'leave' | 'archive-prune' | 'agent-less', team: string, id: string, ok: boolean, reason?: string) => void
   readonly a2aJoinGateRefusal: (exec: { agent?: { id: unknown } } | undefined) => void
@@ -66,11 +59,13 @@ export interface ActToolsDeps {
  */
 export function createActTools(deps: ActToolsDeps) {
   const {
-    ctx, config, logger, session, sessionNodes, joinedSessions,
-    teamMemberships, exposureStore, teamAuditRing, reportRing, recordTeamAudit,
+    ctx, config, logger, sessionNodes, joinedSessions,
+    teamMemberships, exposureStore, reportRing, recordTeamAudit,
     a2aJoinGateRefusal, id8, routeTrunk,
   } = deps
   const reportLastAt = new Map<string, number>()
+  /** Fix ④ loop circuit-breaker: session+text-hash → accepted-report timestamps (10min window). */
+  const reportLoopRing = new Map<string, number[]>()
 
   // S4: team-membership tools — node-declared rosters under the owner's
   // allowlist curation. Joining is a network-visible declaration (the card

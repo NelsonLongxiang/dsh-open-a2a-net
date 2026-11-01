@@ -994,7 +994,9 @@ export function apply(ctx: Context, config: Config): void {
   // route serves, never in any routable surface.
   const reportRing: Array<{ at: number; level: 'info' | 'warning' | 'error'; message: string; session: string; task?: string }> = []
 
-  // One quick dispatch per 5s per client (the control route the route tool shares).
+  // Quick-dispatch face (0.6.9): the workbench POSTs /__dsh_a2a/dispatch as a
+  // human gesture; the window keeps a runaway page (or a stuck autorefresh)
+  // from flooding the mesh. Keyed by client address, mirror of reportLastAt.
   const dispatchLastAt = new Map<string, number>()
 
   /**
@@ -3497,8 +3499,8 @@ ${message}`
   infoTools.registerWhoami()
 
   const actTools = createActTools({
-    ctx, config, logger, session, sessionNodes, joinedSessions,
-    teamMemberships, exposureStore, teamAuditRing, reportRing, recordTeamAudit,
+    ctx, config, logger, sessionNodes, joinedSessions,
+    teamMemberships, exposureStore, reportRing, recordTeamAudit,
     a2aJoinGateRefusal, id8, routeTrunk,
     // Owner-settings hot-apply REBINDS this let: the getter keeps the tool
     // module's call-time read live instead of snapshotting at construction.
