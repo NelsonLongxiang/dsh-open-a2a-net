@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "sourceCommit": "88162aeebc4a1764d4638dbb1d1f74e1f9bd129f",
+  "sourceCommit": "9f1aa8b2e57cd6e1b8ab2d445bf904c3fe894256",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "58bd0071116d192a63f6c8ca1960e227f61f7d6375382c4f1fbaaee5140b3875",
-    "src/faces/admin.ts": "dc23a240bf3161f639e90cdb2bac369f2b64f934583c0fc416f38e9dde1bcda0",
+    "src/index.ts": "8251021e254e15d3afe2f0f17c9f09691dd124b5249319ade54b3739333b7d0e",
+    "src/faces/admin.ts": "ed128ab5928fb4f98b8fc0f79a274253273848b4e20e1c17dc6d3876571ffbf8",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "fded04a5bd4e0443f096874a9a0495786272ddb63d7e5ddf72e89b4502fad333",
@@ -23,20 +23,20 @@
     "src/faces/canvas-notify.ts": "5120c3828d5a9b8928006059fc516d88ac6813afecc9ae0464223b598a4b6850",
     "src/task-auth.ts": "7398ba1cc1f3635c18c9ba5d8979e3aefea03ca131c851ae28a0411087ff2bdf",
     "src/origin-claim.ts": "07a2d7d6c385d6a3c113230697a47228ee6d081acf4f627b132607a2aa6876f9",
-    "src/tools/info.ts": "474a008b29b6d935509c6b5e901cde112ce8f3fcb07997e8d088cd5205e8b1ea",
+    "src/tools/info.ts": "cb66116cb0d991d73e1ac0c080c8290d9daaba886ac132cdd4dbbb8517ab1565",
     "src/tools/act.ts": "4d8f0254e2c117ea690f68fb0fb04539934a724dcd799df15bd592e1797fa39b"
   },
   "anchors": [
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/tools/info.ts:154",
+      "ref": "src/tools/info.ts:156",
       "expect": "name: 'a2a_whoami',"
     },
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/tools/info.ts:644",
+      "ref": "src/tools/info.ts:646",
       "expect": "name: 'a2a_probe',"
     },
     {
@@ -60,13 +60,13 @@
     {
       "page": "p1-arch",
       "cell": "b3",
-      "ref": "src/index.ts:2762",
+      "ref": "src/index.ts:2780",
       "expect": "function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {"
     },
     {
       "page": "p1-arch",
       "cell": "b4",
-      "ref": "src/index.ts:1630",
+      "ref": "src/index.ts:1645",
       "expect": "function exposureDescription(description: string): string | undefined {"
     },
     {
@@ -84,19 +84,19 @@
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:3924",
+      "ref": "src/index.ts:3945",
       "expect": "const sharedCanvas = canvasStore.list().some(name => {"
     },
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:3929",
+      "ref": "src/index.ts:3950",
       "expect": "let orgShared = false"
     },
     {
       "page": "p1-arch",
       "cell": "c1",
-      "ref": "src/index.ts:2014",
+      "ref": "src/index.ts:2029",
       "expect": "path: '/.well-known/agent-card.json',"
     },
     {
@@ -120,19 +120,19 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:483",
+      "ref": "src/faces/admin.ts:507",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:161",
+      "ref": "src/faces/admin.ts:167",
       "expect": "path: '/__dsh_a2a/state',"
     },
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:3117",
+      "ref": "src/index.ts:3135",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -174,7 +174,7 @@
     {
       "page": "p1-arch",
       "cell": "d7",
-      "ref": "src/faces/admin.ts:276",
+      "ref": "src/faces/admin.ts:300",
       "expect": "activity: recentActivity.slice(),"
     },
     {
@@ -210,7 +210,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:4111",
+      "ref": "src/index.ts:4132",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -252,7 +252,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3543",
+      "ref": "src/index.ts:3561",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
@@ -264,13 +264,13 @@
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2363",
+      "ref": "src/index.ts:2381",
       "expect": "void runReceiptLadder("
     },
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2315",
+      "ref": "src/index.ts:2333",
       "expect": "function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {"
     },
     {
@@ -282,13 +282,13 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/admin.ts:112",
+      "ref": "src/faces/admin.ts:116",
       "expect": "export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void {"
     },
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/index.ts:1963",
+      "ref": "src/index.ts:1978",
       "expect": "registerAdminFaces(webServer, {"
     },
     {

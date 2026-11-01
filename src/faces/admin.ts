@@ -87,6 +87,10 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly sessionTeamOf: (agent: Agent) => string
   /** gh#131: the `<zone>/<id8>` handle a canvas may hold for this local session, if it reads as this session. */
   readonly ownCanvasHandleOf: (id: string) => string | undefined
+  /** gh#131: the local session a remote-shaped member ref reads as, if unambiguous. */
+  readonly localSessionOfHandle: (ref: string) => string | undefined
+  /** gh#152: the session's canvas teams read through the local lens — a handle-stored membership of this session counts. */
+  readonly canvasTeamsOfSession: (id: string) => string[]
   readonly nodeMetadataOf: (agent: Agent) => { name: string; description: string; workspace?: string }
   readonly canvasTeamOf: (name: string) => string
   readonly archivedSessionFilter: () => ((id: string) => boolean) | undefined
@@ -150,6 +154,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
     sessionLabelOf,
     sessionTeamOf,
     ownCanvasHandleOf,
+    localSessionOfHandle,
+    canvasTeamsOfSession,
     nodeMetadataOf,
     canvasTeamOf,
     archivedSessionFilter,
@@ -181,20 +187,25 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
         const tFacts0 = Date.now()
         const sessions: Array<Record<string, unknown>> = [...liveRoots.values()]
           .filter(agent => isArchived?.(String(agent.id)) !== true)
-          .map(agent => ({
-            id: String(agent.id),
-            label: sessionLabelOf(agent),
-            team: sessionTeamOf(agent),
-            ...nodeMetadataOf(agent),
-            joined: sessionNodes.has(String(agent.id)),
-            live: true,
-            teams: [...teamMemberships.teamsOf(String(agent.id))],
-            // #19 D3: the session's exposure tier (linked floor /
-            // fleet opt-up) — readable on the state face.
-            exposure: exposureStore.tierOf(String(agent.id)),
-            ...(canvasStore.teamsOf(String(agent.id)).length > 0 ? { canvasTeams: [...canvasStore.teamsOf(String(agent.id))] } : {}),
-            ...(groupOf(String(agent.id)) !== undefined ? { group: groupOf(String(agent.id)) } : {}),
-          }))
+          .map(agent => {
+            // gh#152: canvas teams through the local lens — a handle-stored
+            // membership (gh#131) shows here exactly as routing reads it.
+            const canvasTeams = canvasTeamsOfSession(String(agent.id))
+            return {
+              id: String(agent.id),
+              label: sessionLabelOf(agent),
+              team: sessionTeamOf(agent),
+              ...nodeMetadataOf(agent),
+              joined: sessionNodes.has(String(agent.id)),
+              live: true,
+              teams: [...teamMemberships.teamsOf(String(agent.id))],
+              // #19 D3: the session's exposure tier (linked floor /
+              // fleet opt-up) — readable on the state face.
+              exposure: exposureStore.tierOf(String(agent.id)),
+              ...(canvasTeams.length > 0 ? { canvasTeams } : {}),
+              ...(groupOf(String(agent.id)) !== undefined ? { group: groupOf(String(agent.id)) } : {}),
+            }
+          })
         // Cold joined sessions: a remembered intent whose Agent is not
         // back yet (host restarted, session not opened). The row carries
         // no facts — the Web client merges the session title from its
@@ -220,7 +231,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             joined: true,
             live: false,
             teams: [...teamMemberships.teamsOf(id)],
-            ...(canvasStore.teamsOf(id).length > 0 ? { canvasTeams: [...canvasStore.teamsOf(id)] } : {}),
+            // gh#152: same local lens as the live rows (handle-stored counts).
+            ...(canvasTeamsOfSession(id).length > 0 ? { canvasTeams: canvasTeamsOfSession(id) } : {}),
             ...(groupOf(id) !== undefined ? { group: groupOf(id) } : {}),
           })
         }
@@ -233,21 +245,33 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             teams: canvasStore.list().map(name => ({
               name,
               team: canvasTeamOf(name),
-              members: canvasStore.membersOf(name).map(id => {
-                // Dual shape: local members report this zone's join/live
-                // facts; remote refs are opaque team handles — the state
-                // face passes them through with remote:true for the
-                // workbench's member chips and pickers.
-                if (isRemoteMemberRef(id)) {
-                  return { id, team: id, remote: true }
+              // gh#152: members as the local tiers read them (gh#131). One
+              // of this host's own handles renders as the local session it
+              // names — join/live facts instead of an opaque remote chip — and
+              // the two stored shapes of one session collapse to ONE row (the
+              // store keeps both). Genuinely remote refs pass through with
+              // remote:true for the workbench's member chips and pickers.
+              members: (() => {
+                const rows: Array<{ id: string; team: string; joined?: boolean; live?: boolean; remote?: boolean }> = []
+                const seenLocal = new Set<string>()
+                for (const id of canvasStore.membersOf(name)) {
+                  if (isRemoteMemberRef(id)) {
+                    const localId = localSessionOfHandle(id)
+                    if (localId !== undefined) {
+                      if (seenLocal.has(localId)) continue
+                      seenLocal.add(localId)
+                      rows.push({ id: localId, team: `${config.team}/${id8(localId)}`, joined: sessionNodes.has(localId) || joinedSessions.has(localId), live: sessionNodes.has(localId) })
+                      continue
+                    }
+                    rows.push({ id, team: id, remote: true })
+                    continue
+                  }
+                  if (seenLocal.has(id)) continue
+                  seenLocal.add(id)
+                  rows.push({ id, team: `${config.team}/${id8(id)}`, joined: sessionNodes.has(id) || joinedSessions.has(id), live: sessionNodes.has(id) })
                 }
-                return {
-                  id,
-                  team: `${config.team}/${id8(id)}`,
-                  joined: sessionNodes.has(id) || joinedSessions.has(id),
-                  live: sessionNodes.has(id),
-                }
-              }),
+                return rows
+              })(),
             })),
           },
           host: lanIp === '' ? {} : { lanIp },

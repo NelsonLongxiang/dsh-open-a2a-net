@@ -61,6 +61,8 @@ export interface InfoToolsDeps {
   readonly sessionTeamOf: (agent: Agent) => string
   readonly nodeMetadataOf: (agent: Agent) => { name: string; description: string; workspace?: string }
   readonly canvasTeamOf: (name: string) => string
+  /** gh#152: the session's canvas teams read through the local lens — a handle-stored membership of this session counts. */
+  readonly canvasTeamsOfSession: (id: string) => string[]
   readonly memoizedCardFetch: () => ZoneCardFetch
   readonly mapBounded: <T, R>(items: readonly T[], limit: number, task: (item: T) => Promise<R>) => Promise<R[]>
   readonly SWEEP_CONCURRENCY: number
@@ -82,7 +84,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
     joinedSessions, teamMemberships, canvasStore, exposureStore, idempotencyStore,
     cardCache, inFlightRoutes, recentActivity, teamAuditRing, reportRing,
     sessionNodes,
-    id8, sessionTeamOf, nodeMetadataOf, canvasTeamOf, memoizedCardFetch,
+    id8, sessionTeamOf, nodeMetadataOf, canvasTeamOf, canvasTeamsOfSession, memoizedCardFetch,
     mapBounded, SWEEP_CONCURRENCY, a2aJoinGateRefusal, observeAuthorization,
     settlePeerCard, client, listDirectoryTeams,
   } = deps
@@ -236,7 +238,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
           },
           teams: {
             roster: [...teamMemberships.teamsOf(agentId)],
-            canvas: [...canvasStore.teamsOf(agentId)],
+            canvas: [...canvasTeamsOfSession(agentId)],
           },
           allowlist: {
             patterns,
@@ -333,7 +335,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
           if (callerAgent !== undefined) {
             const callerId = String(callerAgent.id)
             const ownHandle = sessionTeamOf(callerAgent)
-            const myCanvas = new Set(canvasStore.teamsOf(callerId))
+            const myCanvas = new Set(canvasTeamsOfSession(callerId))
             const myRoster = new Set(teamMemberships.teamsOf(callerId))
             const before = teams.length
             teams = teams.filter(row => {
@@ -346,7 +348,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
               const target = [...sessionNodes.values()].find(agent => id8(String(agent.id)) === targetId8)
               if (target === undefined) return true // unresolvable: keep (host fact)
               const targetId = String(target.id)
-              const shares = [...canvasStore.teamsOf(targetId)].some(name => myCanvas.has(name))
+              const shares = [...canvasTeamsOfSession(targetId)].some(name => myCanvas.has(name))
                 || [...teamMemberships.teamsOf(targetId)].some(name => myRoster.has(name))
               return shares
             })
