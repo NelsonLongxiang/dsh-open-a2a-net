@@ -23,7 +23,7 @@ import { TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_MAX_LIMIT } from '../session-trans
 import { refuseIfBudgetExhausted } from '../recursion-guard.ts'
 import { peerPayloadFingerprint, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from '../idempotency-store.ts'
 import { briefOf, type TaskLedger } from '../task-ledger.ts'
-import { taskIdRefusal } from '../receipt.ts'
+import { parseReceipt, taskIdRefusal } from '../receipt.ts'
 import { buildAuthorization, claimCovers, refusalOf, type Admission, type AuthProof, type SettlementRefusal, type Settler } from '../task-auth.ts'
 import type { Config } from '../index.ts'
 import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from '../transport-caps.ts'
@@ -775,6 +775,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // settle. The row itself stays: stall visibility and the
                 // nudge still apply to the TARGET side.
                 const receiptExpectation = receiptExpectationOf(receiptTarget)
+                const deliveredReceipt = parseReceipt(message) !== null
                 // #114 S2: the row is born with its immutable authorization record.
                 const auth = buildAuthorization(admission, {
                   caller,
@@ -790,8 +791,13 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 })
                 // #139: the member that actually received it answers for a canvas or bare-zone team.
                 const deliveredTo = sessionTeamOf(target)
-                taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message), auth, deliveredTo === team ? undefined : deliveredTo)
-                armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
+                // gh#141: a receipt owes no receipt — it is settlement traffic,
+                // recorded on the row it settled. Booking it would leave a debt
+                // nothing can pay, and a nudge chasing an answer nobody owes.
+                if (!deliveredReceipt) {
+                  taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message), auth, deliveredTo === team ? undefined : deliveredTo)
+                  armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
+                }
                 const payload = JSON.stringify({
                   routed: true,
                   delivered: true,
@@ -802,7 +808,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                   task_status: 'TASK_STATE_DELIVERED',
                   artifacts: [],
                   consumed: consumedProbe,
-                  receipt: receiptExpectation === 'process-label' ? 'none' : 'routed',
+                  receipt: receiptExpectation === 'process-label' || deliveredReceipt ? 'none' : 'routed',
                 })
                 res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
                 res.end(payload)

@@ -46,7 +46,7 @@ import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
-import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type OutboundBirth, type ReceiptResolvedInfo, type Sender, type TaskRecord } from './task-ledger.ts'
+import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type OutboundBirth, type ReceiptResolvedInfo, type Sender, type SettlementJudge, type TaskRecord } from './task-ledger.ts'
 import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
@@ -1000,22 +1000,13 @@ export function apply(ctx: Context, config: Config): void {
   const dispatchLastAt = new Map<string, number>()
 
   /**
-   * Settle one message through the ledger and announce what it correlated
-   * on `a2a/receipt-resolved` — the seam peer plugins (native-teams)
-   * consume to settle their outstanding async submissions. Fence honesty:
-   * the try/catch contains SYNCHRONOUS listener throws (cordis dispatch is
-   * synchronous, so a throw lands here and the routing path survives); an
-   * ASYNC listener that rejects escapes as an unhandled rejection and is
-   * the consumer's own discipline — keep seam listeners synchronous.
-   * @param message - the inbound or relayed message text.
+   * #114 S4: the judge of one settler against each correlated row's
+   * authorization chain (design §4.2). `observe` records what enforce would
+   * refuse and settles as before; `enforce` keeps a refused row owed. No
+   * settler (a path that knows none), or settlementAuth off, judges nothing.
    */
-  function settleAndAnnounce(message: string, settler?: Settler): SettlementRefusal | undefined {
-    // #114 S4: judge the settler against each correlated row's authorization
-    // chain (design §4.2). `observe` records what enforce would refuse and
-    // settles as before; `enforce` keeps a refused row owed. A call with no
-    // settler (a path that knows none) is not judged.
-    const parsedForJudge = parseReceipt(message)
-    const judge = settler === undefined || config.settlementAuth === 'off' ? undefined : {
+  function settlementJudgeFor(settler: Settler | undefined, parsedForJudge: ReturnType<typeof parseReceipt>): SettlementJudge | undefined {
+    return settler === undefined || config.settlementAuth === 'off' ? undefined : {
       enforce: config.settlementAuth === 'enforce',
       settler: { caller: settler.caller, proof: settler.proof, ingress: settler.ingress },
       check: (row: TaskRecord, echo: boolean) => judgeSettlement(row, settler, {
@@ -1030,6 +1021,21 @@ export function apply(ctx: Context, config: Config): void {
         echo,
       }),
     }
+  }
+
+  /**
+   * Settle one message through the ledger and announce what it correlated
+   * on `a2a/receipt-resolved` — the seam peer plugins (native-teams)
+   * consume to settle their outstanding async submissions. Fence honesty:
+   * the try/catch contains SYNCHRONOUS listener throws (cordis dispatch is
+   * synchronous, so a throw lands here and the routing path survives); an
+   * ASYNC listener that rejects escapes as an unhandled rejection and is
+   * the consumer's own discipline — keep seam listeners synchronous.
+   * @param message - the inbound or relayed message text.
+   */
+  function settleAndAnnounce(message: string, settler?: Settler): SettlementRefusal | undefined {
+    const parsedForJudge = parseReceipt(message)
+    const judge = settlementJudgeFor(settler, parsedForJudge)
     // W7 slice-2 hook 3: a receipt that correlates an id THIS node's
     // idempotency ledger claimed records the receipt's human line as that
     // key's outcome. Parsed DIRECTLY off the receipt codec — a claimed key
@@ -1081,6 +1087,24 @@ export function apply(ctx: Context, config: Config): void {
       logger.warn(`a2a: receipt-resolved listener rejected: ${String(error)}`)
     }
     return undefined
+  }
+
+  /**
+   * gh#141: a receipt this node sent across hosts pays its own debt — the
+   * inbound row the answered delivery was born with (F2'). The same-host
+   * path settles in settleAndAnnounce, as the receipt lands in-process; a
+   * receipt that leaves over the wire never passed this ledger, so the row
+   * stayed owed (and kept the async nudge armed) until its dead TTL. Only
+   * an inbound row whose receipt target is the team the receipt reached
+   * settles, and the payer is judged like any in-process settler.
+   * @param message - the receipt text as delivered.
+   * @param creditor - the team the receipt was delivered to.
+   * @param payer - who sent it on this host.
+   */
+  function settleOwnInbound(message: string, creditor: string, payer: Settler): void {
+    const parsed = parseReceipt(message)
+    if (parsed === null || parsed.taskId === '') return
+    taskLedger.resolveFromMessage(message, settlementJudgeFor(payer, parsed), row => row.direction === 'inbound' && row.peer === `local:${creditor}`)
   }
 
   // Server-side idempotency keys (work-order P3): a caller-born task id
@@ -2264,7 +2288,12 @@ export function apply(ctx: Context, config: Config): void {
       // without a log.
       void runReceiptLadder(
         {
-          deliver: (team) => dispatchAnywhere(team, receipt, session, undefined, new AbortController().signal, true) as Promise<void>,
+          deliver: async (team) => {
+            await dispatchAnywhere(team, receipt, session, undefined, new AbortController().signal, true)
+            // gh#141: the caller lane pays this delivery's inbound row (a same-host
+            // receipt already settled it in-process); the owner mailbox does not.
+            if (team === callerTeam) settleOwnInbound(receipt, callerTeam, { caller: session, proof: 'in-process', ingress: 'local' })
+          },
           ownerTeam: config.team,
           log: (stage, error) => {
             // N2 (observability): throttled per task to avoid ping-pong noise.
@@ -3881,6 +3910,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // steered receipt header names it — so "[A2A receipt] task <id>" from
       // the target correlates with the route's own result verbatim.
       const taskId = `direct-${Math.random().toString(16).slice(2, 10)}`
+      const routedReceipt = parseReceipt(args.message) !== null
       // Candidate order: this host's own teams first (an in-process steer —
       // cheapest possible and immune to nested-signal aborts), then direct
       // publishers, then zone delegations, deduplicated by URL.
@@ -3890,7 +3920,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       localBirths.delete(taskId)
       if (outcome !== undefined) {
         if (outcome.ok) {
-          trackOwedTask(taskId, args.team, 'local', outcome, callbackAddress, briefOf(args.message), sender, localBirth)
+          // gh#141: a receipt owes no receipt — booking it would strand a row nothing settles.
+          if (!routedReceipt) trackOwedTask(taskId, args.team, 'local', outcome, callbackAddress, briefOf(args.message), sender, localBirth)
           return outcome as unknown as Record<string, JsonValue>
         }
         failures.push(`local: ${outcome.error}`)
@@ -3938,7 +3969,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         }
         const result = await dispatchPeerCandidate(candidate, target, args.message, args.context_id, signal, callerSession, peerAsync, taskId, callbackAddress)
         if (result.ok || signal.aborted) {
-          if (result.ok) trackOwedTask(taskId, args.team, candidate, result, callbackAddress, briefOf(args.message), sender, await peerBirth(fetch, candidate, target === args.team ? undefined : target))
+          if (result.ok && routedReceipt) settleOwnInbound(args.message, args.team, { caller: callerSession ?? '', proof: 'in-process', ingress: 'local' })
+          else if (result.ok) trackOwedTask(taskId, args.team, candidate, result, callbackAddress, briefOf(args.message), sender, await peerBirth(fetch, candidate, target === args.team ? undefined : target))
           const notes: string[] = []
           if (result.ok && args.async === true && result.task_status === 'TASK_STATE_DELIVERED' && !routableCallerLabel(callerSession)) {
             notes.push(unroutableCallerNote(String(callerSession ?? session)))

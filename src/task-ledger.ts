@@ -721,10 +721,12 @@ export class TaskLedger {
    * record with the latest outcome. A dead-lettered row revives through this
    * same path when a revived target finally answers.
    * @param message - the inbound or relayed message text.
+   * @param only - gh#141: settle the named row only when it passes this test;
+   *   with a test, a row that fails it or is already archived correlates nothing.
    * @returns what the receipt settled, or `undefined` when the message
    *   correlated nothing.
    */
-  resolveFromMessage(message: string, judge?: SettlementJudge): ReceiptResolvedInfo | undefined {
+  resolveFromMessage(message: string, judge?: SettlementJudge, only?: (record: TaskRecord) => boolean): ReceiptResolvedInfo | undefined {
     const parsed = parseReceipt(message)
     if (parsed === null) return undefined
     const taskId = parsed.taskId
@@ -734,6 +736,7 @@ export class TaskLedger {
     const elapsedMs = parsed.envelope?.elapsedMs
     this.sweep(this.now())
     const record = this.tasks.find(entry => entry.taskId === taskId)
+    if (only !== undefined && (record === undefined || !only(record))) return undefined
     if (record !== undefined) {
       // #114 S4: judge the settler before the row moves; enforce keeps a refused row owed.
       const verdict = judge?.check(record, false)
