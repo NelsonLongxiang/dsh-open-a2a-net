@@ -2607,7 +2607,7 @@ ${message}`
       unboundOpen: config.originClaimUnboundWindow !== false,
       onUnbound: () => { unboundInboundCount += 1 },
       onBoundMiss: () => { boundMissInboundCount += 1 },
-      loopbackArrival: (config.originClaimUrl ?? '') === '' && (config.originClaimAudiences ?? []).length === 0,
+      loopbackArrival: (config.originClaimUrl ?? '') === '',
       now: Date.now(),
       ...(options?.cli === true ? { cliDeposit: cliDepositCard } : {}),
     })

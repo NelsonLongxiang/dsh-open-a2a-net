@@ -117,10 +117,9 @@ counted as `boundMissInbound` besides `unboundInbound`:
    `originClaimAudiences` list, and the address the request arrived on
    (the socket's LOCAL end, plus the other loopback spellings of the same
    port when that address is loopback). A host that sets `originClaimUrl`
-   or `originClaimAudiences` declares it is reached through a tunnel or
-   proxy, whose requests all arrive on loopback; there a loopback arrival
-   names no host and counts only when a configured origin is loopback at
-   that port. The `Host` header is never read, because the
+   declares it is reached elsewhere — a tunnel or proxy, whose requests
+   all arrive on loopback; there a loopback arrival names no host and
+   counts only when a configured origin is loopback at that port. The `Host` header is never read, because the
    sender sets it.
 2. The signature covers the receiver's own `req.method` and path, so an
    envelope made for one route does not verify on another.
@@ -155,9 +154,10 @@ all still walks the caller gate on the faces that accept legacy deliveries.
 - A port-mapped or proxied host (the URL peers dial is not its card URL
   and not the address the request arrives on) must list that URL in
   `originClaimAudiences` or set `originClaimUrl`, or bound envelopes to it
-  are `wrong-audience`. A loopback-bound host behind a tunnel must do so
-  for a second reason: without either setting its loopback arrivals answer
-  to the loopback audience, which other hosts on a peer's machine share.
+  are `wrong-audience`. A host behind a tunnel or proxy should set
+  `originClaimUrl` for a second reason: without it, its loopback arrivals
+  answer to the loopback audience, which other hosts on a peer's machine
+  share (`originClaimAudiences` alone does not turn that off).
 - The CLI (`cli/a2a.mjs`) signs only its home host's requests and is not
   changed here: it still signs the unbound form only. Its claims (gh#133,
   decided from the home host's deposit table) take the same rules as a zone

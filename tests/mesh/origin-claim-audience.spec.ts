@@ -103,6 +103,23 @@ describe('OriginClaim audience binding (mesh)', () => {
     }
   }, 60_000)
 
+  it('a host behind a declared tunnel (originClaimUrl) answers to no loopback audience of its own', async () => {
+    const portA = await reservePort()
+    const portB = await reservePort()
+    const a = await bootNode({ name: 'A', session: 'mesh-aud-ta', team: 'dsh', sessionNodes: true, port: portA, peers: [`http://127.0.0.1:${String(portB)}`] })
+    const b = await bootNode({ name: 'B', session: 'mesh-aud-tb', team: 'dsh', sessionNodes: true, port: portB, originClaimUnboundWindow: false, originClaimUrl: `http://b.tunnel.test:${String(portB)}`, peers: [`http://127.0.0.1:${String(portA)}`] })
+    try {
+      // A dials B on loopback, as every tunnelled request arrives: B's audience is its tunnel URL only.
+      const refused = await call(`${a.baseUrl}/__dsh_a2a/fleet-canvas-op`, { body: { peer: b.baseUrl, op: 'create', name: 'via-loopback' } })
+      expect(refused.ok).toBe(false)
+      expect(String(refused.error)).toContain('wrong-audience')
+      expect(await teamsOf(b)).not.toContain('via-loopback')
+    } finally {
+      await a.dispose()
+      await b.dispose()
+    }
+  }, 60_000)
+
   it('with both windows open the unbound form verifies at B (counted, the bound miss too); a sender with its window closed signs no unbound form', async () => {
     const m = await capturingHost()
     const [a, b] = await linkedPair(m, { aOpen: true, bOpen: true })

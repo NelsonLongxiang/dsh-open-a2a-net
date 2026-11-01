@@ -112,7 +112,7 @@ function hostForm(address: string): string {
  * (own card URL, operator aliases) plus the address the request actually
  * arrived on — the socket's LOCAL end, which a sender cannot choose (unlike
  * the Host header). A loopback arrival answers to all its loopback
- * spellings — unless `loopbackArrival` is off (the operator declared a
+ * spellings — unless `loopbackArrival` is off (originClaimUrl declares a
  * tunnel or proxy, whose requests all arrive on loopback), and then only
  * when a configured origin is loopback at that port.
  */
@@ -165,7 +165,7 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   readonly onUnbound: () => void
   /** Count one bound form that missed and fell back to the unbound one. */
   readonly onBoundMiss?: () => void
-  /** A loopback arrival is an audience of its own (default); off behind a declared tunnel or proxy. */
+  /** A loopback arrival is an audience of its own (default); off when originClaimUrl declares a tunnel or proxy. */
   readonly loopbackArrival?: boolean
   readonly now: number
   /** On the faces that admit CLI identities: the deposit a claim URL names. */

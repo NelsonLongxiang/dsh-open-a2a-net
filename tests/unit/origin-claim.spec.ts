@@ -148,7 +148,7 @@ describe('OriginClaim audience binding', () => {
     expect((await verify(req(sign('http://127.0.0.1:3080/a2a/direct', 'POST', false), local), { audiences: ['http://192.168.1.5:3080'] })).v.ok).toBe(true)
   })
 
-  it('behind a declared tunnel or proxy (originClaimUrl / originClaimAudiences set) a loopback arrival is no audience of its own', async () => {
+  it('behind a declared tunnel or proxy (originClaimUrl set) a loopback arrival is no audience of its own', async () => {
     // Every tunnelled request arrives on loopback; that address names no host.
     const tunnelled = { url: '/a2a/direct', local: '127.0.0.1', port: 13080 }
     const loopbackAud = sign('http://127.0.0.1:13080/a2a/direct', 'POST', false)
