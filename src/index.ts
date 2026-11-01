@@ -1396,6 +1396,21 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
+   * gh#152: a local session's canvas teams as every READ face sees them — the
+   * stored member id, or one of this host's own handles that reads as this
+   * session (a fleet edit stored it by handle; routing has read that shape
+   * through canvasLocalMembersOf since gh#131). Visibility now matches
+   * routability: whoami, the scoped teams listing and the state face show the
+   * canvas a handle-stored membership puts the session in.
+   */
+  function canvasTeamsOfSession(id: string): string[] {
+    const teams = new Set(canvasStore.teamsOf(id))
+    const own = ownCanvasHandleOf(id)
+    if (own !== undefined) for (const name of canvasStore.teamsOf(own)) teams.add(name)
+    return [...teams]
+  }
+
+  /**
    * gh#131: a canvas team's members as the local routing tiers read them —
    * one of this host's own handles stands for the session it names (a fleet
    * edit stored it by handle). Read at route time, never written back: a
@@ -1961,7 +1976,7 @@ export function apply(ctx: Context, config: Config): void {
     whenWebServerSettled((webServer) => {
       // gh#77 B1: the admin faces live in src/faces/admin.ts.
       registerAdminFaces(webServer, {
-        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
+        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url,
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
@@ -2109,7 +2124,10 @@ export function apply(ctx: Context, config: Config): void {
             // zone/id8 handles (local session ids translate to the node's
             // session-team handle) — one form on the wire, so readers never
             // mix id/handle shapes (owner: 数据对不上).
-            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: canvasStore.membersOf(name).map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) })) } : {}),
+            // gh#152: members are read through the local tiers' lens — one of
+            // this host's own handles resolves to the session it names, and
+            // the two stored shapes of one session publish as ONE handle.
+            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) })) } : {}),
             ...(named && lanIp !== '' ? { lanIp } : {}),
             ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}),
             description: `A2A node exposing team ${config.team}${named ? '' : ' (minimal card — OriginClaim envelope required for the full card: X-A2A-Caller/-Url/-Ts/-Sig signed with your card key)'}`,
@@ -3599,7 +3617,7 @@ ${message}`
     get ownerAllowlist() { return ownerAllowlist },
     get ownerTeamScopeInfo() { return ownerTeamScopeInfo },
     teamAuditRing, reportRing, a2aJoinGateRefusal, observeAuthorization,
-    settlePeerCard, client, listDirectoryTeams,
+    settlePeerCard, client, listDirectoryTeams, canvasTeamsOfSession,
     SWEEP_CONCURRENCY,
   })
   infoTools.registerWhoami()
@@ -3654,7 +3672,10 @@ ${message}`
       // count are the facts a caller needs before routing — resolution picks
       // the first live member at route time.
       ...canvasStore.list().map(name => {
-        const members = canvasStore.membersOf(name)
+        // gh#152: members as the local tiers read them (gh#131) — a handle
+        // naming one of this host's own sessions counts as that member, and
+        // the two stored shapes of one session collapse to one.
+        const members = [...new Set(canvasLocalMembersOf(name))]
         const live = members.filter(id => sessionNodes.has(id)).length
         return {
           team: canvasTeamOf(name),
