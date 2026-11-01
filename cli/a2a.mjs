@@ -194,6 +194,31 @@ const keyHeaders = () => {
   }
 }
 
+/** A redirect the CLI refused to follow (gh#148): its Location is never dialled. */
+class RedirectRefused extends Error {
+  constructor(url, status, location) {
+    super(`${url} answered ${String(status)} → ${location} — not followed: the API key (and, on a route, the OriginClaim) would travel to the new address. Point --home / $A2A_HOME at the address the host itself serves`)
+    this.name = 'RedirectRefused'
+  }
+}
+
+/**
+ * Every request to the home carries the API key (and the pocket cookie), so
+ * none follows a redirect (gh#148): fetch's default would resend them to
+ * wherever Location points, cross-origin included. `manual` hands back the
+ * 3xx itself, so the refusal reads the status — not the wording of
+ * undici's error for `redirect: 'error'`.
+ */
+async function homeFetch(url, init) {
+  const res = await fetch(url, { ...init, redirect: 'manual' })
+  const location = res.headers.get('location')
+  if (res.status >= 300 && res.status < 400 && location !== null) {
+    await res.body?.cancel().catch(() => {})
+    throw new RedirectRefused(url, res.status, location)
+  }
+  return res
+}
+
 /**
  * Read a JSON object reply. A non-JSON or non-object body (a proxy page, an
  * empty 405 from a front proxy, an old host) becomes an error object, and an
@@ -213,7 +238,7 @@ async function replyOf(res) {
 }
 
 async function control(body) {
-  const res = await fetch(`${home()}/__dsh_a2a/cli-deposit`, {
+  const res = await homeFetch(`${home()}/__dsh_a2a/cli-deposit`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', ...keyHeaders() }, body: JSON.stringify(body),
   })
   if (res.status === 401 || res.status === 403) die(keyHint(res.status))
@@ -226,7 +251,7 @@ function keyHint(status) {
 }
 
 async function state() {
-  const res = await fetch(`${home()}/__dsh_a2a/state`, { headers: keyHeaders() })
+  const res = await homeFetch(`${home()}/__dsh_a2a/state`, { headers: keyHeaders() })
   if (res.status === 401 || res.status === 403) die(keyHint(res.status))
   if (res.status !== 200) die(`state face ${String(res.status)} on ${home()}`)
   return await replyOf(res)
@@ -642,15 +667,11 @@ async function postDirect(body) {
   const url = `${home()}/a2a/direct`
   for (let attempt = 0; ; attempt += 1) {
     try {
-      const res = await fetch(url, {
+      const res = await homeFetch(url, {
         method: 'POST',
         // A fresh OriginClaim per attempt: the signature carries its own timestamp.
         headers: { 'Content-Type': 'application/json', ...(signed ? originClaimFor(home())(url, 'POST') : {}), ...keyHeaders() },
         body: JSON.stringify(body),
-        // Never followed: the bound signature names the address dialled, and
-        // a followed redirect would carry the claim and the API key to
-        // wherever Location points (review of PR #146).
-        redirect: 'error',
       })
       const refusal = signed && res.status === 200 ? claimRefusal(await res.clone().text()) : undefined
       // gh#133 compatibility: a host from before the fix cannot derive a CLI
@@ -679,9 +700,9 @@ async function postDirect(body) {
       }
       await res.text().catch(() => '')
     } catch (error) {
-      if (error?.cause?.message === 'unexpected redirect') {
-        throw new Error(`[${String(body.task_id)}] ${url} answered with a redirect — not followed and not resent: the bound OriginClaim names the address dialled, and the claim and API key would travel to the new address. Point --home / $A2A_HOME at the address the host itself serves`)
-      }
+      // Never followed nor resent (review of PR #146): the bound signature
+      // names the address dialled, and a redirect lands nothing there.
+      if (error instanceof RedirectRefused) throw new Error(`[${String(body.task_id)}] ${error.message}; not resent`)
       if (!transientError(error)) throw error
       if (attempt >= RETRY_DELAYS_MS.length) { notConfirmed(body, attempt); throw error }
     }
@@ -692,13 +713,13 @@ async function postDirect(body) {
 /** Ask the host how an earlier attempt of this task id settled. */
 async function queryOutcome(body) {
   try {
-    const res = await fetch(`${home()}/a2a/query`, {
+    const res = await homeFetch(`${home()}/a2a/query`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...keyHeaders() },
       body: JSON.stringify({ task_id: body.task_id, fingerprint: payloadFingerprint(body) }),
     })
     return await replyOf(res)
-  } catch {
-    return { found: false, reason: 'unreachable' }
+  } catch (error) {
+    return { found: false, reason: error instanceof RedirectRefused ? 'redirect' : 'unreachable' }
   }
 }
 

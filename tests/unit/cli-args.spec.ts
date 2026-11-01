@@ -763,7 +763,39 @@ describe('a2a-net CLI: route carries its own task id and resends it safely (gh#1
     expect(out.code).toBe(1)
     expect(landing.seen).toHaveLength(0)
     expect(hits).toBe(1)
-    expect(out.stderr).toContain('answered with a redirect — not followed and not resent')
+    expect(out.stderr).toContain(`answered 307 → ${landing.url}/a2a/direct — not followed`)
+    expect(out.stderr).toContain('not resent')
+  })
+
+  it('gh#148: the keyed requests that carry no claim never follow a redirect either — inbox, status, and the query after a replay', async () => {
+    const landing = await stubHost(() => ({ status: 200, body: { ok: true, mail: [], found: true, status: 'completed', reply: 'x' } }))
+    servers.push(landing.server)
+    const redirector = createServer((req, res) => {
+      req.resume()
+      req.on('end', () => {
+        if (req.url === '/a2a/direct') {
+          const payload = JSON.stringify({ code: -32003, task_id: 'direct-aaaabbbbcccc', replay: true, error: 'duplicate' })
+          res.writeHead(409, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+          res.end(payload)
+          return
+        }
+        res.writeHead(req.url === '/__dsh_a2a/state' ? 302 : 307, { Location: `${landing.url}${req.url ?? '/'}` })
+        res.end()
+      })
+    })
+    await new Promise<void>(resolve => redirector.listen(0, '127.0.0.1', resolve))
+    servers.push(redirector)
+    const url = `http://127.0.0.1:${String((redirector.address() as { port: number }).port)}`
+    const env = { ...fast(await scoutHome(), url), A2A_KEY: 'k-test', A2A_POCKET_TOKEN: 'p-test' }
+    const inbox = await runCli(['inbox'], env)
+    expect(inbox.code).toBe(1)
+    expect(inbox.stderr).toContain(`${url}/__dsh_a2a/cli-deposit answered 307 → ${landing.url}/__dsh_a2a/cli-deposit — not followed`)
+    const status = await runCli(['status'], env)
+    expect(status.code).toBe(1)
+    expect(status.stderr).toContain('answered 302')
+    await runCli(['route', 'ops', 'hi', '--task', 'direct-aaaabbbbcccc'], env)
+    // Neither the key nor the pocket cookie ever reached the redirect target.
+    expect(landing.seen).toHaveLength(0)
   })
 
   it('review of PR #135 P2: a --sync reply that merely quotes the not-derivable text is not a refusal', async () => {
