@@ -44,7 +44,10 @@ ten model tools.
   default: the receipt comes back to `a2a-net inbox`.
 - The envelope (`X-A2A-Caller`, `X-A2A-Caller-Url`, `X-A2A-Caller-Ts`,
   `X-A2A-Caller-Sig`) is signed with the identity key, over the identity's
-  deposit face on the home host. A host with gh#133 verifies it on the
+  deposit face on the home host. It also carries the bound form
+  (`X-A2A-Caller-Aud`, `X-A2A-Caller-Sig2`, docs/protocol/delivery-origin-auth.md
+  §2.1): a signature over the origin, method and path the CLI actually
+  dials, so it is good only at that host's `/a2a/direct`. A host with gh#133 verifies it on the
   delivery face, from its own deposit table (it never dials the CLI's
   address back, so a proxy or tailnet address is fine): the delivery's
   authorization record says `proof: origin-claim` with the full handle as
@@ -52,6 +55,17 @@ ten model tools.
 - An older host refuses the envelope as `not-derivable`. The CLI says so on
   stderr and resends the same task id once unsigned, the way earlier CLIs
   always sent (accepted only while the host's OriginClaim window is open).
+- Dialling the home through an address the host does not list as its own
+  (a Tailscale address, a card-proxy port such as 13080, a pocket tunnel)
+  makes the bound form miss. While the host's `originClaimUnboundWindow` is
+  open the route still lands and the miss shows only on the host, in
+  `boundMissInbound`; `a2a-net status` prints that gauge beside the address
+  the CLI dials. Once the window is closed the route is refused as
+  `wrong-audience`: stderr names the dialled origin and the fix — the host
+  operator adds it to `originClaimAudiences`, or `--home` / `$A2A_HOME`
+  points at an address the host lists. A proxy that rewrites the path
+  (`<home>` with a path prefix) fails the same way as `bad-sig`. These
+  refusals are never resent unsigned.
 - An identity may not be named after the host's zone (the deposit is refused).
 - `--sync` waits for the target's reply and prints it:
   `reply from <team> · task <id> · context <ctx>` followed by the reply text.

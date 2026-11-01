@@ -138,15 +138,44 @@ const home = () => {
 }
 const apiKey = () => flag('--key') ?? (process.env.A2A_KEY !== undefined && process.env.A2A_KEY !== '' ? process.env.A2A_KEY : undefined)
 
+/** The bound form's domain tag (src/origin-claim.ts ORIGIN_CLAIM_BOUND_TAG). */
+const ORIGIN_CLAIM_BOUND_TAG = 'a2a-origin-claim/2'
+
+/** The origin and query-less path of an http(s) URL, or undefined (src/origin-claim.ts originOf / pathOf). */
+function claimTarget(url) {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? { audience: parsed.origin, path: parsed.pathname } : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The OriginClaim envelope for one request, built as src/origin-claim.ts
+ * signOriginClaim builds a host's (docs/protocol/delivery-origin-auth.md
+ * §2.1): the bound (v2) form over the origin actually dialled, the method
+ * and the path without its query, plus the unbound (v1) form. The CLI keeps
+ * signing v1: a host from before PR #130 reads only that one, and a host
+ * whose originClaimUnboundWindow is closed never consults it.
+ */
 function originClaimFor(base) {
   const id = identity()
   const privateKey = createPrivateKey(id.privateKeyPem)
   const callerUrl = `${base}/a2a/cli/${encodeURIComponent(id.handle)}`
-  return () => {
+  const sign = (form) => edSign(undefined, Buffer.from(JSON.stringify(form)), privateKey).toString('base64')
+  return (url, method) => {
     const ts = Date.now()
-    const signature = edSign(undefined, Buffer.from(JSON.stringify([id.name, callerUrl, ts])), privateKey).toString('base64')
+    const target = claimTarget(url)
     // gh#133: the header names the host verifies (X-A2A-Ts/-Sig were never read, so every envelope looked absent).
-    return { 'X-A2A-Caller': id.name, 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Caller-Ts': String(ts), 'X-A2A-Caller-Sig': signature }
+    return {
+      'X-A2A-Caller': id.name, 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Caller-Ts': String(ts),
+      ...(target !== undefined ? {
+        'X-A2A-Caller-Aud': target.audience,
+        'X-A2A-Caller-Sig2': sign([ORIGIN_CLAIM_BOUND_TAG, id.name, callerUrl, ts, target.audience, method.toUpperCase(), target.path]),
+      } : {}),
+      'X-A2A-Caller-Sig': sign([id.name, callerUrl, ts]),
+    }
   }
 }
 
@@ -565,15 +594,38 @@ const RETRY_DELAYS_MS = (() => {
   return [unit, unit * 2, unit * 4]
 })()
 
-/** A refusal of the envelope itself as not derivable — never a reply that merely quotes that text. */
-function notDerivable(text) {
+/** The reason the host refused the envelope itself — never read from a reply that merely quotes that text. */
+function claimRefusal(text) {
   try {
     const out = JSON.parse(text)
-    return out !== null && typeof out === 'object' && out.routed !== true && out.delivered !== true &&
-      typeof out.error === 'string' && out.error.startsWith('untrusted-origin: OriginClaim verification failed (not-derivable)')
+    if (out === null || typeof out !== 'object' || out.routed === true || out.delivered === true || typeof out.error !== 'string') return undefined
+    return /^untrusted-origin: OriginClaim verification failed \(([a-z-]+)\)/.exec(out.error)?.[1]
   } catch {
-    return false
+    return undefined
   }
+}
+
+/**
+ * Why a bound envelope missed at the host, for the refusals a proxied home
+ * meets once the host closes originClaimUnboundWindow (§2.1). Until then the
+ * same miss is accepted through the v1 form and counted in the host's
+ * boundMissInbound, so nothing shows here.
+ */
+function boundMissHint(reason, url) {
+  const target = claimTarget(url)
+  if (target === undefined) return undefined
+  const open = 'while its originClaimUnboundWindow was open this was accepted as v1 and counted in boundMissInbound'
+  if (reason === 'wrong-audience') {
+    return `this CLI dialled ${target.audience}, an address the host does not list as its own (a Tailscale address, a card-proxy port such as 13080, a pocket tunnel, or loopback on a host whose originClaimUrl declares a tunnel); ${open}. ` +
+      `Ask the host operator to add "${target.audience}" to originClaimAudiences, or point --home / $A2A_HOME at an address the host lists (its card URL)`
+  }
+  if (reason === 'unbound-closed') {
+    return `the host saw no bound signature: something between this CLI and ${target.audience} drops the X-A2A-Caller-Aud / -Sig2 headers; ${open}`
+  }
+  if (reason === 'bad-sig' && target.path !== '/a2a/direct') {
+    return `this CLI signed the path ${target.path}; if a proxy rewrites it for the host, the bound signature cannot verify — ${open}. Dial the host without a path prefix`
+  }
+  return undefined
 }
 
 /** Resends ran out: the task may or may not have landed, and the same id is the safe way to try again. */
@@ -587,25 +639,33 @@ function notConfirmed(body, attempt) {
  */
 async function postDirect(body) {
   let signed = true
+  const url = `${home()}/a2a/direct`
   for (let attempt = 0; ; attempt += 1) {
     try {
-      const res = await fetch(`${home()}/a2a/direct`, {
+      const res = await fetch(url, {
         method: 'POST',
         // A fresh OriginClaim per attempt: the signature carries its own timestamp.
-        headers: { 'Content-Type': 'application/json', ...(signed ? originClaimFor(home())() : {}), ...keyHeaders() },
+        headers: { 'Content-Type': 'application/json', ...(signed ? originClaimFor(home())(url, 'POST') : {}), ...keyHeaders() },
         body: JSON.stringify(body),
       })
+      const refusal = signed && res.status === 200 ? claimRefusal(await res.clone().text()) : undefined
       // gh#133 compatibility: a host from before the fix cannot derive a CLI
       // identity and refuses the now-readable envelope as not-derivable. That
       // refusal comes before the host records the task id, so resending the
       // same id unsigned once — as every older CLI sent — is safe: it rides
       // the OriginClaim window exactly as before.
-      if (signed && res.status === 200 && notDerivable(await res.clone().text())) {
+      if (refusal === 'not-derivable') {
         console.error(`[${String(body.task_id)}] the host cannot verify this identity's signature (not-derivable: most likely a host from before gh#133) — resending once unsigned; it is accepted only while the host's OriginClaim window is open`)
         signed = false
         attempt -= 1
         continue
       }
+      // A bound miss (§2.1) is NOT resent unsigned: the host refuses it only
+      // after closing originClaimUnboundWindow, and an unsigned resend would
+      // walk around that closure through the legacy (absent-envelope) window.
+      // The fix is the host's audience list or the address dialled.
+      const hint = refusal !== undefined ? boundMissHint(refusal, url) : undefined
+      if (hint !== undefined) console.error(`[${String(body.task_id)}] OriginClaim ${refusal}: ${hint} — not resent`)
       if (res.status < 500) return { res, attempts: attempt + 1 }
       if (attempt >= RETRY_DELAYS_MS.length) {
         // A 5xx comes from a proxy or a crash, never from the host's own
@@ -791,6 +851,11 @@ async function main() {
     if (inflight.length > 0) {
       console.log('in-flight:')
       for (const r of inflight) console.log(`  ${String(r.team)} → ${String(r.peer)}`)
+    }
+    // §2.1 gauges, host-wide: a boundMissInbound that grows with this CLI's routes means
+    // the address it dials is missing from the host's originClaimAudiences.
+    if (typeof s.unboundInbound === 'number') {
+      console.log(`claims      unboundInbound=${String(s.unboundInbound)}  boundMissInbound=${String(s.boundMissInbound ?? 0)}  (dialled as ${claimTarget(home())?.audience ?? home()})`)
     }
     console.log(`deposit     ${depositLine(list, identity().handle, 'OFFLINE')}`)
     return
