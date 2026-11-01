@@ -130,6 +130,12 @@ export interface A2aRouteOk {
    * receipt-owed (`trackOwedTask` skips it).
    */
   readonly bridge?: 'native-teams'
+  /**
+   * gh#141: the peer refused the settlement the delivered message carried
+   * (its enforce verdict, `settlement: {status: 'refused'}` on the wire,
+   * #139) — the delivery landed, the debt it named stays owed there.
+   */
+  readonly settlementRefused?: true
 }
 
 /** Canonical `a2a_route` failure value. */
