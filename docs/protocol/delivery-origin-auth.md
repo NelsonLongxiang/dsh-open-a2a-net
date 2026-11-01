@@ -181,11 +181,13 @@ all still walks the caller gate on the faces that accept legacy deliveries.
   resend would walk around that closure through `originClaimWindow` (the
   absent-envelope window). The fix is the host's audience list or the
   address the CLI dials.
-- The CLI never follows a redirect on a signed POST (`redirect: 'error'`).
-  The bound signature names the address dialled, and a followed 307/308
-  would carry the claim and the API key to wherever `Location` points. The
-  route fails, is not resent, and stderr asks for `--home` / `$A2A_HOME`
-  to name the address the host itself serves.
+- The CLI never follows a redirect from its home (gh#148): every request
+  carries the API key and pocket cookie, and the signed POST also the
+  claim, which names the address dialled. A followed 3xx would carry them
+  to wherever `Location` points. The request fails on the status itself
+  (`redirect: 'manual'`), a route is not resent, and stderr names the
+  status and `Location` and asks for `--home` / `$A2A_HOME` to name the
+  address the host itself serves.
 
 ## 3. Verification flow (verification against published keys, not handshakes)
 
