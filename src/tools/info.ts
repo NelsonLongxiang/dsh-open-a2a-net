@@ -53,6 +53,9 @@ export interface InfoToolsDeps {
   readonly reportRing: { at: number; level: 'info' | 'warning' | 'error'; message: string; session: string; task?: string }[]
   readonly sessionNodes: Map<string, Agent>
   readonly legacyInboundCount: number
+  // Hot-applied owner settings: the caller passes these as getters over the
+  // apply-scope lets, so every call-time read must go through `deps.X` — a
+  // destructured copy would freeze the boot value.
   readonly ownerAllowlist: readonly string[]
   readonly ownerTeamScopeInfo: boolean
   readonly id8: (id: string) => string
@@ -79,7 +82,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
     ctx, config, logger, session, lanIp, ownCardUrl, peerStore, taskLedger,
     joinedSessions, teamMemberships, canvasStore, exposureStore, idempotencyStore,
     cardCache, inFlightRoutes, recentActivity, teamAuditRing, reportRing,
-    sessionNodes, legacyInboundCount, ownerAllowlist, ownerTeamScopeInfo,
+    sessionNodes, legacyInboundCount,
     id8, sessionTeamOf, nodeMetadataOf, canvasTeamOf, memoizedCardFetch,
     mapBounded, SWEEP_CONCURRENCY, a2aJoinGateRefusal, observeAuthorization,
     settlePeerCard, client, listDirectoryTeams,
@@ -222,7 +225,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
           .slice(-3)
           .reverse()
           .map(entry => ({ at: entry.at, action: entry.action, team: entry.team, reason: entry.reason ?? '' }))
-        const patterns = [...ownerAllowlist]
+        const patterns = [...deps.ownerAllowlist]
         return {
           ok: true,
           face: 'session',
@@ -316,7 +319,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         // are host-internal facts and always survive. The note keeps the
         // model from reading a scoped listing as an empty fleet.
         let note: string | undefined
-        if (ownerTeamScopeInfo) {
+        if (deps.ownerTeamScopeInfo) {
           const joined = joinedTeamScope()
           const remoteBefore = teams.filter(row => row.local !== true).length
           teams = teams.filter(row => row.local === true || joined.has(row.team) || (row.teams ?? []).some(name => joined.has(name)))

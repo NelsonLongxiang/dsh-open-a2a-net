@@ -3576,8 +3576,13 @@ ${message}`
     ctx, config, logger, session, lanIp, ownCardUrl, peerStore, taskLedger,
     inFlightRoutes, recentActivity, joinedSessions, sessionNodes, canvasStore,
     teamMemberships, exposureStore, idempotencyStore, cardCache,
-    legacyInboundCount, ownerAllowlist, ownerTeamScopeInfo, id8, sessionTeamOf,
+    legacyInboundCount, id8, sessionTeamOf,
     nodeMetadataOf, canvasTeamOf, memoizedCardFetch, mapBounded,
+    // Hot-applied owner settings: getters keep the tools' call-time read live.
+    // Passing these by value snapshots the apply-scope lets and silently
+    // disables owner-settings hot-apply (whoami allowlist / teams scoping).
+    get ownerAllowlist() { return ownerAllowlist },
+    get ownerTeamScopeInfo() { return ownerTeamScopeInfo },
     teamAuditRing, reportRing, a2aJoinGateRefusal, observeAuthorization,
     settlePeerCard, client, listDirectoryTeams,
     SWEEP_CONCURRENCY,
