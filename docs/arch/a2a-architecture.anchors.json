@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "sourceCommit": "a78cf41d360ee2a61aff4dfa1e5eebde84b7b5b8",
+  "sourceCommit": "842e69afac55abafd733b25ac2b96fdd3bf5471f",
   "scope": "Committed source only; no deployment inference",
   "sources": {
     "src/index.ts": "5d5dd13eac1cf644d6fb8994ae7480cb2109cf7761a241bb90f4b0a51437c760",
-    "src/faces/admin.ts": "ed128ab5928fb4f98b8fc0f79a274253273848b4e20e1c17dc6d3876571ffbf8",
+    "src/faces/admin.ts": "10b875059049f219fb727d701258fcac0d78601971dc0863f3876572b0df2767",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "fded04a5bd4e0443f096874a9a0495786272ddb63d7e5ddf72e89b4502fad333",
@@ -14,7 +14,7 @@
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
     "nexus-stage/src/planning-card-text.ts": "31403071229c5dde4af545ded1a8eaebb1c329a52df3169fae868a57119225d9",
     "nexus-stage/src/planning-fit.ts": "cbda0255062632bd412deb2131c7a01e1e16ab9c72d2a70a32c362e108f8c07a",
-    "src/task-ledger.ts": "656f1751e58dec2741c9a1d451b4c7672611e0470391810ba074879104a441d8",
+    "src/task-ledger.ts": "b036ec27701f96b0fba836fb92607b59c675c6744f4fdca0e63fc41e10336810",
     "nexus-stage/src/world.ts": "1c6308555b65e8316cda38cf97dc43120b979be3e30792a12b893faf845cb934",
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
@@ -120,7 +120,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:507",
+      "ref": "src/faces/admin.ts:512",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
@@ -294,7 +294,7 @@
     {
       "page": "p1-arch",
       "cell": "d10",
-      "ref": "src/task-ledger.ts:921",
+      "ref": "src/task-ledger.ts:971",
       "expect": "private trimOwed(): void {"
     },
     {
