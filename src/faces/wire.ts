@@ -24,9 +24,40 @@ import { refuseIfBudgetExhausted } from '../recursion-guard.ts'
 import { peerPayloadFingerprint, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from '../idempotency-store.ts'
 import { briefOf, type TaskLedger } from '../task-ledger.ts'
 import { taskIdRefusal } from '../receipt.ts'
-import { buildAuthorization, claimCovers, refusalOf, type Admission, type AuthProof, type Settler } from '../task-auth.ts'
+import { buildAuthorization, claimCovers, refusalOf, type Admission, type AuthProof, type SettlementRefusal, type Settler } from '../task-auth.ts'
 import type { Config } from '../index.ts'
 import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from '../transport-caps.ts'
+
+/**
+ * #139 (design §4.4): add `settlement: {status:'refused', reason, task_id}`
+ * to whatever JSON object this response ends with. The delivery face has
+ * many exits (mailbox, no-wait, waiting, refusals); deferring the head until
+ * the body is known keeps one rule for all of them. A non-JSON or non-object
+ * body is sent unchanged.
+ */
+export function withSettlementField(res: ServerResponse, settlement: SettlementRefusal): void {
+  const writeHead = res.writeHead.bind(res) as (status: number, headers?: Record<string, string | number>) => ServerResponse
+  const end = res.end.bind(res) as (body?: string) => ServerResponse
+  let head: { status: number; headers: Record<string, string | number> } | undefined
+  ;(res as unknown as { writeHead: unknown }).writeHead = (status: number, headers?: Record<string, string | number>) => {
+    head = { status, headers: { ...(headers ?? {}) } }
+    return res
+  }
+  ;(res as unknown as { end: unknown }).end = (body?: string) => {
+    let out = body
+    if (typeof body === 'string') {
+      try {
+        const parsed: unknown = JSON.parse(body)
+        if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) out = JSON.stringify({ ...parsed, settlement })
+      } catch { /* not JSON: unchanged */ }
+    }
+    if (head !== undefined) {
+      if (out !== undefined && 'Content-Length' in head.headers) head.headers['Content-Length'] = Buffer.byteLength(out)
+      writeHead(head.status, head.headers)
+    }
+    return end(out)
+  }
+}
 
 /** The origin of a card URL for the authorization record; the raw text, bounded, when it does not parse. */
 const originOf = (url: string): string => {
@@ -98,7 +129,8 @@ export interface WireDeps {
   readonly readSessionLogTail: (id: string, limit: number) => { ok: true; id: string; messages: Array<{ role: string; text: string; time?: number }> } | { ok: false; error: string }
   readonly taskLedger: TaskLedger
   readonly refuseIfFlooded: (caller: string, message: string, team: string, taskId: string, res: ServerResponse) => boolean
-  readonly settleAndAnnounce: (message: string, settler?: Settler) => void
+  /** Settles a receipt; returns the enforce refusal of the row its header names (#139), if any. */
+  readonly settleAndAnnounce: (message: string, settler?: Settler) => SettlementRefusal | undefined
   readonly touchWakeDemand: () => void
   readonly session: string
   readonly resolveAgentForTeam: (team: string) => Agent | undefined
@@ -106,6 +138,8 @@ export interface WireDeps {
   readonly canvasLiveAgent: (name: string | undefined, skipId?: string) => Agent | undefined
   readonly wakeColdTeam: (team: string, skipId?: string) => ColdWake
   readonly probeConsumption: (agent: Agent, taskId: string) => boolean
+  /** A session's own node team (`<zone>/<id8>`), the handle a member is known by. */
+  readonly sessionTeamOf: (agent: Agent) => string
   readonly steerRelay: (agent: Agent, text: string, sender?: string) => void
   readonly fromClause: (from: string) => string
   readonly armReceiptAutosend: (target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number) => void
@@ -158,6 +192,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     canvasLiveAgent,
     wakeColdTeam,
     probeConsumption,
+    sessionTeamOf,
     steerRelay,
     fromClause,
     armReceiptAutosend,
@@ -632,7 +667,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // steers on exactly as before.
           // #114 S4: the settler is this delivery's caller, as proven here. A CLI identity's claim URL
           // is not a host's origin (its origin is unconstrained), so it never vouches for one (review of PR #140 P1-2).
-          settleAndAnnounce(message, { caller, proof: callerProof, ...(claim.ok && claim.cli !== true ? { claimOrigin: originOf(claim.callerUrl) } : {}), ingress: 'wire' })
+          // #139: the claim's card key names the host whatever address spelling it signed with.
+          const refusedSettlement = settleAndAnnounce(message, { caller, proof: callerProof, ...(claim.ok && claim.cli !== true ? { claimOrigin: originOf(claim.callerUrl), claimKey: claim.card.publicKey } : {}), ingress: 'wire' })
+          // #139 (design §4.4): every answer this delivery gets carries the refusal.
+          if (refusedSettlement !== undefined) withSettlementField(res, refusedSettlement)
           // gh#45 CLI mailbox (wire face): a delivery targeting a DEPOSITED
           // CLI handle never resolves a session and never wakes — it lands
           // in the deposit's mailbox and answers delivered. Placement here
@@ -750,7 +788,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                   // Audit only: a cold session's activation window also reads as running.
                   targetBusy: runningBeforeSteer,
                 })
-                taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message), auth)
+                // #139: the member that actually received it answers for a canvas or bare-zone team.
+                const deliveredTo = sessionTeamOf(target)
+                taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message), auth, deliveredTo === team ? undefined : deliveredTo)
                 armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
                 const payload = JSON.stringify({
                   routed: true,

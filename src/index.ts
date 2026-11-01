@@ -46,7 +46,7 @@ import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
-import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type ReceiptResolvedInfo, type Sender, type TaskRecord } from './task-ledger.ts'
+import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type OutboundBirth, type ReceiptResolvedInfo, type Sender, type TaskRecord } from './task-ledger.ts'
 import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
@@ -55,7 +55,7 @@ import { createFloodGuard } from './flood-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
 import { AuthObserver, type AffectedEntry } from './auth-observer.ts'
-import { allowlistVersion, authorizationRef, callerAdmission, canonicalAllowlist, judgeSettlement, type SettlementMode, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry } from './task-auth.ts'
+import { allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type SettlementMode, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
 // `ctx.timer` on Context; the runtime service is mounted by app compositions.
@@ -1007,7 +1007,7 @@ const reportLoopRing = new Map<string, number[]>()
    * the consumer's own discipline — keep seam listeners synchronous.
    * @param message - the inbound or relayed message text.
    */
-  function settleAndAnnounce(message: string, settler?: Settler): void {
+  function settleAndAnnounce(message: string, settler?: Settler): SettlementRefusal | undefined {
     // #114 S4: judge the settler against each correlated row's authorization
     // chain (design §4.2). `observe` records what enforce would refuse and
     // settles as before; `enforce` keeps a refused row owed. A call with no
@@ -1053,9 +1053,15 @@ const reportLoopRing = new Map<string, number[]>()
     // A header that names an owed row and comes back unresolved was refused
     // (enforce): that is the verdict — the echo fallback must not judge the
     // same message a second time.
-    const owedByHeader = parsed !== null && parsed.taskId !== '' && taskLedger.find(parsed.taskId) !== undefined
+    const owedRow = parsed !== null && parsed.taskId !== '' ? taskLedger.find(parsed.taskId) : undefined
+    const owedByHeader = owedRow !== undefined
+    // #139 (design §4.4): an enforce refusal of the row the header names is
+    // told to the sender on the wire response, not only in /state.
+    const headerVerdict = judge?.enforce === true && owedRow !== undefined ? judge.check(owedRow, false) : undefined
     const resolved = taskLedger.resolveFromMessage(message, judge)
-    if (resolved === undefined && owedByHeader) return
+    if (resolved === undefined && owedByHeader) {
+      return headerVerdict !== undefined && !headerVerdict.ok ? { status: 'refused', reason: headerVerdict.reason, task_id: parsed!.taskId } : undefined
+    }
     if (resolved === undefined) {
       // F5 (settlement integrity): the formal envelope missed — an inbound
       // message that still echoes a pending task id means the peer
@@ -1065,13 +1071,14 @@ const reportLoopRing = new Map<string, number[]>()
       if (echoed.length > 0) {
         logger.info(`a2a: ${String(echoed.length)} pending task(s) settled by content echo (${echoed.join(', ')})`)
       }
-      return
+      return undefined
     }
     try {
       ctx.emit('a2a/receipt-resolved', resolved)
     } catch (error) {
       logger.warn(`a2a: receipt-resolved listener rejected: ${String(error)}`)
     }
+    return undefined
   }
 
   // Server-side idempotency keys (work-order P3): a caller-born task id
@@ -2965,6 +2972,7 @@ ${message}`
       canvasLiveAgent,
       wakeColdTeam,
       probeConsumption,
+      sessionTeamOf,
       steerRelay,
       fromClause,
       armReceiptAutosend,
@@ -4225,7 +4233,36 @@ ${message}`
    * already carries its answer and owes nothing.
    * #114 S3: `sender` is the real originator the row is attributed to.
    */
-  const trackOwedTask = (taskId: string, team: string, peer: string, result: A2aRouteResult, callbackAddress: string | undefined, brief: string | undefined, sender: Sender): void => {
+  /**
+   * #139: what an in-process async delivery learned about its own birth —
+   * the admission it ran under (design §2.4) and the member that received it
+   * — handed from dispatchLocalCandidate to the caller's outbound row, keyed
+   * by task id and taken (deleted) by whoever dispatched.
+   */
+  const localBirths = new Map<string, OutboundBirth>()
+  const localBirthOf = (team: string, callerSession: string | undefined, receiptTarget: string | undefined, deliveredTo: string): OutboundBirth => {
+    const admission = localCandidateAdmission(admissionRecords, callerSession, team)
+    const caller = callerSession ?? session
+    const auth = admission.ok && caller !== ''
+      ? buildAuthorization(admission, { caller, proof: 'in-process', ingress: 'local', allowlistVersion: allowlistVersionNow(), target: team, receiptTarget: receiptTarget ?? caller, receivedAt: Date.now() })
+      : undefined
+    return { ...(auth !== undefined ? { auth } : {}), ...(deliveredTo !== team ? { deliveredTo } : {}) }
+  }
+  /**
+   * #139: the peer facts a remote outbound row is born with — the signed
+   * card's key and session label (the host identity whatever spelling of its
+   * address dialed it) and, for a canvas row, the member handle the request
+   * carried. The memo makes the card read free after the directory walk.
+   */
+  const peerBirth = async (fetch: ZoneCardFetch, candidate: string, member: string | undefined): Promise<OutboundBirth> => {
+    const card = await fetch(candidate).catch(() => undefined)
+    return {
+      ...(card !== undefined && card.publicKey !== '' ? { peerKey: card.publicKey } : {}),
+      ...(card !== undefined && card.session !== '' ? { peerHost: card.session } : {}),
+      ...(member !== undefined ? { deliveredTo: member } : {}),
+    }
+  }
+  const trackOwedTask = (taskId: string, team: string, peer: string, result: A2aRouteResult, callbackAddress: string | undefined, brief: string | undefined, sender: Sender, birth?: OutboundBirth): void => {
     if (!result.ok) return
     // Native-teams bridge rounds emit no A2A receipt in this slice: booking
     // them as receipt-owed would fill the owed book with rows no receipt can
@@ -4238,10 +4275,10 @@ ${message}`
     // row whose only exit was the dead-letter sweep (57 dead letters, half
     // this shape).
     if (callbackAddress === undefined) {
-      taskLedger.trackReceiptless(taskId, team, peer, result.context_id === '' ? undefined : result.context_id, brief, sender)
+      taskLedger.trackReceiptless(taskId, team, peer, result.context_id === '' ? undefined : result.context_id, brief, sender, birth)
       return
     }
-    taskLedger.track(taskId, team, peer, result.context_id === '' ? undefined : result.context_id, brief, sender)
+    taskLedger.track(taskId, team, peer, result.context_id === '' ? undefined : result.context_id, brief, sender, birth)
   }
 
   /**
@@ -4465,9 +4502,11 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // publishers, then zone delegations, deduplicated by URL.
       const failures: string[] = []
       const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, signal, args.async === true, taskId, callbackAddress, agent === undefined ? undefined : String(agent.id))
+      const localBirth = localBirths.get(taskId)
+      localBirths.delete(taskId)
       if (outcome !== undefined) {
         if (outcome.ok) {
-          trackOwedTask(taskId, args.team, 'local', outcome, callbackAddress, briefOf(args.message), sender)
+          trackOwedTask(taskId, args.team, 'local', outcome, callbackAddress, briefOf(args.message), sender, localBirth)
           return outcome as unknown as Record<string, JsonValue>
         }
         failures.push(`local: ${outcome.error}`)
@@ -4515,7 +4554,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         }
         const result = await dispatchPeerCandidate(candidate, target, args.message, args.context_id, signal, callerSession, peerAsync, taskId, callbackAddress)
         if (result.ok || signal.aborted) {
-          if (result.ok) trackOwedTask(taskId, args.team, candidate, result, callbackAddress, briefOf(args.message), sender)
+          if (result.ok) trackOwedTask(taskId, args.team, candidate, result, callbackAddress, briefOf(args.message), sender, await peerBirth(fetch, candidate, target === args.team ? undefined : target))
           const notes: string[] = []
           if (result.ok && args.async === true && result.task_status === 'TASK_STATE_DELIVERED' && !routableCallerLabel(callerSession)) {
             notes.push(unroutableCallerNote(String(callerSession ?? session)))
@@ -4688,6 +4727,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         const steerFloor = sessionEventsOf(target).length
         steerRelay(target, `[A2A direct] (task ${taskId}) ${fromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam)
         armReceiptAutosend(target, taskId, callerTeam, message, steerFloor)
+        // #139: the caller's outbound row is born with this admission and the member that received it.
+        if (taskIdFromCaller !== undefined) localBirths.set(taskIdFromCaller, localBirthOf(team, callerSession, callerTeam, sessionTeamOf(target)))
         endRoute(flight)
         recordActivity('out', team, 'local', true)
         return {
@@ -4871,6 +4912,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
    */
   async function dispatchAnywhere(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode: boolean, taskId?: string): Promise<void> {
     const local = await dispatchLocalCandidate(team, message, callerSession, contextId, signal, asyncMode, taskId)
+    // A background send books no outbound row: its birth facts have no row to go on.
+    if (taskId !== undefined) localBirths.delete(taskId)
     if (local !== undefined) {
       if (!local.ok) throw new Error(local.error)
       return
@@ -5040,7 +5083,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           if (abort.aborted) break
           continue
         }
-        trackOwedTask(taskId, request.handle, candidate, result, callbackAddress, briefOf(request.message), sender)
+        trackOwedTask(taskId, request.handle, candidate, result, callbackAddress, briefOf(request.message), sender, await peerBirth(fetch, candidate, undefined))
         const contextId = request.contextId ?? (result.context_id !== '' ? result.context_id : `ctx-${Math.random().toString(16).slice(2, 10)}`)
         if (result.task_status === 'TASK_STATE_COMPLETED') {
           return { kind: 'completed', text: result.reply, taskId, contextId }

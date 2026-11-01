@@ -290,8 +290,8 @@ interface Settler {
 | chain_role | 条件 |
 |---|---|
 | `target` | `S.caller === R.team`（出站行：我们派给谁；入站行：`R.auth.target`） |
-| `target-member` | R.team 是画布队，且 S.caller 是该画布**当前**的成员（会话 id 或句柄，本机或远端引用）。S4 实现取当前成员；`deliveredTo`（派发时实际投中的成员）转后续 issue，届时收紧为"实际投中者" |
-| `host-face` | S 是目标所在宿主的进程面**代目标结算**：自动回执（§4.3 的 `onBehalfOf` 等于 R.team / `deliveredTo`），且（跨主机时）`S.claimOrigin` 等于 R.peer 的 origin，（本机时）`S.caller === session` 且 `S.ingress === 'local'` |
+| `target-member` | R.team 是画布队，且 S.caller 是**实际投中的成员** `R.deliveredTo`（#139）；`deliveredTo` 出生前的旧行仍取该画布**当前**的成员（会话 id 或句柄，本机或远端引用） |
+| `host-face` | S 是目标所在宿主的进程面**代目标结算**：自动回执（§4.3 的 `onBehalfOf` 等于 R.team / `deliveredTo`），且（跨主机时）S 是对端的进程标签（R 记有 `peerHost` 时必须等于它，#139 收掉 N1 在 scope 关闭下的残余），且 claim 来自 R 的对端：`S.claimOrigin` 等于 R.peer 的 origin，**或** claim 名片的公钥等于 R 出生时记下的 `peerKey`（#139：同一台主机绑 0.0.0.0 时以局域网 URL 签名、却被经 Tailscale 拨入，地址写法不同但密钥相同），（本机时）`S.caller === session` 且 `S.ingress === 'local'` |
 | `legacy` | R 无 `auth`/`deliveredTo`（旧行）——兼容放行，单独计数 |
 
 其余一律 **`off-chain`**。三条结算路径都过同一判定：
@@ -304,6 +304,14 @@ interface Settler {
    结果写入不经过回执路径，不受此门控：flood-guard 拒绝时记 `failed`（`flood-guard.ts:95`），以及 #115 新增的
    `refuseNoWait` 对异步拒绝记 `failed`。它们的写入方就是本机，没有"结算方"可比对。
 3. CLI 信箱分流（§4.5）。
+
+#139 补齐的出生事实（行上可选字段，归档原样复制，`restore()` 逐字段白名单、不合形即丢、行照常恢复）：
+
+- `peerKey` / `peerHost`：远端出站行派发时对端签名名片的公钥与 session 标签（只在远端出站行上）；
+- `deliveredTo`：实际投中的成员——远端画布行取请求携带的成员句柄，本机候选取被 steer 的会话句柄，
+  入站行取接收会话的句柄（与 target 相同时省略）；
+- 本机候选的出站行带 `auth`（`ingress: 'local'`、`proof: 'in-process'`，规则取 joined 面的同队判定，
+  不设闸的调用者记 `local-exempt`），`restore()` 对出站行只接受这种记录。
 
 ### 4.3 自动回执的 turn 归属（#61 的直接成因）
 
@@ -335,7 +343,7 @@ interface Settler {
 - 写入有界环 `settlementRefusals`（cap 64，随 `tasks.json` 持久化）：
   `{taskId, at, settler:{caller, proof, ingress}, reason, head}`（`head` = 回执首行，`SUMMARY_CAP`）；
 - `logger.warn` + 事件 `a2a/receipt-refused`；`/state` 新块 `settlementRefusals`；
-- wire 面响应体追加 `settlement: {status: 'refused', reason}`（追加字段；送达结果不变）——**S4 未做，转后续 issue**（observe 默认下从不拒绝，enforce 前补）。
+- wire 面响应体追加 `settlement: {status: 'refused', reason, task_id}`（追加字段；送达结果不变；#139 已补，只在 enforce 拒绝回执头所指的行时出现，observe 下从不出现）。
 
 封闭原因码：
 
