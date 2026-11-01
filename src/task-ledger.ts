@@ -468,6 +468,18 @@ export class TaskLedger {
   private refusals: SettlementRefusalRecord[] = []
   /** #114 S4: every refusal ever noted (monotonic; survives the ring's bound). */
   private refusalsTotal = 0
+  /**
+   * gh#154 conservation lifetime counters (persisted; never reset by cap
+   * trims or restarts — the refusalsTotal pattern). trackedTotal counts every
+   * row the three track* seams actually inserted; archivedByEnd counts every
+   * archiveSettled arrival by endedBy; archiveTrimmed counts rows that fell
+   * off the live archive cap; restoreTrimmed counts rows the load path cut.
+   * Identity: trackedTotal = |owed| + Σ archivedByEnd + restoreTrimmed.
+   */
+  private conservationTracked = 0
+  private readonly archivedByEnd: Record<ArchiveEnd, number> = { receipt: 0, echo: 0, abandoned: 0, cancelled: 0, evicted: 0 }
+  private archiveTrimmed = 0
+  private restoreTrimmed = 0
   private readonly staleTtlMs: number
   private readonly archiveCap: number
   /** Injectable clock (option `now`). */
@@ -528,6 +540,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
+    this.conservationTracked += 1
     this.tasks = [{
       taskId,
       team,
@@ -550,6 +563,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
+    this.conservationTracked += 1
     this.tasks = [{
       taskId,
       team,
@@ -584,6 +598,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
+    this.conservationTracked += 1
     this.tasks = [{
       taskId,
       team,
@@ -906,9 +921,44 @@ export class TaskLedger {
     this.refusals = [{ taskId: id, at: this.now(), settler, reason, head, enforced: judge.enforce, count: (prior?.count ?? 0) + 1 }, ...this.refusals.filter(r => !same(r))].slice(0, SETTLEMENT_REFUSAL_CAP)
   }
 
-  /** Move one settled record to the archive head, trimming at the cap. */
+  /**
+   * Move one settled record to the archive head, trimming at the cap.
+   * gh#154: every arrival and every cap-trimmed row is counted — the trim
+   * itself stays exactly as it was, only visible now.
+   */
   private archiveSettled(record: ArchivedRecord): void {
-    this.archived = [record, ...this.archived].slice(0, this.archiveCap)
+    const next = [record, ...this.archived]
+    const kept = next.slice(0, this.archiveCap)
+    this.archiveTrimmed += next.length - kept.length
+    if (record.endedBy !== undefined) this.archivedByEnd[record.endedBy] += 1
+    this.archived = kept
+  }
+
+  /**
+   * gh#154 conservation verdict — duplicates first, then the count identity
+   * (a duplicated row can still make the counts balance; the Harness²
+   * assert_identity lesson). Never mutates; pure read over current state.
+   */
+  conservation(): { conserved: boolean; delta: number; trackedTotal: number; owed: number; archivedByEnd: Record<ArchiveEnd, number>; archivedTotal: number; archiveTrimmed: number; restoreTrimmed: number; duplicateTaskIds: string[] } {
+    const seen = new Set<string>()
+    const duplicateTaskIds: string[] = []
+    for (const row of [...this.tasks, ...this.archived]) {
+      if (seen.has(row.taskId)) duplicateTaskIds.push(row.taskId)
+      else seen.add(row.taskId)
+    }
+    const archivedTotal = (Object.keys(this.archivedByEnd) as ArchiveEnd[]).reduce((n, key) => n + this.archivedByEnd[key]!, 0)
+    const delta = this.conservationTracked - (this.tasks.length + archivedTotal + this.restoreTrimmed)
+    return {
+      conserved: duplicateTaskIds.length === 0 && delta === 0,
+      delta,
+      trackedTotal: this.conservationTracked,
+      owed: this.tasks.length,
+      archivedByEnd: { ...this.archivedByEnd },
+      archivedTotal,
+      archiveTrimmed: this.archiveTrimmed,
+      restoreTrimmed: this.restoreTrimmed,
+      ...(duplicateTaskIds.length > 0 ? { duplicateTaskIds } : { duplicateTaskIds: [] }),
+    }
   }
 
   /**
@@ -1048,8 +1098,34 @@ export class TaskLedger {
           })
         }
       }
+      // gh#154: the load path's cap cuts are COUNTED, never silent. Rows this
+      // snapshot carried beyond the caps leave the live view but remain in the
+      // identity through restoreTrimmed.
       this.tasks = restored.slice(0, TASK_CAP)
+      this.restoreTrimmed += Math.max(0, restored.length - this.tasks.length)
+      this.restoreTrimmed += Math.max(0, this.archived.length - this.archiveCap)
       this.archived = this.archived.slice(0, this.archiveCap)
+      // gh#154: restore the lifetime counters when the snapshot carries them
+      // (validated like refusalsTotal), else bootstrap from what this
+      // snapshot proves: the kept rows plus this load's cuts.
+      const saved = (snapshot as { conservation?: { trackedTotal?: unknown; archivedByEnd?: unknown; archiveTrimmed?: unknown; restoreTrimmed?: unknown } | undefined } | null)?.conservation
+      const savedTracked = saved !== null && typeof saved === 'object' && typeof saved.trackedTotal === 'number' && Number.isInteger(saved.trackedTotal) && saved.trackedTotal >= 0 ? saved.trackedTotal : undefined
+      const savedTrimmed = saved !== null && typeof saved === 'object' && typeof saved.archiveTrimmed === 'number' && Number.isInteger(saved.archiveTrimmed) && saved.archiveTrimmed >= 0 ? saved.archiveTrimmed : undefined
+      const savedRestore = saved !== null && typeof saved === 'object' && typeof saved.restoreTrimmed === 'number' && Number.isInteger(saved.restoreTrimmed) && saved.restoreTrimmed >= 0 ? saved.restoreTrimmed : undefined
+      const savedByEnd = saved !== null && typeof saved === 'object' && saved.archivedByEnd !== null && typeof saved.archivedByEnd === 'object' ? saved.archivedByEnd as Record<string, unknown> : undefined
+      if (savedTracked !== undefined && savedTrimmed !== undefined && savedRestore !== undefined && savedByEnd !== undefined) {
+        this.conservationTracked = Math.max(savedTracked, this.tasks.length + this.archived.length)
+        this.archiveTrimmed = savedTrimmed
+        this.restoreTrimmed = Math.max(savedRestore, this.restoreTrimmed)
+        for (const key of ARCHIVE_ENDS) {
+          const value = savedByEnd[key]
+          this.archivedByEnd[key as ArchiveEnd] = typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0
+        }
+      } else {
+        this.conservationTracked = this.tasks.length + this.archived.length + this.restoreTrimmed
+        this.archiveTrimmed = 0
+        for (const entry of this.archived) if (entry.endedBy !== undefined) this.archivedByEnd[entry.endedBy] += 1
+      }
       const refusals = (snapshot as { settlementRefusals?: unknown } | null)?.settlementRefusals
       if (Array.isArray(refusals)) this.refusals = refusals.map(parseRefusal).filter((r): r is SettlementRefusalRecord => r !== undefined).slice(0, SETTLEMENT_REFUSAL_CAP)
       const total = (snapshot as { settlementRefusalsTotal?: unknown } | null)?.settlementRefusalsTotal
@@ -1070,6 +1146,9 @@ export class TaskLedger {
         ...(this.archived.length > 0 ? { archived: this.archived.map(entry => ({ ...entry })) } : {}),
         ...(this.refusals.length > 0 ? { settlementRefusals: this.refusals.map(entry => ({ ...entry, settler: { ...entry.settler } })) } : {}),
         ...(this.refusalsTotal > 0 ? { settlementRefusalsTotal: this.refusalsTotal } : {}),
+        // gh#154: the conservation counters ride every snapshot once any work
+        // has been tracked (zero-work ledgers stay byte-identical to before).
+        ...(this.conservationTracked > 0 ? { conservation: { trackedTotal: this.conservationTracked, archivedByEnd: { ...this.archivedByEnd }, archiveTrimmed: this.archiveTrimmed, restoreTrimmed: this.restoreTrimmed } } : {}),
       }
       writeFileSync(this.path, JSON.stringify(snapshot), { mode: 0o600 })
     } catch {
