@@ -40,6 +40,7 @@ export class TeamMembershipStore {
   /** Entries in first-declaration order; teams in join order. */
   private entries: Array<{ session: string; teams: string[] }> = []
   private readonly path: string
+  private readonly listeners = new Set<() => void>()
 
   /**
    * @param path - the snapshot file; an empty path keeps the store in memory.
@@ -105,6 +106,7 @@ export class TeamMembershipStore {
     if (entry.teams.includes(clean) || entry.teams.length >= TEAMS_PER_NODE_CAP) return
     entry.teams.push(clean)
     this.persist()
+    this.notify()
   }
 
   /** Retract one membership; a no-op when absent. */
@@ -116,6 +118,7 @@ export class TeamMembershipStore {
       entry.teams.splice(index, 1)
       if (entry.teams.length === 0) this.entries = this.entries.filter(candidate => candidate.session !== session)
       this.persist()
+      this.notify()
     }
   }
 
@@ -123,6 +126,26 @@ export class TeamMembershipStore {
   dropSession(session: string): void {
     const before = this.entries.length
     this.entries = this.entries.filter(entry => entry.session !== session)
-    if (this.entries.length !== before) this.persist()
+    if (this.entries.length !== before) {
+      this.persist()
+      this.notify()
+    }
+  }
+
+  /**
+   * #114 S6: observe changes — the listener runs after every write that
+   * changed the store (never on restore or reload). A throwing listener
+   * cannot break the write.
+   * @returns the unsubscribe function.
+   */
+  onChange(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
+
+  private notify(): void {
+    for (const listener of this.listeners) {
+      try { listener() } catch { /* a listener's failure is its own */ }
+    }
   }
 }

@@ -92,6 +92,8 @@ export interface WireDeps {
   readonly a2aCallerAdmission: (caller: string, targetTeam?: string) => Admission
   /** #114 S2: this host's allowlist version right now (design §2.3). */
   readonly allowlistVersionNow: () => string
+  /** #114 S6: record the version if it moved and re-judge affected tasks (observe only). */
+  readonly observeAuthorization: (cause: string) => void
   readonly scanSessionLogList: () => Array<{ id: string; mtimeMs: number; sizeBytes: number }>
   readonly readSessionLogTail: (id: string, limit: number) => { ok: true; id: string; messages: Array<{ role: string; text: string; time?: number }> } | { ok: false; error: string }
   readonly taskLedger: TaskLedger
@@ -144,6 +146,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     a2aCallerRefusal,
     a2aCallerAdmission,
     allowlistVersionNow,
+    observeAuthorization,
     scanSessionLogList,
     readSessionLogTail,
     taskLedger,
@@ -574,6 +577,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             res.end(payload)
             return
           }
+          // #114 S6: a version an inbound record is born under is always in the history.
+          observeAuthorization('lazy')
           // #114 S2: the version is read at admission time, beside the decision it explains.
           const admittedAt = { version: allowlistVersionNow(), at: Date.now() }
           // gh#9+gh#10 OriginClaim on the delivery face (M1): an envelope
