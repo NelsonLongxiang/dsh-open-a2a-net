@@ -389,15 +389,8 @@ export interface TaskLedgerSnapshot {
   readonly settlementRefusals?: readonly SettlementRefusalRecord[]
   /** #114 S4: monotonic count of every refusal noted. */
   readonly settlementRefusalsTotal?: number
-  /** gh#154: lifetime conservation counters (persisted; absent = pre-#154 legacy). */
-  readonly conservation?: {
-    readonly trackedTotal: number
-    readonly archivedByEnd: Record<ArchiveEnd, number>
-    readonly archiveTrimmed: number
-    readonly restoreTrimmed: number
-    /** gh#154 review r2: a damage marker PERSISTS — once stamped, restarts keep refusing conserved until an explicit reseed policy clears it. */
-    readonly damaged?: string
-  }
+  /** gh#154: lifetime conservation counters (persisted; absent = pre-#154 legacy) — the module contract, shared by classifier, counters, and this schema (review P3). */
+  readonly conservation?: ConservationSnapshot
 }
 
 /** #114 S4: who settled an archived row, and how they stood on its authorization chain. */
@@ -1002,15 +995,19 @@ export class TaskLedger {
     if (this.path === '' || !existsSync(this.path)) return
     try {
       const snapshot = JSON.parse(readFileSync(this.path, 'utf8')) as Partial<TaskLedgerSnapshot> | null
-      // gh#154 review r2: a non-object top level ("null", a string, a number)
-      // is a malformed snapshot, not a healthy empty ledger — fail closed.
-      if (snapshot === null || typeof snapshot !== 'object') {
+      // gh#154 review r3: a non-object OR ARRAY top level, and a missing or
+      // non-array required `tasks` member, are malformed snapshots — never a
+      // healthy empty ledger (an array is typeof 'object'; absence of the
+      // one required member is damage, not an empty legacy snapshot).
+      if (snapshot === null || typeof snapshot !== 'object' || Array.isArray(snapshot) || !Array.isArray(snapshot.tasks)) {
         this.counters.damaged = 'snapshot-shape-invalid'
         return
       }
-      // Same for the row arrays: present-but-not-an-array is damage.
-      if (snapshot.tasks !== undefined && !Array.isArray(snapshot.tasks)) this.counters.damaged = 'snapshot-shape-invalid'
-      if (snapshot.archived !== undefined && !Array.isArray(snapshot.archived)) this.counters.damaged = 'snapshot-shape-invalid'
+      // The optional archive array: present-but-not-an-array is damage too.
+      if (snapshot.archived !== undefined && !Array.isArray(snapshot.archived)) {
+        this.counters.damaged = 'snapshot-shape-invalid'
+        return
+      }
       const entries = snapshot.tasks
       const restored: TaskRecord[] = []
       if (Array.isArray(entries)) {
@@ -1018,7 +1015,12 @@ export class TaskLedger {
           // Unparsed on purpose: the legacy shape carries a 'resolved' status
           // and inline outcome fields that TaskRecord no longer declares.
           const entry = raw as Record<string, unknown> | null
-          if (typeof entry?.taskId !== 'string' || entry.taskId === '') continue
+          if (typeof entry?.taskId !== 'string' || entry.taskId === '') {
+            // gh#154 review r3: a malformed row never vanishes into a balanced
+            // baseline — the parseable rows still load, the verdict refuses.
+            this.counters.damaged = this.counters.damaged ?? 'row-shape-invalid'
+            continue
+          }
           // Legacy two-state files carried resolved rows inline; they migrate
           // into the archive so pre-upgrade outcomes survive the upgrade.
           if (entry.status === 'resolved') {
@@ -1072,7 +1074,11 @@ export class TaskLedger {
       if (Array.isArray(legacyArchive)) {
         for (const raw of legacyArchive) {
           const entry = raw as Partial<ArchivedRecord> | null
-          if (typeof entry?.taskId !== 'string' || entry.taskId === '') continue
+          if (typeof entry?.taskId !== 'string' || entry.taskId === '') {
+            // gh#154 review r3: same refusal for a malformed archived row.
+            this.counters.damaged = this.counters.damaged ?? 'row-shape-invalid'
+            continue
+          }
           if (this.archived.some(existing => existing.taskId === entry.taskId)) continue
           this.archived.push({
             taskId: entry.taskId,

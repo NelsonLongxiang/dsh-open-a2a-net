@@ -194,20 +194,78 @@ describe('#154 ledger conservation identity', () => {
     expect(reloaded.list().length).toBe(2)
   })
 
-  it('review r2 P1: malformed top-level shapes never report a healthy ledger', () => {
-    const home = mkdtempSync(join(tmpdir(), 'gh154-shape-'))
+  it('review r3 P1: top-level array and missing tasks never become a healthy ledger', () => {
+    const home = mkdtempSync(join(tmpdir(), 'gh154-shape3-'))
     const verdictFor = (name: string, text: string) => {
       const path = join(home, name)
       writeFileSync(path, text)
       return new TaskLedger(path).conservation()
     }
-    expect(verdictFor('null.json', 'null').conserved).toBe(false)
-    expect(verdictFor('null.json', 'null').damaged).toBe('snapshot-shape-invalid')
-    const tasksCorrupt = verdictFor('tasks.json', JSON.stringify({ tasks: 'corrupt' }))
-    expect(tasksCorrupt.conserved).toBe(false)
-    expect(tasksCorrupt.damaged).toBe('snapshot-shape-invalid')
-    const conservationNull = verdictFor('cnull.json', JSON.stringify({ tasks: [], conservation: null }))
-    expect(conservationNull.conserved).toBe(false)
-    expect(conservationNull.damaged).toBe('conservation-block-invalid')
+    for (const [name, text] of [['arr.json', '[]'], ['obj.json', '{}']] as Array<[string, string]>) {
+      const verdict = verdictFor(name, text)
+      expect(verdict.conserved, name).toBe(false)
+      expect(verdict.damaged, name).toBe('snapshot-shape-invalid')
+    }
+    // After a normal mutation both persist with the marker and stay red on reload.
+    const path = join(home, 'arr.json')
+    writeFileSync(path, '[]')
+    const ledger = new TaskLedger(path)
+    ledger.track('direct-q0001', 'dsh/target', 'peer')
+    const reloaded = new TaskLedger(path)
+    expect(reloaded.conservation().conserved).toBe(false)
+    expect(reloaded.conservation().damaged).toBe('snapshot-shape-invalid')
+  })
+
+  it('review r3 P1: malformed row entries refuse the verdict while parseable rows load', () => {
+    const home = mkdtempSync(join(tmpdir(), 'gh154-rows-'))
+    const path = join(home, 'tasks.json')
+    writeFileSync(path, JSON.stringify({
+      tasks: [
+        { taskId: 'direct-w0001', team: 'dsh/target', peer: 'peer', startedAt: 1, status: 'pending' },
+        { team: 'missing-id' },
+      ],
+    }))
+    const ledger = new TaskLedger(path)
+    expect(ledger.list()).toHaveLength(1)
+    const verdict = ledger.conservation()
+    expect(verdict.conserved).toBe(false)
+    expect(verdict.damaged).toBe('row-shape-invalid')
+    // The marker persists across mutation and reload.
+    ledger.track('direct-w0002', 'dsh/target', 'peer')
+    const reloaded = new TaskLedger(path)
+    expect(reloaded.conservation().damaged).toBe('row-shape-invalid')
+    expect(reloaded.conservation().conserved).toBe(false)
+  })
+
+  it('review r3 P2: an undercounted trackedTotal stays red, never repaired upward', () => {
+    const home = mkdtempSync(join(tmpdir(), 'gh154-under-'))
+    const path = join(home, 'tasks.json')
+    writeFileSync(path, JSON.stringify({
+      tasks: [
+        { taskId: 'direct-u0001', team: 'dsh/target', peer: 'peer', startedAt: 1, status: 'pending' },
+        { taskId: 'direct-u0002', team: 'dsh/target', peer: 'peer', startedAt: 2, status: 'pending' },
+      ],
+      conservation: { trackedTotal: 1, archivedByEnd: { receipt: 0, echo: 0, abandoned: 0, cancelled: 0, evicted: 0 }, archiveTrimmed: 0, restoreTrimmed: 0 },
+    }))
+    const verdict = new TaskLedger(path).conservation()
+    expect(verdict.trackedTotal).toBe(1)
+    // Undercount: tracked (1) < accounted (2 owed) — the identity stays red,
+    // delta negative; the rows prove more work than the block admits.
+    expect(verdict.delta).toBe(-1)
+    expect(verdict.conserved).toBe(false)
+  })
+
+  it('review r3 P2: a valid block keeps persisted restore cuts PLUS this load\'s cuts', () => {
+    const home = mkdtempSync(join(tmpdir(), 'gh154-cuts-'))
+    const path = join(home, 'tasks.json')
+    const rows = Array.from({ length: 70 }, (_, i) => ({ taskId: `direct-k${String(i).padStart(4, '0')}`, team: 'dsh/target', peer: 'peer', startedAt: i, status: 'pending' }))
+    writeFileSync(path, JSON.stringify({
+      tasks: rows,
+      conservation: { trackedTotal: 70, archivedByEnd: { receipt: 0, echo: 0, abandoned: 0, cancelled: 0, evicted: 0 }, archiveTrimmed: 0, restoreTrimmed: 0 },
+    }))
+    const verdict = new TaskLedger(path).conservation()
+    expect(verdict.owed).toBe(64)
+    expect(verdict.restoreTrimmed).toBe(6)
+    expect(verdict.conserved, JSON.stringify(verdict)).toBe(true)
   })
 })

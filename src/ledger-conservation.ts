@@ -97,13 +97,15 @@ export class ConservationCounters {
     for (const row of archive) this.archivedByEnd[classify(row)] += 1
   }
 
-  /** Valid-block load: counters as persisted (tracked never below the rows present). */
+  /** Valid-block load: counters EXACTLY as persisted (review P2: an undercount stays red — never repaired upward); restoreTrimmed ADDS this load's cuts to the persisted lifetime (review P2: neither overwrite nor max). */
   loadFrom(snapshot: ConservationSnapshot, owedCount: number, archiveCount: number): void {
-    this.trackedTotal = Math.max(snapshot.trackedTotal, owedCount + archiveCount)
+    this.trackedTotal = snapshot.trackedTotal
     this.archiveTrimmed = snapshot.archiveTrimmed
-    this.restoreTrimmed = snapshot.restoreTrimmed
+    this.restoreTrimmed += snapshot.restoreTrimmed
     for (const key of ARCHIVE_ENDS) this.archivedByEnd[key] = snapshot.archivedByEnd[key]
     if (snapshot.damaged !== undefined) this.damaged = snapshot.damaged
+    void owedCount
+    void archiveCount
   }
 
   /** The persisted shape (damaged rides along once stamped). */
