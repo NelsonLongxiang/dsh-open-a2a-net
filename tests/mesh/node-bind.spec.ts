@@ -155,6 +155,8 @@ describe('node binding mounts the node layers on the session scope (N2+N3)', () 
       expect(mut).toBeGreaterThan(-1)
       expect(core).toBeGreaterThan(mut)
       expect(text).toContain('#156 在验收')
+      // A line-leading issue number is prose, not a heading: it is not escaped.
+      expect(text).not.toContain('\\#156')
       expect(text).toContain('你是总工，只做路由与裁定。')
       expect(text).toContain('本段优先于上方的「节点自记」。')
       expect(NODE_PROMPT.mutable.order).toBeLessThan(NODE_PROMPT.core.order)
@@ -467,6 +469,16 @@ describe('review of #173 at c8530ff — counter-examples', () => {
       })
       try {
         expect(readFileSync(join(m.home, 'a2a', 'node-bindings.json'), 'utf8')).toBe(rows)
+        // r3: the first join after that reading must not end the others either (difference, not a sweep).
+        const b = makeAgent(m.ctx, B)
+        m.publish(b)
+        expect((await m.post('/__dsh_a2a/join', { id: B })).status).toBe(200)
+        expect(readFileSync(join(m.home, 'a2a', 'node-bindings.json'), 'utf8')).toBe(rows)
+        // ...while a real leave still ends its own binding.
+        expect((await m.post('/__dsh_a2a/nodes', { action: 'create', name: 'chief' })).status).toBe(200)
+        expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: B })).status).toBe(200)
+        expect((await m.post('/__dsh_a2a/leave', { id: B })).status).toBe(200)
+        expect((JSON.parse(readFileSync(join(m.home, 'a2a', 'node-bindings.json'), 'utf8')) as { bindings: Array<{ session: string }> }).bindings.map(r => r.session)).toEqual([A])
       } finally {
         await m.dispose()
       }

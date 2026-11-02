@@ -1142,7 +1142,7 @@ export function apply(ctx: Context, config: Config): void {
   const liveRoots = new Map<string, Agent>()
   // Node identity N2+N3: a joined session that carries a node gets that node's layers on its own scope.
   const nodeBindings = new NodeBindings(join(home, 'a2a'))
-  const nodeBinder = createNodeBinder({ store: nodeStore, bindings: nodeBindings, logger, joined: id => joinedSessions.has(id), archived: id => archivedSessionFilter()?.(id) === true, live: id => liveRoots.get(id) })
+  const nodeBinder = createNodeBinder({ store: nodeStore, bindings: nodeBindings, logger, joined: id => joinedSessions.has(id), joinedList: () => joinedSessions.list(), archived: id => archivedSessionFilter()?.(id) === true, live: id => liveRoots.get(id) })
   // No boot reconcile: a joined.json that failed to parse reads as empty, and ending every binding on that
   // reading would destroy them (the 3081 lesson). A stale row is harmless — mount checks joined itself.
   ctx.effect(() => joinedSessions.onChange(() => { nodeBinder.reconcile() }), 'a2a: node bindings follow join')
@@ -1296,6 +1296,7 @@ export function apply(ctx: Context, config: Config): void {
       if (!isArchived(id)) continue
       const ownHandle = ownCanvasHandleOf(id, true)
       sessionNodes.delete(id)
+      // Sections come back at the next mount (re-publish) if this archived reading was transient; the row stays.
       nodeBinder.suspend(id)
       // The archived session's JOIN INTENT is retained: deleting it was the
       // 3081 wake-defect root cause (a transient archived-window reading

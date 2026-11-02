@@ -19,7 +19,9 @@
  *   line, both before the deployment suffix at 10200 (§5).
  * - Frozen snapshot (§5): the texts are read once, when the session mounts.
  *   A layer written later takes effect from the session's next mount
- *   (resume / clear / compact re-publish it), never mid-session.
+ *   (resume / clear / compact re-publish it), never mid-session — except a
+ *   plugin hot reload, which re-mounts live sessions at the latest version
+ *   (#174 tracks re-mounting at the frozen versions).
  * - No interpolation (§5, B3): the installed system-prompt has no
  *   `interpolate:false`; it interpolates `{{name}}` groups and fails on an
  *   unknown one. Each section's text is therefore only `{{a2a_node_*}}`,
@@ -57,11 +59,11 @@ export interface NodeBinding {
 const fail = <T>(code: 'bad-request' | 'not-found' | 'conflict' | 'unavailable', error: string): NodeResult<T> => ({ ok: false, code, error })
 
 /**
- * Mutable text cannot leave its fence: the fence markers are neutralised and a line that starts with
- * `#` is escaped, so a note can never close the fence or forge a heading (e.g. a second 节点契约).
+ * Mutable text cannot leave its fence: the fence markers are neutralised and a line-leading ATX
+ * heading marker (`#`…`######` then a space or the line end) is escaped — `#156` stays as written — so a note can never close the fence or forge a heading (e.g. a second 节点契约).
  */
 export function fenceSafe(text: string): string {
-  return text.replaceAll('<<<节点自记', '‹‹‹节点自记').replaceAll('节点自记>>>', '节点自记›››').replace(/^(\s*)#/gm, '$1\\#')
+  return text.replaceAll('<<<节点自记', '‹‹‹节点自记').replaceAll('节点自记>>>', '节点自记›››').replace(/^(\s*)(#{1,6})(?=\s|$)/gm, '$1\\$2')
 }
 
 /** The mutable layer, fenced and marked lower than the core layer below it. '' when every section is empty. */
@@ -203,6 +205,8 @@ export interface NodeBinderDeps {
   readonly logger: { warn: (format: string, ...args: unknown[]) => void }
   /** Whether a session is joined (§3: only a joined session binds). */
   readonly joined: (session: string) => boolean
+  /** Every joined session now (reconcile works on the difference from the last reading). */
+  readonly joinedList: () => readonly string[]
   /** Whether a session is archived (it never mounts and cannot bind). */
   readonly archived: (session: string) => boolean
   /** The live top-level session with this id, if any. */
@@ -220,7 +224,11 @@ export interface NodeBinder {
   mounted(session: string): MountedNode | undefined
   bind(session: string, node: string, by: string): NodeResult<NodeBinding & { mounted: boolean }>
   unbind(session: string): NodeResult<true>
-  /** End the bindings of sessions no longer joined (leave, JOIN_CAP eviction). Never throws. */
+  /**
+   * End the bindings of sessions that LEFT since the last reading (leave, JOIN_CAP eviction). Only
+   * the difference counts: a joined.json that failed to parse reads as empty, and treating every
+   * session as "left" on that reading would end every binding (the 3081 lesson). Never throws.
+   */
   reconcile(): void
   /** End every binding to an archived node. */
   nodeArchived(node: string): void
@@ -230,6 +238,7 @@ export interface NodeBinder {
 
 export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
   const mounts = new Map<string, { dispose: () => void; info: MountedNode }>()
+  let seenJoined = new Set(d.joinedList())
 
   const unmount = (session: string): void => {
     const m = mounts.get(session)
@@ -328,10 +337,14 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
     },
     reconcile() {
       try {
-        const gone = d.bindings.deleteWhere(b => !d.joined(b.session))
+        const now = new Set(d.joinedList())
+        const left = new Set([...seenJoined].filter(id => !now.has(id)))
+        seenJoined = now
+        if (left.size === 0) return
+        const gone = d.bindings.deleteWhere(b => left.has(b.session))
         if (!gone.ok) {
           d.logger.warn('a2a nodes: could not end bindings of sessions that left: %s', gone.error)
-          for (const b of d.bindings.list()) if (!d.joined(b.session)) unmount(b.session)
+          for (const id of left) unmount(id)
           return
         }
         for (const b of gone.value) unmount(b.session)
