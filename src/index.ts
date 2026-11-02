@@ -113,6 +113,8 @@ import { A2aClient, type A2aFetch, type A2aSchedule, type CardFetchOutcome } fro
 import { MAX_LAYOUT_BODY_BYTES, WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from './transport-caps.ts'
 import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from './runtime.ts'
 import { registerAdminFaces } from './faces/admin.ts'
+import { registerNodeFaces } from './faces/nodes.ts'
+import { NodeStore } from './node-store.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { canvasCandidateMatches, canvasTargetAmbiguous, peerDirectoryRows, routableCallerLabel, sessionCandidateMatches, unroutableCallerNote } from './peer-directory.ts'
@@ -837,6 +839,8 @@ export function apply(ctx: Context, config: Config): void {
   // the same home as the node key.
   const home = config.dshHome === '' ? resolveDshHome() : resolveDshHome(config.dshHome)
   const peerStore = new PeerStore(config.peers, join(home, 'a2a', 'peers.json'))
+  // Node identity (docs/design/node-identity.md, N1): human-named nodes and their prompt versions.
+  const nodeStore = new NodeStore(join(home, 'a2a'))
   // Peer boundary model (docs/design/peer-boundary-model.md) — connection
   // layer. referralLearning off freezes the seed set: referrals are neither
   // learned nor offered. A non-empty peerAllowlist admits a referral only
@@ -1993,6 +1997,7 @@ export function apply(ctx: Context, config: Config): void {
         get ownerAnnounceRestartPending() { return ownerAnnounceRestartPending },
         set ownerAnnounceRestartPending(v) { ownerAnnounceRestartPending = v },
       })
+      registerNodeFaces(webServer, { ctx, nodeStore, apiKey: () => config.apiKey, secretEqual, controlRoute, readJsonBody })
     })
   }
 
