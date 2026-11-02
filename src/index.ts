@@ -2642,7 +2642,7 @@ export function apply(ctx: Context, config: Config): void {
     // shared zone string was "us". True self is the loopback self-fetch
     // face: the caller's card URL origin equals OUR card URL origin.
     try {
-      if (callerUrl !== '' && new URL(callerUrl).origin === new URL(ownCardUrl).origin) return true
+      if (callerUrl !== '' && isRootOriginUrl(callerUrl) && new URL(callerUrl).origin === new URL(ownCardUrl).origin) return true
     } catch { /* malformed callerUrl — falls through to the record bases */ }
     for (const id of joinedSessions.list()) {
       if (`${config.team}/${id8(id)}` === caller) return true
@@ -2667,7 +2667,8 @@ export function apply(ctx: Context, config: Config): void {
     // served-fresh field, exactly the self-description trust class
     // N3/V5 abolished. Our operator's own config anchors; the card
     // shadow only corroborates.
-    if (callerCard !== undefined && ownCardUrl !== '') {
+    // #189: only a ROOT claim URL speaks for its origin (a card under a path proves that path's publisher).
+    if (callerCard !== undefined && ownCardUrl !== '' && isRootOriginUrl(callerUrl)) {
       const ourOrigin = new URL(ownCardUrl).origin
       const callerOrigin = new URL(callerUrl).origin
       const weSeedThem = config.peers.some(peer => {
