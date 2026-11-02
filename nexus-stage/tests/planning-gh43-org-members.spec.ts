@@ -11,6 +11,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createPlanningView, type PlanningInput } from '../src/planning-view.ts'
+import { joinedLocalIdsByHandle, remoteMemberBoardId } from '../src/planning-member-handles.ts'
 
 const NOW = 72_400
 
@@ -112,5 +113,31 @@ describe('gh#43 remote org member resolution', () => {
     expect(v.root.querySelector('.p-node[data-id="member-dsh-c6c6f4f6"]')).not.toBeNull()
     const frame = [...v.root.querySelectorAll('.p-frame')].find(n => n.dataset.name === '远端研发')
     expect(frame).toBeDefined()
+  })
+})
+
+describe('joined local handle projection helper', () => {
+  it('maps only unique joined id8 handles that the peer directory does not claim', () => {
+    const sessions = [
+      { id: 'session-aaaaaaaa11111111', team: 'dsh/aaaaaaaa', joined: true },
+      { id: 'session-bbbbbbbb11111111', team: 'dsh/bbbbbbbb', joined: true },
+      { id: 'session-cccccccc11111111', team: 'dsh/cccccccc', joined: false },
+      { id: 'session-eeeeeeee11111111', team: 'dsh/dddddddd', joined: true },
+      { id: 'session-ffffffff11111111', team: 'dsh/dddddddd', joined: true },
+    ]
+    const map = joinedLocalIdsByHandle(sessions, new Set(['dsh/bbbbbbbb']))
+    expect(map.get('dsh/aaaaaaaa')).toBe('session-aaaaaaaa11111111')
+    expect(map.has('dsh/bbbbbbbb')).toBe(false)
+    expect(map.has('dsh/cccccccc')).toBe(false)
+    expect(map.has('dsh/dddddddd')).toBe(false)
+  })
+
+  it('projects canonical handles, legacy session ids and remote ids deterministically', () => {
+    const local = new Map([['dsh/aaaaaaaa', 'session-aaaaaaaa11111111']])
+    const rows = [{ team: 'zone/01234567', name: 'peer', via: 'https://peer.invalid' }]
+    expect(remoteMemberBoardId('dsh/aaaaaaaa', local, rows, 'https://peer.invalid')).toBe('session-aaaaaaaa11111111')
+    expect(remoteMemberBoardId('zone/01234567', local, rows, 'https://peer.invalid')).toBe('member-zone-01234567')
+    expect(remoteMemberBoardId('session-01234567-1111', local, rows, 'https://peer.invalid')).toBe('member-zone-01234567')
+    expect(remoteMemberBoardId('session-01234567-1111', local, [], 'https://peer.invalid')).toBe('member-dsh-01234567')
   })
 })

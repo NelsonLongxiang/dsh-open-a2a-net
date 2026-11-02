@@ -30,6 +30,7 @@ import { buildLayoutDoc, clampDoc, type LayoutDoc, type LayoutRect } from './lay
 import { FRAME_HEAD_LIFT } from './edges'
 import { drawMemberEdges } from './planning-edges'
 import { createFederationOverlay } from './federation-overlay'
+import { joinedLocalIdsByHandle, remoteMemberBoardId } from './planning-member-handles'
 import { displayName } from './stage-name'
 import {
   activityEdges, federalEdges, flyBounds, groupRemoteTeams, peerNodeId, peerHostOf, placePeers,
@@ -1250,27 +1251,6 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // peer card — pulling a specific remote member into a local team is a
     // plain drag (no picker, no hand-typed handle). Host cards stay for
     // federation context; the member cards carry the actual join gesture.
-    const peerSessionHandles = new Set((input.remoteTeams ?? []).map(row => row.team))
-    const localIdsByHandle = new Map<string, string>()
-    const ambiguousHandles = new Set<string>()
-    for (const session of input.sessions) {
-      if (session.joined !== true) continue
-      const slash = session.team.lastIndexOf('/')
-      if (slash <= 0 || session.team.slice(slash + 1) !== session.id.replace(/^session-/, '').slice(0, 8)) continue
-      const handle = session.team
-      if (peerSessionHandles.has(handle) || ambiguousHandles.has(handle)) continue
-      if (localIdsByHandle.has(handle)) {
-        localIdsByHandle.delete(handle)
-        ambiguousHandles.add(handle)
-      } else {
-        localIdsByHandle.set(handle, session.id)
-      }
-    }
-    const handleBoardId = (member: string, zone: string): string => {
-      const localId = localIdsByHandle.get(member)
-      if (localId !== undefined) return localId
-      return member.includes('/') ? `member-${member.replace(/[^a-z0-9-]/gi, '-')}` : `member-${zone}-${member.replace(/^session-/, '').slice(0, 8)}`
-    }
 
     const memberSeen = new Set<string>()
     for (const [host, rows] of lastRemoteTeams) {
@@ -1333,43 +1313,12 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       const localNames = new Set(input.teams.map(t => t.name))
       dissolving.sweep(input.peerOrg)
       for (const row of input.peerOrg) {
-        // The peer's zone comes from its directory rows ('dsh/xxxx' →
-        // 'dsh'); the org's members are stored verbatim — LOCAL members as
-        // session ids, remote members as zone/id8 handles. Both must
-        // resolve onto that host's session cards: id-form members become
-        // `member-<zone>-<id8>` (id8 = strip 'session-' prefix, first 8
-        // chars — the repo's id8 derivation), handle members sanitize
-        // directly. The old sanitize-only pass misresolved every local
-        // member (owner: 数据对不上).
-        const peerZone = input.remoteTeams?.find(r => r.via === row.url)?.team.split('/')[0] ?? 'dsh'
-        const id8of = (id: string): string => id.replace(/^session-/, '').slice(0, 8)
-        // Canvas members are canonical zone/id8 handles. Map one to a local card
-        // only when that joined handle is unambiguous and no published remote
-        // directory row already claims it; otherwise keep a synthetic member card.
-        const localIdsByHandle = new Map<string, string>()
-        const ambiguousHandles = new Set<string>()
+        // Resolve joined local handles and id-form legacy members through the pure projection helper.
         const publishedHandles = new Set((input.remoteTeams ?? []).map(session => session.team))
-        for (const session of input.sessions) {
-          if (session.joined !== true) continue
-          const slash = session.team.lastIndexOf('/')
-          if (slash <= 0 || session.team.slice(slash + 1) !== id8of(session.id)) continue
-          const handle = session.team
-          if (publishedHandles.has(handle) || ambiguousHandles.has(handle)) continue
-          if (localIdsByHandle.has(handle)) {
-            localIdsByHandle.delete(handle)
-            ambiguousHandles.add(handle)
-          } else {
-            localIdsByHandle.set(handle, session.id)
-          }
-        }
-        const memberBoardId = (member: string): string => {
-          const localId = localIdsByHandle.get(member)
-          if (localId !== undefined) return localId
-          return member.includes('/') ? `member-${member.replace(/[^a-z0-9-]/gi, '-')}` : `member-${peerZone}-${id8of(member)}`
-        }
+        const localIdsByHandle = joinedLocalIdsByHandle(input.sessions, publishedHandles)
         for (const team of row.org) {
           if (team.name === '' || localNames.has(team.name) || dissolving.hides(team.name, row.url)) continue
-          const memberIds = team.members.map(memberBoardId).filter(id => model.getNode(id) !== undefined)
+          const memberIds = team.members.map(member => remoteMemberBoardId(member, localIdsByHandle, input.remoteTeams, row.url)).filter(id => model.getNode(id) !== undefined)
           const saved = layoutDoc?.frames?.[team.name]
           // gh#44 (owner: frame position/size never sticks): the LOCAL-team
           // path keeps an existing frame's live rect ("live rect wins" — a
