@@ -18,7 +18,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'
-import SystemPrompt, { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
+import SystemPrompt, { renderContextSnapshot, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import TimerService from '@deepseek-ai/cordis-plugin-timer'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
@@ -27,7 +27,8 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import * as plugin from '../../src/index.ts'
 import type { Config } from '../../src/index.ts'
-import { NODE_PROMPT } from '../../src/node-bind.ts'
+import { createNodeBinder, NODE_PROMPT, NodeBindings } from '../../src/node-bind.ts'
+import { NodeStore } from '../../src/node-store.ts'
 import { promptSha } from '../../src/node-store.ts'
 import { fromMarkdown } from 'mdast-util-from-markdown'
 
@@ -838,6 +839,183 @@ describe('#174 — frozen versions across a plugin reload, retries, re-join, hea
       expect(row?.mutable_version).toBe(2)
       expect(row?.mutable_sha256).toMatch(/^[0-9a-f]{64}$/)
     } finally {
+      await m.dispose()
+    }
+  }, 30_000)
+})
+
+describe('N6 — task pointers on the nodes face, the live task context, the reminder', () => {
+  /** api.github.com answers from `github`; every other request (the host under test) goes through. */
+  const stubGithub = (github: Record<string, unknown>): void => {
+    const real = globalThis.fetch
+    vi.stubEnv('GITHUB_TOKEN', 'test-token')
+    vi.stubGlobal('fetch', (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (!u.startsWith('https://api.github.com/')) return await real(url, init)
+      const n = /issues\/(\d+)$/.exec(u)?.[1] ?? ''
+      return n in github ? new Response(JSON.stringify(github[n])) : new Response('{}', { status: 404 })
+    }) as typeof globalThis.fetch)
+  }
+  const contextOf = async (m: Mounted, agent: ScopedAgent): Promise<string> => {
+    const sp = m.ctx.get('systemPrompt') as unknown as { assemble: (c: { scope: object }) => Promise<Parameters<typeof renderContextSnapshot>[0]> }
+    return renderContextSnapshot(await sp.assemble({ scope: agent.key }))
+  }
+
+  it('track records the versions, a merged PR reads merged, and the bound session sees it in its task context', async () => {
+    stubGithub({ 160: { state: 'closed', pull_request: { merged_at: '2026-11-02T05:45:41Z' } }, 172: { state: 'open' } })
+    const m = await mount()
+    try {
+      await nodeWithLayers(m, 'chief', { 当前状态: '原文' })
+      const a = makeAgent(m.ctx, A)
+      const b = makeAgent(m.ctx, B)
+      m.publish(a); m.publish(b)
+      expect((await m.post('/__dsh_a2a/join', { id: A })).status).toBe(200)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: A })).status).toBe(200)
+      // Identity gate: tracking needs the key like every POST here.
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'track', name: 'chief', ref: 'o/r#160' }, 'wrong')).status).toBe(401)
+      for (const ref of ['NelsonLongxiang/dsh-open-a2a-net#160', 'NelsonLongxiang/dsh-open-a2a-net#172']) {
+        expect((await m.post('/__dsh_a2a/nodes', { action: 'track', name: 'chief', ref })).status).toBe(200)
+      }
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'track', name: 'nobody', ref: 'o/r#1' })).status).toBe(404)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'track', name: 'chief', ref: 'not-a-ref' })).status).toBe(400)
+      let tasks: Array<{ ref: string; state: string; core_version: number; mutable_version: number }> = []
+      for (let i = 0; i < 50; i++) {
+        tasks = ((await (await m.get('/__dsh_a2a/nodes?name=chief')).json()) as { tasks: typeof tasks }).tasks
+        if (tasks.every(t => t.state !== 'unknown')) break
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      expect(tasks.map(t => `${t.ref} ${t.state} v${String(t.core_version)}/${String(t.mutable_version)}`).sort()).toEqual([
+        'NelsonLongxiang/dsh-open-a2a-net#160 merged v1/1', 'NelsonLongxiang/dsh-open-a2a-net#172 open v1/1',
+      ])
+      const ctxA = await contextOf(m, a)
+      expect(ctxA).toContain('## 节点任务（a2a:node:tasks）')
+      expect(ctxA.indexOf('#172')).toBeLessThan(ctxA.indexOf('#160'))
+      expect(await contextOf(m, b)).not.toContain('节点任务')
+      // Live, not frozen: untracking shows at the next assembly.
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'untrack', name: 'chief', ref: 'NelsonLongxiang/dsh-open-a2a-net#160' })).status).toBe(200)
+      expect(await contextOf(m, a)).not.toContain('#160')
+      // Archiving the node moves its pointers to the archive.
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'archive', name: 'chief' })).status).toBe(200)
+      expect(readFileSync(join(m.home, 'a2a', 'node-tasks-archive.jsonl'), 'utf8')).toContain('#172')
+    } finally {
+      vi.unstubAllEnvs()
+      await m.dispose()
+    }
+  }, 30_000)
+
+  it('without a credential every pointer reads unknown; a bad ref is refused before any probe', async () => {
+    vi.stubEnv('GITHUB_TOKEN', '')
+    vi.stubEnv('PATH', '/nonexistent')
+    const m = await mount()
+    try {
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'create', name: 'chief' })).status).toBe(200)
+      for (const bad of ['o/..#1', 'o/r#1; rm -rf /', 'o/r']) expect((await m.post('/__dsh_a2a/nodes', { action: 'track', name: 'chief', ref: bad })).status).toBe(400)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'track', name: 'chief', ref: 'o/r#1' })).status).toBe(200)
+      let tasks: Array<{ state: string; check: string }> = []
+      for (let i = 0; i < 100; i++) {
+        tasks = ((await (await m.get('/__dsh_a2a/nodes?name=chief')).json()) as { tasks: typeof tasks }).tasks
+        if (tasks[0]?.check !== 'pending') break
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      expect(tasks).toEqual([expect.objectContaining({ state: 'unknown', check: 'unknown' })])
+    } finally {
+      vi.unstubAllEnvs()
+      await m.dispose()
+    }
+  }, 30_000)
+
+  it('a {{x}} in a task context never fails assembly; remind reaches only live sessions carrying that node', async () => {
+    const host = new Context()
+    await host.plugin(SystemPrompt)
+    const store = new NodeStore('')
+    expect(store.create({ name: 'chief' }, 'human:owner').ok).toBe(true)
+    expect(store.create({ name: 'other' }, 'human:owner').ok).toBe(true)
+    const bindings = new NodeBindings('')
+    const got: Record<string, string[]> = { [A]: [], [B]: [] }
+    const agents = new Map<string, ScopedAgent & { followup: (m: { content: Array<{ text: string }> }) => void }>()
+    for (const id of [A, B]) {
+      const agent = Object.assign(makeAgent(host, id), { followup: (msg: { content: Array<{ text: string }> }) => { got[id]?.push(msg.content[0]?.text ?? '') } })
+      agents.set(id, agent)
+    }
+    const binder = createNodeBinder({
+      store, bindings, logger: { warn: () => undefined }, joined: () => true, joinedList: () => [A, B], archived: () => false,
+      live: id => agents.get(id) as never,
+      tasksText: node => { if (node === 'other') throw new Error('tasks table exploded'); return node === 'chief' ? '## 节点任务\n- 模板 {{x}} 原样' : '' },
+    })
+    expect(binder.bind(A, 'chief', 'human:owner').ok).toBe(true)
+    expect(binder.bind(B, 'other', 'human:owner').ok).toBe(true)
+    const sp = host.get('systemPrompt') as unknown as { assemble: (c: { scope: object }) => Promise<Parameters<typeof renderContextSnapshot>[0]> }
+    expect(renderContextSnapshot(await sp.assemble({ scope: (agents.get(A) as ScopedAgent).key }))).toContain('模板 {{x}} 原样')
+    // A task text provider that throws leaves that session's assembly intact (r1 M5).
+    expect(renderPrompt(await sp.assemble({ scope: (agents.get(B) as ScopedAgent).key }) as never)).toContain('节点契约')
+    expect(binder.remind('chief', '[节点复盘] o/r#1 已合并。')).toBe(1)
+    expect(got).toEqual({ [A]: ['[节点复盘] o/r#1 已合并。'], [B]: [] })
+    await host.fiber.dispose()
+  }, 20_000)
+
+  it('r1 M1/M2: end to end — after a plugin (re)load the first pass finds the merge and the wired reminder reaches the session', async () => {
+    const github: Record<string, unknown> = { 172: { state: 'open' } }
+    stubGithub(github)
+    const m = await mount()
+    try {
+      await nodeWithLayers(m, 'chief', { 当前状态: '原文' })
+      const got: string[] = []
+      const a = Object.assign(makeAgent(m.ctx, A), { followup: (msg: { content: Array<{ text: string }>; source: { senderSessionId?: string } }) => { got.push(`${msg.source.senderSessionId ?? ''}|${msg.content[0]?.text ?? ''}`) } })
+      m.publish(a)
+      expect((await m.post('/__dsh_a2a/join', { id: A })).status).toBe(200)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: A })).status).toBe(200)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'track', name: 'chief', ref: 'NelsonLongxiang/dsh-open-a2a-net#172' })).status).toBe(200)
+      for (let i = 0; i < 50 && got.length === 0; i++) {
+        const tasks = ((await (await m.get('/__dsh_a2a/nodes?name=chief')).json()) as { tasks: Array<{ state: string }> }).tasks
+        if (tasks[0]?.state === 'open') break
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      github[172] = { state: 'closed', closed_at: new Date().toISOString(), pull_request: { merged_at: new Date().toISOString() } }
+      await m.reload(true)
+      for (let i = 0; i < 100 && got.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 10))
+      expect(got).toEqual(['节点 chief 的任务核对|[节点复盘] NelsonLongxiang/dsh-open-a2a-net#172 已合并。这件事告一段落：按需更新节点自记（当前状态、执行要点、已知陷阱、当前重点）。'])
+    } finally {
+      vi.unstubAllEnvs()
+      await m.dispose()
+    }
+  }, 30_000)
+
+  it('r2 P2: a merge found by the load-time pass while no session is live is handed to the session when it comes up (next turn, no wake)', async () => {
+    const github: Record<string, unknown> = { 172: { state: 'open' } }
+    stubGithub(github)
+    const m = await mount()
+    try {
+      await nodeWithLayers(m, 'chief', { 当前状态: '原文' })
+      const a = makeAgent(m.ctx, A)
+      m.publish(a)
+      expect((await m.post('/__dsh_a2a/join', { id: A })).status).toBe(200)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: A })).status).toBe(200)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'track', name: 'chief', ref: 'NelsonLongxiang/dsh-open-a2a-net#172' })).status).toBe(200)
+      const state = async (): Promise<string> => ((await (await m.get('/__dsh_a2a/nodes?name=chief')).json()) as { tasks: Array<{ state: string }> }).tasks[0]?.state ?? ''
+      for (let i = 0; i < 50 && await state() !== 'open'; i++) await new Promise(resolve => setTimeout(resolve, 10))
+      // Cold boot: the plugin goes down, the session is not live when it comes back, the PR merged meanwhile.
+      await m.reload(false)
+      m.agents.map.delete(A)
+      await a.dispose()
+      github[172] = { state: 'closed', closed_at: new Date().toISOString(), pull_request: { merged_at: new Date().toISOString() } }
+      await m.reload(true)
+      for (let i = 0; i < 100 && await state() !== 'merged'; i++) await new Promise(resolve => setTimeout(resolve, 10))
+      expect(await state()).toBe('merged')
+      // The session comes up later: the owed reminder rides its next turn, without waking it.
+      const sent: string[] = []
+      const resumed = Object.assign(makeAgent(m.ctx, A), {
+        send: (msg: { content: Array<{ text: string }> }, target: string, wakeup: boolean) => { sent.push(`${target}|${String(wakeup)}|${msg.content[0]?.text ?? ''}`) },
+      })
+      m.publish(resumed)
+      expect(sent).toEqual(['next-turn|false|[节点复盘] NelsonLongxiang/dsh-open-a2a-net#172 已合并。这件事告一段落：按需更新节点自记（当前状态、执行要点、已知陷阱、当前重点）。'])
+      // Handed out once: a later re-publish owes nothing.
+      const later = Object.assign(makeAgent(m.ctx, A), { send: () => { sent.push('again') } })
+      await resumed.dispose()
+      m.ctx.emit('agent/disposed', { agent: resumed as unknown as Agent })
+      m.publish(later)
+      expect(sent).toHaveLength(1)
+    } finally {
+      vi.unstubAllEnvs()
       await m.dispose()
     }
   }, 30_000)
