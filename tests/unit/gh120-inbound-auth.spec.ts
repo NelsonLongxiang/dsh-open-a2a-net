@@ -11,6 +11,8 @@ import { describe, expect, it } from 'vitest'
 import { AUTH_BASIS_CAP, AUTH_CLOCK_SKEW_MS, AUTH_STRING_CAP, buildAuthorization, claimCovers, parseAuthorization, type TaskAuthorization } from '../../src/task-auth.ts'
 import { TaskLedger } from '../../src/task-ledger.ts'
 
+const HANDLE = 'ops-cli/a1b2c3d4e5f60718'
+
 function ledgerPath(): string {
   return join(mkdtempSync(join(tmpdir(), 'dsh-a2a-auth-')), 'a2a', 'tasks.json')
 }
@@ -53,6 +55,20 @@ describe('#120 buildAuthorization / parseAuthorization', () => {
     expect(parseAuthorization(JSON.parse(JSON.stringify(mismatch)))).toEqual(mismatch)
   })
 
+  it('round-trips low-trust unbound and deposited-CLI claims through restore', () => {
+    for (const proof of ['unbound', 'cli-identity'] as const) {
+      const caller = proof === 'cli-identity' ? HANDLE : 'market/aaaaaaaa'
+      const claimCaller = proof === 'cli-identity' ? HANDLE : 'market'
+      const rule = proof === 'cli-identity' ? 'cli-deposit' : 'scope-off'
+      const via = proof === 'cli-identity' ? 'cli-deposit' : 'open'
+      const auth = buildAuthorization({ ok: true, via, rule, basis: [] }, {
+        caller, proof, claim: { caller: claimCaller, origin: 'https://issuer.example' }, ingress: 'wire',
+        allowlistVersion: 'al1:0123456789abcdef', target: 'dsh/bbbbbbbb', receiptTarget: caller, receivedAt: 1,
+      })
+      expect(parseAuthorization(JSON.parse(JSON.stringify(auth)))).toEqual(auth)
+    }
+  })
+
   it('claimCovers: the same zone, or a handle under it — never a prefix without the slash', () => {
     expect(claimCovers('dsh', 'dsh')).toBe(true)
     expect(claimCovers('dsh/aaaaaaaa', 'dsh')).toBe(true)
@@ -79,7 +95,7 @@ describe('#120 buildAuthorization / parseAuthorization', () => {
       { ...json, received_at: -1 },
       { ...json, target_busy: false },
       { ...json, claim: undefined }, // origin-claim without its claim
-      { ...json, proof: 'legacy-window' }, // a claim without origin-claim proof
+      { ...json, proof: 'none' }, // claims cannot accompany a proof that has no claim evidence
       { ...json, claim: { caller: 'dsh' } },
       // Review of PR #134 P2: combinations admission could never have produced.
       { ...json, caller: '' }, // admission refuses anonymous callers
@@ -94,7 +110,7 @@ describe('#120 buildAuthorization / parseAuthorization', () => {
       { ...json, received_at: 1.5 },
       // Review of PR #134 P1: coverage, not the record, decides origin-claim vs claim-mismatch.
       { ...json, claim: { caller: 'far', origin: 'http://far' } },
-      { ...json, proof: 'claim-mismatch' },
+      { ...json, proof: 'origin-claim', claim: { caller: 'far', origin: 'http://far' } },
     ]
     for (const raw of bad) expect(parseAuthorization(raw), JSON.stringify(raw)).toBeUndefined()
     expect(parseAuthorization(null)).toBeUndefined()
@@ -128,6 +144,26 @@ describe('#120 auth on ledger rows', () => {
     const second = new TaskLedger(path)
     expect(second.list().find(r => r.taskId === 'direct-live')?.auth).toEqual(AUTH)
     expect(new Map(second.archive().map(row => [row.taskId, row])).get('direct-r')?.auth).toEqual(AUTH)
+  })
+
+  it('unbound and cli-identity claims survive a TaskLedger restart without gaining origin trust', () => {
+    const path = ledgerPath()
+    const lowTrust = (proof: 'unbound' | 'cli-identity'): TaskAuthorization => {
+      const cli = proof === 'cli-identity'
+      const caller = cli ? HANDLE : 'market/aaaaaaaa'
+      const rule = cli ? 'cli-deposit' : 'scope-off'
+      const via = cli ? 'cli-deposit' : 'open'
+      return buildAuthorization({ ok: true, via, rule, basis: [] }, {
+        caller, proof, claim: { caller: cli ? HANDLE : 'market', origin: 'https://issuer.example' }, ingress: 'wire', allowlistVersion: 'al1:0123456789abcdef', target: 'dsh/bbbbbbbb', receiptTarget: caller, receivedAt: 1,
+      })
+    }
+    const first = new TaskLedger(path)
+    for (const proof of ['unbound', 'cli-identity'] as const) {
+      const auth = lowTrust(proof)
+      const taskId = `direct-restore-${proof}`
+      first.trackInbound(taskId, 'dsh/bbbbbbbb', auth.caller, undefined, true, 'first', auth)
+      expect(new TaskLedger(path).list().find(row => row.taskId === taskId)?.auth).toEqual(auth)
+    }
   })
 
   it('re-review P3: restore bounds received_at by the ledger\'s own clock, not the wall clock', () => {

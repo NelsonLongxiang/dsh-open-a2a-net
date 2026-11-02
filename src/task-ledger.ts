@@ -433,7 +433,7 @@ export interface SettlementJudge {
 
 const SETTLEMENT_REASONS: readonly string[] = ['settler-off-chain', 'settler-unverified', 'on-behalf-mismatch', 'echo-off-chain']
 const CHAIN_ROLES: readonly string[] = ['target', 'target-member', 'host-face', 'compat', 'legacy', 'off-chain']
-const PROOF_VALUES: readonly string[] = ['origin-claim', 'claim-mismatch', 'legacy-window', 'in-process', 'none']
+const PROOF_VALUES: readonly string[] = ['origin-claim', 'claim-mismatch', 'legacy-window', 'unbound', 'cli-identity', 'in-process', 'none']
 
 /** Restore-side allowlist for settledBy: whole or nothing. */
 function withSettledBy(raw: unknown): { settledBy?: SettledBy } {

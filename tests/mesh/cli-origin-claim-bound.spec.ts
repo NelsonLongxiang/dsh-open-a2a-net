@@ -86,7 +86,7 @@ describe('CLI bound OriginClaim (real host, §2.1)', () => {
       const home = await runCli(['route', TARGET, 'bound at home', '--task', 'direct-bound000001'], cli.env(a.baseUrl))
       expect(home.code, home.stderr).toBe(0)
       let after = await gauges(a)
-      expect(after.rows.find(t => t.taskId === 'direct-bound000001')?.auth).toMatchObject({ caller: 'ops-cli/a1b2c3d4e5f60718', proof: 'origin-claim', via: 'cli-deposit' })
+      expect(after.rows.find(t => t.taskId === 'direct-bound000001')?.auth).toMatchObject({ caller: 'ops-cli/a1b2c3d4e5f60718', proof: 'cli-identity', via: 'cli-deposit' })
       // Verified by the bound form alone: nothing counted against the window.
       expect([after.legacyInbound, after.unboundInbound, after.boundMissInbound]).toEqual([before.legacyInbound, before.unboundInbound, before.boundMissInbound])
 
@@ -118,7 +118,7 @@ describe('CLI bound OriginClaim (real host, §2.1)', () => {
       const listed = await runCli(['route', TARGET, 'via a listed proxy', '--task', 'direct-bound000003'], onB.env(proxyB.url))
       expect(listed.code, listed.stderr).toBe(0)
       const gb = await gauges(b)
-      expect(gb.rows.find(t => t.taskId === 'direct-bound000003')?.auth).toMatchObject({ proof: 'origin-claim', via: 'cli-deposit' })
+      expect(gb.rows.find(t => t.taskId === 'direct-bound000003')?.auth).toMatchObject({ proof: 'cli-identity', via: 'cli-deposit' })
       expect([gb.unboundInbound, gb.boundMissInbound]).toEqual([0, 0])
 
       const onC = await cliOn(c, 'c1b2c3d4e5f60718')
@@ -128,7 +128,7 @@ describe('CLI bound OriginClaim (real host, §2.1)', () => {
       // Silent at the CLI while the window is open: the host's gauge is where it shows.
       expect(open.stderr).toBe('')
       const gc = await gauges(c)
-      expect(gc.rows.find(t => t.taskId === 'direct-bound000004')?.auth).toMatchObject({ proof: 'origin-claim', via: 'cli-deposit' })
+      expect(gc.rows.find(t => t.taskId === 'direct-bound000004')?.auth).toMatchObject({ proof: 'cli-identity', via: 'cli-deposit' })
       expect(gc.unboundInbound - before.unboundInbound).toBe(1)
       expect(gc.boundMissInbound - before.boundMissInbound).toBe(1)
       // `a2a status` prints the gauges beside the address this CLI dials.

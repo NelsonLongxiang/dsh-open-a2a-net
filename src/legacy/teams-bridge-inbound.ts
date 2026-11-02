@@ -46,6 +46,8 @@ export interface TeamsBridgeInboundDeps {
   readonly config: Config
   readonly liveAgent: () => Agent | undefined
   readonly fromClause: (from: string) => string
+  readonly sanitizeFromClause: (from: string) => string
+  readonly proofHeader?: (team: string, taskId: string, from: string, proofClause: string) => string
 }
 
 /** The four inbound-bridge operations, verbatim from apply(). */
@@ -53,7 +55,7 @@ export interface TeamsBridgeInbound {
   teamsRegistry(): BridgeTeamsRegistry | undefined
   nativeTeamsClaims(team: string): Promise<boolean>
   nativeTeamsPrepare(team: string): Promise<NativeTeamsPrepared>
-  nativeTeamsRound(prepared: Extract<NativeTeamsPrepared, { ok: true }>, team: string, caller: string, message: string, taskId: string | undefined, external?: AbortSignal): Promise<NativeTeamsRoundOutcome>
+  nativeTeamsRound(prepared: Extract<NativeTeamsPrepared, { ok: true }>, team: string, caller: string, message: string, taskId: string | undefined, proofClause: string, external?: AbortSignal, proofHeader?: (team: string, taskId: string, from: string, proofClause: string) => string): Promise<NativeTeamsRoundOutcome>
 }
 
 /**
@@ -63,7 +65,7 @@ export interface TeamsBridgeInbound {
  */
 export function createTeamsBridgeInbound(deps: TeamsBridgeInboundDeps): TeamsBridgeInbound {
   const {
-    ctx, config, liveAgent, fromClause,
+    ctx, config, liveAgent, fromClause, sanitizeFromClause, proofHeader,
   } = deps
   function teamsRegistry(): BridgeTeamsRegistry | undefined {
     const candidate = (ctx as unknown as { get(name: string): unknown }).get('teams') as Partial<BridgeTeamsRegistry> | undefined
@@ -141,10 +143,12 @@ export function createTeamsBridgeInbound(deps: TeamsBridgeInboundDeps): TeamsBri
   }
 
   /** The A2A envelope rides the round message so the dispatcher sees the network origin. */
-  function bridgeEnvelope(team: string, caller: string, message: string, taskId: string | undefined): string {
+  function bridgeEnvelope(team: string, caller: string, message: string, taskId: string | undefined, proofClause: string, headerBuilder?: (team: string, taskId: string, from: string, proofClause: string) => string): string {
     const from = caller === '' ? 'an unknown node' : caller
     const taskPrefix = taskId === undefined ? '' : `(task ${taskId}) `
-    return `[A2A direct] ${taskPrefix}${fromClause(from)} (routed to ${team}) sent:\n\n${message}`
+    const builder = headerBuilder ?? proofHeader
+    const header = builder !== undefined && taskId !== undefined ? builder(team, taskId, from, proofClause) : `[A2A direct] ${taskPrefix}${proofClause} ${sanitizeFromClause(from)} (routed to ${team}) sent:`
+    return `${header}\n\n${message}`
   }
 
   type NativeTeamsRoundOutcome =
@@ -164,7 +168,7 @@ export function createTeamsBridgeInbound(deps: TeamsBridgeInboundDeps): TeamsBri
    * unsettled projection while the round keeps running detached.
    * @param prepared - a ready dispatch (claim, seam, parent) from {@link nativeTeamsPrepare}.
    */
-  async function nativeTeamsRound(prepared: Extract<NativeTeamsPrepared, { ok: true }>, team: string, caller: string, message: string, taskId: string | undefined, external?: AbortSignal): Promise<NativeTeamsRoundOutcome> {
+  async function nativeTeamsRound(prepared: Extract<NativeTeamsPrepared, { ok: true }>, team: string, caller: string, message: string, taskId: string | undefined, proofClause: string, external?: AbortSignal, headerBuilder?: (team: string, taskId: string, from: string, proofClause: string) => string): Promise<NativeTeamsRoundOutcome> {
     const controller = new AbortController()
     // One listener, always removed after the race: an external abort cancels
     // the round through its own controller.
@@ -186,7 +190,7 @@ export function createTeamsBridgeInbound(deps: TeamsBridgeInboundDeps): TeamsBri
       bridgeTimers.add(deadlineTimer)
     })
     const verdict = await Promise.race([
-      prepared.teams.startRound({ team, message: bridgeEnvelope(team, caller, message, taskId) }, prepared.parent, controller.signal).then(
+      prepared.teams.startRound({ team, message: bridgeEnvelope(team, caller, message, taskId, proofClause, headerBuilder) }, prepared.parent, controller.signal).then(
         (reply): Verdict => ({ kind: 'settled', reply }),
         (error: unknown): Verdict => { roundError = error; return { kind: 'failed' } },
       ),

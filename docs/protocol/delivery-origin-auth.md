@@ -102,12 +102,12 @@ X-A2A-Caller-Sig2: base64(ed25519-sign(
 `path` is the request path without its query. The leading tag separates
 the two forms: an unbound signature never verifies as a bound one.
 
-**Verification.** When `X-A2A-Caller-Sig2` is present, the receiver
-verifies the bound form. Once the unbound window is closed that is the
-only form it verifies. While the window is open, a bound form that misses
-(steps 1–2) falls back to the `X-A2A-Caller-Sig` the envelope also
-carries — no more than stripping `Sig2` would give — and the miss is
-counted as `boundMissInbound` besides `unboundInbound`:
+**Verification.** When `X-A2A-Caller-Sig2` is present, the receiver attempts the bound form first.
+While the unbound window is open, a bound miss can fall back to the accompanying
+`X-A2A-Caller-Sig`; the request is then accepted only with `bound: false` and
+counted as both `unboundInbound` and `boundMissInbound`. It must never receive
+a verified-origin label. Once the window is closed, the bound form is the
+only form verified:
 
 1. `audience` must be one of this host's own origins, else
    `wrong-audience` (answered before any card fetch when there is no
@@ -145,8 +145,11 @@ missing from `originClaimAudiences`: add it before closing. Close
 all still walks the caller gate on the faces that accept legacy deliveries.
 
 **Scope notes.**
-- The body is not signed; a body hash in the bound form is a possible
-  later addition.
+- A verified-origin label is only valid when the signature that verified was the bound v2 form (`bound === true`), the signed caller URL is exactly the root URL (`URL.origin` form: path `/`, no query or userinfo), and the card fetch returned the card directly. A v1 signature, even when accepted during migration or as fallback after a bound miss, proves only key possession and must be labeled `unverified (unbound)`, never as an origin. Since v1 signs only `[caller, callerUrl, ts]`, anyone holding it can replay it during the skew window to another body, target, method, or path; the default migration window therefore is not strong source authentication.
+- Card verification fetches use manual redirect handling; every 3xx is a verification failure. A `Location` target is not a substitute caller card. Path-prefixed `callerUrl` values are still fetched beneath that path to preserve deployments with mounted card endpoints; a valid path-prefixed delivery is classified `claim-mismatch` and never receives root-origin proof. Such a claim never speaks for its origin anywhere else either (#187, #189): at settlement it vouches for its key only, and for the operator link (canvas regulation, the full card face) it counts only as the EXACT peer URL this host seeded — same origin and same path, no userinfo, query or fragment — so a mounted peer seeded as `https://f.example/node` still links, while another path under `f.example` (another publisher) does not.
+- Consumers that interpret the host-authored direct header must parse only its first line with an anchored pattern such as `^\[A2A direct\] \(task \S+\) 已验证来源 (https?://[^ /]+) from "`; arbitrary text later in the message is not provenance. For intake routing, the expected market origin is team-level configuration in AGENTS or node notes supplied by the owner/operations, not `originClaimAudiences`; compare `new URL(expected).origin` with the extracted URL origin.
+- `originClaimAudiences` configures origins this host accepts as the bound request audience; it is not a market issuer allowlist. The direct proof authenticates the key in a card served at the caller's root, not that it is the operator-designated market. Consumers requiring a particular market must compare normalized `URL.origin` or the card public key against a deployment trust configuration. This package has no market-specific key allowlist. With `http:`, the card and claim are cleartext and provide no strong proof against an on-path observer.
+- The body is not signed and there is no nonce/replay cache. A captured bound envelope can be replayed within the five-minute skew window to the same origin, method, and path with a different body. The proof authenticates the caller origin/key and request route, not the event contents; applications must validate the body and use their own idempotency/authorization. HTTPS protects against passive/on-path capture; HTTP does not. A body hash or nonce scheme is a future protocol change, not provided here.
 - Hosts that answer at the same origin from different vantage points share
   an audience: loopback (for example tunnels that end on the same local
   port) or a private address reused on both sides.

@@ -40,6 +40,29 @@ export interface OriginClaimTarget {
 }
 
 export type OriginClaimRefusal = 'absent' | 'bad-caller-shape' | 'bad-ts' | 'no-card' | 'bad-sig' | 'not-derivable' | 'wrong-audience' | 'unbound-closed'
+
+/** Only the canonical origin root can claim that origin's identity. */
+export function isRootOriginUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.username === '' && url.password === '' && url.pathname === '/' && url.search === '' && url.hash === ''
+  } catch { return false }
+}
+/**
+ * #189 follow-up: whether a path-prefixed claim URL is EXACTLY a peer URL the operator seeded (a
+ * mounted card endpoint, delivery-origin-auth §"挂载卡片端点"): same origin and same path (trailing
+ * slashes ignored), neither carrying userinfo, query or fragment. A different path under the same
+ * origin is a different publisher and never matches.
+ */
+export function sameMountedUrl(seeded: string, claimUrl: string): boolean {
+  try {
+    const a = new URL(seeded)
+    const b = new URL(claimUrl)
+    const clean = (u: URL): boolean => (u.protocol === 'http:' || u.protocol === 'https:') && u.username === '' && u.password === '' && u.search === '' && u.hash === ''
+    const path = (u: URL): string => u.pathname.replace(/\/+$/, '')
+    return clean(a) && clean(b) && a.origin === b.origin && path(a) !== '' && path(a) === path(b)
+  } catch { return false }
+}
 export type OriginClaimVerdict =
   | { ok: true; caller: string; callerUrl: string; card: A2aPeerCard; bound: boolean; cli?: true }
   | { ok: false; reason: OriginClaimRefusal }
@@ -194,12 +217,12 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
       return false
     }
   }
-  // The form that verifies under `card`: bound when it is at its audience
-  // and signed; else the unbound one when the window allows (a bound miss).
+  // Only a successful bound signature is origin proof. A v1/fallback
+  // signature is accepted for migration compatibility but remains unbound.
   let bound = false
   const signedBy = (card: A2aPeerCard): boolean => {
     bound = audienceOk && verifies(card, boundCanonical(caller, callerUrl, ts, audience, req.method ?? '', pathOf(req.url ?? '')), boundSig)
-    return bound || ((!hasBound || fallback) && verifies(card, unboundCanonical(caller, callerUrl, ts), unboundSig))
+    return bound || (fallback && verifies(card, unboundCanonical(caller, callerUrl, ts), unboundSig))
   }
   const accepted = (): void => {
     if (bound) return
@@ -226,8 +249,15 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   if (card === undefined) {
     try {
       // callerUrl is the caller's BASE URL — the card lives under it.
-      const cardUrl = callerUrl.endsWith('/') ? `${callerUrl}.well-known/agent-card.json` : `${callerUrl}/.well-known/agent-card.json`
-      const response = await d.fetch(cardUrl, { method: 'GET', headers: {} })
+      const cardBase = new URL(callerUrl)
+      cardBase.username = ''
+      cardBase.password = ''
+      cardBase.pathname = `${cardBase.pathname.replace(/\/+$/, '')}/.well-known/agent-card.json`
+      cardBase.search = ''
+      cardBase.hash = ''
+      const cardUrl = cardBase.toString()
+      const response = await d.fetch(cardUrl, { method: 'GET', headers: {}, redirect: 'manual' })
+      if (response.status >= 300 && response.status < 400) return { ok: false, reason: 'not-derivable' }
       const verdict = verifyCard(JSON.parse(await response.text()), Date.now())
       if (verdict.ok) card = verdict.card
     } catch {
