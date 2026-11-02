@@ -13,16 +13,19 @@
  * - Identity writes (create / update / archive / core / rollback) are
  *   gated by the caller (the nodes face requires apiKey even on loopback,
  *   §8-2); this module only validates shapes and keeps the chain closed.
- * - Never-reuse survives a lost roster: a name whose version directory
- *   exists counts as used. A roster that does not parse is moved aside
- *   (`nodes.json.corrupt-<ts>`) and the store turns READ-ONLY — it never
- *   silently overwrites what it could not read. Writes go to disk first
- *   (tmp + rename) and only then into memory.
+ * - Never-reuse survives a lost roster: create makes the node's version
+ *   directory at once, and a name with a directory counts as used. A roster
+ *   that does not parse, or parses into the wrong shape, is copied to
+ *   `nodes.json.corrupt-<ts>` and LEFT IN PLACE; the store is READ-ONLY for
+ *   as long as it stays unreadable (every restart), so it is never silently
+ *   overwritten. Entries dropped as malformed are backed up first
+ *   (`nodes.json.dropped-<ts>`). Writes go to disk first (tmp + rename) and
+ *   only then into memory.
  * @module @nelsonlongxiang/dsh-open-a2a-net/node-store
  */
 
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** §8-1: node names. */
@@ -181,24 +184,40 @@ export class NodeStore {
 
   private restore(): void {
     if (this.root === '' || !existsSync(this.file)) return
-    let snap: Partial<Snapshot> | null
+    const stamp = this.now().replace(/[:.]/g, '-')
+    const keepAside = (suffix: string): string => {
+      const aside = `${this.file}.${suffix}-${stamp}`
+      try { copyFileSync(this.file, aside) } catch { /* the original stays in place either way */ }
+      return aside
+    }
+    let snap: unknown
     try {
-      snap = JSON.parse(readFileSync(this.file, 'utf8')) as Partial<Snapshot> | null
+      snap = JSON.parse(readFileSync(this.file, 'utf8'))
     } catch {
-      // Never overwrite what could not be read: move it aside and refuse writes (design §3 still
-      // holds — a broken roster vetoes nothing, the node faces just stay read-only).
-      const aside = `${this.file}.corrupt-${this.now().replace(/[:.]/g, '-')}`
-      try { renameSync(this.file, aside) } catch { /* keep it in place; still read-only */ }
-      this.readOnlyReason = `nodes.json did not parse and was moved to ${aside}; repair or restore it, then restart`
+      snap = undefined
+    }
+    const shaped = snap !== null && typeof snap === 'object' && !Array.isArray(snap)
+      && ((snap as Partial<Snapshot>).nodes === undefined || Array.isArray((snap as Partial<Snapshot>).nodes))
+      && ((snap as Partial<Snapshot>).retired === undefined || Array.isArray((snap as Partial<Snapshot>).retired))
+    if (!shaped) {
+      // Never overwrite what could not be read. The original stays where it is, so the store comes
+      // back read-only on every restart until a human repairs it (design §3: it vetoes nothing else).
+      this.readOnlyReason = `nodes.json is unreadable or not a roster (copy kept at ${keepAside('corrupt')}); repair it, then restart`
       return
     }
-    for (const raw of Array.isArray(snap?.nodes) ? snap.nodes : []) {
+    const parsed = snap as Partial<Snapshot>
+    for (const raw of parsed.nodes ?? []) {
       const record = recordOf(raw)
       if (record === undefined || this.nodes.some(n => n.name === record.name)) this.dropped.push(String((raw as { name?: unknown } | null)?.name ?? '?'))
       else this.nodes.push(record)
     }
-    // Dropped names stay reserved: their version directories make them "used" (see nameUsed).
-    if (Array.isArray(snap?.retired)) this.retired = snap.retired.filter(isText)
+    this.retired = (parsed.retired ?? []).filter(isText)
+    // The next commit rewrites the roster without the dropped entries: keep the original first, and
+    // retire their names — a malformed entry may have no version directory to reserve it.
+    if (this.dropped.length > 0) {
+      keepAside('dropped')
+      for (const name of this.dropped) if (NODE_NAME.test(name) && !this.retired.includes(name)) this.retired.push(name)
+    }
   }
 
   /** Disk first (tmp + rename), memory after — a failed write leaves both as they were. */
@@ -228,10 +247,13 @@ export class NodeStore {
   /** Why the store refuses writes ('' when it does not). */
   get readOnly(): string { return this.readOnlyReason }
 
-  /** A name is used when it is live, retired, or has version files on disk (survives a lost roster). */
+  /** Names reserved in memory mode (root ''), standing in for the version directory. */
+  private readonly memReserved = new Set<string>()
+
+  /** A name is used when it is live, retired, or has a version directory (created with the node, so it survives a lost roster). */
   private nameUsed(name: string): boolean {
     if (this.get(name) !== undefined || this.retired.includes(name)) return true
-    if (this.root === '') return [...this.memVersions.keys()].some(k => k.startsWith(`${name}/`))
+    if (this.root === '') return this.memReserved.has(name)
     return existsSync(this.versionDir(name))
   }
 
@@ -296,6 +318,15 @@ export class NodeStore {
       label: fields.value.label === '' ? name : fields.value.label,
       prompt: { core_version: 0, core_sha256: '', mutable_version: 0, mutable_sha256: '' },
       created_by: by, created_at: this.now(),
+    }
+    // Reserve the name on disk before the roster names it: the directory outlives any roster loss.
+    if (this.root === '') this.memReserved.add(name)
+    else {
+      try {
+        mkdirSync(this.versionDir(name), { recursive: true })
+      } catch (error) {
+        return fail('unavailable', `could not reserve ${name}: ${String(error)}`)
+      }
     }
     const saved = this.commit({ nodes: [...this.nodes, record] })
     return saved.ok ? { ok: true, value: record } : saved

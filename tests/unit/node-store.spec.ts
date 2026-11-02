@@ -135,18 +135,43 @@ describe('NodeStore — disk', () => {
     expect(b.version('n-1', 'mutable', 1)?.sections['当前状态']).toBe('one')
   })
 
-  it('a roster that does not parse is moved aside and the store turns read-only (never overwritten)', () => {
+  it('an unreadable roster is copied aside, left in place, and the store stays read-only across restarts', () => {
     const dir = root()
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'nodes.json'), '{not json')
     const s = new NodeStore(dir)
     expect(s.list()).toEqual([])
-    expect(s.readOnly).toMatch(/moved to/)
+    expect(s.readOnly).toMatch(/copy kept at/)
     expect(s.create({ name: 'n-1' }, 'h')).toMatchObject({ ok: false, code: 'unavailable' })
-    expect(existsSync(join(dir, 'nodes.json'))).toBe(false)
+    expect(readFileSync(join(dir, 'nodes.json'), 'utf8')).toBe('{not json')
     const aside = readdirSync(dir).find(f => f.startsWith('nodes.json.corrupt-'))
-    expect(aside).toBeDefined()
     expect(readFileSync(join(dir, aside!), 'utf8')).toBe('{not json')
+    const restarted = new NodeStore(dir)
+    expect(restarted.readOnly).not.toBe('')
+    expect(restarted.create({ name: 'n-1' }, 'h')).toMatchObject({ ok: false, code: 'unavailable' })
+  })
+
+  it.each(['null', '[]', '{"nodes":"x"}', '{"retired":5}'])('a roster that parses into the wrong shape (%s) is read-only and untouched', (text) => {
+    const dir = root()
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'nodes.json'), text)
+    const s = new NodeStore(dir)
+    expect(s.create({ name: 'n-1' }, 'h')).toMatchObject({ ok: false, code: 'unavailable' })
+    expect(readFileSync(join(dir, 'nodes.json'), 'utf8')).toBe(text)
+  })
+
+  it('a node created and archived without ever writing a layer still reserves its name after the roster is lost', () => {
+    const dir = root()
+    const a = new NodeStore(dir)
+    a.create({ name: 'gone-1' }, 'h')
+    a.archive('gone-1')
+    rmSync(join(dir, 'nodes.json'))
+    expect(new NodeStore(dir).create({ name: 'gone-1' }, 'h')).toMatchObject({ ok: false, code: 'conflict' })
+    // Memory mode keeps the same rule.
+    const m = new NodeStore('')
+    m.create({ name: 'gone-2' }, 'h')
+    m.archive('gone-2')
+    expect(m.create({ name: 'gone-2' }, 'h')).toMatchObject({ ok: false, code: 'conflict' })
   })
 
   it('a lost roster does not free a used name: its version directory still reserves it', () => {
@@ -166,11 +191,16 @@ describe('NodeStore — disk', () => {
     const snap = JSON.parse(readFileSync(join(dir, 'nodes.json'), 'utf8'))
     snap.nodes.push({ name: 'bad-1', label: 'x' }) // no prompt / carrier / role …
     writeFileSync(join(dir, 'nodes.json'), JSON.stringify(snap))
+    const original = readFileSync(join(dir, 'nodes.json'), 'utf8')
     const b = new NodeStore(dir)
     expect(b.list().map(n => n.name)).toEqual(['good-1'])
     expect(b.dropped).toEqual(['bad-1'])
+    const backup = readdirSync(dir).find(f => f.startsWith('nodes.json.dropped-'))
+    expect(readFileSync(join(dir, backup!), 'utf8')).toBe(original)
     expect(b.writeLayer('good-1', 'core', { core: 'c' }, meta('')).ok).toBe(true)
     expect(b.writeLayer('bad-1', 'core', { core: 'c' }, meta(''))).toMatchObject({ ok: false, code: 'not-found' })
+    expect(b.create({ name: 'bad-1' }, 'h')).toMatchObject({ ok: false, code: 'conflict' }) // no version dir, but its name is retired
+    expect(new NodeStore(dir).create({ name: 'bad-1' }, 'h')).toMatchObject({ ok: false, code: 'conflict' }) // and stays retired on disk
   })
 
   it('on disk: CAS, rollback and write-after-rollback number past every file', () => {
