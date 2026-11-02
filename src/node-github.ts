@@ -15,21 +15,30 @@ import { execFile } from 'node:child_process'
 
 export type TaskState = 'open' | 'merged' | 'closed' | 'declined'
 
-/** `owner/repo#n` — the pointer form (GitHub's own owner and repo character sets). */
-export const TASK_REF = /^([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9._-]{1,100})#([1-9]\d{0,9})$/
+/** `owner/repo#n` — the pointer form (GitHub's own owner and repo character sets; `.` and `..` are no repo). */
+export const TASK_REF = /^([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/(?!\.\.?#)([A-Za-z0-9._-]{1,100})#([1-9]\d{0,9})$/
 
-/** One pointer's state on GitHub, or undefined when it cannot be known right now. */
-export type GithubProbe = (ref: string) => Promise<TaskState | undefined>
+/** One pointer's state on GitHub, and when it finished (merged_at / closed_at), if it did. */
+export interface TaskFact { readonly state: TaskState; readonly finishedAt?: string }
 
-/** Map one issues-API body to a state; undefined for anything that does not look like one. */
-export function stateOf(body: unknown): TaskState | undefined {
+/** One pointer's fact on GitHub, or undefined when it cannot be known right now. */
+export type GithubProbe = (ref: string) => Promise<TaskFact | undefined>
+
+/** Map one issues-API body to a fact; undefined for anything that does not look like one. */
+export function factOf(body: unknown): TaskFact | undefined {
   if (body === null || typeof body !== 'object') return undefined
-  const b = body as { state?: unknown; state_reason?: unknown; pull_request?: { merged_at?: unknown } | null }
-  if (b.state === 'open') return 'open'
+  const b = body as { state?: unknown; state_reason?: unknown; closed_at?: unknown; pull_request?: { merged_at?: unknown } | null }
+  if (b.state === 'open') return { state: 'open' }
   if (b.state !== 'closed') return undefined
-  if (b.pull_request !== undefined && b.pull_request !== null && typeof b.pull_request.merged_at === 'string') return 'merged'
-  if (b.state_reason === 'not_planned') return 'declined'
-  return 'closed'
+  const closedAt = typeof b.closed_at === 'string' ? { finishedAt: b.closed_at } : {}
+  if (b.pull_request !== undefined && b.pull_request !== null && typeof b.pull_request.merged_at === 'string') return { state: 'merged', finishedAt: b.pull_request.merged_at }
+  if (b.state_reason === 'not_planned') return { state: 'declined', ...closedAt }
+  return { state: 'closed', ...closedAt }
+}
+
+/** Just the state of {@link factOf}. */
+export function stateOf(body: unknown): TaskState | undefined {
+  return factOf(body)?.state
 }
 
 export interface GithubProbeDeps {
@@ -65,9 +74,9 @@ export function githubProbe(d: GithubProbeDeps = {}): GithubProbe {
           signal: AbortSignal.timeout(timeoutMs),
         })
         if (!res.ok) return undefined
-        return stateOf(await res.json())
+        return factOf(await res.json())
       }
-      return stateOf(JSON.parse(await gh(path)))
+      return factOf(JSON.parse(await gh(path)))
     } catch {
       return undefined
     }

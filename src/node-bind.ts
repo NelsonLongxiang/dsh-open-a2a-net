@@ -496,7 +496,8 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
             id: MessageId(`a2a-node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`),
             role: 'user',
             content: [{ type: 'text', text }],
-            source: { kind: 'a2a-relay', form: 'relay' },
+            // The sender label makes ui-chat render it as "来自 …" with the text, not an opaque relay row.
+            source: { kind: 'a2a-relay', form: 'relay', senderSessionId: `节点 ${node} 的任务核对` },
           })
           reached++
         } catch (error) {

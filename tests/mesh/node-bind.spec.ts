@@ -903,12 +903,13 @@ describe('N6 — task pointers on the nodes face, the live task context, the rem
     }
   }, 30_000)
 
-  it('without a credential every pointer reads unknown (gh is never reached with a bad ref either)', async () => {
+  it('without a credential every pointer reads unknown; a bad ref is refused before any probe', async () => {
     vi.stubEnv('GITHUB_TOKEN', '')
     vi.stubEnv('PATH', '/nonexistent')
     const m = await mount()
     try {
       expect((await m.post('/__dsh_a2a/nodes', { action: 'create', name: 'chief' })).status).toBe(200)
+      for (const bad of ['o/..#1', 'o/r#1; rm -rf /', 'o/r']) expect((await m.post('/__dsh_a2a/nodes', { action: 'track', name: 'chief', ref: bad })).status).toBe(400)
       expect((await m.post('/__dsh_a2a/nodes', { action: 'track', name: 'chief', ref: 'o/r#1' })).status).toBe(200)
       let tasks: Array<{ state: string; check: string }> = []
       for (let i = 0; i < 100; i++) {
@@ -938,15 +939,45 @@ describe('N6 — task pointers on the nodes face, the live task context, the rem
     }
     const binder = createNodeBinder({
       store, bindings, logger: { warn: () => undefined }, joined: () => true, joinedList: () => [A, B], archived: () => false,
-      live: id => agents.get(id) as never, tasksText: node => node === 'chief' ? '## 节点任务\n- 模板 {{x}} 原样' : '',
+      live: id => agents.get(id) as never,
+      tasksText: node => { if (node === 'other') throw new Error('tasks table exploded'); return node === 'chief' ? '## 节点任务\n- 模板 {{x}} 原样' : '' },
     })
     expect(binder.bind(A, 'chief', 'human:owner').ok).toBe(true)
     expect(binder.bind(B, 'other', 'human:owner').ok).toBe(true)
     const sp = host.get('systemPrompt') as unknown as { assemble: (c: { scope: object }) => Promise<Parameters<typeof renderContextSnapshot>[0]> }
     expect(renderContextSnapshot(await sp.assemble({ scope: (agents.get(A) as ScopedAgent).key }))).toContain('模板 {{x}} 原样')
+    // A task text provider that throws leaves that session's assembly intact (r1 M5).
+    expect(renderPrompt(await sp.assemble({ scope: (agents.get(B) as ScopedAgent).key }) as never)).toContain('节点契约')
     expect(binder.remind('chief', '[节点复盘] o/r#1 已合并。')).toBe(1)
     expect(got).toEqual({ [A]: ['[节点复盘] o/r#1 已合并。'], [B]: [] })
     await host.fiber.dispose()
   }, 20_000)
+
+  it('r1 M1/M2: end to end — after a plugin (re)load the first pass finds the merge and the wired reminder reaches the session', async () => {
+    const github: Record<string, unknown> = { 172: { state: 'open' } }
+    stubGithub(github)
+    const m = await mount()
+    try {
+      await nodeWithLayers(m, 'chief', { 当前状态: '原文' })
+      const got: string[] = []
+      const a = Object.assign(makeAgent(m.ctx, A), { followup: (msg: { content: Array<{ text: string }>; source: { senderSessionId?: string } }) => { got.push(`${msg.source.senderSessionId ?? ''}|${msg.content[0]?.text ?? ''}`) } })
+      m.publish(a)
+      expect((await m.post('/__dsh_a2a/join', { id: A })).status).toBe(200)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: A })).status).toBe(200)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'track', name: 'chief', ref: 'NelsonLongxiang/dsh-open-a2a-net#172' })).status).toBe(200)
+      for (let i = 0; i < 50 && got.length === 0; i++) {
+        const tasks = ((await (await m.get('/__dsh_a2a/nodes?name=chief')).json()) as { tasks: Array<{ state: string }> }).tasks
+        if (tasks[0]?.state === 'open') break
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      github[172] = { state: 'closed', closed_at: new Date().toISOString(), pull_request: { merged_at: new Date().toISOString() } }
+      await m.reload(true)
+      for (let i = 0; i < 100 && got.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 10))
+      expect(got).toEqual(['节点 chief 的任务核对|[节点复盘] NelsonLongxiang/dsh-open-a2a-net#172 已合并。这件事告一段落：按需更新节点自记（当前状态、执行要点、已知陷阱、当前重点）。'])
+    } finally {
+      vi.unstubAllEnvs()
+      await m.dispose()
+    }
+  }, 30_000)
 })
 
