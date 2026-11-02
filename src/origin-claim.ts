@@ -40,6 +40,14 @@ export interface OriginClaimTarget {
 }
 
 export type OriginClaimRefusal = 'absent' | 'bad-caller-shape' | 'bad-ts' | 'no-card' | 'bad-sig' | 'not-derivable' | 'wrong-audience' | 'unbound-closed'
+
+/** Only the canonical origin root can claim that origin's identity. */
+export function isRootOriginUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.username === '' && url.password === '' && url.pathname === '/' && url.search === '' && url.hash === ''
+  } catch { return false }
+}
 export type OriginClaimVerdict =
   | { ok: true; caller: string; callerUrl: string; card: A2aPeerCard; bound: boolean; cli?: true }
   | { ok: false; reason: OriginClaimRefusal }
@@ -194,12 +202,12 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
       return false
     }
   }
-  // The form that verifies under `card`: bound when it is at its audience
-  // and signed; else the unbound one when the window allows (a bound miss).
+  // Only a successful bound signature is origin proof. A v1/fallback
+  // signature is accepted for migration compatibility but remains unbound.
   let bound = false
   const signedBy = (card: A2aPeerCard): boolean => {
     bound = audienceOk && verifies(card, boundCanonical(caller, callerUrl, ts, audience, req.method ?? '', pathOf(req.url ?? '')), boundSig)
-    return bound || ((!hasBound || fallback) && verifies(card, unboundCanonical(caller, callerUrl, ts), unboundSig))
+    return bound || (fallback && verifies(card, unboundCanonical(caller, callerUrl, ts), unboundSig))
   }
   const accepted = (): void => {
     if (bound) return
@@ -222,12 +230,14 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   // card.team === caller below — both ride the minimal card's signed core,
   // so a single envelope-less fetch suffices and never recurses). A warm
   // cache entry short-circuits the fetch.
+  if (!isRootOriginUrl(callerUrl)) return { ok: false, reason: 'not-derivable' }
   let card: A2aPeerCard | undefined = d.cardCache.get(callerUrl)?.card
   if (card === undefined) {
     try {
       // callerUrl is the caller's BASE URL — the card lives under it.
-      const cardUrl = callerUrl.endsWith('/') ? `${callerUrl}.well-known/agent-card.json` : `${callerUrl}/.well-known/agent-card.json`
-      const response = await d.fetch(cardUrl, { method: 'GET', headers: {} })
+      const cardUrl = new URL('/.well-known/agent-card.json', callerUrl).toString()
+      const response = await d.fetch(cardUrl, { method: 'GET', headers: {}, redirect: 'manual' })
+      if (response.status >= 300 && response.status < 400) return { ok: false, reason: 'not-derivable' }
       const verdict = verifyCard(JSON.parse(await response.text()), Date.now())
       if (verdict.ok) card = verdict.card
     } catch {

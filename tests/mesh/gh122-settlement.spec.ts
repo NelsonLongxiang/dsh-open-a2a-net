@@ -59,7 +59,7 @@ describe('#114 S4 settlement authorization (real host)', () => {
       expect(state.tasks.find(t => t.taskId === 'direct-gh122000001')).toBeUndefined()
       expect(state.archived.find(t => t.taskId === 'direct-gh122000001')?.settledBy).toEqual({ caller: evil, chain_role: 'off-chain' })
       expect(state.settlement).toMatchObject({ mode: 'observe', offChain: 1 })
-      expect(state.settlement.refusals[0]).toMatchObject({ taskId: 'direct-gh122000001', reason: 'settler-off-chain', enforced: false, settler: { caller: evil, proof: 'origin-claim', ingress: 'wire' } })
+      expect(state.settlement.refusals[0]).toMatchObject({ taskId: 'direct-gh122000001', reason: 'settler-off-chain', enforced: false, settler: { caller: evil, proof: 'cli-identity', ingress: 'wire' } })
     } finally {
       await a.dispose()
     }

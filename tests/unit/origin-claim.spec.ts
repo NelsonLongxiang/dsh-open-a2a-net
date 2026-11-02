@@ -1,14 +1,14 @@
 /**
  * OriginClaim audience binding (docs/protocol/delivery-origin-auth.md §2.1):
- * a bound envelope verifies only at the origin, method and path it was
- * signed for; the unbound legacy form passes only while the window is open,
- * and a present bound signature never falls back to the unbound one.
+ * A verified source requires a bound envelope at the root caller URL, and
+ * a signed bound miss never falls back to an unbound signature. Legacy-only
+ * envelopes can still be accepted as key possession during migration.
  */
 import { describe, expect, it } from 'vitest'
 import { generateKeyPairSync, sign as edSign } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import { signCard } from '../../src/card.ts'
-import { requestAudiences, signOriginClaim, unboundCanonical, verifyOriginClaim } from '../../src/origin-claim.ts'
+import { isRootOriginUrl, requestAudiences, signOriginClaim, unboundCanonical, verifyOriginClaim } from '../../src/origin-claim.ts'
 import type { CardCacheEntry } from '../../src/runtime.ts'
 import type { A2aPeerCard } from '../../src/types.ts'
 
@@ -30,13 +30,13 @@ const req = (headers: Record<string, string>, at: { url: string; method?: string
 /** The receiving host's own card URL — always among its configured audiences. */
 const OWN = 'http://127.0.0.1:4000'
 
-function verify(request: IncomingMessage, options: { unboundOpen?: boolean; audiences?: string[]; loopbackArrival?: boolean; now?: number } = {}) {
-  const cardCache = new Map<string, CardCacheEntry>([[CALLER_URL, { at: Date.now(), card }]])
+function verify(request: IncomingMessage, options: { unboundOpen?: boolean; audiences?: string[]; loopbackArrival?: boolean; now?: number; cacheCard?: boolean; fetch?: (url: string, init: { method: 'GET' | 'POST'; headers: Record<string, string>; redirect?: 'follow' | 'error' | 'manual' }) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }> } = {}) {
+  const cardCache = new Map<string, CardCacheEntry>(options.cacheCard === false ? [] : [[CALLER_URL, { at: Date.now(), card }]])
   let unbound = 0
   let boundMiss = 0
   const verdict = verifyOriginClaim(request, {
     cardCache,
-    fetch: () => { throw new Error('no fetch: the card is cached') },
+    fetch: options.fetch ?? (async () => { throw new Error('no fetch: the card is cached') }),
     audiences: options.audiences ?? [OWN],
     unboundOpen: options.unboundOpen ?? true,
     onUnbound: () => { unbound += 1 },
@@ -51,6 +51,26 @@ const strip = (headers: Record<string, string>, ...names: string[]): Record<stri
   Object.fromEntries(Object.entries(headers).filter(([k]) => !names.includes(k)))
 
 describe('OriginClaim audience binding', () => {
+  it('ordinary caller identities must use the exact origin root URL', () => {
+    expect(isRootOriginUrl(CALLER_URL)).toBe(true)
+    for (const suffix of ['/apps/market', '/.well-known/agent-card.json', '/path/', '?q=1', '#fragment', '/user@host']) expect(isRootOriginUrl(`${CALLER_URL}${suffix}`)).toBe(false)
+    expect(isRootOriginUrl('http://user:secret@10.0.0.1:13080')).toBe(false)
+    expect(isRootOriginUrl(CALLER_URL + '/')).toBe(true)
+  })
+
+  it('a same-origin child app cannot prove the origin and a redirected card is refused', async () => {
+    const pathCaller = 'http://10.0.0.1:13080/apps/market'
+    const pathHeaders = signOriginClaim({ url: `${OWN}/a2a/direct`, method: 'POST' }, { caller: 'dsh', callerUrl: pathCaller, privateKey, unbound: false, now: Date.now() })
+    const pathResult = await verify(req(pathHeaders, { url: '/a2a/direct' }), { cacheCard: false, fetch: async () => ({ ok: true, status: 200, text: async () => JSON.stringify(card) }) })
+    expect(pathResult.v).toEqual({ ok: false, reason: 'not-derivable' })
+    const rootHeaders = signOriginClaim({ url: `${OWN}/a2a/direct`, method: 'POST' }, { caller: 'dsh', callerUrl: CALLER_URL, privateKey, unbound: false, now: Date.now() })
+    const redirect = await verify(req(rootHeaders, { url: '/a2a/direct' }), { cacheCard: false, fetch: async (_url, init) => {
+      expect(init.redirect).toBe('manual')
+      return { ok: false, status: 302, text: async () => JSON.stringify(card) }
+    } })
+    expect(redirect.v).toEqual({ ok: false, reason: 'not-derivable' })
+  })
+
   it('a bound envelope verifies at the host, method and path it was made for', async () => {
     const { v, unbound } = await verify(req(sign('http://127.0.0.1:4000/a2a/canvas-op'), { url: '/a2a/canvas-op' }))
     expect(v).toMatchObject({ ok: true, caller: 'dsh', bound: true })
@@ -65,11 +85,9 @@ describe('OriginClaim audience binding', () => {
     expect((await verify(req(headers, { url: '/a2a/canvas-op', local: '10.0.0.9', port: 5000 }), { unboundOpen: true })).v).toEqual({ ok: false, reason: 'wrong-audience' })
   })
 
-  it('while the window is open a bound miss falls back to the unbound form the envelope also carries (counted twice); once it closes it does not', async () => {
-    // A peer dialled by a name this host does not list (hostname, port map):
-    // during the rollout it keeps working, and the miss shows on the gauge.
+  it('a bound audience miss can only use counted unbound migration proof', async () => {
     const headers = sign('http://b.local:13080/a2a/direct')
-    const open = await verify(req(headers, { url: '/a2a/direct' }))
+    const open = await verify(req(headers, { url: '/a2a/direct' }), { unboundOpen: true })
     expect(open.v).toMatchObject({ ok: true, caller: 'dsh', bound: false })
     expect([open.unbound, open.boundMiss]).toEqual([1, 1])
     const closed = await verify(req(headers, { url: '/a2a/direct' }), { unboundOpen: false })
@@ -85,15 +103,14 @@ describe('OriginClaim audience binding', () => {
     expect((await verify(req(headers, { url: '/.well-known/agent-card.json?caller_session=x', method: 'GET' }))).v.ok).toBe(true)
   })
 
-  it('a failed bound signature falls back to the unbound one only while the window is open', async () => {
+  it('a bad bound signature can at most fall back to counted unbound proof', async () => {
     const headers = { ...sign('http://127.0.0.1:4000/a2a/direct'), 'X-A2A-Caller-Sig2': Buffer.from('forged').toString('base64') }
-    expect((await verify(req(headers, { url: '/a2a/direct' }), { unboundOpen: false })).v).toEqual({ ok: false, reason: 'bad-sig' })
-    // Open window: no more than stripping Sig2 would give, and it is counted.
-    const open = await verify(req(headers, { url: '/a2a/direct' }))
-    expect(open.v).toMatchObject({ ok: true, bound: false })
+    const open = await verify(req(headers, { url: '/a2a/direct' }), { unboundOpen: true })
+    expect(open.v).toMatchObject({ ok: true, caller: 'dsh', bound: false })
     expect([open.unbound, open.boundMiss]).toEqual([1, 1])
-    // No valid unbound form either: still refused.
-    expect((await verify(req({ ...headers, 'X-A2A-Caller-Sig': headers['X-A2A-Caller-Sig2'] }, { url: '/a2a/direct' }))).v).toEqual({ ok: false, reason: 'bad-sig' })
+    expect((await verify(req(headers, { url: '/a2a/direct' }), { unboundOpen: false })).v).toEqual({ ok: false, reason: 'bad-sig' })
+    const noValidV1 = { ...headers, 'X-A2A-Caller-Sig': headers['X-A2A-Caller-Sig2'] }
+    expect((await verify(req(noValidV1, { url: '/a2a/direct' }))).v).toEqual({ ok: false, reason: 'bad-sig' })
   })
 
   it('an empty Sig2 header is no bound form: the unbound one decides', async () => {
@@ -222,9 +239,9 @@ describe('OriginClaim — a CLI identity deposited here (gh#133)', () => {
     expect((await verifyCli(req(cliV1('bob'), { url: '/a2a/direct' }))).v).toEqual({ ok: false, reason: 'not-derivable' })
   })
 
-  it('a face that does not admit CLI identities takes the zone path (fetch), never the deposit', async () => {
-    const { v, fetched } = await verifyCli(req(cliV1(), { url: '/a2a/direct' }), { optIn: false })
-    expect(v).toEqual({ ok: false, reason: 'no-card' })
-    expect(fetched).toBe(1)
+  it('a non-root CLI URL is never reclassified as an ordinary zone issuer', async () => {
+    const { v, fetched } = await verifyCli(req(cliV1(), { url: '/a2a/direct' }), { optIn: false, unboundOpen: false })
+    expect(v).toEqual({ ok: false, reason: 'unbound-closed' })
+    expect(fetched).toBe(0)
   })
 })

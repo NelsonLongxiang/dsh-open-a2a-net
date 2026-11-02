@@ -353,6 +353,7 @@ describe('inbound native-teams bridge', () => {
     await new Promise(resolve => { setTimeout(resolve, 20) })
     expect(m.registry.rounds).toHaveLength(1)
     expect(m.registry.rounds[0]!.args.message).toContain('async ship')
+    expect(m.registry.rounds[0]!.args.message.split('\n', 1)[0]).toMatch(/^\[A2A direct\] \(task \S+\) 未验证（legacy-window） from "peer-x"/)
   })
 
   it('a2a_teams lists registry rows only when the bridge is on', async () => {

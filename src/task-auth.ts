@@ -319,16 +319,15 @@ export function allowlistVersion(inputs: AllowlistInputs): string {
 
 /**
  * How strongly the caller's identity was proven at birth:
- * - `origin-claim`: an OriginClaim verified AND its signed zone covers the
- *   judged caller (the same name, or `<zone>/…`). It proves possession of a
- *   key whose card names that zone — not that the zone is who it says.
- * - `claim-mismatch`: an OriginClaim verified, but for a zone that does not
- *   cover the judged caller (the claim is kept for audit; review of PR #134 P1).
+ * - `origin-claim`: a bound, audience-correct envelope verified on a root-origin card for this caller.
+ * - `claim-mismatch`: bound proof names another caller, or root-origin derivation failed.
  * - `legacy-window`: no envelope, admitted inside the OriginClaim window.
+ * - `unbound`: a v1 signature proves only key possession, not origin.
+ * - `cli-identity`: a deposited CLI key proves the local CLI handle, not market issuer origin.
  * - `in-process`: a local delivery inside this host (S4).
  * - `none`: no identity evidence at all.
  */
-export type AuthProof = 'origin-claim' | 'claim-mismatch' | 'legacy-window' | 'in-process' | 'none'
+export type AuthProof = 'origin-claim' | 'claim-mismatch' | 'legacy-window' | 'unbound' | 'cli-identity' | 'in-process' | 'none'
 
 /**
  * Frozen on an inbound ledger row when it is born, archived with it, never
@@ -360,7 +359,7 @@ export interface TaskAuthorization {
 export const AUTH_STRING_CAP = 256
 export const AUTH_BASIS_CAP = 64
 
-const PROOFS: readonly string[] = ['origin-claim', 'claim-mismatch', 'legacy-window', 'in-process', 'none']
+const PROOFS: readonly string[] = ['origin-claim', 'claim-mismatch', 'legacy-window', 'unbound', 'cli-identity', 'in-process', 'none']
 const RULES = Object.keys(VIA_OF)
 /** Rules that admit on shared teams: their basis lists at least one, each once. Every other rule has an empty basis. */
 const SHARED_RULES: readonly AdmissionRule[] = ['roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'peer-org']
@@ -465,7 +464,7 @@ export function parseAuthorization(raw: unknown, now: number = Date.now()): Task
   if (new Set(r.basis).size !== r.basis.length) return undefined
   if (SHARED_RULES.includes(rule) ? r.basis.length === 0 : r.basis.length !== 0) return undefined
   // The wire proves identity by envelope or not at all; an in-process birth is local, and local-exempt only exists there.
-  if (r.ingress === 'wire' ? !['origin-claim', 'claim-mismatch', 'legacy-window'].includes(r.proof) : r.proof !== 'in-process') return undefined
+  if (r.ingress === 'wire' ? !['origin-claim', 'claim-mismatch', 'legacy-window', 'unbound', 'cli-identity'].includes(r.proof) : r.proof !== 'in-process') return undefined
   if (rule === 'local-exempt' && r.ingress !== 'local') return undefined
   if (typeof r.allowlist_version !== 'string' || !/^al1:[0-9a-f]{16}$/.test(r.allowlist_version)) return undefined
   if (typeof r.received_at !== 'number' || !Number.isInteger(r.received_at) || r.received_at < 0 || r.received_at > now + AUTH_CLOCK_SKEW_MS) return undefined

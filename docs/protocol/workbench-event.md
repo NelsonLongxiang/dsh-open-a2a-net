@@ -66,6 +66,8 @@
 }
 ```
 
+`event_id` 的线上格式必须匹配 `^wbe-[0-9a-f]{16}$`。接单方在将它用于回写路径前先校验该格式，禁止把信封中的任意值直接拼接进URL。
+
 `app-data` 来源保留旧的 `type: "app-data-submitted"` 及 `slug / id / data / created_at / hint` 字段，兼容现有接收方。在此基础上增加下列同名字段，不带 `reply`：
 
 - `v`
@@ -87,12 +89,13 @@
   - `context_id` 同第 4 节；
   - `caller_session = market/<来源台 node8>`。
 - **去重**：代价是同一个事件可能送到两次。触发条件包括：对端超过 15 秒才应答（冷唤醒就是这样，上游在超时之后仍会把投递完成），以及响应丢失。**接单方按 `event_id` 去重。**
-- **线程**：`context_id` 按事项唯一。本版里每个事项只发一个事件；以后同一事项的后续事件（如撤回、修改通知）会复用同一个 `context_id`。
+- **线程**：`context_id` 按事项唯一，本版里每个事项只发一个事件；以后同一事项的后续事件（如撤回、修改通知）会复用同一个 `context_id`。它只供事项关联，不选择或固定某个agent会话，也不保证投递路由落入同一会话。
 - **重试**：
   - 退避间隔依次为 1m、5m、15m、1h，失败 5 次记 `dead`；
   - 对端返回 -32001（载荷超限）、-32002、-32003（幂等冲突，见 [routing.md](../../src/skill/references/routing.md) 幂等一节）时，直接记 `dead`，不重试。每次尝试的 id 唯一，所以后两者一旦出现就是异常；
   - 发送前按实际请求体计算大小，超过 `/a2a/direct` 的传输上限时一次即记 `dead`。
 - **来源签名（OriginClaim）**：
+  - 接单节点只有在宿主消息首行带 `已验证来源 <origin>`、且该 origin 与团队配置的 market origin 完全一致时，才把信封按 market 事件处理；首行标记是host-authored的bound来源证明，不是对 `submitter_kind` 或请求体内容的背书。团队origin配置位置和拒绝规则见 [intake.md](../../src/skill/references/intake.md)；
   - 主签名用绑定形式，即 `X-A2A-Caller-Sig2` 加 `X-A2A-Caller-Aud`，见 [delivery-origin-auth.md](delivery-origin-auth.md) §2.1；
   - 默认同时带 v1 的 `X-A2A-Caller-Sig`，以兼容未升级的对端。全舰队关窗后，market 设 `A2A_ORIGIN_CLAIM_UNBOUND=off` 停发；
   - #64 关窗后只认绑定形式。
@@ -113,11 +116,12 @@ POST /api/workbench-events/<event_id>/decision
 ```
 
 - **鉴权**：用投递里的 token，不需要额外绑定。
-- **暴露面（如实描述）**：token 会以投递正文的形式进入接单会话的记录。同一主机上能读到该会话日志的成员（例如经 `/a2a/log`）也能读到它。所以 token 只是「这条投递的回写凭证」，不是身份证明。约束如下：
+- **暴露面（如实描述）**：token 会以投递正文的形式进入接单会话记录；同主机可读该会话日志的成员（例如经 `/a2a/log`）也能看到它。token 是本次投递回写凭证，不是身份证明。HTTP 部署会在传输中明文暴露token及claim，不提供防被动监听的强证明；应优先使用HTTPS，内网HTTP须由部署方明确接受这一边界。约束如下：
   - token 不对或事件不存在一律返回 404，不泄露事件是否存在；
   - 只对 `sent` 的投递有效：`pending` 的投递回写返回 409，可以稍后重试；`dead`、`cancelled` 的投递也返回 409，但不会再变；
   - 自送达起 7 天有效，之后返回 410；
   - `decided_by` 是自报的。
+  - `accept`/`decline` 已有终态时再写返回 409；接单方应读取 market 终态决定并保留其中 `ref` 指向的 issue。若并发重试又开了 issue，只关闭本次多余的新建项，不能按本地创建时间覆盖market终态ref。
 - **状态**：
   - `ask` 不是终态，之后还可以改为 `accept` 或 `decline`；
   - `accept` 和 `decline` 是终态，再写返回 409。
