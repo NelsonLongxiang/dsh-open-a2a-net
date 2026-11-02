@@ -1,7 +1,7 @@
 /** Security and projection guards for remote canvas directory rows (#159). */
 import { describe, expect, it } from 'vitest'
 import { CANVAS_MEMBER_CAP, CANVAS_NAME_MAX, CANVAS_TEAM_CAP } from '../../src/canvas-store.ts'
-import { advertisedCanvasTeams, canvasTargetAmbiguous, peerDirectoryRows, sessionCandidateMatches } from '../../src/peer-directory.ts'
+import { advertisedCanvasTeams, canvasCandidateMatches, canvasTargetAmbiguous, peerDirectoryRows, sessionCandidateMatches } from '../../src/peer-directory.ts'
 import type { A2aPeerCard } from '../../src/types.ts'
 
 const card = (org: NonNullable<A2aPeerCard['canvasOrg']>): A2aPeerCard => ({
@@ -80,6 +80,18 @@ describe('gh#159 peer directory projection', () => {
     }
     expect(sessionCandidateMatches(peer, 'other/canvas/ops')).toBe(false)
     expect(peerDirectoryRows(peer, 'http://peer', false).some(row => row.team === 'other/canvas/ops')).toBe(false)
+  })
+
+  it('does not use the publishing peer own session as a local member', () => {
+    const team = 'zone/canvas/ops'
+    const handle = 'zone/12345678'
+    const peer = card([{ name: 'ops', team, members: [handle, 'home/aaaaaaaa'] }])
+    const caller = { id: 'session-foreign-collision', handle }
+    const resolve = (): string => caller.id
+    const row = peerDirectoryRows(peer, 'http://peer', true).find(entry => entry.team === team)
+    expect(row?.canvasMembers).toEqual(['home/aaaaaaaa'])
+    expect(canvasCandidateMatches(peer, team, caller, resolve)).toBe(false)
+    expect(canvasTargetAmbiguous([peer], team, caller, resolve, false)).toBe(true)
   })
 
   it('rejects distinct member-canvas owners but deduplicates aliases of the same card', () => {

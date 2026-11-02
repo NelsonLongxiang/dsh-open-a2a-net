@@ -422,6 +422,49 @@ describe('gh#159 remote canvas discovery and routing', () => {
     } finally { await a.dispose(); await relay.close(); await rogue.close() }
   }, 30_000)
 
+  it('does not mistake a referral peer own colliding session for a local canvas member', async () => {
+    const peerKey = generateKeyPairSync('ed25519')
+    const relayKey = generateKeyPairSync('ed25519')
+    const handle = 'dsh/aaaaaaaa'
+    const team = 'dsh/canvas/referral-test'
+    const foreign = {
+      ...signCard({ name: 'foreign', session: 'gh159-referral-collision', team: 'dsh', capabilities: { route: true, async: true, roster: true }, expiresAt: Date.now() + 60_000 }, peerKey.privateKey),
+      sessionTeams: [{ team: handle, name: 'foreign seat', description: '' }],
+      canvasOrg: [{ name: 'referral-test', team, members: [handle] }],
+    }
+    const deliveries: string[] = []
+    const peer = createServer((req, res) => {
+      if (req.url === '/.well-known/agent-card.json') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(foreign)); return }
+      if (req.url === '/a2a/direct') {
+        let body = ''
+        req.on('data', chunk => { body += String(chunk) })
+        req.on('end', () => { deliveries.push(body); res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'fixture refusal', code: -32000 })) })
+        return
+      }
+      res.writeHead(404); res.end()
+    })
+    await new Promise<void>((resolve, reject) => { peer.once('error', reject); peer.listen(0, '127.0.0.1', resolve) })
+    const peerUrl = base((peer.address() as AddressInfo).port)
+    const relay = await ghostNode({
+      ...signCard({ name: 'relay', session: 'gh159-collision-relay', team: 'relay', capabilities: { roster: true }, expiresAt: Date.now() + 60_000 }, relayKey.privateKey),
+      peers: [peerUrl],
+    })
+    const a = await bootNode({ name: 'A', session: 'gh159-referral-local', team: 'dsh', agentId: A_ID, sessionNodes: true, teamScopeInfo: true, teamScopeRouting: true, referralLearning: true, referralTeamResolution: true, peers: [relay.baseUrl], cardCacheTtlMs: 30_000 })
+    try {
+      await post(a, '/__dsh_a2a/join', { id: A_ID })
+      const context = runContext(a.agents.agent)
+      const listed = await a.ctx.tools.get('a2a_teams')!.execute({ query: 'referral-test' }, context) as Directory
+      const result = await a.ctx.tools.get('a2a_route')!.execute({ team, message: 'private fixture' }, context) as Route
+      expect(listed.teams.some(row => row.team === team && row.via === peerUrl)).toBe(false)
+      expect(result.ok).toBe(false)
+      expect(result.error).toContain('ambiguous')
+      expect(deliveries).toHaveLength(0)
+    } finally {
+      await a.dispose(); await relay.close()
+      await new Promise<void>((resolve, reject) => { peer.close(error => error ? reject(error) : resolve()) })
+    }
+  }, 30_000)
+
   it('does not disclose a canvas solely on a peer-claimed roster decoration', async () => {
     const key = generateKeyPairSync('ed25519')
     const team = 'other/canvas/ops'

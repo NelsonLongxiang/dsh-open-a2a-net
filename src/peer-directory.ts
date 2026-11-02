@@ -41,6 +41,11 @@ export function sessionCandidateMatches(card: A2aPeerCard, team: string): boolea
   return sessionAliasAllowed(card, team) && (card.sessionTeams ?? []).some(entry => entry.team === team)
 }
 
+/** A member the publisher also serves as its own session is not ours. */
+function peerPublishesSession(card: A2aPeerCard, handle: string): boolean {
+  return (card.sessionTeams ?? []).some(entry => entry.team === handle)
+}
+
 /** Match a scoped caller to this peer's canvas before sending the payload. */
 export function canvasCandidateMatches(
   card: A2aPeerCard,
@@ -48,8 +53,8 @@ export function canvasCandidateMatches(
   caller?: { id: string; handle: string },
   resolveLocal?: (ref: string) => string | undefined,
 ): boolean {
-  return advertisedCanvasTeams(card).some(entry => entry.team === team &&
-    (caller === undefined || (resolveLocal?.(caller.handle) === caller.id && entry.members.includes(caller.handle))))
+  if (caller !== undefined && (resolveLocal?.(caller.handle) !== caller.id || peerPublishesSession(card, caller.handle))) return false
+  return advertisedCanvasTeams(card).some(entry => entry.team === team && (caller === undefined || entry.members.includes(caller.handle)))
 }
 
 /** A naked team string is unsafe when both a canvas and another face claim it. */
@@ -62,7 +67,12 @@ export function canvasTargetAmbiguous(
 ): boolean {
   const owners = cards.filter((card): card is A2aPeerCard => card !== undefined && advertisedCanvasTeams(card).some(entry => entry.team === team))
   if (owners.length === 0) return false
-  if (caller !== undefined && resolveLocal?.(caller.handle) !== caller.id) return true
+  if (caller !== undefined) {
+    if (resolveLocal?.(caller.handle) !== caller.id) return true
+    const ownerCollision = owners.some(card => peerPublishesSession(card, caller.handle)
+      && advertisedCanvasTeams(card).some(entry => entry.team === team && entry.members.includes(caller.handle)))
+    if (ownerCollision) return true
+  }
   // Distinct signed publishers with the same qualified group name cannot be
   // selected by the team-only API. URL aliases of one signed card are one.
   const eligible = owners.filter(card => canvasCandidateMatches(card, team, caller, resolveLocal))
@@ -108,9 +118,10 @@ export function peerDirectoryRows(card: A2aPeerCard, peer: string, includeCanvas
     const declared = rosterOf.get(entry.team)
     rows.push({ team: entry.team, session: card.session, name: entry.name, description: entry.description, origin, via: peer, ...(entry.workspace !== undefined ? { workspace: entry.workspace } : {}), ...(legacy ? { legacy } : {}), ...(declared !== undefined && declared.length > 0 ? { teams: declared } : {}) })
   }
+  const publishedSessions = new Set((card.sessionTeams ?? []).map(entry => entry.team))
   if (includeCanvas) for (const entry of advertisedCanvasTeams(card)) {
     const declared = rosterOf.get(entry.team)
-    rows.push({ team: entry.team, session: card.session, name: entry.name, description: 'canvas team', origin, via: peer, ...(legacy ? { legacy } : {}), ...(declared !== undefined && declared.length > 0 ? { teams: declared } : {}), canvasMembers: entry.members })
+    rows.push({ team: entry.team, session: card.session, name: entry.name, description: 'canvas team', origin, via: peer, ...(legacy ? { legacy } : {}), ...(declared !== undefined && declared.length > 0 ? { teams: declared } : {}), canvasMembers: entry.members.filter(ref => !publishedSessions.has(ref)) })
   }
   return rows
 }
