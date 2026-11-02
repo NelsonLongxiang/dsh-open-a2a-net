@@ -30,6 +30,7 @@ import { buildLayoutDoc, clampDoc, type LayoutDoc, type LayoutRect } from './lay
 import { FRAME_HEAD_LIFT } from './edges'
 import { drawMemberEdges } from './planning-edges'
 import { createFederationOverlay } from './federation-overlay'
+import { joinedLocalIdsByHandle, remoteMemberBoardId } from './planning-member-handles'
 import { displayName } from './stage-name'
 import {
   activityEdges, federalEdges, flyBounds, groupRemoteTeams, peerNodeId, peerHostOf, placePeers,
@@ -1250,6 +1251,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // peer card — pulling a specific remote member into a local team is a
     // plain drag (no picker, no hand-typed handle). Host cards stay for
     // federation context; the member cards carry the actual join gesture.
+
     const memberSeen = new Set<string>()
     for (const [host, rows] of lastRemoteTeams) {
       const hostNode = model.allNodes().find(n => n.remote === true && peerHostOf(n.peerUrl ?? '') === host && !n.id.startsWith('member-'))
@@ -1311,24 +1313,12 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       const localNames = new Set(input.teams.map(t => t.name))
       dissolving.sweep(input.peerOrg)
       for (const row of input.peerOrg) {
-        // The peer's zone comes from its directory rows ('dsh/xxxx' →
-        // 'dsh'); the org's members are stored verbatim — LOCAL members as
-        // session ids, remote members as zone/id8 handles. Both must
-        // resolve onto that host's session cards: id-form members become
-        // `member-<zone>-<id8>` (id8 = strip 'session-' prefix, first 8
-        // chars — the repo's id8 derivation), handle members sanitize
-        // directly. The old sanitize-only pass misresolved every local
-        // member (owner: 数据对不上).
-        const peerZone = input.remoteTeams?.find(r => r.via === row.url)?.team.split('/')[0] ?? 'dsh'
-        const id8of = (id: string): string => id.replace(/^session-/, '').slice(0, 8)
-        // The server now canonicalizes org members to handles (gh#41 wire
-        // form); the id-form branch stays as the defensive path for peers
-        // on an older build that still publish raw session ids.
-        const memberBoardId = (m: string): string =>
-          m.includes('/') ? `member-${m.replace(/[^a-z0-9-]/gi, '-')}` : `member-${peerZone}-${id8of(m)}`
+        // Resolve joined local handles and id-form legacy members through the pure projection helper.
+        const publishedHandles = new Set((input.remoteTeams ?? []).map(session => session.team))
+        const localIdsByHandle = joinedLocalIdsByHandle(input.sessions, publishedHandles)
         for (const team of row.org) {
           if (team.name === '' || localNames.has(team.name) || dissolving.hides(team.name, row.url)) continue
-          const memberIds = team.members.map(memberBoardId).filter(id => model.getNode(id) !== undefined)
+          const memberIds = team.members.map(member => remoteMemberBoardId(member, localIdsByHandle, input.remoteTeams, row.url)).filter(id => model.getNode(id) !== undefined)
           const saved = layoutDoc?.frames?.[team.name]
           // gh#44 (owner: frame position/size never sticks): the LOCAL-team
           // path keeps an existing frame's live rect ("live rect wins" — a

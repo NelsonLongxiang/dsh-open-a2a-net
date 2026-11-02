@@ -50,8 +50,9 @@ ten model tools.
   dials, so it is good only at that host's `/a2a/direct`. A host with gh#133 verifies it on the
   delivery face, from its own deposit table (it never dials the CLI's
   address back, so a proxy or tailnet address is fine): the delivery's
-  authorization record says `proof: origin-claim` with the full handle as
-  the claim, and it does not count as a legacy delivery.
+  authorization record says `proof: cli-identity` with the full handle as
+  the locally deposited identity; it is not market-origin proof and does not
+  count as an absent-envelope legacy delivery.
 - An older host refuses the envelope as `not-derivable`. The CLI says so on
   stderr and resends the same task id once unsigned, the way earlier CLIs
   always sent (accepted only while the host's OriginClaim window is open).

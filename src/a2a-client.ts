@@ -17,6 +17,8 @@ export type A2aSchedule = (callback: () => void, delayMs: number) => () => void
 export type A2aFetch = (url: string, init: {
   readonly method: 'GET' | 'POST'
   readonly headers: Record<string, string>
+  /** Optional fetch redirect policy; origin verification sets manual. */
+  readonly redirect?: 'follow' | 'error' | 'manual'
   readonly body?: string
   readonly signal?: AbortSignal
 }) => Promise<{ readonly ok: boolean; readonly status: number; readonly text: () => Promise<string> }>

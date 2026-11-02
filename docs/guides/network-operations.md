@@ -65,7 +65,7 @@
 
 ## 四、路由与协作（功能）
 
-模型工具十枚：`a2a_whoami`（自内省）、`a2a_team_join`/`a2a_team_leave`（roster 声明，allowlist 门）、`a2a_report`（未入网会话的单向上报通道：免加入门、记录发送会话、每会话 30s 一次、≤4000 字、同文 10 分钟 3 次熔断）、`a2a_teams`（目录，teamScopeInfo 作用域内）、`a2a_route`（同步时本机目标最多等 180s 回复，超时以「已投递」形态释放并转回执契约；`async: true` 不等；`context_id` 续聊；模型工具不能直接路由裸进程队）、`a2a_status`（舰队/在途/活动环，作用域内）、`a2a_tasks`（三层账本）、`a2a_probe`（可达性探测，作用域内）、`a2a_exposure`（暴露档调档，#19）。
+模型工具十枚：`a2a_whoami`（自内省）、`a2a_team_join`/`a2a_team_leave`（roster 声明，allowlist 门）、`a2a_report`（未入网会话的单向上报通道：免加入门、记录发送会话、每会话 30s 一次、≤4000 字、同文 10 分钟 3 次熔断）、`a2a_teams`（目录，teamScopeInfo 作用域内）、`a2a_route`（同步时本机目标最多等 180s 回复，超时以「已投递」形态释放并转回执契约；`async: true` 不等；`context_id` 续聊；模型工具不能直接路由裸进程队）、`a2a_status`（舰队/在途/活动环，作用域内）、`a2a_tasks`（三层账本）、`a2a_probe`（可达性探测，作用域内）、`a2a_exposure`（暴露档调档，#19）。status/probe 的 joined-team 范围含本机显式加入的 canvas 成员关系；fresh peer card 的 `canvasOrg.members` 只有与本机已加入的 session handle 可解析匹配时才证明该 peer 对这一 joined team 有服务面。该信息面筛选只是可见/探测范围，不代替接收端的 OriginClaim 验签与目标队成员准入。
 
 收件方看到 `[A2A direct] (task <id>) from "<caller>"` 前缀的用户消息；回执契约 `[A2A receipt] task <id> <一行结局>` 经账本对账。
 

@@ -54,7 +54,7 @@ import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
-import { signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
+import { isRootOriginUrl, sameMountedUrl, signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
 import { AuthObserver, type AffectedEntry } from './auth-observer.ts'
 import { allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type SettlementMode, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
@@ -115,6 +115,9 @@ import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from './runtim
 import { registerAdminFaces } from './faces/admin.ts'
 import { registerNodeFaces } from './faces/nodes.ts'
 import { NodeStore } from './node-store.ts'
+import { createNodeBinder, NodeBindings } from './node-bind.ts'
+import { NodeTasks, settledReminder } from './node-tasks.ts'
+import { githubProbe } from './node-github.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { canvasCandidateMatches, canvasTargetAmbiguous, peerDirectoryRows, routableCallerLabel, sessionCandidateMatches, unroutableCallerNote } from './peer-directory.ts'
@@ -1139,6 +1142,15 @@ export function apply(ctx: Context, config: Config): void {
   // Live top-level agents: the join surface's candidates and the cold-row
   // complement (apply scope — the direct-route wake below reads it too).
   const liveRoots = new Map<string, Agent>()
+  // Node identity N2+N3: a joined session that carries a node gets that node's layers on its own scope.
+  const nodeBindings = new NodeBindings(join(home, 'a2a'))
+  const nodeTasks = new NodeTasks(join(home, 'a2a'), { probe: githubProbe(), logger, onSettled: (node, p) => nodeBinder.remind(node, settledReminder(p)) })
+  nodeTasks.schedule(ctx)
+  const nodeBinder = createNodeBinder({ store: nodeStore, bindings: nodeBindings, logger, joined: id => joinedSessions.has(id), joinedList: () => joinedSessions.list(), archived: id => archivedSessionFilter()?.(id) === true, live: id => liveRoots.get(id), tasksText: node => nodeTasks.render(node), pendingReminders: node => nodeTasks.takePending(node).map(settledReminder) })
+  // No boot reconcile: a joined.json that failed to parse reads as empty, and ending every binding on that
+  // reading would destroy them (the 3081 lesson). A stale row is harmless — mount checks joined itself.
+  ctx.effect(() => joinedSessions.onChange(() => { nodeBinder.reconcile() }), 'a2a: node bindings follow join')
+  ctx.effect(() => () => { nodeBinder.disposeAll() }, 'a2a: node mounts')
   // Last foreground wake/route demand (epoch ms): boot prewarm steps yield
   // while demand keeps arriving inside the quiet window. Panel polls never
   // touch this — they are constant and would starve warming forever.
@@ -1288,6 +1300,8 @@ export function apply(ctx: Context, config: Config): void {
       if (!isArchived(id)) continue
       const ownHandle = ownCanvasHandleOf(id, true)
       sessionNodes.delete(id)
+      // Sections come back at the next mount (re-publish) if this archived reading was transient; the row stays.
+      nodeBinder.suspend(id)
       // The archived session's JOIN INTENT is retained: deleting it was the
       // 3081 wake-defect root cause (a transient archived-window reading
       // wiped intents at boot, and cold sessions then never woke — "no cold
@@ -1673,10 +1687,12 @@ export function apply(ctx: Context, config: Config): void {
       if (agents === undefined || !agents.roots().some(root => root.id === agent.id)) return undefined
       liveRoots.set(String(agent.id), agent)
       if (joinedSessions.has(String(agent.id))) mountSessionNode(agent)
+      nodeBinder.mount(agent)
       return undefined
     })
     ctx.on('agent/disposed', ({ agent }) => {
       liveRoots.delete(String(agent.id))
+      nodeBinder.forget(String(agent.id))
       // Disposal unmounts the runtime node; the persisted intent stays for
       // the remount above (leave is the only intent remover).
       sessionNodes.delete(String(agent.id))
@@ -1684,6 +1700,7 @@ export function apply(ctx: Context, config: Config): void {
     for (const agent of ctx.get('agents')?.roots() ?? []) {
       liveRoots.set(String(agent.id), agent)
       if (joinedSessions.has(String(agent.id))) mountSessionNode(agent)
+      nodeBinder.mount(agent, { atFrozen: true })
     }
 
     /** F-observability: the boot prewarm's lifecycle, surfaced on the state route (F: prewarm not running was invisible). */
@@ -1997,7 +2014,7 @@ export function apply(ctx: Context, config: Config): void {
         get ownerAnnounceRestartPending() { return ownerAnnounceRestartPending },
         set ownerAnnounceRestartPending(v) { ownerAnnounceRestartPending = v },
       })
-      registerNodeFaces(webServer, { ctx, logger, nodeStore, apiKey: () => config.apiKey, secretEqual, controlRoute, readJsonBody })
+      registerNodeFaces(webServer, { ctx, logger, nodeStore, bindings: nodeBindings, binder: nodeBinder, tasks: nodeTasks, apiKey: () => config.apiKey, secretEqual, controlRoute, readJsonBody })
     })
   }
 
@@ -2261,9 +2278,9 @@ export function apply(ctx: Context, config: Config): void {
    * visible for /a2a/query follow-ups.
    */
   const nudgeBudget = new Map<string, number>()
+  const nudgeRef = (taskId: string): string => createHash('sha256').update(taskId, 'utf8').digest('hex').slice(0, 16)
   const escalateQueuePrompt = (agent: Agent, team: string, taskId: string): void => {
-    // Queue-mode prompt seam: the session controller owns prompt admission
-    // (successor of the removed api gateway's prompt face).
+    // Queue-mode prompt seam (the session controller owns prompt admission); #183: it stamps kind:'user', so nudgeRef stands in for the caller's task id.
     const controller = ctx.get('sessionController') as
       | { prompt?: (request: {
           requestId: string
@@ -2273,13 +2290,13 @@ export function apply(ctx: Context, config: Config): void {
         }, signal: AbortSignal) => Promise<unknown> }
       | undefined
     if (typeof controller?.prompt !== 'function') return
-    logger.info(`a2a: async nudge escalates to queue-mode prompt for ${team} (task ${taskId})`)
+    logger.info(`a2a: async nudge escalates to queue-mode prompt for ${team} (task ${taskId}, ref ${nudgeRef(taskId)})`)
     try {
       void controller.prompt({
-        requestId: `a2a-nudge-${taskId}`,
+        requestId: `a2a-nudge-${nudgeRef(taskId)}`,
         sessionId: agent.id,
         mode: 'queue',
-        content: [{ type: 'text', text: `[A2A nudge] (task ${taskId}) your earlier routed message was delivered while this session could not start a turn — please consume the inbox backlog now (ignore if there is nothing pending).` }],
+        content: [{ type: 'text', text: `[A2A nudge] (ref ${nudgeRef(taskId)}) an earlier A2A delivery reached this session while it could not start a turn — please consume the inbox backlog now (ignore if there is nothing pending).` }],
       }, new AbortController().signal).catch(() => {})
     } catch {
       /* queueing is best-effort: the ledger row keeps the debt visible */
@@ -2317,8 +2334,8 @@ export function apply(ctx: Context, config: Config): void {
       // the current live node, or the wake path materializes the session
       // afresh.
       const fresh = resolveAgentForTeam(team) ?? agent
-      logger.info(`a2a: async nudge re-waking ${team} (task ${taskId} delivered but not consumed)`)
-      steerRelay(fresh, `[A2A nudge] (task ${taskId}) your earlier routed message was delivered while this session could not start a turn — please consume the inbox backlog now.`)
+      logger.info(`a2a: async nudge re-waking ${team} (task ${taskId}, ref ${nudgeRef(taskId)}, delivered but not consumed)`)
+      steerRelay(fresh, `[A2A nudge] (ref ${nudgeRef(taskId)}) an earlier A2A delivery reached this session while it could not start a turn — please consume the inbox backlog now.`)
     }, delayMs)
     ctx.effect(() => () => clearTimeout(timer), `a2a: async nudge ${taskId}`)
   }
@@ -2442,18 +2459,18 @@ export function apply(ctx: Context, config: Config): void {
    * marker instead of a (false) completion.
    * @param taskId - the correlation key the steered receipt header carries.
    */
-  async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string): Promise<
+  async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string): Promise<
     { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean } | { ok: false; error: string }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
-      return routeIntoAgentFor(agent, team, message, caller, taskId)
+      return routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader)
     }
     // Wake-on-route: a cold joined team materializes on demand, then steers.
     const wake = wakeColdTeam(team)
     if (wake.kind === 'flight') {
       return wake.flight.then(
-        agent => routeIntoAgentFor(agent, team, message, caller, taskId),
+        agent => routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader),
         (error: unknown) => ({ ok: false, error: `waking the session for team "${team}" failed: ${String(error)}` }) as const,
       )
     }
@@ -2464,7 +2481,7 @@ export function apply(ctx: Context, config: Config): void {
     if (config.nativeTeamsInbound === true) {
       const prepared = await nativeTeamsPrepare(team)
       if (prepared.ok) {
-        const bridged = await nativeTeamsRound(prepared, team, caller, message, taskId)
+        const bridged = await nativeTeamsRound(prepared, team, caller, message, taskId, proofClause ?? '未验证（in-process）', undefined, buildHeader === undefined ? undefined : (_team, _taskId, from) => buildHeader(from))
         if (bridged.ok) {
           if (bridged.settled) return { ok: true, reply: bridged.reply }
           return { ok: true, reply: bridged.reply, status: 'TASK_STATE_DELIVERED', bridge: 'native-teams' }
@@ -2482,7 +2499,7 @@ export function apply(ctx: Context, config: Config): void {
       const live = liveAgent()
       if (live !== undefined) {
         if (callerIsAgent(live, caller)) return { ok: false, error: selfRouteText(team) }
-        return routeIntoAgentFor(live, team, message, caller, taskId)
+        return routeIntoAgentFor(live, team, message, caller, taskId, proofClause, buildHeader)
       }
       return { ok: false, error: 'No live DSH agent is available to accept this message.' }
     }
@@ -2498,7 +2515,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param caller - caller label for the steered prefix.
    * @returns the agent's final reply, or the explicit failure.
    */
-  function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string): Promise<
+  function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string): Promise<
     { ok: true; reply: string; placeholder?: boolean } | { ok: false; error: string }
   > {
     return new Promise((resolve) => {
@@ -2512,10 +2529,10 @@ export function apply(ctx: Context, config: Config): void {
       // the caller supplied one, rides the header so an "[A2A receipt] task
       // <id>" answer correlates with the caller's own route result.
       const from = caller === '' ? 'an unknown node' : caller
-      const taskPrefix = taskId === undefined ? '' : `(task ${taskId}) `
-      const text = `[A2A direct] ${taskPrefix}${fromClause(from)} (routed to ${team}) sent:
-
-${message}`
+      const headerLine = buildHeader !== undefined && taskId !== undefined
+        ? buildHeader(from)
+        : `[A2A direct] ${taskId === undefined ? '' : `(task ${taskId}) `}未验证（in-process） ${sanitizeFromClause(from)} (routed to ${team}) sent:`
+      const text = `${headerLine}\n\n${message}`
       try {
         steerRelay(agent, text, caller === '' ? undefined : caller)
       } catch (error) {
@@ -2536,7 +2553,7 @@ ${message}`
   // to src/legacy/teams-bridge-inbound.ts — the registry probe, claim memo,
   // prepare and the bounded round. The outbound bridgeFace stays here until
   // the G-out slice (it submits through the dispatch trunk).
-  const { teamsRegistry, nativeTeamsClaims, nativeTeamsPrepare, nativeTeamsRound } = createTeamsBridgeInbound({ ctx, config, liveAgent, fromClause })
+  const { teamsRegistry, nativeTeamsClaims, nativeTeamsPrepare, nativeTeamsRound } = createTeamsBridgeInbound({ ctx, config, liveAgent, fromClause, sanitizeFromClause, proofHeader: hostDirectHeader })
 
   /* ── gh#9+gh#10 OriginClaim (docs/protocol/delivery-origin-auth.md,
      src/origin-claim.ts): the caller's card key signs the envelope; the
@@ -2625,7 +2642,7 @@ ${message}`
     // shared zone string was "us". True self is the loopback self-fetch
     // face: the caller's card URL origin equals OUR card URL origin.
     try {
-      if (callerUrl !== '' && new URL(callerUrl).origin === new URL(ownCardUrl).origin) return true
+      if (callerUrl !== '' && isRootOriginUrl(callerUrl) && new URL(callerUrl).origin === new URL(ownCardUrl).origin) return true
     } catch { /* malformed callerUrl — falls through to the record bases */ }
     for (const id of joinedSessions.list()) {
       if (`${config.team}/${id8(id)}` === caller) return true
@@ -2650,11 +2667,12 @@ ${message}`
     // served-fresh field, exactly the self-description trust class
     // N3/V5 abolished. Our operator's own config anchors; the card
     // shadow only corroborates.
+    // #189: a ROOT claim URL speaks for its origin; a path-prefixed one only for the exact peer URL we seeded (a mounted card).
     if (callerCard !== undefined && ownCardUrl !== '') {
       const ourOrigin = new URL(ownCardUrl).origin
       const callerOrigin = new URL(callerUrl).origin
       const weSeedThem = config.peers.some(peer => {
-        try { return new URL(peer).origin === callerOrigin } catch { return false }
+        try { return isRootOriginUrl(callerUrl) ? new URL(peer).origin === callerOrigin : sameMountedUrl(peer, callerUrl) } catch { return false }
       })
       const theySeedUs = (callerCard.peers ?? []).some(peer => {
         try { return new URL(peer).origin === ourOrigin } catch { return false }
@@ -2880,6 +2898,7 @@ ${message}`
       localSessionOfHandle,
       steerRelay,
       fromClause,
+      sanitizeFromClause,
       armReceiptAutosend,
       eventCountOf: (agent: Agent) => sessionEventsOf(agent).length,
       receiptExpectationOf,
@@ -3243,54 +3262,18 @@ ${message}`
   ctx.effect(() => teamMemberships.onChange(() => observeAuthorization('roster')), 'a2a: S6 roster observer')
   observeAuthorization('boot')
 
-  /**
-   * The from-line display name (owner ruling, claim 8ea4150f94): a bare
-   * routing handle (`dsh/74555a36`) carries zero semantics for the reader.
-   * Resolve what the handle NAMES, cheaply and read-only:
-   *   1. a local handle — a joined/live session id, its zone/id8 pseudo-team,
-   *      or a live node label → nodeMetadataOf(agent).name (the session-title
-   *      product, exactly what the directory shows);
-   *   2. a remote bare-zone caller → the warmest cached card whose team
-   *      equals the zone (the publisher's own card NAME is the display name);
-   *   3. a remote zone/id8 caller → the cached card whose sessionTeams row
-   *      matches the handle → that row's name;
-   *   4. nothing resolves → '' (the from line stays bare — no false names).
-   * Read-only over warm caches: never fetches, so a cold cache degrades to
-   * the bare handle, never to a stall.
-   */
-  function callerDisplayName(caller: string): string {
-    if (caller === '' || caller === 'an unknown node') return ''
-    // Local: joined/live session facts on THIS host.
-    for (const [id, agent] of sessionNodes) {
-      if (id === caller || sessionLabelOf(agent) === caller || `${config.team}/${id8(id)}` === caller) {
-        return nodeMetadataOf(agent).name
-      }
-    }
-    for (const [id, agent] of liveRoots) {
-      if (id === caller || sessionLabelOf(agent) === caller || `${config.team}/${id8(id)}` === caller) {
-        return nodeMetadataOf(agent).name
-      }
-    }
-    // Remote: warm card cache only.
-    const zone = caller.includes('/') ? caller.slice(0, caller.indexOf('/')) : caller
-    let zoneName = ''
-    for (const entry of cardCache.values()) {
-      const card = entry.card
-      if (card === undefined) continue
-      if (card.team === zone && zoneName === '') zoneName = card.name
-      if (caller.includes('/')) {
-        const row = (card.sessionTeams ?? []).find(item => item.team === caller)
-        if (row !== undefined && row.name !== '') return row.name
-      }
-    }
-    if (!caller.includes('/') && zoneName !== '') return zoneName
-    return ''
+  /** Security headers omit all unsigned peer display metadata. */
+  function fromClause(from: string): string {
+    const caller = from.replace(/[\x00-\x1f\x7f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff\uff08\uff09\ufe59\ufe5a]/g, '')
+    return `from ${JSON.stringify(caller)}`
   }
 
-  /** The from clause with the display name in full-width parens when resolved. */
-  function fromClause(from: string): string {
-    const display = callerDisplayName(from)
-    return `from "${from}"${display !== '' ? `（${display}）` : ''}`
+  function sanitizeFromClause(from: string): string {
+    return fromClause(from)
+  }
+
+  function hostDirectHeader(team: string, taskId: string, from: string, proofClause: string): string {
+    return `[A2A direct] (task ${taskId}) ${proofClause} ${sanitizeFromClause(from)} (routed to ${team}) sent:`
   }
 
   /**
@@ -3991,7 +3974,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         if (prepared.ok) {
           endRoute(flight)
           recordActivity('out', team, 'local', true)
-          void nativeTeamsRound(prepared, team, callerSession ?? session, message, taskId)
+          void nativeTeamsRound(prepared, team, callerSession ?? session, message, taskId, '未验证（in-process）', undefined, hostDirectHeader)
             .then(outcome => {
               if (!outcome.ok) {
                 recordActivity('out', team, 'local', false)
@@ -4042,7 +4025,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         const receiptHint = callerTeam === undefined ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${callerTeam}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
         // #114 S5: the consumption search starts at the pre-steer log length.
         const steerFloor = sessionEventsOf(target).length
-        steerRelay(target, `[A2A direct] (task ${taskId}) ${fromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam)
+        steerRelay(target, `[A2A direct] (task ${taskId}) 未验证（in-process） ${sanitizeFromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam)
         armReceiptAutosend(target, taskId, callerTeam, message, steerFloor)
         // #139: the caller's outbound row is born with this admission and the member that received it.
         if (taskIdFromCaller !== undefined) localBirths.set(taskIdFromCaller, localBirthOf(team, callerSession, callerTeam, sessionTeamOf(target)))
@@ -4078,7 +4061,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       if (!steerable && team !== config.team) {
         const prepared = await nativeTeamsPrepare(team)
         if (prepared.ok) {
-          const outcome = await nativeTeamsRound(prepared, team, callerSession ?? session, message, taskId, signal)
+          const outcome = await nativeTeamsRound(prepared, team, callerSession ?? session, message, taskId, '未验证（in-process）', signal, hostDirectHeader)
           endRoute(flight)
           if (!outcome.ok) {
             // The aborted-wait shape is earned only by an actual round

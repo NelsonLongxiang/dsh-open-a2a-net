@@ -278,7 +278,7 @@ describe('inbound native-teams bridge', () => {
     const round = m.registry.rounds[0]!
     expect(round.args.team).toBe('freight-team')
     expect(round.args.message).toContain('[A2A direct]')
-    expect(round.args.message).toContain('from "peer-x"')
+    expect(round.args.message.split('\n', 1)[0]).toMatch(/^\[A2A direct\] \(task \S+\) 未验证（legacy-window） from "peer-x"/)
     expect(round.args.message).toContain('ship it')
     expect(round.parentId).toBe('session-main1')
   })
@@ -353,6 +353,7 @@ describe('inbound native-teams bridge', () => {
     await new Promise(resolve => { setTimeout(resolve, 20) })
     expect(m.registry.rounds).toHaveLength(1)
     expect(m.registry.rounds[0]!.args.message).toContain('async ship')
+    expect(m.registry.rounds[0]!.args.message.split('\n', 1)[0]).toMatch(/^\[A2A direct\] \(task \S+\) 未验证（legacy-window） from "peer-x"/)
   })
 
   it('a2a_teams lists registry rows only when the bridge is on', async () => {

@@ -129,9 +129,9 @@ interface TaskAuthorization {
   /** 准入时被判定的 caller（caller_session 原文，即 a2aCallerRefusal 的入参）。 */
   readonly caller: string
   /** caller 身份的证明强度。 */
-  /** caller 身份的证明强度：OriginClaim 验过、且签名的 zone 覆盖 caller（同名或 `<zone>/…`）才是 origin-claim；验过但不覆盖记 claim-mismatch（claim 保留供审计）——S2 实现评审 PR #134 P1。 */
-  readonly proof: 'origin-claim' | 'claim-mismatch' | 'legacy-window' | 'in-process' | 'none'
-  /** proof = origin-claim 时：签名名片推导出的名字与名片 URL 的 origin。 */
+  /** 来源强度：仅bound v2在root card上验证且覆盖caller为origin-claim；unbound v1和CLI deposit分别为低信任unbound/cli-identity。 */
+  readonly proof: 'origin-claim' | 'claim-mismatch' | 'legacy-window' | 'unbound' | 'cli-identity' | 'in-process' | 'none'
+  /** bound与低信任签名均保留其claim caller/origin供审计；仅proof=origin-claim可作为来源证明。 */
   readonly claim?: { readonly caller: string; readonly origin: string }
   /** 入口面（封闭集，§2.2）。 */
   readonly ingress: 'wire' | 'local'
@@ -350,7 +350,7 @@ interface Settler {
 | reason | 含义 |
 |---|---|
 | `settler-off-chain` | 结算方不在 §4.2 授权链上 |
-| `settler-unverified` | 跨主机结算方没有可验 OriginClaim（窗口期 legacy），且身份只能靠自报 |
+| `settler-unverified` | 跨主机结算方缺少可用的bound OriginClaim（含unbound v1、bound-miss迁移回退、CLI本地deposit身份或无信封legacy），且不足以证明结算来源 |
 | `on-behalf-mismatch` | 宿主面回执的 `onBehalfOf` 与行的目标/实际投中成员不符 |
 | `echo-off-chain` | 内容回声来自链外（回声是弱证据，只接受链上） |
 
@@ -365,7 +365,7 @@ wire 面先结算再分流到 CLI 信箱（`wire.ts:572` → `:577`）；本机�
 
 | 步骤 | 今天 | 本设计 |
 |---|---|---|
-| 投递 | 入站行只有 `peer=local:review-seat/f62b…` | `auth = {caller: review-seat/f62b…, proof: origin-claim, ingress: wire, via: cli-deposit, admission_rule: cli-deposit, target: dsh/414d2b90, receipt_target: review-seat/f62b…, target_busy: true, …}` |
+| 投递 | 入站行只有 `peer=local:review-seat/f62b…` | `auth = {caller: review-seat/f62b…, proof: cli-identity, ingress: wire, via: cli-deposit, admission_rule: cli-deposit, target: dsh/414d2b90, receipt_target: review-seat/f62b…, target_busy: true, …}` |
 | 目标在另一条工作线上完成一个 turn | 该 turn 的 final 被当成 bb27ec94 的答复 | 只认 bb27ec94 的 steer 消费事件之后的第一条 final：若该 turn 在消费 steer 之前就结束，它的 final 不归属；若在同一 turn 内消费，消费之后的 final 才是答复 |
 | 宿主发 `(auto)` 回执 | 内容无关、`completed` | 内容来自正确 turn，信封带 `onBehalfOf: dsh/414d2b90`、`authRef` |
 | 若有别的会话发出 `[A2A receipt] task direct-bb27ec94` | 照样结算 | `settler-off-chain` 拒绝、入环、可见 |

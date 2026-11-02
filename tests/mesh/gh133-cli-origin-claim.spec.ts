@@ -62,7 +62,7 @@ describe('gh#133 CLI OriginClaim (real host)', () => {
       const state = await globalThis.fetch(`${a.baseUrl}/__dsh_a2a/state`).then(async r => await r.json()) as { legacyInbound: number; tasks: Array<Record<string, any>>; archived?: Array<Record<string, any>> }
       const row = [...state.tasks, ...(state.archived ?? [])].find(t => t.taskId === 'direct-gh133000001')
       // The claim names the full handle, so it covers exactly this identity (review of PR #135 P1).
-      expect(row?.auth).toMatchObject({ caller: HANDLE, proof: 'origin-claim', claim: { caller: HANDLE, origin: new URL(a.baseUrl).origin }, via: 'cli-deposit' })
+      expect(row?.auth).toMatchObject({ caller: HANDLE, proof: 'cli-identity', claim: { caller: HANDLE, origin: new URL(a.baseUrl).origin }, via: 'cli-deposit' })
       expect(state.legacyInbound).toBe(legacyBefore)
     } finally {
       await a.dispose()
@@ -139,7 +139,7 @@ describe('gh#133 CLI OriginClaim (real host)', () => {
       const unreachable = `http://127.0.0.1:1/behind/a/proxy/a2a/cli/${encodeURIComponent(handleA)}`
       const far = await post(`${a.baseUrl}/a2a/direct`, { team: TARGET, message: 'via proxy', caller_session: handleA, wait: false, task_id: 'direct-gh133-px' }, sign(keyA, 'ops-cli', unreachable))
       expect(far.body.delivered, JSON.stringify(far.body)).toBe(true)
-      expect((await rows()).find(t => t.taskId === 'direct-gh133-px')?.auth).toMatchObject({ caller: handleA, proof: 'origin-claim', claim: { caller: handleA } })
+      expect((await rows()).find(t => t.taskId === 'direct-gh133-px')?.auth).toMatchObject({ caller: handleA, proof: 'cli-identity', claim: { caller: handleA } })
 
       // The log face no longer accepts CLI derivation (least privilege: the CLI never reads it).
       const log = await globalThis.fetch(`${a.baseUrl}/a2a/log?id=session-0123456789abcdef&caller_session=${encodeURIComponent(handleA)}`, { headers: sign(keyA, 'ops-cli', faceA) })

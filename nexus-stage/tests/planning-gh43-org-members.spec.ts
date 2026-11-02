@@ -11,6 +11,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createPlanningView, type PlanningInput } from '../src/planning-view.ts'
+import { joinedLocalIdsByHandle, remoteMemberBoardId } from '../src/planning-member-handles.ts'
 
 const NOW = 72_400
 
@@ -36,6 +37,59 @@ const input: PlanningInput = {
 }
 
 describe('gh#43 remote org member resolution', () => {
+  it("a peer-org handle resolving to one of this host sessions attaches that local session card to the mirror frame", () => {
+    const target = 'session-414d2b90-5fe0-4b98-9840-180cb3f96336'
+    const observed: PlanningInput = {
+      ...input,
+      sessions: [
+        { id: target, label: '总工', team: 'dsh/414d2b90', name: '系统架构设计总工程师', joined: true, live: true, canvasTeams: ['基础建设项目组', '生产服务组'] },
+        { id: 'session-66abc2cf-6424-4d76-b333-ff0a7f481560', label: '本席', team: 'dsh/66abc2cf', name: 'open-a2a-net', joined: true, live: true, canvasTeams: ['基础建设项目组'] },
+      ],
+      teams: [
+        { name: '基础建设项目组', team: 'dsh/canvas/基础建设项目组', members: [{ id: target }, { id: 'session-66abc2cf-6424-4d76-b333-ff0a7f481560' }] },
+        { name: 'dsh-ecom-prodcut-dev--开发组', team: 'dsh/canvas/dsh-ecom-prodcut-dev--开发组', members: [{ id: target }] },
+      ],
+      remoteTeams: [
+        { team: 'dsh/e99d5bd5', name: 'owner-seat', via: 'https://10.0.0.5:8787' },
+      ],
+      peerOrg: [{ url: 'https://10.0.0.5:8787', org: [{ name: '生产服务组', team: 'dsh/canvas/生产服务组', members: ['dsh/e99d5bd5', 'dsh/414d2b90', 'dsh/66abc2cf'] }] }],
+    }
+    const v = createPlanningView({ onDirty: vi.fn(), onLampClick: vi.fn(), onCanvasAction: vi.fn(async () => true), now: () => NOW })
+    document.body.appendChild(v.root)
+    v.reconcile(observed)
+    const frame = [...v.root.querySelectorAll('.p-frame')].find(node => node.getAttribute('data-name') === '生产服务组')
+    expect(frame?.classList.contains('is-mirror')).toBe(true)
+    const member = v.root.querySelector<HTMLElement>(`.p-node[data-id="${target}"]`)
+    expect(member).not.toBeNull()
+    expect(frame?.querySelector('.cnt')?.textContent).toBe('3 成员 +2 跨队')
+    v.reconcile(observed)
+    expect(v.root.querySelector<HTMLElement>(`.p-node[data-id="${target}"]`)).not.toBeNull()
+    expect(frame?.querySelector('.cnt')?.textContent).toBe('3 成员 +2 跨队')
+    expect(frame?.querySelector('.route')?.textContent).toBe('镜像 · 10.0.0.5:8787')
+  })
+
+  it('a duplicate local id8 cannot make a peer canvas handle attach to either session', () => {
+    const observed: PlanningInput = {
+      ...input,
+      sessions: [
+        { id: 'session-414d2b90-0000-0001', label: 'A', team: 'dsh/414d2b90', joined: true, live: true },
+        { id: 'session-414d2b90-0000-0002', label: 'B', team: 'dsh/414d2b90', joined: true, live: true },
+      ],
+      teams: [{ name: 'local', team: 'dsh/canvas/local', members: [{ id: 'session-414d2b90-0000-0001' }, { id: 'session-414d2b90-0000-0002' }] }],
+      remoteTeams: [{ team: 'dsh/414d2b90', name: 'owner-seat', via: 'https://10.0.0.5:8787' }],
+      peerOrg: [{ url: 'https://10.0.0.5:13080', org: [{ name: '生产服务组', team: 'dsh/canvas/生产服务组', members: ['dsh/414d2b90'] }] }],
+    }
+    const v = createPlanningView({ onDirty: vi.fn(), onLampClick: vi.fn(), onCanvasAction: vi.fn(async () => true), now: () => NOW })
+    document.body.appendChild(v.root)
+    v.reconcile(observed)
+    const frame = [...v.root.querySelectorAll<HTMLElement>('.p-frame')].find(el => el.dataset.name === '生产服务组')
+    expect(frame).toBeDefined()
+    expect(frame?.querySelector('.cnt')?.textContent).toBe('1 成员')
+    expect(v.root.querySelector('.p-node[data-id="member-dsh-414d2b90"]')).not.toBeNull()
+    expect(v.root.querySelector('.p-node[data-id="session-414d2b90-0000-0001"]')).not.toBeNull()
+    expect(v.root.querySelector('.p-node[data-id="session-414d2b90-0000-0002"]')).not.toBeNull()
+  })
+
   it('canonical handle members resolve onto the peer session cards', () => {
     const v = createPlanningView({ onDirty: vi.fn(), onLampClick: vi.fn(), onCanvasAction: vi.fn(async () => true), now: () => NOW })
     document.body.appendChild(v.root)
@@ -59,5 +113,31 @@ describe('gh#43 remote org member resolution', () => {
     expect(v.root.querySelector('.p-node[data-id="member-dsh-c6c6f4f6"]')).not.toBeNull()
     const frame = [...v.root.querySelectorAll('.p-frame')].find(n => n.dataset.name === '远端研发')
     expect(frame).toBeDefined()
+  })
+})
+
+describe('joined local handle projection helper', () => {
+  it('maps only unique joined id8 handles that the peer directory does not claim', () => {
+    const sessions = [
+      { id: 'session-aaaaaaaa11111111', team: 'dsh/aaaaaaaa', joined: true },
+      { id: 'session-bbbbbbbb11111111', team: 'dsh/bbbbbbbb', joined: true },
+      { id: 'session-cccccccc11111111', team: 'dsh/cccccccc', joined: false },
+      { id: 'session-eeeeeeee11111111', team: 'dsh/dddddddd', joined: true },
+      { id: 'session-ffffffff11111111', team: 'dsh/dddddddd', joined: true },
+    ]
+    const map = joinedLocalIdsByHandle(sessions, new Set(['dsh/bbbbbbbb']))
+    expect(map.get('dsh/aaaaaaaa')).toBe('session-aaaaaaaa11111111')
+    expect(map.has('dsh/bbbbbbbb')).toBe(false)
+    expect(map.has('dsh/cccccccc')).toBe(false)
+    expect(map.has('dsh/dddddddd')).toBe(false)
+  })
+
+  it('projects canonical handles, legacy session ids and remote ids deterministically', () => {
+    const local = new Map([['dsh/aaaaaaaa', 'session-aaaaaaaa11111111']])
+    const rows = [{ team: 'zone/01234567', name: 'peer', via: 'https://peer.invalid' }]
+    expect(remoteMemberBoardId('dsh/aaaaaaaa', local, rows, 'https://peer.invalid')).toBe('session-aaaaaaaa11111111')
+    expect(remoteMemberBoardId('zone/01234567', local, rows, 'https://peer.invalid')).toBe('member-zone-01234567')
+    expect(remoteMemberBoardId('session-01234567-1111', local, rows, 'https://peer.invalid')).toBe('member-zone-01234567')
+    expect(remoteMemberBoardId('session-01234567-1111', local, [], 'https://peer.invalid')).toBe('member-dsh-01234567')
   })
 })

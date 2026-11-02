@@ -13,6 +13,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Config } from '../index.ts'
 import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from '../runtime.ts'
 import type { A2aPeerCard } from '../types.ts'
+import { peerDirectoryRows } from '../peer-directory.ts'
 import type { ZoneCardFetch } from '../zone.ts'
 import type { A2aClient, CardFetchOutcome } from '../a2a-client.ts'
 import type { CanvasStore } from '../canvas-store.ts'
@@ -121,16 +122,20 @@ export function createInfoTools(deps: InfoToolsDeps) {
     return joined
   }
   /**
-   * Whether a peer card proves service to any joined team — its own zone
-   * team, a published session team, or any roster declaration. A card that
-   * proves nothing serves nothing: under scoping it is withheld, which is
-   * the legacy-peer cost the directive accepts (pre-roster peers cannot
-   * prove service either way).
+   * Match exactly the sanitized rows the directory would expose: process/session
+   * and roster teams use their joined names; canvas rows need an explicitly
+   * joined local member resolved by the same local-first handle rules.
    */
-  const cardServesJoined = (card: A2aPeerCard, joined: ReadonlySet<string>): boolean =>
-    joined.has(card.team)
-    || (card.sessionTeams ?? []).some(entry => joined.has(entry.team))
-    || (card.teamMemberships ?? []).some(membership => joined.has(membership.team))
+  const cardServesJoined = (card: A2aPeerCard, joined: ReadonlySet<string>, resolveLocal: (ref: string) => string | undefined): boolean =>
+    peerDirectoryRows(card, '', true).some(row => {
+      if (row.canvasMembers !== undefined) {
+        return row.canvasMembers.some(ref => {
+          const id = resolveLocal(ref)
+          return id !== undefined && joinedSessions.has(id)
+        })
+      }
+      return joined.has(row.team) || (row.teams ?? []).some(team => joined.has(team))
+    })
 
 
 
@@ -495,6 +500,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         // unread here. The idempotency aggregate is host machinery, not
         // attribution — it stays unscoped like the ledger it serves.
         const joined = joinedTeamScope()
+        const resolveLocal = localHandleResolver()
         const visibleTeams = new Set(joined)
         for (const agent of sessionNodes.values()) {
           if (teamMemberships.teamsOf(String(agent.id)).some(team => joined.has(team))) visibleTeams.add(sessionTeamOf(agent))
@@ -514,7 +520,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         const fetch = memoizedCardFetch()
         const peerRows = await mapBounded(peerStore.list(), SWEEP_CONCURRENCY, async (url: string): Promise<{ url: string; score?: number } | undefined> => {
           const card = await fetch(url)
-          return card !== undefined && cardServesJoined(card, joined) ? { url, score: peerStore.score(url) } : undefined
+          return card !== undefined && cardServesJoined(card, joined, resolveLocal) ? { url, score: peerStore.score(url) } : undefined
         })
         const peers = peerRows.filter((row): row is { url: string; score?: number } => row !== undefined)
         const inScope = (entry: { team: string; peer: string }): boolean => entry.peer === 'local' || visibleTeams.has(entry.team)
@@ -734,15 +740,16 @@ export function createInfoTools(deps: InfoToolsDeps) {
         // proved service is refused without a probe (its reachability is
         // exactly the fact scoping withholds).
         const joined = joinedTeamScope()
+        const resolveLocal = localHandleResolver()
         const fetch = memoizedCardFetch()
         const serves = async (url: string): Promise<boolean> => {
           const card = await fetch(url)
-          return card !== undefined && cardServesJoined(card, joined)
+          return card !== undefined && cardServesJoined(card, joined, resolveLocal)
         }
         if (args.url !== undefined && args.url !== '') {
           if (config.teamScopeInfo && !(await serves(args.url))) {
             const stale = cardCache.get(args.url)?.card
-            if (stale !== undefined && cardServesJoined(stale, joined)) {
+            if (stale !== undefined && cardServesJoined(stale, joined, resolveLocal)) {
               // Was serving, now unverifiable fresh — probe and report the
               // down state through the normal path.
               return { ok: true, results: await Promise.all([args.url].map(probeOne)) }
