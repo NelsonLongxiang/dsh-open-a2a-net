@@ -54,7 +54,7 @@ import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
-import { isRootOriginUrl, signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
+import { isRootOriginUrl, sameMountedUrl, signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
 import { AuthObserver, type AffectedEntry } from './auth-observer.ts'
 import { allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type SettlementMode, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
@@ -2667,12 +2667,12 @@ export function apply(ctx: Context, config: Config): void {
     // served-fresh field, exactly the self-description trust class
     // N3/V5 abolished. Our operator's own config anchors; the card
     // shadow only corroborates.
-    // #189: only a ROOT claim URL speaks for its origin (a card under a path proves that path's publisher).
-    if (callerCard !== undefined && ownCardUrl !== '' && isRootOriginUrl(callerUrl)) {
+    // #189: a ROOT claim URL speaks for its origin; a path-prefixed one only for the exact peer URL we seeded (a mounted card).
+    if (callerCard !== undefined && ownCardUrl !== '') {
       const ourOrigin = new URL(ownCardUrl).origin
       const callerOrigin = new URL(callerUrl).origin
       const weSeedThem = config.peers.some(peer => {
-        try { return new URL(peer).origin === callerOrigin } catch { return false }
+        try { return isRootOriginUrl(callerUrl) ? new URL(peer).origin === callerOrigin : sameMountedUrl(peer, callerUrl) } catch { return false }
       })
       const theySeedUs = (callerCard.peers ?? []).some(peer => {
         try { return new URL(peer).origin === ourOrigin } catch { return false }

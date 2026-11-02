@@ -163,11 +163,6 @@ export interface WireDeps {
 }
 
 /**
- * Register the small wire faces on a settled web server.
- * @param webServer - the settled host web server.
- * @param d - the captures listed on {@link WireDeps}.
- */
-/**
  * #187: what a verified claim may vouch for at settlement. The signing key always (the card was
  * fetched and its key verified); the ORIGIN only when the claim URL is that origin's root — a card
  * fetched from a path under an origin proves the path's publisher, not the origin's host.
@@ -177,6 +172,11 @@ export function settlerClaimFields(claim: { ok: boolean; cli?: true; callerUrl?:
   return { ...(isRootOriginUrl(claim.callerUrl) ? { claimOrigin: originOf(claim.callerUrl) } : {}), claimKey: claim.card.publicKey }
 }
 
+/**
+ * Register the small wire faces on a settled web server.
+ * @param webServer - the settled host web server.
+ * @param d - the captures listed on {@link WireDeps}.
+ */
 export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
   const {
     ctx,

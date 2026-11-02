@@ -48,6 +48,21 @@ export function isRootOriginUrl(value: string): boolean {
     return (url.protocol === 'http:' || url.protocol === 'https:') && url.username === '' && url.password === '' && url.pathname === '/' && url.search === '' && url.hash === ''
   } catch { return false }
 }
+/**
+ * #189 follow-up: whether a path-prefixed claim URL is EXACTLY a peer URL the operator seeded (a
+ * mounted card endpoint, delivery-origin-auth §"挂载卡片端点"): same origin and same path (trailing
+ * slashes ignored), neither carrying userinfo, query or fragment. A different path under the same
+ * origin is a different publisher and never matches.
+ */
+export function sameMountedUrl(seeded: string, claimUrl: string): boolean {
+  try {
+    const a = new URL(seeded)
+    const b = new URL(claimUrl)
+    const clean = (u: URL): boolean => (u.protocol === 'http:' || u.protocol === 'https:') && u.username === '' && u.password === '' && u.search === '' && u.hash === ''
+    const path = (u: URL): string => u.pathname.replace(/\/+$/, '')
+    return clean(a) && clean(b) && a.origin === b.origin && path(a) !== '' && path(a) === path(b)
+  } catch { return false }
+}
 export type OriginClaimVerdict =
   | { ok: true; caller: string; callerUrl: string; card: A2aPeerCard; bound: boolean; cli?: true }
   | { ok: false; reason: OriginClaimRefusal }
