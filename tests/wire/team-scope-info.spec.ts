@@ -1,8 +1,8 @@
 /**
  * S5 (teamScopeInfo, owner directive 2026-10-20): information-plane scoping.
  * The read-only fleet tools (a2a_teams / a2a_status / a2a_probe) disclose
- * remote facts only inside the host's joined-team scope — the union of
- * local roster declarations (`a2a/teams.json`). [this host] rows, local
+ * remote facts only inside the host's joined-team scope — roster declarations
+ * plus explicit local canvas join intent. [this host] rows, local
  * traffic, and a2a_tasks (own ledger, unscoped by ruling) stay. The open
  * plane remains supported at teamScopeInfo: false.
  *
@@ -23,6 +23,7 @@ import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { generateKeyPairSync } from 'node:crypto'
 import { signCard } from '../../src/card.ts'
+import type { A2aPeerCard } from '../../src/types.ts'
 import { apply, type Config } from '../../src/index.ts'
 
 /** Minimal agents face: one settable live root; no initiator fiber. */
@@ -59,6 +60,18 @@ function declareTeams(home: string, session: string, teams: string[]): void {
   writeFileSync(join(home, 'a2a', 'teams.json'), JSON.stringify({ memberships: [{ session, teams }] }))
 }
 
+/** Seed the explicit local network-join intent used by local handle resolution. */
+function declareJoined(home: string, session: string): void {
+  mkdirSync(join(home, 'a2a'), { recursive: true })
+  writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: [session] }))
+}
+
+/** Seed one local canvas name so collision handling can be pinned. */
+function declareCanvas(home: string, name: string, members: string[]): void {
+  mkdirSync(join(home, 'a2a'), { recursive: true })
+  writeFileSync(join(home, 'a2a', 'canvas.json'), JSON.stringify({ teams: [{ name, members }] }))
+}
+
 function runContext(): { signal: AbortSignal } {
   return { signal: new AbortController().signal } as { signal: AbortSignal }
 }
@@ -81,7 +94,7 @@ describe('S5 information-plane scoping (teamScopeInfo)', () => {
   // survive via their roster declarations (row.teams), and everything
   // else (process rows, the legacy zone) is out of scope.
   const key = generateKeyPairSync('ed25519')
-  const wireCards = {
+  const wireCards: Record<string, A2aPeerCard> = {
     'http://peer-a': {
       ...signCard({ name: 'peer-a', session: 'peer-host-a', team: 'zone-a', capabilities: { roster: true }, expiresAt: Date.now() + 3_600_000 }, key.privateKey),
       sessionTeams: [
@@ -98,14 +111,14 @@ describe('S5 information-plane scoping (teamScopeInfo)', () => {
     'http://peer-c': signCard({ name: 'peer-c', session: 'peer-host-c', team: 'zone-c', capabilities: {}, expiresAt: Date.now() + 3_600_000 }, key.privateKey),
   }
 
-  function stubFleet(): void {
+  function stubFleet(cards: Readonly<Record<string, A2aPeerCard>> = wireCards): void {
     const realFetch = globalThis.fetch
     vi.stubGlobal('fetch', (url: string, init?: { method?: string }) => {
       const target = String(url)
       // Loopback (the mounted WebServer) passes through to the real stack.
       if (target.startsWith('http://127.0.0.1') || target.startsWith('http://localhost')) return realFetch(target, init)
       if ((init?.method ?? 'GET') !== 'GET') return Promise.reject(new Error('unexpected method'))
-      for (const [prefix, card] of Object.entries(wireCards)) {
+      for (const [prefix, card] of Object.entries(cards)) {
         if (target.startsWith(prefix)) return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify(card) } as unknown as Response)
       }
       return Promise.reject(new Error('unreachable'))
@@ -157,6 +170,45 @@ describe('S5 information-plane scoping (teamScopeInfo)', () => {
     const listed = await ctx.tools.get('a2a_teams')?.execute({}, runContext()) as { teams: TeamRow[]; note?: string }
     expect(listed.teams.map(row => row.team).sort()).toEqual(['home-zone', 'zone-a', 'zone-a/cargo', 'zone-a/dock', 'zone-b', 'zone-b/hub', 'zone-c'])
     expect(listed.note).toBeUndefined()
+    await ctx.fiber.dispose()
+  })
+
+
+
+  it('status/probe include a peer canvas serving an explicitly joined local handle', async () => {
+    const home = tmpHome()
+    declareJoined(home, 'agent-1')
+    const canvasOnlyPeer: A2aPeerCard = {
+      ...signCard({ name: 'peer-b', session: 'peer-host-b', team: 'zone-b', capabilities: { roster: true }, expiresAt: Date.now() + 3_600_000 }, key.privateKey),
+      canvasOrg: [{ name: 'shared', team: 'zone-b/canvas/shared', members: ['home-zone/agent-1'] }],
+    }
+    stubFleet({ 'http://peer-b': canvasOnlyPeer })
+    const ctx = await mount({ teamScopeInfo: true, dshHome: home })
+    await ctx.tools.get('a2a_teams')?.execute({}, runContext())
+    const status = await ctx.tools.get('a2a_status')?.execute({}, runContext()) as { peers: { url: string }[] }
+    expect(status.peers.map(peer => peer.url)).toEqual(['http://peer-b'])
+    const probed = await ctx.tools.get('a2a_probe')?.execute({}, runContext()) as { results: { url: string; reachable: boolean; team?: string }[] }
+    expect(probed.results).toMatchObject([{ url: 'http://peer-b', reachable: true, team: 'zone-b' }])
+    await ctx.fiber.dispose()
+  })
+
+  it('does not disclose a same-named remote canvas when its advertised members exclude joined locals', async () => {
+    const home = tmpHome()
+    declareJoined(home, 'agent-1')
+    declareCanvas(home, 'shared', ['agent-1'])
+    const collidingPeer: A2aPeerCard = {
+      ...signCard({ name: 'peer-b', session: 'peer-host-b', team: 'dsh', capabilities: { roster: true }, expiresAt: Date.now() + 3_600_000 }, key.privateKey),
+      canvasOrg: [{ name: 'shared', team: 'dsh/canvas/shared', members: ['dsh/remoteonly'] }],
+    }
+    stubFleet({ 'http://peer-b': collidingPeer })
+    const ctx = await mount({ team: 'dsh', teamScopeInfo: true, dshHome: home })
+    const status = await ctx.tools.get('a2a_status')?.execute({}, runContext()) as { peers: { url: string }[] }
+    expect(status.peers).toEqual([])
+    const swept = await ctx.tools.get('a2a_probe')?.execute({}, runContext()) as { results: { url: string }[] }
+    expect(swept.results).toEqual([])
+    const single = await ctx.tools.get('a2a_probe')?.execute({ url: 'http://peer-b' }, runContext()) as { results: { reachable: boolean; error?: string }[] }
+    expect(single.results[0]?.reachable).toBe(false)
+    expect(single.results[0]?.error).toContain('refused (not probed)')
     await ctx.fiber.dispose()
   })
 

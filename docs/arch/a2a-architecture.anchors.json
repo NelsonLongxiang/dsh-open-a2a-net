@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceCommit": "d83b9147d7b03b5d0f31c6c241da2d2b7807147c",
+  "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
     "src/index.ts": "34ff672ed378b3d0e94fb6e1fde2e0ce48f3af8c5dd6c4590ffe38099f9c4517",
@@ -23,7 +23,7 @@
     "src/faces/canvas-notify.ts": "5120c3828d5a9b8928006059fc516d88ac6813afecc9ae0464223b598a4b6850",
     "src/task-auth.ts": "7398ba1cc1f3635c18c9ba5d8979e3aefea03ca131c851ae28a0411087ff2bdf",
     "src/origin-claim.ts": "07a2d7d6c385d6a3c113230697a47228ee6d081acf4f627b132607a2aa6876f9",
-    "src/tools/info.ts": "77ca8bdab2df21eecc3af343752fc2acec3e6e463a130e8f0ea75f00e4d8b26b",
+    "src/tools/info.ts": "0bf2e059f3a11fb8d19dcc0dac30d30aa7b0b3470b67a9d0d25a6848739f4aa0",
     "src/tools/act.ts": "4d8f0254e2c117ea690f68fb0fb04539934a724dcd799df15bd592e1797fa39b",
     "src/peer-directory.ts": "d7c30c27a230f8c61da18d85c30ad17a6e98809083b13eca82b34870a8934d01",
     "src/card.ts": "12c88222e218b191f71b61ce3c30944f6a50f116953aed56e43259108f9b45b5"
@@ -32,13 +32,13 @@
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/tools/info.ts:158",
+      "ref": "src/tools/info.ts:163",
       "expect": "name: 'a2a_whoami',"
     },
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/tools/info.ts:661",
+      "ref": "src/tools/info.ts:667",
       "expect": "name: 'a2a_probe',"
     },
     {
