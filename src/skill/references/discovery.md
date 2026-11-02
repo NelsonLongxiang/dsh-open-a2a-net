@@ -29,6 +29,10 @@ capability flags) plus unsigned serve-fresh fields.
   publisher also advertises as its own session is ambiguous, not proof of a
   local member — including for an opted-in referral candidate. This check is
   specific to that publisher and does not change the global local-handle lens.
+  When `exposureExcerpt: off` omits a session's description, the card parser
+  keeps the handle and normalizes the excerpt to empty; malformed non-string
+  descriptions still drop that row. Older parsers may drop such sessions, so
+  mixed-version peers require separate verification.
   Host/initiator exemptions and the operator-controlled seed/delegate
   resolution boundary stay intact.
   The existing local-first route still wins when this host owns the same team

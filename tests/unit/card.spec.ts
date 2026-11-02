@@ -119,6 +119,23 @@ describe('signCard / verifyCard round trip', () => {
 })
 
 describe('card sessionTeams passthrough', () => {
+  it('preserves a valid session when an off excerpt omits description', () => {
+    const { privateKey } = generateKeyPairSync('ed25519')
+    const card = signCard(core(), privateKey)
+    const sessionTeams = [
+      { team: 'dsh/abcd1234', name: 'private seat', workspace: '/fixture' },
+      { team: 'dsh/abcd5678', name: 'shown seat', description: 'masked' },
+      { team: 'dsh/abcd9999', name: 'invalid seat', description: null },
+    ]
+    expect(verifyCard({ ...card, sessionTeams }, NOW)).toEqual({
+      ok: true,
+      card: { ...card, sessionTeams: [
+        { team: 'dsh/abcd1234', name: 'private seat', description: '', workspace: '/fixture' },
+        { team: 'dsh/abcd5678', name: 'shown seat', description: 'masked' },
+      ] },
+    })
+  })
+
   it('drops malformed entries and a non-array member instead of rejecting the card', () => {
     const { privateKey } = generateKeyPairSync('ed25519')
     const card = signCard(core(), privateKey)

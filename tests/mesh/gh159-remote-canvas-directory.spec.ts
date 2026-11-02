@@ -341,7 +341,7 @@ describe('gh#159 remote canvas discovery and routing', () => {
     } finally { await a.dispose(); await b.dispose(); await other.close() }
   }, 30_000)
 
-  it('does not treat a same-id8 remote member as this host under scoped discovery', async () => {
+  it.each(['full', 'off'] as const)('does not treat a same-id8 remote member as local with excerpt %s', async exposureExcerpt => {
     const pa = await reservePort()
     const pb = await reservePort()
     const nativeFetch = globalThis.fetch
@@ -351,7 +351,7 @@ describe('gh#159 remote canvas discovery and routing', () => {
       return await nativeFetch(input, init)
     })
     const a = await bootNode({ name: 'A', session: 'gh159-collision-a', team: 'dsh', agentId: A_ID, sessionNodes: true, teamScopeInfo: true, teamScopeRouting: true, port: pa, peers: [base(pb)] })
-    const b = await bootNode({ name: 'B', session: 'gh159-collision-b', team: 'dsh', agentId: A_ID, sessionNodes: true, teamScopeInfo: true, port: pb, peers: [base(pa)] })
+    const b = await bootNode({ name: 'B', session: 'gh159-collision-b', team: 'dsh', agentId: A_ID, sessionNodes: true, teamScopeInfo: true, exposureExcerpt, port: pb, peers: [base(pa)] })
     try {
       await post(a, '/__dsh_a2a/join', { id: A_ID })
       await post(b, '/__dsh_a2a/join', { id: A_ID })
@@ -364,6 +364,26 @@ describe('gh#159 remote canvas discovery and routing', () => {
       const routed = await a.ctx.tools.get('a2a_route')!.execute({ team: 'dsh/canvas/碰撞隔离', message: 'private fixture' }, runContext(a.agents.agent)) as Route
       expect(routed.ok).toBe(false)
       expect(deliveries).toHaveLength(0)
+    } finally { await a.dispose(); await b.dispose() }
+  }, 30_000)
+
+  it('still discovers and routes an unambiguous canvas when its owner hides excerpts', async () => {
+    const pa = await reservePort()
+    const pb = await reservePort()
+    const a = await bootNode({ name: 'A', session: 'gh159-off-a', team: 'dsh', agentId: A_ID, sessionNodes: true, teamScopeInfo: true, teamScopeRouting: true, port: pa, peers: [base(pb)] })
+    const b = await bootNode({ name: 'B', session: 'gh159-off-b', team: 'dsh', agentId: B_ID, sessionNodes: true, teamScopeInfo: true, teamScopeRouting: true, exposureExcerpt: 'off', port: pb, peers: [base(pa)] })
+    try {
+      await post(a, '/__dsh_a2a/join', { id: A_ID })
+      await post(b, '/__dsh_a2a/join', { id: B_ID })
+      await post(b, '/__dsh_a2a/canvas', { action: 'create', name: '跨机协作' })
+      await post(b, '/__dsh_a2a/canvas', { action: 'add-member', name: '跨机协作', id: B_ID })
+      await post(b, '/__dsh_a2a/canvas', { action: 'add-member', name: '跨机协作', id: 'dsh/aaaaaaaa' })
+      const context = runContext(a.agents.agent)
+      const listed = await a.ctx.tools.get('a2a_teams')!.execute({ query: '跨机协作' }, context) as Directory
+      expect(listed.teams.some(row => row.team === GROUP && row.via === b.baseUrl)).toBe(true)
+      const routed = await a.ctx.tools.get('a2a_route')!.execute({ team: GROUP, message: 'private excerpt remains hidden' }, context) as Route
+      expect(routed.ok, JSON.stringify(routed)).toBe(true)
+      expect(b.steered).toHaveLength(1)
     } finally { await a.dispose(); await b.dispose() }
   }, 30_000)
 
@@ -422,14 +442,14 @@ describe('gh#159 remote canvas discovery and routing', () => {
     } finally { await a.dispose(); await relay.close(); await rogue.close() }
   }, 30_000)
 
-  it('does not mistake a referral peer own colliding session for a local canvas member', async () => {
+  it.each(['full', 'off'] as const)('does not mistake a referral peer own colliding session for a local member with excerpt %s', async excerpt => {
     const peerKey = generateKeyPairSync('ed25519')
     const relayKey = generateKeyPairSync('ed25519')
     const handle = 'dsh/aaaaaaaa'
     const team = 'dsh/canvas/referral-test'
     const foreign = {
       ...signCard({ name: 'foreign', session: 'gh159-referral-collision', team: 'dsh', capabilities: { route: true, async: true, roster: true }, expiresAt: Date.now() + 60_000 }, peerKey.privateKey),
-      sessionTeams: [{ team: handle, name: 'foreign seat', description: '' }],
+      sessionTeams: [{ team: handle, name: 'foreign seat', ...(excerpt === 'full' ? { description: '' } : {}) }],
       canvasOrg: [{ name: 'referral-test', team, members: [handle] }],
     }
     const deliveries: string[] = []
