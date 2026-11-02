@@ -78,6 +78,9 @@ const DERIVED_SOURCES: Readonly<Record<string, 'senderSessionId' | 'sessionId'>>
   'session-reference': 'sessionId',
 }
 
+/** This plugin's A2A tools that hand the model peer-originated text ({@link toolTaint}). */
+const A2A_READ_TOOLS: ReadonlySet<string> = new Set(['a2a_route', 'a2a_tasks', 'a2a_teams', 'a2a_status', 'a2a_probe'])
+
 /** What the log scan may ask about OTHER sessions. */
 export interface SessionLookups {
   /** Whether that session is marked tainted. */
@@ -110,7 +113,10 @@ export function toolTaint(name: string, value: unknown): string {
 export function sessionSource(events: readonly unknown[], others: SessionLookups = { tainted: () => false, local: () => false }): { local: true } | { local: false; via: string; evidence: boolean } {
   let inputs = 0
   for (const event of events) {
-    const e = event as { type?: unknown; data?: { source?: { kind?: unknown; nodeReminder?: unknown; rpcId?: unknown; senderSessionId?: unknown; sessionId?: unknown } } } | null
+    const e = event as { type?: unknown; data?: { name?: unknown; source?: { kind?: unknown; nodeReminder?: unknown; rpcId?: unknown; senderSessionId?: unknown; sessionId?: unknown; references?: unknown } } } | null
+    // An A2A tool call in the log (native or a run_code sub-dispatch) is remote evidence: it survives into a
+    // fork's inherited prefix, and backs up a mark that was lost.
+    if ((e?.type === 'tool/call' || e?.type === 'tool/ptc-dispatch') && typeof e.data?.name === 'string' && A2A_READ_TOOLS.has(e.data.name)) return { local: false, via: `tool:${e.data.name}`, evidence: true }
     if (e?.type !== 'user/message') continue
     const source = e.data?.source
     const kind = source?.kind
@@ -124,10 +130,13 @@ export function sessionSource(events: readonly unknown[], others: SessionLookups
       // Another session's text: its taint becomes ours (persisted); a clean one is neutral. A subagent is
       // always this host's; a peer agent or a reference must be a session this host knows, else this
       // call is refused (a native-teams bridge could name a remote caller here).
-      const other = source?.[field]
-      if (typeof other !== 'string' || other === '') return { local: false, via: `${kind}:no-sender`, evidence: false }
-      if (others.tainted(other)) return { local: false, via: `${kind}:tainted`, evidence: true }
-      if (kind !== 'subagent-settled' && !others.local(other)) return { local: false, via: `${kind}:unknown-sender`, evidence: false }
+      // A session reference names its sessions in references[].sessionId (the installed shape); the others name one.
+      const named = kind === 'session-reference' && Array.isArray(source?.references)
+        ? (source.references as Array<{ sessionId?: unknown } | null>).map(r => r?.sessionId)
+        : [source?.[field]]
+      if (named.length === 0 || named.some(id => typeof id !== 'string' || id === '')) return { local: false, via: `${kind}:no-sender`, evidence: false }
+      if ((named as string[]).some(id => others.tainted(id))) return { local: false, via: `${kind}:tainted`, evidence: true }
+      if (kind !== 'subagent-settled' && !(named as string[]).every(id => others.local(id))) return { local: false, via: `${kind}:unknown-sender`, evidence: false }
       continue
     }
     if (!LOCAL_SOURCES.has(kind)) return { local: false, via: kind, evidence: false }

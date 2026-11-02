@@ -3,7 +3,7 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "fbf8140fbe59368814f5d2a769bfa04bede723229b803cf2fe03a4610caf7c6b",
+    "src/index.ts": "0ca08a637c38d85c51bc41866649c1c7f43dd8b1150145d615e6719b3f67631e",
     "src/faces/admin.ts": "10b875059049f219fb727d701258fcac0d78601971dc0863f3876572b0df2767",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
@@ -62,13 +62,13 @@
     {
       "page": "p1-arch",
       "cell": "b3",
-      "ref": "src/index.ts:2642",
+      "ref": "src/index.ts:2653",
       "expect": "function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {"
     },
     {
       "page": "p1-arch",
       "cell": "b4",
-      "ref": "src/index.ts:1669",
+      "ref": "src/index.ts:1680",
       "expect": "function exposureDescription(description: string): string | undefined {"
     },
     {
@@ -92,19 +92,19 @@
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:3731",
+      "ref": "src/index.ts:3742",
       "expect": "const sharedCanvas = canvasStore.list().some(name => {"
     },
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:3740",
+      "ref": "src/index.ts:3751",
       "expect": "let orgShared = false"
     },
     {
       "page": "p1-arch",
       "cell": "c1",
-      "ref": "src/index.ts:2057",
+      "ref": "src/index.ts:2068",
       "expect": "path: '/.well-known/agent-card.json',"
     },
     {
@@ -146,7 +146,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:2999",
+      "ref": "src/index.ts:3010",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -224,7 +224,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:3923",
+      "ref": "src/index.ts:3934",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -266,31 +266,31 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3389",
+      "ref": "src/index.ts:3400",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
       "page": "p1-arch",
       "cell": "f2",
-      "ref": "src/index.ts:1236",
+      "ref": "src/index.ts:1247",
       "expect": "const wakeColdTeam = (team: string, skipId?: string): ColdWake => {"
     },
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2412",
+      "ref": "src/index.ts:2423",
       "expect": "void runReceiptLadder("
     },
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2364",
+      "ref": "src/index.ts:2375",
       "expect": "function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {"
     },
     {
       "page": "p1-arch",
       "cell": "f4",
-      "ref": "src/index.ts:1236",
+      "ref": "src/index.ts:1247",
       "expect": "const wakeColdTeam = (team: string, skipId?: string): ColdWake => {"
     },
     {
@@ -302,7 +302,7 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/index.ts:2005",
+      "ref": "src/index.ts:2016",
       "expect": "registerAdminFaces(webServer, {"
     },
     {

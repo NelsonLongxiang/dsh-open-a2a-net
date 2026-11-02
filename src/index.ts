@@ -1147,7 +1147,18 @@ export function apply(ctx: Context, config: Config): void {
   const nodeBindings = new NodeBindings(join(home, 'a2a'))
   const nodeReviews = new NodeReviewQueue(join(home, 'a2a'))
   const nodeTaint = new SessionTaint(join(home, 'a2a'))
-  ctx.on('tools/post-execute', (exec, result, next) => { const via = result.isError ? '' : toolTaint(exec.name, result.value); if (via !== '' && exec.agent !== undefined) nodeTaint.mark(String(exec.agent.id), via); return next() })
+  // N4: a mark covers the session's whole lineage up to its root (a subagent's reads taint every ancestor it reports to).
+  const markLineage = (agent: { id: unknown; session?: unknown } | undefined, via: string): void => {
+    for (let a = agent, depth = 0; a !== undefined && depth < 16; depth++) {
+      nodeTaint.mark(String(a.id), via)
+      const parent = (a.session as { meta?: { parentSession?: unknown } } | undefined)?.meta?.parentSession
+      if (typeof parent !== 'string' || parent === '') return
+      const next = ctx.get('agents')?.get(parent as never) as { id: unknown; session?: unknown } | undefined
+      if (next === undefined) { nodeTaint.mark(parent, via); return }
+      a = next
+    }
+  }
+  ctx.on('tools/post-execute', (exec, result, next) => { const via = result.isError ? (/^a2a_(route|tasks|teams|status|probe)$/.test(exec.name) ? `${exec.name}:error` : '') : toolTaint(exec.name, result.value); if (via !== '') markLineage(exec.agent, via); return next() })
   const nodeTasks = new NodeTasks(join(home, 'a2a'), { probe: githubProbe(), logger, onSettled: (node, p) => nodeBinder.remind(node, settledReminder(p)) })
   nodeTasks.schedule(ctx)
   const nodeBinder = createNodeBinder({ store: nodeStore, bindings: nodeBindings, logger, joined: id => joinedSessions.has(id), joinedList: () => joinedSessions.list(), archived: id => archivedSessionFilter()?.(id) === true, live: id => liveRoots.get(id), tasksText: node => nodeTasks.render(node), pendingReminders: node => nodeTasks.takePending(node).map(settledReminder), selfUpdate: { store: nodeStore, queue: nodeReviews, taint: nodeTaint, events: agent => sessionEventsOf(agent as Agent), localSession: id => liveRoots.has(id) || joinedSessions.has(id) } })
@@ -2211,7 +2222,7 @@ export function apply(ctx: Context, config: Config): void {
    */
   function steerRelay(agent: Agent, text: string, sender?: string): void {
     // N4 session taint: every relay steer carries content from outside this host (a delivery, its nudge or cancel notice).
-    nodeTaint.mark(String(agent.id), 'relay')
+    markLineage(agent, 'relay')
     agent.steer({
       id: MessageId(`a2a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`),
       role: 'user',
@@ -2296,7 +2307,7 @@ export function apply(ctx: Context, config: Config): void {
         }, signal: AbortSignal) => Promise<unknown> }
       | undefined
     if (typeof controller?.prompt !== 'function') return
-    nodeTaint.mark(String(agent.id), 'nudge')
+    markLineage(agent, 'nudge')
     logger.info(`a2a: async nudge escalates to queue-mode prompt for ${team} (task ${taskId}, ref ${nudgeRef(taskId)})`)
     try {
       void controller.prompt({
@@ -2560,7 +2571,7 @@ export function apply(ctx: Context, config: Config): void {
   // to src/legacy/teams-bridge-inbound.ts — the registry probe, claim memo,
   // prepare and the bounded round. The outbound bridgeFace stays here until
   // the G-out slice (it submits through the dispatch trunk).
-  const { teamsRegistry, nativeTeamsClaims, nativeTeamsPrepare, nativeTeamsRound } = createTeamsBridgeInbound({ ctx, config, liveAgent, fromClause, sanitizeFromClause, proofHeader: hostDirectHeader })
+  const { teamsRegistry, nativeTeamsClaims, nativeTeamsPrepare, nativeTeamsRound } = createTeamsBridgeInbound({ ctx, config, liveAgent, fromClause, sanitizeFromClause, proofHeader: hostDirectHeader, taint: agent => { markLineage(agent, 'native-teams') } })
 
   /* ── gh#9+gh#10 OriginClaim (docs/protocol/delivery-origin-auth.md,
      src/origin-claim.ts): the caller's card key signs the envelope; the

@@ -1355,5 +1355,41 @@ describe('N4 — node_update_self under the session taint (owner ruling 2026-11-
       await m.dispose()
     }
   }, 40_000)
+
+  it('a mark covers the whole lineage: a grandchild subagent\'s A2A read taints its parent and the bound root', async () => {
+    const m = await mount()
+    try {
+      await nodeWithLayers(m, 'chief', { 当前状态: '第一版' })
+      const a = await bindSession(m, A)
+      // child and grandchild subagents, linked by meta.parentSession and known to the agents service.
+      const child = Object.assign(makeAgent(m.ctx, 'child-1'), { session: { events: [], title: 'child', meta: { parentSession: A } } })
+      const grand = Object.assign(makeAgent(m.ctx, 'grand-1'), { session: { events: [], title: 'grand', meta: { parentSession: 'child-1' } } })
+      for (const agent of [child, grand]) m.agents.map.set(String(agent.id), agent as unknown as Agent)
+      const tools = m.ctx.get('tools') as unknown as { execute: (input: unknown) => Promise<unknown> }
+      await tools.execute({ name: 'a2a_status', arguments: {}, agent: grand, signal: new AbortController().signal, callId: 'call-g' } as never).catch(() => undefined)
+      const marks = (JSON.parse(readFileSync(join(m.home, 'a2a', 'node-taint.json'), 'utf8')) as { sessions: Array<{ session: string }> }).sessions.map(r => r.session).sort()
+      expect(marks).toEqual(['child-1', 'grand-1', A].sort())
+      // The root never saw the text itself, yet its writes now queue.
+      expect((await call(m, a, [ev(PERSON)], { section: '当前状态', text: 'x', reason: 'r', expected_sha256: await shaOf(m) })).code).toBe('queued')
+    } finally {
+      await m.dispose()
+    }
+  }, 20_000)
+
+  it('an A2A tool that ends in an error still marks the caller (a peer can put text in a failure)', async () => {
+    const m = await mount()
+    try {
+      await nodeWithLayers(m, 'chief', { 当前状态: '第一版' })
+      const b = makeAgent(m.ctx, B)
+      m.publish(b)
+      // Unjoined: the join gate throws, so the call settles as an error.
+      const tools = m.ctx.get('tools') as unknown as { execute: (input: unknown) => Promise<unknown> }
+      await tools.execute({ name: 'a2a_route', arguments: { team: 'dsh/aaaaaaaa', message: 'x' }, agent: b, signal: new AbortController().signal, callId: 'call-e' } as never).catch(() => undefined)
+      const marks = (JSON.parse(readFileSync(join(m.home, 'a2a', 'node-taint.json'), 'utf8')) as { sessions: Array<{ session: string; via: string }> }).sessions
+      expect(marks).toEqual([expect.objectContaining({ session: B, via: 'a2a_route:error' })])
+    } finally {
+      await m.dispose()
+    }
+  }, 20_000)
 })
 

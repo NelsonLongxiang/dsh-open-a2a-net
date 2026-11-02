@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { NodeStore } from '../../src/node-store.ts'
-import { NodeReviewQueue, REVIEW_PER_NODE_MAX, REVIEW_QUEUE_MAX, SELF_UPDATE_DAILY_MAX, SessionTaint, TAINT_CAP, selfUpdate, selfUpdateTool, toolTaint } from '../../src/node-self.ts'
+import { NodeReviewQueue, REVIEW_PER_NODE_MAX, REVIEW_QUEUE_MAX, SELF_UPDATE_DAILY_MAX, SessionTaint, TAINT_CAP, selfUpdate, selfUpdateTool, sessionSource, toolTaint } from '../../src/node-self.ts'
 
 describe('toolTaint: an A2A tool result that hands the model peer-originated text', () => {
   it('any route answer, inbound task rows, and peer listings taint; empty task lists and other tools do not', () => {
@@ -69,6 +69,23 @@ describe('node_update_self renders the current sha to the model on a refusal', (
     const tool = selfUpdateTool({ store, queue: new NodeReviewQueue(''), taint: new SessionTaint(''), events: () => [], onWritten: () => undefined }, 'chief', 's-1') as unknown as { output: { render: (a: unknown, v: unknown) => Array<{ text: string }> } }
     const sha = 'a'.repeat(64)
     expect(tool.output.render({}, { ok: false, code: 'conflict', error: 'stale', current_sha256: sha })[0]?.text).toContain(sha)
+  })
+})
+
+describe('sessionSource: tool-call evidence and the installed session-reference shape', () => {
+  const person = { type: 'user/message', data: { source: { kind: 'user' } } }
+  const lookups = { tainted: (id: string) => id === 'dirty', local: (id: string) => id === 'clean' || id === 'dirty' }
+  it('an A2A tool call or run_code sub-dispatch in the log is remote evidence (it survives into a fork)', () => {
+    expect(sessionSource([person, { type: 'tool/call', data: { name: 'a2a_route' } }], lookups)).toEqual({ local: false, via: 'tool:a2a_route', evidence: true })
+    expect(sessionSource([person, { type: 'tool/ptc-dispatch', data: { name: 'a2a_tasks' } }], lookups)).toEqual({ local: false, via: 'tool:a2a_tasks', evidence: true })
+    expect(sessionSource([person, { type: 'tool/call', data: { name: 'shell' } }], lookups)).toEqual({ local: true })
+  })
+  it('session-reference names its sessions in references[].sessionId', () => {
+    const ref = (ids: unknown[]) => ({ type: 'user/message', data: { source: { kind: 'session-reference', references: ids.map(sessionId => ({ sessionId })) } } })
+    expect(sessionSource([person, ref(['clean'])], lookups)).toEqual({ local: true })
+    expect(sessionSource([person, ref(['clean', 'dirty'])], lookups)).toEqual({ local: false, via: 'session-reference:tainted', evidence: true })
+    expect(sessionSource([person, ref(['clean', 'stranger'])], lookups)).toEqual({ local: false, via: 'session-reference:unknown-sender', evidence: false })
+    expect(sessionSource([person, ref([])], lookups)).toEqual({ local: false, via: 'session-reference:no-sender', evidence: false })
   })
 })
 
