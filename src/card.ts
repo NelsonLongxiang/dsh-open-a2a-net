@@ -118,6 +118,8 @@ function referrals(wire: WireCard): readonly string[] | undefined {
  * The unsigned `sessionTeams` listing passes through only as an array of
  * well-formed entries; any other shape drops the field instead of rejecting
  * the card, because cards from nodes without joined sessions carry none.
+ * A missing description is the D2 `exposureExcerpt: off` form, not a
+ * malformed node: retain its handle and normalize its excerpt to empty.
  * @param wire - the shape-checked card candidate.
  * @returns the session-team entries, or `undefined` when absent or malformed.
  */
@@ -127,11 +129,11 @@ function sessionTeams(wire: WireCard): readonly A2aSessionTeamInfo[] | undefined
   for (const entry of wire.sessionTeams) {
     const team = entry as Partial<A2aSessionTeamInfo> | null
     if (typeof team?.team !== 'string' || team.team === '') continue
-    if (typeof team.name !== 'string' || typeof team.description !== 'string') continue
+    if (typeof team.name !== 'string' || (team.description !== undefined && typeof team.description !== 'string')) continue
     entries.push({
       team: team.team,
       name: team.name,
-      description: team.description,
+      description: team.description ?? '',
       ...(typeof team.workspace === 'string' && team.workspace !== '' ? { workspace: team.workspace } : {}),
     })
   }
