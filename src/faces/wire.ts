@@ -167,6 +167,16 @@ export interface WireDeps {
  * @param webServer - the settled host web server.
  * @param d - the captures listed on {@link WireDeps}.
  */
+/**
+ * #187: what a verified claim may vouch for at settlement. The signing key always (the card was
+ * fetched and its key verified); the ORIGIN only when the claim URL is that origin's root — a card
+ * fetched from a path under an origin proves the path's publisher, not the origin's host.
+ */
+export function settlerClaimFields(claim: { ok: boolean; cli?: true; callerUrl?: string; card?: { publicKey: string } }, originOf: (url: string) => string): { claimOrigin?: string; claimKey?: string } {
+  if (!claim.ok || claim.cli === true || claim.card === undefined || claim.callerUrl === undefined) return {}
+  return { ...(isRootOriginUrl(claim.callerUrl) ? { claimOrigin: originOf(claim.callerUrl) } : {}), claimKey: claim.card.publicKey }
+}
+
 export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
   const {
     ctx,
@@ -686,7 +696,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // #114 S4: the settler is this delivery's caller, as proven here. A CLI identity's claim URL
           // is not a host's origin (its origin is unconstrained), so it never vouches for one (review of PR #140 P1-2).
           // #139: the claim's card key names the host whatever address spelling it signed with.
-          const refusedSettlement = settleAndAnnounce(message, { caller, proof: callerProof, ...(claim.ok && claim.cli !== true ? { claimOrigin: originOf(claim.callerUrl), claimKey: claim.card.publicKey } : {}), ingress: 'wire' })
+          const refusedSettlement = settleAndAnnounce(message, { caller, proof: callerProof, ...settlerClaimFields(claim, originOf), ingress: 'wire' })
           // #139 (design §4.4): every answer this delivery gets carries the refusal.
           if (refusedSettlement !== undefined) withSettlementField(res, refusedSettlement)
           // gh#45 CLI mailbox (wire face): a delivery targeting a DEPOSITED

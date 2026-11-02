@@ -19,7 +19,7 @@
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
-    "src/faces/wire.ts": "173544821007a44c608137b7b0e230724dd5b4068ca76549c669aa8d19cb63e0",
+    "src/faces/wire.ts": "7e87e27ffa16a50e0e95f57ef807b3548d1e6bdec39807c1192de76a53d14f0c",
     "src/faces/canvas-notify.ts": "5120c3828d5a9b8928006059fc516d88ac6813afecc9ae0464223b598a4b6850",
     "src/task-auth.ts": "97479423e91648c22a36807aef18ad2b92c7eaa746f4e41ef64b57acd38d9c1c",
     "src/origin-claim.ts": "7ea47df6458b10f65800f3f241f16e8d19b077b793387db743fbabed09c8d450",
@@ -116,19 +116,19 @@
     {
       "page": "p1-arch",
       "cell": "c2",
-      "ref": "src/faces/wire.ts:503",
+      "ref": "src/faces/wire.ts:513",
       "expect": "path: '/a2a/direct',"
     },
     {
       "page": "p1-arch",
       "cell": "c3",
-      "ref": "src/faces/wire.ts:345",
+      "ref": "src/faces/wire.ts:355",
       "expect": "path: '/a2a/log',"
     },
     {
       "page": "p1-arch",
       "cell": "c4",
-      "ref": "src/faces/wire.ts:424",
+      "ref": "src/faces/wire.ts:434",
       "expect": "path: '/a2a/query',"
     },
     {
@@ -332,7 +332,7 @@
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/faces/wire.ts:681",
+      "ref": "src/faces/wire.ts:691",
       "expect": "if (refuseIfFlooded(caller, message, team, taskId, res)) return"
     },
     {
@@ -344,7 +344,7 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/wire.ts:170",
+      "ref": "src/faces/wire.ts:180",
       "expect": "export function registerWireFaces(webServer: WebServer, d: WireDeps): void {"
     },
     {
