@@ -4,7 +4,7 @@
 > workbench-market，接收方是 dsh-open-a2a-net 主机上的接单节点。属主
 > 2026-11-02 原话授权推进：「那你建议开始吧，我们已经讨论结束了，剩下的都交给你吧」。
 >
-> - **发送方实现**：NelsonLongxiang/workbench-market 仓的 workbench-events 模块（PR 号待补）。
+> - **发送方实现**：NelsonLongxiang/workbench-market 仓 `server/src/workbench-events.ts`（[workbench-market#348](https://github.com/NelsonLongxiang/workbench-market/pull/348)，依赖 OriginClaim 绑定形式签名 [workbench-market#347](https://github.com/NelsonLongxiang/workbench-market/pull/347)）。
 > - **接收方操作说明**：[`src/skill/references/intake.md`](../../src/skill/references/intake.md)。
 > - **本仓代码改动**：无。信封走现有的 `/a2a/direct` 送达面和 OriginClaim 来源签名，本仓不新增字段解析。
 
