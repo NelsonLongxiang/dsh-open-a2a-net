@@ -77,23 +77,24 @@ const pinOf = (version: number | undefined, sha: string | undefined): LayerPin =
  * still open at the end is closed. Tracked by the CommonMark rules: an opener is ``` or ~~~ (three
  * or more) indented at most three spaces, and a backtick opener's info string has no backtick (else
  * it is inline code); inside, only a run of the SAME character, at least as long, followed by nothing
- * but blanks closes it. A fence inside a list item ends with the item, so it is not tracked here.
+ * but blanks closes it. Lines split on CRLF, CR or LF alike; the closer carries the opener's indent, so
+ * a fence opened inside a list item is closed inside it rather than opening a new one at column 0.
  */
 export function closeFences(text: string): string {
-  let open: { ch: string; len: number } | undefined
-  for (const line of text.split('\n')) {
+  let open: { indent: string; ch: string; len: number } | undefined
+  for (const line of text.split(/\r\n|\r|\n/)) {
     if (open === undefined) {
-      const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
+      const m = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line)
       if (m === null) continue
-      const fence = m[1] as string
-      if (fence.startsWith('`') && (m[2] as string).includes('`')) continue
-      open = { ch: fence.charAt(0), len: fence.length }
+      const fence = m[2] as string
+      if (fence.startsWith('`') && (m[3] as string).includes('`')) continue
+      open = { indent: m[1] as string, ch: fence.charAt(0), len: fence.length }
     } else {
       const m = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line)
       if (m !== null && (m[1] as string).startsWith(open.ch) && (m[1] as string).length >= open.len) open = undefined
     }
   }
-  return open === undefined ? text : `${text}\n${open.ch.repeat(open.len)}`
+  return open === undefined ? text : `${text}\n${open.indent}${open.ch.repeat(open.len)}`
 }
 
 const fail = <T>(code: 'bad-request' | 'not-found' | 'conflict' | 'unavailable', error: string): NodeResult<T> => ({ ok: false, code, error })
@@ -398,7 +399,12 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
       if (typeof session !== 'string' || session === '') return fail('bad-request', 'session is required')
       if (!d.joined(session)) return fail('conflict', `session ${session} is not joined — only a joined session carries a node (§3)`)
       if (d.archived(session)) return fail('conflict', `session ${session} is archived — an archived session carries no node (§3)`)
-      if (pendingEnd.has(session)) return fail('conflict', `session ${session} left the network and its old binding is still being ended (a write failed) — retry once the a2a home is writable`)
+      if (pendingEnd.has(session)) {
+        // Retry the pending end here: once the a2a home is writable again, bind goes through.
+        const ended = d.bindings.deleteWhere(b => b.session === session)
+        if (!ended.ok) return fail('conflict', `session ${session} left the network and its old binding is still being ended (a write failed) — retry once the a2a home is writable`)
+        pendingEnd.delete(session)
+      }
       if (d.store.get(name) === undefined) return fail('not-found', `no node ${name}`)
       const existing = d.bindings.get(session)
       if (existing !== undefined && existing.node !== name) return fail('conflict', `session ${session} already carries ${existing.node} — unbind it first (one node per session)`)

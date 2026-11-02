@@ -760,7 +760,12 @@ describe('#174 — frozen versions across a plugin reload, retries, re-join, hea
   it('r3 P2: fences are tracked by CommonMark — legal notes keep the core heading, unclosed ~~~ / ```` are closed', async () => {
     type Node = { type: string; depth?: number; children?: Node[]; value?: string }
     const textOf = (n: Node): string => n.value ?? (n.children ?? []).map(textOf).join('')
-    const cases = ['```行内``` 开头的一句话', '~~~\n```\n~~~', '````\n```\n````', '~~~\n没闭合', '````\n没闭合', '```sh\n没闭合']
+    const cases = [
+      '```行内``` 开头的一句话', '~~~\n```\n~~~', '````\n```\n````', '~~~\n没闭合', '````\n没闭合', '```sh\n没闭合',
+      // r4: CRLF / CR line ends, a fence inside a list item, a closer with trailing text, tab and 4-space "openers".
+      '```sh\r\nls\r\n```', '```sh\r\n没闭合', '```sh\r没闭合', '- 一项\n\n  ```\n  没闭合',
+      '```\n``` 后面有字\n没闭合', '\t```\n不是围栏', '    ```\n缩进代码块',
+    ]
     for (const note of cases) {
       const m = await mount()
       try {
@@ -793,6 +798,9 @@ describe('#174 — frozen versions across a plugin reload, retries, re-join, hea
       expect(await m.prompt(next)).not.toContain('节点契约')
       expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: A })).status).toBe(409)
       chmodSync(dir, 0o700)
+      // r4 P3-1: once the home is writable, bind retries the pending end in place and goes through.
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: A })).status).toBe(200)
+      expect(await m.prompt(next)).toContain('节点契约')
     } finally {
       chmodSync(dir, 0o700)
       await m.dispose()
@@ -807,6 +815,10 @@ describe('#174 — frozen versions across a plugin reload, retries, re-join, hea
       await writeMutable(m, { 当前状态: '第二版' })
       const file = join(m.home, 'a2a', 'node-bindings.json')
       writeFileSync(file, JSON.stringify({ bindings: [{ session: A, node: 'chief', by: 'human:owner', at: 'x', core_version: 1, mutable_version: 1 }] }))
+      await m.reload(true)
+      expect(await m.prompt(a)).toContain('第二版')
+      // A legacy row that says 0 without a sha is "not recorded", not "empty": it still mounts the current version.
+      writeFileSync(file, JSON.stringify({ bindings: [{ session: A, node: 'chief', by: 'human:owner', at: 'x', core_version: 1, mutable_version: 0 }] }))
       await m.reload(true)
       expect(await m.prompt(a)).toContain('第二版')
       const row = (JSON.parse(readFileSync(file, 'utf8')) as { bindings: Array<{ mutable_version: number; mutable_sha256: string }> }).bindings[0]
