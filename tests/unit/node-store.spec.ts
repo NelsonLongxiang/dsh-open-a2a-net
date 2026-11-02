@@ -4,7 +4,7 @@
  * CAS on every layer write, quotas, persistence and corrupt-file resilience.
  */
 import { describe, expect, it } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { MUTABLE_SECTIONS, NodeStore, promptSha, QUOTA } from '../../src/node-store.ts'
@@ -85,6 +85,15 @@ describe('NodeStore — prompt versions', () => {
     expect(s.writeLayer('n-1', 'mutable', full, meta(''))).toMatchObject({ ok: false, code: 'quota' })
   })
 
+  it('refuses an empty patch, counts quota in code points, and rejects control characters in teams', () => {
+    const s = new NodeStore('')
+    s.create({ name: 'n-1' }, 'h')
+    expect(s.writeLayer('n-1', 'mutable', {}, meta(''))).toMatchObject({ ok: false, code: 'bad-request' })
+    expect(s.writeLayer('n-1', 'mutable', { 当前状态: '😀'.repeat(QUOTA.mutableSection) }, meta(''))).toMatchObject({ ok: true })
+    expect(s.create({ name: 'n-2', teams: ['dsh/canvas/a\nb'] }, 'h')).toMatchObject({ ok: false, code: 'bad-request' })
+    expect(s.create({ name: 'n-2', teams: ['DSH/canvas/core'] }, 'h')).toMatchObject({ ok: false, code: 'bad-request' })
+  })
+
   it('requires a reason', () => {
     const s = new NodeStore('')
     s.create({ name: 'n-1' }, 'h')
@@ -126,14 +135,100 @@ describe('NodeStore — disk', () => {
     expect(b.version('n-1', 'mutable', 1)?.sections['当前状态']).toBe('one')
   })
 
-  it('survives a corrupt roster without throwing', () => {
+  it('a roster that does not parse is moved aside and the store turns read-only (never overwritten)', () => {
     const dir = root()
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'nodes.json'), '{not json')
     const s = new NodeStore(dir)
     expect(s.list()).toEqual([])
-    expect(s.create({ name: 'n-1' }, 'h').ok).toBe(true)
-    expect(existsSync(join(dir, 'nodes.json'))).toBe(true)
+    expect(s.readOnly).toMatch(/moved to/)
+    expect(s.create({ name: 'n-1' }, 'h')).toMatchObject({ ok: false, code: 'unavailable' })
+    expect(existsSync(join(dir, 'nodes.json'))).toBe(false)
+    const aside = readdirSync(dir).find(f => f.startsWith('nodes.json.corrupt-'))
+    expect(aside).toBeDefined()
+    expect(readFileSync(join(dir, aside!), 'utf8')).toBe('{not json')
+  })
+
+  it('a lost roster does not free a used name: its version directory still reserves it', () => {
+    const dir = root()
+    const a = new NodeStore(dir)
+    a.create({ name: 'n-1' }, 'h')
+    a.writeLayer('n-1', 'core', { core: 'old identity' }, meta(''))
+    rmSync(join(dir, 'nodes.json'))
+    const b = new NodeStore(dir)
+    expect(b.create({ name: 'n-1' }, 'h')).toMatchObject({ ok: false, code: 'conflict' })
+  })
+
+  it('drops malformed roster entries on load instead of throwing later', () => {
+    const dir = root()
+    const a = new NodeStore(dir)
+    a.create({ name: 'good-1' }, 'h')
+    const snap = JSON.parse(readFileSync(join(dir, 'nodes.json'), 'utf8'))
+    snap.nodes.push({ name: 'bad-1', label: 'x' }) // no prompt / carrier / role …
+    writeFileSync(join(dir, 'nodes.json'), JSON.stringify(snap))
+    const b = new NodeStore(dir)
+    expect(b.list().map(n => n.name)).toEqual(['good-1'])
+    expect(b.dropped).toEqual(['bad-1'])
+    expect(b.writeLayer('good-1', 'core', { core: 'c' }, meta('')).ok).toBe(true)
+    expect(b.writeLayer('bad-1', 'core', { core: 'c' }, meta(''))).toMatchObject({ ok: false, code: 'not-found' })
+  })
+
+  it('on disk: CAS, rollback and write-after-rollback number past every file', () => {
+    const dir = root()
+    const s = new NodeStore(dir)
+    s.create({ name: 'n-1' }, 'h')
+    const v1 = s.writeLayer('n-1', 'mutable', { 当前状态: 'one', 已知陷阱: 'T' }, meta(''))
+    if (!v1.ok) throw new Error(v1.error)
+    expect(s.writeLayer('n-1', 'mutable', { 当前状态: 'x' }, meta('stale'))).toMatchObject({ ok: false, code: 'conflict' })
+    const v2 = s.writeLayer('n-1', 'mutable', { 当前状态: 'two' }, meta(v1.value.sha256))
+    if (!v2.ok) throw new Error(v2.error)
+    const back = s.rollback('n-1', 'mutable', 1, { expectedSha: v2.value.sha256, reason: 'r', by: 'h' })
+    if (!back.ok) throw new Error(back.error)
+    const reopened = new NodeStore(dir)
+    const v4 = reopened.writeLayer('n-1', 'mutable', { 当前重点: 'four' }, meta(back.value.sha256))
+    expect(v4).toMatchObject({ ok: true, value: { version: 4, sections: { 当前状态: 'one', 已知陷阱: 'T', 当前重点: 'four' } } })
+    expect(readdirSync(join(dir, 'nodes', 'n-1')).sort()).toEqual(['mutable-v1.json', 'mutable-v2.json', 'mutable-v3.json', 'mutable-v4.json'])
+  })
+
+  it('rollback never promotes a hand-placed or foreign file (and never throws on one)', () => {
+    const dir = root()
+    const s = new NodeStore(dir)
+    s.create({ name: 'n-1' }, 'h')
+    const c1 = s.writeLayer('n-1', 'core', { core: 'c' }, meta(''))
+    if (!c1.ok) throw new Error(c1.error)
+    writeFileSync(join(dir, 'nodes', 'n-1', 'mutable-v5.json'), '{"stray":true}')
+    writeFileSync(join(dir, 'nodes', 'n-1', 'mutable-v6.json'), readFileSync(join(dir, 'nodes', 'n-1', 'core-v1.json')))
+    expect(s.rollback('n-1', 'mutable', 5, { expectedSha: '', reason: 'r', by: 'h' })).toMatchObject({ ok: false, code: 'conflict' })
+    expect(s.rollback('n-1', 'mutable', 6, { expectedSha: '', reason: 'r', by: 'h' })).toMatchObject({ ok: false, code: 'conflict' })
+    const tampered = { ...c1.value, sections: { core: 'tampered' } }
+    writeFileSync(join(dir, 'nodes', 'n-1', 'core-v1.json'), JSON.stringify(tampered))
+    expect(s.rollback('n-1', 'core', 1, { expectedSha: c1.value.sha256, reason: 'r', by: 'h' })).toMatchObject({ ok: false, code: 'conflict' })
+  })
+
+  it('a patch refuses to run when the current mutable file is missing or altered (no silent blanking)', () => {
+    const dir = root()
+    const s = new NodeStore(dir)
+    s.create({ name: 'n-1' }, 'h')
+    const v1 = s.writeLayer('n-1', 'mutable', { 已知陷阱: 'TRAPS' }, meta(''))
+    if (!v1.ok) throw new Error(v1.error)
+    writeFileSync(join(dir, 'nodes', 'n-1', 'mutable-v1.json'), '{broken')
+    expect(s.writeLayer('n-1', 'mutable', { 当前状态: 'B' }, meta(v1.value.sha256))).toMatchObject({ ok: false, code: 'conflict' })
+    expect(s.versions('n-1', 'mutable')).toEqual([1])
+  })
+
+  it('a failed roster write leaves memory as it was', () => {
+    const dir = root()
+    const s = new NodeStore(dir)
+    s.create({ name: 'n-1', label: 'before' }, 'h')
+    chmodSync(dir, 0o500)
+    try {
+      expect(s.update('n-1', { label: 'after' })).toMatchObject({ ok: false, code: 'unavailable' })
+      expect(s.get('n-1')?.label).toBe('before')
+      expect(s.create({ name: 'n-2' }, 'h')).toMatchObject({ ok: false, code: 'unavailable' })
+      expect(s.get('n-2')).toBeUndefined()
+    } finally {
+      chmodSync(dir, 0o700)
+    }
   })
 
   it('keeps archived versions on disk and the name retired across restarts', () => {

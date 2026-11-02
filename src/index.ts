@@ -1997,7 +1997,7 @@ export function apply(ctx: Context, config: Config): void {
         get ownerAnnounceRestartPending() { return ownerAnnounceRestartPending },
         set ownerAnnounceRestartPending(v) { ownerAnnounceRestartPending = v },
       })
-      registerNodeFaces(webServer, { ctx, nodeStore, apiKey: () => config.apiKey, secretEqual, controlRoute, readJsonBody })
+      registerNodeFaces(webServer, { ctx, logger, nodeStore, apiKey: () => config.apiKey, secretEqual, controlRoute, readJsonBody })
     })
   }
 
