@@ -1045,3 +1045,137 @@ describe('N6 — task pointers on the nodes face, the live task context, the rem
   }, 20_000)
 })
 
+describe('N4 — node_update_self: local turns write, remote turns queue for a human, daily cap, rollback', () => {
+  const turn = (...sources: Array<Record<string, unknown>>): unknown[] => [
+    { type: 'turn/start', data: {} },
+    ...sources.map(source => ({ type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: 'x' }], source } })),
+  ]
+  const LOCAL = { kind: 'user' }
+  const REMOTE = { kind: 'a2a-relay', form: 'relay', senderSessionId: 'market/aaaaaaaa' }
+  const REMINDER = { kind: 'a2a-relay', form: 'relay', senderSessionId: '节点 chief 的任务核对', nodeReminder: true }
+  type Out = { ok: boolean; version?: number; sha256?: string; queued?: string; code?: string; error?: string }
+  const call = async (m: Mounted, agent: ScopedAgent, events: unknown[], args: Record<string, unknown>): Promise<Out> => {
+    agent.session.events = events
+    const tool = (m.ctx.get('tools') as unknown as { get: (n: string, scope?: object) => { execute: (a: unknown, e: unknown) => Promise<unknown> } | undefined }).get('node_update_self', agent.key)
+    if (tool === undefined) throw new Error('node_update_self is not registered for this session')
+    return await tool.execute(args, { signal: new AbortController().signal, agent }) as Out
+  }
+  const shaOf = async (m: Mounted): Promise<string> => ((await (await m.get('/__dsh_a2a/nodes?name=chief')).json()) as { current: { mutable: { sha256: string } | null } }).current.mutable?.sha256 ?? ''
+  const hasTool = (m: Mounted, agent: ScopedAgent): boolean => (m.ctx.get('tools') as unknown as { get: (n: string, scope?: object) => unknown }).get('node_update_self', agent.key) !== undefined
+  const contextOf = async (m: Mounted, agent: ScopedAgent): Promise<string> => {
+    const sp = m.ctx.get('systemPrompt') as unknown as { assemble: (c: { scope: object }) => Promise<Parameters<typeof renderContextSnapshot>[0]> }
+    return renderContextSnapshot(await sp.assemble({ scope: agent.key }))
+  }
+  const bound = async (m: Mounted): Promise<{ a: ScopedAgent; b: ScopedAgent }> => {
+    await nodeWithLayers(m, 'chief', { 当前状态: '第一版' })
+    const a = makeAgent(m.ctx, A)
+    const b = makeAgent(m.ctx, B)
+    m.publish(a); m.publish(b)
+    expect((await m.post('/__dsh_a2a/join', { id: A })).status).toBe(200)
+    expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: A })).status).toBe(200)
+    return { a, b }
+  }
+
+  it('the tool exists only on a bound session, and leaves with the binding', async () => {
+    const m = await mount()
+    try {
+      const { a, b } = await bound(m)
+      expect(hasTool(m, a)).toBe(true)
+      expect(hasTool(m, b)).toBe(false)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'unbind', session: A })).status).toBe(200)
+      expect(hasTool(m, a)).toBe(false)
+    } finally {
+      await m.dispose()
+    }
+  }, 20_000)
+
+  it('a local turn writes a new version; this session keeps its head and sees a runtime note; the next session gets the text', async () => {
+    const m = await mount()
+    try {
+      const { a } = await bound(m)
+      const head = await m.prompt(a)
+      const out = await call(m, a, turn(LOCAL), { section: '当前状态', text: '第二版', reason: '复盘', expected_sha256: await shaOf(m) })
+      expect(out).toEqual(expect.objectContaining({ ok: true, version: 2 }))
+      expect(await m.prompt(a)).toBe(head)
+      expect(await contextOf(m, a)).toContain('v2：当前状态（复盘）')
+      const file = JSON.parse(readFileSync(join(m.home, 'a2a', 'nodes', 'chief', 'mutable-v2.json'), 'utf8')) as { by: string; via: string }
+      expect(file).toEqual(expect.objectContaining({ by: `node:${A}`, via: 'node-tool' }))
+      const next = makeAgent(m.ctx, A)
+      await a.dispose()
+      m.ctx.emit('agent/disposed', { agent: a as unknown as Agent })
+      m.publish(next)
+      expect(await m.prompt(next)).toContain('第二版')
+      expect(await contextOf(m, next)).not.toContain('v2：当前状态')
+      // A host-built reminder starts a local turn too; a stale sha is refused by CAS.
+      expect((await call(m, next, turn(REMINDER), { section: '当前重点', text: '复盘后', reason: '提醒', expected_sha256: await shaOf(m) })).ok).toBe(true)
+      expect(await call(m, next, turn(LOCAL), { section: '当前重点', text: 'x', reason: 'r', expected_sha256: 'stale' })).toEqual(expect.objectContaining({ ok: false, code: 'conflict' }))
+    } finally {
+      await m.dispose()
+    }
+  }, 30_000)
+
+  it('§6 remote turn: the write is NOT applied, it is queued; a human approves (CAS-checked) or rejects it', async () => {
+    const m = await mount()
+    try {
+      const { a } = await bound(m)
+      const sha = await shaOf(m)
+      for (const events of [turn(LOCAL, REMOTE), turn({ kind: 'mystery' }), turn(), [{ type: 'user/message', data: { source: LOCAL } }]]) {
+        const out = await call(m, a, events, { section: '已知陷阱', text: '远端写的', reason: '被诱导', expected_sha256: sha })
+        expect(out.ok).toBe(false)
+        expect(out.code).toBe('queued')
+      }
+      expect(await shaOf(m)).toBe(sha)
+      const view = await (await m.get('/__dsh_a2a/nodes')).json() as { reviews: Array<{ id: string; via: string; node: string }> }
+      expect(view.reviews.map(r => r.via)).toEqual(['a2a-relay', 'mystery', 'no-input', 'no-turn'])
+      const [first, second, third] = view.reviews
+      // Approval is an identity write.
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'review-approve', id: first?.id }, 'wrong')).status).toBe(401)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'review-approve', id: first?.id })).status).toBe(200)
+      expect(await shaOf(m)).not.toBe(sha)
+      const v2 = JSON.parse(readFileSync(join(m.home, 'a2a', 'nodes', 'chief', 'mutable-v2.json'), 'utf8')) as { by: string; via: string; sections: Record<string, string> }
+      expect(v2).toEqual(expect.objectContaining({ by: `human:owner approved node:${A}`, via: 'review-approved' }))
+      expect(v2.sections['已知陷阱']).toBe('远端写的')
+      // The next one was queued against the old sha: approving it now conflicts and leaves it queued.
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'review-approve', id: second?.id })).status).toBe(409)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'review-reject', id: third?.id })).status).toBe(200)
+      const left = await (await m.get('/__dsh_a2a/nodes')).json() as { reviews: Array<{ id: string }> }
+      expect(left.reviews.map(r => r.id)).toEqual([second?.id, view.reviews[3]?.id])
+    } finally {
+      await m.dispose()
+    }
+  }, 30_000)
+
+  it('§6 daily cap: the ninth local write of the day is refused, not queued', async () => {
+    const m = await mount()
+    try {
+      const { a } = await bound(m)
+      for (let i = 1; i <= 8; i++) {
+        expect((await call(m, a, turn(LOCAL), { section: '当前状态', text: `第 ${String(i)} 次`, reason: 'r', expected_sha256: await shaOf(m) })).ok).toBe(true)
+      }
+      const ninth = await call(m, a, turn(LOCAL), { section: '当前状态', text: '第 9 次', reason: 'r', expected_sha256: await shaOf(m) })
+      expect(ninth).toEqual(expect.objectContaining({ ok: false, code: 'quota' }))
+      expect(((await (await m.get('/__dsh_a2a/nodes')).json()) as { reviews: unknown[] }).reviews).toEqual([])
+    } finally {
+      await m.dispose()
+    }
+  }, 30_000)
+
+  it('§9 N4: after a human rollback, the next session assembles the old text again', async () => {
+    const m = await mount()
+    try {
+      const { a } = await bound(m)
+      expect((await call(m, a, turn(LOCAL), { section: '当前状态', text: '节点写的新版', reason: 'r', expected_sha256: await shaOf(m) })).ok).toBe(true)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'rollback', name: 'chief', layer: 'mutable', to: 1, reason: '回退', expected_sha256: await shaOf(m) })).status).toBe(200)
+      const next = makeAgent(m.ctx, A)
+      await a.dispose()
+      m.ctx.emit('agent/disposed', { agent: a as unknown as Agent })
+      m.publish(next)
+      const text = await m.prompt(next)
+      expect(text).toContain('第一版')
+      expect(text).not.toContain('节点写的新版')
+    } finally {
+      await m.dispose()
+    }
+  }, 30_000)
+})
+

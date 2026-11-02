@@ -37,7 +37,10 @@
  *   pointer that changes state shows at the next step (§5 "即时"). Its text
  *   rides a scoped variable too. A pointer that finished calls `remind`:
  *   each live session carrying that node gets a follow-up turn (§6).
- * - `node_update_self` needs the self-update queue (N4) and lands with it.
+ * - `node_update_self` (N4) is registered with the sections on the bound
+ *   session's own scope, and leaves with them. A write it makes is echoed in
+ *   a live `a2a:node:self` context for the rest of that session (the frozen
+ *   sections do not change, §5).
  * @module @nelsonlongxiang/dsh-open-a2a-net/node-bind
  */
 
@@ -46,12 +49,14 @@ import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { MessageId, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { MUTABLE_SECTIONS, type NodeRecord, type NodeResult, type NodeStore, type PromptVersion } from './node-store.ts'
+import { selfUpdateTool, type SelfUpdateDeps } from './node-self.ts'
 
 /** §5: section names, orders and the scoped variables that carry their frozen text. */
 export const NODE_PROMPT = {
   mutable: { section: 'a2a:node:mutable', order: 10150, variable: 'a2a_node_mutable' },
   core: { section: 'a2a:node:core', order: 10180, variable: 'a2a_node_core' },
   tasks: { context: 'a2a:node:tasks', order: 9150, variable: 'a2a_node_tasks' },
+  self: { context: 'a2a:node:self', order: 9160, variable: 'a2a_node_self' },
 } as const
 
 export interface NodeBinding {
@@ -290,6 +295,8 @@ export interface NodeBinderDeps {
   readonly tasksText?: (node: string) => string
   /** Reminders owed to the node (finished while no session carried it); taken — and cleared — at mount. */
   readonly pendingReminders?: (node: string) => string[]
+  /** N4: what `node_update_self` needs (absent = no tool). */
+  readonly selfUpdate?: Omit<SelfUpdateDeps, 'onWritten'>
 }
 
 export interface NodeBinder {
@@ -330,12 +337,16 @@ function reminderMessage(node: string, text: string): UserMessage {
     id: MessageId(`a2a-node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`),
     role: 'user',
     content: [{ type: 'text', text }],
-    source: { kind: 'a2a-relay', form: 'relay', senderSessionId: `节点 ${node} 的任务核对` },
+    // nodeReminder marks it HOST-built: a turn it starts is a local turn for node_update_self (N4). Remote
+    // deliveries are relayed with a fixed source shape, so they cannot carry this field.
+    source: { kind: 'a2a-relay', form: 'relay', senderSessionId: `节点 ${node} 的任务核对`, nodeReminder: true } as UserMessage['source'],
   }
 }
 
 export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
   const mounts = new Map<string, { dispose: () => void; info: MountedNode }>()
+  /** N4: the self-updates each mounted session wrote, echoed in its live context. */
+  const selfNotes = new Map<string, string[]>()
   let seenJoined = new Set(d.joinedList())
   /**
    * Sessions that left but whose binding could not be deleted yet: retried at every join change, and
@@ -347,6 +358,7 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
 
   const unmount = (session: string): void => {
     const m = mounts.get(session)
+    selfNotes.delete(session)
     if (m === undefined) return
     mounts.delete(session)
     try { m.dispose() } catch (error) { d.logger.warn('a2a nodes: unmount of %s failed: %s', session, String(error)) }
@@ -383,6 +395,7 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
       context: (c: { name: string; order: number; text: string }) => () => void
       variable: (name: string, provider: () => string | undefined) => () => void
     } | undefined
+    const tools = agent.ctx.get('tools') as { register: (definition: unknown) => () => void } | undefined
     if (sp === undefined) throw new Error('systemPrompt is not reachable from this session scope')
     const disposers: Array<() => void> = []
     try {
@@ -395,6 +408,20 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
         // Live, unlike the two sections: a provider that never throws (assembly must not fail on it).
         disposers.push(sp.variable(NODE_PROMPT.tasks.variable, () => { try { return tasksText(name) } catch { return '' } }))
         disposers.push(sp.context({ name: NODE_PROMPT.tasks.context, order: NODE_PROMPT.tasks.order, text: `{{${NODE_PROMPT.tasks.variable}}}` }))
+      }
+      if (d.selfUpdate !== undefined && tools !== undefined) {
+        // A fresh mount is a fresh session view: its notes start empty (the frozen layer already has the writes).
+        selfNotes.set(session, [])
+        const notesOf = (): string => {
+          const notes = selfNotes.get(session) ?? []
+          return notes.length === 0 ? '' : ['## 本会话已记录的节点自记更新（a2a:node:self）', '', '下面这些已经写进节点自记，从下一个会话起生效；本会话的「节点自记」段仍是挂载时的版本。', '', ...notes].join('\n')
+        }
+        disposers.push(sp.variable(NODE_PROMPT.self.variable, notesOf))
+        disposers.push(sp.context({ name: NODE_PROMPT.self.context, order: NODE_PROMPT.self.order, text: `{{${NODE_PROMPT.self.variable}}}` }))
+        disposers.push(tools.register(selfUpdateTool({
+          ...d.selfUpdate,
+          onWritten: (s, v, section) => { selfNotes.get(s)?.push(`- v${String(v.version)}：${section}（${v.reason.slice(0, 80)}）`) },
+        }, name, session)))
       }
     } catch (error) {
       for (const dispose of disposers.reverse()) try { dispose() } catch { /* already gone */ }
