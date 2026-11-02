@@ -5,6 +5,14 @@
  *   at most one node, a node may have several live sessions. The table is
  *   `node-bindings.json` under the a2a home; it survives restarts and
  *   cooling unloads (`agent/disposed` is not the end of a binding).
+ * - A binding ends when the session leaves the network (leave, or its join
+ *   intent falls off JOIN_CAP), or when its node is archived: the row is
+ *   deleted and the sections come off. An ARCHIVED session never mounts and
+ *   cannot bind; its row is kept, like its join intent (the 3081 lesson: a
+ *   transient archived reading must not destroy durable intent).
+ * - Mounts belong to the session scope, not to this plugin: the plugin
+ *   disposes every mount it made when it unloads (`disposeAll`), so a
+ *   reloaded plugin never meets registrations it cannot see.
  * - Binding mounts at once (§3 "绑定即生效"): two prompt sections are
  *   registered on that session's own `agent.ctx` — the mutable layer at
  *   10150, the core layer after it at 10180 with an explicit precedence
@@ -113,11 +121,18 @@ export class NodeBindings {
       this.readOnlyReason = `node-bindings.json is unreadable (copy kept at ${aside}); repair it, then restart`
       return
     }
+    let dropped = 0
     for (const row of list as unknown[]) {
       const r = row as Partial<NodeBinding> | null
-      if (r === null || typeof r !== 'object' || typeof r.session !== 'string' || typeof r.node !== 'string') continue
-      if (this.rows.some(b => b.session === r.session)) continue
+      if (r === null || typeof r !== 'object' || typeof r.session !== 'string' || typeof r.node !== 'string' || this.rows.some(b => b.session === r.session)) {
+        dropped++
+        continue
+      }
       this.rows.push({ session: r.session, node: r.node, by: typeof r.by === 'string' ? r.by : '', at: typeof r.at === 'string' ? r.at : '' })
+    }
+    // The next commit rewrites the table without the dropped rows: keep the original first (as the roster does).
+    if (dropped > 0) {
+      try { copyFileSync(this.file, `${this.file}.dropped-${this.now().replace(/[:.]/g, '-')}`) } catch { /* best effort; the rows were unusable either way */ }
     }
   }
 
@@ -148,8 +163,17 @@ export class NodeBindings {
   }
 
   delete(session: string): NodeResult<true> {
+    if (this.readOnlyReason !== '') return fail('unavailable', `node bindings are read-only: ${this.readOnlyReason}`)
     if (this.get(session) === undefined) return fail('not-found', `session ${session} carries no node`)
     return this.commit(this.rows.filter(b => b.session !== session))
+  }
+
+  /** Delete every row matching `drop` in one write; the deleted rows on success. */
+  deleteWhere(drop: (b: NodeBinding) => boolean): NodeResult<NodeBinding[]> {
+    const gone = this.rows.filter(drop)
+    if (gone.length === 0) return { ok: true, value: [] }
+    const done = this.commit(this.rows.filter(b => !drop(b)))
+    return done.ok ? { ok: true, value: gone } : done
   }
 }
 
@@ -171,6 +195,8 @@ export interface NodeBinderDeps {
   readonly logger: { warn: (format: string, ...args: unknown[]) => void }
   /** Whether a session is joined (§3: only a joined session binds). */
   readonly joined: (session: string) => boolean
+  /** Whether a session is archived (it never mounts and cannot bind). */
+  readonly archived: (session: string) => boolean
   /** The live top-level session with this id, if any. */
   readonly live: (session: string) => BindableAgent | undefined
 }
@@ -184,6 +210,12 @@ export interface NodeBinder {
   mounted(session: string): MountedNode | undefined
   bind(session: string, node: string, by: string): NodeResult<NodeBinding & { mounted: boolean }>
   unbind(session: string): NodeResult<true>
+  /** End the bindings of sessions no longer joined (leave, JOIN_CAP eviction). Never throws. */
+  reconcile(): void
+  /** End every binding to an archived node. */
+  nodeArchived(node: string): void
+  /** Dispose every mount this binder made (plugin unload). */
+  disposeAll(): void
 }
 
 export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
@@ -237,7 +269,7 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
       const session = String(agent.id)
       try {
         const binding = d.bindings.get(session)
-        if (binding === undefined) return
+        if (binding === undefined || !d.joined(session) || d.archived(session)) return
         mountNode(agent, binding.node)
       } catch (error) {
         d.logger.warn('a2a nodes: mounting node sections on %s failed (session opens without them): %s', session, String(error))
@@ -252,6 +284,7 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
     bind(session, name, by) {
       if (typeof session !== 'string' || session === '') return fail('bad-request', 'session is required')
       if (!d.joined(session)) return fail('conflict', `session ${session} is not joined — only a joined session carries a node (§3)`)
+      if (d.archived(session)) return fail('conflict', `session ${session} is archived — an archived session carries no node (§3)`)
       if (d.store.get(name) === undefined) return fail('not-found', `no node ${name}`)
       const existing = d.bindings.get(session)
       if (existing !== undefined && existing.node !== name) return fail('conflict', `session ${session} already carries ${existing.node} — unbind it first (one node per session)`)
@@ -262,6 +295,8 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
         saved = result.value
       }
       const agent = d.live(session)
+      // Already carrying this node: keep the frozen snapshot (a re-bind must not change the head mid-session).
+      if (existing !== undefined && mounts.get(session)?.info.node === name) return { ok: true, value: { ...existing, mounted: true } }
       let mounted = false
       if (agent !== undefined) {
         try {
@@ -277,6 +312,27 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
       if (!done.ok) return done
       unmount(session)
       return done
+    },
+    reconcile() {
+      try {
+        const gone = d.bindings.deleteWhere(b => !d.joined(b.session))
+        if (!gone.ok) {
+          d.logger.warn('a2a nodes: could not end bindings of sessions that left: %s', gone.error)
+          for (const b of d.bindings.list()) if (!d.joined(b.session)) unmount(b.session)
+          return
+        }
+        for (const b of gone.value) unmount(b.session)
+      } catch (error) {
+        d.logger.warn('a2a nodes: reconcile failed: %s', String(error))
+      }
+    },
+    nodeArchived(node) {
+      const gone = d.bindings.deleteWhere(b => b.node === node)
+      if (!gone.ok) d.logger.warn('a2a nodes: archived %s, but its bindings stay: %s', node, gone.error)
+      for (const [session, m] of [...mounts]) if (m.info.node === node) unmount(session)
+    },
+    disposeAll() {
+      for (const session of [...mounts.keys()]) unmount(session)
     },
   }
 }

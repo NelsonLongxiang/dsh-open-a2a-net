@@ -53,7 +53,11 @@ export function nodeAction(store: NodeStore, binder: NodeBinder, raw: unknown): 
   switch (body.action) {
     case 'create': return answer(store.create(body, by))
     case 'update': return answer(store.update(name, { ...body, name: body.rename }))
-    case 'archive': return answer(store.archive(name))
+    case 'archive': {
+      const archived = store.archive(name)
+      if (archived.ok) binder.nodeArchived(name)
+      return answer(archived)
+    }
     case 'write-core': return answer(store.writeLayer(name, 'core', { core: body.text }, { expectedSha: body.expected_sha256, reason: body.reason, by, via: 'host-face' }))
     case 'write-mutable': return answer(store.writeLayer(name, 'mutable', body.sections, { expectedSha: body.expected_sha256, reason: body.reason, by, via: 'host-face' }))
     case 'rollback':

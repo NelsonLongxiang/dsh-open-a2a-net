@@ -25,10 +25,16 @@ import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { apply, type Config } from '../../src/index.ts'
+import * as plugin from '../../src/index.ts'
+import type { Config } from '../../src/index.ts'
 import { NODE_PROMPT } from '../../src/node-bind.ts'
 
 const KEY = 'node-bind-key'
+
+class FakeRegistry extends Service {
+  archivedSessionIds: string[] = []
+  constructor(ctx: Context) { super(ctx, 'workspaceRegistry') }
+}
 
 class FakeAgentsService extends Service {
   map = new Map<string, Agent>()
@@ -49,6 +55,9 @@ function makeAgent(host: Context, id: string): ScopedAgent {
 interface Mounted {
   ctx: Context
   agents: FakeAgentsService
+  registry: FakeRegistry
+  /** Unload the a2a plugin (and, with `again`, load a fresh copy on the same home). */
+  reload: (again: boolean) => Promise<void>
   home: string
   post: (path: string, body: unknown, key?: string) => Promise<Response>
   get: (path: string) => Promise<Response>
@@ -66,18 +75,35 @@ async function mount(seed?: (home: string) => void, existing: (host: Context) =>
   await ctx.plugin(TimerService)
   await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
   await ctx.plugin(FakeAgentsService)
+  await ctx.plugin(FakeRegistry)
   const agents = ctx.get('agents') as unknown as FakeAgentsService
+  const registry = ctx.get('workspaceRegistry') as unknown as FakeRegistry
   const boot = existing(ctx)
   for (const agent of boot) agents.map.set(String(agent.id), agent as unknown as Agent)
-  apply(ctx, {
+  const config = {
     apiKey: KEY, session: 'host-nodebind', team: 'dsh', routeTimeoutMs: 5_000, flushTimeoutMs: 300_000,
     announce: false, agentName: 'nodebind-host', peers: [], delegates: [], sessionNodes: true,
     wakeJoinedOnBoot: false, dshHome: home, cardTtlMs: 172_800_000, teamJoinAllowlist: ['*'],
-  } as Config)
+  } as Config
+  // The plugin runs as its own child fiber, so a test can unload and reload it like a host does.
+  const load = (): { dispose: () => Promise<void> | void } => ctx.plugin(plugin as never, config) as unknown as { dispose: () => Promise<void> | void }
   const port = (ctx as unknown as { webServer: { port: number } }).webServer.port
   const base = `http://127.0.0.1:${String(port)}`
+  const ready = async (): Promise<void> => {
+    for (let i = 0; i < 200; i++) {
+      if ((await fetch(base + '/__dsh_a2a/nodes', { headers: { 'X-API-Key': KEY } })).status !== 404) return
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    throw new Error('a2a plugin did not come up')
+  }
+  let fiber = load()
+  await ready()
   return {
-    ctx, agents, home, boot,
+    ctx, agents, registry, home, boot,
+    reload: async (again) => {
+      await fiber.dispose()
+      if (again) { fiber = load(); await ready() }
+    },
     post: async (path, body, key = KEY) => await fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Key': key }, body: JSON.stringify(body) }),
     get: async path => await fetch(base + path, { headers: { 'X-API-Key': KEY } }),
     prompt: async (agent) => {
@@ -279,4 +305,152 @@ describe('bindings survive a restart and remount on load (N2+N3 补注册)', () 
       await second.dispose()
     }
   }, 30_000)
+})
+
+describe('review of #173 at c8530ff — counter-examples', () => {
+  const bindChief = async (m: Mounted, mutable: Record<string, string> = { 当前状态: '原文' }): Promise<ScopedAgent> => {
+    const a = makeAgent(m.ctx, A)
+    m.publish(a)
+    await nodeWithLayers(m, 'chief', mutable)
+    expect((await m.post('/__dsh_a2a/join', { id: A })).status).toBe(200)
+    expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: A })).status).toBe(200)
+    expect(await m.prompt(a)).toContain('节点契约')
+    return a
+  }
+
+  it('P1: unloading the plugin takes the sections off; after a reload, unbind and re-bind really apply', async () => {
+    const m = await mount()
+    try {
+      const a = await bindChief(m)
+      await m.reload(false)
+      expect(await m.prompt(a)).not.toContain('节点契约')
+      await m.reload(true)
+      // Boot remount on the fresh plugin (no duplicate registration left behind).
+      expect(await m.prompt(a)).toContain('节点契约')
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'unbind', session: A })).status).toBe(200)
+      expect(await m.prompt(a)).not.toContain('节点契约')
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'create', name: 'other', label: '其他' })).status).toBe(200)
+      const rebound = await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'other', session: A })
+      expect(((await rebound.json()) as { value: { mounted: boolean } }).value.mounted).toBe(true)
+      const text = await m.prompt(a)
+      expect(text).toContain('节点：other（其他）')
+      expect(text).not.toContain('chief')
+    } finally {
+      await m.dispose()
+    }
+  }, 30_000)
+
+  it('P2-1: leaving the network ends the binding and takes the sections off; a resume does not re-mount', async () => {
+    const m = await mount()
+    try {
+      const a = await bindChief(m)
+      expect((await m.post('/__dsh_a2a/leave', { id: A })).status).toBe(200)
+      expect(await m.prompt(a)).not.toContain('节点契约')
+      expect(JSON.parse(readFileSync(join(m.home, 'a2a', 'node-bindings.json'), 'utf8'))).toEqual({ bindings: [] })
+      const resumed = makeAgent(m.ctx, A)
+      await a.dispose()
+      m.ctx.emit('agent/disposed', { agent: a as unknown as Agent })
+      m.publish(resumed)
+      expect(await m.prompt(resumed)).not.toContain('节点契约')
+    } finally {
+      await m.dispose()
+    }
+  }, 20_000)
+
+  it('P2-2: an archived session cannot bind and never mounts; its row is kept like its join intent', async () => {
+    const m = await mount()
+    try {
+      const a = await bindChief(m)
+      m.registry.archivedSessionIds = [A]
+      // A state read prunes archived joins (the intent itself is retained).
+      expect((await m.get('/__dsh_a2a/state')).status).toBe(200)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'create', name: 'other' })).status).toBe(200)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'unbind', session: A })).status).toBe(200)
+      const refused = await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'other', session: A })
+      expect(refused.status).toBe(409)
+      expect(((await refused.json()) as { error: string }).error).toContain('archived')
+      // A re-publish of an archived session with a surviving row does not mount it.
+      const b = makeAgent(m.ctx, B)
+      m.publish(b)
+      expect((await m.post('/__dsh_a2a/join', { id: B })).status).toBe(200)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: B })).status).toBe(200)
+      m.registry.archivedSessionIds = [A, B]
+      const again = makeAgent(m.ctx, B)
+      await b.dispose()
+      m.ctx.emit('agent/disposed', { agent: b as unknown as Agent })
+      m.publish(again)
+      expect(await m.prompt(again)).not.toContain('节点契约')
+      expect(await m.prompt(a)).not.toContain('节点契约')
+    } finally {
+      await m.dispose()
+    }
+  }, 20_000)
+
+  it('P3-1: a mount that throws (variable already taken in the scope) never vetoes publication', async () => {
+    const m = await mount((home) => {
+      mkdirSync(join(home, 'a2a'), { recursive: true })
+      writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: [A] }))
+    })
+    try {
+      await nodeWithLayers(m, 'chief', { 当前状态: '原文' })
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: A })).status).toBe(200)
+      const a = makeAgent(m.ctx, A)
+      ;(a.ctx.get('systemPrompt') as unknown as { variable: (n: string, p: () => string) => void }).variable(NODE_PROMPT.core.variable, () => 'taken')
+      expect(() => { m.publish(a) }).not.toThrow()
+      const view = await (await m.get('/__dsh_a2a/nodes')).json() as { bindings: Array<{ mounted: unknown }> }
+      expect(view.bindings[0]?.mounted).toBeNull()
+    } finally {
+      await m.dispose()
+    }
+  }, 20_000)
+
+  it('P3-2: re-binding the same node mid-session keeps the head byte-identical', async () => {
+    const m = await mount()
+    try {
+      const a = await bindChief(m, { 当前重点: '旧重点' })
+      const before = await m.prompt(a)
+      const one = await (await m.get('/__dsh_a2a/nodes?name=chief')).json() as { current: { mutable: { sha256: string } } }
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'write-mutable', name: 'chief', sections: { 当前重点: '新重点' }, reason: '更新', expected_sha256: one.current.mutable.sha256 })).status).toBe(200)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: A })).status).toBe(200)
+      expect(await m.prompt(a)).toBe(before)
+    } finally {
+      await m.dispose()
+    }
+  }, 20_000)
+
+  it('P3-3: archiving a node ends its bindings; the session can carry another node at once', async () => {
+    const m = await mount()
+    try {
+      const a = await bindChief(m)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'archive', name: 'chief' })).status).toBe(200)
+      expect(await m.prompt(a)).not.toContain('节点契约')
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'create', name: 'other' })).status).toBe(200)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'other', session: A })).status).toBe(200)
+    } finally {
+      await m.dispose()
+    }
+  }, 20_000)
+
+  it('P3-4: malformed rows are backed up before the rewrite; a read-only table refuses unbind with 503', async () => {
+    const m = await mount((home) => {
+      mkdirSync(join(home, 'a2a'), { recursive: true })
+      writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: [A] }))
+      writeFileSync(join(home, 'a2a', 'node-bindings.json'), JSON.stringify({ bindings: [{ session: 7 }, { session: A, node: 'chief', by: '', at: '' }] }))
+    })
+    try {
+      const { readdirSync } = await import('node:fs')
+      expect(readdirSync(join(m.home, 'a2a')).some(f => f.startsWith('node-bindings.json.dropped-'))).toBe(true)
+    } finally {
+      await m.dispose()
+    }
+    const ro = await mount((home) => {
+      mkdirSync(join(home, 'a2a'), { recursive: true })
+      writeFileSync(join(home, 'a2a', 'node-bindings.json'), 'nope')
+    })
+    try {
+      expect((await ro.post('/__dsh_a2a/nodes', { action: 'unbind', session: A })).status).toBe(503)
+    } finally {
+      await ro.dispose()
+    }
+  }, 20_000)
 })

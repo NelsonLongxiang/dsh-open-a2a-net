@@ -1142,7 +1142,10 @@ export function apply(ctx: Context, config: Config): void {
   const liveRoots = new Map<string, Agent>()
   // Node identity N2+N3: a joined session that carries a node gets that node's layers on its own scope.
   const nodeBindings = new NodeBindings(join(home, 'a2a'))
-  const nodeBinder = createNodeBinder({ store: nodeStore, bindings: nodeBindings, logger, joined: id => joinedSessions.has(id), live: id => liveRoots.get(id) })
+  const nodeBinder = createNodeBinder({ store: nodeStore, bindings: nodeBindings, logger, joined: id => joinedSessions.has(id), archived: id => archivedSessionFilter()?.(id) === true, live: id => liveRoots.get(id) })
+  nodeBinder.reconcile()
+  ctx.effect(() => joinedSessions.onChange(() => { nodeBinder.reconcile() }), 'a2a: node bindings follow join')
+  ctx.effect(() => () => { nodeBinder.disposeAll() }, 'a2a: node mounts')
   // Last foreground wake/route demand (epoch ms): boot prewarm steps yield
   // while demand keeps arriving inside the quiet window. Panel polls never
   // touch this — they are constant and would starve warming forever.
