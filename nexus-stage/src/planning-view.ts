@@ -1250,6 +1250,28 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // peer card — pulling a specific remote member into a local team is a
     // plain drag (no picker, no hand-typed handle). Host cards stay for
     // federation context; the member cards carry the actual join gesture.
+    const peerSessionHandles = new Set((input.remoteTeams ?? []).map(row => row.team))
+    const localIdsByHandle = new Map<string, string>()
+    const ambiguousHandles = new Set<string>()
+    for (const session of input.sessions) {
+      if (session.joined !== true) continue
+      const slash = session.team.lastIndexOf('/')
+      if (slash <= 0 || session.team.slice(slash + 1) !== session.id.replace(/^session-/, '').slice(0, 8)) continue
+      const handle = session.team
+      if (peerSessionHandles.has(handle) || ambiguousHandles.has(handle)) continue
+      if (localIdsByHandle.has(handle)) {
+        localIdsByHandle.delete(handle)
+        ambiguousHandles.add(handle)
+      } else {
+        localIdsByHandle.set(handle, session.id)
+      }
+    }
+    const handleBoardId = (member: string, zone: string): string => {
+      const localId = localIdsByHandle.get(member)
+      if (localId !== undefined) return localId
+      return member.includes('/') ? `member-${member.replace(/[^a-z0-9-]/gi, '-')}` : `member-${zone}-${member.replace(/^session-/, '').slice(0, 8)}`
+    }
+
     const memberSeen = new Set<string>()
     for (const [host, rows] of lastRemoteTeams) {
       const hostNode = model.allNodes().find(n => n.remote === true && peerHostOf(n.peerUrl ?? '') === host && !n.id.startsWith('member-'))
@@ -1321,11 +1343,30 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         // member (owner: 数据对不上).
         const peerZone = input.remoteTeams?.find(r => r.via === row.url)?.team.split('/')[0] ?? 'dsh'
         const id8of = (id: string): string => id.replace(/^session-/, '').slice(0, 8)
-        // The server now canonicalizes org members to handles (gh#41 wire
-        // form); the id-form branch stays as the defensive path for peers
-        // on an older build that still publish raw session ids.
-        const memberBoardId = (m: string): string =>
-          m.includes('/') ? `member-${m.replace(/[^a-z0-9-]/gi, '-')}` : `member-${peerZone}-${id8of(m)}`
+        // Canvas members are canonical zone/id8 handles. Map one to a local card
+        // only when that joined handle is unambiguous and no published remote
+        // directory row already claims it; otherwise keep a synthetic member card.
+        const localIdsByHandle = new Map<string, string>()
+        const ambiguousHandles = new Set<string>()
+        const publishedHandles = new Set((input.remoteTeams ?? []).map(session => session.team))
+        for (const session of input.sessions) {
+          if (session.joined !== true) continue
+          const slash = session.team.lastIndexOf('/')
+          if (slash <= 0 || session.team.slice(slash + 1) !== id8of(session.id)) continue
+          const handle = session.team
+          if (publishedHandles.has(handle) || ambiguousHandles.has(handle)) continue
+          if (localIdsByHandle.has(handle)) {
+            localIdsByHandle.delete(handle)
+            ambiguousHandles.add(handle)
+          } else {
+            localIdsByHandle.set(handle, session.id)
+          }
+        }
+        const memberBoardId = (member: string): string => {
+          const localId = localIdsByHandle.get(member)
+          if (localId !== undefined) return localId
+          return member.includes('/') ? `member-${member.replace(/[^a-z0-9-]/gi, '-')}` : `member-${peerZone}-${id8of(member)}`
+        }
         for (const team of row.org) {
           if (team.name === '' || localNames.has(team.name) || dissolving.hides(team.name, row.url)) continue
           const memberIds = team.members.map(memberBoardId).filter(id => model.getNode(id) !== undefined)
