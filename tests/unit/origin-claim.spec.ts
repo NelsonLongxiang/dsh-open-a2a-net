@@ -58,11 +58,11 @@ describe('OriginClaim audience binding', () => {
     expect(isRootOriginUrl(CALLER_URL + '/')).toBe(true)
   })
 
-  it('a same-origin child app cannot prove the origin and a redirected card is refused', async () => {
+  it('a same-origin child app card stays verifiable but is not an origin root, and redirects are refused', async () => {
     const pathCaller = 'http://10.0.0.1:13080/apps/market'
     const pathHeaders = signOriginClaim({ url: `${OWN}/a2a/direct`, method: 'POST' }, { caller: 'dsh', callerUrl: pathCaller, privateKey, unbound: false, now: Date.now() })
     const pathResult = await verify(req(pathHeaders, { url: '/a2a/direct' }), { cacheCard: false, fetch: async () => ({ ok: true, status: 200, text: async () => JSON.stringify(card) }) })
-    expect(pathResult.v).toEqual({ ok: false, reason: 'not-derivable' })
+    expect(pathResult.v).toMatchObject({ ok: true, caller: 'dsh', bound: true, callerUrl: pathCaller })
     const rootHeaders = signOriginClaim({ url: `${OWN}/a2a/direct`, method: 'POST' }, { caller: 'dsh', callerUrl: CALLER_URL, privateKey, unbound: false, now: Date.now() })
     const redirect = await verify(req(rootHeaders, { url: '/a2a/direct' }), { cacheCard: false, fetch: async (_url, init) => {
       expect(init.redirect).toBe('manual')

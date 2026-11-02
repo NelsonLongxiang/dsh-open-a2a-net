@@ -85,10 +85,10 @@
 
 ### 接收来源校验（#172）
 
-- 本机在 `[A2A direct]` 宿主生成的首行标注来源证明：proof 为 `origin-claim` 且非 CLI 时写 `已验证来源 <claim callerUrl 的 origin>`；其他情况写 `未验证（<proof>）`。消息正文中的自称或仿造首行不是证明。
-- 接单节点仅在首行 origin 与本画布团队由属主/运维配置的 market origin 完全一致时处理为 market 事件；不符或未验证不创建 issue、不回写。
+- 本机在 `[A2A direct]` 宿主生成的首行标注来源证明：仅在非CLI、`claim.bound === true`、callerUrl的path为`/`且卡未重定向时写`已验证来源 <origin>`；非根路径、v1/unbound、CLI、claim mismatch均不获得此标记。路径前缀callerUrl仍可能按有效签名完成低信任投递，并会写`未验证（claim-mismatch）`；卡取回3xx仍拒绝。首行不包含第三方display metadata，正文自称不是证明。
+- 接单节点仅在首行有bound/root-card证明且 origin 与本画布团队由属主/运维配置的 market origin 精确一致时处理为 market 事件；不符或未验证不创建issue、不回写。
 - `reply.url` 是请求体字段，必须恰好匹配 `<已验证 origin>/api/workbench-events/<event_id>/decision`，且不含 userinfo、query、fragment。回写不得跟随重定向；内网明文 HTTP 仅在部署方确认后使用。
-- 按 `event_id` 去重；先搜索 issue，没有再创建并回写。若回写返回“已有终态决定”的 409，再按 `event_id` 搜索，保留最早 issue，将本轮并发新开的 issue 关闭为 duplicate 并互相引用。`context_id` 只是关联标记，不保证投递至同一会话。
+- 按 `event_id` 去重；先搜索issue，没有再创建并回写。若market回写返回accept/decline已有终态的409，响应不包含ref，接单方按event_id重新搜索GitHub issue，保留数字编号最小的一张，其余关闭为duplicate并相互引用；所有并发处理方使用同一排序判据。`context_id`只是关联标记，不保证投递至同一会话。
 - token 已在投递正文和会话记录中，代入命令文本也会留下记录。`jq -n --arg` 和临时文件只减少额外留存，不是“不进历史/进程列表”的保证。
 
 - **送达面**：a2a `/a2a/direct`，异步（`wait:false`）。
@@ -103,7 +103,7 @@
   - 对端返回 -32001（载荷超限）、-32002、-32003（幂等冲突，见 [routing.md](../../src/skill/references/routing.md) 幂等一节）时，直接记 `dead`，不重试。每次尝试的 id 唯一，所以后两者一旦出现就是异常；
   - 发送前按实际请求体计算大小，超过 `/a2a/direct` 的传输上限时一次即记 `dead`。
 - **来源签名（OriginClaim）**：
-  - 接单节点只有在宿主消息首行带 `已验证来源 <origin>`、且该 origin 与团队配置的 market origin 完全一致时，才把信封按 market 事件处理；首行标记是host-authored的bound来源证明，不是对 `submitter_kind` 或请求体内容的背书。团队origin配置位置和拒绝规则见 [intake.md](../../src/skill/references/intake.md)；
+  - 接单节点只有宿主首行标记满足 `claim.bound === true`、callerUrl path 为 `/`，且该 origin 与团队配置的 market origin 完全一致时，才处理为market event。path-prefixed CLI/deployment claim仅作为低信任delivery，不能获得origin marker；第三方显示名不进入header。首行不是对 `submitter_kind` 或body contents的背书。详情见[intake.md](../../src/skill/references/intake.md)；
   - 主签名用绑定形式，即 `X-A2A-Caller-Sig2` 加 `X-A2A-Caller-Aud`，见 [delivery-origin-auth.md](delivery-origin-auth.md) §2.1；
   - 默认同时带 v1 的 `X-A2A-Caller-Sig`，以兼容未升级的对端。全舰队关窗后，market 设 `A2A_ORIGIN_CLAIM_UNBOUND=off` 停发；
   - #64 关窗后只认绑定形式。
@@ -129,7 +129,7 @@ POST /api/workbench-events/<event_id>/decision
   - 只对 `sent` 的投递有效：`pending` 的投递回写返回 409，可以稍后重试；`dead`、`cancelled` 的投递也返回 409，但不会再变；
   - 自送达起 7 天有效，之后返回 410；
   - `decided_by` 是自报的。
-  - `accept`/`decline` 已有终态时再写返回 409；接单方应读取 market 终态决定并保留其中 `ref` 指向的 issue。若并发重试又开了 issue，只关闭本次多余的新建项，不能按本地创建时间覆盖market终态ref。
+  - `accept`/`decline`已有终态时再写返回409，响应为`{error, decision}`且不返回ref；接单方按`event_id`重新搜索issue，保留数字编号最小的一张，其余标记duplicate并互相引用。不要依赖管理员专有事件GET或本地created_at。
 - **状态**：
   - `ask` 不是终态，之后还可以改为 `accept` 或 `decline`；
   - `accept` 和 `decline` 是终态，再写返回 409。

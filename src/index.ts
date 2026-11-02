@@ -3261,63 +3261,14 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => teamMemberships.onChange(() => observeAuthorization('roster')), 'a2a: S6 roster observer')
   observeAuthorization('boot')
 
-  /**
-   * The from-line display name (owner ruling, claim 8ea4150f94): a bare
-   * routing handle (`dsh/74555a36`) carries zero semantics for the reader.
-   * Resolve what the handle NAMES, cheaply and read-only:
-   *   1. a local handle — a joined/live session id, its zone/id8 pseudo-team,
-   *      or a live node label → nodeMetadataOf(agent).name (the session-title
-   *      product, exactly what the directory shows);
-   *   2. a remote bare-zone caller → the warmest cached card whose team
-   *      equals the zone (the publisher's own card NAME is the display name);
-   *   3. a remote zone/id8 caller → the cached card whose sessionTeams row
-   *      matches the handle → that row's name;
-   *   4. nothing resolves → '' (the from line stays bare — no false names).
-   * Read-only over warm caches: never fetches, so a cold cache degrades to
-   * the bare handle, never to a stall.
-   */
-  function callerDisplayName(caller: string): string {
-    if (caller === '' || caller === 'an unknown node') return ''
-    // Local: joined/live session facts on THIS host.
-    for (const [id, agent] of sessionNodes) {
-      if (id === caller || sessionLabelOf(agent) === caller || `${config.team}/${id8(id)}` === caller) {
-        return nodeMetadataOf(agent).name
-      }
-    }
-    for (const [id, agent] of liveRoots) {
-      if (id === caller || sessionLabelOf(agent) === caller || `${config.team}/${id8(id)}` === caller) {
-        return nodeMetadataOf(agent).name
-      }
-    }
-    // Remote: warm card cache only.
-    const zone = caller.includes('/') ? caller.slice(0, caller.indexOf('/')) : caller
-    let zoneName = ''
-    for (const entry of cardCache.values()) {
-      const card = entry.card
-      if (card === undefined) continue
-      if (card.team === zone && zoneName === '') zoneName = card.name
-      if (caller.includes('/')) {
-        const row = (card.sessionTeams ?? []).find(item => item.team === caller)
-        if (row !== undefined && row.name !== '') return row.name
-      }
-    }
-    if (!caller.includes('/') && zoneName !== '') return zoneName
-    return ''
-  }
-
-  /** The from clause with the display name in full-width parens when resolved. */
+  /** Security headers omit all unsigned peer display metadata. */
   function fromClause(from: string): string {
-    const display = callerDisplayName(from)
-    return `from "${from}"${display !== '' ? `（${display}）` : ''}`
+    const caller = from.replace(/[\x00-\x1f\x7f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff\uff08\uff09\ufe59\ufe5a]/g, '')
+    return `from ${JSON.stringify(caller)}`
   }
 
-  /** Third-party session display metadata is outside the signature. */
   function sanitizeFromClause(from: string): string {
-    const clause = fromClause(from)
-    const index = clause.indexOf(' (routed to ')
-    if (index < 0) return clause.replace(/[\x00-\x1f\x7f（）]/g, '').replace(/已验证来源|未验证|origin-claim|claim-mismatch|legacy-window|unbound|cli-identity/g, '')
-    const identity = clause.slice(0, index).replace(/[\x00-\x1f\x7f（）]/g, '').replace(/已验证来源|未验证|origin-claim|claim-mismatch|legacy-window|unbound|cli-identity/g, '')
-    return identity + clause.slice(index)
+    return fromClause(from)
   }
 
   function hostDirectHeader(team: string, taskId: string, from: string, proofClause: string): string {

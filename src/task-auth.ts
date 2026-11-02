@@ -338,7 +338,7 @@ export interface TaskAuthorization {
   /** The caller_session the admission rules judged. */
   readonly caller: string
   readonly proof: AuthProof
-  /** proof = origin-claim: the name the signed card derived, and its card URL's origin. */
+  /** Signed claim identity/origin retained for audit even when proof is low-trust unbound or CLI; its presence alone is not trust. */
   readonly claim?: { readonly caller: string; readonly origin: string }
   readonly ingress: 'wire' | 'local'
   readonly via: Via
@@ -475,9 +475,10 @@ export function parseAuthorization(raw: unknown, now: number = Date.now()): Task
     if (c === null || typeof c !== 'object' || !boundedString(c.caller) || !boundedString(c.origin)) return undefined
     claim = { caller: c.caller as string, origin: c.origin as string }
   }
-  // A claim rides exactly the two claim proofs, and which one is decided by coverage — never by the record's say-so.
-  if ((claim !== undefined) !== (r.proof === 'origin-claim' || r.proof === 'claim-mismatch')) return undefined
-  if (claim !== undefined && claimCovers(r.caller as string, claim.caller) !== (r.proof === 'origin-claim')) return undefined
+  // Unbound and deposited-CLI proofs retain their key/card claim for audit, but do not assert origin.
+  const claimProof = ['origin-claim', 'claim-mismatch', 'unbound', 'cli-identity'].includes(r.proof)
+  if ((claim !== undefined) !== claimProof) return undefined
+  if (claim !== undefined && r.proof === 'origin-claim' && !claimCovers(r.caller as string, claim.caller)) return undefined
   return buildAuthorization(
     { ok: true, via: VIA_OF[rule], rule, basis: r.basis as string[] },
     {

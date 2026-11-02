@@ -652,7 +652,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             : claim.cli === true ? (claimCovers(caller, claim.caller) ? 'cli-identity' : 'claim-mismatch')
               : claim.bound !== true ? 'unbound'
                 : !isRootOriginUrl(claim.callerUrl) ? 'claim-mismatch'
-                  : claimCovers(caller, claim.caller) ? 'origin-claim' : 'claim-mismatch'
+                  : admission.rule === 'host-face' && originOf(claim.callerUrl) !== originOf(d.ownCardUrl) ? 'claim-mismatch'
+                    : claimCovers(caller, claim.caller) ? 'origin-claim' : 'claim-mismatch'
           const proofClause = callerProof === 'origin-claim' && claim.ok ? `已验证来源 ${originOf(claim.callerUrl)}`
             : callerProof === 'cli-identity' ? '未验证（cli-identity）' : `未验证（${callerProof}）`
           const directHeader = (from: string): string => `[A2A direct] (task ${taskId}) ${proofClause} ${sanitizeFromClause(from)} (routed to ${team}) sent:`
@@ -694,7 +695,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // keeps the idempotency claim (above) exactly as for sessions.
           const cliRow = cliDeposits.get(team)
           if (cliRow !== undefined) {
-            cliDeposits.mail(team, caller, message)
+            cliDeposits.mail(team, caller, `${directHeader(caller)}\n\n${message}`)
             recordActivity('in', team, caller, true)
             logger.info(`a2a: cli mailbox delivery for ${team} (from ${caller})`)
             const note = `delivered to the mailbox of ${team} — the CLI polls while online`

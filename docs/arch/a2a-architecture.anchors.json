@@ -3,7 +3,7 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "18ca7686e47fd9401969ddf6303ae0dac998e50cd8eda2f09a3b6810b122e799",
+    "src/index.ts": "0c4278fa935788c05a88e1d3b8fa5d4aa8ec7c502c5426284bcbd3585f5c8fb4",
     "src/faces/admin.ts": "10b875059049f219fb727d701258fcac0d78601971dc0863f3876572b0df2767",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
@@ -19,10 +19,10 @@
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
-    "src/faces/wire.ts": "3d849f31b8da0db4ad43259a90ea81b7209a890a53840b65e4004c7907a8cae0",
+    "src/faces/wire.ts": "173544821007a44c608137b7b0e230724dd5b4068ca76549c669aa8d19cb63e0",
     "src/faces/canvas-notify.ts": "5120c3828d5a9b8928006059fc516d88ac6813afecc9ae0464223b598a4b6850",
-    "src/task-auth.ts": "3869e8bb65e3632fbb953941c41803be9f0bf5655ef73292a6493ebd4b9aa1ae",
-    "src/origin-claim.ts": "3a7ff92c73d20094efb8e33b060b5b4be2661659e9ddb8f86c62ad601f5f840c",
+    "src/task-auth.ts": "97479423e91648c22a36807aef18ad2b92c7eaa746f4e41ef64b57acd38d9c1c",
+    "src/origin-claim.ts": "7ea47df6458b10f65800f3f241f16e8d19b077b793387db743fbabed09c8d450",
     "src/tools/info.ts": "0bf2e059f3a11fb8d19dcc0dac30d30aa7b0b3470b67a9d0d25a6848739f4aa0",
     "src/tools/act.ts": "4d8f0254e2c117ea690f68fb0fb04539934a724dcd799df15bd592e1797fa39b",
     "src/peer-directory.ts": "d7c30c27a230f8c61da18d85c30ad17a6e98809083b13eca82b34870a8934d01",
@@ -92,13 +92,13 @@
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:3772",
+      "ref": "src/index.ts:3723",
       "expect": "const sharedCanvas = canvasStore.list().some(name => {"
     },
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:3781",
+      "ref": "src/index.ts:3732",
       "expect": "let orgShared = false"
     },
     {
@@ -224,7 +224,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:3964",
+      "ref": "src/index.ts:3915",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -266,7 +266,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3430",
+      "ref": "src/index.ts:3381",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
@@ -332,7 +332,7 @@
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/faces/wire.ts:680",
+      "ref": "src/faces/wire.ts:681",
       "expect": "if (refuseIfFlooded(caller, message, team, taskId, res)) return"
     },
     {

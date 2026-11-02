@@ -7,7 +7,7 @@
  * restart restores it whole.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { generateKeyPairSync, sign as edSign } from 'node:crypto'
+import { generateKeyPairSync } from 'node:crypto'
 import { createServer } from 'node:http'
 import { bootNode, reservePort, steerText, tmpHome } from './harness.ts'
 import { signCard } from '../../src/card.ts'
@@ -35,18 +35,9 @@ describe('#114 S2 inbound authorization record (real host)', () => {
       expect((await post(`${a.baseUrl}/__dsh_a2a/join`, { id: 'session-0123456789abcdef' })).status).toBe(200)
       const card = signCard({ name: 'ops-cli', session: 'cli-ops-cli', team: HANDLE, capabilities: { route: true, async: true }, expiresAt: Date.now() + 172_800_000 }, privateKey)
       expect((await post(`${a.baseUrl}/__dsh_a2a/cli-deposit`, { action: 'publish', card: JSON.stringify(card) })).body.ok).toBe(true)
-      const callerUrl = a.baseUrl
-      const signerKey = generateKeyPairSync('ed25519').privateKey
-      // The envelope as a CLI from before gh#133 sent it. Its header names are
-      // not the ones the host verifies, so the claim reads as absent and the
-      // delivery rides the OriginClaim window: the record must say so honestly
-      // (proof legacy-window, no claim). gh133-cli-origin-claim covers the fixed CLI.
-      const envelope = (): Record<string, string> => {
-        const ts = Date.now()
-        return { 'X-A2A-Caller': 'ops-cli', 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Ts': String(ts), 'X-A2A-Sig': edSign(undefined, Buffer.from(JSON.stringify(['ops-cli', callerUrl, ts])), privateKey).toString('base64') }
-      }
+      // An envelope-less CLI-deposit delivery is intentionally legacy; valid CLI signatures are covered by gh133.
       const body = { team: TARGET, message: 'signed task', caller_session: HANDLE, wait: false, task_id: 'direct-aaaa00000001' }
-      const sent = await post(`${a.baseUrl}/a2a/direct`, body, envelope())
+      const sent = await post(`${a.baseUrl}/a2a/direct`, body)
       expect(sent.body, JSON.stringify(sent.body)).toMatchObject({ delivered: true })
 
       // A keep-alive socket to the pre-restart server may be reset once: read again.
@@ -78,12 +69,12 @@ describe('#114 S2 inbound authorization record (real host)', () => {
       expect(typeof row?.auth.received_at).toBe('number')
 
       // A replay of the id (same payload) is refused and leaves the record as it was born.
-      expect((await post(`${a.baseUrl}/a2a/direct`, body, envelope())).status).toBe(409)
+      expect((await post(`${a.baseUrl}/a2a/direct`, body)).status).toBe(409)
       expect((await rowOf('direct-aaaa00000001'))?.auth).toEqual(row?.auth)
 
       // A second task while a canvas exists: the version moves with the records it hashes.
       expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: 'ops' })).body.ok).toBe(true)
-      expect((await post(`${a.baseUrl}/a2a/direct`, { ...body, message: 'second task', task_id: 'direct-aaaa00000002' }, envelope())).body.delivered).toBe(true)
+      expect((await post(`${a.baseUrl}/a2a/direct`, { ...body, message: 'second task', task_id: 'direct-aaaa00000002' })).body.delivered).toBe(true)
       expect((await rowOf('direct-aaaa00000002'))?.auth.allowlist_version).not.toBe(row?.auth.allowlist_version)
 
       const born = row?.auth.allowlist_version as string
@@ -115,8 +106,8 @@ describe('#114 S2 inbound authorization record (real host)', () => {
       const marketServer = createServer((_req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(marketCard)) })
       await new Promise<void>(resolve => marketServer.listen(0, '127.0.0.1', resolve))
       const marketUrl = `http://127.0.0.1:${String((marketServer.address() as { port: number }).port)}`
-      const signed = (audience = a.baseUrl, claimCaller = 'market'): Record<string, string> =>
-        signOriginClaim({ url: `${audience}/a2a/direct`, method: 'POST' }, { caller: claimCaller, callerUrl: marketUrl, privateKey: marketKey, unbound: true, now: Date.now() })
+      const signed = (audience = a.baseUrl, claimCaller = 'market', callerUrl = marketUrl): Record<string, string> =>
+        signOriginClaim({ url: `${audience}/a2a/direct`, method: 'POST' }, { caller: claimCaller, callerUrl, privateKey: marketKey, unbound: true, now: Date.now() })
       // Owed rows and settled ones alike (a receipt may settle a row before it is read).
       const rows = async (): Promise<Array<Record<string, any>>> => {
         const state = (await globalThis.fetch(`${a.baseUrl}/__dsh_a2a/state`).then(async r => await r.json())) as { tasks: Array<Record<string, any>>; archived?: Array<Record<string, any>> }
@@ -130,6 +121,17 @@ describe('#114 S2 inbound authorization record (real host)', () => {
         caller: 'market/aaaaaaaa', proof: 'origin-claim', claim: { caller: 'market', origin: new URL(marketUrl).origin },
         via: 'canvas-member', admission_rule: 'remote-ref-foreign', basis: ['dsh/canvas/ops'],
       })
+
+      const waited = await post(`${a.baseUrl}/a2a/direct`, { team: TARGET, message: 'waited event', caller_session: 'market/aaaaaaaa', wait: true, task_id: 'direct-boundwait01' }, signed())
+      expect(waited.body.routed, JSON.stringify(waited.body)).toBe(true)
+      expect(JSON.parse(steerText(a.steered[a.steered.length - 1])).content[0].text).toMatch(/^\[A2A direct\] \(task direct-boundwait01\) 已验证来源 \S+ from/ )
+
+      // A same-origin subpath card still serves a key-valid identity for delivery, but is never granted origin-level proof.
+      const pathUrl = `${marketUrl}/apps/market`
+      const prefixed = await post(`${a.baseUrl}/a2a/direct`, { team: TARGET, message: 'prefixed origin', caller_session: 'market/aaaaaaaa', wait: false, task_id: 'direct-prefix0001' }, signed(a.baseUrl, 'market', pathUrl))
+      expect(prefixed.body.delivered, JSON.stringify(prefixed.body)).toBe(true)
+      expect(JSON.parse(steerText(a.steered[a.steered.length - 1])).content[0].text).toContain('未验证（claim-mismatch）')
+      expect((await rows()).find(t => t.taskId === 'direct-prefix0001')?.auth).toMatchObject({ proof: 'claim-mismatch', caller: 'market/aaaaaaaa' })
 
       // Replaying the same v1 signature with another body is accepted only as unbound proof; v1 does not sign target or body.
       const v1 = signed()
@@ -156,11 +158,11 @@ describe('#114 S2 inbound authorization record (real host)', () => {
       await new Promise<void>(resolve => imp.listen(0, '127.0.0.1', () => resolve()))
       try {
         const impUrl = `http://127.0.0.1:${String((imp.address() as { port: number }).port)}`
-        const ts = Date.now()
-        const env = { 'X-A2A-Caller': 'dsh', 'X-A2A-Caller-Url': impUrl, 'X-A2A-Caller-Ts': String(ts), 'X-A2A-Caller-Sig': edSign(undefined, Buffer.from(JSON.stringify(['dsh', impUrl, ts])), far).toString('base64') }
+        const env = signOriginClaim({ url: `${a.baseUrl}/a2a/direct`, method: 'POST' }, { caller: 'dsh', callerUrl: impUrl, privateKey: far, unbound: false, now: Date.now() })
         const sent = await post(`${a.baseUrl}/a2a/direct`, { team: TARGET, message: 'impostor', caller_session: 'dsh', wait: false, task_id: 'direct-claim0003' }, env)
         expect(sent.body.delivered, JSON.stringify(sent.body)).toBe(true)
-        expect((await rows()).find(t => t.taskId === 'direct-claim0003')?.auth).toMatchObject({ caller: 'dsh', proof: 'unbound', claim: { caller: 'dsh', origin: new URL(impUrl).origin }, admission_rule: 'host-face' })
+        expect(JSON.parse(steerText(a.steered[a.steered.length - 1])).content[0].text).toContain('未验证（claim-mismatch）')
+        expect((await rows()).find(t => t.taskId === 'direct-claim0003')?.auth).toMatchObject({ caller: 'dsh', proof: 'claim-mismatch', claim: { caller: 'dsh', origin: new URL(impUrl).origin }, admission_rule: 'host-face' })
       } finally {
         imp.close()
       }

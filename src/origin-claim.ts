@@ -230,12 +230,17 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   // card.team === caller below — both ride the minimal card's signed core,
   // so a single envelope-less fetch suffices and never recurses). A warm
   // cache entry short-circuits the fetch.
-  if (!isRootOriginUrl(callerUrl)) return { ok: false, reason: 'not-derivable' }
   let card: A2aPeerCard | undefined = d.cardCache.get(callerUrl)?.card
   if (card === undefined) {
     try {
       // callerUrl is the caller's BASE URL — the card lives under it.
-      const cardUrl = new URL('/.well-known/agent-card.json', callerUrl).toString()
+      const cardBase = new URL(callerUrl)
+      cardBase.username = ''
+      cardBase.password = ''
+      cardBase.pathname = `${cardBase.pathname.replace(/\/+$/, '')}/.well-known/agent-card.json`
+      cardBase.search = ''
+      cardBase.hash = ''
+      const cardUrl = cardBase.toString()
       const response = await d.fetch(cardUrl, { method: 'GET', headers: {}, redirect: 'manual' })
       if (response.status >= 300 && response.status < 400) return { ok: false, reason: 'not-derivable' }
       const verdict = verifyCard(JSON.parse(await response.text()), Date.now())
