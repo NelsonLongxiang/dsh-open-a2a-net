@@ -75,14 +75,16 @@ describe('gh#43 remote org member resolution', () => {
         { id: 'session-414d2b90-0000-0002', label: 'B', team: 'dsh/414d2b90', joined: true, live: true },
       ],
       teams: [{ name: 'local', team: 'dsh/canvas/local', members: [{ id: 'session-414d2b90-0000-0001' }, { id: 'session-414d2b90-0000-0002' }] }],
-      remoteTeams: [{ team: 'dsh/e99d5bd5', name: 'owner-seat', via: 'https://10.0.0.5:8787' }],
-      peerOrg: [{ url: 'https://10.0.0.5:8787', org: [{ name: '生产服务组', team: 'dsh/canvas/生产服务组', members: ['dsh/414d2b90'] }] }],
+      remoteTeams: [{ team: 'dsh/414d2b90', name: 'owner-seat', via: 'https://10.0.0.5:8787' }],
+      peerOrg: [{ url: 'https://10.0.0.5:13080', org: [{ name: '生产服务组', team: 'dsh/canvas/生产服务组', members: ['dsh/414d2b90'] }] }],
     }
     const v = createPlanningView({ onDirty: vi.fn(), onLampClick: vi.fn(), onCanvasAction: vi.fn(async () => true), now: () => NOW })
     document.body.appendChild(v.root)
     v.reconcile(observed)
-    const member = v.root.querySelector('.p-node[data-id="member-dsh-414d2b90"]')
-    expect(member).not.toBeNull()
+    const frame = [...v.root.querySelectorAll<HTMLElement>('.p-frame')].find(el => el.dataset.name === '生产服务组')
+    expect(frame).toBeDefined()
+    expect(frame?.querySelector('.cnt')?.textContent).toBe('1 成员')
+    expect(v.root.querySelector('.p-node[data-id="member-dsh-414d2b90"]')).not.toBeNull()
     expect(v.root.querySelector('.p-node[data-id="session-414d2b90-0000-0001"]')).not.toBeNull()
     expect(v.root.querySelector('.p-node[data-id="session-414d2b90-0000-0002"]')).not.toBeNull()
   })
