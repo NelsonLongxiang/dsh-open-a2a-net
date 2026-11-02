@@ -189,13 +189,19 @@
   - **属主裁定（2026-11-03）「会话级污染」**：§9 里的 `via != host-face` 解释为「本会话收到过来自本机以外的输入」。会话一旦被污染，它此后的每一次自我更新都进人工审核队列；标记持久化，永不清除。两路信号，任一命中即算污染：
     1. **投递时打标**：宿主把远端内容送进会话时，在会话上打标。所有 relay steer（投递、它的 nudge、取消通知）和 queue 模式的 nudge 都会打，记录在 `node-taint.json`。这个文件读不出时，所有会话一律按已污染处理（失败即关）。
     2. **日志兜底**：扫描会话的全部事件。
-       - 以下几类是**远端证据**，命中后打标并持久化：不是宿主生成的节点提醒的 `a2a-relay` 消息；controller rpcId 以 `a2a-` 开头的 `user` 消息（本插件发的 nudge）；`agent-message`（可能经 native-teams 桥接进来）。
+       - 以下几类是**远端证据**，命中后打标并持久化：不是宿主生成的节点提醒的 `a2a-relay` 消息；controller rpcId 以 `a2a-` 开头的 `user` 消息（本插件发的 nudge）。
+       - **转述另一个会话内容的消息**沿用那个会话的污染状态。这类消息有三种：子代理的收尾消息 `subagent-settled`、对端会话发来的 `agent-message`、被引用会话的转录 `session-reference`。
+         - 那个会话已被打标：本会话也打标并持久化。这样，和对端打过交道的子代理，就没法把对端的回复洗成干净的。
+         - 那个会话没被打标：按中性处理。子代理一定在本机；`agent-message` 和 `session-reference` 还要求对方是本机已知的会话，否则只拒绝这一次调用，因为 native-teams 桥可能在这里填一个远端调用方。
        - 来源不认识，或整段日志里没有一条本人的输入：只拒绝**这一次**调用（失败即关），**不持久化**。这样，本模块暂时还不认识的宿主新功能，不会让会话永久被判污染。
-    3. **A2A 工具读取**：本插件自己的 A2A 工具把对端的文字交给模型时，在调用会话上打标，统一经 `tools/post-execute` 处理。对应三种情况：`a2a_route` 拿到回复；`a2a_tasks` 列出了入站任务；`a2a_teams`、`a2a_status`、`a2a_probe` 读出了对端卡片里的名字、描述等自述。
-    - **中性消息**：既不算输入，也不算污染。包括 agent loop 自己注入的 runtime-context、time-context、skill-catalog、tool-jobs、user-approval，以及长会话里宿主自己的功能：compact-checkpoint、skill-invocation、subagent-settled、session-reference、schedule、goal。
+    3. **A2A 工具读取**：本插件自己的 A2A 工具把对端的文字交给模型时，在调用会话上打标，统一经 `tools/post-execute` 处理。对应三种情况：
+       - `a2a_route` 返回了任何结果，包括失败，因为对端可以把文字放进 `{error}` 里；
+       - `a2a_tasks` 列出了入站任务；
+       - `a2a_teams`、`a2a_status`、`a2a_probe` 读出了对端卡片里的名字、描述等自述。
+    - **中性消息**：既不算输入，也不算污染。包括 agent loop 自己注入的 runtime-context、time-context、skill-catalog、tool-jobs、user-approval，以及长会话里宿主自己的功能：compact-checkpoint（本会话自己历史的摘要）、skill-invocation、schedule、goal。
     - **标记文件**：读不出，或者有任何一行不是合法标记时，所有会话一律按已污染处理。最多保留 4096 条，超出后最早的会被挤掉；被挤掉的会话可以靠日志兜底或下一次投递重新打标。
   - **边界**：
-    - 模型通过通用工具读到的远端文字（网页、issue 正文）不是投递，不会造成污染。
+    - 模型通过通用工具读到的远端文字不是投递，不会造成污染。包括网页、issue 正文，也包括用 bash 运行 `a2a-net inbox` 读到的本网络 CLI 信箱。
     - 其他插件经 session controller 提交的 `kind:'user'` prompt 和真人输入分不开，本插件只能认出自己发的 nudge（rpcId 以 `a2a-` 开头）。
   - **审核队列**：存在 `node-review.json`。
     - **容量**：全局最多 64 条，每个节点最多 8 条。同一节点、同一 section、同一会话的新提议会覆盖旧的；超过 section 配额的文本直接拒绝。

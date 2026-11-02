@@ -1176,7 +1176,7 @@ describe('N4 — node_update_self under the session taint (owner ruling 2026-11-
       const cases: Array<[string, unknown[], string, boolean]> = [
         [A, [ev(PERSON), ev(RELAY)], 'log:a2a-relay', true],
         [B, [ev(PERSON), ev({ kind: 'user', rpcId: 'a2a-nudge-0123456789abcdef' })], 'log:a2a-nudge', true],
-        [E, [ev(PERSON), ev({ kind: 'agent-message' })], 'log:agent-message', true],
+        [E, [ev(PERSON), ev({ kind: 'agent-message' })], 'log:agent-message:no-sender', false],
         [C, [ev(PERSON), ev({ kind: 'mystery' })], 'log:mystery', false],
         [D, NEUTRAL.map(ev), 'log:no-input', false],
       ]
@@ -1188,20 +1188,20 @@ describe('N4 — node_update_self under the session taint (owner ruling 2026-11-
         if (sticky) expect(later.code, `${via} sticks`).toBe('queued')
         else expect(later.ok, `${via} refused that call only`).toBe(true)
       }
-      expect((await reviewsOf(m)).filter(r => r.section === '已知陷阱').map(r => r.via).sort()).toEqual(['log:a2a-nudge', 'log:a2a-relay', 'log:agent-message', 'log:mystery', 'log:no-input'])
+      expect((await reviewsOf(m)).filter(r => r.section === '已知陷阱').map(r => r.via).sort()).toEqual(['log:a2a-nudge', 'log:a2a-relay', 'log:agent-message:no-sender', 'log:mystery', 'log:no-input'])
       const marked = (JSON.parse(readFileSync(join(m.home, 'a2a', 'node-taint.json'), 'utf8')) as { sessions: Array<{ session: string }> }).sessions.map(r => r.session).sort()
-      expect(marked).toEqual([A, B, E].sort())
+      expect(marked).toEqual([A, B].sort())
     } finally {
       await m.dispose()
     }
   }, 40_000)
 
-  it('host features of a long session (compaction, /skill, subagents, references, schedules, goals) are neutral', async () => {
+  it('host features of a long session (compaction, /skill, schedules, goals) are neutral', async () => {
     const m = await mount()
     try {
       await nodeWithLayers(m, 'chief', { 当前状态: '第一版' })
       const a = await bindSession(m, A)
-      const events = [ev(PERSON), ...['compact-checkpoint', 'skill-invocation', 'subagent-settled', 'session-reference', 'schedule', 'goal'].map(kind => ev({ kind }))]
+      const events = [ev(PERSON), ...['compact-checkpoint', 'skill-invocation', 'schedule', 'goal'].map(kind => ev({ kind }))]
       expect((await call(m, a, events, { section: '当前状态', text: '长会话', reason: 'r', expected_sha256: await shaOf(m) })).ok).toBe(true)
     } finally {
       await m.dispose()
@@ -1319,4 +1319,41 @@ describe('N4 — node_update_self under the session taint (owner ruling 2026-11-
       await m.dispose()
     }
   }, 30_000)
+
+  it('messages carrying ANOTHER session\'s text take that session\'s taint: subagent, peer agent, reference', async () => {
+    const CHILD_T = 'child-tainted'
+    const CHILD_C = 'child-clean'
+    const m = await mount((home) => {
+      mkdirSync(join(home, 'a2a'), { recursive: true })
+      // The child talked to a peer (its own a2a_route marked it); D is a tainted root.
+      writeFileSync(join(home, 'a2a', 'node-taint.json'), JSON.stringify({ sessions: [{ session: CHILD_T, via: 'a2a-route', at: 'x' }, { session: D, via: 'relay', at: 'x' }] }))
+    })
+    try {
+      await nodeWithLayers(m, 'chief', { 当前状态: '第一版' })
+      const b = await bindSession(m, B)
+      const write = async (agent: ScopedAgent, events: unknown[], text: string): Promise<Out> => await call(m, agent, events, { section: '当前状态', text, reason: 'r', expected_sha256: await shaOf(m) })
+      // A subagent that talked to a peer cannot launder its reply into the parent: queued, and the parent is marked.
+      const a = await bindSession(m, A)
+      expect((await write(a, [ev(PERSON), ev({ kind: 'subagent-settled', senderSessionId: CHILD_T })], 'x')).code).toBe('queued')
+      expect((await write(a, [ev(PERSON)], 'later')).code).toBe('queued')
+      // A clean subagent is neutral.
+      const c = await bindSession(m, C)
+      expect((await write(c, [ev(PERSON), ev({ kind: 'subagent-settled', senderSessionId: CHILD_C })], 'clean child')).ok).toBe(true)
+      // A peer agent message: from a known clean local session neutral; from an unknown sender refused once; from a tainted one sticky.
+      const E = 'session-eeeeeeee55555555'
+      const e = await bindSession(m, E)
+      expect((await write(e, [ev(PERSON), ev({ kind: 'agent-message', senderSessionId: B })], 'from clean B')).ok).toBe(true)
+      expect((await write(e, [ev(PERSON), ev({ kind: 'agent-message', senderSessionId: 'peer/zzzzzzzz' })], 'from unknown')).code).toBe('queued')
+      expect((await write(e, [ev(PERSON), ev({ kind: 'agent-message', senderSessionId: B })], 'clean again')).ok).toBe(true)
+      expect((await write(e, [ev(PERSON), ev({ kind: 'agent-message', senderSessionId: D })], 'from tainted D')).code).toBe('queued')
+      expect((await write(e, [ev(PERSON)], 'sticky')).code).toBe('queued')
+      // A referenced transcript: a tainted session's taints; a clean local one is neutral.
+      expect((await write(b, [ev(PERSON), ev({ kind: 'session-reference', sessionId: C })], 'ref clean')).ok).toBe(true)
+      expect((await write(b, [ev(PERSON), ev({ kind: 'session-reference', sessionId: D })], 'ref tainted')).code).toBe('queued')
+      expect((await write(b, [ev(PERSON)], 'sticky')).code).toBe('queued')
+    } finally {
+      await m.dispose()
+    }
+  }, 40_000)
 })
+

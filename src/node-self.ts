@@ -20,12 +20,16 @@
  *      nudge), or any source kind not known here. Context the agent loop
  *      injects (runtime/time/skill/tool-job notices…) is neutral.
  *   3. this plugin's own A2A tools that hand the model peer-originated text
- *      (a route reply, inbound task briefs, peer card rows — {@link toolTaint})
- *      mark the calling session when they return.
- *   Only remote EVIDENCE is persisted (a relay, a nudge, an agent message, an
- *   A2A tool read); an unknown source or a log with no person's input refuses
- *   this one call (fail-closed) without marking, so a host feature this
- *   module does not know yet never taints a session forever.
+ *      (any route answer — a reply or an error —, inbound task briefs, peer
+ *      card rows — {@link toolTaint}) mark the calling session when they return.
+ *   Messages that carry ANOTHER session's text (a subagent's closing message,
+ *   a peer agent's message, a referenced transcript) take that session's
+ *   taint, so a subagent that talked to a peer cannot launder its reply.
+ *   Only remote EVIDENCE is persisted (a relay, a nudge, a tainted other
+ *   session, an A2A tool read); an unknown source, an unknown sender or a log
+ *   with no person's input refuses this one call (fail-closed) without
+ *   marking, so a host feature this module does not know yet never taints a
+ *   session forever.
  *   The boundary, stated honestly: remote text the model reads through
  *   general tools (a fetched page, an issue body) is not a delivery and does
  *   not taint; nor can a `kind:'user'` prompt another plugin submits through
@@ -60,11 +64,27 @@ const LOCAL_SOURCES: ReadonlySet<string> = new Set(['user'])
  */
 const NEUTRAL_SOURCES: ReadonlySet<string> = new Set([
   'runtime-context', 'time-context', 'skill-catalog', 'tool-jobs', 'user-approval', 'model-selection', 'tool-registry', 'ptc-mode', 'system-prompt',
-  // Host features of a long-running session: compaction, a person's /skill, a subagent's result, a session reference, schedules, goals.
-  'compact-checkpoint', 'skill-invocation', 'subagent-settled', 'session-reference', 'schedule', 'goal',
+  // Host features of a long-running session: compaction (its own history), a person's /skill, schedules, goals.
+  'compact-checkpoint', 'skill-invocation', 'schedule', 'goal',
 ])
-/** Source kinds that ARE remote evidence (persisted): a relay, and a native-teams agent message. */
-const REMOTE_SOURCES: ReadonlySet<string> = new Set(['a2a-relay', 'agent-message'])
+/**
+ * Messages that carry ANOTHER session's text into this one, and where the field naming that session
+ * sits: a subagent's closing message, a peer agent's message, a referenced transcript. Their taint is
+ * the other session's: see {@link sessionSource}.
+ */
+const DERIVED_SOURCES: Readonly<Record<string, 'senderSessionId' | 'sessionId'>> = {
+  'subagent-settled': 'senderSessionId',
+  'agent-message': 'senderSessionId',
+  'session-reference': 'sessionId',
+}
+
+/** What the log scan may ask about OTHER sessions. */
+export interface SessionLookups {
+  /** Whether that session is marked tainted. */
+  readonly tainted: (session: string) => boolean
+  /** Whether that id is a session of this host the plugin knows (a live or joined root). */
+  readonly local: (session: string) => boolean
+}
 
 /**
  * Whether one of this plugin's A2A tools just handed the model text that originated at a peer: a
@@ -74,7 +94,8 @@ const REMOTE_SOURCES: ReadonlySet<string> = new Set(['a2a-relay', 'agent-message
 export function toolTaint(name: string, value: unknown): string {
   const v = value as { ok?: unknown; reply?: unknown; tasks?: unknown; archive?: unknown } | null
   if (v === null || typeof v !== 'object') return ''
-  if (name === 'a2a_route') return v.ok === true && typeof v.reply === 'string' && v.reply !== '' ? 'a2a-route-reply' : ''
+  // Any answer: a peer can put its text in a failure (an {error} body) as easily as in a reply.
+  if (name === 'a2a_route') return 'a2a-route'
   if (name === 'a2a_tasks') return (Array.isArray(v.tasks) && v.tasks.length > 0) || (Array.isArray(v.archive) && v.archive.length > 0) ? 'a2a-tasks' : ''
   if (name === 'a2a_teams' || name === 'a2a_status' || name === 'a2a_probe') return v.ok === true ? name.replace('_', '-') : ''
   return ''
@@ -86,18 +107,29 @@ export function toolTaint(name: string, value: unknown): string {
  * `a2a-relay` source — remote deliveries are relayed by this host with a fixed source shape, so a
  * remote caller cannot set that field). A session with no person's input at all is not local either.
  */
-export function sessionSource(events: readonly unknown[]): { local: true } | { local: false; via: string; evidence: boolean } {
+export function sessionSource(events: readonly unknown[], others: SessionLookups = { tainted: () => false, local: () => false }): { local: true } | { local: false; via: string; evidence: boolean } {
   let inputs = 0
   for (const event of events) {
-    const e = event as { type?: unknown; data?: { source?: { kind?: unknown; nodeReminder?: unknown; rpcId?: unknown } } } | null
+    const e = event as { type?: unknown; data?: { source?: { kind?: unknown; nodeReminder?: unknown; rpcId?: unknown; senderSessionId?: unknown; sessionId?: unknown } } } | null
     if (e?.type !== 'user/message') continue
     const source = e.data?.source
     const kind = source?.kind
     if (typeof kind !== 'string') return { local: false, via: 'unknown', evidence: false }
     if (NEUTRAL_SOURCES.has(kind)) continue
     if (kind === 'a2a-relay' && source?.nodeReminder === true) continue
+    if (kind === 'a2a-relay') return { local: false, via: kind, evidence: true }
     if (kind === 'user' && typeof source?.rpcId === 'string' && source.rpcId.startsWith('a2a-')) return { local: false, via: 'a2a-nudge', evidence: true }
-    if (REMOTE_SOURCES.has(kind)) return { local: false, via: kind, evidence: true }
+    const field = DERIVED_SOURCES[kind]
+    if (field !== undefined) {
+      // Another session's text: its taint becomes ours (persisted); a clean one is neutral. A subagent is
+      // always this host's; a peer agent or a reference must be a session this host knows, else this
+      // call is refused (a native-teams bridge could name a remote caller here).
+      const other = source?.[field]
+      if (typeof other !== 'string' || other === '') return { local: false, via: `${kind}:no-sender`, evidence: false }
+      if (others.tainted(other)) return { local: false, via: `${kind}:tainted`, evidence: true }
+      if (kind !== 'subagent-settled' && !others.local(other)) return { local: false, via: `${kind}:unknown-sender`, evidence: false }
+      continue
+    }
     if (!LOCAL_SOURCES.has(kind)) return { local: false, via: kind, evidence: false }
     inputs++
   }
@@ -284,6 +316,8 @@ export interface SelfUpdateDeps {
   readonly taint: SessionTaint
   /** The calling session's event log (the taint's fail-closed backstop). */
   readonly events: (agent: unknown) => readonly unknown[]
+  /** Whether an id is a session of this host the plugin knows (for messages naming another session). */
+  readonly localSession?: (session: string) => boolean
   readonly now?: () => string
   /** A write went through (the binder echoes it in the session's live context). */
   readonly onWritten: (session: string, version: PromptVersion, section: string) => void
@@ -304,7 +338,7 @@ export function selfUpdate(d: SelfUpdateDeps, node: string, session: string, age
   // The CAS sha the model needs: every refusal hands back the layer's current one.
   const current = d.store.get(node)?.prompt.mutable_sha256 ?? ''
   const marked = d.taint.of(session)
-  const logged = marked === '' ? sessionSource(d.events(agent)) : undefined
+  const logged = marked === '' ? sessionSource(d.events(agent), { tainted: id => d.taint.of(id) !== '', local: id => d.localSession?.(id) === true }) : undefined
   // Only remote evidence is persisted; an unknown source or no person's input refuses this call alone.
   if (logged !== undefined && !logged.local && logged.evidence) d.taint.mark(session, `log:${logged.via}`)
   const via = marked !== '' ? marked : logged !== undefined && !logged.local ? `log:${logged.via}` : ''
