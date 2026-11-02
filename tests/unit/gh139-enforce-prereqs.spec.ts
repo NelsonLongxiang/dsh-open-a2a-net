@@ -19,11 +19,11 @@ const KEY = 'MCowBQYDK2VwAyEApeerKeyBbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb='
 const TAILSCALE = 'http://100.75.181.127:13080'
 const LAN = 'http://192.168.1.5:13080'
 const facts = (extra: Partial<SettlementFacts> = {}): SettlementFacts => ({ hostLabel: HOST, membersOf: team => (team === 'dsh/canvas/ops' ? ['dsh/aaaaaaaa', 'qa/11112222', 'qa/33334444'] : undefined), ...extra })
-const wire = (caller: string, claimOrigin: string, claimKey?: string, proof: Settler['proof'] = 'origin-claim'): Settler => ({ caller, proof, ingress: 'wire', claimOrigin, ...(claimKey !== undefined ? { claimKey } : {}) })
+const wire = (caller: string, claimOrigin?: string, claimKey?: string, proof: Settler['proof'] = 'origin-claim'): Settler => ({ caller, proof, ingress: 'wire', ...(claimOrigin !== undefined ? { claimOrigin } : {}), ...(claimKey !== undefined ? { claimKey } : {}) })
 const local = (caller: string): Settler => ({ caller, proof: 'in-process', ingress: 'local' })
 
 describe('#139 judgeSettlement', () => {
-  it('N2 / P2-2: the peer dialed over Tailscale signs with its LAN URL — the card key, not the spelling, names it', () => {
+  it('N2 / P2-2 / #187: the peer dialed over Tailscale signs with its LAN URL — only root-origin claim evidence names the peer', () => {
     const row = { team: 'qa/11112222', peer: TAILSCALE, direction: 'outbound' as const, peerKey: KEY }
     expect(judgeSettlement(row, wire('qa/11112222', LAN, KEY), facts())).toEqual({ ok: true, role: 'target' })
     // Another key from the same spelling-mismatched origin is not the peer.
@@ -33,9 +33,12 @@ describe('#139 judgeSettlement', () => {
     expect(judgeSettlement(older, wire('qa/11112222', LAN, KEY), facts())).toEqual({ ok: false, reason: 'settler-off-chain' })
     // The key never upgrades an unproven caller.
     expect(judgeSettlement(row, wire('qa/11112222', LAN, KEY, 'claim-mismatch'), facts())).toEqual({ ok: false, reason: 'settler-unverified' })
-    // Compat and host-face read the same peer test.
-    expect(judgeSettlement({ ...row, peerHost: 'qa-host' }, wire('qa-host', LAN, KEY, 'claim-mismatch'), facts())).toEqual({ ok: true, role: 'compat' })
-    expect(judgeSettlement({ ...row, peerHost: 'qa-host' }, wire('qa-host', LAN, KEY, 'claim-mismatch'), facts({ onBehalfOf: 'qa/11112222' }))).toEqual({ ok: true, role: 'host-face' })
+    // #187: a path-prefixed card may carry a signed claim whose URL origin equals the peer, but is not root-origin proof. It cannot authorize any settlement role, even when the card key matches.
+    expect(judgeSettlement({ ...row, peerHost: 'qa-host' }, wire('qa-host', undefined, KEY, 'claim-mismatch'), facts())).toEqual({ ok: false, reason: 'settler-off-chain' })
+    expect(judgeSettlement({ ...row, peerHost: 'qa-host' }, wire('qa-host', undefined, KEY, 'claim-mismatch'), facts({ onBehalfOf: 'qa/11112222' }))).toEqual({ ok: false, reason: 'settler-off-chain' })
+    // Root-origin proof may use the exact same key fallback for address spelling differences.
+    expect(judgeSettlement({ ...row, peerHost: 'qa-host' }, wire('qa-host', LAN, KEY), facts())).toEqual({ ok: true, role: 'compat' })
+    expect(judgeSettlement({ ...row, peerHost: 'qa-host' }, wire('qa-host', LAN, KEY, 'origin-claim'), facts({ onBehalfOf: 'qa/11112222' }))).toEqual({ ok: true, role: 'host-face' })
   })
 
   it('scope-off residual of N1: another bare label on the peer host is not its host face once the row knows the host', () => {
@@ -43,7 +46,7 @@ describe('#139 judgeSettlement', () => {
     // An unjoined session on the peer host signs with the host's zone claim but carries its own label.
     expect(judgeSettlement(row, wire('qa-host-cccccccc', TAILSCALE, KEY, 'claim-mismatch'), facts())).toEqual({ ok: false, reason: 'settler-off-chain' })
     expect(judgeSettlement(row, wire('qa-host-cccccccc', TAILSCALE, KEY, 'claim-mismatch'), facts({ onBehalfOf: 'qa/11112222' }))).toEqual({ ok: false, reason: 'settler-off-chain' })
-    expect(judgeSettlement(row, wire('qa-host', TAILSCALE, KEY, 'claim-mismatch'), facts({ onBehalfOf: 'qa/11112222' }))).toEqual({ ok: true, role: 'host-face' })
+    expect(judgeSettlement(row, wire('qa-host', TAILSCALE, KEY, 'origin-claim'), facts({ onBehalfOf: 'qa/11112222' }))).toEqual({ ok: true, role: 'host-face' })
   })
 
   it('deliveredTo: only the member that received a canvas task answers for it (S5 review #7)', () => {
@@ -51,8 +54,8 @@ describe('#139 judgeSettlement', () => {
     expect(judgeSettlement(row, wire('qa/11112222', TAILSCALE, KEY), facts())).toEqual({ ok: true, role: 'target-member' })
     // Another current member of the canvas, same host, did not receive it.
     expect(judgeSettlement(row, wire('qa/33334444', TAILSCALE, KEY), facts())).toEqual({ ok: false, reason: 'settler-off-chain' })
-    expect(judgeSettlement(row, wire('qa-host', TAILSCALE, KEY, 'claim-mismatch'), facts({ onBehalfOf: 'qa/33334444' }))).toEqual({ ok: false, reason: 'on-behalf-mismatch' })
-    expect(judgeSettlement(row, wire('qa-host', TAILSCALE, KEY, 'claim-mismatch'), facts({ onBehalfOf: 'qa/11112222' }))).toEqual({ ok: true, role: 'host-face' })
+    expect(judgeSettlement(row, wire('qa-host', TAILSCALE, KEY, 'origin-claim'), facts({ onBehalfOf: 'qa/33334444' }))).toEqual({ ok: false, reason: 'on-behalf-mismatch' })
+    expect(judgeSettlement(row, wire('qa-host', TAILSCALE, KEY, 'origin-claim'), facts({ onBehalfOf: 'qa/11112222' }))).toEqual({ ok: true, role: 'host-face' })
     // A member removed after delivery still settled what it received.
     expect(judgeSettlement(row, wire('qa/11112222', TAILSCALE, KEY), facts({ membersOf: () => [] }))).toEqual({ ok: true, role: 'target-member' })
     // A row born before the field keeps the current-membership rule.

@@ -6,10 +6,13 @@
  * auto-receipt it misread. Each case asserts the fixed outcome.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { generateKeyPairSync, sign as edSign } from 'node:crypto'
+import { createPrivateKey, generateKeyPairSync, sign as edSign } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { bootNode, postJson, reservePort, runContext, tmpHome, type MeshNode } from './harness.ts'
 import { signCard } from '../../src/card.ts'
+import { signOriginClaim } from '../../src/origin-claim.ts'
+import { formatReceipt } from '../../src/receipt.ts'
 
 beforeEach(() => { vi.stubGlobal('WebSocket', function throwOnSocket() { throw new Error('no socket') }) })
 afterEach(() => { vi.unstubAllGlobals() })
@@ -143,6 +146,42 @@ describe('#114 S4 review of PR #140: off-chain settlement under enforce stays re
       await until(async () => (await rowOf(A, String(t.task_id)))?.settledBy !== undefined)
       expect((await rowOf(A, String(t.task_id)))?.settledBy).toMatchObject({ chain_role: 'host-face' })
       expect((await state(A)).settlement.refusalsTotal).toBe(0)
+    } finally { await A.dispose(); await B.dispose() }
+  }, 60_000)
+
+  it('#187: a path-prefixed signed peer card cannot settle a remote task by host-face or compat', async () => {
+    const pA = await reservePort()
+    const B = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo', sessionNodes: true, settlementAuth: 'enforce', peers: [`http://127.0.0.1:${String(pA)}`] })
+    const A = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', agentId: A_ID, sessionNodes: true, teamScopeRouting: false, settlementAuth: 'enforce', port: pA, peers: [B.baseUrl] })
+    try {
+      await postJson(A.baseUrl, '/__dsh_a2a/join', { id: A_ID })
+      silence(B)
+      const rootTask = await route(A, { team: 'cargo', message: 'root-proof control work', async: true })
+      const task = await route(A, { team: 'cargo', message: 'path-proof work', async: true })
+      expect(rootTask.ok && task.ok, JSON.stringify([rootTask, task])).toBe(true)
+      const rootCard = await globalThis.fetch(`${B.baseUrl}/.well-known/agent-card.json`).then(async res => await res.json())
+      const pathUrl = `${B.baseUrl}/apps/market`
+      const originalFetch = globalThis.fetch.bind(globalThis)
+      vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input))
+        if (url.href === `${pathUrl}/.well-known/agent-card.json`) return new Response(JSON.stringify(rootCard), { status: 200, headers: { 'Content-Type': 'application/json' } })
+        return await originalFetch(input, init)
+      })
+      const privateKey = createPrivateKey(readFileSync(`${B.home}/a2a/node-key.pem`, 'utf8'))
+      const makeReceipt = (id: string): string => formatReceipt(String(id), 'forged through claim URL', { outcome: 'completed', onBehalfOf: 'cargo/01234567' })
+      const target = { url: `${A.baseUrl}/a2a/direct`, method: 'POST' }
+      const rootHeaders = signOriginClaim(target, { caller: 'cargo', callerUrl: B.baseUrl, privateKey, unbound: true, now: Date.now() })
+      const rootResponse = await directPost(A.baseUrl, { team: 'alpha', message: makeReceipt(String(rootTask.task_id)), caller_session: 'mesh-cargo', wait: false, task_id: 'direct-rootsettle01' }, rootHeaders)
+      expect(rootResponse.delivered, JSON.stringify(rootResponse)).toBe(true)
+      expect(rootResponse.settlement).toBeUndefined()
+      expect((await rowOf(A, String(rootTask.task_id)))?.settledBy).toMatchObject({ chain_role: 'host-face' })
+
+      const pathHeaders = signOriginClaim(target, { caller: 'cargo', callerUrl: pathUrl, privateKey, unbound: true, now: Date.now() })
+      const response = await directPost(A.baseUrl, { team: 'alpha', message: makeReceipt(String(task.task_id)), caller_session: 'mesh-cargo', wait: false, task_id: 'direct-pathsettle01' }, pathHeaders)
+      expect(response.delivered, JSON.stringify(response)).toBe(true)
+      expect(response.settlement).toEqual({ status: 'refused', reason: 'settler-off-chain', task_id: String(task.task_id) })
+      expect((await rowOf(A, String(task.task_id)))?.status).toBe('pending')
+      expect((await state(A)).settlement.refusals).toEqual(expect.arrayContaining([expect.objectContaining({ taskId: task.task_id, reason: 'settler-off-chain', settler: { caller: 'mesh-cargo', proof: 'claim-mismatch', ingress: 'wire' } })]))
     } finally { await A.dispose(); await B.dispose() }
   }, 60_000)
 })

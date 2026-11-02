@@ -505,9 +505,9 @@ export interface Settler {
   /** The caller_session of the message that carries the receipt. */
   readonly caller: string
   readonly proof: AuthProof
-  /** The origin of a VERIFIED OriginClaim's card URL (claim-mismatch included), absent without one. */
+  /** Root origin from a bound v2 claim fetched at a root card URL; absent for unbound, CLI, path-prefixed, and legacy inputs. Caller coverage is judged separately. */
   readonly claimOrigin?: string
-  /** The public key of that claim's verified card (#139): the host identity, whatever address spelling signed it. */
+  /** Public key from the same bound root-card claim evidence (#139), for address-spelling aliases. */
   readonly claimKey?: string
   readonly ingress: 'wire' | 'local'
 }
@@ -589,7 +589,7 @@ export function judgeSettlement(row: SettlementRow, settler: Settler, facts: Set
   const peerOrigin = local ? undefined : originOfUrl(row.peer)
   // #139: the peer is its signing key, not one spelling of its address — a host
   // bound to 0.0.0.0 signs with its LAN URL while it was dialed over Tailscale.
-  const fromPeerOrigin = settler.ingress === 'wire' && peerOrigin !== undefined &&
+  const fromPeerOrigin = settler.ingress === 'wire' && settler.claimOrigin !== undefined && peerOrigin !== undefined &&
     (settler.claimOrigin === peerOrigin || (row.peerKey !== undefined && settler.claimKey === row.peerKey))
   // #139 (scope-off residual of N1): across hosts the process label is the
   // peer card's session label when the row recorded it; another bare label

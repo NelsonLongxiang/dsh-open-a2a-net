@@ -276,7 +276,8 @@ type Sender =
 interface Settler {
   readonly caller: string                          // 送来这条消息的 caller_session
   readonly proof: TaskAuthorization['proof']       // wire 面：OriginClaim 结果；本机：'in-process'
-  readonly claimOrigin?: string                    // OriginClaim 验证通过时名片 URL 的 origin
+  readonly claimOrigin?: string                    // 仅bound v2+根卡直取；caller coverage另判，path/unbound/CLI不提供
+  readonly claimKey?: string                       // 与claimOrigin同一根卡证据，不独立提升unbound/path claim
   readonly ingress: 'wire' | 'local'
 }
 ```
@@ -291,7 +292,7 @@ interface Settler {
 |---|---|
 | `target` | `S.caller === R.team`（出站行：我们派给谁；入站行：`R.auth.target`） |
 | `target-member` | R.team 是画布队，且 S.caller 是**实际投中的成员** `R.deliveredTo`（#139）；`deliveredTo` 出生前的旧行仍取该画布**当前**的成员（会话 id 或句柄，本机或远端引用） |
-| `host-face` | S 是目标所在宿主的进程面**代目标结算**：自动回执（§4.3 的 `onBehalfOf` 等于 R.team / `deliveredTo`），且（跨主机时）S 是对端的进程标签（R 记有 `peerHost` 时必须等于它，#139 收掉 N1 在 scope 关闭下的残余），且 claim 来自 R 的对端：`S.claimOrigin` 等于 R.peer 的 origin，**或** claim 名片的公钥等于 R 出生时记下的 `peerKey`（#139：同一台主机绑 0.0.0.0 时以局域网 URL 签名、却被经 Tailscale 拨入，地址写法不同但密钥相同），（本机时）`S.caller === session` 且 `S.ingress === 'local'` |
+| `host-face` | S 是目标所在宿主的进程面**代目标结算**：自动回执（§4.3 的 `onBehalfOf` 等于 R.team / `deliveredTo`），且（跨主机时）S 是对端的进程标签（R 记有 `peerHost` 时必须等于它，#139 收掉 N1 在 scope 关闭下的残余），且有bound v2 + 根卡直取产生的 `S.claimOrigin` 证据；其origin等于 R.peer 的 origin，**或**同一根卡的公钥等于 R 出生时记下的 `peerKey`（#139：同一台主机绑 0.0.0.0 时以局域网 URL 签名、却被经 Tailscale 拨入，地址写法不同但密钥相同）。caller coverage另在target/member角色判定，不代表path/unbound可结算；（本机时）`S.caller === session` 且 `S.ingress === 'local'` |
 | `legacy` | R 无 `auth`/`deliveredTo`（旧行）——兼容放行，单独计数 |
 
 其余一律 **`off-chain`**。三条结算路径都过同一判定：

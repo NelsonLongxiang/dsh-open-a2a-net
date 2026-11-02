@@ -686,7 +686,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // #114 S4: the settler is this delivery's caller, as proven here. A CLI identity's claim URL
           // is not a host's origin (its origin is unconstrained), so it never vouches for one (review of PR #140 P1-2).
           // #139: the claim's card key names the host whatever address spelling it signed with.
-          const refusedSettlement = settleAndAnnounce(message, { caller, proof: callerProof, ...(claim.ok && claim.cli !== true ? { claimOrigin: originOf(claim.callerUrl), claimKey: claim.card.publicKey } : {}), ingress: 'wire' })
+          const refusedSettlement = settleAndAnnounce(message, { caller, proof: callerProof, ...(claim.ok && claim.cli !== true && claim.bound === true && isRootOriginUrl(claim.callerUrl) ? { claimOrigin: originOf(claim.callerUrl), claimKey: claim.card.publicKey } : {}), ingress: 'wire' })
           // #139 (design §4.4): every answer this delivery gets carries the refusal.
           if (refusedSettlement !== undefined) withSettlementField(res, refusedSettlement)
           // gh#45 CLI mailbox (wire face): a delivery targeting a DEPOSITED

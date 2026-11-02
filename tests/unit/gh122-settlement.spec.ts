@@ -52,23 +52,28 @@ describe('#122 judgeSettlement', () => {
     expect(judgeSettlement(row, wire('dsh/zzzzzzzz', 'origin-claim', 'http://100.75.181.127:13080'), facts())).toEqual({ ok: false, reason: 'settler-off-chain' })
   })
 
-  it('review of PR #140 P2-1: an auto-receipt for a bare zone team names one of that zone\'s faces', () => {
+  it('review of PR #140 P2-1: root-origin evidence permits host-face even when caller coverage differs', () => {
     expect(judgeSettlement({ ...inbound, auth: { ...auth, target: 'dsh' } }, local(HOST), facts({ onBehalfOf: 'dsh/01234567' }))).toEqual({ ok: true, role: 'host-face' })
-    expect(judgeSettlement({ ...outbound, team: 'cargo' }, wire('cargo-host', 'claim-mismatch', 'http://100.75.181.127:13080'), facts({ onBehalfOf: 'cargo/89abcdef' }))).toEqual({ ok: true, role: 'host-face' })
-    expect(judgeSettlement({ ...outbound, team: 'cargo' }, wire('cargo-host', 'claim-mismatch', 'http://100.75.181.127:13080'), facts({ onBehalfOf: 'cargox/89abcdef' }))).toEqual({ ok: false, reason: 'on-behalf-mismatch' })
+    expect(judgeSettlement({ ...outbound, team: 'cargo' }, wire('cargo-host', 'origin-claim', 'http://100.75.181.127:13080'), facts({ onBehalfOf: 'cargo/89abcdef' }))).toEqual({ ok: true, role: 'host-face' })
+    expect(judgeSettlement({ ...outbound, team: 'cargo' }, wire('cargo-host', 'claim-mismatch'), facts({ onBehalfOf: 'cargo/89abcdef' }))).toEqual({ ok: false, reason: 'settler-off-chain' })
+    expect(judgeSettlement({ ...outbound, team: 'cargo' }, wire('cargo-host', 'origin-claim', 'http://100.75.181.127:13080'), facts({ onBehalfOf: 'cargox/89abcdef' }))).toEqual({ ok: false, reason: 'on-behalf-mismatch' })
   })
 
   it('host-face: the target\'s host on its behalf — locally by this host\'s label, across hosts by a claim from the row\'s peer origin', () => {
     expect(judgeSettlement(inbound, local(HOST), facts({ onBehalfOf: TARGET }))).toEqual({ ok: true, role: 'host-face' })
     expect(judgeSettlement(inbound, local(HOST), facts({ onBehalfOf: 'dsh/zzzzzzzz' }))).toEqual({ ok: false, reason: 'on-behalf-mismatch' })
+    expect(judgeSettlement(outbound, wire('dsh-host-b', 'origin-claim', 'http://100.75.181.127:13080'), facts({ onBehalfOf: 'dsh/bbbbbbbb' }))).toEqual({ ok: true, role: 'host-face' })
     expect(judgeSettlement(outbound, wire('dsh-host-b', 'claim-mismatch', 'http://100.75.181.127:13080'), facts({ onBehalfOf: 'dsh/bbbbbbbb' }))).toEqual({ ok: true, role: 'host-face' })
+    expect(judgeSettlement(outbound, wire('dsh-host-b', 'claim-mismatch'), facts({ onBehalfOf: 'dsh/bbbbbbbb' }))).toEqual({ ok: false, reason: 'settler-off-chain' })
     expect(judgeSettlement(outbound, wire('dsh-host-b', 'claim-mismatch', 'http://elsewhere:1'), facts({ onBehalfOf: 'dsh/bbbbbbbb' }))).toEqual({ ok: false, reason: 'settler-off-chain' })
     // Round 2 N1: a session face on the peer host is not its host face, whatever onBehalfOf it writes.
     expect(judgeSettlement(outbound, wire('dsh/cccccccc', 'origin-claim', 'http://100.75.181.127:13080'), facts({ onBehalfOf: 'dsh/bbbbbbbb' }))).toEqual({ ok: false, reason: 'settler-off-chain' })
   })
 
   it('compat: an older host\'s auto-receipt (no onBehalfOf) with a claim from the row\'s peer origin', () => {
+    expect(judgeSettlement(outbound, wire('dsh-host-b', 'origin-claim', 'http://100.75.181.127:13080'), facts())).toEqual({ ok: true, role: 'compat' })
     expect(judgeSettlement(outbound, wire('dsh-host-b', 'claim-mismatch', 'http://100.75.181.127:13080'), facts())).toEqual({ ok: true, role: 'compat' })
+    expect(judgeSettlement(outbound, wire('dsh-host-b', 'claim-mismatch'), facts())).toEqual({ ok: false, reason: 'settler-off-chain' })
   })
 
   it('#61 shape: the target host\'s own label settling WITHOUT onBehalfOf, or anyone else, is off-chain; an echo is echo-off-chain', () => {
