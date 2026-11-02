@@ -317,4 +317,39 @@ describe('N6 P3 (review of #178 at 40b7310)', () => {
     expect(t.list('chief')[0]?.remind_pending).toBeUndefined()
     expect(t.takePending('chief')).toEqual([])
   })
+
+  it('D2: the same ref owing a reminder a SECOND time in one process is handed out again', async () => {
+    let answer: TaskFact = open
+    const { t } = table(async () => answer, '', 0)
+    t.track('chief', 'o/r#5', V, 'human:owner')
+    await flush()
+    answer = merged()
+    await t.checkAll()
+    expect(t.takePending('chief').map(p => p.ref)).toEqual(['o/r#5'])
+    expect(t.untrack('chief', 'o/r#5').ok).toBe(true)
+    answer = open
+    t.track('chief', 'o/r#5', V, 'human:owner')
+    await flush()
+    answer = merged()
+    await t.checkAll()
+    expect(t.takePending('chief').map(p => p.ref)).toEqual(['o/r#5'])
+    expect(t.takePending('chief')).toEqual([])
+  })
+
+  it('D6: when every pointer owes a reminder, the cap still holds (the oldest owed one goes)', async () => {
+    let answer: TaskFact = open
+    const { t } = table(async () => answer, '', 0)
+    for (let i = 1; i <= TASK_KEEP; i++) { t.track('chief', `o/r#${String(i)}`, V, 'human:owner'); await flush() }
+    answer = merged()
+    await t.checkAll()
+    expect(t.list('chief').every(p => p.remind_pending === true)).toBe(true)
+    answer = open
+    t.track('chief', 'o/r#999', V, 'human:owner')
+    await flush()
+    const refs = t.list('chief').map(p => p.ref)
+    expect(refs).toHaveLength(TASK_KEEP)
+    expect(refs).toContain('o/r#999')
+    expect(refs).not.toContain('o/r#1')
+  })
 })
+
