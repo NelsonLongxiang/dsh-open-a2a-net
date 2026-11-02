@@ -20,7 +20,12 @@
  *   it was `open` here, or GitHub's merged_at / closed_at is later than
  *   `since` — calls `onSettled` once. A pointer that finished before it
  *   was tracked, or whose finish time cannot be told, does not remind; an
- *   unknown state never does.
+ *   unknown state never does. A reminder that reached no session (a cold
+ *   host boot: the load-time pass runs before any session is live) is kept
+ *   as `remind_pending` and handed out the next time the node mounts on a
+ *   session (`takePending`), so a merge during downtime is not swallowed.
+ *   The finish-time comparison trusts the host clock; skew of a few minutes
+ *   can add or drop a reminder for a pointer whose first check failed.
  * - After the plugin unloads (`dispose`), a check still in flight neither
  *   writes nor reminds: a newer instance owns the file by then.
  * - A file that does not parse is left in place and the table is read-only;
@@ -50,6 +55,8 @@ export interface TaskPointer {
   readonly core_version: number
   readonly mutable_version: number
   readonly by: string
+  /** A reminder is owed: it finished, but no live session carried the node at the time. */
+  readonly remind_pending?: true
 }
 
 /** The §6 reminder for a pointer that finished. */
@@ -74,6 +81,7 @@ function pointerOf(raw: unknown): TaskPointer | undefined {
     ref: r.ref, state: r.state, check: r.check === 'ok' || r.check === 'unknown' ? r.check : 'pending',
     since: r.since, checked_at: typeof r.checked_at === 'string' && ISO.test(r.checked_at) ? r.checked_at : '',
     core_version: n(r.core_version), mutable_version: n(r.mutable_version), by: typeof r.by === 'string' ? r.by.slice(0, 80) : '',
+    ...(r.remind_pending === true && FINISHED.has(r.state) ? { remind_pending: true as const } : {}),
   }
 }
 
@@ -95,8 +103,8 @@ export interface TaskSchedule {
 export interface NodeTasksDeps {
   readonly probe: GithubProbe
   readonly logger: { warn: (format: string, ...args: unknown[]) => void }
-  /** A pointer finished after it was tracked (§6 主触发). */
-  readonly onSettled: (node: string, pointer: TaskPointer) => void
+  /** A pointer finished after it was tracked (§6 主触发); returns how many sessions got the reminder. */
+  readonly onSettled: (node: string, pointer: TaskPointer) => number
   readonly now?: () => string
 }
 
@@ -153,8 +161,9 @@ export class NodeTasks {
         mkdirSync(this.root, { recursive: true })
         const tmp = `${this.file}.${String(process.pid)}.tmp`
         writeFileSync(tmp, JSON.stringify({ tasks: next }), { mode: 0o600 })
-        // The archive is appended only once the new table is ready, so a failed table write leaves no duplicate
-        // archive rows behind; a crash between the two can lose an evicted pointer, never revive one.
+        // The archive is appended after the new table is staged and before it replaces the old one: a failed
+        // staging write leaves no archive rows; a crash (or a failed rename) after the append leaves the pointer
+        // in BOTH files — a duplicate, never a loss.
         for (const a of archived) appendFileSync(join(this.root, 'node-tasks-archive.jsonl'), `${JSON.stringify({ node: a.node, ...a.pointer, archived_at: this.now() })}\n`, { mode: 0o600 })
         renameSync(tmp, this.file)
       } catch (error) {
@@ -246,8 +255,32 @@ export class NodeTasks {
       return
     }
     if (fact !== undefined && finishedSinceTracked(before, fact)) {
-      try { this.d.onSettled(node, after) } catch (error) { this.d.logger.warn('a2a nodes: reminder for %s failed: %s', ref, String(error)) }
+      let reached = 0
+      try { reached = this.d.onSettled(node, after) } catch (error) { this.d.logger.warn('a2a nodes: reminder for %s failed: %s', ref, String(error)) }
+      // Nobody carried the node right now (e.g. a cold boot): owe it to the next session that mounts it.
+      if (reached === 0) this.setPending(node, ref, true)
     }
+  }
+
+  private setPending(node: string, ref: string, pending: boolean): void {
+    const list = this.list(node)
+    if (!list.some(p => p.ref === ref)) return
+    const done = this.commit({ ...this.table, [node]: list.map(p => {
+      if (p.ref !== ref) return p
+      const { remind_pending: _drop, ...rest } = p
+      return pending ? { ...rest, remind_pending: true as const } : rest
+    }) })
+    if (!done.ok) this.d.logger.warn('a2a nodes: could not record the owed reminder for %s: %s', ref, done.error)
+  }
+
+  /**
+   * The reminders owed to `node`, cleared as they are handed out (one session gets each). A clear that
+   * cannot be written still hands them out — a reminder may then repeat after a restart, never vanish.
+   */
+  takePending(node: string): TaskPointer[] {
+    const owed = this.list(node).filter(p => p.remind_pending === true)
+    for (const p of owed) this.setPending(node, p.ref, false)
+    return owed
   }
 
   /** The full pass: every pointer not yet finished, one at a time. A pass already running is joined. */

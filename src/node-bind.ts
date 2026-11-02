@@ -264,6 +264,8 @@ export interface BindableAgent {
   readonly ctx: Context
   /** Queue a follow-up turn (the §6 reminder); absent on test doubles that never get one. */
   followup?(message: UserMessage): void
+  /** Queue a message for the next turn without waking (an owed reminder handed out at mount). */
+  send?(message: UserMessage, target: 'next-turn' | 'next-step', wakeup: boolean): void
 }
 
 export interface MountedNode {
@@ -286,6 +288,8 @@ export interface NodeBinderDeps {
   readonly live: (session: string) => BindableAgent | undefined
   /** The node's task context text, read at each assembly ('' = none). */
   readonly tasksText?: (node: string) => string
+  /** Reminders owed to the node (finished while no session carried it); taken — and cleared — at mount. */
+  readonly pendingReminders?: (node: string) => string[]
 }
 
 export interface NodeBinder {
@@ -318,6 +322,16 @@ export interface NodeBinder {
   disposeAll(): void
   /** Queue a follow-up turn on every live, mounted session carrying `node` (§6 reminder); how many got it. */
   remind(node: string, text: string): number
+}
+
+/** One §6 reminder as a user message; the sender label makes ui-chat render it as "来自 …" with the text. */
+function reminderMessage(node: string, text: string): UserMessage {
+  return {
+    id: MessageId(`a2a-node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`),
+    role: 'user',
+    content: [{ type: 'text', text }],
+    source: { kind: 'a2a-relay', form: 'relay', senderSessionId: `节点 ${node} 的任务核对` },
+  }
 }
 
 export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
@@ -388,6 +402,18 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
     }
     const info: MountedNode = { node: name, core_version: core?.version ?? 0, mutable_version: mutable?.version ?? 0 }
     mounts.set(session, { dispose: () => { for (const dispose of disposers.reverse()) dispose() }, info })
+    // Owed reminders ride the session's next turn; handing them out must never fail the mount.
+    if (d.pendingReminders !== undefined) {
+      try {
+        for (const text of d.pendingReminders(name)) {
+          const message = reminderMessage(name, text)
+          if (agent.send !== undefined) agent.send(message, 'next-turn', false)
+          else agent.followup?.(message)
+        }
+      } catch (error) {
+        d.logger.warn('a2a nodes: owed reminders for %s on %s failed: %s', name, session, String(error))
+      }
+    }
     const recorded = d.bindings.setFrozen(session, { version: info.core_version, sha256: core?.sha256 ?? '' }, { version: info.mutable_version, sha256: mutable?.sha256 ?? '' })
     if (!recorded.ok && recorded.code !== 'not-found') d.logger.warn('a2a nodes: could not record the versions %s froze (%s) — a plugin reload may re-mount it at the previously recorded ones', session, recorded.error)
     return info
@@ -492,13 +518,7 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
         const agent = d.live(session)
         if (agent?.followup === undefined) continue
         try {
-          agent.followup({
-            id: MessageId(`a2a-node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`),
-            role: 'user',
-            content: [{ type: 'text', text }],
-            // The sender label makes ui-chat render it as "来自 …" with the text, not an opaque relay row.
-            source: { kind: 'a2a-relay', form: 'relay', senderSessionId: `节点 ${node} 的任务核对` },
-          })
+          agent.followup(reminderMessage(node, text))
           reached++
         } catch (error) {
           d.logger.warn('a2a nodes: reminder to %s failed: %s', session, String(error))

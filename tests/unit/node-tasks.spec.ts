@@ -21,9 +21,9 @@ const T0 = '2026-11-02T10:00:00.000Z'
 const LATER = '2026-11-02T12:00:00Z'
 const EARLIER = '2026-11-01T12:00:00Z'
 
-function table(probe: (ref: string) => Promise<TaskFact | undefined>, root = ''): { t: NodeTasks; settled: Array<[string, TaskPointer]> } {
+function table(probe: (ref: string) => Promise<TaskFact | undefined>, root = '', reached = 1): { t: NodeTasks; settled: Array<[string, TaskPointer]> } {
   const settled: Array<[string, TaskPointer]> = []
-  const t = new NodeTasks(root, { probe, logger: quiet, onSettled: (node, p) => { settled.push([node, p]) }, now: () => T0 })
+  const t = new NodeTasks(root, { probe, logger: quiet, onSettled: (node, p) => { settled.push([node, p]); return reached }, now: () => T0 })
   return { t, settled }
 }
 const flush = async (): Promise<void> => { for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0)) }
@@ -178,13 +178,15 @@ describe('NodeTasks: pointers, checks, reminders', () => {
 
   it('a pointer untracked while its check is in flight is not revived', async () => {
     let release: (f: TaskFact) => void = () => undefined
-    const { t } = table(async () => await new Promise<TaskFact>(resolve => { release = resolve }))
+    const { t, settled } = table(async () => await new Promise<TaskFact>(resolve => { release = resolve }))
     t.track('chief', 'o/r#9', V, 'human:owner')
     await flush()
     expect(t.untrack('chief', 'o/r#9').ok).toBe(true)
-    release(open)
+    // r2 M4: release a MERGE — a revived pointer would also remind.
+    release(merged())
     await flush()
     expect(t.list('chief')).toEqual([])
+    expect(settled).toEqual([])
   })
 
   it('keeps 64 per node, evicting finished pointers before open ones, into node-tasks-archive.jsonl', async () => {
@@ -247,4 +249,30 @@ describe('NodeTasks: pointers, checks, reminders', () => {
     expect(t.list('chief')).toEqual([])
     expect(readFileSync(join(root, 'node-tasks-archive.jsonl'), 'utf8')).toContain('"ref":"o/r#2"')
   })
+
+  it('r2 P2: a reminder that reached no session is owed, survives a restart, and is handed out exactly once', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'node-tasks-'))
+    let answer: TaskFact = open
+    const { t, settled } = table(async () => answer, root, 0)
+    t.track('chief', 'o/r#11', V, 'human:owner')
+    await flush()
+    answer = merged()
+    await t.checkAll()
+    expect(settled).toHaveLength(1)
+    expect(t.list('chief')[0]?.remind_pending).toBe(true)
+    const again = table(async () => answer, root).t
+    expect(again.list('chief')[0]?.remind_pending).toBe(true)
+    expect(again.takePending('chief').map(p => p.ref)).toEqual(['o/r#11'])
+    expect(again.takePending('chief')).toEqual([])
+    expect(table(async () => answer, root).t.list('chief')[0]?.remind_pending).toBeUndefined()
+    // A reminder that did reach a session owes nothing.
+    const { t: t2 } = table(async () => answer, mkdtempSync(join(tmpdir(), 'node-tasks-')), 1)
+    answer = open
+    t2.track('chief', 'o/r#12', V, 'human:owner')
+    await flush()
+    answer = merged()
+    await t2.checkAll()
+    expect(t2.takePending('chief')).toEqual([])
+  })
 })
+

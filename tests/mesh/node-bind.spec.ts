@@ -979,5 +979,44 @@ describe('N6 — task pointers on the nodes face, the live task context, the rem
       await m.dispose()
     }
   }, 30_000)
-})
 
+  it('r2 P2: a merge found by the load-time pass while no session is live is handed to the session when it comes up (next turn, no wake)', async () => {
+    const github: Record<string, unknown> = { 172: { state: 'open' } }
+    stubGithub(github)
+    const m = await mount()
+    try {
+      await nodeWithLayers(m, 'chief', { 当前状态: '原文' })
+      const a = makeAgent(m.ctx, A)
+      m.publish(a)
+      expect((await m.post('/__dsh_a2a/join', { id: A })).status).toBe(200)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: A })).status).toBe(200)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'track', name: 'chief', ref: 'NelsonLongxiang/dsh-open-a2a-net#172' })).status).toBe(200)
+      const state = async (): Promise<string> => ((await (await m.get('/__dsh_a2a/nodes?name=chief')).json()) as { tasks: Array<{ state: string }> }).tasks[0]?.state ?? ''
+      for (let i = 0; i < 50 && await state() !== 'open'; i++) await new Promise(resolve => setTimeout(resolve, 10))
+      // Cold boot: the plugin goes down, the session is not live when it comes back, the PR merged meanwhile.
+      await m.reload(false)
+      m.agents.map.delete(A)
+      await a.dispose()
+      github[172] = { state: 'closed', closed_at: new Date().toISOString(), pull_request: { merged_at: new Date().toISOString() } }
+      await m.reload(true)
+      for (let i = 0; i < 100 && await state() !== 'merged'; i++) await new Promise(resolve => setTimeout(resolve, 10))
+      expect(await state()).toBe('merged')
+      // The session comes up later: the owed reminder rides its next turn, without waking it.
+      const sent: string[] = []
+      const resumed = Object.assign(makeAgent(m.ctx, A), {
+        send: (msg: { content: Array<{ text: string }> }, target: string, wakeup: boolean) => { sent.push(`${target}|${String(wakeup)}|${msg.content[0]?.text ?? ''}`) },
+      })
+      m.publish(resumed)
+      expect(sent).toEqual(['next-turn|false|[节点复盘] NelsonLongxiang/dsh-open-a2a-net#172 已合并。这件事告一段落：按需更新节点自记（当前状态、执行要点、已知陷阱、当前重点）。'])
+      // Handed out once: a later re-publish owes nothing.
+      const later = Object.assign(makeAgent(m.ctx, A), { send: () => { sent.push('again') } })
+      await resumed.dispose()
+      m.ctx.emit('agent/disposed', { agent: resumed as unknown as Agent })
+      m.publish(later)
+      expect(sent).toHaveLength(1)
+    } finally {
+      vi.unstubAllEnvs()
+      await m.dispose()
+    }
+  }, 30_000)
+})
