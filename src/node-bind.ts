@@ -56,10 +56,18 @@ export interface NodeBinding {
 
 const fail = <T>(code: 'bad-request' | 'not-found' | 'conflict' | 'unavailable', error: string): NodeResult<T> => ({ ok: false, code, error })
 
+/**
+ * Mutable text cannot leave its fence: the fence markers are neutralised and a line that starts with
+ * `#` is escaped, so a note can never close the fence or forge a heading (e.g. a second 节点契约).
+ */
+export function fenceSafe(text: string): string {
+  return text.replaceAll('<<<节点自记', '‹‹‹节点自记').replaceAll('节点自记>>>', '节点自记›››').replace(/^(\s*)#/gm, '$1\\#')
+}
+
 /** The mutable layer, fenced and marked lower than the core layer below it. '' when every section is empty. */
 export function renderMutable(v: PromptVersion | undefined): string {
   if (v === undefined) return ''
-  const parts = MUTABLE_SECTIONS.map(key => ({ key, text: (v.sections[key] ?? '').trim() })).filter(p => p.text !== '')
+  const parts = MUTABLE_SECTIONS.map(key => ({ key, text: fenceSafe((v.sections[key] ?? '').trim()) })).filter(p => p.text !== '')
   if (parts.length === 0) return ''
   return [
     '## 节点自记（a2a:node:mutable）',
@@ -204,6 +212,8 @@ export interface NodeBinderDeps {
 export interface NodeBinder {
   /** Mount the session's bound node, if any. Never throws (it runs inside agent/created). */
   mount(agent: BindableAgent): void
+  /** Take a live session's node sections off, keeping its binding row (an archived session). */
+  suspend(session: string): void
   /** Forget a session's mount without touching its binding (cooling unload; the scope disposes itself). */
   forget(session: string): void
   /** What a live session currently carries (the frozen snapshot), if anything. */
@@ -274,6 +284,9 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
       } catch (error) {
         d.logger.warn('a2a nodes: mounting node sections on %s failed (session opens without them): %s', session, String(error))
       }
+    },
+    suspend(session) {
+      unmount(session)
     },
     forget(session) {
       mounts.delete(session)
