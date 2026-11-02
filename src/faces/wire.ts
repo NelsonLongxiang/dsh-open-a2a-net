@@ -454,7 +454,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           readonly fingerprint?: unknown
         }
         try {
-          body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof body
+          body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof body; if (body === null || typeof body !== 'object' || Array.isArray(body)) throw new TypeError('query body must be a JSON object') // #168: `null` read body.task_id in this 'end' callback → uncaught → host exit, no auth needed
         } catch {
           const payload = JSON.stringify({ error: 'malformed body', code: -32000 })
           res.writeHead(400, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
@@ -548,7 +548,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             readonly task_id?: unknown
           }
           try {
-            body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof body
+            body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof body; if (body === null || typeof body !== 'object' || Array.isArray(body)) throw new TypeError('direct body must be a JSON object') // #168: `null` read body.team in this async 'end' callback → unhandled rejection → host exit
           } catch {
             const payload = JSON.stringify({ error: 'malformed body', code: -32000 })
             res.writeHead(400, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
