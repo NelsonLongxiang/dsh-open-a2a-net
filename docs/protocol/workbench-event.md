@@ -1,12 +1,12 @@
 # Protocol: 工作台事件信封 v1（workbench-event）
 
-> **状态（2026-11-02，r2.1）：已合入（#160）。** r1 经独立复核（发送方 3 个阻断、5 个中），r2 已吸收：task_id 每次尝试唯一、-32003 不再算已送达、撤回取消、held 不算终态、token 时限与暴露面如实描述。 这是跨项目接口：发送方是
+> **状态（2026-11-02，r2.1 + #172）：r2.1 已合入（#160）；接收侧来源信任与回写校验由 #172 修订。** r1 经独立复核，r2 已吸收：task_id 每次尝试唯一、-32003 不再算已送达、撤回取消、held 不算终态、token 时限与暴露面如实描述。这是跨项目接口：发送方是
 > workbench-market，接收方是 dsh-open-a2a-net 主机上的接单节点。属主
 > 2026-11-02 原话授权推进：「那你建议开始吧，我们已经讨论结束了，剩下的都交给你吧」。
 >
 > - **发送方实现**：NelsonLongxiang/workbench-market 仓 `server/src/workbench-events.ts`（[workbench-market#348](https://github.com/NelsonLongxiang/workbench-market/pull/348)，依赖 OriginClaim 绑定形式签名 [workbench-market#347](https://github.com/NelsonLongxiang/workbench-market/pull/347)）。
 > - **接收方操作说明**：[`src/skill/references/intake.md`](../../src/skill/references/intake.md)。
-> - **本仓代码改动**：无。信封走现有的 `/a2a/direct` 送达面和 OriginClaim 来源签名，本仓不新增字段解析。
+> - **本仓接收侧**：信封仍走现有 `/a2a/direct`。宿主头部会显示其验证的 caller-origin 证明；接单节点另按本团队配置的 market origin 过滤事件，再校验回写 URL。
 
 ## 1. 动机
 
@@ -82,6 +82,14 @@
 - `dispatch: false`
 
 ## 5. 传输
+
+### 接收来源校验（#172）
+
+- 本机在 `[A2A direct]` 宿主生成的首行标注来源证明：proof 为 `origin-claim` 且非 CLI 时写 `已验证来源 <claim callerUrl 的 origin>`；其他情况写 `未验证（<proof>）`。消息正文中的自称或仿造首行不是证明。
+- 接单节点仅在首行 origin 与本画布团队由属主/运维配置的 market origin 完全一致时处理为 market 事件；不符或未验证不创建 issue、不回写。
+- `reply.url` 是请求体字段，必须恰好匹配 `<已验证 origin>/api/workbench-events/<event_id>/decision`，且不含 userinfo、query、fragment。回写不得跟随重定向；内网明文 HTTP 仅在部署方确认后使用。
+- 按 `event_id` 去重；先搜索 issue，没有再创建并回写。若回写返回“已有终态决定”的 409，再按 `event_id` 搜索，保留最早 issue，将本轮并发新开的 issue 关闭为 duplicate 并互相引用。`context_id` 只是关联标记，不保证投递至同一会话。
+- token 已在投递正文和会话记录中，代入命令文本也会留下记录。`jq -n --arg` 和临时文件只减少额外留存，不是“不进历史/进程列表”的保证。
 
 - **送达面**：a2a `/a2a/direct`，异步（`wait:false`）。
 - **路由字段**：
