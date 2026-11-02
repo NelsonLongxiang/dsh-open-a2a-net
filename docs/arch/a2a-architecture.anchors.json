@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceCommit": "d83b9147d7b03b5d0f31c6c241da2d2b7807147c",
+  "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
     "src/index.ts": "34ff672ed378b3d0e94fb6e1fde2e0ce48f3af8c5dd6c4590ffe38099f9c4517",
