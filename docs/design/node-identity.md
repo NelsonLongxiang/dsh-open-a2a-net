@@ -186,11 +186,17 @@
 - **归因**：每条任务指针记下开始时的 `core_version` 和 `mutable_version`。结果指标取 GitHub 事实：PR 是否合并、从开到合用了多久、评审往返几轮、是否回滚，按版本聚合。
 - **回退**：人在带 apiKey 的管理面把 `mutable_version` 指回旧版本，回退本身也追加一条记录。节点没有回退工具。
 - **实现说明（N4）**：
-  - **怎么判「远端轮次」**：只看本轮的输入消息，也就是最后一个 `turn/start` 之后的各条 `user/message`。本轮输入全部来自本机，才算本地：本机界面或 RPC 上的人（`user`）、harness 自己的通知，以及宿主生成的复盘提醒（`a2a-relay` 来源上带 `nodeReminder: true`。远端投递由宿主按固定字段转发，带不上这个字段）。其余来源，包括未知来源、没有 turn 标记、本轮没有输入，一律按远端处理（失败即关）。
-  - **边界**：本地轮次里，模型通过工具读到的远端文字不会被识别；更早轮次留在历史里的远端内容也不会。设计 §6 的 `via` 指的是本轮输入的来源。
-  - **审核队列**：放在 `node-review.json`，全局最多 64 条，满了就拒绝。人在管理面用 `review-approve` / `review-reject` 处理，两者都是身份写入。批准时仍按入队那一刻的 sha 做 CAS，不一致就回 409，条目留在队列里。
-  - **归因**：节点写入记 `by: node:<session>`、`via: node-tool`；人工批准记 `by: human:<who> approved node:<session>`、`via: review-approved`。
-  - **日上限**：按 UTC 日数当天 `by` 以 `node:` 开头的可变层版本。超出直接拒绝，不进队列。
+  - **属主裁定（2026-11-03）「会话级污染」**：§9 里的 `via != host-face` 解释为「本会话收到过来自本机以外的输入」。会话一旦被污染，它此后的每一次自我更新都进人工审核队列；标记持久化，永不清除。两路信号，任一命中即算污染：
+    1. **投递时打标**：宿主把远端内容送进会话时，在会话上打标。所有 relay steer（投递、它的 nudge、取消通知）和 queue 模式的 nudge 都会打，记录在 `node-taint.json`。这个文件读不出时，所有会话一律按已污染处理（失败即关）。
+    2. **日志兜底**：扫描会话的全部事件。出现以下任一情况即算污染：不是宿主生成的节点提醒的 `a2a-relay` 消息；controller rpcId 以 `a2a-` 开头的 `user` 消息（本插件发的 nudge）；本模块不认识的来源；整段日志里没有一条本人的输入。
+    - **中性消息**：agent loop 自己注入的 runtime-context、time-context、skill-catalog、tool-jobs、user-approval 等既不算输入，也不算污染。
+  - **边界**：模型通过自己的工具读到的远端文字（网页、issue 正文）不是投递，不会造成污染。
+  - **审核队列**：存在 `node-review.json`。
+    - **容量**：全局最多 64 条，每个节点最多 8 条。同一节点、同一 section、同一会话的新提议会覆盖旧的；超过 section 配额的文本直接拒绝。
+    - **审批**：人在管理面用 `review-approve` / `review-reject` 处理，都是身份写入。批准默认仍按入队时的 sha 做 CAS，冲突时回 409，条目留在队列里；`rebase: true` 表示人看过 diff 后，基于当前版本写入。`GET ?name=` 在每个条目旁边附上该 section 的当前文本。
+  - **CAS 的 sha 对模型可见**：`a2a:node:self` context 实时显示当前可变层的 sha，工具每次回复也都带 `current_sha256`。
+  - **归因**：节点写入记 `by: node:<session>`、`via: node-tool`；人工批准记 `by: human:<who> approved[ (rebased)] node:<session>`、`via: review-approved`。
+  - **日上限**：每个节点每个 UTC 日最多 8 次。按当天 `by` 以 `node:` 开头的版本计数；超出即拒绝，不进队列。
   - **本会话的回显**：写入成功后，记进本会话的 `a2a:node:self` 实时 context；冻结的系统提示词不变。
 - **实现说明（N6）**：
   - **核对时机**：登记时核对一次；插件加载后立即全量核对一遍，否则不到 12 小时就重启的宿主永远轮不到全量核对；之后每 12 小时全量核对一次。

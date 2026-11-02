@@ -118,7 +118,7 @@ import { NodeStore } from './node-store.ts'
 import { createNodeBinder, NodeBindings } from './node-bind.ts'
 import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
-import { NodeReviewQueue } from './node-self.ts'
+import { NodeReviewQueue, SessionTaint } from './node-self.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { canvasCandidateMatches, canvasTargetAmbiguous, peerDirectoryRows, routableCallerLabel, sessionCandidateMatches, unroutableCallerNote } from './peer-directory.ts'
@@ -1146,9 +1146,10 @@ export function apply(ctx: Context, config: Config): void {
   // Node identity N2+N3: a joined session that carries a node gets that node's layers on its own scope.
   const nodeBindings = new NodeBindings(join(home, 'a2a'))
   const nodeReviews = new NodeReviewQueue(join(home, 'a2a'))
+  const nodeTaint = new SessionTaint(join(home, 'a2a'))
   const nodeTasks = new NodeTasks(join(home, 'a2a'), { probe: githubProbe(), logger, onSettled: (node, p) => nodeBinder.remind(node, settledReminder(p)) })
   nodeTasks.schedule(ctx)
-  const nodeBinder = createNodeBinder({ store: nodeStore, bindings: nodeBindings, logger, joined: id => joinedSessions.has(id), joinedList: () => joinedSessions.list(), archived: id => archivedSessionFilter()?.(id) === true, live: id => liveRoots.get(id), tasksText: node => nodeTasks.render(node), pendingReminders: node => nodeTasks.takePending(node).map(settledReminder), selfUpdate: { store: nodeStore, queue: nodeReviews, events: agent => sessionEventsOf(agent as Agent) } })
+  const nodeBinder = createNodeBinder({ store: nodeStore, bindings: nodeBindings, logger, joined: id => joinedSessions.has(id), joinedList: () => joinedSessions.list(), archived: id => archivedSessionFilter()?.(id) === true, live: id => liveRoots.get(id), tasksText: node => nodeTasks.render(node), pendingReminders: node => nodeTasks.takePending(node).map(settledReminder), selfUpdate: { store: nodeStore, queue: nodeReviews, taint: nodeTaint, events: agent => sessionEventsOf(agent as Agent) } })
   // No boot reconcile: a joined.json that failed to parse reads as empty, and ending every binding on that
   // reading would destroy them (the 3081 lesson). A stale row is harmless — mount checks joined itself.
   ctx.effect(() => joinedSessions.onChange(() => { nodeBinder.reconcile() }), 'a2a: node bindings follow join')
@@ -2208,6 +2209,8 @@ export function apply(ctx: Context, config: Config): void {
    * opaque row; omitted when the sender is not meaningfully addressable.
    */
   function steerRelay(agent: Agent, text: string, sender?: string): void {
+    // N4 session taint: every relay steer carries content from outside this host (a delivery, its nudge or cancel notice).
+    nodeTaint.mark(String(agent.id), 'relay')
     agent.steer({
       id: MessageId(`a2a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`),
       role: 'user',
@@ -2292,6 +2295,7 @@ export function apply(ctx: Context, config: Config): void {
         }, signal: AbortSignal) => Promise<unknown> }
       | undefined
     if (typeof controller?.prompt !== 'function') return
+    nodeTaint.mark(String(agent.id), 'nudge')
     logger.info(`a2a: async nudge escalates to queue-mode prompt for ${team} (task ${taskId}, ref ${nudgeRef(taskId)})`)
     try {
       void controller.prompt({

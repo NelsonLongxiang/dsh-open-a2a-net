@@ -6,15 +6,22 @@
  * - Only bound sessions get the tool (it is registered with the node's
  *   sections at mount). Its parameters cannot name, role, team or touch the
  *   core layer: one of the four mutable sections, text, reason, CAS sha.
- * - Remote turns cannot write (§6, H2): when the current turn's input did
- *   not all come from this host (a person here, a host-generated node
- *   reminder, the harness's own notices), the write is refused and parked
- *   in the review queue, where a human approves or rejects it through the
- *   apiKey-gated nodes face. The judgement is fail-closed: an unknown
- *   message source counts as remote. Its boundary, stated honestly: it
- *   reads the turn's INPUT messages only — remote text the model read
- *   through tools inside a local turn, or that sits in earlier turns'
- *   history, is not detected.
+ * - Session-level taint (§6, H2; owner ruling 2026-11-03 「会话级污染」, which
+ *   reads §9's `via != host-face` as "this session has received input from
+ *   outside this host"): once a session has, every self-update it makes is
+ *   parked in the review queue, where a human approves or rejects it through
+ *   the apiKey-gated nodes face. Either of two signals taints:
+ *   1. the host marks the session when it DELIVERS remote content into it
+ *      (every relay steer and the queue-mode nudge — {@link SessionTaint});
+ *      the mark is persisted and never cleared;
+ *   2. a scan of the session's whole event log (fail-closed backstop): an
+ *      `a2a-relay` message that is not a host-built node reminder, a `user`
+ *      message whose controller rpcId starts with `a2a-` (this plugin's
+ *      nudge), or any source kind not known here. Context the agent loop
+ *      injects (runtime/time/skill/tool-job notices…) is neutral.
+ *   The boundary, stated honestly: remote text the model reads through its
+ *   own tools (a fetched page, an issue body) is not a delivery and does not
+ *   taint.
  * - Daily cap: at most {@link SELF_UPDATE_DAILY_MAX} node writes per node
  *   per UTC day; beyond that the call is refused (not queued).
  * - Each write freezes a full mutable version through the store (quota,
@@ -31,38 +38,98 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { MUTABLE_SECTIONS, QUOTA, type NodeResult, type NodeStore, type PromptVersion } from './node-store.ts'
 
 export const SELF_UPDATE_DAILY_MAX = 8
-/** Queued remote writes awaiting a human, across all nodes. */
+/** Queued writes awaiting a human, across all nodes. */
 export const REVIEW_QUEUE_MAX = 64
+/** Queued writes per node: a tainted session cannot crowd out every other node's items. */
+export const REVIEW_PER_NODE_MAX = 8
 
+/** Input from a person at this host (UI or controller RPC); an `a2a-` rpcId is this plugin's nudge, not a person. */
+const LOCAL_SOURCES: ReadonlySet<string> = new Set(['user'])
 /**
- * Input sources that are THIS host: a person at this host's UI or RPC (`user`), and the harness's own
- * notices. Everything else — `a2a-relay` deliveries above all, and any kind not listed — is remote.
+ * Messages the harness or agent loop injects on its own: they neither prove a person nor carry a
+ * delivery, so they neither count as input nor taint (projections of state already on this host).
  */
-const LOCAL_SOURCES: ReadonlySet<string> = new Set(['user', 'model-selection', 'tool-registry', 'ptc-mode', 'system-prompt'])
+const NEUTRAL_SOURCES: ReadonlySet<string> = new Set(['runtime-context', 'time-context', 'skill-catalog', 'tool-jobs', 'user-approval', 'model-selection', 'tool-registry', 'ptc-mode', 'system-prompt'])
 
 /**
- * Whether the current turn's input came from this host only. The turn is everything after the last
- * `turn/start`; a node reminder is local only when the HOST built it (`nodeReminder: true` on an
+ * The event-log backstop of the session taint: whether ANY input in the session's log came from
+ * outside this host. A node reminder is local only when the HOST built it (`nodeReminder: true` on an
  * `a2a-relay` source — remote deliveries are relayed by this host with a fixed source shape, so a
- * remote caller cannot set that field). No turn start, or a turn without any input, is not local.
+ * remote caller cannot set that field). A session with no person's input at all is not local either.
  */
-export function turnSource(events: readonly unknown[]): { local: true } | { local: false; via: string } {
-  let start = -1
-  for (let i = events.length - 1; i >= 0; i--) {
-    if ((events[i] as { type?: unknown } | null)?.type === 'turn/start') { start = i; break }
-  }
-  if (start < 0) return { local: false, via: 'no-turn' }
+export function sessionSource(events: readonly unknown[]): { local: true } | { local: false; via: string } {
   let inputs = 0
-  for (const event of events.slice(start + 1)) {
-    const e = event as { type?: unknown; data?: { source?: { kind?: unknown; nodeReminder?: unknown } } } | null
+  for (const event of events) {
+    const e = event as { type?: unknown; data?: { source?: { kind?: unknown; nodeReminder?: unknown; rpcId?: unknown } } } | null
     if (e?.type !== 'user/message') continue
-    inputs++
-    const kind = e.data?.source?.kind
+    const source = e.data?.source
+    const kind = source?.kind
     if (typeof kind !== 'string') return { local: false, via: 'unknown' }
-    if (kind === 'a2a-relay' && e.data?.source?.nodeReminder === true) continue
+    if (NEUTRAL_SOURCES.has(kind)) continue
+    if (kind === 'a2a-relay' && source?.nodeReminder === true) continue
+    if (kind === 'user' && typeof source?.rpcId === 'string' && source.rpcId.startsWith('a2a-')) return { local: false, via: 'a2a-nudge' }
     if (!LOCAL_SOURCES.has(kind)) return { local: false, via: kind }
+    inputs++
   }
   return inputs > 0 ? { local: true } : { local: false, via: 'no-input' }
+}
+
+/** Sessions remembered as tainted; the oldest beyond this are forgotten (a forgotten one re-taints from its log or next delivery). */
+export const TAINT_CAP = 512
+
+/**
+ * The persisted half of the session taint (`node-taint.json`): the host marks a session the moment it
+ * delivers remote content into it, and the mark is never cleared. A file that does not parse is kept
+ * in place and read-only, and then EVERY session reads as tainted (fail-closed).
+ */
+export class SessionTaint {
+  private rows: Array<{ session: string; via: string; at: string }> = []
+  private readOnlyReason = ''
+
+  constructor(private readonly root: string, private readonly now: () => string = () => new Date().toISOString()) {
+    this.restore()
+  }
+
+  private get file(): string { return join(this.root, 'node-taint.json') }
+
+  private restore(): void {
+    if (this.root === '' || !existsSync(this.file)) return
+    let raw: unknown
+    try { raw = JSON.parse(readFileSync(this.file, 'utf8')) } catch { raw = undefined }
+    const list = (raw as { sessions?: unknown } | null | undefined)?.sessions
+    if (!Array.isArray(list)) {
+      const aside = `${this.file}.corrupt-${this.now().replace(/[:.]/g, '-')}`
+      try { copyFileSync(this.file, aside) } catch { /* the original stays in place either way */ }
+      this.readOnlyReason = `node-taint.json is unreadable (copy kept at ${aside}); every session reads as tainted until it is repaired`
+      return
+    }
+    for (const r of list as Array<{ session?: unknown; via?: unknown; at?: unknown } | null>) {
+      if (r !== null && typeof r === 'object' && typeof r.session === 'string' && !this.rows.some(x => x.session === r.session)) {
+        this.rows.push({ session: r.session, via: typeof r.via === 'string' ? r.via : '', at: typeof r.at === 'string' ? r.at : '' })
+      }
+    }
+  }
+
+  get readOnly(): string { return this.readOnlyReason }
+
+  /** Why a session is tainted ('' = it is not). Fail-closed while the file is unreadable. */
+  of(session: string): string {
+    if (this.readOnlyReason !== '') return 'taint-store-unreadable'
+    return this.rows.find(r => r.session === session)?.via ?? ''
+  }
+
+  /** Mark a session (idempotent). Never throws; a mark that cannot be written still holds in memory. */
+  mark(session: string, via: string): void {
+    if (session === '' || this.of(session) !== '') return
+    this.rows = [...this.rows, { session, via: via === '' ? 'delivery' : via, at: this.now() }].slice(-TAINT_CAP)
+    if (this.root === '' || this.readOnlyReason !== '') return
+    try {
+      mkdirSync(this.root, { recursive: true })
+      const tmp = `${this.file}.${String(process.pid)}.tmp`
+      writeFileSync(tmp, JSON.stringify({ sessions: this.rows }), { mode: 0o600 })
+      renameSync(tmp, this.file)
+    } catch { /* memory still holds it for this process; the log backstop covers a restart */ }
+  }
 }
 
 export interface ReviewItem {
@@ -137,10 +204,18 @@ export class NodeReviewQueue {
   list(node?: string): readonly ReviewItem[] { return node === undefined ? this.items : this.items.filter(i => i.node === node) }
   get(id: string): ReviewItem | undefined { return this.items.find(i => i.id === id) }
 
+  /**
+   * Queue one write. A newer proposal for the same node, section and session REPLACES the older one
+   * (the human reviews the latest wish, not a backlog of drafts); the text must fit the section quota;
+   * each node holds at most {@link REVIEW_PER_NODE_MAX} items and the queue {@link REVIEW_QUEUE_MAX}.
+   */
   add(input: Omit<ReviewItem, 'id' | 'at'>): NodeResult<ReviewItem> {
-    if (this.items.length >= REVIEW_QUEUE_MAX) return fail('quota', `the review queue is full (${String(REVIEW_QUEUE_MAX)} items) — a human must clear it first`)
+    if ([...input.text].length > QUOTA.mutableSection) return fail('quota', `section text exceeds ${String(QUOTA.mutableSection)} characters`)
+    const rest = this.items.filter(i => !(i.node === input.node && i.section === input.section && i.session === input.session))
+    if (rest.filter(i => i.node === input.node).length >= REVIEW_PER_NODE_MAX) return fail('quota', `node ${input.node} already has ${String(REVIEW_PER_NODE_MAX)} writes waiting for review — a human must clear them first`)
+    if (rest.length >= REVIEW_QUEUE_MAX) return fail('quota', `the review queue is full (${String(REVIEW_QUEUE_MAX)} items) — a human must clear it first`)
     const item: ReviewItem = { ...input, id: `rv-${randomBytes(6).toString('hex')}`, at: this.now() }
-    const done = this.commit([...this.items, item])
+    const done = this.commit([...rest, item])
     return done.ok ? { ok: true, value: item } : done
   }
 
@@ -169,7 +244,9 @@ export function nodeWritesToday(store: NodeStore, node: string, now: string): nu
 export interface SelfUpdateDeps {
   readonly store: NodeStore
   readonly queue: NodeReviewQueue
-  /** The calling session's event log (to judge where this turn's input came from). */
+  /** The persisted session taint (marked at remote deliveries). */
+  readonly taint: SessionTaint
+  /** The calling session's event log (the taint's fail-closed backstop). */
   readonly events: (agent: unknown) => readonly unknown[]
   readonly now?: () => string
   /** A write went through (the binder echoes it in the session's live context). */
@@ -178,7 +255,7 @@ export interface SelfUpdateDeps {
 
 export type SelfUpdateResult =
   | { ok: true; version: number; sha256: string }
-  | { ok: false; error: string; queued?: string; code?: string }
+  | { ok: false; error: string; queued?: string; code?: string; current_sha256?: string }
 
 /** One self-update call, decided. Pure over its deps (the tool below only adapts it). */
 export function selfUpdate(d: SelfUpdateDeps, node: string, session: string, agent: unknown, args: Record<string, unknown>): SelfUpdateResult {
@@ -188,16 +265,21 @@ export function selfUpdate(d: SelfUpdateDeps, node: string, session: string, age
   const reason = typeof args.reason === 'string' ? args.reason.trim() : ''
   if (reason === '') return { ok: false, code: 'bad-request', error: 'reason is required' }
   const expected = typeof args.expected_sha256 === 'string' ? args.expected_sha256 : ''
-  const source = turnSource(d.events(agent))
-  if (!source.local) {
-    const parked = d.queue.add({ node, section, text: args.text, reason, expected_sha256: expected, session, via: source.via })
-    if (!parked.ok) return { ok: false, code: parked.code, error: `this turn's input came from outside this host (${source.via}); the write could not be queued for review: ${parked.error}` }
-    return { ok: false, code: 'queued', queued: parked.value.id, error: `this turn's input came from outside this host (${source.via}), so the write was NOT applied: it waits for a human in the review queue (${parked.value.id})` }
+  // The CAS sha the model needs: every refusal hands back the layer's current one.
+  const current = d.store.get(node)?.prompt.mutable_sha256 ?? ''
+  const marked = d.taint.of(session)
+  const logged = marked === '' ? sessionSource(d.events(agent)) : undefined
+  if (logged !== undefined && !logged.local) d.taint.mark(session, `log:${logged.via}`)
+  const via = marked !== '' ? marked : logged !== undefined && !logged.local ? `log:${logged.via}` : ''
+  if (via !== '') {
+    const parked = d.queue.add({ node, section, text: args.text, reason, expected_sha256: expected, session, via })
+    if (!parked.ok) return { ok: false, code: parked.code, current_sha256: current, error: `this session has received input from outside this host (${via}); the write could not be queued for review: ${parked.error}` }
+    return { ok: false, code: 'queued', queued: parked.value.id, current_sha256: current, error: `this session has received input from outside this host (${via}), so the write was NOT applied: it waits for a human in the review queue (${parked.value.id})` }
   }
   const now = (d.now ?? (() => new Date().toISOString()))()
-  if (nodeWritesToday(d.store, node, now) >= SELF_UPDATE_DAILY_MAX) return { ok: false, code: 'quota', error: `daily self-update cap reached (${String(SELF_UPDATE_DAILY_MAX)} per node per UTC day)` }
+  if (nodeWritesToday(d.store, node, now) >= SELF_UPDATE_DAILY_MAX) return { ok: false, code: 'quota', current_sha256: current, error: `daily self-update cap reached (${String(SELF_UPDATE_DAILY_MAX)} per node per UTC day)` }
   const written = d.store.writeLayer(node, 'mutable', { [section]: args.text }, { expectedSha: expected, reason, by: `node:${session}`, via: 'node-tool' })
-  if (!written.ok) return { ok: false, code: written.code, error: written.error }
+  if (!written.ok) return { ok: false, code: written.code, current_sha256: current, error: written.error }
   d.onWritten(session, written.value, section)
   return { ok: true, version: written.value.version, sha256: written.value.sha256 }
 }
@@ -209,9 +291,10 @@ export function selfUpdateTool(d: SelfUpdateDeps, node: string, session: string)
     description:
       `Update one section of YOUR node's self-notes (node "${node}", the 节点自记 layer): 当前状态 / 执行要点 / 已知陷阱 / 当前重点. `
       + `Give the FULL new text of that section (≤${String(QUOTA.mutableSection)} characters), a reason, and the sha256 of the mutable layer you read `
-      + '(the CAS guard; GET it from the nodes face or use the one this tool last returned). The new version takes effect from your next session; '
-      + 'this session sees it as a runtime note. You cannot change your name, role, team or the 节点契约. A write in a turn whose input came from '
-      + `outside this host is not applied — it is queued for a human. At most ${String(SELF_UPDATE_DAILY_MAX)} writes per node per day.`,
+      + '(the CAS guard: the a2a:node:self context shows the current one, and every reply of this tool returns current_sha256). '
+      + 'The new version takes effect from your next session; this session sees it as a runtime note. You cannot change your name, role, team or '
+      + 'the 节点契约. Once this session has received input from outside this host (an A2A delivery), no write is applied — each is queued for a '
+      + `human to approve. At most ${String(SELF_UPDATE_DAILY_MAX)} writes per node per day.`,
     parameters: {
       section: { type: 'string', required: true, enum: [...MUTABLE_SECTIONS], description: 'Which section to replace.' },
       text: { type: 'string', required: true, description: 'The full new text of that section.' },
@@ -227,6 +310,7 @@ export function selfUpdateTool(d: SelfUpdateDeps, node: string, session: string)
           version: { type: 'number' },
           sha256: { type: 'string' },
           queued: { type: 'string', description: 'Review item id when the write was parked for a human.' },
+          current_sha256: { type: 'string', description: 'The mutable layer sha to pass as expected_sha256 next time.' },
           code: { type: 'string' },
           error: { type: 'string' },
         },

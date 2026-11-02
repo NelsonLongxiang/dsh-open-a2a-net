@@ -332,7 +332,7 @@ export interface NodeBinder {
 }
 
 /** One §6 reminder as a user message; the sender label makes ui-chat render it as "来自 …" with the text. */
-function reminderMessage(node: string, text: string): UserMessage {
+export function reminderMessage(node: string, text: string): UserMessage {
   return {
     id: MessageId(`a2a-node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`),
     role: 'user',
@@ -414,7 +414,10 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
         selfNotes.set(session, [])
         const notesOf = (): string => {
           const notes = selfNotes.get(session) ?? []
-          return notes.length === 0 ? '' : ['## 本会话已记录的节点自记更新（a2a:node:self）', '', '下面这些已经写进节点自记，从下一个会话起生效；本会话的「节点自记」段仍是挂载时的版本。', '', ...notes].join('\n')
+          const record = d.store.get(name)?.prompt
+          // The CAS sha node_update_self needs (live: it moves with every write, by this session or another).
+          const head = ['## 节点自记（a2a:node:self）', '', `节点自记当前版本 v${String(record?.mutable_version ?? 0)}，sha256 ${record?.mutable_sha256 === '' || record === undefined ? '（尚无版本，写入时传空串）' : record.mutable_sha256}。`]
+          return notes.length === 0 ? head.join('\n') : [...head, '', '本会话已记录的更新（从下一个会话起生效；本会话的「节点自记」段仍是挂载时的版本）：', '', ...notes].join('\n')
         }
         disposers.push(sp.variable(NODE_PROMPT.self.variable, notesOf))
         disposers.push(sp.context({ name: NODE_PROMPT.self.context, order: NODE_PROMPT.self.order, text: `{{${NODE_PROMPT.self.variable}}}` }))

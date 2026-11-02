@@ -83,10 +83,13 @@ export function nodeAction(store: NodeStore, binder: NodeBinder, tasks: NodeTask
     }
     case 'untrack': return answer(tasks.untrack(name, body.ref))
     case 'review-approve': {
-      // N4: a human applies a parked remote self-update; its CAS sha still has to match, or it stays queued.
+      // N4: a human applies a parked self-update. By default its own CAS sha still has to match (409 keeps it
+      // queued); `rebase: true` is the human's explicit choice to apply the proposed section onto the CURRENT
+      // version after reading the diff the GET view shows (current section text beside the proposal).
       const item = typeof body.id === 'string' ? reviews.get(body.id) : undefined
       if (item === undefined) return { status: 404, payload: { ok: false, error: `no review item ${String(body.id)}` } }
-      const written = store.writeLayer(item.node, 'mutable', { [item.section]: item.text }, { expectedSha: item.expected_sha256, reason: item.reason, by: `${by} approved node:${item.session}`, via: 'review-approved' })
+      const expectedSha = body.rebase === true ? store.get(item.node)?.prompt.mutable_sha256 ?? '' : item.expected_sha256
+      const written = store.writeLayer(item.node, 'mutable', { [item.section]: item.text }, { expectedSha, reason: item.reason, by: `${by} approved${body.rebase === true ? ' (rebased)' : ''} node:${item.session}`, via: 'review-approved' })
       if (!written.ok) return answer(written)
       const removed = reviews.remove(item.id)
       return { status: 200, payload: { ok: true, value: written.value, ...(removed.ok ? {} : { queue_warning: removed.error }) } }
@@ -127,7 +130,8 @@ export function nodeView(store: NodeStore, bindings: NodeBindings, binder: NodeB
       },
       tasks: tasks.list(name),
       tasks_read_only: tasks.readOnly,
-      reviews: reviews.list(name),
+      // Each parked write beside the section text it would replace (the diff the human approves).
+      reviews: reviews.list(name).map(r => ({ ...r, current_text: store.current(name, 'mutable')?.sections[r.section] ?? '' })),
     },
   }
 }
