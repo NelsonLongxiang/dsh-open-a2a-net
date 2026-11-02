@@ -25,6 +25,7 @@ import { peerPayloadFingerprint, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REP
 import { briefOf, type TaskLedger } from '../task-ledger.ts'
 import { parseReceipt, taskIdRefusal } from '../receipt.ts'
 import { buildAuthorization, claimCovers, refusalOf, type Admission, type AuthProof, type SettlementRefusal, type Settler } from '../task-auth.ts'
+import { isRootOriginUrl } from '../origin-claim.ts'
 import type { Config } from '../index.ts'
 import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from '../transport-caps.ts'
 
@@ -94,7 +95,7 @@ export type NativeRoundOutcome =
   | { readonly ok: false; readonly error: string; readonly phase?: 'pre-dispatch'; readonly aborted?: boolean }
 
 /** What verifyOriginClaim answers (see index.ts; reason widens to string here — the faces only interpolate it). */
-export type OriginClaimResult = { ok: true; caller: string; callerUrl: string; card: A2aPeerCard; cli?: true } | { ok: false; reason: string }
+export type OriginClaimResult = { ok: true; caller: string; callerUrl: string; card: A2aPeerCard; bound: boolean; cli?: true } | { ok: false; reason: string }
 
 /** Same scheme/host/port; false when either side is empty or malformed. */
 function sameOrigin(a: string, b: string): boolean {
@@ -144,6 +145,7 @@ export interface WireDeps {
   readonly localSessionOfHandle: (ref: string) => string | undefined
   readonly steerRelay: (agent: Agent, text: string, sender?: string) => void
   readonly fromClause: (from: string) => string
+  readonly sanitizeFromClause: (from: string) => string
   readonly armReceiptAutosend: (target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number) => void
   /** #114 S5: the target's session-log length, read just before a steer. */
   readonly eventCountOf: (agent: Agent) => number
@@ -156,8 +158,8 @@ export interface WireDeps {
   readonly archivedColdMatchText: (team: string) => string
   readonly noColdMatchText: (team: string) => string
   readonly nativeTeamsPrepare: (team: string) => Promise<NativePrepared>
-  readonly nativeTeamsRound: (prepared: Extract<NativePrepared, { ok: true }>, team: string, caller: string, message: string, taskId: string | undefined) => Promise<NativeRoundOutcome>
-  readonly routeIntoAgent: (team: string, message: string, caller: string, taskId?: string) => Promise<RouteOutcome>
+  readonly nativeTeamsRound: (prepared: Extract<NativePrepared, { ok: true }>, team: string, caller: string, message: string, taskId: string | undefined, proofClause: string, external?: AbortSignal, proofHeader?: (team: string, taskId: string, from: string, proofClause: string) => string) => Promise<NativeRoundOutcome>
+  readonly routeIntoAgent: (team: string, message: string, caller: string, taskId?: string, proofClause?: string, directHeader?: (from: string) => string) => Promise<RouteOutcome>
 }
 
 /**
@@ -198,6 +200,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     localSessionOfHandle,
     steerRelay,
     fromClause,
+    sanitizeFromClause,
     armReceiptAutosend,
     eventCountOf,
     receiptExpectationOf,
@@ -646,8 +649,14 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // A verified claim proves the caller only when its signed zone covers it (review of PR #134 P1),
           // and the host face only when it was signed from this very host (round 2: a zone name is not an origin).
           const callerProof: AuthProof = !claim.ok ? 'legacy-window'
-            : claimCovers(caller, claim.caller) && (admission.rule !== 'host-face' || originOf(claim.callerUrl) === originOf(d.ownCardUrl))
-              ? 'origin-claim' : 'claim-mismatch'
+            : claim.cli === true ? (claimCovers(caller, claim.caller) ? 'cli-identity' : 'claim-mismatch')
+              : claim.bound !== true ? 'unbound'
+                : !isRootOriginUrl(claim.callerUrl) ? 'claim-mismatch'
+                  : admission.rule === 'host-face' && originOf(claim.callerUrl) !== originOf(d.ownCardUrl) ? 'claim-mismatch'
+                    : claimCovers(caller, claim.caller) ? 'origin-claim' : 'claim-mismatch'
+          const proofClause = callerProof === 'origin-claim' && claim.ok ? `已验证来源 ${originOf(claim.callerUrl)}`
+            : callerProof === 'cli-identity' ? '未验证（cli-identity）' : `未验证（${callerProof}）`
+          const directHeader = (from: string): string => `[A2A direct] (task ${taskId}) ${proofClause} ${sanitizeFromClause(from)} (routed to ${team}) sent:`
           if (refuseIfBudgetExhausted(req, res, team, caller, taskId, taskLedger)) return
           // Server-side idempotency (P3/B3): one key, one execution inside
           // the window. Same key + same payload ⇒ replay; different payload
@@ -686,7 +695,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // keeps the idempotency claim (above) exactly as for sessions.
           const cliRow = cliDeposits.get(team)
           if (cliRow !== undefined) {
-            cliDeposits.mail(team, caller, message)
+            cliDeposits.mail(team, caller, `${directHeader(caller)}\n\n${message}`)
             recordActivity('in', team, caller, true)
             logger.info(`a2a: cli mailbox delivery for ${team} (from ${caller})`)
             const note = `delivered to the mailbox of ${team} — the CLI polls while online`
@@ -756,7 +765,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 const deliveredReceipt = parseReceipt(message) !== null
                 // gh#141: a receipt is answered by nobody — its steer asks for no receipt back.
                 const receiptRequest = deliveredReceipt ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
-                steerRelay(target, `[A2A direct] (task ${taskId}) ${fromClause(from)} (routed to ${team}) sent:\n\n${message}${receiptRequest}`, from === 'an unknown node' ? undefined : from)
+                steerRelay(target, `${directHeader(from)}\n\n${message}${receiptRequest}`, from === 'an unknown node' ? undefined : from)
                 steered = true
                 recordActivity('in', team, caller, true)
                 armReceiptAutosend(target, taskId, receiptTarget, message, steerFloor)
@@ -876,7 +885,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 return
               }
               recordActivity('in', team, caller, true)
-              void nativeTeamsRound(prepared, team, caller, message, taskId)
+              void nativeTeamsRound(prepared, team, caller, message, taskId, proofClause, undefined, (_team, _taskId, from) => directHeader(from))
                 .then(outcome => {
                   if (!outcome.ok) {
                     recordActivity('in', team, caller, false)
@@ -898,7 +907,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             })()
             return
           }
-          void routeIntoAgent(team, message, caller, taskId).then((outcome) => {
+          void routeIntoAgent(team, message, caller, taskId, proofClause, directHeader).then((outcome) => {
             recordActivity('in', team, caller, outcome.ok)
             // W7 slice-2 hook 1: record the settled outcome on the claim row.
             // Ruling: a non-COMPLETED status (TASK_STATE_DELIVERED — the

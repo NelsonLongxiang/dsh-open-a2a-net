@@ -54,7 +54,7 @@ import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
-import { signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
+import { isRootOriginUrl, signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
 import { AuthObserver, type AffectedEntry } from './auth-observer.ts'
 import { allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type SettlementMode, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
@@ -2459,18 +2459,18 @@ export function apply(ctx: Context, config: Config): void {
    * marker instead of a (false) completion.
    * @param taskId - the correlation key the steered receipt header carries.
    */
-  async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string): Promise<
+  async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string): Promise<
     { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean } | { ok: false; error: string }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
-      return routeIntoAgentFor(agent, team, message, caller, taskId)
+      return routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader)
     }
     // Wake-on-route: a cold joined team materializes on demand, then steers.
     const wake = wakeColdTeam(team)
     if (wake.kind === 'flight') {
       return wake.flight.then(
-        agent => routeIntoAgentFor(agent, team, message, caller, taskId),
+        agent => routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader),
         (error: unknown) => ({ ok: false, error: `waking the session for team "${team}" failed: ${String(error)}` }) as const,
       )
     }
@@ -2481,7 +2481,7 @@ export function apply(ctx: Context, config: Config): void {
     if (config.nativeTeamsInbound === true) {
       const prepared = await nativeTeamsPrepare(team)
       if (prepared.ok) {
-        const bridged = await nativeTeamsRound(prepared, team, caller, message, taskId)
+        const bridged = await nativeTeamsRound(prepared, team, caller, message, taskId, proofClause ?? '未验证（in-process）', undefined, buildHeader === undefined ? undefined : (_team, _taskId, from) => buildHeader(from))
         if (bridged.ok) {
           if (bridged.settled) return { ok: true, reply: bridged.reply }
           return { ok: true, reply: bridged.reply, status: 'TASK_STATE_DELIVERED', bridge: 'native-teams' }
@@ -2499,7 +2499,7 @@ export function apply(ctx: Context, config: Config): void {
       const live = liveAgent()
       if (live !== undefined) {
         if (callerIsAgent(live, caller)) return { ok: false, error: selfRouteText(team) }
-        return routeIntoAgentFor(live, team, message, caller, taskId)
+        return routeIntoAgentFor(live, team, message, caller, taskId, proofClause, buildHeader)
       }
       return { ok: false, error: 'No live DSH agent is available to accept this message.' }
     }
@@ -2515,7 +2515,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param caller - caller label for the steered prefix.
    * @returns the agent's final reply, or the explicit failure.
    */
-  function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string): Promise<
+  function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string): Promise<
     { ok: true; reply: string; placeholder?: boolean } | { ok: false; error: string }
   > {
     return new Promise((resolve) => {
@@ -2529,10 +2529,10 @@ export function apply(ctx: Context, config: Config): void {
       // the caller supplied one, rides the header so an "[A2A receipt] task
       // <id>" answer correlates with the caller's own route result.
       const from = caller === '' ? 'an unknown node' : caller
-      const taskPrefix = taskId === undefined ? '' : `(task ${taskId}) `
-      const text = `[A2A direct] ${taskPrefix}${fromClause(from)} (routed to ${team}) sent:
-
-${message}`
+      const headerLine = buildHeader !== undefined && taskId !== undefined
+        ? buildHeader(from)
+        : `[A2A direct] ${taskId === undefined ? '' : `(task ${taskId}) `}未验证（in-process） ${sanitizeFromClause(from)} (routed to ${team}) sent:`
+      const text = `${headerLine}\n\n${message}`
       try {
         steerRelay(agent, text, caller === '' ? undefined : caller)
       } catch (error) {
@@ -2553,7 +2553,7 @@ ${message}`
   // to src/legacy/teams-bridge-inbound.ts — the registry probe, claim memo,
   // prepare and the bounded round. The outbound bridgeFace stays here until
   // the G-out slice (it submits through the dispatch trunk).
-  const { teamsRegistry, nativeTeamsClaims, nativeTeamsPrepare, nativeTeamsRound } = createTeamsBridgeInbound({ ctx, config, liveAgent, fromClause })
+  const { teamsRegistry, nativeTeamsClaims, nativeTeamsPrepare, nativeTeamsRound } = createTeamsBridgeInbound({ ctx, config, liveAgent, fromClause, sanitizeFromClause, proofHeader: hostDirectHeader })
 
   /* ── gh#9+gh#10 OriginClaim (docs/protocol/delivery-origin-auth.md,
      src/origin-claim.ts): the caller's card key signs the envelope; the
@@ -2897,6 +2897,7 @@ ${message}`
       localSessionOfHandle,
       steerRelay,
       fromClause,
+      sanitizeFromClause,
       armReceiptAutosend,
       eventCountOf: (agent: Agent) => sessionEventsOf(agent).length,
       receiptExpectationOf,
@@ -3260,54 +3261,18 @@ ${message}`
   ctx.effect(() => teamMemberships.onChange(() => observeAuthorization('roster')), 'a2a: S6 roster observer')
   observeAuthorization('boot')
 
-  /**
-   * The from-line display name (owner ruling, claim 8ea4150f94): a bare
-   * routing handle (`dsh/74555a36`) carries zero semantics for the reader.
-   * Resolve what the handle NAMES, cheaply and read-only:
-   *   1. a local handle — a joined/live session id, its zone/id8 pseudo-team,
-   *      or a live node label → nodeMetadataOf(agent).name (the session-title
-   *      product, exactly what the directory shows);
-   *   2. a remote bare-zone caller → the warmest cached card whose team
-   *      equals the zone (the publisher's own card NAME is the display name);
-   *   3. a remote zone/id8 caller → the cached card whose sessionTeams row
-   *      matches the handle → that row's name;
-   *   4. nothing resolves → '' (the from line stays bare — no false names).
-   * Read-only over warm caches: never fetches, so a cold cache degrades to
-   * the bare handle, never to a stall.
-   */
-  function callerDisplayName(caller: string): string {
-    if (caller === '' || caller === 'an unknown node') return ''
-    // Local: joined/live session facts on THIS host.
-    for (const [id, agent] of sessionNodes) {
-      if (id === caller || sessionLabelOf(agent) === caller || `${config.team}/${id8(id)}` === caller) {
-        return nodeMetadataOf(agent).name
-      }
-    }
-    for (const [id, agent] of liveRoots) {
-      if (id === caller || sessionLabelOf(agent) === caller || `${config.team}/${id8(id)}` === caller) {
-        return nodeMetadataOf(agent).name
-      }
-    }
-    // Remote: warm card cache only.
-    const zone = caller.includes('/') ? caller.slice(0, caller.indexOf('/')) : caller
-    let zoneName = ''
-    for (const entry of cardCache.values()) {
-      const card = entry.card
-      if (card === undefined) continue
-      if (card.team === zone && zoneName === '') zoneName = card.name
-      if (caller.includes('/')) {
-        const row = (card.sessionTeams ?? []).find(item => item.team === caller)
-        if (row !== undefined && row.name !== '') return row.name
-      }
-    }
-    if (!caller.includes('/') && zoneName !== '') return zoneName
-    return ''
+  /** Security headers omit all unsigned peer display metadata. */
+  function fromClause(from: string): string {
+    const caller = from.replace(/[\x00-\x1f\x7f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff\uff08\uff09\ufe59\ufe5a]/g, '')
+    return `from ${JSON.stringify(caller)}`
   }
 
-  /** The from clause with the display name in full-width parens when resolved. */
-  function fromClause(from: string): string {
-    const display = callerDisplayName(from)
-    return `from "${from}"${display !== '' ? `（${display}）` : ''}`
+  function sanitizeFromClause(from: string): string {
+    return fromClause(from)
+  }
+
+  function hostDirectHeader(team: string, taskId: string, from: string, proofClause: string): string {
+    return `[A2A direct] (task ${taskId}) ${proofClause} ${sanitizeFromClause(from)} (routed to ${team}) sent:`
   }
 
   /**
@@ -4008,7 +3973,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         if (prepared.ok) {
           endRoute(flight)
           recordActivity('out', team, 'local', true)
-          void nativeTeamsRound(prepared, team, callerSession ?? session, message, taskId)
+          void nativeTeamsRound(prepared, team, callerSession ?? session, message, taskId, '未验证（in-process）', undefined, hostDirectHeader)
             .then(outcome => {
               if (!outcome.ok) {
                 recordActivity('out', team, 'local', false)
@@ -4059,7 +4024,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         const receiptHint = callerTeam === undefined ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${callerTeam}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
         // #114 S5: the consumption search starts at the pre-steer log length.
         const steerFloor = sessionEventsOf(target).length
-        steerRelay(target, `[A2A direct] (task ${taskId}) ${fromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam)
+        steerRelay(target, `[A2A direct] (task ${taskId}) 未验证（in-process） ${sanitizeFromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam)
         armReceiptAutosend(target, taskId, callerTeam, message, steerFloor)
         // #139: the caller's outbound row is born with this admission and the member that received it.
         if (taskIdFromCaller !== undefined) localBirths.set(taskIdFromCaller, localBirthOf(team, callerSession, callerTeam, sessionTeamOf(target)))
@@ -4095,7 +4060,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       if (!steerable && team !== config.team) {
         const prepared = await nativeTeamsPrepare(team)
         if (prepared.ok) {
-          const outcome = await nativeTeamsRound(prepared, team, callerSession ?? session, message, taskId, signal)
+          const outcome = await nativeTeamsRound(prepared, team, callerSession ?? session, message, taskId, '未验证（in-process）', signal, hostDirectHeader)
           endRoute(flight)
           if (!outcome.ok) {
             // The aborted-wait shape is earned only by an actual round

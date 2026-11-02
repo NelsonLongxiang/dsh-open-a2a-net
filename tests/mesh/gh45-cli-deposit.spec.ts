@@ -78,6 +78,7 @@ describe('gh#45 CLI household registration (end-to-end)', () => {
       const inbox = await post(`${a.baseUrl}/__dsh_a2a/cli-deposit`, { action: 'inbox', handle: HANDLE })
       expect(inbox.body.ok).toBe(true)
       expect(JSON.stringify(inbox.body.mail)).toContain('all green')
+      expect(JSON.stringify(inbox.body.mail)).toContain('未验证（claim-mismatch）')
       // ⑦ revoke: the card face 404s and the sessionTeams row is gone.
       expect((await post(`${a.baseUrl}/__dsh_a2a/cli-deposit`, { action: 'revoke', handle: HANDLE })).body.ok).toBe(true)
       expect((await globalThis.fetch(`${a.baseUrl}/a2a/cli/${encodeURIComponent(HANDLE)}/.well-known/agent-card.json`)).status).toBe(404)

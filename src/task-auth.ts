@@ -319,16 +319,15 @@ export function allowlistVersion(inputs: AllowlistInputs): string {
 
 /**
  * How strongly the caller's identity was proven at birth:
- * - `origin-claim`: an OriginClaim verified AND its signed zone covers the
- *   judged caller (the same name, or `<zone>/…`). It proves possession of a
- *   key whose card names that zone — not that the zone is who it says.
- * - `claim-mismatch`: an OriginClaim verified, but for a zone that does not
- *   cover the judged caller (the claim is kept for audit; review of PR #134 P1).
+ * - `origin-claim`: a bound, audience-correct envelope verified on a root-origin card for this caller.
+ * - `claim-mismatch`: bound proof names another caller, or root-origin derivation failed.
  * - `legacy-window`: no envelope, admitted inside the OriginClaim window.
+ * - `unbound`: a v1 signature proves only key possession, not origin.
+ * - `cli-identity`: a deposited CLI key proves the local CLI handle, not market issuer origin.
  * - `in-process`: a local delivery inside this host (S4).
  * - `none`: no identity evidence at all.
  */
-export type AuthProof = 'origin-claim' | 'claim-mismatch' | 'legacy-window' | 'in-process' | 'none'
+export type AuthProof = 'origin-claim' | 'claim-mismatch' | 'legacy-window' | 'unbound' | 'cli-identity' | 'in-process' | 'none'
 
 /**
  * Frozen on an inbound ledger row when it is born, archived with it, never
@@ -339,7 +338,7 @@ export interface TaskAuthorization {
   /** The caller_session the admission rules judged. */
   readonly caller: string
   readonly proof: AuthProof
-  /** proof = origin-claim: the name the signed card derived, and its card URL's origin. */
+  /** Signed claim identity/origin retained for audit even when proof is low-trust unbound or CLI; its presence alone is not trust. */
   readonly claim?: { readonly caller: string; readonly origin: string }
   readonly ingress: 'wire' | 'local'
   readonly via: Via
@@ -360,7 +359,7 @@ export interface TaskAuthorization {
 export const AUTH_STRING_CAP = 256
 export const AUTH_BASIS_CAP = 64
 
-const PROOFS: readonly string[] = ['origin-claim', 'claim-mismatch', 'legacy-window', 'in-process', 'none']
+const PROOFS: readonly string[] = ['origin-claim', 'claim-mismatch', 'legacy-window', 'unbound', 'cli-identity', 'in-process', 'none']
 const RULES = Object.keys(VIA_OF)
 /** Rules that admit on shared teams: their basis lists at least one, each once. Every other rule has an empty basis. */
 const SHARED_RULES: readonly AdmissionRule[] = ['roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'peer-org']
@@ -465,7 +464,7 @@ export function parseAuthorization(raw: unknown, now: number = Date.now()): Task
   if (new Set(r.basis).size !== r.basis.length) return undefined
   if (SHARED_RULES.includes(rule) ? r.basis.length === 0 : r.basis.length !== 0) return undefined
   // The wire proves identity by envelope or not at all; an in-process birth is local, and local-exempt only exists there.
-  if (r.ingress === 'wire' ? !['origin-claim', 'claim-mismatch', 'legacy-window'].includes(r.proof) : r.proof !== 'in-process') return undefined
+  if (r.ingress === 'wire' ? !['origin-claim', 'claim-mismatch', 'legacy-window', 'unbound', 'cli-identity'].includes(r.proof) : r.proof !== 'in-process') return undefined
   if (rule === 'local-exempt' && r.ingress !== 'local') return undefined
   if (typeof r.allowlist_version !== 'string' || !/^al1:[0-9a-f]{16}$/.test(r.allowlist_version)) return undefined
   if (typeof r.received_at !== 'number' || !Number.isInteger(r.received_at) || r.received_at < 0 || r.received_at > now + AUTH_CLOCK_SKEW_MS) return undefined
@@ -476,9 +475,10 @@ export function parseAuthorization(raw: unknown, now: number = Date.now()): Task
     if (c === null || typeof c !== 'object' || !boundedString(c.caller) || !boundedString(c.origin)) return undefined
     claim = { caller: c.caller as string, origin: c.origin as string }
   }
-  // A claim rides exactly the two claim proofs, and which one is decided by coverage — never by the record's say-so.
-  if ((claim !== undefined) !== (r.proof === 'origin-claim' || r.proof === 'claim-mismatch')) return undefined
-  if (claim !== undefined && claimCovers(r.caller as string, claim.caller) !== (r.proof === 'origin-claim')) return undefined
+  // Unbound and deposited-CLI proofs retain their key/card claim for audit, but do not assert origin.
+  const claimProof = ['origin-claim', 'claim-mismatch', 'unbound', 'cli-identity'].includes(r.proof)
+  if ((claim !== undefined) !== claimProof) return undefined
+  if (claim !== undefined && r.proof === 'origin-claim' && !claimCovers(r.caller as string, claim.caller)) return undefined
   return buildAuthorization(
     { ok: true, via: VIA_OF[rule], rule, basis: r.basis as string[] },
     {
