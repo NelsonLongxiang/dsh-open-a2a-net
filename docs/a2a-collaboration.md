@@ -1,6 +1,6 @@
 # A2A 协作规范（指引）
 
-全文在 `src/skill/references/collaboration.md`（当前 v1.17）。那是唯一可写的源头，本页只做指引，不放第二份正文。
+全文在 `src/skill/references/collaboration.md`（当前 v1.18）。那是唯一可写的源头，本页只做指引，不放第二份正文。
 
 ## 本项目 branch-cap 范围与只读盘点
 
