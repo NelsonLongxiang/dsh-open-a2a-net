@@ -115,6 +115,7 @@ import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from './runtim
 import { registerAdminFaces } from './faces/admin.ts'
 import { registerNodeFaces } from './faces/nodes.ts'
 import { NodeStore } from './node-store.ts'
+import { createNodeBinder, NodeBindings } from './node-bind.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { canvasCandidateMatches, canvasTargetAmbiguous, peerDirectoryRows, routableCallerLabel, sessionCandidateMatches, unroutableCallerNote } from './peer-directory.ts'
@@ -1139,6 +1140,13 @@ export function apply(ctx: Context, config: Config): void {
   // Live top-level agents: the join surface's candidates and the cold-row
   // complement (apply scope — the direct-route wake below reads it too).
   const liveRoots = new Map<string, Agent>()
+  // Node identity N2+N3: a joined session that carries a node gets that node's layers on its own scope.
+  const nodeBindings = new NodeBindings(join(home, 'a2a'))
+  const nodeBinder = createNodeBinder({ store: nodeStore, bindings: nodeBindings, logger, joined: id => joinedSessions.has(id), joinedList: () => joinedSessions.list(), archived: id => archivedSessionFilter()?.(id) === true, live: id => liveRoots.get(id) })
+  // No boot reconcile: a joined.json that failed to parse reads as empty, and ending every binding on that
+  // reading would destroy them (the 3081 lesson). A stale row is harmless — mount checks joined itself.
+  ctx.effect(() => joinedSessions.onChange(() => { nodeBinder.reconcile() }), 'a2a: node bindings follow join')
+  ctx.effect(() => () => { nodeBinder.disposeAll() }, 'a2a: node mounts')
   // Last foreground wake/route demand (epoch ms): boot prewarm steps yield
   // while demand keeps arriving inside the quiet window. Panel polls never
   // touch this — they are constant and would starve warming forever.
@@ -1288,6 +1296,8 @@ export function apply(ctx: Context, config: Config): void {
       if (!isArchived(id)) continue
       const ownHandle = ownCanvasHandleOf(id, true)
       sessionNodes.delete(id)
+      // Sections come back at the next mount (re-publish) if this archived reading was transient; the row stays.
+      nodeBinder.suspend(id)
       // The archived session's JOIN INTENT is retained: deleting it was the
       // 3081 wake-defect root cause (a transient archived-window reading
       // wiped intents at boot, and cold sessions then never woke — "no cold
@@ -1673,10 +1683,12 @@ export function apply(ctx: Context, config: Config): void {
       if (agents === undefined || !agents.roots().some(root => root.id === agent.id)) return undefined
       liveRoots.set(String(agent.id), agent)
       if (joinedSessions.has(String(agent.id))) mountSessionNode(agent)
+      nodeBinder.mount(agent)
       return undefined
     })
     ctx.on('agent/disposed', ({ agent }) => {
       liveRoots.delete(String(agent.id))
+      nodeBinder.forget(String(agent.id))
       // Disposal unmounts the runtime node; the persisted intent stays for
       // the remount above (leave is the only intent remover).
       sessionNodes.delete(String(agent.id))
@@ -1684,6 +1696,7 @@ export function apply(ctx: Context, config: Config): void {
     for (const agent of ctx.get('agents')?.roots() ?? []) {
       liveRoots.set(String(agent.id), agent)
       if (joinedSessions.has(String(agent.id))) mountSessionNode(agent)
+      nodeBinder.mount(agent)
     }
 
     /** F-observability: the boot prewarm's lifecycle, surfaced on the state route (F: prewarm not running was invisible). */
@@ -1997,7 +2010,7 @@ export function apply(ctx: Context, config: Config): void {
         get ownerAnnounceRestartPending() { return ownerAnnounceRestartPending },
         set ownerAnnounceRestartPending(v) { ownerAnnounceRestartPending = v },
       })
-      registerNodeFaces(webServer, { ctx, logger, nodeStore, apiKey: () => config.apiKey, secretEqual, controlRoute, readJsonBody })
+      registerNodeFaces(webServer, { ctx, logger, nodeStore, bindings: nodeBindings, binder: nodeBinder, apiKey: () => config.apiKey, secretEqual, controlRoute, readJsonBody })
     })
   }
 
