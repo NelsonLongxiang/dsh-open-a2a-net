@@ -786,7 +786,7 @@ export function apply(ctx: Context, config: Config): void {
       }
       let body: { readonly id?: unknown }
       try {
-        body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof body
+        body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof body; if (body === null || typeof body !== 'object' || Array.isArray(body)) throw new TypeError('control body must be a JSON object') // `null` crashed every route reading body.id
       } catch {
         const payload = JSON.stringify({ error: 'malformed body' })
         res.writeHead(400, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
@@ -806,7 +806,7 @@ export function apply(ctx: Context, config: Config): void {
         res.end(payload)
         return
       }
-      use(body)
+      try { use(body) } catch (error) { logger.warn('control route failed: %s', String(error)); if (!res.headersSent) { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"error":"internal error"}') } } // runs in the reader's 'end' callback, outside the web server's guard: a throw here would exit the host
     })
   }
 
