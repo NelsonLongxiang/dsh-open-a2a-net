@@ -19,9 +19,9 @@
  *   line, both before the deployment suffix at 10200 (§5).
  * - Frozen snapshot (§5): the texts are read once, when the session mounts.
  *   A layer written later takes effect from the session's next mount
- *   (resume / clear / compact re-publish it), never mid-session — except a
- *   plugin hot reload, which re-mounts live sessions at the latest version
- *   (#174 tracks re-mounting at the frozen versions).
+ *   (resume / clear / compact re-publish it), never mid-session: the binding
+ *   row records the versions each mount froze, and a plugin reload re-mounts
+ *   live sessions at them (#174).
  * - No interpolation (§5, B3): the installed system-prompt has no
  *   `interpolate:false`; it interpolates `{{name}}` groups and fails on an
  *   unknown one. Each section's text is therefore only `{{a2a_node_*}}`,
@@ -54,16 +54,66 @@ export interface NodeBinding {
   readonly node: string
   readonly by: string
   readonly at: string
+  /**
+   * What the session's last mount froze, per layer: version (0 = the layer had none, so it mounts
+   * empty) and that version's sha. Absent = never recorded (an older row): the current version.
+   * A plugin reload re-mounts at these (#174).
+   */
+  readonly core_version?: number
+  readonly core_sha256?: string
+  readonly mutable_version?: number
+  readonly mutable_sha256?: string
+}
+
+/** One layer's frozen pin as recorded on a row, or undefined when the row never recorded it. */
+export type LayerPin = { readonly version: number; readonly sha256: string } | undefined
+
+const versionField = (raw: unknown): number | undefined => typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0 ? raw : undefined
+const shaField = (raw: unknown): string | undefined => typeof raw === 'string' && /^([0-9a-f]{64})?$/.test(raw) ? raw : undefined
+const pinOf = (version: number | undefined, sha: string | undefined): LayerPin => version === undefined || sha === undefined ? undefined : { version, sha256: sha }
+
+/**
+ * A code fence left open would swallow everything rendered after it (even the core layer), so one
+ * still open at the end is closed. Tracked by the CommonMark rules: an opener is ``` or ~~~ (three
+ * or more) indented at most three spaces, and a backtick opener's info string has no backtick (else
+ * it is inline code); inside, only a run of the SAME character, at least as long, followed by nothing
+ * but blanks closes it. Lines split on CRLF, CR or LF alike; the closer carries the opener's indent, so
+ * a fence opened inside a list item is closed inside it rather than opening a new one at column 0.
+ */
+export function closeFences(text: string): string {
+  let open: { indent: string; ch: string; len: number } | undefined
+  for (const line of text.split(/\r\n|\r|\n/)) {
+    if (open === undefined) {
+      const m = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line)
+      if (m === null) continue
+      const fence = m[2] as string
+      if (fence.startsWith('`') && (m[3] as string).includes('`')) continue
+      open = { indent: m[1] as string, ch: fence.charAt(0), len: fence.length }
+    } else {
+      const m = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line)
+      if (m !== null && (m[1] as string).startsWith(open.ch) && (m[1] as string).length >= open.len) open = undefined
+    }
+  }
+  return open === undefined ? text : `${text}\n${open.indent}${open.ch.repeat(open.len)}`
 }
 
 const fail = <T>(code: 'bad-request' | 'not-found' | 'conflict' | 'unavailable', error: string): NodeResult<T> => ({ ok: false, code, error })
 
 /**
- * Mutable text cannot leave its fence: the fence markers are neutralised and a line-leading ATX
- * heading marker (`#`…`######` then a space or the line end) is escaped — `#156` stays as written — so a note can never close the fence or forge a heading (e.g. a second 节点契约).
+ * Mutable text cannot leave its fence: the fence markers are neutralised, and every Markdown heading
+ * form is escaped — an ATX marker (`#`…`######` then a space or the line end) and a Setext underline
+ * (a line of only `=` or `-`), at the line start or behind any block-quote / list-item prefix
+ * (`>`, `-`, `*`, `+`, `1.`, `1)`). `#156` stays as written; a `# comment` inside a code block is
+ * escaped too (harmless in a prompt, and simpler than tracking code blocks). An unclosed code fence
+ * is closed, so it cannot swallow what follows. A note can never close the fence or forge a heading.
  */
+const BLOCK_PREFIX = '((?:[ \\t]*(?:>|(?:[-*+]|\\d{1,9}[.)])(?=[ \\t])))*[ \\t]*)'
+const ATX = new RegExp(`^${BLOCK_PREFIX}(#{1,6})(?=[ \\t]|$)`, 'gm')
+const SETEXT = new RegExp(`^${BLOCK_PREFIX}(=+|-+)([ \\t]*)$`, 'gm')
 export function fenceSafe(text: string): string {
-  return text.replaceAll('<<<节点自记', '‹‹‹节点自记').replaceAll('节点自记>>>', '节点自记›››').replace(/^(\s*)(#{1,6})(?=\s|$)/gm, '$1\\$2')
+  return closeFences(text.replaceAll('<<<节点自记', '‹‹‹节点自记').replaceAll('节点自记>>>', '节点自记›››')
+    .replace(ATX, '$1\\$2')
+    .replace(SETEXT, '$1\\$2$3'))
 }
 
 /** The mutable layer, fenced and marked lower than the core layer below it. '' when every section is empty. */
@@ -138,7 +188,13 @@ export class NodeBindings {
         dropped++
         continue
       }
-      this.rows.push({ session: r.session, node: r.node, by: typeof r.by === 'string' ? r.by : '', at: typeof r.at === 'string' ? r.at : '' })
+      const core = pinOf(versionField(r.core_version), shaField(r.core_sha256))
+      const mutable = pinOf(versionField(r.mutable_version), shaField(r.mutable_sha256))
+      this.rows.push({
+        session: r.session, node: r.node, by: typeof r.by === 'string' ? r.by : '', at: typeof r.at === 'string' ? r.at : '',
+        ...(core !== undefined ? { core_version: core.version, core_sha256: core.sha256 } : {}),
+        ...(mutable !== undefined ? { mutable_version: mutable.version, mutable_sha256: mutable.sha256 } : {}),
+      })
     }
     // The next commit rewrites the table without the dropped rows: keep the original first (as the roster does).
     if (dropped > 0) {
@@ -170,6 +226,16 @@ export class NodeBindings {
     const row: NodeBinding = { session, node, by, at: this.now() }
     const done = this.commit([...this.rows.filter(b => b.session !== session), row])
     return done.ok ? { ok: true, value: row } : done
+  }
+
+  /** Record what a mount froze (best effort; unchanged values write nothing). */
+  setFrozen(session: string, core: { version: number; sha256: string }, mutable: { version: number; sha256: string }): NodeResult<true> {
+    const row = this.get(session)
+    if (row === undefined) return fail('not-found', `session ${session} carries no node`)
+    if (row.core_version === core.version && row.core_sha256 === core.sha256 && row.mutable_version === mutable.version && row.mutable_sha256 === mutable.sha256) return { ok: true, value: true }
+    return this.commit(this.rows.map(b => b.session === session
+      ? { ...b, core_version: core.version, core_sha256: core.sha256, mutable_version: mutable.version, mutable_sha256: mutable.sha256 }
+      : b))
   }
 
   delete(session: string): NodeResult<true> {
@@ -214,8 +280,13 @@ export interface NodeBinderDeps {
 }
 
 export interface NodeBinder {
-  /** Mount the session's bound node, if any. Never throws (it runs inside agent/created). */
-  mount(agent: BindableAgent): void
+  /**
+   * Mount the session's bound node, if any. Never throws (it runs inside agent/created). A new session
+   * (agent/created) takes the current versions; `atFrozen` — the plugin-load pass over sessions that are
+   * already live — re-mounts at the versions the row recorded, so a plugin reload never changes a live
+   * session's head (§5; #174). A recorded version that no longer reads back falls back to the current one.
+   */
+  mount(agent: BindableAgent, opts?: { atFrozen?: boolean }): void
   /** Take a live session's node sections off, keeping its binding row (an archived session). */
   suspend(session: string): void
   /** Forget a session's mount without touching its binding (cooling unload; the scope disposes itself). */
@@ -227,7 +298,9 @@ export interface NodeBinder {
   /**
    * End the bindings of sessions that LEFT since the last reading (leave, JOIN_CAP eviction). Only
    * the difference counts: a joined.json that failed to parse reads as empty, and treating every
-   * session as "left" on that reading would end every binding (the 3081 lesson). Never throws.
+   * session as "left" on that reading would end every binding (the 3081 lesson). A failed write keeps
+   * the leavers for the next reading (retry). A session that (re)joined and carries a binding row
+   * mounts at once, if live. Never throws.
    */
   reconcile(): void
   /** End every binding to an archived node. */
@@ -239,6 +312,13 @@ export interface NodeBinder {
 export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
   const mounts = new Map<string, { dispose: () => void; info: MountedNode }>()
   let seenJoined = new Set(d.joinedList())
+  /**
+   * Sessions that left but whose binding could not be deleted yet: retried at every join change, and
+   * neither mounted nor re-bound meanwhile. In memory only: a plugin reload before the write goes
+   * through forgets them, and a later re-join then revives the row (there is no boot sweep — the 3081
+   * lesson — so this needs a failed write AND a reload to happen).
+   */
+  let pendingEnd = new Set<string>()
 
   const unmount = (session: string): void => {
     const m = mounts.get(session)
@@ -248,17 +328,27 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
   }
 
   /** Register the frozen texts on the session's own scope; throws on registry errors (callers catch). */
-  const mountNode = (agent: BindableAgent, name: string): MountedNode | undefined => {
+  /** One layer at a recorded pin: 0 = none (empty), a version = that version if it reads back, else current. */
+  const layerAt = (name: string, layer: 'core' | 'mutable', pin: LayerPin): PromptVersion | undefined => {
+    if (pin === undefined) return d.store.current(name, layer)
+    if (pin.version === 0) return undefined
+    const v = d.store.frozen(name, layer, pin.version, pin.sha256)
+    if (v !== undefined) return v
+    d.logger.warn('a2a nodes: %s %s v%s (frozen by a live session) does not read back — re-mounted at the current version, so this session\'s head changes', name, layer, String(pin.version))
+    return d.store.current(name, layer)
+  }
+
+  const mountNode = (agent: BindableAgent, name: string, pin?: { core: LayerPin; mutable: LayerPin }): MountedNode | undefined => {
     const session = String(agent.id)
     const node = d.store.get(name)
     if (node === undefined) {
       d.logger.warn('a2a nodes: session %s is bound to %s, which is not on the roster — no node sections', session, name)
       return undefined
     }
-    const core = d.store.current(name, 'core')
-    const mutable = d.store.current(name, 'mutable')
-    if (node.prompt.core_version > 0 && core === undefined) d.logger.warn('a2a nodes: %s core v%s fails its sha check — mounted without it', name, String(node.prompt.core_version))
-    if (node.prompt.mutable_version > 0 && mutable === undefined) d.logger.warn('a2a nodes: %s mutable v%s fails its sha check — mounted without it', name, String(node.prompt.mutable_version))
+    const core = pin !== undefined ? layerAt(name, 'core', pin.core) : d.store.current(name, 'core')
+    const mutable = pin !== undefined ? layerAt(name, 'mutable', pin.mutable) : d.store.current(name, 'mutable')
+    if (pin === undefined && node.prompt.core_version > 0 && core === undefined) d.logger.warn('a2a nodes: %s core v%s fails its sha check — mounted without it', name, String(node.prompt.core_version))
+    if (pin === undefined && node.prompt.mutable_version > 0 && mutable === undefined) d.logger.warn('a2a nodes: %s mutable v%s fails its sha check — mounted without it', name, String(node.prompt.mutable_version))
     // Frozen here: the providers return these strings for the whole life of this mount.
     const coreText = renderCore(node, core)
     const mutableText = renderMutable(mutable)
@@ -280,16 +370,18 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
     }
     const info: MountedNode = { node: name, core_version: core?.version ?? 0, mutable_version: mutable?.version ?? 0 }
     mounts.set(session, { dispose: () => { for (const dispose of disposers.reverse()) dispose() }, info })
+    const recorded = d.bindings.setFrozen(session, { version: info.core_version, sha256: core?.sha256 ?? '' }, { version: info.mutable_version, sha256: mutable?.sha256 ?? '' })
+    if (!recorded.ok && recorded.code !== 'not-found') d.logger.warn('a2a nodes: could not record the versions %s froze (%s) — a plugin reload may re-mount it at the previously recorded ones', session, recorded.error)
     return info
   }
 
-  return {
-    mount(agent) {
+  const binder: NodeBinder = {
+    mount(agent, opts) {
       const session = String(agent.id)
       try {
         const binding = d.bindings.get(session)
-        if (binding === undefined || !d.joined(session) || d.archived(session)) return
-        mountNode(agent, binding.node)
+        if (binding === undefined || !d.joined(session) || d.archived(session) || pendingEnd.has(session)) return
+        mountNode(agent, binding.node, opts?.atFrozen === true ? { core: pinOf(binding.core_version, binding.core_sha256), mutable: pinOf(binding.mutable_version, binding.mutable_sha256) } : undefined)
       } catch (error) {
         d.logger.warn('a2a nodes: mounting node sections on %s failed (session opens without them): %s', session, String(error))
       }
@@ -307,6 +399,12 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
       if (typeof session !== 'string' || session === '') return fail('bad-request', 'session is required')
       if (!d.joined(session)) return fail('conflict', `session ${session} is not joined — only a joined session carries a node (§3)`)
       if (d.archived(session)) return fail('conflict', `session ${session} is archived — an archived session carries no node (§3)`)
+      if (pendingEnd.has(session)) {
+        // Retry the pending end here: once the a2a home is writable again, bind goes through.
+        const ended = d.bindings.deleteWhere(b => b.session === session)
+        if (!ended.ok) return fail('conflict', `session ${session} left the network and its old binding is still being ended (a write failed) — retry once the a2a home is writable`)
+        pendingEnd.delete(session)
+      }
       if (d.store.get(name) === undefined) return fail('not-found', `no node ${name}`)
       const existing = d.bindings.get(session)
       if (existing !== undefined && existing.node !== name) return fail('conflict', `session ${session} already carries ${existing.node} — unbind it first (one node per session)`)
@@ -338,16 +436,25 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
     reconcile() {
       try {
         const now = new Set(d.joinedList())
-        const left = new Set([...seenJoined].filter(id => !now.has(id)))
+        // A leave ends the binding even if the session re-joined before the write went through.
+        const toEnd = new Set([...[...seenJoined].filter(id => !now.has(id)), ...pendingEnd])
+        const arrived = [...now].filter(id => !seenJoined.has(id))
         seenJoined = now
-        if (left.size === 0) return
-        const gone = d.bindings.deleteWhere(b => left.has(b.session))
-        if (!gone.ok) {
-          d.logger.warn('a2a nodes: could not end bindings of sessions that left: %s', gone.error)
-          for (const id of left) unmount(id)
-          return
+        if (toEnd.size > 0) {
+          for (const id of toEnd) unmount(id)
+          const gone = d.bindings.deleteWhere(b => toEnd.has(b.session))
+          if (gone.ok) {
+            pendingEnd = new Set()
+          } else {
+            d.logger.warn('a2a nodes: could not end bindings of sessions that left (retried at the next change): %s', gone.error)
+            pendingEnd = toEnd
+          }
         }
-        for (const b of gone.value) unmount(b.session)
+        // A session that (re)joined with a surviving row mounts now, not at its next publish.
+        for (const id of arrived) {
+          const agent = d.live(id)
+          if (agent !== undefined && !mounts.has(id)) binder.mount(agent)
+        }
       } catch (error) {
         d.logger.warn('a2a nodes: reconcile failed: %s', String(error))
       }
@@ -361,4 +468,5 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
       for (const session of [...mounts.keys()]) unmount(session)
     },
   }
+  return binder
 }

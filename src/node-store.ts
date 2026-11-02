@@ -309,6 +309,21 @@ export class NodeStore {
     return wellFormed(v, layer) && v.version === pinned && v.sha256 === sha ? v : undefined
   }
 
+  /**
+   * A specific version a live session froze at mount (#174: a plugin reload re-mounts at it). The pinned
+   * current version goes through {@link current} (the roster's sha); an older one must be well-formed,
+   * carry its own number, AND match the sha the mount recorded — the outside anchor a hand-edited file
+   * that recomputed its own sha cannot also fake. undefined when any check fails (the caller falls back).
+   */
+  frozen(name: string, layer: Layer, version: number, sha: string): PromptVersion | undefined {
+    const node = this.get(name)
+    if (node === undefined || version <= 0) return undefined
+    const v = version === (layer === 'core' ? node.prompt.core_version : node.prompt.mutable_version)
+      ? this.current(name, layer)
+      : this.version(name, layer, version)
+    return wellFormed(v, layer) && v.version === version && v.sha256 === sha ? v : undefined
+  }
+
   /** Version numbers present for one layer, ascending. */
   versions(name: string, layer: Layer): number[] {
     return this.versionNumbers(name, layer).sort((a, b) => a - b)

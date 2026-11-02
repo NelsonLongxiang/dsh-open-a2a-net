@@ -1696,7 +1696,7 @@ export function apply(ctx: Context, config: Config): void {
     for (const agent of ctx.get('agents')?.roots() ?? []) {
       liveRoots.set(String(agent.id), agent)
       if (joinedSessions.has(String(agent.id))) mountSessionNode(agent)
-      nodeBinder.mount(agent)
+      nodeBinder.mount(agent, { atFrozen: true })
     }
 
     /** F-observability: the boot prewarm's lifecycle, surfaced on the state route (F: prewarm not running was invisible). */
