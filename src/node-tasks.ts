@@ -113,6 +113,8 @@ export class NodeTasks {
   private readOnlyReason = ''
   private running: Promise<void> | undefined
   private readonly inflight = new Map<string, Promise<void>>()
+  /** Owed reminders already handed out by this process: a clear that could not be written must not repeat at every mount. */
+  private readonly handedOut = new Set<string>()
   private disposed = false
   private readonly now: () => string
 
@@ -194,17 +196,19 @@ export class NodeTasks {
     const existing = list.find(p => p.ref === ref)
     if (existing !== undefined) return { ok: true, value: existing }
     const pointer: TaskPointer = { ref, state: 'unknown', check: 'pending', since: this.now(), checked_at: '', core_version: versions.core, mutable_version: versions.mutable, by }
-    // Over the cap, finished pointers go first (oldest first), then the oldest open ones.
+    // Over the cap: finished pointers go first (oldest first), then the oldest open ones, and a pointer that
+    // still owes a reminder goes last — evicting it would drop the reminder with it.
     const all = [pointer, ...list]
     const evict = new Set<string>()
-    for (const p of [...all].reverse()) {
-      if (all.length - evict.size <= TASK_KEEP) break
-      if (FINISHED.has(p.state)) evict.add(p.ref)
+    const pass = (pick: (p: TaskPointer) => boolean): void => {
+      for (const p of [...all].reverse()) {
+        if (all.length - evict.size <= TASK_KEEP) return
+        if (p !== pointer && !evict.has(p.ref) && pick(p)) evict.add(p.ref)
+      }
     }
-    for (const p of [...all].reverse()) {
-      if (all.length - evict.size <= TASK_KEEP) break
-      if (p !== pointer) evict.add(p.ref)
-    }
+    pass(p => FINISHED.has(p.state) && p.remind_pending !== true)
+    pass(p => p.remind_pending !== true)
+    pass(() => true)
     const done = this.commit({ ...this.table, [node]: all.filter(p => !evict.has(p.ref)) }, all.filter(p => evict.has(p.ref)).map(p => ({ node, pointer: p })))
     if (!done.ok) return done
     void this.check(node, ref)
@@ -258,7 +262,10 @@ export class NodeTasks {
       let reached = 0
       try { reached = this.d.onSettled(node, after) } catch (error) { this.d.logger.warn('a2a nodes: reminder for %s failed: %s', ref, String(error)) }
       // Nobody carried the node right now (e.g. a cold boot): owe it to the next session that mounts it.
-      if (reached === 0) this.setPending(node, ref, true)
+      if (reached === 0) {
+        this.handedOut.delete(`${node}\u0000${ref}`)
+        this.setPending(node, ref, true)
+      }
     }
   }
 
@@ -275,11 +282,15 @@ export class NodeTasks {
 
   /**
    * The reminders owed to `node`, cleared as they are handed out (one session gets each). A clear that
-   * cannot be written still hands them out — a reminder may then repeat after a restart, never vanish.
+   * cannot be written still hands them out, once per process — a reminder may then repeat after a restart,
+   * never vanish.
    */
   takePending(node: string): TaskPointer[] {
-    const owed = this.list(node).filter(p => p.remind_pending === true)
-    for (const p of owed) this.setPending(node, p.ref, false)
+    const owed = this.list(node).filter(p => p.remind_pending === true && !this.handedOut.has(`${node}\u0000${p.ref}`))
+    for (const p of owed) {
+      this.handedOut.add(`${node}\u0000${p.ref}`)
+      this.setPending(node, p.ref, false)
+    }
     return owed
   }
 

@@ -276,3 +276,45 @@ describe('NodeTasks: pointers, checks, reminders', () => {
   })
 })
 
+
+describe('N6 P3 (review of #178 at 40b7310)', () => {
+  it('P3-1: an owed reminder whose clear cannot be written is handed out once per process, not at every mount', async () => {
+    const { chmodSync } = await import('node:fs')
+    const root = mkdtempSync(join(tmpdir(), 'node-tasks-'))
+    let answer: TaskFact = open
+    const { t } = table(async () => answer, root, 0)
+    t.track('chief', 'o/r#21', V, 'human:owner')
+    await flush()
+    answer = merged()
+    await t.checkAll()
+    chmodSync(root, 0o500)
+    try {
+      expect(t.takePending('chief').map(p => p.ref)).toEqual(['o/r#21'])
+      expect(t.takePending('chief')).toEqual([])
+    } finally {
+      chmodSync(root, 0o700)
+    }
+  })
+
+  it('P3-2: a pointer that still owes a reminder is evicted last, so the reminder survives the cap', async () => {
+    let answer: TaskFact = open
+    const { t } = table(async () => answer, '', 0)
+    t.track('chief', 'o/r#1', V, 'human:owner')
+    await flush()
+    answer = merged()
+    await t.checkAll()
+    expect(t.list('chief')[0]?.remind_pending).toBe(true)
+    answer = open
+    for (let i = 2; i <= TASK_KEEP + 1; i++) { t.track('chief', `o/r#${String(i)}`, V, 'human:owner'); await flush() }
+    expect(t.list('chief').some(p => p.ref === 'o/r#1')).toBe(true)
+    expect(t.takePending('chief').map(p => p.ref)).toEqual(['o/r#1'])
+  })
+
+  it('C7: an open row read from disk never carries an owed reminder', () => {
+    const root = mkdtempSync(join(tmpdir(), 'node-tasks-'))
+    writeFileSync(join(root, 'node-tasks.json'), JSON.stringify({ tasks: { chief: [{ ref: 'o/r#1', state: 'open', since: T0, remind_pending: true }] } }))
+    const { t } = table(async () => open, root)
+    expect(t.list('chief')[0]?.remind_pending).toBeUndefined()
+    expect(t.takePending('chief')).toEqual([])
+  })
+})

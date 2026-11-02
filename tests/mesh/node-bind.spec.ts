@@ -1019,4 +1019,29 @@ describe('N6 — task pointers on the nodes face, the live task context, the rem
       await m.dispose()
     }
   }, 30_000)
+
+  it('C10 + C9: owed reminders go to the session of THAT node only, and a throwing source never fails the mount', async () => {
+    const host = new Context()
+    await host.plugin(SystemPrompt)
+    const store = new NodeStore('')
+    for (const name of ['chief', 'other', 'broken']) expect(store.create({ name }, 'human:owner').ok).toBe(true)
+    const bindings = new NodeBindings('')
+    const C = 'session-cccccccc33333333'
+    const sent: Record<string, string[]> = { [A]: [], [B]: [], [C]: [] }
+    const agents = new Map<string, ScopedAgent>()
+    for (const id of [A, B, C]) agents.set(id, Object.assign(makeAgent(host, id), { send: (msg: { content: Array<{ text: string }> }) => { sent[id]?.push(msg.content[0]?.text ?? '') } }))
+    const owed: Record<string, string[]> = { chief: ['欠 chief 的'], other: [] }
+    const binder = createNodeBinder({
+      store, bindings, logger: { warn: () => undefined }, joined: () => true, joinedList: () => [A, B, C], archived: () => false,
+      live: id => agents.get(id) as never,
+      pendingReminders: node => { if (node === 'broken') throw new Error('tasks table exploded'); const out = owed[node] ?? []; owed[node] = []; return out },
+    })
+    expect(binder.bind(B, 'other', 'human:owner').ok).toBe(true)
+    expect(binder.bind(A, 'chief', 'human:owner').ok).toBe(true)
+    const broken = binder.bind(C, 'broken', 'human:owner')
+    expect(broken.ok && broken.value.mounted).toBe(true)
+    expect(sent).toEqual({ [A]: ['欠 chief 的'], [B]: [], [C]: [] })
+    await host.fiber.dispose()
+  }, 20_000)
 })
+
