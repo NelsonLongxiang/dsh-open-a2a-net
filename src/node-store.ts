@@ -294,6 +294,21 @@ export class NodeStore {
     }
   }
 
+  /**
+   * The version a node's record pins for `layer`, only when it is well-formed AND its sha is the one
+   * the record pins — a hand-edited or swapped version file reads as absent, never as prompt text.
+   * undefined for an unknown node, a layer never written (version 0), or a file that fails either check.
+   */
+  current(name: string, layer: Layer): PromptVersion | undefined {
+    const node = this.get(name)
+    if (node === undefined) return undefined
+    const pinned = layer === 'core' ? node.prompt.core_version : node.prompt.mutable_version
+    const sha = layer === 'core' ? node.prompt.core_sha256 : node.prompt.mutable_sha256
+    if (pinned <= 0) return undefined
+    const v = this.version(name, layer, pinned)
+    return wellFormed(v, layer) && v.version === pinned && v.sha256 === sha ? v : undefined
+  }
+
   /** Version numbers present for one layer, ascending. */
   versions(name: string, layer: Layer): number[] {
     return this.versionNumbers(name, layer).sort((a, b) => a - b)

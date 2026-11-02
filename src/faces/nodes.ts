@@ -4,7 +4,7 @@
  * - GET rides the ordinary control trust (loopback or apiKey): the roster,
  *   and with `?name=` one node plus its version numbers and current layers.
  * - POST is an IDENTITY write (create / update / archive / write-core /
- *   write-mutable / rollback). §8-2 (owner ruling 2026-11-02): it requires
+ *   write-mutable / rollback, and bind / unbind a session — N2+N3). §8-2 (owner ruling 2026-11-02): it requires
  *   the host's apiKey in `X-API-Key` even on loopback — a host with no
  *   apiKey refuses identity writes outright. No model tool reaches it.
  *   Same-host shell access can still edit the files; the design says so
@@ -15,6 +15,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { NodeErrorCode, NodeResult, NodeStore } from '../node-store.ts'
+import type { NodeBinder, NodeBindings } from '../node-bind.ts'
 
 /** Identity bodies carry layers of up to 3000 CJK characters; the 10 KiB control default is too small. */
 export const NODE_BODY_MAX_BYTES = 32_000
@@ -23,6 +24,8 @@ export interface NodeFaceDeps {
   readonly ctx: Context
   readonly logger: { warn: (format: string, ...args: unknown[]) => void }
   readonly nodeStore: NodeStore
+  readonly bindings: NodeBindings
+  readonly binder: NodeBinder
   readonly apiKey: () => string
   readonly secretEqual: (a: string, b: string) => boolean
   readonly controlRoute: (handler: (req: IncomingMessage, res: ServerResponse) => void) => (req: IncomingMessage, res: ServerResponse) => void
@@ -39,7 +42,7 @@ export function identityVerdict(apiKey: string, presented: unknown, secretEqual:
 const STATUS: Record<NodeErrorCode, number> = { 'bad-request': 400, 'not-found': 404, conflict: 409, quota: 413, cap: 409, unavailable: 503 }
 
 /** One POST body → status + payload. Pure: the route below only does I/O and the identity gate. */
-export function nodeAction(store: NodeStore, raw: unknown): { status: number; payload: Record<string, unknown> } {
+export function nodeAction(store: NodeStore, binder: NodeBinder, raw: unknown): { status: number; payload: Record<string, unknown> } {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { status: 400, payload: { ok: false, error: 'body must be a JSON object' } }
   const body = raw as Record<string, unknown>
   const by = typeof body.by === 'string' && body.by.trim() !== '' ? `human:${body.by.trim().slice(0, 64)}` : 'human:owner'
@@ -56,13 +59,28 @@ export function nodeAction(store: NodeStore, raw: unknown): { status: number; pa
     case 'rollback':
       if (body.layer !== 'core' && body.layer !== 'mutable') return { status: 400, payload: { ok: false, error: "layer must be 'core' or 'mutable'" } }
       return answer(store.rollback(name, body.layer, body.to, { expectedSha: body.expected_sha256, reason: body.reason, by }))
-    default: return { status: 400, payload: { ok: false, error: 'action must be create | update | archive | write-core | write-mutable | rollback' } }
+    case 'bind': return answer(binder.bind(typeof body.session === 'string' ? body.session : '', name, by))
+    case 'unbind': return answer(binder.unbind(typeof body.session === 'string' ? body.session : ''))
+    default: return { status: 400, payload: { ok: false, error: 'action must be create | update | archive | write-core | write-mutable | rollback | bind | unbind' } }
   }
 }
 
-/** GET view: the roster, or one node with its version numbers and current layer texts. */
-export function nodeView(store: NodeStore, name: string | null): { status: number; payload: Record<string, unknown> } {
-  if (name === null || name === '') return { status: 200, payload: { ok: true, nodes: store.list(), read_only: store.readOnly, dropped: store.dropped } }
+/**
+ * GET view: the roster with the bindings (and what each live session froze at mount), or one node
+ * with its version numbers and current layers. `current` only shows a version that passes the shape
+ * and sha checks (`null` otherwise) — the same reading a mount uses.
+ */
+export function nodeView(store: NodeStore, bindings: NodeBindings, binder: NodeBinder, name: string | null): { status: number; payload: Record<string, unknown> } {
+  if (name === null || name === '') {
+    return {
+      status: 200,
+      payload: {
+        ok: true, nodes: store.list(), read_only: store.readOnly, dropped: store.dropped,
+        bindings: bindings.list().map(b => ({ ...b, mounted: binder.mounted(b.session) ?? null })),
+        bindings_read_only: bindings.readOnly,
+      },
+    }
+  }
   const node = store.get(name)
   if (node === undefined) return { status: 404, payload: { ok: false, error: `no node ${name}` } }
   return {
@@ -71,15 +89,15 @@ export function nodeView(store: NodeStore, name: string | null): { status: numbe
       ok: true, node,
       versions: { core: store.versions(name, 'core'), mutable: store.versions(name, 'mutable') },
       current: {
-        core: node.prompt.core_version > 0 ? store.version(name, 'core', node.prompt.core_version) : null,
-        mutable: node.prompt.mutable_version > 0 ? store.version(name, 'mutable', node.prompt.mutable_version) : null,
+        core: store.current(name, 'core') ?? null,
+        mutable: store.current(name, 'mutable') ?? null,
       },
     },
   }
 }
 
 export function registerNodeFaces(webServer: WebServer, d: NodeFaceDeps): void {
-  const { ctx, nodeStore, controlRoute, readJsonBody } = d
+  const { ctx, nodeStore, bindings, binder, controlRoute, readJsonBody } = d
   const send = (res: ServerResponse, status: number, payload: Record<string, unknown>): void => {
     const text = JSON.stringify(payload)
     res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(text), 'Cache-Control': 'no-store' })
@@ -92,7 +110,7 @@ export function registerNodeFaces(webServer: WebServer, d: NodeFaceDeps): void {
       if (req.method === 'GET') {
         controlRoute((r, s) => {
           try {
-            const view = nodeView(nodeStore, new URL(r.url ?? '/', 'http://x').searchParams.get('name'))
+            const view = nodeView(nodeStore, bindings, binder, new URL(r.url ?? '/', 'http://x').searchParams.get('name'))
             send(s, view.status, view.payload)
           } catch (error) {
             d.logger.warn('nodes face: %s', String(error))
@@ -108,7 +126,7 @@ export function registerNodeFaces(webServer: WebServer, d: NodeFaceDeps): void {
         // This runs in the body reader's 'end' callback, outside the web server's handler guard:
         // a throw here would be an uncaughtException and take the host down.
         try {
-          const out = nodeAction(nodeStore, body)
+          const out = nodeAction(nodeStore, binder, body)
           send(res, out.status, out.payload)
         } catch (error) {
           d.logger.warn('nodes face: %s', String(error))
