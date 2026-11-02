@@ -311,15 +311,17 @@ export class NodeStore {
 
   /**
    * A specific version a live session froze at mount (#174: a plugin reload re-mounts at it). The pinned
-   * current version goes through {@link current}; an older one must still be well-formed and carry its
-   * own number. undefined when it fails either check — the caller falls back to the current version.
+   * current version goes through {@link current} (the roster's sha); an older one must be well-formed,
+   * carry its own number, AND match the sha the mount recorded — the outside anchor a hand-edited file
+   * that recomputed its own sha cannot also fake. undefined when any check fails (the caller falls back).
    */
-  frozen(name: string, layer: Layer, version: number): PromptVersion | undefined {
+  frozen(name: string, layer: Layer, version: number, sha: string): PromptVersion | undefined {
     const node = this.get(name)
     if (node === undefined || version <= 0) return undefined
-    if (version === (layer === 'core' ? node.prompt.core_version : node.prompt.mutable_version)) return this.current(name, layer)
-    const v = this.version(name, layer, version)
-    return wellFormed(v, layer) && v.version === version ? v : undefined
+    const v = version === (layer === 'core' ? node.prompt.core_version : node.prompt.mutable_version)
+      ? this.current(name, layer)
+      : this.version(name, layer, version)
+    return wellFormed(v, layer) && v.version === version && v.sha256 === sha ? v : undefined
   }
 
   /** Version numbers present for one layer, ascending. */
