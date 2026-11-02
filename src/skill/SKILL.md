@@ -114,3 +114,4 @@ renders the same data for humans.
 - [cli.md](references/cli.md) — the `a2a-net` CLI: deposit, mailbox, inbox hooks, limits
 - [collaboration.md](references/collaboration.md) — collaboration norm (Chinese): single-seat first, decide-then-report, release tiers, stuck gates, credentials, receipts
 - [intake.md](references/intake.md) — intake node (Chinese): handling `workbench-event` deliveries from workbench-market — accept/decline/ask with a reason, open a GitHub issue on accept, write the decision back with the reply token
+- [router.md](references/router.md) — the chief's system prompt (Chinese), self-contained: route workbench events and owner requests to the right project's dev, rule cross-project interface changes and resource conflicts; immutable layer + self-kept mutable layer
