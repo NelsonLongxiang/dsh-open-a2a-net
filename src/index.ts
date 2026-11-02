@@ -2278,9 +2278,9 @@ export function apply(ctx: Context, config: Config): void {
    * visible for /a2a/query follow-ups.
    */
   const nudgeBudget = new Map<string, number>()
+  const nudgeRef = (taskId: string): string => createHash('sha256').update(taskId, 'utf8').digest('hex').slice(0, 16)
   const escalateQueuePrompt = (agent: Agent, team: string, taskId: string): void => {
-    // Queue-mode prompt seam: the session controller owns prompt admission
-    // (successor of the removed api gateway's prompt face).
+    // Queue-mode prompt seam (the session controller owns prompt admission); #183: it stamps kind:'user', so nudgeRef stands in for the caller's task id.
     const controller = ctx.get('sessionController') as
       | { prompt?: (request: {
           requestId: string
@@ -2290,13 +2290,13 @@ export function apply(ctx: Context, config: Config): void {
         }, signal: AbortSignal) => Promise<unknown> }
       | undefined
     if (typeof controller?.prompt !== 'function') return
-    logger.info(`a2a: async nudge escalates to queue-mode prompt for ${team} (task ${taskId})`)
+    logger.info(`a2a: async nudge escalates to queue-mode prompt for ${team} (task ${taskId}, ref ${nudgeRef(taskId)})`)
     try {
       void controller.prompt({
-        requestId: `a2a-nudge-${taskId}`,
+        requestId: `a2a-nudge-${nudgeRef(taskId)}`,
         sessionId: agent.id,
         mode: 'queue',
-        content: [{ type: 'text', text: `[A2A nudge] (task ${taskId}) your earlier routed message was delivered while this session could not start a turn — please consume the inbox backlog now (ignore if there is nothing pending).` }],
+        content: [{ type: 'text', text: `[A2A nudge] (ref ${nudgeRef(taskId)}) an earlier A2A delivery reached this session while it could not start a turn — please consume the inbox backlog now (ignore if there is nothing pending).` }],
       }, new AbortController().signal).catch(() => {})
     } catch {
       /* queueing is best-effort: the ledger row keeps the debt visible */
@@ -2334,8 +2334,8 @@ export function apply(ctx: Context, config: Config): void {
       // the current live node, or the wake path materializes the session
       // afresh.
       const fresh = resolveAgentForTeam(team) ?? agent
-      logger.info(`a2a: async nudge re-waking ${team} (task ${taskId} delivered but not consumed)`)
-      steerRelay(fresh, `[A2A nudge] (task ${taskId}) your earlier routed message was delivered while this session could not start a turn — please consume the inbox backlog now.`)
+      logger.info(`a2a: async nudge re-waking ${team} (task ${taskId}, ref ${nudgeRef(taskId)}, delivered but not consumed)`)
+      steerRelay(fresh, `[A2A nudge] (ref ${nudgeRef(taskId)}) an earlier A2A delivery reached this session while it could not start a turn — please consume the inbox backlog now.`)
     }, delayMs)
     ctx.effect(() => () => clearTimeout(timer), `a2a: async nudge ${taskId}`)
   }
