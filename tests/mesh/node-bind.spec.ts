@@ -29,6 +29,7 @@ import * as plugin from '../../src/index.ts'
 import type { Config } from '../../src/index.ts'
 import { NODE_PROMPT } from '../../src/node-bind.ts'
 import { promptSha } from '../../src/node-store.ts'
+import { fromMarkdown } from 'mdast-util-from-markdown'
 
 const KEY = 'node-bind-key'
 
@@ -755,4 +756,64 @@ describe('#174 — frozen versions across a plugin reload, retries, re-join, hea
       await m.dispose()
     }
   }, 20_000)
+
+  it('r3 P2: fences are tracked by CommonMark — legal notes keep the core heading, unclosed ~~~ / ```` are closed', async () => {
+    type Node = { type: string; depth?: number; children?: Node[]; value?: string }
+    const textOf = (n: Node): string => n.value ?? (n.children ?? []).map(textOf).join('')
+    const cases = ['```行内``` 开头的一句话', '~~~\n```\n~~~', '````\n```\n````', '~~~\n没闭合', '````\n没闭合', '```sh\n没闭合']
+    for (const note of cases) {
+      const m = await mount()
+      try {
+        await nodeWithLayers(m, 'chief', { 当前状态: note, 当前重点: '后面的段' })
+        const a = await boundLive(m)
+        const tree = fromMarkdown(await m.prompt(a)) as unknown as Node
+        const headings = (tree.children ?? []).filter(n => n.type === 'heading').map(textOf)
+        expect(headings, note).toContain('节点契约（a2a:node:core）')
+        expect(headings, note).toContain('当前重点')
+      } finally {
+        await m.dispose()
+      }
+    }
+  }, 60_000)
+
+  it('r3 M15 + P3-1: while a failed leave is pending, a re-join and a re-publish do not mount, and bind answers 409', async () => {
+    const { chmodSync } = await import('node:fs')
+    const m = await mount()
+    const dir = join(m.home, 'a2a')
+    try {
+      await nodeWithLayers(m, 'chief', { 当前状态: '原文' })
+      const a = await boundLive(m)
+      chmodSync(dir, 0o500)
+      await m.post('/__dsh_a2a/leave', { id: A })
+      await m.post('/__dsh_a2a/join', { id: A })
+      const next = makeAgent(m.ctx, A)
+      await a.dispose()
+      m.ctx.emit('agent/disposed', { agent: a as unknown as Agent })
+      m.publish(next)
+      expect(await m.prompt(next)).not.toContain('节点契约')
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: A })).status).toBe(409)
+      chmodSync(dir, 0o700)
+    } finally {
+      chmodSync(dir, 0o700)
+      await m.dispose()
+    }
+  }, 20_000)
+
+  it('r3 M19: a row from the previous slice (versions without sha) re-mounts at the current version on reload', async () => {
+    const m = await mount()
+    try {
+      await nodeWithLayers(m, 'chief', { 当前状态: '第一版' })
+      const a = await boundLive(m)
+      await writeMutable(m, { 当前状态: '第二版' })
+      const file = join(m.home, 'a2a', 'node-bindings.json')
+      writeFileSync(file, JSON.stringify({ bindings: [{ session: A, node: 'chief', by: 'human:owner', at: 'x', core_version: 1, mutable_version: 1 }] }))
+      await m.reload(true)
+      expect(await m.prompt(a)).toContain('第二版')
+      const row = (JSON.parse(readFileSync(file, 'utf8')) as { bindings: Array<{ mutable_version: number; mutable_sha256: string }> }).bindings[0]
+      expect(row?.mutable_version).toBe(2)
+      expect(row?.mutable_sha256).toMatch(/^[0-9a-f]{64}$/)
+    } finally {
+      await m.dispose()
+    }
+  }, 30_000)
 })

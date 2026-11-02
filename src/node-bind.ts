@@ -72,10 +72,28 @@ const versionField = (raw: unknown): number | undefined => typeof raw === 'numbe
 const shaField = (raw: unknown): string | undefined => typeof raw === 'string' && /^([0-9a-f]{64})?$/.test(raw) ? raw : undefined
 const pinOf = (version: number | undefined, sha: string | undefined): LayerPin => version === undefined || sha === undefined ? undefined : { version, sha256: sha }
 
-/** A trailing unclosed code fence would swallow everything rendered after it (even the core layer). */
-function closeFences(text: string): string {
-  const fences = text.split('\n').filter(line => /^[ \t]*(```|~~~)/.test(line)).length
-  return fences % 2 === 0 ? text : `${text}\n\`\`\``
+/**
+ * A code fence left open would swallow everything rendered after it (even the core layer), so one
+ * still open at the end is closed. Tracked by the CommonMark rules: an opener is ``` or ~~~ (three
+ * or more) indented at most three spaces, and a backtick opener's info string has no backtick (else
+ * it is inline code); inside, only a run of the SAME character, at least as long, followed by nothing
+ * but blanks closes it. A fence inside a list item ends with the item, so it is not tracked here.
+ */
+export function closeFences(text: string): string {
+  let open: { ch: string; len: number } | undefined
+  for (const line of text.split('\n')) {
+    if (open === undefined) {
+      const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
+      if (m === null) continue
+      const fence = m[1] as string
+      if (fence.startsWith('`') && (m[2] as string).includes('`')) continue
+      open = { ch: fence.charAt(0), len: fence.length }
+    } else {
+      const m = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line)
+      if (m !== null && (m[1] as string).startsWith(open.ch) && (m[1] as string).length >= open.len) open = undefined
+    }
+  }
+  return open === undefined ? text : `${text}\n${open.ch.repeat(open.len)}`
 }
 
 const fail = <T>(code: 'bad-request' | 'not-found' | 'conflict' | 'unavailable', error: string): NodeResult<T> => ({ ok: false, code, error })
@@ -293,7 +311,12 @@ export interface NodeBinder {
 export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
   const mounts = new Map<string, { dispose: () => void; info: MountedNode }>()
   let seenJoined = new Set(d.joinedList())
-  /** Sessions that left but whose binding could not be deleted yet: retried at every change, never revived. */
+  /**
+   * Sessions that left but whose binding could not be deleted yet: retried at every join change, and
+   * neither mounted nor re-bound meanwhile. In memory only: a plugin reload before the write goes
+   * through forgets them, and a later re-join then revives the row (there is no boot sweep — the 3081
+   * lesson — so this needs a failed write AND a reload to happen).
+   */
   let pendingEnd = new Set<string>()
 
   const unmount = (session: string): void => {
@@ -375,6 +398,7 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
       if (typeof session !== 'string' || session === '') return fail('bad-request', 'session is required')
       if (!d.joined(session)) return fail('conflict', `session ${session} is not joined — only a joined session carries a node (§3)`)
       if (d.archived(session)) return fail('conflict', `session ${session} is archived — an archived session carries no node (§3)`)
+      if (pendingEnd.has(session)) return fail('conflict', `session ${session} left the network and its old binding is still being ended (a write failed) — retry once the a2a home is writable`)
       if (d.store.get(name) === undefined) return fail('not-found', `no node ${name}`)
       const existing = d.bindings.get(session)
       if (existing !== undefined && existing.node !== name) return fail('conflict', `session ${session} already carries ${existing.node} — unbind it first (one node per session)`)
