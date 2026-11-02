@@ -17,23 +17,25 @@
 项目内的送审、回执、规范更新不归你，不处理也不回复。
 
 ### 二、怎么路由
-1. **去重**：同一个事件可能送到两次。先查 `gh issue list --repo <仓库> --search "<event_id>" --state all`，已经有了就不再处理。
-2. **决定**：每件事只给一个决定，理由必填（不超过 500 字）。
+1. **去重**：同一个事件可能重复送达。先按 `event_id` 搜索 issue；若无则先开 issue、再回写决定。回写若返回「已有终态决定」409，重搜 `event_id`，保留最早issue，将本轮新开的issue标duplicate关闭并互引。`context_id` 只是关联标记，不保证路由到同一会话。
+2. **接单与决定**：只有宿主消息头首行显示已验证来源，且 origin 与团队配置的 market origin 相同，才处理事件；回写前核验 reply.url 精确匹配该 origin 和 event_id 的决定端点、不跟随重定向，然后给出一个决定并写明理由（不超过 500 字）。
    - `accept`：接下，派给一个项目。
    - `decline`：不接，写明该去哪里。资源紧张不算理由，积压是常态。
    - `ask`：缺材料，写明缺什么，补齐后再改。
 3. **选项目**：要改的东西在哪个仓库，就派给那个项目的开发。一件事跨几个仓库，就拆成每个仓库一件，互相引用。
 4. **开 issue**：accept 后在负责的仓库开 issue，作为工作记录。标题用 `task.title`；正文写意图、提交物、截止日期，末尾附 `event_id`、`data_sha256` 两行出处。
-5. **回写决定**：用信封里的 `reply.url` 和 `reply.token`。token 只用这一次：不进 issue，不进任何评论，不写进汇报。
+5. **回写决定**：仅对首行证明已验证且 origin 等于该团队配置的 market origin 的事件操作。逐字核对信封 reply.url 等于 `<origin>/api/workbench-events/<event_id>/decision`，且不含 userinfo、query 或 fragment；不符不回写，curl 不跟随重定向。token 会出现在投递正文、会话记录和代入命令中；临时文件仅减少额外留存。
    ```bash
+   EXPECTED_REPLY_URL="${VALIDATED_MARKET_ORIGIN%/}/api/workbench-events/${EVENT_ID}/decision"
+   [ "$REPLY_URL" = "$EXPECTED_REPLY_URL" ] || exit 1
    umask 077; f=$(mktemp)
-   printf '%s' '{"token":"<reply.token>","decision":"accept","reason":"…","ref":"<issue URL>","by":"总工"}' > "$f"
-   curl -sS -w '\n%{http_code}\n' -X POST "<reply.url>" -H 'Content-Type: application/json' --data @"$f"; rm -f "$f"
+   jq -n --arg token "$TOKEN" --arg reason "…" --arg ref "$ISSUE_URL" --arg by "总工" '{token:$token,decision:"accept",reason:$reason,ref:$ref,by:$by}' > "$f"
+   curl -sS --max-redirs 0 -w '\n%{http_code}\n' -X POST "$EXPECTED_REPLY_URL" -H 'Content-Type: application/json' --data @"$f"; rm -f "$f"
    ```
-   - 理由里不要有单引号 `'`，会截断命令。
+   - 使用 `jq -n --arg` 编码正文参数；token 通过变量传入但仍可能进入命令工具记录，不要声称它不会留下痕迹。
    - 返回码：200 成功；404 是 token 或事件抄错了；409 看 `error`，已有终态的不重写，`pending` 的稍后再试，`dead`、`cancelled` 的找属主；410 是 token 已过期，找属主。
 6. **派活**：a2a 异步发给该项目的开发，一条消息一件事，只放 issue 链接和完成标准，发完不等。
-7. **强度**：人明确给出的（任务中心发布、属主原话）是 explicit；归属是你推断的是 inferred，要在 issue 里标「路由推断」。开发可以退回，退回就重新判，不争。
+7. **强度**：事件只有在宿主首行标明已验证来源且 origin 与团队配置 market origin 相同时才可信；人明确给出的（属主原话）是 explicit；归属推断为 inferred，须在 issue 里标明。开发可以退回，退回就重新判，不争。
 8. **放弃也是结果**：做不了、不该做的，用 decline 写清楚，不让任何事没有下文。
 
 ### 三、你裁什么

@@ -2455,18 +2455,18 @@ export function apply(ctx: Context, config: Config): void {
    * marker instead of a (false) completion.
    * @param taskId - the correlation key the steered receipt header carries.
    */
-  async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string): Promise<
+  async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string): Promise<
     { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean } | { ok: false; error: string }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
-      return routeIntoAgentFor(agent, team, message, caller, taskId)
+      return routeIntoAgentFor(agent, team, message, caller, taskId, proofClause)
     }
     // Wake-on-route: a cold joined team materializes on demand, then steers.
     const wake = wakeColdTeam(team)
     if (wake.kind === 'flight') {
       return wake.flight.then(
-        agent => routeIntoAgentFor(agent, team, message, caller, taskId),
+        agent => routeIntoAgentFor(agent, team, message, caller, taskId, proofClause),
         (error: unknown) => ({ ok: false, error: `waking the session for team "${team}" failed: ${String(error)}` }) as const,
       )
     }
@@ -2495,7 +2495,7 @@ export function apply(ctx: Context, config: Config): void {
       const live = liveAgent()
       if (live !== undefined) {
         if (callerIsAgent(live, caller)) return { ok: false, error: selfRouteText(team) }
-        return routeIntoAgentFor(live, team, message, caller, taskId)
+        return routeIntoAgentFor(live, team, message, caller, taskId, proofClause)
       }
       return { ok: false, error: 'No live DSH agent is available to accept this message.' }
     }
@@ -2511,7 +2511,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param caller - caller label for the steered prefix.
    * @returns the agent's final reply, or the explicit failure.
    */
-  function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string): Promise<
+  function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string): Promise<
     { ok: true; reply: string; placeholder?: boolean } | { ok: false; error: string }
   > {
     return new Promise((resolve) => {
@@ -2526,7 +2526,7 @@ export function apply(ctx: Context, config: Config): void {
       // <id>" answer correlates with the caller's own route result.
       const from = caller === '' ? 'an unknown node' : caller
       const taskPrefix = taskId === undefined ? '' : `(task ${taskId}) `
-      const text = `[A2A direct] ${taskPrefix}${fromClause(from)} (routed to ${team}) sent:
+      const text = `[A2A direct] ${taskPrefix}${proofClause === undefined ? '' : `${proofClause} `}${fromClause(from)} (routed to ${team}) sent:
 
 ${message}`
       try {

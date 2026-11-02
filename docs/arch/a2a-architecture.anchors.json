@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "sourceCommit": "21a5119",
+  "sourceCommit": "a327abb",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "3d1037eb777fd1c9aaa370252fee33363fcaf2bd98f1da748b86576666710cbc",
+    "src/index.ts": "1beb3b57c253c00083afa60705883cd1fb6ba63257c900ce8c1105ac3f743698",
     "src/faces/admin.ts": "10b875059049f219fb727d701258fcac0d78601971dc0863f3876572b0df2767",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
@@ -19,7 +19,7 @@
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
-    "src/faces/wire.ts": "28a5a183e159736bdaaed7c192c3fd27cc81670fd7ee682b3c1057b733da26b6",
+    "src/faces/wire.ts": "12c6fc3271715f31b6da8f58fc652764df91e044498fe9bfa5954161eb9e8039",
     "src/faces/canvas-notify.ts": "5120c3828d5a9b8928006059fc516d88ac6813afecc9ae0464223b598a4b6850",
     "src/task-auth.ts": "7398ba1cc1f3635c18c9ba5d8979e3aefea03ca131c851ae28a0411087ff2bdf",
     "src/origin-claim.ts": "07a2d7d6c385d6a3c113230697a47228ee6d081acf4f627b132607a2aa6876f9",
@@ -332,7 +332,7 @@
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/faces/wire.ts:672",
+      "ref": "src/faces/wire.ts:675",
       "expect": "if (refuseIfFlooded(caller, message, team, taskId, res)) return"
     },
     {

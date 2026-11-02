@@ -157,7 +157,7 @@ export interface WireDeps {
   readonly noColdMatchText: (team: string) => string
   readonly nativeTeamsPrepare: (team: string) => Promise<NativePrepared>
   readonly nativeTeamsRound: (prepared: Extract<NativePrepared, { ok: true }>, team: string, caller: string, message: string, taskId: string | undefined) => Promise<NativeRoundOutcome>
-  readonly routeIntoAgent: (team: string, message: string, caller: string, taskId?: string) => Promise<RouteOutcome>
+  readonly routeIntoAgent: (team: string, message: string, caller: string, taskId?: string, proofClause?: string) => Promise<RouteOutcome>
 }
 
 /**
@@ -648,6 +648,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           const callerProof: AuthProof = !claim.ok ? 'legacy-window'
             : claimCovers(caller, claim.caller) && (admission.rule !== 'host-face' || originOf(claim.callerUrl) === originOf(d.ownCardUrl))
               ? 'origin-claim' : 'claim-mismatch'
+          const proofClause = callerProof === 'origin-claim' && claim.ok && claim.cli !== true
+            ? `已验证来源 ${originOf(claim.callerUrl)}`
+            : `未验证（${callerProof}）`
           if (refuseIfBudgetExhausted(req, res, team, caller, taskId, taskLedger)) return
           // Server-side idempotency (P3/B3): one key, one execution inside
           // the window. Same key + same payload ⇒ replay; different payload
@@ -756,7 +759,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 const deliveredReceipt = parseReceipt(message) !== null
                 // gh#141: a receipt is answered by nobody — its steer asks for no receipt back.
                 const receiptRequest = deliveredReceipt ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
-                steerRelay(target, `[A2A direct] (task ${taskId}) ${fromClause(from)} (routed to ${team}) sent:\n\n${message}${receiptRequest}`, from === 'an unknown node' ? undefined : from)
+                steerRelay(target, `[A2A direct] (task ${taskId}) ${proofClause} ${fromClause(from)} (routed to ${team}) sent:\n\n${message}${receiptRequest}`, from === 'an unknown node' ? undefined : from)
                 steered = true
                 recordActivity('in', team, caller, true)
                 armReceiptAutosend(target, taskId, receiptTarget, message, steerFloor)
@@ -898,7 +901,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             })()
             return
           }
-          void routeIntoAgent(team, message, caller, taskId).then((outcome) => {
+          void routeIntoAgent(team, message, caller, taskId, proofClause).then((outcome) => {
             recordActivity('in', team, caller, outcome.ok)
             // W7 slice-2 hook 1: record the settled outcome on the claim row.
             // Ruling: a non-COMPLETED status (TASK_STATE_DELIVERED — the

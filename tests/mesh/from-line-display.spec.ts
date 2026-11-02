@@ -185,7 +185,8 @@ describe('from-line display names (claim 8ea4150f94)', () => {
       expect(target.steered.length).toBeGreaterThan(0)
       const envelope = payloadText(target.steered[target.steered.length - 1])
       expect(envelope).toContain('from "weird-caller-xyz" (routed to')
-      expect(envelope).not.toMatch(/（[^）]+）/m)
+      expect(envelope).toContain('未验证（legacy-window）')
+      expect(envelope).not.toContain('（weird-caller-xyz）')
     } finally {
       await target.dispose()
     }
