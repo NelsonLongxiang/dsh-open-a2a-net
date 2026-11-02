@@ -62,7 +62,7 @@
     "agentPreset": "<preset id>",
     "model": "<model selection>"
   },
-  "prompt": { "core_version": 3, "mutable_version": 17, "mutable_sha256": "…" },
+  "prompt": { "core_version": 3, "core_sha256": "…", "mutable_version": 17, "mutable_sha256": "…" },  // 两层各带 sha，供 CAS
   "tasks": [                        // 任务指针：只记编号与状态
     { "ref": "NelsonLongxiang/dsh-open-a2a-net#160", "state": "open", "since": "…", "core_version": 3, "mutable_version": 17 }
   ],
@@ -79,6 +79,8 @@
   - 每个版本存**整层全量快照**（可变层不到 3000 字符），不存增量；
   - `sha256` 覆盖规范化 JSON 的 `{version, sections}`；
   - 写入带 CAS：调用方给出 `expected_sha256`，与当前值不一致就拒绝，以防多个并行会话同时写。
+- **单进程**：一个 DSH home 只由一个宿主进程写。CAS 比对的是进程内的名册，多个进程共用同一个 home 会丢失名册更新（版本文件靠 `wx` 加 max+1 不会撞号，但名册指针会分叉）。不支持这种部署。
+- **损坏处理（N1 复核）**：名册解析失败时，把原文件改名为 `nodes.json.corrupt-<ts>`，并转为只读，身份写入返回 503，绝不覆盖读不出的文件。节点名只要有版本目录，就视为用过，丢了名册也不会被复用。
 - **任务指针**：状态取值为 `open` / `merged` / `closed` / `declined`，以 GitHub 为准，这里只是缓存（核对机制见 §6）。只保留最近 64 条，更早的转存到 `tasks-archive`。
 
 ## 3. 会话与节点的绑定
@@ -161,7 +163,7 @@
 - **频率上限**：每节点每天最多 8 次（可配置），超出时拒绝。
 - **每次写入**：
   1. 检查配额，再做 CAS；
-  2. 写 `mutable-v<max+1>.json`，内容为 `{version, sha256, parent_version, sections(全量), changed_section, reason, by_session, via, at}`；
+  2. 写 `mutable-v<max+1>.json`，内容为 `{layer, version, sha256, parent_version, sections(全量), changed, reason, by, via, at, rollback_of?}`（N1 #164 的实际字段；`by` 对人工写入是 `human:<who>`，N4 起节点写入记会话）；
   3. 更新 nodes.json 的 `mutable_version` 和 `mutable_sha256`；
   4. 本会话以 runtime context 追加一条已记录的提示（§5）。
 - **触发**：
