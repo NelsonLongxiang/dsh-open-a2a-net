@@ -116,6 +116,8 @@ import { registerAdminFaces } from './faces/admin.ts'
 import { registerNodeFaces } from './faces/nodes.ts'
 import { NodeStore } from './node-store.ts'
 import { createNodeBinder, NodeBindings } from './node-bind.ts'
+import { NodeTasks, TASKS_CHECK_MS } from './node-tasks.ts'
+import { githubProbe } from './node-github.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { canvasCandidateMatches, canvasTargetAmbiguous, peerDirectoryRows, routableCallerLabel, sessionCandidateMatches, unroutableCallerNote } from './peer-directory.ts'
@@ -1142,7 +1144,9 @@ export function apply(ctx: Context, config: Config): void {
   const liveRoots = new Map<string, Agent>()
   // Node identity N2+N3: a joined session that carries a node gets that node's layers on its own scope.
   const nodeBindings = new NodeBindings(join(home, 'a2a'))
-  const nodeBinder = createNodeBinder({ store: nodeStore, bindings: nodeBindings, logger, joined: id => joinedSessions.has(id), joinedList: () => joinedSessions.list(), archived: id => archivedSessionFilter()?.(id) === true, live: id => liveRoots.get(id) })
+  const nodeTasks = new NodeTasks(join(home, 'a2a'), { probe: githubProbe(), logger, onSettled: (node, p) => { nodeBinder.remind(node, `[节点复盘] ${p.ref} 已${p.state === 'merged' ? '合并' : p.state === 'declined' ? '被拒' : '关闭'}。这件事告一段落：按需更新节点自记（当前状态、执行要点、已知陷阱、当前重点）。`) } })
+  ctx.timer.interval(() => { void nodeTasks.checkAll() }, TASKS_CHECK_MS)
+  const nodeBinder = createNodeBinder({ store: nodeStore, bindings: nodeBindings, logger, joined: id => joinedSessions.has(id), joinedList: () => joinedSessions.list(), archived: id => archivedSessionFilter()?.(id) === true, live: id => liveRoots.get(id), tasksText: node => nodeTasks.render(node) })
   // No boot reconcile: a joined.json that failed to parse reads as empty, and ending every binding on that
   // reading would destroy them (the 3081 lesson). A stale row is harmless — mount checks joined itself.
   ctx.effect(() => joinedSessions.onChange(() => { nodeBinder.reconcile() }), 'a2a: node bindings follow join')
@@ -2010,7 +2014,7 @@ export function apply(ctx: Context, config: Config): void {
         get ownerAnnounceRestartPending() { return ownerAnnounceRestartPending },
         set ownerAnnounceRestartPending(v) { ownerAnnounceRestartPending = v },
       })
-      registerNodeFaces(webServer, { ctx, logger, nodeStore, bindings: nodeBindings, binder: nodeBinder, apiKey: () => config.apiKey, secretEqual, controlRoute, readJsonBody })
+      registerNodeFaces(webServer, { ctx, logger, nodeStore, bindings: nodeBindings, binder: nodeBinder, tasks: nodeTasks, apiKey: () => config.apiKey, secretEqual, controlRoute, readJsonBody })
     })
   }
 

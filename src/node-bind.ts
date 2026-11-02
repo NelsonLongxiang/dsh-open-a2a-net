@@ -32,21 +32,26 @@
  *   would block the session from publishing. Every mount path catches and
  *   logs; a corrupt roster, a missing node or a tampered version file
  *   leaves the session without node sections, never without a session.
- * - The task-status context (`a2a:node:tasks`) and `node_update_self` need
- *   the task pointers (N6) and the self-update queue (N4); they land with
- *   those slices.
+ * - The task context `a2a:node:tasks` (N6) is LIVE, not frozen: it is a
+ *   runtime context that the system prompt materialises per assembly, so a
+ *   pointer that changes state shows at the next step (§5 "即时"). Its text
+ *   rides a scoped variable too. A pointer that finished calls `remind`:
+ *   each live session carrying that node gets a follow-up turn (§6).
+ * - `node_update_self` needs the self-update queue (N4) and lands with it.
  * @module @nelsonlongxiang/dsh-open-a2a-net/node-bind
  */
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
+import { MessageId, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { MUTABLE_SECTIONS, type NodeRecord, type NodeResult, type NodeStore, type PromptVersion } from './node-store.ts'
 
 /** §5: section names, orders and the scoped variables that carry their frozen text. */
 export const NODE_PROMPT = {
   mutable: { section: 'a2a:node:mutable', order: 10150, variable: 'a2a_node_mutable' },
   core: { section: 'a2a:node:core', order: 10180, variable: 'a2a_node_core' },
+  tasks: { context: 'a2a:node:tasks', order: 9150, variable: 'a2a_node_tasks' },
 } as const
 
 export interface NodeBinding {
@@ -257,6 +262,8 @@ export class NodeBindings {
 export interface BindableAgent {
   readonly id: unknown
   readonly ctx: Context
+  /** Queue a follow-up turn (the §6 reminder); absent on test doubles that never get one. */
+  followup?(message: UserMessage): void
 }
 
 export interface MountedNode {
@@ -277,6 +284,8 @@ export interface NodeBinderDeps {
   readonly archived: (session: string) => boolean
   /** The live top-level session with this id, if any. */
   readonly live: (session: string) => BindableAgent | undefined
+  /** The node's task context text, read at each assembly ('' = none). */
+  readonly tasksText?: (node: string) => string
 }
 
 export interface NodeBinder {
@@ -307,6 +316,8 @@ export interface NodeBinder {
   nodeArchived(node: string): void
   /** Dispose every mount this binder made (plugin unload). */
   disposeAll(): void
+  /** Queue a follow-up turn on every live, mounted session carrying `node` (§6 reminder); how many got it. */
+  remind(node: string, text: string): number
 }
 
 export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
@@ -355,6 +366,7 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
     unmount(session)
     const sp = agent.ctx.get('systemPrompt') as {
       section: (s: { name: string; order: number; text: string }) => () => void
+      context: (c: { name: string; order: number; text: string }) => () => void
       variable: (name: string, provider: () => string | undefined) => () => void
     } | undefined
     if (sp === undefined) throw new Error('systemPrompt is not reachable from this session scope')
@@ -364,6 +376,12 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
       disposers.push(sp.variable(NODE_PROMPT.core.variable, () => coreText))
       disposers.push(sp.section({ name: NODE_PROMPT.mutable.section, order: NODE_PROMPT.mutable.order, text: `{{${NODE_PROMPT.mutable.variable}}}` }))
       disposers.push(sp.section({ name: NODE_PROMPT.core.section, order: NODE_PROMPT.core.order, text: `{{${NODE_PROMPT.core.variable}}}` }))
+      if (d.tasksText !== undefined) {
+        const tasksText = d.tasksText
+        // Live, unlike the two sections: a provider that never throws (assembly must not fail on it).
+        disposers.push(sp.variable(NODE_PROMPT.tasks.variable, () => { try { return tasksText(name) } catch { return '' } }))
+        disposers.push(sp.context({ name: NODE_PROMPT.tasks.context, order: NODE_PROMPT.tasks.order, text: `{{${NODE_PROMPT.tasks.variable}}}` }))
+      }
     } catch (error) {
       for (const dispose of disposers.reverse()) try { dispose() } catch { /* already gone */ }
       throw error
@@ -466,6 +484,26 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
     },
     disposeAll() {
       for (const session of [...mounts.keys()]) unmount(session)
+    },
+    remind(node, text) {
+      let reached = 0
+      for (const [session, m] of mounts) {
+        if (m.info.node !== node) continue
+        const agent = d.live(session)
+        if (agent?.followup === undefined) continue
+        try {
+          agent.followup({
+            id: MessageId(`a2a-node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`),
+            role: 'user',
+            content: [{ type: 'text', text }],
+            source: { kind: 'a2a-relay', form: 'relay' },
+          })
+          reached++
+        } catch (error) {
+          d.logger.warn('a2a nodes: reminder to %s failed: %s', session, String(error))
+        }
+      }
+      return reached
     },
   }
   return binder
