@@ -806,7 +806,7 @@ export function apply(ctx: Context, config: Config): void {
         res.end(payload)
         return
       }
-      try { use(body) } catch (error) { logger.warn('control route failed: %s', String(error)); if (!res.headersSent) { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"error":"internal error"}') } } // runs in the reader's 'end' callback, outside the web server's guard: a throw here would exit the host
+      try { use(body) } catch (error) { logger.warn('control route failed: %s', String(error)); if (!res.headersSent) { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"error":"internal error"}') } else if (!res.writableEnded) res.end() } // runs in the reader's 'end' callback, outside the web server's guard: a throw here would exit the host
     })
   }
 
