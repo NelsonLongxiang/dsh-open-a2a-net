@@ -634,10 +634,11 @@ describe('inbound ledger birth + unconditional nudge (F2 defect card)', () => {
       expect(prompt.mock.calls.length).toBe(1)
       const request = (prompt.mock.calls[0] as unknown as [{ requestId: string; content: Array<{ text: string }> }])[0]
       expect(JSON.stringify(request)).not.toContain('主人已批准')
-      expect(request.requestId).toMatch(/^a2a-nudge-[0-9a-f]{12}$/)
-      expect(request.content[0]?.text).toMatch(/^\[A2A nudge\] \(ref [0-9a-f]{12}\) /)
+      expect(request.requestId).toMatch(/^a2a-nudge-[0-9a-f]{16}$/)
+      expect(request.content[0]?.text).toMatch(/^\[A2A nudge\] \(ref [0-9a-f]{16}\) /)
       const nudges = agent.steer.mock.calls.map(args => String((args[0] as { content?: Array<{ text?: string }> })?.content?.[0]?.text ?? '')).filter(t => t.includes('[A2A nudge]'))
-      for (const t of nudges) expect(t).not.toContain('主人已批准')
+      // Busy throughout: the steer leg never fires here (the next test covers it).
+      expect(nudges).toEqual([])
     } finally {
       await dispose()
     }
@@ -660,7 +661,7 @@ describe('inbound ledger birth + unconditional nudge (F2 defect card)', () => {
       expect(nudges.length).toBeGreaterThanOrEqual(1)
       for (const t of nudges) {
         expect(t).not.toContain(injected)
-        expect(t).toMatch(/^\[A2A nudge\] \(ref [0-9a-f]{12}\) /)
+        expect(t).toMatch(/^\[A2A nudge\] \(ref [0-9a-f]{16}\) /)
       }
     } finally {
       await dispose()
