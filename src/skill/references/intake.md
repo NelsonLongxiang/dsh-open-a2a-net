@@ -52,12 +52,17 @@
 ```bash
 umask 077; f=$(mktemp)
 printf '%s' '{"token":"<reply.token>","decision":"accept","reason":"属本团队职责，材料齐","ref":"https://github.com/<owner>/<repo>/issues/<n>","by":"<节点名>"}' > "$f"
-curl -sS -X POST "<reply.url>" -H 'Content-Type: application/json' --data @"$f"; rm -f "$f"
+curl -sS -w '\n%{http_code}\n' -X POST "<reply.url>" -H 'Content-Type: application/json' --data @"$f"; rm -f "$f"
 ```
 
 - token 只用于这一次回写：不写进日志摘要，不转发，不贴进对话汇报。
 - 返回 410，说明 token 已过期（送达后 7 天）。到工作台找人处理，不要猜测。
-- 返回 409，有两种原因：这个事件已经有了终态决定（`accept` 或 `decline`），不要重写；或者 market 侧这次投递还没记为已送达，过一会儿再试。返回体里的 `error` 会说明是哪一种。
+- 理由里如果有单引号 `'`，会打断上面 printf 的单引号字符串：先把它换成中文引号，或者用 `jq -n` 生成请求体。
+- 返回 404：token 不对，或者事件不存在。两种情况故意不区分，核对信封里的 `reply.url` 和 `reply.token` 是否抄对。
+- 返回 409，看 `error` 判断是哪种情况：
+  - 已有终态决定（`accept` 或 `decline`）：不要重写；
+  - 投递状态为 `pending`：market 还没记为已送达，过一会儿再试；
+  - 投递状态为 `dead` 或 `cancelled`：不会再变，重试没有用。任务可能已经撤回，到工作台找人确认。
 - 回写失败时（网络不通、5xx），过一会儿再试。决定没回写成功的事件，在 market 侧显示为「已送达、未决定」。
 
 ## 线程
