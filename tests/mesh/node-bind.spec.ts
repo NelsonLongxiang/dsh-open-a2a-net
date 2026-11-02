@@ -1168,28 +1168,61 @@ describe('N4 — node_update_self under the session taint (owner ruling 2026-11-
     }
   }, 30_000)
 
-  it('signal 2 — the log backstop: relay, an a2a- nudge rpcId, an unknown kind or no person taints; the taint then sticks', async () => {
+  it('signal 2 — the log backstop: remote evidence (relay, a2a- nudge, agent message) taints for good; unknown or no person refuses that call only', async () => {
     const m = await mount()
     try {
       await nodeWithLayers(m, 'chief', { 当前状态: '第一版' })
-      const cases: Array<[string, unknown[], string]> = [
-        [A, [ev(PERSON), ev(RELAY)], 'log:a2a-relay'],
-        [B, [ev(PERSON), ev({ kind: 'user', rpcId: 'a2a-nudge-0123456789abcdef' })], 'log:a2a-nudge'],
-        [C, [ev(PERSON), ev({ kind: 'mystery' })], 'log:mystery'],
-        [D, NEUTRAL.map(ev), 'log:no-input'],
+      const E = 'session-eeeeeeee55555555'
+      const cases: Array<[string, unknown[], string, boolean]> = [
+        [A, [ev(PERSON), ev(RELAY)], 'log:a2a-relay', true],
+        [B, [ev(PERSON), ev({ kind: 'user', rpcId: 'a2a-nudge-0123456789abcdef' })], 'log:a2a-nudge', true],
+        [E, [ev(PERSON), ev({ kind: 'agent-message' })], 'log:agent-message', true],
+        [C, [ev(PERSON), ev({ kind: 'mystery' })], 'log:mystery', false],
+        [D, NEUTRAL.map(ev), 'log:no-input', false],
       ]
-      for (const [id, events, via] of cases) {
+      for (const [id, events, via, sticky] of cases) {
         const agent = await bindSession(m, id)
         const out = await call(m, agent, events, { section: '已知陷阱', text: `来自 ${id}`, reason: 'r', expected_sha256: await shaOf(m) })
         expect(out.code, via).toBe('queued')
-        // Sticky: a clean log afterwards still queues.
-        expect((await call(m, agent, [ev(PERSON)], { section: '当前状态', text: `干净 ${id}`, reason: 'r', expected_sha256: await shaOf(m) })).code).toBe('queued')
+        const later = await call(m, agent, [ev(PERSON)], { section: '当前状态', text: `干净 ${id}`, reason: 'r', expected_sha256: await shaOf(m) })
+        if (sticky) expect(later.code, `${via} sticks`).toBe('queued')
+        else expect(later.ok, `${via} refused that call only`).toBe(true)
       }
-      expect((await reviewsOf(m)).filter(r => r.section === '已知陷阱').map(r => r.via).sort()).toEqual(['log:a2a-nudge', 'log:a2a-relay', 'log:mystery', 'log:no-input'])
+      expect((await reviewsOf(m)).filter(r => r.section === '已知陷阱').map(r => r.via).sort()).toEqual(['log:a2a-nudge', 'log:a2a-relay', 'log:agent-message', 'log:mystery', 'log:no-input'])
+      const marked = (JSON.parse(readFileSync(join(m.home, 'a2a', 'node-taint.json'), 'utf8')) as { sessions: Array<{ session: string }> }).sessions.map(r => r.session).sort()
+      expect(marked).toEqual([A, B, E].sort())
     } finally {
       await m.dispose()
     }
   }, 40_000)
+
+  it('host features of a long session (compaction, /skill, subagents, references, schedules, goals) are neutral', async () => {
+    const m = await mount()
+    try {
+      await nodeWithLayers(m, 'chief', { 当前状态: '第一版' })
+      const a = await bindSession(m, A)
+      const events = [ev(PERSON), ...['compact-checkpoint', 'skill-invocation', 'subagent-settled', 'session-reference', 'schedule', 'goal'].map(kind => ev({ kind }))]
+      expect((await call(m, a, events, { section: '当前状态', text: '长会话', reason: 'r', expected_sha256: await shaOf(m) })).ok).toBe(true)
+    } finally {
+      await m.dispose()
+    }
+  }, 20_000)
+
+  it('signal 3 — an A2A tool that reads peer text (a2a_status here) taints the calling session', async () => {
+    const m = await mount()
+    try {
+      await nodeWithLayers(m, 'chief', { 当前状态: '第一版' })
+      const a = await bindSession(m, A)
+      const tools = m.ctx.get('tools') as unknown as { execute: (input: unknown) => Promise<unknown>; get: (n: string) => unknown }
+      // Through the registry, so tools/post-execute runs as it does for the model.
+      await tools.execute({ name: 'a2a_status', arguments: {}, agent: a, signal: new AbortController().signal, callId: 'call-1' } as never).catch(() => undefined)
+      const marks = (JSON.parse(readFileSync(join(m.home, 'a2a', 'node-taint.json'), 'utf8')) as { sessions: Array<{ session: string; via: string }> }).sessions
+      expect(marks).toEqual([expect.objectContaining({ session: A, via: 'a2a-status' })])
+      expect((await call(m, a, [ev(PERSON)], { section: '当前状态', text: 'x', reason: 'r', expected_sha256: await shaOf(m) })).code).toBe('queued')
+    } finally {
+      await m.dispose()
+    }
+  }, 20_000)
 
   it('the taint survives a restart, and an unreadable taint file makes every session tainted (fail-closed)', async () => {
     const m = await mount()
@@ -1199,7 +1232,8 @@ describe('N4 — node_update_self under the session taint (owner ruling 2026-11-
       expect((await call(m, a, [ev(PERSON), ev(RELAY)], { section: '当前状态', text: 'x', reason: 'r', expected_sha256: await shaOf(m) })).code).toBe('queued')
       await m.reload(true)
       expect((await call(m, a, [ev(PERSON)], { section: '当前重点', text: 'y', reason: 'r', expected_sha256: await shaOf(m) })).code).toBe('queued')
-      writeFileSync(join(m.home, 'a2a', 'node-taint.json'), '{ nope')
+      // A half-broken file (a row that is not a mark) fails closed just like an unreadable one.
+      writeFileSync(join(m.home, 'a2a', 'node-taint.json'), JSON.stringify({ sessions: [{ sesion: A, via: 'relay' }] }))
       await m.reload(true)
       const b = await bindSession(m, B)
       expect((await call(m, b, [ev(PERSON)], { section: '当前状态', text: 'z', reason: 'r', expected_sha256: await shaOf(m) })).code).toBe('queued')

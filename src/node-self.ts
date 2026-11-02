@@ -19,9 +19,18 @@
  *      message whose controller rpcId starts with `a2a-` (this plugin's
  *      nudge), or any source kind not known here. Context the agent loop
  *      injects (runtime/time/skill/tool-job notices…) is neutral.
- *   The boundary, stated honestly: remote text the model reads through its
- *   own tools (a fetched page, an issue body) is not a delivery and does not
- *   taint.
+ *   3. this plugin's own A2A tools that hand the model peer-originated text
+ *      (a route reply, inbound task briefs, peer card rows — {@link toolTaint})
+ *      mark the calling session when they return.
+ *   Only remote EVIDENCE is persisted (a relay, a nudge, an agent message, an
+ *   A2A tool read); an unknown source or a log with no person's input refuses
+ *   this one call (fail-closed) without marking, so a host feature this
+ *   module does not know yet never taints a session forever.
+ *   The boundary, stated honestly: remote text the model reads through
+ *   general tools (a fetched page, an issue body) is not a delivery and does
+ *   not taint; nor can a `kind:'user'` prompt another plugin submits through
+ *   the session controller be told apart from a person (only this plugin's
+ *   nudge, rpcId `a2a-*`, is recognised).
  * - Daily cap: at most {@link SELF_UPDATE_DAILY_MAX} node writes per node
  *   per UTC day; beyond that the call is refused (not queued).
  * - Each write freezes a full mutable version through the store (quota,
@@ -49,7 +58,27 @@ const LOCAL_SOURCES: ReadonlySet<string> = new Set(['user'])
  * Messages the harness or agent loop injects on its own: they neither prove a person nor carry a
  * delivery, so they neither count as input nor taint (projections of state already on this host).
  */
-const NEUTRAL_SOURCES: ReadonlySet<string> = new Set(['runtime-context', 'time-context', 'skill-catalog', 'tool-jobs', 'user-approval', 'model-selection', 'tool-registry', 'ptc-mode', 'system-prompt'])
+const NEUTRAL_SOURCES: ReadonlySet<string> = new Set([
+  'runtime-context', 'time-context', 'skill-catalog', 'tool-jobs', 'user-approval', 'model-selection', 'tool-registry', 'ptc-mode', 'system-prompt',
+  // Host features of a long-running session: compaction, a person's /skill, a subagent's result, a session reference, schedules, goals.
+  'compact-checkpoint', 'skill-invocation', 'subagent-settled', 'session-reference', 'schedule', 'goal',
+])
+/** Source kinds that ARE remote evidence (persisted): a relay, and a native-teams agent message. */
+const REMOTE_SOURCES: ReadonlySet<string> = new Set(['a2a-relay', 'agent-message'])
+
+/**
+ * Whether one of this plugin's A2A tools just handed the model text that originated at a peer: a
+ * route reply, inbound task briefs, or peer card rows (names, descriptions are self-described).
+ * The via to mark the calling session with, or '' when the result carries nothing remote.
+ */
+export function toolTaint(name: string, value: unknown): string {
+  const v = value as { ok?: unknown; reply?: unknown; tasks?: unknown; archive?: unknown } | null
+  if (v === null || typeof v !== 'object') return ''
+  if (name === 'a2a_route') return v.ok === true && typeof v.reply === 'string' && v.reply !== '' ? 'a2a-route-reply' : ''
+  if (name === 'a2a_tasks') return (Array.isArray(v.tasks) && v.tasks.length > 0) || (Array.isArray(v.archive) && v.archive.length > 0) ? 'a2a-tasks' : ''
+  if (name === 'a2a_teams' || name === 'a2a_status' || name === 'a2a_probe') return v.ok === true ? name.replace('_', '-') : ''
+  return ''
+}
 
 /**
  * The event-log backstop of the session taint: whether ANY input in the session's log came from
@@ -57,25 +86,26 @@ const NEUTRAL_SOURCES: ReadonlySet<string> = new Set(['runtime-context', 'time-c
  * `a2a-relay` source — remote deliveries are relayed by this host with a fixed source shape, so a
  * remote caller cannot set that field). A session with no person's input at all is not local either.
  */
-export function sessionSource(events: readonly unknown[]): { local: true } | { local: false; via: string } {
+export function sessionSource(events: readonly unknown[]): { local: true } | { local: false; via: string; evidence: boolean } {
   let inputs = 0
   for (const event of events) {
     const e = event as { type?: unknown; data?: { source?: { kind?: unknown; nodeReminder?: unknown; rpcId?: unknown } } } | null
     if (e?.type !== 'user/message') continue
     const source = e.data?.source
     const kind = source?.kind
-    if (typeof kind !== 'string') return { local: false, via: 'unknown' }
+    if (typeof kind !== 'string') return { local: false, via: 'unknown', evidence: false }
     if (NEUTRAL_SOURCES.has(kind)) continue
     if (kind === 'a2a-relay' && source?.nodeReminder === true) continue
-    if (kind === 'user' && typeof source?.rpcId === 'string' && source.rpcId.startsWith('a2a-')) return { local: false, via: 'a2a-nudge' }
-    if (!LOCAL_SOURCES.has(kind)) return { local: false, via: kind }
+    if (kind === 'user' && typeof source?.rpcId === 'string' && source.rpcId.startsWith('a2a-')) return { local: false, via: 'a2a-nudge', evidence: true }
+    if (REMOTE_SOURCES.has(kind)) return { local: false, via: kind, evidence: true }
+    if (!LOCAL_SOURCES.has(kind)) return { local: false, via: kind, evidence: false }
     inputs++
   }
-  return inputs > 0 ? { local: true } : { local: false, via: 'no-input' }
+  return inputs > 0 ? { local: true } : { local: false, via: 'no-input', evidence: false }
 }
 
 /** Sessions remembered as tainted; the oldest beyond this are forgotten (a forgotten one re-taints from its log or next delivery). */
-export const TAINT_CAP = 512
+export const TAINT_CAP = 4096
 
 /**
  * The persisted half of the session taint (`node-taint.json`): the host marks a session the moment it
@@ -104,9 +134,15 @@ export class SessionTaint {
       return
     }
     for (const r of list as Array<{ session?: unknown; via?: unknown; at?: unknown } | null>) {
-      if (r !== null && typeof r === 'object' && typeof r.session === 'string' && !this.rows.some(x => x.session === r.session)) {
-        this.rows.push({ session: r.session, via: typeof r.via === 'string' ? r.via : '', at: typeof r.at === 'string' ? r.at : '' })
+      // A row that is not a mark means the file was edited or damaged: fail closed, as for an unreadable file.
+      if (r === null || typeof r !== 'object' || typeof r.session !== 'string' || r.session === '' || typeof r.via !== 'string') {
+        const aside = `${this.file}.corrupt-${this.now().replace(/[:.]/g, '-')}`
+        try { copyFileSync(this.file, aside) } catch { /* the original stays in place either way */ }
+        this.readOnlyReason = `node-taint.json has a malformed row (copy kept at ${aside}); every session reads as tainted until it is repaired`
+        this.rows = []
+        return
       }
+      if (!this.rows.some(x => x.session === r.session)) this.rows.push({ session: r.session, via: r.via, at: typeof r.at === 'string' ? r.at : '' })
     }
   }
 
@@ -269,7 +305,8 @@ export function selfUpdate(d: SelfUpdateDeps, node: string, session: string, age
   const current = d.store.get(node)?.prompt.mutable_sha256 ?? ''
   const marked = d.taint.of(session)
   const logged = marked === '' ? sessionSource(d.events(agent)) : undefined
-  if (logged !== undefined && !logged.local) d.taint.mark(session, `log:${logged.via}`)
+  // Only remote evidence is persisted; an unknown source or no person's input refuses this call alone.
+  if (logged !== undefined && !logged.local && logged.evidence) d.taint.mark(session, `log:${logged.via}`)
   const via = marked !== '' ? marked : logged !== undefined && !logged.local ? `log:${logged.via}` : ''
   if (via !== '') {
     const parked = d.queue.add({ node, section, text: args.text, reason, expected_sha256: expected, session, via })
@@ -317,7 +354,9 @@ export function selfUpdateTool(d: SelfUpdateDeps, node: string, session: string)
       },
       render: (_args, value) => [{
         type: 'text',
-        text: value.ok === true ? `节点自记已写入 v${String(value.version)}（sha256 ${String(value.sha256)}）` : `未写入：${String(value.error)}`,
+        text: value.ok === true
+          ? `节点自记已写入 v${String(value.version)}（sha256 ${String(value.sha256)}）`
+          : `未写入：${String(value.error)}${typeof value.current_sha256 === 'string' ? `（当前 sha256 ${value.current_sha256}）` : ''}`,
       }],
     },
     presentCall: () => ({ card: 'generic', title: 'Node self-update', kind: 'other', rawInput: null }),

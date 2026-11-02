@@ -118,7 +118,7 @@ import { NodeStore } from './node-store.ts'
 import { createNodeBinder, NodeBindings } from './node-bind.ts'
 import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
-import { NodeReviewQueue, SessionTaint } from './node-self.ts'
+import { NodeReviewQueue, SessionTaint, toolTaint } from './node-self.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { canvasCandidateMatches, canvasTargetAmbiguous, peerDirectoryRows, routableCallerLabel, sessionCandidateMatches, unroutableCallerNote } from './peer-directory.ts'
@@ -1147,6 +1147,7 @@ export function apply(ctx: Context, config: Config): void {
   const nodeBindings = new NodeBindings(join(home, 'a2a'))
   const nodeReviews = new NodeReviewQueue(join(home, 'a2a'))
   const nodeTaint = new SessionTaint(join(home, 'a2a'))
+  ctx.on('tools/post-execute', (exec, result, next) => { const via = result.isError ? '' : toolTaint(exec.name, result.value); if (via !== '' && exec.agent !== undefined) nodeTaint.mark(String(exec.agent.id), via); return next() })
   const nodeTasks = new NodeTasks(join(home, 'a2a'), { probe: githubProbe(), logger, onSettled: (node, p) => nodeBinder.remind(node, settledReminder(p)) })
   nodeTasks.schedule(ctx)
   const nodeBinder = createNodeBinder({ store: nodeStore, bindings: nodeBindings, logger, joined: id => joinedSessions.has(id), joinedList: () => joinedSessions.list(), archived: id => archivedSessionFilter()?.(id) === true, live: id => liveRoots.get(id), tasksText: node => nodeTasks.render(node), pendingReminders: node => nodeTasks.takePending(node).map(settledReminder), selfUpdate: { store: nodeStore, queue: nodeReviews, taint: nodeTaint, events: agent => sessionEventsOf(agent as Agent) } })
