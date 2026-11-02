@@ -765,6 +765,8 @@ describe('#174 — frozen versions across a plugin reload, retries, re-join, hea
       // r4: CRLF / CR line ends, a fence inside a list item, a closer with trailing text, tab and 4-space "openers".
       '```sh\r\nls\r\n```', '```sh\r\n没闭合', '```sh\r没闭合', '- 一项\n\n  ```\n  没闭合',
       '```\n``` 后面有字\n没闭合', '\t```\n不是围栏', '    ```\n缩进代码块',
+      // M26: a 4-space ``` is indented code, not an opener — else the real fence after it falls out of step.
+      '段落\n\n    ```\n\n```\nx\n```',
     ]
     for (const note of cases) {
       const m = await mount()
@@ -801,6 +803,17 @@ describe('#174 — frozen versions across a plugin reload, retries, re-join, hea
       // r4 P3-1: once the home is writable, bind retries the pending end in place and goes through.
       expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: A })).status).toBe(200)
       expect(await m.prompt(next)).toContain('节点契约')
+      // M29: the retried end leaves pendingEnd, so the new binding survives a re-publish and a join change.
+      const again = makeAgent(m.ctx, A)
+      await next.dispose()
+      m.ctx.emit('agent/disposed', { agent: next as unknown as Agent })
+      m.publish(again)
+      expect(await m.prompt(again)).toContain('节点契约')
+      const b = makeAgent(m.ctx, B)
+      m.publish(b)
+      expect((await m.post('/__dsh_a2a/join', { id: B })).status).toBe(200)
+      expect(await m.prompt(again)).toContain('节点契约')
+      expect(rowsOf(m)).toEqual([A])
     } finally {
       chmodSync(dir, 0o700)
       await m.dispose()
