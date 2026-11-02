@@ -29,7 +29,7 @@ import type { TeamMembershipStore } from '../team-store.ts'
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
 /** One directory row shared with listDirectoryTeams (which stays in index.ts). */
-export type DirectoryTeamRow = { team: string; session: string; name: string; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean; teams?: string[] }
+export type DirectoryTeamRow = { team: string; session: string; name: string; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean; teams?: string[]; /** Internal S5 scope hint, stripped before the tool's public output. */ canvasMembers?: readonly string[] }
 
 /** Everything the information-plane tools capture from apply(). */
 export interface InfoToolsDeps {
@@ -63,6 +63,8 @@ export interface InfoToolsDeps {
   readonly canvasTeamOf: (name: string) => string
   /** gh#152: the session's canvas teams read through the local lens — a handle-stored membership of this session counts. */
   readonly canvasTeamsOfSession: (id: string) => string[]
+  /** Resolve a handle against the current local/seeded-peer collision snapshot. */
+  readonly localHandleResolver: () => (ref: string) => string | undefined
   readonly memoizedCardFetch: () => ZoneCardFetch
   readonly mapBounded: <T, R>(items: readonly T[], limit: number, task: (item: T) => Promise<R>) => Promise<R[]>
   readonly SWEEP_CONCURRENCY: number
@@ -70,7 +72,7 @@ export interface InfoToolsDeps {
   readonly observeAuthorization: (cause: string) => void
   readonly settlePeerCard: (peer: string, outcome: CardFetchOutcome) => A2aPeerCard | undefined
   readonly client: A2aClient
-  readonly listDirectoryTeams: (expand: boolean) => Promise<DirectoryTeamRow[]>
+  readonly listDirectoryTeams: (expand: boolean, includeCanvas?: boolean) => Promise<DirectoryTeamRow[]>
 }
 
 /**
@@ -84,7 +86,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
     joinedSessions, teamMemberships, canvasStore, exposureStore, idempotencyStore,
     cardCache, inFlightRoutes, recentActivity, teamAuditRing, reportRing,
     sessionNodes,
-    id8, sessionTeamOf, nodeMetadataOf, canvasTeamOf, canvasTeamsOfSession, memoizedCardFetch,
+    id8, sessionTeamOf, nodeMetadataOf, canvasTeamOf, canvasTeamsOfSession, localHandleResolver, memoizedCardFetch,
     mapBounded, SWEEP_CONCURRENCY, a2aJoinGateRefusal, observeAuthorization,
     settlePeerCard, client, listDirectoryTeams,
   } = deps
@@ -264,10 +266,11 @@ export function createInfoTools(deps: InfoToolsDeps) {
         + 'grouping when a fleet spans machines), and the session\'s working directory when shared. Pass query to filter '
         + 'by keyword (case-insensitive substring over team name, title, excerpt, origin, or workspace) — searching '
         + 'discovers one extra referral hop within the call. Canvas teams (<team>/canvas/<name>, user-composed multi-member groups) '
-        + 'list as local rows; routing to one resolves the first live member or wakes the first cold one — the dispatching session '
-        + 'itself is skipped on the local tiers, falling through to the other members (issue #41: a member routing to its own group '
-        + 'never loops home). '
-        + 'While teamScopeInfo is on (default), the listing follows YOUR collaboration circle: remote rows serve only teams joined by this host\'s nodes, and [this host] session rows show only your own row, your canvas teams, and sessions sharing a team with you — an exposed node id invites mis-routing, so the directory does not advertise strangers. The owner\'s GUI panel keeps the full plane; teamScopeInfo: false opens it for tools too. '
+        + 'list as local rows and as remote rows when a peer publishes them (origin/via identify their owner). Local routing resolves '
+        + 'the first live member or wakes the first cold one; the dispatching session itself is skipped on the local tiers '
+        + '(issue #41: routing to its own group never loops home). Remote candidates still require the existing peer-link and '
+        + 'receiver admission checks; a served-fresh canvasOrg is not itself a signature over membership. '
+        + 'While teamScopeInfo is on (default), the listing follows YOUR collaboration circle: remote canvas rows name a joined session of this host, remote roster rows serve a joined team, and [this host] session rows show only your own row, your canvas teams, and sessions sharing a team with you — an exposed node id invites mis-routing, so the directory does not advertise strangers. The owner\'s GUI panel keeps the full plane; teamScopeInfo: false opens it for tools too. '
         + 'Call this before a2a_route to pick a target team.',
       parameters: {
         query: { type: 'string', description: 'Optional keyword filter (case-insensitive substring over team/name/description).' },
@@ -314,7 +317,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
       execute: async (args: { query?: string }, exec): Promise<{ ok: boolean; query: string; teams: DirectoryTeamRow[]; note?: string }> => {
         a2aJoinGateRefusal(exec)
         const query = args.query?.trim().toLowerCase() ?? ''
-        let teams = await listDirectoryTeams(query !== '')
+        let teams = await listDirectoryTeams(query !== '', true)
         // S5: remote rows survive only when they serve a joined team (the
         // row's own name or any roster declaration it carries); local rows
         // are host-internal facts and always survive. The note keeps the
@@ -322,8 +325,18 @@ export function createInfoTools(deps: InfoToolsDeps) {
         let note: string | undefined
         if (deps.ownerTeamScopeInfo) {
           const joined = joinedTeamScope()
+          const resolveLocal = localHandleResolver()
           const remoteBefore = teams.filter(row => row.local !== true).length
-          teams = teams.filter(row => row.local === true || joined.has(row.team) || (row.teams ?? []).some(name => joined.has(name)))
+          teams = teams.filter(row => {
+            if (row.local === true) return true
+            // A same-zone canvas NAME can exist on two hosts: a local team
+            // with that name does not prove membership in the remote one.
+            if (row.canvasMembers !== undefined) return row.canvasMembers.some(ref => {
+              const id = resolveLocal(ref)
+              return id !== undefined && joinedSessions.has(id)
+            })
+            return joined.has(row.team) || (row.teams ?? []).some(name => joined.has(name))
+          })
           const hiddenRemote = remoteBefore - teams.filter(row => row.local !== true).length
           // gh#39 (owner ruling: the listing ADVERTISES targets — an exposed
           // node id invites a session with no collaboration relationship to
@@ -357,6 +370,8 @@ export function createInfoTools(deps: InfoToolsDeps) {
           const hidden = hiddenRemote + hiddenLocal
           note = `teamScopeInfo on: ${String(joined.size)} joined team${joined.size === 1 ? '' : 's'} on this host — ${String(hidden)} row${hidden === 1 ? '' : 's'} outside your collaboration circle withheld (${String(hiddenRemote)} remote, ${String(hiddenLocal)} local [this host] session rows; the process team, your own row, and your canvas teams always show). To widen the scope: a human composes the shared canvas team (the board drag), the owner adds the EXACT team name to teamJoinAllowlist (patterns carry no mint rights, gh#11), or the owner sets teamScopeInfo: false for the open plane`
         }
+        // Canvas members are a private scope hint, not part of the tool schema.
+        teams = teams.map(({ canvasMembers: _canvasMembers, ...row }) => row)
         if (query === '') return { ok: true, query: '', teams, ...(note !== undefined ? { note } : {}) }
         const matches = (team: DirectoryTeamRow): boolean =>
           team.team.toLowerCase().includes(query) || team.name.toLowerCase().includes(query) || team.description.toLowerCase().includes(query)

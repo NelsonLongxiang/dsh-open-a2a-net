@@ -17,6 +17,21 @@ capability flags) plus unsigned serve-fresh fields.
   link.
 - Peers poll cards and aggregate the `sessionTeams` they are entitled to into
   their `remote` rows — this is how the planning canvas shows other nodes.
+- `a2a_teams` also exposes remote `canvasOrg` groups as group rows with the
+  publisher's `origin` and `via` (#159); they do not become extra session
+  nodes in state `remote`. With `teamScopeInfo` on, a remote canvas row is
+  included only when it names an unambiguously resolved joined session on this
+  host. With it off, discoverable rows are open like other remote rows.
+  `canvasOrg` is unsigned serve-fresh data, **not** a signed membership proof:
+  discovery does not replace the receiver's OriginClaim/target admission.
+  A model caller's same-named canvas candidates are checked against that
+  caller's existing scope before a message is sent. Host/initiator exemptions
+  and the operator-controlled seed/delegate resolution boundary stay intact.
+  The existing local-first route still wins when this host owns the same team
+  name; `a2a_route` has no owner-URL selector, so avoid creating a duplicate
+  local group to address a remote one. If remote resolution finds multiple
+  distinct matching group owners or an overlapping session identity, it
+  fails closed with `ambiguous` rather than guessing a remote recipient.
 
 ## Visibility follows membership
 
