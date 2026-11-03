@@ -95,6 +95,16 @@ const newEpoch = (): string => randomUUID().replace(/-/g, '').slice(0, 12)
 
 const isSeq = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 1
 
+/** The public key a stored card was published with ('' when it does not parse: never equal to a verified key, so fail-closed). */
+const publicKeyOf = (cardJson: string): string => {
+  try {
+    const key = (JSON.parse(cardJson) as { publicKey?: unknown } | null)?.publicKey
+    return typeof key === 'string' ? key : ''
+  } catch {
+    return ''
+  }
+}
+
 export const MAILBOX_CAP = 64
 export const MAILBOX_TEXT_CAP = 4000
 
@@ -133,11 +143,17 @@ export class CliDepositStore {
     const ttl = Math.min(CLI_DEPOSIT_TTL_MS, CLI_DEPOSIT_TTL_MS)
     const at = this.now()
     const prior = this.deposits.get(handle)
+    // gh#137: same handle, same key. A live deposit or a tombstone pins the
+    // handle to the key it was published with; a different key is refused
+    // until the old deposit is revoked explicitly (a2a revoke), so a swap is
+    // a visible act, never a silent overwrite (an `init --force` collision).
+    if (prior !== undefined && publicKeyOf(prior.cardJson) !== verdict.card.publicKey) {
+      return { ok: false, error: `handle ${handle} is held by another key (${prior.expiredAt !== undefined ? 'offline' : 'live'} deposit) — revoke it first (a2a revoke), then publish` }
+    }
     // gh#47: a re-publish un-tombstones (expiredAt clears) and refreshes
     // the card — same handle, same key, back online.
     const row: CliDeposit = { handle, name, cardJson, depositedAt: at, expiresAt: at + ttl }
     this.deposits.set(handle, row)
-    void prior
     this.pruneTombstones()
     this.persist()
     return { ok: true, handle, expiresAt: row.expiresAt }

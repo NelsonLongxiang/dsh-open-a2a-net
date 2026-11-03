@@ -28,6 +28,11 @@ ten model tools.
   its card is no longer served, but it stays in the host's directory as an
   OFFLINE row (gh#47; the newest 16 are kept) so canvas refs to it never
   dangle silently. Publish again (same handle, same key) to come back.
+- A handle stays pinned to the key it was published with, live or offline
+  (gh#137): publishing it with a different key (e.g. after `init --force
+  --uuid <same>`) is refused with "held by another key". Run `a2a-net revoke`
+  first; the next publish then takes the new key. A key swap is therefore
+  always an explicit act, never a silent overwrite.
 - While deposited, the host serves the card at
   `<home>/a2a/cli/<handle>/.well-known/agent-card.json` and lists the handle
   in its directory as "cli — deposited identity (no wake; mailbox)".
