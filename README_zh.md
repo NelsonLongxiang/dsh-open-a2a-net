@@ -61,7 +61,7 @@ a2a-net route dsh/1a2b3c4d "status?"                     # 默认异步；--sync
 a2a-net inbox --new                                      # 未读来信；--wait 阻塞等待，--hook 供 Claude Code hook 使用
 ```
 
-它只能投递到 home 宿主上的团队（直连投递不转发）。命令、参数、环境变量与退出码见 [`src/skill/references/cli.md`](src/skill/references/cli.md)。
+默认只投递 home 宿主上的团队；`forwardDirect: true` 时，home 可替已验签且在线的 CLI 向已链接的对端目标转发一跳。两边运营者必须各自链接：A 链接 B 的接收成员，B 链接 CLI 句柄并将 home 钉为 A。画布目标还要求 A 直接链接所有名片列出的接收成员，不能只依赖对端画布 org。作用域及结算 enforce 开启时，B 成员宿主的自动回执结清 A 的转发行并进入 CLI 信箱；`--sync` 返回 B 的回复。命令、参数、环境变量与退出码见 [`src/skill/references/cli.md`](src/skill/references/cli.md)。
 
 ## 画布队伍（任意组队，v0.5.25）
 
@@ -69,7 +69,7 @@ a2a-net inbox --new                                      # 未读来信；--wait
 
 - 存储：`<dsh-home>/a2a/canvas.json`（有序队伍条目；上限：64 队 × 32 成员）
 - 控制 API：`POST /__dsh_a2a/canvas`，`action: create | remove | add-member | remove-member`；`cli-home-options` 是仅查询已有 CLI 成员候选的属主操作。
-- CLI 成员标「home 未确定」时，打开其画布队详情并点「指定 home」。宿主现读名片，只列已链接且列出该句柄的主机，并显示不可读名片数；不会自动选中。确认后复用本机 `add-member` 的显式 `home`，提交时再次现读校验，不放宽自动钉或准入。
+- CLI 成员标「home 未确定」时，打开其画布队详情并点「指定 home」。宿主现读名片，只列已链接且列出该句柄的主机，并显示不可读名片数；不会自动选中。确认后复用本机 `add-member` 的显式 `home`，提交时再次现读校验，不放宽自动钉或准入。本机持有在线户口或离线墓碑时显示「本机持有，无需指定」，候选返回 `held:true` 且为空，显式 home 写入提示先撤销本机户口；回执优先投在线本机信箱，无在线户口才按既有 pin 投递。
 - 成员必须是 joined 会话（活节点或已记意图）——未加入会话没有路由后门；退出网络（leave/archive）自动清空全部画布成员关系
 - 成员也可以是操作者手工加入的**远端**带 zone 团队句柄（`zone/a1b2c3d4`）——这就是让该远端调用方在本机获准入、并有权拿完整卡片的链接
 - `a2a_teams` 以本地行列出画布队伍（含成员数/活数）；`/__dsh_a2a/state` 对本地成员提供 `joined`/`live` 标记，对远端成员提供 `{ id, team, remote: true }`
@@ -93,7 +93,7 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | --- | --- | --- |
 | `announce` | `false` | 发布本节点 agent 卡片供 peer 发现。 |
 | `isolated` | `false` | 不向任何对端发请求：取卡、目录扫描、路由、远端日志读取、canvas 变更推送、舰队 canvas-op 中继一律拒绝（gh#193）。`a2a/peers.json` 不动，被拒的请求也不给对端扣分；入站面照常应答；state 面显示 `isolated: true`。供测试与验收主机使用。 |
-| `forwardDirect` | `false` | 本机目标未找到时，允许替已验签且在线的本地CLI转发一跳；仍检查发送作用域和跳数预算。 |
+| `forwardDirect` | `false` | 本机目标未找到时，允许替已验签且在线的本地CLI转发一跳；仍检查发送作用域和跳数预算。A 链接 B 接收成员，B 链接 CLI 并钉住 A；对端不会再转发。 |
 | `peers` | `[]` | 种子 base URL；被引荐的 peers 从其卡片学习。 |
 | `delegates` | `[]` | 区域委托：`{ name, url, publicKey }` 发布在卡片上。 |
 | `team` | `'dsh'` | 本节点暴露给直连路由的团队名。 |

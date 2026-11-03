@@ -295,7 +295,7 @@ const bench = createWorkbench({
   async cliHomeOptions(name, id) {
     try {
       const res = await controlFetch('/__dsh_a2a/canvas', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'cli-home-options', name, id }) })
-      const body = await res.json() as { ok: boolean; homes?: string[]; unreadable?: number; error?: string }
+      const body = await res.json() as { ok: boolean; homes?: string[]; unreadable?: number; held?: boolean; error?: string }
       return { ...body, ok: res.ok && body.ok === true }
     } catch (error) { return { ok: false, error: String(error) } }
   },

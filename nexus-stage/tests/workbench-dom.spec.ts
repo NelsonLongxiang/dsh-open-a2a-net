@@ -714,6 +714,30 @@ describe('canvas inspector member management (0.6.6)', () => {
     expect(rows[1]?.querySelector('.wb-member-label')?.getAttribute('title')).toBe('https://home.example')
   })
 
+  it('locally held CLI members explain ownership and never offer home selection', () => {
+    const read = vi.fn()
+    const { v, canvasOp } = bench({ cliHomeOptions: read })
+    v.update({ ...state, canvas: { teams: [{ name: 'ygl', team: 'dsh/canvas/ygl', members: [{ id: 'ops-cli/a1b2c3d4e5f60718', remote: true, cliHome: null, cliHeld: true }] }] } })
+    openTeam(v)
+    expect(text(v.root.querySelector('.wb-inspector'))).toContain('本机持有，无需指定')
+    expect(v.root.querySelector('.wb-cli-home')).toBeNull()
+    expect(read).not.toHaveBeenCalled(); expect(canvasOp).not.toHaveBeenCalled()
+  })
+
+  it('a fresh held response removes a stale home picker without presenting candidates', async () => {
+    const read = vi.fn(async () => ({ ok: true, held: true, homes: [] }))
+    const { v, canvasOp } = bench({ cliHomeOptions: read })
+    v.update({ ...state, canvas: { teams: [{ name: 'ygl', team: 'dsh/canvas/ygl', members: [{ id: 'ops-cli/a1b2c3d4e5f60718', remote: true, cliHome: null }] }] } })
+    openTeam(v)
+    const form = v.root.querySelector('.wb-cli-home') as HTMLFormElement
+    ;(form.querySelector('button[type=button]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(text(form)).toContain('本机持有，无需指定'))
+    expect((form.querySelector('select') as HTMLSelectElement).hidden).toBe(true)
+    expect((form.querySelector('button[type=button]') as HTMLButtonElement).hidden).toBe(true)
+    expect((form.querySelector('button[type=submit]') as HTMLButtonElement).hidden).toBe(true)
+    expect(canvasOp).not.toHaveBeenCalled()
+  })
+
   it('unknown CLI home offers fresh candidates, requires explicit choice, and survives polling', async () => {
     const read = vi.fn(async () => ({ ok: true, homes: ['https://one.example', 'https://two.example'], unreadable: 2 }))
     const { v, canvasOp } = bench({ cliHomeOptions: read })

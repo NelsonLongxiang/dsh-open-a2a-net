@@ -14,7 +14,8 @@ export function cliHomeOrigin(value: unknown): string | undefined {
 export type CliHomeDecision = { readonly ok: true; readonly home?: string } | { readonly ok: false; readonly error: string }
 
 /** Read-only projection of the same fresh evidence used by explicit home validation. */
-export function cliHomeChoices(handle: string, candidates: readonly CliHomeCandidate[]): { homes: string[]; unreadable: number } {
+export function cliHomeChoices(handle: string, candidates: readonly CliHomeCandidate[], locallyHeld = false): { homes: string[]; unreadable: number; held?: true } {
+  if (locallyHeld) return { homes: [], unreadable: 0, held: true }
   const homes = new Set<string>()
   for (const row of candidates) {
     if (!row.linked || !row.card?.sessionTeams?.some(t => t.team === handle)) continue
@@ -24,8 +25,9 @@ export function cliHomeChoices(handle: string, candidates: readonly CliHomeCandi
 }
 
 /** Count origins, not URL aliases: two card URLs on one host are one home. */
-export function decideCliHome(handle: string, requested: unknown, candidates: readonly CliHomeCandidate[]): CliHomeDecision {
+export function decideCliHome(handle: string, requested: unknown, candidates: readonly CliHomeCandidate[], locallyHeld = false): CliHomeDecision {
   if (!CLI_HANDLE_RE.test(handle)) return requested === undefined ? { ok: true } : { ok: false, error: 'home is only valid for a CLI handle' }
+  if (locallyHeld) return requested === undefined ? { ok: true } : { ok: false, error: 'CLI household is held locally; revoke the local household before specifying another home' }
   const homes = new Set(cliHomeChoices(handle, candidates).homes)
   if (requested !== undefined) {
     const origin = cliHomeOrigin(requested)

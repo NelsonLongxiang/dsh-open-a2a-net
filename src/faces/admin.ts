@@ -71,7 +71,7 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly groupStore: GroupStore
   readonly canvasStore: CanvasStore
   readonly cliHomeForAdd: (handle: string, requested?: unknown) => Promise<CliHomeDecision>
-  readonly cliHomeOptions: (handle: string) => Promise<{ homes: string[]; unreadable: number }>
+  readonly cliHomeOptions: (handle: string) => Promise<{ homes: string[]; unreadable: number; held?: true }>
   readonly layoutStore: LayoutStore
   readonly taskLedger: TaskLedger
   /** #114 S6: observe (lazily) and return the /state `authorization` block. */
@@ -267,7 +267,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               // store keeps both). Genuinely remote refs pass through with
               // remote:true for the workbench's member chips and pickers.
               members: (() => {
-                const rows: Array<{ id: string; team: string; joined?: boolean; live?: boolean; remote?: boolean; cliHome?: string | null }> = []
+                const rows: Array<{ id: string; team: string; joined?: boolean; live?: boolean; remote?: boolean; cliHome?: string | null; cliHeld?: boolean }> = []
                 const seenLocal = new Set<string>()
                 for (const id of canvasStore.membersOf(name)) {
                   if (isRemoteMemberRef(id)) {
@@ -278,7 +278,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
                       rows.push({ id: localId, team: `${config.team}/${id8(localId)}`, joined: sessionNodes.has(localId) || joinedSessions.has(localId), live: sessionNodes.has(localId) })
                       continue
                     }
-                    rows.push({ id, team: id, remote: true, ...(CLI_HANDLE_RE.test(id) ? { cliHome: canvasStore.cliHomeOf(id) ?? null } : {}) })
+                    rows.push({ id, team: id, remote: true, ...(CLI_HANDLE_RE.test(id) ? { cliHome: canvasStore.cliHomeOf(id) ?? null, cliHeld: cliDeposits.directoryRows().some(row => row.team === id) } : {}) })
                     continue
                   }
                   if (seenLocal.has(id)) continue

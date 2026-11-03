@@ -3,12 +3,12 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "75835eaf85bc0555677f265b55817d284282c0c46212f1faa9f23be8d5059c75",
-    "src/faces/admin.ts": "7296d2124610aaa2a04f737b4d111ba2ef107c7879424b76e5bf831f66c3bd44",
+    "src/index.ts": "6afae013563d00c556876ab65aeb980a4773b47b00c659867d96ade4baba85d3",
+    "src/faces/admin.ts": "5a350f5aedd6df0834c45af3da4f9b362cc2fcca94634e9f13740abff6f42c95",
     "src/canvas-store.ts": "c612b9b8e03377fec827978addaabf4ce0762a52769bfa15263bd873fbfdedde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "a8e203feb252f0c5d21f98be6ecc45c84d33f867726331a64823f40d68578a2e",
-    "nexus-stage/src/workbench.ts": "83e6b4827677054e4298f32c8bf4734e6b15effc6e92a465cb1c8988e8b033b7",
+    "nexus-stage/src/workbench.ts": "0310a63dd316e6a5ffbfe8cd14141d4e83a1442fbb0b0978a2ab819dd2c07844",
     "nexus-stage/src/federation.ts": "06e74e9b17b43b655d15fa41c7ab2b0b648cfa15d0ecd02cafe3b505ba6fa0d4",
     "nexus-stage/src/planning-relayout.ts": "7ce77ba2bc95fcbee62af752f22969b726511d8988133e74123a5e04a7a6a571",
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
@@ -19,7 +19,7 @@
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
-    "src/faces/wire.ts": "5ca25d6aba38c063e2c2bd046215944c65eb58cb56ecd353f803790036094fc2",
+    "src/faces/wire.ts": "c352bfe3388d9defa79c538cba8a682ffab113802a41f8216f43fc308dd911d2",
     "src/faces/canvas-notify.ts": "7153f7cb2b6c985825edde55809d47d3a2a14e652d69e55f6d1a72cd9f6d50d9",
     "src/task-auth.ts": "8558710d33b37f3e261eded23b6ca971572019a5dccb05ab5e8d8bd222095717",
     "src/origin-claim.ts": "d467153656bd5592785597e4a81d3686f0b4f91cac38705ecb18d4cc74f8d22c",
@@ -213,7 +213,7 @@
     {
       "page": "p1-arch",
       "cell": "e1",
-      "ref": "nexus-stage/src/workbench.ts:571",
+      "ref": "nexus-stage/src/workbench.ts:572",
       "expect": "function renderHosts(): void {"
     },
     {
@@ -225,7 +225,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:3857",
+      "ref": "src/index.ts:3862",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -267,7 +267,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3338",
+      "ref": "src/index.ts:3342",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {

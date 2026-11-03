@@ -8,7 +8,7 @@ const ok: A2aRouteResult = { ok: true, team: request.team, reply: '', task_id: r
 function fixture(results: A2aRouteResult[] = [ok]) {
   const ledger = new TaskLedger('')
   const sent: Array<{ url: string; request: ForwardRequest; guard: string }> = []
-  const deps: DirectForwardDeps = { enabled: () => true, isolated: () => false, deposited: () => true, scope: async () => ({ ok: true }),
+  const deps: DirectForwardDeps = { enabled: () => true, isolated: () => false, deposited: () => true, memberLinked: () => true, scope: async () => ({ ok: true }),
     candidates: async () => ({ urls: results.map((_, i) => 'https://peer' + i + '.test'), card: async () => ({ publicKey: 'key', session: 'host' } as A2aPeerCard) }),
     dispatch: async (url, r, guard) => { sent.push({ url, request: r, guard }); return results[sent.length - 1]! }, ledger, activity: () => {},
   }
@@ -31,6 +31,9 @@ describe('one-hop CLI forwarding', () => {
     const receipt = fixture()
     expect(await createDirectForward(receipt.deps)({ ...request, message: '[A2A receipt] task prior-task done' })).toMatchObject({ ok: true, receipt: 'none' })
     expect(receipt.ledger.list()).toHaveLength(0)
+    const uncertain = fixture([{ ok: false, code: -32005, error: 'wait expired' }])
+    expect(await createDirectForward(uncertain.deps)({ ...request, message: '[A2A receipt] task prior-task done', noWait: false })).toMatchObject({ ok: false, code: -32005, receipt: 'none' })
+    expect(uncertain.ledger.list()).toHaveLength(0)
     const bridge = fixture([{ ...ok, bridge: 'native-teams', receipt: 'none' }])
     expect(await createDirectForward(bridge.deps)(request)).toMatchObject({ ok: true, bridge: 'native-teams', receipt: 'none' })
     expect(bridge.ledger.list()).toHaveLength(0)
@@ -51,6 +54,16 @@ describe('one-hop CLI forwarding', () => {
     expect(await createDirectForward(x.deps)(request)).toMatchObject({ ok: false, code: -32005 })
     expect(x.sent).toHaveLength(1)
     expect(x.ledger.list()).toHaveLength(1)
+  })
+  it('a canvas candidate requires direct return links to every advertised receiving member', async () => {
+    const x = fixture()
+    const team = 'beta/canvas/ops'
+    x.deps.candidates = async () => ({ urls: ['https://peer.test'], card: async () => ({ canvasOrg: [{ team, name: 'ops', members: [request.caller, 'beta/aaaaaaaa', 'beta/bbbbbbbb'] }], sessionTeams: [{ team: 'beta/aaaaaaaa' }] } as A2aPeerCard) })
+    x.deps.memberLinked = member => member === 'beta/aaaaaaaa'
+    expect((await createDirectForward(x.deps)({ ...request, team })).ok).toBe(false)
+    expect(x.sent).toHaveLength(0)
+    x.deps.memberLinked = () => true
+    expect((await createDirectForward(x.deps)({ ...request, team })).ok).toBe(true)
   })
   it('a deposit expiring during directory lookup is not dispatched', async () => {
     const x = fixture()

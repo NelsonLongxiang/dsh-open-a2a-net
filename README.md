@@ -100,7 +100,7 @@ a2a-net route dsh/1a2b3c4d "status?"                     # async by default; --s
 a2a-net inbox --new                                      # unread mail; --wait blocks, --hook feeds a Claude Code hook
 ```
 
-It delivers only to teams on its home host (direct delivery never relays). Commands, flags, environment
+By default it delivers only to teams on its home host. With `forwardDirect: true`, the home can forward an authenticated online CLI one hop to a linked peer target. Both operators must link: A links the receiving B member; B links the CLI handle and explicitly pins A as its home. Canvas targets require A to directly link every advertised receiving member, not merely rely on the peer canvas org. With scope and settlement enforcement on, the member-host auto-receipt settles A’s forwarded row and lands in the CLI inbox; `--sync` returns B’s reply. Commands, flags, environment
 variables and exit codes: [`src/skill/references/cli.md`](src/skill/references/cli.md).
 
 ## Canvas teams (arbitrary grouping, v0.5.25)
@@ -109,7 +109,7 @@ A canvas team is a user-composed, named, multi-member routing group: **one atomi
 
 - Storage: `<dsh-home>/a2a/canvas.json` (ordered team entries; caps: 64 teams × 32 members)
 - Control API: `POST /__dsh_a2a/canvas` with `action: create | remove | add-member | remove-member`; `cli-home-options` is a read-only owner action for an existing CLI member.
-- For a CLI member marked “home 未确定”, open its canvas team inspector and choose “指定 home”. The host freshly reads cards, lists only linked advertisers, and reports unreadable-card counts. No home is selected automatically; confirming calls the existing local `add-member` with explicit `home`, which freshly validates again. This does not weaken automatic pinning or admission.
+- For a CLI member marked “home 未确定”, open its canvas team inspector and choose “指定 home”. The host freshly reads cards, lists only linked advertisers, and reports unreadable-card counts. No home is selected automatically; confirming calls the existing local `add-member` with explicit `home`, which freshly validates again. A locally held household (live or offline tombstone) instead shows “本机持有，无需指定”, returns `held: true` with no choices, and rejects explicit home writes until that household is revoked. Online local households receive receipts before any older pin. This does not weaken automatic pinning or admission.
 - Membership requires a joined session (live node or remembered intent) — no routing backdoor over unjoined sessions; leaving the network (leave/archive) drops every canvas membership
 - A member may also be a **remote** zone-qualified team handle (`zone/a1b2c3d4`) the operator adds by hand — the link that admits that remote caller here and entitles it to the full card
 - `a2a_teams` lists canvas teams as local rows with member/live counts; `/__dsh_a2a/state` serves per-member `joined`/`live` flags for local members and `{ id, team, remote: true }` for remote ones
@@ -135,7 +135,7 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | --- | --- | --- |
 | `announce` | `false` | Publish this node's agent card for peer discovery. |
 | `isolated` | `false` | Send nothing to any peer: card reads, directory sweeps, routes, remote log reads, canvas pings and fleet canvas-op relays are all refused (gh#193). `a2a/peers.json` is left untouched and refused fetches do not score peers; inbound faces keep answering; the state face shows `isolated: true`. For test and acceptance hosts. |
-| `forwardDirect` | `false` | Opt in to one-hop forwarding for an authenticated online local CLI after a local target miss; sender scope and the hop guard remain enforced. |
+| `forwardDirect` | `false` | Opt in to one-hop forwarding for an authenticated online local CLI after a local target miss; sender scope and the hop guard remain enforced. Link B receiving members at A, and link/pin the CLI home A at B; no second forwarding hop. |
 | `peers` | `[]` | Seed base URLs; referred peers are learned from their cards. |
 | `delegates` | `[]` | Zone delegations: `{ name, url, publicKey }` published on the card. |
 | `team` | `'dsh'` | Team name this node exposes for direct routing. |

@@ -1,5 +1,5 @@
 /** Explicit operator choice only; this form never auto-selects or relaxes home admission. */
-export interface CliHomeOptions { ok: boolean; homes?: string[]; unreadable?: number; error?: string }
+export interface CliHomeOptions { ok: boolean; homes?: string[]; unreadable?: number; held?: boolean; error?: string }
 export function createCliHomePicker(read: () => Promise<CliHomeOptions>, save: (home: string) => Promise<boolean>): HTMLFormElement {
   const form = document.createElement('form')
   form.className = 'wb-cli-home'
@@ -19,6 +19,7 @@ export function createCliHomePicker(read: () => Promise<CliHomeOptions>, save: (
     try {
       const result = await read()
       if (!result.ok) throw Error(result.error ?? '候选读取失败')
+      if (result.held) { readButton.hidden = true; select.hidden = true; submit.hidden = true; select.replaceChildren(); note.textContent = '本机持有，无需指定'; return }
       select.replaceChildren(new Option('请选择 home 主机…', '', true, true))
       for (const home of result.homes ?? []) select.appendChild(new Option(home, home))
       select.hidden = false; submit.hidden = false; readButton.textContent = '刷新候选'

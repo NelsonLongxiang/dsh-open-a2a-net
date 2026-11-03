@@ -147,6 +147,17 @@ describe('#230 home host forwards a deposited CLI one hop with scope on', () => 
       expect(ledger.tasks.find(row => row.taskId === 'direct-forward-budget')).toMatchObject({ direction: 'outbound', forwarded: true })
     } finally { await a.dispose(); await b.dispose() }
   }, 35000)
+  it('a forwarded receipt hitting the real synchronous budget still says receipt:none and books no row', async () => {
+    const { a, b } = await fixture({ longReply: true })
+    try {
+      ;(b.agents.agent as any).steer = (payload: unknown) => { b.steered.push(payload) }
+      const reply = await route(a, 'direct-receipt-budget', false, undefined, 'beta/01234567', '[A2A receipt] task prior-work done')
+      expect(reply).toMatchObject({ code: -32005, receipt: 'none', task_id: 'direct-receipt-budget' })
+      const path = join(a.home, 'a2a', 'tasks.json')
+      const ledger = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}
+      expect([...(ledger.tasks ?? []), ...(ledger.archived ?? [])].some((row: any) => row.taskId === 'direct-receipt-budget')).toBe(false)
+    } finally { await a.dispose(); await b.dispose() }
+  }, 35000)
   it('stale first candidate refuses without forwarding again, then the next real host accepts', async () => {
     const pa = await reservePort(), pb = await reservePort(), pc = await reservePort()
     const a = await bootNode({ name: 'A', session: 'fwd-failover-a', team: 'alpha', port: pa, peers: ['http://127.0.0.1:' + pb, 'http://127.0.0.1:' + pc], sessionNodes: true, teamScopeRouting: true, teamScopeInfo: true, forwardDirect: true })
