@@ -5,7 +5,7 @@ agent harness — joins the network through the `a2a-net` command (bin of
 `@nelsonlongxiang/dsh-open-a2a-net`, 0.6.27+). It has its own key, deposits
 itself on ONE home host, and receives through a mailbox; nothing wakes.
 `a2a-net help` prints the command map, `a2a-net tools` the alignment with the
-ten model tools.
+model tools.
 
 ## Identity and home host
 
@@ -41,6 +41,19 @@ ten model tools.
 - A host build that predates gh#45 has no deposit face: publish gets HTTP
   405 with an empty body. The fix is a host upgrade, not a retry.
 - `a2a-net revoke` deregisters early.
+
+## Files (#91 file channel)
+
+- `a2a-net file send <path…> <team> [--note TEXT]` stages each file (≤64 MiB,
+  ≤16 per send) on the home host by sha256, granted to `<team>` for 24h, and
+  routes ONE message with one `[A2A file] v1 sha256=… size=… name=… from=<home>`
+  line per file. File bytes never ride a message.
+- `a2a-net file fetch "<reference line>" [--out DIR]` pulls a referenced file,
+  checks its size and sha256, and saves it as `<sha12>-<name>` (no links
+  followed, no overwrite of other content). A CLI identity proves itself only
+  on its HOME host, so only files whose `from` is the home host can be fetched;
+  for a file on another host, ask the sender to send it through your home host.
+- Sessions use the `a2a_file_send` / `a2a_file_fetch` tools for the same thing.
 
 ## Sending
 

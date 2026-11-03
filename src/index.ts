@@ -123,6 +123,7 @@ import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { registerSessionLogFaces } from './faces/session-log.ts'
 import { registerFileFaces } from './faces/files.ts'
+import { createFileTools } from './tools/files.ts'
 import { BlobStore } from './blob-store.ts'
 import { canvasCandidateMatches, canvasTargetAmbiguous, peerDirectoryRows, routableCallerLabel, sessionCandidateMatches, unroutableCallerNote } from './peer-directory.ts'
 import { createTeamsBridgeInbound } from './legacy/teams-bridge-inbound.ts'
@@ -1177,7 +1178,7 @@ export function apply(ctx: Context, config: Config): void {
       a = next
     }
   }
-  ctx.on('tools/post-execute', (exec, result, next) => { const via = result.isError ? (/^a2a_(route|tasks|teams|status|probe)$/.test(exec.name) ? `${exec.name}:error` : '') : toolTaint(exec.name, result.value); if (via !== '') markLineage(exec.agent, via); return next() })
+  ctx.on('tools/post-execute', (exec, result, next) => { const via = result.isError ? (/^a2a_(route|tasks|teams|status|probe|file_send|file_fetch)$/.test(exec.name) ? `${exec.name}:error` : '') : toolTaint(exec.name, result.value); if (via !== '') markLineage(exec.agent, via); return next() })
   const nodeTasks = new NodeTasks(join(home, 'a2a'), { probe: githubProbe(), logger, onSettled: (node, p) => nodeBinder.remind(node, settledReminder(p)) })
   nodeTasks.schedule(ctx)
   const nodeBinder = createNodeBinder({ store: nodeStore, bindings: nodeBindings, logger, joined: id => joinedSessions.has(id), joinedList: () => joinedSessions.list(), archived: id => archivedSessionFilter()?.(id) === true, live: id => liveRoots.get(id), tasksText: node => nodeTasks.render(node), pendingReminders: node => nodeTasks.takePending(node).map(settledReminder), selfUpdate: { store: nodeStore, queue: nodeReviews, taint: nodeTaint, events: agent => sessionEventsOf(agent as Agent), localSession: id => liveRoots.has(id) || joinedSessions.has(id) } })
@@ -3560,6 +3561,10 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   }
 
   actTools.registerRoute()
+  // #91 file channel F2: a2a_file_send / a2a_file_fetch (src/tools/files.ts).
+  const fileTools = createFileTools({ ctx, config, blobStore, canvasMembersOf: name => canvasStore.membersOf(name), ownCardUrl: () => ownCardUrl, sessionTeamOf, a2aJoinGateRefusal, routeTrunk, peerFetch, originClaimHeaders })
+  fileTools.registerFileSend()
+  fileTools.registerFileFetch()
 
   /**
    * The routing trunk (0.6.9): the one failover sequence behind both the

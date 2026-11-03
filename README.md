@@ -35,7 +35,7 @@ shared tool runtime.
 
 ## What you get
 
-- **Model tools** (ten; see the table below) — `a2a_teams` lists the teams this node can see (its own rows
+- **Model tools** (see the table below) — `a2a_teams` lists the teams this node can see (its own rows
   plus peer teams inside the joined-team scope); `a2a_route`
   sends one message to a team, reuses `context_id` to continue a remote conversation, and fails over across
   candidates when a peer is unreachable. `a2a_tasks` reconciles the receipt contract across three tiers: every route that leaves a
@@ -82,6 +82,8 @@ this host's joined-team scope: `[this host]` rows plus peers serving a team this
 | `a2a_exposure` | How visible is this session? | Sets the session's own tier: `linked` (the default floor) or `fleet` (a voluntary opt-up); a group's visibility follows its strictest member. Requires a joined session. |
 | `a2a_report` | Tell this host's supervision something while off the network. | The one ingress exempt from the join gate: one-way, lands in the state face's reports ring, grants no presence or routing. One report per 30s per session, ≤4000 chars, identical text 3× in 10 min is refused as a loop. |
 | `a2a_status` | What is this node doing right now? | In-scope tracked peers with quality scores, in-flight routes, recent routing activity, and the idempotency window aggregate (occupancy + claim/replay/conflict counters). |
+| `a2a_file_send` | Hand files to a team without putting them in a message. | Stages each file (≤16 per call, ≤64 MiB each) on this host for that team and routes ONE message of `[A2A file]` reference lines; the bytes never ride the message (#91). |
+| `a2a_file_fetch` | Pull a file someone referenced. | Pulls one `[A2A file]` reference from the host that staged it, signed as this session; checks size and sha256 before saving it under `<cwd>/a2a-inbox/`. A grant names one session (or a whole host, or a canvas team's members); the fetch always marks the session as having read peer content. |
 
 ## a2a-net CLI (callers outside a session)
 
@@ -158,6 +160,7 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | `originClaimUnboundWindow` | `true` | OriginClaim audience-binding window: also sign and accept the legacy envelope that names no audience (accepted ones counted as `unboundInbound`; those whose bound form missed here also as `boundMissInbound`); `false` signs and accepts the audience-bound form only. |
 | `originClaimAudiences` | `[]` | Extra origins this host answers to as an envelope audience, for port-mapped or proxied hosts whose dialed URL is neither the card URL nor the arrival address. |
 | `gateAgentLessCalls` | `'audit'` | Host-side (agent-less) routing calls: audit them, or `refuse`. |
+| `settlementAuth` | `'observe'` | Settlement authorization (#114): `off`, `observe` (record what would be refused, settle as before), or `enforce`. |
 | `asyncNudgeDelayMs` | `120000` | Delay before a delivered-but-unconsumed async route re-wakes its target with a one-line nudge; `0` disables. |
 | `taskStaleTtlMs` | `86400000` | Owed-task stale TTL (24h): past it a pending row auto-dead-letters (a late receipt can still settle it). |
 | `dshHome` | `''` | DSH home directory override for the plugin's state (`<home>/a2a/…`); `''` resolves the default home. |
@@ -194,6 +197,7 @@ Set an `apiKey` before exposing the listener beyond loopback.
 | `GET /__dsh_a2a/state` | The state face the panel and workbench poll (sessions, canvas, peers, remote rows, activity, ledger). |
 | `POST /__dsh_a2a/join` · `/leave` | Join or leave one session node. |
 | `/__dsh_a2a/canvas` · `/canvas-layout` | Canvas teams (create/remove/add-member/remove-member) and the board layout. |
+| `POST /__dsh_a2a/roster-op` | Owner-controlled roster team creation, member add/remove, dissolution, and exact allowlist maintenance. |
 | `/__dsh_a2a/groups` | Manual session grouping — deprecated since 0.6.6 (canvas teams supersede it), kept for old panels. |
 | `POST /__dsh_a2a/dispatch` | Workbench quick dispatch into a team. |
 | `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | Settle an owed task from the caller side (cancel also steers a stop notice to a live local target); the row lands in `archived[]`. |
@@ -201,6 +205,8 @@ Set an `apiKey` before exposing the listener beyond loopback.
 | `/__dsh_a2a/owner-settings` | The owner panel: read (GET) or write (POST) `teamJoinAllowlist`, `teamScopeInfo` and `announce` into the home patch layer (the first two apply immediately; `announce` on the next restart). |
 | `/__dsh_a2a/fleet-canvas-op` | Relay a canvas operation (`create`, `add-member`, `remove-member`, `remove`) to a peer's `/a2a/canvas-op`, stamped with this node's OriginClaim; the peer's link gate decides. |
 | `/__dsh_a2a/cli-deposit` | Deposit, list, revoke and mailbox reads for `a2a-net` CLI identities. |
+| `GET /__dsh_a2a/nodes` · `POST` | Node identities (docs/design/node-identity.md): GET reads the roster or one node (`?name=`); POST is an identity write and needs the apiKey even on loopback. |
+| `POST /__dsh_a2a/blob` | Stage a file for a recipient (`?to=&name=`) — the file channel's write side; peers pull through `GET /a2a/blob`. |
 
 The state face's ledger: `tasks` (pending, each with `settleable`), `tasksStaleCount`, `tasksDead` (with
 `direction` when known), and `archived` — the newest 64 settled rows, newest first, each with `outcome`,
