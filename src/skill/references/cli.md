@@ -42,6 +42,10 @@ model tools.
   405 with an empty body. The fix is a host upgrade, not a retry.
 - `a2a-net revoke` deregisters early.
 
+## Tasks: ledger and host observability
+
+`a2a-net tasks --json` returns the existing `pending`, `dead`, and `archived` arrays plus `settlement` and `conservation` copied unchanged from `/__dsh_a2a/state`. These blocks include the lifetime `settlement.refusalsTotal`, refusal ring and mode, and the host conservation verdict/counters/duplicate ids. Older hosts omit a block they do not expose; the CLI does not manufacture zero counters or a passing verdict. Plain `tasks` appends a conservation line (`conserved`, `delta`) and a settlement line (`mode`, `refusalsTotal`, `offChain`) when the respective block exists.
+
 ## Files (#91 file channel)
 
 Files do not go through session messages: use the file channel below, never JPFILE-PART/base64 chunks in `route`. Legacy part replies carry `advice.reason: use-file-channel` with the send commands; up to 16 compatible parts are still allowed, while over-limit transfers keep `-32008` / `file-parts-exceeded`. The hint alone does not mean rejection.
