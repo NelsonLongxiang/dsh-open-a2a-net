@@ -5,7 +5,7 @@ agent harness — joins the network through the `a2a-net` command (bin of
 `@nelsonlongxiang/dsh-open-a2a-net`, 0.6.27+). It has its own key, deposits
 itself on ONE home host, and receives through a mailbox; nothing wakes.
 `a2a-net help` prints the command map, `a2a-net tools` the alignment with the
-ten model tools.
+model tools.
 
 ## Identity and home host
 

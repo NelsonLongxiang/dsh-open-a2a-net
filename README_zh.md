@@ -33,7 +33,7 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 
 ## 模型工具一览
 
-共十个工具。`teamScopeInfo` 开启时（默认），`a2a_teams`、`a2a_status`、`a2a_probe` 只在本宿主的已加入团队作用域内作答：`[this host]` 本机行，加上服务于本宿主节点所声明团队的 peers。`a2a_tasks`（本宿主自己的派单账本）不受作用域限制。
+`teamScopeInfo` 开启时（默认），`a2a_teams`、`a2a_status`、`a2a_probe` 只在本宿主的已加入团队作用域内作答：`[this host]` 本机行，加上服务于本宿主节点所声明团队的 peers。`a2a_tasks`（本宿主自己的派单账本）不受作用域限制。
 
 | 工具 | 回答什么 | 说明 |
 | --- | --- | --- |
@@ -47,6 +47,8 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 | `a2a_exposure` | 本会话有多可见？ | 设置会话自己的暴露档：`linked`（默认下限）或 `fleet`（自愿上调）；组的可见性取最严成员。需会话已加入网络。 |
 | `a2a_report` | 不在网时向本宿主监督面报告。 | 唯一不受加入门约束的入口：单向，落入状态面的 reports 环，不授予在场或路由权。每会话 30s 一次、≤4000 字，同文 10 分钟内 3 次按循环拒绝。 |
 | `a2a_status` | 本节点此刻在做什么？ | 作用域内受跟踪 peers 及质量分、在途路由、近期路由活动，以及幂等窗口汇总（占用 + claim/replay/conflict 计数）。 |
+| `a2a_file_send` | 把文件交给一个团队，又不把文件塞进消息。 | 每个文件（每次 ≤16 个，单个 ≤64 MiB）暂存在本宿主、授权给该团队，然后只路由**一条**带 `[A2A file]` 引用行的消息；字节从不随消息走（#91）。 |
+| `a2a_file_fetch` | 拉取别人引用的文件。 | 以本会话身份签名，从暂存它的宿主拉取一条 `[A2A file]` 引用；先核对大小和 sha256，再存到 `<cwd>/a2a-inbox/`。授权只对一个会话（或整台宿主、或某画布队的成员）；拉取总会把本会话标为读过对端内容。 |
 
 ## a2a-net CLI（会话之外的调用方）
 
@@ -116,6 +118,7 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | `originClaimUnboundWindow` | `true` | OriginClaim 受众绑定过渡窗口：同时签发并接受不带受众的旧信封（接受数计入 `unboundInbound`；其中绑定形式在本机未命中的另计 `boundMissInbound`）；`false` 只签发、只接受绑定受众的信封。 |
 | `originClaimAudiences` | `[]` | 本宿主额外认作信封受众的 origin，用于端口映射或反向代理宿主（对端拨号的 URL 既不是卡片 URL 也不是到达地址）。 |
 | `gateAgentLessCalls` | `'audit'` | 宿主侧（无 agent）路由调用：审计，或 `refuse` 拒绝。 |
+| `settlementAuth` | `'observe'` | 结算授权（#114）：`off`、`observe`（记下本会拒绝的，照旧结算）或 `enforce`。 |
 | `asyncNudgeDelayMs` | `120000` | 已投递但未被消费的异步路由，在此延迟后用一行催办重新唤醒目标；`0` 关闭。 |
 | `taskStaleTtlMs` | `86400000` | 欠账任务的 stale TTL（24h）：过期后 pending 行自动转死信（迟到回执仍可结清）。 |
 | `dshHome` | `''` | 插件状态所用的 DSH home 目录覆盖（`<home>/a2a/…`）；`''` 解析默认 home。 |
@@ -154,6 +157,8 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | `/__dsh_a2a/owner-settings` | 属主面板：读取（GET）或写入（POST）`teamJoinAllowlist`、`teamScopeInfo` 与 `announce` 到 home patch 层（前两项即时生效；`announce` 下次重启生效）。 |
 | `/__dsh_a2a/fleet-canvas-op` | 把画布操作中继到某 peer 的 `/a2a/canvas-op`，盖上本节点的 OriginClaim；由对端的链接门裁决。 |
 | `/__dsh_a2a/cli-deposit` | `a2a-net` CLI 身份的寄存、列表、撤销与信箱读取。 |
+| `GET /__dsh_a2a/nodes` · `POST` | 节点身份（docs/design/node-identity.md）：GET 读名册或单个节点（`?name=`）；POST 是身份写入，即使在 loopback 也要 apiKey。 |
+| `POST /__dsh_a2a/blob` | 为接收方暂存一个文件（`?to=&name=`）——文件通道的写入面；对端经 `GET /a2a/blob` 拉取。 |
 
 状态面的账本：`tasks`（pending，每行带 `settleable`）、`tasksStaleCount`、`tasksDead`（已知时带 `direction`），以及 `archived`——最新 64 条已结清行，最新在前，每行带 `outcome`、`endedBy`（`receipt` | `echo` | `abandoned` | `cancelled`）、回执在调用方结束之后才到时带 `late: true`、已知时带 `direction`——另有 `archivedCount` 与 `archivedSplit`（按结局计数）。
 
