@@ -1,147 +1,139 @@
-# Design: Cross-Host Direct Delivery (#57) — Host Forwarding (Plan A)
+# 设计：跨主机直投（#57）——宿主转发（方案 A）v2
 
-- **Status**: proposed (roadmap P2; supervisor order direct-fd54f7da item ③)
-- **Owner**: dsh-open-a2a-net (dev seat), decision by the review seat + owner
-- **Hard boundaries**: chief-engineer constraints from direct-256f74e5
-  (recorded on issue #57) are binding on this design.
+- **状态**：提议稿 v2（2026-11-03）。属主当日裁定选方案 A。v1（PR #76，2026-10-27）写于 #114 结算授权、CLI 绑定受众签名（#146）、gh#141 之前，本稿按现行代码重写，v1 的约束和验收沿用。
+- **归属**：dsh-open-a2a-net，评审席设计。动的是准入和路由，属**高档**：每个实现切片都要一个非自我节点的评审 PASS。
+- **硬约束**：总工席 direct-256f74e5，记录在 #57。
+  - (a) 转发不能绕过准入。
+  - (b) 跳数上限与卡片缓存 TTL 联动，自环和循环转发在链上截断，并记入台账。
+- **前置**：#217（PR #218）。作用域开启时，跨主机自动回执此前会被调用方拒收；转发的回执回程靠这条路。
+- **关联**：#60（跳数预算，入口检查已实现）、#71（双向识别）、#45（CLI 落户）、#114（授权记录与结算判定）、gh#141（本机付款）。
 
-## 1. Problem and current state
+## 0. 一句话
 
-`/a2a/direct` delivers only to THIS host's teams. A target team on another
-host answers `No live DSH session node accepts team` (reproduced 2026-10-25:
-.156 → .157 `dsh/c1e25ac2`). CLI deposits are single-host. Direct delivery
-across hosts is the missing prerequisite for the "remote collaboration goes
-through a2a first" rule.
+CLI 身份（或其他外部调用方）只在自己的 home 主机 H 上落户。它投给 H 的 `/a2a/direct` 时，如果目标队不在 H 上，**H 像本机会话调用 `a2a_route` 那样替它投一跳**，送到发布该队的主机 H2。回执经 H 回到 CLI 信箱。
+- 被转发过的投递到了 H2 后**绝不再转发**，所以环在结构上不可能出现。
+- 准入在 H2 上判**原始调用方**，判据是 H2 自己运营者建立的链接。H 只是邮差，不是担保人。
 
-What already exists and can be extended:
+## 1. 现状（file:line 按 7c33568）
 
-- **canvas remote failover** (dispatchLocalCandidate → remoteMembersOf →
-  directoryPeerCandidates → dispatchPeerCandidate): the full chain —
-  directory resolution, signed cross-host delivery, receipt return — already
-  runs for canvas members (#41/#43/#71). Plan A generalizes its target set.
-- **OriginClaim envelope**: signature verification, freshness window.
-- **Recursion guard protocol** (docs/protocol/recursion-guard.md) —
-  hopBudget / visited / deadlineAt / budget-exhausted, fully specified,
-  not yet implemented (#60).
+- **会话已能跨主机**：`a2a_route` → `routeTrunk`（`src/index.ts` 约 3580）。本机找不到时，按 `directoryPeerCandidates` 走目录，再由 `dispatchPeerCandidate` 带 OriginClaim 投到对端，失败就换下一个候选。发起会话的宿主就是发送方，所以不算转发。
+- **`/a2a/direct` 只投本机**：入口检查依次是：
+  1. 准入；
+  2. OriginClaim；
+  3. 跳数预算 `refuseIfBudgetExhausted`（wire.ts:674）；
+  4. 幂等；
+  5. 防洪；
+  6. 回执关联；
+  7. CLI 信箱；
+  8. 本机投递（wire.ts:515 起）。
 
-## 2. Three options
+  本机找不到时，返回 `No live DSH session node accepts team`（index.ts:2544、wire.ts:890）。CLI 直投 H 的队以外的目标，一律落在这里。
+- **跳数预算只有入口**：`checkGuardAtIngress` 只在 wire.ts:674 调用。`mintGuard` 和 `guardHeader` 从没被调用，出站从不带 `X-A2A-Guard`。
+- **准入**（`callerAdmission`，task-auth.ts:244）：
+  - 外 zone 的 `zone/id8` 只认本机运营者加的画布远端成员引用；
+  - 自由格式标签（含 CLI 句柄 `name/16hex`）只认本机节点事实，也就是本机落户。
 
-| | A. Host forwarding (recommended) | B. Multi-host deposits | C. Zone-direct |
-|---|---|---|---|
-| Client burden | none (one handle) | publish per host, TTL ×N | must reach every host |
-| NAT/firewall | one reachable face per host | same | **fails** (VM 29.136: only .156's portproxy reaches it) |
-| Identity | one authored identity | N identities to rotate | one |
-| Receipts | return path recorded in the envelope | per-host mailbox | direct |
-| Complexity | forward loop + guard (bounded) | none | none |
-| Verdict | **adopt** | fallback only for CLI | rejected |
+  外主机的 CLI 句柄因此到哪都会被拒。画布远端成员引用只要求带 `/`（canvas-store.ts:42），CLI 句柄存得进去，只是准入不认。
+- **CLI 信封绑定受众**（#146）：CLI 签的 v2 信封只对它的 home 主机有效，原样转发给 H2 会验签失败。
+- **名片**：H 的完整名片在 `sessionTeams` 里列出本机落户的 CLI 句柄，但只给已链接的调用方看（index.ts 约 2169）。
 
-## 3. Plan A — host forwarding
+## 2. 协议
 
-### 3.1 Trigger and resolution
+### 2.1 何时转发（H 侧）
 
-When `dispatchLocalCandidate` misses (the echo of today's
-"not a local team"), the dispatcher walks `directoryPeerCandidates(target)`
-— the SAME directory walk the canvas failover uses — and POSTs the signed
-envelope to the first candidate that accepts. No new resolution machinery:
-the directory already resolves a team to its publishing host.
+H 的 `/a2a/direct` 在**本机投递找不到目标**时（也就是今天返回 `No live DSH session node accepts team` 的位置），只有下列条件**全部**成立才转发：
 
-### 3.2 Envelope additions
+1. 配置 `forwardDirect` 为 true，默认 false。属主逐台打开。
+2. 本机不是 `isolated`。
+3. **调用方是本机的节点事实**：本机落户、未过期的 CLI 句柄（`cliDeposits` 在线）。从对端来的投递（调用方是外主机的 `zone/id8`，或签名方是另一台主机）一律不转发。
+4. **入站没有显式的跳数预算**（`checkGuardAtIngress` 的 mode 为 `default`）。带了 `X-A2A-Guard` 的投递，说明已经被转发过，不再转发。
+5. **H 的发送侧作用域门放行**：与 `routeTrunk` 的作用域门同一套判据（index.ts 约 3608–3665）。目标必须在 H 的运营者链接范围内。CLI 不因为借了宿主就比本机会话看得更远。
 
-```
-X-A2A-Origin-Caller: <zone>/<id8>        # the ORIGINAL caller (immutable)
-X-A2A-Origin-Caller-Url: <url>          # its card face
-X-A2A-Hop: <n>                          # hops consumed (0 at origin)
-X-A2A-Via: <url>,<url>                  # transport chain, oldest first
-X-A2A-Guard: <base64(RecursionGuard)>   # recursion-guard.md payload
-```
+不满足任一条时，照旧返回原来的「找不到」错误，文本里加一句未转发的原因：没开 / 隔离 / 已转发过 / 目标不在本机作用域。
 
-The per-hop OriginClaim signature (X-A2A-Sig) stays what it is: proof of
-**the sending hop's** key possession. The forwarding host signs its own
-claim; the original claim travels inside the guard payload.
+### 2.2 怎么投（H → H2）
 
-### 3.3 Admission — the chief's constraint (a), binding
+- **复用会话的出站路径**：`directoryPeerCandidates` → `dispatchPeerCandidate`，失败换下一个候选，不新造解析机制。
+- **请求体**：
+  - `caller_session` = 原始调用方（CLI 句柄）；
+  - `task_id` = 调用方生出的那个 id（CLI 每次投递都带 task id，重发同一个 id）；
+  - `context_id` 和 `wait` 原样带上。
+- **签名**：H 用自己的 OriginClaim 签名，绑定受众为 H2。CLI 原来的信封留在 H，不往下传。H 已经在入口验过它，这正是落户的意义。
+- **跳数预算**：出站带 `X-A2A-Guard`，`hopBudget = DEFAULT_HOP_BUDGET - 1`，`visitToken` 由 H 新生成。
+  - H2 入口照常检查。
+  - H2 按 §2.1 第 4 条不会再转发，所以预算在本设计里只起两个作用：一是标记「这是被转发过的」，二是防将来的扩展把环重新打开。
 
-**Transfer of trust is forbidden.** At the receiving host:
+### 2.3 H2 的准入：判原始调用方（约束 a）
 
-1. The admission core (`sameZoneSharedTeamRefusal` / `a2aCallerRefusal`)
-   judges the **ORIGINAL caller** — its declared roster (via its card's
-   canvasOrg, #71's bidirectional rule: own handles ∧ caller on both sides)
-   — exactly as today. Forwarding NEVER widens the declared set.
-2. **CLI-origin callers (gh#45)**: when the origin caller is a deposited
-   CLI handle (`<agent-name>/<uuid·16hex>`, not a zone/id8 session team),
-   its admission basis is the gh#45 deposit fact — a PUBLISHED node fact of
-   the host it deposited onto (`cli-deposits.json`, served as the CLI's
-   signed card under `/a2a/cli/<handle>/.well-known/agent-card.json`). The
-   N3 caller gate admits exactly that handle; the forwarding chain neither
-   re-derives nor dilutes it. A CLI origin whose deposit has expired
-   (tombstoned, 4h TTL) is DEAD on every leg — the relay must not revive
-   it (no orphaned forwarding).
-3. The **forwarding hop** is judged separately as legal transport: it must
-   prove possession of its key (OriginClaim ✓) and be **linked to this
-   host** (`callerLinkedToThisHost`) — an unlinked host cannot relay
-   traffic through us. Failure ⇒ `untrusted-origin` and no steering.
-4. The ledger row records `via` (the transport chain) so the caller/origin
-   distinction is auditable, never conflated.
+H2 收到的 `caller_session` 是 CLI 句柄，签名方是 H。新增一条准入规则 `remote-ref-cli`，三个条件同时满足才放行：
 
-Consequence: a linked-but-unrelated peer relaying a stranger's message gets
-the stranger judged on the stranger's own links. Forwarding is a postman,
-not a sponsor.
+1. **H2 的运营者链接过这个句柄**：它在 H2 某个画布队的远端成员引用里。这和外 zone 的 `zone/id8` 走同一个门槛（N3/N4）：自报不算，运营者加的才算。
+2. **签名方就是这个句柄的 home**：OriginClaim 验签通过（绑定受众为 H2），而且签名主机名片的 `sessionTeams` 列着这个句柄（读暖缓存，缓存冷时按需拉一次）。
+   - 这一条防的是：一台已链接但无关的主机冒充某个 CLI 的转发方。
+   - 过渡窗口期内，没有信封的投递在这条规则下**不放行**。CLI 句柄没有 zone 前缀，`claimCovers` 本来就盖不住它，这里不另开口子。
+3. **句柄在 home 上仍在线**：名片里的 CLI 行没有标 OFFLINE。过期的户口在每一跳都是死的，转发不能让它复活（v1 §3.3-2 原文沿用）。
 
-### 3.4 Receipts
+H2 的其余检查不变：
+- 防洪按原始调用方计；
+- 幂等指纹里的 caller 就是原始调用方；
+- 授权记录 `auth.caller` = CLI 句柄，`auth.claim` 记签名方 H，还新增 `auth.via = H 的卡片 URL`，审计时分得清调用方和邮差。
 
-The receiving host's receipt targets the **origin caller** (the existing
-`callback` field already carries a routable address; a forwarded delivery
-sets it to the origin caller's handle when absent). If the origin caller's
-host is itself unreachable from the receiver, the receipt rides the reverse
-of `X-A2A-Via` — each returning hop delivers to the next address in the
-chain. **Reverse-path validation**: every returning hop must find ITSELF
-inside `X-A2A-Via` (the recorded chain) — a host outside the chain may not
-claim a relay slot (`untrusted-origin`, no delivery), so a receipt cannot
-be redirected through arbitrary hosts. The chain is consumed oldest→newest
-in reverse and each hop re-signs its own OriginClaim exactly like the
-outbound leg. Receipt failure falls back to the existing three-tier ledger
-(pending → dead-letter → archive).
+### 2.4 回执与台账
 
-### 3.5 Hop budget — the chief's constraint (b), binding
+**H2 侧**：照常记一条入站行，`receiptTarget` = CLI 句柄。目标会话的自动回执投给 CLI 句柄：
+- 走目录：H 的名片列着这个句柄，所以能找到 H；
+- `caller_session` 按 #217 的修法是干活会话的句柄；
+- 签名方是 H2。
 
-- `hopBudget` from recursion-guard.md, `DEFAULT_HOP_BUDGET = 4` (protocol
-  §6); each forwarding leg decrements; `hopBudget === 0` ⇒
-  `budget-exhausted`, nothing executes, row records
-  `hopsConsumed`/`hopsRemaining`.
-- **TTL linkage**: every hop resolves independently against its own warm
-  cache (cardCacheTtl governs freshness only — it never extends trust or
-  budget). The guard is a payload constant, not a cache-derived value; a
-  stale directory can cost a retry but can never amplify the traversal.
-- Self/cycle: `visited` (own base URL at ingress) per protocol §4.3;
-  #60 lands hop accounting first, the visited set second (roadmap
-  sequencing).
+**H 侧**：H 在转发成功时**只记一条出站行**：
+- `sender = {kind:'cli', id:<句柄>}`；
+- `peer` = H2 的卡片 URL，`peerKey` / `peerHost` / `deliveredTo` 与会话出站行相同；
+- `forwarded: true`。
 
-### 3.6 Change surface (implementation sketch)
+H 上不另记入站行。`track*` 遇到已有的 task id 会静默忽略，两条行会丢一条。
 
-| File | Change |
-|---|---|
-| `src/recursion-guard.ts` (new) | guard payload build/parse/validate; O(len) parse per protocol §7 acceptance list |
-| `src/index.ts` dispatch seam | local miss → directory walk → forward with guard + origin fields |
-| `src/index.ts` ingress | origin-caller admission + hop check + transport-link check |
-| `src/index.ts` receipt | origin-caller callback default; reverse-via fallback |
-| `src/task-ledger.ts` | `hopsConsumed` / `hopsRemaining` / `via` row fields |
-| `tests/mesh/cross-host-forward.spec.ts` (new) | A→B direct; A→B→C two-hop; cycle terminates; budget-exhausted; unlinked relay refused; receipt returns |
+**回执进入 H 的 `/a2a/direct` 后**：
+1. 准入：调用方是 H2 上的会话句柄。H 的作用域门在转发前已经要求 H 链接了目标，所以这个句柄在 H 上有运营者链接，走 `remote-ref` 或 `sameZoneAdmission`。
+   - **待 F2 验证**：目标是 H2 的画布队（`zone2/canvas/x`）时，H 的作用域可能是经 #41 的对端画布 org 放行的。这时回执的调用方是队里某个成员的句柄，H 是否也认它（#71 双向规则），要在 F2 的 mesh 用例里实测。认不了就写进作用域门：转发只放行 H 直接链接了成员的目标。
+2. 回执关联：`settleAndAnnounce` 用 H 的那条出站行做结算判定。`fromPeerOrigin` 成立，结清方是目标成员，判 `target` 或 `target-member`，在授权链上。
+3. CLI 信箱：投进句柄的信箱（wire.ts:710 起）。CLI 用 `a2a inbox` 看到。
 
-### 3.7 Acceptance (issue #57, machine-checkable)
+**同步（`--sync`）**：H 用 `dispatchPeerCandidate` 的同步路径等 H2 回复，把回复原样交给 CLI。
+- 15 秒传输预算先到时，返回 `-32005 DELIVERED-UNSETTLED` 和 task id，含义与会话路由完全相同：已送达，不要盲目重发。
+- 回执稍后照样进信箱。
 
-1. A CLI identity deposited on .156 runs `a2a-net route <a .157 team> --sync`
-   and receives a reply; the receipt lands in the sender's mailbox.
-2. A new mesh test proves cross-host direct delivery, the cycle terminating
-   at the budget, and the unlinked-relay refusal.
-3. The recursion-guard status banner flips to "implemented (first step)"
-   only after #60's hop accounting lands.
+### 2.5 跳数与缓存 TTL（约束 b）
 
-## 4. Risks and fallbacks
+- 转发只发生在原始调用方的 home 主机，且只发生一次。H2 不转发，所以不存在 A→B→A。
+- **缓存过期的代价**：H 的卡片缓存可能还以为 H2 发布着目标队（`cardCacheTtlMs` 默认 60 秒）。这时 H2 回答「找不到」，H 换下一个候选；候选都失败，就返回 `-32004`。
+  - 代价至多是候选数那么多次投递，不会放大，因为 H2 不会把它再转出去。
+  - TTL 只影响新鲜度，不影响预算和信任，这是 v1 §3.5 的原则。
+- **每个转发都要可见**：H 的活动环记一条 `dir: 'fwd'`。转发失败时，CLI 拿到的错误里写明试过哪些候选。入站带显式预算、又在 H2 上找不到目标时，H2 照常返回「找不到」；预算为 0 时返回 `budget-exhausted`（-32007），并记一条无回执行（#60 已实现）。
 
-- **Relay abuse** → §3.3: transport legality is checked every hop; the
-  budget bounds cost.
-- **Receipt churn** on reverse paths → existing ledger tiers absorb it; the
-  `via` field makes failures diagnosable.
-- **Rollback**: forwarding is opt-in via config (`forwardEnabled`, default
-  false until the review seat's pass); with it off, behavior is exactly
-  today's.
+## 3. 不做的事
+
+- **多跳转发**（H2 再转给 H3）。没有真实需求。要做时再引入 visited 集合（递归防护协议 §4.3）并重审本稿。
+- **会话调用方经 `/a2a/direct` 转发**。会话本来就用 `a2a_route`，它的宿主就是发送方。
+- **H 为 CLI 担保**。H2 不因为「H 是链接过的主机」就放行 H 转来的任何调用方，见 §2.3。
+- **自动打开转发**。`forwardDirect` 默认 false。
+
+## 4. 实现切片（各自独立合入，均为高档）
+
+| # | 切片 | 完成判据 |
+|---|---|---|
+| F1 | H2 侧准入 `remote-ref-cli`（§2.3），以及授权记录的 `via` | 单测覆盖三个条件各缺一条时被拒、全部满足时放行。mesh：真实两台主机，链接过的 CLI 句柄经 home 签名的投递被接收；同一句柄由另一台已链接的主机签名，被拒；句柄离线，被拒 |
+| F2 | H 侧转发（§2.1、§2.2）、`forwardDirect` 配置、出站行（§2.4 H 侧）、活动环 `fwd` | mesh：CLI 在 A 上 `route` 到 B 的队，同步拿到回复，异步拿到 task id。未开、隔离、目标不在作用域、入站带预算，这四种情况各一例，都不转发且错误写明原因。缓存过期时换候选，B 不再转发 |
+| F3 | 回执回到 CLI 信箱（§2.4）的端到端验证，以及文档（README 配置表、`references/cli.md`、`pitfalls.md` 里「No live DSH session」那一条、递归防护横幅） | mesh：两台主机都开作用域、enforce 模式下，B 的自动回执把 A 的出站行结清（`settledBy` 不是 off-chain），并进入 CLI 信箱。`verify:docs` 通过 |
+
+F1 不依赖 F2，可以先合入。F2 依赖 #218。F3 依赖 F1 和 F2。
+
+## 5. 验收（#57）
+
+1. .156 上落户的 CLI 身份执行 `a2a-net route <.157 上的队> --sync` 能拿到回复，回执进入它的信箱。前提是两台主机都打开 `forwardDirect`，并且双方运营者互相链接。
+2. mesh 测试覆盖：跨主机直投、不转发的各种情形、冒充转发方被拒、回执回到信箱。
+3. 部署后团队验证器 C1（跨宿主任务）连续 24 小时 ≥ 1。
+
+## 6. 运维须知
+
+- **打开方式**：在两台主机上设 `forwardDirect: true`。H 的运营者要把 H2 上的目标链接进 H 的画布队，H2 的运营者要把 CLI 句柄链接进 H2 的画布队。少了任何一边，都会可见地拒绝，而不是静默失败。
+- **回滚**：把 `forwardDirect` 关掉，行为立即回到今天的样子。已经在途的转发行按普通出站行处理：等回执，过期转死信。
