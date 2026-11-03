@@ -150,6 +150,7 @@ export interface ActivityRow {
 
 /** The /state subset the workbench consumes (additive fields ignored). */
 export interface StateBody {
+  readonly zone?: string
   readonly version?: string
   readonly sessions?: readonly SessionRow[]
   readonly canvas?: { teams?: readonly CanvasTeamRow[] }
@@ -176,6 +177,7 @@ export interface StateBody {
   readonly archived?: readonly ArchivedRow[]
   /** gh#41 fleet planning: each tracked peer's published canvas org. */
   readonly peerOrg?: readonly PeerOrgRow[]
+  readonly registry?: { teams?: ReadonlyArray<{ team: string; members: readonly string[]; live?: number }> }
   readonly archivedCount?: number
   /** Settled-archive split by verdict (the receipt outcome vocabulary — 'completed' | 'rejected' | 'failed' | … | 'abandoned' — or 'unclassified'). */
   readonly archivedSplit?: Readonly<Record<string, number>>

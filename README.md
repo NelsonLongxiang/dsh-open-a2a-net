@@ -197,6 +197,7 @@ Set an `apiKey` before exposing the listener beyond loopback.
 | `GET /__dsh_a2a/state` | The state face the panel and workbench poll (sessions, canvas, peers, remote rows, activity, ledger). |
 | `POST /__dsh_a2a/join` · `/leave` | Join or leave one session node. |
 | `/__dsh_a2a/canvas` · `/canvas-layout` | Canvas teams (create/remove/add-member/remove-member) and the board layout. |
+| `POST /__dsh_a2a/roster-op` | Owner-controlled roster team creation, member add/remove, dissolution, and exact allowlist maintenance. |
 | `/__dsh_a2a/groups` | Manual session grouping — deprecated since 0.6.6 (canvas teams supersede it), kept for old panels. |
 | `POST /__dsh_a2a/dispatch` | Workbench quick dispatch into a team. |
 | `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | Settle an owed task from the caller side (cancel also steers a stop notice to a live local target); the row lands in `archived[]`. |

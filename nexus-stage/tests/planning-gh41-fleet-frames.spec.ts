@@ -40,6 +40,25 @@ describe('gh#41 remote org frames + fleet drop fork', () => {
     expect(member).not.toBeNull()
   })
 
+  it('#199: a remote canvas named roster:... stays a mirror and never becomes a local roster write', async () => {
+    const actions: Array<{ type: string; team?: string; fleetPeer?: string; roster?: boolean }> = []
+    const v = createPlanningView({ onDirty: vi.fn(), onLampClick: vi.fn(), onCanvasAction: async a => { actions.push(a); return true }, now: () => NOW })
+    document.body.appendChild(v.root)
+    v.adoptExternalLayout({ version: 1, viewport: { x: 0, y: 0, scale: 1 }, nodes: { a: { x: 0, y: 0 } }, frames: { 本地队: { x: -200, y: -200, w: 500, h: 400 } } })
+    v.reconcile({ ...input, peerOrg: [{ url: 'https://10.0.0.5:8787', org: [{ name: 'roster:伪装', team: 'peerzone/canvas/roster:伪装', members: [] }] }] })
+    const frame = v.root.querySelector<HTMLElement>('.p-frame[data-name="roster:伪装"]')!
+    expect(frame.classList.contains('is-roster')).toBe(false)
+    expect(frame.classList.contains('is-mirror')).toBe(true)
+    expect(frame.querySelector('.ttl')?.textContent).toBe('roster:伪装')
+    const card = v.root.querySelector<HTMLElement>('.p-node[data-id="a"]')!
+    v.seam.pointerDown(ptr({ target: card, clientX: 400, clientY: 0 }))
+    v.seam.pointerMove(ptr({ target: card, clientX: 325, clientY: 1005 }))
+    v.seam.pointerUp(ptr({ target: frame, clientX: 325, clientY: 1005 }))
+    await vi.waitFor(() => expect(actions.find(a => a.type === 'add-member')).toMatchObject({ fleetPeer: 'https://10.0.0.5:8787' }))
+    expect(actions.find(a => a.type === 'add-member')).not.toHaveProperty('roster')
+    v.destroy()
+  }, 15_000)
+
   it('#197: unreachable peer leaves frame, peer card and member card visible but weak; recovery clears warning', () => {
     const v = createPlanningView({ onDirty: vi.fn(), onLampClick: vi.fn(), onCanvasAction: vi.fn(async () => true), now: () => NOW })
     document.body.appendChild(v.root)

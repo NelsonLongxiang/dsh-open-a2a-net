@@ -11,7 +11,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/team-store
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 /** On-disk shape: one entry per session node that declares memberships. */
@@ -120,6 +120,43 @@ export class TeamMembershipStore {
       this.persist()
       this.notify()
     }
+  }
+
+  /** One atomic roster replacement for the owner's workbench gesture. A failed disk write changes no in-memory membership. */
+  replaceTeam(team: string, members: readonly string[]): { ok: true } | { ok: false; error: string } {
+    const clean = validTeam(team)
+    if (clean === undefined || new Set(members).size !== members.length || members.some(id => id === '')) return { ok: false, error: 'invalid roster team or member ids' }
+    if (this.membersOf(clean).join('\0') === members.join('\0')) return { ok: true }
+    const wanted = new Set(members)
+    const next = this.entries.map(entry => ({ session: entry.session, teams: wanted.has(entry.session) ? [...entry.teams] : entry.teams.filter(t => t !== clean) }))
+      .filter(entry => entry.teams.length > 0)
+    for (const id of members) {
+      let entry = next.find(row => row.session === id)
+      if (entry === undefined) {
+        if (next.length >= TEAM_NODE_CAP) return { ok: false, error: 'roster node capacity reached' }
+        entry = { session: id, teams: [] }; next.push(entry)
+      }
+      if (!entry.teams.includes(clean)) {
+        if (entry.teams.length >= TEAMS_PER_NODE_CAP) return { ok: false, error: `session ${id} reached the team limit` }
+        entry.teams.push(clean)
+      }
+    }
+    try {
+      if (this.path !== '') {
+        mkdirSync(dirname(this.path), { recursive: true })
+        const tmp = `${this.path}.${String(process.pid)}.tmp`
+        try {
+          writeFileSync(tmp, JSON.stringify({ memberships: next }), { mode: 0o600 })
+          renameSync(tmp, this.path)
+        } catch (error) {
+          try { unlinkSync(tmp) } catch { /* the original snapshot stays */ }
+          throw error
+        }
+      }
+    } catch (error) { return { ok: false, error: `roster persistence failed: ${String(error)}` } }
+    this.entries = next
+    this.notify()
+    return { ok: true }
   }
 
   /** Drop every declaration of one session (a left or archived node). */

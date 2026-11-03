@@ -39,6 +39,8 @@ export const SCALE_MAX = 3
 /** Document shape caps: a layout taxonomy, not a database. */
 export const LAYOUT_NODE_CAP = 256
 export const LAYOUT_FRAME_CAP = 96
+/** Canvas names stay ≤40; roster keys carry an extra seven-character namespace. */
+const validFrame = (name: string): boolean => name !== '' && !name.includes('/') && (name.startsWith('roster:') ? name.length > 7 && name.length <= 47 : name.length <= 40)
 
 function clampCoord(v: unknown): number | undefined {
   const n = typeof v === 'number' ? v : Number.NaN
@@ -91,8 +93,7 @@ function clampDoc(raw: unknown): LayoutSnapshot | undefined {
   const frames: Record<string, LayoutRect> = {}
   if (rec.frames !== null && typeof rec.frames === 'object') {
     for (const [name, rect] of Object.entries(rec.frames as Record<string, unknown>)) {
-      // Frame keys mirror canvas team names: same discipline (no '/', cap 40).
-      if (typeof name !== 'string' || name === '' || name.includes('/') || name.length > 40) continue
+      if (!validFrame(name)) continue
       const r = clampRect(rect)
       if (r !== undefined) frames[name] = r
       if (Object.keys(frames).length >= LAYOUT_FRAME_CAP) break

@@ -33,6 +33,7 @@ import type { IdempotencyStore } from '../idempotency-store.ts'
 import type { JoinedSessions } from '../joined-store.ts'
 import type { LayoutStore } from '../layout-store.ts'
 import { applyOwnerSettings, type OwnerSettings } from '../owner-settings.ts'
+import { rosterOp } from '../roster-op.ts'
 import type { PeerStore } from '../peer-store.ts'
 import { resolveStageMount } from '../stage-mount.ts'
 import { ARCHIVE_CAP, archivedEndedBy, type TaskLedger } from '../task-ledger.ts'
@@ -74,7 +75,7 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly idempotencyStore: IdempotencyStore
   readonly inFlightRoutes: Map<number, InFlightRoute>
   readonly recentActivity: RouteActivityEntry[]
-  readonly teamAuditRing: { at: number; action: 'join' | 'leave' | 'archive-prune' | 'agent-less'; team: string; id: string; ok: boolean; reason?: string }[]
+  readonly teamAuditRing: { at: number; action: 'join' | 'leave' | 'archive-prune' | 'agent-less'; team: string; id: string; ok: boolean; actor?: string; reason?: string }[]
   readonly reportRing: { at: number; level: 'info' | 'warning' | 'error'; message: string; session: string; task?: string }[]
   readonly sessionNodes: Map<string, Agent>
   readonly liveRoots: Map<string, Agent>
@@ -238,6 +239,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
         }
         const body = JSON.stringify({
           nodes: true,
+          zone: config.team,
           version: PLUGIN_VERSION,
           // gh#193: a dark host says so — an empty remote list is not an outage.
           ...(config.isolated ? { isolated: true } : {}),
@@ -647,6 +649,30 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
       })
     }),
   }), 'a2a: fleet-canvas-op relay route')
+  // A roster owner gesture writes the same teams.json declarations as a2a_team_join; it cannot admit remote or unjoined ids.
+  ctx.effect(() => webServer.register({
+    kind: 'exact', path: '/__dsh_a2a/roster-op',
+    handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+      const send = (payload: Record<string, unknown>): void => {
+        const text = JSON.stringify(payload)
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(text) }); res.end(text)
+      }
+      if (req.method !== 'POST') { send({ ok: false, error: 'POST required' }); return }
+      readJsonBody(req, res, body => {
+        try {
+          send(rosterOp({
+            zone: config.team, home, store: teamMemberships, joined: id => joinedSessions.has(id),
+            canvasExists: name => canvasStore.hasTeam(name) || canvasStore.hasTeam('roster:' + name),
+            allowlist: () => d.ownerAllowlist, setAllowlist: list => { d.ownerAllowlist = list },
+            audit: (action, team, id, ok, reason) => {
+              teamAuditRing.push({ at: Date.now(), action, team, id, ok, reason, actor: 'human:owner' })
+              if (teamAuditRing.length > 32) teamAuditRing.splice(0, teamAuditRing.length - 32)
+            },
+          }, body))
+        } catch (error) { d.logger.warn('roster-op failed: %s', String(error)); send({ ok: false, error: 'roster operation unavailable' }) }
+      })
+    }),
+  }), 'a2a: owner roster route')
   // Owner ruling 2026-10-29 (single owner + mirror): tell linked peers to re-read this host's card on any canvas change.
   registerCanvasNotify(webServer, d)
   // gh#34 owner three-key panel: the remote build-out unlock knobs,
@@ -751,6 +777,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
   // remembered intent): canvas routing only reaches sessions the user
   // put on the network by gesture — no routing backdoor over unjoined
   // sessions.
+  const canvasNameReserved = (name: string): boolean => { const clean = name.trim(); return clean.startsWith('roster:') || d.ownerAllowlist.includes(`${config.team}/${clean}`) || teamMemberships.membersOf(`${config.team}/${clean}`).length > 0 }
   ctx.effect(() => webServer.register({
     kind: 'exact',
     path: '/__dsh_a2a/canvas',
@@ -760,8 +787,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
         let payload: string
         if (action === 'create') {
           const name = typeof body.name === 'string' ? body.name : ''
-          const stored = canvasStore.create(name)
-          payload = JSON.stringify(stored === undefined ? { ok: false, error: 'invalid name or team cap reached' } : { ok: true, name: stored, teams: canvasStore.list() })
+          const stored = canvasNameReserved(name) ? undefined : canvasStore.create(name)
+          payload = JSON.stringify(stored === undefined ? { ok: false, error: 'invalid, roster-reserved name or team cap reached' } : { ok: true, name: stored, teams: canvasStore.list() })
         } else if (action === 'remove') {
           const name = typeof body.name === 'string' ? body.name : ''
           payload = JSON.stringify({ ok: canvasStore.remove(name), teams: canvasStore.list() })
@@ -775,7 +802,9 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           const memberValid = isRemoteMemberRef(id)
             ? validRemoteMemberRef(id)
             : id !== '' && (sessionNodes.has(id) || joinedSessions.has(id))
-          if (name === '' || !memberValid) {
+          if (!canvasStore.hasTeam(name) && canvasNameReserved(name)) {
+            payload = JSON.stringify({ ok: false, error: 'roster reserves this canvas name' })
+          } else if (name === '' || !memberValid) {
             payload = JSON.stringify({ ok: false, error: 'name and a member (joined session id, or a zone-qualified remote team handle like zone/a1b2c3d4) are required' })
           } else {
             canvasStore.create(name)

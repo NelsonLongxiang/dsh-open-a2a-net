@@ -83,6 +83,8 @@
 #dsh-plan .p-frame-head .cnt{color:var(--ink-muted); font-weight:400}
 #dsh-plan .p-frame-head .route{font-size:10.5px; color:var(--ink-muted)}
 #dsh-plan .p-frame.is-mirror{border-style:dashed}
+#dsh-plan .p-frame.is-roster{border-style:double;border-width:3px}
+#dsh-plan .p-frame.is-roster .p-frame-head{border-style:dashed}
 #dsh-plan .p-frame.is-syncing .p-frame-head .route{color:var(--accent)}
 #dsh-plan .p-frame.is-unreachable{opacity:.76;border-style:dashed}
 #dsh-plan .p-frame-unreachable{position:absolute;left:8px;top:20px;max-width:calc(100% - 16px);color:var(--uupm-error);font-size:11px;pointer-events:none}

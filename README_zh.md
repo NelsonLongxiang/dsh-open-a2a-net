@@ -150,6 +150,7 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | `GET /__dsh_a2a/state` | 面板与工作台轮询的状态面（会话、画布、peers、远端行、活动、账本）。 |
 | `POST /__dsh_a2a/join` · `/leave` | 加入或退出一个会话节点。 |
 | `/__dsh_a2a/canvas` · `/canvas-layout` | 画布队伍（create/remove/add-member/remove-member）与规划板布局。 |
+| `POST /__dsh_a2a/roster-op` | 属主在画布创建、加减成员、解散 roster 队，并维护精确允许名单。 |
 | `/__dsh_a2a/groups` | 手工会话分组——自 0.6.6 起弃用（被画布队伍取代），为旧面板保留。 |
 | `POST /__dsh_a2a/dispatch` | 工作台快速派单到一个团队。 |
 | `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | 从调用方一侧结清一个欠账任务（cancel 还会向在线的本地目标转达停止通知）；该行落入 `archived[]`。 |
