@@ -50,6 +50,8 @@ export interface CanvasNotifyDeps {
   readonly verifyOriginClaim: (req: IncomingMessage) => Promise<{ ok: true; caller: string; callerUrl: string; card: A2aPeerCard } | { ok: false; reason: string }>
   readonly callerLinkedToThisHost: (caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined) => boolean
   readonly cachedCardFetch: (url: string) => Promise<A2aPeerCard | undefined>
+  /** gh#193: the host's guarded peer fetch (refuses while isolated). */
+  readonly peerFetch: typeof globalThis.fetch
 }
 
 /**
@@ -98,7 +100,7 @@ export function registerCanvasNotify(webServer: WebServer, d: CanvasNotifyDeps):
     lastRecipients = now
     for (const url of targets) {
       const target = url.replace(/\/$/, '') + '/a2a/canvas-changed'
-      void globalThis.fetch(target, {
+      void d.peerFetch(target, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...originClaimHeaders({ url: target, method: 'POST' }) },
         body: '{}',

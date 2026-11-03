@@ -57,7 +57,8 @@ describe('change ping recipients', () => {
   async function harness() {
     vi.useFakeTimers()
     const pinged: string[] = []
-    vi.stubGlobal('fetch', async (url: string) => { pinged.push(url); return new Response('{"ok":true}') })
+    // gh#193: pings go through the host's guarded peer fetch, never the global one.
+    vi.stubGlobal('fetch', async () => { throw new Error('canvas pings must use d.peerFetch') })
     const linked = new Set([URL_A])
     const tracked = [URL_A]
     let change: () => void = () => {}
@@ -72,6 +73,7 @@ describe('change ping recipients', () => {
       verifyOriginClaim: async () => ({ ok: false, reason: 'absent' }),
       callerLinkedToThisHost: (_c: string, url: string) => linked.has(url),
       cachedCardFetch: async () => undefined,
+      peerFetch: async (url: string) => { pinged.push(url); return new Response('{"ok":true}') },
     } as unknown as CanvasNotifyDeps
     registerCanvasNotify({ register: () => () => {} } as never, d)
     const flush = async (): Promise<void> => { change(); await vi.advanceTimersByTimeAsync(CANVAS_NOTIFY_DEBOUNCE_MS + 10) }

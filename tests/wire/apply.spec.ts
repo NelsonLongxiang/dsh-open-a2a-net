@@ -2254,6 +2254,7 @@ describe('a2a plugin module surface', () => {
       taskStaleTtlMs: 86_400_000,
       team: 'dsh',
       announce: false,
+      isolated: false,
       agentName: 'DeepSeek Harness A2A node',
       peers: [],
       delegates: [],
