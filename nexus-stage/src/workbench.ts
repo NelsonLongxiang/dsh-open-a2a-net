@@ -98,6 +98,8 @@ export interface SessionRow {
   readonly workspace?: string
   readonly joined?: boolean
   readonly live?: boolean
+  /** Final scoped assembly lacks at least one registered node section (#174). */
+  readonly nodePromptMissing?: boolean
   readonly teams?: readonly string[]
   /** Canvas teams this session is a member of (0.6.6 roster annotation). */
   readonly canvasTeams?: readonly string[]

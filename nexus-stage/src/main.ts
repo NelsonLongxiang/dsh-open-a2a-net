@@ -206,6 +206,9 @@ async function postNetworkJoin(action: 'join' | 'leave', id: string): Promise<bo
 }
 
 let lampState: LampState = 'idle'
+// The nodes face reports effective scoped assemblies; a mounted registration alone does not prove visibility.
+let nodePromptMissing = new Set<string>()
+let nodePromptCheckedAt = 0
 let canvasFace = false
 let lastLayoutJson: string | undefined
 /** True once any layout answer (saved doc or an explicit null) has been
@@ -381,13 +384,25 @@ async function poll(): Promise<void> {
     const res = await controlFetch('/__dsh_a2a/state', { cache: 'no-store' })
     if (!res.ok) throw new Error(`/__dsh_a2a/state ${res.status}`)
     const body = (await res.json()) as StateBody
+    if (Date.now() - nodePromptCheckedAt >= 15_000) {
+      nodePromptCheckedAt = Date.now()
+      try {
+        const nodes = await controlFetch('/__dsh_a2a/nodes', { cache: 'no-store' })
+        if (!nodes.ok) throw new Error(`nodes ${nodes.status}`)
+        const view = await nodes.json() as { bindings?: Array<{ session: string; mounted: unknown; effective: { core: boolean; mutable: boolean } | null }> }
+        nodePromptMissing = new Set((view.bindings ?? [])
+          .filter(b => b.mounted !== null && b.effective !== null && (b.effective.core === false || b.effective.mutable === false))
+          .map(b => b.session))
+      } catch { nodePromptMissing.clear() } // unavailable is unknown, not confirmed missing
+    }
+    const shown = { ...body, sessions: (body.sessions ?? []).map(s => ({ ...s, ...(nodePromptMissing.has(s.id) ? { nodePromptMissing: true } : {}) })) }
     clearFault()
     // canvasFace first: bench.update reads board.available() to pick the
     // mode, so assigning it afterwards held the very first paint in data
     // mode (board display:none, 0px wide) until the next 3s poll — and the
     // board's first reconcile measured a zero-width view.
     canvasFace = body.canvas !== undefined
-    bench.update(body)
+    bench.update(shown)
 
     // ── The layout answer precedes the first reconcile on purpose ──
     // The board's first build reads `layoutDoc` for saved positions and
