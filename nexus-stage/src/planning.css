@@ -116,6 +116,14 @@
 #dsh-plan .p-node.remote .nm-text{overflow-wrap:anywhere}
 #dsh-plan .p-node .dot{width:8px; height:8px; border-radius:50%; background:var(--edge-live); flex:none}
 #dsh-plan .p-node.cold .dot{background:transparent; border:1.5px solid var(--edge-cold)}
+#dsh-plan .p-node .sub-row{display:flex; align-items:baseline; gap:6px; margin-top:2px; min-width:0}
+#dsh-plan .p-node .sub-row .sub{flex:1 1 auto; min-width:0; margin-top:0}
+#dsh-plan .p-node .work{flex:none; font-size:10.5px; font-weight:500; color:var(--ink-muted); white-space:nowrap}
+#dsh-plan .p-node .work:empty{display:none}
+#dsh-plan .p-node.is-working .work{color:var(--edge-live)}
+#dsh-plan .p-node.is-working .dot{animation:p-working 1.4s ease-in-out infinite}
+@keyframes p-working{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--edge-live) 55%,transparent)}50%{box-shadow:0 0 0 4px transparent}}
+@media (prefers-reduced-motion: reduce){#dsh-plan .p-node.is-working .dot{animation:none}}
 #dsh-plan .p-node .sub{font-size:11px; color:var(--ink-muted); margin-top:2px;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 /* W1: a picked search hit pulses its card for 1.2s (class removed on timer). */

@@ -68,6 +68,14 @@ type Gesture =
   | { readonly kind: 'pan'; last: { x: number; y: number }; moved: boolean }
   | { readonly kind: 'marquee'; origin: { x: number; y: number }; last: { x: number; y: number }; additive: boolean }
 
+
+/** The card's 工作中/空闲 chip text; empty when the host reported no status (older host, cold or remote node). */
+export function workLabel(work: Pick<PlanningSession, 'status' | 'queued'> | undefined): string {
+  if (work?.status === undefined) return ''
+  const base = work.status === 'running' ? '工作中' : '空闲'
+  return typeof work.queued === 'number' && work.queued > 0 ? `${base} · 排队 ${String(work.queued)}` : base
+}
+
 export function createPlanningView(deps: PlanningDeps): PlanningView {
   const model = new WorldModel()
   let layoutDoc: LayoutDoc | undefined
@@ -413,7 +421,13 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         sub.className = 'sub mono'
         const prio = document.createElement('span')
         prio.className = 'prio mono'
-        el.append(nm, sub, prio)
+        // Second line: the description, with the 工作中/空闲 chip at its right end — the title keeps its full width.
+        const work = document.createElement('span')
+        work.className = 'work'
+        const subRow = document.createElement('div')
+        subRow.className = 'sub-row'
+        subRow.append(sub, work)
+        el.append(nm, subRow, prio)
         nodeLayer.appendChild(el)
         nodeEls.set(n.id, el)
       }
@@ -422,6 +436,12 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       el.style.top = `${r.y}px`
       el.classList.toggle('cold', !n.live)
       el.classList.toggle('remote', n.remote === true)
+      // 工作中/空闲: live local sessions only; the host reports nothing for cold or remote nodes.
+      const work = n.live && n.remote !== true ? lastWork.get(n.id) : undefined
+      el.classList.toggle('is-working', work?.status === 'running')
+      const workText = workLabel(work)
+      const workEl = el.querySelector<HTMLElement>('.work')!
+      if (workEl.textContent !== workText) workEl.textContent = workText
       el.classList.toggle('selected', model.isSelected(n.id))
       el.setAttribute('aria-selected', String(model.isSelected(n.id)))
       const host = n.id.slice('peer-'.length)
@@ -470,6 +490,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   const federation = createFederationOverlay(svg, model)
   let lastPeers: ReadonlyArray<PeerRow> = []
   let lastRemoteTeams: ReadonlyMap<string, RemoteTeamRow[]> = new Map()
+  let lastWork: ReadonlyMap<string, Pick<PlanningSession, 'status' | 'queued'>> = new Map()
   const peerScoreByText = new Map<string, number | undefined>()
   /** gh#20 W-A: per-host link/verified info for the peer badges. */
   const peerInfoByHost = new Map<string, { link?: 'linked' | 'stranger'; verified?: boolean }>()
@@ -1221,6 +1242,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // excluded from bounds, so the column cannot feed back into itself).
     const peerSeen = new Set<string>()
     lastRemoteTeams = groupRemoteTeams(input.remoteTeams ?? [])
+    lastWork = new Map(input.sessions.map(s => [s.id, { status: s.status, queued: s.queued }]))
     reachability = unreachableRefs(input)
     peerScoreByText.clear()
     for (const p of input.peers ?? []) {
