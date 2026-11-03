@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { FloodGuard, DEFAULT_RATE_PER_MINUTE } from '../../src/flood-guard.ts'
+import { FloodGuard, DEFAULT_RATE_PER_MINUTE, fileChannelAdvice } from '../../src/flood-guard.ts'
 const part = (t: string, f = 'f', i = 1, n = 1) => '[JPFILE-PART v1] ' + JSON.stringify({ v: 1, transfer_id: t, file_id: f, part_i: i, part_n: n })
 
 describe('gh91 guard boundaries', () => {
+  it('advises the file channel for accepted, oversized and malformed legacy parts only', () => {
+    for (const message of [part('ok'), part('large', 'f', 1, 17), '[JPFILE-PART v1] broken']) {
+      expect(fileChannelAdvice(message)).toMatchObject({ reason: 'use-file-channel', message: expect.stringContaining('a2a_file_send { paths, team }') })
+      expect(fileChannelAdvice(message)?.message).toContain('a2a-net file send <path…> <team>')
+    }
+    expect(fileChannelAdvice('ordinary request')).toBeUndefined()
+  })
   it('uses a sliding minute; callers have independent budgets', () => {
     let now = 0; const g = new FloodGuard(() => now)
     for (let i = 0; i < DEFAULT_RATE_PER_MINUTE; i++) expect(g.check('a', 'request')).toBeUndefined()

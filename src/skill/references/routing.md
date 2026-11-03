@@ -1,5 +1,9 @@
 # Routing deep-dive
 
+## Files use the file channel
+
+Files do not go through session messages. Send with `a2a_file_send { paths, team }` (up to 16 files, 64 MiB each), not `a2a_route` with file bytes or JPFILE-PART chunks. The receiver uses `a2a_file_fetch { ref }` with the `[A2A file] v1 …` line. CLI: `a2a-net file send <path…> <team>` / `a2a-net file fetch "<reference line>"`. One reference message carries the transfer; ordinary routing and receipt rules below apply to that message. Legacy parts still allowed by the transitional cap receive `advice.reason: use-file-channel`; this hint is not a refusal or a completion receipt.
+
 ## The receipt contract
 
 Every async route (`wait:false`) registers the task on the peer and returns

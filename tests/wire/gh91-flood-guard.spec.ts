@@ -16,13 +16,23 @@ async function boot(): Promise<MeshNode> {
 }
 async function post(n: MeshNode, id: string, message = 'ordinary request', caller = 'dsh', wait = true) {
   const r = await fetch(n.baseUrl + '/a2a/direct', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ team: 'dsh/01234567', caller_session: caller, task_id: id, message, wait }) })
-  return { status: r.status, body: await r.json() as { code?: number; reason?: string; error?: string; task_id?: string; delivered?: boolean; reply?: string; result?: unknown } }
+  return { status: r.status, body: await r.json() as { code?: number; reason?: string; advice?: { reason: string; message: string }; error?: string; task_id?: string; delivered?: boolean; reply?: string; result?: unknown } }
 }
 function part(transfer: string, file: string, i: number, n: number): string {
   return '[JPFILE-PART v1] ' + JSON.stringify({ v: 1, transfer_id: transfer, file_id: file, part_i: i, part_n: n, payload: 'data' })
 }
 
 describe('gh#91 authenticated direct flood brake', () => {
+  it.each([true, false])('legacy parts remain accepted with file-channel advice (wait=%s)', async wait => {
+    const n = await boot()
+    const accepted = await post(n, 'hint-part', part('hint', 'f', 1, 16), 'dsh', wait)
+    expect(accepted.status).toBe(200)
+    expect(accepted.body.code).toBeUndefined()
+    expect(accepted.body.advice).toMatchObject({ reason: 'use-file-channel', message: expect.stringContaining('a2a_file_send { paths, team }') })
+    expect(accepted.body.advice?.message).toContain('a2a-net file send <path…> <team>')
+    expect(n.steered).toHaveLength(1)
+    expect((await post(n, 'no-hint', 'ordinary request', 'dsh', wait)).body.advice).toBeUndefined()
+  })
   it('admits 16 ordinary deliveries, rejects the 17th visibly BEFORE steer, and stores a failed query outcome', async () => {
     const n = await boot()
     for (let i = 0; i < 16; i++) expect((await post(n, 'rate-' + i)).body.code).toBeUndefined()
@@ -53,7 +63,12 @@ describe('gh#91 authenticated direct flood brake', () => {
   })
   it('17 declared parts and malformed part messages are rejected without steering', async () => {
     const n = await boot()
-    expect((await post(n, 'declared-over', part('t', 'f', 1, 17))).body.reason).toBe('file-parts-exceeded')
+    const over = (await post(n, 'declared-over', part('t', 'f', 1, 17))).body
+    expect(over).toMatchObject({ code: -32008, reason: 'file-parts-exceeded', advice: { reason: 'use-file-channel' } })
+    expect(over.error).toContain('file-parts-exceeded')
+    expect(over.error).toContain('use-file-channel')
+    expect(over.error).toContain('a2a_file_send { paths, team }')
+    expect(over.error).toContain('a2a-net file send <path…> <team>')
     expect((await post(n, 'malformed', '[JPFILE-PART v1] broken')).body.reason).toBe('file-part-invalid')
     expect(n.steered).toHaveLength(0)
   })
@@ -61,8 +76,12 @@ describe('gh#91 authenticated direct flood brake', () => {
     const n = await boot()
     await post(n, 'p0', part('transfer', 'first-file', 1, 1))
     expect((await post(n, 'duplicate-new-task', part('transfer', 'first-file', 1, 1))).body.reason).toBe('file-part-duplicate')
-    for (let i = 1; i < 16; i++) expect((await post(n, 'p' + i, part('transfer', 'file-' + i, 1, 1))).body.code).toBeUndefined()
-    expect((await post(n, 'p16', part('transfer', 'another-file', 1, 1))).body.reason).toBe('file-parts-exceeded')
+    for (let i = 1; i < 16; i++) {
+      const accepted = (await post(n, 'p' + i, part('transfer', 'file-' + i, 1, 1))).body
+      expect(accepted.code).toBeUndefined()
+      expect(accepted.advice?.reason).toBe('use-file-channel')
+    }
+    expect((await post(n, 'p16', part('transfer', 'another-file', 1, 1))).body).toMatchObject({ code: -32008, reason: 'file-parts-exceeded', advice: { reason: 'use-file-channel' } })
     expect(n.steered).toHaveLength(16)
   })
   it('the async path shares the same pre-steer brake', async () => {

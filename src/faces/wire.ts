@@ -28,6 +28,7 @@ import { parseReceipt, taskIdRefusal } from '../receipt.ts'
 import { buildAuthorization, claimCovers, refusalOf, type Admission, type AuthProof, type RemoteCliProof, type SettlementRefusal, type Settler } from '../task-auth.ts'
 import { isRootOriginUrl } from '../origin-claim.ts'
 import type { Config } from '../index.ts'
+import { withResponseFields } from '../response-fields.ts'
 import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from '../transport-caps.ts'
 
 /**
@@ -38,27 +39,7 @@ import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from '../transport-c
  * body is sent unchanged.
  */
 export function withSettlementField(res: ServerResponse, settlement: SettlementRefusal): void {
-  const writeHead = res.writeHead.bind(res) as (status: number, headers?: Record<string, string | number>) => ServerResponse
-  const end = res.end.bind(res) as (body?: string) => ServerResponse
-  let head: { status: number; headers: Record<string, string | number> } | undefined
-  ;(res as unknown as { writeHead: unknown }).writeHead = (status: number, headers?: Record<string, string | number>) => {
-    head = { status, headers: { ...(headers ?? {}) } }
-    return res
-  }
-  ;(res as unknown as { end: unknown }).end = (body?: string) => {
-    let out = body
-    if (typeof body === 'string') {
-      try {
-        const parsed: unknown = JSON.parse(body)
-        if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) out = JSON.stringify({ ...parsed, settlement })
-      } catch { /* not JSON: unchanged */ }
-    }
-    if (head !== undefined) {
-      if (out !== undefined && 'Content-Length' in head.headers) head.headers['Content-Length'] = Buffer.byteLength(out)
-      writeHead(head.status, head.headers)
-    }
-    return end(out)
-  }
+  withResponseFields(res, { settlement })
 }
 
 /** The origin of a card URL for the authorization record; the raw text, bounded, when it does not parse. */
