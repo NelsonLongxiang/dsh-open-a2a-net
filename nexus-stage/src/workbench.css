@@ -321,6 +321,8 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-item-sub{font:11px/1.35 ui-monospace,Consolas,monospace;color:var(--n-ink-muted);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wb-item.is-untitled .wb-item-label{color:var(--n-ink-muted);font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.wb-directory .wb-item.is-unreachable{opacity:.78}
+.wb-unreachable-note{font-size:11px;line-height:1.35;color:var(--n-danger);white-space:normal;overflow-wrap:anywhere}
 .wb-dot-log{color:var(--n-ink-muted)}
 
 /* ── 台账 (wb-ledger) ── */
