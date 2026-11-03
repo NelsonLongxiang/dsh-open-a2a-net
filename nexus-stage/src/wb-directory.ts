@@ -130,8 +130,15 @@ export function renderDirectory(box: HTMLElement, ctx: DirectoryContext): string
     const g = group('本机会话', sessions.length, cold.length > 0 ? `${live.length} 在线 · ${cold.length} 冷` : undefined)
     for (const s of [...live, ...cold]) {
       const isLive = s.live === true
+      const missing = s.nodePromptMissing === true
       const item = row(g, isLive ? 'wb-dot-live' : 'wb-dot-cold', isLive ? '●' : '○', displayName(s), isLive ? s.team : `冷 · ${s.team}`,
         () => ctx.openChat({ kind: 'session', id: s.id, title: displayName(s), sub: s.team, team: s.team, live: s.live }), s.id)
+      if (missing) {
+        item.classList.add('is-node-prompt-missing')
+        const note = el('span', 'wb-node-warning')
+        note.textContent = '本会话的组装不含节点段'
+        item.querySelector('.wb-item-text')?.appendChild(note)
+      }
       badges(item, s.canvasTeams)
     }
   }
@@ -153,6 +160,12 @@ export function renderDirectory(box: HTMLElement, ctx: DirectoryContext): string
     for (const r of remote) {
       const item = row(g, 'wb-dot-remote', '◇', displayName(r), r.origin !== undefined && r.origin !== '' ? r.origin : r.team,
         () => ctx.openChat({ kind: 'remote', team: r.team, title: displayName(r), sub: r.team, row: r }), r.team)
+      if (r.unreachable === true) {
+        item.classList.add('is-unreachable')
+        const note = el('span', 'wb-unreachable-note')
+        note.textContent = '对端未应答（显示的是最后已知状态）'
+        item.querySelector('.wb-item-text')?.appendChild(note)
+      }
       badges(item, r.canvasTeams)
     }
   }

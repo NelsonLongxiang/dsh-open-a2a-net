@@ -84,6 +84,7 @@ export interface ArchivedRow {
  *  canvasOrg) — the board renders REMOTE team frames from these rows. */
 export interface PeerOrgRow {
   readonly url: string
+  readonly unreachable?: boolean
   readonly org: ReadonlyArray<{ name: string; team: string; members: readonly string[] }>
 }
 
@@ -97,6 +98,8 @@ export interface SessionRow {
   readonly workspace?: string
   readonly joined?: boolean
   readonly live?: boolean
+  /** Final scoped assembly lacks at least one registered node section (#174). */
+  readonly nodePromptMissing?: boolean
   readonly teams?: readonly string[]
   /** Canvas teams this session is a member of (0.6.6 roster annotation). */
   readonly canvasTeams?: readonly string[]
@@ -107,6 +110,7 @@ export interface SessionRow {
 /** One remote team row from /state `remote`. */
 export interface RemoteRow {
   readonly team: string
+  readonly unreachable?: boolean
   readonly name?: string
   readonly origin?: string
   readonly via?: string
