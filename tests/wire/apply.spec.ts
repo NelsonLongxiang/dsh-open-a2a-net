@@ -1941,7 +1941,7 @@ describe('a2a session nodes (opt-in join)', () => {
       body: JSON.stringify({ team: 'dsh/00000000', message: 'route to nobody' }),
     })
     await expect(response.json()).resolves.toMatchObject({
-      error: 'No live DSH session node accepts team "dsh/00000000" and no cold joined session matches it.',
+      error: expect.stringContaining('No live DSH session node accepts team "dsh/00000000" and no cold joined session matches it.'),
     })
     expect(initiator.steer).not.toHaveBeenCalled()
     await ctx.fiber.dispose()
@@ -2256,6 +2256,7 @@ describe('a2a plugin module surface', () => {
       team: 'dsh',
       announce: false,
       isolated: false,
+      forwardDirect: false,
       agentName: 'DeepSeek Harness A2A node',
       peers: [],
       delegates: [],

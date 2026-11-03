@@ -43,6 +43,8 @@ import { ExposureStore } from './exposure-store.ts'
 import { applyOwnerSettings, type OwnerSettings } from './owner-settings.ts'
 import { CLI_HANDLE_RE, CliDepositStore } from './cli-deposit.ts'
 import { decideCliHome } from './cli-home.ts'
+import { outboundScope, type OutboundScopeRecords } from './outbound-scope.ts'
+import { createDirectForward } from './direct-forward.ts'
 import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
@@ -199,6 +201,8 @@ export interface Config {
    * (which is left untouched). Inbound faces keep answering. Default false.
    */
   readonly isolated: boolean
+  /** Forward online local CLI deliveries one hop after a local miss. Default off. */
+  readonly forwardDirect: boolean
   /** Human-facing name published on the agent card. */
   readonly agentName: string
   /**
@@ -439,6 +443,7 @@ export const Config: s<Config> = s.object({
   settlementAuth: s.union(['off', 'observe', 'enforce'] as const).default('observe'),
   announce: s.boolean().default(false),
   isolated: s.boolean().default(false),
+  forwardDirect: s.boolean().default(false),
   agentName: s.string().default('DeepSeek Harness A2A node'),
   peers: s.array(s.string()).default([]),
   delegates: s.array(s.object({ name: s.string(), url: s.string(), publicKey: s.string().default('') })).default([]),
@@ -981,7 +986,7 @@ export function apply(ctx: Context, config: Config): void {
     return id
   }
   const endRoute = (id: number): void => { inFlightRoutes.delete(id) }
-  const recordActivity = (dir: 'in' | 'out', team: string, peer: string, ok: boolean): void => {
+  const recordActivity = (dir: 'in' | 'out' | 'fwd', team: string, peer: string, ok: boolean): void => {
     recentActivity.push({ ts: Date.now(), dir, team, peer, ok })
     if (recentActivity.length > ACTIVITY_CAP) recentActivity.splice(0, recentActivity.length - ACTIVITY_CAP)
   }
@@ -2509,7 +2514,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param taskId - the correlation key the steered receipt header carries.
    */
   async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string): Promise<
-    { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean } | { ok: false; error: string }
+    { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean } | { ok: false; error: string; localMiss?: true }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
@@ -2552,7 +2557,7 @@ export function apply(ctx: Context, config: Config): void {
       }
       return { ok: false, error: 'No live DSH agent is available to accept this message.' }
     }
-    return { ok: false, error: wake.kind === 'no-face' ? noWakeFaceText(team) : wake.kind === 'archived' ? archivedColdMatchText(team) : noColdMatchText(team) }
+    return { ok: false, ...(wake.kind === 'no-match' ? { localMiss: true as const } : {}), error: wake.kind === 'no-face' ? noWakeFaceText(team) : wake.kind === 'archived' ? archivedColdMatchText(team) : noColdMatchText(team) }
   }
 
   /**
@@ -2927,6 +2932,7 @@ export function apply(ctx: Context, config: Config): void {
       idempotencyStore,
       verifyOriginClaim,
       remoteCliProof,
+      forwardDirect: request => forwardDirect(request),
       callerLinkedToThisHost, get ownCardUrl() { return ownCardUrl },
       recordActivity,
       bumpLegacyInbound: () => { legacyInboundCount += 1 },
@@ -3621,6 +3627,21 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
    * caller label — the "能发即能收" invariant: whatever it addresses can
    * answer it with one route.
    */
+  const forwardDirect = createDirectForward({
+    enabled: () => config.forwardDirect === true, isolated: () => config.isolated, deposited: handle => cliDeposits.get(handle) !== undefined,
+    scope: (handle, team) => config.teamScopeRouting ? outboundScope(senderScopeRecords, handle, handle, team) : Promise.resolve({ ok: true as const }),
+    candidates: async (team, failures, caller) => { const fetch = memoizedCardFetch(); return { urls: await directoryPeerCandidates(fetch, team, failures, { id: caller, handle: caller }), card: fetch } },
+    dispatch: (url, request, guard) => dispatchPeerCandidate(url, request.team, request.message, request.contextId, new AbortController().signal, request.caller, request.noWait, request.taskId, request.caller, guard),
+    ledger: taskLedger, activity: (team, peer, ok) => recordActivity('fwd', team, peer, ok),
+  })
+
+  const senderScopeRecords: OutboundScopeRecords = {
+    zone: config.team, id8, teamsOf: id => teamMemberships.teamsOf(id), membersOf: team => teamMemberships.membersOf(team),
+    canvasNames: () => canvasStore.list(), canvasMembers: name => canvasStore.membersOf(name), canvasTeam: canvasTeamOf,
+    peerOrgs: function* () { for (const hit of cardCache.values()) if (hit.card?.canvasOrg) yield hit.card.canvasOrg },
+    warmPeers: () => mapBounded(resolutionPeers(), SWEEP_CONCURRENCY, cachedCardFetch),
+  }
+
   async function routeTrunk(args: { team: string; message: string; context_id?: string; async?: boolean }, agent: Agent | undefined, signal: AbortSignal, hostCaller?: string): Promise<Record<string, JsonValue>> {
       // Fix ③ (S4 audit): host-side calls carry no agent identity — every one
       // lands in the team audit ring, and the owner can flip the gate from
@@ -3656,55 +3677,10 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           initiator = ctx.get('agents')?.requireInitiator() === agent
         } catch { /* no initiator in this fiber */ }
         if (!initiator) {
-          const callerTeams = teamMemberships.teamsOf(scopeCaller)
-          const team = String(args.team ?? '').trim()
-          const sharedRoster = callerTeams.some(roster => teamMemberships.membersOf(roster).some(id => `${config.team}/${id8(id)}` === team))
-          // gh#71: the SHARED-CANVAS basis and the warm cache's peer-org
-          // basis (an org entry naming BOTH the caller and the target
-          // handle) count as declared here too — the same link the
-          // admission core honors on the receiving side; without this the
-          // tool face refused routes the canvas itself had authorized.
-          // Canvas members mix two shapes: LOCAL sessions sit by session
-          // id, cross-host members by zone/id8 handle — match either.
           const callerHandle = `${config.team}/${id8(scopeCaller)}`
           scopedCanvasCaller = { id: scopeCaller, handle: callerHandle }
-          // gh#45 末修 (66abc2cf defect): a CANVAS GROUP NAME target
-          // (`<team>/canvas/<name>`) never matches member handles — a
-          // whole-group dispatch from a group member was refused. The
-          // group's own team handle (canvasTeamOf(name)) is the match
-          // (the caller sits in the very group being addressed).
-          const sharedCanvas = canvasStore.list().some(name => {
-            const members = canvasStore.membersOf(name)
-            const inGroup = members.includes(scopeCaller) || members.includes(callerHandle)
-            return inGroup ? members.includes(team) || canvasTeamOf(name) === team : false
-          })
-          // A direct group route must not require a prior directory call. Fetch
-          // only the same eligible peers as resolution; then apply the
-          // unchanged sender/receiver admission rules to their verified cards.
-          if (team.includes('/canvas/') && !sharedCanvas && !callerTeams.includes(team)) await mapBounded(resolutionPeers(), SWEEP_CONCURRENCY, cachedCardFetch)
-          let orgShared = false
-          for (const cached of cardCache.values()) {
-            const org = (cached.card as { canvasOrg?: Array<{ team?: unknown; members?: unknown }> } | undefined)?.canvasOrg
-            if (!Array.isArray(org)) continue
-            for (const e of org) {
-              if (typeof e.team !== 'string' || e.team === '' || !Array.isArray(e.members)) continue
-              const inOrg = e.members.includes(scopeCaller) || e.members.includes(callerHandle)
-              if (inOrg && (e.members.includes(team) || e.team === team)) { orgShared = true; break }
-            }
-            if (orgShared) break
-          }
-          if (callerTeams.length === 0 && !sharedRoster && !sharedCanvas && !orgShared) {
-            return localRoute({
-              ok: false,
-              error: `team-scoped routing is on and this session (${id8(scopeCaller)}) has declared no team membership — a teamless node has no network. Declare one with a2a_team_join (subject to the owner's teamJoinAllowlist)`,
-            })
-          }
-          if (!callerTeams.includes(team) && !sharedRoster && !sharedCanvas && !orgShared) {
-            return localRoute({
-              ok: false,
-              error: `team-scoped routing is on: routing to "${team}" requires declared membership. This session's teams: ${callerTeams.join(', ')}. a2a_team_join can declare it (subject to the owner's teamJoinAllowlist)`,
-            })
-          }
+          const scope = await outboundScope(senderScopeRecords, scopeCaller, callerHandle, String(args.team ?? '').trim())
+          if (!scope.ok) return localRoute(scope)
         }
       }
       let callerSession = resolveCallerLabel({
@@ -4130,9 +4106,9 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
    * exactly like same-host ones; older peers that ignore the flag simply
    * keep the blocking wait (graceful degradation).
    */
-  async function dispatchPeerCandidate(url: string, team: string, message: string, contextId: string | undefined, signal: AbortSignal, callerSession: string | undefined, asyncMode = false, taskIdFromCaller?: string, callbackAddress?: string): Promise<A2aRouteResult> {
+  async function dispatchPeerCandidate(url: string, team: string, message: string, contextId: string | undefined, signal: AbortSignal, callerSession: string | undefined, asyncMode = false, taskIdFromCaller?: string, callbackAddress?: string, guard?: string): Promise<A2aRouteResult> {
     const flight = beginRoute(team, url)
-    const result = await client.routeDirect(url, team, message, contextId, signal, callerSession, asyncMode, taskIdFromCaller, callbackAddress)
+    const result = await client.routeDirect(url, team, message, contextId, signal, callerSession, asyncMode, taskIdFromCaller, callbackAddress, guard)
     endRoute(flight)
     recordActivity('out', team, url, result.ok)
     // F1 half-transaction compensation (t-mth5gmxy): the client's 15s budget
@@ -4234,7 +4210,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     const cards = await mapBounded(peers, CANDIDATE_CONCURRENCY, async peer => ({ peer, card: await fetch(peer) }))
     // Check after fetching all cards: a seeded peer publishing the same id8
     // makes the caller handle ambiguous, so do not send a canvas payload.
-    const resolveLocal = scopedCanvasCaller === undefined ? undefined : localHandleResolver()
+    const sessions = scopedCanvasCaller === undefined ? undefined : localHandleResolver()
+    const resolveLocal = sessions === undefined ? undefined : (ref: string): string | undefined => cliDeposits.get(ref) !== undefined ? ref : sessions(ref)
     const resolutions = await mapBounded(peers, CANDIDATE_CONCURRENCY, async peer => ({ peer, outcome: await resolveZone(fetch, peer, team) }))
     if (canvasTargetAmbiguous(cards.map(entry => entry.card), team, scopedCanvasCaller, resolveLocal, resolutions.some(entry => entry.outcome.ok))) {
       failures.push(`ambiguous: team "${team}" has conflicting owners, identities, or a colliding caller; no payload sent`)

@@ -96,7 +96,7 @@ const ECHO_SUMMARY = '(settled by content echo)'
  * same-host seats could not be told apart.
  */
 export interface Sender {
-  readonly kind: 'session' | 'host' | 'bridge'
+  readonly kind: 'session' | 'host' | 'bridge' | 'cli'
   /**
    * A session's `<zone>/<id8>` node team, the host process label, or the
    * bridge submitter. Group senders by `kind:id`, never by `id` alone: a host
@@ -111,7 +111,7 @@ export interface Sender {
   readonly face?: string
 }
 
-const SENDER_KINDS: readonly string[] = ['session', 'host', 'bridge']
+const SENDER_KINDS: readonly string[] = ['session', 'host', 'bridge', 'cli']
 
 /** Longest sender id kept; anything longer is malformed, not truncated. */
 export const SENDER_ID_CAP = 256
@@ -161,8 +161,9 @@ function withAuth(raw: unknown, entry: { direction?: unknown; team?: unknown; pe
 }
 
 /** #139: the routing facts settlement reads, copied between a row and its archive entry. */
-function routingOf(row: Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo'>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo'> {
+function routingOf(row: Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded'>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded'> {
   return {
+    ...(row.forwarded === true ? { forwarded: true as const } : {}),
     ...(row.peerKey !== undefined ? { peerKey: row.peerKey } : {}),
     ...(row.peerHost !== undefined ? { peerHost: row.peerHost } : {}),
     ...(row.deliveredTo !== undefined ? { deliveredTo: row.deliveredTo } : {}),
@@ -171,6 +172,7 @@ function routingOf(row: Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo'>
 
 /** #139: what an outbound row is born with besides its sender. */
 export interface OutboundBirth {
+  readonly forwarded?: true
   /** The local-candidate admission (ingress local); kept only on a row whose peer is 'local'. */
   readonly auth?: TaskAuthorization
   readonly peerKey?: string
@@ -179,12 +181,13 @@ export interface OutboundBirth {
 }
 
 /** The facts of one outbound birth that fit the row (see {@link withRouting} for the same shape on restore). */
-function birthFacts(peer: string, birth: OutboundBirth | undefined): Pick<TaskRecord, 'auth' | 'peerKey' | 'peerHost' | 'deliveredTo'> {
+function birthFacts(peer: string, birth: OutboundBirth | undefined): Pick<TaskRecord, 'auth' | 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded'> {
   if (birth === undefined) return {}
   const fact = (v: string | undefined): v is string => v !== undefined && v !== '' && v.length <= ROUTING_FACT_CAP
   const remote = peer !== 'local' && !peer.startsWith('local:')
   return {
     ...(!remote && birth.auth !== undefined && birth.auth.ingress === 'local' ? { auth: birth.auth } : {}),
+    ...(remote && birth.forwarded === true ? { forwarded: true as const } : {}),
     ...(remote && fact(birth.peerKey) ? { peerKey: birth.peerKey } : {}),
     ...(remote && fact(birth.peerHost) ? { peerHost: birth.peerHost } : {}),
     ...(fact(birth.deliveredTo) ? { deliveredTo: birth.deliveredTo } : {}),
@@ -200,10 +203,11 @@ const ROUTING_FACT_CAP = 256
  * a remote outbound row; anything else is dropped (the row survives as one
  * born before the fields, judged by current membership and origin).
  */
-function withRouting(entry: Record<string, unknown>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo'> {
+function withRouting(entry: Record<string, unknown>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded'> {
   const fact = (v: unknown): v is string => typeof v === 'string' && v !== '' && v.length <= ROUTING_FACT_CAP
   const remoteOutbound = entry.direction === 'outbound' && typeof entry.peer === 'string' && entry.peer !== 'local' && !entry.peer.startsWith('local:')
   return {
+    ...(remoteOutbound && entry.forwarded === true ? { forwarded: true as const } : {}),
     ...(remoteOutbound && fact(entry.peerKey) ? { peerKey: entry.peerKey } : {}),
     ...(remoteOutbound && fact(entry.peerHost) ? { peerHost: entry.peerHost } : {}),
     ...(fact(entry.deliveredTo) ? { deliveredTo: entry.deliveredTo } : {}),
@@ -239,6 +243,8 @@ export interface TaskRecord {
   readonly brief?: string
   /** #114 S3: the real sender of an outbound row (absent on inbound rows and rows persisted before the field). */
   readonly sender?: Sender
+  /** Home host forwarded an online CLI request to a peer. */
+  readonly forwarded?: true
   /**
    * #114 S2: the immutable authorization the row was born with — an inbound
    * row's wire admission, or (#139) an outbound row's local-candidate
@@ -299,6 +305,8 @@ export interface ArchivedRecord {
   readonly receiptExpected?: false
   /** #114 S3: copied from the owed row (absent on inbound rows and rows archived before the field). */
   readonly sender?: Sender
+  /** Home host forwarded an online CLI request to a peer. */
+  readonly forwarded?: true
   /** #114 S2: carried over from the live row unchanged. */
   readonly auth?: TaskAuthorization
   /** #139: carried over from the live row unchanged (a late receipt is judged against them). */

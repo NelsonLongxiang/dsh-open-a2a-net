@@ -144,7 +144,7 @@ export interface CanvasTeamRow {
 /** One activity-ring entry. */
 export interface ActivityRow {
   readonly ts: number
-  readonly dir: 'in' | 'out'
+  readonly dir: 'in' | 'out' | 'fwd'
   readonly team: string
   readonly peer: string
   readonly ok: boolean
@@ -692,7 +692,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     for (const row of ring) {
       const line = el('div', 'wb-row')
       const dir = el('span', 'wb-row-dir')
-      dir.textContent = row.dir === 'out' ? '→' : '←'
+      dir.textContent = row.dir === 'fwd' ? '⇢' : row.dir === 'out' ? '→' : '←'
       if (row.ok !== true) dir.classList.add('is-fail')
       line.appendChild(dir)
       teamCell(line, last, row.team)

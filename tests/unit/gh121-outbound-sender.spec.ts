@@ -33,6 +33,17 @@ describe('#121 sender on outbound rows', () => {
     expect(byId.get('direct-c')).not.toHaveProperty('sender')
   })
 
+  it('a forwarded CLI row keeps its sender and routing facts through restore and archive', () => {
+    const path = ledgerPath()
+    const ledger = new TaskLedger(path)
+    const sender = { kind: 'cli' as const, id: 'scout/0123456789abcdef' }
+    ledger.track('direct-fwd', 'remote/01234567', 'https://peer.test', 'ctx', 'brief', sender, { forwarded: true, peerKey: 'key', peerHost: 'host', deliveredTo: 'remote/01234567' })
+    const restored = new TaskLedger(path)
+    expect(restored.list()[0]).toMatchObject({ forwarded: true, sender, direction: 'outbound', peerKey: 'key', peerHost: 'host' })
+    restored.resolveFromMessage('[A2A receipt] task direct-fwd done')
+    expect(new TaskLedger(path).archive()[0]).toMatchObject({ forwarded: true, sender, direction: 'outbound' })
+  })
+
   it('inbound rows carry no sender (their originator is the caller, not this host)', () => {
     const ledger = new TaskLedger('')
     ledger.trackInbound('direct-in', 'dsh/1a2b3c4d', 'dsh/99999999')
@@ -148,12 +159,12 @@ describe('#121 restore allowlist', () => {
 })
 
 describe('#121 parseSender', () => {
-  it('accepts exactly the three kinds with a bounded non-empty id', () => {
+  it('accepts the declared sender kinds including a forwarded local CLI with a bounded non-empty id', () => {
     expect(parseSender({ kind: 'session', id: 'dsh/1a2b3c4d' })).toEqual(SEAT)
     expect(parseSender({ kind: 'host', id: 'dsh' })).toEqual({ kind: 'host', id: 'dsh' })
     expect(parseSender({ kind: 'bridge', id: 'x'.repeat(SENDER_ID_CAP) })).toEqual({ kind: 'bridge', id: 'x'.repeat(SENDER_ID_CAP) })
     expect(parseSender(undefined)).toBeUndefined()
-    expect(parseSender({ kind: 'cli', id: 'scout/0123456789abcdef' })).toBeUndefined()
+    expect(parseSender({ kind: 'cli', id: 'scout/0123456789abcdef' })).toEqual({ kind: 'cli', id: 'scout/0123456789abcdef' })
     expect(parseSender({ kind: 'host', id: 'dsh-host', face: 'dsh/aaaabbbb' })).toEqual({ kind: 'host', id: 'dsh-host', face: 'dsh/aaaabbbb' })
   })
 
