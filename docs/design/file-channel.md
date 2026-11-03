@@ -49,7 +49,7 @@
 
 5. 工具返回 `{ ok, task_id, sha256, size, expiresAt }`。
 
-同一个 sha256 发给同一个目标，只续期授权，不再存一份。
+同一个 sha256 发给同一个目标，只续期授权，不再存一份。发给不同的目标时，每个目标各有一条授权，`blob-grants.json` 里按 (sha256, to) 并存，各自过期，文件只存一份（设计评审 PASS 附注 b）。只要还有一条授权有效，这个 blob 就不会被清掉。
 
 **容量**：全宿主最多 1 GiB 或 256 个 blob。满了先清已过期的；还不够就拒绝新的暂存，返回可见错误，不挤掉还没过期的授权。
 
@@ -124,7 +124,7 @@
 | 切片 | 内容 | 档 | 判据（反例） |
 |---|---|---|---|
 | F1 | blob 存储加授权（`src/blob-store.ts`）、`GET /a2a/blob/<sha256>` 准入、容量 | 高 | 未授权、过期、非 `to` 的调用方都拿不到；存储满时可见拒绝；没有 OriginClaim 证明的请求被拒 |
-| F2 | `a2a_file_send` 和 `a2a_file_fetch` 两个工具、落盘清洗、sha256 校验、N4 打标 | 高 | 篡改字节时校验失败且不落盘；含 `../` 的名字落不到 `a2a-inbox/` 外面；isolated 时拒绝拉取；拉取后会话已污染 |
+| F2 | `a2a_file_send`（接受一个或多个 path，多个文件合成一条引用消息，每行一个引用；设计评审 PASS 附注 a）和 `a2a_file_fetch` 两个工具、落盘清洗、sha256 校验、N4 打标 | 高 | 篡改字节时校验失败且不落盘；含 `../` 的名字落不到 `a2a-inbox/` 外面；isolated 时拒绝拉取；拉取后会话已污染 |
 | F3 | CLI 的 `file send` / `file fetch`、控制面 `POST /__dsh_a2a/blob` | 高 | 不带 apiKey 的暂存被拒；CLI 拉取的校验规则与宿主一致 |
 | F4 | FloodGuard 的 `use-file-channel` 提示，skill 文档更新 | 中 | JPFILE-PART 拒收时带新原因码和用法 |
 

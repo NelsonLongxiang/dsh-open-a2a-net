@@ -43,6 +43,24 @@ describe('BlobStore staging and grants', () => {
     s.stage(bytes('x'), { name: 'a', to: 't2', by: 's' })
     expect(s.list().map(g => g.to).sort()).toEqual(['t1', 't2'])
     expect(readdirSync(join(root, 'blobs'))).toHaveLength(1)
+
+  })
+
+  it('grants for different targets coexist and expire on their own; the blob stays while any one is live (design §3.1, review note b)', () => {
+    const root = home()
+    const c = clock()
+    const s = new BlobStore(root, c.now)
+    s.stage(bytes('同一份'), { name: 'a', to: 't1', by: 's' })
+    c.tick(60 * 60 * 1000)
+    s.stage(bytes('同一份'), { name: 'a', to: 't2', by: 's' })
+    c.tick(BLOB_GRANT_TTL_MS - 60 * 60 * 1000) // t1 just expired, t2 has an hour left
+    expect(s.grantFor(sha('同一份'), ['t1'])).toBeUndefined()
+    const live = s.grantFor(sha('同一份'), ['t2'])
+    expect(live).toBeDefined()
+    // A sweep (any new stage) must keep the blob t2 still names.
+    expect(s.stage(bytes('别的'), { name: 'b', to: 't3', by: 's' }).ok).toBe(true)
+    expect(new TextDecoder().decode(s.read(live!))).toBe('同一份')
+    expect(s.list().map(g => g.to).sort()).toEqual(['t2', 't3'])
   })
 
   it('refuses a file over the cap, and a stage without a target or sender', () => {
