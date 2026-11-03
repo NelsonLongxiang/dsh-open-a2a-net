@@ -4,7 +4,7 @@
   "scope": "Committed source only; no deployment inference",
   "sources": {
     "src/index.ts": "d34ccb813dfb8164a3e565b2ad39912024a32e054f40a8297dfe41e5f405eab0",
-    "src/faces/admin.ts": "07c2848085d0867819d05b9ed33f7a3c901cc9e80f86105900c082d790cd8420",
+    "src/faces/admin.ts": "f05f24d038d135fbfe2f9e6e4ff942f1e77a5061995fefa346e01266eaf5d954",
     "src/canvas-store.ts": "c612b9b8e03377fec827978addaabf4ce0762a52769bfa15263bd873fbfdedde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "a8e203feb252f0c5d21f98be6ecc45c84d33f867726331a64823f40d68578a2e",
@@ -15,7 +15,7 @@
     "nexus-stage/src/planning-card-text.ts": "31403071229c5dde4af545ded1a8eaebb1c329a52df3169fae868a57119225d9",
     "nexus-stage/src/planning-fit.ts": "cbda0255062632bd412deb2131c7a01e1e16ab9c72d2a70a32c362e108f8c07a",
     "src/task-ledger.ts": "a0f211ad202f5a2aa5e1e54e38186e52d455d7aba5fdfe992577d878b3cf1081",
-    "nexus-stage/src/world.ts": "1c6308555b65e8316cda38cf97dc43120b979be3e30792a12b893faf845cb934",
+    "nexus-stage/src/world.ts": "e9d759ed5bb5272f5798260450927e453f00fe442c8006e7037d2eb2db0d0f81",
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
@@ -134,13 +134,13 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:522",
+      "ref": "src/faces/admin.ts:530",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:170",
+      "ref": "src/faces/admin.ts:171",
       "expect": "path: '/__dsh_a2a/state',"
     },
     {
@@ -188,7 +188,7 @@
     {
       "page": "p1-arch",
       "cell": "d7",
-      "ref": "src/faces/admin.ts:306",
+      "ref": "src/faces/admin.ts:314",
       "expect": "activity: recentActivity.slice(),"
     },
     {
@@ -296,7 +296,7 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/admin.ts:119",
+      "ref": "src/faces/admin.ts:120",
       "expect": "export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void {"
     },
     {
@@ -314,7 +314,7 @@
     {
       "page": "p1-arch",
       "cell": "e7",
-      "ref": "nexus-stage/src/world.ts:288",
+      "ref": "nexus-stage/src/world.ts:292",
       "expect": "applyFrameDrag(snap: FrameDragSnapshot, dx: number, dy: number): void {"
     },
     {

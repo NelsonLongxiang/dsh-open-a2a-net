@@ -41,6 +41,7 @@ import { ARCHIVE_CAP, archivedEndedBy, type TaskLedger } from '../task-ledger.ts
 import type { TeamMembershipStore } from '../team-store.ts'
 import { MAX_LAYOUT_BODY_BYTES } from '../transport-caps.ts'
 import type { OriginClaimTarget } from '../origin-claim.ts'
+import { queuedFor } from '../queue-guard.ts'
 
 /** Remote-team rows cached for the state face (see refreshRemoteRows). */
 export type RemoteRowsCache = { at: number; rows: { team: string; name: string; origin?: string; via?: string; workspace?: string; legacy?: boolean; unreachable?: boolean; teams?: readonly string[] }[] } | undefined
@@ -187,6 +188,9 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
         // or not. (The prune above already took their join intents; this
         // covers never-joined live roots and any intent a restart left.)
         const isArchived = archivedSessionFilter()
+        const liveStatusOf = (agent: { status?: unknown }): 'running' | 'idle' | undefined => {
+          try { return agent.status === 'running' ? 'running' : agent.status === 'idle' ? 'idle' : undefined } catch { return undefined }
+        }
         const tFacts0 = Date.now()
         const sessions: Array<Record<string, unknown>> = [...liveRoots.values()]
           .filter(agent => isArchived?.(String(agent.id)) !== true)
@@ -201,6 +205,10 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               ...nodeMetadataOf(agent),
               joined: sessionNodes.has(String(agent.id)),
               live: true,
+              // Owner 2026-11-03: whether the session is mid-turn right now, and how many
+              // receipt-owing tasks wait on it (the gh#224 queue count) — the board's 工作中/空闲.
+              status: liveStatusOf(agent),
+              queued: queuedFor(taskLedger.list(), sessionTeamOf(agent)),
               teams: [...teamMemberships.teamsOf(String(agent.id))],
               // #19 D3: the session's exposure tier (linked floor /
               // fleet opt-up) — readable on the state face.
