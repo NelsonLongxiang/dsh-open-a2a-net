@@ -184,11 +184,11 @@ describe('mesh anomalies — receipt-ledger honesty under odd settlement shapes'
   })
 
   // Scope-off: This fixture isolates transport and ledger anomalies without operator team membership.
-  it('a reply that merely echoes a pending task id settles the debt as a marked content echo (F5 fallback)', async () => {
-    // The captured "settled by content echo" form: the target demonstrably
-    // answered (its reply names the task id) but the formal receipt envelope
-    // never rode the reply. F5 is the INTENTIONAL fallback — this pins it as
-    // contract so it cannot silently regress into ghost debt.
+  it('a reply that merely echoes a pending task id from OFF the authorization chain leaves the debt owed (#125: echoes judged as enforce)', async () => {
+    // F5's content-echo fallback stays, but an echo is weak evidence: since #125 it settles only from an
+    // on-chain settler, even under observe (tests/mesh/gh125-echo-enforce.spec.ts covers the on-chain
+    // echo that still settles). This unsigned post from a free-form label is exactly the off-chain shape
+    // that settled two production rows on 2026-11-03.
     const { alpha, cargo } = await owedPair()
     try {
       const delivered = await alpha.ctx.tools.get('a2a_route')?.execute({ team: 'cargo', message: 'echo me', async: true }, runContext(alpha.agents.agent)) as { ok: boolean; task_id: string }
@@ -196,13 +196,14 @@ describe('mesh anomalies — receipt-ledger honesty under odd settlement shapes'
       const owed = await stateTasks(alpha)
       expect(owed.some(row => row.taskId === delivered.task_id && row.receiptExpected === true)).toBe(true)
 
-      // A plain inbound message (no [A2A receipt] header) that names the
-      // pending task id: the echo settles, with the audit marker.
+      // A plain inbound message (no [A2A receipt] header) that names the pending task id, from a
+      // settler off the chain: the row stays owed and the refusal is recorded as enforced.
       await postJson(alpha.baseUrl, '/a2a/direct', { team: 'alpha', message: `worked on task ${String(delivered.task_id)} and the result follows`, caller_session: 'mesh-anom-f' })
-      const settled = await ledger(alpha)
-      expect(settled.tasks.some(row => row.taskId === delivered.task_id)).toBe(false)
-      const archived = settled.archive.find(row => row.taskId === delivered.task_id)
-      expect(archived?.summary).toBe('(settled by content echo)')
+      const after = await ledger(alpha)
+      expect(after.tasks.some(row => row.taskId === delivered.task_id)).toBe(true)
+      expect(after.archive.some(row => row.taskId === delivered.task_id)).toBe(false)
+      const refusals = ((await globalThis.fetch(`${alpha.baseUrl}/__dsh_a2a/state`).then(r => r.json())) as { settlement: { refusals: Array<{ taskId: string; reason: string; enforced: boolean }> } }).settlement.refusals
+      expect(refusals.find(r => r.taskId === delivered.task_id)).toMatchObject({ reason: 'echo-off-chain', enforced: true })
     } finally {
       await alpha.dispose()
       await cargo.dispose()

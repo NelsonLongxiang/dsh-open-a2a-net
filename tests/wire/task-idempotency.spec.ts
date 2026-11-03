@@ -713,7 +713,10 @@ describe('settlement integrity — debt gate and echo settle (F5 defect card)', 
     }
   })
 
-  it('a content reply echoing the task id settles the pending row without the receipt envelope', async () => {
+  it('#125: a content reply from the CALLER echoing its own task id no longer settles the row this host owes it', async () => {
+    // F5's content echo is weak evidence and, since #125, is judged as enforce even under observe: the
+    // creditor quoting its own task id is not the target answering. (The on-chain echo that still
+    // settles is pinned in tests/mesh/gh125-echo-enforce.spec.ts.)
     const { port, dispose } = await mount({ sessionNodes: true })
     try {
       const direct = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
@@ -730,14 +733,14 @@ describe('settlement integrity — debt gate and echo settle (F5 defect card)', 
         body: JSON.stringify({ team: 'dsh', message: '讨论回复（基于 task echo-task）：结论如下……', caller_session: 'idem-runner', wait: false }),
       })
       expect((await reply.json() as { delivered?: boolean }).delivered).toBe(true)
-      let pending: unknown[] | undefined
+      let state: { tasks?: Array<{ taskId?: string }>; settlement?: { refusals?: Array<{ taskId: string; reason: string; enforced: boolean }> } } = {}
       for (let attempt = 0; attempt < 20; attempt += 1) {
-        const state = await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`).then(r => r.json() as Promise<{ tasks?: Array<{ taskId?: string }> }>)
-        pending = (state.tasks ?? []).filter(task => task.taskId === 'echo-task')
-        if (pending !== undefined && pending.length === 0) break
+        state = await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`).then(r => r.json() as Promise<typeof state>)
+        if ((state.settlement?.refusals ?? []).some(r => r.taskId === 'echo-task')) break
         await new Promise(resolve => setTimeout(resolve, 25))
       }
-      expect(pending).toEqual([])
+      expect((state.tasks ?? []).filter(task => task.taskId === 'echo-task')).toHaveLength(1)
+      expect((state.settlement?.refusals ?? []).find(r => r.taskId === 'echo-task')).toMatchObject({ reason: 'echo-off-chain', enforced: true })
     } finally {
       await dispose()
     }
