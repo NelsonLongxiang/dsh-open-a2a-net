@@ -11,6 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { generateKeyPairSync } from 'node:crypto'
 import * as net from 'node:net'
 import { bootNode, craftCard, ghostNode, preseedNodeKey, postJson, reservePort, runContext, steerText, tmpHome, type MeshNode } from './harness.ts'
+// These legacy wire/discovery/fault cases test their named seam, not team admission; production-scope tests stay on the harness default.
+const LEGACY_OPEN_SCOPE = { teamScopeRouting: false, teamScopeInfo: false } as const
 
 beforeEach(() => {
   vi.stubGlobal('WebSocket', function throwOnSocket() { throw new Error('the decentralized client opens no socket') })
@@ -26,13 +28,14 @@ async function probe(node: MeshNode): Promise<{ url: string; reachable: boolean;
 }
 
 describe('mesh faults — card validity across machines', () => {
+  // Scope-off: This fixture isolates signed-card or network faults without operator team membership.
   it('a genuinely signed but expired card (clock-skew surrogate) is rejected on the wire with the expired reason', async () => {
     // The signer's clock was behind: the signature is valid, the expiry is
     // already in the verifier's past. This is the cross-machine NTP-drift
     // failure mode a same-process test cannot reproduce.
     const { card } = craftCard({ name: 'skewed', session: 'ghost-skewed', team: 'skewed', expiresAt: Date.now() - 1_000 })
     const ghost = await ghostNode(card)
-    const alpha = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', peers: [ghost.baseUrl] })
+    const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-alpha', team: 'alpha', peers: [ghost.baseUrl] })
     try {
       const listed = await alpha.ctx.tools.get('a2a_teams')?.execute({}, runContext()) as { ok: boolean; teams: { team: string }[] }
       expect(listed.teams.some(row => row.team === 'skewed')).toBe(false)
@@ -46,12 +49,13 @@ describe('mesh faults — card validity across machines', () => {
     }
   })
 
+  // Scope-off: This fixture isolates signed-card or network faults without operator team membership.
   it('a signed-then-tampered card is rejected with the bad-signature reason', async () => {
     const { card } = craftCard({ name: 'honest', session: 'ghost-tamper', team: 'honest', expiresAt: Date.now() + 60_000 })
     // A middlebox flips one committed field after signing.
     const tampered = { ...card, name: 'honest-renamed' }
     const ghost = await ghostNode(tampered)
-    const alpha = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', peers: [ghost.baseUrl] })
+    const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-alpha', team: 'alpha', peers: [ghost.baseUrl] })
     try {
       const listed = await alpha.ctx.tools.get('a2a_teams')?.execute({}, runContext()) as { ok: boolean; teams: { team: string }[] }
       expect(listed.teams.some(row => row.team === 'honest-renamed')).toBe(false)
@@ -68,12 +72,13 @@ describe('mesh faults — card validity across machines', () => {
 })
 
 describe('mesh faults — partition, restart, and recovery', () => {
+  // Scope-off: This fixture isolates signed-card or network faults without operator team membership.
   it('killing the target node fails the route closed, and a same-port restart recovers discovery and routing', async () => {
     const portA = await reservePort()
     const portC = await reservePort()
     const cargoHome = tmpHome()
-    const cargo = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo', home: cargoHome, port: portC, peers: [`http://127.0.0.1:${String(portA)}`] })
-    const alpha = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', port: portA, peers: [`http://127.0.0.1:${String(portC)}`] })
+    const cargo = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'cargo', session: 'mesh-cargo', team: 'cargo', home: cargoHome, port: portC, peers: [`http://127.0.0.1:${String(portA)}`] })
+    const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-alpha', team: 'alpha', port: portA, peers: [`http://127.0.0.1:${String(portC)}`] })
     try {
       // Baseline green before the fault.
       const first = await alpha.ctx.tools.get('a2a_route')?.execute({ team: 'cargo', message: 'before fault' }, runContext()) as { ok: boolean }
@@ -98,7 +103,7 @@ describe('mesh faults — partition, restart, and recovery', () => {
       // The machine reboots on the same port (home preserved: same node key,
       // same identity) — discovery must recover once the negative cache
       // window (40ms in the mesh) has passed.
-      const revived = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo', home: cargoHome, port: portC, peers: [`http://127.0.0.1:${String(portA)}`] })
+      const revived = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'cargo', session: 'mesh-cargo', team: 'cargo', home: cargoHome, port: portC, peers: [`http://127.0.0.1:${String(portA)}`] })
       try {
         await vi.waitFor(async () => {
           const rows = await probe(alpha)
@@ -115,11 +120,12 @@ describe('mesh faults — partition, restart, and recovery', () => {
     }
   })
 
+  // Scope-off: This fixture isolates signed-card or network faults without operator team membership.
   it('one node under two loopback spellings collapses to a single tracked peer (learned alias, not seed)', async () => {
     const portC = await reservePort()
     const ipSpelling = `http://127.0.0.1:${String(portC)}`
     // cargo listens on all interfaces so both loopback spellings reach it.
-    const cargo = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo', host: '0.0.0.0', port: portC })
+    const cargo = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'cargo', session: 'mesh-cargo', team: 'cargo', host: '0.0.0.0', port: portC })
     // gh#3 (macOS 26.5 arm64): the whole-127/8 loopback assumption is
     // Linux/Windows — macOS lo0 carries only 127.0.0.1, so a 127.0.0.2
     // connect hangs the test. Detect the second loopback address at
@@ -139,8 +145,8 @@ describe('mesh faults — partition, restart, and recovery', () => {
     // relay knows cargo under the SECOND spelling only; alpha seeds the first
     // spelling plus relay — the alias arrives as a referral (non-seed), which
     // is the only shape alias collapse may drop.
-    const relay = await bootNode({ name: 'relay', session: 'mesh-relay', team: 'relay', peers: [aliasSpelling] })
-    const alpha = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', peers: [ipSpelling, relay.baseUrl] })
+    const relay = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'relay', session: 'mesh-relay', team: 'relay', peers: [aliasSpelling] })
+    const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-alpha', team: 'alpha', peers: [ipSpelling, relay.baseUrl] })
     try {
       // First sweep fetches both seeds; relay's card offers the alias
       // spelling. The search pass fetches it, sees the same signed session,
@@ -161,21 +167,22 @@ describe('mesh faults — partition, restart, and recovery', () => {
 })
 
 describe('mesh faults — zone delegation across real nodes', () => {
+  // Scope-off: This fixture isolates signed-card or network faults without operator team membership.
   it('a delegated team name resolves through the delegating node to its bound target', async () => {
     // cargo's node key is preseeded so alpha's delegate record can bind the
     // exact public key before either node boots.
     const cargoHome = tmpHome()
     const cargoPub = preseedNodeKey(cargoHome)
     const portC = await reservePort()
-    const cargo = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo', home: cargoHome, port: portC })
+    const cargo = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'cargo', session: 'mesh-cargo', team: 'cargo', home: cargoHome, port: portC })
     // alpha is the delegating zone: its signed card claims the name 'cargo'
     // resolves at cargo's URL under cargo's bound key.
-    const alpha = await bootNode({
+    const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE,
       name: 'alpha', session: 'mesh-alpha', team: 'alpha',
       delegates: [{ name: 'cargo', url: `http://127.0.0.1:${String(portC)}`, publicKey: cargoPub }],
     })
     // delta sees ONLY alpha; the name must resolve through the delegation.
-    const delta = await bootNode({ name: 'delta', session: 'mesh-delta', team: 'delta', peers: [alpha.baseUrl] })
+    const delta = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'delta', session: 'mesh-delta', team: 'delta', peers: [alpha.baseUrl] })
     try {
       const result = await delta.ctx.tools.get('a2a_route')?.execute({ team: 'cargo', message: 'delegated hello' }, runContext()) as { ok: boolean; reply?: string }
       expect(result.ok).toBe(true)
@@ -189,16 +196,17 @@ describe('mesh faults — zone delegation across real nodes', () => {
     }
   })
 
+  // Scope-off: This fixture isolates signed-card or network faults without operator team membership.
   it('a delegation bound to the wrong key fails closed with the key-mismatch reason surfaced', async () => {
     const { publicKey: wrongKey } = generateKeyPairSync('ed25519')
     const wrongPublic = wrongKey.export({ format: 'der', type: 'spki' }).toString('base64')
-    const cargo = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo' })
+    const cargo = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'cargo', session: 'mesh-cargo', team: 'cargo' })
     // alpha binds a random key: cargo's served card can never match it.
-    const alpha = await bootNode({
+    const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE,
       name: 'alpha', session: 'mesh-alpha', team: 'alpha',
       delegates: [{ name: 'cargo', url: cargo.baseUrl, publicKey: wrongPublic }],
     })
-    const delta = await bootNode({ name: 'delta', session: 'mesh-delta', team: 'delta', peers: [alpha.baseUrl] })
+    const delta = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'delta', session: 'mesh-delta', team: 'delta', peers: [alpha.baseUrl] })
     try {
       const result = await delta.ctx.tools.get('a2a_route')?.execute({ team: 'cargo', message: 'must not resolve' }, runContext()) as { ok: boolean; error?: string }
       expect(result.ok).toBe(false)
@@ -215,10 +223,11 @@ describe('mesh faults — zone delegation across real nodes', () => {
 })
 
 describe('mesh faults — connection-layer boundary', () => {
+  // Scope-off: This fixture isolates signed-card or network faults without operator team membership.
   it('referralLearning: false freezes the seed set: gossip offers are neither learned nor offered', async () => {
-    const cargo = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo' })
-    const relay = await bootNode({ name: 'relay', session: 'mesh-relay', team: 'relay', peers: [cargo.baseUrl] })
-    const alpha = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', referralLearning: false, peers: [relay.baseUrl] })
+    const cargo = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'cargo', session: 'mesh-cargo', team: 'cargo' })
+    const relay = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'relay', session: 'mesh-relay', team: 'relay', peers: [cargo.baseUrl] })
+    const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-alpha', team: 'alpha', referralLearning: false, peers: [relay.baseUrl] })
     try {
       // The search pass would chase any offered referral hop; the freeze
       // means cargo is never offered, so the hunt cannot reach it.

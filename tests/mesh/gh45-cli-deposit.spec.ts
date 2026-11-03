@@ -10,6 +10,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { generateKeyPairSync } from 'node:crypto'
 import { bootNode, reservePort } from './harness.ts'
+// These legacy wire/discovery/fault cases test their named seam, not team admission; production-scope tests stay on the harness default.
+const LEGACY_OPEN_SCOPE = { teamScopeRouting: false, teamScopeInfo: false } as const
 import { signCard } from '../../src/card.ts'
 
 const { privateKey } = generateKeyPairSync('ed25519')
@@ -33,11 +35,12 @@ function cliCard(): string {
 }
 
 describe('gh#45 CLI household registration (end-to-end)', () => {
+  // Scope-off: CLI mailbox and signed-card checks have no operator roster link.
   it('deposit → card face serves the signed card → sessionTeams row → mailbox delivery', async () => {
     const portA = await reservePort()
     const portB = await reservePort()
-    const a = await bootNode({ name: 'A', session: 'mesh-gh45-a', team: 'dsh', sessionNodes: true, port: portA, peers: [`http://127.0.0.1:${String(portB)}`] })
-    const b = await bootNode({ name: 'B', session: 'mesh-gh45-b', team: 'dsh', sessionNodes: true, port: portB, peers: [`http://127.0.0.1:${String(portA)}`] })
+    const a = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'A', session: 'mesh-gh45-a', team: 'dsh', sessionNodes: true, port: portA, peers: [`http://127.0.0.1:${String(portB)}`] })
+    const b = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'B', session: 'mesh-gh45-b', team: 'dsh', sessionNodes: true, port: portB, peers: [`http://127.0.0.1:${String(portA)}`] })
     try {
       // ① deposit at the home host A.
       const dep = await post(`${a.baseUrl}/__dsh_a2a/cli-deposit`, { action: 'publish', card: cliCard() })

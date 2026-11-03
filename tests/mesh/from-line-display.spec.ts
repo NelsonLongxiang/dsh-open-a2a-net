@@ -17,6 +17,8 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, type Config } from '../../src/index.ts'
 import { bootNode, reservePort, runContext, steerText, type MeshNode } from './harness.ts'
+// These legacy wire/discovery/fault cases test their named seam, not team admission; production-scope tests stay on the harness default.
+const LEGACY_OPEN_SCOPE = { teamScopeRouting: false, teamScopeInfo: false } as const
 
 class FakeAgentsService extends Service {
   map = new Map<string, Agent>()
@@ -137,11 +139,12 @@ describe('from-line authenticated identity headers', () => {
     }
   }, 20_000)
 
+  // Scope-off: Unsigned display-header provenance is isolated from operator team admission.
   it('CROSS-HOST: a poisoned sessionTeams display name never enters the proof header', async () => {
     const alphaPort = await reservePort()
     const cargoPort = await reservePort()
-    const alpha = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', sessionNodes: true, port: alphaPort, peers: [`http://127.0.0.1:${String(cargoPort)}`] })
-    const cargo = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo', sessionNodes: true, port: cargoPort, peers: [`http://127.0.0.1:${String(alphaPort)}`] })
+    const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-alpha', team: 'alpha', sessionNodes: true, port: alphaPort, peers: [`http://127.0.0.1:${String(cargoPort)}`] })
+    const cargo = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'cargo', session: 'mesh-cargo', team: 'cargo', sessionNodes: true, port: cargoPort, peers: [`http://127.0.0.1:${String(alphaPort)}`] })
     try {
       // Both sessions join and publish zone/id8 handles.
       for (const node of [alpha, cargo]) {
@@ -171,8 +174,9 @@ describe('from-line authenticated identity headers', () => {
     }
   }, 30_000)
 
+  // Scope-off: Unsigned display-header provenance is isolated from operator team admission.
   it('COLD CACHE / UNKNOWN: no resolution keeps the from line bare — never a stall, never a false name', async () => {
-    const target = await bootNode({ name: 'coldt', session: 'mesh-coldt', team: 'cold-zone', sessionNodes: true, teamScopeRouting: false })
+    const target = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'coldt', session: 'mesh-coldt', team: 'cold-zone', sessionNodes: true, teamScopeRouting: false })
     try {
       // An envelope-less legacy delivery with a foreign caller label: no
       // local match, no warm card for its zone → the from line stays bare.

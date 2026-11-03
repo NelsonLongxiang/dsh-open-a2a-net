@@ -14,6 +14,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServer } from 'node:http'
 import { bootNode, craftCard, ghostNode, postJson, reservePort, runContext, type MeshNode } from './harness.ts'
+// These legacy wire/discovery/fault cases test their named seam, not team admission; production-scope tests stay on the harness default.
+const LEGACY_OPEN_SCOPE = { teamScopeRouting: false, teamScopeInfo: false } as const
 
 beforeEach(() => {
   vi.stubGlobal('WebSocket', function throwOnSocket() { throw new Error('the decentralized client opens no socket') })
@@ -56,8 +58,8 @@ async function hangingNode(): Promise<{ baseUrl: string; close(): Promise<void> 
 /** Boot the canonical receipt-owed pair: alpha (joined, routable label) → cargo. */
 async function owedPair(): Promise<{ alpha: MeshNode; cargo: MeshNode }> {
   const portA = await reservePort()
-  const cargo = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo', sessionNodes: true, peers: [`http://127.0.0.1:${String(portA)}`] })
-  const alpha = await bootNode({ name: 'alpha', session: 'mesh-alpha/1a2b3c4d', team: 'alpha', sessionNodes: true, port: portA, peers: [cargo.baseUrl] })
+  const cargo = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'cargo', session: 'mesh-cargo', team: 'cargo', sessionNodes: true, peers: [`http://127.0.0.1:${String(portA)}`] })
+  const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-alpha/1a2b3c4d', team: 'alpha', sessionNodes: true, port: portA, peers: [cargo.baseUrl] })
   const selfJoin = await postJson(alpha.baseUrl, '/__dsh_a2a/join', { id: 'session-0123456789abcdef' })
   expect(selfJoin.status).toBe(200)
   return { alpha, cargo }
@@ -67,11 +69,12 @@ describe('mesh anomalies — hung peers and mixed-fleet diagnosis', () => {
   // The one deliberately slow test in the mesh layer: proving a wedged peer
   // cannot hold the socket open forever means waiting out the real 15s HTTP
   // budget (a2a-client HTTP_TIMEOUT_MS). 25s wall keeps CI safe under load.
+  // Scope-off: This fixture isolates transport and ledger anomalies without operator team membership.
   it('a peer that accepts the connection but never answers is cut by the HTTP budget and reported unreachable with the abort detail', async () => {
     // Probing a single target (the fleet stays clean) is exactly the ops
     // move when one endpoint is suspect: one verified-card fetch, one row.
     const hung = await hangingNode()
-    const alpha = await bootNode({ name: 'alpha', session: 'mesh-anom-a', team: 'alpha' })
+    const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-anom-a', team: 'alpha' })
     try {
       const result = await alpha.ctx.tools.get('a2a_probe')?.execute({ url: hung.baseUrl }, runContext()) as { ok: boolean; results: { url: string; reachable: boolean; ms: number; error?: string }[] }
       expect(result.ok).toBe(true)
@@ -96,6 +99,7 @@ describe('mesh anomalies — hung peers and mixed-fleet diagnosis', () => {
     }
   }, 25_000)
 
+  // Scope-off: This fixture isolates transport and ledger anomalies without operator team membership.
   it('one probe report tells three failure shapes apart: live, expired card, dead port', async () => {
     // The captured cross-machine morning: four endpoints, three distinct
     // shapes in ONE fleet. The probe's whole job is that a single report
@@ -103,8 +107,8 @@ describe('mesh anomalies — hung peers and mixed-fleet diagnosis', () => {
     const { card } = craftCard({ name: 'skewed', session: 'ghost-anom', team: 'skewed', expiresAt: Date.now() - 1_000 })
     const expired = await ghostNode(card)
     const deadPort = await reservePort() // bound then released: nothing listens
-    const cargo = await bootNode({ name: 'cargo', session: 'mesh-anom-c', team: 'cargo' })
-    const alpha = await bootNode({
+    const cargo = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'cargo', session: 'mesh-anom-c', team: 'cargo' })
+    const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE,
       name: 'alpha', session: 'mesh-anom-b', team: 'alpha',
       peers: [cargo.baseUrl, expired.baseUrl, `http://127.0.0.1:${String(deadPort)}`],
     })
@@ -129,13 +133,14 @@ describe('mesh anomalies — hung peers and mixed-fleet diagnosis', () => {
 })
 
 describe('mesh anomalies — receipt-ledger honesty under odd settlement shapes', () => {
+  // Scope-off: This fixture isolates transport and ledger anomalies without operator team membership.
   it('a fire-and-forget route from a non-routable caller is visible bookkeeping, never owed debt, yet still settles on a formal receipt', async () => {
     // The captured black-hole form: a caller whose label cannot receive a
     // receipt (bare process team) used to birth invisible debt. Fix ② keeps
     // the row VISIBLE with receiptExpected:false — supervision must not
     // chase it — and an honest receipt still closes it.
-    const cargo = await bootNode({ name: 'cargo', session: 'mesh-anom-d', team: 'cargo', sessionNodes: true })
-    const alpha = await bootNode({ name: 'alpha', session: 'mesh-anom-e', team: 'alpha', sessionNodes: true, peers: [cargo.baseUrl] })
+    const cargo = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'cargo', session: 'mesh-anom-d', team: 'cargo', sessionNodes: true })
+    const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-anom-e', team: 'alpha', sessionNodes: true, peers: [cargo.baseUrl] })
     try {
       // No join and no live agent in the tool context: the caller label is
       // the bare process label — exactly the non-routable shape.
@@ -158,11 +163,12 @@ describe('mesh anomalies — receipt-ledger honesty under odd settlement shapes'
     }
   })
 
+  // Scope-off: This fixture isolates transport and ledger anomalies without operator team membership.
   it('an orphan receipt for a task this node never dispatched correlates nothing and corrupts nothing', async () => {
     // The captured cross-fleet noise form: receipts arriving for tasks born
     // on other nodes (or already forgotten). The ledger must shrug.
-    const cargo = await bootNode({ name: 'cargo', session: 'mesh-anom-f', team: 'cargo', sessionNodes: true })
-    const alpha = await bootNode({ name: 'alpha', session: 'mesh-anom-g', team: 'alpha', sessionNodes: true, peers: [cargo.baseUrl] })
+    const cargo = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'cargo', session: 'mesh-anom-f', team: 'cargo', sessionNodes: true })
+    const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-anom-g', team: 'alpha', sessionNodes: true, peers: [cargo.baseUrl] })
     try {
       const before = await ledger(alpha)
       const response = await postJson(alpha.baseUrl, '/a2a/direct', { team: 'alpha', message: '[A2A receipt] task 11111111-2222-3333-4444-555555555555 ghost outcome', caller_session: 'mesh-anom-f' })
@@ -177,6 +183,7 @@ describe('mesh anomalies — receipt-ledger honesty under odd settlement shapes'
     }
   })
 
+  // Scope-off: This fixture isolates transport and ledger anomalies without operator team membership.
   it('a reply that merely echoes a pending task id settles the debt as a marked content echo (F5 fallback)', async () => {
     // The captured "settled by content echo" form: the target demonstrably
     // answered (its reply names the task id) but the formal receipt envelope
@@ -202,13 +209,14 @@ describe('mesh anomalies — receipt-ledger honesty under odd settlement shapes'
     }
   })
 
+  // Scope-off: This fixture isolates transport and ledger anomalies without operator team membership.
   it('an unsettled debt dead-letters past the stale TTL (reason unconsumed) and a late receipt revives it into the archive', async () => {
     // The captured "回执不回流" form: the target went silent for good. The
     // debt must AGE OUT of the owed view with a reason a supervisor can act
     // on — and a late receipt from a revived target must still settle it.
     const portA = await reservePort()
-    const cargo = await bootNode({ name: 'cargo', session: 'mesh-anom-h', team: 'cargo', sessionNodes: true, peers: [`http://127.0.0.1:${String(portA)}`] })
-    const alpha = await bootNode({
+    const cargo = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'cargo', session: 'mesh-anom-h', team: 'cargo', sessionNodes: true, peers: [`http://127.0.0.1:${String(portA)}`] })
+    const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE,
       name: 'alpha', session: 'mesh-anom-i/1a2b3c4d', team: 'alpha', sessionNodes: true, port: portA, peers: [cargo.baseUrl],
       // Sub-second dead-letter window: the injected seam exists exactly for
       // this lifecycle, which a 24h default would hide from every test.

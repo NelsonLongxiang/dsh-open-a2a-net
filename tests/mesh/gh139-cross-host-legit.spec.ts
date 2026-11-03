@@ -30,8 +30,9 @@ const delayed = (n: MeshNode, text = 'finished the work'): void => {
 describe('r142 legitimate cross-host receipts under enforce', () => {
   it('canvas (scope off, two zones): a task to the remote member settles by the member host\'s auto-receipt', async () => {
     const pA = await reservePort(); const pB = await reservePort()
-    const A = await bootNode({ name: 'A', session: 'hostA', team: 'alpha', agentId: A_ID, sessionNodes: true, settlementAuth: 'enforce', port: pA, peers: [`http://127.0.0.1:${pB}`], home: tmpHome() } as never)
-    const B = await bootNode({ name: 'B', session: 'hostB', team: 'cargo', agentId: B_ID, sessionNodes: true, settlementAuth: 'enforce', port: pB, peers: [`http://127.0.0.1:${pA}`], home: tmpHome() } as never)
+    // This pre-#217 receipt-shape case declares scope-off; #218 separately pins the production-scoped round.
+    const A = await bootNode({ name: 'A', session: 'hostA', team: 'alpha', agentId: A_ID, sessionNodes: true, teamScopeRouting: false, teamScopeInfo: false, settlementAuth: 'enforce', port: pA, peers: [`http://127.0.0.1:${pB}`], home: tmpHome() } as never)
+    const B = await bootNode({ name: 'B', session: 'hostB', team: 'cargo', agentId: B_ID, sessionNodes: true, teamScopeRouting: false, teamScopeInfo: false, settlementAuth: 'enforce', port: pB, peers: [`http://127.0.0.1:${pA}`], home: tmpHome() } as never)
     try {
       expect((await postJson(A.baseUrl, '/__dsh_a2a/join', { id: A_ID })).status).toBe(200)
       expect((await postJson(B.baseUrl, '/__dsh_a2a/join', { id: B_ID })).status).toBe(200)

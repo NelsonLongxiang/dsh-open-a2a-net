@@ -10,6 +10,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { generateKeyPairSync, sign as edSign } from 'node:crypto'
 import { bootNode, reservePort, runContext, steerText } from './harness.ts'
+// These legacy wire/discovery/fault cases test their named seam, not team admission; production-scope tests stay on the harness default.
+const LEGACY_OPEN_SCOPE = { teamScopeRouting: false, teamScopeInfo: false } as const
 import { signCard } from '../../src/card.ts'
 
 beforeEach(() => {
@@ -28,11 +30,12 @@ const AGENT_ID = 'session-0123456789abcdef'
 const HANDLE = 'mesh-i41-cli/a1b2c3d4e5f60718'
 
 describe('issue #41 canvas initiator self-skip', () => {
+  // Scope-off: The legacy self-skip ordering case has no reciprocal operator team link.
   it('a member routing to its own canvas team skips itself and the remote member receives', async () => {
     const portA = await reservePort()
     const portB = await reservePort()
-    const a = await bootNode({ name: 'A', session: 'mesh-i41-a', team: 'dsh', sessionNodes: true, port: portA, peers: [`http://127.0.0.1:${String(portB)}`] })
-    const b = await bootNode({ name: 'B', session: 'mesh-i41-b', team: 'dsh', sessionNodes: true, port: portB, peers: [`http://127.0.0.1:${String(portA)}`] })
+    const a = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'A', session: 'mesh-i41-a', team: 'dsh', sessionNodes: true, port: portA, peers: [`http://127.0.0.1:${String(portB)}`] })
+    const b = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'B', session: 'mesh-i41-b', team: 'dsh', sessionNodes: true, port: portB, peers: [`http://127.0.0.1:${String(portA)}`] })
     try {
       for (const n of [a, b]) expect((await post(`${n.baseUrl}/__dsh_a2a/join`, { id: AGENT_ID })).team).toBe("dsh/01234567")
       // Canvas team on A: the initiator's own session (live local member,

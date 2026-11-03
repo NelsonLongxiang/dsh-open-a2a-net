@@ -133,8 +133,9 @@ describe('#114 S4 review of PR #140: off-chain settlement under enforce stays re
 
   it('P2-1 (observe): a task to another host\'s bare process team, answered by its auto-receipt, settles as host-face', async () => {
     const pA = await reservePort()
-    const B = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo', sessionNodes: true, settlementAuth: 'observe', peers: [`http://127.0.0.1:${String(pA)}`] })
-    const A = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', agentId: A_ID, sessionNodes: true, settlementAuth: 'observe', port: pA, peers: [B.baseUrl] })
+    // This host-face settlement case has no operator team link; scope admission is tested separately above.
+    const B = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo', sessionNodes: true, teamScopeRouting: false, teamScopeInfo: false, settlementAuth: 'observe', peers: [`http://127.0.0.1:${String(pA)}`] })
+    const A = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', agentId: A_ID, sessionNodes: true, teamScopeRouting: false, teamScopeInfo: false, settlementAuth: 'observe', port: pA, peers: [B.baseUrl] })
     try {
       await postJson(A.baseUrl, '/__dsh_a2a/join', { id: A_ID })
       delayed(B)

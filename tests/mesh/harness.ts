@@ -142,7 +142,8 @@ const MESH_TIMING: Partial<Config> = {
 /**
  * Full parsed-config defaults (apply receives post-schema config; a plain
  * object must carry every defaulted field, mirroring wire/apply.spec.ts's
- * makeConfig) plus the mesh timing knobs.
+ * makeConfig) plus the mesh timing knobs. Scope defaults match production;
+ * scope-off scenarios must set teamScopeRouting/teamScopeInfo: false explicitly.
  */
 function meshConfig(options: MeshNodeOptions): Config {
   return {
@@ -158,6 +159,8 @@ function meshConfig(options: MeshNodeOptions): Config {
     peerAllowlist: options.peerAllowlist ?? [],
     referralLearning: options.referralLearning ?? true,
     sessionNodes: options.sessionNodes ?? false,
+    teamScopeRouting: options.teamScopeRouting ?? true,
+    teamScopeInfo: options.teamScopeInfo ?? true,
     wakeJoinedOnBoot: options.wakeJoinedOnBoot ?? false,
     wakePrewarmDelayMs: options.wakePrewarmDelayMs ?? 0,
     wakePrewarmQuietMs: options.wakePrewarmQuietMs ?? 0,

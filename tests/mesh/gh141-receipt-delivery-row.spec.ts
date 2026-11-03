@@ -49,7 +49,8 @@ const owed = async (n: MeshNode): Promise<unknown[]> => (await state(n)).tasks.m
 
 async function pair(modeA: 'off' | 'observe' | 'enforce' = 'enforce', modeB = modeA, extra: Record<string, unknown> = {}): Promise<{ A: MeshNode; B: MeshNode }> {
   const pA = await reservePort(); const pB = await reservePort()
-  const base = { team: 'dsh', sessionNodes: true, ...extra }
+  // Settlement-chain tests isolate debt/receipt roles; their hand-built pair has no operator team link.
+  const base = { team: 'dsh', sessionNodes: true, teamScopeRouting: false, teamScopeInfo: false, ...extra }
   const A = await bootNode({ ...base, settlementAuth: modeA, name: 'A', session: 'hostA', agentId: A_ID, port: pA, peers: [`http://127.0.0.1:${pB}`], home: tmpHome() } as any)
   const B = await bootNode({ ...base, settlementAuth: modeB, name: 'B', session: 'hostB', agentId: B_ID, port: pB, peers: [`http://127.0.0.1:${pA}`], home: tmpHome() } as any)
   expect((await postJson(A.baseUrl, '/__dsh_a2a/join', { id: A_ID })).status).toBe(200)
@@ -58,6 +59,7 @@ async function pair(modeA: 'off' | 'observe' | 'enforce' = 'enforce', modeB = mo
 }
 
 describe('gh#141 cross-host receipts leave no unpayable rows (settlementAuth enforce)', () => {
+  // Scope-off: Settlement assertions have no operator team memberships.
   it('manual and auto receipts to the session handle: both ledgers end empty, every row settled on-chain', async () => {
     const { A, B } = await pair()
     try {
@@ -87,6 +89,7 @@ describe('gh#141 cross-host receipts leave no unpayable rows (settlementAuth enf
     } finally { await A.dispose(); await B.dispose() }
   }, 60_000)
 
+  // Scope-off: Settlement assertions have no operator team memberships.
   it('the wire answers a receipt delivery receipt:"none" and books no inbound row for it', async () => {
     const { A, B } = await pair()
     try {
@@ -106,6 +109,7 @@ describe('gh#141 cross-host receipts leave no unpayable rows (settlementAuth enf
 
 describe('gh#141 review of PR #149: only the debtor pays, and only what the creditor accepts', () => {
   for (const mode of ['off', 'observe', 'enforce'] as const) {
+    // Scope-off: Settlement assertions have no operator team memberships.
     it(`P2-1 settlementAuth ${mode}: another session on B cannot pay B's row`, async () => {
       const { A, B } = await pair(mode)
       try {
@@ -132,6 +136,7 @@ describe('gh#141 review of PR #149: only the debtor pays, and only what the cred
     }, 60_000)
   }
 
+  // Scope-off: Settlement assertions have no operator team memberships.
   it('P2-2: a receipt the creditor refuses (A enforce) leaves B\'s row owed even when B observes', async () => {
     const { A, B } = await pair('enforce', 'observe')
     try {
@@ -146,6 +151,7 @@ describe('gh#141 review of PR #149: only the debtor pays, and only what the cred
     } finally { await A.dispose(); await B.dispose() }
   }, 60_000)
 
+  // Scope-off: Settlement assertions have no operator team memberships.
   it('P3-3: the paid row records the receipt line as its claimed key\'s outcome (/a2a/query answers it)', async () => {
     const { A, B } = await pair()
     try {
@@ -160,6 +166,7 @@ describe('gh#141 review of PR #149: only the debtor pays, and only what the cred
     } finally { await A.dispose(); await B.dispose() }
   }, 60_000)
 
+  // Scope-off: Settlement assertions have no operator team memberships.
   it('P3-4: a receipt to a team other than the row\'s receipt target pays nothing', async () => {
     const { A, B } = await pair('observe')
     try {
@@ -175,6 +182,7 @@ describe('gh#141 review of PR #149: only the debtor pays, and only what the cred
     } finally { await A.dispose(); await B.dispose() }
   }, 60_000)
 
+  // Scope-off: Settlement assertions have no operator team memberships.
   it('P3-4: a same-host receipt books no outbound row on the sender', async () => {
     const { A, B } = await pair('observe', 'observe', { teamJoinAllowlist: ['dsh/shared'] })
     try {

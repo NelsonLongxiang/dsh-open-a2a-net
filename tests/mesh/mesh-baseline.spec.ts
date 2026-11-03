@@ -8,6 +8,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { bootNode, postJson, reservePort, runContext, steerText, type MeshNode } from './harness.ts'
+// These legacy wire/discovery/fault cases test their named seam, not team admission; production-scope tests stay on the harness default.
+const LEGACY_OPEN_SCOPE = { teamScopeRouting: false, teamScopeInfo: false } as const
 
 beforeEach(() => {
   vi.stubGlobal('WebSocket', function throwOnSocket() { throw new Error('the decentralized client opens no socket') })
@@ -29,15 +31,17 @@ async function mutualPair(): Promise<{ alpha: MeshNode; cargo: MeshNode }> {
   // sessionNodes: true mounts the panel state face (/__dsh_a2a/state) the
   // receipt assertions poll; the join surface stays unused (unjoined
   // sessions are invisible on the network by design).
-  const cargo = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo', sessionNodes: true, peers: [`http://127.0.0.1:${String(portA)}`] })
+  const cargo = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'cargo', session: 'mesh-cargo', team: 'cargo', sessionNodes: true, peers: [`http://127.0.0.1:${String(portA)}`] })
   // alpha's session label is deliberately ROUTABLE (<zone>/<id8>): the
   // receipt contract branches on caller routability, and the closed loop
   // under test is the one where the peer CAN send the receipt back.
-  const alpha = await bootNode({ name: 'alpha', session: 'mesh-alpha/1a2b3c4d', team: 'alpha', sessionNodes: true, port: portA, peers: [cargo.baseUrl] })
+  // Wire and ledger baselines predate operator team membership: scope-off is explicit for this seam.
+  const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-alpha/1a2b3c4d', team: 'alpha', sessionNodes: true, teamScopeRouting: false, teamScopeInfo: false, port: portA, peers: [cargo.baseUrl] })
   return { alpha, cargo }
 }
 
 describe('mesh baseline — real cross-machine closed loops', () => {
+  // Scope-off: This baseline fixture tests discovery and receipt transport with no operator team roster.
   it('two real nodes discover each other mutually and close a sync route round trip', async () => {
     const { alpha, cargo } = await mutualPair()
     try {
@@ -52,7 +56,7 @@ describe('mesh baseline — real cross-machine closed loops', () => {
       expect(cargoRow?.via).toBe(cargo.baseUrl)
 
       const result = await alpha.ctx.tools.get('a2a_route')?.execute({ team: 'cargo', message: 'ping mesh' }, runContext()) as { ok: boolean; reply?: string }
-      expect(result.ok).toBe(true)
+      expect(result.ok, JSON.stringify(result)).toBe(true)
       expect(result.reply).toContain('ok from cargo:')
       // The delivery steered cargo's agent exactly once — cross-node wire, no local echo.
       expect(cargo.steered).toHaveLength(1)
@@ -63,10 +67,11 @@ describe('mesh baseline — real cross-machine closed loops', () => {
     }
   })
 
+  // Scope-off: This baseline fixture tests discovery and receipt transport with no operator team roster.
   it('gh#8 N9: a third node is learned through a middle peer — visible via gossip, but routable only when seeded (or via the migration flag)', async () => {
-    const cargo = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo' })
-    const relay = await bootNode({ name: 'relay', session: 'mesh-relay', team: 'relay', peers: [cargo.baseUrl] })
-    const alpha = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', peers: [relay.baseUrl] })
+    const cargo = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'cargo', session: 'mesh-cargo', team: 'cargo' })
+    const relay = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'relay', session: 'mesh-relay', team: 'relay', peers: [cargo.baseUrl] })
+    const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-alpha', team: 'alpha', teamScopeInfo: false, peers: [relay.baseUrl] })
     try {
       // The search pass chases one referral hop: relay's card offers cargo.
       // VISIBILITY still rides the whole tracked set (gh#8 scoped the fix
@@ -86,7 +91,7 @@ describe('mesh baseline — real cross-machine closed loops', () => {
 
       // The migration flag restores the legacy whole-store basis (the
       // sweep first learns cargo through relay's referral, as originally).
-      const alphaLegacy = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', peers: [relay.baseUrl], referralTeamResolution: true })
+      const alphaLegacy = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-alpha', team: 'alpha', teamScopeInfo: false, peers: [relay.baseUrl], referralTeamResolution: true })
       await alphaLegacy.ctx.tools.get('a2a_teams')?.execute({ query: 'cargo' }, runContext())
       const legacy = await alphaLegacy.ctx.tools.get('a2a_route')?.execute({ team: 'cargo', message: 'via gossip' }, runContext()) as { ok: boolean; reply?: string }
       expect(legacy.ok).toBe(true)
@@ -95,7 +100,7 @@ describe('mesh baseline — real cross-machine closed loops', () => {
       await alphaLegacy.dispose()
 
       // And the operator-linked basis: seed cargo directly.
-      const alphaSeeded = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', peers: [relay.baseUrl, cargo.baseUrl] })
+      const alphaSeeded = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-alpha', team: 'alpha', peers: [relay.baseUrl, cargo.baseUrl] })
       const seeded = await alphaSeeded.ctx.tools.get('a2a_route')?.execute({ team: 'cargo', message: 'seeded basis' }, runContext()) as { ok: boolean; reply?: string }
       expect(seeded.ok).toBe(true)
       expect(seeded.reply).toContain('ok from cargo:')
@@ -106,6 +111,7 @@ describe('mesh baseline — real cross-machine closed loops', () => {
     }
   })
 
+  // Scope-off: This baseline fixture tests discovery and receipt transport with no operator team roster.
   it('an async cross-node task owes its receipt, and a replayed receipt settles the ledger exactly once', async () => {
     const { alpha, cargo } = await mutualPair()
     try {
@@ -135,13 +141,14 @@ describe('mesh baseline — real cross-machine closed loops', () => {
     }
   })
 
+  // Scope-off: This baseline fixture tests discovery and receipt transport with no operator team roster.
   it('a joined session node on a remote host is listed with its facts and routable cross-node', async () => {
     // 0.6.25 W3 bilateral link policy: mutual seeding (reserved ports,
     // cross-referenced URLs) — both operators made the gesture.
     const cargoPort = await reservePort()
     const alphaPort = await reservePort()
-    const cargo = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo', sessionNodes: true, port: cargoPort, peers: [`http://127.0.0.1:${String(alphaPort)}`] })
-    const alpha = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', port: alphaPort, peers: [`http://127.0.0.1:${String(cargoPort)}`] })
+    const cargo = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'cargo', session: 'mesh-cargo', team: 'cargo', sessionNodes: true, port: cargoPort, peers: [`http://127.0.0.1:${String(alphaPort)}`] })
+    const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-alpha', team: 'alpha', teamScopeInfo: false, port: alphaPort, peers: [`http://127.0.0.1:${String(cargoPort)}`] })
     try {
       // cargo's agent went live at boot (harness) and now joins the network
       // from its own host.
