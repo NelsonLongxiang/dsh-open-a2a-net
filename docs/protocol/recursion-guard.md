@@ -1,6 +1,6 @@
 # Protocol: Cross-Machine Recursion Guard — Sender-Gossip Hop Accounting
 
-> **已实现：跳数预算出站递减（#57 F2/F3）。** `/a2a/direct` checks
+> **IMPLEMENTED: outbound hop-budget decrement (#57 F2/F3).** `/a2a/direct` checks
 > X-A2A-Guard on ingress, grants the default first-hop budget (§6), and
 > returns structured `budget-exhausted` (-32007) with a receiptless row.
 > A home-host CLI forward mints a fresh token and sends `DEFAULT_HOP_BUDGET - 1`;

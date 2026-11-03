@@ -50,6 +50,31 @@ async function setup(directLink = true, extraHome = false) {
   return { a, b, c, home }
 }
 describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both hosts', () => {
+  it('a CLI deposited in A canvas receives automatic receipts from A local sessions', async () => {
+    const { a, b, home } = await setup()
+    try {
+      const id = 'session-0123456789abcdef'
+      await post(a, '/__dsh_a2a/join', { id })
+      expect((await post(a, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id })).ok).toBe(true)
+      const agent = a.agents.agent as any
+      agent.steer = (payload: any) => {
+        a.steered.push(payload)
+        agent.session.events.push({ type: 'user/message', data: { content: typeof payload === 'string' ? [{ type: 'text', text: payload }] : payload.content } })
+        setTimeout(() => { agent.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'local work completed at A' }] } } }); a.ctx.emit('agent/status', { agent, status: 'idle' }) }, 180)
+      }
+      const task = 'direct-cli-local-canvas'
+      const result = await cli(home, ['route', 'alpha/01234567', 'local canvas CLI request', '--task', task])
+      expect(result.code, result.stderr).toBe(0)
+      await vi.waitFor(async () => {
+        const inbox = await post(a, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle })
+        expect(inbox.mail.some((row: any) => row.text.includes(task) && row.text.includes('local work completed at A'))).toBe(true)
+      }, { timeout: 5000, interval: 80 })
+      const inbox = await cli(home, ['inbox'])
+      expect(inbox.code, inbox.stderr).toBe(0)
+      expect(inbox.stdout).toContain(task)
+      expect(inbox.stdout).toContain('local work completed at A')
+    } finally { await a.dispose(); await b.dispose() }
+  }, 20000)
   for (const canvas of [false, true]) it((canvas ? 'canvas' : 'session') + ': automatic target-member receipt settles A and is readable by shipped CLI inbox', async () => {
     const { a, b, home } = await setup()
     const task = canvas ? 'direct-receipt-canvas' : 'direct-receipt-session'
@@ -76,12 +101,15 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
   it('automatic receipt ignores a higher-priority namesake CLI deposit and goes only to pinned A', async () => {
     const { a, b, c, home } = await setup(true, true)
     try {
+      const card = JSON.stringify(signCard({ name: 'receipt-cli', session: 'cli-receipt', team: handle, capabilities: { route: true, async: true }, expiresAt: Date.now() + 172800000 }, privateKey))
+      expect((await post(b, '/__dsh_a2a/cli-deposit', { action: 'publish', card })).ok).toBe(true) // a local namesake still loses to an operator pin
       const task = 'direct-receipt-pinned-home'
       const sent = await cli(home, ['route', targetHandle, 'pinned-home receipt', '--task', task])
       expect(sent.code, sent.stderr).toBe(0)
       await vi.waitFor(async () => { expect((await state(a)).archived.some((row: any) => row.taskId === task && row.settledBy?.caller === targetHandle)).toBe(true) }, { timeout: 8000, interval: 80 })
       const namesake = await post(c!, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle })
       expect(namesake.mail.some((row: any) => row.text.includes(task))).toBe(false)
+      expect((await post(b, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle })).mail.some((row: any) => row.text.includes(task))).toBe(false)
       expect((await cli(home, ['inbox'])).stdout).toContain(task)
     } finally { await a.dispose(); await b.dispose(); if (c !== undefined) await c.dispose() }
   }, 30000)

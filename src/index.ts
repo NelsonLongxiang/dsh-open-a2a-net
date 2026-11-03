@@ -4149,7 +4149,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   async function dispatchAnywhere(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode: boolean, taskId?: string, peerCaller?: string): Promise<A2aRouteResult & { ok: true }> {
     // A remote CLI receipt belongs only to its operator-pinned home, never a
     // namesake deposit or another host publishing the same directory handle.
-    if (CLI_HANDLE_RE.test(team) && parseReceipt(message) !== null && (cliDeposits.get(team) === undefined || canvasStore.list().some(name => canvasStore.remoteMembersOf(name).includes(team)))) {
+    if (CLI_HANDLE_RE.test(team) && parseReceipt(message) !== null && (canvasStore.cliHomeOf(team) !== undefined || cliDeposits.get(team) === undefined)) {
       const home = canvasStore.cliHomeOf(team)
       if (home === undefined) throw new Error(`CLI receipt home is not pinned for ${team}`)
       const delivered = await dispatchPeerCandidate(home, team, message, contextId, signal, peerCaller ?? callerSession, asyncMode, taskId)

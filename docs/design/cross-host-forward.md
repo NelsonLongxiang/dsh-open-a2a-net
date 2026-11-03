@@ -101,7 +101,7 @@ H 上不另记入站行。`track*` 遇到已有的 task id 会静默忽略，两
 
 **回执进入 H 的 `/a2a/direct` 后**：
 1. 准入：调用方是 H2 上的会话句柄。H 的作用域门在转发前已经要求 H 链接了目标，所以这个句柄在 H 上有运营者链接，走 `remote-ref` 或 `sameZoneAdmission`。
-   - **F3 实测结论**：双主机作用域开启、`settlementAuth: enforce` 下，会话目标和画布目标的成员回执都能结清 H 的唯一转发行并进入 CLI 信箱，但仅靠对端画布 org 放行且 H 未直接链接成员时，回执会被 H 拒收。转发画布候选因此要求其名片列出的所有可能接收成员都已被 H 的运营者直接链接；缺一个即发送前拒绝，不能留下无回程的欠账。用例：`tests/mesh/cli-forward-receipt.spec.ts`。
+   - **F3 实测结论**：双主机作用域开启、`settlementAuth: enforce` 下，会话目标和画布目标的成员回执都能结清 H 的唯一转发行并进入 CLI 信箱，但仅靠对端画布 org 放行且 H 未直接链接成员时，回执会被 H 拒收。转发画布候选因此要求其名片列出的所有可能接收成员都已被 H 的运营者直接链接；缺一个即在发送前跳过该候选并继续试下一个；所有候选都失败后返回 `-32004`，不能留下无回程的欠账。用例：`tests/mesh/cli-forward-receipt.spec.ts`。
 2. 回执关联：`settleAndAnnounce` 用 H 的那条出站行做结算判定。`fromPeerOrigin` 成立，结清方是目标成员，判 `target` 或 `target-member`，在授权链上。
 3. CLI 信箱：投进句柄的信箱（wire.ts:710 起）。CLI 用 `a2a inbox` 看到。
 
