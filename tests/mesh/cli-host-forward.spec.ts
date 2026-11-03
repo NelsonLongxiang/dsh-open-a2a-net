@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { generateKeyPairSync, createPrivateKey } from 'node:crypto'
-import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { readFileSync, mkdtempSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
@@ -28,10 +28,10 @@ async function fixture(options: { enabled?: boolean; isolated?: boolean; linked?
   }
   return { a, b }
 }
-async function route(a: MeshNode, id: string, noWait = true, guard?: string, team = 'beta/01234567') {
+async function route(a: MeshNode, id: string, noWait = true, guard?: string, team = 'beta/01234567', message = 'forward report') {
   const url = a.baseUrl + '/a2a/direct'
   const headers = signOriginClaim({ url, method: 'POST' }, { caller: 'ops-cli', callerUrl: a.baseUrl + '/a2a/cli/' + encodeURIComponent(handle), privateKey: cliKey, unbound: false, now: Date.now() })
-  return await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers, ...(guard === undefined ? {} : { 'X-A2A-Guard': guard }) }, body: JSON.stringify({ team, message: 'forward report', caller_session: handle, task_id: id, context_id: 'cli-context', wait: !noWait }) }).then(async r => await r.json() as Record<string, any>)
+  return await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers, ...(guard === undefined ? {} : { 'X-A2A-Guard': guard }) }, body: JSON.stringify({ team, message, caller_session: handle, task_id: id, context_id: 'cli-context', wait: !noWait }) }).then(async r => await r.json() as Record<string, any>)
 }
 async function cliRoute(a: MeshNode, task: string, sync: boolean) {
   const home = mkdtempSync(join(tmpdir(), 'cli-forward-'))
@@ -54,6 +54,40 @@ describe('#230 home host forwards a deposited CLI one hop with scope on', () => 
       const syncResult = await cliRoute(a, 'direct-cli-binary-sync', true)
       expect(syncResult.code, syncResult.stderr).toBe(0)
       expect(syncResult.stdout).toContain('B')
+    } finally { await a.dispose(); await b.dispose() }
+  }, 30000)
+  it('forwarding a CLI receipt returns no-receipt semantics and creates no outbound debt', async () => {
+    const { a, b } = await fixture()
+    try {
+      const result = await route(a, 'direct-forward-receipt', true, undefined, 'beta/01234567', '[A2A receipt] task original-work done')
+      expect(result.routed, JSON.stringify(result)).toBe(true)
+      expect(result.receipt).toBe('none')
+      const path = join(a.home, 'a2a', 'tasks.json')
+      const ledger = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}
+      expect([...(ledger.tasks ?? []), ...(ledger.archived ?? [])].some((row: any) => row.taskId === 'direct-forward-receipt')).toBe(false)
+      expect(b.steered).toHaveLength(1)
+    } finally { await a.dispose(); await b.dispose() }
+  }, 30000)
+  it('preserves bridge and receipt-none response through HTTP and the shipped CLI without booking debt', async () => {
+    const { a, b } = await fixture()
+    try {
+      const realFetch = globalThis.fetch
+      // Native bridge delivery has a different receipt contract; exercise the real peer transport/forward response seam.
+      vi.stubGlobal('fetch', async (...args: Parameters<typeof fetch>) => {
+        const response = await realFetch(...args)
+        if (String(args[0]) !== b.baseUrl + '/a2a/direct') return response
+        const body = await response.json() as Record<string, any>
+        return new Response(JSON.stringify({ ...body, bridge: 'native-teams', receipt: 'none' }), { status: response.status, headers: response.headers })
+      })
+      const result = await route(a, 'direct-forward-bridge')
+      expect(result).toMatchObject({ routed: true, bridge: 'native-teams', receipt: 'none' })
+      const cli = await cliRoute(a, 'direct-forward-bridge-cli', false)
+      expect(cli.code, cli.stderr).toBe(0)
+      expect(cli.stdout).toContain('no receipt will come')
+      expect(cli.stdout).not.toContain('receipt arrives in: a2a inbox')
+      const path = join(a.home, 'a2a', 'tasks.json')
+      const ledger = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}
+      expect([...(ledger.tasks ?? []), ...(ledger.archived ?? [])].some((row: any) => String(row.taskId).startsWith('direct-forward-bridge'))).toBe(false)
     } finally { await a.dispose(); await b.dispose() }
   }, 30000)
   it('returns async delivery and sync reply with the original task/context and one outbound CLI row', async () => {

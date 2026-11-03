@@ -1,6 +1,7 @@
 /** H-side one-hop forwarding. Never resolves or dispatches local candidates again. */
 import { DEFAULT_HOP_BUDGET, guardHeader, mintGuard } from './recursion-guard.ts'
 import { briefOf, type OutboundBirth, type TaskLedger } from './task-ledger.ts'
+import { parseReceipt } from './receipt.ts'
 import type { A2aPeerCard, A2aRouteResult } from './types.ts'
 
 export interface ForwardRequest {
@@ -35,13 +36,19 @@ export function createDirectForward(d: DirectForwardDeps) {
       const result = !answer.ok && answer.ownBudgetExhausted === true ? { ...answer, code: -32005 } : answer
       d.activity(request.team, url, result.ok)
       if (result.ok || result.code === -32005) {
+        // A receipt owes no receipt; native bridge rounds have no A2A receipt contract.
+        // Match routeTrunk/trackOwedTask rather than manufacturing an unpayable debt.
+        if (parseReceipt(request.message) !== null) return result.ok ? { ...result, receipt: 'none' } : result
+        if (result.ok && result.bridge !== undefined) return { ...result, receipt: 'none' }
         const card = await directory.card(url)
         const birth: OutboundBirth = { forwarded: true, ...(card?.publicKey ? { peerKey: card.publicKey } : {}), ...(card?.session ? { peerHost: card.session } : {}), deliveredTo: result.ok ? result.deliveredTo ?? request.team : request.team }
         // Exactly one outbound row. A completed sync response is receiptless bookkeeping.
-        if (result.ok && result.task_status === 'TASK_STATE_COMPLETED') d.ledger.trackReceiptless(request.taskId, request.team, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
+        if (result.ok && (result.task_status === 'TASK_STATE_COMPLETED' || result.receipt === 'none')) d.ledger.trackReceiptless(request.taskId, request.team, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
         else d.ledger.track(request.taskId, request.team, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
         return result
       }
+      // The shared dispatcher's sync recovery query may prove a definitive failed
+      // outcome; like routeTrunk, that is an eligible miss, not an uncertain -32005.
       failures.push(url + ': ' + result.error)
       if (result.code === -32002 || result.code === -32003) return { ...result, task_id: request.taskId }
     }

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { generateKeyPairSync, createPrivateKey } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { signCard } from '../../src/card.ts'
 import { signOriginClaim } from '../../src/origin-claim.ts'
@@ -12,7 +12,7 @@ afterEach(() => { vi.unstubAllGlobals() })
 const handle = 'ops-cli/a1b2c3d4e5f60718'
 const key = generateKeyPairSync('ed25519').privateKey
 const post = async (base: string, path: string, body: unknown): Promise<Record<string, any>> =>
-  await fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(async r => await r.json() as Record<string, any>)
+  await fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json', Connection: 'close' }, body: JSON.stringify(body) }).then(async r => await r.json() as Record<string, any>)
 const cliCard = (until = Date.now() + 4 * 60 * 60_000): string => JSON.stringify(signCard({ name: 'ops-cli', session: 'cli-ops', team: handle, capabilities: { route: true, async: true }, expiresAt: until }, key))
 const deposit = async (home: MeshNode, until?: number): Promise<void> => { const row = await post(home.baseUrl, '/__dsh_a2a/cli-deposit', { action: 'publish', card: cliCard(until) }); expect(row.ok, JSON.stringify(row)).toBe(true) }
 async function pair(twoHomes = false): Promise<{ target: MeshNode; homes: MeshNode[] }> {
@@ -50,10 +50,21 @@ describe('#222 F1 remote CLI pinned-home admission (real hosts; scope on)', () =
       expect(store.cliHome?.[handle]).toBe(homes[0]!.baseUrl)
       const unsigned = await post(target.baseUrl, '/a2a/direct', { team: 'target/01234567', message: 'unsigned CLI', caller_session: handle, wait: false })
       expect(unsigned.routed).not.toBe(true) // the legacy unsigned-envelope window never grants remote-ref-cli
-      const answer = await direct(target, homes[0]!, 'direct-cli-home-success', true)
+      const answer = await direct(target, homes[0]!, 'direct-cli-home-success')
       expect(answer.routed, JSON.stringify(answer)).toBe(true)
       const ledger = JSON.parse(readFileSync(join(target.home, 'a2a', 'tasks.json'), 'utf8')) as { tasks: Array<{ auth?: { via: string; carrier_url: string; admission_rule: string } }> }
       expect(ledger.tasks.some(x => x.auth?.carrier_url === homes[0]!.baseUrl && x.auth.via === 'canvas-member' && x.auth.admission_rule === 'remote-ref-cli')).toBe(true)
+    } finally { await target.dispose(); for (const home of homes) await home.dispose() }
+  }, 20_000)
+  it('N4b: a signer callerUrl with a trailing slash stores only canonical carrier origin', async () => {
+    const { target, homes } = await pair()
+    try {
+      await deposit(homes[0]!)
+      expect((await link(target)).ok).toBe(true)
+      const reply = await direct(target, homes[0]!, 'direct-cli-home-slash', true)
+      expect(reply.routed, JSON.stringify(reply)).toBe(true)
+      const ledger = JSON.parse(readFileSync(join(target.home, 'a2a', 'tasks.json'), 'utf8'))
+      expect(ledger.tasks.find((row: any) => row.taskId === 'direct-cli-home-slash').auth.carrier_url).toBe(homes[0]!.baseUrl)
     } finally { await target.dispose(); for (const home of homes) await home.dispose() }
   }, 20_000)
   it('two linked homes advertising the same handle leave the pin unknown and refuse delivery', async () => {
@@ -114,7 +125,7 @@ describe('#222 F1 remote CLI pinned-home admission (real hosts; scope on)', () =
       expect((await direct(target, homes[1]!, 'direct-cli-implicit-repin')).routed).not.toBe(true)
     } finally { await target.dispose(); for (const home of homes) await home.dispose() }
   }, 20_000)
-  it('N2c: an unreadable tracked but verified-unlinked peer does not prevent auto-pinning the linked home', async () => {
+  it('an unreadable tracked stranger keeps auto-pin conservative and an explicit fresh home remains selectable', async () => {
     const { target, homes } = await pair(true)
     try {
       await deposit(homes[0]!)
@@ -135,6 +146,8 @@ describe('#222 F1 remote CLI pinned-home admission (real hosts; scope on)', () =
       expect((await post(target.baseUrl, '/__dsh_a2a/canvas', { action: 'remove-member', name: 'ops', id: handle })).ok).toBe(true)
       unavailable = true
       expect((await link(target)).ok).toBe(true)
+      expect(pinOf(target)).toBeUndefined()
+      expect((await link(target, homes[0]!.baseUrl)).ok).toBe(true)
       expect(pinOf(target)).toBe(homes[0]!.baseUrl)
     } finally { await target.dispose(); for (const home of homes) await home.dispose() }
   }, 20_000)
@@ -152,6 +165,23 @@ describe('#222 F1 remote CLI pinned-home admission (real hosts; scope on)', () =
       expect((await link(target, homes[1]!.baseUrl)).ok).toBe(true) // fresh successful explicit candidate remains selectable
       expect(pinOf(target)).toBe(homes[1]!.baseUrl)
     } finally { await target.dispose(); await homes[1]!.dispose() }
+  }, 30_000)
+  it('a cold restart cannot pin a liar while the canvas-only linked real home is unreadable', async () => {
+    const { target, homes } = await pair(true)
+    let cold: MeshNode | undefined
+    try {
+      await deposit(homes[0]!)
+      expect((await post(target.baseUrl, '/__dsh_a2a/canvas', { action: 'add-member', name: 'host-link', id: 'home0/01234567' })).ok).toBe(true)
+      await deposit(homes[1]!)
+      await target.dispose()
+      await homes[0]!.dispose()
+      // Home0 survives only as a learned tracked peer and an operator canvas ref, not a config seed or CLI pin.
+      writeFileSync(join(target.home, 'a2a', 'peers.json'), JSON.stringify({ peers: homes.map((host, index) => ({ url: host.baseUrl, score: 10000, seed: index === 1 })) }))
+      cold = await bootNode({ name: 'H2', session: 'mesh-cli-target', team: 'target', port: target.port, home: target.home, sessionNodes: true, peers: [homes[1]!.baseUrl] })
+      expect((await link(cold)).ok).toBe(true)
+      expect(pinOf(cold)).toBeUndefined()
+      expect((await direct(cold, homes[1]!, 'direct-cli-cold-home-liar')).error).toContain('home is not pinned')
+    } finally { if (cold !== undefined) await cold.dispose(); await homes[1]!.dispose() }
   }, 30_000)
   it('allowlist observation rechecks only the CLI link and pinned carrier, not old request signatures', async () => {
     const { target, homes } = await pair()

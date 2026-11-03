@@ -134,6 +134,8 @@ export interface A2aRouteOk {
    * receipt-owed (`trackOwedTask` skips it).
    */
   readonly bridge?: 'native-teams'
+  /** The peer's explicit receipt contract, when provided. */
+  readonly receipt?: 'none' | 'routed' | 'mailbox'
   /**
    * gh#141: the peer refused the settlement the delivered message carried
    * (its enforce verdict, `settlement: {status: 'refused'}` on the wire,

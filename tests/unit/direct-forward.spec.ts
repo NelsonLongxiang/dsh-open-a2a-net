@@ -27,6 +27,17 @@ describe('one-hop CLI forwarding', () => {
     expect(x.ledger.list()).toHaveLength(1)
     expect(x.ledger.list()[0]).toMatchObject({ direction: 'outbound', forwarded: true, sender: { kind: 'cli', id: request.caller }, peer: 'https://peer1.test' })
   })
+  it('forwarded receipts and native bridge deliveries never create receipt debt', async () => {
+    const receipt = fixture()
+    expect(await createDirectForward(receipt.deps)({ ...request, message: '[A2A receipt] task prior-task done' })).toMatchObject({ ok: true, receipt: 'none' })
+    expect(receipt.ledger.list()).toHaveLength(0)
+    const bridge = fixture([{ ...ok, bridge: 'native-teams', receipt: 'none' }])
+    expect(await createDirectForward(bridge.deps)(request)).toMatchObject({ ok: true, bridge: 'native-teams', receipt: 'none' })
+    expect(bridge.ledger.list()).toHaveLength(0)
+    const none = fixture([{ ...ok, receipt: 'none' }])
+    await createDirectForward(none.deps)(request)
+    expect(none.ledger.list()[0]?.receiptExpected).toBe(false)
+  })
   it('does not fail over an uncertain sync timeout or an idempotency verdict', async () => {
     for (const code of [-32005, -32002, -32003]) {
       const x = fixture([{ ok: false, code, error: 'terminal or uncertain' }, ok])

@@ -3,7 +3,7 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "d71789daf48b5088dd02001101ffc772297b6878e97b6e2cff7e6af59ef05225",
+    "src/index.ts": "1d74c55795910b5cd1e60b946b694cc6f9e72d66b95884c1e68b48080b37e67a",
     "src/faces/admin.ts": "efe5c45b3a986ec3267f021bc2d6eeded770f6861e8587d729f5e3c1948fbaa8",
     "src/canvas-store.ts": "c612b9b8e03377fec827978addaabf4ce0762a52769bfa15263bd873fbfdedde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
@@ -19,7 +19,7 @@
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
-    "src/faces/wire.ts": "37f6ea9737229178249c16c0fa703457c3d2fc1deb26d0d780642219718eb0aa",
+    "src/faces/wire.ts": "5ca25d6aba38c063e2c2bd046215944c65eb58cb56ecd353f803790036094fc2",
     "src/faces/canvas-notify.ts": "7153f7cb2b6c985825edde55809d47d3a2a14e652d69e55f6d1a72cd9f6d50d9",
     "src/task-auth.ts": "8558710d33b37f3e261eded23b6ca971572019a5dccb05ab5e8d8bd222095717",
     "src/origin-claim.ts": "d467153656bd5592785597e4a81d3686f0b4f91cac38705ecb18d4cc74f8d22c",
@@ -225,7 +225,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:3853",
+      "ref": "src/index.ts:3851",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -267,7 +267,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3334",
+      "ref": "src/index.ts:3332",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {

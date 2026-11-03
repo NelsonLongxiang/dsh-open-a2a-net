@@ -3260,13 +3260,11 @@ export function apply(ctx: Context, config: Config): void {
   async function cliHomeForAdd(handle: string, requested?: unknown) {
     if (!CLI_HANDLE_RE.test(handle)) return decideCliHome(handle, requested, [])
     const candidates = await mapBounded(peerStore.list(), 6, async url => {
-      // Membership comes from operator links, not mere tracking. Retain a known link
-      // through failed fresh reads; an unknown seeded origin remains conservatively unresolved.
-      const known = peerLinkState(url)
-      const possibleColdLink = config.peers.includes(url) || canvasStore.pinnedCliHomes().some(([, home]) => { try { return new URL(url).origin === home } catch { return false } })
+      // A failed read cannot prove a tracked host is unlinked (especially after a cold boot).
+      // Conservatively leave automatic ownership unknown; explicit fresh choices still work.
       const card = await fetchPeerCard(url).catch(() => undefined)
       if (card !== undefined) cardCache.set(url, { at: Date.now(), card })
-      return { url, card, linked: card === undefined ? known.link === 'linked' || (!known.verified && possibleColdLink) : peerLinkState(url).link === 'linked' }
+      return { url, card, linked: card === undefined || peerLinkState(url).link === 'linked' }
     })
     return decideCliHome(handle, requested, candidates)
   }

@@ -76,6 +76,7 @@ type WireRoute = {
   readonly task_status?: unknown
   readonly result?: unknown
   readonly bridge?: unknown
+  readonly receipt?: unknown
   /** #139: the peer's enforce verdict on a receipt this delivery carried. */
   readonly settlement?: unknown
 }
@@ -359,6 +360,7 @@ export class A2aClient {
         ...(consumed !== undefined ? { consumed } : {}),
         ...(wireText(raw.delivered_to) !== '' ? { deliveredTo: wireText(raw.delivered_to) } : {}),
         ...(bridge !== undefined ? { bridge } : {}),
+        ...(raw.receipt === 'none' || raw.receipt === 'routed' || raw.receipt === 'mailbox' ? { receipt: raw.receipt } : {}),
         ...(settlementRefused ? { settlementRefused: true as const } : {}),
       }
     }
@@ -375,6 +377,7 @@ export class A2aClient {
       context_id: wireText(raw.context_id),
       task_status: wireText(raw.task_status),
       ...(bridge !== undefined ? { bridge } : {}),
+      ...(raw.receipt === 'none' || raw.receipt === 'routed' || raw.receipt === 'mailbox' ? { receipt: raw.receipt } : {}),
       ...(settlementRefused ? { settlementRefused: true as const } : {}),
     }
   }
