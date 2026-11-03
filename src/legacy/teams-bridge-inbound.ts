@@ -48,6 +48,8 @@ export interface TeamsBridgeInboundDeps {
   readonly fromClause: (from: string) => string
   readonly sanitizeFromClause: (from: string) => string
   readonly proofHeader?: (team: string, taskId: string, from: string, proofClause: string) => string
+  /** N4 session taint: the round about to carry remote text runs under this parent (its members derive from it). */
+  readonly taint?: (agent: Agent) => void
 }
 
 /** The four inbound-bridge operations, verbatim from apply(). */
@@ -133,6 +135,7 @@ export function createTeamsBridgeInbound(deps: TeamsBridgeInboundDeps): TeamsBri
     if (teams === undefined) return { ok: false, reason: 'not-claimed' }
     const parent = liveAgent()
     if (parent === undefined) return { ok: false, reason: 'error', error: 'No live DSH initiator is available to parent the native-teams round.' }
+    deps.taint?.(parent)
     // The alpha.4 Session face dropped the events member (the widened
     // BridgeTeamsRegistry accepts it optional) — the raw Agent carries the
     // ambient Session whose shape no longer overlaps, so project through the

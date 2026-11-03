@@ -118,6 +118,7 @@ import { NodeStore } from './node-store.ts'
 import { createNodeBinder, NodeBindings } from './node-bind.ts'
 import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
+import { NodeReviewQueue, SessionTaint, toolTaint } from './node-self.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { canvasCandidateMatches, canvasTargetAmbiguous, peerDirectoryRows, routableCallerLabel, sessionCandidateMatches, unroutableCallerNote } from './peer-directory.ts'
@@ -184,6 +185,14 @@ export interface Config {
    * joined session teams so peers find it without a central directory.
    */
   readonly announce: boolean
+  /**
+   * gh#193: send nothing to any peer. Every outbound peer request — card
+   * reads, directory sweeps, routes, log reads, canvas pings and canvas-op
+   * relays — goes through one fetch that refuses while this is on, so a
+   * test host stays dark even with learned peers in `a2a/peers.json`
+   * (which is left untouched). Inbound faces keep answering. Default false.
+   */
+  readonly isolated: boolean
   /** Human-facing name published on the agent card. */
   readonly agentName: string
   /**
@@ -421,6 +430,7 @@ export const Config: s<Config> = s.object({
   gateAgentLessCalls: s.union(['audit', 'refuse'] as const).default('audit'),
   settlementAuth: s.union(['off', 'observe', 'enforce'] as const).default('observe'),
   announce: s.boolean().default(false),
+  isolated: s.boolean().default(false),
   agentName: s.string().default('DeepSeek Harness A2A node'),
   peers: s.array(s.string()).default([]),
   delegates: s.array(s.object({ name: s.string(), url: s.string(), publicKey: s.string().default('') })).default([]),
@@ -649,7 +659,9 @@ export function apply(ctx: Context, config: Config): void {
       return () => {}
     }
   }
-  const fetchImpl: A2aFetch = (url, init) => globalThis.fetch(url, init)
+  // gh#193: the one door to peers — while isolated nothing leaves this host.
+  const peerFetch: typeof globalThis.fetch = (url, init) => config.isolated ? Promise.reject(new Error('isolated: outbound peer traffic is off on this host')) : globalThis.fetch(url, init)
+  const fetchImpl: A2aFetch = (url, init) => peerFetch(url, init)
 
   /** Constant-time secret comparison: hash both sides to equal-length digests. */
   function secretEqual(a: string, b: string): boolean {
@@ -1144,9 +1156,26 @@ export function apply(ctx: Context, config: Config): void {
   const liveRoots = new Map<string, Agent>()
   // Node identity N2+N3: a joined session that carries a node gets that node's layers on its own scope.
   const nodeBindings = new NodeBindings(join(home, 'a2a'))
+  const nodeReviews = new NodeReviewQueue(join(home, 'a2a'))
+  const nodeTaint = new SessionTaint(join(home, 'a2a'))
+  // N4: a SUBAGENT's mark climbs to every ancestor it reports to (session.header: origin 'subagent' + parentSession). A
+  // fork is not climbed: its source never sees the fork's text, and the fork's inherited log carries its own evidence.
+  const markLineage = (agent: { id: unknown; session?: unknown } | undefined, via: string): void => {
+    const seen = new Set<string>()
+    for (let a = agent; a !== undefined && !seen.has(String(a.id));) {
+      seen.add(String(a.id))
+      nodeTaint.mark(String(a.id), via)
+      const header = (a.session as { header?: { parentSession?: unknown; origin?: unknown } } | undefined)?.header
+      if (header?.origin !== 'subagent' || typeof header.parentSession !== 'string' || header.parentSession === '') return
+      const next = ctx.get('agents')?.get(header.parentSession as never) as { id: unknown; session?: unknown } | undefined
+      if (next === undefined) { nodeTaint.mark(header.parentSession, via); return }
+      a = next
+    }
+  }
+  ctx.on('tools/post-execute', (exec, result, next) => { const via = result.isError ? (/^a2a_(route|tasks|teams|status|probe)$/.test(exec.name) ? `${exec.name}:error` : '') : toolTaint(exec.name, result.value); if (via !== '') markLineage(exec.agent, via); return next() })
   const nodeTasks = new NodeTasks(join(home, 'a2a'), { probe: githubProbe(), logger, onSettled: (node, p) => nodeBinder.remind(node, settledReminder(p)) })
   nodeTasks.schedule(ctx)
-  const nodeBinder = createNodeBinder({ store: nodeStore, bindings: nodeBindings, logger, joined: id => joinedSessions.has(id), joinedList: () => joinedSessions.list(), archived: id => archivedSessionFilter()?.(id) === true, live: id => liveRoots.get(id), tasksText: node => nodeTasks.render(node), pendingReminders: node => nodeTasks.takePending(node).map(settledReminder) })
+  const nodeBinder = createNodeBinder({ store: nodeStore, bindings: nodeBindings, logger, joined: id => joinedSessions.has(id), joinedList: () => joinedSessions.list(), archived: id => archivedSessionFilter()?.(id) === true, live: id => liveRoots.get(id), tasksText: node => nodeTasks.render(node), pendingReminders: node => nodeTasks.takePending(node).map(settledReminder), selfUpdate: { store: nodeStore, queue: nodeReviews, taint: nodeTaint, events: agent => sessionEventsOf(agent as Agent), localSession: id => liveRoots.has(id) || joinedSessions.has(id) } })
   // No boot reconcile: a joined.json that failed to parse reads as empty, and ending every binding on that
   // reading would destroy them (the 3081 lesson). A stale row is harmless — mount checks joined itself.
   ctx.effect(() => joinedSessions.onChange(() => { nodeBinder.reconcile() }), 'a2a: node bindings follow join')
@@ -1976,7 +2005,7 @@ export function apply(ctx: Context, config: Config): void {
     // staying well inside a peer restart\x27s noticeability. Single-flight: a
     // refresh already in flight serves every poll that arrives before it
     // settles — no stacked sweeps.
-    let remoteRowsCache: { at: number; rows: { team: string; name: string; origin?: string; via?: string; workspace?: string; legacy?: boolean; teams?: readonly string[] }[] } | undefined
+    let remoteRowsCache: { at: number; rows: { team: string; name: string; origin?: string; via?: string; workspace?: string; legacy?: boolean; unreachable?: boolean; teams?: readonly string[] }[] } | undefined
     let remoteRowsInFlight: Promise<void> | undefined
     const refreshRemoteRows = (): void => {
       const now = Date.now()
@@ -1988,7 +2017,7 @@ export function apply(ctx: Context, config: Config): void {
             at: now,
             rows: all
               .filter(row => row.local !== true)
-              .map(row => ({ team: row.team, name: row.name, ...(row.origin !== undefined ? { origin: row.origin } : {}), ...(row.via !== undefined ? { via: row.via } : {}), ...(row.workspace !== undefined ? { workspace: row.workspace } : {}), ...(row.legacy === true ? { legacy: true } : {}), ...(row.teams !== undefined && row.teams.length > 0 ? { teams: [...row.teams] } : {}) })),
+              .map(row => ({ team: row.team, name: row.name, ...(row.origin !== undefined ? { origin: row.origin } : {}), ...(row.via !== undefined ? { via: row.via } : {}), ...(row.workspace !== undefined ? { workspace: row.workspace } : {}), ...(row.legacy === true ? { legacy: true } : {}), ...(row.unreachable === true ? { unreachable: true } : {}), ...(row.teams !== undefined && row.teams.length > 0 ? { teams: [...row.teams] } : {}) })),
           }
         })
         .catch(() => {})
@@ -1999,7 +2028,7 @@ export function apply(ctx: Context, config: Config): void {
     whenWebServerSettled((webServer) => {
       // gh#77 B1: the admin faces live in src/faces/admin.ts.
       registerAdminFaces(webServer, {
-        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
+        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url,
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
@@ -2014,7 +2043,7 @@ export function apply(ctx: Context, config: Config): void {
         get ownerAnnounceRestartPending() { return ownerAnnounceRestartPending },
         set ownerAnnounceRestartPending(v) { ownerAnnounceRestartPending = v },
       })
-      registerNodeFaces(webServer, { ctx, logger, nodeStore, bindings: nodeBindings, binder: nodeBinder, tasks: nodeTasks, apiKey: () => config.apiKey, secretEqual, controlRoute, readJsonBody })
+      registerNodeFaces(webServer, { ctx, logger, nodeStore, bindings: nodeBindings, binder: nodeBinder, tasks: nodeTasks, reviews: nodeReviews, apiKey: () => config.apiKey, secretEqual, controlRoute, readJsonBody })
     })
   }
 
@@ -2206,6 +2235,8 @@ export function apply(ctx: Context, config: Config): void {
    * opaque row; omitted when the sender is not meaningfully addressable.
    */
   function steerRelay(agent: Agent, text: string, sender?: string): void {
+    // N4 session taint: every relay steer carries content from outside this host (a delivery, its nudge or cancel notice).
+    markLineage(agent, 'relay')
     agent.steer({
       id: MessageId(`a2a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`),
       role: 'user',
@@ -2290,6 +2321,7 @@ export function apply(ctx: Context, config: Config): void {
         }, signal: AbortSignal) => Promise<unknown> }
       | undefined
     if (typeof controller?.prompt !== 'function') return
+    markLineage(agent, 'nudge')
     logger.info(`a2a: async nudge escalates to queue-mode prompt for ${team} (task ${taskId}, ref ${nudgeRef(taskId)})`)
     try {
       void controller.prompt({
@@ -2553,7 +2585,7 @@ export function apply(ctx: Context, config: Config): void {
   // to src/legacy/teams-bridge-inbound.ts — the registry probe, claim memo,
   // prepare and the bounded round. The outbound bridgeFace stays here until
   // the G-out slice (it submits through the dispatch trunk).
-  const { teamsRegistry, nativeTeamsClaims, nativeTeamsPrepare, nativeTeamsRound } = createTeamsBridgeInbound({ ctx, config, liveAgent, fromClause, sanitizeFromClause, proofHeader: hostDirectHeader })
+  const { teamsRegistry, nativeTeamsClaims, nativeTeamsPrepare, nativeTeamsRound } = createTeamsBridgeInbound({ ctx, config, liveAgent, fromClause, sanitizeFromClause, proofHeader: hostDirectHeader, taint: agent => { markLineage(agent, 'native-teams') } })
 
   /* ── gh#9+gh#10 OriginClaim (docs/protocol/delivery-origin-auth.md,
      src/origin-claim.ts): the caller's card key signs the envelope; the
@@ -3132,7 +3164,7 @@ export function apply(ctx: Context, config: Config): void {
             const listUrl = new URL('/a2a/log', base)
             listUrl.searchParams.set('caller_session', config.team)
             try {
-              const listResponse = await globalThis.fetch(listUrl, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } })
+              const listResponse = await peerFetch(listUrl, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } })
               const listBody = await listResponse.json().catch(() => ({ ok: false, error: `peer answered HTTP ${listResponse.status}` })) as { ok?: boolean; error?: string; sessions?: Array<{ id: string }> }
               if (listResponse.ok && listBody.ok === true && Array.isArray(listBody.sessions)) {
                 const picked = suffix !== '' ? listBody.sessions.find(row => row.id.includes(suffix)) : listBody.sessions[0]
@@ -3158,7 +3190,7 @@ export function apply(ctx: Context, config: Config): void {
           if (resolvedId !== '') target.searchParams.set('id', resolvedId)
           target.searchParams.set('limit', String(limit))
           try {
-            const response = await globalThis.fetch(target, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } })
+            const response = await peerFetch(target, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } })
             const body = await response.json().catch(() => ({ ok: false, error: `peer answered HTTP ${response.status}` })) as { ok?: boolean; error?: string }
             if (response.ok && body.ok === true) {
               finish({ ...body, via: base } as Record<string, JsonValue>)
@@ -3186,7 +3218,9 @@ export function apply(ctx: Context, config: Config): void {
    */
   function settlePeerCard(peer: string, outcome: CardFetchOutcome): A2aPeerCard | undefined {
     if (!outcome.ok) {
-      peerStore.noteFailure(peer)
+      // gh#193: a fetch the isolation switch refused says nothing about the
+      // peer — scoring it would evict learned peers and rewrite peers.json.
+      if (!config.isolated) peerStore.noteFailure(peer)
       return undefined
     }
     // A self-referral learned from a peer's card (the peer lists this node's
@@ -3530,7 +3564,10 @@ export function apply(ctx: Context, config: Config): void {
       if (card === undefined) return []
       // Keep the GUI's remote node projection session-only; the model tool
       // opts into the additional canvas-team rows (#159).
-      return peerDirectoryRows(card, peer, includeCanvas)
+      const rows = peerDirectoryRows(card, peer, includeCanvas)
+      // gh#106: a card kept through a miss still lists (until its own
+      // expiresAt), but the row says the peer did not answer the last read.
+      return cardCache.get(peer)?.missAt !== undefined ? rows.map(row => ({ ...row, unreachable: true })) : rows
     }
     // Bounded-concurrency sweep (mapBounded keeps row order by index, so the
     // listing still follows the peer store's preference order): a cold cache
