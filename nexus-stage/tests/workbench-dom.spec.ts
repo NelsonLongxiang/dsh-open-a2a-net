@@ -749,6 +749,25 @@ describe('canvas inspector member management (0.6.6)', () => {
     expect(canvasOp).not.toHaveBeenCalled()
   })
 
+  it('a failed explicit home save keeps the choice and shows a retryable validation error', async () => {
+    const save = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    const { v } = bench({ cliHomeOptions: async () => ({ ok: true, homes: ['https://home.example'], unreadable: 1 }), canvasOp: save })
+    v.update({ ...state, canvas: { teams: [{ name: 'ygl', team: 'dsh/canvas/ygl', members: [{ id: 'ops-cli/a1b2c3d4e5f60718', remote: true, cliHome: null }] }] } })
+    openTeam(v)
+    const form = v.root.querySelector('.wb-cli-home') as HTMLFormElement
+    ;(form.querySelector('button[type=button]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(text(form)).toContain('仍需你显式确认'))
+    const select = form.querySelector('select') as HTMLSelectElement
+    select.value = 'https://home.example'; select.dispatchEvent(new Event('change'))
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(text(form)).toContain('指定失败'))
+    expect(select.value).toBe('https://home.example')
+    expect((form.querySelector('button[type=submit]') as HTMLButtonElement).disabled).toBe(false)
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(text(form)).toContain('home 已指定'))
+    expect(save).toHaveBeenCalledTimes(2)
+  })
+
   it('adds members by picker (local session) and by manual remote handle', async () => {
     const { v, canvasOp } = bench()
     v.update(state)

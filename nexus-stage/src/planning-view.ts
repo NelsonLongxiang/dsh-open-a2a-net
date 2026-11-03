@@ -51,6 +51,7 @@ import { settleBoard, tidyMembers } from './planning-overlap'
 import { createLayoutUndo, type LayoutSnap } from './planning-undo'
 import { createNodeList } from './planning-nodelist'
 import { cardText } from './planning-card-text'
+import { createCardElement, paintPrio, workLabel } from './planning-card'
 import { createLegend } from './planning-legend'
 import { UNREACHABLE_HINT, showFrameReachability, unreachableRefs } from './planning-reachability'
 import { viewportBucket, type PlanningDeps, type PlanningInput, type PlanningSession, type PlanningTeam, type PlanningView, type SeamKey, type SeamPointer, type ViewportBucket } from './planning-types'
@@ -68,13 +69,8 @@ type Gesture =
   | { readonly kind: 'pan'; last: { x: number; y: number }; moved: boolean }
   | { readonly kind: 'marquee'; origin: { x: number; y: number }; last: { x: number; y: number }; additive: boolean }
 
-
-/** The card's 工作中/空闲 chip text; empty when the host reported no status (older host, cold or remote node). */
-export function workLabel(work: Pick<PlanningSession, 'status' | 'queued'> | undefined): string {
-  if (work?.status === undefined) return ''
-  const base = work.status === 'running' ? '工作中' : '空闲'
-  return typeof work.queued === 'number' && work.queued > 0 ? `${base} · 排队 ${String(work.queued)}` : base
-}
+// The card skeleton, its 工作中/空闲 chip and the right-hand chip live in planning-card (module-size cap).
+export { workLabel } from './planning-card'
 
 export function createPlanningView(deps: PlanningDeps): PlanningView {
   const model = new WorldModel()
@@ -406,28 +402,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       seen.add(n.id)
       let el = nodeEls.get(n.id)
       if (el === undefined) {
-        el = document.createElement('div')
-        el.className = 'p-node'
-        el.dataset.id = n.id
-        el.tabIndex = 0
-        const nm = document.createElement('div')
-        nm.className = 'nm'
-        const dot = document.createElement('span')
-        dot.className = 'dot'
-        const name = document.createElement('span')
-        name.className = 'nm-text'
-        nm.append(dot, name)
-        const sub = document.createElement('div')
-        sub.className = 'sub mono'
-        const prio = document.createElement('span')
-        prio.className = 'prio mono'
-        // Second line: the description, with the 工作中/空闲 chip at its right end — the title keeps its full width.
-        const work = document.createElement('span')
-        work.className = 'work'
-        const subRow = document.createElement('div')
-        subRow.className = 'sub-row'
-        subRow.append(sub, work)
-        el.append(nm, subRow, prio)
+        el = createCardElement(n.id)
         nodeLayer.appendChild(el)
         nodeEls.set(n.id, el)
       }
@@ -456,22 +431,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       if (subEl.textContent !== subText) subEl.textContent = subText
       const tip = unavailable ? `${txt.tip} · ${UNREACHABLE_HINT}` : txt.tip
       if (el.title !== tip) el.title = tip
-      const prioEl = el.querySelector<HTMLElement>('.prio')!
-      if (n.remote === true) {
-        // gh#20 W-A: the peer badge — link class colors the chip (linked
-        // green / stranger gray), the verified tick/cross rides after it.
-        // An absent link field (older host) renders the neutral 'peer'.
-        const info = peerInfoByHost.get(host)
-        const cls = info?.link === 'linked' ? 'lnk-linked' : info?.link === 'stranger' ? 'lnk-stranger' : ''
-        if (prioEl.className !== `prio mono ${cls}`.trim()) prioEl.className = `prio mono ${cls}`.trim()
-        const mark = info === undefined ? '' : info.verified === true ? '✓' : '✗'
-        const badge = (info?.link ?? 'peer') + mark
-        if (prioEl.textContent !== badge) prioEl.textContent = badge
-      } else {
-        if (prioEl.className !== 'prio mono') prioEl.className = 'prio mono'
-        const prioText = n.memberships[0] !== undefined ? `P${n.memberships[0]!.index}` : ''
-        if (prioEl.textContent !== prioText) prioEl.textContent = prioText
-      }
+      paintPrio(el.querySelector<HTMLElement>('.prio')!, n, n.remote === true ? peerInfoByHost.get(host) : undefined)
     }
     for (const [id, el] of [...nodeEls]) {
       if (!seen.has(id)) { el.remove(); nodeEls.delete(id) }
