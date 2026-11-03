@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { decideCliHome, type CliHomeCandidate } from '../../src/cli-home.ts'
+import { cliHomeChoices, decideCliHome, type CliHomeCandidate } from '../../src/cli-home.ts'
 import type { A2aPeerCard } from '../../src/types.ts'
 
 const handle = 'ops-cli/a1b2c3d4e5f60718'
@@ -19,6 +19,10 @@ describe('CLI home pin at the operator link gesture', () => {
     expect(decideCliHome(handle, undefined, candidates)).toEqual({ ok: true })
     expect(decideCliHome(handle, 'https://attacker.test/', candidates)).toEqual({ ok: true, home: 'https://attacker.test' })
     expect(decideCliHome(handle, 'https://home.test', candidates).ok).toBe(false)
+  })
+  it('choice projection includes only linked advertisers, counts unreadable cards, and deduplicates origins', () => {
+    const candidates = [row('https://one.test'), row('https://one.test/alias'), row('https://stranger.test', false), row('https://unlisted.test', true, false), { url: 'https://dead.test', linked: true }]
+    expect(cliHomeChoices(handle, candidates)).toEqual({ homes: ['https://one.test'], unreadable: 1 })
   })
   it('accepts explicit home only when its linked host lists that exact CLI handle', () => {
     const candidates = [row('https://one.test'), row('https://two.test', false), row('https://three.test', true, false)]

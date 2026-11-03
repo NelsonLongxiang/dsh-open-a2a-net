@@ -108,7 +108,8 @@ variables and exit codes: [`src/skill/references/cli.md`](src/skill/references/c
 A canvas team is a user-composed, named, multi-member routing group: **one atomic session node may sit in many teams**, and a route to `<team>/canvas/<name>` resolves the **first live member** (member order is the routing priority) or wakes the **first cold joined member** (wake-on-route). The `canvas/` path segment can never collide with a node alias (`<team>/<id8>`), so both namespaces coexist untouched.
 
 - Storage: `<dsh-home>/a2a/canvas.json` (ordered team entries; caps: 64 teams × 32 members)
-- Control API: `POST /__dsh_a2a/canvas` with `action: create | remove | add-member | remove-member`
+- Control API: `POST /__dsh_a2a/canvas` with `action: create | remove | add-member | remove-member`; `cli-home-options` is a read-only owner action for an existing CLI member.
+- For a CLI member marked “home 未确定”, open its canvas team inspector and choose “指定 home”. The host freshly reads cards, lists only linked advertisers, and reports unreadable-card counts. No home is selected automatically; confirming calls the existing local `add-member` with explicit `home`, which freshly validates again. This does not weaken automatic pinning or admission.
 - Membership requires a joined session (live node or remembered intent) — no routing backdoor over unjoined sessions; leaving the network (leave/archive) drops every canvas membership
 - A member may also be a **remote** zone-qualified team handle (`zone/a1b2c3d4`) the operator adds by hand — the link that admits that remote caller here and entitles it to the full card
 - `a2a_teams` lists canvas teams as local rows with member/live counts; `/__dsh_a2a/state` serves per-member `joined`/`live` flags for local members and `{ id, team, remote: true }` for remote ones
