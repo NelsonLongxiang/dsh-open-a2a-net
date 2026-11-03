@@ -694,6 +694,20 @@ describe('canvas inspector member management (0.6.6)', () => {
     expect(canvasOp).toHaveBeenCalledWith('remove-member', 'ygl', 'session-11111111-aaaa')
   })
 
+  it('marks CLI refs without a pinned home in the member panel and shows a known home', () => {
+    const { v } = bench()
+    v.update({ ...state, canvas: { teams: [{ name: 'ygl', team: 'dsh/canvas/ygl', members: [
+      { id: 'ops-cli/a1b2c3d4e5f60718', remote: true, cliHome: null },
+      { id: 'ops-cli/1111222233334444', remote: true, cliHome: 'https://home.example' },
+    ] }] } })
+    const card = openTeam(v)
+    const rows = [...card.querySelectorAll('.wb-member-row')]
+    expect(text(rows[0]?.querySelector('.wb-member-dot'))).toContain('home 未确定')
+    expect(rows[0]?.querySelector('.wb-member-label')?.getAttribute('title')).toBe('home 未确定')
+    expect(text(rows[1]?.querySelector('.wb-member-dot'))).not.toContain('home 未确定')
+    expect(rows[1]?.querySelector('.wb-member-label')?.getAttribute('title')).toBe('https://home.example')
+  })
+
   it('adds members by picker (local session) and by manual remote handle', async () => {
     const { v, canvasOp } = bench()
     v.update(state)

@@ -96,4 +96,19 @@ describe('#222 F1 remote CLI pinned-home admission (real hosts; scope on)', () =
       expect((await direct(target, homes[0]!, 'direct-cli-home-unreachable')).error).toContain('offline or home card could not be read')
     } finally { await target.dispose() }
   }, 20_000)
+  it('a cold H2 card cache with an unreadable pinned home refuses the forwarded CLI body', async () => {
+    const { target, homes } = await pair()
+    let cold: MeshNode | undefined
+    try {
+      await deposit(homes[0]!)
+      expect((await link(target)).ok).toBe(true)
+      await target.dispose()
+      await homes[0]!.dispose()
+      // Reboot with the same canvas.json pin but an empty in-memory card cache.
+      cold = await bootNode({ name: 'H2', session: 'mesh-cli-target', team: 'target', port: target.port, home: target.home, sessionNodes: true, peers: [homes[0]!.baseUrl] })
+      const answer = await direct(cold, homes[0]!, 'direct-cli-home-cold')
+      expect(answer.routed, JSON.stringify(answer)).not.toBe(true)
+      expect(cold.steered).toHaveLength(0)
+    } finally { if (cold !== undefined) await cold.dispose() }
+  }, 20_000)
 })
