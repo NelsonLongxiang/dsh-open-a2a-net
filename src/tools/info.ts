@@ -14,6 +14,7 @@ import type { Config } from '../index.ts'
 import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from '../runtime.ts'
 import type { A2aPeerCard } from '../types.ts'
 import { peerDirectoryRows } from '../peer-directory.ts'
+import { peerContentMeta } from '../node-self.ts'
 import type { ZoneCardFetch } from '../zone.ts'
 import type { A2aClient, CardFetchOutcome } from '../a2a-client.ts'
 import type { CanvasStore } from '../canvas-store.ts'
@@ -281,6 +282,8 @@ export function createInfoTools(deps: InfoToolsDeps) {
         query: { type: 'string', description: 'Optional keyword filter (case-insensitive substring over team/name/description).' },
       },
       output: {
+        // gh#198: the host's own verdict on whether this result came from outside this host, persisted on tool/result.
+        presentationMeta: peerContentMeta('a2a_teams'),
         schema: {
           type: 'object',
           additionalProperties: false,
@@ -399,6 +402,8 @@ export function createInfoTools(deps: InfoToolsDeps) {
         + 'Use it to observe an ongoing collaboration or diagnose delivery instead of re-routing.',
       parameters: {},
       output: {
+        // gh#198: the host's own verdict on whether this result came from outside this host, persisted on tool/result.
+        presentationMeta: peerContentMeta('a2a_status'),
         schema: {
           type: 'object',
           additionalProperties: false,
@@ -545,6 +550,8 @@ export function createInfoTools(deps: InfoToolsDeps) {
         + 're-routing to ask for progress.',
       parameters: {},
       output: {
+        // gh#198: the host's own verdict on whether this result came from outside this host, persisted on tool/result.
+        presentationMeta: peerContentMeta('a2a_tasks'),
         schema: {
           type: 'object',
           additionalProperties: false,
@@ -675,6 +682,8 @@ export function createInfoTools(deps: InfoToolsDeps) {
         url: { type: 'string', description: 'Optional single peer base URL to probe; empty probes every tracked peer.' },
       },
       output: {
+        // gh#198: the host's own verdict on whether this result came from outside this host, persisted on tool/result.
+        presentationMeta: peerContentMeta('a2a_probe'),
         schema: {
           type: 'object',
           additionalProperties: false,
