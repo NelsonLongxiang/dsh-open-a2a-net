@@ -36,7 +36,7 @@ export function createDirectForward(d: DirectForwardDeps) {
       if (request.team.includes('/canvas/')) {
         const card = await directory.card(url)
         const org = card?.canvasOrg?.find(row => row.team === request.team)
-        const receivers = org?.members.filter(member => member !== request.caller && card?.sessionTeams?.some(row => row.team === member)) ?? []
+        const receivers = org?.members.filter(member => member !== request.caller) ?? []
         if (receivers.length === 0 || receivers.some(member => !d.memberLinked(member))) {
           failures.push(url + ': forwarding a canvas requires a direct operator link to every receiving member for its receipt return path')
           continue

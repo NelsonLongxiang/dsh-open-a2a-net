@@ -58,7 +58,7 @@ describe('one-hop CLI forwarding', () => {
   it('a canvas candidate requires direct return links to every advertised receiving member', async () => {
     const x = fixture()
     const team = 'beta/canvas/ops'
-    x.deps.candidates = async () => ({ urls: ['https://peer.test'], card: async () => ({ canvasOrg: [{ team, name: 'ops', members: [request.caller, 'beta/aaaaaaaa', 'beta/bbbbbbbb'] }], sessionTeams: [{ team: 'beta/aaaaaaaa' }, { team: 'beta/bbbbbbbb' }] } as A2aPeerCard) })
+    x.deps.candidates = async () => ({ urls: ['https://peer.test'], card: async () => ({ canvasOrg: [{ team, name: 'ops', members: [request.caller, 'beta/aaaaaaaa', 'beta/bbbbbbbb'] }], sessionTeams: [{ team: 'beta/aaaaaaaa' }] } as A2aPeerCard) })
     x.deps.memberLinked = member => member === 'beta/aaaaaaaa'
     expect((await createDirectForward(x.deps)({ ...request, team })).ok).toBe(false)
     expect(x.sent).toHaveLength(0)

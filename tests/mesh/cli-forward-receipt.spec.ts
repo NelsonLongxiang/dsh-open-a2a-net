@@ -36,6 +36,7 @@ async function setup(directLink = true, extraHome = false) {
   expect((await post(a, '/__dsh_a2a/cli-deposit', { action: 'publish', card })).ok).toBe(true)
   if (c !== undefined) expect((await post(c, '/__dsh_a2a/cli-deposit', { action: 'publish', card })).ok).toBe(true)
   await post(b, '/__dsh_a2a/join', { id: targetId })
+  if (c !== undefined) await post(c, '/__dsh_a2a/canvas', { action: 'add-member', name: 'intercept', id: targetHandle })
   await post(a, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: handle })
   if (directLink) await post(a, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: targetHandle })
   expect((await post(b, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: handle, home: a.baseUrl })).ok).toBe(true)

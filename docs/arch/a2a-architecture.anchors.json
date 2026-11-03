@@ -3,7 +3,7 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "1d74c55795910b5cd1e60b946b694cc6f9e72d66b95884c1e68b48080b37e67a",
+    "src/index.ts": "a9db0600e43fefa2f9bec44a81ef905281d60cc3941283b8a6a88b7f650246b9",
     "src/faces/admin.ts": "840ef1b31bde7ed1b0cd69a3f27420ce06992d4f214b4005976c6bee63fb3b8c",
     "src/canvas-store.ts": "c612b9b8e03377fec827978addaabf4ce0762a52769bfa15263bd873fbfdedde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
@@ -19,7 +19,7 @@
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
-    "src/faces/wire.ts": "5ca25d6aba38c063e2c2bd046215944c65eb58cb56ecd353f803790036094fc2",
+    "src/faces/wire.ts": "c352bfe3388d9defa79c538cba8a682ffab113802a41f8216f43fc308dd911d2",
     "src/faces/canvas-notify.ts": "7153f7cb2b6c985825edde55809d47d3a2a14e652d69e55f6d1a72cd9f6d50d9",
     "src/task-auth.ts": "8558710d33b37f3e261eded23b6ca971572019a5dccb05ab5e8d8bd222095717",
     "src/origin-claim.ts": "d467153656bd5592785597e4a81d3686f0b4f91cac38705ecb18d4cc74f8d22c",
@@ -225,7 +225,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:3851",
+      "ref": "src/index.ts:3852",
       "expect": "const callerNodeId = originAgentId"
     },
     {
