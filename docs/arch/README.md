@@ -26,6 +26,19 @@ pnpm exec vitest run tests/unit/architecture-audit.spec.ts
 每个全路径数值锚的精确源码串与文件 SHA256；范围的起终点分别核，
 裸 :NN 直接拒绝。源码文件任何变化都会要求重核，不自动平移放行。
 
+改了带锚点的源码之后，用显式的重锚命令把行号跟上，不要手改：
+
+~~~sh
+pnpm reanchor:arch              # 按 origin/master → 工作树的 diff 平移锚点
+pnpm reanchor:arch --check      # 只检查，有要改的就退出 1
+pnpm reanchor:arch --base <ref> # 清单对应的不是 origin/master 时指定基准
+~~~
+
+它只平移「平移后那一行仍与见证逐字相同」的锚点，同时改写 drawio 里的引用和源文件摘要。
+见证对不上的锚点（落在被编辑的行上）一律不自动移动，会连同文件里与见证相同的候选行号一起列出来，
+由人判断；此时退出 1，`verify-architecture` 也仍然会报错。清单记录的不是基准版本时（例如合并时
+docs/arch 冲突），它会提示先 `git checkout <base> -- docs/arch`。
+
 锚点清单不是语义正确性的自动证明：精确行文本和文件摘要防漂移，
 模块描述与源码的含义仍需审阅。10 个工程测试包含正例及有意变异反例，
 覆盖错行、短锚、范围越界、源码漂移、错误预期串、坏 XML、非黑字、
