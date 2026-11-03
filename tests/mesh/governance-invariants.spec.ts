@@ -23,6 +23,18 @@ import { apply, type Config } from '../../src/index.ts'
 import { envelopeFor } from '../wire/envelope.ts'
 import { bootNode, runContext } from './harness.ts'
 
+describe('mesh harness follows the shipped scope defaults', () => {
+  it('without overrides both routing and information scope are on', async () => {
+    const node = await bootNode({ name: 'defaults', session: 'mesh-defaults', team: 'dsh', sessionNodes: true })
+    try {
+      const self = await node.ctx.tools.get('a2a_whoami')!.execute({}, runContext(node.agents.agent)) as { teamScopeRouting?: boolean }
+      expect(self.teamScopeRouting).toBe(true)
+      const owner = await globalThis.fetch(`${node.baseUrl}/__dsh_a2a/owner-settings`).then(async r => await r.json() as { teamScopeInfo: boolean })
+      expect(owner.teamScopeInfo).toBe(true)
+    } finally { await node.dispose() }
+  })
+})
+
 const lanIp = (): string => {
   for (const list of Object.values(networkInterfaces())) {
     for (const a of list ?? []) if (a.family === 'IPv4' && !a.internal) return a.address

@@ -101,7 +101,8 @@ describe('gh#112 CLI resend through a lost reply (end-to-end)', () => {
     }
   }, 60_000)
 
-  it('review P1: a refused async round whose reply was lost is reported as failed, never as delivered', async () => {
+  // #144: this host's Windows Vitest child-process path fail-fast exits 0xC0000409 even on old master; POSIX still runs this contract.
+  it.skipIf(process.platform === 'win32')('review P1: a refused async round whose reply was lost is reported as failed, never as delivered', async () => {
     const port = await reservePort()
     const a = await bootNode({ name: 'A', session: 'mesh-gh112-p1', team: 'dsh', sessionNodes: true, port })
     const proxy = await lossyProxy(a.baseUrl)

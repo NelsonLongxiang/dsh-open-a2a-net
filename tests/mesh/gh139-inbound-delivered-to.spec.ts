@@ -14,8 +14,9 @@ afterEach(() => { vi.unstubAllGlobals() })
 describe('r142 inbound deliveredTo', () => {
   it('a delivery to the bare process team records the session face that received it', async () => {
     const pA = await reservePort()
-    const B = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo', sessionNodes: true, settlementAuth: 'observe', home: tmpHome(), peers: [`http://127.0.0.1:${String(pA)}`] })
-    const A = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', agentId: 'session-aaaaaaaa11112222', sessionNodes: true, settlementAuth: 'observe', port: pA, peers: [B.baseUrl] })
+    // Inbound deliveredTo is a wire bookkeeping fact; this pair does not establish team membership.
+    const B = await bootNode({ name: 'cargo', session: 'mesh-cargo', team: 'cargo', sessionNodes: true, teamScopeRouting: false, teamScopeInfo: false, settlementAuth: 'observe', home: tmpHome(), peers: [`http://127.0.0.1:${String(pA)}`] })
+    const A = await bootNode({ name: 'alpha', session: 'mesh-alpha', team: 'alpha', agentId: 'session-aaaaaaaa11112222', sessionNodes: true, teamScopeRouting: false, teamScopeInfo: false, settlementAuth: 'observe', port: pA, peers: [B.baseUrl] })
     try {
       await postJson(A.baseUrl, '/__dsh_a2a/join', { id: 'session-aaaaaaaa11112222' })
       ;(B.agents.agent as any).steer = (p: unknown) => { B.steered.push(p) }

@@ -585,7 +585,8 @@ describe('#174 — frozen versions across a plugin reload, retries, re-join, hea
     }
   }, 30_000)
 
-  it('3: a leave whose write failed is retried at the next join change', async () => {
+  // Windows chmod does not deny directory writes; this permission-failure fixture is POSIX-only.
+  it.skipIf(process.platform === 'win32')('3: a leave whose write failed is retried at the next join change', async () => {
     const { chmodSync } = await import('node:fs')
     const m = await mount()
     const dir = join(m.home, 'a2a')
@@ -786,7 +787,8 @@ describe('#174 — frozen versions across a plugin reload, retries, re-join, hea
     }
   }, 60_000)
 
-  it('r3 M15 + P3-1: while a failed leave is pending, a re-join and a re-publish do not mount, and bind answers 409', async () => {
+  // Windows chmod cannot reproduce a pending failed write; POSIX keeps the exact assertion.
+  it.skipIf(process.platform === 'win32')('r3 M15 + P3-1: while a failed leave is pending, a re-join and a re-publish do not mount, and bind answers 409', async () => {
     const { chmodSync } = await import('node:fs')
     const m = await mount()
     const dir = join(m.home, 'a2a')
