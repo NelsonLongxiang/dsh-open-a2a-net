@@ -2907,7 +2907,7 @@ export function apply(ctx: Context, config: Config): void {
       config,
       cliDeposits,
       canvasStore,
-      canvasNameReserved: name => name.startsWith('roster:') || ownerAllowlist.includes(`${config.team}/${name}`) || teamMemberships.membersOf(`${config.team}/${name}`).length > 0,
+      canvasNameReserved: raw => { const name = raw.trim(); return name.startsWith('roster:') || ownerAllowlist.includes(`${config.team}/${name}`) || teamMemberships.membersOf(`${config.team}/${name}`).length > 0 },
       sessionNodes,
       joinedSessions,
       idempotencyStore,

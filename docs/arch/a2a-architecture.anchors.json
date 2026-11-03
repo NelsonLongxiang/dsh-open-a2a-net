@@ -3,8 +3,8 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "a38860762b9b45392021693b5804fe4f9c7da8d328d5ce183f76849c0946dc44",
-    "src/faces/admin.ts": "c5b0d01d92bf417cdbf19ccdc997aa467f380149684881b94edf371f6590ce93",
+    "src/index.ts": "90303b7d5bd9323a8d4539245b21e021e8d43d8535e6adf0e504530e0ce88864",
+    "src/faces/admin.ts": "9f1742276b4ab51a6094f26d85945bb439f4d0bf80bcce951300bba4a867d77e",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "a8e203feb252f0c5d21f98be6ecc45c84d33f867726331a64823f40d68578a2e",

@@ -777,7 +777,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
   // remembered intent): canvas routing only reaches sessions the user
   // put on the network by gesture — no routing backdoor over unjoined
   // sessions.
-  const canvasNameReserved = (name: string): boolean => name.startsWith('roster:') || d.ownerAllowlist.includes(`${config.team}/${name}`) || teamMemberships.membersOf(`${config.team}/${name}`).length > 0
+  const canvasNameReserved = (name: string): boolean => { const clean = name.trim(); return clean.startsWith('roster:') || d.ownerAllowlist.includes(`${config.team}/${clean}`) || teamMemberships.membersOf(`${config.team}/${clean}`).length > 0 }
   ctx.effect(() => webServer.register({
     kind: 'exact',
     path: '/__dsh_a2a/canvas',

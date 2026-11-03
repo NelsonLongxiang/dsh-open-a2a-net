@@ -46,9 +46,11 @@ describe('gh#41 fleet canvas regulation', () => {
       // own view via state (ownCardUrl is not exposed; but the seed URL is).
       const add = await post(`${a.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: b.baseUrl, op: 'add-member', name: '远端研发', id: 'dsh/01234567' })
       expect(add.ok).toBe(true)
-      const prefixed = await post(`${a.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: b.baseUrl, op: 'create', name: 'roster:伪装' })
-      expect(prefixed.ok).toBe(false)
-      expect(String(prefixed.error)).toContain('roster-reserved')
+      for (const name of ['roster:伪装', ' roster:伪装 ']) {
+        const prefixed = await post(`${a.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: b.baseUrl, op: 'create', name })
+        expect(prefixed.ok).toBe(false)
+        expect(String(prefixed.error)).toContain('roster-reserved')
+      }
       const bState = await post(`${b.baseUrl}/__dsh_a2a/state`)
       const team = (bState.canvas?.teams as Array<{ name: string; members: string[] }>).find(t => t.name === '远端研发')
       expect(JSON.stringify(team?.members)).toContain('dsh/01234567')

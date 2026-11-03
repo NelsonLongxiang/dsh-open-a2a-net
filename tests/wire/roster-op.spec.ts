@@ -59,8 +59,8 @@ describe('#199 roster control HTTP and shared membership', () => {
       expect(st.registry.teamAudit.some(row => row.id === 'human:owner' && row.actor === 'human:owner')).toBe(true)
       const who = await m.ctx.tools.get('a2a_whoami')?.execute({}, { agent: m.a }) as { teams: { roster: string[] } }
       expect(who.teams.roster).toContain('dsh/生产服务组')
-      for (const action of ['create', 'add-member']) {
-        const reply = await fetch(m.base + '/__dsh_a2a/canvas', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Key': 'test-key' }, body: JSON.stringify({ action, name: '生产服务组', id: A }) })
+      for (const action of ['create', 'add-member']) for (const name of ['生产服务组', ' 生产服务组 ']) {
+        const reply = await fetch(m.base + '/__dsh_a2a/canvas', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Key': 'test-key' }, body: JSON.stringify({ action, name, id: A }) })
         expect((await reply.json() as { ok: boolean }).ok).toBe(false)
       }
       expect((await m.post({ op: 'remove-member', name: '生产服务组', id: B })).body).toMatchObject({ ok: true, members: [A] })
