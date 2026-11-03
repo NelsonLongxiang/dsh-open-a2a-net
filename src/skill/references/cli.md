@@ -111,10 +111,11 @@ model tools.
   - Reusing an id for a different message, or switching `--sync` on or off,
     is refused (exit 1): drop `--task` to send it as a new task.
   - `report` takes `--task` the same way.
-- Direct delivery does not relay: only teams on the home host are reachable.
-  A team on another host answers "No live DSH session node accepts team".
-- Admission: a deposited handle is a node fact of its home host (N3). It
-  carries no roster or canvas membership of its own.
+- Home-host forwarding is opt-in: `forwardDirect: true` forwards one hop only after a local target miss. H must not be isolated, the CLI must be online and sign a bound envelope, the inbound request must have no Guard, and the target must pass H’s sender scope.
+- Both operators establish links: at A, put the CLI and B receiving member handles in an operator canvas; at B, link the CLI handle and pin its home to A. A remote canvas target requires A to directly link every advertised receiving member; a peer-org claim alone is insufficient for the return receipt.
+- B signs its auto-receipt as the member that did the work. It returns only to the pinned home, settles A’s single forwarded outbound row on-chain under `enforce`, and enters the CLI mailbox (`a2a-net inbox`). `--sync` returns B’s final reply. A 15s transport-budget expiry is `-32005`; reconcile by task id rather than resend blindly.
+- With forwarding off or any prerequisite missing, the original "No live DSH session node accepts team" error includes the reason it was not forwarded. Receiving hosts never forward the forwarded request again.
+- Admission: a deposited handle is a node fact of its home host (N3); that fact alone grants no remote scope or admission. Operator canvas membership and B’s home pin are still required. Global self-description is never a link.
 - `a2a-net report <message…>` is a one-way report to the host's process team.
 - A message that starts with `-` goes after `--`. Flag values never become
   part of the message.

@@ -3629,6 +3629,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
    */
   const forwardDirect = createDirectForward({
     enabled: () => config.forwardDirect === true, isolated: () => config.isolated, deposited: handle => cliDeposits.get(handle) !== undefined,
+    memberLinked: handle => canvasStore.list().some(name => canvasStore.remoteMembersOf(name).includes(handle)),
     scope: (handle, team) => config.teamScopeRouting ? outboundScope(senderScopeRecords, handle, handle, team) : Promise.resolve({ ok: true as const }),
     candidates: async (team, failures, caller) => { const fetch = memoizedCardFetch(); return { urls: await directoryPeerCandidates(fetch, team, failures, { id: caller, handle: caller }), card: fetch } },
     dispatch: (url, request, guard) => dispatchPeerCandidate(url, request.team, request.message, request.contextId, new AbortController().signal, request.caller, request.noWait, request.taskId, request.caller, guard),
@@ -4146,6 +4147,15 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
    * owner escalation actually fires for cross-node callback addresses.
    */
   async function dispatchAnywhere(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode: boolean, taskId?: string, peerCaller?: string): Promise<A2aRouteResult & { ok: true }> {
+    // A remote CLI receipt belongs only to its operator-pinned home, never a
+    // namesake deposit or another host publishing the same directory handle.
+    if (CLI_HANDLE_RE.test(team) && parseReceipt(message) !== null && canvasStore.list().some(name => canvasStore.remoteMembersOf(name).includes(team))) {
+      const home = canvasStore.cliHomeOf(team)
+      if (home === undefined) throw new Error(`CLI receipt home is not pinned for ${team}`)
+      const delivered = await dispatchPeerCandidate(home, team, message, contextId, signal, peerCaller ?? callerSession, asyncMode, taskId)
+      if (!delivered.ok) throw new Error(`CLI receipt to pinned home failed: ${delivered.error}`)
+      return delivered
+    }
     const local = await dispatchLocalCandidate(team, message, callerSession, contextId, signal, asyncMode, taskId)
     // A background send books no outbound row: its birth facts have no row to go on.
     if (taskId !== undefined) localBirths.delete(taskId)

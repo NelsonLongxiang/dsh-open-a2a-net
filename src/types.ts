@@ -146,6 +146,8 @@ export interface A2aRouteOk {
 
 /** Canonical `a2a_route` failure value. */
 export interface A2aRouteError {
+  /** A forwarded receipt never promises another receipt, including uncertain waits. */
+  readonly receipt?: 'none'
   readonly ok: false
   /** Peer or transport failure text. */
   readonly error: string

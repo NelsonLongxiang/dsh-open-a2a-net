@@ -20,10 +20,7 @@
   The `a2a-net` CLI (0.6.27+) is the supported exception: a DEPOSITED handle
   is routable on its home host and receives into its mailbox
   ([cli.md](cli.md)).
-- **Direct delivery does not relay.** `POST /a2a/direct` only serves teams on
-  the host that receives it; a team on another host answers "No live DSH
-  session node accepts team". `a2a_route` resolves peers and forwards;
-  direct callers (the CLI included) must target their home host's teams.
+- **"No live DSH session node accepts team" may name a forwarding prerequisite.** Direct delivery remains local by default. `forwardDirect: true` permits one hop only for an online, bound-signed local CLI, on a non-isolated home, with no inbound Guard and a target inside sender scope. A must link B’s receiving members; B must link the CLI and pin A as its home. Remote canvas org alone cannot authorize the receipt return path. Read the appended "not forwarded" reason; do not treat a missing link, expired deposit or already-forwarded request as a transport outage. The target host never forwards again.
 - A sync route to a remote peer rides a 15s transport budget (a target on
   this host gets 180s) — both are shorter than many model turns. For
   anything that runs long, prefer `async: true` and the receipt contract.

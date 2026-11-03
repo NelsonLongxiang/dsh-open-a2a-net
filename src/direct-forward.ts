@@ -12,6 +12,7 @@ export interface DirectForwardDeps {
   enabled(): boolean
   isolated(): boolean
   deposited(handle: string): boolean
+  memberLinked(handle: string): boolean
   scope(handle: string, team: string): Promise<{ ok: true } | { ok: false; error: string }>
   candidates(team: string, failures: string[], caller: string): Promise<{ urls: string[]; card(url: string): Promise<A2aPeerCard | undefined> }>
   dispatch(url: string, request: ForwardRequest, guard: string): Promise<A2aRouteResult>
@@ -32,13 +33,22 @@ export function createDirectForward(d: DirectForwardDeps) {
     const guard = guardHeader({ ...mintGuard(), hopBudget: DEFAULT_HOP_BUDGET - 1 })
     for (const url of directory.urls) {
       if (!d.deposited(request.caller)) return refuse('local CLI deposit expired before dispatch')
+      if (request.team.includes('/canvas/')) {
+        const card = await directory.card(url)
+        const org = card?.canvasOrg?.find(row => row.team === request.team)
+        const receivers = org?.members.filter(member => member !== request.caller && card?.sessionTeams?.some(row => row.team === member)) ?? []
+        if (receivers.length === 0 || receivers.some(member => !d.memberLinked(member))) {
+          failures.push(url + ': forwarding a canvas requires a direct operator link to every receiving member for its receipt return path')
+          continue
+        }
+      }
       const answer = await d.dispatch(url, request, guard)
       const result = !answer.ok && answer.ownBudgetExhausted === true ? { ...answer, code: -32005 } : answer
       d.activity(request.team, url, result.ok)
       if (result.ok || result.code === -32005) {
         // A receipt owes no receipt; native bridge rounds have no A2A receipt contract.
         // Match routeTrunk/trackOwedTask rather than manufacturing an unpayable debt.
-        if (parseReceipt(request.message) !== null) return result.ok ? { ...result, receipt: 'none' } : result
+        if (parseReceipt(request.message) !== null) return { ...result, receipt: 'none' }
         if (result.ok && result.bridge !== undefined) return { ...result, receipt: 'none' }
         const card = await directory.card(url)
         const birth: OutboundBirth = { forwarded: true, ...(card?.publicKey ? { peerKey: card.publicKey } : {}), ...(card?.session ? { peerHost: card.session } : {}), deliveredTo: result.ok ? result.deliveredTo ?? request.team : request.team }
