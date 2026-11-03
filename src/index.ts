@@ -185,6 +185,14 @@ export interface Config {
    * joined session teams so peers find it without a central directory.
    */
   readonly announce: boolean
+  /**
+   * gh#193: send nothing to any peer. Every outbound peer request — card
+   * reads, directory sweeps, routes, log reads, canvas pings and canvas-op
+   * relays — goes through one fetch that refuses while this is on, so a
+   * test host stays dark even with learned peers in `a2a/peers.json`
+   * (which is left untouched). Inbound faces keep answering. Default false.
+   */
+  readonly isolated: boolean
   /** Human-facing name published on the agent card. */
   readonly agentName: string
   /**
@@ -422,6 +430,7 @@ export const Config: s<Config> = s.object({
   gateAgentLessCalls: s.union(['audit', 'refuse'] as const).default('audit'),
   settlementAuth: s.union(['off', 'observe', 'enforce'] as const).default('observe'),
   announce: s.boolean().default(false),
+  isolated: s.boolean().default(false),
   agentName: s.string().default('DeepSeek Harness A2A node'),
   peers: s.array(s.string()).default([]),
   delegates: s.array(s.object({ name: s.string(), url: s.string(), publicKey: s.string().default('') })).default([]),
@@ -650,7 +659,9 @@ export function apply(ctx: Context, config: Config): void {
       return () => {}
     }
   }
-  const fetchImpl: A2aFetch = (url, init) => globalThis.fetch(url, init)
+  // gh#193: the one door to peers — while isolated nothing leaves this host.
+  const peerFetch: typeof globalThis.fetch = (url, init) => config.isolated ? Promise.reject(new Error('isolated: outbound peer traffic is off on this host')) : globalThis.fetch(url, init)
+  const fetchImpl: A2aFetch = (url, init) => peerFetch(url, init)
 
   /** Constant-time secret comparison: hash both sides to equal-length digests. */
   function secretEqual(a: string, b: string): boolean {
@@ -1994,7 +2005,7 @@ export function apply(ctx: Context, config: Config): void {
     // staying well inside a peer restart\x27s noticeability. Single-flight: a
     // refresh already in flight serves every poll that arrives before it
     // settles — no stacked sweeps.
-    let remoteRowsCache: { at: number; rows: { team: string; name: string; origin?: string; via?: string; workspace?: string; legacy?: boolean; teams?: readonly string[] }[] } | undefined
+    let remoteRowsCache: { at: number; rows: { team: string; name: string; origin?: string; via?: string; workspace?: string; legacy?: boolean; unreachable?: boolean; teams?: readonly string[] }[] } | undefined
     let remoteRowsInFlight: Promise<void> | undefined
     const refreshRemoteRows = (): void => {
       const now = Date.now()
@@ -2006,7 +2017,7 @@ export function apply(ctx: Context, config: Config): void {
             at: now,
             rows: all
               .filter(row => row.local !== true)
-              .map(row => ({ team: row.team, name: row.name, ...(row.origin !== undefined ? { origin: row.origin } : {}), ...(row.via !== undefined ? { via: row.via } : {}), ...(row.workspace !== undefined ? { workspace: row.workspace } : {}), ...(row.legacy === true ? { legacy: true } : {}), ...(row.teams !== undefined && row.teams.length > 0 ? { teams: [...row.teams] } : {}) })),
+              .map(row => ({ team: row.team, name: row.name, ...(row.origin !== undefined ? { origin: row.origin } : {}), ...(row.via !== undefined ? { via: row.via } : {}), ...(row.workspace !== undefined ? { workspace: row.workspace } : {}), ...(row.legacy === true ? { legacy: true } : {}), ...(row.unreachable === true ? { unreachable: true } : {}), ...(row.teams !== undefined && row.teams.length > 0 ? { teams: [...row.teams] } : {}) })),
           }
         })
         .catch(() => {})
@@ -2017,7 +2028,7 @@ export function apply(ctx: Context, config: Config): void {
     whenWebServerSettled((webServer) => {
       // gh#77 B1: the admin faces live in src/faces/admin.ts.
       registerAdminFaces(webServer, {
-        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
+        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url,
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
@@ -3153,7 +3164,7 @@ export function apply(ctx: Context, config: Config): void {
             const listUrl = new URL('/a2a/log', base)
             listUrl.searchParams.set('caller_session', config.team)
             try {
-              const listResponse = await globalThis.fetch(listUrl, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } })
+              const listResponse = await peerFetch(listUrl, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } })
               const listBody = await listResponse.json().catch(() => ({ ok: false, error: `peer answered HTTP ${listResponse.status}` })) as { ok?: boolean; error?: string; sessions?: Array<{ id: string }> }
               if (listResponse.ok && listBody.ok === true && Array.isArray(listBody.sessions)) {
                 const picked = suffix !== '' ? listBody.sessions.find(row => row.id.includes(suffix)) : listBody.sessions[0]
@@ -3179,7 +3190,7 @@ export function apply(ctx: Context, config: Config): void {
           if (resolvedId !== '') target.searchParams.set('id', resolvedId)
           target.searchParams.set('limit', String(limit))
           try {
-            const response = await globalThis.fetch(target, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } })
+            const response = await peerFetch(target, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } })
             const body = await response.json().catch(() => ({ ok: false, error: `peer answered HTTP ${response.status}` })) as { ok?: boolean; error?: string }
             if (response.ok && body.ok === true) {
               finish({ ...body, via: base } as Record<string, JsonValue>)
@@ -3207,7 +3218,9 @@ export function apply(ctx: Context, config: Config): void {
    */
   function settlePeerCard(peer: string, outcome: CardFetchOutcome): A2aPeerCard | undefined {
     if (!outcome.ok) {
-      peerStore.noteFailure(peer)
+      // gh#193: a fetch the isolation switch refused says nothing about the
+      // peer — scoring it would evict learned peers and rewrite peers.json.
+      if (!config.isolated) peerStore.noteFailure(peer)
       return undefined
     }
     // A self-referral learned from a peer's card (the peer lists this node's
@@ -3551,7 +3564,10 @@ export function apply(ctx: Context, config: Config): void {
       if (card === undefined) return []
       // Keep the GUI's remote node projection session-only; the model tool
       // opts into the additional canvas-team rows (#159).
-      return peerDirectoryRows(card, peer, includeCanvas)
+      const rows = peerDirectoryRows(card, peer, includeCanvas)
+      // gh#106: a card kept through a miss still lists (until its own
+      // expiresAt), but the row says the peer did not answer the last read.
+      return cardCache.get(peer)?.missAt !== undefined ? rows.map(row => ({ ...row, unreachable: true })) : rows
     }
     // Bounded-concurrency sweep (mapBounded keeps row order by index, so the
     // listing still follows the peer store's preference order): a cold cache
