@@ -386,6 +386,13 @@ describe('a2a-net CLI: inbox --wait', () => {
     const host = await mailHost()
     const HOME = await scoutHome()
     const out = await runCli(['inbox', '--wait', '--renew', '--interval', '100ms', '--timeout', '300ms'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url })
+    // Re-publishing signs a card with the BUILT lib/card.js (lib/ is untracked). A checkout that never
+    // ran `pnpm build` cannot renew: the CLI must say so and stop, not wait out the timeout.
+    if (!existsSync(join(process.cwd(), 'lib', 'card.js'))) {
+      expect(out.code).toBe(1)
+      expect(out.stderr).toContain('lib/card.js is missing')
+      return
+    }
     expect(out.code).toBe(3)
     expect(out.stderr).toContain('no new mail within')
     expect(out.stderr).toContain('deposit renewed')
