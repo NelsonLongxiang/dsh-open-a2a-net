@@ -17,6 +17,12 @@ capability flags) plus unsigned serve-fresh fields.
   link.
 - Peers poll cards and aggregate the `sessionTeams` they are entitled to into
   their `remote` rows — this is how the planning canvas shows other nodes.
+- A peer that stops answering keeps its last good card listed until that card's
+  own `expiresAt` (up to `cardTtlMs`, 48h by default), but its rows — in
+  `a2a_teams`, state `remote` / `registry.nodes`, and `peerOrg` — carry
+  `unreachable: true` from the first missed read until it answers again
+  (#106). Treat such a row as last-known, not live: a route to it will most
+  likely fail at transport.
 - `a2a_teams` also exposes remote `canvasOrg` groups as group rows with the
   publisher's `origin` and `via` (#159); they do not become extra session
   nodes in state `remote`. With `teamScopeInfo` on, a remote canvas row is
