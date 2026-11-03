@@ -2443,7 +2443,10 @@ export function apply(ctx: Context, config: Config): void {
       void runReceiptLadder(
         {
           deliver: async (team) => {
-            const delivered = await dispatchAnywhere(team, receipt, session, undefined, new AbortController().signal, true)
+            // gh#217: across hosts the caller admits a session face it linked, never this host's process label; a
+            // task for the bare process team keeps the label, the only host face the settlement judge accepts (N1).
+            const peerCaller = row?.auth?.target.includes('/') === true ? sessionTeamOf(target) : undefined
+            const delivered = await dispatchAnywhere(team, receipt, session, undefined, new AbortController().signal, true, undefined, peerCaller)
             // gh#141: the caller lane pays this delivery's inbound row across hosts (a
             // same-host receipt already settled it in-process), unless the caller
             // refused it. The owner tier is no payment here — but an owner mailbox
@@ -4119,7 +4122,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
    * receipt ladder can distinguish "delivered" from "no route" and its
    * owner escalation actually fires for cross-node callback addresses.
    */
-  async function dispatchAnywhere(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode: boolean, taskId?: string): Promise<A2aRouteResult & { ok: true }> {
+  async function dispatchAnywhere(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode: boolean, taskId?: string, peerCaller?: string): Promise<A2aRouteResult & { ok: true }> {
     const local = await dispatchLocalCandidate(team, message, callerSession, contextId, signal, asyncMode, taskId)
     // A background send books no outbound row: its birth facts have no row to go on.
     if (taskId !== undefined) localBirths.delete(taskId)
@@ -4134,7 +4137,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     }
     let lastError = 'no candidate delivered'
     for (const candidate of candidates) {
-      const result = await dispatchPeerCandidate(candidate, team, message, contextId, signal, callerSession, asyncMode, taskId)
+      const result = await dispatchPeerCandidate(candidate, team, message, contextId, signal, peerCaller ?? callerSession, asyncMode, taskId)
       if (result.ok) return result
       lastError = result.error
       if (signal.aborted) break
