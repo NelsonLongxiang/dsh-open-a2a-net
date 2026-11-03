@@ -465,7 +465,7 @@ async function poll(): Promise<void> {
     // SessionLite needs `joined: boolean` (workbench rows carry `joined?`):
     // tri-state → boolean without losing the unjoined node-list population.
     const allSessions = (body.sessions ?? []).map(s => ({ ...s, joined: s.joined === true }))
-    const teams = [...(body.canvas?.teams ?? []), ...rosterFrames(body.registry?.teams ?? [])]
+    const teams = [...(body.canvas?.teams ?? []), ...rosterFrames(body.registry?.teams ?? [], body.zone ?? '')]
     const peers = (body.peers ?? []).filter(p => p !== null && typeof p === 'object' && typeof (p as { url?: unknown }).url === 'string')
     const inFlight = (body.inFlight ?? []).filter(r => r !== null && typeof r === 'object' && typeof (r as { team?: unknown }).team === 'string' && typeof (r as { peer?: unknown }).peer === 'string' && Number.isFinite((r as { startedAt?: unknown }).startedAt))
     const remoteTeams = (body.remote ?? [])

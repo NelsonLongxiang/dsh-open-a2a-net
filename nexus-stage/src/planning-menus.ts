@@ -125,7 +125,7 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
     }
     const nameError = (): string | null => {
       const name = input.value.trim()
-      if (name === '' || name.length > 40 || name.includes('/') || name.startsWith('roster:') || /^\d+$/.test(name)) return '队名需 1..40 字，不含“/”和保留前缀，不为纯数字'
+      if (name === '' || name.length > 40 || name.includes('/') || name.startsWith('roster:') || (kind.value === 'roster' && name.includes('*')) || /^\d+$/.test(name)) return '队名需 1..40 字，不含“/”、通配符或保留前缀，不为纯数字'
       if (kind.value === 'roster' && model.getFrame(name) !== undefined) return '同名 canvas 队已存在，不能创建 roster 队'
       if (kind.value === 'roster' && model.getFrame(rosterFrameName(name)) !== undefined && !d.isRoster(rosterFrameName(name))) return 'roster 框名已被 canvas 或镜像队占用'
       if (kind.value === 'canvas' && model.getFrame(rosterFrameName(name)) !== undefined) return '同名 roster 队已存在，不能创建 canvas 队'

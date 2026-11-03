@@ -26,12 +26,13 @@ export function rosterOp(d: RosterOpDeps, raw: unknown): RosterOpResult {
   const actor = 'human:owner'
   const audit = (id: string, ok: boolean, why: string): void => d.audit(action, team, id, ok, why)
   const reject = (error: string): RosterOpResult => { audit(typeof b.id === 'string' ? b.id : actor, false, error); return { ok: false, error } }
-  if (typeof name !== 'string' || name !== name.trim() || name.length < 1 || name.length > 40 || name.includes('/') || name.startsWith('roster:') || /^\d+$/.test(name) || /[\r\n]/.test(name) || team.length > TEAM_NAME_MAX) return reject('name must be one exact local roster name (no slash or canvas path)')
-  if (d.canvasExists(name)) return reject('a canvas team already uses this name')
+  if (typeof name !== 'string' || name !== name.trim() || name.length < 1 || name.length > 40 || name.includes('/') || name.includes('*') || name.startsWith('roster:') || /^\d+$/.test(name) || /[\r\n]/.test(name) || team.length > TEAM_NAME_MAX) return reject('name must be one exact local roster name (no slash or canvas path)')
+  if (op === 'create' && d.canvasExists(name)) return reject('a canvas team already uses this name')
   if (op !== 'create' && op !== 'add-member' && op !== 'remove-member' && op !== 'dissolve') return reject('invalid roster operation')
   const current = d.store.membersOf(team)
   const allow = [...d.allowlist()]
   const allowed = allow.includes(team)
+  if (op === 'add-member' && !allowed) return reject('roster name is no longer in the exact allowlist')
   if (op !== 'create' && !allowed && current.length === 0) return reject('no such roster team')
   if (op === 'create' && (!Array.isArray(b.ids) || b.ids.length < 2 || b.ids.some(x => typeof x !== 'string'))) return reject('create needs at least two joined local session ids')
   if ((op === 'add-member' || op === 'remove-member') && (typeof b.id !== 'string' || b.id === '')) return reject('local session id is required')

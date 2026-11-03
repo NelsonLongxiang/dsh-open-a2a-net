@@ -109,6 +109,7 @@ export interface WireDeps {
   readonly config: Config
   readonly cliDeposits: CliDepositStore
   readonly canvasStore: CanvasStore
+  readonly canvasNameReserved: (name: string) => boolean
   readonly sessionNodes: Map<string, Agent>
   readonly joinedSessions: JoinedSessions
   readonly idempotencyStore: IdempotencyStore
@@ -184,6 +185,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     config,
     cliDeposits,
     canvasStore,
+    canvasNameReserved,
     sessionNodes,
     joinedSessions,
     idempotencyStore,
@@ -306,13 +308,15 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const id = (isRemoteMemberRef(rawId) ? localSessionOfHandle(rawId) : undefined) ?? rawId
             let payload: { ok: boolean; members?: readonly string[]; removed?: boolean; error?: string }
             if (op === 'create') {
-              const stored = canvasStore.create(name)
-              payload = stored === undefined ? { ok: false, error: 'invalid name or team cap reached' } : { ok: true, members: canvasStore.membersOf(stored) }
+              const stored = canvasNameReserved(name) ? undefined : canvasStore.create(name)
+              payload = stored === undefined ? { ok: false, error: 'invalid, roster-reserved name or team cap reached' } : { ok: true, members: canvasStore.membersOf(stored) }
             } else if (op === 'add-member') {
               // gh#131: a handle is stored as sent, even one of this host's own — the
               // local tiers read it as the session it names at route time.
               const memberValid = isRemoteMemberRef(rawId) ? validRemoteMemberRef(rawId) : rawId !== '' && (sessionNodes.has(rawId) || joinedSessions.has(rawId))
-              payload = name === '' || !memberValid
+              payload = !canvasStore.hasTeam(name) && canvasNameReserved(name)
+                ? { ok: false, error: 'roster reserves this canvas name' }
+                : name === '' || !memberValid
                 ? { ok: false, error: 'name and a member (joined session id, or a zone-qualified remote team handle) are required' }
                 : (canvasStore.create(name), { ok: canvasStore.addMember(name, rawId), members: canvasStore.membersOf(name) })
             } else if (op === 'remove-member') {

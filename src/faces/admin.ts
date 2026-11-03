@@ -239,6 +239,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
         }
         const body = JSON.stringify({
           nodes: true,
+          zone: config.team,
           version: PLUGIN_VERSION,
           // gh#193: a dark host says so — an empty remote list is not an outage.
           ...(config.isolated ? { isolated: true } : {}),
@@ -776,6 +777,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
   // remembered intent): canvas routing only reaches sessions the user
   // put on the network by gesture — no routing backdoor over unjoined
   // sessions.
+  const canvasNameReserved = (name: string): boolean => name.startsWith('roster:') || d.ownerAllowlist.includes(`${config.team}/${name}`) || teamMemberships.membersOf(`${config.team}/${name}`).length > 0
   ctx.effect(() => webServer.register({
     kind: 'exact',
     path: '/__dsh_a2a/canvas',
@@ -785,8 +787,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
         let payload: string
         if (action === 'create') {
           const name = typeof body.name === 'string' ? body.name : ''
-          const stored = canvasStore.create(name)
-          payload = JSON.stringify(stored === undefined ? { ok: false, error: 'invalid name or team cap reached' } : { ok: true, name: stored, teams: canvasStore.list() })
+          const stored = canvasNameReserved(name) ? undefined : canvasStore.create(name)
+          payload = JSON.stringify(stored === undefined ? { ok: false, error: 'invalid, roster-reserved name or team cap reached' } : { ok: true, name: stored, teams: canvasStore.list() })
         } else if (action === 'remove') {
           const name = typeof body.name === 'string' ? body.name : ''
           payload = JSON.stringify({ ok: canvasStore.remove(name), teams: canvasStore.list() })
@@ -800,7 +802,9 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           const memberValid = isRemoteMemberRef(id)
             ? validRemoteMemberRef(id)
             : id !== '' && (sessionNodes.has(id) || joinedSessions.has(id))
-          if (name === '' || !memberValid) {
+          if (!canvasStore.hasTeam(name) && canvasNameReserved(name)) {
+            payload = JSON.stringify({ ok: false, error: 'roster reserves this canvas name' })
+          } else if (name === '' || !memberValid) {
             payload = JSON.stringify({ ok: false, error: 'name and a member (joined session id, or a zone-qualified remote team handle like zone/a1b2c3d4) are required' })
           } else {
             canvasStore.create(name)

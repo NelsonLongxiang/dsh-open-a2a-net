@@ -44,6 +44,8 @@ describe('#199 owner roster operation', () => {
       { op: 'create', name: 'dsh/canvas/生产服务组', ids: ['session-a', 'session-b'] },
       { op: 'create', name: '123', ids: ['session-a', 'session-b'] },
       { op: 'create', name: 'roster:伪造', ids: ['session-a', 'session-b'] },
+      { op: 'create', name: '*', ids: ['session-a', 'session-b'] },
+      { op: 'create', name: 'prefix*', ids: ['session-a', 'session-b'] },
       { op: 'create', name: '生产服务组', ids: ['session-a', 'remote/abc'] },
       { op: 'create', name: '生产服务组', ids: ['session-a', 'session-a'] },
       { op: 'create', name: '生产服务组', ids: ['session-a'] },
@@ -53,6 +55,18 @@ describe('#199 owner roster operation', () => {
     expect(m.allowlist()).toEqual([])
     expect(existsSync(join(m.home, 'cordis.patch.yml'))).toBe(false)
     expect(m.audit.every(row => !row.ok)).toBe(true)
+  })
+
+  it('permits withdrawing and dissolving an existing roster despite a later canvas-name collision', () => {
+    const m = fixture()
+    expect(rosterOp(m.deps, { op: 'create', name: '生产服务组', ids: ['session-a', 'session-b'] }).ok).toBe(true)
+    m.deps.canvasExists = () => true
+    m.deps.setAllowlist([])
+    expect(rosterOp(m.deps, { op: 'add-member', name: '生产服务组', id: 'session-b' }).ok).toBe(false)
+    expect(rosterOp(m.deps, { op: 'remove-member', name: '生产服务组', id: 'session-b' }).ok).toBe(true)
+    expect(rosterOp(m.deps, { op: 'dissolve', name: '生产服务组' }).ok).toBe(true)
+    expect(m.store.membersOf('dsh/生产服务组')).toEqual([])
+    expect(m.allowlist()).toEqual([])
   })
 
   it('rolls back allowlist when teams.json cannot be persisted, without changing in-memory roster', () => {

@@ -150,6 +150,7 @@ export interface ActivityRow {
 
 /** The /state subset the workbench consumes (additive fields ignored). */
 export interface StateBody {
+  readonly zone?: string
   readonly version?: string
   readonly sessions?: readonly SessionRow[]
   readonly canvas?: { teams?: readonly CanvasTeamRow[] }

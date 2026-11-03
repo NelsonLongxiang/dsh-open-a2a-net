@@ -3,12 +3,12 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "05f4955552f9a08c16cd93012596ce455dbb6358db21a0a1711bc0fb633e076c",
-    "src/faces/admin.ts": "2e3759d352ba73d6c536281c65c3eb9ac93ce2ad79f72be6c088c63130b3f5fc",
+    "src/index.ts": "c0704b046e9c542adc29647d7f5cc57e975f0ebbd8ae14d8acf6806bc856e57f",
+    "src/faces/admin.ts": "c5b0d01d92bf417cdbf19ccdc997aa467f380149684881b94edf371f6590ce93",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "a8e203feb252f0c5d21f98be6ecc45c84d33f867726331a64823f40d68578a2e",
-    "nexus-stage/src/workbench.ts": "d43d14d57902d812a99877cc46119d648da72d24436ba4ac92811c131926942c",
+    "nexus-stage/src/workbench.ts": "f98a26156cae7786279f8c63f72baa3122298ac334063664a16254751c83fc12",
     "nexus-stage/src/federation.ts": "06e74e9b17b43b655d15fa41c7ab2b0b648cfa15d0ecd02cafe3b505ba6fa0d4",
     "nexus-stage/src/planning-relayout.ts": "7ce77ba2bc95fcbee62af752f22969b726511d8988133e74123a5e04a7a6a571",
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
@@ -19,7 +19,7 @@
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
-    "src/faces/wire.ts": "efb3d87e41b96948396221dfece3a35998cd625221170f847d90e997b1fb4422",
+    "src/faces/wire.ts": "74d41ef8d60f104d25fd25702a8e7122ad6290f0bee9e9caaa676592a37aa3b2",
     "src/faces/canvas-notify.ts": "7153f7cb2b6c985825edde55809d47d3a2a14e652d69e55f6d1a72cd9f6d50d9",
     "src/task-auth.ts": "97479423e91648c22a36807aef18ad2b92c7eaa746f4e41ef64b57acd38d9c1c",
     "src/origin-claim.ts": "d467153656bd5592785597e4a81d3686f0b4f91cac38705ecb18d4cc74f8d22c",
@@ -92,13 +92,13 @@
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:3621",
+      "ref": "src/index.ts:3622",
       "expect": "const sharedCanvas = canvasStore.list().some(name => {"
     },
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:3630",
+      "ref": "src/index.ts:3631",
       "expect": "let orgShared = false"
     },
     {
@@ -116,25 +116,25 @@
     {
       "page": "p1-arch",
       "cell": "c2",
-      "ref": "src/faces/wire.ts:513",
+      "ref": "src/faces/wire.ts:517",
       "expect": "path: '/a2a/direct',"
     },
     {
       "page": "p1-arch",
       "cell": "c3",
-      "ref": "src/faces/wire.ts:355",
+      "ref": "src/faces/wire.ts:359",
       "expect": "path: '/a2a/log',"
     },
     {
       "page": "p1-arch",
       "cell": "c4",
-      "ref": "src/faces/wire.ts:434",
+      "ref": "src/faces/wire.ts:438",
       "expect": "path: '/a2a/query',"
     },
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:519",
+      "ref": "src/faces/admin.ts:520",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
@@ -146,7 +146,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:3025",
+      "ref": "src/index.ts:3026",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -188,7 +188,7 @@
     {
       "page": "p1-arch",
       "cell": "d7",
-      "ref": "src/faces/admin.ts:303",
+      "ref": "src/faces/admin.ts:304",
       "expect": "activity: recentActivity.slice(),"
     },
     {
@@ -212,7 +212,7 @@
     {
       "page": "p1-arch",
       "cell": "e1",
-      "ref": "nexus-stage/src/workbench.ts:565",
+      "ref": "nexus-stage/src/workbench.ts:566",
       "expect": "function renderHosts(): void {"
     },
     {
@@ -224,7 +224,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:3814",
+      "ref": "src/index.ts:3815",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -266,7 +266,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3275",
+      "ref": "src/index.ts:3276",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
@@ -332,7 +332,7 @@
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/faces/wire.ts:691",
+      "ref": "src/faces/wire.ts:695",
       "expect": "if (refuseIfFlooded(caller, message, team, taskId, res)) return"
     },
     {
@@ -344,7 +344,7 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/wire.ts:180",
+      "ref": "src/faces/wire.ts:181",
       "expect": "export function registerWireFaces(webServer: WebServer, d: WireDeps): void {"
     },
     {

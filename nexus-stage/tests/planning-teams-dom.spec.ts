@@ -135,6 +135,20 @@ describe('建队 flow', () => {
     expect(JSON.stringify(v.snapshotDoc())).toContain('roster:生产服务组')
   })
 
+  it('#199: roster name wildcard is refused in the visible create dialog', () => {
+    const { v, actions } = view()
+    v.reconcile(baseInput)
+    selectTwo(v)
+    v.seam.key(key({ key: 'g', target: v.root }))
+    const dialog = v.root.querySelector<HTMLElement>('.p-dialog')!
+    dialog.querySelector<HTMLSelectElement>('select')!.value = 'roster'
+    const input = dialog.querySelector<HTMLInputElement>('input')!
+    input.value = 'prefix*'
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(dialog.querySelector('.p-dialog-err')?.textContent).toContain('通配符')
+    expect(actions).toHaveLength(0)
+  })
+
   it('#199: a refused roster create rolls the optimistic roster frame back without hiding canvas teammates', async () => {
     const { v, actions, settle } = view()
     v.reconcile(baseInput)

@@ -19,10 +19,11 @@ class FakeAgents extends Service {
   get(id: unknown): Agent | undefined { return this.agents.find(a => String(a.id) === String(id)) }
   requireInitiator(): never { throw new Error('no initiator') }
 }
-async function mounted() {
+async function mounted(existingCanvas?: string) {
   const home = mkdtempSync(join(tmpdir(), 'a2a-roster-web-'))
   mkdirSync(join(home, 'a2a'))
   writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: [A, B] }))
+  if (existingCanvas !== undefined) writeFileSync(join(home, 'a2a', 'canvas.json'), JSON.stringify({ teams: [{ name: existingCanvas, members: [] }] }))
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
@@ -58,6 +59,10 @@ describe('#199 roster control HTTP and shared membership', () => {
       expect(st.registry.teamAudit.some(row => row.id === 'human:owner' && row.actor === 'human:owner')).toBe(true)
       const who = await m.ctx.tools.get('a2a_whoami')?.execute({}, { agent: m.a }) as { teams: { roster: string[] } }
       expect(who.teams.roster).toContain('dsh/生产服务组')
+      for (const action of ['create', 'add-member']) {
+        const reply = await fetch(m.base + '/__dsh_a2a/canvas', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Key': 'test-key' }, body: JSON.stringify({ action, name: '生产服务组', id: A }) })
+        expect((await reply.json() as { ok: boolean }).ok).toBe(false)
+      }
       expect((await m.post({ op: 'remove-member', name: '生产服务组', id: B })).body).toMatchObject({ ok: true, members: [A] })
       expect((await m.post({ op: 'add-member', name: '生产服务组', id: B })).body).toMatchObject({ ok: true, members: [A, B] })
       const routed = await m.ctx.tools.get('a2a_route')?.execute({ team: 'dsh/bbbbbbbb', message: 'ping', async: true }, { agent: m.a, signal: new AbortController().signal }) as { ok: boolean; error?: string }
@@ -72,12 +77,12 @@ describe('#199 roster control HTTP and shared membership', () => {
   }, 25_000)
 
   it('refuses remote and unjoined members and canvas paths without mutating registry', async () => {
-    const m = await mounted()
+    const m = await mounted('roster:伪装')
     try {
       const canvas = await fetch(m.base + '/__dsh_a2a/canvas', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Key': 'test-key' }, body: JSON.stringify({ action: 'create', name: '已占用' }) })
       expect((await canvas.json() as { ok: boolean }).ok).toBe(true)
       const prefix = await fetch(m.base + '/__dsh_a2a/canvas', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Key': 'test-key' }, body: JSON.stringify({ action: 'create', name: 'roster:伪装' }) })
-      expect((await prefix.json() as { ok: boolean }).ok).toBe(true)
+      expect((await prefix.json() as { ok: boolean }).ok).toBe(false)
       for (const body of [
         { op: 'create', name: '伪装', ids: [A, B] },
         { op: 'create', name: '已占用', ids: [A, B] },
