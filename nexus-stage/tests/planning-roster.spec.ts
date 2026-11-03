@@ -11,7 +11,7 @@ describe('#199 roster frame namespace and state projection', () => {
     expect(rosterNameOf('甲')).toBeUndefined()
     expect(rosterNameOf('roster:甲')).toBe('甲')
     expect(rosterFrames([], 'dsh')).toEqual([])
-    expect(rosterFrames([{ team: 'dsh/review', members: ['a'] }, { team: 'peerzone/review', members: ['b'] }, { team: 'dsh/a/b', members: ['c'] }], 'dsh')).toEqual([{ name: 'roster:review', team: 'dsh/review', kind: 'roster', members: [{ id: 'a' }] }])
+    expect(rosterFrames([{ team: 'dsh/review', members: ['a'] }, { team: 'abc/review', members: ['b'] }, { team: 'dsh/a/b', members: ['c'] }], 'dsh')).toEqual([{ name: 'roster:review', team: 'dsh/review', kind: 'roster', members: [{ id: 'a' }] }])
   })
   it('round-trips a 40-character roster name as an independent 47-character layout key', () => {
     const frame = rosterFrameName('组'.repeat(40))

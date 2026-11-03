@@ -243,3 +243,10 @@ export class CanvasStore {
     if (dirty) this.persist()
   }
 }
+
+/** One policy predicate for local and signed-remote canvas creation. */
+export function canvasNameReserved(raw: string, zone: string, allowlist: readonly string[], roster: { membersOf(team: string): readonly string[] }): boolean {
+  const name = raw.trim()
+  const team = `${zone}/${name}`
+  return name.startsWith('roster:') || allowlist.includes(team) || roster.membersOf(team).length > 0
+}
