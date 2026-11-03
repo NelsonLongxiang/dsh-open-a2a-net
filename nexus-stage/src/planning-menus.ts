@@ -91,12 +91,46 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
     title.id = 'p-dialog-title'
     title.className = 'p-dialog-title'
     title.textContent = `组建团队（${ids.length} 个节点，自上而下即优先级）`
-    const kind = document.createElement('select')
-    kind.className = 'p-dialog-kind'
-    kind.setAttribute('aria-label', '团队类型')
-    for (const [value, label] of [['canvas', 'canvas 队'], ['roster', 'roster 网络队']]) {
-      const option = document.createElement('option'); option.value = value; option.textContent = label; kind.appendChild(option)
+    // Team type: a visible two-way toggle (a bare <select> read as a label and roster went unnoticed).
+    const kind = { value: 'canvas' as 'canvas' | 'roster' }
+    const kindGroup = document.createElement('div')
+    kindGroup.className = 'p-dialog-kind'
+    kindGroup.setAttribute('role', 'radiogroup')
+    kindGroup.setAttribute('aria-label', '团队类型')
+    const kindHint = document.createElement('div')
+    kindHint.className = 'p-dialog-hint'
+    const KIND_HINT = {
+      canvas: 'canvas 队：画布上的协作组，可以加入远端成员。',
+      roster: 'roster 网络队：只收本机已入网的会话；队名会写进属主的精确允许名单。',
+    } as const
+    const kindButtons = (['canvas', 'roster'] as const).map(value => {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.dataset.kind = value
+      b.setAttribute('role', 'radio')
+      b.textContent = value === 'canvas' ? 'canvas 队' : 'roster 网络队'
+      b.addEventListener('click', () => setKind(value))
+      kindGroup.appendChild(b)
+      return b
+    })
+    function setKind(value: 'canvas' | 'roster'): void {
+      kind.value = value
+      for (const b of kindButtons) {
+        const on = b.dataset.kind === value
+        b.setAttribute('aria-checked', String(on))
+        b.tabIndex = on ? 0 : -1
+      }
+      kindHint.textContent = KIND_HINT[value]
+      err.textContent = ''
     }
+    // Arrow keys move between the two options (radiogroup pattern).
+    kindGroup.addEventListener('keydown', (ev) => {
+      const e = ev as KeyboardEvent
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return
+      e.preventDefault()
+      setKind(kind.value === 'canvas' ? 'roster' : 'canvas')
+      kindButtons.find(b => b.dataset.kind === kind.value)?.focus()
+    })
     const input = document.createElement('input')
     input.className = 'p-dialog-input'
     input.maxLength = 40
@@ -113,7 +147,8 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
     cancelBtn.type = 'button'
     cancelBtn.textContent = '取消'
     row.append(okBtn, cancelBtn)
-    panel.append(title, kind, input, err, row)
+    setKind('canvas')
+    panel.append(title, kindGroup, kindHint, input, err, row)
     wrap.appendChild(panel)
     root.appendChild(wrap)
 
@@ -161,7 +196,7 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return }
       if (e.key !== 'Tab') return
       e.preventDefault()
-      const focusables = Array.from(panel.querySelectorAll<HTMLElement>('input, select, button'))
+      const focusables = Array.from(panel.querySelectorAll<HTMLElement>('input, select, button:not([tabindex="-1"])'))
       const idx = focusables.indexOf(document.activeElement as HTMLElement)
       const next = e.shiftKey
         ? focusables[(idx - 1 + focusables.length) % focusables.length]
