@@ -24,7 +24,7 @@ import TimerService from '@deepseek-ai/cordis-plugin-timer'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import * as plugin from '../../src/index.ts'
 import type { Config } from '../../src/index.ts'
 import { createNodeBinder, NODE_PROMPT, NodeBindings, reminderMessage } from '../../src/node-bind.ts'
@@ -1356,21 +1356,43 @@ describe('N4 — node_update_self under the session taint (owner ruling 2026-11-
     }
   }, 40_000)
 
-  it('a mark covers the whole lineage: a grandchild subagent\'s A2A read taints its parent and the bound root', async () => {
+  it('a mark climbs a SUBAGENT lineage (real Session headers) to the bound root; a fork is not climbed; a cold parent is marked; no loop', async () => {
     const m = await mount()
     try {
       await nodeWithLayers(m, 'chief', { 当前状态: '第一版' })
       const a = await bindSession(m, A)
-      // child and grandchild subagents, linked by meta.parentSession and known to the agents service.
-      const child = Object.assign(makeAgent(m.ctx, 'child-1'), { session: { events: [], title: 'child', meta: { parentSession: A } } })
-      const grand = Object.assign(makeAgent(m.ctx, 'grand-1'), { session: { events: [], title: 'grand', meta: { parentSession: 'child-1' } } })
-      for (const agent of [child, grand]) m.agents.map.set(String(agent.id), agent as unknown as Agent)
+      const realSession = (id: string, header: Record<string, unknown>) => Session.create(SessionId(id), [], { version: 4, id, createdAt: Date.now(), isSeeded: false, ...header } as never)
+      const live = (id: string, header: Record<string, unknown>) => {
+        const agent = Object.assign(makeAgent(m.ctx, id), { session: realSession(id, header) })
+        m.agents.map.set(id, agent as unknown as Agent)
+        return agent
+      }
       const tools = m.ctx.get('tools') as unknown as { execute: (input: unknown) => Promise<unknown> }
-      await tools.execute({ name: 'a2a_status', arguments: {}, agent: grand, signal: new AbortController().signal, callId: 'call-g' } as never).catch(() => undefined)
-      const marks = (JSON.parse(readFileSync(join(m.home, 'a2a', 'node-taint.json'), 'utf8')) as { sessions: Array<{ session: string }> }).sessions.map(r => r.session).sort()
-      expect(marks).toEqual(['child-1', 'grand-1', A].sort())
-      // The root never saw the text itself, yet its writes now queue.
+      const read = async (agent: ScopedAgent, callId: string): Promise<void> => {
+        await tools.execute({ name: 'a2a_status', arguments: {}, agent, signal: new AbortController().signal, callId } as never).catch(() => undefined)
+      }
+      const marks = (): string[] => (JSON.parse(readFileSync(join(m.home, 'a2a', 'node-taint.json'), 'utf8')) as { sessions: Array<{ session: string }> }).sessions.map(r => r.session).sort()
+      // Two subagent levels: grandchild -> child -> the bound root A.
+      live('child-1', { origin: 'subagent', parentSession: A })
+      const grand = live('grand-1', { origin: 'subagent', parentSession: 'child-1' })
+      expect((grand.session as unknown as { header: { parentSession: string } }).header.parentSession).toBe('child-1')
+      await read(grand, 'call-g')
+      expect(marks()).toEqual(['child-1', 'grand-1', A].sort())
       expect((await call(m, a, [ev(PERSON)], { section: '当前状态', text: 'x', reason: 'r', expected_sha256: await shaOf(m) })).code).toBe('queued')
+      // A FORK (no subagent origin) marks itself only, never its source.
+      const fork = live('fork-1', { parentSession: 'source-root' })
+      await read(fork, 'call-f')
+      expect(marks()).toContain('fork-1')
+      expect(marks()).not.toContain('source-root')
+      // A cold parent (not in memory) is still marked by id.
+      const orphan = live('orphan-1', { origin: 'subagent', parentSession: 'cold-parent' })
+      await read(orphan, 'call-o')
+      expect(marks()).toContain('cold-parent')
+      // A cycle in the headers ends.
+      live('loop-a', { origin: 'subagent', parentSession: 'loop-b' })
+      const loopB = live('loop-b', { origin: 'subagent', parentSession: 'loop-a' })
+      await read(loopB, 'call-l')
+      expect(marks()).toEqual(expect.arrayContaining(['loop-a', 'loop-b']))
     } finally {
       await m.dispose()
     }

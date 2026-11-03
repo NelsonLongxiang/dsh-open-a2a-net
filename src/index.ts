@@ -1147,14 +1147,17 @@ export function apply(ctx: Context, config: Config): void {
   const nodeBindings = new NodeBindings(join(home, 'a2a'))
   const nodeReviews = new NodeReviewQueue(join(home, 'a2a'))
   const nodeTaint = new SessionTaint(join(home, 'a2a'))
-  // N4: a mark covers the session's whole lineage up to its root (a subagent's reads taint every ancestor it reports to).
+  // N4: a SUBAGENT's mark climbs to every ancestor it reports to (session.header: origin 'subagent' + parentSession). A
+  // fork is not climbed: its source never sees the fork's text, and the fork's inherited log carries its own evidence.
   const markLineage = (agent: { id: unknown; session?: unknown } | undefined, via: string): void => {
-    for (let a = agent, depth = 0; a !== undefined && depth < 16; depth++) {
+    const seen = new Set<string>()
+    for (let a = agent; a !== undefined && !seen.has(String(a.id));) {
+      seen.add(String(a.id))
       nodeTaint.mark(String(a.id), via)
-      const parent = (a.session as { meta?: { parentSession?: unknown } } | undefined)?.meta?.parentSession
-      if (typeof parent !== 'string' || parent === '') return
-      const next = ctx.get('agents')?.get(parent as never) as { id: unknown; session?: unknown } | undefined
-      if (next === undefined) { nodeTaint.mark(parent, via); return }
+      const header = (a.session as { header?: { parentSession?: unknown; origin?: unknown } } | undefined)?.header
+      if (header?.origin !== 'subagent' || typeof header.parentSession !== 'string' || header.parentSession === '') return
+      const next = ctx.get('agents')?.get(header.parentSession as never) as { id: unknown; session?: unknown } | undefined
+      if (next === undefined) { nodeTaint.mark(header.parentSession, via); return }
       a = next
     }
   }

@@ -198,7 +198,7 @@
        - `a2a_route` 返回了任何结果，包括失败，因为对端可以把文字放进 `{error}` 里；
        - `a2a_tasks` 列出了入站任务；
        - `a2a_teams`、`a2a_status`、`a2a_probe` 读出了对端卡片里的名字、描述等自述。
-    - **沿会话谱系传播**：打标时沿 `meta.parentSession` 一路标到根会话，所以多层子代理读到的内容会污染每一个它向上汇报的会话。日志兜底也把 A2A 工具的 `tool/call` 和 `tool/ptc-dispatch` 事件算作远端证据，这些事件会随 fork 继承下来，fork 出的新会话因此同样被判污染。native-teams 入站桥在投递前给它选中的父会话打标，桥接成员的消息再从父会话那里继承污染。`session-reference` 按已装版本的格式 `references[].sessionId` 判定。
+    - **沿会话谱系传播**：子代理的会话 header 是 `origin: 'subagent'` 加上 `parentSession`。给子代理打标时，沿这条链一路标到根会话（用 Set 防环，不限深度；父会话不在内存时只标它的 id），所以多层子代理读到的内容会污染每一个它向上汇报的会话。fork 出来的会话（没有 subagent origin）不向上传播：源会话看不到 fork 里的内容，fork 继承的日志自带证据。日志兜底也把 A2A 工具的 `tool/call` 和 `tool/ptc-dispatch` 事件算作远端证据，这些事件会随 fork 继承下来，fork 出的新会话因此同样被判污染。native-teams 入站桥在投递前给它选中的父会话打标，桥接成员的消息再从父会话那里继承污染。代价是：HTTP 入站时没有发起方，父会话会退到第一个根会话，所以开启遗留的 `nativeTeamsInbound`（默认关）后，这个根会话会被过度标记。`session-reference` 按已装版本的格式 `references[].sessionId` 判定。
     - **中性消息**：既不算输入，也不算污染。包括 agent loop 自己注入的 runtime-context、time-context、skill-catalog、tool-jobs、user-approval，以及长会话里宿主自己的功能：compact-checkpoint（本会话自己历史的摘要）、skill-invocation、schedule、goal。
     - **标记文件**：读不出，或者有任何一行不是合法标记时，所有会话一律按已污染处理。最多保留 4096 条，超出后最早的会被挤掉；被挤掉的会话可以靠日志兜底或下一次投递重新打标。
   - **边界**：
