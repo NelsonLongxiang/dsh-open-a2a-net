@@ -4,8 +4,7 @@
 > 复用 ygl-trees 的 M13 spec-validator 引擎（立项时 0.97.x；0.113+ 起材料须重冻，见下方「引擎迁移注记」）：
 > 材料 → spec（冻结）→ 报告（可重放、无时间函数、fail-closed）。
 >
-> **现行 id 速查（2026-10-27 复核）**：RC 判据 spec 在 0.114 引擎上已重冻为 `spec_2b4fb653a3b2`
-> （下文 `spec_c8b6350c5034` / `spec_bae507ea0520` 为 0.6.14–0.6.17 周期的历史 id，保留作台账）；
+> **现行 id 速查（2026-11-03）**：隔离候选版 RC 判据在 0.119 引擎上冻结为 `spec_1819f122d9d3`（14 单元）。旧 `spec_2b4fb653a3b2` 属 0.114 时期且当前机未安装，不可拿历史运行作现行 PASS；`spec_c8b6350c5034` / `spec_bae507ea0520` 仅留台账。
 > 监督域 S 层现行 spec 为 `spec_4de5f3b9d48d`（S1–S19，19 单元，见文末）。
 
 ## 架构（三层分工）
@@ -19,26 +18,26 @@ scripts/verify-probe.mjs          证据采集面（验证器之外，真命令/
    │   仓库外——放 repo 的 tmp/ 会被 vitest 收进测试树，实测踩坑 0.6.14）
    └─ 产出：verify/probe-summary.json（人读摘要）
 
-verify/material.md                判据源（14 条判据句，逐字被验证单元引用）
-verify/candidates.json            候选验证单元（谓词 AST / file 检查器）
-verify/reviews.json               盲审结论（三问：faithful / decidable / not-vacuous）
+verify/material-isolated.md        隔离候选版 14 条冻结判据源（旧 material.md 不改写）
+verify/candidates-isolated.json  与新判据逐字匹配的候选 AST
+verify/reviews-isolated.json     三问盲审（旧 candidates/reviews 不改写）
 
 ygl-trees verify prepare          P1 逐字→P2 谓词形状→P3 盲审→P4 红队→P5 冻版
 ygl-trees verify run              确定性判定（只在快照+提交树上，不出网、不跑命令）
    └─ 报告：tmp/ygl-verify/verify/reports/run_*.json（overall + 每 VU 判定 + witness）
 ```
 
-**快照模式是关键**：判定期零命令执行——命令证据（门禁退出码、HTTP 探针、npm view）
+**快照模式是关键**：判定期零命令执行——命令证据（门禁退出码、HTTP 探针、公网 npmjs 精确版本直连元数据）
 全部由探针先冻结进 snapshot.sqlite，验证器只对冻结数据做 SQL 谓词判定。
 同一份 spec 可以反复重跑新快照（候选期每轮重新 probe → run），判定可重放。
 
-## 覆盖面（baseline 1 = spec_c8b6350c5034，14 单元；1.0 时代 spec_bae507ea0520 同判据；0.114 引擎重冻为 spec_2b4fb653a3b2，判据不变）
+## 覆盖面（隔离候选版 `spec_1819f122d9d3`，14 单元；历史版本冻结不回写）
 
 | 面 | 单元 | 检查 |
 |---|---|---|
 | 质量门禁 | V1–V4 | typecheck / test:unit / test:wire / verify:nexus（含 dist 门禁）退出码 |
-| 发布闸门 | V5–V7 | 3081 候选就位、私仓未发版（稳定期不自动发版）、工作树干净 |
-| 运行时 | V8–V10 | nexus 页 200、peer ≥4、死信 ≤30 |
+| 发布闸门 | V5–V7 | 3081 候选就位、公网 npmjs 精确版本不存在（404=未发布，其余未知=FAIL）、工作树干净 |
+| 运行时 | V8–V10 | nexus 页 200、隔离标记或非隔离 peer ≥4、state 200 且死信 0–30 |
 | 提交物 | V11–V14 | nexusDist bundle 在库、release-gate.md 在库、无 tmp-* 散落、spec 文件 ≥15 |
 
 severity：V1–V6=S1（闸门面）V7–V10=S2（运行时）V11–V14=S3（提交物）。
@@ -52,11 +51,17 @@ node scripts/verify-probe.mjs
 # 2. 判定（YGL_HOME 指向仓库内自包含工作区；路径按本机替换，下例为开发席 Windows 机）
 export YGL_HOME=D:/workspace/dsh-open-a2a-net/tmp/ygl-verify
 YGL=D:/workspace/ygl-trees/dist/apps/cli/src/bin.js
-# 现行 RC spec：spec_2b4fb653a3b2（0.114 引擎重冻；历史周期用 spec_c8b6350c5034）
-node $YGL verify run spec_2b4fb653a3b2 --db verify/snapshot.sqlite --submission "$(node -p "require('os').tmpdir()")/dsh-a2a-submission" --json
+# 现行隔离候选版 RC spec：spec_1819f122d9d3；--submission 必须取本轮 probe 输出的唯一目录
+ygl-trees verify run spec_1819f122d9d3 --db verify/snapshot.sqlite --submission "<本轮 probe 的 submission exported 路径>" --json
 # （submission 路径以 probe 日志行「submission exported: N tracked files -> <path>」为准）
 # overall 在报告 JSON 里；rc=0 只表示「跑完出报告」，FAIL 也是有效结论
 ```
+
+新环境没有 `spec_1819f122d9d3` 时，不得借用旧 spec 的 PASS：先由 CLI 按 `verify/material-isolated.md`、`verify/candidates-isolated.json`、`verify/reviews-isolated.json` 提交/准备，file 检查器必须以本轮仓库真实 nexusDist bundle、`docs/release-gate.md` 和一份已跟踪的 `tests/**/*.spec.ts` 作为 `--attach` 样本。引擎治理 meta 指向实际验证器源码根（本机 `D:/workspace/ygl-trees`）；本插件仓 `verify meta` 当前 R3 因已存在的插件运行时代码报 FAIL，不能冒称本仓 meta PASS。冻结后记新 spec id 与材料 hash，正式判定只认 `verify run` 的报告和归档。
+
+`scripts/verify-probe.mjs` 直连 npmjs **候选精确版本**：404 才记未发布，200 记已发布，网络错误/其他状态记未核且 V6 FAIL；不以 `latest` 标签或项目 `.npmrc` 证明精确版本不存在。3081 state 在 isolated 模式可保留持久化 peer 列表，V9 看显式 `isolated=true` 而不要求 peer 数为 0；V10 必须 state HTTP 200 且死信计数非空、处于 0–30。probe 的提交物目录每轮新建并打印路径，不删上轮目录。
+
+**本机正式CLI运行（2026-11-03，非发布PASS）**：`spec_1819f122d9d3` 的 `run_5e98468f584f5426` 判 `FAIL`（8 PASS、6 FAIL），红项 V2/V5/V6/V7/V9/V10：本地仓 package 仍是 0.6.31、当前公网精确版本已存在、Windows unit 红、工作树在途及 3081 state 返回 401，均不得伪装成候选验收。较早运行 `run_b927977dbea7a8b9`（该快照仍用前版 latest 探针，**不能证明新 V6**）在 3081 v0.6.32 `isolated=true` 且 state 报 9 个持久化 peer 时，V8/V9/V10 都 PASS，整体仍 FAIL 9/5。两份报告独立保留，最新 run 的归档 `archive verify` 165 项通过；没有一个报告可当 90c7d4c 候选的正式 RC PASS。
 
 首轮结果（2026-10-20，0.6.13 候选）：10 PASS + V7 FAIL（验证器自身未提交，判据如实拒绝）
 + V11–V14 ERROR（工作树 .claude/worktrees 的 pnpm junction 环致 walk ELOOP）——
@@ -125,7 +130,7 @@ node scripts/verify-recursive.mjs [--fresh]   # --fresh 先跑探针重采快照
 
 环境变量（脚本默认值写死开发席 Windows 路径与历史 spec id，换机或换引擎须覆盖）：
 `YGL_BIN`（引擎 bin.js）、`YGL_HOME`（默认仓库 `tmp/ygl-verify`）、`A2A_SPEC_ID`
-（**默认仍是历史 `spec_c8b6350c5034`，现行应设 `spec_2b4fb653a3b2`**）、`YGL_VERIFY_CORPUS`。
+（默认 `spec_1819f122d9d3`）、`YGL_VERIFY_CORPUS`。
 
 产出 verify/recursive-summary.json（gitignore 再生产物）。首跑实绩：引擎 6 ok/0 skip/0 fail、
 spec-run PASS 14/14（run_60ff8d9aa34e5a6e）、归档链 5 items 无问题。
