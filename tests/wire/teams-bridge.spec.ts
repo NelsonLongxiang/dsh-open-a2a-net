@@ -7,7 +7,7 @@
  * bridge declines ambiguous claims; wait:false fires detached).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer, type Server } from 'node:http'
@@ -281,6 +281,9 @@ describe('inbound native-teams bridge', () => {
     expect(round.args.message.split('\n', 1)[0]).toMatch(/^\[A2A direct\] \(task \S+\) 未验证（legacy-window） from "peer-x"/)
     expect(round.args.message).toContain('ship it')
     expect(round.parentId).toBe('session-main1')
+    // N4 session taint: the parent of a round that carries remote text is marked (its members derive from it).
+    const marks = (JSON.parse(readFileSync(join(m.home, 'a2a', 'node-taint.json'), 'utf8')) as { sessions: Array<{ session: string; via: string }> }).sessions
+    expect(marks).toContainEqual(expect.objectContaining({ session: 'session-main1', via: 'native-teams' }))
   })
 
   it('the bridge is off by default: the same route falls through to the standard miss', async () => {

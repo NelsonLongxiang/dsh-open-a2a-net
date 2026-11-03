@@ -118,6 +118,7 @@ import { NodeStore } from './node-store.ts'
 import { createNodeBinder, NodeBindings } from './node-bind.ts'
 import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
+import { NodeReviewQueue, SessionTaint, toolTaint } from './node-self.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { canvasCandidateMatches, canvasTargetAmbiguous, peerDirectoryRows, routableCallerLabel, sessionCandidateMatches, unroutableCallerNote } from './peer-directory.ts'
@@ -1155,9 +1156,26 @@ export function apply(ctx: Context, config: Config): void {
   const liveRoots = new Map<string, Agent>()
   // Node identity N2+N3: a joined session that carries a node gets that node's layers on its own scope.
   const nodeBindings = new NodeBindings(join(home, 'a2a'))
+  const nodeReviews = new NodeReviewQueue(join(home, 'a2a'))
+  const nodeTaint = new SessionTaint(join(home, 'a2a'))
+  // N4: a SUBAGENT's mark climbs to every ancestor it reports to (session.header: origin 'subagent' + parentSession). A
+  // fork is not climbed: its source never sees the fork's text, and the fork's inherited log carries its own evidence.
+  const markLineage = (agent: { id: unknown; session?: unknown } | undefined, via: string): void => {
+    const seen = new Set<string>()
+    for (let a = agent; a !== undefined && !seen.has(String(a.id));) {
+      seen.add(String(a.id))
+      nodeTaint.mark(String(a.id), via)
+      const header = (a.session as { header?: { parentSession?: unknown; origin?: unknown } } | undefined)?.header
+      if (header?.origin !== 'subagent' || typeof header.parentSession !== 'string' || header.parentSession === '') return
+      const next = ctx.get('agents')?.get(header.parentSession as never) as { id: unknown; session?: unknown } | undefined
+      if (next === undefined) { nodeTaint.mark(header.parentSession, via); return }
+      a = next
+    }
+  }
+  ctx.on('tools/post-execute', (exec, result, next) => { const via = result.isError ? (/^a2a_(route|tasks|teams|status|probe)$/.test(exec.name) ? `${exec.name}:error` : '') : toolTaint(exec.name, result.value); if (via !== '') markLineage(exec.agent, via); return next() })
   const nodeTasks = new NodeTasks(join(home, 'a2a'), { probe: githubProbe(), logger, onSettled: (node, p) => nodeBinder.remind(node, settledReminder(p)) })
   nodeTasks.schedule(ctx)
-  const nodeBinder = createNodeBinder({ store: nodeStore, bindings: nodeBindings, logger, joined: id => joinedSessions.has(id), joinedList: () => joinedSessions.list(), archived: id => archivedSessionFilter()?.(id) === true, live: id => liveRoots.get(id), tasksText: node => nodeTasks.render(node), pendingReminders: node => nodeTasks.takePending(node).map(settledReminder) })
+  const nodeBinder = createNodeBinder({ store: nodeStore, bindings: nodeBindings, logger, joined: id => joinedSessions.has(id), joinedList: () => joinedSessions.list(), archived: id => archivedSessionFilter()?.(id) === true, live: id => liveRoots.get(id), tasksText: node => nodeTasks.render(node), pendingReminders: node => nodeTasks.takePending(node).map(settledReminder), selfUpdate: { store: nodeStore, queue: nodeReviews, taint: nodeTaint, events: agent => sessionEventsOf(agent as Agent), localSession: id => liveRoots.has(id) || joinedSessions.has(id) } })
   // No boot reconcile: a joined.json that failed to parse reads as empty, and ending every binding on that
   // reading would destroy them (the 3081 lesson). A stale row is harmless — mount checks joined itself.
   ctx.effect(() => joinedSessions.onChange(() => { nodeBinder.reconcile() }), 'a2a: node bindings follow join')
@@ -2025,7 +2043,7 @@ export function apply(ctx: Context, config: Config): void {
         get ownerAnnounceRestartPending() { return ownerAnnounceRestartPending },
         set ownerAnnounceRestartPending(v) { ownerAnnounceRestartPending = v },
       })
-      registerNodeFaces(webServer, { ctx, logger, nodeStore, bindings: nodeBindings, binder: nodeBinder, tasks: nodeTasks, apiKey: () => config.apiKey, secretEqual, controlRoute, readJsonBody })
+      registerNodeFaces(webServer, { ctx, logger, nodeStore, bindings: nodeBindings, binder: nodeBinder, tasks: nodeTasks, reviews: nodeReviews, apiKey: () => config.apiKey, secretEqual, controlRoute, readJsonBody })
     })
   }
 
@@ -2217,6 +2235,8 @@ export function apply(ctx: Context, config: Config): void {
    * opaque row; omitted when the sender is not meaningfully addressable.
    */
   function steerRelay(agent: Agent, text: string, sender?: string): void {
+    // N4 session taint: every relay steer carries content from outside this host (a delivery, its nudge or cancel notice).
+    markLineage(agent, 'relay')
     agent.steer({
       id: MessageId(`a2a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`),
       role: 'user',
@@ -2301,6 +2321,7 @@ export function apply(ctx: Context, config: Config): void {
         }, signal: AbortSignal) => Promise<unknown> }
       | undefined
     if (typeof controller?.prompt !== 'function') return
+    markLineage(agent, 'nudge')
     logger.info(`a2a: async nudge escalates to queue-mode prompt for ${team} (task ${taskId}, ref ${nudgeRef(taskId)})`)
     try {
       void controller.prompt({
@@ -2564,7 +2585,7 @@ export function apply(ctx: Context, config: Config): void {
   // to src/legacy/teams-bridge-inbound.ts — the registry probe, claim memo,
   // prepare and the bounded round. The outbound bridgeFace stays here until
   // the G-out slice (it submits through the dispatch trunk).
-  const { teamsRegistry, nativeTeamsClaims, nativeTeamsPrepare, nativeTeamsRound } = createTeamsBridgeInbound({ ctx, config, liveAgent, fromClause, sanitizeFromClause, proofHeader: hostDirectHeader })
+  const { teamsRegistry, nativeTeamsClaims, nativeTeamsPrepare, nativeTeamsRound } = createTeamsBridgeInbound({ ctx, config, liveAgent, fromClause, sanitizeFromClause, proofHeader: hostDirectHeader, taint: agent => { markLineage(agent, 'native-teams') } })
 
   /* ── gh#9+gh#10 OriginClaim (docs/protocol/delivery-origin-auth.md,
      src/origin-claim.ts): the caller's card key signs the envelope; the
