@@ -3,8 +3,8 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "9f0cc6f49693060649975e2fd23936dc61461cedc833ad5444ae6e6a7f8c30b2",
-    "src/faces/admin.ts": "6874abeb51125630a28763b73be9491150ac0e5d89a502af73852697516b6492",
+    "src/index.ts": "ded37183a54f8e9dac79dfb825a23f499a702baf9d28fbe26db8b920f220dbe2",
+    "src/faces/admin.ts": "0081d86e4c472f39a2d6bd8d8bbbf7350c95fd0e4e30b0ca4da2a3d2a5de460a",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "fded04a5bd4e0443f096874a9a0495786272ddb63d7e5ddf72e89b4502fad333",
@@ -23,7 +23,7 @@
     "src/faces/canvas-notify.ts": "7153f7cb2b6c985825edde55809d47d3a2a14e652d69e55f6d1a72cd9f6d50d9",
     "src/task-auth.ts": "97479423e91648c22a36807aef18ad2b92c7eaa746f4e41ef64b57acd38d9c1c",
     "src/origin-claim.ts": "d467153656bd5592785597e4a81d3686f0b4f91cac38705ecb18d4cc74f8d22c",
-    "src/tools/info.ts": "0bf2e059f3a11fb8d19dcc0dac30d30aa7b0b3470b67a9d0d25a6848739f4aa0",
+    "src/tools/info.ts": "738d85b32aa8493e86be43928230e193f2786dc29fbdf1fba561a59ef4c290f4",
     "src/tools/act.ts": "4d8f0254e2c117ea690f68fb0fb04539934a724dcd799df15bd592e1797fa39b",
     "src/peer-directory.ts": "d7c30c27a230f8c61da18d85c30ad17a6e98809083b13eca82b34870a8934d01",
     "src/card.ts": "12c88222e218b191f71b61ce3c30944f6a50f116953aed56e43259108f9b45b5"
@@ -92,13 +92,13 @@
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:3737",
+      "ref": "src/index.ts:3740",
       "expect": "const sharedCanvas = canvasStore.list().some(name => {"
     },
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:3746",
+      "ref": "src/index.ts:3749",
       "expect": "let orgShared = false"
     },
     {
@@ -134,7 +134,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:514",
+      "ref": "src/faces/admin.ts:518",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
@@ -224,7 +224,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:3929",
+      "ref": "src/index.ts:3932",
       "expect": "const callerNodeId = originAgentId"
     },
     {

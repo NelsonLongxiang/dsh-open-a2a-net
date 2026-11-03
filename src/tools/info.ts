@@ -30,7 +30,7 @@ import type { TeamMembershipStore } from '../team-store.ts'
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
 /** One directory row shared with listDirectoryTeams (which stays in index.ts). */
-export type DirectoryTeamRow = { team: string; session: string; name: string; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean; teams?: string[]; /** Internal S5 scope hint, stripped before the tool's public output. */ canvasMembers?: readonly string[] }
+export type DirectoryTeamRow = { team: string; session: string; name: string; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean; /** gh#106: the peer's last card fetch missed — this row is its kept card, not a live answer. */ unreachable?: boolean; teams?: string[]; /** Internal S5 scope hint, stripped before the tool's public output. */ canvasMembers?: readonly string[] }
 
 /** Everything the information-plane tools capture from apply(). */
 export interface InfoToolsDeps {

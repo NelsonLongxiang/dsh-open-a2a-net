@@ -7,13 +7,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { Context } from '@deepseek-ai/cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import TimerService from '@deepseek-ai/cordis-plugin-timer'
+import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { generateKeyPairSync } from 'node:crypto'
 import { signCard } from '../../src/card.ts'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import { apply, type Config } from '../../src/index.ts'
+
+/** The state face mounts with the multi-agent service (gh#106 reads it). */
+class FakeMultiAgents extends Service {
+  constructor(ctx: Context) { super(ctx, 'agents') }
+  requireInitiator(): Agent { throw new Error('no initiator in this fiber') }
+  roots(): Agent[] { return [] }
+  get(): Agent | undefined { return undefined }
+}
 
 function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
@@ -174,6 +184,62 @@ describe('shared TTL card cache', () => {
     const callsAtExit = calls
     await teams?.execute({}, runContext())
     expect(calls).toBe(callsAtExit)
+    await ctx.fiber.dispose()
+  })
+
+  it('gh#106: while the old card is kept through a miss, the directory row, the state remote row and peerOrg say unreachable; a peer that answers again clears it', async () => {
+    const { privateKey } = generateKeyPairSync('ed25519')
+    const card = cardBody({ privateKey }, 'http://peer-a')
+    let serving = true
+    const realFetch = globalThis.fetch
+    vi.stubGlobal('fetch', (url: string | URL, init?: RequestInit) => {
+      if (String(url).startsWith('http://peer-a')) {
+        if (serving && (init?.method ?? 'GET') === 'GET') return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify(card) } as unknown as Response)
+        return Promise.reject(new Error('peer-a went down'))
+      }
+      return realFetch(url, init)
+    })
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    new FakeMultiAgents(ctx)
+    apply(ctx, makeConfig({ peers: ['http://peer-a'], dshHome: tmpHome(), sessionNodes: true, cardCacheTtlMs: 40, cardCacheNegativeTtlMs: 40, remoteRowsTtlMs: 0 }))
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    const teams = ctx.tools.get('a2a_teams')
+    type Row = { session: string; unreachable?: boolean }
+    const peerRows = async (): Promise<Row[]> => ((await teams?.execute({}, runContext())) as { teams: Row[] }).teams.filter(t => t.session === 'peer-host')
+    /** Two state reads: the first starts the throttled sweep, the second serves its rows. */
+    const state = async (): Promise<{ remote: Array<{ unreachable?: boolean }>; peerOrg: Array<{ url: string; unreachable?: boolean }>; registry: { nodes: Array<{ remote?: boolean; unreachable?: boolean }> } }> => {
+      await realFetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)
+      await new Promise(resolve => setTimeout(resolve, 20))
+      return await (await realFetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as never
+    }
+    const up = await peerRows()
+    expect(up.length).toBeGreaterThan(0)
+    expect(up.every(row => row.unreachable === undefined)).toBe(true)
+    const upState = await state()
+    expect(upState.remote.length).toBeGreaterThan(0)
+    expect(upState.remote.every(row => row.unreachable === undefined)).toBe(true)
+    expect(upState.peerOrg.find(row => row.url === 'http://peer-a')?.unreachable).toBeUndefined()
+    expect(upState.registry.nodes.every(row => row.unreachable === undefined)).toBe(true)
+    serving = false
+    await new Promise(resolve => setTimeout(resolve, 60))
+    const down = await peerRows()
+    expect(down.length).toBeGreaterThan(0) // still listed: the kept card serves until its own expiresAt
+    expect(down.every(row => row.unreachable === true)).toBe(true)
+    const downState = await state()
+    expect(downState.remote.length).toBeGreaterThan(0)
+    expect(downState.remote.every(row => row.unreachable === true)).toBe(true)
+    expect(downState.peerOrg.find(row => row.url === 'http://peer-a')?.unreachable).toBe(true)
+    const remoteNodes = downState.registry.nodes.filter(row => row.remote === true)
+    expect(remoteNodes.length).toBeGreaterThan(0)
+    expect(remoteNodes.every(row => row.unreachable === true)).toBe(true)
+    serving = true
+    await new Promise(resolve => setTimeout(resolve, 60))
+    const back = await peerRows()
+    expect(back.every(row => row.unreachable === undefined)).toBe(true)
     await ctx.fiber.dispose()
   })
 

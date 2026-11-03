@@ -1987,7 +1987,7 @@ export function apply(ctx: Context, config: Config): void {
     // staying well inside a peer restart\x27s noticeability. Single-flight: a
     // refresh already in flight serves every poll that arrives before it
     // settles — no stacked sweeps.
-    let remoteRowsCache: { at: number; rows: { team: string; name: string; origin?: string; via?: string; workspace?: string; legacy?: boolean; teams?: readonly string[] }[] } | undefined
+    let remoteRowsCache: { at: number; rows: { team: string; name: string; origin?: string; via?: string; workspace?: string; legacy?: boolean; unreachable?: boolean; teams?: readonly string[] }[] } | undefined
     let remoteRowsInFlight: Promise<void> | undefined
     const refreshRemoteRows = (): void => {
       const now = Date.now()
@@ -1999,7 +1999,7 @@ export function apply(ctx: Context, config: Config): void {
             at: now,
             rows: all
               .filter(row => row.local !== true)
-              .map(row => ({ team: row.team, name: row.name, ...(row.origin !== undefined ? { origin: row.origin } : {}), ...(row.via !== undefined ? { via: row.via } : {}), ...(row.workspace !== undefined ? { workspace: row.workspace } : {}), ...(row.legacy === true ? { legacy: true } : {}), ...(row.teams !== undefined && row.teams.length > 0 ? { teams: [...row.teams] } : {}) })),
+              .map(row => ({ team: row.team, name: row.name, ...(row.origin !== undefined ? { origin: row.origin } : {}), ...(row.via !== undefined ? { via: row.via } : {}), ...(row.workspace !== undefined ? { workspace: row.workspace } : {}), ...(row.legacy === true ? { legacy: true } : {}), ...(row.unreachable === true ? { unreachable: true } : {}), ...(row.teams !== undefined && row.teams.length > 0 ? { teams: [...row.teams] } : {}) })),
           }
         })
         .catch(() => {})
@@ -3543,7 +3543,10 @@ export function apply(ctx: Context, config: Config): void {
       if (card === undefined) return []
       // Keep the GUI's remote node projection session-only; the model tool
       // opts into the additional canvas-team rows (#159).
-      return peerDirectoryRows(card, peer, includeCanvas)
+      const rows = peerDirectoryRows(card, peer, includeCanvas)
+      // gh#106: a card kept through a miss still lists (until its own
+      // expiresAt), but the row says the peer did not answer the last read.
+      return cardCache.get(peer)?.missAt !== undefined ? rows.map(row => ({ ...row, unreachable: true })) : rows
     }
     // Bounded-concurrency sweep (mapBounded keeps row order by index, so the
     // listing still follows the peer store's preference order): a cold cache
