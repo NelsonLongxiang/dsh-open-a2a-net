@@ -3,12 +3,12 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "1d74c55795910b5cd1e60b946b694cc6f9e72d66b95884c1e68b48080b37e67a",
-    "src/faces/admin.ts": "840ef1b31bde7ed1b0cd69a3f27420ce06992d4f214b4005976c6bee63fb3b8c",
+    "src/index.ts": "75835eaf85bc0555677f265b55817d284282c0c46212f1faa9f23be8d5059c75",
+    "src/faces/admin.ts": "7296d2124610aaa2a04f737b4d111ba2ef107c7879424b76e5bf831f66c3bd44",
     "src/canvas-store.ts": "c612b9b8e03377fec827978addaabf4ce0762a52769bfa15263bd873fbfdedde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "a8e203feb252f0c5d21f98be6ecc45c84d33f867726331a64823f40d68578a2e",
-    "nexus-stage/src/workbench.ts": "2a255e444eb2cef500aeb8cbad61f604f6dcbcc18ab879678171beca75c066f8",
+    "nexus-stage/src/workbench.ts": "83e6b4827677054e4298f32c8bf4734e6b15effc6e92a465cb1c8988e8b033b7",
     "nexus-stage/src/federation.ts": "06e74e9b17b43b655d15fa41c7ab2b0b648cfa15d0ecd02cafe3b505ba6fa0d4",
     "nexus-stage/src/planning-relayout.ts": "7ce77ba2bc95fcbee62af752f22969b726511d8988133e74123a5e04a7a6a571",
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
@@ -135,13 +135,13 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:531",
+      "ref": "src/faces/admin.ts:532",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:171",
+      "ref": "src/faces/admin.ts:172",
       "expect": "path: '/__dsh_a2a/state',"
     },
     {
@@ -189,7 +189,7 @@
     {
       "page": "p1-arch",
       "cell": "d7",
-      "ref": "src/faces/admin.ts:314",
+      "ref": "src/faces/admin.ts:315",
       "expect": "activity: recentActivity.slice(),"
     },
     {
@@ -213,7 +213,7 @@
     {
       "page": "p1-arch",
       "cell": "e1",
-      "ref": "nexus-stage/src/workbench.ts:568",
+      "ref": "nexus-stage/src/workbench.ts:571",
       "expect": "function renderHosts(): void {"
     },
     {
@@ -225,7 +225,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:3851",
+      "ref": "src/index.ts:3857",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -267,7 +267,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3332",
+      "ref": "src/index.ts:3338",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
@@ -297,7 +297,7 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/admin.ts:120",
+      "ref": "src/faces/admin.ts:121",
       "expect": "export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void {"
     },
     {
