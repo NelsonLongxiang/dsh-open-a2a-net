@@ -1150,7 +1150,8 @@ export function apply(ctx: Context, config: Config): void {
   // refused-but-idempotent, same-key different-payload answers conflict.
   const idempotencyStore = new IdempotencyStore(join(home, 'a2a', 'idempotency.json'))
   const refuseIfFlooded = createFloodGuard(idempotencyStore, recordActivity)
-  const refuseIfQueueFull = createQueueGuard(() => taskLedger.list(), () => config.targetQueueCap, idempotencyStore, recordActivity)
+  const ownTask = (taskId: string): boolean => taskLedger.list().some(r => r.taskId === taskId) || taskLedger.archive().some(r => r.taskId === taskId)
+  const refuseIfQueueFull = createQueueGuard(() => taskLedger.list(), () => config.targetQueueCap, ownTask, idempotencyStore, recordActivity)
 
   // Unmasked-identity suppression: gossip mirrors peer lists back and forth,
   // so a URL whose fetch just proved it serves this node — or an already
@@ -3826,7 +3827,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       return { ok: false, error: idRefusal, code: -32000 }
     }
     // gh#224: a full target queue refuses a same-host delivery as the wire face does (receipts, CLI mailboxes pass).
-    const queueRefusal = queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, cliDeposits.get(team) !== undefined)
+    const queueRefusal = queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, cliDeposits.get(team) !== undefined, ownTask)
     if (queueRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: queueRefusal, code: WIRE_ERROR_QUEUE_FULL }
