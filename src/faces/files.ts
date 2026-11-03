@@ -6,8 +6,8 @@
  *   reading the delivery face gives `已验证来源`: an OriginClaim that verifies, and for a host the
  *   audience-bound (v2) form signed from a ROOT card URL whose zone covers `caller_session`; a
  *   deposited CLI identity proves its own handle. The caller must then match a live grant's `to`:
- *   the same label, a target the verified signer's zone covers (that host answers for its own
- *   sessions and canvas teams), or a canvas team of THIS host with a member on the verified host.
+ *   the caller's own label, the signer host itself or one of its canvas teams, or a canvas team of
+ *   THIS host the caller itself is a member of ({@link grantAdmits}).
  *   A refusal never says whether the blob exists. Pulls are rate-limited per proven signer.
  * - `POST /__dsh_a2a/blob?to=<team>&name=<file>` — the control-gated STAGE face (CLI `file send`,
  *   design §3.4): raw bytes in, a grant out. No peer can write into the store.
@@ -41,18 +41,23 @@ export interface FileFaceDeps {
 }
 
 /**
- * Whether a grant's target lets this proven caller pull (design §3.2): the same label; for a HOST
- * signer, also a target its zone covers, or a canvas team of THIS host (`<zone>/canvas/<name>`, this
- * zone only — another host's same-named team is a different team) with a member on the signer's
- * host. A CLI handle is an identity, never a zone (review of PR #208 R1): it admits only its own
- * exact grant. `caller` is already proven by `signer`.
+ * Whether a grant's target lets this proven caller pull (design §3.2). For a HOST signer: the
+ * caller's own label; the signer host itself (a grant to the whole zone); one of the signer host's
+ * canvas teams (`<signer>/canvas/<name>` — that host answers for its own membership); or a canvas
+ * team of THIS host (`<zone>/canvas/<name>`; another host's same-named team is a different team) of
+ * which the caller ITSELF is a member. A grant to one session is not another session's, even on the
+ * same host (#91 F2: the honest host's tool names the pulling session, so a mistake cannot cross
+ * sessions). A CLI handle is an identity, never a zone (review of PR #208 R1): only its own grant.
+ * `caller` is already proven by `signer`.
  */
 export function grantAdmits(to: string, caller: string, signer: string, zone: string, localCanvasMembers: (name: string) => readonly string[], cli = false): boolean {
   if (to === caller) return true
   if (cli) return false
-  if (claimCovers(to, signer)) return true
+  if (to === signer) return true
+  const own = `${signer}/canvas/`
+  if (to.startsWith(own) && to.length > own.length) return true
   const prefix = `${zone}/canvas/`
-  return to.startsWith(prefix) && to.length > prefix.length && localCanvasMembers(to.slice(prefix.length)).some(member => claimCovers(member, signer))
+  return to.startsWith(prefix) && to.length > prefix.length && localCanvasMembers(to.slice(prefix.length)).includes(caller)
 }
 
 /**
