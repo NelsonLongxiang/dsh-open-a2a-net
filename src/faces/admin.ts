@@ -267,7 +267,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               // store keeps both). Genuinely remote refs pass through with
               // remote:true for the workbench's member chips and pickers.
               members: (() => {
-                const rows: Array<{ id: string; team: string; joined?: boolean; live?: boolean; remote?: boolean; cliHome?: string | null; cliHeld?: boolean }> = []
+                const rows: Array<{ id: string; team: string; joined?: boolean; live?: boolean; remote?: boolean; cliHome?: string | null; cliHeld?: boolean; cliHomeCleared?: boolean }> = []
                 const seenLocal = new Set<string>()
                 for (const id of canvasStore.membersOf(name)) {
                   if (isRemoteMemberRef(id)) {
@@ -278,7 +278,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
                       rows.push({ id: localId, team: `${config.team}/${id8(localId)}`, joined: sessionNodes.has(localId) || joinedSessions.has(localId), live: sessionNodes.has(localId) })
                       continue
                     }
-                    rows.push({ id, team: id, remote: true, ...(CLI_HANDLE_RE.test(id) ? { cliHome: canvasStore.cliHomeOf(id) ?? null, cliHeld: cliDeposits.directoryRows().some(row => row.team === id) } : {}) })
+                    rows.push({ id, team: id, remote: true, ...(CLI_HANDLE_RE.test(id) ? { cliHome: canvasStore.cliHomeOf(id) ?? null, cliHeld: cliDeposits.directoryRows().some(row => row.team === id), ...(canvasStore.wasCliHomeCleared(id) ? { cliHomeCleared: true } : {}) } : {}) })
                     continue
                   }
                   if (seenLocal.has(id)) continue
@@ -586,8 +586,9 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // its handle would read as one of the zone's own faces.
           const name = (() => { try { const team = (JSON.parse(card) as { team?: unknown }).team; return typeof team === 'string' ? team.split('/')[0] : '' } catch { return '' } })()
           const out = name === config.team ? { ok: false as const, error: `a CLI identity may not be named after this host's zone "${config.team}" — choose another agent name` } : cliDeposits.deposit(card)
+          const homeCleared = out.ok && canvasStore.clearCliHomeForLocal(out.handle)
           payload = JSON.stringify(out.ok
-            ? { ok: true, handle: out.handle, expiresAt: out.expiresAt, cardUrl: `${d.ownCardUrl}/a2a/cli/${encodeURIComponent(out.handle)}` }
+            ? { ok: true, handle: out.handle, expiresAt: out.expiresAt, ...(homeCleared ? { homeCleared: true } : {}), cardUrl: `${d.ownCardUrl}/a2a/cli/${encodeURIComponent(out.handle)}` }
             : { ok: false, error: out.error })
         } else if (action === 'revoke') {
           payload = JSON.stringify({ ok: cliDeposits.revoke(typeof (body as { handle?: unknown }).handle === 'string' ? (body as { handle: string }).handle : '') })

@@ -3,12 +3,12 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "6afae013563d00c556876ab65aeb980a4773b47b00c659867d96ade4baba85d3",
-    "src/faces/admin.ts": "5a350f5aedd6df0834c45af3da4f9b362cc2fcca94634e9f13740abff6f42c95",
-    "src/canvas-store.ts": "c612b9b8e03377fec827978addaabf4ce0762a52769bfa15263bd873fbfdedde",
+    "src/index.ts": "720a8e97fbe0d746b38e4080a94e2c041d3a7b6bf3d2c02e5a8ad3f22ca76e4f",
+    "src/faces/admin.ts": "feb2e45f1d85afe279d48214729876800b871bb493720180eeea7197b781e867",
+    "src/canvas-store.ts": "d9abf5ba55b38723c137e2ae46967b72c07d607df038c27219af4e6d1d92d60a",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "a8e203feb252f0c5d21f98be6ecc45c84d33f867726331a64823f40d68578a2e",
-    "nexus-stage/src/workbench.ts": "0310a63dd316e6a5ffbfe8cd14141d4e83a1442fbb0b0978a2ab819dd2c07844",
+    "nexus-stage/src/workbench.ts": "5306c84e03dda61d37d5ce7c13362eb40e37ad7d6e99641e79c50791e05158c9",
     "nexus-stage/src/federation.ts": "06e74e9b17b43b655d15fa41c7ab2b0b648cfa15d0ecd02cafe3b505ba6fa0d4",
     "nexus-stage/src/planning-relayout.ts": "7ce77ba2bc95fcbee62af752f22969b726511d8988133e74123a5e04a7a6a571",
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
@@ -165,7 +165,7 @@
     {
       "page": "p1-arch",
       "cell": "d3",
-      "ref": "src/canvas-store.ts:75",
+      "ref": "src/canvas-store.ts:77",
       "expect": "export class CanvasStore {"
     },
     {
@@ -213,7 +213,7 @@
     {
       "page": "p1-arch",
       "cell": "e1",
-      "ref": "nexus-stage/src/workbench.ts:572",
+      "ref": "nexus-stage/src/workbench.ts:573",
       "expect": "function renderHosts(): void {"
     },
     {

@@ -121,6 +121,20 @@ describe('CanvasStore', () => {
     expect(a.cliHomeOf(cli)).toBeUndefined()
   })
 
+  it('local publish removes the old pin durably while preserving membership and an owner notice', () => {
+    const path = tmpFile(), cli = 'ops-cli/a1b2c3d4e5f60718'
+    const store = new CanvasStore(path)
+    store.create('ops'); store.addMember('ops', cli, 'https://old.example')
+    expect(store.clearCliHomeForLocal(cli)).toBe(true)
+    expect(store.clearCliHomeForLocal(cli)).toBe(false)
+    const restored = new CanvasStore(path)
+    expect(restored.membersOf('ops')).toEqual([cli])
+    expect(restored.cliHomeOf(cli)).toBeUndefined()
+    expect(restored.wasCliHomeCleared(cli)).toBe(true)
+    restored.removeMember('ops', cli)
+    expect(new CanvasStore(path).wasCliHomeCleared(cli)).toBe(false)
+  })
+
   it('does not restore an orphan CLI pin or include it in the allowlist inputs', () => {
     const path = tmpFile()
     const cli = 'ops-cli/a1b2c3d4e5f60718'

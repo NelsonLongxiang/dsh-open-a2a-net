@@ -4159,7 +4159,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   async function dispatchAnywhere(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode: boolean, taskId?: string, peerCaller?: string): Promise<A2aRouteResult & { ok: true }> {
     // A local online household is an owner-established fact and receives locally.
     // Otherwise only the pinned home may receive; never fall back to directory claims.
-    if (CLI_HANDLE_RE.test(team) && parseReceipt(message) !== null && cliDeposits.get(team) === undefined) {
+    const cliReceipt = CLI_HANDLE_RE.test(team) && parseReceipt(message) !== null
+    if (cliReceipt && cliDeposits.get(team) === undefined) {
       const home = canvasStore.cliHomeOf(team)
       if (home === undefined) throw new Error(`CLI receipt home is not pinned for ${team}`)
       const delivered = await dispatchPeerCandidate(home, team, message, contextId, signal, peerCaller ?? callerSession, asyncMode, taskId)
@@ -4173,6 +4174,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       if (!local.ok) throw new Error(local.error)
       return local
     }
+    if (cliReceipt) throw new Error(`local CLI household expired before delivery to ${team}; directory fallback refused`)
     const failures: string[] = []
     const candidates = await directoryPeerCandidates(memoizedCardFetch(), team, failures)
     if (candidates.length === 0) {
