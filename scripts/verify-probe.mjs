@@ -182,6 +182,7 @@ const summary = {
   release_gate: Object.fromEntries(gateRows.map((g) => [g.rule, !!g.holds])),
   release_evidence: { source: regUrl, checked_at: regCheckedAt, exact_version: pkg.version, registry_state: regState },
   snapshot: OUT,
+  submission: SUBMISSION,
 };
 writeFileSync(resolve(REPO, "verify/probe-summary.json"), JSON.stringify(summary, null, 2) + "\n");
 console.log(JSON.stringify(summary, null, 2));

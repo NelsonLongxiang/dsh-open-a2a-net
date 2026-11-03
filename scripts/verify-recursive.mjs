@@ -16,7 +16,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { submissionFromProbe } from "./verify-submission.mjs";
 
 const REPO = resolve(import.meta.dirname, "..");
 const YGL_BIN = process.env.YGL_BIN ?? resolve(REPO, "..", "ygl-trees", "dist/apps/cli/src/bin.js");
@@ -67,11 +67,14 @@ if (argv.includes("--fresh")) {
 /* ── L·判定：冻结 spec 跑当前快照 ──────────────────────── */
 {
   const snapshot = resolve(REPO, "verify/snapshot.sqlite");
-  const submission = resolve(tmpdir(), "dsh-a2a-submission");
+  const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: REPO, encoding: "utf8" }).stdout?.trim() ?? "";
+  const submission = submissionFromProbe(resolve(REPO, "verify/probe-summary.json"), snapshot, head);
   if (!existsSync(snapshot)) {
     layers.push({ layer: "spec-run", ok: false, detail: "verify/snapshot.sqlite missing — run scripts/verify-probe.mjs first" });
+  } else if (!submission.ok) {
+    layers.push({ layer: "spec-run", ok: false, detail: submission.error });
   } else {
-    const res = runJson(["verify", "run", SPEC_ID, "--db", snapshot, "--submission", submission, "--json"]);
+    const res = runJson(["verify", "run", SPEC_ID, "--db", snapshot, "--submission", submission.path, "--json"]);
     layers.push({
       layer: "spec-run",
       ok: res.status === 0 && res.json.overall === "PASS",

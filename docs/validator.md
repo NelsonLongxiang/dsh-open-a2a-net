@@ -14,9 +14,9 @@ scripts/verify-probe.mjs          证据采集面（验证器之外，真命令/
    ├─ 质量门禁：pnpm run typecheck / verify:docs / test:unit / test:wire / verify:nexus（退出码+用例计数）
    ├─ 运行时：3081 /__dsh_a2a_nexus/ 与 /__dsh_a2a/state 探针
    ├─ 闸门推导：candidate_on_3081 / unpublished_in_registry / worktree_clean
-   ├─ 产出：verify/snapshot.sqlite（快照）+ 提交树导出（os tmpdir/dsh-a2a-submission，
+   ├─ 产出：verify/snapshot.sqlite（快照）+ 提交树导出（os tmpdir/dsh-a2a-submission-<唯一后缀>，
    │   仓库外——放 repo 的 tmp/ 会被 vitest 收进测试树，实测踩坑 0.6.14）
-   └─ 产出：verify/probe-summary.json（人读摘要）
+   └─ 产出：verify/probe-summary.json（人读摘要，含 snapshot/submission 路径与 git_head 绑定）
 
 verify/material-isolated.md        隔离候选版 15 条冻结判据源（旧 material.md 不改写）
 verify/candidates-isolated.json  与新判据逐字匹配的候选 AST
@@ -53,13 +53,13 @@ export YGL_HOME=D:/workspace/dsh-open-a2a-net/tmp/ygl-verify
 YGL=D:/workspace/ygl-trees/dist/apps/cli/src/bin.js
 # 现行隔离候选版 RC spec：spec_bdf9df9d3851；--submission 必须取本轮 probe 输出的唯一目录
 ygl-trees verify run spec_bdf9df9d3851 --db verify/snapshot.sqlite --submission "<本轮 probe 的 submission exported 路径>" --json
-# （submission 路径以 probe 日志行「submission exported: N tracked files -> <path>」为准）
+# （submission 路径以本轮 probe-summary.json.submission 为准；缺失或与 snapshot/HEAD 不匹配即拒绝）
 # overall 在报告 JSON 里；rc=0 只表示「跑完出报告」，FAIL 也是有效结论
 ```
 
 新环境没有 `spec_bdf9df9d3851` 时，不得借用旧 spec 的 PASS：先由 CLI 按 `verify/material-isolated.md`、`verify/candidates-isolated.json`、`verify/reviews-isolated.json` 提交/准备，file 检查器必须以本轮仓库真实 nexusDist bundle、`docs/release-gate.md` 和一份已跟踪的 `tests/**/*.spec.ts` 作为 `--attach` 样本。引擎治理 meta 指向实际验证器源码根（本机 `D:/workspace/ygl-trees`）；本插件仓 `verify meta` 当前 R3 因已存在的插件运行时代码报 FAIL，不能冒称本仓 meta PASS。冻结后记新 spec id 与材料 hash，正式判定只认 `verify run` 的报告和归档。
 
-`scripts/verify-probe.mjs` 直连 npmjs **候选精确版本**：404 才记未发布，200 记已发布，网络错误/其他状态记未核且 V6 FAIL；不以 `latest` 标签或项目 `.npmrc` 证明精确版本不存在。3081 state 在 isolated 模式可保留持久化 peer 列表，V9 看显式 `isolated=true` 而不要求 peer 数为 0；V10 必须 state HTTP 200 且死信计数非空、处于 0–30。probe 的提交物目录每轮新建并打印路径，不删上轮目录。
+`scripts/verify-probe.mjs` 直连 npmjs **候选精确版本**：404 才记未发布，200 记已发布，网络错误/其他状态记未核且 V6 FAIL；不以 `latest` 标签或项目 `.npmrc` 证明精确版本不存在。3081 state 在 isolated 模式可保留持久化 peer 列表，V9 看显式 `isolated=true` 而不要求 peer 数为 0；V10 必须 state HTTP 200 且死信计数非空、处于 0–30。probe 的提交物目录每轮新建，写进摘要并打印路径；递归层只接受同一 snapshot/HEAD 下的该目录，缺摘要、路径异常、旧固定 TEMP 目录都 FAIL，不回落旧目录。
 
 **本机正式CLI运行（2026-11-03，非发布PASS）**：现行 `spec_bdf9df9d3851` 的 `run_b67ca23c44bee3a7` 判 `FAIL`（9 PASS、6 FAIL，V15 文档漂移闸 PASS），红项 V2/V5/V6/V7/V9/V10：仓库仍是已发布的 0.6.31、Windows unit 红、工作树在途且 3081 state 返回 401，不能宣称候选通过。该报告归档 `archive verify` **169 项通过**；把现行规格跑在旧四门禁快照得到 `run_c3de2aebeb915040`，V15 明确 FAIL，缺门禁不会空洞通过。历史 14 单元 `run_b927977dbea7a8b9` 在 3081 v0.6.32 `isolated=true` 且 state 报 9 个持久化 peer 时，V8/V9/V10 PASS，但其快照仍使用旧 latest 探针，不证明精确版本的 V6；整体仍 FAIL。两份报告均不对应 90c7d4c 的完整正式候选 PASS。
 
