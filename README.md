@@ -131,6 +131,7 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `announce` | `false` | Publish this node's agent card for peer discovery. |
+| `isolated` | `false` | Send nothing to any peer: card reads, directory sweeps, routes, remote log reads, canvas pings and fleet canvas-op relays are all refused (gh#193). `a2a/peers.json` is left untouched and refused fetches do not score peers; inbound faces keep answering; the state face shows `isolated: true`. For test and acceptance hosts. |
 | `peers` | `[]` | Seed base URLs; referred peers are learned from their cards. |
 | `delegates` | `[]` | Zone delegations: `{ name, url, publicKey }` published on the card. |
 | `team` | `'dsh'` | Team name this node exposes for direct routing. |

@@ -44,7 +44,7 @@ import type { OriginClaimTarget } from '../origin-claim.ts'
 export type RemoteRowsCache = { at: number; rows: { team: string; name: string; origin?: string; via?: string; workspace?: string; legacy?: boolean; teams?: readonly string[] }[] } | undefined
 
 /** Everything the admin faces used to capture from `apply()`. */
-export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim' | 'callerLinkedToThisHost' | 'cachedCardFetch'> {
+export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim' | 'callerLinkedToThisHost' | 'cachedCardFetch' | 'peerFetch'> {
   readonly ctx: Context
   readonly config: Config
   readonly logger: ReturnType<Context['logger']>
@@ -239,6 +239,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
         const body = JSON.stringify({
           nodes: true,
           version: PLUGIN_VERSION,
+          // gh#193: a dark host says so — an empty remote list is not an outage.
+          ...(config.isolated ? { isolated: true } : {}),
           sessions,
           groups: groupStore.list(),
           canvas: {
@@ -613,7 +615,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
         }
         try {
           const target = peerUrl.replace(/\/$/, '') + '/a2a/canvas-op'
-          const reply = await globalThis.fetch(target, {
+          const reply = await d.peerFetch(target, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...originClaimHeaders({ url: target, method: 'POST' }) },
             // A local session id means nothing on the peer: send its zone/id8 handle (the workbench
