@@ -35,7 +35,7 @@ export function resolveCallerLabel(input: {
 import { signCard, verifyCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { CanvasStore, isRemoteMemberRef } from './canvas-store.ts'
-import { decodeSessionLog, extractTranscript, TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_MAX_FILE_BYTES, TRANSCRIPT_MAX_LIMIT } from './session-transcript.ts'
+import { decodeSessionLog, extractTranscript, TRANSCRIPT_MAX_FILE_BYTES } from './session-transcript.ts'
 import { LayoutStore } from './layout-store.ts'
 import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
@@ -118,9 +118,10 @@ import { NodeStore } from './node-store.ts'
 import { createNodeBinder, NodeBindings } from './node-bind.ts'
 import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
-import { NodeReviewQueue, SessionTaint, toolTaint } from './node-self.ts'
+import { NodeReviewQueue, SessionTaint, localRoute, toolTaint } from './node-self.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
+import { registerSessionLogFaces } from './faces/session-log.ts'
 import { canvasCandidateMatches, canvasTargetAmbiguous, peerDirectoryRows, routableCallerLabel, sessionCandidateMatches, unroutableCallerNote } from './peer-directory.ts'
 import { createTeamsBridgeInbound } from './legacy/teams-bridge-inbound.ts'
 import { createActTools } from './tools/act.ts'
@@ -2234,14 +2235,14 @@ export function apply(ctx: Context, config: Config): void {
    * so ui-chat renders the relay body ("来自 X" + full text) instead of an
    * opaque row; omitted when the sender is not meaningfully addressable.
    */
-  function steerRelay(agent: Agent, text: string, sender?: string): void {
-    // N4 session taint: every relay steer carries content from outside this host (a delivery, its nudge or cancel notice).
-    markLineage(agent, 'relay')
+  function steerRelay(agent: Agent, text: string, sender?: string, localFrom?: string): void {
+    // N4/gh#198: a relay steer carries content from outside this host — unless it is an in-process delivery from a clean local session (localFrom), whose taint the target then takes.
+    if (localFrom === undefined || nodeTaint.of(localFrom) !== '') markLineage(agent, 'relay')
     agent.steer({
       id: MessageId(`a2a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`),
       role: 'user',
       content: [{ type: 'text', text }],
-      source: { kind: 'a2a-relay', form: 'relay', ...(sender === undefined ? {} : { senderSessionId: sender }) },
+      source: { kind: 'a2a-relay', form: 'relay', ...(sender === undefined ? {} : { senderSessionId: sender }), ...(localFrom === undefined ? {} : { localSender: localFrom }) },
     })
   }
 
@@ -2491,18 +2492,18 @@ export function apply(ctx: Context, config: Config): void {
    * marker instead of a (false) completion.
    * @param taskId - the correlation key the steered receipt header carries.
    */
-  async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string): Promise<
+  async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string): Promise<
     { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean } | { ok: false; error: string }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
-      return routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader)
+      return routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader, localFrom)
     }
     // Wake-on-route: a cold joined team materializes on demand, then steers.
     const wake = wakeColdTeam(team)
     if (wake.kind === 'flight') {
       return wake.flight.then(
-        agent => routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader),
+        agent => routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader, localFrom),
         (error: unknown) => ({ ok: false, error: `waking the session for team "${team}" failed: ${String(error)}` }) as const,
       )
     }
@@ -2547,7 +2548,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param caller - caller label for the steered prefix.
    * @returns the agent's final reply, or the explicit failure.
    */
-  function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string): Promise<
+  function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string): Promise<
     { ok: true; reply: string; placeholder?: boolean } | { ok: false; error: string }
   > {
     return new Promise((resolve) => {
@@ -2566,7 +2567,7 @@ export function apply(ctx: Context, config: Config): void {
         : `[A2A direct] ${taskId === undefined ? '' : `(task ${taskId}) `}未验证（in-process） ${sanitizeFromClause(from)} (routed to ${team}) sent:`
       const text = `${headerLine}\n\n${message}`
       try {
-        steerRelay(agent, text, caller === '' ? undefined : caller)
+        steerRelay(agent, text, caller === '' ? undefined : caller, localFrom)
       } catch (error) {
         // The waiter was registered above, so the key always holds it; the
         // map-of-arrays stays a plain read.
@@ -3060,150 +3061,8 @@ export function apply(ctx: Context, config: Config): void {
       }),
     }), 'a2a: quick-dispatch route')
 
-    // Session transcript reader (0.6.11): the workbench inspector shows the
-    // tail of a LOCAL node's own conversation log inline — owner ruling
-    // 2026-10-20 banned navigation, and reading is the need jumps used to
-    // serve. The id gate is artifact existence under this host's sessions
-    // tree — reading is a host-workbench concern, not a network-membership
-    // concern, so archived and never-joined sessions stay readable while the
-    // network faces keep their own visibility rules. Path shape is still
-    // checked (no '/', '\', '..') and the tree never leaves <dshHome>/sessions.
-    // Without an id the same face lists readable sessions (newest activity
-    // first, capped) so the workbench directory can offer log rows even when
-    // the network directory shows none. Caps mirror session-transcript.ts.
-    ctx.effect(() => webServer.register({
-      kind: 'exact',
-      path: '/__dsh_a2a/session-log',
-      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
-        const url = new URL(req.url ?? '/', 'http://x')
-        const id = url.searchParams.get('id') ?? ''
-        const limitArg = Number(url.searchParams.get('limit') ?? TRANSCRIPT_DEFAULT_LIMIT)
-        const limit = Number.isFinite(limitArg) ? Math.max(1, Math.min(TRANSCRIPT_MAX_LIMIT, Math.floor(limitArg))) : TRANSCRIPT_DEFAULT_LIMIT
-        let result: Record<string, JsonValue>
-        if (id.includes('/') || id.includes('\\') || id.includes('..')) {
-          result = { ok: false, error: 'id is required' }
-        } else if (id === '') {
-          // Listing face: every session directory holding a log artifact.
-          try {
-            const rows = scanSessionLogList()
-            result = { ok: true, count: rows.length, sessions: rows.slice(0, 50) }
-          } catch (error) {
-            result = { ok: false, error: `transcript list failed: ${error instanceof Error ? error.message : String(error)}` }
-          }
-        } else {
-          try {
-            const tail = readSessionLogTail(id, limit)
-            if (!tail.ok) result = { ok: false, error: tail.error }
-            else result = { ok: true, id: tail.id, count: tail.messages.length, messages: tail.messages }
-          } catch (error) {
-            result = { ok: false, error: `transcript failed: ${error instanceof Error ? error.message : String(error)}` }
-          }
-        }
-        const payload = JSON.stringify(result)
-        res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
-        res.end(payload)
-      }),
-    }), 'a2a: session-log route')
-
-    // 0.6.15: the local proxy for REMOTE session logs. The workbench runs
-    // in this host's browser page, so cross-host reads must originate from
-    // this host (no CORS, one trust boundary). ?team=<zone/id8> resolves
-    // directory candidates that publish that team (same walk as routing);
-    // ?peer=<base-url> targets one tracked peer directly and MUST name a
-    // URL already in the peer store — the proxy never fetches an
-    // arbitrary address. The caller label we present is config.team (this
-    // node's own zone handle, the same host face quick-dispatch uses).
-    ctx.effect(() => webServer.register({
-      kind: 'exact',
-      path: '/__dsh_a2a/remote-session-log',
-      handler: controlRoute(async (req: IncomingMessage, res: ServerResponse) => {
-        const url = new URL(req.url ?? '/', 'http://x')
-        const team = url.searchParams.get('team') ?? ''
-        const peer = url.searchParams.get('peer') ?? ''
-        const id = url.searchParams.get('id') ?? ''
-        const limitArg = Number(url.searchParams.get('limit') ?? TRANSCRIPT_DEFAULT_LIMIT)
-        const limit = Number.isFinite(limitArg) ? Math.max(1, Math.min(TRANSCRIPT_MAX_LIMIT, Math.floor(limitArg))) : TRANSCRIPT_DEFAULT_LIMIT
-        const finish = (body: Record<string, JsonValue>): void => {
-          const payload = JSON.stringify(body)
-          res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
-          res.end(payload)
-        }
-        if (id.includes('/') || id.includes('\\') || id.includes('..')) {
-          finish({ ok: false, error: 'id is required' })
-          return
-        }
-        const trackedPeers = new Set(peerStore.list().map(entry => entry.replace(/\/+$/, '')))
-        let targets: string[]
-        if (peer !== '') {
-          const normalized = peer.replace(/\/+$/, '')
-          if (!trackedPeers.has(normalized)) {
-            finish({ ok: false, error: 'unknown peer on this node — the proxy only reads tracked peers' })
-            return
-          }
-          targets = [normalized]
-        } else if (team !== '') {
-          const failures: string[] = []
-          targets = await directoryPeerCandidates(memoizedCardFetch(), team, failures)
-          if (targets.length === 0) {
-            finish({ ok: false, error: `no directory candidate publishes team "${team}"${failures.length > 0 ? ` (${failures.slice(0, 3).join('; ')})` : ''}` })
-            return
-          }
-        } else {
-          finish({ ok: false, error: 'team or peer is required' })
-          return
-        }
-        // 0.6.16: a team-handle read without an explicit id names a NODE, not
-        // a session. The handle suffix (zone/<id8>) is the first 8 hex of the
-        // peer-side session id (sessionTeamOf), so resolve the listing once
-        // and pick that session — bare zone teams fall back to the newest.
-        // An explicit id (peer drill) short-circuits this.
-        let resolvedId = id
-        if (resolvedId === '' && team !== '') {
-          const suffix = team.includes('/') ? team.slice(team.lastIndexOf('/') + 1) : ''
-          for (const base of targets) {
-            const listUrl = new URL('/a2a/log', base)
-            listUrl.searchParams.set('caller_session', config.team)
-            try {
-              const listResponse = await peerFetch(listUrl, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } })
-              const listBody = await listResponse.json().catch(() => ({ ok: false, error: `peer answered HTTP ${listResponse.status}` })) as { ok?: boolean; error?: string; sessions?: Array<{ id: string }> }
-              if (listResponse.ok && listBody.ok === true && Array.isArray(listBody.sessions)) {
-                const picked = suffix !== '' ? listBody.sessions.find(row => row.id.includes(suffix)) : listBody.sessions[0]
-                if (picked !== undefined) {
-                  resolvedId = picked.id
-                  break
-                }
-              }
-            } catch {
-              // listing failed on this candidate — the tail attempt below
-              // will surface the honest error for the same base
-            }
-          }
-          if (resolvedId === '') {
-            finish({ ok: false, error: `no readable session on this peer matches "${team}"` })
-            return
-          }
-        }
-        const attempts: string[] = []
-        for (const base of targets) {
-          const target = new URL('/a2a/log', base)
-          target.searchParams.set('caller_session', config.team)
-          if (resolvedId !== '') target.searchParams.set('id', resolvedId)
-          target.searchParams.set('limit', String(limit))
-          try {
-            const response = await peerFetch(target, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } })
-            const body = await response.json().catch(() => ({ ok: false, error: `peer answered HTTP ${response.status}` })) as { ok?: boolean; error?: string }
-            if (response.ok && body.ok === true) {
-              finish({ ...body, via: base } as Record<string, JsonValue>)
-              return
-            }
-            attempts.push(`${base}: ${body.error ?? `HTTP ${response.status}`}`)
-          } catch (error) {
-            attempts.push(`${base}: ${error instanceof Error ? error.message : String(error)}`)
-          }
-        }
-        finish({ ok: false, error: `remote log unavailable — ${attempts.join(' | ')}` })
-      }),
-    }), 'a2a: remote-session-log proxy route')
+    // gh#77: the session-log faces (local transcript reader + remote-log proxy) live in src/faces/session-log.ts.
+    registerSessionLogFaces(webServer, { ctx, config, controlRoute, scanSessionLogList, readSessionLogTail, peerStore, peerFetch, directoryPeerCandidates, memoizedCardFetch })
   })
 
   /**
@@ -3780,16 +3639,16 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
             if (orgShared) break
           }
           if (callerTeams.length === 0 && !sharedRoster && !sharedCanvas && !orgShared) {
-            return {
+            return localRoute({
               ok: false,
               error: `team-scoped routing is on and this session (${id8(scopeCaller)}) has declared no team membership — a teamless node has no network. Declare one with a2a_team_join (subject to the owner's teamJoinAllowlist)`,
-            }
+            })
           }
           if (!callerTeams.includes(team) && !sharedRoster && !sharedCanvas && !orgShared) {
-            return {
+            return localRoute({
               ok: false,
               error: `team-scoped routing is on: routing to "${team}" requires declared membership. This session's teams: ${callerTeams.join(', ')}. a2a_team_join can declare it (subject to the owner's teamJoinAllowlist)`,
-            }
+            })
           }
         }
       }
@@ -3834,7 +3693,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // cheapest possible and immune to nested-signal aborts), then direct
       // publishers, then zone delegations, deduplicated by URL.
       const failures: string[] = []
-      if (signal?.aborted) return { ok: false, error: 'route aborted before dispatch', code: -32000 }
+      if (signal?.aborted) return localRoute({ ok: false, error: 'route aborted before dispatch', code: -32000 })
       const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, signal, args.async === true, taskId, callbackAddress, agent === undefined ? undefined : String(agent.id))
       const localBirth = localBirths.get(taskId)
       localBirths.delete(taskId)
@@ -3842,7 +3701,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         if (outcome.ok) {
           // gh#141: a receipt owes no receipt — booking it would strand a row nothing settles.
           if (!routedReceipt) trackOwedTask(taskId, args.team, 'local', outcome, callbackAddress, briefOf(args.message), sender, localBirth)
-          return outcome as unknown as Record<string, JsonValue>
+          // gh#198: host-built delivery notes, or a reply from a clean local session (resolved as routeIntoAgent does), are this host's alone.
+          return ((outcome.bridge === undefined && (outcome.task_status === 'TASK_STATE_DELIVERED' || outcome.task_status === 'TASK_STATE_ABORTED_WAIT' || (t => t !== undefined && nodeTaint.of(String(t.id)) === '')(resolveAgentForTeam(args.team) ?? canvasLiveAgent(parseCanvasTeamName(args.team))))) ? localRoute(outcome) : outcome) as unknown as Record<string, JsonValue>
         }
         failures.push(`local: ${outcome.error}`)
       }
@@ -4063,7 +3923,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         const receiptHint = callerTeam === undefined ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${callerTeam}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
         // #114 S5: the consumption search starts at the pre-steer log length.
         const steerFloor = sessionEventsOf(target).length
-        steerRelay(target, `[A2A direct] (task ${taskId}) 未验证（in-process） ${sanitizeFromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam)
+        steerRelay(target, `[A2A direct] (task ${taskId}) 未验证（in-process） ${sanitizeFromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam, originAgentId)
         armReceiptAutosend(target, taskId, callerTeam, message, steerFloor)
         // #139: the caller's outbound row is born with this admission and the member that received it.
         if (taskIdFromCaller !== undefined) localBirths.set(taskIdFromCaller, localBirthOf(team, callerSession, callerTeam, sessionTeamOf(target)))
@@ -4140,7 +4000,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         }
       }
     }
-    const wait = routeIntoAgent(team, message, callerSession ?? session, taskId)
+    const wait = routeIntoAgent(team, message, callerSession ?? session, taskId, undefined, undefined, originAgentId)
     const aborted = new Promise<never>((_, reject) => {
       signal.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
     })

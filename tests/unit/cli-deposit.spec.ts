@@ -23,6 +23,42 @@ function store(dir = mkdtempSync(join(tmpdir(), 'cli45-')), base = 1_000_000): {
   return { s, tick: ms => { t += ms } }
 }
 
+describe('gh#137 a re-publish keeps the key the handle was published with', () => {
+  const H = 'ops-cli/a1b2c3d4e5f60718'
+  const other = generateKeyPairSync('ed25519').privateKey
+  const otherCard = (team: string): string => JSON.stringify(signCard({ name: 'cli-node', session: 'cli-node-session', team, capabilities: { route: true, async: true }, expiresAt: Date.now() + 172_800_000 }, other))
+  const keyOf = (json: string | undefined): unknown => (json === undefined ? undefined : (JSON.parse(json) as { publicKey?: unknown }).publicKey)
+
+  it('a live deposit refuses another key (and stays as it was); the same key refreshes', () => {
+    const { s } = store()
+    expect(s.deposit(cliCard(H)).ok).toBe(true)
+    const before = s.get(H)?.cardJson
+    const swapped = s.deposit(otherCard(H))
+    expect(swapped).toEqual({ ok: false, error: expect.stringContaining('held by another key (live deposit)') as unknown })
+    expect(s.get(H)?.cardJson).toBe(before)
+    expect(s.deposit(cliCard(H)).ok).toBe(true)
+  })
+
+  it('a tombstone pins the key too; an explicit revoke frees the handle for a new key', () => {
+    const { s, tick } = store()
+    expect(s.deposit(cliCard(H)).ok).toBe(true)
+    tick(4 * 60 * 60 * 1000 + 1)
+    expect(s.get(H)).toBeUndefined() // expired: offline row only
+    expect(s.deposit(otherCard(H))).toEqual({ ok: false, error: expect.stringContaining('held by another key (offline deposit)') as unknown })
+    expect(s.revoke(H)).toBe(true)
+    expect(s.deposit(otherCard(H)).ok).toBe(true)
+    expect(keyOf(s.get(H)?.cardJson)).toBe((JSON.parse(otherCard(H)) as { publicKey: string }).publicKey)
+  })
+
+  it('the pin survives a restart (the stored card carries the key)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli137-'))
+    expect(store(dir).s.deposit(cliCard(H)).ok).toBe(true)
+    const { s } = store(dir)
+    expect(s.deposit(otherCard(H)).ok).toBe(false)
+    expect(s.deposit(cliCard(H)).ok).toBe(true)
+  })
+})
+
 describe('gh#45 CLI deposit store', () => {
   it('① accepts <agent-name>/<uuid16hex>, rejects every other shape', () => {
     const { s } = store()
