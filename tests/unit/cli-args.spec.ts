@@ -215,6 +215,35 @@ describe('a2a-net CLI: read commands and errors', () => {
     expect((JSON.parse(json.stdout) as { pending: unknown[] }).pending).toHaveLength(25)
   })
 
+  it('tasks preserves settlement/conservation exactly in JSON and appends both table summaries', async () => {
+    const settlement = { mode: 'enforce', offChain: 2, legacy: 0, compat: 1, refusalsTotal: 87, refusals: [{ task_id: 'x', reason: 'off-chain', extra: { preserved: true } }] }
+    const conservation = { conserved: false, delta: -1, born: 17, pending: 3, archived: 13, duplicateTaskIds: ['x'], futureField: { untouched: [1, 2] } }
+    const host = await stubHost(() => ({ status: 200, body: { tasks: [], tasksDead: [], archived: [], settlement, conservation } }))
+    servers.push(host.server)
+    const HOME = tmpHomeDir(), env = { HOME, A2A_CLI_HOME: HOME }
+    const json = await runCli(['tasks', '--home', host.url, '--json'], env)
+    expect(json.code, json.stderr).toBe(0)
+    expect(JSON.parse(json.stdout)).toEqual({ pending: [], dead: [], archived: [], settlement, conservation })
+    const table = await runCli(['tasks', '--home', host.url], env)
+    expect(table.code, table.stderr).toBe(0)
+    expect(table.stdout).toMatch(/conservation: conserved=false delta=-1\nsettlement: mode=enforce refusalsTotal=87 offChain=2\n$/)
+  })
+
+  it('tasks omits absent observability blocks on older hosts and preserves zero counters', async () => {
+    let body: Record<string, unknown> = { tasks: [], tasksDead: [], archived: [] }
+    const host = await stubHost(() => ({ status: 200, body }))
+    servers.push(host.server)
+    const HOME = tmpHomeDir(), env = { HOME, A2A_CLI_HOME: HOME }
+    const old = await runCli(['tasks', '--home', host.url, '--json'], env)
+    expect(old.code, old.stderr).toBe(0)
+    expect(JSON.parse(old.stdout)).toEqual({ pending: [], dead: [], archived: [] })
+    expect((await runCli(['tasks', '--home', host.url], env)).stdout).toBe('pending (0):\ndead (0):\narchived (0):\n')
+    body = { ...body, settlement: { mode: 'observe', refusalsTotal: 0, offChain: 0 } }
+    const single = await runCli(['tasks', '--home', host.url, '--json'], env)
+    expect(JSON.parse(single.stdout)).toEqual({ pending: [], dead: [], archived: [], settlement: body.settlement })
+    expect((await runCli(['tasks', '--home', host.url], env)).stdout).toContain('settlement: mode=observe refusalsTotal=0 offChain=0')
+  })
+
   it('tasks prints each row\'s sender at the end of its line; rows without one print nothing extra (#121)', async () => {
     const host = await stubHost(() => ({ status: 200, body: {
       tasks: [{ taskId: 'direct-00000001', team: 'ops', direction: 'outbound', sender: { kind: 'session', id: 'dsh/1a2b3c4d' } }, { taskId: 'direct-00000002', team: 'ops', direction: 'inbound' }],

@@ -959,13 +959,15 @@ async function main() {
     const pending = s.tasks ?? []
     const dead = s.tasksDead ?? []
     const archived = s.archived ?? []
-    if (has('--json')) { console.log(JSON.stringify({ pending, dead, archived }, null, 2)); return }
+    if (has('--json')) { console.log(JSON.stringify({ pending, dead, archived, ...(s.settlement === undefined ? {} : { settlement: s.settlement }), ...(s.conservation === undefined ? {} : { conservation: s.conservation }) }, null, 2)); return }
     console.log(`pending (${String(pending.length)}):`)
     listCapped(pending, 20, t => `  ${String(t.taskId)} → ${String(t.team)} ${String(t.direction ?? '')}${senderTail(t)}`)
     console.log(`dead (${String(dead.length)}):`)
     listCapped(dead, 20, t => `  ${String(t.taskId)} → ${String(t.team)} (${String(t.reason ?? '?')})${senderTail(t)}`)
     console.log(`archived (${String(archived.length)}):`)
     listCapped(archived, 20, t => `  ${String(t.taskId)} ${String(t.outcome ?? '?')}${t.endedBy !== undefined && t.endedBy !== 'receipt' ? ` (${String(t.endedBy)})` : ''}${senderTail(t)}`)
+    if (s.conservation != null) console.log(`conservation: conserved=${String(s.conservation.conserved)} delta=${String(s.conservation.delta)}`)
+    if (s.settlement != null) console.log(`settlement: mode=${String(s.settlement.mode)} refusalsTotal=${String(s.settlement.refusalsTotal)} offChain=${String(s.settlement.offChain)}`)
     return
   }
   if (cmd === 'status') {
