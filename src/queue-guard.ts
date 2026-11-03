@@ -5,11 +5,15 @@
  *
  * Counted ("queued for T"): rows this host's ledger still holds pending for T that expect a
  * receipt — inbound rows born at /a2a/direct (addressed to T, or delivered to T), and same-host
- * routes (peer 'local') to T. Never refused: receipts (terminal; refusing one strands the
- * caller's row) and deliveries into a CLI mailbox (its own 64-mail bound applies).
+ * routes (peer 'local') to T. Never refused: a receipt for a task this host's ledger holds
+ * (terminal; refusing one strands that row — a genuine receipt always returns to the host that
+ * booked its task, so a '[A2A receipt]' header naming an unknown id is ordinary traffic and is
+ * counted), and deliveries into a CLI mailbox (its own 64-mail bound applies). A canvas team is
+ * one target: a full queue refuses the team as addressed, remote members included.
  */
 import type { ServerResponse } from 'node:http'
 import type { IdempotencyStore } from './idempotency-store.ts'
+import { parseReceipt } from './receipt.ts'
 
 export const WIRE_ERROR_QUEUE_FULL = -32009
 export const DEFAULT_TARGET_QUEUE_CAP = 3
@@ -32,24 +36,27 @@ export function queuedFor(rows: readonly QueueRow[], team: string): number {
 }
 
 /** The refusal text when `team`'s queue is full, else undefined. `cap <= 0` disables the guard. */
-export function queueFullRefusal(rows: readonly QueueRow[], team: string, message: string, cap: number, mailbox: boolean): string | undefined {
+export function queueFullRefusal(rows: readonly QueueRow[], team: string, message: string, cap: number, mailbox: boolean, ownTask: (taskId: string) => boolean): string | undefined {
   // A config without the key (old patch layer, test harness) gets the shipped default, not "no cap".
   const limit = typeof cap === 'number' && Number.isFinite(cap) ? cap : DEFAULT_TARGET_QUEUE_CAP
-  if (limit <= 0 || mailbox || message.startsWith('[A2A receipt] task ')) return undefined
+  if (limit <= 0 || mailbox) return undefined
+  const receipt = parseReceipt(message)
+  if (receipt !== null && receipt.taskId !== '' && ownTask(receipt.taskId)) return undefined
   const queued = queuedFor(rows, team)
   if (queued < limit) return undefined
-  return `target-queue-full (gh#224): "${team}" already has ${String(queued)} task(s) waiting for a receipt (cap ${String(limit)}) — nothing was delivered. Wait for a receipt from it (a2a inbox / a2a_tasks), or send again later; do not resend in a loop.`
+  return `target-queue-full (gh#224): "${team}" already has ${String(queued)} task(s) waiting for a receipt (cap ${String(limit)}) — nothing was delivered. Wait for a receipt from it (a2a inbox / a2a_tasks), or send again later with a NEW task id (this one is recorded as failed); do not resend in a loop. A task that never gets a receipt turns dead after taskStaleTtlMs and stops counting.`
 }
 
 /** Wire-face adapter in the flood guard's shape: a refused fresh key is FAILED, not stranded pending. */
 export function createQueueGuard(
   rows: () => readonly QueueRow[],
   cap: () => number,
+  ownTask: (taskId: string) => boolean,
   outcomes: Pick<IdempotencyStore, 'recordOutcome'>,
   recordActivity: (dir: 'in' | 'out', team: string, peer: string, ok: boolean) => void,
 ): (caller: string, message: string, team: string, taskId: string, mailbox: boolean, res: ServerResponse) => boolean {
   return (caller, message, team, taskId, mailbox, res) => {
-    const error = queueFullRefusal(rows(), team, message, cap(), mailbox)
+    const error = queueFullRefusal(rows(), team, message, cap(), mailbox, ownTask)
     if (error === undefined) return false
     outcomes.recordOutcome(taskId, { status: 'failed', error })
     recordActivity('in', team, caller, false)
