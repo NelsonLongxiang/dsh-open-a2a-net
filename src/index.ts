@@ -122,6 +122,8 @@ import { NodeReviewQueue, SessionTaint, localRoute, toolTaint } from './node-sel
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { registerSessionLogFaces } from './faces/session-log.ts'
+import { registerFileFaces } from './faces/files.ts'
+import { BlobStore } from './blob-store.ts'
 import { canvasCandidateMatches, canvasTargetAmbiguous, peerDirectoryRows, routableCallerLabel, sessionCandidateMatches, unroutableCallerNote } from './peer-directory.ts'
 import { createTeamsBridgeInbound } from './legacy/teams-bridge-inbound.ts'
 import { createActTools } from './tools/act.ts'
@@ -1001,6 +1003,8 @@ export function apply(ctx: Context, config: Config): void {
   // may sit in many teams; routing to <team>/canvas/<name> resolves the
   // first live member or wakes the first cold one (member order = priority).
   const canvasStore = new CanvasStore(join(home, 'a2a', 'canvas.json'))
+  // #91 file channel: the sender host's blob store (docs/design/file-channel.md).
+  const blobStore = new BlobStore(join(home, 'a2a'))
   // Spatial presentation state for the full-page stage (contract v2).
   const layoutStore = new LayoutStore(join(home, 'a2a', 'canvas-layout.json'))
 
@@ -3063,6 +3067,7 @@ export function apply(ctx: Context, config: Config): void {
 
     // gh#77: the session-log faces (local transcript reader + remote-log proxy) live in src/faces/session-log.ts.
     registerSessionLogFaces(webServer, { ctx, config, controlRoute, scanSessionLogList, readSessionLogTail, peerStore, peerFetch, directoryPeerCandidates, memoizedCardFetch })
+    registerFileFaces(webServer, { ctx, config, blobStore, canvasStore, verifyOriginClaim, secretEqual, controlRoute, recordActivity })
   })
 
   /**
