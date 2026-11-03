@@ -19,10 +19,13 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { CLI_HANDLE_RE } from './cli-deposit.ts'
 
 /** On-disk shape: ordered team entries, each an ordered member id list. */
 export interface CanvasSnapshot {
   readonly teams: ReadonlyArray<{ readonly name: string; readonly members: readonly string[] }>
+  /** Pinned CLI handle -> linked home origin (only while some canvas team holds the handle). */
+  readonly cliHome?: Readonly<Record<string, string>>
 }
 
 /** Upper bounds: a canvas taxonomy, not a database. */
@@ -72,6 +75,7 @@ function validName(raw: string): string | undefined {
 export class CanvasStore {
   /** Team entries in creation order; members in add order (routing priority). */
   private teams: Array<{ name: string; members: string[] }> = []
+  private cliHome: Record<string, string> = {}
   private readonly path: string
   private readonly listeners = new Set<() => void>()
 
@@ -111,6 +115,11 @@ export class CanvasStore {
         kept.push({ name: String(entry.name), members })
       }
       this.teams = kept.slice(0, CANVAS_TEAM_CAP)
+      if (snapshot.cliHome !== null && typeof snapshot.cliHome === 'object' && !Array.isArray(snapshot.cliHome)) {
+        for (const [handle, home] of Object.entries(snapshot.cliHome)) {
+          if (CLI_HANDLE_RE.test(handle) && typeof home === 'string' && validHomeOrigin(home) && this.teams.some(t => t.members.includes(handle))) this.cliHome[handle] = home
+        }
+      }
     } catch {
       // A corrupt store is not fatal: the user re-creates teams; routing
       // names simply stop resolving until then.
@@ -129,7 +138,7 @@ export class CanvasStore {
     if (this.path === '') return
     try {
       mkdirSync(dirname(this.path), { recursive: true })
-      const snapshot: CanvasSnapshot = { teams: this.teams.map(t => ({ name: t.name, members: [...t.members] })) }
+      const snapshot: CanvasSnapshot = { teams: this.teams.map(t => ({ name: t.name, members: [...t.members] })), ...(Object.keys(this.cliHome).length > 0 ? { cliHome: { ...this.cliHome } } : {}) }
       writeFileSync(this.path, JSON.stringify(snapshot), { mode: 0o600 })
     } catch {
       // An unwritable home must not break the canvas; the store degrades to
@@ -152,6 +161,10 @@ export class CanvasStore {
     const entry = this.teams.find(t => t.name === name)
     return entry === undefined ? [] : [...entry.members]
   }
+
+  /** Frozen, operator-linked CLI home; undefined means unknown or ambiguous. */
+  cliHomeOf(handle: string): string | undefined { return this.cliHome[handle] }
+  pinnedCliHomes(): ReadonlyArray<readonly [string, string]> { return Object.entries(this.cliHome) }
 
   /**
    * The named team's remote member refs (zone-qualified team handles) in
@@ -191,7 +204,8 @@ export class CanvasStore {
   remove(name: string): boolean {
     const index = this.teams.findIndex(t => t.name === name)
     if (index < 0) return false
-    this.teams.splice(index, 1)
+    const [removed] = this.teams.splice(index, 1)
+    for (const id of removed!.members) this.forgetUnusedHome(id)
     this.persist()
     return true
   }
@@ -202,13 +216,17 @@ export class CanvasStore {
    * @param name - the existing team name.
    * @param id - the member session id.
    */
-  addMember(name: string, id: string): boolean {
-    if (id === '') return false
+  addMember(name: string, id: string, home?: string): boolean {
+    if (id === '' || (home !== undefined && (!CLI_HANDLE_RE.test(id) || !validHomeOrigin(home)))) return false
     const entry = this.teams.find(t => t.name === name)
     if (entry === undefined) return false
-    if (entry.members.includes(id)) return true
+    if (entry.members.includes(id)) {
+      if (home !== undefined && this.cliHome[id] !== home) { this.cliHome[id] = home; this.persist() }
+      return true
+    }
     if (entry.members.length >= CANVAS_MEMBER_CAP) return false
     entry.members.push(id)
+    if (home !== undefined) this.cliHome[id] = home
     this.persist()
     return true
   }
@@ -222,8 +240,13 @@ export class CanvasStore {
     const index = entry.members.indexOf(id)
     if (index < 0) return false
     entry.members.splice(index, 1)
+    this.forgetUnusedHome(id)
     this.persist()
     return true
+  }
+
+  private forgetUnusedHome(id: string): void {
+    if (!this.teams.some(team => team.members.includes(id))) delete this.cliHome[id]
   }
 
   /**
@@ -240,7 +263,7 @@ export class CanvasStore {
         dirty = true
       }
     }
-    if (dirty) this.persist()
+    if (dirty) { this.forgetUnusedHome(id); this.persist() }
   }
 }
 
@@ -249,4 +272,9 @@ export function canvasNameReserved(raw: string, zone: string, allowlist: readonl
   const name = raw.trim()
   const team = `${zone}/${name}`
   return name.startsWith('roster:') || allowlist.includes(team) || roster.membersOf(team).length > 0
+}
+
+function validHomeOrigin(raw: string): boolean {
+  try { const url = new URL(raw); return (url.protocol === 'http:' || url.protocol === 'https:') && url.origin === raw }
+  catch { return false }
 }

@@ -82,7 +82,7 @@ H2 收到的 `caller_session` 是 CLI 句柄，签名方是 H。新增一条准�
 H2 的其余检查不变：
 - 防洪按原始调用方计；
 - 幂等指纹里的 caller 就是原始调用方；
-- 授权记录 `auth.caller` = CLI 句柄，`auth.claim` 记签名方 H，还新增 `auth.via = H 的卡片 URL`，审计时分得清调用方和邮差。
+- 授权记录 `auth.caller` = CLI 句柄，`auth.claim` 记签名方 H；既有 `auth.via` 仍为准入依据封闭集（此处 `canvas-member`），新增独立 `auth.carrier_url = H 的卡片 URL`，审计时分得清调用方和邮差。
 
 ### 2.4 回执与台账
 

@@ -46,6 +46,21 @@ describe('#120 buildAuthorization / parseAuthorization', () => {
     expect(quiet).not.toHaveProperty('target_busy')
   })
 
+  it('remote CLI stores a distinct carrier_url, preserving the existing via enum and rejecting forged restore', () => {
+    const auth = buildAuthorization({ ok: true, via: 'canvas-member', rule: 'remote-ref-cli', basis: ['dsh/canvas/ops'] }, {
+      caller: HANDLE, proof: 'origin-claim', claim: { caller: 'home-zone', origin: 'https://home.example' }, carrierUrl: 'https://home.example',
+      ingress: 'wire', allowlistVersion: 'al1:0123456789abcdef', target: 'dsh/aaaaaaaa', receiptTarget: HANDLE, receivedAt: 1,
+    })
+    expect(auth.via).toBe('canvas-member')
+    expect(auth.carrier_url).toBe('https://home.example')
+    expect(parseAuthorization(JSON.parse(JSON.stringify(auth)))).toEqual(auth)
+    for (const variant of [
+      { ...auth, carrier_url: undefined }, { ...auth, carrier_url: 'https://other.example' },
+      { ...auth, carrier_url: 'https://home.example/path' }, { ...auth, proof: 'legacy-window' },
+      { ...auth, via: 'open' },
+    ]) expect(parseAuthorization(variant)).toBeUndefined()
+  })
+
   it('round-trips through JSON exactly, including a claim-mismatch record', () => {
     expect(parseAuthorization(JSON.parse(JSON.stringify(AUTH)))).toEqual(AUTH)
     const mismatch = buildAuthorization({ ok: true, via: 'host-face', rule: 'host-face', basis: [] }, {

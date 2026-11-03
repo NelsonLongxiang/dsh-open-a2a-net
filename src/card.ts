@@ -129,11 +129,12 @@ function sessionTeams(wire: WireCard): readonly A2aSessionTeamInfo[] | undefined
   for (const entry of wire.sessionTeams) {
     const team = entry as Partial<A2aSessionTeamInfo> | null
     if (typeof team?.team !== 'string' || team.team === '') continue
-    if (typeof team.name !== 'string' || (team.description !== undefined && typeof team.description !== 'string')) continue
+    if (typeof team.name !== 'string' || (team.description !== undefined && typeof team.description !== 'string') || (team.offline !== undefined && typeof team.offline !== 'boolean')) continue
     entries.push({
       team: team.team,
       name: team.name,
       description: team.description ?? '',
+      ...(team.offline !== undefined ? { offline: team.offline } : {}),
       ...(typeof team.workspace === 'string' && team.workspace !== '' ? { workspace: team.workspace } : {}),
     })
   }

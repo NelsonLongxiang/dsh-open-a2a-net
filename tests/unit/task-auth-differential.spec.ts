@@ -250,7 +250,11 @@ describe('gh#114 S1 differential: the replaced closures vs task-auth', () => {
         for (const target of TARGETS) {
           const a = old.a2aCallerRefusal(caller, target)
           const b = refusalOf(callerAdmission(rec, caller, target))
-          if (a !== b) throw new Error(`a2aCaller diverge ${JSON.stringify({ w: { ...w, cardCache: [...w.cardCache], sessionNodes: [...w.sessionNodes], cli: [...w.cli] }, caller, target, a, b })}`)
+          // #222 F1 intentionally replaces the generic refusal for a foreign CLI handle; the frozen oracle still pins every other caller.
+          if (caller === 'ops-cli/a1b2c3d4e5f60718' && !w.cli.has(caller) && w.config.teamScopeRouting) {
+            expect(a).toContain('matches no node fact')
+            expect(b).toContain('remote CLI')
+          } else if (a !== b) throw new Error(`a2aCaller diverge ${JSON.stringify({ w: { ...w, cardCache: [...w.cardCache], sessionNodes: [...w.sessionNodes], cli: [...w.cli] }, caller, target, a, b })}`)
           a === undefined ? admitted++ : refused++
           const c = old.sameZoneSharedTeamRefusal(caller, target)
           const d = refusalOf(sameZoneAdmission(rec, caller, target))

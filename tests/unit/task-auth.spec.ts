@@ -23,6 +23,7 @@ interface World {
   orgs?: PeerOrgEntry[][]
   live?: string[]
   cli?: string[]
+  cliHome?: string
 }
 
 function records(w: World = {}): AdmissionRecords {
@@ -41,6 +42,7 @@ function records(w: World = {}): AdmissionRecords {
     peerOrgs: () => w.orgs ?? [],
     liveNodeIds: () => w.live ?? [],
     cliDeposited: handle => (w.cli ?? []).includes(handle),
+    cliHomeOf: () => w.cliHome,
   }
 }
 
@@ -85,6 +87,19 @@ describe('gh#114 S1: every admission rule, with its basis', () => {
   it('remote-ref-foreign: a foreign-zone handle the operator added as a remote member (N3/N4)', () => {
     const r = records({ canvas: { ops: [A, 'qa/11112222'], qa: ['qa/11112222'] } })
     expect(callerAdmission(r, 'qa/11112222')).toEqual({ ok: true, via: 'canvas-member', rule: 'remote-ref-foreign', basis: ['dsh/canvas/ops', 'dsh/canvas/qa'] })
+  })
+
+  it('remote-ref-cli requires operator link, pinned home, bound matching signer, and online full-card row', () => {
+    const handle = 'ops-cli/a1b2c3d4e5f60718'
+    const origin = 'https://home.example'
+    const good = { origin, viaUrl: origin, bound: true, online: true }
+    const linked = records({ canvas: { ops: [handle] }, cliHome: origin })
+    expect(callerAdmission(linked, handle, undefined, good)).toEqual({ ok: true, via: 'canvas-member', rule: 'remote-ref-cli', basis: ['dsh/canvas/ops'] })
+    expect(callerAdmission(records({ cliHome: origin }), handle, undefined, good).ok).toBe(false)
+    expect(callerAdmission(records({ canvas: { ops: [handle] } }), handle, undefined, good).ok).toBe(false)
+    for (const bad of [undefined, { ...good, origin: 'https://other.example' }, { ...good, bound: false }, { ...good, online: false }, { ...good, viaUrl: 'https://other.example' }]) {
+      expect(callerAdmission(linked, handle, undefined, bad).ok).toBe(false)
+    }
   })
 
   it('node-fact: a joined session id, its pseudo-handle, or a live node label', () => {

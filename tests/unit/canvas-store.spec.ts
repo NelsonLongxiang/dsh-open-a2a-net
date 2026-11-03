@@ -84,6 +84,37 @@ describe('CanvasStore', () => {
     expect(second.membersOf('alpha')).toEqual(['session-b', 'session-a'])
   })
 
+  it('pins one linked CLI home in canvas.json and clears it only after the last team reference', () => {
+    const path = tmpFile()
+    const cli = 'ops-cli/a1b2c3d4e5f60718'
+    const a = new CanvasStore(path)
+    a.create('alpha'); a.create('beta')
+    expect(a.addMember('alpha', cli, 'https://home.example')).toBe(true)
+    expect(a.addMember('beta', cli)).toBe(true)
+    expect(a.cliHomeOf(cli)).toBe('https://home.example')
+    expect(JSON.parse(readFileSync(path, 'utf8')).cliHome[cli]).toBe('https://home.example')
+    expect(new CanvasStore(path).cliHomeOf(cli)).toBe('https://home.example')
+    a.removeMember('alpha', cli)
+    expect(a.cliHomeOf(cli)).toBe('https://home.example')
+    a.remove('beta')
+    expect(a.cliHomeOf(cli)).toBeUndefined()
+    expect(new CanvasStore(path).cliHomeOf(cli)).toBeUndefined()
+  })
+
+  it('rejects invalid home origins and can explicitly pin an existing ambiguous CLI reference', () => {
+    const a = new CanvasStore(tmpFile())
+    const cli = 'ops-cli/a1b2c3d4e5f60718'
+    a.create('ops')
+    expect(a.addMember('ops', cli)).toBe(true)
+    expect(a.cliHomeOf(cli)).toBeUndefined()
+    expect(a.addMember('ops', cli, 'https://home.example/path')).toBe(false)
+    expect(a.addMember('ops', cli, 'https://home.example')).toBe(true)
+    expect(a.cliHomeOf(cli)).toBe('https://home.example')
+    expect(a.addMember('ops', 'ordinary/12345678', 'https://home.example')).toBe(false)
+    a.dropMember(cli)
+    expect(a.cliHomeOf(cli)).toBeUndefined()
+  })
+
   it('a corrupt snapshot degrades to empty, not a crash', () => {
     const path = tmpFile()
     mkdirSync(join(path, '..'), { recursive: true })

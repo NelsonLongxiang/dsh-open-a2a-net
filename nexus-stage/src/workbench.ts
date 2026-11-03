@@ -130,6 +130,8 @@ export interface CanvasMemberRow {
   readonly joined?: boolean
   readonly live?: boolean
   readonly remote?: boolean
+  /** Present only for CLI refs: null means the linked home is ambiguous or unknown. */
+  readonly cliHome?: string | null
 }
 
 /** One canvas team from /state `canvas.teams`. */
@@ -962,12 +964,12 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       }
       for (const member of fresh.members) {
         const row = el('div', 'wb-member-row')
-        const dot = member.remote === true ? '◇ 远端' : member.live === true ? '● 现场' : member.joined === true ? '○ 冷启' : '· 未入网'
+        const dot = member.remote === true ? (member.cliHome === null ? '◇ 远端 · home 未确定' : '◇ 远端') : member.live === true ? '● 现场' : member.joined === true ? '○ 冷启' : '· 未入网'
         row.appendChild(el('span', 'wb-member-dot')).textContent = dot
         const label = el('span', 'wb-member-label')
         const session = (last?.sessions ?? []).find(s => s.id === member.id)
         label.textContent = member.remote === true ? member.id : (session !== undefined ? displayName(session) : member.id)
-        label.title = member.team ?? member.id
+        label.title = member.cliHome !== undefined ? (member.cliHome ?? 'home 未确定') : (member.team ?? member.id)
         row.appendChild(label)
         const remove = el('button', 'wb-member-remove')
         remove.type = 'button'

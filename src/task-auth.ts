@@ -13,6 +13,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/task-auth
  */
 import { createHash } from 'node:crypto'
+import { CLI_HANDLE_RE } from './cli-deposit.ts'
 
 /** The admission basis (closed set, design §2.2). */
 export type Via = 'host-face' | 'joined-session' | 'canvas-member' | 'peer-org' | 'cli-deposit' | 'open'
@@ -26,6 +27,7 @@ export type AdmissionRule =
   | 'canvas-shared'
   | 'remote-ref-samezone'
   | 'remote-ref-foreign'
+  | 'remote-ref-cli'
   | 'peer-org'
   | 'node-fact'
   | 'cli-deposit'
@@ -39,6 +41,7 @@ export const VIA_OF: Readonly<Record<AdmissionRule, Via>> = {
   'canvas-shared': 'canvas-member',
   'remote-ref-samezone': 'canvas-member',
   'remote-ref-foreign': 'canvas-member',
+  'remote-ref-cli': 'canvas-member',
   'peer-org': 'peer-org',
   'node-fact': 'joined-session',
   'cli-deposit': 'cli-deposit',
@@ -83,7 +86,12 @@ export interface AdmissionRecords {
   peerOrgs(): Iterable<readonly PeerOrgEntry[]>
   liveNodeIds(): readonly string[]
   cliDeposited(handle: string): boolean
+  /** An operator-pinned CLI home, absent for ambiguous/unlinked CLI refs. */
+  cliHomeOf?(handle: string): string | undefined
 }
+
+/** Bound signer evidence and a fresh full-card online check, never caller self-description. */
+export interface RemoteCliProof { readonly origin: string; readonly viaUrl: string; readonly bound: boolean; readonly online: boolean }
 
 const ZONE_ID8 = /^[a-z0-9-]+\/[0-9a-f]{8}$/i
 
@@ -241,7 +249,7 @@ export function localCandidateAdmission(r: AdmissionRecords, callerSession: stri
 }
 
 /** Inbound admission for the peer faces (/a2a/direct, /a2a/log): caller_session is the contract. */
-export function callerAdmission(r: AdmissionRecords, caller: string, targetTeam?: string): Admission {
+export function callerAdmission(r: AdmissionRecords, caller: string, targetTeam?: string, cliProof?: RemoteCliProof): Admission {
   if (!r.teamScopeRouting) return admitted('scope-off')
   if (caller === '') {
     return refused('caller_session is required — anonymous deliveries are refused (S3 phase-3b). Pass caller_session as <zone>/<id8>.')
@@ -254,6 +262,17 @@ export function callerAdmission(r: AdmissionRecords, caller: string, targetTeam?
     const basis = r.canvasNames().filter(name => r.canvasRemoteMembersOf(name).includes(caller)).map(name => r.canvasTeamOf(name))
     if (basis.length > 0) return admitted('remote-ref-foreign', basis)
     return refused(`caller "${caller}" has no operator-established link on this node — cross-host admission requires a canvas remote membership this host's operator added (N3/N4: the caller's own card claims are self-description, not links). Ask this host's operator to add the member in the A2A workbench, or route through a linked member.`)
+  }
+  // A foreign CLI handle is never a free-form node fact: its operator link,
+  // pinned home, bound signer, and fresh online row must ALL hold.
+  if (CLI_HANDLE_RE.test(caller) && !r.cliDeposited(caller)) {
+    const basis = r.canvasNames().filter(name => r.canvasRemoteMembersOf(name).includes(caller)).map(name => r.canvasTeamOf(name))
+    if (basis.length === 0) return refused(`remote CLI ${caller} has no operator-established canvas link`)
+    const home = r.cliHomeOf?.(caller)
+    if (home === undefined) return refused(`remote CLI ${caller} home is not pinned`)
+    if (cliProof?.bound !== true || cliProof.origin !== home || cliProof.viaUrl !== home) return refused(`remote CLI ${caller} signer does not match pinned home`)
+    if (cliProof.online !== true) return refused(`remote CLI ${caller} is offline or home card could not be read`)
+    return admitted('remote-ref-cli', basis)
   }
   // Free-form label: only this host's own node facts (V3).
   if (r.joined().includes(caller)) return admitted('node-fact')
@@ -279,6 +298,7 @@ export interface AllowlistInputs {
   readonly roster: readonly (readonly [handle: string, team: string])[]
   readonly canvas: readonly (readonly [team: string, members: readonly string[]])[]
   readonly cli: readonly string[]
+  readonly cliHome?: readonly (readonly [handle: string, origin: string])[]
   readonly links: readonly string[]
 }
 
@@ -306,6 +326,7 @@ export function canonicalAllowlist(inputs: AllowlistInputs): string {
     roster,
     canvas,
     cli: sortedUnique(inputs.cli),
+    ...(inputs.cliHome !== undefined && inputs.cliHome.length > 0 ? { cliHome: [...new Map(inputs.cliHome.map(p => [JSON.stringify(p), p])).values()].sort((a, b) => pairKey(a) < pairKey(b) ? -1 : pairKey(a) > pairKey(b) ? 1 : 0) } : {}),
     links: sortedUnique(inputs.links),
   })
 }
@@ -342,6 +363,8 @@ export interface TaskAuthorization {
   readonly claim?: { readonly caller: string; readonly origin: string }
   readonly ingress: 'wire' | 'local'
   readonly via: Via
+  /** Signed courier host's card URL for a remote CLI, distinct from the closed-set admission via. */
+  readonly carrier_url?: string
   readonly admission_rule: AdmissionRule
   /** Every shared team that held (cache-owed ones as `peer-org:<team>`). */
   readonly basis: readonly string[]
@@ -362,7 +385,7 @@ export const AUTH_BASIS_CAP = 64
 const PROOFS: readonly string[] = ['origin-claim', 'claim-mismatch', 'legacy-window', 'unbound', 'cli-identity', 'in-process', 'none']
 const RULES = Object.keys(VIA_OF)
 /** Rules that admit on shared teams: their basis lists at least one, each once. Every other rule has an empty basis. */
-const SHARED_RULES: readonly AdmissionRule[] = ['roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'peer-org']
+const SHARED_RULES: readonly AdmissionRule[] = ['roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'peer-org']
 /** A record born more than this far in the future is a forgery or a broken clock, not a birth. */
 export const AUTH_CLOCK_SKEW_MS = 24 * 60 * 60 * 1000
 
@@ -375,6 +398,7 @@ export interface AuthorizationFacts {
   readonly caller: string
   readonly proof: AuthProof
   readonly claim?: { readonly caller: string; readonly origin: string }
+  readonly carrierUrl?: string
   readonly ingress: 'wire' | 'local'
   readonly allowlistVersion: string
   readonly target: string
@@ -392,6 +416,7 @@ export function buildAuthorization(admission: Extract<Admission, { ok: true }>, 
     ...(facts.claim !== undefined ? { claim: Object.freeze({ caller: facts.claim.caller, origin: facts.claim.origin }) } : {}),
     ingress: facts.ingress,
     via: admission.via,
+    ...(facts.carrierUrl !== undefined ? { carrier_url: facts.carrierUrl } : {}),
     admission_rule: admission.rule,
     basis: Object.freeze([...admission.basis]),
     allowlist_version: facts.allowlistVersion,
@@ -418,6 +443,7 @@ export function canonicalAuthorization(auth: TaskAuthorization): string {
     ...(auth.claim !== undefined ? { claim: { caller: auth.claim.caller, origin: auth.claim.origin } } : {}),
     ingress: auth.ingress,
     via: auth.via,
+    ...(auth.carrier_url !== undefined ? { carrier_url: auth.carrier_url } : {}),
     admission_rule: auth.admission_rule,
     basis: sortedUnique(auth.basis),
     allowlist_version: auth.allowlist_version,
@@ -439,6 +465,10 @@ export function authorizationRef(auth: TaskAuthorization): string {
 
 const boundedString = (v: unknown, allowEmpty = false): v is string =>
   typeof v === 'string' && (allowEmpty || v !== '') && v.length <= AUTH_STRING_CAP
+const validCarrierUrl = (v: unknown): v is string => {
+  if (!boundedString(v)) return false
+  try { const url = new URL(v); return (url.protocol === 'http:' || url.protocol === 'https:') && url.origin === v } catch { return false }
+}
 
 /**
  * Restore-side allowlist for one persisted record (design §2.5): all of it or
@@ -460,6 +490,7 @@ export function parseAuthorization(raw: unknown, now: number = Date.now()): Task
   if (typeof r.admission_rule !== 'string' || !RULES.includes(r.admission_rule)) return undefined
   const rule = r.admission_rule as AdmissionRule
   if (r.via !== VIA_OF[rule]) return undefined
+  if (rule === 'remote-ref-cli' ? !validCarrierUrl(r.carrier_url) : r.carrier_url !== undefined) return undefined
   if (!Array.isArray(r.basis) || r.basis.length > AUTH_BASIS_CAP || !r.basis.every(b => boundedString(b))) return undefined
   if (new Set(r.basis).size !== r.basis.length) return undefined
   if (SHARED_RULES.includes(rule) ? r.basis.length === 0 : r.basis.length !== 0) return undefined
@@ -478,11 +509,13 @@ export function parseAuthorization(raw: unknown, now: number = Date.now()): Task
   // Unbound and deposited-CLI proofs retain their key/card claim for audit, but do not assert origin.
   const claimProof = ['origin-claim', 'claim-mismatch', 'unbound', 'cli-identity'].includes(r.proof)
   if ((claim !== undefined) !== claimProof) return undefined
-  if (claim !== undefined && r.proof === 'origin-claim' && !claimCovers(r.caller as string, claim.caller)) return undefined
+  if (claim !== undefined && r.proof === 'origin-claim' && (rule === 'remote-ref-cli' ? claim.origin !== r.carrier_url : !claimCovers(r.caller as string, claim.caller))) return undefined
+  if (rule === 'remote-ref-cli' && (r.proof !== 'origin-claim' || claim === undefined)) return undefined
   return buildAuthorization(
     { ok: true, via: VIA_OF[rule], rule, basis: r.basis as string[] },
     {
       caller: r.caller as string, proof: r.proof as AuthProof, ...(claim !== undefined ? { claim } : {}),
+      ...(rule === 'remote-ref-cli' ? { carrierUrl: r.carrier_url as string } : {}),
       ingress: r.ingress, allowlistVersion: r.allowlist_version, target: r.target as string,
       receiptTarget: r.receipt_target as string, receivedAt: r.received_at, targetBusy: r.target_busy === true,
     },
