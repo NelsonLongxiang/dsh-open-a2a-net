@@ -42,6 +42,7 @@ import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
 import { applyOwnerSettings, type OwnerSettings } from './owner-settings.ts'
 import { CLI_HANDLE_RE, CliDepositStore } from './cli-deposit.ts'
+import { decideCliHome } from './cli-home.ts'
 import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
@@ -57,7 +58,7 @@ import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
 import { isRootOriginUrl, sameMountedUrl, signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
 import { AuthObserver, type AffectedEntry } from './auth-observer.ts'
-import { allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type SettlementMode, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry } from './task-auth.ts'
+import { allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type SettlementMode, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry, type RemoteCliProof, recheckRemoteCliAuthorization } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
 // `ctx.timer` on Context; the runtime service is mounted by app compositions.
@@ -2041,7 +2042,7 @@ export function apply(ctx: Context, config: Config): void {
     whenWebServerSettled((webServer) => {
       // gh#77 B1: the admin faces live in src/faces/admin.ts.
       registerAdminFaces(webServer, {
-        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
+        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, cliHomeForAdd, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url,
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
@@ -2173,7 +2174,7 @@ export function apply(ctx: Context, config: Config): void {
             // deposit stays as an OFFLINE row (tombstone) so the board keeps
             // the member card grayed-but-present and canvas refs never
             // dangle silently; re-publish (same handle) un-tombstones.
-            ...cliDeposits.directoryRows().map(row => exposureRow(row.team, { name: row.name, description: row.description })),
+            ...cliDeposits.directoryRows().map(row => exposureRow(row.team, { name: row.name, description: row.description, offline: row.offline })),
           ]
           const memberships = teamMemberships.list().flatMap(entry =>
             entry.teams.map(team => ({ node: `${config.team}/${id8(entry.session)}`, team })))
@@ -2770,6 +2771,7 @@ export function apply(ctx: Context, config: Config): void {
     },
     liveNodeIds: () => [...sessionNodes.values()].map(agent => String(agent.id)),
     cliDeposited: handle => cliDeposits.get(handle) !== undefined,
+    cliHomeOf: handle => canvasStore.cliHomeOf(handle),
   }
 
   /** W1/W2 shared-team admission (see sameZoneAdmission in src/task-auth.ts). */
@@ -2784,8 +2786,8 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /** Inbound admission with the rule and shared teams that admitted the caller (gh#114 S1). */
-  function a2aCallerAdmission(caller: string, targetTeam?: string): Admission {
-    return callerAdmission(admissionRecords, caller, targetTeam)
+  function a2aCallerAdmission(caller: string, targetTeam?: string, cliProof?: RemoteCliProof): Admission {
+    return callerAdmission(admissionRecords, caller, targetTeam, cliProof)
   }
 
   function a2aCallerRefusal(caller: string, targetTeam?: string): string | undefined {
@@ -2812,6 +2814,7 @@ export function apply(ctx: Context, config: Config): void {
       // Local members by their handle (design §2.3), remote refs as they are stored.
       canvas: canvasStore.list().map(name => [canvasTeamOf(name), canvasStore.membersOf(name).map(m => (m.includes('/') ? m : handle(m)))] as const),
       cli: cliDeposits.list().map(row => row.handle),
+      cliHome: canvasStore.pinnedCliHomes(),
       links: config.peers.map(peer => { try { return new URL(peer).origin } catch { return peer } }),
     }
   }
@@ -2834,7 +2837,7 @@ export function apply(ctx: Context, config: Config): void {
       cause,
       rows: () => taskLedger.list(),
       // A local-candidate record (#139) is judged as the local candidate admits; every other one by the wire face.
-      judge: (caller, target, ingress) => (ingress === 'local' ? localCandidateAdmission(admissionRecords, caller, target) : callerAdmission(admissionRecords, caller, target)),
+      judge: (caller, target, ingress, auth) => auth.admission_rule === 'remote-ref-cli' ? recheckRemoteCliAuthorization(admissionRecords, auth) : (ingress === 'local' ? localCandidateAdmission(admissionRecords, caller, target) : callerAdmission(admissionRecords, caller, target)),
     })
     if (entry === undefined) return
     const revoke = entry.tasks.filter(task => task.verdict === 'would-revoke').length
@@ -2923,6 +2926,7 @@ export function apply(ctx: Context, config: Config): void {
       joinedSessions,
       idempotencyStore,
       verifyOriginClaim,
+      remoteCliProof,
       callerLinkedToThisHost, get ownCardUrl() { return ownCardUrl },
       recordActivity,
       bumpLegacyInbound: () => { legacyInboundCount += 1 },
@@ -3245,6 +3249,35 @@ export function apply(ctx: Context, config: Config): void {
       }
     }
     return { link: linked ? 'linked' : 'stranger', verified }
+  }
+
+  async function cliHomeForAdd(handle: string, requested?: unknown) {
+    if (!CLI_HANDLE_RE.test(handle)) return decideCliHome(handle, requested, [])
+    const candidates = await mapBounded(peerStore.list(), 6, async url => {
+      // A failed read cannot prove a tracked host is unlinked (especially after a cold boot).
+      // Conservatively leave automatic ownership unknown; explicit fresh choices still work.
+      const card = await fetchPeerCard(url).catch(() => undefined)
+      if (card !== undefined) cardCache.set(url, { at: Date.now(), card })
+      return { url, card, linked: card === undefined || peerLinkState(url).link === 'linked' }
+    })
+    return decideCliHome(handle, requested, candidates)
+  }
+
+  /** Remote CLI admission never trusts a retained stale cache entry after a failed home read. */
+  async function remoteCliProof(handle: string, claim: Extract<OriginClaimVerdict, { ok: true }>): Promise<RemoteCliProof | undefined> {
+    const home = canvasStore.cliHomeOf(handle)
+    if (home === undefined || !claim.bound || claim.cli === true || !isRootOriginUrl(claim.callerUrl)) return undefined
+    if (new URL(claim.callerUrl).origin !== home) return undefined
+    for (const url of peerStore.list()) {
+      try { if (new URL(url).origin !== home) continue } catch { continue }
+      const card = await fetchPeerCard(url)
+      if (card === undefined || card.publicKey !== claim.card.publicKey) continue
+      cardCache.set(url, { at: Date.now(), card })
+      if (peerLinkState(url).link !== 'linked') continue
+      const row = card.sessionTeams?.find(item => item.team === handle)
+      if (row !== undefined) return { origin: home, viaUrl: claim.callerUrl, bound: true, online: row.offline === false }
+    }
+    return { origin: home, viaUrl: claim.callerUrl, bound: true, online: false }
   }
 
   function cachedCardFetch(url: string): Promise<A2aPeerCard | undefined> {

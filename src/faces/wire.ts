@@ -16,7 +16,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { A2aPeerCard } from '../types.ts'
 import { CanvasStore, isRemoteMemberRef, validRemoteMemberRef } from '../canvas-store.ts'
-import type { CliDepositStore } from '../cli-deposit.ts'
+import { CLI_HANDLE_RE, type CliDepositStore } from '../cli-deposit.ts'
 import type { IdempotencyStore } from '../idempotency-store.ts'
 import type { JoinedSessions } from '../joined-store.ts'
 import { TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_MAX_LIMIT } from '../session-transcript.ts'
@@ -24,7 +24,7 @@ import { refuseIfBudgetExhausted } from '../recursion-guard.ts'
 import { peerPayloadFingerprint, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from '../idempotency-store.ts'
 import { briefOf, type TaskLedger } from '../task-ledger.ts'
 import { parseReceipt, taskIdRefusal } from '../receipt.ts'
-import { buildAuthorization, claimCovers, refusalOf, type Admission, type AuthProof, type SettlementRefusal, type Settler } from '../task-auth.ts'
+import { buildAuthorization, claimCovers, refusalOf, type Admission, type AuthProof, type RemoteCliProof, type SettlementRefusal, type Settler } from '../task-auth.ts'
 import { isRootOriginUrl } from '../origin-claim.ts'
 import type { Config } from '../index.ts'
 import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from '../transport-caps.ts'
@@ -114,6 +114,7 @@ export interface WireDeps {
   readonly joinedSessions: JoinedSessions
   readonly idempotencyStore: IdempotencyStore
   readonly verifyOriginClaim: (req: IncomingMessage, options?: { readonly cli?: boolean }) => Promise<OriginClaimResult>
+  readonly remoteCliProof: (handle: string, claim: Extract<OriginClaimResult, { ok: true }>) => Promise<RemoteCliProof | undefined>
   readonly callerLinkedToThisHost: (caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined) => boolean
   /** This host's own card URL (read when a request lands; set once the web server settles). */
   readonly ownCardUrl: string
@@ -122,7 +123,7 @@ export interface WireDeps {
   readonly secretEqual: (a: string, b: string) => boolean
   readonly a2aCallerRefusal: (caller: string, targetTeam?: string) => string | undefined
   /** #114 S2: the same decision with the rule and basis that admitted the caller. */
-  readonly a2aCallerAdmission: (caller: string, targetTeam?: string) => Admission
+  readonly a2aCallerAdmission: (caller: string, targetTeam?: string, cliProof?: RemoteCliProof) => Admission
   /** #114 S2: this host's allowlist version right now (design §2.3). */
   readonly allowlistVersionNow: () => string
   /** #114 S6: record the version if it moved and re-judge affected tasks (observe only). */
@@ -192,6 +193,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     joinedSessions,
     idempotencyStore,
     verifyOriginClaim,
+    remoteCliProof,
     callerLinkedToThisHost,
     recordActivity,
     secretEqual,
@@ -282,7 +284,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
       req.on('end', () => {
         void (async () => {
           try {
-            const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { op?: unknown; name?: unknown; id?: unknown }
+            const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { op?: unknown; name?: unknown; id?: unknown; home?: unknown }
             const claim = await verifyOriginClaim(req)
             if (!claim.ok) {
               logger.warn(`a2a: canvas-op claim failed (${claim.reason}) — caller=${String(req.headers['x-a2a-caller'] ?? '')} url=${String(req.headers['x-a2a-caller-url'] ?? '')} ts=${String(req.headers['x-a2a-caller-ts'] ?? '')}`)
@@ -317,11 +319,13 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
               // gh#131: a handle is stored as sent, even one of this host's own — the
               // local tiers read it as the session it names at route time.
               const memberValid = isRemoteMemberRef(rawId) ? validRemoteMemberRef(rawId) : rawId !== '' && (sessionNodes.has(rawId) || joinedSessions.has(rawId))
-              payload = !canvasStore.hasTeam(name) && canvasNameReserved(name)
-                ? { ok: false, error: 'roster reserves this canvas name' }
-                : name === '' || !memberValid
-                ? { ok: false, error: 'name and a member (joined session id, or a zone-qualified remote team handle) are required' }
-                : (canvasStore.create(name), { ok: canvasStore.addMember(name, rawId), members: canvasStore.membersOf(name) })
+              if (!canvasStore.hasTeam(name) && canvasNameReserved(name)) payload = { ok: false, error: 'roster reserves this canvas name' }
+              else if (name === '' || !memberValid) payload = { ok: false, error: 'name and a member (joined session id, or a zone-qualified remote team handle) are required' }
+              else {
+                // A peer may compose references, never decide this operator's CLI home pin.
+                if (body.home !== undefined) payload = { ok: false, error: 'CLI home pins may only be set by this host local control route' }
+                else { canvasStore.create(name); payload = { ok: canvasStore.addMember(name, rawId), members: canvasStore.membersOf(name) } }
+              }
             } else if (op === 'remove-member') {
               // Either shape may be stored (an older edit kept the handle): remove both (review of PR #151 P2-1).
               const removed = name !== '' && [...new Set([id, rawId])].map(each => canvasStore.removeMember(name, each)).some(Boolean)
@@ -632,7 +636,12 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // (0.6.15: the rule now lives in a2aCallerRefusal so the
           // read-only /a2a/log face admits callers by exactly the same
           // standard as message delivery.)
-          const admission = a2aCallerAdmission(caller, team)
+          // F1: only a FOREIGN CLI handle needs a bound host claim and live home card
+          // before admission. Every other caller keeps the existing admission-first order.
+          const foreignCli = config.teamScopeRouting && CLI_HANDLE_RE.test(caller) && cliDeposits.get(caller) === undefined
+          const earlyClaim = foreignCli ? await verifyOriginClaim(req, { cli: true }) : undefined
+          const cliProof = foreignCli && earlyClaim?.ok ? await remoteCliProof(caller, earlyClaim).catch(() => undefined) : undefined
+          const admission = a2aCallerAdmission(caller, team, cliProof)
           const callerRefusal = refusalOf(admission)
           if (callerRefusal !== undefined || !admission.ok) {
             recordActivity('in', team, caller === '' ? 'anonymous' : caller, false)
@@ -652,7 +661,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // after the window closes it rejects like a failed signature —
           // N3 proves a NAME's linkability, never key possession.
           // gh#133: the delivery face is where a deposited CLI identity signs its routes.
-          const claim = await verifyOriginClaim(req, { cli: true })
+          const claim = earlyClaim ?? await verifyOriginClaim(req, { cli: true })
           if (!claim.ok) {
             if (claim.reason !== 'absent' || config.originClaimWindow === false) {
               recordActivity('in', team, caller, false)
@@ -666,7 +675,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // A verified claim proves the caller only when its signed zone covers it (review of PR #134 P1),
           // and the host face only when it was signed from this very host (round 2: a zone name is not an origin).
           const callerProof: AuthProof = !claim.ok ? 'legacy-window'
-            : claim.cli === true ? (claimCovers(caller, claim.caller) ? 'cli-identity' : 'claim-mismatch')
+            : admission.rule === 'remote-ref-cli' ? 'origin-claim'
+              : claim.cli === true ? (claimCovers(caller, claim.caller) ? 'cli-identity' : 'claim-mismatch')
               : claim.bound !== true ? 'unbound'
                 : !isRootOriginUrl(claim.callerUrl) ? 'claim-mismatch'
                   : admission.rule === 'host-face' && originOf(claim.callerUrl) !== originOf(d.ownCardUrl) ? 'claim-mismatch'
@@ -819,6 +829,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                   caller,
                   proof: callerProof,
                   ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}),
+                  ...(admission.rule === 'remote-ref-cli' && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}),
                   ingress: 'wire',
                   allowlistVersion: admittedAt.version,
                   target: team,

@@ -74,6 +74,8 @@ export interface A2aSessionTeamInfo {
   readonly name: string
   /** One-line excerpt of the session's newest user or assistant text. */
   readonly description: string
+  /** CLI deposit status, explicitly online/offline on full host cards; absent on ordinary sessions. */
+  readonly offline?: boolean
   /** The session's working directory, when the publishing node shares it. */
   readonly workspace?: string
 }

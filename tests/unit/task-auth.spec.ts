@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  VIA_OF, allowlistVersion, callerAdmission, canonicalAllowlist, joinedFaceAdmission, refusalOf, sameZoneAdmission,
+  VIA_OF, allowlistVersion, callerAdmission, canonicalAllowlist, joinedFaceAdmission, refusalOf, sameZoneAdmission, buildAuthorization, recheckRemoteCliAuthorization,
   type AdmissionRecords, type AdmissionRule, type AllowlistInputs, type PeerOrgEntry,
 } from '../../src/task-auth.ts'
 
@@ -23,6 +23,7 @@ interface World {
   orgs?: PeerOrgEntry[][]
   live?: string[]
   cli?: string[]
+  cliHome?: string
 }
 
 function records(w: World = {}): AdmissionRecords {
@@ -41,6 +42,7 @@ function records(w: World = {}): AdmissionRecords {
     peerOrgs: () => w.orgs ?? [],
     liveNodeIds: () => w.live ?? [],
     cliDeposited: handle => (w.cli ?? []).includes(handle),
+    cliHomeOf: () => w.cliHome,
   }
 }
 
@@ -85,6 +87,31 @@ describe('gh#114 S1: every admission rule, with its basis', () => {
   it('remote-ref-foreign: a foreign-zone handle the operator added as a remote member (N3/N4)', () => {
     const r = records({ canvas: { ops: [A, 'qa/11112222'], qa: ['qa/11112222'] } })
     expect(callerAdmission(r, 'qa/11112222')).toEqual({ ok: true, via: 'canvas-member', rule: 'remote-ref-foreign', basis: ['dsh/canvas/ops', 'dsh/canvas/qa'] })
+  })
+
+  it('remote-ref-cli requires operator link, pinned home, bound matching signer, and online full-card row', () => {
+    const handle = 'ops-cli/a1b2c3d4e5f60718'
+    const origin = 'https://home.example'
+    const good = { origin, viaUrl: origin, bound: true, online: true }
+    const linked = records({ canvas: { ops: [handle] }, cliHome: origin })
+    expect(callerAdmission(linked, handle, undefined, good)).toEqual({ ok: true, via: 'canvas-member', rule: 'remote-ref-cli', basis: ['dsh/canvas/ops'] })
+    expect(callerAdmission(linked, handle, undefined, { ...good, origin: origin + '/', viaUrl: origin + '/' }).ok).toBe(true)
+    expect(callerAdmission(records({ cliHome: origin }), handle, undefined, good).ok).toBe(false)
+    expect(callerAdmission(records({ canvas: { ops: [handle] } }), handle, undefined, good).ok).toBe(false)
+    for (const bad of [undefined, { ...good, origin: 'https://other.example' }, { ...good, bound: false }, { ...good, online: false }, { ...good, viaUrl: 'https://other.example' }]) {
+      expect(callerAdmission(linked, handle, undefined, bad).ok).toBe(false)
+    }
+  })
+
+  it('remote CLI authorization recheck needs only the mutable operator link and original carrier pin', () => {
+    const caller = 'ops-cli/a1b2c3d4e5f60718'
+    const origin = 'https://home.example'
+    const auth = buildAuthorization({ ok: true, via: 'canvas-member', rule: 'remote-ref-cli', basis: ['dsh/canvas/ops'] }, { caller, carrierUrl: origin, proof: 'origin-claim', claim: { caller: 'home', origin }, ingress: 'wire', allowlistVersion: 'al1:1111111111111111', target: 'dsh/aaaaaaaa', receiptTarget: caller, receivedAt: 1 })
+    const canvas = { ops: [caller] }
+    expect(recheckRemoteCliAuthorization(records({ canvas, cliHome: origin }), auth).ok).toBe(true)
+    expect(recheckRemoteCliAuthorization(records({ cliHome: origin }), auth).ok).toBe(false)
+    expect(recheckRemoteCliAuthorization(records({ canvas, cliHome: 'https://other.example' }), auth).ok).toBe(false)
+    expect(recheckRemoteCliAuthorization(records({ canvas }), auth).ok).toBe(false)
   })
 
   it('node-fact: a joined session id, its pseudo-handle, or a live node label', () => {
