@@ -34,7 +34,7 @@ export function resolveCallerLabel(input: {
 }
 import { signCard, verifyCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
-import { CanvasStore, isRemoteMemberRef } from './canvas-store.ts'
+import { CanvasStore, canvasNameReserved, isRemoteMemberRef } from './canvas-store.ts'
 import { decodeSessionLog, extractTranscript, TRANSCRIPT_MAX_FILE_BYTES } from './session-transcript.ts'
 import { LayoutStore } from './layout-store.ts'
 import { fileURLToPath } from 'node:url'
@@ -2911,7 +2911,7 @@ export function apply(ctx: Context, config: Config): void {
       config,
       cliDeposits,
       canvasStore,
-      canvasNameReserved: raw => { const name = raw.trim(); return name.startsWith('roster:') || ownerAllowlist.includes(`${config.team}/${name}`) || teamMemberships.membersOf(`${config.team}/${name}`).length > 0 },
+      canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
       sessionNodes,
       joinedSessions,
       idempotencyStore,

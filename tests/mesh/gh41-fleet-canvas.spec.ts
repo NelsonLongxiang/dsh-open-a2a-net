@@ -29,7 +29,7 @@ describe('gh#41 fleet canvas regulation', () => {
     // the cards carry well-formed identity (a missing session field makes
     // the card malformed at verification).
     const a = await bootNode({ name: 'A', session: 'mesh-gh41-a', team: 'dsh', sessionNodes: true, port: portA, peers: [`http://127.0.0.1:${String(portB)}`] })
-    const b = await bootNode({ name: 'B', session: 'mesh-gh41-b', team: 'dsh', sessionNodes: true, port: portB, peers: [`http://127.0.0.1:${String(portA)}`] })
+    const b = await bootNode({ name: 'B', session: 'mesh-gh41-b', team: 'dsh', sessionNodes: true, port: portB, peers: [`http://127.0.0.1:${String(portA)}`], teamJoinAllowlist: ['dsh/仅名单'] })
     // Join both agents so the session teams exist (the reply carries the
     // joined node's team handle).
     for (const n of [a, b]) {
@@ -50,6 +50,16 @@ describe('gh#41 fleet canvas regulation', () => {
         const prefixed = await post(`${a.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: b.baseUrl, op: 'create', name })
         expect(prefixed.ok).toBe(false)
         expect(String(prefixed.error)).toContain('roster-reserved')
+      }
+      // A linked peer must not mint roster-prefixed names via implicit add (Mb).
+      const implicit = await post(`${a.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: b.baseUrl, op: 'add-member', name: 'roster:伪装', id: 'dsh/01234567' })
+      expect(implicit.ok).toBe(false)
+      expect(String(implicit.error)).toContain('roster')
+      // This name is only on B's allowlist (no roster members); create and implicit add must both refuse (Me).
+      for (const op of ['create', 'add-member']) {
+        const reserved = await post(`${a.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: b.baseUrl, op, name: '仅名单', id: 'dsh/01234567' })
+        expect(reserved.ok).toBe(false)
+        expect(String(reserved.error)).toContain('roster')
       }
       const bState = await post(`${b.baseUrl}/__dsh_a2a/state`)
       const team = (bState.canvas?.teams as Array<{ name: string; members: string[] }>).find(t => t.name === '远端研发')
