@@ -24,7 +24,7 @@ export function cliHomeChoices(handle: string, candidates: readonly CliHomeCandi
 }
 
 /** Count origins, not URL aliases: two card URLs on one host are one home. */
-export function decideCliHome(handle: string, requested: unknown, candidates: readonly CliHomeCandidate[]): CliHomeDecision {
+export function decideCliHome(handle: string, requested: unknown, candidates: readonly CliHomeCandidate[], locallyHeld = false): CliHomeDecision {
   if (!CLI_HANDLE_RE.test(handle)) return requested === undefined ? { ok: true } : { ok: false, error: 'home is only valid for a CLI handle' }
   const homes = new Set(cliHomeChoices(handle, candidates).homes)
   if (requested !== undefined) {
@@ -32,6 +32,8 @@ export function decideCliHome(handle: string, requested: unknown, candidates: re
     if (origin === undefined || !homes.has(origin)) return { ok: false, error: 'home must be a linked host that currently lists this CLI handle' }
     return { ok: true, home: origin }
   }
+  // A local household (online or tombstoned) is already home; only an explicit operator choice can override it.
+  if (locallyHeld) return { ok: true }
   // An unreadable linked host may be another home; lack of evidence is not absence.
   return !candidates.some(row => row.linked && row.card === undefined) && homes.size === 1 ? { ok: true, home: [...homes][0]! } : { ok: true }
 }

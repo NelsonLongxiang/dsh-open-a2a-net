@@ -3268,7 +3268,9 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   async function cliHomeForAdd(handle: string, requested?: unknown) {
-    return decideCliHome(handle, requested, CLI_HANDLE_RE.test(handle) ? await freshCliHomeCards() : [])
+    const localHousehold = () => cliDeposits.directoryRows().some(row => row.team === handle)
+    if (requested === undefined && localHousehold()) return decideCliHome(handle, requested, [], true)
+    return decideCliHome(handle, requested, CLI_HANDLE_RE.test(handle) ? await freshCliHomeCards() : [], localHousehold())
   }
 
   async function cliHomeOptions(handle: string) {
