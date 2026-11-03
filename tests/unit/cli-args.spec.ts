@@ -676,7 +676,8 @@ describe('a2a-net CLI: route carries its own task id and resends it safely (gh#1
     expect(host.direct()[0]?.body.task_id).toBe('direct-111122223333')
   })
 
-  it('5xx until resends run out still names the safe resend', async () => {
+  // #144: Node 24.12 Windows aborts at src/win/async.c:76 after fetch + process.exit(1); POSIX checks the exact exit contract.
+  it.skipIf(process.platform === 'win32' && process.versions.node === '24.12.0')('5xx until resends run out still names the safe resend', async () => {
     const busy = { status: 502, body: { error: 'bad gateway' } }
     const host = await scriptedHost([busy, busy, busy, busy])
     const HOME = await scoutHome()

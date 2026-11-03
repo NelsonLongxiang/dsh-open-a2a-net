@@ -224,7 +224,17 @@ describe('#138 review fixes', () => {
     expect(obs.observe(input('al1:4444444444444444', rows, () => refuse('gone'), 'canvas'))?.tasks).toHaveLength(1)
   })
 
-  it('P3: auth-versions.json is replaced by rename (a read-only old file does not block the write; no tmp left behind)', () => {
+  it('P3: a writable existing history is replaced without leaving temporary files on every platform', () => {
+    const path = observerPath()
+    const obs = new AuthObserver(path)
+    obs.observe(input(V1, [], () => refuse('x'), 'boot'))
+    obs.observe(input(V2, [], () => refuse('x'), 'canvas'))
+    expect((JSON.parse(readFileSync(path, 'utf8')) as { versions: Array<{ version: string }> }).versions.map(entry => entry.version)).toEqual([V2, V1])
+    expect(readdirSync(dirname(path))).toEqual(['auth-versions.json'])
+  })
+
+  // POSIX-only: replacing a read-only directory entry is allowed by parent permissions; Windows read-only attributes deny replacement.
+  it.skipIf(process.platform === 'win32')('P3: auth-versions.json is replaced by rename (a read-only old file does not block the write; no tmp left behind)', () => {
     const path = observerPath()
     const obs = new AuthObserver(path)
     obs.observe(input(V1, [], () => refuse('x'), 'boot'))
