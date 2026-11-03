@@ -7,7 +7,7 @@
  *           语料摘要 → 形状 → 全语料实跑 → 归档链，六环；缺语料诚实 SKIP）
  *   L·证据  `verify archive verify`——重算本候选最新 run 归档的完整 hash 链
  *           （spec/材料/报告逐字节可复现，防「报告被改过」）
- *   L·判定  `verify run`——冻结 spec 在当前快照上的 14 单元判定（本层不重跑
+ *   L·判定  `verify run`——冻结 spec 在当前快照上的 15 单元判定（本层不重跑
  *           门禁，读探针刚冻结的快照；探针是命令证据的采集面）
  *
  * 用法：node scripts/verify-recursive.mjs [--fresh]（--fresh 先跑 verify-probe 再判定）
@@ -21,7 +21,7 @@ import { tmpdir } from "node:os";
 const REPO = resolve(import.meta.dirname, "..");
 const YGL_BIN = process.env.YGL_BIN ?? resolve(REPO, "..", "ygl-trees", "dist/apps/cli/src/bin.js");
 const YGL_HOME = process.env.YGL_HOME ?? resolve(REPO, "tmp/ygl-verify");
-const SPEC_ID = process.env.A2A_SPEC_ID ?? "spec_1819f122d9d3";
+const SPEC_ID = process.env.A2A_SPEC_ID ?? "spec_bdf9df9d3851";
 const CORPUS = process.env.YGL_VERIFY_CORPUS ?? resolve(REPO, "..", "ygl-trees", "packages/verify/core/corpus");
 const ARCHIVES = resolve(YGL_HOME, "verify/archives");
 

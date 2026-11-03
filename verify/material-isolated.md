@@ -27,6 +27,7 @@ V11 仓库必须跟踪至少 1 个 nexusDist 前端 bundle（assets/nexusDist/as
 V12 提交物必须包含发布闸门文档 release-gate.md。
 V13 仓库根不得有 tmp- 开头的散落临时文件。
 V14 测试套件规模不得低于 15 个 spec 文件（tests/**/*.spec.ts）。
+V15 质量门禁 verify:docs（文档漂移检查）的退出码必须为 0。
 
 ## 边界（如实声明）
 

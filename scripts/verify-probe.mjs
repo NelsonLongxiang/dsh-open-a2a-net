@@ -8,7 +8,7 @@
  *
  * 采集面：
  *   repo_facts     仓库事实（版本、HEAD、工作树是否干净、dist 是否在库）
- *   quality_gates  质量门禁（typecheck / test:unit / test:wire / verify:nexus）
+ *   quality_gates  质量门禁（typecheck / verify:docs / test:unit / test:wire / verify:nexus）
  *   runtime_probes 3081 运行时探针（nexus 页 / state 面）
  *   release_gate   发布闸门推导（候选就位、公网npmjs精确版本未发布）
  *
@@ -67,6 +67,7 @@ const repoFacts = [
 /* ── 2. 质量门禁（真命令，限时） ────────────────────────── */
 const gates = [
   run("typecheck", "pnpm", ["run", "typecheck"], 180_000),
+  run("verify:docs", "pnpm", ["run", "verify:docs"], 180_000),
   run("test:unit", "pnpm", ["run", "test:unit"], 300_000),
   run("test:wire", "pnpm", ["run", "test:wire"], 300_000),
   run("verify:nexus", "pnpm", ["run", "verify:nexus"], 600_000),
@@ -176,7 +177,7 @@ const summary = {
   git_clean: !gitDirty,
   gates: Object.fromEntries(gates.map((g) => [g.gate, { exit: g.exit_code, passed: g.passed, failed: g.failed }])),
   runtime: Object.fromEntries(runtimeRows.map((r) => [r.endpoint, r.http_status === 200
-    ? { ok: true, source: `${BASE}/${r.endpoint === "state" ? "__dsh_a2a/state" : "__dsh_a2a_nexus/"}`, checked_at: r.checked_at, version: r.version, peers: r.peers, isolated: r.isolated === 1, dead: r.ledger_dead }
+    ? { ok: true, source: `${BASE}/${r.endpoint === "state" ? "__dsh_a2a/state" : "__dsh_a2a_nexus/"}`, checked_at: r.checked_at, version: r.version, peers: r.peers, isolated: r.isolated === null ? null : r.isolated === 1, dead: r.ledger_dead }
     : { ok: false, source: `${BASE}/${r.endpoint === "state" ? "__dsh_a2a/state" : "__dsh_a2a_nexus/"}`, checked_at: r.checked_at, status: r.http_status }])),
   release_gate: Object.fromEntries(gateRows.map((g) => [g.rule, !!g.holds])),
   release_evidence: { source: regUrl, checked_at: regCheckedAt, exact_version: pkg.version, registry_state: regState },

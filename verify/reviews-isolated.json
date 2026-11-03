@@ -335,6 +335,30 @@
           "reason": "空快照或空提交物下该检查必为 FAIL 或 NEEDS-MATERIAL（count>=1/exists 期望命中/找违规型给了 where），不会空洞通过。"
         }
       ]
+    },
+    {
+      "source_clause": "V15 质量门禁 verify:docs（文档漂移检查）的退出码必须为 0。",
+      "findings": [
+        {
+          "question": "faithful",
+          "verdict": "ok",
+          "reason": "逐字取自新版材料V15，判据直接对应pnpm verify正式链上的verify:docs退出码。",
+          "anchor": {
+            "quote": "V15 质量门禁 verify:docs（文档漂移检查）的退出码必须为 0。",
+            "locator": "material.md §判据 V15"
+          }
+        },
+        {
+          "question": "decidable",
+          "verdict": "ok",
+          "reason": "条件全部落在冻结快照的确定性列（退出码/计数/版本比较/文件枚举），无时间函数、无主观词。"
+        },
+        {
+          "question": "not-vacuous",
+          "verdict": "ok",
+          "reason": "缺失verify:docs门禁行或退出码非0时匹配行数为0，不可能空洞PASS。"
+        }
+      ]
     }
   ]
 }

@@ -434,6 +434,39 @@
         "glob": "tests/**/*.spec.ts",
         "min": 15
       }
+    },
+    {
+      "source_clause": "V15 质量门禁 verify:docs（文档漂移检查）的退出码必须为 0。",
+      "anchor": {
+        "quote": "V15 质量门禁 verify:docs（文档漂移检查）的退出码必须为 0。",
+        "locator": "material.md §判据 V15"
+      },
+      "title": "文档漂移质量门禁通过",
+      "severity": "S1",
+      "checker": {
+        "type": "count",
+        "predicate": {
+          "from": "quality_gates",
+          "select": [],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "gate",
+                "op": "=",
+                "value": "verify:docs"
+              },
+              {
+                "col": "exit_code",
+                "op": "=",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "op": ">=",
+        "value": 1
+      }
     }
   ]
 }
