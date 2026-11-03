@@ -40,6 +40,29 @@ describe('gh#41 remote org frames + fleet drop fork', () => {
     expect(member).not.toBeNull()
   })
 
+  it('#197: unreachable peer leaves frame, peer card and member card visible but weak; recovery clears warning', () => {
+    const v = createPlanningView({ onDirty: vi.fn(), onLampClick: vi.fn(), onCanvasAction: vi.fn(async () => true), now: () => NOW })
+    document.body.appendChild(v.root)
+    v.reconcile(input)
+    const frame = v.root.querySelector<HTMLElement>('.p-frame[data-name="远端研发"]')!
+    const host = v.root.querySelector<HTMLElement>('.p-node[data-id^="peer-"]')!
+    const member = v.root.querySelector<HTMLElement>('.p-node[data-id="member-peerzone-d659a8f9"]')!
+    for (const lost of [
+      { ...input, remoteTeams: [{ ...input.remoteTeams![0]!, unreachable: true }] },
+      { ...input, peerOrg: [{ ...input.peerOrg![0]!, unreachable: true }] },
+    ]) {
+      v.reconcile(lost)
+      expect(frame.classList.contains('is-unreachable')).toBe(true)
+      expect(frame.querySelector('.p-frame-unreachable')?.textContent).toBe('对端未应答（显示的是最后已知状态）')
+      for (const card of [host, member]) { expect(card.classList.contains('is-unreachable')).toBe(true); expect(card.title).toContain('最后已知状态'); expect(card.querySelector('.sub')?.textContent).toContain('未应答') }
+      v.reconcile(input)
+      expect(frame.classList.contains('is-unreachable')).toBe(false)
+      expect(frame.querySelector('.p-frame-unreachable')).toBeNull()
+      for (const card of [host, member]) { expect(card.classList.contains('is-unreachable')).toBe(false); expect(card.title).not.toContain('最后已知状态') }
+    }
+    v.destroy()
+  })
+
   it('dropping a LOCAL card into a REMOTE frame emits add-member carrying fleetPeer', async () => {
     const actions: Array<{ type: string; team?: string; ids?: readonly string[]; fleetPeer?: string }> = []
     const v = createPlanningView({ onDirty: vi.fn(), onLampClick: vi.fn(), onCanvasAction: async a => { actions.push(a as { type: string }); return true }, now: () => NOW })

@@ -117,6 +117,17 @@ describe('目录 (wb-directory)', () => {
     expect(text(box).includes('1111-aaaa · ')).toBe(false)
   })
 
+  it('#197: an unreachable remote stays in the directory with a visible last-known warning, then recovers', () => {
+    const remote = { team: 'peer/abc12345', name: '远端同事', origin: 'peer host', unreachable: true }
+    const lost = render({ filter: 'remote', state: { remote: [remote] } }).box
+    const item = lost.querySelector<HTMLElement>('.wb-item.is-unreachable')
+    expect(item).not.toBeNull()
+    expect(text(item?.querySelector('.wb-unreachable-note'))).toBe('对端未应答（显示的是最后已知状态）')
+    const back = render({ filter: 'remote', state: { remote: [{ ...remote, unreachable: false }] } }).box
+    expect(back.querySelector('.wb-item')).not.toBeNull()
+    expect(back.querySelector('.is-unreachable, .wb-unreachable-note')).toBeNull()
+  })
+
   it('says how many logs it shows when the host caps the list', () => {
     const { box } = render({ logTotal: 73 })
     expect(text(box.querySelector('.wb-dir-group:last-child .wb-dir-head-note'))).toBe('显示 4 / 共 73')

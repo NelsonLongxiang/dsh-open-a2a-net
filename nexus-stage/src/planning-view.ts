@@ -51,6 +51,7 @@ import { createLayoutUndo, type LayoutSnap } from './planning-undo'
 import { createNodeList } from './planning-nodelist'
 import { cardText } from './planning-card-text'
 import { createLegend } from './planning-legend'
+import { UNREACHABLE_HINT, showFrameReachability, unreachableRefs } from './planning-reachability'
 import { viewportBucket, type PlanningDeps, type PlanningInput, type PlanningSession, type PlanningTeam, type PlanningView, type SeamKey, type SeamPointer, type ViewportBucket } from './planning-types'
 import './planning.css'
 
@@ -383,12 +384,14 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       const cntText = `${members} 成员` + (cross > 0 ? ` +${cross} 跨队` : '')
       if (cnt.textContent !== cntText) cnt.textContent = cntText
       const mirror = mirrorRoute(remoteFramesRef.get(name), pendingTeams.has(name)) // PR#96 single owner + mirror
+      const unavailable = mirror !== undefined && reachability.hosts.has(peerHostOf(remoteFramesRef.get(name)!))
       const routeText0 = mirror?.text ?? routeText(name)
       if (route.textContent !== routeText0) route.textContent = routeText0
-      route.title = mirror?.title ?? ''
+      route.title = `${mirror?.title ?? ''}${unavailable ? ` · ${UNREACHABLE_HINT}` : ''}`
+      showFrameReachability(el, unavailable)
       el.classList.toggle('is-mirror', mirror !== undefined)
       el.classList.toggle('is-syncing', mirror?.syncing === true)
-      const label = `团队框 ${name}${mirror !== undefined ? `（${mirror.text}）` : ''}（拖动整组，回车菜单）`
+      const label = `团队框 ${name}${mirror !== undefined ? `（${mirror.text}）` : ''}${unavailable ? `（${UNREACHABLE_HINT}）` : ''}（拖动整组，回车菜单）`
       const headEl = el.querySelector('.p-frame-head')!
       if (headEl.getAttribute('aria-label') !== label) headEl.setAttribute('aria-label', label) // a rewrite re-announces
     }
@@ -439,11 +442,15 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       const host = n.id.slice('peer-'.length)
       // Title / second line / tooltip rules: planning-card-text.
       const txt = cardText(n, n.remote === true ? lastRemoteTeams.get(host) ?? [] : [], peerScoreByText.get(host))
+      const unavailable = n.remote === true && (n.id.startsWith('member-') ? reachability.members.has(n.id) : reachability.hosts.has(host))
+      el.classList.toggle('is-unreachable', unavailable)
       const nmEl = el.querySelector<HTMLElement>('.nm-text')!
       if (nmEl.textContent !== txt.title) nmEl.textContent = txt.title
       const subEl = el.querySelector<HTMLElement>('.sub')!
-      if (subEl.textContent !== txt.sub) subEl.textContent = txt.sub
-      if (el.title !== txt.tip) el.title = txt.tip
+      const subText = unavailable ? `未应答 · ${txt.sub}` : txt.sub
+      if (subEl.textContent !== subText) subEl.textContent = subText
+      const tip = unavailable ? `${txt.tip} · ${UNREACHABLE_HINT}` : txt.tip
+      if (el.title !== tip) el.title = tip
       const prioEl = el.querySelector<HTMLElement>('.prio')!
       if (n.remote === true) {
         // gh#20 W-A: the peer badge — link class colors the chip (linked
@@ -527,6 +534,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   // gh#41: remote-frame registry (frame name → peer URL), refreshed by
   // reconcile and read by emitAction's serverAction to fork remote drops.
   let remoteFramesRef = new Map<string, string>()
+  let reachability = unreachableRefs({})
   const dissolving = createDissolveGuard(deps.now)
 
   function emitAction(a: CanvasAction): void {
@@ -1211,6 +1219,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // excluded from bounds, so the column cannot feed back into itself).
     const peerSeen = new Set<string>()
     lastRemoteTeams = groupRemoteTeams(input.remoteTeams ?? [])
+    reachability = unreachableRefs(input)
     peerScoreByText.clear()
     for (const p of input.peers ?? []) {
       peerScoreByText.set(peerHostOf(p.url), p.score)

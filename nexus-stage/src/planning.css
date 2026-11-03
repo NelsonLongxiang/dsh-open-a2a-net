@@ -84,6 +84,10 @@
 #dsh-plan .p-frame-head .route{font-size:10.5px; color:var(--ink-muted)}
 #dsh-plan .p-frame.is-mirror{border-style:dashed}
 #dsh-plan .p-frame.is-syncing .p-frame-head .route{color:var(--accent)}
+#dsh-plan .p-frame.is-unreachable{opacity:.76;border-style:dashed}
+#dsh-plan .p-frame-unreachable{position:absolute;left:8px;top:20px;max-width:calc(100% - 16px);color:var(--uupm-error);font-size:11px;pointer-events:none}
+#dsh-plan .p-node.remote.is-unreachable{opacity:.72;border-left-color:var(--uupm-error)}
+#dsh-plan .p-node.remote.is-unreachable .sub{color:var(--uupm-error)}
 
 /* ── node card (fixed 56px border-box height = world.NODE_H) ── */
 #dsh-plan .p-node{position:absolute; width:172px; height:56px; padding:8px 26px 8px 14px;

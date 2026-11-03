@@ -435,15 +435,17 @@ async function poll(): Promise<void> {
         name: r.name,
         via: r.via,
         workspace: r.workspace,
+        ...(r.unreachable === true ? { unreachable: true } : {}),
         ...(typeof r.origin === 'string' && r.origin !== '' ? { origin: r.origin } : {}),
         ...(Array.isArray(r.teams) && r.teams.length > 0 ? { teams: r.teams.filter((t): t is string => typeof t === 'string' && t !== '') } : {}),
       }))
     // gh#41: the peers' published canvas org rides the board (remote frames).
     const peerOrg = (body.peerOrg as unknown[] ?? [])
-      .filter((r): r is { url?: unknown; org?: unknown } => r !== null && typeof r === 'object')
+      .filter((r): r is { url?: unknown; org?: unknown; unreachable?: unknown } => r !== null && typeof r === 'object')
       .filter(r => typeof r.url === 'string' && Array.isArray(r.org))
       .map(r => ({
         url: r.url as string,
+        ...(r.unreachable === true ? { unreachable: true } : {}),
         org: (r.org as unknown[])
           .filter((e): e is { name?: unknown; team?: unknown; members?: unknown } => e !== null && typeof e === 'object')
           .filter(e => typeof e.team === 'string' && e.team !== '')

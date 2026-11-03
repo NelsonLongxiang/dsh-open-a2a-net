@@ -8,8 +8,8 @@
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "fded04a5bd4e0443f096874a9a0495786272ddb63d7e5ddf72e89b4502fad333",
-    "nexus-stage/src/workbench.ts": "db77d8c241f08dd7bb84825c7c085769d209d0bd17fd7521d194718e679add7e",
-    "nexus-stage/src/federation.ts": "d499312360a0ee4ddc5fa42f45675bfe0dba4f68c40e976c38036f8f06150148",
+    "nexus-stage/src/workbench.ts": "16f63111dbc93383c31f725301efb1a2c8b385b0a153020d4ad529c252ab843e",
+    "nexus-stage/src/federation.ts": "06e74e9b17b43b655d15fa41c7ab2b0b648cfa15d0ecd02cafe3b505ba6fa0d4",
     "nexus-stage/src/planning-relayout.ts": "7ce77ba2bc95fcbee62af752f22969b726511d8988133e74123a5e04a7a6a571",
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
     "nexus-stage/src/planning-card-text.ts": "31403071229c5dde4af545ded1a8eaebb1c329a52df3169fae868a57119225d9",
@@ -212,13 +212,13 @@
     {
       "page": "p1-arch",
       "cell": "e1",
-      "ref": "nexus-stage/src/workbench.ts:560",
+      "ref": "nexus-stage/src/workbench.ts:562",
       "expect": "function renderHosts(): void {"
     },
     {
       "page": "p1-arch",
       "cell": "e2",
-      "ref": "nexus-stage/src/federation.ts:128",
+      "ref": "nexus-stage/src/federation.ts:129",
       "expect": "export function placePeers("
     },
     {

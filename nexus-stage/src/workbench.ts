@@ -84,6 +84,7 @@ export interface ArchivedRow {
  *  canvasOrg) — the board renders REMOTE team frames from these rows. */
 export interface PeerOrgRow {
   readonly url: string
+  readonly unreachable?: boolean
   readonly org: ReadonlyArray<{ name: string; team: string; members: readonly string[] }>
 }
 
@@ -107,6 +108,7 @@ export interface SessionRow {
 /** One remote team row from /state `remote`. */
 export interface RemoteRow {
   readonly team: string
+  readonly unreachable?: boolean
   readonly name?: string
   readonly origin?: string
   readonly via?: string

@@ -26,7 +26,7 @@ export interface PlanningInput {
   remoteTeams?: ReadonlyArray<RemoteTeamRow>
   /** gh#41 fleet planning: each tracked peer's published canvas org —
    *  rendered as REMOTE team frames (read + cross-host regulation). */
-  peerOrg?: ReadonlyArray<{ url: string; org: ReadonlyArray<{ name: string; team: string; members: readonly string[] }> }>
+  peerOrg?: ReadonlyArray<{ url: string; unreachable?: boolean; org: ReadonlyArray<{ name: string; team: string; members: readonly string[] }> }>
 }
 
 /** Screen-width class a viewport is remembered under (window width, not board width — collapsing the rail must not switch buckets). */

@@ -153,6 +153,12 @@ export function renderDirectory(box: HTMLElement, ctx: DirectoryContext): string
     for (const r of remote) {
       const item = row(g, 'wb-dot-remote', '◇', displayName(r), r.origin !== undefined && r.origin !== '' ? r.origin : r.team,
         () => ctx.openChat({ kind: 'remote', team: r.team, title: displayName(r), sub: r.team, row: r }), r.team)
+      if (r.unreachable === true) {
+        item.classList.add('is-unreachable')
+        const note = el('span', 'wb-unreachable-note')
+        note.textContent = '对端未应答（显示的是最后已知状态）'
+        item.querySelector('.wb-item-text')?.appendChild(note)
+      }
       badges(item, r.canvasTeams)
     }
   }
