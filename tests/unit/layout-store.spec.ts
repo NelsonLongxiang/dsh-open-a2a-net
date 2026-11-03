@@ -39,6 +39,14 @@ describe('LayoutStore', () => {
     expect(Object.keys(s.get()!.frames)).toEqual([])
   })
 
+  it('#199 keeps roster frame geometry under the prefixed 47-character key without accepting oversized canvas names', () => {
+    const s = new LayoutStore(tmpFile())
+    const roster = 'roster:' + '组'.repeat(40)
+    const rect = { x: -12, y: 20, w: 320, h: 180 }
+    expect(s.save({ ...DOC, frames: { [roster]: rect, ['组'.repeat(41)]: rect } })).toBe(true)
+    expect(s.get()!.frames).toEqual({ [roster]: rect })
+  })
+
   it('clamps non-finite and out-of-range values', () => {
     const s = new LayoutStore(tmpFile())
     const messy = {

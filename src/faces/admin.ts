@@ -33,6 +33,7 @@ import type { IdempotencyStore } from '../idempotency-store.ts'
 import type { JoinedSessions } from '../joined-store.ts'
 import type { LayoutStore } from '../layout-store.ts'
 import { applyOwnerSettings, type OwnerSettings } from '../owner-settings.ts'
+import { rosterOp } from '../roster-op.ts'
 import type { PeerStore } from '../peer-store.ts'
 import { resolveStageMount } from '../stage-mount.ts'
 import { ARCHIVE_CAP, archivedEndedBy, type TaskLedger } from '../task-ledger.ts'
@@ -74,7 +75,7 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly idempotencyStore: IdempotencyStore
   readonly inFlightRoutes: Map<number, InFlightRoute>
   readonly recentActivity: RouteActivityEntry[]
-  readonly teamAuditRing: { at: number; action: 'join' | 'leave' | 'archive-prune' | 'agent-less'; team: string; id: string; ok: boolean; reason?: string }[]
+  readonly teamAuditRing: { at: number; action: 'join' | 'leave' | 'archive-prune' | 'agent-less'; team: string; id: string; ok: boolean; actor?: string; reason?: string }[]
   readonly reportRing: { at: number; level: 'info' | 'warning' | 'error'; message: string; session: string; task?: string }[]
   readonly sessionNodes: Map<string, Agent>
   readonly liveRoots: Map<string, Agent>
@@ -647,6 +648,30 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
       })
     }),
   }), 'a2a: fleet-canvas-op relay route')
+  // A roster owner gesture writes the same teams.json declarations as a2a_team_join; it cannot admit remote or unjoined ids.
+  ctx.effect(() => webServer.register({
+    kind: 'exact', path: '/__dsh_a2a/roster-op',
+    handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+      const send = (payload: Record<string, unknown>): void => {
+        const text = JSON.stringify(payload)
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(text) }); res.end(text)
+      }
+      if (req.method !== 'POST') { send({ ok: false, error: 'POST required' }); return }
+      readJsonBody(req, res, body => {
+        try {
+          send(rosterOp({
+            zone: config.team, home, store: teamMemberships, joined: id => joinedSessions.has(id),
+            canvasExists: name => canvasStore.hasTeam(name) || canvasStore.hasTeam('roster:' + name),
+            allowlist: () => d.ownerAllowlist, setAllowlist: list => { d.ownerAllowlist = list },
+            audit: (action, team, id, ok, reason) => {
+              teamAuditRing.push({ at: Date.now(), action, team, id, ok, reason, actor: 'human:owner' })
+              if (teamAuditRing.length > 32) teamAuditRing.splice(0, teamAuditRing.length - 32)
+            },
+          }, body))
+        } catch (error) { d.logger.warn('roster-op failed: %s', String(error)); send({ ok: false, error: 'roster operation unavailable' }) }
+      })
+    }),
+  }), 'a2a: owner roster route')
   // Owner ruling 2026-10-29 (single owner + mirror): tell linked peers to re-read this host's card on any canvas change.
   registerCanvasNotify(webServer, d)
   // gh#34 owner three-key panel: the remote build-out unlock knobs,

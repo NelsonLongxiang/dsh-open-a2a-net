@@ -116,6 +116,71 @@ describe('建队 flow', () => {
     expect(v.root.querySelector('.p-frame[data-name="先锋"]')).not.toBeNull()
   })
 
+  it('#199: the create gesture defaults to canvas, can choose roster, and persists the separate frame key', async () => {
+    const { v, actions } = view()
+    v.reconcile(baseInput)
+    selectTwo(v)
+    v.seam.key(key({ key: 'g', target: v.root }))
+    const dialog = v.root.querySelector<HTMLElement>('.p-dialog')!
+    const kind = dialog.querySelector<HTMLSelectElement>('select[aria-label="团队类型"]')!
+    expect(kind.value).toBe('canvas')
+    kind.value = 'roster'
+    const input = dialog.querySelector<HTMLInputElement>('input')!
+    input.value = '生产服务组'
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(actions[0]).toEqual({ type: 'create-team', name: 'roster:生产服务组', ids: ['a', 'b'], created: true, roster: true })
+    const frame = v.root.querySelector<HTMLElement>('.p-frame[data-name="roster:生产服务组"]')!
+    expect(frame.classList.contains('is-roster')).toBe(true)
+    expect(frame.querySelector('.ttl')?.textContent).toBe('网络队 · roster · 生产服务组')
+    expect(JSON.stringify(v.snapshotDoc())).toContain('roster:生产服务组')
+  })
+
+  it('#199: a refused roster create rolls the optimistic roster frame back without hiding canvas teammates', async () => {
+    const { v, actions, settle } = view()
+    v.reconcile(baseInput)
+    selectTwo(v)
+    v.seam.key(key({ key: 'g', target: v.root }))
+    const dialog = v.root.querySelector<HTMLElement>('.p-dialog')!
+    dialog.querySelector<HTMLSelectElement>('select')!.value = 'roster'
+    const input = dialog.querySelector<HTMLInputElement>('input')!
+    input.value = '生产服务组'
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(actions).toHaveLength(1)
+    expect(v.root.querySelector('.p-frame[data-name="roster:生产服务组"]')).not.toBeNull()
+    await settle(false)
+    expect(v.root.querySelector('.p-frame[data-name="roster:生产服务组"]')).toBeNull()
+  })
+
+  it('#199: roster cannot mint a name already used by canvas and dissolution asks for confirmation', () => {
+    const { v, actions } = view(true)
+    v.reconcile(arrangedInput)
+    selectTwo(v)
+    v.seam.key(key({ key: 'g', target: v.root }))
+    const dialog = v.root.querySelector<HTMLElement>('.p-dialog')!
+    dialog.querySelector<HTMLSelectElement>('select')!.value = 'roster'
+    const input = dialog.querySelector<HTMLInputElement>('input')!
+    input.value = '甲'
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(dialog.querySelector('.p-dialog-err')?.textContent).toContain('同名 canvas')
+    expect(actions).toHaveLength(0)
+  })
+
+  it('#199: roster dissolution requires confirmation from the frame menu and Delete key', () => {
+    const { v, actions } = view()
+    v.reconcile({ ...baseInput, teams: [{ name: 'roster:生产服务组', team: 't/生产服务组', kind: 'roster' as const, members: [{ id: 'a' }, { id: 'b' }] }] })
+    const head = v.root.querySelector<HTMLElement>('.p-frame-head[data-frame="roster:生产服务组"]')!
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    try {
+      v.seam.contextMenu(ptr({ target: head, clientX: 10, clientY: 10 }))
+      v.root.querySelector<HTMLButtonElement>('[role=menuitem]')!.click()
+      expect(actions).toHaveLength(0)
+      confirm.mockReturnValue(true)
+      head.focus()
+      v.seam.key(key({ key: 'Delete', target: head }))
+      expect(actions).toEqual([{ type: 'remove-team', name: 'roster:生产服务组', roster: true }])
+    } finally { confirm.mockRestore() }
+  })
+
   it('G with fewer than two selected only raises an info notice', () => {
     const { v, actions } = view()
     v.reconcile(baseInput)
@@ -367,6 +432,51 @@ describe('context menu', () => {
     head.focus()
     v2.v.seam.key(key({ key: 'Delete', target: head, preventDefault: () => {} }))
     expect(v2.actions).toEqual([{ type: 'remove-team', name: '甲' }])
+  })
+})
+
+describe('#199 roster membership gestures', () => {
+  const rosterInput: PlanningInput = { ...baseInput, teams: [{ name: 'roster:甲', team: 't/甲', kind: 'roster' as const, members: [{ id: 'a' }, { id: 'c' }] }] }
+  const rosterLayout = { ...arrangedLayout, frames: { 'roster:甲': arrangedLayout.frames.甲 } }
+  it('a session in canvas and roster appears in both frames with cross-team counts; roster disappears when state drops it', () => {
+    const { v } = view()
+    const canvas = { name: '甲', team: 't/canvas/甲', members: [{ id: 'a' }, { id: 'b' }] }
+    const roster = { name: 'roster:甲', team: 't/甲', kind: 'roster' as const, members: [{ id: 'a' }, { id: 'c' }] }
+    v.reconcile({ ...baseInput, teams: [canvas, roster] })
+    const frames = [...v.root.querySelectorAll<HTMLElement>('.p-frame')]
+    expect(frames.map(f => f.dataset.name).sort()).toEqual(['roster:甲', '甲'])
+    expect(frames.every(f => f.querySelector('.cnt')?.textContent?.includes('+1 跨队'))).toBe(true)
+    expect(frames.find(f => f.dataset.name === 'roster:甲')?.classList.contains('is-roster')).toBe(true)
+    v.reconcile({ ...baseInput, teams: [canvas] })
+    expect(v.root.querySelector('.p-frame[data-name="roster:甲"]')).toBeNull()
+    expect(v.root.querySelector('.p-frame[data-name="甲"]')).not.toBeNull()
+  })
+
+  it('dragging a local joined session into a roster frame declares a member', () => {
+    const { v, actions } = view()
+    v.adoptExternalLayout(rosterLayout)
+    v.reconcile(rosterInput)
+    const b = v.root.querySelector<HTMLElement>('.p-node[data-id="b"]')!
+    drag(v, b, { x: 600, y: 0 }, { x: 10, y: 10 })
+    expect(actions).toEqual([{ type: 'add-member', team: 'roster:甲', ids: ['b'], roster: true }])
+  })
+  it('refuses a remote card dropped into a roster frame, with visible feedback and no roster write', () => {
+    const { v, actions } = view()
+    v.adoptExternalLayout(rosterLayout)
+    v.reconcile({ ...rosterInput, peers: [{ url: 'http://p1:80' }], remoteTeams: [{ team: 'foreign/abcd1234', via: 'http://p1:80' }] })
+    const peer = v.root.querySelector<HTMLElement>('.p-node.remote')!
+    drag(v, peer, { x: 0, y: 0 }, { x: 10, y: 10 })
+    expect(actions).toHaveLength(0)
+    expect(v.root.textContent).toContain('roster 只接受本机已入网会话')
+  })
+
+  it('dragging out of a roster frame retracts only that roster membership, unlike canvas blank drops', () => {
+    const { v, actions } = view()
+    v.adoptExternalLayout(rosterLayout)
+    v.reconcile(rosterInput)
+    const a = v.root.querySelector<HTMLElement>('.p-node[data-id="a"]')!
+    drag(v, a, { x: 0, y: 0 }, { x: 1500, y: 800 })
+    expect(actions).toEqual([{ type: 'remove-member', team: 'roster:甲', ids: ['a'], roster: true }])
   })
 })
 

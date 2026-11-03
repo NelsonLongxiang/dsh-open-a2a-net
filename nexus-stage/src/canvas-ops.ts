@@ -19,7 +19,7 @@ import type { LayoutDoc } from './layout-doc'
 export type RosterOp = { op: 'remove' | 'add'; id: string }
 
 /** The five user-facing write actions (one per design.md §3.3 row), plus the two network join/leave actions the panel-slim migration moved into the planning view. */
-export type CanvasAction =
+export type CanvasAction = (
   | { type: 'create-team'; name: string; ids: readonly string[]; /** true when the model had no such team before this action; NOT server creation provenance and never authority to delete on failure. */ created?: boolean }
   | { type: 'add-member'; team: string; ids: readonly string[]; /** gh#41: set when the target frame is a REMOTE peer's team — the wire routes the op through the host fleet relay. */ fleetPeer?: string }
   | { type: 'remove-member'; team: string; ids: readonly string[]; /** gh#41: see add-member. */ fleetPeer?: string }
@@ -29,6 +29,7 @@ export type CanvasAction =
   /** Network-level join/leave (the session joins the A2A mesh) — distinct from canvas-team membership. */
   | { type: 'join-network'; id: string }
   | { type: 'leave-network'; id: string }
+) & { roster?: boolean }
 
 /** Reverts exactly what one applyAction did (team-scoped). */
 export type Undo = () => void

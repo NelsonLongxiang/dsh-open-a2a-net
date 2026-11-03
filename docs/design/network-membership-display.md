@@ -36,7 +36,7 @@
 - **3D 场景 / 规划视图画布**：joined 会话节点 + `peer-*` 节点（按 peer URL 一个节点，无队伍概念）+ canvas team 框。
 - **规划视图工具栏**：`未入网(N)` chip + 下拉 → `join-network`（本机未 joined 会话的唯一 GUI 入网口）。
 - **节点右键**：组成团队 / 加入团队 / 置顶路由 / 离队 / **退网**（remote 节点只读，无退网）。
-- **双轨并存**：canvas teams（GUI 组队，框的成员）与 roster teams（`a2a/teams.json` 声明式，S3 的作用域）是两套队伍概念；规划视图 frames 只用 canvas teams，roster（`registry.teams`）已进 state 面但未进画布。
+- **双轨并存（#199）**：canvas teams（GUI 编排）与 roster teams（`a2a/teams.json` 声明、S3 作用域）仍是两套队伍；规划视图现在同时从 `canvas.teams` 和本机 `registry.teams` 画框。roster 框的布局键为 `roster:<name>`，但框身份只认本机 `registry.teams` 来源标记或建队类型选项，不根据可由对端自报的队名字串猜测；标题显示「网络队 · roster」，双线边框与图例区分 canvas；同一个会话可同时属于两种框。
 
 ## 3. 设计
 
@@ -112,7 +112,7 @@
 
 ## 5. 风险与开放问题
 
-1. **双轨队伍长期统一**：canvas team（可视化）与 roster team（网络声明）并存是有意的（编排层 vs 声明层），但"组队"并集判定要在文档与 UI 文案中保持一致，避免"在框里但没声明"的认知差。开放：是否给 canvas 建队手势联动 roster 声明（默认否——声明是网络可见动作，过 allowlist 闸，不该被画布手势隐式触发）。
+1. **双轨队伍裁定（#199，2026-11-03）**：canvas 与 roster 仍分开存储、分开布局。建队对话框默认 canvas，显式选 roster 时属主在 `/__dsh_a2a/roster-op` 先把精确队名写入允许名单，再替选中的已入网本机会话声明成员；拖进/拖出 roster 框增减声明，解散需确认并撤销成员与允许名单。失败以 200 + `ok:false` 反馈，画布回滚该队乐观变更；远端与未入网成员不能进入 roster，canvas 与 roster 同名拒绝。模型的 `a2a_team_join`/`leave` 路径不变，共享 `a2a/teams.json` 真相。
 2. **阶段二的行为破坏**：翻默认后，现网所有未声明队伍的 joined 会话立即失去出站能力。需要版本旗标 + 发版说明 + 龙翔批准。
 3. **远端 memberships 的时效**：card 读取有 TTL 缓存（remoteRowsTtlMs 15s），远端退队的展示延迟 ≤ 一个 TTL，可接受。
 4. **peer-* 节点的队伍归属**：peer 信标节点本身不是会话节点，其"队伍"来自该 peer card 的 memberships 聚合展示，不参与画布组队过滤的入场券判定（信标恒定展示）。

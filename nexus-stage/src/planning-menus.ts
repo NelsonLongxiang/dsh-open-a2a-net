@@ -8,6 +8,7 @@
  * @module nexus-stage/planning-menus
  */
 import { reorderOps, type CanvasAction } from './canvas-ops'
+import { rosterFrameName, rosterFrameTitle } from './planning-roster'
 import type { PlanningSession, PlanningTeam } from './planning-types'
 import type { WorldModel } from './world'
 
@@ -22,6 +23,8 @@ export interface MenusDeps {
   readonly model: WorldModel
   /** Canvas teams from the latest poll. */
   teams(): ReadonlyArray<PlanningTeam>
+  joined(id: string): boolean
+  isRoster(frame: string): boolean
   /** The card or frame-head element a menu re-focuses on close. */
   anchorFor(target: MenuTarget): HTMLElement | null
   emit(a: CanvasAction): void
@@ -45,6 +48,7 @@ export interface PlanningMenus {
 
 export function createPlanningMenus(d: MenusDeps): PlanningMenus {
   const { root, netBtn, signal, model } = d
+  const titleOf = (frame: string): string => d.isRoster(frame) ? rosterFrameTitle(frame) : frame
 
   // ── 建队：selection → 命名对话框 → create-team ──
   function selectedByY(): string[] {
@@ -87,6 +91,12 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
     title.id = 'p-dialog-title'
     title.className = 'p-dialog-title'
     title.textContent = `组建团队（${ids.length} 个节点，自上而下即优先级）`
+    const kind = document.createElement('select')
+    kind.className = 'p-dialog-kind'
+    kind.setAttribute('aria-label', '团队类型')
+    for (const [value, label] of [['canvas', 'canvas 队'], ['roster', 'roster 网络队']]) {
+      const option = document.createElement('option'); option.value = value; option.textContent = label; kind.appendChild(option)
+    }
     const input = document.createElement('input')
     input.className = 'p-dialog-input'
     input.maxLength = 40
@@ -103,7 +113,7 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
     cancelBtn.type = 'button'
     cancelBtn.textContent = '取消'
     row.append(okBtn, cancelBtn)
-    panel.append(title, input, err, row)
+    panel.append(title, kind, input, err, row)
     wrap.appendChild(panel)
     root.appendChild(wrap)
 
@@ -115,25 +125,27 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
     }
     const nameError = (): string | null => {
       const name = input.value.trim()
-      if (name === '' || name.length > 40 || name.includes('/') || /^\d+$/.test(name)) {
-        return '队名需 1..40 字，不含“/”，不为纯数字'
-      }
+      if (name === '' || name.length > 40 || name.includes('/') || name.startsWith('roster:') || /^\d+$/.test(name)) return '队名需 1..40 字，不含“/”和保留前缀，不为纯数字'
+      if (kind.value === 'roster' && model.getFrame(name) !== undefined) return '同名 canvas 队已存在，不能创建 roster 队'
+      if (kind.value === 'roster' && model.getFrame(rosterFrameName(name)) !== undefined && !d.isRoster(rosterFrameName(name))) return 'roster 框名已被 canvas 或镜像队占用'
+      if (kind.value === 'canvas' && model.getFrame(rosterFrameName(name)) !== undefined) return '同名 roster 队已存在，不能创建 canvas 队'
+      if (kind.value === 'roster' && ids.some(id => model.getNode(id)?.remote === true || !d.joined(id))) return 'roster 仅接受本机已入网的会话'
       return null
     }
     const confirm = (): void => {
       const problem = nameError()
       if (problem !== null) { err.textContent = problem; input.focus(); return }
-      const name = input.value.trim()
+      const name = kind.value === 'roster' ? rosterFrameName(input.value.trim()) : input.value.trim()
       close()
       if (model.getFrame(name) !== undefined) {
         // Duplicate name: host create is idempotent-ok, but the optimistic
         // create-team would WIPE the existing roster and overwrite its saved
         // frame rect. Join instead — same wire result, nothing destroyed.
-        d.notice('info', `已加入现有团队「${name}」`)
+        d.notice('info', `已加入现有团队「${kind.value === 'roster' ? rosterFrameTitle(name) : name}」`)
         d.emit({ type: 'add-member', team: name, ids })
         return
       }
-      d.emit({ type: 'create-team', name, ids, created: true })
+      d.emit({ type: 'create-team', name, ids, created: true, ...(kind.value === 'roster' ? { roster: true } : {}) })
     }
     okBtn.addEventListener('click', confirm)
     cancelBtn.addEventListener('click', close)
@@ -149,7 +161,7 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return }
       if (e.key !== 'Tab') return
       e.preventDefault()
-      const focusables = Array.from(panel.querySelectorAll<HTMLElement>('input, button'))
+      const focusables = Array.from(panel.querySelectorAll<HTMLElement>('input, select, button'))
       const idx = focusables.indexOf(document.activeElement as HTMLElement)
       const next = e.shiftKey
         ? focusables[(idx - 1 + focusables.length) % focusables.length]
@@ -252,7 +264,7 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
     el.setAttribute('aria-label', '团队操作')
     let items: HTMLButtonElement[] = []
     if (target.kind === 'frame') {
-      items = [menuItem(`解散团队「${target.name}」`, true, () => d.emit({ type: 'remove-team', name: target.name }))]
+      items = [menuItem(`解散团队「${titleOf(target.name)}」`, true, () => d.emit({ type: 'remove-team', name: target.name }))]
     } else {
       const id = target.id
       if (level === 'root') {
@@ -278,13 +290,17 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
         for (const t of d.teams()) {
           if (level === 'join') {
             const already = (model.getNode(id)?.memberships.some(m => m.team === t.name)) ?? true
-            items.push(menuItem(already ? `${t.name}（已加入）` : t.name, !already, () => d.emit({ type: 'add-member', team: t.name, ids: [id] })))
+            const allowed = !d.isRoster(t.name) || (d.joined(id) && model.getNode(id)?.remote !== true)
+            const item = menuItem(already ? `${titleOf(t.name)}（已加入）` : titleOf(t.name), !already && allowed, () => d.emit({ type: 'add-member', team: t.name, ids: [id] }))
+            if (!allowed) item.title = 'roster 只接受本机已入网会话'
+            items.push(item)
           } else if (level === 'leave') {
             const member = (model.getNode(id)?.memberships.some(m => m.team === t.name)) ?? false
-            items.push(menuItem(t.name, member, () => d.emit({ type: 'remove-member', team: t.name, ids: [id] })))
+            items.push(menuItem(titleOf(t.name), member, () => d.emit({ type: 'remove-member', team: t.name, ids: [id] })))
           } else {
             const member = (model.getNode(id)?.memberships.some(m => m.team === t.name)) ?? false
-            items.push(menuItem(t.name, member, () => {
+            if (d.isRoster(t.name)) continue
+            items.push(menuItem(titleOf(t.name), member, () => {
               const current = model.teamMemberIds(t.name)
               const desired = [id, ...current.filter(x => x !== id)]
               d.emit({ type: 'reorder', team: t.name, ops: reorderOps(current, desired) })

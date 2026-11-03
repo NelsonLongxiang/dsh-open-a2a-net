@@ -9,9 +9,10 @@
 import { createFaultReporter } from './fault'
 import { createWorkbench, type StateBody } from './workbench'
 import { createPlanningView } from './planning-view'
+import { rosterFrames, rosterNameOf } from './planning-roster'
 import { createSaveLoop, type LampState } from './layout-wire'
 import { createCanvasWire } from './canvas-wire'
-import type { CanvasAction } from './canvas-ops'
+import { actionTeam, type CanvasAction } from './canvas-ops'
 import './workbench.css'
 
 const app = document.getElementById('app')!
@@ -171,6 +172,24 @@ async function fleetOp(peer: string, op: 'add-member' | 'remove-member' | 'remov
   return false
 }
 
+async function rosterAction(a: CanvasAction, name: string): Promise<boolean> {
+  const post = async (body: Record<string, unknown>): Promise<boolean> => {
+    const reply = await controlFetch('/__dsh_a2a/roster-op', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, ...body }) }).catch(() => undefined)
+    const result = reply !== undefined ? await reply.json().catch(() => undefined) as { ok?: boolean; error?: string } | undefined : undefined
+    if (reply?.ok && result?.ok === true) return true
+    planning.notice('error', `roster 操作失败：${String(result?.error ?? (reply ? `HTTP ${reply.status}` : '无响应'))}`)
+    return false
+  }
+  if (a.type === 'create-team') return post({ op: 'create', ids: a.ids })
+  if (a.type === 'remove-team') return post({ op: 'dissolve' })
+  if (a.type === 'add-member' || a.type === 'remove-member') {
+    for (const id of a.ids) if (!(await post({ op: a.type, id }))) return false
+    return true
+  }
+  planning.notice('error', 'roster 不支持该操作')
+  return false
+}
+
 function runCanvasAction(a: CanvasAction): Promise<boolean> {
   // gh#41: a remote-frame drop forks to the fleet relay; so does dissolving
   // a mirror frame (single owner + mirror: the owner's store is the truth).
@@ -182,6 +201,12 @@ function runCanvasAction(a: CanvasAction): Promise<boolean> {
     })()
   }
   if (a.type === 'remove-team' && a.fleetPeer !== undefined) return fleetOp(a.fleetPeer, 'remove', a.name)
+  // Only a trusted registry roster frame or an explicit create choice may trigger a local roster write.
+  if (a.roster === true) {
+    const roster = rosterNameOf(actionTeam(a))
+    if (roster !== undefined) return rosterAction(a, roster)
+    planning.notice('error', '无效的 roster 框名'); return Promise.resolve(false)
+  }
   switch (a.type) {
     case 'create-team': return canvasWire.createTeam(a.name, a.ids, a.created)
     case 'add-member': return canvasWire.addMembers(a.team, a.ids)
@@ -440,7 +465,7 @@ async function poll(): Promise<void> {
     // SessionLite needs `joined: boolean` (workbench rows carry `joined?`):
     // tri-state → boolean without losing the unjoined node-list population.
     const allSessions = (body.sessions ?? []).map(s => ({ ...s, joined: s.joined === true }))
-    const teams = body.canvas?.teams ?? []
+    const teams = [...(body.canvas?.teams ?? []), ...rosterFrames(body.registry?.teams ?? [])]
     const peers = (body.peers ?? []).filter(p => p !== null && typeof p === 'object' && typeof (p as { url?: unknown }).url === 'string')
     const inFlight = (body.inFlight ?? []).filter(r => r !== null && typeof r === 'object' && typeof (r as { team?: unknown }).team === 'string' && typeof (r as { peer?: unknown }).peer === 'string' && Number.isFinite((r as { startedAt?: unknown }).startedAt))
     const remoteTeams = (body.remote ?? [])

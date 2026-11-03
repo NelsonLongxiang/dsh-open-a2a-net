@@ -27,6 +27,7 @@ export function createLegend(): HTMLDetailsElement {
   }
   row(false, '成员边（星形，框→成员）')
   row(true, '跨队多属（虚线）')
+  row(true, 'roster 网络队框（双线边框）')
   row(false, '活动边（inFlight 路由，瞬时）', 'var(--accent)')
   row(true, '联邦线（→peer）', 'var(--federal)')
   legend.append(summary, rows)

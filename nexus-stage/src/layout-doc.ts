@@ -66,11 +66,13 @@ function clampRect(raw: unknown): LayoutRect | undefined {
  * Normalize an untrusted layout document exactly as the host does:
  * version!==1 rejects the whole doc; non-finite coordinates drop the
  * point; coordinates round and clamp to ±COORD_LIMIT; scale clamps to
- * [SCALE_MIN, SCALE_MAX]; node keys cap at 128 chars; frame keys mirror
- * canvas team names (no '/', cap 40); rects need w>0 and h>0; caps are
+ * [SCALE_MIN, SCALE_MAX]; node keys cap at 128 chars; canvas frame names cap at 40,
+ * roster:<name> reserves seven extra characters; rects need w>0 and h>0; caps are
  * first-wins in insertion order - entries beyond are silently dropped,
  * never refused (an overflow renders, it just does not persist).
  */
+const validFrame = (name: string): boolean => name !== '' && !name.includes('/') && (name.startsWith('roster:') ? name.length > 7 && name.length <= 47 : name.length <= 40)
+
 export function clampDoc(raw: unknown): LayoutDoc | undefined {
   if (raw === null || typeof raw !== 'object') return undefined
   const rec = raw as Record<string, unknown>
@@ -96,7 +98,7 @@ export function clampDoc(raw: unknown): LayoutDoc | undefined {
   const frames: Record<string, LayoutRect> = {}
   if (rec.frames !== null && typeof rec.frames === 'object') {
     for (const [name, rect] of Object.entries(rec.frames as Record<string, unknown>)) {
-      if (typeof name !== 'string' || name === '' || name.includes('/') || name.length > 40) continue
+      if (!validFrame(name)) continue
       const r = clampRect(rect)
       if (r !== undefined) frames[name] = r
       if (Object.keys(frames).length >= LAYOUT_FRAME_CAP) break
@@ -127,7 +129,7 @@ export function buildLayoutDoc(
   }
   const docFrames: Record<string, LayoutRect> = {}
   for (const [name, r] of frames) {
-    if (typeof name !== 'string' || name === '' || name.includes('/') || name.length > 40) continue
+    if (!validFrame(name)) continue
     const w = clamp(r.w)
     const h = clamp(r.h)
     if (w <= 0 || h <= 0) continue

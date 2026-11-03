@@ -41,7 +41,8 @@ import { clampViewport, fitView, panBy, screenToWorld, worldTransformCss, zoomAt
 import { boardBounds, fitBelowHud, hudBottomOf } from './planning-fit'
 import { WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, planTeamClusters, NODE_W, NODE_H } from './world'
 import { applyAction, settleAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction } from './canvas-ops'
-import { FRAME_HUES } from './tokens'
+import { frameHue } from './planning-frame-hue'
+import { rosterFrameTitle } from './planning-roster'
 import { createPlanningMenus } from './planning-menus'
 import { createNodeFlyer, mountBoardSearch } from './planning-search'
 import { applyBoardRelayout } from './planning-relayout'
@@ -58,23 +59,10 @@ import './planning.css'
 export { viewportBucket } from './planning-types'
 export type { PlanningDeps, PlanningInput, PlanningSession, PlanningTeam, PlanningView, SeamKey, SeamPointer, ViewportBucket } from './planning-types'
 
-/** Team-name hue, same 31-polynomial family as the 3D scene's getHue. */
-function frameHue(name: string): { line: string; bg: string } {
-  let h = 0
-  for (let i = 0; i < name.length; i++) h = ((h * 31 + name.charCodeAt(i)) & 0xfffffff) >>> 0
-  const rgb = FRAME_HUES[h % FRAME_HUES.length]!
-  const line = '#' + rgb.toString(16).padStart(6, '0')
-  // 5% alpha fill over the dark base, per the design system.
-  const r = (rgb >> 16) & 0xff
-  const g = (rgb >> 8) & 0xff
-  const b = rgb & 0xff
-  return { line, bg: `rgba(${r},${g},${b},0.05)` }
-}
-
 
 type Gesture =
   | { readonly kind: 'none' }
-  | { readonly kind: 'node'; ids: readonly string[]; clicked: string; last: { x: number; y: number }; moved: boolean; el: Element | null }
+  | { readonly kind: 'node'; ids: readonly string[]; clicked: string; rosterOrigin?: string; last: { x: number; y: number }; moved: boolean; el: Element | null }
   | { readonly kind: 'frame'; name: string; snap: NonNullable<ReturnType<WorldModel['beginFrameDrag']>>; origin: { x: number; y: number }; moved: boolean }
   | { readonly kind: 'frame-resize'; name: string; dir: string; startRect: { x: number; y: number; w: number; h: number }; origin: { x: number; y: number }; moved: boolean }
   | { readonly kind: 'pan'; last: { x: number; y: number }; moved: boolean }
@@ -372,7 +360,10 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       const title = el.querySelector<HTMLElement>('.ttl')!
       const cnt = el.querySelector<HTMLElement>('.cnt')!
       const route = el.querySelector<HTMLElement>('.route')!
-      if (title.textContent !== name) title.textContent = name
+      const isRoster = rosterFramesRef.has(name)
+      const shownName = isRoster ? rosterFrameTitle(name) : name
+      if (title.textContent !== shownName) title.textContent = shownName
+      el.classList.toggle('is-roster', isRoster)
       let members = 0
       let cross = 0
       for (const m of model.allNodes()) {
@@ -385,7 +376,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       if (cnt.textContent !== cntText) cnt.textContent = cntText
       const mirror = mirrorRoute(remoteFramesRef.get(name), pendingTeams.has(name)) // PR#96 single owner + mirror
       const unavailable = mirror !== undefined && reachability.hosts.has(peerHostOf(remoteFramesRef.get(name)!))
-      const routeText0 = mirror?.text ?? routeText(name)
+      const routeText0 = mirror?.text ?? (lastTeams.find(x => x.name === name)?.team ?? name)
       if (route.textContent !== routeText0) route.textContent = routeText0
       route.title = `${mirror?.title ?? ''}${unavailable ? ` · ${UNREACHABLE_HINT}` : ''}`
       showFrameReachability(el, unavailable)
@@ -398,12 +389,6 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     for (const [name, el] of [...frameEls]) {
       if (!seen.has(name)) { el.remove(); frameEls.delete(name) }
     }
-  }
-
-  /** The mono route line `<host>/canvas/<name>` when the payload carries it. */
-  function routeText(name: string): string {
-    const t = lastTeams.find(x => x.name === name)
-    return t?.team ?? name
   }
 
   // ── keyed diff: nodes ──
@@ -534,10 +519,17 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   // gh#41: remote-frame registry (frame name → peer URL), refreshed by
   // reconcile and read by emitAction's serverAction to fork remote drops.
   let remoteFramesRef = new Map<string, string>()
+  let rosterFramesRef = new Set<string>()
   let reachability = unreachableRefs({})
   const dissolving = createDissolveGuard(deps.now)
 
   function emitAction(a: CanvasAction): void {
+    const roster = (a.type === 'create-team' && a.roster === true) || rosterFramesRef.has(actionTeam(a))
+    if (roster && a.type === 'remove-team' && !window.confirm(`解散网络队「${rosterFrameTitle(a.name)}」并撤回成员与白名单？`)) return
+    if (roster && a.type === 'reorder') { notice('error', 'roster 队不支持置顶路由'); return }
+    if (roster && (a.type === 'create-team' || a.type === 'add-member') && a.ids.some(id => model.getNode(id)?.remote === true || !lastSessions.some(s => s.id === id && s.joined === true))) {
+      notice('error', 'roster 只接受本机已入网会话，远端或未入网成员未写入'); return
+    }
     // gh#20 W-B: the SERVER sees zone/id8 remote handles where the model
     // keeps its peer-<host> node id — the canvas member contract is
     // session-id-or-remote-ref. Translation happens here, one boundary;
@@ -590,14 +582,16 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         })
       }
     }
+    if (roster && a.type === 'create-team') rosterFramesRef.add(a.name)
     const undo = applyAction(model, a)
     const team = actionTeam(a)
     pendingAdd(team)
     render()
-    const sent = serverAction(a)
+    const sent = serverAction(roster ? { ...a, roster: true } : a)
     void deps.onCanvasAction(sent).then(
       ok => {
         pendingRelease(team)
+        if (!ok && a.type === 'create-team' && roster) rosterFramesRef.delete(team)
         layoutDoc = settleAction(model, a, ok, undo, layoutDoc); markDirty(); dissolving.settled(sent, ok)
         render()
       },
@@ -606,6 +600,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         // team's guard (and its optimistic state) forever — and per §3.4
         // 不吞错, the rollback surfaces to the user.
         pendingRelease(team)
+        if (a.type === 'create-team' && roster) rosterFramesRef.delete(team)
         layoutDoc = settleAction(model, a, false, undo, layoutDoc); markDirty(); dissolving.settled(sent, false)
         notice('error', '操作通道异常，已回滚')
         render()
@@ -628,6 +623,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   const menus = createPlanningMenus({
     root, netBtn, signal, model,
     teams: () => lastTeams,
+    joined: id => lastSessions.some(s => s.id === id && s.joined === true),
+    isRoster: name => rosterFramesRef.has(name),
     anchorFor: (t) => (t.kind === 'node' ? nodeEls.get(t.id) : frameEls.get(t.name)) ?? null,
     emit: emitAction,
     notice,
@@ -698,8 +695,11 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         }
       }
     }
-    // Blank drop: a position move only. No roster writes — the explicit
-    // context-menu 离队 (and the node drawer) remain the removal paths.
+    // Canvas blank drops move only; leaving a roster frame explicitly retracts those declarations.
+    if (gesture.rosterOrigin !== undefined && f !== gesture.rosterOrigin) {
+      const leaving = gesture.ids.filter(id => model.teamMemberIds(gesture.rosterOrigin!).includes(id))
+      if (leaving.length > 0) emitAction({ type: 'remove-member', team: gesture.rosterOrigin, ids: leaving })
+    }
   }
 
   function pointerDown(ev: SeamPointer): void {
@@ -768,7 +768,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       const already = model.isSelected(id)
       if (!already && !ev.shiftKey) model.setSelection([id])
       const ids = ev.shiftKey || already ? (model.isSelected(id) ? model.selectedIds() : [...model.selectedIds(), id]) : [id]
-      gesture = { kind: 'node', clicked: id, ids, last: screenToWorld(vp, p.x, p.y), moved: false, el: nodeEl }
+      const origin = innermostFrameAt(new Map(model.allFrames()), screenToWorld(vp, p.x, p.y))
+      gesture = { kind: 'node', clicked: id, ids, ...(origin && rosterFramesRef.has(origin) && model.teamMemberIds(origin).includes(id) ? { rosterOrigin: origin } : {}), last: screenToWorld(vp, p.x, p.y), moved: false, el: nodeEl }
       nodeEl.classList.add('dragging')
     } else if (headEl !== null) {
       if (ev.button !== 0) return
@@ -1126,6 +1127,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   function reconcile(input: PlanningInput): void {
     // gh#41: remote-frame registry shared with serverAction (drop fork).
     lastTeams = input.teams
+    rosterFramesRef = new Set([...input.teams.filter(t => t.kind === 'roster').map(t => t.name), ...[...rosterFramesRef].filter(n => pendingTeams.has(n))])
     lastPeers = input.peers ?? []
     federation.setInFlight(input.inFlight ?? [])
     // Unjoined sessions have no node on the canvas — the panel-slim

@@ -245,6 +245,7 @@ describe('federation overlay DOM', () => {
     expect(legend.querySelector('summary')!.textContent).toBe('图例')
     legend.open = true
     legend.dispatchEvent(new Event('toggle'))
-    expect(legend.querySelectorAll('.p-legend-rows > span').length).toBe(4)
+    expect(legend.querySelectorAll('.p-legend-rows > span').length).toBe(5)
+    expect(legend.textContent).toContain('roster 网络队框（双线边框）')
   })
 })

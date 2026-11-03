@@ -3,12 +3,12 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "5e7098b4355dfa54cad7ce0b76df8d84c017d870fefb9581eee2e2d0c6a51a5c",
-    "src/faces/admin.ts": "0081d86e4c472f39a2d6bd8d8bbbf7350c95fd0e4e30b0ca4da2a3d2a5de460a",
+    "src/index.ts": "df1d0c24c8c027c20de104ee0205c077c44db0aa8746a92aaeafa47e0f5494ad",
+    "src/faces/admin.ts": "2e3759d352ba73d6c536281c65c3eb9ac93ce2ad79f72be6c088c63130b3f5fc",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "fded04a5bd4e0443f096874a9a0495786272ddb63d7e5ddf72e89b4502fad333",
-    "nexus-stage/src/workbench.ts": "f5c386f06c563385a00daaf6396980f34770f06db7873fb2fd90ad17d64ceacd",
+    "nexus-stage/src/workbench.ts": "d43d14d57902d812a99877cc46119d648da72d24436ba4ac92811c131926942c",
     "nexus-stage/src/federation.ts": "06e74e9b17b43b655d15fa41c7ab2b0b648cfa15d0ecd02cafe3b505ba6fa0d4",
     "nexus-stage/src/planning-relayout.ts": "7ce77ba2bc95fcbee62af752f22969b726511d8988133e74123a5e04a7a6a571",
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
@@ -92,13 +92,13 @@
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:3761",
+      "ref": "src/index.ts:3762",
       "expect": "const sharedCanvas = canvasStore.list().some(name => {"
     },
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:3770",
+      "ref": "src/index.ts:3771",
       "expect": "let orgShared = false"
     },
     {
@@ -134,13 +134,13 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:518",
+      "ref": "src/faces/admin.ts:519",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:167",
+      "ref": "src/faces/admin.ts:168",
       "expect": "path: '/__dsh_a2a/state',"
     },
     {
@@ -188,7 +188,7 @@
     {
       "page": "p1-arch",
       "cell": "d7",
-      "ref": "src/faces/admin.ts:302",
+      "ref": "src/faces/admin.ts:303",
       "expect": "activity: recentActivity.slice(),"
     },
     {
@@ -212,7 +212,7 @@
     {
       "page": "p1-arch",
       "cell": "e1",
-      "ref": "nexus-stage/src/workbench.ts:564",
+      "ref": "nexus-stage/src/workbench.ts:565",
       "expect": "function renderHosts(): void {"
     },
     {
@@ -224,7 +224,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:3953",
+      "ref": "src/index.ts:3954",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -296,7 +296,7 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/admin.ts:116",
+      "ref": "src/faces/admin.ts:117",
       "expect": "export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void {"
     },
     {

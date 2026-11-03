@@ -3744,6 +3744,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         if (!initiator) {
           const callerTeams = teamMemberships.teamsOf(scopeCaller)
           const team = String(args.team ?? '').trim()
+          const sharedRoster = callerTeams.some(roster => teamMemberships.membersOf(roster).some(id => `${config.team}/${id8(id)}` === team))
           // gh#71: the SHARED-CANVAS basis and the warm cache's peer-org
           // basis (an org entry naming BOTH the caller and the target
           // handle) count as declared here too — the same link the
@@ -3778,13 +3779,13 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
             }
             if (orgShared) break
           }
-          if (callerTeams.length === 0 && !sharedCanvas && !orgShared) {
+          if (callerTeams.length === 0 && !sharedRoster && !sharedCanvas && !orgShared) {
             return {
               ok: false,
               error: `team-scoped routing is on and this session (${id8(scopeCaller)}) has declared no team membership — a teamless node has no network. Declare one with a2a_team_join (subject to the owner's teamJoinAllowlist)`,
             }
           }
-          if (!callerTeams.includes(team) && !sharedCanvas && !orgShared) {
+          if (!callerTeams.includes(team) && !sharedRoster && !sharedCanvas && !orgShared) {
             return {
               ok: false,
               error: `team-scoped routing is on: routing to "${team}" requires declared membership. This session's teams: ${callerTeams.join(', ')}. a2a_team_join can declare it (subject to the owner's teamJoinAllowlist)`,
