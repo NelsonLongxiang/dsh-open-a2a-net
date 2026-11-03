@@ -23,7 +23,7 @@
     "src/faces/canvas-notify.ts": "7153f7cb2b6c985825edde55809d47d3a2a14e652d69e55f6d1a72cd9f6d50d9",
     "src/task-auth.ts": "8558710d33b37f3e261eded23b6ca971572019a5dccb05ab5e8d8bd222095717",
     "src/origin-claim.ts": "d467153656bd5592785597e4a81d3686f0b4f91cac38705ecb18d4cc74f8d22c",
-    "src/tools/info.ts": "38630dc5ba0ad0c0774de5f5f01f8188d4f0f4edabcf4f260bfdebead4de0099",
+    "src/tools/info.ts": "495aaa3974acdb8b5d8876423664c6239034e84e669aecf53afb3e5618b33e6c",
     "src/tools/act.ts": "983f78c58b8c886b39b5af3f2cf474a1a47e4d03b91fedf5ed581aba3225bed2",
     "src/peer-directory.ts": "d7c30c27a230f8c61da18d85c30ad17a6e98809083b13eca82b34870a8934d01",
     "src/card.ts": "c72e71e453d8b2cd3981e4fd1a2b4c2e804b1f6a312328825eec89489ca13cf5",
@@ -39,7 +39,7 @@
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/tools/info.ts:676",
+      "ref": "src/tools/info.ts:690",
       "expect": "name: 'a2a_probe',"
     },
     {
