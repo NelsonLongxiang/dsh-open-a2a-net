@@ -3,7 +3,7 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "9e7cb7c1ccb2d29dcb7fefc909d0a1b06a33e9a8259c73b6a3cccd55665e83dc",
+    "src/index.ts": "de55da04f298b4a9e22409647648f6c1a986d2af6b8694583fc35dd9f125eb82",
     "src/faces/admin.ts": "9f1742276b4ab51a6094f26d85945bb439f4d0bf80bcce951300bba4a867d77e",
     "src/canvas-store.ts": "657861b471d54444df9f3f1521659727d72620cda8e1a9cff1e70bf962be2fde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
@@ -62,7 +62,7 @@
     {
       "page": "p1-arch",
       "cell": "b3",
-      "ref": "src/index.ts:2673",
+      "ref": "src/index.ts:2676",
       "expect": "function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {"
     },
     {
@@ -92,13 +92,13 @@
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:3632",
+      "ref": "src/index.ts:3635",
       "expect": "const sharedCanvas = canvasStore.list().some(name => {"
     },
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:3641",
+      "ref": "src/index.ts:3644",
       "expect": "let orgShared = false"
     },
     {
@@ -146,7 +146,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:3031",
+      "ref": "src/index.ts:3034",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -224,7 +224,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:3825",
+      "ref": "src/index.ts:3828",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -266,7 +266,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3282",
+      "ref": "src/index.ts:3285",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {

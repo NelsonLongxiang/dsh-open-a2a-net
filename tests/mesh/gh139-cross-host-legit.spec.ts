@@ -45,7 +45,8 @@ describe('r142 legitimate cross-host receipts under enforce', () => {
       await until(async () => (await rowOf(A, String(t.task_id)))?.status !== 'pending' || (await state(A)).settlement.refusals.length > 0)
       const s = await state(A)
       expect(s.settlement.refusals, JSON.stringify(s.settlement.refusals)).toEqual([])
-      expect((await rowOf(A, String(t.task_id)))?.settledBy).toMatchObject({ chain_role: 'host-face' })
+      // gh#217: the member that did the work answers for it (it used to be the host's process label).
+      expect((await rowOf(A, String(t.task_id)))?.settledBy).toMatchObject({ caller: 'cargo/bbbbbbbb', chain_role: 'target-member' })
     } finally { await A.dispose(); await B.dispose() }
   }, 90_000)
 
