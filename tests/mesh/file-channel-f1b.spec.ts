@@ -169,16 +169,19 @@ describe('#91 F1b — a peer HOST pulls with the audience-bound envelope only', 
       const spoofed = await pull(a, sha('别人的'), 'dsh/aaaa1111', envelope())
       expect(spoofed.status).toBe(403)
       expect(((await spoofed.json()) as { code?: unknown }).code).toBe('untrusted-origin')
-      // A canvas team of this host with a member on the market host: another market session may pull.
+      // A canvas team of this host that names market/aaaaaaaa: that member may pull, another market session may not.
       const post = async (body: unknown): Promise<unknown> => (await globalThis.fetch(`${a.baseUrl}/__dsh_a2a/canvas`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json()
       expect(((await post({ action: 'create', name: 'ops' })) as { ok?: boolean }).ok).toBe(true)
       expect(((await post({ action: 'add-member', name: 'ops', id: 'market/aaaaaaaa' })) as { ok?: boolean }).ok).toBe(true)
       await stage(a, '队内件', 'dsh/canvas/ops')
-      expect((await pull(a, sha('队内件'), 'market/bbbbbbbb', envelope())).status).toBe(200)
-      // The budget is the market HOST's (its proven zone), not each session label it names (review R1):
-      // 2 served pulls so far (refusals spend nothing); 14 more under rotating session labels fill it, the next is refused.
-      for (let i = 0; i < BLOB_PULLS_PER_MINUTE - 2; i++) expect((await pull(a, sha('队内件'), `market/rot${String(i).padStart(5, '0')}`, envelope())).status).toBe(200)
-      expect((await pull(a, sha('队内件'), 'market/cccccccc', envelope())).status).toBe(429)
+      expect((await pull(a, sha('队内件'), 'market/aaaaaaaa', envelope())).status).toBe(200)
+      expect((await pull(a, sha('队内件'), 'market/bbbbbbbb', envelope())).status).toBe(403)
+      // A grant to the whole market host admits any of its sessions; the budget is still the HOST's (its proven
+      // zone), not each session label it names (review R1): 2 served pulls so far (refusals spend nothing); 14 more
+      // under rotating session labels fill it, the next is refused.
+      await stage(a, '全主机件', 'market')
+      for (let i = 0; i < BLOB_PULLS_PER_MINUTE - 2; i++) expect((await pull(a, sha('全主机件'), `market/rot${String(i).padStart(5, '0')}`, envelope())).status).toBe(200)
+      expect((await pull(a, sha('全主机件'), 'market/cccccccc', envelope())).status).toBe(429)
     } finally {
       srv.close()
       await a.dispose()
@@ -195,7 +198,11 @@ describe('grantAdmits (design §3.2)', () => {
     expect(grantAdmits('other/aaaa1111', 'peer/aaaa1111', 'peer', 'dsh', none)).toBe(false)
     expect(grantAdmits('peerx/aaaa1111', 'peer/aaaa1111', 'peer', 'dsh', none)).toBe(false) // a prefix is not a zone
     const members = (name: string): readonly string[] => (name === 'delivery' ? ['session-local-1', 'peer/aaaa1111'] : [])
-    expect(grantAdmits('dsh/canvas/delivery', 'peer/cccc3333', 'peer', 'dsh', members)).toBe(true)
+    expect(grantAdmits('dsh/canvas/delivery', 'peer/aaaa1111', 'peer', 'dsh', members)).toBe(true)
+    // Only the member itself: another session of the member's host is not admitted (#91 F2).
+    expect(grantAdmits('dsh/canvas/delivery', 'peer/cccc3333', 'peer', 'dsh', members)).toBe(false)
+    // A grant to one session is not another session's, even on the same host.
+    expect(grantAdmits('peer/zzzz9999', 'peer/aaaa1111', 'peer', 'dsh', none)).toBe(false)
     expect(grantAdmits('dsh/canvas/delivery', 'third/aaaa1111', 'third', 'dsh', members)).toBe(false)
     // Another host's same-named canvas team is a different team: this host's members do not count.
     expect(grantAdmits('zz/canvas/delivery', 'peer/cccc3333', 'peer', 'dsh', members)).toBe(false)

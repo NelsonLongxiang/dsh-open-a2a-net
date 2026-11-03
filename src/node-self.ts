@@ -79,7 +79,7 @@ const DERIVED_SOURCES: Readonly<Record<string, 'senderSessionId' | 'sessionId'>>
 }
 
 /** This plugin's A2A tools that hand the model peer-originated text ({@link toolTaint}). */
-const A2A_READ_TOOLS: ReadonlySet<string> = new Set(['a2a_route', 'a2a_tasks', 'a2a_teams', 'a2a_status', 'a2a_probe'])
+const A2A_READ_TOOLS: ReadonlySet<string> = new Set(['a2a_route', 'a2a_tasks', 'a2a_teams', 'a2a_status', 'a2a_probe', 'a2a_file_send', 'a2a_file_fetch'])
 
 /** What the log scan may ask about OTHER sessions. */
 export interface SessionLookups {
@@ -106,7 +106,10 @@ export function peerContentOf(name: string, value: unknown): boolean {
   if (v === null || typeof v !== 'object') return false
   const rows = (x: unknown): unknown[] => (Array.isArray(x) ? x : [])
   const remotePeer = (row: unknown): boolean => (row as { peer?: unknown } | null)?.peer !== 'local'
-  if (name === 'a2a_route') return v.peer_content !== false
+  // a2a_file_send routes through the same trunk and carries the same host-written flag (#91 F2).
+  if (name === 'a2a_route' || name === 'a2a_file_send') return v.peer_content !== false
+  // A fetched file is content from outside this host, always (#91 design §3.5).
+  if (name === 'a2a_file_fetch') return true
   if (name === 'a2a_tasks') return rows(v.tasks).length > 0 || rows(v.archive).length > 0
   if (name === 'a2a_teams') return rows(v.teams).some(row => (row as { local?: unknown } | null)?.local !== true)
   if (name === 'a2a_status') return rows(v.peers).length > 0 || rows(v.inFlight).some(remotePeer) || rows(v.activity).some(remotePeer)
