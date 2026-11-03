@@ -57,6 +57,13 @@ describe('#124 judgeAffected (pure)', () => {
     expect(judged).toHaveLength(1)
   })
 
+  it('passes the immutable birth authorization to the host rechecker', () => {
+    const original = auth()
+    let seen: TaskAuthorization | undefined
+    expect(judgeAffected([row('birth-record', original)], V2, (_caller, _target, _ingress, birth) => { seen = birth; return pass('canvas-shared', ['dsh/canvas/ops']) })).toEqual([])
+    expect(seen).toBe(original)
+  })
+
   it('a basis-less rule (cli-deposit) holds when the same rule admits again', () => {
     expect(judgeAffected([row('t-cli', auth({ via: 'cli-deposit' }))], V2, () => pass('cli-deposit', []))).toEqual([])
     expect(judgeAffected([row('t-cli', auth({ via: 'cli-deposit' }))], V2, () => refuse('no node fact'))[0]?.verdict).toBe('would-revoke')

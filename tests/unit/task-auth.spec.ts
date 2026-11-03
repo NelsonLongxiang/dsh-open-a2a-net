@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  VIA_OF, allowlistVersion, callerAdmission, canonicalAllowlist, joinedFaceAdmission, refusalOf, sameZoneAdmission,
+  VIA_OF, allowlistVersion, callerAdmission, canonicalAllowlist, joinedFaceAdmission, refusalOf, sameZoneAdmission, buildAuthorization, recheckRemoteCliAuthorization,
   type AdmissionRecords, type AdmissionRule, type AllowlistInputs, type PeerOrgEntry,
 } from '../../src/task-auth.ts'
 
@@ -95,11 +95,23 @@ describe('gh#114 S1: every admission rule, with its basis', () => {
     const good = { origin, viaUrl: origin, bound: true, online: true }
     const linked = records({ canvas: { ops: [handle] }, cliHome: origin })
     expect(callerAdmission(linked, handle, undefined, good)).toEqual({ ok: true, via: 'canvas-member', rule: 'remote-ref-cli', basis: ['dsh/canvas/ops'] })
+    expect(callerAdmission(linked, handle, undefined, { ...good, origin: origin + '/', viaUrl: origin + '/' }).ok).toBe(true)
     expect(callerAdmission(records({ cliHome: origin }), handle, undefined, good).ok).toBe(false)
     expect(callerAdmission(records({ canvas: { ops: [handle] } }), handle, undefined, good).ok).toBe(false)
     for (const bad of [undefined, { ...good, origin: 'https://other.example' }, { ...good, bound: false }, { ...good, online: false }, { ...good, viaUrl: 'https://other.example' }]) {
       expect(callerAdmission(linked, handle, undefined, bad).ok).toBe(false)
     }
+  })
+
+  it('remote CLI authorization recheck needs only the mutable operator link and original carrier pin', () => {
+    const caller = 'ops-cli/a1b2c3d4e5f60718'
+    const origin = 'https://home.example'
+    const auth = buildAuthorization({ ok: true, via: 'canvas-member', rule: 'remote-ref-cli', basis: ['dsh/canvas/ops'] }, { caller, carrierUrl: origin, proof: 'origin-claim', claim: { caller: 'home', origin }, ingress: 'wire', allowlistVersion: 'al1:1111111111111111', target: 'dsh/aaaaaaaa', receiptTarget: caller, receivedAt: 1 })
+    const canvas = { ops: [caller] }
+    expect(recheckRemoteCliAuthorization(records({ canvas, cliHome: origin }), auth).ok).toBe(true)
+    expect(recheckRemoteCliAuthorization(records({ cliHome: origin }), auth).ok).toBe(false)
+    expect(recheckRemoteCliAuthorization(records({ canvas, cliHome: 'https://other.example' }), auth).ok).toBe(false)
+    expect(recheckRemoteCliAuthorization(records({ canvas }), auth).ok).toBe(false)
   })
 
   it('node-fact: a joined session id, its pseudo-handle, or a live node label', () => {

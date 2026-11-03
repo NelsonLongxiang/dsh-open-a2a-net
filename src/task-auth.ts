@@ -14,6 +14,7 @@
  */
 import { createHash } from 'node:crypto'
 import { CLI_HANDLE_RE } from './cli-deposit.ts'
+import { cliHomeOrigin } from './cli-home.ts'
 
 /** The admission basis (closed set, design §2.2). */
 export type Via = 'host-face' | 'joined-session' | 'canvas-member' | 'peer-org' | 'cli-deposit' | 'open'
@@ -270,7 +271,7 @@ export function callerAdmission(r: AdmissionRecords, caller: string, targetTeam?
     if (basis.length === 0) return refused(`remote CLI ${caller} has no operator-established canvas link`)
     const home = r.cliHomeOf?.(caller)
     if (home === undefined) return refused(`remote CLI ${caller} home is not pinned`)
-    if (cliProof?.bound !== true || cliProof.origin !== home || cliProof.viaUrl !== home) return refused(`remote CLI ${caller} signer does not match pinned home`)
+    if (cliProof?.bound !== true || cliHomeOrigin(cliProof.origin) !== home || cliHomeOrigin(cliProof.viaUrl) !== home) return refused(`remote CLI ${caller} signer does not match pinned home`)
     if (cliProof.online !== true) return refused(`remote CLI ${caller} is offline or home card could not be read`)
     return admitted('remote-ref-cli', basis)
   }
@@ -283,6 +284,16 @@ export function callerAdmission(r: AdmissionRecords, caller: string, targetTeam?
   // gh#45: a deposited CLI handle is a published node fact of this host.
   if (r.cliDeposited(caller)) return admitted('cli-deposit')
   return refused(`caller_session "${caller}" matches no node fact on this host (joined session id, live node label, or deposited CLI handle) — free-form caller labels are self-description and are not admissible (N3). Pass caller_session as <zone>/<id8> with an operator-established link.`)
+}
+
+/** Revalidate only mutable operator authority, not already-verified birth-time identity or liveness. */
+export function recheckRemoteCliAuthorization(r: AdmissionRecords, auth: TaskAuthorization): Admission {
+  if (!r.teamScopeRouting) return admitted('scope-off')
+  const basis = r.canvasNames().filter(name => r.canvasRemoteMembersOf(name).includes(auth.caller)).map(name => r.canvasTeamOf(name))
+  if (basis.length === 0) return refused(`remote CLI ${auth.caller} has no operator-established canvas link`)
+  const home = r.cliHomeOf?.(auth.caller)
+  if (home === undefined || home !== cliHomeOrigin(auth.carrier_url)) return refused(`remote CLI ${auth.caller} pinned home changed`)
+  return admitted('remote-ref-cli', basis)
 }
 
 /**

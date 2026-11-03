@@ -110,9 +110,25 @@ describe('CanvasStore', () => {
     expect(a.addMember('ops', cli, 'https://home.example/path')).toBe(false)
     expect(a.addMember('ops', cli, 'https://home.example')).toBe(true)
     expect(a.cliHomeOf(cli)).toBe('https://home.example')
+    expect(a.addMember('ops', cli, 'https://attacker.example')).toBe(false)
+    a.create('other')
+    expect(a.addMember('other', cli, 'https://attacker.example')).toBe(false)
+    expect(a.cliHomeOf(cli)).toBe('https://home.example')
+    expect(a.addMember('ops', cli, 'https://replacement.example', { replaceHome: true })).toBe(true)
+    expect(a.cliHomeOf(cli)).toBe('https://replacement.example')
     expect(a.addMember('ops', 'ordinary/12345678', 'https://home.example')).toBe(false)
     a.dropMember(cli)
     expect(a.cliHomeOf(cli)).toBeUndefined()
+  })
+
+  it('does not restore an orphan CLI pin or include it in the allowlist inputs', () => {
+    const path = tmpFile()
+    const cli = 'ops-cli/a1b2c3d4e5f60718'
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, JSON.stringify({ teams: [{ name: 'ops', members: [] }], cliHome: { [cli]: 'https://home.example' } }))
+    const restored = new CanvasStore(path)
+    expect(restored.cliHomeOf(cli)).toBeUndefined()
+    expect(restored.pinnedCliHomes()).toEqual([])
   })
 
   it('a corrupt snapshot degrades to empty, not a crash', () => {

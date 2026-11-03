@@ -32,6 +32,14 @@ async function direct(target: MeshNode, signer: MeshNode, id: string): Promise<R
   return await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ team: 'target/01234567', message: 'CLI linked home report', caller_session: handle, task_id: id, wait: false }) }).then(async r => await r.json() as Record<string, any>)
 }
 
+async function peerOp(target: MeshNode, signer: MeshNode, body: unknown): Promise<Record<string, any>> {
+  const url = target.baseUrl + '/a2a/canvas-op'
+  const privateKey = createPrivateKey(readFileSync(join(signer.home, 'a2a', 'node-key.pem'), 'utf8'))
+  const headers = signOriginClaim({ url, method: 'POST' }, { caller: signer.team, callerUrl: signer.baseUrl, privateKey, unbound: false, now: Date.now() })
+  return await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) }).then(async r => await r.json() as Record<string, any>)
+}
+const pinOf = (target: MeshNode): string | undefined => JSON.parse(readFileSync(join(target.home, 'a2a', 'canvas.json'), 'utf8')).cliHome?.[handle]
+
 describe('#222 F1 remote CLI pinned-home admission (real hosts; scope on)', () => {
   it('one linked home pins on add and its bound signer delivers with carrier_url audit', async () => {
     const { target, homes } = await pair()
@@ -68,6 +76,60 @@ describe('#222 F1 remote CLI pinned-home admission (real hosts; scope on)', () =
       expect((await link(target)).ok).toBe(true)
       await deposit(homes[1]!)
       expect((await direct(target, homes[1]!, 'direct-cli-home-forged')).error).toContain('signer does not match pinned home')
+    } finally { await target.dispose(); for (const home of homes) await home.dispose() }
+  }, 20_000)
+  it('a linked peer cannot create or replace a CLI pin through signed canvas ops or the fleet relay', async () => {
+    const { target, homes } = await pair(true)
+    try {
+      await deposit(homes[0]!)
+      expect((await peerOp(target, homes[0]!, { op: 'add-member', name: 'ops', id: handle })).ok).toBe(true)
+      expect(pinOf(target)).toBeUndefined() // peer-side composition never auto-pins
+      expect((await link(target)).ok).toBe(true)
+      await deposit(homes[1]!)
+      const attack = await peerOp(target, homes[1]!, { op: 'add-member', name: 'ops', id: handle, home: homes[1]!.baseUrl })
+      expect(attack.ok).toBe(false)
+      expect(attack.error).toContain('local control')
+      expect((await peerOp(target, homes[1]!, { op: 'add-member', name: 'ops', id: handle })).ok).toBe(true)
+      expect((await post(homes[1]!.baseUrl, '/__dsh_a2a/fleet-canvas-op', { peer: target.baseUrl, op: 'add-member', name: 'ops', id: handle, home: homes[1]!.baseUrl })).ok).toBe(true)
+      expect(pinOf(target)).toBe(homes[0]!.baseUrl)
+      expect((await direct(target, homes[1]!, 'direct-cli-peer-pin-attack')).routed).not.toBe(true)
+      expect((await direct(target, homes[0]!, 'direct-cli-original-pin')).routed).toBe(true)
+      expect((await link(target)).ok).toBe(true)
+      expect(pinOf(target)).toBe(homes[0]!.baseUrl)
+      expect((await link(target, homes[1]!.baseUrl + '/')).ok).toBe(true) // only explicit local control may re-pin
+      expect(pinOf(target)).toBe(homes[1]!.baseUrl)
+      expect((await direct(target, homes[0]!, 'direct-cli-old-pin')).routed).not.toBe(true)
+      expect((await direct(target, homes[1]!, 'direct-cli-local-repin')).routed).toBe(true)
+    } finally { await target.dispose(); for (const home of homes) await home.dispose() }
+  }, 30_000)
+  it('link-time fresh reads do not treat an unreadable linked home as absent', async () => {
+    const { target, homes } = await pair(true)
+    try {
+      await deposit(homes[0]!)
+      expect((await link(target)).ok).toBe(true) // cache both host cards before the second CLI publishes
+      expect((await post(target.baseUrl, '/__dsh_a2a/canvas', { action: 'remove-member', name: 'ops', id: handle })).ok).toBe(true)
+      await deposit(homes[1]!)
+      await homes[0]!.dispose()
+      expect((await link(target)).ok).toBe(true)
+      expect(pinOf(target)).toBeUndefined()
+      expect((await direct(target, homes[1]!, 'direct-cli-incomplete-candidates')).error).toContain('home is not pinned')
+      expect((await link(target, homes[1]!.baseUrl)).ok).toBe(true) // fresh successful explicit candidate remains selectable
+      expect(pinOf(target)).toBe(homes[1]!.baseUrl)
+    } finally { await target.dispose(); await homes[1]!.dispose() }
+  }, 30_000)
+  it('allowlist observation rechecks only the CLI link and pinned carrier, not old request signatures', async () => {
+    const { target, homes } = await pair()
+    try {
+      await deposit(homes[0]!)
+      expect((await link(target)).ok).toBe(true)
+      const task = 'direct-cli-observer'
+      expect((await direct(target, homes[0]!, task)).routed).toBe(true)
+      await post(target.baseUrl, '/__dsh_a2a/canvas', { action: 'create', name: 'unrelated' })
+      const state = await fetch(target.baseUrl + '/__dsh_a2a/state').then(async r => await r.json() as Record<string, any>)
+      expect(state.authorization.affected.flatMap((entry: any) => entry.tasks).some((row: any) => row.taskId === task)).toBe(false)
+      await post(target.baseUrl, '/__dsh_a2a/canvas', { action: 'remove-member', name: 'ops', id: handle })
+      const revoked = await fetch(target.baseUrl + '/__dsh_a2a/state').then(async r => await r.json() as Record<string, any>)
+      expect(revoked.authorization.affected.flatMap((entry: any) => entry.tasks).some((row: any) => row.taskId === task && row.verdict === 'would-revoke')).toBe(true)
     } finally { await target.dispose(); for (const home of homes) await home.dispose() }
   }, 20_000)
   it('a home card marking its CLI row OFFLINE refuses delivery even from the pinned signer', async () => {

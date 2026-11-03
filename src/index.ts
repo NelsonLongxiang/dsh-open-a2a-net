@@ -58,7 +58,7 @@ import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
 import { isRootOriginUrl, sameMountedUrl, signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
 import { AuthObserver, type AffectedEntry } from './auth-observer.ts'
-import { allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type SettlementMode, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry, type RemoteCliProof } from './task-auth.ts'
+import { allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type SettlementMode, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry, type RemoteCliProof, recheckRemoteCliAuthorization } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
 // `ctx.timer` on Context; the runtime service is mounted by app compositions.
@@ -2837,7 +2837,7 @@ export function apply(ctx: Context, config: Config): void {
       cause,
       rows: () => taskLedger.list(),
       // A local-candidate record (#139) is judged as the local candidate admits; every other one by the wire face.
-      judge: (caller, target, ingress) => (ingress === 'local' ? localCandidateAdmission(admissionRecords, caller, target) : callerAdmission(admissionRecords, caller, target)),
+      judge: (caller, target, ingress, auth) => auth.admission_rule === 'remote-ref-cli' ? recheckRemoteCliAuthorization(admissionRecords, auth) : (ingress === 'local' ? localCandidateAdmission(admissionRecords, caller, target) : callerAdmission(admissionRecords, caller, target)),
     })
     if (entry === undefined) return
     const revoke = entry.tasks.filter(task => task.verdict === 'would-revoke').length
@@ -2921,7 +2921,6 @@ export function apply(ctx: Context, config: Config): void {
       config,
       cliDeposits,
       canvasStore,
-      cliHomeForAdd,
       canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
       sessionNodes,
       joinedSessions,
@@ -3254,9 +3253,13 @@ export function apply(ctx: Context, config: Config): void {
 
   async function cliHomeForAdd(handle: string, requested?: unknown) {
     if (!CLI_HANDLE_RE.test(handle)) return decideCliHome(handle, requested, [])
-    const candidates = await mapBounded(peerStore.list(), 6, async url => ({
-      url, card: await cachedCardFetch(url), linked: peerLinkState(url).link === 'linked',
-    }))
+    const candidates = await mapBounded(peerStore.list(), 6, async url => {
+      // A failed read cannot prove a tracked host is unlinked (especially after a cold boot).
+      // Conservatively leave automatic ownership unknown; explicit fresh choices still work.
+      const card = await fetchPeerCard(url).catch(() => undefined)
+      if (card !== undefined) cardCache.set(url, { at: Date.now(), card })
+      return { url, card, linked: card === undefined || peerLinkState(url).link === 'linked' }
+    })
     return decideCliHome(handle, requested, candidates)
   }
 

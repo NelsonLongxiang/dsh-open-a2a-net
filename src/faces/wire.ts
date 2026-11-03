@@ -17,7 +17,6 @@ import type WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { A2aPeerCard } from '../types.ts'
 import { CanvasStore, isRemoteMemberRef, validRemoteMemberRef } from '../canvas-store.ts'
 import { CLI_HANDLE_RE, type CliDepositStore } from '../cli-deposit.ts'
-import type { CliHomeDecision } from '../cli-home.ts'
 import type { IdempotencyStore } from '../idempotency-store.ts'
 import type { JoinedSessions } from '../joined-store.ts'
 import { TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_MAX_LIMIT } from '../session-transcript.ts'
@@ -110,7 +109,6 @@ export interface WireDeps {
   readonly config: Config
   readonly cliDeposits: CliDepositStore
   readonly canvasStore: CanvasStore
-  readonly cliHomeForAdd: (handle: string, requested?: unknown) => Promise<CliHomeDecision>
   readonly canvasNameReserved: (name: string) => boolean
   readonly sessionNodes: Map<string, Agent>
   readonly joinedSessions: JoinedSessions
@@ -190,7 +188,6 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     config,
     cliDeposits,
     canvasStore,
-    cliHomeForAdd,
     canvasNameReserved,
     sessionNodes,
     joinedSessions,
@@ -325,9 +322,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
               if (!canvasStore.hasTeam(name) && canvasNameReserved(name)) payload = { ok: false, error: 'roster reserves this canvas name' }
               else if (name === '' || !memberValid) payload = { ok: false, error: 'name and a member (joined session id, or a zone-qualified remote team handle) are required' }
               else {
-                const pin = await cliHomeForAdd(rawId, body.home)
-                if (!pin.ok) payload = { ok: false, error: pin.error }
-                else { canvasStore.create(name); payload = { ok: canvasStore.addMember(name, rawId, pin.home), members: canvasStore.membersOf(name) } }
+                // A peer may compose references, never decide this operator's CLI home pin.
+                if (body.home !== undefined) payload = { ok: false, error: 'CLI home pins may only be set by this host local control route' }
+                else { canvasStore.create(name); payload = { ok: canvasStore.addMember(name, rawId), members: canvasStore.membersOf(name) } }
               }
             } else if (op === 'remove-member') {
               // Either shape may be stored (an older edit kept the handle): remove both (review of PR #151 P2-1).
@@ -832,7 +829,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                   caller,
                   proof: callerProof,
                   ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}),
-                  ...(admission.rule === 'remote-ref-cli' && claim.ok ? { carrierUrl: claim.callerUrl } : {}),
+                  ...(admission.rule === 'remote-ref-cli' && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}),
                   ingress: 'wire',
                   allowlistVersion: admittedAt.version,
                   target: team,

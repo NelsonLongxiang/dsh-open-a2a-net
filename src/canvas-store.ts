@@ -216,8 +216,9 @@ export class CanvasStore {
    * @param name - the existing team name.
    * @param id - the member session id.
    */
-  addMember(name: string, id: string, home?: string): boolean {
+  addMember(name: string, id: string, home?: string, options: { replaceHome?: boolean } = {}): boolean {
     if (id === '' || (home !== undefined && (!CLI_HANDLE_RE.test(id) || !validHomeOrigin(home)))) return false
+    if (home !== undefined && this.cliHome[id] !== undefined && this.cliHome[id] !== home && options.replaceHome !== true) return false
     const entry = this.teams.find(t => t.name === name)
     if (entry === undefined) return false
     if (entry.members.includes(id)) {

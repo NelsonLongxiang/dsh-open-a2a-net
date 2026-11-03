@@ -3,9 +3,9 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "821999b6647e9fb0621e1b3fa9fbe1c9983fb77f0f85ec2e4b5192d59e24d477",
-    "src/faces/admin.ts": "c26d66fde2fe1432c1322e8cda337255adee4df08042ed6b36dcdc8b0ebd1ab0",
-    "src/canvas-store.ts": "e511ad39715d123f349255e9f971acffeb49cc5064fd0985b5d05fb50e9df675",
+    "src/index.ts": "d34ccb813dfb8164a3e565b2ad39912024a32e054f40a8297dfe41e5f405eab0",
+    "src/faces/admin.ts": "07c2848085d0867819d05b9ed33f7a3c901cc9e80f86105900c082d790cd8420",
+    "src/canvas-store.ts": "c612b9b8e03377fec827978addaabf4ce0762a52769bfa15263bd873fbfdedde",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "a8e203feb252f0c5d21f98be6ecc45c84d33f867726331a64823f40d68578a2e",
     "nexus-stage/src/workbench.ts": "c41607b0071525b3c3f92d2fab087e110feb20602c73c1548f520ae2fedcef69",
@@ -19,9 +19,9 @@
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
-    "src/faces/wire.ts": "277f6d38450288b3f072bd0557b0cf3dfff4f66fe29c62a720e3023e116563f0",
+    "src/faces/wire.ts": "10512069f7bb05cb53f357ed42d7d952b1c91079f410d97b446b4c9108378f35",
     "src/faces/canvas-notify.ts": "7153f7cb2b6c985825edde55809d47d3a2a14e652d69e55f6d1a72cd9f6d50d9",
-    "src/task-auth.ts": "373d14970ffcae53c9ea58219103d49d7df085aee52a6bde0d0205c8519002d6",
+    "src/task-auth.ts": "8558710d33b37f3e261eded23b6ca971572019a5dccb05ab5e8d8bd222095717",
     "src/origin-claim.ts": "d467153656bd5592785597e4a81d3686f0b4f91cac38705ecb18d4cc74f8d22c",
     "src/tools/info.ts": "fb04be2ec3324287045a782ffd6e2c486db1583f1929d2d4cce21b137f3a7a5e",
     "src/tools/act.ts": "983f78c58b8c886b39b5af3f2cf474a1a47e4d03b91fedf5ed581aba3225bed2",
@@ -86,19 +86,19 @@
     {
       "page": "p1-arch",
       "cell": "b5",
-      "ref": "src/task-auth.ts:109",
+      "ref": "src/task-auth.ts:110",
       "expect": "export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTeam?: string): Admission {"
     },
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:3673",
+      "ref": "src/index.ts:3676",
       "expect": "const sharedCanvas = canvasStore.list().some(name => {"
     },
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/index.ts:3682",
+      "ref": "src/index.ts:3685",
       "expect": "let orgShared = false"
     },
     {
@@ -116,19 +116,19 @@
     {
       "page": "p1-arch",
       "cell": "c2",
-      "ref": "src/faces/wire.ts:527",
+      "ref": "src/faces/wire.ts:524",
       "expect": "path: '/a2a/direct',"
     },
     {
       "page": "p1-arch",
       "cell": "c3",
-      "ref": "src/faces/wire.ts:369",
+      "ref": "src/faces/wire.ts:366",
       "expect": "path: '/a2a/log',"
     },
     {
       "page": "p1-arch",
       "cell": "c4",
-      "ref": "src/faces/wire.ts:448",
+      "ref": "src/faces/wire.ts:445",
       "expect": "path: '/a2a/query',"
     },
     {
@@ -146,7 +146,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:3047",
+      "ref": "src/index.ts:3046",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -224,19 +224,19 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:3872",
+      "ref": "src/index.ts:3875",
       "expect": "const callerNodeId = originAgentId"
     },
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/task-auth.ts:136",
+      "ref": "src/task-auth.ts:137",
       "expect": "if (r.canvasRemoteMembersOf(name).includes(caller)) declare(r.canvasTeamOf(name), 'remote-ref-samezone')"
     },
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/task-auth.ts:138",
+      "ref": "src/task-auth.ts:139",
       "expect": "const ownHandles = new Set<string>([r.zone, ...r.joined().map(id => `${r.zone}/${r.id8(id)}`)])"
     },
     {
@@ -266,7 +266,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3323",
+      "ref": "src/index.ts:3326",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
@@ -332,7 +332,7 @@
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/faces/wire.ts:711",
+      "ref": "src/faces/wire.ts:708",
       "expect": "if (refuseIfFlooded(caller, message, team, taskId, res)) return"
     },
     {
@@ -344,7 +344,7 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/wire.ts:186",
+      "ref": "src/faces/wire.ts:184",
       "expect": "export function registerWireFaces(webServer: WebServer, d: WireDeps): void {"
     },
     {

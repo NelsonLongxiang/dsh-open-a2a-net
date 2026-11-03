@@ -604,7 +604,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
     path: '/__dsh_a2a/fleet-canvas-op',
     handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
       readJsonBody(req, res, async (body) => {
-        const { peer, op, name, id, home: cliHome } = body as { peer?: unknown; op?: unknown; name?: unknown; id?: unknown; home?: unknown }
+        const { peer, op, name, id } = body as { peer?: unknown; op?: unknown; name?: unknown; id?: unknown }
         const peerUrl = typeof peer === 'string' ? peer : ''
         const opV = typeof op === 'string' ? op : ''
         const nameV = typeof name === 'string' ? name : ''
@@ -628,7 +628,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             headers: { 'Content-Type': 'application/json', ...originClaimHeaders({ url: target, method: 'POST' }) },
             // A local session id means nothing on the peer: send its zone/id8 handle (the workbench
             // drops a local card into a remote frame with its raw session id, which the peer refused).
-            body: JSON.stringify({ op: opV, name: nameV, ...(opV === 'add-member' || opV === 'remove-member' ? { id: idV !== '' && !isRemoteMemberRef(idV) && (sessionNodes.has(idV) || joinedSessions.has(idV)) ? `${config.team}/${id8(idV)}` : idV } : {}), ...(opV === 'add-member' && cliHome !== undefined ? { home: cliHome } : {}) }),
+            body: JSON.stringify({ op: opV, name: nameV, ...(opV === 'add-member' || opV === 'remove-member' ? { id: idV !== '' && !isRemoteMemberRef(idV) && (sessionNodes.has(idV) || joinedSessions.has(idV)) ? `${config.team}/${id8(idV)}` : idV } : {}) }),
             signal: AbortSignal.timeout(15_000),
           })
           const raw = await reply.text()
@@ -813,7 +813,9 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             if (!pin.ok) payload = JSON.stringify({ ok: false, error: pin.error })
             else {
               canvasStore.create(name)
-              payload = JSON.stringify({ ok: canvasStore.addMember(name, id, pin.home), teams: canvasStore.list(), members: canvasStore.membersOf(name) })
+              const explicitHome = (body as { home?: unknown }).home !== undefined
+              const home = explicitHome ? pin.home : canvasStore.cliHomeOf(id) ?? pin.home
+              payload = JSON.stringify({ ok: canvasStore.addMember(name, id, home, { replaceHome: explicitHome }), teams: canvasStore.list(), members: canvasStore.membersOf(name) })
             }
           }
         } else if (action === 'remove-member') {

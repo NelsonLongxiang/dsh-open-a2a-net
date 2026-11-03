@@ -14,6 +14,12 @@ describe('CLI home pin at the operator link gesture', () => {
     expect(decideCliHome(handle, undefined, [row('https://one.test'), row('https://one.test/alias')])).toEqual({ ok: true, home: 'https://one.test' })
     expect(decideCliHome(handle, undefined, [row('https://one.test'), row('https://two.test')])).toEqual({ ok: true })
   })
+  it('an unreadable linked host prevents automatic pinning, but an explicit verified choice remains available', () => {
+    const candidates = [row('https://attacker.test'), { url: 'https://home.test', linked: true }]
+    expect(decideCliHome(handle, undefined, candidates)).toEqual({ ok: true })
+    expect(decideCliHome(handle, 'https://attacker.test/', candidates)).toEqual({ ok: true, home: 'https://attacker.test' })
+    expect(decideCliHome(handle, 'https://home.test', candidates).ok).toBe(false)
+  })
   it('accepts explicit home only when its linked host lists that exact CLI handle', () => {
     const candidates = [row('https://one.test'), row('https://two.test', false), row('https://three.test', true, false)]
     expect(decideCliHome(handle, 'https://one.test', candidates)).toEqual({ ok: true, home: 'https://one.test' })
