@@ -92,6 +92,26 @@ describe('#91 F1b — stage face and pull face', () => {
     } finally { await a.dispose() }
   }, 60_000)
 
+  it('review R1: a CLI handle proves exactly itself — not H/child — and its budget cannot be rotated away by renaming the caller', async () => {
+    const { a, key, face } = await hostWithCli()
+    try {
+      // A grant to H/victim is not H's to pull.
+      await stage(a, '受害者的', `${HANDLE}/victim`)
+      const child = await pull(a, sha('受害者的'), `${HANDLE}/victim`, sign(key, 'ops-cli', face))
+      expect(child.status).toBe(403)
+      expect(((await child.json()) as { code?: unknown }).code).toBe('untrusted-origin')
+      // Nor as H itself: the handle is no zone, so a grant to H/victim does not cover H.
+      const asSelf = await pull(a, sha('受害者的'), HANDLE, sign(key, 'ops-cli', face))
+      expect(asSelf.status).toBe(403)
+      expect(((await asSelf.json()) as { code?: unknown }).code).toBe('not-granted')
+      // H's own grant: 16 pulls, then a renamed caller_session is no fresh budget (it does not even prove).
+      await stage(a, '自己的', HANDLE)
+      for (let i = 0; i < BLOB_PULLS_PER_MINUTE; i++) expect((await pull(a, sha('自己的'), HANDLE, sign(key, 'ops-cli', face))).status).toBe(200)
+      expect((await pull(a, sha('自己的'), HANDLE, sign(key, 'ops-cli', face))).status).toBe(429)
+      for (let i = 0; i < 3; i++) expect((await pull(a, sha('自己的'), `${HANDLE}/rotate-${String(i)}`, sign(key, 'ops-cli', face))).status).toBe(403)
+    } finally { await a.dispose() }
+  }, 60_000)
+
   it('a blob whose bytes changed on disk is gone (410), never served', async () => {
     const { a, key, face } = await hostWithCli()
     try {
@@ -155,6 +175,10 @@ describe('#91 F1b — a peer HOST pulls with the audience-bound envelope only', 
       expect(((await post({ action: 'add-member', name: 'ops', id: 'market/aaaaaaaa' })) as { ok?: boolean }).ok).toBe(true)
       await stage(a, '队内件', 'dsh/canvas/ops')
       expect((await pull(a, sha('队内件'), 'market/bbbbbbbb', envelope())).status).toBe(200)
+      // The budget is the market HOST's (its proven zone), not each session label it names (review R1):
+      // 2 served pulls so far (refusals spend nothing); 14 more under rotating session labels fill it, the next is refused.
+      for (let i = 0; i < BLOB_PULLS_PER_MINUTE - 2; i++) expect((await pull(a, sha('队内件'), `market/rot${String(i).padStart(5, '0')}`, envelope())).status).toBe(200)
+      expect((await pull(a, sha('队内件'), 'market/cccccccc', envelope())).status).toBe(429)
     } finally {
       srv.close()
       await a.dispose()
@@ -176,5 +200,10 @@ describe('grantAdmits (design §3.2)', () => {
     // Another host's same-named canvas team is a different team: this host's members do not count.
     expect(grantAdmits('zz/canvas/delivery', 'peer/cccc3333', 'peer', 'dsh', members)).toBe(false)
     expect(grantAdmits('dsh/canvas/', 'peer/cccc3333', 'peer', 'dsh', () => ['peer/aaaa1111'])).toBe(false)
+    // A CLI handle is an identity, never a zone (review R1): only its exact grant.
+    const H = 'ops-cli/a1b2c3d4e5f60718'
+    expect(grantAdmits(H, H, H, 'dsh', none, true)).toBe(true)
+    expect(grantAdmits(`${H}/victim`, H, H, 'dsh', none, true)).toBe(false)
+    expect(grantAdmits('dsh/canvas/delivery', H, H, 'dsh', () => [H], true)).toBe(false)
   })
 })

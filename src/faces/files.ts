@@ -8,7 +8,7 @@
  *   deposited CLI identity proves its own handle. The caller must then match a live grant's `to`:
  *   the same label, a target the verified signer's zone covers (that host answers for its own
  *   sessions and canvas teams), or a canvas team of THIS host with a member on the verified host.
- *   A refusal never says whether the blob exists. Pulls are rate-limited per caller.
+ *   A refusal never says whether the blob exists. Pulls are rate-limited per proven signer.
  * - `POST /__dsh_a2a/blob?to=<team>&name=<file>` — the control-gated STAGE face (CLI `file send`,
  *   design §3.4): raw bytes in, a grant out. No peer can write into the store.
  * @module @nelsonlongxiang/dsh-open-a2a-net/faces/files
@@ -23,9 +23,9 @@ import { isRootOriginUrl } from '../origin-claim.ts'
 import { claimCovers } from '../task-auth.ts'
 import type { OriginClaimResult } from './wire.ts'
 
-/** Pulls per caller in a sliding minute (design §8; the FloodGuard figure). */
+/** Pulls per proven signer (host zone or CLI handle) in a sliding minute (design §8; the FloodGuard figure). */
 export const BLOB_PULLS_PER_MINUTE = 16
-/** Distinct callers the pull limiter remembers; a full table refuses new callers rather than forgetting live ones. */
+/** Distinct signers the pull limiter remembers; a full table refuses new signers rather than forgetting live ones. */
 const PULL_CALLERS_MAX = 1024
 
 export interface FileFaceDeps {
@@ -41,13 +41,16 @@ export interface FileFaceDeps {
 }
 
 /**
- * Whether a grant's target lets this proven caller pull (design §3.2): the same label; a target the
- * verified signer's zone covers; or a canvas team of THIS host (`<zone>/canvas/<name>`, this zone
- * only — another host's same-named team is a different team) with a member on the signer's host.
- * `caller` is already proven covered by `signer`.
+ * Whether a grant's target lets this proven caller pull (design §3.2): the same label; for a HOST
+ * signer, also a target its zone covers, or a canvas team of THIS host (`<zone>/canvas/<name>`, this
+ * zone only — another host's same-named team is a different team) with a member on the signer's
+ * host. A CLI handle is an identity, never a zone (review of PR #208 R1): it admits only its own
+ * exact grant. `caller` is already proven by `signer`.
  */
-export function grantAdmits(to: string, caller: string, signer: string, zone: string, localCanvasMembers: (name: string) => readonly string[]): boolean {
-  if (to === caller || claimCovers(to, signer)) return true
+export function grantAdmits(to: string, caller: string, signer: string, zone: string, localCanvasMembers: (name: string) => readonly string[], cli = false): boolean {
+  if (to === caller) return true
+  if (cli) return false
+  if (claimCovers(to, signer)) return true
   const prefix = `${zone}/canvas/`
   return to.startsWith(prefix) && to.length > prefix.length && localCanvasMembers(to.slice(prefix.length)).some(member => claimCovers(member, signer))
 }
@@ -65,14 +68,14 @@ export function registerFileFaces(webServer: WebServer, d: FileFaceDeps): void {
     res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
     res.end(payload)
   }
-  /** One more pull for `caller` inside the minute, or false when it is over budget (or the table is full). */
-  const takePull = (caller: string): boolean => {
+  /** One more pull for a proven signer inside the minute, or false when it is over budget (or the table is full). */
+  const takePull = (signer: string): boolean => {
     const at = now()
     for (const [key, times] of pulls) if (times.every(t => at - t >= 60_000)) pulls.delete(key)
-    const recent = (pulls.get(caller) ?? []).filter(t => at - t < 60_000)
+    const recent = (pulls.get(signer) ?? []).filter(t => at - t < 60_000)
     if (recent.length >= BLOB_PULLS_PER_MINUTE) return false
-    if (!pulls.has(caller) && pulls.size >= PULL_CALLERS_MAX) return false
-    pulls.set(caller, [...recent, at])
+    if (!pulls.has(signer) && pulls.size >= PULL_CALLERS_MAX) return false
+    pulls.set(signer, [...recent, at])
     return true
   }
 
@@ -95,14 +98,16 @@ export function registerFileFaces(webServer: WebServer, d: FileFaceDeps): void {
       if (caller === '') { refuse(403, 'untrusted-origin', 'caller_session is required'); return }
       const claim = await verifyOriginClaim(req, { cli: true })
       if (!claim.ok) { refuse(403, 'untrusted-origin', `OriginClaim verification failed (${claim.reason}) — a file is pulled only with a signed envelope`); return }
+      // A deposited CLI handle proves exactly itself (R1: `H/child` is not H); a host proves its zone.
       const proven = claim.cli === true
-        ? claimCovers(caller, claim.caller)
+        ? caller === claim.caller
         : claim.bound === true && isRootOriginUrl(claim.callerUrl) && claimCovers(caller, claim.caller)
       if (!proven) { refuse(403, 'untrusted-origin', 'the envelope does not prove this caller (it must be the audience-bound form, signed from a root card URL whose zone covers caller_session)'); return }
-      const grant = blobStore.list().find(g => g.sha256 === sha256 && grantAdmits(g.to, caller, claim.caller, config.team, name => canvasStore.membersOf(name)))
+      const grant = blobStore.list().find(g => g.sha256 === sha256 && grantAdmits(g.to, caller, claim.caller, config.team, name => canvasStore.membersOf(name), claim.cli === true))
       // One answer for "no such blob", "expired" and "not yours": a refusal is no existence oracle.
       if (grant === undefined) { refuse(403, 'not-granted', 'no live grant lets this caller pull that file'); return }
-      if (!takePull(caller)) { refuse(429, 'rate-limited', `at most ${String(BLOB_PULLS_PER_MINUTE)} pulls per caller per minute`); return }
+      // Budgeted by the PROVEN signer (a host zone or a CLI handle), never the self-described label (R1).
+      if (!takePull(claim.caller)) { refuse(429, 'rate-limited', `at most ${String(BLOB_PULLS_PER_MINUTE)} pulls per signer per minute`); return }
       const bytes = blobStore.read(grant)
       if (bytes === undefined) { refuse(410, 'gone', 'the file is no longer stored on this host'); return }
       recordActivity('in', 'blob', caller, true)
