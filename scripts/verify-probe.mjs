@@ -8,17 +8,17 @@
  *
  * 采集面：
  *   repo_facts     仓库事实（版本、HEAD、工作树是否干净、dist 是否在库）
- *   quality_gates  质量门禁（typecheck / test:unit / test:wire / verify:nexus）
+ *   quality_gates  质量门禁（typecheck / verify:docs / test:unit / test:wire / verify:nexus）
  *   runtime_probes 3081 运行时探针（nexus 页 / state 面）
- *   release_gate   发布闸门推导（候选就位、私仓未发版）
+ *   release_gate   发布闸门推导（候选就位、公网npmjs精确版本未发布）
  *
  * 用法：node scripts/verify-probe.mjs [--base http://127.0.0.1:3081] [--out verify/snapshot.sqlite]
  * 退出码：0 = 采集完成（不代表判定结果；判定由 verify run 出报告）。
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -67,6 +67,7 @@ const repoFacts = [
 /* ── 2. 质量门禁（真命令，限时） ────────────────────────── */
 const gates = [
   run("typecheck", "pnpm", ["run", "typecheck"], 180_000),
+  run("verify:docs", "pnpm", ["run", "verify:docs"], 180_000),
   run("test:unit", "pnpm", ["run", "test:unit"], 300_000),
   run("test:wire", "pnpm", ["run", "test:wire"], 300_000),
   run("verify:nexus", "pnpm", ["run", "verify:nexus"], 600_000),
@@ -77,15 +78,15 @@ const probeRuntime = async () => {
   const rows = [];
   const t = new Date().toISOString();
   try {
-    const page = await fetch(`${BASE}/__dsh_a2a_nexus/`);
+    const page = await fetch(`${BASE}/__dsh_a2a_nexus/`, { signal: AbortSignal.timeout(8_000) });
     await page.text();
-    rows.push({ endpoint: "nexus_page", http_status: page.status, version: null, peers: null, sessions_live: null, sessions_cold: null, remote_rows: null, ledger_pending: null, ledger_dead: null, ledger_archived: null, checked_at: t });
+    rows.push({ endpoint: "nexus_page", http_status: page.status, version: null, peers: null, isolated: null, sessions_live: null, sessions_cold: null, remote_rows: null, ledger_pending: null, ledger_dead: null, ledger_archived: null, checked_at: t });
   } catch (e) {
-    rows.push({ endpoint: "nexus_page", http_status: 0, version: null, peers: null, sessions_live: null, sessions_cold: null, remote_rows: null, ledger_pending: null, ledger_dead: null, ledger_archived: null, checked_at: t });
+    rows.push({ endpoint: "nexus_page", http_status: 0, version: null, peers: null, isolated: null, sessions_live: null, sessions_cold: null, remote_rows: null, ledger_pending: null, ledger_dead: null, ledger_archived: null, checked_at: t });
     console.error(`[probe] nexus_page: unreachable (${e.message})`);
   }
   try {
-    const r = await fetch(`${BASE}/__dsh_a2a/state`);
+    const r = await fetch(`${BASE}/__dsh_a2a/state`, { signal: AbortSignal.timeout(8_000) });
     const j = await r.json();
     const sessions = Array.isArray(j.sessions) ? j.sessions : [];
     const live = sessions.filter((s) => s.live).length;
@@ -96,6 +97,7 @@ const probeRuntime = async () => {
       http_status: r.status,
       version: typeof j.version === "string" ? j.version : null,
       peers: cnt(j.peers),
+      isolated: j.isolated === true ? 1 : 0,
       sessions_live: live,
       sessions_cold: cold,
       remote_rows: cnt(j.remote),
@@ -106,7 +108,7 @@ const probeRuntime = async () => {
       checked_at: t,
     });
   } catch (e) {
-    rows.push({ endpoint: "state", http_status: 0, version: null, peers: null, sessions_live: null, sessions_cold: null, remote_rows: null, ledger_pending: null, ledger_dead: null, ledger_archived: null, checked_at: t });
+    rows.push({ endpoint: "state", http_status: 0, version: null, peers: null, isolated: null, sessions_live: null, sessions_cold: null, remote_rows: null, ledger_pending: null, ledger_dead: null, ledger_archived: null, checked_at: t });
     console.error(`[probe] state: unreachable (${e.message})`);
   }
   return rows;
@@ -115,18 +117,25 @@ const runtimeRows = await probeRuntime();
 const stateRow = runtimeRows.find((r) => r.endpoint === "state");
 
 /* ── 4. 发布闸门推导 ────────────────────────────────────── */
-const regView = spawnSync("npm", ["view", `${pkg.name}`, "version"], { cwd: REPO, encoding: "utf8", timeout: 60_000, shell: SHELL });
-const regLatest = (regView.stdout ?? "").trim() || null;
+const regUrl = `https://registry.npmjs.org/${encodeURIComponent(pkg.name)}/${encodeURIComponent(pkg.version)}`;
+let regState = "unverified";
+const regCheckedAt = new Date().toISOString();
+try {
+  const reg = await fetch(regUrl, { signal: AbortSignal.timeout(8_000) });
+  if (reg.status === 404) regState = "absent";
+  else if (reg.ok) { const body = await reg.json(); if (body.version === pkg.version) regState = "published"; }
+  else console.error(`[probe] public npmjs exact version HTTP ${reg.status}`);
+} catch (e) { console.error(`[probe] public npmjs exact version: ${e.message}`); }
 const gateRows = [
   {
     rule: "candidate_on_3081",
     holds: stateRow && stateRow.version === pkg.version ? 1 : 0,
-    detail: `pkg=${pkg.version} 3081=${stateRow?.version ?? "unreachable"} registry=${regLatest ?? "?"}`,
+    detail: `pkg=${pkg.version} 3081=${stateRow?.version ?? "unreachable"} npmjs=${regState}`,
   },
   {
     rule: "unpublished_in_registry",
-    holds: regLatest && regLatest !== pkg.version ? 1 : 0,
-    detail: regLatest === pkg.version ? `registry latest ${regLatest} == candidate ${pkg.version}（已发版 —— 候选期违例）` : `registry latest ${regLatest ?? "none"} != candidate ${pkg.version}`,
+    holds: regState === "absent" ? 1 : 0,
+    detail: `npmjs ${pkg.version} exact version: ${regState}`,
   },
   { rule: "worktree_clean", holds: gitDirty ? 0 : 1, detail: gitDirty ? gitDirty.split("\n").slice(0, 3).join("; ") : "clean" },
 ];
@@ -135,9 +144,7 @@ const gateRows = [
 // 不用工作树本身：.claude/worktrees 里有 pnpm junction 环（walk ELOOP），且 node_modules 是非提交物。
 // 提交面 = git ls-files 的导出 —— 与「提交物」语义严格一致。
 // 位置必须在仓库外（os tmpdir）：放进 repo 的 tmp/ 会被 vitest 当测试树收进 test:wire（实测踩坑 0.6.14）。
-const SUBMISSION = resolve(tmpdir(), "dsh-a2a-submission");
-rmSync(SUBMISSION, { recursive: true, force: true });
-mkdirSync(SUBMISSION, { recursive: true });
+const SUBMISSION = mkdtempSync(join(tmpdir(), "dsh-a2a-submission-"));
 const tracked = git(["ls-files"]).split("\n").filter(Boolean);
 for (const rel of tracked) {
   const dest = resolve(SUBMISSION, rel);
@@ -154,13 +161,13 @@ const db = new DatabaseSync(OUT);
 db.exec(`
 CREATE TABLE repo_facts (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE quality_gates (gate TEXT PRIMARY KEY, exit_code INTEGER NOT NULL, passed INTEGER, failed INTEGER, skipped INTEGER, duration_ms INTEGER NOT NULL, stdout_tail TEXT);
-CREATE TABLE runtime_probes (endpoint TEXT PRIMARY KEY, http_status INTEGER, version TEXT, peers INTEGER, sessions_live INTEGER, sessions_cold INTEGER, remote_rows INTEGER, ledger_pending INTEGER, ledger_dead INTEGER, ledger_archived INTEGER, checked_at TEXT NOT NULL);
+CREATE TABLE runtime_probes (endpoint TEXT PRIMARY KEY, http_status INTEGER, version TEXT, peers INTEGER, isolated INTEGER, sessions_live INTEGER, sessions_cold INTEGER, remote_rows INTEGER, ledger_pending INTEGER, ledger_dead INTEGER, ledger_archived INTEGER, checked_at TEXT NOT NULL);
 CREATE TABLE release_gate (rule TEXT PRIMARY KEY, holds INTEGER NOT NULL, detail TEXT);
 `);
 const ins = (sql, rows) => { const s = db.prepare(sql); for (const r of rows) s.run(...r); };
 ins("INSERT INTO repo_facts VALUES (?,?)", repoFacts);
 ins("INSERT INTO quality_gates VALUES (?,?,?,?,?,?,?)", gates.map((g) => [g.gate, g.exit_code, g.passed, g.failed, g.skipped, g.duration_ms, g.stdout_tail]));
-ins("INSERT INTO runtime_probes VALUES (?,?,?,?,?,?,?,?,?,?,?)", runtimeRows.map((r) => [r.endpoint, r.http_status, r.version, r.peers, r.sessions_live, r.sessions_cold, r.remote_rows, r.ledger_pending, r.ledger_dead, r.ledger_archived, r.checked_at]));
+ins("INSERT INTO runtime_probes VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", runtimeRows.map((r) => [r.endpoint, r.http_status, r.version, r.peers, r.isolated, r.sessions_live, r.sessions_cold, r.remote_rows, r.ledger_pending, r.ledger_dead, r.ledger_archived, r.checked_at]));
 ins("INSERT INTO release_gate VALUES (?,?,?)", gateRows.map((g) => [g.rule, g.holds, g.detail]));
 db.close();
 
@@ -169,9 +176,13 @@ const summary = {
   git_head: gitHead.slice(0, 8),
   git_clean: !gitDirty,
   gates: Object.fromEntries(gates.map((g) => [g.gate, { exit: g.exit_code, passed: g.passed, failed: g.failed }])),
-  runtime: Object.fromEntries(runtimeRows.map((r) => [r.endpoint, r.http_status === 200 ? { ok: true, version: r.version, peers: r.peers, dead: r.ledger_dead } : { ok: false, status: r.http_status }])),
+  runtime: Object.fromEntries(runtimeRows.map((r) => [r.endpoint, r.http_status === 200
+    ? { ok: true, source: `${BASE}/${r.endpoint === "state" ? "__dsh_a2a/state" : "__dsh_a2a_nexus/"}`, checked_at: r.checked_at, version: r.version, peers: r.peers, isolated: r.isolated === null ? null : r.isolated === 1, dead: r.ledger_dead }
+    : { ok: false, source: `${BASE}/${r.endpoint === "state" ? "__dsh_a2a/state" : "__dsh_a2a_nexus/"}`, checked_at: r.checked_at, status: r.http_status }])),
   release_gate: Object.fromEntries(gateRows.map((g) => [g.rule, !!g.holds])),
+  release_evidence: { source: regUrl, checked_at: regCheckedAt, exact_version: pkg.version, registry_state: regState },
   snapshot: OUT,
+  submission: SUBMISSION,
 };
 writeFileSync(resolve(REPO, "verify/probe-summary.json"), JSON.stringify(summary, null, 2) + "\n");
 console.log(JSON.stringify(summary, null, 2));
