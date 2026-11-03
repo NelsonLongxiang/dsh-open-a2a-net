@@ -120,6 +120,7 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | `gateAgentLessCalls` | `'audit'` | 宿主侧（无 agent）路由调用：审计，或 `refuse` 拒绝。 |
 | `settlementAuth` | `'observe'` | 结算授权（#114）：`off`、`observe`（记下本会拒绝的，照旧结算）或 `enforce`。 |
 | `asyncNudgeDelayMs` | `120000` | 已投递但未被消费的异步路由，在此延迟后用一行催办重新唤醒目标；`0` 关闭。 |
+| `targetQueueCap` | `3` | 本宿主上同一个目标最多排队这么多条等回执的任务；再来新投递就可见拒收（`-32009 target-queue-full`，不投递）。回执和 CLI 信箱从不拦。`0` 关闭（#224）。 |
 | `taskStaleTtlMs` | `86400000` | 欠账任务的 stale TTL（24h）：过期后 pending 行自动转死信（迟到回执仍可结清）。 |
 | `dshHome` | `''` | 插件状态所用的 DSH home 目录覆盖（`<home>/a2a/…`）；`''` 解析默认 home。 |
 | `cardTtlMs` / `flushTimeoutMs` / `routeTimeoutMs` | 见 schema | 卡片生命周期（48h）与路由时序预算。 |

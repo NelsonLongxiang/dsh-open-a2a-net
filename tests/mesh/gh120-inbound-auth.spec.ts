@@ -97,7 +97,8 @@ describe('#114 S2 inbound authorization record (real host)', () => {
     const srv = createServer((_req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(card)) })
     await new Promise<void>(resolve => srv.listen(0, '127.0.0.1', () => resolve()))
     const farUrl = `http://127.0.0.1:${String((srv.address() as { port: number }).port)}`
-    const a = await bootNode({ name: 'A', session: 'mesh-gh120-claim', team: 'dsh', sessionNodes: true, teamScopeRouting: true, port: await reservePort(), home: tmpHome() })
+    // Several claim shapes land on ONE target to compare their auth records; the per-target queue cap (gh#224) is off here.
+    const a = await bootNode({ name: 'A', session: 'mesh-gh120-claim', team: 'dsh', sessionNodes: true, teamScopeRouting: true, targetQueueCap: 0, port: await reservePort(), home: tmpHome() })
     try {
       expect((await post(`${a.baseUrl}/__dsh_a2a/join`, { id: 'session-0123456789abcdef' })).status).toBe(200)
       // The operator links far/aaaaaaaa as a remote member (N3/N4).
