@@ -89,20 +89,41 @@ export interface SessionLookups {
   readonly local: (session: string) => boolean
 }
 
+/** Host-only marker routeTrunk puts on a route result it built from this host alone (a symbol: no peer JSON can carry it). */
+export const LOCAL_ROUTE: unique symbol = Symbol('a2a.localRoute')
+/** Mark a route result as built on this host alone (host refusals, host-built delivery notes, a clean local session's reply). */
+export function localRoute<T extends object>(value: T): T { return Object.assign(value, { [LOCAL_ROUTE]: true }) }
+
 /**
- * Whether one of this plugin's A2A tools just handed the model text that originated at a peer: a
- * route reply, inbound task briefs, or peer card rows (names, descriptions are self-described).
- * The via to mark the calling session with, or '' when the result carries nothing remote.
+ * gh#198 (owner ruling 2026-11-03 「按建议判据做」): whether one of this plugin's A2A tools just handed the
+ * model content that came from outside this host — a route that reached (or tried) a peer, inbound task
+ * rows, a directory row that is not this host's, a status/probe that names peers. A result built from
+ * this host's own facts alone is not remote. `a2a_route` reads the host-written `peer_content` flag the
+ * tool sets last (so a peer reply cannot set it); anything else defaults to remote.
+ */
+export function peerContentOf(name: string, value: unknown): boolean {
+  const v = value as { peer_content?: unknown; tasks?: unknown; archive?: unknown; teams?: unknown; peers?: unknown; inFlight?: unknown; activity?: unknown; results?: unknown } | null
+  if (v === null || typeof v !== 'object') return false
+  const rows = (x: unknown): unknown[] => (Array.isArray(x) ? x : [])
+  const remotePeer = (row: unknown): boolean => (row as { peer?: unknown } | null)?.peer !== 'local'
+  if (name === 'a2a_route') return v.peer_content !== false
+  if (name === 'a2a_tasks') return rows(v.tasks).length > 0 || rows(v.archive).length > 0
+  if (name === 'a2a_teams') return rows(v.teams).some(row => (row as { local?: unknown } | null)?.local !== true)
+  if (name === 'a2a_status') return rows(v.peers).length > 0 || rows(v.inFlight).some(remotePeer) || rows(v.activity).some(remotePeer)
+  if (name === 'a2a_probe') return rows(v.results).length > 0
+  return false
+}
+
+/**
+ * The via to mark the calling session with after one of the A2A tools returned, or '' when its result
+ * carries nothing from outside this host ({@link peerContentOf}).
  */
 export function toolTaint(name: string, value: unknown): string {
-  const v = value as { ok?: unknown; reply?: unknown; tasks?: unknown; archive?: unknown } | null
-  if (v === null || typeof v !== 'object') return ''
-  // Any answer: a peer can put its text in a failure (an {error} body) as easily as in a reply.
-  if (name === 'a2a_route') return 'a2a-route'
-  if (name === 'a2a_tasks') return (Array.isArray(v.tasks) && v.tasks.length > 0) || (Array.isArray(v.archive) && v.archive.length > 0) ? 'a2a-tasks' : ''
-  if (name === 'a2a_teams' || name === 'a2a_status' || name === 'a2a_probe') return v.ok === true ? name.replace('_', '-') : ''
-  return ''
+  return A2A_READ_TOOLS.has(name) && peerContentOf(name, value) ? name.replace('_', '-') : ''
 }
+
+/** The `tool/result` meta the A2A tools persist, so the log backstop reads the same verdict ({@link sessionSource}). */
+export const peerContentMeta = (name: string) => (_args: unknown, value: unknown): { a2aPeerContent: boolean } => ({ a2aPeerContent: peerContentOf(name, value) })
 
 /**
  * The event-log backstop of the session taint: whether ANY input in the session's log came from
@@ -112,17 +133,35 @@ export function toolTaint(name: string, value: unknown): string {
  */
 export function sessionSource(events: readonly unknown[], others: SessionLookups = { tainted: () => false, local: () => false }): { local: true } | { local: false; via: string; evidence: boolean } {
   let inputs = 0
+  // gh#198: a top-level A2A call whose persisted result says (host-written meta, not an error) that it
+  // carried nothing from outside this host is not evidence. A run_code sub-dispatch has no meta, and an
+  // older log has none either: both stay evidence.
+  const localCalls = new Set<unknown>()
   for (const event of events) {
-    const e = event as { type?: unknown; data?: { name?: unknown; source?: { kind?: unknown; nodeReminder?: unknown; rpcId?: unknown; senderSessionId?: unknown; sessionId?: unknown; references?: unknown } } } | null
+    const r = event as { type?: unknown; data?: { message?: { toolCallId?: unknown; isError?: unknown }; meta?: { a2aPeerContent?: unknown } } } | null
+    if (r?.type === 'tool/result' && r.data?.meta?.a2aPeerContent === false && r.data.message?.isError !== true) localCalls.add(r.data.message?.toolCallId)
+  }
+  for (const event of events) {
+    const e = event as { type?: unknown; data?: { name?: unknown; callId?: unknown; source?: { kind?: unknown; nodeReminder?: unknown; localSender?: unknown; rpcId?: unknown; senderSessionId?: unknown; sessionId?: unknown; references?: unknown } } } | null
     // An A2A tool call in the log (native or a run_code sub-dispatch) is remote evidence: it survives into a
     // fork's inherited prefix, and backs up a mark that was lost.
-    if ((e?.type === 'tool/call' || e?.type === 'tool/ptc-dispatch') && typeof e.data?.name === 'string' && A2A_READ_TOOLS.has(e.data.name)) return { local: false, via: `tool:${e.data.name}`, evidence: true }
+    if ((e?.type === 'tool/call' || e?.type === 'tool/ptc-dispatch') && typeof e.data?.name === 'string' && A2A_READ_TOOLS.has(e.data.name)) {
+      if (e.type === 'tool/call' && e.data.callId !== undefined && localCalls.has(e.data.callId)) continue
+      return { local: false, via: `tool:${e.data.name}`, evidence: true }
+    }
     if (e?.type !== 'user/message') continue
     const source = e.data?.source
     const kind = source?.kind
     if (typeof kind !== 'string') return { local: false, via: 'unknown', evidence: false }
     if (NEUTRAL_SOURCES.has(kind)) continue
     if (kind === 'a2a-relay' && source?.nodeReminder === true) continue
+    // gh#198: an in-process delivery the HOST stamped with its local sender takes that session's taint
+    // (a remote delivery never carries the field: the host builds every relay source itself).
+    if (kind === 'a2a-relay' && typeof source?.localSender === 'string' && source.localSender !== '') {
+      if (others.tainted(source.localSender)) return { local: false, via: 'a2a-relay:tainted', evidence: true }
+      if (!others.local(source.localSender)) return { local: false, via: 'a2a-relay:unknown-sender', evidence: false }
+      continue
+    }
     if (kind === 'a2a-relay') return { local: false, via: kind, evidence: true }
     if (kind === 'user' && typeof source?.rpcId === 'string' && source.rpcId.startsWith('a2a-')) return { local: false, via: 'a2a-nudge', evidence: true }
     const field = DERIVED_SOURCES[kind]

@@ -14,6 +14,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Config } from '../index.ts'
 import type { A2aRouteResult } from '../types.ts'
+import { LOCAL_ROUTE, peerContentMeta } from '../node-self.ts'
 import type { ExposureStore } from '../exposure-store.ts'
 import type { JoinedSessions } from '../joined-store.ts'
 import type { TeamMembershipStore } from '../team-store.ts'
@@ -388,6 +389,8 @@ export function createActTools(deps: ActToolsDeps) {
         async: { type: 'boolean', description: 'Fire-and-forget: deliver and return immediately (delivered:true + task_id) without waiting for the target\'s reply. The target answers by routing a receipt — a message starting "[A2A receipt] task <task_id> <outcome summary>" — back to your team (visible in a2a_status activity), or follow up with the context_id. Prefer async for long-running tasks (minutes to hours).' },
       },
       output: {
+        // gh#198: the host's own verdict on whether this result came from outside this host, persisted on tool/result.
+        presentationMeta: peerContentMeta('a2a_route'),
         schema: {
           type: 'object',
           additionalProperties: true,
@@ -408,12 +411,16 @@ export function createActTools(deps: ActToolsDeps) {
         const requestedTeam = String(args.team ?? '').trim()
         if (exec.agent !== undefined && requestedTeam === config.team) {
           return {
+            peer_content: false,
             ok: false,
             error: `the process face "${config.team}" is the host's own mailbox — model tools must target a member face. Route to a session team handle ("${config.team}/<id8>" from a2a_teams) or a canvas team; receipts and quick dispatch reach the host face on their own paths.`,
             code: -32000,
           }
         }
-        return routeTrunk(args, exec.agent, exec.signal)
+        // gh#198: the host's own flag, written last so a peer's reply fields cannot set it — a result
+        // routeTrunk built on this host alone carries the LOCAL_ROUTE symbol; everything else reached a peer.
+        const { [LOCAL_ROUTE]: local, ...result } = await routeTrunk(args, exec.agent, exec.signal) as Record<string, JsonValue> & { [LOCAL_ROUTE]?: true }
+        return { ...result, peer_content: local !== true }
       },
     }))
   }

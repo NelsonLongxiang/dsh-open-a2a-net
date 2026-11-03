@@ -118,7 +118,7 @@ import { NodeStore } from './node-store.ts'
 import { createNodeBinder, NodeBindings } from './node-bind.ts'
 import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
-import { NodeReviewQueue, SessionTaint, toolTaint } from './node-self.ts'
+import { NodeReviewQueue, SessionTaint, localRoute, toolTaint } from './node-self.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { canvasCandidateMatches, canvasTargetAmbiguous, peerDirectoryRows, routableCallerLabel, sessionCandidateMatches, unroutableCallerNote } from './peer-directory.ts'
@@ -2234,14 +2234,14 @@ export function apply(ctx: Context, config: Config): void {
    * so ui-chat renders the relay body ("来自 X" + full text) instead of an
    * opaque row; omitted when the sender is not meaningfully addressable.
    */
-  function steerRelay(agent: Agent, text: string, sender?: string): void {
-    // N4 session taint: every relay steer carries content from outside this host (a delivery, its nudge or cancel notice).
-    markLineage(agent, 'relay')
+  function steerRelay(agent: Agent, text: string, sender?: string, localFrom?: string): void {
+    // N4/gh#198: a relay steer carries content from outside this host — unless it is an in-process delivery from a clean local session (localFrom), whose taint the target then takes.
+    if (localFrom === undefined || nodeTaint.of(localFrom) !== '') markLineage(agent, 'relay')
     agent.steer({
       id: MessageId(`a2a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`),
       role: 'user',
       content: [{ type: 'text', text }],
-      source: { kind: 'a2a-relay', form: 'relay', ...(sender === undefined ? {} : { senderSessionId: sender }) },
+      source: { kind: 'a2a-relay', form: 'relay', ...(sender === undefined ? {} : { senderSessionId: sender }), ...(localFrom === undefined ? {} : { localSender: localFrom }) },
     })
   }
 
@@ -2491,18 +2491,18 @@ export function apply(ctx: Context, config: Config): void {
    * marker instead of a (false) completion.
    * @param taskId - the correlation key the steered receipt header carries.
    */
-  async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string): Promise<
+  async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string): Promise<
     { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean } | { ok: false; error: string }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
-      return routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader)
+      return routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader, localFrom)
     }
     // Wake-on-route: a cold joined team materializes on demand, then steers.
     const wake = wakeColdTeam(team)
     if (wake.kind === 'flight') {
       return wake.flight.then(
-        agent => routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader),
+        agent => routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader, localFrom),
         (error: unknown) => ({ ok: false, error: `waking the session for team "${team}" failed: ${String(error)}` }) as const,
       )
     }
@@ -2547,7 +2547,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param caller - caller label for the steered prefix.
    * @returns the agent's final reply, or the explicit failure.
    */
-  function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string): Promise<
+  function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string): Promise<
     { ok: true; reply: string; placeholder?: boolean } | { ok: false; error: string }
   > {
     return new Promise((resolve) => {
@@ -2566,7 +2566,7 @@ export function apply(ctx: Context, config: Config): void {
         : `[A2A direct] ${taskId === undefined ? '' : `(task ${taskId}) `}未验证（in-process） ${sanitizeFromClause(from)} (routed to ${team}) sent:`
       const text = `${headerLine}\n\n${message}`
       try {
-        steerRelay(agent, text, caller === '' ? undefined : caller)
+        steerRelay(agent, text, caller === '' ? undefined : caller, localFrom)
       } catch (error) {
         // The waiter was registered above, so the key always holds it; the
         // map-of-arrays stays a plain read.
@@ -3779,16 +3779,16 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
             if (orgShared) break
           }
           if (callerTeams.length === 0 && !sharedCanvas && !orgShared) {
-            return {
+            return localRoute({
               ok: false,
               error: `team-scoped routing is on and this session (${id8(scopeCaller)}) has declared no team membership — a teamless node has no network. Declare one with a2a_team_join (subject to the owner's teamJoinAllowlist)`,
-            }
+            })
           }
           if (!callerTeams.includes(team) && !sharedCanvas && !orgShared) {
-            return {
+            return localRoute({
               ok: false,
               error: `team-scoped routing is on: routing to "${team}" requires declared membership. This session's teams: ${callerTeams.join(', ')}. a2a_team_join can declare it (subject to the owner's teamJoinAllowlist)`,
-            }
+            })
           }
         }
       }
@@ -3833,7 +3833,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // cheapest possible and immune to nested-signal aborts), then direct
       // publishers, then zone delegations, deduplicated by URL.
       const failures: string[] = []
-      if (signal?.aborted) return { ok: false, error: 'route aborted before dispatch', code: -32000 }
+      if (signal?.aborted) return localRoute({ ok: false, error: 'route aborted before dispatch', code: -32000 })
       const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, signal, args.async === true, taskId, callbackAddress, agent === undefined ? undefined : String(agent.id))
       const localBirth = localBirths.get(taskId)
       localBirths.delete(taskId)
@@ -3841,7 +3841,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         if (outcome.ok) {
           // gh#141: a receipt owes no receipt — booking it would strand a row nothing settles.
           if (!routedReceipt) trackOwedTask(taskId, args.team, 'local', outcome, callbackAddress, briefOf(args.message), sender, localBirth)
-          return outcome as unknown as Record<string, JsonValue>
+          // gh#198: host-built delivery notes, or a reply from a clean local session (resolved as routeIntoAgent does), are this host's alone.
+          return ((outcome.bridge === undefined && (outcome.task_status === 'TASK_STATE_DELIVERED' || outcome.task_status === 'TASK_STATE_ABORTED_WAIT' || (t => t !== undefined && nodeTaint.of(String(t.id)) === '')(resolveAgentForTeam(args.team) ?? canvasLiveAgent(parseCanvasTeamName(args.team))))) ? localRoute(outcome) : outcome) as unknown as Record<string, JsonValue>
         }
         failures.push(`local: ${outcome.error}`)
       }
@@ -4062,7 +4063,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         const receiptHint = callerTeam === undefined ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${callerTeam}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
         // #114 S5: the consumption search starts at the pre-steer log length.
         const steerFloor = sessionEventsOf(target).length
-        steerRelay(target, `[A2A direct] (task ${taskId}) 未验证（in-process） ${sanitizeFromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam)
+        steerRelay(target, `[A2A direct] (task ${taskId}) 未验证（in-process） ${sanitizeFromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam, originAgentId)
         armReceiptAutosend(target, taskId, callerTeam, message, steerFloor)
         // #139: the caller's outbound row is born with this admission and the member that received it.
         if (taskIdFromCaller !== undefined) localBirths.set(taskIdFromCaller, localBirthOf(team, callerSession, callerTeam, sessionTeamOf(target)))
@@ -4139,7 +4140,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         }
       }
     }
-    const wait = routeIntoAgent(team, message, callerSession ?? session, taskId)
+    const wait = routeIntoAgent(team, message, callerSession ?? session, taskId, undefined, undefined, originAgentId)
     const aborted = new Promise<never>((_, reject) => {
       signal.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
     })
