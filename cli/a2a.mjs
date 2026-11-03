@@ -39,7 +39,7 @@ const INBOX_CURSOR = join(IDENTITY_DIR, 'inbox.cursor')
 const DEFAULT_HOME = 'http://127.0.0.1:3080'
 const DEFAULT_SKILL_ROOTS = [join(homedir(), '.agents', 'skills')]
 
-const USAGE = `a2a-net CLI — aligned with the plugin's ten model tools ('a2a tools' prints the full map)
+const USAGE = `a2a-net CLI — aligned with the plugin's model tools ('a2a tools' prints the full map)
 
 usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 
@@ -270,10 +270,12 @@ const TOOL_CATALOG = [
   ['a2a_tasks', '账本三层对账：pending（欠回执）/dead（超期）/archived（已结算）'],
   ['a2a_probe', '探活整个 tracked fleet 或单 peer：可达性+往返延迟+失败原因'],
   ['a2a_exposure', '设本会话的网络可见档：linked（下限）/fleet（自愿上调）'],
+  ['a2a_file_send', '把文件暂存在本宿主并授权给目标队，只路由一条引用消息（字节不进消息）'],
+  ['a2a_file_fetch', '按引用从暂存宿主拉取文件，核对大小与 sha256 后落到 a2a-inbox/'],
 ]
 
 function printAlignment() {
-  console.log('插件工具面（十枚）与 CLI 对齐：\n')
+  console.log('插件工具面与 CLI 对齐：\n')
   for (const [tool, desc] of TOOL_CATALOG) console.log(`  ${tool.padEnd(16)} ${desc}`)
   console.log('\nCLI 对齐映射：')
   const map = [
@@ -284,6 +286,7 @@ function printAlignment() {
     ['a2a tasks', 'a2a_tasks', '账本三层（pending/dead/archived）'],
     ['a2a probe', 'a2a_probe', 'peer 可达性（评分/链接/验证，读暖态）'],
     ['a2a report', 'a2a_report', '离网报告（CLI 形态：投给宿主进程队信箱）'],
+    ['a2a file send/fetch', 'a2a_file_send/fetch', '文件通道（CLI 只能从自己的 home 宿主拉取）'],
     ['（N/A）', 'a2a_exposure', '暴露档是会话面概念——CLI 无会话；户口即其可见性'],
     ['（拖卡入队）', 'a2a_team_join/leave', '入队是会话手势——等价物：属主把 CLI 成员卡拖进 canvas 队（画布手势=运营者链接）'],
     ['a2a skills', '（插件无）', '加载本机技能目录输出（CLI 专有）'],
