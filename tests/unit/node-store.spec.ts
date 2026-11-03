@@ -4,7 +4,7 @@
  * CAS on every layer write, quotas, persistence and corrupt-file resilience.
  */
 import { describe, expect, it } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { MUTABLE_SECTIONS, NodeStore, promptSha, QUOTA } from '../../src/node-store.ts'
@@ -250,14 +250,16 @@ describe('NodeStore — disk', () => {
     const dir = root()
     const s = new NodeStore(dir)
     s.create({ name: 'n-1', label: 'before' }, 'h')
-    chmodSync(dir, 0o500)
+    // A directory at the exact temporary-file path makes writeFileSync fail on every OS, even as root.
+    const blocked = join(dir, `nodes.json.${String(process.pid)}.tmp`)
+    mkdirSync(blocked)
     try {
       expect(s.update('n-1', { label: 'after' })).toMatchObject({ ok: false, code: 'unavailable' })
       expect(s.get('n-1')?.label).toBe('before')
       expect(s.create({ name: 'n-2' }, 'h')).toMatchObject({ ok: false, code: 'unavailable' })
       expect(s.get('n-2')).toBeUndefined()
     } finally {
-      chmodSync(dir, 0o700)
+      rmSync(blocked, { recursive: true })
     }
   })
 

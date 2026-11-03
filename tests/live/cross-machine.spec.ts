@@ -20,6 +20,7 @@ const targetTeam = process.env.DSH_A2A_LIVE_TARGET_TEAM ?? ''
 const seeds = liveMesh.split(',').map(url => url.trim()).filter(url => url !== '')
 const runnable = seeds.length > 0
 
+// Real fleet traffic requires explicit DSH_A2A_LIVE_MESH opt-in; ordinary tests must not contact production.
 describe.skipIf(!runnable)('live cross-machine fleet (DSH_A2A_LIVE_MESH)', () => {
   let observer: Awaited<ReturnType<typeof bootNode>> | undefined
 
@@ -60,6 +61,7 @@ describe.skipIf(!runnable)('live cross-machine fleet (DSH_A2A_LIVE_MESH)', () =>
     expect(listed.teams.filter(row => row.local !== true).length).toBeGreaterThan(0)
   })
 
+  // Sending a live task additionally requires an explicit DSH_A2A_LIVE_TARGET_TEAM; discovery alone is not send consent.
   it.skipIf(targetTeam === '')('routes one self-contained probe message to the target team and observes the outcome', async () => {
     const result = await observer!.ctx.tools.get('a2a_route')?.execute({
       team: targetTeam,

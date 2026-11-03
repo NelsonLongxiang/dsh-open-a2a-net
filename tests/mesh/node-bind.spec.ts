@@ -14,7 +14,7 @@
  * createScope), so the scoped sections and variables behave as on a host.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -585,27 +585,27 @@ describe('#174 — frozen versions across a plugin reload, retries, re-join, hea
     }
   }, 30_000)
 
-  // Windows chmod does not deny directory writes; this permission-failure fixture is POSIX-only.
-  it.skipIf(process.platform === 'win32')('3: a leave whose write failed is retried at the next join change', async () => {
-    const { chmodSync } = await import('node:fs')
+  // Block the atomic temporary-file path with a directory: a real write failure on Windows and POSIX.
+  it('3: a leave whose write failed is retried at the next join change', async () => {
     const m = await mount()
     const dir = join(m.home, 'a2a')
+    const blocked = join(dir, `node-bindings.json.${String(process.pid)}.tmp`)
     try {
       const a = makeAgent(m.ctx, A)
       m.publish(a)
       await nodeWithLayers(m, 'chief', { 当前状态: '原文' })
       expect((await m.post('/__dsh_a2a/join', { id: A })).status).toBe(200)
       expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: A })).status).toBe(200)
-      chmodSync(dir, 0o500)
+      mkdirSync(blocked)
       await m.post('/__dsh_a2a/leave', { id: A })
-      chmodSync(dir, 0o700)
+      rmSync(blocked, { recursive: true, force: true })
       expect(rowsOf(m)).toEqual([A])
       const b = makeAgent(m.ctx, B)
       m.publish(b)
       expect((await m.post('/__dsh_a2a/join', { id: B })).status).toBe(200)
       expect(rowsOf(m)).toEqual([])
     } finally {
-      chmodSync(dir, 0o700)
+      rmSync(blocked, { recursive: true, force: true })
       await m.dispose()
     }
   }, 20_000)
@@ -724,20 +724,20 @@ describe('#174 — frozen versions across a plugin reload, retries, re-join, hea
   }, 30_000)
 
   it('r2 P3-4: a leave whose write failed, then a quick re-join, still ends the binding — it does not revive', async () => {
-    const { chmodSync } = await import('node:fs')
     const m = await mount()
     const dir = join(m.home, 'a2a')
+    const blocked = join(dir, `node-bindings.json.${String(process.pid)}.tmp`)
     try {
       await nodeWithLayers(m, 'chief', { 当前状态: '原文' })
       const a = await boundLive(m)
-      chmodSync(dir, 0o500)
+      mkdirSync(blocked)
       await m.post('/__dsh_a2a/leave', { id: A })
-      chmodSync(dir, 0o700)
+      rmSync(blocked, { recursive: true, force: true })
       expect((await m.post('/__dsh_a2a/join', { id: A })).status).toBe(200)
       expect(rowsOf(m)).toEqual([])
       expect(await m.prompt(a)).not.toContain('节点契约')
     } finally {
-      chmodSync(dir, 0o700)
+      rmSync(blocked, { recursive: true, force: true })
       await m.dispose()
     }
   }, 20_000)
@@ -787,15 +787,15 @@ describe('#174 — frozen versions across a plugin reload, retries, re-join, hea
     }
   }, 60_000)
 
-  // Windows chmod cannot reproduce a pending failed write; POSIX keeps the exact assertion.
-  it.skipIf(process.platform === 'win32')('r3 M15 + P3-1: while a failed leave is pending, a re-join and a re-publish do not mount, and bind answers 409', async () => {
-    const { chmodSync } = await import('node:fs')
+  // Use a directory at the atomic temporary-file path, not POSIX chmod, to keep this coverage cross-platform.
+  it('r3 M15 + P3-1: while a failed leave is pending, a re-join and a re-publish do not mount, and bind answers 409', async () => {
     const m = await mount()
     const dir = join(m.home, 'a2a')
+    const blocked = join(dir, `node-bindings.json.${String(process.pid)}.tmp`)
     try {
       await nodeWithLayers(m, 'chief', { 当前状态: '原文' })
       const a = await boundLive(m)
-      chmodSync(dir, 0o500)
+      mkdirSync(blocked)
       await m.post('/__dsh_a2a/leave', { id: A })
       await m.post('/__dsh_a2a/join', { id: A })
       const next = makeAgent(m.ctx, A)
@@ -804,7 +804,7 @@ describe('#174 — frozen versions across a plugin reload, retries, re-join, hea
       m.publish(next)
       expect(await m.prompt(next)).not.toContain('节点契约')
       expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: A })).status).toBe(409)
-      chmodSync(dir, 0o700)
+      rmSync(blocked, { recursive: true, force: true })
       // r4 P3-1: once the home is writable, bind retries the pending end in place and goes through.
       expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: A })).status).toBe(200)
       expect(await m.prompt(next)).toContain('节点契约')
@@ -820,7 +820,7 @@ describe('#174 — frozen versions across a plugin reload, retries, re-join, hea
       expect(await m.prompt(again)).toContain('节点契约')
       expect(rowsOf(m)).toEqual([A])
     } finally {
-      chmodSync(dir, 0o700)
+      rmSync(blocked, { recursive: true, force: true })
       await m.dispose()
     }
   }, 20_000)

@@ -111,6 +111,7 @@ describe('canvas-layout control face', () => {
   })
 })
 
+// Asset-serving assertions require the built stage bundle; source-only checkouts must build it first.
 describe.skipIf(!hasStageDist)('floor stage page serving', () => {
   it('serves the shell with brand and hashed assets, guarding traversal', async () => {
     const port = await harness()

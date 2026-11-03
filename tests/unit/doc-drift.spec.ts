@@ -46,7 +46,7 @@ describe('gh#56 doc drift — this checkout', () => {
 describe('gh#56 doc drift — counterexamples go red', () => {
   it('a tool row deleted from README.md', () => {
     const dir = scratchRepo()
-    rewrite(dir, 'README.md', /^\| `a2a_probe` \|.*\n/m, '')
+    rewrite(dir, 'README.md', /^\| `a2a_probe` \|[^\r\n]*\r?\n/m, '')
     expect(drifted(checkRepo(dir))).toEqual([{ pair: 'tools ↔ README.md', missing: ['a2a_probe'], stale: [] }])
   })
 
