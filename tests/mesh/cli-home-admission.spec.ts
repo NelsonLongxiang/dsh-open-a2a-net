@@ -67,6 +67,30 @@ describe('#222 F1 remote CLI pinned-home admission (real hosts; scope on)', () =
       expect(ledger.tasks.find((row: any) => row.taskId === 'direct-cli-home-slash').auth.carrier_url).toBe(homes[0]!.baseUrl)
     } finally { await target.dispose(); for (const home of homes) await home.dispose() }
   }, 20_000)
+  it('owner home options read fresh cards without pinning and explicit submission revalidates them', async () => {
+    const { target, homes } = await pair(true)
+    try {
+      for (const home of homes) await deposit(home)
+      expect((await link(target)).ok).toBe(true)
+      const before = readFileSync(join(target.home, 'a2a', 'canvas.json'), 'utf8')
+      const inspect = () => post(target.baseUrl, '/__dsh_a2a/canvas', { action: 'cli-home-options', name: 'ops', id: handle })
+      expect(await inspect()).toMatchObject({ ok: true, homes: expect.arrayContaining(homes.map(x => x.baseUrl)) })
+      expect(readFileSync(join(target.home, 'a2a', 'canvas.json'), 'utf8')).toBe(before)
+      await post(homes[1]!.baseUrl, '/__dsh_a2a/cli-deposit', { action: 'revoke', handle })
+      const updated = await inspect()
+      expect(updated.homes).toEqual([homes[0]!.baseUrl]) // no stale cached advertiser
+      expect((await link(target, homes[1]!.baseUrl)).ok).toBe(false)
+      await homes[1]!.dispose()
+      const offline = await inspect()
+      expect(offline).toMatchObject({ ok: true, homes: [homes[0]!.baseUrl] })
+      expect(offline.unreadable).toBeGreaterThanOrEqual(1)
+      expect(pinOf(target)).toBeUndefined()
+      expect((await link(target, homes[0]!.baseUrl)).ok).toBe(true)
+      expect(pinOf(target)).toBe(homes[0]!.baseUrl)
+      expect((await post(target.baseUrl, '/__dsh_a2a/canvas', { action: 'cli-home-options', name: 'missing', id: handle })).ok).toBe(false)
+      expect((await post(target.baseUrl, '/__dsh_a2a/canvas', { action: 'cli-home-options', name: 'ops', id: 'home0/01234567' })).ok).toBe(false)
+    } finally { await target.dispose(); await homes[0]!.dispose() }
+  }, 30_000)
   it('two linked homes advertising the same handle leave the pin unknown and refuse delivery', async () => {
     const { target, homes } = await pair(true)
     try {

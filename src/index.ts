@@ -42,7 +42,7 @@ import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
 import { applyOwnerSettings, type OwnerSettings } from './owner-settings.ts'
 import { CLI_HANDLE_RE, CliDepositStore } from './cli-deposit.ts'
-import { decideCliHome } from './cli-home.ts'
+import { cliHomeChoices, decideCliHome } from './cli-home.ts'
 import { outboundScope, type OutboundScopeRecords } from './outbound-scope.ts'
 import { createDirectForward } from './direct-forward.ts'
 import { TeamMembershipStore } from './team-store.ts'
@@ -2047,7 +2047,7 @@ export function apply(ctx: Context, config: Config): void {
     whenWebServerSettled((webServer) => {
       // gh#77 B1: the admin faces live in src/faces/admin.ts.
       registerAdminFaces(webServer, {
-        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, cliHomeForAdd, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
+        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url,
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
@@ -3257,16 +3257,22 @@ export function apply(ctx: Context, config: Config): void {
     return { link: linked ? 'linked' : 'stranger', verified }
   }
 
-  async function cliHomeForAdd(handle: string, requested?: unknown) {
-    if (!CLI_HANDLE_RE.test(handle)) return decideCliHome(handle, requested, [])
-    const candidates = await mapBounded(peerStore.list(), 6, async url => {
+  async function freshCliHomeCards() {
+    return await mapBounded(peerStore.list(), 6, async url => {
       // A failed read cannot prove a tracked host is unlinked (especially after a cold boot).
       // Conservatively leave automatic ownership unknown; explicit fresh choices still work.
       const card = await fetchPeerCard(url).catch(() => undefined)
       if (card !== undefined) cardCache.set(url, { at: Date.now(), card })
       return { url, card, linked: card === undefined || peerLinkState(url).link === 'linked' }
     })
-    return decideCliHome(handle, requested, candidates)
+  }
+
+  async function cliHomeForAdd(handle: string, requested?: unknown) {
+    return decideCliHome(handle, requested, CLI_HANDLE_RE.test(handle) ? await freshCliHomeCards() : [])
+  }
+
+  async function cliHomeOptions(handle: string) {
+    return cliHomeChoices(handle, await freshCliHomeCards())
   }
 
   /** Remote CLI admission never trusts a retained stale cache entry after a failed home read. */

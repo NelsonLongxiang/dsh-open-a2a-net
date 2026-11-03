@@ -292,14 +292,21 @@ const bench = createWorkbench({
   // The only reach primitive is the inline 快派 form: it works for local
   // session teams, canvas teams and remote rows alike, and never leaves
   // this page.
-  async canvasOp(action, name, id) {
+  async cliHomeOptions(name, id) {
+    try {
+      const res = await controlFetch('/__dsh_a2a/canvas', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'cli-home-options', name, id }) })
+      const body = await res.json() as { ok: boolean; homes?: string[]; unreadable?: number; error?: string }
+      return { ...body, ok: res.ok && body.ok === true }
+    } catch (error) { return { ok: false, error: String(error) } }
+  },
+  async canvasOp(action, name, id, home) {
     // Same control route the planning board's wire uses; the inspector's
     // member writes are one id at a time, so no serial fan-out needed.
     try {
       const res = await controlFetch('/__dsh_a2a/canvas', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ action, name, id }),
+        body: JSON.stringify({ action, name, id, ...(home === undefined ? {} : { home }) }),
       })
       const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string }
       if (res.ok && body.ok !== false) return true
