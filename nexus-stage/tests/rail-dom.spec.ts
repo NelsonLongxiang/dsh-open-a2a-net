@@ -128,6 +128,17 @@ describe('目录 (wb-directory)', () => {
     expect(back.querySelector('.is-unreachable, .wb-unreachable-note')).toBeNull()
   })
 
+  it('#174: only a confirmed absent node section warns on the bound session row; restored view clears it', () => {
+    const missing: StateBody = { sessions: [{ ...state.sessions![0]!, nodePromptMissing: true }] }
+    const flagged = render({ state: missing }).box.querySelector<HTMLElement>('.wb-dir-group .wb-item')!
+    expect(flagged.classList.contains('is-node-prompt-missing')).toBe(true)
+    expect(text(flagged.querySelector('.wb-node-warning'))).toBe('本会话的组装不含节点段')
+    for (const restored of [render().box, render({ state: { sessions: [{ ...state.sessions![0]!, nodePromptMissing: false }] } }).box]) {
+      expect(restored.querySelector('.is-node-prompt-missing')).toBeNull()
+      expect(text(restored)).not.toContain('本会话的组装不含节点段')
+    }
+  })
+
   it('says how many logs it shows when the host caps the list', () => {
     const { box } = render({ logTotal: 73 })
     expect(text(box.querySelector('.wb-dir-group:last-child .wb-dir-head-note'))).toBe('显示 4 / 共 73')
