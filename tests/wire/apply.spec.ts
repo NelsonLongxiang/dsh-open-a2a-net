@@ -2251,6 +2251,7 @@ describe('a2a plugin module surface', () => {
       apiKey: '',
       session: '',
       asyncNudgeDelayMs: 120_000,
+      targetQueueCap: 3,
       taskStaleTtlMs: 86_400_000,
       team: 'dsh',
       announce: false,

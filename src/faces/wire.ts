@@ -131,6 +131,8 @@ export interface WireDeps {
   readonly readSessionLogTail: (id: string, limit: number) => { ok: true; id: string; messages: Array<{ role: string; text: string; time?: number }> } | { ok: false; error: string }
   readonly taskLedger: TaskLedger
   readonly refuseIfFlooded: (caller: string, message: string, team: string, taskId: string, res: ServerResponse) => boolean
+  /** gh#224: refuses a new delivery once the target already owes `targetQueueCap` receipts. */
+  readonly refuseIfQueueFull: (caller: string, message: string, team: string, taskId: string, mailbox: boolean, res: ServerResponse) => boolean
   /** Settles a receipt; returns the enforce refusal of the row its header names (#139), if any. */
   readonly settleAndAnnounce: (message: string, settler?: Settler) => SettlementRefusal | undefined
   readonly touchWakeDemand: () => void
@@ -201,6 +203,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     readSessionLogTail,
     taskLedger,
     refuseIfFlooded,
+    refuseIfQueueFull,
     settleAndAnnounce,
     session,
     resolveAgentForTeam,
@@ -693,6 +696,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             return
           }
           if (refuseIfFlooded(caller, message, team, taskId, res)) return
+          if (refuseIfQueueFull(caller, message, team, taskId, cliDeposits.get(team) !== undefined, res)) return
           // The caller-side receipt correlation: a message shaped as a
           // receipt resolves the task it echoes, whichever wait semantics
           // carried it here. Correlation is bookkeeping only — the message

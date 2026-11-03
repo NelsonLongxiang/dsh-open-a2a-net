@@ -52,6 +52,7 @@ import { runReceiptLadder } from './receipt-ladder.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
+import { createQueueGuard, DEFAULT_TARGET_QUEUE_CAP, queueFullRefusal, WIRE_ERROR_QUEUE_FULL } from './queue-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
 import { isRootOriginUrl, sameMountedUrl, signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
@@ -365,6 +366,8 @@ export interface Config {
    * v0.5.23 (async-stall): see the schema comment on asyncNudgeDelayMs.
    */
   readonly asyncNudgeDelayMs: number
+  /** gh#224: receipt-owing tasks one target may queue on this host before new deliveries are refused (0 = off). */
+  readonly targetQueueCap: number
   /**
    * How long the state route serves the cold-row id set from cache before
    * re-enumerating the persistence layer. The panel polls every 2s; the
@@ -537,6 +540,8 @@ export const Config: s<Config> = s.object({
    * t-mt6nd0sq-hxuhj6). 0 disables the nudge entirely.
    */
   asyncNudgeDelayMs: s.number().default(120_000),
+  /** gh#224: at most this many receipt-owing tasks queue for one target; the next is refused (-32009). 0 disables. */
+  targetQueueCap: s.number().default(DEFAULT_TARGET_QUEUE_CAP),
   stateColdRowsTtlMs: s.number().default(5_000),
   cardCacheTtlMs: s.number().default(60_000),
   cardCacheNegativeTtlMs: s.number().default(30_000),
@@ -1145,6 +1150,7 @@ export function apply(ctx: Context, config: Config): void {
   // refused-but-idempotent, same-key different-payload answers conflict.
   const idempotencyStore = new IdempotencyStore(join(home, 'a2a', 'idempotency.json'))
   const refuseIfFlooded = createFloodGuard(idempotencyStore, recordActivity)
+  const refuseIfQueueFull = createQueueGuard(() => taskLedger.list(), () => config.targetQueueCap, idempotencyStore, recordActivity)
 
   // Unmasked-identity suppression: gossip mirrors peer lists back and forth,
   // so a URL whose fetch just proved it serves this node — or an already
@@ -2928,6 +2934,7 @@ export function apply(ctx: Context, config: Config): void {
       readSessionLogTail,
       taskLedger,
       refuseIfFlooded,
+      refuseIfQueueFull,
       settleAndAnnounce,
       touchWakeDemand: () => { lastWakeDemandAt = Date.now() },
       session,
@@ -3817,6 +3824,12 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     if (idRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: idRefusal, code: -32000 }
+    }
+    // gh#224: a full target queue refuses a same-host delivery as the wire face does (receipts, CLI mailboxes pass).
+    const queueRefusal = queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, cliDeposits.get(team) !== undefined)
+    if (queueRefusal !== undefined) {
+      recordActivity('out', team, callerSession ?? 'local', false)
+      return { ok: false, error: queueRefusal, code: WIRE_ERROR_QUEUE_FULL }
     }
     const canvasName = parseCanvasTeamName(team)
     // Issue #41 shape note: the caller label is the WIRE form (<zone>/<id8>

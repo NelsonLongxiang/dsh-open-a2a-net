@@ -7,7 +7,8 @@ const nodes: MeshNode[] = []
 afterEach(async () => { for (const n of nodes.splice(0)) await n.dispose(); vi.unstubAllGlobals() })
 async function boot(): Promise<MeshNode> {
   vi.stubGlobal('WebSocket', function () { throw new Error('no socket') })
-  const n = await bootNode({ name: 'receiver', session: 'gh91-' + nodes.length, team: 'dsh', sessionNodes: true, teamScopeRouting: true, originClaimWindow: true })
+  // These cases pile 16+ tasks on ONE target to exercise the per-sender brake; the per-target queue cap (gh#224) is off here.
+  const n = await bootNode({ name: 'receiver', session: 'gh91-' + nodes.length, team: 'dsh', sessionNodes: true, teamScopeRouting: true, originClaimWindow: true, targetQueueCap: 0 })
   nodes.push(n)
   const join = await fetch(n.baseUrl + '/__dsh_a2a/join', { method: 'POST', body: JSON.stringify({ id: 'session-0123456789abcdef' }) }).then(r => r.json()) as { team: string }
   expect(join.team).toBe('dsh/01234567')

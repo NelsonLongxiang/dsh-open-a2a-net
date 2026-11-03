@@ -162,6 +162,7 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | `gateAgentLessCalls` | `'audit'` | Host-side (agent-less) routing calls: audit them, or `refuse`. |
 | `settlementAuth` | `'observe'` | Settlement authorization (#114): `off`, `observe` (record what would be refused, settle as before), or `enforce`. |
 | `asyncNudgeDelayMs` | `120000` | Delay before a delivered-but-unconsumed async route re-wakes its target with a one-line nudge; `0` disables. |
+| `targetQueueCap` | `3` | At most this many receipt-owing tasks queue for one target on this host; the next delivery is refused visibly (`-32009 target-queue-full`, nothing delivered). Receipts and CLI mailboxes are never refused. `0` disables (#224). |
 | `taskStaleTtlMs` | `86400000` | Owed-task stale TTL (24h): past it a pending row auto-dead-letters (a late receipt can still settle it). |
 | `dshHome` | `''` | DSH home directory override for the plugin's state (`<home>/a2a/…`); `''` resolves the default home. |
 | `cardTtlMs` / `flushTimeoutMs` / `routeTimeoutMs` | see schema | Card lifetime (48h) and route timing budgets. |
