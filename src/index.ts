@@ -1113,7 +1113,10 @@ export function apply(ctx: Context, config: Config): void {
       // message that still echoes a pending task id means the peer
       // demonstrably responded to it, which settles the debt even when the
       // receipt formality never rode the reply.
-      const echoed = taskLedger.resolveEcho(message, judge)
+      // #125 (owner data 2026-11-03: two production rows settled by a relay and by another task's receipt):
+      // an echo is weak evidence, so under observe it is judged as enforce — only an on-chain settler's echo
+      // settles. Formal receipt headers keep observing; settlementAuth 'off' still judges nothing.
+      const echoed = taskLedger.resolveEcho(message, judge !== undefined && !judge.enforce ? { ...judge, enforce: true } : judge)
       if (echoed.length > 0) {
         logger.info(`a2a: ${String(echoed.length)} pending task(s) settled by content echo (${echoed.join(', ')})`)
       }
