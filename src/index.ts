@@ -3266,7 +3266,7 @@ export function apply(ctx: Context, config: Config): void {
       const row = card.sessionTeams?.find(item => item.team === handle)
       if (row !== undefined) return { origin: home, viaUrl: claim.callerUrl, bound: true, online: row.offline === false }
     }
-    return undefined
+    return { origin: home, viaUrl: claim.callerUrl, bound: true, online: false }
   }
 
   function cachedCardFetch(url: string): Promise<A2aPeerCard | undefined> {

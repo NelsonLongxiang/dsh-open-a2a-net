@@ -55,7 +55,7 @@ describe('#222 F1 remote CLI pinned-home admission (real hosts; scope on)', () =
       expect((await link(target)).ok).toBe(true)
       const state = await fetch(target.baseUrl + '/__dsh_a2a/state').then(async r => await r.json() as { canvas: { teams: Array<{ members: Array<{ id: string; cliHome?: string | null }> }> } })
       expect(state.canvas.teams[0]?.members.find(m => m.id === handle)?.cliHome).toBeNull()
-      expect((await direct(target, homes[0]!, 'direct-cli-home-ambiguous')).routed).not.toBe(true)
+      expect((await direct(target, homes[0]!, 'direct-cli-home-ambiguous')).error).toContain('home is not pinned')
       expect((await link(target, 'https://unlinked.example')).ok).toBe(false)
       expect((await link(target, homes[0]!.baseUrl)).ok).toBe(true)
       expect((await direct(target, homes[0]!, 'direct-cli-home-explicit')).routed).toBe(true)
@@ -67,7 +67,7 @@ describe('#222 F1 remote CLI pinned-home admission (real hosts; scope on)', () =
       await deposit(homes[0]!)
       expect((await link(target)).ok).toBe(true)
       await deposit(homes[1]!)
-      expect((await direct(target, homes[1]!, 'direct-cli-home-forged')).routed).not.toBe(true)
+      expect((await direct(target, homes[1]!, 'direct-cli-home-forged')).error).toContain('signer does not match pinned home')
     } finally { await target.dispose(); for (const home of homes) await home.dispose() }
   }, 20_000)
   it('a home card marking its CLI row OFFLINE refuses delivery even from the pinned signer', async () => {
@@ -84,7 +84,7 @@ describe('#222 F1 remote CLI pinned-home admission (real hosts; scope on)', () =
         if (card.sessionTeams?.some(x => x.team === handle)) for (const row of card.sessionTeams) if (row.team === handle) row.offline = true
         return new Response(JSON.stringify(card), { status: response.status, headers: response.headers })
       })
-      expect((await direct(target, homes[0]!, 'direct-cli-home-offline')).routed).not.toBe(true)
+      expect((await direct(target, homes[0]!, 'direct-cli-home-offline')).error).toContain('offline or home card could not be read')
     } finally { await target.dispose(); for (const home of homes) await home.dispose() }
   }, 20_000)
   it('the warm verified signer is still refused when a new home-card fetch fails', async () => {
@@ -93,7 +93,7 @@ describe('#222 F1 remote CLI pinned-home admission (real hosts; scope on)', () =
       await deposit(homes[0]!)
       expect((await link(target)).ok).toBe(true)
       await homes[0]!.dispose()
-      expect((await direct(target, homes[0]!, 'direct-cli-home-unreachable')).routed).not.toBe(true)
+      expect((await direct(target, homes[0]!, 'direct-cli-home-unreachable')).error).toContain('offline or home card could not be read')
     } finally { await target.dispose() }
   }, 20_000)
 })
