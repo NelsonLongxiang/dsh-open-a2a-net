@@ -92,6 +92,7 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | --- | --- | --- |
 | `announce` | `false` | 发布本节点 agent 卡片供 peer 发现。 |
 | `isolated` | `false` | 不向任何对端发请求：取卡、目录扫描、路由、远端日志读取、canvas 变更推送、舰队 canvas-op 中继一律拒绝（gh#193）。`a2a/peers.json` 不动，被拒的请求也不给对端扣分；入站面照常应答；state 面显示 `isolated: true`。供测试与验收主机使用。 |
+| `forwardDirect` | `false` | 本机目标未找到时，允许替已验签且在线的本地CLI转发一跳；仍检查发送作用域和跳数预算。 |
 | `peers` | `[]` | 种子 base URL；被引荐的 peers 从其卡片学习。 |
 | `delegates` | `[]` | 区域委托：`{ name, url, publicKey }` 发布在卡片上。 |
 | `team` | `'dsh'` | 本节点暴露给直连路由的团队名。 |

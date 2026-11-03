@@ -23,7 +23,7 @@ export interface A2aSessionRow {
 /** One routing outcome as the state route reports it. */
 export interface A2aActivityRow {
   readonly ts: number
-  readonly dir: 'in' | 'out'
+  readonly dir: 'in' | 'out' | 'fwd'
   readonly team: string
   readonly peer: string
   readonly ok: boolean
@@ -95,7 +95,7 @@ function relativeTime(ts: number): string {
 
 /** One feed row: direction glyph (aria-labelled), team, peer host, age, fail mark. */
 function FeedRow({ dir, team, peer, ts, ok, target, openSession, t }: {
-  readonly dir: 'in' | 'out'
+  readonly dir: 'in' | 'out' | 'fwd'
   readonly team: string
   readonly peer: string
   readonly ts: number
@@ -114,7 +114,7 @@ function FeedRow({ dir, team, peer, ts, ok, target, openSession, t }: {
       onClick={() => { if (target !== undefined) openSession(target.id) }}
       role={target !== undefined ? 'button' : undefined}
     >
-      <span className={clsx(css.activityDir, dir)} aria-label={dir === 'in' ? 'inbound' : 'outbound'}>{dir === 'in' ? '←' : '→'}</span>
+      <span className={clsx(css.activityDir, dir)} aria-label={dir === 'fwd' ? 'forwarded' : dir === 'in' ? 'inbound' : 'outbound'}>{dir === 'fwd' ? '⇢' : dir === 'in' ? '←' : '→'}</span>
       <span className={css.activityTeam} title={team}>{team}</span>
       <span className={css.activityPeer} title={peer}>{peer === '' || peer === 'local' ? '' : peer.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}</span>
       {ok === false ? <span className={css.failMark} aria-label="failed">✕</span> : null}

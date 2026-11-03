@@ -368,6 +368,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             ...(row.brief !== undefined ? { brief: row.brief } : {}),
             ...(row.summary !== undefined && row.summary !== '' ? { summary: row.summary.slice(0, 160) } : {}),
             ...(row.sender !== undefined ? { sender: row.sender } : {}),
+            ...(row.forwarded === true ? { forwarded: true } : {}),
             ...(row.auth !== undefined ? { auth: row.auth } : {}),
             // #114 S4: who settled it and how they stood on the chain.
             ...(row.settledBy !== undefined ? { settledBy: row.settledBy } : {}),

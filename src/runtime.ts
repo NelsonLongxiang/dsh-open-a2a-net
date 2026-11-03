@@ -12,7 +12,7 @@ import type { A2aPeerCard } from './types.ts'
  */
 export interface RouteActivityEntry {
   readonly ts: number
-  readonly dir: 'in' | 'out'
+  readonly dir: 'in' | 'out' | 'fwd'
   readonly team: string
   readonly peer: string
   readonly ok: boolean

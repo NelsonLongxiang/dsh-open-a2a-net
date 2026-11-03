@@ -25,10 +25,10 @@ async function pair(twoHomes = false): Promise<{ target: MeshNode; homes: MeshNo
   return { target, homes }
 }
 async function link(target: MeshNode, home?: string): Promise<Record<string, any>> { return await post(target.baseUrl, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: handle, ...(home === undefined ? {} : { home }) }) }
-async function direct(target: MeshNode, signer: MeshNode, id: string): Promise<Record<string, any>> {
+async function direct(target: MeshNode, signer: MeshNode, id: string, slash = false): Promise<Record<string, any>> {
   const url = target.baseUrl + '/a2a/direct'
   const secret = createPrivateKey(readFileSync(join(signer.home, 'a2a', 'node-key.pem'), 'utf8'))
-  const headers = signOriginClaim({ url, method: 'POST' }, { caller: signer.team, callerUrl: signer.baseUrl, privateKey: secret, unbound: false, now: Date.now() })
+  const headers = signOriginClaim({ url, method: 'POST' }, { caller: signer.team, callerUrl: signer.baseUrl + (slash ? '/' : ''), privateKey: secret, unbound: false, now: Date.now() })
   return await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ team: 'target/01234567', message: 'CLI linked home report', caller_session: handle, task_id: id, wait: false }) }).then(async r => await r.json() as Record<string, any>)
 }
 
@@ -50,7 +50,7 @@ describe('#222 F1 remote CLI pinned-home admission (real hosts; scope on)', () =
       expect(store.cliHome?.[handle]).toBe(homes[0]!.baseUrl)
       const unsigned = await post(target.baseUrl, '/a2a/direct', { team: 'target/01234567', message: 'unsigned CLI', caller_session: handle, wait: false })
       expect(unsigned.routed).not.toBe(true) // the legacy unsigned-envelope window never grants remote-ref-cli
-      const answer = await direct(target, homes[0]!, 'direct-cli-home-success')
+      const answer = await direct(target, homes[0]!, 'direct-cli-home-success', true)
       expect(answer.routed, JSON.stringify(answer)).toBe(true)
       const ledger = JSON.parse(readFileSync(join(target.home, 'a2a', 'tasks.json'), 'utf8')) as { tasks: Array<{ auth?: { via: string; carrier_url: string; admission_rule: string } }> }
       expect(ledger.tasks.some(x => x.auth?.carrier_url === homes[0]!.baseUrl && x.auth.via === 'canvas-member' && x.auth.admission_rule === 'remote-ref-cli')).toBe(true)
@@ -102,6 +102,42 @@ describe('#222 F1 remote CLI pinned-home admission (real hosts; scope on)', () =
       expect((await direct(target, homes[1]!, 'direct-cli-local-repin')).routed).toBe(true)
     } finally { await target.dispose(); for (const home of homes) await home.dispose() }
   }, 30_000)
+  it('N1c: an implicit local re-add cannot replace a pin even when the other home is the sole live advertiser', async () => {
+    const { target, homes } = await pair(true)
+    try {
+      await deposit(homes[0]!)
+      expect((await link(target)).ok).toBe(true)
+      await post(homes[0]!.baseUrl, '/__dsh_a2a/cli-deposit', { action: 'revoke', handle })
+      await deposit(homes[1]!)
+      expect((await link(target)).ok).toBe(true)
+      expect(pinOf(target)).toBe(homes[0]!.baseUrl)
+      expect((await direct(target, homes[1]!, 'direct-cli-implicit-repin')).routed).not.toBe(true)
+    } finally { await target.dispose(); for (const home of homes) await home.dispose() }
+  }, 20_000)
+  it('N2c: an unreadable tracked but verified-unlinked peer does not prevent auto-pinning the linked home', async () => {
+    const { target, homes } = await pair(true)
+    try {
+      await deposit(homes[0]!)
+      // Read its genuine minimal card without a reciprocal peer listing: this peer is a known stranger.
+      const realFetch = globalThis.fetch
+      let unavailable = false
+      vi.stubGlobal('fetch', async (...args: Parameters<typeof fetch>) => {
+        if (String(args[0]) === homes[1]!.baseUrl + '/.well-known/agent-card.json') {
+          if (unavailable) throw new Error('known unlinked peer is offline')
+          const response = await realFetch(...args)
+          const card = await response.json() as Record<string, any>
+          card.peers = []
+          return new Response(JSON.stringify(card), { status: 200, headers: response.headers })
+        }
+        return await realFetch(...args)
+      })
+      expect((await link(target)).ok).toBe(true)
+      expect((await post(target.baseUrl, '/__dsh_a2a/canvas', { action: 'remove-member', name: 'ops', id: handle })).ok).toBe(true)
+      unavailable = true
+      expect((await link(target)).ok).toBe(true)
+      expect(pinOf(target)).toBe(homes[0]!.baseUrl)
+    } finally { await target.dispose(); for (const home of homes) await home.dispose() }
+  }, 20_000)
   it('link-time fresh reads do not treat an unreadable linked home as absent', async () => {
     const { target, homes } = await pair(true)
     try {

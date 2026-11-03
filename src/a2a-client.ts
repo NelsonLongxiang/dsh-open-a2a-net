@@ -67,6 +67,7 @@ export type CardFetchOutcome =
 type WireRoute = {
   readonly routed?: unknown
   readonly delivered?: unknown
+  readonly delivered_to?: unknown
   readonly consumed?: unknown
   readonly error?: unknown
   readonly code?: unknown
@@ -123,6 +124,7 @@ export class A2aClient {
     readonly method: 'GET' | 'POST'
     readonly body?: string
     readonly signal?: AbortSignal
+    readonly guard?: string
   }, baseUrl: string): Promise<unknown> {
     if (init.signal?.aborted) throw new Error('A2A request aborted before dispatch')
     const controller = new AbortController()
@@ -139,7 +141,7 @@ export class A2aClient {
       const url = `${baseUrl}${path}`
       const response = await this.options.fetch(url, {
         method: init.method,
-        headers: this.headers(init.body !== undefined, url, init.method),
+        headers: { ...this.headers(init.body !== undefined, url, init.method), ...(init.guard !== undefined ? { 'X-A2A-Guard': init.guard } : {}) },
         ...(init.body !== undefined ? { body: init.body } : {}),
         signal: controller.signal,
       })
@@ -237,12 +239,14 @@ export class A2aClient {
     asyncMode = false,
     taskIdFromCaller?: string,
     callbackAddress?: string,
+    guard?: string,
   ): Promise<A2aRouteResult> {
     const args: Record<string, unknown> = { team, message, caller_session: callerSession ?? this.options.sessionId }
     if (contextId !== undefined) args.context_id = contextId
     // wait:false asks the peer to steer and answer delivered immediately —
     // the async half of the receipt contract for cross-host long tasks.
     if (asyncMode) args.wait = false
+    else if (guard !== undefined) args.wait = true
     // The caller-born task id rides the request (idempotency key): a peer
     // that echoes it keeps the receipt header correlated with this route's
     // own result; the fallback below stamps it when the peer generated its
@@ -270,6 +274,7 @@ export class A2aClient {
       raw = await this.http('/a2a/direct', {
         method: 'POST',
         body,
+        ...(guard !== undefined ? { guard } : {}),
         ...(signal !== undefined ? { signal } : {}),
       }, baseUrl) as WireRoute
     } catch (error) {
@@ -352,6 +357,7 @@ export class A2aClient {
         context_id: wireText(raw.context_id),
         task_status: wireText(raw.task_status) === '' ? 'TASK_STATE_DELIVERED' : wireText(raw.task_status),
         ...(consumed !== undefined ? { consumed } : {}),
+        ...(wireText(raw.delivered_to) !== '' ? { deliveredTo: wireText(raw.delivered_to) } : {}),
         ...(bridge !== undefined ? { bridge } : {}),
         ...(settlementRefused ? { settlementRefused: true as const } : {}),
       }
@@ -362,6 +368,7 @@ export class A2aClient {
       ok: true,
       team,
       reply,
+      ...(wireText(raw.delivered_to) !== '' ? { deliveredTo: wireText(raw.delivered_to) } : {}),
       // Same echo-first rule as the delivered branch: the peer's echo wins,
       // else the caller-born id, else ''.
       task_id: wireText(raw.task_id) !== '' ? wireText(raw.task_id) : taskIdFromCaller ?? '',

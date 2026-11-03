@@ -357,6 +357,12 @@ describe('workbench panels', () => {
     expect(abandon).toHaveBeenCalledWith('direct-cccccccc', 'workbench dead-letter cleanup')
   })
 
+  it('marks a home-host forwarding activity distinctly from inbound traffic', () => {
+    const { v } = bench()
+    v.update({ ...state, activity: [{ ts: NOW, dir: 'fwd', team: 'dsh/11111111', peer: 'https://home.example', ok: true }] })
+    expect([...v.root.querySelectorAll('.wb-row-dir')].some(node => text(node) === '⇢')).toBe(true)
+  })
+
   it('renders activity: in-flight first, failed inbound marked', () => {
     const { v } = bench()
     v.update(state)

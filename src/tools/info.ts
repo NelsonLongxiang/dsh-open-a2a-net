@@ -574,12 +574,13 @@ export function createInfoTools(deps: InfoToolsDeps) {
                   deadAt: { type: 'number' },
                   direction: { type: 'string', enum: ['inbound', 'outbound'] },
                   receiptExpected: { type: 'boolean' },
+                  forwarded: { type: 'boolean' },
                   reason: { type: 'string', enum: ['fire-forget', 'unconsumed'] },
                   sender: {
                     type: 'object',
                     additionalProperties: false,
                     properties: {
-                      kind: { type: 'string', required: true, enum: ['session', 'host', 'bridge'] },
+                      kind: { type: 'string', required: true, enum: ['session', 'host', 'bridge', 'cli'] },
                       id: { type: 'string', required: true },
                       face: { type: 'string' },
                     },
@@ -600,11 +601,12 @@ export function createInfoTools(deps: InfoToolsDeps) {
                   resolvedAt: { type: 'number', required: true },
                   summary: { type: 'string' },
                   brief: { type: 'string' },
+                  forwarded: { type: 'boolean' },
                   sender: {
                     type: 'object',
                     additionalProperties: false,
                     properties: {
-                      kind: { type: 'string', required: true, enum: ['session', 'host', 'bridge'] },
+                      kind: { type: 'string', required: true, enum: ['session', 'host', 'bridge', 'cli'] },
                       id: { type: 'string', required: true },
                       face: { type: 'string' },
                     },

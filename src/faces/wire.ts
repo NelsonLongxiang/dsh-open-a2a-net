@@ -14,7 +14,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type WebServer from '@deepseek-ai/dsh-host-webserver'
-import type { A2aPeerCard } from '../types.ts'
+import type { A2aPeerCard, A2aRouteResult } from '../types.ts'
+import type { ForwardRequest } from '../direct-forward.ts'
 import { CanvasStore, isRemoteMemberRef, validRemoteMemberRef } from '../canvas-store.ts'
 import { CLI_HANDLE_RE, type CliDepositStore } from '../cli-deposit.ts'
 import type { IdempotencyStore } from '../idempotency-store.ts'
@@ -75,7 +76,7 @@ export type ColdWake =
   | { readonly kind: 'no-match' }
 
 /** routeIntoAgent's settled answer (mirrors index.ts's local union). */
-export type RouteOutcome = { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean } | { ok: false; error: string }
+export type RouteOutcome = { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean } | { ok: false; error: string; localMiss?: true }
 
 interface BridgeTeamsRegistryMirror {
   listTeams(): Array<{ name: string; description: string }>
@@ -114,6 +115,7 @@ export interface WireDeps {
   readonly joinedSessions: JoinedSessions
   readonly idempotencyStore: IdempotencyStore
   readonly verifyOriginClaim: (req: IncomingMessage, options?: { readonly cli?: boolean }) => Promise<OriginClaimResult>
+  readonly forwardDirect: (request: ForwardRequest) => Promise<A2aRouteResult>
   readonly remoteCliProof: (handle: string, claim: Extract<OriginClaimResult, { ok: true }>) => Promise<RemoteCliProof | undefined>
   readonly callerLinkedToThisHost: (caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined) => boolean
   /** This host's own card URL (read when a request lands; set once the web server settles). */
@@ -740,6 +742,14 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // Inbound routing is foreground demand: boot prewarm yields for a
           // quiet window around it.
           d.touchWakeDemand()
+          const forwardMiss = async (original: string): Promise<void> => {
+            const result = await d.forwardDirect({ team, message, caller, taskId, contextId, noWait,
+              localCliProof: claim.ok && claim.cli === true && claim.bound && claim.caller === caller, guarded: req.headers['x-a2a-guard'] !== undefined }).catch((error: unknown): A2aRouteResult => ({ ok: false, error: `forwarding unavailable: ${String(error)}`, code: -32000, task_id: taskId }))
+            if (!result.ok && result.code !== -32005) idempotencyStore.recordOutcome(taskId, { status: 'failed', error: original + ' — ' + result.error })
+            else if (result.ok && result.task_status === 'TASK_STATE_COMPLETED') idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: result.reply })
+            const payload = JSON.stringify(result.ok ? { routed: true, ...(result.task_status === 'TASK_STATE_DELIVERED' ? { delivered: true } : { result: { text: result.reply } }), team, task_id: taskId, context_id: contextId, task_status: result.task_status, consumed: result.consumed, forwarded: true } : { error: original + ' — ' + result.error, code: result.code ?? -32000, task_id: taskId, team, task_status: result.code === -32005 ? 'TASK_STATE_DELIVERED' : 'TASK_STATE_FAILED' })
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload)
+          }
           // wait:false delivers without the final-reply hold: steer resolves
           // synchronously inside routeIntoAgentFor, so by the time the agent
           // lookup settles the message is already in — answer delivered and
@@ -857,6 +867,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                   task_status: 'TASK_STATE_DELIVERED',
                   artifacts: [],
                   consumed: consumedProbe,
+                  ...(req.headers['x-a2a-guard'] !== undefined ? { delivered_to: deliveredTo } : {}),
                   receipt: receiptExpectation === 'process-label' || deliveredReceipt ? 'none' : 'routed',
                 })
                 res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
@@ -887,7 +898,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
               // success. Past prepare, the round fires detached (noWait means
               // delivery, not settlement); its late outcome corrects the
               // activity ring and the log.
-              const standardMiss = (): void => {
+              const standardMiss = async (): Promise<void> => {
                 if (team === config.team) {
                   const live = liveAgent()
                   if (live !== undefined) {
@@ -902,6 +913,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                     deliver(live); return
                   }
                 }
+                if (wake?.kind === 'no-match') { await forwardMiss(noColdMatchText(team)); return }
                 refuseNoWait(wake?.kind === 'no-face' ? noWakeFaceText(team) : wake?.kind === 'archived' ? archivedColdMatchText(team) : noColdMatchText(team), false)
               }
               const prepared = await nativeTeamsPrepare(team)
@@ -910,7 +922,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                   refuseNoWait(prepared.error)
                   return
                 }
-                standardMiss()
+                await standardMiss()
                 return
               }
               recordActivity('in', team, caller, true)
@@ -936,7 +948,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             })()
             return
           }
-          void routeIntoAgent(team, message, caller, taskId, proofClause, directHeader).then((outcome) => {
+          void routeIntoAgent(team, message, caller, taskId, proofClause, directHeader).then(async (outcome) => {
+            if (!outcome.ok && outcome.localMiss) { await forwardMiss(outcome.error); return }
             recordActivity('in', team, caller, outcome.ok)
             // W7 slice-2 hook 1: record the settled outcome on the claim row.
             // Ruling: a non-COMPLETED status (TASK_STATE_DELIVERED — the
@@ -961,6 +974,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 team,
                 session,
                 result: { text: outcome.reply },
+                ...(req.headers['x-a2a-guard'] !== undefined ? ((target) => target === undefined ? {} : { delivered_to: sessionTeamOf(target) })(resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))) : {}),
                 task_id: taskId,
                 context_id: contextId,
                 task_status: outcome.status ?? 'TASK_STATE_COMPLETED',
