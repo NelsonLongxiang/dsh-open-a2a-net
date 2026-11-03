@@ -313,6 +313,13 @@ export interface NodeBinder {
   forget(session: string): void
   /** What a live session currently carries (the frozen snapshot), if anything. */
   mounted(session: string): MountedNode | undefined
+  /**
+   * #174: whether the session's assembled system prompt still carries the two node sections. A
+   * `complete` preset replaces the whole prompt and drops them though they stay mounted. Assembles
+   * with the session's own scope, as the agent loop does; undefined when the session carries no node
+   * or the assembly fails.
+   */
+  assembled(session: string): Promise<{ core: boolean; mutable: boolean } | undefined>
   bind(session: string, node: string, by: string): NodeResult<NodeBinding & { mounted: boolean }>
   unbind(session: string): NodeResult<true>
   /**
@@ -344,7 +351,7 @@ export function reminderMessage(node: string, text: string): UserMessage {
 }
 
 export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
-  const mounts = new Map<string, { dispose: () => void; info: MountedNode }>()
+  const mounts = new Map<string, { dispose: () => void; info: MountedNode; agent: BindableAgent }>()
   /** N4: the self-updates each mounted session wrote, echoed in its live context. */
   const selfNotes = new Map<string, string[]>()
   let seenJoined = new Set(d.joinedList())
@@ -431,7 +438,7 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
       throw error
     }
     const info: MountedNode = { node: name, core_version: core?.version ?? 0, mutable_version: mutable?.version ?? 0 }
-    mounts.set(session, { dispose: () => { for (const dispose of disposers.reverse()) dispose() }, info })
+    mounts.set(session, { dispose: () => { for (const dispose of disposers.reverse()) dispose() }, info, agent })
     // Owed reminders ride the session's next turn; handing them out must never fail the mount.
     if (d.pendingReminders !== undefined) {
       try {
@@ -468,6 +475,18 @@ export function createNodeBinder(d: NodeBinderDeps): NodeBinder {
     },
     mounted(session) {
       return mounts.get(session)?.info
+    },
+    async assembled(session) {
+      const mount = mounts.get(session)
+      const sp = mount?.agent.ctx.get('systemPrompt') as { assemble?: (c: { agent: unknown; scope: unknown }) => Promise<{ sections: Array<{ name: string }> }> } | undefined
+      if (mount === undefined || sp?.assemble === undefined) return undefined
+      try {
+        // The agent loop's own assembly context (dsh-agent assembleContextFor): the agent is the scope.
+        const names = new Set((await sp.assemble({ agent: mount.agent, scope: mount.agent })).sections.map(s => s.name))
+        return { core: names.has(NODE_PROMPT.core.section), mutable: names.has(NODE_PROMPT.mutable.section) }
+      } catch {
+        return undefined
+      }
     },
     bind(session, name, by) {
       if (typeof session !== 'string' || session === '') return fail('bad-request', 'session is required')

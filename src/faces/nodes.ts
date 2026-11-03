@@ -104,13 +104,18 @@ export function nodeAction(store: NodeStore, binder: NodeBinder, tasks: NodeTask
  * with its version numbers and current layers. `current` only shows a version that passes the shape
  * and sha checks (`null` otherwise) — the same reading a mount uses.
  */
-export function nodeView(store: NodeStore, bindings: NodeBindings, binder: NodeBinder, tasks: NodeTasks, reviews: NodeReviewQueue, name: string | null): { status: number; payload: Record<string, unknown> } {
+export function nodeView(store: NodeStore, bindings: NodeBindings, binder: NodeBinder, tasks: NodeTasks, reviews: NodeReviewQueue, name: string | null, assembled: ReadonlyMap<string, { core: boolean; mutable: boolean }> = new Map()): { status: number; payload: Record<string, unknown> } {
   if (name === null || name === '') {
     return {
       status: 200,
       payload: {
         ok: true, nodes: store.list(), read_only: store.readOnly, dropped: store.dropped,
-        bindings: bindings.list().map(b => ({ ...b, mounted: binder.mounted(b.session) ?? null })),
+        // #174: `assembled` is what the session's prompt really carries; `sections_missing` flags a mounted
+        // node whose sections a `complete` preset dropped (the workbench hint reads it).
+        bindings: bindings.list().map(b => {
+          const seen = assembled.get(b.session)
+          return { ...b, mounted: binder.mounted(b.session) ?? null, ...(seen !== undefined ? { assembled: seen, sections_missing: !seen.core || !seen.mutable } : {}) }
+        }),
         bindings_read_only: bindings.readOnly,
         reviews: reviews.list(),
         reviews_read_only: reviews.readOnly,
@@ -150,8 +155,22 @@ export function registerNodeFaces(webServer: WebServer, d: NodeFaceDeps): void {
       if (req.method === 'GET') {
         controlRoute((r, s) => {
           try {
-            const view = nodeView(nodeStore, bindings, binder, tasks, reviews, new URL(r.url ?? '/', 'http://x').searchParams.get('name'))
-            send(s, view.status, view.payload)
+            const name = new URL(r.url ?? '/', 'http://x').searchParams.get('name')
+            // #174: the roster view assembles each mounted session's prompt (async), then renders.
+            void (async () => {
+              const assembled = new Map<string, { core: boolean; mutable: boolean }>()
+              if (name === null || name === '') {
+                for (const b of bindings.list()) {
+                  const seen = await binder.assembled(b.session)
+                  if (seen !== undefined) assembled.set(b.session, seen)
+                }
+              }
+              const view = nodeView(nodeStore, bindings, binder, tasks, reviews, name, assembled)
+              send(s, view.status, view.payload)
+            })().catch((error: unknown) => {
+              d.logger.warn('nodes face: %s', String(error))
+              if (!s.headersSent) send(s, 500, { ok: false, error: 'internal error' })
+            })
           } catch (error) {
             d.logger.warn('nodes face: %s', String(error))
             if (!s.headersSent) send(s, 500, { ok: false, error: 'internal error' })

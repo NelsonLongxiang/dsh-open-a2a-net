@@ -50,9 +50,10 @@ class FakeAgentsService extends Service {
 interface ScopedAgent { id: Agent['id']; ctx: Context; key: object; session: { events: unknown[]; title: string }; dispose: () => Promise<void> }
 
 function makeAgent(host: Context, id: string): ScopedAgent {
-  const key = {}
-  const scope = createScope(host, key)
-  return { id: SessionId(id), ctx: scope.ctx, key, session: { events: [], title: id }, dispose: async () => { await scope.dispose() } }
+  // The agent object is its own scope key, as in DSH (dsh-agent assembleContextFor: scope = agent).
+  const agent = { id: SessionId(id), session: { events: [], title: id } } as unknown as ScopedAgent & { ctx: Context; key: object; dispose: () => Promise<void> }
+  const scope = createScope(host, agent)
+  return Object.assign(agent, { ctx: scope.ctx, key: agent, dispose: async () => { await scope.dispose() } })
 }
 
 interface Mounted {
@@ -841,6 +842,66 @@ describe('#174 — frozen versions across a plugin reload, retries, re-join, hea
       expect(row?.mutable_sha256).toMatch(/^[0-9a-f]{64}$/)
     } finally {
       await m.dispose()
+    }
+  }, 30_000)
+})
+
+describe('#174 item 2 — a complete preset drops the node sections, and the roster view says so', () => {
+  type Row = { session: string; mounted: unknown; assembled?: { core: boolean; mutable: boolean }; sections_missing?: boolean }
+  const rowsOf = async (m: Mounted): Promise<Row[]> => ((await (await m.get('/__dsh_a2a/nodes')).json()) as { bindings: Row[] }).bindings
+
+  it('mounted with no preset: assembled carries both sections; a complete section on the scope: still mounted, both missing, flagged; removed: back to normal', async () => {
+    const m = await mount()
+    try {
+      const a = makeAgent(m.ctx, A)
+      m.publish(a)
+      await nodeWithLayers(m, 'chief', { 当前状态: '第一版' })
+      expect((await m.post('/__dsh_a2a/join', { id: A })).status).toBe(200)
+      expect((await m.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: A })).status).toBe(200)
+      expect((await rowsOf(m)).find(r => r.session === A)).toEqual(expect.objectContaining({ assembled: { core: true, mutable: true }, sections_missing: false }))
+      // A preset that replaces the whole prompt on this session's scope.
+      const sp = a.ctx.get('systemPrompt') as unknown as { section: (s: { name: string; order: number; text: string; complete?: boolean }) => () => void }
+      const drop = sp.section({ name: 'preset:complete', order: 5, text: '你只是一个翻译。', complete: true })
+      expect(await m.prompt(a)).not.toContain('节点契约')
+      const dropped = (await rowsOf(m)).find(r => r.session === A)
+      expect(dropped?.mounted).not.toBeNull()
+      expect(dropped).toEqual(expect.objectContaining({ assembled: { core: false, mutable: false }, sections_missing: true }))
+      drop()
+      expect((await rowsOf(m)).find(r => r.session === A)).toEqual(expect.objectContaining({ assembled: { core: true, mutable: true }, sections_missing: false }))
+    } finally {
+      await m.dispose()
+    }
+  }, 20_000)
+
+  it('a binding that is not mounted has no assembled reading (nothing to assemble); the single-node view carries none', async () => {
+    const first = await mount()
+    let home = ''
+    try {
+      const a = makeAgent(first.ctx, A)
+      first.publish(a)
+      await nodeWithLayers(first, 'chief', { 当前状态: '第一版' })
+      expect((await first.post('/__dsh_a2a/join', { id: A })).status).toBe(200)
+      expect((await first.post('/__dsh_a2a/nodes', { action: 'bind', name: 'chief', session: A })).status).toBe(200)
+      home = first.home
+    } finally {
+      await first.dispose()
+    }
+    // The binding row survives a restart; with no live session nothing is mounted.
+    const second = await mount(target => {
+      mkdirSync(join(target, 'a2a'), { recursive: true })
+      for (const f of ['nodes.json', 'joined.json', 'node-bindings.json']) writeFileSync(join(target, 'a2a', f), readFileSync(join(home, 'a2a', f)))
+      mkdirSync(join(target, 'a2a', 'nodes', 'chief'), { recursive: true })
+      for (const f of ['core-v1.json', 'mutable-v1.json']) writeFileSync(join(target, 'a2a', 'nodes', 'chief', f), readFileSync(join(home, 'a2a', 'nodes', 'chief', f)))
+    })
+    try {
+      const row = (await rowsOf(second)).find(r => r.session === A)
+      expect(row?.mounted).toBeNull()
+      expect(row?.assembled).toBeUndefined()
+      expect(row?.sections_missing).toBeUndefined()
+      const one = (await (await second.get('/__dsh_a2a/nodes?name=chief')).json()) as Record<string, unknown>
+      expect(JSON.stringify(one)).not.toContain('sections_missing')
+    } finally {
+      await second.dispose()
     }
   }, 30_000)
 })
