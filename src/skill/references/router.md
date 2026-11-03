@@ -87,7 +87,7 @@
 ### 已知陷阱
 - held 状态超过 72 小时就判为不通过：观察期里要及时 release 或撤回。
 - a2a CLI 户口 4 小时过期，发送前先执行 `publish`。
-- `verify-probe.mjs` 会清空固定的 TEMP 目录 `dsh-a2a-submission`，跑之前确认里面没有别人的东西。
+- `verify-probe.mjs` 每轮把提交树导出到一个新建的唯一目录 `<TEMP>/dsh-a2a-submission-XXXXXX`，并把路径写进 `verify/probe-summary.json`；`verify-recursive.mjs` 只认这个路径，不再读、也不再清空旧的固定目录 `dsh-a2a-submission`（#213）。这些导出目录不会自动删除，需要时手动清理自己的。
 
 ### 当前重点
 - 跑通第一条真实的人类事件。需要三件事：

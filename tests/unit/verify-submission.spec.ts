@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { submissionFromProbe } from '../../scripts/verify-submission.mjs'
@@ -25,5 +25,32 @@ describe('RC recursive verifier submission binding', () => {
       writeFileSync(summary, JSON.stringify({ snapshot, git_head: head.slice(0, 8), submission: join(root, '..', 'dsh-a2a-submission-foreign') }))
       expect(submissionFromProbe(summary, snapshot, head, root).ok).toBe(false)
     } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+
+  it('refuses a summary without a submission, a vanished export, and a link standing in for one — the old fixed directory is never the answer', () => {
+    const root = mkdtempSync(join(tmpdir(), 'a2a-verify-submission-test-'))
+    try {
+      const snapshot = join(root, 'snapshot.sqlite')
+      const summary = join(root, 'probe-summary.json')
+      const head = 'c'.repeat(40)
+      const stale = join(root, 'dsh-a2a-submission')
+      mkdirSync(stale)
+      const row = (extra: Record<string, unknown>) => writeFileSync(summary, JSON.stringify({ snapshot, git_head: head.slice(0, 8), ...extra }))
+      row({})
+      expect(submissionFromProbe(summary, snapshot, head, root)).toEqual({ ok: false, error: expect.stringContaining('lacks an absolute submission path') as unknown })
+      row({ submission: join(root, 'dsh-a2a-submission-gone') })
+      expect(submissionFromProbe(summary, snapshot, head, root)).toEqual({ ok: false, error: expect.stringContaining('missing') as unknown })
+      const link = join(root, 'dsh-a2a-submission-link')
+      symlinkSync(stale, link)
+      row({ submission: link })
+      expect(submissionFromProbe(summary, snapshot, head, root).ok).toBe(false)
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+
+  it('verify-recursive hands the engine only the bound submission path (no fixed-directory fallback at the call site)', () => {
+    const src = readFileSync(join(process.cwd(), 'scripts', 'verify-recursive.mjs'), 'utf8')
+    expect(src).not.toMatch(/["']dsh-a2a-submission["']/)
+    expect(src).not.toMatch(/\btmpdir\(/)
+    expect(src).toMatch(/"--submission", submission\.path/)
   })
 })
