@@ -252,6 +252,15 @@
 #dsh-plan .p-dialog-input:hover{border-color:color-mix(in srgb,var(--uupm-ink-1) 55%,transparent)}
 #dsh-plan .p-dialog-input:focus-visible{outline:2px solid var(--accent); outline-offset:1px; border-color:var(--accent)}
 #dsh-plan .p-dialog-err{min-height:1.2em; font-size:11px; color:var(--uupm-error)}
+#dsh-plan .p-dialog-kind{display:grid; grid-template-columns:1fr 1fr; gap:4px; padding:3px;
+  background:var(--uupm-bg-0); border:1px solid var(--card-line); border-radius:8px}
+#dsh-plan .p-dialog-kind button{font:inherit; color:var(--ink-muted); background:transparent; border:1px solid transparent;
+  border-radius:6px; padding:6px 10px; cursor:pointer}
+#dsh-plan .p-dialog-kind button:hover{color:var(--ink); background:var(--uupm-wash-8)}
+#dsh-plan .p-dialog-kind button[aria-checked=true]{color:var(--ink); font-weight:600; background:var(--uupm-wash-15);
+  border-color:var(--accent)}
+#dsh-plan .p-dialog-kind button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+#dsh-plan .p-dialog-hint{font-size:11px; color:var(--ink-muted); max-width:340px}
 #dsh-plan .p-dialog-row{display:flex; gap:8px; justify-content:flex-end}
 #dsh-plan .p-dialog-row button{background:transparent; color:var(--ink); border:1px solid var(--card-line);
   border-radius:6px; padding:5px 12px; font:inherit; cursor:pointer}
