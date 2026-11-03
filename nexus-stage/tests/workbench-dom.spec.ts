@@ -7,11 +7,11 @@
  * rendering, and the responsive toggles (rail collapse / drawer).
  */
 import { describe, expect, it, vi } from 'vitest'
-import { createWorkbench, type StateBody } from '../src/workbench.ts'
+import { createWorkbench, type StateBody, type WorkbenchDeps } from '../src/workbench.ts'
 
 const NOW = 1_700_000_000_000
 
-function bench() {
+function bench(extra: Partial<WorkbenchDeps> = {}) {
   const abandon = vi.fn(async () => true)
   const copy = vi.fn()
   const canvasOp = vi.fn(async () => true)
@@ -41,7 +41,7 @@ function bench() {
       { id: 'session-77777777-peer', mtimeMs: NOW - 3_000, sizeBytes: 4096 },
     ] }
   })
-  const v = createWorkbench({ now: () => NOW, abandon, copy, canvasOp, dispatchQuick, sessionLog, sessionLogList, remoteSessionLog })
+  const v = createWorkbench({ now: () => NOW, abandon, copy, canvasOp, dispatchQuick, sessionLog, sessionLogList, remoteSessionLog, ...extra })
   document.body.appendChild(v.root)
   return { v, abandon, copy, canvasOp, dispatchQuick, sessionLog, sessionLogList, remoteSessionLog }
 }
@@ -712,6 +712,41 @@ describe('canvas inspector member management (0.6.6)', () => {
     expect(rows[0]?.querySelector('.wb-member-label')?.getAttribute('title')).toBe('home 未确定')
     expect(text(rows[1]?.querySelector('.wb-member-dot'))).not.toContain('home 未确定')
     expect(rows[1]?.querySelector('.wb-member-label')?.getAttribute('title')).toBe('https://home.example')
+  })
+
+  it('unknown CLI home offers fresh candidates, requires explicit choice, and survives polling', async () => {
+    const read = vi.fn(async () => ({ ok: true, homes: ['https://one.example', 'https://two.example'], unreadable: 2 }))
+    const { v, canvasOp } = bench({ cliHomeOptions: read })
+    const current: StateBody = { ...state, canvas: { teams: [{ name: 'ygl', team: 'dsh/canvas/ygl', members: [{ id: 'ops-cli/a1b2c3d4e5f60718', remote: true, cliHome: null }] }] } }
+    v.update(current); openTeam(v)
+    const form = v.root.querySelector('.wb-cli-home') as HTMLFormElement
+    const load = form.querySelector('button[type=button]') as HTMLButtonElement
+    load.click()
+    await vi.waitFor(() => expect(read).toHaveBeenCalledWith('ygl', 'ops-cli/a1b2c3d4e5f60718'))
+    await vi.waitFor(() => expect(text(form)).toContain('有 2 台对端名片读不到'))
+    const select = form.querySelector('select') as HTMLSelectElement
+    const submit = form.querySelector('button[type=submit]') as HTMLButtonElement
+    expect(select.value).toBe(''); expect(submit.disabled).toBe(true); expect(canvasOp).not.toHaveBeenCalled()
+    select.value = 'https://two.example'; select.dispatchEvent(new Event('change'))
+    v.update(current)
+    expect(v.root.querySelector('.wb-cli-home select')).toBe(select)
+    expect(select.value).toBe('https://two.example')
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(canvasOp).toHaveBeenCalledWith('add-member', 'ygl', 'ops-cli/a1b2c3d4e5f60718', 'https://two.example'))
+    expect(text(form)).toContain('home 已指定')
+  })
+
+  it('home candidate failures and empty lists stay visible without changing membership', async () => {
+    const read = vi.fn().mockResolvedValueOnce({ ok: false, error: 'offline' }).mockResolvedValueOnce({ ok: true, homes: [], unreadable: 3 })
+    const { v, canvasOp } = bench({ cliHomeOptions: read })
+    v.update({ ...state, canvas: { teams: [{ name: 'ygl', team: 'dsh/canvas/ygl', members: [{ id: 'ops-cli/a1b2c3d4e5f60718', remote: true, cliHome: null }] }] } })
+    openTeam(v)
+    const form = v.root.querySelector('.wb-cli-home') as HTMLFormElement
+    const load = form.querySelector('button[type=button]') as HTMLButtonElement
+    load.click(); await vi.waitFor(() => expect(text(form)).toContain('读取失败'))
+    load.click(); await vi.waitFor(() => expect(text(form)).toContain('没有已链接'))
+    expect((form.querySelector('button[type=submit]') as HTMLButtonElement).disabled).toBe(true)
+    expect(canvasOp).not.toHaveBeenCalled()
   })
 
   it('adds members by picker (local session) and by manual remote handle', async () => {

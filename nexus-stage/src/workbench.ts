@@ -19,6 +19,7 @@
  * @module nexus-stage/workbench
  */
 import { createChatDrawer, type ChatTarget } from './wb-chat'
+import { createCliHomePicker, type CliHomeOptions } from './cli-home-picker'
 import { createRailTabs } from './wb-rail'
 import { DIRECTORY_FILTERS, learnLogTitle, loadLogTitles, renderDirectory, type DirFilter } from './wb-directory'
 import { ledgerFacts, renderLedger as paintLedger } from './wb-ledger'
@@ -214,7 +215,8 @@ export interface WorkbenchDeps {
   abandon(taskId: string, reason: string): Promise<boolean>
   /** Canvas team member change via the control route (0.6.6): `id` is a
    *  local session id or a zone-qualified remote handle. True on success. */
-  canvasOp(action: 'add-member' | 'remove-member', name: string, id: string): Promise<boolean>
+  canvasOp(action: 'add-member' | 'remove-member', name: string, id: string, home?: string): Promise<boolean>
+  cliHomeOptions?(name: string, id: string): Promise<CliHomeOptions>
   /** Quick dispatch (0.6.9): POST /__dsh_a2a/dispatch as a human gesture —
    *  one message to a routing team, async delivery, receipt lands in the
    *  ledger. Optional — without it the 快派 form hides. */
@@ -335,6 +337,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // Canvas add-member form cache (static DOM re-mounted across polls; keyed
   // by team name — same trick as draftForm so inputs survive the 3s poll).
   let canvasForm: { name: string; form: HTMLFormElement; pick: HTMLSelectElement; manual: HTMLInputElement } | null = null
+  const cliHomeForms = new Map<string, HTMLFormElement>()
   // Quick-dispatch form (0.6.9), cached per target routing team the same
   // draftForm way: a textarea's draft must survive the 3s poll remount.
   let dispatchForm: { team: string; form: HTMLFormElement; text: HTMLTextAreaElement; note: HTMLElement } | null = null
@@ -980,6 +983,15 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         })
         row.appendChild(remove)
         card.appendChild(row)
+        if (member.cliHome === null && deps.cliHomeOptions !== undefined) {
+          const key = JSON.stringify([fresh.name, member.id])
+          let form = cliHomeForms.get(key)
+          if (form === undefined) {
+            form = createCliHomePicker(() => deps.cliHomeOptions!(fresh.name, member.id), home => deps.canvasOp('add-member', fresh.name, member.id, home))
+            cliHomeForms.set(key, form)
+          }
+          card.appendChild(form)
+        }
       }
       // Add-member form: static DOM re-mounted per poll (draftForm trick) —
       // rebuilt only when the inspected team changes.
@@ -1198,6 +1210,8 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   }
 
   function update(state: StateBody | null): void {
+    const unknown = new Set((state?.canvas?.teams ?? []).flatMap(team => team.members.filter(member => member.cliHome === null).map(member => JSON.stringify([team.name, member.id]))))
+    for (const key of cliHomeForms.keys()) if (!unknown.has(key)) cliHomeForms.delete(key)
     last = state
     // 0.6.12: refresh the readable-log list opportunistically (single flight;
     // the sidebar re-renders when rows land, mid-poll remount is idempotent).

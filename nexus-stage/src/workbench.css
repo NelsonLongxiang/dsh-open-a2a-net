@@ -93,6 +93,10 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-member-remove:hover:not(:disabled),.wb-member-submit:hover:not(:disabled){border-color:var(--n-danger)}
 .wb-member-submit:hover:not(:disabled){border-color:var(--n-accent)}
 .wb-member-add{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.wb-cli-home{display:flex;flex-wrap:wrap;gap:6px;padding:8px;margin:4px 0 10px;border:1px solid var(--n-border);border-radius:6px}
+.wb-cli-home [hidden]{display:none}
+.wb-cli-home .wb-hint{flex-basis:100%;margin-top:0}
+.wb-cli-home .wb-member-pick{min-width:0;max-width:100%}
 .wb-member-pick,.wb-member-manual{background:var(--n-panel);border:1px solid var(--n-border);color:var(--n-ink);
   border-radius:6px;padding:3px 8px;font:inherit;font-size:12px;min-width:0}
 .wb-member-pick{flex:1 1 150px}

@@ -71,6 +71,7 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly groupStore: GroupStore
   readonly canvasStore: CanvasStore
   readonly cliHomeForAdd: (handle: string, requested?: unknown) => Promise<CliHomeDecision>
+  readonly cliHomeOptions: (handle: string) => Promise<{ homes: string[]; unreadable: number }>
   readonly layoutStore: LayoutStore
   readonly taskLedger: TaskLedger
   /** #114 S6: observe (lazily) and return the /state `authorization` block. */
@@ -796,7 +797,15 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
       readJsonBody(req, res, async (body) => {
         const action = body.action
         let payload: string
-        if (action === 'create') {
+        if (action === 'cli-home-options') {
+          const name = typeof body.name === 'string' ? body.name : ''
+          const id = typeof body.id === 'string' ? body.id : ''
+          if (!CLI_HANDLE_RE.test(id) || !canvasStore.membersOf(name).includes(id)) payload = JSON.stringify({ ok: false, error: 'an existing canvas CLI member is required' })
+          else {
+            try { payload = JSON.stringify({ ok: true, ...await d.cliHomeOptions(id) }) }
+            catch { payload = JSON.stringify({ ok: false, error: 'fresh home card lookup failed' }) }
+          }
+        } else if (action === 'create') {
           const name = typeof body.name === 'string' ? body.name : ''
           const stored = canvasNameReserved(name) ? undefined : canvasStore.create(name)
           payload = JSON.stringify(stored === undefined ? { ok: false, error: 'invalid, roster-reserved name or team cap reached' } : { ok: true, name: stored, teams: canvasStore.list() })
