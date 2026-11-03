@@ -575,6 +575,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
                   direction: { type: 'string', enum: ['inbound', 'outbound'] },
                   receiptExpected: { type: 'boolean' },
                   forwarded: { type: 'boolean' },
+                  deliveredTo: { type: 'string' },
                   reason: { type: 'string', enum: ['fire-forget', 'unconsumed'] },
                   sender: {
                     type: 'object',
@@ -656,13 +657,26 @@ export function createInfoTools(deps: InfoToolsDeps) {
         }],
       },
       presentCall: () => ({ card: 'generic', title: 'A2A task ledger', kind: 'other', rawInput: null }),
-      execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; status: 'pending' | 'dead'; deadAt?: number; reason?: 'fire-forget' | 'unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean; sender?: Sender }[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; sender?: Sender }[]; archivedTotal: number }> => {
+      execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; status: 'pending' | 'dead'; deadAt?: number; reason?: 'fire-forget' | 'unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean; forwarded?: true; deliveredTo?: string; sender?: Sender }[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; sender?: Sender }[]; archivedTotal: number }> => {
         a2aJoinGateRefusal(exec)
         observeAuthorization('lazy')
         const archiveAll = taskLedger.archive()
         return {
           ok: true,
-          tasks: taskLedger.list().map(task => ({ ...task })),
+          // Project the declared fields only: ledger rows also carry internal audit facts (the #114 auth record,
+          // #139 peerKey/peerHost) the output schema does not admit — spreading the row failed every call (0.6.32+).
+          tasks: taskLedger.list().map(({ taskId, team, peer, startedAt, contextId, brief, status, deadAt, direction, receiptExpected, forwarded, deliveredTo, reason, sender }) => ({
+            taskId, team, peer, startedAt, status,
+            ...(contextId !== undefined ? { contextId } : {}),
+            ...(brief !== undefined ? { brief } : {}),
+            ...(deadAt !== undefined ? { deadAt } : {}),
+            ...(direction !== undefined ? { direction } : {}),
+            ...(receiptExpected !== undefined ? { receiptExpected } : {}),
+            ...(forwarded !== undefined ? { forwarded } : {}),
+            ...(deliveredTo !== undefined ? { deliveredTo } : {}),
+            ...(reason !== undefined ? { reason } : {}),
+            ...(sender !== undefined ? { sender } : {}),
+          })),
           archive: archiveAll.slice(0, 5).map(({ taskId, team, startedAt, resolvedAt, summary, brief, sender }) => ({ taskId, team, startedAt, resolvedAt, ...(summary !== undefined && summary !== '' ? { summary } : {}), ...(brief !== undefined ? { brief } : {}), ...(sender !== undefined ? { sender } : {}) })),
           archivedTotal: archiveAll.length,
         }
