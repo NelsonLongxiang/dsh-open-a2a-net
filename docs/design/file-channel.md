@@ -103,7 +103,7 @@
 
 ## 4. 与 JPFILE-PART 的过渡
 
-1. 文件通道合入并部署后，FloodGuard 遇到 JPFILE-PART 消息时，拒收原因里加上 `use-file-channel`，并附上 `a2a_file_send` 的用法。
+1. 文件通道合入并部署后，FloodGuard 遇到 JPFILE-PART 消息时，响应增加 `advice.reason: use-file-channel`，并附上 `a2a_file_send { paths, team }` 与 `a2a-net file send <path…> <team>` 的用法；16 件以内仍按原规则放行，只附提示。超限仍以 `-32008` / `file-parts-exceeded` 拒收，错误文本也带迁移提示。
 2. 机群全部升级后的下一个版本，JPFILE-PART 一律拒收。这一步按 v1.18 属高档，要有非自我评审。
 
 过渡期内 16 件的上限保持不变。

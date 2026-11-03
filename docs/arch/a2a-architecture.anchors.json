@@ -18,8 +18,8 @@
     "nexus-stage/src/world.ts": "e9d759ed5bb5272f5798260450927e453f00fe442c8006e7037d2eb2db0d0f81",
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
-    "src/flood-guard.ts": "49e9eda59169e3041ea4662e6c32a8880ebbba3e40b86e6f2164add5e96957ac",
-    "src/faces/wire.ts": "c352bfe3388d9defa79c538cba8a682ffab113802a41f8216f43fc308dd911d2",
+    "src/flood-guard.ts": "037a5e6f9bfb7f26b0584dadc6cf03acad7c101736259da76805daec7e47583e",
+    "src/faces/wire.ts": "4d4bc547d6e4390ff24521945632ab15c49783ee1b828cc3fc2abe556a338b17",
     "src/faces/canvas-notify.ts": "7153f7cb2b6c985825edde55809d47d3a2a14e652d69e55f6d1a72cd9f6d50d9",
     "src/task-auth.ts": "8558710d33b37f3e261eded23b6ca971572019a5dccb05ab5e8d8bd222095717",
     "src/origin-claim.ts": "d467153656bd5592785597e4a81d3686f0b4f91cac38705ecb18d4cc74f8d22c",
@@ -117,19 +117,19 @@
     {
       "page": "p1-arch",
       "cell": "c2",
-      "ref": "src/faces/wire.ts:526",
+      "ref": "src/faces/wire.ts:507",
       "expect": "path: '/a2a/direct',"
     },
     {
       "page": "p1-arch",
       "cell": "c3",
-      "ref": "src/faces/wire.ts:368",
+      "ref": "src/faces/wire.ts:349",
       "expect": "path: '/a2a/log',"
     },
     {
       "page": "p1-arch",
       "cell": "c4",
-      "ref": "src/faces/wire.ts:447",
+      "ref": "src/faces/wire.ts:428",
       "expect": "path: '/a2a/query',"
     },
     {
@@ -333,19 +333,19 @@
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/faces/wire.ts:710",
+      "ref": "src/faces/wire.ts:691",
       "expect": "if (refuseIfFlooded(caller, message, team, taskId, res)) return"
     },
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/flood-guard.ts:86",
+      "ref": "src/flood-guard.ts:90",
       "expect": "export function createFloodGuard("
     },
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/wire.ts:186",
+      "ref": "src/faces/wire.ts:167",
       "expect": "export function registerWireFaces(webServer: WebServer, d: WireDeps): void {"
     },
     {

@@ -1,7 +1,6 @@
 # Direct flood guard — #91 transitional brake
 
-Status: implementation candidate; NOT deployed and NOT a claim that the WSL
-incident has stopped. The independent file channel remains separate work.
+Status: transitional guard with F4 file-channel migration advice. File-channel F1–F3 shipped in 0.6.32; this change does not claim a fleet upgrade or that the WSL incident has stopped. Unconditional JPFILE-PART rejection remains a separate, high-grade rollout after the fleet upgrades.
 
 ## Wire contract
 
@@ -35,6 +34,14 @@ sender-rate-limited / file-parts-exceeded / file-part-invalid /
 file-part-duplicate / flood-state-full. The same fresh idempotency key gets
 a failed outcome for /a2a/query, and activity records a failed inbound event.
 It never becomes an owed receipt or a false delivered result.
+
+Every JPFILE-PART message reaching the guard (including malformed variants) adds a structured `advice` field to its response:
+
+```json
+{ "advice": { "reason": "use-file-channel", "message": "Files must use the file channel, not session messages: a2a_file_send { paths, team }; CLI: a2a-net file send <path…> <team>." } }
+```
+
+`use-file-channel` is migration advice, not a new refusal code: accepted parts within the existing 16-part and sender budgets remain accepted with the same success fields. Refusals retain their original `reason` (for example `file-parts-exceeded`) and code `-32008`; their error text also includes `use-file-channel` and both send commands. All later response exits, including CLI mailbox, sync, async and target-queue refusal, carry the advice without changing their verdict. Ordinary messages acquire no advice. Admission/budget/idempotency refusals that occur before the guard keep their existing responses. This does not make all JPFILE-PART messages invalid yet.
 
 ## Boundaries and incident evidence
 

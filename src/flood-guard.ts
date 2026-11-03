@@ -6,6 +6,10 @@
  */
 import type { ServerResponse } from 'node:http'
 import type { IdempotencyStore } from './idempotency-store.ts'
+import { withResponseFields } from './response-fields.ts'
+
+export const FILE_CHANNEL_ADVICE = { reason: 'use-file-channel', message: 'Files must use the file channel, not session messages: a2a_file_send { paths, team }; CLI: a2a-net file send <path…> <team>.' } as const
+export const fileChannelAdvice = (message: string): typeof FILE_CHANNEL_ADVICE | undefined => message.includes('[JPFILE-PART') ? FILE_CHANNEL_ADVICE : undefined
 
 export const WIRE_ERROR_RATE_LIMITED = -32008
 export const MAX_PARTS_PER_TRANSFER = 16
@@ -89,9 +93,11 @@ export function createFloodGuard(
 ): (caller: string, message: string, team: string, taskId: string, res: ServerResponse) => boolean {
   const guard = new FloodGuard()
   return (caller, message, team, taskId, res) => {
+    const advice = fileChannelAdvice(message)
+    if (advice !== undefined) withResponseFields(res, { advice })
     const reason = guard.check(caller, message)
     if (reason === undefined) return false
-    const error = 'flood-guard: ' + reason + ' (gh#91): file data must use an independent channel; no delivery occurred'
+    const error = 'flood-guard: ' + reason + ' (gh#91): file data must use an independent channel; no delivery occurred' + (advice === undefined ? '' : '; use-file-channel: ' + advice.message)
     outcomes.recordOutcome(taskId, { status: 'failed', error })
     recordActivity('in', team, caller, false)
     const payload = JSON.stringify({ error, reason, code: WIRE_ERROR_RATE_LIMITED, task_id: taskId, team, delivered: false, task_status: 'TASK_STATE_FAILED' })

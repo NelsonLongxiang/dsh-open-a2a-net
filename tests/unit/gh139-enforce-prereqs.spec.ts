@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { buildAuthorization, judgeSettlement, localCandidateAdmission, type AdmissionRecords, type Settler, type SettlementFacts } from '../../src/task-auth.ts'
 import { TaskLedger } from '../../src/task-ledger.ts'
 import { withSettlementField } from '../../src/faces/wire.ts'
+import { withResponseFields } from '../../src/response-fields.ts'
 
 const HOST = 'dsh-host-9c53bf95'
 const KEY = 'MCowBQYDK2VwAyEApeerKeyBbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb='
@@ -149,6 +150,18 @@ describe('#139 withSettlementField', () => {
     expect(JSON.parse(String(sent.body))).toEqual({ delivered: true, settlement: refusal })
     expect(sent.headers?.['Content-Length']).toBe(Buffer.byteLength(String(sent.body)))
     expect(sent.status).toBe(200)
+  })
+
+  it('composes migration advice with settlement without losing either field or byte length', () => {
+    const { res, sent } = fakeRes()
+    const advice = { reason: 'use-file-channel', message: '文件不走会话消息' }
+    withResponseFields(res, { advice })
+    withSettlementField(res, refusal)
+    const body = JSON.stringify({ delivered: true })
+    ;(res as { writeHead: (s: number, h: Record<string, string | number>) => void }).writeHead(200, { 'Content-Length': Buffer.byteLength(body) })
+    ;(res as { end: (b: string) => void }).end(body)
+    expect(JSON.parse(String(sent.body))).toEqual({ delivered: true, advice, settlement: refusal })
+    expect(sent.headers?.['Content-Length']).toBe(Buffer.byteLength(String(sent.body)))
   })
 
   it('leaves a non-object body unchanged', () => {
