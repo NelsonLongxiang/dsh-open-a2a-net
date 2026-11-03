@@ -24,7 +24,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Config } from '../index.ts'
 import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from '../runtime.ts'
-import { CanvasStore, isRemoteMemberRef, validRemoteMemberRef } from '../canvas-store.ts'
+import { CanvasStore, canvasNameReserved as reservedCanvasName, isRemoteMemberRef, validRemoteMemberRef } from '../canvas-store.ts'
 import { refreshPeerCard, registerCanvasNotify, type CanvasNotifyDeps } from './canvas-notify.ts'
 import type { CliDepositStore } from '../cli-deposit.ts'
 import type { ExposureStore } from '../exposure-store.ts'
@@ -777,7 +777,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
   // remembered intent): canvas routing only reaches sessions the user
   // put on the network by gesture — no routing backdoor over unjoined
   // sessions.
-  const canvasNameReserved = (name: string): boolean => { const clean = name.trim(); return clean.startsWith('roster:') || d.ownerAllowlist.includes(`${config.team}/${clean}`) || teamMemberships.membersOf(`${config.team}/${clean}`).length > 0 }
+  const canvasNameReserved = (name: string): boolean => reservedCanvasName(name, config.team, d.ownerAllowlist, teamMemberships)
   ctx.effect(() => webServer.register({
     kind: 'exact',
     path: '/__dsh_a2a/canvas',
