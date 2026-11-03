@@ -133,6 +133,7 @@ export interface CanvasMemberRow {
   readonly remote?: boolean
   /** Present only for CLI refs: null means the linked home is ambiguous or unknown. */
   readonly cliHome?: string | null
+  readonly cliHeld?: boolean
 }
 
 /** One canvas team from /state `canvas.teams`. */
@@ -967,12 +968,12 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       }
       for (const member of fresh.members) {
         const row = el('div', 'wb-member-row')
-        const dot = member.remote === true ? (member.cliHome === null ? '◇ 远端 · home 未确定' : '◇ 远端') : member.live === true ? '● 现场' : member.joined === true ? '○ 冷启' : '· 未入网'
+        const dot = member.cliHeld === true ? '本机持有，无需指定' : member.remote === true ? (member.cliHome === null ? '◇ 远端 · home 未确定' : '◇ 远端') : member.live === true ? '● 现场' : member.joined === true ? '○ 冷启' : '· 未入网'
         row.appendChild(el('span', 'wb-member-dot')).textContent = dot
         const label = el('span', 'wb-member-label')
         const session = (last?.sessions ?? []).find(s => s.id === member.id)
         label.textContent = member.remote === true ? member.id : (session !== undefined ? displayName(session) : member.id)
-        label.title = member.cliHome !== undefined ? (member.cliHome ?? 'home 未确定') : (member.team ?? member.id)
+        label.title = member.cliHeld === true ? '本机持有，无需指定' : member.cliHome !== undefined ? (member.cliHome ?? 'home 未确定') : (member.team ?? member.id)
         row.appendChild(label)
         const remove = el('button', 'wb-member-remove')
         remove.type = 'button'
@@ -983,7 +984,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         })
         row.appendChild(remove)
         card.appendChild(row)
-        if (member.cliHome === null && deps.cliHomeOptions !== undefined) {
+        if (member.cliHome === null && member.cliHeld !== true && deps.cliHomeOptions !== undefined) {
           const key = JSON.stringify([fresh.name, member.id])
           let form = cliHomeForms.get(key)
           if (form === undefined) {
@@ -1210,7 +1211,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   }
 
   function update(state: StateBody | null): void {
-    const unknown = new Set((state?.canvas?.teams ?? []).flatMap(team => team.members.filter(member => member.cliHome === null).map(member => JSON.stringify([team.name, member.id]))))
+    const unknown = new Set((state?.canvas?.teams ?? []).flatMap(team => team.members.filter(member => member.cliHome === null && member.cliHeld !== true).map(member => JSON.stringify([team.name, member.id]))))
     for (const key of cliHomeForms.keys()) if (!unknown.has(key)) cliHomeForms.delete(key)
     last = state
     // 0.6.12: refresh the readable-log list opportunistically (single flight;

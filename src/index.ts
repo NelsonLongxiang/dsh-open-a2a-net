@@ -3269,12 +3269,14 @@ export function apply(ctx: Context, config: Config): void {
 
   async function cliHomeForAdd(handle: string, requested?: unknown) {
     const localHousehold = () => cliDeposits.directoryRows().some(row => row.team === handle)
-    if (requested === undefined && localHousehold()) return decideCliHome(handle, requested, [], true)
+    if (localHousehold()) return decideCliHome(handle, requested, [], true)
     return decideCliHome(handle, requested, CLI_HANDLE_RE.test(handle) ? await freshCliHomeCards() : [], localHousehold())
   }
 
   async function cliHomeOptions(handle: string) {
-    return cliHomeChoices(handle, await freshCliHomeCards())
+    const locallyHeld = () => cliDeposits.directoryRows().some(row => row.team === handle)
+    if (locallyHeld()) return cliHomeChoices(handle, [], true)
+    return cliHomeChoices(handle, await freshCliHomeCards(), locallyHeld())
   }
 
   /** Remote CLI admission never trusts a retained stale cache entry after a failed home read. */
@@ -4155,9 +4157,9 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
    * owner escalation actually fires for cross-node callback addresses.
    */
   async function dispatchAnywhere(team: string, message: string, callerSession: string | undefined, contextId: string | undefined, signal: AbortSignal, asyncMode: boolean, taskId?: string, peerCaller?: string): Promise<A2aRouteResult & { ok: true }> {
-    // A remote CLI receipt belongs only to its operator-pinned home, never a
-    // namesake deposit or another host publishing the same directory handle.
-    if (CLI_HANDLE_RE.test(team) && parseReceipt(message) !== null && (canvasStore.cliHomeOf(team) !== undefined || cliDeposits.get(team) === undefined)) {
+    // A local online household is an owner-established fact and receives locally.
+    // Otherwise only the pinned home may receive; never fall back to directory claims.
+    if (CLI_HANDLE_RE.test(team) && parseReceipt(message) !== null && cliDeposits.get(team) === undefined) {
       const home = canvasStore.cliHomeOf(team)
       if (home === undefined) throw new Error(`CLI receipt home is not pinned for ${team}`)
       const delivered = await dispatchPeerCandidate(home, team, message, contextId, signal, peerCaller ?? callerSession, asyncMode, taskId)
