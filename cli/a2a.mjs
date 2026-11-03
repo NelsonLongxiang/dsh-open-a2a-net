@@ -23,9 +23,9 @@
  * Runs on the SDK subpaths only — no @deepseek-ai/* imports.
  */
 import { createHash, generateKeyPairSync, randomUUID, sign as edSign, createPrivateKey } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 // The identity home: A2A_CLI_HOME overrides the base directory (the
 // testability anchor — os.homedir() reads USERPROFILE on Windows, so a
@@ -39,13 +39,14 @@ const INBOX_CURSOR = join(IDENTITY_DIR, 'inbox.cursor')
 const DEFAULT_HOME = 'http://127.0.0.1:3080'
 const DEFAULT_SKILL_ROOTS = [join(homedir(), '.agents', 'skills')]
 
-const USAGE = `a2a-net CLI — aligned with the plugin's ten model tools ('a2a tools' prints the full map)
+const USAGE = `a2a-net CLI — aligned with the plugin's model tools ('a2a tools' prints the full map)
 
 usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 
 户口制:   init <name> [--uuid 16hex] [--force] · publish · inbox [--new|--wait|--hook] · revoke
 对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · report <msg…> [--task ID]
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
+文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR]   (#91: bytes never ride a message)
 
 host:     --home > $A2A_HOME > the home saved by 'a2a init --home URL' > ${DEFAULT_HOME}
 key:      --key > $A2A_KEY (prefer the env var: a --key value stays in shell history)
@@ -66,7 +67,7 @@ inbox:    bare 'inbox' lists the whole mailbox (newest first, the host keeps 64;
                         nothing at all when there is none or the host is unreachable (always exit 0)`
 
 /** Flags that take a value (both '--home URL' and '--home=URL'); the rest are switches. */
-const VALUE_FLAGS = new Set(['--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task'])
+const VALUE_FLAGS = new Set(['--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task'])
 const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
@@ -269,10 +270,12 @@ const TOOL_CATALOG = [
   ['a2a_tasks', '账本三层对账：pending（欠回执）/dead（超期）/archived（已结算）'],
   ['a2a_probe', '探活整个 tracked fleet 或单 peer：可达性+往返延迟+失败原因'],
   ['a2a_exposure', '设本会话的网络可见档：linked（下限）/fleet（自愿上调）'],
+  ['a2a_file_send', '把文件暂存在本宿主并授权给目标队，只路由一条引用消息（字节不进消息）'],
+  ['a2a_file_fetch', '按引用从暂存宿主拉取文件，核对大小与 sha256 后落到 a2a-inbox/'],
 ]
 
 function printAlignment() {
-  console.log('插件工具面（十枚）与 CLI 对齐：\n')
+  console.log('插件工具面与 CLI 对齐：\n')
   for (const [tool, desc] of TOOL_CATALOG) console.log(`  ${tool.padEnd(16)} ${desc}`)
   console.log('\nCLI 对齐映射：')
   const map = [
@@ -283,6 +286,7 @@ function printAlignment() {
     ['a2a tasks', 'a2a_tasks', '账本三层（pending/dead/archived）'],
     ['a2a probe', 'a2a_probe', 'peer 可达性（评分/链接/验证，读暖态）'],
     ['a2a report', 'a2a_report', '离网报告（CLI 形态：投给宿主进程队信箱）'],
+    ['a2a file send/fetch', 'a2a_file_send/fetch', '文件通道（CLI 只能从自己的 home 宿主拉取）'],
     ['（N/A）', 'a2a_exposure', '暴露档是会话面概念——CLI 无会话；户口即其可见性'],
     ['（拖卡入队）', 'a2a_team_join/leave', '入队是会话手势——等价物：属主把 CLI 成员卡拖进 canvas 队（画布手势=运营者链接）'],
     ['a2a skills', '（插件无）', '加载本机技能目录输出（CLI 专有）'],
@@ -730,6 +734,86 @@ async function queryOutcome(body) {
  * earlier attempt of this id already landed: it is reported from /a2a/query,
  * never sent a second time.
  */
+// ── #91 file channel (docs/design/file-channel.md §3.4) ──────────────────
+// Mirrors src/blob-store.ts: the reference line and the name sanitizer must stay byte-identical.
+const FILE_MAX = 64 * 1024 * 1024
+const sanitizeName = (name) => {
+  const base = (String(name).split(/[\\/]/).pop() ?? '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]/g, '').replace(/\.\.+/g, '.').replace(/^[.\s]+/, '').trim()
+  const capped = base.slice(0, 120)
+  return capped === '' ? 'file' : capped
+}
+const fileRef = (f) => `[A2A file] v1 sha256=${f.sha256} size=${String(f.size)} name=${encodeURIComponent(sanitizeName(f.name))} from=${f.from}`
+function parseRef(text) {
+  const m = /\[A2A file\] v1 sha256=([0-9a-f]{64}) size=(\d{1,12}) name=(\S{1,512}) from=(https?:\/\/\S{1,2048})/.exec(text)
+  if (m === null) return undefined
+  const size = Number(m[2])
+  if (!Number.isSafeInteger(size) || size > FILE_MAX) return undefined
+  let name, from
+  try { name = decodeURIComponent(m[3]); from = new URL(m[4]) } catch { return undefined }
+  if (from.username !== '' || from.password !== '' || (from.pathname !== '/' && from.pathname !== '') || from.search !== '' || from.hash !== '') return undefined
+  return { sha256: m[1], size, name: sanitizeName(name), from: from.origin }
+}
+
+/** file send <path…> <team>: stage each file on the home host, then route ONE message of references. */
+async function cmdFileSend() {
+  const args = positionals().slice(1)
+  const team = args.pop()
+  if (team === undefined || args.length === 0) usage('usage: a2a file send <path…> <team> [--note TEXT]')
+  if (args.length > 16) die('[file send] at most 16 files per send')
+  const from = new URL(home()).origin
+  const handle = identity().handle
+  const files = []
+  for (const path of args) {
+    let st
+    try { st = statSync(path) } catch { die(`[file send] cannot read ${path}`) }
+    if (!st.isFile()) die(`[file send] ${path} is not a file`)
+    if (st.size > FILE_MAX) die(`[file send] ${path} is ${String(st.size)} bytes; the file channel takes at most ${String(FILE_MAX)}`)
+    const res = await homeFetch(`${home()}/__dsh_a2a/blob?to=${encodeURIComponent(team)}&name=${encodeURIComponent(basename(path))}&by=${encodeURIComponent(handle)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream', ...keyHeaders() }, body: readFileSync(path),
+    })
+    if (res.status === 401 || res.status === 403) die(keyHint(res.status))
+    const out = await replyOf(res)
+    if (out.ok !== true) die(`[file send] ${path}: ${String(out.error ?? 'refused')} — a host without the file channel answers 404/405: upgrade it`)
+    files.push({ sha256: out.sha256, size: out.size, name: out.name, from })
+  }
+  const note = flag('--note')
+  const message = [...(note !== undefined && note !== '' ? [note] : []), ...files.map(fileRef)].join('\n')
+  for (const f of files) console.log(`[file send] staged ${f.name} (${String(f.size)} bytes, sha256 ${f.sha256.slice(0, 12)}…) for ${team}`)
+  await sendDirect('file send', { team, message, caller_session: handle, wait: false, task_id: taskFlag() ?? newTaskId() })
+}
+
+/** file fetch <ref> [--out DIR]: pull one referenced file (from the home host: the CLI proves itself only there). */
+async function cmdFileFetch() {
+  const text = positionals().slice(1).join(' ')
+  const ref = parseRef(text)
+  if (ref === undefined) usage('usage: a2a file fetch "<[A2A file] v1 … reference line>" [--out DIR]')
+  const homeOrigin = new URL(home()).origin
+  if (ref.from !== homeOrigin) die(`[file fetch] the file is on ${ref.from}, not your home host ${homeOrigin}: a CLI identity proves itself only on its home host — ask the sender to send it through your home host, or fetch it from a session there`)
+  const target = `${ref.from}/a2a/blob`
+  const res = await homeFetch(`${target}?sha256=${ref.sha256}&caller_session=${encodeURIComponent(identity().handle)}`, {
+    headers: { ...originClaimFor(ref.from)(target, 'GET'), ...keyHeaders() },
+  })
+  if (res.status !== 200) {
+    const out = await replyOf(res)
+    die(`[file fetch] ${ref.from} refused (${String(out.code ?? res.status)}): ${String(out.error ?? '')}`)
+  }
+  const bytes = Buffer.from(await res.arrayBuffer())
+  if (bytes.byteLength !== ref.size) die(`[file fetch] expected ${String(ref.size)} bytes, got ${String(bytes.byteLength)} — nothing saved`)
+  if (createHash('sha256').update(bytes).digest('hex') !== ref.sha256) die('[file fetch] the bytes do not hash to the referenced sha256 — nothing saved')
+  const dir = flag('--out') ?? '.'
+  if (existsSync(dir) && lstatSync(dir).isSymbolicLink()) die(`[file fetch] ${dir} is a link; refusing to write through it`)
+  mkdirSync(dir, { recursive: true })
+  const path = join(dir, `${ref.sha256.slice(0, 12)}-${ref.name}`)
+  if (existsSync(path)) {
+    if (lstatSync(path).isSymbolicLink() || createHash('sha256').update(readFileSync(path)).digest('hex') !== ref.sha256) die(`[file fetch] ${path} exists with other content`)
+  } else {
+    writeFileSync(path, bytes, { flag: 'wx', mode: 0o600 })
+  }
+  console.log(`[file fetch] ${path} (${String(bytes.byteLength)} bytes, sha256 ${ref.sha256})`)
+}
+
 async function sendDirect(verb, body) {
   const { res } = await postDirect(body)
   // Exhausted 5xx resends: the outcome is unknown, not "not delivered" (the hint above names the safe resend).
@@ -830,6 +914,12 @@ async function main() {
     return
   }
   if (cmd === 'inbox') { await cmdInbox(); return }
+  if (cmd === 'file') {
+    const sub = positionals()[0]
+    if (sub === 'send') { await cmdFileSend(); return }
+    if (sub === 'fetch') { await cmdFileFetch(); return }
+    usage('usage: a2a file send <path…> <team> [--note TEXT] · a2a file fetch <ref> [--out DIR]')
+  }
   if (cmd === 'skills') { cmdSkills(); return }
   if (cmd === 'tools') { printAlignment(); return }
   if (cmd === 'whoami') {
