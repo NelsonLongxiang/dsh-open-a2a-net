@@ -134,6 +134,7 @@ export interface CanvasMemberRow {
   /** Present only for CLI refs: null means the linked home is ambiguous or unknown. */
   readonly cliHome?: string | null
   readonly cliHeld?: boolean
+  readonly cliHomeCleared?: boolean
 }
 
 /** One canvas team from /state `canvas.teams`. */
@@ -984,6 +985,11 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         })
         row.appendChild(remove)
         card.appendChild(row)
+        if (member.cliHomeCleared === true) {
+          const notice = el('div', 'wb-hint')
+          notice.textContent = '本机落户已清除旧 home 钉；户口离线后也不会恢复旧钉。'
+          card.appendChild(notice)
+        }
         if (member.cliHome === null && member.cliHeld !== true && deps.cliHomeOptions !== undefined) {
           const key = JSON.stringify([fresh.name, member.id])
           let form = cliHomeForms.get(key)

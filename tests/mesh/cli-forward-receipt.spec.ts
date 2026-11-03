@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { signCard } from '../../src/card.ts'
 import { signOriginClaim } from '../../src/origin-claim.ts'
+import { CliDepositStore } from '../../src/cli-deposit.ts'
 import { bootNode, reservePort, type MeshNode } from './harness.ts'
 beforeEach(() => vi.stubGlobal('WebSocket', function noSocket() { throw Error('no socket') }))
 afterEach(() => vi.unstubAllGlobals())
@@ -39,7 +40,13 @@ async function setup(directLink = true, extraHome = false, replayAtHome = false,
   await post(b, '/__dsh_a2a/join', { id: targetId })
   if (c !== undefined) await post(c, '/__dsh_a2a/canvas', { action: 'add-member', name: 'intercept', id: targetHandle })
   await post(a, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: handle })
-  if (latePublish) expect((await post(a, '/__dsh_a2a/cli-deposit', { action: 'publish', card })).ok).toBe(true)
+  const pinBeforePublish = latePublish ? JSON.parse(readFileSync(join(a.home, 'a2a', 'canvas.json'), 'utf8')).cliHome?.[handle] : undefined
+  if (latePublish) {
+    expect((await post(a, '/__dsh_a2a/cli-deposit', { action: 'publish', card: '{bad-card' })).ok).toBe(false)
+    expect(JSON.parse(readFileSync(join(a.home, 'a2a', 'canvas.json'), 'utf8')).cliHome?.[handle]).toBe(pinBeforePublish)
+  }
+  const localPublish = latePublish ? await post(a, '/__dsh_a2a/cli-deposit', { action: 'publish', card }) : undefined
+  if (latePublish) expect(localPublish.ok).toBe(true)
   if (directLink) await post(a, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: targetHandle })
   expect((await post(b, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: handle, home: a.baseUrl })).ok).toBe(true)
   await post(b, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: targetId })
@@ -49,7 +56,7 @@ async function setup(directLink = true, extraHome = false, replayAtHome = false,
     agent.session.events.push({ type: 'user/message', data: { content: typeof payload === 'string' ? [{ type: 'text', text: payload }] : payload.content } })
     setTimeout(() => { agent.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'roundtrip completed at B' }] } } }); b.ctx.emit('agent/status', { agent, status: 'idle' }) }, 180)
   }
-  return { a, b, c, home }
+  return { a, b, c, home, pinBeforePublish, localPublish }
 }
 describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both hosts', () => {
   it('a CLI deposited in A canvas receives automatic receipts from A local sessions', async () => {
@@ -110,9 +117,14 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
     } finally { await a.dispose(); await b.dispose(); if (c !== undefined) await c.dispose() }
   }, 30000)
   it('an old auto-pin loses to a CLI household published locally afterwards', async () => {
-    const { a, b, c, home } = await setup(true, true, true, true)
+    const { a, b, c, home, pinBeforePublish, localPublish } = await setup(true, true, true, true)
     try {
-      expect(JSON.parse(readFileSync(join(a.home, 'a2a', 'canvas.json'), 'utf8')).cliHome[handle]).toBe(c!.baseUrl)
+      expect(pinBeforePublish).toBe(c!.baseUrl)
+      expect(localPublish.homeCleared).toBe(true)
+      const canvas = JSON.parse(readFileSync(join(a.home, 'a2a', 'canvas.json'), 'utf8'))
+      expect(canvas.cliHome?.[handle]).toBeUndefined()
+      expect(canvas.cliHomeCleared).toContain(handle)
+      expect((await state(a)).canvas.teams.flatMap((t: any) => t.members).find((m: any) => m.id === handle).cliHomeCleared).toBe(true)
       const id = 'session-0123456789abcdef'
       await post(a, '/__dsh_a2a/join', { id })
       await post(a, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id })
@@ -129,6 +141,54 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
       expect(await post(a, '/__dsh_a2a/canvas', { action: 'cli-home-options', name: 'ops', id: handle })).toMatchObject({ ok: true, held: true, homes: [] })
     } finally { await a.dispose(); await b.dispose(); if (c !== undefined) await c.dispose() }
   }, 30000)
+  it('a local publish-cleared pin cannot revive when the household expires across restart', async () => {
+    const { a, b, c, home } = await setup(true, true, true, true)
+    let cold: MeshNode | undefined
+    try {
+      const path = join(a.home, 'a2a', 'cli-deposits.json')
+      await a.dispose()
+      const snapshot = JSON.parse(readFileSync(path, 'utf8'))
+      for (const row of snapshot.deposits) if (row.handle === handle) { row.expiresAt = Date.now() - 1000; row.expiredAt = Date.now() - 1000 }
+      writeFileSync(path, JSON.stringify(snapshot))
+      cold = await bootNode({ name: 'A', session: 'receipt-home', team: 'alpha', port: a.port, home: a.home, peers: [b.baseUrl, c!.baseUrl], sessionNodes: true, teamScopeRouting: true, teamScopeInfo: true, settlementAuth: 'enforce', forwardDirect: true })
+      const canvas = JSON.parse(readFileSync(join(a.home, 'a2a', 'canvas.json'), 'utf8'))
+      expect(canvas.cliHome?.[handle]).toBeUndefined()
+      expect(canvas.cliHomeCleared).toContain(handle)
+      const row = (await state(cold)).canvas.teams.flatMap((t: any) => t.members).find((m: any) => m.id === handle)
+      expect(row).toMatchObject({ cliHeld: true, cliHome: null, cliHomeCleared: true })
+      expect(await post(cold, '/__dsh_a2a/canvas', { action: 'cli-home-options', name: 'ops', id: handle })).toMatchObject({ ok: true, held: true, homes: [] })
+    } finally { if (cold !== undefined) await cold.dispose(); await b.dispose(); if (c !== undefined) await c.dispose() }
+  }, 20000)
+  it('local receipt expiry between household selection and mailbox delivery never falls back to a namesake directory', async () => {
+    const { a, b, c, home } = await setup(true, true, true)
+    const originalGet = CliDepositStore.prototype.get
+    let armed = false, reads = 0, secondRead = false
+    const spy = vi.spyOn(CliDepositStore.prototype, 'get').mockImplementation(function(this: CliDepositStore, name: string) {
+      if (armed && name === handle && (this as unknown as { path: string }).path === join(a.home, 'a2a', 'cli-deposits.json')) {
+        if (++reads === 1) return originalGet.call(this, name)
+        secondRead = true; return undefined
+      }
+      return originalGet.call(this, name)
+    })
+    try {
+      const id = 'session-0123456789abcdef'
+      await post(a, '/__dsh_a2a/join', { id })
+      await post(a, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id })
+      await post(c!, '/__dsh_a2a/canvas', { action: 'add-member', name: 'return-link', id: 'alpha/01234567' })
+      const agent = a.agents.agent as any
+      const task = 'direct-cli-mid-delivery-expiry'
+      agent.steer = (payload: any) => {
+        a.steered.push(payload)
+        const text = typeof payload === 'string' ? payload : payload.content?.find((block: any) => block.type === 'text')?.text ?? ''
+        if (text.startsWith('[A2A receipt]')) return
+        agent.session.events.push({ type: 'user/message', data: { content: typeof payload === 'string' ? [{ type: 'text', text: payload }] : payload.content } })
+        setTimeout(() => { agent.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'expiry-race result' }] } } }); armed = true; a.ctx.emit('agent/status', { agent, status: 'idle' }) }, 180)
+      }
+      expect((await cli(home, ['route', 'alpha/01234567', 'receipt expiry race', '--task', task])).code).toBe(0)
+      await vi.waitFor(() => { expect(secondRead, JSON.stringify({armed,reads,steered:a.steered})).toBe(true); expect(a.steered.slice(1).some(payload => JSON.stringify(payload).includes('[A2A receipt]') && JSON.stringify(payload).includes(task)), JSON.stringify(a.steered)).toBe(true) }, { timeout: 5000, interval: 80 })
+      expect((await post(c!, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle })).mail.some((row: any) => row.text.includes(task))).toBe(false)
+    } finally { spy.mockRestore(); await a.dispose(); await b.dispose(); if (c !== undefined) await c.dispose() }
+  }, 20000)
   it('an expired local CLI tombstone also blocks automatic foreign home pins after restart', async () => {
     const pa = await reservePort(), pc = await reservePort()
     const home = mkdtempSync(join(tmpdir(), 'cli-offline-home-'))

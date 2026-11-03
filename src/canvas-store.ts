@@ -26,6 +26,8 @@ export interface CanvasSnapshot {
   readonly teams: ReadonlyArray<{ readonly name: string; readonly members: readonly string[] }>
   /** Pinned CLI handle -> linked home origin (only while some canvas team holds the handle). */
   readonly cliHome?: Readonly<Record<string, string>>
+  /** Local publish cleared an older pin; kept for the owner inspector until membership is removed or re-pinned. */
+  readonly cliHomeCleared?: readonly string[]
 }
 
 /** Upper bounds: a canvas taxonomy, not a database. */
@@ -76,6 +78,7 @@ export class CanvasStore {
   /** Team entries in creation order; members in add order (routing priority). */
   private teams: Array<{ name: string; members: string[] }> = []
   private cliHome: Record<string, string> = {}
+  private cliHomeCleared = new Set<string>()
   private readonly path: string
   private readonly listeners = new Set<() => void>()
 
@@ -120,6 +123,9 @@ export class CanvasStore {
           if (CLI_HANDLE_RE.test(handle) && typeof home === 'string' && validHomeOrigin(home) && this.teams.some(t => t.members.includes(handle))) this.cliHome[handle] = home
         }
       }
+      if (Array.isArray(snapshot.cliHomeCleared)) for (const handle of snapshot.cliHomeCleared) {
+        if (typeof handle === 'string' && CLI_HANDLE_RE.test(handle) && this.cliHome[handle] === undefined && this.teams.some(t => t.members.includes(handle))) this.cliHomeCleared.add(handle)
+      }
     } catch {
       // A corrupt store is not fatal: the user re-creates teams; routing
       // names simply stop resolving until then.
@@ -138,7 +144,7 @@ export class CanvasStore {
     if (this.path === '') return
     try {
       mkdirSync(dirname(this.path), { recursive: true })
-      const snapshot: CanvasSnapshot = { teams: this.teams.map(t => ({ name: t.name, members: [...t.members] })), ...(Object.keys(this.cliHome).length > 0 ? { cliHome: { ...this.cliHome } } : {}) }
+      const snapshot: CanvasSnapshot = { teams: this.teams.map(t => ({ name: t.name, members: [...t.members] })), ...(Object.keys(this.cliHome).length > 0 ? { cliHome: { ...this.cliHome } } : {}), ...(this.cliHomeCleared.size > 0 ? { cliHomeCleared: [...this.cliHomeCleared] } : {}) }
       writeFileSync(this.path, JSON.stringify(snapshot), { mode: 0o600 })
     } catch {
       // An unwritable home must not break the canvas; the store degrades to
@@ -165,6 +171,14 @@ export class CanvasStore {
   /** Frozen, operator-linked CLI home; undefined means unknown or ambiguous. */
   cliHomeOf(handle: string): string | undefined { return this.cliHome[handle] }
   pinnedCliHomes(): ReadonlyArray<readonly [string, string]> { return Object.entries(this.cliHome) }
+  wasCliHomeCleared(handle: string): boolean { return this.cliHomeCleared.has(handle) }
+  clearCliHomeForLocal(handle: string): boolean {
+    if (this.cliHome[handle] === undefined) return false
+    delete this.cliHome[handle]
+    this.cliHomeCleared.add(handle)
+    this.persist()
+    return true
+  }
 
   /**
    * The named team's remote member refs (zone-qualified team handles) in
@@ -222,12 +236,12 @@ export class CanvasStore {
     const entry = this.teams.find(t => t.name === name)
     if (entry === undefined) return false
     if (entry.members.includes(id)) {
-      if (home !== undefined && this.cliHome[id] !== home) { this.cliHome[id] = home; this.persist() }
+      if (home !== undefined && this.cliHome[id] !== home) { this.cliHome[id] = home; this.cliHomeCleared.delete(id); this.persist() }
       return true
     }
     if (entry.members.length >= CANVAS_MEMBER_CAP) return false
     entry.members.push(id)
-    if (home !== undefined) this.cliHome[id] = home
+    if (home !== undefined) { this.cliHome[id] = home; this.cliHomeCleared.delete(id) }
     this.persist()
     return true
   }
@@ -247,7 +261,7 @@ export class CanvasStore {
   }
 
   private forgetUnusedHome(id: string): void {
-    if (!this.teams.some(team => team.members.includes(id))) delete this.cliHome[id]
+    if (!this.teams.some(team => team.members.includes(id))) { delete this.cliHome[id]; this.cliHomeCleared.delete(id) }
   }
 
   /**

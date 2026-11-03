@@ -724,6 +724,14 @@ describe('canvas inspector member management (0.6.6)', () => {
     expect(read).not.toHaveBeenCalled(); expect(canvasOp).not.toHaveBeenCalled()
   })
 
+  it('shows a durable notice when local publish removed an old foreign home pin', () => {
+    const { v } = bench()
+    v.update({ ...state, canvas: { teams: [{ name: 'ygl', team: 'dsh/canvas/ygl', members: [{ id: 'ops-cli/a1b2c3d4e5f60718', remote: true, cliHome: null, cliHeld: true, cliHomeCleared: true }] }] } })
+    openTeam(v)
+    expect(text(v.root.querySelector('.wb-inspector'))).toContain('本机落户已清除旧 home 钉')
+    expect(text(v.root.querySelector('.wb-inspector'))).toContain('离线后也不会恢复旧钉')
+  })
+
   it('a fresh held response removes a stale home picker without presenting candidates', async () => {
     const read = vi.fn(async () => ({ ok: true, held: true, homes: [] }))
     const { v, canvasOp } = bench({ cliHomeOptions: read })
