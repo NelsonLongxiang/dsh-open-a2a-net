@@ -746,7 +746,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // quiet window around it.
           d.touchWakeDemand()
           const forwardMiss = async (original: string): Promise<void> => {
-            const result = await d.forwardDirect({ team, message, caller, taskId, contextId, noWait,
+            // #282 S2 review P1: forward with the id the caller sent — our own `@fp8` must find no other owner.
+            const result = await d.forwardDirect({ team: typeof body.team === 'string' && ownerQualified.owner !== undefined ? body.team : team, message, caller, taskId, contextId, noWait,
               auth: buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget: caller, receivedAt: admittedAt.at }),
               localCliProof: claim.ok && claim.cli === true && claim.bound && claim.caller === caller, guarded: req.headers['x-a2a-guard'] !== undefined }).catch((error: unknown): A2aRouteResult => ({ ok: false, error: `forwarding unavailable: ${String(error)}`, code: -32000, task_id: taskId }))
             const failure = result.ok ? '' : await d.diagnoseCanvas(team, original + ' — ' + result.error, claim.ok && claim.cli === true && claim.bound && claim.caller === caller ? caller : undefined)

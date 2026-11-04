@@ -67,6 +67,8 @@ function validName(raw: string): string | undefined {
   // reorder under JSON.parse's integer-like key ordering if the store ever
   // migrated to a keyed map — both stay out now.
   if (clean.includes('/') || /^\d+$/.test(clean)) return undefined
+  // #282 S2: `@<8 lowercase hex>` at the end is the owner-fingerprint suffix of a routing id, never part of a name.
+  if (/@[0-9a-f]{8}$/.test(clean)) return undefined
   return clean
 }
 

@@ -26,4 +26,11 @@ describe('canvas owner ids', () => {
     }
     expect(splitCanvasOwner('dsh/canvas/a@b@abcdef12')).toEqual({ team: 'dsh/canvas/a@b', owner: 'abcdef12' })
   })
+  it('a canvas name cannot end like an owner suffix (it would be unreachable by its bare id)', async () => {
+    const { CanvasStore } = await import('../../src/canvas-store.ts')
+    const store = new CanvasStore('')
+    expect(store.create('x@abcdef12')).toBeUndefined()
+    expect(store.create('x@abc')).toBe('x@abc')
+    expect(store.create('ops')).toBe('ops')
+  })
 })

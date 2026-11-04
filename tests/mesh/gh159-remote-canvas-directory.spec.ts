@@ -309,6 +309,8 @@ describe('gh#159 remote canvas discovery and routing', () => {
       await post(b, '/__dsh_a2a/canvas', { action: 'create', name: '跨机协作' })
       await post(b, '/__dsh_a2a/canvas', { action: 'add-member', name: '跨机协作', id: B_ID })
       await post(b, '/__dsh_a2a/canvas', { action: 'add-member', name: '跨机协作', id: 'dsh/aaaaaaaa' })
+      // A's same-named local canvas also links B's session: a foreign @fp8 must not take that local remote-member seam.
+      await post(a, '/__dsh_a2a/canvas', { action: 'add-member', name: '跨机协作', id: 'dsh/bbbbbbbb' })
       const bCard = await fetch(b.baseUrl + '/.well-known/agent-card.json').then(r => r.json()) as { publicKey: string }
       const fpB = canvasOwnerFingerprint(bCard.publicKey)
       const stateA = await fetch(a.baseUrl + '/__dsh_a2a/state').then(r => r.json()) as any
@@ -320,6 +322,7 @@ describe('gh#159 remote canvas discovery and routing', () => {
       expect(remote.ok, JSON.stringify(remote)).toBe(true)
       expect(localSteers).toHaveLength(0)
       expect(b.steered).toHaveLength(1)
+      expect(JSON.stringify(b.steered[0])).toContain('routed to ' + GROUP)
       // Own fingerprint: stays local, B sees nothing more.
       const local = await a.ctx.tools.get('a2a_route')!.execute({ team: ownId, message: 'for A', async: true }, runContext(a.agents.agent)) as Route
       expect(local.ok, JSON.stringify(local)).toBe(true)
@@ -330,9 +333,9 @@ describe('gh#159 remote canvas discovery and routing', () => {
       expect(nobody.ok).toBe(false)
       expect(localSteers).toHaveLength(1)
       expect(b.steered).toHaveLength(1)
-      // The state face publishes B's org with its qualified id.
-      const peerRow = stateA.peerOrg?.find((p: any) => p.url === b.baseUrl)
-      if (peerRow !== undefined && peerRow.org.length > 0) expect(peerRow.org.find((t: any) => t.team === GROUP)?.id).toBe(GROUP + '@' + fpB)
+      // The state face publishes B's org with its qualified id (B's card is warm after the routes above).
+      const warm = await fetch(a.baseUrl + '/__dsh_a2a/state').then(r => r.json()) as any
+      expect(warm.peerOrg.find((p: any) => p.url === b.baseUrl).org.find((t: any) => t.team === GROUP).id).toBe(GROUP + '@' + fpB)
     } finally { await a.dispose(); await b.dispose() }
   }, 30_000)
 
