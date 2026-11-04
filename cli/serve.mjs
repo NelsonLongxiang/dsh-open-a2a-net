@@ -8,7 +8,7 @@
  * forwarding, canvas ownership, the task ledger, the state face and the workbench. Delivering
  * to an AI session still needs a DSH host — this node forwards there like any home host.
  *
- *   a2a-net serve [--config node.json] [--host 0.0.0.0] [--port 13090] [--home DIR]
+ *   a2a-net serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port 13090] [--home DIR]
  *
  * node.json holds plugin Config keys (team, session, agentName, apiKey, peers,
  * originClaimUrl, originClaimAudiences, forwardDirect, …); flags win over the file.
@@ -30,7 +30,7 @@ export const SERVE_DEPS = {
   '@deepseek-ai/schemastery': '3.18.5',
 }
 
-export const SERVE_USAGE = 'usage: a2a-net serve [--config node.json] [--host 0.0.0.0] [--port 13090] [--home DIR]'
+export const SERVE_USAGE = 'usage: a2a-net serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port 13090] [--home DIR]'
 
 /** One `npm i` line that installs this package and the tested runtime set into a folder. */
 export function installLine(version) {
@@ -39,7 +39,8 @@ export function installLine(version) {
 
 /** Merge file config and flags into the plugin config; pure. */
 export function nodeConfig(file, flags) {
-  const port = flags.port !== undefined ? Number(flags.port) : Number(file.port ?? 13090)
+  const raw = flags.port ?? file.port ?? 13090
+  const port = typeof raw === 'number' ? raw : /^\d+$/.test(String(raw)) ? Number(raw) : NaN
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('--port must be an integer 0-65535')
   const home = resolve(flags.home ?? file.dshHome ?? join(homedir(), '.a2a-net', 'node'))
   const { port: _port, host: _host, ...rest } = file
@@ -80,7 +81,12 @@ export async function startNode({ host, port, config }, load = specifier => impo
   await ctx.plugin(tools.default)
   await ctx.plugin(timer.default)
   await ctx.plugin(webServer.default, { host, port })
-  plugin.apply(ctx, plugin.Config(config))
+  try {
+    plugin.apply(ctx, plugin.Config(config))
+  } catch (error) {
+    await ctx.fiber.dispose() // the web server is already listening
+    throw error
+  }
   const bound = ctx.webServer.port
   const url = 'http://' + (host === '0.0.0.0' ? '127.0.0.1' : host) + ':' + String(bound)
   return { url, port: bound, close: async () => { await ctx.fiber.dispose() } }
@@ -90,11 +96,14 @@ export async function startNode({ host, port, config }, load = specifier => impo
 export async function serve(argv) {
   const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
   const flags = {}
+  if (argv.includes('--help') || argv.includes('-h')) { console.log(SERVE_USAGE); process.exit(0) }
   for (let i = 0; i < argv.length; i++) {
-    const [name, inline] = argv[i].split('=', 2)
+    const eq = argv[i].indexOf('=')
+    const name = eq === -1 ? argv[i] : argv[i].slice(0, eq)
+    const inline = eq === -1 ? undefined : argv[i].slice(eq + 1)
     if (!['--config', '--host', '--port', '--home'].includes(name)) { console.error(SERVE_USAGE); process.exit(2) }
     const value = inline ?? argv[++i]
-    if (value === undefined || value.startsWith('--')) { console.error(SERVE_USAGE); process.exit(2) }
+    if (value === undefined || value === '' || value.startsWith('--')) { console.error(SERVE_USAGE); process.exit(2) }
     flags[name.slice(2)] = value
   }
   let file = {}

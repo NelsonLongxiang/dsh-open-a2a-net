@@ -46,7 +46,7 @@ usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 户口制:   init <name> [--uuid 16hex] [--force] · publish · inbox [--new|--wait|--hook] · revoke
 对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · report <msg…> [--task ID]
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
-独立节点: serve [--config node.json] [--host H] [--port N] [--home DIR]   (the network layer without a DSH instance)
+独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
 文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR]   (#91: bytes never ride a message)
 
 host:     --home > $A2A_HOME > the home saved by 'a2a init --home URL' > ${DEFAULT_HOME}
