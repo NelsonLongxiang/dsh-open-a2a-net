@@ -59,3 +59,7 @@ work around a duplicate verdict by mutating the message — reconcile instead.
    peer's state `tasks` face) for the task id's settled outcome.
 4. Only re-dispatch when BOTH the receipt is absent AND the peer's ledger
    shows the task unknown — otherwise you risk duplicate execution.
+
+## Owner-qualified canvas ids (#282)
+
+`<zone>/canvas/<name>@<fp8>` names the canvas owned by the host whose signed card key fingerprints to `<fp8>` (sha256 over the SPKI DER, first 8 hex). The suffix only selects among owners: scope, the peer request, receivers and the ledger all use the plain `<zone>/canvas/<name>`. A foreign suffix never lands on a same-named local canvas; this host's own suffix is its local canvas. `a2a-net teams` and the state face (`canvas.teams[].id`, `peerOrg[].org[].id`) print the ids. The suffix names a signing key, not a URL: a seeded peer serving that key's signed card core counts as an alias of the same owner, as before, and the card's `canvasOrg` is not part of the signed core. A canvas name may not end in `@<8 hex>`; a request carrying our own suffix never leaves this host, on the trunk or the forward path.

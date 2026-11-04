@@ -6,7 +6,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net
  */
 
-import { createHash, createPrivateKey, generateKeyPairSync, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -32,7 +32,7 @@ export function resolveCallerLabel(input: {
   if (input.initiatorFace) return input.nodeTeam
   return input.sessionLabel
 }
-import { signCard, verifyCard, type CardCore } from './card.ts'
+import { encodePublicKey, signCard, verifyCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { CanvasStore, canvasNameReserved, isRemoteMemberRef } from './canvas-store.ts'
 import { decodeSessionLog, extractTranscript, TRANSCRIPT_MAX_FILE_BYTES } from './session-transcript.ts'
@@ -161,6 +161,7 @@ export const name = 'a2a'
 export const inject = ['tools', 'timer', 'systemPrompt']
 
 import { Config } from './config.ts'
+import { canvasOwnerFingerprint, splitCanvasOwner } from './canvas-id.ts'
 export { Config }
 export type { DelegateConfig } from './config.ts'
 
@@ -511,6 +512,8 @@ export function apply(ctx: Context, config: Config): void {
   }))
 
   const nodePrivateKey = loadOrCreateNodeKey(join(home, 'a2a', 'node-key.pem'))
+  /** #282 S2: this host's canvas owner fingerprint (`<canvas>@<fp8>` names our own canvas). */
+  const ownCanvasFingerprint = canvasOwnerFingerprint(encodePublicKey(createPublicKey(nodePrivateKey)))
   /** Our own card URL once the web server settles — the OriginClaim anchor. */
   let ownCardUrl = ''
   /**
@@ -1675,7 +1678,7 @@ export function apply(ctx: Context, config: Config): void {
         get unboundInboundCount() { return unboundInboundCount },
         get boundMissInboundCount() { return boundMissInboundCount },
         get boundMissRecent() { return boundMissRecent },
-        get ownCardUrl() { return ownCardUrl },
+        get ownCardUrl() { return ownCardUrl }, ownCanvasFingerprint,
         get ownerSeatNames() { return ownerSeatNames },
         set ownerSeatNames(v) { ownerSeatNames = v },
         get ownerAllowlist() { return ownerAllowlist },
@@ -2569,7 +2572,7 @@ export function apply(ctx: Context, config: Config): void {
       idempotencyStore,
       verifyOriginClaim,
       remoteCliProof,
-      forwardDirect: request => forwardDirect(request),
+      forwardDirect: request => forwardDirect(request), ownCanvasFingerprint,
       diagnoseCanvas: (team, reason, caller) => diagnoseCanvas(team, reason, caller),
       callerLinkedToThisHost, get ownCardUrl() { return ownCardUrl },
       recordActivity,
@@ -3344,6 +3347,11 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // node team when it has joined, else the node label), so the receiver
       // can answer with one a2a_route instead of an unroutable display label.
       a2aJoinGateRefusal(agent === undefined ? undefined : { agent })
+      // #282 S2: an owner-qualified canvas id. Our own fingerprint is our canvas; a foreign one never
+      // lands on a same-named local canvas, and the directory walk keeps only that owner.
+      const ownerQualified = splitCanvasOwner(String(args.team ?? '').trim())
+      const foreignOwner = ownerQualified.owner !== undefined && ownerQualified.owner !== ownCanvasFingerprint ? ownerQualified.owner : undefined
+      if (ownerQualified.owner !== undefined) args = { ...args, team: ownerQualified.team }
       // A target-authored receipt attempt answers its own work even if scope/transport later refuses delivery.
       const answer = parseReceipt(args.message)
       if (agent !== undefined && answer !== null) taskLedger.markAnswered(answer.taskId, sessionTeamOf(agent))
@@ -3411,7 +3419,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // publishers, then zone delegations, deduplicated by URL.
       const failures: string[] = []
       if (signal?.aborted) return localRoute({ ok: false, error: 'route aborted before dispatch', code: -32000 })
-      const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, signal, args.async === true, taskId, callbackAddress, agent === undefined ? undefined : String(agent.id))
+      const outcome = foreignOwner !== undefined ? undefined : await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, signal, args.async === true, taskId, callbackAddress, agent === undefined ? undefined : String(agent.id))
       const localBirth = localBirths.get(taskId)
       localBirths.delete(taskId)
       if (outcome !== undefined) {
@@ -3431,7 +3439,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // union in member order. Non-canvas teams keep the single-walk shape
       // unchanged. The ledger stays keyed to the canvas team the caller
       // named; the peer request carries the member handle it must resolve.
-      const canvasName = parseCanvasTeamName(args.team)
+      const canvasName = foreignOwner !== undefined ? undefined : parseCanvasTeamName(args.team)
       // gh#131: one of this host's own handles is a local member, never a directory target.
       const remoteTargets = canvasName !== undefined ? ((resolve) => canvasStore.remoteMembersOf(canvasName).filter(ref => resolve(ref) === undefined))(localHandleResolver()) : []
       const targets = remoteTargets.length > 0 ? [...remoteTargets] : [args.team]
@@ -3446,7 +3454,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       }
       const candidatePool: Array<{ candidate: string; target: string }> = []
       for (const target of targets) {
-        for (const candidate of await directoryPeerCandidates(fetch, target, failures, scopedCanvasCaller)) {
+        for (const candidate of await directoryPeerCandidates(fetch, ownerQualified.owner !== undefined && target === args.team ? `${target}@${ownerQualified.owner}` : target, failures, scopedCanvasCaller)) {
           candidatePool.push({ candidate, target })
         }
       }
@@ -3903,14 +3911,18 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // (gh#8: a squatter two gossip hops away captured routes by naming
     // itself after the target). referralTeamResolution restores the legacy
     // whole-store basis for fleets mid-migration.
+    // #282 S2: `<canvas>@<fp8>` selects only the owner whose signed card key matches; no delegation walk.
+    const qualified = splitCanvasOwner(team)
+    team = qualified.team
+    const ownerOk = (card: A2aPeerCard | undefined): boolean => qualified.owner === undefined || canvasOwnerFingerprint(card?.publicKey) === qualified.owner
     const peers = resolutionPeers()
     const candidates: string[] = []
-    const cards = await mapBounded(peers, CANDIDATE_CONCURRENCY, async peer => ({ peer, card: await fetch(peer) }))
+    const cards = (await mapBounded(peers, CANDIDATE_CONCURRENCY, async peer => ({ peer, card: await fetch(peer) }))).map(entry => ownerOk(entry.card) ? entry : { peer: entry.peer, card: undefined })
     // Check after fetching all cards: a seeded peer publishing the same id8
     // makes the caller handle ambiguous, so do not send a canvas payload.
     const sessions = scopedCanvasCaller === undefined ? undefined : localHandleResolver()
     const resolveLocal = sessions === undefined ? undefined : (ref: string): string | undefined => cliDeposits.get(ref) !== undefined ? ref : sessions(ref)
-    const resolutions = await mapBounded(peers, CANDIDATE_CONCURRENCY, async peer => ({ peer, outcome: await resolveZone(fetch, peer, team) }))
+    const resolutions = qualified.owner !== undefined ? [] : await mapBounded(peers, CANDIDATE_CONCURRENCY, async peer => ({ peer, outcome: await resolveZone(fetch, peer, team) }))
     if (canvasTargetAmbiguous(cards.map(entry => entry.card), team, scopedCanvasCaller, resolveLocal, resolutions.some(entry => entry.outcome.ok))) {
       failures.push(`ambiguous: team "${team}" has conflicting owners, identities, or a colliding caller; no payload sent`)
       return []
@@ -3994,7 +4006,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           const card = await fetch(candidate)
           peerAsync = (card?.capabilities as { async?: unknown } | undefined)?.async === true
         }
-        const result = await dispatchPeerCandidate(candidate, request.handle, request.message, request.contextId, abort, session, request.delivery === 'async' && peerAsync, taskId, callbackAddress)
+        const result = await dispatchPeerCandidate(candidate, splitCanvasOwner(request.handle).team, request.message, request.contextId, abort, session, request.delivery === 'async' && peerAsync, taskId, callbackAddress)
         if (!result.ok) {
           // Idempotency verdicts (B3) are terminal, not failover: a replay
           // says the prior attempt at THIS peer stays authoritative —
@@ -4026,7 +4038,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           if (abort.aborted) break
           continue
         }
-        trackOwedTask(taskId, request.handle, candidate, result, callbackAddress, briefOf(request.message), sender, await peerBirth(fetch, candidate, undefined))
+        trackOwedTask(taskId, splitCanvasOwner(request.handle).team, candidate, result, callbackAddress, briefOf(request.message), sender, await peerBirth(fetch, candidate, undefined))
         const contextId = request.contextId ?? (result.context_id !== '' ? result.context_id : `ctx-${Math.random().toString(16).slice(2, 10)}`)
         if (result.task_status === 'TASK_STATE_COMPLETED') {
           return { kind: 'completed', text: result.reply, taskId, contextId }
