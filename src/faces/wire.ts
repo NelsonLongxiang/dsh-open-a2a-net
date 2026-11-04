@@ -95,7 +95,7 @@ export interface WireDeps {
   readonly sessionNodes: Map<string, Agent>
   readonly joinedSessions: JoinedSessions
   readonly idempotencyStore: IdempotencyStore
-  readonly verifyOriginClaim: (req: IncomingMessage, options?: { readonly cli?: boolean }) => Promise<OriginClaimResult>
+  readonly verifyOriginClaim: (req: IncomingMessage, options?: { readonly cli?: boolean; readonly rawBody?: Uint8Array }) => Promise<OriginClaimResult>
   readonly forwardDirect: (request: ForwardRequest) => Promise<A2aRouteResult>
   readonly remoteCliProof: (handle: string, claim: Extract<OriginClaimResult, { ok: true }>) => Promise<RemoteCliProof | undefined>
   readonly callerLinkedToThisHost: (caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined) => boolean
@@ -267,8 +267,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
       req.on('end', () => {
         void (async () => {
           try {
-            const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { op?: unknown; name?: unknown; id?: unknown; home?: unknown }
-            const claim = await verifyOriginClaim(req)
+            if (size > 16 * 1024) { send(413, JSON.stringify({ ok: false, error: 'payload too large' })); return }
+            const rawBody = Buffer.concat(chunks)
+            const body = JSON.parse(rawBody.toString('utf8')) as { op?: unknown; name?: unknown; id?: unknown; home?: unknown }
+            const claim = await verifyOriginClaim(req, { rawBody })
             if (!claim.ok) {
               logger.warn(`a2a: canvas-op claim failed (${claim.reason}) — caller=${String(req.headers['x-a2a-caller'] ?? '')} url=${String(req.headers['x-a2a-caller-url'] ?? '')} ts=${String(req.headers['x-a2a-caller-ts'] ?? '')}`)
               send(200, JSON.stringify({ ok: false, error: `untrusted-origin: OriginClaim verification failed (${claim.reason}) — canvas regulation requires a signed envelope`, code: -32000 }))
@@ -545,6 +547,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             }
             return
           }
+          const rawBody = Buffer.concat(chunks)
           let body: {
             readonly team?: unknown
             readonly message?: unknown
@@ -555,7 +558,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             readonly task_id?: unknown
           }
           try {
-            body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof body; if (body === null || typeof body !== 'object' || Array.isArray(body)) throw new TypeError('direct body must be a JSON object') // #168: `null` read body.team in this async 'end' callback → unhandled rejection → host exit
+            body = JSON.parse(rawBody.toString('utf8')) as typeof body; if (body === null || typeof body !== 'object' || Array.isArray(body)) throw new TypeError('direct body must be a JSON object') // #168: `null` read body.team in this async 'end' callback → unhandled rejection → host exit
           } catch {
             const payload = JSON.stringify({ error: 'malformed body', code: -32000 })
             res.writeHead(400, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
@@ -622,7 +625,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // F1: only a FOREIGN CLI handle needs a bound host claim and live home card
           // before admission. Every other caller keeps the existing admission-first order.
           const foreignCli = config.teamScopeRouting && CLI_HANDLE_RE.test(caller) && cliDeposits.get(caller) === undefined
-          const earlyClaim = foreignCli ? await verifyOriginClaim(req, { cli: true }) : undefined
+          const earlyClaim = foreignCli ? await verifyOriginClaim(req, { cli: true, rawBody }) : undefined
           const cliProof = foreignCli && earlyClaim?.ok ? await remoteCliProof(caller, earlyClaim).catch(() => undefined) : undefined
           const admission = a2aCallerAdmission(caller, team, cliProof)
           const callerRefusal = refusalOf(admission)
@@ -644,7 +647,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // after the window closes it rejects like a failed signature —
           // N3 proves a NAME's linkability, never key possession.
           // gh#133: the delivery face is where a deposited CLI identity signs its routes.
-          const claim = earlyClaim ?? await verifyOriginClaim(req, { cli: true })
+          const claim = earlyClaim ?? await verifyOriginClaim(req, { cli: true, rawBody })
           if (!claim.ok) {
             if (claim.reason !== 'absent' || config.originClaimWindow === false) {
               recordActivity('in', team, caller, false)

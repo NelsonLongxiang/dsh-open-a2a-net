@@ -47,7 +47,7 @@ export interface CanvasNotifyDeps {
   readonly canvasStore: CanvasStore
   readonly cardCache: Map<string, CardCacheEntry>
   readonly originClaimHeaders: (target: OriginClaimTarget) => Record<string, string>
-  readonly verifyOriginClaim: (req: IncomingMessage) => Promise<{ ok: true; caller: string; callerUrl: string; card: A2aPeerCard } | { ok: false; reason: string }>
+  readonly verifyOriginClaim: (req: IncomingMessage, options?: { readonly rawBody?: Uint8Array }) => Promise<{ ok: true; caller: string; callerUrl: string; card: A2aPeerCard } | { ok: false; reason: string }>
   readonly callerLinkedToThisHost: (caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined) => boolean
   readonly cachedCardFetch: (url: string) => Promise<A2aPeerCard | undefined>
   /** gh#193: the host's guarded peer fetch (refuses while isolated). */
@@ -102,7 +102,7 @@ export function registerCanvasNotify(webServer: WebServer, d: CanvasNotifyDeps):
       const target = url.replace(/\/$/, '') + '/a2a/canvas-changed'
       void d.peerFetch(target, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...originClaimHeaders({ url: target, method: 'POST' }) },
+        headers: { 'Content-Type': 'application/json', ...originClaimHeaders({ url: target, method: 'POST', body: '{}' }) },
         body: '{}',
         signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
       }).then(async (reply) => {
@@ -144,10 +144,10 @@ export function registerCanvasNotify(webServer: WebServer, d: CanvasNotifyDeps):
         res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(text) })
         res.end(text)
       }
-      // The ping has no content: drain a small body without buffering it,
-      // and cut off anything larger.
+      // Retain only bounded raw ping bytes for Sig3 verification; cut off oversized uploads.
       let size = 0
-      req.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 4 * 1024) req.destroy() })
+      const chunks: Buffer[] = []
+      req.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 4 * 1024) { req.destroy(); return } chunks.push(chunk) })
       req.on('end', () => {
         void (async () => {
           if (req.method !== 'POST') { send({ ok: false, error: 'POST required' }); return }
@@ -157,7 +157,7 @@ export function registerCanvasNotify(webServer: WebServer, d: CanvasNotifyDeps):
           const claimed = String(req.headers['x-a2a-caller-url'] ?? '').replace(/\/$/, '')
           const tracked = claimed === '' ? [] : peerStore.list().filter(url => url.replace(/\/$/, '') === claimed && d.cardCache.get(url)?.card !== undefined)
           if (tracked.length === 0) { send({ ok: false, error: 'caller is not a tracked peer of this host' }); return }
-          const claim = await verifyOriginClaim(req)
+          const claim = await verifyOriginClaim(req, { rawBody: Buffer.concat(chunks) })
           if (!claim.ok) { send({ ok: false, error: `untrusted-origin: OriginClaim verification failed (${claim.reason})` }); return }
           if (disposed) { send({ ok: false, error: 'host is shutting down' }); return }
           // Rate limit without losing an update: a ping inside the gap is

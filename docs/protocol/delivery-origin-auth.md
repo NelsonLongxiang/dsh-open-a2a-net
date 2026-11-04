@@ -149,7 +149,7 @@ all still walks the caller gate on the faces that accept legacy deliveries.
 - Card verification fetches use manual redirect handling; every 3xx is a verification failure. A `Location` target is not a substitute caller card. Path-prefixed `callerUrl` values are still fetched beneath that path to preserve deployments with mounted card endpoints; a valid path-prefixed delivery is classified `claim-mismatch` and never receives root-origin proof. Such a claim never speaks for its origin anywhere else either (#187, #189): at settlement it vouches for its key only, and for the operator link (canvas regulation, the full card face) it counts only as the EXACT peer URL this host seeded — same origin and same path, no userinfo, query or fragment — so a mounted peer seeded as `https://f.example/node` still links, while another path under `f.example` (another publisher) does not.
 - Consumers that interpret the host-authored direct header must parse only its first line with an anchored pattern such as `^\[A2A direct\] \(task \S+\) 已验证来源 (https?://[^ /]+) from "`; arbitrary text later in the message is not provenance. For intake routing, the expected market origin is team-level configuration in AGENTS or node notes supplied by the owner/operations, not `originClaimAudiences`; compare `new URL(expected).origin` with the extracted URL origin.
 - `originClaimAudiences` configures origins this host accepts as the bound request audience; it is not a market issuer allowlist. The direct proof authenticates the key in a card served at the caller's root, not that it is the operator-designated market. Consumers requiring a particular market must compare normalized `URL.origin` or the card public key against a deployment trust configuration. This package has no market-specific key allowlist. With `http:`, the card and claim are cleartext and provide no strong proof against an on-path observer.
-- The body is not signed and there is no nonce/replay cache. A captured bound envelope can be replayed within the five-minute skew window to the same origin, method, and path with a different body. The proof authenticates the caller origin/key and request route, not the event contents; applications must validate the body and use their own idempotency/authorization. HTTPS protects against passive/on-path capture; HTTP does not. A body hash or nonce scheme is a future protocol change, not provided here.
+- Sig2 does not sign the body. A captured Sig2 can carry a different body at the same origin/method/path within the skew window. Native Sig3 (§2.2) binds raw body bytes with no present-Sig3 downgrade, but compatibility without Sig3 remains open, and exact signed-body replays still need task idempotency. HTTPS and deployment key trust remain necessary.
 - Hosts that answer at the same origin from different vantage points share
   an audience: loopback (for example tunnels that end on the same local
   port) or a private address reused on both sides.
@@ -191,6 +191,25 @@ all still walks the caller gate on the faces that accept legacy deliveries.
   (`redirect: 'manual'`), a route is not resent, and stderr names the
   status and `Location` and asks for `--home` / `$A2A_HOME` to name the
   address the host itself serves.
+
+## 2.2 Body binding (native v3, #227)
+
+Body-carrying host peer requests with an established caller card URL emit Sig2 **and** Sig3 during rollout, including `/a2a/direct`, `/a2a/canvas-op` and `/a2a/canvas-changed`. Bodyless card/log/blob GETs keep Sig2. The standalone deposited-identity CLI still emits Sig2 in this slice and remains compatible. An unannounced/no-web composition with no caller card URL keeps its previous absent-envelope migration posture, not a malformed Sig3; it cannot satisfy a consumer requiring body authentication.
+
+Headers (case-insensitive):
+
+- `X-A2A-Body-Sha256`: base64url without padding of SHA-256 over the **exact raw body bytes** sent on the wire (43 characters). String bodies are UTF-8. Never trim, parse/stringify, reorder keys, normalize Unicode or whitespace before hashing.
+- `X-A2A-Caller-Sig3`: standard base64 Ed25519 signature with the same card key/caller/URL/timestamp/audience as Sig2, over UTF-8 bytes of:
+
+```js
+JSON.stringify(['a2a-origin-claim/3', caller, callerUrl, ts, audience, METHOD, path, bodySha256])
+```
+
+METHOD is uppercase and path excludes query, as in v2. The v3 tag **replaces** the v2 tag; v1/v2 signatures cannot verify as v3. Serialize once, hash and transmit that same string.
+
+**Receiver precedence:** the bounded readers on the three POST routes retain the actual received bytes. The **presence** of Sig3, even empty/malformed, selects mandatory v3 verification. The digest must equal the recomputed raw-byte digest; audience/method/path and signature must verify. Any failure refuses before mutation/steer, even if Sig2/v1 would pass or the legacy inbound window is open. No v3 downgrade exists. Missing bytes, missing/bad digest or changed bytes yields `body-mismatch`; a bad/domain-confused signature yields `bad-sig`; wrong audience yields `wrong-audience`. These are verification reasons, not new route error codes (direct/canvas-op keep their existing `-32000` untrusted-origin responses).
+
+Without Sig3, existing Sig2/v1 compatibility/windows remain unchanged until #64 closes them. Older receivers ignore Sig3 and use Sig2. Stripping Sig3 therefore still permits the v2 compatibility path: consumers requiring body authentication (workbench-market strict mode) must explicitly require Sig3 after senders upgrade. Exact signed-body replays within the timestamp window remain possible; task idempotency/authorization still apply. HTTP card-key substitution/on-path capture is not solved by a digest: retain HTTPS/deployment key trust protections.
 
 ## 3. Verification flow (verification against published keys, not handshakes)
 

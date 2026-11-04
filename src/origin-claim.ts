@@ -4,7 +4,7 @@
  * face (card, /a2a/direct, /a2a/log, /a2a/canvas-op, /a2a/canvas-changed)
  * runs.
  *
- * Two canonical forms ride the same four base headers
+ * Three canonical forms share the base caller headers
  * (X-A2A-Caller / -Url / -Ts):
  *   · bound (v2, §2.1): JSON.stringify([tag, caller, callerUrl, ts,
  *     audience, METHOD, path]) in X-A2A-Caller-Sig2, the audience origin in
@@ -14,13 +14,14 @@
  *   · unbound (v1, legacy): JSON.stringify([caller, callerUrl, ts]) in
  *     X-A2A-Caller-Sig. Emitted and accepted only while the unbound window
  *     is open (originClaimUnboundWindow); accepted ones are counted.
- * Once the window closes a present Sig2 is the only thing verified. While
+ * A present Sig3 requires the exact raw body and v3 signature, with no downgrade.
+ * Without Sig3, once the window closes a present Sig2 is the only thing verified. While
  * it is open, a Sig2 that misses (audience or signature) falls back to the
  * Sig the envelope also carries — no more than stripping Sig2 would give —
  * and the miss is counted, so a peer dialled by an unlisted name keeps
  * working through the rollout and shows on the gauge.
  */
-import { createPublicKey, sign as edSign, verify as edVerify, type KeyObject } from 'node:crypto'
+import { createHash, createPublicKey, sign as edSign, verify as edVerify, type KeyObject } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import type { TLSSocket } from 'node:tls'
 import { verifyCard } from './card.ts'
@@ -32,14 +33,19 @@ import type { A2aPeerCard } from './types.ts'
 export const ORIGIN_CLAIM_SKEW_MS = 5 * 60_000
 /** Domain tag of the bound form: a v1 signature can never verify as v2. */
 export const ORIGIN_CLAIM_BOUND_TAG = 'a2a-origin-claim/2'
+export const ORIGIN_CLAIM_BODY_TAG = 'a2a-origin-claim/3'
+
+/** Digest the exact UTF-8 string/bytes passed to transport, never reserialized JSON. */
+export const originBodySha256 = (body: string | Uint8Array): string => createHash('sha256').update(body).digest('base64url')
 
 /** Where an outbound request goes: the bound form signs both. */
 export interface OriginClaimTarget {
   readonly url: string
   readonly method: string
+  readonly body?: string | Uint8Array
 }
 
-export type OriginClaimRefusal = 'absent' | 'bad-caller-shape' | 'bad-ts' | 'no-card' | 'bad-sig' | 'not-derivable' | 'wrong-audience' | 'unbound-closed'
+export type OriginClaimRefusal = 'absent' | 'bad-caller-shape' | 'bad-ts' | 'no-card' | 'bad-sig' | 'not-derivable' | 'wrong-audience' | 'unbound-closed' | 'body-mismatch'
 
 /** Only the canonical origin root can claim that origin's identity. */
 export function isRootOriginUrl(value: string): boolean {
@@ -75,6 +81,11 @@ export function unboundCanonical(caller: string, callerUrl: string, ts: number):
 /** The bound (v2) canonical form; method upper-cased, path without query. */
 export function boundCanonical(caller: string, callerUrl: string, ts: number, audience: string, method: string, path: string): string {
   return JSON.stringify([ORIGIN_CLAIM_BOUND_TAG, caller, callerUrl, ts, audience, method.toUpperCase(), path])
+}
+
+/** The body-bound v3 form is domain-separated from v1/v2, with the digest appended. */
+export function bodyBoundCanonical(caller: string, callerUrl: string, ts: number, audience: string, method: string, path: string, bodySha256: string): string {
+  return JSON.stringify([ORIGIN_CLAIM_BODY_TAG, caller, callerUrl, ts, audience, method.toUpperCase(), path, bodySha256])
 }
 
 /** An origin in URL's normal form, or '' when the text is not an http(s) URL. */
@@ -119,6 +130,11 @@ export function signOriginClaim(target: OriginClaimTarget, signer: {
   if (audience !== '') {
     headers['X-A2A-Caller-Aud'] = audience
     headers['X-A2A-Caller-Sig2'] = sign(boundCanonical(caller, callerUrl, ts, audience, target.method, pathOf(target.url)))
+    if (target.body !== undefined) {
+      const digest = originBodySha256(target.body)
+      headers['X-A2A-Body-Sha256'] = digest
+      headers['X-A2A-Caller-Sig3'] = sign(bodyBoundCanonical(caller, callerUrl, ts, audience, target.method, pathOf(target.url), digest))
+    }
   }
   if (signer.unbound) headers['X-A2A-Caller-Sig'] = sign(unboundCanonical(caller, callerUrl, ts))
   return headers
@@ -191,6 +207,8 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   /** A loopback arrival is an audience of its own (default); off when originClaimUrl declares a tunnel or proxy. */
   readonly loopbackArrival?: boolean
   readonly now: number
+  /** Exact received bytes, supplied by the bounded body reader. Missing bytes cannot verify Sig3. */
+  readonly rawBody?: Uint8Array
   /** On the faces that admit CLI identities: the deposit a claim URL names. */
   readonly cliDeposit?: (callerUrl: string) => CliDepositCard | undefined
 }): Promise<OriginClaimVerdict> {
@@ -201,12 +219,17 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   const unboundSig = header('x-a2a-caller-sig')
   const boundSig = header('x-a2a-caller-sig2')
   const audience = header('x-a2a-caller-aud')
-  if (caller === '' || callerUrl === '' || !Number.isFinite(ts) || ts <= 0 || (unboundSig === '' && boundSig === '')) return { ok: false, reason: 'absent' }
+  const hasBodySig = req.headers['x-a2a-caller-sig3'] !== undefined
+  const bodySig = header('x-a2a-caller-sig3')
+  const digest = header('x-a2a-body-sha256')
+  // Presence, even malformed/empty, opts into v3. It must never become absent/legacy or fall back to Sig2/v1.
+  if (hasBodySig && (!bodySig || !/^[A-Za-z0-9_-]{43}$/.test(digest) || d.rawBody === undefined || originBodySha256(d.rawBody) !== digest)) return { ok: false, reason: 'body-mismatch' }
+  if (caller === '' || callerUrl === '' || !Number.isFinite(ts) || ts <= 0 || (unboundSig === '' && boundSig === '' && !hasBodySig)) return { ok: false, reason: hasBodySig ? 'bad-sig' : 'absent' }
   if (!originClaimCallerShape.test(caller)) return { ok: false, reason: 'bad-caller-shape' }
   if (Math.abs(d.now - ts) > ORIGIN_CLAIM_SKEW_MS) return { ok: false, reason: 'bad-ts' }
-  const hasBound = boundSig !== ''
+  const hasBound = boundSig !== '' || hasBodySig
   const audienceOk = hasBound && requestAudiences(req, d.audiences, d.loopbackArrival ?? true).has(originOf(audience))
-  const fallback = d.unboundOpen && unboundSig !== ''
+  const fallback = !hasBodySig && d.unboundOpen && unboundSig !== ''
   if (hasBound && !audienceOk && !fallback) return { ok: false, reason: 'wrong-audience' }
   if (!hasBound && !d.unboundOpen) return { ok: false, reason: 'unbound-closed' }
   const verifies = (card: A2aPeerCard, canonical: string, signature: string): boolean => {
@@ -221,6 +244,10 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   // signature is accepted for migration compatibility but remains unbound.
   let bound = false
   const signedBy = (card: A2aPeerCard): boolean => {
+    if (hasBodySig) {
+      bound = audienceOk && verifies(card, bodyBoundCanonical(caller, callerUrl, ts, audience, req.method ?? '', pathOf(req.url ?? ''), digest), bodySig)
+      return bound
+    }
     bound = audienceOk && verifies(card, boundCanonical(caller, callerUrl, ts, audience, req.method ?? '', pathOf(req.url ?? '')), boundSig)
     return bound || (fallback && verifies(card, unboundCanonical(caller, callerUrl, ts), unboundSig))
   }
