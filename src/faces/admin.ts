@@ -25,6 +25,7 @@ import type WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Config } from '../index.ts'
 import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from '../runtime.ts'
 import { CanvasStore, canvasNameReserved as reservedCanvasName, isRemoteMemberRef, validRemoteMemberRef } from '../canvas-store.ts'
+import { qualifiedCanvasId } from '../canvas-id.ts'
 import { refreshPeerCard, registerCanvasNotify, type CanvasNotifyDeps } from './canvas-notify.ts'
 import { CLI_HANDLE_RE, type CliDepositStore } from '../cli-deposit.ts'
 import type { ExposureStore } from '../exposure-store.ts'
@@ -110,6 +111,8 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly boundMissInboundCount: number
   readonly boundMissRecent: ReadonlyArray<{ caller: string; audience: string; count: number; lastAt: number }>
   readonly ownCardUrl: string
+  /** #282 S2: this host's canvas owner fingerprint. */
+  readonly ownCanvasFingerprint: string
   ownerSeatNames: Record<string, string>
   ownerAllowlist: string[]
   ownerTeamScopeInfo: boolean
@@ -265,6 +268,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             teams: canvasStore.list().map(name => ({
               name,
               team: canvasTeamOf(name),
+              // #282 S2: the owner-qualified routing id.
+              id: `${canvasTeamOf(name)}@${d.ownCanvasFingerprint}`,
               // gh#152: members as the local tiers read them (gh#131). One
               // of this host's own handles renders as the local session it
               // names — join/live facts instead of an opaque remote chip — and
@@ -449,7 +454,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             const unreachable = card !== undefined && entry?.missAt !== undefined ? { unreachable: true } : {}
             return Array.isArray(org)
               ? { url, ...unreachable, org: org.filter((e): e is { name: unknown; team: unknown; members: unknown } => e !== null && typeof e === 'object')
-                  .map(e => ({ name: typeof e.name === 'string' ? e.name : '', team: typeof e.team === 'string' ? e.team : '', members: Array.isArray(e.members) ? e.members.filter((m): m is string => typeof m === 'string') : [] }))
+                  .map(e => ({ name: typeof e.name === 'string' ? e.name : '', team: typeof e.team === 'string' ? e.team : '', id: typeof e.team === 'string' ? qualifiedCanvasId(e.team, card?.publicKey) : '', members: Array.isArray(e.members) ? e.members.filter((m): m is string => typeof m === 'string') : [] }))
                   .filter(e => e.team !== '') }
               : { url, ...unreachable, org: [] }
           }),

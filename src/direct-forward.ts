@@ -1,8 +1,9 @@
 /** H-side one-hop forwarding. Never resolves or dispatches local candidates again. */
 import { DEFAULT_HOP_BUDGET, guardHeader, mintGuard } from './recursion-guard.ts'
-import { briefOf, type OutboundBirth, type TaskLedger } from './task-ledger.ts'
+import { briefOf, type OutboundBirth, type TaskLedger, type TaskRecord } from './task-ledger.ts'
 import { parseReceipt } from './receipt.ts'
-import type { TaskAuthorization } from './task-auth.ts'
+import { splitCanvasOwner } from './canvas-id.ts'
+import { claimCovers, type TaskAuthorization } from './task-auth.ts'
 import type { A2aPeerCard, A2aRouteResult } from './types.ts'
 
 export interface ForwardRequest {
@@ -26,7 +27,6 @@ export interface DirectForwardDeps {
   enabled(): boolean
   isolated(): boolean
   deposited(handle: string): boolean
-  memberLinked(handle: string): boolean
   scope(handle: string, team: string): Promise<{ ok: true } | { ok: false; error: string }>
   candidates(team: string, failures: string[], caller: string): Promise<{ urls: string[]; card(url: string): Promise<A2aPeerCard | undefined> }>
   dispatch(url: string, request: ForwardRequest, guard: string): Promise<A2aRouteResult>
@@ -35,35 +35,39 @@ export interface DirectForwardDeps {
 }
 export function createDirectForward(d: DirectForwardDeps) {
   return async (request: ForwardRequest): Promise<A2aRouteResult> => {
-    const refuse = (why: string): A2aRouteResult => ({ ok: false, code: -32000, task_id: request.taskId, error: 'not forwarded: ' + why })
-    if (!d.enabled()) return refuse('forwardDirect is off')
-    if (d.isolated()) return refuse('host is isolated')
+    const refuse = (why: string, next?: string): A2aRouteResult => ({ ok: false, code: -32000, task_id: request.taskId, error: 'not forwarded: ' + why, ...(next !== undefined ? { next } : {}) })
+    const publish = 'run `a2a-net publish` to renew this CLI deposit on its home host, then send again with a new task id'
+    if (!d.enabled()) return refuse('forwardDirect is off', 'ask this host\'s operator to set forwardDirect: true (the default since 0.6.38)')
+    if (d.isolated()) return refuse('host is isolated', 'this host forwards nothing while isolated; deposit the CLI on another home host')
     if (request.guarded) return refuse('an inbound X-A2A-Guard is present; already forwarded')
-    if (!request.localCliProof || !d.deposited(request.caller)) return refuse('caller is not a proven online local CLI deposit')
-    const scope = await d.scope(request.caller, request.team)
-    if (!scope.ok) return refuse('target is outside sender scope: ' + scope.error)
+    if (!request.localCliProof || !d.deposited(request.caller)) return refuse('caller is not a proven online local CLI deposit', publish)
+    // #282 S2: candidates honour an owner-qualified id; scope, the peer, the receivers and the ledger see the plain team.
+    const plainTeam = splitCanvasOwner(request.team).team
+    const scope = await d.scope(request.caller, plainTeam)
+    if (!scope.ok) return refuse('target is outside sender scope: ' + scope.error, `ask this host's operator to link ${request.team} here: drag it (or one of its members) into a canvas team on this host`)
     const failures: string[] = []
     const directory = await d.candidates(request.team, failures, request.caller)
     const guard = guardHeader({ ...mintGuard(), hopBudget: DEFAULT_HOP_BUDGET - 1 })
     for (const url of directory.urls) {
-      if (!d.deposited(request.caller)) return refuse('local CLI deposit expired before dispatch')
+      if (!d.deposited(request.caller)) return refuse('local CLI deposit expired before dispatch', publish)
       const peerCard = await directory.card(url)
-      const receivers = request.team.includes('/canvas/') ? peerCard?.canvasOrg?.find(row => row.team === request.team)?.members.filter(member => member !== request.caller) : undefined
-      if (request.team.includes('/canvas/')) {
-        if (receivers === undefined || receivers.length === 0 || receivers.some(member => !d.memberLinked(member))) {
-          failures.push(url + ': forwarding a canvas requires a direct operator link to every receiving member for its receipt return path')
+      const receivers = plainTeam.includes('/canvas/') ? peerCard?.canvasOrg?.find(row => row.team === plainTeam)?.members.filter(member => member !== request.caller) : undefined
+      if (plainTeam.includes('/canvas/')) {
+        // #282 S3 (same team authorizes): the owner's signed canvas is the return path; receipts settle only from these frozen receivers on this peer key (#274).
+        if (receivers === undefined || receivers.length === 0) {
+          failures.push(url + ': the owner card lists no receiving member of this canvas')
           continue
         }
       }
       // Reserve only after all eligibility/receiver-link gates. A receipt owes no receipt.
       const receipt = parseReceipt(request.message) !== null
       const release = receipt ? () => {} : d.births.begin(request.taskId)
-      if (release === undefined) return refuse('forward receipt correlation capacity is full')
+      if (release === undefined) return refuse('forward receipt correlation capacity is full', 'wait for in-flight forwards to settle, then send again with a new task id')
       try {
         // The same selected-peer snapshot supplies both return-link gate and settlement birth.
-        const answer = await d.dispatch(url, request, guard)
+        const answer = await d.dispatch(url, plainTeam === request.team ? request : { ...request, team: plainTeam }, guard)
         const result = !answer.ok && answer.ownBudgetExhausted === true ? { ...answer, code: -32005 } : answer
-        d.activity(request.team, url, result.ok)
+        d.activity(plainTeam, url, result.ok)
         if (result.ok || result.code === -32005) {
           // A receipt owes no receipt; native bridge rounds have no A2A receipt contract.
           // Match routeTrunk/trackOwedTask rather than manufacturing an unpayable debt.
@@ -72,8 +76,8 @@ export function createDirectForward(d: DirectForwardDeps) {
           const deliveredTo = result.ok ? result.deliveredTo : undefined
           const birth: OutboundBirth = { forwarded: true, ...(request.auth !== undefined ? { auth: request.auth } : {}), ...(peerCard?.publicKey ? { peerKey: peerCard.publicKey } : {}), ...(peerCard?.session ? { peerHost: peerCard.session } : {}), ...(deliveredTo !== undefined ? { deliveredTo } : {}), ...(receivers !== undefined ? { receiverMembers: receivers } : {}) }
           // Exactly one outbound row. A completed sync response is receiptless bookkeeping.
-          if (result.ok && (result.task_status === 'TASK_STATE_COMPLETED' || result.receipt === 'none')) d.ledger.trackReceiptless(request.taskId, request.team, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
-          else d.ledger.track(request.taskId, request.team, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
+          if (result.ok && (result.task_status === 'TASK_STATE_COMPLETED' || result.receipt === 'none')) d.ledger.trackReceiptless(request.taskId, plainTeam, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
+          else d.ledger.track(request.taskId, plainTeam, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
           return result
         }
         // The shared dispatcher's sync recovery query may prove a definitive failed
@@ -82,6 +86,26 @@ export function createDirectForward(d: DirectForwardDeps) {
         if (result.code === -32002 || result.code === -32003) return { ...result, task_id: request.taskId }
       } finally { release() }
     }
-    return { ok: false, code: -32004, task_id: request.taskId, error: 'forwarding to "' + request.team + '" failed: ' + (failures.join('; ') || 'no eligible peer candidate') }
+    const noReceiver = failures.some(f => f.includes('lists no receiving member'))
+    const next = noReceiver ? `the owner's canvas ${plainTeam} lists no member besides you; ask its owner to add one, or route to a member's own handle` : failures.length === 0 ? `no linked peer lists ${request.team}; check the name with \`a2a-net teams\`` : undefined
+    return { ok: false, code: -32004, task_id: request.taskId, error: 'forwarding to "' + request.team + '" failed: ' + (failures.join('; ') || 'no eligible peer candidate'), ...(next !== undefined ? { next } : {}) }
   }
+}
+
+/**
+ * #282 S3 (same team authorizes): the admission basis for a receipt delivered to a local CLI mailbox
+ * from a member the home never linked — only for that CLI's own pending forward, only from a receiver
+ * frozen at birth, only when the body-bound (Sig3) claim's card key is the frozen peer key. Anything else:
+ * undefined. Trust assumption (design D2): the selected owner host is honest about its own canvas — it may
+ * list any label as a receiver, including one of this host's session labels in the same zone.
+ */
+export function forwardReceiptBasis(row: TaskRecord | undefined, caller: string, cliHandle: string, claim: { readonly caller: string; readonly bound: boolean; readonly bodyBound?: true; readonly card: { readonly publicKey: string } }): string | undefined {
+  // The signer's zone must cover the caller label: B never signs for another zone's member (review of #287 M4).
+  if (!claimCovers(caller, claim.caller)) return undefined
+  if (row === undefined || row.status !== 'pending' || row.forwarded !== true || row.sender?.kind !== 'cli' || row.sender.id !== cliHandle) return undefined
+  // Body-bound (Sig3) only: a stripped Sig3 would let a captured envelope carry another body (review of #287 P3-1).
+  if (!claim.bound || claim.bodyBound !== true || row.peerKey === undefined || claim.card.publicKey !== row.peerKey) return undefined
+  // A legacy row's deliveredTo may be the canvas handle itself (#272/#275): never a receiver.
+  if (row.deliveredTo !== undefined && (row.deliveredTo === row.team || row.deliveredTo.includes('/canvas/'))) return undefined
+  return (row.deliveredTo !== undefined ? [row.deliveredTo] : row.receiverMembers ?? []).includes(caller) ? `peer-org:${row.team}` : undefined
 }

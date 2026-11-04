@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  VIA_OF, allowlistVersion, callerAdmission, canonicalAllowlist, joinedFaceAdmission, refusalOf, sameZoneAdmission, buildAuthorization, recheckRemoteCliAuthorization,
+  VIA_OF, allowlistVersion, callerAdmission, canonicalAllowlist, joinedFaceAdmission, nextOf, refusalOf, sameZoneAdmission, buildAuthorization, recheckRemoteCliAuthorization,
   type AdmissionRecords, type AdmissionRule, type AllowlistInputs, type PeerOrgEntry,
 } from '../../src/task-auth.ts'
 
@@ -157,6 +157,22 @@ describe('gh#114 S1: refusal texts are the faces\' texts, byte for byte', () => 
     expect(sameZoneAdmission(firm, 'dsh/aaaaaaaa', 'dsh/bbbbbbbb')).toMatchObject({ rule: 'roster-shared', basis: ['dsh/canvas/far'] })
     const lonely = records({ joined: [A, B], orgs: [[{ team: 'dsh/canvas/far', members: ['dsh/aaaaaaaa', 'dsh/bbbbbbbb'] }]] })
     expect(refusalOf(sameZoneAdmission(lonely, 'dsh/aaaaaaaa', 'dsh/bbbbbbbb'))).toMatch(/^caller "dsh\/aaaaaaaa" declares no team membership/)
+  })
+})
+
+describe('#282 S1: every admission refusal names one next step', () => {
+  it('anonymous, teamless, unroutable, target-level, foreign, remote CLI, free-form', () => {
+    expect(nextOf(callerAdmission(records(), ''))).toContain('caller_session')
+    expect(nextOf(callerAdmission(records(), 'dsh/99999999'))).toContain('put dsh/99999999 in a canvas team')
+    expect(nextOf(callerAdmission(records({ memberships: [{ session: A, teams: ['dsh/lonely'] }], joined: [A] }), 'dsh/aaaaaaaa'))).toContain('A2A workbench')
+    expect(nextOf(callerAdmission(records({ joined: [A, B, C], canvas: { ops: [A, C], qa: [B] } }), 'dsh/aaaaaaaa', 'dsh/bbbbbbbb'))).toContain('with dsh/bbbbbbbb')
+    expect(nextOf(callerAdmission(records(), 'qa/11112222', 'dsh/aaaaaaaa'))).toContain('put qa/11112222 in a canvas team with dsh/aaaaaaaa')
+    expect(nextOf(callerAdmission(records(), 'ops-cli/a1b2c3d4e5f60718'))).toContain('canvas team')
+    expect(nextOf(callerAdmission(records({ canvas: { ops: ['ops-cli/a1b2c3d4e5f60718'] } }), 'ops-cli/a1b2c3d4e5f60718'))).toContain('pin')
+    expect(nextOf(callerAdmission(records({ canvas: { ops: ['ops-cli/a1b2c3d4e5f60718'] }, cliHome: 'https://home.test' }), 'ops-cli/a1b2c3d4e5f60718', undefined, { bound: true, origin: 'https://home.test', viaUrl: 'https://home.test', online: false } as never))).toContain('a2a-net publish')
+    expect(nextOf(callerAdmission(records(), 'someone'))).toContain('<zone>/<id8>')
+    // An admitted decision has no next step.
+    expect(nextOf(callerAdmission(records({ scopeOff: true }), 'anyone'))).toBeUndefined()
   })
 })
 

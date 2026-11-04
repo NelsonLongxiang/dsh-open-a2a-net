@@ -6,7 +6,7 @@
  *   1. model tools     — `defineTool({ name })` in src/index.ts + src/tools/*.ts
  *                        == the tool table in README.md and README_zh.md
  *                        == the CLI's `a2a tools` catalog (cli/a2a.mjs TOOL_CATALOG)
- *   2. config keys     — the top-level `Config` schema keys in src/index.ts
+ *   2. config keys     — the top-level `Config` schema keys in src/config.ts (src/index.ts before #77 moved it)
  *                        == the config table in both READMEs, minus CONFIG_UNDOCUMENTED (tuning knobs)
  *   3. CLI surface     — every `cmd === '<name>'` command and every flag of cli/a2a.mjs
  *                        appears in src/skill/references/cli.md
@@ -16,7 +16,7 @@
  * The extractors are pure functions of file text (exported for tests/unit/doc-drift.spec.ts);
  * `node scripts/doc-drift.mjs` reads the repo, prints one line per pair, and exits 1 on drift.
  */
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -120,7 +120,8 @@ export function checkRepo(repo) {
   const readmes = { 'README.md': read('README.md'), 'README_zh.md': read('README_zh.md') }
   const headers = { 'README.md': ['Tool', 'Key', 'Control route'], 'README_zh.md': ['工具', '键', '控制路由'] }
   const tools = registeredTools(sources)
-  const keys = configKeys(index)
+  // #77: the Config schema moved to src/config.ts; older trees still keep it in index.ts.
+  const keys = configKeys(existsSync(join(repo, 'src/config.ts')) ? read('src/config.ts') : index)
   const routes = registeredRoutes(everySource)
   const rows = []
   for (const [file, md] of Object.entries(readmes)) {

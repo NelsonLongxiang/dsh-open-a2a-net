@@ -24,6 +24,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, type Config } from '../../src/index.ts'
 import { envelopeFor } from './envelope.ts'
 import { peerPayloadFingerprint } from '../../src/idempotency-store.ts'
+import { canvasOwnerFingerprint } from '../../src/canvas-id.ts'
 import { signCard } from '../../src/card.ts'
 import { NATIVE_TEAMS_A2A_FACE_KEY } from '../../src/teams-bridge.ts'
 
@@ -74,7 +75,7 @@ function tmpHome(): string {
 }
 
 /** One real loopback peer: a verified signed card plus an echoing direct route. */
-async function startPeer(options: { session?: string; asyncCap?: boolean; direct?: (body: Record<string, unknown>) => { readonly status: number; readonly payload: Record<string, unknown> }; query?: (body: Record<string, unknown>) => { readonly status: number; readonly payload: Record<string, unknown> } } = {}): Promise<{ url: string; seen: Array<Record<string, unknown>>; close: () => Promise<void> }> {
+async function startPeer(options: { session?: string; asyncCap?: boolean; canvasOrg?: ReadonlyArray<{ name: string; team: string; members: string[] }>; direct?: (body: Record<string, unknown>) => { readonly status: number; readonly payload: Record<string, unknown> }; query?: (body: Record<string, unknown>) => { readonly status: number; readonly payload: Record<string, unknown> } } = {}): Promise<{ url: string; seen: Array<Record<string, unknown>>; close: () => Promise<void> }> {
   const { privateKey } = generateKeyPairSync('ed25519')
   const session = options.session ?? 'peer-node'
   const card = signCard({
@@ -84,10 +85,12 @@ async function startPeer(options: { session?: string; asyncCap?: boolean; direct
     capabilities: { route: true, ...(options.asyncCap === true ? { async: true } : {}) },
     expiresAt: Date.now() + 3_600_000,
   }, privateKey)
+  // canvasOrg rides beside the signed core (it is not part of it).
+  const servedCard = options.canvasOrg !== undefined ? { ...card, canvasOrg: options.canvasOrg } : card
   const seen: Array<Record<string, unknown>> = []
   const server: Server = createServer((req, res) => {
     if (req.url === '/.well-known/agent-card.json') {
-      const body = JSON.stringify(card)
+      const body = JSON.stringify(servedCard)
       res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) })
       res.end(body)
       return
@@ -243,6 +246,19 @@ describe('outbound nativeTeamsA2a face', () => {
     expect(state.tasks.map(task => task.taskId)).toContain('wb-2')
     // #121: no submitting session named → the bridge row is the host's label.
     expect(state.tasks.find(task => task.taskId === 'wb-2')?.sender).toEqual({ kind: 'bridge', id: 'bridge-test' })
+  })
+
+  it('#286 review P3: an owner-qualified canvas handle is sent and booked as the plain team', async () => {
+    const peer = await startPeer({ asyncCap: true, canvasOrg: [{ name: 'ops', team: 'peer-team/canvas/ops', members: ['peer-team/aaaaaaaa'] }] })
+    const m = await mount({ peers: [peer.url] })
+    mounted.push(async () => { await m.dispose(); await peer.close() })
+    const served = await (await fetch(peer.url + '/.well-known/agent-card.json')).json() as { publicKey: string }
+    const face = m.face() as { submit: (request: Record<string, unknown>) => Promise<Record<string, unknown>> }
+    const outcome = await face.submit({ handle: 'peer-team/canvas/ops@' + canvasOwnerFingerprint(served.publicKey), message: 'canvas job', delivery: 'async', idempotencyKey: 'wb-canvas' })
+    expect(outcome).toMatchObject({ kind: 'accepted', taskId: 'wb-canvas' })
+    expect(peer.seen[0]).toMatchObject({ team: 'peer-team/canvas/ops' })
+    const state = await (await fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { tasks: Array<{ taskId: string; team: string }> }
+    expect(state.tasks.find(task => task.taskId === 'wb-canvas')?.team).toBe('peer-team/canvas/ops')
   })
 
   it('submit async without a declared async capability waits sync instead of silently degrading', async () => {

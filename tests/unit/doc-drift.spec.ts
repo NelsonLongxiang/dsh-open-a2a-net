@@ -32,8 +32,8 @@ describe('gh#56 doc drift — this checkout', () => {
   })
 
   it('the extractors see the real surfaces (a check that finds nothing would pass vacuously)', () => {
-    const index = readFileSync(join(REPO, 'src/index.ts'), 'utf8')
-    expect(configKeys(index).size).toBeGreaterThan(30)
+    const config = readFileSync(join(REPO, 'src/config.ts'), 'utf8')
+    expect(configKeys(config).size).toBeGreaterThan(30)
     const cli = cliSurface(readFileSync(join(REPO, 'cli/a2a.mjs'), 'utf8'))
     expect([...cli.commands]).toEqual(expect.arrayContaining(['route', 'inbox', 'file', 'whoami']))
     expect([...cli.flags]).toEqual(expect.arrayContaining(['--json', '--note', '--sync']))
@@ -58,7 +58,7 @@ describe('gh#56 doc drift — counterexamples go red', () => {
 
   it('a new config key with no README row, and a new control route with no row', () => {
     const dir = scratchRepo()
-    rewrite(dir, 'src/index.ts', "  team: s.string().default('dsh'),", "  team: s.string().default('dsh'),\n  brandNewKey: s.boolean().default(false),")
+    rewrite(dir, 'src/config.ts', "  team: s.string().default('dsh'),", "  team: s.string().default('dsh'),\n  brandNewKey: s.boolean().default(false),")
     rewrite(dir, 'src/faces/nodes.ts', "path: '/__dsh_a2a/nodes'", "path: '/__dsh_a2a/nodes-v2'")
     const rows = drifted(checkRepo(dir))
     expect(rows.map(r => r.pair)).toEqual(['config ↔ README.md', 'routes ↔ README.md', 'config ↔ README_zh.md', 'routes ↔ README_zh.md'])

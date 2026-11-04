@@ -17,6 +17,7 @@ import type WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { A2aPeerCard, A2aRouteResult } from '../types.ts'
 import type { ForwardRequest } from '../direct-forward.ts'
 import { CanvasStore, isRemoteMemberRef, validRemoteMemberRef } from '../canvas-store.ts'
+import { splitCanvasOwner } from '../canvas-id.ts'
 import { CLI_HANDLE_RE, type CliDepositStore } from '../cli-deposit.ts'
 import type { IdempotencyStore } from '../idempotency-store.ts'
 import type { JoinedSessions } from '../joined-store.ts'
@@ -25,7 +26,7 @@ import { refuseIfBudgetExhausted } from '../recursion-guard.ts'
 import { peerPayloadFingerprint, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from '../idempotency-store.ts'
 import { briefOf, type TaskLedger } from '../task-ledger.ts'
 import { parseReceipt, taskIdRefusal } from '../receipt.ts'
-import { buildAuthorization, claimCovers, refusalOf, type Admission, type AuthProof, type RemoteCliProof, type SettlementRefusal, type Settler } from '../task-auth.ts'
+import { buildAuthorization, claimCovers, nextOf, refusalOf, type Admission, type AuthProof, type RemoteCliProof, type SettlementRefusal, type Settler } from '../task-auth.ts'
 import { isRootOriginUrl } from '../origin-claim.ts'
 import type { Config } from '../index.ts'
 import { withResponseFields } from '../response-fields.ts'
@@ -77,7 +78,7 @@ export type NativeRoundOutcome =
   | { readonly ok: false; readonly error: string; readonly phase?: 'pre-dispatch'; readonly aborted?: boolean }
 
 /** What verifyOriginClaim answers (see index.ts; reason widens to string here — the faces only interpolate it). */
-export type OriginClaimResult = { ok: true; caller: string; callerUrl: string; card: A2aPeerCard; bound: boolean; cli?: true } | { ok: false; reason: string }
+export type OriginClaimResult = { ok: true; caller: string; callerUrl: string; card: A2aPeerCard; bound: boolean; cli?: true; bodyBound?: true } | { ok: false; reason: string }
 
 /** Same scheme/host/port; false when either side is empty or malformed. */
 function sameOrigin(a: string, b: string): boolean {
@@ -97,8 +98,12 @@ export interface WireDeps {
   readonly idempotencyStore: IdempotencyStore
   readonly verifyOriginClaim: (req: IncomingMessage, options?: { readonly cli?: boolean; readonly rawBody?: Uint8Array }) => Promise<OriginClaimResult>
   readonly forwardDirect: (request: ForwardRequest) => Promise<A2aRouteResult>
+  /** #282 S2: this host's canvas owner fingerprint. */
+  readonly ownCanvasFingerprint: string
   readonly diagnoseCanvas: (team: string, reason: string, caller?: string) => Promise<string>
   readonly remoteCliProof: (handle: string, claim: Extract<OriginClaimResult, { ok: true }>) => Promise<RemoteCliProof | undefined>
+  /** #282 S3: the basis for a receipt to a local CLI from a member frozen on this host's own forward, else undefined. */
+  readonly forwardReceiptBasis: (taskId: string, caller: string, cliHandle: string, claim: Extract<OriginClaimResult, { ok: true }>) => string | undefined
   readonly callerLinkedToThisHost: (caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined) => boolean
   /** This host's own card URL (read when a request lands; set once the web server settles). */
   readonly ownCardUrl: string
@@ -581,7 +586,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
               return
             }
           }
-          const team = typeof body.team === 'string' ? body.team : ''
+          // #282 S2: our own `<canvas>@<fp8>` is our canvas; a foreign suffix stays for the forward walk.
+          const ownerQualified = splitCanvasOwner(typeof body.team === 'string' ? body.team : '')
+          const team = ownerQualified.owner !== undefined && ownerQualified.owner === d.ownCanvasFingerprint ? ownerQualified.team : typeof body.team === 'string' ? body.team : ''
           const message = typeof body.message === 'string' ? body.message : ''
           const caller = typeof body.caller_session === 'string' ? body.caller_session : ''
           // P2 receipt-callback: where THIS node's receipt should route on
@@ -629,11 +636,23 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           const foreignCli = config.teamScopeRouting && CLI_HANDLE_RE.test(caller) && cliDeposits.get(caller) === undefined
           const earlyClaim = foreignCli ? await verifyOriginClaim(req, { cli: true, rawBody }) : undefined
           const cliProof = foreignCli && earlyClaim?.ok ? await remoteCliProof(caller, earlyClaim).catch(() => undefined) : undefined
-          const admission = a2aCallerAdmission(caller, team, cliProof)
+          let admission = a2aCallerAdmission(caller, team, cliProof)
+          // #282 S3 (same team authorizes): a receipt for this host's own forward, to the CLI that sent it, from a
+          // receiver frozen at birth on the selected peer's key — the owner's signed canvas is the return path.
+          const echoed = !admission.ok && cliDeposits.get(team) !== undefined ? parseReceipt(message) : null
+          if (echoed !== null) {
+            // Verify first, so an unsigned or Sig2-only caller cannot hold the connection on an in-flight forward (#287 review P3);
+            // then a body-bound receipt may beat the dispatch's HTTP answer: wait for this forward's row to be born (#287 P2).
+            const receiptClaim = earlyClaim ?? await verifyOriginClaim(req, { cli: true, rawBody })
+            if (receiptClaim.ok && receiptClaim.bodyBound === true) await waitForForwardBirth(message)
+            const basis = receiptClaim.ok ? d.forwardReceiptBasis(echoed.taskId, caller, team, receiptClaim) : undefined
+            if (basis !== undefined) admission = { ok: true, via: 'peer-org', rule: 'peer-org', basis: [basis] }
+          }
           const callerRefusal = refusalOf(admission)
           if (callerRefusal !== undefined || !admission.ok) {
             recordActivity('in', team, caller === '' ? 'anonymous' : caller, false)
-            const payload = JSON.stringify({ error: callerRefusal, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
+            const next = nextOf(admission)
+            const payload = JSON.stringify({ error: callerRefusal, code: -32000, team, task_status: 'TASK_STATE_FAILED', ...(next !== undefined ? { next } : {}) })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
             return
@@ -731,13 +750,14 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // quiet window around it.
           d.touchWakeDemand()
           const forwardMiss = async (original: string): Promise<void> => {
-            const result = await d.forwardDirect({ team, message, caller, taskId, contextId, noWait,
+            // #282 S2 review P1: forward with the id the caller sent — our own `@fp8` must find no other owner.
+            const result = await d.forwardDirect({ team: typeof body.team === 'string' && ownerQualified.owner !== undefined ? body.team : team, message, caller, taskId, contextId, noWait,
               auth: buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget: caller, receivedAt: admittedAt.at }),
               localCliProof: claim.ok && claim.cli === true && claim.bound && claim.caller === caller, guarded: req.headers['x-a2a-guard'] !== undefined }).catch((error: unknown): A2aRouteResult => ({ ok: false, error: `forwarding unavailable: ${String(error)}`, code: -32000, task_id: taskId }))
             const failure = result.ok ? '' : await d.diagnoseCanvas(team, original + ' — ' + result.error, claim.ok && claim.cli === true && claim.bound && claim.caller === caller ? caller : undefined)
             if (!result.ok && result.code !== -32005) idempotencyStore.recordOutcome(taskId, { status: 'failed', error: failure })
             else if (result.ok && result.task_status === 'TASK_STATE_COMPLETED') idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: result.reply })
-            const payload = JSON.stringify(result.ok ? { routed: true, ...(result.task_status === 'TASK_STATE_DELIVERED' ? { delivered: true } : { result: { text: result.reply } }), team, task_id: taskId, context_id: contextId, task_status: result.task_status, consumed: result.consumed, bridge: result.bridge, receipt: result.receipt, forwarded: true } : { error: failure, code: result.code ?? -32000, receipt: result.receipt, task_id: taskId, team, task_status: result.code === -32005 ? 'TASK_STATE_DELIVERED' : 'TASK_STATE_FAILED' })
+            const payload = JSON.stringify(result.ok ? { routed: true, ...(result.task_status === 'TASK_STATE_DELIVERED' ? { delivered: true } : { result: { text: result.reply } }), team, task_id: taskId, context_id: contextId, task_status: result.task_status, consumed: result.consumed, bridge: result.bridge, receipt: result.receipt, forwarded: true } : { error: failure, code: result.code ?? -32000, receipt: result.receipt, task_id: taskId, team, task_status: result.code === -32005 ? 'TASK_STATE_DELIVERED' : 'TASK_STATE_FAILED', ...(result.next !== undefined ? { next: result.next } : {}) })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload)
           }
           // wait:false delivers without the final-reply hold: steer resolves

@@ -10,6 +10,7 @@ import type { AddressInfo } from 'node:net'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { signCard } from '../../src/card.ts'
+import { canvasOwnerFingerprint } from '../../src/canvas-id.ts'
 import { bootNode, ghostNode, reservePort, runContext, type MeshNode } from './harness.ts'
 
 beforeEach(() => { vi.stubGlobal('WebSocket', function throwOnSocket() { throw new Error('no socket') }) })
@@ -283,6 +284,58 @@ describe('gh#159 remote canvas discovery and routing', () => {
       expect(result.ok, JSON.stringify(result)).toBe(true)
       expect(localSteers).toHaveLength(1)
       expect(b.steered).toHaveLength(0)
+    } finally { await a.dispose(); await b.dispose() }
+  }, 30_000)
+
+  it('#282 S2: an owner-qualified id picks that owner over a same-named local canvas; our own fingerprint stays local', async () => {
+    const pa = await reservePort()
+    const pb = await reservePort()
+    const a = await bootNode({ name: 'A', session: 'gh282-qualified-a', team: 'dsh', agentId: A_ID, sessionNodes: true, teamScopeInfo: true, teamScopeRouting: true, port: pa, peers: [base(pb)] })
+    const b = await bootNode({ name: 'B', session: 'gh282-qualified-b', team: 'dsh', agentId: B_ID, sessionNodes: true, teamScopeInfo: true, teamScopeRouting: true, port: pb, peers: [base(pa)] })
+    const localSteers: unknown[] = []
+    const localId = 'session-cccccccc33334444'
+    const localAgent = { id: SessionId(localId), session: { events: [] }, steer: (payload: unknown) => { localSteers.push(payload) } }
+    try {
+      await post(a, '/__dsh_a2a/join', { id: A_ID })
+      const caller = a.agents.agent
+      a.agents.agent = localAgent as never
+      a.ctx.emit('agent/created', { agent: localAgent as never })
+      a.agents.agent = caller
+      await post(a, '/__dsh_a2a/join', { id: localId })
+      await post(b, '/__dsh_a2a/join', { id: B_ID })
+      await post(a, '/__dsh_a2a/canvas', { action: 'create', name: '跨机协作' })
+      await post(a, '/__dsh_a2a/canvas', { action: 'add-member', name: '跨机协作', id: A_ID })
+      await post(a, '/__dsh_a2a/canvas', { action: 'add-member', name: '跨机协作', id: localId })
+      await post(b, '/__dsh_a2a/canvas', { action: 'create', name: '跨机协作' })
+      await post(b, '/__dsh_a2a/canvas', { action: 'add-member', name: '跨机协作', id: B_ID })
+      await post(b, '/__dsh_a2a/canvas', { action: 'add-member', name: '跨机协作', id: 'dsh/aaaaaaaa' })
+      // A's same-named local canvas also links B's session: a foreign @fp8 must not take that local remote-member seam.
+      await post(a, '/__dsh_a2a/canvas', { action: 'add-member', name: '跨机协作', id: 'dsh/bbbbbbbb' })
+      const bCard = await fetch(b.baseUrl + '/.well-known/agent-card.json').then(r => r.json()) as { publicKey: string }
+      const fpB = canvasOwnerFingerprint(bCard.publicKey)
+      const stateA = await fetch(a.baseUrl + '/__dsh_a2a/state').then(r => r.json()) as any
+      const ownId = stateA.canvas.teams.find((t: any) => t.name === '跨机协作').id as string
+      expect(ownId).toMatch(/^dsh\/canvas\/跨机协作@[0-9a-f]{8}$/)
+      expect(ownId).not.toBe(GROUP + '@' + fpB)
+      // Foreign owner: B gets it, A's same-named local canvas does not.
+      const remote = await a.ctx.tools.get('a2a_route')!.execute({ team: GROUP + '@' + fpB, message: 'for B only', async: true }, runContext(a.agents.agent)) as Route
+      expect(remote.ok, JSON.stringify(remote)).toBe(true)
+      expect(localSteers).toHaveLength(0)
+      expect(b.steered).toHaveLength(1)
+      expect(JSON.stringify(b.steered[0])).toContain('routed to ' + GROUP)
+      // Own fingerprint: stays local, B sees nothing more.
+      const local = await a.ctx.tools.get('a2a_route')!.execute({ team: ownId, message: 'for A', async: true }, runContext(a.agents.agent)) as Route
+      expect(local.ok, JSON.stringify(local)).toBe(true)
+      expect(localSteers).toHaveLength(1)
+      expect(b.steered).toHaveLength(1)
+      // An owner fingerprint nobody holds reaches no one.
+      const nobody = await a.ctx.tools.get('a2a_route')!.execute({ team: GROUP + '@00000000', message: 'nobody', async: true }, runContext(a.agents.agent)) as Route
+      expect(nobody.ok).toBe(false)
+      expect(localSteers).toHaveLength(1)
+      expect(b.steered).toHaveLength(1)
+      // The state face publishes B's org with its qualified id (B's card is warm after the routes above).
+      const warm = await fetch(a.baseUrl + '/__dsh_a2a/state').then(r => r.json()) as any
+      expect(warm.peerOrg.find((p: any) => p.url === b.baseUrl).org.find((t: any) => t.team === GROUP).id).toBe(GROUP + '@' + fpB)
     } finally { await a.dispose(); await b.dispose() }
   }, 30_000)
 

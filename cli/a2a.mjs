@@ -868,7 +868,8 @@ async function printDelivery(verb, res) {
     if (out.task_status !== undefined && out.task_status !== 'TASK_STATE_COMPLETED') console.error(`[${verb}] status ${String(out.task_status)} — the round has not settled; reconcile by task id before re-sending`)
     return
   }
-  if (out.delivered !== true) die(`[${verb}] not delivered (HTTP ${String(res.status)}): ${String(out.error ?? out.task_status ?? 'no reason given')}`)
+  // #282 S1: one actionable next step under the reason, when the host knows one.
+  if (out.delivered !== true) die(`[${verb}] not delivered (HTTP ${String(res.status)}): ${String(out.error ?? out.task_status ?? 'no reason given')}${typeof out.next === 'string' && out.next !== '' ? `\n[${verb}] next: ${out.next}` : ''}`)
   const receipt = out.receipt === 'none' ? 'no receipt will come' : 'receipt arrives in: a2a inbox'
   console.log(`[${verb}] delivered → ${String(out.team)} · task ${String(out.task_id)} · ${receipt}`)
 }
@@ -877,13 +878,13 @@ async function printDelivery(verb, res) {
 function stateCanvasTeams(s) {
   const rows = []
   const owner = String(s.ownerHost ?? home())
-  for (const team of s.canvas?.teams ?? []) rows.push({ team: String(team.team ?? String(s.zone ?? 'dsh') + '/canvas/' + team.name), name: String(team.name), kind: 'canvas', owner, memberCount: (team.members ?? []).length, where: 'local canvas', members: (team.members ?? []).map(m => typeof m === 'string' ? m : m.team ?? m.id) })
+  for (const team of s.canvas?.teams ?? []) rows.push({ team: String(team.id ?? team.team ?? String(s.zone ?? 'dsh') + '/canvas/' + team.name), name: String(team.name), kind: 'canvas', owner, memberCount: (team.members ?? []).length, where: 'local canvas', members: (team.members ?? []).map(m => typeof m === 'string' ? m : m.team ?? m.id) })
   const seen = new Set()
   for (const peer of s.peerOrg ?? []) for (const team of peer.org ?? []) {
     const key = String(peer.url) + ':' + String(team.team)
     if (seen.has(key)) continue
     seen.add(key)
-    rows.push({ team: String(team.team), name: String(team.name), kind: 'canvas', owner: String(peer.url), memberCount: (team.members ?? []).length, where: 'remote canvas', members: team.members ?? [] })
+    rows.push({ team: String(team.id || team.team), name: String(team.name), kind: 'canvas', owner: String(peer.url), memberCount: (team.members ?? []).length, where: 'remote canvas', members: team.members ?? [] })
   }
   return rows
 }

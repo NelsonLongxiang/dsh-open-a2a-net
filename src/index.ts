@@ -6,7 +6,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net
  */
 
-import { createHash, createPrivateKey, generateKeyPairSync, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -32,7 +32,7 @@ export function resolveCallerLabel(input: {
   if (input.initiatorFace) return input.nodeTeam
   return input.sessionLabel
 }
-import { signCard, verifyCard, type CardCore } from './card.ts'
+import { encodePublicKey, signCard, verifyCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { CanvasStore, canvasNameReserved, isRemoteMemberRef } from './canvas-store.ts'
 import { decodeSessionLog, extractTranscript, TRANSCRIPT_MAX_FILE_BYTES } from './session-transcript.ts'
@@ -51,18 +51,18 @@ import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
-import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type OutboundBirth, type ReceiptResolvedInfo, type Sender, type SettlementJudge, type TaskRecord } from './task-ledger.ts'
+import { TaskLedger, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type OutboundBirth, type ReceiptResolvedInfo, type Sender, type SettlementJudge, type TaskRecord } from './task-ledger.ts'
 import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
-import { createQueueGuard, DEFAULT_TARGET_QUEUE_CAP, queueFullRefusal, WIRE_ERROR_QUEUE_FULL } from './queue-guard.ts'
+import { createQueueGuard, queueFullRefusal, QUEUE_FULL_NEXT, WIRE_ERROR_QUEUE_FULL } from './queue-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
 import { isRootOriginUrl, sameMountedUrl, signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
 import { AuthObserver, type AffectedEntry } from './auth-observer.ts'
-import { allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type SettlementMode, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry, type RemoteCliProof, recheckRemoteCliAuthorization } from './task-auth.ts'
+import { allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry, type RemoteCliProof, recheckRemoteCliAuthorization } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
 // `ctx.timer` on Context; the runtime service is mounted by app compositions.
@@ -87,7 +87,6 @@ import type { } from '@deepseek-ai/dsh-session-persistence'
 // the api gateway package (4f00a8b82a).
 import type { } from '@deepseek-ai/dsh-api-session-controller'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import s from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 // JsonValue is declared locally instead of imported from @deepseek-ai/dsh-tools
 // or dsh-session: those packages re-export the type through a dsh-session
@@ -161,409 +160,11 @@ export const name = 'a2a'
 
 export const inject = ['tools', 'timer', 'systemPrompt']
 
-/** One signed zone delegation published on this node's agent card. */
-export interface DelegateConfig {
-  /** The delegated name; resolves zone-relatively at route time. */
-  readonly name: string
-  /** Base URL of the zone the name resolves in. */
-  readonly url: string
-  /** Base64 SPKI DER binding to the target zone's card key; `''` leaves the delegation unbound. */
-  readonly publicKey: string
-}
-
-/** Deployment-varying A2A node facts; every field has a declared default. */
-export interface Config {
-  /** `X-API-Key` value sent on peer requests and required by the control routes; empty disables the header. */
-  readonly apiKey: string
-  /**
-   * This node's caller label. `''` (the default) derives `dsh-host-<8 hex>`
-   * from a per-home node id created on first use, so two deployments mounting
-   * defaults do not collide while a persisted home keeps the label stable
-   * across restarts.
-   */
-  readonly session: string
-  /** Team name this node exposes for direct routing. */
-  readonly team: string
-  /** S4 fix 3: audit (default) or refuse host-side (agent-less) routing calls. */
-  readonly gateAgentLessCalls: 'audit' | 'refuse'
-  /** #114 S4: settlement authorization — off, observe (record would-refuse, settle as before), enforce. */
-  readonly settlementAuth: SettlementMode
-  /**
-   * Publish this node's `/.well-known/agent-card.json` on the shared web
-   * server (peer discovery). Requires the web server in the composition;
-   * the card carries this node's team, capabilities, referral list, and
-   * joined session teams so peers find it without a central directory.
-   */
-  readonly announce: boolean
-  /**
-   * gh#193: send nothing to any peer. Every outbound peer request — card
-   * reads, directory sweeps, routes, log reads, canvas pings and canvas-op
-   * relays — goes through one fetch that refuses while this is on, so a
-   * test host stays dark even with learned peers in `a2a/peers.json`
-   * (which is left untouched). Inbound faces keep answering. Default false.
-   */
-  readonly isolated: boolean
-  /** Forward online local CLI deliveries one hop after a local miss. Default on from 0.6.38; explicit false opts out. */
-  readonly forwardDirect: boolean
-  /** Human-facing name published on the agent card. */
-  readonly agentName: string
-  /**
-   * Base URLs of seed peer nodes. `a2a_teams` lists teams discovered from
-   * the peers' agent cards and `a2a_route` connects to the owning peer's
-   * `/a2a/direct` endpoint. The list is a seed set: referral URLs learned
-   * from fetched cards join a bounded, quality-scored peer store persisted
-   * at `<dsh-home>/a2a/peers.json`.
-   */
-  readonly peers: string[]
-  /**
-   * Zone delegation records published (signed) on this node's agent card:
-   * each entry publishes `name` as resolvable in the zone at `url`, so a
-   * route for `name` walks the delegation chain (at most 5 hops, cycles
-   * fail closed).
-   */
-  readonly delegates: DelegateConfig[]
-  /**
-   * gh#9+gh#10 OriginClaim window (docs/protocol/delivery-origin-auth.md §4):
-   * while true (default), a delivery/log request with NO envelope still
-   * walks N3 admission and increments the legacyInbound warn metric; when
-   * the operator closes it (post fleet flip), an absent envelope rejects
-   * `untrusted-origin` — same code as a failed signature (M1: a
-   * self-asserted already-linked name must not pass on shape alone).
-   */
-  readonly originClaimWindow: boolean
-  /**
-   * OriginClaim unbound window (docs/protocol/delivery-origin-auth.md §2.1):
-   * while true (default), this host also signs the legacy unbound form and
-   * accepts a peer's unbound-only envelope (counted as unboundInbound);
-   * closed, it signs and accepts the audience-bound form only.
-   */
-  readonly originClaimUnboundWindow: boolean
-  /**
-   * Extra origins this host answers to as an OriginClaim audience, beyond
-   * its card URL and the address a request arrives on (port-mapped or
-   * proxied hosts name the URL peers dial).
-   */
-  readonly originClaimAudiences: string[]
-  /**
-   * #19 D2: card-face sessionTeams excerpt exposure — 'full' | 'masked'
-   * | 'off' (owner-level; default full). See the schema comment.
-   */
-  readonly exposureExcerpt: 'full' | 'masked' | 'off'
-  /**
-   * Override for the OriginClaim callerUrl anchor. Loopback-bound hosts
-   * behind a pocket tunnel must name the card URL peers can actually
-   * fetch (e.g. http://192.168.3.157:13080); empty uses the web server's
-   * own address.
-   */
-  readonly originClaimUrl: string
-  /**
-   * gh#8 (N9) escape hatch: when true, team-name resolution also considers
-   * the referral-learned peer tail (the legacy whole-store basis) instead
-   * of the seeded/delegate subset only. Default false — a team name binds
-   * to hosts the operator linked; fleets relying on referral discovery for
-   * routing migrate by adding explicit seeds, then leave this off.
-   */
-  readonly referralTeamResolution: boolean
-  /**
-   * Harness home slice for the node keypair and peer store; `''` (the
-   * default) uses the process DSH home. The Ed25519 key lives at
-   * `<home>/a2a/node-key.pem` and is generated on first announce; a
-   * persisted key keeps the node's card identity stable across restarts.
-   */
-  readonly dshHome: string
-  /**
-   * Agent-card validity. Announce re-signs at TTL/4 so three lost refreshes
-   * still leave a live card; a node silent for one TTL disappears from every
-   * peer's discovery without manual eviction.
-   */
-  readonly cardTtlMs: number
-  /**
-   * Enable per-session A2A nodes: each live top-level session can join the
-   * network explicitly — label `<session>-<agentId8>`, team
-   * `<team>/<agentId8>`, node facts carrying the session title and a
-   * recent-activity excerpt. Joining is opt-in through the sidebar control's
-   * host routes; joined teams ride this node's card and dispatch through
-   * its `/a2a/direct` endpoint.
-   */
-  readonly sessionNodes: boolean
-  /**
-   * Prewarm every cold joined session's agent after the plugin mounts (dev
-   * boxes and always-on collaboration hosts that restart often: the network
-   * state returns without opening each session). Each wake materializes a
-   * full agent — a main-thread log replay — so the prewarm is deferred,
-   * foreground-yielding, and cancellable (see `wakePrewarmDelayMs` /
-   * `wakePrewarmQuietMs`); the default stays off for deployments that would
-   * rather pay on demand (wake-on-route and the sidebar's wake button remain
-   * available either way).
-   */
-  readonly wakeJoinedOnBoot: boolean
-  /**
-   * Idle delay between loader settlement and the first boot prewarm wake:
-   * boot traffic gets a clear window before any log replay starts. `0`
-   * restores the old fire-at-settle behavior.
-   */
-  readonly wakePrewarmDelayMs: number
-  /**
-   * Foreground quiet window: a wake/route demand inside this window (or any
-   * outbound route still in flight) postpones the next prewarm step. Panel
-   * polls never count. `0` disables the yield.
-   */
-  readonly wakePrewarmQuietMs: number
-  /**
-   * Pause between consecutive boot prewarm wakes. Each wake replays a full
-   * session log — the zstd decode yields the event loop only every 500ms —
-   * so unbounded concurrent wakes of several huge logs starve every request
-   * for tens of seconds after a restart. The serial queue with this pause
-   * keeps the preheat while capping decode saturation, and wake-on-route
-   * never waits on this queue.
-   */
-  readonly wakeBootStaggerMs: number
-  /**
-   * F8: continuous desired-state reconciliation. The boot prewarm is a
-   * one-shot queue; the reconciler re-derives the due set every tick and
-   * wakes one cold intent per pass — covering post-boot drift, failed
-   * wakes, and gateways that mounted late. Default on.
-   */
-  readonly wakeReconcile: boolean
-  /** Cadence between reconciliation ticks (floored at 50ms). */
-  readonly wakeReconcileIntervalMs: number
-  /** First-retry delay after a failed reconcile wake; doubles per attempt. */
-  readonly wakeReconcileBackoffBaseMs: number
-  /** Backoff ceiling; corrupt-log rows park as needs-repair and never retry. */
-  readonly wakeReconcileMaxBackoffMs: number
-  /**
-   * S4 (gh#11 N7, operator directive: team creation is a human act): the
-   * joinable-team curation list for a2a_team_join. ONLY an EXACT entry
-   * authorizes a join; trailing-`*` pattern entries stay readable here
-   * (whoami shows them) but carry no mint rights — a pattern that
-   * pre-authorized every future name under it would let a model mint teams
-   * nobody created. Empty list denies every join (default).
-   */
-  readonly teamJoinAllowlist: string[]
-  /** Human-owned stable display labels keyed by full local session id; never a routing identity. */
-  readonly seatNames: Record<string, unknown>
-  /**
-   * S3 (phase-2 default-ON, owner ruling 2026-09-01): route dispatch checks
-   * caller↔target shared team membership before addressing; set false to
-   * restore the open outbound seam. (Kept in sync with the schema comment.)
-   */
-  readonly teamScopeRouting: boolean
-  /**
-   * S5 (owner directive 2026-10-20): information-plane scoping — the
-   * read-only fleet tools (a2a_teams / a2a_status / a2a_probe) disclose
-   * only teams joined by this host's nodes (the union of local roster
-   * declarations). [this host] rows stay visible; a2a_tasks (this host's
-   * own ledger) stays unscoped. Set false for the open plane.
-   */
-  readonly teamScopeInfo: boolean
-  /**
-   * Peer boundary model (docs/design/peer-boundary-model.md) — connection
-   * layer: an empty list keeps the historical open-referral posture; a
-   * non-empty list admits a referral only when its host matches an entry
-   * (exact host[:port], bare domain suffix, or full URL). Seeds from
-   * `peers` are owner-configured and unaffected.
-   */
-  readonly peerAllowlist: string[]
-  /**
-   * Peer boundary model — connection layer: when false, referral URLs are
-   * neither learned nor offered; the tracked set stays the configured seed
-   * set for the lifetime of the config that named them.
-   */
-  readonly referralLearning: boolean
-
-  /**
-   * v0.5.23 (async-stall): see the schema comment on asyncNudgeDelayMs.
-   */
-  readonly asyncNudgeDelayMs: number
-  /** gh#224: receipt-owing tasks one target may queue on this host before new deliveries are refused (0 = off). */
-  readonly targetQueueCap: number
-  /**
-   * How long the state route serves the cold-row id set from cache before
-   * re-enumerating the persistence layer. The panel polls every 2s; the
-   * default keeps one full enumeration per 5s instead of one per poll.
-   */
-  readonly stateColdRowsTtlMs: number
-  /**
-   * Serve window for a verified peer card from the shared cache. Cards are
-   * signed for days and re-signed at TTL/4, so 60s is semantically safe; a
-   * peer that restarts with a fresh card is picked up on the next window.
-   */
-  readonly cardCacheTtlMs: number
-  /** Shorter window for unreachable/invalid cards, so a revived peer reappears quickly. */
-  readonly cardCacheNegativeTtlMs: number
-  /**
-   * Serve window for the panel\x27s remote rows. The refresh itself rides the
-   * shared card cache, so this is pure sweep cadence: how often real
-   * network activity happens while the panel polls every 2s.
-   */
-  readonly remoteRowsTtlMs: number
-  /**
-   * `final` reply budget: how long an inbound direct route waits for the
-   * session's next assistant message before answering with a timeout
-   * notice. Without it a session that never idles (or never produces text)
-   * leaves the caller hanging until `routeTimeoutMs` expires.
-   */
-  readonly flushTimeoutMs: number
-  /**
-   * `a2a_route` execution budget: how long a call may plausibly wait for a
-   * remote session's reply (default 30 minutes).
-   */
-  readonly routeTimeoutMs: number
-  /**
-   * Age at which an unsettled async task auto-dead-letters (exits the owed
-   * view, disarms the nudge, still settles on a late receipt). Default
-   * 24h; the mesh anomaly suite injects sub-second windows to exercise the
-   * dead-letter → revival lifecycle without wall-clock waits.
-   */
-  readonly taskStaleTtlMs: number
-  /**
-   * Opt-in native-teams inbound bridge: when composed with
-   * `@nelsonlongxiang/dsh-native-teams`, a routed team name that its
-   * registry classifies as an unambiguous local claim dispatches through
-   * its authoritative routing seam (`/a2a/direct`, the outbound A2A tools,
-   * and the directory listing). Off by default — exposing every registered
-   * team to the network is an operator decision (exposure-grants
-   * governance: grants are deliberate, never ambient). Dispatcher-level
-   * only: inbound callers address the team, never its individual members
-   * (members stay visible-not-addressable).
-   */
-  readonly nativeTeamsInbound?: boolean
-  /**
-   * Reply-wait budget for one native-teams round (the bridge's answer
-   * deadline, mirroring the steer path's 180s deadline). A round still
-   * running past it answers the honest delivered-unsettled shape instead
-   * of parking the caller; the round itself keeps going.
-   */
-  readonly nativeRoundWaitMs?: number
-}
-
-/** Schemastery configuration for the A2A client plugin row. */
-export const Config: s<Config> = s.object({
-  apiKey: s.string().default(''),
-  session: s.string().default(''),
-  team: s.string().default('dsh'),
-  /** S4 fix ③: host-side (agent-less) routing calls — audit them (default) or refuse outright. */
-  gateAgentLessCalls: s.union(['audit', 'refuse'] as const).default('audit'),
-  settlementAuth: s.union(['off', 'observe', 'enforce'] as const).default('observe'),
-  announce: s.boolean().default(false),
-  isolated: s.boolean().default(false),
-  forwardDirect: s.boolean().default(true),
-  agentName: s.string().default('DeepSeek Harness A2A node'),
-  peers: s.array(s.string()).default([]),
-  delegates: s.array(s.object({ name: s.string(), url: s.string(), publicKey: s.string().default('') })).default([]),
-  dshHome: s.string().default(''),
-  sessionNodes: s.boolean().default(true),
-  wakeJoinedOnBoot: s.boolean().default(false),
-  wakePrewarmDelayMs: s.number().default(10_000),
-  wakePrewarmQuietMs: s.number().default(5_000),
-  wakeBootStaggerMs: s.number().default(3_000),
-  wakeReconcile: s.boolean().default(true),
-  wakeReconcileIntervalMs: s.number().default(60_000),
-  wakeReconcileBackoffBaseMs: s.number().default(5_000),
-  wakeReconcileMaxBackoffMs: s.number().default(600_000),
-  /**
-   * S4 (gh#11 N7): the joinable-team curation list. A model calling
-   * a2a_team_join may only declare membership in a team with an EXACT
-   * entry here — trailing-`*` patterns are readable but authorize nothing
-   * (no mint rights: a pattern pre-authorizing every future name under it
-   * would let a model mint teams nobody created). Default empty: the
-   * owner's no-self-join ruling, institutionalized as default-deny; a
-   * refused join carries guidance instead of failing silently.
-   */
-  teamJoinAllowlist: s.array(s.string()).default([]),
-  seatNames: s.dict(s.any()).default({}),
-  /**
-   * S3 (phase-2 default, owner ruling 2026-09-01): route dispatch checks
-   * caller↔target shared team membership before addressing — a session
-   * with no declared team has no network (the unteamed-peer defect the
-   * owner reproduced on 4080 and locally). Fleet compatibility rides the
-   * roster capability flag (0.5.44 cards advertise roster:true; older
-   * peers read as legacy). Set false to restore the open outbound seam.
-   */
-  teamScopeRouting: s.boolean().default(true),
-  /**
-   * S5 (default-on, owner directive 2026-10-20): the information-plane
-   * tools answer from the joined-team scope only — a2a_teams lists
-   * [this host] rows plus peer rows serving a joined team (note field
-   * explains the scope); a2a_status narrows peers / in-flight / activity
-   * to that scope (local traffic and idempotency aggregates stay);
-   * a2a_probe sweeps serving peers and refuses a single URL whose
-   * verified card cannot prove service. A host whose nodes declare no
-   * teams keeps host-internal facts only. Set false to restore
-   * fleet-wide disclosure.
-   */
-  teamScopeInfo: s.boolean().default(true),
-
-  /**
-   * Peer boundary model — connection layer: an empty list keeps the
-   * historical open-referral posture; a non-empty list admits a referral
-   * only when its host matches an entry (exact host[:port], bare domain
-   * suffix, or full URL). Seeds from `peers` are owner-configured and
-   * unaffected.
-   */
-  peerAllowlist: s.array(s.string()).default([]),
-
-  /**
-   * Peer boundary model — connection layer: when false, referral URLs are
-   * neither learned nor offered; the tracked set stays the configured seed
-   * set for the lifetime of the config that named them.
-   */
-  referralLearning: s.boolean().default(true),
-
-  /**
-   * gh#8 (N9): team-name resolution rides the operator-established peer
-   * basis (config seeds + delegates) only; the referral-learned tail's
-   * self-published card claims do not bind team names. Set true to restore
-   * the legacy whole-store basis (fleet migration window).
-   */
-  referralTeamResolution: s.boolean().default(false),
-
-  /**
-   * #19 D2 (ruling final, owner-level knob): how much of a session team's
-   * activity EXCERPT the card face publishes in sessionTeams descriptions.
-   * 'full' (default) keeps the verbatim tail excerpt; 'masked' truncates
-   * to a shape-only prefix; 'off' omits the description field entirely.
-   * Titles and team handles stay in every tier — the knob is the excerpt,
-   * not the listing.
-   */
-  exposureExcerpt: s.union(['full', 'masked', 'off'] as const).default('full'),
-
-  /**
-   * gh#9+gh#10 OriginClaim window: absent envelopes still walk N3 during
-   * the window (counted as legacyInbound); closing it rejects them like
-   * failed signatures. See docs/protocol/delivery-origin-auth.md §4.
-   */
-  originClaimWindow: s.boolean().default(true),
-  /**
-   * OriginClaim unbound window: also sign/accept the legacy envelope that
-   * names no audience (counted as unboundInbound); closing it leaves the
-   * audience-bound form only. See docs/protocol/delivery-origin-auth.md §2.1.
-   */
-  originClaimUnboundWindow: s.boolean().default(true),
-  /** Extra OriginClaim audience origins (port-mapped/proxied hosts). */
-  originClaimAudiences: s.array(s.string()).default([]),
-  /** OriginClaim callerUrl override for pocket-tunneled hosts; '' = auto. */
-  originClaimUrl: s.string().default(''),
-
-  /**
-   * v0.5.23 (async-stall): delay before a delivered-but-unconsumed async
-   * route re-wakes its target with a one-line nudge (defect
-   * t-mt6nd0sq-hxuhj6). 0 disables the nudge entirely.
-   */
-  asyncNudgeDelayMs: s.number().default(120_000),
-  /** gh#224: at most this many receipt-owing tasks queue for one target; the next is refused (-32009). 0 disables. */
-  targetQueueCap: s.number().default(DEFAULT_TARGET_QUEUE_CAP),
-  stateColdRowsTtlMs: s.number().default(5_000),
-  cardCacheTtlMs: s.number().default(60_000),
-  cardCacheNegativeTtlMs: s.number().default(30_000),
-  remoteRowsTtlMs: s.number().default(15_000),
-  cardTtlMs: s.number().default(172_800_000),
-  flushTimeoutMs: s.number().default(300_000),
-  routeTimeoutMs: s.number().default(1_800_000),
-  taskStaleTtlMs: s.number().default(TASK_STALE_TTL_MS),
-  nativeTeamsInbound: s.boolean().default(false),
-  nativeRoundWaitMs: s.number().default(180_000),
-})
+import { Config } from './config.ts'
+import { canvasOwnerFingerprint, splitCanvasOwner } from './canvas-id.ts'
+import { forwardReceiptBasis } from './direct-forward.ts'
+export { Config }
+export type { DelegateConfig } from './config.ts'
 
 
 /**
@@ -912,6 +513,8 @@ export function apply(ctx: Context, config: Config): void {
   }))
 
   const nodePrivateKey = loadOrCreateNodeKey(join(home, 'a2a', 'node-key.pem'))
+  /** #282 S2: this host's canvas owner fingerprint (`<canvas>@<fp8>` names our own canvas). */
+  const ownCanvasFingerprint = canvasOwnerFingerprint(encodePublicKey(createPublicKey(nodePrivateKey)))
   /** Our own card URL once the web server settles — the OriginClaim anchor. */
   let ownCardUrl = ''
   /**
@@ -2076,7 +1679,7 @@ export function apply(ctx: Context, config: Config): void {
         get unboundInboundCount() { return unboundInboundCount },
         get boundMissInboundCount() { return boundMissInboundCount },
         get boundMissRecent() { return boundMissRecent },
-        get ownCardUrl() { return ownCardUrl },
+        get ownCardUrl() { return ownCardUrl }, ownCanvasFingerprint,
         get ownerSeatNames() { return ownerSeatNames },
         set ownerSeatNames(v) { ownerSeatNames = v },
         get ownerAllowlist() { return ownerAllowlist },
@@ -2970,7 +2573,8 @@ export function apply(ctx: Context, config: Config): void {
       idempotencyStore,
       verifyOriginClaim,
       remoteCliProof,
-      forwardDirect: request => forwardDirect(request),
+      forwardReceiptBasis: (taskId, caller, cliHandle, claim) => forwardReceiptBasis(taskLedger.find(taskId), caller, cliHandle, claim),
+      forwardDirect: request => forwardDirect(request), ownCanvasFingerprint,
       diagnoseCanvas: (team, reason, caller) => diagnoseCanvas(team, reason, caller),
       callerLinkedToThisHost, get ownCardUrl() { return ownCardUrl },
       recordActivity,
@@ -3639,7 +3243,7 @@ export function apply(ctx: Context, config: Config): void {
  * face (the NODE team — bare, team-name routable) > the session label (not
  * routable; the dispatch registers receiptless per fix 2).
  */
-const routeVerdict = (team: string, failures: readonly string[], candidateCount: number): { ok: false; error: string; code: number } => {
+const routeVerdict = (team: string, failures: readonly string[], candidateCount: number): { ok: false; error: string; code: number; next?: string } => {
     const ambiguous = failures.find(failure => failure.startsWith('ambiguous: '))
     if (candidateCount === 0 && ambiguous !== undefined) return { ok: false, error: ambiguous, code: -32004 }
     if (candidateCount > 0) {
@@ -3650,6 +3254,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       }
     }
     const remote = failures.filter(entry => !entry.startsWith('local: '))
+    const queueFull = failures.some(entry => entry.startsWith('local: target-queue-full'))
     const suffix = team.slice(team.indexOf('/') + 1)
     const near = [...new Set([
       ...joinedSessions.list().map(id => `${config.team}/${id8(id)}`),
@@ -3665,9 +3270,10 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       `team "${team}" is not published by any configured peer${remote.length > 0 ? ` (unresolved delegations: ${remote.join('; ')})` : ''}`,
       ...failures.filter(entry => entry.startsWith('local: ')).map(entry => `local reason: ${entry.slice('local: '.length)}`),
       near.length > 0 ? `nearby advertised teams: ${near.join(', ')}` : undefined,
-      'next: enumerate live alternatives with a2a_teams; do not retry unchanged; joining is the target session\'s own gesture (its sidebar) — relay that request to the human',
+      // #282 S1: a full local queue means the target exists and is busy — waiting is the only right next step.
+      queueFull ? `next: ${QUEUE_FULL_NEXT}` : 'next: enumerate live alternatives with a2a_teams; do not retry unchanged; joining is the target session\'s own gesture (its sidebar) — relay that request to the human',
     ].filter((line): line is string => line !== undefined)
-    return { ok: false, error: lines.join(' — '), code: -32004 }
+    return queueFull ? { ok: false, error: lines.join(' — '), code: WIRE_ERROR_QUEUE_FULL, next: QUEUE_FULL_NEXT } : { ok: false, error: lines.join(' — '), code: -32004 }
   }
 
   actTools.registerRoute()
@@ -3702,7 +3308,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       if (!scope.ok) missing.push('sender scope: ' + scope.error)
       for (const owner of owners.filter(row => row.team === team && !row.local)) {
         if (!owner.members.includes(caller)) missing.push(owner.owner + ': caller is not an advertised canvas member')
-        for (const member of owner.members.filter(member => member !== caller)) if (!canvasStore.list().some(name => canvasStore.remoteMembersOf(name).includes(member))) missing.push(owner.owner + ': missing direct operator link to receiver ' + member)
+        // #282 S3: no per-member link here; the owner's signed canvas is the return path.
+        if (owner.members.every(member => member === caller)) missing.push(owner.owner + ': the canvas lists no receiving member besides the caller')
       }
     }
     return canvasFailure(team, owners, reason) + (missing.length === 0 ? '' : ' — missing prerequisites: ' + missing.join('; '))
@@ -3710,7 +3317,6 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   const forwardDirect = createDirectForward({
     births: forwardingBirths,
     enabled: () => config.forwardDirect === true, isolated: () => config.isolated, deposited: handle => cliDeposits.get(handle) !== undefined,
-    memberLinked: handle => canvasStore.list().some(name => canvasStore.remoteMembersOf(name).includes(handle)),
     scope: (handle, team) => config.teamScopeRouting ? outboundScope(senderScopeRecords, handle, handle, team) : Promise.resolve({ ok: true as const }),
     candidates: async (team, failures, caller) => { const fetch = memoizedCardFetch(); return { urls: await directoryPeerCandidates(fetch, team, failures, { id: caller, handle: caller }), card: fetch } },
     dispatch: (url, request, guard) => dispatchPeerCandidate(url, request.team, request.message, request.contextId, new AbortController().signal, request.caller, request.noWait, request.taskId, request.caller, guard),
@@ -3743,6 +3349,11 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // node team when it has joined, else the node label), so the receiver
       // can answer with one a2a_route instead of an unroutable display label.
       a2aJoinGateRefusal(agent === undefined ? undefined : { agent })
+      // #282 S2: an owner-qualified canvas id. Our own fingerprint is our canvas; a foreign one never
+      // lands on a same-named local canvas, and the directory walk keeps only that owner.
+      const ownerQualified = splitCanvasOwner(String(args.team ?? '').trim())
+      const foreignOwner = ownerQualified.owner !== undefined && ownerQualified.owner !== ownCanvasFingerprint ? ownerQualified.owner : undefined
+      if (ownerQualified.owner !== undefined) args = { ...args, team: ownerQualified.team }
       // A target-authored receipt attempt answers its own work even if scope/transport later refuses delivery.
       const answer = parseReceipt(args.message)
       if (agent !== undefined && answer !== null) taskLedger.markAnswered(answer.taskId, sessionTeamOf(agent))
@@ -3810,7 +3421,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // publishers, then zone delegations, deduplicated by URL.
       const failures: string[] = []
       if (signal?.aborted) return localRoute({ ok: false, error: 'route aborted before dispatch', code: -32000 })
-      const outcome = await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, signal, args.async === true, taskId, callbackAddress, agent === undefined ? undefined : String(agent.id))
+      const outcome = foreignOwner !== undefined ? undefined : await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, signal, args.async === true, taskId, callbackAddress, agent === undefined ? undefined : String(agent.id))
       const localBirth = localBirths.get(taskId)
       localBirths.delete(taskId)
       if (outcome !== undefined) {
@@ -3830,7 +3441,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // union in member order. Non-canvas teams keep the single-walk shape
       // unchanged. The ledger stays keyed to the canvas team the caller
       // named; the peer request carries the member handle it must resolve.
-      const canvasName = parseCanvasTeamName(args.team)
+      const canvasName = foreignOwner !== undefined ? undefined : parseCanvasTeamName(args.team)
       // gh#131: one of this host's own handles is a local member, never a directory target.
       const remoteTargets = canvasName !== undefined ? ((resolve) => canvasStore.remoteMembersOf(canvasName).filter(ref => resolve(ref) === undefined))(localHandleResolver()) : []
       const targets = remoteTargets.length > 0 ? [...remoteTargets] : [args.team]
@@ -3845,7 +3456,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       }
       const candidatePool: Array<{ candidate: string; target: string }> = []
       for (const target of targets) {
-        for (const candidate of await directoryPeerCandidates(fetch, target, failures, scopedCanvasCaller)) {
+        for (const candidate of await directoryPeerCandidates(fetch, ownerQualified.owner !== undefined && target === args.team ? `${target}@${ownerQualified.owner}` : target, failures, scopedCanvasCaller)) {
           candidatePool.push({ candidate, target })
         }
       }
@@ -3925,7 +3536,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     const queueRefusal = queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, cliDeposits.get(team) !== undefined, ownTask)
     if (queueRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
-      return { ok: false, error: queueRefusal, code: WIRE_ERROR_QUEUE_FULL }
+      return { ok: false, error: queueRefusal, code: WIRE_ERROR_QUEUE_FULL, next: QUEUE_FULL_NEXT }
     }
     const canvasName = parseCanvasTeamName(team)
     // Issue #41 shape note: the caller label is the WIRE form (<zone>/<id8>
@@ -4302,14 +3913,18 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // (gh#8: a squatter two gossip hops away captured routes by naming
     // itself after the target). referralTeamResolution restores the legacy
     // whole-store basis for fleets mid-migration.
+    // #282 S2: `<canvas>@<fp8>` selects only the owner whose signed card key matches; no delegation walk.
+    const qualified = splitCanvasOwner(team)
+    team = qualified.team
+    const ownerOk = (card: A2aPeerCard | undefined): boolean => qualified.owner === undefined || canvasOwnerFingerprint(card?.publicKey) === qualified.owner
     const peers = resolutionPeers()
     const candidates: string[] = []
-    const cards = await mapBounded(peers, CANDIDATE_CONCURRENCY, async peer => ({ peer, card: await fetch(peer) }))
+    const cards = (await mapBounded(peers, CANDIDATE_CONCURRENCY, async peer => ({ peer, card: await fetch(peer) }))).map(entry => ownerOk(entry.card) ? entry : { peer: entry.peer, card: undefined })
     // Check after fetching all cards: a seeded peer publishing the same id8
     // makes the caller handle ambiguous, so do not send a canvas payload.
     const sessions = scopedCanvasCaller === undefined ? undefined : localHandleResolver()
     const resolveLocal = sessions === undefined ? undefined : (ref: string): string | undefined => cliDeposits.get(ref) !== undefined ? ref : sessions(ref)
-    const resolutions = await mapBounded(peers, CANDIDATE_CONCURRENCY, async peer => ({ peer, outcome: await resolveZone(fetch, peer, team) }))
+    const resolutions = qualified.owner !== undefined ? [] : await mapBounded(peers, CANDIDATE_CONCURRENCY, async peer => ({ peer, outcome: await resolveZone(fetch, peer, team) }))
     if (canvasTargetAmbiguous(cards.map(entry => entry.card), team, scopedCanvasCaller, resolveLocal, resolutions.some(entry => entry.outcome.ok))) {
       failures.push(`ambiguous: team "${team}" has conflicting owners, identities, or a colliding caller; no payload sent`)
       return []
@@ -4393,7 +4008,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           const card = await fetch(candidate)
           peerAsync = (card?.capabilities as { async?: unknown } | undefined)?.async === true
         }
-        const result = await dispatchPeerCandidate(candidate, request.handle, request.message, request.contextId, abort, session, request.delivery === 'async' && peerAsync, taskId, callbackAddress)
+        const result = await dispatchPeerCandidate(candidate, splitCanvasOwner(request.handle).team, request.message, request.contextId, abort, session, request.delivery === 'async' && peerAsync, taskId, callbackAddress)
         if (!result.ok) {
           // Idempotency verdicts (B3) are terminal, not failover: a replay
           // says the prior attempt at THIS peer stays authoritative —
@@ -4425,7 +4040,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           if (abort.aborted) break
           continue
         }
-        trackOwedTask(taskId, request.handle, candidate, result, callbackAddress, briefOf(request.message), sender, await peerBirth(fetch, candidate, undefined))
+        trackOwedTask(taskId, splitCanvasOwner(request.handle).team, candidate, result, callbackAddress, briefOf(request.message), sender, await peerBirth(fetch, candidate, undefined))
         const contextId = request.contextId ?? (result.context_id !== '' ? result.context_id : `ctx-${Math.random().toString(16).slice(2, 10)}`)
         if (result.task_status === 'TASK_STATE_COMPLETED') {
           return { kind: 'completed', text: result.reply, taskId, contextId }

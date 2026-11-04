@@ -54,7 +54,14 @@ describe('#230 home host forwards a deposited CLI one hop with scope on', () => 
       expect(owner.error).toContain('forwardDirect is off')
       await post(a,'/__dsh_a2a/canvas',{action:'remove-member',name:'ops',id:'beta/01234567'})
       const missing=await route(a,'direct-271-link',true,undefined,'beta/canvas/ops')
-      expect(missing.error).toContain('missing direct operator link to receiver beta/01234567')
+      // #282 S3: a per-member link here is no longer a prerequisite (the owner's signed canvas is the return path).
+      expect(missing.error).not.toContain('missing direct operator link')
+      expect(missing.error).toContain('home forwardDirect is off')
+      // #282 S3: a canvas whose only advertised member is the caller has no receiver — the diagnosis says so.
+      await post(b,'/__dsh_a2a/canvas',{action:'create',name:'solo'})
+      await post(b,'/__dsh_a2a/canvas',{action:'add-member',name:'solo',id:handle})
+      const solo=await route(a,'direct-271-solo',true,undefined,'beta/canvas/solo')
+      expect(solo.error).toContain('lists no receiving member besides the caller')
       const absent=await route(a,'direct-271-absent',true,undefined,'beta/canvas/no-such-team')
       expect(absent.error).toContain('canvas-not-found')
       expect(absent.error).not.toContain('canvas-owner:')
@@ -219,7 +226,11 @@ describe('#230 home host forwards a deposited CLI one hop with scope on', () => 
     ['malformed-guard', {}, 'malformed-not-a-first-hop', 'already forwarded'],
   ] as const) it(name + ' is a visible non-forwarding local miss', async () => {
     const { a, b } = await fixture(options)
-    try { const result = await route(a, 'direct-forward-' + name, true, guard); expect(result.error).toContain(reason); expect(b.steered).toHaveLength(0) }
+    try {
+      const result = await route(a, 'direct-forward-' + name, true, guard); expect(result.error).toContain(reason); expect(b.steered).toHaveLength(0)
+      // #282 S1: the wire face carries the next step; a guard refusal has none.
+      if (guard === undefined) expect(typeof result.next).toBe('string'); else expect(result.next).toBeUndefined()
+    }
     finally { await a.dispose(); await b.dispose() }
   }, 30000)
 })
