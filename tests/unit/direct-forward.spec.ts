@@ -55,6 +55,23 @@ describe('one-hop CLI forwarding', () => {
     pending.splice(0).forEach(release=>release());await Promise.all([...flights,recovered])
     expect(x.deps.births.wait('cap-0')).toBeUndefined()
   })
+  it('#298 an early receipt waits for the birth at most the cap, then proceeds without the row being born', async () => {
+    vi.useFakeTimers()
+    try {
+      const births=new ForwardBirths(1_000)
+      const release=births.begin('slow')!
+      let waited=false
+      const waiting=births.wait('slow')!.then(()=>{waited=true})
+      await vi.advanceTimersByTimeAsync(999); expect(waited).toBe(false)
+      await vi.advanceTimersByTimeAsync(1); await waiting; expect(waited).toBe(true)
+      // The cap ends the receipt's wait only: the dispatch keeps its slot until it finishes.
+      expect(births.wait('slow')).toBeDefined(); expect(births.begin('slow')).toBeUndefined()
+      release(); expect(births.wait('slow')).toBeUndefined()
+      // A release before the cap resolves at once and leaves no timer behind.
+      const again=births.begin('fast')!; const fast=births.wait('fast')!
+      again(); await fast; expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
+  })
   it('#275 dispatch exceptions release the birth waiter without manufacturing a row', async () => {
     const x=fixture();x.deps.dispatch=async()=>{throw Error('dispatch failed')}
     await expect(createDirectForward(x.deps)(request)).rejects.toThrow('dispatch failed')
