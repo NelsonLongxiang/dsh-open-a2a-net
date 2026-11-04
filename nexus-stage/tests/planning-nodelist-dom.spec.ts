@@ -56,6 +56,26 @@ function openPanel(v: ReturnType<typeof view>['v']): HTMLElement {
 }
 
 describe('teamed-only canvas + node list drawer', () => {
+  it('all local groups and remote host groups render hostile names only as text after refresh', () => {
+    const { v } = view()
+    const hostile = '<img src=x onerror=alert(1)>'
+    const data = { ...input, sessions: sessions.map(row => ({ ...row, name: hostile })), remoteTeams: input.remoteTeams!.map(row => ({ ...row, name: hostile })) }
+    v.reconcile(data)
+    let panel = openPanel(v)
+    const check = (expected: number) => {
+      const names = [...panel.querySelectorAll('.p-nodename')]
+      expect(names).toHaveLength(expected)
+      for (const name of names) { expect(name.textContent).toBe(hostile); expect(name.children).toHaveLength(0) }
+      expect(panel.querySelector('img')).toBeNull()
+    }
+    check(3)
+    v.reconcile(data); panel = v.root.querySelector('.p-nodelist')!; check(3)
+    const select = panel.querySelector('select')!
+    select.value = '192.168.3.156:13080'; select.dispatchEvent(new Event('change'))
+    panel = v.root.querySelector('.p-nodelist')!; check(2)
+    v.reconcile(data); panel = v.root.querySelector('.p-nodelist')!; check(2)
+    v.root.remove()
+  })
   it('unteamed joined sessions earn no canvas card; roster-teamed ones do', () => {
     const { v } = view()
     v.reconcile(input)

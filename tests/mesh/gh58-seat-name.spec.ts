@@ -53,6 +53,25 @@ describe('#58 human-owned seat labels', () => {
     expect((await state(restarted)).sessions.find((row: any) => row.id === ID).name).toBe('人工开发席')
   })
 
+  it('invalid boot entries do not prevent the plugin mounting or discard valid siblings', async () => {
+    const n = await setup({ seatNames: { [ID]: '开发席', 'session-1111222233334444': 'bad\u202ename', 'session-5555666677778888': 123 } })
+    expect((await state(n)).sessions.find((s: any) => s.id === ID).name).toBe('开发席')
+    expect((await fetch(n.baseUrl + '/__dsh_a2a/owner-settings').then(r => r.json()) as any).seatNames).toEqual({ [ID]: '开发席' })
+  })
+
+  it('seat-name-only owner writes preserve existing allowlist, scope, announce and unrelated patch settings', async () => {
+    const n = await setup({ teamJoinAllowlist: ['dsh/review'], teamScopeInfo: false })
+    await post(n, '/__dsh_a2a/owner-settings', { teamJoinAllowlist: ['dsh/review'], teamScopeInfo: false, announce: false })
+    const before = await fetch(n.baseUrl + '/__dsh_a2a/owner-settings').then(r => r.json()) as any
+    await post(n, '/__dsh_a2a/owner-settings', { seatNames: { [ID]: '开发席' } })
+    const after = await fetch(n.baseUrl + '/__dsh_a2a/owner-settings').then(r => r.json()) as any
+    expect(after).toEqual({ ...before, seatNames: { [ID]: '开发席' } })
+    const yaml = readFileSync(join(n.home, 'cordis.patch.yml'), 'utf8')
+    expect(yaml).toContain("teamJoinAllowlist: ['dsh/review']")
+    expect(yaml).toContain('teamScopeInfo: false')
+    expect(yaml).toContain('announce: false')
+  })
+
   it('real tool runtime rejects naming fields, including otherwise valid tool arguments, without changing owner state', async () => {
     const n = await setup(), runtime = n.ctx.get('tools') as any
     for (const [name, args] of [['a2a_whoami', { seatName: '模型命名' }], ['a2a_team_join', { team: 'dsh/dev', seatNames: { [ID]: '模型命名' } }], ['a2a_route', { team: 'dsh/01234567', message: 'hello', seatName: '模型命名' }]] as const) {
