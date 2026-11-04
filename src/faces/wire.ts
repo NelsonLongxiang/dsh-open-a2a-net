@@ -97,6 +97,7 @@ export interface WireDeps {
   readonly idempotencyStore: IdempotencyStore
   readonly verifyOriginClaim: (req: IncomingMessage, options?: { readonly cli?: boolean; readonly rawBody?: Uint8Array }) => Promise<OriginClaimResult>
   readonly forwardDirect: (request: ForwardRequest) => Promise<A2aRouteResult>
+  readonly diagnoseCanvas: (team: string, reason: string, caller?: string) => Promise<string>
   readonly remoteCliProof: (handle: string, claim: Extract<OriginClaimResult, { ok: true }>) => Promise<RemoteCliProof | undefined>
   readonly callerLinkedToThisHost: (caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined) => boolean
   /** This host's own card URL (read when a request lands; set once the web server settles). */
@@ -733,9 +734,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const result = await d.forwardDirect({ team, message, caller, taskId, contextId, noWait,
               auth: buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget: caller, receivedAt: admittedAt.at }),
               localCliProof: claim.ok && claim.cli === true && claim.bound && claim.caller === caller, guarded: req.headers['x-a2a-guard'] !== undefined }).catch((error: unknown): A2aRouteResult => ({ ok: false, error: `forwarding unavailable: ${String(error)}`, code: -32000, task_id: taskId }))
-            if (!result.ok && result.code !== -32005) idempotencyStore.recordOutcome(taskId, { status: 'failed', error: original + ' — ' + result.error })
+            const failure = result.ok ? '' : await d.diagnoseCanvas(team, original + ' — ' + result.error, claim.ok && claim.cli === true && claim.bound && claim.caller === caller ? caller : undefined)
+            if (!result.ok && result.code !== -32005) idempotencyStore.recordOutcome(taskId, { status: 'failed', error: failure })
             else if (result.ok && result.task_status === 'TASK_STATE_COMPLETED') idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: result.reply })
-            const payload = JSON.stringify(result.ok ? { routed: true, ...(result.task_status === 'TASK_STATE_DELIVERED' ? { delivered: true } : { result: { text: result.reply } }), team, task_id: taskId, context_id: contextId, task_status: result.task_status, consumed: result.consumed, bridge: result.bridge, receipt: result.receipt, forwarded: true } : { error: original + ' — ' + result.error, code: result.code ?? -32000, receipt: result.receipt, task_id: taskId, team, task_status: result.code === -32005 ? 'TASK_STATE_DELIVERED' : 'TASK_STATE_FAILED' })
+            const payload = JSON.stringify(result.ok ? { routed: true, ...(result.task_status === 'TASK_STATE_DELIVERED' ? { delivered: true } : { result: { text: result.reply } }), team, task_id: taskId, context_id: contextId, task_status: result.task_status, consumed: result.consumed, bridge: result.bridge, receipt: result.receipt, forwarded: true } : { error: failure, code: result.code ?? -32000, receipt: result.receipt, task_id: taskId, team, task_status: result.code === -32005 ? 'TASK_STATE_DELIVERED' : 'TASK_STATE_FAILED' })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload)
           }
           // wait:false delivers without the final-reply hold: steer resolves

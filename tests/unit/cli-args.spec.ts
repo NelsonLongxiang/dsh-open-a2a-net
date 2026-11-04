@@ -199,6 +199,24 @@ describe('a2a-net CLI: a host behind dsh-pocket', () => {
 })
 
 describe('a2a-net CLI: read commands and errors', () => {
+  it('#271 lists local and peer canvases with owners/counts and whoami emits pure JSON membership', async () => {
+    const HOME = tmpHomeDir(), env = { HOME, A2A_CLI_HOME: HOME }
+    expect((await runCli(['init','scout'],env)).code).toBe(0)
+    const identity = JSON.parse(readFileSync(join(HOME,'cli.json'),'utf8')) as { handle: string }
+    const host = await stubHost(path => ({ status:200, body:path.includes('cli-deposit') ? { ok:true, deposits:[] } : { zone:'custom',ownerHost:'http://home',canvas:{teams:[{name:'same',team:'custom/canvas/same',members:[{id:identity.handle,team:identity.handle}]}]},peerOrg:[{url:'http://peer',org:[{name:'same',team:'custom/canvas/same',members:[identity.handle,'custom/11112222']},{name:'private',team:'custom/canvas/private',members:['custom/11112222']}]}] } }))
+    servers.push(host.server)
+    const teams=await runCli(['teams','same','--json','--home',host.url],env)
+    expect(teams.code,teams.stderr).toBe(0)
+    expect(JSON.parse(teams.stdout)).toEqual(expect.arrayContaining([{team:'custom/canvas/same',name:'same',kind:'canvas',owner:'http://home',memberCount:1,where:'local canvas'},{team:'custom/canvas/same',name:'same',kind:'canvas',owner:'http://peer',memberCount:2,where:'remote canvas'}]))
+    const who=await runCli(['whoami','--json','--home',host.url],env)
+    expect(who.code,who.stderr).toBe(0)
+    const value=JSON.parse(who.stdout)
+    expect(value.handle).toBe(identity.handle);expect(value.canvas).toHaveLength(2)
+    expect(value.canvas.every((row: any)=>row.name==='same' && !('members' in row))).toBe(true)
+    const text=await runCli(['whoami','--home',host.url],env)
+    expect(text.stdout).toContain('owner=http://home members=1');expect(text.stdout).toContain('owner=http://peer members=2')
+  })
+
   it('teams searches by owner seatName, then name, then the legacy label without changing route handles', async () => {
     const host = await stubHost(() => ({ status: 200, body: { sessions: [{ team: 'dsh/01234567', label: 'default-label', name: 'conversation', seatName: '开发席' }, { team: 'dsh/11112222', label: 'legacy' }, { team: 'dsh/33334444', label: 'default', name: 'title' }], remote: [] } }))
     servers.push(host.server)

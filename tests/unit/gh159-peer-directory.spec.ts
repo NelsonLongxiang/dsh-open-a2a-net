@@ -23,7 +23,7 @@ describe('gh#159 peer directory projection', () => {
     ])
     expect(peerDirectoryRows(peer, 'http://peer', true)).toEqual([
       ...original,
-      { team: 'zone/canvas/研发协作', session: 'peer-session', name: '研发协作', description: 'canvas team', origin: 'peer-session (192.0.2.10)', via: 'http://peer', canvasMembers: ['home/aaaaaaaa'] },
+      { team: 'zone/canvas/研发协作', session: 'peer-session', name: '研发协作', description: 'canvas team', kind: 'canvas', owner: 'http://peer', memberCount: 1, origin: 'peer-session (192.0.2.10)', via: 'http://peer', canvasMembers: ['home/aaaaaaaa'] },
     ])
   })
 

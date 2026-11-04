@@ -45,6 +45,23 @@ async function cliRoute(a: MeshNode, task: string, sync: boolean) {
 }
 
 describe('#230 home host forwards a deposited CLI one hop with scope on', () => {
+  it('#271 canvas failures name the owner and each missing return link, or report known-directory absence', async () => {
+    const { a,b }=await fixture({enabled:false})
+    try {
+      await post(b,'/__dsh_a2a/canvas',{action:'add-member',name:'ops',id:'session-0123456789abcdef'})
+      const owner=await route(a,'direct-271-owner',true,undefined,'beta/canvas/ops')
+      expect(owner.error).toContain('canvas-owner: '+b.baseUrl)
+      expect(owner.error).toContain('forwardDirect is off')
+      await post(a,'/__dsh_a2a/canvas',{action:'remove-member',name:'ops',id:'beta/01234567'})
+      const missing=await route(a,'direct-271-link',true,undefined,'beta/canvas/ops')
+      expect(missing.error).toContain('missing direct operator link to receiver beta/01234567')
+      const absent=await route(a,'direct-271-absent',true,undefined,'beta/canvas/no-such-team')
+      expect(absent.error).toContain('canvas-not-found')
+      expect(absent.error).not.toContain('canvas-owner:')
+      expect(b.steered).toHaveLength(0)
+    } finally { await a.dispose();await b.dispose() }
+  },15000)
+
   it('the shipped a2a-net CLI receives async task acknowledgement and a synchronous cross-host reply', async () => {
     const { a, b } = await fixture()
     try {

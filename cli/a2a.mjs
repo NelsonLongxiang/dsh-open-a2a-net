@@ -251,10 +251,13 @@ function keyHint(status) {
   return `host ${home()} answered ${String(status)} — ${apiKey() === undefined ? 'it is keyed: set $A2A_KEY (or pass --key)' : 'the key was refused: check $A2A_KEY / --key'}${pocket}`
 }
 
-async function state() {
+async function state(optional = false) {
   const res = await homeFetch(`${home()}/__dsh_a2a/state`, { headers: keyHeaders() })
   if (res.status === 401 || res.status === 403) die(keyHint(res.status))
-  if (res.status !== 200) die(`state face ${String(res.status)} on ${home()}`)
+  if (res.status !== 200) {
+    if (optional) return { error: `state face ${String(res.status)} on ${home()}` }
+    die(`state face ${String(res.status)} on ${home()}`)
+  }
   return await replyOf(res)
 }
 
@@ -870,6 +873,21 @@ async function printDelivery(verb, res) {
   console.log(`[${verb}] delivered → ${String(out.team)} · task ${String(out.task_id)} · ${receipt}`)
 }
 
+/** Canvas rows come from the owner state face, not a new discovery or admission path. */
+function stateCanvasTeams(s) {
+  const rows = []
+  const owner = String(s.ownerHost ?? home())
+  for (const team of s.canvas?.teams ?? []) rows.push({ team: String(team.team ?? String(s.zone ?? 'dsh') + '/canvas/' + team.name), name: String(team.name), kind: 'canvas', owner, memberCount: (team.members ?? []).length, where: 'local canvas', members: (team.members ?? []).map(m => typeof m === 'string' ? m : m.team ?? m.id) })
+  const seen = new Set()
+  for (const peer of s.peerOrg ?? []) for (const team of peer.org ?? []) {
+    const key = String(peer.url) + ':' + String(team.team)
+    if (seen.has(key)) continue
+    seen.add(key)
+    rows.push({ team: String(team.team), name: String(team.name), kind: 'canvas', owner: String(peer.url), memberCount: (team.members ?? []).length, where: 'remote canvas', members: team.members ?? [] })
+  }
+  return rows
+}
+
 async function main() {
   if (cmd === 'help' || has('--help') || has('-h')) {
     console.log(USAGE)
@@ -925,25 +943,31 @@ async function main() {
   if (cmd === 'whoami') {
     const id = identity()
     const list = await control({ action: 'list' })
+    const s = await state(true)
+    const canvas = stateCanvasTeams(s).filter(team => team.members.includes(id.handle)).map(({ members, ...row }) => row)
+    if (has('--json')) { console.log(JSON.stringify({ handle: id.handle, host: home(), deposit: depositLine(list, id.handle, 'OFFLINE'), canvas, ...(s.error ? { canvasError: s.error } : {}) }, null, 2)); return }
     console.log(`handle      ${id.handle}`)
     console.log(`identity    ~/.a2a/cli.json (own Ed25519 key — the card's team = "${id.name}" is its own zone)`)
     console.log(`deposit     ${depositLine(list, id.handle, 'OFFLINE (expired or never published — run: a2a publish)')}`)
     console.log(`host        ${home()}`)
     console.log(`card url    ${home()}/a2a/cli/${encodeURIComponent(id.handle)}`)
     console.log(`capability  route via signed envelope; receive via mailbox (poll: a2a inbox)`)
+    if (s.error) console.log(`canvas      UNKNOWN — ${String(s.error)}`)
+    for (const team of canvas) console.log(`canvas      ${team.team} owner=${team.owner} members=${String(team.memberCount)}`)
     return
   }
   if (cmd === 'teams') {
     const s = await state()
     const q = (positionals()[0] ?? '').toLowerCase()
     const rows = [
-      ...['dsh'].map(t => ({ team: String(t), name: String(s.session ?? 'host'), where: 'host' })),
+      ...[s.zone ?? 'dsh'].map(t => ({ team: String(t), name: String(s.session ?? 'host'), where: 'host' })),
       ...(s.sessions ?? []).map(x => ({ team: String(x.team ?? ''), name: String(x.seatName ?? x.name ?? x.label ?? ''), where: 'local' })),
       ...(s.remote ?? []).map(x => ({ team: String(x.team ?? ''), name: String(x.name ?? ''), where: `remote · ${String(x.via ?? '')}` })),
+      ...stateCanvasTeams(s).map(({ members, ...row }) => row),
     ]
     const hits = rows.filter(r => q === '' || r.team.toLowerCase().includes(q) || r.name.toLowerCase().includes(q))
     if (has('--json')) { console.log(JSON.stringify(hits, null, 2)); return }
-    for (const r of hits) console.log(`${r.team.padEnd(28)} ${r.name.slice(0, 24).padEnd(26)} [${r.where}]`)
+    for (const r of hits) console.log(`${r.team.padEnd(28)} ${r.name.slice(0, 24).padEnd(26)} [${r.where}${r.kind === 'canvas' ? ` owner=${r.owner} members=${String(r.memberCount)}` : ''}]`)
     if (hits.length === 0) console.log(q === '' ? '(no teams)' : `(no team matches "${q}")`)
     return
   }

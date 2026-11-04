@@ -171,7 +171,9 @@ Files do not go through session messages: use the file channel below, never JPFI
 
 `whoami`, `teams [query]`, `status`, `tasks`, `probe` read the home host's
 state face (key-gated on a keyed host). `--json` prints raw rows for
-`teams`, `tasks`, `probe`, `route`, `report`, `inbox` and `skills`.
+`whoami`, `teams`, `tasks`, `probe`, `route`, `report`, `inbox` and `skills`.
+
+`teams` includes local canvas and peerOrg rows with qualified route name, owner URL and memberCount; same names on different hosts stay separate. `whoami --json` is pure JSON and includes only canvases naming this CLI identity, local and remote. An unreadable optional state face reports canvasError/UNKNOWN, never falsely empty membership. Canvas failures retain the original refusal and add visible-directory not-found, owner prerequisites (including each missing direct receiver link), or conflicting owner candidates. Owner URLs do not require direct dialing or a home override and grant no admission.
 
 ## Local commands
 

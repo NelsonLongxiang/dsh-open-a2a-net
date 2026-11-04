@@ -14,6 +14,7 @@ import type { Config } from '../index.ts'
 import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from '../runtime.ts'
 import type { A2aPeerCard } from '../types.ts'
 import { peerDirectoryRows } from '../peer-directory.ts'
+import { canvasMemberships, canvasOwners } from '../canvas-discovery.ts'
 import { peerContentMeta } from '../node-self.ts'
 import type { ZoneCardFetch } from '../zone.ts'
 import type { A2aClient, CardFetchOutcome } from '../a2a-client.ts'
@@ -31,7 +32,7 @@ import type { TeamMembershipStore } from '../team-store.ts'
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
 /** One directory row shared with listDirectoryTeams (which stays in index.ts). */
-export type DirectoryTeamRow = { team: string; session: string; name: string; seatName?: string; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean; /** gh#106: the peer's last card fetch missed — this row is its kept card, not a live answer. */ unreachable?: boolean; teams?: string[]; /** Internal S5 scope hint, stripped before the tool's public output. */ canvasMembers?: readonly string[] }
+export type DirectoryTeamRow = { team: string; session: string; name: string; seatName?: string; kind?: 'canvas'; owner?: string; memberCount?: number; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean; /** gh#106: the peer's last card fetch missed — this row is its kept card, not a live answer. */ unreachable?: boolean; teams?: string[]; /** Internal S5 scope hint, stripped before the tool's public output. */ canvasMembers?: readonly string[] }
 
 /** Everything the information-plane tools capture from apply(). */
 export interface InfoToolsDeps {
@@ -84,7 +85,7 @@ export interface InfoToolsDeps {
  */
 export function createInfoTools(deps: InfoToolsDeps) {
   const {
-    ctx, config, logger, session, lanIp, ownCardUrl, peerStore, taskLedger,
+    ctx, config, logger, session, lanIp, peerStore, taskLedger,
     joinedSessions, teamMemberships, canvasStore, exposureStore, idempotencyStore,
     cardCache, inFlightRoutes, recentActivity, teamAuditRing, reportRing,
     sessionNodes,
@@ -184,7 +185,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
             teams: {
               type: 'object',
               additionalProperties: true,
-              description: 'roster: allowlisted teams declared via a2a_team_join; canvas: workbench-assigned teams.',
+              description: 'roster: allowlisted teams declared via a2a_team_join; canvas: local workbench-assigned names (compatibility); canvasDetails: local/remote membership with qualified team, owner URL and memberCount.',
             },
             allowlist: {
               type: 'object',
@@ -204,7 +205,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
           type: 'text',
           text: value.face === 'host'
             ? `Host face on team ${String((value.node as Record<string, unknown> | undefined)?.team ?? '?')}: routing rides the bare node team (能发即能收)`
-            : `Node ${String((value.node as Record<string, unknown> | undefined)?.name ?? '')} ${String((value.node as Record<string, unknown> | undefined)?.id ?? '?')}: joined=${String((value.node as Record<string, unknown> | undefined)?.joined)}, live=${String((value.node as Record<string, unknown> | undefined)?.live)}; roster teams: ${((value.teams as Record<string, unknown> | undefined)?.roster as string[] | undefined ?? []).join(', ') || 'none'}; canvas: ${((value.teams as Record<string, unknown> | undefined)?.canvas as string[] | undefined ?? []).join(', ') || 'none'}; allowlist effect: ${String((value.allowlist as Record<string, unknown> | undefined)?.effect ?? '?')}`,
+            : `Node ${String((value.node as Record<string, unknown> | undefined)?.name ?? '')} ${String((value.node as Record<string, unknown> | undefined)?.id ?? '?')}: joined=${String((value.node as Record<string, unknown> | undefined)?.joined)}, live=${String((value.node as Record<string, unknown> | undefined)?.live)}; roster teams: ${((value.teams as Record<string, unknown> | undefined)?.roster as string[] | undefined ?? []).join(', ') || 'none'}; canvas: ${((value.teams as Record<string, unknown> | undefined)?.canvas as string[] | undefined ?? []).join(', ') || 'none'}; canvas owners: ${JSON.stringify((value.teams as Record<string, unknown> | undefined)?.canvasDetails ?? [])}; allowlist effect: ${String((value.allowlist as Record<string, unknown> | undefined)?.effect ?? '?')}`,
         }],
       },
       presentCall: () => ({ card: 'generic', title: 'A2A whoami', kind: 'other', rawInput: null }),
@@ -229,6 +230,8 @@ export function createInfoTools(deps: InfoToolsDeps) {
         }
         const joined = joinedSessions.has(agentId)
         const live = sessionNodes.has(agentId)
+        await listDirectoryTeams(false, true) // refresh through the existing bounded directory, not a second discovery path
+        const canvasDetails = canvasMemberships(canvasOwners(canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: canvasStore.membersOf(name) })), deps.ownCardUrl, [...cardCache.entries()].flatMap(([url, entry]) => entry.card === undefined ? [] : [{ url, card: entry.card }])), `${config.team}/${id8(agentId)}`, agentId, localHandleResolver())
         const refusals = teamAuditRing
           .filter(entry => entry.id === agentId && !entry.ok)
           .slice(-3)
@@ -248,6 +251,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
           teams: {
             roster: [...teamMemberships.teamsOf(agentId)],
             canvas: [...canvasTeamsOfSession(agentId)],
+            canvasDetails,
           },
           allowlist: {
             patterns,
@@ -302,6 +306,9 @@ export function createInfoTools(deps: InfoToolsDeps) {
                   session: { type: 'string', required: true },
                   name: { type: 'string', required: true },
                   seatName: { type: 'string', description: 'Human-owned stable display label, never a route identity.' },
+                  kind: { type: 'string', enum: ['canvas'] },
+                  owner: { type: 'string', description: 'Canvas owner host URL; discovery metadata, not a --home requirement.' },
+                  memberCount: { type: 'number' },
                   description: { type: 'string', required: true },
                   local: { type: 'boolean', description: 'true when the team is served by this host (loopback candidate).' },
                   origin: { type: 'string', description: 'The publishing host (node session label, LAN IP when known) — the natural grouping for fleet rows.' },
@@ -319,7 +326,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
           type: 'text',
           text: (value.teams.length === 0
             ? `No A2A teams${(value.query ?? '') === '' ? '' : ` matching "${String(args.query)}"`} are currently reachable.`
-            : value.teams.map(team => `- ${team.team}${team.local === true ? ' [this host]' : ''}${team.name === '' ? '' : ` (${team.name})`}${team.description === '' ? '' : ` — ${team.description}`}${typeof team.origin === 'string' && team.origin !== '' && team.local !== true ? ` @ ${team.origin}` : ''}${typeof team.workspace === 'string' && team.workspace !== '' ? ` [${team.workspace}]` : ''}`).join('\n'))
+            : value.teams.map(team => `- ${team.team}${team.local === true ? ' [this host]' : ''}${team.name === '' ? '' : ` (${team.name})`}${team.kind === 'canvas' ? ` [canvas owner=${team.owner ?? '?'} members=${String(team.memberCount ?? '?')}]` : ''}${team.description === '' ? '' : ` — ${team.description}`}${typeof team.origin === 'string' && team.origin !== '' && team.local !== true ? ` @ ${team.origin}` : ''}${typeof team.workspace === 'string' && team.workspace !== '' ? ` [${team.workspace}]` : ''}`).join('\n'))
             + (value.note === undefined ? '' : `\n${value.note}`),
         }],
       },
@@ -386,7 +393,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         const matches = (team: DirectoryTeamRow): boolean =>
           team.team.toLowerCase().includes(query) || team.name.toLowerCase().includes(query) || team.description.toLowerCase().includes(query)
           || team.session.toLowerCase().includes(query)
-          || (team.origin ?? '').toLowerCase().includes(query) || (team.workspace ?? '').toLowerCase().includes(query) || (team.via ?? '').toLowerCase().includes(query)
+          || (team.owner ?? '').toLowerCase().includes(query) || (team.origin ?? '').toLowerCase().includes(query) || (team.workspace ?? '').toLowerCase().includes(query) || (team.via ?? '').toLowerCase().includes(query)
         return { ok: true, query, teams: teams.filter(matches), ...(note !== undefined ? { note } : {}) }
       },
     }))
