@@ -130,9 +130,13 @@ describe('OriginClaim audience binding (mesh)', () => {
       // the unbound one it also carries decides — as if Sig2 were stripped.
       expect((await call(`${b.baseUrl}/a2a/canvas-op`, { body: { op: 'create', name: 'other' }, headers: forM })).ok).toBe(true)
       expect(await call(`${b.baseUrl}/__dsh_a2a/state`)).toMatchObject({ unboundInbound: 1, boundMissInbound: 1 })
+      // #64: the state face names who missed and the origin it dialled — the entry to add to originClaimAudiences.
+      expect((await call(`${b.baseUrl}/__dsh_a2a/state`) as { boundMissRecent: unknown[] }).boundMissRecent).toEqual([expect.objectContaining({ caller: 'dsh', audience: new URL(m.baseUrl).origin, count: 1 })])
       const unboundAtB = await call(`${b.baseUrl}/a2a/canvas-op`, { body: { op: 'create', name: 'other2' }, headers: without(forM, 'x-a2a-caller-aud', 'x-a2a-caller-sig2') })
       expect(unboundAtB.ok).toBe(true)
       expect(await call(`${b.baseUrl}/__dsh_a2a/state`)).toMatchObject({ unboundInbound: 2, boundMissInbound: 1 })
+      // An unbound-only envelope (no audience at all) is no bound miss and adds no row.
+      expect((await call(`${b.baseUrl}/__dsh_a2a/state`) as { boundMissRecent: unknown[] }).boundMissRecent).toHaveLength(1)
     } finally {
       await a.dispose()
       await b.dispose()

@@ -135,6 +135,8 @@ describe('CLI bound OriginClaim (real host, §2.1)', () => {
       const status = await runCli(['status'], onC.env(proxyC.url))
       expect(status.stdout).toContain(`boundMissInbound=${String(gc.boundMissInbound)}`)
       expect(status.stdout).toContain(`dialled as ${proxyC.url}`)
+      // #64: and which caller missed by which origin — what the operator adds to originClaimAudiences.
+      expect(status.stdout).toMatch(new RegExp(`miss +\\S+ dialled ${new URL(proxyC.url).origin.replace(/[.]/g, '\\.')} ×\\d+`))
     } finally {
       await b.dispose()
       await c.dispose()
