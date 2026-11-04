@@ -4006,7 +4006,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           const card = await fetch(candidate)
           peerAsync = (card?.capabilities as { async?: unknown } | undefined)?.async === true
         }
-        const result = await dispatchPeerCandidate(candidate, request.handle, request.message, request.contextId, abort, session, request.delivery === 'async' && peerAsync, taskId, callbackAddress)
+        const result = await dispatchPeerCandidate(candidate, splitCanvasOwner(request.handle).team, request.message, request.contextId, abort, session, request.delivery === 'async' && peerAsync, taskId, callbackAddress)
         if (!result.ok) {
           // Idempotency verdicts (B3) are terminal, not failover: a replay
           // says the prior attempt at THIS peer stays authoritative —
@@ -4038,7 +4038,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           if (abort.aborted) break
           continue
         }
-        trackOwedTask(taskId, request.handle, candidate, result, callbackAddress, briefOf(request.message), sender, await peerBirth(fetch, candidate, undefined))
+        trackOwedTask(taskId, splitCanvasOwner(request.handle).team, candidate, result, callbackAddress, briefOf(request.message), sender, await peerBirth(fetch, candidate, undefined))
         const contextId = request.contextId ?? (result.context_id !== '' ? result.context_id : `ctx-${Math.random().toString(16).slice(2, 10)}`)
         if (result.task_status === 'TASK_STATE_COMPLETED') {
           return { kind: 'completed', text: result.reply, taskId, contextId }

@@ -3,9 +3,9 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "9ef7bfe6b1348be6cb0fa5aad69c97064732ffcd76ea79ea46dca17c7b814907",
+    "src/index.ts": "2eb61f1178eddaafa9bafd717306591e8600ff1e7de946ad56632d490c67eacf",
     "src/faces/admin.ts": "ca66a4e6cf60fb0ec58c57d7a34af86007a35928823900bbcd9dbe59592d1e36",
-    "src/canvas-store.ts": "d9abf5ba55b38723c137e2ae46967b72c07d607df038c27219af4e6d1d92d60a",
+    "src/canvas-store.ts": "7c71938e2ab669ac9f2adad7c26a21a3c53a0c95ce8271f0dcc25e3189cbc7e3",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "a8e203feb252f0c5d21f98be6ecc45c84d33f867726331a64823f40d68578a2e",
     "nexus-stage/src/workbench.ts": "aecc25df9c9ff6d4b95b4acd07512e58ac94dbbb5f4797418ba6fe6c8c48e1ee",
@@ -19,7 +19,7 @@
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "037a5e6f9bfb7f26b0584dadc6cf03acad7c101736259da76805daec7e47583e",
-    "src/faces/wire.ts": "22cee99e84c9ecb20f4edb0f3d62cd78c2b1c3d7b727f518a370684b248bb999",
+    "src/faces/wire.ts": "0d3414843e7bbe404d0b904b92cc50e7bafbe317101c5b7a2b312658d1632205",
     "src/faces/canvas-notify.ts": "4d06ea71c72f5a0fd200fbc7cc32c62cfd367af054c22f284be3d242919c1358",
     "src/task-auth.ts": "9123b42f81b9185bea7702f1a3623383992d26d6132ca79a51e84a6faf249bdd",
     "src/origin-claim.ts": "f40e356eada17b9e774d341e23e2089eb693a871c0cd97763b0313ab8031a090",
@@ -165,7 +165,7 @@
     {
       "page": "p1-arch",
       "cell": "d3",
-      "ref": "src/canvas-store.ts:77",
+      "ref": "src/canvas-store.ts:79",
       "expect": "export class CanvasStore {"
     },
     {

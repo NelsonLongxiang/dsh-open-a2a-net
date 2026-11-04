@@ -2,8 +2,10 @@
  * Owner-qualified canvas ids (#282 S2, design docs/design/simplify-2026-11.md D1).
  * `<zone>/canvas/<name>@<fp8>`: the suffix is the first 8 hex of sha256 over the
  * owner's signed card public key (SPKI DER), so a host that changes address keeps
- * its id and nobody can claim an id without the key. A bare `<zone>/canvas/<name>`
- * keeps routing exactly as before; the suffix only selects among owners.
+ * its id. The suffix selects a signing key, not a URL: as on master, a seeded peer
+ * serving that key's signed card core counts as an alias of the same owner, and the
+ * card's canvasOrg itself is not signed. A bare `<zone>/canvas/<name>` keeps routing
+ * exactly as before; the suffix only selects among owners.
  */
 import { createHash } from 'node:crypto'
 

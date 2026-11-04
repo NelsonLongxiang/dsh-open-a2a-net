@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process'
 import { signCard } from '../../src/card.ts'
 import { signOriginClaim } from '../../src/origin-claim.ts'
 import { CliDepositStore } from '../../src/cli-deposit.ts'
+import { canvasOwnerFingerprint } from '../../src/canvas-id.ts'
 import { bootNode, reservePort, type MeshNode } from './harness.ts'
 beforeEach(() => vi.stubGlobal('WebSocket', function noSocket() { throw Error('no socket') }))
 afterEach(() => vi.unstubAllGlobals())
@@ -59,6 +60,26 @@ async function setup(directLink = true, extraHome = false, replayAtHome = false,
   return { a, b, c, home, pinBeforePublish, localPublish }
 }
 describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both hosts', () => {
+  it('#282 S2 review P1: a CLI route carrying our own @fp8 stays on this host — a local canvas is reached, a same-named remote one never is', async () => {
+    const { a, b, home } = await setup()
+    try {
+      const fpA = canvasOwnerFingerprint((await fetch(a.baseUrl + '/.well-known/agent-card.json').then(r => r.json()) as { publicKey: string }).publicKey)
+      // B owns beta/canvas/ops; our own fingerprint on that name must not escape to B through the forward path.
+      const escaped = await cli(home, ['route', `beta/canvas/ops@${fpA}`, 'must stay home', '--task', 'direct-own-fp-escape'])
+      expect(escaped.code).not.toBe(0)
+      expect(b.steered).toHaveLength(0)
+      // Our own canvas by its qualified id: the wire face strips the suffix and delivers locally.
+      const id = 'session-0123456789abcdef'
+      await post(a, '/__dsh_a2a/join', { id })
+      expect((await post(a, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id })).ok).toBe(true)
+      const agent = a.agents.agent as any
+      agent.steer = (payload: any) => { a.steered.push(payload) }
+      const local = await cli(home, ['route', `alpha/canvas/ops@${fpA}`, 'own canvas by id', '--task', 'direct-own-fp-local'])
+      expect(local.code, local.stderr).toBe(0)
+      expect(a.steered).toHaveLength(1)
+      expect(b.steered).toHaveLength(0)
+    } finally { await a.dispose(); await b.dispose() }
+  }, 30000)
   it('a CLI deposited in A canvas receives automatic receipts from A local sessions', async () => {
     const { a, b, home } = await setup()
     try {
