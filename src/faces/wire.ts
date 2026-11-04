@@ -102,6 +102,8 @@ export interface WireDeps {
   readonly ownCanvasFingerprint: string
   readonly diagnoseCanvas: (team: string, reason: string, caller?: string) => Promise<string>
   readonly remoteCliProof: (handle: string, claim: Extract<OriginClaimResult, { ok: true }>) => Promise<RemoteCliProof | undefined>
+  /** #282 S3: the basis for a receipt to a local CLI from a member frozen on this host's own forward, else undefined. */
+  readonly forwardReceiptBasis: (taskId: string, caller: string, cliHandle: string, claim: Extract<OriginClaimResult, { ok: true }>) => string | undefined
   readonly callerLinkedToThisHost: (caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined) => boolean
   /** This host's own card URL (read when a request lands; set once the web server settles). */
   readonly ownCardUrl: string
@@ -634,7 +636,15 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           const foreignCli = config.teamScopeRouting && CLI_HANDLE_RE.test(caller) && cliDeposits.get(caller) === undefined
           const earlyClaim = foreignCli ? await verifyOriginClaim(req, { cli: true, rawBody }) : undefined
           const cliProof = foreignCli && earlyClaim?.ok ? await remoteCliProof(caller, earlyClaim).catch(() => undefined) : undefined
-          const admission = a2aCallerAdmission(caller, team, cliProof)
+          let admission = a2aCallerAdmission(caller, team, cliProof)
+          // #282 S3 (same team authorizes): a receipt for this host's own forward, to the CLI that sent it, from a
+          // receiver frozen at birth on the selected peer's key — the owner's signed canvas is the return path.
+          const echoed = !admission.ok && cliDeposits.get(team) !== undefined ? parseReceipt(message) : null
+          if (echoed !== null) {
+            const receiptClaim = earlyClaim ?? await verifyOriginClaim(req, { cli: true, rawBody })
+            const basis = receiptClaim.ok && claimCovers(caller, receiptClaim.caller) ? d.forwardReceiptBasis(echoed.taskId, caller, team, receiptClaim) : undefined
+            if (basis !== undefined) admission = { ok: true, via: 'peer-org', rule: 'peer-org', basis: [basis] }
+          }
           const callerRefusal = refusalOf(admission)
           if (callerRefusal !== undefined || !admission.ok) {
             recordActivity('in', team, caller === '' ? 'anonymous' : caller, false)

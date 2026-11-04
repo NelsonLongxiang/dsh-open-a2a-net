@@ -61,7 +61,7 @@ a2a-net route dsh/1a2b3c4d "status?"                     # 默认异步；--sync
 a2a-net inbox --new                                      # 未读来信；--wait 阻塞等待，--hook 供 Claude Code hook 使用
 ```
 
-从 0.6.38 起 `forwardDirect` 默认 `true`；本机目标未找到时，home 可替已验签且在线的 CLI 向已链接的对端目标转发一跳。两边运营者必须各自链接：A 链接 B 的接收成员，B 链接 CLI 句柄并将 home 钉为 A。画布目标还要求 A 直接链接所有名片列出的接收成员，不能只依赖对端画布 org。作用域及结算 enforce 开启时，B 成员宿主的自动回执结清 A 的转发行并进入 CLI 信箱；`--sync` 返回 B 的回复。命令、参数、环境变量与退出码见 [`src/skill/references/cli.md`](src/skill/references/cli.md)。
+从 0.6.38 起 `forwardDirect` 默认 `true`；本机目标未找到时，home 可替已验签且在线的 CLI 向已链接的对端目标转发一跳。两边运营者必须各自链接：A 链接 B 的接收成员，B 链接 CLI 句柄并将 home 钉为 A。画布目标只需 A 链接画布属主主机（#282 S3，同队即授权）：接收成员在转发行出生时从属主签名名片冻结，回执只有来自这些成员、且由该属主公钥签名时才放行进 CLI 信箱并结算。作用域及结算 enforce 开启时，B 成员宿主的自动回执结清 A 的转发行并进入 CLI 信箱；`--sync` 返回 B 的回复。命令、参数、环境变量与退出码见 [`src/skill/references/cli.md`](src/skill/references/cli.md)。
 
 ## 画布队伍（任意组队，v0.5.25）
 

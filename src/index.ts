@@ -162,6 +162,7 @@ export const inject = ['tools', 'timer', 'systemPrompt']
 
 import { Config } from './config.ts'
 import { canvasOwnerFingerprint, splitCanvasOwner } from './canvas-id.ts'
+import { forwardReceiptBasis } from './direct-forward.ts'
 export { Config }
 export type { DelegateConfig } from './config.ts'
 
@@ -2572,6 +2573,7 @@ export function apply(ctx: Context, config: Config): void {
       idempotencyStore,
       verifyOriginClaim,
       remoteCliProof,
+      forwardReceiptBasis: (taskId, caller, cliHandle, claim) => forwardReceiptBasis(taskLedger.find(taskId), caller, cliHandle, claim),
       forwardDirect: request => forwardDirect(request), ownCanvasFingerprint,
       diagnoseCanvas: (team, reason, caller) => diagnoseCanvas(team, reason, caller),
       callerLinkedToThisHost, get ownCardUrl() { return ownCardUrl },
@@ -3306,7 +3308,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       if (!scope.ok) missing.push('sender scope: ' + scope.error)
       for (const owner of owners.filter(row => row.team === team && !row.local)) {
         if (!owner.members.includes(caller)) missing.push(owner.owner + ': caller is not an advertised canvas member')
-        for (const member of owner.members.filter(member => member !== caller)) if (!canvasStore.list().some(name => canvasStore.remoteMembersOf(name).includes(member))) missing.push(owner.owner + ': missing direct operator link to receiver ' + member)
+        // #282 S3: no per-member link here; the owner's signed canvas is the return path.
+        if (owner.members.every(member => member === caller)) missing.push(owner.owner + ': the canvas lists no receiving member besides the caller')
       }
     }
     return canvasFailure(team, owners, reason) + (missing.length === 0 ? '' : ' — missing prerequisites: ' + missing.join('; '))
@@ -3314,7 +3317,6 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   const forwardDirect = createDirectForward({
     births: forwardingBirths,
     enabled: () => config.forwardDirect === true, isolated: () => config.isolated, deposited: handle => cliDeposits.get(handle) !== undefined,
-    memberLinked: handle => canvasStore.list().some(name => canvasStore.remoteMembersOf(name).includes(handle)),
     scope: (handle, team) => config.teamScopeRouting ? outboundScope(senderScopeRecords, handle, handle, team) : Promise.resolve({ ok: true as const }),
     candidates: async (team, failures, caller) => { const fetch = memoizedCardFetch(); return { urls: await directoryPeerCandidates(fetch, team, failures, { id: caller, handle: caller }), card: fetch } },
     dispatch: (url, request, guard) => dispatchPeerCandidate(url, request.team, request.message, request.contextId, new AbortController().signal, request.caller, request.noWait, request.taskId, request.caller, guard),

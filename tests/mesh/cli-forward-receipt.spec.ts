@@ -360,13 +360,31 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
     }
     finally { delayReply.mockRestore(); await a.dispose(); await b.dispose() }
   }, 30000)
-  it('a peer-org canvas alone must not open a return path the home operator never linked', async () => {
+  it('#282 S3 same team authorizes: with only the owner host linked, a canvas forward settles on-chain under enforce; a non-member still cannot reach the CLI mailbox', async () => {
     const { a, b, home } = await setup(false)
+    const task = 'direct-receipt-same-team'
     try {
-      const result = await cli(home, ['route', 'beta/canvas/ops', 'canvas without direct member link', '--task', 'direct-receipt-unlinked'])
-      expect(result.code).not.toBe(0)
-      expect(result.stderr).toContain('direct operator link')
-      expect(b.steered).toHaveLength(0)
+      const result = await cli(home, ['route', 'beta/canvas/ops', 'canvas with only the owner host linked', '--task', task])
+      expect(result.code, result.stderr).toBe(0)
+      expect(b.steered).toHaveLength(1)
+      await vi.waitFor(async () => {
+        const current = await state(a)
+        const row = current.archived.find((r: any) => r.taskId === task)
+        expect(row).toMatchObject({ outcome: 'completed', forwarded: true, sender: { kind: 'cli', id: handle }, settledBy: { caller: targetHandle } })
+        expect(row.settledBy.chain_role).not.toBe('off-chain')
+        expect(row.receiverMembers).toContain(targetHandle)
+        expect(current.settlement.refusals).toEqual([])
+      }, { timeout: 9000, interval: 80 })
+      const inbox = await cli(home, ['inbox'])
+      expect(inbox.stdout).toContain(`[A2A receipt] task ${task}`)
+      // Negative: B's session that is NOT in B's canvas `ops` has no shared team with the CLI on A.
+      const outsider = 'beta/cccccccc'
+      const url = a.baseUrl + '/a2a/direct'
+      const hostKey = createPrivateKey(readFileSync(join(b.home, 'a2a', 'node-key.pem'), 'utf8'))
+      const headers = signOriginClaim({ url, method: 'POST' }, { caller: b.team, callerUrl: b.baseUrl, privateKey: hostKey, unbound: false, now: Date.now() })
+      const refused = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ team: handle, caller_session: outsider, task_id: 'direct-outsider-mail', message: 'not a member' }) }).then(r => r.json()) as any
+      expect(refused.routed).not.toBe(true)
+      expect((await post(a, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle })).mail.some((row: any) => row.text.includes('not a member'))).toBe(false)
     } finally { await a.dispose(); await b.dispose() }
   }, 30000)
 })
