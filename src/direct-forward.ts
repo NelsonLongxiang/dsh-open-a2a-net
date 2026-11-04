@@ -35,18 +35,19 @@ export interface DirectForwardDeps {
 }
 export function createDirectForward(d: DirectForwardDeps) {
   return async (request: ForwardRequest): Promise<A2aRouteResult> => {
-    const refuse = (why: string): A2aRouteResult => ({ ok: false, code: -32000, task_id: request.taskId, error: 'not forwarded: ' + why })
-    if (!d.enabled()) return refuse('forwardDirect is off')
-    if (d.isolated()) return refuse('host is isolated')
+    const refuse = (why: string, next?: string): A2aRouteResult => ({ ok: false, code: -32000, task_id: request.taskId, error: 'not forwarded: ' + why, ...(next !== undefined ? { next } : {}) })
+    const publish = 'run `a2a-net publish` to renew this CLI deposit on its home host, then send again with a new task id'
+    if (!d.enabled()) return refuse('forwardDirect is off', 'ask this host\'s operator to set forwardDirect: true (the default since 0.6.38)')
+    if (d.isolated()) return refuse('host is isolated', 'this host forwards nothing while isolated; deposit the CLI on another home host')
     if (request.guarded) return refuse('an inbound X-A2A-Guard is present; already forwarded')
-    if (!request.localCliProof || !d.deposited(request.caller)) return refuse('caller is not a proven online local CLI deposit')
+    if (!request.localCliProof || !d.deposited(request.caller)) return refuse('caller is not a proven online local CLI deposit', publish)
     const scope = await d.scope(request.caller, request.team)
-    if (!scope.ok) return refuse('target is outside sender scope: ' + scope.error)
+    if (!scope.ok) return refuse('target is outside sender scope: ' + scope.error, `ask this host's operator to link ${request.team} here: drag it (or one of its members) into a canvas team on this host`)
     const failures: string[] = []
     const directory = await d.candidates(request.team, failures, request.caller)
     const guard = guardHeader({ ...mintGuard(), hopBudget: DEFAULT_HOP_BUDGET - 1 })
     for (const url of directory.urls) {
-      if (!d.deposited(request.caller)) return refuse('local CLI deposit expired before dispatch')
+      if (!d.deposited(request.caller)) return refuse('local CLI deposit expired before dispatch', publish)
       const peerCard = await directory.card(url)
       const receivers = request.team.includes('/canvas/') ? peerCard?.canvasOrg?.find(row => row.team === request.team)?.members.filter(member => member !== request.caller) : undefined
       if (request.team.includes('/canvas/')) {
@@ -58,7 +59,7 @@ export function createDirectForward(d: DirectForwardDeps) {
       // Reserve only after all eligibility/receiver-link gates. A receipt owes no receipt.
       const receipt = parseReceipt(request.message) !== null
       const release = receipt ? () => {} : d.births.begin(request.taskId)
-      if (release === undefined) return refuse('forward receipt correlation capacity is full')
+      if (release === undefined) return refuse('forward receipt correlation capacity is full', 'wait for in-flight forwards to settle, then send again with a new task id')
       try {
         // The same selected-peer snapshot supplies both return-link gate and settlement birth.
         const answer = await d.dispatch(url, request, guard)
@@ -82,6 +83,8 @@ export function createDirectForward(d: DirectForwardDeps) {
         if (result.code === -32002 || result.code === -32003) return { ...result, task_id: request.taskId }
       } finally { release() }
     }
-    return { ok: false, code: -32004, task_id: request.taskId, error: 'forwarding to "' + request.team + '" failed: ' + (failures.join('; ') || 'no eligible peer candidate') }
+    const unlinked = failures.some(f => f.includes('requires a direct operator link to every receiving member'))
+    const next = unlinked ? `ask this host's operator to drag every member of ${request.team} into a canvas team on this host (receipts return through those links), or route to one member's own handle` : failures.length === 0 ? `no linked peer lists ${request.team}; check the name with \`a2a-net teams\`` : undefined
+    return { ok: false, code: -32004, task_id: request.taskId, error: 'forwarding to "' + request.team + '" failed: ' + (failures.join('; ') || 'no eligible peer candidate'), ...(next !== undefined ? { next } : {}) }
   }
 }

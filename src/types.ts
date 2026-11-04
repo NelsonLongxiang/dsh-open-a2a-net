@@ -162,6 +162,8 @@ export interface A2aRouteError {
   /** A2A JSON-RPC-style code when the peer supplied one. */
   readonly code?: number
   readonly task_id?: string
+  /** One actionable next step for the caller (#282 S1); absent when nothing the caller can do helps. */
+  readonly next?: string
 }
 
 /** Canonical `a2a_route` value: success or explicit failure. */

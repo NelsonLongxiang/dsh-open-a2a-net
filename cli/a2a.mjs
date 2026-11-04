@@ -868,7 +868,8 @@ async function printDelivery(verb, res) {
     if (out.task_status !== undefined && out.task_status !== 'TASK_STATE_COMPLETED') console.error(`[${verb}] status ${String(out.task_status)} — the round has not settled; reconcile by task id before re-sending`)
     return
   }
-  if (out.delivered !== true) die(`[${verb}] not delivered (HTTP ${String(res.status)}): ${String(out.error ?? out.task_status ?? 'no reason given')}`)
+  // #282 S1: one actionable next step under the reason, when the host knows one.
+  if (out.delivered !== true) die(`[${verb}] not delivered (HTTP ${String(res.status)}): ${String(out.error ?? out.task_status ?? 'no reason given')}${typeof out.next === 'string' && out.next !== '' ? `\n[${verb}] next: ${out.next}` : ''}`)
   const receipt = out.receipt === 'none' ? 'no receipt will come' : 'receipt arrives in: a2a inbox'
   console.log(`[${verb}] delivered → ${String(out.team)} · task ${String(out.task_id)} · ${receipt}`)
 }
