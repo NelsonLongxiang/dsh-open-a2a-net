@@ -638,12 +638,13 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
         }
         try {
           const target = peerUrl.replace(/\/$/, '') + '/a2a/canvas-op'
+          const body = JSON.stringify({ op: opV, name: nameV, ...(opV === 'add-member' || opV === 'remove-member' ? { id: idV !== '' && !isRemoteMemberRef(idV) && (sessionNodes.has(idV) || joinedSessions.has(idV)) ? `${config.team}/${id8(idV)}` : idV } : {}) })
           const reply = await d.peerFetch(target, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...originClaimHeaders({ url: target, method: 'POST' }) },
+            headers: { 'Content-Type': 'application/json', ...originClaimHeaders({ url: target, method: 'POST', body }) },
             // A local session id means nothing on the peer: send its zone/id8 handle (the workbench
             // drops a local card into a remote frame with its raw session id, which the peer refused).
-            body: JSON.stringify({ op: opV, name: nameV, ...(opV === 'add-member' || opV === 'remove-member' ? { id: idV !== '' && !isRemoteMemberRef(idV) && (sessionNodes.has(idV) || joinedSessions.has(idV)) ? `${config.team}/${id8(idV)}` : idV } : {}) }),
+            body,
             signal: AbortSignal.timeout(15_000),
           })
           const raw = await reply.text()

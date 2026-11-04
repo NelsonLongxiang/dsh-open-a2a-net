@@ -43,7 +43,7 @@ export interface A2aClientOptions {
    * POST carries a verifiable origin claim; absent ⇒ the caller stays at
    * the named-only posture (transition).
    */
-  readonly originClaim?: (target: { readonly url: string; readonly method: string }) => Record<string, string>
+  readonly originClaim?: (target: { readonly url: string; readonly method: string; readonly body?: string }) => Record<string, string>
   /** Delayed-callback seam (HTTP timeouts). */
   readonly schedule: A2aSchedule
   /** HTTP seam. */
@@ -105,7 +105,7 @@ export class A2aClient {
     this.options = options
   }
 
-  private headers(json: boolean, url: string, method: string): Record<string, string> {
+  private headers(json: boolean, url: string, method: string, body?: string): Record<string, string> {
     const headers: Record<string, string> = {}
     if (json) headers['Content-Type'] = 'application/json'
     if (this.options.apiKey !== '') headers['X-API-Key'] = this.options.apiKey
@@ -116,7 +116,7 @@ export class A2aClient {
     // peer request when the signer is wired (full-card reads and delivery
     // verification both ride it).
     if (this.options.originClaim !== undefined) {
-      for (const [key, value] of Object.entries(this.options.originClaim({ url, method }))) headers[key] = value
+      for (const [key, value] of Object.entries(this.options.originClaim({ url, method, ...(body !== undefined ? { body } : {}) }))) headers[key] = value
     }
     return headers
   }
@@ -142,7 +142,7 @@ export class A2aClient {
       const url = `${baseUrl}${path}`
       const response = await this.options.fetch(url, {
         method: init.method,
-        headers: { ...this.headers(init.body !== undefined, url, init.method), ...(init.guard !== undefined ? { 'X-A2A-Guard': init.guard } : {}) },
+        headers: { ...this.headers(init.body !== undefined, url, init.method, init.body), ...(init.guard !== undefined ? { 'X-A2A-Guard': init.guard } : {}) },
         ...(init.body !== undefined ? { body: init.body } : {}),
         signal: controller.signal,
       })

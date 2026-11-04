@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
 import { generateKeyPairSync, sign as edSign } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import { signCard } from '../../src/card.ts'
-import { isRootOriginUrl, requestAudiences, signOriginClaim, unboundCanonical, verifyOriginClaim } from '../../src/origin-claim.ts'
+import { isRootOriginUrl, requestAudiences, signOriginClaim, unboundCanonical, verifyOriginClaim, bodyBoundCanonical, originBodySha256 } from '../../src/origin-claim.ts'
 import type { CardCacheEntry } from '../../src/runtime.ts'
 import type { A2aPeerCard } from '../../src/types.ts'
 
@@ -30,7 +30,7 @@ const req = (headers: Record<string, string>, at: { url: string; method?: string
 /** The receiving host's own card URL — always among its configured audiences. */
 const OWN = 'http://127.0.0.1:4000'
 
-function verify(request: IncomingMessage, options: { unboundOpen?: boolean; audiences?: string[]; loopbackArrival?: boolean; now?: number; cacheCard?: boolean; fetch?: (url: string, init: { method: 'GET' | 'POST'; headers: Record<string, string>; redirect?: 'follow' | 'error' | 'manual' }) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }> } = {}) {
+function verify(request: IncomingMessage, options: { rawBody?: Uint8Array; unboundOpen?: boolean; audiences?: string[]; loopbackArrival?: boolean; now?: number; cacheCard?: boolean; fetch?: (url: string, init: { method: 'GET' | 'POST'; headers: Record<string, string>; redirect?: 'follow' | 'error' | 'manual' }) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }> } = {}) {
   const cardCache = new Map<string, CardCacheEntry>(options.cacheCard === false ? [] : [[CALLER_URL, { at: Date.now(), card }]])
   let unbound = 0
   let boundMiss = 0
@@ -43,6 +43,7 @@ function verify(request: IncomingMessage, options: { unboundOpen?: boolean; audi
     onBoundMiss: () => { boundMiss += 1 },
     ...(options.loopbackArrival === undefined ? {} : { loopbackArrival: options.loopbackArrival }),
     now: options.now ?? Date.now(),
+    ...(options.rawBody !== undefined ? { rawBody: options.rawBody } : {}),
   })
   return verdict.then(v => ({ v, unbound, boundMiss }))
 }
@@ -51,6 +52,26 @@ const strip = (headers: Record<string, string>, ...names: string[]): Record<stri
   Object.fromEntries(Object.entries(headers).filter(([k]) => !names.includes(k)))
 
 describe('OriginClaim audience binding', () => {
+  it('v3 signs exact bytes beside v2 and refuses broken v3 without downgrade', async () => {
+    const body = '  ' + JSON.stringify({ message: '中文', n: 1 })
+    const headers = signOriginClaim({ url: OWN + '/a2a/direct', method: 'POST', body }, { caller: 'dsh', callerUrl: CALLER_URL, privateKey, unbound: true, now: Date.now() })
+    expect(headers['X-A2A-Body-Sha256']).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(headers['X-A2A-Body-Sha256']).toBe(originBodySha256(Buffer.from(body)))
+    expect(JSON.parse(bodyBoundCanonical('dsh', CALLER_URL, 1, OWN, 'post', '/a2a/direct', 'digest'))).toEqual(['a2a-origin-claim/3', 'dsh', CALLER_URL, 1, OWN, 'POST', '/a2a/direct', 'digest'])
+    expect((await verify(req(headers, { url: '/a2a/direct' }), { rawBody: Buffer.from(body) })).v).toMatchObject({ ok: true, bound: true })
+    expect((await verify(req(headers, { url: '/a2a/direct' }), { rawBody: Buffer.from(JSON.stringify(JSON.parse(body))) })).v).toEqual({ ok: false, reason: 'body-mismatch' })
+    expect((await verify(req(strip(headers, 'X-A2A-Caller-Sig2', 'X-A2A-Caller-Sig'), { url: '/a2a/direct' }), { rawBody: Buffer.from(body) })).v).toMatchObject({ ok: true, bound: true })
+    expect((await verify(req(headers, { url: '/a2a/canvas-op' }), { rawBody: Buffer.from(body) })).v).toEqual({ ok: false, reason: 'bad-sig' })
+    expect((await verify(req(headers, { url: '/a2a/direct', method: 'PUT' }), { rawBody: Buffer.from(body) })).v).toEqual({ ok: false, reason: 'bad-sig' })
+    expect((await verify(req(headers, { url: '/a2a/direct', port: 4001 }), { rawBody: Buffer.from(body), audiences: ['http://127.0.0.1:4001'] })).v).toEqual({ ok: false, reason: 'wrong-audience' })
+    const forged = { ...headers, 'X-A2A-Caller-Sig3': headers['X-A2A-Caller-Sig2']! }
+    expect((await verify(req(forged, { url: '/a2a/direct' }), { rawBody: Buffer.from(body) })).v).toEqual({ ok: false, reason: 'bad-sig' })
+    expect((await verify(req({ ...headers, 'X-A2A-Caller-Sig3': '' }, { url: '/a2a/direct' }), { rawBody: Buffer.from(body) })).v.ok).toBe(false)
+    expect((await verify(req(headers, { url: '/a2a/direct' }))).v.ok).toBe(false)
+    expect((await verify(req({ ...headers, 'X-A2A-Caller': '' }, { url: '/a2a/direct' }), { rawBody: Buffer.from(body) })).v).not.toEqual({ ok: false, reason: 'absent' })
+    expect((await verify(req(strip(headers, 'X-A2A-Caller-Sig3', 'X-A2A-Body-Sha256'), { url: '/a2a/direct' }))).v).toMatchObject({ ok: true, bound: true })
+  })
+
   it('ordinary caller identities must use the exact origin root URL', () => {
     expect(isRootOriginUrl(CALLER_URL)).toBe(true)
     for (const suffix of ['/apps/market', '/.well-known/agent-card.json', '/path/', '?q=1', '#fragment', '/user@host']) expect(isRootOriginUrl(`${CALLER_URL}${suffix}`)).toBe(false)
@@ -197,7 +218,7 @@ describe('OriginClaim — a CLI identity deposited here (gh#133)', () => {
   }
   const cliV2 = (url: string): Record<string, string> =>
     signOriginClaim({ url, method: 'POST' }, { caller: 'alice', callerUrl: CLI_URL, privateKey: cliKey, unbound: false, now: Date.now() })
-  function verifyCli(request: IncomingMessage, options: { unboundOpen?: boolean; deposit?: A2aPeerCard | undefined; optIn?: boolean } = {}) {
+  function verifyCli(request: IncomingMessage, options: { rawBody?: Uint8Array; unboundOpen?: boolean; deposit?: A2aPeerCard | undefined; optIn?: boolean } = {}) {
     let unbound = 0
     let fetched = 0
     const deposit = { handle: HANDLE, name: 'alice', card: 'deposit' in options ? options.deposit as A2aPeerCard | undefined : cliCard }

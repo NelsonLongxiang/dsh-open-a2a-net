@@ -920,7 +920,9 @@ export function apply(ctx: Context, config: Config): void {
    * request) and the relay/notify faces.
    */
   function originClaimHeaders(target: OriginClaimTarget): Record<string, string> {
-    return signOriginClaim(target, { caller: config.team, callerUrl: ownCardUrl, privateKey: nodePrivateKey, unbound: config.originClaimUnboundWindow !== false, now: Date.now() })
+    // No local web/card anchor yet: keep the preexisting absent-envelope migration posture, not a malformed Sig3.
+    const signedTarget = ownCardUrl === '' ? { url: target.url, method: target.method } : target
+    return signOriginClaim(signedTarget, { caller: config.team, callerUrl: ownCardUrl, privateKey: nodePrivateKey, unbound: config.originClaimUnboundWindow !== false, now: Date.now() })
   }
   const client = new A2aClient({
     apiKey: config.apiKey,
@@ -2632,7 +2634,7 @@ export function apply(ctx: Context, config: Config): void {
    *  closing originClaimUnboundWindow; boundMissInbound: those of them whose
    *  bound form missed (a peer dials us by a name not in our audiences). */
   let unboundInboundCount = 0, boundMissInboundCount = 0
-  function verifyOriginClaim(req: IncomingMessage, options?: { readonly cli?: boolean }): Promise<OriginClaimVerdict> {
+  function verifyOriginClaim(req: IncomingMessage, options?: { readonly cli?: boolean; readonly rawBody?: Uint8Array }): Promise<OriginClaimVerdict> {
     return verifyOriginClaimOf(req, {
       cardCache,
       fetch: fetchImpl,
@@ -2643,6 +2645,7 @@ export function apply(ctx: Context, config: Config): void {
       loopbackArrival: (config.originClaimUrl ?? '') === '',
       now: Date.now(),
       ...(options?.cli === true ? { cliDeposit: cliDepositCard } : {}),
+      ...(options?.rawBody !== undefined ? { rawBody: options.rawBody } : {}),
     })
   }
 
