@@ -399,7 +399,7 @@ wire 面先结算再分流到 CLI 信箱（`wire.ts:572` → `:577`）；本机�
   `{at, from_version, to_version, cause, tasks:[{taskId, direction, caller, target, verdict, reason}]}`；
   `/state` 新块、`logger.info`、事件 `a2a/authorization-affected`。
 - **不做**：不取消、不改行状态、不 nudge、不阻止回执。`enforce`（恢复/结算前按当前名单重校验）
-  需要单独的属主裁定，不在本 issue 范围。
+  需要单独放行（v1.18 起为非自我评审 PASS，即 S7/#125），不在本 issue 范围。
 
 ## 6. 兼容
 
@@ -444,7 +444,7 @@ wire 面先结算再分流到 CLI 信箱（`wire.ts:572` → `:577`）；本机�
 | S4 | 结算判定（`observe` 默认）：`settleAndAnnounce(message, settler)`；授权链；`settledBy` 入归档；`settlementRefusals` 环；`recordOutcome` 门控；本机 CLI 信箱路径结算顺序对齐 | **高**（协议+台账） | 各原因码单测；`observe` 下现有测试零改动通过；**评审席团队验证器新判据："结算方不在授权链上的结算数 = 0"**（数据源：`/state` 归档行 `settledBy.chain_role === 'off-chain'` 计数 + `settlementRefusals` 中 `would-refuse` 计数，两者均为 0 才算通过） |
 | S5 | 自动回执 turn 归属与绑定：waiter 按 steer 头部定位自己的消费事件（`consumedAt`）；`flushFinals` 逐 waiter 从 `consumedAt` 之后取第一条 final；信封 `onBehalfOf`/`authRef`；`target_busy` 仅审计 | **高**（协议） | 两条回归：**(a)** 目标正忙、steer 在同一 turn 内被消费 → 该 turn 的 final 产出回执；**(b)** 目标正忙、steer 到下一 turn 才被消费 → 当前 turn 的 final 不产出回执，下一 turn 的 final 产出。另：新键对旧解析器无影响（`receipt-envelope-v2.spec.ts` 扩例） |
 | S6 | 受影响任务清单（observe）：惰性 + 变更点触发；重判；`affectedTasks` 环 | 中 | 移除画布成员 → 出现 `would-revoke` 条目；断言**无任何行状态变化**；版本未变时零产出 |
-| S7 | `settlementAuth` 默认切 `enforce` | **高**，需属主裁定 | 三台主机均 ≥ S4/S5 版本；S4 判据连续 7 天为 0；`legacy` 计数为 0；#275：`settlement.enforceBlockers` 为空，旧出站转发 canvas 欠账不得缺接收成员事实（含 dead 未结行），否则拒绝启用 enforce，但插件照常启动并退回 observe，error 日志及 settlement.enforceRefused:{reason,blockers} 保留启动拒因；不改持久配置、不在欠账清空后自动升档，先对账再由属主重新应用 enforce，绝不补造授权 |
+| S7 | `settlementAuth` 默认切 `enforce` | **高**，非自我评审 PASS（v1.18 起取消属主裁定，#125） | 三台主机均 ≥ S4/S5 版本；S4 判据连续 7 天为 0；`legacy` 计数为 0；#275：`settlement.enforceBlockers` 为空，旧出站转发 canvas 欠账不得缺接收成员事实（含 dead 未结行），否则拒绝启用 enforce，但插件照常启动并退回 observe，error 日志及 settlement.enforceRefused:{reason,blockers} 保留启动拒因；不改持久配置、不在欠账清空后自动升档，先对账再由开发席重新应用 enforce（v1.18），绝不补造授权 |
 
 S1 与 S3 互不依赖、可并行；S2 依赖 S1；S4 依赖 S2+S3；S5 只依赖 S2（`onBehalfOf`/`authRef` 取自 `auth`），可与 S4 并行；
 S6 依赖 S1+S2。S3/S4 的 CLI 部分与 #112/#113 同改 `cli/a2a.mjs`，排在协调席的 #112/#113 以及 #115、#117 合入之后。

@@ -3,6 +3,8 @@
 > 来源：`dsh-agent-skills/a2a-supervisor-sop` 技能整编（2026-10-23，随 network-operations.md 一并入库；原技能的 CLI 章节已退役）。
 > 此后发布的 `a2a-net` CLI（0.6.27+）是会话外席位的入网方式，操作见 `network-operations.md` 第七节。
 > 面向：监督席、代决策席、评审/测试席位。操作面（入网/路由/故障）见 `network-operations.md`。
+>
+> **v1.17/v1.18 起本文降为历史 SOP**：项目角色至多「开发＋评审」两席，监督席/代决策席/测试席已并入（规范第 1 节）；「呈属主」「属主/授权代行点头」类门禁已由《A2A 协作规范》v1.18（2026-11-03）取消，高档放行 = 非自我节点评审 PASS。冲突处以规范（`src/skill/references/collaboration.md`，当前 v1.18）为准；本文保留作派单环/双章的历史实战记录。
 
 ## 一、角色铁律（先读）
 
