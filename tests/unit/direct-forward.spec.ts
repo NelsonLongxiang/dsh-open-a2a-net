@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createDirectForward, ForwardBirths, type DirectForwardDeps, type ForwardRequest } from '../../src/direct-forward.ts'
+import { createDirectForward, ForwardBirths, forwardReceiptBasis, type DirectForwardDeps, type ForwardRequest } from '../../src/direct-forward.ts'
 import { TaskLedger } from '../../src/task-ledger.ts'
 import { checkGuardAtIngress, DEFAULT_HOP_BUDGET } from '../../src/recursion-guard.ts'
 import type { A2aPeerCard, A2aRouteResult } from '../../src/types.ts'
@@ -8,7 +8,7 @@ const ok: A2aRouteResult = { ok: true, team: request.team, reply: '', task_id: r
 function fixture(results: A2aRouteResult[] = [ok]) {
   const ledger = new TaskLedger('')
   const sent: Array<{ url: string; request: ForwardRequest; guard: string }> = []
-  const deps: DirectForwardDeps = { births: new ForwardBirths(), enabled: () => true, isolated: () => false, deposited: () => true, memberLinked: () => true, scope: async () => ({ ok: true }),
+  const deps: DirectForwardDeps = { births: new ForwardBirths(), enabled: () => true, isolated: () => false, deposited: () => true, scope: async () => ({ ok: true }),
     candidates: async () => ({ urls: results.map((_, i) => 'https://peer' + i + '.test'), card: async () => ({ publicKey: 'key', session: 'host' } as A2aPeerCard) }),
     dispatch: async (url, r, guard) => { sent.push({ url, request: r, guard }); return results[sent.length - 1]! }, ledger, activity: () => {},
   }
@@ -45,9 +45,8 @@ describe('one-hop CLI forwarding', () => {
     x.deps.scope=async()=>({ok:false,error:'scope gate'})
     expect(await forward({...request,taskId:'scope-at-cap'})).toMatchObject({task_id:'scope-at-cap',error:expect.stringContaining('scope gate')})
     x.deps.scope=async()=>({ok:true})
-    x.deps.candidates=async()=>({urls:['https://peer'],card:async()=>({publicKey:'key',canvasOrg:[{team:'beta/canvas/ops',name:'ops',members:['beta/aaaaaaaa']}]} as A2aPeerCard)})
-    x.deps.memberLinked=()=>false
-    expect(await forward({...request,team:'beta/canvas/ops',taskId:'link-at-cap'})).toMatchObject({task_id:'link-at-cap',error:expect.stringContaining('direct operator link')})
+    x.deps.candidates=async()=>({urls:['https://peer'],card:async()=>({publicKey:'key',canvasOrg:[{team:'beta/canvas/ops',name:'ops',members:[request.caller]}]} as A2aPeerCard)})
+    expect(await forward({...request,team:'beta/canvas/ops',taskId:'link-at-cap'})).toMatchObject({task_id:'link-at-cap',error:expect.stringContaining('lists no receiving member')})
     expect(await forward({...request,taskId:'receipt-at-cap',message:'[A2A receipt] task earlier done'})).toMatchObject({ok:true,receipt:'none'})
     pending.shift()!(); await waiting; expect(released).toBe(true)
     expect(x.ledger.find('cap-0')).toBeDefined()
@@ -102,17 +101,18 @@ describe('one-hop CLI forwarding', () => {
     expect(x.sent).toHaveLength(1)
     expect(x.ledger.list()).toHaveLength(1)
   })
-  it('a canvas candidate requires direct return links to every advertised receiving member', async () => {
+  it('#282 S3 same team authorizes: a canvas forward needs a receiving member on the owner card, not a per-member link here', async () => {
     const x = fixture()
     const team = 'beta/canvas/ops'
-    x.deps.candidates = async () => ({ urls: ['https://peer.test'], card: async () => ({ canvasOrg: [{ team, name: 'ops', members: [request.caller, 'beta/aaaaaaaa', 'beta/bbbbbbbb'] }], sessionTeams: [{ team: 'beta/aaaaaaaa' }] } as A2aPeerCard) })
-    x.deps.memberLinked = member => member === 'beta/aaaaaaaa'
-    const unlinked = await createDirectForward(x.deps)({ ...request, team })
-    expect(unlinked.ok).toBe(false)
-    expect(!unlinked.ok && unlinked.next).toContain('drag every member of beta/canvas/ops')
+    x.deps.candidates = async () => ({ urls: ['https://peer.test'], card: async () => ({ canvasOrg: [{ team, name: 'ops', members: [request.caller] }] } as A2aPeerCard) })
+    const empty = await createDirectForward(x.deps)({ ...request, team })
+    expect(empty.ok).toBe(false)
+    expect(!empty.ok && empty.next).toContain('lists no member besides you')
     expect(x.sent).toHaveLength(0)
-    x.deps.memberLinked = () => true
+    x.deps.candidates = async () => ({ urls: ['https://peer.test'], card: async () => ({ publicKey: 'key', canvasOrg: [{ team, name: 'ops', members: [request.caller, 'beta/aaaaaaaa', 'beta/bbbbbbbb'] }] } as A2aPeerCard) })
     expect((await createDirectForward(x.deps)({ ...request, team })).ok).toBe(true)
+    expect(x.sent).toHaveLength(1)
+    expect(x.ledger.list()[0]).toMatchObject({ receiverMembers: ['beta/aaaaaaaa', 'beta/bbbbbbbb'], peerKey: 'key' })
   })
   it('#272 a peer without delivered_to uses frozen canvas membership, never the canvas handle as a receiver', async () => {
     const x = fixture(), team = 'beta/canvas/ops'
@@ -140,5 +140,25 @@ describe('one-hop CLI forwarding', () => {
     for (const over of [{ guarded: true }, { localCliProof: false }]) { const x = fixture(); expect((await createDirectForward(x.deps)({ ...request, ...over })).ok).toBe(false); expect(x.sent).toHaveLength(0) }
     // A protocol refusal (already forwarded) has nothing for the caller to do.
     { const x = fixture(); const out = await createDirectForward(x.deps)({ ...request, guarded: true }); expect(!out.ok && out.next).toBeUndefined() }
+  })
+  it('#282 S3: a forward receipt is admissible only for that CLI, from a frozen receiver, on the frozen peer key', () => {
+    const cli = request.caller
+    const row: any = { taskId: 't', team: 'beta/canvas/ops', status: 'pending', forwarded: true, sender: { kind: 'cli', id: cli }, peerKey: 'K', receiverMembers: ['beta/aaaaaaaa'] }
+    const claim = { caller: 'beta', bound: true, bodyBound: true as const, card: { publicKey: 'K' } }
+    expect(forwardReceiptBasis(row, 'beta/aaaaaaaa', cli, claim)).toBe('peer-org:beta/canvas/ops')
+    expect(forwardReceiptBasis(row, 'beta/cccccccc', cli, claim)).toBeUndefined() // not a frozen receiver
+    expect(forwardReceiptBasis(row, 'beta/aaaaaaaa', 'other-cli/0000000000000000', claim)).toBeUndefined() // another CLI's mailbox
+    expect(forwardReceiptBasis(row, 'beta/aaaaaaaa', cli, { ...claim, card: { publicKey: 'X' } })).toBeUndefined() // another peer's key
+    expect(forwardReceiptBasis(row, 'beta/aaaaaaaa', cli, { ...claim, bound: false })).toBeUndefined() // unbound claim
+    expect(forwardReceiptBasis(row, 'beta/aaaaaaaa', cli, { caller: 'beta', bound: true, card: { publicKey: 'K' } })).toBeUndefined() // Sig2 only: body not signed
+    // A frozen receiver of another zone: B (zone beta) must not sign for it.
+    expect(forwardReceiptBasis({ ...row, receiverMembers: ['gamma/cccccccc'] }, 'gamma/cccccccc', cli, claim)).toBeUndefined()
+    expect(forwardReceiptBasis({ ...row, receiverMembers: ['gamma/cccccccc'] }, 'gamma/cccccccc', cli, { ...claim, caller: 'gamma' })).toBe('peer-org:beta/canvas/ops')
+    expect(forwardReceiptBasis({ ...row, deliveredTo: 'beta/canvas/ops' }, 'beta/canvas/ops', cli, claim)).toBeUndefined() // legacy canvas-handle deliveredTo
+    expect(forwardReceiptBasis({ ...row, status: 'dead' }, 'beta/aaaaaaaa', cli, claim)).toBeUndefined()
+    expect(forwardReceiptBasis({ ...row, forwarded: undefined }, 'beta/aaaaaaaa', cli, claim)).toBeUndefined()
+    expect(forwardReceiptBasis({ ...row, peerKey: undefined }, 'beta/aaaaaaaa', cli, claim)).toBeUndefined()
+    expect(forwardReceiptBasis({ ...row, deliveredTo: 'beta/bbbbbbbb' }, 'beta/aaaaaaaa', cli, claim)).toBeUndefined() // the actual receiver wins
+    expect(forwardReceiptBasis(undefined, 'beta/aaaaaaaa', cli, claim)).toBeUndefined()
   })
 })

@@ -54,7 +54,9 @@ describe('#230 home host forwards a deposited CLI one hop with scope on', () => 
       expect(owner.error).toContain('forwardDirect is off')
       await post(a,'/__dsh_a2a/canvas',{action:'remove-member',name:'ops',id:'beta/01234567'})
       const missing=await route(a,'direct-271-link',true,undefined,'beta/canvas/ops')
-      expect(missing.error).toContain('missing direct operator link to receiver beta/01234567')
+      // #282 S3: a per-member link here is no longer a prerequisite (the owner's signed canvas is the return path).
+      expect(missing.error).not.toContain('missing direct operator link')
+      expect(missing.error).toContain('home forwardDirect is off')
       const absent=await route(a,'direct-271-absent',true,undefined,'beta/canvas/no-such-team')
       expect(absent.error).toContain('canvas-not-found')
       expect(absent.error).not.toContain('canvas-owner:')
