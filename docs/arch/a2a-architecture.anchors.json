@@ -19,9 +19,9 @@
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "037a5e6f9bfb7f26b0584dadc6cf03acad7c101736259da76805daec7e47583e",
-    "src/faces/wire.ts": "0e12f007d43dc27077cb02d7496d0192f390c6078350216b51e0558bcd9570e9",
+    "src/faces/wire.ts": "9e78549ddaad0136dbd962872cee0f5299551061840a4ddb9be4d31305c46e3c",
     "src/faces/canvas-notify.ts": "4d06ea71c72f5a0fd200fbc7cc32c62cfd367af054c22f284be3d242919c1358",
-    "src/task-auth.ts": "9123b42f81b9185bea7702f1a3623383992d26d6132ca79a51e84a6faf249bdd",
+    "src/task-auth.ts": "db8218c9a07bc6d3f6aa63a9652c8da73a5f78f8224b5c9645ae5708934a7ca2",
     "src/origin-claim.ts": "9539808ab3890c018d5984496a79e6fb64ffde2e93259e6f27f7bbab9255adbf",
     "src/tools/info.ts": "34ec6601ec754530360b7933bec552d0aca9729c2b8c7373e3d9ab9dddb10232",
     "src/tools/act.ts": "983f78c58b8c886b39b5af3f2cf474a1a47e4d03b91fedf5ed581aba3225bed2",
@@ -87,7 +87,7 @@
     {
       "page": "p1-arch",
       "cell": "b5",
-      "ref": "src/task-auth.ts:110",
+      "ref": "src/task-auth.ts:114",
       "expect": "export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTeam?: string): Admission {"
     },
     {
@@ -231,13 +231,13 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/task-auth.ts:137",
+      "ref": "src/task-auth.ts:141",
       "expect": "if (r.canvasRemoteMembersOf(name).includes(caller)) declare(r.canvasTeamOf(name), 'remote-ref-samezone')"
     },
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/task-auth.ts:139",
+      "ref": "src/task-auth.ts:143",
       "expect": "const ownHandles = new Set<string>([r.zone, ...r.joined().map(id => `${r.zone}/${r.id8(id)}`)])"
     },
     {
@@ -333,7 +333,7 @@
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/faces/wire.ts:714",
+      "ref": "src/faces/wire.ts:715",
       "expect": "if (refuseIfFlooded(caller, message, team, taskId, res)) return"
     },
     {
