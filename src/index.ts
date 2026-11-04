@@ -40,7 +40,7 @@ import { LayoutStore } from './layout-store.ts'
 import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
-import { applyOwnerSettings, type OwnerSettings } from './owner-settings.ts'
+import { applyOwnerSettings, parseSeatNames, type OwnerSettings } from './owner-settings.ts'
 import { CLI_HANDLE_RE, CliDepositStore } from './cli-deposit.ts'
 import { cliHomeChoices, decideCliHome } from './cli-home.ts'
 import { outboundScope, type OutboundScopeRecords } from './outbound-scope.ts'
@@ -338,6 +338,8 @@ export interface Config {
    * nobody created. Empty list denies every join (default).
    */
   readonly teamJoinAllowlist: string[]
+  /** Human-owned stable display labels keyed by full local session id; never a routing identity. */
+  readonly seatNames: Record<string, string>
   /**
    * S3 (phase-2 default-ON, owner ruling 2026-09-01): route dispatch checks
    * caller↔target shared team membership before addressing; set false to
@@ -467,6 +469,7 @@ export const Config: s<Config> = s.object({
    * refused join carries guidance instead of failing silently.
    */
   teamJoinAllowlist: s.array(s.string()).default([]),
+  seatNames: s.dict(s.string()).default({}),
   /**
    * S3 (phase-2 default, owner ruling 2026-09-01): route dispatch checks
    * caller↔target shared team membership before addressing — a session
@@ -946,6 +949,10 @@ export function apply(ctx: Context, config: Config): void {
   // are read at call time, so the panel's write applies WITHOUT a restart;
   // announce is boot-time publishing (restart pending flag for the UI).
   let ownerAllowlist: string[] = [...(config.teamJoinAllowlist ?? [])]
+  const parsedSeatNames = parseSeatNames(config.seatNames ?? {})
+  if (parsedSeatNames === undefined) throw new Error('invalid owner seatNames configuration')
+  let ownerSeatNames: Record<string, string> = parsedSeatNames
+  ctx.tools.guard(exec => exec.name.startsWith('a2a_') && exec.arguments !== null && typeof exec.arguments === 'object' && (Object.hasOwn(exec.arguments, 'seatName') || Object.hasOwn(exec.arguments, 'seatNames')) ? 'seatName is human-owned; use the workbench owner settings, not model tools' : undefined)
   // Truthiness matches the ORIGINAL read site (`if (config.teamScopeInfo)`):
   // literal compositions without the schema default carry undefined, which
   // reads as the OPEN plane — `!== false` would silently scope them.
@@ -1645,9 +1652,9 @@ export function apply(ctx: Context, config: Config): void {
    */
   const LEGACY_PREWARM_PROBE_TITLE = '[prewarm] 请回复 ok。'
 
-  function nodeMetadataOf(agent: Agent): { name: string; description: string; workspace?: string } {
+  function nodeMetadataOf(agent: Agent): { name: string; seatName?: string; description: string; workspace?: string } {
     const title = sessionTitleOf(agent)
-    const cwd = (agent.session as { header?: { cwd?: string } }).header?.cwd
+    const cwd = (agent.session as { header?: { cwd?: string } } | undefined)?.header?.cwd
     // Display-layer fallback (pure presentation, zero data mutation): a title
     // that IS the legacy probe reads as machine junk in every directory and
     // card — surface the stable seat label instead. The session-title
@@ -1655,7 +1662,8 @@ export function apply(ctx: Context, config: Config): void {
     const displayTitle =
       title !== undefined && title !== '' && title !== LEGACY_PREWARM_PROBE_TITLE ? title : undefined
     return {
-      name: displayTitle !== undefined ? displayTitle : sessionLabelOf(agent),
+      name: ownerSeatNames[String(agent.id)] ?? (displayTitle !== undefined ? displayTitle : sessionLabelOf(agent)),
+      ...(ownerSeatNames[String(agent.id)] !== undefined ? { seatName: ownerSeatNames[String(agent.id)] } : {}),
       description: recentActivityOf(agent),
       ...(cwd !== undefined && cwd !== '' ? { workspace: cwd } : {}),
     }
@@ -2058,6 +2066,8 @@ export function apply(ctx: Context, config: Config): void {
         get unboundInboundCount() { return unboundInboundCount },
         get boundMissInboundCount() { return boundMissInboundCount },
         get ownCardUrl() { return ownCardUrl },
+        get ownerSeatNames() { return ownerSeatNames },
+        set ownerSeatNames(v) { ownerSeatNames = v },
         get ownerAllowlist() { return ownerAllowlist },
         set ownerAllowlist(v) { ownerAllowlist = v },
         get ownerTeamScopeInfo() { return ownerTeamScopeInfo },
@@ -2175,7 +2185,7 @@ export function apply(ctx: Context, config: Config): void {
             ...[...sessionNodes.values()].filter(isJoinedNode).map(agent => exposureRow(sessionTeamOf(agent), nodeMetadataOf(agent) as unknown as Record<string, unknown>)),
             ...joinedSessions.list()
               .filter(id => !liveRoots.has(id) && isArchived?.(id) !== true)
-              .map(id => exposureRow(`${config.team}/${id8(id)}`, { name: `${session}-${id8(id)}`, description: 'cold — not loaded; routing here wakes the session' })),
+              .map(id => exposureRow(`${config.team}/${id8(id)}`, { name: ownerSeatNames[id] ?? `${session}-${id8(id)}`, ...(ownerSeatNames[id] !== undefined ? { seatName: ownerSeatNames[id] } : {}), description: 'cold — not loaded; routing here wakes the session' })),
             // gh#45/47: deposited CLI identities publish as directory rows —
             // the fleet sees them as member cards (draggable = the operator
             // link). Their "zone" is the agent-name. gh#47: an EXPIRED

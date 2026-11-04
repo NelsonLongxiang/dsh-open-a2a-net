@@ -199,6 +199,17 @@ describe('a2a-net CLI: a host behind dsh-pocket', () => {
 })
 
 describe('a2a-net CLI: read commands and errors', () => {
+  it('teams searches by owner seatName, then name, then the legacy label without changing route handles', async () => {
+    const host = await stubHost(() => ({ status: 200, body: { sessions: [{ team: 'dsh/01234567', label: 'default-label', name: 'conversation', seatName: '开发席' }, { team: 'dsh/11112222', label: 'legacy' }, { team: 'dsh/33334444', label: 'default', name: 'title' }], remote: [] } }))
+    servers.push(host.server)
+    const HOME = tmpHomeDir(), env = { HOME, A2A_CLI_HOME: HOME }
+    const found = await runCli(['teams', '开发席', '--json', '--home', host.url], env)
+    expect(found.code, found.stderr).toBe(0)
+    expect(JSON.parse(found.stdout)).toEqual([{ team: 'dsh/01234567', name: '开发席', where: 'local' }])
+    expect((await runCli(['teams', '--home', host.url], env)).stdout).toContain('legacy')
+    expect((await runCli(['teams', '--home', host.url], env)).stdout).toContain('title')
+  })
+
   it('a keyed host says which knob to set; tasks --json lists every row', async () => {
     const rows = Array.from({ length: 25 }, (_, i) => ({ taskId: `direct-${String(i).padStart(8, '0')}`, team: 'ops', status: 'pending' }))
     let keyed = true

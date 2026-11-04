@@ -70,8 +70,9 @@ export interface A2aPeerCard {
 export interface A2aSessionTeamInfo {
   /** Session team name (`<team>/<agentId8>`); the route target. */
   readonly team: string
-  /** The session's title at read time. */
+  /** Human seatName when configured, otherwise the session title at read time. */
   readonly name: string
+  readonly seatName?: string
   /** One-line excerpt of the session's newest user or assistant text. */
   readonly description: string
   /** CLI deposit status, explicitly online/offline on full host cards; absent on ordinary sessions. */

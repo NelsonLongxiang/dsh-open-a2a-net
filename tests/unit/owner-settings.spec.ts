@@ -30,6 +30,19 @@ describe('applyOwnerSettings', () => {
     expect(restartNeeded).toBe(false)
   })
 
+  it('persists session label maps as quoted flow YAML and replaces block-form old maps without touching other keys', () => {
+    const patch = '- id: a2a\n  config:\n    seatNames:\n      session-0123456789abcdef: old\n      session-1111222233334444: stale\n    announce: true\n'
+    const names = { 'session-0123456789abcdef': '开发席 \"quoted\" : # name' }
+    const first = applyOwnerSettings(patch, { seatNames: names })
+    expect(first.yaml).toContain('seatNames: ' + JSON.stringify(names))
+    expect(first.yaml).not.toContain('stale')
+    expect(first.yaml).toContain('announce: true')
+    expect(first.restartNeeded).toBe(false)
+    const cleared = applyOwnerSettings(first.yaml, { seatNames: {} }).yaml
+    expect(cleared).toContain('seatNames: {}')
+    expect(cleared).not.toContain('开发席')
+  })
+
   it('announce changes flag a restart', () => {
     const { restartNeeded } = applyOwnerSettings(EXISTING, { announce: false })
     expect(restartNeeded).toBe(true)

@@ -108,6 +108,7 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | `wakePrewarmQuietMs` | `5000` | 前台静默窗口：窗口内有唤醒/路由需求（或有出站路由在途）则推迟下一步预热；`0` 关闭让路。 |
 | `wakeBootStaggerMs` | `3000` | 启动预热串行唤醒之间的停顿（压住重启后的日志解码饱和；路由唤醒不排此队）。 |
 | `wakeReconcile` | `true` | 持续的期望态对账：每个 tick 重新推导到期的冷加入意图，每轮唤醒一个（覆盖启动后漂移、唤醒失败、晚挂载的网关）。由 `wakeReconcileIntervalMs`（`60000`）、`wakeReconcileBackoffBaseMs`（`5000`）、`wakeReconcileMaxBackoffMs`（`600000`）调节。 |
+| `seatNames` | `{}` | 按完整本机会话 id 保存的人工席位展示名。工作台主人设置中选择会话、输入并显式保存；留空保存清除。即时用于卡面、whoami、CLI teams 和画布，不改标题、句柄或准入；A2A 模型工具携带命名字段会被拒。 |
 | `teamJoinAllowlist` | `[]` | `a2a_team_join` 可声明的团队：**只认精确名**（`*`/前缀条目不授权任何加入）。空列表拒绝一切加入。属主也可在工作台属主面板（`/__dsh_a2a/owner-settings`）编辑。 |
 | `teamScopeRouting` | `true` | S3 准入：路由检查调用方与目标是否共享团队；未声明任何团队的会话没有网络。`false` 恢复开放出站缝。 |
 | `teamScopeInfo` | `true` | S5 信息面作用域，作用于 `a2a_teams` / `a2a_status` / `a2a_probe`（见工具一览）。`false` 恢复全舰队披露。 |
@@ -158,7 +159,7 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | `POST /__dsh_a2a/dispatch` | 工作台快速派单到一个团队。 |
 | `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | 从调用方一侧结清一个欠账任务（cancel 还会向在线的本地目标转达停止通知）；该行落入 `archived[]`。 |
 | `/__dsh_a2a/session-log` · `/remote-session-log` | 供工作台读取会话日志。 |
-| `/__dsh_a2a/owner-settings` | 属主面板：读取（GET）或写入（POST）`teamJoinAllowlist`、`teamScopeInfo` 与 `announce` 到 home patch 层（前两项即时生效；`announce` 下次重启生效）。 |
+| `/__dsh_a2a/owner-settings` | 属主面板：读取（GET）或写入（POST）`teamJoinAllowlist`、`teamScopeInfo`、`seatNames` 与 `announce` 到 home patch 层（除 `announce` 外即时生效）。`seatNames` 为完整映射，删去会话 id 即清除。复用属主鉴权，不提供模型命名工具；本机 shell/配置写入者仍处于既有运营者信任边界内。 |
 | `/__dsh_a2a/fleet-canvas-op` | 把画布操作中继到某 peer 的 `/a2a/canvas-op`，盖上本节点的 OriginClaim；由对端的链接门裁决。 |
 | `/__dsh_a2a/cli-deposit` | `a2a-net` CLI 身份的寄存、列表、撤销与信箱读取。 |
 | `GET /__dsh_a2a/nodes` · `POST` | 节点身份（docs/design/node-identity.md）：GET 读名册或单个节点（`?name=`）；POST 是身份写入，即使在 loopback 也要 apiKey。 |

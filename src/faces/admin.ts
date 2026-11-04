@@ -32,7 +32,7 @@ import type { GroupStore } from '../group-store.ts'
 import type { IdempotencyStore } from '../idempotency-store.ts'
 import type { JoinedSessions } from '../joined-store.ts'
 import type { LayoutStore } from '../layout-store.ts'
-import { applyOwnerSettings, type OwnerSettings } from '../owner-settings.ts'
+import { applyOwnerSettings, parseSeatNames, type OwnerSettings } from '../owner-settings.ts'
 import { rosterOp } from '../roster-op.ts'
 import type { CliHomeDecision } from '../cli-home.ts'
 import type { PeerStore } from '../peer-store.ts'
@@ -108,6 +108,7 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly unboundInboundCount: number
   readonly boundMissInboundCount: number
   readonly ownCardUrl: string
+  ownerSeatNames: Record<string, string>
   ownerAllowlist: string[]
   ownerTeamScopeInfo: boolean
   ownerAnnounceRestartPending: boolean
@@ -239,6 +240,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           sessions.push({
             id,
             label: `${session}-${id8(id)}`,
+            ...(d.ownerSeatNames[id] !== undefined ? { name: d.ownerSeatNames[id], seatName: d.ownerSeatNames[id] } : {}),
             team: `${config.team}/${id8(id)}`,
             joined: true,
             live: false,
@@ -704,6 +706,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
       if (req.method === 'GET') {
         const payload = JSON.stringify({
           ok: true,
+          seatNames: { ...d.ownerSeatNames },
           teamJoinAllowlist: [...d.ownerAllowlist],
           teamScopeInfo: d.ownerTeamScopeInfo,
           announce: config.announce === true,
@@ -716,6 +719,15 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
       readJsonBody(req, res, (rawBody) => {
         const body = rawBody as Record<string, unknown>
         const changes: OwnerSettings = {}
+        if (Object.hasOwn(body, 'seatName') || Object.hasOwn(body, 'seatNames')) {
+          const names = body.seatNames
+          const parsedNames = parseSeatNames(names)
+          if (Object.hasOwn(body, 'seatName') || parsedNames === undefined) {
+            const payload = JSON.stringify({ ok: false, error: 'seatNames must map full local session ids to nonempty display names (max 64 characters, no controls); clear by omitting the id' })
+            res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(payload); return
+          }
+          changes.seatNames = parsedNames
+        }
         if (Array.isArray(body.teamJoinAllowlist)) {
           const list = (body.teamJoinAllowlist as unknown[]).filter((name): name is string => typeof name === 'string' && name !== '' && name.length <= 128)
           changes.teamJoinAllowlist = [...new Set(list)]
@@ -734,7 +746,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           const { yaml, restartNeeded } = applyOwnerSettings(current, changes)
           mkdirSync(home, { recursive: true })
           writeFileSync(patchPath, yaml, 'utf8')
-          // Hot-apply the two call-time keys.
+          // Hot-apply the call-time owner keys.
+          if (changes.seatNames !== undefined) d.ownerSeatNames = changes.seatNames
           if (changes.teamJoinAllowlist !== undefined) d.ownerAllowlist = [...changes.teamJoinAllowlist]
           if (changes.teamScopeInfo !== undefined) d.ownerTeamScopeInfo = changes.teamScopeInfo
           if (changes.announce !== undefined && changes.announce !== (config.announce === true)) d.ownerAnnounceRestartPending = true
