@@ -55,13 +55,17 @@ export const VIA_OF: Readonly<Record<AdmissionRule, Via>> = {
  */
 export type Admission =
   | { readonly ok: true; readonly via: Via; readonly rule: AdmissionRule; readonly basis: readonly string[] }
-  | { readonly ok: false; readonly refusal: string }
+  | { readonly ok: false; readonly refusal: string; readonly next?: string }
 
 /** The refusal text of a decision, or undefined when admitted — the shape the faces have always read. */
 export const refusalOf = (admission: Admission): string | undefined => (admission.ok ? undefined : admission.refusal)
 
 const admitted = (rule: AdmissionRule, basis: readonly string[] = []): Admission => ({ ok: true, via: VIA_OF[rule], rule, basis })
-const refused = (refusal: string): Admission => ({ ok: false, refusal })
+/** #282 S1: a refusal may carry the one step the caller (or this host's operator) can take next. */
+const refused = (refusal: string, next?: string): Admission => ({ ok: false, refusal, ...(next !== undefined ? { next } : {}) })
+/** The next step of a refused decision, or undefined. */
+export const nextOf = (a: Admission): string | undefined => (a.ok ? undefined : a.next)
+const linkNext = (caller: string, target?: string): string => `ask this host's operator to put ${caller} in a canvas team${target !== undefined ? ` with ${target}` : ''} in the A2A workbench, or route through a member of a team you already share`
 
 /** One cached peer card's published canvas org (gh#71). */
 export interface PeerOrgEntry { readonly team?: unknown; readonly members?: unknown }
@@ -217,14 +221,14 @@ export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTea
       if (hit !== undefined) return hit
       return refused(declared.size === 0
         ? teamlessText(caller)
-        : `caller "${caller}" shares no team with target "${targetTeam}" — declared [${[...declared.keys()].join(', ')}], target links [${[...links].join(', ')}] (F5 target-level admission: a host-level link alone does not open every session team).`)
+        : `caller "${caller}" shares no team with target "${targetTeam}" — declared [${[...declared.keys()].join(', ')}], target links [${[...links].join(', ')}] (F5 target-level admission: a host-level link alone does not open every session team).`, linkNext(caller, targetTeam))
     }
   }
   const hit = pass(t => routable.has(t) || otherLocalDeclarations.has(t))
   if (hit !== undefined) return hit
   return refused(declared.size === 0
     ? teamlessText(caller)
-    : `caller "${caller}" declares teams [${[...declared.keys()].join(', ')}] — none is routable on this node (shared-team admission). Declare a shared team on both ends, or route through a teamed member.`)
+    : `caller "${caller}" declares teams [${[...declared.keys()].join(', ')}] — none is routable on this node (shared-team admission). Declare a shared team on both ends, or route through a teamed member.`, linkNext(caller, targetTeam))
 }
 
 /**
@@ -253,7 +257,7 @@ export function localCandidateAdmission(r: AdmissionRecords, callerSession: stri
 export function callerAdmission(r: AdmissionRecords, caller: string, targetTeam?: string, cliProof?: RemoteCliProof): Admission {
   if (!r.teamScopeRouting) return admitted('scope-off')
   if (caller === '') {
-    return refused('caller_session is required — anonymous deliveries are refused (S3 phase-3b). Pass caller_session as <zone>/<id8>.')
+    return refused('caller_session is required — anonymous deliveries are refused (S3 phase-3b). Pass caller_session as <zone>/<id8>.', 'send caller_session as your <zone>/<id8> handle (a2a-net does this for you)')
   }
   if (caller === r.zone) return admitted('host-face')
   if (ZONE_ID8.test(caller)) {
@@ -262,17 +266,17 @@ export function callerAdmission(r: AdmissionRecords, caller: string, targetTeam?
     // Foreign-zone handle (N3/N4): only this host's operator-added remote member refs.
     const basis = r.canvasNames().filter(name => r.canvasRemoteMembersOf(name).includes(caller)).map(name => r.canvasTeamOf(name))
     if (basis.length > 0) return admitted('remote-ref-foreign', basis)
-    return refused(`caller "${caller}" has no operator-established link on this node — cross-host admission requires a canvas remote membership this host's operator added (N3/N4: the caller's own card claims are self-description, not links). Ask this host's operator to add the member in the A2A workbench, or route through a linked member.`)
+    return refused(`caller "${caller}" has no operator-established link on this node — cross-host admission requires a canvas remote membership this host's operator added (N3/N4: the caller's own card claims are self-description, not links). Ask this host's operator to add the member in the A2A workbench, or route through a linked member.`, linkNext(caller, targetTeam))
   }
   // A foreign CLI handle is never a free-form node fact: its operator link,
   // pinned home, bound signer, and fresh online row must ALL hold.
   if (CLI_HANDLE_RE.test(caller) && !r.cliDeposited(caller)) {
     const basis = r.canvasNames().filter(name => r.canvasRemoteMembersOf(name).includes(caller)).map(name => r.canvasTeamOf(name))
-    if (basis.length === 0) return refused(`remote CLI ${caller} has no operator-established canvas link`)
+    if (basis.length === 0) return refused(`remote CLI ${caller} has no operator-established canvas link`, linkNext(caller, targetTeam))
     const home = r.cliHomeOf?.(caller)
-    if (home === undefined) return refused(`remote CLI ${caller} home is not pinned`)
-    if (cliProof?.bound !== true || cliHomeOrigin(cliProof.origin) !== home || cliHomeOrigin(cliProof.viaUrl) !== home) return refused(`remote CLI ${caller} signer does not match pinned home`)
-    if (cliProof.online !== true) return refused(`remote CLI ${caller} is offline or home card could not be read`)
+    if (home === undefined) return refused(`remote CLI ${caller} home is not pinned`, `ask this host's operator to pin ${caller}'s home host when adding it to the canvas team (workbench member dialog)`)
+    if (cliProof?.bound !== true || cliHomeOrigin(cliProof.origin) !== home || cliHomeOrigin(cliProof.viaUrl) !== home) return refused(`remote CLI ${caller} signer does not match pinned home`, `send through ${caller}'s pinned home host only`)
+    if (cliProof.online !== true) return refused(`remote CLI ${caller} is offline or home card could not be read`, 'run `a2a-net publish` on the home host, then send again with a new task id')
     return admitted('remote-ref-cli', basis)
   }
   // Free-form label: only this host's own node facts (V3).
@@ -283,7 +287,7 @@ export function callerAdmission(r: AdmissionRecords, caller: string, targetTeam?
   if (r.liveNodeIds().includes(caller)) return admitted('node-fact')
   // gh#45: a deposited CLI handle is a published node fact of this host.
   if (r.cliDeposited(caller)) return admitted('cli-deposit')
-  return refused(`caller_session "${caller}" matches no node fact on this host (joined session id, live node label, or deposited CLI handle) — free-form caller labels are self-description and are not admissible (N3). Pass caller_session as <zone>/<id8> with an operator-established link.`)
+  return refused(`caller_session "${caller}" matches no node fact on this host (joined session id, live node label, or deposited CLI handle) — free-form caller labels are self-description and are not admissible (N3). Pass caller_session as <zone>/<id8> with an operator-established link.`, 'send caller_session as a <zone>/<id8> handle this host has linked; free-form labels are never admitted')
 }
 
 /** Revalidate only mutable operator authority, not already-verified birth-time identity or liveness. */

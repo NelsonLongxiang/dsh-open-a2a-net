@@ -129,6 +129,8 @@ describe('issue #43 same-zone cross-host admission', () => {
       body: JSON.stringify({ team: 'dsh/01234567', message: '未链接的同 zone 外来者', caller_session: 'dsh/dddddddd', wait: false }),
     }).then(async r => await r.json() as Record<string, any>)
     expect(res.error).toContain('declares no team membership')
+    // #282 S1: the wire refusal carries the one next step.
+    expect(res.next).toContain('put dsh/dddddddd in a canvas team')
     expect(member.steer).not.toHaveBeenCalled()
   }, 30_000)
 
