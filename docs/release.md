@@ -7,7 +7,7 @@
 
 从 0.6.38 起，未显式配置 `forwardDirect` 的宿主会默认启用已实现的一跳 CLI 转发。0.6.37 及以前默认关闭；已有显式 `false` 保持关闭。升级不会新建链接或扩大作用域，仍须已验签、在线的本机 CLI 户口、发送作用域、双方运营者链接、DEFAULT-1 跳数预算；入站带 Guard 或 isolated 主机不转发。
 
-**回滚默认行为**：属主在相同配置层显式设 `forwardDirect: false`，再按宿主既有的安全生效流程应用；无需倒退发行包或删除队成员。升级和配置生效由属主安排，不由会话自重启生产。不要随此升级把 settlementAuth 默认切 enforce；#272 必须先经独立评审。长转发任务推荐 async + inbox，15 秒 sync 超时不代表未投递。#275：启用 enforce 前先核对状态面的 `settlement.enforceBlockers` 为空；0.6.34–0.6.37 的旧转发 canvas 欠账缺接收成员事实时，启动会拒绝 enforce 并列 task id，保持 observe 对账处理（含 dead 未结行），不得用当前画布成员补造旧授权。
+**回滚默认行为**：属主在相同配置层显式设 `forwardDirect: false`，再按宿主既有的安全生效流程应用；无需倒退发行包或删除队成员。升级和配置生效由属主安排，不由会话自重启生产。不要随此升级把 settlementAuth 默认切 enforce；#272 必须先经独立评审。长转发任务推荐 async + inbox，15 秒 sync 超时不代表未投递。#275：启用 enforce 前先核对状态面的 `settlement.enforceBlockers` 为空；0.6.34–0.6.37 的旧转发 canvas 欠账缺接收成员事实时，拒绝的是 enforce 模式而非插件启动：运行态退回 observe 保持在线并记 error，状态面 settlement.mode=observe、enforceRefused:{reason,blockers} 列启动拒因和 task id，CLI tasks --json 原样带回（tasks/status 文本也可见）；保持 observe 对账处理（含 dead 未结行），不写回持久配置且清账后不自动升档，不得用当前画布成员补造旧授权。
 
 ## 1. cordis 归一 override 的单一归属纪律
 

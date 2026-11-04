@@ -192,17 +192,29 @@ afterEach(() => {
 })
 
 describe('a2a plugin announce (peer discovery)', () => {
-  it('#275 refuses enforce activation while restored legacy forwarded canvas debts remain; observe still boots', async () => {
+  it('#277 refused enforce stays online in observe with error and visible refusal; explicit observe is unchanged', async () => {
     const home=tmpHome(), path=join(home,'a2a','tasks.json')
     mkdirSync(join(home,'a2a'),{recursive:true})
     writeFileSync(path,JSON.stringify({tasks:[{taskId:'old-forwarded',team:'dsh/canvas/ops',peer:'http://peer',startedAt:Date.now(),status:'pending',direction:'outbound',forwarded:true,deliveredTo:'dsh/canvas/ops'}]}))
     for(const settlementAuth of ['enforce','observe'] as const){
       const ctx=new Context()
       await ctx.plugin(SystemPrompt);await ctx.plugin(ToolRuntime);await ctx.plugin(TimerService)
+      await ctx.plugin(WebServer,{host:'127.0.0.1',port:0})
+      const errors: unknown[][]=[]
+      ctx.logger.exporter({export:message=>{if(message.name==='a2a' && message.type==='error') errors.push(message.args)}})
       try {
-        const start=()=>apply(ctx,makeConfig({dshHome:home,settlementAuth}))
-        if(settlementAuth==='enforce') expect(start).toThrow('settlementAuth enforce refused: legacy forwarded canvas debts lack receiver facts: old-forwarded')
-        else expect(start).not.toThrow()
+        const config=makeConfig({dshHome:home,settlementAuth,sessionNodes:true})
+        expect(()=>apply(ctx,config)).not.toThrow()
+        expect(config.settlementAuth).toBe(settlementAuth) // do not rewrite caller-owned configuration
+        const port=(ctx as unknown as {webServer:WebServer}).webServer.port
+        const response=await fetch('http://127.0.0.1:'+port+'/__dsh_a2a/state')
+        expect(response.status).toBe(200)
+        const state=await response.json() as any
+        expect(state.settlement.mode).toBe('observe')
+        if(settlementAuth==='enforce'){
+          expect(errors).toEqual([[expect.stringContaining('running observe'),expect.stringContaining('old-forwarded')]])
+          expect(state.settlement.enforceRefused).toEqual({reason:'legacy forwarded canvas debts lack receiver facts',blockers:['old-forwarded']})
+        }else {expect(errors).toEqual([]);expect(state.settlement.enforceRefused).toBeUndefined()}
       } finally {await ctx.fiber.dispose()}
     }
   })

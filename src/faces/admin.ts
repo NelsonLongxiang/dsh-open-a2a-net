@@ -74,6 +74,7 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly cliHomeOptions: (handle: string) => Promise<{ homes: string[]; unreadable: number; held?: true }>
   readonly layoutStore: LayoutStore
   readonly taskLedger: TaskLedger
+  readonly enforceRefused?: { reason: string; blockers: readonly string[] }
   /** #114 S6: observe (lazily) and return the /state `authorization` block. */
   readonly authorizationView: () => unknown
   readonly idempotencyStore: IdempotencyStore
@@ -403,6 +404,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             const roles = archive.flatMap(row => (row.settledBy !== undefined ? [row.settledBy.chain_role] : []))
             return {
               mode: config.settlementAuth,
+              ...(d.enforceRefused !== undefined ? { enforceRefused: d.enforceRefused } : {}),
               enforceBlockers: taskLedger.settlementEnforceBlockers(),
               offChain: roles.filter(r => r === 'off-chain').length,
               legacy: roles.filter(r => r === 'legacy').length,
