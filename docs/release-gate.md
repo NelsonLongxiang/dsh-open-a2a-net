@@ -25,6 +25,15 @@
 
 违反顺序（先 publish 后校验）= 流程事故，须交底并补校验。
 
+**打包源头钉死候选 SHA**（0.6.39 事故）：在候选 PR 合并之前、从冻结 SHA 的干净检出打包，不在合并后的 master 或工作树上打包。
+1. `git checkout <候选 SHA>`；
+2. 确认 `git rev-parse HEAD` 就是候选 SHA，且 `git status --porcelain --ignored -- nexus-stage/scripts` 为空；
+3. build，再 `npm pack`；
+4. `tar -tzf` 列一遍文件，确认不含 `__pycache__`、`.pyc` 和临时件；
+5. 拿这个 tgz 去验收，publish 的也是同一个 tgz。
+
+0.6.39 的 npm 包实际打自合并后的 a2389ba，比 tag 的 bc8f423 多了 #300，另外混进了一个 `.pyc`。
+
 ## 发布面（双 registry）
 
 - **公网 npmjs 为主发布面**：0.6.24（2026-10-22）起有发布记录，README 徽章即指向它；

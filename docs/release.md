@@ -12,6 +12,12 @@
 - **#291 兼容 harness ≥0.2.2-rc**：宿主的 `AgentRegistry` 没有 `roots()` 时，改用 `list()` 按委托深度过滤，会话发布和恢复不再因 TypeError 回滚（历史会话从列表消失的事故）。旧宿主语义不变。
 - 本版无配置默认值变化，无需回滚预案。
 
+**发布偏差（如实记录）**：npm 与 Gitea 上的 0.6.39 tgz（`dist.shasum 4799aa78…`）不是从 tag `v0.6.39`（bc8f423）打包的，而是从合并后的 master a2389ba 打包的，所以包内多了两样东西：
+- #300：早到的转发回执等出生最多 60 秒，超时后照常结算。已评审并合入 master，行为是收紧。
+- `nexus-stage/scripts/__pycache__/mockhost.cpython-312.pyc`：一个无害的多余文件。
+
+tag 不移动，发布物也不撤回。0.6.40 起改为从候选 SHA 的干净检出打包，见 docs/release-gate.md。
+
 ## 0. 0.6.38 转发默认值升级提示
 
 - **状态面 `boundMissRecent`**（#273，#64 关窗前置，0.6.38 起）：列出谁的绑定签名对不上、拨的是哪个 origin，`a2a-net status` 的 `claims` 下显示 `miss` 行。把列出的 origin 加进对应主机的 `originClaimAudiences`。
