@@ -25,10 +25,10 @@ async function cli(home: string, args: string[]) {
     p.on('error', reject); p.on('close', code => resolve({ code, stdout, stderr }))
   })
 }
-async function setup(directLink = true, extraHome = false, replayAtHome = false, latePublish = false) {
+async function setup(directLink = true, extraHome = false, replayAtHome = false, latePublish = false, waitMs?: number, settlementAuth: 'observe' | 'enforce' = 'enforce') {
   const pa = await reservePort(), pb = await reservePort()
   const pc = extraHome ? await reservePort() : undefined
-  const scoped = { sessionNodes: true, teamScopeRouting: true, teamScopeInfo: true, settlementAuth: 'enforce' as const, forwardDirect: true, cardCacheTtlMs: 0 }
+  const scoped = { sessionNodes: true, teamScopeRouting: true, teamScopeInfo: true, settlementAuth, forwardDirect: true, cardCacheTtlMs: 0, ...(waitMs !== undefined ? { flushTimeoutMs: waitMs } : {}) }
   const a = await bootNode({ name: 'A', session: 'receipt-home', team: 'alpha', port: pa, peers: ['http://127.0.0.1:' + pb, ...(replayAtHome && pc !== undefined ? ['http://127.0.0.1:' + pc] : [])], ...scoped })
   const c = pc === undefined ? undefined : await bootNode({ name: 'C', session: 'receipt-namesake', team: 'gamma', port: pc, peers: ['http://127.0.0.1:' + pb, ...(replayAtHome ? [a.baseUrl] : [])], ...scoped })
   const b = await bootNode({ name: 'B', session: 'receipt-target', team: 'beta', agentId: targetId, port: pb, peers: [...(c === undefined ? [] : [c.baseUrl]), a.baseUrl], ...scoped })
@@ -251,6 +251,8 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
         const row = current.archived.find((r: any) => r.taskId === task)
         expect(row).toMatchObject({ outcome: 'completed', forwarded: true, direction: 'outbound', sender: { kind: 'cli', id: handle }, settledBy: { caller: targetHandle } })
         expect(row.settledBy.chain_role).not.toBe('off-chain')
+        expect(row.auth).toMatchObject({ caller: handle, proof: 'cli-identity', ingress: 'wire', target: canvas ? 'beta/canvas/ops' : targetHandle, receipt_target: handle })
+        if (canvas) expect(row.receiverMembers).toContain(targetHandle)
         expect(current.tasks.some((r: any) => r.taskId === task)).toBe(false)
         expect(current.settlement.refusals).toEqual([])
       }, { timeout: 9000, interval: 80 })
@@ -283,10 +285,80 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
       }
     } finally { await a.dispose(); await b.dispose(); if (c !== undefined) await c.dispose() }
   }, 30000)
+  it('#272 an older peer missing delivered_to settles a canvas member under enforce using peer snapshot', async () => {
+    const { a, b, home } = await setup()
+    const original = globalThis.fetch
+    const strip = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const response = await original(url, init)
+      if (String(url) === b.baseUrl + '/a2a/direct' && init?.method === 'POST') {
+        const body = await response.json() as Record<string, unknown>
+        delete body.delivered_to
+        return new Response(JSON.stringify(body), { status: response.status, headers: { 'Content-Type': 'application/json' } })
+      }
+      return response
+    })
+    try {
+      const task = 'direct-272-old-peer-canvas'
+      expect((await cli(home, ['route', 'beta/canvas/ops', 'old peer member reply', '--task', task])).code).toBe(0)
+      await vi.waitFor(async () => {
+        const s = await state(a), row = s.archived.find((row: any) => row.taskId === task)
+        expect(row).toMatchObject({ auth: { caller: handle }, receiverMembers: [targetHandle], settledBy: { caller: targetHandle, chain_role: 'target-member' } })
+        expect(s.settlement.refusals.filter((r: any) => r.taskId === task)).toEqual([])
+      }, { timeout: 5000 })
+    } finally { strip.mockRestore(); await a.dispose(); await b.dispose() }
+  }, 15000)
+
+  it('#272 a late final after a forwarded synchronous wait expires still auto-receipts the original task', async () => {
+    const { a, b, home } = await setup(true, false, false, false, 25000, 'observe')
+    try {
+      const agent = b.agents.agent as any
+      agent.steer = (payload: any) => {
+        b.steered.push(payload)
+        agent.session.events.push({ type: 'user/message', data: { content: typeof payload === 'string' ? [{ type: 'text', text: payload }] : payload.content } })
+        setTimeout(() => { agent.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'late forwarded sync result' }] } } }); b.ctx.emit('agent/status', { agent, status: 'idle' }) }, 16500)
+      }
+      const task = 'direct-272-late-sync'
+      const result = await cli(home, ['route', targetHandle, 'late forwarded sync', '--sync', '--task', task])
+      expect(result.code, result.stderr).not.toBe(0) // the existing transport budget is deliberately hit
+      await vi.waitFor(async () => {
+        const s = await state(a)
+        expect(s.archived.find((row: any) => row.taskId === task)).toMatchObject({ endedBy: 'receipt' })
+        const box = await post(a, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle })
+        expect(box.mail.some((row: any) => row.text.includes('[A2A receipt] task ' + task) && row.text.includes('late forwarded sync result'))).toBe(true)
+      }, { timeout: 7000, interval: 100 })
+    } finally { await a.dispose(); await b.dispose() }
+  }, 30000)
+
+  it('#272 an immediately completed forwarded sync turn still emits its original automatic receipt', async () => {
+    const { a, b, home } = await setup()
+    try {
+      const agent = b.agents.agent as any
+      agent.steer = (payload: any) => {
+        b.steered.push(payload)
+        agent.session.events.push({ type: 'user/message', data: { content: typeof payload === 'string' ? [{ type: 'text', text: payload }] : payload.content } })
+        agent.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'immediate sync product' }] } } })
+        b.ctx.emit('agent/status', { agent, status: 'idle' })
+      }
+      const task = 'direct-272-immediate-sync'
+      expect((await cli(home, ['route', targetHandle, 'instant sync', '--sync', '--task', task])).code).toBe(0)
+      await vi.waitFor(async () => expect((await state(a)).archived.find((row: any) => row.taskId === task)).toMatchObject({ endedBy: 'receipt' }), { timeout: 3000 })
+    } finally { await a.dispose(); await b.dispose() }
+  }, 10000)
+
   it('sync receives B final text through the same authenticated home forwarding path', async () => {
     const { a, b, home } = await setup()
-    try { const result = await cli(home, ['route', targetHandle, 'sync roundtrip', '--sync', '--task', 'direct-receipt-sync']); expect(result.code, result.stderr).toBe(0); expect(result.stdout).toContain('roundtrip completed at B') }
-    finally { await a.dispose(); await b.dispose() }
+    const original = globalThis.fetch
+    const delayReply = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const response = await original(url, init)
+      if (String(url) === b.baseUrl + '/a2a/direct' && init?.method === 'POST') await new Promise(resolve => setTimeout(resolve, 350))
+      return response
+    })
+    try {
+      const result = await cli(home, ['route', targetHandle, 'sync roundtrip', '--sync', '--task', 'direct-receipt-sync'])
+      expect(result.code, result.stderr).toBe(0); expect(result.stdout).toContain('roundtrip completed at B')
+      await vi.waitFor(async () => expect((await state(a)).archived.find((row: any) => row.taskId === 'direct-receipt-sync')).toMatchObject({ endedBy: 'receipt' }), { timeout: 3000 })
+    }
+    finally { delayReply.mockRestore(); await a.dispose(); await b.dispose() }
   }, 30000)
   it('a peer-org canvas alone must not open a return path the home operator never linked', async () => {
     const { a, b, home } = await setup(false)

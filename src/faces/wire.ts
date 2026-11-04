@@ -118,6 +118,7 @@ export interface WireDeps {
   /** gh#224: refuses a new delivery once the target already owes `targetQueueCap` receipts. */
   readonly refuseIfQueueFull: (caller: string, message: string, team: string, taskId: string, mailbox: boolean, res: ServerResponse) => boolean
   /** Settles a receipt; returns the enforce refusal of the row its header names (#139), if any. */
+  readonly waitForForwardBirth: (message: string) => Promise<void>
   readonly settleAndAnnounce: (message: string, settler?: Settler) => SettlementRefusal | undefined
   readonly touchWakeDemand: () => void
   readonly session: string
@@ -146,7 +147,7 @@ export interface WireDeps {
   readonly noColdMatchText: (team: string) => string
   readonly nativeTeamsPrepare: (team: string) => Promise<NativePrepared>
   readonly nativeTeamsRound: (prepared: Extract<NativePrepared, { ok: true }>, team: string, caller: string, message: string, taskId: string | undefined, proofClause: string, external?: AbortSignal, proofHeader?: (team: string, taskId: string, from: string, proofClause: string) => string) => Promise<NativeRoundOutcome>
-  readonly routeIntoAgent: (team: string, message: string, caller: string, taskId?: string, proofClause?: string, directHeader?: (from: string) => string) => Promise<RouteOutcome>
+  readonly routeIntoAgent: (team: string, message: string, caller: string, taskId?: string, proofClause?: string, directHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number) => void) => Promise<RouteOutcome>
 }
 
 /**
@@ -189,7 +190,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     taskLedger,
     refuseIfFlooded,
     refuseIfQueueFull,
-    settleAndAnnounce,
+    settleAndAnnounce, waitForForwardBirth,
     session,
     resolveAgentForTeam,
     parseCanvasTeamName,
@@ -700,6 +701,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // #114 S4: the settler is this delivery's caller, as proven here. A CLI identity's claim URL
           // is not a host's origin (its origin is unconstrained), so it never vouches for one (review of PR #140 P1-2).
           // #139: the claim's card key names the host whatever address spelling it signed with.
+          // The response can race a fast peer receipt. Wait for this exact forwarding birth before judging or acknowledging it.
+          await waitForForwardBirth(message)
           const refusedSettlement = settleAndAnnounce(message, { caller, proof: callerProof, ...settlerClaimFields(claim, originOf), ingress: 'wire' })
           // #139 (design §4.4): every answer this delivery gets carries the refusal.
           if (refusedSettlement !== undefined) withSettlementField(res, refusedSettlement)
@@ -728,6 +731,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           d.touchWakeDemand()
           const forwardMiss = async (original: string): Promise<void> => {
             const result = await d.forwardDirect({ team, message, caller, taskId, contextId, noWait,
+              auth: buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget: caller, receivedAt: admittedAt.at }),
               localCliProof: claim.ok && claim.cli === true && claim.bound && claim.caller === caller, guarded: req.headers['x-a2a-guard'] !== undefined }).catch((error: unknown): A2aRouteResult => ({ ok: false, error: `forwarding unavailable: ${String(error)}`, code: -32000, task_id: taskId }))
             if (!result.ok && result.code !== -32005) idempotencyStore.recordOutcome(taskId, { status: 'failed', error: original + ' — ' + result.error })
             else if (result.ok && result.task_status === 'TASK_STATE_COMPLETED') idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: result.reply })
@@ -932,7 +936,16 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             })()
             return
           }
-          void routeIntoAgent(team, message, caller, taskId, proofClause, directHeader).then(async (outcome) => {
+          let syncTarget: string | undefined
+          // A forwarded synchronous delivery still owes its automatic receipt after the HTTP waiter expires.
+          const syncSteered = req.headers['x-a2a-guard'] === undefined || parseReceipt(message) !== null ? undefined : (target: Agent, floor: number): void => {
+            syncTarget = sessionTeamOf(target)
+            const receiptTarget = callback !== '' ? callback : caller
+            const auth = buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ...(admission.rule === 'remote-ref-cli' && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget, receivedAt: admittedAt.at })
+            taskLedger.trackInbound(taskId, team, receiptTarget, contextId, receiptExpectationOf(receiptTarget) !== 'process-label', briefOf(message), auth, syncTarget === team ? undefined : syncTarget)
+            armReceiptAutosend(target, taskId, receiptTarget, message, floor)
+          }
+          void routeIntoAgent(team, message, caller, taskId, proofClause, directHeader, undefined, syncSteered).then(async (outcome) => {
             if (!outcome.ok && outcome.localMiss) { await forwardMiss(outcome.error); return }
             recordActivity('in', team, caller, outcome.ok)
             // W7 slice-2 hook 1: record the settled outcome on the claim row.
@@ -958,7 +971,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 team,
                 session,
                 result: { text: outcome.reply },
-                ...(req.headers['x-a2a-guard'] !== undefined ? ((target) => target === undefined ? {} : { delivered_to: sessionTeamOf(target) })(resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))) : {}),
+                ...(syncTarget !== undefined ? { delivered_to: syncTarget } : {}),
                 task_id: taskId,
                 context_id: contextId,
                 task_status: outcome.status ?? 'TASK_STATE_COMPLETED',

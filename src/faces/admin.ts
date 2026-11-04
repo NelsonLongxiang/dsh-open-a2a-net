@@ -331,6 +331,9 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, status: task.status,
               direction: task.direction ?? 'outbound', receiptExpected: task.receiptExpected !== false,
               ...(task.answeredAt !== undefined ? { answeredAt: task.answeredAt } : {}),
+              ...(task.forwarded === true ? { forwarded: true } : {}),
+              ...(task.deliveredTo !== undefined ? { deliveredTo: task.deliveredTo } : {}),
+              ...(task.receiverMembers !== undefined ? { receiverMembers: task.receiverMembers } : {}),
               // The dispatch brief rides every row: a task id and a team
               // say nothing about WHAT is owed — supervision cannot tell
               // a nudge from an abandon without it.
@@ -383,6 +386,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             ...(row.summary !== undefined && row.summary !== '' ? { summary: row.summary.slice(0, 160) } : {}),
             ...(row.sender !== undefined ? { sender: row.sender } : {}),
             ...(row.forwarded === true ? { forwarded: true } : {}),
+            ...(row.deliveredTo !== undefined ? { deliveredTo: row.deliveredTo } : {}),
+            ...(row.receiverMembers !== undefined ? { receiverMembers: row.receiverMembers } : {}),
             ...(row.auth !== undefined ? { auth: row.auth } : {}),
             // #114 S4: who settled it and how they stood on the chain.
             ...(row.settledBy !== undefined ? { settledBy: row.settledBy } : {}),
