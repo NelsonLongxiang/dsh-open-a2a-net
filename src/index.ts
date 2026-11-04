@@ -2429,6 +2429,7 @@ export function apply(ctx: Context, config: Config): void {
       // session has no product, and hook 3 would otherwise ledger the
       // placeholder as one on the same-node loop-back.
       if (placeholder === true) return
+      taskLedger.markAnswered(taskId, sessionTeamOf(target))
       // Idempotency: a row THIS ledger tracks must still be pending
       // (settled/dead rows never re-send). A foreign task id (an inbound
       // route the caller tracks on ITS node) has no local row — the final
@@ -3675,6 +3676,9 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // node team when it has joined, else the node label), so the receiver
       // can answer with one a2a_route instead of an unroutable display label.
       a2aJoinGateRefusal(agent === undefined ? undefined : { agent })
+      // A target-authored receipt attempt answers its own work even if scope/transport later refuses delivery.
+      const answer = parseReceipt(args.message)
+      if (agent !== undefined && answer !== null) taskLedger.markAnswered(answer.taskId, sessionTeamOf(agent))
       // S3 (team-scoped routing, phase-2 default ON per the 2026-09-01 owner
       // ruling; set false to restore the open outbound seam): a session
       // caller must have declared membership in the target team before it

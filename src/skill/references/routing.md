@@ -40,6 +40,10 @@ polling `a2a_teams` cannot see another host's ledger.
   when known. `archivedCount` and `archivedSplit` (count per outcome) cover
   the whole archive.
 
+## Queue capacity is not receipt debt
+
+A pending row with `answeredAt` records that its actual local target produced a task-attributed final or attempted its own formal receipt. It no longer occupies the `targetQueueCap` limit, even if the caller CLI expired and receipt delivery failed. It is **still pending receipt debt**: do not abandon it just to free capacity, or claim the sender received it. Dead-letter expiry, late receipts and lifetime conservation continue unchanged. State session `queued` and the board both use the same unanswered-row count; unfinished work still counts against the default cap of three. Unrelated agents, unrelated finals and host timeout placeholders cannot mark an answer.
+
 ## Idempotency
 
 A route carries a fingerprint (caller + message + team + wait-mode). Re-

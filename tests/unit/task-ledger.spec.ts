@@ -22,6 +22,41 @@ async function tickPastTtl(ms: number): Promise<void> {
 }
 
 describe('TaskLedger registration and listing', () => {
+  it('answeredAt is target-bound, persisted, idempotent, and neither settlement nor a conservation event', () => {
+    let now = 100
+    const path = ledgerPath()
+    const ledger = new TaskLedger(path, { now: () => now, staleTtlMs: 1000 })
+    ledger.trackInbound('answered', 'dsh/canvas/ops', 'cli/aabbccddeeff0011', undefined, true, undefined, undefined, 'dsh/01234567')
+    ledger.track('remote', 'peer/01234567', 'https://peer')
+    let counters = ledger.conservation()
+    expect(ledger.markAnswered('answered', 'dsh/99999999')).toBe(false)
+    expect(ledger.markAnswered('remote', 'peer/01234567')).toBe(false)
+    expect(ledger.markAnswered('unknown', 'dsh/01234567')).toBe(false)
+    ledger.track('local-answer', 'dsh/canvas/local', 'local', undefined, undefined, undefined, { deliveredTo: 'dsh/22223333' })
+    expect(ledger.markAnswered('local-answer', 'dsh/canvas/local')).toBe(false)
+    expect(ledger.markAnswered('local-answer', 'dsh/22223333')).toBe(true)
+    counters = ledger.conservation()
+    expect(ledger.markAnswered('answered', 'dsh/01234567')).toBe(true)
+    now = 200
+    expect(ledger.markAnswered('answered', 'dsh/01234567')).toBe(false)
+    expect(ledger.conservation()).toEqual(counters)
+    const restored = new TaskLedger(path, { now: () => now, staleTtlMs: 1000 })
+    expect(restored.find('answered')).toMatchObject({ status: 'pending', answeredAt: 100 })
+    now = 1200
+    expect(restored.list().find(row => row.taskId === 'answered')).toMatchObject({ status: 'dead', answeredAt: 100 })
+    restored.resolveFromMessage('[A2A receipt] task answered completed later')
+    expect(restored.archive().find(row => row.taskId === 'answered')).toMatchObject({ answeredAt: 100, summary: 'completed later' })
+    expect(restored.conservation().conserved).toBe(true)
+  })
+  it('drops malformed answered timestamps on restore rather than suppressing queue capacity', () => {
+    const path = ledgerPath()
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, JSON.stringify({ tasks: [null, -1, '1'].map((answeredAt, i) => ({ taskId: 'bad-' + i, team: 'dsh/01234567', peer: 'local:caller', direction: 'inbound', status: 'pending', startedAt: 100, answeredAt })) }))
+    const ledger = new TaskLedger(path, { now: () => 100 })
+    expect(ledger.list()).toHaveLength(3)
+    expect(ledger.list().every(row => row.answeredAt === undefined)).toBe(true)
+  })
+
   it('tracks a pending task with its routing facts, most recent first', () => {
     const ledger = new TaskLedger('')
     ledger.track('direct-aa', 'team/x', 'local')

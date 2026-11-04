@@ -160,9 +160,10 @@ function withAuth(raw: unknown, entry: { direction?: unknown; team?: unknown; pe
   return auth.ingress === 'local' && entry.peer === 'local' ? { auth } : {}
 }
 
-/** #139: the routing facts settlement reads, copied between a row and its archive entry. */
-function routingOf(row: Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded'>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded'> {
+/** Routing and answer facts copied unchanged between a row and its archive entry. */
+function routingOf(row: Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt'>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt'> {
   return {
+    ...(row.answeredAt !== undefined ? { answeredAt: row.answeredAt } : {}),
     ...(row.forwarded === true ? { forwarded: true as const } : {}),
     ...(row.peerKey !== undefined ? { peerKey: row.peerKey } : {}),
     ...(row.peerHost !== undefined ? { peerHost: row.peerHost } : {}),
@@ -203,10 +204,11 @@ const ROUTING_FACT_CAP = 256
  * a remote outbound row; anything else is dropped (the row survives as one
  * born before the fields, judged by current membership and origin).
  */
-function withRouting(entry: Record<string, unknown>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded'> {
+function withRouting(entry: Record<string, unknown>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt'> {
   const fact = (v: unknown): v is string => typeof v === 'string' && v !== '' && v.length <= ROUTING_FACT_CAP
   const remoteOutbound = entry.direction === 'outbound' && typeof entry.peer === 'string' && entry.peer !== 'local' && !entry.peer.startsWith('local:')
   return {
+    ...(typeof entry.answeredAt === 'number' && Number.isFinite(entry.answeredAt) && entry.answeredAt >= 0 ? { answeredAt: entry.answeredAt } : {}),
     ...(remoteOutbound && entry.forwarded === true ? { forwarded: true as const } : {}),
     ...(remoteOutbound && fact(entry.peerKey) ? { peerKey: entry.peerKey } : {}),
     ...(remoteOutbound && fact(entry.peerHost) ? { peerHost: entry.peerHost } : {}),
@@ -257,6 +259,8 @@ export interface TaskRecord {
   readonly peerHost?: string
   /** #139: the member that actually received the task (canvas / bare-zone deliveries). */
   readonly deliveredTo?: string
+  /** Local target has produced an answer; still owed until receipt delivery/settlement, but no longer queued. */
+  answeredAt?: number
   status: TaskStatus
   /** When the row was swept to dead-letter (absent while pending). */
   deadAt?: number
@@ -313,6 +317,8 @@ export interface ArchivedRecord {
   readonly peerKey?: string
   readonly peerHost?: string
   readonly deliveredTo?: string
+  /** Local answer time retained as audit metadata, independent of resolution time. */
+  readonly answeredAt?: number
   /** #114 S4: who settled the row (receipt and echo ends), and their chain role. */
   readonly settledBy?: SettledBy
 }
@@ -616,6 +622,15 @@ export class TaskLedger {
     }, ...this.tasks]
     this.trimOwed()
     this.persist()
+  }
+
+  /** Record an answer only from the local member that actually received this row; never settle or change counters. */
+  markAnswered(taskId: string, target: string): boolean {
+    const row = this.tasks.find(entry => entry.taskId === taskId)
+    if (row === undefined || !(row.direction === 'inbound' || row.peer === 'local') || (row.deliveredTo ?? row.team) !== target || row.answeredAt !== undefined) return false
+    row.answeredAt = this.now()
+    this.persist()
+    return true
   }
 
   /**
