@@ -14,7 +14,22 @@ export interface ForwardRequest {
 /** Birth barrier exists only for eligible, actively dispatched tasks; receipts never reserve a slot. */
 export class ForwardBirths {
   private readonly pending = new Map<string, Promise<void>>()
-  wait(taskId: string): Promise<void> | undefined { return this.pending.get(taskId) }
+  /**
+   * Wait for a birth row, bounded by an INDEPENDENT deadline (#298: previously the
+   * waiter could hang for candidates × (15s sync window + recovery query) with no
+   * budget of its own). The deadline only ends the WAIT: settlement afterwards is
+   * judged by the normal rules — a timeout never counts as the row being born, and
+   * a late birth still lands and settles by its own receipts.
+   */
+  static readonly WAIT_BUDGET_MS = 10_000
+  wait(taskId: string): Promise<void> | undefined {
+    const pending = this.pending.get(taskId)
+    if (pending === undefined) return undefined
+    return new Promise<void>(resolve => {
+      const timer = setTimeout(resolve, ForwardBirths.WAIT_BUDGET_MS)
+      void pending.finally(() => { clearTimeout(timer); resolve() })
+    })
+  }
   begin(taskId: string): (() => void) | undefined {
     if (this.pending.size >= 64 || this.pending.has(taskId)) return undefined
     let release!: () => void

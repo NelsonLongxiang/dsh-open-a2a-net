@@ -14,6 +14,46 @@ function fixture(results: A2aRouteResult[] = [ok]) {
   }
   return { deps, ledger, sent }
 }
+describe('#298 ForwardBirths wait budget', () => {
+  it('an unknown task resolves immediately (no pending forward to wait for)', async () => {
+    const births = new ForwardBirths()
+    const started = Date.now()
+    await births.wait('direct-unknown')
+    expect(Date.now() - started).toBeLessThan(1_000)
+  })
+  it('a stuck pending forward resolves within the independent budget, not candidates × 15s', async () => {
+    vi.useFakeTimers()
+    try {
+      const births = new ForwardBirths()
+      const release = births.begin('direct-stuck')
+      expect(release).toBeTypeOf('function')
+      let settled = false
+      const waiter = births.wait('direct-stuck')!.then(() => { settled = true })
+      await vi.advanceTimersByTimeAsync(ForwardBirths.WAIT_BUDGET_MS - 1)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      await waiter
+      expect(settled).toBe(true)
+      // A late birth still lands and deletes its slot; a further wait is immediate.
+      release!()
+      const started = Date.now()
+      await births.wait('direct-stuck')
+      expect(Date.now() - started).toBeLessThan(1_000)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('a birth that lands before the budget resolves the waiter early, once', async () => {
+    const births = new ForwardBirths()
+    const release = births.begin('direct-fast')!
+    let settled = false
+    const waiter = births.wait('direct-fast')!.then(() => { settled = true })
+    release()
+    await waiter
+    expect(settled).toBe(true)
+  })
+})
+
 describe('one-hop CLI forwarding', () => {
   it('#282 S2: an owner-qualified canvas id reaches candidates as-is, while scope, the peer, receivers and the ledger see the plain team', async () => {
     const x = fixture()
