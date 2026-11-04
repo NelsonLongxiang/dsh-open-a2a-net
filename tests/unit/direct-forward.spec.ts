@@ -15,6 +15,18 @@ function fixture(results: A2aRouteResult[] = [ok]) {
   return { deps, ledger, sent }
 }
 describe('one-hop CLI forwarding', () => {
+  it('#282 S2: an owner-qualified canvas id reaches candidates as-is, while scope, the peer, receivers and the ledger see the plain team', async () => {
+    const x = fixture()
+    const team = 'beta/canvas/ops'
+    const seen: { scope?: string; candidates?: string } = {}
+    x.deps.scope = async (_caller, t) => { seen.scope = t; return { ok: true } }
+    x.deps.candidates = async (t) => { seen.candidates = t; return { urls: ['https://peer.test'], card: async () => ({ publicKey: 'key', session: 'host', canvasOrg: [{ team, name: 'ops', members: [request.caller, 'beta/aaaaaaaa'] }] } as A2aPeerCard) } }
+    const out = await createDirectForward(x.deps)({ ...request, team: team + '@abcdef12', noWait: true })
+    expect(out.ok).toBe(true)
+    expect(seen).toEqual({ scope: team, candidates: team + '@abcdef12' })
+    expect(x.sent[0]!.request.team).toBe(team)
+    expect(x.ledger.list()[0]).toMatchObject({ team, receiverMembers: ['beta/aaaaaaaa'] })
+  })
   it('#275 exactly 64 eligible dispatches wait for birth; 65th carries task_id, gates retain precedence and released slots recover', async () => {
     const x = fixture(), pending: Array<() => void> = []
     let dispatched=0

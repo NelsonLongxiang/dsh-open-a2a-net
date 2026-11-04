@@ -17,6 +17,7 @@ import type WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { A2aPeerCard, A2aRouteResult } from '../types.ts'
 import type { ForwardRequest } from '../direct-forward.ts'
 import { CanvasStore, isRemoteMemberRef, validRemoteMemberRef } from '../canvas-store.ts'
+import { splitCanvasOwner } from '../canvas-id.ts'
 import { CLI_HANDLE_RE, type CliDepositStore } from '../cli-deposit.ts'
 import type { IdempotencyStore } from '../idempotency-store.ts'
 import type { JoinedSessions } from '../joined-store.ts'
@@ -97,6 +98,8 @@ export interface WireDeps {
   readonly idempotencyStore: IdempotencyStore
   readonly verifyOriginClaim: (req: IncomingMessage, options?: { readonly cli?: boolean; readonly rawBody?: Uint8Array }) => Promise<OriginClaimResult>
   readonly forwardDirect: (request: ForwardRequest) => Promise<A2aRouteResult>
+  /** #282 S2: this host's canvas owner fingerprint. */
+  readonly ownCanvasFingerprint: string
   readonly diagnoseCanvas: (team: string, reason: string, caller?: string) => Promise<string>
   readonly remoteCliProof: (handle: string, claim: Extract<OriginClaimResult, { ok: true }>) => Promise<RemoteCliProof | undefined>
   readonly callerLinkedToThisHost: (caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined) => boolean
@@ -581,7 +584,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
               return
             }
           }
-          const team = typeof body.team === 'string' ? body.team : ''
+          // #282 S2: our own `<canvas>@<fp8>` is our canvas; a foreign suffix stays for the forward walk.
+          const ownerQualified = splitCanvasOwner(typeof body.team === 'string' ? body.team : '')
+          const team = ownerQualified.owner !== undefined && ownerQualified.owner === d.ownCanvasFingerprint ? ownerQualified.team : typeof body.team === 'string' ? body.team : ''
           const message = typeof body.message === 'string' ? body.message : ''
           const caller = typeof body.caller_session === 'string' ? body.caller_session : ''
           // P2 receipt-callback: where THIS node's receipt should route on

@@ -878,13 +878,13 @@ async function printDelivery(verb, res) {
 function stateCanvasTeams(s) {
   const rows = []
   const owner = String(s.ownerHost ?? home())
-  for (const team of s.canvas?.teams ?? []) rows.push({ team: String(team.team ?? String(s.zone ?? 'dsh') + '/canvas/' + team.name), name: String(team.name), kind: 'canvas', owner, memberCount: (team.members ?? []).length, where: 'local canvas', members: (team.members ?? []).map(m => typeof m === 'string' ? m : m.team ?? m.id) })
+  for (const team of s.canvas?.teams ?? []) rows.push({ team: String(team.id ?? team.team ?? String(s.zone ?? 'dsh') + '/canvas/' + team.name), name: String(team.name), kind: 'canvas', owner, memberCount: (team.members ?? []).length, where: 'local canvas', members: (team.members ?? []).map(m => typeof m === 'string' ? m : m.team ?? m.id) })
   const seen = new Set()
   for (const peer of s.peerOrg ?? []) for (const team of peer.org ?? []) {
     const key = String(peer.url) + ':' + String(team.team)
     if (seen.has(key)) continue
     seen.add(key)
-    rows.push({ team: String(team.team), name: String(team.name), kind: 'canvas', owner: String(peer.url), memberCount: (team.members ?? []).length, where: 'remote canvas', members: team.members ?? [] })
+    rows.push({ team: String(team.id || team.team), name: String(team.name), kind: 'canvas', owner: String(peer.url), memberCount: (team.members ?? []).length, where: 'remote canvas', members: team.members ?? [] })
   }
   return rows
 }

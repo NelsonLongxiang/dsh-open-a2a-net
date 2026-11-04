@@ -2,6 +2,7 @@
 import { DEFAULT_HOP_BUDGET, guardHeader, mintGuard } from './recursion-guard.ts'
 import { briefOf, type OutboundBirth, type TaskLedger } from './task-ledger.ts'
 import { parseReceipt } from './receipt.ts'
+import { splitCanvasOwner } from './canvas-id.ts'
 import type { TaskAuthorization } from './task-auth.ts'
 import type { A2aPeerCard, A2aRouteResult } from './types.ts'
 
@@ -41,7 +42,9 @@ export function createDirectForward(d: DirectForwardDeps) {
     if (d.isolated()) return refuse('host is isolated', 'this host forwards nothing while isolated; deposit the CLI on another home host')
     if (request.guarded) return refuse('an inbound X-A2A-Guard is present; already forwarded')
     if (!request.localCliProof || !d.deposited(request.caller)) return refuse('caller is not a proven online local CLI deposit', publish)
-    const scope = await d.scope(request.caller, request.team)
+    // #282 S2: candidates honour an owner-qualified id; scope, the peer, the receivers and the ledger see the plain team.
+    const plainTeam = splitCanvasOwner(request.team).team
+    const scope = await d.scope(request.caller, plainTeam)
     if (!scope.ok) return refuse('target is outside sender scope: ' + scope.error, `ask this host's operator to link ${request.team} here: drag it (or one of its members) into a canvas team on this host`)
     const failures: string[] = []
     const directory = await d.candidates(request.team, failures, request.caller)
@@ -49,8 +52,8 @@ export function createDirectForward(d: DirectForwardDeps) {
     for (const url of directory.urls) {
       if (!d.deposited(request.caller)) return refuse('local CLI deposit expired before dispatch', publish)
       const peerCard = await directory.card(url)
-      const receivers = request.team.includes('/canvas/') ? peerCard?.canvasOrg?.find(row => row.team === request.team)?.members.filter(member => member !== request.caller) : undefined
-      if (request.team.includes('/canvas/')) {
+      const receivers = plainTeam.includes('/canvas/') ? peerCard?.canvasOrg?.find(row => row.team === plainTeam)?.members.filter(member => member !== request.caller) : undefined
+      if (plainTeam.includes('/canvas/')) {
         if (receivers === undefined || receivers.length === 0 || receivers.some(member => !d.memberLinked(member))) {
           failures.push(url + ': forwarding a canvas requires a direct operator link to every receiving member for its receipt return path')
           continue
@@ -62,9 +65,9 @@ export function createDirectForward(d: DirectForwardDeps) {
       if (release === undefined) return refuse('forward receipt correlation capacity is full', 'wait for in-flight forwards to settle, then send again with a new task id')
       try {
         // The same selected-peer snapshot supplies both return-link gate and settlement birth.
-        const answer = await d.dispatch(url, request, guard)
+        const answer = await d.dispatch(url, plainTeam === request.team ? request : { ...request, team: plainTeam }, guard)
         const result = !answer.ok && answer.ownBudgetExhausted === true ? { ...answer, code: -32005 } : answer
-        d.activity(request.team, url, result.ok)
+        d.activity(plainTeam, url, result.ok)
         if (result.ok || result.code === -32005) {
           // A receipt owes no receipt; native bridge rounds have no A2A receipt contract.
           // Match routeTrunk/trackOwedTask rather than manufacturing an unpayable debt.
@@ -73,8 +76,8 @@ export function createDirectForward(d: DirectForwardDeps) {
           const deliveredTo = result.ok ? result.deliveredTo : undefined
           const birth: OutboundBirth = { forwarded: true, ...(request.auth !== undefined ? { auth: request.auth } : {}), ...(peerCard?.publicKey ? { peerKey: peerCard.publicKey } : {}), ...(peerCard?.session ? { peerHost: peerCard.session } : {}), ...(deliveredTo !== undefined ? { deliveredTo } : {}), ...(receivers !== undefined ? { receiverMembers: receivers } : {}) }
           // Exactly one outbound row. A completed sync response is receiptless bookkeeping.
-          if (result.ok && (result.task_status === 'TASK_STATE_COMPLETED' || result.receipt === 'none')) d.ledger.trackReceiptless(request.taskId, request.team, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
-          else d.ledger.track(request.taskId, request.team, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
+          if (result.ok && (result.task_status === 'TASK_STATE_COMPLETED' || result.receipt === 'none')) d.ledger.trackReceiptless(request.taskId, plainTeam, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
+          else d.ledger.track(request.taskId, plainTeam, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
           return result
         }
         // The shared dispatcher's sync recovery query may prove a definitive failed

@@ -44,6 +44,8 @@ model tools.
 
 ## Team display names
 
+Canvas rows in `a2a-net teams` carry an owner-qualified id, `<zone>/canvas/<name>@<fp8>` (the first 8 hex of sha256 over the owner card's public key; #282). Route to that id to pick one owner when several hosts have a canvas of the same name; a bare `<zone>/canvas/<name>` still routes as before (this host's own canvas first, refused as ambiguous when several remote owners match). Your own fingerprint names your own canvas; an id nobody's key matches reaches no one. The id survives a change of the owner's address.
+
 `a2a-net teams <query>` searches the owner-set seat label as well as the route handle; `--json` exposes the effective display name. Local rows prefer `seatName`, then the current title (`name`), then the legacy label. Only the human workbench owner panel/config can set `seatNames`; the CLI has no naming command.
 
 ## Tasks: ledger and host observability
