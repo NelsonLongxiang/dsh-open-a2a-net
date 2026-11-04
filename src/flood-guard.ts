@@ -100,7 +100,9 @@ export function createFloodGuard(
     const error = 'flood-guard: ' + reason + ' (gh#91): file data must use an independent channel; no delivery occurred' + (advice === undefined ? '' : '; use-file-channel: ' + advice.message)
     outcomes.recordOutcome(taskId, { status: 'failed', error })
     recordActivity('in', team, caller, false)
-    const payload = JSON.stringify({ error, reason, code: WIRE_ERROR_RATE_LIMITED, task_id: taskId, team, delivered: false, task_status: 'TASK_STATE_FAILED' })
+    // #282 S1: one next step — file bytes go through the file channel, never chat messages.
+    const next = 'send file data with a2a_file_send / `a2a-net file send <path> <team>` instead of message chunks; resend other text as one message with a new task id'
+    const payload = JSON.stringify({ error, reason, code: WIRE_ERROR_RATE_LIMITED, task_id: taskId, team, delivered: false, task_status: 'TASK_STATE_FAILED', next })
     res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
     res.end(payload)
     return true

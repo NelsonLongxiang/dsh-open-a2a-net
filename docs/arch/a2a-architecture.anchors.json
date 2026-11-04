@@ -18,7 +18,7 @@
     "nexus-stage/src/world.ts": "e9d759ed5bb5272f5798260450927e453f00fe442c8006e7037d2eb2db0d0f81",
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
-    "src/flood-guard.ts": "037a5e6f9bfb7f26b0584dadc6cf03acad7c101736259da76805daec7e47583e",
+    "src/flood-guard.ts": "b4f92c9ce3237019ab3c7ab71f0624c3306e8c316cb15d119d4e7c57f65e604f",
     "src/faces/wire.ts": "9e78549ddaad0136dbd962872cee0f5299551061840a4ddb9be4d31305c46e3c",
     "src/faces/canvas-notify.ts": "4d06ea71c72f5a0fd200fbc7cc32c62cfd367af054c22f284be3d242919c1358",
     "src/task-auth.ts": "db8218c9a07bc6d3f6aa63a9652c8da73a5f78f8224b5c9645ae5708934a7ca2",

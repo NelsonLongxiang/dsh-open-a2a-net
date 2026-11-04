@@ -39,6 +39,8 @@ describe('gh#91 authenticated direct flood brake', () => {
     const calls = n.steered.length
     const refused = await post(n, 'rate-17')
     expect(refused.body).toMatchObject({ code: -32008, reason: 'sender-rate-limited', task_id: 'rate-17' })
+    // #282 S1: one next step rides with the refusal.
+    expect(String((refused.body as Record<string, unknown>).next)).toContain('a2a_file_send')
     expect(n.steered).toHaveLength(calls)
     const fingerprint = peerPayloadFingerprint({ caller: 'dsh', message: 'ordinary request', noWait: false, team: 'dsh/01234567' })
     const query = await fetch(n.baseUrl + '/a2a/query', { method: 'POST', body: JSON.stringify({ task_id: 'rate-17', fingerprint }) }).then(r => r.json())
