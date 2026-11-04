@@ -115,14 +115,11 @@ Do section 1 on both hosts first. Then the **owner**, on BOTH hosts:
 
 ## 3. Beyond direct peers (A cannot reach C)
 
-Host-to-host forwarding is **not shipped yet**. Today a delivery reaches only
-the host it is sent to:
-- `/a2a/direct` never relays.
-- A session's `a2a_route` dials the host that publishes the team.
-- #57 Plan A (host forwarding) is designed. Its prerequisite #60 hop budget
-  has landed at ingress.
+Home-host one-hop forwarding shipped in 0.6.34 and defaults **on from 0.6.38**. Explicit `forwardDirect: false` restores local-only CLI delivery. It only follows a local miss for a bound-signed, online CLI deposited on that home, inside the unchanged sender scope. A must directly link B's receiving member (all advertised potential receivers for a canvas), and B must link the CLI and pin A as home. The home must not be isolated and any inbound Guard prevents a second forward. The outbound hop budget remains DEFAULT-1. No links are auto-created or relaxed.
 
-Until forwarding ships, pick one:
+Long forwarded work should use async `route` plus `inbox --wait --renew`, not expect a 15s `--sync` transport window to cover an entire model turn. A late final still produces the original task's receipt, and the forwarded row keeps selected-peer receiver facts for enforced settlement.
+
+Other connectivity options (not authority bypasses):
 
 1. **Make it a peer pair.** Open a tunnel or port-forward so A reaches C,
    then do section 2 for A↔C. This is the simplest and keeps receipts
@@ -139,8 +136,7 @@ Until forwarding ships, pick one:
 ## 4. Callers outside a session
 
 Scripts and terminals use the `a2a-net` CLI: deposit on ONE home host, read
-a mailbox, no wake. The same rule applies: the CLI reaches only teams on its
-home host. See [cli.md](cli.md).
+a mailbox, no wake. The home can forward eligible requests one hop under section 3; an online deposit alone grants no remote scope. See [cli.md](cli.md).
 
 ## 5. Symptom → step
 

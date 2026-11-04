@@ -24,6 +24,39 @@ const local = (caller: string): Settler => ({ caller, proof: 'in-process', ingre
 const wire = (caller: string, proof: Settler['proof'] = 'origin-claim', claimOrigin?: string): Settler => ({ caller, proof, ingress: 'wire', ...(claimOrigin !== undefined ? { claimOrigin } : {}) })
 
 describe('#122 judgeSettlement', () => {
+  it('#272 forwarded canvases use selected peer receiver snapshot, never a local same-name canvas', () => {
+    const row = { ...outbound, team: 'dsh/canvas/remote', forwarded: true as const, peerKey: 'peer-key', receiverMembers: ['dsh/11112222'] }
+    const f = facts({ membersOf: () => ['dsh/99999999'] })
+    expect(judgeSettlement(row, wire('dsh/11112222', 'origin-claim', row.peer), f)).toEqual({ ok: true, role: 'target-member' })
+    expect(judgeSettlement(row, wire('dsh/99999999', 'origin-claim', row.peer), f)).toEqual({ ok: false, reason: 'settler-off-chain' })
+    expect(judgeSettlement(row, wire('dsh/11112222', 'origin-claim', 'http://impostor'), f)).toEqual({ ok: false, reason: 'settler-off-chain' })
+    expect(judgeSettlement({ ...row, deliveredTo: 'dsh/33334444' }, wire('dsh/11112222', 'origin-claim', row.peer), f)).toEqual({ ok: false, reason: 'settler-off-chain' })
+    expect(judgeSettlement({ ...row, receiverMembers: undefined }, wire('dsh/99999999', 'origin-claim', row.peer), f)).toEqual({ ok: false, reason: 'settler-off-chain' })
+  })
+  it('#272 forwarded CLI admission and peer receivers survive restart and reject unrelated same-origin/local-canvas members', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'forward-auth-')), 'tasks.json')
+    const team = 'dsh/canvas/remote', caller = 'review-seat/aabbccddeeff0011'
+    const a = buildAuthorization({ ok: true, via: 'cli-deposit', rule: 'cli-deposit', basis: [] }, { caller, proof: 'cli-identity', claim: { caller, origin: 'http://home' }, ingress: 'wire', allowlistVersion: 'al1:0123456789abcdef', target: team, receiptTarget: caller, receivedAt: 1 })
+    const l = new TaskLedger(path)
+    l.track('forwarded-audit', team, 'http://peer', undefined, undefined, { kind: 'cli', id: caller }, { forwarded: true, auth: a, peerKey: 'peer-key', peerHost: 'peer-host', receiverMembers: ['dsh/11112222'] })
+    const restored = new TaskLedger(path)
+    expect(restored.find('forwarded-audit')).toMatchObject({ auth: a, receiverMembers: ['dsh/11112222'], forwarded: true })
+    expect(Object.isFrozen(restored.find('forwarded-audit')!.receiverMembers)).toBe(true)
+    const noKey = new TaskLedger('')
+    noKey.track('no-peer-key', team, 'http://peer', undefined, undefined, { kind: 'cli', id: caller }, { forwarded: true, receiverMembers: ['dsh/11112222'] })
+    expect(noKey.find('no-peer-key')!.receiverMembers).toBeUndefined()
+    const malformed = new TaskLedger('')
+    malformed.track('bad-receivers', team, 'http://peer', undefined, undefined, { kind: 'cli', id: caller }, { forwarded: true, peerKey: 'peer-key', receiverMembers: ['dsh/canvas/remote'] })
+    expect(malformed.find('bad-receivers')!.receiverMembers).toBeUndefined()
+    const f = facts({ membersOf: () => ['dsh/99999999'] })
+    const j = (who: string): SettlementJudge => ({ enforce: true, settler: { caller: who, proof: 'origin-claim', ingress: 'wire' }, check: (row, echo) => judgeSettlement(row, wire(who, 'origin-claim', 'http://peer'), { ...f, echo }) })
+    expect(restored.resolveFromMessage('[A2A receipt] task forwarded-audit done', j('dsh/99999999'))).toBeUndefined()
+    expect(restored.resolveFromMessage('[A2A receipt] task forwarded-audit done', j('dsh/11112222'))).toBeDefined()
+    const archive = new TaskLedger(path).archive()[0]!
+    expect(archive).toMatchObject({ auth: a, receiverMembers: ['dsh/11112222'], settledBy: { chain_role: 'target-member' } })
+    expect(restored.conservation().conserved).toBe(true)
+  })
+
   it('legacy: an inbound row born before S2 is allowed and labelled', () => {
     expect(judgeSettlement({ ...inbound, auth: undefined }, wire('anyone'), facts())).toEqual({ ok: true, role: 'legacy' })
   })

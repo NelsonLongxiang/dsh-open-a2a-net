@@ -2,11 +2,13 @@
 import { DEFAULT_HOP_BUDGET, guardHeader, mintGuard } from './recursion-guard.ts'
 import { briefOf, type OutboundBirth, type TaskLedger } from './task-ledger.ts'
 import { parseReceipt } from './receipt.ts'
+import type { TaskAuthorization } from './task-auth.ts'
 import type { A2aPeerCard, A2aRouteResult } from './types.ts'
 
 export interface ForwardRequest {
   team: string; message: string; caller: string; taskId: string; contextId?: string; noWait: boolean
   localCliProof: boolean; guarded: boolean
+  auth?: TaskAuthorization
 }
 export interface DirectForwardDeps {
   enabled(): boolean
@@ -33,15 +35,15 @@ export function createDirectForward(d: DirectForwardDeps) {
     const guard = guardHeader({ ...mintGuard(), hopBudget: DEFAULT_HOP_BUDGET - 1 })
     for (const url of directory.urls) {
       if (!d.deposited(request.caller)) return refuse('local CLI deposit expired before dispatch')
+      const peerCard = await directory.card(url)
+      const receivers = request.team.includes('/canvas/') ? peerCard?.canvasOrg?.find(row => row.team === request.team)?.members.filter(member => member !== request.caller) : undefined
       if (request.team.includes('/canvas/')) {
-        const card = await directory.card(url)
-        const org = card?.canvasOrg?.find(row => row.team === request.team)
-        const receivers = org?.members.filter(member => member !== request.caller) ?? []
-        if (receivers.length === 0 || receivers.some(member => !d.memberLinked(member))) {
+        if (receivers === undefined || receivers.length === 0 || receivers.some(member => !d.memberLinked(member))) {
           failures.push(url + ': forwarding a canvas requires a direct operator link to every receiving member for its receipt return path')
           continue
         }
       }
+      // The same selected-peer snapshot supplies both return-link gate and settlement birth.
       const answer = await d.dispatch(url, request, guard)
       const result = !answer.ok && answer.ownBudgetExhausted === true ? { ...answer, code: -32005 } : answer
       d.activity(request.team, url, result.ok)
@@ -50,8 +52,8 @@ export function createDirectForward(d: DirectForwardDeps) {
         // Match routeTrunk/trackOwedTask rather than manufacturing an unpayable debt.
         if (parseReceipt(request.message) !== null) return { ...result, receipt: 'none' }
         if (result.ok && result.bridge !== undefined) return { ...result, receipt: 'none' }
-        const card = await directory.card(url)
-        const birth: OutboundBirth = { forwarded: true, ...(card?.publicKey ? { peerKey: card.publicKey } : {}), ...(card?.session ? { peerHost: card.session } : {}), deliveredTo: result.ok ? result.deliveredTo ?? request.team : request.team }
+        const deliveredTo = result.ok ? result.deliveredTo : undefined
+        const birth: OutboundBirth = { forwarded: true, ...(request.auth !== undefined ? { auth: request.auth } : {}), ...(peerCard?.publicKey ? { peerKey: peerCard.publicKey } : {}), ...(peerCard?.session ? { peerHost: peerCard.session } : {}), ...(deliveredTo !== undefined ? { deliveredTo } : {}), ...(receivers !== undefined ? { receiverMembers: receivers } : {}) }
         // Exactly one outbound row. A completed sync response is receiptless bookkeeping.
         if (result.ok && (result.task_status === 'TASK_STATE_COMPLETED' || result.receipt === 'none')) d.ledger.trackReceiptless(request.taskId, request.team, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
         else d.ledger.track(request.taskId, request.team, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)

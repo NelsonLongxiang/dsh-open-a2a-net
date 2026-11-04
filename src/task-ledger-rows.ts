@@ -129,18 +129,23 @@ export function withSender(raw: unknown, direction: unknown): { sender?: Sender 
  * row survives as a pre-S2 row, never with a partially adopted or borrowed
  * record.
  */
-export function withAuth(raw: unknown, entry: { direction?: unknown; team?: unknown; peer?: unknown }, now: number): { auth?: TaskAuthorization } {
+export function withAuth(raw: unknown, entry: { direction?: unknown; team?: unknown; peer?: unknown; forwarded?: unknown; sender?: unknown }, now: number): { auth?: TaskAuthorization } {
   if (entry.direction !== 'inbound' && entry.direction !== 'outbound') return {}
   const auth = parseAuthorization(raw, now)
   if (auth === undefined || auth.target !== entry.team) return {}
   if (entry.direction === 'inbound') return auth.ingress === 'wire' && `local:${auth.receipt_target}` === entry.peer ? { auth } : {}
-  // #139: an outbound row carries only its local-candidate admission.
+  // Forwarded births retain the verified local CLI wire admission for audit, never borrowed remote authority.
+  if (entry.forwarded === true && typeof entry.peer === 'string' && !entry.peer.startsWith('local')) {
+    const sender = parseSender(entry.sender)
+    return auth.ingress === 'wire' && auth.proof === 'cli-identity' && sender?.kind === 'cli' && sender.id === auth.caller && auth.receipt_target === auth.caller ? { auth } : {}
+  }
   return auth.ingress === 'local' && entry.peer === 'local' ? { auth } : {}
 }
 
 /** Routing and answer facts copied unchanged between a row and its archive entry. */
-export function routingOf(row: Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt'>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt'> {
+export function routingOf(row: Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt' | 'receiverMembers'>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt' | 'receiverMembers'> {
   return {
+    ...(row.receiverMembers !== undefined ? { receiverMembers: [...row.receiverMembers] } : {}),
     ...(row.answeredAt !== undefined ? { answeredAt: row.answeredAt } : {}),
     ...(row.forwarded === true ? { forwarded: true as const } : {}),
     ...(row.peerKey !== undefined ? { peerKey: row.peerKey } : {}),
@@ -152,20 +157,24 @@ export function routingOf(row: Pick<TaskRecord, 'peerKey' | 'peerHost' | 'delive
 /** #139: what an outbound row is born with besides its sender. */
 export interface OutboundBirth {
   readonly forwarded?: true
-  /** The local-candidate admission (ingress local); kept only on a row whose peer is 'local'. */
+  /** Local-candidate admission, or a forwarded online CLI's verified wire admission. */
   readonly auth?: TaskAuthorization
   readonly peerKey?: string
   readonly peerHost?: string
   readonly deliveredTo?: string
+  /** Verified selected peer canvas membership at dispatch; actual deliveredTo remains stricter when available. */
+  readonly receiverMembers?: readonly string[]
 }
 
 /** The facts of one outbound birth that fit the row (see {@link withRouting} for the same shape on restore). */
-export function birthFacts(peer: string, birth: OutboundBirth | undefined): Pick<TaskRecord, 'auth' | 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded'> {
+export function birthFacts(peer: string, birth: OutboundBirth | undefined): Pick<TaskRecord, 'auth' | 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'receiverMembers'> {
   if (birth === undefined) return {}
   const fact = (v: string | undefined): v is string => v !== undefined && v !== '' && v.length <= ROUTING_FACT_CAP
   const remote = peer !== 'local' && !peer.startsWith('local:')
   return {
     ...(!remote && birth.auth !== undefined && birth.auth.ingress === 'local' ? { auth: birth.auth } : {}),
+    ...(remote && birth.forwarded === true && birth.auth?.ingress === 'wire' && birth.auth.proof === 'cli-identity' && birth.auth.caller === birth.auth.receipt_target ? { auth: birth.auth } : {}),
+    ...(remote && birth.forwarded === true && fact(birth.peerKey) && validReceiverMembers(birth.receiverMembers) ? { receiverMembers: Object.freeze([...birth.receiverMembers]) } : {}),
     ...(remote && birth.forwarded === true ? { forwarded: true as const } : {}),
     ...(remote && fact(birth.peerKey) ? { peerKey: birth.peerKey } : {}),
     ...(remote && fact(birth.peerHost) ? { peerHost: birth.peerHost } : {}),
@@ -175,6 +184,7 @@ export function birthFacts(peer: string, birth: OutboundBirth | undefined): Pick
 
 /** Bound on a persisted routing fact; anything longer (or empty, or not a string) is dropped on restore. */
 export const ROUTING_FACT_CAP = 256
+const validReceiverMembers = (value: unknown): value is readonly string[] => Array.isArray(value) && value.length > 0 && value.length <= 256 && value.every(v => typeof v === 'string' && new RegExp('^[a-z0-9-]+/[0-9a-f]{8}(?:[0-9a-f]{8})?$', 'i').test(v)) && new Set(value).size === value.length
 
 /**
  * #139: restore-side allowlist for the routing facts. Each is kept only in
@@ -182,11 +192,12 @@ export const ROUTING_FACT_CAP = 256
  * a remote outbound row; anything else is dropped (the row survives as one
  * born before the fields, judged by current membership and origin).
  */
-export function withRouting(entry: Record<string, unknown>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt'> {
+export function withRouting(entry: Record<string, unknown>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt' | 'receiverMembers'> {
   const fact = (v: unknown): v is string => typeof v === 'string' && v !== '' && v.length <= ROUTING_FACT_CAP
   const remoteOutbound = entry.direction === 'outbound' && typeof entry.peer === 'string' && entry.peer !== 'local' && !entry.peer.startsWith('local:')
   return {
     ...(typeof entry.answeredAt === 'number' && Number.isFinite(entry.answeredAt) && entry.answeredAt >= 0 ? { answeredAt: entry.answeredAt } : {}),
+    ...(remoteOutbound && entry.forwarded === true && fact(entry.peerKey) && validReceiverMembers(entry.receiverMembers) ? { receiverMembers: Object.freeze([...entry.receiverMembers]) } : {}),
     ...(remoteOutbound && entry.forwarded === true ? { forwarded: true as const } : {}),
     ...(remoteOutbound && fact(entry.peerKey) ? { peerKey: entry.peerKey } : {}),
     ...(remoteOutbound && fact(entry.peerHost) ? { peerHost: entry.peerHost } : {}),
@@ -237,6 +248,8 @@ export interface TaskRecord {
   readonly peerHost?: string
   /** #139: the member that actually received the task (canvas / bare-zone deliveries). */
   readonly deliveredTo?: string
+  /** Verified selected peer canvas membership at dispatch; actual deliveredTo remains stricter when available. */
+  readonly receiverMembers?: readonly string[]
   /** Local target has produced an answer; still owed until receipt delivery/settlement, but no longer queued. */
   answeredAt?: number
   status: TaskStatus
@@ -295,6 +308,8 @@ export interface ArchivedRecord {
   readonly peerKey?: string
   readonly peerHost?: string
   readonly deliveredTo?: string
+  /** Verified selected peer canvas membership at dispatch; actual deliveredTo remains stricter when available. */
+  readonly receiverMembers?: readonly string[]
   /** Local answer time retained as audit metadata, independent of resolution time. */
   readonly answeredAt?: number
   /** #114 S4: who settled the row (receipt and echo ends), and their chain role. */
@@ -420,7 +435,7 @@ export const SETTLEMENT_REFUSAL_CAP = 64
 export interface SettlementJudge {
   readonly enforce: boolean
   readonly settler: SettlementRefusalRecord['settler']
-  check(row: Pick<TaskRecord, 'team' | 'peer' | 'direction' | 'auth' | 'peerKey' | 'peerHost' | 'deliveredTo'>, echo: boolean): SettlementVerdict
+  check(row: Pick<TaskRecord, 'team' | 'peer' | 'direction' | 'auth' | 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'receiverMembers'>, echo: boolean): SettlementVerdict
 }
 
 const SETTLEMENT_REASONS: readonly string[] = ['settler-off-chain', 'settler-unverified', 'on-behalf-mismatch', 'echo-off-chain']
