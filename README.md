@@ -105,6 +105,8 @@ variables and exit codes: [`src/skill/references/cli.md`](src/skill/references/c
 
 ## Canvas teams (arbitrary grouping, v0.5.25)
 
+Peer/member badges are host-specific display facts: bilateral URL seeds or an exact, nonlocal canvas-member handle uniquely advertised by that host card. Shared zone names (such as `dsh`) never establish a badge link. A minimal card without session rows remains unconfirmed/stranger unless bilateral seeds establish the host; this conservative display rule does not change caller admission or CLI home validation.
+
 A canvas team is a user-composed, named, multi-member routing group: **one atomic session node may sit in many teams**, and a route to `<team>/canvas/<name>` resolves the **first live member** (member order is the routing priority) or wakes the **first cold joined member** (wake-on-route). The `canvas/` path segment can never collide with a node alias (`<team>/<id8>`), so both namespaces coexist untouched.
 
 - Storage: `<dsh-home>/a2a/canvas.json` (ordered team entries; caps: 64 teams × 32 members)
