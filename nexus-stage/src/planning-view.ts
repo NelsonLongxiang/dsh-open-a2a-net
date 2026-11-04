@@ -1161,15 +1161,29 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       syncViewSize()
       clusterSeats = planTeamClusters(input.teams, seatIds, viewW > 0 ? viewW : undefined)
     }
+    // A joined session whose only team is a peer's (a mirror frame) is teamed too: without its
+    // card the mirror frame cannot show it, and 离队 has nothing to reach (owner report 2026-11-04).
+    const mirrorMemberIds = new Set<string>()
+    if (input.peerOrg !== undefined) {
+      const byHandle = joinedLocalIdsByHandle(input.sessions, new Set((input.remoteTeams ?? []).map(session => session.team)))
+      for (const row of input.peerOrg) {
+        for (const team of row.org) for (const member of team.members) {
+          const id = byHandle.get(member)
+          if (id !== undefined) mirrorMemberIds.add(id)
+        }
+      }
+      // The node list reads the same fact: such a session is teamed, not 未组队.
+      lastCanvasMemberIds = new Set([...lastCanvasMemberIds, ...mirrorMemberIds])
+    }
     for (const s of input.sessions) {
       if (s.joined !== true) continue
       // Teamed-only canvas (network-membership-display ruling): a joined
       // session earns a canvas node only with a team — canvas membership
-      // (optimistic-aware) or a declared roster team. Teamless joined
-      // sessions ride the node list's 未组队 group instead; sessions absent
-      // from `seen` are swept from the model below.
+      // (optimistic-aware), a declared roster team, or a mirror frame's
+      // membership. Teamless joined sessions ride the node list's 未组队
+      // group instead; sessions absent from `seen` are swept from the model below.
       const effective = resolveMemberships(s.id)
-      if (effective.length === 0 && (s.teams === undefined || s.teams.length === 0)) continue
+      if (effective.length === 0 && (s.teams === undefined || s.teams.length === 0) && !mirrorMemberIds.has(s.id)) continue
       seen.add(s.id)
       if (model.getNode(s.id) !== undefined) {
         model.upsertNode({
