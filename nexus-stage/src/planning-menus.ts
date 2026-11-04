@@ -306,14 +306,13 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
         const create = menuItem('组成团队…', model.selectedIds().length >= 2, () => openNameDialog(selectedByY()))
         create.title = '先框选或 Shift 加选至少 2 个节点'
         items.push(create)
+        const teamsOf = model.getNode(id)?.memberships.map(m => m.team) ?? []
         if (d.teams().length > 0) {
           items.push(menuItem('加入团队 ▸', true, () => openMenu(x, y, target, 'join')))
-          const teamsOf = model.getNode(id)?.memberships.map(m => m.team) ?? []
-          if (teamsOf.length > 0) {
-            items.push(menuItem('置顶路由 ▸', true, () => openMenu(x, y, target, 'promote')))
-            items.push(menuItem('离队 ▸', true, () => openMenu(x, y, target, 'leave')))
-          }
+          if (teamsOf.length > 0) items.push(menuItem('置顶路由 ▸', true, () => openMenu(x, y, target, 'promote')))
         }
+        // A card that is only in mirror frames (a peer's team) still has a team to leave.
+        if (teamsOf.length > 0) items.push(menuItem('离队 ▸', true, () => openMenu(x, y, target, 'leave')))
         // Network-level leave (distinct from canvas-team membership): the
         // panel-slim migration moved the join/leave toggle here. Remote
         // nodes are read-only entries — never a leave target.
@@ -340,6 +339,14 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
               const desired = [id, ...current.filter(x => x !== id)]
               d.emit({ type: 'reorder', team: t.name, ops: reorderOps(current, desired) })
             }))
+          }
+        }
+        // d.teams() is this host's own teams; a mirror frame's membership leaves through
+        // the owner's relay (the view adds fleetPeer), so list those memberships too.
+        if (level === 'leave') {
+          const local = new Set(d.teams().map(t => t.name))
+          for (const m of model.getNode(id)?.memberships ?? []) {
+            if (!local.has(m.team)) items.push(menuItem(titleOf(m.team), true, () => d.emit({ type: 'remove-member', team: m.team, ids: [id] })))
           }
         }
       }
