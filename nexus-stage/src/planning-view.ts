@@ -431,7 +431,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       if (subEl.textContent !== subText) subEl.textContent = subText
       const tip = unavailable ? `${txt.tip} · ${UNREACHABLE_HINT}` : txt.tip
       if (el.title !== tip) el.title = tip
-      paintPrio(el.querySelector<HTMLElement>('.prio')!, n, n.remote === true ? peerInfoByHost.get(host) : undefined)
+      // A member card's chip follows the link of the host that publishes its handle.
+      const linkHost = n.id.startsWith('member-') ? memberHostByHandle.get(n.remoteHandle ?? '') : host
+      paintPrio(el.querySelector<HTMLElement>('.prio')!, n, n.remote === true && linkHost !== undefined ? peerInfoByHost.get(linkHost) : undefined)
     }
     for (const [id, el] of [...nodeEls]) {
       if (!seen.has(id)) { el.remove(); nodeEls.delete(id) }
@@ -454,6 +456,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   const peerScoreByText = new Map<string, number | undefined>()
   /** gh#20 W-A: per-host link/verified info for the peer badges. */
   const peerInfoByHost = new Map<string, { link?: 'linked' | 'stranger'; verified?: boolean }>()
+  let memberHostByHandle: ReadonlyMap<string, string> = new Map()
 
   function renderFederation(): void {
     federation.render(clock())
@@ -1202,6 +1205,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // excluded from bounds, so the column cannot feed back into itself).
     const peerSeen = new Set<string>()
     lastRemoteTeams = groupRemoteTeams(input.remoteTeams ?? [])
+    memberHostByHandle = new Map([...lastRemoteTeams].flatMap(([h, rows]) => rows.map(row => [row.team, h] as const)))
     lastWork = new Map(input.sessions.map(s => [s.id, { status: s.status, queued: s.queued }]))
     reachability = unreachableRefs(input)
     peerScoreByText.clear()
