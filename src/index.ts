@@ -57,7 +57,7 @@ import { runReceiptLadder } from './receipt-ladder.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
-import { createQueueGuard, queueFullRefusal, WIRE_ERROR_QUEUE_FULL } from './queue-guard.ts'
+import { createQueueGuard, queueFullRefusal, QUEUE_FULL_NEXT, WIRE_ERROR_QUEUE_FULL } from './queue-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
 import { isRootOriginUrl, sameMountedUrl, signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
@@ -3238,7 +3238,7 @@ export function apply(ctx: Context, config: Config): void {
  * face (the NODE team — bare, team-name routable) > the session label (not
  * routable; the dispatch registers receiptless per fix 2).
  */
-const routeVerdict = (team: string, failures: readonly string[], candidateCount: number): { ok: false; error: string; code: number } => {
+const routeVerdict = (team: string, failures: readonly string[], candidateCount: number): { ok: false; error: string; code: number; next?: string } => {
     const ambiguous = failures.find(failure => failure.startsWith('ambiguous: '))
     if (candidateCount === 0 && ambiguous !== undefined) return { ok: false, error: ambiguous, code: -32004 }
     if (candidateCount > 0) {
@@ -3249,6 +3249,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       }
     }
     const remote = failures.filter(entry => !entry.startsWith('local: '))
+    const queueFull = failures.some(entry => entry.startsWith('local: target-queue-full'))
     const suffix = team.slice(team.indexOf('/') + 1)
     const near = [...new Set([
       ...joinedSessions.list().map(id => `${config.team}/${id8(id)}`),
@@ -3264,9 +3265,10 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       `team "${team}" is not published by any configured peer${remote.length > 0 ? ` (unresolved delegations: ${remote.join('; ')})` : ''}`,
       ...failures.filter(entry => entry.startsWith('local: ')).map(entry => `local reason: ${entry.slice('local: '.length)}`),
       near.length > 0 ? `nearby advertised teams: ${near.join(', ')}` : undefined,
-      'next: enumerate live alternatives with a2a_teams; do not retry unchanged; joining is the target session\'s own gesture (its sidebar) — relay that request to the human',
+      // #282 S1: a full local queue means the target exists and is busy — waiting is the only right next step.
+      queueFull ? `next: ${QUEUE_FULL_NEXT}` : 'next: enumerate live alternatives with a2a_teams; do not retry unchanged; joining is the target session\'s own gesture (its sidebar) — relay that request to the human',
     ].filter((line): line is string => line !== undefined)
-    return { ok: false, error: lines.join(' — '), code: -32004 }
+    return queueFull ? { ok: false, error: lines.join(' — '), code: WIRE_ERROR_QUEUE_FULL, next: QUEUE_FULL_NEXT } : { ok: false, error: lines.join(' — '), code: -32004 }
   }
 
   actTools.registerRoute()
@@ -3524,7 +3526,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     const queueRefusal = queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, cliDeposits.get(team) !== undefined, ownTask)
     if (queueRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
-      return { ok: false, error: queueRefusal, code: WIRE_ERROR_QUEUE_FULL }
+      return { ok: false, error: queueRefusal, code: WIRE_ERROR_QUEUE_FULL, next: QUEUE_FULL_NEXT }
     }
     const canvasName = parseCanvasTeamName(team)
     // Issue #41 shape note: the caller label is the WIRE form (<zone>/<id8>
