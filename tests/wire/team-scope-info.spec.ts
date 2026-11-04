@@ -135,7 +135,7 @@ describe('S5 information-plane scoping (teamScopeInfo)', () => {
   }
 
   it('pins the schema default: teamScopeInfo ships default(true)', () => {
-    const source = readFileSync(new URL('../../src/index.ts', import.meta.url), 'utf8')
+    const source = readFileSync(new URL('../../src/config.ts', import.meta.url), 'utf8')
     expect(source).toContain('teamScopeInfo: s.boolean().default(true)')
   })
 
