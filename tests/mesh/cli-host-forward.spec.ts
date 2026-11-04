@@ -57,6 +57,11 @@ describe('#230 home host forwards a deposited CLI one hop with scope on', () => 
       // #282 S3: a per-member link here is no longer a prerequisite (the owner's signed canvas is the return path).
       expect(missing.error).not.toContain('missing direct operator link')
       expect(missing.error).toContain('home forwardDirect is off')
+      // #282 S3: a canvas whose only advertised member is the caller has no receiver — the diagnosis says so.
+      await post(b,'/__dsh_a2a/canvas',{action:'create',name:'solo'})
+      await post(b,'/__dsh_a2a/canvas',{action:'add-member',name:'solo',id:handle})
+      const solo=await route(a,'direct-271-solo',true,undefined,'beta/canvas/solo')
+      expect(solo.error).toContain('lists no receiving member besides the caller')
       const absent=await route(a,'direct-271-absent',true,undefined,'beta/canvas/no-such-team')
       expect(absent.error).toContain('canvas-not-found')
       expect(absent.error).not.toContain('canvas-owner:')

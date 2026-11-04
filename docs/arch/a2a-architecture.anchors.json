@@ -5,7 +5,7 @@
   "sources": {
     "src/index.ts": "4dc3dd60ee1a61cb3638e1fd021ca877cab581d5b95a0b7fd790f060c126c13b",
     "src/faces/admin.ts": "ca66a4e6cf60fb0ec58c57d7a34af86007a35928823900bbcd9dbe59592d1e36",
-    "src/canvas-store.ts": "7c71938e2ab669ac9f2adad7c26a21a3c53a0c95ce8271f0dcc25e3189cbc7e3",
+    "src/canvas-store.ts": "e100285ecbb0bd57057f985c51c062658cebe64cdedca646dd6fe867c330509c",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "a8e203feb252f0c5d21f98be6ecc45c84d33f867726331a64823f40d68578a2e",
     "nexus-stage/src/workbench.ts": "aecc25df9c9ff6d4b95b4acd07512e58ac94dbbb5f4797418ba6fe6c8c48e1ee",
@@ -19,7 +19,7 @@
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "037a5e6f9bfb7f26b0584dadc6cf03acad7c101736259da76805daec7e47583e",
-    "src/faces/wire.ts": "1a97382ea79407de7871db406cf8bfdb27ff0d58b34da0a165a726f731d7156b",
+    "src/faces/wire.ts": "0e12f007d43dc27077cb02d7496d0192f390c6078350216b51e0558bcd9570e9",
     "src/faces/canvas-notify.ts": "4d06ea71c72f5a0fd200fbc7cc32c62cfd367af054c22f284be3d242919c1358",
     "src/task-auth.ts": "9123b42f81b9185bea7702f1a3623383992d26d6132ca79a51e84a6faf249bdd",
     "src/origin-claim.ts": "9539808ab3890c018d5984496a79e6fb64ffde2e93259e6f27f7bbab9255adbf",
@@ -165,7 +165,7 @@
     {
       "page": "p1-arch",
       "cell": "d3",
-      "ref": "src/canvas-store.ts:79",
+      "ref": "src/canvas-store.ts:84",
       "expect": "export class CanvasStore {"
     },
     {
@@ -333,7 +333,7 @@
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/faces/wire.ts:713",
+      "ref": "src/faces/wire.ts:714",
       "expect": "if (refuseIfFlooded(caller, message, team, taskId, res)) return"
     },
     {
