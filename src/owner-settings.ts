@@ -20,8 +20,21 @@ export interface OwnerSettings {
 export function parseSeatNames(value: unknown): Record<string, string> | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length > 1024) return undefined
   const entries = Object.entries(value)
-  if (entries.some(([id, name]) => !/^session-[a-zA-Z0-9-]{8,128}$/.test(id) || typeof name !== 'string' || name.trim() === '' || [...name.trim()].length > 64 || /[\u0000-\u001f\u007f\ufffd]/.test(name))) return undefined
+  if (entries.some(([id, name]) => !/^session-[a-zA-Z0-9-]{8,128}$/.test(id) || typeof name !== 'string' || name.trim() === '' || [...name.trim()].length > 64 || /[\p{Cc}\p{Cf}\u2028\u2029\ufffd]/u.test(name) || !/[^\p{Z}\p{C}\p{M}]/u.test(name))) return undefined
   return Object.fromEntries(entries.map(([id, name]) => [id, (name as string).trim()]))
+}
+
+/** Boot config degrades entry-by-entry; owner POST remains all-or-nothing. Never echo label contents in warnings. */
+export function loadSeatNames(value: unknown, warn: (reason: string) => void): Record<string, string> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) { warn('seatNames: ignored invalid map'); return {} }
+  const kept: Record<string, string> = {}
+  let count = 0
+  for (const [id, name] of Object.entries(value)) {
+    const entry = parseSeatNames({ [id]: name })
+    if (entry === undefined || count >= 1024) { warn('seatNames: ignored invalid or over-cap entry'); continue }
+    Object.assign(kept, entry); count += 1
+  }
+  return kept
 }
 
 /** The exact keys this module may touch, in wire order. */

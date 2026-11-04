@@ -3,8 +3,9 @@
  * appends when absent, rewrites exactly the three keys, keeps foreign
  * lines verbatim, flags restart when announce changes.
  */
-import { describe, expect, it } from 'vitest'
-import { applyOwnerSettings } from '../../src/owner-settings.ts'
+import { describe, expect, it, vi } from 'vitest'
+import { applyOwnerSettings, parseSeatNames, loadSeatNames } from '../../src/owner-settings.ts'
+import { Config } from '../../src/index.ts'
 
 const EXISTING = `# top comment
 - id: session-persistence-jsonl
@@ -17,6 +18,17 @@ const EXISTING = `# top comment
 `
 
 describe('applyOwnerSettings', () => {
+  it.each(['a\u0085b', 'a\u200bb', 'a\u202eb', 'a\u2028b', 'a\u2029b', '\u200b', '\u0301', '\u3000'])('refuses invisible/control-only or format-bearing labels %j', name => {
+    expect(parseSeatNames({ 'session-0123456789abcdef': name })).toBeUndefined()
+  })
+  it('requires visible content and retains only valid boot entries while warning without echoing values', () => {
+    const warn = vi.fn()
+    const names = { 'session-0123456789abcdef': '开发席', 'session-1111222233334444': 'hidden\u200bname', 'session-5555666677778888': 'e\u0301' }
+    expect(Config({ seatNames: { 'session-1111222233334444': 123 } } as never).seatNames).toEqual({ 'session-1111222233334444': 123 })
+    expect(loadSeatNames(names, warn)).toEqual({ 'session-0123456789abcdef': '开发席', 'session-5555666677778888': 'e\u0301' })
+    expect(warn).toHaveBeenCalledOnce()
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('hidden')
+  })
   it('rewrites the three keys inside the existing a2a config block, foreign lines verbatim', () => {
     const { yaml, restartNeeded } = applyOwnerSettings(EXISTING, {
       teamJoinAllowlist: ['dsh/review-gate', "dsh/owner's-team"],
