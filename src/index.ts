@@ -37,6 +37,7 @@ import { GroupStore } from './group-store.ts'
 import { CanvasStore, canvasNameReserved, isRemoteMemberRef } from './canvas-store.ts'
 import { decodeSessionLog, extractTranscript, TRANSCRIPT_MAX_FILE_BYTES } from './session-transcript.ts'
 import { LayoutStore } from './layout-store.ts'
+import { peerLinkDisplay } from './peer-link-display.ts'
 import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
@@ -3214,10 +3215,10 @@ export function apply(ctx: Context, config: Config): void {
 
   /**
    * gh#20 W-A: THIS host's view of one tracked peer's link state (the
-   * mirror of callerLinkedToThisHost, judged from our side about THEM):
-   *   · linked — bilateral seeding (our config.peers carries a URL of the
-   *     peer's origin AND the peer's card carries ours), or a canvas remote
-   *     ref naming the peer's zone or one of its session teams;
+   * display projection, not an admission decision:
+   *   · linked — bilateral URL seeding, or a canvas reference to an exact
+   *     nonlocal session handle uniquely advertised by that peer card key;
+   *     a shared zone or a minimal card alone never proves host identity;
    *   · stranger — no operator-established basis (a verified key is not a
    *     relationship);
    *   · verified — we hold a signature-valid cached card (the badge's
@@ -3232,6 +3233,16 @@ export function apply(ctx: Context, config: Config): void {
    * Pure over warm caches and config; never fetches.
    */
   function peerLinkState(peerUrl: string): { link: 'linked' | 'stranger'; verified: boolean } {
+    return peerLinkDisplay(peerUrl, {
+      card: cardCache.get(peerUrl)?.card, ownUrl: ownCardUrl, seeds: config.peers,
+      refs: canvasStore.list().flatMap(name => [...canvasStore.remoteMembersOf(name)]),
+      ownHandles: new Set([...joinedSessions.list(), ...liveRoots.keys()].map(id => `${config.team}/${id8(id)}`)),
+      cards: [...cardCache.values()].flatMap(entry => entry.card === undefined ? [] : [entry.card]),
+    })
+  }
+
+  // Compatibility for existing CLI home/admission semantics: badge projection must not change authorization.
+  function peerAdmissionLinkState(peerUrl: string): { link: 'linked' | 'stranger'; verified: boolean } {
     const cached = cardCache.get(peerUrl)?.card
     const verified = cached !== undefined
     const zone = cached?.team ?? ''
@@ -3278,7 +3289,7 @@ export function apply(ctx: Context, config: Config): void {
       // Conservatively leave automatic ownership unknown; explicit fresh choices still work.
       const card = await fetchPeerCard(url).catch(() => undefined)
       if (card !== undefined) cardCache.set(url, { at: Date.now(), card })
-      return { url, card, linked: card === undefined || peerLinkState(url).link === 'linked' }
+      return { url, card, linked: card === undefined || peerAdmissionLinkState(url).link === 'linked' }
     })
   }
 
@@ -3304,7 +3315,7 @@ export function apply(ctx: Context, config: Config): void {
       const card = await fetchPeerCard(url)
       if (card === undefined || card.publicKey !== claim.card.publicKey) continue
       cardCache.set(url, { at: Date.now(), card })
-      if (peerLinkState(url).link !== 'linked') continue
+      if (peerAdmissionLinkState(url).link !== 'linked') continue
       const row = card.sessionTeams?.find(item => item.team === handle)
       if (row !== undefined) return { origin: home, viaUrl: claim.callerUrl, bound: true, online: row.offline === false }
     }

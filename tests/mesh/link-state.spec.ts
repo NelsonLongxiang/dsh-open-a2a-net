@@ -2,11 +2,11 @@
 /**
  * gh#20 W-A: state-face peers carry {link, verified} — the badge data
  * source. linked = an operator-established basis holds (bilateral seeding
- * OR a canvas remote ref naming the peer's zone/session team); stranger =
+ * OR an exact uniquely advertised nonlocal canvas session handle); stranger =
  * no link (a verified key is not a relationship); verified = a
  * signature-valid cached card.
- * W-B: a canvas remote ref names the peer's session team → the link flips
- * (the cross-host team compose pipeline's server-side effect).
+ * A minimal card without sessionTeams cannot prove handle ownership. Shared
+ * zones/local refs never grant badge links; admission is intentionally unchanged.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { bootNode, reservePort, type MeshNode } from './harness.ts'
@@ -38,7 +38,20 @@ async function warmCards(a: MeshNode, b: MeshNode): Promise<void> {
 }
 
 describe('W-A state-face link fields', () => {
-  it('bilateral mutual seeds report linked+verified; a canvas ref naming the peer session team flips stranger→linked', async () => {
+  it('two dsh hosts remain distinct: our own handle cannot mark an unlinked same-zone host as linked', async () => {
+    const pa = await reservePort(), pb = await reservePort(), pc = await reservePort()
+    const a = await bootNode({ name: 'A', session: 'badge-a', team: 'dsh', port: pa, peers: [`http://127.0.0.1:${pb}`, `http://127.0.0.1:${pc}`], sessionNodes: true })
+    const b = await bootNode({ name: 'B', session: 'badge-b', team: 'dsh', port: pb, peers: [a.baseUrl], sessionNodes: true })
+    const c = await bootNode({ name: 'C', session: 'badge-c', team: 'dsh', port: pc, sessionNodes: true })
+    try {
+      await fetch(a.baseUrl + '/__dsh_a2a/join', { method: 'POST', body: JSON.stringify({ id: 'session-0123456789abcdef' }) })
+      await canvasAddMember(a, 'own', 'dsh/01234567')
+      await warmCards(a, b); await warmCards(a, c)
+      expect(await peerRow(a, b.baseUrl)).toMatchObject({ link: 'linked', verified: true })
+      expect(await peerRow(a, c.baseUrl)).toMatchObject({ link: 'stranger', verified: true })
+    } finally { await a.dispose(); await b.dispose(); await c.dispose() }
+  })
+  it('bilateral seeds show linked, but a minimal card cannot prove exact canvas-member ownership', async () => {
     const pa = await reservePort()
     const pb = await reservePort()
     const alice = await bootNode({ name: 'alice', session: 'mesh-alice', team: 'alice-zone', sessionNodes: true, port: pa, peers: [`http://127.0.0.1:${String(pb)}`] })
@@ -74,12 +87,11 @@ describe('W-A state-face link fields', () => {
         await warmCards(charlie, dave)
         const cold = await peerRow(charlie, dave.baseUrl)
         expect(cold.link).toBe('stranger')
-        // The cross-host compose (W-B's server effect): charlie's operator
-        // adds dave's session-team handle as a canvas remote ref — the exact
-        // handle basis flips the link.
+        // A one-way peer serves only its minimal card: no advertised session handle proves host ownership.
+        // A canvas ref must not turn its same-zone siblings green merely from the zone prefix.
         await canvasAddMember(charlie, 'fleet', 'dave-zone/01234567')
         const linked = await peerRow(charlie, dave.baseUrl)
-        expect(linked.link).toBe('linked')
+        expect(linked.link).toBe('stranger')
         expect(linked.verified).toBe(true)
       } finally {
         await dave.dispose()
