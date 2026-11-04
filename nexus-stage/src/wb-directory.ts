@@ -15,6 +15,7 @@
 import type { CanvasTeamRow, StateBody } from './workbench'
 import type { ChatTarget } from './wb-chat'
 import { displayName } from './stage-name'
+import { makeSessionDraggable } from './session-drag'
 
 export type DirFilter = 'all' | 'local' | 'canvas' | 'remote' | 'logs'
 
@@ -140,6 +141,7 @@ export function renderDirectory(box: HTMLElement, ctx: DirectoryContext): string
         item.querySelector('.wb-item-text')?.appendChild(note)
       }
       badges(item, s.canvasTeams)
+      makeSessionDraggable(item, s.id)
     }
   }
 

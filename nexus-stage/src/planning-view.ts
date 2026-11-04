@@ -31,6 +31,7 @@ import { FRAME_HEAD_LIFT } from './edges'
 import { drawMemberEdges } from './planning-edges'
 import { createFederationOverlay } from './federation-overlay'
 import { joinedLocalIdsByHandle, membershipIndex, mirrorMemberIds, remoteMemberBoardId } from './planning-member-handles'
+import { attachSessionDrop } from './session-drag'
 import { displayName } from './stage-name'
 import {
   activityEdges, federalEdges, flyBounds, groupRemoteTeams, peerNodeId, peerHostOf, placePeers,
@@ -624,6 +625,12 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     emit: emitAction,
     openNameDialog: menus.openNameDialog,
     locate: locateNode,
+  })
+  // A rail 本机会话 row dropped on a frame joins that team, like a card drop (session-drag).
+  attachSessionDrop(root, {
+    signal, frames: () => frameEls,
+    frameAt: (clientX, clientY) => { const p = localXY({ clientX, clientY }); return innermostFrameAt(new Map(model.allFrames()), screenToWorld(vp, p.x, p.y)) },
+    drop: (team, id) => model.getNode(id)?.memberships.some(m => m.team === team) === true ? notice('info', '该会话已在这个队里') : emitAction({ type: 'add-member', team, ids: [id] }),
   })
 
   /** Center the viewport on one canvas node (the 已组队 row's 定位). */
