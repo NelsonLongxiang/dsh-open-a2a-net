@@ -30,7 +30,7 @@ import { buildLayoutDoc, clampDoc, type LayoutDoc, type LayoutRect } from './lay
 import { FRAME_HEAD_LIFT } from './edges'
 import { drawMemberEdges } from './planning-edges'
 import { createFederationOverlay } from './federation-overlay'
-import { joinedLocalIdsByHandle, remoteMemberBoardId } from './planning-member-handles'
+import { joinedLocalIdsByHandle, membershipIndex, mirrorMemberIds, remoteMemberBoardId } from './planning-member-handles'
 import { displayName } from './stage-name'
 import {
   activityEdges, federalEdges, flyBounds, groupRemoteTeams, peerNodeId, peerHostOf, placePeers,
@@ -1119,15 +1119,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     // toolbar chip instead of vanishing entirely.
     lastSessions = input.sessions
     menus.setUnjoined(input.sessions.filter(s => s.joined !== true && !s.id.startsWith('peer-')))
-    const memberships = new Map<string, Array<{ team: string; index: number }>>()
-    for (const team of input.teams) {
-      for (let i = 0; i < team.members.length; i++) {
-        const id = team.members[i]!.id
-        const list = memberships.get(id) ?? []
-        list.push({ team: team.name, index: i })
-        memberships.set(id, list)
-      }
-    }
+    const memberships = membershipIndex(input.teams)
     lastCanvasMemberIds = new Set(memberships.keys())
     const seen = new Set<string>()
     // In-flight write guard: membership entries of teams with unsettled
@@ -1163,18 +1155,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
     // A joined session whose only team is a peer's (a mirror frame) is teamed too: without its
     // card the mirror frame cannot show it, and 离队 has nothing to reach (owner report 2026-11-04).
-    const mirrorMemberIds = new Set<string>()
-    if (input.peerOrg !== undefined) {
-      const byHandle = joinedLocalIdsByHandle(input.sessions, new Set((input.remoteTeams ?? []).map(session => session.team)))
-      for (const row of input.peerOrg) {
-        for (const team of row.org) for (const member of team.members) {
-          const id = byHandle.get(member)
-          if (id !== undefined) mirrorMemberIds.add(id)
-        }
-      }
-      // The node list reads the same fact: such a session is teamed, not 未组队.
-      lastCanvasMemberIds = new Set([...lastCanvasMemberIds, ...mirrorMemberIds])
-    }
+    const mirrorMembers = input.peerOrg !== undefined ? mirrorMemberIds(input.peerOrg, input.sessions, input.remoteTeams) : new Set<string>()
+    // The node list reads the same fact: such a session is teamed, not 未组队.
+    if (input.peerOrg !== undefined) lastCanvasMemberIds = new Set([...lastCanvasMemberIds, ...mirrorMembers])
     for (const s of input.sessions) {
       if (s.joined !== true) continue
       // Teamed-only canvas (network-membership-display ruling): a joined
@@ -1183,7 +1166,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       // membership. Teamless joined sessions ride the node list's 未组队
       // group instead; sessions absent from `seen` are swept from the model below.
       const effective = resolveMemberships(s.id)
-      if (effective.length === 0 && (s.teams === undefined || s.teams.length === 0) && !mirrorMemberIds.has(s.id)) continue
+      if (effective.length === 0 && (s.teams === undefined || s.teams.length === 0) && !mirrorMembers.has(s.id)) continue
       seen.add(s.id)
       if (model.getNode(s.id) !== undefined) {
         model.upsertNode({
