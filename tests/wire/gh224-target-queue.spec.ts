@@ -18,7 +18,7 @@ async function boot(extra: Record<string, unknown> = {}): Promise<MeshNode> {
 }
 async function post(n: MeshNode, id: string, message = 'ordinary request') {
   const r = await fetch(n.baseUrl + '/a2a/direct', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ team: 'dsh/01234567', caller_session: 'dsh', task_id: id, message, wait: false }) })
-  return await r.json() as { code?: number; reason?: string; delivered?: boolean; error?: string }
+  return await r.json() as { code?: number; reason?: string; delivered?: boolean; error?: string; next?: string }
 }
 
 describe('gh#224 per-target queue cap (real host)', () => {
@@ -28,6 +28,8 @@ describe('gh#224 per-target queue cap (real host)', () => {
     const steered = n.steered.length
     const refused = await post(n, 'q-3')
     expect(refused).toMatchObject({ code: -32009, reason: 'target-queue-full', delivered: false })
+    // #282 S1: one next step rides with the refusal.
+    expect(String(refused.next)).toContain('wait for a receipt from the target')
     expect(refused.error).toContain('already has 3 task(s)')
     expect(n.steered).toHaveLength(steered)
     const state = await fetch(n.baseUrl + '/__dsh_a2a/state').then(r => r.json()) as { tasks: Array<{ taskId: string }> }

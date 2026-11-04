@@ -48,6 +48,9 @@ export function queueFullRefusal(rows: readonly QueueRow[], team: string, messag
   return `target-queue-full (gh#224): "${team}" already has ${String(queued)} task(s) not yet answered by the target (cap ${String(limit)}) — nothing was delivered. Wait for a receipt from it (a2a inbox / a2a_tasks), or send again later with a NEW task id (this one is recorded as failed); do not resend in a loop. A task that never gets a receipt turns dead after taskStaleTtlMs and stops counting.`
 }
 
+/** #282 S1: the one next step for a full target queue. */
+export const QUEUE_FULL_NEXT = 'wait for a receipt from the target (a2a-net inbox / a2a_tasks), then send again with a new task id; do not resend in a loop'
+
 /** Wire-face adapter in the flood guard's shape: a refused fresh key is FAILED, not stranded pending. */
 export function createQueueGuard(
   rows: () => readonly QueueRow[],
@@ -61,7 +64,7 @@ export function createQueueGuard(
     if (error === undefined) return false
     outcomes.recordOutcome(taskId, { status: 'failed', error })
     recordActivity('in', team, caller, false)
-    const payload = JSON.stringify({ error, reason: 'target-queue-full', code: WIRE_ERROR_QUEUE_FULL, task_id: taskId, team, delivered: false, task_status: 'TASK_STATE_FAILED' })
+    const payload = JSON.stringify({ error, reason: 'target-queue-full', code: WIRE_ERROR_QUEUE_FULL, task_id: taskId, team, delivered: false, task_status: 'TASK_STATE_FAILED', next: QUEUE_FULL_NEXT })
     res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
     res.end(payload)
     return true

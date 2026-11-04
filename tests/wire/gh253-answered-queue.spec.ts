@@ -32,6 +32,19 @@ async function setup(extra: Record<string, unknown> = {}) {
   return { n, agent, expire, dispatch }
 }
 describe('#253 answered work is not queued, but remains owed', () => {
+  it('#282 S1: a model a2a_route into a full queue returns -32009 with one next step', async () => {
+    // Scope routing off: this case targets the queue gate on the model-tool path, not the scope gate.
+    const { n, agent, dispatch } = await setup({ teamScopeRouting: false })
+    for (let i = 0; i < 3; i++) expect((await dispatch('next-' + i)).delivered).toBe(true)
+    const other = { id: SessionId('session-8888888811112222'), session: { events: [] }, steer() {} } as unknown as Agent
+    n.agents.roots = () => [agent, other]
+    n.ctx.emit('agent/created', { agent: other })
+    await post(n, '/__dsh_a2a/join', { id: String(other.id) })
+    await post(n, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: String(other.id) })
+    const result = await n.ctx.tools.get('a2a_route')!.execute({ team: TEAM, message: 'a fourth request', async: true }, runContext(other)) as { ok: boolean; code?: number; next?: string }
+    expect(result).toMatchObject({ ok: false, code: -32009 })
+    expect(result.next).toContain('wait for a receipt from the target')
+  })
   it('an expired CLI prevents receipt delivery while finals release capacity and preserve pending rows', async () => {
     const { n, agent, expire, dispatch } = await setup()
     for (let i = 0; i < 3; i++) expect((await dispatch('auto-' + i)).delivered).toBe(true)
