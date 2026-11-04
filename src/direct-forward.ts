@@ -10,7 +10,19 @@ export interface ForwardRequest {
   localCliProof: boolean; guarded: boolean
   auth?: TaskAuthorization
 }
+/** Birth barrier exists only for eligible, actively dispatched tasks; receipts never reserve a slot. */
+export class ForwardBirths {
+  private readonly pending = new Map<string, Promise<void>>()
+  wait(taskId: string): Promise<void> | undefined { return this.pending.get(taskId) }
+  begin(taskId: string): (() => void) | undefined {
+    if (this.pending.size >= 64 || this.pending.has(taskId)) return undefined
+    let release!: () => void
+    this.pending.set(taskId, new Promise<void>(resolve => { release = resolve }))
+    return () => { this.pending.delete(taskId); release() }
+  }
+}
 export interface DirectForwardDeps {
+  births: ForwardBirths
   enabled(): boolean
   isolated(): boolean
   deposited(handle: string): boolean
@@ -43,26 +55,32 @@ export function createDirectForward(d: DirectForwardDeps) {
           continue
         }
       }
-      // The same selected-peer snapshot supplies both return-link gate and settlement birth.
-      const answer = await d.dispatch(url, request, guard)
-      const result = !answer.ok && answer.ownBudgetExhausted === true ? { ...answer, code: -32005 } : answer
-      d.activity(request.team, url, result.ok)
-      if (result.ok || result.code === -32005) {
-        // A receipt owes no receipt; native bridge rounds have no A2A receipt contract.
-        // Match routeTrunk/trackOwedTask rather than manufacturing an unpayable debt.
-        if (parseReceipt(request.message) !== null) return { ...result, receipt: 'none' }
-        if (result.ok && result.bridge !== undefined) return { ...result, receipt: 'none' }
-        const deliveredTo = result.ok ? result.deliveredTo : undefined
-        const birth: OutboundBirth = { forwarded: true, ...(request.auth !== undefined ? { auth: request.auth } : {}), ...(peerCard?.publicKey ? { peerKey: peerCard.publicKey } : {}), ...(peerCard?.session ? { peerHost: peerCard.session } : {}), ...(deliveredTo !== undefined ? { deliveredTo } : {}), ...(receivers !== undefined ? { receiverMembers: receivers } : {}) }
-        // Exactly one outbound row. A completed sync response is receiptless bookkeeping.
-        if (result.ok && (result.task_status === 'TASK_STATE_COMPLETED' || result.receipt === 'none')) d.ledger.trackReceiptless(request.taskId, request.team, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
-        else d.ledger.track(request.taskId, request.team, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
-        return result
-      }
-      // The shared dispatcher's sync recovery query may prove a definitive failed
-      // outcome; like routeTrunk, that is an eligible miss, not an uncertain -32005.
-      failures.push(url + ': ' + result.error)
-      if (result.code === -32002 || result.code === -32003) return { ...result, task_id: request.taskId }
+      // Reserve only after all eligibility/receiver-link gates. A receipt owes no receipt.
+      const receipt = parseReceipt(request.message) !== null
+      const release = receipt ? () => {} : d.births.begin(request.taskId)
+      if (release === undefined) return refuse('forward receipt correlation capacity is full')
+      try {
+        // The same selected-peer snapshot supplies both return-link gate and settlement birth.
+        const answer = await d.dispatch(url, request, guard)
+        const result = !answer.ok && answer.ownBudgetExhausted === true ? { ...answer, code: -32005 } : answer
+        d.activity(request.team, url, result.ok)
+        if (result.ok || result.code === -32005) {
+          // A receipt owes no receipt; native bridge rounds have no A2A receipt contract.
+          // Match routeTrunk/trackOwedTask rather than manufacturing an unpayable debt.
+          if (parseReceipt(request.message) !== null) return { ...result, receipt: 'none' }
+          if (result.ok && result.bridge !== undefined) return { ...result, receipt: 'none' }
+          const deliveredTo = result.ok ? result.deliveredTo : undefined
+          const birth: OutboundBirth = { forwarded: true, ...(request.auth !== undefined ? { auth: request.auth } : {}), ...(peerCard?.publicKey ? { peerKey: peerCard.publicKey } : {}), ...(peerCard?.session ? { peerHost: peerCard.session } : {}), ...(deliveredTo !== undefined ? { deliveredTo } : {}), ...(receivers !== undefined ? { receiverMembers: receivers } : {}) }
+          // Exactly one outbound row. A completed sync response is receiptless bookkeeping.
+          if (result.ok && (result.task_status === 'TASK_STATE_COMPLETED' || result.receipt === 'none')) d.ledger.trackReceiptless(request.taskId, request.team, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
+          else d.ledger.track(request.taskId, request.team, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
+          return result
+        }
+        // The shared dispatcher's sync recovery query may prove a definitive failed
+        // outcome; like routeTrunk, that is an eligible miss, not an uncertain -32005.
+        failures.push(url + ': ' + result.error)
+        if (result.code === -32002 || result.code === -32003) return { ...result, task_id: request.taskId }
+      } finally { release() }
     }
     return { ok: false, code: -32004, task_id: request.taskId, error: 'forwarding to "' + request.team + '" failed: ' + (failures.join('; ') || 'no eligible peer candidate') }
   }

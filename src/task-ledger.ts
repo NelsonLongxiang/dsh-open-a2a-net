@@ -50,6 +50,7 @@ export class TaskLedger {
   private readonly archiveCap: number
   /** Injectable clock (option `now`). */
   private readonly now: () => number
+  private readonly warn: (message: string) => void
 
   /**
    * @param path - persistence file (`<dsh-home>/a2a/tasks.json`); empty = no persistence.
@@ -59,6 +60,7 @@ export class TaskLedger {
     this.staleTtlMs = options?.staleTtlMs ?? TASK_STALE_TTL_MS
     this.archiveCap = options?.archiveCap ?? ARCHIVE_CAP
     this.now = options?.now ?? (() => Date.now())
+    this.warn = options?.warn ?? console.warn
     this.restore()
   }
 
@@ -72,6 +74,11 @@ export class TaskLedger {
     return [...this.tasks]
   }
 
+  /** #275: old forwarded canvas debts cannot be safely upgraded by inventing receiver authority. */
+  settlementEnforceBlockers(): string[] {
+    return this.list().filter(row => row.direction === 'outbound' && row.forwarded === true && row.receiptExpected !== false && row.team.includes('/canvas/') && (row.deliveredTo === row.team || (row.deliveredTo === undefined && (row.receiverMembers === undefined || row.receiverMembers.length === 0)))).map(row => row.taskId)
+  }
+
   /**
    * The settled archive, most recently resolved first. Rows land here the
    * moment their receipt correlates and stay until the archive cap evicts
@@ -79,6 +86,7 @@ export class TaskLedger {
    * delayed duplicate refreshes instead of resolving nothing.
    * @returns the archived records.
    */
+
   archive(): readonly ArchivedRecord[] {
     return [...this.archived]
   }
@@ -117,7 +125,7 @@ export class TaskLedger {
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
       ...(brief !== undefined && brief !== '' ? { brief } : {}),
       ...(sender !== undefined ? { sender } : {}),
-      ...birthFacts(peer, birth),
+      ...birthFacts(peer, birth, team, sender, this.now(), this.warn),
       status: 'pending' as const,
     }, ...this.tasks]
     this.trimOwed()
@@ -139,7 +147,7 @@ export class TaskLedger {
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
       ...(brief !== undefined && brief !== '' ? { brief } : {}),
       ...(sender !== undefined ? { sender } : {}),
-      ...birthFacts(peer, birth),
+      ...birthFacts(peer, birth, team, sender, this.now(), this.warn),
       status: 'pending' as const,
     }, ...this.tasks]
     this.trimOwed()
@@ -623,7 +631,7 @@ export class TaskLedger {
               ...(entry.receiptExpected === false ? { receiptExpected: false as const } : {}),
               ...withSender(entry.sender, entry.direction),
               ...withAuth(entry.auth, entry, this.now()),
-            ...withRouting(entry as Record<string, unknown>),
+            ...withRouting(entry as Record<string, unknown>, this.warn),
               ...withSettledBy((entry as { settledBy?: unknown }).settledBy),
             })
             continue
@@ -642,7 +650,7 @@ export class TaskLedger {
             // #114 S3: a malformed sender is dropped whole; the row survives.
             ...withSender(entry.sender, entry.direction),
             ...withAuth(entry.auth, entry, this.now()),
-            ...withRouting(entry as Record<string, unknown>),
+            ...withRouting(entry as Record<string, unknown>, this.warn),
             status: entry.status === 'dead' ? 'dead' : 'pending',
             ...(entry.status === 'dead'
               ? {
@@ -679,7 +687,7 @@ export class TaskLedger {
             ...(entry.receiptExpected === false ? { receiptExpected: false as const } : {}),
             ...withSender(entry.sender, entry.direction),
             ...withAuth(entry.auth, entry, this.now()),
-            ...withRouting(entry as Record<string, unknown>),
+            ...withRouting(entry as Record<string, unknown>, this.warn),
             ...withSettledBy((entry as { settledBy?: unknown }).settledBy),
           })
         }
