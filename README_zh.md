@@ -63,6 +63,11 @@ a2a-net inbox --new                                      # 未读来信；--wait
 
 从 0.6.38 起 `forwardDirect` 默认 `true`；本机目标未找到时，home 可替已验签且在线的 CLI 向已链接的对端目标转发一跳。两边运营者必须各自链接：A 链接 B 的接收成员，B 链接 CLI 句柄并将 home 钉为 A。画布目标只需 A 链接画布属主主机（#282 S3，同队即授权）：接收成员在转发行出生时从属主签名名片冻结，回执只有来自这些成员、且由该属主公钥签名时才放行进 CLI 信箱并结算。作用域及结算 enforce 开启时，B 成员宿主的自动回执结清 A 的转发行并进入 CLI 信箱；`--sync` 返回 B 的回复。命令、参数、环境变量与退出码见 [`src/skill/references/cli.md`](src/skill/references/cli.md)。
 
+
+### 独立网络节点（不依赖 DSH 实例）
+
+`a2a-net serve --config node.json` 在一个独立的 Node 进程里运行网络层：名片与签名、对端目录、CLI 户口与信箱、一跳转发、canvas 归属、台账、状态面和工作台。它不承载 AI 会话，发往会话的消息照常转发给 DSH 主机。把它部署在一台稳定的机器上作为 CLI 的 home，DSH 重启就不会让 CLI 户口、信箱和 canvas 目录掉线（节点自身重启后也保留）。安装与配置见 [`src/skill/references/cli.md`](src/skill/references/cli.md) 的 `a2a-net serve` 一节。
+
 ## 画布队伍（任意组队，v0.5.25）
 
 主机/成员的 linked 徽章按主机事实显示：双向 URL 种子，或该主机卡唯一列出的精确非本机画布成员句柄。同名 zone（例如全为 `dsh`）不再推断已链接；最小卡缺少会话列表时，除非双向种子能证明该主机，否则保守显示 stranger。该显示规则不改变调用方准入或 CLI home 校验。
