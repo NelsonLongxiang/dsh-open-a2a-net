@@ -67,6 +67,16 @@ describe('drag a rail session into a canvas team', () => {
     v.destroy()
   })
 
+  it('a drag cancelled over a frame (Esc: dragend, no drop) clears the highlight', () => {
+    const { v, actions } = mount()
+    v.root.dispatchEvent(dragEvent('dragover', 10, 10, { [SESSION_DRAG_TYPE]: LONE }))
+    expect(v.root.querySelector('.drop-target')).not.toBeNull()
+    document.dispatchEvent(dragEvent('dragend', 10, 10, {}))
+    expect(v.root.querySelector('.drop-target')).toBeNull()
+    expect(actions).toHaveLength(0)
+    v.destroy()
+  })
+
   it('blank board, foreign drags and an existing member do not write', async () => {
     const { v, actions } = mount()
     const blank = dragEvent('dragover', 2000, 2000, { [SESSION_DRAG_TYPE]: LONE })
