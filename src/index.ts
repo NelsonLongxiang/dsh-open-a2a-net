@@ -114,6 +114,7 @@ declare module '@deepseek-ai/dsh-llm' {
 }
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { liveRootAgents } from './live-roots.ts'
 import { A2aClient, type A2aFetch, type A2aSchedule, type CardFetchOutcome } from './a2a-client.ts'
 import { MAX_LAYOUT_BODY_BYTES, WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from './transport-caps.ts'
 import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from './runtime.ts'
@@ -1356,7 +1357,8 @@ export function apply(ctx: Context, config: Config): void {
     // side-effect-only.
     ctx.on('agent/created', ({ agent }) => {
       const agents = ctx.get('agents')
-      if (agents === undefined || !agents.roots().some(root => root.id === agent.id)) return undefined
+      // #291: hosts without roots() (0.2.2-rc) resolve top-level via list()+delegation depth; never throws.
+      if (agents === undefined || !liveRootAgents(agents).some(root => root.id === agent.id)) return undefined
       liveRoots.set(String(agent.id), agent)
       if (joinedSessions.has(String(agent.id))) mountSessionNode(agent)
       nodeBinder.mount(agent)
@@ -1369,7 +1371,7 @@ export function apply(ctx: Context, config: Config): void {
       // the remount above (leave is the only intent remover).
       sessionNodes.delete(String(agent.id))
     })
-    for (const agent of ctx.get('agents')?.roots() ?? []) {
+    for (const agent of liveRootAgents(ctx.get('agents'))) {
       liveRoots.set(String(agent.id), agent)
       if (joinedSessions.has(String(agent.id))) mountSessionNode(agent)
       nodeBinder.mount(agent, { atFrozen: true })
@@ -1850,7 +1852,7 @@ export function apply(ctx: Context, config: Config): void {
     try {
       return agents.requireInitiator()
     } catch {
-      const roots = agents.roots()
+      const roots = liveRootAgents(agents)
       return roots.length > 0 ? roots[0] : undefined
     }
   }
