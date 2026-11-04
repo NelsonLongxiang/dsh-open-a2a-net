@@ -65,6 +65,14 @@ describe('one-hop CLI forwarding', () => {
     x.deps.memberLinked = () => true
     expect((await createDirectForward(x.deps)({ ...request, team })).ok).toBe(true)
   })
+  it('#272 a peer without delivered_to uses frozen canvas membership, never the canvas handle as a receiver', async () => {
+    const x = fixture(), team = 'beta/canvas/ops'
+    x.deps.candidates = async () => ({ urls: ['https://peer.test'], card: async () => ({ publicKey: 'peer-key', session: 'peer-host', canvasOrg: [{ team, name: 'ops', members: [request.caller, 'beta/aaaaaaaa'] }] } as A2aPeerCard) })
+    await createDirectForward(x.deps)({ ...request, team })
+    expect(x.ledger.list()[0]).toMatchObject({ receiverMembers: ['beta/aaaaaaaa'], peerKey: 'peer-key', forwarded: true })
+    expect(x.ledger.list()[0]!.deliveredTo).toBeUndefined()
+  })
+
   it('a deposit expiring during directory lookup is not dispatched', async () => {
     const x = fixture()
     let online = true

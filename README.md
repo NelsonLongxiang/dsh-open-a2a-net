@@ -100,7 +100,7 @@ a2a-net route dsh/1a2b3c4d "status?"                     # async by default; --s
 a2a-net inbox --new                                      # unread mail; --wait blocks, --hook feeds a Claude Code hook
 ```
 
-By default it delivers only to teams on its home host. With `forwardDirect: true`, the home can forward an authenticated online CLI one hop to a linked peer target. Both operators must link: A links the receiving B member; B links the CLI handle and explicitly pins A as its home. Canvas targets require A to directly link every advertised receiving member, not merely rely on the peer canvas org. With scope and settlement enforcement on, the member-host auto-receipt settles A’s forwarded row and lands in the CLI inbox; `--sync` returns B’s reply. Commands, flags, environment
+From 0.6.38, `forwardDirect` defaults to `true`: after a local miss the home can forward an authenticated online CLI one hop to a linked peer target. Both operators must link: A links the receiving B member; B links the CLI handle and explicitly pins A as its home. Canvas targets require A to directly link every advertised receiving member, not merely rely on the peer canvas org. With scope and settlement enforcement on, the member-host auto-receipt settles A’s forwarded row and lands in the CLI inbox; `--sync` returns B’s reply. Commands, flags, environment
 variables and exit codes: [`src/skill/references/cli.md`](src/skill/references/cli.md).
 
 ## Canvas teams (arbitrary grouping, v0.5.25)
@@ -137,7 +137,7 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | --- | --- | --- |
 | `announce` | `false` | Publish this node's agent card for peer discovery. |
 | `isolated` | `false` | Send nothing to any peer: card reads, directory sweeps, routes, remote log reads, canvas pings and fleet canvas-op relays are all refused (gh#193). `a2a/peers.json` is left untouched and refused fetches do not score peers; inbound faces keep answering; the state face shows `isolated: true`. For test and acceptance hosts. |
-| `forwardDirect` | `false` | Opt in to one-hop forwarding for an authenticated online local CLI after a local target miss; sender scope and the hop guard remain enforced. Link B receiving members at A, and link/pin the CLI home A at B; no second forwarding hop. |
+| `forwardDirect` | `true` | From 0.6.38, one-hop forwarding is enabled by default for an authenticated online local CLI after a local target miss; sender scope and the hop guard remain enforced. Link B receiving members at A, and link/pin the CLI home A at B; no second forwarding hop. Set `forwardDirect: false` to restore local-only CLI delivery. |
 | `peers` | `[]` | Seed base URLs; referred peers are learned from their cards. |
 | `delegates` | `[]` | Zone delegations: `{ name, url, publicKey }` published on the card. |
 | `team` | `'dsh'` | Team name this node exposes for direct routing. |

@@ -568,6 +568,8 @@ export interface SettlementRow {
   readonly peerHost?: string
   /** #139: the member that actually received the task (canvas and bare-zone deliveries). */
   readonly deliveredTo?: string
+  readonly forwarded?: true
+  readonly receiverMembers?: readonly string[]
 }
 
 /** Facts from outside the row. */
@@ -628,7 +630,7 @@ export function judgeSettlement(row: SettlementRow, settler: Settler, facts: Set
   if (inbound && row.auth === undefined) return { ok: true, role: 'legacy' }
   const target = inbound ? row.auth!.target : row.team
   // #139: once the member that received the task is known, it alone answers for the team.
-  const members = row.deliveredTo !== undefined ? [row.deliveredTo] : facts.membersOf(target) ?? []
+  const members = row.deliveredTo !== undefined ? [row.deliveredTo] : row.forwarded === true ? row.receiverMembers ?? [] : facts.membersOf(target) ?? []
   const local = inbound || row.peer === 'local' || row.peer.startsWith('local:')
   const peerOrigin = local ? undefined : originOfUrl(row.peer)
   // #139: the peer is its signing key, not one spelling of its address — a host

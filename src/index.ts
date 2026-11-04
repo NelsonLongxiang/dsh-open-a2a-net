@@ -203,7 +203,7 @@ export interface Config {
    * (which is left untouched). Inbound faces keep answering. Default false.
    */
   readonly isolated: boolean
-  /** Forward online local CLI deliveries one hop after a local miss. Default off. */
+  /** Forward online local CLI deliveries one hop after a local miss. Default on from 0.6.38; explicit false opts out. */
   readonly forwardDirect: boolean
   /** Human-facing name published on the agent card. */
   readonly agentName: string
@@ -447,7 +447,7 @@ export const Config: s<Config> = s.object({
   settlementAuth: s.union(['off', 'observe', 'enforce'] as const).default('observe'),
   announce: s.boolean().default(false),
   isolated: s.boolean().default(false),
-  forwardDirect: s.boolean().default(false),
+  forwardDirect: s.boolean().default(true),
   agentName: s.string().default('DeepSeek Harness A2A node'),
   peers: s.array(s.string()).default([]),
   delegates: s.array(s.object({ name: s.string(), url: s.string(), publicKey: s.string().default('') })).default([]),
@@ -1080,6 +1080,11 @@ export function apply(ctx: Context, config: Config): void {
    * the consumer's own discipline — keep seam listeners synchronous.
    * @param message - the inbound or relayed message text.
    */
+  const forwardingBirths = new Map<string, Promise<void>>()
+  async function waitForForwardBirth(message: string): Promise<void> {
+    const receipt = parseReceipt(message)
+    if (receipt !== null) await forwardingBirths.get(receipt.taskId)
+  }
   function settleAndAnnounce(message: string, settler?: Settler): SettlementRefusal | undefined {
     const parsedForJudge = parseReceipt(message)
     const judge = settlementJudgeFor(settler, parsedForJudge)
@@ -2530,18 +2535,18 @@ export function apply(ctx: Context, config: Config): void {
    * marker instead of a (false) completion.
    * @param taskId - the correlation key the steered receipt header carries.
    */
-  async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string): Promise<
+  async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number) => void): Promise<
     { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean } | { ok: false; error: string; localMiss?: true }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
-      return routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader, localFrom)
+      return routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader, localFrom, onSteered)
     }
     // Wake-on-route: a cold joined team materializes on demand, then steers.
     const wake = wakeColdTeam(team)
     if (wake.kind === 'flight') {
       return wake.flight.then(
-        agent => routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader, localFrom),
+        agent => routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader, localFrom, onSteered),
         (error: unknown) => ({ ok: false, error: `waking the session for team "${team}" failed: ${String(error)}` }) as const,
       )
     }
@@ -2570,7 +2575,7 @@ export function apply(ctx: Context, config: Config): void {
       const live = liveAgent()
       if (live !== undefined) {
         if (callerIsAgent(live, caller)) return { ok: false, error: selfRouteText(team) }
-        return routeIntoAgentFor(live, team, message, caller, taskId, proofClause, buildHeader)
+        return routeIntoAgentFor(live, team, message, caller, taskId, proofClause, buildHeader, undefined, onSteered)
       }
       return { ok: false, error: 'No live DSH agent is available to accept this message.' }
     }
@@ -2586,7 +2591,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param caller - caller label for the steered prefix.
    * @returns the agent's final reply, or the explicit failure.
    */
-  function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string): Promise<
+  function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number) => void): Promise<
     { ok: true; reply: string; placeholder?: boolean } | { ok: false; error: string }
   > {
     return new Promise((resolve) => {
@@ -2605,7 +2610,10 @@ export function apply(ctx: Context, config: Config): void {
         : `[A2A direct] ${taskId === undefined ? '' : `(task ${taskId}) `}未验证（in-process） ${sanitizeFromClause(from)} (routed to ${team}) sent:`
       const text = `${headerLine}\n\n${message}`
       try {
+        const floor = sessionEventsOf(agent).length
         steerRelay(agent, text, caller === '' ? undefined : caller, localFrom)
+        onSteered?.(agent, floor)
+        if (onSteered !== undefined && sessionEventsOf(agent).slice(floor).some(event => event?.type === 'assistant/message')) queueMicrotask(() => flushFinals(String(agent.id))) // synchronous final may already have emitted idle
       } catch (error) {
         // The waiter was registered above, so the key always holds it; the
         // map-of-arrays stays a plain read.
@@ -2974,7 +2982,7 @@ export function apply(ctx: Context, config: Config): void {
       taskLedger,
       refuseIfFlooded,
       refuseIfQueueFull,
-      settleAndAnnounce,
+      settleAndAnnounce, waitForForwardBirth,
       touchWakeDemand: () => { lastWakeDemandAt = Date.now() },
       session,
       resolveAgentForTeam,
@@ -3696,7 +3704,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     }
     return canvasFailure(team, owners, reason) + (missing.length === 0 ? '' : ' — missing prerequisites: ' + missing.join('; '))
   }
-  const forwardDirect = createDirectForward({
+  const dispatchForwarded = createDirectForward({
     enabled: () => config.forwardDirect === true, isolated: () => config.isolated, deposited: handle => cliDeposits.get(handle) !== undefined,
     memberLinked: handle => canvasStore.list().some(name => canvasStore.remoteMembersOf(name).includes(handle)),
     scope: (handle, team) => config.teamScopeRouting ? outboundScope(senderScopeRecords, handle, handle, team) : Promise.resolve({ ok: true as const }),
@@ -3704,6 +3712,14 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     dispatch: (url, request, guard) => dispatchPeerCandidate(url, request.team, request.message, request.contextId, new AbortController().signal, request.caller, request.noWait, request.taskId, request.caller, guard),
     ledger: taskLedger, activity: (team, peer, ok) => recordActivity('fwd', team, peer, ok),
   })
+  const forwardDirect: typeof dispatchForwarded = async request => {
+    if (parseReceipt(request.message) !== null) return dispatchForwarded(request)
+    if (forwardingBirths.size >= 64) return { ok: false, code: -32000, error: 'forward receipt correlation capacity is full' }
+    let release!: () => void
+    forwardingBirths.set(request.taskId, new Promise<void>(resolve => { release = resolve }))
+    try { return await dispatchForwarded(request) }
+    finally { forwardingBirths.delete(request.taskId); release() }
+  }
 
   const senderScopeRecords: OutboundScopeRecords = {
     zone: config.team, id8, teamsOf: id => teamMemberships.teamsOf(id), membersOf: team => teamMemberships.membersOf(team),

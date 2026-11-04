@@ -153,7 +153,7 @@ function meshConfig(options: MeshNodeOptions): Config {
     routeTimeoutMs: 60_000,
     flushTimeoutMs: 300_000,
     announce: true,
-    forwardDirect: false,
+    forwardDirect: true,
     agentName: options.name,
     peers: options.peers ?? [],
     delegates: options.delegates ?? [],
