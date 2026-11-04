@@ -67,9 +67,14 @@ function validName(raw: string): string | undefined {
   // reorder under JSON.parse's integer-like key ordering if the store ever
   // migrated to a keyed map — both stay out now.
   if (clean.includes('/') || /^\d+$/.test(clean)) return undefined
-  // #282 S2: `@<8 lowercase hex>` at the end is the owner-fingerprint suffix of a routing id, never part of a name.
-  if (/@[0-9a-f]{8}$/.test(clean)) return undefined
   return clean
+}
+
+/** A NEW canvas name: `@<8 lowercase hex>` at the end is the owner-fingerprint suffix of a routing id (#282 S2), never part of a name.
+ *  An existing canvas with such a name still loads; it is reached by its full id `<zone>/canvas/<name>@<own fp8>`. */
+function validNewName(raw: string): string | undefined {
+  const clean = validName(raw)
+  return clean === undefined || /@[0-9a-f]{8}$/.test(clean) ? undefined : clean
 }
 
 /**
@@ -204,7 +209,7 @@ export class CanvasStore {
    * @returns the stored name, or undefined when rejected.
    */
   create(name: string): string | undefined {
-    const clean = validName(name)
+    const clean = validNewName(name)
     if (clean === undefined) return undefined
     if (this.hasTeam(clean)) return clean
     if (this.teams.length >= CANVAS_TEAM_CAP) return undefined
