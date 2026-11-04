@@ -1,9 +1,9 @@
 /** H-side one-hop forwarding. Never resolves or dispatches local candidates again. */
 import { DEFAULT_HOP_BUDGET, guardHeader, mintGuard } from './recursion-guard.ts'
-import { briefOf, type OutboundBirth, type TaskLedger } from './task-ledger.ts'
+import { briefOf, type OutboundBirth, type TaskLedger, type TaskRecord } from './task-ledger.ts'
 import { parseReceipt } from './receipt.ts'
 import { splitCanvasOwner } from './canvas-id.ts'
-import type { TaskAuthorization } from './task-auth.ts'
+import { claimCovers, type TaskAuthorization } from './task-auth.ts'
 import type { A2aPeerCard, A2aRouteResult } from './types.ts'
 
 export interface ForwardRequest {
@@ -27,7 +27,6 @@ export interface DirectForwardDeps {
   enabled(): boolean
   isolated(): boolean
   deposited(handle: string): boolean
-  memberLinked(handle: string): boolean
   scope(handle: string, team: string): Promise<{ ok: true } | { ok: false; error: string }>
   candidates(team: string, failures: string[], caller: string): Promise<{ urls: string[]; card(url: string): Promise<A2aPeerCard | undefined> }>
   dispatch(url: string, request: ForwardRequest, guard: string): Promise<A2aRouteResult>
@@ -54,8 +53,9 @@ export function createDirectForward(d: DirectForwardDeps) {
       const peerCard = await directory.card(url)
       const receivers = plainTeam.includes('/canvas/') ? peerCard?.canvasOrg?.find(row => row.team === plainTeam)?.members.filter(member => member !== request.caller) : undefined
       if (plainTeam.includes('/canvas/')) {
-        if (receivers === undefined || receivers.length === 0 || receivers.some(member => !d.memberLinked(member))) {
-          failures.push(url + ': forwarding a canvas requires a direct operator link to every receiving member for its receipt return path')
+        // #282 S3 (same team authorizes): the owner's signed canvas is the return path; receipts settle only from these frozen receivers on this peer key (#274).
+        if (receivers === undefined || receivers.length === 0) {
+          failures.push(url + ': the owner card lists no receiving member of this canvas')
           continue
         }
       }
@@ -86,8 +86,26 @@ export function createDirectForward(d: DirectForwardDeps) {
         if (result.code === -32002 || result.code === -32003) return { ...result, task_id: request.taskId }
       } finally { release() }
     }
-    const unlinked = failures.some(f => f.includes('requires a direct operator link to every receiving member'))
-    const next = unlinked ? `ask this host's operator to drag every member of ${request.team} into a canvas team on this host (receipts return through those links), or route to one member's own handle` : failures.length === 0 ? `no linked peer lists ${request.team}; check the name with \`a2a-net teams\`` : undefined
+    const noReceiver = failures.some(f => f.includes('lists no receiving member'))
+    const next = noReceiver ? `the owner's canvas ${plainTeam} lists no member besides you; ask its owner to add one, or route to a member's own handle` : failures.length === 0 ? `no linked peer lists ${request.team}; check the name with \`a2a-net teams\`` : undefined
     return { ok: false, code: -32004, task_id: request.taskId, error: 'forwarding to "' + request.team + '" failed: ' + (failures.join('; ') || 'no eligible peer candidate'), ...(next !== undefined ? { next } : {}) }
   }
+}
+
+/**
+ * #282 S3 (same team authorizes): the admission basis for a receipt delivered to a local CLI mailbox
+ * from a member the home never linked — only for that CLI's own pending forward, only from a receiver
+ * frozen at birth, only when the body-bound (Sig3) claim's card key is the frozen peer key. Anything else:
+ * undefined. Trust assumption (design D2): the selected owner host is honest about its own canvas — it may
+ * list any label as a receiver, including one of this host's session labels in the same zone.
+ */
+export function forwardReceiptBasis(row: TaskRecord | undefined, caller: string, cliHandle: string, claim: { readonly caller: string; readonly bound: boolean; readonly bodyBound?: true; readonly card: { readonly publicKey: string } }): string | undefined {
+  // The signer's zone must cover the caller label: B never signs for another zone's member (review of #287 M4).
+  if (!claimCovers(caller, claim.caller)) return undefined
+  if (row === undefined || row.status !== 'pending' || row.forwarded !== true || row.sender?.kind !== 'cli' || row.sender.id !== cliHandle) return undefined
+  // Body-bound (Sig3) only: a stripped Sig3 would let a captured envelope carry another body (review of #287 P3-1).
+  if (!claim.bound || claim.bodyBound !== true || row.peerKey === undefined || claim.card.publicKey !== row.peerKey) return undefined
+  // A legacy row's deliveredTo may be the canvas handle itself (#272/#275): never a receiver.
+  if (row.deliveredTo !== undefined && (row.deliveredTo === row.team || row.deliveredTo.includes('/canvas/'))) return undefined
+  return (row.deliveredTo !== undefined ? [row.deliveredTo] : row.receiverMembers ?? []).includes(caller) ? `peer-org:${row.team}` : undefined
 }

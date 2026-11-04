@@ -59,7 +59,57 @@ async function setup(directLink = true, extraHome = false, replayAtHome = false,
   }
   return { a, b, c, home, pinBeforePublish, localPublish }
 }
+
+/** A request to A's /a2a/direct signed by `signerHome`'s node key (Sig2+Sig3 over the body); `strip` drops Sig3, `swap` sends another body. */
+async function signedPost(target: MeshNode, signerHome: string, signerZone: string, signerUrl: string, body: unknown, opts: { strip?: boolean; swap?: unknown } = {}): Promise<any> {
+  const url = target.baseUrl + '/a2a/direct'
+  const key = createPrivateKey(readFileSync(join(signerHome, 'a2a', 'node-key.pem'), 'utf8'))
+  const raw = JSON.stringify(body)
+  const headers: Record<string, string> = signOriginClaim({ url, method: 'POST', body: raw }, { caller: signerZone, callerUrl: signerUrl, privateKey: key, unbound: false, now: Date.now() })
+  if (opts.strip === true) { delete headers['X-A2A-Caller-Sig3']; delete headers['X-A2A-Body-Sha256'] }
+  return await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: opts.swap !== undefined ? JSON.stringify(opts.swap) : raw }).then(async r => await r.json())
+}
 describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both hosts', () => {
+  it('#282 S3 review P2: a receipt that beats the dispatch answer still settles with only the owner host linked', async () => {
+    const { a, b, home } = await setup(false)
+    const original = globalThis.fetch
+    const delay = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const response = await original(url as never, init)
+      if (String(url) === b.baseUrl + '/a2a/direct' && init?.method === 'POST') await new Promise(resolve => setTimeout(resolve, 600))
+      return response
+    })
+    const task = 'direct-race-same-team'
+    try {
+      expect((await cli(home, ['route', 'beta/canvas/ops', 'race', '--task', task])).code).toBe(0)
+      await vi.waitFor(async () => { expect((await state(a)).archived.find((r: any) => r.taskId === task)).toMatchObject({ outcome: 'completed', settledBy: { chain_role: 'target-member' } }) }, { timeout: 8000, interval: 100 })
+    } finally { delay.mockRestore(); await a.dispose(); await b.dispose() }
+  }, 30000)
+  it('#282 S3 review: only a body-bound receipt from a frozen receiver of B passes — other labels, free text and a stripped Sig3 do not', async () => {
+    const { a, b, home } = await setup(false)
+    const agent = b.agents.agent as any
+    agent.steer = (payload: any) => { b.steered.push(payload) } // never completes: the row stays pending
+    const task = 'direct-pending-s3'
+    try {
+      // A member of another zone (host C) in B's canvas: frozen as a receiver, but only C may sign for it.
+      await post(b, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: 'gamma/cccccccc' })
+      expect((await cli(home, ['route', 'beta/canvas/ops', 'hold', '--task', task])).code).toBe(0)
+      await vi.waitFor(async () => expect((await state(a)).tasks.find((r: any) => r.taskId === task)).toBeDefined(), { timeout: 4000 })
+      const receipt = (id: string, extra = '') => ({ team: handle, caller_session: targetHandle, task_id: id, message: `[A2A receipt] task ${task} done${extra}` })
+      expect((await state(a)).tasks.find((r: any) => r.taskId === task).receiverMembers).toContain('gamma/cccccccc')
+      // B signs for that frozen receiver of another zone: claimCovers must refuse (M4).
+      expect((await signedPost(a, b.home, 'beta', b.baseUrl, { ...receipt('s3-gamma'), caller_session: 'gamma/cccccccc' })).routed).not.toBe(true)
+      // A frozen receiver's free text with a fresh id is not a receipt (M6).
+      expect((await signedPost(a, b.home, 'beta', b.baseUrl, { team: handle, caller_session: targetHandle, task_id: 's3-free', message: 'free text, not a receipt' })).routed).not.toBe(true)
+      // A captured B envelope with Sig3 stripped and another body swapped in (P3-1).
+      expect((await signedPost(a, b.home, 'beta', b.baseUrl, receipt('s3-orig', ' ok'), { strip: true, swap: receipt('s3-swapped', ' FORGED') })).routed).not.toBe(true)
+      const mail = (await post(a, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle })).mail as Array<{ text: string }>
+      expect(mail.some(m => m.text.includes('FORGED') || m.text.includes('free text'))).toBe(false)
+      expect((await state(a)).tasks.find((r: any) => r.taskId === task)).toBeDefined()
+      // The genuine body-bound receipt from the frozen receiver settles it.
+      expect((await signedPost(a, b.home, 'beta', b.baseUrl, receipt('s3-genuine'))).routed).toBe(true)
+      await vi.waitFor(async () => expect((await state(a)).archived.find((r: any) => r.taskId === task)).toMatchObject({ settledBy: { caller: targetHandle } }), { timeout: 4000 })
+    } finally { await a.dispose(); await b.dispose() }
+  }, 30000)
   it('#282 S2 review P1: a CLI route carrying our own @fp8 stays on this host — a local canvas is reached, a same-named remote one never is', async () => {
     const { a, b, home } = await setup()
     try {
@@ -381,13 +431,31 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
     }
     finally { delayReply.mockRestore(); await a.dispose(); await b.dispose() }
   }, 30000)
-  it('a peer-org canvas alone must not open a return path the home operator never linked', async () => {
+  it('#282 S3 same team authorizes: with only the owner host linked, a canvas forward settles on-chain under enforce; a non-member still cannot reach the CLI mailbox', async () => {
     const { a, b, home } = await setup(false)
+    const task = 'direct-receipt-same-team'
     try {
-      const result = await cli(home, ['route', 'beta/canvas/ops', 'canvas without direct member link', '--task', 'direct-receipt-unlinked'])
-      expect(result.code).not.toBe(0)
-      expect(result.stderr).toContain('direct operator link')
-      expect(b.steered).toHaveLength(0)
+      const result = await cli(home, ['route', 'beta/canvas/ops', 'canvas with only the owner host linked', '--task', task])
+      expect(result.code, result.stderr).toBe(0)
+      expect(b.steered).toHaveLength(1)
+      await vi.waitFor(async () => {
+        const current = await state(a)
+        const row = current.archived.find((r: any) => r.taskId === task)
+        expect(row).toMatchObject({ outcome: 'completed', forwarded: true, sender: { kind: 'cli', id: handle }, settledBy: { caller: targetHandle } })
+        expect(row.settledBy.chain_role).not.toBe('off-chain')
+        expect(row.receiverMembers).toContain(targetHandle)
+        expect(current.settlement.refusals).toEqual([])
+      }, { timeout: 9000, interval: 80 })
+      const inbox = await cli(home, ['inbox'])
+      expect(inbox.stdout).toContain(`[A2A receipt] task ${task}`)
+      // Negative: B's session that is NOT in B's canvas `ops` has no shared team with the CLI on A.
+      const outsider = 'beta/cccccccc'
+      const url = a.baseUrl + '/a2a/direct'
+      const hostKey = createPrivateKey(readFileSync(join(b.home, 'a2a', 'node-key.pem'), 'utf8'))
+      const headers = signOriginClaim({ url, method: 'POST' }, { caller: b.team, callerUrl: b.baseUrl, privateKey: hostKey, unbound: false, now: Date.now() })
+      const refused = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ team: handle, caller_session: outsider, task_id: 'direct-outsider-mail', message: 'not a member' }) }).then(r => r.json()) as any
+      expect(refused.routed).not.toBe(true)
+      expect((await post(a, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle })).mail.some((row: any) => row.text.includes('not a member'))).toBe(false)
     } finally { await a.dispose(); await b.dispose() }
   }, 30000)
 })

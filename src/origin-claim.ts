@@ -70,7 +70,7 @@ export function sameMountedUrl(seeded: string, claimUrl: string): boolean {
   } catch { return false }
 }
 export type OriginClaimVerdict =
-  | { ok: true; caller: string; callerUrl: string; card: A2aPeerCard; bound: boolean; cli?: true }
+  | { ok: true; caller: string; callerUrl: string; card: A2aPeerCard; bound: boolean; cli?: true; bodyBound?: true }
   | { ok: false; reason: OriginClaimRefusal }
 
 /** The unbound (v1) canonical form. */
@@ -265,7 +265,7 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
     if (!signedBy(cli.card)) return { ok: false, reason: 'bad-sig' }
     if (cli.name !== caller) return { ok: false, reason: 'not-derivable' }
     accepted()
-    return { ok: true, caller: cli.handle, callerUrl, card: cli.card, bound, cli: true }
+    return { ok: true, caller: cli.handle, callerUrl, card: cli.card, bound, cli: true, ...(bound && hasBodySig ? { bodyBound: true as const } : {}) }
   }
   // Fetch the caller's card PLAIN (REVIEW M2 third-round ruling: the
   // envelope names a BARE ZONE, and derivation is the exact match
@@ -300,5 +300,6 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   // session handle with its own key).
   if (card.team !== caller) return { ok: false, reason: 'not-derivable' }
   accepted()
-  return { ok: true, caller, callerUrl, card, bound }
+  // #282 S3 review: a verified Sig3 means the body itself was signed (stripping it falls back to Sig2, which has no bodyBound).
+  return { ok: true, caller, callerUrl, card, bound, ...(bound && hasBodySig ? { bodyBound: true as const } : {}) }
 }

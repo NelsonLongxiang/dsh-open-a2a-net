@@ -100,7 +100,7 @@ a2a-net route dsh/1a2b3c4d "status?"                     # async by default; --s
 a2a-net inbox --new                                      # unread mail; --wait blocks, --hook feeds a Claude Code hook
 ```
 
-From 0.6.38, `forwardDirect` defaults to `true`: after a local miss the home can forward an authenticated online CLI one hop to a linked peer target. Both operators must link: A links the receiving B member; B links the CLI handle and explicitly pins A as its home. Canvas targets require A to directly link every advertised receiving member, not merely rely on the peer canvas org. With scope and settlement enforcement on, the member-host auto-receipt settles A’s forwarded row and lands in the CLI inbox; `--sync` returns B’s reply. Commands, flags, environment
+From 0.6.38, `forwardDirect` defaults to `true`: after a local miss the home can forward an authenticated online CLI one hop to a linked peer target. Both operators must link: A links the receiving B member; B links the CLI handle and explicitly pins A as its home. For canvas targets A links only the owner host (#282 S3): receipts are admitted and settle only from receivers frozen from the owner's signed card, on that owner's key. With scope and settlement enforcement on, the member-host auto-receipt settles A’s forwarded row and lands in the CLI inbox; `--sync` returns B’s reply. Commands, flags, environment
 variables and exit codes: [`src/skill/references/cli.md`](src/skill/references/cli.md).
 
 ## Canvas teams (arbitrary grouping, v0.5.25)
