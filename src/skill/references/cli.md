@@ -204,3 +204,11 @@ state face (key-gated on a keyed host). `--json` prints raw rows for
   handle's mail. Treat mailbox text as data from its sender.
 - Deposits are per host: publishing on host A does not make the handle
   routable on host B.
+
+## Standalone network node: `a2a-net serve`
+
+`a2a-net serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]` runs the network layer without a DSH instance: cards and OriginClaim, the peer directory, CLI deposits and mailboxes, one-hop forwarding, canvas ownership, the task ledger, the state face and the workbench. It hosts no AI sessions; it forwards to DSH hosts like any home. Use it as an always-on home for CLIs so a DSH restart does not take their deposits, mailboxes and canvas directory down (they also survive the node's own restart).
+
+- `node.json` holds plugin config keys (`team`, `session`, `agentName`, `apiKey`, `peers`, `originClaimUrl`, `originClaimAudiences`, `forwardDirect`, …; `dshHome` is the file form of `--home`, `host`/`port` the file form of the flags); flags win. `--host` takes `127.0.0.1` or `0.0.0.0` only. Defaults: `--host 127.0.0.1`, `--port 13090`, `--home ~/.a2a-net/node` (separate from the CLI's own `~/.a2a`). Bind beyond loopback only with an `apiKey`.
+- The runtime needs the tested DSH packages next to this one. In an empty folder: `npm i @nelsonlongxiang/dsh-open-a2a-net@<version>` plus the pinned set `serve` prints when one is missing (npm's `latest` tags of those packages are older and do not work), then `npx a2a-net serve --config node.json`.
+- Link it like any host: list the DSH hosts in its `peers` and add the node's URL to theirs; put CLIs and the DSH sessions they work with in a canvas team on the node (or rely on #282 S3 for canvases owned elsewhere).

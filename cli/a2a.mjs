@@ -46,6 +46,7 @@ usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 户口制:   init <name> [--uuid 16hex] [--force] · publish · inbox [--new|--wait|--hook] · revoke
 对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · report <msg…> [--task ID]
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
+独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
 文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR]   (#91: bytes never ride a message)
 
 host:     --home > $A2A_HOME > the home saved by 'a2a init --home URL' > ${DEFAULT_HOME}
@@ -108,7 +109,8 @@ function parseArgs(argv) {
   return { flags, positional }
 }
 
-const parsed = parseArgs(process.argv.slice(2))
+// `serve` owns its flags (cli/serve.mjs) and loads the node runtime lazily: the other commands never need it.
+const parsed = process.argv[2] === 'serve' ? { flags: new Map(), positional: ['serve'] } : parseArgs(process.argv.slice(2))
 const cmd = parsed.positional[0] ?? ''
 const flag = (name) => {
   const value = parsed.flags.get(name)
@@ -890,6 +892,11 @@ function stateCanvasTeams(s) {
 }
 
 async function main() {
+  if (cmd === 'serve') {
+    const { serve } = await import('./serve.mjs')
+    await serve(process.argv.slice(3))
+    return
+  }
   if (cmd === 'help' || has('--help') || has('-h')) {
     console.log(USAGE)
     return

@@ -103,6 +103,11 @@ a2a-net inbox --new                                      # unread mail; --wait b
 From 0.6.38, `forwardDirect` defaults to `true`: after a local miss the home can forward an authenticated online CLI one hop to a linked peer target. Both operators must link: A links the receiving B member; B links the CLI handle and explicitly pins A as its home. For canvas targets A links only the owner host (#282 S3): receipts are admitted and settle only from receivers frozen from the owner's signed card, on that owner's key. With scope and settlement enforcement on, the member-host auto-receipt settles A’s forwarded row and lands in the CLI inbox; `--sync` returns B’s reply. Commands, flags, environment
 variables and exit codes: [`src/skill/references/cli.md`](src/skill/references/cli.md).
 
+
+### Standalone network node (no DSH instance)
+
+`a2a-net serve --config node.json` runs the network layer in its own Node process: cards and signatures, the peer directory, CLI deposits and mailboxes, one-hop forwarding, canvas ownership, the ledger, the state face and the workbench. It hosts no AI sessions; messages for a session are forwarded to a DSH host as usual. Run it on a stable machine as the CLIs' home so a DSH restart does not take their deposits, mailboxes and canvas directory down (they also survive the node's own restart). Install and config: the `a2a-net serve` section of [`src/skill/references/cli.md`](src/skill/references/cli.md).
+
 ## Canvas teams (arbitrary grouping, v0.5.25)
 
 Peer/member badges are host-specific display facts: bilateral URL seeds or an exact, nonlocal canvas-member handle uniquely advertised by that host card. Shared zone names (such as `dsh`) never establish a badge link. A minimal card without session rows remains unconfirmed/stranger unless bilateral seeds establish the host; this conservative display rule does not change caller admission or CLI home validation.
