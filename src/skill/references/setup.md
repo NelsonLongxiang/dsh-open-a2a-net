@@ -23,7 +23,7 @@ presenting the operator's gesture on the operator's behalf is exactly the
 
 ## Human seat names
 
-The owner can open the workbench header ⚙, select a local session under “会话席位名”, and explicitly save a stable display name (up to 64 characters). Empty input clears the label. The `seatNames` map is stored in the home patch layer and hot-applies; cards and the board prefer it over the session title, and `a2a_whoami` / `a2a-net teams <name>` expose it. It never changes the route handle, join state or admission. Agents must ask the owner rather than self-name: A2A tool arguments containing `seatName`/`seatNames` are refused; no naming model tool exists. The owner control API keeps its existing apiKey/loopback trust model, not a sandbox against local shell or config-file writers.
+The owner can open the workbench header ⚙, select a local session under “会话席位名”, and explicitly save a stable display name (up to 64 characters; a name shaped like a route address such as `dsh/66abc2cf` is refused so it cannot pass for another session). Empty input clears the label. The `seatNames` map is stored in the home patch layer and hot-applies; cards and the board prefer it over the session title, and `a2a_whoami` / `a2a-net teams <name>` expose it. It never changes the route handle, join state or admission. Agents must ask the owner rather than self-name: A2A tool arguments containing `seatName`/`seatNames` are refused; no naming model tool exists. The owner control API keeps its existing apiKey/loopback trust model, not a sandbox against local shell or config-file writers.
 
 ## 1. One host: sessions talking to each other
 
