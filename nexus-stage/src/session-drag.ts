@@ -50,6 +50,8 @@ export function attachSessionDrop(root: HTMLElement, d: SessionDropDeps): void {
   root.addEventListener('dragleave', ev => {
     if (carries(ev) && (ev.relatedTarget === null || !root.contains(ev.relatedTarget as Node))) highlight(undefined)
   }, d.signal)
+  // A drag cancelled with Esc over a frame fires no dragleave on the board: the source's dragend clears it.
+  root.ownerDocument.addEventListener('dragend', () => highlight(undefined), d.signal)
   root.addEventListener('drop', ev => {
     if (!carries(ev)) return
     highlight(undefined)
