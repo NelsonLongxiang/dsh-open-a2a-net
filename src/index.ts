@@ -2066,6 +2066,7 @@ export function apply(ctx: Context, config: Config): void {
         get legacyInboundCount() { return legacyInboundCount },
         get unboundInboundCount() { return unboundInboundCount },
         get boundMissInboundCount() { return boundMissInboundCount },
+        get boundMissRecent() { return boundMissRecent },
         get ownCardUrl() { return ownCardUrl },
         get ownerSeatNames() { return ownerSeatNames },
         set ownerSeatNames(v) { ownerSeatNames = v },
@@ -2635,6 +2636,15 @@ export function apply(ctx: Context, config: Config): void {
    *  closing originClaimUnboundWindow; boundMissInbound: those of them whose
    *  bound form missed (a peer dials us by a name not in our audiences). */
   let unboundInboundCount = 0, boundMissInboundCount = 0
+  /** Which verified callers missed, and the origin they dialled: what to add to originClaimAudiences (#64). */
+  const boundMissRecent: Array<{ caller: string; audience: string; count: number; lastAt: number }> = []
+  const noteBoundMiss = (miss: { caller: string; audience: string }): void => {
+    boundMissInboundCount += 1
+    const at = boundMissRecent.findIndex(row => row.caller === miss.caller && row.audience === miss.audience)
+    const row = at >= 0 ? boundMissRecent.splice(at, 1)[0]! : { ...miss, count: 0, lastAt: 0 }
+    boundMissRecent.unshift({ ...row, count: row.count + 1, lastAt: Date.now() })
+    boundMissRecent.length = Math.min(boundMissRecent.length, 16)
+  }
   function verifyOriginClaim(req: IncomingMessage, options?: { readonly cli?: boolean; readonly rawBody?: Uint8Array }): Promise<OriginClaimVerdict> {
     return verifyOriginClaimOf(req, {
       cardCache,
@@ -2642,7 +2652,7 @@ export function apply(ctx: Context, config: Config): void {
       audiences: [ownCardUrl, ...config.originClaimAudiences ?? []],
       unboundOpen: config.originClaimUnboundWindow !== false,
       onUnbound: () => { unboundInboundCount += 1 },
-      onBoundMiss: () => { boundMissInboundCount += 1 },
+      onBoundMiss: noteBoundMiss,
       loopbackArrival: (config.originClaimUrl ?? '') === '',
       now: Date.now(),
       ...(options?.cli === true ? { cliDeposit: cliDepositCard } : {}),

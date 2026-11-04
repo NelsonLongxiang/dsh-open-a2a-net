@@ -203,7 +203,7 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   /** Count one accepted unbound envelope (the drain gauge). */
   readonly onUnbound: () => void
   /** Count one bound form that missed and fell back to the unbound one. */
-  readonly onBoundMiss?: () => void
+  readonly onBoundMiss?: (miss: { readonly caller: string; readonly audience: string }) => void
   /** A loopback arrival is an audience of its own (default); off when originClaimUrl declares a tunnel or proxy. */
   readonly loopbackArrival?: boolean
   readonly now: number
@@ -254,7 +254,7 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   const accepted = (): void => {
     if (bound) return
     d.onUnbound()
-    if (hasBound) d.onBoundMiss?.()
+    if (hasBound) d.onBoundMiss?.({ caller, audience: originOf(audience) })
   }
   // gh#133: a CLI identity deposited HERE, decided from the deposit table
   // before any fetch (the CLI may reach its home through a proxy the host

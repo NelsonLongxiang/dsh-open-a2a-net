@@ -107,6 +107,7 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly legacyInboundCount: number
   readonly unboundInboundCount: number
   readonly boundMissInboundCount: number
+  readonly boundMissRecent: ReadonlyArray<{ caller: string; audience: string; count: number; lastAt: number }>
   readonly ownCardUrl: string
   ownerSeatNames: Record<string, string>
   ownerAllowlist: string[]
@@ -453,6 +454,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // Of those, envelopes whose bound form missed here: the sender
           // dials an origin missing from originClaimAudiences.
           boundMissInbound: d.boundMissInboundCount,
+          // Who missed, by verified caller and the origin it dialled (newest first, ≤16).
+          boundMissRecent: d.boundMissRecent,
           // gh#113: CLI mailbox loss, all handles — mail the 64-row cap
           // pushed out, and mail cut at 4000 chars. The team verifier
           // holds `dropped` to zero.
