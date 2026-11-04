@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { signCard } from '../../src/card.ts'
-import { bootNode, reservePort, type MeshNode } from './harness.ts'
+import { bootNode, reservePort, type MeshNode, cliEnv } from './harness.ts'
 // @ts-expect-error -- plain ESM module without types
 import { nodeConfig, startNode, installLine, SERVE_DEPS } from '../../cli/serve.mjs'
 
@@ -28,7 +28,7 @@ const post = async (url: string, path: string, body: unknown): Promise<any> => a
 const state = async (url: string): Promise<any> => await fetch(url + '/__dsh_a2a/state').then(async r => await r.json())
 async function cli(home: string, args: string[]) {
   return await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-    const p = spawn(process.execPath, [join(process.cwd(), 'cli/a2a.mjs'), ...args], { env: { ...process.env, A2A_CLI_HOME: home } })
+    const p = spawn(process.execPath, [join(process.cwd(), 'cli/a2a.mjs'), ...args], { env: cliEnv(home) })
     let stdout = '', stderr = ''
     p.stdout.on('data', x => { stdout += String(x) }); p.stderr.on('data', x => { stderr += String(x) })
     p.on('error', reject); p.on('close', code => resolve({ code, stdout, stderr }))
