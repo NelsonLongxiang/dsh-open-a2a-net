@@ -83,11 +83,16 @@ host_prefix = 'dsh'
 for _t in _BASE.get('canvas', {}).get('teams', []):
     teams[_t['name']] = [m['id'] for m in _t.get('members', [])]
     for _m in _t.get('members', []):
-        member_rows[_m['id']] = _m
+        member_rows[_m['id']] = _m  # every member row, not only the first
         _p = _m.get('team', '').split('/')[0]
-        if _p:
+        if _p and '/' not in _m['id']:
             host_prefix = _p
-            break
+
+
+def valid_remote_ref(mid):
+    """Mirror of canvas-store.validRemoteMemberRef: a '/'-qualified handle, no whitespace, no empty side."""
+    return (isinstance(mid, str) and '/' in mid and mid == mid.strip() and not any(c.isspace() for c in mid)
+            and not mid.startswith('/') and not mid.endswith('/') and '//' not in mid)
 
 
 def valid_name(raw):
@@ -118,7 +123,9 @@ def build_state(demo: bool = False) -> bytes:
         for mid in ids:
             row = member_rows.get(mid)
             if row is None:
-                row = {'id': mid, 'team': f'{host_prefix}/{mid[:8]}', 'joined': True, 'live': True}
+                # A remote ref renders as the real state face does: { id, team: the handle, remote: true }.
+                row = ({'id': mid, 'team': mid, 'remote': True} if '/' in mid
+                       else {'id': mid, 'team': f'{host_prefix}/{mid[8:16] if mid.startswith("session-") else mid[:8]}', 'joined': True, 'live': True})
                 member_rows[mid] = row
             members.append(row)
         team_rows.append({'name': name, 'team': f'{host_prefix}/canvas/{name}', 'members': members})
@@ -208,8 +215,9 @@ class MockHost(SimpleHTTPRequestHandler):
         elif action == 'add-member':
             name = valid_name(body.get('name'))
             mid = body.get('id')
-            if name is None or not isinstance(mid, str) or mid not in joined_ids:
-                self._json(b'{"ok":false,"error":"name and a joined session id are required"}')
+            # Dual member shape, as the real host: a joined local session id, or a remote team handle.
+            if name is None or not isinstance(mid, str) or not (mid in joined_ids or valid_remote_ref(mid)):
+                self._json(b'{"ok":false,"error":"name and a member (joined session id, or a zone-qualified remote team handle like zone/a1b2c3d4) are required"}')
                 return
             roster = teams.setdefault(name, [])
             if mid in roster:

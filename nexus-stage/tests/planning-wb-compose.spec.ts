@@ -64,4 +64,26 @@ describe('W-B cross-host compose pipeline', () => {
     expect(created?.ids?.some(id => id.startsWith('peer-'))).toBe(false)
     v.root.remove()
   }, 15_000)
+  it('a host whose rows lead with its bare process team still joins by its first zone/id8 session handle (owner report 2026-11-04)', async () => {
+    const actions: Array<{ type: string; ids?: readonly string[] }> = []
+    const v = createPlanningView({ onDirty: vi.fn(), onLampClick: vi.fn(), onCanvasAction: async a => { actions.push(a as { type: string }); return true }, now: () => NOW })
+    document.body.appendChild(v.root)
+    v.adoptExternalLayout({ version: 1, viewport: { x: 0, y: 0, scale: 1 }, nodes: { a: { x: 0, y: 0 } }, frames: {} })
+    // The process-team row 'peerzone' comes first, as live hosts publish it now.
+    v.reconcile({ ...input, remoteTeams: [{ team: 'peerzone', via: 'https://10.0.0.5:8787' }, { team: 'peerzone/01234567', via: 'https://10.0.0.5:8787' }] })
+    v.seam.pointerDown(ptr({ target: v.root, clientX: -2000, clientY: -2000 }))
+    v.seam.pointerMove(ptr({ target: v.root, clientX: 4000, clientY: 4000 }))
+    v.seam.pointerUp(ptr({ target: v.root, clientX: 4000, clientY: 4000 }))
+    v.seam.key({ key: 'g', shiftKey: false, altKey: false, target: v.root, preventDefault: () => {} })
+    const dialogInput = v.root.querySelector<HTMLInputElement>('.p-dialog-input')!
+    dialogInput.value = '跨宿队'
+    dialogInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await vi.waitFor(() => expect(actions.length).toBeGreaterThan(0))
+    const created = actions.find(a => a.type === 'create-team') as { ids?: readonly string[] }
+    expect(created?.ids).toContain('peerzone/01234567')
+    // Never the bare process team: the server would refuse it as an unknown local session id.
+    expect(created?.ids).not.toContain('peerzone')
+    v.root.remove()
+  }, 15_000)
 })
+
