@@ -984,6 +984,10 @@ async function main() {
     // the address it dials is missing from the host's originClaimAudiences.
     if (typeof s.unboundInbound === 'number') {
       console.log(`claims      unboundInbound=${String(s.unboundInbound)}  boundMissInbound=${String(s.boundMissInbound ?? 0)}  (dialled as ${claimTarget(home())?.audience ?? home()})`)
+      // Who missed and by which origin: add that origin to the host's originClaimAudiences.
+      for (const m of (Array.isArray(s.boundMissRecent) ? s.boundMissRecent : []).slice(0, 5)) {
+        console.log(`  miss      ${String(m.caller)} dialled ${String(m.audience) || '(no origin)'} ×${String(m.count)}`)
+      }
     }
     console.log(`deposit     ${depositLine(list, identity().handle, 'OFFLINE')}`)
     return
