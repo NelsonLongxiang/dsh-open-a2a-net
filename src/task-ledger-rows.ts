@@ -167,14 +167,14 @@ export interface OutboundBirth {
 }
 
 /** The facts of one outbound birth that fit the row (see {@link withRouting} for the same shape on restore). */
-export function birthFacts(peer: string, birth: OutboundBirth | undefined): Pick<TaskRecord, 'auth' | 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'receiverMembers'> {
+export function birthFacts(peer: string, birth: OutboundBirth | undefined, team = '', sender?: Sender, now = Date.now(), warn: (message: string) => void = console.warn): Pick<TaskRecord, 'auth' | 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'receiverMembers'> {
   if (birth === undefined) return {}
   const fact = (v: string | undefined): v is string => v !== undefined && v !== '' && v.length <= ROUTING_FACT_CAP
   const remote = peer !== 'local' && !peer.startsWith('local:')
+  const receiverMembers = remote && birth.forwarded === true && fact(birth.peerKey) ? parseReceiverMembers(birth.receiverMembers, warn) : undefined
   return {
-    ...(!remote && birth.auth !== undefined && birth.auth.ingress === 'local' ? { auth: birth.auth } : {}),
-    ...(remote && birth.forwarded === true && birth.auth?.ingress === 'wire' && birth.auth.proof === 'cli-identity' && birth.auth.caller === birth.auth.receipt_target ? { auth: birth.auth } : {}),
-    ...(remote && birth.forwarded === true && fact(birth.peerKey) && validReceiverMembers(birth.receiverMembers) ? { receiverMembers: Object.freeze([...birth.receiverMembers]) } : {}),
+    ...withAuth(birth.auth, { direction: 'outbound', team, peer, sender, forwarded: birth.forwarded }, now),
+    ...(receiverMembers !== undefined ? { receiverMembers } : {}),
     ...(remote && birth.forwarded === true ? { forwarded: true as const } : {}),
     ...(remote && fact(birth.peerKey) ? { peerKey: birth.peerKey } : {}),
     ...(remote && fact(birth.peerHost) ? { peerHost: birth.peerHost } : {}),
@@ -184,7 +184,17 @@ export function birthFacts(peer: string, birth: OutboundBirth | undefined): Pick
 
 /** Bound on a persisted routing fact; anything longer (or empty, or not a string) is dropped on restore. */
 export const ROUTING_FACT_CAP = 256
-const validReceiverMembers = (value: unknown): value is readonly string[] => Array.isArray(value) && value.length > 0 && value.length <= 256 && value.every(v => typeof v === 'string' && new RegExp('^[a-z0-9-]+/[0-9a-f]{8}(?:[0-9a-f]{8})?$', 'i').test(v)) && new Set(value).size === value.length
+export function parseReceiverMembers(value: unknown, warn: (message: string) => void = console.warn): readonly string[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value)) { warn('a2a: receiverMembers is not an array; ignored'); return undefined }
+  const members = new Set<string>()
+  if (value.length > 256) warn('a2a: receiverMembers exceeds 256 entries; tail ignored')
+  for (const [index, member] of value.slice(0, 256).entries()) {
+    if (typeof member !== 'string' || !new RegExp('^[a-z0-9-]+/[0-9a-f]{8}(?:[0-9a-f]{8})?$', 'i').test(member)) { warn('a2a: invalid receiverMembers entry at index ' + index + '; ignored'); continue }
+    members.add(member)
+  }
+  return members.size === 0 ? undefined : Object.freeze([...members])
+}
 
 /**
  * #139: restore-side allowlist for the routing facts. Each is kept only in
@@ -192,12 +202,13 @@ const validReceiverMembers = (value: unknown): value is readonly string[] => Arr
  * a remote outbound row; anything else is dropped (the row survives as one
  * born before the fields, judged by current membership and origin).
  */
-export function withRouting(entry: Record<string, unknown>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt' | 'receiverMembers'> {
+export function withRouting(entry: Record<string, unknown>, warn: (message: string) => void = console.warn): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt' | 'receiverMembers'> {
   const fact = (v: unknown): v is string => typeof v === 'string' && v !== '' && v.length <= ROUTING_FACT_CAP
   const remoteOutbound = entry.direction === 'outbound' && typeof entry.peer === 'string' && entry.peer !== 'local' && !entry.peer.startsWith('local:')
+  const receiverMembers = remoteOutbound && entry.forwarded === true && fact(entry.peerKey) ? parseReceiverMembers(entry.receiverMembers, warn) : undefined
   return {
     ...(typeof entry.answeredAt === 'number' && Number.isFinite(entry.answeredAt) && entry.answeredAt >= 0 ? { answeredAt: entry.answeredAt } : {}),
-    ...(remoteOutbound && entry.forwarded === true && fact(entry.peerKey) && validReceiverMembers(entry.receiverMembers) ? { receiverMembers: Object.freeze([...entry.receiverMembers]) } : {}),
+    ...(receiverMembers !== undefined ? { receiverMembers } : {}),
     ...(remoteOutbound && entry.forwarded === true ? { forwarded: true as const } : {}),
     ...(remoteOutbound && fact(entry.peerKey) ? { peerKey: entry.peerKey } : {}),
     ...(remoteOutbound && fact(entry.peerHost) ? { peerHost: entry.peerHost } : {}),
@@ -353,6 +364,8 @@ export interface CancelledResult extends AbandonResult {
 
 /** Per-instance knobs; defaults come from the exported constants. */
 export interface TaskLedgerOptions {
+  /** Invalid persisted member entries are dropped individually and reported without their content. */
+  warn?: (message: string) => void
   /** Stale-TTL override (tests inject short windows); defaults to {@link TASK_STALE_TTL_MS}. */
   staleTtlMs?: number
   /** Archive capacity override; defaults to {@link ARCHIVE_CAP}. */

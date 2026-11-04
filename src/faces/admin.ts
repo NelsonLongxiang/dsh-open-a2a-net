@@ -403,6 +403,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             const roles = archive.flatMap(row => (row.settledBy !== undefined ? [row.settledBy.chain_role] : []))
             return {
               mode: config.settlementAuth,
+              enforceBlockers: taskLedger.settlementEnforceBlockers(),
               offChain: roles.filter(r => r === 'off-chain').length,
               legacy: roles.filter(r => r === 'legacy').length,
               compat: roles.filter(r => r === 'compat').length,

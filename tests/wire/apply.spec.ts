@@ -192,6 +192,21 @@ afterEach(() => {
 })
 
 describe('a2a plugin announce (peer discovery)', () => {
+  it('#275 refuses enforce activation while restored legacy forwarded canvas debts remain; observe still boots', async () => {
+    const home=tmpHome(), path=join(home,'a2a','tasks.json')
+    mkdirSync(join(home,'a2a'),{recursive:true})
+    writeFileSync(path,JSON.stringify({tasks:[{taskId:'old-forwarded',team:'dsh/canvas/ops',peer:'http://peer',startedAt:Date.now(),status:'pending',direction:'outbound',forwarded:true,deliveredTo:'dsh/canvas/ops'}]}))
+    for(const settlementAuth of ['enforce','observe'] as const){
+      const ctx=new Context()
+      await ctx.plugin(SystemPrompt);await ctx.plugin(ToolRuntime);await ctx.plugin(TimerService)
+      try {
+        const start=()=>apply(ctx,makeConfig({dshHome:home,settlementAuth}))
+        if(settlementAuth==='enforce') expect(start).toThrow('settlementAuth enforce refused: legacy forwarded canvas debts lack receiver facts: old-forwarded')
+        else expect(start).not.toThrow()
+      } finally {await ctx.fiber.dispose()}
+    }
+  })
+
   it('publishes a signed agent card, re-signs at TTL/4, and persists the key across restarts', async () => {
     const home = tmpHome()
     const ctx = new Context()

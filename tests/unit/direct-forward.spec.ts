@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { createDirectForward, type DirectForwardDeps, type ForwardRequest } from '../../src/direct-forward.ts'
+import { describe, expect, it, vi } from 'vitest'
+import { createDirectForward, ForwardBirths, type DirectForwardDeps, type ForwardRequest } from '../../src/direct-forward.ts'
 import { TaskLedger } from '../../src/task-ledger.ts'
 import { checkGuardAtIngress, DEFAULT_HOP_BUDGET } from '../../src/recursion-guard.ts'
 import type { A2aPeerCard, A2aRouteResult } from '../../src/types.ts'
@@ -8,13 +8,48 @@ const ok: A2aRouteResult = { ok: true, team: request.team, reply: '', task_id: r
 function fixture(results: A2aRouteResult[] = [ok]) {
   const ledger = new TaskLedger('')
   const sent: Array<{ url: string; request: ForwardRequest; guard: string }> = []
-  const deps: DirectForwardDeps = { enabled: () => true, isolated: () => false, deposited: () => true, memberLinked: () => true, scope: async () => ({ ok: true }),
+  const deps: DirectForwardDeps = { births: new ForwardBirths(), enabled: () => true, isolated: () => false, deposited: () => true, memberLinked: () => true, scope: async () => ({ ok: true }),
     candidates: async () => ({ urls: results.map((_, i) => 'https://peer' + i + '.test'), card: async () => ({ publicKey: 'key', session: 'host' } as A2aPeerCard) }),
     dispatch: async (url, r, guard) => { sent.push({ url, request: r, guard }); return results[sent.length - 1]! }, ledger, activity: () => {},
   }
   return { deps, ledger, sent }
 }
 describe('one-hop CLI forwarding', () => {
+  it('#275 exactly 64 eligible dispatches wait for birth; 65th carries task_id, gates retain precedence and released slots recover', async () => {
+    const x = fixture(), pending: Array<() => void> = []
+    let dispatched=0
+    x.deps.dispatch=async (_url,r) => { dispatched++; if(r.taskId==='receipt-at-cap') return ok; await new Promise<void>(resolve=>pending.push(resolve)); return {...ok,task_id:r.taskId} }
+    const forward=createDirectForward(x.deps)
+    const flights=Array.from({length:64},(_,i)=>forward({...request,taskId:'cap-'+i}))
+    await vi.waitFor(()=>expect(dispatched).toBe(64))
+    let released=false
+    const waiting=x.deps.births.wait('cap-0')!.then(()=>{released=true})
+    expect(released).toBe(false)
+    expect(await forward({...request,taskId:'cap-65'})).toMatchObject({ok:false,task_id:'cap-65',error:expect.stringContaining('capacity')})
+    x.deps.enabled=()=>false
+    expect(await forward({...request,taskId:'disabled-at-cap'})).toMatchObject({task_id:'disabled-at-cap',error:expect.stringContaining('forwardDirect is off')})
+    x.deps.enabled=()=>true
+    expect(await forward({...request,guarded:true,taskId:'guard-at-cap'})).toMatchObject({task_id:'guard-at-cap',error:expect.stringContaining('already forwarded')})
+    x.deps.scope=async()=>({ok:false,error:'scope gate'})
+    expect(await forward({...request,taskId:'scope-at-cap'})).toMatchObject({task_id:'scope-at-cap',error:expect.stringContaining('scope gate')})
+    x.deps.scope=async()=>({ok:true})
+    x.deps.candidates=async()=>({urls:['https://peer'],card:async()=>({publicKey:'key',canvasOrg:[{team:'beta/canvas/ops',name:'ops',members:['beta/aaaaaaaa']}]} as A2aPeerCard)})
+    x.deps.memberLinked=()=>false
+    expect(await forward({...request,team:'beta/canvas/ops',taskId:'link-at-cap'})).toMatchObject({task_id:'link-at-cap',error:expect.stringContaining('direct operator link')})
+    expect(await forward({...request,taskId:'receipt-at-cap',message:'[A2A receipt] task earlier done'})).toMatchObject({ok:true,receipt:'none'})
+    pending.shift()!(); await waiting; expect(released).toBe(true)
+    expect(x.ledger.find('cap-0')).toBeDefined()
+    const recovered=forward({...request,taskId:'recovered'})
+    await vi.waitFor(()=>expect(dispatched).toBe(66))
+    pending.splice(0).forEach(release=>release());await Promise.all([...flights,recovered])
+    expect(x.deps.births.wait('cap-0')).toBeUndefined()
+  })
+  it('#275 dispatch exceptions release the birth waiter without manufacturing a row', async () => {
+    const x=fixture();x.deps.dispatch=async()=>{throw Error('dispatch failed')}
+    await expect(createDirectForward(x.deps)(request)).rejects.toThrow('dispatch failed')
+    expect(x.deps.births.wait(request.taskId)).toBeUndefined();expect(x.ledger.list()).toEqual([])
+  })
+
   it('fails over refusals but sends the original identity with one decremented guard and one row', async () => {
     const x = fixture([{ ok: false, code: -32000, error: 'stale target' }, ok])
     expect((await createDirectForward(x.deps)(request)).ok).toBe(true)

@@ -46,7 +46,7 @@ import { applyOwnerSettings, loadSeatNames, type OwnerSettings } from './owner-s
 import { CLI_HANDLE_RE, CliDepositStore } from './cli-deposit.ts'
 import { cliHomeChoices, decideCliHome } from './cli-home.ts'
 import { outboundScope, type OutboundScopeRecords } from './outbound-scope.ts'
-import { createDirectForward } from './direct-forward.ts'
+import { createDirectForward, ForwardBirths } from './direct-forward.ts'
 import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
@@ -1033,7 +1033,9 @@ export function apply(ctx: Context, config: Config): void {
   // queryable here, and the correlating `[A2A receipt] task <id>` message
   // resolves it — the caller-side half of the receipt contract, persisted so
   // a restart does not orphan the reconciliation.
-  const taskLedger = new TaskLedger(join(home, 'a2a', 'tasks.json'), { staleTtlMs: config.taskStaleTtlMs })
+  const taskLedger = new TaskLedger(join(home, 'a2a', 'tasks.json'), { staleTtlMs: config.taskStaleTtlMs, warn: message => logger.warn(message) })
+  const enforceBlockers = taskLedger.settlementEnforceBlockers()
+  if (config.settlementAuth === 'enforce' && enforceBlockers.length > 0) throw new Error('settlementAuth enforce refused: legacy forwarded canvas debts lack receiver facts: ' + enforceBlockers.join(', ') + '; keep observe and reconcile them first (#125/#275)')
   // Unjoined-node reporting ingress (design: docs/design/unjoined-report-ingress.md):
   // a one-way signal channel for sessions with no network membership — a
   // fallen-off or never-joined session reports "I exist / I have a task"
@@ -1080,10 +1082,10 @@ export function apply(ctx: Context, config: Config): void {
    * the consumer's own discipline — keep seam listeners synchronous.
    * @param message - the inbound or relayed message text.
    */
-  const forwardingBirths = new Map<string, Promise<void>>()
+  const forwardingBirths = new ForwardBirths()
   async function waitForForwardBirth(message: string): Promise<void> {
     const receipt = parseReceipt(message)
-    if (receipt !== null) await forwardingBirths.get(receipt.taskId)
+    if (receipt !== null) await forwardingBirths.wait(receipt.taskId)
   }
   function settleAndAnnounce(message: string, settler?: Settler): SettlementRefusal | undefined {
     const parsedForJudge = parseReceipt(message)
@@ -3704,7 +3706,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     }
     return canvasFailure(team, owners, reason) + (missing.length === 0 ? '' : ' — missing prerequisites: ' + missing.join('; '))
   }
-  const dispatchForwarded = createDirectForward({
+  const forwardDirect = createDirectForward({
+    births: forwardingBirths,
     enabled: () => config.forwardDirect === true, isolated: () => config.isolated, deposited: handle => cliDeposits.get(handle) !== undefined,
     memberLinked: handle => canvasStore.list().some(name => canvasStore.remoteMembersOf(name).includes(handle)),
     scope: (handle, team) => config.teamScopeRouting ? outboundScope(senderScopeRecords, handle, handle, team) : Promise.resolve({ ok: true as const }),
@@ -3712,14 +3715,6 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     dispatch: (url, request, guard) => dispatchPeerCandidate(url, request.team, request.message, request.contextId, new AbortController().signal, request.caller, request.noWait, request.taskId, request.caller, guard),
     ledger: taskLedger, activity: (team, peer, ok) => recordActivity('fwd', team, peer, ok),
   })
-  const forwardDirect: typeof dispatchForwarded = async request => {
-    if (parseReceipt(request.message) !== null) return dispatchForwarded(request)
-    if (forwardingBirths.size >= 64) return { ok: false, code: -32000, error: 'forward receipt correlation capacity is full' }
-    let release!: () => void
-    forwardingBirths.set(request.taskId, new Promise<void>(resolve => { release = resolve }))
-    try { return await dispatchForwarded(request) }
-    finally { forwardingBirths.delete(request.taskId); release() }
-  }
 
   const senderScopeRecords: OutboundScopeRecords = {
     zone: config.team, id8, teamsOf: id => teamMemberships.teamsOf(id), membersOf: team => teamMemberships.membersOf(team),
