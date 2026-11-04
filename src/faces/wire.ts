@@ -78,7 +78,7 @@ export type NativeRoundOutcome =
   | { readonly ok: false; readonly error: string; readonly phase?: 'pre-dispatch'; readonly aborted?: boolean }
 
 /** What verifyOriginClaim answers (see index.ts; reason widens to string here — the faces only interpolate it). */
-export type OriginClaimResult = { ok: true; caller: string; callerUrl: string; card: A2aPeerCard; bound: boolean; cli?: true } | { ok: false; reason: string }
+export type OriginClaimResult = { ok: true; caller: string; callerUrl: string; card: A2aPeerCard; bound: boolean; cli?: true; bodyBound?: true } | { ok: false; reason: string }
 
 /** Same scheme/host/port; false when either side is empty or malformed. */
 function sameOrigin(a: string, b: string): boolean {
@@ -641,9 +641,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // receiver frozen at birth on the selected peer's key — the owner's signed canvas is the return path.
           const echoed = !admission.ok && cliDeposits.get(team) !== undefined ? parseReceipt(message) : null
           if (echoed !== null) {
-            // A receipt can beat the dispatch's HTTP answer: wait for this forward's row to be born first (review of #287 P2).
-            await waitForForwardBirth(message)
+            // Verify first, so an unsigned or Sig2-only caller cannot hold the connection on an in-flight forward (#287 review P3);
+            // then a body-bound receipt may beat the dispatch's HTTP answer: wait for this forward's row to be born (#287 P2).
             const receiptClaim = earlyClaim ?? await verifyOriginClaim(req, { cli: true, rawBody })
+            if (receiptClaim.ok && receiptClaim.bodyBound === true) await waitForForwardBirth(message)
             const basis = receiptClaim.ok ? d.forwardReceiptBasis(echoed.taskId, caller, team, receiptClaim) : undefined
             if (basis !== undefined) admission = { ok: true, via: 'peer-org', rule: 'peer-org', basis: [basis] }
           }
