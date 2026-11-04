@@ -219,7 +219,11 @@ describe('#230 home host forwards a deposited CLI one hop with scope on', () => 
     ['malformed-guard', {}, 'malformed-not-a-first-hop', 'already forwarded'],
   ] as const) it(name + ' is a visible non-forwarding local miss', async () => {
     const { a, b } = await fixture(options)
-    try { const result = await route(a, 'direct-forward-' + name, true, guard); expect(result.error).toContain(reason); expect(b.steered).toHaveLength(0) }
+    try {
+      const result = await route(a, 'direct-forward-' + name, true, guard); expect(result.error).toContain(reason); expect(b.steered).toHaveLength(0)
+      // #282 S1: the wire face carries the next step; a guard refusal has none.
+      if (guard === undefined) expect(typeof result.next).toBe('string'); else expect(result.next).toBeUndefined()
+    }
     finally { await a.dispose(); await b.dispose() }
   }, 30000)
 })

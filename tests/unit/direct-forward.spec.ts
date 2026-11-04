@@ -95,7 +95,9 @@ describe('one-hop CLI forwarding', () => {
     const team = 'beta/canvas/ops'
     x.deps.candidates = async () => ({ urls: ['https://peer.test'], card: async () => ({ canvasOrg: [{ team, name: 'ops', members: [request.caller, 'beta/aaaaaaaa', 'beta/bbbbbbbb'] }], sessionTeams: [{ team: 'beta/aaaaaaaa' }] } as A2aPeerCard) })
     x.deps.memberLinked = member => member === 'beta/aaaaaaaa'
-    expect((await createDirectForward(x.deps)({ ...request, team })).ok).toBe(false)
+    const unlinked = await createDirectForward(x.deps)({ ...request, team })
+    expect(unlinked.ok).toBe(false)
+    expect(!unlinked.ok && unlinked.next).toContain('drag every member of beta/canvas/ops')
     expect(x.sent).toHaveLength(0)
     x.deps.memberLinked = () => true
     expect((await createDirectForward(x.deps)({ ...request, team })).ok).toBe(true)
@@ -118,9 +120,13 @@ describe('one-hop CLI forwarding', () => {
     expect(x.sent).toHaveLength(0)
   })
   it('every forwarding prerequisite refuses before any peer dispatch', async () => {
-    for (const over of [{ enabled: () => false }, { isolated: () => true }, { deposited: () => false }, { scope: async () => ({ ok: false as const, error: 'no team' }) }]) {
-      const x = fixture(); expect((await createDirectForward({ ...x.deps, ...over })(request)).ok).toBe(false); expect(x.sent).toHaveLength(0)
+    // #282 S1: each refusal the caller can act on names one next step.
+    for (const [over, next] of [[{ enabled: () => false }, 'forwardDirect: true'], [{ isolated: () => true }, 'another home host'], [{ deposited: () => false }, 'a2a-net publish'], [{ scope: async () => ({ ok: false as const, error: 'no team' }) }, 'canvas team on this host']] as const) {
+      const x = fixture(); const out = await createDirectForward({ ...x.deps, ...over })(request)
+      expect(out.ok).toBe(false); expect(x.sent).toHaveLength(0); expect(!out.ok && out.next).toContain(next)
     }
     for (const over of [{ guarded: true }, { localCliProof: false }]) { const x = fixture(); expect((await createDirectForward(x.deps)({ ...request, ...over })).ok).toBe(false); expect(x.sent).toHaveLength(0) }
+    // A protocol refusal (already forwarded) has nothing for the caller to do.
+    { const x = fixture(); const out = await createDirectForward(x.deps)({ ...request, guarded: true }); expect(!out.ok && out.next).toBeUndefined() }
   })
 })

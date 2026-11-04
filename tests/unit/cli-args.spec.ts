@@ -169,6 +169,17 @@ describe('a2a-net CLI: route / report talk to the right host with the right mess
     expect(raw.code).toBe(1)
     expect(JSON.parse(raw.stdout)).toEqual({ error: 'caller not admitted' })
   })
+
+  it('#282 S1: a refusal that carries a next step prints it under the reason', async () => {
+    const host = await stubHost(() => ({ status: 200, body: { error: 'not forwarded: forwardDirect is off', code: -32000, task_status: 'TASK_STATE_FAILED', next: "ask this host's operator to set forwardDirect: true" } }))
+    servers.push(host.server)
+    const HOME = tmpHomeDir()
+    await runCli(['init', 'scout'], { HOME, A2A_CLI_HOME: HOME })
+    const refused = await runCli(['route', 'ops', 'hi', '--home', host.url], { HOME, A2A_CLI_HOME: HOME })
+    expect(refused.code).toBe(1)
+    expect(refused.stderr).toContain('forwardDirect is off')
+    expect(refused.stderr).toContain("[route] next: ask this host's operator to set forwardDirect: true")
+  })
 })
 
 describe('a2a-net CLI: a host behind dsh-pocket', () => {
