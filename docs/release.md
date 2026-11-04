@@ -8,12 +8,13 @@
 - **canvas 带属主指纹的 id**（S2）：`a2a-net teams` 以及状态面的 `canvas.teams[].id`、`peerOrg[].org[].id`，现在把 canvas 行显示为 `<zone>/canvas/<name>@<fp8>`（属主名片公钥的指纹）。`teams --json` 的 `team` 字段也是这个 id，读这个字段的脚本请按需取 `@` 之前的部分。不带后缀的旧写法路由行为不变。新建 canvas 不能再以 `@<8 位十六进制>` 结尾；已存在的同名 canvas 照常加载，用完整 id 访问。
 - **同队即授权**（S3）：CLI 转发到远端 canvas 时，home 只需链接 canvas 的**属主主机**，不再要求逐个链接接收成员。成员回执只有满足以下全部条件才放行进 CLI 信箱并结算：来自转发出生时冻结的接收成员；由选中对端的名片公钥签名；签名为绑定请求体的 Sig3。因此**属主主机须 ≥ 0.6.37**，否则回执退回旧规则，需要链接成员。未链接成员发来的自由消息照旧需要链接。
 - **拒绝给下一步**（S1）：转发、排队已满、准入、防刷屏的拒绝新增 `next` 字段，CLI 打印为 `[route] next: …`。拒绝原文与错误码不变；幂等 409 的响应体是冻结接口，未改。
-- **状态面 `boundMissRecent`**（#273，#64 关窗前置）：列出谁的绑定签名对不上、拨的是哪个 origin，`a2a-net status` 的 `claims` 下显示 `miss` 行。把列出的 origin 加进对应主机的 `originClaimAudiences`。
 - **独立网络节点 `a2a-net serve`**（#295）：不依赖 DSH 实例运行网络层，包括名片、对端目录、CLI 户口与信箱、一跳转发、canvas 归属、任务账本、状态面和工作台。它不托管 AI 会话，投递会话仍转发给 DSH 宿主。安装需要一组固定版本的运行时依赖，`installLine` 给出完整的 `npm i` 行（npm 上的 `latest` 标签较旧，不能用）。绑定 `0.0.0.0` 时必须配 `apiKey`。用法见 `references/cli.md`。
 - **#291 兼容 harness ≥0.2.2-rc**：宿主的 `AgentRegistry` 没有 `roots()` 时，改用 `list()` 按委托深度过滤，会话发布和恢复不再因 TypeError 回滚（历史会话从列表消失的事故）。旧宿主语义不变。
 - 本版无配置默认值变化，无需回滚预案。
 
 ## 0. 0.6.38 转发默认值升级提示
+
+- **状态面 `boundMissRecent`**（#273，#64 关窗前置，0.6.38 起）：列出谁的绑定签名对不上、拨的是哪个 origin，`a2a-net status` 的 `claims` 下显示 `miss` 行。把列出的 origin 加进对应主机的 `originClaimAudiences`。
 
 从 0.6.38 起，未显式配置 `forwardDirect` 的宿主会默认启用已实现的一跳 CLI 转发。0.6.37 及以前默认关闭；已有显式 `false` 保持关闭。升级不会新建链接或扩大作用域，仍须已验签、在线的本机 CLI 户口、发送作用域、双方运营者链接、DEFAULT-1 跳数预算；入站带 Guard 或 isolated 主机不转发。
 
