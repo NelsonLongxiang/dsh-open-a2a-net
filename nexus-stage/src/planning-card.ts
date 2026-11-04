@@ -43,15 +43,17 @@ export function createCardElement(id: string): HTMLDivElement {
 
 /**
  * The right-hand chip. Peer cards show the link badge (gh#20 W-A: linked green / stranger gray, then the
- * verified tick/cross; an absent link field from an older host renders the neutral 'peer'); session cards show
- * their first membership priority `P<n>`. Writes only on change.
+ * verified tick/cross; an absent link field from an older host renders the neutral 'peer'). A remote MEMBER card
+ * (gh#38) is one session on that host, not the host: it reads 成员, colored and ticked by its host's link
+ * (it used to fall through to 'peer' and looked like a host card). Session cards show their first membership
+ * priority `P<n>`. Writes only on change.
  */
 export function paintPrio(prioEl: HTMLElement, n: WorldNode, info: { link?: 'linked' | 'stranger'; verified?: boolean } | undefined): void {
   if (n.remote === true) {
     const cls = info?.link === 'linked' ? 'lnk-linked' : info?.link === 'stranger' ? 'lnk-stranger' : ''
     if (prioEl.className !== `prio mono ${cls}`.trim()) prioEl.className = `prio mono ${cls}`.trim()
     const mark = info === undefined ? '' : info.verified === true ? '✓' : '✗'
-    const badge = (info?.link ?? 'peer') + mark
+    const badge = (n.id.startsWith('member-') ? '成员' : info?.link ?? 'peer') + mark
     if (prioEl.textContent !== badge) prioEl.textContent = badge
   } else {
     if (prioEl.className !== 'prio mono') prioEl.className = 'prio mono'
