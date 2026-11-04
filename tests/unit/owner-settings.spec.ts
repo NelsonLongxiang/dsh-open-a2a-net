@@ -21,6 +21,12 @@ describe('applyOwnerSettings', () => {
   it.each(['a\u0085b', 'a\u200bb', 'a\u202eb', 'a\u2028b', 'a\u2029b', '\u200b', '\u0301', '\u3000'])('refuses invisible/control-only or format-bearing labels %j', name => {
     expect(parseSeatNames({ 'session-0123456789abcdef': name })).toBeUndefined()
   })
+  it.each(['dsh/66abc2cf', 'dsh/canvas/基础建设项目组', 'review-seat/e6733904011a44ed', ' zone/x '])('refuses address-shaped labels %j (they would pass for another session)', name => {
+    expect(parseSeatNames({ 'session-0123456789abcdef': name })).toBeUndefined()
+  })
+  it.each(['开发席', '前端/设计', 'dev seat / review', 'A2A 评审席'])('keeps ordinary labels with a slash or spaces %j', name => {
+    expect(parseSeatNames({ 'session-0123456789abcdef': name })).toEqual({ 'session-0123456789abcdef': name })
+  })
   it('requires visible content and retains only valid boot entries while warning without echoing values', () => {
     const warn = vi.fn()
     const names = { 'session-0123456789abcdef': '开发席', 'session-1111222233334444': 'hidden\u200bname', 'session-5555666677778888': 'e\u0301' }
