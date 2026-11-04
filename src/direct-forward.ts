@@ -11,10 +11,23 @@ export interface ForwardRequest {
   localCliProof: boolean; guarded: boolean
   auth?: TaskAuthorization
 }
+/** An early receipt waits at most this long for its forward row to be born (#298). */
+export const BIRTH_WAIT_CAP_MS = 60_000
 /** Birth barrier exists only for eligible, actively dispatched tasks; receipts never reserve a slot. */
 export class ForwardBirths {
   private readonly pending = new Map<string, Promise<void>>()
-  wait(taskId: string): Promise<void> | undefined { return this.pending.get(taskId) }
+  constructor(private readonly waitCapMs = BIRTH_WAIT_CAP_MS) {}
+  /**
+   * Resolves when the birth is released or after the cap, whichever is first. After the cap the receipt
+   * is judged by the normal rules against whatever row exists then — never accepted in advance (#298).
+   */
+  wait(taskId: string): Promise<void> | undefined {
+    const birth = this.pending.get(taskId)
+    if (birth === undefined) return undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const cap = new Promise<void>(resolve => { timer = setTimeout(resolve, this.waitCapMs); (timer as { unref?: () => void }).unref?.() })
+    return Promise.race([birth, cap]).finally(() => clearTimeout(timer))
+  }
   begin(taskId: string): (() => void) | undefined {
     if (this.pending.size >= 64 || this.pending.has(taskId)) return undefined
     let release!: () => void
