@@ -22,6 +22,7 @@ describe('gh#224 queuedFor', () => {
       inbound({ status: 'archived' }),
       inbound({ status: 'dead' }),
       inbound({ receiptExpected: false }),
+      inbound({ answeredAt: 0 }),
       inbound({ team: 'dsh/aaaa1111' }),
       { team: T, peer: 'http://10.0.0.9:3080', status: 'pending', direction: 'outbound' },
     ]

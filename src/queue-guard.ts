@@ -3,7 +3,7 @@
  * busy session. This counts what the target already owes and refuses a NEW delivery once the
  * count reaches the cap, visibly and before anything is steered or booked.
  *
- * Counted ("queued for T"): rows this host's ledger still holds pending for T that expect a
+ * Counted ("queued for T"): unanswered rows this host's ledger still holds pending for T that expect a
  * receipt — inbound rows born at /a2a/direct (addressed to T, or delivered to T), and same-host
  * routes (peer 'local') to T. Never refused: a receipt for a task this host's ledger holds
  * (terminal; refusing one strands that row — a genuine receipt always returns to the host that
@@ -25,12 +25,13 @@ export interface QueueRow {
   readonly status: string
   readonly direction?: string
   readonly receiptExpected?: boolean
+  readonly answeredAt?: number
   readonly deliveredTo?: string
 }
 
-/** How many receipt-owing tasks this host holds pending for `team`. */
+/** How many receipt-owing tasks this host holds pending and unanswered for `team`. */
 export function queuedFor(rows: readonly QueueRow[], team: string): number {
-  return rows.filter(row => row.status === 'pending' && row.receiptExpected !== false &&
+  return rows.filter(row => row.status === 'pending' && row.receiptExpected !== false && row.answeredAt === undefined &&
     (row.direction === 'inbound' || row.peer === 'local') &&
     (row.team === team || row.deliveredTo === team)).length
 }
@@ -44,7 +45,7 @@ export function queueFullRefusal(rows: readonly QueueRow[], team: string, messag
   if (receipt !== null && receipt.taskId !== '' && ownTask(receipt.taskId)) return undefined
   const queued = queuedFor(rows, team)
   if (queued < limit) return undefined
-  return `target-queue-full (gh#224): "${team}" already has ${String(queued)} task(s) waiting for a receipt (cap ${String(limit)}) — nothing was delivered. Wait for a receipt from it (a2a inbox / a2a_tasks), or send again later with a NEW task id (this one is recorded as failed); do not resend in a loop. A task that never gets a receipt turns dead after taskStaleTtlMs and stops counting.`
+  return `target-queue-full (gh#224): "${team}" already has ${String(queued)} task(s) not yet answered by the target (cap ${String(limit)}) — nothing was delivered. Wait for a receipt from it (a2a inbox / a2a_tasks), or send again later with a NEW task id (this one is recorded as failed); do not resend in a loop. A task that never gets a receipt turns dead after taskStaleTtlMs and stops counting.`
 }
 
 /** Wire-face adapter in the flood guard's shape: a refused fresh key is FAILED, not stranded pending. */

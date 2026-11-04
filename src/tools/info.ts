@@ -547,7 +547,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         'Read-only three-tier ledger of routed A2A tasks: pending rows still owed a receipt, rows '
         + 'auto-dead-lettered past the stale TTL, and the bounded archive of correlated '
         + '`[A2A receipt] task <task_id>` outcomes. Use it to reconcile dispatched async work instead of '
-        + 're-routing to ask for progress.',
+        + 're-routing to ask for progress. answeredAt means the local target answered, not that the receipt arrived; that row stays owed but no longer occupies target queue capacity.',
       parameters: {},
       output: {
         // gh#198: the host's own verdict on whether this result came from outside this host, persisted on tool/result.
@@ -572,6 +572,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
                   brief: { type: 'string' },
                   status: { type: 'string', required: true },
                   deadAt: { type: 'number' },
+                  answeredAt: { type: 'number' },
                   direction: { type: 'string', enum: ['inbound', 'outbound'] },
                   receiptExpected: { type: 'boolean' },
                   forwarded: { type: 'boolean' },
@@ -657,7 +658,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         }],
       },
       presentCall: () => ({ card: 'generic', title: 'A2A task ledger', kind: 'other', rawInput: null }),
-      execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; status: 'pending' | 'dead'; deadAt?: number; reason?: 'fire-forget' | 'unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean; forwarded?: true; deliveredTo?: string; sender?: Sender }[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; sender?: Sender }[]; archivedTotal: number }> => {
+      execute: async (_args, exec): Promise<{ ok: boolean; tasks: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; status: 'pending' | 'dead'; deadAt?: number; answeredAt?: number; reason?: 'fire-forget' | 'unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean; forwarded?: true; deliveredTo?: string; sender?: Sender }[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; sender?: Sender }[]; archivedTotal: number }> => {
         a2aJoinGateRefusal(exec)
         observeAuthorization('lazy')
         const archiveAll = taskLedger.archive()
@@ -665,11 +666,12 @@ export function createInfoTools(deps: InfoToolsDeps) {
           ok: true,
           // Project the declared fields only: ledger rows also carry internal audit facts (the #114 auth record,
           // #139 peerKey/peerHost) the output schema does not admit — spreading the row failed every call (0.6.32+).
-          tasks: taskLedger.list().map(({ taskId, team, peer, startedAt, contextId, brief, status, deadAt, direction, receiptExpected, forwarded, deliveredTo, reason, sender }) => ({
+          tasks: taskLedger.list().map(({ taskId, team, peer, startedAt, contextId, brief, status, deadAt, answeredAt, direction, receiptExpected, forwarded, deliveredTo, reason, sender }) => ({
             taskId, team, peer, startedAt, status,
             ...(contextId !== undefined ? { contextId } : {}),
             ...(brief !== undefined ? { brief } : {}),
             ...(deadAt !== undefined ? { deadAt } : {}),
+            ...(answeredAt !== undefined ? { answeredAt } : {}),
             ...(direction !== undefined ? { direction } : {}),
             ...(receiptExpected !== undefined ? { receiptExpected } : {}),
             ...(forwarded !== undefined ? { forwarded } : {}),
