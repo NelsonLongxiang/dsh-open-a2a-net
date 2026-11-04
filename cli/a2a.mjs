@@ -992,12 +992,14 @@ async function main() {
     listCapped(archived, 20, t => `  ${String(t.taskId)} ${String(t.outcome ?? '?')}${t.endedBy !== undefined && t.endedBy !== 'receipt' ? ` (${String(t.endedBy)})` : ''}${senderTail(t)}`)
     if (s.conservation != null) console.log(`conservation: conserved=${String(s.conservation.conserved)} delta=${String(s.conservation.delta)}`)
     if (s.settlement != null) console.log(`settlement: mode=${String(s.settlement.mode)} refusalsTotal=${String(s.settlement.refusalsTotal)} offChain=${String(s.settlement.offChain)}`)
+    if (s.settlement?.enforceRefused) console.log(`enforce refused: ${String(s.settlement.enforceRefused.reason)}; blockers=${JSON.stringify(s.settlement.enforceRefused.blockers)}`)
     return
   }
   if (cmd === 'status') {
     const s = await state()
     const list = await control({ action: 'list' })
     console.log(`host        ${home()}  version=${String(s.version ?? '?')}  peers=${String((s.peers ?? []).length)}`)
+    if (s.settlement?.enforceRefused) console.log(`settlement  mode=${String(s.settlement.mode)}; enforce refused: ${String(s.settlement.enforceRefused.reason)}; blockers=${JSON.stringify(s.settlement.enforceRefused.blockers)}`)
     for (const p of s.peers ?? []) console.log(`  peer ${String(p.url).padEnd(34)} link=${String(p.link ?? 'stranger')}`)
     const inflight = s.inFlight ?? []
     if (inflight.length > 0) {

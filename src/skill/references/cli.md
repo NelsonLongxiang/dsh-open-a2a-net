@@ -169,6 +169,8 @@ Files do not go through session messages: use the file channel below, never JPFI
 
 ## Reading the host
 
+If configured enforcement is refused because old forwarded canvas debts lack receiver facts, the plugin stays online in observe. `tasks --json` preserves `settlement.mode` and `settlement.enforceRefused:{reason,blockers}`; tasks/status text also shows the refusal. This boot-time audit remains after reconciliation; a later owner-controlled reapplication may enable enforce once blockers are cleared. Configuration on disk is unchanged.
+
 `whoami`, `teams [query]`, `status`, `tasks`, `probe` read the home host's
 state face (key-gated on a keyed host). `--json` prints raw rows for
 `whoami`, `teams`, `tasks`, `probe`, `route`, `report`, `inbox` and `skills`.

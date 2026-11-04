@@ -1035,7 +1035,8 @@ export function apply(ctx: Context, config: Config): void {
   // a restart does not orphan the reconciliation.
   const taskLedger = new TaskLedger(join(home, 'a2a', 'tasks.json'), { staleTtlMs: config.taskStaleTtlMs, warn: message => logger.warn(message) })
   const enforceBlockers = taskLedger.settlementEnforceBlockers()
-  if (config.settlementAuth === 'enforce' && enforceBlockers.length > 0) throw new Error('settlementAuth enforce refused: legacy forwarded canvas debts lack receiver facts: ' + enforceBlockers.join(', ') + '; keep observe and reconcile them first (#125/#275)')
+  const enforceRefused = config.settlementAuth === 'enforce' && enforceBlockers.length > 0 ? { reason: 'legacy forwarded canvas debts lack receiver facts', blockers: enforceBlockers } : undefined
+  if (enforceRefused !== undefined) { logger.error('settlementAuth enforce refused; running observe (#125/#275): %s', JSON.stringify(enforceRefused)); config = { ...config, settlementAuth: 'observe' } }
   // Unjoined-node reporting ingress (design: docs/design/unjoined-report-ingress.md):
   // a one-way signal channel for sessions with no network membership — a
   // fallen-off or never-joined session reports "I exist / I have a task"
@@ -2068,7 +2069,7 @@ export function apply(ctx: Context, config: Config): void {
       // gh#77 B1: the admin faces live in src/faces/admin.ts.
       registerAdminFaces(webServer, {
         ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
-        indexUrl: import.meta.url,
+        indexUrl: import.meta.url, enforceRefused,
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
         get legacyInboundCount() { return legacyInboundCount },
