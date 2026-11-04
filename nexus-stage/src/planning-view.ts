@@ -1230,7 +1230,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         // team row's zone/id8 handle (canvas remote refs are exact handles
         // per the D1 ruling). Absent until the first remote team row lands.
         const host = peerHostOf(p.url)
-        const handle = lastRemoteTeams.get(host)?.[0]?.team
+        // Owner report 2026-11-04: the host's rows now lead with its bare process team (e.g. 'dsh'), which the
+        // server reads as a local session id and refuses — take the first zone/id8 SESSION handle instead.
+        const handle = lastRemoteTeams.get(host)?.find(row => row.team.includes('/'))?.team
         model.upsertNode({
           id, x: base.x, y: base.y,
           label: p.url, team: '', name: p.url, peerUrl: p.url,
