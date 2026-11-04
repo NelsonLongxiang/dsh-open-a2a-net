@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { signCard } from '../../src/card.ts'
 import { signOriginClaim } from '../../src/origin-claim.ts'
 import { guardHeader } from '../../src/recursion-guard.ts'
-import { bootNode, postJson, reservePort, type MeshNode } from './harness.ts'
+import { bootNode, postJson, reservePort, type MeshNode, cliEnv } from './harness.ts'
 const handle = 'ops-cli/a1b2c3d4e5f60718'
 const cliKey = generateKeyPairSync('ed25519').privateKey
 beforeEach(() => vi.stubGlobal('WebSocket', function noSocket() { throw Error('no socket') }))
@@ -37,7 +37,7 @@ async function cliRoute(a: MeshNode, task: string, sync: boolean) {
   const home = mkdtempSync(join(tmpdir(), 'cli-forward-'))
   writeFileSync(join(home, 'cli.json'), JSON.stringify({ name: 'ops-cli', uuid: 'a1b2c3d4e5f60718', handle, home: a.baseUrl, privateKeyPem: cliKey.export({ format: 'pem', type: 'pkcs8' }) }), { mode: 0o600 })
   return await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn(process.execPath, [join(process.cwd(), 'cli/a2a.mjs'), 'route', 'beta/01234567', 'real CLI forward', '--task', task, ...(sync ? ['--sync'] : [])], { env: { ...process.env, A2A_CLI_HOME: home } })
+    const child = spawn(process.execPath, [join(process.cwd(), 'cli/a2a.mjs'), 'route', 'beta/01234567', 'real CLI forward', '--task', task, ...(sync ? ['--sync'] : [])], { env: cliEnv(home) })
     let stdout = '', stderr = ''
     child.stdout.on('data', data => { stdout += String(data) }); child.stderr.on('data', data => { stderr += String(data) })
     child.on('error', reject); child.on('close', code => resolve({ code, stdout, stderr }))

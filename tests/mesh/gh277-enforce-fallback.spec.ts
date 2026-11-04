@@ -5,12 +5,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { TaskLedger } from '../../src/task-ledger.ts'
-import { bootNode } from './harness.ts'
+import { bootNode, cliEnv } from './harness.ts'
 beforeEach(()=>vi.stubGlobal('WebSocket',function(){throw Error('no socket')}))
 afterEach(()=>vi.unstubAllGlobals())
 async function cli(home:string,args:string[]){
  return await new Promise<{code:number|null;stdout:string;stderr:string}>((resolve,reject)=>{
-  const child=spawn(process.execPath,[join(process.cwd(),'cli/a2a.mjs'),...args],{env:{...process.env,A2A_CLI_HOME:home}})
+  const child=spawn(process.execPath,[join(process.cwd(),'cli/a2a.mjs'),...args],{ env: cliEnv(home) })
   let stdout='',stderr='';child.stdout.on('data',x=>{stdout+=String(x)});child.stderr.on('data',x=>{stderr+=String(x)});child.on('error',reject);child.on('close',code=>resolve({code,stdout,stderr}))
  })
 }
