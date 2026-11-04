@@ -641,8 +641,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // receiver frozen at birth on the selected peer's key — the owner's signed canvas is the return path.
           const echoed = !admission.ok && cliDeposits.get(team) !== undefined ? parseReceipt(message) : null
           if (echoed !== null) {
+            // A receipt can beat the dispatch's HTTP answer: wait for this forward's row to be born first (review of #287 P2).
+            await waitForForwardBirth(message)
             const receiptClaim = earlyClaim ?? await verifyOriginClaim(req, { cli: true, rawBody })
-            const basis = receiptClaim.ok && claimCovers(caller, receiptClaim.caller) ? d.forwardReceiptBasis(echoed.taskId, caller, team, receiptClaim) : undefined
+            const basis = receiptClaim.ok ? d.forwardReceiptBasis(echoed.taskId, caller, team, receiptClaim) : undefined
             if (basis !== undefined) admission = { ok: true, via: 'peer-org', rule: 'peer-org', basis: [basis] }
           }
           const callerRefusal = refusalOf(admission)

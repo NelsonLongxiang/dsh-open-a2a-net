@@ -144,12 +144,17 @@ describe('one-hop CLI forwarding', () => {
   it('#282 S3: a forward receipt is admissible only for that CLI, from a frozen receiver, on the frozen peer key', () => {
     const cli = request.caller
     const row: any = { taskId: 't', team: 'beta/canvas/ops', status: 'pending', forwarded: true, sender: { kind: 'cli', id: cli }, peerKey: 'K', receiverMembers: ['beta/aaaaaaaa'] }
-    const claim = { bound: true, card: { publicKey: 'K' } }
+    const claim = { caller: 'beta', bound: true, bodyBound: true as const, card: { publicKey: 'K' } }
     expect(forwardReceiptBasis(row, 'beta/aaaaaaaa', cli, claim)).toBe('peer-org:beta/canvas/ops')
     expect(forwardReceiptBasis(row, 'beta/cccccccc', cli, claim)).toBeUndefined() // not a frozen receiver
     expect(forwardReceiptBasis(row, 'beta/aaaaaaaa', 'other-cli/0000000000000000', claim)).toBeUndefined() // another CLI's mailbox
-    expect(forwardReceiptBasis(row, 'beta/aaaaaaaa', cli, { bound: true, card: { publicKey: 'X' } })).toBeUndefined() // another peer's key
-    expect(forwardReceiptBasis(row, 'beta/aaaaaaaa', cli, { bound: false, card: { publicKey: 'K' } })).toBeUndefined() // unbound claim
+    expect(forwardReceiptBasis(row, 'beta/aaaaaaaa', cli, { ...claim, card: { publicKey: 'X' } })).toBeUndefined() // another peer's key
+    expect(forwardReceiptBasis(row, 'beta/aaaaaaaa', cli, { ...claim, bound: false })).toBeUndefined() // unbound claim
+    expect(forwardReceiptBasis(row, 'beta/aaaaaaaa', cli, { caller: 'beta', bound: true, card: { publicKey: 'K' } })).toBeUndefined() // Sig2 only: body not signed
+    // A frozen receiver of another zone: B (zone beta) must not sign for it.
+    expect(forwardReceiptBasis({ ...row, receiverMembers: ['gamma/cccccccc'] }, 'gamma/cccccccc', cli, claim)).toBeUndefined()
+    expect(forwardReceiptBasis({ ...row, receiverMembers: ['gamma/cccccccc'] }, 'gamma/cccccccc', cli, { ...claim, caller: 'gamma' })).toBe('peer-org:beta/canvas/ops')
+    expect(forwardReceiptBasis({ ...row, deliveredTo: 'beta/canvas/ops' }, 'beta/canvas/ops', cli, claim)).toBeUndefined() // legacy canvas-handle deliveredTo
     expect(forwardReceiptBasis({ ...row, status: 'dead' }, 'beta/aaaaaaaa', cli, claim)).toBeUndefined()
     expect(forwardReceiptBasis({ ...row, forwarded: undefined }, 'beta/aaaaaaaa', cli, claim)).toBeUndefined()
     expect(forwardReceiptBasis({ ...row, peerKey: undefined }, 'beta/aaaaaaaa', cli, claim)).toBeUndefined()

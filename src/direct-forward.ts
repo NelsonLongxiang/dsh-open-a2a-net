@@ -3,7 +3,7 @@ import { DEFAULT_HOP_BUDGET, guardHeader, mintGuard } from './recursion-guard.ts
 import { briefOf, type OutboundBirth, type TaskLedger, type TaskRecord } from './task-ledger.ts'
 import { parseReceipt } from './receipt.ts'
 import { splitCanvasOwner } from './canvas-id.ts'
-import type { TaskAuthorization } from './task-auth.ts'
+import { claimCovers, type TaskAuthorization } from './task-auth.ts'
 import type { A2aPeerCard, A2aRouteResult } from './types.ts'
 
 export interface ForwardRequest {
@@ -95,10 +95,17 @@ export function createDirectForward(d: DirectForwardDeps) {
 /**
  * #282 S3 (same team authorizes): the admission basis for a receipt delivered to a local CLI mailbox
  * from a member the home never linked — only for that CLI's own pending forward, only from a receiver
- * frozen at birth, only when the bound claim's card key is the frozen peer key. Anything else: undefined.
+ * frozen at birth, only when the body-bound (Sig3) claim's card key is the frozen peer key. Anything else:
+ * undefined. Trust assumption (design D2): the selected owner host is honest about its own canvas — it may
+ * list any label as a receiver, including one of this host's session labels in the same zone.
  */
-export function forwardReceiptBasis(row: TaskRecord | undefined, caller: string, cliHandle: string, claim: { readonly bound: boolean; readonly card: { readonly publicKey: string } }): string | undefined {
+export function forwardReceiptBasis(row: TaskRecord | undefined, caller: string, cliHandle: string, claim: { readonly caller: string; readonly bound: boolean; readonly bodyBound?: true; readonly card: { readonly publicKey: string } }): string | undefined {
+  // The signer's zone must cover the caller label: B never signs for another zone's member (review of #287 M4).
+  if (!claimCovers(caller, claim.caller)) return undefined
   if (row === undefined || row.status !== 'pending' || row.forwarded !== true || row.sender?.kind !== 'cli' || row.sender.id !== cliHandle) return undefined
-  if (!claim.bound || row.peerKey === undefined || claim.card.publicKey !== row.peerKey) return undefined
+  // Body-bound (Sig3) only: a stripped Sig3 would let a captured envelope carry another body (review of #287 P3-1).
+  if (!claim.bound || claim.bodyBound !== true || row.peerKey === undefined || claim.card.publicKey !== row.peerKey) return undefined
+  // A legacy row's deliveredTo may be the canvas handle itself (#272/#275): never a receiver.
+  if (row.deliveredTo !== undefined && (row.deliveredTo === row.team || row.deliveredTo.includes('/canvas/'))) return undefined
   return (row.deliveredTo !== undefined ? [row.deliveredTo] : row.receiverMembers ?? []).includes(caller) ? `peer-org:${row.team}` : undefined
 }
