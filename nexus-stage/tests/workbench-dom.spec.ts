@@ -85,6 +85,21 @@ function text(node: Element | null | undefined): string {
 }
 
 describe('workbench rail sections', () => {
+  it('owner seat editor requires explicit save and keeps draft input across state polls', async () => {
+    const write = vi.fn(async () => ({ ok: true }))
+    const { v } = bench({ ownerSettingsRead: async () => ({ ok: true, seatNames: {}, teamJoinAllowlist: [], teamScopeInfo: true, announce: true }), ownerSettingsWrite: write })
+    v.update(state)
+    ;(v.root.querySelector('.wb-owner-btn') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(v.root.querySelector('[aria-label="人工席位名"]')).not.toBeNull())
+    const input = v.root.querySelector('[aria-label="人工席位名"]') as HTMLInputElement
+    input.value = '开发席'
+    v.update(state)
+    expect(v.root.querySelector('[aria-label="人工席位名"]')).toBe(input)
+    expect(input.value).toBe('开发席')
+    expect(write).not.toHaveBeenCalled()
+    input.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(write).toHaveBeenCalledWith({ seatNames: { 'session-11111111-aaaa': '开发席' } }))
+  })
   it('renders the directory groups with counts; peer hosts live on the 主机 tab only', () => {
     const { v } = bench()
     v.update(state)

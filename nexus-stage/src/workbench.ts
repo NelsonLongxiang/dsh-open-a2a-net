@@ -19,6 +19,7 @@
  * @module nexus-stage/workbench
  */
 import { createChatDrawer, type ChatTarget } from './wb-chat'
+import { createSeatNameEditor } from './seat-name-editor'
 import { createCliHomePicker, type CliHomeOptions } from './cli-home-picker'
 import { createRailTabs } from './wb-rail'
 import { DIRECTORY_FILTERS, learnLogTitle, loadLogTitles, renderDirectory, type DirFilter } from './wb-directory'
@@ -95,6 +96,7 @@ export interface SessionRow {
   readonly label: string
   readonly team: string
   readonly name?: string
+  readonly seatName?: string
   readonly description?: string
   readonly workspace?: string
   readonly joined?: boolean
@@ -207,9 +209,9 @@ export interface WorkbenchDeps {
   /** gh#41 fleet planning: each tracked peer's published canvas org. */
   peerOrg?: readonly PeerOrgRow[]
   /** gh#34: read the owner three-key panel state (GET /__dsh_a2a/owner-settings). */
-  ownerSettingsRead?(): Promise<{ ok: boolean; teamJoinAllowlist?: string[]; teamScopeInfo?: boolean; announce?: boolean; announceRestartPending?: boolean; error?: string }>
+  ownerSettingsRead?(): Promise<{ ok: boolean; seatNames?: Record<string, string>; teamJoinAllowlist?: string[]; teamScopeInfo?: boolean; announce?: boolean; announceRestartPending?: boolean; error?: string }>
   /** gh#34: write owner panel changes; true on success (POST the same face). */
-  ownerSettingsWrite?(changes: { teamJoinAllowlist?: string[]; teamScopeInfo?: boolean; announce?: boolean }): Promise<{ ok: boolean; restartNeeded?: boolean; error?: string }>
+  ownerSettingsWrite?(changes: { seatNames?: Record<string, string>; teamJoinAllowlist?: string[]; teamScopeInfo?: boolean; announce?: boolean }): Promise<{ ok: boolean; restartNeeded?: boolean; error?: string }>
   /** gh#41 fleet planning: regulate a REMOTE peer's canvas team (this host
    *  signs the envelope and forwards; the peer's link gate authorizes). */
   fleetCanvasOp?(peer: string, op: 'create' | 'add-member' | 'remove-member' | 'remove', name: string, id?: string): Promise<{ ok: boolean; members?: string[]; error?: string }>
@@ -375,8 +377,8 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   const ownerBtn = el('button', 'wb-icon-btn wb-owner-btn')
   ownerBtn.type = 'button'
   ownerBtn.dataset.testid = 'wb-owner-btn'
-  ownerBtn.setAttribute('aria-label', '主人设置（三键面板）')
-  ownerBtn.title = '主人设置：入网白名单 / 可见性 / 发布'
+  ownerBtn.setAttribute('aria-label', '主人设置')
+  ownerBtn.title = '主人设置：席位名 / 入网白名单 / 可见性 / 发布'
   ownerBtn.textContent = '⚙'
   ownerBtn.addEventListener('click', () => { ownerPanelOpen = !ownerPanelOpen; renderOwnerPanel() })
   header.appendChild(ownerBtn)
@@ -827,15 +829,18 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
 
   // ── Inspector (overlay card over the stage; bottom sheet on narrow) ──
   // gh#34 owner panel state + render (the gear toggles; the inspector hosts).
+  let seatEditor: HTMLElement | undefined
   let ownerPanelOpen = false
-  let ownerState: { teamJoinAllowlist: string[]; teamScopeInfo: boolean; announce: boolean; announceRestartPending: boolean } | null = null
+  let ownerState: { seatNames: Record<string, string>; teamJoinAllowlist: string[]; teamScopeInfo: boolean; announce: boolean; announceRestartPending: boolean } | null = null
   function renderOwnerPanel(): void {
     renderInspector()
     if (!ownerPanelOpen) return
     void deps.ownerSettingsRead?.().then(result => {
       if (!ownerPanelOpen) return
       if (result.ok !== true) { ownerState = null; renderInspector(); return }
+      seatEditor = undefined
       ownerState = {
+        seatNames: result.seatNames ?? {},
         teamJoinAllowlist: result.teamJoinAllowlist ?? [],
         teamScopeInfo: result.teamScopeInfo !== false,
         announce: result.announce === true,
@@ -870,6 +875,12 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       return
     }
     const st = ownerState
+    seatEditor ??= createSeatNameEditor(last?.sessions ?? [], st.seatNames, async seatNames => {
+      const result = await deps.ownerSettingsWrite?.({ seatNames })
+      if (result?.ok) { st.seatNames = seatNames; return { ok: true } }
+      return { ok: false, error: result?.error ?? '保存失败' }
+    })
+    card.appendChild(seatEditor)
     // ① 入网白名单（精确团队名增删）
     const alHead = el('div', 'wb-side-head')
     alHead.textContent = '入网白名单（精确团队名）'

@@ -49,6 +49,7 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
   width:30px;height:30px;display:none;align-items:center;justify-content:center;font:inherit;font-size:14px;
   cursor:pointer;flex:none}
 .wb-icon-btn:hover{border-color:var(--n-accent)}
+.wb-owner-btn{display:inline-flex}
 .wb-menu{margin-left:0}
 .wb-rail-toggle{margin-left:auto}
 .wb.is-rail-collapsed .wb-rail{display:none}

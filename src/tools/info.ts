@@ -31,7 +31,7 @@ import type { TeamMembershipStore } from '../team-store.ts'
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
 /** One directory row shared with listDirectoryTeams (which stays in index.ts). */
-export type DirectoryTeamRow = { team: string; session: string; name: string; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean; /** gh#106: the peer's last card fetch missed — this row is its kept card, not a live answer. */ unreachable?: boolean; teams?: string[]; /** Internal S5 scope hint, stripped before the tool's public output. */ canvasMembers?: readonly string[] }
+export type DirectoryTeamRow = { team: string; session: string; name: string; seatName?: string; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean; /** gh#106: the peer's last card fetch missed — this row is its kept card, not a live answer. */ unreachable?: boolean; teams?: string[]; /** Internal S5 scope hint, stripped before the tool's public output. */ canvasMembers?: readonly string[] }
 
 /** Everything the information-plane tools capture from apply(). */
 export interface InfoToolsDeps {
@@ -61,7 +61,7 @@ export interface InfoToolsDeps {
   readonly ownerTeamScopeInfo: boolean
   readonly id8: (id: string) => string
   readonly sessionTeamOf: (agent: Agent) => string
-  readonly nodeMetadataOf: (agent: Agent) => { name: string; description: string; workspace?: string }
+  readonly nodeMetadataOf: (agent: Agent) => { name: string; seatName?: string; description: string; workspace?: string }
   readonly canvasTeamOf: (name: string) => string
   /** gh#152: the session's canvas teams read through the local lens — a handle-stored membership of this session counts. */
   readonly canvasTeamsOfSession: (id: string) => string[]
@@ -204,7 +204,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
           type: 'text',
           text: value.face === 'host'
             ? `Host face on team ${String((value.node as Record<string, unknown> | undefined)?.team ?? '?')}: routing rides the bare node team (能发即能收)`
-            : `Node ${String((value.node as Record<string, unknown> | undefined)?.id ?? '?')}: joined=${String((value.node as Record<string, unknown> | undefined)?.joined)}, live=${String((value.node as Record<string, unknown> | undefined)?.live)}; roster teams: ${((value.teams as Record<string, unknown> | undefined)?.roster as string[] | undefined ?? []).join(', ') || 'none'}; canvas: ${((value.teams as Record<string, unknown> | undefined)?.canvas as string[] | undefined ?? []).join(', ') || 'none'}; allowlist effect: ${String((value.allowlist as Record<string, unknown> | undefined)?.effect ?? '?')}`,
+            : `Node ${String((value.node as Record<string, unknown> | undefined)?.name ?? '')} ${String((value.node as Record<string, unknown> | undefined)?.id ?? '?')}: joined=${String((value.node as Record<string, unknown> | undefined)?.joined)}, live=${String((value.node as Record<string, unknown> | undefined)?.live)}; roster teams: ${((value.teams as Record<string, unknown> | undefined)?.roster as string[] | undefined ?? []).join(', ') || 'none'}; canvas: ${((value.teams as Record<string, unknown> | undefined)?.canvas as string[] | undefined ?? []).join(', ') || 'none'}; allowlist effect: ${String((value.allowlist as Record<string, unknown> | undefined)?.effect ?? '?')}`,
         }],
       },
       presentCall: () => ({ card: 'generic', title: 'A2A whoami', kind: 'other', rawInput: null }),
@@ -240,6 +240,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
           face: 'session',
           node: {
             id: agentId,
+            ...(exec.agent !== undefined ? { name: nodeMetadataOf(exec.agent).name, ...(nodeMetadataOf(exec.agent).seatName !== undefined ? { seatName: nodeMetadataOf(exec.agent).seatName! } : {}) } : {}),
             ...(joined ? { team: `${config.team}/${id8(agentId)}` } : {}),
             joined,
             live,
@@ -300,6 +301,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
                   team: { type: 'string', required: true },
                   session: { type: 'string', required: true },
                   name: { type: 'string', required: true },
+                  seatName: { type: 'string', description: 'Human-owned stable display label, never a route identity.' },
                   description: { type: 'string', required: true },
                   local: { type: 'boolean', description: 'true when the team is served by this host (loopback candidate).' },
                   origin: { type: 'string', description: 'The publishing host (node session label, LAN IP when known) — the natural grouping for fleet rows.' },

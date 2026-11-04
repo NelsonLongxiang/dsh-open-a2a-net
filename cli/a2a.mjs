@@ -938,7 +938,7 @@ async function main() {
     const q = (positionals()[0] ?? '').toLowerCase()
     const rows = [
       ...['dsh'].map(t => ({ team: String(t), name: String(s.session ?? 'host'), where: 'host' })),
-      ...(s.sessions ?? []).map(x => ({ team: String(x.team ?? ''), name: String(x.label ?? ''), where: 'local' })),
+      ...(s.sessions ?? []).map(x => ({ team: String(x.team ?? ''), name: String(x.seatName ?? x.name ?? x.label ?? ''), where: 'local' })),
       ...(s.remote ?? []).map(x => ({ team: String(x.team ?? ''), name: String(x.name ?? ''), where: `remote · ${String(x.via ?? '')}` })),
     ]
     const hits = rows.filter(r => q === '' || r.team.toLowerCase().includes(q) || r.name.toLowerCase().includes(q))

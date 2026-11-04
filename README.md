@@ -150,6 +150,7 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | `wakePrewarmQuietMs` | `5000` | Foreground quiet window: a wake/route demand (or any outbound route in flight) inside this window postpones the next prewarm step; `0` disables the yield. |
 | `wakeBootStaggerMs` | `3000` | Pause between serial boot-prewarm wakes (caps log-decode saturation after a restart; wake-on-route never waits on it). |
 | `wakeReconcile` | `true` | Continuous desired-state reconciliation: each tick re-derives the cold joined intents due and wakes one per pass (post-boot drift, failed wakes, late gateways). Tuned by `wakeReconcileIntervalMs` (`60000`), `wakeReconcileBackoffBaseMs` (`5000`) and `wakeReconcileMaxBackoffMs` (`600000`). |
+| `seatNames` | `{}` | Human-owned stable display labels keyed by full local session id. Set/clear through the workbench owner panel; labels hot-apply to cards, whoami, CLI teams and the board, without changing titles, handles or admission. A2A model-tool naming arguments are refused. |
 | `teamJoinAllowlist` | `[]` | Teams `a2a_team_join` may declare: **exact names only** (a `*`/prefix entry authorizes nothing). Empty denies every join. The owner can also edit it from the workbench owner panel (`/__dsh_a2a/owner-settings`). |
 | `teamScopeRouting` | `true` | S3 admission: routing checks caller↔target shared team membership; a session with no declared team has no network. `false` restores the open outbound seam. |
 | `teamScopeInfo` | `true` | S5 information-plane scope for `a2a_teams` / `a2a_status` / `a2a_probe` (see the tools section). `false` restores fleet-wide disclosure. |
@@ -205,7 +206,7 @@ Set an `apiKey` before exposing the listener beyond loopback.
 | `POST /__dsh_a2a/dispatch` | Workbench quick dispatch into a team. |
 | `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | Settle an owed task from the caller side (cancel also steers a stop notice to a live local target); the row lands in `archived[]`. |
 | `/__dsh_a2a/session-log` · `/remote-session-log` | Session log reads for the workbench. |
-| `/__dsh_a2a/owner-settings` | The owner panel: read (GET) or write (POST) `teamJoinAllowlist`, `teamScopeInfo` and `announce` into the home patch layer (the first two apply immediately; `announce` on the next restart). |
+| `/__dsh_a2a/owner-settings` | The owner panel: read (GET) or write (POST) `teamJoinAllowlist`, `teamScopeInfo`, `seatNames` and `announce` into the home patch layer (all but `announce` apply immediately). `seatNames` is a validated full map; omit a session id to clear its label. This owner-authenticated control face is not a model naming tool; local shell/config writers remain inside the existing operator trust boundary. |
 | `/__dsh_a2a/fleet-canvas-op` | Relay a canvas operation (`create`, `add-member`, `remove-member`, `remove`) to a peer's `/a2a/canvas-op`, stamped with this node's OriginClaim; the peer's link gate decides. |
 | `/__dsh_a2a/cli-deposit` | Deposit, list, revoke and mailbox reads for `a2a-net` CLI identities. |
 | `GET /__dsh_a2a/nodes` · `POST` | Node identities (docs/design/node-identity.md): GET reads the roster or one node (`?name=`); POST is an identity write and needs the apiKey even on loopback. |

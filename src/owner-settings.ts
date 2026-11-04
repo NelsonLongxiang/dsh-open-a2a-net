@@ -13,10 +13,19 @@ export interface OwnerSettings {
   teamJoinAllowlist?: string[]
   teamScopeInfo?: boolean
   announce?: boolean
+  seatNames?: Record<string, string>
+}
+
+/** Shared validation for boot config and owner POST; labels are plain text, never handles or authority. */
+export function parseSeatNames(value: unknown): Record<string, string> | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length > 1024) return undefined
+  const entries = Object.entries(value)
+  if (entries.some(([id, name]) => !/^session-[a-zA-Z0-9-]{8,128}$/.test(id) || typeof name !== 'string' || name.trim() === '' || [...name.trim()].length > 64 || /[\u0000-\u001f\u007f\ufffd]/.test(name))) return undefined
+  return Object.fromEntries(entries.map(([id, name]) => [id, (name as string).trim()]))
 }
 
 /** The exact keys this module may touch, in wire order. */
-const KEYS = ['teamJoinAllowlist', 'teamScopeInfo', 'announce'] as const
+const KEYS = ['teamJoinAllowlist', 'teamScopeInfo', 'announce', 'seatNames'] as const
 
 export function applyOwnerSettings(patchYaml: string, changes: OwnerSettings): { yaml: string; restartNeeded: boolean } {
   const lines = patchYaml.split('\n')
@@ -36,6 +45,7 @@ export function applyOwnerSettings(patchYaml: string, changes: OwnerSettings): {
   }
   if (changes.teamScopeInfo !== undefined) writes.push(`    teamScopeInfo: ${changes.teamScopeInfo ? 'true' : 'false'}`)
   if (changes.announce !== undefined) writes.push(`    announce: ${changes.announce ? 'true' : 'false'}`)
+  if (changes.seatNames !== undefined) writes.push(`    seatNames: ${JSON.stringify(changes.seatNames)}`)
   if (writes.length === 0) return { yaml: patchYaml, restartNeeded }
 
   if (entryStart === -1) {
@@ -75,7 +85,11 @@ export function applyOwnerSettings(patchYaml: string, changes: OwnerSettings): {
       const kv = new RegExp(`^\\s*${key}:`).exec(line)
       if (kv !== null) {
         const write = writes.find(w => w.trim().startsWith(`${key}:`))
-        if (write !== undefined) { lines[j] = write; found = true }
+        if (write !== undefined) {
+          lines[j] = write; found = true
+          // A map may have been authored as block YAML. Replace its nested rows too, not just the heading.
+          if (key === 'seatNames') while (j + 1 < lines.length && (/^ {5,}\S/.test(lines[j + 1] ?? '') || /^\s*$/.test(lines[j + 1] ?? ''))) lines.splice(j + 1, 1)
+        }
         break
       }
       if (/^\s*-\s*id:/.test(line)) break

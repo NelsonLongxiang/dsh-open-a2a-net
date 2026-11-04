@@ -42,6 +42,10 @@ model tools.
   405 with an empty body. The fix is a host upgrade, not a retry.
 - `a2a-net revoke` deregisters early.
 
+## Team display names
+
+`a2a-net teams <query>` searches the owner-set seat label as well as the route handle; `--json` exposes the effective display name. Local rows prefer `seatName`, then the current title (`name`), then the legacy label. Only the human workbench owner panel/config can set `seatNames`; the CLI has no naming command.
+
 ## Tasks: ledger and host observability
 
 `a2a-net tasks --json` returns the existing `pending`, `dead`, and `archived` arrays plus `settlement` and `conservation` copied unchanged from `/__dsh_a2a/state`. These blocks include the lifetime `settlement.refusalsTotal`, refusal ring and mode, and the host conservation verdict/counters/duplicate ids. Older hosts omit a block they do not expose; the CLI does not manufacture zero counters or a passing verdict. Plain `tasks` appends a conservation line (`conserved`, `delta`) and a settlement line (`mode`, `refusalsTotal`, `offChain`) when the respective block exists.
