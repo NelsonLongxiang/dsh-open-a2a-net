@@ -155,12 +155,15 @@ describe('shared TTL card cache', () => {
 
   it('PR#96 P2-2 r2: past the card\'s own expiresAt the old card stops answering — the dead peer leaves the directory', async () => {
     const { privateKey } = generateKeyPairSync('ed25519')
-    const card = cardBody({ privateKey }, 'http://peer-a', Date.now() + 120)
+    // The card's own expiry starts at its first fetch, after boot: a slow boot used to eat the whole
+    // window, so the first read already saw an expired card and the refetch count came up one short.
+    let card: ReturnType<typeof cardBody> | undefined
     let calls = 0
     let serving = true
     vi.stubGlobal('fetch', (url: string, init?: { method?: string }) => {
       if (String(url).startsWith('http://peer-a') && (init?.method ?? 'GET') === 'GET') {
         calls += 1
+        card ??= cardBody({ privateKey }, 'http://peer-a', Date.now() + 300)
         if (serving) return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify(card) } as unknown as Response)
         return Promise.reject(new Error('peer-a went down'))
       }
@@ -176,7 +179,7 @@ describe('shared TTL card cache', () => {
     const callsWhenGood = calls
     serving = false
     // Past the card's own expiry AND the cache TTL: the kept card is refused.
-    await new Promise(resolve => setTimeout(resolve, 220))
+    await new Promise(resolve => setTimeout(resolve, 420))
     const gone = await teams?.execute({}, runContext()) as { teams: { team: string }[] }
     expect(gone.teams.some(t => t.session === 'peer-host')).toBe(false)
     expect(calls).toBe(callsWhenGood + 1)
