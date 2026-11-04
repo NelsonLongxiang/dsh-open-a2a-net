@@ -51,8 +51,12 @@ describe('gh#159 remote canvas discovery and routing', () => {
 
       const listed = await a.ctx.tools.get('a2a_teams')!.execute({ query: '跨机协作' }, runContext(a.agents.agent)) as Directory
       const remote = listed.teams.find(row => row.team === GROUP)
-      expect(remote).toMatchObject({ team: GROUP, name: '跨机协作', session: 'gh159-b', via: b.baseUrl })
+      expect(remote).toMatchObject({ team: GROUP, name: '跨机协作', session: 'gh159-b', via: b.baseUrl, kind: 'canvas', owner: b.baseUrl, memberCount: 2 })
       expect(remote?.local).not.toBe(true)
+      const who = await a.ctx.tools.get('a2a_whoami')!.execute({}, runContext(a.agents.agent)) as any
+      expect(who.teams.canvasDetails).toEqual(expect.arrayContaining([{ team: GROUP, name: '跨机协作', owner: b.baseUrl, memberCount: 2, local: false }]))
+      expect(who.teams.canvasDetails.some((row: any) => row.team === PRIVATE && row.owner === b.baseUrl)).toBe(false)
+      expect(who.teams.canvasDetails).toEqual(expect.arrayContaining([{ team: PRIVATE, name: '不共享', owner: a.baseUrl, memberCount: 1, local: true }]))
       // Membership is a scope input, never an undocumented list of members.
       expect(remote).not.toHaveProperty('members')
       expect(remote).not.toHaveProperty('canvasMembers')
@@ -336,6 +340,9 @@ describe('gh#159 remote canvas discovery and routing', () => {
       const result = await a.ctx.tools.get('a2a_route')!.execute({ team: GROUP, message: 'ambiguous payload' }, runContext(a.agents.agent)) as Route
       expect(result.ok).toBe(false)
       expect(result.error).toContain('ambiguous')
+      expect(result.error).toContain('canvas-multiple-owners')
+      expect(result.error).toContain(b.baseUrl)
+      expect(result.error).toContain(other.baseUrl)
       expect(deliveries).toHaveLength(0)
       expect(b.steered).toHaveLength(0)
     } finally { await a.dispose(); await b.dispose(); await other.close() }

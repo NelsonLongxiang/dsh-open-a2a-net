@@ -254,6 +254,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
         const body = JSON.stringify({
           nodes: true,
           zone: config.team,
+          ownerHost: d.ownCardUrl,
           version: PLUGIN_VERSION,
           // gh#193: a dark host says so — an empty remote list is not an outage.
           ...(config.isolated ? { isolated: true } : {}),

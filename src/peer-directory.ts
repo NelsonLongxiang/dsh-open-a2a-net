@@ -121,7 +121,7 @@ export function peerDirectoryRows(card: A2aPeerCard, peer: string, includeCanvas
   const publishedSessions = new Set((card.sessionTeams ?? []).map(entry => entry.team))
   if (includeCanvas) for (const entry of advertisedCanvasTeams(card)) {
     const declared = rosterOf.get(entry.team)
-    rows.push({ team: entry.team, session: card.session, name: entry.name, description: 'canvas team', origin, via: peer, ...(legacy ? { legacy } : {}), ...(declared !== undefined && declared.length > 0 ? { teams: declared } : {}), canvasMembers: entry.members.filter(ref => !publishedSessions.has(ref)) })
+    rows.push({ team: entry.team, session: card.session, name: entry.name, description: 'canvas team', kind: 'canvas' as const, owner: peer, memberCount: entry.members.length, origin, via: peer, ...(legacy ? { legacy } : {}), ...(declared !== undefined && declared.length > 0 ? { teams: declared } : {}), canvasMembers: entry.members.filter(ref => !publishedSessions.has(ref)) })
   }
   return rows
 }

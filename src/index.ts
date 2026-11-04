@@ -38,6 +38,7 @@ import { CanvasStore, canvasNameReserved, isRemoteMemberRef } from './canvas-sto
 import { decodeSessionLog, extractTranscript, TRANSCRIPT_MAX_FILE_BYTES } from './session-transcript.ts'
 import { LayoutStore } from './layout-store.ts'
 import { peerLinkDisplay } from './peer-link-display.ts'
+import { canvasOwners, canvasFailure } from './canvas-discovery.ts'
 import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
@@ -2959,6 +2960,7 @@ export function apply(ctx: Context, config: Config): void {
       verifyOriginClaim,
       remoteCliProof,
       forwardDirect: request => forwardDirect(request),
+      diagnoseCanvas: (team, reason, caller) => diagnoseCanvas(team, reason, caller),
       callerLinkedToThisHost, get ownCardUrl() { return ownCardUrl },
       recordActivity,
       bumpLegacyInbound: () => { legacyInboundCount += 1 },
@@ -3423,7 +3425,7 @@ export function apply(ctx: Context, config: Config): void {
 
 
   const infoTools = createInfoTools({
-    ctx, config, logger, session, lanIp, ownCardUrl, peerStore, taskLedger,
+    ctx, config, logger, session, lanIp, get ownCardUrl() { return ownCardUrl }, peerStore, taskLedger,
     inFlightRoutes, recentActivity, joinedSessions, sessionNodes, canvasStore,
     teamMemberships, exposureStore, idempotencyStore, cardCache,
     id8, sessionTeamOf,
@@ -3498,6 +3500,7 @@ export function apply(ctx: Context, config: Config): void {
           team: canvasTeamOf(name),
           session,
           name,
+          kind: 'canvas' as const, owner: ownCardUrl, memberCount: canvasStore.membersOf(name).length,
           description: `canvas team — ${members.length} member${members.length === 1 ? '' : 's'}, ${live} live`,
           local: true,
           origin: localOrigin,
@@ -3673,6 +3676,26 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
    * caller label — the "能发即能收" invariant: whatever it addresses can
    * answer it with one route.
    */
+  const knownCanvasOwners = () => canvasOwners(canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: canvasStore.membersOf(name) })), ownCardUrl, [...cardCache.entries()].flatMap(([url, entry]) => entry.card === undefined ? [] : [{ url, card: entry.card }]))
+  const diagnoseCanvas = async (team: string, reason: string, caller?: string): Promise<string> => {
+    if (!new RegExp('^.+/canvas/[^/]+$').test(team)) return reason
+    try { await listDirectoryTeams(false, true) } catch (error) { return reason + ' — canvas discovery unavailable: ' + String(error) }
+    const resolve = localHandleResolver()
+    const localId = caller === undefined ? undefined : resolve(caller)
+    const owners = knownCanvasOwners().filter(row => !ownerTeamScopeInfo || (caller !== undefined && cliDeposits.get(caller) !== undefined) || (row.local ? localId !== undefined && row.members.some(ref => ref === localId || resolve(ref) === localId) : (row.scopeMembers ?? row.members).some(ref => { const id = resolve(ref); return id !== undefined && joinedSessions.has(id) })))
+    const missing: string[] = []
+    if (caller !== undefined && cliDeposits.get(caller) !== undefined) {
+      if (!config.forwardDirect) missing.push('home forwardDirect is off')
+      if (config.isolated) missing.push('home is isolated')
+      const scope = config.teamScopeRouting ? await outboundScope(senderScopeRecords, caller, caller, team) : { ok: true as const }
+      if (!scope.ok) missing.push('sender scope: ' + scope.error)
+      for (const owner of owners.filter(row => row.team === team && !row.local)) {
+        if (!owner.members.includes(caller)) missing.push(owner.owner + ': caller is not an advertised canvas member')
+        for (const member of owner.members.filter(member => member !== caller)) if (!canvasStore.list().some(name => canvasStore.remoteMembersOf(name).includes(member))) missing.push(owner.owner + ': missing direct operator link to receiver ' + member)
+      }
+    }
+    return canvasFailure(team, owners, reason) + (missing.length === 0 ? '' : ' — missing prerequisites: ' + missing.join('; '))
+  }
   const forwardDirect = createDirectForward({
     enabled: () => config.forwardDirect === true, isolated: () => config.isolated, deposited: handle => cliDeposits.get(handle) !== undefined,
     memberLinked: handle => canvasStore.list().some(name => canvasStore.remoteMembersOf(name).includes(handle)),
@@ -3730,7 +3753,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           const callerHandle = `${config.team}/${id8(scopeCaller)}`
           scopedCanvasCaller = { id: scopeCaller, handle: callerHandle }
           const scope = await outboundScope(senderScopeRecords, scopeCaller, callerHandle, String(args.team ?? '').trim())
-          if (!scope.ok) return localRoute(scope)
+          if (!scope.ok) return localRoute({ ...scope, error: await diagnoseCanvas(args.team, scope.error, callerHandle) })
         }
       }
       let callerSession = resolveCallerLabel({
@@ -3849,7 +3872,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         failures.push(`${candidate}: ${result.error}`)
       }
       if (failures.length > 0) logger.warn(`route to team "${args.team}" exhausted its candidates: ${failures.join('; ')}`)
-      return routeVerdict(args.team, failures, candidatePool.length)
+      const verdict = routeVerdict(args.team, failures, candidatePool.length)
+      return { ...verdict, error: await diagnoseCanvas(args.team, verdict.error, callerSession) }
   }
 
   /**
