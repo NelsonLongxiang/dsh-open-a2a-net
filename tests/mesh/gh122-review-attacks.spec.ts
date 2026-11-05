@@ -32,11 +32,13 @@ async function canvasPair(mode: 'observe' | 'enforce', extraA: Record<string, un
   const pA = await reservePort(); const pB = await reservePort()
   const A = await bootNode({ name: 'A', session: 'hostA', team: 'dsh', agentId: A_ID, sessionNodes: true, teamScopeRouting: true, settlementAuth: mode, port: pA, peers: [`http://127.0.0.1:${pB}`], home: tmpHome(), ...extraA } as never)
   const B = await bootNode({ name: 'B', session: 'hostB', team: 'dsh', agentId: B_ID, sessionNodes: true, teamScopeRouting: true, settlementAuth: mode, port: pB, peers: [`http://127.0.0.1:${pA}`], home: tmpHome() } as never)
-  for (const [n, mine, theirs] of [[A, A_ID, 'dsh/bbbbbbbb'], [B, B_ID, 'dsh/aaaaaaaa']] as const) {
+  for (const [n, mine] of [[A, A_ID], [B, B_ID]] as const) {
     expect((await postJson(n.baseUrl, '/__dsh_a2a/join', { id: mine })).status).toBe(200)
     await postJson(n.baseUrl, '/__dsh_a2a/canvas', { action: 'create', name: 'ops' })
     await postJson(n.baseUrl, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: mine })
-    await postJson(n.baseUrl, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: theirs })
+  }
+  for(const [n,theirs,peer]of [[A,'dsh/bbbbbbbb',B],[B,'dsh/aaaaaaaa',A]] as const){
+    const added=await postJson(n.baseUrl,'/__dsh_a2a/canvas',{action:'add-member',name:'ops',id:theirs,peer:peer.baseUrl}).then(r=>r.json());expect(added.ok,JSON.stringify(added)).toBe(true)
   }
   return { A, B }
 }
@@ -86,9 +88,12 @@ describe('#114 S4 review of PR #140: off-chain settlement under enforce stays re
     try {
       silence(B)
       const t1 = await route(A, { team: 'dsh/bbbbbbbb', message: 'real work', async: true })
-      await directPost(A.baseUrl, { team: 'dsh/aaaaaaaa', message: `[A2A receipt] task ${String(t1.task_id)} forged by impostor`, caller_session: 'dsh/bbbbbbbb', wait: false, task_id: 'direct-imp0000001' }, imp.headers())
+      const rejected=await directPost(A.baseUrl, { team: 'dsh/aaaaaaaa', message: `[A2A receipt] task ${String(t1.task_id)} forged by impostor`, caller_session: 'dsh/bbbbbbbb', wait: false, task_id: 'direct-imp0000001' }, imp.headers())
+      expect(rejected.routed).not.toBe(true)
+      expect(rejected.error).toContain('declares no team membership')
       expect((await rowOf(A, String(t1.task_id)))?.status).toBe('pending')
-      expect(((await state(A)).settlement.refusals as Array<Record<string, any>>)[0]).toMatchObject({ taskId: t1.task_id, reason: 'settler-unverified', enforced: true })
+      // #334 rejects the foreign key at provenance admission, before settlement; no forged receipt is recorded as paid.
+      expect(((await state(A)).settlement.refusals as Array<Record<string, any>>).some(r=>r.taskId===t1.task_id&&r.enforced===false)).toBe(false)
     } finally { imp.srv.close(); await A.dispose(); await B.dispose() }
   }, 90_000)
 

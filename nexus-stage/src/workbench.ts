@@ -21,6 +21,7 @@
 import { createChatDrawer, type ChatTarget } from './wb-chat'
 import { createSeatNameEditor } from './seat-name-editor'
 import { createCliHomePicker, type CliHomeOptions } from './cli-home-picker'
+import { createMemberProvenancePicker, type ProvenanceChoice } from './member-provenance-picker'
 import { createRailTabs } from './wb-rail'
 import { DIRECTORY_FILTERS, learnLogTitle, loadLogTitles, renderDirectory, type DirFilter } from './wb-directory'
 import { ledgerFacts, renderLedger as paintLedger } from './wb-ledger'
@@ -92,6 +93,7 @@ export interface PeerOrgRow {
 
 /** One session row from /state `sessions` (live or cold joined). */
 export interface SessionRow {
+  readonly memberRef?: string
   readonly id: string
   readonly label: string
   readonly team: string
@@ -112,6 +114,7 @@ export interface SessionRow {
 
 /** One remote team row from /state `remote`. */
 export interface RemoteRow {
+  readonly memberRef?: string
   readonly team: string
   readonly unreachable?: boolean
   readonly name?: string
@@ -161,7 +164,7 @@ export interface StateBody {
   readonly zone?: string
   readonly version?: string
   readonly sessions?: readonly SessionRow[]
-  readonly canvas?: { teams?: readonly CanvasTeamRow[]; revision?: number; retainedMembers?: ReadonlyArray<{ team: string; member: string; suspended: boolean; records: readonly unknown[] }> }
+  readonly canvas?: { teams?: readonly CanvasTeamRow[]; revision?: number; memberSlots?: ReadonlyArray<{ name: string; member: string; ownerKey: string | null; provenance: string; suspended: boolean; compatibilityInference: boolean }>; retainedMembers?: ReadonlyArray<{ team: string; member: string; suspended: boolean; records: readonly unknown[] }> }
   /** gh#20 W-A/W-C: the peer row carries the link badge source, the host
    *  rail's label/version/last-contact facts (absent on older hosts). */
   readonly peers?: ReadonlyArray<{
@@ -220,8 +223,9 @@ export interface WorkbenchDeps {
   abandon(taskId: string, reason: string): Promise<boolean>
   /** Canvas team member change via the control route (0.6.6): `id` is a
    *  local session id or a zone-qualified remote handle. True on success. */
-  canvasOp(action: 'add-member' | 'remove-member', name: string, id: string, home?: string): Promise<boolean>
+  canvasOp(action: 'add-member' | 'remove-member', name: string, id: string, home?: string, peer?: string): Promise<boolean>
   cliHomeOptions?(name: string, id: string): Promise<CliHomeOptions>
+  confirmMember?(name: string, id: string, replacement: string, revision: number, expectedOwner: string | null, peer?: string): Promise<{ ok: boolean; error?: string }>
   regulateSuspended?(action: 'restore-suspended' | 'delete-suspended', name: string, id: string, revision: number, expected: readonly unknown[]): Promise<{ ok: boolean; error?: string }>
   /** Quick dispatch (0.6.9): POST /__dsh_a2a/dispatch as a human gesture —
    *  one message to a routing team, async delivery, receipt lands in the
@@ -344,6 +348,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // by team name — same trick as draftForm so inputs survive the 3s poll).
   let canvasForm: { name: string; form: HTMLFormElement; pick: HTMLSelectElement; manual: HTMLInputElement } | null = null
   const cliHomeForms = new Map<string, HTMLFormElement>()
+  const provenanceForms = new Map<string, HTMLElement>()
   // Quick-dispatch form (0.6.9), cached per target routing team the same
   // draftForm way: a textarea's draft must survive the 3s poll remount.
   let dispatchForm: { team: string; form: HTMLFormElement; text: HTMLTextAreaElement; note: HTMLElement } | null = null
@@ -1033,6 +1038,17 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         }
         card.appendChild(row)
       }
+      for (const slot of last?.canvas?.memberSlots ?? []) {
+        if (slot.name !== fresh.name || slot.provenance !== 'unknown' || !deps.confirmMember || last?.canvas?.revision === undefined) continue
+        const badge=el('div','wb-hint');badge.textContent=slot.member+' · 来源未确认'+(slot.compatibilityInference?' · 兼容推断中':'')+(slot.suspended?' · 已暂停':'');card.appendChild(badge)
+        const choices: ProvenanceChoice[]=(last.sessions??[]).filter(s=>s.joined===true).map(s=>({replacement:s.id,label:displayName(s)+' — 本机完整会话'}))
+        for(const remote of last.remote??[])if(remote.team.includes('/') && remote.via)choices.push({replacement:remote.team,label:displayName(remote)+' — '+remote.via,peer:remote.via})
+        const revision=last.canvas.revision
+        const formKey=JSON.stringify([fresh.name,slot.member,revision,slot.ownerKey,choices])
+        let form=provenanceForms.get(formKey)
+        if(!form){form=createMemberProvenancePicker(choices,choice=>deps.confirmMember!(fresh.name,slot.member,choice.replacement,revision,slot.ownerKey,choice.peer));provenanceForms.set(formKey,form)}
+        card.appendChild(form)
+      }
       // Add-member form: static DOM re-mounted per poll (draftForm trick) —
       // rebuilt only when the inspected team changes.
       if (canvasForm?.name !== fresh.name) {
@@ -1054,10 +1070,11 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         form.addEventListener('submit', async ev => {
           ev.preventDefault()
           const handle = manual.value.trim()
-          const id = handle !== '' ? handle : pick.value
+          const selected=handle!==''?undefined:pick.selectedOptions[0]
+          const id = handle !== '' ? handle : selected?.dataset.member ?? pick.value
           if (id === '') return
           submit.disabled = true
-          const ok = await deps.canvasOp('add-member', fresh.name, id)
+          const ok = await deps.canvasOp('add-member', fresh.name, id, undefined, selected?.dataset.peer)
           submit.disabled = false
           if (ok) manual.value = ''
         })
@@ -1089,7 +1106,10 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
           pick.appendChild(new Option('远端会话队（目录卡片）…', '', true, false))
           remoteLabeled = true
         }
-        pick.appendChild(new Option(`${displayName(remote)} — 远端`, remote.team))
+        const option=new Option(`${displayName(remote)} — ${remote.via ?? '来源未确认'}`, JSON.stringify([remote.team,remote.via]))
+        option.dataset.member=remote.team
+        if(remote.via)option.dataset.peer=remote.via
+        pick.appendChild(option)
       }
       if (!remoteLabeled) {
         pick.appendChild(new Option('（暂无可拉入的远端会话队——见下方说明）', '', true, false))
@@ -1098,7 +1118,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       card.appendChild(canvasForm.form)
       const hint = el('div', 'wb-hint')
       hint.textContent =
-        '成员由人类在此手工分配（agent 不可自组队）。远端成员走对端目录路由，不做本机冷唤醒；地址由目录在派发时重解析。远端下拉只列 zone/id8 会话句柄——若为空，说明目录里还没有已链接对端的会话队（未链接的对端只给最小卡）；此时可在输入框手输句柄（如 dsh/xxxxxxxx）先把人拉进来，句柄本身即链接手势。'
+        '成员由人类明确分配。本机写完整会话；远端必须通过已链接主机的有效名片核实并记录完整公钥来源。最小卡、离线或第三方无法验证时保留待确认，不能手输裸句柄绕过来源校验。来源确认不恢复暂停；默认兼容窗口不自动关闭。'
       card.appendChild(hint)
       // Quick dispatch targets the canvas ROUTING team (0.6.9): local tiers
       // first, then the remote members in order — the seam's own priority.
@@ -1252,6 +1272,8 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   function update(state: StateBody | null): void {
     const unknown = new Set((state?.canvas?.teams ?? []).flatMap(team => team.members.filter(member => member.cliHome === null && member.cliHeld !== true).map(member => JSON.stringify([team.name, member.id]))))
     for (const key of cliHomeForms.keys()) if (!unknown.has(key)) cliHomeForms.delete(key)
+    const slots=state?.canvas?.memberSlots??[]
+    for(const key of provenanceForms.keys()){const [name,member,revision]=JSON.parse(key) as [string,string,number];if(revision!==state?.canvas?.revision||!slots.some(slot=>slot.name===name&&slot.member===member&&slot.provenance==='unknown'))provenanceForms.delete(key)}
     last = state
     // 0.6.12: refresh the readable-log list opportunistically (single flight;
     // the sidebar re-renders when rows land, mid-poll remount is idempotent).

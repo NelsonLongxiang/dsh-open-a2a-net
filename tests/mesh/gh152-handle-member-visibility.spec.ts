@@ -76,7 +76,8 @@ describe('gh#152 a handle-stored member is visible as the session it names', () 
       await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: 'both' })
       await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: 'both', id: IDS.a })
       // The store keeps both shapes (gh#131: never rewritten).
-      expect((await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'add-member', name: 'both', id: 'dsh/aaaaaaaa' })).members).toEqual([IDS.a, 'dsh/aaaaaaaa'])
+      const relayed=await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'add-member', name: 'both', id: 'dsh/aaaaaaaa' })
+      expect(relayed.members[0]).toBe(IDS.a);expect(relayed.members).toHaveLength(2);expect(relayed.members[1]).toMatch(/^dsh\/aaaaaaaa@[0-9a-f]{8}$/)
 
       const teams = await a.ctx.tools.get('a2a_teams')!.execute({}, runContext(a.agents.agent)) as { ok: boolean; teams: Array<{ team: string; description: string }> }
       const row = teams.teams.find(entry => entry.team === 'dsh/canvas/both')

@@ -9,7 +9,8 @@
  * zones/local refs never grant badge links; admission is intentionally unchanged.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { bootNode, reservePort, type MeshNode } from './harness.ts'
+import { bootNode, reservePort, tmpHome, type MeshNode } from './harness.ts'
+import { seedCanvasHistory } from '../fixtures/canvas-history.ts'
 
 beforeEach(() => {
   vi.stubGlobal('WebSocket', function throwOnSocket() { throw new Error('no socket') })
@@ -45,7 +46,7 @@ describe('W-A state-face link fields', () => {
     const c = await bootNode({ name: 'C', session: 'badge-c', team: 'dsh', port: pc, sessionNodes: true })
     try {
       await fetch(a.baseUrl + '/__dsh_a2a/join', { method: 'POST', body: JSON.stringify({ id: 'session-0123456789abcdef' }) })
-      await canvasAddMember(a, 'own', 'dsh/01234567')
+      await canvasAddMember(a, 'own', 'session-0123456789abcdef')
       await warmCards(a, b); await warmCards(a, c)
       expect(await peerRow(a, b.baseUrl)).toMatchObject({ link: 'linked', verified: true })
       expect(await peerRow(a, c.baseUrl)).toMatchObject({ link: 'stranger', verified: true })
@@ -73,7 +74,7 @@ describe('W-A state-face link fields', () => {
       // stranger until a canvas ref names dave's session team handle.
       const pc = await reservePort()
       const pd = await reservePort()
-      const charlie = await bootNode({ name: 'charlie', session: 'mesh-charlie', team: 'charlie-zone', sessionNodes: true, port: pc, peers: [`http://127.0.0.1:${String(pd)}`] })
+      const charlie = await bootNode({ home:seedCanvasHistory(tmpHome(),[{name:'fleet',members:['dave-zone/01234567']}]), name: 'charlie', session: 'mesh-charlie', team: 'charlie-zone', sessionNodes: true, port: pc, peers: [`http://127.0.0.1:${String(pd)}`] })
       const dave = await bootNode({ name: 'dave', session: 'mesh-dave', team: 'dave-zone', sessionNodes: true, port: pd })
       try {
         const dj = await globalThis.fetch(`http://127.0.0.1:${String(dave.port)}/__dsh_a2a/join`, {

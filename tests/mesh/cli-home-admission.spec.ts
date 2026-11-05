@@ -195,7 +195,8 @@ describe('#222 F1 remote CLI pinned-home admission (real hosts; scope on)', () =
     let cold: MeshNode | undefined
     try {
       await deposit(homes[0]!)
-      expect((await post(target.baseUrl, '/__dsh_a2a/canvas', { action: 'add-member', name: 'host-link', id: 'home0/01234567' })).ok).toBe(true)
+      await post(homes[0]!.baseUrl,'/__dsh_a2a/join',{id:'session-0123456789abcdef'})
+      expect((await post(target.baseUrl, '/__dsh_a2a/canvas', { action: 'add-member', name: 'host-link', id: 'home0/01234567',peer:homes[0]!.baseUrl })).ok).toBe(true)
       await deposit(homes[1]!)
       await target.dispose()
       await homes[0]!.dispose()

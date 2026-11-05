@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, expect, it, vi } from 'vitest'
-import { bootNode, type MeshNode } from './harness.ts'
+import { bootNode, tmpHome, type MeshNode } from './harness.ts'
+import { seedCanvasHistory } from '../fixtures/canvas-history.ts'
 import { CANVAS_MEMBER_CAP } from '../../src/canvas-store.ts'
 import { createCanvasWire, type CanvasWireResult } from '../../nexus-stage/src/canvas-wire.ts'
 let node: MeshNode | undefined
@@ -8,17 +9,17 @@ afterEach(async () => { await node?.dispose(); node = undefined; vi.unstubAllGlo
 
 it('gh108 real HTTP: a full host team refuses a new member visibly; duplicate/removal no-ops retain idempotence', async () => {
   vi.stubGlobal('WebSocket', function () { throw new Error('no socket') })
-  node = await bootNode({ name: 'capacity-test', session: 'gh108-capacity', team: 'dsh', sessionNodes: true })
+  const ids = Array.from({ length: CANVAS_MEMBER_CAP }, (_, i) => 'peer/' + i.toString(16).padStart(8, '0'))
+  node = await bootNode({ home:seedCanvasHistory(tmpHome(),[{name:'Capacity',members:ids}]), name: 'capacity-test', session: 'gh108-capacity', team: 'dsh', sessionNodes: true })
   const send = async (body: unknown): Promise<CanvasWireResult> => {
     const r = await fetch(node!.baseUrl + '/__dsh_a2a/canvas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     return { status: r.status, body: await r.json() as CanvasWireResult['body'] }
   }
   expect((await send({ action: 'create', name: 'Capacity' })).body.ok).toBe(true)
-  const ids = Array.from({ length: CANVAS_MEMBER_CAP }, (_, i) => 'peer/' + i.toString(16).padStart(8, '0'))
   for (const id of ids) expect((await send({ action: 'add-member', name: 'Capacity', id })).body.ok).toBe(true)
   const refused = await send({ action: 'add-member', name: 'Capacity', id: 'peer/eeeeffff' })
-  expect(refused.status).toBe(200); expect(refused.body.ok).toBe(false); expect(refused.body.error).toBeUndefined()
-  expect(refused.body.members).toHaveLength(CANVAS_MEMBER_CAP)
+  expect(refused.status).toBe(200); expect(refused.body.ok).toBe(false); expect(refused.body.error).toContain('unconfirmed')
+  const full=await fetch(node.baseUrl+'/__dsh_a2a/state').then(r=>r.json());expect(full.canvas.teams.find((t:any)=>t.name==='Capacity').members).toHaveLength(CANVAS_MEMBER_CAP)
   const notices: string[] = []
   const wire = createCanvasWire({ send, onNotice: (_kind, text) => notices.push(text) })
   expect(await wire.addMembers('Capacity', ['peer/eeeeffff'])).toBe(false)

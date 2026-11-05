@@ -154,6 +154,7 @@ export function planSeatClear(sid: string, occupied: ReadonlyArray<{ readonly x:
 
 /** Minimal session row shape the model needs (topology.SessionRow satisfies it). */
 export interface SessionLite {
+  memberRef?: string
   id: string; label: string; team: string; name?: string; description?: string; joined: boolean; live?: boolean; teams?: readonly string[]
   /** Live local sessions only: mid-turn ('running') or idle, and how many receipt-owing tasks wait on it. */
   status?: 'running' | 'idle'; queued?: number

@@ -59,7 +59,9 @@ describe('#227 native body-bound peer envelopes', () => {
     await post(a.baseUrl + '/__dsh_a2a/join', { id: 'session-aaaaaaaa11112222' })
     for (const n of [a, b]) {
       await post(n.baseUrl + '/__dsh_a2a/canvas', { action: 'create', name: 'shared' })
-      for (const id of ['dsh/aaaaaaaa', 'dsh/01234567']) await post(n.baseUrl + '/__dsh_a2a/canvas', { action: 'add-member', name: 'shared', id })
+      const local=n===a?'session-aaaaaaaa11112222':'session-0123456789abcdef',remote=n===a?'dsh/01234567':'dsh/aaaaaaaa',peer=n===a?b:a
+      expect((await post(n.baseUrl + '/__dsh_a2a/canvas', { action: 'add-member', name: 'shared', id:local })).ok).toBe(true)
+      expect((await post(n.baseUrl + '/__dsh_a2a/canvas', { action: 'add-member', name: 'shared', id:remote,peer:peer.baseUrl })).ok).toBe(true)
     }
     const seen: Array<{ path: string; body: string; headers: Record<string, string> }> = []
     const original = globalThis.fetch

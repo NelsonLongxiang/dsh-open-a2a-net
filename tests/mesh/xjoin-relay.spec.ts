@@ -45,11 +45,12 @@ describe('cross-instance join through the fleet relay', () => {
       expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: '跨机队' })).ok).toBe(true)
       const relayed = await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'add-member', name: '跨机队', id: ids.b })
       expect(relayed.ok).toBe(true)
-      expect(relayed.members).toContain('dsh/bbbbbbbb')
+      expect(relayed.members).toHaveLength(1)
+      expect(relayed.members[0]).toMatch(/^dsh\/bbbbbbbb@[0-9a-f]{8}$/)
       // Removing through the relay with the raw id works the same way.
       const removed = await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'remove-member', name: '跨机队', id: ids.b })
       expect(removed.ok).toBe(true)
-      expect(removed.members ?? []).not.toContain('dsh/bbbbbbbb')
+      expect(removed.members ?? []).toEqual([])
     } finally {
       await a.dispose()
       await b.dispose()
@@ -84,7 +85,7 @@ describe('cross-instance join through the fleet relay', () => {
       // With the old `await refreshPeerCard` this reply waited on the hung
       // card face (two serial 15s fetch budgets); the pin fails on timeout.
       expect(relayed.ok).toBe(true)
-      expect(relayed.members ?? []).not.toContain('dsh/bbbbbbbb')
+      expect(relayed.members ?? []).toEqual([])
       expect(Date.now() - t0).toBeLessThan(3_000)
     } finally {
       vi.unstubAllGlobals()

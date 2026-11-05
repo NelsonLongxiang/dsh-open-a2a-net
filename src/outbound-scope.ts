@@ -7,6 +7,7 @@ export interface OutboundScopeRecords {
   canvasNames(): readonly string[]
   canvasMembers(name: string): readonly string[]
   canvasTeam(name: string): string
+  memberHandle?(ref: string): string
   peerOrgs(): Iterable<readonly { team?: unknown; members?: unknown }[]>
   warmPeers(): Promise<unknown>
 }
@@ -14,8 +15,10 @@ export async function outboundScope(r: OutboundScopeRecords, id: string, handle:
   const teams = r.teamsOf(id)
   const sharedRoster = teams.some(roster => r.membersOf(roster).some(member => r.zone + '/' + r.id8(member) === team))
   const sharedCanvas = r.canvasNames().some(name => {
-    const members = r.canvasMembers(name)
-    return (members.includes(id) || members.includes(handle)) && (members.includes(team) || r.canvasTeam(name) === team)
+    const raw = r.canvasMembers(name)
+    const members = raw.map(ref => r.memberHandle?.(ref) ?? ref)
+    const targetHeld = team.includes('@') ? raw.includes(team) : members.includes(team)
+    return (members.includes(id) || members.includes(handle)) && (targetHeld || r.canvasTeam(name) === team)
   })
   if (team.includes('/canvas/') && !sharedCanvas && !teams.includes(team)) await r.warmPeers()
   let orgShared = false

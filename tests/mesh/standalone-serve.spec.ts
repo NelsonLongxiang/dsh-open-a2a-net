@@ -64,8 +64,8 @@ describe('a2a-net serve: a standalone network node', () => {
       expect((await post(aUrl, '/__dsh_a2a/cli-deposit', { action: 'publish', card })).ok).toBe(true)
       // Links: A puts the CLI and B's session in one canvas; B links the CLI and pins A as its home.
       await post(aUrl, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: handle })
-      await post(aUrl, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: targetHandle })
       await post(b.baseUrl, '/__dsh_a2a/join', { id: targetId })
+      expect((await post(aUrl, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: targetHandle,peer:b.baseUrl })).ok).toBe(true)
       expect((await post(b.baseUrl, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: handle, home: aUrl })).ok).toBe(true)
       await post(b.baseUrl, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: targetId })
       const agent = b.agents.agent as any

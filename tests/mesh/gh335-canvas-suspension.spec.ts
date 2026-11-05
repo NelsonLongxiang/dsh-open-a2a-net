@@ -7,8 +7,11 @@ import { createPrivateKey, generateKeyPairSync } from 'node:crypto'
 import { ghostNode } from './harness.ts'
 import { signCard } from '../../src/card.ts'
 import { signOriginClaim } from '../../src/origin-claim.ts'
-import { bootNode, reservePort, runContext, tmpHome } from './harness.ts'
+import { bootNode, reservePort, runContext, tmpHome, preseedNodeKey } from './harness.ts'
+import { canvasOwnerFingerprint } from '../../src/canvas-id.ts'
 const id='session-aaaaaaaa11112222',bare='dsh/aaaaaaaa'
+// #334 forbids new bare writes. These tests deliberately start from historical snapshots.
+const legacyHome=(members:string[]=[bare],owners:Record<string,string>={})=>{const home=tmpHome();mkdirSync(join(home,'a2a'),{recursive:true});writeFileSync(join(home,'a2a/canvas.json'),JSON.stringify({teams:[{name:'ops',members}],...(Object.keys(owners).length?{memberOwners:owners}:{})}));return home}
 const post=async(base:string,path:string,body:unknown)=>{const res=await fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return {status:res.status,body:await res.json()}}
 const state=async(base:string)=>await fetch(base+'/__dsh_a2a/state').then(r=>r.json())
 const route=async(n:Awaited<ReturnType<typeof bootNode>>,message:string)=>await n.ctx.tools.get('a2a_route')!.execute({team:'dsh/canvas/ops',message},{signal:new AbortController().signal} as never) as any
@@ -49,7 +52,7 @@ describe('#335 real canvas lifecycle',()=>{
  it('membership-specific foreign blob grants cannot use a suspended canvas slot',async()=>{
   const pair=generateKeyPairSync('ed25519'),remote='foreign/aaaaaaaa'
   const ghost=await ghostNode(signCard({name:'foreign',session:'foreign',team:'foreign',capabilities:{},expiresAt:Date.now()+60000},pair.privateKey))
-  const a=await bootNode({name:'grant335',session:'grant335',team:'dsh',sessionNodes:true})
+  const a=await bootNode({name:'grant335',home:legacyHome([remote]),session:'grant335',team:'dsh',sessionNodes:true})
   try{
    await post(a.baseUrl,'/__dsh_a2a/canvas',{action:'add-member',name:'ops',id:remote})
    const staged=await fetch(a.baseUrl+'/__dsh_a2a/blob?to='+encodeURIComponent('dsh/canvas/ops')+'&name=x',{method:'POST',body:'grant'}).then(r=>r.json())
@@ -70,7 +73,7 @@ describe('#335 real canvas lifecycle',()=>{
  })
 
  it('suspended members are absent from published canvasOrg, effective counts and whoami',async()=>{
-  const a=await bootNode({name:'auth335',session:'auth335',team:'dsh',agentId:id,sessionNodes:true})
+  const a=await bootNode({name:'auth335',home:legacyHome(),session:'auth335',team:'dsh',agentId:id,sessionNodes:true})
   try{
    await post(a.baseUrl,'/__dsh_a2a/join',{id});await post(a.baseUrl,'/__dsh_a2a/canvas',{action:'add-member',name:'ops',id:bare})
    const staged=await fetch(a.baseUrl+'/__dsh_a2a/blob?to='+encodeURIComponent('dsh/canvas/ops')+'&name=x',{method:'POST',body:'grant payload'}).then(r=>r.json())
@@ -93,7 +96,7 @@ describe('#335 real canvas lifecycle',()=>{
 
  it('records real collision inference warnings without counting state polling as use',async()=>{
   const pa=await reservePort(),pb=await reservePort()
-  const a=await bootNode({name:'warnA',session:'warnA',team:'dsh',agentId:id,sessionNodes:true,port:pa,peers:['http://127.0.0.1:'+pb],cardCacheTtlMs:60000})
+  const a=await bootNode({name:'warnA',home:legacyHome(),session:'warnA',team:'dsh',agentId:id,sessionNodes:true,port:pa,peers:['http://127.0.0.1:'+pb],cardCacheTtlMs:60000})
   const b=await bootNode({name:'warnB',session:'warnB',team:'dsh',agentId:id,sessionNodes:true,port:pb,peers:[a.baseUrl],cardCacheTtlMs:60000})
   try{
    await post(a.baseUrl,'/__dsh_a2a/join',{id});await post(b.baseUrl,'/__dsh_a2a/join',{id})
@@ -110,8 +113,10 @@ describe('#335 real canvas lifecycle',()=>{
 
  it('cold unilateral same-id8 peer survives cleanup; qualified foreign slot is never treated as ours',async()=>{
   const pa=await reservePort(),pb=await reservePort()
-  const a=await bootNode({name:'A335collision',session:'A335collision',team:'dsh',agentId:id,sessionNodes:true,port:pa,peers:['http://127.0.0.1:'+pb]})
-  const b=await bootNode({name:'B335collision',session:'B335collision',team:'dsh',agentId:id,sessionNodes:true,port:pb})
+  const ah=tmpHome(),bh=tmpHome(),ak=preseedNodeKey(ah),bk=preseedNodeKey(bh),aq=bare+'@'+canvasOwnerFingerprint(ak),bq=bare+'@'+canvasOwnerFingerprint(bk)
+  writeFileSync(join(ah,'a2a/canvas.json'),JSON.stringify({teams:[{name:'ops',members:[bare,bq,aq,id]}],memberOwners:{[bq]:bk,[aq]:ak}}))
+  const a=await bootNode({name:'A335collision',home:ah,session:'A335collision',team:'dsh',agentId:id,sessionNodes:true,port:pa,peers:['http://127.0.0.1:'+pb]})
+  const b=await bootNode({name:'B335collision',home:bh,session:'B335collision',team:'dsh',agentId:id,sessionNodes:true,port:pb})
   try{
    await post(a.baseUrl,'/__dsh_a2a/join',{id});await post(b.baseUrl,'/__dsh_a2a/join',{id})
    await post(b.baseUrl,'/__dsh_a2a/canvas',{action:'create',name:'b-marker'})
@@ -128,7 +133,7 @@ describe('#335 real canvas lifecycle',()=>{
   }finally{await a.dispose();await b.dispose()}
  })
  it('owner suspension action remains control-gated and readd cannot clear records',async()=>{
-  const key='335-control',a=await bootNode({name:'key335',session:'key335',team:'dsh',agentId:id,sessionNodes:true,apiKey:key})
+  const key='335-control',a=await bootNode({name:'key335',home:legacyHome(),session:'key335',team:'dsh',agentId:id,sessionNodes:true,apiKey:key})
   const keyed=async(path:string,body:unknown)=>await fetch(a.baseUrl+path,{method:'POST',headers:{'X-API-Key':key,'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json())
   try{
    await keyed('/__dsh_a2a/join',{id});await keyed('/__dsh_a2a/canvas',{action:'add-member',name:'ops',id:bare});await keyed('/__dsh_a2a/leave',{id})
@@ -141,7 +146,7 @@ describe('#335 real canvas lifecycle',()=>{
   }finally{await a.dispose()}
  })
  for(const action of ['leave','remove','archive'])it(action+' suspends inferred bare slots, persists them and requires exact owner restore',async()=>{
-  const a=await bootNode({name:'A335',session:'A335-'+action,team:'dsh',agentId:id,sessionNodes:true})
+  const a=await bootNode({name:'A335',home:legacyHome(),session:'A335-'+action,team:'dsh',agentId:id,sessionNodes:true})
   let restarted:Awaited<ReturnType<typeof bootNode>>|undefined
   try{
    await post(a.baseUrl,'/__dsh_a2a/join',{id})
@@ -174,7 +179,7 @@ describe('#335 real canvas lifecycle',()=>{
   }finally{await restarted?.dispose();await a.dispose()}
  },20000)
  it('failed durable suspension refuses leave, keeps join and cannot serve canvas rows',async()=>{
-  const a=await bootNode({name:'A335fail',session:'A335fail',team:'dsh',agentId:id,sessionNodes:true})
+  const a=await bootNode({name:'A335fail',home:legacyHome(),session:'A335fail',team:'dsh',agentId:id,sessionNodes:true})
   try{
    await post(a.baseUrl,'/__dsh_a2a/join',{id});await post(a.baseUrl,'/__dsh_a2a/canvas',{action:'add-member',name:'ops',id:bare})
    const file=join(a.home,'a2a/canvas.json'),original=readFileSync(file,'utf8');writeFileSync(file,original+' ')
@@ -185,7 +190,7 @@ describe('#335 real canvas lifecycle',()=>{
   }finally{await a.dispose()}
  })
  it('closed legacy window excludes raw bare rows without deleting them',async()=>{
-  const a=await bootNode({name:'closed335',session:'closed335',team:'dsh',agentId:id,sessionNodes:true,canvasLegacyBareMembers:false})
+  const a=await bootNode({name:'closed335',home:legacyHome(),session:'closed335',team:'dsh',agentId:id,sessionNodes:true,canvasLegacyBareMembers:false})
   try{
    await post(a.baseUrl,'/__dsh_a2a/join',{id});await post(a.baseUrl,'/__dsh_a2a/canvas',{action:'add-member',name:'ops',id:bare})
    expect((await post(a.baseUrl,'/__dsh_a2a/dispatch',{team:'dsh/canvas/ops',message:'closed'})).body.ok).toBe(false)

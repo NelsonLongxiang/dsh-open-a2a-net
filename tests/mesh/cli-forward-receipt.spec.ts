@@ -10,7 +10,8 @@ import { signCard } from '../../src/card.ts'
 import { signOriginClaim } from '../../src/origin-claim.ts'
 import { CliDepositStore } from '../../src/cli-deposit.ts'
 import { canvasOwnerFingerprint } from '../../src/canvas-id.ts'
-import { bootNode, reservePort, type MeshNode, cliEnv } from './harness.ts'
+import { bootNode, reservePort, tmpHome, type MeshNode, cliEnv } from './harness.ts'
+import { seedCanvasHistory } from '../fixtures/canvas-history.ts'
 beforeEach(() => vi.stubGlobal('WebSocket', function noSocket() { throw Error('no socket') }))
 afterEach(() => vi.unstubAllGlobals())
 const handle = 'receipt-cli/a1b2c3d4e5f60718'
@@ -27,13 +28,13 @@ async function cli(home: string, args: string[]) {
     p.on('error', reject); p.on('close', code => resolve({ code, stdout, stderr }))
   })
 }
-async function setup(directLink = true, extraHome = false, replayAtHome = false, latePublish = false, waitMs?: number, settlementAuth: 'observe' | 'enforce' = 'enforce') {
+async function setup(directLink = true, extraHome = false, replayAtHome = false, latePublish = false, waitMs?: number, settlementAuth: 'observe' | 'enforce' = 'enforce', historicalGamma = false) {
   const pa = await reservePort(), pb = await reservePort()
   const pc = extraHome ? await reservePort() : undefined
   const scoped = { sessionNodes: true, teamScopeRouting: true, teamScopeInfo: true, settlementAuth, forwardDirect: true, cardCacheTtlMs: 0, ...(waitMs !== undefined ? { flushTimeoutMs: waitMs } : {}) }
   const a = await bootNode({ name: 'A', session: 'receipt-home', team: 'alpha', port: pa, peers: ['http://127.0.0.1:' + pb, ...(replayAtHome && pc !== undefined ? ['http://127.0.0.1:' + pc] : [])], ...scoped })
   const c = pc === undefined ? undefined : await bootNode({ name: 'C', session: 'receipt-namesake', team: 'gamma', port: pc, peers: ['http://127.0.0.1:' + pb, ...(replayAtHome ? [a.baseUrl] : [])], ...scoped })
-  const b = await bootNode({ name: 'B', session: 'receipt-target', team: 'beta', agentId: targetId, port: pb, peers: [...(c === undefined ? [] : [c.baseUrl]), a.baseUrl], ...scoped })
+  const b = await bootNode({ ...(historicalGamma?{home:seedCanvasHistory(tmpHome(),[{name:'ops',members:['gamma/cccccccc']}])}:{}), name: 'B', session: 'receipt-target', team: 'beta', agentId: targetId, port: pb, peers: [...(c === undefined ? [] : [c.baseUrl]), a.baseUrl], ...scoped })
   const home = mkdtempSync(join(tmpdir(), 'cli-receipt-'))
   writeFileSync(join(home, 'cli.json'), JSON.stringify({ name: 'receipt-cli', uuid: 'a1b2c3d4e5f60718', handle, home: a.baseUrl, privateKeyPem: privateKey.export({ type: 'pkcs8', format: 'pem' }) }), { mode: 0o600 })
   const card = JSON.stringify(signCard({ name: 'receipt-cli', session: 'cli-receipt', team: handle, capabilities: { route: true, async: true }, expiresAt: Date.now() + 172800000 }, privateKey))
@@ -86,7 +87,7 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
     } finally { delay.mockRestore(); await a.dispose(); await b.dispose() }
   }, 30000)
   it('#282 S3 review: only a body-bound receipt from a frozen receiver of B passes — other labels, free text and a stripped Sig3 do not', async () => {
-    const { a, b, home } = await setup(false)
+    const { a, b, home } = await setup(false,false,false,false,undefined,'enforce',true)
     const agent = b.agents.agent as any
     agent.steer = (payload: any) => { b.steered.push(payload) } // never completes: the row stays pending
     const task = 'direct-pending-s3'
@@ -292,8 +293,8 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
     const a = await bootNode({ name: 'A', session: 'offline-pinned-target', team: 'alpha', port: pa, home, peers: [c.baseUrl], sessionNodes: true, teamScopeRouting: true, settlementAuth: 'enforce', forwardDirect: true })
     try {
       await post(c, '/__dsh_a2a/cli-deposit', { action: 'publish', card })
-      await post(c, '/__dsh_a2a/canvas', { action: 'add-member', name: 'return-link', id: 'alpha/01234567' })
       await post(a, '/__dsh_a2a/join', { id: localId })
+      expect((await post(c, '/__dsh_a2a/canvas', { action: 'add-member', name: 'return-link', id: 'alpha/01234567', peer:a.baseUrl })).ok).toBe(true)
       const agent = a.agents.agent as any
       agent.steer = (payload: any) => {
         a.steered.push(payload)

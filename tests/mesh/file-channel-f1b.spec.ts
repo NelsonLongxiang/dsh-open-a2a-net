@@ -11,6 +11,7 @@ import { readdirSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { bootNode, reservePort, tmpHome, type MeshNode } from './harness.ts'
+import { seedCanvasHistory } from '../fixtures/canvas-history.ts'
 import { signCard } from '../../src/card.ts'
 import { signOriginClaim } from '../../src/origin-claim.ts'
 import { BLOB_FILE_MAX } from '../../src/blob-store.ts'
@@ -141,7 +142,7 @@ describe('#91 F1b — stage face and pull face', () => {
 
 describe('#91 F1b — a peer HOST pulls with the audience-bound envelope only', () => {
   it('bound v2 from a root card URL: pulls its own grant and a canvas grant naming a member on its host; the unbound form alone, or a path card URL, does not prove it', async () => {
-    const { a } = await hostWithCli()
+    const { a } = await hostWithCli({home:seedCanvasHistory(tmpHome(),[{name:'ops',members:['market/aaaaaaaa']}])})
     const marketKey = generateKeyPairSync('ed25519').privateKey
     const marketCard = signCard({ name: 'market', session: 'market-s', team: 'market', capabilities: { route: true }, expiresAt: Date.now() + 3_600_000 }, marketKey)
     const srv = createServer((_req, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(marketCard)) })

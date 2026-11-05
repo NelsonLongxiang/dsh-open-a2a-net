@@ -69,6 +69,7 @@ export function peerHostOf(url: string): string {
 
 /** One remote team row as the directory reports it (state.remote). */
 export interface RemoteTeamRow {
+  memberRef?: string
   team: string
   unreachable?: boolean
   name?: string
