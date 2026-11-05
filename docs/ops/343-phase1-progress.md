@@ -28,6 +28,16 @@ verify/draft-shapes-phase1.json只含8个最小子义务checker形状（其中1�
 
 读0.120实现另见：draft仅回拟id/record:null，不落spec/prepare/trace；普通run需要已有冻结spec。尚未找到合法的“不冻结draft直接run”入口，**不手工将draft写入specs目录，不偷偷freeze为探针**。这两项实际接缝已上报原评审，追加上游#232 comment6662688951；需引擎/全局裁可用路径后补真实定稿VU/运行报告。当前无NEEDS-MATERIAL报告，只有形状lint与meta拒绝，不能把拒绝重新命名NM。
 
+## 受限探针形状探索与登记修复集成
+
+独立PR347按监督席a-f PASS@509145d并入一期，来源更新为已推GitHub的bb481b97323936e7c9698efaa6ce264fd2eda72d，master未动。新探针按授权从该SHA整体git archive导入ignored tmp/phase1-343/probe-bb481b9，只不导出二期递归驱动，meta/collector/草稿原字节一致；旧20ddb80探针未打补丁。根PROBE-ONLY声明新旧来源、106项CRLF登记修复原因，独立YGL_HOME仅在探针树内。
+
+根据direct-777fcd894733，允许探针自己的普通prepare产生临时实验规格。实验材料/标题明确“PROBE-ONLY实验非v3”，实验run/report/archive全部只留ignored tmp，不进入发布审计、PR验收证据或项目准入结论；没有回拷任何spec/report/archive。本记录只记隔离流程和形状经验，不引用实验run身份/判定作为证据。定稿表交付后两棵探针树整体封存tmp。
+
+形状经验：count相等使用contract规定的**==**，不能写predicate的=；项目draft-shapes中7处count op已更正，原始项目根CLI lint仍checked8/schema&coverage未skip。aggregate sql-pair比较hash文本还须同域唯一性与非NULL的独立守卫，不能依靠max聚合吞重复。扫描域与违规where分离，不把缺域空表当PASS。这些是形状选择，不代表已验证完整A1-A8，也不把实验生成V编号冒充正式v3编号。
+
+项目根meta仍唯一R3=verify-recursive.mjs。退场提前仅获设计授权direct-1d07385faccf，禁止实施，需单独覆盖调用方/v2门不断/历史回放/精确删除移动清单后交全局评估。最终真实VU表尚未完成，正式v3没有冻结；如实保持“项目尚未运行/R3阻挡”，不伪造NM报告。
+
 ## 下一步与发布硬边界
 
 1. 义务映射PASS已收到；等#232能力及draft/run接缝裁定，完成最终真实VU表，再交精确SHA覆盖PASS；不能先正式prepare再补审批。
