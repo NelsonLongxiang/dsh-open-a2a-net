@@ -9,6 +9,7 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
+import { selectLanIPv4 } from './lan-ip.ts'
 import { dirname, join } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 // The package own version, read from package.json at load time so the
@@ -609,19 +610,12 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
-   * This host's primary LAN IPv4 (first non-internal address), computed once:
+   * This host's primary LAN IPv4 (RFC1918 > other external IPv4 > CGNAT), computed once:
    * a node fact the card and state route publish so peers and operators can
    * tell machines apart in a same-team fleet. Empty when no external address
    * exists (loopback-only deployments).
    */
-  const lanIp = (() => {
-    for (const entries of Object.values(networkInterfaces())) {
-      for (const entry of entries ?? []) {
-        if (entry.family === 'IPv4' && !entry.internal) return entry.address
-      }
-    }
-    return ''
-  })()
+  const lanIp = selectLanIPv4(networkInterfaces())
 
   // Session groups: user-named buckets for the panel's session listing,
   // persisted beside the join intents so they survive restarts.
@@ -2878,7 +2872,7 @@ export function apply(ctx: Context, config: Config): void {
    */
   function peerLinkState(peerUrl: string): { link: 'linked' | 'stranger'; verified: boolean } {
     return peerLinkDisplay(peerUrl, {
-      card: cardCache.get(peerUrl)?.card, ownUrl: ownCardUrl, seeds: config.peers,
+      card: cardCache.get(peerUrl)?.card, ownUrl: ownCardUrl, ownAudiences: config.originClaimAudiences, seeds: config.peers,
       refs: canvasStore.list().flatMap(name => [...canvasStore.remoteMembersOf(name)]),
       ownHandles: new Set([...joinedSessions.list(), ...liveRoots.keys()].map(id => `${config.team}/${id8(id)}`)),
       cards: [...cardCache.values()].flatMap(entry => entry.card === undefined ? [] : [entry.card]),

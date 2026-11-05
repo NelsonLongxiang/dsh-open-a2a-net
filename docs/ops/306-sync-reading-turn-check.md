@@ -26,7 +26,7 @@ routeIntoAgentFor 在注册同步等待前读取 floorAtRegistration；有非空
 
 ## 升级影响
 
-见 docs/release.md 的 0.6.40 候选节。忙碌目标更可能超过既有 15 秒同步传输等待，得到 -32005/DELIVERED-UNSETTLED，而不是错误文字；用原 task id 对账，async + inbox 收真回执，不重派新任务。
+见 docs/release.md 的 0.6.41 候选节。0.6.40 已独立冻结并发布，不含本修复。忙碌目标更可能超过既有 15 秒同步传输等待，得到 -32005/DELIVERED-UNSETTLED，而不是错误文字；用原 task id 对账，async + inbox 收真回执，不重派新任务。
 
 ## 未声称完成的内容
 
