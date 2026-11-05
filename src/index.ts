@@ -10,6 +10,7 @@ import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, ran
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 import { selectLanIPv4 } from './lan-ip.ts'
+import { isLinkKey, normalizeLinkKeys, originOf, outboundKeyFor } from './link-keys.ts'
 import { dirname, join } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 // The package own version, read from package.json at load time so the
@@ -285,7 +286,9 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
   // gh#193: the one door to peers — while isolated nothing leaves this host.
-  const peerFetch: typeof globalThis.fetch = (url, init) => config.isolated ? Promise.reject(new Error('isolated: outbound peer traffic is off on this host')) : globalThis.fetch(url, init)
+  // Review of #318 R4: never follow a peer's redirect — X-API-Key and the OriginClaim headers are not stripped on
+  // a cross-origin hop, so a 3xx would hand them to whoever the Location names. A redirect is an HTTP failure.
+  const peerFetch: typeof globalThis.fetch = (url, init) => config.isolated ? Promise.reject(new Error('isolated: outbound peer traffic is off on this host')) : globalThis.fetch(url, { ...init, redirect: 'manual' })
   const fetchImpl: A2aFetch = (url, init) => peerFetch(url, init)
 
   /** Constant-time secret comparison: hash both sides to equal-length digests. */
@@ -293,6 +296,36 @@ export function apply(ctx: Context, config: Config): void {
     const digestA = createHash('sha256').update(a).digest()
     const digestB = createHash('sha256').update(b).digest()
     return timingSafeEqual(digestA, digestB)
+  }
+
+  // #317 link keys (src/link-keys.ts): a per-peer X-API-Key on the peer faces, never on the control routes.
+  const linkKeyMap = normalizeLinkKeys(config.linkKeys)
+  /**
+   * The peer-face key gate (/a2a/direct, /a2a/log, /a2a/blob): this host's apiKey as before; a link key only
+   * from a host whose OriginClaim verifies here BOUND to this very request (audience-bound v2 — never a v1
+   * envelope replayed onto another path; a POST also body-bound, Sig3), and only the key configured for that
+   * signer's own origin (review of #318 R1, R3). A leaked link key cannot act without that peer's node key.
+   * An empty apiKey keeps the open posture.
+   * @param req - the inbound peer request.
+   * @param rawBody - the request body, for a POST.
+   */
+  async function peerKeyAdmits(req: IncomingMessage, rawBody?: Uint8Array): Promise<boolean> {
+    if (config.apiKey === '') return true
+    const presented = String(req.headers['x-api-key'] ?? '')
+    if (secretEqual(presented, config.apiKey)) return true
+    if (!isLinkKey(presented, linkKeyMap, secretEqual)) return false
+    const claim = await verifyOriginClaim(req, rawBody !== undefined ? { rawBody } : undefined)
+    if (!claim.ok || claim.cli === true || !claim.bound || (rawBody !== undefined && claim.bodyBound !== true)) return false
+    const expected = linkKeyMap.get(originOf(claim.callerUrl))
+    return expected !== undefined && secretEqual(presented, expected)
+  }
+  /**
+   * The headers of one signed peer read (the remote session-log proxy): the OriginClaim for `url` (origin and
+   * path, no query) and the key for that target — its link key, else this host's apiKey (review of #318 R2).
+   */
+  function peerRequestHeaders(url: string, method: string): Record<string, string> {
+    const key = outboundKeyFor(url, linkKeyMap, config.apiKey)
+    return { ...originClaimHeaders({ url, method }), ...(key !== '' ? { 'X-API-Key': key } : {}) }
   }
 
   /**
@@ -539,6 +572,7 @@ export function apply(ctx: Context, config: Config): void {
   }
   const client = new A2aClient({
     apiKey: config.apiKey,
+    apiKeyFor: url => outboundKeyFor(url, linkKeyMap, config.apiKey),
     sessionId: session,
     cardCaller: config.team,
     // gh#9+gh#10 OriginClaim (docs/protocol/delivery-origin-auth.md): every
@@ -2304,7 +2338,7 @@ export function apply(ctx: Context, config: Config): void {
       if (known !== undefined && known.key === claim.card.publicKey && known.expiresAt > Date.now() && Date.now() - known.at < config.cardCacheTtlMs) return { ...claim, card: { ...claim.card, peers: known.peers } }
       const target = claim.callerUrl.replace(/\/$/, '') + '/.well-known/agent-card.json?discovery=1'
       try {
-        const response = await peerFetch(target, { method: 'GET', headers: originClaimHeaders({ url: target, method: 'GET' }), redirect: 'manual', signal: AbortSignal.timeout(5_000) })
+        const response = await peerFetch(target, { method: 'GET', headers: peerRequestHeaders(target, 'GET'), redirect: 'manual', signal: AbortSignal.timeout(5_000) })
         if (response.ok) {
           const verified = verifyCard(JSON.parse(await response.text()), Date.now())
           if (verified.ok && verified.card.publicKey === claim.card.publicKey && verified.card.team === claim.card.team) {
@@ -2617,6 +2651,7 @@ export function apply(ctx: Context, config: Config): void {
       joinedSessions,
       idempotencyStore,
       verifyOriginClaim,
+      peerKeyAdmits,
       remoteCliProof,
       forwardReceiptBasis: (taskId, caller, cliHandle, claim) => forwardReceiptBasis(taskLedger.find(taskId), caller, cliHandle, claim),
       forwardDirect: request => forwardDirect(request), ownCanvasFingerprint,
@@ -2624,7 +2659,6 @@ export function apply(ctx: Context, config: Config): void {
       callerLinkedToThisHost, get ownCardUrl() { return ownCardUrl },
       recordActivity,
       bumpLegacyInbound: () => { legacyInboundCount += 1 },
-      secretEqual,
       a2aCallerRefusal,
       a2aCallerAdmission,
       allowlistVersionNow,
@@ -2777,8 +2811,8 @@ export function apply(ctx: Context, config: Config): void {
     }), 'a2a: quick-dispatch route')
 
     // gh#77: the session-log faces (local transcript reader + remote-log proxy) live in src/faces/session-log.ts.
-    registerSessionLogFaces(webServer, { ctx, config, controlRoute, scanSessionLogList, readSessionLogTail, peerStore, peerFetch, directoryPeerCandidates, memoizedCardFetch })
-    registerFileFaces(webServer, { ctx, config, blobStore, canvasStore, verifyOriginClaim, secretEqual, controlRoute, recordActivity })
+    registerSessionLogFaces(webServer, { ctx, config, controlRoute, scanSessionLogList, readSessionLogTail, peerStore, peerFetch, peerRequestHeaders, directoryPeerCandidates, memoizedCardFetch })
+    registerFileFaces(webServer, { ctx, config, blobStore, canvasStore, verifyOriginClaim, peerKeyAdmits, controlRoute, recordActivity })
   })
 
   /**

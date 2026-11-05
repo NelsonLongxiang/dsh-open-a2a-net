@@ -171,6 +171,7 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | `originClaimUrl` | `''` | Override for the envelope's `callerUrl` (pocket-tunneled hosts); `''` derives it. |
 | `originClaimUnboundWindow` | `true` | OriginClaim audience-binding window: also sign and accept the legacy envelope that names no audience (accepted ones counted as `unboundInbound`; those whose bound form missed here also as `boundMissInbound`); `false` signs and accepts the audience-bound form only. |
 | `originClaimAudiences` | `[]` | Extra origins this host answers to as an envelope audience, for port-mapped or proxied hosts whose dialed URL is neither the card URL nor the arrival address. |
+| `linkKeys` | `{}` | Link keys (#317): `{ "<peer origin>": "<key>" }`. Requests to that peer carry this key instead of `apiKey`; this host's peer faces (`/a2a/direct`, `/a2a/log`, `/a2a/blob`) accept it only from a caller whose OriginClaim verifies and names that origin (a POST must be Sig3 body-bound); the control routes never accept it. Lets a public node link to the fleet without holding the fleet apiKey; both ends configure the same link key. |
 | `gateAgentLessCalls` | `'audit'` | Host-side (agent-less) routing calls: audit them, or `refuse`. |
 | `settlementAuth` | `'observe'` | Settlement authorization (#114): `off`, `observe` (record what would be refused, settle as before), or `enforce`. |
 | `asyncNudgeDelayMs` | `120000` | Delay before a delivered-but-unconsumed async route re-wakes its target with a one-line nudge; `0` disables. |

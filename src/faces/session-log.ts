@@ -23,6 +23,8 @@ export interface SessionLogFaceDeps {
   readonly readSessionLogTail: (id: string, limit: number) => { ok: true; id: string; messages: Array<{ role: string; text: string; time?: number }> } | { ok: false; error: string }
   readonly peerStore: Pick<PeerStore, 'list'>
   readonly peerFetch: typeof globalThis.fetch
+  /** #317 review R2: the signed, keyed headers of one peer read (OriginClaim + the target's key). */
+  readonly peerRequestHeaders: (url: string, method: string) => Record<string, string>
   readonly directoryPeerCandidates: (fetch: (url: string) => Promise<A2aPeerCard | undefined>, team: string, failures: string[]) => Promise<string[]>
   readonly memoizedCardFetch: () => (url: string) => Promise<A2aPeerCard | undefined>
 }
@@ -32,7 +34,7 @@ export interface SessionLogFaceDeps {
  * @param d - the captures listed on {@link SessionLogFaceDeps}.
  */
 export function registerSessionLogFaces(webServer: WebServer, d: SessionLogFaceDeps): void {
-  const { ctx, config, controlRoute, scanSessionLogList, readSessionLogTail, peerStore, peerFetch, directoryPeerCandidates, memoizedCardFetch } = d
+  const { ctx, config, controlRoute, scanSessionLogList, readSessionLogTail, peerStore, peerFetch, peerRequestHeaders, directoryPeerCandidates, memoizedCardFetch } = d
   // Session transcript reader (0.6.11): the workbench inspector shows the
   // tail of a LOCAL node's own conversation log inline — owner ruling
   // 2026-10-20 banned navigation, and reading is the need jumps used to
@@ -137,7 +139,7 @@ export function registerSessionLogFaces(webServer: WebServer, d: SessionLogFaceD
           const listUrl = new URL('/a2a/log', base)
           listUrl.searchParams.set('caller_session', config.team)
           try {
-            const listResponse = await peerFetch(listUrl, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } })
+            const listResponse = await peerFetch(listUrl, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json', ...peerRequestHeaders(new URL('/a2a/log', base).toString(), 'GET') } })
             const listBody = await listResponse.json().catch(() => ({ ok: false, error: `peer answered HTTP ${listResponse.status}` })) as { ok?: boolean; error?: string; sessions?: Array<{ id: string }> }
             if (listResponse.ok && listBody.ok === true && Array.isArray(listBody.sessions)) {
               const picked = suffix !== '' ? listBody.sessions.find(row => row.id.includes(suffix)) : listBody.sessions[0]
@@ -163,7 +165,7 @@ export function registerSessionLogFaces(webServer: WebServer, d: SessionLogFaceD
         if (resolvedId !== '') target.searchParams.set('id', resolvedId)
         target.searchParams.set('limit', String(limit))
         try {
-          const response = await peerFetch(target, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json' } })
+          const response = await peerFetch(target, { signal: AbortSignal.timeout(5000), headers: { accept: 'application/json', ...peerRequestHeaders(new URL('/a2a/log', base).toString(), 'GET') } })
           const body = await response.json().catch(() => ({ ok: false, error: `peer answered HTTP ${response.status}` })) as { ok?: boolean; error?: string }
           if (response.ok && body.ok === true) {
             finish({ ...body, via: base } as Record<string, JsonValue>)

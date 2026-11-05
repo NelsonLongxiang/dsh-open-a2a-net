@@ -2321,6 +2321,7 @@ describe('a2a plugin module surface', () => {
       // OriginClaim audience binding: unbound window open, no extra audiences.
       originClaimUnboundWindow: true,
       originClaimAudiences: [],
+      linkKeys: {},
       originClaimUrl: '',
       // #19 D2: card-face excerpt exposure (owner-level; default full).
       exposureExcerpt: 'full',
