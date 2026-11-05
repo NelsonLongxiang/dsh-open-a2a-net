@@ -20,8 +20,8 @@
  */
 
 import type { TaskAuthorization, SettlementReason } from './task-auth.ts'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { writeTaskLedger } from './task-ledger-persistence.ts'
 import { parseReceipt, RECEIPT_OUTCOMES, type ReceiptOutcomeV2 } from './receipt.ts'
 import { classifyConservationBlock, ConservationCounters, type ConservationVerdict } from './ledger-conservation.ts'
 import { CALLER_ENDED_PREFIX, TASK_CAP, ARCHIVE_CAP, SUMMARY_CAP, TASK_STALE_TTL_MS, ARCHIVE_ENDS, ECHO_SUMMARY, ROUTING_FACT_CAP, SETTLEMENT_ID_CAP, SETTLEMENT_REFUSAL_CAP, withSender, withAuth, routingOf, birthFacts, withRouting, withSettledBy, parseRefusal, archivedEndedBy } from './task-ledger-rows.ts'
@@ -51,6 +51,8 @@ export class TaskLedger {
   /** Injectable clock (option `now`). */
   private readonly now: () => number
   private readonly warn: (message: string) => void
+  /** Last successful commit, for rollback when a mutation cannot persist. */
+  private committed = ''
 
   /**
    * @param path - persistence file (`<dsh-home>/a2a/tasks.json`); empty = no persistence.
@@ -62,6 +64,7 @@ export class TaskLedger {
     this.now = options?.now ?? (() => Date.now())
     this.warn = options?.warn ?? console.warn
     this.restore()
+    this.committed = JSON.stringify(this.snapshot())
   }
 
   /**
@@ -729,9 +732,23 @@ export class TaskLedger {
   /** Persist the ledger (no-op when no path was configured). */
   private persist(): void {
     if (this.path === '') return
+    const bytes = JSON.stringify(this.snapshot())
     try {
-      mkdirSync(dirname(this.path), { recursive: true })
-      const snapshot: TaskLedgerSnapshot = {
+      writeTaskLedger(this.path, bytes)
+      this.committed = bytes
+    } catch (error) {
+      const previous = JSON.parse(this.committed) as TaskLedgerSnapshot
+      this.tasks = [...previous.tasks]
+      this.archived = [...previous.archived ?? []]
+      this.refusals = [...previous.settlementRefusals ?? []]
+      this.refusalsTotal = previous.settlementRefusalsTotal ?? 0
+      Object.assign(this.counters, new ConservationCounters(), previous.conservation ?? {})
+      throw error
+    }
+  }
+
+  private snapshot(): TaskLedgerSnapshot {
+    return {
         tasks: this.tasks.map(task => ({ ...task })),
         ...(this.archived.length > 0 ? { archived: this.archived.map(entry => ({ ...entry })) } : {}),
         ...(this.refusals.length > 0 ? { settlementRefusals: this.refusals.map(entry => ({ ...entry, settler: { ...entry.settler } })) } : {}),
@@ -740,11 +757,6 @@ export class TaskLedger {
         // has been tracked (zero-work ledgers stay byte-identical to before).
         // A damage marker rides too — review r2: it must survive restarts.
         ...(this.counters.trackedTotal > 0 || this.counters.damaged !== undefined ? { conservation: this.counters.toSnapshot() } : {}),
-      }
-      writeFileSync(this.path, JSON.stringify(snapshot), { mode: 0o600 })
-    } catch {
-      // An unwritable home must not break routing; the ledger degrades to
-      // memory-only.
     }
   }
 }
