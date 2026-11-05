@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { generateKeyPairSync } from 'node:crypto'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 import { signCard } from '../../src/card.ts'
 import { bootNode, reservePort, type MeshNode, cliEnv } from './harness.ts'
@@ -39,7 +39,7 @@ describe('a2a-net serve: a standalone network node', () => {
   it('nodeConfig fills defaults, keeps the file keys, forces no session wake, and validates the port', () => {
     const { host, port, config } = nodeConfig({ team: 'lab', peers: ['http://p'], port: 1 }, { port: '2', home: '/tmp/x' })
     expect({ host, port }).toEqual({ host: '127.0.0.1', port: 2 })
-    expect(config).toMatchObject({ team: 'lab', peers: ['http://p'], announce: true, sessionNodes: true, wakeJoinedOnBoot: false, dshHome: '/tmp/x' })
+    expect(config).toMatchObject({ team: 'lab', peers: ['http://p'], announce: true, sessionNodes: true, wakeJoinedOnBoot: false, dshHome: resolve('/tmp/x') }) // D:\tmp\x on Windows
     expect(() => nodeConfig({}, { port: 'x' })).toThrow('--port')
     // an empty flag, a boolean or an exponent never become a port (review of #295)
     for (const bad of ['', '1e3', '-1', '65536']) expect(() => nodeConfig({}, { port: bad })).toThrow('--port')
