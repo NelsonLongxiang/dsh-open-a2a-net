@@ -4,7 +4,7 @@
   "scope": "Committed source only; no deployment inference",
   "sources": {
     "src/index.ts": "62cab25f8465739bd3af6bf09b621571729c3384e7babca9058124b2414806ec",
-    "src/faces/admin.ts": "ca66a4e6cf60fb0ec58c57d7a34af86007a35928823900bbcd9dbe59592d1e36",
+    "src/faces/admin.ts": "0da9f35b1f105dd6526aa89aec3710d68272f73bb2de0156ddc51afcdc4c5b82",
     "src/canvas-store.ts": "e100285ecbb0bd57057f985c51c062658cebe64cdedca646dd6fe867c330509c",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "8b8b714d8b47ee11c5518e51d08ea31cc588a29bc4eb73843bb2239f880e718a",
