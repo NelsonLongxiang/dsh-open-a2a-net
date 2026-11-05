@@ -2,7 +2,9 @@
 import { describe,it,expect,vi,afterEach } from 'vitest'
 import { readFileSync,chmodSync,statSync } from 'node:fs'
 import { join } from 'node:path'
-import { createPrivateKey } from 'node:crypto'
+import { createPrivateKey,generateKeyPairSync } from 'node:crypto'
+import { signCard } from '../../src/card.ts'
+import { peerPayloadFingerprint } from '../../src/idempotency-store.ts'
 import { signOriginClaim } from '../../src/origin-claim.ts'
 import { bootNode,reservePort,runContext } from './harness.ts'
 const denied=vi.hoisted(()=>({prefix:'',remaining:0,skip:0}))
@@ -11,6 +13,35 @@ afterEach(()=>{denied.prefix='';denied.remaining=0;denied.skip=0})
 const state=async(base:string)=>{const response=await fetch(base+'/__dsh_a2a/state');expect(response.status).toBe(200);return response.json()}
 const finish=(agent:any,ids:string[])=>{for(const id of ids)agent.session.events.push({type:'turn/start'}, {type:'user/message',data:{content:[{type:'text',text:'[A2A direct] (task '+id+') sender sent:'}]}},{type:'assistant/message',data:{message:{content:[{type:'text',text:'completed '+id}]}}},{type:'turn/end',data:{reason:{kind:'completed'}}})}
 describe('ledger errors stay inside the real host event boundary',()=>{
+ it('enforce forwarded receipt publishes query completion from precommit authority only after the ledger commits',async()=>{
+  const pa=await reservePort(),pb=await reservePort(),au='http://127.0.0.1:'+pa,bu='http://127.0.0.1:'+pb
+  const a=await bootNode({name:'queryA',session:'queryA',team:'alpha',sessionNodes:true,port:pa,peers:[bu],teamScopeRouting:false,settlementAuth:'enforce',silent:true,forwardDirect:true})
+  const b=await bootNode({name:'queryB',session:'queryB',team:'beta',sessionNodes:true,port:pb,peers:[au],teamScopeRouting:false,settlementAuth:'enforce',silent:true})
+  const cli=generateKeyPairSync('ed25519').privateKey,handle='query-cli/a1b2c3d4e5f60718',task='enforce-query-commit',message='forward and preserve query result'
+  const post=async(base:string,path:string,body:unknown)=>fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json())
+  try{
+   await post(bu,'/__dsh_a2a/join',{id:String(b.agents.agent!.id)})
+   expect((await post(au,'/__dsh_a2a/cli-deposit',{action:'publish',card:JSON.stringify(signCard({name:'query-cli',session:'query-cli',team:handle,capabilities:{route:true,async:true},expiresAt:Date.now()+86400000},cli))})).ok).toBe(true)
+   expect((await post(au,'/__dsh_a2a/canvas',{action:'add-member',name:'ops',id:handle})).ok).toBe(true)
+   expect((await post(au,'/__dsh_a2a/canvas',{action:'add-member',name:'ops',id:'beta/01234567',peer:bu})).ok).toBe(true)
+   expect((await post(bu,'/__dsh_a2a/canvas',{action:'add-member',name:'ops',id:handle,home:au})).ok).toBe(true)
+   const target=au+'/a2a/direct',body=JSON.stringify({team:'beta/01234567',caller_session:handle,task_id:task,message,wait:false})
+   const sent=await fetch(target,{method:'POST',headers:{'Content-Type':'application/json',...signOriginClaim({url:target,method:'POST',body},{caller:'query-cli',callerUrl:au+'/a2a/cli/'+encodeURIComponent(handle),privateKey:cli,unbound:false,now:Date.now()})},body}).then(r=>r.json())
+   expect(sent.routed,JSON.stringify(sent)).toBe(true)
+   const fingerprint=peerPayloadFingerprint({caller:handle,message,noWait:true,team:'beta/01234567'}),query=()=>post(au,'/a2a/query',{task_id:task,fingerprint})
+   expect(await query()).toMatchObject({found:true,status:'pending'})
+   const key=createPrivateKey(readFileSync(join(b.home,'a2a/node-key.pem'),'utf8'))
+   const receipt=async(id:string)=>{const body=JSON.stringify({team:handle,caller_session:'beta/01234567',task_id:id,message:'[A2A receipt] task '+task+' exact completed result',wait:false});return fetch(target,{method:'POST',signal:AbortSignal.timeout(3000),headers:{'Content-Type':'application/json',...signOriginClaim({url:target,method:'POST',body},{caller:'beta',callerUrl:bu,privateKey:key,unbound:false,now:Date.now()})},body})}
+   denied.prefix=join(a.home,'a2a/tasks.json')+'.';denied.remaining=1
+   expect((await receipt('enforce-query-failure')).status).toBe(503)
+   expect(await query()).toMatchObject({found:true,status:'pending'})
+   expect((await state(au)).tasks.some((r:any)=>r.taskId===task)).toBe(true)
+   denied.remaining=0;const accepted=await receipt('enforce-query-success');expect(accepted.status).toBe(200);expect((await accepted.json()).settlement).toBeUndefined()
+   expect((await state(au)).archived.some((r:any)=>r.taskId===task)).toBe(true)
+   expect(await query()).toMatchObject({found:true,status:'completed',reply:'exact completed result'})
+  }finally{denied.remaining=0;await a.dispose();await b.dispose()}
+ })
+
  it('reports an own-inbound commit failure after the peer accepted the formal receipt without escaping or clearing local debt',async()=>{
   const pa=await reservePort(),pb=await reservePort(),au='http://127.0.0.1:'+pa,bu='http://127.0.0.1:'+pb
   const a=await bootNode({name:'ownA',session:'ownA',team:'alpha',sessionNodes:true,port:pa,peers:[bu],teamScopeRouting:false,silent:true})

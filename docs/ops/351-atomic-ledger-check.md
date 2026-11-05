@@ -40,4 +40,10 @@ TaskLedger.persistenceState只暴露ok/lastError{at,code}，不暴露路径/正�
 | cancel nativeTeams bridgeFace | async cancel返回Promise | 返回Promise失败交bridge调用者处理，不是detached timer；状态保writeFailure，不假cleared |
 | list lazy sweep | state/tools/queueguard/nudge timer/授权观察读取可能触发写 | list内部catch保最近commit及诊断，读面可用，不静默把失败sweep当dead |
 
+## PR354 R2：enforce query答复不丢
+
+原2078570发送方边界已非作者复核通过，R2发现hook3在resolve归档后再find导致enforce query答复丢失。现用resolve之前owedRow/headerVerdict计算outcomeAllowed，仍在成功持久提交之后recordOutcome；不把write失败或off-chain回执记completed。新增真实CLI deposit→A转发→B持有效key正式receipt的enforce mesh：query起初pending，写错503后仍pending且欠账保留，修复提交后query返回completed/原摘要。把allowed反向改回resolve后find，该例明确query仍pending而红，已恢复。
+
+首轮全gate仅既有30ms singleflight墙钟红，未改预算/worker/skip，隔离原例绿；最终默认全量job bash-b3ff1c7ad2f14fa4真实exit0：root1517passed/7skip（原6+POSIX权限平台1），layout4/nexus332/innerentries0。#357 owner阶梯旧语义单列，不在本PR改。
+
 未来提醒器不在本PR实现，它自己的idle/timer/boot reserve仍必须内部catch并测无uncaught；不能因本PR有错误诊断而省略边界。需高档非作者新精确head复跑发送/接收故障、去catch及恢复吞错突变，之后按授权链处理合并。PR352重写方向另遵属主最新“空闲提醒本人对账”，此PR不引入新phase/ack/outbox/对账器；生产及1c56c492/446ce672积压未动。

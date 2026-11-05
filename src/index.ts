@@ -755,6 +755,8 @@ export function apply(ctx: Context, config: Config): void {
     // #139 (design §4.4): an enforce refusal of the row the header names is
     // told to the sender on the wire response, not only in /state.
     const headerVerdict = judge?.enforce === true && owedRow !== undefined ? judge.check(owedRow, false) : undefined
+    // Capture authority while the owed row is still present; successful resolve archives it.
+    const outcomeAllowed = judge?.enforce !== true || (owedRow !== undefined && headerVerdict?.ok === true)
     const resolved = taskLedger.resolveFromMessage(message, judge)
     if (parsed !== null && parsed.taskId !== '') {
       const line = parsed.summary.trim()
@@ -762,9 +764,7 @@ export function apply(ctx: Context, config: Config): void {
       // outcome a /a2a/query answers only for a row THIS ledger owes and
       // whose settler is on the chain — anyone sending a receipt line could
       // otherwise rewrite another caller's answer.
-      const row = judge?.enforce === true ? taskLedger.find(parsed.taskId) : undefined
-      const allowed = judge?.enforce !== true || (row !== undefined && judge.check(row, false).ok)
-      if (line !== '' && allowed) {
+      if (line !== '' && outcomeAllowed) {
         idempotencyStore.recordOutcome(parsed.taskId, { status: 'completed', reply: line.slice(0, SUMMARY_CAP) })
       }
     }
