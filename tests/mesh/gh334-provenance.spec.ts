@@ -11,6 +11,42 @@ const id='session-aaaaaaaa11112222',bare='dsh/aaaaaaaa'
 const post=async(base:string,body:unknown)=>fetch(base+'/__dsh_a2a/canvas',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json())
 const state=async(base:string)=>fetch(base+'/__dsh_a2a/state').then(r=>r.json())
 describe('#334 actual source confirmation',()=>{
+ it('R1 cross-zone: a different beta host validly signing the pinned beta member is refused, its real key holder is admitted',async()=>{
+  const pa=await reservePort(),pb=await reservePort(),px=await reservePort(),au='http://127.0.0.1:'+pa,bu='http://127.0.0.1:'+pb,xu='http://127.0.0.1:'+px
+  const a=await bootNode({name:'r1-A',session:'r1-A',team:'alpha',agentId:id,sessionNodes:true,port:pa,peers:[bu,xu],teamScopeRouting:true})
+  const b=await bootNode({name:'r1-B',session:'r1-B',team:'beta',agentId:id,sessionNodes:true,port:pb,peers:[au],teamScopeRouting:true})
+  const x=await bootNode({name:'r1-X',session:'r1-X',team:'beta',agentId:id,sessionNodes:true,port:px,peers:[au],teamScopeRouting:true})
+  try{
+   for(const n of [a,b,x])await fetch(n.baseUrl+'/__dsh_a2a/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})})
+   expect((await post(au,{action:'add-member',name:'ops',id})).ok).toBe(true)
+   expect((await post(au,{action:'add-member',name:'ops',id:'beta/aaaaaaaa',peer:bu})).ok).toBe(true)
+   const target=au+'/a2a/direct',body=JSON.stringify({team:'alpha/canvas/ops',caller_session:'beta/aaaaaaaa',task_id:'direct-334-crosszone-key',message:'identical request, only signer changes',wait:false})
+   const deliver=async(n:typeof b)=>{const key=createPrivateKey(readFileSync(join(n.home,'a2a/node-key.pem'),'utf8'));return fetch(target,{method:'POST',headers:{'Content-Type':'application/json',...signOriginClaim({url:target,method:'POST',body},{caller:'beta',callerUrl:n.baseUrl,privateKey:key,unbound:false,now:Date.now()})},body}).then(r=>r.json())}
+   // X has a real, independently verifiable beta card and a body-bound signature, not bad-sig/claim-mismatch.
+   const bad=await deliver(x);expect(bad.task_status).toBe('TASK_STATE_FAILED');expect(bad.error).toContain('no operator-established link');expect(a.steered).toHaveLength(0)
+   const accepted=await deliver(b);expect(accepted.routed,JSON.stringify(accepted)).toBe(true);expect(a.steered).toHaveLength(1)
+   const after=await state(au),row=after.tasks.find((r:any)=>r.taskId==='direct-334-crosszone-key')
+   expect(row.auth).toMatchObject({caller:'beta/aaaaaaaa',proof:'origin-claim',admission_rule:'remote-ref-foreign',basis:['alpha/canvas/ops']})
+  }finally{await a.dispose();await b.dispose();await x.dispose()}
+ })
+ it('R1 target-side: a legitimate caller cannot borrow a different owner pinned at the local target handle',async()=>{
+  const pa=await reservePort(),pb=await reservePort(),px=await reservePort(),au='http://127.0.0.1:'+pa,bu='http://127.0.0.1:'+pb,xu='http://127.0.0.1:'+px,xid='session-bbbbbbbb11112222'
+  const a=await bootNode({name:'r1target-A',session:'r1target-A',team:'dsh',agentId:id,sessionNodes:true,port:pa,peers:[bu,xu],teamScopeRouting:true})
+  const b=await bootNode({name:'r1target-B',session:'r1target-B',team:'dsh',agentId:id,sessionNodes:true,port:pb,peers:[au],teamScopeRouting:true})
+  const x=await bootNode({name:'r1target-X',session:'r1target-X',team:'dsh',agentId:xid,sessionNodes:true,port:px,peers:[au],teamScopeRouting:true})
+  try{
+   for(const n of [a,b,x])await fetch(n.baseUrl+'/__dsh_a2a/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:n===x?xid:id})})
+   expect((await post(au,{action:'add-member',name:'ops',id:bare,peer:bu})).ok).toBe(true)
+   expect((await post(au,{action:'add-member',name:'ops',id:'dsh/bbbbbbbb',peer:xu})).ok).toBe(true)
+   const target=au+'/a2a/direct',body=JSON.stringify({team:bare,caller_session:'dsh/bbbbbbbb',task_id:'direct-334-target-key',message:'must not alias B slot onto local A target',wait:false}),key=createPrivateKey(readFileSync(join(x.home,'a2a/node-key.pem'),'utf8'))
+   const deliver=()=>fetch(target,{method:'POST',headers:{'Content-Type':'application/json',...signOriginClaim({url:target,method:'POST',body},{caller:'dsh',callerUrl:xu,privateKey:key,unbound:false,now:Date.now()})},body}).then(r=>r.json())
+   const bad=await deliver();expect(bad.routed).not.toBe(true);expect(bad.error).toContain('shares no team with target');expect(a.steered).toHaveLength(0)
+   // Explicitly adding A's real local id provides the target basis; the identical signed request then succeeds.
+   expect((await post(au,{action:'add-member',name:'ops',id})).ok).toBe(true)
+   const good=await deliver();expect(good.routed,JSON.stringify(good)).toBe(true);expect(a.steered).toHaveLength(1)
+  }finally{await a.dispose();await b.dispose();await x.dispose()}
+ })
+
  it('same-id8 foreign signer cannot borrow local provenance, but its separately pinned member is admitted',async()=>{
   const pa=await reservePort(),pb=await reservePort(),au='http://127.0.0.1:'+pa,bu='http://127.0.0.1:'+pb
   const a=await bootNode({name:'authA334',session:'authA334',team:'dsh',agentId:id,sessionNodes:true,port:pa,peers:[bu],teamScopeRouting:true})

@@ -28,7 +28,20 @@ Nexus新增picker2、board2及workbench inspector1：必须显式选来源、失
 
 ## 继承测试迁移为什么必要
 
-旧测试有大量用新addAPI无证裸写来构造历史slot。新义务明确禁止新裸写，不为保旧测试放开后门：涉及历史行为的setup改为启动前磁盘seed历史snapshot（含先join本机事实避免合法prune改变优先级），保留原安全/暂停/link/容量断言；新跨机setup先真实join目标再选peer，断言qualified字符串。bad-signer now在来源admission更早拒，保“不投递/旧债未清”断言，不要求产生晚阶段settlement拒绝行。legacy第三方gamma回执反例只在对应case seed，不污染其他receiver列表。schema-source测试从固定4000字符截取改为registration presentCall边界，不删legacy/teams检查。
+旧测试有大量用新addAPI无证裸写来构造历史slot。新义务明确禁止新裸写，不为保旧测试放开后门：涉及历史行为的setup改为启动前磁盘seed历史snapshot（含先join本机事实避免合法prune改变优先级），保留原安全/暂停/link断言；63c0230的gh108容量mesh曾退化为来源拒绝，不能声称保留容量覆盖，本轮review修订恢复真正的已证明第33成员cap断言；新跨机setup先真实join目标再选peer，断言qualified字符串。bad-signer now在来源admission更早拒，保“不投递/旧债未清”断言，不要求产生晚阶段settlement拒绝行。legacy第三方gamma回执反例只在对应case seed，不污染其他receiver列表。schema-source测试从固定4000字符截取改为registration presentCall边界，不删legacy/teams检查。
+
+## review-350-r1：仅补测试，不改逻辑
+
+原REQUEST CHANGES@63c0230保留。非作者发现旧same-zone signer测试不区分members()两处绑定，旧gh108第33成员在来源门拒绝而非cap，属真实覆盖缺口；以前“保留容量断言”措辞已更正。
+
+- R1 cross-zone真HTTP：A=alpha，B/X均为独立beta主机/真实key/有效card，B的beta/aaaaaaaa已完整pin到A；请求body与task id相同，仅签名者及其合法caller URL不同。X合法Sig3签名被operator-link准入拒、零steer；B真正key持有者同请求被接纳、仅一次steer，账本proof=origin-claim/rule=remote-ref-foreign。去掉canvasRemoteMembersOf signer比较后，该测试因X收到TASK_STATE_DELIVERED而FAIL。
+- R1 target-side补全评审突变2：真实caller X与B同dsh，A本机target handle与B同id8；X自身slot已合法pin，但A目标仅有B的远端slot时拒投递。显式加入A完整本机id提供target basis后，同body/key请求才通过。按评审原突变2去members() confirmed-remote signer比较及callerCanvas foreign-signer排除，测试因错误routed=true而FAIL。此用例与跨zone例分开，未把只杀remote-ref比较的结果冒充杀members()比较。
+- R2 gh108：32历史slot已满，新增候选是实际agent已join的完整本机id，来源门通过；满员返回ok:false且无来源错误、仍32成员。同候选在释放一slot后成功写入，形成正对照。去addMember cap检查后真实HTTP拒绝断言失败（ok变true），不再仅单测守cap。
+- 三次反向修改均try/finally恢复；git diff src/index.ts/src/canvas-store.ts为空，生产逻辑与63c0230逐字相同。恢复后11个#334 mesh及1容量mesh全绿，不靠架构摘要失败取证。
+
+修订默认完整pnpm verify（job bash-04a21c5b80be49b6）真实exit0：root1505passed/6原skip（新增2个R1行为例），layout4，nexus332，innerentries0；全源码/UI/架构锚与63c0230无差异，修订仅两个mesh测试与两份文档。
+
+N1缺锚历史qualified远端立即停用边界已补release说明，需操作者确认。评审所见.156存量0只作为其观察，不推广为全舰队0。N2串行拉seed/delegate卡可能拖慢add/confirm、N3旧gh122末项断言较弱均记录未改逻辑；新R1直接覆盖身份/准入边界，不宣称优化延迟或强化旧断言已实现。此修订不修改#343文件/生产配置，仍待非作者新精确头复评。
 
 ## 默认/回滚/交接
 
