@@ -52,6 +52,20 @@ const strip = (headers: Record<string, string>, ...names: string[]): Record<stri
   Object.fromEntries(Object.entries(headers).filter(([k]) => !names.includes(k)))
 
 describe('OriginClaim audience binding', () => {
+  it('#311 a CGNAT callerUrl needs a card cached at that exact URL or a reachable callback; a LAN alias cache is not enough', async () => {
+    const cgnat = 'http://100.75.181.127:13080'
+    const headers = signOriginClaim({ url: OWN + '/a2a/direct', method: 'POST' }, { caller: 'dsh', callerUrl: cgnat, privateKey, unbound: false, now: Date.now() })
+    const received = req(headers, { url: '/a2a/direct' })
+    const dialed: string[] = []
+    const base = { audiences: [OWN], unboundOpen: false, now: Date.now() }
+    const fetch = async (url: string): Promise<never> => { dialed.push(url); throw new Error('LAN-only peer cannot route tailnet') }
+    expect(await verifyOriginClaim(received, { ...base, cardCache: new Map([[CALLER_URL, { at: Date.now(), card }]]), fetch })).toEqual({ ok: false, reason: 'no-card' })
+    expect(dialed).toEqual([cgnat + '/.well-known/agent-card.json'])
+    dialed.length = 0
+    expect(await verifyOriginClaim(received, { ...base, cardCache: new Map([[cgnat, { at: Date.now(), card }]]), fetch })).toMatchObject({ ok: true, bound: true, callerUrl: cgnat })
+    expect(dialed).toEqual([])
+    expect(await verifyOriginClaim(received, { ...base, cardCache: new Map(), fetch: async () => ({ status: 200, ok: true, text: async () => JSON.stringify(card) }) })).toMatchObject({ ok: true, bound: true })
+  })
   it('v3 signs exact bytes beside v2 and refuses broken v3 without downgrade', async () => {
     const body = '  ' + JSON.stringify({ message: '中文', n: 1 })
     const headers = signOriginClaim({ url: OWN + '/a2a/direct', method: 'POST', body }, { caller: 'dsh', callerUrl: CALLER_URL, privateKey, unbound: true, now: Date.now() })
