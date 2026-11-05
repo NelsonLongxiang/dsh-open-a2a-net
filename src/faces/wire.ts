@@ -109,7 +109,8 @@ export interface WireDeps {
   readonly ownCardUrl: string
   readonly recordActivity: (dir: 'in' | 'out', team: string, peer: string, ok: boolean) => void
   readonly bumpLegacyInbound: () => void
-  readonly secretEqual: (a: string, b: string) => boolean
+  /** #317: the peer-face key gate — this host's apiKey, or a link key from the verified peer it belongs to. */
+  readonly peerKeyAdmits: (req: IncomingMessage, rawBody?: Uint8Array) => Promise<boolean>
   readonly a2aCallerRefusal: (caller: string, targetTeam?: string) => string | undefined
   /** #114 S2: the same decision with the rule and basis that admitted the caller. */
   readonly a2aCallerAdmission: (caller: string, targetTeam?: string, cliProof?: RemoteCliProof) => Admission
@@ -219,7 +220,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     remoteCliProof,
     callerLinkedToThisHost,
     recordActivity,
-    secretEqual,
+    peerKeyAdmits,
     a2aCallerRefusal,
     a2aCallerAdmission,
     allowlistVersionNow,
@@ -401,13 +402,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
         return
       }
       // V2 (gh#7, S1): the read-only log face rides the same apiKey gate
-      // as delivery — a configured key must be presented here too.
-      if (config.apiKey !== '') {
-        const presented = String(req.headers['x-api-key'] ?? '')
-        if (!secretEqual(presented, config.apiKey)) {
-          send(401, { ok: false, error: 'unauthorized: X-API-Key required (apiKey is configured)', code: -32000 })
-          return
-        }
+      // as delivery — a configured key (or #317 link key) must be presented here too.
+      if (!await peerKeyAdmits(req)) {
+        send(401, { ok: false, error: 'unauthorized: X-API-Key required (apiKey is configured)', code: -32000 })
+        return
       }
       const url = new URL(req.url ?? '/', 'http://x')
       const caller = url.searchParams.get('caller_session') ?? ''
@@ -611,14 +609,12 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // used to let anyone reachable steer sessions while the control
           // routes demanded the key, making it decorative for delivery.
           // Empty-key deployments keep the documented open posture.
-          if (config.apiKey !== '') {
-            const presented = String(req.headers['x-api-key'] ?? '')
-            if (!secretEqual(presented, config.apiKey)) {
-              const payload = JSON.stringify({ error: 'unauthorized: X-API-Key required on the delivery face (apiKey is configured)', code: -32000 })
-              res.writeHead(401, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
-              res.end(payload)
-              return
-            }
+          // #317: a link key admits only its own verified, body-bound peer.
+          if (!await peerKeyAdmits(req, rawBody)) {
+            const payload = JSON.stringify({ error: 'unauthorized: X-API-Key required on the delivery face (apiKey is configured)', code: -32000 })
+            res.writeHead(401, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+            return
           }
           // #282 S2: our own `<canvas>@<fp8>` is our canvas; a foreign suffix stays for the forward walk.
           const ownerQualified = splitCanvasOwner(typeof body.team === 'string' ? body.team : '')

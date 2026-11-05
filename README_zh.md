@@ -129,6 +129,7 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | `originClaimUrl` | `''` | 信封 `callerUrl` 的覆盖值（pocket 隧道宿主用）；`''` 自动推导。 |
 | `originClaimUnboundWindow` | `true` | OriginClaim 受众绑定过渡窗口：同时签发并接受不带受众的旧信封（接受数计入 `unboundInbound`；其中绑定形式在本机未命中的另计 `boundMissInbound`）；`false` 只签发、只接受绑定受众的信封。 |
 | `originClaimAudiences` | `[]` | 本宿主额外认作信封受众的 origin，用于端口映射或反向代理宿主（对端拨号的 URL 既不是卡片 URL 也不是到达地址）。 |
+| `linkKeys` | `{}` | 链路 key（#317）：`{ "<对端 origin>": "<key>" }`。发往该对端的请求改带这把 key；本机对端面（`/a2a/direct`、`/a2a/log`、`/a2a/blob`）只在调用方 OriginClaim 验签通过、且签名者正是该 origin 时接受它（POST 须 Sig3 绑定请求体）；控制路由不接受。用于公网节点与舰队互联而不持有舰队 apiKey，两端配同一把链路 key。 |
 | `gateAgentLessCalls` | `'audit'` | 宿主侧（无 agent）路由调用：审计，或 `refuse` 拒绝。 |
 | `settlementAuth` | `'observe'` | 结算授权（#114）：`off`、`observe`（记下本会拒绝的，照旧结算）或 `enforce`。 |
 | `asyncNudgeDelayMs` | `120000` | 已投递但未被消费的异步路由，在此延迟后用一行催办重新唤醒目标；`0` 关闭。 |

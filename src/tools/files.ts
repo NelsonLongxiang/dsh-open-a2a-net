@@ -23,6 +23,7 @@ import { BLOB_FILE_MAX, formatFileRef, parseFileRef, sanitizeBlobName, type Blob
 import { grantAdmits } from '../faces/files.ts'
 import { LOCAL_ROUTE } from '../node-self.ts'
 import { originOf, type OriginClaimTarget } from '../origin-claim.ts'
+import { normalizeLinkKeys, outboundKeyFor } from '../link-keys.ts'
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
@@ -33,7 +34,7 @@ export const FILE_INBOX_DIR = 'a2a-inbox'
 
 export interface FileToolsDeps {
   readonly ctx: Context
-  readonly config: Pick<Config, 'apiKey' | 'team'>
+  readonly config: Pick<Config, 'apiKey' | 'team' | 'linkKeys'>
   readonly blobStore: BlobStore
   readonly canvasMembersOf: (name: string) => readonly string[]
   /** This host's own card URL (live: it is known only once the web server settled). */
@@ -141,10 +142,11 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
           bytes = local
         } else {
           const target = `${ref.from}/a2a/blob`
+          const key = outboundKeyFor(target, normalizeLinkKeys(config.linkKeys), config.apiKey) // #317 link key
           let response: Response
           try {
             response = await d.peerFetch(`${target}?sha256=${ref.sha256}&caller_session=${encodeURIComponent(caller)}`, {
-              headers: { ...d.originClaimHeaders({ url: target, method: 'GET' }), ...(config.apiKey !== '' ? { 'X-API-Key': config.apiKey } : {}) },
+              headers: { ...d.originClaimHeaders({ url: target, method: 'GET' }), ...(key !== '' ? { 'X-API-Key': key } : {}) },
               redirect: 'manual',
               signal: AbortSignal.any([exec.signal, AbortSignal.timeout(120_000)]),
             })

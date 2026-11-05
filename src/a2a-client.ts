@@ -27,6 +27,8 @@ export type A2aFetch = (url: string, init: {
 export interface A2aClientOptions {
   /** `X-API-Key` value sent on peer requests; empty omits the header. */
   readonly apiKey: string
+  /** #317: the key for one target URL (a link key), when it differs from `apiKey`. */
+  readonly apiKeyFor?: (url: string) => string
   /** This node's caller label stamped on outbound routes. */
   readonly sessionId: string
   /**
@@ -109,7 +111,8 @@ export class A2aClient {
   private headers(json: boolean, url: string, method: string, body?: string): Record<string, string> {
     const headers: Record<string, string> = {}
     if (json) headers['Content-Type'] = 'application/json'
-    if (this.options.apiKey !== '') headers['X-API-Key'] = this.options.apiKey
+    const apiKey = this.options.apiKeyFor?.(url) ?? this.options.apiKey
+    if (apiKey !== '') headers['X-API-Key'] = apiKey
     // GETs are card fetches: name ourselves so the peer serves the full
     // card (gh#7 G1). POSTs carry caller_session in the body already.
     if (!json && this.options.cardCaller !== '') headers['X-A2A-Caller'] = this.options.cardCaller

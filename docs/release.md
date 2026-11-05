@@ -3,6 +3,10 @@
 > 2026-10-21 立，源自 K3 测试章前瞻（cordis 事故线收尾）：两项与「锁重生成 × 环境策略」
 > 交互的坑，已实测咬人，故入档为纪律。
 
+## 0. 0.6.41（未发布）
+
+- **链路 key `linkKeys`**（#317）：按对端单独配置 key，公网节点不必持有舰队 apiKey 也能互联。发往 `linkKeys` 里某个 origin 的请求带该链路 key；本机对端接口只在调用方 OriginClaim 验签通过、签名者正是该 origin 时接受链路 key，POST 还要求 Sig3 绑定请求体；控制路由一律不接受。两端都要升级到 0.6.41，并配置同一把链路 key。不配置 `linkKeys` 的主机行为不变。
+
 ## 0. 0.6.40 升级提示
 
 - **安全：反代转发的请求不再享受回环信任**（#308）。0.6.39 及更早版本里，同机反向代理（Caddy、nginx、隧道代理）以 `127.0.0.1` 连接节点，所有公网请求都被当成本机：配了 key 的主机会把 apiKey 写进工作台 HTML，没配 key 的主机控制面对公网完全开放。现在请求只要带 `X-Forwarded-For`、`Forwarded` 或 `X-Real-IP`，就不给回环信任；经代理带 key 访问照常可用。**对外开放的节点请尽快升级。** nginx 必须设置 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`，Caddy 默认会带。经 pocket 隧道打开工作台不受影响（pocket 不写转发头）。

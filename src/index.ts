@@ -10,6 +10,7 @@ import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, ran
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 import { selectLanIPv4 } from './lan-ip.ts'
+import { linkKeyOrigin, normalizeLinkKeys, originOf, outboundKeyFor } from './link-keys.ts'
 import { dirname, join } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 // The package own version, read from package.json at load time so the
@@ -293,6 +294,25 @@ export function apply(ctx: Context, config: Config): void {
     return timingSafeEqual(digestA, digestB)
   }
 
+  // #317 link keys (src/link-keys.ts): a per-peer X-API-Key on the peer faces, never on the control routes.
+  const linkKeyMap = normalizeLinkKeys(config.linkKeys)
+  /**
+   * The peer-face key gate (/a2a/direct, /a2a/log, /a2a/blob): this host's apiKey as before; a link key only
+   * from a host whose OriginClaim verifies here and names that key's origin — a POST must also be body-bound
+   * (Sig3) — so a leaked link key cannot act without that peer's node key. An empty apiKey keeps the open posture.
+   * @param req - the inbound peer request.
+   * @param rawBody - the request body, for a POST.
+   */
+  async function peerKeyAdmits(req: IncomingMessage, rawBody?: Uint8Array): Promise<boolean> {
+    if (config.apiKey === '') return true
+    const presented = String(req.headers['x-api-key'] ?? '')
+    if (secretEqual(presented, config.apiKey)) return true
+    const origin = linkKeyOrigin(presented, linkKeyMap, secretEqual)
+    if (origin === undefined) return false
+    const claim = await verifyOriginClaim(req, rawBody !== undefined ? { rawBody } : undefined)
+    return claim.ok && claim.cli !== true && originOf(claim.callerUrl) === origin && (rawBody === undefined || claim.bodyBound === true)
+  }
+
   /**
    * No-key trust for the control routes (gh#7 N1, V1): ONLY a loopback
    * socket — header-only trust (Sec-Fetch-Site, Origin) admitted any
@@ -537,6 +557,7 @@ export function apply(ctx: Context, config: Config): void {
   }
   const client = new A2aClient({
     apiKey: config.apiKey,
+    apiKeyFor: url => outboundKeyFor(url, linkKeyMap, config.apiKey),
     sessionId: session,
     cardCaller: config.team,
     // gh#9+gh#10 OriginClaim (docs/protocol/delivery-origin-auth.md): every
@@ -2584,6 +2605,7 @@ export function apply(ctx: Context, config: Config): void {
       joinedSessions,
       idempotencyStore,
       verifyOriginClaim,
+      peerKeyAdmits,
       remoteCliProof,
       forwardReceiptBasis: (taskId, caller, cliHandle, claim) => forwardReceiptBasis(taskLedger.find(taskId), caller, cliHandle, claim),
       forwardDirect: request => forwardDirect(request), ownCanvasFingerprint,
@@ -2591,7 +2613,6 @@ export function apply(ctx: Context, config: Config): void {
       callerLinkedToThisHost, get ownCardUrl() { return ownCardUrl },
       recordActivity,
       bumpLegacyInbound: () => { legacyInboundCount += 1 },
-      secretEqual,
       a2aCallerRefusal,
       a2aCallerAdmission,
       allowlistVersionNow,
@@ -2745,7 +2766,7 @@ export function apply(ctx: Context, config: Config): void {
 
     // gh#77: the session-log faces (local transcript reader + remote-log proxy) live in src/faces/session-log.ts.
     registerSessionLogFaces(webServer, { ctx, config, controlRoute, scanSessionLogList, readSessionLogTail, peerStore, peerFetch, directoryPeerCandidates, memoizedCardFetch })
-    registerFileFaces(webServer, { ctx, config, blobStore, canvasStore, verifyOriginClaim, secretEqual, controlRoute, recordActivity })
+    registerFileFaces(webServer, { ctx, config, blobStore, canvasStore, verifyOriginClaim, peerKeyAdmits, controlRoute, recordActivity })
   })
 
   /**
