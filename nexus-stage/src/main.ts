@@ -299,6 +299,13 @@ const bench = createWorkbench({
       return { ...body, ok: res.ok && body.ok === true }
     } catch (error) { return { ok: false, error: String(error) } }
   },
+  async confirmMember(name, id, replacement, revision, expectedOwner, peer) {
+    try {
+      const response=await controlFetch('/__dsh_a2a/canvas',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'confirm-member',name,id,replacement,revision,expectedOwner,...(peer?{peer}:{})})})
+      const body=await response.json() as {ok?:boolean;error?:string}
+      return {ok:response.ok&&body.ok===true,error:body.error}
+    }catch(error){return{ok:false,error:String(error)}}
+  },
   async regulateSuspended(action, name, id, revision, expected) {
     try {
       const response = await controlFetch('/__dsh_a2a/canvas', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, name, id, revision, expected }) })
@@ -306,14 +313,14 @@ const bench = createWorkbench({
       return { ok: response.ok && body.ok === true, error: body.error }
     } catch (error) { return { ok: false, error: String(error) } }
   },
-  async canvasOp(action, name, id, home) {
+  async canvasOp(action, name, id, home, peer) {
     // Same control route the planning board's wire uses; the inspector's
     // member writes are one id at a time, so no serial fan-out needed.
     try {
       const res = await controlFetch('/__dsh_a2a/canvas', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ action, name, id, ...(home === undefined ? {} : { home }) }),
+        body: JSON.stringify({ action, name, id, ...(home === undefined ? {} : { home }), ...(peer === undefined ? {} : { peer }) }),
       })
       const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string }
       if (res.ok && body.ok !== false) return true
@@ -486,6 +493,7 @@ async function poll(): Promise<void> {
       .filter(r => r !== null && typeof r === 'object' && typeof (r as { team?: unknown }).team === 'string' && typeof (r as { via?: unknown }).via === 'string')
       .map(r => ({
         team: r.team,
+        memberRef:r.memberRef,
         name: r.name,
         via: r.via,
         workspace: r.workspace,

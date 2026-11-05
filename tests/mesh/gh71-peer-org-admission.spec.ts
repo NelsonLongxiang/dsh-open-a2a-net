@@ -214,7 +214,7 @@ describe('gh#71 probe full-face persist (fix ①)', () => {
       expect((await post(`${p.baseUrl}/__dsh_a2a/join`, { id: 'session-eeee5555zzzz0000' })).team).toBe('dsh/eeee5555')
       expect((await post(`${q.baseUrl}/__dsh_a2a/join`, { id: 'session-dddd4444zzzz0000' })).team).toBe('dsh/dddd4444')
       expect((await post(`${q.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: '探针组' })).ok).toBe(true)
-      expect((await post(`${q.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: '探针组', id: 'dsh/dddd4444' })).ok).toBe(true)
+      expect((await post(`${q.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: '探针组', id: 'session-dddd4444zzzz0000' })).ok).toBe(true)
       const probeTool = p.ctx.tools.get('a2a_probe')
       const agentP = (p as unknown as { agents: { agent: unknown } }).agents.agent
       const probe = await probeTool?.execute({}, { signal: new AbortController().signal, agent: agentP } as never) as Record<string, any>

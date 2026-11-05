@@ -7,9 +7,10 @@ import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { signCard } from '../../src/card.ts'
+import { seedCanvasHistory } from '../fixtures/canvas-history.ts'
 import { signOriginClaim } from '../../src/origin-claim.ts'
 import { guardHeader } from '../../src/recursion-guard.ts'
-import { bootNode, postJson, reservePort, type MeshNode, cliEnv } from './harness.ts'
+import { bootNode, postJson, reservePort, tmpHome, type MeshNode, cliEnv } from './harness.ts'
 const handle = 'ops-cli/a1b2c3d4e5f60718'
 const cliKey = generateKeyPairSync('ed25519').privateKey
 beforeEach(() => vi.stubGlobal('WebSocket', function noSocket() { throw Error('no socket') }))
@@ -185,7 +186,7 @@ describe('#230 home host forwards a deposited CLI one hop with scope on', () => 
   }, 35000)
   it('stale first candidate refuses without forwarding again, then the next real host accepts', async () => {
     const pa = await reservePort(), pb = await reservePort(), pc = await reservePort()
-    const a = await bootNode({ name: 'A', session: 'fwd-failover-a', team: 'alpha', port: pa, peers: ['http://127.0.0.1:' + pb, 'http://127.0.0.1:' + pc], sessionNodes: true, teamScopeRouting: true, teamScopeInfo: true, forwardDirect: true, cardCacheTtlMs: 60_000, remoteRowsTtlMs: 60_000 })
+    const a = await bootNode({ name: 'A', home:seedCanvasHistory(tmpHome(),[{name:'ops',members:['beta/01234567']}]), session: 'fwd-failover-a', team: 'alpha', port: pa, peers: ['http://127.0.0.1:' + pb, 'http://127.0.0.1:' + pc], sessionNodes: true, teamScopeRouting: true, teamScopeInfo: true, forwardDirect: true, cardCacheTtlMs: 60_000, remoteRowsTtlMs: 60_000 })
     const b = await bootNode({ name: 'B', session: 'fwd-stale-b', team: 'beta', port: pb, peers: [a.baseUrl], sessionNodes: true, teamScopeRouting: true, teamScopeInfo: true, forwardDirect: true })
     const c = await bootNode({ name: 'C', session: 'fwd-live-c', team: 'beta', port: pc, peers: [a.baseUrl], sessionNodes: true, teamScopeRouting: true, teamScopeInfo: true })
     try {

@@ -12,7 +12,9 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { generateKeyPairSync } from 'node:crypto'
 import { signCard } from '../../src/card.ts'
-import { bootNode, ghostNode, reservePort, runContext, steerText, type MeshNode } from './harness.ts'
+import { mkdirSync,writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { bootNode, ghostNode, reservePort, runContext, steerText, tmpHome, type MeshNode } from './harness.ts'
 
 beforeEach(() => { vi.stubGlobal('WebSocket', function throwOnSocket() { throw new Error('no socket') }) })
 afterEach(() => { vi.unstubAllGlobals() })
@@ -32,7 +34,7 @@ function ownSession(node: MeshNode, id: string): string[] {
 
 async function pairAB(tag: string, ids: { a: string; b: string }) {
   const [pa, pb] = [await reservePort(), await reservePort()]
-  const a = await bootNode({ name: 'A', session: `mesh-131-${tag}-a`, team: 'dsh', sessionNodes: true, port: pa, peers: [url(pb)] })
+  const a = await bootNode({ name: 'A', ...(tag==='remove'?{home:legacyHome('by-handle',['dsh/aaaaaaaa'])}:{}), session: `mesh-131-${tag}-a`, team: 'dsh', sessionNodes: true, port: pa, peers: [url(pb)] })
   const b = await bootNode({ name: 'B', session: `mesh-131-${tag}-b`, team: 'dsh', sessionNodes: true, port: pb, peers: [url(pa)] })
   const steeredA = ownSession(a, ids.a)
   ownSession(b, ids.b)
@@ -41,6 +43,7 @@ async function pairAB(tag: string, ids: { a: string; b: string }) {
   return { a, b, steeredA }
 }
 
+const legacyHome=(name:string,members:string[])=>{const home=tmpHome();mkdirSync(join(home,'a2a'),{recursive:true});writeFileSync(join(home,'a2a/canvas.json'),JSON.stringify({teams:[{name,members}]}));writeFileSync(join(home,'a2a/joined.json'),JSON.stringify({sessions:members.filter(m=>!m.includes('/'))}));return home}
 const IDS = { a: 'session-aaaaaaaa11112222', b: 'session-bbbbbbbb33334444' }
 
 describe('gh#131 a local session named by handle is a local canvas member', () => {
@@ -49,11 +52,11 @@ describe('gh#131 a local session named by handle is a local canvas member', () =
     try {
       expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: 'ops' })).ok).toBe(true)
       const relayed = await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'add-member', name: 'ops', id: 'dsh/aaaaaaaa' })
-      expect(relayed).toMatchObject({ ok: true, members: ['dsh/aaaaaaaa'] })
+      expect(relayed.ok).toBe(true);expect(relayed.members).toHaveLength(1);expect(relayed.members[0]).toMatch(/^dsh\/aaaaaaaa@[0-9a-f]{8}$/)
       const dispatched = await post(`${a.baseUrl}/__dsh_a2a/dispatch`, { team: 'dsh/canvas/ops', message: 'hello team' })
       expect(dispatched.ok, JSON.stringify(dispatched)).toBe(true)
       expect(steeredA.some(text => text.includes('hello team'))).toBe(true)
-      const removed = await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'remove-member', name: 'ops', id: 'dsh/aaaaaaaa' })
+      const removed = await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'remove-member', name: 'ops', id: relayed.members[0] })
       expect(removed).toMatchObject({ ok: true, members: [] })
     } finally { await a.dispose(); await b.dispose() }
   }, 60_000)
@@ -73,7 +76,7 @@ describe('gh#131 a local session named by handle is a local canvas member', () =
   }, 60_000)
 
   it('a handle stored before its session joined reaches the session once it joins', async () => {
-    const a = await bootNode({ name: 'A', session: 'mesh-131-later', team: 'dsh', sessionNodes: true, port: await reservePort() })
+    const a = await bootNode({ name: 'A', home:legacyHome('later',['dsh/cccccccc']), session: 'mesh-131-later', team: 'dsh', sessionNodes: true, port: await reservePort() })
     const id = 'session-cccccccc55556666'
     const steered = ownSession(a, id)
     try {
@@ -89,7 +92,7 @@ describe('gh#131 a local session named by handle is a local canvas member', () =
   it('review P2-2: an id8 both hosts use keeps the peer\'s slot: a restart and a join on a cold card cache never rewrite the store', async () => {
     const shared = 'session-0123456789abcdef'
     const [pa, pb] = [await reservePort(), await reservePort()]
-    const a = await bootNode({ name: 'A', session: 'mesh-131-col-a', team: 'dsh', sessionNodes: true, port: pa, peers: [url(pb)] })
+    const a = await bootNode({ name: 'A', home:legacyHome('g',[shared,'dsh/01234567']), session: 'mesh-131-col-a', team: 'dsh', sessionNodes: true, port: pa, peers: [url(pb)] })
     const b = await bootNode({ name: 'B', session: 'mesh-131-col-b', team: 'dsh', sessionNodes: true, port: pb, peers: [url(pa)] })
     let a2: MeshNode | undefined
     try {

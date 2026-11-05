@@ -55,9 +55,9 @@ describe('gh#159 remote canvas discovery and routing', () => {
       expect(remote).toMatchObject({ team: GROUP, name: '跨机协作', session: 'gh159-b', via: b.baseUrl, kind: 'canvas', owner: b.baseUrl, memberCount: 2 })
       expect(remote?.local).not.toBe(true)
       const who = await a.ctx.tools.get('a2a_whoami')!.execute({}, runContext(a.agents.agent)) as any
-      expect(who.teams.canvasDetails).toEqual(expect.arrayContaining([{ team: GROUP, name: '跨机协作', owner: b.baseUrl, memberCount: 2, local: false }]))
+      expect(who.teams.canvasDetails).toEqual(expect.arrayContaining([expect.objectContaining({ team: GROUP, name: '跨机协作', owner: b.baseUrl, memberCount: 2, local: false, provenance: 'confirmed' })]))
       expect(who.teams.canvasDetails.some((row: any) => row.team === PRIVATE && row.owner === b.baseUrl)).toBe(false)
-      expect(who.teams.canvasDetails).toEqual(expect.arrayContaining([{ team: PRIVATE, name: '不共享', owner: a.baseUrl, memberCount: 1, local: true }]))
+      expect(who.teams.canvasDetails).toEqual(expect.arrayContaining([expect.objectContaining({ team: PRIVATE, name: '不共享', owner: a.baseUrl, memberCount: 1, local: true, provenance: 'confirmed' })]))
       // Membership is a scope input, never an undocumented list of members.
       expect(remote).not.toHaveProperty('members')
       expect(remote).not.toHaveProperty('canvasMembers')

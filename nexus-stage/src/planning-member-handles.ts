@@ -2,7 +2,7 @@
 import type { RemoteTeamRow } from './federation'
 import type { SessionLite } from './world'
 
-type HandleSession = Pick<SessionLite, 'id' | 'team' | 'joined'>
+type HandleSession = Pick<SessionLite, 'id' | 'team' | 'joined' | 'memberRef'>
 
 /** Map only unique joined id8 handles that no remote directory row already owns. */
 export function joinedLocalIdsByHandle(sessions: ReadonlyArray<HandleSession>, publishedHandles: ReadonlySet<string>): Map<string, string> {
@@ -21,6 +21,9 @@ export function joinedLocalIdsByHandle(sessions: ReadonlyArray<HandleSession>, p
       localIds.set(handle, session.id)
     }
   }
+  const ownerAliases=new Map<string,string[]>()
+  for(const session of sessions)if(session.joined===true && session.memberRef){const ids=ownerAliases.get(session.memberRef)??[];ids.push(session.id);ownerAliases.set(session.memberRef,ids)}
+  for(const [ref,ids]of ownerAliases)if(ids.length===1)localIds.set(ref,ids[0]!)
   return localIds
 }
 

@@ -13,6 +13,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Config } from '../index.ts'
 import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from '../runtime.ts'
 import type { A2aPeerCard } from '../types.ts'
+import { splitQualifiedMember } from '../canvas-member.ts'
 import { peerDirectoryRows } from '../peer-directory.ts'
 import { canvasMemberships, canvasOwners } from '../canvas-discovery.ts'
 import { peerContentMeta } from '../node-self.ts'
@@ -32,7 +33,7 @@ import type { TeamMembershipStore } from '../team-store.ts'
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
 /** One directory row shared with listDirectoryTeams (which stays in index.ts). */
-export type DirectoryTeamRow = { team: string; session: string; name: string; seatName?: string; kind?: 'canvas'; owner?: string; memberCount?: number; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean; /** gh#106: the peer's last card fetch missed — this row is its kept card, not a live answer. */ unreachable?: boolean; teams?: string[]; /** Internal S5 scope hint, stripped before the tool's public output. */ canvasMembers?: readonly string[] }
+export type DirectoryTeamRow = { memberRef?: string; team: string; session: string; name: string; seatName?: string; kind?: 'canvas'; owner?: string; memberCount?: number; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean; /** gh#106: the peer's last card fetch missed — this row is its kept card, not a live answer. */ unreachable?: boolean; teams?: string[]; /** Internal S5 scope hint, stripped before the tool's public output. */ canvasMembers?: readonly string[] }
 
 /** Everything the information-plane tools capture from apply(). */
 export interface InfoToolsDeps {
@@ -47,6 +48,7 @@ export interface InfoToolsDeps {
   readonly joinedSessions: JoinedSessions
   readonly teamMemberships: TeamMembershipStore
   readonly canvasStore: CanvasStore
+  readonly canvasMigrationState: () => Record<string, unknown>
   readonly exposureStore: ExposureStore
   readonly idempotencyStore: IdempotencyStore
   readonly cardCache: Map<string, CardCacheEntry>
@@ -136,7 +138,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
           return id !== undefined && joinedSessions.has(id)
         })
       }
-      return joined.has(row.team) || (row.teams ?? []).some(team => joined.has(team))
+      return joined.has(row.team) || [...joined].some(ref => splitQualifiedMember(ref)?.handle === row.team && canvasStore.ownerKeyOf(ref) === card.publicKey) || (row.teams ?? []).some(team => joined.has(team))
     })
 
 
@@ -252,6 +254,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
             roster: [...teamMemberships.teamsOf(agentId)],
             canvas: [...canvasTeamsOfSession(agentId)],
             canvasDetails,
+            canvasMigration: (() => { const s=deps.canvasMigrationState(); return Object.fromEntries(['canvasLegacyBareMembers','epoch','legacyBareMembers','legacyInferredMembers','legacyInferenceResolutions','legacyCollisionWarnings','suspendedMembersCount'].map(key=>[key,s[key] as JsonValue])) })(),
           },
           allowlist: {
             patterns,
@@ -303,6 +306,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
                 additionalProperties: false,
                 properties: {
                   team: { type: 'string', required: true },
+                  memberRef: { type: 'string', description: 'Owner-qualified session selector, bound to the verified publishing host key; not an independent authority.' },
                   session: { type: 'string', required: true },
                   name: { type: 'string', required: true },
                   seatName: { type: 'string', description: 'Human-owned stable display label, never a route identity.' },
@@ -352,7 +356,8 @@ export function createInfoTools(deps: InfoToolsDeps) {
               const id = resolveLocal(ref)
               return id !== undefined && joinedSessions.has(id)
             })
-            return joined.has(row.team) || (row.teams ?? []).some(name => joined.has(name))
+            const card = row.via ? cardCache.get(row.via)?.card : undefined
+            return joined.has(row.team) || [...joined].some(ref=>splitQualifiedMember(ref)?.handle===row.team && canvasStore.ownerKeyOf(ref)===card?.publicKey) || (row.teams ?? []).some(name => joined.has(name))
           })
           const hiddenRemote = remoteBefore - teams.filter(row => row.local !== true).length
           // gh#39 (owner ruling: the listing ADVERTISES targets — an exposed

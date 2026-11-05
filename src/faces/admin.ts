@@ -45,7 +45,7 @@ import type { OriginClaimTarget } from '../origin-claim.ts'
 import { queuedFor } from '../queue-guard.ts'
 
 /** Remote-team rows cached for the state face (see refreshRemoteRows). */
-export type RemoteRowsCache = { at: number; rows: { team: string; name: string; origin?: string; via?: string; workspace?: string; legacy?: boolean; unreachable?: boolean; teams?: readonly string[] }[] } | undefined
+export type RemoteRowsCache = { at: number; rows: { memberRef?: string; team: string; name: string; origin?: string; via?: string; workspace?: string; legacy?: boolean; unreachable?: boolean; teams?: readonly string[] }[] } | undefined
 
 /** Everything the admin faces used to capture from `apply()`. */
 export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim' | 'callerLinkedToThisHost' | 'cachedCardFetch' | 'peerFetch'> {
@@ -71,6 +71,7 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly cliDeposits: CliDepositStore
   readonly groupStore: GroupStore
   readonly canvasStore: CanvasStore
+  readonly canvasMemberForWrite: (ref: string, peer?: unknown) => Promise<{ ok: true; member: string; ownerKey?: string } | { ok: false; error: string }>
   readonly cliHomeForAdd: (handle: string, requested?: unknown) => Promise<CliHomeDecision>
   readonly cliHomeOptions: (handle: string) => Promise<{ homes: string[]; unreadable: number; held?: true }>
   readonly layoutStore: LayoutStore
@@ -213,6 +214,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               id: String(agent.id),
               label: sessionLabelOf(agent),
               team: sessionTeamOf(agent),
+              memberRef: `${sessionTeamOf(agent)}@${d.ownCanvasFingerprint}`,
               ...nodeMetadataOf(agent),
               joined: sessionNodes.has(String(agent.id)),
               live: true,
@@ -251,6 +253,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             label: `${session}-${id8(id)}`,
             ...(d.ownerSeatNames[id] !== undefined ? { name: d.ownerSeatNames[id], seatName: d.ownerSeatNames[id] } : {}),
             team: `${config.team}/${id8(id)}`,
+            memberRef: `${config.team}/${id8(id)}@${d.ownCanvasFingerprint}`,
             joined: true,
             live: false,
             teams: [...teamMemberships.teamsOf(id)],
@@ -328,7 +331,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             }
           }),
           remote: (refreshRemoteRows(), (d.remoteRowsCache?.rows ?? []).map(row => {
-            const canvasTeams = canvasStore.teamsOf(row.team)
+            const canvasTeams = [...new Set([...canvasStore.teamsOf(row.team),...(row.memberRef?canvasStore.teamsOf(row.memberRef):[])])]
             return canvasTeams.length > 0 ? { ...row, canvasTeams: [...canvasTeams] } : row
           })),
           activity: recentActivity.slice(),
@@ -649,7 +652,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
     path: '/__dsh_a2a/fleet-canvas-op',
     handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
       readJsonBody(req, res, async (body) => {
-        const { peer, op, name, id } = body as { peer?: unknown; op?: unknown; name?: unknown; id?: unknown }
+        const { peer, op, name, id, memberPeer } = body as { peer?: unknown; op?: unknown; name?: unknown; id?: unknown; memberPeer?: unknown }
         const peerUrl = typeof peer === 'string' ? peer : ''
         const opV = typeof op === 'string' ? op : ''
         const nameV = typeof name === 'string' ? name : ''
@@ -668,7 +671,10 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
         }
         try {
           const target = peerUrl.replace(/\/$/, '') + '/a2a/canvas-op'
-          const body = JSON.stringify({ op: opV, name: nameV, ...(opV === 'add-member' || opV === 'remove-member' ? { id: idV !== '' && !isRemoteMemberRef(idV) && (sessionNodes.has(idV) || joinedSessions.has(idV)) ? `${config.team}/${id8(idV)}` : idV } : {}) })
+          const proof = opV === 'add-member' ? await d.canvasMemberForWrite(idV, memberPeer) : undefined
+          if (proof && !proof.ok) { send(JSON.stringify(proof)); return }
+          const selectedId = proof?.ok ? (proof.member.includes('/') ? proof.member : `${config.team}/${id8(proof.member)}@${d.ownCanvasFingerprint}`) : idV !== '' && !isRemoteMemberRef(idV) && (sessionNodes.has(idV) || joinedSessions.has(idV)) ? `${config.team}/${id8(idV)}@${d.ownCanvasFingerprint}` : idV
+          const body = JSON.stringify({ op: opV, name: nameV, ...(opV === 'add-member' || opV === 'remove-member' ? { id: selectedId } : {}) })
           const reply = await d.peerFetch(target, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...originClaimHeaders({ url: target, method: 'POST', body }) },
@@ -851,7 +857,17 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
         const action = body.action
         let payload: string
         try {
-          if (action === 'restore-suspended' || action === 'delete-suspended') {
+          if (action === 'confirm-member') {
+            const name = typeof body.name === 'string' ? body.name : '', id = typeof body.id === 'string' ? body.id : ''
+            const request = body as { replacement?: unknown; peer?: unknown; revision?: unknown; expectedOwner?: unknown }
+            const replacement = typeof request.replacement === 'string' ? request.replacement : ''
+            const originalHandle = id.replace(/@[0-9a-f]{8}$/, '')
+            const localChoice = replacement !== '' && !replacement.includes('/')
+            const proof = localChoice && originalHandle !== `${config.team}/${id8(replacement)}` ? { ok: false as const, error: 'local confirmation must match this host zone and the original handle' } : await d.canvasMemberForWrite(replacement, request.peer)
+            const out = proof.ok ? canvasStore.confirmMember(name, id, proof.member, proof.ownerKey, request.revision, request.expectedOwner) : proof
+            logger.info('canvas provenance owner confirmation actor=owner-control at=%s team=%s old=%s new=%s ownerKey=%s ok=%s', new Date().toISOString(), name, id, proof.ok ? proof.member : replacement, proof.ok ? proof.ownerKey ?? 'local-id' : 'unconfirmed', out.ok)
+            payload = JSON.stringify({ ...out, ...canvasStore.state() })
+          } else if (action === 'restore-suspended' || action === 'delete-suspended') {
             const request = body as { name?: unknown; id?: unknown; revision?: unknown; expected?: unknown }
             const name = typeof request.name === 'string' ? request.name : '', id = typeof request.id === 'string' ? request.id : ''
             const out = canvasStore.regulateSuspended(action === 'restore-suspended' ? 'restore' : 'delete', name, id, request.revision, request.expected)
@@ -886,14 +902,19 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               payload = JSON.stringify({ ok: false, error: 'roster reserves this canvas name' })
             } else if (name === '' || !memberValid) {
               payload = JSON.stringify({ ok: false, error: 'name and a member (joined session id, or a zone-qualified remote team handle like zone/a1b2c3d4) are required' })
+            } else if (legacyBareMember(id) && canvasStore.rawMembersOf(name).includes(id)) {
+              // Re-adding a retained legacy slot is a no-op, never provenance confirmation or restore.
+              payload = JSON.stringify({ ok: true, members: canvasStore.membersOf(name), provenance: 'unknown' })
             } else {
-              const pin = await d.cliHomeForAdd(id, (body as { home?: unknown }).home).catch(() => ({ ok: false as const, error: 'linked home card lookup failed' }))
+              const proof = await d.canvasMemberForWrite(id, (body as { peer?: unknown }).peer)
+              if (!proof.ok) { payload = JSON.stringify(proof); res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(payload); return }
+              const pin = await d.cliHomeForAdd(proof.member, (body as { home?: unknown }).home).catch(() => ({ ok: false as const, error: 'linked home card lookup failed' }))
               if (!pin.ok) payload = JSON.stringify({ ok: false, error: pin.error })
               else {
                 canvasStore.create(name)
                 const explicitHome = (body as { home?: unknown }).home !== undefined
                 const home = explicitHome ? pin.home : canvasStore.cliHomeOf(id) ?? pin.home
-                payload = JSON.stringify({ ok: canvasStore.addMember(name, id, home, { replaceHome: explicitHome }), teams: canvasStore.list(), members: canvasStore.membersOf(name) })
+                payload = JSON.stringify({ ok: canvasStore.addMember(name, proof.member, home, { replaceHome: explicitHome, ownerKey: proof.ownerKey }), teams: canvasStore.list(), members: canvasStore.membersOf(name) })
               }
             }
           } else if (action === 'remove-member') {

@@ -92,6 +92,7 @@ export interface WireDeps {
   readonly config: Config
   readonly cliDeposits: CliDepositStore
   readonly canvasStore: CanvasStore
+  readonly canvasMemberForWrite: (ref: string, peer?: unknown, editorCard?: A2aPeerCard) => Promise<{ ok: true; member: string; ownerKey?: string } | { ok: false; error: string }>
   readonly canvasNameReserved: (name: string) => boolean
   readonly sessionNodes: Map<string, Agent>
   readonly joinedSessions: JoinedSessions
@@ -113,7 +114,7 @@ export interface WireDeps {
   readonly peerKeyAdmits: (req: IncomingMessage, rawBody?: Uint8Array) => Promise<boolean>
   readonly a2aCallerRefusal: (caller: string, targetTeam?: string) => string | undefined
   /** #114 S2: the same decision with the rule and basis that admitted the caller. */
-  readonly a2aCallerAdmission: (caller: string, targetTeam?: string, cliProof?: RemoteCliProof) => Admission
+  readonly a2aCallerAdmission: (caller: string, targetTeam?: string, cliProof?: RemoteCliProof, signerKey?: string) => Admission
   /** #114 S2: this host's allowlist version right now (design §2.3). */
   readonly allowlistVersionNow: () => string
   /** #114 S6: record the version if it moved and re-judge affected tasks (observe only). */
@@ -353,7 +354,11 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
               else {
                 // A peer may compose references, never decide this operator's CLI home pin.
                 if (body.home !== undefined) payload = { ok: false, error: 'CLI home pins may only be set by this host local control route' }
-                else { canvasStore.create(name); payload = { ok: canvasStore.addMember(name, rawId), members: canvasStore.membersOf(name) } }
+                else {
+                  const proof = await d.canvasMemberForWrite(rawId, undefined, claim.card)
+                  if (!proof.ok) payload = proof
+                  else { canvasStore.create(name); payload = { ok: canvasStore.addMember(name, proof.member, undefined, { ownerKey: proof.ownerKey }), members: canvasStore.membersOf(name) } }
+                }
               }
             } else if (op === 'remove-member') {
               // Either shape may be stored (an older edit kept the handle): remove both (review of PR #151 P2-1).
@@ -666,9 +671,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // F1: only a FOREIGN CLI handle needs a bound host claim and live home card
           // before admission. Every other caller keeps the existing admission-first order.
           const foreignCli = config.teamScopeRouting && CLI_HANDLE_RE.test(caller) && cliDeposits.get(caller) === undefined
-          const earlyClaim = foreignCli ? await verifyOriginClaim(req, { cli: true, rawBody }) : undefined
+          const hasQualified = canvasStore.list().some(name => canvasStore.membersOf(name).some(ref => /@[0-9a-f]{8}$/.test(ref)))
+          const earlyClaim = foreignCli || hasQualified ? await verifyOriginClaim(req, { cli: true, rawBody }) : undefined
           const cliProof = foreignCli && earlyClaim?.ok ? await remoteCliProof(caller, earlyClaim).catch(() => undefined) : undefined
-          let admission = a2aCallerAdmission(caller, team, cliProof)
+          let admission = a2aCallerAdmission(caller, team, cliProof, earlyClaim?.ok ? earlyClaim.card.publicKey : undefined)
           // #282 S3 (same team authorizes): a receipt for this host's own forward, to the CLI that sent it, from a
           // receiver frozen at birth on the selected peer's key — the owner's signed canvas is the return path.
           const echoed = !admission.ok && cliDeposits.get(team) !== undefined ? parseReceipt(message) : null

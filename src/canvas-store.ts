@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
 import { dirname } from 'node:path'
 import { CLI_HANDLE_RE } from './cli-deposit.ts'
+import { splitQualifiedMember, validMemberOwner, memberProvenance } from './canvas-member.ts'
 
 /** On-disk shape: ordered team entries, each an ordered member id list. */
 export interface SuspendedCanvasMember {
@@ -114,7 +115,7 @@ export class CanvasStore {
   /**
    * @param path - the snapshot file; an empty path keeps the store in memory.
    */
-  constructor(path: string, private readonly options: { legacyBareMembers?: boolean } = {}) {
+  constructor(path: string, private readonly options: { legacyBareMembers?: boolean; ownPublicKey?: string } = {}) {
     this.path = path
     this.restore()
     this.committed = this.serialize()
@@ -151,7 +152,13 @@ export class CanvasStore {
             members.add(member)
           }
         }
-        if (snapshot.memberOwners !== undefined && (snapshot.memberOwners === null || typeof snapshot.memberOwners !== 'object' || Array.isArray(snapshot.memberOwners) || Object.values(snapshot.memberOwners).some(key => typeof key !== 'string'))) throw Error('invalid canvas v2 owners')
+        if (snapshot.memberOwners !== undefined && (snapshot.memberOwners === null || typeof snapshot.memberOwners !== 'object' || Array.isArray(snapshot.memberOwners) || Object.entries(snapshot.memberOwners).some(([ref,key]) => typeof key !== 'string' || !validMemberOwner(ref,key)))) throw Error('invalid canvas v2 owners')
+        const fpKeys = new Map<string,string>()
+        for (const [ref,key] of Object.entries(snapshot.memberOwners ?? {})) {
+          const fp = splitQualifiedMember(ref)!.fingerprint
+          if (fpKeys.has(fp) && fpKeys.get(fp) !== key) throw Error('conflicting canvas member fingerprints')
+          fpKeys.set(fp,key)
+        }
         if (snapshot.cliHome !== undefined && (snapshot.cliHome === null || typeof snapshot.cliHome !== 'object' || Array.isArray(snapshot.cliHome) || Object.entries(snapshot.cliHome).some(([handle, home]) => !CLI_HANDLE_RE.test(handle) || typeof home !== 'string' || !validHomeOrigin(home) || !snapshot.teams!.some(t => t.members.includes(handle))))) throw Error('invalid canvas v2 CLI homes')
         if (snapshot.cliHomeCleared !== undefined && (!Array.isArray(snapshot.cliHomeCleared) || new Set(snapshot.cliHomeCleared).size !== snapshot.cliHomeCleared.length || snapshot.cliHomeCleared.some(handle => typeof handle !== 'string' || !CLI_HANDLE_RE.test(handle) || !snapshot.teams!.some(t => t.members.includes(handle))))) throw Error('invalid canvas v2 cleared homes')
       }
@@ -201,6 +208,7 @@ export class CanvasStore {
       const previous = JSON.parse(this.committed) as CanvasSnapshot
       this.teams = previous.teams.map(t => ({ name: t.name, members: [...t.members] }))
       this.suspended = [...previous.suspendedMembers ?? []]
+      this.memberOwners = { ...previous.memberOwners }
       this.cliHome = { ...previous.cliHome }; this.cliHomeCleared = new Set(previous.cliHomeCleared)
       this.revision = previous.revision ?? 0
       throw error
@@ -211,7 +219,7 @@ export class CanvasStore {
   }
 
   private serialize(): string {
-    return JSON.stringify({ teams: this.teams, suspendedMembers: this.suspended, cliHome: this.cliHome, cliHomeCleared: [...this.cliHomeCleared], revision: this.revision })
+    return JSON.stringify({ teams: this.teams, memberOwners: this.memberOwners, suspendedMembers: this.suspended, cliHome: this.cliHome, cliHomeCleared: [...this.cliHomeCleared], revision: this.revision })
   }
   private write(): void {
     if (this.readOnlyReason) throw Error(this.readOnlyReason)
@@ -285,7 +293,14 @@ export class CanvasStore {
   membersOf(name: string): readonly string[] {
     const entry = this.teams.find(t => t.name === name)
     if (this.readOnlyReason || this.failedSuspension) return []
-    return entry === undefined ? [] : entry.members.filter(id => !this.isSuspended(name, id) && (this.options.legacyBareMembers !== false || !legacyBareMember(id)))
+    return entry === undefined ? [] : entry.members.filter(id => {
+      if (this.isSuspended(name,id) || (this.options.legacyBareMembers === false && legacyBareMember(id))) return false
+      if (this.options.ownPublicKey && id.includes('@') && !CLI_HANDLE_RE.test(id)) {
+        const provenance=memberProvenance(id,this.memberOwners[id],this.options.ownPublicKey)
+        return provenance==='confirmed-local'||provenance==='confirmed-remote'
+      }
+      return true
+    })
   }
 
   /** Inspection only: never use raw rows for routing, authorization or counts. */
@@ -299,6 +314,33 @@ export class CanvasStore {
       ...(this.readOnlyReason || this.failedSuspension || this.lastWriteError ? { error: this.readOnlyReason || (this.failedSuspension ? 'canvas suspension persistence failed; restart after repair' : this.lastWriteError) } : {}) }
   }
   ownerKeyOf(member: string): string | undefined { return this.memberOwners[member] }
+  private ownerConflict(member: string, key: string): boolean {
+    const fp = splitQualifiedMember(member)?.fingerprint
+    return Object.entries(this.memberOwners).some(([ref, pinned]) =>
+      (ref === member || splitQualifiedMember(ref)?.fingerprint === fp) && pinned !== key)
+  }
+  /** Owner control only: CAS the complete slot and preserve suspension plus routing priority. */
+  confirmMember(team: string, member: string, replacement: string, ownerKey: string | undefined, revision: unknown, expectedOwner: unknown): { ok: boolean; error?: string } {
+    if (this.readOnlyReason || this.failedSuspension) return { ok: false, error: this.state().error }
+    const entry = this.teams.find(t => t.name === team), index = entry?.members.indexOf(member) ?? -1
+    if (!entry || index < 0 || revision !== this.revision || expectedOwner !== (this.memberOwners[member] ?? null)) return { ok: false, error: 'canvas version, member slot or owner changed; refresh first' }
+    const sameId8 = (value: string) => value.replace(/^session-/, '').slice(0,8)
+    const originalHandle = splitQualifiedMember(member)?.handle ?? member
+    const replacementHandle = splitQualifiedMember(replacement)?.handle ?? replacement
+    if (member.includes('/') && (replacement.includes('/') ? originalHandle !== replacementHandle : !originalHandle.endsWith('/' + sameId8(replacement)))) return { ok: false, error: 'confirmation must identify the same original session handle' }
+    if (!member.includes('/') || !replacement || CLI_HANDLE_RE.test(member) || CLI_HANDLE_RE.test(replacement)) return { ok: false, error: 'session provenance confirmation only; CLI homes use their own controls' }
+    const qualified = splitQualifiedMember(replacement)
+    if ((replacement.includes('/') && !qualified) || (qualified && (!ownerKey || !validMemberOwner(replacement, ownerKey) || this.ownerConflict(replacement, ownerKey)))) return { ok: false, error: 'owner key/fingerprint conflict or unproved member' }
+    if (this.memberOwners[member] !== undefined && (replacement !== member || ownerKey !== this.memberOwners[member])) return { ok: false, error: 'confirmed owner cannot be silently replaced' }
+    const equivalent = entry.members.indexOf(replacement)
+    if (equivalent >= 0 && equivalent !== index && this.suspensionOf(team,member).some(row => this.suspensionOf(team,replacement).some(other => other.reason===row.reason && other.localSessionId===row.localSessionId))) return { ok:false,error:'both slots have independent matching suspension reasons; handle them explicitly before merging' }
+    if (equivalent >= 0 && equivalent !== index) entry.members.splice(index, 1)
+    else entry.members[index] = replacement
+    this.suspended = this.suspended.map(row => row.team === team && row.member === member ? { ...row, member: replacement } : row)
+      .filter((row, i, all) => all.findIndex(other => other.team === row.team && other.member === row.member && other.reason === row.reason && other.localSessionId === row.localSessionId) === i)
+    if (qualified) this.memberOwners[replacement] = ownerKey!
+    try { this.persist(); return { ok: true } } catch (error) { return { ok: false, error: String(error) } }
+  }
   /** Durably revoke canvas consent BEFORE join/agent/roster state is removed. */
   revokeLocal(id: string, ownQualified: string | undefined, inferredBare: string | undefined, reason: SuspendedCanvasMember['reason'], team?: string): boolean {
     if (this.readOnlyReason || this.failedSuspension) throw Error(this.state().error)
@@ -308,7 +350,7 @@ export class CanvasStore {
       if (inferredBare !== undefined && entry.members.includes(inferredBare) && !this.suspended.some(r => r.team === entry.name && r.member === inferredBare && r.localSessionId === id && r.reason === reason)) {
         this.suspended.push({ team: entry.name, member: inferredBare, localSessionId: id, reason, at: new Date().toISOString(), token: randomUUID() }); changed = true
       }
-      const kept = entry.members.filter(m => m !== id && m !== ownQualified)
+      const kept = entry.members.filter(m => (m !== id && m !== ownQualified) || this.isSuspended(entry.name,m))
       if (kept.length !== entry.members.length) { entry.members = kept; changed = true }
     }
     if (changed) { try { this.persist() } catch (error) { this.failedSuspension = true; throw error } }
@@ -389,17 +431,21 @@ export class CanvasStore {
    * @param name - the existing team name.
    * @param id - the member session id.
    */
-  addMember(name: string, id: string, home?: string, options: { replaceHome?: boolean } = {}): boolean {
+  addMember(name: string, id: string, home?: string, options: { replaceHome?: boolean; ownerKey?: string } = {}): boolean {
     if (id === '' || (home !== undefined && (!CLI_HANDLE_RE.test(id) || !validHomeOrigin(home)))) return false
     if (home !== undefined && this.cliHome[id] !== undefined && this.cliHome[id] !== home && options.replaceHome !== true) return false
+    const qualified = splitQualifiedMember(id)
+    if (qualified && (!options.ownerKey || !validMemberOwner(id, options.ownerKey) || this.ownerConflict(id, options.ownerKey))) return false
     const entry = this.teams.find(t => t.name === name)
     if (entry === undefined) return false
     if (entry.members.includes(id)) {
+      if (qualified && this.memberOwners[id] === undefined) return false // Existing unknown slots require explicit confirmation, not re-add.
       if (home !== undefined && this.cliHome[id] !== home) { this.cliHome[id] = home; this.cliHomeCleared.delete(id); this.persist() }
       return true
     }
     if (entry.members.length >= CANVAS_MEMBER_CAP) return false
     entry.members.push(id)
+    if (qualified) this.memberOwners[id] = options.ownerKey!
     if (home !== undefined) { this.cliHome[id] = home; this.cliHomeCleared.delete(id) }
     this.persist()
     return true

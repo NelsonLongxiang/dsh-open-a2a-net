@@ -117,11 +117,11 @@ describe('canvas single owner + mirror: change notification', () => {
       // detached refresh lands — settle it the same way as steps 2 and 4.
       const relayed = await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'add-member', name: '镜像队', id: ids.b })
       expect(relayed.ok).toBe(true)
-      expect(await until(async () => (await mirrored(b, a.baseUrl)).find(e => e.name === '镜像队')?.members.includes('dsh/bbbbbbbb') === true)).toBe(true)
+      expect(await until(async () => (await mirrored(b, a.baseUrl)).find(e => e.name === '镜像队')?.members.some(member=>/^dsh\/bbbbbbbb@[0-9a-f]{8}$/.test(member)) === true)).toBe(true)
 
       // 4. Removal propagates the same way (no tombstones: the owner's store is the truth).
-      expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'remove-member', name: '镜像队', id: 'dsh/bbbbbbbb' })).ok).toBe(true)
-      expect(await until(async () => (await mirrored(b, a.baseUrl)).find(e => e.name === '镜像队')?.members.includes('dsh/bbbbbbbb') === false)).toBe(true)
+      expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'remove-member', name: '镜像队', id: (await mirrored(b,a.baseUrl)).find(e=>e.name==='镜像队')!.members.find(member=>member.startsWith('dsh/bbbbbbbb@')) })).ok).toBe(true)
+      expect(await until(async () => (await mirrored(b, a.baseUrl)).find(e => e.name === '镜像队')?.members.some(member=>member.startsWith('dsh/bbbbbbbb@')) === false)).toBe(true)
     } finally {
       await a.dispose()
       await b.dispose()

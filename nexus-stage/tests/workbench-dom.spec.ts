@@ -833,6 +833,16 @@ describe('canvas inspector member management (0.6.6)', () => {
     expect(save).toHaveBeenCalledTimes(2)
   })
 
+  it('#334 keeps explicit source choice across unchanged polls, sends slot CAS and never conflates restore',async()=>{
+    const confirmMember=vi.fn(async()=>({ok:false,error:'version changed'})),regulateSuspended=vi.fn(async()=>({ok:true}))
+    const {v}=bench({confirmMember,regulateSuspended})
+    const observed:StateBody={...state,canvas:{...state.canvas,revision:7,memberSlots:[{name:'ygl',member:'dsh/11111111',ownerKey:null,provenance:'unknown',suspended:true,compatibilityInference:false}]}}
+    v.update(observed);let card=openTeam(v);const form=card.querySelector('.wb-member-provenance') as HTMLFormElement;expect(card.textContent).toContain('来源未确认');expect(card.textContent).toContain('已暂停')
+    const select=form.querySelector('select')!;select.value='0';v.update(observed)
+    card=v.root.querySelector('.wb-inspector')!;expect(v.root.contains(form)).toBe(true);expect(select.value).toBe('0')
+    form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await vi.waitFor(()=>expect(confirmMember).toHaveBeenCalledWith('ygl','dsh/11111111','session-11111111-aaaa',7,null,undefined))
+    expect(regulateSuspended).not.toHaveBeenCalled();expect(form.textContent).toContain('version changed');v.root.remove()
+  })
   it('adds members by picker (local session) and by manual remote handle', async () => {
     const { v, canvasOp } = bench()
     v.update(state)
@@ -846,15 +856,15 @@ describe('canvas inspector member management (0.6.6)', () => {
     expect(values).toContain('session-22222222-bbbb')
     // gh#37: handle rows are offered; bare host rows are not (they fail
     // the backend shape gate — the old picker offered dead options).
-    expect(values).toContain('nel85/9abc1234')
+    expect([...pick.options].some(option=>option.dataset.member==='nel85/9abc1234')).toBe(true)
     expect(values).not.toContain('dsh-host-ca0c0a8d')
     pick.value = 'session-22222222-bbbb'
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
-    await vi.waitFor(() => expect(canvasOp).toHaveBeenCalledWith('add-member', 'ygl', 'session-22222222-bbbb'))
+    await vi.waitFor(() => expect(canvasOp).toHaveBeenCalledWith('add-member', 'ygl', 'session-22222222-bbbb', undefined, undefined))
     // Manual handle wins over the picker when filled.
     manual.value = 'nel85/9abc1234'
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
-    await vi.waitFor(() => expect(canvasOp).toHaveBeenCalledWith('add-member', 'ygl', 'nel85/9abc1234'))
+    await vi.waitFor(() => expect(canvasOp).toHaveBeenCalledWith('add-member', 'ygl', 'nel85/9abc1234', undefined, undefined))
     expect(manual.value).toBe('') // cleared on success
   })
 

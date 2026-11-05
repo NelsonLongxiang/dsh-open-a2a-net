@@ -7,7 +7,8 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createPrivateKey, sign as edSign } from 'node:crypto'
-import { bootNode, reservePort, type MeshNode } from './harness.ts'
+import { bootNode, reservePort, tmpHome, type MeshNode } from './harness.ts'
+import { seedCanvasHistory } from '../fixtures/canvas-history.ts'
 
 beforeEach(() => {
   vi.stubGlobal('WebSocket', function throwOnSocket() { throw new Error('no socket') })
@@ -50,11 +51,11 @@ async function directDelivery(node: MeshNode, callerSession: string, message: st
 
 describe('W2: cross-host canvas link on the wire face', () => {
   it('a foreign-zone caller with no link is refused; the canvas remote ref links it', async () => {
-    const target = await bootNode({ name: 'w2t', session: 'mesh-w2t', team: 'dsh', sessionNodes: true, teamScopeRouting: true })
+    const target = await bootNode({ home:seedCanvasHistory(tmpHome(),[{name:'fleet',members:['cargo/aaaabbbb']}]), name: 'w2t', session: 'mesh-w2t', team: 'dsh', sessionNodes: true, teamScopeRouting: true })
     try {
       // Before any link: a foreign-zone delivery is refused (N3/N4 pinned
       // so the W2 basis change cannot regress it).
-      const bare = await directDelivery(target, 'cargo/aaaabbbb', 'no link yet')
+      const bare = await directDelivery(target, 'cargo/ccccdddd', 'no link yet')
       expect(String(bare.error)).toContain('no operator-established link')
       // The operator adds the canvas remote ref — the cross-host link.
       await canvasAddMember(target, 'fleet', 'cargo/aaaabbbb')
@@ -94,7 +95,7 @@ describe('W3 basis-1 origin equality: single-zone fleet shapes', () => {
 
 describe('W3: full card = verify ∧ link (#18 X1)', () => {
   it('a verified stranger gets the minimal card; one-sided seeding does NOT link; bilateral seeding links; a canvas ref links', async () => {
-    const target = await bootNode({ name: 'w3t', session: 'mesh-w3t', team: 'target-zone', sessionNodes: true })
+    const target = await bootNode({ home:seedCanvasHistory(tmpHome(),[{name:'fleet',members:['ref-zone/11112222']}]), name: 'w3t', session: 'mesh-w3t', team: 'target-zone', sessionNodes: true })
     const stranger = await bootNode({ name: 'stranger', session: 'mesh-stranger', team: 'stranger-zone' })
     // Review M1 adversarial probe, pinned: the one-sided seeder lists the
     // TARGET in its own config.peers (one line, zero commitment from the

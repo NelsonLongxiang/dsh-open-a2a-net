@@ -1236,7 +1236,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         const host = peerHostOf(p.url)
         // Owner report 2026-11-04: the host's rows now lead with its bare process team (e.g. 'dsh'), which the
         // server reads as a local session id and refuses — take the first zone/id8 SESSION handle instead.
-        const handle = lastRemoteTeams.get(host)?.find(row => row.team.includes('/'))?.team
+        const first = lastRemoteTeams.get(host)?.find(row => row.team.includes('/')); const handle = first?.memberRef ?? first?.team
         model.upsertNode({
           id, x: base.x, y: base.y,
           label: p.url, team: '', name: p.url, peerUrl: p.url,
@@ -1262,7 +1262,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       let y = hostNode?.y ?? 0
       for (const row of rows) {
         if (!row.team.includes('/')) continue
-        const id = `member-${row.team.replace(/[^a-z0-9-]/gi, '-')}`
+        const id = `member-${(row.memberRef ?? row.team).replace(/[^a-z0-9-]/gi, '-')}`
         if (memberSeen.has(id)) continue
         memberSeen.add(id)
         const saved = layoutDoc?.nodes[id]
@@ -1272,7 +1272,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
         model.upsertNode({
           id, x: pos.x, y: pos.y,
           label: row.team, team: row.team, name: row.name !== undefined && row.name !== '' ? row.name : row.team,
-          remoteHandle: row.team,
+          remoteHandle: row.memberRef ?? row.team,
           live: true, remote: true, memberships: [],
         })
       }

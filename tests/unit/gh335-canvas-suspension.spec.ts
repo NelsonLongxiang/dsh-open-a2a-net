@@ -58,8 +58,10 @@ describe('#335 durable canvas consent',()=>{
   expect(s.membersOf('a')).toEqual([]);expect(readFileSync(path,'utf8')).toBe(before)
  })
  it('keeps raw priority slots but all effective readers exclude suspension, including after restart/readd',()=>{
-  const {path}=fixture(),s=new CanvasStore(path)
-  s.create('a');s.create('b');for(const n of s.list()){s.addMember(n,'session-local');s.addMember(n,'dsh/aaaaaaaa');s.addMember(n,'dsh/aaaaaaaa@1234abcd');s.addMember(n,'dsh/aaaaaaaa@aaaaaaaa')}
+  const {path}=fixture()
+  // Historical rows are seeded on disk: #334 new qualified writes require a real full owner key.
+  writeFileSync(path,JSON.stringify({teams:['a','b'].map(name=>({name,members:['session-local','dsh/aaaaaaaa','dsh/aaaaaaaa@1234abcd','dsh/aaaaaaaa@aaaaaaaa']}))}))
+  const s=new CanvasStore(path)
   expect(s.revokeLocal('session-local','dsh/aaaaaaaa@1234abcd','dsh/aaaaaaaa','leave')).toBe(true)
   expect(s.rawMembersOf('a')).toEqual(['dsh/aaaaaaaa','dsh/aaaaaaaa@aaaaaaaa'])
   expect(s.membersOf('a')).toEqual(['dsh/aaaaaaaa@aaaaaaaa']);expect(s.remoteMembersOf('a')).toEqual(['dsh/aaaaaaaa@aaaaaaaa']);expect(s.teamsOf('dsh/aaaaaaaa')).toEqual([])

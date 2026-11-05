@@ -21,6 +21,7 @@ import { BLOB_FILE_MAX, type BlobStore } from '../blob-store.ts'
 import type { CanvasStore } from '../canvas-store.ts'
 import { isRootOriginUrl } from '../origin-claim.ts'
 import { claimCovers } from '../task-auth.ts'
+import { splitQualifiedMember } from '../canvas-member.ts'
 import type { OriginClaimResult } from './wire.ts'
 
 /** Pulls per proven signer (host zone or CLI handle) in a sliding minute (design §8; the FloodGuard figure). */
@@ -32,7 +33,7 @@ export interface FileFaceDeps {
   readonly ctx: Context
   readonly config: Pick<Config, 'apiKey' | 'team'>
   readonly blobStore: BlobStore
-  readonly canvasStore: Pick<CanvasStore, 'membersOf'>
+  readonly canvasStore: Pick<CanvasStore, 'membersOf'> & Partial<Pick<CanvasStore, 'ownerKeyOf'>>
   readonly verifyOriginClaim: (req: IncomingMessage, options?: { readonly cli?: boolean }) => Promise<OriginClaimResult>
   /** #317: the peer-face key gate — this host's apiKey, or a link key from the verified peer it belongs to. */
   readonly peerKeyAdmits: (req: IncomingMessage, rawBody?: Uint8Array) => Promise<boolean>
@@ -109,7 +110,7 @@ export function registerFileFaces(webServer: WebServer, d: FileFaceDeps): void {
         ? caller === claim.caller
         : claim.bound === true && isRootOriginUrl(claim.callerUrl) && claimCovers(caller, claim.caller)
       if (!proven) { refuse(403, 'untrusted-origin', 'the envelope does not prove this caller (it must be the audience-bound form, signed from a root card URL whose zone covers caller_session)'); return }
-      const grant = blobStore.list().find(g => g.sha256 === sha256 && grantAdmits(g.to, caller, claim.caller, config.team, name => canvasStore.membersOf(name), claim.cli === true))
+      const grant = blobStore.list().find(g => g.sha256 === sha256 && grantAdmits(g.to, caller, claim.caller, config.team, name => canvasStore.membersOf(name).flatMap(ref => { const member = splitQualifiedMember(ref); return member ? (canvasStore.ownerKeyOf?.(ref) === claim.card.publicKey ? [member.handle] : []) : [ref] }), claim.cli === true))
       // One answer for "no such blob", "expired" and "not yours": a refusal is no existence oracle.
       if (grant === undefined) { refuse(403, 'not-granted', 'no live grant lets this caller pull that file'); return }
       // Budgeted by the PROVEN signer (a host zone or a CLI handle), never the self-described label (R1).

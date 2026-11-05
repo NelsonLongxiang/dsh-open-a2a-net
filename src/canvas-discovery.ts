@@ -1,6 +1,7 @@
 /** Read-only canvas ownership projection; never authorizes or selects a dispatch candidate. */
 import { advertisedCanvasTeams } from './peer-directory.ts'
 import type { A2aPeerCard } from './types.ts'
+import { splitQualifiedMember } from './canvas-member.ts'
 export interface CanvasOwner { team: string; name: string; owner: string; memberCount: number; local: boolean; members: readonly string[]; scopeMembers?: readonly string[] }
 export function canvasOwners(local: readonly { name: string; team: string; members: readonly string[] }[], ownUrl: string, peers: readonly { url: string; card: A2aPeerCard }[]): CanvasOwner[] {
   const rows: CanvasOwner[] = local.map(row => ({ ...row, owner: ownUrl, memberCount: row.members.length, local: true }))
@@ -14,7 +15,16 @@ export function canvasOwners(local: readonly { name: string; team: string; membe
   return rows
 }
 export function canvasMemberships(owners: readonly CanvasOwner[], handle: string, localId?: string, resolveLocal?: (ref: string) => string | undefined): Omit<CanvasOwner, 'members' | 'scopeMembers'>[] {
-  return owners.filter(row => ((row.scopeMembers ?? row.members).includes(handle) && (row.local || resolveLocal === undefined || resolveLocal(handle) === localId)) || (row.local && localId !== undefined && row.members.includes(localId))).map(({ members: _members, scopeMembers: _scopeMembers, ...row }) => row)
+  return owners.flatMap(row => {
+    const matched = (row.scopeMembers ?? row.members).filter(ref =>
+      (row.local && localId !== undefined && ref === localId) ||
+      (resolveLocal !== undefined && localId !== undefined && (ref === handle || splitQualifiedMember(ref)?.handle === handle) && resolveLocal(ref) === localId) ||
+      (resolveLocal === undefined && ref === handle))
+    if (!matched.length) return []
+    const inferred = matched.some(ref => ref === handle && splitQualifiedMember(ref) === undefined)
+    const { members: _members, scopeMembers: _scopeMembers, ...detail } = row
+    return [{ ...detail, provenance: inferred ? 'unknown' as const : 'confirmed' as const, ...(inferred ? { compatibilityInference: true } : {}) }]
+  })
 }
 export function canvasFailure(team: string, owners: readonly CanvasOwner[], reason: string): string {
   if (!new RegExp('^.+/canvas/[^/]+$').test(team)) return reason

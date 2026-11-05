@@ -82,10 +82,14 @@ export interface AdmissionRecords {
   canvasTeamOf(name: string): string
   memberships(): readonly { readonly session: string; readonly teams: readonly string[] }[]
   joined(): readonly string[]
+  /** Caller-only proof projection; targets still use the complete local registry. */
+  callerJoined?(): readonly string[]
+  callerMemberships?(): readonly { readonly session: string; readonly teams: readonly string[] }[]
   canvasNames(): readonly string[]
   /** Canvas names the session sits in. */
   canvasTeamsOf(sessionId: string): readonly string[]
   canvasMembersOf(name: string): readonly string[]
+  callerCanvasMembersOf?(name: string): readonly string[]
   canvasRemoteMembersOf(name: string): readonly string[]
   /** The canvasOrg lists of the warm peer-card cache. */
   peerOrgs(): Iterable<readonly PeerOrgEntry[]>
@@ -116,14 +120,14 @@ export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTea
   const declared = new Map<string, AdmissionRule>()
   const declare = (team: string, rule: AdmissionRule): void => { if (!declared.has(team)) declared.set(team, rule) }
   let callerSessionId: string | undefined
-  for (const entry of r.memberships()) {
+  for (const entry of r.callerMemberships?.() ?? r.memberships()) {
     if (`${r.zone}/${r.id8(entry.session)}` === caller) {
       callerSessionId = entry.session
       for (const t of entry.teams) declare(t, 'roster-shared')
     }
   }
   if (callerSessionId === undefined) {
-    for (const id of r.joined()) {
+    for (const id of r.callerJoined?.() ?? r.joined()) {
       if (`${r.zone}/${r.id8(id)}` === caller) { callerSessionId = id; break }
     }
   }
@@ -134,7 +138,7 @@ export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTea
   if (callerSessionId !== undefined) {
     for (const name of r.canvasTeamsOf(callerSessionId)) declare(r.canvasTeamOf(name), 'canvas-shared')
     for (const name of r.canvasNames()) {
-      if (r.canvasMembersOf(name).includes(caller)) declare(r.canvasTeamOf(name), 'canvas-shared')
+      if ((r.callerCanvasMembersOf?.(name) ?? r.canvasMembersOf(name)).includes(caller)) declare(r.canvasTeamOf(name), 'canvas-shared')
     }
   } else {
     for (const name of r.canvasNames()) {

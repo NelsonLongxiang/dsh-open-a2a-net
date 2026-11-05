@@ -37,6 +37,7 @@ export function resolveCallerLabel(input: {
 import { encodePublicKey, signCard, verifyCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { CanvasStore, canvasNameReserved, isRemoteMemberRef, legacyBareMember } from './canvas-store.ts'
+import { splitQualifiedMember, memberProvenance, qualifiedSessionMember } from './canvas-member.ts'
 import { decodeSessionLog, extractTranscript, TRANSCRIPT_MAX_FILE_BYTES } from './session-transcript.ts'
 import { LayoutStore } from './layout-store.ts'
 import { peerLinkDisplay } from './peer-link-display.ts'
@@ -661,7 +662,7 @@ export function apply(ctx: Context, config: Config): void {
   // Canvas teams: user-composed multi-member routing groups. A session node
   // may sit in many teams; routing to <team>/canvas/<name> resolves the
   // first live member or wakes the first cold one (member order = priority).
-  const canvasStore = new CanvasStore(join(home, 'a2a', 'canvas.json'), { legacyBareMembers: config.canvasLegacyBareMembers !== false })
+  const canvasStore = new CanvasStore(join(home, 'a2a', 'canvas.json'), { legacyBareMembers: config.canvasLegacyBareMembers !== false, ownPublicKey: encodePublicKey(createPublicKey(nodePrivateKey)) })
   // #91 file channel: the sender host's blob store (docs/design/file-channel.md).
   const blobStore = new BlobStore(join(home, 'a2a'))
   // Spatial presentation state for the full-page stage (contract v2).
@@ -703,7 +704,14 @@ export function apply(ctx: Context, config: Config): void {
           const name = parseCanvasTeamName(team)
           if (name === undefined) return undefined
           // Canvas members by session id and by handle, as the faces store them.
-          return canvasStore.membersOf(name).flatMap(m => (m.includes('/') ? [m] : [m, `${config.team}/${id8(m)}`]))
+          return canvasStore.membersOf(name).flatMap(m => {
+            const qualified=splitQualifiedMember(m)
+            if (qualified) {
+              const local=localHandleResolver()(m)
+              return local!==undefined || settler.claimKey===canvasStore.ownerKeyOf(m) ? [m,qualified.handle] : [m]
+            }
+            return m.includes('/') ? [m] : [m,`${config.team}/${id8(m)}`]
+          })
         },
         ...(parsedForJudge?.envelope?.onBehalfOf !== undefined ? { onBehalfOf: parsedForJudge.envelope.onBehalfOf } : {}),
         echo,
@@ -1105,7 +1113,13 @@ export function apply(ctx: Context, config: Config): void {
       if (card !== undefined && card.session !== session) for (const row of card.sessionTeams ?? []) published.add(row.team)
     }
     return (ref) => {
-      // #334 qualified member routing is deliberately deferred; this window is only legacy bare inference.
+      const qualified = splitQualifiedMember(ref)
+      if (qualified !== undefined) {
+        const ownKey = encodePublicKey(createPublicKey(nodePrivateKey))
+        if (memberProvenance(ref, canvasStore.ownerKeyOf(ref), ownKey) !== 'confirmed-local') return undefined
+        const hits = byHandle.get(qualified.handle)
+        return hits?.length === 1 ? hits[0] : undefined
+      }
       if (!legacyOverride && config.canvasLegacyBareMembers === false) return undefined
       const hits = byHandle.get(ref)
       const collision = (hits?.length ?? 0) > 1 || (hits?.length === 1 && published.has(ref))
@@ -1145,6 +1159,10 @@ export function apply(ctx: Context, config: Config): void {
       legacyInferredMembers: raw.filter(r => canvasStore.membersOf(r.name).includes(r.member) && resolve(r.member) !== undefined).length,
       legacyInferenceResolutions, legacyCollisionWarnings, legacyCollisionRecent: [...legacyCollisionRecent],
       suspendedMembersCount: new Set(canvasStore.state().suspendedMembers.map(r => JSON.stringify([r.team,r.member]))).size,
+      memberSlots: canvasStore.list().flatMap(name => canvasStore.rawMembersOf(name).map(member => {
+        const provenance = memberProvenance(member, canvasStore.ownerKeyOf(member), encodePublicKey(createPublicKey(nodePrivateKey)))
+        return { name, member, ownerKey: canvasStore.ownerKeyOf(member) ?? null, provenance, suspended: canvasStore.isSuspended(name,member), compatibilityInference: provenance === 'unknown' && canvasStore.membersOf(name).includes(member) && resolve(member) !== undefined }
+      })),
       ...canvasStore.state() }
   }
   function ownCanvasHandleOf(id: string, includeArchived = false): string | undefined {
@@ -1161,10 +1179,8 @@ export function apply(ctx: Context, config: Config): void {
    * canvas a handle-stored membership puts the session in.
    */
   function canvasTeamsOfSession(id: string): string[] {
-    const teams = new Set(canvasStore.teamsOf(id))
-    const own = ownCanvasHandleOf(id)
-    if (own !== undefined) for (const name of canvasStore.teamsOf(own)) teams.add(name)
-    return [...teams]
+    const resolve = localHandleResolver()
+    return canvasStore.list().filter(name => canvasStore.membersOf(name).some(ref => ref === id || resolve(ref) === id))
   }
 
   /**
@@ -1715,7 +1731,7 @@ export function apply(ctx: Context, config: Config): void {
     // staying well inside a peer restart\x27s noticeability. Single-flight: a
     // refresh already in flight serves every poll that arrives before it
     // settles — no stacked sweeps.
-    let remoteRowsCache: { at: number; rows: { team: string; name: string; origin?: string; via?: string; workspace?: string; legacy?: boolean; unreachable?: boolean; teams?: readonly string[] }[] } | undefined
+    let remoteRowsCache: { at: number; rows: { memberRef?: string; team: string; name: string; origin?: string; via?: string; workspace?: string; legacy?: boolean; unreachable?: boolean; teams?: readonly string[] }[] } | undefined
     let remoteRowsInFlight: Promise<void> | undefined
     const refreshRemoteRows = (): void => {
       const now = Date.now()
@@ -1727,7 +1743,7 @@ export function apply(ctx: Context, config: Config): void {
             at: now,
             rows: all
               .filter(row => row.local !== true)
-              .map(row => ({ team: row.team, name: row.name, ...(row.origin !== undefined ? { origin: row.origin } : {}), ...(row.via !== undefined ? { via: row.via } : {}), ...(row.workspace !== undefined ? { workspace: row.workspace } : {}), ...(row.legacy === true ? { legacy: true } : {}), ...(row.unreachable === true ? { unreachable: true } : {}), ...(row.teams !== undefined && row.teams.length > 0 ? { teams: [...row.teams] } : {}) })),
+              .map(row => ({ team: row.team, name: row.name, ...(row.memberRef !== undefined ? {memberRef:row.memberRef} : {}), ...(row.origin !== undefined ? { origin: row.origin } : {}), ...(row.via !== undefined ? { via: row.via } : {}), ...(row.workspace !== undefined ? { workspace: row.workspace } : {}), ...(row.legacy === true ? { legacy: true } : {}), ...(row.unreachable === true ? { unreachable: true } : {}), ...(row.teams !== undefined && row.teams.length > 0 ? { teams: [...row.teams] } : {}) })),
           }
         })
         .catch(() => {})
@@ -1738,7 +1754,7 @@ export function apply(ctx: Context, config: Config): void {
     whenWebServerSettled((webServer) => {
       // gh#77 B1: the admin faces live in src/faces/admin.ts.
       registerAdminFaces(webServer, {
-        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
+        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
@@ -1782,7 +1798,7 @@ export function apply(ctx: Context, config: Config): void {
         // roster: the team-roster face (a2a_team_join/leave, card
         // teamMemberships, team-scope routing admission) ships — peers read
         // its absence as a pre-roster legacy node (0.5.43 and older).
-        capabilities: { route: true, async: true, roster: true },
+        capabilities: { route: true, async: true, roster: true, canvasMemberProvenance: true },
         expiresAt: Date.now() + config.cardTtlMs,
         ...(records.length > 0 ? { records: [...records] } : {}),
       })
@@ -2486,6 +2502,8 @@ export function apply(ctx: Context, config: Config): void {
     for (const name of canvasStore.list()) {
       for (const ref of canvasStore.remoteMembersOf(name)) {
         if (ref === caller) return true
+        const qualified = splitQualifiedMember(ref)
+        if (qualified?.handle === caller && callerCard?.publicKey === canvasStore.ownerKeyOf(ref)) return true
       }
     }
     // Basis 3, BILATERAL (review M1 fix): OUR config.peers seeds a URL
@@ -2542,13 +2560,13 @@ export function apply(ctx: Context, config: Config): void {
     memberships: () => teamMemberships.list(),
     joined: () => joinedSessions.list(),
     canvasNames: () => canvasStore.list(),
-    canvasTeamsOf: sessionId => canvasStore.teamsOf(sessionId),
-    canvasMembersOf: name => canvasStore.membersOf(name),
+    canvasTeamsOf: sessionId => canvasTeamsOfSession(sessionId),
+    canvasMembersOf: name => canvasLocalMembersOf(name),
     canvasRemoteMembersOf: name => canvasStore.remoteMembersOf(name),
     peerOrgs: function * () {
       for (const cached of cardCache.values()) {
         const org = (cached.card as { canvasOrg?: PeerOrgEntry[] } | undefined)?.canvasOrg
-        if (Array.isArray(org)) yield org
+        if (Array.isArray(org)) yield org.map(row=>({ ...row,members:Array.isArray(row.members)?row.members.map((ref: string)=>splitQualifiedMember(ref)&&localHandleResolver()(ref)!==undefined?splitQualifiedMember(ref)!.handle:ref):row.members }))
       }
     },
     liveNodeIds: () => [...sessionNodes.values()].map(agent => String(agent.id)),
@@ -2568,8 +2586,36 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /** Inbound admission with the rule and shared teams that admitted the caller (gh#114 S1). */
-  function a2aCallerAdmission(caller: string, targetTeam?: string, cliProof?: RemoteCliProof): Admission {
-    return callerAdmission(admissionRecords, caller, targetTeam, cliProof)
+  function a2aCallerAdmission(caller: string, targetTeam?: string, cliProof?: RemoteCliProof, signerKey?: string): Admission {
+    const ownKey = encodePublicKey(createPublicKey(nodePrivateKey))
+    const members = (name: string) => canvasStore.membersOf(name).flatMap(ref => {
+      const qualified = splitQualifiedMember(ref)
+      if (!qualified) return [ref]
+      const provenance = memberProvenance(ref, canvasStore.ownerKeyOf(ref), ownKey)
+      if (provenance === 'confirmed-local') { const local=localHandleResolver()(ref); return local ? [local,qualified.handle] : [] }
+      return provenance === 'confirmed-remote' && signerKey === canvasStore.ownerKeyOf(ref) ? [qualified.handle] : []
+    })
+    const foreignSigner = signerKey !== undefined && signerKey !== ownKey
+    const records = { ...admissionRecords,
+      callerJoined: () => admissionRecords.joined().filter(id => !foreignSigner || config.team + '/' + id8(id) !== caller),
+      callerMemberships: () => admissionRecords.memberships().filter(row => !foreignSigner || config.team + '/' + id8(row.session) !== caller),
+      callerCanvasMembersOf: (name: string) => {
+        const effective = new Set(members(name))
+        return canvasStore.membersOf(name).flatMap(ref => {
+          const qualified = splitQualifiedMember(ref)
+          if (qualified?.handle === caller && foreignSigner && canvasStore.ownerKeyOf(ref) !== signerKey) return []
+          if (effective.has(ref)) return [ref]
+          return qualified && effective.has(qualified.handle) ? [qualified.handle] : []
+        })
+      },
+      canvasMembersOf: members,
+      canvasRemoteMembersOf: (name: string) => canvasStore.remoteMembersOf(name).flatMap(ref => {
+        const qualified = splitQualifiedMember(ref)
+        if (!qualified) return [ref]
+        return canvasStore.ownerKeyOf(ref) === signerKey && memberProvenance(ref, canvasStore.ownerKeyOf(ref), ownKey) === 'confirmed-remote' ? [qualified.handle] : []
+      }),
+    }
+    return callerAdmission(records, caller, targetTeam, cliProof)
   }
 
   function a2aCallerRefusal(caller: string, targetTeam?: string): string | undefined {
@@ -2702,7 +2748,7 @@ export function apply(ctx: Context, config: Config): void {
       logger,
       config,
       cliDeposits,
-      canvasStore,
+      canvasStore, canvasMemberForWrite,
       canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
       sessionNodes,
       joinedSessions,
@@ -3037,6 +3083,11 @@ export function apply(ctx: Context, config: Config): void {
     if (!linked && handles.size > 0 && zone !== '') {
       outer: for (const name of canvasStore.list()) {
         for (const ref of canvasStore.remoteMembersOf(name)) {
+          const qualified = splitQualifiedMember(ref)
+          if (qualified) {
+            if (cached?.publicKey === canvasStore.ownerKeyOf(ref) && handles.has(qualified.handle)) { linked = true; break outer }
+            continue
+          }
           if (handles.has(ref)) { linked = true; break outer }
           const refZone = ref.includes('/') ? ref.slice(0, ref.indexOf('/')) : ref
           if (refZone === zone) { linked = true; break outer }
@@ -3054,6 +3105,40 @@ export function apply(ctx: Context, config: Config): void {
       if (card !== undefined) cardCache.set(url, { at: Date.now(), card })
       return { url, card, linked: card === undefined || peerAdmissionLinkState(url).link === 'linked' }
     })
+  }
+
+  async function canvasMemberForWrite(ref: string, requestedPeer?: unknown, editorCard?: A2aPeerCard): Promise<{ ok: true; member: string; ownerKey?: string } | { ok: false; error: string }> {
+    if (CLI_HANDLE_RE.test(ref)) return { ok: true, member: ref }
+    const selected = splitQualifiedMember(ref), handle = selected?.handle ?? ref
+    if (!ref.includes('/')) {
+      if (editorCard) return { ok: false, error: 'peer writes must use owner-qualified session members; upgrade the editor' }
+      return (joinedSessions.has(ref) || sessionNodes.has(ref)) && archivedSessionFilter()?.(ref) !== true ? { ok: true, member: ref } : { ok: false, error: 'local session must be joined and not archived' }
+    }
+    if (editorCard && !selected) return { ok: false, error: 'new bare session member refused; upgrade or confirm locally' }
+    const ownKey = encodePublicKey(createPublicKey(nodePrivateKey))
+    if (selected && memberProvenance(ref, canvasStore.ownerKeyOf(ref), ownKey) === 'confirmed-local') {
+      const locals = [...new Set([...joinedSessions.list(), ...sessionNodes.keys()])].filter(id => config.team + '/' + id8(id) === handle && archivedSessionFilter()?.(id) !== true)
+      if (locals.length === 1) return { ok: true, member: ref, ownerKey: ownKey }
+      return { ok: false, error: 'local qualified member is not uniquely joined' }
+    }
+    const peers = [...new Set([...peerStore.listSeeded(), ...config.delegates.map(row => row.url)])]
+    if (requestedPeer !== undefined && (typeof requestedPeer !== 'string' || !peers.includes(requestedPeer))) return { ok: false, error: 'select an existing linked seed/delegate owner' }
+    const cards: A2aPeerCard[] = []
+    for (const peer of peers) {
+      const card = await fetchPeerCard(peer)
+      if (!card || !verifyCard(card, Date.now()).ok) continue
+      cardCache.set(peer, { at: Date.now(), card })
+      if (requestedPeer !== undefined && peer !== requestedPeer) continue
+      if (peerAdmissionLinkState(peer).link === 'linked') cards.push(card)
+    }
+    if (editorCard && verifyCard(editorCard, Date.now()).ok) cards.push(editorCard)
+    if (selected && new Set(cards.filter(card => canvasOwnerFingerprint(card.publicKey) === selected.fingerprint).map(card => card.publicKey)).size > 1) return { ok: false, error: 'owner fingerprint collision; no member written' }
+    const matching = cards.filter(card => handle.startsWith(card.team + '/') && /^[0-9a-f]{8}$/.test(handle.slice(card.team.length + 1)) && card.sessionTeams?.some(row => row.team === handle) && (!selected || canvasOwnerFingerprint(card.publicKey) === selected.fingerprint))
+    const keys = [...new Set(matching.map(card => card.publicKey))]
+    if (keys.length !== 1) return { ok: false, error: 'member owner is unconfirmed, hidden, offline or ambiguous; select a verifiable host' }
+    const member = qualifiedSessionMember(handle, keys[0]!)
+    if (!member || (selected && member !== ref)) return { ok: false, error: 'member fingerprint/key mismatch' }
+    return { ok: true, member, ownerKey: keys[0]! }
   }
 
   async function cliHomeForAdd(handle: string, requested?: unknown) {
@@ -3187,7 +3272,7 @@ export function apply(ctx: Context, config: Config): void {
     get ownerAllowlist() { return ownerAllowlist },
     get ownerTeamScopeInfo() { return ownerTeamScopeInfo },
     teamAuditRing, reportRing, a2aJoinGateRefusal, observeAuthorization,
-    settlePeerCard, client, listDirectoryTeams, canvasTeamsOfSession, localHandleResolver,
+    settlePeerCard, client, listDirectoryTeams, canvasTeamsOfSession, localHandleResolver, canvasMigrationState,
     SWEEP_CONCURRENCY,
   })
   infoTools.registerWhoami()
@@ -3462,7 +3547,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   const senderScopeRecords: OutboundScopeRecords = {
     zone: config.team, id8, teamsOf: id => teamMemberships.teamsOf(id), membersOf: team => teamMemberships.membersOf(team),
     canvasNames: () => canvasStore.list(), canvasMembers: name => canvasStore.membersOf(name), canvasTeam: canvasTeamOf,
-    peerOrgs: function* () { for (const hit of cardCache.values()) if (hit.card?.canvasOrg) yield hit.card.canvasOrg },
+    memberHandle: ref => splitQualifiedMember(ref)?.handle ?? ref,
+    peerOrgs: function* () { for (const hit of cardCache.values()) if (hit.card?.canvasOrg) yield hit.card.canvasOrg.map(row=>({...row,members:row.members.map(ref=>splitQualifiedMember(ref)&&localHandleResolver()(ref)!==undefined?splitQualifiedMember(ref)!.handle:ref)})) },
     warmPeers: () => mapBounded(resolutionPeers(), SWEEP_CONCURRENCY, cachedCardFetch),
   }
 
@@ -3487,6 +3573,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       a2aJoinGateRefusal(agent === undefined ? undefined : { agent })
       // #282 S2: an owner-qualified canvas id. Our own fingerprint is our canvas; a foreign one never
       // lands on a same-named local canvas, and the directory walk keeps only that owner.
+      const requestedMember=splitQualifiedMember(String(args.team ?? '').trim())
+      if(requestedMember && localHandleResolver()(String(args.team).trim())!==undefined) args={...args,team:requestedMember.handle}
       const ownerQualified = splitCanvasOwner(String(args.team ?? '').trim())
       const foreignOwner = ownerQualified.owner !== undefined && ownerQualified.owner !== ownCanvasFingerprint ? ownerQualified.owner : undefined
       if (ownerQualified.owner !== undefined) args = { ...args, team: ownerQualified.team }
@@ -3579,7 +3667,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // named; the peer request carries the member handle it must resolve.
       const canvasName = foreignOwner !== undefined ? undefined : parseCanvasTeamName(args.team)
       // gh#131: one of this host's own handles is a local member, never a directory target.
-      const remoteTargets = canvasName !== undefined ? ((resolve) => canvasStore.remoteMembersOf(canvasName).filter(ref => resolve(ref) === undefined))(localHandleResolver()) : []
+      const remoteTargets = canvasName !== undefined ? ((resolve) => canvasStore.remoteMembersOf(canvasName).filter(ref => resolve(ref) === undefined && (memberProvenance(ref, canvasStore.ownerKeyOf(ref), encodePublicKey(createPublicKey(nodePrivateKey))) !== 'conflict')))(localHandleResolver()) : []
       const targets = remoteTargets.length > 0 ? [...remoteTargets] : [args.team]
       if (remoteTargets.length > 0) {
         failures.push(`local: canvas team "${args.team}" has no live or wakeable local member`)
@@ -3593,7 +3681,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const candidatePool: Array<{ candidate: string; target: string }> = []
       for (const target of targets) {
         for (const candidate of await directoryPeerCandidates(fetch, ownerQualified.owner !== undefined && target === args.team ? `${target}@${ownerQualified.owner}` : target, failures, scopedCanvasCaller)) {
-          candidatePool.push({ candidate, target })
+          candidatePool.push({ candidate, target: splitQualifiedMember(target)?.handle ?? target })
         }
       }
       // Failover: try every candidate in order — an offline path falls back
@@ -4050,12 +4138,24 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // itself after the target). referralTeamResolution restores the legacy
     // whole-store basis for fleets mid-migration.
     // #282 S2: `<canvas>@<fp8>` selects only the owner whose signed card key matches; no delegation walk.
-    const qualified = splitCanvasOwner(team)
+    if (!splitQualifiedMember(team)) {
+      const qualifiedRefs = [...new Set(canvasStore.list().flatMap(name=>canvasStore.membersOf(name)).filter(ref=>splitQualifiedMember(ref)?.handle===team))]
+      const keys = new Set(qualifiedRefs.map(ref=>canvasStore.ownerKeyOf(ref)).filter(Boolean))
+      if (keys.size > 1) { failures.push('ambiguous member owners; select an owner-qualified handle'); return [] }
+      if (qualifiedRefs.length === 1) team=qualifiedRefs[0]!
+    }
+    const member = splitQualifiedMember(team)
+    const storedMember = team
+    const qualified = member ? { team: member.handle, owner: member.fingerprint } : splitCanvasOwner(team)
+    const ownerKey = member ? canvasStore.ownerKeyOf(storedMember) : undefined
+    if (member && !ownerKey) { failures.push('member provenance is unconfirmed; owner must confirm the full key first'); return [] }
     team = qualified.team
-    const ownerOk = (card: A2aPeerCard | undefined): boolean => qualified.owner === undefined || canvasOwnerFingerprint(card?.publicKey) === qualified.owner
+    const ownerOk = (card: A2aPeerCard | undefined): boolean => (qualified.owner === undefined || canvasOwnerFingerprint(card?.publicKey) === qualified.owner) && (member === undefined || card?.publicKey === ownerKey)
     const peers = resolutionPeers()
     const candidates: string[] = []
-    const cards = (await mapBounded(peers, CANDIDATE_CONCURRENCY, async peer => ({ peer, card: await fetch(peer) }))).map(entry => ownerOk(entry.card) ? entry : { peer: entry.peer, card: undefined })
+    const fetched = await mapBounded(peers, CANDIDATE_CONCURRENCY, async peer => ({ peer, card: await fetch(peer) }))
+    if (member && fetched.some(entry => entry.card && canvasOwnerFingerprint(entry.card.publicKey) === member.fingerprint && entry.card.publicKey !== ownerKey)) { failures.push('member owner fingerprint collision or key change; no payload sent'); return [] }
+    const cards = fetched.map(entry => ownerOk(entry.card) ? entry : { peer: entry.peer, card: undefined })
     // Check after fetching all cards: a seeded peer publishing the same id8
     // makes the caller handle ambiguous, so do not send a canvas payload.
     const sessions = scopedCanvasCaller === undefined ? undefined : localHandleResolver()
@@ -4067,6 +4167,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     }
     for (const entry of cards) {
       if (entry.card === undefined) continue
+      if (member && (entry.card.capabilities as { canvasMemberProvenance?: unknown })?.canvasMemberProvenance !== true) { failures.push('selected member host needs a provenance-capable upgrade'); continue }
       if (entry.card.team === team || sessionCandidateMatches(entry.card, team) || canvasCandidateMatches(entry.card, team, scopedCanvasCaller, resolveLocal)) candidates.push(entry.peer)
     }
     for (const { peer, outcome } of resolutions) {
@@ -4144,7 +4245,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           const card = await fetch(candidate)
           peerAsync = (card?.capabilities as { async?: unknown } | undefined)?.async === true
         }
-        const result = await dispatchPeerCandidate(candidate, splitCanvasOwner(request.handle).team, request.message, request.contextId, abort, session, request.delivery === 'async' && peerAsync, taskId, callbackAddress)
+        const result = await dispatchPeerCandidate(candidate, splitQualifiedMember(request.handle)?.handle ?? splitCanvasOwner(request.handle).team, request.message, request.contextId, abort, session, request.delivery === 'async' && peerAsync, taskId, callbackAddress)
         if (!result.ok) {
           // Idempotency verdicts (B3) are terminal, not failover: a replay
           // says the prior attempt at THIS peer stays authoritative —

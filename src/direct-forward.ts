@@ -3,6 +3,7 @@ import { DEFAULT_HOP_BUDGET, guardHeader, mintGuard } from './recursion-guard.ts
 import { briefOf, type OutboundBirth, type TaskLedger, type TaskRecord } from './task-ledger.ts'
 import { parseReceipt } from './receipt.ts'
 import { splitCanvasOwner } from './canvas-id.ts'
+import { splitQualifiedMember } from './canvas-member.ts'
 import { claimCovers, type TaskAuthorization } from './task-auth.ts'
 import type { A2aPeerCard, A2aRouteResult } from './types.ts'
 
@@ -55,8 +56,9 @@ export function createDirectForward(d: DirectForwardDeps) {
     if (request.guarded) return refuse('an inbound X-A2A-Guard is present; already forwarded')
     if (!request.localCliProof || !d.deposited(request.caller)) return refuse('caller is not a proven online local CLI deposit', publish)
     // #282 S2: candidates honour an owner-qualified id; scope, the peer, the receivers and the ledger see the plain team.
-    const plainTeam = splitCanvasOwner(request.team).team
-    const scope = await d.scope(request.caller, plainTeam)
+    const qualifiedMember = splitQualifiedMember(request.team)
+    const plainTeam = qualifiedMember?.handle ?? splitCanvasOwner(request.team).team
+    const scope = await d.scope(request.caller, qualifiedMember ? request.team : plainTeam)
     if (!scope.ok) return refuse('target is outside sender scope: ' + scope.error, `ask this host's operator to link ${request.team} here: drag it (or one of its members) into a canvas team on this host`)
     const failures: string[] = []
     const directory = await d.candidates(request.team, failures, request.caller)

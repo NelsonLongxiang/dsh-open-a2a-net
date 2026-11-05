@@ -10,6 +10,7 @@
 import { CANVAS_MEMBER_CAP, CANVAS_NAME_MAX, CANVAS_TEAM_CAP } from './canvas-store.ts'
 import type { A2aPeerCard } from './types.ts'
 import type { DirectoryTeamRow } from './tools/info.ts'
+import { splitQualifiedMember, qualifiedSessionMember } from './canvas-member.ts'
 
 type CanvasEntry = NonNullable<A2aPeerCard['canvasOrg']>[number]
 
@@ -53,8 +54,15 @@ export function canvasCandidateMatches(
   caller?: { id: string; handle: string },
   resolveLocal?: (ref: string) => string | undefined,
 ): boolean {
-  if (caller !== undefined && (resolveLocal?.(caller.handle) !== caller.id || peerPublishesSession(card, caller.handle))) return false
-  return advertisedCanvasTeams(card).some(entry => entry.team === team && (caller === undefined || entry.members.includes(caller.handle)))
+  return advertisedCanvasTeams(card).some(entry => {
+    if (entry.team !== team) return false
+    if (caller === undefined) return true
+    return entry.members.some(ref => {
+      const qualified=splitQualifiedMember(ref)
+      if (qualified) return qualified.handle===caller.handle && resolveLocal?.(ref)===caller.id
+      return ref===caller.handle && resolveLocal?.(ref)===caller.id && !peerPublishesSession(card,caller.handle)
+    })
+  })
 }
 
 /** A naked team string is unsafe when both a canvas and another face claim it. */
@@ -68,7 +76,7 @@ export function canvasTargetAmbiguous(
   const owners = cards.filter((card): card is A2aPeerCard => card !== undefined && advertisedCanvasTeams(card).some(entry => entry.team === team))
   if (owners.length === 0) return false
   if (caller !== undefined) {
-    if (resolveLocal?.(caller.handle) !== caller.id) return true
+    if (resolveLocal?.(caller.handle) !== caller.id && !owners.some(card=>canvasCandidateMatches(card,team,caller,resolveLocal))) return true
     const ownerCollision = owners.some(card => peerPublishesSession(card, caller.handle)
       && advertisedCanvasTeams(card).some(entry => entry.team === team && entry.members.includes(caller.handle)))
     if (ownerCollision) return true
@@ -116,7 +124,7 @@ export function peerDirectoryRows(card: A2aPeerCard, peer: string, includeCanvas
     // own-zone session stays visible even if its zone ends in /canvas.
     if (!sessionAliasAllowed(card, entry.team)) continue
     const declared = rosterOf.get(entry.team)
-    rows.push({ team: entry.team, session: card.session, name: entry.name, description: entry.description, origin, via: peer, ...(entry.workspace !== undefined ? { workspace: entry.workspace } : {}), ...(legacy ? { legacy } : {}), ...(declared !== undefined && declared.length > 0 ? { teams: declared } : {}) })
+    rows.push({ ...((card.capabilities as {canvasMemberProvenance?:unknown})?.canvasMemberProvenance===true && qualifiedSessionMember(entry.team,card.publicKey) ? {memberRef:qualifiedSessionMember(entry.team,card.publicKey)} : {}), team: entry.team, session: card.session, name: entry.name, description: entry.description, origin, via: peer, ...(entry.workspace !== undefined ? { workspace: entry.workspace } : {}), ...(legacy ? { legacy } : {}), ...(declared !== undefined && declared.length > 0 ? { teams: declared } : {}) })
   }
   const publishedSessions = new Set((card.sessionTeams ?? []).map(entry => entry.team))
   if (includeCanvas) for (const entry of advertisedCanvasTeams(card)) {

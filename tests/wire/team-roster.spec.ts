@@ -544,7 +544,7 @@ describe('a2a_teams output schema covers roster fields (!85 regression pin)', ()
     // pin follows the schema's new home (path-only change, same assertions).
     const source = readFileSync(join(process.cwd(), 'src', 'tools', 'info.ts'), 'utf8')
     const schemaStart = source.indexOf("name: 'a2a_teams'")
-    const schemaSection = source.slice(schemaStart, schemaStart + 4000)
+    const schemaSection = source.slice(schemaStart, source.indexOf('      presentCall:', schemaStart))
     expect(schemaSection).toContain('via:')
     expect(schemaSection).toContain('legacy:')
     expect(schemaSection).toContain('teams:')
