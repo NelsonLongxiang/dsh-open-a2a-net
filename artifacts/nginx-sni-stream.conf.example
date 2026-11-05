@@ -1,0 +1,29 @@
+# a2a-net-edge-stream
+# SNI split in front of Xray Reality. Raw TCP: this block does not terminate TLS
+# and does not speak HTTP to a2a-net. The named domain goes to nginx on
+# 127.0.0.1:8443; that http server's proxy_pass uses the NIC upstream.
+# Every other SNI, including clients that send none, goes to Xray Reality on
+# 127.0.0.1:2443. Reality serverNames must not include a2a-net-zxchkjzgsajdgas.sindox.top.
+# Do not enable proxy_protocol; both upstreams expect the original ClientHello.
+
+map $ssl_preread_server_name $a2a_sni_upstream {
+	a2a-net-zxchkjzgsajdgas.sindox.top a2a_nginx_tls;
+	default xray_reality;
+}
+
+upstream a2a_nginx_tls {
+	server 127.0.0.1:8443;
+}
+
+upstream xray_reality {
+	server 127.0.0.1:2443;
+}
+
+server {
+	listen 443;
+	listen [::]:443;
+	ssl_preread on;
+	proxy_pass $a2a_sni_upstream;
+	proxy_connect_timeout 5s;
+	proxy_timeout 1800s;
+}
