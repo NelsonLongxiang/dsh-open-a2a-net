@@ -5,8 +5,9 @@
  * surface in the state route, and keep join-gate semantics (membership
  * requires join; leave drops membership).
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'

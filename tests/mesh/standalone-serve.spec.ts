@@ -6,9 +6,10 @@
  * CLI's deposit and mailbox across its own restart (owner request 2026-11-04: the network must not
  * depend on a DSH instance staying up).
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { generateKeyPairSync } from 'node:crypto'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'

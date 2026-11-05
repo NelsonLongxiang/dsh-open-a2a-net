@@ -2,7 +2,8 @@
  * Peer-store unit tests: seeding, bounded growth, quality scoring, eviction,
  * seed immunity, and whole-file persistence semantics (slice 2).
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync } from '../temp-dirs.ts'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -253,6 +254,12 @@ describe('PeerStore node-identity dedup', () => {
     const snapshot = JSON.parse(readFileSync(path, 'utf8')) as { peers: { session?: string }[] }
     expect(snapshot.peers[0]?.session).toBe('node-1')
     expect(new PeerStore([], path).bySession('node-1')).toBe('http://a')
+    // #339: teardown drains the current write; a late fetch outcome cannot resurrect a removed home.
+    await first.close()
+    rmSync(dirname(path), { recursive: true, force: true, maxRetries: 10 })
+    first.noteSuccess('http://a'); first.offer('http://late')
+    await first.flush(); await first.close()
+    expect(existsSync(dirname(path))).toBe(false)
   })
 })
 

@@ -4,8 +4,9 @@
  * unsigned display metadata. Coverage includes same-host, cross-host poisoned
  * card titles, cold cache, and unknown callers.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'

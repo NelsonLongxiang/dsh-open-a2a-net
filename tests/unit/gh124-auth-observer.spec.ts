@@ -4,7 +4,8 @@
  * peer-org recheck, and the persisted rings (round trip, corrupt file
  * dropped whole, malformed entries dropped one by one). Observe mode only.
  */
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync } from '../temp-dirs.ts'
+import { chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'

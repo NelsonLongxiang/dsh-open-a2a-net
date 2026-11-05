@@ -6,7 +6,8 @@
  * cap trim, load-path trim) with ≥200 tasks; the negative proves the
  * identity catches a row deleted behind the counters' backs.
  */
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync } from '../temp-dirs.ts'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'

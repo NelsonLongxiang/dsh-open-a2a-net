@@ -5,9 +5,10 @@
  * throwaway HOME, and the "host" is a local stub that answers fixed JSON and
  * records what the CLI sent, so nothing here touches a real DSH or ~/.a2a.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { spawn } from 'node:child_process'
 import { createPrivateKey, createPublicKey, verify as edVerify } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'

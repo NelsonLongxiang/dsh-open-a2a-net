@@ -349,11 +349,12 @@ export class PeerStore {
    * re-seeded from config on every boot, and scores rebuild on contact.
    */
   private dirty = false
+  private closed = false
   private writeChain: Promise<void> = Promise.resolve()
   private pendingTimer: NodeJS.Timeout | undefined
 
   private persist(): void {
-    if (this.path === '') return
+    if (this.path === '' || this.closed) return
     this.dirty = true
     // Classic trailing debounce: one shared timer, reset on every change, so
     // a steady drip of outcomes still lands as one write after the last
@@ -362,26 +363,35 @@ export class PeerStore {
     if (this.pendingTimer !== undefined) clearTimeout(this.pendingTimer)
     const timer = setTimeout(() => {
       this.pendingTimer = undefined
-      if (!this.dirty) return
+      if (!this.dirty || this.closed) return
       this.dirty = false
-      this.writeChain = this.writeChain.then(async () => {
-        if (this.path === '') return
-        try {
-          await mkdir(dirname(this.path), { recursive: true })
-          const snapshot: PeerStoreSnapshot = {
-            peers: [...this.peers.values()].map(peer => ({ ...peer })),
-            evictions: [...this.evictions.entries()].map(([url, evictedAt]) => ({ url, evictedAt })),
-          }
-          await writeFile(this.path, JSON.stringify(snapshot), { mode: 0o600 })
-        } catch {
-          // An unwritable home must not break routing; the store degrades to memory-only.
-        }
-      })
+      this.writePending()
     }, this.persistDebounceMs)
     timer.unref?.()
     this.pendingTimer = timer
   }
 
+  private writePending(): void {
+    this.writeChain = this.writeChain.then(async () => {
+      if (this.path === '') return
+      try {
+        await mkdir(dirname(this.path), { recursive: true })
+        const snapshot: PeerStoreSnapshot = {
+          peers: [...this.peers.values()].map(peer => ({ ...peer })),
+          evictions: [...this.evictions.entries()].map(([url, evictedAt]) => ({ url, evictedAt })),
+        }
+        await writeFile(this.path, JSON.stringify(snapshot), { mode: 0o600 })
+      } catch { /* an unwritable home retains the existing memory-only posture */ }
+    })
+  }
+  /** Final teardown: drain once, then late peer responses cannot recreate this home. */
+  async close(): Promise<void> {
+    this.closed = true
+    if (this.pendingTimer !== undefined) clearTimeout(this.pendingTimer)
+    this.pendingTimer = undefined
+    if (this.dirty) { this.dirty = false; this.writePending() }
+    await this.writeChain
+  }
   /**
    * Await the last scheduled write (tests and teardown). Resolves when the
    * debounced write chain has settled with the current in-memory state.

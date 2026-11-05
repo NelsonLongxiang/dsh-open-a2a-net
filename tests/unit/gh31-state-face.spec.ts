@@ -8,7 +8,8 @@
  *      bounded to the archive, newest first) — the "已离开台账：已结算、
  *      放弃或撤回之一" ambiguity dies at the source.
  */
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync } from '../temp-dirs.ts'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'

@@ -4,7 +4,8 @@
  * never silently dropped. The review seat's recommendation, chief-endorsed.
  * L8 criterion: zero silently-dropped rows over any window.
  */
-import { mkdtempSync } from 'node:fs'
+
+import { mkdtempSync } from '../temp-dirs.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'

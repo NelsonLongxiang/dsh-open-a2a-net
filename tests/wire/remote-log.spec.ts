@@ -7,8 +7,9 @@
  * only, team handles resolved through the directory walk, honest
  * aggregation when every candidate fails.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs'
+import { mkdirSync, writeFileSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { zstdCompressSync } from 'node:zlib'

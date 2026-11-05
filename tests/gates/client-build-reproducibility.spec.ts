@@ -1,5 +1,6 @@
 /** Real bundler regression: identical inputs at unrelated filesystem roots yield identical bytes. */
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp } from '../temp-dirs.ts'
+import { cp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'

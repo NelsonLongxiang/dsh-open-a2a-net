@@ -3,8 +3,9 @@
  * priority), cross-team drop, and persistence round-trip — the same contract
  * family as group-store.spec.ts.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { CanvasStore, CANVAS_MEMBER_CAP, CANVAS_TEAM_CAP, isRemoteMemberRef, validRemoteMemberRef } from '../../src/canvas-store.ts'

@@ -6,7 +6,8 @@
  * ledger carries those facts from birth to archive and restores them only
  * in shape; an outbound local row keeps its in-process admission.
  */
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync } from '../temp-dirs.ts'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'

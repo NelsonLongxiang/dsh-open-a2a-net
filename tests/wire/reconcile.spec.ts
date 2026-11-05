@@ -8,8 +8,9 @@
  * Poll discipline: vi.waitFor retries while its callback THROWS, so every
  * predicate asserts with expect() instead of returning a boolean.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'

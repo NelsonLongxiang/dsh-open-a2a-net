@@ -1,6 +1,7 @@
 // @vitest-environment node
+import { mkdtempSync } from '../temp-dirs.ts'
 import { spawn } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
+
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'

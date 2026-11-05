@@ -1,4 +1,5 @@
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync } from '../temp-dirs.ts'
+import { writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { zstdCompressSync } from 'node:zlib'

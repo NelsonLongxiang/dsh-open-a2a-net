@@ -542,7 +542,7 @@ export function apply(ctx: Context, config: Config): void {
   }
   // Graceful disposal lands the debounced peer state on disk before a
   // restart reads it back (fiber teardown awaits effect disposers).
-  ctx.effect(() => () => peerStore.flush())
+  ctx.effect(() => () => peerStore.close())
   // Slice 3: an unset session derives from a per-home node id, and the
   // configured delegations become signed zone records on every card.
   const session = config.session === '' ? deriveSession(home) : config.session

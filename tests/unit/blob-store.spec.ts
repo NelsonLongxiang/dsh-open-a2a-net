@@ -3,8 +3,9 @@
  * dedup, grants (who, until when), capacity that never pushes out a live grant, fail-closed
  * restore, tamper check on read, name sanitizing and the reference line.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'

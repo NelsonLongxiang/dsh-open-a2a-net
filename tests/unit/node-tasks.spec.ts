@@ -8,8 +8,9 @@
  *   no walk-back of a finished state, unload, §5 truncation, the cap, and
  *   corrupt / hand-edited files.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { factOf, githubProbe, stateOf, type TaskFact } from '../../src/node-github.ts'

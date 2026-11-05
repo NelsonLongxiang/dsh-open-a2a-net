@@ -18,6 +18,14 @@
 build-layout 门禁与 nexus-stage 子套件。分层脚本供人按深度迭代；不要为了"快"把 L2 场景
 降级写成 L1 的 fake-peer 形态——那正是本次重构要消灭的盲区。
 
+### 临时目录所有权（#339）
+
+所有测试通过 `tests/temp-dirs.ts` 的同步/异步 mkdtemp helper 分配目录，不直接从 node:fs 引入分配器。helper 只记录自己真实返回的绝对路径，在文件级 afterAll（包括断言失败）逆序 `rmSync(...,{recursive:true,force:true,maxRetries:10})`，失败显式报错；不按前缀扫描系统临时目录，不删旧存量。文件级而非逐例是为了保留同一 spec 跨用例共享的 home/重启语义。fiber、socket、子进程仍须在原 finally/afterEach 先关闭，清理目录不能代替关闭资源。
+
+`pnpm verify` 现在经 `scripts/verify-temp-clean.mjs` 启动原配方 `verify:core`：创建独占空临时根，在整个默认并发进程树设置 TMPDIR/TEMP/TMP 三变量并禁用 Node 编译缓存；根测试、build-layout 与 Nexus 全部跑完后，**先检查剩余条目必须为0**，残留会把门禁置失败，再清理这个精确 owned 根。禁用缓存是避免工具链自身在临时根生成 node-compile-cache，不是过滤残留名单。原断言、用例数、并发、timeout 和 skip 不改。
+
+可单独用 `node scripts/verify-temp-clean.mjs -- <executable> <args…>` 包住测试命令。该门禁既保留原子进程失败，也报告清理结果；强杀整个进程/系统宕机不能保证 finally，外层验证器独立临时根及收尾删除仍作兜底。macOS/Windows 都必须运行并核对 `[temp-clean] entries:0`，同名默认变量不足以推定另一平台已通过。
+
 ## L2 mesh 层契约（本次新增的核心）
 
 **为什么它是跨机器的等价物**：跨机协议路径的全部要素——独立节点身份（独立签名密钥）、

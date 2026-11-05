@@ -4,8 +4,9 @@
  * 409/-32003/replay:true without re-steering, key conflicts answer
  * 409/-32002, expiry re-opens the window, and every path is total.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'

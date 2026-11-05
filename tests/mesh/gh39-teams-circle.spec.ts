@@ -6,8 +6,9 @@
  * With teamScopeInfo on (default), [this host] session rows now follow the
  * CALLER's collaboration circle; the host's own GUI plane stays full.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'

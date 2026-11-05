@@ -5,12 +5,13 @@
  * referenced file from the home host with the CLI's own envelope, checks it, and saves it. A file
  * on another host is refused up front: a CLI identity proves itself only on its home host.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { createHash, createPrivateKey } from 'node:crypto'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { bootNode, reservePort, steerText, tmpHome } from './harness.ts'

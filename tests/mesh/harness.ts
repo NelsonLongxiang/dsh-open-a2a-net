@@ -7,9 +7,10 @@
  * (one node + fake or stubbed peers) cannot see. Layer contract:
  * docs/testing-layers.md.
  */
+import { mkdtempSync, cleanupBeforeTempDirs } from '../temp-dirs.ts'
 import { createServer, type Server } from 'node:http'
 import { generateKeyPairSync, createPrivateKey, createPublicKey } from 'node:crypto'
-import { mkdtempSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import * as net from 'node:net'
@@ -196,6 +197,7 @@ export async function bootNode(options: MeshNodeOptions): Promise<MeshNode> {
   const home = options.home ?? tmpHome()
   const reply: ReplyFn = options.reply ?? ((message) => `ok from ${options.name}: ${message}`)
   const ctx = new Context()
+  cleanupBeforeTempDirs(() => ctx.fiber.dispose())
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(TimerService)
