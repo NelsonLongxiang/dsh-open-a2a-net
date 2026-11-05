@@ -62,7 +62,7 @@ import { createFloodGuard } from './flood-guard.ts'
 import { createQueueGuard, queueFullRefusal, QUEUE_FULL_NEXT, WIRE_ERROR_QUEUE_FULL } from './queue-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
-import { isRootOriginUrl, sameMountedUrl, signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
+import { isRootOriginUrl, sameMountedUrl, originClaimTeamWarning, signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
 import { AuthObserver, type AffectedEntry } from './auth-observer.ts'
 import { allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry, type RemoteCliProof, recheckRemoteCliAuthorization } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
@@ -260,6 +260,8 @@ export function apply(ctx: Context, config: Config): void {
   })
   // F4 slice: say the quiet part at boot instead of leaving the exposure to
   // be discovered from a ledger full of unexplained steering.
+  const teamWarning = originClaimTeamWarning(config.team)
+  if (teamWarning !== undefined) logger.warn(teamWarning)
   const exposure = directDeliveryExposure(config.peers, config.apiKey)
   if (exposure.warning !== undefined) logger.warn(exposure.warning)
   // gh#9 control-face norm (docs/protocol/delivery-origin-auth.md §10): on a
@@ -1768,11 +1770,14 @@ export function apply(ctx: Context, config: Config): void {
         // MINIMAL discovery card.
         handler: async (req: IncomingMessage, res: ServerResponse) => {
           const send = (named: boolean, body_: string): void => {
-            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body_) })
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body_), 'Cache-Control': 'private, no-store' })
             res.end(body_)
             void named
           }
           const claim = await verifyOriginClaim(req)
+          // #312: signed discovery is a reduced face; it never requests a full-card callback.
+          const discoveryOnly = new URL(req.url ?? '/', 'http://x').searchParams.get('discovery') === '1'
+
           // W3 (#18 half-side, 0.6.25): a VERIFIED envelope proves the
           // caller holds a real node key — it does not prove a relationship
           // with THIS host. The full card (sessionTeams/rosters =
@@ -1783,14 +1788,17 @@ export function apply(ctx: Context, config: Config): void {
           // Interaction with the OriginClaim narrowing: the caller is a
           // bare zone; linkage judges that zone face against our canvas
           // remote refs, joined handles, and the caller card's peers.
-          const named = claim.ok && callerLinkedToThisHost(claim.caller, claim.ok ? claim.callerUrl : '', claim.ok ? claim.card : undefined)
+          const linkedCaller = claim.ok && callerLinkedToThisHost(claim.caller, claim.callerUrl, claim.card)
+          const showPeers = claim.ok && (configuredSeedCaller(claim.callerUrl) || linkedCaller)
+          const named = !discoveryOnly && linkedCaller
           // gh#7 G1 (review-seat R2 ruling): the card serves two faces.
           // A NAMED caller — ?caller_session= or the X-A2A-Caller header in
           // the zone or zone/id8 shape — gets the FULL card. An anonymous
           // fetcher (or an invalid shape, fail-closed) gets the MINIMAL
-          // card: name/team/session/capabilities/records/peers/signature
-          // stay (discovery, gossip, delegation, capability negotiation
-          // unbroken), while sessionTeams/teamMemberships/lanIp are
+          // card: name/team/session/capabilities/records/signature stay.
+          // #312/#324 F1: peers requires a verified caller that we explicitly seed
+          // or already link; unrelated self-signed strangers get no topology.
+          // Meanwhile sessionTeams/teamMemberships/lanIp are
           // omitted — session membership and rosters are collaboration
           // facts, not discovery facts. Named determination does NOT
           // require a shared team: demanding roster symmetry before the
@@ -1846,7 +1854,8 @@ export function apply(ctx: Context, config: Config): void {
             entry.teams.map(team => ({ node: `${config.team}/${id8(entry.session)}`, team })))
           const body = JSON.stringify({
             ...currentCard,
-            peers: peerStore.list(),
+            // #324 F1: possession of an arbitrary self-signed identity is not a local relationship.
+            ...(showPeers ? { peers: peerStore.list() } : {}),
             ...(named && sessionTeams.length > 0 ? { sessionTeams } : {}),
             ...(named && memberships.length > 0 ? { teamMemberships: memberships } : {}),
             // gh#41 fleet planning (owner ruling: any peer composes and
@@ -2305,8 +2314,16 @@ export function apply(ctx: Context, config: Config): void {
     boundMissRecent.unshift({ ...row, count: row.count + 1, lastAt: Date.now() })
     boundMissRecent.length = Math.min(boundMissRecent.length, 16)
   }
-  function verifyOriginClaim(req: IncomingMessage, options?: { readonly cli?: boolean; readonly rawBody?: Uint8Array }): Promise<OriginClaimVerdict> {
-    return verifyOriginClaimOf(req, {
+  /** Our configured seeds anchor origin claims; mounted claims require exact mount matching. */
+  function configuredSeedCaller(callerUrl: string): boolean {
+    return config.peers.some(peer => {
+      try { return isRootOriginUrl(callerUrl) ? new URL(peer).origin === new URL(callerUrl).origin : sameMountedUrl(peer, callerUrl) } catch { return false }
+    })
+  }
+  // #312: topology-only callbacks must never replace a full session/roster card cache entry.
+  const signedDiscoveryPeers = new Map<string, { at: number; expiresAt: number; key: string; peers: readonly string[] }>()
+  async function verifyOriginClaim(req: IncomingMessage, options?: { readonly cli?: boolean; readonly rawBody?: Uint8Array }): Promise<OriginClaimVerdict> {
+    const claim = await verifyOriginClaimOf(req, {
       cardCache,
       fetch: fetchImpl,
       audiences: [ownCardUrl, ...config.originClaimAudiences ?? []],
@@ -2318,6 +2335,29 @@ export function apply(ctx: Context, config: Config): void {
       ...(options?.cli === true ? { cliDeposit: cliDepositCard } : {}),
       ...(options?.rawBody !== undefined ? { rawBody: options.rawBody } : {}),
     })
+    // #312: recover bilateral seed evidence from a signed, reduction-only card,
+    // never from a caller-selected unseeded URL and never recursively.
+    const discovery = new URL(req.url ?? '/', 'http://x').searchParams.get('discovery') === '1'
+    if (!discovery && claim.ok && claim.cli !== true && claim.card.peers === undefined && configuredSeedCaller(claim.callerUrl)) {
+      const discoveryKey = new URL(claim.callerUrl).href.replace(/\/$/, '')
+      const known = signedDiscoveryPeers.get(discoveryKey)
+      if (known !== undefined && known.key === claim.card.publicKey && known.expiresAt > Date.now() && Date.now() - known.at < config.cardCacheTtlMs) return { ...claim, card: { ...claim.card, peers: known.peers } }
+      const target = claim.callerUrl.replace(/\/$/, '') + '/.well-known/agent-card.json?discovery=1'
+      try {
+        const response = await peerFetch(target, { method: 'GET', headers: peerRequestHeaders(target, 'GET'), redirect: 'manual', signal: AbortSignal.timeout(5_000) })
+        if (response.ok) {
+          const verified = verifyCard(JSON.parse(await response.text()), Date.now())
+          if (verified.ok && verified.card.publicKey === claim.card.publicKey && verified.card.team === claim.card.team) {
+            if (verified.card.peers !== undefined) {
+              signedDiscoveryPeers.set(discoveryKey, { at: Date.now(), expiresAt: verified.card.expiresAt, key: verified.card.publicKey, peers: verified.card.peers })
+              if (signedDiscoveryPeers.size > 64) signedDiscoveryPeers.delete(signedDiscoveryPeers.keys().next().value!)
+            }
+            return { ...claim, card: { ...claim.card, ...(verified.card.peers !== undefined ? { peers: verified.card.peers } : {}) } }
+          }
+        }
+      } catch { /* unavailable refresh keeps bilateral-link checks closed */ }
+    }
+    return claim
   }
 
   /**

@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
 import { generateKeyPairSync, sign as edSign } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import { signCard } from '../../src/card.ts'
-import { isRootOriginUrl, requestAudiences, signOriginClaim, unboundCanonical, verifyOriginClaim, bodyBoundCanonical, originBodySha256 } from '../../src/origin-claim.ts'
+import { originClaimTeamWarning, isRootOriginUrl, requestAudiences, signOriginClaim, unboundCanonical, verifyOriginClaim, bodyBoundCanonical, originBodySha256 } from '../../src/origin-claim.ts'
 import type { CardCacheEntry } from '../../src/runtime.ts'
 import type { A2aPeerCard } from '../../src/types.ts'
 
@@ -52,6 +52,10 @@ const strip = (headers: Record<string, string>, ...names: string[]): Record<stri
   Object.fromEntries(Object.entries(headers).filter(([k]) => !names.includes(k)))
 
 describe('OriginClaim audience binding', () => {
+  it('#312 warns for an unsupported host team without changing the caller shape gate', () => {
+    for (const team of ['dsh', 'zone-canvas', 'ABC-123']) expect(originClaimTeamWarning(team)).toBeUndefined()
+    for (const team of ['', 'zone/canvas', 'space zone', '控制字符\n']) expect(originClaimTeamWarning(team)).toContain('Use ^[a-z0-9-]+$')
+  })
   it('#311 a CGNAT callerUrl needs a card cached at that exact URL or a reachable callback; a LAN alias cache is not enough', async () => {
     const cgnat = 'http://100.75.181.127:13080'
     const headers = signOriginClaim({ url: OWN + '/a2a/direct', method: 'POST' }, { caller: 'dsh', callerUrl: cgnat, privateKey, unbound: false, now: Date.now() })

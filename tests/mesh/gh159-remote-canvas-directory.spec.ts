@@ -119,16 +119,16 @@ describe('gh#159 remote canvas discovery and routing', () => {
     } finally { await a.dispose(); await b.dispose() }
   }, 30_000)
 
-  it('lists and routes a non-conflicting session in a nested canvas zone', async () => {
+  it('lists and routes a non-conflicting session on a valid host zone (legacy slash host migrated by #312)', async () => {
     const pa = await reservePort()
     const pb = await reservePort()
     const nestedId = 'session-abcdef1233334444'
     const a = await bootNode({ name: 'A', session: 'gh159-nested-a', team: 'home', agentId: A_ID, sessionNodes: true, teamScopeInfo: false, teamScopeRouting: false, port: pa, peers: [base(pb)] })
-    const b = await bootNode({ name: 'B', session: 'gh159-nested-b', team: 'zone/canvas', agentId: nestedId, sessionNodes: true, teamScopeInfo: false, teamScopeRouting: false, port: pb, peers: [base(pa)] })
+    const b = await bootNode({ name: 'B', session: 'gh159-nested-b', team: 'zone-canvas', agentId: nestedId, sessionNodes: true, teamScopeInfo: false, teamScopeRouting: false, port: pb, peers: [base(pa)] })
     try {
       await post(a, '/__dsh_a2a/join', { id: A_ID })
       await post(b, '/__dsh_a2a/join', { id: nestedId })
-      const team = 'zone/canvas/abcdef12'
+      const team = 'zone-canvas/abcdef12'
       const listed = await a.ctx.tools.get('a2a_teams')!.execute({ query: team }, runContext(a.agents.agent)) as Directory
       expect(listed.teams.some(row => row.team === team && row.via === b.baseUrl)).toBe(true)
       const result = await a.ctx.tools.get('a2a_route')!.execute({ team, message: 'nested zone session' }, runContext(a.agents.agent)) as Route

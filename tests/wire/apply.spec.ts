@@ -1166,12 +1166,16 @@ describe('a2a plugin decentralized routing (peers)', () => {
   it('discovers a second node through a seed card\'s referrals', async () => {
     const nodeB = await mountPeerNode({ team: 'analysis' })
     // Node A's store seeds B, so A's served card carries B's URL as a referral.
-    const nodeA = await mountPeerNode({ team: 'team-a', peers: [nodeB.baseUrl] })
+    const seedUrls = [nodeB.baseUrl]
+    const nodeA = await mountPeerNode({ team: 'team-a', peers: seedUrls })
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(TimerService)
-    apply(ctx, makeConfig({ peers: [nodeA.baseUrl], dshHome: tmpHome() }))
+    // #312: referral discovery requires a real signed caller, not an agent-less anonymous client.
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    seedUrls.push('http://127.0.0.1:' + (ctx as unknown as { webServer: WebServer }).webServer.port)
+    apply(ctx, makeConfig({ announce: true, peers: [nodeA.baseUrl], dshHome: tmpHome() }))
     try {
       const teams = ctx.tools.get('a2a_teams')
       // The first call knows only the seed; B joins the store through A's card.
@@ -1190,7 +1194,8 @@ describe('a2a plugin decentralized routing (peers)', () => {
 
   it('peer boundary model: peerAllowlist admits matching referral hosts only (three entry forms)', async () => {
     const nodeB = await mountPeerNode({ team: 'trusted-referral' })
-    const nodeA = await mountPeerNode({ team: 'team-a', peers: [nodeB.baseUrl] })
+    const seedUrls = [nodeB.baseUrl]
+    const nodeA = await mountPeerNode({ team: 'team-a', peers: seedUrls })
     const trustedHost = new URL(nodeB.baseUrl).host
     const teamsCall = async (ctx: Context): Promise<{ ok: boolean; teams: { team: string }[] }> =>
       await ctx.tools.get('a2a_teams')?.execute({}, runContext()) as { ok: boolean; teams: { team: string }[] }
@@ -1199,7 +1204,10 @@ describe('a2a plugin decentralized routing (peers)', () => {
       await ctx.plugin(SystemPrompt)
       await ctx.plugin(ToolRuntime)
       await ctx.plugin(TimerService)
-      apply(ctx, makeConfig({ peers: [nodeA.baseUrl], dshHome: tmpHome(), peerAllowlist: allowlist }))
+      await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+      // Explicit provider-side seed grants this caller the referral list (#324 F1).
+      seedUrls.push('http://127.0.0.1:' + (ctx as unknown as { webServer: WebServer }).webServer.port)
+      apply(ctx, makeConfig({ announce: true, peers: [nodeA.baseUrl], dshHome: tmpHome(), peerAllowlist: allowlist }))
       return ctx
     }
     try {
@@ -1236,14 +1244,17 @@ describe('a2a plugin decentralized routing (peers)', () => {
 
   it('keeps discovered peers across a restart through peers.json', async () => {
     const nodeB = await mountPeerNode({ team: 'analysis' })
-    const nodeA = await mountPeerNode({ team: 'team-a', peers: [nodeB.baseUrl] })
+    const seedUrls = [nodeB.baseUrl]
+    const nodeA = await mountPeerNode({ team: 'team-a', peers: seedUrls })
     const home = tmpHome()
     const mountClient = async (): Promise<Context> => {
       const ctx = new Context()
       await ctx.plugin(SystemPrompt)
       await ctx.plugin(ToolRuntime)
       await ctx.plugin(TimerService)
-      apply(ctx, makeConfig({ peers: [nodeA.baseUrl], dshHome: home }))
+      await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+      seedUrls.push('http://127.0.0.1:' + (ctx as unknown as { webServer: WebServer }).webServer.port)
+      apply(ctx, makeConfig({ announce: true, peers: [nodeA.baseUrl], dshHome: home }))
       return ctx
     }
     try {

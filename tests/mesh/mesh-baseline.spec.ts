@@ -70,8 +70,9 @@ describe('mesh baseline — real cross-machine closed loops', () => {
   // Scope-off: This baseline fixture tests discovery and receipt transport with no operator team roster.
   it('gh#8 N9: a third node is learned through a middle peer — visible via gossip, but routable only when seeded (or via the migration flag)', async () => {
     const cargo = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'cargo', session: 'mesh-cargo', team: 'cargo' })
-    const relay = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'relay', session: 'mesh-relay', team: 'relay', peers: [cargo.baseUrl] })
-    const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-alpha', team: 'alpha', teamScopeInfo: false, peers: [relay.baseUrl] })
+    const alphaPort = await reservePort()
+    const relay = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'relay', session: 'mesh-relay', team: 'relay', peers: [cargo.baseUrl, 'http://127.0.0.1:' + alphaPort] })
+    const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-alpha', team: 'alpha', port: alphaPort, teamScopeInfo: false, peers: [relay.baseUrl] })
     try {
       // The search pass chases one referral hop: relay's card offers cargo.
       // VISIBILITY still rides the whole tracked set (gh#8 scoped the fix
@@ -91,7 +92,7 @@ describe('mesh baseline — real cross-machine closed loops', () => {
 
       // The migration flag restores the legacy whole-store basis (the
       // sweep first learns cargo through relay's referral, as originally).
-      const alphaLegacy = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-alpha', team: 'alpha', teamScopeInfo: false, peers: [relay.baseUrl], referralTeamResolution: true })
+      const alphaLegacy = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-alpha', team: 'alpha', port: alphaPort, teamScopeInfo: false, peers: [relay.baseUrl], referralTeamResolution: true })
       await alphaLegacy.ctx.tools.get('a2a_teams')?.execute({ query: 'cargo' }, runContext())
       const legacy = await alphaLegacy.ctx.tools.get('a2a_route')?.execute({ team: 'cargo', message: 'via gossip' }, runContext()) as { ok: boolean; reply?: string }
       expect(legacy.ok).toBe(true)

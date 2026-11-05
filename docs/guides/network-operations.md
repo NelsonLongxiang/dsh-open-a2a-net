@@ -12,7 +12,7 @@
 - **peer 集合**：`peers: [<种子 URL>]` 配置出发，卡片 referral 扩散学习（上限 30、质量评分、持久化 `<home>/a2a/peers.json`；种子永不驱逐）。评分驱逐的地址进入 **24h 冷却**（gh#46）：冷却期内再被引荐一律拒收，防止死地址经他人卡片反复回流。
 - **发布**：`announce: true` 发布本节点卡片（`/.well-known/agent-card.json`）。
 - **zone 委派**：`delegates` 发布签名命名记录，名字可穿 zone 解析（≤5 跳，成环失败关闭）。
-- **卡片双面**（0.6.21+ G1）：匿名取卡得**最小发现面**（name/team/session/capabilities/records/peers/签名）；全量面（sessionTeams/teamMemberships/lanIp）需 **OriginClaim 信封**（`X-A2A-Caller/-Url/-Ts/-Sig`，卡钥签名）且**验签 ∧ 链接**双过（0.6.23-25：链接=同宿成员/canvas 句柄 ref/双边互种——单边自申报不成链接）。
+- **卡片双面**（0.6.21+ G1）：匿名取卡得**最小发现面**（name/team/session/capabilities/records/签名，不含 peers）；peers 引荐只向通过 OriginClaim 验签且被本机显式 seed 或已链接的调用方提供（#312/#324 F1，单纯持有自签名私钥不够）；全量面（sessionTeams/teamMemberships/lanIp）需 **OriginClaim 信封**（`X-A2A-Caller/-Url/-Ts/-Sig`，卡钥签名）且**验签 ∧ 链接**双过（0.6.23-25：链接=同宿成员/canvas 句柄 ref/双边互种——单边自申报不成链接）。
 
 ### 应用方法
 配置面：a2a 行 `peers`（种子）+ `announce: true`（发布）+ `apiKey`（出回环必设）。发现面：`a2a_teams`（模型工具）或 state 面（Web）读目录。
