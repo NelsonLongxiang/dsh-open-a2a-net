@@ -3,8 +3,8 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "34c2213328c9f272c1f8fb91c483f6a6487c311bf6da24130066d629ef9a718a",
-    "src/faces/admin.ts": "962b282cf96fb33a78de68d5d7496c7da0e0b03ce262f80cdf021e3c22d4896c",
+    "src/index.ts": "c9dddef140038f5cfa2007354f372fd27d18734e453d2ae05e516726ab81b869",
+    "src/faces/admin.ts": "eabae32c57d67dace98d426598da37b622ee0c69b4351b8a750b13e151a47ecc",
     "src/canvas-store.ts": "1c6788cade4a0825212d220f22f89e56d46b09c029236ddd06d1df7df8ec0502",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
     "src/cli-deposit.ts": "8b8b714d8b47ee11c5518e51d08ea31cc588a29bc4eb73843bb2239f880e718a",
@@ -63,7 +63,7 @@
     {
       "page": "p1-arch",
       "cell": "b3",
-      "ref": "src/index.ts:2446",
+      "ref": "src/index.ts:2466",
       "expect": "function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {"
     },
     {
@@ -105,7 +105,7 @@
     {
       "page": "p1-arch",
       "cell": "c1",
-      "ref": "src/index.ts:1795",
+      "ref": "src/index.ts:1797",
       "expect": "path: '/.well-known/agent-card.json',"
     },
     {
@@ -135,19 +135,19 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:560",
+      "ref": "src/faces/admin.ts:565",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:180",
+      "ref": "src/faces/admin.ts:182",
       "expect": "path: '/__dsh_a2a/state',"
     },
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:2811",
+      "ref": "src/index.ts:2831",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -189,7 +189,7 @@
     {
       "page": "p1-arch",
       "cell": "d7",
-      "ref": "src/faces/admin.ts:332",
+      "ref": "src/faces/admin.ts:334",
       "expect": "activity: recentActivity.slice(),"
     },
     {
@@ -225,7 +225,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:3664",
+      "ref": "src/index.ts:3684",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -267,7 +267,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3111",
+      "ref": "src/index.ts:3131",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
@@ -279,13 +279,13 @@
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2158",
+      "ref": "src/index.ts:2160",
       "expect": "void runReceiptLadder("
     },
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2109",
+      "ref": "src/index.ts:2111",
       "expect": "function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {"
     },
     {
@@ -297,7 +297,7 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/admin.ts:129",
+      "ref": "src/faces/admin.ts:131",
       "expect": "export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void {"
     },
     {
