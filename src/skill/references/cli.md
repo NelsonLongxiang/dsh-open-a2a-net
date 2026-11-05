@@ -151,6 +151,7 @@ Files do not go through session messages: use the file channel below, never JPFI
 - The host's state face totals both losses for every handle as
   `cliMailbox: {dropped, truncated}`.
 - `a2a-net inbox` lists the whole mailbox.
+- A `--sync` route whose reply reached the CLI still gets the target's receipt later. The home keeps it in full but marks it `dup: "sync-answered"`; `inbox` and the hook fold it to one line, and `--json` shows the whole row. The mark lives in the home's memory for an hour; after a home restart the receipt arrives unmarked (#298).
 - `inbox --new [--peek]` shows unread mail, oldest first. "Unread" is a local
   cursor (`$A2A_CLI_HOME/inbox.cursor`, tied to the handle) that advances
   unless `--peek`. On a host with `seq` the cursor is the last seq read:

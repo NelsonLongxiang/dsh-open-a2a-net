@@ -171,6 +171,38 @@ export function settlerClaimFields(claim: { ok: boolean; cli?: true; callerUrl?:
  * @param webServer - the settled host web server.
  * @param d - the captures listed on {@link WireDeps}.
  */
+/** #298: how long, and how many, sync-answered forwards are remembered for marking their duplicate receipt. */
+export const SYNC_ANSWERED_TTL_MS = 3_600_000
+export const SYNC_ANSWERED_CAP = 256
+
+/**
+ * #298: forwards whose COMPLETED sync answer was fully written back to the CLI that sent them. A receipt that
+ * later lands in that CLI's mailbox for the same task is marked a duplicate — never dropped. In memory only:
+ * after a restart the receipt arrives unmarked, which is today's behaviour.
+ */
+export class SyncAnswered {
+  private readonly rows = new Map<string, { handle: string; at: number }>()
+  constructor(private readonly now: () => number = Date.now) {}
+  note(taskId: string, handle: string): void {
+    this.sweep()
+    this.rows.delete(taskId)
+    this.rows.set(taskId, { handle, at: this.now() })
+    while (this.rows.size > SYNC_ANSWERED_CAP) this.rows.delete(this.rows.keys().next().value!)
+  }
+  /** True once for a task answered to exactly this handle; the row is consumed. */
+  take(taskId: string, handle: string): boolean {
+    this.sweep()
+    const row = this.rows.get(taskId)
+    if (row === undefined || row.handle !== handle) return false
+    this.rows.delete(taskId)
+    return true
+  }
+  private sweep(): void {
+    const cutoff = this.now() - SYNC_ANSWERED_TTL_MS
+    for (const [taskId, row] of this.rows) if (row.at <= cutoff) this.rows.delete(taskId)
+  }
+}
+
 export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
   const {
     ctx,
@@ -222,6 +254,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     nativeTeamsRound,
     routeIntoAgent,
   } = d
+  const syncAnswered = new SyncAnswered()
   // gh#45 CLI 户口卡面 (peer face, unsigned card serve): the deposited
   // CLI's SIGNED card is served verbatim under its own base URL — an
   // OriginClaim verification of a CLI envelope fetches exactly here
@@ -732,7 +765,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // keeps the idempotency claim (above) exactly as for sessions.
           const cliRow = cliDeposits.get(team)
           if (cliRow !== undefined) {
-            cliDeposits.mail(team, caller, `${directHeader(caller)}\n\n${message}`)
+            const answered = parseReceipt(message)
+            cliDeposits.mail(team, caller, `${directHeader(caller)}\n\n${message}`, answered !== null && syncAnswered.take(answered.taskId, team) ? 'sync-answered' : undefined)
             recordActivity('in', team, caller, true)
             logger.info(`a2a: cli mailbox delivery for ${team} (from ${caller})`)
             const note = `delivered to the mailbox of ${team} — the CLI polls while online`
@@ -758,6 +792,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             if (!result.ok && result.code !== -32005) idempotencyStore.recordOutcome(taskId, { status: 'failed', error: failure })
             else if (result.ok && result.task_status === 'TASK_STATE_COMPLETED') idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: result.reply })
             const payload = JSON.stringify(result.ok ? { routed: true, ...(result.task_status === 'TASK_STATE_DELIVERED' ? { delivered: true } : { result: { text: result.reply } }), team, task_id: taskId, context_id: contextId, task_status: result.task_status, consumed: result.consumed, bridge: result.bridge, receipt: result.receipt, forwarded: true } : { error: failure, code: result.code ?? -32000, receipt: result.receipt, task_id: taskId, team, task_status: result.code === -32005 ? 'TASK_STATE_DELIVERED' : 'TASK_STATE_FAILED', ...(result.next !== undefined ? { next: result.next } : {}) })
+            // #298: only an answer the CLI was actually handed marks its later receipt a duplicate ('finish' never
+            // fires when the CLI gave up and closed the socket first).
+            if (result.ok && result.task_status === 'TASK_STATE_COMPLETED' && claim.ok && claim.cli === true && claim.caller === caller) res.once('finish', () => syncAnswered.note(taskId, caller))
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload)
           }
           // wait:false delivers without the final-reply hold: steer resolves

@@ -310,6 +310,27 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
       expect(await post(a, '/__dsh_a2a/canvas', { action: 'cli-home-options', name: 'ops', id: handle })).toMatchObject({ ok: true, held: true, homes: [] })
     } finally { await a.dispose(); await c.dispose() }
   }, 20000)
+  it('#298 the receipt of a sync-answered forward stays in the mailbox in full, marked a duplicate and folded by the CLI; an async one is not', async () => {
+    const { a, b, home } = await setup()
+    try {
+      const synced = await cli(home, ['route', targetHandle, 'sync request', '--task', 'dup-sync', '--sync'])
+      expect(synced.code, synced.stderr).toBe(0)
+      expect(synced.stdout).toContain('roundtrip completed at B')
+      expect((await cli(home, ['route', targetHandle, 'async request', '--task', 'dup-async'])).code).toBe(0)
+      const mailOf = async (task: string): Promise<any[]> => ((await post(a, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle })).mail as any[]).filter(m => String(m.text).includes('[A2A receipt] task ' + task))
+      await vi.waitFor(async () => { expect(await mailOf('dup-sync')).toHaveLength(1); expect(await mailOf('dup-async')).toHaveLength(1) }, { timeout: 9000, interval: 80 })
+      const [dup] = await mailOf('dup-sync'), [fresh] = await mailOf('dup-async')
+      expect(dup).toMatchObject({ dup: 'sync-answered' })
+      expect(dup.text).toContain('roundtrip completed at B') // kept in full
+      expect(fresh.dup).toBeUndefined()
+      const inbox = await cli(home, ['inbox'])
+      expect(inbox.code, inbox.stderr).toBe(0)
+      const line = (task: string): string => inbox.stdout.split('\n').find(l => l.includes('task ' + task)) ?? ''
+      expect(line('dup-sync')).toContain('duplicate receipt')
+      expect(line('dup-async')).not.toContain('duplicate receipt')
+      expect((await cli(home, ['inbox', '--json'])).stdout).toContain('"dup": "sync-answered"')
+    } finally { await a.dispose(); await b.dispose() }
+  }, 30000)
   for (const canvas of [false, true]) it((canvas ? 'canvas' : 'session') + ': automatic target-member receipt settles A and is readable by shipped CLI inbox', async () => {
     const { a, b, home } = await setup()
     const task = canvas ? 'direct-receipt-canvas' : 'direct-receipt-session'
