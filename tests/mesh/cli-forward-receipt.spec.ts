@@ -331,6 +331,24 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
       expect((await cli(home, ['inbox', '--json'])).stdout).toContain('"dup": "sync-answered"')
     } finally { await a.dispose(); await b.dispose() }
   }, 30000)
+  for (const sync of [true, false]) it(`#298 review F1: a ${sync ? 'sync' : 'default'} route to a remote CLI mailbox gets a placeholder; the later real receipt is never marked a duplicate`, async () => {
+    const { a, b, home } = await setup()
+    try {
+      const peerKey = generateKeyPairSync('ed25519').privateKey, peerHandle = 'peer-cli/0123456789abcdef', task = 'cli2cli-' + String(sync)
+      const peerCard = JSON.stringify(signCard({ name: 'peer-cli', session: 'cli-peer', team: peerHandle, capabilities: { route: true, async: true }, expiresAt: Date.now() + 172800000 }, peerKey))
+      expect((await post(b, '/__dsh_a2a/cli-deposit', { action: 'publish', card: peerCard })).ok).toBe(true)
+      await post(a, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: peerHandle, home: b.baseUrl })
+      await post(b, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: peerHandle })
+      const routed = await cli(home, ['route', peerHandle, 'what is 2+2?', '--task', task, ...(sync ? ['--sync'] : [])])
+      expect(routed.code, routed.stderr).toBe(0)
+      await signedPost(a, b.home, 'beta', b.baseUrl, { team: handle, caller_session: peerHandle, task_id: 'rcpt-' + task, message: `[A2A receipt] task ${task} completed\nTHE REAL ANSWER IS 4` })
+      await signedPost(a, b.home, 'beta', b.baseUrl, { team: handle, caller_session: targetHandle, task_id: 'rcpt2-' + task, message: `[A2A receipt] task ${task} completed\nfrom another sender` })
+      const mail = ((await post(a, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle })).mail as any[]).filter(m => String(m.text).includes('task ' + task))
+      expect(mail.length).toBeGreaterThan(0)
+      for (const row of mail) expect(row.dup).toBeUndefined()
+      expect((await cli(home, ['inbox'])).stdout).not.toContain('duplicate receipt')
+    } finally { await a.dispose(); await b.dispose() }
+  }, 30000)
   for (const canvas of [false, true]) it((canvas ? 'canvas' : 'session') + ': automatic target-member receipt settles A and is readable by shipped CLI inbox', async () => {
     const { a, b, home } = await setup()
     const task = canvas ? 'direct-receipt-canvas' : 'direct-receipt-session'

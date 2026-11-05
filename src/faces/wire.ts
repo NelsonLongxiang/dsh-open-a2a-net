@@ -176,24 +176,25 @@ export const SYNC_ANSWERED_TTL_MS = 3_600_000
 export const SYNC_ANSWERED_CAP = 256
 
 /**
- * #298: forwards whose COMPLETED sync answer was fully written back to the CLI that sent them. A receipt that
- * later lands in that CLI's mailbox for the same task is marked a duplicate — never dropped. In memory only:
- * after a restart the receipt arrives unmarked, which is today's behaviour.
+ * #298: forwards whose final sync answer — the member's own reply, not a delivered/mailbox placeholder — was
+ * fully written back to the CLI that sent them. That member's receipt for the same task, landing in that CLI's
+ * mailbox unrefused, is marked a duplicate — never dropped. In memory only: after a restart the receipt arrives
+ * unmarked, which is today's behaviour.
  */
 export class SyncAnswered {
-  private readonly rows = new Map<string, { handle: string; at: number }>()
+  private readonly rows = new Map<string, { handle: string; answeredBy: string; at: number }>()
   constructor(private readonly now: () => number = Date.now) {}
-  note(taskId: string, handle: string): void {
+  note(taskId: string, handle: string, answeredBy: string): void {
     this.sweep()
     this.rows.delete(taskId)
-    this.rows.set(taskId, { handle, at: this.now() })
+    this.rows.set(taskId, { handle, answeredBy, at: this.now() })
     while (this.rows.size > SYNC_ANSWERED_CAP) this.rows.delete(this.rows.keys().next().value!)
   }
-  /** True once for a task answered to exactly this handle; the row is consumed. */
-  take(taskId: string, handle: string): boolean {
+  /** True once for a task answered to exactly this handle by exactly this sender; the row is consumed. */
+  take(taskId: string, handle: string, sender: string): boolean {
     this.sweep()
     const row = this.rows.get(taskId)
-    if (row === undefined || row.handle !== handle) return false
+    if (row === undefined || row.handle !== handle || row.answeredBy !== sender) return false
     this.rows.delete(taskId)
     return true
   }
@@ -766,7 +767,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           const cliRow = cliDeposits.get(team)
           if (cliRow !== undefined) {
             const answered = parseReceipt(message)
-            cliDeposits.mail(team, caller, `${directHeader(caller)}\n\n${message}`, answered !== null && syncAnswered.take(answered.taskId, team) ? 'sync-answered' : undefined)
+            // #298: only the answering member's own, unrefused receipt is the duplicate of a sync answer.
+            const duplicate = answered !== null && refusedSettlement === undefined && syncAnswered.take(answered.taskId, team, caller)
+            cliDeposits.mail(team, caller, `${directHeader(caller)}\n\n${message}`, duplicate ? 'sync-answered' : undefined)
             recordActivity('in', team, caller, true)
             logger.info(`a2a: cli mailbox delivery for ${team} (from ${caller})`)
             const note = `delivered to the mailbox of ${team} — the CLI polls while online`
@@ -792,9 +795,12 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             if (!result.ok && result.code !== -32005) idempotencyStore.recordOutcome(taskId, { status: 'failed', error: failure })
             else if (result.ok && result.task_status === 'TASK_STATE_COMPLETED') idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: result.reply })
             const payload = JSON.stringify(result.ok ? { routed: true, ...(result.task_status === 'TASK_STATE_DELIVERED' ? { delivered: true } : { result: { text: result.reply } }), team, task_id: taskId, context_id: contextId, task_status: result.task_status, consumed: result.consumed, bridge: result.bridge, receipt: result.receipt, forwarded: true } : { error: failure, code: result.code ?? -32000, receipt: result.receipt, task_id: taskId, team, task_status: result.code === -32005 ? 'TASK_STATE_DELIVERED' : 'TASK_STATE_FAILED', ...(result.next !== undefined ? { next: result.next } : {}) })
-            // #298: only an answer the CLI was actually handed marks its later receipt a duplicate ('finish' never
-            // fires when the CLI gave up and closed the socket first).
-            if (result.ok && result.task_status === 'TASK_STATE_COMPLETED' && claim.ok && claim.cli === true && claim.caller === caller) res.once('finish', () => syncAnswered.note(taskId, caller))
+            // #298: only a member's own final reply the CLI was actually handed marks that member's later receipt a
+            // duplicate — never a delivered, mailbox or bridge placeholder (review of #305 F1), and never when the CLI
+            // gave up and closed the socket first ('finish' does not fire then).
+            const answeredBy = result.ok ? result.deliveredTo : undefined
+            if (!noWait && result.ok && result.task_status === 'TASK_STATE_COMPLETED' && result.receipt === undefined && result.bridge === undefined && answeredBy !== undefined
+              && claim.ok && claim.cli === true && claim.bound && claim.caller === caller && cliDeposits.get(caller) !== undefined) res.once('finish', () => syncAnswered.note(taskId, caller, answeredBy))
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload)
           }
           // wait:false delivers without the final-reply hold: steer resolves
