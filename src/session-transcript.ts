@@ -89,21 +89,48 @@ export function scanZstdFrames(buffer: Buffer): FrameRange[] {
  * artifacts are split into frames and decoded frame by frame (node's public
  * decoder is single-frame).
  */
-export function decodeSessionLog(buffer: Buffer): string {
-  const frames = scanZstdFrames(buffer)
-  if (frames.length === 0) return buffer.toString('utf8')
-  const parts: string[] = []
-  let total = 0
-  for (const frame of frames) {
-    const chunk = zstdDecompressSync(buffer.subarray(frame.start, frame.end))
-    total += chunk.length
-    if (total > TRANSCRIPT_MAX_DECOMPRESSED_BYTES) {
-      throw new Error('session log exceeds the decompressed-size cap')
+type BoundedZstdDecoder = (input: Uint8Array, options: { maxOutputLength: number }) => Buffer
+// A fixed harmless 16-byte plaintext frame. Never probe support using an untrusted log.
+const OUTPUT_LIMIT_PROBE = Buffer.from('KLUv/SAQgQAAY2FwYWJpbGl0eS1wcm9iZQ==', 'base64')
+
+/** Codec seam for tests; budgets may only tighten the shipped hard caps. */
+export function createSessionLogDecoder(decoder: BoundedZstdDecoder | undefined = zstdDecompressSync, outputCap = TRANSCRIPT_MAX_DECOMPRESSED_BYTES): (buffer: Buffer) => string {
+  if (!Number.isSafeInteger(outputCap) || outputCap < 1 || outputCap > TRANSCRIPT_MAX_DECOMPRESSED_BYTES) throw Error('invalid decompressed-size cap')
+  let limitSupported: boolean | undefined
+  function requireOutputLimit(): void {
+    if (limitSupported === undefined) {
+      limitSupported = false
+      if (typeof decoder === 'function') {
+        try { decoder(OUTPUT_LIMIT_PROBE, { maxOutputLength: 1 }) }
+        catch (error) { limitSupported = (error as { code?: unknown }).code === 'ERR_BUFFER_TOO_LARGE' }
+      }
     }
-    parts.push(chunk.toString('utf8'))
+    if (!limitSupported) throw Error('zstd decoder does not enforce maxOutputLength; refusing compressed log')
   }
-  return parts.join('')
+  return (buffer) => {
+    if (buffer.length > TRANSCRIPT_MAX_FILE_BYTES) throw Error('session log exceeds the file-size cap')
+    const frames = scanZstdFrames(buffer)
+    if (frames.length === 0) {
+      if (buffer.length > outputCap) throw Error('session log exceeds the decompressed-size cap')
+      return buffer.toString('utf8')
+    }
+    requireOutputLimit()
+    const parts: string[] = []
+    let total = 0
+    for (const frame of frames) {
+      const remaining = outputCap - total
+      if (remaining <= 0) throw Error('session log exceeds the decompressed-size cap')
+      // The codec enforces this BEFORE producing an oversized Buffer, including a single huge frame.
+      const chunk = decoder!(buffer.subarray(frame.start, frame.end), { maxOutputLength: remaining })
+      total += chunk.length
+      if (total > outputCap) throw Error('session log exceeds the decompressed-size cap')
+      parts.push(chunk.toString('utf8'))
+    }
+    return parts.join('')
+  }
 }
+
+export const decodeSessionLog = createSessionLogDecoder()
 
 function clampEntry(text: string): string {
   const flat = text.replace(/\s+/g, ' ').trim()

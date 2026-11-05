@@ -2,9 +2,9 @@ import { mkdtempSync } from '../temp-dirs.ts'
 import { writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { zstdCompressSync } from 'node:zlib'
-import { describe, expect, it } from 'vitest'
-import { decodeSessionLog, extractTranscript, scanZstdFrames, TRANSCRIPT_ENTRY_TEXT_CAP, TRANSCRIPT_DEFAULT_LIMIT } from '../../src/session-transcript.ts'
+import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
+import { describe, expect, it, vi } from 'vitest'
+import { createSessionLogDecoder, decodeSessionLog, extractTranscript, scanZstdFrames, TRANSCRIPT_ENTRY_TEXT_CAP, TRANSCRIPT_DEFAULT_LIMIT } from '../../src/session-transcript.ts'
 
 function frame(lines: string[]): Buffer {
   return zstdCompressSync(lines.join('\n') + '\n')
@@ -34,6 +34,44 @@ describe('scanZstdFrames', () => {
 })
 
 describe('decodeSessionLog', () => {
+  it('enforces a single-frame output ceiling inside the real codec before returning a Buffer', () => {
+    const compressed = zstdCompressSync(Buffer.alloc(4096, 120)), decode = createSessionLogDecoder(zstdDecompressSync, 1024)
+    expect(compressed.length).toBeLessThan(1024)
+    expect(() => decode(compressed)).toThrow(expect.objectContaining({ code: 'ERR_BUFFER_TOO_LARGE' }))
+    expect(decode(zstdCompressSync(Buffer.alloc(1024,120)))).toHaveLength(1024)
+  })
+  it('passes the decreasing remaining budget into every frame, not just the first one', () => {
+    const decoder = vi.fn((bytes: Uint8Array, options: {maxOutputLength:number}) => zstdDecompressSync(bytes,options))
+    const decode = createSessionLogDecoder(decoder,1024), one=zstdCompressSync(Buffer.alloc(600,120)),two=zstdCompressSync(Buffer.alloc(600,121))
+    expect(() => decode(Buffer.concat([one,two]))).toThrow(expect.objectContaining({code:'ERR_BUFFER_TOO_LARGE'}))
+    expect(decoder.mock.calls.map(([,options])=>options.maxOutputLength)).toEqual([1,1024,424])
+    const first=zstdCompressSync(Buffer.alloc(1024,120));decoder.mockClear()
+    expect(()=>decode(Buffer.concat([first,two]))).toThrow('decompressed-size cap')
+    expect(decoder).toHaveBeenCalledTimes(1)
+  })
+  it('refuses a decoder that ignores output limits before passing any untrusted frame to it', () => {
+    const untrusted=zstdCompressSync(Buffer.alloc(4096,122)), ignores=vi.fn((bytes:Uint8Array)=>zstdDecompressSync(bytes))
+    const decode=createSessionLogDecoder(ignores,1024)
+    expect(()=>decode(untrusted)).toThrow('does not enforce maxOutputLength')
+    expect(ignores).toHaveBeenCalledTimes(1)
+    expect(Buffer.from(ignores.mock.calls[0]![0])).not.toEqual(untrusted)
+    expect(()=>decode(untrusted)).toThrow('does not enforce maxOutputLength')
+    expect(ignores).toHaveBeenCalledTimes(1)
+  })
+  it('does not infer support from arbitrary codec errors or retry with an unbounded call',()=>{
+    const unsupported=vi.fn(()=>{throw Object.assign(Error('unsupported option'),{code:'ERR_INVALID_ARG_VALUE'})})
+    const decode=createSessionLogDecoder(unsupported,100)
+    expect(()=>decode(zstdCompressSync('hello'))).toThrow('does not enforce maxOutputLength')
+    expect(unsupported).toHaveBeenCalledTimes(1)
+  })
+  it('keeps plain logs available without a codec probe and rejects invalid budget widening',()=>{
+    const codec=vi.fn(()=>{throw Error('not supported')}),decode=createSessionLogDecoder(codec,4)
+    expect(decode(Buffer.from('four'))).toBe('four');expect(codec).not.toHaveBeenCalled()
+    expect(()=>decode(Buffer.from('five!'))).toThrow('decompressed-size cap')
+    expect(()=>createSessionLogDecoder(codec,Infinity)).toThrow('invalid')
+    expect(()=>createSessionLogDecoder(codec,161*1024*1024)).toThrow('invalid')
+  })
+
   it('decodes every frame, not just the first (node public decoder stops at one)', () => {
     const text = 'line-one\nline-two\n'
     const buffer = Buffer.concat([zstdCompressSync(text), zstdCompressSync('line-three\n')])
