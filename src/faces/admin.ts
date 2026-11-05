@@ -299,7 +299,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               })(),
             })),
           },
-          host: lanIp === '' ? {} : { lanIp },
+          // #332: home-controlled aliases, never inferred from peer cards or a file reference.
+          host: { ...(lanIp !== '' ? { lanIp } : {}), originClaimAudiences: [...config.originClaimAudiences ?? []] },
           // gh#20 W-C (host rail): each peer row also carries its display
           // name and version from the warm card (absent until a fetch),
           // and the last-contact timestamp for the health lamp. W-A's

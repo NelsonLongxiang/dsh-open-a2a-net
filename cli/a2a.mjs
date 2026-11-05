@@ -801,11 +801,31 @@ async function cmdFileFetch() {
   const text = positionals().slice(1).join(' ')
   const ref = parseRef(text)
   if (ref === undefined) usage('usage: a2a file fetch "<[A2A file] v1 … reference line>" [--out DIR]')
-  const homeOrigin = new URL(home()).origin
-  if (ref.from !== homeOrigin) die(`[file fetch] the file is on ${ref.from}, not your home host ${homeOrigin}: a CLI identity proves itself only on its home host — ask the sender to send it through your home host, or fetch it from a session there`)
-  const target = `${ref.from}/a2a/blob`
+  const homeBase = home()
+  const homeOrigin = new URL(homeBase).origin
+  let localSource = ref.from === homeOrigin
+  if (!localSource) {
+    // Ask only the configured home: neither a reference nor a remote card can
+    // authorize sending CLI credentials to another origin (#332). Old/denied
+    // metadata fails closed; same-origin fetches retain their no-lookup path.
+    const metadata = await homeFetch(`${homeBase}/__dsh_a2a/state`, { headers: keyHeaders(), signal: AbortSignal.timeout(5_000) })
+    if (metadata.status === 401 || metadata.status === 403) die(keyHint(metadata.status))
+    if (metadata.status === 200) {
+      const info = await replyOf(metadata)
+      const aliases = [info.ownerHost, ...(Array.isArray(info.host?.originClaimAudiences) ? info.host.originClaimAudiences : [])]
+      localSource = info.error === undefined && aliases.some(value => {
+        if (typeof value !== 'string') return false
+        try {
+          const url = new URL(value)
+          return ['http:', 'https:'].includes(url.protocol) && url.username === '' && url.password === '' && url.search === '' && url.hash === '' && url.origin === ref.from
+        } catch { return false }
+      })
+    }
+  }
+  if (!localSource) die(`[file fetch] the file is on ${ref.from}, not your home host ${homeOrigin}: a CLI identity proves itself only on its home host — ask the sender to send it through your home host, or fetch it from a session there`)
+  const target = `${homeBase}/a2a/blob`
   const res = await homeFetch(`${target}?sha256=${ref.sha256}&caller_session=${encodeURIComponent(identity().handle)}`, {
-    headers: { ...originClaimFor(ref.from)(target, 'GET'), ...keyHeaders() },
+    headers: { ...originClaimFor(homeBase)(target, 'GET'), ...keyHeaders() },
   })
   if (res.status !== 200) {
     const out = await replyOf(res)

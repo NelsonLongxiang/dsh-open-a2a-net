@@ -80,6 +80,7 @@
 
 - **发送**：`a2a-net file send <path> <team>`。CLI 通过控制面 `POST /__dsh_a2a/blob`（受 apiKey 门禁，请求体是原始字节）把文件暂存到自己的 home 主机，再发引用消息；引用里的 `from` 是 home 主机的卡片 URL。
 - **拉取**：`a2a-net file fetch <ref> [--out DIR]`。CLI 自己签 OriginClaim 去拉，校验规则和宿主一样。
+- **同一 home 的地址别名（#332）**：引用 `from` 不等于当前 home origin 时，只读当前 home 的受控 state 面，以 `ownerHost`（由 ownCardUrl 得来）及 `host.originClaimAudiences` 声明判断是否为别名；不信任引用或其他对端名片自报。命中后仍向当前 home URL 的 `/a2a/blob` 拉取，签名 callerUrl、受众、key/cookie 都只用于这个 home，不拨别名地址。旧宿主无声明、非 200、未声明/畸形别名或重定向都失败关闭；同 origin 保留原无额外查询路径。控制面被拒时须正确配置 home 的访问方式或 key，不新增绕过；CLI 私钥、deposit、精确句柄 grant、文件大小和 SHA256 门不变。
 
 ### 3.5 和 N4 会话污染的关系
 
