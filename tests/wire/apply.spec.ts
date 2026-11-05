@@ -83,7 +83,9 @@ function makeAgent(): Agent & { steer: ReturnType<typeof vi.fn>; session: { even
 /** A main-session agent whose steer answers with an assistant message and idle. */
 function replyingAgent(ctx: Context): ReturnType<typeof makeAgent> {
   const agent = makeAgent()
-  agent.steer = vi.fn(() => {
+  agent.steer = vi.fn((payload: { content?: Array<{ type: string; text?: string }> }) => {
+    // #306: a real session logs the steered user message before answering it — the attributed sync waiter reads that turn window.
+    ;(agent.session.events as unknown[]).push({ type: 'user/message', data: { content: payload?.content ?? [] } })
     ;(agent.session.events as unknown[]).push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'peer node replied' }] } } })
     ctx.emit('agent/status', { agent, status: 'idle' })
   })
@@ -145,7 +147,9 @@ async function mountPeerNode(
   const registry = ctx.get('agents') as unknown as FakeAgentsService
   void agents
   const liveAgent = { ...makeAgent() } as ReturnType<typeof makeAgent>
-  const steer = vi.fn(() => {
+  const steer = vi.fn((payload: { content?: Array<{ type: string; text?: string }> }) => {
+    // #306: the steered user message is logged before the reply (attributed sync waits read that turn).
+    ;(liveAgent.session.events as unknown[]).push({ type: 'user/message', data: { content: payload?.content ?? [] } })
     ;(liveAgent.session.events as unknown[]).push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'peer node replied' }] } } })
     ctx.emit('agent/status', { agent: liveAgent, status: 'idle' })
   })

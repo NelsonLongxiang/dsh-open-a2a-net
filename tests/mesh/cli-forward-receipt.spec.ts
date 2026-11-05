@@ -367,7 +367,7 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
       expect(mail[0].dup).toBeUndefined()
     } finally { await a.dispose(); await b.dispose() }
   }, 30000)
-  it('#298 review F4: a busy target whose OTHER turn answers the sync wait sends no reply_final; the real receipt is never marked a duplicate', async () => {
+  it('#306 / #298 F4: a busy target sync waits for its own reading turn, never the unrelated turn', async () => {
     const { a, b, home } = await setup()
     try {
       const agent = b.agents.agent as any
@@ -383,15 +383,16 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
       }
       const routed = await cli(home, ['route', targetHandle, 'question', '--sync', '--task', 'busy-1'])
       expect(routed.code, routed.stderr).toBe(0)
-      expect(routed.stdout).toContain('unrelated other work finished') // the existing sync shape on a busy target
+      expect(routed.stdout).toContain('THE REAL ANSWER for busy-1')
+      expect(routed.stdout).not.toContain('unrelated other work finished')
       const receipts = async (): Promise<any[]> => ((await post(a, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle })).mail as any[]).filter(m => String(m.text).includes('[A2A receipt] task busy-1'))
       await vi.waitFor(async () => expect(await receipts()).toHaveLength(1), { timeout: 9000, interval: 100 })
       const [receipt] = await receipts()
       expect(receipt.text).toContain('THE REAL ANSWER for busy-1')
-      expect(receipt.dup).toBeUndefined()
+      expect(receipt.dup).toBe('sync-answered')
     } finally { await a.dispose(); await b.dispose() }
   }, 30000)
-  for (const nextTurn of [true, false]) it(`#298 review F5: with turn markers, ${nextTurn ? 'a back-to-back next turn answering the sync leaves the receipt unmarked' : 'the reading turn answering the sync marks the receipt'}`, async () => {
+  for (const nextTurn of [true, false]) it(`#298 review F5: with turn markers, ${nextTurn ? 'a back-to-back next turn never replaces the reading-turn reply' : 'the reading turn answering the sync marks the receipt'}`, async () => {
     const { a, b, home } = await setup()
     const task = 'b2b-' + String(nextTurn)
     try {
@@ -415,13 +416,13 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
       }
       const routed = await cli(home, ['route', targetHandle, 'question', '--sync', '--task', task])
       expect(routed.code, routed.stderr).toBe(0)
-      expect(routed.stdout).toContain(nextTurn ? 'next turn other text' : 'THE REAL ANSWER for ' + task)
+      expect(routed.stdout).toContain('THE REAL ANSWER for ' + task)
+      expect(routed.stdout).not.toContain('next turn other text')
       const receipts = async (): Promise<any[]> => ((await post(a, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle })).mail as any[]).filter(m => String(m.text).includes('[A2A receipt] task ' + task))
       await vi.waitFor(async () => expect(await receipts()).toHaveLength(1), { timeout: 9000, interval: 100 })
       const [receipt] = await receipts()
       expect(receipt.text).toContain('THE REAL ANSWER for ' + task)
-      if (nextTurn) expect(receipt.dup).toBeUndefined()
-      else expect(receipt.dup).toBe('sync-answered')
+      expect(receipt.dup).toBe('sync-answered')
     } finally { await a.dispose(); await b.dispose() }
   }, 30000)
   for (const canvas of [false, true]) it((canvas ? 'canvas' : 'session') + ': automatic target-member receipt settles A and is readable by shipped CLI inbox', async () => {

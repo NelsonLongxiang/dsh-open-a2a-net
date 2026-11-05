@@ -112,7 +112,9 @@ const postJson = (port: number, path: string, body: unknown): Promise<Response> 
 
 /** A steer that answers: pushes an assistant event and goes idle. */
 function answering(ctx: Context, agent: Agent & { session: { events: unknown[] } }): ReturnType<typeof vi.fn> {
-  const steer = vi.fn(() => {
+  const steer = vi.fn((payload: { content?: Array<{ type: string; text?: string }> }) => {
+    // #306: log the steered user message before the reply (attributed sync waits read that turn).
+    ;(agent.session.events as unknown[]).push({ type: 'user/message', data: { content: payload?.content ?? [] } })
     ;(agent.session.events as unknown[]).push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'canvas member replied' }] } } })
     ctx.emit('agent/status', { agent, status: 'idle' })
   })
