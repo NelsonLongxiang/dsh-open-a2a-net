@@ -4,7 +4,7 @@
 
 ## 冻结前覆盖门
 
-覆盖表docs/design/343-phase1-vu-coverage.md已在GitHub精确commit d20b364c54e2c747acc9e960e26fd1d3fe02bb07送全局生产评估，issue343 comment6662307302留痕。四守卫ISO/loopback/basename/整数均已裁保留，缺口NM/非PASS；A3枚举含目录与A8普通文件数分开。**尚未收到该SHA覆盖PASS；没有v3 submit/prepare/spec/run**，也没有v3放行结论。最终真实VU形状仍需定稿再报；本进度不是绕过条件②。
+覆盖表docs/design/343-phase1-vu-coverage.md已在GitHub精确commit d20b364c54e2c747acc9e960e26fd1d3fe02bb07送全局生产评估，issue343 comment6662307302留痕。四守卫ISO/loopback/basename/整数均已裁保留，缺口NM/非PASS；A3枚举含目录与A8普通文件数分开。**现已通过direct-427035177c9a转达收到d20b364义务映射层PASS**；只放行prepare --draft的形状探针，最终真实VU定稿表仍须精确SHA再交全局PASS才可正式prepare。没有v3 submit、正式prepare、冻结spec或run，更无v3放行结论。
 
 ## 已实施且可独立复核的基础
 
@@ -20,9 +20,17 @@
 
 首轮默认完整verify因旧single-flight30ms墙钟断言失败，inner0；该用例隔离原预算通过。未改此无关断言/worker/timeout/skip。第二轮默认完整verify真实exit0：root1489passed/6原skip、layout4、nexus327、innerentries0、tracked dist零diff。原门禁1430等历史数不挪作本树结论；新增3例如实计入。
 
+## draft-only CLI 实测与未解接缝
+
+verify/draft-shapes-phase1.json只含8个最小子义务checker形状（其中1项aggregate sql-pair，其余input presence）；不声称完整覆盖，即使lint条款计数8/8也不能替语义覆盖。draft-reviews明确faithful=revise以说明子覆盖不足，不能直接拿作正式prepare。所用material是原已存在v2，仅测形状/准入，不submit新v3材料。
+
+本地0.120 CLI lint-candidates rc0，checked8/schema/coverage均未skip；项目根prepare --draft实际rc1 meta_failed，唯一R3是明确二期的verify-recursive.mjs，没有进入P0-P5，不能声称draft ready。输出tmp/phase1-343/minimal-shape-lint.json与draft-admission.json。没有--meta-repo/--no-meta/中立目录避门。
+
+读0.120实现另见：draft仅回拟id/record:null，不落spec/prepare/trace；普通run需要已有冻结spec。尚未找到合法的“不冻结draft直接run”入口，**不手工将draft写入specs目录，不偷偷freeze为探针**。这两项实际接缝已上报原评审，追加上游#232 comment6662688951；需引擎/全局裁可用路径后补真实定稿VU/运行报告。当前无NEEDS-MATERIAL报告，只有形状lint与meta拒绝，不能把拒绝重新命名NM。
+
 ## 下一步与发布硬边界
 
-1. 等覆盖精确SHA PASS与#232引擎维护回复，完成最终VU表；不能先prepare再补审批。
+1. 义务映射PASS已收到；等#232能力及draft/run接缝裁定，完成最终真实VU表，再交精确SHA覆盖PASS；不能先正式prepare再补审批。
 2. 同一期高档PR继续补原始数据与获批v3材料/spec生产接口，不增减A1-A8；旧spec/run/snapshot/archive都不改，不把原v2改得无法继续发布门。
 3. v3未全PASS前发布使用v2，附v3结果；若v3真FAIL而v2PASS，**暂停发布并上报全局生产评估**，不能把矛盾当known-gap。当前尚无v3规格，因此只能标尚未生产，不伪造NM报告。
 4. 合并前贴项目根真实meta结果；二期未授权不动。非作者PASS绑最终exact head。M2/M7原a2a-net评审链不代裁。
