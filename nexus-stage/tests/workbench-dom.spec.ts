@@ -694,6 +694,24 @@ describe('inline-only reach (0.6.10)', () => {
 })
 
 describe('canvas inspector member management (0.6.6)', () => {
+  it('#335 retained suspended rows are not counted and require owner CAS actions', async () => {
+    const regulateSuspended = vi.fn(async () => ({ ok: false, error: 'changed; refresh' }))
+    const { v, canvasOp } = bench({ regulateSuspended })
+    const records = [{ team: 'ygl', member: 'dsh/aaaaaaaa', reason: 'leave', token: 'one' }]
+    v.update({ ...state, canvas: { revision: 7, teams: [{ name: 'ygl', team: 'dsh/canvas/ygl', members: [] }], retainedMembers: [{ team: 'ygl', member: 'dsh/aaaaaaaa', suspended: true, records }] } })
+    const card = openTeam(v)
+    expect(text(card)).toContain('成员 · 0')
+    expect(text(card)).toContain('已暂停 · 不参与路由')
+    expect(text(card)).not.toContain('● 现场')
+    const restore = [...card.querySelectorAll<HTMLButtonElement>('button')].find(b => text(b) === '显式恢复')!
+    restore.click()
+    await vi.waitFor(() => expect(regulateSuspended).toHaveBeenCalledWith('restore-suspended', 'ygl', 'dsh/aaaaaaaa', 7, records))
+    expect(restore.title).toBe('changed; refresh')
+    expect(canvasOp).not.toHaveBeenCalled()
+    const remove = [...card.querySelectorAll<HTMLButtonElement>('button')].find(b => text(b) === '删除暂停位')!
+    remove.click()
+    await vi.waitFor(() => expect(regulateSuspended).toHaveBeenCalledWith('delete-suspended', 'ygl', 'dsh/aaaaaaaa', 7, records))
+  })
   function openTeam(v: ReturnType<typeof createWorkbench>): HTMLElement {
     const item = [...v.root.querySelectorAll('.wb-item-label')].find(n => text(n).includes('ygl'))!
     item.click()

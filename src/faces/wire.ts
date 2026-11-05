@@ -337,7 +337,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const name = typeof body.name === 'string' ? body.name : ''
             const rawId = typeof body.id === 'string' ? body.id : ''
             // gh#131: a peer names our sessions by handle — the session it names, for removal.
-            const id = (isRemoteMemberRef(rawId) ? localSessionOfHandle(rawId) : undefined) ?? rawId
+            // A bare handle may still infer for routing, never for deleting another stored slot.
+            const provenOwn = rawId.endsWith('@' + d.ownCanvasFingerprint)
+            const id = (provenOwn ? localSessionOfHandle(rawId) : undefined) ?? rawId
             let payload: { ok: boolean; members?: readonly string[]; removed?: boolean; error?: string }
             if (op === 'create') {
               const stored = canvasNameReserved(name) ? undefined : canvasStore.create(name)
