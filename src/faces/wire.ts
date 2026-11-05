@@ -58,7 +58,7 @@ export type ColdWake =
   | { readonly kind: 'no-match' }
 
 /** routeIntoAgent's settled answer (mirrors index.ts's local union). */
-export type RouteOutcome = { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean } | { ok: false; error: string; localMiss?: true }
+export type RouteOutcome = { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; localMiss?: true }
 
 interface BridgeTeamsRegistryMirror {
   listTeams(): Array<{ name: string; description: string }>
@@ -1037,8 +1037,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 session,
                 result: { text: outcome.reply },
                 ...(syncTarget !== undefined ? { delivered_to: syncTarget } : {}),
-                // #298: a positive, cross-host statement that this text is the member's own final reply.
-                ...(outcome.placeholder !== true && outcome.bridge === undefined && (outcome.status ?? 'TASK_STATE_COMPLETED') === 'TASK_STATE_COMPLETED' ? { reply_final: true } : {}),
+                // #298: a positive, cross-host statement that this text is the member's own final reply — the turn
+                // that read this task's steer (`ownTurn`), never a placeholder, a bridge round or another turn (#305 F3/F4).
+                ...(outcome.ownTurn === true && outcome.placeholder !== true && outcome.bridge === undefined && (outcome.status ?? 'TASK_STATE_COMPLETED') === 'TASK_STATE_COMPLETED' ? { reply_final: true } : {}),
                 task_id: taskId,
                 context_id: contextId,
                 task_status: outcome.status ?? 'TASK_STATE_COMPLETED',

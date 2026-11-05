@@ -367,6 +367,30 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
       expect(mail[0].dup).toBeUndefined()
     } finally { await a.dispose(); await b.dispose() }
   }, 30000)
+  it('#298 review F4: a busy target whose OTHER turn answers the sync wait sends no reply_final; the real receipt is never marked a duplicate', async () => {
+    const { a, b, home } = await setup()
+    try {
+      const agent = b.agents.agent as any
+      agent.steer = (payload: any) => {
+        b.steered.push(payload)
+        // The running turn (other work) ends first; the steer is read by the NEXT turn.
+        setTimeout(() => { agent.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'unrelated other work finished' }] } } }); b.ctx.emit('agent/status', { agent, status: 'idle' }) }, 150)
+        setTimeout(() => {
+          agent.session.events.push({ type: 'user/message', data: { content: typeof payload === 'string' ? [{ type: 'text', text: payload }] : payload.content } })
+          agent.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'THE REAL ANSWER for busy-1' }] } } })
+          b.ctx.emit('agent/status', { agent, status: 'idle' })
+        }, 900)
+      }
+      const routed = await cli(home, ['route', targetHandle, 'question', '--sync', '--task', 'busy-1'])
+      expect(routed.code, routed.stderr).toBe(0)
+      expect(routed.stdout).toContain('unrelated other work finished') // the existing sync shape on a busy target
+      const receipts = async (): Promise<any[]> => ((await post(a, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle })).mail as any[]).filter(m => String(m.text).includes('[A2A receipt] task busy-1'))
+      await vi.waitFor(async () => expect(await receipts()).toHaveLength(1), { timeout: 9000, interval: 100 })
+      const [receipt] = await receipts()
+      expect(receipt.text).toContain('THE REAL ANSWER for busy-1')
+      expect(receipt.dup).toBeUndefined()
+    } finally { await a.dispose(); await b.dispose() }
+  }, 30000)
   for (const canvas of [false, true]) it((canvas ? 'canvas' : 'session') + ': automatic target-member receipt settles A and is readable by shipped CLI inbox', async () => {
     const { a, b, home } = await setup()
     const task = canvas ? 'direct-receipt-canvas' : 'direct-receipt-session'

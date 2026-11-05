@@ -2144,7 +2144,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param taskId - the correlation key the steered receipt header carries.
    */
   async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number) => void): Promise<
-    { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean } | { ok: false; error: string; localMiss?: true }
+    { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; localMiss?: true }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
@@ -2200,11 +2200,21 @@ export function apply(ctx: Context, config: Config): void {
    * @returns the agent's final reply, or the explicit failure.
    */
   function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number) => void): Promise<
-    { ok: true; reply: string; placeholder?: boolean } | { ok: false; error: string }
+    { ok: true; reply: string; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string }
   > {
     return new Promise((resolve) => {
+      const floorAtRegistration = sessionEventsOf(agent).length
       const waiter = registerFinalWaiter(agent, (text, placeholder) => {
-        resolve({ ok: true, reply: text, ...(placeholder === true ? { placeholder: true } : {}) })
+        // #298 (review of #305 F4): the sync wait may close on a busy target's OTHER turn. `ownTurn` states,
+        // from this session's own events, that the steer carrying this task was read and that the reply is the
+        // newest text after that read — the only reply a peer may declare final (`reply_final`).
+        let ownTurn = false
+        if (placeholder !== true && taskId !== undefined && taskId !== '') {
+          const events = sessionEventsOf(agent)
+          const read = consumptionIndex(events, taskId, floorAtRegistration)
+          ownTurn = read !== undefined && text !== '' && latestAssistantText(events, read + 1) === text
+        }
+        resolve({ ok: true, reply: text, ...(placeholder === true ? { placeholder: true } : {}), ...(ownTurn ? { ownTurn: true as const } : {}) })
       })
       // The header names the sender first: `caller` is the routing node's
       // own label (the session that issued the route), while `team` is this
