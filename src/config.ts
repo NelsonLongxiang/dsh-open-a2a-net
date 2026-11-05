@@ -81,6 +81,8 @@ export interface Config {
    * closed, it signs and accepts the audience-bound form only.
    */
   readonly originClaimUnboundWindow: boolean
+  /** #335: preserve unsuspended legacy bare member inference until the owner closes the window. */
+  readonly canvasLegacyBareMembers: boolean
   /**
    * Extra origins this host answers to as an OriginClaim audience, beyond
    * its card URL and the address a request arrives on (port-mapped or
@@ -389,6 +391,7 @@ export const Config: s<Config> = s.object({
    * audience-bound form only. See docs/protocol/delivery-origin-auth.md §2.1.
    */
   originClaimUnboundWindow: s.boolean().default(true),
+  canvasLegacyBareMembers: s.boolean().default(true),
   /** Extra OriginClaim audience origins (port-mapped/proxied hosts). */
   originClaimAudiences: s.array(s.string()).default([]),
   linkKeys: s.dict(s.string()).default({}),

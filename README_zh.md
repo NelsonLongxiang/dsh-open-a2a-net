@@ -128,6 +128,7 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | `originClaimWindow` | `true` | OriginClaim 过渡窗口：不带信封的投递仍走调用方门（计入 `legacyInbound`）；`false` 则按验签失败拒绝。 |
 | `originClaimUrl` | `''` | 信封 `callerUrl` 的覆盖值（pocket 隧道宿主用）；`''` 自动推导。 |
 | `originClaimUnboundWindow` | `true` | OriginClaim 受众绑定过渡窗口：同时签发并接受不带受众的旧信封（接受数计入 `unboundInbound`；其中绑定形式在本机未命中的另计 `boundMissInbound`）；`false` 只签发、只接受绑定受众的信封。 |
+| `canvasLegacyBareMembers` | `true` | #335 迁移窗口：未暂停历史裸成员保持旧推断；暂停槽位永不路由/授权，迁移与观察完成后仅属主裁定关窗。 |
 | `originClaimAudiences` | `[]` | 本宿主额外认作信封受众的 origin，用于端口映射或反向代理宿主（对端拨号的 URL 既不是卡片 URL 也不是到达地址）。 |
 | `linkKeys` | `{}` | 链路 key（#317）：`{ "<对端 origin>": "<key>" }`。发往该对端的请求改带这把 key；本机对端面（`/a2a/direct`、`/a2a/log`、`/a2a/blob`）只在调用方 OriginClaim 验签通过、且签名者正是该 origin 时接受它（POST 须 Sig3 绑定请求体）；控制路由不接受。用于公网节点与舰队互联而不持有舰队 apiKey，两端配同一把链路 key。 |
 | `gateAgentLessCalls` | `'audit'` | 宿主侧（无 agent）路由调用：审计，或 `refuse` 拒绝。 |

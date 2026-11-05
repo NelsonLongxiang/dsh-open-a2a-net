@@ -128,6 +128,7 @@ export interface RemoteRow {
  *  handle (`zone/id8`) — remote members are routed by the directory, never
  *  woken locally (0.6.6 unified team model). */
 export interface CanvasMemberRow {
+  readonly provenance?: 'legacy-inferred' | 'unknown'
   readonly id: string
   readonly team?: string
   readonly joined?: boolean
@@ -160,7 +161,7 @@ export interface StateBody {
   readonly zone?: string
   readonly version?: string
   readonly sessions?: readonly SessionRow[]
-  readonly canvas?: { teams?: readonly CanvasTeamRow[] }
+  readonly canvas?: { teams?: readonly CanvasTeamRow[]; revision?: number; retainedMembers?: ReadonlyArray<{ team: string; member: string; suspended: boolean; records: readonly unknown[] }> }
   /** gh#20 W-A/W-C: the peer row carries the link badge source, the host
    *  rail's label/version/last-contact facts (absent on older hosts). */
   readonly peers?: ReadonlyArray<{
@@ -221,6 +222,7 @@ export interface WorkbenchDeps {
    *  local session id or a zone-qualified remote handle. True on success. */
   canvasOp(action: 'add-member' | 'remove-member', name: string, id: string, home?: string): Promise<boolean>
   cliHomeOptions?(name: string, id: string): Promise<CliHomeOptions>
+  regulateSuspended?(action: 'restore-suspended' | 'delete-suspended', name: string, id: string, revision: number, expected: readonly unknown[]): Promise<{ ok: boolean; error?: string }>
   /** Quick dispatch (0.6.9): POST /__dsh_a2a/dispatch as a human gesture —
    *  one message to a routing team, async delivery, receipt lands in the
    *  ledger. Optional — without it the 快派 form hides. */
@@ -981,7 +983,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       for (const member of fresh.members) {
         const row = el('div', 'wb-member-row')
         const dot = member.cliHeld === true ? '本机持有，无需指定' : member.remote === true ? (member.cliHome === null ? '◇ 远端 · home 未确定' : '◇ 远端') : member.live === true ? '● 现场' : member.joined === true ? '○ 冷启' : '· 未入网'
-        row.appendChild(el('span', 'wb-member-dot')).textContent = dot
+        row.appendChild(el('span', 'wb-member-dot')).textContent = dot + (member.provenance ? ' · 来源未确认' + (member.provenance === 'legacy-inferred' ? '（兼容推断）' : '') : '')
         const label = el('span', 'wb-member-label')
         const session = (last?.sessions ?? []).find(s => s.id === member.id)
         label.textContent = member.remote === true ? member.id : (session !== undefined ? displayName(session) : member.id)
@@ -1010,6 +1012,26 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
           }
           card.appendChild(form)
         }
+      }
+      const retained = (last?.canvas?.retainedMembers ?? []).filter(r => r.team === fresh.name)
+      for (const slot of retained) {
+        const row = el('div', 'wb-member-row')
+        row.appendChild(el('span', 'wb-member-dot')).textContent = slot.suspended ? '已暂停 · 不参与路由' : '来源未确认 · 窗口关闭'
+        row.appendChild(el('span', 'wb-member-label')).textContent = slot.member
+        if (slot.suspended && deps.regulateSuspended && last?.canvas?.revision !== undefined) {
+          for (const action of ['restore-suspended', 'delete-suspended'] as const) {
+            const button = el('button', 'wb-member-remove'); button.type = 'button'
+            button.textContent = action === 'restore-suspended' ? '显式恢复' : '删除暂停位'
+            const revision = last.canvas.revision
+            button.addEventListener('click', async () => {
+              button.disabled = true
+              const result = await deps.regulateSuspended!(action, fresh.name, slot.member, revision, slot.records)
+              if (!result.ok) { button.disabled = false; button.title = result.error ?? '状态已变，请刷新后重试' }
+            })
+            row.appendChild(button)
+          }
+        }
+        card.appendChild(row)
       }
       // Add-member form: static DOM re-mounted per poll (draftForm trick) —
       // rebuilt only when the inspected team changes.

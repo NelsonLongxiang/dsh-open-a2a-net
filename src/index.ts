@@ -36,7 +36,7 @@ export function resolveCallerLabel(input: {
 }
 import { encodePublicKey, signCard, verifyCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
-import { CanvasStore, canvasNameReserved, isRemoteMemberRef } from './canvas-store.ts'
+import { CanvasStore, canvasNameReserved, isRemoteMemberRef, legacyBareMember } from './canvas-store.ts'
 import { decodeSessionLog, extractTranscript, TRANSCRIPT_MAX_FILE_BYTES } from './session-transcript.ts'
 import { LayoutStore } from './layout-store.ts'
 import { peerLinkDisplay } from './peer-link-display.ts'
@@ -661,7 +661,7 @@ export function apply(ctx: Context, config: Config): void {
   // Canvas teams: user-composed multi-member routing groups. A session node
   // may sit in many teams; routing to <team>/canvas/<name> resolves the
   // first live member or wakes the first cold one (member order = priority).
-  const canvasStore = new CanvasStore(join(home, 'a2a', 'canvas.json'))
+  const canvasStore = new CanvasStore(join(home, 'a2a', 'canvas.json'), { legacyBareMembers: config.canvasLegacyBareMembers !== false })
   // #91 file channel: the sender host's blob store (docs/design/file-channel.md).
   const blobStore = new BlobStore(join(home, 'a2a'))
   // Spatial presentation state for the full-page stage (contract v2).
@@ -1004,7 +1004,7 @@ export function apply(ctx: Context, config: Config): void {
     if (isArchived === undefined) return
     for (const id of joinedSessions.list()) {
       if (!isArchived(id)) continue
-      const ownHandle = ownCanvasHandleOf(id, true)
+      try { revokeCanvasMember(id, 'archive') } catch (error) { logger.error('canvas archive suspension failed: %s', String(error)); continue }
       sessionNodes.delete(id)
       // Sections come back at the next mount (re-publish) if this archived reading was transient; the row stays.
       nodeBinder.suspend(id)
@@ -1014,8 +1014,6 @@ export function apply(ctx: Context, config: Config): void {
       // joined session matches"). Safety without the deletion: wake refuses
       // archived intents (:804), card assembly and the state cold rows filter
       // them, the reconciler skips them, and JOIN_CAP bounds the file.
-      canvasStore.dropMember(id)
-      if (ownHandle !== undefined) canvasStore.dropMember(ownHandle)
       // S2 consistency: an archived node's roster declarations die with it
       // — a left node keeps no team membership.
       teamMemberships.dropSession(id)
@@ -1090,7 +1088,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param includeArchived - count archived sessions too (the archive prune
    *   drops an archived session's own handle).
    */
-  function localHandleResolver(includeArchived = false): (ref: string) => string | undefined {
+  function localHandleResolver(includeArchived = false, count = false, legacyOverride = false): (ref: string) => string | undefined {
     const isArchived = includeArchived ? undefined : archivedSessionFilter()
     const byHandle = new Map<string, string[]>()
     for (const id of new Set([...joinedSessions.list(), ...sessionNodes.keys()])) {
@@ -1104,7 +1102,14 @@ export function apply(ctx: Context, config: Config): void {
       if (card !== undefined && card.session !== session) for (const row of card.sessionTeams ?? []) published.add(row.team)
     }
     return (ref) => {
+      // #334 qualified member routing is deliberately deferred; this window is only legacy bare inference.
+      if (!legacyOverride && config.canvasLegacyBareMembers === false) return undefined
       const hits = byHandle.get(ref)
+      const collision = (hits?.length ?? 0) > 1 || (hits?.length === 1 && published.has(ref))
+      if (count && legacyBareMember(ref)) {
+        legacyInferenceResolutions++
+        if (collision) { legacyCollisionWarnings++; if (legacyCollisionRecent.length >= 16) legacyCollisionRecent.shift(); legacyCollisionRecent.push({ member: ref, at: Date.now() }) }
+      }
       return hits?.length === 1 && !published.has(ref) ? hits[0] : undefined
     }
   }
@@ -1116,6 +1121,29 @@ export function apply(ctx: Context, config: Config): void {
    * handle-stored membership must not outlive the session's consent).
    * @param id - the local session id (still joined when this is read).
    */
+  const canvasMigrationEpoch = new Date().toISOString()
+  let legacyInferenceResolutions = 0, legacyCollisionWarnings = 0
+  const legacyCollisionRecent: Array<{ member: string; at: number }> = []
+  function revokeCanvasMember(id: string, reason: 'leave' | 'archive' | 'remove', name?: string): boolean {
+    if (!joinedSessions.has(id) && !sessionNodes.has(id)) return false
+    const bare = config.team + '/' + id8(id)
+    const inferred = localHandleResolver(true, false, true)(bare) === id ? bare : undefined
+    const qualified = bare + '@' + ownCanvasFingerprint
+    const sameId8 = new Set([...joinedSessions.list(), ...sessionNodes.keys()].filter(local => id8(local) === id8(id)))
+    const pinned = canvasStore.ownerKeyOf(qualified)
+    const proof = sameId8.size === 1 && (pinned === undefined || pinned === encodePublicKey(createPublicKey(nodePrivateKey))) ? qualified : undefined
+    return canvasStore.revokeLocal(id, proof, inferred, reason, name)
+  }
+  function canvasMigrationState() {
+    const raw = canvasStore.list().flatMap(name => canvasStore.rawMembersOf(name).filter(legacyBareMember).map(member => ({ name, member })))
+    const resolve = localHandleResolver(false, false)
+    return { canvasLegacyBareMembers: config.canvasLegacyBareMembers !== false, epoch: canvasMigrationEpoch,
+      legacyBareMembers: raw.length,
+      legacyInferredMembers: raw.filter(r => canvasStore.membersOf(r.name).includes(r.member) && resolve(r.member) !== undefined).length,
+      legacyInferenceResolutions, legacyCollisionWarnings, legacyCollisionRecent: [...legacyCollisionRecent],
+      suspendedMembersCount: new Set(canvasStore.state().suspendedMembers.map(r => JSON.stringify([r.team,r.member]))).size,
+      ...canvasStore.state() }
+  }
   function ownCanvasHandleOf(id: string, includeArchived = false): string | undefined {
     const handle = `${config.team}/${id8(id)}`
     return localHandleResolver(includeArchived)(handle) === id ? handle : undefined
@@ -1143,8 +1171,8 @@ export function apply(ctx: Context, config: Config): void {
    * reading that depends on which peer cards are cached must not rewrite
    * the store (review of PR #151 P2-2).
    */
-  function canvasLocalMembersOf(name: string): string[] {
-    const resolve = localHandleResolver()
+  function canvasLocalMembersOf(name: string, count = false): string[] {
+    const resolve = localHandleResolver(false, count)
     return canvasStore.membersOf(name).map(id => (isRemoteMemberRef(id) ? resolve(id) ?? id : id))
   }
 
@@ -1199,7 +1227,7 @@ export function apply(ctx: Context, config: Config): void {
    */
   function canvasLiveAgent(name: string | undefined, skipId?: string): Agent | undefined {
     if (name === undefined) return undefined
-    for (const id of canvasLocalMembersOf(name)) {
+    for (const id of canvasLocalMembersOf(name, true)) {
       if (id === skipId) continue
       const agent = sessionNodes.get(id)
       if (agent !== undefined) return agent
@@ -1217,7 +1245,7 @@ export function apply(ctx: Context, config: Config): void {
   function canvasColdMemberId(name: string | undefined, skipId?: string): string | undefined {
     if (name === undefined) return undefined
     const isArchived = archivedSessionFilter()
-    return canvasLocalMembersOf(name).find(id =>
+    return canvasLocalMembersOf(name, true).find(id =>
       id !== skipId && joinedSessions.has(id) && !liveRoots.has(id) && isArchived?.(id) !== true)
   }
 
@@ -1707,7 +1735,7 @@ export function apply(ctx: Context, config: Config): void {
     whenWebServerSettled((webServer) => {
       // gh#77 B1: the admin faces live in src/faces/admin.ts.
       registerAdminFaces(webServer, {
-        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
+        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },

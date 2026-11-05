@@ -299,6 +299,13 @@ const bench = createWorkbench({
       return { ...body, ok: res.ok && body.ok === true }
     } catch (error) { return { ok: false, error: String(error) } }
   },
+  async regulateSuspended(action, name, id, revision, expected) {
+    try {
+      const response = await controlFetch('/__dsh_a2a/canvas', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, name, id, revision, expected }) })
+      const body = await response.json() as { ok?: boolean; error?: string }
+      return { ok: response.ok && body.ok === true, error: body.error }
+    } catch (error) { return { ok: false, error: String(error) } }
+  },
   async canvasOp(action, name, id, home) {
     // Same control route the planning board's wire uses; the inspector's
     // member writes are one id at a time, so no serial fan-out needed.
