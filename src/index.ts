@@ -1746,6 +1746,8 @@ export function apply(ctx: Context, config: Config): void {
         get unboundInboundCount() { return unboundInboundCount },
         get boundMissInboundCount() { return boundMissInboundCount },
         get boundMissRecent() { return boundMissRecent },
+        get claimRejectsInboundCount() { return claimRejectsInboundCount },
+        get claimRejectsRecent() { return claimRejectsRecent },
         get ownCardUrl() { return ownCardUrl }, ownCanvasFingerprint,
         get ownerSeatNames() { return ownerSeatNames },
         set ownerSeatNames(v) { ownerSeatNames = v },
@@ -2345,6 +2347,23 @@ export function apply(ctx: Context, config: Config): void {
     boundMissRecent.unshift({ ...row, count: row.count + 1, lastAt: Date.now() })
     boundMissRecent.length = Math.min(boundMissRecent.length, 16)
   }
+  /**
+   * Envelopes that were present but failed verification, by claimed caller, claimed URL and reason —
+   * `bad-ts` is a sender clock off by more than ±5 min, `no-card`/`bad-sig` a key or reachability fault.
+   * Observation only: the faces' refusals are unchanged. Caller fields are the sender's unverified
+   * header values (capped), so read them as claims, not identities. Counts verification attempts.
+   */
+  let claimRejectsInboundCount = 0
+  const claimRejectsRecent: Array<{ caller: string; callerUrl: string; reason: string; count: number; lastAt: number }> = []
+  const noteClaimReject = (req: IncomingMessage, reason: string): void => {
+    claimRejectsInboundCount += 1
+    const header = (name: string): string => String(req.headers[name] ?? '').slice(0, 200)
+    const caller = header('x-a2a-caller'), callerUrl = header('x-a2a-caller-url')
+    const at = claimRejectsRecent.findIndex(row => row.caller === caller && row.callerUrl === callerUrl && row.reason === reason)
+    const row = at >= 0 ? claimRejectsRecent.splice(at, 1)[0]! : { caller, callerUrl, reason, count: 0, lastAt: 0 }
+    claimRejectsRecent.unshift({ ...row, count: row.count + 1, lastAt: Date.now() })
+    claimRejectsRecent.length = Math.min(claimRejectsRecent.length, 16)
+  }
   /** Our configured seeds anchor origin claims; mounted claims require exact mount matching. */
   function configuredSeedCaller(callerUrl: string): boolean {
     return config.peers.some(peer => {
@@ -2366,6 +2385,7 @@ export function apply(ctx: Context, config: Config): void {
       ...(options?.cli === true ? { cliDeposit: cliDepositCard } : {}),
       ...(options?.rawBody !== undefined ? { rawBody: options.rawBody } : {}),
     })
+    if (!claim.ok && claim.reason !== 'absent') noteClaimReject(req, claim.reason)
     // #312: recover bilateral seed evidence from a signed, reduction-only card,
     // never from a caller-selected unseeded URL and never recursively.
     const discovery = new URL(req.url ?? '/', 'http://x').searchParams.get('discovery') === '1'

@@ -112,6 +112,8 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly unboundInboundCount: number
   readonly boundMissInboundCount: number
   readonly boundMissRecent: ReadonlyArray<{ caller: string; audience: string; count: number; lastAt: number }>
+  readonly claimRejectsInboundCount: number
+  readonly claimRejectsRecent: ReadonlyArray<{ caller: string; callerUrl: string; reason: string; count: number; lastAt: number }>
   readonly ownCardUrl: string
   /** #282 S2: this host's canvas owner fingerprint. */
   readonly ownCanvasFingerprint: string
@@ -477,6 +479,9 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           boundMissInbound: d.boundMissInboundCount,
           // Who missed, by verified caller and the origin it dialled (newest first, ≤16).
           boundMissRecent: d.boundMissRecent,
+          // Present-but-unverifiable envelopes by claimed caller and reason (bad-ts = sender clock skew > ±5 min).
+          claimRejectsInbound: d.claimRejectsInboundCount,
+          claimRejectsRecent: d.claimRejectsRecent,
           // gh#113: CLI mailbox loss, all handles — mail the 64-row cap
           // pushed out, and mail cut at 4000 chars. The team verifier
           // holds `dropped` to zero.

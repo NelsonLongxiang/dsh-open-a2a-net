@@ -91,7 +91,10 @@ Files do not go through session messages: use the file channel below, never JPFI
   makes the bound form miss. While the host's `originClaimUnboundWindow` is
   open the route still lands and the miss shows only on the host, in
   `boundMissInbound`; `a2a-net status` prints that gauge beside the address
-  the CLI dials. Once the window is closed the route is refused as
+  the CLI dials. It also prints `reject` rows from the host's
+  `claimRejectsRecent`: envelopes that were present but failed verification,
+  by claimed caller and reason. `bad-ts` means that sender's clock is off by
+  more than ±5 min (fix its NTP); the caller fields are the sender's own claim. Once the window is closed the route is refused as
   `wrong-audience`: stderr names the dialled origin and the fix — the host
   operator adds it to `originClaimAudiences`, or `--home` / `$A2A_HOME`
   points at an address the host lists. A proxy that rewrites the path

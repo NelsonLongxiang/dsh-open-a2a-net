@@ -1049,6 +1049,10 @@ async function main() {
       for (const m of (Array.isArray(s.boundMissRecent) ? s.boundMissRecent : []).slice(0, 5)) {
         console.log(`  miss      ${String(m.caller)} dialled ${String(m.audience) || '(no origin)'} ×${String(m.count)}`)
       }
+      // Present but unverifiable: bad-ts is the sender's clock (±5 min); the caller fields are its own claim.
+      for (const r of (Array.isArray(s.claimRejectsRecent) ? s.claimRejectsRecent : []).slice(0, 5)) {
+        console.log(`  reject    ${String(r.reason)} from ${String(r.caller) || '(no caller)'} ${String(r.callerUrl) || ''} ×${String(r.count)}`)
+      }
     }
     console.log(`deposit     ${depositLine(list, identity().handle, 'OFFLINE')}`)
     return
