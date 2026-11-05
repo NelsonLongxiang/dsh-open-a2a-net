@@ -58,7 +58,7 @@ describe('gh#131 a local session named by handle is a local canvas member', () =
     } finally { await a.dispose(); await b.dispose() }
   }, 60_000)
 
-  it('review P2-1: a peer removes by handle a member the local control stored by id, and one it stored by handle', async () => {
+  it('#335: peer removal by bare handle removes only that exact slot, never an inferred local id', async () => {
     const { a, b } = await pairAB('remove', IDS)
     try {
       await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: 'by-id' })
@@ -67,7 +67,7 @@ describe('gh#131 a local session named by handle is a local canvas member', () =
       await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: 'by-handle', id: 'dsh/aaaaaaaa' })
       for (const name of ['by-id', 'by-handle']) {
         const removed = await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'remove-member', name, id: 'dsh/aaaaaaaa' })
-        expect(removed, name).toMatchObject({ ok: true, members: [] })
+        expect(removed, name).toMatchObject(name === 'by-id' ? { ok: false, members: [IDS.a] } : { ok: true, members: [] })
       }
     } finally { await a.dispose(); await b.dispose() }
   }, 60_000)

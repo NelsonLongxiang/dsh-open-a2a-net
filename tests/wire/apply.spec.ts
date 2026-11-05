@@ -2349,6 +2349,7 @@ describe('a2a plugin module surface', () => {
       originClaimWindow: true,
       // OriginClaim audience binding: unbound window open, no extra audiences.
       originClaimUnboundWindow: true,
+      canvasLegacyBareMembers: true,
       originClaimAudiences: [],
       linkKeys: {},
       originClaimUrl: '',

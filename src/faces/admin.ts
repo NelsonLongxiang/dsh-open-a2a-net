@@ -24,7 +24,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Config } from '../index.ts'
 import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from '../runtime.ts'
-import { CanvasStore, canvasNameReserved as reservedCanvasName, isRemoteMemberRef, validRemoteMemberRef } from '../canvas-store.ts'
+import { CanvasStore, canvasNameReserved as reservedCanvasName, isRemoteMemberRef, validRemoteMemberRef, legacyBareMember } from '../canvas-store.ts'
 import { qualifiedCanvasId } from '../canvas-id.ts'
 import { refreshPeerCard, registerCanvasNotify, type CanvasNotifyDeps } from './canvas-notify.ts'
 import { CLI_HANDLE_RE, type CliDepositStore } from '../cli-deposit.ts'
@@ -94,6 +94,8 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly sessionTeamOf: (agent: Agent) => string
   /** gh#131: the `<zone>/<id8>` handle a canvas may hold for this local session, if it reads as this session. */
   readonly ownCanvasHandleOf: (id: string) => string | undefined
+  readonly revokeCanvasMember: (id: string, reason: 'leave' | 'archive' | 'remove', name?: string) => boolean
+  readonly canvasMigrationState: () => Record<string, unknown>
   /** gh#131: the local session a remote-shaped member ref reads as, if unambiguous. */
   readonly localSessionOfHandle: (ref: string) => string | undefined
   /** gh#152: the session's canvas teams read through the local lens — a handle-stored membership of this session counts. */
@@ -265,6 +267,9 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           sessions,
           groups: groupStore.list(),
           canvas: {
+            ...d.canvasMigrationState(),
+            // Raw retained slots are an inspection view, never the effective team member list.
+            retainedMembers: canvasStore.list().flatMap(name => canvasStore.rawMembersOf(name).filter(id => !canvasStore.membersOf(name).includes(id)).map(id => ({ team: name, member: id, suspended: canvasStore.isSuspended(name,id), records: canvasStore.suspensionOf(name,id) }))),
             teams: canvasStore.list().map(name => ({
               name,
               team: canvasTeamOf(name),
@@ -277,18 +282,19 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               // store keeps both). Genuinely remote refs pass through with
               // remote:true for the workbench's member chips and pickers.
               members: (() => {
-                const rows: Array<{ id: string; team: string; joined?: boolean; live?: boolean; remote?: boolean; cliHome?: string | null; cliHeld?: boolean; cliHomeCleared?: boolean }> = []
+                const rows: Array<{ suspended?: boolean; suspension?: unknown; provenance?: string; id: string; team: string; joined?: boolean; live?: boolean; remote?: boolean; cliHome?: string | null; cliHeld?: boolean; cliHomeCleared?: boolean }> = []
                 const seenLocal = new Set<string>()
                 for (const id of canvasStore.membersOf(name)) {
+                  const legacy = legacyBareMember(id)
                   if (isRemoteMemberRef(id)) {
                     const localId = localSessionOfHandle(id)
                     if (localId !== undefined) {
                       if (seenLocal.has(localId)) continue
                       seenLocal.add(localId)
-                      rows.push({ id: localId, team: `${config.team}/${id8(localId)}`, joined: sessionNodes.has(localId) || joinedSessions.has(localId), live: sessionNodes.has(localId) })
+                      rows.push({ ...(legacy ? { provenance: 'legacy-inferred' } : {}), id: localId, team: `${config.team}/${id8(localId)}`, joined: sessionNodes.has(localId) || joinedSessions.has(localId), live: sessionNodes.has(localId) })
                       continue
                     }
-                    rows.push({ id, team: id, remote: true, ...(CLI_HANDLE_RE.test(id) ? { cliHome: canvasStore.cliHomeOf(id) ?? null, cliHeld: cliDeposits.directoryRows().some(row => row.team === id), ...(canvasStore.wasCliHomeCleared(id) ? { cliHomeCleared: true } : {}) } : {}) })
+                    rows.push({ ...(legacy ? { provenance: 'unknown' } : {}), id, team: id, remote: true, ...(CLI_HANDLE_RE.test(id) ? { cliHome: canvasStore.cliHomeOf(id) ?? null, cliHeld: cliDeposits.directoryRows().some(row => row.team === id), ...(canvasStore.wasCliHomeCleared(id) ? { cliHomeCleared: true } : {}) } : {}) })
                     continue
                   }
                   if (seenLocal.has(id)) continue
@@ -576,15 +582,16 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
       readJsonBody(req, res, (body) => {
         const id = typeof body.id === 'string' ? body.id : ''
         // gh#131: read while the session is still joined — its own handle reads as it only then.
-        const ownHandle = id !== '' ? ownCanvasHandleOf(id) : undefined
+        try { if (id !== '') d.revokeCanvasMember(id, 'leave') } catch (error) {
+          const payload = JSON.stringify({ ok: false, error: String(error) })
+          res.writeHead(503, { 'Content-Type': 'application/json' }); res.end(payload); return
+        }
         if (id !== '') sessionNodes.delete(id)
         joinedSessions.remove(id)
         // Leaving the network leaves every canvas team too: membership
         // without join consent would be a routing backdoor. Team
         // roster declarations die the same way (S2 consistency) — and so
         // does a membership a fleet edit stored by the session's handle.
-        canvasStore.dropMember(id)
-        if (ownHandle !== undefined) canvasStore.dropMember(ownHandle)
         teamMemberships.dropSession(id)
         const payload = JSON.stringify({ id })
         res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
@@ -838,58 +845,69 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
       readJsonBody(req, res, async (body) => {
         const action = body.action
         let payload: string
-        if (action === 'cli-home-options') {
-          const name = typeof body.name === 'string' ? body.name : ''
-          const id = typeof body.id === 'string' ? body.id : ''
-          if (!CLI_HANDLE_RE.test(id) || !canvasStore.membersOf(name).includes(id)) payload = JSON.stringify({ ok: false, error: 'an existing canvas CLI member is required' })
-          else {
-            try { payload = JSON.stringify({ ok: true, ...await d.cliHomeOptions(id) }) }
-            catch { payload = JSON.stringify({ ok: false, error: 'fresh home card lookup failed' }) }
-          }
-        } else if (action === 'create') {
-          const name = typeof body.name === 'string' ? body.name : ''
-          const stored = canvasNameReserved(name) ? undefined : canvasStore.create(name)
-          payload = JSON.stringify(stored === undefined ? { ok: false, error: 'invalid, roster-reserved name or team cap reached' } : { ok: true, name: stored, teams: canvasStore.list() })
-        } else if (action === 'remove') {
-          const name = typeof body.name === 'string' ? body.name : ''
-          payload = JSON.stringify({ ok: canvasStore.remove(name), teams: canvasStore.list() })
-        } else if (action === 'add-member') {
-          const name = typeof body.name === 'string' ? body.name : ''
-          const id = typeof body.id === 'string' ? body.id : ''
-          // Dual member shape: a local session id must be a joined node;
-          // a remote ref is a zone-qualified team handle whose shape this
-          // gate checks and whose existence the UI picker (directory
-          // rows) vouches for. Humans compose both via the workbench.
-          const memberValid = isRemoteMemberRef(id)
-            ? validRemoteMemberRef(id)
-            : id !== '' && (sessionNodes.has(id) || joinedSessions.has(id))
-          if (!canvasStore.hasTeam(name) && canvasNameReserved(name)) {
-            payload = JSON.stringify({ ok: false, error: 'roster reserves this canvas name' })
-          } else if (name === '' || !memberValid) {
-            payload = JSON.stringify({ ok: false, error: 'name and a member (joined session id, or a zone-qualified remote team handle like zone/a1b2c3d4) are required' })
-          } else {
-            const pin = await d.cliHomeForAdd(id, (body as { home?: unknown }).home).catch(() => ({ ok: false as const, error: 'linked home card lookup failed' }))
-            if (!pin.ok) payload = JSON.stringify({ ok: false, error: pin.error })
+        try {
+          if (action === 'restore-suspended' || action === 'delete-suspended') {
+            const request = body as { name?: unknown; id?: unknown; revision?: unknown; expected?: unknown }
+            const name = typeof request.name === 'string' ? request.name : '', id = typeof request.id === 'string' ? request.id : ''
+            const out = canvasStore.regulateSuspended(action === 'restore-suspended' ? 'restore' : 'delete', name, id, request.revision, request.expected)
+            logger.info('canvas suspended owner operation %s %s %s: %s', action, name, id, out.ok)
+            payload = JSON.stringify({ ...out, ...canvasStore.state() })
+          } else if (action === 'cli-home-options') {
+            const name = typeof body.name === 'string' ? body.name : ''
+            const id = typeof body.id === 'string' ? body.id : ''
+            if (!CLI_HANDLE_RE.test(id) || !canvasStore.membersOf(name).includes(id)) payload = JSON.stringify({ ok: false, error: 'an existing canvas CLI member is required' })
             else {
-              canvasStore.create(name)
-              const explicitHome = (body as { home?: unknown }).home !== undefined
-              const home = explicitHome ? pin.home : canvasStore.cliHomeOf(id) ?? pin.home
-              payload = JSON.stringify({ ok: canvasStore.addMember(name, id, home, { replaceHome: explicitHome }), teams: canvasStore.list(), members: canvasStore.membersOf(name) })
+              try { payload = JSON.stringify({ ok: true, ...await d.cliHomeOptions(id) }) }
+              catch { payload = JSON.stringify({ ok: false, error: 'fresh home card lookup failed' }) }
             }
-          }
-        } else if (action === 'remove-member') {
-          const name = typeof body.name === 'string' ? body.name : ''
-          const id = typeof body.id === 'string' ? body.id : ''
-          if (name === '' || id === '') {
-            payload = JSON.stringify({ ok: false, error: 'name and id are required' })
+          } else if (action === 'create') {
+            const name = typeof body.name === 'string' ? body.name : ''
+            const stored = canvasNameReserved(name) ? undefined : canvasStore.create(name)
+            payload = JSON.stringify(stored === undefined ? { ok: false, error: 'invalid, roster-reserved name or team cap reached' } : { ok: true, name: stored, teams: canvasStore.list() })
+          } else if (action === 'remove') {
+            const name = typeof body.name === 'string' ? body.name : ''
+            payload = JSON.stringify({ ok: canvasStore.remove(name), teams: canvasStore.list() })
+          } else if (action === 'add-member') {
+            const name = typeof body.name === 'string' ? body.name : ''
+            const id = typeof body.id === 'string' ? body.id : ''
+            // Dual member shape: a local session id must be a joined node;
+            // a remote ref is a zone-qualified team handle whose shape this
+            // gate checks and whose existence the UI picker (directory
+            // rows) vouches for. Humans compose both via the workbench.
+            const memberValid = isRemoteMemberRef(id)
+              ? validRemoteMemberRef(id)
+              : id !== '' && (sessionNodes.has(id) || joinedSessions.has(id))
+            if (!canvasStore.hasTeam(name) && canvasNameReserved(name)) {
+              payload = JSON.stringify({ ok: false, error: 'roster reserves this canvas name' })
+            } else if (name === '' || !memberValid) {
+              payload = JSON.stringify({ ok: false, error: 'name and a member (joined session id, or a zone-qualified remote team handle like zone/a1b2c3d4) are required' })
+            } else {
+              const pin = await d.cliHomeForAdd(id, (body as { home?: unknown }).home).catch(() => ({ ok: false as const, error: 'linked home card lookup failed' }))
+              if (!pin.ok) payload = JSON.stringify({ ok: false, error: pin.error })
+              else {
+                canvasStore.create(name)
+                const explicitHome = (body as { home?: unknown }).home !== undefined
+                const home = explicitHome ? pin.home : canvasStore.cliHomeOf(id) ?? pin.home
+                payload = JSON.stringify({ ok: canvasStore.addMember(name, id, home, { replaceHome: explicitHome }), teams: canvasStore.list(), members: canvasStore.membersOf(name) })
+              }
+            }
+          } else if (action === 'remove-member') {
+            const name = typeof body.name === 'string' ? body.name : ''
+            const id = typeof body.id === 'string' ? body.id : ''
+            if (name === '' || id === '') {
+              payload = JSON.stringify({ ok: false, error: 'name and id are required' })
+            } else {
+              // gh#131: removing a local session removes its handle-stored slot too.
+              let removed = false
+              try { removed = isRemoteMemberRef(id) ? (!canvasStore.isSuspended(name, id) && canvasStore.removeMember(name, id)) : d.revokeCanvasMember(id, 'remove', name) } catch (error) { payload = JSON.stringify({ ok: false, error: String(error) }); res.writeHead(503, { 'Content-Type': 'application/json' }); res.end(payload); return }
+              payload = JSON.stringify({ ok: removed, teams: canvasStore.list(), members: canvasStore.membersOf(name) })
+            }
           } else {
-            // gh#131: removing a local session removes its handle-stored slot too.
-            const ownHandle = isRemoteMemberRef(id) ? undefined : ownCanvasHandleOf(id)
-            const removed = [id, ...(ownHandle !== undefined ? [ownHandle] : [])].map(each => canvasStore.removeMember(name, each)).some(Boolean)
-            payload = JSON.stringify({ ok: removed, teams: canvasStore.list(), members: canvasStore.membersOf(name) })
+            payload = JSON.stringify({ ok: false, error: 'unknown action' })
           }
-        } else {
-          payload = JSON.stringify({ ok: false, error: 'unknown action' })
+        } catch (error) {
+          const failure = JSON.stringify({ ok: false, error: String(error) })
+          res.writeHead(503, { 'Content-Type': 'application/json' }); res.end(failure); return
         }
         res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
         res.end(payload)
