@@ -1773,11 +1773,19 @@ describe('a2a session nodes (opt-in join)', () => {
     } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
     const materialize = vi.fn(async () => makeAgent())
     ctx.provide('sessionController', { resolveAgent: async (id: string) => ({ agent: await materialize(id) }) } as never)
-    apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, wakePrewarmDelayMs: 120, dshHome: home }))
-    await new Promise(resolve => setTimeout(resolve, 40))
-    expect(materialize).not.toHaveBeenCalled()
-    await vi.waitFor(() => { expect(materialize).toHaveBeenCalledWith('agent-1') })
-    await ctx.fiber.dispose()
+    // #325: assert scheduler time, not elapsed wall time under concurrent Windows load.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, wakePrewarmDelayMs: 120, dshHome: home }))
+      await vi.advanceTimersByTimeAsync(0) // settle the zero-delay prune/queue initialization
+      await vi.advanceTimersByTimeAsync(119)
+      expect(materialize).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(materialize).toHaveBeenCalledExactlyOnceWith('agent-1')
+    } finally {
+      await ctx.fiber.dispose()
+      vi.useRealTimers()
+    }
   })
 
   it('boot prewarm yields to a recent route demand, then resumes after the quiet window', async () => {
@@ -1801,31 +1809,38 @@ describe('a2a session nodes (opt-in join)', () => {
       return woken
     })
     ctx.provide('sessionController', { resolveAgent: async (id: string) => ({ agent: await materialize(id) }) } as never)
-    apply(ctx, makeConfig({
-      sessionNodes: true,
-      wakeJoinedOnBoot: true,
-      wakePrewarmDelayMs: 0,
-      wakePrewarmQuietMs: 400,
-      wakeBootStaggerMs: 200,
-      dshHome: home,
-    }))
-    // The first prewarm wake (agent-1) is itself the demand clock's start:
-    // waking it does not count, but the route that follows does.
-    await vi.waitFor(() => { expect(materialize).toHaveBeenCalledWith('agent-1') })
-    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
-    // agent-1 now live: a route to its team records foreground demand.
-    await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
-      method: 'POST',
-      body: JSON.stringify({ team: 'dsh/agent-1', message: 'foreground demand', wait: false }),
-    })
-    await new Promise(resolve => setTimeout(resolve, 100))
-    // Inside the quiet window: agent-2 stays asleep (the stagger has long
-    // elapsed; only the demand yield holds it back).
-    expect(materialize.mock.calls.map(call => String(call[0]))).toEqual(['agent-1'])
-    // Past the window (demand 400ms old): the queue resumes. The yield
-    // retry cadence is 1s, so the wait budget must exceed it.
-    await vi.waitFor(() => { expect(materialize).toHaveBeenCalledWith('agent-2') }, { timeout: 4_000 })
-    await ctx.fiber.dispose()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      apply(ctx, makeConfig({
+        sessionNodes: true,
+        wakeJoinedOnBoot: true,
+        wakePrewarmDelayMs: 0,
+        wakePrewarmQuietMs: 400,
+        wakeBootStaggerMs: 200,
+        dshHome: home,
+      }))
+      await vi.advanceTimersByTimeAsync(1)
+      // The first prewarm wake (agent-1) is itself the demand clock's start:
+      // waking it does not count, but the route that follows does.
+      expect(materialize).toHaveBeenCalledWith('agent-1')
+      const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+      // agent-1 now live: a route to its team records foreground demand.
+      await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        body: JSON.stringify({ team: 'dsh/agent-1', message: 'foreground demand', wait: false }),
+      })
+      await vi.advanceTimersByTimeAsync(200)
+      // Inside the quiet window: agent-2 stays asleep (the stagger has long
+      // elapsed; only the demand yield holds it back).
+      expect(materialize.mock.calls.map(call => String(call[0]))).toEqual(['agent-1'])
+      // Past the window (demand 400ms old): the queue resumes. The yield
+      // retry cadence is 1s, so the wait budget must exceed it.
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(materialize).toHaveBeenCalledWith('agent-2')
+    } finally {
+      await ctx.fiber.dispose()
+      vi.useRealTimers()
+    }
   })
 
   it('disposing the fiber mid-queue stops further boot prewarm wakes', async () => {
@@ -1843,11 +1858,18 @@ describe('a2a session nodes (opt-in join)', () => {
     } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
     const materialize = vi.fn(async () => makeAgent())
     ctx.provide('sessionController', { resolveAgent: async (id: string) => ({ agent: await materialize(id) }) } as never)
-    apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, wakePrewarmDelayMs: 0, wakeBootStaggerMs: 200, dshHome: home }))
-    await vi.waitFor(() => { expect(materialize).toHaveBeenCalledWith('agent-1') })
-    await ctx.fiber.dispose()
-    await new Promise(resolve => setTimeout(resolve, 400))
-    expect(materialize.mock.calls.map(call => String(call[0]))).toEqual(['agent-1'])
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      apply(ctx, makeConfig({ sessionNodes: true, wakeJoinedOnBoot: true, wakePrewarmDelayMs: 0, wakeBootStaggerMs: 200, dshHome: home }))
+      await vi.advanceTimersByTimeAsync(1)
+      expect(materialize).toHaveBeenCalledWith('agent-1')
+      await ctx.fiber.dispose()
+      await vi.advanceTimersByTimeAsync(400)
+      expect(materialize.mock.calls.map(call => String(call[0]))).toEqual(['agent-1'])
+    } finally {
+      await ctx.fiber.dispose()
+      vi.useRealTimers()
+    }
   })
 
   it('serves cold rows stale-while-revalidate: a hung enumeration never blocks the poll', async () => {

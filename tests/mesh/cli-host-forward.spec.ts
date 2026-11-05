@@ -184,7 +184,7 @@ describe('#230 home host forwards a deposited CLI one hop with scope on', () => 
   }, 35000)
   it('stale first candidate refuses without forwarding again, then the next real host accepts', async () => {
     const pa = await reservePort(), pb = await reservePort(), pc = await reservePort()
-    const a = await bootNode({ name: 'A', session: 'fwd-failover-a', team: 'alpha', port: pa, peers: ['http://127.0.0.1:' + pb, 'http://127.0.0.1:' + pc], sessionNodes: true, teamScopeRouting: true, teamScopeInfo: true, forwardDirect: true })
+    const a = await bootNode({ name: 'A', session: 'fwd-failover-a', team: 'alpha', port: pa, peers: ['http://127.0.0.1:' + pb, 'http://127.0.0.1:' + pc], sessionNodes: true, teamScopeRouting: true, teamScopeInfo: true, forwardDirect: true, cardCacheTtlMs: 60_000, remoteRowsTtlMs: 60_000 })
     const b = await bootNode({ name: 'B', session: 'fwd-stale-b', team: 'beta', port: pb, peers: [a.baseUrl], sessionNodes: true, teamScopeRouting: true, teamScopeInfo: true, forwardDirect: true })
     const c = await bootNode({ name: 'C', session: 'fwd-live-c', team: 'beta', port: pc, peers: [a.baseUrl], sessionNodes: true, teamScopeRouting: true, teamScopeInfo: true })
     try {
@@ -196,6 +196,9 @@ describe('#230 home host forwards a deposited CLI one hop with scope on', () => 
       }
       await post(a, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: handle })
       await post(a, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: 'beta/01234567' })
+      // #325: hold this intentionally stale directory snapshot for the whole test, not the
+      // harness 60ms TTL (which could expire between HTTP calls under parallel load).
+      // Both candidates remain advertised while B really leaves; the original failover assertions stay.
       // Cache the advertised B row, then remove it. Resolution must fail over the stale positive.
       await a.ctx.tools.get('a2a_teams')!.execute({}, { signal: new AbortController().signal } as never)
       await post(b, '/__dsh_a2a/leave', { id: 'session-0123456789abcdef' })
