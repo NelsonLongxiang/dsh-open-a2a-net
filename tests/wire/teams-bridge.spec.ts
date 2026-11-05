@@ -397,7 +397,9 @@ describe('inbound native-teams bridge', () => {
     const events: unknown[] = []
     const node = makeAgent('session-aaa')
     ;(node.session as { events: unknown[] }).events = events
-    const steer = vi.fn(() => {
+    const steer = vi.fn((message: { content: Array<{ type: string; text?: string }> }) => {
+      // #306: the steered user message is logged before the reply (attributed waits read that turn).
+      events.push({ type: 'user/message', data: { content: message.content } })
       events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'session node answered' }] } } })
       m.ctx.emit('agent/status', { agent: node, status: 'idle' })
     })
@@ -731,6 +733,8 @@ describe('P2 receipt-resolved event seam', () => {
     const initiator = makeAgent('session-main1')
     const steer = vi.fn((message: { content: Array<{ type: string; text?: string }> }) => {
       setTimeout(() => {
+        // #306: the steered user message is logged before the reply (attributed waits read that turn).
+        initiator.session.events.push({ type: 'user/message', data: { content: message.content } })
         initiator.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'work finished' }] } } })
         m.ctx.emit('agent/status', { agent: initiator, status: 'idle' })
       }, 30)
@@ -769,6 +773,8 @@ describe('settle fence coverage', () => {
     const initiator = makeAgent('session-main1')
     const steer = vi.fn((message: { content: Array<{ type: string; text?: string }> }) => {
       setTimeout(() => {
+        // #306: the steered user message is logged before the reply (attributed waits read that turn).
+        initiator.session.events.push({ type: 'user/message', data: { content: message.content } })
         initiator.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'work finished' }] } } })
         m.ctx.emit('agent/status', { agent: initiator, status: 'idle' })
       }, 30)

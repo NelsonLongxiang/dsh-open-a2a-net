@@ -13,7 +13,7 @@ const state = async (n: MeshNode) => await fetch(n.baseUrl + '/__dsh_a2a/state')
 describe('state face: live session work status', () => {
   it('reports the agent status and the receipt-owing queue for each live session', async () => {
     vi.stubGlobal('WebSocket', function () { throw new Error('no socket') })
-    const n = await bootNode({ name: 'h', session: 'work-status', team: 'dsh', sessionNodes: true, teamScopeRouting: true, originClaimWindow: true, targetQueueCap: 0 } as never)
+    const n = await bootNode({ name: 'h', session: 'work-status', team: 'dsh', sessionNodes: true, teamScopeRouting: true, originClaimWindow: true, targetQueueCap: 0, silent: true } as never)
     nodes.push(n)
     await fetch(n.baseUrl + '/__dsh_a2a/join', { method: 'POST', body: JSON.stringify({ id: 'session-0123456789abcdef' }) })
     const agent = n.agents.agent as unknown as { status: string }

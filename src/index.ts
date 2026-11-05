@@ -2203,9 +2203,16 @@ export function apply(ctx: Context, config: Config): void {
     { ok: true; reply: string; placeholder?: boolean } | { ok: false; error: string }
   > {
     return new Promise((resolve) => {
+      // #306: a task-bearing sync wait is attributed to the turn that READS the
+      // task — the same window the auto-receipt waiter uses (#114 S5). The old
+      // "latest assistant text since registration" answered with whatever the
+      // busy target's OTHER work line produced, which is not this request's
+      // reply. Registration to steer is synchronous, so the floor taken here is
+      // the pre-steer floor.
+      const steerFloor = sessionEventsOf(agent).length
       const waiter = registerFinalWaiter(agent, (text, placeholder) => {
         resolve({ ok: true, reply: text, ...(placeholder === true ? { placeholder: true } : {}) })
-      })
+      }, taskId !== undefined && taskId !== '' ? { taskId, steerFloor } : undefined)
       // The header names the sender first: `caller` is the routing node's
       // own label (the session that issued the route), while `team` is this
       // request's target — showing the target as "remote team" hid the

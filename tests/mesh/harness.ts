@@ -67,6 +67,8 @@ export interface MeshNodeOptions extends Partial<Config> {
   reply?: ReplyFn
   /** The fake agent's session id (default session-0123456789abcdef): two hosts need distinct ones to tell their sessions apart. */
   agentId?: string
+  /** #306-era: record steers but never answer — inbound rows stay owed (queue caps, owed-state pins). */
+  silent?: boolean
 }
 
 export interface MeshNode {
@@ -196,6 +198,12 @@ export async function bootNode(options: MeshNodeOptions): Promise<MeshNode> {
     id: SessionId(options.agentId ?? 'session-0123456789abcdef'),
     session: { events: [] as unknown[] },
     steer: (payload: unknown) => {
+      // #306: a real session logs the steered user message before its reply — the
+      // attributed sync waiter reads the turn that consumed the task.
+      const blocks = typeof payload === 'object' && payload !== null && 'content' in (payload as Record<string, unknown>)
+        ? (payload as { content: Array<{ type: string; text?: string }> }).content
+        : [{ type: 'text', text: steerText(payload) }]
+      agent.session.events.push({ type: 'user/message', data: { content: blocks } })
       const out = reply(steerText(payload), options.name)
       agent.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: out }] } } })
       ctx.emit('agent/status', { agent: agent as unknown as Agent, status: 'idle' })
@@ -207,11 +215,20 @@ export async function bootNode(options: MeshNodeOptions): Promise<MeshNode> {
   ctx.emit('agent/created', { agent: agent as unknown as Agent })
   const steerCalls: unknown[] = []
   const originalSteer = agent.steer.bind(agent)
-  ;(agent as unknown as { steer: (payload: unknown) => void }).steer = (payload: unknown) => {
-    steerCalls.push(payload)
-    originalSteer(payload)
+  // #306-era fixture honesty: with the default reply the target answers every steer, and its
+  // auto-receipt settles the inbound rows on-chain (correctly). Queue-cap and work-status
+  // cases pin the OWED state, so they boot silent: the steer is recorded, never answered.
+  if (options.silent === true) {
+    ;(agent as unknown as { steer: (payload: unknown) => void }).steer = (payload: unknown) => {
+      steerCalls.push(payload)
+    }
+  } else {
+    ;(agent as unknown as { steer: (payload: unknown) => void }).steer = (payload: unknown) => {
+      steerCalls.push(payload)
+      originalSteer(payload)
+    }
   }
-  const { agentId: _agentId, ...configOptions } = options
+  const { agentId: _agentId, silent: _silent, ...configOptions } = options
   void _agentId
   apply(ctx, meshConfig({ ...configOptions, home }))
   const port = (ctx as unknown as { webServer: WebServer }).webServer.port
@@ -227,6 +244,12 @@ export async function bootNode(options: MeshNodeOptions): Promise<MeshNode> {
     setReply(next: ReplyFn) {
       ;(agent as unknown as { steer: (payload: unknown) => void }).steer = (payload: unknown) => {
         steerCalls.push(payload)
+        // #306: a real session logs the steered user message before its reply — the
+        // attributed sync waiter reads the turn that consumed the task.
+        const blocks = typeof payload === 'object' && payload !== null && 'content' in (payload as Record<string, unknown>)
+          ? (payload as { content: Array<{ type: string; text?: string }> }).content
+          : [{ type: 'text', text: steerText(payload) }]
+        agent.session.events.push({ type: 'user/message', data: { content: blocks } })
         const out = next(steerText(payload), options.name)
         agent.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: out }] } } })
         ctx.emit('agent/status', { agent: agent as unknown as Agent, status: 'idle' })

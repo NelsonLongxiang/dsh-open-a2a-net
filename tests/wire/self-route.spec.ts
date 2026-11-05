@@ -53,7 +53,9 @@ function makeAgent(id: string): Agent & { steer: ReturnType<typeof vi.fn>; sessi
 /** A live agent that answers a steer with one final reply, then goes idle. */
 function replyingAgent(ctx: Context, id: string): Agent & { steer: ReturnType<typeof vi.fn>; session: { events: unknown[] } } {
   const agent = makeAgent(id)
-  agent.steer = vi.fn(() => {
+  agent.steer = vi.fn((payload: { content?: Array<{ type: string; text?: string }> }) => {
+    // #306: log the steered user message before the reply (attributed sync waits read that turn).
+    ;(agent.session.events as unknown[]).push({ type: 'user/message', data: { content: payload?.content ?? [] } })
     ;(agent.session.events as unknown[]).push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'peer node replied' }] } } })
     ctx.emit('agent/status', { agent, status: 'idle' })
   }) as typeof agent.steer
