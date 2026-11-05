@@ -30,7 +30,7 @@ describe('#114 S2 inbound authorization record (real host)', () => {
   it('born on the row, shown on /state, not overwritten by a replay, restored whole after a restart', async () => {
     const port = await reservePort()
     const home = tmpHome()
-    let a = await bootNode({ name: 'A', session: 'mesh-gh120', team: 'dsh', sessionNodes: true, teamScopeRouting: true, port, home })
+    let a = await bootNode({ name: 'A', session: 'mesh-gh120', team: 'dsh', sessionNodes: true, teamScopeRouting: true, silent: true, port, home })
     try {
       expect((await post(`${a.baseUrl}/__dsh_a2a/join`, { id: 'session-0123456789abcdef' })).status).toBe(200)
       const card = signCard({ name: 'ops-cli', session: 'cli-ops-cli', team: HANDLE, capabilities: { route: true, async: true }, expiresAt: Date.now() + 172_800_000 }, privateKey)
@@ -80,7 +80,7 @@ describe('#114 S2 inbound authorization record (real host)', () => {
       const born = row?.auth.allowlist_version as string
 
       await a.dispose()
-      a = await bootNode({ name: 'A', session: 'mesh-gh120', team: 'dsh', sessionNodes: true, teamScopeRouting: true, port, home })
+      a = await bootNode({ name: 'A', session: 'mesh-gh120', team: 'dsh', sessionNodes: true, teamScopeRouting: true, silent: true, port, home })
       expect((await rowOf('direct-aaaa00000001'))?.auth).toEqual(row?.auth)
       expect((await rowOf('direct-aaaa00000001'))?.auth.allowlist_version).toBe(born)
     } finally {
@@ -117,7 +117,7 @@ describe('#114 S2 inbound authorization record (real host)', () => {
 
       const covered = await post(`${a.baseUrl}/a2a/direct`, { team: TARGET, message: 'covered', caller_session: 'market/aaaaaaaa', wait: false, task_id: 'direct-claim0001' }, signed())
       expect(covered.body.delivered, JSON.stringify(covered.body)).toBe(true)
-      expect(JSON.parse(steerText(a.steered[a.steered.length - 1])).content[0].text).toMatch(/^\[A2A direct\] \(task direct-claim0001\) 已验证来源 \S+ from/)
+      expect(a.steered.map(payload => JSON.parse(steerText(payload)).content[0].text).find((text: string) => text.startsWith('[A2A direct] (task direct-claim0001) '))).toMatch(/^\[A2A direct\] \(task direct-claim0001\) 已验证来源 \S+ from/)
       expect((await rows()).find(t => t.taskId === 'direct-claim0001')?.auth).toMatchObject({
         caller: 'market/aaaaaaaa', proof: 'origin-claim', claim: { caller: 'market', origin: new URL(marketUrl).origin },
         via: 'canvas-member', admission_rule: 'remote-ref-foreign', basis: ['dsh/canvas/ops'],
@@ -125,13 +125,14 @@ describe('#114 S2 inbound authorization record (real host)', () => {
 
       const waited = await post(`${a.baseUrl}/a2a/direct`, { team: TARGET, message: 'waited event', caller_session: 'market/aaaaaaaa', wait: true, task_id: 'direct-boundwait01' }, signed())
       expect(waited.body.routed, JSON.stringify(waited.body)).toBe(true)
-      expect(JSON.parse(steerText(a.steered[a.steered.length - 1])).content[0].text).toMatch(/^\[A2A direct\] \(task direct-boundwait01\) 已验证来源 \S+ from/ )
+      // #306: real consumption now enables automatic receipts; identify this delivery by its header, not the final steer (which may be a receipt).
+      expect(a.steered.map(payload => JSON.parse(steerText(payload)).content[0].text).find((text: string) => text.startsWith('[A2A direct] (task direct-boundwait01) '))).toMatch(/^\[A2A direct\] \(task direct-boundwait01\) 已验证来源 \S+ from/ )
 
       // A same-origin subpath card still serves a key-valid identity for delivery, but is never granted origin-level proof.
       const pathUrl = `${marketUrl}/apps/market`
       const prefixed = await post(`${a.baseUrl}/a2a/direct`, { team: TARGET, message: 'prefixed origin', caller_session: 'market/aaaaaaaa', wait: false, task_id: 'direct-prefix0001' }, signed(a.baseUrl, 'market', pathUrl))
       expect(prefixed.body.delivered, JSON.stringify(prefixed.body)).toBe(true)
-      expect(JSON.parse(steerText(a.steered[a.steered.length - 1])).content[0].text).toContain('未验证（claim-mismatch）')
+      expect(a.steered.map(payload => JSON.parse(steerText(payload)).content[0].text).find((text: string) => text.startsWith('[A2A direct] (task direct-prefix0001) '))).toContain('未验证（claim-mismatch）')
       expect((await rows()).find(t => t.taskId === 'direct-prefix0001')?.auth).toMatchObject({ proof: 'claim-mismatch', caller: 'market/aaaaaaaa' })
 
       // Replaying the same v1 signature with another body is accepted only as unbound proof; v1 does not sign target or body.
@@ -143,12 +144,12 @@ describe('#114 S2 inbound authorization record (real host)', () => {
         expect(replay.body.delivered, JSON.stringify(replay.body)).toBe(true)
         expect((await rows()).find(t => t.taskId === taskId)?.auth).toMatchObject({ proof: 'unbound', caller: 'market/aaaaaaaa' })
       }
-      expect(JSON.parse(steerText(a.steered[a.steered.length - 1])).content[0].text).toContain('未验证（unbound）')
+      expect(a.steered.map(payload => JSON.parse(steerText(payload)).content[0].text).find((text: string) => text.startsWith('[A2A direct] (task direct-v1replay02) '))).toContain('未验证（unbound）')
 
       // The signed zone "market" does not cover the host face "dsh": delivered (admission is unchanged), but never recorded as proven.
       const mismatched = await post(`${a.baseUrl}/a2a/direct`, { team: TARGET, message: 'mismatch', caller_session: 'dsh', wait: false, task_id: 'direct-claim0002' }, signed(a.baseUrl, 'market'))
       expect(mismatched.body.delivered, JSON.stringify(mismatched.body)).toBe(true)
-      expect(JSON.parse(steerText(a.steered[a.steered.length - 1])).content[0].text).toContain('未验证（claim-mismatch）')
+      expect(a.steered.map(payload => JSON.parse(steerText(payload)).content[0].text).find((text: string) => text.startsWith('[A2A direct] (task direct-claim0002) '))).toContain('未验证（claim-mismatch）')
       expect((await rows()).find(t => t.taskId === 'direct-claim0002')?.auth).toMatchObject({
         caller: 'dsh', proof: 'claim-mismatch', claim: { caller: 'market' }, admission_rule: 'host-face',
       })

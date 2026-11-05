@@ -58,7 +58,9 @@ async function mount(overrides: Partial<Config> = {}): Promise<Mounted> {
   const session = {
     id: SessionId('session-0123456789abcdef'),
     session: { events: [] as unknown[] },
-    steer(): void {
+    steer(payload: { content: unknown[] }): void {
+      // #306: record task consumption before answering.
+      ;(session as { session: { events: unknown[] } }).session.events.push({ type: 'user/message', data: { content: payload.content } })
       ;(session as { session: { events: unknown[] } }).session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'steered ok' }] } } })
       ctx.emit('agent/status', { agent: session as unknown as Agent, status: 'idle' })
     },

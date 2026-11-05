@@ -58,6 +58,9 @@ function makeAgent(id: string, name: string): TestAgent {
         ? String((payload as { message?: unknown }).message)
         : String(payload)
       const events = (agent as unknown as { session: { events: unknown[] } }).session.events
+      // #306: emulate the real session consuming its steered user message before answering.
+      const content = typeof payload === 'object' && payload !== null && 'content' in payload ? (payload as { content: unknown[] }).content : [{ type: 'text', text: String(payload) }]
+      events.push({ type: 'user/message', data: { content } })
       events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: `answered ${name}: ${message.slice(0, 40)}` }] } } })
       agent.host?.emit('agent/status', { agent: agent as unknown as Agent, status: 'idle' })
     },
