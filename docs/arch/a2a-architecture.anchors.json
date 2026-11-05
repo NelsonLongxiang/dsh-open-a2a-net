@@ -3,7 +3,7 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "498d0c6a390db8f191dfc9fd87f1a074b05c33c1239e208d22128f5fb71c182e",
+    "src/index.ts": "cd074bf92552d1350708ca1da10436086c4337cac6aff3c24685edc9fc166156",
     "src/faces/admin.ts": "ca66a4e6cf60fb0ec58c57d7a34af86007a35928823900bbcd9dbe59592d1e36",
     "src/canvas-store.ts": "e100285ecbb0bd57057f985c51c062658cebe64cdedca646dd6fe867c330509c",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
@@ -63,7 +63,7 @@
     {
       "page": "p1-arch",
       "cell": "b3",
-      "ref": "src/index.ts:2342",
+      "ref": "src/index.ts:2344",
       "expect": "function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {"
     },
     {
@@ -147,7 +147,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:2707",
+      "ref": "src/index.ts:2709",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -225,7 +225,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:3560",
+      "ref": "src/index.ts:3562",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -267,7 +267,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3007",
+      "ref": "src/index.ts:3009",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {

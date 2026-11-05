@@ -391,6 +391,39 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
       expect(receipt.dup).toBeUndefined()
     } finally { await a.dispose(); await b.dispose() }
   }, 30000)
+  for (const nextTurn of [true, false]) it(`#298 review F5: with turn markers, ${nextTurn ? 'a back-to-back next turn answering the sync leaves the receipt unmarked' : 'the reading turn answering the sync marks the receipt'}`, async () => {
+    const { a, b, home } = await setup()
+    const task = 'b2b-' + String(nextTurn)
+    try {
+      const agent = b.agents.agent as any
+      agent.steer = (payload: any) => {
+        b.steered.push(payload)
+        setTimeout(() => {
+          const events = agent.session.events
+          events.push({ type: 'turn/start', data: {} })
+          events.push({ type: 'user/message', data: { content: typeof payload === 'string' ? [{ type: 'text', text: payload }] : payload.content } })
+          events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'THE REAL ANSWER for ' + task } ] } } })
+          events.push({ type: 'turn/end', data: { reason: { kind: 'completed' } } })
+          if (nextTurn) {
+            events.push({ type: 'turn/start', data: {} })
+            events.push({ type: 'user/message', data: { content: [{ type: 'text', text: 'a local user asks something else' }] } })
+            events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'next turn other text' }] } } })
+            events.push({ type: 'turn/end', data: { reason: { kind: 'completed' } } })
+          }
+          b.ctx.emit('agent/status', { agent, status: 'idle' })
+        }, 200)
+      }
+      const routed = await cli(home, ['route', targetHandle, 'question', '--sync', '--task', task])
+      expect(routed.code, routed.stderr).toBe(0)
+      expect(routed.stdout).toContain(nextTurn ? 'next turn other text' : 'THE REAL ANSWER for ' + task)
+      const receipts = async (): Promise<any[]> => ((await post(a, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle })).mail as any[]).filter(m => String(m.text).includes('[A2A receipt] task ' + task))
+      await vi.waitFor(async () => expect(await receipts()).toHaveLength(1), { timeout: 9000, interval: 100 })
+      const [receipt] = await receipts()
+      expect(receipt.text).toContain('THE REAL ANSWER for ' + task)
+      if (nextTurn) expect(receipt.dup).toBeUndefined()
+      else expect(receipt.dup).toBe('sync-answered')
+    } finally { await a.dispose(); await b.dispose() }
+  }, 30000)
   for (const canvas of [false, true]) it((canvas ? 'canvas' : 'session') + ': automatic target-member receipt settles A and is readable by shipped CLI inbox', async () => {
     const { a, b, home } = await setup()
     const task = canvas ? 'direct-receipt-canvas' : 'direct-receipt-session'
