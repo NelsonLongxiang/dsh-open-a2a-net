@@ -135,6 +135,9 @@ Other connectivity options (not authority bypasses):
 
 ## 4. Callers outside a session
 
+For an always-on CLI home that survives DSH restarts, run the network layer without a DSH instance: `a2a-net serve` — deployment, service files, linking and the public-internet caveats are in `docs/guides/standalone-node.md` of the repository.
+
+
 Scripts and terminals use the `a2a-net` CLI: deposit on ONE home host, read
 a mailbox, no wake. The home can forward eligible requests one hop under section 3; an online deposit alone grants no remote scope. See [cli.md](cli.md).
 

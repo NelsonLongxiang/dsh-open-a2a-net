@@ -66,6 +66,8 @@ a2a-net inbox --new                                      # 未读来信；--wait
 
 ### 独立网络节点（不依赖 DSH 实例）
 
+部署手册（安装、常驻服务、与 DSH 宿主互联、公网安全）：[docs/guides/standalone-node.md](docs/guides/standalone-node.md)。
+
 `a2a-net serve --config node.json` 在一个独立的 Node 进程里运行网络层：名片与签名、对端目录、CLI 户口与信箱、一跳转发、canvas 归属、台账、状态面和工作台。它不承载 AI 会话，发往会话的消息照常转发给 DSH 主机。把它部署在一台稳定的机器上作为 CLI 的 home，DSH 重启就不会让 CLI 户口、信箱和 canvas 目录掉线（节点自身重启后也保留）。安装与配置见 [`src/skill/references/cli.md`](src/skill/references/cli.md) 的 `a2a-net serve` 一节。
 
 ## 画布队伍（任意组队，v0.5.25）
