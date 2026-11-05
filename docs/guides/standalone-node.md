@@ -26,16 +26,48 @@
 | 过渡窗口默认开 | `originClaimWindow`、`originClaimUnboundWindow` 默认 `true`，无签名的旧式投递仍会进入调用方门。 |
 | 名片公开 | `/.well-known/agent-card.json` 不需要 key，内容含会话名、zone、公钥、版本和 `peers`。`peers` 列出你其他主机的地址，等于公开内网拓扑。 |
 | 未审计 | 0.6.x，未经独立安全审计；`settlementAuth` 默认 `observe`。 |
+| 反代泄露 key（≤ 0.6.39） | 本机回环访问时，工作台页面会把 apiKey 写进 HTML。同机反代（Caddy、nginx）以 `127.0.0.1` 连接节点，每个公网请求都会被当成本机，**任何人打开工作台都能拿到 key**。0.6.40 起，带 `X-Forwarded-For`、`Forwarded` 或 `X-Real-IP` 的请求不再享受本机信任；0.6.39 及更早版本要按下面的做法绕开。 |
 
 **推荐**：放在 Tailscale / WireGuard 等私有网络里，`host` 绑 `0.0.0.0` 时，只在私网接口放行端口，或直接用防火墙限制来源。
 
 **如果必须上公网**，以下全部要做：
 
-1. 节点只绑 `127.0.0.1`，前面放 TLS 反向代理（Caddy、nginx），由代理对外。
+1. 前面放 TLS 反向代理，由代理对外，节点端口不直接暴露。具体做法见下面的“公网 HTTPS 前置”。
 2. 用强随机、专用的 `apiKey`（例如 `openssl rand -hex 32`），不要复用别处的密钥。
 3. 在代理层加来源 IP 白名单和请求限流。
 4. `node.json` 里设 `"originClaimWindow": false`，拒绝无签名投递。
 5. 跟踪 #137，修复前认清重放风险。
+6. 对外节点用**专用 key**，不要与内网舰队共用。互联要求同一把 key，所以对外节点暂不与内网 DSH 宿主互联，或单独起一个对外节点。
+
+### 公网 HTTPS 前置（Caddy）
+
+需要一个指向 VPS 的域名。没有自己的域名时，可以临时用 `38-209-68-244.sslip.io` 这类通配 DNS，但 Let's Encrypt 对这类公共域名常有签发限额。
+
+**0.6.39 及更早版本**：反代不能连 `127.0.0.1`。让节点绑 `0.0.0.0`，Caddy 连 VPS 自己的网卡地址，这样节点看到的来源不是回环；再用防火墙关掉公网直连的节点端口（本机到本机走 `lo`，不受影响）：
+
+```
+# /etc/caddy/Caddyfile
+a2a.example.com {
+    reverse_proxy <VPS 网卡 IP>:3080
+}
+```
+
+```bash
+sudo ufw deny 3080/tcp      # 公网不能直连节点；Caddy 走本机 lo 不受影响
+sudo systemctl reload caddy
+```
+
+**0.6.40 起**：节点可以只绑 `127.0.0.1`，Caddy 连 `127.0.0.1:3080`。Caddy 默认带 `X-Forwarded-For`。用 nginx 时必须写 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`，否则仍会被当成本机。
+
+两种做法都要在 `node.json` 设 `"originClaimUrl": "https://a2a.example.com"`，然后重启节点。
+
+**验收**（从 VPS 之外执行）：
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' http://<VPS IP>:3080/.well-known/agent-card.json      # 连接失败（端口已关）
+curl -s https://a2a.example.com/__dsh_a2a_nexus/ | grep -c __DSH_A2A_KEY__                     # 0：页面里没有 key
+curl -s -o /dev/null -w '%{http_code}\n' https://a2a.example.com/__dsh_a2a/state               # 401
+```
 
 ## 2. 安装
 
