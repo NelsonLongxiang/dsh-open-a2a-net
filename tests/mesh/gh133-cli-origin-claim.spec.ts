@@ -5,10 +5,11 @@
  * not move. The CLI derivation is narrow: only this host's own deposit face,
  * only the deposited key, only the delivery and log faces.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { spawn } from 'node:child_process'
 import { createPrivateKey, generateKeyPairSync, sign as edSign } from 'node:crypto'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'

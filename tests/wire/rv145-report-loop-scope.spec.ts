@@ -3,8 +3,9 @@
 // per-apply() state, as it was before the split. Four independent plugin
 // instances in one process each file ONE identical host report; none of
 // them has had 3 prior reports, so none may be loop-refused.
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+
 import { join as joinPath } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context } from '@deepseek-ai/cordis'

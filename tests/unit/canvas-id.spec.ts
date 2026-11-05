@@ -1,4 +1,5 @@
 /** #282 S2: owner-qualified canvas ids — `<zone>/canvas/<name>@<fp8>`. */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
 import { createHash, generateKeyPairSync } from 'node:crypto'
 import { canvasOwnerFingerprint, qualifiedCanvasId, splitCanvasOwner } from '../../src/canvas-id.ts'
@@ -34,7 +35,7 @@ describe('canvas owner ids', () => {
     expect(store.create('ops')).toBe('ops')
   })
   it('an existing canvas whose name ends like a suffix still loads and is reachable by its full id (#286 review P3)', async () => {
-    const { mkdtempSync, writeFileSync } = await import('node:fs')
+    const { writeFileSync } = await import('node:fs')
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
     const { CanvasStore } = await import('../../src/canvas-store.ts')

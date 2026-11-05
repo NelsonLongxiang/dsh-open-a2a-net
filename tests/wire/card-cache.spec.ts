@@ -3,8 +3,9 @@
  * fetched (and scored) at most once across consumers; the negative window
  * keeps dead peers from being re-punished every poll; expiry re-fetches.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'

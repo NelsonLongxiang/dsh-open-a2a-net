@@ -1,5 +1,6 @@
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TeamMembershipStore } from '../../src/team-store.ts'

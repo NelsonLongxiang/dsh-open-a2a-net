@@ -3,8 +3,9 @@
  * audit for unauthenticated direct deliveries — pure logic over the config,
  * so the matrix is testable without mounting the node.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context } from '@deepseek-ai/cordis'

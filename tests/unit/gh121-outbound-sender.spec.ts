@@ -4,7 +4,8 @@
  * archive path, the restore allowlist (round trip, malformed sender dropped
  * whole while the row survives), and a pre-field tasks.json loading unchanged.
  */
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync } from '../temp-dirs.ts'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'

@@ -7,8 +7,9 @@
  * the no-id listing face, generation-artifact discovery, multi-frame zstd
  * decode, the limit cap, and honest errors for absent artifacts.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs'
+import { mkdirSync, writeFileSync, utimesSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { zstdCompressSync } from 'node:zlib'

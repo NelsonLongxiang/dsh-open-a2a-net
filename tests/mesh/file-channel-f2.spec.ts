@@ -5,9 +5,10 @@
  * audience-bound envelope), and lands it in its workspace inbox; the fetch taints B's session. A
  * grant for someone else, a reference that lies about the size, and an isolated host all fail visibly.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { bootNode, reservePort, tmpHome, type MeshNode } from './harness.ts'

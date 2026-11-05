@@ -9,10 +9,11 @@
  * the CLI names the fix; accepted where the host lists that address, and
  * counted as a bound miss while the window is open.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { spawn } from 'node:child_process'
 import { createPrivateKey } from 'node:crypto'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { createServer, request, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'

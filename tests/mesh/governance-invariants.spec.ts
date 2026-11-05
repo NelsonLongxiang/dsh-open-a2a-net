@@ -7,9 +7,10 @@
  * N3 rewrite); V5's policy question (allowlist patterns) is an owner
  * ruling, not code.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { request } from 'node:http'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir, networkInterfaces } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'

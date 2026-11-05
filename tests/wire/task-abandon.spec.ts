@@ -4,8 +4,9 @@
  * against abandoned rows land as orphan metadata without rewriting the
  * decision; the control route rides the standard control guard.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'

@@ -3,9 +3,10 @@
  * a2a_file_fetch driven through their definitions with fake captures — one message for many files,
  * the host-written peer_content, the local-store fetch path, and the inbox landing rules.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { BlobStore, formatFileRef, parseFileRef } from '../../src/blob-store.ts'

@@ -4,7 +4,8 @@
  * of it: observe settles and records, enforce keeps the row owed, an echo
  * is judged as weak evidence, and the refusal ring and settledBy persist.
  */
-import { mkdtempSync } from 'node:fs'
+
+import { mkdtempSync } from '../temp-dirs.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'

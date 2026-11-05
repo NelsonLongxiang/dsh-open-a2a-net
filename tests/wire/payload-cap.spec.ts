@@ -4,9 +4,10 @@
  * 413 + wire error code — never truncated, never connection-killed mid-read;
  * the outbound half refuses before any byte leaves the process.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { request } from 'node:http'
-import { mkdtempSync } from 'node:fs'
+
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'

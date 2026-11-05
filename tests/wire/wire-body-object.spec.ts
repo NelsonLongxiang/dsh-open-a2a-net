@@ -5,13 +5,14 @@
  * (/a2a/direct, an async 'end' callback → unhandled rejection), both
  * outside the web server's handler guard → host exit.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import TimerService from '@deepseek-ai/cordis-plugin-timer'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
-import { mkdtempSync } from 'node:fs'
+
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { apply } from '../../src/index.ts'

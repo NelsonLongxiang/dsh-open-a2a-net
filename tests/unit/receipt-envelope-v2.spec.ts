@@ -4,8 +4,9 @@
  * atomic no-truncation formatting — and the ledger outcomes that fall out of
  * parsing them, including the abandoned-row isolation pin.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { formatReceipt, parseReceipt, taskIdRefusal } from '../../src/receipt.ts'

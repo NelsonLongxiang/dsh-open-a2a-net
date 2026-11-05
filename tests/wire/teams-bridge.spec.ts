@@ -6,8 +6,9 @@
  * through the sibling's authoritative routing seam; off by default; the
  * bridge declines ambiguous claims; wait:false fires detached).
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer, type Server } from 'node:http'

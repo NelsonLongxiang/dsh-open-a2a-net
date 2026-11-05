@@ -9,8 +9,9 @@
  * agent/created listener keep working via list()+delegation depth, never
  * throw, and never mount a subagent-tree child as a joinable session.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'

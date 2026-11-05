@@ -8,8 +8,9 @@
  *   (3) an ABSENT header grants the default one-shot budget (old peers
  *       constrained, not broken) and behaves exactly like today
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'

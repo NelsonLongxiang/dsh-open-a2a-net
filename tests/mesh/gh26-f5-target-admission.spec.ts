@@ -8,8 +8,9 @@
  *   ③ the PROCESS face (config.team) keeps the host-level exemption;
  *   ④ the refusal text is accurate (declared vs target links).
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'

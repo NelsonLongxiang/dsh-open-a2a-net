@@ -2,8 +2,9 @@
  * gh#56: the doc drift check is green on this checkout, and each pair goes red when a doc loses a
  * row the code has, or keeps a row the code dropped (the issue's counterexample self-check).
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {

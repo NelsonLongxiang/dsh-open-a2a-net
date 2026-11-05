@@ -5,10 +5,11 @@
  * the SAME caller-born task id; the host's idempotency store answers replay,
  * so the target mailbox holds the message exactly once.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { spawn } from 'node:child_process'
 import { createPrivateKey } from 'node:crypto'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'

@@ -11,8 +11,9 @@
  *   ④ seeds/config peers are never affected
  *   ⑤ LRU bound: the 65th eviction squeezes the oldest out
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PeerStore, EVICTION_COOLDOWN_MS, INITIAL_SCORE, FAILURE_PENALTY, EVICTION_LEDGER_CAP, type PeerStoreSnapshot } from '../../src/peer-store.ts'

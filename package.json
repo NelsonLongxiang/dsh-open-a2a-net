@@ -88,7 +88,8 @@
     "verify:docs": "node scripts/doc-drift.mjs",
     "reanchor:arch": "node scripts/reanchor-architecture.mjs",
     "verify:nexus": "node scripts/verify-nexus-ci.mjs && npm --prefix nexus-stage run build && npm --prefix nexus-stage run test && git diff --exit-code -- assets/nexusDist/assets && git diff --ignore-cr-at-eol --exit-code -- assets/nexusDist/index.html",
-    "verify": "pnpm typecheck && pnpm verify:docs && pnpm build && pnpm test && pnpm test:build-layout && pnpm verify:nexus"
+    "verify": "node scripts/verify-temp-clean.mjs",
+    "verify:core": "pnpm typecheck && pnpm verify:docs && pnpm build && pnpm test && pnpm test:build-layout && pnpm verify:nexus"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.1",

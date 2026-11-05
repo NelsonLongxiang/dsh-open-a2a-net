@@ -4,8 +4,9 @@
  * destroyed the text before the wire, and persisting it would immortalize
  * mojibake names in every panel render. Clean CJK flows untouched.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'

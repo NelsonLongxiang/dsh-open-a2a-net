@@ -4,8 +4,9 @@
  * notify half; late receipts against caller-ended rows collapse to outcome
  * 'abandoned' with lateReceiptAt isolation — across both prefixes.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { formatReceipt } from '../../src/receipt.ts'

@@ -3,7 +3,8 @@
  * re-join reorders, quiet remove), the JOIN_CAP bound, and whole-file
  * persistence (round-trip, non-string filtering, corrupt degradation).
  */
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync } from '../temp-dirs.ts'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'

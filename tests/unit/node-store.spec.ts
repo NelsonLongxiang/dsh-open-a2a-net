@@ -3,8 +3,9 @@
  * two append-only version namespaces with max+1 numbering, full snapshots,
  * CAS on every layer write, quotas, persistence and corrupt-file resilience.
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { MUTABLE_SECTIONS, NodeStore, promptSha, QUOTA } from '../../src/node-store.ts'

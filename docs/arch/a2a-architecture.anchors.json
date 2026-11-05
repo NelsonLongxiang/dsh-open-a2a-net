@@ -3,10 +3,10 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "d1d0e146f3092ab9bf8d12992783a182c20183f8609bb256b7446ce3b77859ca",
+    "src/index.ts": "34c2213328c9f272c1f8fb91c483f6a6487c311bf6da24130066d629ef9a718a",
     "src/faces/admin.ts": "962b282cf96fb33a78de68d5d7496c7da0e0b03ce262f80cdf021e3c22d4896c",
     "src/canvas-store.ts": "1c6788cade4a0825212d220f22f89e56d46b09c029236ddd06d1df7df8ec0502",
-    "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
+    "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
     "src/cli-deposit.ts": "8b8b714d8b47ee11c5518e51d08ea31cc588a29bc4eb73843bb2239f880e718a",
     "nexus-stage/src/workbench.ts": "be86c0843ca401d18b53d415fd1a55fdc2fa292feef640954467e95c8e61c897",
     "nexus-stage/src/federation.ts": "06e74e9b17b43b655d15fa41c7ab2b0b648cfa15d0ecd02cafe3b505ba6fa0d4",

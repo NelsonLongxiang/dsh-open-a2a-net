@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync } from '../temp-dirs.ts'
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CanvasStore, CANVAS_MEMBER_CAP, CANVAS_TEAM_CAP } from '../../src/canvas-store.ts'

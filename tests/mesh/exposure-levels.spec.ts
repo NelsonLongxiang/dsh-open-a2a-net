@@ -6,8 +6,9 @@
  * Titles and team handles stay in every tier. D5: v1 carries exactly
  * these tiers — no private residue (nothing below the linked default).
  */
+import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'

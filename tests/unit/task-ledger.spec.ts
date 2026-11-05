@@ -5,7 +5,8 @@
  * (nudge disarm + late-receipt revival), the settled archive's bound, and
  * legacy two-state file migration.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync } from '../temp-dirs.ts'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
