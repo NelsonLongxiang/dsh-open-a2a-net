@@ -13,7 +13,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs'
-import { basename, dirname, resolve as resolvePath, sep } from 'node:path'
+import { basename, dirname, relative, resolve as resolvePath, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { transform } from 'lightningcss'
 import { defineConfig, type UserConfig } from 'tsdown'
@@ -46,6 +46,9 @@ const GENERATED_REMOTE = /^@deepseek-ai\/dsh-[a-z0-9]+(?:-[a-z0-9]+)*\/remote$/
 /** Virtual-id wrapper keeping module CSS away from tsdown's own css pipeline. */
 const CSS_VIRTUAL_PREFIX = '\0dsh-css:'
 const CSS_VIRTUAL_SUFFIX = '.mjs'
+/** Stable module identity; absolute filesystem paths are used only for reading/watching. */
+const REPO_ROOT = fileURLToPath(new URL('.', import.meta.url))
+const assetIdentity = (file: string): string => relative(REPO_ROOT, file).split(sep).join('/')
 
 /**
  * Module id this bundle registers under via `__ModuleLoader__.load`. The host
@@ -67,6 +70,9 @@ const config: UserConfig = {
   dts: false,
   sourcemap: true,
   clean: false,
+  // Debug region comments otherwise embed resolver realpaths (including linked dependency stores).
+  // Keep source-level debugging in the normalized sourcemap instead.
+  inputOptions: { experimental: { attachDebugInfo: 'none' } },
   external: [...CLIENT_EXTERNALS],
   define: {
     'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
@@ -91,15 +97,16 @@ const config: UserConfig = {
     resolveId(source: string, importer: string | undefined) {
       if (!source.endsWith('.module.css')) return null
       const abs = importer !== undefined ? sourceAssetPath(source, importer) : source
-      return CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX
+      return CSS_VIRTUAL_PREFIX + assetIdentity(abs) + CSS_VIRTUAL_SUFFIX
     },
     async load(virtualId: string) {
       if (!virtualId.startsWith(CSS_VIRTUAL_PREFIX)) return null
-      const fileId = virtualId.slice(CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)
+      const identity = virtualId.slice(CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)
+      const fileId = resolvePath(REPO_ROOT, identity)
       this.addWatchFile(fileId)
       const source = readFileSync(fileId)
       const { code, exports: cssExports } = transform({
-        filename: fileId,
+        filename: identity,
         code: source,
         cssModules: { pattern: '[hash]_[local]' },
         minify: true,
@@ -126,6 +133,13 @@ const config: UserConfig = {
   }],
   outputOptions: {
     entryFileNames: 'client.js',
+    // Dependency realpaths can point outside a linked checkout (or include pnpm's
+    // machine-specific store path). Keep only the package-relative source identity.
+    sourcemapPathTransform(source: string) {
+      const normalized = source.split('\\').join('/')
+      const dependency = normalized.lastIndexOf('node_modules/')
+      return dependency < 0 ? normalized : '../node_modules/' + normalized.slice(dependency + 'node_modules/'.length)
+    },
     banner: `window.__ModuleLoader__.load({ id: ${JSON.stringify(PLUGIN_ID)}, factory: (require) => {`,
     footer: 'return module.exports; } });',
     intro: 'var module = { exports: {} }; var exports = module.exports;',
