@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { compareReviewerManifest } from './release-file-manifest.mjs'
 
 const digest = (bytes, algorithm) => createHash(algorithm).update(bytes).digest('hex')
 const isoTime = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value) && /(?:Z|[+-]\d{2}:\d{2})$/.test(value) && Number.isFinite(Date.parse(value))
@@ -59,6 +60,12 @@ export function collectReleaseArtifactFacts(directory, repo) {
       metaOk = m.version === manifest?.version && m.shasum === actualSha1 && m.sha256 === actualSha256 && m.bytes === downloaded.length && isoTime(m.at)
     }
     return { ok: bytes !== undefined && actualSha1 === sha1 && actualSha256 === sha256 && metaOk, detail: { registry: name, actualSha1, actualSha256, bytes: downloaded.length, metadataMatches: metaOk } }
+  })
+  add('reviewer_file_identity', () => {
+    if (bytes === undefined || provenance === undefined) throw Error('release artifact unavailable')
+    const input = readFileSync(resolve(directory, 'reviewer-manifest.json'))
+    const result = compareReviewerManifest(bytes, JSON.parse(input.toString('utf8')), provenance.candidate)
+    return { ok: result.ok, detail: { ...result, manifestSha256: digest(input, 'sha256'), scope: 'provided reviewer manifest against actual package files; not cryptographic proof of reviewer identity or clean build' } }
   })
   return facts
 }
