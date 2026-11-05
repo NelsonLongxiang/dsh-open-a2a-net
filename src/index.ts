@@ -1788,14 +1788,16 @@ export function apply(ctx: Context, config: Config): void {
           // Interaction with the OriginClaim narrowing: the caller is a
           // bare zone; linkage judges that zone face against our canvas
           // remote refs, joined handles, and the caller card's peers.
-          const named = !discoveryOnly && claim.ok && callerLinkedToThisHost(claim.caller, claim.callerUrl, claim.card)
+          const linkedCaller = claim.ok && callerLinkedToThisHost(claim.caller, claim.callerUrl, claim.card)
+          const showPeers = claim.ok && (configuredSeedCaller(claim.callerUrl) || linkedCaller)
+          const named = !discoveryOnly && linkedCaller
           // gh#7 G1 (review-seat R2 ruling): the card serves two faces.
           // A NAMED caller — ?caller_session= or the X-A2A-Caller header in
           // the zone or zone/id8 shape — gets the FULL card. An anonymous
           // fetcher (or an invalid shape, fail-closed) gets the MINIMAL
           // card: name/team/session/capabilities/records/signature stay.
-          // #312: peers requires a verified OriginClaim (not full-card linkage),
-          // so signed seed bootstrapping/gossip survives without anonymous topology.
+          // #312/#324 F1: peers requires a verified caller that we explicitly seed
+          // or already link; unrelated self-signed strangers get no topology.
           // Meanwhile sessionTeams/teamMemberships/lanIp are
           // omitted — session membership and rosters are collaboration
           // facts, not discovery facts. Named determination does NOT
@@ -1852,8 +1854,8 @@ export function apply(ctx: Context, config: Config): void {
             entry.teams.map(team => ({ node: `${config.team}/${id8(entry.session)}`, team })))
           const body = JSON.stringify({
             ...currentCard,
-            // #312: topology is visible only after verifying the caller, independently of full-card linkage.
-            ...(claim.ok ? { peers: peerStore.list() } : {}),
+            // #324 F1: possession of an arbitrary self-signed identity is not a local relationship.
+            ...(showPeers ? { peers: peerStore.list() } : {}),
             ...(named && sessionTeams.length > 0 ? { sessionTeams } : {}),
             ...(named && memberships.length > 0 ? { teamMemberships: memberships } : {}),
             // gh#41 fleet planning (owner ruling: any peer composes and
@@ -2312,6 +2314,12 @@ export function apply(ctx: Context, config: Config): void {
     boundMissRecent.unshift({ ...row, count: row.count + 1, lastAt: Date.now() })
     boundMissRecent.length = Math.min(boundMissRecent.length, 16)
   }
+  /** Our configured seeds anchor origin claims; mounted claims require exact mount matching. */
+  function configuredSeedCaller(callerUrl: string): boolean {
+    return config.peers.some(peer => {
+      try { return isRootOriginUrl(callerUrl) ? new URL(peer).origin === new URL(callerUrl).origin : sameMountedUrl(peer, callerUrl) } catch { return false }
+    })
+  }
   // #312: topology-only callbacks must never replace a full session/roster card cache entry.
   const signedDiscoveryPeers = new Map<string, { at: number; expiresAt: number; key: string; peers: readonly string[] }>()
   async function verifyOriginClaim(req: IncomingMessage, options?: { readonly cli?: boolean; readonly rawBody?: Uint8Array }): Promise<OriginClaimVerdict> {
@@ -2330,9 +2338,7 @@ export function apply(ctx: Context, config: Config): void {
     // #312: recover bilateral seed evidence from a signed, reduction-only card,
     // never from a caller-selected unseeded URL and never recursively.
     const discovery = new URL(req.url ?? '/', 'http://x').searchParams.get('discovery') === '1'
-    if (!discovery && claim.ok && claim.cli !== true && claim.card.peers === undefined && config.peers.some(peer => {
-      try { return isRootOriginUrl(claim.callerUrl) ? new URL(peer).origin === new URL(claim.callerUrl).origin : sameMountedUrl(peer, claim.callerUrl) } catch { return false }
-    })) {
+    if (!discovery && claim.ok && claim.cli !== true && claim.card.peers === undefined && configuredSeedCaller(claim.callerUrl)) {
       const discoveryKey = new URL(claim.callerUrl).href.replace(/\/$/, '')
       const known = signedDiscoveryPeers.get(discoveryKey)
       if (known !== undefined && known.key === claim.card.publicKey && known.expiresAt > Date.now() && Date.now() - known.at < config.cardCacheTtlMs) return { ...claim, card: { ...claim.card, peers: known.peers } }

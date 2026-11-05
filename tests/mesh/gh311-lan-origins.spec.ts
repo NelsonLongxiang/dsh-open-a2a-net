@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { networkInterfaces } from 'node:os'
 import { selectLanIPv4 } from '../../src/lan-ip.ts'
-import { bootNode, reservePort, runContext } from './harness.ts'
+import { bootNode, ghostNode, craftCard, reservePort, runContext } from './harness.ts'
 
 const state = async (url: string): Promise<any> => { const r = await fetch(url + '/__dsh_a2a/state'); const text = await r.text(); expect(r.status, text || 'empty state response').toBe(200); return JSON.parse(text) }
 describe('#311 state projection on real adapters and origin aliases', () => {
@@ -31,10 +31,12 @@ describe('#311 state projection on real adapters and origin aliases', () => {
     } finally { await node.dispose() }
   })
   it('state peers[].link recognizes the configured audience origin', async () => {
-    const [pa, pb] = [await reservePort(), await reservePort()]
+    const pa = await reservePort()
     const alias = 'http://localhost:' + pa
-    const a = await bootNode({ name: 'a311', session: 'a311', team: 'alpha', sessionNodes: true, port: pa, peers: ['http://127.0.0.1:' + pb], originClaimAudiences: [alias], teamScopeInfo: false })
-    const b = await bootNode({ name: 'b311', session: 'b311', team: 'beta', sessionNodes: true, port: pb, peers: [alias], teamScopeInfo: false })
+    // Signed fixture isolates badge alias projection from the newer peers relationship-disclosure gate.
+    const core = craftCard({ name: 'b311', session: 'b311', team: 'beta', expiresAt: Date.now() + 60_000 }).card
+    const b = await ghostNode({ ...core, peers: [alias] })
+    const a = await bootNode({ name: 'a311', session: 'a311', team: 'alpha', sessionNodes: true, port: pa, peers: [b.baseUrl], originClaimAudiences: [alias], teamScopeInfo: false })
     try {
       await a.ctx.tools.get('a2a_probe')!.execute({ url: b.baseUrl }, runContext())
       await vi.waitFor(async () => {
@@ -42,6 +44,6 @@ describe('#311 state projection on real adapters and origin aliases', () => {
         expect(s.peers.find((p: any) => p.url === b.baseUrl)).toMatchObject({ link: 'linked', verified: true })
       })
       console.log('gh311 alias-state', JSON.stringify({ at: new Date().toISOString(), host: (await state(a.baseUrl)).host, peers: (await state(a.baseUrl)).peers.map((p: any) => ({url:p.url, link:p.link, verified:p.verified})) }))
-    } finally { await a.dispose(); await b.dispose() }
+    } finally { await a.dispose(); await b.close() }
   })
 })

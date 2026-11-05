@@ -9,6 +9,57 @@ import { verifyCard } from '../../src/card.ts'
 const key = (n: any) => createPrivateKey(readFileSync(join(n.home,'a2a/node-key.pem'),'utf8'))
 const card = async (n: any, headers: Record<string,string> = {}, query='') => await fetch(n.baseUrl+'/.well-known/agent-card.json'+query,{headers}).then(r=>r.json())
 describe('#312 private referral topology',()=>{
+ it('#324 F1 unrelated self-signed callers get no peers, even when they seed this host or request discovery',async()=>{
+  const seed=await bootNode({name:'trustedSeed',session:'trustedSeed',team:'seed',sessionNodes:true})
+  const b=await bootNode({name:'privateB',session:'privateB',team:'beta',sessionNodes:true,peers:[seed.baseUrl]})
+  const stranger=await bootNode({name:'strangerC',session:'strangerC',team:'gamma',sessionNodes:true,peers:[b.baseUrl]})
+  try{
+   const target=b.baseUrl+'/.well-known/agent-card.json'
+   for(const query of ['', '?discovery=1']){
+    const headers=signOriginClaim({url:target+query,method:'GET'},{caller:'gamma',callerUrl:stranger.baseUrl,privateKey:key(stranger),unbound:false,now:Date.now()})
+    const response=await card(b,headers,query)
+    expect(verifyCard(response,Date.now()).ok).toBe(true)
+    expect(response).not.toHaveProperty('peers')
+    expect(JSON.stringify(response)).not.toContain(seed.baseUrl)
+    expect(response.sessionTeams).toBeUndefined()
+   }
+   // B explicitly seeds this caller, so it may read topology even without a bilateral full-card link.
+   const headers=signOriginClaim({url:target,method:'GET'},{caller:'seed',callerUrl:seed.baseUrl,privateKey:key(seed),unbound:false,now:Date.now()})
+   const seeded=await card(b,headers)
+   expect(seeded.peers).toContain(seed.baseUrl)
+   expect(seeded.sessionTeams).toBeUndefined()
+   expect(seeded.canvasOrg).toBeUndefined()
+  }finally{await stranger.dispose();await b.dispose();await seed.dispose()}
+ })
+ it('#324 Q1 a fully cold bilateral signed card exchange uses at most one signed reduced callback and two anonymous verification reads',async()=>{
+  const pa=await reservePort(),pb=await reservePort()
+  const a=await bootNode({name:'coldA',session:'coldA',team:'alpha',port:pa,sessionNodes:true,peers:['http://127.0.0.1:'+pb],cardCacheTtlMs:30000})
+  const b=await bootNode({name:'coldB',session:'coldB',team:'beta',port:pb,sessionNodes:true,peers:[a.baseUrl],cardCacheTtlMs:30000})
+  try{
+   const observed:Array<{url:string;signed:boolean}>=[]
+   const raw=globalThis.fetch
+   const spy=vi.spyOn(globalThis,'fetch').mockImplementation((input,init)=>{
+    const url=String(input)
+    if(url.startsWith(a.baseUrl+'/.well-known/')||url.startsWith(b.baseUrl+'/.well-known/')) observed.push({url,signed:new Headers(init?.headers).has('X-A2A-Caller-Sig2')})
+    if(observed.length>8) return Promise.reject(new Error('unexpected recursive card read'))
+    return raw(input,init)
+   })
+   try{
+    const target=b.baseUrl+'/.well-known/agent-card.json'
+    const headers=signOriginClaim({url:target,method:'GET'},{caller:'alpha',callerUrl:a.baseUrl,privateKey:key(a),unbound:false,now:Date.now()})
+    const response=await card(b,headers)
+    expect(response.peers).toContain(a.baseUrl)
+    expect(response.canvasOrg).toBeDefined()
+    const discovery=observed.filter(r=>r.url.includes('?discovery=1'))
+    const anonymous=observed.filter(r=>!r.signed)
+    expect(discovery).toHaveLength(1)
+    expect(discovery[0].signed).toBe(true)
+    expect(anonymous.length).toBeLessThanOrEqual(2)
+    expect(observed.length).toBeLessThanOrEqual(4)
+    console.log('gh324 cold bootstrap requests',JSON.stringify(observed))
+   }finally{spy.mockRestore()}
+  }finally{await a.dispose();await b.dispose()}
+ })
  it('does not use a changed-key discovery reply as bilateral evidence and never advertises the peers anonymously',async()=>{
   const pa=await reservePort(),pb=await reservePort()
   const a=await bootNode({name:'keyA',session:'keyA',team:'alpha',port:pa,sessionNodes:true,peers:['http://127.0.0.1:'+pb]})
@@ -26,7 +77,7 @@ describe('#312 private referral topology',()=>{
    expect(await card(b)).not.toHaveProperty('peers')
   }finally{await a.dispose();await b.dispose();await c.dispose()}
  })
- it('omits peers for anonymous, shape-only, invalid and stale claims; an authenticated stranger sees peers but not sessions/org',async()=>{
+ it('omits peers for anonymous, shape-only, invalid and stale claims; a verified configured seed sees peers but not sessions/org',async()=>{
   const b=await bootNode({name:'B312',session:'B312',team:'beta',sessionNodes:true})
   const a=await bootNode({name:'A312',session:'A312',team:'alpha',sessionNodes:true,peers:[b.baseUrl]})
   try{
