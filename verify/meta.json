@@ -1021,7 +1021,7 @@
     },
     {
       "path": "tests/unit/verify-submission.spec.ts",
-      "sha256": "d554691f07586e8c13ea9bbbc8790222df7e2350f6f32ddb9c8d1606deb6a1ab",
+      "sha256": "aef2d55a8c42e046396be23e7688621bea05890cb2c833a8cfb9b3b4a675a6cc",
       "role": "test"
     },
     {
@@ -4025,6 +4025,14 @@
       "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
       "actor": "dsh/f49961b0",
       "at": "2026-11-05T16:12:31.472Z"
+    },
+    {
+      "path": "tests/unit/verify-submission.spec.ts",
+      "old_sha256": "d554691f07586e8c13ea9bbbc8790222df7e2350f6f32ddb9c8d1606deb6a1ab",
+      "new_sha256": "aef2d55a8c42e046396be23e7688621bea05890cb2c833a8cfb9b3b4a675a6cc",
+      "reason": "批准e09761e退场清单：保留绑定行为用例，第三例迁移直接CLI三产物与唯一submission文档入口",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:42:08.289Z"
     }
   ]
 }
