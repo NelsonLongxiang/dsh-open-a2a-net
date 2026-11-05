@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 export function packagePath(raw) {
   if (typeof raw !== 'string' || raw === '' || raw.includes('\\') || /[\x00-\x1f\x7f]/.test(raw) || /^[a-z]:/i.test(raw)) throw Error('invalid file path')
   const path = raw.startsWith('package/') ? raw.slice(8) : raw
-  if (path.split('/').some(p => p === '' || p === '.' || p === '..')) throw Error('invalid file path: ' + raw)
+  if (/^[a-z]:/i.test(path) || path.split('/').some(p => p === '' || p === '.' || p === '..')) throw Error('invalid file path: ' + raw)
   return path
 }
 export function reviewerFiles(document, candidate) {
@@ -47,7 +47,8 @@ export function tarFiles(bytes) {
         if (!Number.isSafeInteger(length) || end > data.length || end <= space || data[end - 1] !== 10) throw Error('invalid PAX record')
         const record = data.subarray(space + 1, end - 1).toString(), equal = record.indexOf('=')
         if (equal < 1) throw Error('invalid PAX key')
-        const key = record.slice(0, equal); if (Object.hasOwn(pax, key)) throw Error('duplicate PAX key')
+        const key = record.slice(0, equal); if (key.startsWith('GNU.sparse.') || key === 'SCHILY.filetype') throw Error('non-regular PAX extension')
+        if (Object.hasOwn(pax, key)) throw Error('duplicate PAX key')
         pax[key] = record.slice(equal + 1); i = end
       }
       continue

@@ -203,6 +203,22 @@ ygl-trees verify run spec_4de5f3b9d48d --db <snapshot>      # 判定：overall �
 
 **边界**：这是发布后留存证据核对，不是发布前候选 PASS。不能从 tgz 反推出历史 HEAD、干净构建或评审身份；同版本但不同提交的构建还需独立血统核对。不替代原 15 条 RC、不新增人工门或发布阻断条件。
 
+## 发布物留存 v2：评审包内清单一致（A8，2026-11-05）
+
+新材料/构造输入为 verify/material-artifact-audit-v2.md、candidates-artifact-audit-v2.json、reviews-artifact-audit-v2.json；旧v1三份冻结输入及spec_71ef5a1de108不改写。采集器仍用原 --release-audit 入口，现在固定输出第8事实 reviewer_file_identity；旧规格只读它原来7项，新v2缺评审清单必失败。
+
+评审席交付 reviewer-manifest.json，格式为 {sha:<完整候选SHA>,platform:<非空环境描述>,files:[{path,size,sha256}]}，须保留独立交付来源。path可带单个package/前缀或相对包根；裸数组不能自补造SHA/评审身份。采集器只核声明候选及实际包内文件身份，不凭JSON证明评审者身份或干净构建过程。
+
+实际tgz在内存只读展开（256MiB解压上限），不把成员路径解到磁盘；校验tar header、普通文件、重复/越界/控制字符、完整路径集合、size与SHA256。正常目录不算包内文件，PAX path/size按明文处理，link/device/sparse等失败关闭。比较忽略容器mtime/uid/gzip元数据，保留文件内容原字节，不做LF改写。
+
+构造自检：材料mat_c73696766f43（SHA25694a0952f65ce181dcfe4d2dca6f4c24d214a41439287ed8fd7c8c78d08617be1）先submit冻结；规格spec_5723ba8259bb v1，8单元，as-of2026-11-05T09:48:00Z。候选/评审同作者构造自检如实在trace记录，独立PR评审另行完成。新的tests/fixtures/release-audit-case.mjs明确生成的是constructedSelfTest，不是历史HTTP验收/真实发布证据。
+
+正式run_859a74b82468739e为8/8PASS；归档arc_0efe913dd418验包ok=true/5items，zipSHA256482f7d39821d1e17ad40f446a5788a05363d239723b2d5dec719126bab7dc7fd。9种实际输入反例（缺清单/错候选/空/错size/hash/重复/越界/缺文件/多文件）全部7PASS/1FAIL；负例归档全链均验包通过。明细tmp/validator-review-manifest/negative-runs.json与archive-checks.json。
+
+真实旧0.6.42因无同候选评审清单，新v2 run_f5fad4a34102b47f如实7PASS/1FAIL；不倒填伪造清单。#331真实macOS清单另经新比对器与当时Windows包解析对账208/208，无差异（tmp/validator-review-manifest/actual331-comparison.json），此不是宣称该候选曾正式发布。旧v1历史发布结论仍限旧规格。
+
+新流程仍是probe采集→lint-candidates→prepare新冻结规格→verify run→archive verify；用--meta-repo指向验证器引擎源码根，不把插件产品源码误当纯验证器项目，也不使用--no-meta绕过。采集exit0不是PASS，所有结论只认spec run。
+
 ## 维护
 
 - **调阈值/加判据**：改 verify/material.md（判据句必须逐字可引用）+ candidates/reviews，

@@ -48,7 +48,7 @@ describe('retained-release fact collector (not the verdict engine)',()=>{
    expect(()=>tarFiles(gzipSync(entry.subarray(0,513)))).toThrow('truncated')
   }finally{rmSync(f.dir,{recursive:true,force:true})}
  })
- for(const mode of ['missing','wrong-sha','empty','wrong-size','wrong-hash','duplicate','traversal','absolute','backslash','extra','missing-file','non-array'])it('fails closed reviewer manifest '+mode,()=>{
+ for(const mode of ['missing','wrong-sha','empty','wrong-size','wrong-hash','duplicate','traversal','absolute','drive','backslash','extra','missing-file','non-array'])it('fails closed reviewer manifest '+mode,()=>{
   const f=fixture();try{
    const input=f.read('reviewer-manifest.json')
    if(mode==='missing')rmSync(join(f.dir,'reviewer-manifest.json'))
@@ -60,6 +60,7 @@ describe('retained-release fact collector (not the verdict engine)',()=>{
     if(mode==='duplicate')input.files.push({...input.files[0],path:'package/'+input.files[0].path})
     if(mode==='traversal')input.files[0].path='../outside'
     if(mode==='absolute')input.files[0].path='/outside'
+    if(mode==='drive')input.files[0].path='package/C:/outside'
     if(mode==='backslash')input.files[0].path='directory'+String.fromCharCode(92)+'outside'
     if(mode==='extra')input.files.push({...input.files[0],path:'extra'})
     if(mode==='missing-file')input.files=[]
