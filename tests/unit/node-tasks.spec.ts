@@ -26,7 +26,9 @@ function table(probe: (ref: string) => Promise<TaskFact | undefined>, root = '',
   const t = new NodeTasks(root, { probe, logger: quiet, onSettled: (node, p) => { settled.push([node, p]); return reached }, now: () => T0 })
   return { t, settled }
 }
-const flush = async (): Promise<void> => { for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0)) }
+// #325: these probes resolve through Promise chains, not five wall-clock timer ticks per row.
+// One check-phase turn drains those chains without multiplying Windows timer granularity by 64.
+const flush = async (): Promise<void> => { await new Promise<void>(resolve => setImmediate(resolve)) }
 const open: TaskFact = { state: 'open' }
 const merged = (at = LATER): TaskFact => ({ state: 'merged', finishedAt: at })
 
@@ -193,8 +195,9 @@ describe('NodeTasks: pointers, checks, reminders', () => {
     const root = mkdtempSync(join(tmpdir(), 'node-tasks-'))
     const { t } = table(async (ref) => ref === 'o/r#1' ? open : merged(EARLIER), root)
     for (let i = 1; i <= TASK_KEEP + 2; i++) {
-      expect(t.track('chief', `o/r#${String(i)}`, V, 'human:owner').ok).toBe(true)
-      await flush()
+      const ref = `o/r#${String(i)}`
+      expect(t.track('chief', ref, V, 'human:owner').ok).toBe(true)
+      await t.check('chief', ref) // join the track-triggered probe instead of guessing a sleep
     }
     const refs = t.list('chief').map(p => p.ref)
     expect(refs).toHaveLength(TASK_KEEP)
@@ -305,7 +308,7 @@ describe('N6 P3 (review of #178 at 40b7310)', () => {
     await t.checkAll()
     expect(t.list('chief')[0]?.remind_pending).toBe(true)
     answer = open
-    for (let i = 2; i <= TASK_KEEP + 1; i++) { t.track('chief', `o/r#${String(i)}`, V, 'human:owner'); await flush() }
+    for (let i = 2; i <= TASK_KEEP + 1; i++) { const ref = `o/r#${String(i)}`; t.track('chief', ref, V, 'human:owner'); await t.check('chief', ref) }
     expect(t.list('chief').some(p => p.ref === 'o/r#1')).toBe(true)
     expect(t.takePending('chief').map(p => p.ref)).toEqual(['o/r#1'])
   })
@@ -339,7 +342,7 @@ describe('N6 P3 (review of #178 at 40b7310)', () => {
   it('D6: when every pointer owes a reminder, the cap still holds (the oldest owed one goes)', async () => {
     let answer: TaskFact = open
     const { t } = table(async () => answer, '', 0)
-    for (let i = 1; i <= TASK_KEEP; i++) { t.track('chief', `o/r#${String(i)}`, V, 'human:owner'); await flush() }
+    for (let i = 1; i <= TASK_KEEP; i++) { const ref = `o/r#${String(i)}`; t.track('chief', ref, V, 'human:owner'); await t.check('chief', ref) }
     answer = merged()
     await t.checkAll()
     expect(t.list('chief').every(p => p.remind_pending === true)).toBe(true)
