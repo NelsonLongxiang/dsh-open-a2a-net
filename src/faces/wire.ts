@@ -584,7 +584,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             res.end()
           }
         })
-        req.on('end', async () => {
+        req.on('end', () => {
+          void (async () => {
           if (overflowed) {
             if (!res.writableEnded && !res.headersSent) {
               const payload = JSON.stringify({ error: 'payload too large', code: WIRE_ERROR_PAYLOAD_TOO_LARGE })
@@ -761,7 +762,16 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // #139: the claim's card key names the host whatever address spelling it signed with.
           // The response can race a fast peer receipt. Wait for this exact forwarding birth before judging or acknowledging it.
           await waitForForwardBirth(message)
-          const refusedSettlement = settleAndAnnounce(message, { caller, proof: callerProof, ...settlerClaimFields(claim, originOf), ingress: 'wire' })
+          let refusedSettlement: SettlementRefusal | undefined
+          try {
+            refusedSettlement = settleAndAnnounce(message, { caller, proof: callerProof, ...settlerClaimFields(claim, originOf), ingress: 'wire' })
+          } catch {
+            // Body end runs outside the webServer guard; a failed commit must not escape or steer.
+            const payload = JSON.stringify({ error: 'task ledger write failed; settlement was not committed', code: -32000, task_id: taskId, task_status: 'TASK_STATE_FAILED', delivered: false })
+            res.writeHead(503, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+            return
+          }
           // #139 (design §4.4): every answer this delivery gets carries the refusal.
           if (refusedSettlement !== undefined) withSettlementField(res, refusedSettlement)
           // gh#45 CLI mailbox (wire face): a delivery targeting a DEPOSITED
@@ -948,7 +958,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             }
             // Remaining candidates need one async classification (the
             // native-teams bridge), so the tail answers inside an IIFE.
-            void (async () => {
+            await (async () => {
               // Native-teams inbound bridge (opt-in): prepare BEFORE answering
               // delivered — claim, seam, and parent initiator are everything
               // that can fail fast, and a phantom dispatch must never answer
@@ -1014,7 +1024,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             taskLedger.trackInbound(taskId, team, receiptTarget, contextId, receiptExpectationOf(receiptTarget) !== 'process-label', briefOf(message), auth, syncTarget === team ? undefined : syncTarget)
             armReceiptAutosend(target, taskId, receiptTarget, message, floor)
           }
-          void routeIntoAgent(team, message, caller, taskId, proofClause, directHeader, undefined, syncSteered).then(async (outcome) => {
+          await routeIntoAgent(team, message, caller, taskId, proofClause, directHeader, undefined, syncSteered).then(async (outcome) => {
             if (!outcome.ok && outcome.localMiss) { await forwardMiss(outcome.error); return }
             recordActivity('in', team, caller, outcome.ok)
             // W7 slice-2 hook 1: record the settled outcome on the claim row.
@@ -1057,6 +1067,14 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
               : JSON.stringify({ error: outcome.error, code: -32000, team, task_id: taskId, task_status: 'TASK_STATE_FAILED' })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
+          })
+          })().catch(error => {
+            // EventEmitter ignores promises returned from body-end callbacks. Own this boundary.
+            logger.warn('a2a: direct request callback failed: %s', String(error))
+            if (!res.headersSent) {
+              res.writeHead(500, { 'Content-Type': 'application/json' })
+              res.end(JSON.stringify({ error: 'direct request failed before confirmation', code: -32000, task_status: 'TASK_STATE_FAILED' }))
+            } else if (!res.writableEnded) res.end()
           })
         })
       },
