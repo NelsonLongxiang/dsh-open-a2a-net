@@ -18,4 +18,26 @@ TaskLedger.persistenceState只暴露ok/lastError{at,code}，不暴露路径/正�
 
 去answerFinalSafely catch，idle真实mesh因EACCES逃逸not.toThrow行为断言立即红，已finally恢复。修订最终默认门禁job bash-1b98863ca1e84fd8真实exit0：root1514passed/7skipped（原6+新增POSIX权限例在Windows跳过1）、layout4、nexus332、innerentries0；不靠架构hash取证。
 
-需高档非作者新精确head复跑故障行为、去catch及恢复吞错突变，之后按授权链处理合并。PR352重写方向另遵属主最新“空闲提醒本人对账”，此PR不引入新phase/ack/outbox/对账器；生产及1c56c492/446ce672积压未动。
+## PR354 R1′：发送方回执结算边界
+
+7e15105的接收方修复非作者复跑成立，发送方req end事件不在Web守卫内的新缺口继续REQUEST CHANGES。现wire receipt结算处catch持久错误返回503/FAILED/delivered:false，既不继续steer也不假装已归档；整body-end用显式IIFE.catch持有异步异常，sync route/分类IIFE也纳入await。settleAndAnnounce原query outcome写在ledger提交后，避免失败预报completed。settleOwnInbound局部catch返回false，模型路径明确“peer已接纳但本机结账失败”，自动路径转原ladder错误日志，本地欠账保留。
+
+新sender真实签名HTTP mesh：A先实际派给B形成outbound，A账本写错后B正式receipt返回503，A不steer、旧盘逐字不变、仍欠且state EACCES，修复后后续合法receipt归档一次。另一mesh核peer已收而己方inbound commit失败只显式error、local仍欠。去sender局部catch，行为mesh因503缺失和UnhandledRejection红；已恢复。当前全门禁job bash-bb375fd07a3c4655真exit0 root1516/7skip（原6+POSIX权限平台1）、layout4/nexus332/inner0。
+
+### 守卫外写账调用点审计（对照本修订源码，行号见PR评论）
+
+| 调用组 | 触发点 | 错误边界与失败语义 |
+|---|---|---|
+| markAnswered自动final | flushFinals由idle事件/route微任务触发，timeout/gone callback | answerFinalSafely逐项catch；失败保原waiter，其它继续，不发送 |
+| resolveFromMessage/resolveEcho（settleAndAnnounce） | wire body-end收到receipt/正文echo | 局部catch→503不投递；整body-end IIFE.catch兜底500，不逃逸 |
+| 同上local dispatch | async dispatchLocalCandidate在await route链里，同机CLI mailbox/receipt | Promise传播到tool/控制HTTP调用者或自动receipt ladder.catch，无裸事件异步；失败不执行后续投递 |
+| resolveFromMessage（settleOwnInbound） | await跨peer回执后本机inbound收账 | 函数内catch→false；tool返回error，自动ladder收到reject，不虚报本地结清 |
+| markAnswered模型显式receipt | async routeTrunk工具入口 | 局部catch→结构化error、不发回执 |
+| track/trackReceiptless | routeTrunk await投递后的outbound记录、direct-forward await forwarding | 由工具Promise/转发.catch和控制路由await异常处理；不是timer/裸事件，持久error诊断保留 |
+| trackInbound async delivery | wire直接/冷wake.flight deliver callback | deliver内部try/catch保steered事实，已投递时不报失败诱导重投（原规则） |
+| trackInbound syncSteered | routeIntoAgent onSteered | routeIntoAgent catch生成失败结果；wire await+body-end.catch兜底，无UnhandledRejection |
+| abandon/cancel控制面 | readJsonBody end callback | readJsonBody明确use try/catch→500；不同于wire原先裸end |
+| cancel nativeTeams bridgeFace | async cancel返回Promise | 返回Promise失败交bridge调用者处理，不是detached timer；状态保writeFailure，不假cleared |
+| list lazy sweep | state/tools/queueguard/nudge timer/授权观察读取可能触发写 | list内部catch保最近commit及诊断，读面可用，不静默把失败sweep当dead |
+
+未来提醒器不在本PR实现，它自己的idle/timer/boot reserve仍必须内部catch并测无uncaught；不能因本PR有错误诊断而省略边界。需高档非作者新精确head复跑发送/接收故障、去catch及恢复吞错突变，之后按授权链处理合并。PR352重写方向另遵属主最新“空闲提醒本人对账”，此PR不引入新phase/ack/outbox/对账器；生产及1c56c492/446ce672积压未动。

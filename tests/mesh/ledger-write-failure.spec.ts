@@ -2,6 +2,8 @@
 import { describe,it,expect,vi,afterEach } from 'vitest'
 import { readFileSync,chmodSync,statSync } from 'node:fs'
 import { join } from 'node:path'
+import { createPrivateKey } from 'node:crypto'
+import { signOriginClaim } from '../../src/origin-claim.ts'
 import { bootNode,reservePort,runContext } from './harness.ts'
 const denied=vi.hoisted(()=>({prefix:'',remaining:0,skip:0}))
 vi.mock('node:fs',async original=>{const fs=await original<typeof import('node:fs')>();return {...fs,openSync:(path:any,...args:any[])=>{if(denied.remaining>0&&String(path).startsWith(denied.prefix)){if(denied.skip>0){denied.skip--;return (fs.openSync as any)(path,...args)}denied.remaining--;throw Object.assign(Error('injected unwritable ledger directory'),{code:'EACCES'})}return (fs.openSync as any)(path,...args)}}})
@@ -9,6 +11,44 @@ afterEach(()=>{denied.prefix='';denied.remaining=0;denied.skip=0})
 const state=async(base:string)=>{const response=await fetch(base+'/__dsh_a2a/state');expect(response.status).toBe(200);return response.json()}
 const finish=(agent:any,ids:string[])=>{for(const id of ids)agent.session.events.push({type:'turn/start'}, {type:'user/message',data:{content:[{type:'text',text:'[A2A direct] (task '+id+') sender sent:'}]}},{type:'assistant/message',data:{message:{content:[{type:'text',text:'completed '+id}]}}},{type:'turn/end',data:{reason:{kind:'completed'}}})}
 describe('ledger errors stay inside the real host event boundary',()=>{
+ it('reports an own-inbound commit failure after the peer accepted the formal receipt without escaping or clearing local debt',async()=>{
+  const pa=await reservePort(),pb=await reservePort(),au='http://127.0.0.1:'+pa,bu='http://127.0.0.1:'+pb
+  const a=await bootNode({name:'ownA',session:'ownA',team:'alpha',sessionNodes:true,port:pa,peers:[bu],teamScopeRouting:false,silent:true})
+  const b=await bootNode({name:'ownB',session:'ownB',team:'beta',sessionNodes:true,port:pb,peers:[au],teamScopeRouting:false,silent:true})
+  try{
+   for(const n of [a,b])await fetch(n.baseUrl+'/__dsh_a2a/join',{method:'POST',body:JSON.stringify({id:String(n.agents.agent!.id)})})
+   const sent=await a.ctx.tools.get('a2a_route')!.execute({team:'beta/01234567',message:'own inbound commit test',async:true},runContext(a.agents.agent)) as any
+   expect(sent.ok).toBe(true);const task=sent.task_id,file=join(b.home,'a2a/tasks.json')
+   denied.prefix=file+'.';denied.remaining=1;denied.skip=1 // answered commit succeeds; post-peer own-inbound commit fails.
+   const result=await b.ctx.tools.get('a2a_route')!.execute({team:'alpha/01234567',message:'[A2A receipt] task '+task+' completed',async:true},runContext(b.agents.agent)) as any
+   expect(result).toMatchObject({ok:false,error:expect.stringContaining('local settlement commit failed')})
+   expect((await state(au)).archived.some((r:any)=>r.taskId===task)).toBe(true)
+   expect(JSON.parse(readFileSync(file,'utf8')).tasks.some((r:any)=>r.taskId===task)).toBe(true)
+   expect((await state(bu)).ledgerPersistence.lastError.code).toBe('EACCES')
+  }finally{denied.remaining=0;denied.skip=0;await a.dispose();await b.dispose()}
+ })
+
+ it('sender refuses a receipt with 503 when its own ledger cannot commit, stays owed and accepts a later receipt after repair',async()=>{
+  const pa=await reservePort(),pb=await reservePort(),au='http://127.0.0.1:'+pa,bu='http://127.0.0.1:'+pb
+  const a=await bootNode({name:'senderDiskA',session:'senderDiskA',team:'alpha',sessionNodes:true,port:pa,peers:[bu],teamScopeRouting:false,silent:true})
+  const b=await bootNode({name:'senderDiskB',session:'senderDiskB',team:'beta',sessionNodes:true,port:pb,peers:[au],teamScopeRouting:false,silent:true})
+  const escaped:unknown[]=[],onError=(error:unknown)=>escaped.push(error);process.on('uncaughtExceptionMonitor',onError)
+  try{
+   for(const n of [a,b])await fetch(n.baseUrl+'/__dsh_a2a/join',{method:'POST',body:JSON.stringify({id:String(n.agents.agent!.id)})})
+   const sent=await a.ctx.tools.get('a2a_route')!.execute({team:'beta/01234567',message:'sender disk test',async:true},runContext(a.agents.agent)) as any
+   expect(sent.ok,JSON.stringify(sent)).toBe(true);const task=sent.task_id,file=join(a.home,'a2a/tasks.json'),before=readFileSync(file)
+   expect((await state(au)).tasks.some((r:any)=>r.taskId===task)).toBe(true)
+   const key=createPrivateKey(readFileSync(join(b.home,'a2a/node-key.pem'),'utf8')),target=au+'/a2a/direct'
+   const receipt=async(transportId:string)=>{const body=JSON.stringify({team:'alpha/01234567',caller_session:'beta/01234567',task_id:transportId,message:'[A2A receipt] task '+task+' completed',wait:false});return fetch(target,{method:'POST',signal:AbortSignal.timeout(3000),headers:{'Content-Type':'application/json',...signOriginClaim({url:target,method:'POST',body},{caller:'beta',callerUrl:bu,privateKey:key,unbound:false,now:Date.now()})},body})}
+   denied.prefix=file+'.';denied.remaining=1
+   const failed=await receipt('disk-sender-receipt-1');expect(failed.status).toBe(503);expect(await failed.json()).toMatchObject({delivered:false,error:expect.stringContaining('settlement was not committed')})
+   expect(readFileSync(file)).toEqual(before);expect((await state(au)).tasks.some((r:any)=>r.taskId===task)).toBe(true);expect(a.steered).toHaveLength(0)
+   expect((await state(au)).ledgerPersistence).toMatchObject({ok:false,lastError:{code:'EACCES'}});expect(escaped).toEqual([])
+   denied.remaining=0;const good=await receipt('disk-sender-receipt-2');expect(good.status).toBe(200);expect((await good.json()).delivered).toBe(true)
+   expect((await state(au)).archived.some((r:any)=>r.taskId===task)).toBe(true);expect((await state(au)).ledgerPersistence).toEqual({ok:true});expect(a.steered).toHaveLength(1);expect(escaped).toEqual([])
+  }finally{process.off('uncaughtExceptionMonitor',onError);denied.remaining=0;await a.dispose();await b.dispose()}
+ })
+
  it('a forwarded synchronous final handles the after-steer microtask write error and can retry without a second delivery',async()=>{
   const pa=await reservePort(),pb=await reservePort(),au='http://127.0.0.1:'+pa,bu='http://127.0.0.1:'+pb
   const a=await bootNode({name:'microA',session:'microA',team:'alpha',sessionNodes:true,port:pa,peers:[bu],teamScopeRouting:false})

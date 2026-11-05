@@ -747,6 +747,15 @@ export function apply(ctx: Context, config: Config): void {
     // must not be recorded as one. First-write wins inside the store, so a
     // late receipt never overwrites a precise sync-hook record.
     const parsed = parsedForJudge
+    // A header that names an owed row and comes back unresolved was refused
+    // (enforce): that is the verdict — the echo fallback must not judge the
+    // same message a second time.
+    const owedRow = parsed !== null && parsed.taskId !== '' ? taskLedger.find(parsed.taskId) : undefined
+    const owedByHeader = owedRow !== undefined
+    // #139 (design §4.4): an enforce refusal of the row the header names is
+    // told to the sender on the wire response, not only in /state.
+    const headerVerdict = judge?.enforce === true && owedRow !== undefined ? judge.check(owedRow, false) : undefined
+    const resolved = taskLedger.resolveFromMessage(message, judge)
     if (parsed !== null && parsed.taskId !== '') {
       const line = parsed.summary.trim()
       // #114 S4 (design §4.2.2): under enforce, the receipt hook writes the
@@ -759,15 +768,6 @@ export function apply(ctx: Context, config: Config): void {
         idempotencyStore.recordOutcome(parsed.taskId, { status: 'completed', reply: line.slice(0, SUMMARY_CAP) })
       }
     }
-    // A header that names an owed row and comes back unresolved was refused
-    // (enforce): that is the verdict — the echo fallback must not judge the
-    // same message a second time.
-    const owedRow = parsed !== null && parsed.taskId !== '' ? taskLedger.find(parsed.taskId) : undefined
-    const owedByHeader = owedRow !== undefined
-    // #139 (design §4.4): an enforce refusal of the row the header names is
-    // told to the sender on the wire response, not only in /state.
-    const headerVerdict = judge?.enforce === true && owedRow !== undefined ? judge.check(owedRow, false) : undefined
-    const resolved = taskLedger.resolveFromMessage(message, judge)
     if (resolved === undefined && owedByHeader) {
       return headerVerdict !== undefined && !headerVerdict.ok ? { status: 'refused', reason: headerVerdict.reason, task_id: parsed!.taskId } : undefined
     }
@@ -809,12 +809,18 @@ export function apply(ctx: Context, config: Config): void {
    * @param creditor - the team the receipt was delivered to.
    * @param payer - who sent it on this host.
    */
-  function settleOwnInbound(message: string, creditor: string, payer: Settler): void {
+  function settleOwnInbound(message: string, creditor: string, payer: Settler): boolean {
     const parsed = parseReceipt(message)
-    if (parsed === null || parsed.taskId === '') return
-    const settled = taskLedger.resolveFromMessage(message, settlementJudgeFor(payer, parsed, true), row => row.direction === 'inbound' && row.peer === `local:${creditor}`)
-    const line = parsed.summary.trim()
-    if (settled !== undefined && line !== '') idempotencyStore.recordOutcome(parsed.taskId, { status: 'completed', reply: line.slice(0, SUMMARY_CAP) })
+    if (parsed === null || parsed.taskId === '') return true
+    try {
+      const settled = taskLedger.resolveFromMessage(message, settlementJudgeFor(payer, parsed, true), row => row.direction === 'inbound' && row.peer === `local:${creditor}`)
+      const line = parsed.summary.trim()
+      if (settled !== undefined && line !== '') idempotencyStore.recordOutcome(parsed.taskId, { status: 'completed', reply: line.slice(0, SUMMARY_CAP) })
+      return true
+    } catch {
+      logger.warn('a2a: own inbound settlement commit failed; task remains owed')
+      return false
+    }
   }
 
   // Server-side idempotency keys (work-order P3): a caller-born task id
@@ -2184,7 +2190,7 @@ export function apply(ctx: Context, config: Config): void {
             // same-host receipt already settled it in-process), unless the caller
             // refused it. The owner tier is no payment here — but an owner mailbox
             // on THIS host settles the row in-process, as it always has.
-            if (team === callerTeam && delivered.settlementRefused !== true) settleOwnInbound(receipt, callerTeam, { caller: session, proof: 'in-process', ingress: 'local' })
+            if (team === callerTeam && delivered.settlementRefused !== true && !settleOwnInbound(receipt, callerTeam, { caller: session, proof: 'in-process', ingress: 'local' })) throw new Error('task ledger settlement commit failed')
           },
           ownerTeam: config.team,
           log: (stage, error) => {
@@ -3706,7 +3712,9 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         const result = await dispatchPeerCandidate(candidate, target, args.message, args.context_id, signal, callerSession, peerAsync, taskId, callbackAddress)
         if (result.ok || signal.aborted) {
           // A receipt the creditor refused (its enforce verdict) pays nothing here either (review of PR #149 P2-2).
-          if (result.ok && routedReceipt) { if (result.settlementRefused !== true) settleOwnInbound(args.message, args.team, { caller: callerSession ?? '', proof: 'in-process', ingress: 'local' }) }
+          if (result.ok && routedReceipt) {
+            if (result.settlementRefused !== true && !settleOwnInbound(args.message, args.team, { caller: callerSession ?? '', proof: 'in-process', ingress: 'local' })) return { ok: false, error: 'receipt reached the peer but local settlement commit failed; task remains owed', code: -32000, receipt: 'none' }
+          }
           else if (result.ok) trackOwedTask(taskId, args.team, candidate, result, callbackAddress, briefOf(args.message), sender, await peerBirth(fetch, candidate, target === args.team ? undefined : target))
           const notes: string[] = []
           if (result.ok && args.async === true && result.task_status === 'TASK_STATE_DELIVERED' && !routableCallerLabel(callerSession)) {
