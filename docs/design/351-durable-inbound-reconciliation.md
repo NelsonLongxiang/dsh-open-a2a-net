@@ -1,6 +1,6 @@
 # ADR：#351 空闲会话的持久强制对账提醒（属主裁定重写，仅设计）
 
-状态：**待高档非作者精确头设计复核；无提醒器实施授权**。依据属主原话与issue351 comment6670509982、direct-7ac45ccba3c8。取代PR352原730980c的A+C日志补回执方案，以及已被否决的读到即ack方向；旧稿保留在git历史。基线f636331；前置解码PR353已合725c1c6，账本原子写PR354另行高档复核。本PR仅改本文件，不提醒生产会话、不补账/回执、不改配置，不碰#343。
+状态：**a615950 REQUEST CHANGES后修订，待新精确头非作者复评；来源排队P0有阻断，无提醒器实施授权**。依据属主原话与issue351 comment6670509982、direct-7ac45ccba3c8。取代PR352原730980c的A+C日志补回执方案，以及已被否决的读到即ack方向；旧稿保留在git历史。基线f636331；前置解码PR353已合725c1c6，账本原子写PR354另行高档复核。本PR仅改本文件，不提醒生产会话、不补账/回执、不改配置，不碰#343。
 
 ## 上下文
 
@@ -31,7 +31,9 @@
 - **空闲转换**：复用当前agent/status idle；如能接真实turn/end，仅排一次检查，在日志/状态更新后的下一调度点重看agent.status。不能凭turn/end事件就假定已idle（可能连续下一轮），注入前再次核对完整sessionid、live对象与status=idle。
 - **启动恢复**：原子账本加载后对live idle目标检查持久due；还没live或在busy就等待后续idle/低频，不因催账而主动wake/恢复归档会话。不拿磁盘日志“证明做完”。
 - **低频兜底**：ctx.timer托管60秒检查，测试注入时钟，不新增DSH schedule/YGL job/cron。触发合并为per-session single-flight；stop插件取消timer/排队扫描/本进程请求，不杀宿主、不抛弃业务欠账。
-- 每次触发只处理有欠账且到期的目标；空闲检查与注入之间race变busy时取消该次或交queue-mode排队但不steer打断。首选**queue-mode prompt**，复用armAsyncNudge已有控制器适配/lineage/requestId逻辑；若控制器不可用，只在当前确实idle时用原steerRelay兼容seam，不做二次盲投递。能力全无只记录unavailable，不能当已提醒。
+- 每次触发只处理有欠账且到期的目标；空闲检查与注入之间race变busy时取消该次或排到独立下一轮，**提醒只能排队，不以steer降级**。任务投递（异步/同步/同机/跨机）也按属主分工默认排队、一任务一轮；撤单通知保留steer以打断当前轮。任务投递改造是P1独立PR，不混本提醒设计或缺陷修复。
+- **排队来源硬门**：必须保存a2a-relay/发送方/taskId（提醒用独立非业务requestId+欠账引用）及既有lineage/taint，模型与UI都不能当属主kind:user输入。P0只读核宿主fcc0ad4621：SessionPromptRequest无source（packages/api/session-controller/src/types.ts:324–332）；prompt强制非空kind:user（src/index.ts:483–491），commands.ts:364–374再queue为followup。因此当前sessionController.prompt不能满足来源要求，**实现阻断/先报能力缺口**；不私改宿主、不传无效extra source字段假装修好、不上裸user队列、不用正文前缀替代metadata。由龙翔或其授权宿主会话提供能力后须经评估席P0复核放行，再另派P1。
+- 接口未挂载/不支持source时只记reminder-unavailable，state明确未接纳，不计成功提醒、不把每次60秒探测当一次正式reserve。旧armAsyncNudge该seam现有静默return/catch不作为新能力保证；错误必须安全可见。P0源码与既有测试只读，无生产提示注入或宿主测试运行。
 
 新逻辑与armAsyncNudge共用**会话级最小间隔/在途门**以免两个提醒连发，但不改原未读nudge条件、预算或消费探针。旧nudge只提示读取；新reconciliation reminder列欠账，不重新steer原任务、不冒用原task header。现自动回执快路径仍按原消费轮规则运行；提醒自己结束一轮不能成为任一旧task的完成回复。
 
@@ -47,42 +49,41 @@
 
 只增提醒元数据，不改status或守恒：每行可选reconcileReminder{version:1,attempts,deliveredCount,lastAttemptAt,lastDeliveredAt,nextAt,requestId,lastResult}，及最多与有欠账session一一对应的会话节流记录；类型白名单/上界非法则标diagnostic，不丢原行。旧pending没有元数据时视次数0，但**设计/实现上线前不实际回溯操作当前生产积压**，升级部署/存量处理另批。
 
-常量建议：RECONCILE_SCAN_MS=60秒、SESSION_MIN_REMINDER_MS=120秒；每task同一欠账生命周期MAX_REMINDERS=3，三次间隔按2分钟/10分钟/30分钟退避。第一次正常idle时可检查，但受会话总最小间隔；第三次后再等30分钟未结才标exhausted。测试用注入钟，不让测试真等分钟。task id不变的pending不会因brief变化、host重启、batch集合增减或其他任务结清而重置次数；新任务只带自己预算，不能借加入新task使已耗尽旧task重获3次。每个session任何batch也受同一120秒门，防“不断新task”刷屏。
+常量建议：RECONCILE_SCAN_MS=60秒、SESSION_MIN_REMINDER_MS=120秒、REMINDER_LONG_INTERVAL_MS=2小时、REMINDER_ESCALATE_AFTER=3（**告警阈值不是总次数上限**）。初次真正idle且可排队时可提醒，第2次至少距第1次2分钟、第3次至少距第2次10分钟；第三次后等30分钟仍pending且idle时标“多次提醒未对账”、给本机sender一次警示，此次检查不自动加发第四次。第4次及之后至少距上次实际尝试2小时，到期若busy延后至真正idle，**持续提醒、永不因次数达到3而停止**。第三次已reserve但宿主未接纳时，警示注明尝试3次/成功M次，不伪称会话已读3次。
 
-发送提醒前原子提交本次reserve（attempts+requestId/lastAttemptAt/nextAt），再向queue prompt注入；只有宿主接纳才deliveredCount+lastDeliveredAt（“已提醒”表示宿主接纳提示，不证明模型已经读入）。写盘失败不注入、不在状态面报持久成功。prompt失败/unsupported只记录尝试失败，显示“尝试N次/成功接纳M次”，次数上限限制尝试而不是失败后无穷快重试。
+次数/nextAt从落盘恢复；task不变不会因brief、重启、batch变化、其他任务结清重置早期退避。新任务只有自己早期节奏，不能给旧任务重启短间隔；同session任何batch仍受120秒门/单flight。长期计数以安全整数饱和展示N+，不能溢出归零或因达数字界停止。若最后一条欠账正常结清/dead/有权撤单才退出提醒due，其他欠账计时不重置；busy期间不消耗提醒次数。测试假钟跨42分钟/数小时/重启，必须证明长活结束后空闲仍收到提醒，而不是被exhausted截断。
 
-崩溃在reserve之后、注入之前：可能少一次提醒，持久attempt不回滚为0，退避后有剩额才再试；崩溃在注入后、确认计数前：lastResult=unknown，不声称已提醒成功，不立刻补注入，同requestId若宿主支持去重就沿用，否则等下次预算。这里**不承诺跨崩溃物理恰一次**，但不会丢业务账或靠无限重发补足次数。只保最小reserve元数据，不新造outbox或查询远端幂等记录；旧A+C的24h/23h回执重试窗不再是本设计必要机制，因为不代发回执。元数据重启保留必须以前置原子提交正确传播错误为硬依赖。
+发送提醒前原子提交本次reserve（attempts+requestId/lastAttemptAt/nextAt），再向queue prompt注入；只有宿主接纳才deliveredCount+lastDeliveredAt（“已提醒”表示宿主接纳提示，不证明模型已经读入）。写盘失败由**提醒器自身在idle/timer/boot入口内catch**，不让异常逃逸为uncaughtException/UnhandledRejection；不注入、不推进次数、不在状态面报持久成功，显示持久失败时点/安全错误码并退避重查，不能仅依赖TaskLedger向上抛。注入后确认提交失败也catch，保留reserve/unknown防立即重复。prompt明确失败只记录尝试失败，显示“尝试N次/成功接纳M次”，以当前阶段nextAt限速，不无穷快重试；unsupported应在reserve前识别，失败能力不消耗所谓3次终止额度。
 
-### 5. 超次数后的诊断与“通知发送方”通道
+崩溃在reserve之后、注入之前：可能少一次提醒，持久attempt不回滚为0，退避后到期才再试，第三次以后仍按2小时长间隔继续；崩溃在注入后、确认计数前：lastResult=unknown，不声称已提醒成功，不立刻补注入，同requestId若宿主支持去重就沿用，否则等下次预算。这里**不承诺跨崩溃物理恰一次**，但不会丢业务账或靠无限重发补足次数。只保最小reserve元数据，不新造outbox或查询远端幂等记录；旧A+C的24h/23h回执重试窗不再是本设计必要机制，因为不代发回执。元数据重启保留必须以前置原子提交正确传播错误为硬依赖。
+
+### 5. 多次提醒后的诊断与本机发送方警示（远端推送不在本期）
 
 第三次后的due检查仍pending→仅观察标记“多次提醒未对账”，保留次数/最近接纳时间与原因，**不改任务状态、不撤单、不归档**。发送方自己决定追问或有权撤单。状态面与queue-full next改为“等目标本人对账”，列原占额条目提醒次数/年龄；占额count仍与原queuedFor一致。普通remote只看到自己发的taskid及总数，不泄露其他发送方id/brief；control按原权限可看全部。本切片不做新phase或匿名细分桶。
 
-**不能用普通a2a_route给发送方再派一条任务来通知**，否则本机会制造新欠账/挤队；也不能用正式receipt头通知，否则误结账。拟增加有界的“非任务对账警示”投递适配：
+**本切片不做远端通知端点**（评审裁定）：不新增/a2a/reconcile-notice，不以ordinary direct给发送方再派一条任务，不借receipt前缀误结账。
 
-- 同host发送会话：通过同一queue-mode提示seam注入“[A2A reconciliation notice] 你发出的task尚欠正式回执，目标已多次提醒”，不走direct/track、不占名额；sender离线则在自己的tasks/status可见，不wake它或放宽join。
-- 远端发送方：需新增仅警示的/a2a/reconcile-notice小端点，Sig3绑定body+audience，body只含原taskid、reminder次数/时点/警示，不含brief、指令或回执结局。接收host核本地outbound原行确为发给该peer key（含原peerKey/接收者/授权事实），不是caller自报就信；映射已知sender后入其只读notice ring/CLI警示。**不steer业务任务、不改ledger、不调用receipt解析、不产生task/debt**；固定notice key按原task+达到阈值的生命周期去重，限每task一次成功警示，失败至多一次后续重试且仍守会话节流，不建通用网络通知平台。
-- 旧peer未声明/404：不fallback普通direct。状态面明确“发送方主动警示不可达/旧版不支持”，原query/status/tasks在正常查询时携带可见提醒观测；不能声称已经通知到。升级兼容范围必须在实现PR验收，如评审不接受新增小端点，则此项记能力缺口需另裁，不能省略通知又宣称全部完成。
-- 本地持久只保noticeAttempted/notifiedAt与有界lastError供重启去重；这不是receipt outbox。警示丢失不能转成settled或新任务；收到警示不要求给警示发回执，避免提醒回环。
-
-此非任务警示端点是“通知发送方”实现需要的明确协议面，提交本设计由评审裁范围；不在设计期开放任何生产接口、不借未入网report ingress跨peer取权。
+- 同host发送会话：经满足来源硬门的queue-mode提示注入“[A2A reconciliation notice] 原task尚欠正式回执，目标已多次提醒”，不宣称已读/完成，不走direct/track、不占名额、不要求通知的回执。一次性通知有持久noticeAttempted/notifiedAt、失败catch与有界诊断，重启不刷屏；冷/离线sender仅自己tasks/status可见，不主动wake或放宽join。
+- 远端发送方：本期仅在其主动查询status/tasks/queue-full等现有只读面时显示自己task可见的提醒次数与等待对账提示。不能跨host凭本地旧缓存伪装已取到远端最新次数；尚未查询到则标未知/未同步。**不声称远端已经被主动通知**，旧客户端忽略新增只读字段不改变其receipt/欠账行为。远端主动推送另出设计/独立切片报审，本PR不实现任何新端点。
+- 第三次后本地sender警示只发一次，但对欠账目标的2小时提醒继续；警示与持续提醒是两种不同调度，不因notifiedAt已存在停掉目标提醒。缺来源队列能力则本机通知同样blocked，不steer降级。
 
 ### 6. 不变项、历史与前置修复
 
-- queuedFor/cap、mailbox/receipt豁免、receipt词表与[A2A receipt]格式、OriginClaim/完整owner key授权、同步15秒预算、#114 S5/#305/#306归属全部不变。新提醒用户消息不匹配consumptionIndex任务头，不成为旧waiter的消费事件；主机不读磁盘会话日志判任务完成，不重建answered、不发自动ack。
+- queuedFor/cap、mailbox/receipt豁免、receipt词表与[A2A receipt]格式、OriginClaim/完整owner key授权、同步15秒预算、#114 S5/#305/#306归属全部不变。新提醒是带来源metadata的外部消息，不是kind:user属主输入，且正文不匹配consumptionIndex任务头，不成为旧waiter的消费事件；主机不读磁盘会话日志判任务完成，不重建answered、不发自动ack。
 - 既有正常自动receipt快路径与会话正式回执仍由原链路处理；本设计不根据提醒次数屏蔽真正回执，也不使队满拦收账。只有真实终态变更使该task退出due，其他同会话欠账预算不重置。
 - TaskLedger原子写P1(PR354)与bounded decoderP2(PR353)独立缺陷先行，高档非作者精确head复跑，恢复吞错/去上界突变必红；它们不是提醒业务逻辑或对外语义放行。P2已合725c1c6，P1待复核，部署仍另报。
-- 此设计不改变a2a-network/routing技能的回执责任，只需补充“收到对账提醒需逐条核对本人任务，提醒不是新任务/不需要回提醒回执”。若警示能力端点落地须文档说明旧peer不可达，不暗改现契约为已读结账。
+- 此设计不改变a2a-network/routing技能的回执责任，只需补充“收到对账提醒需逐条核对本人任务，提醒不是新任务/不需要回提醒回执”。本期不含远端新端点，仅说明远端查询可见范围，不能暗改契约为已读结账。
 - 1c56c492/446ce672现有积压照旧原会话补正式回执，不在本轮改账/补发/注入提醒。所有设计候选测试使用临时home，生产升级和存量启用另行授权。
 
 ### 7. 验收与反向突变（设计阶段未执行）
 
 | 测试 | 必须观察 | 行为突变必须变红 |
 |---|---|---|
-| R1 idle与启动 | busy不打断；idle且pending有回执义务注入一条逐项提醒；启动从磁盘预算恢复；冷会话不唤醒 | 去idle检查→busy注入；去boot/持久恢复→重启无提醒或重置次数 |
+| R1 idle与启动/来源硬门 | 来源能力存在时idle逐项queue、busy不打断，boot恢复due；无source能力/未挂载不发裸user、不steer降级且诊断可见，冷会话不唤醒 | 去来源门/steer fallback→错误kind:user或打断；去持久恢复→计数重置 |
 | R2 不改结算 | 提醒前后task状态/answeredAt/archive/conservation/queuedFor相同；文本taskid/原发送方/brief/年龄准确，未填outcome；完成由真实会话receipt收账 | 提醒当receipt/markAnswered/不计已读→债或cap改变 |
-| R3 退避与上限 | 三次预算+120秒会话门，batch变化/新task/其他结清/重启不重置旧task；过次只状态警示 | 去最小间隔/计数持久/单flight→连发或超次 |
-| R4 reserve失败/崩溃 | persist失败注入spy0且原账/次数未变；注入前后crash不立即重复，unknown不冒称已接纳 | 吞persist错/发后才reserve→漏持久预算或无限重复 |
-| R5 非任务通知 | 超次对sender一次有界通知，不能生成新task/debt/receipt；陌生key/错target/body篡改拒；旧peer404不fallbackdirect、显示未送达 | 用普通route/假receipt、忽略peer绑定或无限通知→新增债/误结/泄漏 |
+| R3 退避与持续性 | 前3次按2/10分钟退避与120秒门；第3次后30分钟警示，之后至少每2小时且真正idle时继续。长活跨多小时/重启后仍提醒；新task不刷新旧task短间隔 | 达3次return/exhausted停止→长活后无人提醒；去长间隔/持久/单flight→连发 |
+| R4 reserve失败/崩溃 | idle/timer/boot里persist失败被提醒器内部catch，无uncaughtException/UnhandledRejection、注入spy0、原账/次数不变，状态安全time/code可见；恢复后到期继续 | 去内部catch→真实事件/微任务异常红；吞persist错误/发后reserve→假成功或连发 |
+| R5 本机非任务警示/远端范围 | 第3次后本机sender一次queue警示不新增债/不标已读；远端无新端点与主动推送，只查询原可见字段/未知标记；目标仍持续提醒 | ordinaryroute/假receipt/警示使目标停止/暗加远端端点→语义或范围测试红 |
 | R6 停止与竞争 | 正式receipt与扫描/排队竞争时发送前复核，已settled/dead不再催；stop取消本进程timer；无提醒回receipt回环 | 去最终pending重检/stop取消→结清后仍提醒或停机后注入 |
 | R7 原规则 | S5/305/306原例全保，旧轮中断/后轮文本不代结；提醒头不匹配direct；queue满真实receipt仍过 | 改头/改归属/把提醒设新业务id→误消费或堵收账 |
 | R8 诊断/上限 | tasks/state/CLI与queuefull显示已尝试/已接纳/最近时间、未对账、next；未知target只诊断，任务正文不泄给其他caller；批次8/4KiB轮转不丢预算 | 截断id当新id/省略occupancy/泄第三方brief→错误行为 |
@@ -91,6 +92,6 @@
 
 ## 后果
 
-收益：保留背压与责任归属，以持久有限提醒要求会话自己对账，不因日志推断或ack把完成责任转给主机。代价：不响应提醒的会话仍可能长期占额，发送方须决定处理；宿主没有queue能力/peer旧版时警示可见降级，不伪造结果。新端点的最小协议面须评审确认，不擅自扩为通用消息系统。
+收益：保留背压与责任归属，以持久限频、长间隔不断的提醒要求会话本人对账，不因日志推断或ack把责任转主机。代价：不响应提醒仍可能长期占额，发送方须决定处理；当前source-preserving queue能力缺口是实施阻断，不以裸user/steer降级交付。远端主动警示明确不在本切片，不擅扩端点。
 
 推迟：已读ack/新接单状态/短租期/只计未读/主机日志代回执/新outbox/worker池/远端query等均非本次方向，不偷偷保留旧A+C机器。设计确认后另派实现，不部署.88/.43或更改生产配置。本PR仅docs/design，旧730980c与属主否决留git/issue可追溯；新稿精确SHA重新非作者评审，不能沿旧PASS或旧REQUEST CHANGES状态宣称已通过。
