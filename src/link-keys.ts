@@ -23,9 +23,9 @@ export function outboundKeyFor(url: string, linkKeys: ReadonlyMap<string, string
   return linkKeys.get(originOf(url)) ?? apiKey
 }
 
-/** The origin whose link key equals `presented` (every key is compared, in constant time each), or undefined. */
-export function linkKeyOrigin(presented: string, linkKeys: ReadonlyMap<string, string>, secretEqual: (a: string, b: string) => boolean): string | undefined {
-  let matched: string | undefined
-  for (const [origin, key] of linkKeys) if (secretEqual(presented, key) && matched === undefined) matched = origin
+/** Whether `presented` is one of the link keys (every key is compared, in constant time each). */
+export function isLinkKey(presented: string, linkKeys: ReadonlyMap<string, string>, secretEqual: (a: string, b: string) => boolean): boolean {
+  let matched = false
+  for (const key of linkKeys.values()) if (secretEqual(presented, key)) matched = true
   return matched
 }

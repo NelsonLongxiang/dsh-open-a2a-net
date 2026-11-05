@@ -7,7 +7,7 @@ import { generateKeyPairSync } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { A2aClient, type A2aFetch } from '../../src/a2a-client.ts'
 import { signCard } from '../../src/card.ts'
-import { linkKeyOrigin, normalizeLinkKeys, outboundKeyFor } from '../../src/link-keys.ts'
+import { isLinkKey, normalizeLinkKeys, outboundKeyFor } from '../../src/link-keys.ts'
 
 
 /** One stubbed fetch invocation. */
@@ -380,11 +380,11 @@ describe('#317 link-keys helpers', () => {
     expect(outboundKeyFor('http://other:1/a2a/direct', keys, 'fleet')).toBe('fleet')
     expect(outboundKeyFor('http://other:1/a2a/direct', keys, '')).toBe('')
   })
-  it('maps a presented link key to its origin only on an exact match', () => {
+  it('recognizes a presented link key only on an exact match', () => {
     const keys = normalizeLinkKeys({ 'https://vps.example': 'link', 'http://lan:13080': 'lan-link' })
-    expect(linkKeyOrigin('lan-link', keys, equal)).toBe('http://lan:13080')
-    expect(linkKeyOrigin('link', keys, equal)).toBe('https://vps.example')
-    expect(linkKeyOrigin('nope', keys, equal)).toBeUndefined()
-    expect(linkKeyOrigin('', keys, equal)).toBeUndefined()
+    expect(isLinkKey('lan-link', keys, equal)).toBe(true)
+    expect(isLinkKey('link', keys, equal)).toBe(true)
+    expect(isLinkKey('nope', keys, equal)).toBe(false)
+    expect(isLinkKey('', keys, equal)).toBe(false)
   })
 })

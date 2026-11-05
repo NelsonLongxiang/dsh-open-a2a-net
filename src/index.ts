@@ -10,7 +10,7 @@ import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, ran
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 import { selectLanIPv4 } from './lan-ip.ts'
-import { linkKeyOrigin, normalizeLinkKeys, originOf, outboundKeyFor } from './link-keys.ts'
+import { isLinkKey, normalizeLinkKeys, originOf, outboundKeyFor } from './link-keys.ts'
 import { dirname, join } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 // The package own version, read from package.json at load time so the
@@ -298,8 +298,10 @@ export function apply(ctx: Context, config: Config): void {
   const linkKeyMap = normalizeLinkKeys(config.linkKeys)
   /**
    * The peer-face key gate (/a2a/direct, /a2a/log, /a2a/blob): this host's apiKey as before; a link key only
-   * from a host whose OriginClaim verifies here and names that key's origin — a POST must also be body-bound
-   * (Sig3) — so a leaked link key cannot act without that peer's node key. An empty apiKey keeps the open posture.
+   * from a host whose OriginClaim verifies here BOUND to this very request (audience-bound v2 — never a v1
+   * envelope replayed onto another path; a POST also body-bound, Sig3), and only the key configured for that
+   * signer's own origin (review of #318 R1, R3). A leaked link key cannot act without that peer's node key.
+   * An empty apiKey keeps the open posture.
    * @param req - the inbound peer request.
    * @param rawBody - the request body, for a POST.
    */
@@ -307,10 +309,19 @@ export function apply(ctx: Context, config: Config): void {
     if (config.apiKey === '') return true
     const presented = String(req.headers['x-api-key'] ?? '')
     if (secretEqual(presented, config.apiKey)) return true
-    const origin = linkKeyOrigin(presented, linkKeyMap, secretEqual)
-    if (origin === undefined) return false
+    if (!isLinkKey(presented, linkKeyMap, secretEqual)) return false
     const claim = await verifyOriginClaim(req, rawBody !== undefined ? { rawBody } : undefined)
-    return claim.ok && claim.cli !== true && originOf(claim.callerUrl) === origin && (rawBody === undefined || claim.bodyBound === true)
+    if (!claim.ok || claim.cli === true || !claim.bound || (rawBody !== undefined && claim.bodyBound !== true)) return false
+    const expected = linkKeyMap.get(originOf(claim.callerUrl))
+    return expected !== undefined && secretEqual(presented, expected)
+  }
+  /**
+   * The headers of one signed peer read (the remote session-log proxy): the OriginClaim for `url` (origin and
+   * path, no query) and the key for that target — its link key, else this host's apiKey (review of #318 R2).
+   */
+  function peerRequestHeaders(url: string, method: string): Record<string, string> {
+    const key = outboundKeyFor(url, linkKeyMap, config.apiKey)
+    return { ...originClaimHeaders({ url, method }), ...(key !== '' ? { 'X-API-Key': key } : {}) }
   }
 
   /**
@@ -2765,7 +2776,7 @@ export function apply(ctx: Context, config: Config): void {
     }), 'a2a: quick-dispatch route')
 
     // gh#77: the session-log faces (local transcript reader + remote-log proxy) live in src/faces/session-log.ts.
-    registerSessionLogFaces(webServer, { ctx, config, controlRoute, scanSessionLogList, readSessionLogTail, peerStore, peerFetch, directoryPeerCandidates, memoizedCardFetch })
+    registerSessionLogFaces(webServer, { ctx, config, controlRoute, scanSessionLogList, readSessionLogTail, peerStore, peerFetch, peerRequestHeaders, directoryPeerCandidates, memoizedCardFetch })
     registerFileFaces(webServer, { ctx, config, blobStore, canvasStore, verifyOriginClaim, peerKeyAdmits, controlRoute, recordActivity })
   })
 
