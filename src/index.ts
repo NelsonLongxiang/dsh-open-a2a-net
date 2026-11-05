@@ -310,6 +310,10 @@ export function apply(ctx: Context, config: Config): void {
     // callers must present apiKey.
     const site = req.headers['sec-fetch-site']
     if (typeof site === 'string' && site !== 'same-origin' && site !== 'none') return false
+    // A reverse proxy or tunnel on this host (Caddy, nginx, a tunnel agent) reaches us over loopback for EVERY
+    // remote client: a forwarding header says the real caller is elsewhere, so loopback trust does not apply —
+    // otherwise the workbench shell would hand the apiKey to anyone on the internet. Forging one only denies trust.
+    if (req.headers['x-forwarded-for'] !== undefined || req.headers.forwarded !== undefined || req.headers['x-real-ip'] !== undefined) return false
     const remote = req.socket.remoteAddress
     return remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
   }
