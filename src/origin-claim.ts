@@ -176,6 +176,10 @@ export function requestAudiences(req: IncomingMessage, configured: readonly stri
 }
 
 const originClaimCallerShape = /^[a-z0-9-]+$/i
+/** #312: explain unsupported host zone configuration without changing startup or signature policy. */
+export function originClaimTeamWarning(team: string): string | undefined {
+  return originClaimCallerShape.test(team) ? undefined : 'a2a: configured host team contains invalid characters; OriginClaim cannot produce a verifiable host identity. Use ^[a-z0-9-]+$ (no slash).'
+}
 
 /**
  * gh#133: a CLI identity deposited on the verifying host — the full handle,
