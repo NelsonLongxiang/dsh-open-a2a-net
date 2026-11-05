@@ -1,3 +1,26 @@
+# Keep checkout text deterministic across Windows/Linux release packers.
+* text=auto eol=lf
+
+# Binary resources must never pass through newline conversion.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tgz binary
+*.gz binary
+*.sqlite binary
+*.sqlite3 binary
+*.db binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+
+# Preserve existing explicit policies for the generated HTML and CLI sources.
 nexus-stage/*.html text eol=lf
 nexus-stage/**/*.html text eol=lf
 assets/nexusDist/*.html text eol=lf
