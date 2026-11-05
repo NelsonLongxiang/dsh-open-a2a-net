@@ -81,7 +81,9 @@ async function mount(): Promise<{ port: number; dispose: () => Promise<void>; st
     session: { events: [] as unknown[] },
     steer: vi.fn(),
   } as unknown as Agent & { steer: ReturnType<typeof vi.fn>; session: { events: unknown[] } }
-  liveAgent.steer = vi.fn(() => {
+  liveAgent.steer = vi.fn((payload: { content?: Array<{ type: string; text?: string }> }) => {
+    // #306: log the steered user message before the reply (attributed sync waits read that turn).
+    ;(liveAgent.session.events as unknown[]).push({ type: 'user/message', data: { content: payload?.content ?? [] } })
     ;(liveAgent.session.events as unknown[]).push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'peer node replied' }] } } })
     ctx.emit('agent/status', { agent: liveAgent, status: 'idle' })
   })

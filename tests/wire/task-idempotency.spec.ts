@@ -133,7 +133,9 @@ async function mount(overrides: Partial<Config> = {}, controller?: object): Prom
     session: { events: [] as unknown[] },
     steer: vi.fn(),
   } as unknown as Agent & { steer: ReturnType<typeof vi.fn>; session: { events: unknown[] } }
-  liveAgent.steer = vi.fn(() => {
+  liveAgent.steer = vi.fn((payload: { content?: Array<{ type: string; text?: string }> }) => {
+    // #306: log the steered user message before the reply (attributed sync waits read that turn).
+    ;(liveAgent.session.events as unknown[]).push({ type: 'user/message', data: { content: payload?.content ?? [] } })
     ;(liveAgent.session.events as unknown[]).push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'peer node replied' }] } } })
     ctx.emit('agent/status', { agent: liveAgent, status: 'idle' })
   })
@@ -717,7 +719,11 @@ describe('settlement integrity — debt gate and echo settle (F5 defect card)', 
     // F5's content echo is weak evidence and, since #125, is judged as enforce even under observe: the
     // creditor quoting its own task id is not the target answering. (The on-chain echo that still
     // settles is pinned in tests/mesh/gh125-echo-enforce.spec.ts.)
-    const { port, dispose } = await mount({ sessionNodes: true })
+    const { port, dispose, registry } = await mount({ sessionNodes: true })
+    // #306-era fixture honesty: the default fixture now logs and answers the steer, and its
+    // auto-receipt settles the inbound row on-chain — correctly. This case pins the echo
+    // refusal for the shape it was written for: the target never produced a receipt.
+    ;(registry.agent as unknown as { steer: () => void }).steer = () => {}
     try {
       const direct = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
         method: 'POST',

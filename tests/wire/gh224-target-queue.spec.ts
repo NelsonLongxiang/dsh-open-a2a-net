@@ -11,7 +11,7 @@ const nodes: MeshNode[] = []
 afterEach(async () => { for (const n of nodes.splice(0)) await n.dispose(); vi.unstubAllGlobals() })
 async function boot(extra: Record<string, unknown> = {}): Promise<MeshNode> {
   vi.stubGlobal('WebSocket', function () { throw new Error('no socket') })
-  const n = await bootNode({ name: 'receiver', session: 'gh224-' + nodes.length, team: 'dsh', sessionNodes: true, teamScopeRouting: true, originClaimWindow: true, ...extra } as never)
+  const n = await bootNode({ name: 'receiver', session: 'gh224-' + nodes.length, team: 'dsh', sessionNodes: true, teamScopeRouting: true, originClaimWindow: true, silent: true, ...extra } as never)
   nodes.push(n)
   await fetch(n.baseUrl + '/__dsh_a2a/join', { method: 'POST', body: JSON.stringify({ id: 'session-0123456789abcdef' }) })
   return n

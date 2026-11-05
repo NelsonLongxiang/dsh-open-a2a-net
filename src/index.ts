@@ -2201,21 +2201,20 @@ export function apply(ctx: Context, config: Config): void {
     { ok: true; reply: string; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string }
   > {
     return new Promise((resolve) => {
+      // #306: synchronous replies use the same reading-turn attribution as automatic receipts.
+      // Registering and steering are synchronous, so this is the exact pre-steer floor.
       const floorAtRegistration = sessionEventsOf(agent).length
       const waiter = registerFinalWaiter(agent, (text, placeholder) => {
-        // #298 (review of #305 F4): the sync wait may close on a busy target's OTHER turn. `ownTurn` states,
-        // from this session's own events, that the steer carrying this task was read and that the reply is the
-        // reading turn's own last text — the only reply a peer may declare final (`reply_final`).
+        // Preserve #305's reply_final contract: only this task's own completed reading turn qualifies.
         let ownTurn = false
         if (placeholder !== true && taskId !== undefined && taskId !== '') {
           const events = sessionEventsOf(agent)
           const read = consumptionIndex(events, taskId, floorAtRegistration)
-          // The receipt's own window (review of #305 F5): a back-to-back next turn's text is not this turn's.
           const window = read === undefined ? undefined : readingTurnReply(events, read)
           ownTurn = window !== undefined && window.completed && window.reply !== '' && window.reply === text
         }
         resolve({ ok: true, reply: text, ...(placeholder === true ? { placeholder: true } : {}), ...(ownTurn ? { ownTurn: true as const } : {}) })
-      })
+      }, taskId !== undefined && taskId !== '' ? { taskId, steerFloor: floorAtRegistration } : undefined)
       // The header names the sender first: `caller` is the routing node's
       // own label (the session that issued the route), while `team` is this
       // request's target — showing the target as "remote team" hid the
