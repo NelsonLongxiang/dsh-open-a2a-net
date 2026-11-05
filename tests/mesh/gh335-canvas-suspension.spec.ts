@@ -1,17 +1,51 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { describe, expect, it, vi } from 'vitest'
+import { JoinedSessions } from '../../src/joined-store.ts'
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createPrivateKey, generateKeyPairSync } from 'node:crypto'
 import { ghostNode } from './harness.ts'
 import { signCard } from '../../src/card.ts'
 import { signOriginClaim } from '../../src/origin-claim.ts'
-import { bootNode, reservePort, runContext } from './harness.ts'
+import { bootNode, reservePort, runContext, tmpHome } from './harness.ts'
 const id='session-aaaaaaaa11112222',bare='dsh/aaaaaaaa'
 const post=async(base:string,path:string,body:unknown)=>{const res=await fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return {status:res.status,body:await res.json()}}
 const state=async(base:string)=>await fetch(base+'/__dsh_a2a/state').then(r=>r.json())
 const route=async(n:Awaited<ReturnType<typeof bootNode>>,message:string)=>await n.ctx.tools.get('a2a_route')!.execute({team:'dsh/canvas/ops',message},{signal:new AbortController().signal} as never) as any
 describe('#335 real canvas lifecycle',()=>{
+ it('#338 B1 a stale lock and stale local member do not break boot or repeated state polling',async()=>{
+  const home=tmpHome();mkdirSync(join(home,'a2a'),{recursive:true})
+  const file=join(home,'a2a/canvas.json'),raw=JSON.stringify({formatVersion:2,revision:1,suspendedMembers:[],teams:[{name:'stale',members:['session-stale']} ]})
+  writeFileSync(file,raw);mkdirSync(file+'.lock');writeFileSync(file+'.lock/owner.json',JSON.stringify({pid:123,host:'prior',at:'2026-11-05T00:00:00Z'}))
+  const a=await bootNode({name:'bootLock335',session:'bootLock335',team:'dsh',sessionNodes:true,home})
+  try{
+   for(let i=0;i<2;i++){
+    const res=await fetch(a.baseUrl+'/__dsh_a2a/state');expect(res.status).toBe(200)
+    const s=await res.json();expect(s.canvas.error).toContain('canvas lock held');expect(s.canvas.lock.owner.host).toBe('prior')
+   }
+   expect(readFileSync(file,'utf8')).toBe(raw)
+  }finally{await a.dispose()}
+ })
+ it('#338 B1 externally changed canvas with stale members leaves repeated state operational',async()=>{
+  const a=await bootNode({name:'external335',session:'external335',team:'dsh',agentId:id,sessionNodes:true})
+  try{
+   await post(a.baseUrl,'/__dsh_a2a/join',{id});await post(a.baseUrl,'/__dsh_a2a/canvas',{action:'add-member',name:'stale',id})
+   const file=join(a.home,'a2a/canvas.json'),raw=readFileSync(file,'utf8');writeFileSync(file,raw+' ')
+   const agent=a.agents.agent!;a.ctx.emit('agent/disposed',{agent});a.agents.agent=undefined
+   writeFileSync(join(a.home,'a2a/joined.json'),JSON.stringify({sessions:[]}))
+   // Inject the stale-join observation; do not run the legitimate leave path,
+   // which would correctly persist canvas revocation before making this id stale.
+   const missing=vi.spyOn(JoinedSessions.prototype,'has').mockReturnValue(false)
+   try {
+   for(let i=0;i<2;i++){
+    const res=await fetch(a.baseUrl+'/__dsh_a2a/state');expect(res.status).toBe(200)
+    expect((await res.json()).canvas.error).toContain('changed externally')
+   }
+   expect(readFileSync(file,'utf8')).toBe(raw+' ')
+   }finally{missing.mockRestore()}
+  }finally{await a.dispose()}
+ })
+
  it('membership-specific foreign blob grants cannot use a suspended canvas slot',async()=>{
   const pair=generateKeyPairSync('ed25519'),remote='foreign/aaaaaaaa'
   const ghost=await ghostNode(signCard({name:'foreign',session:'foreign',team:'foreign',capabilities:{},expiresAt:Date.now()+60000},pair.privateKey))

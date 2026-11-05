@@ -17,8 +17,9 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/canvas-store
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, copyFileSync, rmSync, openSync, closeSync, fsyncSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync, openSync, closeSync, fsyncSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { hostname } from 'node:os'
 import { dirname } from 'node:path'
 import { CLI_HANDLE_RE } from './cli-deposit.ts'
 
@@ -105,6 +106,7 @@ export class CanvasStore {
   private memberOwners: Record<string, string> = {}
   private disk: string | undefined
   private readOnlyReason = ''
+  private lastWriteError = ''
   private failedSuspension = false
   private readonly path: string
   private readonly listeners = new Set<() => void>()
@@ -137,13 +139,29 @@ export class CanvasStore {
       const snapshot = JSON.parse(this.disk) as Partial<CanvasSnapshot> | null
       if (snapshot?.formatVersion !== undefined && snapshot.formatVersion !== 2) { this.readOnlyReason = 'unsupported canvas formatVersion'; return }
       if (snapshot?.memberOwners && typeof snapshot.memberOwners === 'object' && !Array.isArray(snapshot.memberOwners)) this.memberOwners = { ...snapshot.memberOwners }
-      if (snapshot?.formatVersion === 2 && (!Number.isSafeInteger(snapshot.revision) || snapshot.revision! < 0 || !Array.isArray(snapshot.suspendedMembers))) throw Error('incomplete canvas v2 snapshot')
+      if (snapshot?.formatVersion === 2) {
+        if (!Number.isSafeInteger(snapshot.revision) || snapshot.revision! < 0 || !Array.isArray(snapshot.suspendedMembers) || !Array.isArray(snapshot.teams) || snapshot.teams.length > CANVAS_TEAM_CAP) throw Error('incomplete or oversized canvas v2 snapshot')
+        const names = new Set<string>()
+        for (const entry of snapshot.teams) {
+          if (!entry || typeof entry !== 'object' || typeof entry.name !== 'string' || validName(entry.name) !== entry.name || names.has(entry.name) || !Array.isArray(entry.members) || entry.members.length > CANVAS_MEMBER_CAP) throw Error('invalid canvas v2 team')
+          names.add(entry.name)
+          const members = new Set<string>()
+          for (const member of entry.members) {
+            if (typeof member !== 'string' || member === '' || /[\x00-\x1f\x7f]/.test(member) || members.has(member)) throw Error('invalid canvas v2 member')
+            members.add(member)
+          }
+        }
+        if (snapshot.memberOwners !== undefined && (snapshot.memberOwners === null || typeof snapshot.memberOwners !== 'object' || Array.isArray(snapshot.memberOwners) || Object.values(snapshot.memberOwners).some(key => typeof key !== 'string'))) throw Error('invalid canvas v2 owners')
+        if (snapshot.cliHome !== undefined && (snapshot.cliHome === null || typeof snapshot.cliHome !== 'object' || Array.isArray(snapshot.cliHome) || Object.entries(snapshot.cliHome).some(([handle, home]) => !CLI_HANDLE_RE.test(handle) || typeof home !== 'string' || !validHomeOrigin(home) || !snapshot.teams!.some(t => t.members.includes(handle))))) throw Error('invalid canvas v2 CLI homes')
+        if (snapshot.cliHomeCleared !== undefined && (!Array.isArray(snapshot.cliHomeCleared) || new Set(snapshot.cliHomeCleared).size !== snapshot.cliHomeCleared.length || snapshot.cliHomeCleared.some(handle => typeof handle !== 'string' || !CLI_HANDLE_RE.test(handle) || !snapshot.teams!.some(t => t.members.includes(handle))))) throw Error('invalid canvas v2 cleared homes')
+      }
       this.revision = Number.isSafeInteger(snapshot?.revision) && snapshot!.revision! >= 0 ? snapshot!.revision! : 0
       if (snapshot?.suspendedMembers !== undefined) {
         if (!Array.isArray(snapshot.suspendedMembers)) throw Error('invalid suspension records')
         const seen = new Set<string>()
         for (const row of snapshot.suspendedMembers) {
           if (!row || typeof row.team !== 'string' || typeof row.member !== 'string' || typeof row.localSessionId !== 'string' || !['leave', 'archive', 'remove'].includes(row.reason) || typeof row.at !== 'string' || !Number.isFinite(Date.parse(row.at)) || typeof row.token !== 'string' || !row.token) throw Error('invalid suspension record')
+          if (snapshot.formatVersion === 2 && !snapshot.teams?.some(t => t.name === row.team && t.members.includes(row.member))) throw Error('orphan suspension record')
           const key = JSON.stringify([row.team,row.member,row.reason,row.localSessionId])
           if (seen.has(key)) throw Error('duplicate suspension record'); seen.add(key)
           this.suspended.push({ ...row })
@@ -178,7 +196,8 @@ export class CanvasStore {
 
   /** Persist the current snapshot (no-op without a path), then tell the listeners. */
   private persist(): void {
-    try { this.write(); this.committed = this.serialize() } catch (error) {
+    try { this.write(); this.committed = this.serialize(); this.lastWriteError = '' } catch (error) {
+      this.lastWriteError = String(error)
       const previous = JSON.parse(this.committed) as CanvasSnapshot
       this.teams = previous.teams.map(t => ({ name: t.name, members: [...t.members] }))
       this.suspended = [...previous.suspendedMembers ?? []]
@@ -207,25 +226,49 @@ export class CanvasStore {
     if (this.path !== '') {
       mkdirSync(dirname(this.path), { recursive: true })
       const lock = this.path + '.lock'
-      // Never steal another writer's lock.
-      mkdirSync(lock)
+      // Never steal another writer's lock. Diagnostics do not authorize removal.
+      try { mkdirSync(lock) } catch (error) { throw Error('canvas lock held at ' + lock + ': ' + JSON.stringify(this.lockInfo()) + ' (' + String(error) + ')') }
       try {
+        writeFileSync(lock + '/owner.json', JSON.stringify({ pid: process.pid, host: hostname(), at: new Date().toISOString() }), { mode: 0o600, flag: 'wx' })
         const current = existsSync(this.path) ? readFileSync(this.path, 'utf8') : undefined
         if (current !== this.disk) throw Error('canvas snapshot changed externally; reload before writing')
         let oldVersion: unknown
         try { oldVersion = current === undefined ? undefined : JSON.parse(current)?.formatVersion } catch { /* back up malformed legacy data too */ }
-        if (current !== undefined && oldVersion !== 2 && !existsSync(this.path + '.pre-v2')) copyFileSync(this.path, this.path + '.pre-v2')
-        const temporary = this.path + '.tmp-' + randomUUID()
-        try {
-          writeFileSync(temporary, bytes, { mode: 0o600, flag: 'wx' })
-          const fd = openSync(temporary, 'r+'); try { fsyncSync(fd) } finally { closeSync(fd) }
-          renameSync(temporary, this.path)
+        if (current !== undefined && oldVersion !== 2) {
+          const backup = this.path + '.pre-v2'
+          if (existsSync(backup)) {
+            if (readFileSync(backup, 'utf8') !== current) throw Error('canvas pre-v2 backup differs; inspect before migration: ' + backup)
+          } else this.replaceFile(backup, current)
         }
-        finally { rmSync(temporary, { force: true }) }
+        this.replaceFile(this.path, bytes)
         this.disk = bytes
       } finally { rmSync(lock, { recursive: true }) }
     }
     this.revision = revision
+  }
+
+  private replaceFile(target: string, bytes: string): void {
+    const temporary = target + '.tmp-' + randomUUID()
+    try {
+      writeFileSync(temporary, bytes, { mode: 0o600, flag: 'wx' })
+      const fd = openSync(temporary, 'r+'); try { fsyncSync(fd) } finally { closeSync(fd) }
+      renameSync(temporary, target)
+      if (process.platform !== 'win32') {
+        try {
+          const dir = openSync(dirname(target), 'r'); try { fsyncSync(dir) } finally { closeSync(dir) }
+        } catch (error) {
+          // Rename already committed: rolled-back memory must not be used as active state.
+          this.readOnlyReason = 'canvas directory fsync failed after rename: ' + String(error)
+          throw error
+        }
+      }
+    } finally { rmSync(temporary, { force: true }) }
+  }
+  private lockInfo(): { path: string; owner?: unknown; error?: string } | undefined {
+    const path = this.path + '.lock'
+    if (this.path === '' || !existsSync(path)) return undefined
+    try { return { path, owner: JSON.parse(readFileSync(path + '/owner.json', 'utf8')) } }
+    catch (error) { return { path, error: 'owner metadata unavailable: ' + String(error) } }
   }
 
   /** Every team name, in creation order. */
@@ -249,8 +292,11 @@ export class CanvasStore {
   rawMembersOf(name: string): readonly string[] { return [...(this.teams.find(t => t.name === name)?.members ?? [])] }
   isSuspended(name: string, member: string): boolean { return this.suspended.some(r => r.team === name && r.member === member) }
   suspensionOf(name: string, member: string): readonly SuspendedCanvasMember[] { return this.suspended.filter(r => r.team === name && r.member === member).map(r => ({ ...r })) }
-  state(): { revision: number; suspendedMembers: readonly SuspendedCanvasMember[]; error?: string } {
-    return { revision: this.revision, suspendedMembers: this.suspended.map(r => ({ ...r })), ...(this.readOnlyReason || this.failedSuspension ? { error: this.readOnlyReason || 'canvas suspension persistence failed; restart after repair' } : {}) }
+  state(): { revision: number; suspendedMembers: readonly SuspendedCanvasMember[]; error?: string; lock?: unknown; directoryFsync: string } {
+    return { revision: this.revision, suspendedMembers: this.suspended.map(r => ({ ...r })),
+      directoryFsync: process.platform === 'win32' ? 'unavailable on Windows; file fsync and atomic rename only' : 'required after rename',
+      ...(this.lockInfo() ? { lock: this.lockInfo() } : {}),
+      ...(this.readOnlyReason || this.failedSuspension || this.lastWriteError ? { error: this.readOnlyReason || (this.failedSuspension ? 'canvas suspension persistence failed; restart after repair' : this.lastWriteError) } : {}) }
   }
   ownerKeyOf(member: string): string | undefined { return this.memberOwners[member] }
   /** Durably revoke canvas consent BEFORE join/agent/roster state is removed. */

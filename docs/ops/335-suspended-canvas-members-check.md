@@ -2,6 +2,18 @@
 
 基线master5c93230，按已确认设计#337。中高档，须原评审非自我复核；未合并发布部署。#334来源确认界面、qualified新写/远端路由仍未实现。
 
+## review-338-r1 修订记录
+
+原FAIL@5ed6b3a保留。B1：pruneCanvasMemberships每个remove包try/log/continue，启动和state复用同处理；锁冲突/盘CAS不再拖垮插件，state保留lastWriteError及锁owner信息，不偷锁。真实启动“残锁+stale local id”与运行期外改+stale观察反例均返回state200、磁盘字节不变。临时去掉catch，启动例立即FAIL；已恢复。
+
+B2：v2不走旧格式的过滤/截断宽容路径。teams必须数组且受cap；任一队名/成员类型、重复、超限、坏CLI附表或孤悬暂停记录都readonly失败关闭，不把数据裁掉后成功重写。对象teams、含斜杠队名、坏members、重复队/成员、队数/成员数超限7例逐个检查state错误、写入抛错和磁盘不变。去掉strict块，teams-object例立即FAIL；已恢复。
+
+N1：快照及.pre-v2备份均同目录临时件写→可写fd fsync→rename，POSIX再fsync目录；Windows目录fsync明确跳过（state.directoryFsync报告file fsync+rename only），不声称Windows断电目录落盘保障。目录fsync在rename后失败时保持readonly，避免内存回滚数据继续作为活动状态。已有备份若不等于迁移前原文，拒迁移/提示检查，不忽略可能截断的旧备份；不覆盖现场证据。
+
+N2：锁目录写owner.json的pid/host/at；state.lock报路径/owner或metadata不可读原因，错误包含锁持有信息。残锁不自动接管。N3：release说明补#334之前对端裸handle删除按完整id存的成员会ok:false，需要属主本机明确删除。
+
+修订针对性unit16+mesh12全过；默认完整pnpm verify真实exit0：root1485passed/6原skip，layout4，nexus327。图锚按原评审SHA重锚10项，无miss；source/types/docs/dist同链。#339 PR340独立冻结407f458，未合入本PR。
+
 ## 数据与失败边界
 
 CanvasStore将有效membersOf/remoteMembersOf/teamsOf统一过滤suspended（窗口关时再过滤legacy bare）；rawMembersOf仅供检查/生命周期，不提供授权。state.canvas.teams仍是有效成员，暂停/窗口关闭留存位在retainedMembers单列，避免工作台旧计数/board把暂停位计有效。CLI pin体系不改。

@@ -3,9 +3,9 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "6a13ae9c7983def7c0e222b58f1a2665de039a2f54db8b27c58f383f7c5b4ead",
+    "src/index.ts": "d1d0e146f3092ab9bf8d12992783a182c20183f8609bb256b7446ce3b77859ca",
     "src/faces/admin.ts": "962b282cf96fb33a78de68d5d7496c7da0e0b03ce262f80cdf021e3c22d4896c",
-    "src/canvas-store.ts": "f5fc1d9c7e18bb50bcebfcb7f1cd542888a9851d459aaf94c5dc93179e493f84",
+    "src/canvas-store.ts": "1c6788cade4a0825212d220f22f89e56d46b09c029236ddd06d1df7df8ec0502",
     "src/peer-store.ts": "7793a0b19d356dac01b87c86409cc2969078da330ed4bf9368a98d2a407c6d44",
     "src/cli-deposit.ts": "8b8b714d8b47ee11c5518e51d08ea31cc588a29bc4eb73843bb2239f880e718a",
     "nexus-stage/src/workbench.ts": "be86c0843ca401d18b53d415fd1a55fdc2fa292feef640954467e95c8e61c897",
@@ -63,13 +63,13 @@
     {
       "page": "p1-arch",
       "cell": "b3",
-      "ref": "src/index.ts:2443",
+      "ref": "src/index.ts:2446",
       "expect": "function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {"
     },
     {
       "page": "p1-arch",
       "cell": "b4",
-      "ref": "src/index.ts:1400",
+      "ref": "src/index.ts:1403",
       "expect": "function exposureDescription(description: string): string | undefined {"
     },
     {
@@ -105,7 +105,7 @@
     {
       "page": "p1-arch",
       "cell": "c1",
-      "ref": "src/index.ts:1792",
+      "ref": "src/index.ts:1795",
       "expect": "path: '/.well-known/agent-card.json',"
     },
     {
@@ -147,7 +147,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:2808",
+      "ref": "src/index.ts:2811",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -165,7 +165,7 @@
     {
       "page": "p1-arch",
       "cell": "d3",
-      "ref": "src/canvas-store.ts:97",
+      "ref": "src/canvas-store.ts:98",
       "expect": "export class CanvasStore {"
     },
     {
@@ -225,7 +225,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:3661",
+      "ref": "src/index.ts:3664",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -267,7 +267,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3108",
+      "ref": "src/index.ts:3111",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
@@ -279,13 +279,13 @@
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2155",
+      "ref": "src/index.ts:2158",
       "expect": "void runReceiptLadder("
     },
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2106",
+      "ref": "src/index.ts:2109",
       "expect": "function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {"
     },
     {
@@ -303,7 +303,7 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/index.ts:1737",
+      "ref": "src/index.ts:1740",
       "expect": "registerAdminFaces(webServer, {"
     },
     {

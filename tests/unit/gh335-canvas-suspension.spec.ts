@@ -2,9 +2,37 @@ import { describe, expect, it } from 'vitest'
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CanvasStore } from '../../src/canvas-store.ts'
+import { CanvasStore, CANVAS_MEMBER_CAP, CANVAS_TEAM_CAP } from '../../src/canvas-store.ts'
 const fixture=()=>{const dir=mkdtempSync(join(tmpdir(),'canvas335-'));return {dir,path:join(dir,'canvas.json')}}
 describe('#335 durable canvas consent',()=>{
+ for(const [name,teams] of [
+  ['teams-object',{ops:['session-a']}],
+  ['slash-name',[{name:'bad/name',members:['session-a']}]],
+  ['non-array-members',[{name:'ops',members:{id:'session-a'}}]],
+  ['duplicate-team',[{name:'ops',members:[]},{name:'ops',members:[]}]],
+  ['duplicate-member',[{name:'ops',members:['session-a','session-a']}]],
+  ['too-many-teams',Array.from({length:CANVAS_TEAM_CAP+1},(_,i)=>({name:'team-'+i,members:[]}))],
+  ['too-many-members',[{name:'ops',members:Array.from({length:CANVAS_MEMBER_CAP+1},(_,i)=>'session-'+i)}]],
+ ] as const)it('#338 B2 refuses malformed v2 '+name+' without rewriting or losing original bytes',()=>{
+  const {path}=fixture(),raw=JSON.stringify({formatVersion:2,revision:7,suspendedMembers:[],teams});writeFileSync(path,raw)
+  const store=new CanvasStore(path)
+  expect(store.state().error).toContain('invalid canvas v2')
+  expect(store.membersOf('ops')).toEqual([]);expect(()=>store.create('new')).toThrow()
+  expect(readFileSync(path,'utf8')).toBe(raw)
+ })
+ it('#338 N1 never trusts a partial pre-v2 backup and leaves the original untouched',()=>{
+  const {path}=fixture(),raw=JSON.stringify({teams:[{name:'ops',members:['session-a']}]});writeFileSync(path,raw);writeFileSync(path+'.pre-v2','partial')
+  const store=new CanvasStore(path);expect(()=>store.create('new')).toThrow('backup differs')
+  expect(readFileSync(path,'utf8')).toBe(raw);expect(readFileSync(path+'.pre-v2','utf8')).toBe('partial')
+ })
+ it('#338 N2 reports held lock path and owner without stealing it',()=>{
+  const {path}=fixture(),store=new CanvasStore(path);store.create('ops')
+  mkdirSync(path+'.lock');const owner={pid:123,host:'supervisor',at:'2026-11-05T00:00:00Z'};writeFileSync(path+'.lock/owner.json',JSON.stringify(owner))
+  expect(()=>store.create('blocked')).toThrow('supervisor')
+  expect(store.state()).toMatchObject({lock:{path:path+'.lock',owner},error:expect.stringContaining('canvas lock held')})
+  expect(readFileSync(path+'.lock/owner.json','utf8')).toBe(JSON.stringify(owner))
+ })
+
  it('real filesystem write failure is visible and cannot leave successful in-memory edits',()=>{
   const {dir}=fixture(),parent=join(dir,'not-a-directory');writeFileSync(parent,'blocker')
   const s=new CanvasStore(join(parent,'canvas.json'))

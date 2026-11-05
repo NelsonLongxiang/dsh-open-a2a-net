@@ -1043,7 +1043,10 @@ export function apply(ctx: Context, config: Config): void {
         // at route time, so the prune never touches them.
         if (isRemoteMemberRef(id)) continue
         if (sessionNodes.has(id) || joinedSessions.has(id)) continue
-        canvasStore.removeMember(name, id)
+        try { canvasStore.removeMember(name, id) } catch (error) {
+          logger.error('canvas stale-member prune failed (%s/%s): %s', name, id, String(error))
+          continue
+        }
         logger.info(`a2a: canvas team "${name}" dropped stale member ${id8(id)} (no live node, no join intent)`)
       }
     }
