@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { collectReleaseArtifactFacts } from '../../scripts/verify-release-artifact.mjs'
 import { tarFiles, compareReviewerManifest } from '../../scripts/release-file-manifest.mjs'
+import { fixtureTar } from '../fixtures/fixture-tar.mjs'
 const repo = process.cwd()
 const hash = (b: Buffer, a: string) => createHash(a).update(b).digest('hex')
 function fixture(badPath = false) {
@@ -16,10 +17,10 @@ function fixture(badPath = false) {
  const pkg=JSON.parse(spawnSync('git',['show',sha+':package.json'],{cwd:repo,encoding:'utf8'}).stdout)
  writeFileSync(join(dir,'package/package.json'),JSON.stringify(pkg))
  if(badPath){mkdirSync(join(dir,'package/__pycache__'));writeFileSync(join(dir,'package/__pycache__/x.pyc'),'bad')}
- const tar=spawnSync('tar',['-czf','release.tgz','package'],{cwd:dir,encoding:'utf8'})
+ const tar=fixtureTar(['-czf','release.tgz','package'],{cwd:dir,encoding:'utf8'})
  if(tar.status!==0)throw Error(tar.stderr)
  const bytes=readFileSync(join(dir,'release.tgz')),shasum=hash(bytes,'sha1'),sha256=hash(bytes,'sha256')
- const files=spawnSync('tar',['-tzf','release.tgz'],{cwd:dir,encoding:'utf8'}).stdout.trim().split(/\r?\n/).length
+ const files=fixtureTar(['-tzf','release.tgz'],{cwd:dir,encoding:'utf8'}).stdout.trim().split(/\r?\n/).length
  const json=(file: string,value: unknown)=>writeFileSync(join(dir,file),JSON.stringify(value))
  json('provenance.json',{candidate:sha,at:'2026-11-05T00:00:00Z',filename:'release.tgz',size:bytes.length,files,shasum,sha256})
  const results=['dsh3081','cleanServe'].flatMap(kind=>[{kind,base:'http://127.0.0.1:3081',path:'/.well-known/agent-card.json',status:200,version:pkg.version},{kind,base:'http://127.0.0.1:3081',path:'/__dsh_a2a/state',status:200,version:pkg.version,isolated:true},{kind,base:'http://127.0.0.1:3081',path:'/__dsh_a2a_nexus/',status:200,html:true,bytes:100}])
@@ -30,12 +31,35 @@ function fixture(badPath = false) {
  return {dir,json,rows:()=>collectReleaseArtifactFacts(dir,repo),read:(file: string)=>JSON.parse(readFileSync(join(dir,file),'utf8'))}
 }
 describe('retained-release fact collector (not the verdict engine)',()=>{
+ it('fixture producer excludes macOS xattrs even when inherited COPYFILE_DISABLE is off',()=>{
+  const dir=mkdtempSync(join(tmpdir(),'release-audit-xattr-'))
+  try{
+   mkdirSync(join(dir,'package'));writeFileSync(join(dir,'package/example.txt'),'before fixture')
+   if(process.platform==='darwin'){
+    for(const path of ['package','package/example.txt']){
+     const x=spawnSync('xattr',['-w','com.apple.provenance','audit-fixture-regression',join(dir,path)],{encoding:'utf8'})
+     expect(x.status,x.stderr).toBe(0)
+    }
+   }
+   const out=spawnSync(process.execPath,[join(repo,'tests/fixtures/release-audit-case.mjs'),dir],{encoding:'utf8',env:{...process.env,COPYFILE_DISABLE:'0'}})
+   expect(out.status,out.stderr).toBe(0)
+   expect([...tarFiles(readFileSync(join(dir,'release.tgz'))).keys()].sort()).toEqual(['example.txt','package.json'])
+  }finally{rmSync(dir,{recursive:true,force:true})}
+ })
+
  it('rejects nonregular/traversal/duplicate/truncated tar payloads even with valid gzip and checksum',()=>{
   const f=fixture();try{
    const original=gunzipSync(readFileSync(join(f.dir,'release.tgz')))
-   const fileHeader=Buffer.from(original.subarray(512,1024))
+   // bsdtar may keep legitimate PAX timestamp headers even with AppleDouble disabled.
+   // Locate the regular member rather than assuming the directory occupies one header.
+   let start=0
+   while(start+512<=original.length && original[start+156]!==48 && original[start+156]!==0){
+    const size=parseInt(original.subarray(start+124,start+136).toString().replaceAll(String.fromCharCode(0),'').trim(),8)
+    start+=512+Math.ceil(size/512)*512
+   }
+   const fileHeader=Buffer.from(original.subarray(start,start+512))
    const size=parseInt(fileHeader.subarray(124,136).toString().replaceAll(String.fromCharCode(0),'').trim(),8)
-   const entry=original.subarray(512,1024+Math.ceil(size/512)*512)
+   const entry=original.subarray(start,start+512+Math.ceil(size/512)*512)
    for(const type of ['1','2','3','6']){
     const header=Buffer.from(fileHeader);header[156]=type.charCodeAt(0);header.fill(32,148,156)
     const sum=header.reduce((a,b)=>a+b,0);header.write(sum.toString(8).padStart(6,'0')+String.fromCharCode(0)+' ',148,'ascii')
@@ -80,7 +104,7 @@ describe('retained-release fact collector (not the verdict engine)',()=>{
  it('refuses repeated archive entries (including tar hardlink optimization) without extracting them',()=>{
   const f=fixture();try{
    for(const args of [['-czf','bad.tgz','package/package.json','package/package.json'],['-czf','bad.tgz','package/package.json']]){
-    expect(spawnSync('tar',args,{cwd:f.dir}).status).toBe(0)
+    expect(fixtureTar(args,{cwd:f.dir}).status).toBe(0)
     if(args.length===4)expect(()=>tarFiles(readFileSync(join(f.dir,'bad.tgz')))).toThrow()
    }
    const bytes=readFileSync(join(f.dir,'release.tgz'))
