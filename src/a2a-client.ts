@@ -68,6 +68,7 @@ type WireRoute = {
   readonly routed?: unknown
   readonly delivered?: unknown
   readonly delivered_to?: unknown
+  reply_final?: unknown
   readonly consumed?: unknown
   readonly error?: unknown
   readonly code?: unknown
@@ -371,6 +372,7 @@ export class A2aClient {
       team,
       reply,
       ...(wireText(raw.delivered_to) !== '' ? { deliveredTo: wireText(raw.delivered_to) } : {}),
+      ...(raw.reply_final === true ? { replyFinal: true as const } : {}),
       // Same echo-first rule as the delivered branch: the peer's echo wins,
       // else the caller-born id, else ''.
       task_id: wireText(raw.task_id) !== '' ? wireText(raw.task_id) : taskIdFromCaller ?? '',

@@ -88,6 +88,18 @@ export interface MeshNode {
 }
 
 /** Fresh per-node DSH home so keygen and peers.json never touch the developer's home. */
+/**
+ * Environment for a spawned `a2a-net` CLI: the parent environment minus every `A2A_*` variable, plus the
+ * test's own `A2A_CLI_HOME`. The CLI ranks `A2A_HOME` above its saved home and reads `A2A_KEY` /
+ * `A2A_TOKEN` / `A2A_POCKET_TOKEN` from the environment, so an operator's exported values would send the
+ * test's routes to their real host with their real credentials (#303).
+ */
+export function cliEnv(home: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {}
+  for (const [name, value] of Object.entries(process.env)) if (!name.startsWith('A2A_')) env[name] = value
+  return { ...env, ...extra, A2A_CLI_HOME: home }
+}
+
 export function tmpHome(): string {
   return mkdtempSync(join(tmpdir(), 'dsh-a2a-mesh-'))
 }

@@ -310,6 +310,10 @@ export function apply(ctx: Context, config: Config): void {
     // callers must present apiKey.
     const site = req.headers['sec-fetch-site']
     if (typeof site === 'string' && site !== 'same-origin' && site !== 'none') return false
+    // A reverse proxy or tunnel on this host (Caddy, nginx, a tunnel agent) reaches us over loopback for EVERY
+    // remote client: a forwarding header says the real caller is elsewhere, so loopback trust does not apply —
+    // otherwise the workbench shell would hand the apiKey to anyone on the internet. Forging one only denies trust.
+    if (req.headers['x-forwarded-for'] !== undefined || req.headers.forwarded !== undefined || req.headers['x-real-ip'] !== undefined) return false
     const remote = req.socket.remoteAddress
     return remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
   }
@@ -2144,7 +2148,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param taskId - the correlation key the steered receipt header carries.
    */
   async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number) => void): Promise<
-    { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean } | { ok: false; error: string; localMiss?: true }
+    { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; localMiss?: true }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
@@ -2200,19 +2204,23 @@ export function apply(ctx: Context, config: Config): void {
    * @returns the agent's final reply, or the explicit failure.
    */
   function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number) => void): Promise<
-    { ok: true; reply: string; placeholder?: boolean } | { ok: false; error: string }
+    { ok: true; reply: string; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string }
   > {
     return new Promise((resolve) => {
-      // #306: a task-bearing sync wait is attributed to the turn that READS the
-      // task — the same window the auto-receipt waiter uses (#114 S5). The old
-      // "latest assistant text since registration" answered with whatever the
-      // busy target's OTHER work line produced, which is not this request's
-      // reply. Registration to steer is synchronous, so the floor taken here is
-      // the pre-steer floor.
-      const steerFloor = sessionEventsOf(agent).length
+      // #306: synchronous replies use the same reading-turn attribution as automatic receipts.
+      // Registering and steering are synchronous, so this is the exact pre-steer floor.
+      const floorAtRegistration = sessionEventsOf(agent).length
       const waiter = registerFinalWaiter(agent, (text, placeholder) => {
-        resolve({ ok: true, reply: text, ...(placeholder === true ? { placeholder: true } : {}) })
-      }, taskId !== undefined && taskId !== '' ? { taskId, steerFloor } : undefined)
+        // Preserve #305's reply_final contract: only this task's own completed reading turn qualifies.
+        let ownTurn = false
+        if (placeholder !== true && taskId !== undefined && taskId !== '') {
+          const events = sessionEventsOf(agent)
+          const read = consumptionIndex(events, taskId, floorAtRegistration)
+          const window = read === undefined ? undefined : readingTurnReply(events, read)
+          ownTurn = window !== undefined && window.completed && window.reply !== '' && window.reply === text
+        }
+        resolve({ ok: true, reply: text, ...(placeholder === true ? { placeholder: true } : {}), ...(ownTurn ? { ownTurn: true as const } : {}) })
+      }, taskId !== undefined && taskId !== '' ? { taskId, steerFloor: floorAtRegistration } : undefined)
       // The header names the sender first: `caller` is the routing node's
       // own label (the session that issued the route), while `team` is this
       // request's target — showing the target as "remote team" hid the
@@ -4207,24 +4215,13 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           entry.scannedTo = events.length
           continue
         }
-        // The consuming turn's window: up to its own `turn/end`, never into a
-        // following turn (back-to-back turns can run with no idle between).
-        // Without turn markers, this idle is the turn's end.
-        let end = events.length
-        let completed = true
-        if (turnMarked) {
-          const close = turnEndIndex(events, entry.consumedAt + 1)
-          if (close === undefined) {
-            // The consuming turn is still open: wait for its turn/end.
-            continue
-          }
-          end = close
-          completed = events[close]?.data?.reason?.kind === 'completed'
-        }
+        const window = readingTurnReply(events, entry.consumedAt, turnMarked)
+        // The consuming turn is still open: wait for its turn/end.
+        if (window === undefined) continue
         // The waiter closes HERE with that turn's last text. A turn that said
         // nothing, or ended aborted/failed/blocked, did no work this host can
         // vouch for: close as a placeholder — no receipt, the row stays owed.
-        const reply = latestAssistantText(events, entry.consumedAt + 1, end)
+        const { reply, completed } = window
         answered.push(reply !== '' && completed ? { entry, reply } : { entry, reply: '', placeholder: true })
         continue
       }
@@ -4240,6 +4237,19 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       if (placeholder === true) entry.answer('The consuming turn produced no completed reply.', true)
       else entry.answer(reply)
     }
+  }
+
+  /**
+   * #114 S5: the consuming turn's window — from the read at `read` up to its own `turn/end`, never into a
+   * following turn (back-to-back turns can run with no idle between); without turn markers, up to now (the
+   * idle is the turn's end). Undefined while a marked turn is still open. The receipt waiter and the sync
+   * answer's `ownTurn` (#298) both read this one window.
+   */
+  function readingTurnReply(events: readonly (SessionEventLike | undefined)[], read: number, turnMarked = events.some(event => event?.type === 'turn/start' || event?.type === 'turn/end')): { reply: string; completed: boolean } | undefined {
+    if (!turnMarked) return { reply: latestAssistantText(events, read + 1), completed: true }
+    const close = turnEndIndex(events, read + 1)
+    if (close === undefined) return undefined
+    return { reply: latestAssistantText(events, read + 1, close), completed: events[close]?.data?.reason?.kind === 'completed' }
   }
 
   /** #114 S5: the index of the first `turn/end` at or after `from`, or undefined while the turn is open. */

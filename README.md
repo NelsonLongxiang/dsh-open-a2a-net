@@ -106,6 +106,8 @@ variables and exit codes: [`src/skill/references/cli.md`](src/skill/references/c
 
 ### Standalone network node (no DSH instance)
 
+Deployment guide (install, service files, linking DSH hosts, public-internet caveats; Chinese): [docs/guides/standalone-node.md](docs/guides/standalone-node.md).
+
 `a2a-net serve --config node.json` runs the network layer in its own Node process: cards and signatures, the peer directory, CLI deposits and mailboxes, one-hop forwarding, canvas ownership, the ledger, the state face and the workbench. It hosts no AI sessions; messages for a session are forwarded to a DSH host as usual. Run it on a stable machine as the CLIs' home so a DSH restart does not take their deposits, mailboxes and canvas directory down (they also survive the node's own restart). Install and config: the `a2a-net serve` section of [`src/skill/references/cli.md`](src/skill/references/cli.md).
 
 ## Canvas teams (arbitrary grouping, v0.5.25)
