@@ -7,6 +7,7 @@ import { generateKeyPairSync } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { A2aClient, type A2aFetch } from '../../src/a2a-client.ts'
 import { signCard } from '../../src/card.ts'
+import { isLinkKey, normalizeLinkKeys, outboundKeyFor } from '../../src/link-keys.ts'
 
 
 /** One stubbed fetch invocation. */
@@ -240,6 +241,14 @@ describe('routeDirect', () => {
     expect(calls[0]?.headers['X-API-Key']).toBe('sekrit')
     expect(calls[0]?.headers['Content-Type']).toBe('application/json')
   })
+
+  it('#317 sends a link key to its own peer and the apiKey everywhere else', async () => {
+    const { calls, fetch } = stubFetch(() => ({ status: 200, body: { result: { text: 'ok' } } }))
+    const client = makeClient({ fetch, apiKey: 'fleet', apiKeyFor: url => outboundKeyFor(url, normalizeLinkKeys({ 'https://vps.example': 'link' }), 'fleet') })
+    await client.routeDirect('https://vps.example', 't', 'm')
+    await client.routeDirect('http://p:1', 't', 'm')
+    expect(calls.map(call => call.headers['X-API-Key'])).toEqual(['link', 'fleet'])
+  })
 })
 
 describe('http seam', () => {
@@ -359,5 +368,23 @@ describe('delivered shape carries the consumed probe (F1 client half, async-stal
     const { fetch } = stubFetch(() => ({ status: 200, body: { routed: true, delivered: true, task_id: 't-7', context_id: 'ctx-7', task_status: 'TASK_STATE_DELIVERED' } }))
     const result = await makeClient({ fetch }).routeDirect('http://p:1', 'crew', 'hello')
     expect(result).not.toHaveProperty('consumed')
+  })
+})
+
+describe('#317 link-keys helpers', () => {
+  const equal = (a: string, b: string): boolean => a === b
+  it('normalizes keys by origin, drops blanks and junk, and picks the outbound key per target', () => {
+    const keys = normalizeLinkKeys({ 'https://vps.example/some/path': 'link', 'http://lan:13080': 'lan-link', 'not a url': 'x', 'http://blank': '' })
+    expect([...keys.keys()]).toEqual(['https://vps.example', 'http://lan:13080'])
+    expect(outboundKeyFor('https://vps.example/a2a/direct', keys, 'fleet')).toBe('link')
+    expect(outboundKeyFor('http://other:1/a2a/direct', keys, 'fleet')).toBe('fleet')
+    expect(outboundKeyFor('http://other:1/a2a/direct', keys, '')).toBe('')
+  })
+  it('recognizes a presented link key only on an exact match', () => {
+    const keys = normalizeLinkKeys({ 'https://vps.example': 'link', 'http://lan:13080': 'lan-link' })
+    expect(isLinkKey('lan-link', keys, equal)).toBe(true)
+    expect(isLinkKey('link', keys, equal)).toBe(true)
+    expect(isLinkKey('nope', keys, equal)).toBe(false)
+    expect(isLinkKey('', keys, equal)).toBe(false)
   })
 })

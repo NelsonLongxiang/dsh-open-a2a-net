@@ -65,7 +65,11 @@ Do section 1 on both hosts first. Then the **owner**, on BOTH hosts:
    key is set, and a host sends ITS OWN `apiKey` on every peer request. So
    keyed hosts that talk to each other must carry the SAME key (or both
    none, loopback-only). A mismatch shows up as HTTP 401
-   `X-API-Key required on the delivery face`.
+   `X-API-Key required on the delivery face`. To link a host that must NOT
+   hold the fleet key (a public node), give that one link its own key instead:
+   `linkKeys: { '<other host origin>': '<link key>' }` on BOTH ends (#317).
+   A link key is accepted only on the peer faces, only from the verified
+   peer it names, and never on the control routes.
 3. **Announce and seed each other.** Seeding BOTH ways is what makes the
    hosts linked: each side then reads the other's full card. One-sided
    seeding does not link.

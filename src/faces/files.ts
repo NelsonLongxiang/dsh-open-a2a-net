@@ -34,7 +34,8 @@ export interface FileFaceDeps {
   readonly blobStore: BlobStore
   readonly canvasStore: Pick<CanvasStore, 'membersOf'>
   readonly verifyOriginClaim: (req: IncomingMessage, options?: { readonly cli?: boolean }) => Promise<OriginClaimResult>
-  readonly secretEqual: (a: string, b: string) => boolean
+  /** #317: the peer-face key gate — this host's apiKey, or a link key from the verified peer it belongs to. */
+  readonly peerKeyAdmits: (req: IncomingMessage, rawBody?: Uint8Array) => Promise<boolean>
   readonly controlRoute: (handler: (req: IncomingMessage, res: ServerResponse) => void) => (req: IncomingMessage, res: ServerResponse) => void
   readonly recordActivity: (dir: 'in' | 'out', team: string, peer: string, ok: boolean) => void
   readonly now?: () => number
@@ -65,7 +66,7 @@ export function grantAdmits(to: string, caller: string, signer: string, zone: st
  * @param d - the captures listed on {@link FileFaceDeps}.
  */
 export function registerFileFaces(webServer: WebServer, d: FileFaceDeps): void {
-  const { ctx, config, blobStore, canvasStore, verifyOriginClaim, secretEqual, controlRoute, recordActivity } = d
+  const { ctx, config, blobStore, canvasStore, verifyOriginClaim, peerKeyAdmits, controlRoute, recordActivity } = d
   const now = d.now ?? (() => Date.now())
   const pulls = new Map<string, number[]>()
   const json = (res: ServerResponse, status: number, body: Record<string, unknown>): void => {
@@ -89,7 +90,7 @@ export function registerFileFaces(webServer: WebServer, d: FileFaceDeps): void {
     path: '/a2a/blob',
     handler: async (req: IncomingMessage, res: ServerResponse) => {
       if (req.method !== 'GET') { json(res, 405, { ok: false, error: 'GET is the only method on this face' }); return }
-      if (config.apiKey !== '' && !secretEqual(String(req.headers['x-api-key'] ?? ''), config.apiKey)) {
+      if (!await peerKeyAdmits(req)) {
         json(res, 401, { ok: false, error: 'unauthorized: X-API-Key required (apiKey is configured)' })
         return
       }

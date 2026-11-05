@@ -88,6 +88,12 @@ export interface Config {
    */
   readonly originClaimAudiences: string[]
   /**
+   * #317: per-peer `X-API-Key`, keyed by the peer's origin. Sent instead of `apiKey` on requests to that peer,
+   * and accepted on this host's peer faces only from a caller whose verified OriginClaim names that origin.
+   * Never accepted on the control routes. Lets a public node link without holding the fleet key.
+   */
+  readonly linkKeys: Record<string, string>
+  /**
    * #19 D2: card-face sessionTeams excerpt exposure — 'full' | 'masked'
    * | 'off' (owner-level; default full). See the schema comment.
    */
@@ -385,6 +391,7 @@ export const Config: s<Config> = s.object({
   originClaimUnboundWindow: s.boolean().default(true),
   /** Extra OriginClaim audience origins (port-mapped/proxied hosts). */
   originClaimAudiences: s.array(s.string()).default([]),
+  linkKeys: s.dict(s.string()).default({}),
   /** OriginClaim callerUrl override for pocket-tunneled hosts; '' = auto. */
   originClaimUrl: s.string().default(''),
 

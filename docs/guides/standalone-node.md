@@ -211,7 +211,11 @@ nssm start a2a-node
 ## 6. 与 DSH 宿主互联（属主操作）
 
 1. **网络可达**：节点与每台 DSH 宿主双向可达（同一 tailnet 即可）。
-2. **同一把 key**：节点的 `apiKey` 与 DSH 宿主插件配置里的 `apiKey` 相同。
+2. **key**：内网节点可以直接用舰队的 `apiKey`。**公网节点**保留专用 `apiKey`，改用**链路 key**（0.6.41 起，#317）：两端各配 `linkKeys`，填同一把新的随机 key（`openssl rand -hex 32`）。
+   - 节点：`"linkKeys": { "http://<DSH 宿主地址>:13080": "<链路 key>" }`
+   - DSH 宿主：`linkKeys: { "https://<节点域名>": "<链路 key>" }`
+
+   链路 key 只能在对端接口上使用，而且只认它所对应的那台对端（签名必须验证通过）；控制面不认链路 key。这样公网节点被攻破，也拿不到舰队主机的控制权。
 3. **双向种子**：节点 `node.json` 的 `peers` 列出 DSH 宿主；每台 DSH 宿主的插件配置 `peers` 加上本节点 URL，`announce: true`，然后重启 `dsh web`（属主安排）。
 4. **画布队伍**（谁能和谁说话由画布决定）：
    - 在**节点**的工作台 `http://<节点>:13090/__dsh_a2a_nexus/` 建队。在节点本机打开时会自动带上 key；从别的机器打开时，需要手动输入一次 X-API-Key，只存在该浏览器的 sessionStorage。把 CLI 户口和要协作的远端会话放进同一个队。
