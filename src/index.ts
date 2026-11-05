@@ -284,7 +284,9 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
   // gh#193: the one door to peers — while isolated nothing leaves this host.
-  const peerFetch: typeof globalThis.fetch = (url, init) => config.isolated ? Promise.reject(new Error('isolated: outbound peer traffic is off on this host')) : globalThis.fetch(url, init)
+  // Review of #318 R4: never follow a peer's redirect — X-API-Key and the OriginClaim headers are not stripped on
+  // a cross-origin hop, so a 3xx would hand them to whoever the Location names. A redirect is an HTTP failure.
+  const peerFetch: typeof globalThis.fetch = (url, init) => config.isolated ? Promise.reject(new Error('isolated: outbound peer traffic is off on this host')) : globalThis.fetch(url, { ...init, redirect: 'manual' })
   const fetchImpl: A2aFetch = (url, init) => peerFetch(url, init)
 
   /** Constant-time secret comparison: hash both sides to equal-length digests. */

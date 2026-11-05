@@ -17,7 +17,7 @@ export type A2aSchedule = (callback: () => void, delayMs: number) => () => void
 export type A2aFetch = (url: string, init: {
   readonly method: 'GET' | 'POST'
   readonly headers: Record<string, string>
-  /** Optional fetch redirect policy; origin verification sets manual. */
+  /** Unused by the client itself: the host's peerFetch already refuses every redirect (review of #318 R4). */
   readonly redirect?: 'follow' | 'error' | 'manual'
   readonly body?: string
   readonly signal?: AbortSignal

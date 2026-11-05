@@ -8,6 +8,8 @@ import { describe, expect, it } from 'vitest'
 import { createPrivateKey } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { signOriginClaim } from '../../src/origin-claim.ts'
 import { bootNode, reservePort, type MeshNode } from './harness.ts'
 
@@ -104,5 +106,23 @@ describe('#317 link keys on the peer faces', () => {
       expect(String(body.error ?? '')).not.toContain('X-API-Key')
       expect(String(body.error ?? '')).not.toContain('unauthorized')
     } finally { await a.dispose(); await b.dispose(); await c.dispose() }
+  })
+  it('review of #318 R4: a peer\'s redirect is never followed — no key or envelope reaches the Location host', async () => {
+    const seen: Array<Record<string, unknown>> = []
+    const third = createServer((req, res) => { seen.push({ url: req.url, key: req.headers['x-api-key'], caller: req.headers['x-a2a-caller-url'] }); res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"ok":true,"messages":[]}') })
+    await new Promise<void>(resolve => third.listen(0, '127.0.0.1', resolve))
+    const thirdUrl = 'http://127.0.0.1:' + String((third.address() as AddressInfo).port)
+    const bouncer = createServer((req, res) => { res.writeHead(302, { Location: thirdUrl + (req.url ?? '/') }); res.end() })
+    await new Promise<void>(resolve => bouncer.listen(0, '127.0.0.1', resolve))
+    const peerUrl = 'http://127.0.0.1:' + String((bouncer.address() as AddressInfo).port)
+    const a = await bootNode({ name: 'A', session: 'redir-a', team: 'alpha', port: await reservePort(), sessionNodes: true, apiKey: 'fleet-key-of-a', peers: [peerUrl], linkKeys: { [peerUrl]: LINK }, cardCacheTtlMs: 0 })
+    try {
+      const url = a.baseUrl + '/__dsh_a2a/remote-session-log?peer=' + encodeURIComponent(peerUrl) + '&id=none'
+      const body = await (await fetch(url, { headers: { 'X-API-Key': 'fleet-key-of-a' } })).json() as { ok?: boolean }
+      expect(body.ok).not.toBe(true)
+      await fetch(a.baseUrl + '/__dsh_a2a/state', { headers: { 'X-API-Key': 'fleet-key-of-a' } }) // card refresh through the client
+      await new Promise(resolve => setTimeout(resolve, 300))
+      expect(seen).toEqual([])
+    } finally { await a.dispose(); third.close(); bouncer.close() }
   })
 })
