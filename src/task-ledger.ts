@@ -53,6 +53,11 @@ export class TaskLedger {
   private readonly warn: (message: string) => void
   /** Last successful commit, for rollback when a mutation cannot persist. */
   private committed = ''
+  private writeFailure: { at: number; code: string } | undefined
+  /** Diagnostic-only; never implies that a failed mutation committed. No paths or payloads exposed. */
+  persistenceState(): { ok: boolean; lastError?: { at: number; code: string } } {
+    return this.writeFailure ? { ok: false, lastError: { ...this.writeFailure } } : { ok: true }
+  }
 
   /**
    * @param path - persistence file (`<dsh-home>/a2a/tasks.json`); empty = no persistence.
@@ -73,7 +78,9 @@ export class TaskLedger {
    * @returns the owed-book records.
    */
   list(): readonly TaskRecord[] {
-    this.sweep(this.now())
+    try { this.sweep(this.now()) } catch {
+      // sweep already restored the last commit and recorded the write error. Read faces stay available.
+    }
     return [...this.tasks]
   }
 
@@ -736,7 +743,10 @@ export class TaskLedger {
     try {
       writeTaskLedger(this.path, bytes)
       this.committed = bytes
+      this.writeFailure = undefined
     } catch (error) {
+      const code = (error as { code?: unknown })?.code
+      this.writeFailure = { at: this.now(), code: typeof code === 'string' && /^[A-Z0-9_]{1,48}$/.test(code) ? code : 'LEDGER_WRITE_FAILED' }
       const previous = JSON.parse(this.committed) as TaskLedgerSnapshot
       this.tasks = [...previous.tasks]
       this.archived = [...previous.archived ?? []]

@@ -34,8 +34,8 @@ describe('task ledger atomic commit errors',()=>{
   const file=path(),ledger=new TaskLedger(file);ledger.trackInbound('read-task','dsh/canvas/ops','beta/bbbbbbbb',undefined,true,undefined,undefined,'dsh/aaaaaaaa')
   const bytes=readFileSync(file),send=vi.fn(),counters=ledger.conservation();fault.mode='rename'
   expect(()=>{ledger.markAnswered('read-task','dsh/aaaaaaaa');send()}).toThrow('rename denied')
-  expect(send).not.toHaveBeenCalled();expect(ledger.find('read-task')?.answeredAt).toBeUndefined();expect(readFileSync(file)).toEqual(bytes);expect(ledger.conservation()).toEqual(counters)
-  fault.mode='';expect(ledger.markAnswered('read-task','dsh/aaaaaaaa')).toBe(true);expect(new TaskLedger(file).find('read-task')?.answeredAt).toBeTypeOf('number')
+  expect(send).not.toHaveBeenCalled();expect(ledger.persistenceState()).toMatchObject({ok:false,lastError:{code:'EACCES',at:expect.any(Number)}});expect(ledger.find('read-task')?.answeredAt).toBeUndefined();expect(readFileSync(file)).toEqual(bytes);expect(ledger.conservation()).toEqual(counters)
+  fault.mode='';expect(ledger.markAnswered('read-task','dsh/aaaaaaaa')).toBe(true);expect(new TaskLedger(file).find('read-task')?.answeredAt).toBeTypeOf('number');expect(ledger.persistenceState()).toEqual({ok:true})
  })
  it('failed receipt settlement restores owed row, empty archive and conservation totals',()=>{
   const file=path(),ledger=new TaskLedger(file);ledger.track('owed','beta/bbbbbbbb','http://peer');const bytes=readFileSync(file),counters=ledger.conservation();fault.mode='partial'

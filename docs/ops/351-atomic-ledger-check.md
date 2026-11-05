@@ -8,4 +8,14 @@
 - T9反向突变：恢复catch吞错误（仍回滚但不throw），failed-answer no-send用例立即FAIL，因caller被放行；已try/finally恢复，不靠架构摘要判断。没有把工程测试写成新业务规范run。
 - 首轮默认verify仅旧single-flight30ms墙钟期望失败，inner0；该例原预算隔离绿，未改断言/worker/timeout/skip。第二轮完整verify jobbash-5f07e794a1ab4088真实exit0：root1512passed/6原skip、layout4、nexus332、innerentries0，trackeddist零diff。架构按base重锚2处无miss，未视觉渲染。
 
-需高档非作者精确head复跑故障行为及恢复吞错突变，之后按授权链处理合并。PR352重写方向另遵属主最新“空闲提醒本人对账”，此PR不引入新phase/ack/outbox/对账器；生产及1c56c492/446ce672积压未动。
+## PR354 R1修订：后台异常边界
+
+旧头8c07e6d REQUEST CHANGES保留：原子写/回滚本身非作者已复核，但markAnswered异常会从final waiter/idle/微任务逃逸。现final callback统一经answerFinalSafely边界，逐个移除/调用，失败重放回原floor/消费锚、其他同批waiter不丢；成功才取消timer。timeout/会话消失placeholder同样受边界。模型显式receipt标answered失败返回工具error不发；已有async ladder内settle在await promise链内由原catch接住；HTTP写点仍走原handler守卫。
+
+TaskLedger.persistenceState只暴露ok/lastError{at,code}，不暴露路径/正文；persist失败记录后回滚并仍向写API抛错，后续成功提交清诊断。list的lazy sweep可能写盘，读边界捕获失败后返回上次已提交行并保留错误，防state/计时nudge读变成宿主异常；不把未落盘sweep当成功。
+
+新增真HTTP mesh：idle后EACCES（portable fs.openSync定向故障）无逃逸/无uncaughtExceptionMonitor事件、不发该任务回执、盘仍欠账；同批其他waiter成功，失败者下次idle重试且只一份回执。guarded sync after-steer queueMicrotask同样写错不逃逸、同步答复仍正常，恢复idle可重试。另有POSIX非root实际chmod0500目录例，Windows/root不可用明确跳过，portable两例不skip。不是声称Windows chmod提供POSIX拒写。
+
+去answerFinalSafely catch，idle真实mesh因EACCES逃逸not.toThrow行为断言立即红，已finally恢复。修订最终默认门禁job bash-1b98863ca1e84fd8真实exit0：root1514passed/7skipped（原6+新增POSIX权限例在Windows跳过1）、layout4、nexus332、innerentries0；不靠架构hash取证。
+
+需高档非作者新精确head复跑故障行为、去catch及恢复吞错突变，之后按授权链处理合并。PR352重写方向另遵属主最新“空闲提醒本人对账”，此PR不引入新phase/ack/outbox/对账器；生产及1c56c492/446ce672积压未动。

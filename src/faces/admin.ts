@@ -344,6 +344,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // in-flight ring cannot show. Dead-lettered rows ride their own
           // list and settled ones just a count, all additive so the panel
           // keeps rendering plain owed rows until it learns the tiers.
+          ledgerPersistence: taskLedger.persistenceState(),
           tasks: taskLedger.list()
             .filter(task => task.status === 'pending')
             .map(task => ({

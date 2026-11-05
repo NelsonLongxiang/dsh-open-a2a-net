@@ -3580,7 +3580,11 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       if (ownerQualified.owner !== undefined) args = { ...args, team: ownerQualified.team }
       // A target-authored receipt attempt answers its own work even if scope/transport later refuses delivery.
       const answer = parseReceipt(args.message)
-      if (agent !== undefined && answer !== null) taskLedger.markAnswered(answer.taskId, sessionTeamOf(agent))
+      if (agent !== undefined && answer !== null) {
+        try { taskLedger.markAnswered(answer.taskId, sessionTeamOf(agent)) } catch {
+          return { ok: false, error: 'task ledger write failed; receipt was not sent', code: -32000, peer_content: false }
+        }
+      }
       // S3 (team-scoped routing, phase-2 default ON per the 2026-09-01 owner
       // ruling; set false to restore the open outbound seam): a session
       // caller must have declared membership in the target team before it
@@ -4394,6 +4398,12 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     timeoutDisposer?: () => void
   }
   const pendingFinals = new Map<string, FinalWaiter[]>()
+  function answerFinalSafely(entry: FinalWaiter, text: string, placeholder?: boolean): boolean {
+    try { entry.answer(text, placeholder); return true } catch (error) {
+      logger.warn('a2a: final callback failed; task remains owed: %s', String(error))
+      return false
+    }
+  }
   const armFlushTimeout = (agentId: string, waiter: FinalWaiter): (() => void) => {
     return ctx.timer.timeout(() => {
       const entries = pendingFinals.get(agentId)
@@ -4402,7 +4412,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const kept = entries.filter(entry => entry !== waiter)
       if (kept.length === 0) pendingFinals.delete(agentId)
       else pendingFinals.set(agentId, kept)
-      waiter.answer('The DSH session produced no final reply within the configured window.', true)
+      answerFinalSafely(waiter, 'The DSH session produced no final reply within the configured window.', true)
     }, config.flushTimeoutMs)
   }
 
@@ -4413,7 +4423,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     if (agent === undefined) {
       for (const entry of entries) {
         entry.timeoutDisposer?.()
-        entry.answer('The target DSH session is no longer live.', true)
+        answerFinalSafely(entry, 'The target DSH session is no longer live.', true)
       }
       pendingFinals.delete(agentId)
       return
@@ -4449,13 +4459,20 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       if (reply !== '') answered.push({ entry, reply })
     }
     if (answered.length === 0) return
-    const kept = entries.filter(entry => !answered.some(done => done.entry === entry))
-    if (kept.length === 0) pendingFinals.delete(agentId)
-    else pendingFinals.set(agentId, kept)
     for (const { entry, reply, placeholder } of answered) {
-      entry.timeoutDisposer?.()
-      if (placeholder === true) entry.answer('The consuming turn produced no completed reply.', true)
-      else entry.answer(reply)
+      // Remove one callback before invoking (it may synchronously re-enter), never the whole batch.
+      const current = pendingFinals.get(agentId) ?? []
+      if (!current.includes(entry)) continue
+      const kept = current.filter(other => other !== entry)
+      if (kept.length) pendingFinals.set(agentId, kept)
+      else pendingFinals.delete(agentId)
+      if (answerFinalSafely(entry, placeholder ? 'The consuming turn produced no completed reply.' : reply, placeholder)) {
+        entry.timeoutDisposer?.()
+      } else {
+        // A failed commit is still owed. Keep its original floor/consuming turn for a later idle retry.
+        const now = pendingFinals.get(agentId) ?? []
+        if (!now.includes(entry)) pendingFinals.set(agentId, [entry, ...now])
+      }
     }
   }
 
