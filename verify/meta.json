@@ -16,7 +16,7 @@
     },
     {
       "path": "assets/stageDist/assets/index-C-28k_o5.js",
-      "sha256": "c078dc55af5db05eb03f86cd3597e23e88a11996ee7615ac2c89502f39580c40",
+      "sha256": "87f42e4280068993943e1dba30dc4b54cd6abd70481286da82b724a75edfdd42",
       "role": "release"
     },
     {
@@ -31,27 +31,27 @@
     },
     {
       "path": "examples/external-node/index.mjs",
-      "sha256": "e04bbe5d1270e49927cedc3383bfcd344fea650a8c2d458f6934fe2c5b6f3ffb",
+      "sha256": "74528d9967a7a7f357f576f61ae4b2999ee3e660c7ccebd345d7a8fcf132a841",
       "role": "release"
     },
     {
       "path": "feedback/2026-08-27-nexus-canvas-ux/shot_planning.py",
-      "sha256": "a4a4d1ddd5dcbb7e994b45325615bc1c6ca035d911ca6575b53e7b044b37998c",
+      "sha256": "15fd4c14f2d77aa474cdf4c4acb50b811487b04ba565243f14f795b53d263f13",
       "role": "test"
     },
     {
       "path": "feedback/2026-08-27-nexus-canvas-ux/shot_status_quo.py",
-      "sha256": "3bbec77f1dbd6840ce90e52799939cb5e8cf6f2965914629e37ad5c713dd7157",
+      "sha256": "f5707f17f4694f0c2421418021bcb00d66fba756f716def82c96e5521f75ba08",
       "role": "test"
     },
     {
       "path": "nexus-stage/scripts/mockhost.py",
-      "sha256": "9a04e009b06d87df69d61319ef03ce00ac2a61579fd442a356d80f654690f29e",
+      "sha256": "0799e62ed605158944518756373c0e34f71159050679b29211582aa28ddfbbdf",
       "role": "gate"
     },
     {
       "path": "nexus-stage/tests/chat-drawer-dom.spec.ts",
-      "sha256": "393799024f629d31222b9b4cb798186f42a0576d191599abeef2d258a363cb9f",
+      "sha256": "49c90e0fbda458fa402094c13a4ba5cee0d2e232b92ad988c29011f4e961c017",
       "role": "test"
     },
     {
@@ -66,37 +66,37 @@
     },
     {
       "path": "nexus-stage/tests/planning-card-text.spec.ts",
-      "sha256": "6b2b93ef09cf1cd354640ef5444d4a2e97fdfcf6f7de3e0fc4ff08421a440bc9",
+      "sha256": "e43e5f3ba8b22d9d575d00d1624b7ccd76a33e46114c8ac2d4281cfa4c9965f6",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-dom.spec.ts",
-      "sha256": "530049a3d5575534d1171f08127246cfac01d818fa444f3171314dc24f2b90e1",
+      "sha256": "4839e3eddfc65b4701e1e3073dc43985dde484cdbf72c57d3c825ddd766d8cd9",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-federation-dom.spec.ts",
-      "sha256": "2fb58f2f81db07224763ac3a5658eeb04232c9cce9e4018493c6c4a9eeef02bf",
+      "sha256": "c763e61ab5f6b603be1454b0ccce16b81dc9329a18379ab4a865a04740bf988d",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-first-run-dom.spec.ts",
-      "sha256": "a71db74ed3b81b8f08b18528eeea968be56fac7a95b1a4664cdeb31cba43eb3f",
+      "sha256": "440b324382e2b1b0feb4edc1b2b5a68af70e0e1076908c444b30914b2460c04d",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-fit.spec.ts",
-      "sha256": "4c3e777830e308791150583ae89c28f9105c42100768876f4f7903ca28aa9749",
+      "sha256": "3554403aea9345593d7b2721e6fcdea57f18ff92e3e978943091622960f9def1",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-frame-solo.spec.ts",
-      "sha256": "2064c884b1c3f9e1e00cea3e4acf7488aa4589c95c886dbcf8672dd0f8336ce4",
+      "sha256": "a5badeddea95b4fe9d3cedf6eb6e9fb0f257ef6a5d7f49f357c548d6b4082018",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-gh108-settlement.spec.ts",
-      "sha256": "6f1ac1ef67bb12d9b70ae7448cb2329ffc81ed69e67f7e7965c3e20d0b90909a",
+      "sha256": "992b863a98f4d0d4813049e444704e4016064df1b09ed6165d5f6c798a59ecd7",
       "role": "test"
     },
     {
@@ -106,7 +106,7 @@
     },
     {
       "path": "nexus-stage/tests/planning-gh41-fleet-frames.spec.ts",
-      "sha256": "2dad0f882ed051d1fe4c8a31a864e0a1c86aee092976349e680e7938f6e0ad98",
+      "sha256": "ceaf31ebb9a72c5b9b3ce80dc6a9e65c7d462852768b06ac32e03d704697c16c",
       "role": "test"
     },
     {
@@ -116,7 +116,7 @@
     },
     {
       "path": "nexus-stage/tests/planning-gh43-org-members.spec.ts",
-      "sha256": "fe20bffe13a3802eb5196f17098bdd425913ce29c1ce50e16e37efdcee892550",
+      "sha256": "f285e19ea5dc68992efc2affbcaa378555bfd86a4a17d5af4aee6c1b18797c55",
       "role": "test"
     },
     {
@@ -126,92 +126,92 @@
     },
     {
       "path": "nexus-stage/tests/planning-gh48-tidy.spec.ts",
-      "sha256": "67c7b73c6d697fa039d370e2cf6d6cd1b131053248585e7daa5ad64d1e357944",
+      "sha256": "56664b9cd126d36bd2f28bf297b2a4e11bcf75eaa76d78ee196c98b77ac2e4b7",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-leave-mirror.spec.ts",
-      "sha256": "0f0459f82bc26834d2693865c39953be93c3080e791d168d28084ccfd4db945b",
+      "sha256": "4127a726b0084a0cc81f5b2858e0777104613213548b165d131ada9213805e06",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-member-badge.spec.ts",
-      "sha256": "87a44984aa52e80f8ecc59d096e88ade598a4719f7428360d4797b34318196ce",
+      "sha256": "402eb0118a4c8f34d6ffd7fc6d55e33c94226e1ab630f3b60cd238739944341c",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-mirror.spec.ts",
-      "sha256": "2cc5491d411331ebff141559c3f2c8e45200ac2a0a72be8ab3b2b414c6e2620d",
+      "sha256": "fbc5f0beda728e2a728f71d4866440d15a25751279537e4e4888a4904492132e",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-nodelist-dom.spec.ts",
-      "sha256": "f93d58cbb0f2d2790fd8be223e17a35a4c774b9c8b97cd533a8e1afc6c9508dc",
+      "sha256": "fc6124646fc6f72f2d3080b34387561078a6ca5832485794b6e72139d027afef",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-overlap-dom.spec.ts",
-      "sha256": "ca60ef9fe6d82658a09de00062c47efc799139c5b8e94c9c9ce14c603656b9b5",
+      "sha256": "f158edcdad94b3b2cc6f4d61261f8ec0ebcf344e4cdf221ae20f71e1bcc39232",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-overlap.spec.ts",
-      "sha256": "d39326ae206a23cf0c7aa680014650059273fabc9042b18900c80994f9e9bcab",
+      "sha256": "5daa52af57b79f01120533350f7492fa6f19c24ebf48f64e4e29374cf11f9a23",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-relayout.spec.ts",
-      "sha256": "8b68b3001ad69aa6b6e70c0a42d703330c3a4d7c92a1ba756cbb49a063054f4e",
+      "sha256": "eec98b64106c447c9673be8bbee04c7261d84061b242785a773325cf669633a1",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-roster.spec.ts",
-      "sha256": "123ed07aedb596f0be32baf3da4820863061c94cf184729f7de5faaa389c569c",
+      "sha256": "66b032990b472ce76a1bfeabc578598bd7249039da2cfe18cc7f7ea0035aeea5",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-search.spec.ts",
-      "sha256": "81bfd8be5ef226a17a29e01b2b4f6547eb036602c731f7008a10a587cec2287a",
+      "sha256": "119f148ce2845d372c7c6fcad63e8fb82e3eb8ea9076da07a8a0511ccc2bf318",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-teams-dom.spec.ts",
-      "sha256": "60c9d50d0ebe71245165a06443e8eee725e26083c35a95e0fdb42fd06cfe0fbd",
+      "sha256": "f98627d77371b5f98b33f92366ffb4acfa0cae5dd0c3db39343c122d4007e1f3",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-undo.spec.ts",
-      "sha256": "29e6cec51b93b08c29823e1c8c5aa0fb61f6c2fcda82908c2d4da944362eab88",
+      "sha256": "753deee4054b15300d4e97e179125b42da4ceb3ccca1447ff31cd99fb92926e9",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-wb-compose.spec.ts",
-      "sha256": "3ace61e38d25a5535dcf27b7c8e94323bf0cc3547b36d5801526e0e1d838e6a8",
+      "sha256": "6fa73f917411d4559bb37d7d6a2c9b21e6877397d7e2ebc419f5d762115176bf",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/planning-work-status.spec.ts",
-      "sha256": "6c993cce3dd9ec20eabdfb61095f4be2a1c19da61ed001dc4f743dffb164f672",
+      "sha256": "a4b64d231595aae322ad796efe48f87fe40e28bbc63c651ab160df4453436bb5",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/rail-dom.spec.ts",
-      "sha256": "770e3c7e81b33cc69d735cd91cff130aa7c1976277a11538b47bf0022e9074ca",
+      "sha256": "e1c71d93ad7226449e3a6b505fe7806d2ca0be2fa246b333601066e7feed3b77",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/seat-name-editor.spec.ts",
-      "sha256": "554f688b0cdaa67eb580ec0f49ed5133bc329204c2c8ed44d41c034c0a74a331",
+      "sha256": "00117423d1e58529b54b2c00b2494e0855e8d9e407736a5b36ad305fafd6e1a2",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/session-drag.spec.ts",
-      "sha256": "347f09fe52c9b366a9736712c82f9c9610b366e537c1da83c10a8b8b5a1ec957",
+      "sha256": "6d275bb8c9c88124f1043f3d73fe4b934152172962147f971a29b43dccbbab6f",
       "role": "test"
     },
     {
       "path": "nexus-stage/tests/viewport-fit.spec.ts",
-      "sha256": "6c94c74f4d2c7b108cc74f05ed4358fcd19876b04613d97c0535a631f2b315fe",
+      "sha256": "0c2857aa04ea895606a6a4fe96120935b89664aeb95a045fde10c3442dcb472a",
       "role": "test"
     },
     {
@@ -221,12 +221,12 @@
     },
     {
       "path": "nexus-stage/vite.config.ts",
-      "sha256": "dd958a15ab2a6347e1cd22862c008ce2fa5e92213f7bdfd30581d1729154fec5",
+      "sha256": "2d2ab04369c144dc3dd42b66c1f1b782b6493619e8a50804387c08f689059613",
       "role": "build"
     },
     {
       "path": "nexus-stage/vitest.config.ts",
-      "sha256": "9bd0ecc4544ae7da3930da75ea0b0e561b73bb027588eeab386bc96651de24e9",
+      "sha256": "02b57e63a6da91191bf360975b8d0c9f9008fdd232411b6ccfa98eeb51d3baf6",
       "role": "build"
     },
     {
@@ -236,17 +236,17 @@
     },
     {
       "path": "scripts/copy-skill.mjs",
-      "sha256": "2da5530a6d6af92d2452b924f02dd20fbc9051e027b9893fe928a38e43cc828e",
+      "sha256": "9a91a47f38d48eb14392dc8b3476e7c501fee4f64b20c60b65703351e9d83f02",
       "role": "build"
     },
     {
       "path": "scripts/doc-drift.mjs",
-      "sha256": "3c9e6ee0f1d509a5e793bcfe6f6af535cfc6b33cb95c5ff51cb5ac0c7724410f",
+      "sha256": "734810401893c9dcdf105b73868020757d3de5f35d4cd919950f7e024304daab",
       "role": "gate"
     },
     {
       "path": "scripts/reanchor-architecture.mjs",
-      "sha256": "23335bd23cde92571469e25abd9fcc9c3731cf48ec6ed19e125ca052d4bcc34f",
+      "sha256": "a7ed67dc5b13832159a4ae55569b28ba500314c215fb6bd86ac78f500bb6d64a",
       "role": "gate"
     },
     {
@@ -256,12 +256,12 @@
     },
     {
       "path": "scripts/supervisor-snapshot.mjs",
-      "sha256": "1b485bada541cde44c5cdde46313b227bbb31ae277d2fc5264940065cacd9c32",
+      "sha256": "b33fd58ea5f508108acb7ca4542d79130fabf3d59971b620bffd03af4665f991",
       "role": "gate"
     },
     {
       "path": "scripts/verify-architecture.mjs",
-      "sha256": "b3003e5d09aceeffd97532db263032cb81cc60a6aa27dd29385ed6b70205a523",
+      "sha256": "24f2c87103af8282dc7895bf1ab7bdef38028143ff56eb9ac4e38d7aa5598271",
       "role": "gate"
     },
     {
@@ -281,7 +281,7 @@
     },
     {
       "path": "scripts/verify-submission.mjs",
-      "sha256": "6fe0263c6d1da3d182f71632b43ae421e30569885064429c7f3f49781483e0d6",
+      "sha256": "fbb821abb7e80157db1ab0ba615a754f2cfcfb87a385b88bc6f94a889ca8bb28",
       "role": "gate"
     },
     {
@@ -291,7 +291,7 @@
     },
     {
       "path": "stage/vite.config.ts",
-      "sha256": "801319c63666162fdda4d6749d76e4e106b1d4f0a4bbe761dd7fb4b1f9c0cbbb",
+      "sha256": "626db8e561710d29787a18991fd7b8b1c34315924390e9ad9f85a1abab395570",
       "role": "build"
     },
     {
@@ -306,7 +306,7 @@
     },
     {
       "path": "tests/gates/build-layout.spec.ts",
-      "sha256": "74f8f8d51317bdf9ae582c2aeb5ed02586a96cc154e86125807fe3561230156e",
+      "sha256": "507febbb775232f8f7d41eac9810697b54dc742d9c41967a03a59459ba570059",
       "role": "test"
     },
     {
@@ -316,7 +316,7 @@
     },
     {
       "path": "tests/live/cross-machine.spec.ts",
-      "sha256": "9c1a4ff494316394ea988cfdda2d54dd1e0417214739b8f10b33d86705e3a9a0",
+      "sha256": "d8cb2712b79fc685e006b1f6d03e97fc0646f6e6f8da3fc179e037d41d175c7c",
       "role": "test"
     },
     {
@@ -326,12 +326,12 @@
     },
     {
       "path": "tests/mesh/boundary-hardening-w23.spec.ts",
-      "sha256": "29c34149341d20868d1746be7b29f93568db1a8e72d33862fbdb65ffacf7bdec",
+      "sha256": "8b0f086332875320f08b4a297d023a65ac68d10bc7f31a3183db192ab02839f4",
       "role": "test"
     },
     {
       "path": "tests/mesh/canvas-mirror-notify.spec.ts",
-      "sha256": "08adb01c0b1ff7e2fa948cbf6514f01407f0cc5ddf8ebc34b982c3875236042c",
+      "sha256": "aab2dd754d7d4e84e8aa1360cc4f095166f353d19e1579604a5aeaf8cddebb39",
       "role": "test"
     },
     {
@@ -351,7 +351,7 @@
     },
     {
       "path": "tests/mesh/cli-home-admission.spec.ts",
-      "sha256": "511d85e174778bcc38fe84af1b7d8dde792ee79c8525cf92c3a11883b102eb83",
+      "sha256": "d6533195e8ce6d01e44e12ddf41d00b45a55cc0ff13b19ec502cbaee1a9919da",
       "role": "test"
     },
     {
@@ -371,7 +371,7 @@
     },
     {
       "path": "tests/mesh/file-channel-f1b.spec.ts",
-      "sha256": "5c6ac9533e147273bf1c938a0e63dd8cc19335c1258c908058bb33b0defbe7e5",
+      "sha256": "170a4a2a8c93a1d59a377edf04de35d213e8249e6ffbbea72e6a3302a8542b54",
       "role": "test"
     },
     {
@@ -386,7 +386,7 @@
     },
     {
       "path": "tests/mesh/fleet-dissolve.spec.ts",
-      "sha256": "8a7ab08b2a53edb81d2ce39d8fd8b0f255e541d08cd27a9b2d99b7110daa9328",
+      "sha256": "c215905e39f411b33e15e4669424fc99a94405990e716c496887ef3b4a068143",
       "role": "test"
     },
     {
@@ -396,7 +396,7 @@
     },
     {
       "path": "tests/mesh/gh108-capacity.spec.ts",
-      "sha256": "6419e27d5dee658621fc60fa7f598bde0be902578a62caaff262648130169fe3",
+      "sha256": "3c54cd35d35697ff17b1efb3e6ed34666fa618a3e805ece51c1581042e9f7456",
       "role": "test"
     },
     {
@@ -406,7 +406,7 @@
     },
     {
       "path": "tests/mesh/gh113-mailbox-shape.spec.ts",
-      "sha256": "3217fb2965598a8a4f1fdc36e6cbf6cc2f7b67df8f48552729dbef12449e251c",
+      "sha256": "1b8ab65af7e0984a55f025fcb8a1ed5a442e00619b58ac97304e42d6c9d1c95c",
       "role": "test"
     },
     {
@@ -416,17 +416,17 @@
     },
     {
       "path": "tests/mesh/gh122-review-attacks.spec.ts",
-      "sha256": "cd9b000d71a4d0e66a9b2e9f0e2953e6b26cf776ecf5900c0b5848d6e03f8557",
+      "sha256": "2de7a78356eaf441288961aa4e02a73f7a6466b9207866f2c6336638897d457c",
       "role": "test"
     },
     {
       "path": "tests/mesh/gh122-settlement.spec.ts",
-      "sha256": "be59c8ac869d2abe9d811d8edd94ab73743ae312286363b6d5ef04fc1aed1aee",
+      "sha256": "b5c7cadac77107b8dfc29fc51b7dab90cc1730eeee43e469c806b507e7837778",
       "role": "test"
     },
     {
       "path": "tests/mesh/gh125-echo-enforce.spec.ts",
-      "sha256": "39b1817b7b1b56d5a1a3ce95ece609a44e1897bba48b02cce14f7fceae7abdae",
+      "sha256": "c431a5f3db66247bd6cc5854d85c70ecee9a436b76e3f99b1d03cd60547a74aa",
       "role": "test"
     },
     {
@@ -441,27 +441,27 @@
     },
     {
       "path": "tests/mesh/gh139-cross-host-legit.spec.ts",
-      "sha256": "7ccdd7e34f4aeee7f20069cd62b627f832e36cece1cc19a87aae23fe3a0c1009",
+      "sha256": "f7cf3d5dc2e8c5b736d742483bf510801653d96c802aec7f075675f49916a5d4",
       "role": "test"
     },
     {
       "path": "tests/mesh/gh139-inbound-delivered-to.spec.ts",
-      "sha256": "92165f8c23312eb56d4eb62cd88830c60d0f5ad0324441046fd5339532a2c3fd",
+      "sha256": "90fd92d18e4ad5f4669601e695ea69173624d0bd80fdbfec4d7180df83664ef4",
       "role": "test"
     },
     {
       "path": "tests/mesh/gh139-observer-local-auth.spec.ts",
-      "sha256": "963270e93226c6d0cdd90426abbe4ef047bbec26488c8bcfd5632824408b37b5",
+      "sha256": "160d7da190a818807d6ffa074128de110e4a3b412ad3ecc459b5b49937e3a808",
       "role": "test"
     },
     {
       "path": "tests/mesh/gh141-receipt-delivery-row.spec.ts",
-      "sha256": "11f99e431777c955e8fa7f2f2d14106faf297e4bf20cee29ee202efc845d8d4e",
+      "sha256": "9953463a8d36d5881bafe03d8f283f670e9c224af846f4748e736e45278ed792",
       "role": "test"
     },
     {
       "path": "tests/mesh/gh152-handle-member-visibility.spec.ts",
-      "sha256": "9d121af1c23414c5e935bfcca1804030409f29b54c2569dcea8b33abb7a6fe75",
+      "sha256": "8e190566bd1d94a44142d8b46c762316a2e936d073c43a7db9acd32f67cdac3b",
       "role": "test"
     },
     {
@@ -471,12 +471,12 @@
     },
     {
       "path": "tests/mesh/gh189-path-claim-link.spec.ts",
-      "sha256": "4b64143dd3068334a8e4aea55fa8fb724cc7f6f6fe5bc92a28acda08bf4f0fee",
+      "sha256": "c32692c8a5cf3bb1eb6c52850836b0c17b044bb2bf193f5ab4b2b3e616c023fa",
       "role": "test"
     },
     {
       "path": "tests/mesh/gh217-cross-host-receipt-scope.spec.ts",
-      "sha256": "78678612a4f706e34ecaa29ead4a93d6781e7b9a3815b0ea1765c68bb2dbd401",
+      "sha256": "74c2aa99b4b4f81923340c7997f00907560cb7ebf2675086d4be5f9af905f3c4",
       "role": "test"
     },
     {
@@ -546,7 +546,7 @@
     },
     {
       "path": "tests/mesh/gh41-fleet-canvas.spec.ts",
-      "sha256": "045621e9a379184e296e36a3e03d3f953f59b799621d9fbd6765619a5696eab0",
+      "sha256": "09d7cf4e5f7f397a68272919670bb48f4d58248deeae7618fb6fafe656797af6",
       "role": "test"
     },
     {
@@ -556,12 +556,12 @@
     },
     {
       "path": "tests/mesh/gh45-cli-deposit.spec.ts",
-      "sha256": "3be8beb89f9119419e3c26ec6998cd90184b3fa85482f3d5cf109701235788bc",
+      "sha256": "189a80aefff324211eb86b83d05f6b30fee926f1ffe2a3a5b70b28169d30e752",
       "role": "test"
     },
     {
       "path": "tests/mesh/gh58-seat-name.spec.ts",
-      "sha256": "836e366ab9ab66b010625349b01249fd01d6f6d1e11fb450312c7ba06997726f",
+      "sha256": "784ee0ecb46e6fb8756959b7652120a64be3d56bba45971cea8216df7187540c",
       "role": "test"
     },
     {
@@ -581,27 +581,27 @@
     },
     {
       "path": "tests/mesh/issue41-canvas-self-skip.spec.ts",
-      "sha256": "8a074e6e8bb747705b98b6b234655111995f5e98d6f87e1ec3f599c66f00967a",
+      "sha256": "ca3f02ab78d503eb325b564bf5b91961c9e304a5b0c0267f9596c3d946e4a085",
       "role": "test"
     },
     {
       "path": "tests/mesh/link-state.spec.ts",
-      "sha256": "77de33ab3a0d8b384c529aff20abce402f6f5a049b88ccdb0ae8d9a6ba2da2db",
+      "sha256": "7ebe872b5b41f74ad362ef21d69847eca209a0779bfc7678b647115ac290ba00",
       "role": "test"
     },
     {
       "path": "tests/mesh/mesh-anomalies.spec.ts",
-      "sha256": "a323eb15767cbfd7bf3413998f88016e604ddd46fe5bbe041544220b1847a2b0",
+      "sha256": "7ff26fb16c8e327abb5673bd1beed4f25221d2f723de92b6ababe5faa33b5fd5",
       "role": "test"
     },
     {
       "path": "tests/mesh/mesh-baseline.spec.ts",
-      "sha256": "87c7baf18a7cf9535ce5732d672072e302797b3f77e41c888433a72092b35240",
+      "sha256": "028bfee2ded170050d69898e98a4048c27d7a90183f676acf4b8be83f1a61c16",
       "role": "test"
     },
     {
       "path": "tests/mesh/mesh-faults.spec.ts",
-      "sha256": "608d35ca16e0e2924e1e43def8291781203312d1b51d6568b8f15c6ad11ebef1",
+      "sha256": "5a333b7b9f039336f8228218064b1e91c3480a03683eaba19fb86a70e4a5907d",
       "role": "test"
     },
     {
@@ -611,12 +611,12 @@
     },
     {
       "path": "tests/mesh/origin-claim-audience.spec.ts",
-      "sha256": "5176cfb9f3ef2c6f3a32afefe2bd748a38ea09c67622b57cc80f503cf1713b85",
+      "sha256": "58cb585f59f9429abbe5ff24afe69a711976558cee5b676fe25915a75c1dc206",
       "role": "test"
     },
     {
       "path": "tests/mesh/origin-claim-body-v3.spec.ts",
-      "sha256": "d3218247cc9736021adb208329ca3e44d3b1225671f5fad27da07266f22067d4",
+      "sha256": "1a101d8b2ba2c4e0052840ca015efe190b0a62a95b3ee2368c4ae852bd6832af",
       "role": "test"
     },
     {
@@ -641,12 +641,12 @@
     },
     {
       "path": "tests/mesh/tool-output-schema.spec.ts",
-      "sha256": "ebf6d8e11723a45e8443ee3c59c711d0b001667376758931213707f23db153dc",
+      "sha256": "5969aaa8520445ee4dacdd55afcbc2f1a2daa9eb3aa0169fbe72cee39238db8f",
       "role": "test"
     },
     {
       "path": "tests/mesh/xjoin-relay.spec.ts",
-      "sha256": "103715dd89caca635458733c3bad674faf580e9f1514ba52b739bd6bbdce621a",
+      "sha256": "c35c4c2d7c0384eef5510efe7ac44249f9047859de73d2c11f36e8ab510434f7",
       "role": "test"
     },
     {
@@ -656,7 +656,7 @@
     },
     {
       "path": "tests/unit/architecture-audit.spec.ts",
-      "sha256": "ca48d1105d8387370705e3aecaee0c78a15a0359311ab4ceed0a8d3f8cbe93e3",
+      "sha256": "ae3672fc4c5d4647702dde97aa9ab5574781f894fa9796e335d9a9b457e94bc5",
       "role": "test"
     },
     {
@@ -666,7 +666,7 @@
     },
     {
       "path": "tests/unit/canvas-discovery.spec.ts",
-      "sha256": "77a0b2b7d531519614b53a349ace1faa45f15c9753e6aa2f3dfa8ca9392e2aed",
+      "sha256": "91b649330a0974493df8c681670608e6fb45979dcec010f8b45d7fb54354543b",
       "role": "test"
     },
     {
@@ -676,7 +676,7 @@
     },
     {
       "path": "tests/unit/canvas-notify.spec.ts",
-      "sha256": "400fc8a3cc16c97429c932d44e62feba470ec357dd3d7805040e456f9e98ac4c",
+      "sha256": "6493ef1b4a0c446f83cdb36909465d73c7cdf3b25623d89c238d45eb5a196c45",
       "role": "test"
     },
     {
@@ -691,12 +691,12 @@
     },
     {
       "path": "tests/unit/canvas-wire.spec.ts",
-      "sha256": "91de8b7128ccaaef2d090fb4c30930c5e3fe3e772ab7fb9a7f8b5369fd955593",
+      "sha256": "e7e4a4c8cb94120075650ddb12dd7f2dcbe3893ffaf90e00280a13b8adc3df74",
       "role": "test"
     },
     {
       "path": "tests/unit/card.spec.ts",
-      "sha256": "78d033d9d8266db86810e2ef7b5a7f04d6d2f0610e283ee205e5f7f3a583043c",
+      "sha256": "3c6bde7cdc8cae639651ebb364bd263e0a32c6c6488b747bc3165847a22e76eb",
       "role": "test"
     },
     {
@@ -711,7 +711,7 @@
     },
     {
       "path": "tests/unit/cli-home.spec.ts",
-      "sha256": "5f9bdb1788d68b38e774265d52d9e269722177218e7126431e5c26ffb01ebd23",
+      "sha256": "7eee67671d97a1d80f77261d9fce5b3c2ec3f70bf980cdc8de94bac81fc8291b",
       "role": "test"
     },
     {
@@ -761,7 +761,7 @@
     },
     {
       "path": "tests/unit/fixtures/receipt-pre-s5.ts",
-      "sha256": "ad82558698cebe6eeda6db56e1d55ed75a69088fab84a5f6dfd44a89675a3bce",
+      "sha256": "f8e39edb1bcac7112d94216a1c9676bcbe41ce0211cf22eb3023e214983fb387",
       "role": "test"
     },
     {
@@ -781,7 +781,7 @@
     },
     {
       "path": "tests/unit/gh123-auth-ref.spec.ts",
-      "sha256": "f9cd88f33e275f7ba231993620dee7b2d609add6ecccf78a47aaac15b0afbe76",
+      "sha256": "3216876ba19e4ebb0e1515cd0c2da8bf1c58566ec86af740bcca12af06961009",
       "role": "test"
     },
     {
@@ -796,7 +796,7 @@
     },
     {
       "path": "tests/unit/gh141-own-inbound.spec.ts",
-      "sha256": "cb386df7cf8384f638b1dd37a7065023925c76b116b8ebf50eaf6410675532d3",
+      "sha256": "45df4ce699c7df5d86dc2c465be1b1259ef5f9e7d8a40052830201c1832ade7f",
       "role": "test"
     },
     {
@@ -806,12 +806,12 @@
     },
     {
       "path": "tests/unit/gh159-peer-directory.spec.ts",
-      "sha256": "9d156d7eb77dabe52eedb6a22ce44b64f5569354592bfced7d0aa6038b6b94d0",
+      "sha256": "31698030791b27e5300c5f17f88ca54402dcb4ba94df87800f2e7de36eb0972b",
       "role": "test"
     },
     {
       "path": "tests/unit/gh224-queue-guard.spec.ts",
-      "sha256": "034f2f0c3826ddd89ac96ac08ace6992cd7f617ca2c4266f3830671f52431a25",
+      "sha256": "5ec4e5f65ef42f8b7c7e95b92a9cc037576534918674338245121edd08bfc24c",
       "role": "test"
     },
     {
@@ -836,7 +836,7 @@
     },
     {
       "path": "tests/unit/gh91-flood-guard.spec.ts",
-      "sha256": "a2ec502b506db7059ade7b3124918d496dc5008983272d33a73eb92e7a1cb02a",
+      "sha256": "31c49d8472a8bc91d968bffc4e6419264a566d7e7248ca2731759b2f515adedf",
       "role": "test"
     },
     {
@@ -846,7 +846,7 @@
     },
     {
       "path": "tests/unit/join-gate-fix12.spec.ts",
-      "sha256": "9c99d5f1a0f95826bf04ef752691b88ffefa07e2a8df8499a489dd76c1d5dc82",
+      "sha256": "ec0bd687d013309c90309bb589e911b7a4e38f38c133d02bb245c853f37c9b11",
       "role": "test"
     },
     {
@@ -871,12 +871,12 @@
     },
     {
       "path": "tests/unit/load-path.spec.ts",
-      "sha256": "fe9a864ed1d0e45bae6eabeeefc2895324acdcc726bd7cbdc22b42818db7c668",
+      "sha256": "2e53f0ff15eab8bb35ecab011ca22464d9d326e66352b58390c99c371e5f50bb",
       "role": "test"
     },
     {
       "path": "tests/unit/node-self.spec.ts",
-      "sha256": "3428c997df956d9ddeefdc612b5fefbb376a2ca6fe7d571a687caab17b8d1825",
+      "sha256": "a8db4db185727b3ebecc3669af0949c77f5e23649295544d0dcea1d6c672b46a",
       "role": "test"
     },
     {
@@ -896,12 +896,12 @@
     },
     {
       "path": "tests/unit/outbound-scope.spec.ts",
-      "sha256": "8c8cbba2c0dba98667e3c475f4247927cb68a7a622cf67d6c18173e515ca12e1",
+      "sha256": "b29ad75fff7287ef62a800fb53d7015943aadc5dc7fc57da26d8b6041d3b789c",
       "role": "test"
     },
     {
       "path": "tests/unit/owner-settings.spec.ts",
-      "sha256": "d6b829eb54b29fa22fd9a2f6abe5941939ca5d63579992369b5c3a7caf5dd8f2",
+      "sha256": "7136b5b3462b3c25caa14b8b3a510cddacdeeeea3b325610e56a7924a0a4b4f1",
       "role": "test"
     },
     {
@@ -936,12 +936,12 @@
     },
     {
       "path": "tests/unit/planning-world.spec.ts",
-      "sha256": "2e5ba6ca998af966552a75cbb05fd98043066978b86f7858894577027ecccc06",
+      "sha256": "4b61a64943098b3e07910e2c20594deedfd5d2dc72ead416100d9ca2508874d3",
       "role": "test"
     },
     {
       "path": "tests/unit/reanchor-architecture.spec.ts",
-      "sha256": "c6466899884cfecdd74298ae29981a42ba4df05d7356f4ceca423033687c1da5",
+      "sha256": "3b8cdd0dc59e94c6cf9e2d5c3198fea36eb332e6aa5facafc18a36955a7051dc",
       "role": "test"
     },
     {
@@ -951,7 +951,7 @@
     },
     {
       "path": "tests/unit/receipt-ladder.spec.ts",
-      "sha256": "5fba49c1e8d1e079627fe896d355d512194337a8400e020c05dccb8f0f3ad936",
+      "sha256": "63c2bedae1837cb7c923165e506716d1cf6b0e6c6bc6bedaeef5ec2f73e04ecf",
       "role": "test"
     },
     {
@@ -961,12 +961,12 @@
     },
     {
       "path": "tests/unit/same-mounted-url.spec.ts",
-      "sha256": "912c2175dcf958ea280ff6fd5f39fdbb1178ffff52260822dbe817e6c6499d19",
+      "sha256": "251caa622564e9e02a77f0a4736fd5ebad6e278d977148e2ff56eaf6eb770e47",
       "role": "test"
     },
     {
       "path": "tests/unit/self-suppress.spec.ts",
-      "sha256": "8dd4f3a7c043511050915d0c24dfaa8a85a162d9474d89c11f10ab3fd6b6d1e5",
+      "sha256": "be5256a42e31d305fa1e720adf418b58e5519659944461bf1fc22c9616fe63bd",
       "role": "test"
     },
     {
@@ -976,7 +976,7 @@
     },
     {
       "path": "tests/unit/settler-claim-fields.spec.ts",
-      "sha256": "b87f00c41c485b6671aedfdaca2a33b3b546b3c8f9392577de6d2a6745c8a4fb",
+      "sha256": "c6f3bdab5ba78e9df99a0ce7f21b324c9c03cd903e1fc19ee184866e9f88561c",
       "role": "test"
     },
     {
@@ -986,7 +986,7 @@
     },
     {
       "path": "tests/unit/stage-mount.spec.ts",
-      "sha256": "ee169875fa4557ff75e932e5f53c3b247ff966ede8cff3dfb853c88af841968a",
+      "sha256": "1812040ca6308668401e12a01bb409a97420fc0137fcfbdc34f9ef428552cfdd",
       "role": "test"
     },
     {
@@ -996,12 +996,12 @@
     },
     {
       "path": "tests/unit/task-auth-differential.spec.ts",
-      "sha256": "604c4667965a8050654876318f591fa18bcea7a5e3ca2503536a71097af8ebf5",
+      "sha256": "02813971f1c0ab491bed05252d2b36a00ec8df9f45f539c4f893ec70876da832",
       "role": "test"
     },
     {
       "path": "tests/unit/task-auth.spec.ts",
-      "sha256": "5478d09e1f2c9fcc2e540e53accf41fa716fcf705871d28817088d17dc407c5e",
+      "sha256": "54fb8e21870f1f25bb6f6cdbf5fe0b90398dec0414a74739f92f83988458f182",
       "role": "test"
     },
     {
@@ -1026,12 +1026,12 @@
     },
     {
       "path": "tests/unit/wire-abort-telemetry.spec.ts",
-      "sha256": "34d4cdcd8b4975ea134ba25cabbd0afc579c86dbd25781fc370472d866d91b17",
+      "sha256": "f36ae6595241ee4ab96d3a186a8472fcc56dc0472662c6751954763c191c1806",
       "role": "test"
     },
     {
       "path": "tests/unit/zone.spec.ts",
-      "sha256": "d562e82cead8ebe7d74c58500d6db7af7c2a9ac5c77c0a2dc892065670a20cb4",
+      "sha256": "130c55b79121cfa34dc5d846762d3a73f420e314225f47780703096904be4f0c",
       "role": "test"
     },
     {
@@ -1076,7 +1076,7 @@
     },
     {
       "path": "tests/wire/gh253-answered-queue.spec.ts",
-      "sha256": "4ff1639ebd22e110add55ca4c9ed87a91cb5463299cf0cf4f870b512236fb5a5",
+      "sha256": "e0a84fa78aeda74d84978dd8e88f706763e474bdf069d86ab29817b87818c8c6",
       "role": "test"
     },
     {
@@ -1086,7 +1086,7 @@
     },
     {
       "path": "tests/wire/gh91-flood-guard.spec.ts",
-      "sha256": "a90a77ba3a32d21066f8eab6c410a58ab9a5eac917ae67b0c8b4210eced810db",
+      "sha256": "1d8aee079aa39594e552d5bcb2133bf3dc77ad8e051145abfe4f64ca4b79387b",
       "role": "test"
     },
     {
@@ -1131,7 +1131,7 @@
     },
     {
       "path": "tests/wire/receipt-autosend.spec.ts",
-      "sha256": "425185147d9a3bf59dd9c177a32fbe55426d0caa4d77f65248b48c573d80bf7f",
+      "sha256": "308d7e70b8cb31b1b7f3d76a754ed9deaa7657fff18026571116a1b79fc30bd6",
       "role": "test"
     },
     {
@@ -1146,7 +1146,7 @@
     },
     {
       "path": "tests/wire/report-ingress.spec.ts",
-      "sha256": "7eed277c63cdda562bf7fcb0904a96ca336fb4b7c542ea833f09f91ffc0535eb",
+      "sha256": "1497780782f6aae6e40861021692c836fee6802bbfb7185f4e246c62f6c74f1c",
       "role": "test"
     },
     {
@@ -1221,7 +1221,7 @@
     },
     {
       "path": "vitest.config.ts",
-      "sha256": "41ba539d7a007d9338ea10f2fafbb4b26968b4f2f27c6430b22c89c8fc14e8e4",
+      "sha256": "9d57aa0d681d258a7a8e7a724d70cb8efac014093a0482d8d001bb142381ae77",
       "role": "build"
     }
   ],
@@ -3177,6 +3177,854 @@
       "reason": "一期原始快照wx排他创建与非有限JSON数值原文保留，无判据变更",
       "actor": "dsh/f49961b0",
       "at": "2026-11-05T15:50:17.098Z"
+    },
+    {
+      "path": "assets/stageDist/assets/index-C-28k_o5.js",
+      "old_sha256": "c078dc55af5db05eb03f86cd3597e23e88a11996ee7615ac2c89502f39580c40",
+      "new_sha256": "87f42e4280068993943e1dba30dc4b54cd6abd70481286da82b724a75edfdd42",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.133Z"
+    },
+    {
+      "path": "examples/external-node/index.mjs",
+      "old_sha256": "e04bbe5d1270e49927cedc3383bfcd344fea650a8c2d458f6934fe2c5b6f3ffb",
+      "new_sha256": "74528d9967a7a7f357f576f61ae4b2999ee3e660c7ccebd345d7a8fcf132a841",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.196Z"
+    },
+    {
+      "path": "feedback/2026-08-27-nexus-canvas-ux/shot_planning.py",
+      "old_sha256": "a4a4d1ddd5dcbb7e994b45325615bc1c6ca035d911ca6575b53e7b044b37998c",
+      "new_sha256": "15fd4c14f2d77aa474cdf4c4acb50b811487b04ba565243f14f795b53d263f13",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.257Z"
+    },
+    {
+      "path": "feedback/2026-08-27-nexus-canvas-ux/shot_status_quo.py",
+      "old_sha256": "3bbec77f1dbd6840ce90e52799939cb5e8cf6f2965914629e37ad5c713dd7157",
+      "new_sha256": "f5707f17f4694f0c2421418021bcb00d66fba756f716def82c96e5521f75ba08",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.322Z"
+    },
+    {
+      "path": "nexus-stage/scripts/mockhost.py",
+      "old_sha256": "9a04e009b06d87df69d61319ef03ce00ac2a61579fd442a356d80f654690f29e",
+      "new_sha256": "0799e62ed605158944518756373c0e34f71159050679b29211582aa28ddfbbdf",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.384Z"
+    },
+    {
+      "path": "nexus-stage/tests/chat-drawer-dom.spec.ts",
+      "old_sha256": "393799024f629d31222b9b4cb798186f42a0576d191599abeef2d258a363cb9f",
+      "new_sha256": "49c90e0fbda458fa402094c13a4ba5cee0d2e232b92ad988c29011f4e961c017",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.444Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-card-text.spec.ts",
+      "old_sha256": "6b2b93ef09cf1cd354640ef5444d4a2e97fdfcf6f7de3e0fc4ff08421a440bc9",
+      "new_sha256": "e43e5f3ba8b22d9d575d00d1624b7ccd76a33e46114c8ac2d4281cfa4c9965f6",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.510Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-dom.spec.ts",
+      "old_sha256": "530049a3d5575534d1171f08127246cfac01d818fa444f3171314dc24f2b90e1",
+      "new_sha256": "4839e3eddfc65b4701e1e3073dc43985dde484cdbf72c57d3c825ddd766d8cd9",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.572Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-federation-dom.spec.ts",
+      "old_sha256": "2fb58f2f81db07224763ac3a5658eeb04232c9cce9e4018493c6c4a9eeef02bf",
+      "new_sha256": "c763e61ab5f6b603be1454b0ccce16b81dc9329a18379ab4a865a04740bf988d",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.631Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-first-run-dom.spec.ts",
+      "old_sha256": "a71db74ed3b81b8f08b18528eeea968be56fac7a95b1a4664cdeb31cba43eb3f",
+      "new_sha256": "440b324382e2b1b0feb4edc1b2b5a68af70e0e1076908c444b30914b2460c04d",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.695Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-fit.spec.ts",
+      "old_sha256": "4c3e777830e308791150583ae89c28f9105c42100768876f4f7903ca28aa9749",
+      "new_sha256": "3554403aea9345593d7b2721e6fcdea57f18ff92e3e978943091622960f9def1",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.752Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-frame-solo.spec.ts",
+      "old_sha256": "2064c884b1c3f9e1e00cea3e4acf7488aa4589c95c886dbcf8672dd0f8336ce4",
+      "new_sha256": "a5badeddea95b4fe9d3cedf6eb6e9fb0f257ef6a5d7f49f357c548d6b4082018",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.812Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh108-settlement.spec.ts",
+      "old_sha256": "6f1ac1ef67bb12d9b70ae7448cb2329ffc81ed69e67f7e7965c3e20d0b90909a",
+      "new_sha256": "992b863a98f4d0d4813049e444704e4016064df1b09ed6165d5f6c798a59ecd7",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.872Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh41-fleet-frames.spec.ts",
+      "old_sha256": "2dad0f882ed051d1fe4c8a31a864e0a1c86aee092976349e680e7938f6e0ad98",
+      "new_sha256": "ceaf31ebb9a72c5b9b3ce80dc6a9e65c7d462852768b06ac32e03d704697c16c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.929Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh43-org-members.spec.ts",
+      "old_sha256": "fe20bffe13a3802eb5196f17098bdd425913ce29c1ce50e16e37efdcee892550",
+      "new_sha256": "f285e19ea5dc68992efc2affbcaa378555bfd86a4a17d5af4aee6c1b18797c55",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.987Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh48-tidy.spec.ts",
+      "old_sha256": "67c7b73c6d697fa039d370e2cf6d6cd1b131053248585e7daa5ad64d1e357944",
+      "new_sha256": "56664b9cd126d36bd2f28bf297b2a4e11bcf75eaa76d78ee196c98b77ac2e4b7",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.047Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-leave-mirror.spec.ts",
+      "old_sha256": "0f0459f82bc26834d2693865c39953be93c3080e791d168d28084ccfd4db945b",
+      "new_sha256": "4127a726b0084a0cc81f5b2858e0777104613213548b165d131ada9213805e06",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.115Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-member-badge.spec.ts",
+      "old_sha256": "87a44984aa52e80f8ecc59d096e88ade598a4719f7428360d4797b34318196ce",
+      "new_sha256": "402eb0118a4c8f34d6ffd7fc6d55e33c94226e1ab630f3b60cd238739944341c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.175Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-mirror.spec.ts",
+      "old_sha256": "2cc5491d411331ebff141559c3f2c8e45200ac2a0a72be8ab3b2b414c6e2620d",
+      "new_sha256": "fbc5f0beda728e2a728f71d4866440d15a25751279537e4e4888a4904492132e",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.236Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-nodelist-dom.spec.ts",
+      "old_sha256": "f93d58cbb0f2d2790fd8be223e17a35a4c774b9c8b97cd533a8e1afc6c9508dc",
+      "new_sha256": "fc6124646fc6f72f2d3080b34387561078a6ca5832485794b6e72139d027afef",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.299Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-overlap-dom.spec.ts",
+      "old_sha256": "ca60ef9fe6d82658a09de00062c47efc799139c5b8e94c9c9ce14c603656b9b5",
+      "new_sha256": "f158edcdad94b3b2cc6f4d61261f8ec0ebcf344e4cdf221ae20f71e1bcc39232",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.400Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-overlap.spec.ts",
+      "old_sha256": "d39326ae206a23cf0c7aa680014650059273fabc9042b18900c80994f9e9bcab",
+      "new_sha256": "5daa52af57b79f01120533350f7492fa6f19c24ebf48f64e4e29374cf11f9a23",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.464Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-relayout.spec.ts",
+      "old_sha256": "8b68b3001ad69aa6b6e70c0a42d703330c3a4d7c92a1ba756cbb49a063054f4e",
+      "new_sha256": "eec98b64106c447c9673be8bbee04c7261d84061b242785a773325cf669633a1",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.529Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-roster.spec.ts",
+      "old_sha256": "123ed07aedb596f0be32baf3da4820863061c94cf184729f7de5faaa389c569c",
+      "new_sha256": "66b032990b472ce76a1bfeabc578598bd7249039da2cfe18cc7f7ea0035aeea5",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.600Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-search.spec.ts",
+      "old_sha256": "81bfd8be5ef226a17a29e01b2b4f6547eb036602c731f7008a10a587cec2287a",
+      "new_sha256": "119f148ce2845d372c7c6fcad63e8fb82e3eb8ea9076da07a8a0511ccc2bf318",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.703Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-teams-dom.spec.ts",
+      "old_sha256": "60c9d50d0ebe71245165a06443e8eee725e26083c35a95e0fdb42fd06cfe0fbd",
+      "new_sha256": "f98627d77371b5f98b33f92366ffb4acfa0cae5dd0c3db39343c122d4007e1f3",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.767Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-undo.spec.ts",
+      "old_sha256": "29e6cec51b93b08c29823e1c8c5aa0fb61f6c2fcda82908c2d4da944362eab88",
+      "new_sha256": "753deee4054b15300d4e97e179125b42da4ceb3ccca1447ff31cd99fb92926e9",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.835Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-wb-compose.spec.ts",
+      "old_sha256": "3ace61e38d25a5535dcf27b7c8e94323bf0cc3547b36d5801526e0e1d838e6a8",
+      "new_sha256": "6fa73f917411d4559bb37d7d6a2c9b21e6877397d7e2ebc419f5d762115176bf",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.901Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-work-status.spec.ts",
+      "old_sha256": "6c993cce3dd9ec20eabdfb61095f4be2a1c19da61ed001dc4f743dffb164f672",
+      "new_sha256": "a4b64d231595aae322ad796efe48f87fe40e28bbc63c651ab160df4453436bb5",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.963Z"
+    },
+    {
+      "path": "nexus-stage/tests/rail-dom.spec.ts",
+      "old_sha256": "770e3c7e81b33cc69d735cd91cff130aa7c1976277a11538b47bf0022e9074ca",
+      "new_sha256": "e1c71d93ad7226449e3a6b505fe7806d2ca0be2fa246b333601066e7feed3b77",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.027Z"
+    },
+    {
+      "path": "nexus-stage/tests/seat-name-editor.spec.ts",
+      "old_sha256": "554f688b0cdaa67eb580ec0f49ed5133bc329204c2c8ed44d41c034c0a74a331",
+      "new_sha256": "00117423d1e58529b54b2c00b2494e0855e8d9e407736a5b36ad305fafd6e1a2",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.095Z"
+    },
+    {
+      "path": "nexus-stage/tests/session-drag.spec.ts",
+      "old_sha256": "347f09fe52c9b366a9736712c82f9c9610b366e537c1da83c10a8b8b5a1ec957",
+      "new_sha256": "6d275bb8c9c88124f1043f3d73fe4b934152172962147f971a29b43dccbbab6f",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.163Z"
+    },
+    {
+      "path": "nexus-stage/tests/viewport-fit.spec.ts",
+      "old_sha256": "6c94c74f4d2c7b108cc74f05ed4358fcd19876b04613d97c0535a631f2b315fe",
+      "new_sha256": "0c2857aa04ea895606a6a4fe96120935b89664aeb95a045fde10c3442dcb472a",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.255Z"
+    },
+    {
+      "path": "nexus-stage/vite.config.ts",
+      "old_sha256": "dd958a15ab2a6347e1cd22862c008ce2fa5e92213f7bdfd30581d1729154fec5",
+      "new_sha256": "2d2ab04369c144dc3dd42b66c1f1b782b6493619e8a50804387c08f689059613",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.317Z"
+    },
+    {
+      "path": "nexus-stage/vitest.config.ts",
+      "old_sha256": "9bd0ecc4544ae7da3930da75ea0b0e561b73bb027588eeab386bc96651de24e9",
+      "new_sha256": "02b57e63a6da91191bf360975b8d0c9f9008fdd232411b6ccfa98eeb51d3baf6",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.380Z"
+    },
+    {
+      "path": "scripts/copy-skill.mjs",
+      "old_sha256": "2da5530a6d6af92d2452b924f02dd20fbc9051e027b9893fe928a38e43cc828e",
+      "new_sha256": "9a91a47f38d48eb14392dc8b3476e7c501fee4f64b20c60b65703351e9d83f02",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.473Z"
+    },
+    {
+      "path": "scripts/doc-drift.mjs",
+      "old_sha256": "3c9e6ee0f1d509a5e793bcfe6f6af535cfc6b33cb95c5ff51cb5ac0c7724410f",
+      "new_sha256": "734810401893c9dcdf105b73868020757d3de5f35d4cd919950f7e024304daab",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.533Z"
+    },
+    {
+      "path": "scripts/reanchor-architecture.mjs",
+      "old_sha256": "23335bd23cde92571469e25abd9fcc9c3731cf48ec6ed19e125ca052d4bcc34f",
+      "new_sha256": "a7ed67dc5b13832159a4ae55569b28ba500314c215fb6bd86ac78f500bb6d64a",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.593Z"
+    },
+    {
+      "path": "scripts/supervisor-snapshot.mjs",
+      "old_sha256": "1b485bada541cde44c5cdde46313b227bbb31ae277d2fc5264940065cacd9c32",
+      "new_sha256": "b33fd58ea5f508108acb7ca4542d79130fabf3d59971b620bffd03af4665f991",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.654Z"
+    },
+    {
+      "path": "scripts/verify-architecture.mjs",
+      "old_sha256": "b3003e5d09aceeffd97532db263032cb81cc60a6aa27dd29385ed6b70205a523",
+      "new_sha256": "24f2c87103af8282dc7895bf1ab7bdef38028143ff56eb9ac4e38d7aa5598271",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.714Z"
+    },
+    {
+      "path": "scripts/verify-submission.mjs",
+      "old_sha256": "6fe0263c6d1da3d182f71632b43ae421e30569885064429c7f3f49781483e0d6",
+      "new_sha256": "fbb821abb7e80157db1ab0ba615a754f2cfcfb87a385b88bc6f94a889ca8bb28",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.773Z"
+    },
+    {
+      "path": "stage/vite.config.ts",
+      "old_sha256": "801319c63666162fdda4d6749d76e4e106b1d4f0a4bbe761dd7fb4b1f9c0cbbb",
+      "new_sha256": "626db8e561710d29787a18991fd7b8b1c34315924390e9ad9f85a1abab395570",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.836Z"
+    },
+    {
+      "path": "tests/gates/build-layout.spec.ts",
+      "old_sha256": "74f8f8d51317bdf9ae582c2aeb5ed02586a96cc154e86125807fe3561230156e",
+      "new_sha256": "507febbb775232f8f7d41eac9810697b54dc742d9c41967a03a59459ba570059",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.896Z"
+    },
+    {
+      "path": "tests/live/cross-machine.spec.ts",
+      "old_sha256": "9c1a4ff494316394ea988cfdda2d54dd1e0417214739b8f10b33d86705e3a9a0",
+      "new_sha256": "d8cb2712b79fc685e006b1f6d03e97fc0646f6e6f8da3fc179e037d41d175c7c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.958Z"
+    },
+    {
+      "path": "tests/mesh/boundary-hardening-w23.spec.ts",
+      "old_sha256": "29c34149341d20868d1746be7b29f93568db1a8e72d33862fbdb65ffacf7bdec",
+      "new_sha256": "8b0f086332875320f08b4a297d023a65ac68d10bc7f31a3183db192ab02839f4",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.020Z"
+    },
+    {
+      "path": "tests/mesh/canvas-mirror-notify.spec.ts",
+      "old_sha256": "08adb01c0b1ff7e2fa948cbf6514f01407f0cc5ddf8ebc34b982c3875236042c",
+      "new_sha256": "aab2dd754d7d4e84e8aa1360cc4f095166f353d19e1579604a5aeaf8cddebb39",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.082Z"
+    },
+    {
+      "path": "tests/mesh/cli-home-admission.spec.ts",
+      "old_sha256": "511d85e174778bcc38fe84af1b7d8dde792ee79c8525cf92c3a11883b102eb83",
+      "new_sha256": "d6533195e8ce6d01e44e12ddf41d00b45a55cc0ff13b19ec502cbaee1a9919da",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.181Z"
+    },
+    {
+      "path": "tests/mesh/file-channel-f1b.spec.ts",
+      "old_sha256": "5c6ac9533e147273bf1c938a0e63dd8cc19335c1258c908058bb33b0defbe7e5",
+      "new_sha256": "170a4a2a8c93a1d59a377edf04de35d213e8249e6ffbbea72e6a3302a8542b54",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.249Z"
+    },
+    {
+      "path": "tests/mesh/fleet-dissolve.spec.ts",
+      "old_sha256": "8a7ab08b2a53edb81d2ce39d8fd8b0f255e541d08cd27a9b2d99b7110daa9328",
+      "new_sha256": "c215905e39f411b33e15e4669424fc99a94405990e716c496887ef3b4a068143",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.321Z"
+    },
+    {
+      "path": "tests/mesh/gh108-capacity.spec.ts",
+      "old_sha256": "6419e27d5dee658621fc60fa7f598bde0be902578a62caaff262648130169fe3",
+      "new_sha256": "3c54cd35d35697ff17b1efb3e6ed34666fa618a3e805ece51c1581042e9f7456",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.388Z"
+    },
+    {
+      "path": "tests/mesh/gh113-mailbox-shape.spec.ts",
+      "old_sha256": "3217fb2965598a8a4f1fdc36e6cbf6cc2f7b67df8f48552729dbef12449e251c",
+      "new_sha256": "1b8ab65af7e0984a55f025fcb8a1ed5a442e00619b58ac97304e42d6c9d1c95c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.459Z"
+    },
+    {
+      "path": "tests/mesh/gh122-review-attacks.spec.ts",
+      "old_sha256": "cd9b000d71a4d0e66a9b2e9f0e2953e6b26cf776ecf5900c0b5848d6e03f8557",
+      "new_sha256": "2de7a78356eaf441288961aa4e02a73f7a6466b9207866f2c6336638897d457c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.526Z"
+    },
+    {
+      "path": "tests/mesh/gh122-settlement.spec.ts",
+      "old_sha256": "be59c8ac869d2abe9d811d8edd94ab73743ae312286363b6d5ef04fc1aed1aee",
+      "new_sha256": "b5c7cadac77107b8dfc29fc51b7dab90cc1730eeee43e469c806b507e7837778",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.630Z"
+    },
+    {
+      "path": "tests/mesh/gh125-echo-enforce.spec.ts",
+      "old_sha256": "39b1817b7b1b56d5a1a3ce95ece609a44e1897bba48b02cce14f7fceae7abdae",
+      "new_sha256": "c431a5f3db66247bd6cc5854d85c70ecee9a436b76e3f99b1d03cd60547a74aa",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.694Z"
+    },
+    {
+      "path": "tests/mesh/gh139-cross-host-legit.spec.ts",
+      "old_sha256": "7ccdd7e34f4aeee7f20069cd62b627f832e36cece1cc19a87aae23fe3a0c1009",
+      "new_sha256": "f7cf3d5dc2e8c5b736d742483bf510801653d96c802aec7f075675f49916a5d4",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.779Z"
+    },
+    {
+      "path": "tests/mesh/gh139-inbound-delivered-to.spec.ts",
+      "old_sha256": "92165f8c23312eb56d4eb62cd88830c60d0f5ad0324441046fd5339532a2c3fd",
+      "new_sha256": "90fd92d18e4ad5f4669601e695ea69173624d0bd80fdbfec4d7180df83664ef4",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.846Z"
+    },
+    {
+      "path": "tests/mesh/gh139-observer-local-auth.spec.ts",
+      "old_sha256": "963270e93226c6d0cdd90426abbe4ef047bbec26488c8bcfd5632824408b37b5",
+      "new_sha256": "160d7da190a818807d6ffa074128de110e4a3b412ad3ecc459b5b49937e3a808",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.949Z"
+    },
+    {
+      "path": "tests/mesh/gh141-receipt-delivery-row.spec.ts",
+      "old_sha256": "11f99e431777c955e8fa7f2f2d14106faf297e4bf20cee29ee202efc845d8d4e",
+      "new_sha256": "9953463a8d36d5881bafe03d8f283f670e9c224af846f4748e736e45278ed792",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.011Z"
+    },
+    {
+      "path": "tests/mesh/gh152-handle-member-visibility.spec.ts",
+      "old_sha256": "9d121af1c23414c5e935bfcca1804030409f29b54c2569dcea8b33abb7a6fe75",
+      "new_sha256": "8e190566bd1d94a44142d8b46c762316a2e936d073c43a7db9acd32f67cdac3b",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.074Z"
+    },
+    {
+      "path": "tests/mesh/gh189-path-claim-link.spec.ts",
+      "old_sha256": "4b64143dd3068334a8e4aea55fa8fb724cc7f6f6fe5bc92a28acda08bf4f0fee",
+      "new_sha256": "c32692c8a5cf3bb1eb6c52850836b0c17b044bb2bf193f5ab4b2b3e616c023fa",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.135Z"
+    },
+    {
+      "path": "tests/mesh/gh217-cross-host-receipt-scope.spec.ts",
+      "old_sha256": "78678612a4f706e34ecaa29ead4a93d6781e7b9a3815b0ea1765c68bb2dbd401",
+      "new_sha256": "74c2aa99b4b4f81923340c7997f00907560cb7ebf2675086d4be5f9af905f3c4",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.197Z"
+    },
+    {
+      "path": "tests/mesh/gh41-fleet-canvas.spec.ts",
+      "old_sha256": "045621e9a379184e296e36a3e03d3f953f59b799621d9fbd6765619a5696eab0",
+      "new_sha256": "09d7cf4e5f7f397a68272919670bb48f4d58248deeae7618fb6fafe656797af6",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.272Z"
+    },
+    {
+      "path": "tests/mesh/gh45-cli-deposit.spec.ts",
+      "old_sha256": "3be8beb89f9119419e3c26ec6998cd90184b3fa85482f3d5cf109701235788bc",
+      "new_sha256": "189a80aefff324211eb86b83d05f6b30fee926f1ffe2a3a5b70b28169d30e752",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.345Z"
+    },
+    {
+      "path": "tests/mesh/gh58-seat-name.spec.ts",
+      "old_sha256": "836e366ab9ab66b010625349b01249fd01d6f6d1e11fb450312c7ba06997726f",
+      "new_sha256": "784ee0ecb46e6fb8756959b7652120a64be3d56bba45971cea8216df7187540c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.462Z"
+    },
+    {
+      "path": "tests/mesh/issue41-canvas-self-skip.spec.ts",
+      "old_sha256": "8a074e6e8bb747705b98b6b234655111995f5e98d6f87e1ec3f599c66f00967a",
+      "new_sha256": "ca3f02ab78d503eb325b564bf5b91961c9e304a5b0c0267f9596c3d946e4a085",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.529Z"
+    },
+    {
+      "path": "tests/mesh/link-state.spec.ts",
+      "old_sha256": "77de33ab3a0d8b384c529aff20abce402f6f5a049b88ccdb0ae8d9a6ba2da2db",
+      "new_sha256": "7ebe872b5b41f74ad362ef21d69847eca209a0779bfc7678b647115ac290ba00",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.608Z"
+    },
+    {
+      "path": "tests/mesh/mesh-anomalies.spec.ts",
+      "old_sha256": "a323eb15767cbfd7bf3413998f88016e604ddd46fe5bbe041544220b1847a2b0",
+      "new_sha256": "7ff26fb16c8e327abb5673bd1beed4f25221d2f723de92b6ababe5faa33b5fd5",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.675Z"
+    },
+    {
+      "path": "tests/mesh/mesh-baseline.spec.ts",
+      "old_sha256": "87c7baf18a7cf9535ce5732d672072e302797b3f77e41c888433a72092b35240",
+      "new_sha256": "028bfee2ded170050d69898e98a4048c27d7a90183f676acf4b8be83f1a61c16",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.746Z"
+    },
+    {
+      "path": "tests/mesh/mesh-faults.spec.ts",
+      "old_sha256": "608d35ca16e0e2924e1e43def8291781203312d1b51d6568b8f15c6ad11ebef1",
+      "new_sha256": "5a333b7b9f039336f8228218064b1e91c3480a03683eaba19fb86a70e4a5907d",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.822Z"
+    },
+    {
+      "path": "tests/mesh/origin-claim-audience.spec.ts",
+      "old_sha256": "5176cfb9f3ef2c6f3a32afefe2bd748a38ea09c67622b57cc80f503cf1713b85",
+      "new_sha256": "58cb585f59f9429abbe5ff24afe69a711976558cee5b676fe25915a75c1dc206",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.903Z"
+    },
+    {
+      "path": "tests/mesh/origin-claim-body-v3.spec.ts",
+      "old_sha256": "d3218247cc9736021adb208329ca3e44d3b1225671f5fad27da07266f22067d4",
+      "new_sha256": "1a101d8b2ba2c4e0052840ca015efe190b0a62a95b3ee2368c4ae852bd6832af",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.996Z"
+    },
+    {
+      "path": "tests/mesh/tool-output-schema.spec.ts",
+      "old_sha256": "ebf6d8e11723a45e8443ee3c59c711d0b001667376758931213707f23db153dc",
+      "new_sha256": "5969aaa8520445ee4dacdd55afcbc2f1a2daa9eb3aa0169fbe72cee39238db8f",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.065Z"
+    },
+    {
+      "path": "tests/mesh/xjoin-relay.spec.ts",
+      "old_sha256": "103715dd89caca635458733c3bad674faf580e9f1514ba52b739bd6bbdce621a",
+      "new_sha256": "c35c4c2d7c0384eef5510efe7ac44249f9047859de73d2c11f36e8ab510434f7",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.149Z"
+    },
+    {
+      "path": "tests/unit/architecture-audit.spec.ts",
+      "old_sha256": "ca48d1105d8387370705e3aecaee0c78a15a0359311ab4ceed0a8d3f8cbe93e3",
+      "new_sha256": "ae3672fc4c5d4647702dde97aa9ab5574781f894fa9796e335d9a9b457e94bc5",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.216Z"
+    },
+    {
+      "path": "tests/unit/canvas-discovery.spec.ts",
+      "old_sha256": "77a0b2b7d531519614b53a349ace1faa45f15c9753e6aa2f3dfa8ca9392e2aed",
+      "new_sha256": "91b649330a0974493df8c681670608e6fb45979dcec010f8b45d7fb54354543b",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.280Z"
+    },
+    {
+      "path": "tests/unit/canvas-notify.spec.ts",
+      "old_sha256": "400fc8a3cc16c97429c932d44e62feba470ec357dd3d7805040e456f9e98ac4c",
+      "new_sha256": "6493ef1b4a0c446f83cdb36909465d73c7cdf3b25623d89c238d45eb5a196c45",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.345Z"
+    },
+    {
+      "path": "tests/unit/canvas-wire.spec.ts",
+      "old_sha256": "91de8b7128ccaaef2d090fb4c30930c5e3fe3e772ab7fb9a7f8b5369fd955593",
+      "new_sha256": "e7e4a4c8cb94120075650ddb12dd7f2dcbe3893ffaf90e00280a13b8adc3df74",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.455Z"
+    },
+    {
+      "path": "tests/unit/card.spec.ts",
+      "old_sha256": "78d033d9d8266db86810e2ef7b5a7f04d6d2f0610e283ee205e5f7f3a583043c",
+      "new_sha256": "3c6bde7cdc8cae639651ebb364bd263e0a32c6c6488b747bc3165847a22e76eb",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.523Z"
+    },
+    {
+      "path": "tests/unit/cli-home.spec.ts",
+      "old_sha256": "5f9bdb1788d68b38e774265d52d9e269722177218e7126431e5c26ffb01ebd23",
+      "new_sha256": "7eee67671d97a1d80f77261d9fce5b3c2ec3f70bf980cdc8de94bac81fc8291b",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.589Z"
+    },
+    {
+      "path": "tests/unit/fixtures/receipt-pre-s5.ts",
+      "old_sha256": "ad82558698cebe6eeda6db56e1d55ed75a69088fab84a5f6dfd44a89675a3bce",
+      "new_sha256": "f8e39edb1bcac7112d94216a1c9676bcbe41ce0211cf22eb3023e214983fb387",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.654Z"
+    },
+    {
+      "path": "tests/unit/gh123-auth-ref.spec.ts",
+      "old_sha256": "f9cd88f33e275f7ba231993620dee7b2d609add6ecccf78a47aaac15b0afbe76",
+      "new_sha256": "3216876ba19e4ebb0e1515cd0c2da8bf1c58566ec86af740bcca12af06961009",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.722Z"
+    },
+    {
+      "path": "tests/unit/gh141-own-inbound.spec.ts",
+      "old_sha256": "cb386df7cf8384f638b1dd37a7065023925c76b116b8ebf50eaf6410675532d3",
+      "new_sha256": "45df4ce699c7df5d86dc2c465be1b1259ef5f9e7d8a40052830201c1832ade7f",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.822Z"
+    },
+    {
+      "path": "tests/unit/gh159-peer-directory.spec.ts",
+      "old_sha256": "9d156d7eb77dabe52eedb6a22ce44b64f5569354592bfced7d0aa6038b6b94d0",
+      "new_sha256": "31698030791b27e5300c5f17f88ca54402dcb4ba94df87800f2e7de36eb0972b",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.890Z"
+    },
+    {
+      "path": "tests/unit/gh224-queue-guard.spec.ts",
+      "old_sha256": "034f2f0c3826ddd89ac96ac08ace6992cd7f617ca2c4266f3830671f52431a25",
+      "new_sha256": "5ec4e5f65ef42f8b7c7e95b92a9cc037576534918674338245121edd08bfc24c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.975Z"
+    },
+    {
+      "path": "tests/unit/gh91-flood-guard.spec.ts",
+      "old_sha256": "a2ec502b506db7059ade7b3124918d496dc5008983272d33a73eb92e7a1cb02a",
+      "new_sha256": "31c49d8472a8bc91d968bffc4e6419264a566d7e7248ca2731759b2f515adedf",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.042Z"
+    },
+    {
+      "path": "tests/unit/join-gate-fix12.spec.ts",
+      "old_sha256": "9c99d5f1a0f95826bf04ef752691b88ffefa07e2a8df8499a489dd76c1d5dc82",
+      "new_sha256": "ec0bd687d013309c90309bb589e911b7a4e38f38c133d02bb245c853f37c9b11",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.140Z"
+    },
+    {
+      "path": "tests/unit/load-path.spec.ts",
+      "old_sha256": "fe9a864ed1d0e45bae6eabeeefc2895324acdcc726bd7cbdc22b42818db7c668",
+      "new_sha256": "2e53f0ff15eab8bb35ecab011ca22464d9d326e66352b58390c99c371e5f50bb",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.204Z"
+    },
+    {
+      "path": "tests/unit/node-self.spec.ts",
+      "old_sha256": "3428c997df956d9ddeefdc612b5fefbb376a2ca6fe7d571a687caab17b8d1825",
+      "new_sha256": "a8db4db185727b3ebecc3669af0949c77f5e23649295544d0dcea1d6c672b46a",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.267Z"
+    },
+    {
+      "path": "tests/unit/outbound-scope.spec.ts",
+      "old_sha256": "8c8cbba2c0dba98667e3c475f4247927cb68a7a622cf67d6c18173e515ca12e1",
+      "new_sha256": "b29ad75fff7287ef62a800fb53d7015943aadc5dc7fc57da26d8b6041d3b789c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.330Z"
+    },
+    {
+      "path": "tests/unit/owner-settings.spec.ts",
+      "old_sha256": "d6b829eb54b29fa22fd9a2f6abe5941939ca5d63579992369b5c3a7caf5dd8f2",
+      "new_sha256": "7136b5b3462b3c25caa14b8b3a510cddacdeeeea3b325610e56a7924a0a4b4f1",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.392Z"
+    },
+    {
+      "path": "tests/unit/planning-world.spec.ts",
+      "old_sha256": "2e5ba6ca998af966552a75cbb05fd98043066978b86f7858894577027ecccc06",
+      "new_sha256": "4b61a64943098b3e07910e2c20594deedfd5d2dc72ead416100d9ca2508874d3",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.456Z"
+    },
+    {
+      "path": "tests/unit/reanchor-architecture.spec.ts",
+      "old_sha256": "c6466899884cfecdd74298ae29981a42ba4df05d7356f4ceca423033687c1da5",
+      "new_sha256": "3b8cdd0dc59e94c6cf9e2d5c3198fea36eb332e6aa5facafc18a36955a7051dc",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.518Z"
+    },
+    {
+      "path": "tests/unit/receipt-ladder.spec.ts",
+      "old_sha256": "5fba49c1e8d1e079627fe896d355d512194337a8400e020c05dccb8f0f3ad936",
+      "new_sha256": "63c2bedae1837cb7c923165e506716d1cf6b0e6c6bc6bedaeef5ec2f73e04ecf",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.582Z"
+    },
+    {
+      "path": "tests/unit/same-mounted-url.spec.ts",
+      "old_sha256": "912c2175dcf958ea280ff6fd5f39fdbb1178ffff52260822dbe817e6c6499d19",
+      "new_sha256": "251caa622564e9e02a77f0a4736fd5ebad6e278d977148e2ff56eaf6eb770e47",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.677Z"
+    },
+    {
+      "path": "tests/unit/self-suppress.spec.ts",
+      "old_sha256": "8dd4f3a7c043511050915d0c24dfaa8a85a162d9474d89c11f10ab3fd6b6d1e5",
+      "new_sha256": "be5256a42e31d305fa1e720adf418b58e5519659944461bf1fc22c9616fe63bd",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.738Z"
+    },
+    {
+      "path": "tests/unit/settler-claim-fields.spec.ts",
+      "old_sha256": "b87f00c41c485b6671aedfdaca2a33b3b546b3c8f9392577de6d2a6745c8a4fb",
+      "new_sha256": "c6f3bdab5ba78e9df99a0ce7f21b324c9c03cd903e1fc19ee184866e9f88561c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.803Z"
+    },
+    {
+      "path": "tests/unit/stage-mount.spec.ts",
+      "old_sha256": "ee169875fa4557ff75e932e5f53c3b247ff966ede8cff3dfb853c88af841968a",
+      "new_sha256": "1812040ca6308668401e12a01bb409a97420fc0137fcfbdc34f9ef428552cfdd",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.861Z"
+    },
+    {
+      "path": "tests/unit/task-auth-differential.spec.ts",
+      "old_sha256": "604c4667965a8050654876318f591fa18bcea7a5e3ca2503536a71097af8ebf5",
+      "new_sha256": "02813971f1c0ab491bed05252d2b36a00ec8df9f45f539c4f893ec70876da832",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.923Z"
+    },
+    {
+      "path": "tests/unit/task-auth.spec.ts",
+      "old_sha256": "5478d09e1f2c9fcc2e540e53accf41fa716fcf705871d28817088d17dc407c5e",
+      "new_sha256": "54fb8e21870f1f25bb6f6cdbf5fe0b90398dec0414a74739f92f83988458f182",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.983Z"
+    },
+    {
+      "path": "tests/unit/wire-abort-telemetry.spec.ts",
+      "old_sha256": "34d4cdcd8b4975ea134ba25cabbd0afc579c86dbd25781fc370472d866d91b17",
+      "new_sha256": "f36ae6595241ee4ab96d3a186a8472fcc56dc0472662c6751954763c191c1806",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:31.046Z"
+    },
+    {
+      "path": "tests/unit/zone.spec.ts",
+      "old_sha256": "d562e82cead8ebe7d74c58500d6db7af7c2a9ac5c77c0a2dc892065670a20cb4",
+      "new_sha256": "130c55b79121cfa34dc5d846762d3a73f420e314225f47780703096904be4f0c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:31.106Z"
+    },
+    {
+      "path": "tests/wire/gh253-answered-queue.spec.ts",
+      "old_sha256": "4ff1639ebd22e110add55ca4c9ed87a91cb5463299cf0cf4f870b512236fb5a5",
+      "new_sha256": "e0a84fa78aeda74d84978dd8e88f706763e474bdf069d86ab29817b87818c8c6",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:31.201Z"
+    },
+    {
+      "path": "tests/wire/gh91-flood-guard.spec.ts",
+      "old_sha256": "a90a77ba3a32d21066f8eab6c410a58ab9a5eac917ae67b0c8b4210eced810db",
+      "new_sha256": "1d8aee079aa39594e552d5bcb2133bf3dc77ad8e051145abfe4f64ca4b79387b",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:31.262Z"
+    },
+    {
+      "path": "tests/wire/receipt-autosend.spec.ts",
+      "old_sha256": "425185147d9a3bf59dd9c177a32fbe55426d0caa4d77f65248b48c573d80bf7f",
+      "new_sha256": "308d7e70b8cb31b1b7f3d76a754ed9deaa7657fff18026571116a1b79fc30bd6",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:31.322Z"
+    },
+    {
+      "path": "tests/wire/report-ingress.spec.ts",
+      "old_sha256": "7eed277c63cdda562bf7fcb0904a96ca336fb4b7c542ea833f09f91ffc0535eb",
+      "new_sha256": "1497780782f6aae6e40861021692c836fee6802bbfb7185f4e246c62f6c74f1c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:31.379Z"
+    },
+    {
+      "path": "vitest.config.ts",
+      "old_sha256": "41ba539d7a007d9338ea10f2fafbb4b26968b4f2f27c6430b22c89c8fc14e8e4",
+      "new_sha256": "9d57aa0d681d258a7a8e7a724d70cb8efac014093a0482d8d001bb142381ae77",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:31.472Z"
     }
   ]
 }
