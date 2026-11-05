@@ -1,0 +1,196 @@
+{
+  "reviews": [
+    {
+      "source_clause": "A1 发布物证据必须记录可读取 package.json 的完整候选提交 SHA 与有效打包时间。",
+      "findings": [
+        {
+          "question": "faithful",
+          "verdict": "ok",
+          "reason": "构造自检：逐字引用对应材料条款，单元只要求该具名事实存在且ok=1。",
+          "anchor": {
+            "quote": "A1 发布物证据必须记录可读取 package.json 的完整候选提交 SHA 与有效打包时间。",
+            "locator": "material-artifact-audit-v2.md#A1"
+          }
+        },
+        {
+          "question": "decidable",
+          "verdict": "ok",
+          "reason": "只查询冻结快照release_artifact_facts的name与ok列；当前时间、网络与执行命令不参与run判定。"
+        },
+        {
+          "question": "not-vacuous",
+          "verdict": "ok",
+          "reason": "count>=1要求具名成功事实，空表或失败事实均不能达到阈值；采集器缺输入仍写ok=0。反例由单测及CLI突变快照分别验证。"
+        }
+      ]
+    },
+    {
+      "source_clause": "A2 本地 tgz 实际大小、SHA-1 与 SHA-256 必须同时等于发布物记录。",
+      "findings": [
+        {
+          "question": "faithful",
+          "verdict": "ok",
+          "reason": "构造自检：逐字引用对应材料条款，单元只要求该具名事实存在且ok=1。",
+          "anchor": {
+            "quote": "A2 本地 tgz 实际大小、SHA-1 与 SHA-256 必须同时等于发布物记录。",
+            "locator": "material-artifact-audit-v2.md#A2"
+          }
+        },
+        {
+          "question": "decidable",
+          "verdict": "ok",
+          "reason": "只查询冻结快照release_artifact_facts的name与ok列；当前时间、网络与执行命令不参与run判定。"
+        },
+        {
+          "question": "not-vacuous",
+          "verdict": "ok",
+          "reason": "count>=1要求具名成功事实，空表或失败事实均不能达到阈值；采集器缺输入仍写ok=0。反例由单测及CLI突变快照分别验证。"
+        }
+      ]
+    },
+    {
+      "source_clause": "A3 tgz 必须可枚举且文件数与记录一致，包内名称版本等于候选，且不得包含 pycache、pyc、临时目录或越界路径。",
+      "findings": [
+        {
+          "question": "faithful",
+          "verdict": "ok",
+          "reason": "构造自检：逐字引用对应材料条款，单元只要求该具名事实存在且ok=1。",
+          "anchor": {
+            "quote": "A3 tgz 必须可枚举且文件数与记录一致，包内名称版本等于候选，且不得包含 pycache、pyc、临时目录或越界路径。",
+            "locator": "material-artifact-audit-v2.md#A3"
+          }
+        },
+        {
+          "question": "decidable",
+          "verdict": "ok",
+          "reason": "只查询冻结快照release_artifact_facts的name与ok列；当前时间、网络与执行命令不参与run判定。"
+        },
+        {
+          "question": "not-vacuous",
+          "verdict": "ok",
+          "reason": "count>=1要求具名成功事实，空表或失败事实均不能达到阈值；采集器缺输入仍写ok=0。反例由单测及CLI突变快照分别验证。"
+        }
+      ]
+    },
+    {
+      "source_clause": "A4 3081 隔离验收记录必须绑定同一候选与实际 tgz 哈希，验收时间不早于打包，名片版本、隔离 state 与完整工作台 HTML 均通过。",
+      "findings": [
+        {
+          "question": "faithful",
+          "verdict": "ok",
+          "reason": "构造自检：逐字引用对应材料条款，单元只要求该具名事实存在且ok=1。",
+          "anchor": {
+            "quote": "A4 3081 隔离验收记录必须绑定同一候选与实际 tgz 哈希，验收时间不早于打包，名片版本、隔离 state 与完整工作台 HTML 均通过。",
+            "locator": "material-artifact-audit-v2.md#A4"
+          }
+        },
+        {
+          "question": "decidable",
+          "verdict": "ok",
+          "reason": "只查询冻结快照release_artifact_facts的name与ok列；当前时间、网络与执行命令不参与run判定。"
+        },
+        {
+          "question": "not-vacuous",
+          "verdict": "ok",
+          "reason": "count>=1要求具名成功事实，空表或失败事实均不能达到阈值；采集器缺输入仍写ok=0。反例由单测及CLI突变快照分别验证。"
+        }
+      ]
+    },
+    {
+      "source_clause": "A5 独立 serve 验收记录必须绑定同一候选与实际 tgz 哈希，验收时间不早于打包，名片版本、隔离 state 与完整工作台 HTML 均通过。",
+      "findings": [
+        {
+          "question": "faithful",
+          "verdict": "ok",
+          "reason": "构造自检：逐字引用对应材料条款，单元只要求该具名事实存在且ok=1。",
+          "anchor": {
+            "quote": "A5 独立 serve 验收记录必须绑定同一候选与实际 tgz 哈希，验收时间不早于打包，名片版本、隔离 state 与完整工作台 HTML 均通过。",
+            "locator": "material-artifact-audit-v2.md#A5"
+          }
+        },
+        {
+          "question": "decidable",
+          "verdict": "ok",
+          "reason": "只查询冻结快照release_artifact_facts的name与ok列；当前时间、网络与执行命令不参与run判定。"
+        },
+        {
+          "question": "not-vacuous",
+          "verdict": "ok",
+          "reason": "count>=1要求具名成功事实，空表或失败事实均不能达到阈值；采集器缺输入仍写ok=0。反例由单测及CLI突变快照分别验证。"
+        }
+      ]
+    },
+    {
+      "source_clause": "A6 npmjs 下载回读包的实际双哈希必须与本地验收 tgz 一致，记录的版本、大小及双哈希必须与下载包一致。",
+      "findings": [
+        {
+          "question": "faithful",
+          "verdict": "ok",
+          "reason": "构造自检：逐字引用对应材料条款，单元只要求该具名事实存在且ok=1。",
+          "anchor": {
+            "quote": "A6 npmjs 下载回读包的实际双哈希必须与本地验收 tgz 一致，记录的版本、大小及双哈希必须与下载包一致。",
+            "locator": "material-artifact-audit-v2.md#A6"
+          }
+        },
+        {
+          "question": "decidable",
+          "verdict": "ok",
+          "reason": "只查询冻结快照release_artifact_facts的name与ok列；当前时间、网络与执行命令不参与run判定。"
+        },
+        {
+          "question": "not-vacuous",
+          "verdict": "ok",
+          "reason": "count>=1要求具名成功事实，空表或失败事实均不能达到阈值；采集器缺输入仍写ok=0。反例由单测及CLI突变快照分别验证。"
+        }
+      ]
+    },
+    {
+      "source_clause": "A7 Gitea 下载回读包的实际双哈希必须与本地验收 tgz 一致。",
+      "findings": [
+        {
+          "question": "faithful",
+          "verdict": "ok",
+          "reason": "构造自检：逐字引用对应材料条款，单元只要求该具名事实存在且ok=1。",
+          "anchor": {
+            "quote": "A7 Gitea 下载回读包的实际双哈希必须与本地验收 tgz 一致。",
+            "locator": "material-artifact-audit-v2.md#A7"
+          }
+        },
+        {
+          "question": "decidable",
+          "verdict": "ok",
+          "reason": "只查询冻结快照release_artifact_facts的name与ok列；当前时间、网络与执行命令不参与run判定。"
+        },
+        {
+          "question": "not-vacuous",
+          "verdict": "ok",
+          "reason": "count>=1要求具名成功事实，空表或失败事实均不能达到阈值；采集器缺输入仍写ok=0。反例由单测及CLI突变快照分别验证。"
+        }
+      ]
+    },
+    {
+      "source_clause": "A8 必须存在评审席提供的非空包内清单，清单候选 SHA 与发布候选相同；发布 tgz 的普通文件路径集合、每项字节大小和 SHA-256 必须与清单逐项完全相等，缺清单、重复或越界路径、非普通文件、缺项、多项或任一差异均失败；不比较 tgz 容器元数据。",
+      "findings": [
+        {
+          "question": "faithful",
+          "verdict": "ok",
+          "reason": "构造自检：逐字冻结A8；审核人来源真实性是独立协作审计边界，不能凭JSON自证。",
+          "anchor": {
+            "quote": "A8 必须存在评审席提供的非空包内清单，清单候选 SHA 与发布候选相同；发布 tgz 的普通文件路径集合、每项字节大小和 SHA-256 必须与清单逐项完全相等，缺清单、重复或越界路径、非普通文件、缺项、多项或任一差异均失败；不比较 tgz 容器元数据。",
+            "locator": "material-artifact-audit-v2.md#A8"
+          }
+        },
+        {
+          "question": "decidable",
+          "verdict": "ok",
+          "reason": "只查询冻结快照release_artifact_facts的name与ok列；当前时间、网络与执行命令不参与run判定。"
+        },
+        {
+          "question": "not-vacuous",
+          "verdict": "ok",
+          "reason": "count>=1要求具名成功事实，空表或失败事实均不能达到阈值；采集器缺输入仍写ok=0。反例由单测及CLI突变快照分别验证。"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,260 @@
+{
+  "candidates": [
+    {
+      "source_clause": "A1 发布物证据必须记录可读取 package.json 的完整候选提交 SHA 与有效打包时间。",
+      "anchor": {
+        "quote": "A1 发布物证据必须记录可读取 package.json 的完整候选提交 SHA 与有效打包时间。",
+        "locator": "material-artifact-audit-v2.md#A1"
+      },
+      "severity": "S1",
+      "checker": {
+        "type": "count",
+        "predicate": {
+          "from": "release_artifact_facts",
+          "select": [],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "name",
+                "op": "=",
+                "value": "candidate_identity"
+              },
+              {
+                "col": "ok",
+                "op": "=",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "op": ">=",
+        "value": 1
+      }
+    },
+    {
+      "source_clause": "A2 本地 tgz 实际大小、SHA-1 与 SHA-256 必须同时等于发布物记录。",
+      "anchor": {
+        "quote": "A2 本地 tgz 实际大小、SHA-1 与 SHA-256 必须同时等于发布物记录。",
+        "locator": "material-artifact-audit-v2.md#A2"
+      },
+      "severity": "S1",
+      "checker": {
+        "type": "count",
+        "predicate": {
+          "from": "release_artifact_facts",
+          "select": [],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "name",
+                "op": "=",
+                "value": "artifact_digest"
+              },
+              {
+                "col": "ok",
+                "op": "=",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "op": ">=",
+        "value": 1
+      }
+    },
+    {
+      "source_clause": "A3 tgz 必须可枚举且文件数与记录一致，包内名称版本等于候选，且不得包含 pycache、pyc、临时目录或越界路径。",
+      "anchor": {
+        "quote": "A3 tgz 必须可枚举且文件数与记录一致，包内名称版本等于候选，且不得包含 pycache、pyc、临时目录或越界路径。",
+        "locator": "material-artifact-audit-v2.md#A3"
+      },
+      "severity": "S1",
+      "checker": {
+        "type": "count",
+        "predicate": {
+          "from": "release_artifact_facts",
+          "select": [],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "name",
+                "op": "=",
+                "value": "archive_inventory"
+              },
+              {
+                "col": "ok",
+                "op": "=",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "op": ">=",
+        "value": 1
+      }
+    },
+    {
+      "source_clause": "A4 3081 隔离验收记录必须绑定同一候选与实际 tgz 哈希，验收时间不早于打包，名片版本、隔离 state 与完整工作台 HTML 均通过。",
+      "anchor": {
+        "quote": "A4 3081 隔离验收记录必须绑定同一候选与实际 tgz 哈希，验收时间不早于打包，名片版本、隔离 state 与完整工作台 HTML 均通过。",
+        "locator": "material-artifact-audit-v2.md#A4"
+      },
+      "severity": "S1",
+      "checker": {
+        "type": "count",
+        "predicate": {
+          "from": "release_artifact_facts",
+          "select": [],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "name",
+                "op": "=",
+                "value": "acceptance_dsh3081"
+              },
+              {
+                "col": "ok",
+                "op": "=",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "op": ">=",
+        "value": 1
+      }
+    },
+    {
+      "source_clause": "A5 独立 serve 验收记录必须绑定同一候选与实际 tgz 哈希，验收时间不早于打包，名片版本、隔离 state 与完整工作台 HTML 均通过。",
+      "anchor": {
+        "quote": "A5 独立 serve 验收记录必须绑定同一候选与实际 tgz 哈希，验收时间不早于打包，名片版本、隔离 state 与完整工作台 HTML 均通过。",
+        "locator": "material-artifact-audit-v2.md#A5"
+      },
+      "severity": "S1",
+      "checker": {
+        "type": "count",
+        "predicate": {
+          "from": "release_artifact_facts",
+          "select": [],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "name",
+                "op": "=",
+                "value": "acceptance_cleanServe"
+              },
+              {
+                "col": "ok",
+                "op": "=",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "op": ">=",
+        "value": 1
+      }
+    },
+    {
+      "source_clause": "A6 npmjs 下载回读包的实际双哈希必须与本地验收 tgz 一致，记录的版本、大小及双哈希必须与下载包一致。",
+      "anchor": {
+        "quote": "A6 npmjs 下载回读包的实际双哈希必须与本地验收 tgz 一致，记录的版本、大小及双哈希必须与下载包一致。",
+        "locator": "material-artifact-audit-v2.md#A6"
+      },
+      "severity": "S1",
+      "checker": {
+        "type": "count",
+        "predicate": {
+          "from": "release_artifact_facts",
+          "select": [],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "name",
+                "op": "=",
+                "value": "readback_npmjs"
+              },
+              {
+                "col": "ok",
+                "op": "=",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "op": ">=",
+        "value": 1
+      }
+    },
+    {
+      "source_clause": "A7 Gitea 下载回读包的实际双哈希必须与本地验收 tgz 一致。",
+      "anchor": {
+        "quote": "A7 Gitea 下载回读包的实际双哈希必须与本地验收 tgz 一致。",
+        "locator": "material-artifact-audit-v2.md#A7"
+      },
+      "severity": "S1",
+      "checker": {
+        "type": "count",
+        "predicate": {
+          "from": "release_artifact_facts",
+          "select": [],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "name",
+                "op": "=",
+                "value": "readback_gitea"
+              },
+              {
+                "col": "ok",
+                "op": "=",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "op": ">=",
+        "value": 1
+      }
+    },
+    {
+      "source_clause": "A8 必须存在评审席提供的非空包内清单，清单候选 SHA 与发布候选相同；发布 tgz 的普通文件路径集合、每项字节大小和 SHA-256 必须与清单逐项完全相等，缺清单、重复或越界路径、非普通文件、缺项、多项或任一差异均失败；不比较 tgz 容器元数据。",
+      "anchor": {
+        "quote": "A8 必须存在评审席提供的非空包内清单，清单候选 SHA 与发布候选相同；发布 tgz 的普通文件路径集合、每项字节大小和 SHA-256 必须与清单逐项完全相等，缺清单、重复或越界路径、非普通文件、缺项、多项或任一差异均失败；不比较 tgz 容器元数据。",
+        "locator": "material-artifact-audit-v2.md#A8"
+      },
+      "severity": "S1",
+      "checker": {
+        "type": "count",
+        "predicate": {
+          "from": "release_artifact_facts",
+          "select": [],
+          "where": {
+            "op": "and",
+            "conditions": [
+              {
+                "col": "name",
+                "op": "=",
+                "value": "reviewer_file_identity"
+              },
+              {
+                "col": "ok",
+                "op": "=",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "op": ">=",
+        "value": 1
+      }
+    }
+  ]
+}
