@@ -1171,7 +1171,9 @@ describe('a2a plugin decentralized routing (peers)', () => {
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(TimerService)
-    apply(ctx, makeConfig({ peers: [nodeA.baseUrl], dshHome: tmpHome() }))
+    // #312: referral discovery requires a real signed caller, not an agent-less anonymous client.
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    apply(ctx, makeConfig({ announce: true, peers: [nodeA.baseUrl], dshHome: tmpHome() }))
     try {
       const teams = ctx.tools.get('a2a_teams')
       // The first call knows only the seed; B joins the store through A's card.
@@ -1199,7 +1201,8 @@ describe('a2a plugin decentralized routing (peers)', () => {
       await ctx.plugin(SystemPrompt)
       await ctx.plugin(ToolRuntime)
       await ctx.plugin(TimerService)
-      apply(ctx, makeConfig({ peers: [nodeA.baseUrl], dshHome: tmpHome(), peerAllowlist: allowlist }))
+      await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+      apply(ctx, makeConfig({ announce: true, peers: [nodeA.baseUrl], dshHome: tmpHome(), peerAllowlist: allowlist }))
       return ctx
     }
     try {
@@ -1243,7 +1246,8 @@ describe('a2a plugin decentralized routing (peers)', () => {
       await ctx.plugin(SystemPrompt)
       await ctx.plugin(ToolRuntime)
       await ctx.plugin(TimerService)
-      apply(ctx, makeConfig({ peers: [nodeA.baseUrl], dshHome: home }))
+      await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+      apply(ctx, makeConfig({ announce: true, peers: [nodeA.baseUrl], dshHome: home }))
       return ctx
     }
     try {

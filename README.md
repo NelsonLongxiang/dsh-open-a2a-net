@@ -300,7 +300,7 @@ import { A2aClient } from '@nelsonlongxiang/dsh-open-a2a-net/a2a-client'
 
 Implement your own signed card, `GET /.well-known/agent-card.json`, and
 `POST /a2a/direct`. The wire shapes these modules encode are the contract.
-Anonymous card fetches get the minimal discovery face. The full card needs a
+Anonymous card fetches get the minimal discovery face **without `peers`** (#312). A verified OriginClaim exposes the referral list even to a caller that has not established a collaboration link; session/roster/organization fields still require the full-card link gate. Signed `?discovery=1` requests explicitly ask for only core plus referrals, avoiding recursive full-card bootstrapping. Anonymous-only legacy crawlers must use explicit seeds (or upgrade to signed requests); missing `peers` remains a valid signed card and delegations are unchanged. The full card needs a
 verified OriginClaim envelope (`X-A2A-Caller` / `-Url` / `-Ts` / `-Sig`,
 signed with your own card key) **and** a link to the serving host: your card
 URL shares its origin, your handle is one of its joined session handles, its

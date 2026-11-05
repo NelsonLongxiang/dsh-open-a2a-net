@@ -65,7 +65,7 @@ describe('G1 card faces: minimal for anonymous, full for named', () => {
     expect(card.teamMemberships).toBeUndefined()
     expect(card.lanIp).toBeUndefined()
     // Discovery base intact.
-    expect(card.peers).toEqual([])
+    expect(card.peers).toBeUndefined()
     expect(card.team).toBe('g1-zone')
     expect(card.name).toBe('g1 node')
     expect(typeof card.signature).toBe('string')

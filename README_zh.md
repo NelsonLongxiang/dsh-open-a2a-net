@@ -221,7 +221,7 @@ import { withinRouteBodyCap } from '@nelsonlongxiang/dsh-open-a2a-net/transport-
 import { A2aClient } from '@nelsonlongxiang/dsh-open-a2a-net/a2a-client'
 ```
 
-外部节点需要自己实现三样东西：签名卡片、`GET /.well-known/agent-card.json` 和 `POST /a2a/direct`，这些模块编码的线上格式就是契约。匿名取卡只能拿到最小发现面。要拿完整卡片，必须带上通过验证的 OriginClaim 信封（即用你自己的卡片密钥签名的 `X-A2A-Caller` / `-Url` / `-Ts` / `-Sig`），**并且**与提供卡片的宿主有链接：你的卡片 URL 与它同源、你的句柄是它的已加入会话句柄之一、它的操作者把你的精确句柄加成了画布远端成员，或双方操作者互相种了对方（它的 `peers` 列有你的源，你卡片的 `peers` 也列有它的源）。验签通过但没有链接的调用方仍只拿到最小卡片。细节见 `docs/protocol/delivery-origin-auth.md` 及 `docs/protocol/` 下其余文档。
+外部节点需要自己实现三样东西：签名卡片、`GET /.well-known/agent-card.json` 和 `POST /a2a/direct`，这些模块编码的线上格式就是契约。匿名取卡只能拿到最小发现面，**不带 `peers`**（#312）。引荐列表只给通过 OriginClaim 验签的调用方，即便对方尚未建立协作链接；会话、roster、组织字段仍须原完整名片链接门。带签名的 `?discovery=1` 只请求核心与引荐，用于有限次自举，避免递归获取完整卡片。仅匿名取卡的旧爬取者须显式配置 seed 或升级签名请求；缺少 peers 仍是合法签名卡片，委派记录不变。要拿完整卡片，必须带上通过验证的 OriginClaim 信封（即用你自己的卡片密钥签名的 `X-A2A-Caller` / `-Url` / `-Ts` / `-Sig`），**并且**与提供卡片的宿主有链接：你的卡片 URL 与它同源、你的句柄是它的已加入会话句柄之一、它的操作者把你的精确句柄加成了画布远端成员，或双方操作者互相种了对方（它的 `peers` 列有你的源，你卡片的 `peers` 也列有它的源）。验签通过但没有链接的调用方仍只拿到最小卡片。细节见 `docs/protocol/delivery-origin-auth.md` 及 `docs/protocol/` 下其余文档。
 
 **按哪个产物实现。** npm 直装已含四个子路径：自 0.6.25 起（徽章 `latest`）的正式版带齐这批导出，`npm install @nelsonlongxiang/dsh-open-a2a-net` 开箱即用——`examples/external-node/` 有一个可对内嵌 mock peer 跑通全部四个子路径的外部节点参考实现。子路径导出随提交 `9cb3852` 落地；更早的版本（含公开 0.5.15）早于这批导出，也早于上述准入规则和 OriginClaim 信封，从它们引入会报 `ERR_PACKAGE_PATH_NOT_EXPORTED`——历史上的做法（钉提交、`pnpm build`、`npm pack`、依赖 tarball）仅留作 0.6.25 之前部署的历史注：
 
