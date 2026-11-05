@@ -178,6 +178,31 @@ ygl-trees verify run spec_4de5f3b9d48d --db <snapshot>      # 判定：overall �
 - 用户点头后 publish 时，V6（unpublished_in_registry）会翻成 FAIL——那是**发版后的正确行为**，
   baseline 1 的判据面是「候选期」；发版后请升 spec_version 重出材料（见下）。
 
+## 发布物留存证据补充验证器（2026-11-05，独立于发布前 RC）
+
+新增 material-artifact-audit.md / candidates-artifact-audit.json / reviews-artifact-audit.json，均在 verify/ 中；旧冻结材料不变。
+既有 scripts/verify-probe.mjs 增加 --release-audit DIR --out NEW.sqlite 模式，读取实际 tgz、候选 git 对象、验收 JSON 和两端下载包，写独立 release_artifact_facts 表。不覆盖已有快照或原 RC summary；采集退出码不是判定。
+
+正式 CLI 实测：
+- 材料 mat_dc0b5d804dd6；正文 SHA256 03a8ca80a786a2ca35c55dcb60fa45e7a2b3d5f4e209be232cc43c55ec93880e。
+- 规格 spec_71ef5a1de108 v1，7 单元，as-of=2026-11-05T04:25:18.635Z（快照采集时间）。trace 如实记录 candidates/reviews 同作者，这是构造自检，不冒称独立盲审；PR 仍请非自我节点复核。
+- 实际 0.6.40 留存证据 run_722d0e677b6d2f3e：overall=PASS，7 PASS / 0 FAIL，仅针对本补充规格。最终采集器重采后 run_22edf609ace647f8 仍为 7 PASS / 0 FAIL。
+- 七项成功事实逐个改为失败后的 7 次 CLI run 全部 FAIL（各 6 PASS / 1 FAIL）；空表 run_609b897555970fe2 为 0 PASS / 7 FAIL。实际缺输入经采集器产生的 run_b749732c43c12b01 同样 0 PASS / 7 FAIL；验收早于打包 run_52f112f508e2aa76 判 2 FAIL；实际公网回读字节被改 run_a00014b20a089341 判 1 FAIL。对账明细 tmp/validator-artifact-audit/{counterexamples,input-counterexamples}.json。
+- 正例自动归档路径 tmp/validator-artifact-audit/workspace/verify/archives/yglverify-prepared-prepared-spec-v1-20261105T042813Z-r722d0e67.yglverify.zip；verify archive verify 返回 ok=true、5 items、无问题/告警。archive SHA256=1c37ebf0618be6cee57d94a1dca3f85375f4bea3663c4069a7bd9bd072a547fa。
+
+留存目录约定：provenance.json（candidate/at/filename/size/files/shasum/sha256）、该 filename 的 tgz、acceptance.json（candidate/at/shasum/results，每行 kind/base/path/status 及端点字段）、npmjs-readback.json 与 npmjs-readback.tgz，以及 mirror-readback/<filename>。kind 为 dsh3081 或 cleanServe；样本是本机留存的 tmp/release-0.6.40-1af9266/，输入从参数指定，脚本不写死机器路径。
+
+调用（YGL_HOME 选择独立工作区，不触动旧规格）：
+
+    node scripts/verify-probe.mjs --release-audit <留存目录> --out <新快照.sqlite>
+    ygl-trees verify lint-candidates verify/candidates-artifact-audit.json --text verify/material-artifact-audit.md --reviews verify/reviews-artifact-audit.json --db <新快照.sqlite> --json
+    ygl-trees verify submit --title "发布物留存证据 v1" --text verify/material-artifact-audit.md --meta-repo <引擎源码根>
+    ygl-trees verify prepare <材料ID> --candidates verify/candidates-artifact-audit.json --reviews verify/reviews-artifact-audit.json --db <新快照.sqlite> --as-of <采集ISO时间> --meta-repo <引擎源码根>
+    ygl-trees verify run <规格ID> --db <新快照.sqlite> --json
+    ygl-trees verify archive verify <run返回的zip> --json
+
+**边界**：这是发布后留存证据核对，不是发布前候选 PASS。不能从 tgz 反推出历史 HEAD、干净构建或评审身份；同版本但不同提交的构建还需独立血统核对。不替代原 15 条 RC、不新增人工门或发布阻断条件。
+
 ## 维护
 
 - **调阈值/加判据**：改 verify/material.md（判据句必须逐字可引用）+ candidates/reviews，

@@ -30,6 +30,27 @@ const flag = (name, dflt) => {
 const BASE = flag("base", "http://127.0.0.1:3081");
 const OUT = resolve(REPO, flag("out", "verify/snapshot.sqlite"));
 
+// Additive post-publication audit mode. Never overwrite the historical RC snapshot or summary.
+if (argv.includes('--release-audit')) {
+  const directory = flag('release-audit', '')
+  const requestedOut = flag('out', '')
+  if (!directory || directory.startsWith('--') || !requestedOut || requestedOut.startsWith('--')) throw new Error('--release-audit DIR requires an explicit --out snapshot path')
+  const { collectReleaseArtifactFacts } = await import('./verify-release-artifact.mjs')
+  const rows = collectReleaseArtifactFacts(resolve(REPO, directory), REPO)
+  const { DatabaseSync } = await import('node:sqlite')
+  mkdirSync(dirname(OUT), { recursive: true })
+  // New snapshot only: do not silently overwrite evidence or another run's database.
+  if (existsSync(OUT)) throw new Error('release audit snapshot already exists; choose a new --out')
+  const db = new DatabaseSync(OUT)
+  try {
+    db.exec('CREATE TABLE release_artifact_facts (name TEXT PRIMARY KEY, ok INTEGER NOT NULL, detail TEXT NOT NULL)')
+    const insert = db.prepare('INSERT INTO release_artifact_facts VALUES (?,?,?)')
+    for (const row of rows) insert.run(row.name, row.ok, row.detail)
+  } finally { db.close() }
+  console.log(JSON.stringify({ mode: 'retained-release-evidence-audit', snapshot: OUT, rows }, null, 2))
+  process.exit(0) // Collection success is not a validator PASS; only verify run judges this snapshot.
+}
+
 const pkg = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8"));
 
 /* ── 小工具 ─────────────────────────────────────────────── */
