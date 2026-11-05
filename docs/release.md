@@ -3,6 +3,16 @@
 > 2026-10-21 立，源自 K3 测试章前瞻（cordis 事故线收尾）：两项与「锁重生成 × 环境策略」
 > 交互的坑，已实测咬人，故入档为纪律。
 
+## 0. 0.6.40 升级提示
+
+- **安全：反代转发的请求不再享受回环信任**（#308）。0.6.39 及更早版本里，同机反向代理（Caddy、nginx、隧道代理）以 `127.0.0.1` 连接节点，所有公网请求都被当成本机：配了 key 的主机会把 apiKey 写进工作台 HTML，没配 key 的主机控制面对公网完全开放。现在请求只要带 `X-Forwarded-For`、`Forwarded` 或 `X-Real-IP`，就不给回环信任；经代理带 key 访问照常可用。**对外开放的节点请尽快升级。** nginx 必须设置 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`，Caddy 默认会带。经 pocket 隧道打开工作台不受影响（pocket 不写转发头）。
+- **本机 IPv4 的选择改为局域网优先**（#311 / #313）。自动推导的 `lanIp` 按 RFC1918 → 其他非内部地址 → CGNAT（100.64/10，例如 Tailscale）排序，以前是取第一块网卡的地址；显式配置的 `originClaimUrl` 仍最优先。对端互联徽章把 `originClaimAudiences` 也算作本机地址。
+  - **双网卡主机升级须知**：装了 Tailscale 的主机（如 .156），升级后名片地址和签名信封里的 `callerUrl` 会从 Tailscale 地址变回局域网地址。经 Tailscale 拨号的调用方（CLI、对端）会被计入 `boundMiss`，#64 关窗后会被拒；把 Tailscale 地址写进 `peers` 的对端，徽章会变回 stranger。解决办法：在该主机配置 `originClaimAudiences: ['http://<Tailscale 地址>:<端口>']`，升级后用 `a2a-net status` 的 `claims` 行（`boundMissInbound` 不再增长）以及 `peers[].link` 确认。
+- **同步已答的转发，回执标为重复，内容不丢**（#298 / #305）。目标端只对“读到该任务那一轮”的最终答复带上 wire 字段 `reply_final: true`；home 把这份答复完整写回 CLI 后，同一成员发来、未被拒的回执原文照收，但标记为 `dup: "sync-answered"`，`a2a-net inbox` 折成一行显示，`--json` 给出整行。0.6.39 及更早的目标端不会发 `reply_final`，它们的回执一律不标记。
+- **早到回执最多等 60 秒**（#298 / #300），等不到就按正常规则结算。这一项实际已随 npm 上的 0.6.39 包发出，见下节“发布偏差”。
+- 测试与文档：CLI 子进程不再继承操作者的 `A2A_*` 环境（#303 / #304）；serve 测试的 Windows 路径断言（#310）；独立节点部署手册 `docs/guides/standalone-node.md`（#307，含公网 HTTPS 前置）。
+- 无配置默认值变化；不需要回滚预案。
+
 ## 0. 0.6.39 升级提示（#282 做减法 S1–S3）
 
 - **canvas 带属主指纹的 id**（S2）：`a2a-net teams` 以及状态面的 `canvas.teams[].id`、`peerOrg[].org[].id`，现在把 canvas 行显示为 `<zone>/canvas/<name>@<fp8>`（属主名片公钥的指纹）。`teams --json` 的 `team` 字段也是这个 id，读这个字段的脚本请按需取 `@` 之前的部分。不带后缀的旧写法路由行为不变。新建 canvas 不能再以 `@<8 位十六进制>` 结尾；已存在的同名 canvas 照常加载，用完整 id 访问。
