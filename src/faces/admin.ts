@@ -664,6 +664,12 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             body,
             signal: AbortSignal.timeout(15_000),
           })
+          // #320: a JSON body cannot turn a failed/redirected HTTP operation into success.
+          if (!reply.ok || reply.status < 200 || reply.status >= 300) {
+            void reply.body?.cancel().catch(() => {})
+            send(JSON.stringify({ ok: false, status: reply.status, error: `peer ${peerUrl} answered HTTP ${String(reply.status)} — fleet canvas operation failed` }))
+            return
+          }
           const raw = await reply.text()
           try {
             const out = JSON.parse(raw) as Record<string, unknown>
