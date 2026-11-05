@@ -1,6 +1,6 @@
 # #339 临时目录所有权与零残留门禁
 
-base5c93230，独立于待评审#338。87个原创建者文件改为tests/temp-dirs.ts tracked allocator；afterAll逆序删精确owned根，rmSync recursive/force/maxRetries10；失败也清理。mesh在启动前注册fiber关闭，防boot失败漏资源。没有按前缀扫删系统旧目录。
+最初base5c93230，原87个创建者文件改为tests/temp-dirs.ts tracked allocator；现已合入含#338的master0aa92e6，并迁移新增gh335单测创建者（共88个）；afterAll逆序删精确owned根，rmSync recursive/force/maxRetries10；失败也清理。mesh在启动前注册fiber关闭，防boot失败漏资源。没有按前缀扫删系统旧目录。
 
 pnpm verify包原verify:core，独立空根设置TMPDIR/TEMP/TMP，禁Node编译缓存，子进程收尾后先检查剩0再删除owned根。有任何残留即exit1，不豁免名称；原断言/默认并发/timeout/skip不变。外层验证器独立TMPDIR兜底保留，硬杀/宕机不保证finally。
 
@@ -8,7 +8,17 @@ pnpm verify包原verify:core，独立空根设置TMPDIR/TEMP/TMP，禁Node编译
 
 Windows最终两轮默认完整verify：bash-d3bf11fc7ef94a8d、bash-3b643773b4404684，均root1457passed/6原skip、layout4、nexus326真exit0，内部空TMP根entries0，外部新空TMP根outerRemaining=[]。数量与base相同。断言失败探针exit1但entries0；故意原生mkdtemp漏目录探针exit1/entries1，报告后仅清其owned根。临时探针移出门禁，未加skip。
 
-## macOS 独立复核（监督席，exact 407f458）
+## review-340-r1 集成修订（含 #338）
+
+原评审在master0aa92e6试合发现anchors冲突、新增gh335单测16个canvas335-*目录未清理。已合入master，tests/unit/gh335-canvas-suspension.spec.ts只迁移mkdtempSync导入至owned helper，保留全部断言；扫描tests下无helper外node:fs临时分配器。架构清单以master图锚为基线重新生成，保留PeerStore.close与#338来源/暂停修复，无miss；不把旧407f458/macOS PASS作为集成树结论。
+
+集成树Windows工程记录：
+- 两轮工作区D盘新外层TMP根：内层entries0，但原默认5秒预算下出现CanvasStore team-cap及其他不同测试超时，整体rc1，未改断言/worker/timeout/skip；相关canvas-store/canvas-routing两文件隔离运行原预算全过且entries0。不能据此宣称这些外层运行全绿。
+- 系统默认临时目录完整pnpm verify（job bash-32959ae205b44697）：真实rc0，root1485passed/6原skip（总1491，与合入的master测试集合一致）、layout4、nexus327，门禁新建内层remaining=[]/entries0；输出保留tmp/gh339/integrated-system-temp.log。
+
+新集成SHA仍需原评审macOS完整重跑。下面407f458结果仅为旧树历史证据；合并后监督主机的merged master验证器零新增仍是关单条件。
+
+## macOS 独立复核（监督席，历史 exact 407f458）
 
 监督席在Darwin27、Node由fnm管理、pnpm11.28.5的新检出中做行为复核，两轮默认pnpm verify均rc0，门禁内层entries均0。root1460passed/3skipped（总1463与Windows1457/6同数，平台跳过差异），layout4、nexus326。故意漏目录反例rc1/entries1且点名残留；断言失败反例rc1/entries0。此为监督席提供的macOS行为复核，不扩大为逐行代码审查。
 
