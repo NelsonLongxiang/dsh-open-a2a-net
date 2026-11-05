@@ -111,6 +111,11 @@ export interface ZoneRecord {
 export interface A2aRouteOk {
   /** Actual member face returned by a forwarded peer delivery. */
   readonly deliveredTo?: string
+  /**
+   * #298: the peer declares `result.text` is the member's own final reply — never a host-authored placeholder
+   * (flush timeout, dead session), a bridge round or a delivered marker. Absent from older peers.
+   */
+  readonly replyFinal?: true
   readonly ok: true
   readonly team: string
   /** Reply text the remote team produced. */

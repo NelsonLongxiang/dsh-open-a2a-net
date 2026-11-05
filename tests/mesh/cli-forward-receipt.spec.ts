@@ -349,6 +349,24 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
       expect((await cli(home, ['inbox'])).stdout).not.toContain('duplicate receipt')
     } finally { await a.dispose(); await b.dispose() }
   }, 30000)
+  it('#298 review F3: a host placeholder (flush timeout) is not a final reply; the member\'s later real receipt is never marked a duplicate', async () => {
+    const { a, b, home } = await setup(true, false, false, false, 400)
+    try {
+      const agent = b.agents.agent as any
+      agent.steer = (payload: any) => {
+        b.steered.push(payload)
+        agent.session.events.push({ type: 'user/message', data: { content: typeof payload === 'string' ? [{ type: 'text', text: payload }] : payload.content } })
+        setTimeout(() => { agent.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'real answer after the placeholder' }] } } }); b.ctx.emit('agent/status', { agent, status: 'idle' }) }, 1500)
+      }
+      const routed = await cli(home, ['route', targetHandle, 'slow question', '--sync', '--task', 'ph-1'])
+      expect(routed.code, routed.stderr).toBe(0)
+      expect(routed.stdout).toContain('no final reply')
+      await signedPost(a, b.home, 'beta', b.baseUrl, { team: handle, caller_session: targetHandle, task_id: 'ph-1-r', message: '[A2A receipt] task ph-1 completed: THE REAL ANSWER' })
+      const mail = ((await post(a, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle })).mail as any[]).filter(m => String(m.text).includes('THE REAL ANSWER'))
+      expect(mail).toHaveLength(1)
+      expect(mail[0].dup).toBeUndefined()
+    } finally { await a.dispose(); await b.dispose() }
+  }, 30000)
   for (const canvas of [false, true]) it((canvas ? 'canvas' : 'session') + ': automatic target-member receipt settles A and is readable by shipped CLI inbox', async () => {
     const { a, b, home } = await setup()
     const task = canvas ? 'direct-receipt-canvas' : 'direct-receipt-session'

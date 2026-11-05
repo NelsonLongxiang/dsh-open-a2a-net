@@ -795,11 +795,11 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             if (!result.ok && result.code !== -32005) idempotencyStore.recordOutcome(taskId, { status: 'failed', error: failure })
             else if (result.ok && result.task_status === 'TASK_STATE_COMPLETED') idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: result.reply })
             const payload = JSON.stringify(result.ok ? { routed: true, ...(result.task_status === 'TASK_STATE_DELIVERED' ? { delivered: true } : { result: { text: result.reply } }), team, task_id: taskId, context_id: contextId, task_status: result.task_status, consumed: result.consumed, bridge: result.bridge, receipt: result.receipt, forwarded: true } : { error: failure, code: result.code ?? -32000, receipt: result.receipt, task_id: taskId, team, task_status: result.code === -32005 ? 'TASK_STATE_DELIVERED' : 'TASK_STATE_FAILED', ...(result.next !== undefined ? { next: result.next } : {}) })
-            // #298: only a member's own final reply the CLI was actually handed marks that member's later receipt a
-            // duplicate — never a delivered, mailbox or bridge placeholder (review of #305 F1), and never when the CLI
-            // gave up and closed the socket first ('finish' does not fire then).
+            // #298: only a reply the peer itself declares final (`reply_final`; never a host placeholder, review of
+            // #305 F3), handed to the CLI in full, marks that member's later receipt a duplicate — never a delivered,
+            // mailbox or bridge shape (F1), and never when the CLI gave up and closed the socket ('finish' does not fire).
             const answeredBy = result.ok ? result.deliveredTo : undefined
-            if (!noWait && result.ok && result.task_status === 'TASK_STATE_COMPLETED' && result.receipt === undefined && result.bridge === undefined && answeredBy !== undefined
+            if (!noWait && result.ok && result.replyFinal === true && result.task_status === 'TASK_STATE_COMPLETED' && result.receipt === undefined && result.bridge === undefined && answeredBy !== undefined
               && claim.ok && claim.cli === true && claim.bound && claim.caller === caller && cliDeposits.get(caller) !== undefined) res.once('finish', () => syncAnswered.note(taskId, caller, answeredBy))
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload)
           }
@@ -1037,6 +1037,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 session,
                 result: { text: outcome.reply },
                 ...(syncTarget !== undefined ? { delivered_to: syncTarget } : {}),
+                // #298: a positive, cross-host statement that this text is the member's own final reply.
+                ...(outcome.placeholder !== true && outcome.bridge === undefined && (outcome.status ?? 'TASK_STATE_COMPLETED') === 'TASK_STATE_COMPLETED' ? { reply_final: true } : {}),
                 task_id: taskId,
                 context_id: contextId,
                 task_status: outcome.status ?? 'TASK_STATE_COMPLETED',
