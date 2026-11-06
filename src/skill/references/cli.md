@@ -164,6 +164,17 @@ Files do not go through session messages: use the file channel below, never JPFI
     cannot be recovered; tell the user.
   - On an older host, or after the store starts over (a new `epoch`), the
     cursor falls back to the newest `at` seen.
+- `inbox --after <cursor>` is a replayable read for a consumer that keeps its
+  own position, such as a superagent a2a Source. Start with `start`, then pass
+  back the `next` you received. It prints one JSON object
+  `{handle, epoch, after, next, mail, lost, epochChanged}` with `mail` oldest
+  first, and never reads or moves the local `inbox.cursor`:
+  - `lost` counts mail the cap pushed out before this window. It is `null`,
+    meaning unknown, when the host's store restarted (`epochChanged: true`);
+    the read then returns every row it still has.
+  - A host without `seq` is refused (exit 1); there is no time-based
+    fallback. `--after` does not combine with `--new`, `--peek`, `--wait` or
+    `--hook` (exit 2).
 - `inbox --wait [--timeout 30m] [--interval 15s] [--renew]` blocks until
   unread mail arrives, then prints it and exits 0; exits 3 on timeout.
   `--renew` re-publishes the deposit when it is gone or under 10 minutes from

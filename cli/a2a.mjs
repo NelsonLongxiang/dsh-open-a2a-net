@@ -65,10 +65,13 @@ inbox:    bare 'inbox' lists the whole mailbox (newest first, the host keeps 64;
           --wait        block until unread mail arrives, print it and exit 0; exit 3 on --timeout
                         (default 30m; --interval polls, default 15s; --renew re-publishes an expiring deposit)
           --hook        for a Claude Code hook: unread mail as hookSpecificOutput.additionalContext JSON,
-                        nothing at all when there is none or the host is unreachable (always exit 0)`
+                        nothing at all when there is none or the host is unreachable (always exit 0)
+          --after C     replayable read with a cursor the CALLER keeps ('start', then the 'next' it got back):
+                        one JSON object {epoch, after, next, mail (oldest first), lost, epochChanged};
+                        never reads or moves ~/.a2a/inbox.cursor; lost is null when the host's store restarted`
 
 /** Flags that take a value (both '--home URL' and '--home=URL'); the rest are switches. */
-const VALUE_FLAGS = new Set(['--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task'])
+const VALUE_FLAGS = new Set(['--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after'])
 const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
@@ -437,6 +440,30 @@ async function fetchMail(handle) {
   return out
 }
 
+/**
+ * superagent p1-inbox-after: a read whose cursor the caller owns. The cursor is
+ * `<epoch>:<seq>` (or 'start'); it only ever comes back as `next`. Same epoch:
+ * rows past seq, and how many the cap pushed out before them. A new epoch (the
+ * host's store restarted): every row, `lost` unknown (null), never a guessed 0.
+ */
+function afterRead(box, after) {
+  const start = after === 'start'
+  const m = start ? null : /^([^:\s]{1,128}):(\d{1,15})$/.exec(after)
+  if (!start && m === null) usage(`--after takes 'start' or the '<epoch>:<seq>' cursor a previous read returned (got "${after}")`)
+  const rows = [...box.mail].sort((a, b) => a.seq - b.seq)
+  const top = (fallback) => rows.length ? Math.max(fallback, rows.at(-1).seq) : fallback
+  if (start) {
+    const lost = Math.max(0, box.oldest_seq - 1)
+    return { mail: rows, lost, epochChanged: false, next: `${box.epoch}:${String(top(lost))}` }
+  }
+  if (m[1] !== box.epoch) return { mail: rows, lost: null, epochChanged: true, next: `${box.epoch}:${String(top(0))}` }
+  const seq = Number(m[2])
+  const mail = rows.filter(r => r.seq > seq)
+  const lost = Math.max(0, box.oldest_seq - seq - 1)
+  const floor = lost > 0 ? box.oldest_seq - 1 : seq
+  return { mail, lost, epochChanged: false, next: `${box.epoch}:${String(mail.length ? mail.at(-1).seq : floor)}` }
+}
+
 /** The loss line: mail the host's 64-row cap pushed out before it was read. */
 const lostLine = (lost) => `${String(lost)} message${lost === 1 ? ' was' : 's were'} pushed out of the mailbox before ${lost === 1 ? 'it was' : 'they were'} read (the host keeps the newest 64)`
 
@@ -519,6 +546,15 @@ async function publishDeposit() {
 
 async function cmdInbox() {
   const handle = identity().handle
+  const after = flag('--after')
+  if (after !== undefined) {
+    if (['--new', '--peek', '--wait', '--hook'].some(has)) usage('--after is its own cursor: it does not combine with --new, --peek, --wait or --hook')
+    const box = await fetchMail(handle)
+    if (!seqCapable(box)) die('[inbox] --after needs a host that numbers its mailbox (gh#113); upgrade the home host — no time-based fallback')
+    const read = afterRead(box, after)
+    console.log(JSON.stringify({ handle, epoch: box.epoch, after, ...read }, null, 2))
+    return
+  }
   if (has('--hook')) {
     const input = await hookInput()
     const cursor = readCursor(handle)
