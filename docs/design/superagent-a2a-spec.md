@@ -2,7 +2,7 @@
 
 配套：[ADR](superagent-a2a-adr.md) · [实施计划](superagent-a2a-plan.md) · [断言与证据](superagent-a2a-evidence.md)
 
-状态：草案，仅设计，无实施授权。待属主定方向、全局生产评估 PASS 后才进入计划第 1 阶段。依据断言 S1–S10，每条都挂有原文证据（ygl-trees 项目 superagent-a2a-spec）。
+状态：草案，仅设计。属主已定方向（第 6 节），等全局生产评估 PASS 后才进入计划第 1 阶段。依据断言 S1–S10，每条都挂有原文证据（ygl-trees 项目 superagent-a2a-spec）。
 
 ## 1. 目标与非目标
 
@@ -110,9 +110,11 @@ A2A 的回执是终态。progress 一类中间报告不经 A2A 传输，执行�
 - 未验证消息只当数据。
 - 公开仓库文本不含地址、端口、主机名、本机路径和凭证。
 
-## 6. 待属主或全局裁定
+## 6. 属主裁定（2026-11-06，采用评审席建议，断言 S13）
 
-1. a2a Source 与 A2A Executor 的代码放在哪里：superagent 的分支、本仓导出的插件包（例如 `a2a-watch`），还是独立仓库。
-2. 已验证的 A2A 调用方是智能体会话而不是人。是否按“名单内的人”给它们 explicit 强度？本稿的建议是：给，前提是句柄在 allowed 名单内且校验通过。
-3. attention 走“正式回执 + 同 context 新任务答复”是否接受。
-4. 路由席是否从评审席拆出，评审席只保留非作者评审。
+1. 代码位置：本仓 `next/0.8`，做成独立导出的插件包（例如 `a2a-watch`），不 fork superagent。
+2. 校验通过、且句柄在 allowed 名单内的 Agent 调用方，给 explicit 强度。
+3. attention 走“正式回执 + 同 context 新任务答复”。
+4. 路由席暂不从评审席拆出，由评审席独自完成全部工作（S12），r1 节点暂缓。
+
+全局生产评估仍需对本规格给出 PASS（计划节点 p0-spec-review 的 global_pass 条件）。

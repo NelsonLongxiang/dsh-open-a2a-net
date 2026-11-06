@@ -1,10 +1,10 @@
 # superagent-a2a-spec
 
-_generated 2026-11-06 17:49:35 UTC by ygl-trees_
+_generated 2026-11-06 17:55:52 UTC by ygl-trees_
 
 ## 摘要
 
-共 11 条断言（11 条已证实、0 条存争议、0 条待验证），基于 23 条证据、17 个来源。
+共 13 条断言（13 条已证实、0 条存争议、0 条待验证），基于 25 条证据、17 个来源。
 
 ## 主要结论
 
@@ -29,6 +29,10 @@ _generated 2026-11-06 17:49:35 UTC by ygl-trees_
 10. ✓ S10 可靠性：所有外发先存后发、有界退避，与 #357 回执退避一致；dropped 只在目标永久不可达时出现，并留记录。  [3][10]  
    _置信度 B，状态 supported_
 11. ✓ S11 版本线：开发前以 v0.7.0 为基线，不新打 tag；superagent 接入开发由评审席独自在 next/0.8 分支进行。按协同规范 v1.18，评审席自己写的高档改动，仍需另一节点（非自我）在 exact head 上评审 PASS 才能合入。  [23]  
+   _置信度 A，状态 supported_
+12. ✓ S12 执行方式：所有工作都不派发给其他席位，由评审席独自开发完成。非自我评审这一要求仍然有效：评审席提议由全局生产评估在 exact head 上评审，这属于报告，不是派发；最终由全局裁定。  [24]  
+   _置信度 A，状态 supported_
+13. ✓ S13 属主裁定（2026-11-06，采用评审席建议）：① 代码放在本仓 next/0.8，做成独立导出的插件包，不 fork superagent；② 校验通过且在 allowed 名单内的 Agent 调用方给 explicit 强度；③ attention 走“正式回执 + 同 context 新任务答复”；④ 路由席暂不从评审席拆出。  [25]  
    _置信度 A，状态 supported_
 
 ## 实施计划（科技树 superagent-a2a）
@@ -155,6 +159,8 @@ _generated 2026-11-06 17:49:35 UTC by ygl-trees_
 [21] superagent 003 Execution · docs/003-execution.md#Concurrency — The configured concurrency limit applies to these slots, with one extra slot for a person's message or a status request.
 [22] superagent 001 Domain model · docs/001-domain.md#Concepts (Assignment) — A Ticket has several over time. Goes pending → running → ended independently of the Ticket.
 [23] a2a-net 新版本分支 next/0.8 · git ls-remote origin refs/heads/next/0.8 — refs/heads/next/0.8 = a510152435fd410676cf979507037470ed473e4d（v0.7.0 tag 1d5513557c67 → c12c299 是其祖先）
+[24] a2a-net 新版本分支 next/0.8 · 属主在评审席会话中的原话，2026-11-06 — 所有工作你都不能派发，由你独自开发完成
+[25] a2a-net 新版本分支 next/0.8 · 属主在评审席会话中的答复，2026-11-06，针对规格第 6 节 4 个待裁定问题 — Use your recommendations
 
 ## 来源
 
