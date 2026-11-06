@@ -59,6 +59,7 @@ async function mount(overrides: Partial<Config> = {}): Promise<Mounted> {
   const session = {
     id: SessionId('session-0123456789abcdef'),
     session: { events: [] as unknown[] },
+    followup(message: unknown): void { this.steer(message) },
     steer(payload: { content: unknown[] }): void {
       // #306: record task consumption before answering.
       ;(session as { session: { events: unknown[] } }).session.events.push({ type: 'user/message', data: { content: payload.content } })

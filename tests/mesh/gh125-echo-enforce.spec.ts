@@ -36,6 +36,7 @@ describe('#125 content echo is judged as enforce under observe', () => {
         await postJson(n.baseUrl, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: own })
         await postJson(n.baseUrl, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: other })
       }
+      B.agents.agent!.followup=()=>{} // The echo judge, not an automatic final, must settle this task.
       const t = await route(A, { team: 'alpha/canvas/ops', message: 'canvas work', async: true })
       expect(t.ok, JSON.stringify(t)).toBe(true)
       const id = String(t.task_id)

@@ -164,7 +164,7 @@ describe('#114 S2 inbound authorization record (real host)', () => {
         const env = signOriginClaim({ url: `${a.baseUrl}/a2a/direct`, method: 'POST' }, { caller: 'dsh', callerUrl: impUrl, privateKey: far, unbound: false, now: Date.now() })
         const sent = await post(`${a.baseUrl}/a2a/direct`, { team: TARGET, message: 'impostor', caller_session: 'dsh', wait: false, task_id: 'direct-claim0003' }, env)
         expect(sent.body.delivered, JSON.stringify(sent.body)).toBe(true)
-        expect(JSON.parse(steerText(a.steered[a.steered.length - 1])).content[0].text).toContain('未验证（claim-mismatch）')
+        expect(a.steered.map(payload=>JSON.parse(steerText(payload)).content[0].text).find((text:string)=>text.startsWith('[A2A direct] (task direct-claim0003) '))).toContain('未验证（claim-mismatch）')
         expect((await rows()).find(t => t.taskId === 'direct-claim0003')?.auth).toMatchObject({ caller: 'dsh', proof: 'claim-mismatch', claim: { caller: 'dsh', origin: new URL(impUrl).origin }, admission_rule: 'host-face' })
       } finally {
         imp.close()

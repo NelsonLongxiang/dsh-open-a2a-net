@@ -47,6 +47,7 @@ function makeAgent(id: string): Agent & { steer: ReturnType<typeof vi.fn>; sessi
   return {
     id: SessionId(id),
     session: { events: [] },
+    followup(message: unknown): void { this.steer(message) },
     steer: vi.fn(),
   } as unknown as Agent & { steer: ReturnType<typeof vi.fn>; session: { events: unknown[] } }
 }

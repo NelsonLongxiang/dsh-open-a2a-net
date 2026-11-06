@@ -68,7 +68,7 @@ class FakeTeamsRegistry extends Service {
 }
 
 function makeAgent(id: string): Agent {
-  return { id: SessionId(id), session: { events: [] }, steer: vi.fn() } as unknown as Agent
+  return { id: SessionId(id), session: { events: [] }, steer: vi.fn(), followup(message: unknown) { this.steer(message) } } as unknown as Agent
 }
 
 function tmpHome(): string {
@@ -76,14 +76,14 @@ function tmpHome(): string {
 }
 
 /** One real loopback peer: a verified signed card plus an echoing direct route. */
-async function startPeer(options: { session?: string; asyncCap?: boolean; canvasOrg?: ReadonlyArray<{ name: string; team: string; members: string[] }>; direct?: (body: Record<string, unknown>) => { readonly status: number; readonly payload: Record<string, unknown> }; query?: (body: Record<string, unknown>) => { readonly status: number; readonly payload: Record<string, unknown> } } = {}): Promise<{ url: string; seen: Array<Record<string, unknown>>; close: () => Promise<void> }> {
+async function startPeer(options: { session?: string; asyncCap?: boolean; cancelCap?: boolean; canvasOrg?: ReadonlyArray<{ name: string; team: string; members: string[] }>; direct?: (body: Record<string, unknown>) => { readonly status: number; readonly payload: Record<string, unknown> }; query?: (body: Record<string, unknown>) => { readonly status: number; readonly payload: Record<string, unknown> } } = {}): Promise<{ url: string; seen: Array<Record<string, unknown>>; close: () => Promise<void> }> {
   const { privateKey } = generateKeyPairSync('ed25519')
   const session = options.session ?? 'peer-node'
   const card = signCard({
     name: 'peer node',
     session,
     team: 'peer-team',
-    capabilities: { route: true, ...(options.asyncCap === true ? { async: true } : {}) },
+    capabilities: { route: true, ...(options.cancelCap?{queuedTaskCancellation:true}:{}), ...(options.asyncCap === true ? { async: true } : {}) },
     expiresAt: Date.now() + 3_600_000,
   }, privateKey)
   // canvasOrg rides beside the signed core (it is not part of it).
@@ -501,7 +501,7 @@ describe('outbound face: idempotency verdicts and cancel', () => {
   })
 
   it('cancel of a remote submission drives the wire stop-notice to the team and clears the row', async () => {
-    const peer = await startPeer({ asyncCap: true })
+    const peer = await startPeer({ asyncCap: true,cancelCap:true })
     const m = await mount({ peers: [peer.url] })
     mounted.push(async () => { await m.dispose(); await peer.close() })
     const face = m.face() as { submit: (request: Record<string, unknown>) => Promise<Record<string, unknown>>; cancel: (ref: { taskId?: string }, reason?: string) => Promise<boolean> }
@@ -516,6 +516,7 @@ describe('outbound face: idempotency verdicts and cancel', () => {
     // claimed at the peer's idempotency ledger with a different payload, so
     // reusing it would 409-conflict before any steer happens.
     expect(notice?.task_id).toBeUndefined()
+    expect(notice?.cancel_task_id).toBe('wb-z')
     const state = await (await fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { tasks: Array<{ taskId: string }> }
     expect(state.tasks.map(task => task.taskId)).not.toContain('wb-z')
   })
@@ -541,6 +542,8 @@ describe('outbound face: idempotency verdicts and cancel', () => {
     const result = await route!.execute({ team: 'dsh/aaa', message: 'long local job', async: true }, noAgent()) as { ok: boolean; task_id?: string }
     expect(result.ok).toBe(true)
     expect(result.task_id).toBeDefined()
+    const queued=JSON.parse(readFileSync(join(m.home,'a2a/tasks.json'),'utf8')).taskDeliveries.find((row:any)=>row.taskId===result.task_id)
+    m.ctx.emit('agent/inbox/claimed',{agent:node,message:{id:queued.messageId} as never,turn:1})
     const face = m.face() as { cancel: (ref: { taskId?: string }, reason?: string) => Promise<boolean> }
     const cleared = await face.cancel({ taskId: result.task_id }, 'review seat fix check')
     expect(cleared).toBe(true)

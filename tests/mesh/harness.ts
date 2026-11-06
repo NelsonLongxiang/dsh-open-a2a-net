@@ -245,6 +245,9 @@ export async function bootNode(options: MeshNodeOptions): Promise<MeshNode> {
       originalSteer(payload)
     }
   }
+  // Most historical mesh cases script Agent.steer as their fake consumption seam.
+  // followup defers that script to a next microtask; real FIFO/maintenance is tested by the host-loop fixture.
+  agent.followup = payload => {queueMicrotask(()=>{ctx.emit('agent/inbox/claimed',{agent,message:payload,turn:1});agent.steer(payload)})}
   const { agentId: _agentId, silent: _silent, ...configOptions } = options
   void _agentId
   apply(ctx, meshConfig({ ...configOptions, home }))

@@ -156,6 +156,7 @@ export function routingOf(row: Pick<TaskRecord, 'peerKey' | 'peerHost' | 'delive
 
 /** #139: what an outbound row is born with besides its sender. */
 export interface OutboundBirth {
+  readonly consumed?: boolean
   /** Exact receiver selected at local delivery, never inferred from a later canvas roster. */
   readonly receiverSessionId?: string
   readonly forwarded?: true
@@ -169,13 +170,14 @@ export interface OutboundBirth {
 }
 
 /** The facts of one outbound birth that fit the row (see {@link withRouting} for the same shape on restore). */
-export function birthFacts(peer: string, birth: OutboundBirth | undefined, team = '', sender?: Sender, now = Date.now(), warn: (message: string) => void = console.warn): Pick<TaskRecord, 'auth' | 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'receiverMembers' | 'receiverSessionId'> {
+export function birthFacts(peer: string, birth: OutboundBirth | undefined, team = '', sender?: Sender, now = Date.now(), warn: (message: string) => void = console.warn): Pick<TaskRecord, 'auth' | 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'receiverMembers' | 'receiverSessionId' | 'consumed'> {
   if (birth === undefined) return {}
   const fact = (v: string | undefined): v is string => v !== undefined && v !== '' && v.length <= ROUTING_FACT_CAP
   const remote = peer !== 'local' && !peer.startsWith('local:')
   const receiverMembers = remote && birth.forwarded === true && fact(birth.peerKey) ? parseReceiverMembers(birth.receiverMembers, warn) : undefined
   return {
     ...withAuth(birth.auth, { direction: 'outbound', team, peer, sender, forwarded: birth.forwarded }, now),
+    ...(typeof birth.consumed==='boolean'?{consumed:birth.consumed}:{}),
     ...(peer === 'local' && fact(birth.receiverSessionId) ? { receiverSessionId: birth.receiverSessionId } : {}),
     ...(receiverMembers !== undefined ? { receiverMembers } : {}),
     ...(remote && birth.forwarded === true ? { forwarded: true as const } : {}),
@@ -221,6 +223,8 @@ export function withRouting(entry: Record<string, unknown>, warn: (message: stri
 
 /** One tracked outbound task still in the owed book (unsettled). */
 export interface TaskRecord {
+  /** Observation from exact inbox claim or peer response, never an acknowledgement. */
+  consumed?: boolean
   readonly receiverSessionId?: string
   readonly taskId: string
   readonly team: string
@@ -407,6 +411,8 @@ export interface ReceiptResolvedInfo {
 
 /** The persisted ledger document: the owed book plus its settled archive. */
 export interface TaskLedgerSnapshot {
+  readonly taskDeliveryRestoreError?: true
+  readonly taskDeliveries?: readonly import('./task-delivery.ts').TaskDelivery[]
   readonly reconciliationSessions?: Record<string, number>
   readonly reconciliationReminders?: Record<string, import('./reconciliation-state.ts').ReminderState>
   readonly tasks: readonly TaskRecord[]

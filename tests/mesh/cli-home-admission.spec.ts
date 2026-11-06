@@ -211,6 +211,7 @@ describe('#222 F1 remote CLI pinned-home admission (real hosts; scope on)', () =
   it('allowlist observation rechecks only the CLI link and pinned carrier, not old request signatures', async () => {
     const { target, homes } = await pair()
     try {
+      target.agents.agent!.followup=()=>{} // Keep this authorization-observation fixture pending.
       await deposit(homes[0]!)
       expect((await link(target)).ok).toBe(true)
       const task = 'direct-cli-observer'

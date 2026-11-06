@@ -12,7 +12,7 @@ describe('receipt auto-synthesis', () => {
     const n = await bootNode({ name: 'worker', session: 'autosend', team: 'dsh', sessionNodes: true, teamJoinAllowlist: ['dsh/receipt-test'] })
     try {
       const worker = n.agents.agent!
-      const caller = { id: SessionId('session-1111222233334444'), session: { events: [] }, steer: vi.fn() } as unknown as Agent
+      const caller = { id: SessionId('session-1111222233334444'), session: { events: [] }, steer: vi.fn(), followup(message: unknown) { this.steer(message) } } as unknown as Agent
       n.agents.roots = () => [worker, caller]
       n.ctx.emit('agent/created', { agent: caller })
       expect((await fetch(n.baseUrl + '/__dsh_a2a/canvas', { method: 'POST', body: JSON.stringify({ action: 'create', name: 'ops' }) })).status).toBe(200)

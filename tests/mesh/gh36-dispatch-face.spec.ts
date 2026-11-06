@@ -46,6 +46,7 @@ function makeAgent(id: string, name: string): RelayAgent {
     id: SessionId(id),
     session: { events: [] as unknown[], title: name },
     steerTexts: [] as unknown[],
+    followup(message: unknown): void { this.steer(message) },
     steer(payload: unknown): void {
       agent.steerTexts.push(payload)
       const events = (agent as unknown as { session: { events: unknown[] } }).session.events

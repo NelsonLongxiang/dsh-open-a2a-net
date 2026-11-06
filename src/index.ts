@@ -102,6 +102,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 // inlining removes the cross-package resolution race surface entirely.
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 import { MessageId } from '@deepseek-ai/dsh-llm'
+import { FollowupDelivery } from './followup-delivery.ts'
 
 // The a2a relay producer's own message-source kind: upstream 0.1.7 removed the
 // shared catch-all 'plugin' kind, so producers declare their own. Historical
@@ -114,6 +115,9 @@ declare module '@deepseek-ai/dsh-llm' {
        * ui-chat's relay context body renders "来自 X" + the full text from
        * this field; without it the row falls back to an opaque body. */
       senderSessionId?: string
+      /** Audited A2A task identity and clean same-host lineage, never a human principal. */
+      taskId?: string
+      localSender?: string
       /** Host-built node reminder only; never copied from an inbound peer source. */
       nodeReminder?: true
     }
@@ -1809,7 +1813,7 @@ export function apply(ctx: Context, config: Config): void {
         // roster: the team-roster face (a2a_team_join/leave, card
         // teamMemberships, team-scope routing admission) ships — peers read
         // its absence as a pre-roster legacy node (0.5.43 and older).
-        capabilities: { route: true, async: true, roster: true, canvasMemberProvenance: true },
+        capabilities: { route: true, async: true, roster: true, canvasMemberProvenance: true, sourcedFollowup: true, queuedTaskCancellation: true },
         expiresAt: Date.now() + config.cardTtlMs,
         ...(records.length > 0 ? { records: [...records] } : {}),
       })
@@ -1983,6 +1987,28 @@ export function apply(ctx: Context, config: Config): void {
    * so ui-chat renders the relay body ("来自 X" + full text) instead of an
    * opaque row; omitted when the sender is not meaningfully addressable.
    */
+  const followupDelivery = new FollowupDelivery({
+    ledger:taskLedger,
+    taint:(target,localFrom)=>{if(localFrom===undefined||nodeTaint.of(localFrom)!=='')markLineage(target,'relay')},
+    warn:code=>logger.warn('a2a: sourced followup (%s); check ledger persistence and original task',code),
+  })
+  const followupRelay = (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string): void => followupDelivery.deliver(agent,text,sender,localFrom,taskId,callerKey)
+  ctx.on('agent/inbox/claimed',({agent,message})=>followupDelivery.claimed(agent,String(message.id)))
+  const withdrawQueuedTask = (taskId:string): Promise<'removed'|'claimed'|'legacy'> => {
+    const controller=ctx.get('sessionController')
+    return followupDelivery.withdraw(taskId,controller,id=>ctx.get('agents')?.get(SessionId(id)))
+  }
+
+  const cancelQueuedTask = async(taskId:string,text:string,sender:string): Promise<boolean> => {
+    const record=taskLedger.deliveryFor(taskId)
+    const withdrawal=await withdrawQueuedTask(taskId)
+    if(withdrawal==='removed')return true
+    const row=taskLedger.find(taskId)
+    const agent=record ? ctx.get('agents')?.get(SessionId(record.sessionId)) : row ? (resolveAgentForTeam(row.deliveredTo??row.team)??canvasLiveAgent(parseCanvasTeamName(row.team))) : undefined
+    if(!agent)throw Error('original cancellation target unavailable')
+    steerRelay(agent,text,sender);return false
+  }
+
   function steerRelay(agent: Agent, text: string, sender?: string, localFrom?: string): void {
     // N4/gh#198: a relay steer carries content from outside this host — unless it is an in-process delivery from a clean local session (localFrom), whose taint the target then takes.
     if (localFrom === undefined || nodeTaint.of(localFrom) !== '') markLineage(agent, 'relay')
@@ -2155,7 +2181,7 @@ export function apply(ctx: Context, config: Config): void {
       if(row.peer!=='local'||row.sender?.kind!=='session')return undefined
       const matches=reminderAgents().filter(a=>sessionTeamOf(a)===row.sender!.id);return matches.length===1?matches[0]:undefined
     },
-    steer:(agent:ReminderAgent,text:string)=>steerRelay(agent as Agent,text,config.team),
+    followup:(agent:ReminderAgent,text:string)=>followupRelay(agent as Agent,text,config.team),
     warn:code=>logger.warn('a2a: idle reconciliation reminder failed (%s)',code),
   })
   const requestReminderScan = ():void => {queueMicrotask(()=>idleReminders.scan())}
@@ -2270,18 +2296,18 @@ export function apply(ctx: Context, config: Config): void {
    * marker instead of a (false) completion.
    * @param taskId - the correlation key the steered receipt header carries.
    */
-  async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number) => void): Promise<
+  async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number) => void, callerKey?: string): Promise<
     { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; localMiss?: true }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
-      return routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader, localFrom, onSteered)
+      return routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader, localFrom, onSteered, callerKey)
     }
     // Wake-on-route: a cold joined team materializes on demand, then steers.
     const wake = wakeColdTeam(team)
     if (wake.kind === 'flight') {
       return wake.flight.then(
-        agent => routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader, localFrom, onSteered),
+        agent => routeIntoAgentFor(agent, team, message, caller, taskId, proofClause, buildHeader, localFrom, onSteered, callerKey),
         (error: unknown) => ({ ok: false, error: `waking the session for team "${team}" failed: ${String(error)}` }) as const,
       )
     }
@@ -2310,7 +2336,7 @@ export function apply(ctx: Context, config: Config): void {
       const live = liveAgent()
       if (live !== undefined) {
         if (callerIsAgent(live, caller)) return { ok: false, error: selfRouteText(team) }
-        return routeIntoAgentFor(live, team, message, caller, taskId, proofClause, buildHeader, undefined, onSteered)
+        return routeIntoAgentFor(live, team, message, caller, taskId, proofClause, buildHeader, undefined, onSteered, callerKey)
       }
       return { ok: false, error: 'No live DSH agent is available to accept this message.' }
     }
@@ -2326,7 +2352,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param caller - caller label for the steered prefix.
    * @returns the agent's final reply, or the explicit failure.
    */
-  function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number) => void): Promise<
+  function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number) => void, callerKey?: string): Promise<
     { ok: true; reply: string; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string }
   > {
     return new Promise((resolve) => {
@@ -2357,7 +2383,7 @@ export function apply(ctx: Context, config: Config): void {
       const text = `${headerLine}\n\n${message}`
       try {
         const floor = sessionEventsOf(agent).length
-        steerRelay(agent, text, caller === '' ? undefined : caller, localFrom)
+        followupRelay(agent, text, caller === '' ? undefined : caller, localFrom, taskId, callerKey)
         onSteered?.(agent, floor)
         if (onSteered !== undefined && sessionEventsOf(agent).slice(floor).some(event => event?.type === 'assistant/message')) queueMicrotask(() => flushFinals(String(agent.id))) // synchronous final may already have emitted idle
       } catch (error) {
@@ -2818,7 +2844,7 @@ export function apply(ctx: Context, config: Config): void {
       probeConsumption,
       sessionTeamOf,
       localSessionOfHandle,
-      steerRelay,
+      steerRelay, followupRelay, cancelQueuedTask,
       fromClause,
       sanitizeFromClause,
       armReceiptAutosend,
@@ -2873,27 +2899,29 @@ export function apply(ctx: Context, config: Config): void {
       path: '/__dsh_a2a/tasks/cancel',
       handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
         readJsonBody(req, res, (body) => {
+          void (async () => {
           const fields = body as Record<string, unknown>
           const taskId = typeof fields.task_id === 'string' ? fields.task_id : ''
           const reason = typeof fields.reason === 'string' ? fields.reason : undefined
-          const result = taskLedger.cancel(taskId, reason)
-          let steered = false
-          if (result.outcome === 'cleared' && result.team !== undefined) {
-            const live = resolveAgentForTeam(result.team)
-              ?? canvasLiveAgent(parseCanvasTeamName(result.team))
-              ?? (result.team === config.team ? liveAgent() : undefined)
-            if (live !== undefined) {
-              try {
-                steerRelay(live, cancelNoticeText(taskId, reason))
-                steered = true
-              } catch {
-                // Bookkeeping already settled; steering is best-effort only.
-              }
+          const row=taskLedger.find(taskId)
+          let removed=false,steered=false
+          if(row) {
+            const notice=cancelNoticeText(taskId,reason)
+            if(row.peer==='local'||row.direction==='inbound') {
+              removed=await cancelQueuedTask(taskId,notice,session)
+              steered=!removed
+            } else {
+              const card=await cachedCardFetch(row.peer)
+              if((card?.capabilities as {queuedTaskCancellation?:boolean})?.queuedTaskCancellation!==true)throw Error('peer needs queued task cancellation capability; cancellation was not confirmed')
+              const result=await client.routeDirect(row.peer,row.team,notice,undefined,undefined,row.sender?.kind==='session'?row.sender.id:row.auth?.caller??session,true,undefined,undefined,undefined,taskId)
+              if(!result.ok)throw Error('remote queued cancellation was not confirmed')
             }
           }
-          const payload = JSON.stringify({ ...result, steered })
+          const result=taskLedger.cancel(taskId,reason)
+          const payload = JSON.stringify({ ...result, steered, removed })
           res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
           res.end(payload)
+          })().catch(()=>{if(!res.headersSent){res.writeHead(503,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'queued task cancellation could not be committed'}))}else if(!res.writableEnded)res.end()})
         })
       }),
     }), 'a2a: task cancel route')
@@ -3468,6 +3496,7 @@ export function apply(ctx: Context, config: Config): void {
   }
   const trackOwedTask = (taskId: string, team: string, peer: string, result: A2aRouteResult, callbackAddress: string | undefined, brief: string | undefined, sender: Sender, birth?: OutboundBirth): void => {
     if (!result.ok) return
+    birth={...birth,...(typeof result.consumed==='boolean'?{consumed:result.consumed}:{})}
     // Native-teams bridge rounds emit no A2A receipt in this slice: booking
     // them as receipt-owed would fill the owed book with rows no receipt can
     // ever settle (evicting genuinely receivable peer rows past TASK_CAP).
@@ -3924,7 +3953,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         const receiptHint = callerTeam === undefined ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${callerTeam}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
         // #114 S5: the consumption search starts at the pre-steer log length.
         const steerFloor = sessionEventsOf(target).length
-        steerRelay(target, `[A2A direct] (task ${taskId}) 未验证（in-process） ${sanitizeFromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam, originAgentId)
+        followupRelay(target, `[A2A direct] (task ${taskId}) 未验证（in-process） ${sanitizeFromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam, originAgentId, taskId)
         armReceiptAutosend(target, taskId, callerTeam, message, steerFloor)
         // #139: the caller's outbound row is born with this admission and the member that received it.
         if (taskIdFromCaller !== undefined) localBirths.set(taskIdFromCaller, localBirthOf(team, callerSession, callerTeam, sessionTeamOf(target), String(target.id)))
@@ -3937,6 +3966,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           task_id: taskId,
           context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
           task_status: 'TASK_STATE_DELIVERED',
+          consumed:taskLedger.deliveryFor(taskId)?.state==='claimed',
         }
       } catch (error) {
         endRoute(flight)
@@ -4380,6 +4410,10 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       if (row === undefined) return false
       const notice = cancelNoticeText(taskId, reason)
       if (row.peer === 'local') {
+        const record=taskLedger.deliveryFor(taskId)
+        if(record) {await cancelQueuedTask(taskId,notice,session);return taskLedger.cancel(taskId,reason).outcome==='cleared'}
+        const withdrawal=await withdrawQueuedTask(taskId)
+        if(withdrawal==='removed')return taskLedger.cancel(taskId,reason).outcome==='cleared'
         // Mirror the tasks/cancel control route: the cooperative stop-notice
         // steers the live local target, not just the ledger row. The target
         // resolution spans every kind the dispatcher can book — session
@@ -4404,9 +4438,12 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         // peer's idempotency ledger with a different payload, so reusing it
         // would 409-conflict before any steer happens (a bodyless key is
         // always fresh there). The original id rides the notice text.
-        const result = await client.routeDirect(row.peer, row.team, notice, undefined, undefined, session, true)
+        const card=await cachedCardFetch(row.peer)
+        if((card?.capabilities as {queuedTaskCancellation?:boolean})?.queuedTaskCancellation!==true)throw Error('peer needs queued task cancellation capability; cancellation was not confirmed')
+        const result = await client.routeDirect(row.peer, row.team, notice, undefined, undefined, row.sender?.kind==='session'?row.sender.id:row.auth?.caller??session, true, undefined, undefined, undefined, taskId)
         if (!result.ok) {
           logger.warn(`a2a: cancel stop-notice for task ${taskId} failed to deliver to ${row.team}: ${result.error}`)
+          return false
         }
       }
       return taskLedger.cancel(taskId, reason).outcome === 'cleared'

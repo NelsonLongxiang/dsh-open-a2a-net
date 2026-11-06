@@ -95,7 +95,8 @@ describe('issue #43 same-zone cross-host admission', () => {
     const member = {
       id: SessionId(LOCAL_MEMBER),
       session: { events: [] as unknown[] },
-      steer: vi.fn(),
+      followup(message: unknown): void { this.steer(message) },
+    steer: vi.fn(),
     } as unknown as Agent & { steer: ReturnType<typeof vi.fn> }
     m.agents.agents.push(member)
     m.ctx.emit('agent/created', { agent: member })
@@ -119,7 +120,8 @@ describe('issue #43 same-zone cross-host admission', () => {
     const member = {
       id: SessionId(LOCAL_MEMBER),
       session: { events: [] as unknown[] },
-      steer: vi.fn(),
+      followup(message: unknown): void { this.steer(message) },
+    steer: vi.fn(),
     } as unknown as Agent & { steer: ReturnType<typeof vi.fn> }
     m.agents.agents.push(member)
     m.ctx.emit('agent/created', { agent: member })
@@ -141,8 +143,8 @@ describe('issue #43 same-zone cross-host admission', () => {
     const other = 'session-9999888877776666'
     const m = await mount([{ name: '品味组', members: [LOCAL_MEMBER, REMOTE_CALLER] }], [LOCAL_MEMBER, other])
     mounted.push(m.dispose)
-    const first = { id: SessionId(LOCAL_MEMBER), session: { events: [] as unknown[] }, steer: vi.fn() } as unknown as Agent & { steer: ReturnType<typeof vi.fn> }
-    const second = { id: SessionId(other), session: { events: [] as unknown[] }, steer: vi.fn() } as unknown as Agent & { steer: ReturnType<typeof vi.fn> }
+    const first = { id: SessionId(LOCAL_MEMBER), session: { events: [] as unknown[] }, steer: vi.fn(), followup(message:unknown){this.steer(message)} } as unknown as Agent & { steer: ReturnType<typeof vi.fn> }
+    const second = { id: SessionId(other), session: { events: [] as unknown[] }, steer: vi.fn(), followup(message:unknown){this.steer(message)} } as unknown as Agent & { steer: ReturnType<typeof vi.fn> }
     m.agents.agents.push(first, second)
     m.ctx.emit('agent/created', { agent: first })
     m.ctx.emit('agent/created', { agent: second })

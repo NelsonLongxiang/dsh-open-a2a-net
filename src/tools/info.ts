@@ -597,6 +597,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
                   status: { type: 'string', required: true },
                   deadAt: { type: 'number' },
                   answeredAt: { type: 'number' },
+                  consumed:{type:'boolean'}, deliveryObservation:{type:'string',enum:['consumed','delivered-unconsumed']},
                   reminderAttempts: {type:'number'}, reminderDelivered:{type:'number'}, reminderLastAt:{type:'number'}, reminderNextAt:{type:'number'}, reminderResult:{type:'string'}, reminderDiagnostic:{type:'string',enum:['metadata-reset']}, repeatedlyUnreconciled:{type:'boolean'},
                   direction: { type: 'string', enum: ['inbound', 'outbound'] },
                   receiptExpected: { type: 'boolean' },
@@ -683,7 +684,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         }],
       },
       presentCall: () => ({ card: 'generic', title: 'A2A task ledger', kind: 'other', rawInput: null }),
-      execute: async (_args, exec): Promise<{ ok: boolean; tasks: ({ taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; status: 'pending' | 'dead'; deadAt?: number; answeredAt?: number; reason?: 'fire-forget' | 'unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean; forwarded?: true; deliveredTo?: string; sender?: Sender } & Partial<ReminderView>)[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; sender?: Sender }[]; archivedTotal: number }> => {
+      execute: async (_args, exec): Promise<{ ok: boolean; tasks: ({ taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; status: 'pending' | 'dead'; deadAt?: number; answeredAt?: number; reason?: 'fire-forget' | 'unconsumed'; consumed?:boolean; deliveryObservation?:'consumed'|'delivered-unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean; forwarded?: true; deliveredTo?: string; sender?: Sender } & Partial<ReminderView>)[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; sender?: Sender }[]; archivedTotal: number }> => {
         a2aJoinGateRefusal(exec)
         observeAuthorization('lazy')
         const archiveAll = taskLedger.archive()
@@ -691,12 +692,13 @@ export function createInfoTools(deps: InfoToolsDeps) {
           ok: true,
           // Project the declared fields only: ledger rows also carry internal audit facts (the #114 auth record,
           // #139 peerKey/peerHost) the output schema does not admit — spreading the row failed every call (0.6.32+).
-          tasks: taskLedger.list().map(({ taskId, team, peer, startedAt, contextId, brief, status, deadAt, answeredAt, direction, receiptExpected, forwarded, deliveredTo, reason, sender }) => ({
+          tasks: taskLedger.list().map(({ taskId, team, peer, startedAt, contextId, brief, status, deadAt, answeredAt, consumed, direction, receiptExpected, forwarded, deliveredTo, reason, sender }) => ({
             taskId, team, peer, startedAt, status, ...reminderView(taskLedger.reminderState(taskId)),
             ...(contextId !== undefined ? { contextId } : {}),
             ...(brief !== undefined ? { brief } : {}),
             ...(deadAt !== undefined ? { deadAt } : {}),
             ...(answeredAt !== undefined ? { answeredAt } : {}),
+            ...(consumed!==undefined?{consumed,deliveryObservation:consumed?'consumed':'delivered-unconsumed'}:{}),
             ...(direction !== undefined ? { direction } : {}),
             ...(receiptExpected !== undefined ? { receiptExpected } : {}),
             ...(forwarded !== undefined ? { forwarded } : {}),

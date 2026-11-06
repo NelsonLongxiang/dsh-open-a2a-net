@@ -51,6 +51,7 @@ function makeAgent(id: string, name: string): TestAgent {
     id: SessionId(id),
     session: { events: [] as unknown[], title: name },
     steerCalls: [] as unknown[],
+    followup(message: unknown): void { this.steer(message) },
     steer(payload: unknown): void {
       agent.steerCalls.push(payload)
       // The harness reply pattern: a steered session answers and goes

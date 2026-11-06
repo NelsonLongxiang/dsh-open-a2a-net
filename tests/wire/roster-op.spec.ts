@@ -35,8 +35,8 @@ async function mounted(existingCanvas?: string, allowlist: string[] = []) {
   const config = { apiKey: 'test-key', session: 'host-test', team: 'dsh', routeTimeoutMs: 5_000, flushTimeoutMs: 5_000, announce: false, peers: [], delegates: [], sessionNodes: true, teamScopeRouting: true, wakeJoinedOnBoot: false, wakeReconcile: false, cardCacheTtlMs: 60_000, remoteRowsTtlMs: 15_000, cardTtlMs: 172_800_000, dshHome: home, agentName: 'test host', teamJoinAllowlist: allowlist } as Config
   apply(ctx, config)
   const agents = ctx.get('agents') as unknown as FakeAgents
-  const a = { id: SessionId(A), session: { events: [] }, steer: vi.fn() } as unknown as Agent
-  const b = { id: SessionId(B), session: { events: [] }, steer: vi.fn() } as unknown as Agent
+  const a = { id: SessionId(A), session: { events: [] }, steer: vi.fn(), followup(message: unknown) { this.steer(message) } } as unknown as Agent
+  const b = { id: SessionId(B), session: { events: [] }, steer: vi.fn(), followup(message: unknown) { this.steer(message) } } as unknown as Agent
   agents.agents = [a, b]
   ctx.emit('agent/created', { agent: a }); ctx.emit('agent/created', { agent: b })
   const base = 'http://127.0.0.1:' + String((ctx as unknown as { webServer: WebServer }).webServer.port)

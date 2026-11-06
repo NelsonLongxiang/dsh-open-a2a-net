@@ -62,6 +62,7 @@ async function owedPair(): Promise<{ alpha: MeshNode; cargo: MeshNode }> {
   const alpha = await bootNode({ ...LEGACY_OPEN_SCOPE, name: 'alpha', session: 'mesh-alpha/1a2b3c4d', team: 'alpha', sessionNodes: true, port: portA, peers: [cargo.baseUrl] })
   const selfJoin = await postJson(alpha.baseUrl, '/__dsh_a2a/join', { id: 'session-0123456789abcdef' })
   expect(selfJoin.status).toBe(200)
+  cargo.agents.agent!.followup=()=>{} // Pin owed-state anomaly tests; no automatic target completion.
   return { alpha, cargo }
 }
 
@@ -147,7 +148,7 @@ describe('mesh anomalies — receipt-ledger honesty under odd settlement shapes'
       const delivered = await alpha.ctx.tools.get('a2a_route')?.execute({ team: 'cargo', message: 'fire and forget', async: true }, runContext()) as { ok: boolean; task_id: string; reply?: string }
       expect(delivered.ok).toBe(true)
       const rows = await stateTasks(alpha)
-      expect(rows).toEqual([{ taskId: delivered.task_id, team: 'cargo', peer: cargo.baseUrl, status: 'pending', startedAt: expect.any(Number), direction: 'outbound', receiptExpected: false, settleable: false, brief: 'fire and forget', sender: { kind: 'host', id: 'mesh-anom-e' } }])
+      expect(rows).toEqual([{ taskId: delivered.task_id, team: 'cargo', peer: cargo.baseUrl, status: 'pending', startedAt: expect.any(Number), direction: 'outbound', receiptExpected: false, settleable: false, brief: 'fire and forget',consumed:false,deliveryObservation:'delivered-unconsumed', sender: { kind: 'host', id: 'mesh-anom-e' } }])
       // The tasks ledger agrees: visible, not debt.
       const book = await ledger(alpha)
       expect(book.tasks.find(row => row.taskId === delivered.task_id)).toMatchObject({ status: 'pending', receiptExpected: false, direction: 'outbound' })
@@ -224,6 +225,7 @@ describe('mesh anomalies — receipt-ledger honesty under odd settlement shapes'
       taskStaleTtlMs: 300,
     })
     try {
+      cargo.agents.agent!.followup=()=>{}
       const selfJoin = await postJson(alpha.baseUrl, '/__dsh_a2a/join', { id: 'session-0123456789abcdef' })
       expect(selfJoin.status).toBe(200)
       const delivered = await alpha.ctx.tools.get('a2a_route')?.execute({ team: 'cargo', message: 'long silence', async: true }, runContext(alpha.agents.agent)) as { ok: boolean; task_id: string }

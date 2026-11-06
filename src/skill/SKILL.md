@@ -43,7 +43,7 @@ agent prepares the exact config and verifies each step with `a2a_whoami`,
 
 ## Idle reconciliation reminders
 
-A sourced `[A2A reconciliation reminder]` lists **existing** tasks you still owe. It is not a task, receipt, or acknowledgement, and does not release queue capacity. Reconcile each original task yourself; do not reply to the reminder as a new task or fake completion to clear a queue. Busy sessions are skipped; idle reminders persist and back off without exhausting. See [routing.md](references/routing.md#idle-reconciliation-reminders-351-transitional-steer).
+A sourced `[A2A reconciliation reminder]` lists **existing** tasks you still owe. It is not a task, receipt, or acknowledgement, and does not release queue capacity. Reconcile each original task yourself; do not reply to the reminder as a new task or fake completion to clear a queue. Busy sessions are skipped; idle reminders persist and back off without exhausting. See [routing.md](references/routing.md#idle-reconciliation-reminders-351-sourced-followup).
 
 ## Routing (a2a_route)
 
@@ -51,6 +51,7 @@ A sourced `[A2A reconciliation reminder]` lists **existing** tasks you still owe
 a2a_route { team: "<zone>/<id8 or canvas name>", message, context_id?, async? }
 ```
 
+- Tasks use sourced `Agent.followup` (one task per next turn), not human queue prompts. Missing capability fails explicitly. Unclaimed cancellation removes the queued MessageId; claimed cancellation still uses immediate sourced steer. `consumed:false` / `delivered-unconsumed` is visible debt, not acknowledgement or completion; do not resend blindly.
 - `async: true` delivers without waiting (`delivered:true` + task id); the
   target routes a receipt — a message starting `[A2A receipt] task <id>` —
   back to your team.
