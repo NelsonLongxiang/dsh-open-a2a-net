@@ -22,10 +22,11 @@
 import type { TaskAuthorization, SettlementReason } from './task-auth.ts'
 import { existsSync, readFileSync } from 'node:fs'
 import { writeTaskLedger } from './task-ledger-persistence.ts'
+import { parseTaskDelivery, TASK_DELIVERY_CAP, TASK_DELIVERY_RETENTION_MS, type TaskDelivery } from './task-delivery.ts'
 import { parseReminder, REMINDER_LONG_MS, type ReminderState } from './reconciliation-state.ts'
 import { parseReceipt, RECEIPT_OUTCOMES, type ReceiptOutcomeV2 } from './receipt.ts'
 import { classifyConservationBlock, ConservationCounters, type ConservationVerdict } from './ledger-conservation.ts'
-import { CALLER_ENDED_PREFIX, TASK_CAP, ARCHIVE_CAP, SUMMARY_CAP, TASK_STALE_TTL_MS, ARCHIVE_ENDS, ECHO_SUMMARY, ROUTING_FACT_CAP, SETTLEMENT_ID_CAP, SETTLEMENT_REFUSAL_CAP, withSender, withAuth, routingOf, birthFacts, withRouting, withSettledBy, parseRefusal, archivedEndedBy } from './task-ledger-rows.ts'
+import { CALLER_ENDED_PREFIX, TASK_CAP, ARCHIVE_CAP, SUMMARY_CAP, TASK_STALE_TTL_MS, ARCHIVE_ENDS, ECHO_SUMMARY, ROUTING_FACT_CAP, SETTLEMENT_ID_CAP, SETTLEMENT_REFUSAL_CAP, withSender, withAuth, routingOf, birthFacts, withRouting, withSettledBy, parseRefusal, archivedEndedBy, WITHDRAWAL_RESULTS, isWithdrawalResult } from './task-ledger-rows.ts'
 import type { TaskRecord, ArchivedRecord, Sender, OutboundBirth, TaskLedgerOptions, ReceiptResolvedInfo, TaskLedgerSnapshot, SettlementRefusalRecord, SettlementJudge, AbandonResult, CancelledResult, ArchiveEnd } from './task-ledger-rows.ts'
 export * from './task-ledger-rows.ts'
 
@@ -54,6 +55,37 @@ export class TaskLedger {
   private readonly warn: (message: string) => void
   /** Last successful commit, for rollback when a mutation cannot persist. */
   private committed = ''
+  private deliveries: TaskDelivery[] = []
+  private deliveryRestoreError = false
+  markConsumed(taskId:string, consumed:boolean): void {
+    const row=this.tasks.find(r=>r.taskId===taskId);if(!row||row.consumed===true||row.consumed===consumed)return
+    row.consumed=consumed;this.persist()
+  }
+  deliveryFor(taskId: string): TaskDelivery | undefined {
+    if(this.deliveryRestoreError)throw Error('task delivery correspondence is corrupt; automatic re-delivery refused')
+    const row=this.deliveries.find(r=>r.taskId===taskId);return row?{...row}:undefined
+  }
+  deliveryByMessage(sessionId:string,messageId:string): TaskDelivery | undefined {
+    if(this.deliveryRestoreError)throw Error('task delivery correspondence is corrupt')
+    const row=this.deliveries.find(r=>r.sessionId===sessionId&&r.messageId===messageId);return row?{...row}:undefined
+  }
+  reserveDelivery(record: TaskDelivery): TaskDelivery {
+    const parsed=parseTaskDelivery(record);if(!parsed)throw Error('invalid task delivery correspondence')
+    const old=this.deliveryFor(record.taskId)
+    if(old) {
+      if(old.sessionId!==record.sessionId||old.fingerprint!==record.fingerprint)throw Error('task delivery identity conflict')
+      return old
+    }
+    this.deliveries=this.deliveries.filter(row=>this.tasks.some(t=>t.taskId===row.taskId)||this.now()-row.createdAt<=TASK_DELIVERY_RETENTION_MS)
+    if(this.deliveries.length>=TASK_DELIVERY_CAP)throw Error('task delivery correspondence capacity reached; refusing untracked delivery')
+    this.deliveries.push(parsed);this.persist();return {...parsed}
+  }
+  updateDelivery(taskId:string, state:TaskDelivery['state']): void {
+    const row=this.deliveries.find(r=>r.taskId===taskId);if(!row)throw Error('unknown task delivery correspondence')
+    row.state=state
+    if(state==='claimed'){const task=this.tasks.find(r=>r.taskId===taskId);if(task)task.consumed=true}
+    this.persist()
+  }
   private reminderRecoveryPending = false
   private reminders: Record<string, ReminderState> = Object.create(null)
   private reminderSessions: Record<string, number> = Object.create(null)
@@ -207,7 +239,7 @@ export class TaskLedger {
    * @param from - the caller's receipt target (label or callback address).
    * @param contextId - the delivery's conversation id, kept for follow-up routes (empty omits it).
    */
-  trackInbound(taskId: string, team: string, from: string, contextId?: string, receiptExpected?: boolean, brief?: string, auth?: TaskAuthorization, deliveredTo?: string, receiverSessionId?: string): void {
+  trackInbound(taskId: string, team: string, from: string, contextId?: string, receiptExpected?: boolean, brief?: string, auth?: TaskAuthorization, deliveredTo?: string, receiverSessionId?: string, consumed?: boolean): void {
     if (taskId === '') return
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
@@ -219,6 +251,7 @@ export class TaskLedger {
       peer: `local:${from}`,
       startedAt: this.now(),
       direction: 'inbound' as const,
+      ...(typeof consumed==='boolean'?{consumed}:{}),
       ...(receiverSessionId ? { receiverSessionId } : {}),
       ...(receiptExpected === false ? { receiptExpected: false } : {}),
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
@@ -314,6 +347,14 @@ export class TaskLedger {
    * the route layer reads team/contextId from here for its best-effort
    * steer, which is the documented boundary until origin-auth lands.
    */
+  recordWithdrawalResult(taskId: string, result: import('./task-ledger-rows.ts').WithdrawalResult): void {
+    if(!(WITHDRAWAL_RESULTS as readonly string[]).includes(result))throw Error('invalid withdrawal result')
+    const row=this.archived.find(entry=>entry.taskId===taskId&&entry.endedBy==='cancelled')
+    if(!row||row.withdrawalResult===result)return
+    this.archived=this.archived.map(entry=>entry===row?{...entry,withdrawalResult:result}:entry)
+    this.persist()
+  }
+
   cancel(taskId: string, reason?: string): CancelledResult {
     if (taskId === '') return { outcome: 'unknown', taskId }
     this.sweep(this.now())
@@ -643,12 +684,20 @@ export class TaskLedger {
       if(snapshot.reconciliationReminders && typeof snapshot.reconciliationReminders==='object') {
         for(const [id,raw] of Object.entries(snapshot.reconciliationReminders).slice(0,TASK_CAP)) {
           const parsed=parseReminder(raw)
-          if(parsed && parsed.lastResult!=='blocked')this.reminders[id]=parsed
+          if(parsed)this.reminders[id]=parsed
           else this.reminderRecoveryPending=true
         }
       }
       if(snapshot.reconciliationSessions && typeof snapshot.reconciliationSessions==='object') {
         this.reminderSessions=Object.fromEntries(Object.entries(snapshot.reconciliationSessions).filter(([id,at])=>id.length>0&&id.length<=256&&Number.isSafeInteger(at)&&at>=0).slice(0,TASK_CAP))
+      }
+      if(snapshot.taskDeliveryRestoreError===true)this.deliveryRestoreError=true
+      if(snapshot.taskDeliveries!==undefined) {
+        if(!Array.isArray(snapshot.taskDeliveries)||snapshot.taskDeliveries.length>TASK_DELIVERY_CAP)this.deliveryRestoreError=true
+        else {
+          const seen=new Set<string>()
+          for(const raw of snapshot.taskDeliveries) {const parsed=parseTaskDelivery(raw);if(!parsed||seen.has(parsed.taskId)||this.deliveries.some(row=>row.sessionId===parsed.sessionId&&row.messageId===parsed.messageId)){this.deliveryRestoreError=true;break}seen.add(parsed.taskId);this.deliveries.push(parsed)}
+        }
       }
       const entries = snapshot.tasks
       const restored: TaskRecord[] = []
@@ -684,6 +733,7 @@ export class TaskLedger {
               ...withAuth(entry.auth, entry, this.now()),
             ...withRouting(entry as Record<string, unknown>, this.warn),
               ...withSettledBy((entry as { settledBy?: unknown }).settledBy),
+            ...(isWithdrawalResult(entry.withdrawalResult)?{withdrawalResult:entry.withdrawalResult}:{}),
             })
             continue
           }
@@ -703,6 +753,7 @@ export class TaskLedger {
             ...withAuth(entry.auth, entry, this.now()),
             ...withRouting(entry as Record<string, unknown>, this.warn),
             ...(typeof entry.receiverSessionId==='string'&&entry.receiverSessionId.length>0&&entry.receiverSessionId.length<=256?{receiverSessionId:entry.receiverSessionId}:{}),
+            ...(typeof entry.consumed==='boolean'?{consumed:entry.consumed}:{}),
             status: entry.status === 'dead' ? 'dead' : 'pending',
             ...(entry.status === 'dead'
               ? {
@@ -741,6 +792,7 @@ export class TaskLedger {
             ...withAuth(entry.auth, entry, this.now()),
             ...withRouting(entry as Record<string, unknown>, this.warn),
             ...withSettledBy((entry as { settledBy?: unknown }).settledBy),
+            ...(isWithdrawalResult(entry.withdrawalResult)?{withdrawalResult:entry.withdrawalResult}:{}),
           })
         }
       }
@@ -799,6 +851,8 @@ export class TaskLedger {
       const previous = JSON.parse(this.committed) as TaskLedgerSnapshot
       this.reminders = Object.assign(Object.create(null), previous.reconciliationReminders ?? {})
       this.reminderSessions = previous.reconciliationSessions ?? Object.create(null)
+      this.deliveryRestoreError = previous.taskDeliveryRestoreError===true
+      this.deliveries = previous.taskDeliveries ? previous.taskDeliveries.map(r=>({...r})) : []
       this.tasks = [...previous.tasks]
       this.archived = [...previous.archived ?? []]
       this.refusals = [...previous.settlementRefusals ?? []]
@@ -811,6 +865,8 @@ export class TaskLedger {
   private snapshot(): TaskLedgerSnapshot {
     return {
         tasks: this.tasks.map(task => ({ ...task })),
+        ...(this.deliveryRestoreError?{taskDeliveryRestoreError:true as const}:{}),
+        ...(this.deliveries.length ? {taskDeliveries:this.deliveries.map(row=>({...row}))} : {}),
         ...(Object.keys(this.reminderSessions).length ? { reconciliationSessions: {...this.reminderSessions} } : {}),
         ...(Object.keys(this.reminders).length ? { reconciliationReminders: Object.fromEntries(Object.entries(this.reminders).filter(([id])=>this.tasks.some(row=>row.taskId===id&&row.status==='pending'))) } : {}),
         ...(this.archived.length > 0 ? { archived: this.archived.map(entry => ({ ...entry })) } : {}),

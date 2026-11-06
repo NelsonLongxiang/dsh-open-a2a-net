@@ -88,7 +88,7 @@ describe('ledger errors stay inside the real host event boundary',()=>{
   try{
    for(const n of [a,b])await fetch(n.baseUrl+'/__dsh_a2a/join',{method:'POST',body:JSON.stringify({id:String(n.agents.agent!.id)})})
    const task='disk-microtask',file=join(b.home,'a2a/tasks.json')
-   b.agents.agent!.steer=(()=>{finish(b.agents.agent,[task]);denied.prefix=file+'.';denied.remaining=1;denied.skip=1}) as never
+   b.agents.agent!.followup=(()=>{finish(b.agents.agent,[task]);denied.prefix=file+'.';denied.remaining=1;denied.skip=2}) as never
    const guard=Buffer.from(JSON.stringify({visitToken:'microtask-write-test',hopBudget:3})).toString('base64')
    const reply=await fetch(bu+'/a2a/direct',{method:'POST',headers:{'Content-Type':'application/json','X-A2A-Guard':guard},body:JSON.stringify({team:'beta/01234567',caller_session:'alpha/01234567',callback:'alpha/01234567',task_id:task,message:'microtask final',wait:true})}).then(r=>r.json())
    expect(reply.routed,JSON.stringify(reply)).toBe(true)

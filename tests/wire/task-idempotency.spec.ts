@@ -132,6 +132,7 @@ async function mount(overrides: Partial<Config> = {}, controller?: object): Prom
   const liveAgent = {
     id: SessionId('agent-1'),
     session: { events: [] as unknown[] },
+    followup(message: unknown): void { this.steer(message) },
     steer: vi.fn(),
   } as unknown as Agent & { steer: ReturnType<typeof vi.fn>; session: { events: unknown[] } }
   liveAgent.steer = vi.fn((payload: { content?: Array<{ type: string; text?: string }> }) => {
@@ -542,13 +543,14 @@ describe('consumed probe honesty — prior-running targets (F1 defect card)', ()
     }
   })
 
-  it('an idle target whose steer flips the status to running still answers consumed:true (unchanged happy path)', async () => {
+  it('an idle target whose followup actually claims its task answers consumed:true', async () => {
     const { port, registry, dispose } = await mount()
     try {
       const agent = registry.agent as unknown as { status?: string; steer: () => void }
-      agent.steer = (() => {
+      registry.agent!.followup = (message) => {
         agent.status = 'running'
-      }) as typeof agent.steer
+        registry.ctx.emit('agent/inbox/claimed',{agent:registry.agent!,message,turn:1})
+      }
       const direct = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

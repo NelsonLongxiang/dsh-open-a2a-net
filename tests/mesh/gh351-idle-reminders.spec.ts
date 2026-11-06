@@ -44,7 +44,7 @@ describe('#351 real HTTP persistent idle reminders',()=>{
  })
 
  it('same-host sender receives one sourced warning only while idle; the target still owes and long reminders continue',async()=>{
-  const n=await fixture(),targetId='session-bbbbbbbb33334444',captured:any[]=[],target={id:targetId,session:{events:[]},status:'running',steer:(p:any)=>captured.push(p)} as any
+  const n=await fixture(),targetId='session-bbbbbbbb33334444',captured:any[]=[],target={id:targetId,session:{events:[]},status:'running',steer:(p:any)=>captured.push(p),followup(message:any){this.steer(message)}} as any
   const first=n.agents.agent!,service=n.agents as any;service.roots=()=>[first,target];service.get=(id:unknown)=>String(id)===String(first.id)?first:String(id)===targetId?target:undefined
   n.ctx.emit('agent/created',{agent:target});await post(n,'/__dsh_a2a/join',{id:targetId});
   for(const id of [String(first.id),targetId])expect((await post(n,'/__dsh_a2a/canvas',{action:'add-member',name:'shared',id})).ok).toBe(true)

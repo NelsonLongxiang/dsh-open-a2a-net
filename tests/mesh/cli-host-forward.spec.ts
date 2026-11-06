@@ -153,6 +153,7 @@ describe('#230 home host forwards a deposited CLI one hop with scope on', () => 
   }, 30000)
   it('uses the same scoped canvas directory for a deposited CLI and records the actual receiving member', async () => {
     const { a, b } = await fixture()
+    b.agents.agent!.followup=()=>{} // This case observes the pending forwarded birth, not completion.
     try {
       await post(b, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: 'session-0123456789abcdef' })
       const reply = await route(a, 'direct-forward-canvas', true, undefined, 'beta/canvas/ops')

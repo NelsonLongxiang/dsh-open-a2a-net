@@ -43,6 +43,7 @@ describe('read tools validate against their own output schema (real runtime, rea
         await postJson(n.baseUrl, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: own })
         await postJson(n.baseUrl, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id: other })
       }
+      B.agents.agent!.followup=()=>{}
       // No final from B: A keeps a pending outbound row (peerKey, peerHost, deliveredTo) and B a pending
       // inbound row with its #114 authorization record — exactly the shapes that broke the schema.
       const t = await route(A, { team: 'alpha/canvas/ops', message: 'canvas work', async: true })

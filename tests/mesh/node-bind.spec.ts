@@ -52,7 +52,7 @@ interface ScopedAgent { id: Agent['id']; ctx: Context; key: object; session: { e
 
 function makeAgent(host: Context, id: string): ScopedAgent {
   // The agent object is its own scope key, as in DSH (dsh-agent assembleContextFor: scope = agent).
-  const agent = { id: SessionId(id), session: { events: [], title: id } } as unknown as ScopedAgent & { ctx: Context; key: object; dispose: () => Promise<void> }
+  const agent = { id: SessionId(id), session: { events: [], title: id }, followup(message:unknown){(this as unknown as {steer:(p:unknown)=>void}).steer(message)} } as unknown as ScopedAgent & { ctx: Context; key: object; dispose: () => Promise<void> }
   const scope = createScope(host, agent)
   return Object.assign(agent, { ctx: scope.ctx, key: agent, dispose: async () => { await scope.dispose() } })
 }

@@ -77,6 +77,7 @@ function makeAgent(): Agent & { steer: ReturnType<typeof vi.fn>; session: { even
   return {
     id: SessionId('agent-1'),
     session: { events: [] },
+    followup(message: unknown): void { this.steer(message) },
     steer: vi.fn(),
   } as unknown as Agent & { steer: ReturnType<typeof vi.fn>; session: { events: unknown[] } }
 }
@@ -812,7 +813,7 @@ describe('a2a plugin decentralized routing (peers)', () => {
       const owing = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { tasks: { taskId: string; team: string; peer: string; status: string; direction: string; receiptExpected: boolean; settleable: boolean; brief?: string }[] }
       // The row carries the dispatch brief: the panel must say WHAT is owed,
       // not just a correlation id and an age.
-      expect(owing.tasks).toEqual([{ taskId: delivered.task_id, team: 'dsh/agent-1', peer: 'local', status: 'pending', startedAt: expect.any(Number), direction: 'outbound', receiptExpected: false, settleable: false, brief: 'long task', sender: { kind: 'host', id: 'sess-1' }, auth: expect.objectContaining({ ingress: 'local', proof: 'in-process', admission_rule: 'local-exempt', target: 'dsh/agent-1' }) }])
+      expect(owing.tasks).toEqual([{ taskId: delivered.task_id, team: 'dsh/agent-1', peer: 'local', status: 'pending', startedAt: expect.any(Number), direction: 'outbound', receiptExpected: false, settleable: false, brief: 'long task', consumed:false,deliveryObservation:'delivered-unconsumed', sender: { kind: 'host', id: 'sess-1' }, auth: expect.objectContaining({ ingress: 'local', proof: 'in-process', admission_rule: 'local-exempt', target: 'dsh/agent-1' }) }])
       // Correlation clears the pending row within one poll.
       await postJson(port, '/a2a/direct', { team: 'dsh', message: `[A2A receipt] task ${String(delivered.task_id)} tests green` })
       const settled = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as { tasks: unknown[] }

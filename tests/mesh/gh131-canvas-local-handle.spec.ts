@@ -26,7 +26,7 @@ const url = (p: number): string => `http://127.0.0.1:${String(p)}`
 
 function ownSession(node: MeshNode, id: string): string[] {
   const steered: string[] = []
-  const agent = { id: SessionId(id), session: { events: [] as unknown[], title: node.name }, steer(p: unknown): void { steered.push(typeof p === 'string' ? p : JSON.stringify(p)) } } as unknown as Agent
+  const agent = { id: SessionId(id), session: { events: [] as unknown[], title: node.name }, followup(message:unknown){this.steer(message)}, steer(p: unknown): void { steered.push(typeof p === 'string' ? p : JSON.stringify(p)) } } as unknown as Agent
   node.agents.agent = agent
   node.ctx.emit('agent/created', { agent })
   return steered

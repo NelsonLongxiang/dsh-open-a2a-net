@@ -80,6 +80,7 @@ async function mount(): Promise<{ port: number; dispose: () => Promise<void>; st
   const liveAgent = {
     id: SessionId('agent-1'),
     session: { events: [] as unknown[] },
+    followup(message: unknown): void { this.steer(message) },
     steer: vi.fn(),
   } as unknown as Agent & { steer: ReturnType<typeof vi.fn>; session: { events: unknown[] } }
   liveAgent.steer = vi.fn((payload: { content?: Array<{ type: string; text?: string }> }) => {

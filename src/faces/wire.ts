@@ -139,6 +139,8 @@ export interface WireDeps {
   readonly sessionTeamOf: (agent: Agent) => string
   /** gh#131: the local session one of this host's own `<zone>/<id8>` handles names, if exactly one. */
   readonly localSessionOfHandle: (ref: string) => string | undefined
+  readonly cancelQueuedTask: (taskId:string, message:string, sender:string, original?: import('../task-ledger.ts').TaskRecord) => Promise<{removed:boolean;steered:boolean}>
+  readonly followupRelay: (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string) => void
   readonly steerRelay: (agent: Agent, text: string, sender?: string) => void
   readonly fromClause: (from: string) => string
   readonly sanitizeFromClause: (from: string) => string
@@ -155,7 +157,7 @@ export interface WireDeps {
   readonly noColdMatchText: (team: string) => string
   readonly nativeTeamsPrepare: (team: string) => Promise<NativePrepared>
   readonly nativeTeamsRound: (prepared: Extract<NativePrepared, { ok: true }>, team: string, caller: string, message: string, taskId: string | undefined, proofClause: string, external?: AbortSignal, proofHeader?: (team: string, taskId: string, from: string, proofClause: string) => string) => Promise<NativeRoundOutcome>
-  readonly routeIntoAgent: (team: string, message: string, caller: string, taskId?: string, proofClause?: string, directHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number) => void) => Promise<RouteOutcome>
+  readonly routeIntoAgent: (team: string, message: string, caller: string, taskId?: string, proofClause?: string, directHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number) => void, callerKey?: string) => Promise<RouteOutcome>
 }
 
 /**
@@ -240,7 +242,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     probeConsumption,
     sessionTeamOf,
     localSessionOfHandle,
-    steerRelay,
+    steerRelay, followupRelay, cancelQueuedTask,
     fromClause,
     sanitizeFromClause,
     armReceiptAutosend,
@@ -603,6 +605,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             readonly callback?: unknown
             readonly wait?: unknown
             readonly task_id?: unknown
+            readonly cancel_task_id?: unknown
           }
           try {
             body = JSON.parse(rawBody.toString('utf8')) as typeof body; if (body === null || typeof body !== 'object' || Array.isArray(body)) throw new TypeError('direct body must be a JSON object') // #168: `null` read body.team in this async 'end' callback → unhandled rejection → host exit
@@ -751,6 +754,17 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             res.end(payload)
             return
           }
+          if (body.cancel_task_id !== undefined) {
+            const cancelledId=typeof body.cancel_task_id==='string'?body.cancel_task_id:''
+            const original=taskLedger.find(cancelledId),originalClaim=original?.auth?.claim
+            const allowed=claim.ok&&claim.bodyBound===true&&callerProof==='origin-claim'&&original?.direction==='inbound'&&original.auth?.caller===caller&&originalClaim?.caller===claim.caller&&originalClaim.origin===originOf(claim.callerUrl)&&taskLedger.deliveryFor(cancelledId)?.callerKey===claim.card.publicKey
+            if(!allowed) {res.writeHead(403,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'cancellation does not match the original authenticated caller',task_status:'TASK_STATE_FAILED'}));return}
+            taskLedger.cancel(cancelledId,'authenticated caller stop notice')
+            let removed=false,steered=false
+            try {const notification=await cancelQueuedTask(cancelledId,message,caller,original);removed=notification.removed;steered=notification.steered}catch(error){logger.warn('a2a: cancellation committed; stop notice was best-effort: %s',String(error))}
+            const payload=JSON.stringify({routed:true,delivered:true,removed,steered,receipt:'none',team,task_id:taskId,task_status:'TASK_STATE_COMPLETED',result:{text:'cancellation admitted for original task'}})
+            res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
+          }
           if (refuseIfFlooded(caller, message, team, taskId, res)) return
           if (refuseIfQueueFull(caller, message, team, taskId, cliDeposits.get(team) !== undefined, res)) return
           // The caller-side receipt correlation: a message shaped as a
@@ -870,7 +884,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 const deliveredReceipt = parseReceipt(message) !== null
                 // gh#141: a receipt is answered by nobody — its steer asks for no receipt back.
                 const receiptRequest = deliveredReceipt ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
-                steerRelay(target, `${directHeader(from)}\n\n${message}${receiptRequest}`, from === 'an unknown node' ? undefined : from)
+                followupRelay(target, `${directHeader(from)}\n\n${message}${receiptRequest}`, from === 'an unknown node' ? undefined : from, undefined, taskId, claim.ok?claim.card.publicKey:undefined)
                 steered = true
                 recordActivity('in', team, caller, true)
                 armReceiptAutosend(target, taskId, receiptTarget, message, steerFloor)
@@ -893,7 +907,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // zero ledger records for latched activations). Arming is
                 // unconditional now; settlement evidence disarms in the
                 // callback.
-                const consumedProbe = runningBeforeSteer ? false : probeConsumption(target, taskId)
+                const consumedProbe = taskLedger.deliveryFor(taskId)?.state === 'claimed'
                 // F5 (settlement integrity): the debt gate — a process-label
                 // caller cannot receive receipts, so this delivery is born
                 // fire-and-forget (receiptExpected:false, answered as
@@ -921,7 +935,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // recorded on the row it settled. Booking it would leave a debt
                 // nothing can pay, and a nudge chasing an answer nobody owes.
                 if (!deliveredReceipt) {
-                  taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message), auth, deliveredTo === team ? undefined : deliveredTo, String(target.id))
+                  taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message), auth, deliveredTo === team ? undefined : deliveredTo, String(target.id), consumedProbe)
                   armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
                 }
                 const payload = JSON.stringify({
@@ -1021,10 +1035,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             syncTarget = sessionTeamOf(target)
             const receiptTarget = callback !== '' ? callback : caller
             const auth = buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ...(admission.rule === 'remote-ref-cli' && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget, receivedAt: admittedAt.at })
-            taskLedger.trackInbound(taskId, team, receiptTarget, contextId, receiptExpectationOf(receiptTarget) !== 'process-label', briefOf(message), auth, syncTarget === team ? undefined : syncTarget, String(target.id))
+            taskLedger.trackInbound(taskId, team, receiptTarget, contextId, receiptExpectationOf(receiptTarget) !== 'process-label', briefOf(message), auth, syncTarget === team ? undefined : syncTarget, String(target.id), taskLedger.deliveryFor(taskId)?.state==='claimed')
             armReceiptAutosend(target, taskId, receiptTarget, message, floor)
           }
-          await routeIntoAgent(team, message, caller, taskId, proofClause, directHeader, undefined, syncSteered).then(async (outcome) => {
+          await routeIntoAgent(team, message, caller, taskId, proofClause, directHeader, undefined, syncSteered, claim.ok?claim.card.publicKey:undefined).then(async (outcome) => {
             if (!outcome.ok && outcome.localMiss) { await forwardMiss(outcome.error); return }
             recordActivity('in', team, caller, outcome.ok)
             // W7 slice-2 hook 1: record the settled outcome on the claim row.

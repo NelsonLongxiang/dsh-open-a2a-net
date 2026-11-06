@@ -30,7 +30,7 @@ describe('gh#91 authenticated direct flood brake', () => {
     expect(accepted.body.code).toBeUndefined()
     expect(accepted.body.advice).toMatchObject({ reason: 'use-file-channel', message: expect.stringContaining('a2a_file_send { paths, team }') })
     expect(accepted.body.advice?.message).toContain('a2a-net file send <path…> <team>')
-    expect(n.steered).toHaveLength(1)
+    expect(n.steered.filter((p:any)=>p.source?.taskId==='hint-part')).toHaveLength(1)
     expect((await post(n, 'no-hint', 'ordinary request', 'dsh', wait)).body.advice).toBeUndefined()
   })
   it('admits 16 ordinary deliveries, rejects the 17th visibly BEFORE steer, and stores a failed query outcome', async () => {

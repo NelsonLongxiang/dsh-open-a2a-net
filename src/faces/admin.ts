@@ -355,6 +355,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, status: task.status,
               direction: task.direction ?? 'outbound', receiptExpected: task.receiptExpected !== false,
               ...(task.answeredAt !== undefined ? { answeredAt: task.answeredAt } : {}),
+              ...(task.consumed !== undefined ? { consumed:task.consumed,deliveryObservation:task.consumed?'consumed':'delivered-unconsumed' } : {}),
               ...(task.forwarded === true ? { forwarded: true } : {}),
               ...(task.deliveredTo !== undefined ? { deliveredTo: task.deliveredTo } : {}),
               ...(task.receiverMembers !== undefined ? { receiverMembers: task.receiverMembers } : {}),
@@ -395,6 +396,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // its direction when known.
           archived: taskLedger.archive().slice(0, ARCHIVE_CAP).map(row => ({
             taskId: row.taskId,
+            ...(row.withdrawalResult ? {withdrawalResult:row.withdrawalResult} : {}),
             team: row.team,
             peer: row.peer,
             startedAt: row.startedAt,

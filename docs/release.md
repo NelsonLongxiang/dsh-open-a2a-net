@@ -3,6 +3,13 @@
 > 2026-10-21 立，源自 K3 测试章前瞻（cordis 事故线收尾）：两项与「锁重生成 × 环境策略」
 > 交互的坑，已实测咬人，故入档为纪律。
 
+## 下一 minor 候选：#356 sourced followup 投递切换（待高档评审/未发布）
+
+- 任务同机/跨机、同步/异步均通过 `Agent.followup` 保来源排到独立下一轮；冷会话先走原 resolver。缺方法明确拒绝，不退回 steer、不排裸 kind:user。空闲对账提醒及本机发送方警示一并切换 sourced followup；提醒原空闲门/计数规则不变。
+- 原子保存 taskId/MessageId/完整SessionId 对应，写失败不投递；已入队但最后记账未确认时保 reserved/unknown，不盲重发。未消费撤单用 updateQueue remove；竞态已claim与已消费任务仍即时steer停工。撤单保持结账优先：原cancel提交后通知尽力而为。新对端用原caller/key/body绑定控制，旧对端发原无task_id文本通知；目标消失或通知失败仍清caller行，但不假称消息已移除。任务投递缺followup仍明确拒绝，绝非steer兜底。
+- 双端账本保存 consumed 观察，state/tasks/CLI 显 consumed 或 delivered-unconsumed。发送方只是本次peer答复快照，接收方可在确切claim后更新；未提供字段的旧peer仍未知。3条名额、receipt授权、15秒同步预算/-32005、S5/305/306归属不放宽。
+- 旧reminder lastResult blocked不再是可写类型，旧盘按metadata-reset第3次/2h长退避恢复；只在业务终态停止。该候选属于对外投递语义变化，发布需minor，生产部署和存量操作另报；本PR不发布/不部署/不补现网积压。
+
 ## 下一候选：#351 持久空闲对账提醒（待高档评审/未发布）
 
 - 主机仅在真实空闲时以带 A2A 来源/血缘的 steer 提醒会话本人逐条对账；忙时不注入、不计次。每会话多条欠账合并一条，原文 brief 最多160字符；不读日志代补、不发 ack、不自动撤单或结算。

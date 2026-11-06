@@ -6,7 +6,7 @@ import { readFileSync,writeFileSync } from 'node:fs'
 import { TaskLedger } from '../../src/task-ledger.ts'
 import { ReconciliationReminders } from '../../src/reconciliation-reminders.ts'
 import { REMINDER_MIN_MS,REMINDER_LONG_MS } from '../../src/reconciliation-state.ts'
-function fixture(){let now=1_000_000;const file=join(mkdtempSync(join(tmpdir(),'reminder-state-')),'tasks.json'),ledger=new TaskLedger(file,{now:()=>now,staleTtlMs:10*86400000}),target={id:'target',status:'idle'},sender={id:'sender',status:'idle'},steer=vi.fn(),warn=vi.fn();const controller=new ReconciliationReminders({ledger,agents:()=>[target,sender],resolve:()=>target,sender:row=>row.peer==='local'?sender:undefined,steer,now:()=>now,warn});ledger.track('job','beta/aaaaaaaa','local',undefined,'original', {kind:'session',id:'alpha/bbbbbbbb'});return{ledger,file,target,sender,steer,warn,controller,advance:(ms:number)=>{now+=ms}}}
+function fixture(){let now=1_000_000;const file=join(mkdtempSync(join(tmpdir(),'reminder-state-')),'tasks.json'),ledger=new TaskLedger(file,{now:()=>now,staleTtlMs:10*86400000}),target={id:'target',status:'idle'},sender={id:'sender',status:'idle'},steer=vi.fn(),warn=vi.fn();const controller=new ReconciliationReminders({ledger,agents:()=>[target,sender],resolve:()=>target,sender:row=>row.peer==='local'?sender:undefined,followup:steer,now:()=>now,warn});ledger.track('job','beta/aaaaaaaa','local',undefined,'original', {kind:'session',id:'alpha/bbbbbbbb'});return{ledger,file,target,sender,steer,warn,controller,advance:(ms:number)=>{now+=ms}}}
 describe('#351 observation-only persistence',()=>{
  it('sends one local sender warning after three reminders and continues long reminders, never when sender is busy',()=>{
   const f=fixture();f.controller.scan();f.advance(REMINDER_MIN_MS);f.controller.scan();f.advance(600000);f.controller.scan();expect(f.steer).toHaveBeenCalledTimes(3)
@@ -26,7 +26,7 @@ describe('#351 observation-only persistence',()=>{
  it('malformed restored metadata waits two hours then resumes, preserving debt and recovery deadline across restart',()=>{
   const f=fixture();f.controller.scan();const snapshot=JSON.parse(readFileSync(f.file,'utf8'));snapshot.reconciliationReminders.job.attempts='bad';writeFileSync(f.file,JSON.stringify(snapshot))
   let now=1_000_000;let restored=new TaskLedger(f.file,{now:()=>now,staleTtlMs:10*86400000});const send=vi.fn()
-  const make=()=>new ReconciliationReminders({ledger:restored,agents:()=>[f.target],resolve:()=>f.target,sender:()=>undefined,steer:send,warn:vi.fn(),now:()=>now})
+  const make=()=>new ReconciliationReminders({ledger:restored,agents:()=>[f.target],resolve:()=>f.target,sender:()=>undefined,followup:send,warn:vi.fn(),now:()=>now})
   let c=make();c.scan();expect(send).not.toHaveBeenCalled();expect(restored.list()).toHaveLength(1)
   expect(restored.reminderState('job')).toMatchObject({attempts:3,deliveredCount:0,nextAt:now+REMINDER_LONG_MS,lastResult:'unknown',diagnostic:'metadata-reset'})
   const deadline=restored.reminderState('job')!.nextAt;now+=REMINDER_LONG_MS-1;restored=new TaskLedger(f.file,{now:()=>now,staleTtlMs:10*86400000});c=make();c.scan();expect(send).not.toHaveBeenCalled();expect(restored.reminderState('job')!.nextAt).toBe(deadline)

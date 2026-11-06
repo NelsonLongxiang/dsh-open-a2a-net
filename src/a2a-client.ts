@@ -245,9 +245,11 @@ export class A2aClient {
     taskIdFromCaller?: string,
     callbackAddress?: string,
     guard?: string,
+    cancelTaskId?: string,
   ): Promise<A2aRouteResult> {
     const args: Record<string, unknown> = { team, message, caller_session: callerSession ?? this.options.sessionId }
     if (contextId !== undefined) args.context_id = contextId
+    if (cancelTaskId !== undefined) args.cancel_task_id = cancelTaskId
     // wait:false asks the peer to steer and answer delivered immediately —
     // the async half of the receipt contract for cross-host long tasks.
     if (asyncMode) args.wait = false

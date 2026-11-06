@@ -7,7 +7,7 @@ Files do not go through session messages. Send with `a2a_file_send { paths, team
 ## The receipt contract
 
 Every async route (`wait:false`) registers the task on the peer and returns
-immediately. The peer's target session steers the message into its turn; when
+immediately. The peer's target session queues a sourced `agent.followup` as its own next turn; when
 the turn settles, the peer routes a receipt envelope back to the caller's
 team:
 
@@ -18,6 +18,14 @@ team:
 Correlated receipts also carry `{"outcome":"completed","idempotencyKey":"..."}`
 on a following line. Receipts are the ONLY completion signal for async work —
 polling `a2a_teams` cannot see another host's ledger.
+
+## Delivery and cancellation (#356)
+
+Task delivery (local/remote, sync/async) preserves A2A source metadata and queues a separate next turn. The host atomically stores the taskId → full SessionId + MessageId correspondence before submitting. A missing `Agent.followup` is an explicit refusal, never an instruction to use `steer`. Cold targets first pass the existing resolver. Admission, OriginClaim, team scope, taint and the default three-slot cap run before submission.
+
+`delivered` means inbox acceptance, not consumption. Pending rows may expose `consumed:false` and `deliveryObservation:delivered-unconsumed`; CLI `tasks` and `tasks --json` show this. Inbound later claims can become true, while an outbound value is only the selected peer response snapshot, not live remote telemetry. Neither value is an acknowledgement or completion, and it never changes queue counting. Older peers omitting the field remain unknown, not falsely unconsumed.
+
+Cancellation removes the persisted MessageId through `updateQueue remove` if still unclaimed; a claim/removal race becomes the claimed path. Claimed tasks retain an immediate sourced `steer` stop notice, never a queued stop that would wait behind the work. Cancellation bookkeeping keeps priority: commit the original caller cancellation first, then attempt the stop notification. Cross-host peers with the signed queued-cancellation capability receive the body-bound control field tied to the original verified caller key; older peers receive the legacy `[A2A cancel]` text without a task id, best-effort. An unavailable target or failed notification does not undo cancellation, and `removed`/`steered` only report what actually happened. This is stop-notice compatibility, never permission to fall back to steer for task delivery when followup is missing. A reserved/uncertain mapping is not blindly redelivered. Resolve that existing occurrence instead of changing ids to force a second execution.
 
 ## The ledger
 
@@ -44,13 +52,13 @@ polling `a2a_teams` cannot see another host's ledger.
 
 A pending row with `answeredAt` records that its actual local target produced a task-attributed final or attempted its own formal receipt. It no longer occupies the `targetQueueCap` limit, even if the caller CLI expired and receipt delivery failed. It is **still pending receipt debt**: do not abandon it just to free capacity, or claim the sender received it. Dead-letter expiry, late receipts and lifetime conservation continue unchanged. State session `queued` and the board both use the same unanswered-row count; unfinished work still counts against the default cap of three. Unrelated agents, unrelated finals and host timeout placeholders cannot mark an answer.
 
-## Idle reconciliation reminders (#351, transitional steer)
+## Idle reconciliation reminders (#351, sourced followup)
 
 The host may send a sourced `[A2A reconciliation reminder]` while the session is truly idle. It lists existing pending task ids, senders, bounded original-message briefs and ages. **It is not a new task, acknowledgement, or completion evidence**: no slot is released and no receipt is owed to the reminder itself. Check each original task and send your own formal receipt to its original sender when the outcome is known (completed / failed / rejected / abandoned). If still working, use an ordinary follow-up; do not use a terminal receipt header merely to mean “in progress”.
 
 Reminder attempts are persisted before injection, merged per session, skipped without counting while busy, and backed off after three attempts to about two hours without stopping. They stop only when the original row leaves pending by a real receipt, cancellation, expiry or another existing terminal path. Counters do not prove the model read a reminder. Local senders may receive one warning; remote push notifications are not shipped. Tasks/state and CLI show attempts, last/next times and “多次提醒未对账”.
 
-This deliberately uses idle-only `steerRelay` with A2A source/lineage, not unlabelled human queue prompts or a fallback after queue failure. Task-delivery migration is separately tracked by #356. Receipt authorization, queue counting and synchronous reply ownership do not change. An unwritable ledger fails closed; the host does not invent completion or settle production backlog for you.
+#356 queues both idle reminders and local sender notices through `agent.followup`, preserving the declared `a2a-relay` source and lineage. Busy sessions are still skipped by the reminder scheduler; this does not make a reminder an acknowledgement or a new debt. There is no unlabelled human `kind:user` prompt and no fallback to `steer` when `followup` is missing. Receipt authorization, queue counting and synchronous reply ownership do not change. An unwritable ledger fails closed; the host does not invent completion or settle production backlog for you.
 
 ## Idempotency
 

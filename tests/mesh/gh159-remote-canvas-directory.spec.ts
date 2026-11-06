@@ -265,7 +265,7 @@ describe('gh#159 remote canvas discovery and routing', () => {
     const b = await bootNode({ name: 'B', session: 'gh159-local-owner-b', team: 'dsh', agentId: B_ID, sessionNodes: true, teamScopeInfo: true, teamScopeRouting: true, port: pb, peers: [base(pa)] })
     const localSteers: unknown[] = []
     const localId = 'session-cccccccc33334444'
-    const localAgent = { id: SessionId(localId), session: { events: [] }, steer: (payload: unknown) => { localSteers.push(payload) } }
+    const localAgent = { id: SessionId(localId), session: { events: [] }, steer: (payload: unknown) => { localSteers.push(payload) }, followup(message:unknown){this.steer(message)} }
     try {
       await post(a, '/__dsh_a2a/join', { id: A_ID })
       const caller = a.agents.agent
@@ -294,7 +294,7 @@ describe('gh#159 remote canvas discovery and routing', () => {
     const b = await bootNode({ name: 'B', session: 'gh282-qualified-b', team: 'dsh', agentId: B_ID, sessionNodes: true, teamScopeInfo: true, teamScopeRouting: true, port: pb, peers: [base(pa)] })
     const localSteers: unknown[] = []
     const localId = 'session-cccccccc33334444'
-    const localAgent = { id: SessionId(localId), session: { events: [] }, steer: (payload: unknown) => { localSteers.push(payload) } }
+    const localAgent = { id: SessionId(localId), session: { events: [] }, steer: (payload: unknown) => { localSteers.push(payload) }, followup(message:unknown){this.steer(message)} }
     try {
       await post(a, '/__dsh_a2a/join', { id: A_ID })
       const caller = a.agents.agent

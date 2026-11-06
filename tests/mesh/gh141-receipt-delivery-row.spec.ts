@@ -27,7 +27,7 @@ const C_ID = 'session-cccccccc55556666'
 
 /** A second live, joined session on node n (the harness ships one). From the review of PR #149. */
 async function addSession(n: MeshNode, id: string): Promise<Agent> {
-  const second = { id: SessionId(id), session: { events: [] as unknown[] }, steer: () => {} } as unknown as Agent
+  const second = { id: SessionId(id), session: { events: [] as unknown[] }, steer: () => {}, followup(message:unknown){this.steer(message)} } as unknown as Agent
   const svc = n.agents as any
   const first = svc.agent
   svc.roots = () => [first, second].filter(Boolean)
