@@ -67,6 +67,13 @@ afterEach(async () => {
 })
 
 describe('a2a-net CLI: exit codes and help', () => {
+  it('accepted receiver bookkeeping failure is a reconciliation warning, never a redispatch instruction',async()=>{
+    const host=await stubHost(()=>({status:200,body:{routed:true,delivered:true,team:'beta/aaaaaaaa',task_id:'accepted-work',task_status:'TASK_STATE_DELIVERED',receiverBookkeeping:'failed',note:'reconcile'}}));servers.push(host.server)
+    const HOME=tmpHomeDir(),env={HOME,A2A_CLI_HOME:HOME};await runCli(['init','accepted-cli'],env)
+    const out=await runCli(['route','beta/aaaaaaaa','work','--home',host.url],env);expect(out.code,out.stderr).toBe(0);expect(out.stdout).toContain('已送达、接收方记账失败，请对账，不要重派');expect(host.seen.filter(r=>r.path==='/a2a/direct')).toHaveLength(1)
+    const raw=JSON.parse((await runCli(['route','beta/aaaaaaaa','work','--home',host.url,'--json'],env)).stdout);expect(raw.receiverBookkeeping).toBe('failed')
+  })
+
   it('status displays safe persistence and escalation observations in text and JSON and clears recovered failure',async()=>{
     let failure=true
     const host=await stubHost(path=>({status:200,body:path.includes('cli-deposit')?{ok:true,deposits:[]}:{version:'test',peers:[],ledgerPersistence:failure?{ok:false,lastError:{at:123,code:'EACCES',message:'private detail',path:'private path'}}:{ok:true},nudgeEscalations:{queued:2,unavailable:1,failed:3,lastAt:456,lastError:'ETIMEDOUT',body:'private prompt'}}}))

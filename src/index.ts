@@ -58,6 +58,7 @@ import { TaskLedger, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type Ou
 import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
 import { ReconciliationReminders, type ReminderAgent } from './reconciliation-reminders.ts'
 import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
+import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { receiptFailure, retryReceiptDelivery, transientReceiptFailure, receiptRetryWait } from './receipt-retry.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
@@ -1996,7 +1997,7 @@ export function apply(ctx: Context, config: Config): void {
     taint:(target,localFrom)=>{if(localFrom===undefined||nodeTaint.of(localFrom)!=='')markLineage(target,'relay')},
     warn:code=>logger.warn('a2a: sourced followup (%s); check ledger persistence and original task',code),
   })
-  const followupRelay = (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string): void => followupDelivery.deliver(agent,text,sender,localFrom,taskId,callerKey)
+  const followupRelay = (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string, taskExpected=true): void => followupDelivery.deliver(agent,text,sender,localFrom,taskId,callerKey,taskExpected)
   ctx.on('agent/inbox/claimed',({agent,message})=>followupDelivery.claimed(agent,String(message.id)))
   const withdrawQueuedTask = (taskId:string): Promise<'removed'|'claimed'|'legacy'> => {
     const controller=ctx.get('sessionController')
@@ -2314,7 +2315,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param taskId - the correlation key the steered receipt header carries.
    */
   async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number) => void, callerKey?: string): Promise<
-    { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; localMiss?: true }
+    { ok: true; reply: string; receiverBookkeeping?:'failed'; status?: string; bridge?: 'native-teams'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; localMiss?: true }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
@@ -2370,12 +2371,14 @@ export function apply(ctx: Context, config: Config): void {
    * @returns the agent's final reply, or the explicit failure.
    */
   function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number) => void, callerKey?: string): Promise<
-    { ok: true; reply: string; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string }
+    { ok: true; reply: string; receiverBookkeeping?:'failed'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string }
   > {
     return new Promise((resolve) => {
       // #306: synchronous replies use the same reading-turn attribution as automatic receipts.
       // Registering and steering are synchronous, so this is the exact pre-steer floor.
       const floorAtRegistration = sessionEventsOf(agent).length
+      let admissionFinished=false
+      let earlyReply:{ok:true;reply:string;placeholder?:boolean;ownTurn?:true}|undefined
       const waiter = registerFinalWaiter(agent, (text, placeholder) => {
         // Preserve #305's reply_final contract: only this task's own completed reading turn qualifies.
         let ownTurn = false
@@ -2385,7 +2388,8 @@ export function apply(ctx: Context, config: Config): void {
           const window = read === undefined ? undefined : readingTurnReply(events, read)
           ownTurn = window !== undefined && window.completed && window.reply !== '' && window.reply === text
         }
-        resolve({ ok: true, reply: text, ...(placeholder === true ? { placeholder: true } : {}), ...(ownTurn ? { ownTurn: true as const } : {}) })
+        const result={ok:true as const,reply:text,...(placeholder===true?{placeholder:true}:{}),...(ownTurn?{ownTurn:true as const}:{})}
+        if(admissionFinished)resolve(result);else earlyReply=result
       }, taskId !== undefined && taskId !== '' ? { taskId, steerFloor: floorAtRegistration } : undefined)
       // The header names the sender first: `caller` is the routing node's
       // own label (the session that issued the route), while `team` is this
@@ -2400,18 +2404,21 @@ export function apply(ctx: Context, config: Config): void {
       const text = `${headerLine}\n\n${message}`
       try {
         const floor = sessionEventsOf(agent).length
-        followupRelay(agent, text, caller === '' ? undefined : caller, localFrom, taskId, callerKey)
+        followupRelay(agent, text, caller === '' ? undefined : caller, localFrom, taskId, callerKey, onSteered!==undefined)
         onSteered?.(agent, floor)
+        admissionFinished=true
+        if(earlyReply)resolve(earlyReply)
         if (onSteered !== undefined && sessionEventsOf(agent).slice(floor).some(event => event?.type === 'assistant/message')) queueMicrotask(() => flushFinals(String(agent.id))) // synchronous final may already have emitted idle
       } catch (error) {
         // The waiter was registered above, so the key always holds it; the
         // map-of-arrays stays a plain read.
         const key = String(agent.id)
-        const entries = pendingFinals.get(key) as FinalWaiter[]
+        const entries = pendingFinals.get(key) ?? []
         const kept = entries.filter(entry => entry !== waiter)
         if (kept.length === 0) pendingFinals.delete(key)
         else pendingFinals.set(key, kept)
         waiter.timeoutDisposer?.()
+        if(error instanceof AdmittedBookkeepingError){resolve({ok:true,reply:ADMITTED_BOOKKEEPING_NOTE,receiverBookkeeping:'failed',placeholder:true});return}
         resolve({ ok: false, error: `The DSH session rejected the message: ${String(error)}` })
       }
     })
@@ -3528,7 +3535,7 @@ export function apply(ctx: Context, config: Config): void {
     // them as receipt-owed would fill the owed book with rows no receipt can
     // ever settle (evicting genuinely receivable peer rows past TASK_CAP).
     if (result.bridge !== undefined) return
-    if (result.task_status !== 'TASK_STATE_DELIVERED') return
+    if (result.task_status !== 'TASK_STATE_DELIVERED'&&result.receiverBookkeeping!=='failed') return
     // Fix ② (ghost-debt stop): a delivered async dispatch with no routable
     // callback address can never be settled — register it receiptless
     // (visible, non-debt; reconcile via context_id) instead of stranding a
@@ -3988,7 +3995,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         const receiptHint = callerTeam === undefined ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${callerTeam}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
         // #114 S5: the consumption search starts at the pre-steer log length.
         const steerFloor = sessionEventsOf(target).length
-        followupRelay(target, `[A2A direct] (task ${taskId}) 未验证（in-process） ${sanitizeFromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam, originAgentId, taskId)
+        followupRelay(target, `[A2A direct] (task ${taskId}) 未验证（in-process） ${sanitizeFromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam, originAgentId, taskId, undefined, parseReceipt(message)===null)
         armReceiptAutosend(target, taskId, callerTeam, message, steerFloor)
         // #139: the caller's outbound row is born with this admission and the member that received it.
         if (taskIdFromCaller !== undefined) localBirths.set(taskIdFromCaller, localBirthOf(team, callerSession, callerTeam, sessionTeamOf(target), String(target.id)))

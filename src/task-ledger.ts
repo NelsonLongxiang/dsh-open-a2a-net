@@ -112,6 +112,16 @@ export class TaskLedger {
     }
     this.persist()
   }
+  private admittedFailure: {at:number;code:string}|undefined
+  private admittedFailures=0
+  noteAdmittedBookkeepingFailure(error:unknown):void {this.admittedFailures++;this.admittedFailure={at:this.now(),code:safeObservationCode(error,'LEDGER_WRITE_FAILED')}}
+  orphanDelivery(taskId:string):boolean {
+    const row=this.deliveryFor(taskId)
+    return row?.taskExpected===true&&(row.state==='enqueued'||row.state==='claimed')&&!this.tasks.some(r=>r.taskId===taskId)&&!this.archived.some(r=>r.taskId===taskId)
+  }
+  deliveryBookkeepingState():{orphaned:number;failures:number;lastError?:{at:number;code:string}} {
+    return {orphaned:this.deliveries.filter(r=>r.taskExpected===true&&(r.state==='enqueued'||r.state==='claimed')&&!this.tasks.some(t=>t.taskId===r.taskId)&&!this.archived.some(t=>t.taskId===r.taskId)).length,failures:this.admittedFailures,...(this.admittedFailure?{lastError:{...this.admittedFailure}}:{})}
+  }
   private writeFailure: { at: number; code: string } | undefined
   /** Diagnostic-only; never implies that a failed mutation committed. No paths or payloads exposed. */
   persistenceState(): { ok: boolean; lastError?: { at: number; code: string } } {

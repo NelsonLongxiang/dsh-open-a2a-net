@@ -27,6 +27,7 @@ import { peerPayloadFingerprint, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REP
 import { briefOf, type TaskLedger } from '../task-ledger.ts'
 import { parseReceipt, taskIdRefusal } from '../receipt.ts'
 import { buildAuthorization, claimCovers, nextOf, refusalOf, type Admission, type AuthProof, type RemoteCliProof, type SettlementRefusal, type Settler } from '../task-auth.ts'
+import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from '../admitted-bookkeeping.ts'
 import { isRootOriginUrl, type OriginClaimVerdict } from '../origin-claim.ts'
 import { hasOriginClaimFields, completeInboundVerification, verifiedInboundAdmission, WIRE_ERROR_INBOUND_VERIFICATION } from '../inbound-verification.ts'
 import type { Config } from '../index.ts'
@@ -59,7 +60,7 @@ export type ColdWake =
   | { readonly kind: 'no-match' }
 
 /** routeIntoAgent's settled answer (mirrors index.ts's local union). */
-export type RouteOutcome = { ok: true; reply: string; status?: string; bridge?: 'native-teams'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; localMiss?: true }
+export type RouteOutcome = { ok: true; reply: string; receiverBookkeeping?:'failed'; status?: string; bridge?: 'native-teams'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; localMiss?: true }
 
 interface BridgeTeamsRegistryMirror {
   listTeams(): Array<{ name: string; description: string }>
@@ -142,7 +143,7 @@ export interface WireDeps {
   /** gh#131: the local session one of this host's own `<zone>/<id8>` handles names, if exactly one. */
   readonly localSessionOfHandle: (ref: string) => string | undefined
   readonly cancelQueuedTask: (taskId:string, message:string, sender:string, original?: import('../task-ledger.ts').TaskRecord) => Promise<{removed:boolean;steered:boolean}>
-  readonly followupRelay: (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string) => void
+  readonly followupRelay: (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string, taskExpected?:boolean) => void
   readonly steerRelay: (agent: Agent, text: string, sender?: string) => void
   readonly fromClause: (from: string) => string
   readonly sanitizeFromClause: (from: string) => string
@@ -754,6 +755,11 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // ⇒ hard conflict (both 409). A replay must never re-enter the
           // target session, no matter how it settles.
           const idemFingerprint = peerPayloadFingerprint({ caller, message, noWait, team })
+          const priorDelivery=taskLedger.deliveryFor(taskId)
+          if(taskLedger.orphanDelivery(taskId)&&priorDelivery?.callerKey===(claim.ok?claim.card.publicKey:undefined)&&idempotencyStore.query(taskId,idemFingerprint).found){
+            const payload=JSON.stringify({routed:true,delivered:true,team,task_id:taskId,context_id:contextId,task_status:'TASK_STATE_DELIVERED',receipt:'routed',receiverBookkeeping:'failed',note:ADMITTED_BOOKKEEPING_NOTE})
+            res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
+          }
           const idemVerdict = idempotencyStore.claim(taskId, idemFingerprint)
           if (idemVerdict !== 'fresh') {
             const replay = idemVerdict === 'replay'
@@ -839,7 +845,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const failure = result.ok ? '' : await d.diagnoseCanvas(team, original + ' — ' + result.error, claim.ok && claim.cli === true && claim.bound && claim.caller === caller ? caller : undefined)
             if (!result.ok && result.code !== -32005) idempotencyStore.recordOutcome(taskId, { status: 'failed', error: failure })
             else if (result.ok && result.task_status === 'TASK_STATE_COMPLETED') idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: result.reply })
-            const payload = JSON.stringify(result.ok ? { routed: true, ...(result.task_status === 'TASK_STATE_DELIVERED' ? { delivered: true } : { result: { text: result.reply } }), team, task_id: taskId, context_id: contextId, task_status: result.task_status, consumed: result.consumed, bridge: result.bridge, receipt: result.receipt, forwarded: true } : { error: failure, code: result.code ?? -32000, receipt: result.receipt, task_id: taskId, team, task_status: result.code === -32005 ? 'TASK_STATE_DELIVERED' : 'TASK_STATE_FAILED', ...(result.next !== undefined ? { next: result.next } : {}) })
+            const payload = JSON.stringify(result.ok ? { routed: true, ...(result.task_status === 'TASK_STATE_DELIVERED' ? { delivered: true } : { result: { text: result.reply } }), team, task_id: taskId, context_id: contextId, task_status: result.task_status, consumed: result.consumed, bridge: result.bridge, receipt: result.receipt, ...(result.receiverBookkeeping==='failed'?{receiverBookkeeping:'failed',note:ADMITTED_BOOKKEEPING_NOTE}:{}), forwarded: true } : { error: failure, code: result.code ?? -32000, receipt: result.receipt, task_id: taskId, team, task_status: result.code === -32005 ? 'TASK_STATE_DELIVERED' : 'TASK_STATE_FAILED', ...(result.next !== undefined ? { next: result.next } : {}) })
             // #298: only a reply the peer itself declares final (`reply_final`; never a host placeholder, review of
             // #305 F3), handed to the CLI in full, marks that member's later receipt a duplicate — never a delivered,
             // mailbox or bridge shape (F1), and never when the CLI gave up and closed the socket ('finish' does not fire).
@@ -901,11 +907,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 const deliveredReceipt = parseReceipt(message) !== null
                 // gh#141: a receipt is answered by nobody — its steer asks for no receipt back.
                 const receiptRequest = deliveredReceipt ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
-                followupRelay(target, `${directHeader(from)}\n\n${message}${receiptRequest}`, from === 'an unknown node' ? undefined : from, undefined, taskId, claim.ok?claim.card.publicKey:undefined)
+                followupRelay(target, `${directHeader(from)}\n\n${message}${receiptRequest}`, from === 'an unknown node' ? undefined : from, undefined, taskId, claim.ok?claim.card.publicKey:undefined, !deliveredReceipt)
                 steered = true
                 if(deliveredReceipt&&refusedSettlement===undefined)idempotencyStore.recordOutcome(taskId,{status:'completed',reply:'receipt delivered'})
                 recordActivity('in', team, caller, true)
-                armReceiptAutosend(target, taskId, receiptTarget, message, steerFloor)
                 // v0.5.23 (async-stall): "delivered" only proves the steer call
                 // returned — not that a turn started. An idle-phase steer wakes
                 // the driver, but a maintenance/abort window latches the wake for
@@ -954,6 +959,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // nothing can pay, and a nudge chasing an answer nobody owes.
                 if (!deliveredReceipt) {
                   taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message), auth, deliveredTo === team ? undefined : deliveredTo, String(target.id), consumedProbe)
+                  armReceiptAutosend(target, taskId, receiptTarget, message, steerFloor)
                   armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
                 }
                 const payload = JSON.stringify({
@@ -972,10 +978,12 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
                 res.end(payload)
               } catch (error) {
+                if(error instanceof AdmittedBookkeepingError)steered=true
                 if (!steered) { refuseNoWait(`The DSH session rejected the message: ${String(error)}`); return }
-                logger.warn(`a2a: task ${taskId.slice(0, 80)} was delivered to ${team}, but its bookkeeping failed: ${String(error)}`)
+                taskLedger.noteAdmittedBookkeepingFailure(error)
+                logger.warn('a2a: admitted task bookkeeping failed; reconcile original delivery')
                 if (!res.headersSent) {
-                  const payload = JSON.stringify({ routed: true, delivered: true, team, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_DELIVERED', artifacts: [], consumed: false, receipt: 'routed' })
+                  const payload = JSON.stringify({ routed: true, delivered: true, team, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_DELIVERED', artifacts: [], consumed: false, receipt: 'routed',receiverBookkeeping:'failed',note:ADMITTED_BOOKKEEPING_NOTE })
                   res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
                   res.end(payload)
                 }
@@ -1053,10 +1061,14 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             syncTarget = sessionTeamOf(target)
             const receiptTarget = callback !== '' ? callback : caller
             const auth = buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ...(admission.rule === 'remote-ref-cli' && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget, receivedAt: admittedAt.at })
-            taskLedger.trackInbound(taskId, team, receiptTarget, contextId, receiptExpectationOf(receiptTarget) !== 'process-label', briefOf(message), auth, syncTarget === team ? undefined : syncTarget, String(target.id), taskLedger.deliveryFor(taskId)?.state==='claimed')
+            try{taskLedger.trackInbound(taskId, team, receiptTarget, contextId, receiptExpectationOf(receiptTarget) !== 'process-label', briefOf(message), auth, syncTarget === team ? undefined : syncTarget, String(target.id), taskLedger.deliveryFor(taskId)?.state==='claimed')}catch(error){taskLedger.noteAdmittedBookkeepingFailure(error);throw new AdmittedBookkeepingError(error)}
             armReceiptAutosend(target, taskId, receiptTarget, message, floor)
           }
           await routeIntoAgent(team, message, caller, taskId, proofClause, directHeader, undefined, syncSteered, claim.ok?claim.card.publicKey:undefined).then(async (outcome) => {
+            if(outcome.ok&&outcome.receiverBookkeeping==='failed'){
+              const payload=JSON.stringify({routed:true,delivered:true,team,task_id:taskId,context_id:contextId,task_status:'TASK_STATE_DELIVERED',receipt:'routed',receiverBookkeeping:'failed',note:ADMITTED_BOOKKEEPING_NOTE})
+              res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
+            }
             if (!outcome.ok && outcome.localMiss) { await forwardMiss(outcome.error); return }
             recordActivity('in', team, caller, outcome.ok)
             // W7 slice-2 hook 1: record the settled outcome on the claim row.

@@ -13,6 +13,18 @@ vi.mock('node:fs',async original=>{const fs=await original<typeof import('node:f
 afterEach(()=>{fault.fail=false;vi.restoreAllMocks()})
 function setup(){const file=join(mkdtempSync(join(tmpdir(),'followup-delivery-')),'tasks.json'),ledger=new TaskLedger(file),followup=vi.fn(),steer=vi.fn(),agent={id:SessionId('session-aaaaaaaa11112222'),followup,steer} as unknown as Agent,taint=vi.fn(),warn=vi.fn(),dispatcher=new FollowupDelivery({ledger,taint,warn});return{file,ledger,followup,steer,agent,taint,warn,dispatcher}}
 describe('#356 persistent sourced followup admission',()=>{
+ it('task-purpose orphan correspondence survives restore and refuses replay without inventing task state',()=>{
+  const f=setup();f.dispatcher.deliver(f.agent,'work',undefined,undefined,'orphan',undefined,true)
+  const restored=new TaskLedger(f.file),d=new FollowupDelivery({ledger:restored,taint:vi.fn(),warn:vi.fn()})
+  expect(restored.deliveryBookkeepingState().orphaned).toBe(1);expect(restored.list()).toEqual([]);expect(restored.archive()).toEqual([])
+  expect(()=>d.deliver(f.agent,'work',undefined,undefined,'orphan',undefined,true)).toThrow('receiver bookkeeping failed');expect(f.followup).toHaveBeenCalledOnce()
+  restored.trackInbound('orphan','alpha/aaaaaaaa','beta/bbbbbbbb');expect(restored.deliveryBookkeepingState().orphaned).toBe(0)
+ })
+ it('receipt-only and old purpose-unknown correspondence is never inferred to be a missing task birth',()=>{
+  const f=setup();f.dispatcher.deliver(f.agent,'receipt',undefined,undefined,'receipt',undefined,false)
+  expect(new TaskLedger(f.file).deliveryBookkeepingState().orphaned).toBe(0);expect(f.ledger.list()).toEqual([])
+ })
+
  for(const result of ['removed','claimed-steered','withdraw-failed-steered','no-agent'] as const)it('cancellation audit result '+result+' survives disk restart without changing terminal bookkeeping',()=>{
   const f=setup();f.ledger.track('cancel-audit','alpha/aaaaaaaa','local');f.ledger.cancel('cancel-audit');const counters=f.ledger.conservation()
   f.ledger.recordWithdrawalResult('cancel-audit',result);const restored=new TaskLedger(f.file)
