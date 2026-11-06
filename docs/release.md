@@ -6,6 +6,8 @@
 ## 下一版本候选（待评审，未发布）
 
 - followup 抛异常后的宿主接纳观察：只有本次预留的精确会话/MessageId 出现在该会话 inbox 或事件流，才返回 DELIVERED 与 `acceptance:inserted`，提示后续未确认、原 task 对账；不代表消费或完成。证明不了仍失败并带 `acceptance:unknown`，提示“接纳状态未知，请用原 task id 对账，不要换 id 重派”，新调用方停止候选 failover；已知插入前拒绝不改。契约与旧客户端限制见[接纳观察](protocol/followup-admission.md)。不新增状态，0.2.2-rc.1 仅源码判断、未运行验证，不进入0.7.0。
+- 已披露限制（#375，全局 2026-11-06）：返回 `acceptance:"inserted"` 时，主机已接纳输入；但如果接收方没有出生行（例如出生提交失败），这一笔不会触发 nudge，也不会挂自动回执，只能由人按原 task id 人工对账。
+- 节点升级说明（#375）：旧主机（0.7.0 及更早）不认识 `acceptance:"unknown"`，收到后仍可能 failover 到其他候选目标。新主机才会停止 failover，并提示“接纳状态未知，请用原 task id 对账，不要换 id 重派”。建议调用方和接收方两端都升级。
 
 - 普通 Agent 同步等待的主机占位输出（flush 超时、会话 dead、aborted / failed 读取轮、textless）返回已有 `TASK_STATE_DELIVERED` 且不带 `reply_final`。CLI 与 `a2a_route` 同步路径提示“已送达、未得到最终答复，请按 task id 对账”，不是失败重投或完成。已有出生/自动回执的 forwarded sync 带 `receipt:routed` 并保欠账；plain sync 不新建出生/自动回执，带 `receipt:none`，调用方记可见 receiptless 行而不计欠债。除明确 `receipt:none` 的非债兼容路径外，只有复用现有阅读轮归属得到的真实 own-turn final 才允许把普通同步答复当已付。native-teams 权威 round 与 CLI mailbox 接纳语义不扩大变更。
 - 新版 CLI 的 sync 转发等待超时由原来的非 0 退出码改为退出码 0，并提示“已送达、未得到最终答复，请按 task id 对账”，依赖退出码判断成败的脚本需要据此调整。
