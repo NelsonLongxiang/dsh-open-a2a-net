@@ -1,3 +1,4 @@
+import {ACCEPTANCE_UNKNOWN_NOTE,ACCEPTANCE_INSERTED_NOTE} from './followup-admission.ts'
 /**
  * In-process decentralized A2A client: the outbound peer surface — verified
  * agent-card fetches (discovery) and direct routes to a peer's
@@ -69,6 +70,7 @@ export type CardFetchOutcome =
   | { readonly ok: false; readonly stage: 'rejected'; readonly reason: CardRejection }
 
 type WireRoute = {
+  readonly acceptance?:unknown
   readonly receiverBookkeeping?:unknown
   readonly routed?: unknown
   readonly delivered?: unknown
@@ -338,10 +340,11 @@ export class A2aClient {
       return failure
     }
     if (raw.error !== undefined && raw.error !== null) {
-      const failure: { ok: false; error: string; code?: number } = {
+      const failure: { ok: false; error: string; code?: number; acceptance?:'unknown';task_id?:string } = {
         ok: false,
         error: typeof raw.error === 'string' ? raw.error : JSON.stringify(raw.error),
       }
+      if(raw.acceptance==='unknown'){failure.acceptance='unknown';failure.error=ACCEPTANCE_UNKNOWN_NOTE;failure.task_id=wireText(raw.task_id)||taskIdFromCaller}
       if (typeof raw.code === 'number') failure.code = raw.code
       return failure
     }
@@ -362,7 +365,8 @@ export class A2aClient {
         ok: true,
         team,
         ...(raw.receiverBookkeeping==='failed'?{receiverBookkeeping:'failed' as const}:{}),
-        reply: raw.receiverBookkeeping==='failed'?ADMITTED_BOOKKEEPING_NOTE:!asyncMode&&bridge===undefined&&raw.reply_final!==true?'已送达、未得到最终答复，请按 task id 对账。Delivered without a final reply; reconcile task '+taskId+'.':bridge !== undefined
+        ...(raw.acceptance==='inserted'?{acceptance:'inserted' as const}:{}),
+        reply: raw.acceptance==='inserted'?ACCEPTANCE_INSERTED_NOTE:raw.receiverBookkeeping==='failed'?ADMITTED_BOOKKEEPING_NOTE:!asyncMode&&bridge===undefined&&raw.reply_final!==true?'已送达、未得到最终答复，请按 task id 对账。Delivered without a final reply; reconcile task '+taskId+'.':bridge !== undefined
           ? `Delivered to ${team} (async native-teams round). It settles through the team's own routing chain and routes no A2A receipt in this slice — reconcile via context_id follow-ups.`
           : consumed === false
             ? `Delivered to ${team} (async), but the target had not started a turn on it yet — the message is queued behind the session's current turn. Watch a2a_status activity or follow up with the context id; do not resend.`
@@ -370,7 +374,7 @@ export class A2aClient {
         task_id: taskId,
         context_id: wireText(raw.context_id),
         task_status: wireText(raw.task_status) === '' ? 'TASK_STATE_DELIVERED' : wireText(raw.task_status),
-        ...(consumed !== undefined ? { consumed } : {}),
+        ...(raw.acceptance==='inserted'?{consumed:false}:consumed !== undefined ? { consumed } : {}),
         ...(wireText(raw.delivered_to) !== '' ? { deliveredTo: wireText(raw.delivered_to) } : {}),
         ...(bridge !== undefined ? { bridge } : {}),
         ...(raw.receipt === 'none' || raw.receipt === 'routed' || raw.receipt === 'mailbox' ? { receipt: raw.receipt } : {}),
@@ -382,7 +386,8 @@ export class A2aClient {
     return {
       ok: true,
       team,
-      reply: !asyncMode&&wireText(raw.task_status)==='TASK_STATE_DELIVERED'&&raw.reply_final!==true&&bridge===undefined?'已送达、未得到最终答复，请按 task id 对账。Delivered without a final reply; reconcile task '+String(taskIdFromCaller??wireText(raw.task_id))+'. '+reply:reply,
+      ...(raw.acceptance==='inserted'?{acceptance:'inserted' as const,consumed:false}:{}),
+      reply: raw.acceptance==='inserted'?ACCEPTANCE_INSERTED_NOTE:!asyncMode&&wireText(raw.task_status)==='TASK_STATE_DELIVERED'&&raw.reply_final!==true&&bridge===undefined?'已送达、未得到最终答复，请按 task id 对账。Delivered without a final reply; reconcile task '+String(taskIdFromCaller??wireText(raw.task_id))+'. '+reply:reply,
       ...(wireText(raw.delivered_to) !== '' ? { deliveredTo: wireText(raw.delivered_to) } : {}),
       ...(raw.reply_final === true ? { replyFinal: true as const } : {}),
       // Same echo-first rule as the delivered branch: the peer's echo wins,

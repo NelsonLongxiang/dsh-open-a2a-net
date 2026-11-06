@@ -5,11 +5,15 @@
 
 ## 下一版本候选（待评审，未发布）
 
+- followup 抛异常后的宿主接纳观察：只有本次预留的精确会话/MessageId 出现在该会话 inbox 或事件流，才返回 DELIVERED 与 `acceptance:inserted`，提示后续未确认、原 task 对账；不代表消费或完成。证明不了仍失败并带 `acceptance:unknown`，提示“接纳状态未知，请用原 task id 对账，不要换 id 重派”，新调用方停止候选 failover；已知插入前拒绝不改。契约与旧客户端限制见[接纳观察](protocol/followup-admission.md)。不新增状态，0.2.2-rc.1 仅源码判断、未运行验证，不进入0.7.0。
+- 已披露限制（#375，全局 2026-11-06）：返回 `acceptance:"inserted"` 时，主机已接纳输入；但如果接收方没有出生行（例如出生提交失败），这一笔不会触发 nudge，也不会挂自动回执，只能由人按原 task id 人工对账。
+- 节点升级说明（#375）：旧主机（0.7.0 及更早）不认识 `acceptance:"unknown"`，收到后仍可能 failover 到其他候选目标。新主机才会停止 failover，并提示“接纳状态未知，请用原 task id 对账，不要换 id 重派”。建议调用方和接收方两端都升级。
+
 - 普通 Agent 同步等待的主机占位输出（flush 超时、会话 dead、aborted / failed 读取轮、textless）返回已有 `TASK_STATE_DELIVERED` 且不带 `reply_final`。CLI 与 `a2a_route` 同步路径提示“已送达、未得到最终答复，请按 task id 对账”，不是失败重投或完成。已有出生/自动回执的 forwarded sync 带 `receipt:routed` 并保欠账；plain sync 不新建出生/自动回执，带 `receipt:none`，调用方记可见 receiptless 行而不计欠债。除明确 `receipt:none` 的非债兼容路径外，只有复用现有阅读轮归属得到的真实 own-turn final 才允许把普通同步答复当已付。native-teams 权威 round 与 CLI mailbox 接纳语义不扩大变更。
 - 新版 CLI 的 sync 转发等待超时由原来的非 0 退出码改为退出码 0，并提示“已送达、未得到最终答复，请按 task id 对账”，依赖退出码判断成败的脚本需要据此调整。
 - HTTP 等待和自动回执用途分离：等待到期不删除后续 receipt 归属跟踪；后者按原任务终态、取消、TTL 或卸载清理。晚到真实读取轮 final 仍走同一固定身份回执和原有有限退避；占位、未消费、已关闭的空/失败读取轮不生成正式回执，不采用其他任务/后续轮输出。#351 提醒只提示本人对账，不新造正式回执。
 - 旧客户端兼容：0.7.0 及更早 CLI 收到这种含 `result.text` 的 DELIVERED 同步响应时会打印回复并在 stderr 提示未 settled，通常退出0，不自动重投；旧 `a2a_route` 返回 `ok:true` 和 DELIVERED，保留可路由回调的欠账，但旧 `trackOwedTask` 不识别 plain sync 新的 `receipt:none`，仍可能挂幽灵债；因此普通同步两端也应同步升级，不能仅凭旧文案当完成。旧版没有新的明确中文同步对账提示。如果走旧客户端的 `delivered:true` 分支，其文案可能仍称 async；以状态/task id 对账，不能把主机文字当业务完成。旧转发 home 若误收到旧对端的无 `reply_final` COMPLETED 仍可能按旧规则 receiptless，因此建议两端同步升级；本候选不改0.7.0已构建字节或代替后续发版授权。
-- 边界见[同步回复契约](protocol/synchronous-reply-contract.md)。followup 泛化 throw 的接纳未知、#369已覆盖窗口、不自动补出生及重启不恢复补发定时器等另案/已披露限制不混入。不新增任务状态，不 tag / publish / 部署。
+- 边界见[同步回复契约](protocol/synchronous-reply-contract.md)。同步回复片段不涉及 followup 泛化 throw 的接纳未知（本节另列接纳观察候选）；#369已覆盖窗口、不自动补出生及重启不恢复补发定时器等边界不变。不新增任务状态，不 tag / publish / 部署。
 
 ## 0.7.0（阶段0：可发布候选，未 tag / publish / 部署）
 

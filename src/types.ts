@@ -111,6 +111,7 @@ export interface ZoneRecord {
 
 /** Canonical `a2a_route` success value. */
 export interface A2aRouteOk {
+  readonly acceptance?:'inserted'
   readonly receiverBookkeeping?:'failed'
   /** Actual member face returned by a forwarded peer delivery. */
   readonly deliveredTo?: string
@@ -155,6 +156,7 @@ export interface A2aRouteOk {
 
 /** Canonical `a2a_route` failure value. */
 export interface A2aRouteError {
+  readonly acceptance?:'unknown'
   readonly [RECEIPT_RETRYABLE]?:true
   /** A forwarded receipt never promises another receipt, including uncertain waits. */
   readonly receipt?: 'none'

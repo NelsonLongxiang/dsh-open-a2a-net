@@ -219,6 +219,16 @@ ygl-trees verify run spec_4de5f3b9d48d --db <snapshot>      # 判定：overall �
 
 新流程仍是probe采集→lint-candidates→prepare新冻结规格→verify run→archive verify；用--meta-repo指向验证器引擎源码根，不把插件产品源码误当纯验证器项目，也不使用--no-meta绕过。采集exit0不是PASS，所有结论只认spec run。
 
+## 产品仓根目录 `verify meta` 的 R3 现状与原因（2026-11-06）
+
+**现状**：在本仓根目录运行 `verify meta .`，结果为 R1 PASS、R2 PASS、R3 FAIL。引擎 0.119.0 和 0.120.0 实测结果相同，meta_version 都是 1.4。用 v0.6.40、v0.6.43 的干净导出复测，R3 同样 FAIL，所以这不是 0.7.0 引入的退化。
+
+**原因**：本仓根目录有 `AGENTS.md` 和 `verify/`，meta 按验证器仓的严格模式扫描，把产品自身的可执行文件判为“工具目录之外的游离执行工件”。被报的对象有三类：产品 CLI（`cli/a2a.mjs`、`cli/serve.mjs`）、构建产物 bundle（`assets/nexusDist/`、`assets/stageDist/`），以及工程测试用的 `.mjs` fixture（`tests/fixtures/` 下的文件；v0.6.43 时已有的 fixture 也一直被报）。`lib/` 已被 gitignore，干净检出里没有它，只有本地构建后才会被扫到。
+
+**闸门口径**：meta 闸门只认 `--meta-repo` 指向的验证器引擎源码根（见本文发布物留存 v2 一节），不对产品仓根目录下判定。产品代码不登记进 `verify/meta.json` 的 tooling[]，因为它们是产品，不是验证器工具。判定规则和 `verify/` 目录本身不改。
+
+**处置记录**：0.7.0 曾在 `docs/ops/fixtures/` 新增两个回退 fixture，因此多了两条“docs/ 下的执行工件”。按全局 2026-11-06 的裁定，这两个文件已原字节移到 `tests/fixtures/`。移动后复测（引擎 0.119.0 和 0.120.0，meta 1.4），docs/ 下已不再被报，R3 共 9 条：产品 CLI 2 条、bundle 2 条、`tests/fixtures/` 5 条，其中包括移过来的这两个。这三类都按上面的原因保留为 FAIL 现状：移动解决的是“文档目录下有执行工件”，并没有让这两个文件从 R3 里消失。
+
 ## 维护
 
 - **调阈值/加判据**：改 verify/material.md（判据句必须逐字可引用）+ candidates/reviews，

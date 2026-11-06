@@ -189,3 +189,4 @@ it.each([
 ] as const)('ordinary completed response requires own final while native/mailbox retain explicit authority: %j',async({extra,owed})=>{
  const x=fixture([{...ok,task_status:'TASK_STATE_COMPLETED',...extra}as A2aRouteResult]);await createDirectForward(x.deps)({...request,noWait:false});if(extra.bridge==='native-teams')expect(x.ledger.list()).toEqual([]);else expect(x.ledger.list()[0]?.receiptExpected!==false).toBe(owed)
 })
+it('unknown admission observation is terminal to forwarding candidate selection without inventing a task debt',async()=>{const x=fixture([{ok:false,error:'接纳状态未知，请用原 task id 对账，不要换 id 重派',code:-32000,acceptance:'unknown'},ok]);const out=await createDirectForward(x.deps)(request);expect(out).toMatchObject({ok:false,acceptance:'unknown',task_id:request.taskId});expect(x.sent).toHaveLength(1);expect(x.ledger.list()).toEqual([])})
