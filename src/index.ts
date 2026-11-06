@@ -112,6 +112,8 @@ declare module '@deepseek-ai/dsh-llm' {
        * ui-chat's relay context body renders "来自 X" + the full text from
        * this field; without it the row falls back to an opaque body. */
       senderSessionId?: string
+      /** Host-built node reminder only; never copied from an inbound peer source. */
+      nodeReminder?: true
     }
   }
 }
