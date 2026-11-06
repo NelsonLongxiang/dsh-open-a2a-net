@@ -219,6 +219,35 @@ Files do not go through session messages: use the file channel below, never JPFI
     side is newer than the mailbox side.
   - `mail_lost` counts earlier mailbox rows the 64-row cap already pushed
     off the host, whatever their context; they cannot be recovered.
+  - The two sides keep time on different machines: an `in` row's `at` is the
+    home host's clock, an `out` row's `at` is this machine's. When the CLI
+    talks to a home on another machine whose clock is off, the two sides can
+    interleave in the wrong order. Paging stays complete either way.
+- `receipt <task_id> [--attention] [--to TEAM] <one line…>` is the one formal
+  receipt for a task this identity received:
+  - It sends `[A2A receipt] task <task_id> <one line>` plus the v2 envelope
+    line. The default is a result,
+    `{"outcome":"completed","idempotencyKey":<id>,"disposition":"result"}`.
+    With `--attention` it is a question for the caller,
+    `{"idempotencyKey":<id>,"disposition":"attention"}`, with no outcome:
+    it settles the task but is not a completion. The caller's answer comes
+    back as a new task in the same context.
+  - The target is the sender of that task's mailbox row; `--to` names one
+    when the mailbox has none (or several). With neither, it exits 2 and
+    sends nothing. The receipt rides the task's own `context_id`, so it also
+    shows in `thread`.
+  - It rides task id `receipt-<task_id>`. The host runs a task id once, so a
+    task gets one receipt: the same receipt again is a replay ("already
+    received"), and a different one, such as a result after an attention,
+    is refused (exit 1).
+  - The task id must be letters, digits, `.`, `_`, `:` or `-`, and at most
+    72 characters, so `receipt-<task_id>` fits the 80-character task id. A
+    longer id exits 2; it is never cut short. The line is folded to one
+    line.
+  - A task delivered into a CLI mailbox is final on the caller's side (no
+    debt is booked for it), so its receipt settles nothing there; the
+    caller still gets it, with `disposition` on its mailbox row. A receipt
+    settles a debt only where the caller tracked one.
 - `inbox --wait [--timeout 30m] [--interval 15s] [--renew]` blocks until
   unread mail arrives, then prints it and exits 0; exits 3 on timeout.
   `--renew` re-publishes the deposit when it is gone or under 10 minutes from

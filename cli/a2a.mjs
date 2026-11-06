@@ -48,7 +48,7 @@ const USAGE = `a2a-net CLI — aligned with the plugin's model tools ('a2a tools
 
 usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 
-户口制:   init <name> [--uuid 16hex] [--force] · publish · inbox [--new|--wait|--hook] · thread <context_id> · revoke
+户口制:   init <name> [--uuid 16hex] [--force] · publish · inbox [--new|--wait|--hook] · thread <context_id> · receipt <task_id> <result…> · revoke
 对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · report <msg…> [--task ID]
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
@@ -80,11 +80,17 @@ thread:   thread <context_id> [--limit N] [--before C]   one conversation, newes
           mailbox rows the host tagged with that context_id (dir "in") and this identity's routes the host
           took in it (dir "out", from ~/.a2a/sent.jsonl, with the sync reply when there was one);
           --limit 1-200 (default 20), --before takes the next_before a previous page returned;
-          read-only: never moves ~/.a2a/inbox.cursor; unscoped counts mailbox rows with no context_id`
+          read-only: never moves ~/.a2a/inbox.cursor; unscoped counts mailbox rows with no context_id
+
+receipt:  receipt <task_id> [--attention] [--to TEAM] <one line…>   the formal receipt for a task this identity got:
+          settles the caller's debt; the envelope carries disposition "result" (default) or "attention" (a question
+          for the caller — it settles the task but is not a completion; the answer comes back as a new task in the
+          same context). The target is the mailbox row's sender for that task id unless --to names one; it rides
+          task id receipt-<task_id>, so a task gets one receipt (a second, different one is refused)`
 
 /** Flags that take a value (both '--home URL' and '--home=URL'); the rest are switches. */
-const VALUE_FLAGS = new Set(['--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before'])
-const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync'])
+const VALUE_FLAGS = new Set(['--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to'])
+const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
 const HOOK_MODE = process.argv.includes('--hook')
@@ -463,7 +469,10 @@ function journalSent(body, out) {
   try {
     mkdirSync(IDENTITY_DIR, { recursive: true })
     // One older generation is kept; a rename is atomic, so a reader sees either file whole.
-    if ((statSync(SENT_LOG, { throwIfNoEntry: false })?.size ?? 0) > SENT_LOG_CAP) renameSync(SENT_LOG, SENT_LOG_PREV)
+    if ((statSync(SENT_LOG, { throwIfNoEntry: false })?.size ?? 0) > SENT_LOG_CAP) {
+      // Another process may have rolled it between the stat and here: then there is nothing left to roll.
+      try { renameSync(SENT_LOG, SENT_LOG_PREV) } catch (error) { if (error?.code !== 'ENOENT') throw error }
+    }
     appendFileSync(SENT_LOG, `${JSON.stringify(row)}\n`, { mode: 0o600 })
   } catch (error) {
     console.error(`[route] sent journal not written (${String(error?.code ?? error)}) — the send itself stands; 'a2a thread' will miss it`)
@@ -524,6 +533,42 @@ async function cmdThread() {
     // Mail the host's cap pushed out is gone from this read, whatever its context.
     mail_lost: Number.isInteger(box.oldest_seq) ? Math.max(0, box.oldest_seq - 1) : null,
   }, null, 2))
+}
+
+/**
+ * superagent p1-receipt-cmd: the one formal-receipt shape for a CLI identity —
+ * `[A2A receipt] task <id> <one line>` plus the v2 envelope line (src/receipt.ts
+ * formatReceipt key order). disposition says what comes back: the result, or a
+ * question needing the caller's attention; an attention receipt carries no
+ * outcome because it is not a completion. The receipt rides its own fixed task id
+ * `receipt-<id>`, so the host's idempotency holds a task to one receipt.
+ */
+async function cmdReceipt() {
+  const [taskId, ...words] = positionals()
+  const summary = words.join(' ').replace(/\s+/g, ' ').trim()
+  if (taskId === undefined || summary === '') usage('usage: a2a receipt <task_id> [--attention] [--to TEAM] <one line…>')
+  const receiptTask = `receipt-${taskId}`
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(taskId)) usage(`receipt: task id "${taskId}" has characters a receipt's own task id cannot carry (letters, digits, . _ : -)`)
+  if (receiptTask.length > 80) usage(`receipt: task id "${taskId}" is too long — its receipt rides "${receiptTask}" (${String(receiptTask.length)} characters, at most 80); it is not cut short`)
+  const to = flag('--to')
+  if (to !== undefined && to === '') usage('--to takes the team the receipt goes to')
+  const handle = identity().handle
+  const box = await fetchMail(handle)
+  const rows = box.mail.filter(r => r?.task_id === taskId)
+  const senders = [...new Set(rows.map(r => r.from))]
+  if (to === undefined && senders.length !== 1) {
+    usage(senders.length === 0
+      ? `receipt: no mailbox row for task ${taskId} names its sender — pass --to <team>`
+      : `receipt: task ${taskId} came from more than one sender (${senders.join(', ')}) — pass --to <team>`)
+  }
+  const contextId = rows.find(r => typeof r.context_id === 'string')?.context_id
+  const envelope = has('--attention')
+    ? { idempotencyKey: taskId, disposition: 'attention' }
+    : { outcome: 'completed', idempotencyKey: taskId, disposition: 'result' }
+  await sendDirect('receipt', {
+    team: to ?? senders[0], message: `[A2A receipt] task ${taskId} ${summary}\n${JSON.stringify(envelope)}`,
+    caller_session: handle, wait: false, task_id: receiptTask, ...(contextId !== undefined ? { context_id: contextId } : {}),
+  })
 }
 
 /** One mailbox read: the rows, plus the gh#113 seq bounds when the host has them. */
@@ -1001,12 +1046,14 @@ async function sendDirect(verb, body) {
   if (res.status >= 500 && !has('--json')) die(`[${verb}] not confirmed (HTTP ${String(res.status)}) — the task may have landed; use the --task resend above`)
   if (res.status !== 409) {
     const out = await replyOf(res)
-    if (verb === 'route') journalSent(body, out)
+    if (verb === 'route' || verb === 'receipt') journalSent(body, out)
     return printDelivery(verb, res, out)
   }
   const out = await replyOf(res)
   if (out.replay !== true) {
     if (has('--json')) console.log(JSON.stringify({ ...out, class: sendClass(out) }, null, 2))
+    // p1-receipt-cmd: one receipt per task — a follow-up is a new task in the same context, never a second receipt.
+    if (verb === 'receipt') die(`[receipt] task ${String(body.task_id)} already carried a different receipt — a task gets one receipt; send any follow-up as a new task in the same context (a2a route <team> … --context <id>)`)
     die(`[${verb}] task ${String(body.task_id)} was already used for a different message (or with${body.wait === true ? 'out' : ''} --sync) — not sent; drop --task to send it as a new task`)
   }
   const prior = await queryOutcome(body)
@@ -1181,7 +1228,7 @@ async function main() {
     console.log(`dead (${String(dead.length)}):`)
     listCapped(dead, 20, t => `  ${String(t.taskId)} → ${String(t.team)} (${String(t.reason ?? '?')})${senderTail(t)}${t.reminderAttempts!==undefined?` reminders=${t.reminderDelivered??0}/${t.reminderAttempts} last=${t.reminderLastAt??'?'}${t.repeatedlyUnreconciled?' 多次提醒未对账':''}`:''}`)
     console.log(`archived (${String(archived.length)}):`)
-    listCapped(archived, 20, t => `  ${String(t.taskId)} ${String(t.outcome ?? '?')}${t.endedBy !== undefined && t.endedBy !== 'receipt' ? ` (${String(t.endedBy)})` : ''}${t.withdrawalResult?` withdrawal=${String(t.withdrawalResult)}`:''}${senderTail(t)}${t.reminderAttempts!==undefined?` reminders=${t.reminderDelivered??0}/${t.reminderAttempts} last=${t.reminderLastAt??'?'}${t.repeatedlyUnreconciled?' 多次提醒未对账':''}`:''}`)
+    listCapped(archived, 20, t => `  ${String(t.taskId)} ${String(t.outcome ?? '?')}${t.disposition !== undefined ? ` disposition=${String(t.disposition)}` : ''}${t.endedBy !== undefined && t.endedBy !== 'receipt' ? ` (${String(t.endedBy)})` : ''}${t.withdrawalResult?` withdrawal=${String(t.withdrawalResult)}`:''}${senderTail(t)}${t.reminderAttempts!==undefined?` reminders=${t.reminderDelivered??0}/${t.reminderAttempts} last=${t.reminderLastAt??'?'}${t.repeatedlyUnreconciled?' 多次提醒未对账':''}`:''}`)
     if (s.conservation != null) console.log(`conservation: conserved=${String(s.conservation.conserved)} delta=${String(s.conservation.delta)}`)
     if (s.settlement != null) console.log(`settlement: mode=${String(s.settlement.mode)} refusalsTotal=${String(s.settlement.refusalsTotal)} offChain=${String(s.settlement.offChain)}`)
     if (s.settlement?.enforceRefused) console.log(`enforce refused: ${String(s.settlement.enforceRefused.reason)}; blockers=${JSON.stringify(s.settlement.enforceRefused.blockers)}`)
@@ -1225,6 +1272,7 @@ async function main() {
     console.log(`deposit     ${depositLine(list, identity().handle, 'OFFLINE')}`)
     return
   }
+  if (cmd === 'receipt') { await cmdReceipt(); return }
   if (cmd === 'report') {
     const text = positionals().join(' ')
     if (text === '') usage('usage: a2a report <message…> — one-way report into the host process-team mailbox')

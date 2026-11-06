@@ -1,6 +1,6 @@
 /** Stateless ledger row types, classifiers and restore projections; moved verbatim for #258. */
 import { parseAuthorization, type AuthProof, type ChainRole, type SettlementReason, type SettlementVerdict, type TaskAuthorization } from './task-auth.ts'
-import type { ReceiptOutcomeV2 } from './receipt.ts'
+import type { ReceiptDisposition, ReceiptOutcomeV2 } from './receipt.ts'
 import type { ConservationSnapshot } from './ledger-conservation.ts'
 
 /**
@@ -305,6 +305,11 @@ export interface ArchivedRecord {
   readonly brief?: string
   /** Controlled vocabulary verdict when the settling receipt carried a v2 envelope; forced 'abandoned' for caller-abandoned rows. */
   readonly outcome?: ReceiptOutcomeV2 | 'abandoned'
+  /**
+   * p1-receipt-cmd (S14): result or attention, when the settling envelope said.
+   * An attention row carries no outcome — it settled the task but did not complete it.
+   */
+  readonly disposition?: ReceiptDisposition
   /** Remote-turn wall-clock cost, when the settling envelope carried it. */
   readonly elapsedMs?: number
   /**
@@ -412,6 +417,8 @@ export interface ReceiptResolvedInfo {
   readonly peer: string
   /** v2 envelope outcome, when the receipt rode one. */
   readonly outcome?: string
+  /** p1-receipt-cmd: the envelope's disposition, when it carried one. */
+  readonly disposition?: string
   /** One-line outcome summary, when the receipt carried one. */
   readonly summary?: string
   /** True when the receipt answered a dead-lettered or abandoned row. */

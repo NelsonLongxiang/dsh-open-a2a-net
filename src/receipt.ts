@@ -34,7 +34,10 @@ export function taskIdRefusal(taskId: string): string | undefined {
 /** The network's fixed, case-sensitive correlation template. */
 export const RECEIPT_PATTERN = /^\[A2A receipt\] task (\S+)\s*([\s\S]*)$/
 
-/** Controlled outcome vocabulary — the ONLY branchable field of an envelope. */
+/**
+ * Controlled outcome vocabulary — how the work ended. One of the envelope's two
+ * branchable fields; {@link RECEIPT_DISPOSITIONS} is the other.
+ */
 export const RECEIPT_OUTCOMES = [
   'completed',
   'failed',
@@ -47,7 +50,18 @@ export const RECEIPT_OUTCOMES = [
 
 export type ReceiptOutcomeV2 = (typeof RECEIPT_OUTCOMES)[number]
 
-const KNOWN_ENVELOPE_KEYS: readonly string[] = ['outcome', 'idempotencyKey', 'sessionKey', 'elapsedMs', 'artifacts', 'onBehalfOf', 'authRef']
+/**
+ * superagent p1-receipt-cmd (S14): what the receipt hands back — the work's
+ * result, or a question that needs the caller's attention. A closed set; any
+ * other value is dropped. An attention receipt settles the task like any
+ * receipt but is not a completion (it carries no outcome); the answer comes
+ * back as a new task in the same context.
+ */
+export const RECEIPT_DISPOSITIONS = ['result', 'attention'] as const
+
+export type ReceiptDisposition = (typeof RECEIPT_DISPOSITIONS)[number]
+
+const KNOWN_ENVELOPE_KEYS: readonly string[] = ['outcome', 'idempotencyKey', 'sessionKey', 'elapsedMs', 'artifacts', 'onBehalfOf', 'authRef', 'disposition']
 void KNOWN_ENVELOPE_KEYS
 
 /** Envelope fields this codec extracts; anything else rides through ignored (append-only). */
@@ -63,6 +77,8 @@ export interface ReceiptEnvelopeV2Fields {
   onBehalfOf?: string
   /** #114 S5: 16-hex ref of the inbound authorization record (task-auth.ts authorizationRef); audit only. */
   authRef?: string
+  /** p1-receipt-cmd: result or attention (S14). Additive: parsers that predate it ignore it. */
+  disposition?: ReceiptDisposition
 }
 
 export interface ParsedReceipt {
@@ -96,6 +112,9 @@ function tryEnvelopeLine(line: string): ReceiptEnvelopeV2Fields | undefined {
     if (typeof record['elapsedMs'] === 'number' && Number.isFinite(record['elapsedMs'])) fields.elapsedMs = record['elapsedMs']
     if (typeof record['onBehalfOf'] === 'string' && record['onBehalfOf'] !== '') fields.onBehalfOf = record['onBehalfOf']
     if (typeof record['authRef'] === 'string' && /^[0-9a-f]{16}$/.test(record['authRef'])) fields.authRef = record['authRef']
+    if (typeof record['disposition'] === 'string' && (RECEIPT_DISPOSITIONS as readonly string[]).includes(record['disposition'])) {
+      fields.disposition = record['disposition'] as ReceiptDisposition
+    }
     if (Object.keys(fields).length === 0) return undefined
     return fields
   } catch {
@@ -146,6 +165,7 @@ export function formatReceipt(
   if (fields.elapsedMs !== undefined) ordered['elapsedMs'] = fields.elapsedMs
   if (fields.onBehalfOf !== undefined) ordered['onBehalfOf'] = fields.onBehalfOf
   if (fields.authRef !== undefined) ordered['authRef'] = fields.authRef
+  if (fields.disposition !== undefined) ordered['disposition'] = fields.disposition
   const keys = Object.keys(ordered)
   if (keys.length === 0) return header
   return `${header}\n${JSON.stringify(ordered)}`

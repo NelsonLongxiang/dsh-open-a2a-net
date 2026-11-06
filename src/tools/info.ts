@@ -648,6 +648,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
                   summary: { type: 'string' },
                   brief: { type: 'string' },
                   forwarded: { type: 'boolean' },
+                  disposition: { type: 'string', enum: ['result', 'attention'] },
                   sender: {
                     type: 'object',
                     additionalProperties: false,
@@ -693,16 +694,18 @@ export function createInfoTools(deps: InfoToolsDeps) {
                 return `  - ${task.taskId}${brief} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}), dispatched ${describeAge(Date.now() - task.startedAt)} ago${context}`
               }),
               ...(value.archivedTotal > 0 ? [`Archived (${String(value.archivedTotal)}), most recent first:`] : []),
-              ...value.archive.map((entry: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; withdrawalResult?:string }) => {
+              ...value.archive.map((entry: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; withdrawalResult?:string; disposition?: string }) => {
                 const brief = entry.brief === undefined || entry.brief === '' ? '' : ` — "${entry.brief}"`
-                return `  - ${entry.taskId}${brief} → ${entry.team}: after ${describeAge(entry.resolvedAt - entry.startedAt)}, ${entry.summary === undefined || entry.summary === '' ? 'resolved' : entry.summary}${entry.withdrawalResult?`, withdrawal: ${entry.withdrawalResult}`:''}`
+                // p1-receipt-cmd: an attention receipt settled the task with a question, not a result.
+                const attention = entry.disposition === 'attention' ? ' [attention: settled with a question, not completed]' : ''
+                return `  - ${entry.taskId}${brief} → ${entry.team}: after ${describeAge(entry.resolvedAt - entry.startedAt)}, ${entry.summary === undefined || entry.summary === '' ? 'resolved' : entry.summary}${attention}${entry.withdrawalResult?`, withdrawal: ${entry.withdrawalResult}`:''}`
               }),
               ...(value.archivedTotal > value.archive.length ? [`  (+${String(value.archivedTotal - value.archive.length)} older not shown)`] : []),
             ].join('\n'),
         }],
       },
       presentCall: () => ({ card: 'generic', title: 'A2A task ledger', kind: 'other', rawInput: null }),
-      execute: async (_args, exec): Promise<{ ok: boolean; tasks: ({ taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; status: 'pending' | 'dead'; deadAt?: number; answeredAt?: number; receiptDelivery?:'receipt-undelivered'; reason?: 'fire-forget' | 'unconsumed'; consumed?:boolean; deliveryObservation?:'consumed'|'delivered-unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean; forwarded?: true; deliveredTo?: string; sender?: Sender } & Partial<ReminderView>)[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; withdrawalResult?:import('../task-ledger.ts').WithdrawalResult; sender?: Sender }[]; archivedTotal: number }> => {
+      execute: async (_args, exec): Promise<{ ok: boolean; tasks: ({ taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; status: 'pending' | 'dead'; deadAt?: number; answeredAt?: number; receiptDelivery?:'receipt-undelivered'; reason?: 'fire-forget' | 'unconsumed'; consumed?:boolean; deliveryObservation?:'consumed'|'delivered-unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean; forwarded?: true; deliveredTo?: string; sender?: Sender } & Partial<ReminderView>)[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; withdrawalResult?:import('../task-ledger.ts').WithdrawalResult; sender?: Sender; disposition?: 'result' | 'attention' }[]; archivedTotal: number }> => {
         a2aJoinGateRefusal(exec)
         observeAuthorization('lazy')
         const archiveAll = taskLedger.archive()
@@ -725,7 +728,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
             ...(reason !== undefined ? { reason } : {}),
             ...(sender !== undefined ? { sender } : {}),
           })),
-          archive: archiveAll.slice(0, 5).map(({ taskId, team, startedAt, resolvedAt, summary, brief, withdrawalResult, sender }) => ({ ...(withdrawalResult?{withdrawalResult}:{}), taskId, team, startedAt, resolvedAt, ...(summary !== undefined && summary !== '' ? { summary } : {}), ...(brief !== undefined ? { brief } : {}), ...(sender !== undefined ? { sender } : {}) })),
+          archive: archiveAll.slice(0, 5).map(({ taskId, team, startedAt, resolvedAt, summary, brief, withdrawalResult, sender, disposition }) => ({ ...(withdrawalResult?{withdrawalResult}:{}), taskId, team, startedAt, resolvedAt, ...(summary !== undefined && summary !== '' ? { summary } : {}), ...(brief !== undefined ? { brief } : {}), ...(sender !== undefined ? { sender } : {}), ...(disposition !== undefined ? { disposition } : {}) })),
           archivedTotal: archiveAll.length,
         }
       },

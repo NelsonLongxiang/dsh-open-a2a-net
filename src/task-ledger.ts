@@ -25,7 +25,7 @@ import { writeTaskLedger } from './task-ledger-persistence.ts'
 import { safeObservationCode } from './nudge-observability.ts'
 import { parseTaskDelivery, TASK_DELIVERY_CAP, TASK_DELIVERY_RETENTION_MS, type TaskDelivery } from './task-delivery.ts'
 import { parseReminder, REMINDER_LONG_MS, type ReminderState } from './reconciliation-state.ts'
-import { parseReceipt, RECEIPT_OUTCOMES, type ReceiptOutcomeV2 } from './receipt.ts'
+import { parseReceipt, RECEIPT_DISPOSITIONS, RECEIPT_OUTCOMES, type ReceiptDisposition, type ReceiptOutcomeV2 } from './receipt.ts'
 import { classifyConservationBlock, ConservationCounters, type ConservationVerdict } from './ledger-conservation.ts'
 import { CALLER_ENDED_PREFIX, TASK_CAP, ARCHIVE_CAP, SUMMARY_CAP, TASK_STALE_TTL_MS, ARCHIVE_ENDS, ECHO_SUMMARY, ROUTING_FACT_CAP, SETTLEMENT_ID_CAP, SETTLEMENT_REFUSAL_CAP, withSender, withAuth, routingOf, birthFacts, withRouting, withSettledBy, parseRefusal, archivedEndedBy, WITHDRAWAL_RESULTS, isWithdrawalResult } from './task-ledger-rows.ts'
 import type { TaskRecord, ArchivedRecord, Sender, OutboundBirth, TaskLedgerOptions, ReceiptResolvedInfo, TaskLedgerSnapshot, SettlementRefusalRecord, SettlementJudge, AbandonResult, CancelledResult, ArchiveEnd } from './task-ledger-rows.ts'
@@ -426,6 +426,7 @@ export class TaskLedger {
     const envelopeOutcome =
       parsed.envelope?.outcome !== undefined ? (parsed.envelope.outcome as ReceiptOutcomeV2) : undefined
     const elapsedMs = parsed.envelope?.elapsedMs
+    const disposition = parsed.envelope?.disposition
     this.sweep(this.now())
     const record = this.tasks.find(entry => entry.taskId === taskId)
     if (only !== undefined && (record === undefined || !only(record))) return undefined
@@ -447,6 +448,7 @@ export class TaskLedger {
         resolvedAt: this.now(),
         ...(summary !== '' ? { summary } : {}),
         ...(envelopeOutcome !== undefined ? { outcome: envelopeOutcome } : {}),
+        ...(disposition !== undefined ? { disposition } : {}),
         ...(elapsedMs !== undefined ? { elapsedMs } : {}),
         endedBy: 'receipt',
         ...(record.direction !== undefined ? { direction: record.direction } : {}),
@@ -465,6 +467,7 @@ export class TaskLedger {
         // status): its receipt is a revival — the late marker's first form.
         ...(record.status === 'dead' ? { late: true } : {}),
         ...(envelopeOutcome !== undefined ? { outcome: envelopeOutcome } : {}),
+        ...(disposition !== undefined ? { disposition } : {}),
         ...(summary !== '' ? { summary } : {}),
       }
     }
@@ -500,6 +503,7 @@ export class TaskLedger {
               resolvedAt: this.now(),
               ...(summary !== '' ? { summary } : {}),
               ...(envelopeOutcome !== undefined ? { outcome: envelopeOutcome } : {}),
+              ...(disposition !== undefined ? { disposition } : {}),
             }),
       },
       ...this.archived.filter(entry => entry.taskId !== taskId),
@@ -510,6 +514,7 @@ export class TaskLedger {
       team: settled.team,
       peer: settled.peer,
       ...(envelopeOutcome !== undefined ? { outcome: envelopeOutcome } : {}),
+      ...(disposition !== undefined ? { disposition } : {}),
       ...(summary !== '' ? { summary } : {}),
       // The late marker's second form: the caller had already moved on
       // (abandonment recorded verbatim). A HEALTHY row's duplicate refresh
@@ -796,6 +801,7 @@ export class TaskLedger {
             resolvedAt: typeof entry.resolvedAt === 'number' && Number.isFinite(entry.resolvedAt) ? entry.resolvedAt : this.now(),
             ...(typeof entry.summary === 'string' && entry.summary !== '' ? { summary: entry.summary } : {}),
             ...(typeof entry.outcome === 'string' && (RECEIPT_OUTCOMES as readonly string[]).includes(entry.outcome) ? { outcome: entry.outcome as ReceiptOutcomeV2 } : {}),
+              ...(typeof entry.disposition === 'string' && (RECEIPT_DISPOSITIONS as readonly string[]).includes(entry.disposition) ? { disposition: entry.disposition as ReceiptDisposition } : {}),
             ...(typeof entry.lateReceiptAt === 'number' && Number.isFinite(entry.lateReceiptAt) ? { lateReceiptAt: entry.lateReceiptAt } : {}),
             ...(typeof entry.endedBy === 'string' && ARCHIVE_ENDS.includes(entry.endedBy) ? { endedBy: entry.endedBy as ArchiveEnd } : {}),
             ...(entry.direction === 'inbound' || entry.direction === 'outbound' ? { direction: entry.direction } : {}),
