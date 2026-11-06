@@ -1313,12 +1313,12 @@ describe('N4 — node_update_self under the session taint (owner ruling 2026-11-
   }, 30_000)
 
   it('gh#198: a synchronous local reply takes the replying session\'s taint — clean target, clean caller; tainted target, tainted caller', async () => {
-    // A short flush window: the target never answers, so the wait settles on its own (COMPLETED shape).
+    // Use a real attributed final; a host timeout is not the replying session's content.
     const m = await mount(undefined, undefined, { teamJoinAllowlist: ['core'], flushTimeoutMs: 50, peers: ['http://peer-x.test:3080'], teamScopeInfo: false })
     try {
       await nodeWithLayers(m, 'chief', { 当前状态: '第一版' })
       const b = await bindSession(m, B)
-      const a = Object.assign(makeAgent(m.ctx, A), { steer: (msg: unknown) => { a.session.events.push({ type: 'user/message', data: msg }) } })
+      const a = Object.assign(makeAgent(m.ctx, A), { steer: (msg: unknown) => { a.session.events.push({ type: 'user/message', data: msg },{type:'assistant/message',data:{message:{content:[{type:'text',text:'attributed own answer'}]}}});m.ctx.emit('agent/status',{agent:a,status:'idle'}) } })
       m.publish(a)
       expect((await m.post('/__dsh_a2a/join', { id: A })).status).toBe(200)
       for (const agent of [a, b]) expect((await run(m, agent, 'a2a_team_join', { team: 'core', id: String(agent.id) }, `join-${String(agent.id)}`)).value?.ok).toBe(true)

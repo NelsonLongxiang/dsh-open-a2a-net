@@ -891,6 +891,7 @@ async function printDelivery(verb, res) {
   }
   if (res.status === 401 || res.status === 403) die(`[${verb}] ${keyHint(res.status)}${out.error !== undefined ? ` (${String(out.error)})` : ''}`)
   if(out.delivered===true&&out.receiverBookkeeping==='failed'){console.log(`[${verb}] 已送达、接收方记账失败，请对账，不要重派 · task ${String(out.task_id)} — delivered; receiver bookkeeping failed; reconcile, do not redispatch`);return}
+  if(has('--sync')&&out.task_status==='TASK_STATE_DELIVERED'&&out.reply_final!==true&&out.bridge===undefined){console.log(`[${verb}] 已送达、未得到最终答复，请按 task id 对账 · ${String(out.task_id)} — no final reply`);console.error(`[${verb}] status TASK_STATE_DELIVERED — delivered, not failed; reconcile the original task`);if(out.result?.text)console.log(String(out.result.text));return}
   // A sync round answers with the target's reply instead of a delivery marker.
   if (out.routed === true && typeof out.result?.text === 'string') {
     console.log(`[${verb}] reply from ${String(out.team)} · task ${String(out.task_id)}${typeof out.context_id === 'string' && out.context_id !== '' ? ` · context ${out.context_id}` : ''}`)

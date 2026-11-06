@@ -1100,7 +1100,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 ...(outcome.ownTurn === true && outcome.placeholder !== true && outcome.bridge === undefined && (outcome.status ?? 'TASK_STATE_COMPLETED') === 'TASK_STATE_COMPLETED' ? { reply_final: true } : {}),
                 task_id: taskId,
                 context_id: contextId,
-                task_status: outcome.status ?? 'TASK_STATE_COMPLETED',
+                task_status: outcome.placeholder===true||(outcome.bridge===undefined&&outcome.ownTurn!==true&&outcome.status===undefined)?'TASK_STATE_DELIVERED':outcome.status??'TASK_STATE_COMPLETED',
+                ...(outcome.bridge===undefined&&(outcome.placeholder===true||outcome.ownTurn!==true)?{receipt:syncTarget===undefined?'none':'routed'}:{}),
                 artifacts: [],
                 // The bridge marker rides the wire so the caller's
                 // trackOwedTask skips a receipt-less native round — without

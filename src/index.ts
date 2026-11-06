@@ -54,7 +54,7 @@ import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
-import { TaskLedger, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type OutboundBirth, type ReceiptResolvedInfo, type Sender, type SettlementJudge, type TaskRecord } from './task-ledger.ts'
+import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type OutboundBirth, type ReceiptResolvedInfo, type Sender, type SettlementJudge, type TaskRecord } from './task-ledger.ts'
 import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
 import { ReconciliationReminders, type ReminderAgent } from './reconciliation-reminders.ts'
 import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
@@ -770,6 +770,7 @@ export function apply(ctx: Context, config: Config): void {
     // Capture authority while the owed row is still present; successful resolve archives it.
     const outcomeAllowed = judge?.enforce !== true || (owedRow !== undefined && headerVerdict?.ok === true)
     const resolved = taskLedger.resolveFromMessage(message, judge)
+    if(resolved!==undefined)pruneReceiptWaiters()
     if (parsed !== null && parsed.taskId !== '') {
       const line = parsed.summary.trim()
       // #114 S4 (design §4.2.2): under enforce, the receipt hook writes the
@@ -793,6 +794,7 @@ export function apply(ctx: Context, config: Config): void {
       // settles. Formal receipt headers keep observing; settlementAuth 'off' still judges nothing.
       const echoed = taskLedger.resolveEcho(message, judge !== undefined && !judge.enforce ? { ...judge, enforce: true } : judge)
       if (echoed.length > 0) {
+        pruneReceiptWaiters()
         logger.info(`a2a: ${String(echoed.length)} pending task(s) settled by content echo (${echoed.join(', ')})`)
       }
       return undefined
@@ -827,6 +829,7 @@ export function apply(ctx: Context, config: Config): void {
     try {
       const settled = taskLedger.resolveFromMessage(message, settlementJudgeFor(payer, parsed, true), row => row.direction === 'inbound' && row.peer === `local:${creditor}`)
       const line = parsed.summary.trim()
+      if(settled!==undefined)pruneReceiptWaiters()
       if (settled !== undefined && line !== '') idempotencyStore.recordOutcome(parsed.taskId, { status: 'completed', reply: line.slice(0, SUMMARY_CAP) })
       return true
     } catch {
@@ -2005,6 +2008,7 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   const cancelQueuedTask = async(taskId:string,text:string,sender:string,original?: import('./task-ledger.ts').TaskRecord): Promise<{removed:boolean;steered:boolean;withdrawalResult:import('./task-ledger.ts').WithdrawalResult}> => {
+    pruneReceiptWaiters()
     let record:import('./task-delivery.ts').TaskDelivery|undefined,withdrawFailed=false,removed=false
     try {
       record=taskLedger.deliveryFor(taskId)
@@ -2218,6 +2222,7 @@ export function apply(ctx: Context, config: Config): void {
     // target produced after consuming `[A2A direct] (task <id>)` answers it
     // (flushFinals). A busy target's other work line can no longer settle
     // a task it has not read yet (the #61 direct-bb27ec94 shape).
+    if((pendingFinals.get(String(target.id))??[]).some(entry=>entry.purpose==='receipt'&&entry.taskId===taskId))return
     registerFinalWaiter(target, (finalText, placeholder) => {
       // W7 slice-2: a host-authored placeholder (flush timeout, dead
       // session) must not synthesize a COMPLETION receipt — a wedged
@@ -2280,11 +2285,11 @@ export function apply(ctx: Context, config: Config): void {
         notify:async()=>{await dispatchAnywhere(config.team,'[A2A receipt delivery notice] ref '+nudgeRef(taskId)+'; delivery to the original caller is temporarily unconfirmed; host retry is responsible. This notice is not a receipt and does not settle work.',session,undefined,new AbortController().signal,true)},
         pending:()=>row===undefined||taskLedger.isPending(taskId),wait,log:()=>{logger.warn('a2a: receipt delivery temporarily unconfirmed ref=%s',nudgeRef(taskId))},
       }).catch(()=>{/* permanent ladder failure remains visible in the original owed row */})
-    }, { taskId, steerFloor })
+    }, { taskId, steerFloor }, 'receipt')
   }
 
   /**
-   * Register one final-reply waiter for the agent and arm its flush timeout.
+   * Register one attributed waiter: HTTP has a flush window, receipt tracking the original task TTL.
    * @param agent - the agent whose next assistant message answers the waiter.
    * @param answer - how the waiter's reply is delivered.
    * @param attribution - #114 S5: attribute by consumption — only the turn
@@ -2294,14 +2299,18 @@ export function apply(ctx: Context, config: Config): void {
    *   anchors it.
    * @returns the registered waiter (for callers that may retract it).
    */
-  function registerFinalWaiter(agent: Agent, answer: (text: string, placeholder?: boolean) => void, attribution?: { taskId: string; steerFloor: number }): FinalWaiter {
+  function registerFinalWaiter(agent: Agent, answer: (text: string, placeholder?: boolean) => void, attribution?: { taskId: string; steerFloor: number },purpose:'http'|'receipt'='http'): FinalWaiter {
     const key = String(agent.id)
     const waiter: FinalWaiter = {
-      answer,
+      answer,purpose,
       sinceEvents: sessionEventsOf(agent).length,
       ...(attribution !== undefined && attribution.taskId !== '' ? { taskId: attribution.taskId, scannedTo: attribution.steerFloor } : {}),
     }
-    waiter.timeoutDisposer = armFlushTimeout(key, waiter)
+    if(purpose==='receipt'){
+      const row=attribution===undefined?undefined:taskLedger.find(attribution.taskId)
+      const remaining=Math.max(0,(row?.startedAt??Date.now())+(config.taskStaleTtlMs??TASK_STALE_TTL_MS)-Date.now())
+      waiter.timeoutDisposer=ctx.timer.timeout(()=>removeFinalWaiter(key,waiter),remaining)
+    }else waiter.timeoutDisposer = armFlushTimeout(key, waiter)
     pendingFinals.set(key, [...(pendingFinals.get(key) ?? []), waiter])
     return waiter
   }
@@ -2338,7 +2347,7 @@ export function apply(ctx: Context, config: Config): void {
       if (prepared.ok) {
         const bridged = await nativeTeamsRound(prepared, team, caller, message, taskId, proofClause ?? '未验证（in-process）', undefined, buildHeader === undefined ? undefined : (_team, _taskId, from) => buildHeader(from))
         if (bridged.ok) {
-          if (bridged.settled) return { ok: true, reply: bridged.reply }
+          if (bridged.settled) return { ok: true, reply: bridged.reply,status:'TASK_STATE_COMPLETED',bridge:'native-teams' }
           return { ok: true, reply: bridged.reply, status: 'TASK_STATE_DELIVERED', bridge: 'native-teams' }
         }
         return { ok: false, error: bridged.error }
@@ -2914,6 +2923,7 @@ export function apply(ctx: Context, config: Config): void {
           const taskId = typeof fields.task_id === 'string' ? fields.task_id : ''
           const reason = typeof fields.reason === 'string' ? fields.reason : undefined
           const result = taskLedger.abandon(taskId, reason)
+          pruneReceiptWaiters()
           const payload = JSON.stringify(result)
           res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
           res.end(payload)
@@ -3535,13 +3545,13 @@ export function apply(ctx: Context, config: Config): void {
     // them as receipt-owed would fill the owed book with rows no receipt can
     // ever settle (evicting genuinely receivable peer rows past TASK_CAP).
     if (result.bridge !== undefined) return
-    if (result.task_status !== 'TASK_STATE_DELIVERED'&&result.receiverBookkeeping!=='failed') return
+    if (result.task_status !== 'TASK_STATE_DELIVERED'&&result.receiverBookkeeping!=='failed'&&!(result.task_status==='TASK_STATE_COMPLETED'&&result.replyFinal!==true&&result.receipt!=='mailbox')) return
     // Fix ② (ghost-debt stop): a delivered async dispatch with no routable
     // callback address can never be settled — register it receiptless
     // (visible, non-debt; reconcile via context_id) instead of stranding a
     // row whose only exit was the dead-letter sweep (57 dead letters, half
     // this shape).
-    if (callbackAddress === undefined) {
+    if (callbackAddress === undefined || result.receipt === 'none') {
       taskLedger.trackReceiptless(taskId, team, peer, result.context_id === '' ? undefined : result.context_id, brief, sender, birth)
       return
     }
@@ -4124,10 +4134,12 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       return {
         ok: true,
         team,
-        reply: outcome.reply,
+        reply:outcome.placeholder===true?'已送达、未得到最终答复，请按 task id 对账。 '+outcome.reply:outcome.reply,
         task_id: taskId,
         context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
-        task_status: outcome.status ?? 'TASK_STATE_COMPLETED',
+        task_status: outcome.placeholder===true||outcome.ownTurn!==true&&outcome.bridge===undefined&&outcome.status===undefined?'TASK_STATE_DELIVERED':outcome.status??'TASK_STATE_COMPLETED',
+        ...(outcome.ownTurn===true&&outcome.placeholder!==true?{replyFinal:true as const}:{}),
+        ...(outcome.bridge===undefined&&(outcome.placeholder===true||outcome.ownTurn!==true)?{receipt:'none' as const}:{}),
         ...(outcome.bridge !== undefined ? { bridge: outcome.bridge } : {}),
       }
     }
@@ -4455,6 +4467,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // Caller bookkeeping has priority. Notification compatibility never gates cancellation.
       const cleared=taskLedger.cancel(taskId,reason).outcome==='cleared'
       if(!cleared)return false
+      pruneReceiptWaiters()
       try {
         const notice=cancelNoticeText(taskId,reason)
         if(row.peer==='local'||row.direction==='inbound')await cancelQueuedTask(taskId,notice,session,row)
@@ -4482,6 +4495,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   interface FinalWaiter {
     /** @param placeholder - true when the text is a host-authored
      * stand-in (flush timeout, dead session), NOT the session's product. */
+    readonly purpose:'http'|'receipt'
     readonly answer: (text: string, placeholder?: boolean) => void
     readonly sinceEvents: number
     /** #114 S5: set ⇒ attributed by the consumption of this task's steer, not by {@link sinceEvents}. */
@@ -4490,9 +4504,33 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     consumedAt?: number
     /** #114 S5: events below this index were already searched for the consumption. */
     scannedTo?: number
+    /** Preserve the existing reading-turn verdict; a later turn cannot answer a closed empty/aborted reading. */
+    readingClosed?:true
     timeoutDisposer?: () => void
   }
   const pendingFinals = new Map<string, FinalWaiter[]>()
+  function removeFinalWaiter(agentId: string, entry: FinalWaiter): void {
+    const kept = (pendingFinals.get(agentId) ?? []).filter(other => other !== entry)
+    if (kept.length) pendingFinals.set(agentId, kept)
+    else pendingFinals.delete(agentId)
+    entry.timeoutDisposer?.()
+  }
+  function pruneReceiptWaiters(): void {
+    for (const [id, entries] of pendingFinals) {
+      for (const entry of entries) {
+        if (entry.purpose === 'receipt' && entry.taskId !== undefined && !taskLedger.isPending(entry.taskId)) removeFinalWaiter(id, entry)
+      }
+    }
+  }
+  ctx.effect(() => {
+    // Also cover task eviction/expiry independently of session idle events.
+    const stop = ctx.timer.interval(pruneReceiptWaiters, 1000)
+    return () => {
+      stop()
+      for (const entries of pendingFinals.values()) for (const entry of entries) entry.timeoutDisposer?.()
+      pendingFinals.clear()
+    }
+  }, 'a2a: final waiter lifecycle')
   function answerFinalSafely(entry: FinalWaiter, text: string, placeholder?: boolean): boolean {
     try { entry.answer(text, placeholder); return true } catch (error) {
       logger.warn('a2a: final callback failed; task remains owed: %s', String(error))
@@ -4512,15 +4550,12 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   }
 
   function flushFinals(agentId: string): void {
+    pruneReceiptWaiters()
     const entries = pendingFinals.get(agentId)
     if (entries === undefined || entries.length === 0) return
     const agent = ctx.get('agents')?.get(SessionId(agentId))
     if (agent === undefined) {
-      for (const entry of entries) {
-        entry.timeoutDisposer?.()
-        answerFinalSafely(entry, 'The target DSH session is no longer live.', true)
-      }
-      pendingFinals.delete(agentId)
+      for (const entry of entries)if(entry.purpose==='http'){removeFinalWaiter(agentId,entry);answerFinalSafely(entry,'The target DSH session is no longer live.',true)}
       return
     }
     // #114 S5: each waiter is answered from its OWN floor. The old shared
@@ -4532,6 +4567,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // turn; a log without any marker falls back to "this idle ends it".
     const turnMarked = events.some(event => event?.type === 'turn/start' || event?.type === 'turn/end')
     for (const entry of entries) {
+      if(entry.purpose==='receipt'&&entry.readingClosed===true)continue
       if (entry.taskId !== undefined) {
         entry.consumedAt ??= consumptionIndex(events, entry.taskId, entry.scannedTo ?? entry.sinceEvents)
         if (entry.consumedAt === undefined) {
@@ -4555,6 +4591,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     }
     if (answered.length === 0) return
     for (const { entry, reply, placeholder } of answered) {
+      if(entry.purpose==='receipt'&&placeholder===true){entry.readingClosed=true;continue}
       // Remove one callback before invoking (it may synchronously re-enter), never the whole batch.
       const current = pendingFinals.get(agentId) ?? []
       if (!current.includes(entry)) continue
