@@ -185,7 +185,8 @@ describe('a2a-net CLI: route / report talk to the right host with the right mess
     expect(refused.stderr).toContain('caller not admitted')
     const raw = await runCli(['route', 'ops', 'hi', '--home', host.url, '--json'], { HOME, A2A_CLI_HOME: HOME })
     expect(raw.code).toBe(1)
-    expect(JSON.parse(raw.stdout)).toEqual({ error: 'caller not admitted' })
+    // The raw reply, plus the additive class observation (superagent p1-send-classes).
+    expect(JSON.parse(raw.stdout)).toEqual({ error: 'caller not admitted', class: 'retry' })
   })
 
   it('#282 S1: a refusal that carries a next step prints it under the reason', async () => {
@@ -424,6 +425,49 @@ describe('a2a-net CLI: inbox unread cursor', () => {
   })
 })
 
+describe('a2a-net CLI: route --json class (superagent p1-send-classes)', () => {
+  const D = { routed: true, team: 'ops', task_id: 'direct-12345678' }
+  const cases: Array<[string, { status: number; body: unknown }, { status: number; body: unknown } | undefined, 'sent' | 'gone' | 'retry']> = [
+    ['delivered', { status: 200, body: { ...D, delivered: true, task_status: 'TASK_STATE_DELIVERED', receipt: 'routed' } }, undefined, 'sent'],
+    ['receiver bookkeeping failed is still delivered', { status: 200, body: { ...D, delivered: true, receiverBookkeeping: 'failed' } }, undefined, 'sent'],
+    ['acceptance inserted', { status: 200, body: { ...D, delivered: true, acceptance: 'inserted' } }, undefined, 'sent'],
+    ['sync reply', { status: 200, body: { ...D, result: { text: 'done' }, task_status: 'TASK_STATE_COMPLETED' } }, undefined, 'sent'],
+    ['-32005 landed, unsettled', { status: 200, body: { error: 'wait budget', code: -32005, task_id: 'direct-12345678' } }, undefined, 'sent'],
+    ['acceptance unknown', { status: 200, body: { error: 'unknown', code: -32000, acceptance: 'unknown', task_id: 'direct-12345678', task_status: 'TASK_STATE_FAILED' } }, undefined, 'retry'],
+    ['payload too large', { status: 200, body: { error: 'too large', code: -32001 } }, undefined, 'gone'],
+    ['queue full', { status: 200, body: { error: 'queue full', code: -32009, reason: 'target-queue-full', delivered: false } }, undefined, 'retry'],
+    ['inbound verification', { status: 200, body: { error: 'untrusted-origin', code: -32011 } }, undefined, 'retry'],
+    ['generic -32000 text only', { status: 200, body: { error: 'task delivery identity conflict', code: -32000 } }, undefined, 'retry'],
+    ['unauthorized', { status: 401, body: { error: 'unauthorized' } }, undefined, 'retry'],
+    ['5xx', { status: 503, body: { error: 'down' } }, undefined, 'retry'],
+    ['id bound to another message', { status: 409, body: { error: 'conflict', code: -32002, replay: false } }, undefined, 'gone'],
+    ['replay, prior completed', { status: 409, body: { error: 'replay', code: -32003, replay: true } }, { status: 200, body: { found: true, status: 'completed', reply: 'ok' } }, 'sent'],
+    ['replay, prior pending', { status: 409, body: { error: 'replay', code: -32003, replay: true } }, { status: 200, body: { found: true, status: 'pending' } }, 'sent'],
+    ['replay, prior failed', { status: 409, body: { error: 'replay', code: -32003, replay: true } }, { status: 200, body: { found: true, status: 'failed', error: 'x' } }, 'gone'],
+  ]
+  for (const [name, direct, query, expected] of cases) {
+    it(`${name} → ${expected}`, async () => {
+      const host = await stubHost(path => path === '/a2a/query' ? (query ?? { status: 404, body: {} }) : direct)
+      servers.push(host.server)
+      const HOME = tmpHomeDir()
+      const env = { HOME, A2A_CLI_HOME: HOME, A2A_RETRY_BASE_MS: '1' }
+      await runCli(['init', 'class-cli'], env)
+      const out = await runCli(['route', 'ops', 'hi', '--home', host.url, '--json'], env)
+      expect((JSON.parse(out.stdout) as { class: string }).class, out.stdout).toBe(expected)
+    })
+  }
+  it('class changes no exit code: a refused route still exits 1, a delivered one 0', async () => {
+    const refused = await stubHost(() => ({ status: 200, body: { error: 'queue full', code: -32009, delivered: false } }))
+    const ok = await stubHost(() => delivered)
+    servers.push(refused.server, ok.server)
+    const HOME = tmpHomeDir()
+    const env = { HOME, A2A_CLI_HOME: HOME }
+    await runCli(['init', 'class-cli'], env)
+    expect((await runCli(['route', 'ops', 'hi', '--home', refused.url, '--json'], env)).code).toBe(1)
+    expect((await runCli(['route', 'ops', 'hi', '--home', ok.url, '--json'], env)).code).toBe(0)
+  })
+})
+
 describe('a2a-net CLI: inbox --after (superagent p1)', () => {
   it('refuses a host without seq numbering instead of falling back to time', async () => {
     const host = await mailHost()
@@ -448,7 +492,7 @@ describe('a2a-net CLI: inbox --after (superagent p1)', () => {
     // A cursor past the newest seq this host issued (74 is next) was never handed out here: flagged, not clamped.
     const ahead = await runCli(['inbox', '--after', 'e1:100'], env)
     expect(ahead.code).toBe(0)
-    expect(JSON.parse(ahead.stdout)).toMatchObject({ mail: [], lost: 0, cursorAhead: true, next: 'e1:100' })
+    expect(JSON.parse(ahead.stdout)).toMatchObject({ mail: [], lost: null, cursorAhead: true, next: 'e1:100' })
     expect(ahead.stderr).toContain('ahead of this host')
     // The boundary: 74 is the next seq to be issued, not one handed out yet.
     expect(JSON.parse((await runCli(['inbox', '--after', 'e1:74'], env)).stdout)).toMatchObject({ cursorAhead: true, next: 'e1:74' })

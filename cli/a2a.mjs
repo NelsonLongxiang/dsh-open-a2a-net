@@ -58,6 +58,7 @@ route:    async by default (delivered + task id; the receipt comes to 'a2a inbox
           every route carries a task id born here; a transport failure is retried up to 3 times with
           the SAME id, and --task ID resends an earlier one — the host runs one task id at most once
 --json:   teams / tasks / probe / route / report / inbox print the raw rows instead of the table
+          route --json adds class: sent | gone | retry (structured fields only; gone = resending the same task can never succeed)
 
 inbox:    bare 'inbox' lists the whole mailbox (newest first, the host keeps 64; mail it pushed out is counted)
           --new         only mail newer than the local cursor (~/.a2a/inbox.cursor), then advance it
@@ -461,7 +462,7 @@ function afterRead(box, after) {
   // A cursor past the newest seq this host ever issued was not handed out by it (forged or mixed up):
   // flag it, keep it as given, never clamp it silently.
   const issued = Number.isInteger(box.next_seq) ? box.next_seq - 1 : top(Math.max(0, box.oldest_seq - 1))
-  if (seq > issued) return { mail: [], lost: 0, epochChanged: false, cursorAhead: true, next: after }
+  if (seq > issued) return { mail: [], lost: null, epochChanged: false, cursorAhead: true, next: after }
   const mail = rows.filter(r => r.seq > seq)
   const lost = Math.max(0, box.oldest_seq - seq - 1)
   const floor = lost > 0 ? box.oldest_seq - 1 : seq
@@ -887,6 +888,21 @@ async function cmdFileFetch() {
   console.log(`[file fetch] ${path} (${String(bytes.byteLength)} bytes, sha256 ${ref.sha256})`)
 }
 
+/**
+ * superagent p1-send-classes: one observation per --json route reply — 'sent',
+ * 'gone' or 'retry' — from structured fields only (delivered, code,
+ * routed/result, a replay's prior), never from error text. 'gone'
+ * only where resending the same task can never succeed; anything unknown retries.
+ */
+function sendClass(out, prior) {
+  // A replay proves the host already holds this id: it landed, unless it already failed.
+  if (prior !== undefined) return prior.status === 'failed' ? 'gone' : 'sent'
+  if (out?.delivered === true || (out?.routed === true && out?.result !== undefined) || out?.code === -32005) return 'sent'
+  if (out?.code === -32001 || out?.code === -32002) return 'gone'
+  // acceptance:"unknown", 401/403, 5xx, -32003/-32007/-32008/-32009/-32011, generic -32000, anything unrecognised.
+  return 'retry'
+}
+
 async function sendDirect(verb, body) {
   const { res } = await postDirect(body)
   // Exhausted 5xx resends: the outcome is unknown, not "not delivered" (the hint above names the safe resend).
@@ -894,7 +910,7 @@ async function sendDirect(verb, body) {
   if (res.status !== 409) return await printDelivery(verb, res)
   const out = await replyOf(res)
   if (out.replay !== true) {
-    if (has('--json')) console.log(JSON.stringify(out, null, 2))
+    if (has('--json')) console.log(JSON.stringify({ ...out, class: sendClass(out) }, null, 2))
     die(`[${verb}] task ${String(body.task_id)} was already used for a different message (or with${body.wait === true ? 'out' : ''} --sync) — not sent; drop --task to send it as a new task`)
   }
   const prior = await queryOutcome(body)
@@ -903,7 +919,7 @@ async function sendDirect(verb, body) {
   // async delivery waits for its receipt; a host before the gh#112 fix also
   // leaves refused async rounds pending).
   if (has('--json')) {
-    console.log(JSON.stringify({ ...out, received: true, ...(prior.status === 'completed' ? { delivered: true } : prior.status === 'failed' ? { delivered: false } : {}), prior }, null, 2))
+    console.log(JSON.stringify({ ...out, received: true, ...(prior.status === 'completed' ? { delivered: true } : prior.status === 'failed' ? { delivered: false } : {}), prior, class: sendClass(out, prior) }, null, 2))
     if (prior.status === 'failed' || (body.wait === true && prior.status !== 'completed')) process.exitCode = 1
     return
   }
@@ -926,7 +942,7 @@ async function sendDirect(verb, body) {
 async function printDelivery(verb, res) {
   const out = await replyOf(res)
   if (has('--json')) {
-    console.log(JSON.stringify(out, null, 2))
+    console.log(JSON.stringify({ ...out, class: sendClass(out) }, null, 2))
     if (out.delivered !== true) process.exitCode = 1
     return
   }
