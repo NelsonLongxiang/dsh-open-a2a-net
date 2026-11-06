@@ -136,7 +136,21 @@ Files do not go through session messages: use the file channel below, never JPFI
 - A message that starts with `-` goes after `--`. Flag values never become
   part of the message.
 - Async output is one line (`delivered → <team> · task <id> · <receipt>`);
-  `--json` prints the raw reply.
+  `--json` prints the raw reply plus the `class` field below.
+- `route --json` adds an observation field `class`, judged from structured
+  fields only (HTTP status, `delivered`, `code`, `acceptance`, a sync
+  `result`, a replay's `prior`) and never from error text:
+  - `sent`: delivered, including `receiverBookkeeping: "failed"`,
+    `acceptance: "inserted"` and `-32005` (landed, not settled); also a replay
+    whose task the host already holds, unless it failed.
+  - `gone`: resending the same task can never succeed: `-32001` payload too
+    large, `-32002` the id is bound to a different message, or a replay whose
+    task already failed.
+  - `retry`: everything else, including `acceptance: "unknown"`, 401/403, 5xx,
+    `-32003/-32007/-32008/-32009/-32011` and generic `-32000`. Retry with the
+    SAME task id. A consumer counts retries and only drops (with a record)
+    past its own bound. No JSON at all (e.g. the network failed) also means
+    retry. `class` changes no exit code and no host semantics.
 
 ## Receiving: the mailbox
 
@@ -174,7 +188,8 @@ Files do not go through session messages: use the file channel below, never JPFI
     the read then returns every row it still has.
   - A cursor past the newest seq the host issued is not one it handed out
     (forged or mixed up). The read flags it with `cursorAhead: true`, returns
-    no mail, keeps `next` equal to the cursor, and warns on stderr.
+    no mail, keeps `next` equal to the cursor, reports `lost: null` (unknown,
+    as across an epoch change), and warns on stderr.
   - A consumer such as the superagent a2a Source reports a health error
     whenever `lost > 0`, `lost` is `null`, or `cursorAhead` is set. Lost mail
     cannot be recovered; the error makes the gap visible instead of hiding it.

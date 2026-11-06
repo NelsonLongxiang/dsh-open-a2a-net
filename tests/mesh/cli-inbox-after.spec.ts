@@ -89,7 +89,7 @@ describe('superagent p1: inbox --after (real host)', () => {
       expect((await read(home, first.next)).lost).toBe(4)
 
       // A cursor past the newest seq this host issued: flagged, no mail, kept as given.
-      expect(await read(home, `${first.epoch}:999`)).toMatchObject({ mail: [], lost: 0, cursorAhead: true, next: `${first.epoch}:999` })
+      expect(await read(home, `${first.epoch}:999`)).toMatchObject({ mail: [], lost: null, cursorAhead: true, next: `${first.epoch}:999` })
       expect((await read(home, third.next))).not.toHaveProperty('cursorAhead')
       // A cursor from another epoch: every row, loss unknown — never a guessed 0.
       const foreign = await read(home, 'gone-epoch:5')
