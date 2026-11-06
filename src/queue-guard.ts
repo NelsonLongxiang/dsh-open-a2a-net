@@ -20,6 +20,9 @@ export const DEFAULT_TARGET_QUEUE_CAP = 3
 
 /** The ledger fields the count reads. */
 export interface QueueRow {
+  readonly taskId?: string
+  readonly auth?: {readonly caller:string}
+  readonly sender?: {readonly id:string}
   readonly team: string
   readonly peer: string
   readonly status: string
@@ -49,7 +52,7 @@ export function queueFullRefusal(rows: readonly QueueRow[], team: string, messag
 }
 
 /** #282 S1: the one next step for a full target queue. */
-export const QUEUE_FULL_NEXT = 'wait for a receipt from the target (a2a-net inbox / a2a_tasks), then send again with a new task id; do not resend in a loop'
+export const QUEUE_FULL_NEXT = 'wait for a receipt from the target after it reconciles its outstanding tasks (a2a-net inbox / a2a_tasks), then send again with a new task id; do not resend in a loop'
 
 /** Wire-face adapter in the flood guard's shape: a refused fresh key is FAILED, not stranded pending. */
 export function createQueueGuard(
@@ -58,13 +61,15 @@ export function createQueueGuard(
   ownTask: (taskId: string) => boolean,
   outcomes: Pick<IdempotencyStore, 'recordOutcome'>,
   recordActivity: (dir: 'in' | 'out', team: string, peer: string, ok: boolean) => void,
+  reminder: (taskId:string)=>Record<string,unknown> = () => ({}),
 ): (caller: string, message: string, team: string, taskId: string, mailbox: boolean, res: ServerResponse) => boolean {
   return (caller, message, team, taskId, mailbox, res) => {
     const error = queueFullRefusal(rows(), team, message, cap(), mailbox, ownTask)
     if (error === undefined) return false
     outcomes.recordOutcome(taskId, { status: 'failed', error })
     recordActivity('in', team, caller, false)
-    const payload = JSON.stringify({ error, reason: 'target-queue-full', code: WIRE_ERROR_QUEUE_FULL, task_id: taskId, team, delivered: false, task_status: 'TASK_STATE_FAILED', next: QUEUE_FULL_NEXT })
+    const visible = rows().filter(row=>row.status==='pending'&&row.receiptExpected!==false&&row.answeredAt===undefined&&(row.direction==='inbound'||row.peer==='local')&&(row.team===team||row.deliveredTo===team)).filter(row=>row.auth?.caller===caller||row.sender?.id===caller).slice(0,3).map(row=>({taskId:row.taskId,...reminder(row.taskId??'')}))
+    const payload = JSON.stringify({ occupyingTasks: visible, error, reason: 'target-queue-full', code: WIRE_ERROR_QUEUE_FULL, task_id: taskId, team, delivered: false, task_status: 'TASK_STATE_FAILED', next: QUEUE_FULL_NEXT })
     res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
     res.end(payload)
     return true

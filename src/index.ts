@@ -56,6 +56,8 @@ import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type OutboundBirth, type ReceiptResolvedInfo, type Sender, type SettlementJudge, type TaskRecord } from './task-ledger.ts'
 import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
+import { ReconciliationReminders, type ReminderAgent } from './reconciliation-reminders.ts'
+import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { refuseIfBudgetExhausted } from './recursion-guard.ts'
@@ -831,7 +833,7 @@ export function apply(ctx: Context, config: Config): void {
   const idempotencyStore = new IdempotencyStore(join(home, 'a2a', 'idempotency.json'))
   const refuseIfFlooded = createFloodGuard(idempotencyStore, recordActivity)
   const ownTask = (taskId: string): boolean => taskLedger.list().some(r => r.taskId === taskId) || taskLedger.archive().some(r => r.taskId === taskId)
-  const refuseIfQueueFull = createQueueGuard(() => taskLedger.list(), () => config.targetQueueCap, ownTask, idempotencyStore, recordActivity)
+  const refuseIfQueueFull = createQueueGuard(() => taskLedger.list(), () => config.targetQueueCap, ownTask, idempotencyStore, recordActivity, id=>reminderView(taskLedger.reminderState(id)))
 
   // Unmasked-identity suppression: gossip mirrors peer lists back and forth,
   // so a URL whose fetch just proved it serves this node — or an already
@@ -1762,6 +1764,7 @@ export function apply(ctx: Context, config: Config): void {
     whenWebServerSettled((webServer) => {
       // gh#77 B1: the admin faces live in src/faces/admin.ts.
       registerAdminFaces(webServer, {
+        reminderDiagnostics:()=>({...idleReminders.diagnostics}),
         ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
         get cardCache() { return cardCache },
@@ -2067,6 +2070,7 @@ export function apply(ctx: Context, config: Config): void {
         }, signal: AbortSignal) => Promise<unknown> }
       | undefined
     if (typeof controller?.prompt !== 'function') return
+    idleReminders.noteNudge(String(agent.id))
     markLineage(agent, 'nudge')
     logger.info(`a2a: async nudge escalates to queue-mode prompt for ${team} (task ${taskId}, ref ${nudgeRef(taskId)})`)
     try {
@@ -2090,6 +2094,7 @@ export function apply(ctx: Context, config: Config): void {
         nudgeBudget.delete(key)
         return
       }
+      if (!idleReminders.nudgeAllowed(key)) { armAsyncNudge(agent,team,taskId,Math.max(delayMs,120_000)); return }
       if (agent.status !== 'idle') {
         // Busy on its own turn (or wedged): spend the bounded re-arm, then
         // climb to the queue-mode seam. Re-resolve on the steer path below
@@ -2113,6 +2118,7 @@ export function apply(ctx: Context, config: Config): void {
       // afresh.
       const fresh = resolveAgentForTeam(team) ?? agent
       logger.info(`a2a: async nudge re-waking ${team} (task ${taskId}, ref ${nudgeRef(taskId)}, delivered but not consumed)`)
+      idleReminders.noteNudge(String(fresh.id))
       steerRelay(fresh, `[A2A nudge] (ref ${nudgeRef(taskId)}) an earlier A2A delivery reached this session while it could not start a turn — please consume the inbox backlog now.`)
     }, delayMs)
     ctx.effect(() => () => clearTimeout(timer), `a2a: async nudge ${taskId}`)
@@ -2131,6 +2137,29 @@ export function apply(ctx: Context, config: Config): void {
    * receipts themselves are never tracked as new debts.
    */
   const receiptWarnAt = new Map<string, number>()
+  const reminderAgents = (): Agent[] => {
+    const service=ctx.get('agents');return service ? liveRootAgents(service).filter(a=>archivedSessionFilter()?.(String(a.id))!==true) : []
+  }
+  const exactReminderTarget = (row: import('./task-ledger.ts').TaskRecord): Agent | undefined => {
+    const live=reminderAgents()
+    if(row.receiverSessionId)return live.find(a=>String(a.id)===row.receiverSessionId)
+    // Legacy concrete face only; never reassign a canvas/process slot to its current roster.
+    const face=row.deliveredTo??row.team
+    if(face.includes('/canvas/')||face===config.team)return undefined
+    const matches=live.filter(a=>sessionTeamOf(a)===face)
+    return matches.length===1?matches[0]:undefined
+  }
+  const idleReminders = new ReconciliationReminders({
+    ledger:taskLedger,agents:reminderAgents,resolve:exactReminderTarget,
+    sender:row=>{
+      if(row.peer!=='local'||row.sender?.kind!=='session')return undefined
+      const matches=reminderAgents().filter(a=>sessionTeamOf(a)===row.sender!.id);return matches.length===1?matches[0]:undefined
+    },
+    steer:(agent:ReminderAgent,text:string)=>steerRelay(agent as Agent,text,config.team),
+    warn:code=>logger.warn('a2a: idle reconciliation reminder failed (%s)',code),
+  })
+  const requestReminderScan = ():void => {queueMicrotask(()=>idleReminders.scan())}
+  ctx.effect(()=>{const timer=ctx.timer.interval(()=>idleReminders.scan(),REMINDER_SCAN_MS);requestReminderScan();return ()=>{idleReminders.stop();timer()}},'a2a: persistent idle reconciliation reminders')
 
   function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {
     if (!callerTeam || callerTeam === '') return
@@ -3415,13 +3444,13 @@ export function apply(ctx: Context, config: Config): void {
    * by task id and taken (deleted) by whoever dispatched.
    */
   const localBirths = new Map<string, OutboundBirth>()
-  const localBirthOf = (team: string, callerSession: string | undefined, receiptTarget: string | undefined, deliveredTo: string): OutboundBirth => {
+  const localBirthOf = (team: string, callerSession: string | undefined, receiptTarget: string | undefined, deliveredTo: string, receiverSessionId: string): OutboundBirth => {
     const admission = localCandidateAdmission(admissionRecords, callerSession, team)
     const caller = callerSession ?? session
     const auth = admission.ok && caller !== ''
       ? buildAuthorization(admission, { caller, proof: 'in-process', ingress: 'local', allowlistVersion: allowlistVersionNow(), target: team, receiptTarget: receiptTarget ?? caller, receivedAt: Date.now() })
       : undefined
-    return { ...(auth !== undefined ? { auth } : {}), ...(deliveredTo !== team ? { deliveredTo } : {}) }
+    return { receiverSessionId, ...(auth !== undefined ? { auth } : {}), ...(deliveredTo !== team ? { deliveredTo } : {}) }
   }
   /**
    * #139: the peer facts a remote outbound row is born with — the signed
@@ -3898,7 +3927,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         steerRelay(target, `[A2A direct] (task ${taskId}) 未验证（in-process） ${sanitizeFromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam, originAgentId)
         armReceiptAutosend(target, taskId, callerTeam, message, steerFloor)
         // #139: the caller's outbound row is born with this admission and the member that received it.
-        if (taskIdFromCaller !== undefined) localBirths.set(taskIdFromCaller, localBirthOf(team, callerSession, callerTeam, sessionTeamOf(target)))
+        if (taskIdFromCaller !== undefined) localBirths.set(taskIdFromCaller, localBirthOf(team, callerSession, callerTeam, sessionTeamOf(target), String(target.id)))
         endRoute(flight)
         recordActivity('out', team, 'local', true)
         return {
@@ -4554,7 +4583,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   // no-op. Node facts need no refresh here: the card serves them fresh at
   // read time.
   ctx.on('agent/status', (payload) => {
-    if (payload.status === 'idle') flushFinals(String(payload.agent.id))
+    if (payload.status === 'idle') { flushFinals(String(payload.agent.id)); requestReminderScan() }
   })
 }
 

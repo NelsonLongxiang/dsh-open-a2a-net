@@ -44,6 +44,14 @@ polling `a2a_teams` cannot see another host's ledger.
 
 A pending row with `answeredAt` records that its actual local target produced a task-attributed final or attempted its own formal receipt. It no longer occupies the `targetQueueCap` limit, even if the caller CLI expired and receipt delivery failed. It is **still pending receipt debt**: do not abandon it just to free capacity, or claim the sender received it. Dead-letter expiry, late receipts and lifetime conservation continue unchanged. State session `queued` and the board both use the same unanswered-row count; unfinished work still counts against the default cap of three. Unrelated agents, unrelated finals and host timeout placeholders cannot mark an answer.
 
+## Idle reconciliation reminders (#351, transitional steer)
+
+The host may send a sourced `[A2A reconciliation reminder]` while the session is truly idle. It lists existing pending task ids, senders, bounded original-message briefs and ages. **It is not a new task, acknowledgement, or completion evidence**: no slot is released and no receipt is owed to the reminder itself. Check each original task and send your own formal receipt to its original sender when the outcome is known (completed / failed / rejected / abandoned). If still working, use an ordinary follow-up; do not use a terminal receipt header merely to mean “in progress”.
+
+Reminder attempts are persisted before injection, merged per session, skipped without counting while busy, and backed off after three attempts to about two hours without stopping. They stop only when the original row leaves pending by a real receipt, cancellation, expiry or another existing terminal path. Counters do not prove the model read a reminder. Local senders may receive one warning; remote push notifications are not shipped. Tasks/state and CLI show attempts, last/next times and “多次提醒未对账”.
+
+This deliberately uses idle-only `steerRelay` with A2A source/lineage, not unlabelled human queue prompts or a fallback after queue failure. Task-delivery migration is separately tracked by #356. Receipt authorization, queue counting and synchronous reply ownership do not change. An unwritable ledger fails closed; the host does not invent completion or settle production backlog for you.
+
 ## Idempotency
 
 A route carries a fingerprint (caller + message + team + wait-mode). Re-

@@ -70,6 +70,8 @@ export interface MeshNodeOptions extends Partial<Config> {
   agentId?: string
   /** #306-era: record steers but never answer — inbound rows stay owed (queue caps, owed-state pins). */
   silent?: boolean
+  /** Real lifecycle state for boot-only reminder tests; omitted preserves legacy fixture behavior. */
+  initialStatus?: 'idle' | 'running'
 }
 
 export interface MeshNode {
@@ -211,6 +213,7 @@ export async function bootNode(options: MeshNodeOptions): Promise<MeshNode> {
     // like `agent-1` does not.
     id: SessionId(options.agentId ?? 'session-0123456789abcdef'),
     session: { events: [] as unknown[] },
+    ...(options.initialStatus ? {status:options.initialStatus} : {}),
     steer: (payload: unknown) => {
       // #306: a real session logs the steered user message before its reply — the
       // attributed sync waiter reads the turn that consumed the task.
