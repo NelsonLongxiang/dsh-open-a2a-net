@@ -37,7 +37,7 @@ describe('gh#45 CLI caller admission (N3)', () => {
       // gate (empty here) and the N3 caller gate, then land in the mailbox.
       const res = await globalThis.fetch(`${a.baseUrl}/a2a/direct`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-A2A-Caller': 'ops-cli', 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Ts': String(ts), 'X-A2A-Sig': sig },
+        headers: { 'Content-Type': 'application/json', 'X-A2A-Caller': 'ops-cli', 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Caller-Ts': String(ts), 'X-A2A-Caller-Sig': sig },
         body: JSON.stringify({ team: HANDLE, message: 'self-probe from the CLI identity', caller_session: HANDLE, wait: false }),
       }).then(async r => await r.json() as { delivered?: boolean; error?: string })
       expect(res.error).toBeUndefined()

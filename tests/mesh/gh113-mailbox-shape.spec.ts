@@ -37,7 +37,7 @@ describe('gh#113 CLI mailbox shape (real host)', () => {
         const sig = edSign(undefined, Buffer.from(JSON.stringify(['ops-cli', callerUrl, ts])), privateKey).toString('base64')
         return await globalThis.fetch(`${a.baseUrl}/a2a/direct`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-A2A-Caller': 'ops-cli', 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Ts': String(ts), 'X-A2A-Sig': sig },
+          headers: { 'Content-Type': 'application/json', 'X-A2A-Caller': 'ops-cli', 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Caller-Ts': String(ts), 'X-A2A-Caller-Sig': sig },
           body: JSON.stringify({ team: HANDLE, message, caller_session: HANDLE, wait: false }),
         }).then(async r => await r.json() as { delivered?: boolean })
       }
@@ -52,11 +52,11 @@ describe('gh#113 CLI mailbox shape (real host)', () => {
       expect(box.mail[1]).toMatchObject({ truncated: true })
       expect(box.mail[1].chars).toBeGreaterThan(4500)
       expect(box.mail[1].text.length).toBeLessThanOrEqual(4000)
-      expect(box.mail[1].text).toContain('未验证（legacy-window）')
+      expect(box.mail[1].text).toContain('未验证（cli-identity）')
       const newer = await json(`${a.baseUrl}/__dsh_a2a/cli-deposit`, { action: 'inbox', handle: HANDLE, after_seq: 2 })
       expect(newer.mail).toHaveLength(1)
       expect(newer.mail[0].text).toContain('three')
-      expect(newer.mail[0].text).toContain('未验证（legacy-window）')
+      expect(newer.mail[0].text).toContain('未验证（cli-identity）')
 
       const state = await json(`${a.baseUrl}/__dsh_a2a/state`)
       expect(state.cliMailbox).toEqual({ dropped: 0, truncated: 1 })

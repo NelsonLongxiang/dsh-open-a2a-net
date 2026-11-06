@@ -576,8 +576,8 @@ export function apply(ctx: Context, config: Config): void {
    */
   function originClaimHeaders(target: OriginClaimTarget): Record<string, string> {
     // No local web/card anchor yet: keep the preexisting absent-envelope migration posture, not a malformed Sig3.
-    const signedTarget = ownCardUrl === '' ? { url: target.url, method: target.method } : target
-    return signOriginClaim(signedTarget, { caller: config.team, callerUrl: ownCardUrl, privateKey: nodePrivateKey, unbound: config.originClaimUnboundWindow !== false, now: Date.now() })
+    if(ownCardUrl==='')return {}
+    return signOriginClaim(target, { caller: config.team, callerUrl: ownCardUrl, privateKey: nodePrivateKey, unbound: config.originClaimUnboundWindow !== false, now: Date.now() })
   }
   const client = new A2aClient({
     apiKey: config.apiKey,
@@ -2466,6 +2466,7 @@ export function apply(ctx: Context, config: Config): void {
     const claim = await verifyOriginClaimOf(req, {
       cardCache,
       fetch: fetchImpl,
+      freshCard: true,
       audiences: [ownCardUrl, ...config.originClaimAudiences ?? []],
       unboundOpen: config.originClaimUnboundWindow !== false,
       onUnbound: () => { unboundInboundCount += 1 },

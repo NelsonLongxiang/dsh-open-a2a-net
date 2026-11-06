@@ -247,7 +247,7 @@ describe('#222 F1 remote CLI pinned-home admission (real hosts; scope on)', () =
       await deposit(homes[0]!)
       expect((await link(target)).ok).toBe(true)
       await homes[0]!.dispose()
-      expect((await direct(target, homes[0]!, 'direct-cli-home-unreachable')).error).toContain('offline or home card could not be read')
+      expect((await direct(target, homes[0]!, 'direct-cli-home-unreachable')).error).toContain('OriginClaim verification failed (no-card)')
     } finally { await target.dispose() }
   }, 20_000)
   it('a cold H2 card cache with an unreadable pinned home refuses the forwarded CLI body', async () => {

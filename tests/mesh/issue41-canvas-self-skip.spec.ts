@@ -111,7 +111,7 @@ describe('issue #41 canvas initiator self-skip', () => {
       const ts = Date.now()
       const sig = edSign(undefined, Buffer.from(JSON.stringify(['mesh-i41-cli', callerUrl, ts])), privateKey).toString('base64')
       const res = await globalThis.fetch(`${a.baseUrl}/a2a/direct`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-A2A-Caller': 'mesh-i41-cli', 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Ts': String(ts), 'X-A2A-Sig': sig },
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-A2A-Caller': 'mesh-i41-cli', 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Caller-Ts': String(ts), 'X-A2A-Caller-Sig': sig },
         body: JSON.stringify({ team: 'dsh/canvas/入站组', message: 'peer caller to the canvas group', caller_session: HANDLE, wait: false }),
       }).then(async r => await r.json() as Record<string, any>)
       expect(res.error).toBeUndefined()

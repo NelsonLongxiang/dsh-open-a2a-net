@@ -31,6 +31,8 @@ import type { A2aPeerCard } from './types.ts'
 
 /** ts skew tolerance (protocol constant, §7). */
 export const ORIGIN_CLAIM_SKEW_MS = 5 * 60_000
+/** Local verification work budget, including response body reads. */
+export const ORIGIN_CLAIM_VERIFY_MS = 5_000
 /** Domain tag of the bound form: a v1 signature can never verify as v2. */
 export const ORIGIN_CLAIM_BOUND_TAG = 'a2a-origin-claim/2'
 export const ORIGIN_CLAIM_BODY_TAG = 'a2a-origin-claim/3'
@@ -45,7 +47,7 @@ export interface OriginClaimTarget {
   readonly body?: string | Uint8Array
 }
 
-export type OriginClaimRefusal = 'absent' | 'bad-caller-shape' | 'bad-ts' | 'no-card' | 'bad-sig' | 'not-derivable' | 'wrong-audience' | 'unbound-closed' | 'body-mismatch'
+export type OriginClaimRefusal = 'absent' | 'bad-caller-shape' | 'bad-ts' | 'no-card' | 'bad-sig' | 'not-derivable' | 'wrong-audience' | 'unbound-closed' | 'body-mismatch' | 'verification-timeout'
 
 /** Only the canonical origin root can claim that origin's identity. */
 export function isRootOriginUrl(value: string): boolean {
@@ -211,6 +213,10 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   /** A loopback arrival is an audience of its own (default); off when originClaimUrl declares a tunnel or proxy. */
   readonly loopbackArrival?: boolean
   readonly now: number
+  /** Internal deterministic test seam; production uses ORIGIN_CLAIM_VERIFY_MS. */
+  readonly timeoutMs?: number
+  /** Request admission requires a current card read, not a discovery cache assertion. */
+  readonly freshCard?: boolean
   /** Exact received bytes, supplied by the bounded body reader. Missing bytes cannot verify Sig3. */
   readonly rawBody?: Uint8Array
   /** On the faces that admit CLI identities: the deposit a claim URL names. */
@@ -228,7 +234,8 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   const digest = header('x-a2a-body-sha256')
   // Presence, even malformed/empty, opts into v3. It must never become absent/legacy or fall back to Sig2/v1.
   if (hasBodySig && (!bodySig || !/^[A-Za-z0-9_-]{43}$/.test(digest) || d.rawBody === undefined || originBodySha256(d.rawBody) !== digest)) return { ok: false, reason: 'body-mismatch' }
-  if (caller === '' || callerUrl === '' || !Number.isFinite(ts) || ts <= 0 || (unboundSig === '' && boundSig === '' && !hasBodySig)) return { ok: false, reason: hasBodySig ? 'bad-sig' : 'absent' }
+  const present=Object.keys(req.headers).some(name=>name.startsWith('x-a2a-caller')||name==='x-a2a-body-sha256')
+  if (caller === '' || callerUrl === '' || !Number.isFinite(ts) || ts <= 0 || (unboundSig === '' && boundSig === '' && !hasBodySig)) return { ok: false, reason: present ? 'bad-sig' : 'absent' }
   if (!originClaimCallerShape.test(caller)) return { ok: false, reason: 'bad-caller-shape' }
   if (Math.abs(d.now - ts) > ORIGIN_CLAIM_SKEW_MS) return { ok: false, reason: 'bad-ts' }
   const hasBound = boundSig !== '' || hasBodySig
@@ -275,8 +282,8 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
   // envelope names a BARE ZONE, and derivation is the exact match
   // card.team === caller below — both ride the minimal card's signed core,
   // so a single envelope-less fetch suffices and never recurses). A warm
-  // cache entry short-circuits the fetch.
-  let card: A2aPeerCard | undefined = d.cardCache.get(callerUrl)?.card
+  // cache may be used by non-admission consumers; admission always requests a fresh read.
+  let card: A2aPeerCard | undefined = d.freshCard ? undefined : d.cardCache.get(callerUrl)?.card
   if (card === undefined) {
     try {
       // callerUrl is the caller's BASE URL — the card lives under it.
@@ -287,10 +294,25 @@ export async function verifyOriginClaim(req: IncomingMessage, d: {
       cardBase.search = ''
       cardBase.hash = ''
       const cardUrl = cardBase.toString()
-      const response = await d.fetch(cardUrl, { method: 'GET', headers: {}, redirect: 'manual' })
-      if (response.status >= 300 && response.status < 400) return { ok: false, reason: 'not-derivable' }
-      const verdict = verifyCard(JSON.parse(await response.text()), Date.now())
-      if (verdict.ok) card = verdict.card
+      const controller=new AbortController()
+      const ms=d.timeoutMs??ORIGIN_CLAIM_VERIFY_MS,deadline=Date.now()+ms
+      let timer:ReturnType<typeof setTimeout>|undefined
+      try {
+        const expired=new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new Error('verification-timeout'))},ms)})
+        const verdict=await Promise.race([(async()=>{
+          const response=await d.fetch(cardUrl,{method:'GET',headers:{},redirect:'manual',signal:controller.signal})
+          if(response.status>=300&&response.status<400)return undefined
+          if(!response.ok)throw Error('card-read-failed')
+          const bytes=await response.text()
+          if(Date.now()>=deadline)throw Error('verification-timeout')
+          return verifyCard(JSON.parse(bytes),Date.now())
+        })(),expired])
+        if(verdict===undefined)return {ok:false,reason:'not-derivable'}
+        if(verdict.ok)card=verdict.card
+      } catch(error) {
+        if(controller.signal.aborted||Date.now()>=deadline||(error instanceof Error&&error.message==='verification-timeout'))return {ok:false,reason:'verification-timeout'}
+        throw error
+      } finally {if(timer!==undefined)clearTimeout(timer)}
     } catch {
       card = undefined
     }
