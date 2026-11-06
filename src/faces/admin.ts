@@ -24,6 +24,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Config } from '../index.ts'
 import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from '../runtime.ts'
+import { reminderView } from '../reconciliation-state.ts'
 import { CanvasStore, canvasNameReserved as reservedCanvasName, isRemoteMemberRef, validRemoteMemberRef, legacyBareMember } from '../canvas-store.ts'
 import { qualifiedCanvasId } from '../canvas-id.ts'
 import { refreshPeerCard, registerCanvasNotify, type CanvasNotifyDeps } from './canvas-notify.ts'
@@ -76,6 +77,7 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly cliHomeOptions: (handle: string) => Promise<{ homes: string[]; unreadable: number; held?: true }>
   readonly layoutStore: LayoutStore
   readonly taskLedger: TaskLedger
+  readonly reminderDiagnostics?: () => unknown
   readonly enforceRefused?: { reason: string; blockers: readonly string[] }
   /** #114 S6: observe (lazily) and return the /state `authorization` block. */
   readonly authorizationView: () => unknown
@@ -345,9 +347,11 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // list and settled ones just a count, all additive so the panel
           // keeps rendering plain owed rows until it learns the tiers.
           ledgerPersistence: taskLedger.persistenceState(),
+          reconciliationReminders: d.reminderDiagnostics?.(),
           tasks: taskLedger.list()
             .filter(task => task.status === 'pending')
             .map(task => ({
+              ...reminderView(taskLedger.reminderState(task.taskId)),
               taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, status: task.status,
               direction: task.direction ?? 'outbound', receiptExpected: task.receiptExpected !== false,
               ...(task.answeredAt !== undefined ? { answeredAt: task.answeredAt } : {}),

@@ -3,8 +3,8 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "01987f4ac55c3d9ee905d3a030dea6a9cb243d80d36b03a0ab81c8f8ce569b36",
-    "src/faces/admin.ts": "622118eddf640aa9003d444b818bb3c9e724471c656e1e053d3a93edcffa34da",
+    "src/index.ts": "abdbfc80585e413d5ae1f43cf95461c6cc43daabae546fd1c7ea4223ad909191",
+    "src/faces/admin.ts": "a52395b8630f4a1ed0f6556dddfd7d646d921c15aee6d21db4a958a066ddf182",
     "src/canvas-store.ts": "86240be8bcae39faf0077c68aa48f244928cf132e91a9eae6f5b97177ae3d115",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
     "src/cli-deposit.ts": "8b8b714d8b47ee11c5518e51d08ea31cc588a29bc4eb73843bb2239f880e718a",
@@ -14,16 +14,16 @@
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
     "nexus-stage/src/planning-card-text.ts": "31403071229c5dde4af545ded1a8eaebb1c329a52df3169fae868a57119225d9",
     "nexus-stage/src/planning-fit.ts": "cbda0255062632bd412deb2131c7a01e1e16ab9c72d2a70a32c362e108f8c07a",
-    "src/task-ledger.ts": "9cd950e859b0d04756de3b81f49ad503924ac20997ec27e7e234d5764811ac82",
+    "src/task-ledger.ts": "22cb956e8ed6d7e5de95b97fef2e4c1a80a29625c8ddb58dfa4242983baf761a",
     "nexus-stage/src/world.ts": "702e8ad68bebb93239cd2430f0f526166622a6f9b085ef06e1db55fba1de60cc",
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "b4f92c9ce3237019ab3c7ab71f0624c3306e8c316cb15d119d4e7c57f65e604f",
-    "src/faces/wire.ts": "54088594c8e5bd8671ad040acf431e04046722458fd73df51931c02438b93994",
+    "src/faces/wire.ts": "c50ea04b08429fec029d50b5ca27bcd2a8b2b6517560c960b4188959ed1a14bf",
     "src/faces/canvas-notify.ts": "4d06ea71c72f5a0fd200fbc7cc32c62cfd367af054c22f284be3d242919c1358",
     "src/task-auth.ts": "fcdcd510a3d9339e95461cc410815de1eb41f572e4e0b518fd0f6716b8e685de",
     "src/origin-claim.ts": "746d0a466940361c9a1ad53125918525410a83757bc2ba0878ae5dc0979f4a64",
-    "src/tools/info.ts": "809c0edcf81befdc8cd486d9522e8a111293dad2a9e2ceb48e2705bd6e392f94",
+    "src/tools/info.ts": "d6f19d76d4a844f8d684d37384b3a90c311e6f1ea31f62aec99727c01454b562",
     "src/tools/act.ts": "983f78c58b8c886b39b5af3f2cf474a1a47e4d03b91fedf5ed581aba3225bed2",
     "src/peer-directory.ts": "1e58577dc4282f20d011847e8f7efe8c1c281cbdc867133401df0554d3bfeafc",
     "src/card.ts": "c72e71e453d8b2cd3981e4fd1a2b4c2e804b1f6a312328825eec89489ca13cf5",
@@ -33,13 +33,13 @@
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/tools/info.ts:167",
+      "ref": "src/tools/info.ts:168",
       "expect": "name: 'a2a_whoami',"
     },
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/tools/info.ts:706",
+      "ref": "src/tools/info.ts:717",
       "expect": "name: 'a2a_probe',"
     },
     {
@@ -51,7 +51,7 @@
     {
       "page": "p1-arch",
       "cell": "b1",
-      "ref": "src/index.ts:527",
+      "ref": "src/index.ts:529",
       "expect": "const peerAdmissible = (url: string): boolean => {"
     },
     {
@@ -63,13 +63,13 @@
     {
       "page": "p1-arch",
       "cell": "b3",
-      "ref": "src/index.ts:2488",
+      "ref": "src/index.ts:2517",
       "expect": "function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {"
     },
     {
       "page": "p1-arch",
       "cell": "b4",
-      "ref": "src/index.ts:1425",
+      "ref": "src/index.ts:1427",
       "expect": "function exposureDescription(description: string): string | undefined {"
     },
     {
@@ -105,7 +105,7 @@
     {
       "page": "p1-arch",
       "cell": "c1",
-      "ref": "src/index.ts:1819",
+      "ref": "src/index.ts:1822",
       "expect": "path: '/.well-known/agent-card.json',"
     },
     {
@@ -135,31 +135,31 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:569",
+      "ref": "src/faces/admin.ts:573",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:183",
+      "ref": "src/faces/admin.ts:185",
       "expect": "path: '/__dsh_a2a/state',"
     },
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:2883",
+      "ref": "src/index.ts:2912",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
       "page": "p1-arch",
       "cell": "d1",
-      "ref": "src/index.ts:519",
+      "ref": "src/index.ts:521",
       "expect": "const peerStore = new PeerStore(config.peers, join(home, 'a2a', 'peers.json'))"
     },
     {
       "page": "p1-arch",
       "cell": "d2",
-      "ref": "src/index.ts:592",
+      "ref": "src/index.ts:594",
       "expect": "const joinedSessions = new JoinedSessions(join(home, 'a2a', 'joined.json'))"
     },
     {
@@ -171,25 +171,25 @@
     {
       "page": "p1-arch",
       "cell": "d4",
-      "ref": "src/index.ts:597",
+      "ref": "src/index.ts:599",
       "expect": "const exposureStore = new ExposureStore(join(home, 'a2a', 'exposure.json'))"
     },
     {
       "page": "p1-arch",
       "cell": "d5",
-      "ref": "src/index.ts:675",
+      "ref": "src/index.ts:677",
       "expect": "const taskLedger = new TaskLedger(join(home, 'a2a', 'tasks.json'), { staleTtlMs: config.taskStaleTtlMs, warn: message => logger.warn(message) })"
     },
     {
       "page": "p1-arch",
       "cell": "d6",
-      "ref": "src/index.ts:829",
+      "ref": "src/index.ts:831",
       "expect": "const idempotencyStore = new IdempotencyStore(join(home, 'a2a', 'idempotency.json'))"
     },
     {
       "page": "p1-arch",
       "cell": "d7",
-      "ref": "src/faces/admin.ts:337",
+      "ref": "src/faces/admin.ts:339",
       "expect": "activity: recentActivity.slice(),"
     },
     {
@@ -207,7 +207,7 @@
     {
       "page": "p1-arch",
       "cell": "d9",
-      "ref": "src/index.ts:615",
+      "ref": "src/index.ts:617",
       "expect": "const cliDeposits = new CliDepositStore(join(home, 'a2a', 'cli-deposits.json'))"
     },
     {
@@ -225,7 +225,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:3784",
+      "ref": "src/index.ts:3813",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -267,49 +267,49 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3222",
+      "ref": "src/index.ts:3251",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
       "page": "p1-arch",
       "cell": "f2",
-      "ref": "src/index.ts:952",
+      "ref": "src/index.ts:954",
       "expect": "const wakeColdTeam = (team: string, skipId?: string): ColdWake => {"
     },
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2182",
+      "ref": "src/index.ts:2211",
       "expect": "void runReceiptLadder("
     },
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2133",
+      "ref": "src/index.ts:2162",
       "expect": "function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {"
     },
     {
       "page": "p1-arch",
       "cell": "f4",
-      "ref": "src/index.ts:952",
+      "ref": "src/index.ts:954",
       "expect": "const wakeColdTeam = (team: string, skipId?: string): ColdWake => {"
     },
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/admin.ts:132",
+      "ref": "src/faces/admin.ts:134",
       "expect": "export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void {"
     },
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/index.ts:1762",
+      "ref": "src/index.ts:1764",
       "expect": "registerAdminFaces(webServer, {"
     },
     {
       "page": "p1-arch",
       "cell": "d10",
-      "ref": "src/task-ledger.ts:552",
+      "ref": "src/task-ledger.ts:578",
       "expect": "private trimOwed(): void {"
     },
     {

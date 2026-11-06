@@ -41,6 +41,10 @@ The owner does the gestures (install, config, join, allowlist, canvas). The
 agent prepares the exact config and verifies each step with `a2a_whoami`,
 `a2a_probe`, `a2a_teams` and one round with a receipt.
 
+## Idle reconciliation reminders
+
+A sourced `[A2A reconciliation reminder]` lists **existing** tasks you still owe. It is not a task, receipt, or acknowledgement, and does not release queue capacity. Reconcile each original task yourself; do not reply to the reminder as a new task or fake completion to clear a queue. Busy sessions are skipped; idle reminders persist and back off without exhausting. See [routing.md](references/routing.md#idle-reconciliation-reminders-351-transitional-steer).
+
 ## Routing (a2a_route)
 
 ```text

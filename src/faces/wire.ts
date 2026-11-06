@@ -921,7 +921,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // recorded on the row it settled. Booking it would leave a debt
                 // nothing can pay, and a nudge chasing an answer nobody owes.
                 if (!deliveredReceipt) {
-                  taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message), auth, deliveredTo === team ? undefined : deliveredTo)
+                  taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message), auth, deliveredTo === team ? undefined : deliveredTo, String(target.id))
                   armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
                 }
                 const payload = JSON.stringify({
@@ -1021,7 +1021,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             syncTarget = sessionTeamOf(target)
             const receiptTarget = callback !== '' ? callback : caller
             const auth = buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ...(admission.rule === 'remote-ref-cli' && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget, receivedAt: admittedAt.at })
-            taskLedger.trackInbound(taskId, team, receiptTarget, contextId, receiptExpectationOf(receiptTarget) !== 'process-label', briefOf(message), auth, syncTarget === team ? undefined : syncTarget)
+            taskLedger.trackInbound(taskId, team, receiptTarget, contextId, receiptExpectationOf(receiptTarget) !== 'process-label', briefOf(message), auth, syncTarget === team ? undefined : syncTarget, String(target.id))
             armReceiptAutosend(target, taskId, receiptTarget, message, floor)
           }
           await routeIntoAgent(team, message, caller, taskId, proofClause, directHeader, undefined, syncSteered).then(async (outcome) => {

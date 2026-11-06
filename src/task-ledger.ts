@@ -22,6 +22,7 @@
 import type { TaskAuthorization, SettlementReason } from './task-auth.ts'
 import { existsSync, readFileSync } from 'node:fs'
 import { writeTaskLedger } from './task-ledger-persistence.ts'
+import { parseReminder, type ReminderState } from './reconciliation-state.ts'
 import { parseReceipt, RECEIPT_OUTCOMES, type ReceiptOutcomeV2 } from './receipt.ts'
 import { classifyConservationBlock, ConservationCounters, type ConservationVerdict } from './ledger-conservation.ts'
 import { CALLER_ENDED_PREFIX, TASK_CAP, ARCHIVE_CAP, SUMMARY_CAP, TASK_STALE_TTL_MS, ARCHIVE_ENDS, ECHO_SUMMARY, ROUTING_FACT_CAP, SETTLEMENT_ID_CAP, SETTLEMENT_REFUSAL_CAP, withSender, withAuth, routingOf, birthFacts, withRouting, withSettledBy, parseRefusal, archivedEndedBy } from './task-ledger-rows.ts'
@@ -53,6 +54,30 @@ export class TaskLedger {
   private readonly warn: (message: string) => void
   /** Last successful commit, for rollback when a mutation cannot persist. */
   private committed = ''
+  private reminders: Record<string, ReminderState> = Object.create(null)
+  private reminderSessions: Record<string, number> = Object.create(null)
+  reminderSessionAt(id: string): number | undefined { return Object.hasOwn(this.reminderSessions,id) ? this.reminderSessions[id] : undefined }
+  reminderState(taskId: string): ReminderState | undefined { const r=Object.hasOwn(this.reminders,taskId) ? this.reminders[taskId] : undefined; return r ? {...r} : undefined }
+  /** Atomic observation update; no task status, answer, or conservation mutation. */
+  saveReminders(updates: readonly {taskId:string; state:ReminderState|undefined}[], session?: {id:string; at:number|undefined}): void {
+    // Validate all input before touching either observation table.
+    if(session&&(session.id.length<1||session.id.length>256||(session.at!==undefined&&(!Number.isSafeInteger(session.at)||session.at<0))))throw Error('invalid reminder session throttle')
+    for(const update of updates)if(update.state&&!parseReminder(update.state))throw Error('invalid reminder state')
+    this.reminders=Object.assign(Object.create(null),Object.fromEntries(Object.entries(this.reminders).filter(([id])=>this.tasks.some(row=>row.taskId===id&&row.status==='pending'))))
+    if(session) {
+      if(session.at===undefined)delete this.reminderSessions[session.id]
+      else if(session.id.length<=256&&Number.isSafeInteger(session.at)&&session.at>=0)this.reminderSessions[session.id]=session.at
+      else throw Error('invalid reminder session throttle')
+      this.reminderSessions=Object.fromEntries(Object.entries(this.reminderSessions).sort((a,b)=>b[1]-a[1]).slice(0,TASK_CAP))
+    }
+    for(const update of updates) {
+      const row=this.tasks.find(r=>r.taskId===update.taskId&&r.status==='pending')
+      if(!row)continue
+      if(update.state) { const parsed=parseReminder(update.state); if(!parsed)throw Error('invalid reminder state'); this.reminders[update.taskId]=parsed }
+      else delete this.reminders[update.taskId]
+    }
+    this.persist()
+  }
   private writeFailure: { at: number; code: string } | undefined
   /** Diagnostic-only; never implies that a failed mutation committed. No paths or payloads exposed. */
   persistenceState(): { ok: boolean; lastError?: { at: number; code: string } } {
@@ -177,7 +202,7 @@ export class TaskLedger {
    * @param from - the caller's receipt target (label or callback address).
    * @param contextId - the delivery's conversation id, kept for follow-up routes (empty omits it).
    */
-  trackInbound(taskId: string, team: string, from: string, contextId?: string, receiptExpected?: boolean, brief?: string, auth?: TaskAuthorization, deliveredTo?: string): void {
+  trackInbound(taskId: string, team: string, from: string, contextId?: string, receiptExpected?: boolean, brief?: string, auth?: TaskAuthorization, deliveredTo?: string, receiverSessionId?: string): void {
     if (taskId === '') return
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
@@ -189,6 +214,7 @@ export class TaskLedger {
       peer: `local:${from}`,
       startedAt: this.now(),
       direction: 'inbound' as const,
+      ...(receiverSessionId ? { receiverSessionId } : {}),
       ...(receiptExpected === false ? { receiptExpected: false } : {}),
       ...(contextId !== undefined && contextId !== '' ? { contextId } : {}),
       ...(brief !== undefined && brief !== '' ? { brief } : {}),
@@ -609,6 +635,15 @@ export class TaskLedger {
       if (snapshot.archived !== undefined && !Array.isArray(snapshot.archived)) {
         this.counters.damaged = 'snapshot-shape-invalid'
       }
+      if(snapshot.reconciliationReminders && typeof snapshot.reconciliationReminders==='object') {
+        for(const [id,raw] of Object.entries(snapshot.reconciliationReminders).slice(0,TASK_CAP)) {
+          const parsed=parseReminder(raw)
+          this.reminders[id]=parsed ?? {version:1,targetId:'invalid',attempts:0,deliveredCount:0,lastAttemptAt:0,nextAt:Number.MAX_SAFE_INTEGER,requestId:'',lastResult:'blocked'}
+        }
+      }
+      if(snapshot.reconciliationSessions && typeof snapshot.reconciliationSessions==='object') {
+        this.reminderSessions=Object.fromEntries(Object.entries(snapshot.reconciliationSessions).filter(([id,at])=>id.length>0&&id.length<=256&&Number.isSafeInteger(at)&&at>=0).slice(0,TASK_CAP))
+      }
       const entries = snapshot.tasks
       const restored: TaskRecord[] = []
       if (Array.isArray(entries)) {
@@ -661,6 +696,7 @@ export class TaskLedger {
             ...withSender(entry.sender, entry.direction),
             ...withAuth(entry.auth, entry, this.now()),
             ...withRouting(entry as Record<string, unknown>, this.warn),
+            ...(typeof entry.receiverSessionId==='string'&&entry.receiverSessionId.length>0&&entry.receiverSessionId.length<=256?{receiverSessionId:entry.receiverSessionId}:{}),
             status: entry.status === 'dead' ? 'dead' : 'pending',
             ...(entry.status === 'dead'
               ? {
@@ -748,6 +784,8 @@ export class TaskLedger {
       const code = (error as { code?: unknown })?.code
       this.writeFailure = { at: this.now(), code: typeof code === 'string' && /^[A-Z0-9_]{1,48}$/.test(code) ? code : 'LEDGER_WRITE_FAILED' }
       const previous = JSON.parse(this.committed) as TaskLedgerSnapshot
+      this.reminders = Object.assign(Object.create(null), previous.reconciliationReminders ?? {})
+      this.reminderSessions = previous.reconciliationSessions ?? Object.create(null)
       this.tasks = [...previous.tasks]
       this.archived = [...previous.archived ?? []]
       this.refusals = [...previous.settlementRefusals ?? []]
@@ -760,6 +798,8 @@ export class TaskLedger {
   private snapshot(): TaskLedgerSnapshot {
     return {
         tasks: this.tasks.map(task => ({ ...task })),
+        ...(Object.keys(this.reminderSessions).length ? { reconciliationSessions: {...this.reminderSessions} } : {}),
+        ...(Object.keys(this.reminders).length ? { reconciliationReminders: Object.fromEntries(Object.entries(this.reminders).filter(([id])=>this.tasks.some(row=>row.taskId===id&&row.status==='pending'))) } : {}),
         ...(this.archived.length > 0 ? { archived: this.archived.map(entry => ({ ...entry })) } : {}),
         ...(this.refusals.length > 0 ? { settlementRefusals: this.refusals.map(entry => ({ ...entry, settler: { ...entry.settler } })) } : {}),
         ...(this.refusalsTotal > 0 ? { settlementRefusalsTotal: this.refusalsTotal } : {}),

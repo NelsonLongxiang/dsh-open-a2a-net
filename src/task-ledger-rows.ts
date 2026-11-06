@@ -156,6 +156,8 @@ export function routingOf(row: Pick<TaskRecord, 'peerKey' | 'peerHost' | 'delive
 
 /** #139: what an outbound row is born with besides its sender. */
 export interface OutboundBirth {
+  /** Exact receiver selected at local delivery, never inferred from a later canvas roster. */
+  readonly receiverSessionId?: string
   readonly forwarded?: true
   /** Local-candidate admission, or a forwarded online CLI's verified wire admission. */
   readonly auth?: TaskAuthorization
@@ -167,13 +169,14 @@ export interface OutboundBirth {
 }
 
 /** The facts of one outbound birth that fit the row (see {@link withRouting} for the same shape on restore). */
-export function birthFacts(peer: string, birth: OutboundBirth | undefined, team = '', sender?: Sender, now = Date.now(), warn: (message: string) => void = console.warn): Pick<TaskRecord, 'auth' | 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'receiverMembers'> {
+export function birthFacts(peer: string, birth: OutboundBirth | undefined, team = '', sender?: Sender, now = Date.now(), warn: (message: string) => void = console.warn): Pick<TaskRecord, 'auth' | 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'receiverMembers' | 'receiverSessionId'> {
   if (birth === undefined) return {}
   const fact = (v: string | undefined): v is string => v !== undefined && v !== '' && v.length <= ROUTING_FACT_CAP
   const remote = peer !== 'local' && !peer.startsWith('local:')
   const receiverMembers = remote && birth.forwarded === true && fact(birth.peerKey) ? parseReceiverMembers(birth.receiverMembers, warn) : undefined
   return {
     ...withAuth(birth.auth, { direction: 'outbound', team, peer, sender, forwarded: birth.forwarded }, now),
+    ...(peer === 'local' && fact(birth.receiverSessionId) ? { receiverSessionId: birth.receiverSessionId } : {}),
     ...(receiverMembers !== undefined ? { receiverMembers } : {}),
     ...(remote && birth.forwarded === true ? { forwarded: true as const } : {}),
     ...(remote && fact(birth.peerKey) ? { peerKey: birth.peerKey } : {}),
@@ -218,6 +221,7 @@ export function withRouting(entry: Record<string, unknown>, warn: (message: stri
 
 /** One tracked outbound task still in the owed book (unsettled). */
 export interface TaskRecord {
+  readonly receiverSessionId?: string
   readonly taskId: string
   readonly team: string
   readonly peer: string
@@ -403,6 +407,8 @@ export interface ReceiptResolvedInfo {
 
 /** The persisted ledger document: the owed book plus its settled archive. */
 export interface TaskLedgerSnapshot {
+  readonly reconciliationSessions?: Record<string, number>
+  readonly reconciliationReminders?: Record<string, import('./reconciliation-state.ts').ReminderState>
   readonly tasks: readonly TaskRecord[]
   readonly archived?: readonly ArchivedRecord[]
   /** #114 S4: the bounded ring of refused / would-be-refused settlements. */

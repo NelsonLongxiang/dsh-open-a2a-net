@@ -1020,11 +1020,11 @@ async function main() {
     const archived = s.archived ?? []
     if (has('--json')) { console.log(JSON.stringify({ pending, dead, archived, ...(s.settlement === undefined ? {} : { settlement: s.settlement }), ...(s.conservation === undefined ? {} : { conservation: s.conservation }) }, null, 2)); return }
     console.log(`pending (${String(pending.length)}):`)
-    listCapped(pending, 20, t => `  ${String(t.taskId)} → ${String(t.team)} ${String(t.direction ?? '')}${senderTail(t)}`)
+    listCapped(pending, 20, t => `  ${String(t.taskId)} → ${String(t.team)} ${String(t.direction ?? '')}${senderTail(t)}${t.reminderAttempts!==undefined?` reminders=${t.reminderDelivered??0}/${t.reminderAttempts} last=${t.reminderLastAt??'?'}${t.repeatedlyUnreconciled?' 多次提醒未对账':''}`:''}`)
     console.log(`dead (${String(dead.length)}):`)
-    listCapped(dead, 20, t => `  ${String(t.taskId)} → ${String(t.team)} (${String(t.reason ?? '?')})${senderTail(t)}`)
+    listCapped(dead, 20, t => `  ${String(t.taskId)} → ${String(t.team)} (${String(t.reason ?? '?')})${senderTail(t)}${t.reminderAttempts!==undefined?` reminders=${t.reminderDelivered??0}/${t.reminderAttempts} last=${t.reminderLastAt??'?'}${t.repeatedlyUnreconciled?' 多次提醒未对账':''}`:''}`)
     console.log(`archived (${String(archived.length)}):`)
-    listCapped(archived, 20, t => `  ${String(t.taskId)} ${String(t.outcome ?? '?')}${t.endedBy !== undefined && t.endedBy !== 'receipt' ? ` (${String(t.endedBy)})` : ''}${senderTail(t)}`)
+    listCapped(archived, 20, t => `  ${String(t.taskId)} ${String(t.outcome ?? '?')}${t.endedBy !== undefined && t.endedBy !== 'receipt' ? ` (${String(t.endedBy)})` : ''}${senderTail(t)}${t.reminderAttempts!==undefined?` reminders=${t.reminderDelivered??0}/${t.reminderAttempts} last=${t.reminderLastAt??'?'}${t.repeatedlyUnreconciled?' 多次提醒未对账':''}`:''}`)
     if (s.conservation != null) console.log(`conservation: conserved=${String(s.conservation.conserved)} delta=${String(s.conservation.delta)}`)
     if (s.settlement != null) console.log(`settlement: mode=${String(s.settlement.mode)} refusalsTotal=${String(s.settlement.refusalsTotal)} offChain=${String(s.settlement.offChain)}`)
     if (s.settlement?.enforceRefused) console.log(`enforce refused: ${String(s.settlement.enforceRefused.reason)}; blockers=${JSON.stringify(s.settlement.enforceRefused.blockers)}`)
@@ -1033,6 +1033,8 @@ async function main() {
   if (cmd === 'status') {
     const s = await state()
     const list = await control({ action: 'list' })
+    const reminders=(s.tasks??[]).filter(t=>t.reminderAttempts!==undefined)
+    if(reminders.length)console.log(`reconcile   ${reminders.length} task(s) reminded; ${reminders.filter(t=>t.repeatedlyUnreconciled).length} 多次提醒未对账; wait for target reconciliation, no automatic settlement`)
     console.log(`host        ${home()}  version=${String(s.version ?? '?')}  peers=${String((s.peers ?? []).length)}`)
     if (s.settlement?.enforceRefused) console.log(`settlement  mode=${String(s.settlement.mode)}; enforce refused: ${String(s.settlement.enforceRefused.reason)}; blockers=${JSON.stringify(s.settlement.enforceRefused.blockers)}`)
     for (const p of s.peers ?? []) console.log(`  peer ${String(p.url).padEnd(34)} link=${String(p.link ?? 'stranger')}`)
