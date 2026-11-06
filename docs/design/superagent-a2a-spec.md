@@ -2,7 +2,7 @@
 
 配套：[ADR](superagent-a2a-adr.md) · [实施计划](superagent-a2a-plan.md) · [断言与证据](superagent-a2a-evidence.md)
 
-状态：草案，仅设计。属主已定方向（第 6 节），等全局生产评估 PASS 后才进入计划第 1 阶段。依据断言 S1–S15，每条都挂有原文证据（ygl-trees 项目 superagent-a2a-spec-r3）；本版按全局 PR #376 @ a537c5a 的评审意见修订。
+状态：草案，仅设计。属主已定方向（第 6 节），等全局生产评估 PASS 后才进入计划第 1 阶段。依据断言 S1–S16，每条都挂有原文证据（ygl-trees 项目 superagent-a2a-spec-r4）；本版按全局 PR #376 @ a537c5a 的评审意见修订，并按 PR #381 的评审条件对齐 3.4 节与实现。
 
 ## 1. 目标与非目标
 
@@ -74,15 +74,15 @@ Source 的游标保存在 superagent 自己的状态里，按 Cookbook 规则：
 
 `outcome` 是回执上的观察字段，不是新的任务状态（S9）。它改变了回执语义，归入计划节点 p1-receipt-cmd 实现，须全局 PASS 并报属主知会（S14）。旧主机和旧客户端收不到这个字段，只能看到正文，所以接入方必须是新版本。
 
-发送结果映射：
+发送结果映射：直接使用 `a2a route --json` 输出的观察字段 `class`（PR #381）。判定只看结构化字段，不解析错误文本（S3）。
 
-| a2a 结果 | send 返回 |
-|---|---|
-| delivered:true（含 receiverBookkeeping:failed 观察） | sent（另记观察） |
-| 目标身份不存在、名片已撤销 | gone |
-| 身份冲突（可能是名片轮换，也可能是冒充） | 先抛错，按同一 task id 有界重试；超过上限才转 gone，并留下记录，等人核查（S3） |
-| queue-full、校验暂时失败、超时、连接失败、5xx | 抛错，由 Outbox 退避重试 |
-| acceptance:"unknown" | 抛错重试，仍用同一 task id（主机对同 id 至多执行一次） |
+| class | 何时出现 | Outbox 动作 |
+|---|---|---|
+| sent | `delivered:true`（含 `receiverBookkeeping:"failed"`、`acceptance:"inserted"`）、带 result 的同步回复、`-32005`；重放时主机已持有该 id 且 prior 不是 failed | `sent`，另记观察字段 |
+| gone | 只有三种：`-32001`（报文过大）、`-32002`（同一 id 对应不同报文）、重放时 prior failed。原样重发注定失败 | `gone`，留记录；`-32002` 另须上报 health error，因为它说明 id 派生有 bug（S16） |
+| retry | 其余全部，包括 `acceptance:"unknown"`、目标身份不存在、名片已撤销、身份冲突、queue-full、校验失败、超时、401/403、5xx、通用 -32000，以及 CLI 没有输出 JSON | 抛错，由 Outbox 用同一 task id 有界退避重试；超过消费方上限才转 dropped 并留下记录，等人核查 |
+
+目标身份不存在、名片已撤销、身份冲突目前都没有专用的结构化错误码，所以归入 retry，由消费方的上限兜底。将来主机若为它们补上专用错误码，再单独评估是否改判 gone。
 
 task id 由 Outbox 的 message.id 确定性派生；重试永不换 id。
 
