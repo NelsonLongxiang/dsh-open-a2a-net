@@ -67,7 +67,7 @@ inbox:    bare 'inbox' lists the whole mailbox (newest first, the host keeps 64;
           --hook        for a Claude Code hook: unread mail as hookSpecificOutput.additionalContext JSON,
                         nothing at all when there is none or the host is unreachable (always exit 0)
           --after C     replayable read with a cursor the CALLER keeps ('start', then the 'next' it got back):
-                        one JSON object {epoch, after, next, mail (oldest first), lost, epochChanged};
+                        one JSON object {epoch, after, next, mail (oldest first), lost, epochChanged[, cursorAhead]};
                         never reads or moves ~/.a2a/inbox.cursor; lost is null when the host's store restarted`
 
 /** Flags that take a value (both '--home URL' and '--home=URL'); the rest are switches. */
@@ -458,6 +458,10 @@ function afterRead(box, after) {
   }
   if (m[1] !== box.epoch) return { mail: rows, lost: null, epochChanged: true, next: `${box.epoch}:${String(top(0))}` }
   const seq = Number(m[2])
+  // A cursor past the newest seq this host ever issued was not handed out by it (forged or mixed up):
+  // flag it, keep it as given, never clamp it silently.
+  const issued = Number.isInteger(box.next_seq) ? box.next_seq - 1 : top(Math.max(0, box.oldest_seq - 1))
+  if (seq > issued) return { mail: [], lost: 0, epochChanged: false, cursorAhead: true, next: after }
   const mail = rows.filter(r => r.seq > seq)
   const lost = Math.max(0, box.oldest_seq - seq - 1)
   const floor = lost > 0 ? box.oldest_seq - 1 : seq
@@ -552,6 +556,7 @@ async function cmdInbox() {
     const box = await fetchMail(handle)
     if (!seqCapable(box)) die('[inbox] --after needs a host that numbers its mailbox (gh#113); upgrade the home host — no time-based fallback')
     const read = afterRead(box, after)
+    if (read.cursorAhead) console.error(`[inbox] cursor ${after} is ahead of this host (newest seq ${String(Number.isInteger(box.next_seq) ? box.next_seq - 1 : '?')}): it was not issued here — check the consumer's stored cursor`)
     console.log(JSON.stringify({ handle, epoch: box.epoch, after, ...read }, null, 2))
     return
   }

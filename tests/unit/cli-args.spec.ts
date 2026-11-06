@@ -444,6 +444,14 @@ describe('a2a-net CLI: inbox --after (superagent p1)', () => {
     const env = { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url }
     const caught = JSON.parse((await runCli(['inbox', '--after', 'e1:73'], env)).stdout) as { mail: unknown[]; lost: number; next: string }
     expect(caught).toMatchObject({ mail: [], lost: 0, next: 'e1:73' })
+    expect(caught).not.toHaveProperty('cursorAhead')
+    // A cursor past the newest seq this host issued (74 is next) was never handed out here: flagged, not clamped.
+    const ahead = await runCli(['inbox', '--after', 'e1:100'], env)
+    expect(ahead.code).toBe(0)
+    expect(JSON.parse(ahead.stdout)).toMatchObject({ mail: [], lost: 0, cursorAhead: true, next: 'e1:100' })
+    expect(ahead.stderr).toContain('ahead of this host')
+    // The boundary: 74 is the next seq to be issued, not one handed out yet.
+    expect(JSON.parse((await runCli(['inbox', '--after', 'e1:74'], env)).stdout)).toMatchObject({ cursorAhead: true, next: 'e1:74' })
     // A first read of a mailbox that already overflowed: seq 1..9 are gone before this reader ever looked.
     const start = JSON.parse((await runCli(['inbox', '--after', 'start'], env)).stdout) as { mail: Array<{ seq: number }>; lost: number; next: string }
     expect(start).toMatchObject({ lost: 9, next: 'e1:73' })
