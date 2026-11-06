@@ -5,6 +5,11 @@
 
 ## 下一版本候选（待评审，未发布）
 
+### next/0.8：superagent 接入面（CLI）
+- `a2a-net inbox --after <cursor>`：调用方自持游标的可重放读取，报告被上限挤出的条数（#379）。
+- `a2a-net route --json` 附 `class: sent | gone | retry`（#381）。
+- `a2a-net thread <context_id>`：按 context 只读读取一段往来（入向邮件 + 本身份发出的路由），分页（p1-context-read）。宿主从这一版起在每条 CLI 邮件上记 `task_id`、`context_id`，wire 面投递到邮箱的应答也带回 `context_id`；老宿主投递的邮件没有这两个字段，`thread` 计入 `unscoped`。CLI 在身份目录下新增 `sent.jsonl` 发件日志（0600，1 MiB 轮转一代，只在本机）。
+
 - followup 抛异常后的宿主接纳观察：只有本次预留的精确会话/MessageId 出现在该会话 inbox 或事件流，才返回 DELIVERED 与 `acceptance:inserted`，提示后续未确认、原 task 对账；不代表消费或完成。证明不了仍失败并带 `acceptance:unknown`，提示“接纳状态未知，请用原 task id 对账，不要换 id 重派”，新调用方停止候选 failover；已知插入前拒绝不改。契约与旧客户端限制见[接纳观察](protocol/followup-admission.md)。不新增状态，0.2.2-rc.1 仅源码判断、未运行验证，不进入0.7.0。
 - 已披露限制（#375，全局 2026-11-06）：返回 `acceptance:"inserted"` 时，主机已接纳输入；但如果接收方没有出生行（例如出生提交失败），这一笔不会触发 nudge，也不会挂自动回执，只能由人按原 task id 人工对账。
 - 节点升级说明（#375）：旧主机（0.7.0 及更早）不认识 `acceptance:"unknown"`，收到后仍可能 failover 到其他候选目标。新主机才会停止 failover，并提示“接纳状态未知，请用原 task id 对账，不要换 id 重派”。建议调用方和接收方两端都升级。

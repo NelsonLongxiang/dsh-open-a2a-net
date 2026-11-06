@@ -825,7 +825,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const answered = parseReceipt(message)
             // #298: only the answering member's own, unrefused receipt is the duplicate of a sync answer.
             const duplicate = answered !== null && refusedSettlement === undefined && syncAnswered.take(answered.taskId, team, caller)
-            cliDeposits.mail(team, caller, `${directHeader(caller)}\n\n${message}`, duplicate ? 'sync-answered' : undefined)
+            cliDeposits.mail(team, caller, `${directHeader(caller)}\n\n${message}`, duplicate ? 'sync-answered' : undefined, { taskId, contextId })
             recordActivity('in', team, caller, true)
             logger.info(`a2a: cli mailbox delivery for ${team} (from ${caller})`)
             const note = `delivered to the mailbox of ${team} — the CLI polls while online`
@@ -834,7 +834,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             // CLI routes back later still reaches its caller, but does not
             // replace this outcome (recordOutcome is first-writer-wins).
             idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: note })
-            const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, task_status: 'TASK_STATE_COMPLETED', note })
+            // p1-context-read: name the conversation the row was mailed under, as every other taken reply does.
+            const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_COMPLETED', note })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
             return

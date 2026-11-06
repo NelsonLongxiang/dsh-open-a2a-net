@@ -23,7 +23,7 @@
  * Runs on the SDK subpaths only — no @deepseek-ai/* imports.
  */
 import { createHash, generateKeyPairSync, randomUUID, sign as edSign, createPrivateKey } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 
@@ -36,6 +36,11 @@ const IDENTITY_DIR = process.env.A2A_CLI_HOME !== undefined && process.env.A2A_C
   : join(homedir(), '.a2a')
 const IDENTITY = join(IDENTITY_DIR, 'cli.json')
 const INBOX_CURSOR = join(IDENTITY_DIR, 'inbox.cursor')
+// superagent p1-context-read: this identity's side of its conversations (one JSON line per route the host took).
+const SENT_LOG = join(IDENTITY_DIR, 'sent.jsonl')
+const SENT_LOG_PREV = join(IDENTITY_DIR, 'sent.1.jsonl')
+const SENT_LOG_CAP = 1024 * 1024
+const SENT_TEXT_CAP = 4000
 const DEFAULT_HOME = 'http://127.0.0.1:3080'
 const DEFAULT_SKILL_ROOTS = [join(homedir(), '.agents', 'skills')]
 
@@ -43,7 +48,7 @@ const USAGE = `a2a-net CLI — aligned with the plugin's model tools ('a2a tools
 
 usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 
-户口制:   init <name> [--uuid 16hex] [--force] · publish · inbox [--new|--wait|--hook] · revoke
+户口制:   init <name> [--uuid 16hex] [--force] · publish · inbox [--new|--wait|--hook] · thread <context_id> · revoke
 对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · report <msg…> [--task ID]
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
@@ -69,10 +74,16 @@ inbox:    bare 'inbox' lists the whole mailbox (newest first, the host keeps 64;
                         nothing at all when there is none or the host is unreachable (always exit 0)
           --after C     replayable read with a cursor the CALLER keeps ('start', then the 'next' it got back):
                         one JSON object {epoch, after, next, mail (oldest first), lost, epochChanged[, cursorAhead]};
-                        never reads or moves ~/.a2a/inbox.cursor; lost is null when the host's store restarted`
+                        never reads or moves ~/.a2a/inbox.cursor; lost is null when the host's store restarted
+
+thread:   thread <context_id> [--limit N] [--before C]   one conversation, newest first, as JSON:
+          mailbox rows the host tagged with that context_id (dir "in") and this identity's routes the host
+          took in it (dir "out", from ~/.a2a/sent.jsonl, with the sync reply when there was one);
+          --limit 1-200 (default 20), --before takes the next_before a previous page returned;
+          read-only: never moves ~/.a2a/inbox.cursor; unscoped counts mailbox rows with no context_id`
 
 /** Flags that take a value (both '--home URL' and '--home=URL'); the rest are switches. */
-const VALUE_FLAGS = new Set(['--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after'])
+const VALUE_FLAGS = new Set(['--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before'])
 const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
@@ -432,6 +443,87 @@ function unreadOf(box, cursor) {
     .filter(m => typeof m?.at === 'number' && (m.at > cursor.at || (m.at === cursor.at && !cursor.seen.includes(mailKey(m)))))
     .sort((a, b) => (Number.isInteger(a.seq) && Number.isInteger(b.seq) ? a.seq - b.seq : a.at - b.at))
   return { unread, lost: 0 }
+}
+
+/**
+ * superagent p1-context-read: note a route the host took (class "sent") under its
+ * context_id, so `thread` can show this identity's side. The host names the context
+ * on every taken reply that carries one; a -32005 reply does not, so only an explicit
+ * --context covers it. Best effort: a journal failure never turns a send into an error.
+ */
+function journalSent(body, out) {
+  const contextId = typeof out?.context_id === 'string' && out.context_id !== '' ? out.context_id : body.context_id
+  if (sendClass(out) !== 'sent' || typeof contextId !== 'string' || contextId === '') return
+  const cap = (text) => text.length > SENT_TEXT_CAP ? { text: text.slice(0, SENT_TEXT_CAP), truncated: true, chars: text.length } : { text }
+  const reply = typeof out.result?.text === 'string' ? cap(out.result.text) : undefined
+  const row = {
+    handle: body.caller_session, at: Date.now(), team: body.team, task_id: String(out.task_id ?? body.task_id), context_id: contextId,
+    ...cap(body.message), ...(reply !== undefined ? { reply: reply.text, ...(reply.truncated ? { reply_truncated: true, reply_chars: reply.chars } : {}) } : {}),
+  }
+  try {
+    mkdirSync(IDENTITY_DIR, { recursive: true })
+    // One older generation is kept; a rename is atomic, so a reader sees either file whole.
+    if ((statSync(SENT_LOG, { throwIfNoEntry: false })?.size ?? 0) > SENT_LOG_CAP) renameSync(SENT_LOG, SENT_LOG_PREV)
+    appendFileSync(SENT_LOG, `${JSON.stringify(row)}\n`, { mode: 0o600 })
+  } catch (error) {
+    console.error(`[route] sent journal not written (${String(error?.code ?? error)}) — the send itself stands; 'a2a thread' will miss it`)
+  }
+}
+
+/** This handle's journaled routes in one context, older generation first; unreadable lines are skipped. */
+function sentIn(handle, contextId) {
+  const rows = []
+  for (const file of [SENT_LOG_PREV, SENT_LOG]) {
+    let lines = []
+    try { lines = readFileSync(file, 'utf8').split('\n') } catch { continue }
+    for (const line of lines) {
+      if (line === '') continue
+      try {
+        const r = JSON.parse(line)
+        if (r?.handle === handle && r.context_id === contextId && typeof r.at === 'number' && typeof r.task_id === 'string') rows.push(r)
+      } catch { /* a torn last line from a crashed write */ }
+    }
+  }
+  return rows
+}
+
+/** `thread` order, newest first: by time, then mailbox before journal, then seq / task id. */
+const threadKey = (e) => e.dir === 'in' ? `${String(e.at)}:in:${String(e.seq)}` : `${String(e.at)}:out:${e.task_id}`
+function threadBefore(a, b) {
+  if (a.at !== b.at) return a.at < b.at
+  if (a.dir !== b.dir) return a.dir === 'in'
+  return a.dir === 'in' ? a.seq < b.seq : a.task_id < b.task_id
+}
+
+async function cmdThread() {
+  const [contextId, extra] = positionals()
+  if (contextId === undefined || contextId === '' || extra !== undefined) usage('usage: a2a thread <context_id> [--limit N] [--before CURSOR]')
+  const limitRaw = flag('--limit')
+  const limit = limitRaw === undefined ? 20 : Number(limitRaw)
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200 || (limitRaw !== undefined && !/^\d+$/.test(limitRaw))) usage(`--limit takes a whole number from 1 to 200 (got "${String(limitRaw)}")`)
+  const beforeRaw = flag('--before')
+  const m = beforeRaw === undefined ? null : /^(\d{1,15}):(in|out):(\S+)$/.exec(beforeRaw)
+  if (beforeRaw !== undefined && m === null) usage(`--before takes the next_before a previous 'a2a thread' page returned (got "${beforeRaw}")`)
+  const before = m === null ? undefined : { at: Number(m[1]), dir: m[2], ...(m[2] === 'in' ? { seq: Number(m[3]) } : { task_id: m[3] }) }
+  if (before?.dir === 'in' && !Number.isInteger(before.seq)) usage(`--before: an "in" cursor ends in a mailbox seq (got "${beforeRaw}")`)
+  const handle = identity().handle
+  const box = await fetchMail(handle)
+  const inbound = box.mail.filter(r => r?.context_id === contextId && typeof r.at === 'number').map(r => ({
+    dir: 'in', at: r.at, seq: Number.isInteger(r.seq) ? r.seq : 0, from: r.from, ...(typeof r.task_id === 'string' ? { task_id: r.task_id } : {}), text: r.text,
+    ...(r.truncated === true ? { truncated: true, chars: r.chars } : {}), ...(r.dup !== undefined ? { dup: r.dup } : {}),
+  }))
+  const outbound = sentIn(handle, contextId).map(({ handle: _h, context_id: _c, ...r }) => ({ dir: 'out', ...r }))
+  const all = [...inbound, ...outbound].filter(e => before === undefined || threadBefore(e, before)).sort((a, b) => threadBefore(a, b) ? 1 : threadBefore(b, a) ? -1 : 0)
+  const entries = all.slice(0, limit)
+  const more = all.length > limit
+  console.log(JSON.stringify({
+    handle, context_id: contextId, ...(typeof box.epoch === 'string' ? { epoch: box.epoch } : {}),
+    entries, more, next_before: more ? threadKey(entries.at(-1)) : null,
+    // Mailbox rows from before the host tagged context (or deliveries that named none) cannot be placed.
+    unscoped: box.mail.filter(r => typeof r?.context_id !== 'string').length,
+    // Mail the host's cap pushed out is gone from this read, whatever its context.
+    mail_lost: Number.isInteger(box.oldest_seq) ? Math.max(0, box.oldest_seq - 1) : null,
+  }, null, 2))
 }
 
 /** One mailbox read: the rows, plus the gh#113 seq bounds when the host has them. */
@@ -907,7 +999,11 @@ async function sendDirect(verb, body) {
   const { res } = await postDirect(body)
   // Exhausted 5xx resends: the outcome is unknown, not "not delivered" (the hint above names the safe resend).
   if (res.status >= 500 && !has('--json')) die(`[${verb}] not confirmed (HTTP ${String(res.status)}) — the task may have landed; use the --task resend above`)
-  if (res.status !== 409) return await printDelivery(verb, res)
+  if (res.status !== 409) {
+    const out = await replyOf(res)
+    if (verb === 'route') journalSent(body, out)
+    return printDelivery(verb, res, out)
+  }
   const out = await replyOf(res)
   if (out.replay !== true) {
     if (has('--json')) console.log(JSON.stringify({ ...out, class: sendClass(out) }, null, 2))
@@ -939,8 +1035,7 @@ async function sendDirect(verb, body) {
 }
 
 /** One readable line for a /a2a/direct reply; the raw reply stays one --json away. */
-async function printDelivery(verb, res) {
-  const out = await replyOf(res)
+function printDelivery(verb, res, out) {
   if (has('--json')) {
     console.log(JSON.stringify({ ...out, class: sendClass(out) }, null, 2))
     if (out.delivered !== true) process.exitCode = 1
@@ -1028,6 +1123,7 @@ async function main() {
     return
   }
   if (cmd === 'inbox') { await cmdInbox(); return }
+  if (cmd === 'thread') { await cmdThread(); return }
   if (cmd === 'file') {
     const sub = positionals()[0]
     if (sub === 'send') { await cmdFileSend(); return }
