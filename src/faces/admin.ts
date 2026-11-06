@@ -348,6 +348,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // list and settled ones just a count, all additive so the panel
           // keeps rendering plain owed rows until it learns the tiers.
           ledgerPersistence: taskLedger.persistenceState(),
+          deliveryBookkeeping:taskLedger.deliveryBookkeepingState(),
           nudgeEscalations:d.nudgeEscalations?.()??{queued:0,unavailable:0,failed:0},
           reconciliationReminders: d.reminderDiagnostics?.(),
           tasks: taskLedger.list()

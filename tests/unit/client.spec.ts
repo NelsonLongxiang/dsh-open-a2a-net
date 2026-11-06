@@ -156,6 +156,12 @@ describe('fetchCardDetail', () => {
 })
 
 describe('routeDirect', () => {
+  it('preserves accepted receiver bookkeeping failure and warns the tool caller to reconcile',async()=>{
+    const f=stubFetch(()=>({status:200,body:{routed:true,delivered:true,task_id:'work',task_status:'TASK_STATE_DELIVERED',receiverBookkeeping:'failed'}}))
+    const result=await makeClient({fetch:f.fetch,schedule:frozenSchedule().arm}).routeDirect('https://peer.invalid','beta/aaaaaaaa','work',undefined,undefined,undefined,true)
+    expect(result).toMatchObject({ok:true,receiverBookkeeping:'failed',task_status:'TASK_STATE_DELIVERED'});if(result.ok)expect(result.reply).toContain('不要重派')
+  })
+
   it.each([
     [503,{error:'task ledger write failed; settlement was not committed'},true],
     [503,{error:'service unavailable'},false],

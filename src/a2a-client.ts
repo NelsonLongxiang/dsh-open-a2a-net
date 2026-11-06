@@ -6,6 +6,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/a2a-client
  */
 
+import { ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
 import { RECEIPT_RETRYABLE } from './receipt-retry.ts'
 import { verifyCard, type CardRejection } from './card.ts'
 import { MAX_ROUTE_BODY_BYTES, WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from './transport-caps.ts'
@@ -68,6 +69,7 @@ export type CardFetchOutcome =
   | { readonly ok: false; readonly stage: 'rejected'; readonly reason: CardRejection }
 
 type WireRoute = {
+  readonly receiverBookkeeping?:unknown
   readonly routed?: unknown
   readonly delivered?: unknown
   readonly delivered_to?: unknown
@@ -359,7 +361,8 @@ export class A2aClient {
       return {
         ok: true,
         team,
-        reply: bridge !== undefined
+        ...(raw.receiverBookkeeping==='failed'?{receiverBookkeeping:'failed' as const}:{}),
+        reply: raw.receiverBookkeeping==='failed'?ADMITTED_BOOKKEEPING_NOTE:bridge !== undefined
           ? `Delivered to ${team} (async native-teams round). It settles through the team's own routing chain and routes no A2A receipt in this slice — reconcile via context_id follow-ups.`
           : consumed === false
             ? `Delivered to ${team} (async), but the target had not started a turn on it yet — the message is queued behind the session's current turn. Watch a2a_status activity or follow up with the context id; do not resend.`

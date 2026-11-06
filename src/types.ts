@@ -111,6 +111,7 @@ export interface ZoneRecord {
 
 /** Canonical `a2a_route` success value. */
 export interface A2aRouteOk {
+  readonly receiverBookkeeping?:'failed'
   /** Actual member face returned by a forwarded peer delivery. */
   readonly deliveredTo?: string
   /**
