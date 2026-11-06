@@ -207,12 +207,13 @@ export function parseReceiverMembers(value: unknown, warn: (message: string) => 
  * a remote outbound row; anything else is dropped (the row survives as one
  * born before the fields, judged by current membership and origin).
  */
-export function withRouting(entry: Record<string, unknown>, warn: (message: string) => void = console.warn): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt' | 'receiverMembers'> {
+export function withRouting(entry: Record<string, unknown>, warn: (message: string) => void = console.warn): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt' | 'receiverMembers' | 'receiptDelivery'> {
   const fact = (v: unknown): v is string => typeof v === 'string' && v !== '' && v.length <= ROUTING_FACT_CAP
   const remoteOutbound = entry.direction === 'outbound' && typeof entry.peer === 'string' && entry.peer !== 'local' && !entry.peer.startsWith('local:')
   const receiverMembers = remoteOutbound && entry.forwarded === true && fact(entry.peerKey) ? parseReceiverMembers(entry.receiverMembers, warn) : undefined
   return {
     ...(typeof entry.answeredAt === 'number' && Number.isFinite(entry.answeredAt) && entry.answeredAt >= 0 ? { answeredAt: entry.answeredAt } : {}),
+    ...(entry.receiptDelivery==='receipt-undelivered'?{receiptDelivery:'receipt-undelivered' as const}:{}),
     ...(receiverMembers !== undefined ? { receiverMembers } : {}),
     ...(remoteOutbound && entry.forwarded === true ? { forwarded: true as const } : {}),
     ...(remoteOutbound && fact(entry.peerKey) ? { peerKey: entry.peerKey } : {}),
@@ -223,6 +224,8 @@ export function withRouting(entry: Record<string, unknown>, warn: (message: stri
 
 /** One tracked outbound task still in the owed book (unsettled). */
 export interface TaskRecord {
+  /** Local work answered, but successful receipt delivery is not confirmed; never a settlement. */
+  receiptDelivery?: 'receipt-undelivered'
   /** Observation from exact inbox claim or peer response, never an acknowledgement. */
   consumed?: boolean
   readonly receiverSessionId?: string

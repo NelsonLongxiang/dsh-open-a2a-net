@@ -270,6 +270,7 @@ export class TaskLedger {
     const row = this.tasks.find(entry => entry.taskId === taskId)
     if (row === undefined || !(row.direction === 'inbound' || row.peer === 'local') || (row.deliveredTo ?? row.team) !== target || row.answeredAt !== undefined) return false
     row.answeredAt = this.now()
+    row.receiptDelivery='receipt-undelivered'
     this.persist()
     return true
   }

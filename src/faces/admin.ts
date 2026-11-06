@@ -355,6 +355,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, status: task.status,
               direction: task.direction ?? 'outbound', receiptExpected: task.receiptExpected !== false,
               ...(task.answeredAt !== undefined ? { answeredAt: task.answeredAt } : {}),
+              ...(task.receiptDelivery?{receiptDelivery:task.receiptDelivery}:{}),
               ...(task.consumed !== undefined ? { consumed:task.consumed,deliveryObservation:task.consumed?'consumed':'delivered-unconsumed' } : {}),
               ...(task.forwarded === true ? { forwarded: true } : {}),
               ...(task.deliveredTo !== undefined ? { deliveredTo: task.deliveredTo } : {}),
@@ -377,7 +378,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           tasksStaleCount: taskLedger.list().filter(task => task.status === 'pending' && (task.receiptExpected === false || Date.now() - task.startedAt >= 60 * 60_000)).length,
           tasksDead: taskLedger.list()
             .filter(task => task.status === 'dead')
-            .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt, reason: task.reason ?? 'unspecified', ...(task.answeredAt !== undefined ? { answeredAt: task.answeredAt } : {}), ...(task.brief !== undefined ? { brief: task.brief } : {}), ...(task.direction !== undefined ? { direction: task.direction } : {}), ...(task.sender !== undefined ? { sender: task.sender } : {}), ...(task.auth !== undefined ? { auth: task.auth } : task.direction === 'inbound' ? { authLegacy: true } : {}) })),
+            .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt, reason: task.reason ?? 'unspecified', ...(task.answeredAt !== undefined ? { answeredAt: task.answeredAt } : {}),
+              ...(task.receiptDelivery?{receiptDelivery:task.receiptDelivery}:{}), ...(task.brief !== undefined ? { brief: task.brief } : {}), ...(task.direction !== undefined ? { direction: task.direction } : {}), ...(task.sender !== undefined ? { sender: task.sender } : {}), ...(task.auth !== undefined ? { auth: task.auth } : task.direction === 'inbound' ? { authLegacy: true } : {}) })),
           // gh#31: per-task outcomes for rows that LEFT the ledger — the
           // chat drawer used to guess (settled, abandoned or cancelled).
           // Bounded to the archive (≤64), newest first, with the

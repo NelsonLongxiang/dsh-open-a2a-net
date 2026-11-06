@@ -27,6 +27,12 @@ Task delivery (local/remote, sync/async) preserves A2A source metadata and queue
 
 Cancellation removes the persisted MessageId through `updateQueue remove` if still unclaimed; a claim/removal race becomes the claimed path. Claimed tasks retain an immediate sourced `steer` stop notice, never a queued stop that would wait behind the work. Cancellation bookkeeping keeps priority: commit the original caller cancellation first, then attempt the stop notification. Cross-host peers with the signed queued-cancellation capability receive the body-bound control field tied to the original verified caller key; older peers receive the legacy `[A2A cancel]` text without a task id, best-effort. An unavailable target or failed notification does not undo cancellation, and `removed`/`steered` only report what actually happened. This is stop-notice compatibility, never permission to fall back to steer for task delivery when followup is missing. A reserved/uncertain mapping is not blindly redelivered. Resolve that existing occurrence instead of changing ids to force a second execution.
 
+## Receipt delivery observation (#362)
+
+A formal receipt for your own pending inbound task may return only along that task's frozen receipt target; it does not grant permission to send unrelated traffic. The receiver still completes current source verification and checks the frozen task authority. Do not join extra teams merely to return that correlated receipt.
+
+`answeredAt` means the receiving session has answered locally, not that its receipt arrived. A pending row with `receiptDelivery:receipt-undelivered` explicitly records that delivery is not confirmed; tasks, state and CLI JSON preserve this across restart. The row remains owed even though answered work no longer occupies an execution slot. A successful formal receipt settles the original row; a rejected or failed send must not be reported as completed.
+
 ## The ledger
 
 `__dsh_a2a/state` splits the ledger into separate fields:

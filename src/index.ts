@@ -3656,12 +3656,20 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const ownerQualified = splitCanvasOwner(String(args.team ?? '').trim())
       const foreignOwner = ownerQualified.owner !== undefined && ownerQualified.owner !== ownCanvasFingerprint ? ownerQualified.owner : undefined
       if (ownerQualified.owner !== undefined) args = { ...args, team: ownerQualified.team }
-      // A target-authored receipt attempt answers its own work even if scope/transport later refuses delivery.
+      // A receipt may use only its own frozen return lane; local answer state is not delivery proof.
       const answer = parseReceipt(args.message)
-      if (agent !== undefined && answer !== null) {
-        try { taskLedger.markAnswered(answer.taskId, sessionTeamOf(agent)) } catch {
-          return { ok: false, error: 'task ledger write failed; receipt was not sent', code: -32000, peer_content: false }
-        }
+      const receiptRow=answer===null?undefined:taskLedger.find(answer.taskId)
+      if(agent!==undefined&&answer!==null) {
+        try {taskLedger.markAnswered(answer.taskId,sessionTeamOf(agent))}catch{return {ok:false,error:'task ledger write failed; receipt was not sent',code:-32000,peer_content:false}}
+      }
+      const ownReceipt=agent!==undefined&&receiptRow?.status==='pending'&&receiptRow.direction==='inbound'&&receiptRow.receiptExpected!==false&&receiptRow.auth?.receipt_target===args.team&&(receiptRow.deliveredTo??receiptRow.team)===sessionTeamOf(agent)&&(receiptRow.receiverSessionId===undefined||receiptRow.receiverSessionId===String(agent.id))
+      if(ownReceipt&&receiptRow.auth?.proof==='origin-claim'&&receiptRow.auth.claim!==undefined) {
+        const birthHome=receiptRow.auth.carrier_url??receiptRow.auth.claim.origin
+        const home=CLI_HANDLE_RE.test(args.team)?canvasStore.cliHomeOf(args.team)??birthHome:birthHome
+        if(originOf(home)!==originOf(birthHome))return {ok:false,error:'receipt return home no longer matches the task birth',code:-32000,receipt:'none'}
+        const result=await dispatchPeerCandidate(home,args.team,args.message,args.context_id,signal,sessionTeamOf(agent!),true)
+        if(result.ok&&result.settlementRefused!==true&&!settleOwnInbound(args.message,args.team,{caller:sessionTeamOf(agent!),proof:'in-process',ingress:'local'}))return {ok:false,error:'receipt reached the peer but local settlement commit failed; task remains owed',code:-32000,receipt:'none'}
+        return result as unknown as Record<string,JsonValue>
       }
       // S3 (team-scoped routing, phase-2 default ON per the 2026-09-01 owner
       // ruling; set false to restore the open outbound seam): a session
