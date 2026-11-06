@@ -59,6 +59,7 @@ import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
 import { ReconciliationReminders, type ReminderAgent } from './reconciliation-reminders.ts'
 import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
+import {FollowupAcceptanceUnknown,ACCEPTANCE_UNKNOWN_NOTE,ACCEPTANCE_INSERTED_NOTE} from './followup-admission.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { receiptFailure, retryReceiptDelivery, transientReceiptFailure, receiptRetryWait } from './receipt-retry.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
@@ -2000,7 +2001,7 @@ export function apply(ctx: Context, config: Config): void {
     taint:(target,localFrom)=>{if(localFrom===undefined||nodeTaint.of(localFrom)!=='')markLineage(target,'relay')},
     warn:code=>logger.warn('a2a: sourced followup (%s); check ledger persistence and original task',code),
   })
-  const followupRelay = (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string, taskExpected=true): void => followupDelivery.deliver(agent,text,sender,localFrom,taskId,callerKey,taskExpected)
+  const followupRelay = (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string, taskExpected=true): 'inserted'|void => followupDelivery.deliver(agent,text,sender,localFrom,taskId,callerKey,taskExpected)
   ctx.on('agent/inbox/claimed',({agent,message})=>followupDelivery.claimed(agent,String(message.id)))
   const withdrawQueuedTask = (taskId:string): Promise<'removed'|'claimed'|'legacy'> => {
     const controller=ctx.get('sessionController')
@@ -2272,7 +2273,9 @@ export function apply(ctx: Context, config: Config): void {
       const ladder=()=>runReceiptLadder(
         {
           deliver: deliverReceipt,
-          transient:transientReceiptFailure,
+          // Unknown admission must stop the owner lane; unlike a transport transient,
+          // it is not retryable by retryReceiptDelivery and retains the original debt.
+          transient:error=>error instanceof FollowupAcceptanceUnknown||transientReceiptFailure(error),
           ownerTeam: config.team,
           log: (stage, error) => {
             // N2 (observability): throttled per task to avoid ping-pong noise.
@@ -2328,8 +2331,8 @@ export function apply(ctx: Context, config: Config): void {
    * marker instead of a (false) completion.
    * @param taskId - the correlation key the steered receipt header carries.
    */
-  async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number) => void, callerKey?: string): Promise<
-    { ok: true; reply: string; receiverBookkeeping?:'failed'; status?: string; bridge?: 'native-teams'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; localMiss?: true }
+  async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number,acceptance?:'inserted'|void) => void, callerKey?: string): Promise<
+    { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; status?: string; bridge?: 'native-teams'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown'; localMiss?: true }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
@@ -2384,8 +2387,8 @@ export function apply(ctx: Context, config: Config): void {
    * @param caller - caller label for the steered prefix.
    * @returns the agent's final reply, or the explicit failure.
    */
-  function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number) => void, callerKey?: string): Promise<
-    { ok: true; reply: string; receiverBookkeeping?:'failed'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string }
+  function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number,acceptance?:'inserted'|void) => void, callerKey?: string): Promise<
+    { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown' }
   > {
     return new Promise((resolve) => {
       // #306: synchronous replies use the same reading-turn attribution as automatic receipts.
@@ -2418,8 +2421,9 @@ export function apply(ctx: Context, config: Config): void {
       const text = `${headerLine}\n\n${message}`
       try {
         const floor = sessionEventsOf(agent).length
-        followupRelay(agent, text, caller === '' ? undefined : caller, localFrom, taskId, callerKey, onSteered!==undefined)
-        onSteered?.(agent, floor)
+        const acceptance=followupRelay(agent, text, caller === '' ? undefined : caller, localFrom, taskId, callerKey, onSteered!==undefined)
+        onSteered?.(agent, floor,acceptance)
+        if(acceptance==='inserted'){removeFinalWaiter(String(agent.id),waiter);resolve({ok:true,reply:ACCEPTANCE_INSERTED_NOTE,acceptance,placeholder:true});return}
         admissionFinished=true
         if(earlyReply)resolve(earlyReply)
         if (onSteered !== undefined && sessionEventsOf(agent).slice(floor).some(event => event?.type === 'assistant/message')) queueMicrotask(() => flushFinals(String(agent.id))) // synchronous final may already have emitted idle
@@ -2433,6 +2437,7 @@ export function apply(ctx: Context, config: Config): void {
         else pendingFinals.set(key, kept)
         waiter.timeoutDisposer?.()
         if(error instanceof AdmittedBookkeepingError){resolve({ok:true,reply:ADMITTED_BOOKKEEPING_NOTE,receiverBookkeeping:'failed',placeholder:true});return}
+        if(error instanceof FollowupAcceptanceUnknown){resolve({ok:false,error:ACCEPTANCE_UNKNOWN_NOTE,acceptance:'unknown'});return}
         resolve({ ok: false, error: `The DSH session rejected the message: ${String(error)}` })
       }
     })
@@ -3782,6 +3787,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           // gh#198: host-built delivery notes, or a reply from a clean local session (resolved as routeIntoAgent does), are this host's alone.
           return ((outcome.bridge === undefined && (outcome.task_status === 'TASK_STATE_DELIVERED' || outcome.task_status === 'TASK_STATE_ABORTED_WAIT' || (t => t !== undefined && nodeTaint.of(String(t.id)) === '')(resolveAgentForTeam(args.team) ?? canvasLiveAgent(parseCanvasTeamName(args.team))))) ? localRoute(outcome) : outcome) as unknown as Record<string, JsonValue>
         }
+        if(outcome.acceptance==='unknown')return localRoute(outcome) as unknown as Record<string,JsonValue>
         failures.push(`local: ${outcome.error}`)
       }
       // Failover seam for canvas teams: after the local tiers miss, the
@@ -3827,6 +3833,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           peerAsync = card !== undefined && caps?.async === true
         }
         const result = await dispatchPeerCandidate(candidate, target, args.message, args.context_id, signal, callerSession, peerAsync, taskId, callbackAddress)
+        if(!result.ok&&result.acceptance==='unknown')return result as unknown as Record<string,JsonValue>
         if (result.ok || signal.aborted) {
           // A receipt the creditor refused (its enforce verdict) pays nothing here either (review of PR #149 P2-2).
           if (result.ok && routedReceipt) {
@@ -4010,8 +4017,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         const receiptHint = callerTeam === undefined ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${callerTeam}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
         // #114 S5: the consumption search starts at the pre-steer log length.
         const steerFloor = sessionEventsOf(target).length
-        followupRelay(target, `[A2A direct] (task ${taskId}) 未验证（in-process） ${sanitizeFromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam, originAgentId, taskId, undefined, parseReceipt(message)===null)
-        armReceiptAutosend(target, taskId, callerTeam, message, steerFloor)
+        const acceptance=followupRelay(target, `[A2A direct] (task ${taskId}) 未验证（in-process） ${sanitizeFromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam, originAgentId, taskId, undefined, parseReceipt(message)===null)
+        if(acceptance!=='inserted')armReceiptAutosend(target, taskId, callerTeam, message, steerFloor)
         // #139: the caller's outbound row is born with this admission and the member that received it.
         if (taskIdFromCaller !== undefined) localBirths.set(taskIdFromCaller, localBirthOf(team, callerSession, callerTeam, sessionTeamOf(target), String(target.id)))
         endRoute(flight)
@@ -4019,15 +4026,17 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         return {
           ok: true,
           team,
-          reply: `Delivered to ${team} (async). The target routes a receipt — a message starting "[A2A receipt] task ${taskId} <outcome summary>" — back to your team when done; watch a2a_status activity or follow up with the context id.${routable ? '' : unroutableCallerNote(String(callerSession ?? session))}`,
+          ...(acceptance==='inserted'?{acceptance,consumed:false}:{}),
+          reply: acceptance==='inserted'?ACCEPTANCE_INSERTED_NOTE:`Delivered to ${team} (async). The target routes a receipt — a message starting "[A2A receipt] task ${taskId} <outcome summary>" — back to your team when done; watch a2a_status activity or follow up with the context id.${routable ? '' : unroutableCallerNote(String(callerSession ?? session))}`,
           task_id: taskId,
           context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
           task_status: 'TASK_STATE_DELIVERED',
-          consumed:taskLedger.deliveryFor(taskId)?.state==='claimed',
+          consumed:acceptance==='inserted'?false:taskLedger.deliveryFor(taskId)?.state==='claimed',
         }
       } catch (error) {
         endRoute(flight)
         recordActivity('out', team, 'local', false)
+        if(error instanceof FollowupAcceptanceUnknown)return{ok:false,error:ACCEPTANCE_UNKNOWN_NOTE,acceptance:'unknown',task_id:taskId,code:-32000}
         return { ok: false, error: `waking or steering the session for team "${team}" failed: ${String(error)}`, code: -32000 }
       }
     }
@@ -4143,12 +4152,13 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         task_id: taskId,
         context_id: contextId ?? `ctx-${Math.random().toString(16).slice(2, 10)}`,
         task_status: outcome.placeholder===true||outcome.ownTurn!==true&&outcome.bridge===undefined&&outcome.status===undefined?'TASK_STATE_DELIVERED':outcome.status??'TASK_STATE_COMPLETED',
+        ...(outcome.acceptance==='inserted'?{acceptance:'inserted' as const,consumed:false}:{}),
         ...(outcome.ownTurn===true&&outcome.placeholder!==true?{replyFinal:true as const}:{}),
         ...(outcome.bridge===undefined&&(outcome.placeholder===true||outcome.ownTurn!==true)?{receipt:'none' as const}:{}),
         ...(outcome.bridge !== undefined ? { bridge: outcome.bridge } : {}),
       }
     }
-    return { ok: false, error: outcome.error, code: -32000 }
+    return { ok: false, error: outcome.error,code:-32000,...(outcome.acceptance==='unknown'?{acceptance:'unknown' as const,task_id:taskId}:{}) }
   }
 
   /**
@@ -4206,14 +4216,14 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const home = canvasStore.cliHomeOf(team)
       if (home === undefined) throw new Error(`CLI receipt home is not pinned for ${team}`)
       const delivered = await dispatchPeerCandidate(home, team, message, contextId, signal, peerCaller ?? callerSession, asyncMode, taskId)
-      if (!delivered.ok) throw receiptFailure(delivered)
+      if (!delivered.ok){if(delivered.acceptance==='unknown')throw new FollowupAcceptanceUnknown();throw receiptFailure(delivered)}
       return delivered
     }
     const local = await dispatchLocalCandidate(team, message, callerSession, contextId, signal, asyncMode, taskId)
     // A background send books no outbound row: its birth facts have no row to go on.
     if (taskId !== undefined) localBirths.delete(taskId)
     if (local !== undefined) {
-      if (!local.ok) throw receiptFailure(local)
+      if (!local.ok){if(local.acceptance==='unknown')throw new FollowupAcceptanceUnknown();throw receiptFailure(local)}
       return local
     }
     if (cliReceipt) throw new Error(`local CLI household expired before delivery to ${team}; directory fallback refused`)
@@ -4227,6 +4237,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     for (const candidate of candidates) {
       const result = await dispatchPeerCandidate(candidate, team, message, contextId, signal, peerCaller ?? callerSession, asyncMode, taskId)
       if (result.ok) return result
+      if(result.acceptance==='unknown')throw new FollowupAcceptanceUnknown()
       lastError = result.error
       const failure=receiptFailure(result);if(receiptError===undefined||failure.transient)receiptError=failure
       if (signal.aborted) break
@@ -4381,6 +4392,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         }
         const result = await dispatchPeerCandidate(candidate, splitQualifiedMember(request.handle)?.handle ?? splitCanvasOwner(request.handle).team, request.message, request.contextId, abort, session, request.delivery === 'async' && peerAsync, taskId, callbackAddress)
         if (!result.ok) {
+          if(result.acceptance==='unknown')throw new FollowupAcceptanceUnknown()
           // Idempotency verdicts (B3) are terminal, not failover: a replay
           // says the prior attempt at THIS peer stays authoritative —
           // re-dispatching the same dedup key at another peer would execute

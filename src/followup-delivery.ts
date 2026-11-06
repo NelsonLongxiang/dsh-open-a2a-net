@@ -6,6 +6,7 @@ import { AdmittedBookkeepingError } from './admitted-bookkeeping.ts'
 import type { TaskLedger } from './task-ledger.ts'
 import { deliveryFingerprint } from './task-delivery.ts'
 import { createHash } from 'node:crypto'
+import {FollowupAcceptanceUnknown,hostInserted,hostEventCount,pendingMessage} from './followup-admission.ts'
 export interface FollowupDeps {
   ledger: TaskLedger
   taint: (target: Agent, localFrom?: string) => void
@@ -13,28 +14,37 @@ export interface FollowupDeps {
 }
 export class FollowupDelivery {
   constructor(private readonly d: FollowupDeps) {}
-  deliver(agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string, taskExpected=false): void {
+  deliver(agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string, taskExpected=false): 'inserted'|void {
     // Missing capability is a refusal, never a reason to call steer.
     if(typeof agent.followup!=='function')throw Error('A2A requires Agent.followup; target runtime lacks sourced next-turn delivery')
     const sessionId=String(agent.id),fingerprint=deliveryFingerprint(sessionId,text,sender,localFrom)
     const messageId=MessageId('a2a-followup-'+createHash('sha256').update(taskId===undefined?fingerprint+':'+Date.now()+':'+Math.random():sessionId+':'+taskId).digest('hex'))
+    if(typeof text!=='string'||[sender,localFrom,taskId,callerKey].some(value=>value!==undefined&&typeof value!=='string'))throw Error('A2A followup input must contain string fields')
     if(taskId) {
       const existing=this.d.ledger.deliveryFor(taskId)
       if(existing) {
         if(existing.sessionId!==sessionId||existing.fingerprint!==fingerprint||existing.callerKey!==callerKey)throw Error('task delivery identity conflict')
         if(existing.state==='cancelled'||existing.state==='failed')throw Error('task delivery correspondence is terminal; no replay')
-        if(existing.state==='reserved')throw Error('task delivery acceptance uncertain; reconcile the existing MessageId rather than redeliver')
+        if(existing.state==='reserved')throw new FollowupAcceptanceUnknown()
         if(this.d.ledger.orphanDelivery(taskId))throw new AdmittedBookkeepingError(undefined)
         return
       }
+      if(pendingMessage(agent,String(messageId)))throw Error('message is already pending')
       this.d.ledger.reserveDelivery({version:1,taskId,messageId,sessionId,fingerprint,...(taskExpected?{taskExpected:true as const}:{}),...(callerKey?{callerKey}:{}),createdAt:Date.now(),state:'reserved'})
     }
     const source: UserMessage['source']={kind:'a2a-relay',form:'relay',...(sender===undefined?{}:{senderSessionId:sender}),...(localFrom===undefined?{}:{localSender:localFrom}),...(taskId===undefined?{}:{taskId})}
     const message: UserMessage={id:messageId,role:'user',content:[{type:'text',text}],source}
     this.d.taint(agent,localFrom)
+    const acceptedSession=agent.session,eventFloor=hostEventCount(agent)
     try {agent.followup(message)} catch(error) {
       // The host may throw after durable insertion; preserve reserved/unknown, never blind replay.
-      this.d.warn('FOLLOWUP_ADMISSION_FAILED');throw error
+      this.d.warn('FOLLOWUP_ADMISSION_FAILED')
+      const reserved=taskId?this.d.ledger.deliveryFor(taskId):undefined
+      if(agent.session===acceptedSession&&reserved?.sessionId===sessionId&&reserved.messageId===String(messageId)&&hostInserted(agent,reserved.sessionId,reserved.messageId,eventFloor)){
+        try{if(reserved.state==='reserved')this.d.ledger.updateDelivery(taskId!,'enqueued')}catch{this.d.warn('FOLLOWUP_ACCEPTED_COMMIT_FAILED')}
+        return 'inserted'
+      }
+      throw new FollowupAcceptanceUnknown()
     }
     if(taskId)try{if(this.d.ledger.deliveryFor(taskId)?.state==='reserved')this.d.ledger.updateDelivery(taskId,'enqueued')}catch{this.d.warn('FOLLOWUP_ACCEPTED_COMMIT_FAILED')}
   }

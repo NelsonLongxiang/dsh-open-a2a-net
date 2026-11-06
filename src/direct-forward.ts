@@ -83,6 +83,7 @@ export function createDirectForward(d: DirectForwardDeps) {
         const answer = await d.dispatch(url, plainTeam === request.team ? request : { ...request, team: plainTeam }, guard)
         const result = !answer.ok && answer.ownBudgetExhausted === true ? { ...answer, code: -32005 } : answer
         d.activity(plainTeam, url, result.ok)
+        if(!result.ok&&result.acceptance==='unknown')return{...result,task_id:request.taskId}
         if (result.ok || result.code === -32005) {
           // A receipt owes no receipt; native bridge rounds have no A2A receipt contract.
           // Match routeTrunk/trackOwedTask rather than manufacturing an unpayable debt.
