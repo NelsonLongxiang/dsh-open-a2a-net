@@ -91,7 +91,7 @@ export function createDirectForward(d: DirectForwardDeps) {
           const deliveredTo = result.ok ? result.deliveredTo : undefined
           const birth: OutboundBirth = { ...(result.ok&&typeof result.consumed==='boolean'?{consumed:result.consumed}:{}), forwarded: true, ...(request.auth !== undefined ? { auth: request.auth } : {}), ...(peerCard?.publicKey ? { peerKey: peerCard.publicKey } : {}), ...(peerCard?.session ? { peerHost: peerCard.session } : {}), ...(deliveredTo !== undefined ? { deliveredTo } : {}), ...(receivers !== undefined ? { receiverMembers: receivers } : {}) }
           // Exactly one outbound row. A completed sync response is receiptless bookkeeping.
-          if (result.ok && result.receiverBookkeeping!=='failed' && (result.task_status === 'TASK_STATE_COMPLETED' || result.receipt === 'none')) d.ledger.trackReceiptless(request.taskId, plainTeam, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
+          if (result.ok && result.receiverBookkeeping!=='failed' && (result.task_status === 'TASK_STATE_COMPLETED'&&(result.replyFinal===true||result.bridge==='native-teams'||result.receipt==='mailbox') || result.receipt === 'none')) d.ledger.trackReceiptless(request.taskId, plainTeam, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
           else d.ledger.track(request.taskId, plainTeam, url, request.contextId, briefOf(request.message), { kind: 'cli', id: request.caller }, birth)
           return result
         }

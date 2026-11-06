@@ -507,7 +507,8 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
       }
       const task = 'direct-272-late-sync'
       const result = await cli(home, ['route', targetHandle, 'late forwarded sync', '--sync', '--task', task])
-      expect(result.code, result.stderr).not.toBe(0) // the existing transport budget is deliberately hit
+      expect(result.code, result.stderr).toBe(0) // HTTP waiter expires as delivered, not a failed dispatch
+      expect(result.stdout).toContain('未得到最终答复')
       await vi.waitFor(async () => {
         const s = await state(a)
         expect(s.archived.find((row: any) => row.taskId === task)).toMatchObject({ endedBy: 'receipt' })

@@ -362,7 +362,7 @@ export class A2aClient {
         ok: true,
         team,
         ...(raw.receiverBookkeeping==='failed'?{receiverBookkeeping:'failed' as const}:{}),
-        reply: raw.receiverBookkeeping==='failed'?ADMITTED_BOOKKEEPING_NOTE:bridge !== undefined
+        reply: raw.receiverBookkeeping==='failed'?ADMITTED_BOOKKEEPING_NOTE:!asyncMode&&bridge===undefined&&raw.reply_final!==true?'已送达、未得到最终答复，请按 task id 对账。Delivered without a final reply; reconcile task '+taskId+'.':bridge !== undefined
           ? `Delivered to ${team} (async native-teams round). It settles through the team's own routing chain and routes no A2A receipt in this slice — reconcile via context_id follow-ups.`
           : consumed === false
             ? `Delivered to ${team} (async), but the target had not started a turn on it yet — the message is queued behind the session's current turn. Watch a2a_status activity or follow up with the context id; do not resend.`
@@ -382,7 +382,7 @@ export class A2aClient {
     return {
       ok: true,
       team,
-      reply,
+      reply: !asyncMode&&wireText(raw.task_status)==='TASK_STATE_DELIVERED'&&raw.reply_final!==true&&bridge===undefined?'已送达、未得到最终答复，请按 task id 对账。Delivered without a final reply; reconcile task '+String(taskIdFromCaller??wireText(raw.task_id))+'. '+reply:reply,
       ...(wireText(raw.delivered_to) !== '' ? { deliveredTo: wireText(raw.delivered_to) } : {}),
       ...(raw.reply_final === true ? { replyFinal: true as const } : {}),
       // Same echo-first rule as the delivered branch: the peer's echo wins,

@@ -181,3 +181,11 @@ describe('one-hop CLI forwarding', () => {
     expect(forwardReceiptBasis({...row,auth:{receipt_target:'another-cli/0000000000000000'}},'beta/aaaaaaaa',cli,claim)).toBeUndefined()
   })
 })
+it.each([
+ {extra:{},owed:true},
+ {extra:{replyFinal:true},owed:false},
+ {extra:{bridge:'native-teams'},owed:false},
+ {extra:{receipt:'mailbox'},owed:false},
+] as const)('ordinary completed response requires own final while native/mailbox retain explicit authority: %j',async({extra,owed})=>{
+ const x=fixture([{...ok,task_status:'TASK_STATE_COMPLETED',...extra}as A2aRouteResult]);await createDirectForward(x.deps)({...request,noWait:false});if(extra.bridge==='native-teams')expect(x.ledger.list()).toEqual([]);else expect(x.ledger.list()[0]?.receiptExpected!==false).toBe(owed)
+})

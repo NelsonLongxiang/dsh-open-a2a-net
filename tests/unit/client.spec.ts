@@ -368,7 +368,7 @@ describe('queryOutcome (W7 slice 2)', () => {
 describe('delivered shape carries the consumed probe (F1 client half, async-stall §三)', () => {
   it('passes consumed through when the peer reports it true, keeping the async receipt wording', async () => {
     const { fetch } = stubFetch(() => ({ status: 200, body: { routed: true, delivered: true, consumed: true, task_id: 't-9', context_id: 'ctx-9', task_status: 'TASK_STATE_DELIVERED' } }))
-    await expect(makeClient({ fetch }).routeDirect('http://p:1', 'crew', 'hello')).resolves.toEqual({
+    await expect(makeClient({ fetch }).routeDirect('http://p:1', 'crew', 'hello',undefined,undefined,undefined,true)).resolves.toEqual({
       ok: true,
       team: 'crew',
       reply: 'Delivered to crew (async). The target routes a receipt — a message starting "[A2A receipt] task t-9 <outcome summary>" — back to your team when done; watch a2a_status activity or follow up with the context id.',
@@ -381,7 +381,7 @@ describe('delivered shape carries the consumed probe (F1 client half, async-stal
 
   it('answers consumed:false with the queued-turn wording — follow up, do not resend', async () => {
     const { fetch } = stubFetch(() => ({ status: 200, body: { routed: true, delivered: true, consumed: false, task_id: 't-8', context_id: 'ctx-8', task_status: 'TASK_STATE_DELIVERED' } }))
-    const result = await makeClient({ fetch }).routeDirect('http://p:1', 'crew', 'hello')
+    const result = await makeClient({ fetch }).routeDirect('http://p:1', 'crew', 'hello',undefined,undefined,undefined,true)
     expect(result).toMatchObject({ ok: true, consumed: false })
     expect((result as { reply: string }).reply).toContain('queued behind the session')
     expect((result as { reply: string }).reply).toContain('do not resend')
@@ -389,7 +389,7 @@ describe('delivered shape carries the consumed probe (F1 client half, async-stal
 
   it('omits consumed when the peer is older and does not report it', async () => {
     const { fetch } = stubFetch(() => ({ status: 200, body: { routed: true, delivered: true, task_id: 't-7', context_id: 'ctx-7', task_status: 'TASK_STATE_DELIVERED' } }))
-    const result = await makeClient({ fetch }).routeDirect('http://p:1', 'crew', 'hello')
+    const result = await makeClient({ fetch }).routeDirect('http://p:1', 'crew', 'hello',undefined,undefined,undefined,true)
     expect(result).not.toHaveProperty('consumed')
   })
 })
@@ -410,4 +410,9 @@ describe('#317 link-keys helpers', () => {
     expect(isLinkKey('nope', keys, equal)).toBe(false)
     expect(isLinkKey('', keys, equal)).toBe(false)
   })
+})
+it.each([false,true])('sync delivered reply has explicit reconcile instruction (delivered shape %s)',async delivered=>{
+ const {fetch,calls}=stubFetch(()=>({status:200,body:{routed:true,...(delivered?{delivered:true}:{}),task_id:'sync-wait',task_status:'TASK_STATE_DELIVERED',result:{text:'host placeholder'}}}))
+ const reply=await makeClient({fetch}).routeDirect('http://peer:1','ops','work',undefined,undefined,undefined,false,undefined,'sync-wait')
+ expect(reply).toMatchObject({ok:true,task_status:'TASK_STATE_DELIVERED',reply:expect.stringContaining('已送达、未得到最终答复，请按 task id 对账')});expect((reply as any).replyFinal).toBeUndefined();expect(calls.filter(x=>x.method==='POST')).toHaveLength(1)
 })

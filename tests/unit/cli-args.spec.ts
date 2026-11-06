@@ -538,6 +538,8 @@ describe('a2a-net CLI: route --sync', () => {
     const unsettled = await runCli(['route', 'ops', 'hi', '--sync'], env)
     expect(unsettled.code).toBe(0)
     expect(unsettled.stderr).toContain('status TASK_STATE_DELIVERED')
+    expect(unsettled.stdout).toContain('已送达、未得到最终答复，请按 task id 对账')
+    expect(host.seen.filter(s=>s.path==='/a2a/direct')).toHaveLength(1)
     reply = { routed: true, delivered: true, team: 'ops', task_id: 'direct-ee55ff66', task_status: 'TASK_STATE_DELIVERED', receipt: 'routed' }
     await runCli(['route', 'ops', 'hi'], env)
     expect(host.seen.filter(s => s.path === '/a2a/direct').at(-1)?.body.wait).toBe(false)
