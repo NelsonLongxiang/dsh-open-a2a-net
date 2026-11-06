@@ -26,7 +26,7 @@ import { parseTaskDelivery, TASK_DELIVERY_CAP, TASK_DELIVERY_RETENTION_MS, type 
 import { parseReminder, REMINDER_LONG_MS, type ReminderState } from './reconciliation-state.ts'
 import { parseReceipt, RECEIPT_OUTCOMES, type ReceiptOutcomeV2 } from './receipt.ts'
 import { classifyConservationBlock, ConservationCounters, type ConservationVerdict } from './ledger-conservation.ts'
-import { CALLER_ENDED_PREFIX, TASK_CAP, ARCHIVE_CAP, SUMMARY_CAP, TASK_STALE_TTL_MS, ARCHIVE_ENDS, ECHO_SUMMARY, ROUTING_FACT_CAP, SETTLEMENT_ID_CAP, SETTLEMENT_REFUSAL_CAP, withSender, withAuth, routingOf, birthFacts, withRouting, withSettledBy, parseRefusal, archivedEndedBy } from './task-ledger-rows.ts'
+import { CALLER_ENDED_PREFIX, TASK_CAP, ARCHIVE_CAP, SUMMARY_CAP, TASK_STALE_TTL_MS, ARCHIVE_ENDS, ECHO_SUMMARY, ROUTING_FACT_CAP, SETTLEMENT_ID_CAP, SETTLEMENT_REFUSAL_CAP, withSender, withAuth, routingOf, birthFacts, withRouting, withSettledBy, parseRefusal, archivedEndedBy, WITHDRAWAL_RESULTS, isWithdrawalResult } from './task-ledger-rows.ts'
 import type { TaskRecord, ArchivedRecord, Sender, OutboundBirth, TaskLedgerOptions, ReceiptResolvedInfo, TaskLedgerSnapshot, SettlementRefusalRecord, SettlementJudge, AbandonResult, CancelledResult, ArchiveEnd } from './task-ledger-rows.ts'
 export * from './task-ledger-rows.ts'
 
@@ -347,6 +347,14 @@ export class TaskLedger {
    * the route layer reads team/contextId from here for its best-effort
    * steer, which is the documented boundary until origin-auth lands.
    */
+  recordWithdrawalResult(taskId: string, result: import('./task-ledger-rows.ts').WithdrawalResult): void {
+    if(!(WITHDRAWAL_RESULTS as readonly string[]).includes(result))throw Error('invalid withdrawal result')
+    const row=this.archived.find(entry=>entry.taskId===taskId&&entry.endedBy==='cancelled')
+    if(!row||row.withdrawalResult===result)return
+    this.archived=this.archived.map(entry=>entry===row?{...entry,withdrawalResult:result}:entry)
+    this.persist()
+  }
+
   cancel(taskId: string, reason?: string): CancelledResult {
     if (taskId === '') return { outcome: 'unknown', taskId }
     this.sweep(this.now())
@@ -725,6 +733,7 @@ export class TaskLedger {
               ...withAuth(entry.auth, entry, this.now()),
             ...withRouting(entry as Record<string, unknown>, this.warn),
               ...withSettledBy((entry as { settledBy?: unknown }).settledBy),
+            ...(isWithdrawalResult(entry.withdrawalResult)?{withdrawalResult:entry.withdrawalResult}:{}),
             })
             continue
           }
@@ -783,6 +792,7 @@ export class TaskLedger {
             ...withAuth(entry.auth, entry, this.now()),
             ...withRouting(entry as Record<string, unknown>, this.warn),
             ...withSettledBy((entry as { settledBy?: unknown }).settledBy),
+            ...(isWithdrawalResult(entry.withdrawalResult)?{withdrawalResult:entry.withdrawalResult}:{}),
           })
         }
       }

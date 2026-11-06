@@ -50,6 +50,16 @@ real-loop独立子进程1用例加载**实际插件dispatcher**和已有hostlib�
 
 修订最终默认完整门禁job bash-b97380799ef64616真实exit0（此前同计数完整绿一轮；末次强化ordering测试后中途未改动的安全回归出现一次波动，原样隔离通过并私报，未改其断言/预算）：root1578passed/8skip（已有7+新增外部host opt-in1），layout4/nexus332/innerentries0。外部专项单独1/1通过，不把skip混入既有7例。仍需非作者新精确头复评。
 
+## R-WITHDRAW 定点修订（958b3f4之后，仅撤回失败停工通知）
+
+按全局阻断要求，cancelQueuedTask内部捕获withdraw任意异常，之后仍定位原完整接收会话并走既定steer撤单通道；和claimed通知复用cancelNoticeText，明确taskId、任务已撤单、若稍后从队列轮到不得执行。成功remove不发通知；无Agent不伪称steered。任务投递followup/权限/容量/同步及结账优先均不变，不混其他跟进。
+
+新增归档行withdrawalResult观察值removed / claimed-steered / withdraw-failed-steered / no-agent，随原子账本持久/重启恢复，在state、a2a_tasks文本与结构化结果、CLI tasks及JSON显示。结果只记录实际动作，不改变已取消终态/守恒。结果提交失败沿原failclosed诊断回滚该次结果，不把已取消债复活。
+
+真实mesh覆盖缺updateQueue、非not-found错误均发带来源通知且队中原消息仍可见、caller已归档；四结果各自断言，并验证工具/CLI文本与JSON。新增5个单测核四值重启保留及结果写失败不虚报。去catch反向突变使上述两错误mesh行为断言变红，finally恢复。最后完整默认pnpm verify job bash-41429932ea5143aa真实exit0：root1584passed/8skip（已有7+显式host专项opt-in1），layout4/nexus332/innerentries0。架构按原基线刷新源码锚，无图形渲染/视觉结论；公开文档无环境值或网络定位信息。
+
+新精确头交非作者确认、全局核tree差异后由授权评审链处理合并；本席不部署、不补积压。
+
 ## 待评审与发布边界
 
 本PR改变投递外部语义，候选发布需minor；此处只写release说明，不tag/publish/部署/改生产presence。非作者精确head复跑行为/四突变与新增wake观察门，PASS后仍先冻结由监督报全局，回复后match-head合并。#358②ledgerPersistence进status/#355告警与③回滚附带状态清单另待，不因本PR新增consumed或mapping就关整358。生产现有积压不操作、不自动补回执。

@@ -396,6 +396,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // its direction when known.
           archived: taskLedger.archive().slice(0, ARCHIVE_CAP).map(row => ({
             taskId: row.taskId,
+            ...(row.withdrawalResult ? {withdrawalResult:row.withdrawalResult} : {}),
             team: row.team,
             peer: row.peer,
             startedAt: row.startedAt,

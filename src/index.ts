@@ -1999,14 +1999,25 @@ export function apply(ctx: Context, config: Config): void {
     return followupDelivery.withdraw(taskId,controller,id=>ctx.get('agents')?.get(SessionId(id)))
   }
 
-  const cancelQueuedTask = async(taskId:string,text:string,sender:string,original?: import('./task-ledger.ts').TaskRecord): Promise<{removed:boolean;steered:boolean}> => {
-    const record=taskLedger.deliveryFor(taskId)
-    const withdrawal=await withdrawQueuedTask(taskId)
-    if(withdrawal==='removed')return {removed:true,steered:false}
+  const cancelQueuedTask = async(taskId:string,text:string,sender:string,original?: import('./task-ledger.ts').TaskRecord): Promise<{removed:boolean;steered:boolean;withdrawalResult:import('./task-ledger.ts').WithdrawalResult}> => {
+    let record:import('./task-delivery.ts').TaskDelivery|undefined,withdrawFailed=false,removed=false
+    try {
+      record=taskLedger.deliveryFor(taskId)
+      removed=await withdrawQueuedTask(taskId)==='removed'
+    } catch(error) {
+      withdrawFailed=true
+      logger.warn('a2a: queue withdrawal failed; sending immediate cancellation notice: %s',String(error))
+    }
+    if(removed) {taskLedger.recordWithdrawalResult(taskId,'removed');return {removed:true,steered:false,withdrawalResult:'removed'}}
     const row=original??taskLedger.find(taskId)
-    const agent=record ? ctx.get('agents')?.get(SessionId(record.sessionId)) : row ? (resolveAgentForTeam(row.deliveredTo??row.team)??canvasLiveAgent(parseCanvasTeamName(row.team))) : undefined
-    if(!agent)return {removed:false,steered:false}
-    steerRelay(agent,text,sender);return {removed:false,steered:true}
+    const receiverId=record?.sessionId??row?.receiverSessionId
+    const agent=receiverId ? ctx.get('agents')?.get(SessionId(receiverId)) : row ? (resolveAgentForTeam(row.deliveredTo??row.team)??canvasLiveAgent(parseCanvasTeamName(row.team))) : undefined
+    if(!agent) {taskLedger.recordWithdrawalResult(taskId,'no-agent');return {removed:false,steered:false,withdrawalResult:'no-agent'}}
+    const notice=cancelNoticeText(taskId)
+    steerRelay(agent,text.includes('If this task reaches you later from the queue, do not execute it.')?text:notice,sender)
+    const withdrawalResult=withdrawFailed?'withdraw-failed-steered':'claimed-steered'
+    taskLedger.recordWithdrawalResult(taskId,withdrawalResult)
+    return {removed:false,steered:true,withdrawalResult}
   }
 
   function steerRelay(agent: Agent, text: string, sender?: string, localFrom?: string): void {
@@ -2023,7 +2034,7 @@ export function apply(ctx: Context, config: Config): void {
   /** The cooperative stop-notice text, shared by the tasks/cancel control
    * route and the transport face's cancel half (one contract, one wording). */
   function cancelNoticeText(taskId: string, reason?: string): string {
-    return `[A2A cancel] (task ${taskId}) the caller cancelled this task${reason !== undefined && reason !== '' ? `: ${reason}` : ''}. Stop any work tied to it and acknowledge via [A2A receipt] task ${taskId} cancelled.`
+    return `[A2A cancel] (task ${taskId}) the caller cancelled this task${reason !== undefined && reason !== '' ? `: ${reason}` : ''}. This task has been cancelled. If this task reaches you later from the queue, do not execute it. Stop any work tied to it and acknowledge via [A2A receipt] task ${taskId} cancelled.`
   }
 
   /**

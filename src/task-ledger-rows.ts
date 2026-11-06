@@ -283,8 +283,14 @@ export interface TaskRecord {
   reason?: DeadReason
 }
 
+export const WITHDRAWAL_RESULTS = ['removed','claimed-steered','withdraw-failed-steered','no-agent'] as const
+export type WithdrawalResult = typeof WITHDRAWAL_RESULTS[number]
+export function isWithdrawalResult(value:unknown): value is WithdrawalResult { return typeof value==='string'&&(WITHDRAWAL_RESULTS as readonly string[]).includes(value) }
+
 /** One settled task kept for audit, with its receipt-correlated outcome. */
 export interface ArchivedRecord {
+  /** Cancellation notification observation; independent of the terminal task outcome. */
+  readonly withdrawalResult?: WithdrawalResult
   readonly taskId: string
   readonly team: string
   readonly peer: string

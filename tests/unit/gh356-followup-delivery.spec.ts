@@ -13,6 +13,17 @@ vi.mock('node:fs',async original=>{const fs=await original<typeof import('node:f
 afterEach(()=>{fault.fail=false;vi.restoreAllMocks()})
 function setup(){const file=join(mkdtempSync(join(tmpdir(),'followup-delivery-')),'tasks.json'),ledger=new TaskLedger(file),followup=vi.fn(),steer=vi.fn(),agent={id:SessionId('session-aaaaaaaa11112222'),followup,steer} as unknown as Agent,taint=vi.fn(),warn=vi.fn(),dispatcher=new FollowupDelivery({ledger,taint,warn});return{file,ledger,followup,steer,agent,taint,warn,dispatcher}}
 describe('#356 persistent sourced followup admission',()=>{
+ for(const result of ['removed','claimed-steered','withdraw-failed-steered','no-agent'] as const)it('cancellation audit result '+result+' survives disk restart without changing terminal bookkeeping',()=>{
+  const f=setup();f.ledger.track('cancel-audit','alpha/aaaaaaaa','local');f.ledger.cancel('cancel-audit');const counters=f.ledger.conservation()
+  f.ledger.recordWithdrawalResult('cancel-audit',result);const restored=new TaskLedger(f.file)
+  expect(restored.archive()[0]).toMatchObject({taskId:'cancel-audit',endedBy:'cancelled',withdrawalResult:result});expect(restored.list()).toEqual([]);expect(restored.conservation()).toEqual(counters)
+ })
+ it('failed withdrawal audit commit never restores cancelled debt or advertises a result that was not persisted',()=>{
+  const f=setup();f.ledger.track('cancel-audit-fail','alpha/aaaaaaaa','local');f.ledger.cancel('cancel-audit-fail');const bytes=readFileSync(f.file)
+  fault.fail=true;expect(()=>f.ledger.recordWithdrawalResult('cancel-audit-fail','withdraw-failed-steered')).toThrow('disk full')
+  expect(f.ledger.archive()[0].withdrawalResult).toBeUndefined();expect(f.ledger.list()).toEqual([]);expect(readFileSync(f.file)).toEqual(bytes)
+ })
+
  it('outbound peer observation and inbound claim both survive disk restart without releasing receipt debt',()=>{
   const f=setup();f.ledger.track('peer-snapshot','beta/bbbbbbbb','http://beta',undefined,'text',{kind:'session',id:'alpha/aaaaaaaa'},{consumed:false});f.ledger.trackInbound('local-snapshot','alpha/aaaaaaaa','beta/bbbbbbbb',undefined,true,'text',undefined,undefined,String(f.agent.id),false)
   let restored=new TaskLedger(f.file);expect(restored.find('peer-snapshot')?.consumed).toBe(false);expect(restored.find('local-snapshot')?.consumed).toBe(false)

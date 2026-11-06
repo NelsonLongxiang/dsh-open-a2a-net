@@ -1024,7 +1024,7 @@ async function main() {
     console.log(`dead (${String(dead.length)}):`)
     listCapped(dead, 20, t => `  ${String(t.taskId)} → ${String(t.team)} (${String(t.reason ?? '?')})${senderTail(t)}${t.reminderAttempts!==undefined?` reminders=${t.reminderDelivered??0}/${t.reminderAttempts} last=${t.reminderLastAt??'?'}${t.repeatedlyUnreconciled?' 多次提醒未对账':''}`:''}`)
     console.log(`archived (${String(archived.length)}):`)
-    listCapped(archived, 20, t => `  ${String(t.taskId)} ${String(t.outcome ?? '?')}${t.endedBy !== undefined && t.endedBy !== 'receipt' ? ` (${String(t.endedBy)})` : ''}${senderTail(t)}${t.reminderAttempts!==undefined?` reminders=${t.reminderDelivered??0}/${t.reminderAttempts} last=${t.reminderLastAt??'?'}${t.repeatedlyUnreconciled?' 多次提醒未对账':''}`:''}`)
+    listCapped(archived, 20, t => `  ${String(t.taskId)} ${String(t.outcome ?? '?')}${t.endedBy !== undefined && t.endedBy !== 'receipt' ? ` (${String(t.endedBy)})` : ''}${t.withdrawalResult?` withdrawal=${String(t.withdrawalResult)}`:''}${senderTail(t)}${t.reminderAttempts!==undefined?` reminders=${t.reminderDelivered??0}/${t.reminderAttempts} last=${t.reminderLastAt??'?'}${t.repeatedlyUnreconciled?' 多次提醒未对账':''}`:''}`)
     if (s.conservation != null) console.log(`conservation: conserved=${String(s.conservation.conserved)} delta=${String(s.conservation.delta)}`)
     if (s.settlement != null) console.log(`settlement: mode=${String(s.settlement.mode)} refusalsTotal=${String(s.settlement.refusalsTotal)} offChain=${String(s.settlement.offChain)}`)
     if (s.settlement?.enforceRefused) console.log(`enforce refused: ${String(s.settlement.enforceRefused.reason)}; blockers=${JSON.stringify(s.settlement.enforceRefused.blockers)}`)

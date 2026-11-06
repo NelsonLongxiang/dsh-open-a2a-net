@@ -17,20 +17,35 @@ async function fixture(race=false){
  return{n,agent,queued,removed,steered,deliver}
 }
 describe('#356 actual HTTP queue admission and cancellation',()=>{
+ it('missing updateQueue still sends an immediate sourced cancelled-task warning and exposes the persisted result in tasks JSON',async()=>{
+  const f=await fixture();try{
+   await f.deliver('missing-remove');f.n.ctx.set('sessionController',{} as never)
+   const result=await post(f.n,'/__dsh_a2a/tasks/cancel',{task_id:'missing-remove'})
+   expect(result).toMatchObject({outcome:'cleared',removed:false,steered:true});expect(f.queued).toHaveLength(1);expect(f.steered).toHaveLength(1)
+   expect(f.steered[0].source).toMatchObject({kind:'a2a-relay',form:'relay'});expect(f.steered[0].content[0].text).toContain('(task missing-remove)');expect(f.steered[0].content[0].text).toContain('This task has been cancelled.');expect(f.steered[0].content[0].text).toContain('If this task reaches you later from the queue, do not execute it.')
+   const raw=JSON.parse(readFileSync(join(f.n.home,'a2a/tasks.json'),'utf8'));expect(raw.tasks).toEqual([]);expect(raw.archived[0].withdrawalResult).toBe('withdraw-failed-steered')
+   const taskView=await f.n.ctx.tools.get('a2a_tasks')!.execute({},runContext(f.agent)) as any;expect(taskView.archive[0].withdrawalResult).toBe('withdraw-failed-steered')
+   const run=(args:string[])=>promisify(execFile)(process.execPath,['cli/a2a.mjs',...args,'--home',f.n.baseUrl],{env:cliEnv(f.n.home),encoding:'utf8',timeout:5000})
+   expect((await run(['tasks'])).stdout).toContain('withdrawal=withdraw-failed-steered');expect(JSON.parse((await run(['tasks','--json'])).stdout).archived[0].withdrawalResult).toBe('withdraw-failed-steered')
+  }finally{await f.n.dispose()}
+ })
+
  it('claimed target disappearing cannot block local caller bookkeeping cancellation',async()=>{
   const f=await fixture();try{
    await f.deliver('gone-target');const message=f.queued.shift();f.n.ctx.emit('agent/inbox/claimed',{agent:f.agent,message,turn:1})
    f.n.ctx.emit('agent/disposed',{agent:f.agent});f.n.agents.agent=undefined
    const result=await post(f.n,'/__dsh_a2a/tasks/cancel',{task_id:'gone-target'})
-   expect(result).toMatchObject({outcome:'cleared',removed:false,steered:false});expect((await state(f.n)).tasks).toEqual([]);expect(f.steered).toEqual([])
+   expect(result).toMatchObject({outcome:'cleared',removed:false,steered:false});expect((await state(f.n)).tasks).toEqual([]);expect((await state(f.n)).archived[0].withdrawalResult).toBe('no-agent');expect(f.steered).toEqual([])
   }finally{await f.n.dispose()}
  })
  it('queue removal failure is best-effort after caller debt cancellation, not a new cancellation refusal',async()=>{
   const f=await fixture();try{
    let committedBeforeNotify=false
    await f.deliver('remove-failure');f.n.ctx.set('sessionController',{updateQueue:async()=>{const disk=JSON.parse(readFileSync(join(f.n.home,'a2a/tasks.json'),'utf8'));committedBeforeNotify=!disk.tasks.some((r:any)=>r.taskId==='remove-failure')&&disk.archived.some((r:any)=>r.taskId==='remove-failure');throw Error('unavailable')}} as never)
-   const result=await post(f.n,'/__dsh_a2a/tasks/cancel',{task_id:'remove-failure'});expect(result).toMatchObject({outcome:'cleared',removed:false,steered:false})
-   expect(committedBeforeNotify).toBe(true);expect((await state(f.n)).tasks).toEqual([]);expect(f.queued).toHaveLength(1)
+   const result=await post(f.n,'/__dsh_a2a/tasks/cancel',{task_id:'remove-failure'});expect(result).toMatchObject({outcome:'cleared',removed:false,steered:true})
+   expect(committedBeforeNotify).toBe(true);expect((await state(f.n)).tasks).toEqual([]);expect(f.queued).toHaveLength(1);expect(f.steered).toHaveLength(1)
+   expect(f.steered[0].content[0].text).toContain('task remove-failure');expect(f.steered[0].content[0].text).toContain('If this task reaches you later from the queue, do not execute it.')
+   expect((await state(f.n)).archived[0].withdrawalResult).toBe('withdraw-failed-steered')
   }finally{await f.n.dispose()}
  })
  it('synchronous HTTP routeIntoAgent queues sourced followup, never steers, and returns only its consuming-turn final',async()=>{
@@ -117,10 +132,10 @@ describe('#356 actual HTTP queue admission and cancellation',()=>{
   const f=await fixture();try{await f.deliver('queued-task');expect(f.steered).toEqual([]);expect(f.queued).toHaveLength(1);expect((await state(f.n)).tasks[0]).toMatchObject({consumed:false,deliveryObservation:'delivered-unconsumed'});expect(f.queued[0].source).toEqual({kind:'a2a-relay',form:'relay',senderSessionId:'beta/aaaaaaaa',taskId:'queued-task'});const disk=JSON.parse(readFileSync(join(f.n.home,'a2a/tasks.json'),'utf8'));expect(disk.taskDeliveries[0]).toMatchObject({taskId:'queued-task',messageId:f.queued[0].id,sessionId:String(f.agent.id),state:'enqueued'})}finally{await f.n.dispose()}
  })
  it('removes a not-yet-claimed MessageId through updateQueue and then cancels without a steering notice',async()=>{
-  const f=await fixture();try{await f.deliver('remove-queued');const id=f.queued[0].id;const r=await post(f.n,'/__dsh_a2a/tasks/cancel',{task_id:'remove-queued'});expect(r).toMatchObject({outcome:'cleared',removed:true,steered:false});expect(f.queued).toEqual([]);expect(f.removed[0].id).toBe(id);expect(f.steered).toEqual([]);expect((await state(f.n)).tasks).toEqual([])}finally{await f.n.dispose()}
+  const f=await fixture();try{await f.deliver('remove-queued');const id=f.queued[0].id;const r=await post(f.n,'/__dsh_a2a/tasks/cancel',{task_id:'remove-queued'});expect(r).toMatchObject({outcome:'cleared',removed:true,steered:false});expect(f.queued).toEqual([]);expect(f.removed[0].id).toBe(id);expect(f.steered).toEqual([]);expect((await state(f.n)).tasks).toEqual([]);expect((await state(f.n)).archived[0].withdrawalResult).toBe('removed')}finally{await f.n.dispose()}
  })
  for(const race of [false,true])it((race?'a remove/claim race':'an already claimed task')+' gets an immediate steer cancellation, never another followup',async()=>{
-  const f=await fixture(race);try{await f.deliver('claimed-task');if(!race){const message=f.queued.shift();f.n.ctx.emit('agent/inbox/claimed',{agent:f.agent,message,turn:1})}const count=f.queued.length;const r=await post(f.n,'/__dsh_a2a/tasks/cancel',{task_id:'claimed-task'});expect(r).toMatchObject({outcome:'cleared',removed:false,steered:true});expect(f.steered).toHaveLength(1);expect(f.steered[0].content[0].text).toContain('[A2A cancel]');expect(f.queued).toHaveLength(count)}finally{await f.n.dispose()}
+  const f=await fixture(race);try{await f.deliver('claimed-task');if(!race){const message=f.queued.shift();f.n.ctx.emit('agent/inbox/claimed',{agent:f.agent,message,turn:1})}const count=f.queued.length;const r=await post(f.n,'/__dsh_a2a/tasks/cancel',{task_id:'claimed-task'});expect(r).toMatchObject({outcome:'cleared',removed:false,steered:true});expect(f.steered).toHaveLength(1);expect(f.steered[0].content[0].text).toContain('[A2A cancel]');expect(f.queued).toHaveLength(count);expect((await state(f.n)).archived[0].withdrawalResult).toBe('claimed-steered');expect(f.steered[0].content[0].text).toContain('If this task reaches you later from the queue, do not execute it.')}finally{await f.n.dispose()}
  })
  it('a missing followup capability fails honestly and cannot secretly fall back to steer',async()=>{
   const f=await fixture();try{Object.defineProperty(f.agent,'followup',{value:undefined});const r=await post(f.n,'/a2a/direct',{team:'alpha/01234567',caller_session:'beta/aaaaaaaa',task_id:'missing-followup',message:'no fallback',wait:false});expect(r.delivered).not.toBe(true);expect(r.error).toContain('Agent.followup');expect(f.steered).toEqual([]);expect(f.queued).toEqual([])}finally{await f.n.dispose()}
