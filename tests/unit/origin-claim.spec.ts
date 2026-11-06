@@ -4,7 +4,7 @@
  * a signed bound miss never falls back to an unbound signature. Legacy-only
  * envelopes can still be accepted as key possession during migration.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi, afterEach } from 'vitest'
 import { generateKeyPairSync, sign as edSign } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import { signCard } from '../../src/card.ts'
@@ -30,12 +30,14 @@ const req = (headers: Record<string, string>, at: { url: string; method?: string
 /** The receiving host's own card URL — always among its configured audiences. */
 const OWN = 'http://127.0.0.1:4000'
 
-function verify(request: IncomingMessage, options: { rawBody?: Uint8Array; unboundOpen?: boolean; audiences?: string[]; loopbackArrival?: boolean; now?: number; cacheCard?: boolean; fetch?: (url: string, init: { method: 'GET' | 'POST'; headers: Record<string, string>; redirect?: 'follow' | 'error' | 'manual' }) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }> } = {}) {
+function verify(request: IncomingMessage, options: { freshCard?:boolean; timeoutMs?:number; rawBody?: Uint8Array; unboundOpen?: boolean; audiences?: string[]; loopbackArrival?: boolean; now?: number; cacheCard?: boolean; fetch?: (url: string, init: { method: 'GET' | 'POST'; headers: Record<string, string>; redirect?: 'follow' | 'error' | 'manual' }) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }> } = {}) {
   const cardCache = new Map<string, CardCacheEntry>(options.cacheCard === false ? [] : [[CALLER_URL, { at: Date.now(), card }]])
   let unbound = 0
   let boundMiss = 0
   const verdict = verifyOriginClaim(request, {
     cardCache,
+    ...(options.freshCard===undefined?{}:{freshCard:options.freshCard}),
+    ...(options.timeoutMs===undefined?{}:{timeoutMs:options.timeoutMs}),
     fetch: options.fetch ?? (async () => { throw new Error('no fetch: the card is cached') }),
     audiences: options.audiences ?? [OWN],
     unboundOpen: options.unboundOpen ?? true,
@@ -51,7 +53,25 @@ function verify(request: IncomingMessage, options: { rawBody?: Uint8Array; unbou
 const strip = (headers: Record<string, string>, ...names: string[]): Record<string, string> =>
   Object.fromEntries(Object.entries(headers).filter(([k]) => !names.includes(k)))
 
+afterEach(()=>vi.useRealTimers())
 describe('OriginClaim audience binding', () => {
+  it('fresh validation completes locally at the deadline without accepting a cached card',async()=>{
+    vi.useFakeTimers();let observed:unknown
+    const fetch=vi.fn(async()=>new Promise<never>(()=>{}))
+    const pending=verify(req(sign(OWN+'/a2a/direct'),{url:'/a2a/direct'}),{freshCard:true,timeoutMs:5,fetch}).then(result=>{observed=result.v})
+    await vi.advanceTimersByTimeAsync(6);expect(observed).toEqual({ok:false,reason:'verification-timeout'});await pending;expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch.mock.calls[0]![1].signal?.aborted).toBe(true)
+  })
+  it('fresh validation does not accept prior card data after a current read failure',async()=>{
+    const fetch=vi.fn(async()=>{throw Error('read unavailable')})
+    expect((await verify(req(sign(OWN+'/a2a/direct'),{url:'/a2a/direct'}),{freshCard:true,fetch})).v).toEqual({ok:false,reason:'no-card'});expect(fetch).toHaveBeenCalledTimes(1)
+  })
+  it('the same deadline applies to a response whose body is still incomplete',async()=>{
+    vi.useFakeTimers();let observed:unknown
+    const pending=verify(req(sign(OWN+'/a2a/direct'),{url:'/a2a/direct'}),{freshCard:true,timeoutMs:5,fetch:async()=>({ok:true,status:200,text:()=>new Promise<string>(()=>{})})}).then(result=>{observed=result.v})
+    await vi.advanceTimersByTimeAsync(6);expect(observed).toEqual({ok:false,reason:'verification-timeout'});await pending
+  })
+
   it('#312 warns for an unsupported host team without changing the caller shape gate', () => {
     for (const team of ['dsh', 'zone-canvas', 'ABC-123']) expect(originClaimTeamWarning(team)).toBeUndefined()
     for (const team of ['', 'zone/canvas', 'space zone', '控制字符\n']) expect(originClaimTeamWarning(team)).toContain('Use ^[a-z0-9-]+$')

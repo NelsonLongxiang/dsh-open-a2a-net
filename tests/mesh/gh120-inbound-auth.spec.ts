@@ -142,10 +142,11 @@ describe('#114 S2 inbound authorization record (real host)', () => {
       delete v1['X-A2A-Caller-Sig2']
       for (const [taskId, message] of [['direct-v1replay01', 'first body'], ['direct-v1replay02', 'changed replay body']]) {
         const replay = await post(`${a.baseUrl}/a2a/direct`, { team: TARGET, message, caller_session: 'market/aaaaaaaa', wait: false, task_id: taskId }, v1)
-        expect(replay.body.delivered, JSON.stringify(replay.body)).toBe(true)
-        expect((await rows()).find(t => t.taskId === taskId)?.auth).toMatchObject({ proof: 'unbound', caller: 'market/aaaaaaaa' })
+        expect(replay.body.delivered, JSON.stringify(replay.body)).not.toBe(true)
+        expect(replay.body.code).toBe(-32011)
+        expect((await rows()).find(t => t.taskId === taskId)).toBeUndefined()
       }
-      expect(a.steered.map(payload => JSON.parse(steerText(payload)).content[0].text).find((text: string) => text.startsWith('[A2A direct] (task direct-v1replay02) '))).toContain('未验证（unbound）')
+      expect(a.steered.map(payload => JSON.parse(steerText(payload)).content[0].text).some((text: string) => text.startsWith('[A2A direct] (task direct-v1replay02) '))).toBe(false)
 
       // The signed zone "market" does not cover the host face "dsh": delivered (admission is unchanged), but never recorded as proven.
       const mismatched = await post(`${a.baseUrl}/a2a/direct`, { team: TARGET, message: 'mismatch', caller_session: 'dsh', wait: false, task_id: 'direct-claim0002' }, signed(a.baseUrl, 'market'))

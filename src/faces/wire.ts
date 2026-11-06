@@ -27,7 +27,8 @@ import { peerPayloadFingerprint, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REP
 import { briefOf, type TaskLedger } from '../task-ledger.ts'
 import { parseReceipt, taskIdRefusal } from '../receipt.ts'
 import { buildAuthorization, claimCovers, nextOf, refusalOf, type Admission, type AuthProof, type RemoteCliProof, type SettlementRefusal, type Settler } from '../task-auth.ts'
-import { isRootOriginUrl } from '../origin-claim.ts'
+import { isRootOriginUrl, type OriginClaimVerdict } from '../origin-claim.ts'
+import { hasOriginClaimFields, completeInboundVerification, verifiedInboundAdmission, WIRE_ERROR_INBOUND_VERIFICATION } from '../inbound-verification.ts'
 import type { Config } from '../index.ts'
 import { withResponseFields } from '../response-fields.ts'
 import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from '../transport-caps.ts'
@@ -78,7 +79,7 @@ export type NativeRoundOutcome =
   | { readonly ok: false; readonly error: string; readonly phase?: 'pre-dispatch'; readonly aborted?: boolean }
 
 /** What verifyOriginClaim answers (see index.ts; reason widens to string here — the faces only interpolate it). */
-export type OriginClaimResult = { ok: true; caller: string; callerUrl: string; card: A2aPeerCard; bound: boolean; cli?: true; bodyBound?: true } | { ok: false; reason: string }
+export type OriginClaimResult = OriginClaimVerdict
 
 /** Same scheme/host/port; false when either side is empty or malformed. */
 function sameOrigin(a: string, b: string): boolean {
@@ -672,20 +673,27 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // (0.6.15: the rule now lives in a2aCallerRefusal so the
           // read-only /a2a/log face admits callers by exactly the same
           // standard as message delivery.)
-          // F1: only a FOREIGN CLI handle needs a bound host claim and live home card
-          // before admission. Every other caller keeps the existing admission-first order.
+          // Complete present-envelope validation before evaluating request admission.
+          // The fully absent-envelope migration policy remains independent.
           const foreignCli = config.teamScopeRouting && CLI_HANDLE_RE.test(caller) && cliDeposits.get(caller) === undefined
-          const hasQualified = canvasStore.list().some(name => canvasStore.membersOf(name).some(ref => /@[0-9a-f]{8}$/.test(ref)))
-          const earlyClaim = foreignCli || hasQualified ? await verifyOriginClaim(req, { cli: true, rawBody }) : undefined
+          const envelopePresent=hasOriginClaimFields(req)
+          const earlyClaim: OriginClaimResult = envelopePresent ? await completeInboundVerification(()=>verifyOriginClaim(req, { cli: true, rawBody })) : {ok:false,reason:'absent'}
+          const memberClaim=/^[^/\s]+\/[0-9a-f]{8}(?:@[0-9a-f]{8})?$/.test(caller)||caller===config.team||caller.startsWith(config.team+'/')||canvasStore.list().some(name=>canvasStore.rawMembersOf(name).some(ref=>ref===caller||ref.startsWith(caller+'@')))||String(req.headers['x-a2a-caller']??'')===config.team
+          const gate=verifiedInboundAdmission(earlyClaim,envelopePresent,memberClaim,key=>a2aCallerAdmission(caller,team,undefined,key))
+          if(!gate.ok) {
+            recordActivity('in',team,caller,false)
+            const payload=JSON.stringify({error:'untrusted-origin: OriginClaim verification failed ('+gate.reason+')',code:WIRE_ERROR_INBOUND_VERIFICATION,reason:gate.reason,team,task_status:'TASK_STATE_FAILED',delivered:false})
+            res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
+          }
           const cliProof = foreignCli && earlyClaim?.ok ? await remoteCliProof(caller, earlyClaim).catch(() => undefined) : undefined
-          let admission = a2aCallerAdmission(caller, team, cliProof, earlyClaim?.ok ? earlyClaim.card.publicKey : undefined)
+          let admission = foreignCli ? a2aCallerAdmission(caller, team, cliProof, earlyClaim?.ok ? earlyClaim.card.publicKey : undefined) : gate.admission
           // #282 S3 (same team authorizes): a receipt for this host's own forward, to the CLI that sent it, from a
           // receiver frozen at birth on the selected peer's key — the owner's signed canvas is the return path.
           const echoed = !admission.ok && cliDeposits.get(team) !== undefined ? parseReceipt(message) : null
           if (echoed !== null) {
             // Verify first, so an unsigned or Sig2-only caller cannot hold the connection on an in-flight forward (#287 review P3);
             // then a body-bound receipt may beat the dispatch's HTTP answer: wait for this forward's row to be born (#287 P2).
-            const receiptClaim = earlyClaim ?? await verifyOriginClaim(req, { cli: true, rawBody })
+            const receiptClaim = earlyClaim
             if (receiptClaim.ok && receiptClaim.bodyBound === true) await waitForForwardBirth(message)
             const basis = receiptClaim.ok ? d.forwardReceiptBasis(echoed.taskId, caller, team, receiptClaim) : undefined
             if (basis !== undefined) admission = { ok: true, via: 'peer-org', rule: 'peer-org', basis: [basis] }
@@ -710,7 +718,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // after the window closes it rejects like a failed signature —
           // N3 proves a NAME's linkability, never key possession.
           // gh#133: the delivery face is where a deposited CLI identity signs its routes.
-          const claim = earlyClaim ?? await verifyOriginClaim(req, { cli: true, rawBody })
+          const claim = earlyClaim
           if (!claim.ok) {
             if (claim.reason !== 'absent' || config.originClaimWindow === false) {
               recordActivity('in', team, caller, false)
