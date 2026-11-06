@@ -75,7 +75,7 @@ describe('#356 persistent sourced followup admission',()=>{
   const f=setup();f.followup.mockImplementation(message=>f.dispatcher.claimed(f.agent,message.id));f.dispatcher.deliver(f.agent,'text',undefined,undefined,'fast-claim');expect(f.ledger.deliveryFor('fast-claim')?.state).toBe('claimed')
  })
  it('uncertain admission is never blindly replayed after restart',()=>{
-  const f=setup();f.followup.mockImplementation(()=>{throw Error('after-insert observer failure')});expect(()=>f.dispatcher.deliver(f.agent,'text',undefined,undefined,'uncertain')).toThrow();const restored=new TaskLedger(f.file),d=new FollowupDelivery({ledger:restored,taint:vi.fn(),warn:vi.fn()});expect(()=>d.deliver(f.agent,'text',undefined,undefined,'uncertain')).toThrow('uncertain');expect(f.followup).toHaveBeenCalledTimes(1)
+  const f=setup();f.followup.mockImplementation(()=>{throw Error('after-insert observer failure')});expect(()=>f.dispatcher.deliver(f.agent,'text',undefined,undefined,'uncertain')).toThrow();const restored=new TaskLedger(f.file),d=new FollowupDelivery({ledger:restored,taint:vi.fn(),warn:vi.fn()});expect(()=>d.deliver(f.agent,'text',undefined,undefined,'uncertain')).toThrow('接纳状态未知');expect(f.followup).toHaveBeenCalledTimes(1)
  })
  it('pending cancellation uses the exact persisted MessageId through updateQueue remove and does not steer',async()=>{
   const f=setup();f.dispatcher.deliver(f.agent,'text',undefined,undefined,'pending');const row=f.ledger.deliveryFor('pending')!,updateQueue=vi.fn(async()=>({accepted:true}))

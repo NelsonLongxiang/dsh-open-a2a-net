@@ -13,6 +13,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import {FollowupAcceptanceUnknown,ACCEPTANCE_UNKNOWN_NOTE,ACCEPTANCE_INSERTED_NOTE} from '../followup-admission.ts'
 import type WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { A2aPeerCard, A2aRouteResult } from '../types.ts'
 import type { ForwardRequest } from '../direct-forward.ts'
@@ -60,7 +61,7 @@ export type ColdWake =
   | { readonly kind: 'no-match' }
 
 /** routeIntoAgent's settled answer (mirrors index.ts's local union). */
-export type RouteOutcome = { ok: true; reply: string; receiverBookkeeping?:'failed'; status?: string; bridge?: 'native-teams'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; localMiss?: true }
+export type RouteOutcome = { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; status?: string; bridge?: 'native-teams'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown'; localMiss?: true }
 
 interface BridgeTeamsRegistryMirror {
   listTeams(): Array<{ name: string; description: string }>
@@ -143,7 +144,7 @@ export interface WireDeps {
   /** gh#131: the local session one of this host's own `<zone>/<id8>` handles names, if exactly one. */
   readonly localSessionOfHandle: (ref: string) => string | undefined
   readonly cancelQueuedTask: (taskId:string, message:string, sender:string, original?: import('../task-ledger.ts').TaskRecord) => Promise<{removed:boolean;steered:boolean}>
-  readonly followupRelay: (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string, taskExpected?:boolean) => void
+  readonly followupRelay: (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string, taskExpected?:boolean) => 'inserted'|void
   readonly steerRelay: (agent: Agent, text: string, sender?: string) => void
   readonly fromClause: (from: string) => string
   readonly sanitizeFromClause: (from: string) => string
@@ -160,7 +161,7 @@ export interface WireDeps {
   readonly noColdMatchText: (team: string) => string
   readonly nativeTeamsPrepare: (team: string) => Promise<NativePrepared>
   readonly nativeTeamsRound: (prepared: Extract<NativePrepared, { ok: true }>, team: string, caller: string, message: string, taskId: string | undefined, proofClause: string, external?: AbortSignal, proofHeader?: (team: string, taskId: string, from: string, proofClause: string) => string) => Promise<NativeRoundOutcome>
-  readonly routeIntoAgent: (team: string, message: string, caller: string, taskId?: string, proofClause?: string, directHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number) => void, callerKey?: string) => Promise<RouteOutcome>
+  readonly routeIntoAgent: (team: string, message: string, caller: string, taskId?: string, proofClause?: string, directHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number,acceptance?:'inserted'|void) => void, callerKey?: string) => Promise<RouteOutcome>
 }
 
 /**
@@ -760,6 +761,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const payload=JSON.stringify({routed:true,delivered:true,team,task_id:taskId,context_id:contextId,task_status:'TASK_STATE_DELIVERED',receipt:'routed',receiverBookkeeping:'failed',note:ADMITTED_BOOKKEEPING_NOTE})
             res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
           }
+          if(priorDelivery?.state==='reserved'&&priorDelivery.callerKey===(claim.ok?claim.card.publicKey:undefined)&&idempotencyStore.query(taskId,idemFingerprint).found){
+            const payload=JSON.stringify({error:ACCEPTANCE_UNKNOWN_NOTE,acceptance:'unknown',task_id:taskId,task_status:'TASK_STATE_FAILED',code:-32000})
+            res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
+          }
           const idemVerdict = idempotencyStore.claim(taskId, idemFingerprint)
           if (idemVerdict !== 'fresh') {
             const replay = idemVerdict === 'replay'
@@ -842,10 +847,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const result = await d.forwardDirect({ team: typeof body.team === 'string' && ownerQualified.owner !== undefined ? body.team : team, message, caller, taskId, contextId, noWait,
               auth: buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget: caller, receivedAt: admittedAt.at }),
               localCliProof: claim.ok && claim.cli === true && claim.bound && claim.caller === caller, guarded: req.headers['x-a2a-guard'] !== undefined }).catch((error: unknown): A2aRouteResult => ({ ok: false, error: `forwarding unavailable: ${String(error)}`, code: -32000, task_id: taskId }))
-            const failure = result.ok ? '' : await d.diagnoseCanvas(team, original + ' — ' + result.error, claim.ok && claim.cli === true && claim.bound && claim.caller === caller ? caller : undefined)
-            if (!result.ok && result.code !== -32005) idempotencyStore.recordOutcome(taskId, { status: 'failed', error: failure })
+            const failure = result.ok ? '' : result.acceptance==='unknown'?ACCEPTANCE_UNKNOWN_NOTE:await d.diagnoseCanvas(team, original + ' — ' + result.error, claim.ok && claim.cli === true && claim.bound && claim.caller === caller ? caller : undefined)
+            if (!result.ok && result.code !== -32005 && result.acceptance!=='unknown') idempotencyStore.recordOutcome(taskId, { status: 'failed', error: failure })
             else if (result.ok && result.task_status === 'TASK_STATE_COMPLETED') idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: result.reply })
-            const payload = JSON.stringify(result.ok ? { routed: true, ...(result.task_status === 'TASK_STATE_DELIVERED' ? { delivered: true } : { result: { text: result.reply } }), team, task_id: taskId, context_id: contextId, task_status: result.task_status, consumed: result.consumed, bridge: result.bridge, receipt: result.receipt, ...(result.receiverBookkeeping==='failed'?{receiverBookkeeping:'failed',note:ADMITTED_BOOKKEEPING_NOTE}:{}), forwarded: true } : { error: failure, code: result.code ?? -32000, receipt: result.receipt, task_id: taskId, team, task_status: result.code === -32005 ? 'TASK_STATE_DELIVERED' : 'TASK_STATE_FAILED', ...(result.next !== undefined ? { next: result.next } : {}) })
+            const payload = JSON.stringify(result.ok ? { routed: true, ...(result.task_status === 'TASK_STATE_DELIVERED' ? { delivered: true } : { result: { text: result.reply } }), team, task_id: taskId, context_id: contextId, task_status: result.task_status, acceptance:result.acceptance,consumed: result.consumed, bridge: result.bridge, receipt: result.receipt, ...(result.receiverBookkeeping==='failed'?{receiverBookkeeping:'failed',note:ADMITTED_BOOKKEEPING_NOTE}:{}), forwarded: true } : { acceptance:result.acceptance,error: failure, code: result.code ?? -32000, receipt: result.receipt, task_id: taskId, team, task_status: result.code === -32005 ? 'TASK_STATE_DELIVERED' : 'TASK_STATE_FAILED', ...(result.next !== undefined ? { next: result.next } : {}) })
             // #298: only a reply the peer itself declares final (`reply_final`; never a host placeholder, review of
             // #305 F3), handed to the CLI in full, marks that member's later receipt a duplicate — never a delivered,
             // mailbox or bridge shape (F1), and never when the CLI gave up and closed the socket ('finish' does not fire).
@@ -907,7 +912,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 const deliveredReceipt = parseReceipt(message) !== null
                 // gh#141: a receipt is answered by nobody — its steer asks for no receipt back.
                 const receiptRequest = deliveredReceipt ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
-                followupRelay(target, `${directHeader(from)}\n\n${message}${receiptRequest}`, from === 'an unknown node' ? undefined : from, undefined, taskId, claim.ok?claim.card.publicKey:undefined, !deliveredReceipt)
+                const acceptance=followupRelay(target, `${directHeader(from)}\n\n${message}${receiptRequest}`, from === 'an unknown node' ? undefined : from, undefined, taskId, claim.ok?claim.card.publicKey:undefined, !deliveredReceipt)
                 steered = true
                 if(deliveredReceipt&&refusedSettlement===undefined)idempotencyStore.recordOutcome(taskId,{status:'completed',reply:'receipt delivered'})
                 recordActivity('in', team, caller, true)
@@ -930,7 +935,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // zero ledger records for latched activations). Arming is
                 // unconditional now; settlement evidence disarms in the
                 // callback.
-                const consumedProbe = taskLedger.deliveryFor(taskId)?.state === 'claimed'
+                const consumedProbe = acceptance==='inserted'?false:taskLedger.deliveryFor(taskId)?.state === 'claimed'
                 // F5 (settlement integrity): the debt gate — a process-label
                 // caller cannot receive receipts, so this delivery is born
                 // fire-and-forget (receiptExpected:false, answered as
@@ -959,8 +964,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // nothing can pay, and a nudge chasing an answer nobody owes.
                 if (!deliveredReceipt) {
                   taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message), auth, deliveredTo === team ? undefined : deliveredTo, String(target.id), consumedProbe)
-                  armReceiptAutosend(target, taskId, receiptTarget, message, steerFloor)
-                  armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
+                  if(acceptance!=='inserted')armReceiptAutosend(target, taskId, receiptTarget, message, steerFloor)
+                  if(acceptance!=='inserted')armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
                 }
                 const payload = JSON.stringify({
                   routed: true,
@@ -971,6 +976,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                   context_id: contextId,
                   task_status: 'TASK_STATE_DELIVERED',
                   artifacts: [],
+                  ...(acceptance==='inserted'?{acceptance,note:ACCEPTANCE_INSERTED_NOTE}:{}),
                   consumed: consumedProbe,
                   ...(req.headers['x-a2a-guard'] !== undefined ? { delivered_to: deliveredTo } : {}),
                   receipt: receiptExpectation === 'process-label' || deliveredReceipt ? 'none' : 'routed',
@@ -978,6 +984,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
                 res.end(payload)
               } catch (error) {
+                if(error instanceof FollowupAcceptanceUnknown){
+                  const payload=JSON.stringify({error:ACCEPTANCE_UNKNOWN_NOTE,acceptance:'unknown',task_id:taskId,team,task_status:'TASK_STATE_FAILED',code:-32000})
+                  res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
+                }
                 if(error instanceof AdmittedBookkeepingError)steered=true
                 if (!steered) { refuseNoWait(`The DSH session rejected the message: ${String(error)}`); return }
                 if(!(error instanceof AdmittedBookkeepingError))taskLedger.noteAdmittedBookkeepingFailure(error)
@@ -1057,12 +1067,12 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           }
           let syncTarget: string | undefined
           // A forwarded synchronous delivery still owes its automatic receipt after the HTTP waiter expires.
-          const syncSteered = req.headers['x-a2a-guard'] === undefined || parseReceipt(message) !== null ? undefined : (target: Agent, floor: number): void => {
+          const syncSteered = req.headers['x-a2a-guard'] === undefined || parseReceipt(message) !== null ? undefined : (target: Agent, floor: number,acceptance?:'inserted'|void): void => {
             syncTarget = sessionTeamOf(target)
             const receiptTarget = callback !== '' ? callback : caller
             const auth = buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ...(admission.rule === 'remote-ref-cli' && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget, receivedAt: admittedAt.at })
-            try{taskLedger.trackInbound(taskId, team, receiptTarget, contextId, receiptExpectationOf(receiptTarget) !== 'process-label', briefOf(message), auth, syncTarget === team ? undefined : syncTarget, String(target.id), taskLedger.deliveryFor(taskId)?.state==='claimed')}catch(error){taskLedger.noteAdmittedBookkeepingFailure(error);throw new AdmittedBookkeepingError(error)}
-            armReceiptAutosend(target, taskId, receiptTarget, message, floor)
+            try{taskLedger.trackInbound(taskId, team, receiptTarget, contextId, receiptExpectationOf(receiptTarget) !== 'process-label', briefOf(message), auth, syncTarget === team ? undefined : syncTarget, String(target.id), acceptance==='inserted'?false:taskLedger.deliveryFor(taskId)?.state==='claimed')}catch(error){taskLedger.noteAdmittedBookkeepingFailure(error);throw new AdmittedBookkeepingError(error)}
+            if(acceptance!=='inserted')armReceiptAutosend(target, taskId, receiptTarget, message, floor)
           }
           await routeIntoAgent(team, message, caller, taskId, proofClause, directHeader, undefined, syncSteered, claim.ok?claim.card.publicKey:undefined).then(async (outcome) => {
             if(outcome.ok&&outcome.receiverBookkeeping==='failed'){
@@ -1080,9 +1090,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             // settle a node on placeholder text (the exact hazard W7 gap B
             // closed, barred from resurrecting through the outcome ledger).
             if (taskId !== '') {
-              if (!outcome.ok) {
+              if (!outcome.ok&&outcome.acceptance!=='unknown') {
                 idempotencyStore.recordOutcome(taskId, { status: 'failed', error: outcome.error })
-              } else if (outcome.placeholder === true) {
+              } else if (!outcome.ok||outcome.placeholder === true) {
                 // placeholder prose never enters the ledger
               } else if (outcome.status === undefined || outcome.status === 'TASK_STATE_COMPLETED') {
                 idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: outcome.reply })
@@ -1093,6 +1103,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 routed: true,
                 team,
                 session,
+                ...(outcome.acceptance==='inserted'?{acceptance:'inserted',delivered:true,note:ACCEPTANCE_INSERTED_NOTE,consumed:false}:{}),
                 result: { text: outcome.reply },
                 ...(syncTarget !== undefined ? { delivered_to: syncTarget } : {}),
                 // #298: a positive, cross-host statement that this text is the member's own final reply — the turn
@@ -1109,7 +1120,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // row and re-creates the TASK_CAP backlog.
                 ...(outcome.bridge !== undefined ? { bridge: outcome.bridge } : {}),
               })
-              : JSON.stringify({ error: outcome.error, code: -32000, team, task_id: taskId, task_status: 'TASK_STATE_FAILED' })
+              : JSON.stringify({ ...(outcome.acceptance==='unknown'?{acceptance:'unknown'}:{}),error: outcome.error, code: -32000, team, task_id: taskId, task_status: 'TASK_STATE_FAILED' })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
           })

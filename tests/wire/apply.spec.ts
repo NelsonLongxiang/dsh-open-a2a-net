@@ -2689,7 +2689,7 @@ describe('a2a removal-regression edges', () => {
     await ctx.fiber.dispose()
   })
 
-  it('answers a steer rejection from the direct endpoint with the failure text', async () => {
+  it('reports unproved followup rejection as acceptance unknown without asserting insertion', async () => {
     const { ctx, agents, port } = await mountJoinHarness()
     const session = makeAgent()
     session.steer = vi.fn(() => { throw new Error('inbox closed') })
@@ -2699,7 +2699,7 @@ describe('a2a removal-regression edges', () => {
       method: 'POST',
       body: JSON.stringify({ team: 'dsh', message: 'q' }),
     })
-    await expect(response.json()).resolves.toMatchObject({ error: 'The DSH session rejected the message: Error: inbox closed' })
+    await expect(response.json()).resolves.toMatchObject({ error:'接纳状态未知，请用原 task id 对账，不要换 id 重派',acceptance:'unknown' })
     await ctx.fiber.dispose()
   })
 })
