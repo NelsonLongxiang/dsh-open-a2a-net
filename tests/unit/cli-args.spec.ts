@@ -424,6 +424,40 @@ describe('a2a-net CLI: inbox unread cursor', () => {
   })
 })
 
+describe('a2a-net CLI: inbox --after (superagent p1)', () => {
+  it('refuses a host without seq numbering instead of falling back to time', async () => {
+    const host = await mailHost()
+    const HOME = await scoutHome()
+    host.mail.push({ at: 1000, from: 'cargo/22222222', text: 'old host' })
+    const out = await runCli(['inbox', '--after', 'start'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url })
+    expect(out.code).toBe(1)
+    expect(out.stderr).toContain('gh#113')
+    expect(out.stdout).toBe('')
+  })
+
+  it('with nothing new but mail pushed out, reports the loss once and moves next to oldest_seq - 1', async () => {
+    const box = { ok: true, epoch: 'e1', oldest_seq: 10, next_seq: 74, dropped: 9, mail: [] as Array<{ at: number; from: string; text: string; seq: number }> }
+    for (let seq = 73; seq >= 10; seq -= 1) box.mail.push({ at: seq, from: 'cargo/22222222', text: `m${String(seq)}`, seq })
+    const host = await stubHost((path) => path === '/__dsh_a2a/cli-deposit' ? { status: 200, body: box } : { status: 404, body: {} })
+    servers.push(host.server)
+    const HOME = await scoutHome()
+    const env = { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url }
+    const caught = JSON.parse((await runCli(['inbox', '--after', 'e1:73'], env)).stdout) as { mail: unknown[]; lost: number; next: string }
+    expect(caught).toMatchObject({ mail: [], lost: 0, next: 'e1:73' })
+    // A first read of a mailbox that already overflowed: seq 1..9 are gone before this reader ever looked.
+    const start = JSON.parse((await runCli(['inbox', '--after', 'start'], env)).stdout) as { mail: Array<{ seq: number }>; lost: number; next: string }
+    expect(start).toMatchObject({ lost: 9, next: 'e1:73' })
+    expect(start.mail.map(m => m.seq).slice(0, 2)).toEqual([10, 11])
+    const behind = JSON.parse((await runCli(['inbox', '--after', 'e1:5'], env)).stdout) as { mail: Array<{ seq: number }>; lost: number; next: string }
+    expect(behind.lost).toBe(4)
+    expect(behind.mail[0].seq).toBe(10)
+    expect(behind.next).toBe('e1:73')
+    box.mail.length = 0
+    expect(JSON.parse((await runCli(['inbox', '--after', 'e1:5'], env)).stdout)).toMatchObject({ mail: [], lost: 4, next: 'e1:9' })
+    expect(existsSync(join(HOME, 'inbox.cursor'))).toBe(false)
+  })
+})
+
 describe('a2a-net CLI: inbox --hook', () => {
   it('prints nothing without unread mail; with mail, one hookSpecificOutput object for the calling event, framed as data', async () => {
     const host = await mailHost()
