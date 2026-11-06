@@ -4,6 +4,6 @@
 
 native-teams 使用原有权威 round 的 settled/bridge 语义，不在本变更引入 Agent 归属判断；未 settled 的 round 仍明确 bridge 且不承诺本片段 A2A receipt。CLI mailbox 是完整邮件的接纳确认，不是 Agent final；原 mailbox 路径保持原语义，不由普通 COMPLETED 文本冒充阅读轮 final。普通转发节点不得把缺 reply_final 的 session COMPLETED 回答当已付。
 
-HTTP waiter 的窗口只结束 HTTP 答复。自动 receipt 用途沿原 FinalWaiter 保存消费 floor 与既有阅读轮归属，等待原任务终态/取消/原 TTL 或插件卸载清理；不会靠调大全局 flushTimeout 来延长所有 HTTP 等待，不给 placeholder 或未消费消息合成正式回执，不新增任务生命周期状态。
+HTTP waiter 的窗口只结束 HTTP 答复。自动 receipt 用途沿原 FinalWaiter 保存消费 floor 与既有阅读轮归属，等待原任务终态/取消/原 TTL 或插件卸载清理；不会靠调大全局 flushTimeout 来延长所有 HTTP 等待，不给 placeholder 或未消费消息合成正式回执，不新增任务生命周期状态。HTTP 超时不是读取轮结束；真实读取轮若已经闭合为空/失败，则没有后续可归属的 final，立即移除该 receipt waiter 并清其 timer，债务仍留存等本人对账，不留永久闭合的运行时占位。
 
 本候选只修完成编码与等待寿命；followup 泛化 throw 后接纳未知、#369 已覆盖出生提交失败/重入 final、自动补出生、跨重启恢复 retry 定时器、验证器 meta R3 均不混入。高档 exact 非作者 PASS 后报全局，回复才能合并；不 tag/publish/部署。

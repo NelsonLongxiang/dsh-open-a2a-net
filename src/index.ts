@@ -2222,6 +2222,11 @@ export function apply(ctx: Context, config: Config): void {
     // target produced after consuming `[A2A direct] (task <id>)` answers it
     // (flushFinals). A busy target's other work line can no longer settle
     // a task it has not read yet (the #61 direct-bb27ec94 shape).
+    // Defensive only: no current normal replay/reentry path reaches a second
+    // registration. Both wire sites follow the idempotency claim; local tools
+    // mint an id per call, background notices mint one, and receipt retries keep
+    // their id but exit above (receipts owe no receipts). No present-path mutation
+    // coverage claim: this check guards future/internal callers, not replay admission.
     if((pendingFinals.get(String(target.id))??[]).some(entry=>entry.purpose==='receipt'&&entry.taskId===taskId))return
     registerFinalWaiter(target, (finalText, placeholder) => {
       // W7 slice-2: a host-authored placeholder (flush timeout, dead
@@ -4504,8 +4509,6 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     consumedAt?: number
     /** #114 S5: events below this index were already searched for the consumption. */
     scannedTo?: number
-    /** Preserve the existing reading-turn verdict; a later turn cannot answer a closed empty/aborted reading. */
-    readingClosed?:true
     timeoutDisposer?: () => void
   }
   const pendingFinals = new Map<string, FinalWaiter[]>()
@@ -4567,7 +4570,6 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // turn; a log without any marker falls back to "this idle ends it".
     const turnMarked = events.some(event => event?.type === 'turn/start' || event?.type === 'turn/end')
     for (const entry of entries) {
-      if(entry.purpose==='receipt'&&entry.readingClosed===true)continue
       if (entry.taskId !== undefined) {
         entry.consumedAt ??= consumptionIndex(events, entry.taskId, entry.scannedTo ?? entry.sinceEvents)
         if (entry.consumedAt === undefined) {
@@ -4591,7 +4593,9 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     }
     if (answered.length === 0) return
     for (const { entry, reply, placeholder } of answered) {
-      if(entry.purpose==='receipt'&&placeholder===true){entry.readingClosed=true;continue}
+      // A closed empty/failed reading has no later attributable final: remove it,
+      // invoke the existing placeholder no-op, and dispose its timer. HTTP expiry
+      // itself does not enter this receipt path (receipt uses the original TTL).
       // Remove one callback before invoking (it may synchronously re-enter), never the whole batch.
       const current = pendingFinals.get(agentId) ?? []
       if (!current.includes(entry)) continue

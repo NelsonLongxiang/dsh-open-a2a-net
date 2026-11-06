@@ -93,3 +93,14 @@ it('forwarded synchronous replay after HTTP timeout does not redeliver or duplic
   f.finish('sync-replay');await vi.waitFor(async()=>expect((await state(f.a)).archived.filter((r:any)=>r.taskId==='sync-replay')).toHaveLength(1));expect(f.queued.filter(m=>m.source.taskId==='sync-replay')).toHaveLength(1)
  }finally{await f.dispose()}
 })
+it.each(['aborted','textless'] as const)('a closed %s reading immediately disposes its receipt waiter without sending or adopting another turn',async mode=>{
+ const f=await fixture();try{
+  const task='sync-closed-'+mode,pending=f.send(task);await vi.waitFor(()=>expect(f.queued).toHaveLength(1));await vi.waitFor(()=>expect(f.timeouts.some(x=>x.delay>50000)).toBe(true))
+  const timer=f.timeouts.find(x=>x.delay>50000)!;expect(timer.dispose).not.toHaveBeenCalled()
+  f.finish(task,mode==='textless'?'':'unfinished',mode==='textless'?'completed':'aborted')
+  const reply=await pending;expect(reply).toMatchObject({task_status:'TASK_STATE_DELIVERED',receipt:'routed'});expect(reply.reply_final).toBeUndefined();expect(timer.dispose).toHaveBeenCalledTimes(1)
+  ;(f.b.agents.agent!.session as any).events.push({type:'turn/start'},{type:'user/message',data:{content:[{type:'text',text:'unrelated input'}]}},{type:'assistant/message',data:{message:{content:[{type:'text',text:'later unrelated final'}]}}},{type:'turn/end',data:{reason:{kind:'completed'}}})
+  f.b.ctx.emit('agent/status',{agent:f.b.agents.agent!,status:'idle'});await Promise.resolve()
+  expect((await state(f.a)).archived).toEqual([]);expect((await state(f.b)).archived).toEqual([]);expect((await state(f.a)).tasks.find((r:any)=>r.taskId===task)).toMatchObject({receiptExpected:true,status:'pending'});expect(timer.dispose).toHaveBeenCalledTimes(1)
+ }finally{await f.dispose()}
+})
