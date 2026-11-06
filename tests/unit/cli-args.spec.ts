@@ -67,6 +67,16 @@ afterEach(async () => {
 })
 
 describe('a2a-net CLI: exit codes and help', () => {
+  it('status displays safe persistence and escalation observations in text and JSON and clears recovered failure',async()=>{
+    let failure=true
+    const host=await stubHost(path=>({status:200,body:path.includes('cli-deposit')?{ok:true,deposits:[]}:{version:'test',peers:[],ledgerPersistence:failure?{ok:false,lastError:{at:123,code:'EACCES',message:'private detail',path:'private path'}}:{ok:true},nudgeEscalations:{queued:2,unavailable:1,failed:3,lastAt:456,lastError:'ETIMEDOUT',body:'private prompt'}}}))
+    servers.push(host.server);const HOME=tmpHomeDir(),env={HOME,A2A_CLI_HOME:HOME};expect((await runCli(['init','status-test'],env)).code).toBe(0)
+    const text=await runCli(['status','--home',host.url],env);expect(text.code,text.stderr).toBe(0);expect(text.stdout).toContain('ledger      !!! FAILED !!! at=123 code=EACCES');expect(text.stdout).toContain('queued=2 unavailable=1 failed=3 lastAt=456 code=ETIMEDOUT');expect(text.stdout).not.toContain('private')
+    const json=await runCli(['status','--json','--home',host.url],env);expect(json.code,json.stderr).toBe(0);const snapshot=JSON.parse(json.stdout)
+    expect(snapshot.ledgerPersistence).toEqual({ok:false,lastError:{at:123,code:'EACCES'}});expect(snapshot.nudgeEscalations).toEqual({queued:2,unavailable:1,failed:3,lastAt:456,lastError:'ETIMEDOUT'});expect(json.stdout).not.toContain('private')
+    failure=false;const healthy=await runCli(['status','--home',host.url],env);expect(healthy.stdout).toContain('ledger      ok');expect(healthy.stdout).not.toContain('!!! FAILED !!!');expect(JSON.parse((await runCli(['status','--json','--home',host.url],env)).stdout).ledgerPersistence).toEqual({ok:true})
+  })
+
   it('no command and an unknown command are usage errors (exit 2); help exits 0 on stdout', async () => {
     const HOME = tmpHomeDir()
     const empty = await runCli([], { HOME, A2A_CLI_HOME: HOME })

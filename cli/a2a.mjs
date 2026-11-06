@@ -1033,6 +1033,14 @@ async function main() {
   if (cmd === 'status') {
     const s = await state()
     const list = await control({ action: 'list' })
+    const safeCode=value=>typeof value==='string'&&['EACCES','EPERM','EBUSY','ENOSPC','ENOENT','EIO','EROFS','EMFILE','ENFILE','ETIMEDOUT','ECONNRESET','ECONNREFUSED','ABORT_ERR','LEDGER_WRITE_FAILED','NUDGE_QUEUE_FAILED','PROMPT_UNAVAILABLE'].includes(value)?value:'UNKNOWN_ERROR'
+    const time=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0?value:undefined
+    const ledgerPersistence=s.ledgerPersistence&&typeof s.ledgerPersistence.ok==='boolean'?{ok:s.ledgerPersistence.ok,...(!s.ledgerPersistence.ok&&s.ledgerPersistence.lastError?{lastError:{at:time(s.ledgerPersistence.lastError.at),code:safeCode(s.ledgerPersistence.lastError.code)}}:{})}:undefined
+    const n=s.nudgeEscalations
+    const nudgeEscalations=n?{queued:Number.isSafeInteger(n.queued)&&n.queued>=0?n.queued:0,unavailable:Number.isSafeInteger(n.unavailable)&&n.unavailable>=0?n.unavailable:0,failed:Number.isSafeInteger(n.failed)&&n.failed>=0?n.failed:0,...(time(n.lastAt)===undefined?{}:{lastAt:n.lastAt}),...(n.lastError?{lastError:safeCode(n.lastError)}:{})}:undefined
+    if(has('--json')){const {ledgerPersistence:_lp,nudgeEscalations:_ne,...snapshot}=s;console.log(JSON.stringify({...snapshot,...(ledgerPersistence?{ledgerPersistence}:{}),...(nudgeEscalations?{nudgeEscalations}:{}),deposit:list},null,2));return}
+    if(ledgerPersistence)console.log(`ledger      ${ledgerPersistence.ok?'ok':'!!! FAILED !!!'}${ledgerPersistence.lastError?` at=${String(ledgerPersistence.lastError.at??'?')} code=${ledgerPersistence.lastError.code}`:''}`)
+    if(nudgeEscalations)console.log(`nudges      queued=${nudgeEscalations.queued} unavailable=${nudgeEscalations.unavailable} failed=${nudgeEscalations.failed}${nudgeEscalations.lastAt===undefined?'':` lastAt=${nudgeEscalations.lastAt}`}${nudgeEscalations.lastError?` code=${nudgeEscalations.lastError}`:''}`)
     const reminders=(s.tasks??[]).filter(t=>t.reminderAttempts!==undefined)
     if(reminders.length)console.log(`reconcile   ${reminders.length} task(s) reminded; ${reminders.filter(t=>t.repeatedlyUnreconciled).length} 多次提醒未对账; wait for target reconciliation, no automatic settlement`)
     console.log(`host        ${home()}  version=${String(s.version ?? '?')}  peers=${String((s.peers ?? []).length)}`)

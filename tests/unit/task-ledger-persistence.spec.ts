@@ -20,6 +20,15 @@ const path=()=>join(mkdtempSync(join(tmpdir(),'ledger-atomic-')),'tasks.json')
 beforeEach(()=>{fault.mode='';fault.writes=[];fault.renameCodes=[]})
 afterEach(()=>{fault.mode='';vi.restoreAllMocks()})
 describe('task ledger atomic commit errors',()=>{
+ it('warns once on persistence failure transition with only time and safe code, and rearms after recovery',()=>{
+  const warn=vi.fn(),ledger=new TaskLedger(path(),{warn,now:()=>123})
+  fault.mode='rename';expect(()=>ledger.track('first','dsh','local')).toThrow();expect(ledger.persistenceState()).toEqual({ok:false,lastError:{at:123,code:'EACCES'}})
+  expect(warn).toHaveBeenCalledTimes(1);expect(warn.mock.calls[0][0]).toBe('a2a: ledgerPersistence FAILED at=123 code=EACCES')
+  expect(()=>ledger.track('again','dsh','local')).toThrow();expect(warn).toHaveBeenCalledTimes(1)
+  fault.mode='';ledger.track('repaired','dsh','local');expect(ledger.persistenceState()).toEqual({ok:true})
+  fault.mode='rename';expect(()=>ledger.track('next','dsh','local')).toThrow();expect(warn).toHaveBeenCalledTimes(2)
+ })
+
  for(const code of ['EBUSY','EPERM'])it('retries two transient '+code+' renames with one temp file and commits',()=>{
   const file=path(),ledger=new TaskLedger(file),wait=vi.spyOn(Atomics,'wait').mockReturnValue('timed-out')
   fault.renameCodes=[code,code];ledger.track('retry-ok','dsh','local')
