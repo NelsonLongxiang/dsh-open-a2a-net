@@ -17,6 +17,37 @@ async function fixture(race=false){
  return{n,agent,queued,removed,steered,deliver}
 }
 describe('#356 actual HTTP queue admission and cancellation',()=>{
+ it('claimed target disappearing cannot block local caller bookkeeping cancellation',async()=>{
+  const f=await fixture();try{
+   await f.deliver('gone-target');const message=f.queued.shift();f.n.ctx.emit('agent/inbox/claimed',{agent:f.agent,message,turn:1})
+   f.n.ctx.emit('agent/disposed',{agent:f.agent});f.n.agents.agent=undefined
+   const result=await post(f.n,'/__dsh_a2a/tasks/cancel',{task_id:'gone-target'})
+   expect(result).toMatchObject({outcome:'cleared',removed:false,steered:false});expect((await state(f.n)).tasks).toEqual([]);expect(f.steered).toEqual([])
+  }finally{await f.n.dispose()}
+ })
+ it('queue removal failure is best-effort after caller debt cancellation, not a new cancellation refusal',async()=>{
+  const f=await fixture();try{
+   let committedBeforeNotify=false
+   await f.deliver('remove-failure');f.n.ctx.set('sessionController',{updateQueue:async()=>{const disk=JSON.parse(readFileSync(join(f.n.home,'a2a/tasks.json'),'utf8'));committedBeforeNotify=!disk.tasks.some((r:any)=>r.taskId==='remove-failure')&&disk.archived.some((r:any)=>r.taskId==='remove-failure');throw Error('unavailable')}} as never)
+   const result=await post(f.n,'/__dsh_a2a/tasks/cancel',{task_id:'remove-failure'});expect(result).toMatchObject({outcome:'cleared',removed:false,steered:false})
+   expect(committedBeforeNotify).toBe(true);expect((await state(f.n)).tasks).toEqual([]);expect(f.queued).toHaveLength(1)
+  }finally{await f.n.dispose()}
+ })
+ it('synchronous HTTP routeIntoAgent queues sourced followup, never steers, and returns only its consuming-turn final',async()=>{
+  const f=await fixture(),abort=new AbortController();let pending:Promise<any>|undefined
+  try{
+   const task='sync-followup-path'
+   pending=fetch(f.n.baseUrl+'/a2a/direct',{method:'POST',headers:{'Content-Type':'application/json'},signal:abort.signal,body:JSON.stringify({team:'alpha/01234567',caller_session:'beta/aaaaaaaa',task_id:task,message:'sync next-turn work',wait:true})}).then(r=>r.json())
+   void pending.catch(()=>{}) // A failed transport mutation must not leave a second unhandled test promise.
+   await vi.waitFor(()=>expect(f.queued).toHaveLength(1));expect(f.steered).toEqual([])
+   const message=f.queued[0];expect(message.source).toMatchObject({kind:'a2a-relay',form:'relay',taskId:task,senderSessionId:'beta/aaaaaaaa'})
+   const events=(f.agent.session as any).events
+   events.push({type:'turn/start'},{type:'user/message',data:{content:message.content}},{type:'assistant/message',data:{message:{content:[{type:'text',text:'own consuming turn completed'}]}}},{type:'turn/end',data:{reason:{kind:'completed'}}})
+   f.n.ctx.emit('agent/inbox/claimed',{agent:f.agent,message,turn:1});f.n.ctx.emit('agent/status',{agent:f.agent,status:'idle'})
+   const reply=await pending;expect(reply).toMatchObject({routed:true,result:{text:'own consuming turn completed'}});expect(f.steered).toEqual([])
+  }finally{abort.abort();await pending?.catch(()=>{});await f.n.dispose()}
+ })
+
  it('idle reminders and local sender notices both use sourced followup and never steer',async()=>{
   const n=await bootNode({name:'notice-followup',session:'notice-followup',team:'alpha',silent:true,sessionNodes:true,teamScopeRouting:false,asyncNudgeDelayMs:86400000}),first=n.agents.agent!,targetId='session-bbbbbbbb11112222',followed:any[]=[],notices:any[]=[],steer=vi.fn()
   const target={id:targetId,session:{events:[]},status:'running',followup:(m:any)=>followed.push(m),steer} as any

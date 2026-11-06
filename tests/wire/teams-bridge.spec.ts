@@ -500,8 +500,8 @@ describe('outbound face: idempotency verdicts and cancel', () => {
     expect(peer.seen).toHaveLength(1)
   })
 
-  it('cancel of a remote submission drives the wire stop-notice to the team and clears the row', async () => {
-    const peer = await startPeer({ asyncCap: true,cancelCap:true })
+  it.each([false,true])('cancel of a remote submission clears the row and sends best-effort notice (queued capability=%s)', async cancelCap => {
+    const peer = await startPeer({ asyncCap: true,cancelCap })
     const m = await mount({ peers: [peer.url] })
     mounted.push(async () => { await m.dispose(); await peer.close() })
     const face = m.face() as { submit: (request: Record<string, unknown>) => Promise<Record<string, unknown>>; cancel: (ref: { taskId?: string }, reason?: string) => Promise<boolean> }
@@ -516,7 +516,7 @@ describe('outbound face: idempotency verdicts and cancel', () => {
     // claimed at the peer's idempotency ledger with a different payload, so
     // reusing it would 409-conflict before any steer happens.
     expect(notice?.task_id).toBeUndefined()
-    expect(notice?.cancel_task_id).toBe('wb-z')
+    expect(notice?.cancel_task_id).toBe(cancelCap?'wb-z':undefined)
     const state = await (await fetch(`http://127.0.0.1:${String(m.port)}/__dsh_a2a/state`)).json() as { tasks: Array<{ taskId: string }> }
     expect(state.tasks.map(task => task.taskId)).not.toContain('wb-z')
   })

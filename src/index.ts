@@ -1999,14 +1999,14 @@ export function apply(ctx: Context, config: Config): void {
     return followupDelivery.withdraw(taskId,controller,id=>ctx.get('agents')?.get(SessionId(id)))
   }
 
-  const cancelQueuedTask = async(taskId:string,text:string,sender:string): Promise<boolean> => {
+  const cancelQueuedTask = async(taskId:string,text:string,sender:string,original?: import('./task-ledger.ts').TaskRecord): Promise<{removed:boolean;steered:boolean}> => {
     const record=taskLedger.deliveryFor(taskId)
     const withdrawal=await withdrawQueuedTask(taskId)
-    if(withdrawal==='removed')return true
-    const row=taskLedger.find(taskId)
+    if(withdrawal==='removed')return {removed:true,steered:false}
+    const row=original??taskLedger.find(taskId)
     const agent=record ? ctx.get('agents')?.get(SessionId(record.sessionId)) : row ? (resolveAgentForTeam(row.deliveredTo??row.team)??canvasLiveAgent(parseCanvasTeamName(row.team))) : undefined
-    if(!agent)throw Error('original cancellation target unavailable')
-    steerRelay(agent,text,sender);return false
+    if(!agent)return {removed:false,steered:false}
+    steerRelay(agent,text,sender);return {removed:false,steered:true}
   }
 
   function steerRelay(agent: Agent, text: string, sender?: string, localFrom?: string): void {
@@ -2904,20 +2904,20 @@ export function apply(ctx: Context, config: Config): void {
           const taskId = typeof fields.task_id === 'string' ? fields.task_id : ''
           const reason = typeof fields.reason === 'string' ? fields.reason : undefined
           const row=taskLedger.find(taskId)
+          const result=taskLedger.cancel(taskId,reason)
           let removed=false,steered=false
-          if(row) {
+          try { if(row && result.outcome==='cleared') {
             const notice=cancelNoticeText(taskId,reason)
             if(row.peer==='local'||row.direction==='inbound') {
-              removed=await cancelQueuedTask(taskId,notice,session)
-              steered=!removed
+              const notification=await cancelQueuedTask(taskId,notice,session,row)
+              removed=notification.removed;steered=notification.steered
             } else {
               const card=await cachedCardFetch(row.peer)
-              if((card?.capabilities as {queuedTaskCancellation?:boolean})?.queuedTaskCancellation!==true)throw Error('peer needs queued task cancellation capability; cancellation was not confirmed')
-              const result=await client.routeDirect(row.peer,row.team,notice,undefined,undefined,row.sender?.kind==='session'?row.sender.id:row.auth?.caller??session,true,undefined,undefined,undefined,taskId)
+              const supportsQueuedCancel=(card?.capabilities as {queuedTaskCancellation?:boolean})?.queuedTaskCancellation===true
+              const result=await client.routeDirect(row.peer,row.team,notice,undefined,undefined,supportsQueuedCancel?(row.sender?.kind==='session'?row.sender.id:row.auth?.caller??session):session,true,undefined,undefined,undefined,supportsQueuedCancel?taskId:undefined)
               if(!result.ok)throw Error('remote queued cancellation was not confirmed')
             }
-          }
-          const result=taskLedger.cancel(taskId,reason)
+          }} catch(error) {logger.warn('a2a: cancellation committed; stop notice was best-effort: %s',String(error))}
           const payload = JSON.stringify({ ...result, steered, removed })
           res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
           res.end(payload)
@@ -4404,49 +4404,24 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       return undefined
     },
     cancel: async (ref, reason) => {
-      const taskId = ref.taskId
-      if (taskId === undefined || taskId === '') return false
-      const row = taskLedger.list().find(entry => entry.taskId === taskId)
-      if (row === undefined) return false
-      const notice = cancelNoticeText(taskId, reason)
-      if (row.peer === 'local') {
-        const record=taskLedger.deliveryFor(taskId)
-        if(record) {await cancelQueuedTask(taskId,notice,session);return taskLedger.cancel(taskId,reason).outcome==='cleared'}
-        const withdrawal=await withdrawQueuedTask(taskId)
-        if(withdrawal==='removed')return taskLedger.cancel(taskId,reason).outcome==='cleared'
-        // Mirror the tasks/cancel control route: the cooperative stop-notice
-        // steers the live local target, not just the ledger row. The target
-        // resolution spans every kind the dispatcher can book — session
-        // node, canvas team, bare process team — a row's team is whatever
-        // the dispatch accepted, so the cancel must accept the same set.
-        const live = resolveAgentForTeam(row.team)
-          ?? canvasLiveAgent(parseCanvasTeamName(row.team))
-          ?? (row.team === config.team ? liveAgent() : undefined)
-        if (live !== undefined) {
-          try {
-            steerRelay(live, notice)
-          } catch {
-            // Bookkeeping below settles regardless; steering is best-effort.
-          }
+      const taskId=ref.taskId
+      if(!taskId)return false
+      const row=taskLedger.list().find(entry=>entry.taskId===taskId)
+      if(!row)return false
+      // Caller bookkeeping has priority. Notification compatibility never gates cancellation.
+      const cleared=taskLedger.cancel(taskId,reason).outcome==='cleared'
+      if(!cleared)return false
+      try {
+        const notice=cancelNoticeText(taskId,reason)
+        if(row.peer==='local'||row.direction==='inbound')await cancelQueuedTask(taskId,notice,session,row)
+        else {
+          const card=await cachedCardFetch(row.peer)
+          const supportsQueuedCancel=(card?.capabilities as {queuedTaskCancellation?:boolean})?.queuedTaskCancellation===true
+          const result=await client.routeDirect(row.peer,row.team,notice,undefined,undefined,supportsQueuedCancel?(row.sender?.kind==='session'?row.sender.id:row.auth?.caller??session):session,true,undefined,undefined,undefined,supportsQueuedCancel?taskId:undefined)
+          if(!result.ok)throw Error(result.error)
         }
-      } else {
-        // Peers do NOT track inbound task ids (the owed ledger's writer runs
-        // on the dispatcher side), so the peer's ledger-cancel route would
-        // deterministically answer 'unknown'. Drive the stop-notice through
-        // the wire to the team itself instead. The notice deliberately
-        // carries NO task_id: the original id is already claimed at the
-        // peer's idempotency ledger with a different payload, so reusing it
-        // would 409-conflict before any steer happens (a bodyless key is
-        // always fresh there). The original id rides the notice text.
-        const card=await cachedCardFetch(row.peer)
-        if((card?.capabilities as {queuedTaskCancellation?:boolean})?.queuedTaskCancellation!==true)throw Error('peer needs queued task cancellation capability; cancellation was not confirmed')
-        const result = await client.routeDirect(row.peer, row.team, notice, undefined, undefined, row.sender?.kind==='session'?row.sender.id:row.auth?.caller??session, true, undefined, undefined, undefined, taskId)
-        if (!result.ok) {
-          logger.warn(`a2a: cancel stop-notice for task ${taskId} failed to deliver to ${row.team}: ${result.error}`)
-          return false
-        }
-      }
-      return taskLedger.cancel(taskId, reason).outcome === 'cleared'
+      } catch(error) {logger.warn('a2a: cancellation committed; stop notice was best-effort: %s',String(error))}
+      return true
     },
   }
   ctx.reflect.provide(NATIVE_TEAMS_A2A_FACE_KEY, bridgeFace)

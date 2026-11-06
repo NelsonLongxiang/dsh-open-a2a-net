@@ -139,7 +139,7 @@ export interface WireDeps {
   readonly sessionTeamOf: (agent: Agent) => string
   /** gh#131: the local session one of this host's own `<zone>/<id8>` handles names, if exactly one. */
   readonly localSessionOfHandle: (ref: string) => string | undefined
-  readonly cancelQueuedTask: (taskId:string, message:string, sender:string) => Promise<boolean>
+  readonly cancelQueuedTask: (taskId:string, message:string, sender:string, original?: import('../task-ledger.ts').TaskRecord) => Promise<{removed:boolean;steered:boolean}>
   readonly followupRelay: (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string) => void
   readonly steerRelay: (agent: Agent, text: string, sender?: string) => void
   readonly fromClause: (from: string) => string
@@ -759,9 +759,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const original=taskLedger.find(cancelledId),originalClaim=original?.auth?.claim
             const allowed=claim.ok&&claim.bodyBound===true&&callerProof==='origin-claim'&&original?.direction==='inbound'&&original.auth?.caller===caller&&originalClaim?.caller===claim.caller&&originalClaim.origin===originOf(claim.callerUrl)&&taskLedger.deliveryFor(cancelledId)?.callerKey===claim.card.publicKey
             if(!allowed) {res.writeHead(403,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'cancellation does not match the original authenticated caller',task_status:'TASK_STATE_FAILED'}));return}
-            const removed=await cancelQueuedTask(cancelledId,message,caller)
             taskLedger.cancel(cancelledId,'authenticated caller stop notice')
-            const payload=JSON.stringify({routed:true,delivered:true,removed,receipt:'none',team,task_id:taskId,task_status:'TASK_STATE_COMPLETED',result:{text:'cancellation admitted for original task'}})
+            let removed=false,steered=false
+            try {const notification=await cancelQueuedTask(cancelledId,message,caller,original);removed=notification.removed;steered=notification.steered}catch(error){logger.warn('a2a: cancellation committed; stop notice was best-effort: %s',String(error))}
+            const payload=JSON.stringify({routed:true,delivered:true,removed,steered,receipt:'none',team,task_id:taskId,task_status:'TASK_STATE_COMPLETED',result:{text:'cancellation admitted for original task'}})
             res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
           }
           if (refuseIfFlooded(caller, message, team, taskId, res)) return

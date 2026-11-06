@@ -41,7 +41,7 @@ export class FollowupDelivery {
     const record=this.d.ledger.deliveryFor(taskId)
     if(!record)return 'legacy'
     if(record.state==='cancelled')return 'removed'
-    if(record.state==='claimed') {if(!resolve(record.sessionId))throw Error('claimed target Agent is unavailable; stop notice not confirmed');return 'claimed'}
+    if(record.state==='claimed')return 'claimed'
     if(typeof controller?.updateQueue!=='function')throw Error('SessionController.updateQueue unavailable; queued cancellation refused')
     try {
       await controller.updateQueue({sessionId:SessionId(record.sessionId),itemId:MessageId(record.messageId),action:{kind:'remove'}})
