@@ -69,6 +69,19 @@ export interface CliMail {
    * HTTP answer, so this copy is a duplicate. Kept in full (never dropped); readers may fold it.
    */
   readonly dup?: 'sync-answered'
+  /**
+   * superagent p1-context-read: the delivery's task and conversation, as the host saw them —
+   * `a2a thread <context_id>` reads a conversation back from these. Absent on rows mailed
+   * before the field existed, and on deliveries that carried none.
+   */
+  readonly task_id?: string
+  readonly context_id?: string
+}
+
+/** p1-context-read: the task and conversation a mailbox delivery belongs to (empty strings are dropped). */
+export interface CliMailThread {
+  readonly taskId?: string
+  readonly contextId?: string
 }
 
 /** gh#113: one mailbox read — the rows plus what a reader needs to notice loss. */
@@ -219,13 +232,14 @@ export class CliDepositStore {
     }))
   }
 
-  mail(handle: string, from: string, text: string, dup?: 'sync-answered'): void {
+  mail(handle: string, from: string, text: string, dup?: 'sync-answered', thread?: CliMailThread): void {
     const list = this.mailbox.get(handle) ?? []
     const seq = this.nextSeq.get(handle) ?? 1
     this.nextSeq.set(handle, seq + 1)
     const cut = text.length > MAILBOX_TEXT_CAP
     if (cut) this.truncated.set(handle, (this.truncated.get(handle) ?? 0) + 1)
-    list.unshift({ at: this.now(), from, text: cut ? text.slice(0, MAILBOX_TEXT_CAP) : text, seq, ...(cut ? { truncated: true as const, chars: text.length } : {}), ...(dup !== undefined ? { dup } : {}) })
+    list.unshift({ at: this.now(), from, text: cut ? text.slice(0, MAILBOX_TEXT_CAP) : text, seq, ...(cut ? { truncated: true as const, chars: text.length } : {}), ...(dup !== undefined ? { dup } : {}),
+      ...(thread?.taskId ? { task_id: thread.taskId } : {}), ...(thread?.contextId ? { context_id: thread.contextId } : {}) })
     // gh#113: the cap still holds, but what it pushes out is counted, not lost silently.
     if (list.length > MAILBOX_CAP) this.dropped.set(handle, (this.dropped.get(handle) ?? 0) + list.length - MAILBOX_CAP)
     this.mailbox.set(handle, list.slice(0, MAILBOX_CAP))

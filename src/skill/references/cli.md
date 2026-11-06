@@ -196,6 +196,29 @@ Files do not go through session messages: use the file channel below, never JPFI
   - A host without `seq` is refused (exit 1); there is no time-based
     fallback. `--after` does not combine with `--new`, `--peek`, `--wait` or
     `--hook` (exit 2).
+- `thread <context_id> [--limit N] [--before <cursor>]` reads one
+  conversation back, newest first, as one JSON object
+  `{handle, epoch, context_id, entries, more, next_before, unscoped, mail_lost}`
+  (superagent p1-context-read). It is read-only: it never reads or moves the
+  local `inbox.cursor`.
+  - Entries with `dir: "in"` are mailbox rows the home host tagged with that
+    `context_id` (`seq`, `from`, `task_id`, `text`). The host tags every
+    mailbox delivery from this version on; `unscoped` counts the rows that
+    carry no `context_id` (mailed by an older host) and cannot be placed.
+  - Entries with `dir: "out"` are this identity's own routes the host took
+    (`route --json` class `sent`), read from `sent.jsonl` in the identity
+    home: `team`, `task_id`, `text`, and `reply` when `--sync` got one. A route
+    is journaled under the context the host named in its reply, or the
+    explicit `--context`; a `-32005` reply names none, so only `--context`
+    covers it. Texts over 4000 characters are cut (`truncated`, `chars`). Past
+    1 MiB the journal rolls into `sent.1.jsonl` (one older generation, read
+    too). The journal lives on this machine only; a failed journal write
+    warns on stderr and never fails the send.
+  - `--limit` is 1-200 (default 20). When `more` is true, pass `next_before`
+    back as `--before` for the next page. Within one millisecond the journal
+    side is newer than the mailbox side.
+  - `mail_lost` counts earlier mailbox rows the 64-row cap already pushed
+    off the host, whatever their context; they cannot be recovered.
 - `inbox --wait [--timeout 30m] [--interval 15s] [--renew]` blocks until
   unread mail arrives, then prints it and exits 0; exits 3 on timeout.
   `--renew` re-publishes the deposit when it is gone or under 10 minutes from

@@ -222,3 +222,24 @@ describe('gh#113 CLI mailbox: seq, loss and truncation are visible', () => {
     expect(s.readMailbox(H)).toMatchObject({ next_seq: 5, oldest_seq: 1 })
   })
 })
+
+describe('superagent p1-context-read: mailbox rows carry their task and conversation', () => {
+  const H = 'ops-cli/a1b2c3d4e5f60718'
+  it('task_id and context_id are kept as given, empty ones dropped, and both survive a restart', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-thread-store-'))
+    const { s } = store(dir)
+    s.mail(H, 'ops/1', 'tagged', undefined, { taskId: 't-1', contextId: 'ctx-1' })
+    s.mail(H, 'ops/1', 'empty tags', undefined, { taskId: '', contextId: '' })
+    s.mail(H, 'ops/1', 'context only', 'sync-answered', { contextId: 'ctx-2' })
+    s.mail(H, 'ops/1', 'untagged')
+    const rows = (st: CliDepositStore) => st.readMailbox(H).mail.map(({ at: _at, ...m }) => m)
+    const expected = [
+      { from: 'ops/1', text: 'untagged', seq: 4 },
+      { from: 'ops/1', text: 'context only', seq: 3, dup: 'sync-answered', context_id: 'ctx-2' },
+      { from: 'ops/1', text: 'empty tags', seq: 2 },
+      { from: 'ops/1', text: 'tagged', seq: 1, task_id: 't-1', context_id: 'ctx-1' },
+    ]
+    expect(rows(s)).toEqual(expected)
+    expect(rows(store(dir).s)).toEqual(expected)
+  })
+})
