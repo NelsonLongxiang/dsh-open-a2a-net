@@ -2,7 +2,7 @@
 
 配套：[ADR](superagent-a2a-adr.md) · [实施计划](superagent-a2a-plan.md) · [断言与证据](superagent-a2a-evidence.md)
 
-状态：草案，仅设计。属主已定方向（第 6 节），等全局生产评估 PASS 后才进入计划第 1 阶段。依据断言 S1–S10，每条都挂有原文证据（ygl-trees 项目 superagent-a2a-spec）。
+状态：草案，仅设计。属主已定方向（第 6 节），等全局生产评估 PASS 后才进入计划第 1 阶段。依据断言 S1–S15，每条都挂有原文证据（ygl-trees 项目 superagent-a2a-spec-r3）；本版按全局 PR #376 @ a537c5a 的评审意见修订。
 
 ## 1. 目标与非目标
 
@@ -67,21 +67,28 @@ Source 的游标保存在 superagent 自己的状态里，按 Cookbook 规则：
 
 | 用途（purpose） | A2A 动作 |
 |---|---|
-| acknowledgement | 不单独发送。A2A 的送达与消费观察已承担这一层，也遵守“不发礼节性路由”的约定 |
-| result | 正式回执 `[A2A receipt] task <id> <结果一句话>`，结清该任务欠账 |
-| attention | 正式回执，结果为“需要决定：<一个具体问题>”；人的答复以同一 context 的新任务到达，经订阅恢复工单 |
-| answer | 同 result |
+| acknowledgement | 不单独发送，遵守“不发礼节性路由”的约定。注意：delivered 和 consumed 只是主机层面的观察，不代表会话做出了承诺，也不能结清欠账（读到≠确认，S9） |
+| result | 正式回执 `[A2A receipt] task <id> <结果一句话>`，附观察字段 `outcome:"result"`，结清该任务欠账 |
+| attention | 正式回执，附观察字段 `outcome:"attention"`，正文是一个具体问题。它会结清原任务欠账，但**不代表工作完成**；调用方按 outcome 字段区分，不解析正文（S6、S14）。人的答复以同一 context 的新任务到达，经订阅恢复工单 |
+| answer | 同 result，`outcome:"result"` |
+
+`outcome` 是回执上的观察字段，不是新的任务状态（S9）。它改变了回执语义，归入计划节点 p1-receipt-cmd 实现，须全局 PASS 并报属主知会（S14）。旧主机和旧客户端收不到这个字段，只能看到正文，所以接入方必须是新版本。
 
 发送结果映射：
 
 | a2a 结果 | send 返回 |
 |---|---|
 | delivered:true（含 receiverBookkeeping:failed 观察） | sent（另记观察） |
-| 目标身份不存在、名片已撤销、身份冲突 | gone |
+| 目标身份不存在、名片已撤销 | gone |
+| 身份冲突（可能是名片轮换，也可能是冒充） | 先抛错，按同一 task id 有界重试；超过上限才转 gone，并留下记录，等人核查（S3） |
 | queue-full、校验暂时失败、超时、连接失败、5xx | 抛错，由 Outbox 退避重试 |
 | acceptance:"unknown" | 抛错重试，仍用同一 task id（主机对同 id 至多执行一次） |
 
 task id 由 Outbox 的 message.id 确定性派生；重试永不换 id。
+
+### 3.6 影子运行的节点
+
+影子模式（计划节点 p2）在哪个节点运行、什么时候上线，属于生产变更：由属主选定节点，报全局放行（S15）。这两项是 p2 的放行条件。
 
 ### 3.5 对话上下文
 
@@ -117,4 +124,4 @@ A2A 的回执是终态。progress 一类中间报告不经 A2A 传输，执行�
 3. attention 走“正式回执 + 同 context 新任务答复”。
 4. 路由席暂不从评审席拆出，由评审席独自完成全部工作（S12），r1 节点暂缓。
 
-全局生产评估仍需对本规格给出 PASS（计划节点 p0-spec-review 的 global_pass 条件）。
+全局生产评估仍需对本规格给出 PASS（计划节点 p0-spec-review 的 global_pass 条件）。已知局限与未决问题见[断言与证据](superagent-a2a-evidence.md)。

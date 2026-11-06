@@ -1,137 +1,56 @@
-# superagent-a2a-spec
+# superagent-a2a-spec-r3
 
-_generated 2026-11-06 17:55:52 UTC by ygl-trees_
+_generated 2026-11-06 18:00:55 UTC by ygl-trees_
+
+**研究问题**：superagent × a2a-net 接入规格与计划（全局 #376 评审意见修订版，单次生产）
 
 ## 摘要
 
-共 13 条断言（13 条已证实、0 条存争议、0 条待验证），基于 25 条证据、17 个来源。
+共 16 条断言（15 条已证实、0 条存争议、1 条待验证），基于 29 条证据、19 个来源。
 
 ## 主要结论
 
 1. ✓ S1 定位：a2a-net 作为 superagent 的跨节点基础设施层接入，只走两个已有端口：a2a Source（入站请求）与 A2A Executor（出站派工），不改 superagent 领域模型。  [1][2]  
    _置信度 B，状态 supported_
-2. ✓ S2 读取面：a2a Source 需要调用方自持游标、可重放的只读拉取；现有 inbox --new 用本机共享游标且主机信箱只留 64 行，必须新增 inbox --after <seq> --json 并显式报告被挤出的未读数。  [14][13][4][2]  
+2. ✓ S2 读取面：a2a Source 需要调用方自持游标、可重放的只读拉取。现有 inbox --new 用本机共享游标，且主机信箱只留 64 行，所以必须新增 inbox --after <seq> --json，并显式报告被挤出的未读数；被挤出的消息无法恢复，只能如实暴露。  [4][14][2][13]  
    _置信度 A，状态 supported_
-3. ✓ S3 回发面：A2A task id 由 Outbox message.id 确定性派生；发送结果按表映射为 sent / gone / 重试，接纳未知或暂时失败一律用同一 task id 重试，不换 id。  [18][3][15][10][5]  
+3. ✓ S3 回发面：A2A task id 由 Outbox message.id 确定性派生。发送结果按表映射为 sent / gone / 重试；接纳未知或暂时失败一律用同一 task id 重试，不换 id。身份冲突先按重试处理，超过上限才转 gone 并留记录；只有身份不存在或名片已撤销才直接 gone。  [15][5][18][28][10][3]  
    _置信度 A，状态 supported_
-4. ✓ S4 信任：只有入站校验通过（bound）的调用方身份才能成为 Trigger actor；未验证、校验失败的消息在 scope 阶段记为 filtered，只当数据。这正是 superagent 列为开放问题的 Trust。  [19][6]  
+4. ✓ S4 信任：只有入站校验通过（bound）的调用方身份才能成为 Trigger actor；未验证或校验失败的消息在 scope 阶段记为 filtered，只当数据。这正好回答了 superagent 列为开放问题的 Trust。  [19][6]  
    _置信度 A，状态 supported_
 5. ✓ S5 账号：a2a Source 与 A2A Executor 使用专用的 a2a-net CLI 身份（独立 A2A_CLI_HOME），等同 superagent 的专用 agent CLI 包装，不复用任何席位或属主身份。  [12]  
    _置信度 B，状态 supported_
-6. ✓ S6 执行器映射：Assignment 启动对应带固定 task id 的派单；Input 交付对应同 context 追加；inputsDelivered/inputsRead 对应 delivered/consumed 观察；Report 只来自正式回执，不从自由文本推断等人或完成。  [22][1][20][11]  
+6. ✓ S6 执行器映射：Assignment 启动对应带固定 task id 的派单；Input 交付对应在同一 context 里追加；inputsDelivered/inputsRead 对应 delivered/consumed 观察；Report 只来自正式回执，不从自由文本推断“等人”或“完成”。  [22][1][11][20]  
    _置信度 B，状态 supported_
-7. ✓ S7 背压：目标每方 3 笔欠账上限不放宽；执行器派单遇 queue-full 时延后（Later），不换 id、不改投其他目标。  [16][21]  
+7. ✓ S7 背压：目标每方 3 笔欠账上限不放宽；执行器派单遇到 queue-full 时延后（Later），不换 id，也不改投其他目标。  [21][16]  
    _置信度 A，状态 supported_
-8. ✓ S8 角色分离：路由席只转原始请求和路由事实；反复出现的约束沉淀为常设规范，执行席自判范围、自判跟进，超出范围交还。  [9][7][8]  
+8. ✓ S8 角色分离：路由席只转原始请求和路由事实；反复出现的约束沉淀为常设规范；执行席自判范围、自判跟进，超出范围的交还。  [8][9][7]  
    _置信度 B，状态 supported_
-9. ✓ S9 契约不变量：不新增任务状态，不读到即确认，不自动 ack，不用 receipt 以外的方式结清欠账；新增的只有观察字段。  [17][16][11]  
+9. ✓ S9 契约不变量：不新增任务状态，不读到即确认，不自动 ack，欠账只由正式回执结清；新增的只能是观察字段。consumed 只是主机层面的观察，不代表会话做出了承诺，也不能结清欠账。  [17][27][11][16]  
    _置信度 A，状态 supported_
-10. ✓ S10 可靠性：所有外发先存后发、有界退避，与 #357 回执退避一致；dropped 只在目标永久不可达时出现，并留记录。  [3][10]  
+10. ✓ S10 可靠性：所有外发先存后发、有界退避，与 #357 回执退避一致；dropped 只在目标永久不可达时出现，并留记录。  [10][3]  
    _置信度 B，状态 supported_
-11. ✓ S11 版本线：开发前以 v0.7.0 为基线，不新打 tag；superagent 接入开发由评审席独自在 next/0.8 分支进行。按协同规范 v1.18，评审席自己写的高档改动，仍需另一节点（非自我）在 exact head 上评审 PASS 才能合入。  [23]  
+11. ✓ S11 版本线：开发前以 v0.7.0 为基线，不新打 tag；superagent 接入开发在 next/0.8 分支进行。  [23]  
    _置信度 A，状态 supported_
-12. ✓ S12 执行方式：所有工作都不派发给其他席位，由评审席独自开发完成。非自我评审这一要求仍然有效：评审席提议由全局生产评估在 exact head 上评审，这属于报告，不是派发；最终由全局裁定。  [24]  
+12. ✓ S12 执行方式：所有工作都不派发，由评审席独自开发完成；非自我评审由全局生产评估在 exact head 上进行（全局 2026-11-06 裁定）。  [24]  
    _置信度 A，状态 supported_
-13. ✓ S13 属主裁定（2026-11-06，采用评审席建议）：① 代码放在本仓 next/0.8，做成独立导出的插件包，不 fork superagent；② 校验通过且在 allowed 名单内的 Agent 调用方给 explicit 强度；③ attention 走“正式回执 + 同 context 新任务答复”；④ 路由席暂不从评审席拆出。  [25]  
+13. ✓ S13 属主裁定（采用评审席建议）：① 代码放在本仓 next/0.8，做成独立导出的插件包，不 fork superagent；② 校验通过、且在 allowed 名单内的 Agent 调用方给 explicit 强度；③ attention 走“正式回执 + 同 context 新任务答复”；④ 路由席暂不拆出。  [25]  
    _置信度 A，状态 supported_
+14. ✓ S14 回执观察字段：正式回执附带观察字段 outcome，取值 "result" 或 "attention"。attention 回执会结清原任务欠账，但它不代表工作完成，调用方按 outcome 字段区分，不解析正文里的提示文字。这个字段不新增任务状态，纳入 p1-receipt-cmd 的范围，属于回执语义变化，须全局 PASS 并报属主知会。  [17][26][11]  
+   _置信度 A，状态 supported_
+15. ✓ S15 影子节点放行：p2 影子模式在哪个节点、何时上线属于生产变更，由属主选定节点，报全局放行；这两项都是计划树里 p2 的放行条件。  [29]  
+   _置信度 A，状态 supported_
+16. ? L1 未决：0.2.2-rc.1 的 followup “先插入后 throw”的判断只依据精确发布包的源码，尚未经实际运行验证。 _（无证据支撑）_  
+   _置信度 C，状态 unverified_
 
-## 实施计划（科技树 superagent-a2a）
+## 已知局限（设计代价）
 
-计划由 ygl-trees 科技树 `superagent-a2a` 生成：节点就是阶段，边就是前置，条件就是放行闸门。顺序取自 `node path p4-a2a-executor`。每完成一个节点，执行 `node unlock` 并挂上证据，不在本文就地改状态。
+以下是本设计明确接受的代价，不是缺少证据的待办；它们都写在规格或 ADR 里。真正还没验证的项，由下面“局限与未决问题”一节按未验证断言自动列出。
 
-| 顺序 | 节点 | 内容 | 前置 | 放行条件 | 执行 | 档位 |
-|---|---|---|---|---|---|---|
-| 1 | `p0-spec-review` 规格与计划评审 | 本文、ADR 和计划树经属主定方向、全局生产评估 PASS。仅设计，不改代码。 | — | global_pass、owner_direction | 评审席 | — |
-| 2 | `p1-send-classes` 发送结果分类 | route --json 输出稳定的结果类别 sent / gone / retry，并在契约文档里写出映射表（规格 3.4）。不改任何投递语义。 | p0-spec-review | nonauthor_pass | 开发席实现，评审席非作者评审 | 中档 |
-| 3 | `p1-context-read` 按 context 读取往来 | 只读命令：按 context_id 列出本身份参与的往来，分页，给研判提供 threadContext。可选前置，没有它影子模式也能跑。 | p0-spec-review | nonauthor_pass | 开发席实现，评审席非作者评审 | 中档 |
-| 4 | `p1-inbox-after` 可重放读取 inbox --after | CLI 新增 `inbox --after <seq> --json`：只读、最旧在前、给出 next 游标和挤出未读数，不推进本地游标。带真实主机测试和反向突变。 | p0-spec-review | nonauthor_pass | 开发席实现，评审席非作者评审 | 中档 |
-| 5 | `p1-receipt-cmd` CLI 身份正式回执命令定型 | 确认并文档化 CLI 身份发送正式回执的唯一命令形状（task id、结果一句话），补测试，保证结清只走正式回执。 | p0-spec-review | nonauthor_pass | 开发席实现，评审席非作者评审 | 中档 |
-| 6 | `p2-source-shadow` a2a Source 影子模式 | 按 Cookbook 11 步实现 a2a Source，在一个节点以 observe 模式运行：只登记 Trigger 和研判记录，不开工单、不回发。使用专用 CLI 身份。 | p1-inbox-after、p1-send-classes、p1-receipt-cmd、p1-context-read | code_location_ruled、global_pass | 代码位置裁定后由开发席实现 | 高档 |
-| 7 | `p3-source-explicit` 明确请求转工单 | 允许名单内且校验通过的调用方，其明确请求转为工单；结果、问题按规格 3.4 用正式回执回发。影子运行满 7 天无异常后才放行。 | p2-source-shadow | global_pass、shadow_clean_days >= 7 | 开发席实现，评审席非作者评审 | 高档 |
-| 8 | `r1-role-split` 席位职责与派单约束沉淀 | 把反复出现的派单约束沉淀为常设规范；裁定路由席是否从评审席拆出。只改文档与规范。 | p0-spec-review | owner_ruling | 属主裁定，评审席起草 | 低档（文档） |
-| 9 | `p4-a2a-executor` A2A Executor 适配器 | 实现 Executor 端口：派工、追加、回执映射为报告，queue-full 时延后，重启按原 id 对账。先单独提交设计稿评审。 | p3-source-explicit、p1-send-classes、r1-role-split | executor_design_pass、global_pass | 设计稿评审后由开发席实现 | 高档 |
-
-通用规则：
-- 每个节点各开一个 PR，正文只写 Refs，不带任何关闭关键字；高档在 exact head 上由非作者 PASS，报全局，等回复后再合。
-- 不 tag、不 publish、不部署，除非另有发版单。
-- 影子模式与真实请求阶段的验收结论，按验证器规范只认 spec run 产物。
-
-
-## 实施计划（科技树 superagent-a2a）
-
-计划由 ygl-trees 科技树 `superagent-a2a` 生成：节点就是阶段，边就是前置，条件就是放行闸门。顺序取自 `node path p4-a2a-executor`。每完成一个节点，执行 `node unlock` 并挂上证据，不在本文就地改状态。
-
-| 顺序 | 节点 | 内容 | 前置 | 放行条件 | 执行 | 档位 |
-|---|---|---|---|---|---|---|
-| 1 | `p0-spec-review` 规格与计划评审 | 本文、ADR 和计划树经属主定方向、全局生产评估 PASS。仅设计，不改代码。 | — | global_pass、owner_direction | 评审席 | — |
-| 2 | `p1-send-classes` 发送结果分类 | route --json 输出稳定的结果类别 sent / gone / retry，并在契约文档里写出映射表（规格 3.4）。不改任何投递语义。 | p0-spec-review | nonauthor_pass | 开发席实现，评审席非作者评审 | 中档 |
-| 3 | `p1-context-read` 按 context 读取往来 | 只读命令：按 context_id 列出本身份参与的往来，分页，给研判提供 threadContext。可选前置，没有它影子模式也能跑。 | p0-spec-review | nonauthor_pass | 开发席实现，评审席非作者评审 | 中档 |
-| 4 | `p1-inbox-after` 可重放读取 inbox --after | CLI 新增 `inbox --after <seq> --json`：只读、最旧在前、给出 next 游标和挤出未读数，不推进本地游标。带真实主机测试和反向突变。 | p0-spec-review | nonauthor_pass | 开发席实现，评审席非作者评审 | 中档 |
-| 5 | `p1-receipt-cmd` CLI 身份正式回执命令定型 | 确认并文档化 CLI 身份发送正式回执的唯一命令形状（task id、结果一句话），补测试，保证结清只走正式回执。 | p0-spec-review | nonauthor_pass | 开发席实现，评审席非作者评审 | 中档 |
-| 6 | `p2-source-shadow` a2a Source 影子模式 | 按 Cookbook 11 步实现 a2a Source，在一个节点以 observe 模式运行：只登记 Trigger 和研判记录，不开工单、不回发。使用专用 CLI 身份。 | p1-inbox-after、p1-send-classes、p1-receipt-cmd、p1-context-read（可选） | code_location_ruled、global_pass | 代码位置裁定后由开发席实现 | 高档 |
-| 7 | `p3-source-explicit` 明确请求转工单 | 允许名单内且校验通过的调用方，其明确请求转为工单；结果、问题按规格 3.4 用正式回执回发。影子运行满 7 天无异常后才放行。 | p2-source-shadow | global_pass、shadow_clean_days >= 7 | 开发席实现，评审席非作者评审 | 高档 |
-| 8 | `r1-role-split` 席位职责与派单约束沉淀 | 把反复出现的派单约束沉淀为常设规范；裁定路由席是否从评审席拆出。只改文档与规范。 | p0-spec-review | owner_ruling | 属主裁定，评审席起草 | 低档（文档） |
-| 9 | `p4-a2a-executor` A2A Executor 适配器 | 实现 Executor 端口：派工、追加、回执映射为报告，queue-full 时延后，重启按原 id 对账。先单独提交设计稿评审。 | p3-source-explicit、p1-send-classes、r1-role-split（可选） | executor_design_pass、global_pass | 设计稿评审后由开发席实现 | 高档 |
-
-通用规则：
-- 每个节点各开一个 PR，正文只写 Refs，不带任何关闭关键字；高档在 exact head 上由非作者 PASS，报全局，等回复后再合。
-- 不 tag、不 publish、不部署，除非另有发版单。
-- 影子模式与真实请求阶段的验收结论，按验证器规范只认 spec run 产物。
-
-
-## 实施计划（科技树 superagent-a2a）
-
-# superagent × a2a-net 实施计划（草案）
-
-配套 [接入规格](superagent-a2a-spec.md)。
-
-计划由 ygl-trees 科技树 `superagent-a2a` 生成：节点就是阶段，边就是前置，条件就是放行闸门。顺序取自 `node path p4-a2a-executor`。每完成一个节点，执行 `node unlock` 并挂上证据，不在本文就地改状态。
-
-| 顺序 | 节点 | 内容 | 前置 | 放行条件 | 执行 | 档位 |
-|---|---|---|---|---|---|---|
-| 1 | `p0-spec-review` 规格与计划评审 | 本文、ADR 和计划树经属主定方向、全局生产评估 PASS。仅设计，不改代码。 | — | global_pass、owner_direction | 评审席 | — |
-| 2 | `p1-send-classes` 发送结果分类 | route --json 输出稳定的结果类别 sent / gone / retry，并在契约文档里写出映射表（规格 3.4）。不改任何投递语义。 | p0-spec-review | nonauthor_pass | 开发席实现，评审席非作者评审 | 中档 |
-| 3 | `p1-context-read` 按 context 读取往来 | 只读命令：按 context_id 列出本身份参与的往来，分页，给研判提供 threadContext。可选前置，没有它影子模式也能跑。 | p0-spec-review | nonauthor_pass | 开发席实现，评审席非作者评审 | 中档 |
-| 4 | `p1-inbox-after` 可重放读取 inbox --after | CLI 新增 `inbox --after <seq> --json`：只读、最旧在前、给出 next 游标和挤出未读数，不推进本地游标。带真实主机测试和反向突变。 | p0-spec-review | nonauthor_pass | 开发席实现，评审席非作者评审 | 中档 |
-| 5 | `p1-receipt-cmd` CLI 身份正式回执命令定型 | 确认并文档化 CLI 身份发送正式回执的唯一命令形状（task id、结果一句话），补测试，保证结清只走正式回执。 | p0-spec-review | nonauthor_pass | 开发席实现，评审席非作者评审 | 中档 |
-| 6 | `p2-source-shadow` a2a Source 影子模式 | 按 Cookbook 11 步实现 a2a Source，在一个节点以 observe 模式运行：只登记 Trigger 和研判记录，不开工单、不回发。使用专用 CLI 身份。 | p1-inbox-after、p1-send-classes、p1-receipt-cmd、p1-context-read（可选） | code_location_ruled、global_pass | 代码位置裁定后由开发席实现 | 高档 |
-| 7 | `p3-source-explicit` 明确请求转工单 | 允许名单内且校验通过的调用方，其明确请求转为工单；结果、问题按规格 3.4 用正式回执回发。影子运行满 7 天无异常后才放行。 | p2-source-shadow | global_pass、shadow_clean_days >= 7 | 开发席实现，评审席非作者评审 | 高档 |
-| 8 | `r1-role-split` 席位职责与派单约束沉淀 | 把反复出现的派单约束沉淀为常设规范；裁定路由席是否从评审席拆出。只改文档与规范。 | p0-spec-review | owner_ruling | 属主裁定，评审席起草 | 低档（文档） |
-| 9 | `p4-a2a-executor` A2A Executor 适配器 | 实现 Executor 端口：派工、追加、回执映射为报告，queue-full 时延后，重启按原 id 对账。先单独提交设计稿评审。 | p3-source-explicit、p1-send-classes、r1-role-split（可选） | executor_design_pass、global_pass | 设计稿评审后由开发席实现 | 高档 |
-
-通用规则：
-- 每个节点各开一个 PR，正文只写 Refs，不带任何关闭关键字；高档在 exact head 上由非作者 PASS，报全局，等回复后再合。
-- 不 tag、不 publish、不部署，除非另有发版单。
-- 影子模式与真实请求阶段的验收结论，按验证器规范只认 spec run 产物。
-
-
-## 实施计划（科技树 superagent-a2a）
-
-# superagent × a2a-net 实施计划（草案）
-
-配套 [接入规格](superagent-a2a-spec.md)。
-
-计划由 ygl-trees 科技树 `superagent-a2a` 生成：节点就是阶段，边就是前置，条件就是放行闸门。顺序取自 `node path p4-a2a-executor`，最前面加上已经完成的版本分支节点。每完成一个节点，就执行 `node unlock` 并挂上证据，不在本文就地改状态。
-
-| 顺序 | 节点 | 状态 | 内容 | 前置 | 放行条件 | 执行 | 档位 |
-|---|---|---|---|---|---|---|---|
-| 1 | `p0-version-branch` 新版本分支 next/0.8 | 已完成 | 属主指示：以 v0.7.0（c12c299）为基线，不新打 tag；从 master a510152 开分支 next/0.8，接入开发都在这条线上进行。 | — | owner_instruction | 评审席 | — |
-| 2 | `p0-spec-review` 规格与计划评审 | 待办 | 本文、ADR 和计划树经属主定方向、全局生产评估 PASS。只做设计，不改代码。 | — | global_pass、owner_direction | 评审席起草 | — |
-| 3 | `p1-send-classes` 发送结果分类 | 待办 | route --json 输出稳定的结果类别 sent / gone / retry，并在契约文档写出映射表（规格 3.4）。不改投递语义。 | p0-spec-review、p0-version-branch | nonauthor_pass | 评审席独自实现；非自我节点评审 | 中档 |
-| 4 | `p1-context-read` 按 context 读取往来 | 待办 | 只读命令：按 context_id 列出本身份参与的往来，分页，给研判提供 threadContext。可选前置，没有它影子模式也能跑。 | p0-spec-review、p0-version-branch | nonauthor_pass | 评审席独自实现；非自我节点评审 | 中档 |
-| 5 | `p1-inbox-after` 可重放读取 inbox --after | 待办 | CLI 新增 `inbox --after <seq> --json`：只读、最旧在前、给出 next 游标和挤出未读数，不推进本地游标。带真实主机测试和反向突变。 | p0-spec-review、p0-version-branch | nonauthor_pass | 评审席独自实现；非自我节点评审 | 中档 |
-| 6 | `p1-receipt-cmd` CLI 身份正式回执命令定型 | 待办 | 确认并文档化 CLI 身份发正式回执的唯一命令形状（task id、结果一句话），补测试，保证结清只走正式回执。 | p0-spec-review、p0-version-branch | nonauthor_pass | 评审席独自实现；非自我节点评审 | 中档 |
-| 7 | `p2-source-shadow` a2a Source 影子模式 | 待办 | 按 Cookbook 11 步实现 a2a Source，在一个节点以 observe 模式运行：只登记 Trigger 和研判记录，不开工单、不回发。使用专用 CLI 身份。 | p1-inbox-after、p1-send-classes、p1-receipt-cmd、p1-context-read（可选） | code_location_ruled、global_pass | 代码位置裁定后，评审席独自实现；非自我节点评审 | 高档 |
-| 8 | `p3-source-explicit` 明确请求转工单 | 待办 | 允许名单内、校验通过的调用方，其明确请求转为工单；结果与问题按规格 3.4 用正式回执回发。影子运行满 7 天无异常后才放行。 | p2-source-shadow | global_pass、shadow_clean_days >= 7 | 评审席独自实现；非自我节点评审 | 高档 |
-| 9 | `r1-role-split` 席位职责与派单约束沉淀 | 待办 | 把反复出现的派单约束沉淀为常设规范；裁定路由席是否从评审席拆出。只改文档与规范。 | p0-spec-review | owner_ruling | 属主裁定，评审席起草 | 低档（文档） |
-| 10 | `p4-a2a-executor` A2A Executor 适配器 | 待办 | 实现 Executor 端口：派工、追加、回执映射为报告；queue-full 时延后；重启按原 id 对账。先单独交设计稿评审。 | p3-source-explicit、p1-send-classes、r1-role-split（可选） | executor_design_pass、global_pass | 设计稿评审后，评审席独自实现；非自我节点评审 | 高档 |
-
-通用规则：
-- 本接入任务由评审席独自完成，开发席不参与实现。按协同规范 v1.18，评审席自己写的中档、高档改动，必须由另一个节点（非自我，不能是评审席派生的子代理）在 exact head 上评审 PASS；高档另须报全局，等回复后再合。
-- 接入 PR 的 base 都是 `next/0.8`，正文只写 Refs，不带任何关闭关键字（包括 do not close）。
-- master 上的修复照常合入 master，再以普通 merge 并入 `next/0.8`，不 rebase、不改写历史。
-- 不 tag、不 publish、不部署，除非另有发版单。
-- 影子模式和真实请求阶段的验收结论，按验证器规范只认 spec run 产物。
+- **远端执行器没有 progress**：A2A 的回执是终态，执行席的过程报告不经 A2A 传输，只在它自己的工单或 PR 里（S6）。
+- **信箱上限 64 行**：主机只保留最新 64 行，被挤出的未读消息不可恢复。Source 只能如实报告挤出数，并上报 health error（S2）。
+- **attention 多一次往返**：问题通过回执发出，答复要作为同一 context 的新任务回来（S13、S14）。
+- **专用 CLI 身份需要运维**：要按时续户口，信箱容量要有人看（S5）。
 
 
 ## 证据清单
@@ -159,16 +78,22 @@ _generated 2026-11-06 17:55:52 UTC by ygl-trees_
 [21] superagent 003 Execution · docs/003-execution.md#Concurrency — The configured concurrency limit applies to these slots, with one extra slot for a person's message or a status request.
 [22] superagent 001 Domain model · docs/001-domain.md#Concepts (Assignment) — A Ticket has several over time. Goes pending → running → ended independently of the Ticket.
 [23] a2a-net 新版本分支 next/0.8 · git ls-remote origin refs/heads/next/0.8 — refs/heads/next/0.8 = a510152435fd410676cf979507037470ed473e4d（v0.7.0 tag 1d5513557c67 → c12c299 是其祖先）
-[24] a2a-net 新版本分支 next/0.8 · 属主在评审席会话中的原话，2026-11-06 — 所有工作你都不能派发，由你独自开发完成
-[25] a2a-net 新版本分支 next/0.8 · 属主在评审席会话中的答复，2026-11-06，针对规格第 6 节 4 个待裁定问题 — Use your recommendations
+[24] 属主在评审席会话中的裁定（2026-11-06） · 属主原话，评审席会话，2026-11-06 — 所有工作你都不能派发，由你独自开发完成
+[25] 属主在评审席会话中的裁定（2026-11-06） · 属主针对规格第 6 节 4 个问题的答复，2026-11-06 — Use your recommendations
+[26] 全局生产评估 PR #376 规格评审意见 @ a537c5a · 全局评审意见第 4 条 — 要求加一个观察字段，比如回执附带 outcome:"attention"、"result"
+[27] 全局生产评估 PR #376 规格评审意见 @ a537c5a · 全局评审意见第 5 条 — consumed 只是主机层面的观察，不代表会话做出了承诺，也不能结清欠账
+[28] 全局生产评估 PR #376 规格评审意见 @ a537c5a · 全局评审意见第 6 条 — 身份冲突也可能是暂时的（比如名片轮换），也可能是有人冒充
+[29] 全局生产评估 PR #376 规格评审意见 @ a537c5a · 全局评审意见第 7 条 — 选哪个节点、什么时候上线，属于生产变更，由属主选节点、报我放行
 
 ## 来源
 
+- 全局生产评估 PR #376 规格评审意见 @ a537c5a — https://github.com/NelsonLongxiang/dsh-open-a2a-net/pull/376#global-review-a537c5a （置信度 B）
+- a2a-net PR #364 inbound admission fail closed — https://github.com/NelsonLongxiang/dsh-open-a2a-net/pull/364 （置信度 B）
 - a2a-net 新版本分支 next/0.8 — https://github.com/NelsonLongxiang/dsh-open-a2a-net/tree/next/0.8 （置信度 B）
+- 属主在评审席会话中的裁定（2026-11-06） — https://github.com/NelsonLongxiang/dsh-open-a2a-net/pull/376 （置信度 B）
 - a2a-net protocol route-bookkeeping-observation — https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/c12c299/docs/protocol/route-bookkeeping-observation.md （置信度 B）
 - a2a-net PR #372 synchronous reply contract — https://github.com/NelsonLongxiang/dsh-open-a2a-net/pull/372 （置信度 B）
 - a2a-net PR #375 followup admission — https://github.com/NelsonLongxiang/dsh-open-a2a-net/pull/375 （置信度 B）
-- a2a-net PR #364 inbound admission fail closed — https://github.com/NelsonLongxiang/dsh-open-a2a-net/pull/364 （置信度 B）
 - superagent prompts/work.md — https://github.com/deepseek-ai/dsh-superagent-prototype/blob/8c32a9dc5d72/prompts/work.md （置信度 B）
 - a2a-net CLI help (cli/a2a.mjs) — https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/c12c299/cli/a2a.mjs （置信度 B）
 - a2a-net design 351 durable reconciliation — https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/c12c299/docs/design/351-durable-inbound-reconciliation.md （置信度 B）
@@ -184,4 +109,4 @@ _generated 2026-11-06 17:55:52 UTC by ygl-trees_
 
 ## 局限与未决问题
 
-_无_
+- 待补证据：L1 未决：0.2.2-rc.1 的 followup “先插入后 throw”的判断只依据精确发布包的源码，尚未经实际运行验证。
