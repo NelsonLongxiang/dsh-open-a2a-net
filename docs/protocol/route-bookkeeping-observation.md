@@ -44,7 +44,7 @@
 state、a2a_status 和 CLI status 可见 deliveryBookkeeping：
 
 - orphaned：当前明确孤儿映射数；持久来源为原映射，不额外落诊断表。
-- failures：当前插件实例接纳后出生提交失败观察次数，重启归零。
+- failures：当前插件实例真实接纳后出生提交写失败的观察次数，重启归零；已有孤儿映射的重放只返回同一观察，不增加 failures，也不覆盖 lastError。
 - lastError（可选）：当前实例最近一次的 at 与 safeObservationCode 允许的 code，无路径、正文或异常原文。诊断不是业务提交，也不据此产生任务。
 
 ## 明确限制与非目标
@@ -55,6 +55,6 @@ state、a2a_status 和 CLI status 可见 deliveryBookkeeping：
 
 ## 工程验收索引
 
-[双路径与真实调用方故障用例](../../tests/mesh/admitted-bookkeeping.spec.ts) 覆盖异步、同步 CLI 转发（含读取轮 final 重入）、调用方 pending、孤儿恢复、独立 claim/withdraw、idle reminder 空任务集合、相同请求不再投递。故障由隔离的真实账本写入口抛出，不使用生产数据。
+[双路径与真实调用方故障用例](../../tests/mesh/admitted-bookkeeping.spec.ts) 覆盖异步、同步 CLI 转发（含读取轮 final 重入）、调用方 pending、孤儿恢复、独立 claim/withdraw、idle reminder 空任务集合、相同请求不再投递；同时覆盖映射保留但幂等记录缺失的重放，返回标记而非拒绝，且不增加真实写失败计数。测试重启后的控制读取和直接重放使用无连接池复用的独立连接，不增加任何请求重试。故障由隔离的真实账本写入口抛出，不使用生产数据。
 
 [client 用例](../../tests/unit/client.spec.ts)、[CLI 用例](../../tests/unit/cli-args.spec.ts)、[映射恢复用例](../../tests/unit/gh356-followup-delivery.spec.ts) 分别守文案/标记、用途恢复、防盲重放。反向变更逐项检查响应观察、caller 债、恢复计数、防重放与显示。这些是工程测试，不是业务验证器 spec-run。高档非作者精确头确认后，仍须全局回复才能合并；不部署、不改生产配置、不补历史积压。

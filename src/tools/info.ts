@@ -566,7 +566,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
           inFlight: [...inFlightRoutes.values()].map(route => ({ team: route.team, peer: route.peer, startedAt: route.startedAt })).filter(inScope),
           activity: recentActivity.filter(inScope),
           deliveryBookkeeping:taskLedger.deliveryBookkeepingState(),
-            ledgerPersistence:taskLedger.persistenceState(),
+          ledgerPersistence:taskLedger.persistenceState(),
           nudgeEscalations:deps.nudgeEscalations?.()??{queued:0,unavailable:0,failed:0},
           idempotency: idempotencyStore.stats(),
           reconciliationReminders: reminderSummary(),

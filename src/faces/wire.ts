@@ -980,7 +980,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
               } catch (error) {
                 if(error instanceof AdmittedBookkeepingError)steered=true
                 if (!steered) { refuseNoWait(`The DSH session rejected the message: ${String(error)}`); return }
-                taskLedger.noteAdmittedBookkeepingFailure(error)
+                if(!(error instanceof AdmittedBookkeepingError))taskLedger.noteAdmittedBookkeepingFailure(error)
                 logger.warn('a2a: admitted task bookkeeping failed; reconcile original delivery')
                 if (!res.headersSent) {
                   const payload = JSON.stringify({ routed: true, delivered: true, team, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_DELIVERED', artifacts: [], consumed: false, receipt: 'routed',receiverBookkeeping:'failed',note:ADMITTED_BOOKKEEPING_NOTE })
