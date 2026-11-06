@@ -6,6 +6,7 @@
 ## 下一版本候选（待评审，未发布）
 
 - 普通 Agent 同步等待的主机占位输出（flush 超时、会话 dead、aborted / failed 读取轮、textless）返回已有 `TASK_STATE_DELIVERED` 且不带 `reply_final`。CLI 与 `a2a_route` 同步路径提示“已送达、未得到最终答复，请按 task id 对账”，不是失败重投或完成。已有出生/自动回执的 forwarded sync 带 `receipt:routed` 并保欠账；plain sync 不新建出生/自动回执，带 `receipt:none`，调用方记可见 receiptless 行而不计欠债。除明确 `receipt:none` 的非债兼容路径外，只有复用现有阅读轮归属得到的真实 own-turn final 才允许把普通同步答复当已付。native-teams 权威 round 与 CLI mailbox 接纳语义不扩大变更。
+- 新版 CLI 的 sync 转发等待超时由原来的非 0 退出码改为退出码 0，并提示“已送达、未得到最终答复，请按 task id 对账”，依赖退出码判断成败的脚本需要据此调整。
 - HTTP 等待和自动回执用途分离：等待到期不删除后续 receipt 归属跟踪；后者按原任务终态、取消、TTL 或卸载清理。晚到真实读取轮 final 仍走同一固定身份回执和原有有限退避；占位、未消费、已关闭的空/失败读取轮不生成正式回执，不采用其他任务/后续轮输出。#351 提醒只提示本人对账，不新造正式回执。
 - 旧客户端兼容：0.7.0 及更早 CLI 收到这种含 `result.text` 的 DELIVERED 同步响应时会打印回复并在 stderr 提示未 settled，通常退出0，不自动重投；旧 `a2a_route` 返回 `ok:true` 和 DELIVERED，保留可路由回调的欠账，但旧 `trackOwedTask` 不识别 plain sync 新的 `receipt:none`，仍可能挂幽灵债；因此普通同步两端也应同步升级，不能仅凭旧文案当完成。旧版没有新的明确中文同步对账提示。如果走旧客户端的 `delivered:true` 分支，其文案可能仍称 async；以状态/task id 对账，不能把主机文字当业务完成。旧转发 home 若误收到旧对端的无 `reply_final` COMPLETED 仍可能按旧规则 receiptless，因此建议两端同步升级；本候选不改0.7.0已构建字节或代替后续发版授权。
 - 边界见[同步回复契约](protocol/synchronous-reply-contract.md)。followup 泛化 throw 的接纳未知、#369已覆盖窗口、不自动补出生及重启不恢复补发定时器等另案/已披露限制不混入。不新增任务状态，不 tag / publish / 部署。
