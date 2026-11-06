@@ -12,6 +12,8 @@
 export interface ReceiptLadderDeps {
   /** Try delivering the receipt text to one routable team. */
   deliver: (team: string) => Promise<unknown>
+  /** Transient caller failures never enter the receipt-bearing owner tier. */
+  transient?: (error:unknown)=>boolean
   /** This host's process/team mailbox (tier two). */
   ownerTeam: string
   /** Observability hook: `stage` distinguishes `to <team>` / `to owner <team>` / `both lanes`. */
@@ -30,7 +32,7 @@ export async function runReceiptLadder(deps: ReceiptLadderDeps, callerTeam: stri
     return
   } catch (error) {
     deps.log(`to ${callerTeam}`, error)
-    if (callerTeam === deps.ownerTeam) throw error
+    if (callerTeam === deps.ownerTeam || deps.transient?.(error)===true) throw error
   }
   try {
     await deps.deliver(deps.ownerTeam)
