@@ -46,6 +46,7 @@ export interface InfoToolsDeps {
   readonly ownCardUrl: string
   readonly peerStore: PeerStore
   readonly taskLedger: TaskLedger
+  readonly nudgeEscalations?:()=>import('../nudge-observability.ts').NudgeEscalations
   readonly joinedSessions: JoinedSessions
   readonly teamMemberships: TeamMembershipStore
   readonly canvasStore: CanvasStore
@@ -464,6 +465,8 @@ export function createInfoTools(deps: InfoToolsDeps) {
                 },
               },
             },
+            ledgerPersistence:{type:'object',additionalProperties:false,required:true,properties:{ok:{type:'boolean',required:true},lastError:{type:'object',additionalProperties:false,properties:{at:{type:'number',required:true},code:{type:'string',required:true}}}}},
+            nudgeEscalations:{type:'object',additionalProperties:false,required:true,properties:{queued:{type:'number',required:true},unavailable:{type:'number',required:true},failed:{type:'number',required:true},lastAt:{type:'number'},lastError:{type:'string'}}},
             reconciliationReminders: {type:'object',additionalProperties:false,required:true,properties:{observed:{type:'number',required:true},repeatedlyUnreconciled:{type:'number',required:true}}},
             idempotency: {
               type: 'object',
@@ -484,6 +487,8 @@ export function createInfoTools(deps: InfoToolsDeps) {
         render: (_args, value) => [{
           type: 'text',
           text: [
+            `Ledger persistence: ${value.ledgerPersistence.ok?'ok':'!!! FAILED !!!'}${value.ledgerPersistence.lastError?' at='+value.ledgerPersistence.lastError.at+' code='+value.ledgerPersistence.lastError.code:''}`,
+            `Nudge escalations: queued=${value.nudgeEscalations.queued} unavailable=${value.nudgeEscalations.unavailable} failed=${value.nudgeEscalations.failed}${value.nudgeEscalations.lastAt===undefined?'':' lastAt='+value.nudgeEscalations.lastAt}${value.nudgeEscalations.lastError?' code='+value.nudgeEscalations.lastError:''}`,
             ...(value.inFlight.length === 0 ? [] : ['In flight:']),
             ...value.inFlight.map((route: { team: string; peer: string }) => `  → ${route.team} via ${route.peer === 'local' ? 'this host' : route.peer}`),
             `Peers (${String(value.peers.length)}):`,
@@ -501,6 +506,8 @@ export function createInfoTools(deps: InfoToolsDeps) {
         inFlight: { team: string; peer: string; startedAt: number }[]
         activity: RouteActivityEntry[]
         idempotency: IdempotencyStats
+        ledgerPersistence: ReturnType<TaskLedger['persistenceState']>
+        nudgeEscalations:import('../nudge-observability.ts').NudgeEscalations
         reconciliationReminders: {observed:number;repeatedlyUnreconciled:number}
       }> => {
         a2aJoinGateRefusal(exec)
@@ -512,6 +519,8 @@ export function createInfoTools(deps: InfoToolsDeps) {
             inFlight: [...inFlightRoutes.values()].map(route => ({ team: route.team, peer: route.peer, startedAt: route.startedAt })),
             activity: recentActivity.slice(),
             idempotency: idempotencyStore.stats(),
+            ledgerPersistence:taskLedger.persistenceState(),
+            nudgeEscalations:deps.nudgeEscalations?.()??{queued:0,unavailable:0,failed:0},
             reconciliationReminders: reminderSummary(),
           }
         }
@@ -552,6 +561,8 @@ export function createInfoTools(deps: InfoToolsDeps) {
           peers,
           inFlight: [...inFlightRoutes.values()].map(route => ({ team: route.team, peer: route.peer, startedAt: route.startedAt })).filter(inScope),
           activity: recentActivity.filter(inScope),
+          ledgerPersistence:taskLedger.persistenceState(),
+          nudgeEscalations:deps.nudgeEscalations?.()??{queued:0,unavailable:0,failed:0},
           idempotency: idempotencyStore.stats(),
           reconciliationReminders: reminderSummary(),
         }

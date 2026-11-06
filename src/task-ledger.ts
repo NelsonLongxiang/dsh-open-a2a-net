@@ -22,6 +22,7 @@
 import type { TaskAuthorization, SettlementReason } from './task-auth.ts'
 import { existsSync, readFileSync } from 'node:fs'
 import { writeTaskLedger } from './task-ledger-persistence.ts'
+import { safeObservationCode } from './nudge-observability.ts'
 import { parseTaskDelivery, TASK_DELIVERY_CAP, TASK_DELIVERY_RETENTION_MS, type TaskDelivery } from './task-delivery.ts'
 import { parseReminder, REMINDER_LONG_MS, type ReminderState } from './reconciliation-state.ts'
 import { parseReceipt, RECEIPT_OUTCOMES, type ReceiptOutcomeV2 } from './receipt.ts'
@@ -847,8 +848,8 @@ export class TaskLedger {
       this.committed = bytes
       this.writeFailure = undefined
     } catch (error) {
-      const code = (error as { code?: unknown })?.code
-      this.writeFailure = { at: this.now(), code: typeof code === 'string' && /^[A-Z0-9_]{1,48}$/.test(code) ? code : 'LEDGER_WRITE_FAILED' }
+      const becameUnavailable=this.writeFailure===undefined
+      this.writeFailure = { at: this.now(), code:safeObservationCode(error,'LEDGER_WRITE_FAILED') }
       const previous = JSON.parse(this.committed) as TaskLedgerSnapshot
       this.reminders = Object.assign(Object.create(null), previous.reconciliationReminders ?? {})
       this.reminderSessions = previous.reconciliationSessions ?? Object.create(null)
@@ -859,6 +860,7 @@ export class TaskLedger {
       this.refusals = [...previous.settlementRefusals ?? []]
       this.refusalsTotal = previous.settlementRefusalsTotal ?? 0
       Object.assign(this.counters, new ConservationCounters(), previous.conservation ?? {})
+      if(becameUnavailable)try{this.warn('a2a: ledgerPersistence FAILED at='+this.writeFailure.at+' code='+this.writeFailure.code)}catch{/* diagnostic only */}
       throw error
     }
   }

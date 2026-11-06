@@ -78,6 +78,7 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly layoutStore: LayoutStore
   readonly taskLedger: TaskLedger
   readonly reminderDiagnostics?: () => unknown
+  readonly nudgeEscalations?:()=>import('../nudge-observability.ts').NudgeEscalations
   readonly enforceRefused?: { reason: string; blockers: readonly string[] }
   /** #114 S6: observe (lazily) and return the /state `authorization` block. */
   readonly authorizationView: () => unknown
@@ -347,6 +348,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // list and settled ones just a count, all additive so the panel
           // keeps rendering plain owed rows until it learns the tiers.
           ledgerPersistence: taskLedger.persistenceState(),
+          nudgeEscalations:d.nudgeEscalations?.()??{queued:0,unavailable:0,failed:0},
           reconciliationReminders: d.reminderDiagnostics?.(),
           tasks: taskLedger.list()
             .filter(task => task.status === 'pending')

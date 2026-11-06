@@ -175,6 +175,7 @@ export const inject = ['tools', 'timer', 'systemPrompt']
 import { Config } from './config.ts'
 import { canvasOwnerFingerprint, splitCanvasOwner } from './canvas-id.ts'
 import { forwardReceiptBasis } from './direct-forward.ts'
+import { NudgeObservability } from './nudge-observability.ts'
 export { Config }
 export type { DelegateConfig } from './config.ts'
 
@@ -680,6 +681,7 @@ export function apply(ctx: Context, config: Config): void {
   // queryable here, and the correlating `[A2A receipt] task <id>` message
   // resolves it — the caller-side half of the receipt contract, persisted so
   // a restart does not orphan the reconciliation.
+  const nudgeObservations=new NudgeObservability(message=>logger.warn(message))
   const taskLedger = new TaskLedger(join(home, 'a2a', 'tasks.json'), { staleTtlMs: config.taskStaleTtlMs, warn: message => logger.warn(message) })
   const enforceBlockers = taskLedger.settlementEnforceBlockers()
   const enforceRefused = config.settlementAuth === 'enforce' && enforceBlockers.length > 0 ? { reason: 'legacy forwarded canvas debts lack receiver facts', blockers: enforceBlockers } : undefined
@@ -1769,6 +1771,7 @@ export function apply(ctx: Context, config: Config): void {
       // gh#77 B1: the admin faces live in src/faces/admin.ts.
       registerAdminFaces(webServer, {
         reminderDiagnostics:()=>({...idleReminders.diagnostics}),
+        nudgeEscalations:()=>nudgeObservations.snapshot(),
         ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
         get cardCache() { return cardCache },
@@ -2106,19 +2109,19 @@ export function apply(ctx: Context, config: Config): void {
           content: ReadonlyArray<{ type: 'text'; text: string }>
         }, signal: AbortSignal) => Promise<unknown> }
       | undefined
-    if (typeof controller?.prompt !== 'function') return
+    if (typeof controller?.prompt !== 'function') {nudgeObservations.note('unavailable',team,nudgeRef(taskId));return}
     idleReminders.noteNudge(String(agent.id))
     markLineage(agent, 'nudge')
-    logger.info(`a2a: async nudge escalates to queue-mode prompt for ${team} (task ${taskId}, ref ${nudgeRef(taskId)})`)
+    logger.info(`a2a: async nudge escalates to queue-mode prompt for ${team} (ref ${nudgeRef(taskId)})`)
     try {
       void controller.prompt({
         requestId: `a2a-nudge-${nudgeRef(taskId)}`,
         sessionId: agent.id,
         mode: 'queue',
         content: [{ type: 'text', text: `[A2A nudge] (ref ${nudgeRef(taskId)}) an earlier A2A delivery reached this session while it could not start a turn — please consume the inbox backlog now (ignore if there is nothing pending).` }],
-      }, new AbortController().signal).catch(() => {})
-    } catch {
-      /* queueing is best-effort: the ledger row keeps the debt visible */
+      }, new AbortController().signal).then(result=>{const reply=result as {accepted?:unknown;ok?:unknown}|undefined;nudgeObservations.note(reply?.accepted===false||reply?.ok===false?'failed':'queued',team,nudgeRef(taskId))},error=>nudgeObservations.note('failed',team,nudgeRef(taskId),error))
+    } catch(error) {
+      nudgeObservations.note('failed',team,nudgeRef(taskId),error)
     }
   }
   function armAsyncNudge(agent: Agent, team: string, taskId: string, delayMs: number): void {
@@ -3338,6 +3341,7 @@ export function apply(ctx: Context, config: Config): void {
 
 
   const infoTools = createInfoTools({
+    nudgeEscalations:()=>nudgeObservations.snapshot(),
     ctx, config, logger, session, lanIp, get ownCardUrl() { return ownCardUrl }, peerStore, taskLedger,
     inFlightRoutes, recentActivity, joinedSessions, sessionNodes, canvasStore,
     teamMemberships, exposureStore, idempotencyStore, cardCache,
