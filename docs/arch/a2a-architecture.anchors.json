@@ -3,8 +3,8 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "ada4bf1605c44bfc57be882766305960bdce286a654346be2788c0001bc22d6a",
-    "src/faces/admin.ts": "e8841e3fd751a8e44079b019889c3c22743f9a9a5054992dfc2e061ad5447ed0",
+    "src/index.ts": "3016fb7e1cdf5ff34f90e93c8ed908738c16501c8a77aab9991075438d8e4cf8",
+    "src/faces/admin.ts": "157d2776580f957f53bfb4fbc09b478ae706a539c24c7a9259b53a1626b63b3b",
     "src/canvas-store.ts": "86240be8bcae39faf0077c68aa48f244928cf132e91a9eae6f5b97177ae3d115",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
     "src/cli-deposit.ts": "8b8b714d8b47ee11c5518e51d08ea31cc588a29bc4eb73843bb2239f880e718a",
@@ -14,7 +14,7 @@
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
     "nexus-stage/src/planning-card-text.ts": "31403071229c5dde4af545ded1a8eaebb1c329a52df3169fae868a57119225d9",
     "nexus-stage/src/planning-fit.ts": "cbda0255062632bd412deb2131c7a01e1e16ab9c72d2a70a32c362e108f8c07a",
-    "src/task-ledger.ts": "b6e9339b52b5cd9e5bb4f5d30720cf098007dfdbf362a20390744038d2f11403",
+    "src/task-ledger.ts": "3d0aedf28c8a0e42620d01de60db0d273c7379e5a52c9b00622b02578c13ad6c",
     "nexus-stage/src/world.ts": "702e8ad68bebb93239cd2430f0f526166622a6f9b085ef06e1db55fba1de60cc",
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
@@ -23,7 +23,7 @@
     "src/faces/canvas-notify.ts": "4d06ea71c72f5a0fd200fbc7cc32c62cfd367af054c22f284be3d242919c1358",
     "src/task-auth.ts": "fcdcd510a3d9339e95461cc410815de1eb41f572e4e0b518fd0f6716b8e685de",
     "src/origin-claim.ts": "54079e01ec324ea1054bc892ef403ba813fa52c480bd99ecb9cf8b73190c376a",
-    "src/tools/info.ts": "5363b9ca1354066d753b7b2b580466c9f53e1798db1eb0da934c5edeb1f76a9a",
+    "src/tools/info.ts": "43b6f61756aed925f43b0e11c7a8fe9844d4dc100960cc348ac1c0e8abc8b3f2",
     "src/tools/act.ts": "983f78c58b8c886b39b5af3f2cf474a1a47e4d03b91fedf5ed581aba3225bed2",
     "src/peer-directory.ts": "1e58577dc4282f20d011847e8f7efe8c1c281cbdc867133401df0554d3bfeafc",
     "src/card.ts": "c72e71e453d8b2cd3981e4fd1a2b4c2e804b1f6a312328825eec89489ca13cf5",
@@ -39,7 +39,7 @@
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/tools/info.ts:720",
+      "ref": "src/tools/info.ts:722",
       "expect": "name: 'a2a_probe',"
     },
     {
@@ -135,7 +135,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:575",
+      "ref": "src/faces/admin.ts:577",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
@@ -225,7 +225,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:3856",
+      "ref": "src/index.ts:3864",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -309,7 +309,7 @@
     {
       "page": "p1-arch",
       "cell": "d10",
-      "ref": "src/task-ledger.ts:624",
+      "ref": "src/task-ledger.ts:625",
       "expect": "private trimOwed(): void {"
     },
     {

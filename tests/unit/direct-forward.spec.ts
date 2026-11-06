@@ -177,5 +177,7 @@ describe('one-hop CLI forwarding', () => {
     expect(forwardReceiptBasis({ ...row, peerKey: undefined }, 'beta/aaaaaaaa', cli, claim)).toBeUndefined()
     expect(forwardReceiptBasis({ ...row, deliveredTo: 'beta/bbbbbbbb' }, 'beta/aaaaaaaa', cli, claim)).toBeUndefined() // the actual receiver wins
     expect(forwardReceiptBasis(undefined, 'beta/aaaaaaaa', cli, claim)).toBeUndefined()
+    expect(forwardReceiptBasis({...row,team:'beta/aaaaaaaa',deliveredTo:'beta/aaaaaaaa'},'beta/aaaaaaaa',cli,claim)).toBe('peer-org:beta/aaaaaaaa')
+    expect(forwardReceiptBasis({...row,auth:{receipt_target:'another-cli/0000000000000000'}},'beta/aaaaaaaa',cli,claim)).toBeUndefined()
   })
 })

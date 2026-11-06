@@ -117,10 +117,10 @@ export function createDirectForward(d: DirectForwardDeps) {
 export function forwardReceiptBasis(row: TaskRecord | undefined, caller: string, cliHandle: string, claim: { readonly caller: string; readonly bound: boolean; readonly bodyBound?: true; readonly card: { readonly publicKey: string } }): string | undefined {
   // The signer's zone must cover the caller label: B never signs for another zone's member (review of #287 M4).
   if (!claimCovers(caller, claim.caller)) return undefined
-  if (row === undefined || row.status !== 'pending' || row.forwarded !== true || row.sender?.kind !== 'cli' || row.sender.id !== cliHandle) return undefined
+  if (row === undefined || row.status !== 'pending' || row.forwarded !== true || row.sender?.kind !== 'cli' || row.sender.id !== cliHandle || (row.auth!==undefined&&row.auth.receipt_target!==cliHandle) || row.receiptExpected===false) return undefined
   // Body-bound (Sig3) only: a stripped Sig3 would let a captured envelope carry another body (review of #287 P3-1).
   if (!claim.bound || claim.bodyBound !== true || row.peerKey === undefined || claim.card.publicKey !== row.peerKey) return undefined
-  // A legacy row's deliveredTo may be the canvas handle itself (#272/#275): never a receiver.
-  if (row.deliveredTo !== undefined && (row.deliveredTo === row.team || row.deliveredTo.includes('/canvas/'))) return undefined
+  // A legacy canvas deliveredTo is never a receiver; a direct session target equal to row.team is valid.
+  if (row.deliveredTo !== undefined && row.deliveredTo.includes('/canvas/')) return undefined
   return (row.deliveredTo !== undefined ? [row.deliveredTo] : row.receiverMembers ?? []).includes(caller) ? `peer-org:${row.team}` : undefined
 }

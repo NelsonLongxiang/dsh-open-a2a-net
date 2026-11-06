@@ -1020,7 +1020,7 @@ async function main() {
     const archived = s.archived ?? []
     if (has('--json')) { console.log(JSON.stringify({ pending, dead, archived, ...(s.settlement === undefined ? {} : { settlement: s.settlement }), ...(s.conservation === undefined ? {} : { conservation: s.conservation }) }, null, 2)); return }
     console.log(`pending (${String(pending.length)}):`)
-    listCapped(pending, 20, t => `  ${String(t.taskId)} → ${String(t.team)} ${String(t.direction ?? '')}${t.consumed===undefined?'':t.consumed?' consumed':' delivered-unconsumed'}${senderTail(t)}${t.reminderAttempts!==undefined?` reminders=${t.reminderDelivered??0}/${t.reminderAttempts} last=${t.reminderLastAt??'?'}${t.repeatedlyUnreconciled?' 多次提醒未对账':''}`:''}`)
+    listCapped(pending, 20, t => `  ${String(t.taskId)} → ${String(t.team)} ${String(t.direction ?? '')}${t.consumed===undefined?'':t.consumed?' consumed':' delivered-unconsumed'}${t.receiptDelivery?' '+String(t.receiptDelivery):''}${senderTail(t)}${t.reminderAttempts!==undefined?` reminders=${t.reminderDelivered??0}/${t.reminderAttempts} last=${t.reminderLastAt??'?'}${t.repeatedlyUnreconciled?' 多次提醒未对账':''}`:''}`)
     console.log(`dead (${String(dead.length)}):`)
     listCapped(dead, 20, t => `  ${String(t.taskId)} → ${String(t.team)} (${String(t.reason ?? '?')})${senderTail(t)}${t.reminderAttempts!==undefined?` reminders=${t.reminderDelivered??0}/${t.reminderAttempts} last=${t.reminderLastAt??'?'}${t.repeatedlyUnreconciled?' 多次提醒未对账':''}`:''}`)
     console.log(`archived (${String(archived.length)}):`)

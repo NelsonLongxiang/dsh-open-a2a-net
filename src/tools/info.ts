@@ -597,6 +597,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
                   status: { type: 'string', required: true },
                   deadAt: { type: 'number' },
                   answeredAt: { type: 'number' },
+                  receiptDelivery:{type:'string',enum:['receipt-undelivered']},
                   consumed:{type:'boolean'}, deliveryObservation:{type:'string',enum:['consumed','delivered-unconsumed']},
                   reminderAttempts: {type:'number'}, reminderDelivered:{type:'number'}, reminderLastAt:{type:'number'}, reminderNextAt:{type:'number'}, reminderResult:{type:'string'}, reminderDiagnostic:{type:'string',enum:['metadata-reset']}, repeatedlyUnreconciled:{type:'boolean'},
                   direction: { type: 'string', enum: ['inbound', 'outbound'] },
@@ -661,10 +662,10 @@ export function createInfoTools(deps: InfoToolsDeps) {
                 const staleCount = pending.length - settleable.length
                 return [
                   ...(settleable.length > 0 ? ['Owed receipts:'] : []),
-                  ...settleable.map((task: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string } & Partial<ReminderView>) => {
+                  ...settleable.map((task: { taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; receiptDelivery?:string } & Partial<ReminderView>) => {
                     const context = task.contextId === undefined || task.contextId === '' ? '' : `, follow-up context ${task.contextId}`
                     const brief = task.brief === undefined || task.brief === '' ? '' : ` — "${task.brief}"`
-                    return `  - ${task.taskId}${brief} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}), waiting ${describeAge(Date.now() - task.startedAt)}${context}${task.reminderAttempts===undefined?'':` — reminders ${task.reminderDelivered??0}/${task.reminderAttempts}, next ${task.reminderNextAt??0}${task.repeatedlyUnreconciled?' (多次提醒未对账)':''}`}`
+                    return `  - ${task.taskId}${brief} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}), waiting ${describeAge(Date.now() - task.startedAt)}${context}${task.receiptDelivery?' — '+task.receiptDelivery:''}${task.reminderAttempts===undefined?'':` — reminders ${task.reminderDelivered??0}/${task.reminderAttempts}, next ${task.reminderNextAt??0}${task.repeatedlyUnreconciled?' (多次提醒未对账)':''}`}`
                   }),
                   ...(staleCount > 0 ? [`Delivered conversationally without a formal receipt (${String(staleCount)}) — not debts; they auto-dead-letter at the stale TTL.`] : []),
                 ]
@@ -685,7 +686,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         }],
       },
       presentCall: () => ({ card: 'generic', title: 'A2A task ledger', kind: 'other', rawInput: null }),
-      execute: async (_args, exec): Promise<{ ok: boolean; tasks: ({ taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; status: 'pending' | 'dead'; deadAt?: number; answeredAt?: number; reason?: 'fire-forget' | 'unconsumed'; consumed?:boolean; deliveryObservation?:'consumed'|'delivered-unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean; forwarded?: true; deliveredTo?: string; sender?: Sender } & Partial<ReminderView>)[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; withdrawalResult?:import('../task-ledger.ts').WithdrawalResult; sender?: Sender }[]; archivedTotal: number }> => {
+      execute: async (_args, exec): Promise<{ ok: boolean; tasks: ({ taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; status: 'pending' | 'dead'; deadAt?: number; answeredAt?: number; receiptDelivery?:'receipt-undelivered'; reason?: 'fire-forget' | 'unconsumed'; consumed?:boolean; deliveryObservation?:'consumed'|'delivered-unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean; forwarded?: true; deliveredTo?: string; sender?: Sender } & Partial<ReminderView>)[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; withdrawalResult?:import('../task-ledger.ts').WithdrawalResult; sender?: Sender }[]; archivedTotal: number }> => {
         a2aJoinGateRefusal(exec)
         observeAuthorization('lazy')
         const archiveAll = taskLedger.archive()
@@ -693,12 +694,13 @@ export function createInfoTools(deps: InfoToolsDeps) {
           ok: true,
           // Project the declared fields only: ledger rows also carry internal audit facts (the #114 auth record,
           // #139 peerKey/peerHost) the output schema does not admit — spreading the row failed every call (0.6.32+).
-          tasks: taskLedger.list().map(({ taskId, team, peer, startedAt, contextId, brief, status, deadAt, answeredAt, consumed, direction, receiptExpected, forwarded, deliveredTo, reason, sender }) => ({
+          tasks: taskLedger.list().map(({ taskId, team, peer, startedAt, contextId, brief, status, deadAt, answeredAt, receiptDelivery, consumed, direction, receiptExpected, forwarded, deliveredTo, reason, sender }) => ({
             taskId, team, peer, startedAt, status, ...reminderView(taskLedger.reminderState(taskId)),
             ...(contextId !== undefined ? { contextId } : {}),
             ...(brief !== undefined ? { brief } : {}),
             ...(deadAt !== undefined ? { deadAt } : {}),
             ...(answeredAt !== undefined ? { answeredAt } : {}),
+            ...(receiptDelivery?{receiptDelivery}:{}),
             ...(consumed!==undefined?{consumed,deliveryObservation:consumed?'consumed':'delivered-unconsumed'}:{}),
             ...(direction !== undefined ? { direction } : {}),
             ...(receiptExpected !== undefined ? { receiptExpected } : {}),
