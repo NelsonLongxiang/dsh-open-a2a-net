@@ -346,7 +346,7 @@ export function reminderMessage(node: string, text: string): UserMessage {
     content: [{ type: 'text', text }],
     // nodeReminder marks it HOST-built: a turn it starts is a local turn for node_update_self (N4). Remote
     // deliveries are relayed with a fixed source shape, so they cannot carry this field.
-    source: { kind: 'a2a-relay', form: 'relay', senderSessionId: `节点 ${node} 的任务核对`, nodeReminder: true } as UserMessage['source'],
+    source: { kind: 'a2a-relay', form: 'relay', senderSessionId: `节点 ${node} 的任务核对`, nodeReminder: true },
   }
 }
 
