@@ -597,7 +597,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
                   status: { type: 'string', required: true },
                   deadAt: { type: 'number' },
                   answeredAt: { type: 'number' },
-                  reminderAttempts: {type:'number'}, reminderDelivered:{type:'number'}, reminderLastAt:{type:'number'}, reminderNextAt:{type:'number'}, reminderResult:{type:'string'}, repeatedlyUnreconciled:{type:'boolean'},
+                  reminderAttempts: {type:'number'}, reminderDelivered:{type:'number'}, reminderLastAt:{type:'number'}, reminderNextAt:{type:'number'}, reminderResult:{type:'string'}, reminderDiagnostic:{type:'string',enum:['metadata-reset']}, repeatedlyUnreconciled:{type:'boolean'},
                   direction: { type: 'string', enum: ['inbound', 'outbound'] },
                   receiptExpected: { type: 'boolean' },
                   forwarded: { type: 'boolean' },

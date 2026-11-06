@@ -13,6 +13,20 @@ const idle=async(n:MeshNode)=>{(n.agents.agent as any).status='idle';n.ctx.emit(
 async function fixture(){const p=await reservePort();const n=await bootNode({name:'reminder',session:'reminder',team:'beta',port:p,silent:true,sessionNodes:true,teamScopeRouting:false,flushTimeoutMs:500,asyncNudgeDelayMs:86400000,taskStaleTtlMs:7*86400000});await post(n,'/__dsh_a2a/join',{id:String(n.agents.agent!.id)});return n}
 async function deliver(n:MeshNode,id:string,message='original work brief'){const r=await post(n,'/a2a/direct',{team:'beta/01234567',caller_session:'alpha/aaaaaaaa',callback:'alpha/aaaaaaaa',message,task_id:id,wait:false});expect(r.delivered,JSON.stringify(r)).toBe(true)}
 describe('#351 real HTTP persistent idle reminders',()=>{
+ for(const broken of ['corrupt','blocked'] as const)it('restart recovers '+broken+' reminder metadata to long backoff and resumes without settling',async()=>{
+  const home=tmpHome(),id='session-0123456789abcdef';let now=Date.now();const clock=vi.spyOn(Date,'now').mockImplementation(()=>now)
+  mkdirSync(join(home,'a2a'),{recursive:true});const file=join(home,'a2a/tasks.json')
+  const metadata=broken==='corrupt'?{attempts:'bad'}:{version:1,targetId:'invalid',attempts:0,deliveredCount:0,lastAttemptAt:0,nextAt:Number.MAX_SAFE_INTEGER,requestId:'',lastResult:'blocked'}
+  writeFileSync(file,JSON.stringify({tasks:[{taskId:'recovered-debt',team:'beta/01234567',peer:'local:alpha/aaaaaaaa',direction:'inbound',receiverSessionId:id,startedAt:now,status:'pending',brief:'unchanged original brief'}],reconciliationReminders:{'recovered-debt':metadata}}))
+  let n=await bootNode({name:'reset',session:'reset',team:'beta',home,sessionNodes:true,silent:true,initialStatus:'idle',asyncNudgeDelayMs:86400000})
+  try{
+   const first=await state(n);expect(reminders(n)).toHaveLength(0);expect(first.tasks[0]).toMatchObject({reminderAttempts:3,reminderResult:'unknown',reminderDiagnostic:'metadata-reset',reminderNextAt:now+REMINDER_LONG_MS});expect(first.tasks[0].answeredAt).toBeUndefined()
+   const due=first.tasks[0].reminderNextAt;now+=REMINDER_LONG_MS-1;await n.dispose();n=await bootNode({name:'reset2',session:'reset',team:'beta',home,sessionNodes:true,silent:true,initialStatus:'idle',asyncNudgeDelayMs:86400000})
+   await state(n);expect(reminders(n)).toHaveLength(0);expect((await state(n)).tasks[0].reminderNextAt).toBe(due)
+   now++;await idle(n);await vi.waitFor(()=>expect(reminders(n)).toHaveLength(1));const after=await state(n);expect(after.tasks[0]).toMatchObject({reminderAttempts:4,reminderDelivered:1,reminderDiagnostic:'metadata-reset'});expect(after.tasks[0].answeredAt).toBeUndefined();expect(after.archived).toHaveLength(0)
+  }finally{clock.mockRestore();await n.dispose()}
+ })
+
  it('a real cross-host task is reminded only on the receiver; a genuine formal receipt ends it on both hosts',async()=>{
   const pa=await reservePort(),pb=await reservePort(),au='http://127.0.0.1:'+pa,bu='http://127.0.0.1:'+pb
   const a=await bootNode({name:'meshSender',session:'meshSender',team:'alpha',port:pa,peers:[bu],silent:true,sessionNodes:true,teamScopeRouting:false,asyncNudgeDelayMs:86400000})

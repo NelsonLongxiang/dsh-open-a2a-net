@@ -14,7 +14,7 @@
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
     "nexus-stage/src/planning-card-text.ts": "31403071229c5dde4af545ded1a8eaebb1c329a52df3169fae868a57119225d9",
     "nexus-stage/src/planning-fit.ts": "cbda0255062632bd412deb2131c7a01e1e16ab9c72d2a70a32c362e108f8c07a",
-    "src/task-ledger.ts": "22cb956e8ed6d7e5de95b97fef2e4c1a80a29625c8ddb58dfa4242983baf761a",
+    "src/task-ledger.ts": "6a997559f58c4996839771b0f1b07c8eb15307c3a484605f0281ccf36ffd3dbb",
     "nexus-stage/src/world.ts": "702e8ad68bebb93239cd2430f0f526166622a6f9b085ef06e1db55fba1de60cc",
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
@@ -23,7 +23,7 @@
     "src/faces/canvas-notify.ts": "4d06ea71c72f5a0fd200fbc7cc32c62cfd367af054c22f284be3d242919c1358",
     "src/task-auth.ts": "fcdcd510a3d9339e95461cc410815de1eb41f572e4e0b518fd0f6716b8e685de",
     "src/origin-claim.ts": "746d0a466940361c9a1ad53125918525410a83757bc2ba0878ae5dc0979f4a64",
-    "src/tools/info.ts": "d6f19d76d4a844f8d684d37384b3a90c311e6f1ea31f62aec99727c01454b562",
+    "src/tools/info.ts": "fd3b0febd449352b574a15c094b6822baafc847de7ab7fe8441931d03205b4fe",
     "src/tools/act.ts": "983f78c58b8c886b39b5af3f2cf474a1a47e4d03b91fedf5ed581aba3225bed2",
     "src/peer-directory.ts": "1e58577dc4282f20d011847e8f7efe8c1c281cbdc867133401df0554d3bfeafc",
     "src/card.ts": "c72e71e453d8b2cd3981e4fd1a2b4c2e804b1f6a312328825eec89489ca13cf5",
@@ -309,7 +309,7 @@
     {
       "page": "p1-arch",
       "cell": "d10",
-      "ref": "src/task-ledger.ts:578",
+      "ref": "src/task-ledger.ts:583",
       "expect": "private trimOwed(): void {"
     },
     {

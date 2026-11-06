@@ -22,7 +22,7 @@
 import type { TaskAuthorization, SettlementReason } from './task-auth.ts'
 import { existsSync, readFileSync } from 'node:fs'
 import { writeTaskLedger } from './task-ledger-persistence.ts'
-import { parseReminder, type ReminderState } from './reconciliation-state.ts'
+import { parseReminder, REMINDER_LONG_MS, type ReminderState } from './reconciliation-state.ts'
 import { parseReceipt, RECEIPT_OUTCOMES, type ReceiptOutcomeV2 } from './receipt.ts'
 import { classifyConservationBlock, ConservationCounters, type ConservationVerdict } from './ledger-conservation.ts'
 import { CALLER_ENDED_PREFIX, TASK_CAP, ARCHIVE_CAP, SUMMARY_CAP, TASK_STALE_TTL_MS, ARCHIVE_ENDS, ECHO_SUMMARY, ROUTING_FACT_CAP, SETTLEMENT_ID_CAP, SETTLEMENT_REFUSAL_CAP, withSender, withAuth, routingOf, birthFacts, withRouting, withSettledBy, parseRefusal, archivedEndedBy } from './task-ledger-rows.ts'
@@ -54,6 +54,7 @@ export class TaskLedger {
   private readonly warn: (message: string) => void
   /** Last successful commit, for rollback when a mutation cannot persist. */
   private committed = ''
+  private reminderRecoveryPending = false
   private reminders: Record<string, ReminderState> = Object.create(null)
   private reminderSessions: Record<string, number> = Object.create(null)
   reminderSessionAt(id: string): number | undefined { return Object.hasOwn(this.reminderSessions,id) ? this.reminderSessions[id] : undefined }
@@ -95,6 +96,10 @@ export class TaskLedger {
     this.warn = options?.warn ?? console.warn
     this.restore()
     this.committed = JSON.stringify(this.snapshot())
+    if(this.reminderRecoveryPending) {
+      // Save the recovery deadline once: repeated restarts must not postpone it forever.
+      try { this.persist() } catch { /* diagnostics/last committed debt survive; no send on failure */ }
+    }
   }
 
   /**
@@ -638,7 +643,8 @@ export class TaskLedger {
       if(snapshot.reconciliationReminders && typeof snapshot.reconciliationReminders==='object') {
         for(const [id,raw] of Object.entries(snapshot.reconciliationReminders).slice(0,TASK_CAP)) {
           const parsed=parseReminder(raw)
-          this.reminders[id]=parsed ?? {version:1,targetId:'invalid',attempts:0,deliveredCount:0,lastAttemptAt:0,nextAt:Number.MAX_SAFE_INTEGER,requestId:'',lastResult:'blocked'}
+          if(parsed && parsed.lastResult!=='blocked')this.reminders[id]=parsed
+          else this.reminderRecoveryPending=true
         }
       }
       if(snapshot.reconciliationSessions && typeof snapshot.reconciliationSessions==='object') {
@@ -742,6 +748,13 @@ export class TaskLedger {
       // snapshot carried beyond the caps leave the live view but remain in the
       // identity through restoreTrimmed.
       this.tasks = restored.slice(0, TASK_CAP)
+      if(this.reminderRecoveryPending) {
+        const recoveredAt=this.now()
+        for(const row of this.tasks) {
+          if(row.status!=='pending'||!Object.hasOwn(snapshot.reconciliationReminders??{},row.taskId)||this.reminders[row.taskId])continue
+          this.reminders[row.taskId]={version:1,targetId:row.receiverSessionId??'unresolved-metadata-reset',attempts:3,deliveredCount:0,lastAttemptAt:recoveredAt,nextAt:recoveredAt+REMINDER_LONG_MS,requestId:'metadata-reset',lastResult:'unknown',diagnostic:'metadata-reset'}
+        }
+      }
       this.counters.restoreTrimmed += Math.max(0, restored.length - this.tasks.length)
       this.counters.restoreTrimmed += Math.max(0, this.archived.length - this.archiveCap)
       this.archived = this.archived.slice(0, this.archiveCap)

@@ -23,8 +23,14 @@ describe('#351 observation-only persistence',()=>{
   f.controller.scan();expect(f.steer).not.toHaveBeenCalled();expect(f.ledger.reminderState('job')).toBeUndefined();expect(f.ledger.reminderSessionAt('target')).toBeUndefined()
   f.target.status='idle';f.controller.scan();expect(f.steer).toHaveBeenCalledTimes(1);expect(f.ledger.reminderState('job')?.attempts).toBe(1)
  })
- it('malformed restored metadata blocks only reminder, preserves original debt and never resets attempts to spam',()=>{
-  const f=fixture();f.controller.scan();const snapshot=JSON.parse(readFileSync(f.file,'utf8'));snapshot.reconciliationReminders.job.attempts='bad';writeFileSync(f.file,JSON.stringify(snapshot));const restored=new TaskLedger(f.file);const send=vi.fn();const c=new ReconciliationReminders({ledger:restored,agents:()=>[f.target],resolve:()=>f.target,sender:()=>undefined,steer:send,warn:vi.fn()});c.scan();expect(send).not.toHaveBeenCalled();expect(restored.list()).toHaveLength(1);expect(restored.reminderState('job')?.lastResult).toBe('blocked')
+ it('malformed restored metadata waits two hours then resumes, preserving debt and recovery deadline across restart',()=>{
+  const f=fixture();f.controller.scan();const snapshot=JSON.parse(readFileSync(f.file,'utf8'));snapshot.reconciliationReminders.job.attempts='bad';writeFileSync(f.file,JSON.stringify(snapshot))
+  let now=1_000_000;let restored=new TaskLedger(f.file,{now:()=>now,staleTtlMs:10*86400000});const send=vi.fn()
+  const make=()=>new ReconciliationReminders({ledger:restored,agents:()=>[f.target],resolve:()=>f.target,sender:()=>undefined,steer:send,warn:vi.fn(),now:()=>now})
+  let c=make();c.scan();expect(send).not.toHaveBeenCalled();expect(restored.list()).toHaveLength(1)
+  expect(restored.reminderState('job')).toMatchObject({attempts:3,deliveredCount:0,nextAt:now+REMINDER_LONG_MS,lastResult:'unknown',diagnostic:'metadata-reset'})
+  const deadline=restored.reminderState('job')!.nextAt;now+=REMINDER_LONG_MS-1;restored=new TaskLedger(f.file,{now:()=>now,staleTtlMs:10*86400000});c=make();c.scan();expect(send).not.toHaveBeenCalled();expect(restored.reminderState('job')!.nextAt).toBe(deadline)
+  now++;c.scan();expect(send).toHaveBeenCalledTimes(1);expect(restored.reminderState('job')).toMatchObject({attempts:4,deliveredCount:1,diagnostic:'metadata-reset'});expect(restored.list()).toHaveLength(1);expect(restored.find('job')?.answeredAt).toBeUndefined();expect(restored.archive()).toEqual([])
  })
  it('validation errors cannot mutate session throttles or preceding reminder entries',()=>{
   const f=fixture();f.controller.scan();const before=readFileSync(f.file,'utf8'),old=f.ledger.reminderState('job');expect(()=>f.ledger.saveReminders([{taskId:'job',state:{...old!,attempts:-1}}],{id:'target',at:99999})).toThrow('invalid reminder');expect(f.ledger.reminderState('job')).toEqual(old);expect(readFileSync(f.file,'utf8')).toBe(before)
