@@ -1,4 +1,14 @@
 /** Host-owned bounded retry policy; never changes the receipt text. */
+import type { Context } from '@deepseek-ai/cordis'
+export function receiptRetryWait(ctx:Pick<Context,'effect'>,ms:number):Promise<boolean>{
+ return new Promise<boolean>((resolve,reject)=>{
+  let finished=false
+  const timer=setTimeout(()=>{finished=true;resolve(true);void unregister()},ms)
+  timer.unref?.()
+  let unregister:()=>unknown
+  try{unregister=ctx.effect(()=>()=>{clearTimeout(timer);if(!finished){finished=true;resolve(false)}},'a2a: receipt retry wait')}catch(error){clearTimeout(timer);reject(error)}
+ })
+}
 export const RECEIPT_RETRYABLE:unique symbol=Symbol('a2a.receipt-retryable')
 export const RECEIPT_RETRY_DELAYS_MS=[1000,2000,4000,8000,16000,30000] as const
 export class ReceiptDeliveryError extends Error {constructor(message:string,readonly transient:boolean){super(message)}}

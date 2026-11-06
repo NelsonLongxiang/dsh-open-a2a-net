@@ -59,7 +59,7 @@ import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
 import { ReconciliationReminders, type ReminderAgent } from './reconciliation-reminders.ts'
 import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
-import { receiptFailure, retryReceiptDelivery, transientReceiptFailure } from './receipt-retry.ts'
+import { receiptFailure, retryReceiptDelivery, transientReceiptFailure, receiptRetryWait } from './receipt-retry.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
@@ -2273,7 +2273,7 @@ export function apply(ctx: Context, config: Config): void {
         },
         callerTeam,
       )
-      const wait=(ms:number)=>new Promise<boolean>(resolve=>{const timer=setTimeout(()=>resolve(true),ms);timer.unref?.();ctx.effect(()=>()=>{clearTimeout(timer);resolve(false)},'a2a: receipt retry wait')})
+      const wait=(ms:number)=>receiptRetryWait(ctx,ms)
       void retryReceiptDelivery({
         attempt:()=>ladder(),
         notify:async()=>{await dispatchAnywhere(config.team,'[A2A receipt delivery notice] ref '+nudgeRef(taskId)+'; delivery to the original caller is temporarily unconfirmed; host retry is responsible. This notice is not a receipt and does not settle work.',session,undefined,new AbortController().signal,true)},
