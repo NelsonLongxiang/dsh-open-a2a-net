@@ -172,6 +172,12 @@ Files do not go through session messages: use the file channel below, never JPFI
   - `lost` counts mail the cap pushed out before this window. It is `null`,
     meaning unknown, when the host's store restarted (`epochChanged: true`);
     the read then returns every row it still has.
+  - A cursor past the newest seq the host issued is not one it handed out
+    (forged or mixed up). The read flags it with `cursorAhead: true`, returns
+    no mail, keeps `next` equal to the cursor, and warns on stderr.
+  - A consumer such as the superagent a2a Source reports a health error
+    whenever `lost > 0`, `lost` is `null`, or `cursorAhead` is set. Lost mail
+    cannot be recovered; the error makes the gap visible instead of hiding it.
   - A host without `seq` is refused (exit 1); there is no time-based
     fallback. `--after` does not combine with `--new`, `--peek`, `--wait` or
     `--hook` (exit 2).
