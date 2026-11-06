@@ -1,10 +1,10 @@
 # superagent-a2a-spec
 
-_generated 2026-11-06 17:44:51 UTC by ygl-trees_
+_generated 2026-11-06 17:49:35 UTC by ygl-trees_
 
 ## 摘要
 
-共 10 条断言（10 条已证实、0 条存争议、0 条待验证），基于 22 条证据、16 个来源。
+共 11 条断言（11 条已证实、0 条存争议、0 条待验证），基于 23 条证据、17 个来源。
 
 ## 主要结论
 
@@ -28,6 +28,8 @@ _generated 2026-11-06 17:44:51 UTC by ygl-trees_
    _置信度 A，状态 supported_
 10. ✓ S10 可靠性：所有外发先存后发、有界退避，与 #357 回执退避一致；dropped 只在目标永久不可达时出现，并留记录。  [3][10]  
    _置信度 B，状态 supported_
+11. ✓ S11 版本线：开发前以 v0.7.0 为基线，不新打 tag；superagent 接入开发由评审席独自在 next/0.8 分支进行。按协同规范 v1.18，评审席自己写的高档改动，仍需另一节点（非自我）在 exact head 上评审 PASS 才能合入。  [23]  
+   _置信度 A，状态 supported_
 
 ## 实施计划（科技树 superagent-a2a）
 
@@ -99,6 +101,35 @@ _generated 2026-11-06 17:44:51 UTC by ygl-trees_
 - 影子模式与真实请求阶段的验收结论，按验证器规范只认 spec run 产物。
 
 
+## 实施计划（科技树 superagent-a2a）
+
+# superagent × a2a-net 实施计划（草案）
+
+配套 [接入规格](superagent-a2a-spec.md)。
+
+计划由 ygl-trees 科技树 `superagent-a2a` 生成：节点就是阶段，边就是前置，条件就是放行闸门。顺序取自 `node path p4-a2a-executor`，最前面加上已经完成的版本分支节点。每完成一个节点，就执行 `node unlock` 并挂上证据，不在本文就地改状态。
+
+| 顺序 | 节点 | 状态 | 内容 | 前置 | 放行条件 | 执行 | 档位 |
+|---|---|---|---|---|---|---|---|
+| 1 | `p0-version-branch` 新版本分支 next/0.8 | 已完成 | 属主指示：以 v0.7.0（c12c299）为基线，不新打 tag；从 master a510152 开分支 next/0.8，接入开发都在这条线上进行。 | — | owner_instruction | 评审席 | — |
+| 2 | `p0-spec-review` 规格与计划评审 | 待办 | 本文、ADR 和计划树经属主定方向、全局生产评估 PASS。只做设计，不改代码。 | — | global_pass、owner_direction | 评审席起草 | — |
+| 3 | `p1-send-classes` 发送结果分类 | 待办 | route --json 输出稳定的结果类别 sent / gone / retry，并在契约文档写出映射表（规格 3.4）。不改投递语义。 | p0-spec-review、p0-version-branch | nonauthor_pass | 评审席独自实现；非自我节点评审 | 中档 |
+| 4 | `p1-context-read` 按 context 读取往来 | 待办 | 只读命令：按 context_id 列出本身份参与的往来，分页，给研判提供 threadContext。可选前置，没有它影子模式也能跑。 | p0-spec-review、p0-version-branch | nonauthor_pass | 评审席独自实现；非自我节点评审 | 中档 |
+| 5 | `p1-inbox-after` 可重放读取 inbox --after | 待办 | CLI 新增 `inbox --after <seq> --json`：只读、最旧在前、给出 next 游标和挤出未读数，不推进本地游标。带真实主机测试和反向突变。 | p0-spec-review、p0-version-branch | nonauthor_pass | 评审席独自实现；非自我节点评审 | 中档 |
+| 6 | `p1-receipt-cmd` CLI 身份正式回执命令定型 | 待办 | 确认并文档化 CLI 身份发正式回执的唯一命令形状（task id、结果一句话），补测试，保证结清只走正式回执。 | p0-spec-review、p0-version-branch | nonauthor_pass | 评审席独自实现；非自我节点评审 | 中档 |
+| 7 | `p2-source-shadow` a2a Source 影子模式 | 待办 | 按 Cookbook 11 步实现 a2a Source，在一个节点以 observe 模式运行：只登记 Trigger 和研判记录，不开工单、不回发。使用专用 CLI 身份。 | p1-inbox-after、p1-send-classes、p1-receipt-cmd、p1-context-read（可选） | code_location_ruled、global_pass | 代码位置裁定后，评审席独自实现；非自我节点评审 | 高档 |
+| 8 | `p3-source-explicit` 明确请求转工单 | 待办 | 允许名单内、校验通过的调用方，其明确请求转为工单；结果与问题按规格 3.4 用正式回执回发。影子运行满 7 天无异常后才放行。 | p2-source-shadow | global_pass、shadow_clean_days >= 7 | 评审席独自实现；非自我节点评审 | 高档 |
+| 9 | `r1-role-split` 席位职责与派单约束沉淀 | 待办 | 把反复出现的派单约束沉淀为常设规范；裁定路由席是否从评审席拆出。只改文档与规范。 | p0-spec-review | owner_ruling | 属主裁定，评审席起草 | 低档（文档） |
+| 10 | `p4-a2a-executor` A2A Executor 适配器 | 待办 | 实现 Executor 端口：派工、追加、回执映射为报告；queue-full 时延后；重启按原 id 对账。先单独交设计稿评审。 | p3-source-explicit、p1-send-classes、r1-role-split（可选） | executor_design_pass、global_pass | 设计稿评审后，评审席独自实现；非自我节点评审 | 高档 |
+
+通用规则：
+- 本接入任务由评审席独自完成，开发席不参与实现。按协同规范 v1.18，评审席自己写的中档、高档改动，必须由另一个节点（非自我，不能是评审席派生的子代理）在 exact head 上评审 PASS；高档另须报全局，等回复后再合。
+- 接入 PR 的 base 都是 `next/0.8`，正文只写 Refs，不带任何关闭关键字（包括 do not close）。
+- master 上的修复照常合入 master，再以普通 merge 并入 `next/0.8`，不 rebase、不改写历史。
+- 不 tag、不 publish、不部署，除非另有发版单。
+- 影子模式和真实请求阶段的验收结论，按验证器规范只认 spec run 产物。
+
+
 ## 证据清单
 
 [1] superagent 001 Domain model · docs/001-domain.md#Concepts — The Executor, with its Sessions and directories, is outside the domain and connects through Assignments.
@@ -123,9 +154,11 @@ _generated 2026-11-06 17:44:51 UTC by ygl-trees_
 [20] a2a-net PR #372 synchronous reply contract · docs/release.md 下一版本候选 (PR #372) — 返回已有 `TASK_STATE_DELIVERED` 且不带 `reply_final`
 [21] superagent 003 Execution · docs/003-execution.md#Concurrency — The configured concurrency limit applies to these slots, with one extra slot for a person's message or a status request.
 [22] superagent 001 Domain model · docs/001-domain.md#Concepts (Assignment) — A Ticket has several over time. Goes pending → running → ended independently of the Ticket.
+[23] a2a-net 新版本分支 next/0.8 · git ls-remote origin refs/heads/next/0.8 — refs/heads/next/0.8 = a510152435fd410676cf979507037470ed473e4d（v0.7.0 tag 1d5513557c67 → c12c299 是其祖先）
 
 ## 来源
 
+- a2a-net 新版本分支 next/0.8 — https://github.com/NelsonLongxiang/dsh-open-a2a-net/tree/next/0.8 （置信度 B）
 - a2a-net protocol route-bookkeeping-observation — https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/c12c299/docs/protocol/route-bookkeeping-observation.md （置信度 B）
 - a2a-net PR #372 synchronous reply contract — https://github.com/NelsonLongxiang/dsh-open-a2a-net/pull/372 （置信度 B）
 - a2a-net PR #375 followup admission — https://github.com/NelsonLongxiang/dsh-open-a2a-net/pull/375 （置信度 B）
