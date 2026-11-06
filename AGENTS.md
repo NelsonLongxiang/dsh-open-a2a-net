@@ -13,7 +13,7 @@
 
 ## 本仓验证器家族
 - RC 验证器（发布候选闸门）：scripts/verify-probe.mjs + ygl-trees verify run —— docs/validator.md
-- 递归验证器（引擎自证）：scripts/verify-recursive.mjs —— docs/validator.md
+- 引擎与 RC 证据链：项目钉版 CLI `verify self-check`、同候选 RC `verify run` 报告、该 run 的 `verify archive verify` 三份产物缺一不可；树能力齐备后用 `verify tree run`，不再执行历史自判递归脚本 —— docs/validator.md
 - 监督域 S 层（台账诚实）：scripts/supervisor-snapshot.mjs（探针）+ mat_05acb018396d 材料 —— verify/candidates-supervision.json
 
 ## 一句话总纲

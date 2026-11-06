@@ -48,10 +48,16 @@ describe('RC recursive verifier submission binding', () => {
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 
-  it('verify-recursive hands the engine only the bound submission path (no fixed-directory fallback at the call site)', () => {
-    const src = readFileSync(join(process.cwd(), 'scripts', 'verify-recursive.mjs'), 'utf8')
-    expect(src).not.toMatch(/["']dsh-a2a-submission["']/)
-    expect(src).not.toMatch(/\btmpdir\(/)
-    expect(src).toMatch(/"--submission", submission\.path/)
+  it('direct CLI instructions preserve the bound submission and complete three-part evidence chain', () => {
+    const doc = readFileSync(join(process.cwd(), 'docs', 'validator.md'), 'utf8')
+    const router = readFileSync(join(process.cwd(), 'src', 'skill', 'references', 'router.md'), 'utf8')
+    expect(doc).toContain('verify run spec_bdf9df9d3851 --db verify/snapshot.sqlite --submission')
+    expect(doc).toContain('submissionFromProbe')
+    expect(doc).toContain('snapshot/HEAD')
+    expect(doc).toContain('三份 CLI 产物缺一不可')
+    expect(doc).toContain('该 run 返回的精确 zip')
+    expect(doc).toContain('不回落固定 TEMP 目录')
+    expect(router).toContain('经 `submissionFromProbe` 核对与本轮 snapshot/HEAD 相符')
+    expect(doc).not.toMatch(/^node scripts\/verify-recursive\.mjs/m)
   })
 })
