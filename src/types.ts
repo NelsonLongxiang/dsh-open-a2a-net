@@ -3,6 +3,8 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/types
  */
 
+import type { RECEIPT_RETRYABLE } from './receipt-retry.ts'
+
 /** One peer node's agent card — the decentralized discovery record. */
 export interface A2aPeerCard {
   /** Human-facing peer name. */
@@ -152,6 +154,7 @@ export interface A2aRouteOk {
 
 /** Canonical `a2a_route` failure value. */
 export interface A2aRouteError {
+  readonly [RECEIPT_RETRYABLE]?:true
   /** A forwarded receipt never promises another receipt, including uncertain waits. */
   readonly receipt?: 'none'
   readonly ok: false

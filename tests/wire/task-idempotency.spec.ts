@@ -28,6 +28,12 @@ import {
 } from '../../src/idempotency-store.ts'
 
 describe('idempotency store', () => {
+  it('releases only an uncompleted matching receipt claim and preserves conflict and completed keys',()=>{
+    const store=new IdempotencyStore('');expect(store.claim('receipt-attempt','body')).toBe('fresh')
+    store.releaseUncompleted('receipt-attempt','different');expect(store.claim('receipt-attempt','body')).toBe('replay')
+    store.releaseUncompleted('receipt-attempt','body');expect(store.claim('receipt-attempt','body')).toBe('fresh')
+    store.recordOutcome('receipt-attempt',{status:'completed',reply:'delivered'});store.releaseUncompleted('receipt-attempt','body');expect(store.query('receipt-attempt','body')).toMatchObject({found:true,status:'completed'})
+  })
   function tmpStore(options?: IdempotencyOptions): { store: IdempotencyStore; file: string } {
     const file = join(mkdtempSync(join(tmpdir(), 'dsh-a2a-idem-')), 'idempotency.json')
     return { store: new IdempotencyStore(file, options), file }

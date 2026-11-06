@@ -106,6 +106,7 @@ export interface WireDeps {
   readonly remoteCliProof: (handle: string, claim: Extract<OriginClaimResult, { ok: true }>) => Promise<RemoteCliProof | undefined>
   /** #282 S3: the basis for a receipt to a local CLI from a member frozen on this host's own forward, else undefined. */
   readonly forwardReceiptBasis: (taskId: string, caller: string, cliHandle: string, claim: Extract<OriginClaimResult, { ok: true }>) => string | undefined
+  readonly receiptReplayAllowed:(message:string,caller:string,team:string,claim:Extract<OriginClaimResult,{ok:true}>)=>boolean
   readonly callerLinkedToThisHost: (caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined) => boolean
   /** This host's own card URL (read when a request lands; set once the web server settles). */
   readonly ownCardUrl: string
@@ -685,6 +686,12 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const payload=JSON.stringify({error:'untrusted-origin: OriginClaim verification failed ('+gate.reason+')',code:WIRE_ERROR_INBOUND_VERIFICATION,reason:gate.reason,team,task_status:'TASK_STATE_FAILED',delivered:false})
             res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
           }
+          const priorFingerprint=peerPayloadFingerprint({caller,message,noWait,team})
+          const priorTransport=idempotencyStore.query(taskId,priorFingerprint)
+          if(earlyClaim.ok&&priorTransport.found&&priorTransport.status==='completed'&&d.receiptReplayAllowed(message,caller,team,earlyClaim)) {
+            const payload=JSON.stringify({routed:true,delivered:true,receipt:'none',team,task_id:taskId,task_status:'TASK_STATE_COMPLETED',note:'receipt delivery already confirmed'})
+            res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
+          }
           const cliProof = foreignCli && earlyClaim?.ok ? await remoteCliProof(caller, earlyClaim).catch(() => undefined) : undefined
           let admission = foreignCli ? a2aCallerAdmission(caller, team, cliProof, earlyClaim?.ok ? earlyClaim.card.publicKey : undefined) : gate.admission
           // #282 S3 (same team authorizes): a receipt for this host's own forward, to the CLI that sent it, from a
@@ -788,6 +795,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           try {
             refusedSettlement = settleAndAnnounce(message, { caller, proof: callerProof, ...settlerClaimFields(claim, originOf), ingress: 'wire' })
           } catch {
+            // A failed receipt settlement did not deliver: keep its fixed transport identity retryable.
+            if(parseReceipt(message)!==null)idempotencyStore.releaseUncompleted(taskId,idemFingerprint)
             // Body end runs outside the webServer guard; a failed commit must not escape or steer.
             const payload = JSON.stringify({ error: 'task ledger write failed; settlement was not committed', code: -32000, task_id: taskId, task_status: 'TASK_STATE_FAILED', delivered: false })
             res.writeHead(503, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
@@ -894,6 +903,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 const receiptRequest = deliveredReceipt ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
                 followupRelay(target, `${directHeader(from)}\n\n${message}${receiptRequest}`, from === 'an unknown node' ? undefined : from, undefined, taskId, claim.ok?claim.card.publicKey:undefined)
                 steered = true
+                if(deliveredReceipt&&refusedSettlement===undefined)idempotencyStore.recordOutcome(taskId,{status:'completed',reply:'receipt delivered'})
                 recordActivity('in', team, caller, true)
                 armReceiptAutosend(target, taskId, receiptTarget, message, steerFloor)
                 // v0.5.23 (async-stall): "delivered" only proves the steer call

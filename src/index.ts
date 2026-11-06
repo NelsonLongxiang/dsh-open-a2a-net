@@ -59,6 +59,7 @@ import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
 import { ReconciliationReminders, type ReminderAgent } from './reconciliation-reminders.ts'
 import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
+import { receiptFailure, retryReceiptDelivery, transientReceiptFailure } from './receipt-retry.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
@@ -67,7 +68,7 @@ import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
 import { isRootOriginUrl, sameMountedUrl, originClaimTeamWarning, signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
 import { AuthObserver, type AffectedEntry } from './auth-observer.ts'
-import { allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry, type RemoteCliProof, recheckRemoteCliAuthorization } from './task-auth.ts'
+import { claimCovers, allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry, type RemoteCliProof, recheckRemoteCliAuthorization } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
 // `ctx.timer` on Context; the runtime service is mounted by app compositions.
@@ -2250,19 +2251,17 @@ export function apply(ctx: Context, config: Config): void {
       // closure would silently no-op there — runReceiptLadder reads a
       // settled undefined as tier-1 success, so the receipt would vanish
       // without a log.
-      void runReceiptLadder(
+      const transportId='r-'+createHash('sha256').update(taskId+'\0'+callerTeam+'\0'+receipt).digest('base64url').slice(0,12)
+      const deliverReceipt=async(team:string):Promise<void>=>{
+        const peerCaller=row?.auth?.target.includes('/')===true?sessionTeamOf(target):undefined
+        const delivered=await dispatchAnywhere(team,receipt,session,undefined,new AbortController().signal,true,transportId,peerCaller)
+        if(team===callerTeam&&delivered.settlementRefused!==true&&!settleOwnInbound(receipt,callerTeam,{caller:session,proof:'in-process',ingress:'local'}))throw receiptFailure({error:'task ledger write failed after receipt delivery',code:-32011})
+      }
+      /* Legacy permanent-failure ladder remains the owner-settlement policy. */
+      const ladder=()=>runReceiptLadder(
         {
-          deliver: async (team) => {
-            // gh#217: across hosts the caller admits a session face it linked, never this host's process label; a
-            // task for the bare process team keeps the label, the only host face the settlement judge accepts (N1).
-            const peerCaller = row?.auth?.target.includes('/') === true ? sessionTeamOf(target) : undefined
-            const delivered = await dispatchAnywhere(team, receipt, session, undefined, new AbortController().signal, true, undefined, peerCaller)
-            // gh#141: the caller lane pays this delivery's inbound row across hosts (a
-            // same-host receipt already settled it in-process), unless the caller
-            // refused it. The owner tier is no payment here — but an owner mailbox
-            // on THIS host settles the row in-process, as it always has.
-            if (team === callerTeam && delivered.settlementRefused !== true && !settleOwnInbound(receipt, callerTeam, { caller: session, proof: 'in-process', ingress: 'local' })) throw new Error('task ledger settlement commit failed')
-          },
+          deliver: deliverReceipt,
+          transient:transientReceiptFailure,
           ownerTeam: config.team,
           log: (stage, error) => {
             // N2 (observability): throttled per task to avoid ping-pong noise.
@@ -2273,9 +2272,13 @@ export function apply(ctx: Context, config: Config): void {
           },
         },
         callerTeam,
-      ).catch(() => {
-        // Ladder exhausted: the throttled breadcrumbs above already said why.
-      })
+      )
+      const wait=(ms:number)=>new Promise<boolean>(resolve=>{const timer=setTimeout(()=>resolve(true),ms);timer.unref?.();ctx.effect(()=>()=>{clearTimeout(timer);resolve(false)},'a2a: receipt retry wait')})
+      void retryReceiptDelivery({
+        attempt:()=>ladder(),
+        notify:async()=>{await dispatchAnywhere(config.team,'[A2A receipt delivery notice] ref '+nudgeRef(taskId)+'; delivery to the original caller is temporarily unconfirmed; host retry is responsible. This notice is not a receipt and does not settle work.',session,undefined,new AbortController().signal,true)},
+        pending:()=>row===undefined||taskLedger.isPending(taskId),wait,log:()=>{logger.warn('a2a: receipt delivery temporarily unconfirmed ref=%s',nudgeRef(taskId))},
+      }).catch(()=>{/* permanent ladder failure remains visible in the original owed row */})
     }, { taskId, steerFloor })
   }
 
@@ -2847,6 +2850,14 @@ export function apply(ctx: Context, config: Config): void {
       scanSessionLogList,
       readSessionLogTail,
       taskLedger,
+      receiptReplayAllowed:(message,caller,team,claim)=>{
+        const parsed=parseReceipt(message);if(!parsed||!claim.bound||claim.bodyBound!==true||!claimCovers(caller,claim.caller)||!isRootOriginUrl(claim.callerUrl))return false
+        const row=taskLedger.archive().find(r=>r.taskId===parsed.taskId)
+        if(!row||row.endedBy!=='receipt'||row.peerKey!==claim.card.publicKey)return false
+        const creditor=row.auth?.receipt_target??row.sender?.id
+        if(creditor!==team)return false
+        return judgeSettlement(row,{caller,proof:'origin-claim',claimKey:claim.card.publicKey,claimOrigin:originOf(claim.callerUrl),ingress:'wire'},{hostLabel:session,membersOf:()=>undefined,...(parsed.envelope?.onBehalfOf?{onBehalfOf:parsed.envelope.onBehalfOf}:{})}).ok
+      },
       refuseIfFlooded,
       refuseIfQueueFull,
       settleAndAnnounce, waitForForwardBirth,
@@ -4171,14 +4182,14 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const home = canvasStore.cliHomeOf(team)
       if (home === undefined) throw new Error(`CLI receipt home is not pinned for ${team}`)
       const delivered = await dispatchPeerCandidate(home, team, message, contextId, signal, peerCaller ?? callerSession, asyncMode, taskId)
-      if (!delivered.ok) throw new Error(`CLI receipt to pinned home failed: ${delivered.error}`)
+      if (!delivered.ok) throw receiptFailure(delivered)
       return delivered
     }
     const local = await dispatchLocalCandidate(team, message, callerSession, contextId, signal, asyncMode, taskId)
     // A background send books no outbound row: its birth facts have no row to go on.
     if (taskId !== undefined) localBirths.delete(taskId)
     if (local !== undefined) {
-      if (!local.ok) throw new Error(local.error)
+      if (!local.ok) throw receiptFailure(local)
       return local
     }
     if (cliReceipt) throw new Error(`local CLI household expired before delivery to ${team}; directory fallback refused`)
@@ -4188,13 +4199,15 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       throw new Error(`no route to "${team}": not a local team and not published by any tracked peer`)
     }
     let lastError = 'no candidate delivered'
+    let receiptError:ReturnType<typeof receiptFailure>|undefined
     for (const candidate of candidates) {
       const result = await dispatchPeerCandidate(candidate, team, message, contextId, signal, peerCaller ?? callerSession, asyncMode, taskId)
       if (result.ok) return result
       lastError = result.error
+      const failure=receiptFailure(result);if(receiptError===undefined||failure.transient)receiptError=failure
       if (signal.aborted) break
     }
-    throw new Error(`delivery to "${team}" failed on every candidate: ${lastError}`)
+    throw receiptError??new Error(`delivery to "${team}" failed on every candidate: ${lastError}`)
   }
 
   /**

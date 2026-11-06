@@ -7,6 +7,7 @@ import { generateKeyPairSync } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { A2aClient, type A2aFetch } from '../../src/a2a-client.ts'
 import { signCard } from '../../src/card.ts'
+import { receiptFailure } from '../../src/receipt-retry.ts'
 import { isLinkKey, normalizeLinkKeys, outboundKeyFor } from '../../src/link-keys.ts'
 
 
@@ -155,6 +156,22 @@ describe('fetchCardDetail', () => {
 })
 
 describe('routeDirect', () => {
+  it.each([
+    [503,{error:'task ledger write failed; settlement was not committed'},true],
+    [503,{error:'service unavailable'},false],
+    [200,{error:'verification incomplete',code:-32011},true],
+    [403,{error:'authorization mismatch'},false],
+    [200,{error:'unknown task',code:-32000},false],
+  ] as const)('classifies receipt retry evidence for HTTP %s',async(status,body,transient)=>{
+    const f=stubFetch(()=>({status,body})),client=makeClient({fetch:f.fetch,schedule:frozenSchedule().arm})
+    const result=await client.routeDirect('https://peer.invalid','team','receipt',undefined,undefined,undefined,true)
+    expect(result.ok).toBe(false);if(!result.ok)expect(receiptFailure(result).transient).toBe(transient)
+  })
+  it.each([new TypeError('fetch failed'),Object.assign(Error('timeout'),{name:'TimeoutError'}),Object.assign(Error('connect failed'),{code:'ECONNREFUSED'})])('classifies connection and timeout failures for receipt recovery',async error=>{
+    const client=makeClient({fetch:async()=>{throw error},schedule:frozenSchedule().arm}),result=await client.routeDirect('https://peer.invalid','team','receipt',undefined,undefined,undefined,true)
+    expect(result.ok).toBe(false);if(!result.ok)expect(receiptFailure(result).transient).toBe(true)
+  })
+
   it('sends the canonical args and returns the canonical result', async () => {
     const { calls, fetch } = stubFetch(() => ({ status: 200, body: { routed: true, task_id: 't-1', context_id: 'ctx-1', task_status: 'TASK_STATE_COMPLETED', result: { text: 'reply body' } } }))
     const client = makeClient({ fetch })

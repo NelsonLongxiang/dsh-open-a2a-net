@@ -262,6 +262,13 @@ export class IdempotencyStore {
    * Unknown or already-settled ids answer `false`. Never throws.
    * @returns whether the outcome was recorded.
    */
+  /** Release only an unchanged, uncompleted receipt attempt whose settlement did not commit. */
+  releaseUncompleted(taskId:string,fingerprint:string):void {
+    const row=this.rows.get(taskId)
+    if(row?.fingerprint!==fingerprint||row.outcome!==undefined)return
+    this.rows.delete(taskId);this.persist()
+  }
+
   recordOutcome(taskId: string, outcome: TaskOutcome, settledAt: number = this.now()): boolean {
     if (taskId === '') return false
     this.prune(this.now())

@@ -6,6 +6,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/a2a-client
  */
 
+import { RECEIPT_RETRYABLE } from './receipt-retry.ts'
 import { verifyCard, type CardRejection } from './card.ts'
 import { MAX_ROUTE_BODY_BYTES, WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from './transport-caps.ts'
 import type { A2aPeerCard, A2aRouteResult } from './types.ts'
@@ -320,7 +321,10 @@ export class A2aClient {
           /* prose body — keep the generic code */
         }
       }
+      const status=(error as {statusCode?:unknown})?.statusCode
+      const transient=status===503&&typeof bodyText==='string'&&bodyText.includes('task ledger write failed')||status===undefined&&(abortClass||error instanceof TypeError||/ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH/.test(String(error)+' '+String((error as {code?:unknown;cause?:{code?:unknown}})?.code??'')+' '+String((error as {cause?:{code?:unknown}})?.cause?.code??'')))
       const failure: Extract<A2aRouteResult, { ok: false }> = {
+        ...(transient?{[RECEIPT_RETRYABLE]:true as const}:{}),
         ok: false,
         error: `direct route to peer failed: ${String(error)}`,
         code,

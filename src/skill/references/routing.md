@@ -33,6 +33,10 @@ A formal receipt for your own pending inbound task may return only along that ta
 
 `answeredAt` means the receiving session has answered locally, not that its receipt arrived. A pending row with `receiptDelivery:receipt-undelivered` explicitly records that delivery is not confirmed; tasks, state and CLI JSON preserve this across restart. The row remains owed even though answered work no longer occupies an execution slot. A successful formal receipt settles the original row; a rejected or failed send must not be reported as completed.
 
+## Temporary receipt delivery failures (#357)
+
+For an automatic receipt, a recognized temporary delivery failure keeps the original task pending with `receiptDelivery:receipt-undelivered`. The host retries the same receipt body and transport id with bounded backoff (1, 2, 4, 8, 16, 30 seconds; at most six retries). Its owner receives a notification, not a substitute receipt. Exhaustion or plugin disposal stops this runtime retry budget without settling the debt; timers are not resumed on restart. Permanent refusals retain the existing receipt-ladder policy. Reconciliation reminders still ask the session to reconcile; host retransmissions do not count as reminder attempts or new work.
+
 ## Status diagnostics (#355 / #358②)
 
 `a2a-net status` and `status --json` show `ledgerPersistence` and `nudgeEscalations`. A persistence failure is prominently flagged; `lastError` contains only time/code, and a later successful commit clears it. Nudge counts distinguish a successful queue-call return, an unavailable prompt seam, and a failed call. They are host-local runtime counters, reset with the plugin instance, not receipt or consumption evidence. Missing seams and failures emit safe warnings without task text. These observations never change routing, settlement, retry budgets or capacity.
