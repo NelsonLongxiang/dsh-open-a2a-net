@@ -3,7 +3,7 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": ["ES2022"],
+    "lib": ["ES2023"],
     "strict": true,
     "noImplicitAny": true,
     "noUncheckedIndexedAccess": true,
@@ -51,5 +51,5 @@
     }
   },
   "include": ["src"],
-  "exclude": ["src/client"]
+  "exclude": ["src/client", "src/superagent/upstream/dsh-superagent/tests"]
 }

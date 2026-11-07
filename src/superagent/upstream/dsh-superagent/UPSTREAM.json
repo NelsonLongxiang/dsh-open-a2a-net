@@ -1,0 +1,24 @@
+{
+  "repo": "github.com/deepseek-ai/dsh-superagent-prototype",
+  "commit": "8c32a9dc5d72c033816c6a8110b37f40cf94fba4",
+  "license": "MIT, reproduced in ../LICENSE.dsh-superagent",
+  "files": {
+    "src/core/assignments.ts": "6acf4b858b35d95c875680e39b1e3c41557bbe6d39f65031bb26927289327065",
+    "src/core/engine.ts": "bd9a4caff834859877d1a08ccddebc990d0e1ca568674b80f9d59ce5adcac827",
+    "src/core/errors.ts": "aa7532a2d1f8c443608683ef1231bf3d81b842f67a87d9b77742b5c76d515009",
+    "src/core/evals.ts": "38916de24ec6e1a27118dd5d7a7efa67bf7a2dfdbab26fb59d377516269e2fc8",
+    "src/core/ids.ts": "bc4bc6fd43ea1377087ff2815706c57f0200666aeb4a7711a40489c377f141ab",
+    "src/core/index.ts": "a5a1cf43f02eafaf520a5bfaf5e76b71ba521d04ee648cfcf12b3843cc474a3e",
+    "src/core/intake.ts": "323aadefea69436ba23ed2de3bdbaad673d61915be9e239f3233ecf551a74179",
+    "src/core/memory.ts": "36cefca987a4e533369a414e52e3fb4754945ae942bb021f8e5cf23c186cf536",
+    "src/core/model.ts": "982155fe6a03c887a7ac4475c6d1592d12aa23c5fe3698403c93bbfd6469d44a",
+    "src/core/part.ts": "437c4f4bcc05e836c056cdb45bbf451e55242d62b602b489f4df902be112e73e",
+    "src/core/ports.ts": "0b44f1cd716d64776b0e3ea74a158cf0effd92e763b1b13c7705e766e9225a43",
+    "src/core/reasons.ts": "dc29e0c3c52e4ffd6e8f27a618cbe704a83fdbd9c5a1b99a1e0c4184d5c33af4",
+    "src/core/replies.ts": "5a8821a1b9d951d2255709543e0be762c6d3204bca07a77ff17c7bfe82ba66f4",
+    "src/core/stage.ts": "b935012a654d2a68ca20cb27909ddc8dceafb704b56a16a23a08036a546141df",
+    "src/core/tickets.ts": "1d9f964ad34b54cbb0403bde16af58851e5e80111177ce73a27b6034e9af940e",
+    "tests/core-engine.spec.ts": "e29358c139a2dbb1a2877e980e043f34cf39bca1905fb10ee14e0b4866bc1a6b",
+    "tests/stage.spec.ts": "3df130eae87d70643f0c924caf66fbca8cb27ced50467e0c7283dee0a39436be"
+  }
+}
