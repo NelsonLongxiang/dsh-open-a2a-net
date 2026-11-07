@@ -1,8 +1,8 @@
 # superagent × a2a-net 接入规格（草案）
 
-配套：[ADR](superagent-a2a-adr.md) · [实施计划](superagent-a2a-plan.md) · [断言与证据](superagent-a2a-evidence.md)
+配套：[ADR](superagent-a2a-adr.md) · [实施计划](superagent-a2a-plan.md) · [p2 Source 设计稿](superagent-a2a-p2-source-design.md) · [断言与证据](superagent-a2a-evidence.md)
 
-状态：草案，仅设计。属主已定方向（第 6 节），等全局生产评估 PASS 后才进入计划第 1 阶段。依据断言 S1–S17，每条都挂有原文证据（ygl-trees 项目 superagent-a2a-spec-r5）；本版按全局 PR #376 @ a537c5a 的评审意见修订，按 PR #381 的评审条件对齐 3.4 节与实现，并按全局 p1-receipt-cmd 开工前裁定，把回执观察字段定名为 `disposition`。
+状态：属主已定方向（第 6 节），全局生产评估已 PASS；计划第 1 阶段（p1）的四个节点已全部交付（PR #379–#384），p2 设计稿第 2 版待全局抽查（第 1 版评审已批 G1、G2、D4，D7 不批并移进 p3）。依据断言 S1–S20，每条都挂有原文证据（ygl-trees 项目 superagent-a2a-spec-r7）。修订经过：按全局 PR #376 @ a537c5a 的评审意见修订；按 PR #381 的评审条件对齐 3.4 节与实现；按全局 p1-receipt-cmd 开工前裁定，把回执观察字段定名为 `disposition`；补入 p2 设计时发现的来源校验缺口（S18）和类型依赖缺口（S19）；本版按全局对 p2 设计稿的裁定（S20）改 Trigger id 与 actor 的翻译。
 
 ## 1. 目标与非目标
 
@@ -39,9 +39,9 @@
 | superagent 概念 | a2a 映射 |
 |---|---|
 | Source 实例 | 一个专用 a2a-net CLI 身份（独立 A2A_CLI_HOME）的信箱（S5） |
-| Trigger | 信箱中一条已验证的入站消息；id = key('a2a', 信箱 seq 与 task id) |
+| Trigger | 信箱中一条入站消息；id = key('a2a', 调用方句柄, task id)。task id 只在宿主幂等窗口内唯一，带上调用方句柄防止窗口过后撞号；不用信箱 seq（新 epoch 会从 1 重来） |
 | Thread | context_id；没有 context_id 时用 task id |
-| Actor | 入站校验通过（bound）的调用方句柄（S4） |
+| Actor | 来源校验通过的调用方句柄（S4）：信箱行 `proof` 为 origin-claim 或 in-process（S20）；按事实翻译为 `human: false` |
 | addressed | direct：A2A 消息总是点名路由到本身份 |
 | Channel 地址 | {调用方句柄, task_id, context_id} |
 | Policy 的 Source 部分 | allowed = 允许发起工作的调用方句柄名单；bots 为空 |
@@ -50,13 +50,15 @@
 
 只有入站校验通过的调用方才能成为 actor。被标为“未验证”或校验失败的消息，在 scope 阶段记为 filtered（reason: unverified），只当数据，不进入 Eval。这回答了 superagent 架构文档中列为开放问题的 Trust。
 
+现状缺口（S18）：校验结论目前只写在信箱行正文的头部（wire 面写“已验证来源 …”或“未验证（…）”，本地面不写），信箱行没有结构化字段。Source 不能靠解析正文判断 actor，所以宿主要先把已算出的校验结论写成信箱行的 `proof` 字段，回执行另写 `receipt_for`。这是计划节点 p1-mail-proof，作为 p2 的必检前置。
+
 ### 3.3 读取面（S2）
 
 Cookbook 要求的是调用方自持游标的拉取。现状有两处不满足：
 - `a2a-net inbox --new` 用本机共享游标（~/.a2a/inbox.cursor），多个消费者会互相推进；
 - 主机信箱只保留最新 64 行，超出的未读会被挤出。
 
-所以需要新增 `a2a-net inbox --after <seq> --json`：
+所以新增了 `a2a-net inbox --after <seq> --json`（PR #379、#380 已交付）：
 - 只读，不推进任何游标；
 - 输出最旧在前，并给出 next 游标；
 - 显式给出这次窗口内被挤出的未读数。
@@ -90,13 +92,13 @@ CLI 身份发正式回执只用一个命令：`a2a-net receipt <task_id> [--atte
 
 task id 由 Outbox 的 message.id 确定性派生；重试永不换 id。
 
-### 3.6 影子运行的节点
-
-影子模式（计划节点 p2）在哪个节点运行、什么时候上线，属于生产变更：由属主选定节点，报全局放行（S15）。这两项是 p2 的放行条件。
-
 ### 3.5 对话上下文
 
-为研判提供 threadContext，需要新增按 context_id 读取往来的只读命令。缺少时，研判只能看到 Trigger 本身。
+为研判提供 threadContext，需要按 context_id 读取往来的只读命令。已由 PR #383 交付：`a2a-net thread <context_id>`，合并信箱里同一 context 的入向消息与本身份发出的路由，分页、只读。
+
+### 3.6 影子运行的节点
+
+影子模式（计划节点 p2）在哪个节点运行、什么时候上线，属于生产变更：由属主选定节点，报全局放行（S15）。这两项是 p2 的放行条件。p2 的实现方案见 [p2 Source 设计稿](superagent-a2a-p2-source-design.md)，它要先过全局设计评审（design_pass）。
 
 ## 4. 接入点 B：A2A Executor（出站，后置）（S6、S7）
 
@@ -124,8 +126,10 @@ A2A 的回执是终态。progress 一类中间报告不经 A2A 传输，执行�
 ## 6. 属主裁定（2026-11-06，采用评审席建议，断言 S13）
 
 1. 代码位置：本仓 `next/0.8`，做成独立导出的插件包（例如 `a2a-watch`），不 fork superagent。
-2. 校验通过、且句柄在 allowed 名单内的 Agent 调用方，给 explicit 强度。
+2. 校验通过、且句柄在 allowed 名单内的 Agent 调用方，给 explicit 强度。注意：这与 superagent Cookbook「名单内的 bot 只能当 inferred」相冲突；p2 按事实翻译为 `human: false`，只把按本条应得的强度记为观察字段，冲突留到 p3 设计时由属主裁定（D7，S20）。
 3. attention 走“正式回执 + 同 context 新任务答复”。
 4. 路由席暂不从评审席拆出，由评审席独自完成全部工作（S12），r1 节点暂缓。
 
-全局生产评估仍需对本规格给出 PASS（计划节点 p0-spec-review 的 global_pass 条件）。已知局限与未决问题见[断言与证据](superagent-a2a-evidence.md)。
+全局生产评估已对本规格给出 PASS（计划节点 p0-spec-review 已解锁）。已知局限与未决问题见[断言与证据](superagent-a2a-evidence.md)。
+
+插件包的类型依赖（S19）：superagent 没有以 npm 包发布，`SourceKind`、`SourceContext` 等类型在编译期拿不到。p2 设计稿推荐在本仓声明最小结构类型，并用契约测试对照钉住的 superagent 提交；最后由全局定。
