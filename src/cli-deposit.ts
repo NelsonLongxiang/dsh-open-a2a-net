@@ -103,6 +103,15 @@ const MAIL_PROOFS = ['origin-claim', 'claim-mismatch', 'legacy-window', 'unbound
  */
 export const MAIL_ADMISSIONS = ['scope-off', 'host-face', 'local-exempt', 'roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'peer-org', 'node-fact', 'cli-deposit'] as const satisfies readonly AdmissionRule[]
 
+/**
+ * Both lists cover their whole union: `satisfies` above keeps each entry a real value; these fail to compile when
+ * task-auth gains a proof or a rule the list does not carry (which a restored row would then silently lose).
+ */
+type Missing<All, Listed> = Exclude<All, Listed>
+const MAIL_PROOFS_COMPLETE: Missing<AuthProof, typeof MAIL_PROOFS[number]> extends never ? true : never = true
+const MAIL_ADMISSIONS_COMPLETE: Missing<AdmissionRule, typeof MAIL_ADMISSIONS[number]> extends never ? true : never = true
+void MAIL_PROOFS_COMPLETE; void MAIL_ADMISSIONS_COMPLETE
+
 /** p1-context-read: the task and conversation a mailbox delivery belongs to (empty strings are dropped). */
 export interface CliMailThread {
   readonly taskId?: string
