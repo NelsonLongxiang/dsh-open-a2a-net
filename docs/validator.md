@@ -229,6 +229,29 @@ ygl-trees verify run spec_4de5f3b9d48d --db <snapshot>      # 判定：overall �
 
 **处置记录**：0.7.0 曾在 `docs/ops/fixtures/` 新增两个回退 fixture，因此多了两条“docs/ 下的执行工件”。按全局 2026-11-06 的裁定，这两个文件已原字节移到 `tests/fixtures/`。移动后复测（引擎 0.119.0 和 0.120.0，meta 1.4），docs/ 下已不再被报，R3 共 9 条：产品 CLI 2 条、bundle 2 条、`tests/fixtures/` 5 条，其中包括移过来的这两个。这三类都按上面的原因保留为 FAIL 现状：移动解决的是“文档目录下有执行工件”，并没有让这两个文件从 R3 里消失。
 
+## superagent p2 影子验收采集器（2026-11-07）
+
+**用途**：p2 影子运行结束时，把 a2a Source 自己记下的行记录、页头记录、health 记录，以及 superagent 库里的 Trigger、外发、Ticket，展平成一个新的快照，交给 `ygl-trees verify run` 按影子验收材料判定。采集器只产快照，不产判定，也不调用 verify 的 run、prepare、submit、archive。
+
+    node scripts/verify-probe.mjs --a2a-shadow <superagent 库> --cli-home <Source 身份目录> --window <起>..<止> --out <新快照.sqlite>
+
+- **源库只读**：以 readOnly 打开，并设 `PRAGMA query_only = ON`；测试断言采集前后源库字节不变。
+- **只写新文件**：`--out` 已存在就拒绝（退出码 1），原文件不动；采集中途出错时删掉本次新建的文件，重跑不会被挡住。
+- **输出与退出码**：stdout 只有一个 JSON 对象。0 表示采集完成，1 表示运行错误（源库或记录形状不对），2 表示用法错误（缺参数、窗口不是带时区的严格 ISO、起点不早于终点）。采集完成不等于 PASS。
+- **展平规则**写在 `scripts/a2a-shadow-snapshot.mjs`，可复跑：同一输入写到另一个新文件，各表内容相同。
+  - 按窗口（`at` 含起点、不含终点）截取：shadow_rows、shadow_pages、shadow_health、shadow_sent。
+  - 不按窗口截取：shadow_triggers（只取 source 为 a2a 的）、shadow_outbox（只取 channel.source 为 a2a 的）、shadow_tickets。这几类记录没有窗口内的时间字段，检查范围只会更大，不会更小。
+  - shadow_meta 按三类记录的全量计算，并带 window_from，供 A0 做同表列比较。
+- **采集器自己计算的列**：
+  - trigger_id = key('a2a', from, task_id)，与插件同一算法，测试中对照；
+  - loss：A7 的定义，即 lost>0、lost 为 null、cursorAhead 或 epochChanged；
+  - shadow_seq_gaps：同一 epoch 内、窗口首末 seq 之间缺失的 seq。covered 表示它落在同 epoch 某个 lost>0 页头的区间 (after_seq, after_seq+lost] 内（after 为 start 时 after_seq 取 0）。宿主的 lost 等于 oldest_seq − after_seq − 1，被挤出的正好是这个区间。真实宿主用例（tests/mesh/a2a-shadow-snapshot.spec.ts）按 64 行上限挤出 6 条，校准了这个区间。
+- **不带正文**：快照里没有消息正文、Trigger 正文、外发正文和 health 的 detail，测试断言了这一点。
+  - 反向用例：同一真实宿主数据删掉一条未报告挤出的行记录，对应的 seq 得到 covered=0。
+- **登记口径**（全局 2026-11-07 裁定 (a)）：本仓 `verify/meta.json` 是 meta_index_version 1，scripts/ 按 v1 的目录白名单豁免，采集器不进 tooling[]（v1 没有这一登记形状）。升到 v2 是另一件治理改动，要做时单独提议。
+- **身份钉住**（代替 tooling 登记）：输出 JSON 的 `collector` 字段带 git commit、两个采集脚本（verify-probe.mjs 和 a2a-shadow-snapshot.mjs）的 sha256，以及这两个文件相对该 commit 是否干净。验收回报必须写明这些值，并且要与采集器 PR 合入时的值一致，否则不能作为验收依据。
+- **机械检查**：单元测试去掉注释后断言两个脚本的代码里不出现 ygl-trees 调用，也不出现 verify 的 run、prepare、submit、archive 步骤；展平模块不引入 child_process。
+
 ## 维护
 
 - **调阈值/加判据**：改 verify/material.md（判据句必须逐字可引用）+ candidates/reviews，
