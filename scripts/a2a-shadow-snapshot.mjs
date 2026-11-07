@@ -14,7 +14,11 @@ import { join } from 'node:path'
 /** KV keys and record caps of src/superagent/a2a-watch.ts (the unit test pins them against the plugin's exports). */
 export const KV = { rows: 'a2a-rows', pages: 'a2a-pages', healthLog: 'a2a-health-log' }
 export const CAPS = { rows: 1000, pages: 1000, health: 200 }
-const OUTCOMES = new Set(['stored', 'duplicate', 'filtered:unverified', 'filtered:receipt', 'duplicateCopy', 'unreadable'])
+const OUTCOMES = new Set(['stored', 'duplicate', 'filtered:unverified', 'filtered:unlinked', 'filtered:loop', 'filtered:receipt', 'duplicateCopy', 'unreadable'])
+/** p3 (S36): the host admission rules that are an operator's link; src/superagent/a2a-watch.ts LINK_RULES (the unit test pins them). */
+export const LINK_RULES = ['canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'cli-deposit']
+/** p3 (S27 L1): the Source's own task ids start with this. */
+export const LOOP_PREFIX = 'a2a-'
 
 /** superagent's `key(...)`: the first 32 hex of sha256 over the JSON array of the parts. */
 export const key = (...values) => createHash('sha256').update(JSON.stringify(values)).digest('hex').slice(0, 32)
@@ -65,6 +69,9 @@ function checkPages(pages) {
     if (p === null || typeof p !== 'object') fail(KV.pages, i, 'not an object')
     if (!isIso(p.at) || typeof p.after !== 'string' || typeof p.next !== 'string' || typeof p.epoch !== 'string') fail(KV.pages, i, 'at, after, next or epoch')
     if (!(p.lost === null || Number.isInteger(p.lost)) || typeof p.epochChanged !== 'boolean' || typeof p.cursorAhead !== 'boolean') fail(KV.pages, i, 'lost, epochChanged or cursorAhead')
+    // Plan P (p3): a heartbeat page carries whole, non-negative counts; any other page carries none.
+    if (p.heartbeat !== undefined && (p.heartbeat !== true || !(Number.isInteger(p.rounds) && p.rounds >= 0) || !(Number.isInteger(p.rows) && p.rows >= 0))) fail(KV.pages, i, 'heartbeat, rounds or rows')
+    if (p.heartbeat === undefined && (p.rounds !== undefined || p.rows !== undefined)) fail(KV.pages, i, 'rounds or rows without heartbeat')
   })
 }
 function checkHealth(log) {
@@ -126,9 +133,9 @@ function readSent(cliHome) {
 const SCHEMA = `
 CREATE TABLE shadow_meta (kind TEXT PRIMARY KEY, cap INTEGER NOT NULL, oldest_at TEXT, newest_at TEXT, count INTEGER NOT NULL, window_from TEXT NOT NULL, window_to TEXT NOT NULL);
 CREATE TABLE shadow_rows (epoch TEXT NOT NULL, seq INTEGER, task_id TEXT, from_handle TEXT, outcome TEXT NOT NULL, at TEXT NOT NULL, proof TEXT, receipt_for TEXT, dup TEXT, trigger_id TEXT,
-  trigger_present INTEGER NOT NULL, trigger_filtered_code TEXT, seq_records INTEGER);
+  trigger_present INTEGER NOT NULL, trigger_filtered_code TEXT, seq_records INTEGER, admission TEXT);
 CREATE TABLE shadow_pages (at TEXT NOT NULL, after TEXT NOT NULL, next TEXT NOT NULL, epoch TEXT NOT NULL, lost INTEGER, epoch_changed INTEGER NOT NULL, cursor_ahead INTEGER NOT NULL, loss INTEGER NOT NULL,
-  health_error INTEGER NOT NULL);
+  health_error INTEGER NOT NULL, heartbeat INTEGER NOT NULL, rounds INTEGER, rows INTEGER, hb_gap_min INTEGER, hb_next_gap_min INTEGER);
 CREATE TABLE shadow_health (at TEXT NOT NULL, entry TEXT NOT NULL, state TEXT NOT NULL, code TEXT);
 CREATE TABLE shadow_seq_gaps (epoch TEXT NOT NULL, seq INTEGER NOT NULL, covered INTEGER NOT NULL);
 CREATE TABLE shadow_triggers (id TEXT PRIMARY KEY, source TEXT NOT NULL, human INTEGER, filtered_code TEXT, at TEXT, in_window INTEGER NOT NULL);
@@ -148,9 +155,17 @@ export const TALLY = {
   source_sent: 'SELECT COUNT(*) AS n FROM shadow_sent WHERE handle = source_handle',
   tickets_a2a: "SELECT COUNT(*) AS n FROM shadow_tickets WHERE basis_source = 'a2a'",
   gaps_uncovered: 'SELECT COUNT(*) AS n FROM shadow_seq_gaps WHERE covered = 0',
+  // p3 A14: linked cli-identity requests that were taken in (a count to be at least 1, kept here so it is never an empty scan).
+  cli_identity_stored: `SELECT COUNT(*) AS n FROM shadow_rows WHERE outcome = 'stored' AND proof = 'cli-identity' AND receipt_for IS NULL
+    AND admission IN (${LINK_RULES.map(r => `'${r}'`).join(', ')}) AND (task_id IS NULL OR task_id NOT LIKE '${LOOP_PREFIX}%')`,
+  // p3 A15: the heartbeats' row counts after the first heartbeat, against the row records in (first, last] (must be 0).
+  heartbeat_row_delta: `SELECT COALESCE((SELECT SUM(rows) FROM shadow_pages WHERE heartbeat = 1 AND at > (SELECT MIN(at) FROM shadow_pages WHERE heartbeat = 1)), 0)
+    - (SELECT COUNT(*) FROM shadow_rows WHERE at > (SELECT MIN(at) FROM shadow_pages WHERE heartbeat = 1) AND at <= (SELECT MAX(at) FROM shadow_pages WHERE heartbeat = 1)) AS n`,
 }
+/** Whole minutes from `a` to `b`, rounded up, so a gap a few seconds over a bound never reads as within it. */
+const minutesUp = (a, b) => Math.ceil((Date.parse(b) - Date.parse(a)) / 60_000)
 
-/** Re-count each tally from the snapshot's own detail tables; exactly the four names, each equal, or the run fails. */
+/** Re-count each tally from the snapshot's own detail tables; exactly the TALLY names, each equal, or the run fails. */
 export function checkTally(snapshotDb) {
   const rows = snapshotDb.prepare('SELECT name, n FROM shadow_tally ORDER BY name').all()
   const names = Object.keys(TALLY)
@@ -176,6 +191,10 @@ export function checkTally(snapshotDb) {
  * - shadow_pages.health_error: 1 when the whole a2a-health-log (no window) has a record with the same at, entry 'a2a' and
  *   state 'error', else 0.
  * - shadow_triggers.in_window: 1 when trigger.at lies in --window (from inclusive, to exclusive), else 0.
+ * - shadow_pages.heartbeat / rounds / rows (p3 plan P): the heartbeat page's own fields; 0 / null / null otherwise.
+ * - shadow_pages.hb_gap_min: for a heartbeat, the whole minutes (rounded up) since the previous heartbeat in the window, or
+ *   since the window's start for the first one; hb_next_gap_min: to the next heartbeat, or to the window's end for the last.
+ *   Null on other pages. A15 reads both, so a silence at either edge of the window shows.
  */
 export function flattenShadow({ sourceDb, cliHome, window, snapshotDb }) {
   const inWindow = at => at >= window.from && at < window.to
@@ -194,11 +213,19 @@ export function flattenShadow({ sourceDb, cliHome, window, snapshotDb }) {
   const { handle, sent: sentAll } = readSent(cliHome)
   const sent = sentAll.filter(s => inWindow(s.at))
   const gaps = seqGaps(rows, pages)
+  const beats = pages.filter(p => p.heartbeat === true).map(p => at(p.at)).sort()
+  const beatGaps = new Map(beats.map((b, i) => [b, { prev: minutesUp(i === 0 ? window.from : beats[i - 1], b), next: minutesUp(b, i === beats.length - 1 ? window.to : beats[i + 1]) }]))
+  const linked = new Set(LINK_RULES)
+  const rowAt = r => at(r.at)
   const tally = {
     outbox_sent: outbox.filter(o => o.status === 'sent').length,
     source_sent: sent.filter(s => s.handle === handle).length,
     tickets_a2a: tickets.filter(t => t.basis_source === 'a2a').length,
     gaps_uncovered: gaps.filter(g => g.covered === 0).length,
+    cli_identity_stored: rows.filter(r => r.outcome === 'stored' && r.proof === 'cli-identity' && (r.receipt_for ?? null) === null && linked.has(r.admission) &&
+      !(typeof r.task_id === 'string' && r.task_id.startsWith(LOOP_PREFIX))).length,
+    heartbeat_row_delta: beats.length === 0 ? 0
+      : pages.filter(p => p.heartbeat === true && at(p.at) > beats[0]).reduce((sum, p) => sum + p.rows, 0) - rows.filter(r => rowAt(r) > beats[0] && rowAt(r) <= beats.at(-1)).length,
   }
   // trigger.id is the table's primary key (superagent store.ts:72), so a trigger_id finds at most one Trigger.
   const lookup = sourceDb.prepare(`SELECT d.value ->> '$.filtered.code' AS code FROM trigger t LEFT JOIN disposition d ON d.id = t.id WHERE t.id = ?`)
@@ -222,19 +249,25 @@ export function flattenShadow({ sourceDb, cliHome, window, snapshotDb }) {
     insert('shadow_meta', ['kind', 'cap', 'oldest_at', 'newest_at', 'count', 'window_from', 'window_to'],
       [meta('rows', CAPS.rows, rowsAll), meta('pages', CAPS.pages, pagesAll), meta('health', CAPS.health, healthAll)])
     insert('shadow_rows', ['epoch', 'seq', 'task_id', 'from_handle', 'outcome', 'at', 'proof', 'receipt_for', 'dup', 'trigger_id',
-      'trigger_present', 'trigger_filtered_code', 'seq_records'], rows.map(r => {
+      'trigger_present', 'trigger_filtered_code', 'seq_records', 'admission'], rows.map(r => {
       const triggerId = typeof r.task_id === 'string' && typeof r.from === 'string' ? key('a2a', r.from, r.task_id) : null
       const found = triggerId === null ? undefined : lookup.get(triggerId)
       return {
         epoch: r.epoch, seq: r.seq, task_id: text(r.task_id), from_handle: text(r.from), outcome: r.outcome, at: at(r.at),
         proof: text(r.proof), receipt_for: text(r.receipt_for), dup: text(r.dup), trigger_id: triggerId,
         trigger_present: found === undefined ? 0 : 1, trigger_filtered_code: found === undefined ? null : text(found.code),
-        seq_records: r.seq === null ? null : seqCount.get(`${r.epoch}:${String(r.seq)}`),
+        seq_records: r.seq === null ? null : seqCount.get(`${r.epoch}:${String(r.seq)}`), admission: text(r.admission),
       }
     }))
-    insert('shadow_pages', ['at', 'after', 'next', 'epoch', 'lost', 'epoch_changed', 'cursor_ahead', 'loss', 'health_error'], pages.map(p => ({
-      at: at(p.at), after: p.after, next: p.next, epoch: p.epoch, lost: p.lost, epoch_changed: p.epochChanged ? 1 : 0,
-      cursor_ahead: p.cursorAhead ? 1 : 0, loss: isLoss(p) ? 1 : 0, health_error: healthErrors.has(at(p.at)) ? 1 : 0 })))
+    insert('shadow_pages', ['at', 'after', 'next', 'epoch', 'lost', 'epoch_changed', 'cursor_ahead', 'loss', 'health_error', 'heartbeat', 'rounds', 'rows', 'hb_gap_min', 'hb_next_gap_min'], pages.map(p => {
+      const beat = p.heartbeat === true ? beatGaps.get(at(p.at)) : undefined
+      return {
+        at: at(p.at), after: p.after, next: p.next, epoch: p.epoch, lost: p.lost, epoch_changed: p.epochChanged ? 1 : 0,
+        cursor_ahead: p.cursorAhead ? 1 : 0, loss: isLoss(p) ? 1 : 0, health_error: healthErrors.has(at(p.at)) ? 1 : 0,
+        heartbeat: beat === undefined ? 0 : 1, rounds: beat === undefined ? null : p.rounds, rows: beat === undefined ? null : p.rows,
+        hb_gap_min: beat?.prev ?? null, hb_next_gap_min: beat?.next ?? null,
+      }
+    }))
     insert('shadow_health', ['at', 'entry', 'state', 'code'], health.map(h => ({ at: at(h.at), entry: h.entry, state: h.state, code: text(h.code) })))
     insert('shadow_seq_gaps', ['epoch', 'seq', 'covered'], gaps)
     insert('shadow_triggers', ['id', 'source', 'human', 'filtered_code', 'at', 'in_window'], triggers.map(t => ({ ...t,

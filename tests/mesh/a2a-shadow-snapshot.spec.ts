@@ -124,7 +124,9 @@ describe('superagent p2: shadow collector on a real host overflow', () => {
           .toEqual([{ trigger_present: 1, trigger_filtered_code: null, seq_records: 1, n: 3 + MAILBOX_CAP }])
         expect(snap.prepare('SELECT loss, health_error FROM shadow_pages ORDER BY rowid').all()).toEqual([{ loss: 0, health_error: 0 }, { loss: 0, health_error: 0 }, { loss: 1, health_error: 1 }])
         expect(snap.prepare('SELECT in_window, COUNT(*) AS n FROM shadow_triggers GROUP BY 1').all()).toEqual([{ in_window: 1, n: 3 + MAILBOX_CAP }])
-        expect(snap.prepare('SELECT name, n FROM shadow_tally ORDER BY name').all()).toEqual(['gaps_uncovered', 'outbox_sent', 'source_sent', 'tickets_a2a'].map(name => ({ name, n: 0 })))
+        // The deposited CLI callers are linked cli-identity requests taken in (p3 A14): every row counts; the rest stay 0.
+        expect(snap.prepare('SELECT name, n FROM shadow_tally ORDER BY name').all()).toEqual(['cli_identity_stored', 'gaps_uncovered', 'heartbeat_row_delta', 'outbox_sent', 'source_sent', 'tickets_a2a']
+          .map(name => ({ name, n: name === 'cli_identity_stored' ? 3 + MAILBOX_CAP : 0 })))
         // Every row's trigger_id is a stored Trigger (cli callers: all stored, no filter code), and no text came across.
         expect(snap.prepare(`SELECT COUNT(*) AS n FROM shadow_rows r LEFT JOIN shadow_triggers t ON t.id = r.trigger_id WHERE t.id IS NULL OR t.filtered_code IS NOT NULL OR r.outcome IS NOT 'stored'`).get()).toEqual({ n: 0 })
       } finally { snap.close() }
