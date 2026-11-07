@@ -116,6 +116,11 @@ describe('superagent p2: shadow collector on a real host overflow', () => {
         expect(snap.prepare('SELECT epoch, seq, covered FROM shadow_seq_gaps ORDER BY seq').all()).toEqual([4, 5, 6, 7, 8, 9].map(seq => ({ epoch, seq, covered: 1 })))
         // A7: the loss round left an a2a error health record at the same at.
         expect(snap.prepare(`SELECT COUNT(*) AS n FROM shadow_pages p JOIN shadow_health h ON h.at = p.at AND h.entry = 'a2a' AND h.state = 'error' WHERE p.loss = 1`).get()).toEqual({ n: 1 })
+        // Lookup columns on real data: each row finds its (filtered) Trigger once, the loss page its health error, all in the window.
+        expect(snap.prepare(`SELECT trigger_present, trigger_filtered_code, seq_records, COUNT(*) AS n FROM shadow_rows GROUP BY 1, 2, 3`).all())
+          .toEqual([{ trigger_present: 1, trigger_filtered_code: 'unverified', seq_records: 1, n: 3 + MAILBOX_CAP }])
+        expect(snap.prepare('SELECT loss, health_error FROM shadow_pages ORDER BY rowid').all()).toEqual([{ loss: 0, health_error: 0 }, { loss: 1, health_error: 1 }])
+        expect(snap.prepare('SELECT in_window, COUNT(*) AS n FROM shadow_triggers GROUP BY 1').all()).toEqual([{ in_window: 1, n: 3 + MAILBOX_CAP }])
         // Every row's trigger_id is a stored Trigger (cli callers: all filtered unverified), and no text came across.
         expect(snap.prepare(`SELECT COUNT(*) AS n FROM shadow_rows r LEFT JOIN shadow_triggers t ON t.id = r.trigger_id WHERE t.id IS NULL OR t.filtered_code IS NOT 'unverified' OR r.outcome IS NOT 'filtered:unverified'`).get()).toEqual({ n: 0 })
       } finally { snap.close() }

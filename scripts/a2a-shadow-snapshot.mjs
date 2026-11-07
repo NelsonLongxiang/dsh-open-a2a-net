@@ -125,11 +125,13 @@ function readSent(cliHome) {
 
 const SCHEMA = `
 CREATE TABLE shadow_meta (kind TEXT PRIMARY KEY, cap INTEGER NOT NULL, oldest_at TEXT, newest_at TEXT, count INTEGER NOT NULL, window_from TEXT NOT NULL, window_to TEXT NOT NULL);
-CREATE TABLE shadow_rows (epoch TEXT NOT NULL, seq INTEGER, task_id TEXT, from_handle TEXT, outcome TEXT NOT NULL, at TEXT NOT NULL, proof TEXT, receipt_for TEXT, dup TEXT, trigger_id TEXT);
-CREATE TABLE shadow_pages (at TEXT NOT NULL, after TEXT NOT NULL, next TEXT NOT NULL, epoch TEXT NOT NULL, lost INTEGER, epoch_changed INTEGER NOT NULL, cursor_ahead INTEGER NOT NULL, loss INTEGER NOT NULL);
+CREATE TABLE shadow_rows (epoch TEXT NOT NULL, seq INTEGER, task_id TEXT, from_handle TEXT, outcome TEXT NOT NULL, at TEXT NOT NULL, proof TEXT, receipt_for TEXT, dup TEXT, trigger_id TEXT,
+  trigger_present INTEGER NOT NULL, trigger_filtered_code TEXT, seq_records INTEGER);
+CREATE TABLE shadow_pages (at TEXT NOT NULL, after TEXT NOT NULL, next TEXT NOT NULL, epoch TEXT NOT NULL, lost INTEGER, epoch_changed INTEGER NOT NULL, cursor_ahead INTEGER NOT NULL, loss INTEGER NOT NULL,
+  health_error INTEGER NOT NULL);
 CREATE TABLE shadow_health (at TEXT NOT NULL, entry TEXT NOT NULL, state TEXT NOT NULL, code TEXT);
 CREATE TABLE shadow_seq_gaps (epoch TEXT NOT NULL, seq INTEGER NOT NULL, covered INTEGER NOT NULL);
-CREATE TABLE shadow_triggers (id TEXT PRIMARY KEY, source TEXT NOT NULL, human INTEGER, filtered_code TEXT, at TEXT);
+CREATE TABLE shadow_triggers (id TEXT PRIMARY KEY, source TEXT NOT NULL, human INTEGER, filtered_code TEXT, at TEXT, in_window INTEGER NOT NULL);
 CREATE TABLE shadow_outbox (id TEXT PRIMARY KEY, channel_source TEXT, status TEXT, drop_reason TEXT);
 CREATE TABLE shadow_tickets (id TEXT PRIMARY KEY, basis_source TEXT);
 CREATE TABLE shadow_sent (handle TEXT, task_id TEXT, at TEXT NOT NULL, source_handle TEXT NOT NULL);
@@ -139,6 +141,15 @@ CREATE TABLE shadow_sent (handle TEXT, task_id TEXT, at TEXT NOT NULL, source_ha
  * Read the superagent database and the Source identity's home, and write the snapshot tables into `snapshotDb`.
  * Window-bounded: rows, pages, health and sent (by `at`, from inclusive, to exclusive). Whole-store: the a2a Triggers,
  * the a2a outbox and every Ticket's basis source (they carry no window time of their own, so the check covers more, not less).
+ *
+ * Lookup columns (appended; the raw columns stay as they are). The verify predicate reads one table and sql-pair only
+ * compares equal key sets, so containment, counts and the window are worked out here, the same way on every rerun:
+ * - shadow_rows.trigger_present: 1 when the whole trigger table (any source, no window) has id = trigger_id, else 0.
+ * - shadow_rows.trigger_filtered_code: that Trigger's disposition $.filtered.code; null without a Trigger or unfiltered.
+ * - shadow_rows.seq_records: records with the same epoch and seq in the whole a2a-rows list (no window); null when seq is.
+ * - shadow_pages.health_error: 1 when the whole a2a-health-log (no window) has a record with the same at, entry 'a2a' and
+ *   state 'error', else 0.
+ * - shadow_triggers.in_window: 1 when trigger.at lies in --window (from inclusive, to exclusive), else 0.
  */
 export function flattenShadow({ sourceDb, cliHome, window, snapshotDb }) {
   const inWindow = at => at >= window.from && at < window.to
@@ -157,6 +168,15 @@ export function flattenShadow({ sourceDb, cliHome, window, snapshotDb }) {
   const { handle, sent: sentAll } = readSent(cliHome)
   const sent = sentAll.filter(s => inWindow(s.at))
   const gaps = seqGaps(rows, pages)
+  // trigger.id is the table's primary key (superagent store.ts:72), so a trigger_id finds at most one Trigger.
+  const lookup = sourceDb.prepare(`SELECT d.value ->> '$.filtered.code' AS code FROM trigger t LEFT JOIN disposition d ON d.id = t.id WHERE t.id = ?`)
+  const seqCount = new Map()
+  for (const r of rowsAll) if (r.seq !== null) seqCount.set(`${r.epoch}:${String(r.seq)}`, (seqCount.get(`${r.epoch}:${String(r.seq)}`) ?? 0) + 1)
+  const healthErrors = new Set(healthAll.filter(h => h.entry === 'a2a' && h.state === 'error').map(h => at(h.at)))
+  const triggerAt = t => {
+    if (!isIso(t.at)) throw new Error(`trigger ${String(t.id)} has no readable at; the snapshot was not written`)
+    return at(t.at)
+  }
 
   snapshotDb.exec(SCHEMA)
   const insert = (table, columns, list) => {
@@ -169,17 +189,24 @@ export function flattenShadow({ sourceDb, cliHome, window, snapshotDb }) {
   try {
     insert('shadow_meta', ['kind', 'cap', 'oldest_at', 'newest_at', 'count', 'window_from', 'window_to'],
       [meta('rows', CAPS.rows, rowsAll), meta('pages', CAPS.pages, pagesAll), meta('health', CAPS.health, healthAll)])
-    insert('shadow_rows', ['epoch', 'seq', 'task_id', 'from_handle', 'outcome', 'at', 'proof', 'receipt_for', 'dup', 'trigger_id'], rows.map(r => ({
-      epoch: r.epoch, seq: r.seq, task_id: text(r.task_id), from_handle: text(r.from), outcome: r.outcome, at: at(r.at),
-      proof: text(r.proof), receipt_for: text(r.receipt_for), dup: text(r.dup),
-      trigger_id: typeof r.task_id === 'string' && typeof r.from === 'string' ? key('a2a', r.from, r.task_id) : null })))
-    insert('shadow_pages', ['at', 'after', 'next', 'epoch', 'lost', 'epoch_changed', 'cursor_ahead', 'loss'], pages.map(p => ({
+    insert('shadow_rows', ['epoch', 'seq', 'task_id', 'from_handle', 'outcome', 'at', 'proof', 'receipt_for', 'dup', 'trigger_id',
+      'trigger_present', 'trigger_filtered_code', 'seq_records'], rows.map(r => {
+      const triggerId = typeof r.task_id === 'string' && typeof r.from === 'string' ? key('a2a', r.from, r.task_id) : null
+      const found = triggerId === null ? undefined : lookup.get(triggerId)
+      return {
+        epoch: r.epoch, seq: r.seq, task_id: text(r.task_id), from_handle: text(r.from), outcome: r.outcome, at: at(r.at),
+        proof: text(r.proof), receipt_for: text(r.receipt_for), dup: text(r.dup), trigger_id: triggerId,
+        trigger_present: found === undefined ? 0 : 1, trigger_filtered_code: found === undefined ? null : text(found.code),
+        seq_records: r.seq === null ? null : seqCount.get(`${r.epoch}:${String(r.seq)}`),
+      }
+    }))
+    insert('shadow_pages', ['at', 'after', 'next', 'epoch', 'lost', 'epoch_changed', 'cursor_ahead', 'loss', 'health_error'], pages.map(p => ({
       at: at(p.at), after: p.after, next: p.next, epoch: p.epoch, lost: p.lost, epoch_changed: p.epochChanged ? 1 : 0,
-      cursor_ahead: p.cursorAhead ? 1 : 0, loss: isLoss(p) ? 1 : 0 })))
+      cursor_ahead: p.cursorAhead ? 1 : 0, loss: isLoss(p) ? 1 : 0, health_error: healthErrors.has(at(p.at)) ? 1 : 0 })))
     insert('shadow_health', ['at', 'entry', 'state', 'code'], health.map(h => ({ at: at(h.at), entry: h.entry, state: h.state, code: text(h.code) })))
     insert('shadow_seq_gaps', ['epoch', 'seq', 'covered'], gaps)
-    insert('shadow_triggers', ['id', 'source', 'human', 'filtered_code', 'at'], triggers.map(t => ({ ...t,
-      human: t.human === 'true' ? 1 : t.human === 'false' ? 0 : null })))
+    insert('shadow_triggers', ['id', 'source', 'human', 'filtered_code', 'at', 'in_window'], triggers.map(t => ({ ...t,
+      human: t.human === 'true' ? 1 : t.human === 'false' ? 0 : null, in_window: inWindow(triggerAt(t)) ? 1 : 0 })))
     insert('shadow_outbox', ['id', 'channel_source', 'status', 'drop_reason'], outbox)
     insert('shadow_tickets', ['id', 'basis_source'], tickets)
     insert('shadow_sent', ['handle', 'task_id', 'at', 'source_handle'], sent.map(s => ({ ...s, source_handle: handle })))
