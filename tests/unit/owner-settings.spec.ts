@@ -14,7 +14,7 @@ const EXISTING = `# top comment
   config:
     announce: true
     wakeJoinedOnBoot: true
-    peers: [ 'http://10.20.30.157:13080' ]
+    peers: [ 'http://10.20.30.11:13080' ]
 `
 
 describe('applyOwnerSettings', () => {
@@ -43,7 +43,7 @@ describe('applyOwnerSettings', () => {
     expect(yaml).toContain("teamJoinAllowlist: ['dsh/review-gate', 'dsh/owner''s-team']")
     expect(yaml).toContain('teamScopeInfo: false')
     expect(yaml).toContain('wakeJoinedOnBoot: true')
-    expect(yaml).toContain("peers: [ 'http://10.20.30.157:13080' ]")
+    expect(yaml).toContain("peers: [ 'http://10.20.30.11:13080' ]")
     expect(yaml).toContain('- id: session-persistence-jsonl')
     expect(restartNeeded).toBe(false)
   })

@@ -14,19 +14,19 @@
 
 读取：2026-11-05 11:03:25 +08:00，GET http://127.0.0.1:3080/__dsh_a2a/state（13080 代理读回相同）。
 
-- host.lanIp = 100.64.0.127。
-- .85/.88/.157/.43:13080 均 linked、verified=true、lastContactOk=true。
-- .156:12080 linked、verified=true；.223:13080 stranger、verified=false、lastContactOk=false。
+- host.lanIp = 100.64.0.10。
+- 多个对端 linked、verified=true、lastContactOk=true。
+- 另有对端 linked；一个未配置的对端为 stranger、verified=false、lastContactOk=false。
 - 这不是重演 issue 中的“全部 stranger”：对端后来已增加 Tailscale seed，当前已部分恢复。未修改或撤销这些现场配置来制造反例。
-- 真实 IPv4 枚举依次含 Tailscale 100.64.0.127、以太网 10.20.30.156、VMware 192.168.251.1/192.168.250.1、环回、Hyper-V/WSL。
+- 真实 IPv4 枚举依次含 Tailscale 100.64.0.10、以太网 10.20.30.10、VMware 192.168.251.1/192.168.250.1、环回、Hyper-V/WSL。
 
 ## 改后隔离宿主读回（同机真实网卡，非生产替换）
 
 命令：pnpm exec vitest run tests/mesh/gh311-lan-origins.spec.ts。
 读取：2026-11-05 11:11:50–53 +08:00。测试用临时 home 与随机监听端口启动真实插件，并 GET /__dsh_a2a/state；结束即 dispose，不重启生产宿主。
 
-- host.lanIp = 10.20.30.156（Tailscale 仍排在枚举首位）。
-- 无显式覆盖时，出站 X-A2A-Caller-Url 为 http://10.20.30.156:<隔离宿主端口>。
+- host.lanIp = 10.20.30.10（Tailscale 仍排在枚举首位）。
+- 无显式覆盖时，出站 X-A2A-Caller-Url 为 http://10.20.30.10:<隔离宿主端口>。
 - 显式 originClaimUrl=http://explicit.example:13080 时，签名 callerUrl 保持该值；host.lanIp 仍报告真实优选 LAN 地址。
 - 双测试宿主通过 localhost 与 127.0.0.1 模拟本机别名：对端只种 audience 别名，修复后的 state.peers 对目标宿主报告 linked、verified=true。
 - 单元反例钉住无 alias 为 stranger、有 alias 为 linked，错端口/协议/其他对端/非法 URL/未验签名片均不升级。
@@ -37,7 +37,7 @@
 
 src/origin-claim.ts:275–294 先按 callerUrl 的精确 URL 查名片缓存；未命中就 GET callerUrl + /.well-known/agent-card.json。验签不因两个 URL 宣称同一台机器就借用另一 URL 的缓存。
 
-因此 LAN 对端到不了 100.64.0.127 时，即使有 10.20.30.156 的名片缓存，冷 CGNAT callerUrl 仍可能返回 no-card，影响真实 OriginClaim 校验；并非仅徽章显示。反之，有该精确 URL 的可用已验签名片缓存或实际 tailnet 可达时可以通过。CLI 本机 deposit 验签是另一条本机表路径，不应与普通宿主信封混同。
+因此 LAN 对端到不了 100.64.0.10 时，即使有 10.20.30.10 的名片缓存，冷 CGNAT callerUrl 仍可能返回 no-card，影响真实 OriginClaim 校验；并非仅徽章显示。反之，有该精确 URL 的可用已验签名片缓存或实际 tailnet 可达时可以通过。CLI 本机 deposit 验签是另一条本机表路径，不应与普通宿主信封混同。
 
 已加独立回归测试：同一签名在“仅 LAN URL 缓存且 CGNAT 回拨失败”时 no-card；精确 CGNAT 缓存命中时 bound=true 且不回拨；回拨成功时通过。
 

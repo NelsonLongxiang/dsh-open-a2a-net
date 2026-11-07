@@ -19,7 +19,7 @@ const sessions = [
 ]
 const peers = [
   { url: 'https://10.0.0.5:8787', score: 0.9 },
-  { url: 'http://10.20.30.9:13080', score: 0.4 },
+  { url: 'http://10.20.30.14:13080', score: 0.4 },
 ]
 const input: PlanningInput = {
   sessions,
@@ -28,7 +28,7 @@ const input: PlanningInput = {
   peerCount: peers.length,
   peers,
   inFlight: [],
-  // 10.0.0.5 carries a remote team row (handle); 10.20.30.9 does not.
+  // 10.0.0.5 carries a remote team row (handle); 10.20.30.14 does not.
   remoteTeams: [{ team: 'peerzone/01234567', via: 'https://10.0.0.5:8787' }],
 }
 

@@ -27,11 +27,11 @@ describe('cardText', () => {
   })
 
   it('a peer publishing one named team is titled by that name; the address moves to the second line', () => {
-    const peer = node({ id: 'peer-10.20.30.157:13080', remote: true, name: undefined })
-    const t = cardText(peer, [{ team: 'dsh-host-ca0c0a8d', name: 'remote-157', via: 'http://10.20.30.157:13080' }], 0.9)
+    const peer = node({ id: 'peer-10.20.30.11:13080', remote: true, name: undefined })
+    const t = cardText(peer, [{ team: 'dsh-host-ca0c0a8d', name: 'remote-157', via: 'http://10.20.30.11:13080' }], 0.9)
     expect(t.title).toBe('remote-157')
-    expect(t.sub).toBe('10.20.30.157:13080 · score 0.9 · 1 远端团队：remote-157')
-    expect(t.tip).toContain('10.20.30.157:13080')
+    expect(t.sub).toBe('10.20.30.11:13080 · score 0.9 · 1 远端团队：remote-157')
+    expect(t.tip).toContain('10.20.30.11:13080')
   })
 
   it('a peer with several (or unnamed) teams keeps the address as its title', () => {

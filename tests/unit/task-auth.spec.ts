@@ -216,16 +216,16 @@ describe('gh#114 S1: allowlist version (golden vectors)', () => {
     roster: [['dsh/aaaaaaaa', 'dsh/team-x'], ['dsh/aaaaaaaa', 'dsh/team-x']],
     canvas: [['dsh/canvas/ops', ['dsh/bbbbbbbb', 'dsh/aaaaaaaa']]],
     cli: ['review-seat/f62b3c7aa9f44276'],
-    links: ['http://100.64.0.127:13080'],
+    links: ['http://100.64.0.10:13080'],
   }
 
   it('canonical JSON: fixed key order, sorted and deduplicated arrays, no whitespace', () => {
-    expect(canonicalAllowlist(inputs)).toBe('{"zone":"dsh","scope":[true,true],"joined":["dsh/aaaaaaaa","dsh/bbbbbbbb"],"roster":[["dsh/aaaaaaaa","dsh/team-x"]],"canvas":[["dsh/canvas/ops",["dsh/aaaaaaaa","dsh/bbbbbbbb"]]],"cli":["review-seat/f62b3c7aa9f44276"],"links":["http://100.64.0.127:13080"]}')
+    expect(canonicalAllowlist(inputs)).toBe('{"zone":"dsh","scope":[true,true],"joined":["dsh/aaaaaaaa","dsh/bbbbbbbb"],"roster":[["dsh/aaaaaaaa","dsh/team-x"]],"canvas":[["dsh/canvas/ops",["dsh/aaaaaaaa","dsh/bbbbbbbb"]]],"cli":["review-seat/f62b3c7aa9f44276"],"links":["http://100.64.0.10:13080"]}')
   })
 
   it('the version is al1: + 16 hex, stable under input order, and moves with any input', () => {
     const v = allowlistVersion(inputs)
-    expect(v).toBe('al1:67db82f48b6d6566') // computed independently: python3 hashlib.sha256 over the canonical string above
+    expect(v).toBe('al1:9eb79c134d3fc171') // computed independently: python3 hashlib.sha256 over the canonical string above
     expect(allowlistVersion({ ...inputs, joined: [...inputs.joined].reverse(), canvas: [['dsh/canvas/ops', ['dsh/aaaaaaaa', 'dsh/bbbbbbbb']]] })).toBe(v)
     expect(allowlistVersion({ ...inputs, cli: [] })).not.toBe(v)
     expect(allowlistVersion({ ...inputs, scope: [true, false] })).not.toBe(v)

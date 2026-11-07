@@ -26,7 +26,7 @@ MOCK_STATE = {
             {"id": "55667788", "team": "beta/55667788", "joined": True, "live": True},
             {"id": "99aabbcc", "team": "beta/99aabbcc", "joined": True, "live": False}]},
     ]},
-    "peers": [{"url": "http://10.20.30.88:3080", "score": 42}],
+    "peers": [{"url": "http://10.20.30.12:3080", "score": 42}],
 }
 
 def shot(pw, name, mock):

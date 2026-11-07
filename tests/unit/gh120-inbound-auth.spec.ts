@@ -26,7 +26,7 @@ function writeSnapshot(path: string, snapshot: unknown): void {
 const AUTH: TaskAuthorization = buildAuthorization(
   { ok: true, via: 'canvas-member', rule: 'canvas-shared', basis: ['dsh/canvas/ops', 'peer-org:dsh/canvas/far'] },
   {
-    caller: 'dsh/aaaaaaaa', proof: 'origin-claim', claim: { caller: 'dsh', origin: 'http://100.64.0.127:13080' },
+    caller: 'dsh/aaaaaaaa', proof: 'origin-claim', claim: { caller: 'dsh', origin: 'http://100.64.0.10:13080' },
     ingress: 'wire', allowlistVersion: 'al1:0123456789abcdef', target: 'dsh/bbbbbbbb', receiptTarget: 'dsh/aaaaaaaa',
     receivedAt: 1_700_000_000_000, targetBusy: true,
   },
@@ -35,7 +35,7 @@ const AUTH: TaskAuthorization = buildAuthorization(
 describe('#120 buildAuthorization / parseAuthorization', () => {
   it('builds a frozen record (nested values too) with via derived from the rule', () => {
     expect(AUTH).toEqual({
-      v: 1, caller: 'dsh/aaaaaaaa', proof: 'origin-claim', claim: { caller: 'dsh', origin: 'http://100.64.0.127:13080' },
+      v: 1, caller: 'dsh/aaaaaaaa', proof: 'origin-claim', claim: { caller: 'dsh', origin: 'http://100.64.0.10:13080' },
       ingress: 'wire', via: 'canvas-member', admission_rule: 'canvas-shared', basis: ['dsh/canvas/ops', 'peer-org:dsh/canvas/far'],
       allowlist_version: 'al1:0123456789abcdef', target: 'dsh/bbbbbbbb', receipt_target: 'dsh/aaaaaaaa', received_at: 1_700_000_000_000, target_busy: true,
     })
