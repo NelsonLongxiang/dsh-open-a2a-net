@@ -109,6 +109,18 @@ describe('6 · every loss is a health error with its numbers', () => {
     expect(lossHealth({ lost: null, epochChanged: false, cursorAhead: true }, 'e1:999', at)?.detail).toContain('mailbox store restarted')
     expect(lossHealth({ lost: 0, epochChanged: false, cursorAhead: true }, 'e1:999', at)).toMatchObject({ state: 'error', detail: expect.stringContaining('cursor e1:999 is ahead') })
   })
+  it('a round of the loop that lost mail ends on its error, never covered by a ready (global review of PR #390)', async () => {
+    for (const over of [{ lost: 2 }, { lost: null }, { lost: null, epochChanged: true }, { cursorAhead: true }]) {
+      const f = fake(args => args[0] === 'publish' ? '' : page([row()], over))
+      const stop = new AbortController()
+      const run = watch(f.ctx, stop.signal, () => new Date(at))
+      await new Promise(r => setTimeout(r, 10)); stop.abort(); await run
+      const read = f.reports.filter(([entry]) => entry === 'a2a')
+      expect(read.at(-1)?.[1], JSON.stringify(over)).toMatchObject({ state: 'error', at })
+      expect(read.some(([, h]) => h.state === 'ready'), JSON.stringify(over)).toBe(false)
+      expect(f.received).toHaveLength(1)
+    }
+  })
   it('the read reports it on the a2a entry and still takes in what it got', async () => {
     const f = fake(() => page([row()], { lost: 2 }))
     await pollMailbox(f.ctx, new AbortController().signal, () => new Date(at))

@@ -31,3 +31,14 @@ superagent 包的 `cordis.patch.yml` 里插入一条，默认禁用：
 - `human: false`。`meta.s13Strength` 只是观察字段（见 D7，p3 由属主裁定）。
 - `lost > 0`、`lost === null`、`cursorAhead`、`epochChanged` 都会报 `a2a` health error，并写出具体数字；宿主重启时文案会写明。
 - 游标在一轮全部 receive 之后才前移；重放靠稳定 id 去重。每隔 `renewMinutes` 执行一次 `a2a-net publish` 续户口，连续失败 3 次报 `a2a-deposit` error。
+
+## health 怎么报
+
+- 出现挤出或游标异常（lost > 0、lost === null、cursorAhead、epochChanged）的那一轮，`a2a` 条目以 error 结束，同一轮不再报 ready，不会被覆盖（全局对 PR #390 的评审）。
+- 下一轮读取干净时，`a2a` 条目重新报 ready。所以 error 至少在一个轮询间隔（`pollSeconds`）内可见；要留存全部异常，靠影子验收判据 A7 采集 health 历史。
+- 连续 3 轮读取失败时，报 `pollFailures` error；户口续期连续失败 3 次时，报 `a2a-deposit` error。
+
+## 已知限制
+
+- **毒行**：某一行的 `ctx.receive` 如果一直抛错，游标会停在那一行，之后每轮都重读、反复报 error。p2 接受这一点，因为它会显示出来。处理要靠人：查明并修好这一行的问题后重启；或者经全局同意，人工把游标越过这一行。
+- **还没配置完成时**：`configured()` 为假时，Source 报 `setupPending` 后直接返回，不轮询。superagent 在账户配置完成后会重启，重启时插件会重新 apply（superagent docs/008-cookbook.md 第 9 步）。所以不需要循环等待。

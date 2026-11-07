@@ -163,7 +163,8 @@ export function lossHealth(page: Pick<MailPage, 'lost' | 'epochChanged' | 'curso
   return undefined
 }
 
-export interface RoundSummary { read: number; triggers: number; duplicateCopies: number; unreadable: number; next: string }
+/** One read. `loss` is the health error this round reported, so the loop does not cover it with a ready in the same round. */
+export interface RoundSummary { read: number; triggers: number; duplicateCopies: number; unreadable: number; next: string; loss?: Health }
 
 /**
  * Read the mailbox after the stored cursor, take in each row, then move the cursor. An interrupted round leaves the cursor
@@ -174,7 +175,7 @@ export async function pollMailbox(ctx: SourceContext, signal: AbortSignal, now: 
   const page = parsePage(await ctx.commands.withSignal(signal).run(PROGRAM, ['inbox', '--after', after]))
   const loss = lossHealth(page, after, now().toISOString())
   if (loss !== undefined) ctx.report(HEALTH.read, loss)
-  const summary: RoundSummary = { read: page.mail.length, triggers: 0, duplicateCopies: 0, unreadable: 0, next: page.next }
+  const summary: RoundSummary = { read: page.mail.length, triggers: 0, duplicateCopies: 0, unreadable: 0, next: page.next, ...(loss !== undefined ? { loss } : {}) }
   for (const row of page.mail) {
     if (signal.aborted) throw new Error('The a2a Source stopped during the read')
     const result = translate(row, page.epoch)
@@ -269,6 +270,8 @@ const delay = (ms: number, signal: AbortSignal): Promise<void> => new Promise(re
 /** The polling loop: waits for setup, follows the switch, renews the deposit, reads, and reports health. */
 export async function watch(ctx: SourceContext, signal: AbortSignal, now: () => Date = () => new Date()): Promise<void> {
   await ctx.ready
+  // Setup restarts dsh-superagent once it resolves the accounts (superagent docs/008-cookbook.md, step 9), so a Source
+  // that is not configured yet reads nothing and returns; the restart applies the plugin again.
   if (!ctx.configured()) { ctx.report(HEALTH.read, health('paused', 'setupPending')); return }
   let readFailures = 0
   let depositFailures = 0
@@ -286,7 +289,9 @@ export async function watch(ctx: SourceContext, signal: AbortSignal, now: () => 
       try {
         const round = await pollMailbox(ctx, signal, now)
         readFailures = 0
-        ctx.report(HEALTH.read, { state: 'ready', detail: `${String(round.read)} read, ${String(round.triggers)} taken in, ${String(round.duplicateCopies)} duplicate copies, ${String(round.unreadable)} unreadable`, at: now().toISOString() })
+        // A round that lost mail ends on its error (S2: never hidden). The next clean round reports ready again: the
+        // loss stays visible for at least one poll interval, and the round summary in each ready says what was read.
+        if (round.loss === undefined) ctx.report(HEALTH.read, { state: 'ready', detail: `${String(round.read)} read, ${String(round.triggers)} taken in, ${String(round.duplicateCopies)} duplicate copies, ${String(round.unreadable)} unreadable`, at: now().toISOString() })
       } catch (error) {
         readFailures += 1
         if (!signal.aborted && readFailures >= 3) ctx.report(HEALTH.read, health('error', 'pollFailures', { count: String(readFailures), error: String(error) }))

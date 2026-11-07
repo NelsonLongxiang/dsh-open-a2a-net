@@ -3,7 +3,9 @@
  * superagent a2a Source (p2a-source-code) against a real loopback host and the real `a2a-net` CLI: the Source's own
  * deposited identity reads its mailbox with `inbox --after`, translates rows into Triggers, judges trust from the host's
  * `proof` field only, keeps its cursor, replays without second Triggers, renews its deposit and reads thread context.
- * Temporary homes live under tmp/; no production host is contacted and no key is written to a file or a log.
+ * Temporary homes live under tmp/ (gitignored) and are removed when the file's tests end (tests/temp-dirs.ts). Each holds a
+ * throwaway test identity's private key in cli.json (mode 0600), as the CLI keeps one; no real key, host token or A2A_KEY
+ * is written anywhere, and nothing is logged. No production host is contacted: the host runs on loopback.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { generateKeyPairSync } from 'node:crypto'
