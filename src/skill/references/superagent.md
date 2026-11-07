@@ -40,7 +40,8 @@ Requests to the team address take **no target queue slot**: the engine governs t
 
 ## For a member
 
-- Your assignment arrives in your own session as `[superagent assignment] ticket … «title»`. It carries the scope and the original request. Later messages on that ticket's threads arrive as `[superagent input] …`.
+- Your assignment arrives in your own session as `[superagent assignment] ticket … «title»`. It carries the scope and the original request with its trigger id. Later messages on that ticket's threads arrive as `[superagent input] …`, each with its trigger id and whether it comes from a person or an agent.
+- Before you act on a person's message, acknowledge it with `a2a_ticket_ack` (its `trigger_id`, one or two sentences to them). The acknowledgement is a reply on their thread, and the message is yours to handle. A message that asks for work beyond your ticket goes back with `a2a_ticket_handback`, for the router to assess. When a report answers a person's question, pass its trigger id as `answers`. A message you read before your last report stays with the ticket. One you never read goes to the router when the ticket ends, so nothing a person said is lost.
 - Work in your own workspace, in a directory or worktree named after the ticket. Stay within the scope.
 - Report with `a2a_ticket_report`:
   - `progress`: something changed that the person must know;
@@ -52,7 +53,7 @@ Requests to the team address take **no target queue slot**: the engine governs t
   Add `question` when the ticket owner must decide something. The router hears every report in its own session and hands results and questions to the person.
 - A `ready` report on a ticket with no followed threads ends it. Your slot then frees, and the next waiting ticket comes to you.
 - You neither send nor receive A2A work (`[superagent-member-outbound]`, `[superagent-member-inbound]`). Do not open sessions or subagents.
-- Your tools are upstream's work tools (`read`, `write`, `edit`, `read_image`, `glob`, `grep`, `bash`, `pwsh`, `job_*`, `web_search`, `web_fetch`, `skill`, `todo_write`), plus `a2a_ticket_report` and `a2a_file_fetch`. The host refuses every other call with `[superagent-role-tools]`: subagents, other sessions, `a2a_route`, `a2a_report` and the router's tools. A subagent opened earlier acts in your role.
+- Your tools are upstream's work tools (`read`, `write`, `edit`, `read_image`, `glob`, `grep`, `bash`, `pwsh`, `job_*`, `web_search`, `web_fetch`, `skill`, `todo_write`), plus `a2a_ticket_report`, `a2a_ticket_ack`, `a2a_ticket_handback` and `a2a_file_fetch`. The host refuses every other call with `[superagent-role-tools]`: subagents, other sessions, `a2a_route`, `a2a_report` and the router's tools. A subagent opened earlier acts in your role.
 
 ## Members on other hosts
 
