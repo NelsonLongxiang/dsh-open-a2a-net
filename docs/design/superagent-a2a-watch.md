@@ -28,9 +28,24 @@ superagent 包的 `cordis.patch.yml` 里插入一条，默认禁用：
 - Trigger id：`key('a2a', 调用方句柄, task_id)`。Thread 取 `context_id`，没有就用 `task_id`。
 - 可信来源只认 `proof ∈ {origin-claim, in-process}`，其余都判为 unverified，按 unverified 理由过滤。可信的回执行按 receipt 理由过滤。
 - `dup: 'sync-answered'` 的行算重复副本，没有 `task_id` 的行算 unreadable，两者都不生成 Trigger。
+- superagent 还在等 setup 时，observe 模式照常读信，其他模式等 setup（见下节）。
 - `human: false`。`meta.s13Strength` 只是观察字段（见 D7，p3 由属主裁定）。
 - `lost > 0`、`lost === null`、`cursorAhead`、`epochChanged` 都会报 `a2a` health error，并写出具体数字；宿主重启时文案会写明。
 - 游标在一轮全部 receive 之后才前移；重放靠稳定 id 去重。每隔 `renewMinutes` 执行一次 `a2a-net publish` 续户口，连续失败 3 次报 `a2a-deposit` error。
+
+## superagent 等待 setup 时：observe 模式照常读信（有意偏离 Cookbook 第 9 步）
+
+superagent 的 setup 必须先绑定一个 GitHub 仓库和 agent 账户（上游 8c32a9d：src/app/setup.ts:77–79 无条件调用 resolveDeployment；src/deployment.ts:87–105）。Cookbook 第 9 步的做法是：Source 在 setup 完成前什么都不读，直接返回，等 setup 完成、superagent 重启后再由插件重新加载。github-watch 就是这样做的（src/sources/github.ts:132）。
+
+a2a-watch 在 `mode: observe` 时有意不照这一步：setup 未完成也照常读信。其他任何模式（目前 schema 只接受 observe，这条规则是防将来扩模式）仍然等 setup，报 `setupPending` 后返回。依据是上游自身的语义：等待 setup 时 Engine 照常登记 Source 送来的东西，只是不评估、不派工、不外发，这正是影子模式要的状态。
+
+- src/app/runtime.ts，paused() 的注释原文：「Hold evaluation, dispatch, and outbound delivery while paused or awaiting setup; sources still record incoming triggers.」
+- src/app/passes.ts，pump() 的注释原文：「Do not assess, dispatch, or send while waiting for setup; queued work waits for the restart that completes setup.」
+- src/core/intake.ts receive()：整段不判断 setup；被 scope 过滤的写 trigger 和 disposition{filtered:{code}}，其余写 trigger 和 thread。
+
+已在一台未完成 setup 的真实 superagent（0.2.1-rc.3 + 8c32a9d）上实测：三类信箱行（in-process 可信、in-process 可信回执、cli-identity 不可信）分别落成 stored、filtered:receipt、filtered:unverified；trigger 3 行、disposition 3 行，outbox、ticket、decision、effect 都是 0 行；runtime 仍是 paused。
+
+**退场约束**：未被过滤的 trigger 会排进评估队列，等 setup 完成后才处理。所以跑影子的这台实例，在影子期间和之后都不得完成 setup；影子结束后按卸载清单删掉 stateDir 或整个实例。只要哪天完成了 setup，排队的评估就会开始跑。
 
 ## health 怎么报
 

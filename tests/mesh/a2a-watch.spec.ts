@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { mkdtempSync } from '../temp-dirs.ts'
 import { bootNode, cliEnv, reservePort } from './harness.ts'
 import { signCard } from '../../src/card.ts'
-import { a2aKind, KV, pollMailbox, renewDeposit, scope, type A2aConfig } from '../../src/superagent/a2a-watch.ts'
+import { a2aKind, KV, pollMailbox, renewDeposit, scope, watch, type A2aConfig } from '../../src/superagent/a2a-watch.ts'
 import { key, type Health, type SourceContext, type Trigger } from '../../src/superagent/source-types.ts'
 
 const SOURCE = { name: 'shadow-src', uuid: 'a1b2c3d4e5f60718', key: generateKeyPairSync('ed25519').privateKey }
@@ -124,6 +124,28 @@ describe('superagent p2a: a2a Source on a real host (shadow mode)', () => {
       expect(typeof state.get(KV.renewedAt)).toBe('number')
       // Shadow mode: no reply can go anywhere.
       expect(a2aKind.channel.allowed(local.trigger.channel!.address, OBSERVE)).toBe(false)
+
+      // superagent awaiting setup (no GitHub repository yet): observe mode still reads the real mailbox and takes every row
+      // in, while the Engine holds evaluation and sending; a non-observe mode waits for setup and runs nothing.
+      const pending = new Map<string, unknown>()
+      const pendingReports: Array<[string, Health]> = []
+      const pendingTaken: Trigger[] = []
+      const awaiting = (config: A2aConfig): SourceContext => ({ ...ctx, configured: () => false, config: <C extends Record<string, unknown>>() => config as unknown as C,
+        receive: async trigger => { pendingTaken.push(trigger); return scope(trigger).listened ? 'stored' : 'filtered' },
+        state: { get: <V>(k: string) => pending.get(k) as V | undefined, set: (k, v) => { if (v === undefined) pending.delete(k); else pending.set(k, v) } },
+        report: (entry, h) => { pendingReports.push([entry, h]) } })
+      const stop = new AbortController()
+      const run = watch(awaiting(OBSERVE), stop.signal)
+      await vi.waitFor(() => { expect(pendingReports.some(([entry, h]) => entry === 'a2a' && h.state === 'ready')).toBe(true) }, { timeout: 30_000 })
+      stop.abort(); await run
+      expect(pendingReports.some(([, h]) => h.code === 'setupPending')).toBe(false)
+      expect(pendingTaken.map(t => t.meta.proof)).toEqual(['in-process', 'cli-identity', 'in-process'])
+      const gated: Array<[string, Health]> = []
+      const commandsSeen: string[][] = []
+      await watch({ ...awaiting({ ...OBSERVE, mode: 'reply' } as unknown as A2aConfig), report: (entry, h) => { gated.push([entry, h]) },
+        commands: { withSignal: () => ({ withSignal: () => { throw new Error('unused') }, run: async (_p: string, args: string[]) => { commandsSeen.push(args); return '' } }), run: async () => '' } as never }, new AbortController().signal)
+      expect(gated).toEqual([['a2a', expect.objectContaining({ state: 'paused', code: 'setupPending' })]])
+      expect(commandsSeen).toEqual([])
     } finally {
       await a.dispose()
     }

@@ -340,16 +340,19 @@ const delay = (ms: number, signal: AbortSignal): Promise<void> => new Promise(re
   signal.addEventListener('abort', done, { once: true })
 })
 
-/** The polling loop: waits for setup, follows the switch, renews the deposit, reads, and reports health. */
+/** The polling loop: waits for setup (observe mode reads while setup is pending), follows the switch, renews the deposit, reads, and reports health. */
 export async function watch(ctx: SourceContext, signal: AbortSignal, now: () => Date = () => new Date()): Promise<void> {
   await ctx.ready
-  // Setup restarts dsh-superagent once it resolves the accounts (superagent docs/008-cookbook.md, step 9), so a Source
-  // that is not configured yet reads nothing and returns; the restart applies the plugin again.
-  if (!ctx.configured()) { ctx.report(HEALTH.read, health('paused', 'setupPending')); return }
   let readFailures = 0
   let depositFailures = 0
   while (!signal.aborted) {
     const config = ctx.config<A2aConfig>(KIND)
+    // Setup restarts dsh-superagent once it resolves the accounts (superagent docs/008-cookbook.md, step 9), so a Source
+    // that is not configured yet normally reads nothing and returns. Observe mode deliberately reads anyway: while setup is
+    // pending superagent still records what Sources receive and only holds evaluation, dispatch and sending (runtime.ts
+    // paused(): "sources still record incoming triggers"; passes.ts pump()), which is exactly a shadow run. Any other mode
+    // keeps waiting for setup.
+    if (!ctx.configured() && config?.mode !== 'observe') { ctx.report(HEALTH.read, health('paused', 'setupPending')); return }
     if (config === undefined) ctx.report(HEALTH.read, health('paused', 'sourceOff'))
     else {
       try {
