@@ -3924,7 +3924,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // exactly the settlement a CLI-originated task waits for — settle it,
       // as the wire face settles before ITS mailbox split.
       settleAndAnnounce(message, localSettler)
-      cliDeposits.mail(team, callerSession ?? 'unknown', message, undefined, { taskId: taskIdFromCaller, contextId })
+      const disposition = parseReceipt(message)?.envelope?.disposition
+      cliDeposits.mail(team, callerSession ?? 'unknown', message, undefined, { taskId: taskIdFromCaller, contextId, ...(disposition !== undefined ? { disposition } : {}) })
       recordActivity('in', team, callerSession ?? 'peer', true)
       logger.info(`a2a: cli mailbox delivery for ${team} (from ${callerSession ?? 'unknown'})`)
       return { ok: true, team, reply: `delivered to the mailbox of ${team} — the CLI polls while online`, task_id: taskIdFromCaller ?? '', context_id: contextId ?? '', task_status: 'TASK_STATE_COMPLETED' }

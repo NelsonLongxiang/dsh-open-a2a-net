@@ -408,6 +408,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             resolvedAt: row.resolvedAt,
             ...(row.answeredAt !== undefined ? { answeredAt: row.answeredAt } : {}),
             outcome: row.outcome ?? 'unclassified',
+            // p1-receipt-cmd: an attention row has no outcome and stays unclassified, never completed.
+            ...(row.disposition !== undefined ? { disposition: row.disposition } : {}),
             endedBy: archivedEndedBy(row),
             ...(row.direction !== undefined ? { direction: row.direction } : {}),
             // gh#68: present only when the row awaited no receipt.

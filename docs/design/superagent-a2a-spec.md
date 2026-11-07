@@ -2,7 +2,7 @@
 
 配套：[ADR](superagent-a2a-adr.md) · [实施计划](superagent-a2a-plan.md) · [断言与证据](superagent-a2a-evidence.md)
 
-状态：草案，仅设计。属主已定方向（第 6 节），等全局生产评估 PASS 后才进入计划第 1 阶段。依据断言 S1–S16，每条都挂有原文证据（ygl-trees 项目 superagent-a2a-spec-r4）；本版按全局 PR #376 @ a537c5a 的评审意见修订，并按 PR #381 的评审条件对齐 3.4 节与实现。
+状态：草案，仅设计。属主已定方向（第 6 节），等全局生产评估 PASS 后才进入计划第 1 阶段。依据断言 S1–S17，每条都挂有原文证据（ygl-trees 项目 superagent-a2a-spec-r5）；本版按全局 PR #376 @ a537c5a 的评审意见修订，按 PR #381 的评审条件对齐 3.4 节与实现，并按全局 p1-receipt-cmd 开工前裁定，把回执观察字段定名为 `disposition`。
 
 ## 1. 目标与非目标
 
@@ -68,11 +68,15 @@ Source 的游标保存在 superagent 自己的状态里，按 Cookbook 规则：
 | 用途（purpose） | A2A 动作 |
 |---|---|
 | acknowledgement | 不单独发送，遵守“不发礼节性路由”的约定。注意：delivered 和 consumed 只是主机层面的观察，不代表会话做出了承诺，也不能结清欠账（读到≠确认，S9） |
-| result | 正式回执 `[A2A receipt] task <id> <结果一句话>`，附观察字段 `outcome:"result"`，结清该任务欠账 |
-| attention | 正式回执，附观察字段 `outcome:"attention"`，正文是一个具体问题。它会结清原任务欠账，但**不代表工作完成**；调用方按 outcome 字段区分，不解析正文（S6、S14）。人的答复以同一 context 的新任务到达，经订阅恢复工单 |
-| answer | 同 result，`outcome:"result"` |
+| result | 正式回执 `[A2A receipt] task <id> <结果一句话>`，信封带 `outcome:"completed"` 和 `disposition:"result"`，结清该任务欠账 |
+| attention | 正式回执，信封带 `disposition:"attention"`，不带 outcome，正文是一个具体问题。它会结清原任务欠账，但**不代表工作完成**；调用方按 disposition 字段区分，不解析正文（S6、S14）。后续工作作为同一 context 的新任务另派，人的答复也以同一 context 的新任务到达，经订阅恢复工单 |
+| answer | 同 result，`disposition:"result"` |
 
-`outcome` 是回执上的观察字段，不是新的任务状态（S9）。它改变了回执语义，归入计划节点 p1-receipt-cmd 实现，须全局 PASS 并报属主知会（S14）。旧主机和旧客户端收不到这个字段，只能看到正文，所以接入方必须是新版本。
+`disposition` 是回执 v2 信封里的新键，取值只有 `"result"` 和 `"attention"`，其他值丢弃；它是观察字段，不是新的任务状态（S9）。没有沿用 `outcome` 这个名字，是因为回执 v2 信封已有 `outcome`，表示工作如何结束（completed、failed 等），旧解析器会丢弃不认识的取值；新键则会被旧主机忽略，属于纯增量。attention 回执的信封仍带 `idempotencyKey`，旧主机照常认它为有效信封，并按头行结清。它改变了回执语义，归入计划节点 p1-receipt-cmd 实现，须全局 PASS 并报属主知会（S14）。
+
+CLI 身份发正式回执只用一个命令：`a2a-net receipt <task_id> [--attention] <一句话>`。回执走固定 task id `receipt-<task_id>`，主机对同一 task id 只执行一次，所以一个任务只有一张回执：同一回执重发是幂等重放，先 attention 后 result 这类不同回执会被拒绝。
+
+投递进 CLI 信箱的任务，在调用方是终态（信箱应答 `receipt:"mailbox"`，调用方不记欠账）。这类任务的回执在调用方没有可结清的欠账行，只把 `disposition` 送到调用方（CLI 调用方在信箱行上读这个字段）；回执只在调用方确实记了欠账的地方结清（S17）。
 
 发送结果映射：直接使用 `a2a route --json` 输出的观察字段 `class`（PR #381）。判定只看结构化字段，不解析错误文本（S3）。
 

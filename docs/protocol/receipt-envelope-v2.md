@@ -9,6 +9,9 @@
 > T1/T2 liveness ladder. The ledger never writes the `expired` outcome.
 > The §4 table is annotated below with what the ledger records today
 > (`archived[].endedBy`, `late`).
+> **Next version (next/0.8, superagent p1-receipt-cmd):** the codec also
+> carries `disposition` (§2a), and the CLI gains `a2a-net receipt`, the one
+> formal-receipt command for a CLI identity.
 
 - **Status**: design frozen with the orchestration face (co-design round, pure-spec slice ahead of implementation) — codec since shipped; see the status note above
 - **Owner**: dsh-open-a2a-net (protocol face) · Co-signer: graph_loop orchestration face (pending_remote W3 consumer)
@@ -58,8 +61,62 @@ interface ReceiptEnvelopeV2 {
   artifacts?: Array<{ kind: string; ref: string; digest: string }>   // [2026-10-27: not implemented — tolerated as an unknown key]
   /** Telemetry slot #4: wall-clock cost of the remote turn. */
   elapsedMs?: number
+  /** §2a (next/0.8): what the receipt hands back. Closed set; other values are dropped. */
+  disposition?: 'result' | 'attention'
 }
 ```
+
+## 2a. Two branchable fields: `outcome` and `disposition`
+
+*(next/0.8, superagent p1-receipt-cmd, spec S14.)*
+
+A receipt now has two branchable fields, and they answer different questions:
+
+- `outcome` — **how the work ended** (the §4 enum). Unchanged.
+- `disposition` — **what the receipt hands back**: `"result"` (the work's
+  result) or `"attention"` (a concrete question that needs the caller). It is
+  a closed set; any other value is dropped, as for `outcome`.
+
+An `attention` receipt settles the task's debt like any receipt, but it is
+**not a completion**: it carries no `outcome`, and every view keeps that
+absence (the state face shows `outcome: "unclassified"` with
+`disposition: "attention"`, never `completed`). The answer to the question
+comes back as a **new task in the same context**; the original task is not
+answered twice.
+
+`disposition` is a new key, not new values of `outcome`: a host that predates
+it ignores the key (§1 rule 3), while new `outcome` values would be dropped
+silently by older parsers and their meaning lost. An attention envelope still
+carries `idempotencyKey`, so an older host recognizes the envelope and settles
+by the header as before.
+
+Where it shows up:
+
+- the ledger's archived row and `tasks --json` (`archived[].disposition`);
+- `a2a_tasks` (its archive rows, and an `[attention: …]` marker in the text);
+- a CLI mailbox row that holds a receipt (`mail[].disposition`), so a CLI
+  caller branches on the field instead of reading the text.
+
+The CLI's `a2a-net receipt <task_id> [--attention] <one line…>` composes
+exactly these shapes:
+
+```
+[A2A receipt] task <id> <one line>
+{"outcome":"completed","idempotencyKey":"<id>","disposition":"result"}
+
+[A2A receipt] task <id> <one line>
+{"idempotencyKey":"<id>","disposition":"attention"}
+```
+
+It sends them on task id `receipt-<id>`. The host runs one task id at most
+once, so a task gets one receipt: resending the same receipt is a replay, and
+a different one (for example `result` after `attention`) is refused.
+
+A task delivered into a CLI mailbox is final from the caller's side (the
+mailbox answers `receipt: "mailbox"`, and the caller books no debt for it).
+A receipt for such a task settles nothing on the caller's ledger, because
+there is no owed row; it still reaches the caller with its `disposition`. A
+receipt settles a debt only where the caller tracked an owed row.
 
 ## 3. Atomic overflow rule (no illegal tails, ever)
 
@@ -84,8 +141,9 @@ Threshold: **4096 bytes** total structured payload.
 | `completed` / `sync_completed` | ordinary `[A2A receipt]` correlations (async vs awaited-in-round) |
 | `failed` · `expired` · `rejected` · `unknown` | new distinctions; ledger dead-letter sweep maps natural expiry to `expired` |
 
-Migration law: consumers branch ONLY on this enum. Free-text `summary` is
-display material, never a dispatch predicate.
+Migration law: consumers branch ONLY on this enum and, from next/0.8, on
+`disposition` (§2a). Free-text `summary` is display material, never a
+dispatch predicate.
 
 *[2026-10-27 note — what the ledger actually records (`src/task-ledger.ts`,
 state face in `src/index.ts`):*
