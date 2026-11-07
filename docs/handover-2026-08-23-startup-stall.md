@@ -23,7 +23,7 @@ wakeJoinedOnBoot: true + 23 个 joined intent（约 254MB 压缩日志）
       → DOMException "signal timed out" 被折叠为 code:'internal'
 ```
 
-证据锚点：profile 实配 `wakeJoinedOnBoot: true`（`C:\Users\Administrator\.dsh\profiles\web\cordis.patch.yml`）；`joined.json` 23 条 intent；上次启动磁盘时间戳 14:44→14:50（约 6 分钟唤醒尾部）；修复前实测 state 路由 25s 超时 ×2 后恢复。
+证据锚点：profile 实配 `wakeJoinedOnBoot: true`（`C:\Users\<user>\.dsh\profiles\web\cordis.patch.yml`）；`joined.json` 23 条 intent；上次启动磁盘时间戳 14:44→14:50（约 6 分钟唤醒尾部）；修复前实测 state 路由 25s 超时 ×2 后恢复。
 
 ## 已交付内容
 
@@ -45,7 +45,7 @@ wakeJoinedOnBoot: true + 23 个 joined intent（约 254MB 压缩日志）
 
 ### B. 运行配置（已生效待重启）
 
-`C:\Users\Administrator\.dsh\profiles\web\cordis.patch.yml`：`wakeJoinedOnBoot: true → false`。
+`C:\Users\<user>\.dsh\profiles\web\cordis.patch.yml`：`wakeJoinedOnBoot: true → false`。
 冷会话仍可 route 唤醒 / 侧栏手动 wake / 打开后自动 remount；joined intent 不丢。
 
 ### C. 宿主仓库 `D:\workspace\deepseek-harness`（PR #114 已合并，merge commit `7318f2bc27`）
@@ -87,5 +87,5 @@ wakeJoinedOnBoot: true + 23 个 joined intent（约 254MB 压缩日志）
 - 性能方案文档：`D:\workspace\dsh-open-a2a-net\docs\perf-fix-plan.md`
 - 宿主 Agent Note：`D:\workspace\deepseek-harness\.agents\notes\implemented\architecture\2026-08-23-cold-open-replay-event-loop-yields.md`（含中文对照）
 - PR：https://gitee.com/NelsonLongXiang/deepseek-harness/pulls/114
-- profile 配置：`C:\Users\Administrator\.dsh\profiles\web\cordis.patch.yml`
-- DSH home 数据：`C:\Users\Administrator\.dsh\a2a\`（joined.json/peers.json）、`C:\Users\Administrator\.dsh\sessions\`
+- profile 配置：`C:\Users\<user>\.dsh\profiles\web\cordis.patch.yml`
+- DSH home 数据：`C:\Users\<user>\.dsh\a2a\`（joined.json/peers.json）、`C:\Users\<user>\.dsh\sessions\`

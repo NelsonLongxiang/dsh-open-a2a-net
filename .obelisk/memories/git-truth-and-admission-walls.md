@@ -13,7 +13,7 @@ Executor assertions alone never close a case.
   dual chapters (review + test) had genuinely passed.
 - The same session proved the rule positively twice: internal-Gitea private
   repo verification worked via `git ls-remote
-  http://oauth2:$TOKEN@192.168.3.88:3000/jf-tech/<repo>.git` with the .npmrc
+  http://oauth2:$TOKEN@<internal-git-host>/<org>/<repo>.git` with the .npmrc
   Gitea authToken (40 chars, never echoed). Gitee catalog/liveness indexes
   are not proof of git landing.
 

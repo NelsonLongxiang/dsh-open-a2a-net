@@ -24,11 +24,11 @@ const sessions = [
 const teams = [{ name: '甲', team: 'dsh/canvas/jia', members: [{ id: 'a' }, { id: 'c' }] }]
 const peers = [
   { url: 'https://10.0.0.5:8787', score: 0.9 },
-  { url: 'http://192.168.3.9:13080', score: 0.4 },
+  { url: 'http://10.20.30.9:13080', score: 0.4 },
 ]
 const inFlight = [
   { team: '甲', peer: '10.0.0.5:8787', startedAt: 60_000 },
-  { team: '甲', peer: '192.168.3.9:13080', startedAt: 71_000 },
+  { team: '甲', peer: '10.20.30.9:13080', startedAt: 71_000 },
 ]
 const fedInput: PlanningInput = { sessions, teams, peerCount: peers.length, peers, inFlight }
 
@@ -80,7 +80,7 @@ describe('federation overlay DOM', () => {
     v.reconcile({ ...fedInput, remoteTeams: [
       { team: '远端甲', name: 'alpha-team', via: 'https://10.0.0.5:8787' },
       { team: '远端乙', via: 'https://10.0.0.5:8787' },
-      { team: '远端丙', via: 'http://192.168.3.9:13080' },
+      { team: '远端丙', via: 'http://10.20.30.9:13080' },
     ] })
     const cards = v.root.querySelectorAll<HTMLElement>('.p-node.remote')
     expect(cards).toHaveLength(2)
@@ -97,16 +97,16 @@ describe('federation overlay DOM', () => {
     v.reconcile({ ...fedInput, remoteTeams: [
       { team: '远端甲', name: 'alpha-team', via: 'https://10.0.0.5:8787' },
       { team: '远端乙', via: 'https://10.0.0.5:8787' },
-      { team: '远端丙', via: 'http://192.168.3.9:13080' },
+      { team: '远端丙', via: 'http://10.20.30.9:13080' },
     ], peers: [
       { url: 'https://10.0.0.5:8787', score: 0.9, link: 'linked', verified: true },
-      { url: 'http://192.168.3.9:13080', score: 0.4, link: 'stranger', verified: false },
+      { url: 'http://10.20.30.9:13080', score: 0.4, link: 'stranger', verified: false },
     ] })
     const badgeOf = (host: string): HTMLElement => v.root.querySelector<HTMLElement>(`.p-node[data-id="peer-${host}"] .prio`)!
     expect(badgeOf('10.0.0.5:8787').className).toContain('lnk-linked')
     expect(badgeOf('10.0.0.5:8787').textContent).toContain('✓')
-    expect(badgeOf('192.168.3.9:13080').className).toContain('lnk-stranger')
-    expect(badgeOf('192.168.3.9:13080').textContent).toContain('✗')
+    expect(badgeOf('10.20.30.9:13080').className).toContain('lnk-stranger')
+    expect(badgeOf('10.20.30.9:13080').textContent).toContain('✗')
   })
 
   it('each pending route draws an accent edge labelled a2a_route · peer · age', () => {
@@ -209,7 +209,7 @@ describe('federation overlay DOM', () => {
     v.seam.contextMenu(ptr({ target: withHandle, clientX: 10, clientY: 10 }))
     const menu = v.root.querySelector('.p-menu')
     expect(menu).not.toBeNull()
-    // The handleless peer (192.168.3.9 — no remote team rows) stays
+    // The handleless peer (10.20.30.9 — no remote team rows) stays
     // read-only: no menu (P2 regression shape, preserved for the no-handle
     // case).
     v.reconcile({
@@ -220,7 +220,7 @@ describe('federation overlay DOM', () => {
       inFlight: [],
       remoteTeams: [{ team: 'dsh-remote/01234567', via: 'https://10.0.0.5:8787' }],
     })
-    const handleless = v.root.querySelector<HTMLElement>('.p-node[data-id="peer-192.168.3.9:13080"]')!
+    const handleless = v.root.querySelector<HTMLElement>('.p-node[data-id="peer-10.20.30.9:13080"]')!
     // Close the first menu via a pointerdown outside it (the dismissal
     // contract), then probe the handleless card: it must not open one.
     v.root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))

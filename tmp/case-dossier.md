@@ -7,7 +7,7 @@ federated-kb 设计先行研究（项目 federated-kb-design）：3 个检索式
 - 编排者：本会话（dsh-open-a2a-net 工作区，ygl-trees CLI 直接驱动者）
 - 分片A → dsh/canvas/ygl-trees（3 活成员 canvas 团队）：task direct-632cf4b3，1 分钟内回执，全文落盘 D:\workspace\ygl-trees\tmp\federated-kb-sliceA.md（含一手核验：packages/core/database/src/db.ts 列清单 + workspace=YGL_HOME 实测）
 - 分片B → dsh/ec4ce7f8（ygl-trees 主开发线独立会话）：task direct-f5d8de58（先行实践与教训调研）
-- 跨机尝试（全失败，故障样本留档）：192.168.3.157:13080 冷会话唤醒失败（resume 报缺 linux-x64/bin/glibc/system.node 原生模块）；192.168.3.85:13080 直连超时 AbortError；192.168.3.156:13080 与 .157:13082 卡片 fetch failed
+- 跨机尝试（全失败，故障样本留档）：10.20.30.157:13080 冷会话唤醒失败（resume 报缺 linux-x64/bin/glibc/system.node 原生模块）；10.20.30.85:13080 直连超时 AbortError；10.20.30.156:13080 与 .157:13082 卡片 fetch failed
 
 ## 集成轨迹
 - source 05f5f0caa8 ← 分片A 全文（file:// URL + a2a 任务署名）

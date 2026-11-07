@@ -19,8 +19,8 @@ describe('directDeliveryExposure', () => {
   })
 
   it('a non-loopback peer with an empty key warns with the actionable fix', () => {
-    const { nonLoopbackPeers, warning } = directDeliveryExposure(['http://192.168.3.157:13080'], '')
-    expect(nonLoopbackPeers).toEqual(['http://192.168.3.157:13080'])
+    const { nonLoopbackPeers, warning } = directDeliveryExposure(['http://10.20.30.157:13080'], '')
+    expect(nonLoopbackPeers).toEqual(['http://10.20.30.157:13080'])
     expect(warning).toContain('apiKey')
     // gh#7 V2: the warning names both faces the key would gate.
     expect(warning).toContain('/a2a/direct and /a2a/log')
@@ -28,7 +28,7 @@ describe('directDeliveryExposure', () => {
   })
 
   it('a non-loopback peer with a configured key is deliberate, not an exposure', () => {
-    const { warning } = directDeliveryExposure(['http://192.168.3.157:13080'], 'secret-key')
+    const { warning } = directDeliveryExposure(['http://10.20.30.157:13080'], 'secret-key')
     expect(warning).toBeUndefined()
   })
 
@@ -43,8 +43,8 @@ describe('directDeliveryExposure', () => {
   })
 
   it('malformed seed URLs say nothing about exposure and never throw', () => {
-    const { nonLoopbackPeers, warning } = directDeliveryExposure(['not a url', 'http://192.168.3.157:13080'], '')
-    expect(nonLoopbackPeers).toEqual(['http://192.168.3.157:13080'])
+    const { nonLoopbackPeers, warning } = directDeliveryExposure(['not a url', 'http://10.20.30.157:13080'], '')
+    expect(nonLoopbackPeers).toEqual(['http://10.20.30.157:13080'])
     expect(warning).toBeDefined()
   })
 })

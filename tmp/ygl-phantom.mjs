@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-const db = new DatabaseSync('C:/Users/Administrator/.ygl-trees/ygl-trees.db', { readOnly: true });
+const db = new DatabaseSync('C:/Users/<user>/.ygl-trees/ygl-trees.db', { readOnly: true });
 
 // discover schema of events table
 const cols = db.prepare("PRAGMA table_info(events)").all().map(c => c.name);

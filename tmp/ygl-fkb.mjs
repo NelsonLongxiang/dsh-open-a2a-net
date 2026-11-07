@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-const db = new DatabaseSync('C:/Users/Administrator/.ygl-trees/ygl-trees.db', { readOnly: true });
+const db = new DatabaseSync('C:/Users/<user>/.ygl-trees/ygl-trees.db', { readOnly: true });
 const tid = db.prepare("SELECT id FROM trees WHERE name='v2-roadmap'").get().id;
 const nodes = db.prepare("SELECT id,key,name,kind,tier FROM nodes WHERE tree_id=?").all(tid);
 const byId = Object.fromEntries(nodes.map(n => [n.id, n.key]));

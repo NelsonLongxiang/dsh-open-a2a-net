@@ -77,7 +77,7 @@ describe('OriginClaim audience binding', () => {
     for (const team of ['', 'zone/canvas', 'space zone', '控制字符\n']) expect(originClaimTeamWarning(team)).toContain('Use ^[a-z0-9-]+$')
   })
   it('#311 a CGNAT callerUrl needs a card cached at that exact URL or a reachable callback; a LAN alias cache is not enough', async () => {
-    const cgnat = 'http://100.75.181.127:13080'
+    const cgnat = 'http://100.64.0.127:13080'
     const headers = signOriginClaim({ url: OWN + '/a2a/direct', method: 'POST' }, { caller: 'dsh', callerUrl: cgnat, privateKey, unbound: false, now: Date.now() })
     const received = req(headers, { url: '/a2a/direct' })
     const dialed: string[] = []

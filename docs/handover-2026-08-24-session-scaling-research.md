@@ -25,7 +25,7 @@
 ## 二、本机实证（生产 3080，被动观测）
 
 - **25 个活跃会话 → 工作集 3440 MB**（30 个 node 进程中第二名 181 MB）——最直接证据，均值约 130MB/活跃会话；
-- 存量：`C:\Users\Administrator\.dsh\sessions` 232 个 zstd 共 447 MB；`session.list` 报 228 会话（72 root + 156 subagent），3 个在运行；a2a 视角 29 行（25 live / 4 cold）、24 join intent、卡片发布 20 个 sessionTeams、state 响应体约 24–29KB；
+- 存量：`C:\Users\<user>\.dsh\sessions` 232 个 zstd 共 447 MB；`session.list` 报 228 会话（72 root + 156 subagent），3 个在运行；a2a 视角 29 行（25 live / 4 cold）、24 join intent、卡片发布 20 个 sessionTeams、state 响应体约 24–29KB；
 - a2a 面板 `X-A2A-Timing` 实测：空闲 poll `facts=0–1ms`；有会话产出事件时跳至 **50–63ms**（11 样本中 3 个尖峰）——"活跃会话数 × 事件产出率"的现成观测面；
 - 插件侧每会话每 poll 成本已被缓存（title/excerpt 指纹 WeakMap + 500 事件扫描上限）压到微秒级；监听器全局注册一次，无每会话监听器泄漏面。
 

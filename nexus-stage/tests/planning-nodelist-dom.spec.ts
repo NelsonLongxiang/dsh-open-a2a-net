@@ -22,10 +22,10 @@ const input: PlanningInput = {
   sessions,
   teams: [{ name: 'alpha', team: 'dsh/canvas/alpha', members: [{ id: 't1' }] }],
   peerCount: 1,
-  peers: [{ url: 'http://192.168.3.156:13080', score: 0.9 }],
+  peers: [{ url: 'http://10.20.30.156:13080', score: 0.9 }],
   remoteTeams: [
-    { team: 'peer/bb22cc33', name: 'remote-teamed', via: 'http://192.168.3.156:13080', origin: 'sess-156 (192.168.3.156)', teams: ['dsh/ops'] },
-    { team: 'peer/dd44ee55', name: 'remote-teameless', via: 'http://192.168.3.156:13080', origin: 'sess-156 (192.168.3.156)' },
+    { team: 'peer/bb22cc33', name: 'remote-teamed', via: 'http://10.20.30.156:13080', origin: 'sess-156 (10.20.30.156)', teams: ['dsh/ops'] },
+    { team: 'peer/dd44ee55', name: 'remote-teameless', via: 'http://10.20.30.156:13080', origin: 'sess-156 (10.20.30.156)' },
   ],
 }
 
@@ -71,7 +71,7 @@ describe('teamed-only canvas + node list drawer', () => {
     check(3)
     v.reconcile(data); panel = v.root.querySelector('.p-nodelist')!; check(3)
     const select = panel.querySelector('select')!
-    select.value = '192.168.3.156:13080'; select.dispatchEvent(new Event('change'))
+    select.value = '10.20.30.156:13080'; select.dispatchEvent(new Event('change'))
     panel = v.root.querySelector('.p-nodelist')!; check(2)
     v.reconcile(data); panel = v.root.querySelector('.p-nodelist')!; check(2)
     v.root.remove()
@@ -135,8 +135,8 @@ describe('teamed-only canvas + node list drawer', () => {
     const panel = openPanel(v)
     const sel = panel.querySelector<HTMLSelectElement>('.p-nodesel')!
     const values = Array.from(sel.options).map(o => o.value)
-    expect(values).toContain('192.168.3.156:13080')
-    sel.value = '192.168.3.156:13080'
+    expect(values).toContain('10.20.30.156:13080')
+    sel.value = '10.20.30.156:13080'
     sel.dispatchEvent(new Event('change'))
     const text = panel.textContent ?? ''
     expect(text).toContain('remote-teamed')

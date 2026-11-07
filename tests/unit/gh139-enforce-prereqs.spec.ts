@@ -18,7 +18,7 @@ import { withResponseFields } from '../../src/response-fields.ts'
 
 const HOST = 'dsh-host-9c53bf95'
 const KEY = 'MCowBQYDK2VwAyEApeerKeyBbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb='
-const TAILSCALE = 'http://100.75.181.127:13080'
+const TAILSCALE = 'http://100.64.0.127:13080'
 const LAN = 'http://192.168.1.5:13080'
 const facts = (extra: Partial<SettlementFacts> = {}): SettlementFacts => ({ hostLabel: HOST, membersOf: team => (team === 'dsh/canvas/ops' ? ['dsh/aaaaaaaa', 'qa/11112222', 'qa/33334444'] : undefined), ...extra })
 const wire = (caller: string, claimOrigin: string, claimKey?: string, proof: Settler['proof'] = 'origin-claim'): Settler => ({ caller, proof, ingress: 'wire', claimOrigin, ...(claimKey !== undefined ? { claimKey } : {}) })

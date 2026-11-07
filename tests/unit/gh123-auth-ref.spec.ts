@@ -9,13 +9,13 @@ import { authorizationRef, buildAuthorization, canonicalAuthorization, parseAuth
 const AUTH: TaskAuthorization = buildAuthorization(
   { ok: true, via: 'canvas-member', rule: 'canvas-shared', basis: ['peer-org:dsh/canvas/far', 'dsh/canvas/ops'] },
   {
-    caller: 'dsh/aaaaaaaa', proof: 'origin-claim', claim: { caller: 'dsh', origin: 'http://100.75.181.127:13080' },
+    caller: 'dsh/aaaaaaaa', proof: 'origin-claim', claim: { caller: 'dsh', origin: 'http://100.64.0.127:13080' },
     ingress: 'wire', allowlistVersion: 'al1:0123456789abcdef', target: 'dsh/bbbbbbbb', receiptTarget: 'dsh/aaaaaaaa',
     receivedAt: 1_700_000_000_000, targetBusy: true,
   },
 )
 
-const CANONICAL = '{"v":1,"caller":"dsh/aaaaaaaa","proof":"origin-claim","claim":{"caller":"dsh","origin":"http://100.75.181.127:13080"},"ingress":"wire","via":"canvas-member","admission_rule":"canvas-shared","basis":["dsh/canvas/ops","peer-org:dsh/canvas/far"],"allowlist_version":"al1:0123456789abcdef","target":"dsh/bbbbbbbb","receipt_target":"dsh/aaaaaaaa","received_at":1700000000000,"target_busy":true}'
+const CANONICAL = '{"v":1,"caller":"dsh/aaaaaaaa","proof":"origin-claim","claim":{"caller":"dsh","origin":"http://100.64.0.127:13080"},"ingress":"wire","via":"canvas-member","admission_rule":"canvas-shared","basis":["dsh/canvas/ops","peer-org:dsh/canvas/far"],"allowlist_version":"al1:0123456789abcdef","target":"dsh/bbbbbbbb","receipt_target":"dsh/aaaaaaaa","received_at":1700000000000,"target_busy":true}'
 
 describe('#123 authRef (golden vector)', () => {
   it('canonical JSON: declaration key order, basis sorted, no whitespace', () => {
@@ -23,7 +23,7 @@ describe('#123 authRef (golden vector)', () => {
   })
 
   it('authRef is the first 16 hex of sha256 over the canonical JSON', () => {
-    expect(authorizationRef(AUTH)).toBe('6b8957a6f02206de')
+    expect(authorizationRef(AUTH)).toBe('bc9f948dcdbe3ebd')
   })
 
   it('is stable under persisted key order and basis order (a restored record keeps its ref)', () => {
@@ -31,7 +31,7 @@ describe('#123 authRef (golden vector)', () => {
     shuffled.basis = [...AUTH.basis].reverse()
     const restored = parseAuthorization(shuffled, 1_700_000_000_000)
     expect(restored).toBeDefined()
-    expect(authorizationRef(restored!)).toBe('6b8957a6f02206de')
+    expect(authorizationRef(restored!)).toBe('bc9f948dcdbe3ebd')
   })
 
   it('omits absent optional fields and moves with any field', () => {
