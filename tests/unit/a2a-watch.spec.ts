@@ -1,16 +1,18 @@
 // @vitest-environment node
 /**
- * superagent a2a Source (p2a-source-code): the nine semantics the global review fixed for shadow mode, each pinned by a
- * case that a mutation of it fails. The superagent side is a fake SourceContext; `a2a-net` is a stub that prints the
+ * superagent a2a Source (p2a-source-code, p3-source-explicit): the semantics fixed for shadow mode, and the p3 trust,
+ * link, loop and reply rules, each pinned by a case that a mutation of it fails. The superagent side is a fake SourceContext; `a2a-net` is a stub that prints the
  * pages the real CLI prints (the real host and CLI are in tests/mesh/a2a-watch.spec.ts).
  */
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { a2aKind, apply, configSchema, HEALTH_RECORD_CAP, KV, lossHealth, PAGE_RECORD_CAP, policySchema, pollMailbox, recordPage, recordRows, renewDeposit, reportError, ROW_RECORD_CAP, scope, translate, TRUSTED_PROOFS, watch, type A2aConfig, type HealthRecord, type PageRecord, type RowRecord } from '../../src/superagent/a2a-watch.ts'
-import type { Health, SourceContext, Trigger } from '../../src/superagent/source-types.ts'
+import { a2aKind, ADMISSION_VALUES, apply, configSchema, HEALTH_RECORD_CAP, KV, LINK_RULES, lossHealth, PAGE_RECORD_CAP, policySchema, pollMailbox, recordPage, recordRows, renewDeposit, reportError, ROW_RECORD_CAP, scope, translate, TRUSTED_PROOFS, watch, type A2aConfig, type HealthRecord, type PageRecord, type RowRecord } from '../../src/superagent/a2a-watch.ts'
+import type { Health, SourceContext, TicketView, Trigger } from '../../src/superagent/source-types.ts'
+import { MAIL_ADMISSIONS } from '../../src/cli-deposit.ts'
 
 const upstreamKey = (...values: string[]) => createHash('sha256').update(JSON.stringify(values)).digest('hex').slice(0, 32)
 const OBSERVE: A2aConfig = { mode: 'observe', pollSeconds: 30, renewMinutes: 60 }
+const REPLY: A2aConfig = { ...OBSERVE, mode: 'reply' }
 
 function fake(answer: (args: string[]) => string, config: A2aConfig | null = OBSERVE, configured = true) {
   const state = new Map<string, unknown>()
@@ -19,6 +21,7 @@ function fake(answer: (args: string[]) => string, config: A2aConfig | null = OBS
   const reports: Array<[string, Health]> = []
   const described: string[] = []
   const runs: string[][] = []
+  const tickets = new Map<string, TicketView>()
   const commands = { withSignal: () => commands, run: async (program: string, args: string[]) => { runs.push([program, ...args]); return answer(args) } }
   const ctx: SourceContext = {
     commands, ready: Promise.resolve(), configured: () => configured,
@@ -26,38 +29,74 @@ function fake(answer: (args: string[]) => string, config: A2aConfig | null = OBS
     receive: async trigger => { if (ids.has(trigger.id)) return 'duplicate'; ids.add(trigger.id); received.push(trigger); return 'stored' },
     state: { get: <V>(k: string) => state.get(k) as V | undefined, set: (k, v) => { if (v === undefined) state.delete(k); else state.set(k, v) } },
     threads: { describe: k => { described.push(k) } },
+    tickets: { get: id => tickets.get(id) },
     report: (entry, h) => { reports.push([entry, h]) },
   }
-  return { ctx, state, received, reports, described, runs }
+  return { ctx, state, received, reports, described, runs, tickets, commands }
 }
-const row = (over: Record<string, unknown> = {}) => ({ at: 1_794_000_000_000, from: 'dsh/aaaa1111', text: 'please build it', seq: 1, task_id: 'task-1', context_id: 'ctx-1', proof: 'origin-claim', ...over })
+const row = (over: Record<string, unknown> = {}) => ({ at: 1_794_000_000_000, from: 'dsh/aaaa1111', text: 'please build it', seq: 1, task_id: 'task-1', context_id: 'ctx-1', proof: 'origin-claim', admission: 'canvas-shared', ...over })
 const page = (mail: unknown[], over: Record<string, unknown> = {}) => JSON.stringify({ handle: 'src/0123456789abcdef', epoch: 'e1', after: 'start', next: `e1:${String(mail.length)}`, mail, lost: 0, epochChanged: false, ...over })
 
-describe('1 · mode is observe only, and observe never sends', () => {
-  it('the config schema fills defaults and refuses reply, any other mode, unknown keys and out-of-range numbers', () => {
+describe('1 · mode is observe or reply; observe never sends', () => {
+  it('the config schema fills defaults, takes observe and reply, and refuses any other mode, unknown keys and out-of-range numbers', () => {
     expect(configSchema.parse({})).toEqual(OBSERVE)
     expect(configSchema.parse({ mode: 'observe', pollSeconds: 10, renewMinutes: 230 })).toEqual({ mode: 'observe', pollSeconds: 10, renewMinutes: 230 })
-    for (const bad of [{ mode: 'reply' }, { mode: 'Observe' }, { mode: '' }, { extra: 1 }, { pollSeconds: 9 }, { pollSeconds: 30.5 }, { renewMinutes: 231 }, { renewMinutes: 9 }, null, [], 'observe']) {
+    expect(configSchema.parse({ mode: 'reply' })).toEqual(REPLY)
+    for (const bad of [{ mode: 'Reply' }, { mode: 'Observe' }, { mode: '' }, { mode: 'send' }, { extra: 1 }, { pollSeconds: 9 }, { pollSeconds: 30.5 }, { renewMinutes: 231 }, { renewMinutes: 9 }, null, [], 'observe']) {
       expect(configSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false)
     }
-    expect(() => configSchema.parse({ mode: 'reply' })).toThrow('invalid configuration')
+    expect(() => configSchema.parse({ mode: 'send' })).toThrow('invalid configuration')
   })
 
-  it('the Channel allows no address and refuses to send', async () => {
+  it('observe allows no address; reply allows only an address with a real caller and its task', async () => {
     for (const address of [{}, { caller: 'dsh/aaaa1111', task: 't' }, { caller: 'x', task: 't', context: 'c' }]) expect(a2aKind.channel.allowed(address, OBSERVE)).toBe(false)
-    await expect(a2aKind.channel.send({ commands: { withSignal: () => { throw Error() }, run: async () => '' } }, { id: 'm', channel: { source: 'a2a', thread: 'a2a:t', address: {} }, text: 'hi', kind: 'reply' })).rejects.toThrow('observe-only')
+    expect(a2aKind.channel.allowed({ caller: 'dsh/aaaa1111', task: 't' }, REPLY)).toBe(true)
+    expect(a2aKind.channel.allowed({ caller: 'dsh/aaaa1111', task: 't', context: 'c', ingress: 'local' }, REPLY)).toBe(true)
+    // The host's own face has no caller session: "unknown" is never guessed at (v1.1 item 1).
+    for (const address of [{}, { caller: 'unknown', task: 't' }, { caller: '', task: 't' }, { caller: 'dsh/aaaa1111' }, { caller: 'dsh/aaaa1111', task: '' }]) {
+      expect(a2aKind.channel.allowed(address, REPLY), JSON.stringify(address)).toBe(false)
+    }
+    // The exported kind has no running context: a send waits (the Outbox retries), it never goes out.
+    await expect(a2aKind.channel.send({ commands: { withSignal: () => { throw Error() }, run: async () => '' } }, { id: 'm', channel: { source: 'a2a', thread: 'a2a:t', address: { caller: 'dsh/aaaa1111', task: 't' } }, text: 'hi', kind: 'reply' })).rejects.toThrow('not running yet')
   })
 })
 
-describe('2 · the trusted proofs are exactly origin-claim and in-process', () => {
-  it('everything else, or no proof at all, is unverified', () => {
-    expect([...TRUSTED_PROOFS].sort()).toEqual(['in-process', 'origin-claim'])
-    for (const proof of ['origin-claim', 'in-process']) expect(scope({ meta: { proof } })).toEqual({ listened: true, observed: false, row: 'mailbox' })
-    for (const proof of ['cli-identity', 'claim-mismatch', 'legacy-window', 'unbound', 'none', 'ORIGIN-CLAIM', '', undefined, 1]) {
-      expect(scope({ meta: { proof } }), String(proof)).toEqual({ listened: false, reason: 'unverified' })
+describe('2 · trust is a host proof plus an operator link (S36), then loop, then receipt', () => {
+  it('the trusted proofs and the link rules are exactly the ruled sets', () => {
+    expect([...TRUSTED_PROOFS].sort()).toEqual(['cli-identity', 'in-process', 'origin-claim'])
+    expect([...LINK_RULES].sort()).toEqual(['canvas-shared', 'cli-deposit', 'remote-ref-cli', 'remote-ref-foreign', 'remote-ref-samezone'])
+    // The record vocabulary is the host's whole admission set.
+    expect([...ADMISSION_VALUES].sort()).toEqual([...MAIL_ADMISSIONS].sort())
+  })
+  it('every trusted proof with every link rule listens; anything else fails closed, in the ruled order', () => {
+    for (const proof of TRUSTED_PROOFS) for (const admission of LINK_RULES) expect(scope({ meta: { proof, admission, taskId: 't' } })).toEqual({ listened: true, observed: false, row: 'mailbox' })
+    for (const proof of ['claim-mismatch', 'legacy-window', 'unbound', 'none', 'ORIGIN-CLAIM', '', undefined, 1]) {
+      expect(scope({ meta: { proof, admission: 'canvas-shared' } }), String(proof)).toEqual({ listened: false, reason: 'unverified' })
     }
     expect(scope({ meta: {} })).toEqual({ listened: false, reason: 'unverified' })
-    expect(a2aKind.scope({ meta: { proof: 'in-process' } }, OBSERVE)).toEqual({ listened: true, observed: false, row: 'mailbox' })
+    // Not a link: the rules an operator did not set, an unknown value, or none at all (a host before p1-mail-admission).
+    for (const admission of ['roster-shared', 'scope-off', 'host-face', 'local-exempt', 'peer-org', 'node-fact', 'CANVAS-SHARED', '', undefined, 3]) {
+      expect(scope({ meta: { proof: 'origin-claim', admission } }), String(admission)).toEqual({ listened: false, reason: 'unlinked' })
+    }
+    expect(scope({ meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: 'a2a-0123' } })).toEqual({ listened: false, reason: 'loop' })
+    expect(scope({ meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: 'xa2a-0123' } })).toMatchObject({ listened: true })
+    expect(scope({ meta: { proof: 'origin-claim', admission: 'canvas-shared', receiptFor: 'job' } })).toEqual({ listened: false, reason: 'receipt' })
+    // The order: trust before link before loop before receipt.
+    expect(scope({ meta: { proof: 'unbound', admission: 'roster-shared', taskId: 'a2a-1', receiptFor: 'j' } })).toEqual({ listened: false, reason: 'unverified' })
+    expect(scope({ meta: { proof: 'in-process', admission: 'roster-shared', taskId: 'a2a-1', receiptFor: 'j' } })).toEqual({ listened: false, reason: 'unlinked' })
+    expect(scope({ meta: { proof: 'in-process', admission: 'canvas-shared', taskId: 'a2a-1', receiptFor: 'j' } })).toEqual({ listened: false, reason: 'loop' })
+    expect(a2aKind.scope({ meta: { proof: 'in-process', admission: 'cli-deposit' } }, OBSERVE)).toEqual({ listened: true, observed: false, row: 'mailbox' })
+  })
+  it('translate keeps the admission only from the host vocabulary, and the reply face from the proof', () => {
+    const one = translate(row({ admission: 'cli-deposit' }), 'e1')
+    const forged = translate(row({ admission: 'owner-said-so' }), 'e1')
+    const local = translate(row({ proof: 'in-process' }), 'e1')
+    if (one.kind !== 'trigger' || forged.kind !== 'trigger' || local.kind !== 'trigger') throw Error('expected triggers')
+    expect(one.trigger.meta.admission).toBe('cli-deposit')
+    expect(forged.trigger.meta.admission).toBeUndefined()
+    expect(scope(forged.trigger)).toEqual({ listened: false, reason: 'unlinked' })
+    expect(one.trigger.channel!.address.ingress).toBeUndefined()
+    expect(local.trigger.channel!.address.ingress).toBe('local')
   })
 })
 
@@ -95,7 +134,7 @@ describe('5 · no task id is unreadable; a receipt is filtered as one', () => {
     expect(receipt.trigger.meta.receiptFor).toBe('job-1')
     expect(scope(receipt.trigger)).toEqual({ listened: false, reason: 'receipt' })
     // Trust is judged first: an unverified receipt is unverified.
-    expect(scope({ meta: { proof: 'cli-identity', receiptFor: 'job-1' } })).toEqual({ listened: false, reason: 'unverified' })
+    expect(scope({ meta: { proof: 'unbound', admission: 'canvas-shared', receiptFor: 'job-1' } })).toEqual({ listened: false, reason: 'unverified' })
   })
 })
 
@@ -152,7 +191,7 @@ describe('7 · an interrupted round keeps its cursor; the replay is a duplicate'
 describe('8 · D7: human is false; s13Strength is an observation only', () => {
   it('every Trigger is a bot, and s13Strength never changes the scope', () => {
     const trusted = translate(row(), 'e1')
-    const untrusted = translate(row({ proof: 'cli-identity' }), 'e1')
+    const untrusted = translate(row({ proof: 'unbound' }), 'e1')
     if (trusted.kind !== 'trigger' || untrusted.kind !== 'trigger') throw Error('expected triggers')
     expect(trusted.trigger.human).toBe(false)
     expect(untrusted.trigger.human).toBe(false)
@@ -191,14 +230,17 @@ describe('the rest of the kind', () => {
 
   it('has a closed admission row, a strict policy part and its environment variables', () => {
     expect(a2aKind.policy.rows({})).toEqual([expect.objectContaining({ id: 'mailbox', cells: { listedUnaddressed: false, unlistedAddressed: false, unlistedUnaddressed: false } })])
-    expect(policySchema.parse({})).toEqual({ allowed: [] })
-    expect(policySchema.parse({ allowed: [{ id: 'dsh/aaaa1111', name: 'dev' }] })).toEqual({ allowed: [{ id: 'dsh/aaaa1111', name: 'dev' }] })
-    for (const bad of [{ allowed: [{ id: '' }] }, { allowed: [{ id: 'x', role: 'admin' }] }, { allowed: 'x' }, { other: [] }]) expect(policySchema.safeParse(bad).success).toBe(false)
+    expect(policySchema.parse({})).toEqual({ allowed: [], bots: [] })
+    expect(policySchema.parse({ allowed: [{ id: 'dsh/aaaa1111', name: 'dev' }] })).toEqual({ allowed: [{ id: 'dsh/aaaa1111', name: 'dev' }], bots: [] })
+    // p3 v1.2: an A2A caller is a bot (D7); superagent admits one only through this list (policy.ts machineGate).
+    expect(policySchema.parse({ bots: [{ id: 'dsh/aaaa1111' }] })).toEqual({ allowed: [], bots: [{ id: 'dsh/aaaa1111' }] })
+    for (const bad of [{ allowed: [{ id: '' }] }, { allowed: [{ id: 'x', role: 'admin' }] }, { allowed: 'x' }, { other: [] }, { bots: 'x' }, { bots: [{ id: '' }] }, { bots: [{ id: 'x', trusted: true }] }]) expect(policySchema.safeParse(bad).success).toBe(false)
+    expect(a2aKind.policy.fields.map(field => field.key)).toEqual(['allowed', 'bots'])
     const t = translate(row(), 'e1')
     if (t.kind !== 'trigger') throw Error('expected a trigger')
     expect(a2aKind.environment.values({ config: OBSERVE, trigger: t.trigger })).toEqual({ DSH_SUPERAGENT_A2A_CALLER: 'dsh/aaaa1111', DSH_SUPERAGENT_A2A_CONTEXT: 'ctx-1' })
     expect(a2aKind.environment.values({ config: OBSERVE })).toEqual({ DSH_SUPERAGENT_A2A_CALLER: '', DSH_SUPERAGENT_A2A_CONTEXT: '' })
-    expect(a2aKind.health).toEqual(['a2a', 'a2a-deposit'])
+    expect(a2aKind.health).toEqual(['a2a', 'a2a-deposit', 'a2a-reply'])
   })
 
   it('renews the deposit only after renewMinutes', async () => {
@@ -210,6 +252,12 @@ describe('the rest of the kind', () => {
     now += 60_000
     expect(await renewDeposit(f.ctx, OBSERVE, new AbortController().signal, () => now)).toBe(true)
     expect(f.runs).toEqual([['a2a-net', 'publish'], ['a2a-net', 'publish']])
+    // P3-9 (S33): reply mode declares the mailbox owes receipts; switching back to observe withdraws it on the next renewal.
+    now += 60 * 60_000
+    expect(await renewDeposit(f.ctx, REPLY, new AbortController().signal, () => now)).toBe(true)
+    now += 60 * 60_000
+    expect(await renewDeposit(f.ctx, OBSERVE, new AbortController().signal, () => now)).toBe(true)
+    expect(f.runs.slice(2)).toEqual([['a2a-net', 'publish', '--owes'], ['a2a-net', 'publish']])
   })
 
   it('observe mode reads while superagent awaits setup (shadow run: the Engine records, holds evaluation and sending)', async () => {
@@ -224,8 +272,8 @@ describe('the rest of the kind', () => {
   })
 
   it('the loop waits for setup, follows the switch, and stops on abort', async () => {
-    // A mode other than observe (unreachable through the schema, so forced here) and a switched-off Source wait for setup.
-    const notSet = fake(() => page([]), { ...OBSERVE, mode: 'reply' } as unknown as A2aConfig, false)
+    // Reply mode (it needs a configured superagent to send) and a switched-off Source wait for setup.
+    const notSet = fake(() => page([]), REPLY, false)
     await watch(notSet.ctx, new AbortController().signal)
     expect(notSet.reports).toEqual([['a2a', expect.objectContaining({ state: 'paused', code: 'setupPending' })]])
     expect(notSet.runs).toEqual([])
@@ -271,41 +319,45 @@ describe('D1/D2 · records for the shadow acceptance (global review of the accep
     f.ctx.receive = async t => { if (ids.has(t.id)) return 'duplicate'; ids.add(t.id); return scope(t).listened ? 'stored' : 'filtered' }
     return sets
   }
-  const mail = [row(), row({ seq: 2, task_id: 'task-2', proof: 'cli-identity' }), row({ seq: 3, task_id: 'task-3', receipt_for: 'job-1' }),
-    row({ seq: 4, task_id: 'task-4', dup: 'sync-answered' }), row({ seq: 5, task_id: undefined })]
+  const mail = [row(), row({ seq: 2, task_id: 'task-2', proof: 'unbound' }), row({ seq: 3, task_id: 'task-3', receipt_for: 'job-1' }),
+    row({ seq: 4, task_id: 'task-4', dup: 'sync-answered' }), row({ seq: 5, task_id: undefined }),
+    row({ seq: 6, task_id: 'task-6', admission: 'roster-shared' }), row({ seq: 7, task_id: 'a2a-0123' })]
 
   it('records one outcome per row, with exactly these fields and never the text, before the cursor moves', async () => {
     const f = fake(() => page(mail))
     const sets = engine(f)
     await pollMailbox(f.ctx, new AbortController().signal, () => new Date(at))
     const rows = f.state.get(KV.rows) as RowRecord[]
-    expect(rows.map(r => [r.seq, r.outcome])).toEqual([[1, 'stored'], [2, 'filtered:unverified'], [3, 'filtered:receipt'], [4, 'duplicateCopy'], [5, 'unreadable']])
-    expect(rows[0]).toEqual({ epoch: 'e1', seq: 1, task_id: 'task-1', from: 'dsh/aaaa1111', outcome: 'stored', at, proof: 'origin-claim', receipt_for: null, dup: null })
-    expect(rows[1]).toMatchObject({ proof: 'cli-identity', receipt_for: null, dup: null })
+    expect(rows.map(r => [r.seq, r.outcome])).toEqual([[1, 'stored'], [2, 'filtered:unverified'], [3, 'filtered:receipt'], [4, 'duplicateCopy'], [5, 'unreadable'], [6, 'filtered:unlinked'], [7, 'filtered:loop']])
+    expect(rows[0]).toEqual({ epoch: 'e1', seq: 1, task_id: 'task-1', from: 'dsh/aaaa1111', outcome: 'stored', at, proof: 'origin-claim', receipt_for: null, dup: null, admission: 'canvas-shared' })
+    expect(rows[1]).toMatchObject({ proof: 'unbound', receipt_for: null, dup: null })
+    expect(rows[5]).toMatchObject({ admission: 'roster-shared' })
     expect(rows[2]).toMatchObject({ proof: 'origin-claim', receipt_for: 'job-1', dup: null })
     expect(rows[3]).toMatchObject({ outcome: 'duplicateCopy', dup: 'sync-answered' })
-    expect(rows[4]).toEqual({ epoch: 'e1', seq: 5, task_id: null, from: 'dsh/aaaa1111', outcome: 'unreadable', at, proof: 'origin-claim', receipt_for: null, dup: null })
-    for (const r of rows) expect(Object.keys(r).sort()).toEqual(['at', 'dup', 'epoch', 'from', 'outcome', 'proof', 'receipt_for', 'seq', 'task_id'])
+    expect(rows[4]).toEqual({ epoch: 'e1', seq: 5, task_id: null, from: 'dsh/aaaa1111', outcome: 'unreadable', at, proof: 'origin-claim', receipt_for: null, dup: null, admission: 'canvas-shared' })
+    for (const r of rows) expect(Object.keys(r).sort()).toEqual(['admission', 'at', 'dup', 'epoch', 'from', 'outcome', 'proof', 'receipt_for', 'seq', 'task_id'])
     expect(JSON.stringify([...f.state.values()])).not.toContain('please build it')
-    // Every record is written before the cursor: the cursor is the round's last write.
-    expect(sets.at(-1)).toBe(KV.cursor)
-    expect(sets.filter(k => k === KV.rows)).toHaveLength(5)
+    // Every row record is written before the cursor moves; only the heartbeat bookkeeping comes after it.
+    expect(sets.lastIndexOf(KV.rows)).toBeLessThan(sets.indexOf(KV.cursor))
+    expect(sets.filter(k => k === KV.rows)).toHaveLength(7)
     expect(sets.indexOf(KV.pages)).toBeLessThan(sets.indexOf(KV.rows))
   })
 
-  it('keeps proof and dup only from their closed sets; a page header is recorded every read, loss or not', async () => {
-    const f = fake(() => page([row({ proof: 'trusted-by-me', dup: 'maybe' }), row({ seq: 2, task_id: 'task-2', proof: 3 })], { lost: 0 }))
+  it('keeps proof, dup and admission only from their closed sets; a page header is recorded for rows or a loss', async () => {
+    const f = fake(() => page([row({ proof: 'trusted-by-me', dup: 'maybe', admission: 'trust-me' }), row({ seq: 2, task_id: 'task-2', proof: 3 })], { lost: 0 }))
     engine(f)
     await pollMailbox(f.ctx, new AbortController().signal, () => new Date(at))
-    expect((f.state.get(KV.rows) as RowRecord[]).map(r => [r.proof, r.dup])).toEqual([[null, null], [null, null]])
-    expect(f.state.get(KV.pages)).toEqual([{ at, after: 'start', next: 'e1:2', epoch: 'e1', lost: 0, epochChanged: false, cursorAhead: false }])
+    expect((f.state.get(KV.rows) as RowRecord[]).map(r => [r.proof, r.dup, r.admission])).toEqual([[null, null, null], [null, null, 'canvas-shared']])
+    const content = { at, after: 'start', next: 'e1:2', epoch: 'e1', lost: 0, epochChanged: false, cursorAhead: false }
+    // The read with rows, then the first heartbeat (none before it), which counts this round and its two row records.
+    expect(f.state.get(KV.pages)).toEqual([content, { ...content, heartbeat: true, rounds: 1, rows: 2 }])
     expect(f.state.get(KV.healthLog)).toBeUndefined()
     const lossy = fake(() => page([], { lost: null, epochChanged: true, next: 'e2:0', epoch: 'e2' }))
     await pollMailbox(lossy.ctx, new AbortController().signal, () => new Date(at))
-    expect(lossy.state.get(KV.pages)).toEqual([{ at, after: 'start', next: 'e2:0', epoch: 'e2', lost: null, epochChanged: true, cursorAhead: false }])
+    expect((lossy.state.get(KV.pages) as PageRecord[])[0]).toEqual({ at, after: 'start', next: 'e2:0', epoch: 'e2', lost: null, epochChanged: true, cursorAhead: false })
     const ahead = fake(() => page([], { cursorAhead: true, next: 'e1:999' }))
     await pollMailbox(ahead.ctx, new AbortController().signal, () => new Date(at))
-    expect(ahead.state.get(KV.pages)).toEqual([{ at, after: 'start', next: 'e1:999', epoch: 'e1', lost: 0, epochChanged: false, cursorAhead: true }])
+    expect((ahead.state.get(KV.pages) as PageRecord[])[0]).toEqual({ at, after: 'start', next: 'e1:999', epoch: 'e1', lost: 0, epochChanged: false, cursorAhead: true })
     // The loss's health record and the page header share the round's at, so the acceptance can join them.
     expect((lossy.state.get(KV.healthLog) as HealthRecord[])[0]!.at).toBe(at)
   })
@@ -322,12 +374,12 @@ describe('D1/D2 · records for the shadow acceptance (global review of the accep
     f.ctx.receive = receive
     await pollMailbox(f.ctx, new AbortController().signal, () => new Date(at))
     await pollMailbox(f.ctx, new AbortController().signal, () => new Date(at))
-    expect((f.state.get(KV.rows) as RowRecord[]).map(r => r.seq)).toEqual([1, 2, 3, 4, 5])
+    expect((f.state.get(KV.rows) as RowRecord[]).map(r => r.seq)).toEqual([1, 2, 3, 4, 5, 6, 7])
   })
 
   it('keeps the newest ROW_RECORD_CAP rows and HEALTH_RECORD_CAP health records', () => {
     const f = fake(() => '')
-    const rows = (from: number, n: number): RowRecord[] => Array.from({ length: n }, (_, i) => ({ epoch: 'e1', seq: from + i, task_id: 't', from: 'x', outcome: 'stored' as const, at, proof: null, receipt_for: null, dup: null }))
+    const rows = (from: number, n: number): RowRecord[] => Array.from({ length: n }, (_, i) => ({ epoch: 'e1', seq: from + i, task_id: 't', from: 'x', outcome: 'stored' as const, at, proof: null, receipt_for: null, dup: null, admission: null }))
     recordRows(f.ctx, rows(1, ROW_RECORD_CAP))
     recordRows(f.ctx, rows(ROW_RECORD_CAP + 1, 5))
     const kept = f.state.get(KV.rows) as RowRecord[]

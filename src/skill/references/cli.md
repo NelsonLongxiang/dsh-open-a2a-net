@@ -276,6 +276,12 @@ Files do not go through session messages: use the file channel below, never JPFI
     72 characters, so `receipt-<task_id>` fits the 80-character task id. A
     longer id exits 2; it is never cut short. The line is folded to one
     line.
+  - `--json --exit-class` (on `route` and `receipt`) makes the exit code
+    carry the class too, for callers whose command runner keeps the exit
+    code and drops stdout (superagent's a2a Source): 0 sent (or the same
+    receipt replayed), 4 gone, 5 the task already carries a different receipt
+    (`receipt` only), 1 retry or any other failure. `--exit-class` without
+    `--json` exits 2. Without the switch no exit code changes.
   - A task delivered into a CLI mailbox is final on the caller's side (no
     debt is booked for it), so its receipt settles nothing there; the
     caller still gets it, with `disposition` on its mailbox row. A receipt
