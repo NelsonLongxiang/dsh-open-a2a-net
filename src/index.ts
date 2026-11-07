@@ -58,6 +58,7 @@ import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedB
 import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
 import { SuperagentHost } from './superagent/host/index.ts'
 import { registerSuperagentTools } from './superagent/host/tools.ts'
+import { RoleTools, type RoleAgent } from './superagent/host/role-tools.ts'
 import { ReconciliationReminders, type ReminderAgent } from './reconciliation-reminders.ts'
 import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
@@ -2028,7 +2029,15 @@ export function apply(ctx: Context, config: Config): void {
     },
     handleOf: id => `${config.team}/${id8(id)}`,
     localSessionOf: handle => localSessionOfHandle(handle),
+    onRolesChanged: () => { syncRoleTools() },
   }) : undefined
+  // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
+  const superagentRoleTools = new RoleTools({
+    roleOf: id => superagentHost?.roleOf(id),
+    agentOf: id => ctx.get('agents')?.get(SessionId(id)) as RoleAgent | undefined,
+    logger,
+  })
+  function syncRoleTools(): void { for (const agent of liveRootAgents(ctx.get('agents'))) superagentRoleTools.sync(agent as unknown as RoleAgent) }
   let superagentHomeUrl: string | undefined
   if (superagentHost !== undefined) {
     whenWebServerSettled(webServer => { superagentHomeUrl = `http://127.0.0.1:${String((webServer as { port: number }).port)}` })
@@ -2036,6 +2045,10 @@ export function apply(ctx: Context, config: Config): void {
     registerSuperagentTools(ctx, () => superagentHost)
     // A member's turn ending is the executor's turn-end fact (PR-C1).
     ctx.on('agent/status', payload => { if (payload.status === 'idle') superagentHost.memberIdle(String(payload.agent.id)) })
+    ctx.tools.guard(exec => superagentRoleTools.guard(exec.name, exec.agent as unknown as RoleAgent | undefined))
+    ctx.on('agent/created', ({ agent }) => { superagentRoleTools.sync(agent as unknown as RoleAgent); return undefined })
+    ctx.on('agent/disposed', ({ agent }) => { superagentRoleTools.forget(String(agent.id)) })
+    syncRoleTools()
   }
   /**
    * The router acts only through superagent tools and takes work only as candidates from the team's Sources, so A2A
