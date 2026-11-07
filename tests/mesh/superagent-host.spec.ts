@@ -241,8 +241,38 @@ describe('superagent engine in the a2a host', () => {
       const strangerThread = s.threads.find((t: any) => t.triggers.some((x: any) => x.actor.id === handleOf(stranger)))
       expect(strangerThread, JSON.stringify(s.threads.map((t: any) => t.key))).toBeDefined()
       expect(strangerThread.decisions.map((d: any) => [d.kind, d.reason[0]?.code])).toEqual([['ignore', 'botNotListed']])
+
+      // Requester acknowledgement: under auto the router accepts the listed agent's next request. The team address
+      // acknowledges it: the requester's row stays owed, but leaves the queue count and the 24-hour TTL, and the
+      // ticket's result settles it later.
+      expect(await m.sa({ action: 'settings', settings: { acceptMode: 'auto' } })).toMatchObject({ ok: true })
+      const pending = m.R.steered.filter(t => t.includes('[superagent candidate]') && t.includes(handleOf(listed)) && !t.includes(trigger))
+      await until(() => m.R.steered.filter(t => t.includes('[superagent candidate]') && t.includes(handleOf(listed))).length >= 2, 40_000)
+      const next = (pending[0] ?? m.R.steered.filter(t => t.includes('[superagent candidate]') && t.includes(handleOf(listed)) && !t.includes(trigger))[0])!
+      const nextTrigger = /^trigger (\S+) /m.exec(next)![1]!
+      const accepted = await m.tool('superagent_route', m.R, { items: [{ trigger_id: nextTrigger, kind: 'accept', title: 'bump lib', scope: 'one dep', reason: 'matches deps', rules: ['deps'] }] })
+      expect(accepted.results[0], JSON.stringify(accepted)).toMatchObject({ ok: true })
+      const ticketId = accepted.results[0].ticket_id as string
+      const taskOf = (await m.state()).threads.flatMap((t: any) => t.triggers).find((x: any) => x.id === nextTrigger)
+      expect(taskOf).toBeDefined()
+      // The requester's mailbox gets the acknowledgement receipt …
+      let ackMail: any
+      await until(async () => {
+        const box = await run(listed, 'inbox', '--json')
+        const rows = (JSON.parse(box.stdout) as { mail?: any[] }).mail ?? JSON.parse(box.stdout)
+        ackMail = (Array.isArray(rows) ? rows : []).find((r: any) => r.disposition === 'acknowledged')
+        return ackMail !== undefined
+      }, 30_000)
+      expect(String(ackMail.text)).toContain('bump lib')
+      // … and its owed row on this host is marked, still pending.
+      const owed = async () => ((await (await globalThis.fetch(`http://127.0.0.1:${m.port}/__dsh_a2a/state`)).json()) as { tasks: any[] }).tasks
+      const ackRow = (await owed()).find((t: any) => t.taskId === ackMail.receipt_for || t.taskId === ackMail.receiptFor)
+      expect(ackRow, JSON.stringify(ackMail)).toMatchObject({ team: address, status: 'pending', acknowledgedAt: expect.any(Number) })
+      // The owner stops the ticket (no member here): its ending receipt settles the row.
+      expect(await m.sa({ action: 'stop', ticket_id: ticketId, reason: '验收：结束' })).toMatchObject({ ok: true })
+      await until(async () => !(await owed()).some((t: any) => t.taskId === ackRow.taskId), 30_000)
     } finally { await m.dispose() }
-  }, 90_000)
+  }, 150_000)
 
   it('PR-C1: the A2A executor runs tickets on the fixed members — one slot each, queue, report, relay, follow-ups — and never opens a session', async () => {
     const home = mkdtempSync(join(tmpdir(), 'sa-exec-'))

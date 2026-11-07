@@ -86,13 +86,16 @@ thread:   thread <context_id> [--limit N] [--before C]   one conversation, newes
           --limit 1-200 (default 20), --before takes the next_before a previous page returned;
           read-only: never moves ~/.a2a/inbox.cursor; unscoped counts mailbox rows with no context_id
 
-receipt:  receipt <task_id> [--attention | --outcome O] [--to TEAM] <one line…>   the formal receipt for a task this identity got:
+receipt:  receipt <task_id> [--attention | --acknowledged | --outcome O] [--to TEAM] <one line…>   the formal receipt for a task this identity got:
           settles the caller's debt; the envelope carries disposition "result" (default) or "attention" (a question
           for the caller — it settles the task but is not a completion; the answer comes back as a new task in the
           same context). A result says how the work ended with --outcome: completed (default), failed, rejected
           (declined, not taken up) or abandoned (stopped before it finished); an attention receipt takes no outcome.
           The target is the mailbox row's sender for that task id unless --to names one; it rides
           task id receipt-<task_id>, so a task gets one receipt (a second, different one is refused)
+          --acknowledged: the task is taken up and its result follows — the caller's row stays owed but leaves the
+          queue count and expires 7 days after the acknowledgement instead of 24 hours after dispatch; it rides
+          task id ack-<task_id>, so the later receipt is not refused
 
 admission: admission <caller> [--local] [--json]   how <caller> would be admitted delivering to THIS identity right
           now (the home host recomputes it from its current links): {caller, admitted, rule}. --local asks for the
@@ -102,7 +105,7 @@ admission: admission <caller> [--local] [--json]   how <caller> would be admitte
 
 /** Flags that take a value (both '--home URL' and '--home=URL'); the rest are switches. */
 const VALUE_FLAGS = new Set(['--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome'])
-const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--owes', '--local', '--exit-class'])
+const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--acknowledged', '--owes', '--local', '--exit-class'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
 const HOOK_MODE = process.argv.includes('--hook')
@@ -562,11 +565,14 @@ const SENDER_OUTCOMES = ['completed', 'failed', 'rejected', 'abandoned']
 async function cmdReceipt() {
   const [taskId, ...words] = positionals()
   const summary = words.join(' ').replace(/\s+/g, ' ').trim()
-  if (taskId === undefined || summary === '') usage('usage: a2a receipt <task_id> [--attention | --outcome O] [--to TEAM] <one line…>')
+  if (taskId === undefined || summary === '') usage('usage: a2a receipt <task_id> [--attention | --acknowledged | --outcome O] [--to TEAM] <one line…>')
   const outcome = flag('--outcome')
   if (outcome !== undefined && has('--attention')) usage('receipt: --attention takes no --outcome — an attention receipt is a question, not an ending')
+  // superagent v4: an acknowledgement — the task is taken up and its result follows; the caller's row stays owed.
+  const acknowledged = has('--acknowledged')
+  if (acknowledged && (outcome !== undefined || has('--attention'))) usage('receipt: --acknowledged takes neither --outcome nor --attention — it is not an ending')
   if (outcome !== undefined && !SENDER_OUTCOMES.includes(outcome)) usage(`receipt: --outcome takes ${SENDER_OUTCOMES.join(', ')} (got "${outcome}")`)
-  const receiptTask = `receipt-${taskId}`
+  const receiptTask = `${acknowledged ? 'ack' : 'receipt'}-${taskId}`
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(taskId)) usage(`receipt: task id "${taskId}" has characters a receipt's own task id cannot carry (letters, digits, . _ : -)`)
   if (receiptTask.length > 80) usage(`receipt: task id "${taskId}" is too long — its receipt rides "${receiptTask}" (${String(receiptTask.length)} characters, at most 80); it is not cut short`)
   const to = flag('--to')
@@ -581,7 +587,9 @@ async function cmdReceipt() {
       : `receipt: task ${taskId} came from more than one sender (${senders.join(', ')}) — pass --to <team>`)
   }
   const contextId = rows.find(r => typeof r.context_id === 'string')?.context_id
-  const envelope = has('--attention')
+  const envelope = acknowledged
+    ? { idempotencyKey: taskId, disposition: 'acknowledged' }
+    : has('--attention')
     ? { idempotencyKey: taskId, disposition: 'attention' }
     : { outcome: outcome ?? 'completed', idempotencyKey: taskId, disposition: 'result' }
   await sendDirect('receipt', {

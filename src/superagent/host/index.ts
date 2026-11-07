@@ -100,6 +100,9 @@ export class SuperagentHost {
   /** Outbox messages being sent right now, so a pass never sends one twice at once. */
   private readonly sending = new Set<string>()
   private started = false
+  /** Requester acknowledgements in flight, and the tasks acknowledged (or never acknowledgeable) in this process. */
+  private acknowledging = false
+  private readonly ackSettled = new Set<string>()
   /** Refusals at the team's edge by rule, and the latest ones (noteRefusal). */
   private readonly refusalCounts = new Map<string, number>()
   private readonly refusalRecent: Array<{ at: string; rule: string; caller?: string; target?: string }> = []
@@ -371,6 +374,39 @@ export class SuperagentHost {
     try { this.engine.evaluateDue() } catch (error) { this.d.logger.warn('superagent: evaluation pass failed: %s', String(error)) }
     this.flushCandidates()
     this.flushOutbox()
+    this.acknowledgeRequests()
+  }
+
+  /**
+   * superagent v4 (requester acknowledgement): the A2A request a live ticket was accepted from gets one `acknowledged`
+   * receipt, so the requester's owed row waits for the result without counting against its host's queue or expiring at
+   * 24 hours. A person's request already gets the engine's acknowledgement reply; an agent's gets none upstream, and its
+   * first reply is its formal receipt, so this is the transport's own acknowledgement. One at a time; a failure is tried
+   * again on a later pass; a request that can never be acknowledged is not tried again in this process.
+   */
+  private acknowledgeRequests(): void {
+    if (this.acknowledging || !this.settingsValue.sources.a2a) return
+    const due: Array<{ task: string; address: Record<string, string>; text: string }> = []
+    for (const ticket of this.store.tickets.list()) {
+      if (ticket.ended) continue
+      const trigger = this.store.triggers.get(ticket.origin.triggerId)
+      const address = trigger?.source === 'a2a' && trigger.human !== true ? trigger.channel?.address : undefined
+      const task = address?.task
+      if (address === undefined || task === undefined || this.ackSettled.has(task)) continue
+      due.push({ task, address, text: clip(`已接下，工单「${ticket.title}」完成后回执结果。Accepted as ticket «${ticket.title}»; the result follows.`, 400) })
+    }
+    if (due.length === 0) return
+    this.acknowledging = true
+    void (async () => {
+      for (const item of due) {
+        try {
+          const result = await this.a2a.acknowledge(item.address, item.text)
+          this.ackSettled.add(item.task)
+          if (result === 'sent') this.d.logger.info('superagent: acknowledged A2A task %s to %s', item.task, item.address.caller ?? '?')
+          else if (result === 'gone') this.d.logger.warn('superagent: A2A task %s cannot be acknowledged', item.task)
+        } catch (error) { this.d.logger.warn('superagent: acknowledging A2A task %s failed (retried later): %s', item.task, String(error)) }
+      }
+    })().finally(() => { this.acknowledging = false })
   }
 
   private flushCandidates(): void {

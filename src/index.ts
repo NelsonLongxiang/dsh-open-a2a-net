@@ -778,6 +778,12 @@ export function apply(ctx: Context, config: Config): void {
     // Capture authority while the owed row is still present; successful resolve archives it.
     const outcomeAllowed = judge?.enforce !== true || (owedRow !== undefined && headerVerdict?.ok === true)
     const resolved = taskLedger.resolveFromMessage(message, judge)
+    // An acknowledgement marks the owed row and settles nothing: no waiter is answered, no outcome is recorded, and the
+    // settlement seam is not told (its consumers treat a resolution as the end of the task).
+    if (parsed?.envelope?.disposition === 'acknowledged') {
+      if (resolved?.acknowledged === true) logger.info(`a2a: task ${resolved.taskId} acknowledged by its target; it stays owed until the result`)
+      return undefined
+    }
     if(resolved!==undefined)pruneReceiptWaiters()
     if (parsed !== null && parsed.taskId !== '') {
       const line = parsed.summary.trim()
@@ -836,6 +842,8 @@ export function apply(ctx: Context, config: Config): void {
     if (parsed === null || parsed.taskId === '') return true
     try {
       const settled = taskLedger.resolveFromMessage(message, settlementJudgeFor(payer, parsed, true), row => row.direction === 'inbound' && row.peer === `local:${creditor}`)
+      // An acknowledgement only marks the row it was born with (it stays owed until the result).
+      if (settled?.acknowledged === true) return true
       const line = parsed.summary.trim()
       if(settled!==undefined)pruneReceiptWaiters()
       if (settled !== undefined && line !== '') idempotencyStore.recordOutcome(parsed.taskId, { status: 'completed', reply: line.slice(0, SUMMARY_CAP) })
