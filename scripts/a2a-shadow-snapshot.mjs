@@ -135,7 +135,33 @@ CREATE TABLE shadow_triggers (id TEXT PRIMARY KEY, source TEXT NOT NULL, human I
 CREATE TABLE shadow_outbox (id TEXT PRIMARY KEY, channel_source TEXT, status TEXT, drop_reason TEXT);
 CREATE TABLE shadow_tickets (id TEXT PRIMARY KEY, basis_source TEXT);
 CREATE TABLE shadow_sent (handle TEXT, task_id TEXT, at TEXT NOT NULL, source_handle TEXT NOT NULL);
+CREATE TABLE shadow_tally (name TEXT PRIMARY KEY, n INTEGER NOT NULL);
 `
+
+/**
+ * shadow_tally: the zero-must-hold counts, one fixed row each. A verify scan of an empty table is NEEDS-MATERIAL by
+ * design, and in a healthy run these detail tables are empty, so each count is its own always-present row. The SQL
+ * re-counts the detail tables as written into the snapshot; checkTally fails the run on any difference or missing row.
+ */
+export const TALLY = {
+  outbox_sent: "SELECT COUNT(*) AS n FROM shadow_outbox WHERE status = 'sent'",
+  source_sent: 'SELECT COUNT(*) AS n FROM shadow_sent WHERE handle = source_handle',
+  tickets_a2a: "SELECT COUNT(*) AS n FROM shadow_tickets WHERE basis_source = 'a2a'",
+  gaps_uncovered: 'SELECT COUNT(*) AS n FROM shadow_seq_gaps WHERE covered = 0',
+}
+
+/** Re-count each tally from the snapshot's own detail tables; exactly the four names, each equal, or the run fails. */
+export function checkTally(snapshotDb) {
+  const rows = snapshotDb.prepare('SELECT name, n FROM shadow_tally ORDER BY name').all()
+  const names = Object.keys(TALLY)
+  if (rows.length !== names.length || !names.every(name => rows.some(r => r.name === name))) {
+    throw new Error(`shadow_tally must hold exactly ${names.join(', ')}; the snapshot was not written`)
+  }
+  for (const r of rows) {
+    const recount = Number(snapshotDb.prepare(TALLY[r.name]).get().n)
+    if (recount !== Number(r.n)) throw new Error(`shadow_tally ${r.name} is ${String(r.n)} but the snapshot holds ${String(recount)}; the snapshot was not written`)
+  }
+}
 
 /**
  * Read the superagent database and the Source identity's home, and write the snapshot tables into `snapshotDb`.
@@ -168,6 +194,12 @@ export function flattenShadow({ sourceDb, cliHome, window, snapshotDb }) {
   const { handle, sent: sentAll } = readSent(cliHome)
   const sent = sentAll.filter(s => inWindow(s.at))
   const gaps = seqGaps(rows, pages)
+  const tally = {
+    outbox_sent: outbox.filter(o => o.status === 'sent').length,
+    source_sent: sent.filter(s => s.handle === handle).length,
+    tickets_a2a: tickets.filter(t => t.basis_source === 'a2a').length,
+    gaps_uncovered: gaps.filter(g => g.covered === 0).length,
+  }
   // trigger.id is the table's primary key (superagent store.ts:72), so a trigger_id finds at most one Trigger.
   const lookup = sourceDb.prepare(`SELECT d.value ->> '$.filtered.code' AS code FROM trigger t LEFT JOIN disposition d ON d.id = t.id WHERE t.id = ?`)
   const seqCount = new Map()
@@ -210,12 +242,16 @@ export function flattenShadow({ sourceDb, cliHome, window, snapshotDb }) {
     insert('shadow_outbox', ['id', 'channel_source', 'status', 'drop_reason'], outbox)
     insert('shadow_tickets', ['id', 'basis_source'], tickets)
     insert('shadow_sent', ['handle', 'task_id', 'at', 'source_handle'], sent.map(s => ({ ...s, source_handle: handle })))
+    // From the same rows just written above, never a second read of the source.
+    insert('shadow_tally', ['name', 'n'], Object.entries(tally).map(([name, n]) => ({ name, n })))
     snapshotDb.exec('COMMIT')
   } catch (error) { snapshotDb.exec('ROLLBACK'); throw error }
+  checkTally(snapshotDb)
   return {
     window, handle,
     counts: { rows: rows.length, pages: pages.length, health: health.length, seq_gaps: gaps.length, triggers: triggers.length,
       outbox: outbox.length, tickets: tickets.length, sent: sent.length },
+    tally,
     stored: { rows: rowsAll.length, pages: pagesAll.length, health: healthAll.length },
   }
 }
