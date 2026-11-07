@@ -262,3 +262,36 @@ describe('PR-B2b: the A2A Source scope is a2a-watch\'s trust filter', () => {
     expect(teamScope(() => settings()).scope({ source: 'a2a', meta: { proof: 'cli-identity', admission: 'cli-deposit' } })).toEqual({ listened: false, reason: 'sourceOff' })
   })
 })
+
+describe('PR-C1: executor restart recovery', () => {
+  it('a running assignment restarts on the same member with upstream\'s recovery note; the slot is not stuck', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const home = mkdtempSync(join(tmpdir(), 'sa-c1-'))
+    const make = (sent: Array<[string, string]>) => new SuperagentHost({ home, logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {} })
+    const sent1: Array<[string, string]> = []
+    const h1 = make(sent1)
+    expect(h1.saveSettings({ router: 'session-r', members: ['session-m'] }, () => true)).toMatchObject({ ok: true })
+    h1.start()
+    const asked = h1.request('do it')
+    expect(asked.ok).toBe(true)
+    const triggerId = (asked as { triggerId: string }).triggerId
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    expect(routeItem(h1, { trigger_id: triggerId, kind: 'accept', title: 'T', scope: 's', reason: 'r' })).toMatchObject({ ok: true })
+    await new Promise(r => setTimeout(r, 20))
+    expect(sent1.filter(([id, t]) => id === 'session-m' && t.includes('[superagent assignment]'))).toHaveLength(1)
+    const ticketId = h1.executor.list()[0]!.ticketId
+    expect(h1.ticket(ticketId)?.assignments.at(-1)?.state).toBe('running')
+    void h1.stop()
+
+    // The host restarts: the running assignment is interrupted and runs again on the member, with the recovery note.
+    const sent2: Array<[string, string]> = []
+    const h2 = make(sent2)
+    h2.start()
+    await new Promise(r => setTimeout(r, 30))
+    const t = h2.ticket(ticketId)!
+    expect(t.assignments.at(-1)?.state).toBe('running')
+    expect(h2.executor.list().map(b => [b.member, b.ticketId])).toEqual([['session-m', ticketId]])
+    expect(sent2.some(([id, text]) => id === 'session-m' && (text.includes('[superagent assignment]') || text.includes('restarted')))).toBe(true)
+    void h2.stop()
+  })
+})

@@ -160,4 +160,28 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
       try { return { ok: true, requested: h.engine.requestStatus(String(args.ticket_id ?? '')) } } catch (error) { return failure(error) }
     },
   }))
+
+  ctx.tools.register(defineTool({
+    name: 'a2a_ticket_report',
+    description: 'Team member only: report on the superagent ticket assigned to you (upstream orchestrator_report). state: progress (something changed the person must know), waiting (you wait for a Trigger), ready (the result can be reviewed or used — put the pull request link in the summary), blocked or failed (you cannot go on), dropped (nothing to do). question: one concrete question when the ticket owner must decide; null clears an open one.',
+    parameters: {
+      state: { type: 'string', required: true, description: 'progress | waiting | ready | blocked | failed | dropped' },
+      summary: { type: 'string', required: true, description: 'What changed, with evidence; links for results.' },
+      question: { type: 'string', description: 'One concrete question for the ticket owner; empty to keep, "null" to clear.' },
+      answers: { type: 'string', description: 'The trigger id of the person\'s question this report answers.' },
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('ticket report', value) },
+    presentCall: args => ({ card: 'generic', title: `ticket report: ${String(args.state)}`, kind: 'other', rawInput: args }),
+    execute: async (args: { state: string; summary: string; question?: string; answers?: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = host()
+      const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
+      if (h === undefined || me === undefined || h.roleOf(me) !== 'member') return { ok: false, code: 'not-member', error: 'a2a_ticket_report serves only the superagent team members the owner named' }
+      if (!['progress', 'waiting', 'ready', 'blocked', 'failed', 'dropped'].includes(args.state)) return { ok: false, code: 'state', error: 'state must be progress, waiting, ready, blocked, failed or dropped' }
+      const summary = str(args.summary)
+      if (summary === undefined) return { ok: false, code: 'missing', error: 'summary is required' }
+      const question = args.question === 'null' ? null : str(args.question)
+      const out = h.report(me, { state: args.state as 'progress', summary, ...(question !== undefined ? { question } : {}), ...(str(args.answers) !== undefined ? { answers: str(args.answers)! } : {}) })
+      return json(out) as Record<string, JsonValue>
+    },
+  }))
 }

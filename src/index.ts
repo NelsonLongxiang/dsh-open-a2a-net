@@ -2024,6 +2024,8 @@ export function apply(ctx: Context, config: Config): void {
     whenWebServerSettled(webServer => { superagentHomeUrl = `http://127.0.0.1:${String((webServer as { port: number }).port)}` })
     ctx.effect(() => { superagentHost.start(); return () => { void superagentHost.stop() } }, 'a2a: superagent engine passes')
     registerSuperagentTools(ctx, () => superagentHost)
+    // A member's turn ending is the executor's turn-end fact (PR-C1).
+    ctx.on('agent/status', payload => { if (payload.status === 'idle') superagentHost.memberIdle(String(payload.agent.id)) })
   }
   /**
    * The router acts only through superagent tools and takes work only as candidates from the team's Sources, so A2A
@@ -2031,12 +2033,15 @@ export function apply(ctx: Context, config: Config): void {
    * @returns the refusal, or undefined when the router is not involved.
    */
   function superagentRouterRefusal(callerSessionId: string | undefined, target: string): string | undefined {
-    const router = superagentHost?.routerSession
-    if (router === undefined) return undefined
-    if (callerSessionId === router) return '[superagent-router-outbound] the team router does not route A2A; it decides with superagent_route and replies with superagent_reply'
-    const handle = `${config.team}/${id8(router)}`
+    if (superagentHost === undefined) return undefined
+    const callerRole = callerSessionId === undefined ? undefined : superagentHost.roleOf(callerSessionId)
+    if (callerRole === 'router') return '[superagent-router-outbound] the team router does not route A2A; it decides with superagent_route and replies with superagent_reply'
+    if (callerRole === 'member') return '[superagent-member-outbound] a team member does not route A2A; it works on its assigned ticket and reports with a2a_ticket_report'
     const bare = target.replace(/@[0-9a-f]{8}$/, '')
-    if (target === router || (bare === handle && (target === bare || target.endsWith('@' + ownCanvasFingerprint)))) return '[superagent-router-inbound] the team router takes no A2A work; send requests to the team\'s Sources (the workbench), where the gate admits them'
+    const named = (id: string): boolean => { const handle = `${config.team}/${id8(id)}`; return target === id || (bare === handle && (target === bare || target.endsWith('@' + ownCanvasFingerprint))) }
+    const router = superagentHost.routerSession
+    if (router !== undefined && named(router)) return '[superagent-router-inbound] the team router takes no A2A work; send requests to the team\'s Sources (the workbench or its A2A address), where the gate admits them'
+    if (superagentHost.settings.members.some(named)) return '[superagent-member-inbound] a team member takes work only as assignments from the team\'s executor; send requests to the team\'s Sources'
     return undefined
   }
   ctx.on('agent/inbox/claimed',({agent,message})=>followupDelivery.claimed(agent,String(message.id)))
@@ -2428,8 +2433,8 @@ export function apply(ctx: Context, config: Config): void {
     { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown' }
   > {
     // superagent v4: whatever address resolved to it (a canvas team, the node team), the router takes no A2A work.
-    if (superagentHost?.routerSession !== undefined && String(agent.id) === superagentHost.routerSession) {
-      return Promise.resolve({ ok: false, error: superagentRouterRefusal(undefined, String(agent.id)) ?? 'the team router takes no A2A work' })
+    if (superagentHost?.roleOf(String(agent.id)) !== undefined) {
+      return Promise.resolve({ ok: false, error: superagentRouterRefusal(undefined, String(agent.id)) ?? 'superagent team sessions take no A2A work' })
     }
     return new Promise((resolve) => {
       // #306: synchronous replies use the same reading-turn attribution as automatic receipts.
@@ -4106,10 +4111,10 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       try {
         const target = await woken
         // superagent v4: whatever address resolved to it (a canvas team, the node team), the router takes no A2A work.
-        if (superagentHost?.routerSession !== undefined && String(target.id) === superagentHost.routerSession) {
+        if (superagentHost?.roleOf(String(target.id)) !== undefined) {
           endRoute(flight)
           recordActivity('out', team, callerSession ?? 'local', false)
-          return { ok: false, error: superagentRouterRefusal(undefined, String(target.id)) ?? 'the team router takes no A2A work', code: -32000 }
+          return { ok: false, error: superagentRouterRefusal(undefined, String(target.id)) ?? 'superagent team sessions take no A2A work', code: -32000 }
         }
         // N1 (review seat 7e4cf94a): dashed composite labels are NOT routable;
         // accept only <zone>/<short-id> shapes so envelopes stop bouncing -32004.

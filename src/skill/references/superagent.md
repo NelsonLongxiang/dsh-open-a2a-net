@@ -12,7 +12,7 @@ The flow follows upstream's model:
    - An agent can never make a stop.
 3. **Eval by the router.** The router is one fixed session the owner names.
 4. **Decision → Ticket with Mandate.** An accepted request becomes a ticket.
-5. **Assignment → executor.** The A2A executor arrives in a later PR; until then accepted tickets wait as `working / queued`.
+5. **Assignment → executor.** The A2A executor runs tickets on the owner's fixed **members**, one ticket per member at a time; the others wait as `working / queued`. It never opens a session.
 
 ## The A2A Source (agents)
 
@@ -37,13 +37,28 @@ Requests to the team address take **no target queue slot**: the engine governs t
 - You neither send nor receive A2A work. `a2a_route` from you, or to you by any address (handle, session id, or a canvas you sit in), is refused with `[superagent-router-outbound]` or `[superagent-router-inbound]`.
 - No other session can use these tools; they answer `not-router`.
 
+## For a member
+
+- Your assignment arrives in your own session as `[superagent assignment] ticket … «title»`. It carries the scope and the original request. Later messages on that ticket's threads arrive as `[superagent input] …`.
+- Work in your own workspace, in a directory or worktree named after the ticket. Stay within the scope.
+- Report with `a2a_ticket_report`:
+  - `progress`: something changed that the person must know;
+  - `waiting`: you are waiting for a Trigger;
+  - `ready`: the result can be reviewed or used; put the PR link in the summary;
+  - `blocked` / `failed`: you cannot go on;
+  - `dropped`: there is nothing to do.
+
+  Add `question` when the ticket owner must decide something. The router hears every report in its own session and hands results and questions to the person.
+- A `ready` report on a ticket with no followed threads ends it. Your slot then frees, and the next waiting ticket comes to you.
+- You neither send nor receive A2A work (`[superagent-member-outbound]`, `[superagent-member-inbound]`). Do not open sessions or subagents.
+
 ## For the owner
 
 The owner control route is `/__dsh_a2a/superagent`.
 
 - `GET` returns the state: threads with their triggers, decisions and replies, and tickets with their stage.
 - `POST { action }` takes one of:
-  - `settings`: the router (a joined local session), the allowed persons per Source, the A2A bot list, the accept mode, the proactive rules (`{name, text, enabled}`), the Source switches, the Eval timeout, and pause;
+  - `settings`: the router (a joined local session), the members (joined local sessions, not the router; one worker slot each), the allowed persons per Source, the A2A bot list, the accept mode, the proactive rules (`{name, text, enabled}`), the Source switches, the Eval timeout, and pause;
   - `request`: the workbench Source, with `text`, and `thread` to follow up;
   - `stop` / `retry`: act on a ticket by `ticket_id`.
 - A follow-up on a ticket's thread goes to that ticket (Subscription fan-out). It does not start a new Eval.

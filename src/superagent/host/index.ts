@@ -15,9 +15,11 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
-import { Engine, ticketStage, type Assessor, type Candidate, type Executor, type Outbox, type Ticket, type Trigger, type ReceiveResult } from '../upstream/dsh-superagent/src/core/index.ts'
+import { Engine, ticketStage, type Assessor, type Candidate, type Outbox, type Ticket, type Trigger, type ReceiveResult } from '../upstream/dsh-superagent/src/core/index.ts'
 import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
+import { MemberExecutor } from './executor.ts'
+import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { DEFAULT_SETTINGS, WORKBENCH_OWNER, parseSettings, policyVersion, teamPolicy, teamScope, type TeamSettings } from './policy.ts'
 
 export interface SuperagentHostDeps {
@@ -79,6 +81,8 @@ export class SuperagentHost {
   /** Candidates waiting to reach the router, by evalId; delivered ones stay until the engine releases them. */
   private readonly candidates = new Map<string, { candidate: Candidate; delivered: boolean }>()
   private disposeTimer: (() => void) | undefined
+  /** The A2A executor (PR-C1): the owner's fixed member pool, one worker slot each. */
+  readonly executor: MemberExecutor
   /** The A2A Source (PR-B2b): the team's A2A address and its mailbox loop. */
   readonly a2a: A2aSource
   /** Outbox messages being sent right now, so a pass never sends one twice at once. */
@@ -94,8 +98,10 @@ export class SuperagentHost {
       request: candidate => { this.candidates.set(candidate.evalId, { candidate, delivered: false }); queueMicrotask(() => this.flushCandidates()) },
       release: evalId => { this.candidates.delete(evalId) },
     }
-    // PR-C replaces this placeholder with the A2A executor (fixed member pool, no new sessions).
-    const executor: Executor = { start: () => {}, deliver: () => {}, stop: () => {} }
+    const executor = this.executor = new MemberExecutor({
+      path: join(dir, 'executor.json'), members: () => this.settingsValue.members, deliver: d.deliverToSession, engine: () => this.engine,
+      ticket: id => this.store.tickets.get(id), trigger: id => this.store.triggers.get(id), logger: d.logger,
+    })
     const outbox: Outbox = {
       send: message => {
         if (this.store.messages.get(message.id) !== undefined) return
@@ -147,6 +153,12 @@ export class SuperagentHost {
       const candidate = this.engine.candidate(first)
       if (candidate !== undefined) this.candidates.set(candidate.evalId, { candidate, delivered: evaluation.delivered !== undefined })
     }
+    // Upstream's restart rule: Assignments that were running restart with a recovery note; pending ones launch again.
+    this.executor.recover()
+    for (const ticket of this.store.tickets.open()) {
+      const latest = ticket.assignments.at(-1)
+      if (latest !== undefined && latest.state === 'pending' && this.executor.list().every(b => b.assignmentId !== latest.id)) this.executor.start(ticket, latest)
+    }
     this.disposeTimer = this.d.interval(() => this.pass(), PASS_MS)
     this.started = true
     this.syncA2a()
@@ -159,6 +171,33 @@ export class SuperagentHost {
   private syncA2a(): void {
     if (this.started && this.settingsValue.sources.a2a) this.a2a.start()
     else void this.a2a.stop()
+  }
+
+  /** Whether a local session is the router or a member: such sessions take and send no A2A work. */
+  roleOf(sessionId: string): 'router' | 'member' | undefined {
+    return this.settingsValue.router === sessionId ? 'router' : this.settingsValue.members.includes(sessionId) ? 'member' : undefined
+  }
+
+  /** A member's turn ended (agent idle): the executor's turn-end fact. */
+  memberIdle(sessionId: string): void { if (this.settingsValue.members.includes(sessionId)) this.executor.memberIdle(sessionId) }
+
+  /**
+   * A member's report (upstream orchestrator_report) on the ticket bound to it. The router hears it in its own session,
+   * so it can hand a ready result or a question to the person (superagent_reply).
+   */
+  report(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string }): { ok: true; ticketId: string; stage: unknown } | { ok: false; code: string; error: string } {
+    const binding = this.executor.bindingOf(member)
+    if (binding === undefined) return { ok: false, code: 'not-assigned', error: 'no ticket is assigned to this session' }
+    let ticket: Ticket
+    try { ticket = this.engine.report(binding.ticketId, report) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
+    const router = this.settingsValue.router
+    const stage = ticket.ended ? { stage: 'ended', outcome: ticket.ended.outcome } : ticketStage(ticket)
+    if (router !== undefined) {
+      const question = ticket.attention !== undefined ? `\nquestion for the person (send it with superagent_reply purpose attention, copied exactly): ${ticket.attention.question}` : ''
+      this.d.deliverToSession(router, `[superagent report] ticket ${ticket.id} «${ticket.title}» · ${report.state} · stage ${JSON.stringify(stage)}\n${clip(report.summary, 2_000)}${question}`)
+    }
+    this.pass()
+    return { ok: true, ticketId: ticket.id, stage }
   }
 
   /** The team's A2A address: requests to it are Triggers, so they take no target queue slot. */
@@ -204,10 +243,12 @@ export class SuperagentHost {
   get routerSession(): string | undefined { return this.settingsValue.router }
 
   /** Owner control: replace the team settings; a Policy version change is reported to the engine as upstream does. */
-  saveSettings(raw: unknown, routerValid: (id: string) => boolean): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
+  saveSettings(raw: unknown, sessionValid: (id: string) => boolean): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
     const parsed = parseSettings(raw, this.settingsValue)
     if (!parsed.ok) return parsed
-    if (parsed.settings.router !== undefined && !routerValid(parsed.settings.router)) return { ok: false, error: 'router must be a joined local session' }
+    if (parsed.settings.router !== undefined && !sessionValid(parsed.settings.router)) return { ok: false, error: 'router must be a joined local session' }
+    const strange = parsed.settings.members.find(member => !sessionValid(member))
+    if (strange !== undefined) return { ok: false, error: `member ${strange} must be a joined local session` }
     const before = policyVersion(this.settingsValue)
     const routerChanged = parsed.settings.router !== this.settingsValue.router
     mkdirSync(dirname(this.settingsPath), { recursive: true })
@@ -220,6 +261,7 @@ export class SuperagentHost {
     if (routerChanged) for (const entry of this.candidates.values()) entry.delivered = false
     this.d.logger.info('superagent: team settings saved (policy %s)', after)
     this.syncA2a()
+    this.executor.launch()
     this.pass()
     return parsed
   }
@@ -252,6 +294,7 @@ export class SuperagentHost {
       settings: this.settingsValue,
       policyVersion: policyVersion(this.settingsValue),
       a2a: { enabled: this.settingsValue.sources.a2a, address: this.a2a.address ?? null, health: this.a2a.health },
+      executor: { members: this.settingsValue.members, bindings: this.executor.list() },
       ...(this.store.loadError !== undefined ? { error: this.store.loadError } : {}),
       threads: this.store.threads.list().map(thread => ({
         key: thread.key, ref: thread.ref, createdAt: thread.createdAt, lastAt: thread.lastAt ?? null, subscriptions: thread.subscriptions,
