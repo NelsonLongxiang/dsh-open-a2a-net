@@ -74,7 +74,7 @@ The workbench (`/__dsh_a2a_nexus/`) shows it as the **团队** tab whenever the 
 - **团队**: the router, each member's slot, the remote members and the team this host serves, with their pinned keys, and the A2A address.
 - **设置**: the router, the members, the accept mode, the Source switches, and pause.
 
-- `GET` returns the state: threads with their triggers, decisions and replies, and tickets with their stage.
+- `GET` returns the state: threads with their triggers, decisions and replies, and tickets with their stage. It also returns `refusals`, the refusals at the team's edge in this process. These include A2A routes to or from a role session, role sessions' calls outside their tool list, and host-to-host requests that are unsigned or not signed by the pinned key. They are counted by rule (`counts`), and the latest 50 are kept with caller and target (`recent`).
 - `POST { action }` takes one of:
   - `settings`: the router (a joined local session), the members (joined local sessions, not the router; one worker slot each), the allowed persons per Source, the A2A bot list, the accept mode, the proactive rules (`{name, text, enabled}`), the Source switches, the Eval timeout, and pause;
   - `request`: the workbench Source, with `text`, and `thread` to follow up;
