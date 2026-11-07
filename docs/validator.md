@@ -253,10 +253,17 @@ ygl-trees verify run spec_4de5f3b9d48d --db <snapshot>      # 判定：overall �
   - shadow_pages.health_error：按全量 a2a-health-log 计算（不限窗口），存在 at 与该页头相同、entry 为 a2a、state 为 error 的记录为 1，否则为 0。
   - shadow_triggers.in_window：按 trigger.at 和 --window 计算，左闭右开，落在窗口内为 1，否则为 0；trigger.at 读不出时间就整次采集失败（退出码 1），不猜。
   - 每列都有反向变异守着：只在窗口内的 Trigger 里查找、code 取错列、seq_records 只计窗口内、health_error 不比较 entry 或不比较 state、in_window 用闭区间，都会让测试变红。
+- **计数表 shadow_tally**（2026-11-07 全局裁定追加）：verify 的检查器对扫描域为 0 行的表一律判 NEEDS-MATERIAL，而「必须为零」的 4 条判据，在健康运行下要扫的明细表本来就是空的。所以采集器另写一张固定 4 行的计数表，每个计数都由刚写入快照的同一批明细行算出，不再查一次源库：
+  - outbox_sent：shadow_outbox 中 status 为 sent 的行数（这张表只收 a2a 的外发，不限窗口），对应 A1；
+  - source_sent：shadow_sent 中 handle 等于 source_handle 的行数（按窗口），对应 A2；
+  - tickets_a2a：shadow_tickets 中 basis_source 为 a2a 的行数（全库），对应 A9；
+  - gaps_uncovered：shadow_seq_gaps 中 covered 为 0 的行数，对应 A7b。
+  - 自检：快照写完以后，在快照库里用 SQL 把 4 个计数重算一遍；行数不是恰好 4 行、少了某个名字、或者任何一项对不上，都整次失败（退出码 1），不留文件。
+  - 检查器统一写成：scan 为 name='<计数名>'，where 为 n>0，fail_when 为 rows>0，这样扫描域固定是那一行。2026-11-07 用一次性工作区实测过：n=0 时 PASS（rows_scanned=1），n=1 时 FAIL，那一行被改名或缺失时 NEEDS-MATERIAL。不写 scan 时扫描域是整张表，改名会被静默判 PASS，所以不用那种写法。
 - **不带正文**：快照里没有消息正文、Trigger 正文、外发正文和 health 的 detail，测试断言了这一点。
   - 反向用例：同一真实宿主数据删掉一条未报告挤出的行记录，对应的 seq 得到 covered=0。
 - **登记口径**（全局 2026-11-07 裁定 (a)）：本仓 `verify/meta.json` 是 meta_index_version 1，scripts/ 按 v1 的目录白名单豁免，采集器不进 tooling[]（v1 没有这一登记形状）。升到 v2 是另一件治理改动，要做时单独提议。
-- **身份钉住**（代替 tooling 登记）：输出 JSON 的 `collector` 字段带 git commit、两个采集脚本（verify-probe.mjs 和 a2a-shadow-snapshot.mjs）的 sha256，以及这两个文件相对该 commit 是否干净。验收回报必须写明这些值，并且要与最近一次采集器 PR 合入时的值一致，否则不能作为验收依据。加查找列的 PR 合入后，以它的 merge commit 和 sha256 为准，#392 那组值（796cccc）作废。
+- **身份钉住**（代替 tooling 登记）：输出 JSON 的 `collector` 字段带 git commit、两个采集脚本（verify-probe.mjs 和 a2a-shadow-snapshot.mjs）的 sha256，以及这两个文件相对该 commit 是否干净。验收回报必须写明这些值，并且要与最近一次采集器 PR 合入时的值一致，否则不能作为验收依据。每次采集器 PR 合入都会换一次身份，旧值随之作废：#392 的 796cccc、#393 的 bcf150c 都已作废，以最近一次合入为准。
 - **机械检查**：单元测试去掉注释后断言两个脚本的代码里不出现 ygl-trees 调用，也不出现 verify 的 run、prepare、submit、archive 步骤；展平模块不引入 child_process。
 
 ## 维护

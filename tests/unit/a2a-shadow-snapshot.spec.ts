@@ -8,11 +8,11 @@
 import { describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync } from '../temp-dirs.ts'
-import { CAPS, KV as SNAP_KV, key as snapKey, seqGaps, isLoss, parseWindow } from '../../scripts/a2a-shadow-snapshot.mjs'
+import { CAPS, KV as SNAP_KV, key as snapKey, seqGaps, isLoss, parseWindow, checkTally, TALLY, flattenShadow } from '../../scripts/a2a-shadow-snapshot.mjs'
 import { HEALTH_RECORD_CAP, KV, PAGE_RECORD_CAP, ROW_RECORD_CAP } from '../../src/superagent/a2a-watch.ts'
 import { key } from '../../src/superagent/source-types.ts'
 
@@ -117,6 +117,9 @@ describe('p2 shadow collector (verify-probe --a2a-shadow)', () => {
     expect(all(f.out, 'SELECT id, basis_source FROM shadow_tickets ORDER BY id')).toEqual([{ id: 'k1', basis_source: 'github' }, { id: 'k2', basis_source: null }])
     expect(all(f.out, 'SELECT handle, task_id, at, source_handle FROM shadow_sent')).toEqual([{ handle: 'other/1', task_id: 'x1', at: '2026-11-07T01:30:00.000Z', source_handle: SOURCE_HANDLE }])
     expect(readFileSync(f.out).toString('latin1')).not.toMatch(/SECRET/)
+    expect(all(f.out, 'SELECT name, n FROM shadow_tally ORDER BY name')).toEqual([
+      { name: 'gaps_uncovered', n: 0 }, { name: 'outbox_sent', n: 0 }, { name: 'source_sent', n: 0 }, { name: 'tickets_a2a', n: 0 }])
+    expect(r.json.tally).toEqual({ outbox_sent: 0, source_sent: 0, tickets_a2a: 0, gaps_uncovered: 0 })
 
     // Rerunnable: the same inputs into another new file give the same tables.
     const again = join(f.dir, 'snap2.sqlite')
@@ -204,6 +207,63 @@ describe('p2 shadow collector (verify-probe --a2a-shadow)', () => {
     expect(r.code).toBe(1)
     expect(r.json.error).toMatch(/no readable at/)
     expect(existsSync(f.out)).toBe(false)
+  })
+
+  it('shadow_tally: the four zero-must-hold counts, from the rows written into the snapshot', () => {
+    const f = fixture({ rows: [
+      row(2, 'stored', '2026-11-07T01:00:00.000Z'), row(3, 'filtered:unverified', '2026-11-07T01:00:00.000Z', { proof: 'cli-identity' }),
+      row(6, 'filtered:receipt', '2026-11-07T02:00:00.000Z', { receipt_for: 'job-1' }),
+      row(8, 'stored', '2026-11-07T03:00:00.000Z'), // seq 7 is missing and no page reported it: one uncovered gap
+    ] })
+    const db = new DatabaseSync(f.source)
+    db.prepare('INSERT INTO outbox VALUES (?,?)').run('o3', JSON.stringify({ id: 'o3', channel: { source: 'a2a' }, text: 'x', status: 'sent' }))
+    db.prepare('INSERT INTO outbox VALUES (?,?)').run('o4', JSON.stringify({ id: 'o4', channel: { source: 'a2a' }, text: 'x', status: 'pending' }))
+    db.prepare('INSERT INTO ticket VALUES (?,?)').run('k3', JSON.stringify({ id: 'k3', mandate: { basis: { source: 'a2a', via: 'bot' } } }))
+    db.close()
+    // In the window: one send by the Source's own handle (next to the other handle's); one more by it outside the window.
+    appendFileSync(join(f.cliHome, 'sent.1.jsonl'), `${JSON.stringify({ handle: SOURCE_HANDLE, at: Date.parse('2026-11-07T04:00:00Z'), task_id: 's1' })}\n${JSON.stringify({ handle: SOURCE_HANDLE, at: Date.parse('2026-11-06T04:00:00Z'), task_id: 's0' })}\n`)
+    const r = probe(['--a2a-shadow', f.source, '--cli-home', f.cliHome, '--window', WINDOW, '--out', f.out])
+    expect(r.code, r.stdout).toBe(0)
+    expect(r.json.tally).toEqual({ outbox_sent: 1, source_sent: 1, tickets_a2a: 1, gaps_uncovered: 1 })
+    expect(all(f.out, 'SELECT name, n FROM shadow_tally ORDER BY name')).toEqual([
+      { name: 'gaps_uncovered', n: 1 }, { name: 'outbox_sent', n: 1 }, { name: 'source_sent', n: 1 }, { name: 'tickets_a2a', n: 1 }])
+    // The detail rows stay beside the counts for audit.
+    expect(all(f.out, 'SELECT seq, covered FROM shadow_seq_gaps ORDER BY seq')).toEqual([{ seq: 4, covered: 1 }, { seq: 5, covered: 1 }, { seq: 7, covered: 0 }])
+  })
+
+  it('the flatten path re-counts the tally it wrote: a tampered insert fails the run', () => {
+    const f = fixture()
+    const sourceDb = new DatabaseSync(f.source, { readOnly: true })
+    const real = new DatabaseSync(f.out)
+    // Every statement passes through, except the tally insert, whose count is replaced after the fact.
+    const snapshotDb = new Proxy(real, { get: (target, prop) => prop === 'prepare'
+      ? (sql: string) => { const stmt = target.prepare(sql); return sql.startsWith('INSERT INTO shadow_tally') ? { run: (name: string) => stmt.run(name, 99) } : stmt }
+      : (target as unknown as Record<string | symbol, unknown>)[prop] instanceof Function ? ((target as unknown as Record<string | symbol, (...a: unknown[]) => unknown>)[prop]).bind(target) : (target as unknown as Record<string | symbol, unknown>)[prop] })
+    try {
+      expect(() => flattenShadow({ sourceDb, cliHome: f.cliHome, window: parseWindow(WINDOW), snapshotDb })).toThrow(/shadow_tally \w+ is 99 but the snapshot holds 0/)
+    } finally { real.close(); sourceDb.close() }
+  })
+
+  it('checkTally: exactly the four rows, each equal to its re-count, or the run fails', () => {
+    const make = (extra: string) => {
+      mkdirSync(join(repo, 'tmp'), { recursive: true })
+      const db = new DatabaseSync(join(mkdtempSync(join(repo, 'tmp', 'a2a-shadow-tally-')), 'snap.sqlite'))
+      db.exec(`CREATE TABLE shadow_outbox (id TEXT, channel_source TEXT, status TEXT, drop_reason TEXT);
+        CREATE TABLE shadow_sent (handle TEXT, task_id TEXT, at TEXT, source_handle TEXT);
+        CREATE TABLE shadow_tickets (id TEXT, basis_source TEXT);
+        CREATE TABLE shadow_seq_gaps (epoch TEXT, seq INTEGER, covered INTEGER);
+        CREATE TABLE shadow_tally (name TEXT PRIMARY KEY, n INTEGER NOT NULL);
+        INSERT INTO shadow_outbox VALUES ('o1', 'a2a', 'sent', NULL);
+        ${extra}`)
+      return db
+    }
+    const four = (outbox: number) => `INSERT INTO shadow_tally VALUES ('outbox_sent', ${String(outbox)}), ('source_sent', 0), ('tickets_a2a', 0), ('gaps_uncovered', 0);`
+    expect(() => checkTally(make(four(1)))).not.toThrow()
+    expect(() => checkTally(make(four(0)))).toThrow(/outbox_sent is 0 but the snapshot holds 1/)
+    expect(() => checkTally(make("INSERT INTO shadow_tally VALUES ('outbox_sent', 1), ('source_sent', 0), ('tickets_a2a', 0);"))).toThrow(/exactly/)
+    expect(() => checkTally(make(`${four(1)} INSERT INTO shadow_tally VALUES ('outbox_sent_x', 0);`))).toThrow(/exactly/)
+    expect(() => checkTally(make("INSERT INTO shadow_tally VALUES ('outbox_sentX', 1), ('source_sent', 0), ('tickets_a2a', 0), ('gaps_uncovered', 0);"))).toThrow(/exactly/)
+    expect(Object.keys(TALLY).sort()).toEqual(['gaps_uncovered', 'outbox_sent', 'source_sent', 'tickets_a2a'])
   })
 
   it('A7b gaps: covered exactly by (after_seq, after_seq+lost] of a lost>0 page of the same epoch', () => {

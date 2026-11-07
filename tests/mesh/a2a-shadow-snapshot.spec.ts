@@ -121,6 +121,7 @@ describe('superagent p2: shadow collector on a real host overflow', () => {
           .toEqual([{ trigger_present: 1, trigger_filtered_code: 'unverified', seq_records: 1, n: 3 + MAILBOX_CAP }])
         expect(snap.prepare('SELECT loss, health_error FROM shadow_pages ORDER BY rowid').all()).toEqual([{ loss: 0, health_error: 0 }, { loss: 1, health_error: 1 }])
         expect(snap.prepare('SELECT in_window, COUNT(*) AS n FROM shadow_triggers GROUP BY 1').all()).toEqual([{ in_window: 1, n: 3 + MAILBOX_CAP }])
+        expect(snap.prepare('SELECT name, n FROM shadow_tally ORDER BY name').all()).toEqual(['gaps_uncovered', 'outbox_sent', 'source_sent', 'tickets_a2a'].map(name => ({ name, n: 0 })))
         // Every row's trigger_id is a stored Trigger (cli callers: all filtered unverified), and no text came across.
         expect(snap.prepare(`SELECT COUNT(*) AS n FROM shadow_rows r LEFT JOIN shadow_triggers t ON t.id = r.trigger_id WHERE t.id IS NULL OR t.filtered_code IS NOT 'unverified' OR r.outcome IS NOT 'filtered:unverified'`).get()).toEqual({ n: 0 })
       } finally { snap.close() }
@@ -136,6 +137,7 @@ describe('superagent p2: shadow collector on a real host overflow', () => {
       expect(r2.status, r2.stdout + r2.stderr).toBe(0)
       const snap2 = new DatabaseSync(out2, { readOnly: true })
       try {
+        expect(snap2.prepare("SELECT n FROM shadow_tally WHERE name = 'gaps_uncovered'").get()).toEqual({ n: 1 })
         expect(snap2.prepare('SELECT seq, covered FROM shadow_seq_gaps ORDER BY seq').all()).toEqual([...[4, 5, 6, 7, 8, 9].map(seq => ({ seq, covered: 1 })), { seq: 20, covered: 0 }])
       } finally { snap2.close() }
     } finally {
