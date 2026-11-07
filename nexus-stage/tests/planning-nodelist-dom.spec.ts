@@ -6,6 +6,7 @@
  * selector. Covers the three local groups, the remote read-only view, and
  * the join/leave/入队 gestures emitted through the canvas action channel.
  */
+import { readFileSync, existsSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import { createPlanningView, type PlanningInput } from '../src/planning-view.ts'
 import type { CanvasAction } from '../src/canvas-ops.ts'
@@ -56,6 +57,17 @@ function openPanel(v: ReturnType<typeof view>['v']): HTMLElement {
 }
 
 describe('teamed-only canvas + node list drawer', () => {
+  it('the panel column is pinned to the panel width, so a long name truncates and the row buttons stay in view', () => {
+    // .p-menu is a grid; an auto column sizes to the rows' max-content (a long session title plus its tag and buttons),
+    // widening the rows past the 340px panel and scrolling 入队/退网/入网 out of sight (owner report, 2026-11-07).
+    const css = readFileSync(['src/planning.css', 'nexus-stage/src/planning.css'].find(f => existsSync(f))!, 'utf8')
+    const rule = /#dsh-plan \.p-nodelist\{([^}]*)\}/.exec(css)?.[1] ?? ''
+    expect(rule).toContain('max-width:340px')
+    expect(rule.replace(/\/\*[\s\S]*?\*\//g, '')).toMatch(/grid-template-columns:minmax\(0,\s*1fr\)/)
+    // and the name is the part that gives way
+    expect(/#dsh-plan \.p-nodename\{[^}]*min-width:0[^}]*text-overflow:ellipsis/.test(css)).toBe(true)
+  })
+
   it('all local groups and remote host groups render hostile names only as text after refresh', () => {
     const { v } = view()
     const hostile = '<img src=x onerror=alert(1)>'
