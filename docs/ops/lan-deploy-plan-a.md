@@ -180,7 +180,7 @@ Start-Process -FilePath 'D:\node-v24.12.0-win-x64\dsh.cmd' -ArgumentList 'web','
 ```
 ①宿主(.156)开转发（管理员，规则持久跨重启）：
   netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=<LAN口> connectaddress=<远程内网址> connectport=<远程a2a口>
-  实测：13909 → 192.168.250.136:3091
+  实测：13909 → 192.168.200.136:3091
 
 ②远程节点侧（三条配置）：
   originClaimUrl: 'http://<宿主LAN-IP>:<LAN口>'   ← 声明地址=代理地址

@@ -18,7 +18,7 @@
 - 多个对端 linked、verified=true、lastContactOk=true。
 - 另有对端 linked；一个未配置的对端为 stranger、verified=false、lastContactOk=false。
 - 这不是重演 issue 中的“全部 stranger”：对端后来已增加 Tailscale seed，当前已部分恢复。未修改或撤销这些现场配置来制造反例。
-- 真实 IPv4 枚举依次含 Tailscale 100.64.0.10、以太网 10.20.30.10、VMware 192.168.251.1/192.168.250.1、环回、Hyper-V/WSL。
+- 真实 IPv4 枚举依次含 Tailscale 100.64.0.10、以太网 10.20.30.10、VMware 192.168.201.1/192.168.202.1、环回、Hyper-V/WSL。
 
 ## 改后隔离宿主读回（同机真实网卡，非生产替换）
 
