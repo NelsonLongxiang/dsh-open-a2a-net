@@ -5,15 +5,15 @@ const card = (key: string, handle?: string) => ({ team: 'dsh', publicKey: key, p
 const base = { ownUrl: 'http://self:3080', seeds: [], refs: ['dsh/aaaaaaaa'], ownHandles: new Set<string>() }
 describe('host-specific display link facts only', () => {
   it('#311 accepts either the primary origin or an explicit audience alias, still requiring the exact peer seed', () => {
-    const b = { ...card('b'), peers: ['http://192.168.3.156:13080/'] }
-    const input = { ...base, card: b, cards: [b], refs: [], ownUrl: 'http://100.75.181.127:13080', seeds: ['http://b:13080'] }
+    const b = { ...card('b'), peers: ['http://10.20.30.10:13080/'] }
+    const input = { ...base, card: b, cards: [b], refs: [], ownUrl: 'http://100.64.0.10:13080', seeds: ['http://b:13080'] }
     expect(peerLinkDisplay('http://b:13080', input).link).toBe('stranger')
-    expect(peerLinkDisplay('http://b:13080', { ...input, ownAudiences: ['http://192.168.3.156:13080'] }).link).toBe('linked')
-    expect(peerLinkDisplay('http://other:13080', { ...input, ownAudiences: ['http://192.168.3.156:13080'] }).link).toBe('stranger')
-    expect(peerLinkDisplay('http://b:13080', { ...input, ownAudiences: ['http://192.168.3.156:3080'] }).link).toBe('stranger')
-    expect(peerLinkDisplay('http://b:13080', { ...input, ownAudiences: ['https://192.168.3.156:13080'] }).link).toBe('stranger')
+    expect(peerLinkDisplay('http://b:13080', { ...input, ownAudiences: ['http://10.20.30.10:13080'] }).link).toBe('linked')
+    expect(peerLinkDisplay('http://other:13080', { ...input, ownAudiences: ['http://10.20.30.10:13080'] }).link).toBe('stranger')
+    expect(peerLinkDisplay('http://b:13080', { ...input, ownAudiences: ['http://10.20.30.10:3080'] }).link).toBe('stranger')
+    expect(peerLinkDisplay('http://b:13080', { ...input, ownAudiences: ['https://10.20.30.10:13080'] }).link).toBe('stranger')
     expect(peerLinkDisplay('http://b:13080', { ...input, ownAudiences: ['not a URL', ''] }).link).toBe('stranger')
-    expect(peerLinkDisplay('http://b:13080', { ...input, card: undefined, ownAudiences: ['http://192.168.3.156:13080'] })).toEqual({ link: 'stranger', verified: false })
+    expect(peerLinkDisplay('http://b:13080', { ...input, card: undefined, ownAudiences: ['http://10.20.30.10:13080'] })).toEqual({ link: 'stranger', verified: false })
   })
   it('#311 keeps the primary own origin in the set even when aliases are configured', () => {
     const b = { ...card('b'), peers: ['http://self:3080'] }

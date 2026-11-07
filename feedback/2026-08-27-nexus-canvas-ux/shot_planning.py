@@ -30,7 +30,7 @@ MOCK_STATE = {
             {"id": "e5f6a7b8", "team": "alpha/e5f6a7b8", "joined": True, "live": True},
             {"id": "99aabbcc", "team": "beta/99aabbcc", "joined": True, "live": False}]},
     ]},
-    "peers": [{"url": "http://192.168.3.88:3080", "score": 42}],
+    "peers": [{"url": "http://10.20.30.12:3080", "score": 42}],
 }
 
 # 已保存布局：卡片摆开 + 队框矩形（走真实的 saved-wins 读路径）。
