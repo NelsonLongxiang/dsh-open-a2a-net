@@ -2018,6 +2018,16 @@ export function apply(ctx: Context, config: Config): void {
     // The team's A2A address (PR-B2b) is a CLI identity the a2a-net CLI runs against this very host.
     homeUrl: () => superagentHomeUrl,
     apiKey: () => config.apiKey,
+    // PR-C2: remote members and served teams talk host to host, signed with this host's card key and bound to the body.
+    signedPost: async (baseUrl, path, body) => {
+      const target = baseUrl.replace(/\/$/, '') + path
+      const text = JSON.stringify(body)
+      const reply = await peerFetch(target, { method: 'POST', headers: { 'Content-Type': 'application/json', ...originClaimHeaders({ url: target, method: 'POST', body: text }) }, body: text, signal: AbortSignal.timeout(15_000) })
+      if (!reply.ok) { void reply.body?.cancel().catch(() => {}); return { ok: false, status: reply.status, error: `HTTP ${String(reply.status)}` } }
+      try { return JSON.parse(await reply.text()) as Record<string, unknown> } catch { return { ok: false, error: 'not JSON' } }
+    },
+    handleOf: id => `${config.team}/${id8(id)}`,
+    localSessionOf: handle => localSessionOfHandle(handle),
   }) : undefined
   let superagentHomeUrl: string | undefined
   if (superagentHost !== undefined) {
@@ -2982,6 +2992,31 @@ export function apply(ctx: Context, config: Config): void {
               send(200, superagentHost.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true))
             } else if (fields.action === 'request') {
               send(200, superagentHost.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined))
+            } else if (fields.action === 'add-remote-member') {
+              // PR-C2: a member on another host. Its key comes from the linked peer's signed card (the canvas member proof).
+              const ref = typeof fields.ref === 'string' ? fields.ref : '', peer = typeof fields.peer === 'string' ? fields.peer : ''
+              void (async () => {
+                const proof = await canvasMemberForWrite(ref, peer)
+                if (!proof.ok) { send(200, proof); return }
+                if (proof.ownerKey === undefined || !proof.member.includes('/') || proof.ownerKey === encodePublicKey(createPublicKey(nodePrivateKey))) { send(200, { ok: false, error: 'a remote member is a session on another host; name local sessions in members' }); return }
+                send(200, superagentHost.addRemoteMember({ ref: proof.member, key: proof.ownerKey, url: new URL(peer).origin }))
+              })().catch(error => send(200, { ok: false, error: String(error) }))
+            } else if (fields.action === 'remove-remote-member') {
+              send(200, superagentHost.removeRemoteMember(typeof fields.ref === 'string' ? fields.ref : ''))
+            } else if (fields.action === 'serve-team') {
+              // PR-C2: serve another host's team. Its key comes from that linked peer's signed card; null peer leaves.
+              if (fields.peer === null) { send(200, superagentHost.serveTeam(undefined, [], () => false)); return }
+              const peer = typeof fields.peer === 'string' ? fields.peer : ''
+              const members = Array.isArray(fields.members) ? fields.members.filter((m): m is string => typeof m === 'string') : []
+              void (async () => {
+                if (peer === '' || !/^https?:\/\//.test(peer)) { send(200, { ok: false, error: 'peer (the team host base URL) is required' }); return }
+                const card = await fetchPeerCard(peer)
+                if (card === undefined || !verifyCard(card, Date.now()).ok || typeof card.publicKey !== 'string') { send(200, { ok: false, error: 'the team host card is unreadable or unsigned' }); return }
+                // The link judgement reads the cached card: cache the verified one first, as the canvas member proof does.
+                cardCache.set(peer, { at: Date.now(), card })
+                if (peerAdmissionLinkState(peer).link !== 'linked') { send(200, { ok: false, error: 'the team host must be a linked peer' }); return }
+                send(200, superagentHost.serveTeam({ url: new URL(peer).origin, key: card.publicKey }, members, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true))
+              })().catch(error => send(200, { ok: false, error: String(error) }))
             } else if (fields.action === 'stop' || fields.action === 'retry') {
               const ticketId = typeof fields.ticket_id === 'string' ? fields.ticket_id : ''
               const ticket = fields.action === 'stop'
@@ -2989,11 +3024,47 @@ export function apply(ctx: Context, config: Config): void {
                 : superagentHost.engine.retryTicket(ticketId)
               superagentHost.pass()
               send(200, { ok: true, ticket })
-            } else send(200, { ok: false, error: 'action must be settings, request, stop or retry' })
+            } else send(200, { ok: false, error: 'action must be settings, request, add-remote-member, remove-remote-member, serve-team, stop or retry' })
           } catch (error) { send(200, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
         }, 64_000)
       }),
     }), 'a2a: superagent control route')
+    // PR-C2: the two host-to-host faces. Each takes a signed, body-bound OriginClaim and judges the signer's card key against
+    // the key the owner pinned: the team host's key on a member host, the member host's key on the team host.
+    const signedFace = (path: string, judge: (body: Record<string, unknown>, claim: { caller: string; key: string }) => Record<string, unknown>, label: string): void => {
+      ctx.effect(() => webServer.register({
+        kind: 'exact',
+        path,
+        handler: (req: IncomingMessage, res: ServerResponse) => {
+          const send = (value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
+          if (req.method !== 'POST') { send({ ok: false, error: 'POST required' }); return }
+          const chunks: Buffer[] = []
+          let size = 0
+          req.on('data', (chunk: Buffer) => { size += chunk.length; if (size <= 64 * 1024) chunks.push(chunk) })
+          req.on('end', () => {
+            void (async () => {
+              if (size > 64 * 1024) { send({ ok: false, error: 'payload too large' }); return }
+              const rawBody = Buffer.concat(chunks)
+              let body: Record<string, unknown>
+              try { body = JSON.parse(rawBody.toString('utf8')) as Record<string, unknown> } catch { send({ ok: false, error: 'not JSON' }); return }
+              const claim = await verifyOriginClaim(req, { rawBody })
+              if (!claim.ok || !claim.bound || claim.bodyBound !== true || typeof claim.card.publicKey !== 'string') {
+                recordActivity('in', path, String(req.headers['x-a2a-caller'] ?? 'unknown'), false)
+                send({ ok: false, code: 'untrusted-origin', error: `a signed, body-bound OriginClaim is required (${claim.ok ? 'unbound' : claim.reason})` })
+                return
+              }
+              const out = judge(body, { caller: claim.caller, key: claim.card.publicKey })
+              recordActivity('in', path, claim.caller, out.ok === true)
+              send(out)
+            })().catch(error => send({ ok: false, error: String(error) }))
+          })
+        },
+      }), label)
+    }
+    signedFace('/a2a/superagent-member', (body, claim) => superagentHost.assignedWork(body.op, body.member, claim.key, body.text), 'a2a: superagent member face')
+    signedFace('/a2a/superagent-team', (body, claim) => typeof body.member === 'string' && claimCovers(body.member, claim.caller)
+      ? superagentHost.remoteEvent(body.op, body.member, claim.key, body.report)
+      : { ok: false, code: 'not-signer', error: 'the signer does not speak for that member' }, 'a2a: superagent team face')
   })
 
   whenWebServerSettled((webServer) => {

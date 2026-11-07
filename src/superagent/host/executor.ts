@@ -20,8 +20,11 @@ export interface MemberExecutorDeps {
   readonly path: string
   /** The members the owner named, in order (the order is the launch preference). */
   readonly members: () => readonly string[]
-  /** Put text into a live local session; false when it is not live. */
-  readonly deliver: (sessionId: string, text: string) => boolean
+  /**
+   * Put text into a member's session: a local one by host relay, a remote one by a signed request to its host (PR-C2).
+   * `kind` says what it carries. False (or a rejected promise) when it did not arrive.
+   */
+  readonly deliver: (member: string, text: string, kind: 'assign' | 'input' | 'stop', ticketId: string) => boolean | Promise<boolean>
   readonly engine: () => Engine
   /** A stored ticket (the engine's repositories). */
   readonly ticket: (id: string) => Ticket | undefined
@@ -37,6 +40,9 @@ export class MemberExecutor implements Executor {
   private bindings: Binding[]
   /** Assignments waiting for a free member, oldest first. */
   private waiting: { ticketId: string; assignmentId: string }[] = []
+  /** One launch loop at a time, so two launches never bind one slot; a request during a run runs it again. */
+  private launching = false
+  private launchAgain = false
 
   constructor(private readonly d: MemberExecutorDeps) {
     this.bindings = this.load()
@@ -65,6 +71,19 @@ export class MemberExecutor implements Executor {
 
   /** Launch waiting Assignments on free members, oldest first, while both exist. */
   launch(): void {
+    if (this.launching) { this.launchAgain = true; return }
+    this.launching = true
+    void this.launchLoop().catch(error => { this.d.logger.warn('superagent: launch failed: %s', String(error)) }).finally(() => {
+      this.launching = false
+      if (this.launchAgain) { this.launchAgain = false; this.launch() }
+    })
+  }
+
+  private async tryDeliver(member: string, text: string, kind: 'assign' | 'input' | 'stop', ticketId: string): Promise<boolean> {
+    try { return await this.d.deliver(member, text, kind, ticketId) } catch (error) { this.d.logger.warn('superagent: delivery to %s failed: %s', member, String(error)); return false }
+  }
+
+  private async launchLoop(): Promise<void> {
     for (;;) {
       const next = this.waiting[0]
       if (next === undefined) return
@@ -72,7 +91,10 @@ export class MemberExecutor implements Executor {
       const ticket = this.d.ticket(next.ticketId)
       const assignment = ticket?.assignments.find(a => a.id === next.assignmentId)
       if (ticket === undefined || ticket.ended || assignment === undefined || assignment.state !== 'pending') { this.waiting.shift(); continue }
-      const member = this.free().find(m => this.d.deliver(m, assignmentCard(ticket, this.d.trigger)))
+      let member: string | undefined
+      for (const candidate of this.free()) {
+        if (await this.tryDeliver(candidate, assignmentCard(ticket, this.d.trigger), 'assign', ticket.id)) { member = candidate; break }
+      }
       if (member === undefined) return
       this.waiting.shift()
       this.bindings.push({ member, ticketId: ticket.id, assignmentId: assignment.id, at: new Date().toISOString() })
@@ -83,7 +105,7 @@ export class MemberExecutor implements Executor {
   }
 
   deliver(ticket: Ticket, assignment: Assignment): void {
-    queueMicrotask(() => {
+    queueMicrotask(() => { void (async () => {
       const binding = this.bindings.find(b => b.assignmentId === assignment.id)
       if (binding === undefined) return
       const current = this.d.ticket(ticket.id)
@@ -93,12 +115,12 @@ export class MemberExecutor implements Executor {
       const engine = this.d.engine()
       // The Triggers the ticket was accepted from are already in its assignment card: recorded delivered, not sent twice.
       const fresh = inputs.filter(input => !(input.kind === 'trigger' && current.origin.triggerIds.includes(input.triggerId)))
-      if (fresh.length > 0 && !this.d.deliver(binding.member, inputsCard(current, fresh, this.d.trigger))) {
-        try { engine.deliveryFailed(ticket.id, assignment.id, `member ${binding.member} is not live`) } catch { /* the ticket ended meanwhile */ }
+      if (fresh.length > 0 && !(await this.tryDeliver(binding.member, inputsCard(current, fresh, this.d.trigger), 'input', ticket.id))) {
+        try { engine.deliveryFailed(ticket.id, assignment.id, `member ${binding.member} did not receive the input`) } catch { /* the ticket ended meanwhile */ }
         return
       }
       try { engine.inputsDelivered(ticket.id, assignment.id, inputs.map(input => input.id)) } catch (error) { this.d.logger.warn('superagent: inputs of %s not recorded delivered: %s', ticket.id, String(error)) }
-    })
+    })() })
   }
 
   stop(ticket: Ticket, assignment: Assignment, reason: string): void {
@@ -107,7 +129,7 @@ export class MemberExecutor implements Executor {
     if (binding !== undefined) {
       this.bindings = this.bindings.filter(b => b !== binding)
       this.save()
-      this.d.deliver(binding.member, `[superagent] ticket ${ticket.id} «${ticket.title}» is no longer yours (${reason}). Stop working on it; do not report on it again.`)
+      void this.tryDeliver(binding.member, `[superagent] ticket ${ticket.id} «${ticket.title}» is no longer yours (${reason}). Stop working on it; do not report on it again.`, 'stop', ticket.id)
     }
     queueMicrotask(() => this.launch())
   }
