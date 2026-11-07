@@ -4,6 +4,13 @@
 
 状态：设计稿第 2 版。全局设计评审（PR #385 @ 355f5fe）已批 G1、G2、D4，D7 不批；本版按评审改稿：D7 移进 p3 推迟项，并收入三条非阻断意见。不写代码；代码等属主选定运行节点（S15）、全局放行后再写。
 
+> **r8 修订说明（2026-11-07）**：本稿是 p2（已交付：#390、#391、#395）的历史设计。下列结论已经被之后的属主裁定取代，以[接入规格](superagent-a2a-spec.md) r8 为准：
+> - **D4**：S36 已修订。可信集合扩为 {origin-claim, in-process, cli-identity}，且三类来源的调用方都须在属主建立的链接集内（`admission` 字段，#398）。由 p3 实现。
+> - **D7**：S21 已裁定。规则化 inferred，`human:false`，auto 模式只设一条规则，S13② 的 explicit 强度不再实现。
+> - **S17 缺口**：S33 已修复。Source 身份以 `publish --owes` 声明欠回执，调用方记欠账，并受名额约束（#397）。
+> - **p3 回发形状**：以 p3 设计稿 v1.1 为准。包括出站边界（S25）、`--outcome`（S26）、`a2a-` 前缀防回环（S27）、用 `--exit-class` 判定 gone，以及外发前的准入复查。
+
+
 ## 上下文
 
 - 目标：按 superagent Cookbook「Add a Source」的 11 步，在本仓 `next/0.8` 实现 a2a Source 插件包（属主裁定 S13 ①，导出名 `a2a-watch`），先以影子模式运行：只登记 Trigger 和研判记录，不开工单、不回发，使用专用 CLI 身份（S5）。
@@ -97,8 +104,8 @@
 
 ## 全局裁定（PR #385 设计评审）
 
-- **D4 可信来源集合**：批。只认 `origin-claim`（宿主已验证来源）和 `in-process`（同宿主本地面）。`cli-identity` 暂不认，以后要放开另立议题。
-- **D7 Agent 调用方的 human 标志**：不批。把 Agent 调用方翻译成 `human: true` 是用一个假标签绕过 Cookbook「名单内的 bot 只能当 inferred」的规则，会让 superagent 里按“人”与“bot”区分的逻辑失真，最危险的是 bot 之间的回环防护；而且 p2 用不到 explicit 强度。p2 按事实翻译为 `human: false`，只把 `s13Strength` 记为观察字段。D7 移进 p3 推迟项。
+- **D4 可信来源集合**：批。只认 `origin-claim`（宿主已验证来源）和 `in-process`（同宿主本地面）。`cli-identity` 暂不认，以后要放开另立议题。**（已被 S36 取代，见文首修订说明。）**
+- **D7 Agent 调用方的 human 标志**：不批。把 Agent 调用方翻译成 `human: true` 是用一个假标签绕过 Cookbook「名单内的 bot 只能当 inferred」的规则，会让 superagent 里按“人”与“bot”区分的逻辑失真，最危险的是 bot 之间的回环防护；而且 p2 用不到 explicit 强度。p2 按事实翻译为 `human: false`，只把 `s13Strength` 记为观察字段。D7 移进 p3 推迟项。**（已由 S21 裁定，见文首修订说明。）**
 
 ## 影子模式的验收
 
