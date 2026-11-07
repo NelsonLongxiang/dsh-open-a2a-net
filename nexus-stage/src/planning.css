@@ -291,7 +291,9 @@
 /* ── Node list drawer (network-membership-display): teamed nodes hold the
    canvas; every other session is managed here, switched by host. ── */
 #dsh-plan .p-nodebtn{color:var(--ink)}
-#dsh-plan .p-nodelist{min-width:300px; max-width:340px; max-height:420px; overflow:auto; padding:6px}
+#dsh-plan .p-nodelist{min-width:300px; max-width:340px; max-height:420px; overflow:auto; padding:6px;
+  /* .p-menu is a grid: an auto column grows to the rows' max-content and pushes the row buttons out of view. */
+  grid-template-columns:minmax(0,1fr)}
 #dsh-plan .p-nodelist-head{display:flex; align-items:center; justify-content:space-between; gap:8px;
   padding:2px 4px 6px; border-bottom:1px solid var(--card-line)}
 #dsh-plan .p-nodelist-title{font-size:12px; font-weight:600; color:var(--ink)}
