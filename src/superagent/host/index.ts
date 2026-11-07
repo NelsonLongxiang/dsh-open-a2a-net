@@ -62,7 +62,8 @@ export function agentLedEnd(ticket: Ticket, assignmentId: string): boolean {
   if (assignment === undefined) return false
   const since = assignment.report?.at ?? assignment.startedAt ?? assignment.createdAt
   const recent = ticket.inputs.filter((input): input is Extract<Ticket['inputs'][number], { kind: 'trigger' }> =>
-    input.kind === 'trigger' && input.deliveredTo === assignmentId && input.at > since)
+    // A message stamped the same millisecond as the previous report may not have been seen by it: it counts.
+    input.kind === 'trigger' && input.deliveredTo === assignmentId && input.at >= since)
   const lastAgent = recent.filter(input => input.human !== true).at(-1)
   if (lastAgent === undefined) return false
   return !recent.some(input => input.human === true && input.at >= lastAgent.at)

@@ -337,16 +337,20 @@ describe('acceptance item 9: an agent\'s message cannot end a ticket through its
     const h = new SuperagentHost({ home, logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {} })
     expect(h.saveSettings({ router: 'session-r', members: ['session-m'] }, () => true)).toMatchObject({ ok: true })
     h.start()
+    // Delivery and fan-out run on microtasks: wait for the state, not a fixed time (a loaded test run is slower).
+    const until = async (f: () => boolean, ms = 5000): Promise<void> => { const t = Date.now(); while (!f()) { if (Date.now() - t > ms) throw new Error('timed out'); await new Promise(r => setTimeout(r, 10)) } }
+    const reached = (ticketId: string, triggerId: string) => () => h.ticket(ticketId)?.inputs.some(i => i.kind === 'trigger' && i.triggerId === triggerId && typeof i.deliveredTo === 'string') === true
     try {
       const asked = h.request('加一个导出按钮') as { triggerId: string; thread: string }
       expect(routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: 'T', scope: 's', reason: 'r' })).toMatchObject({ ok: true })
-      await new Promise(r => setTimeout(r, 20))
+      await until(() => h.executor.list().length === 1 && h.ticket(h.executor.list()[0]!.ticketId)?.assignments.at(-1)?.state === 'running')
       const ticketId = h.executor.list()[0]!.ticketId
 
       // An agent writes on the ticket's thread: it reaches the member, marked as an agent's.
       h.engine.receive({ id: 'agent-stop-1', source: 'workbench', threads: [{ source: 'workbench', id: asked.thread }], actor: { source: 'workbench', id: 'a-bot' },
         human: false, at: new Date().toISOString(), text: '请停止这个工单', meta: {} } as never)
-      await new Promise(r => setTimeout(r, 20))
+      await until(reached(ticketId, 'agent-stop-1'))
+      await until(() => sent.some(([id, t]) => id === 'session-m' && t.includes('trigger agent-stop-1')))
       expect(sent.some(([id, t]) => id === 'session-m' && t.includes('trigger agent-stop-1') && t.includes('an agent, not a person'))).toBe(true)
 
       expect(h.report('session-m', { state: 'dropped', summary: '对方说不用做了' })).toMatchObject({ ok: false, code: 'agent-cannot-end' })
@@ -357,10 +361,10 @@ describe('acceptance item 9: an agent\'s message cannot end a ticket through its
       // A person says to drop it after the agent: the member may end it.
       const agentAgain = { id: 'agent-stop-2', source: 'workbench', threads: [{ source: 'workbench', id: asked.thread }], actor: { source: 'workbench', id: 'a-bot' }, human: false, at: new Date().toISOString(), text: '停', meta: {} }
       h.engine.receive(agentAgain as never)
-      await new Promise(r => setTimeout(r, 20))
+      await until(reached(ticketId, 'agent-stop-2'))
       expect(h.report('session-m', { state: 'dropped', summary: 'x' })).toMatchObject({ ok: false, code: 'agent-cannot-end' })
-      h.request('确实不用做了', asked.thread)
-      await new Promise(r => setTimeout(r, 20))
+      const person = h.request('确实不用做了', asked.thread) as { triggerId: string }
+      await until(reached(ticketId, person.triggerId))
       expect(h.report('session-m', { state: 'dropped', summary: '属主确认不用做' })).toMatchObject({ ok: true })
       expect(h.ticket(ticketId)?.ended?.outcome).toBe('dropped')
     } finally { void h.stop() }
@@ -378,5 +382,7 @@ describe('acceptance item 9: an agent\'s message cannot end a ticket through its
     expect(agentLedEnd(ticket([['2026-11-07T10:01:00.000Z', true], ['2026-11-07T10:02:00.000Z', false]]), 'a1')).toBe(true)
     // An agent's message before the previous report was already answered by that report.
     expect(agentLedEnd(ticket([['2026-11-07T10:01:00.000Z', false]], '2026-11-07T10:05:00.000Z'), 'a1')).toBe(false)
+    // One stamped the same millisecond as the previous report is not known to have been seen by it.
+    expect(agentLedEnd(ticket([['2026-11-07T10:05:00.000Z', false]], '2026-11-07T10:05:00.000Z'), 'a1')).toBe(true)
   })
 })
