@@ -90,6 +90,8 @@ function sameOrigin(a: string, b: string): boolean {
 
 /** The closure captures the wire faces read (grows with each extracted face). */
 export interface WireDeps {
+  /** superagent design v4: the refusal when `team` is the superagent router (it takes no A2A work), else undefined. */
+  readonly superagentInbound: (team: string) => string | undefined
   readonly ctx: Context
   readonly logger: ReturnType<Context['logger']>
   readonly config: Config
@@ -712,6 +714,14 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             recordActivity('in', team, caller === '' ? 'anonymous' : caller, false)
             const next = nextOf(admission)
             const payload = JSON.stringify({ error: callerRefusal, code: -32000, team, task_status: 'TASK_STATE_FAILED', ...(next !== undefined ? { next } : {}) })
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+            return
+          }
+          const routerRefusal = d.superagentInbound(team)
+          if (routerRefusal !== undefined) {
+            recordActivity('in', team, caller, false)
+            const payload = JSON.stringify({ error: routerRefusal, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
             return

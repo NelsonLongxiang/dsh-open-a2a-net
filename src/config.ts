@@ -48,6 +48,11 @@ export interface Config {
   readonly isolated: boolean
   /** Forward online local CLI deliveries one hop after a local miss. Default on from 0.6.38; explicit false opts out. */
   readonly forwardDirect: boolean
+  /**
+   * superagent design v4: run superagent's domain engine in this host (router, Sources, tickets). Off by default; the
+   * owner turns it on, then names the router and the allowed senders in the workbench.
+   */
+  readonly superagent?: boolean
   /** Human-facing name published on the agent card. */
   readonly agentName: string
   /**
@@ -299,6 +304,7 @@ export const Config: s<Config> = s.object({
   announce: s.boolean().default(false),
   isolated: s.boolean().default(false),
   forwardDirect: s.boolean().default(true),
+  superagent: s.boolean().default(false),
   agentName: s.string().default('DeepSeek Harness A2A node'),
   peers: s.array(s.string()).default([]),
   delegates: s.array(s.object({ name: s.string(), url: s.string(), publicKey: s.string().default('') })).default([]),

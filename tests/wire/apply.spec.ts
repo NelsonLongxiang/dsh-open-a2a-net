@@ -2358,6 +2358,7 @@ describe('a2a plugin module surface', () => {
       // #19 D2: card-face excerpt exposure (owner-level; default full).
       exposureExcerpt: 'full',
       stateColdRowsTtlMs: 5_000,
+      superagent: false,
       cardCacheTtlMs: 60_000,
       cardCacheNegativeTtlMs: 30_000,
       remoteRowsTtlMs: 15_000,
