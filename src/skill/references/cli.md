@@ -287,7 +287,10 @@ Files do not go through session messages: use the file channel below, never JPFI
   identity's key, and the host answers only the identity itself — a holder of
   the host key cannot ask about another identity's links — with the rule name
   and nothing more. Exit 0 once answered (admitted or not), 1 when the host
-  refuses the query or predates it.
+  refuses the query or predates it. A signed query stays valid for its
+  5-minute window, so it can be replayed within it; that is accepted — the
+  answer is read-only, goes through the host's own control face, and is the
+  identity's own question.
 - `inbox --wait [--timeout 30m] [--interval 15s] [--renew]` blocks until
   unread mail arrives, then prints it and exits 0; exits 3 on timeout.
   `--renew` re-publishes the deposit when it is gone or under 10 minutes from
