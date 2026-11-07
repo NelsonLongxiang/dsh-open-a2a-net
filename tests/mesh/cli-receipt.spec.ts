@@ -74,6 +74,16 @@ describe('superagent p1: receipt <task_id> (real host)', () => {
       expect(result).toMatchObject({ disposition: 'result', context_id: 'ctx-job-1' })
       expect(result!.text).toContain('[A2A receipt] task job-1 built and tested\n{"outcome":"completed","idempotencyKey":"job-1","disposition":"result"}')
 
+      // p1-receipt-outcome: how the work ended rides the envelope to the asker as sent.
+      for (const outcome of ['failed', 'rejected', 'abandoned']) {
+        await ask(`job-${outcome}`, `try ${outcome}`)
+        const sent = await cli(homes[WORKER.name], ['receipt', `job-${outcome}`, '--outcome', outcome, 'see', 'the', 'log'])
+        expect(sent.code, sent.stderr).toBe(0)
+        const row = (await askerMail()).find(m => m.text.includes(`task job-${outcome} `))
+        expect(row).toMatchObject({ disposition: 'result', context_id: `ctx-job-${outcome}` })
+        expect(row!.text).toContain(`{"outcome":"${outcome}","idempotencyKey":"job-${outcome}","disposition":"result"}`)
+      }
+
       // One receipt per task: a later, different receipt (attention first, result after) is refused.
       const second = await cli(homes[WORKER.name], ['receipt', 'job-2', 'answered myself'])
       expect(second.code).toBe(1)
@@ -115,16 +125,23 @@ describe('superagent p1: receipt <task_id> (real host)', () => {
     ledger.track('owed-r', 'dsh/bbbbbbbb', 'http://peer', 'ctx-r', 'do the work')
     ledger.resolveFromMessage('[A2A receipt] task owed-q which branch?\n{"idempotencyKey":"owed-q","disposition":"attention"}')
     ledger.resolveFromMessage('[A2A receipt] task owed-r done\n{"outcome":"completed","idempotencyKey":"owed-r","disposition":"result"}')
+    // p1-receipt-outcome: each ending a sender can claim is the archived outcome, not folded into completed.
+    for (const outcome of ['failed', 'rejected', 'abandoned']) {
+      ledger.track(`owed-${outcome}`, 'dsh/bbbbbbbb', 'http://peer', `ctx-${outcome}`, 'do the work')
+      ledger.resolveFromMessage(`[A2A receipt] task owed-${outcome} see log\n{"outcome":"${outcome}","idempotencyKey":"owed-${outcome}","disposition":"result"}`)
+    }
     const a = await bootNode({ name: 'A', session: 'mesh-receipt-ledger', team: 'dsh', agentId: SID, sessionNodes: true, home, port: await reservePort() })
     try {
       expect((await postJson(a.baseUrl, '/__dsh_a2a/join', { id: SID })).status).toBe(200)
       const s = await fetch(`${a.baseUrl}/__dsh_a2a/state`).then(r => r.json()) as { archived: Archived[] }
       expect(s.archived.find(r => r.taskId === 'owed-q')).toMatchObject({ outcome: 'unclassified', disposition: 'attention', endedBy: 'receipt' })
       expect(s.archived.find(r => r.taskId === 'owed-r')).toMatchObject({ outcome: 'completed', disposition: 'result' })
+      for (const outcome of ['failed', 'rejected', 'abandoned']) expect(s.archived.find(r => r.taskId === `owed-${outcome}`)).toMatchObject({ outcome, disposition: 'result', endedBy: 'receipt' })
       const cliHome = mkdtempSync(join(tmpdir(), 'cli-receipt-tasks-'))
       const tasks = await cli(cliHome, ['tasks', '--home', a.baseUrl])
       expect(tasks.stdout).toContain('owed-q unclassified disposition=attention')
       expect(tasks.stdout).toContain('owed-r completed disposition=result')
+      for (const outcome of ['failed', 'rejected', 'abandoned']) expect(tasks.stdout).toContain(`owed-${outcome} ${outcome} disposition=result`)
       const tool = a.ctx.tools.get('a2a_tasks')! as unknown as { execute: (args: unknown, ctx: unknown) => Promise<{ archive: Archived[] }>; output: { render: (args: unknown, value: unknown) => Array<{ text: string }> } }
       const view = await tool.execute({}, runContext(a.agents.agent))
       expect(view.archive.find(r => r.taskId === 'owed-q')).toMatchObject({ disposition: 'attention' })

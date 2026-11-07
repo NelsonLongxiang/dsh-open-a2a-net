@@ -101,6 +101,33 @@ describe('receipt <task_id> (superagent p1-receipt-cmd)', () => {
     expect(journal(env)).toEqual([])
   })
 
+  it('--outcome says how the work ended (p1-receipt-outcome): failed, rejected, abandoned; completed by default', async () => {
+    const h = await host(() => ({ status: 200, body: { routed: true, delivered: true, team: 'ops/11111111', task_id: 'receipt-x' } }))
+    const env = await scoutEnv(h.url)
+    for (const outcome of ['failed', 'rejected', 'abandoned', 'completed']) {
+      const out = await runCli(['receipt', `job-${outcome}`, '--outcome', outcome, '--to', 'ops/11111111', 'see', 'log'], env)
+      expect(out.code, out.stderr).toBe(0)
+      expect(h.bodies.at(-1)?.message).toBe(`[A2A receipt] task job-${outcome} see log\n{"outcome":"${outcome}","idempotencyKey":"job-${outcome}","disposition":"result"}`)
+    }
+    // --outcome=value spells the same flag.
+    expect((await runCli(['receipt', 'job-eq', '--outcome=rejected', '--to', 'ops/11111111', 'not mine'], env)).code).toBe(0)
+    expect(h.bodies.at(-1)?.message).toContain('{"outcome":"rejected","idempotencyKey":"job-eq","disposition":"result"}')
+  })
+
+  it('--outcome refuses what a sender cannot claim, and refuses beside --attention, before any request', async () => {
+    const h = await host(() => ({ status: 200, body: { routed: true, delivered: true, team: 'ops/1', task_id: 'receipt-x' } }))
+    const env = await scoutEnv(h.url)
+    for (const value of ['expired', 'sync_completed', 'unknown', 'unclassified', 'FAILED', 'done']) {
+      const out = await runCli(['receipt', 'job-1', '--outcome', value, '--to', 'ops/1', 'x'], env)
+      expect(out.code, value).toBe(2)
+      expect(out.stderr).toContain('--outcome takes completed, failed, rejected, abandoned')
+    }
+    const both = await runCli(['receipt', 'job-1', '--attention', '--outcome', 'failed', '--to', 'ops/1', 'x'], env)
+    expect(both.code).toBe(2)
+    expect(both.stderr).toContain('--attention takes no --outcome')
+    expect(h.seen.filter(p => p === '/a2a/direct')).toEqual([])
+  })
+
   it('refuses with exit 2 what it cannot send whole, before any request', async () => {
     const h = await host(() => ({ status: 200, body: { routed: true, delivered: true, team: 'ops/1', task_id: 'receipt-x' } }))
     const env = await scoutEnv(h.url)
