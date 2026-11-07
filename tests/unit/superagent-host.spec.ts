@@ -231,6 +231,74 @@ describe('PR-B2b: the a2a Channel through the hosted a2a-watch', () => {
     expect(h.calls[1]).toEqual(expect.arrayContaining(['direct-0123456789ab', '--to', 'reporter/0123456789abcdef', '--outcome', 'completed']))
     expect(h.host.store.messages.get('m1')?.status).toBe('sent')
   })
+  it('acceptance run 3: the request a ticket was accepted from keeps its formal receipt for the result — before a ready report a reply on it is a follow-up', async () => {
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const h = await hostWith(args => args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}')
+    expect(h.host.saveSettings({ router: 'session-r', members: ['session-m'], acceptMode: 'auto', bots: { a2a: [caller.caller] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
+    const channel = { source: 'a2a', thread: 'a2a:ctx-5', address: { ...caller, context: 'ctx-5' } }
+    h.host.engine.receive({ ...wb('5', 'ctx-5'), source: 'a2a', threads: [{ source: 'a2a', id: 'ctx-5' }], actor: { source: 'a2a', id: caller.caller }, human: false, channel, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: caller.task } })
+    h.host.pass()
+    expect(routeItem(h.host, { trigger_id: '5', kind: 'accept', title: 'bump', scope: 'one dep', reason: 'matches deps', rules: ['deps'] })).toMatchObject({ ok: true, decision: 'accept' })
+    const ticketId = h.host.store.tickets.list()[0]!.id
+    const queueOn = (id: string, text: string, address: Record<string, string> = channel.address) => h.host.store.atomic(() => h.host.store.messages.save({ message: { id, channel: { ...channel, address }, text, kind: 'reply', ticketId }, status: 'pending', queuedAt: new Date().toISOString() }))
+    const formal = () => h.calls.filter(a => a[0] === 'receipt' && !a.includes('--acknowledged'))
+    // The member's question, relayed while the ticket is open with no ready report: a follow-up in the same context.
+    queueOn('q1', 'zone 匹配要区分大小写吗？')
+    await h.settle()
+    expect(h.host.store.messages.get('q1')?.status).toBe('sent')
+    expect(formal()).toEqual([])
+    expect(h.calls.find(a => a[0] === 'route')).toEqual(expect.arrayContaining(['route', caller.caller, '--context', 'ctx-5']))
+    // A reply on another request of the thread (not the one the ticket came from) still takes that request's receipt.
+    queueOn('a1', '回答另一个问题', { caller: caller.caller, task: 'direct-other00000001', context: 'ctx-5' })
+    await h.settle()
+    expect(formal().map(a => a[1])).toEqual(['direct-other00000001'])
+    // The member reports ready: the result takes the request's one formal receipt.
+    await new Promise(r => setTimeout(r, 20))
+    expect(h.host.report('session-m', { state: 'ready', summary: 'ticket/bump 0123abc' })).toMatchObject({ ok: true })
+    queueOn('r1', '完成：ticket/bump 0123abc')
+    await h.settle()
+    expect(formal().map(a => a[1])).toEqual(['direct-other00000001', caller.task])
+    expect(formal().at(-1)).toEqual(expect.arrayContaining(['--outcome', 'completed']))
+  })
+  it('acceptance run 3: a ticket that ends with its request unanswered gets the host\'s ending receipt — stopped at once, completed after the grace', async () => {
+    const { SuperagentHost, END_RECEIPT_GRACE_MS } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    let clock = Date.parse('2026-11-07T10:00:00.000Z')
+    const calls: string[][] = []
+    const host = new SuperagentHost({
+      home: mkdtempSync(join(tmpdir(), 'sa-end-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
+      homeUrl: () => 'http://127.0.0.1:1', now: () => new Date(clock).toISOString(),
+      runCli: async args => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' },
+    })
+    expect(host.saveSettings({ router: 'session-r', members: ['session-m'], sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [caller.caller] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { host.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const open = (n: string) => {
+      const channel = { source: 'a2a', thread: `a2a:ctx-${n}`, address: { caller: caller.caller, task: `direct-${n.padStart(12, '0')}`, context: `ctx-${n}` } }
+      host.engine.receive({ ...wb(n, `ctx-${n}`), source: 'a2a', threads: [{ source: 'a2a', id: `ctx-${n}` }], actor: { source: 'a2a', id: caller.caller }, human: false, channel, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: channel.address.task } })
+      host.pass()
+      const routed = routeItem(host, { trigger_id: n, kind: 'accept', title: `t${n}`, scope: 's', reason: 'r', rules: ['deps'] }) as { ok: boolean; ticket_id: string }
+      expect(routed).toMatchObject({ ok: true })
+      return { ticketId: routed.ticket_id, task: channel.address.task }
+    }
+    const endings = () => calls.filter(a => a[0] === 'receipt' && !a.includes('--acknowledged'))
+    // Stopped by the owner: upstream sends it no result; the host's ending receipt goes at once.
+    const stopped = open('6')
+    host.engine.stopTicket(stopped.ticketId, 'owner stop')
+    await settle()
+    expect(endings().map(a => [a[1], a[a.indexOf('--outcome') + 1]])).toEqual([[stopped.task, 'abandoned']])
+    // Completed with no result relayed: the router gets the grace first, then the host sends the ending receipt once.
+    const done = open('7')
+    await settle()
+    expect(host.report('session-m', { state: 'ready', summary: 'ticket/t7 0123abc' })).toMatchObject({ ok: true })
+    await settle()
+    expect(host.ticket(done.ticketId)?.ended?.outcome).toBe('completed')
+    expect(endings().filter(a => a[1] === done.task)).toEqual([])
+    clock += END_RECEIPT_GRACE_MS + 1_000
+    await settle(); await settle()
+    const doneReceipts = endings().filter(a => a[1] === done.task)
+    expect(doneReceipts).toHaveLength(1)
+    expect(doneReceipts[0]!.at(-1)).toContain('ticket/t7 0123abc')
+  })
   it('a caller no longer linked makes the message gone (dropped), never sent', async () => {
     const h = await hostWith(args => args[0] === 'admission' ? JSON.stringify({ admitted: false }) : '{}')
     h.queue('m2', caller)

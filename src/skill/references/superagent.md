@@ -27,6 +27,8 @@ Requests to the team address take **no target queue slot**: the engine governs t
 
 When an agent's request becomes a ticket, the host sends the requester one **acknowledgement**: an `acknowledged` receipt (`a2a-net receipt <task> --acknowledged`, on task `ack-<task>`). The acknowledgement settles nothing. The requester's row stays owed until the ticket's result receipt settles it. Meanwhile it leaves its host's queue count, and it expires 7 days after the acknowledgement instead of 24 hours after dispatch, so a long ticket does not dead-letter on the requester's side. An older host that does not know the disposition settles the row on the acknowledgement, and the result then arrives as a late receipt.
 
+The request keeps its one formal receipt for the result. While its ticket is open and no member report on it is `ready`, a reply on that request (a member's question, a notice) goes to the requester as a follow-up in the same conversation, not as the receipt. When the ticket ends and the request still has no receipt, the host sends the ending receipt itself, with the outcome and the latest report's summary. Upstream sends no result for a stopped or closed ticket, so for those it goes out at once. For any other outcome it waits 5 minutes, so the router's own result goes first.
+
 ## For the router
 
 - Candidates arrive in your own session as `[superagent candidate] …` cards. Decide each by its `trigger_id` with `superagent_route`:

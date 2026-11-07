@@ -71,6 +71,10 @@ export function agentLedEnd(ticket: Ticket, assignmentId: string): boolean {
 
 /** How often due Evals are checked and undelivered candidates retried. */
 export const PASS_MS = 5_000
+/** How long an ended ticket's request waits for the router's own result before the host sends the ending receipt. */
+export const END_RECEIPT_GRACE_MS = 5 * 60_000
+/** Tickets that ended longer ago than this get no ending receipt (the requester's acknowledged row is gone by then). */
+const END_RECEIPT_HORIZON_MS = 8 * 86_400_000
 const TEXT_CAP = 4_000
 /** How many refusals the state keeps with their detail (the counts keep all). */
 const REFUSALS_KEPT = 50
@@ -121,6 +125,8 @@ export class SuperagentHost {
   /** Requester acknowledgements in flight, and the tasks acknowledged (or never acknowledgeable) in this process. */
   private acknowledging = false
   private readonly ackSettled = new Set<string>()
+  private endReceipting = false
+  private readonly endReceipted = new Set<string>()
   /** Refusals at the team's edge by rule, and the latest ones (noteRefusal). */
   private readonly refusalCounts = new Map<string, number>()
   private readonly refusalRecent: Array<{ at: string; rule: string; caller?: string; target?: string }> = []
@@ -156,6 +162,7 @@ export class SuperagentHost {
       dir, homeUrl: () => d.homeUrl?.(), apiKey: () => d.apiKey?.(), enabled: () => this.settingsValue.sources.a2a,
       receive: trigger => { const result = this.engine.receive(trigger as unknown as Trigger); queueMicrotask(() => this.pass()); return result },
       ticket: id => this.store.tickets.get(id) as never,
+      resultPending: (ticketId, task) => this.resultPending(ticketId, task),
       logger: d.logger, ...(d.runCli !== undefined ? { run: d.runCli } : {}), ...(d.a2aPollSeconds !== undefined ? { pollSeconds: d.a2aPollSeconds } : {}),
     })
     this.engine = new Engine({
@@ -397,6 +404,18 @@ export class SuperagentHost {
     this.flushCandidates()
     this.flushOutbox()
     this.acknowledgeRequests()
+    this.receiptEndedRequests()
+  }
+
+  /**
+   * Whether `task` is an A2A request a still-open ticket was accepted from and no member report on the ticket is ready yet
+   * (the A2A Source then sends a reply on it as a follow-up and keeps the formal receipt for the result).
+   */
+  private resultPending(ticketId: string, task: string): boolean {
+    const ticket = this.store.tickets.get(ticketId)
+    if (ticket === undefined || ticket.ended) return false
+    const fromTask = ticket.origin.triggerIds.some(id => this.store.triggers.get(id)?.channel?.address?.task === task)
+    return fromTask && !ticket.assignments.some(a => a.report?.state === 'ready')
   }
 
   /**
@@ -429,6 +448,45 @@ export class SuperagentHost {
         } catch (error) { this.d.logger.warn('superagent: acknowledging A2A task %s failed (retried later): %s', item.task, String(error)) }
       }
     })().finally(() => { this.acknowledging = false })
+  }
+
+  /**
+   * Acceptance run 3: the A2A request a ticket was accepted from gets its one formal receipt even when nobody sends the
+   * ticket's result to it — upstream allows no result for a stopped or closed ticket, and the router may not relay one. A
+   * ticket that ended with its request still unanswered gets the host's ending receipt (the outcome as a2a-watch maps it,
+   * with the latest report's summary): at once when stopped or closed, else after {@link END_RECEIPT_GRACE_MS} so the
+   * router's own result goes first. Without it an acknowledged request stays owed for 7 days. One at a time; a failure is
+   * tried again on a later pass.
+   */
+  private receiptEndedRequests(): void {
+    if (this.endReceipting || !this.settingsValue.sources.a2a) return
+    const now = Date.parse(this.now())
+    const due: Array<{ ticket: Ticket; channel: NonNullable<Trigger['channel']> }> = []
+    for (const ticket of this.store.tickets.list()) {
+      if (!ticket.ended || this.endReceipted.has(ticket.id)) continue
+      const trigger = this.store.triggers.get(ticket.origin.triggerId)
+      const channel = trigger?.source === 'a2a' && trigger.human !== true ? trigger.channel : undefined
+      const task = channel?.address.task
+      if (channel === undefined || task === undefined || this.a2a.answered(task)) { this.endReceipted.add(ticket.id); continue }
+      const grace = ticket.ended.outcome === 'stopped' || ticket.ended.outcome === 'closed' ? 0 : END_RECEIPT_GRACE_MS
+      const since = now - Date.parse(ticket.ended.at)
+      if (since > END_RECEIPT_HORIZON_MS) { this.endReceipted.add(ticket.id); continue }
+      if (since < grace) continue
+      due.push({ ticket, channel })
+    }
+    if (due.length === 0) return
+    this.endReceipting = true
+    void (async () => {
+      for (const { ticket, channel } of due) {
+        const summary = [...ticket.assignments].reverse().find(a => a.report !== undefined)?.report?.summary
+        const text = clip(`工单「${ticket.title}」已结束（${ticket.ended!.outcome}）${summary !== undefined ? `：${summary}` : '。'} Ticket «${ticket.title}» ended (${ticket.ended!.outcome}).`, 1_000)
+        try {
+          const result = await this.a2a.send({ id: `a2a-end:${ticket.id}`, channel, text, kind: 'notice', ticketId: ticket.id })
+          this.endReceipted.add(ticket.id)
+          this.d.logger.info('superagent: ticket %s ended; its A2A request %s got the ending receipt (%s)', ticket.id, channel.address.task ?? '?', result)
+        } catch (error) { this.d.logger.warn('superagent: ending receipt for ticket %s failed (retried later): %s', ticket.id, String(error)) }
+      }
+    })().finally(() => { this.endReceipting = false })
   }
 
   private flushCandidates(): void {
