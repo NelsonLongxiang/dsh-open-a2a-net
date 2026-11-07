@@ -182,3 +182,56 @@ describe('team tab', () => {
     expect(pane.classList.contains('is-hidden')).toBe(true)
   })
 })
+
+describe('the poll leaves the view alone unless it changed (0.8.0 live test: a 停止 click was lost to the 3 s rebuild)', () => {
+  it('says it is reading before the first poll, and that there is no team once the host says so', () => {
+    const { pane } = mount()
+    expect(text(pane.root)).toContain('正在读取团队状态…')
+    pane.update(null, sessions, NOW)
+    expect(text(pane.root)).toContain('这台主机没有运行 superagent 团队')
+  })
+
+  it('an unchanged poll keeps the same buttons; a change or a minute rebuilds them', () => {
+    const { pane } = mount()
+    pane.update(state(), sessions, NOW)
+    const stop = button(pane.root, '停止')
+    pane.update(state(), sessions, NOW + 3_000)
+    expect(button(pane.root, '停止')).toBe(stop)
+    // The A2A Source's heartbeat stamp moves on every read round; the view does not show it.
+    pane.update(state({ a2a: { enabled: true, address: null, health: { a2a: { state: 'ready', detail: 'ok', at: at(0) } as never } } }), sessions, NOW + 4_000)
+    pane.update(state({ a2a: { enabled: true, address: null, health: { a2a: { state: 'ready', detail: 'ok', at: at(-1) } as never } } }), sessions, NOW + 5_000)
+    const steady = button(pane.root, '停止')
+    pane.update(state({ a2a: { enabled: true, address: null, health: { a2a: { state: 'ready', detail: 'ok', at: at(-2) } as never } } }), sessions, NOW + 5_500)
+    expect(button(pane.root, '停止')).toBe(steady)
+    pane.update(state({ policyVersion: 'p-2' }), sessions, NOW + 6_000)
+    expect(button(pane.root, '停止')).not.toBe(stop)
+    const again = button(pane.root, '停止')
+    pane.update(state({ policyVersion: 'p-2' }), sessions, NOW + 6_000 + 60_000)
+    expect(button(pane.root, '停止')).not.toBe(again)
+  })
+
+  it('a press in progress is never rebuilt away; the next poll after it lands catches up', () => {
+    const { pane } = mount()
+    pane.update(state(), sessions, NOW)
+    const stop = button(pane.root, '停止')
+    stop.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    pane.update(state({ policyVersion: 'p-2' }), sessions, NOW + 3_000)
+    expect(button(pane.root, '停止')).toBe(stop)
+    document.dispatchEvent(new Event('pointerup'))
+    pane.update(state({ policyVersion: 'p-2' }), sessions, NOW + 6_000)
+    expect(button(pane.root, '停止')).not.toBe(stop)
+  })
+
+  it('a button reached by keyboard keeps its place; one clicked with the mouse does not hold the view', () => {
+    const { pane } = mount()
+    pane.update(state(), sessions, NOW)
+    const stop = button(pane.root, '停止')
+    stop.focus()
+    const matches = vi.spyOn(stop, 'matches').mockImplementation(sel => sel === ':focus-visible')
+    pane.update(state({ policyVersion: 'p-2' }), sessions, NOW + 3_000)
+    expect(button(pane.root, '停止')).toBe(stop)
+    matches.mockImplementation(() => false)
+    pane.update(state({ policyVersion: 'p-3' }), sessions, NOW + 6_000)
+    expect(button(pane.root, '停止')).not.toBe(stop)
+  })
+})
