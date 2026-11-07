@@ -768,6 +768,17 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           const idemVerdict = idempotencyStore.claim(taskId, idemFingerprint)
           if (idemVerdict !== 'fresh') {
             const replay = idemVerdict === 'replay'
+            // p1-mailbox-owes (S33, b): the original caller's same-payload resend of a task an owing deposit still owes
+            // reads as the first answer did — delivered, with the mailbox marker — so a caller whose first answer was lost
+            // books the debt now. Nothing is written again: no second mailbox row, no second inbound row, no second slot.
+            // Anyone else gets the ordinary 409 (the fingerprint binds the caller too; this check holds should that change).
+            const stillOwed = replay && cliDeposits.owes(team) ? taskLedger.find(taskId) : undefined
+            if (stillOwed !== undefined && stillOwed.direction === 'inbound' && stillOwed.status === 'pending' && stillOwed.team === team && stillOwed.peer === `local:${caller}`) {
+              const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, context_id: stillOwed.contextId ?? contextId, task_status: 'TASK_STATE_DELIVERED', note: `delivered to the mailbox of ${team} — it owes a receipt` })
+              res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+              return
+            }
             // Conflicts warn (caller key reuse bugs); harmless replays stay silent.
             if (!replay) logger.warn(`a2a: idempotency CONFLICT on task ${taskId.slice(0, 80)} — same key reused with a different payload (caller bug; never auto-retry)`)
             const payload = JSON.stringify({
@@ -792,7 +803,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
           }
           if (refuseIfFlooded(caller, message, team, taskId, res)) return
-          if (refuseIfQueueFull(caller, message, team, taskId, cliDeposits.get(team) !== undefined, res)) return
+          // p1-mailbox-owes (S33): a deposit whose card declares it owes receipts is under the per-target cap like a session.
+          if (refuseIfQueueFull(caller, message, team, taskId, cliDeposits.get(team) !== undefined && !cliDeposits.owes(team), res)) return
           // The caller-side receipt correlation: a message shaped as a
           // receipt resolves the task it echoes, whichever wait semantics
           // carried it here. Correlation is bookkeeping only — the message
@@ -825,9 +837,20 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const answered = parseReceipt(message)
             // #298: only the answering member's own, unrefused receipt is the duplicate of a sync answer.
             const duplicate = answered !== null && refusedSettlement === undefined && syncAnswered.take(answered.taskId, team, caller)
-            cliDeposits.mail(team, caller, `${directHeader(caller)}\n\n${message}`, duplicate ? 'sync-answered' : undefined, { taskId, contextId, proof: callerProof, ...(answered !== null ? { receiptFor: answered.taskId } : {}), ...(answered?.envelope?.disposition !== undefined ? { disposition: answered.envelope.disposition } : {}) })
+            const evicted = cliDeposits.mail(team, caller, `${directHeader(caller)}\n\n${message}`, duplicate ? 'sync-answered' : undefined, { taskId, contextId, proof: callerProof, ...(answered !== null ? { receiptFor: answered.taskId } : {}), ...(answered?.envelope?.disposition !== undefined ? { disposition: answered.envelope.disposition } : {}) })
+            // p1-mailbox-owes (D-5): a row the cap pushed out takes its owed inbound row with it (slot freed, counted as evicted).
+            for (const gone of evicted) if (gone.task_id !== undefined) taskLedger.evictInbound(gone.task_id, team)
             recordActivity('in', team, caller, true)
             logger.info(`a2a: cli mailbox delivery for ${team} (from ${caller})`)
+            if (answered === null && cliDeposits.owes(team)) {
+              // p1-mailbox-owes (S33, D-2): delivered, not final — the caller books a debt, this host keeps the owed
+              // inbound row (the per-target cap counts it) and records no outcome, so a resend reads pending.
+              taskLedger.trackInbound(taskId, team, caller, contextId === '' ? undefined : contextId, true, briefOf(message))
+              const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_DELIVERED', note: `delivered to the mailbox of ${team} — it owes a receipt` })
+              res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+              return
+            }
             const note = `delivered to the mailbox of ${team} — the CLI polls while online`
             // gh#112 review: a mailbox delivery is final from this host's
             // side, so a resend of this id reads `completed`. A receipt the

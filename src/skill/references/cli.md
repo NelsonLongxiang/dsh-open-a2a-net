@@ -28,6 +28,17 @@ model tools.
   its card is no longer served, but it stays in the host's directory as an
   OFFLINE row (gh#47; the newest 16 are kept) so canvas refs to it never
   dangle silently. Publish again (same handle, same key) to come back.
+- `a2a-net publish --owes` (superagent p1-mailbox-owes) declares in the
+  signed card that this identity owes a receipt for what its mailbox takes.
+  A home host that knows the declaration answers a delivery to it
+  `delivered` instead of final: the caller books a debt, the per-target cap
+  (3, counted per identity across all callers) applies and refuses with
+  `-32009` when full, and the identity's own `receipt <task_id>` frees the
+  slot. An owed row the 64-row cap pushes out is archived as evicted. Every
+  publish states it afresh — `publish` or `inbox --renew` without `--owes`
+  withdraws it — so only an identity that does answer every task (the
+  superagent Source) should declare it. A host that predates it ignores the
+  field and keeps the mailbox final.
 - A handle stays pinned to the key it was published with, live or offline
   (gh#137): publishing it with a different key (e.g. after `init --force
   --uuid <same>`) is refused with "held by another key". Run `a2a-net revoke`
