@@ -28,7 +28,8 @@ import { reminderView } from '../reconciliation-state.ts'
 import { CanvasStore, canvasNameReserved as reservedCanvasName, isRemoteMemberRef, validRemoteMemberRef, legacyBareMember } from '../canvas-store.ts'
 import { qualifiedCanvasId } from '../canvas-id.ts'
 import { refreshPeerCard, registerCanvasNotify, type CanvasNotifyDeps } from './canvas-notify.ts'
-import { CLI_HANDLE_RE, type CliDepositStore } from '../cli-deposit.ts'
+import { CLI_HANDLE_RE, verifyAdmissionQuery, type CliDepositStore } from '../cli-deposit.ts'
+import type { Admission } from '../task-auth.ts'
 import type { ExposureStore } from '../exposure-store.ts'
 import type { GroupStore } from '../group-store.ts'
 import type { IdempotencyStore } from '../idempotency-store.ts'
@@ -70,6 +71,8 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly exposureStore: ExposureStore
   readonly teamMemberships: TeamMembershipStore
   readonly cliDeposits: CliDepositStore
+  /** superagent p1-mail-admission (M-2): the admission `caller` would get delivering to a deposited handle now. */
+  readonly admissionRecheck: (caller: string, handle: string, local: boolean) => Admission
   readonly groupStore: GroupStore
   readonly canvasStore: CanvasStore
   readonly canvasMemberForWrite: (ref: string, peer?: unknown) => Promise<{ ok: true; member: string; ownerKey?: string } | { ok: false; error: string }>
@@ -641,6 +644,20 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           payload = JSON.stringify(out.ok
             ? { ok: true, handle: out.handle, expiresAt: out.expiresAt, ...(homeCleared ? { homeCleared: true } : {}), cardUrl: `${d.ownCardUrl}/a2a/cli/${encodeURIComponent(out.handle)}` }
             : { ok: false, error: out.error })
+        } else if (action === 'admission') {
+          // superagent p1-mail-admission (M-2): how `caller` would be admitted to this identity NOW. Answered only to the
+          // identity itself — the query is signed with its deposit's key (the control key alone is not enough) — and only
+          // with admitted + rule, never the basis or the refusal text.
+          const q = body as { handle?: unknown; caller?: unknown; ingress?: unknown; ts?: unknown; sig?: unknown }
+          const handle = typeof q.handle === 'string' ? q.handle : ''
+          const caller = typeof q.caller === 'string' ? q.caller : ''
+          const ingress = q.ingress === 'local' ? 'local' as const : 'wire' as const
+          const signed = handle !== '' && caller !== '' && verifyAdmissionQuery(cliDeposits.get(handle)?.cardJson, { handle, caller, ingress, ts: typeof q.ts === 'number' ? q.ts : NaN, sig: typeof q.sig === 'string' ? q.sig : '' }, Date.now())
+          if (!signed) payload = JSON.stringify({ ok: false })
+          else {
+            const verdict = d.admissionRecheck(caller, handle, ingress === 'local')
+            payload = JSON.stringify({ ok: true, admitted: verdict.ok, ...(verdict.ok ? { rule: verdict.rule } : {}) })
+          }
         } else if (action === 'revoke') {
           payload = JSON.stringify({ ok: cliDeposits.revoke(typeof (body as { handle?: unknown }).handle === 'string' ? (body as { handle: string }).handle : '') })
         } else if (action === 'inbox') {

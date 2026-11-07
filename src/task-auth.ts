@@ -48,6 +48,9 @@ export const VIA_OF: Readonly<Record<AdmissionRule, Via>> = {
   'cli-deposit': 'cli-deposit',
 }
 
+/** superagent p1-mail-admission: every admission rule name (the closed set a mailbox row's `admission` may carry). */
+export const ADMISSION_RULES = Object.keys(VIA_OF) as readonly AdmissionRule[]
+
 /**
  * One admission decision. `basis` lists every shared team that held; `rule`
  * is the first branch of the decision that hit (deterministic, so a record
@@ -292,6 +295,23 @@ export function callerAdmission(r: AdmissionRecords, caller: string, targetTeam?
   // gh#45: a deposited CLI handle is a published node fact of this host.
   if (r.cliDeposited(caller)) return admitted('cli-deposit')
   return refused(`caller_session "${caller}" matches no node fact on this host (joined session id, live node label, or deposited CLI handle) — free-form caller labels are self-description and are not admissible (N3). Pass caller_session as <zone>/<id8> with an operator-established link.`, 'send caller_session as a <zone>/<id8> handle this host has linked; free-form labels are never admitted')
+}
+
+/**
+ * superagent p1-mail-admission (M-2): the admission `caller` would get delivering to `targetTeam` NOW — the same rules
+ * the settlement judge rechecks with (local face: localCandidateAdmission; otherwise callerAdmission). A remote CLI is
+ * judged on its operator link and pinned home only, as recheckRemoteCliAuthorization does: being online and the signer
+ * binding are facts of one delivery, not of the link.
+ */
+export function recheckCallerAdmission(r: AdmissionRecords, caller: string, targetTeam: string, local: boolean): Admission {
+  if (local) return localCandidateAdmission(r, caller, targetTeam)
+  if (r.teamScopeRouting && CLI_HANDLE_RE.test(caller) && !r.cliDeposited(caller)) {
+    const basis = r.canvasNames().filter(name => r.canvasRemoteMembersOf(name).includes(caller)).map(name => r.canvasTeamOf(name))
+    if (basis.length === 0) return refused(`remote CLI ${caller} has no operator-established canvas link`)
+    if (r.cliHomeOf?.(caller) === undefined) return refused(`remote CLI ${caller} home is not pinned`)
+    return admitted('remote-ref-cli', basis)
+  }
+  return callerAdmission(r, caller, targetTeam)
 }
 
 /** Revalidate only mutable operator authority, not already-verified birth-time identity or liveness. */

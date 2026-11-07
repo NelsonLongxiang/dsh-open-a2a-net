@@ -48,7 +48,7 @@ const USAGE = `a2a-net CLI — aligned with the plugin's model tools ('a2a tools
 
 usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 
-户口制:   init <name> [--uuid 16hex] [--force] · publish [--owes] · inbox [--new|--wait|--hook] · thread <context_id> · receipt <task_id> <result…> · revoke
+户口制:   init <name> [--uuid 16hex] [--force] · publish [--owes] · inbox [--new|--wait|--hook] · thread <context_id> · receipt <task_id> <result…> · admission <caller> [--local] · revoke
 对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · report <msg…> [--task ID]
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
@@ -88,11 +88,17 @@ receipt:  receipt <task_id> [--attention | --outcome O] [--to TEAM] <one line…
           same context). A result says how the work ended with --outcome: completed (default), failed, rejected
           (declined, not taken up) or abandoned (stopped before it finished); an attention receipt takes no outcome.
           The target is the mailbox row's sender for that task id unless --to names one; it rides
-          task id receipt-<task_id>, so a task gets one receipt (a second, different one is refused)`
+          task id receipt-<task_id>, so a task gets one receipt (a second, different one is refused)
+
+admission: admission <caller> [--local] [--json]   how <caller> would be admitted delivering to THIS identity right
+          now (the home host recomputes it from its current links): {caller, admitted, rule}. --local asks for the
+          same-host face (a session on the home host). Signed with this identity's key; the host answers only the
+          identity itself, with the rule name and nothing more. Exit 0 once answered (admitted or not), 1 when the
+          host refuses or does not know the query`
 
 /** Flags that take a value (both '--home URL' and '--home=URL'); the rest are switches. */
 const VALUE_FLAGS = new Set(['--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome'])
-const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--owes'])
+const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--owes', '--local'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
 const HOOK_MODE = process.argv.includes('--hook')
@@ -578,6 +584,25 @@ async function cmdReceipt() {
     team: to ?? senders[0], message: `[A2A receipt] task ${taskId} ${summary}\n${JSON.stringify(envelope)}`,
     caller_session: handle, wait: false, task_id: receiptTask, ...(contextId !== undefined ? { context_id: contextId } : {}),
   })
+}
+
+/**
+ * superagent p1-mail-admission: ask the home host how <caller> would be admitted delivering to this identity now.
+ * The query is signed with this identity's key over ['a2a-admission', handle, caller, ingress, ts] (src/cli-deposit.ts
+ * admissionQueryPayload), so the host answers this identity only, never another one's links.
+ */
+async function cmdAdmission() {
+  const [caller] = positionals()
+  if (caller === undefined || caller === '') usage('usage: a2a admission <caller> [--local] [--json]')
+  const id = identity()
+  const ingress = has('--local') ? 'local' : 'wire'
+  const ts = Date.now()
+  const sig = edSign(null, Buffer.from(JSON.stringify(['a2a-admission', id.handle, caller, ingress, ts])), createPrivateKey(id.privateKeyPem)).toString('base64')
+  const out = await control({ action: 'admission', handle: id.handle, caller, ingress, ts, sig })
+  if (out.ok !== true) die(`[admission] the host did not answer for ${id.handle} (refused, or a host before p1-mail-admission)`)
+  const row = { caller, admitted: out.admitted === true, ...(typeof out.rule === 'string' ? { rule: out.rule } : {}) }
+  if (has('--json')) { console.log(JSON.stringify(row)); return }
+  console.log(row.admitted ? `[admission] ${caller} → admitted (${String(row.rule)})` : `[admission] ${caller} → not admitted`)
 }
 
 /** One mailbox read: the rows, plus the gh#113 seq bounds when the host has them. */
@@ -1285,6 +1310,7 @@ async function main() {
     return
   }
   if (cmd === 'receipt') { await cmdReceipt(); return }
+  if (cmd === 'admission') { await cmdAdmission(); return }
   if (cmd === 'report') {
     const text = positionals().join(' ')
     if (text === '') usage('usage: a2a report <message…> — one-way report into the host process-team mailbox')
