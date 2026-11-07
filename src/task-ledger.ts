@@ -27,7 +27,7 @@ import { parseTaskDelivery, TASK_DELIVERY_CAP, TASK_DELIVERY_RETENTION_MS, type 
 import { parseReminder, REMINDER_LONG_MS, type ReminderState } from './reconciliation-state.ts'
 import { parseReceipt, RECEIPT_DISPOSITIONS, RECEIPT_OUTCOMES, type ReceiptDisposition, type ReceiptOutcomeV2 } from './receipt.ts'
 import { classifyConservationBlock, ConservationCounters, type ConservationVerdict } from './ledger-conservation.ts'
-import { CALLER_ENDED_PREFIX, TASK_CAP, ARCHIVE_CAP, SUMMARY_CAP, TASK_STALE_TTL_MS, ARCHIVE_ENDS, ECHO_SUMMARY, ROUTING_FACT_CAP, SETTLEMENT_ID_CAP, SETTLEMENT_REFUSAL_CAP, withSender, withAuth, routingOf, birthFacts, withRouting, withSettledBy, parseRefusal, archivedEndedBy, WITHDRAWAL_RESULTS, isWithdrawalResult } from './task-ledger-rows.ts'
+import { CALLER_ENDED_PREFIX, TASK_CAP, ARCHIVE_CAP, SUMMARY_CAP, TASK_STALE_TTL_MS, TASK_ACKNOWLEDGED_TTL_MS, ARCHIVE_ENDS, ECHO_SUMMARY, ROUTING_FACT_CAP, SETTLEMENT_ID_CAP, SETTLEMENT_REFUSAL_CAP, withSender, withAuth, routingOf, birthFacts, withRouting, withSettledBy, parseRefusal, archivedEndedBy, WITHDRAWAL_RESULTS, isWithdrawalResult } from './task-ledger-rows.ts'
 import type { TaskRecord, ArchivedRecord, Sender, OutboundBirth, TaskLedgerOptions, ReceiptResolvedInfo, TaskLedgerSnapshot, SettlementRefusalRecord, SettlementJudge, AbandonResult, CancelledResult, ArchiveEnd } from './task-ledger-rows.ts'
 export * from './task-ledger-rows.ts'
 
@@ -50,6 +50,7 @@ export class TaskLedger {
   /** gh#154: lifetime conservation counters (persisted; never reset by cap trims or restarts) and the durable damage marker — the machinery lives in src/ledger-conservation.ts (R-mod); the ledger's seams delegate. */
   private readonly counters = new ConservationCounters()
   private readonly staleTtlMs: number
+  private readonly acknowledgedTtlMs: number
   private readonly archiveCap: number
   /** Injectable clock (option `now`). */
   private readonly now: () => number
@@ -134,6 +135,7 @@ export class TaskLedger {
    */
   constructor(private readonly path: string, options?: TaskLedgerOptions) {
     this.staleTtlMs = options?.staleTtlMs ?? TASK_STALE_TTL_MS
+    this.acknowledgedTtlMs = options?.acknowledgedTtlMs ?? TASK_ACKNOWLEDGED_TTL_MS
     this.archiveCap = options?.archiveCap ?? ARCHIVE_CAP
     this.now = options?.now ?? (() => Date.now())
     this.warn = options?.warn ?? console.warn
@@ -462,6 +464,21 @@ export class TaskLedger {
     this.sweep(this.now())
     const record = this.tasks.find(entry => entry.taskId === taskId)
     if (only !== undefined && (record === undefined || !only(record))) return undefined
+    if (disposition === 'acknowledged') {
+      // An acknowledgement marks the owed row and settles nothing: the result receipt settles it. A settled row is never
+      // rewritten by one, and an unknown id correlates nothing.
+      if (record === undefined) return undefined
+      const verdict = judge?.check(record, false)
+      if (verdict !== undefined && !verdict.ok) {
+        this.noteRefusal(taskId, judge!, verdict.reason, message)
+        if (judge!.enforce) { this.persist(); return undefined }
+      }
+      const revived = record.status === 'dead'
+      if (revived) { record.status = 'pending'; delete record.deadAt; delete record.reason }
+      record.acknowledgedAt = this.now()
+      this.persist()
+      return { taskId, team: record.team, peer: record.peer, disposition, acknowledged: true, ...(summary !== '' ? { summary } : {}), ...(revived ? { late: true } : {}) }
+    }
     if (record !== undefined) {
       // #114 S4: judge the settler before the row moves; enforce keeps a refused row owed.
       const verdict = judge?.check(record, false)
@@ -697,7 +714,9 @@ export class TaskLedger {
   private sweep(now: number): void {
     let changed = false
     for (const entry of this.tasks) {
-      if (entry.status === 'pending' && now - entry.startedAt > this.staleTtlMs) {
+      // A row its target acknowledged stays owed for the acknowledged TTL counted from the acknowledgement.
+      const overdue = entry.acknowledgedAt !== undefined ? now - entry.acknowledgedAt > this.acknowledgedTtlMs : now - entry.startedAt > this.staleTtlMs
+      if (entry.status === 'pending' && overdue) {
         entry.status = 'dead'
         entry.deadAt = now
         // F5 layer-3: stamp WHY the row aged — a fire-and-forget row

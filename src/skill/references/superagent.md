@@ -25,6 +25,8 @@ With `sources.a2a` on, the host holds the team's A2A address: a CLI identity `su
 
 Requests to the team address take **no target queue slot**: the engine governs the work. An agent's request becomes a candidate only when the agent is on the bot list and the accept mode is not `off`. Upstream sends automatic acknowledgements only to persons, so an agent's first reply is the result, which is its formal receipt.
 
+When an agent's request becomes a ticket, the host sends the requester one **acknowledgement**: an `acknowledged` receipt (`a2a-net receipt <task> --acknowledged`, on task `ack-<task>`). The acknowledgement settles nothing. The requester's row stays owed until the ticket's result receipt settles it. Meanwhile it leaves its host's queue count, and it expires 7 days after the acknowledgement instead of 24 hours after dispatch, so a long ticket does not dead-letter on the requester's side. An older host that does not know the disposition settles the row on the acknowledgement, and the result then arrives as a late receipt.
+
 ## For the router
 
 - Candidates arrive in your own session as `[superagent candidate] …` cards. Decide each by its `trigger_id` with `superagent_route`:

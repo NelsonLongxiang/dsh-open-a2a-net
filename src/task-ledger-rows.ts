@@ -46,6 +46,8 @@ export function briefOf(message: string | undefined): string | undefined {
  * lazy — every read/write entry point sweeps first.
  */
 export const TASK_STALE_TTL_MS = 24 * 60 * 60_000
+/** How long a row its target acknowledged stays owed past its acknowledgement before it dead-letters (7 days). */
+export const TASK_ACKNOWLEDGED_TTL_MS = 7 * 24 * 60 * 60_000
 
 /**
  * The receipt correlation template now lives in `receipt.ts` (shared codec
@@ -143,8 +145,9 @@ export function withAuth(raw: unknown, entry: { direction?: unknown; team?: unkn
 }
 
 /** Routing and answer facts copied unchanged between a row and its archive entry. */
-export function routingOf(row: Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt' | 'receiverMembers'>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt' | 'receiverMembers'> {
+export function routingOf(row: Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt' | 'receiverMembers' | 'acknowledgedAt'>): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt' | 'receiverMembers' | 'acknowledgedAt'> {
   return {
+    ...(row.acknowledgedAt !== undefined ? { acknowledgedAt: row.acknowledgedAt } : {}),
     ...(row.receiverMembers !== undefined ? { receiverMembers: [...row.receiverMembers] } : {}),
     ...(row.answeredAt !== undefined ? { answeredAt: row.answeredAt } : {}),
     ...(row.forwarded === true ? { forwarded: true as const } : {}),
@@ -207,12 +210,13 @@ export function parseReceiverMembers(value: unknown, warn: (message: string) => 
  * a remote outbound row; anything else is dropped (the row survives as one
  * born before the fields, judged by current membership and origin).
  */
-export function withRouting(entry: Record<string, unknown>, warn: (message: string) => void = console.warn): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt' | 'receiverMembers' | 'receiptDelivery'> {
+export function withRouting(entry: Record<string, unknown>, warn: (message: string) => void = console.warn): Pick<TaskRecord, 'peerKey' | 'peerHost' | 'deliveredTo' | 'forwarded' | 'answeredAt' | 'receiverMembers' | 'receiptDelivery' | 'acknowledgedAt'> {
   const fact = (v: unknown): v is string => typeof v === 'string' && v !== '' && v.length <= ROUTING_FACT_CAP
   const remoteOutbound = entry.direction === 'outbound' && typeof entry.peer === 'string' && entry.peer !== 'local' && !entry.peer.startsWith('local:')
   const receiverMembers = remoteOutbound && entry.forwarded === true && fact(entry.peerKey) ? parseReceiverMembers(entry.receiverMembers, warn) : undefined
   return {
     ...(typeof entry.answeredAt === 'number' && Number.isFinite(entry.answeredAt) && entry.answeredAt >= 0 ? { answeredAt: entry.answeredAt } : {}),
+    ...(typeof entry.acknowledgedAt === 'number' && Number.isFinite(entry.acknowledgedAt) && entry.acknowledgedAt >= 0 ? { acknowledgedAt: entry.acknowledgedAt } : {}),
     ...(entry.receiptDelivery==='receipt-undelivered'?{receiptDelivery:'receipt-undelivered' as const}:{}),
     ...(receiverMembers !== undefined ? { receiverMembers } : {}),
     ...(remoteOutbound && entry.forwarded === true ? { forwarded: true as const } : {}),
@@ -274,6 +278,8 @@ export interface TaskRecord {
   readonly receiverMembers?: readonly string[]
   /** Local target has produced an answer; still owed until receipt delivery/settlement, but no longer queued. */
   answeredAt?: number
+  /** Its target acknowledged it (an `acknowledged` receipt): owed until the result, outside the queue count and the 24h TTL. */
+  acknowledgedAt?: number
   status: TaskStatus
   /** When the row was swept to dead-letter (absent while pending). */
   deadAt?: number
@@ -345,6 +351,8 @@ export interface ArchivedRecord {
   readonly receiverMembers?: readonly string[]
   /** Local answer time retained as audit metadata, independent of resolution time. */
   readonly answeredAt?: number
+  /** When its target acknowledged it before the result settled it. */
+  readonly acknowledgedAt?: number
   /** #114 S4: who settled the row (receipt and echo ends), and their chain role. */
   readonly settledBy?: SettledBy
 }
@@ -390,6 +398,8 @@ export interface TaskLedgerOptions {
   warn?: (message: string) => void
   /** Stale-TTL override (tests inject short windows); defaults to {@link TASK_STALE_TTL_MS}. */
   staleTtlMs?: number
+  /** TTL after an acknowledgement; defaults to {@link TASK_ACKNOWLEDGED_TTL_MS}. */
+  acknowledgedTtlMs?: number
   /** Archive capacity override; defaults to {@link ARCHIVE_CAP}. */
   archiveCap?: number
   /**
@@ -423,6 +433,8 @@ export interface ReceiptResolvedInfo {
   readonly summary?: string
   /** True when the receipt answered a dead-lettered or abandoned row. */
   readonly late?: boolean
+  /** An `acknowledged` receipt: the row was marked, not settled. */
+  readonly acknowledged?: true
 }
 
 /** The persisted ledger document: the owed book plus its settled archive. */

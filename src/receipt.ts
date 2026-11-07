@@ -56,8 +56,14 @@ export type ReceiptOutcomeV2 = (typeof RECEIPT_OUTCOMES)[number]
  * other value is dropped. An attention receipt settles the task like any
  * receipt but is not a completion (it carries no outcome); the answer comes
  * back as a new task in the same context.
+ *
+ * `acknowledged` (superagent v4, requester acknowledgement): the target took the task up and will answer later — the
+ * caller's row stays owed (the result receipt settles it) but no longer counts against the queue cap or expires at the
+ * 24-hour TTL. It rides the receipt form so every hop treats it as settlement traffic (no debt of its own, never refused
+ * by a queue). A host that predates it drops the unknown value and settles the row on it; the result then arrives as a
+ * late receipt that updates the settled row's summary and outcome.
  */
-export const RECEIPT_DISPOSITIONS = ['result', 'attention'] as const
+export const RECEIPT_DISPOSITIONS = ['result', 'attention', 'acknowledged'] as const
 
 export type ReceiptDisposition = (typeof RECEIPT_DISPOSITIONS)[number]
 

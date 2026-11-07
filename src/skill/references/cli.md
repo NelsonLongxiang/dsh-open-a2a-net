@@ -250,7 +250,7 @@ Files do not go through session messages: use the file channel below, never JPFI
     home host's clock, an `out` row's `at` is this machine's. When the CLI
     talks to a home on another machine whose clock is off, the two sides can
     interleave in the wrong order. Paging stays complete either way.
-- `receipt <task_id> [--attention | --outcome O] [--to TEAM] <one line…>` is the one formal
+- `receipt <task_id> [--attention | --acknowledged | --outcome O] [--to TEAM] <one line…>` is the one formal
   receipt for a task this identity received:
   - It sends `[A2A receipt] task <task_id> <one line>` plus the v2 envelope
     line. The default is a result,
@@ -286,6 +286,7 @@ Files do not go through session messages: use the file channel below, never JPFI
     debt is booked for it), so its receipt settles nothing there; the
     caller still gets it, with `disposition` on its mailbox row. A receipt
     settles a debt only where the caller tracked one.
+  - `--acknowledged` says the task is taken up and its result follows. It settles nothing: the caller's row stays owed until the result receipt, leaves the queue count, and expires 7 days after the acknowledgement instead of 24 hours after dispatch. It rides task id `ack-<task_id>`, so the later receipt is not refused.
 - `admission <caller> [--local] [--json]` asks the home host how `<caller>`
   would be admitted delivering to this identity right now, recomputed from the
   host's current links: `{caller, admitted, rule}`. `--local` asks for the

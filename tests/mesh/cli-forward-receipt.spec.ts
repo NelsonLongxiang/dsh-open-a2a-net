@@ -10,7 +10,7 @@ import { signCard } from '../../src/card.ts'
 import { signOriginClaim } from '../../src/origin-claim.ts'
 import { CliDepositStore } from '../../src/cli-deposit.ts'
 import { canvasOwnerFingerprint } from '../../src/canvas-id.ts'
-import { bootNode, reservePort, tmpHome, type MeshNode, cliEnv } from './harness.ts'
+import { bootNode, reservePort, tmpHome, type MeshNode, cliEnv, runContext } from './harness.ts'
 import { seedCanvasHistory } from '../fixtures/canvas-history.ts'
 beforeEach(() => vi.stubGlobal('WebSocket', function noSocket() { throw Error('no socket') }))
 afterEach(() => vi.unstubAllGlobals())
@@ -574,6 +574,31 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
       const refused = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ team: handle, caller_session: outsider, task_id: 'direct-outsider-mail', message: 'not a member' }) }).then(r => r.json()) as any
       expect(refused.routed).not.toBe(true)
       expect((await post(a, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle })).mail.some((row: any) => row.text.includes('not a member'))).toBe(false)
+    } finally { await a.dispose(); await b.dispose() }
+  }, 30000)
+  it('superagent v4 requester acknowledgement: an acknowledged receipt from the other host marks the CLI\'s row, which stays owed until the result settles it', async () => {
+    const { a, b, home } = await setup()
+    const agent = b.agents.agent as any
+    // B's member works slowly: no automatic receipt; it acknowledges first, then answers.
+    agent.steer = (payload: any) => { b.steered.push(payload) }
+    const task = 'ack-roundtrip-1'
+    try {
+      expect((await cli(home, ['route', 'beta/canvas/ops', '慢慢做的需求', '--task', task])).code).toBe(0)
+      await vi.waitFor(() => { expect(b.steered.length).toBeGreaterThan(0) }, { timeout: 8000, interval: 50 })
+      const owedOnA = async () => (await state(a)).tasks.find((t: any) => t.taskId === task)
+      expect(await owedOnA()).toMatchObject({ status: 'pending' })
+      const route = (message: string) => b.ctx.tools.get('a2a_route')!.execute({ team: handle, message, async: true }, runContext(agent))
+      const ack = `[A2A receipt] task ${task} 已接下，完成后回执结果\n${JSON.stringify({ idempotencyKey: task, disposition: 'acknowledged' })}`
+      expect(await route(ack)).toMatchObject({ ok: true })
+      await vi.waitFor(async () => { expect(await owedOnA()).toMatchObject({ status: 'pending', acknowledgedAt: expect.any(Number) }) }, { timeout: 8000, interval: 100 })
+      expect((await state(a)).archived.some((r: any) => r.taskId === task)).toBe(false)
+      // The CLI's mailbox shows the acknowledgement as such.
+      expect((await post(a, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle })).mail.some((row: any) => row.disposition === 'acknowledged')).toBe(true)
+      // The result settles it.
+      const result = `[A2A receipt] task ${task} 完成\n${JSON.stringify({ outcome: 'completed', idempotencyKey: task, disposition: 'result' })}`
+      expect(await route(result)).toMatchObject({ ok: true })
+      await vi.waitFor(async () => { expect((await state(a)).archived.find((r: any) => r.taskId === task)).toMatchObject({ outcome: 'completed' }) }, { timeout: 8000, interval: 100 })
+      expect(await owedOnA()).toBeUndefined()
     } finally { await a.dispose(); await b.dispose() }
   }, 30000)
 })

@@ -19,7 +19,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HEALTH, KIND, createA2aKind, watch, type A2aConfig } from '../a2a-watch.ts'
+import { EXIT_GONE, EXIT_RECEIPT_CONFLICT, HEALTH, KIND, LINK_RULES, createA2aKind, replyAllowed, watch, type A2aConfig } from '../a2a-watch.ts'
 import type { Commands, Health, OutboundMessage, ReceiveResult, SourceContext, TicketView, Trigger } from '../source-types.ts'
 
 /** The packaged CLI, from both src/superagent/host and lib/superagent/host. */
@@ -28,6 +28,10 @@ export const CLI_PATH = fileURLToPath(new URL('../../../cli/a2a.mjs', import.met
 export const TEAM_IDENTITY_NAME = 'superagent-team'
 /** How long one CLI call may take. */
 const CLI_TIMEOUT_MS = 60_000
+/** Where the acknowledged tasks are kept (in a2a-source.json), and for how long and how many. */
+const ACKED_KEY = 'superagent.acked'
+const ACKED_TTL_MS = 8 * 86_400_000
+const ACKED_CAP = 2000
 
 export interface A2aSourceDeps {
   /** `<a2a home>/superagent`. */
@@ -177,6 +181,37 @@ export class A2aSource {
   allowed(message: OutboundMessage): boolean {
     const config = this.context.config<A2aConfig>(KIND)
     return config !== undefined && this.kindValue.channel.allowed(message.channel.address, config)
+  }
+
+  /**
+   * superagent v4 (requester acknowledgement): tell an A2A requester its request became a ticket, with an `acknowledged`
+   * receipt on task `ack-<task>`. The requester's row stays owed — the ticket's result receipt settles it — but leaves its
+   * host's queue count and the 24-hour TTL. Not an Outbox message: the first Outbox message to a caller is its one formal
+   * receipt (a2a-watch), which an acknowledgement must not take. Once per task: 'sent', 'already', 'gone' (never
+   * deliverable: no reply mode, no real caller, an id no receipt can carry, a caller no longer linked), or a thrown
+   * error (try again on a later pass).
+   */
+  async acknowledge(address: Record<string, string>, text: string): Promise<'sent' | 'already' | 'gone'> {
+    const config = this.context.config<A2aConfig>(KIND)
+    const { caller, task, ingress } = address
+    if (config === undefined || !replyAllowed(address, config) || caller === undefined || task === undefined) return 'gone'
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(task) || `ack-${task}`.length > 80) return 'gone'
+    const acked = (this.stateValue[ACKED_KEY] ?? {}) as Record<string, string>
+    if (acked[task] !== undefined) return 'already'
+    const check = JSON.parse(await this.context.commands.run('a2a-net', ['admission', caller, ...(ingress === 'local' ? ['--local'] : []), '--json'])) as { admitted?: unknown; rule?: unknown }
+    if (check.admitted !== true || typeof check.rule !== 'string' || !LINK_RULES.has(check.rule)) return 'gone'
+    try {
+      await this.context.commands.run('a2a-net', ['receipt', task, '--acknowledged', '--to', caller, '--json', '--exit-class', '--', text])
+    } catch (error) {
+      const code = (error as { exitCode?: unknown }).exitCode
+      if (code === EXIT_GONE) return 'gone'
+      // Already on the host (a restart between the CLI's success and this record): it counts as sent.
+      if (code !== EXIT_RECEIPT_CONFLICT) throw error
+    }
+    const now = Date.now()
+    const kept = Object.entries({ ...acked, [task]: new Date(now).toISOString() }).filter(([, at]) => now - Date.parse(at) <= ACKED_TTL_MS).slice(-ACKED_CAP)
+    this.context.state.set(ACKED_KEY, Object.fromEntries(kept))
+    return 'sent'
   }
 
   /** Send one Outbox message: 'sent', 'gone' (never deliverable), or a thrown error (retry later). */
