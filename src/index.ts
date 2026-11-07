@@ -2045,6 +2045,8 @@ export function apply(ctx: Context, config: Config): void {
     registerSuperagentTools(ctx, () => superagentHost)
     // A member's turn ending is the executor's turn-end fact (PR-C1).
     ctx.on('agent/status', payload => { if (payload.status === 'idle') superagentHost.memberIdle(String(payload.agent.id)) })
+    // PR-F: an Input counts as read once the member's session takes the message carrying it into its history.
+    ctx.on('agent/inbox/claimed', ({ agent }) => { superagentHost.memberClaimed(String(agent.id)) })
     ctx.tools.guard(exec => {
       const refusal = superagentRoleTools.guard(exec.name, exec.agent as unknown as RoleAgent | undefined)
       if (refusal !== undefined) superagentHost.noteRefusal('superagent-role-tools', { ...(exec.agent !== undefined ? { caller: String(exec.agent.id) } : {}), target: exec.name })

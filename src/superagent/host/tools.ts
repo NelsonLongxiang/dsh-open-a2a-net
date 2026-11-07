@@ -186,4 +186,30 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
       return json(out) as Record<string, JsonValue>
     },
   }))
+
+  // PR-F (upstream orchestrator_ack / orchestrator_trigger_handback): a member takes up, or hands back, a person's message that
+  // reached its ticket, by the trigger id its card shows.
+  const takeUpTool = (name: 'a2a_ticket_ack' | 'a2a_ticket_handback', op: 'ack' | 'handback', description: string, textName: 'text' | 'reason', textHelp: string) => defineTool({
+    name, description,
+    parameters: {
+      trigger_id: { type: 'string', required: true, description: 'The trigger id the assignment or input card shows for that message.' },
+      [textName]: { type: 'string', required: true, description: textHelp },
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said(name, value) },
+    presentCall: args => ({ card: 'generic', title: `${name}: ${String(args.trigger_id)}`, kind: 'other', rawInput: args }),
+    execute: async (args: Record<string, string>, exec): Promise<Record<string, JsonValue>> => {
+      const h = host()
+      const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
+      if (h === undefined || me === undefined || h.roleOf(me) !== 'member') return { ok: false, code: 'not-member', error: `${name} serves only the superagent team members the owner named` }
+      const triggerId = String(args.trigger_id ?? ''), text = String(args[textName] ?? '')
+      const out = h.settings.serves?.members.includes(me) === true ? await h.forwardTakeUp(me, op, triggerId, text) : h.takeUp(me, op, triggerId, text)
+      return json(out) as Record<string, JsonValue>
+    },
+  })
+  ctx.tools.register(takeUpTool('a2a_ticket_ack', 'ack',
+    'Team member only: acknowledge a person\'s message that reached your ticket before you act on it (upstream orchestrator_ack). It posts your short acknowledgement on that person\'s thread, and the message is yours to handle from then on.',
+    'text', 'One or two sentences to the person: what you will do with their message, in their language.'))
+  ctx.tools.register(takeUpTool('a2a_ticket_handback', 'handback',
+    'Team member only: hand back a person\'s message that asks for work beyond your ticket or for another one, so the router assesses it afresh (upstream orchestrator_trigger_handback). Once per message.',
+    'reason', 'One sentence on what it asks for beyond this ticket.'))
 }

@@ -43,6 +43,8 @@ export class MemberExecutor implements Executor {
   /** One launch loop at a time, so two launches never bind one slot; a request during a run runs it again. */
   private launching = false
   private launchAgain = false
+  /** When each member's session last took a message into its history (memberRead), for a claim that beats the delivery record. */
+  private readonly claimedAt = new Map<string, number>()
 
   constructor(private readonly d: MemberExecutorDeps) {
     this.bindings = this.load()
@@ -115,11 +117,14 @@ export class MemberExecutor implements Executor {
       const engine = this.d.engine()
       // The Triggers the ticket was accepted from are already in its assignment card: recorded delivered, not sent twice.
       const fresh = inputs.filter(input => !(input.kind === 'trigger' && current.origin.triggerIds.includes(input.triggerId)))
+      const sentAt = Date.now()
       if (fresh.length > 0 && !(await this.tryDeliver(binding.member, inputsCard(current, fresh, this.d.trigger), 'input', ticket.id))) {
         try { engine.deliveryFailed(ticket.id, assignment.id, `member ${binding.member} did not receive the input`) } catch { /* the ticket ended meanwhile */ }
         return
       }
       try { engine.inputsDelivered(ticket.id, assignment.id, inputs.map(input => input.id)) } catch (error) { this.d.logger.warn('superagent: inputs of %s not recorded delivered: %s', ticket.id, String(error)) }
+      // The member's session may take the message in before its delivery is recorded: that claim counts for it.
+      if ((this.claimedAt.get(binding.member) ?? 0) >= sentAt) this.memberRead(binding.member)
     })() })
   }
 
@@ -134,18 +139,24 @@ export class MemberExecutor implements Executor {
     queueMicrotask(() => this.launch())
   }
 
+  /** The member's session took a message into its history: the Inputs delivered to its assignment so far count as read. */
+  memberRead(member: string): void {
+    this.claimedAt.set(member, Date.now())
+    const binding = this.bindingOf(member)
+    if (binding === undefined) return
+    const ticket = this.d.ticket(binding.ticketId)
+    if (ticket === undefined || ticket.ended) return
+    const unread = ticket.inputs.filter((input): input is Extract<TicketInput, { kind: 'trigger' }> => input.kind === 'trigger' && !input.readAt && input.deliveredTo === binding.assignmentId).map(input => input.id)
+    if (unread.length === 0) return
+    try { this.d.engine().inputsRead(ticket.id, unread) } catch (error) { this.d.logger.warn('superagent: inputs of %s not recorded read: %s', ticket.id, String(error)) }
+  }
+
   /** The member's turn ended: Inputs delivered to it before now count as read, and the engine hears the turn end. */
   memberIdle(member: string): void {
     const binding = this.bindingOf(member)
     if (binding === undefined) return
-    const engine = this.d.engine()
-    const ticket = this.d.ticket(binding.ticketId)
-    if (ticket === undefined) return
-    const unread = ticket.inputs.filter((input): input is Extract<TicketInput, { kind: 'trigger' }> => input.kind === 'trigger' && input.readAt === null && input.deliveredTo === binding.assignmentId).map(input => input.id)
-    try {
-      if (unread.length > 0) engine.inputsRead(ticket.id, unread)
-      engine.turnEnded(ticket.id, binding.assignmentId)
-    } catch (error) { this.d.logger.warn('superagent: turn end of %s not recorded: %s', ticket.id, String(error)) }
+    this.memberRead(member)
+    try { this.d.engine().turnEnded(binding.ticketId, binding.assignmentId) } catch (error) { this.d.logger.warn('superagent: turn end of %s not recorded: %s', binding.ticketId, String(error)) }
   }
 
   /** After a restart: each Assignment that was running gets upstream's interruption handling (restart with a recovery note). */
@@ -178,10 +189,11 @@ export function assignmentCard(ticket: Ticket, trigger: MemberExecutorDeps['trig
   const name = ticket.execution?.name ?? ticket.id
   return [
     `[superagent assignment] ticket ${ticket.id} «${ticket.title}»`,
+    `request: trigger ${ticket.origin.triggerId}`,
     `scope: ${ticket.mandate.scope}`,
     `mandate: ${ticket.mandate.strength} (${ticket.mandate.basis.via}), from ${ticket.mandate.actor.source}:${ticket.mandate.actor.id}`,
     '',
-    'request:',
+    'request text:',
     origin === undefined ? '(the original message is not readable)' : origin.text,
     '',
     `Work in your own workspace, in a directory or worktree named ${name}. Stay within the scope; derive what to do from the request yourself.`,
@@ -190,6 +202,10 @@ export function assignmentCard(ticket: Ticket, trigger: MemberExecutorDeps['trig
     '- ready when the result can be reviewed or used (a pull request link in the summary when there is one);',
     '- blocked or failed when you cannot go on; dropped when there turns out to be nothing to do;',
     '- question: one concrete question when the ticket owner must decide something.',
+    'Later messages on this ticket arrive as [superagent input], each with its trigger id. Before you act on a person\'s message,',
+    'acknowledge it with a2a_ticket_ack (trigger_id, one or two sentences to them): it becomes yours to handle. A message that asks',
+    'for work beyond this ticket goes back with a2a_ticket_handback. When a report answers a person\'s question, pass its trigger id',
+    'as answers. A message you neither acknowledge nor answer goes to the router when the ticket ends.',
   ].join('\n')
 }
 
@@ -199,10 +215,10 @@ export function inputsCard(ticket: Ticket, inputs: readonly TicketInput[], trigg
   for (const input of inputs) {
     if (input.kind === 'trigger') {
       const t = trigger(input.triggerId)
-      lines.push(`- message from ${t?.actor.source ?? '?'}:${t?.actor.id ?? '?'}${input.human === true ? ' (a person)' : ''}${input.context === true ? ' (context only)' : ''}:`, t?.text ?? '(unreadable)')
+      lines.push(`- trigger ${input.triggerId} · message from ${t?.actor.source ?? '?'}:${t?.actor.id ?? '?'}${input.human === true ? ' (a person)' : ' (an agent, not a person)'}${input.context === true ? ' (context only)' : ''}:`, t?.text ?? '(unreadable)')
       if (input.note !== undefined) lines.push(`  note from the router: ${input.note}`)
     } else lines.push(`- ${input.kind}: ${JSON.stringify(input).slice(0, 600)}`)
   }
-  lines.push('Report with a2a_ticket_report when this changes what the person must know.')
+  lines.push('Acknowledge a person\'s message with a2a_ticket_ack before acting on it (or a2a_ticket_handback if it is beyond this ticket). Report with a2a_ticket_report when this changes what the person must know.')
   return lines.join('\n')
 }

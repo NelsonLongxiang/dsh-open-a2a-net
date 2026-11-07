@@ -25,7 +25,7 @@ export const MEMBER_WORK_TOOLS: readonly string[] = ['read', 'write', 'edit', 'r
   'job_kill', 'web_search', 'web_fetch', 'skill', 'todo_write']
 
 /** A member's tools: its work tools, its report, and the file channel for inputs it was handed. */
-export const MEMBER_TOOLS: readonly string[] = [...MEMBER_WORK_TOOLS, 'a2a_ticket_report', 'a2a_file_fetch']
+export const MEMBER_TOOLS: readonly string[] = [...MEMBER_WORK_TOOLS, 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_file_fetch']
 
 /** The tool runtime's own transport (programmatic tool calling); never restricted, every inner call is guarded. */
 const TRANSPORT = new Set(['run_code'])
