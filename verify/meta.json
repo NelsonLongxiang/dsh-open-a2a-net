@@ -1,4 +1,4038 @@
 {
-  "meta_index_version": 1,
-  "specs": []
+  "meta_index_version": 3,
+  "kind": "consumer",
+  "specs": [],
+  "source_roots": [
+    "src",
+    "nexus-stage/src",
+    "stage/src"
+  ],
+  "orchestration": [],
+  "tooling": [
+    {
+      "path": "assets/nexusDist/assets/index-CaA76j0F.js",
+      "sha256": "5b88a196adf98c4bfa017a44a7742d90e583e8d91a594c881a11b76079acddaf",
+      "role": "release"
+    },
+    {
+      "path": "assets/stageDist/assets/index-C-28k_o5.js",
+      "sha256": "87f42e4280068993943e1dba30dc4b54cd6abd70481286da82b724a75edfdd42",
+      "role": "release"
+    },
+    {
+      "path": "cli/a2a.mjs",
+      "sha256": "f166f8c599a79fbffbc009e6462d87f8de9da1efed0dcdb0a3cd67befe85b927",
+      "role": "release"
+    },
+    {
+      "path": "cli/serve.mjs",
+      "sha256": "e98d1e8150085167eff1ced912dcda9c58df3d327710e969a885f9a53d379c26",
+      "role": "release"
+    },
+    {
+      "path": "examples/external-node/index.mjs",
+      "sha256": "74528d9967a7a7f357f576f61ae4b2999ee3e660c7ccebd345d7a8fcf132a841",
+      "role": "release"
+    },
+    {
+      "path": "feedback/2026-08-27-nexus-canvas-ux/shot_planning.py",
+      "sha256": "15fd4c14f2d77aa474cdf4c4acb50b811487b04ba565243f14f795b53d263f13",
+      "role": "test"
+    },
+    {
+      "path": "feedback/2026-08-27-nexus-canvas-ux/shot_status_quo.py",
+      "sha256": "f5707f17f4694f0c2421418021bcb00d66fba756f716def82c96e5521f75ba08",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/scripts/mockhost.py",
+      "sha256": "0799e62ed605158944518756373c0e34f71159050679b29211582aa28ddfbbdf",
+      "role": "gate"
+    },
+    {
+      "path": "nexus-stage/tests/chat-drawer-dom.spec.ts",
+      "sha256": "49c90e0fbda458fa402094c13a4ba5cee0d2e232b92ad988c29011f4e961c017",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/keygate.spec.ts",
+      "sha256": "084d0ea5c8a239e61220663a8d692ed79a8808f8c47e58916bfd9997decb45d6",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/owner-panel-dom.spec.ts",
+      "sha256": "cfbdd80ada09263ccb1747afa5c3389aa4469c21939822b7987d9e7ecb3d1eb5",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-card-text.spec.ts",
+      "sha256": "e43e5f3ba8b22d9d575d00d1624b7ccd76a33e46114c8ac2d4281cfa4c9965f6",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-dom.spec.ts",
+      "sha256": "4839e3eddfc65b4701e1e3073dc43985dde484cdbf72c57d3c825ddd766d8cd9",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-federation-dom.spec.ts",
+      "sha256": "c763e61ab5f6b603be1454b0ccce16b81dc9329a18379ab4a865a04740bf988d",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-first-run-dom.spec.ts",
+      "sha256": "440b324382e2b1b0feb4edc1b2b5a68af70e0e1076908c444b30914b2460c04d",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-fit.spec.ts",
+      "sha256": "3554403aea9345593d7b2721e6fcdea57f18ff92e3e978943091622960f9def1",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-frame-solo.spec.ts",
+      "sha256": "a5badeddea95b4fe9d3cedf6eb6e9fb0f257ef6a5d7f49f357c548d6b4082018",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh108-settlement.spec.ts",
+      "sha256": "992b863a98f4d0d4813049e444704e4016064df1b09ed6165d5f6c798a59ecd7",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh38-member-cards.spec.ts",
+      "sha256": "dba711a008c35aef3713730132d67db2b822405050b3d06566336f5774c84fdb",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh41-fleet-frames.spec.ts",
+      "sha256": "ceaf31ebb9a72c5b9b3ce80dc6a9e65c7d462852768b06ac32e03d704697c16c",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh42-remote-edges.spec.ts",
+      "sha256": "6f49f01b589813bb78b12cc893ea1621e2d5dc28228666e593c0d9bef64a255e",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh43-org-members.spec.ts",
+      "sha256": "f285e19ea5dc68992efc2affbcaa378555bfd86a4a17d5af4aee6c1b18797c55",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh44-frame-stick.spec.ts",
+      "sha256": "b474ca1ae2b35080d604ac65f0f21c14de7900f81ee298d3c310186f011ab257",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh48-tidy.spec.ts",
+      "sha256": "56664b9cd126d36bd2f28bf297b2a4e11bcf75eaa76d78ee196c98b77ac2e4b7",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-leave-mirror.spec.ts",
+      "sha256": "4127a726b0084a0cc81f5b2858e0777104613213548b165d131ada9213805e06",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-member-badge.spec.ts",
+      "sha256": "402eb0118a4c8f34d6ffd7fc6d55e33c94226e1ab630f3b60cd238739944341c",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-mirror.spec.ts",
+      "sha256": "fbc5f0beda728e2a728f71d4866440d15a25751279537e4e4888a4904492132e",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-nodelist-dom.spec.ts",
+      "sha256": "fc6124646fc6f72f2d3080b34387561078a6ca5832485794b6e72139d027afef",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-overlap-dom.spec.ts",
+      "sha256": "f158edcdad94b3b2cc6f4d61261f8ec0ebcf344e4cdf221ae20f71e1bcc39232",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-overlap.spec.ts",
+      "sha256": "5daa52af57b79f01120533350f7492fa6f19c24ebf48f64e4e29374cf11f9a23",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-relayout.spec.ts",
+      "sha256": "eec98b64106c447c9673be8bbee04c7261d84061b242785a773325cf669633a1",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-roster.spec.ts",
+      "sha256": "66b032990b472ce76a1bfeabc578598bd7249039da2cfe18cc7f7ea0035aeea5",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-search.spec.ts",
+      "sha256": "119f148ce2845d372c7c6fcad63e8fb82e3eb8ea9076da07a8a0511ccc2bf318",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-teams-dom.spec.ts",
+      "sha256": "f98627d77371b5f98b33f92366ffb4acfa0cae5dd0c3db39343c122d4007e1f3",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-undo.spec.ts",
+      "sha256": "753deee4054b15300d4e97e179125b42da4ceb3ccca1447ff31cd99fb92926e9",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-wb-compose.spec.ts",
+      "sha256": "6fa73f917411d4559bb37d7d6a2c9b21e6877397d7e2ebc419f5d762115176bf",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/planning-work-status.spec.ts",
+      "sha256": "a4b64d231595aae322ad796efe48f87fe40e28bbc63c651ab160df4453436bb5",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/rail-dom.spec.ts",
+      "sha256": "e1c71d93ad7226449e3a6b505fe7806d2ca0be2fa246b333601066e7feed3b77",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/seat-name-editor.spec.ts",
+      "sha256": "00117423d1e58529b54b2c00b2494e0855e8d9e407736a5b36ad305fafd6e1a2",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/session-drag.spec.ts",
+      "sha256": "6d275bb8c9c88124f1043f3d73fe4b934152172962147f971a29b43dccbbab6f",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/viewport-fit.spec.ts",
+      "sha256": "0c2857aa04ea895606a6a4fe96120935b89664aeb95a045fde10c3442dcb472a",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/tests/workbench-dom.spec.ts",
+      "sha256": "78acaf7161753e9f6b2be2498263d34c7f791645faede6c85dda684ab702b2a4",
+      "role": "test"
+    },
+    {
+      "path": "nexus-stage/vite.config.ts",
+      "sha256": "2d2ab04369c144dc3dd42b66c1f1b782b6493619e8a50804387c08f689059613",
+      "role": "build"
+    },
+    {
+      "path": "nexus-stage/vitest.config.ts",
+      "sha256": "02b57e63a6da91191bf360975b8d0c9f9008fdd232411b6ccfa98eeb51d3baf6",
+      "role": "build"
+    },
+    {
+      "path": "scripts/collect-release-measurements.mjs",
+      "sha256": "84124426e4040732f59ba4feca451f8ec259fc4f66a6a64f641c3145a8505039",
+      "role": "release"
+    },
+    {
+      "path": "scripts/copy-skill.mjs",
+      "sha256": "9a91a47f38d48eb14392dc8b3476e7c501fee4f64b20c60b65703351e9d83f02",
+      "role": "build"
+    },
+    {
+      "path": "scripts/doc-drift.mjs",
+      "sha256": "734810401893c9dcdf105b73868020757d3de5f35d4cd919950f7e024304daab",
+      "role": "gate"
+    },
+    {
+      "path": "scripts/reanchor-architecture.mjs",
+      "sha256": "a7ed67dc5b13832159a4ae55569b28ba500314c215fb6bd86ac78f500bb6d64a",
+      "role": "gate"
+    },
+    {
+      "path": "scripts/release-file-manifest.mjs",
+      "sha256": "aa0cc66a72da6184635c28b07021bb0b139d940c76513046715021468d752fff",
+      "role": "release"
+    },
+    {
+      "path": "scripts/supervisor-snapshot.mjs",
+      "sha256": "b33fd58ea5f508108acb7ca4542d79130fabf3d59971b620bffd03af4665f991",
+      "role": "gate"
+    },
+    {
+      "path": "scripts/verify-architecture.mjs",
+      "sha256": "24f2c87103af8282dc7895bf1ab7bdef38028143ff56eb9ac4e38d7aa5598271",
+      "role": "gate"
+    },
+    {
+      "path": "scripts/verify-nexus-ci.mjs",
+      "sha256": "dc046744eaf48daeff08d94cfea2c8727d2f3040f72288755f350200030e6944",
+      "role": "gate"
+    },
+    {
+      "path": "scripts/verify-probe.mjs",
+      "sha256": "eb4a35aa18df7d19f30ada8c3381c7552e8283cea6a82c8e3e10fab54a9e1ebe",
+      "role": "gate"
+    },
+    {
+      "path": "scripts/verify-release-artifact.mjs",
+      "sha256": "ec6525629a4eb79b2a2b410a79af07c71494730b25efa29c2e61ec3666f16a9c",
+      "role": "release"
+    },
+    {
+      "path": "scripts/verify-submission.mjs",
+      "sha256": "fbb821abb7e80157db1ab0ba615a754f2cfcfb87a385b88bc6f94a889ca8bb28",
+      "role": "gate"
+    },
+    {
+      "path": "scripts/verify-temp-clean.mjs",
+      "sha256": "559a8e81e99afdac01cc4404db39cf995eddf2fc73ae26a429c8ecf6af234eb1",
+      "role": "gate"
+    },
+    {
+      "path": "stage/vite.config.ts",
+      "sha256": "626db8e561710d29787a18991fd7b8b1c34315924390e9ad9f85a1abab395570",
+      "role": "build"
+    },
+    {
+      "path": "tests/fixtures/fixture-tar.mjs",
+      "sha256": "86afa0558c6307d9e28aaef3c6835f0bfde47554ab7874683e62e53442789af6",
+      "role": "test"
+    },
+    {
+      "path": "tests/fixtures/release-audit-case.mjs",
+      "sha256": "6042950dce7b6884d5727dd783bc2e8bcc13652034710a67aad6008af0864926",
+      "role": "test"
+    },
+    {
+      "path": "tests/gates/build-layout.spec.ts",
+      "sha256": "507febbb775232f8f7d41eac9810697b54dc742d9c41967a03a59459ba570059",
+      "role": "test"
+    },
+    {
+      "path": "tests/gates/client-build-reproducibility.spec.ts",
+      "sha256": "7eccdfcf7b24d4518522284ebd74b2b3e06f738218b4cf4cd944c57fdedaf1af",
+      "role": "test"
+    },
+    {
+      "path": "tests/live/cross-machine.spec.ts",
+      "sha256": "d8cb2712b79fc685e006b1f6d03e97fc0646f6e6f8da3fc179e037d41d175c7c",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/boundary-hardening-w12.spec.ts",
+      "sha256": "493686b31a162009f2736f8fb14989e0244b3395deb9321ab47bf79dcb475897",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/boundary-hardening-w23.spec.ts",
+      "sha256": "8b0f086332875320f08b4a297d023a65ac68d10bc7f31a3183db192ab02839f4",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/canvas-mirror-notify.spec.ts",
+      "sha256": "aab2dd754d7d4e84e8aa1360cc4f095166f353d19e1579604a5aeaf8cddebb39",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/card-faces.spec.ts",
+      "sha256": "9396ebd66075be9b2e44de4700a07c479cbb697d30ba7d4a31d6922b7a164d58",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/claim-rejects-observability.spec.ts",
+      "sha256": "9d687c327f32fd1c1fa06d500ae278375687dcd2a105f6a5c45782b975427fff",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/cli-forward-receipt.spec.ts",
+      "sha256": "54bcef6b13924e2a93ea90b20b65fbe09a44eee6edfe6cc15feb239de9a65fdc",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/cli-home-admission.spec.ts",
+      "sha256": "d6533195e8ce6d01e44e12ddf41d00b45a55cc0ff13b19ec502cbaee1a9919da",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/cli-host-forward.spec.ts",
+      "sha256": "67b51591a1eaf3458953a1171b16c0eb6eaa7154402948cf1c04aece0c0f5eda",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/cli-origin-claim-bound.spec.ts",
+      "sha256": "2328061fc61cdaa6c72c255f5ebcc808ae5abf5a3776da584f19a231f4833676",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/exposure-levels.spec.ts",
+      "sha256": "dcbebf555274119b38bd3779573b2ecb75aa1f1c8340d65f07ff464f6621e4b4",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/file-channel-f1b.spec.ts",
+      "sha256": "170a4a2a8c93a1d59a377edf04de35d213e8249e6ffbbea72e6a3302a8542b54",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/file-channel-f2.spec.ts",
+      "sha256": "8ba1590b673bfa180460308459469ed89b0ffda4fdb14bf7d025f489e899eb02",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/file-channel-f3-cli.spec.ts",
+      "sha256": "138719d4695d0cc65ee927688b8008603921ddab0a33eb576422f06d00c6f435",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/fleet-dissolve.spec.ts",
+      "sha256": "c215905e39f411b33e15e4669424fc99a94405990e716c496887ef3b4a068143",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/from-line-display.spec.ts",
+      "sha256": "f6f0bc9f14a0ac5eb83611e7cbc1bb85b5a4546de0a0a5649024ee7e32624ad0",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh108-capacity.spec.ts",
+      "sha256": "3c54cd35d35697ff17b1efb3e6ed34666fa618a3e805ece51c1581042e9f7456",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh112-cli-resend.spec.ts",
+      "sha256": "93bf805116178fe2b2d58ef13d3171cc0d7c649c83e158b93ce2ea0ccded08f7",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh113-mailbox-shape.spec.ts",
+      "sha256": "1b8ab65af7e0984a55f025fcb8a1ed5a442e00619b58ac97304e42d6c9d1c95c",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh120-inbound-auth.spec.ts",
+      "sha256": "3a49ce2c3b499b59214e63938e3614389eceae27b9a3978adffee5a7cb5f736f",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh122-review-attacks.spec.ts",
+      "sha256": "2de7a78356eaf441288961aa4e02a73f7a6466b9207866f2c6336638897d457c",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh122-settlement.spec.ts",
+      "sha256": "b5c7cadac77107b8dfc29fc51b7dab90cc1730eeee43e469c806b507e7837778",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh125-echo-enforce.spec.ts",
+      "sha256": "c431a5f3db66247bd6cc5854d85c70ecee9a436b76e3f99b1d03cd60547a74aa",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh131-canvas-local-handle.spec.ts",
+      "sha256": "244d6dbebbb0a3d685f766b49c5309a9f6609dea2d68d5cabdbb2b62b21e5455",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh133-cli-origin-claim.spec.ts",
+      "sha256": "5eba3a269ba72ce4deb9e1c8c9dced7ce3032409f02377dff25ee1dfcca3046d",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh139-cross-host-legit.spec.ts",
+      "sha256": "f7cf3d5dc2e8c5b736d742483bf510801653d96c802aec7f075675f49916a5d4",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh139-inbound-delivered-to.spec.ts",
+      "sha256": "90fd92d18e4ad5f4669601e695ea69173624d0bd80fdbfec4d7180df83664ef4",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh139-observer-local-auth.spec.ts",
+      "sha256": "160d7da190a818807d6ffa074128de110e4a3b412ad3ecc459b5b49937e3a808",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh141-receipt-delivery-row.spec.ts",
+      "sha256": "9953463a8d36d5881bafe03d8f283f670e9c224af846f4748e736e45278ed792",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh152-handle-member-visibility.spec.ts",
+      "sha256": "8e190566bd1d94a44142d8b46c762316a2e936d073c43a7db9acd32f67cdac3b",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh159-remote-canvas-directory.spec.ts",
+      "sha256": "253a2cc7fa98e14127cfdf3a6c728631c34d527468d87533a2cb239886c65f53",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh189-path-claim-link.spec.ts",
+      "sha256": "c32692c8a5cf3bb1eb6c52850836b0c17b044bb2bf193f5ab4b2b3e616c023fa",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh217-cross-host-receipt-scope.spec.ts",
+      "sha256": "74c2aa99b4b4f81923340c7997f00907560cb7ebf2675086d4be5f9af905f3c4",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh24-host-rail-repro.spec.ts",
+      "sha256": "6e81f03e40ab85948728bd2287ca98a3e56443e1b3d43dbe3c6c76557bf2fb5d",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh26-f5-target-admission.spec.ts",
+      "sha256": "bdb6b7cfb3621c758b3991c286cff9d1250706cbdbb341cede0109c076ede14a",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh277-enforce-fallback.spec.ts",
+      "sha256": "3c8423f0bf0067685ab952943cb60f97802539094a085c5aff250635abef597a",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh291-list-only-registry.spec.ts",
+      "sha256": "6435dc2cfc12bc14e83638f00649e6a5ff2f658e72c1375f5153579f042a4e51",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh306-sync-attribution.spec.ts",
+      "sha256": "f8c39de499084478796443d45596742b62d266f0b45bc9119488d5c82c54680c",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh311-lan-origins.spec.ts",
+      "sha256": "60c1ffbe2dfa67303de88dcee12801db3bbd6d6f30268272d94e0c0f00aca5d7",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh312-private-card-peers.spec.ts",
+      "sha256": "868ac1928215d11bd3ab11edb6a10535597799f56032dd7d3f0de56b90b0e369",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh317-link-keys.spec.ts",
+      "sha256": "5daf8670da6b3babf76716fba15f24eb1201baee7610395c73983ef094650542",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh320-canvas-http-status.spec.ts",
+      "sha256": "83f0f2fe1b81478bd049a473c80742e4199e0c8aec15fc6c18f5dc5efdf67206",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh335-canvas-suspension.spec.ts",
+      "sha256": "0934e7da3a0bf1e8a4a0c5f72dd0f2fa4b4fd83c3d2f4f668c45af14a3ca299f",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh34-owner-panel.spec.ts",
+      "sha256": "9336a8119c8eed1f52bf448f2852c908a1e5f6501859cc73c9f1d4b078282844",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh36-dispatch-face.spec.ts",
+      "sha256": "724f10645429e53b90289e41b077c859114efffb778224307218995f0ea962bc",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh39-teams-circle.spec.ts",
+      "sha256": "d12e42d64b926291cf0bdc4211ffd2cc50c9c9eb54576d98272522f5807b607c",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh41-fleet-canvas.spec.ts",
+      "sha256": "09d7cf4e5f7f397a68272919670bb48f4d58248deeae7618fb6fafe656797af6",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh45-cli-caller-admission.spec.ts",
+      "sha256": "bea0f5786059832b77e6d98d29d4a83b1b2581f58fb5f85ff7e86ed764c6cb12",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh45-cli-deposit.spec.ts",
+      "sha256": "189a80aefff324211eb86b83d05f6b30fee926f1ffe2a3a5b70b28169d30e752",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh58-seat-name.spec.ts",
+      "sha256": "784ee0ecb46e6fb8756959b7652120a64be3d56bba45971cea8216df7187540c",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/gh71-peer-org-admission.spec.ts",
+      "sha256": "cb8504ef65ccf789bcee6c5c16feb1a13b2615be5a88606c95eb9acb3cdd2d37",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/governance-invariants.spec.ts",
+      "sha256": "d075d4ddf586e1e9b949afc409a018adb8c8b5cb23ac0b485a23e82c50685484",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/harness.ts",
+      "sha256": "6b780f6d44abbe36782f469ba4c6b9712ea93138aca67711fb725916828abd4f",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/issue41-canvas-self-skip.spec.ts",
+      "sha256": "ca3f02ab78d503eb325b564bf5b91961c9e304a5b0c0267f9596c3d946e4a085",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/link-state.spec.ts",
+      "sha256": "7ebe872b5b41f74ad362ef21d69847eca209a0779bfc7678b647115ac290ba00",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/mesh-anomalies.spec.ts",
+      "sha256": "7ff26fb16c8e327abb5673bd1beed4f25221d2f723de92b6ababe5faa33b5fd5",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/mesh-baseline.spec.ts",
+      "sha256": "028bfee2ded170050d69898e98a4048c27d7a90183f676acf4b8be83f1a61c16",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/mesh-faults.spec.ts",
+      "sha256": "5a333b7b9f039336f8228218064b1e91c3480a03683eaba19fb86a70e4a5907d",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/node-bind.spec.ts",
+      "sha256": "d7ae972228cb2de7c9b0015848000d184c9d0db40356b07e99b75e8b7fd07383",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/origin-claim-audience.spec.ts",
+      "sha256": "58cb585f59f9429abbe5ff24afe69a711976558cee5b676fe25915a75c1dc206",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/origin-claim-body-v3.spec.ts",
+      "sha256": "1a101d8b2ba2c4e0052840ca015efe190b0a62a95b3ee2368c4ae852bd6832af",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/origin-claim-window.spec.ts",
+      "sha256": "7b39241f13a54fd867b4da59ed7e2d582c75c582248af2c953de0a157098a175",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/process-face-tool-gate.spec.ts",
+      "sha256": "7cc0167221a9fe2995cd738bb9331cf7baa0b1a34bfac2e67c45ec7c84a97fa7",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/proxy-loopback-trust.spec.ts",
+      "sha256": "b18d973f135ce6c4ed835dc3ba3909d165f8ee250e8618ca4c0b6494958e442d",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/standalone-serve.spec.ts",
+      "sha256": "33127e7a0d5a999e5d4c87941094f8897326658f818c1c22fa2d308c356adb6e",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/tool-output-schema.spec.ts",
+      "sha256": "5969aaa8520445ee4dacdd55afcbc2f1a2daa9eb3aa0169fbe72cee39238db8f",
+      "role": "test"
+    },
+    {
+      "path": "tests/mesh/xjoin-relay.spec.ts",
+      "sha256": "c35c4c2d7c0384eef5510efe7ac44249f9047859de73d2c11f36e8ab510434f7",
+      "role": "test"
+    },
+    {
+      "path": "tests/temp-dirs.ts",
+      "sha256": "31108036386af836582eab68c92dd03f1d755c48f545f4e62fa22bf265704bfc",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/architecture-audit.spec.ts",
+      "sha256": "ae3672fc4c5d4647702dde97aa9ab5574781f894fa9796e335d9a9b457e94bc5",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/blob-store.spec.ts",
+      "sha256": "9a2356a7489aa1555699ce24d0a25d526b1acd59d7a4207231f9a3c0419df683",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/canvas-discovery.spec.ts",
+      "sha256": "91b649330a0974493df8c681670608e6fb45979dcec010f8b45d7fb54354543b",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/canvas-id.spec.ts",
+      "sha256": "372e86f2da75af1112661b8782a162e2209adb55c23436a6c822b204462682d5",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/canvas-notify.spec.ts",
+      "sha256": "6493ef1b4a0c446f83cdb36909465d73c7cdf3b25623d89c238d45eb5a196c45",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/canvas-ops.spec.ts",
+      "sha256": "9d484ed587d40cb2221c74207b21828f788f6931b3711024fef61c215217e733",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/canvas-store.spec.ts",
+      "sha256": "de3c6b8f88c7d036fd930a1976996bbad772156ddb292d729ed2d147f3116389",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/canvas-wire.spec.ts",
+      "sha256": "e7e4a4c8cb94120075650ddb12dd7f2dcbe3893ffaf90e00280a13b8adc3df74",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/card.spec.ts",
+      "sha256": "3c6bde7cdc8cae639651ebb364bd263e0a32c6c6488b747bc3165847a22e76eb",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/cli-args.spec.ts",
+      "sha256": "207ab603339f14a35c9dbda6cecd2f5e878432993d3bd1f450325055ff4061e4",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/cli-deposit.spec.ts",
+      "sha256": "ae6aa17c47ce9d85fc2838551d7146ea2deb8bbeb167b637941e17077984c909",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/cli-home.spec.ts",
+      "sha256": "7eee67671d97a1d80f77261d9fce5b3c2ec3f70bf980cdc8de94bac81fc8291b",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/cli-spawn-env.spec.ts",
+      "sha256": "ffc6cef818b9ae3f9bdece628c60be5cf792e0c7d47b93d60dfa0f60b4db840b",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/cli-tombstone.spec.ts",
+      "sha256": "1dd501bbbb6b40f92a228921244e83ce4fa736c06ce4e388486cd37bb20ccdf2",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/client.spec.ts",
+      "sha256": "8b1fb5b2cbfcaa2d9e8197632e04762a803f0a474f7be52507abba20987c2cce",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/collect-release-measurements.spec.ts",
+      "sha256": "8ffef6518d069dff6fa2e662039f38780270d9edc216e6f1c574e3b8f329e876",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/direct-exposure.spec.ts",
+      "sha256": "f78a3960ce7cb944e7dd7b94033380a8a75a1434ba23558ce6b4faedc17aeddd",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/direct-forward.spec.ts",
+      "sha256": "d16a7dea420b302d429f57c6373db9aeee0e78ea2b802c0bee48c37b036da3c8",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/doc-drift.spec.ts",
+      "sha256": "4f3d79362a6be93554f504632de0658134a5a732a82e8580b3808b4f736f61f0",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/federation.spec.ts",
+      "sha256": "dd3c1a2ea906951eb092fe59b25dba6a8ee482c0aeb0122114810793326af272",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/file-tools.spec.ts",
+      "sha256": "9c29f49e40df201ec6d07e5e988c45c08fb9b9bd718650d410df9ddba212fd2c",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/fixtures/receipt-pre-s5.ts",
+      "sha256": "f8e39edb1bcac7112d94216a1c9676bcbe41ce0211cf22eb3023e214983fb387",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/gh120-inbound-auth.spec.ts",
+      "sha256": "25bc13ee5e45ef455308ff1ebed936dfd58d521836868ff88fcab1944b32fd7b",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/gh121-outbound-sender.spec.ts",
+      "sha256": "ac66a5970624391ce05a62a6cf77ce3498716cf1e760921d93147e0346d9cc01",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/gh122-settlement.spec.ts",
+      "sha256": "3b61efa6eaab98be379bd33f48608e17c20e341d1464f2833a4df13632df1e01",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/gh123-auth-ref.spec.ts",
+      "sha256": "3216876ba19e4ebb0e1515cd0c2da8bf1c58566ec86af740bcca12af06961009",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/gh124-auth-observer.spec.ts",
+      "sha256": "e974ec73e6363e2e34b1cb85108cec0d00462665531bf678c0127cf8430aa61f",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/gh139-enforce-prereqs.spec.ts",
+      "sha256": "d79eb146353ce5da0c3eacf70d03e6cea8da7ee81f70143d6ad452b0ccf4a996",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/gh141-own-inbound.spec.ts",
+      "sha256": "45df4ce699c7df5d86dc2c465be1b1259ef5f9e7d8a40052830201c1832ade7f",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/gh154-ledger-conservation.spec.ts",
+      "sha256": "4e5a0130e960346e263ba9970e04523ea587fa2569884dcfb73db8a80387734b",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/gh159-peer-directory.spec.ts",
+      "sha256": "31698030791b27e5300c5f17f88ca54402dcb4ba94df87800f2e7de36eb0972b",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/gh224-queue-guard.spec.ts",
+      "sha256": "5ec4e5f65ef42f8b7c7e95b92a9cc037576534918674338245121edd08bfc24c",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/gh275-ledger-hardening.spec.ts",
+      "sha256": "c3decbf190df82f92118b75f2cf7ca6c6aead564b5430da3d6d31bd77062ea12",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/gh31-state-face.spec.ts",
+      "sha256": "69e361c9fce54496518ea46a35c4f2ab0feba75c032c6f8ac543e50893700dc6",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/gh335-canvas-suspension.spec.ts",
+      "sha256": "9dac4e9b96b85ff0430d1ee987e065762f22553dc28f01f3d0bd16325233060a",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/gh86-eviction.spec.ts",
+      "sha256": "006372ba97fe33d2fe6dc02e814af659ccf799e9b13293c82d3fdb2853c683b6",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/gh91-flood-guard.spec.ts",
+      "sha256": "31c49d8472a8bc91d968bffc4e6419264a566d7e7248ca2731759b2f515adedf",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/group-store.spec.ts",
+      "sha256": "88e45c4c5d3c42dae48293735cd3619c92d14a9752f0a8509d12399bacdff0f2",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/join-gate-fix12.spec.ts",
+      "sha256": "ec0bd687d013309c90309bb589e911b7a4e38f38c133d02bb245c853f37c9b11",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/joined-store.spec.ts",
+      "sha256": "3b4c8269f82db486df2552ee4ba11d1d7f45432227bea399418af4ae57a4ca64",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/lan-ip.spec.ts",
+      "sha256": "87abdf94a23daa0f37727e65cf3f7f6ad95166ce63ececae9ecb1e07dff9e1d7",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/layout-store.spec.ts",
+      "sha256": "b66a9392fdb69cbe72d1b03af74e3947800e33e7319d3eea88605e42b7ee8b11",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/live-roots.spec.ts",
+      "sha256": "274d2dc80bf21262b0cd0d4394abffdcddd899369b60e038c2e7f99ef55b8ab8",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/load-path.spec.ts",
+      "sha256": "2e53f0ff15eab8bb35ecab011ca22464d9d326e66352b58390c99c371e5f50bb",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/node-self.spec.ts",
+      "sha256": "a8db4db185727b3ebecc3669af0949c77f5e23649295544d0dcea1d6c672b46a",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/node-store.spec.ts",
+      "sha256": "37b6248738ff6adb9766ba62eaa4896eaa6d6484fb35870d2430e083a9424193",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/node-tasks.spec.ts",
+      "sha256": "ffcc8f133e8b49822f86d7c43b9d061248d45a234b0970c71c6a90d100174a06",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/origin-claim.spec.ts",
+      "sha256": "474eba00f1a4cf8ba257cc1561bb09b3c3391f1e52c88a0e81a316daf8256fa4",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/outbound-scope.spec.ts",
+      "sha256": "b29ad75fff7287ef62a800fb53d7015943aadc5dc7fc57da26d8b6041d3b789c",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/owner-settings.spec.ts",
+      "sha256": "7136b5b3462b3c25caa14b8b3a510cddacdeeeea3b325610e56a7924a0a4b4f1",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/peer-link-display.spec.ts",
+      "sha256": "f713bb681f5633d87903207cbbfd23a170bf38e7155f57488fc6970b3e97f284",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/peer-store-cooldown.spec.ts",
+      "sha256": "9d6c3d60273ade366c7687ce5e3c4f4da87a13ea5ca0d5571a8648ee87dcb618",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/peer-store.spec.ts",
+      "sha256": "cb71397e30e4b7076ab0dee9dfd9f0ae57fc220b67fa094fbb895ff65b03d8a6",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/planning-edges.spec.ts",
+      "sha256": "fd4d52cf83a1dd606eff8ee8f9c457dcdb20105fdd5d13b8ebf59edfd7952503",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/planning-viewport.spec.ts",
+      "sha256": "81330396c365979c0cad73b8181117a00fabc4289870bfc9a43bfea973447f4a",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/planning-wire.spec.ts",
+      "sha256": "51ed4e790ed237ea4dce62161f95d25f8356b1865f25d2a19d17cf027c84babd",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/planning-world.spec.ts",
+      "sha256": "4b61a64943098b3e07910e2c20594deedfd5d2dc72ead416100d9ca2508874d3",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/reanchor-architecture.spec.ts",
+      "sha256": "3b8cdd0dc59e94c6cf9e2d5c3198fea36eb332e6aa5facafc18a36955a7051dc",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/receipt-envelope-v2.spec.ts",
+      "sha256": "da07cf4f9f94ef91a45c09517f92dc2ae113215853f522d461a380f7fb0f993b",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/receipt-ladder.spec.ts",
+      "sha256": "63c2bedae1837cb7c923165e506716d1cf6b0e6c6bc6bedaeef5ec2f73e04ecf",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/roster-op.spec.ts",
+      "sha256": "2150d334fc168be8f4efedb70dc8c4a5bfd173961a7d4751a6ae3ebc2efbdc97",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/same-mounted-url.spec.ts",
+      "sha256": "251caa622564e9e02a77f0a4736fd5ebad6e278d977148e2ff56eaf6eb770e47",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/self-suppress.spec.ts",
+      "sha256": "be5256a42e31d305fa1e720adf418b58e5519659944461bf1fc22c9616fe63bd",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/session-transcript.spec.ts",
+      "sha256": "95e5623746a5acffce96e849f9683561084c1f7757ac1bc4e035ea22bd2c4b0e",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/settler-claim-fields.spec.ts",
+      "sha256": "c6f3bdab5ba78e9df99a0ce7f21b324c9c03cd903e1fc19ee184866e9f88561c",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/stage-css-contract.spec.ts",
+      "sha256": "ede45253670ac81d7cdf68566b3b48eaa24bcd1084250e5caaaa884499bbecbe",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/stage-mount.spec.ts",
+      "sha256": "1812040ca6308668401e12a01bb409a97420fc0137fcfbdc34f9ef428552cfdd",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/sync-answered.spec.ts",
+      "sha256": "b78497b03b4025c4470f3e61ed91da88f858bb1fbb3793be71ac98ce2fece7fd",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/task-auth-differential.spec.ts",
+      "sha256": "02813971f1c0ab491bed05252d2b36a00ec8df9f45f539c4f893ec70876da832",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/task-auth.spec.ts",
+      "sha256": "54fb8e21870f1f25bb6f6cdbf5fe0b90398dec0414a74739f92f83988458f182",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/task-cancel.spec.ts",
+      "sha256": "592c5c34bcb81968863d86855ced024a9e1e6a0ddb101a11973c8a69a6aa77e6",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/task-ledger.spec.ts",
+      "sha256": "6d47dc473acd92a46f180a1ab480c7a415c1edf1d4e58d6d79c912710b2f981e",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/verify-release-artifact.spec.ts",
+      "sha256": "a309c187a2a723199ef6bef3d2f78b7451c903303eaf1bc7b791e367dcc47360",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/verify-submission.spec.ts",
+      "sha256": "aef2d55a8c42e046396be23e7688621bea05890cb2c833a8cfb9b3b4a675a6cc",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/wire-abort-telemetry.spec.ts",
+      "sha256": "f36ae6595241ee4ab96d3a186a8472fcc56dc0472662c6751954763c191c1806",
+      "role": "test"
+    },
+    {
+      "path": "tests/unit/zone.spec.ts",
+      "sha256": "130c55b79121cfa34dc5d846762d3a73f420e314225f47780703096904be4f0c",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/apply.spec.ts",
+      "sha256": "41426849e69daa32a38bac1c7ef96d06f40a4a4c429149533864fe6d6d8d6dc5",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/canvas-remote.spec.ts",
+      "sha256": "446c6a75762ac87d9c4365f9b66471b0b7cd2ae6bbe0b78ebde2bb2ae7f0671d",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/canvas-routing.spec.ts",
+      "sha256": "62217ca885b4f96754537cd21461e61baa0626000aced5d30c11593be7a0537c",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/canvas-stage.spec.ts",
+      "sha256": "df080df2ec5ada255d242a593d028b36659def64210e6dd01fd8624294f32ea8",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/card-cache.spec.ts",
+      "sha256": "aa876559df3a76777d7e47aee52267fa4bf97731ef9e4e510c8421f6928167a0",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/control-body-object.spec.ts",
+      "sha256": "826664f03a187d0a07dfec61702267d32b058b68976deaec447236fe2b1287b0",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/envelope.ts",
+      "sha256": "91e875d118337fb0b701133b41a42ae6a8eacb1f8b06153cd4f6df2d045a6675",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/gh224-target-queue.spec.ts",
+      "sha256": "c3dd5bdcacfe471ca3cf854595234f66b253e69eec72fa6ae17fc99dfbdbd4a3",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/gh253-answered-queue.spec.ts",
+      "sha256": "e0a84fa78aeda74d84978dd8e88f706763e474bdf069d86ab29817b87818c8c6",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/gh60-hop-budget.spec.ts",
+      "sha256": "e9a5c66ec7501fd6a9927f4db9c245da965cdfce1782249ee8d3b1c2b167e962",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/gh91-flood-guard.spec.ts",
+      "sha256": "1d8aee079aa39594e552d5bcb2133bf3dc77ad8e051145abfe4f64ca4b79387b",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/isolated.spec.ts",
+      "sha256": "497d3a502ad2c1bae465cefa3603516e84f9bdc4fe67c2373a5e7f39e962485e",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/issue43-same-zone-remote-ref.spec.ts",
+      "sha256": "02bd7459db2fcca37fc4555bc79712316eb106f4ebf0f79b854bdd22c9823b36",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/join-gate.spec.ts",
+      "sha256": "de3e54b092f52242d163461de1b4c406238cceae380fb41cadd716dffdfa7307",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/node-face.spec.ts",
+      "sha256": "113ee059de9e3c6aa44406a198f7121f31718499051729ef170ee24d1a7524be",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/node-work-status.spec.ts",
+      "sha256": "b27c411dccb532394bd89c2e83f62f86949211c97d724fb169bd7e5f2603a662",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/payload-cap.spec.ts",
+      "sha256": "d0791b6c2cbdd4ce96a4b601a95df5f14b041237ba1576e3fe349691d16550a7",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/pr143-owner-hotapply.spec.ts",
+      "sha256": "d5cc61e1f7a99fb6f9504a2cbf8489f989cb1744e11ea4964c3be1b0e3b091cd",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/quick-dispatch.spec.ts",
+      "sha256": "b43f80ac7fc9f803a63271a0cf5b83841ecd359905dabc23b1ef08c1fcfb6d94",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/receipt-autosend.spec.ts",
+      "sha256": "308d7e70b8cb31b1b7f3d76a754ed9deaa7657fff18026571116a1b79fc30bd6",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/reconcile.spec.ts",
+      "sha256": "3568b9ce7ec4ebbe38de2fe20ed26783245fee17b2435a888bc37416436ae419",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/remote-log.spec.ts",
+      "sha256": "0828e869f485083278918495fad028cac9322e6d704f18314d9907276a9bb0f0",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/report-ingress.spec.ts",
+      "sha256": "1497780782f6aae6e40861021692c836fee6802bbfb7185f4e246c62f6c74f1c",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/report-suppress.spec.ts",
+      "sha256": "c8dcbe09b32ca349b2e02d2dfcb84234c0d1d522181e9810c17ce8accd567b37",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/roster-op.spec.ts",
+      "sha256": "7c0a0a72eece2a3e00fa8b9135a4e1e369fe1f3586dcae12caee1388fefb8e3e",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/rv145-report-loop-scope.spec.ts",
+      "sha256": "d9b32657286438b9be5ed48890a7d2690d14b5756c22f40b1df2f7943c49f838",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/self-route.spec.ts",
+      "sha256": "0b71e4afc2efbbabc2da39600be006f042e1567f8c1a7cd5b375c424131d37fe",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/session-log.spec.ts",
+      "sha256": "5bcdc8c1c702f917460e991ab47741d0586e56a9925d4a135da231ab13eea58c",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/task-abandon.spec.ts",
+      "sha256": "a8d0cfc353096bc392f10c87fd0c1cb9b04feac0e6bd033be0d12a15a796c573",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/task-idempotency.spec.ts",
+      "sha256": "6edffc7eb6b404b3ffd17b64c4a9ff22027da8c70bc6a5a264b92e8edda64785",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/team-roster.spec.ts",
+      "sha256": "5b99cbb2557e2f5c412a34f00b8e7c80576a6b902b0d2b4be99605489744418e",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/team-scope-info.spec.ts",
+      "sha256": "138b51f7d6ea879987f4845aff3b0ee42a5f976023805757ca956b509a7d0360",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/teams-bridge.spec.ts",
+      "sha256": "bb95e0b4552c0b117aaa8eb6d9dc54a519daccb3be11755b89247dea1428e148",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/text-guard.spec.ts",
+      "sha256": "9828987168a921bea378ab394bfc7126594a44f0d44c4691222a517145a7d654",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/wire-body-object.spec.ts",
+      "sha256": "5a193f745610ddb2e16606ab7bf7a808ef60c440fc60e5ccf4be067c64ad9d0f",
+      "role": "test"
+    },
+    {
+      "path": "tests/wire/zz-m1-fix-probe.spec.ts",
+      "sha256": "675db8c7fdd51500742f9cba718bd6edceff04b087f269d20bcacf86aba4a9a4",
+      "role": "test"
+    },
+    {
+      "path": "tsdown.config.ts",
+      "sha256": "22103bd57e459eb9375b5c062ac1245d0209712b0ebc828665e98d63ec8a2f3d",
+      "role": "build"
+    },
+    {
+      "path": "vitest.config.ts",
+      "sha256": "9d57aa0d681d258a7a8e7a724d70cb8efac014093a0482d8d001bb142381ae77",
+      "role": "build"
+    }
+  ],
+  "reregistrations": [
+    {
+      "path": "scripts/collect-release-measurements.mjs",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "0ab097d0fb644b19d7a68927051af2afdb343b87edce708a55629a00b27612b2",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:16.999Z"
+    },
+    {
+      "path": "tests/unit/collect-release-measurements.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "8ffef6518d069dff6fa2e662039f38780270d9edc216e6f1c574e3b8f329e876",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:17.085Z"
+    },
+    {
+      "path": "assets/nexusDist/assets/index-CaA76j0F.js",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "5b88a196adf98c4bfa017a44a7742d90e583e8d91a594c881a11b76079acddaf",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:17.169Z"
+    },
+    {
+      "path": "assets/stageDist/assets/index-C-28k_o5.js",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "c078dc55af5db05eb03f86cd3597e23e88a11996ee7615ac2c89502f39580c40",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:17.254Z"
+    },
+    {
+      "path": "cli/a2a.mjs",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "f166f8c599a79fbffbc009e6462d87f8de9da1efed0dcdb0a3cd67befe85b927",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:17.346Z"
+    },
+    {
+      "path": "cli/serve.mjs",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "e98d1e8150085167eff1ced912dcda9c58df3d327710e969a885f9a53d379c26",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:17.431Z"
+    },
+    {
+      "path": "examples/external-node/index.mjs",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "e04bbe5d1270e49927cedc3383bfcd344fea650a8c2d458f6934fe2c5b6f3ffb",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:17.520Z"
+    },
+    {
+      "path": "feedback/2026-08-27-nexus-canvas-ux/shot_planning.py",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "a4a4d1ddd5dcbb7e994b45325615bc1c6ca035d911ca6575b53e7b044b37998c",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:17.606Z"
+    },
+    {
+      "path": "feedback/2026-08-27-nexus-canvas-ux/shot_status_quo.py",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "3bbec77f1dbd6840ce90e52799939cb5e8cf6f2965914629e37ad5c713dd7157",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:17.695Z"
+    },
+    {
+      "path": "nexus-stage/scripts/mockhost.py",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "9a04e009b06d87df69d61319ef03ce00ac2a61579fd442a356d80f654690f29e",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:17.788Z"
+    },
+    {
+      "path": "nexus-stage/tests/chat-drawer-dom.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "393799024f629d31222b9b4cb798186f42a0576d191599abeef2d258a363cb9f",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:17.846Z"
+    },
+    {
+      "path": "nexus-stage/tests/keygate.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "084d0ea5c8a239e61220663a8d692ed79a8808f8c47e58916bfd9997decb45d6",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:17.906Z"
+    },
+    {
+      "path": "nexus-stage/tests/owner-panel-dom.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "cfbdd80ada09263ccb1747afa5c3389aa4469c21939822b7987d9e7ecb3d1eb5",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:17.969Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-card-text.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "6b2b93ef09cf1cd354640ef5444d4a2e97fdfcf6f7de3e0fc4ff08421a440bc9",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:18.037Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-dom.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "530049a3d5575534d1171f08127246cfac01d818fa444f3171314dc24f2b90e1",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:18.102Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-federation-dom.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "2fb58f2f81db07224763ac3a5658eeb04232c9cce9e4018493c6c4a9eeef02bf",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:18.170Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-first-run-dom.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "a71db74ed3b81b8f08b18528eeea968be56fac7a95b1a4664cdeb31cba43eb3f",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:18.242Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-fit.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "4c3e777830e308791150583ae89c28f9105c42100768876f4f7903ca28aa9749",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:18.315Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-frame-solo.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "2064c884b1c3f9e1e00cea3e4acf7488aa4589c95c886dbcf8672dd0f8336ce4",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:18.390Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh108-settlement.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "6f1ac1ef67bb12d9b70ae7448cb2329ffc81ed69e67f7e7965c3e20d0b90909a",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:18.459Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh38-member-cards.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "dba711a008c35aef3713730132d67db2b822405050b3d06566336f5774c84fdb",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:18.529Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh41-fleet-frames.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "2dad0f882ed051d1fe4c8a31a864e0a1c86aee092976349e680e7938f6e0ad98",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:18.597Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh42-remote-edges.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "6f49f01b589813bb78b12cc893ea1621e2d5dc28228666e593c0d9bef64a255e",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:18.664Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh43-org-members.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "fe20bffe13a3802eb5196f17098bdd425913ce29c1ce50e16e37efdcee892550",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:18.733Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh44-frame-stick.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "b474ca1ae2b35080d604ac65f0f21c14de7900f81ee298d3c310186f011ab257",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:18.813Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh48-tidy.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "67c7b73c6d697fa039d370e2cf6d6cd1b131053248585e7daa5ad64d1e357944",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:18.892Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-leave-mirror.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "0f0459f82bc26834d2693865c39953be93c3080e791d168d28084ccfd4db945b",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:18.964Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-member-badge.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "87a44984aa52e80f8ecc59d096e88ade598a4719f7428360d4797b34318196ce",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:19.042Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-mirror.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "2cc5491d411331ebff141559c3f2c8e45200ac2a0a72be8ab3b2b414c6e2620d",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:19.119Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-nodelist-dom.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "f93d58cbb0f2d2790fd8be223e17a35a4c774b9c8b97cd533a8e1afc6c9508dc",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:19.194Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-overlap-dom.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "ca60ef9fe6d82658a09de00062c47efc799139c5b8e94c9c9ce14c603656b9b5",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:19.268Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-overlap.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "d39326ae206a23cf0c7aa680014650059273fabc9042b18900c80994f9e9bcab",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:19.338Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-relayout.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "8b68b3001ad69aa6b6e70c0a42d703330c3a4d7c92a1ba756cbb49a063054f4e",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:19.410Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-roster.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "123ed07aedb596f0be32baf3da4820863061c94cf184729f7de5faaa389c569c",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:19.478Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-search.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "81bfd8be5ef226a17a29e01b2b4f6547eb036602c731f7008a10a587cec2287a",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:19.548Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-teams-dom.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "60c9d50d0ebe71245165a06443e8eee725e26083c35a95e0fdb42fd06cfe0fbd",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:19.622Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-undo.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "29e6cec51b93b08c29823e1c8c5aa0fb61f6c2fcda82908c2d4da944362eab88",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:19.702Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-wb-compose.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "3ace61e38d25a5535dcf27b7c8e94323bf0cc3547b36d5801526e0e1d838e6a8",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:19.781Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-work-status.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "6c993cce3dd9ec20eabdfb61095f4be2a1c19da61ed001dc4f743dffb164f672",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:19.851Z"
+    },
+    {
+      "path": "nexus-stage/tests/rail-dom.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "770e3c7e81b33cc69d735cd91cff130aa7c1976277a11538b47bf0022e9074ca",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:19.929Z"
+    },
+    {
+      "path": "nexus-stage/tests/seat-name-editor.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "554f688b0cdaa67eb580ec0f49ed5133bc329204c2c8ed44d41c034c0a74a331",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:20.002Z"
+    },
+    {
+      "path": "nexus-stage/tests/session-drag.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "347f09fe52c9b366a9736712c82f9c9610b366e537c1da83c10a8b8b5a1ec957",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:20.072Z"
+    },
+    {
+      "path": "nexus-stage/tests/viewport-fit.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "6c94c74f4d2c7b108cc74f05ed4358fcd19876b04613d97c0535a631f2b315fe",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:20.139Z"
+    },
+    {
+      "path": "nexus-stage/tests/workbench-dom.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "78acaf7161753e9f6b2be2498263d34c7f791645faede6c85dda684ab702b2a4",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:20.208Z"
+    },
+    {
+      "path": "nexus-stage/vite.config.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "dd958a15ab2a6347e1cd22862c008ce2fa5e92213f7bdfd30581d1729154fec5",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:20.276Z"
+    },
+    {
+      "path": "nexus-stage/vitest.config.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "9bd0ecc4544ae7da3930da75ea0b0e561b73bb027588eeab386bc96651de24e9",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:20.347Z"
+    },
+    {
+      "path": "scripts/copy-skill.mjs",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "2da5530a6d6af92d2452b924f02dd20fbc9051e027b9893fe928a38e43cc828e",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:20.416Z"
+    },
+    {
+      "path": "scripts/doc-drift.mjs",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "3c9e6ee0f1d509a5e793bcfe6f6af535cfc6b33cb95c5ff51cb5ac0c7724410f",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:20.482Z"
+    },
+    {
+      "path": "scripts/reanchor-architecture.mjs",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "23335bd23cde92571469e25abd9fcc9c3731cf48ec6ed19e125ca052d4bcc34f",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:20.549Z"
+    },
+    {
+      "path": "scripts/release-file-manifest.mjs",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "aa0cc66a72da6184635c28b07021bb0b139d940c76513046715021468d752fff",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:20.732Z"
+    },
+    {
+      "path": "scripts/supervisor-snapshot.mjs",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "1b485bada541cde44c5cdde46313b227bbb31ae277d2fc5264940065cacd9c32",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:20.799Z"
+    },
+    {
+      "path": "scripts/verify-architecture.mjs",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "b3003e5d09aceeffd97532db263032cb81cc60a6aa27dd29385ed6b70205a523",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:20.904Z"
+    },
+    {
+      "path": "scripts/verify-nexus-ci.mjs",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "dc046744eaf48daeff08d94cfea2c8727d2f3040f72288755f350200030e6944",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:20.972Z"
+    },
+    {
+      "path": "scripts/verify-probe.mjs",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "eb4a35aa18df7d19f30ada8c3381c7552e8283cea6a82c8e3e10fab54a9e1ebe",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:21.039Z"
+    },
+    {
+      "path": "scripts/verify-release-artifact.mjs",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "ec6525629a4eb79b2a2b410a79af07c71494730b25efa29c2e61ec3666f16a9c",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:21.105Z"
+    },
+    {
+      "path": "scripts/verify-submission.mjs",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "6fe0263c6d1da3d182f71632b43ae421e30569885064429c7f3f49781483e0d6",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:21.168Z"
+    },
+    {
+      "path": "scripts/verify-temp-clean.mjs",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "559a8e81e99afdac01cc4404db39cf995eddf2fc73ae26a429c8ecf6af234eb1",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:21.233Z"
+    },
+    {
+      "path": "stage/vite.config.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "801319c63666162fdda4d6749d76e4e106b1d4f0a4bbe761dd7fb4b1f9c0cbbb",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:21.302Z"
+    },
+    {
+      "path": "tests/fixtures/fixture-tar.mjs",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "86afa0558c6307d9e28aaef3c6835f0bfde47554ab7874683e62e53442789af6",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:21.372Z"
+    },
+    {
+      "path": "tests/fixtures/release-audit-case.mjs",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "6042950dce7b6884d5727dd783bc2e8bcc13652034710a67aad6008af0864926",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:21.441Z"
+    },
+    {
+      "path": "tests/gates/build-layout.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "74f8f8d51317bdf9ae582c2aeb5ed02586a96cc154e86125807fe3561230156e",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:21.508Z"
+    },
+    {
+      "path": "tests/gates/client-build-reproducibility.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "7eccdfcf7b24d4518522284ebd74b2b3e06f738218b4cf4cd944c57fdedaf1af",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:21.576Z"
+    },
+    {
+      "path": "tests/live/cross-machine.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "9c1a4ff494316394ea988cfdda2d54dd1e0417214739b8f10b33d86705e3a9a0",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:21.645Z"
+    },
+    {
+      "path": "tests/mesh/boundary-hardening-w12.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "493686b31a162009f2736f8fb14989e0244b3395deb9321ab47bf79dcb475897",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:21.718Z"
+    },
+    {
+      "path": "tests/mesh/boundary-hardening-w23.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "29c34149341d20868d1746be7b29f93568db1a8e72d33862fbdb65ffacf7bdec",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:21.793Z"
+    },
+    {
+      "path": "tests/mesh/canvas-mirror-notify.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "08adb01c0b1ff7e2fa948cbf6514f01407f0cc5ddf8ebc34b982c3875236042c",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:21.867Z"
+    },
+    {
+      "path": "tests/mesh/card-faces.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "9396ebd66075be9b2e44de4700a07c479cbb697d30ba7d4a31d6922b7a164d58",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:21.949Z"
+    },
+    {
+      "path": "tests/mesh/claim-rejects-observability.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "9d687c327f32fd1c1fa06d500ae278375687dcd2a105f6a5c45782b975427fff",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:22.028Z"
+    },
+    {
+      "path": "tests/mesh/cli-forward-receipt.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "54bcef6b13924e2a93ea90b20b65fbe09a44eee6edfe6cc15feb239de9a65fdc",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:22.098Z"
+    },
+    {
+      "path": "tests/mesh/cli-home-admission.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "511d85e174778bcc38fe84af1b7d8dde792ee79c8525cf92c3a11883b102eb83",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:22.171Z"
+    },
+    {
+      "path": "tests/mesh/cli-host-forward.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "67b51591a1eaf3458953a1171b16c0eb6eaa7154402948cf1c04aece0c0f5eda",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:22.256Z"
+    },
+    {
+      "path": "tests/mesh/cli-origin-claim-bound.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "2328061fc61cdaa6c72c255f5ebcc808ae5abf5a3776da584f19a231f4833676",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:22.336Z"
+    },
+    {
+      "path": "tests/mesh/exposure-levels.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "dcbebf555274119b38bd3779573b2ecb75aa1f1c8340d65f07ff464f6621e4b4",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:22.417Z"
+    },
+    {
+      "path": "tests/mesh/file-channel-f1b.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "5c6ac9533e147273bf1c938a0e63dd8cc19335c1258c908058bb33b0defbe7e5",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:22.489Z"
+    },
+    {
+      "path": "tests/mesh/file-channel-f2.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "8ba1590b673bfa180460308459469ed89b0ffda4fdb14bf7d025f489e899eb02",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:22.559Z"
+    },
+    {
+      "path": "tests/mesh/file-channel-f3-cli.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "138719d4695d0cc65ee927688b8008603921ddab0a33eb576422f06d00c6f435",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:22.629Z"
+    },
+    {
+      "path": "tests/mesh/fleet-dissolve.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "8a7ab08b2a53edb81d2ce39d8fd8b0f255e541d08cd27a9b2d99b7110daa9328",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:22.698Z"
+    },
+    {
+      "path": "tests/mesh/from-line-display.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "f6f0bc9f14a0ac5eb83611e7cbc1bb85b5a4546de0a0a5649024ee7e32624ad0",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:22.771Z"
+    },
+    {
+      "path": "tests/mesh/gh108-capacity.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "6419e27d5dee658621fc60fa7f598bde0be902578a62caaff262648130169fe3",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:22.840Z"
+    },
+    {
+      "path": "tests/mesh/gh112-cli-resend.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "93bf805116178fe2b2d58ef13d3171cc0d7c649c83e158b93ce2ea0ccded08f7",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:22.914Z"
+    },
+    {
+      "path": "tests/mesh/gh113-mailbox-shape.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "3217fb2965598a8a4f1fdc36e6cbf6cc2f7b67df8f48552729dbef12449e251c",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:22.990Z"
+    },
+    {
+      "path": "tests/mesh/gh120-inbound-auth.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "3a49ce2c3b499b59214e63938e3614389eceae27b9a3978adffee5a7cb5f736f",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:23.065Z"
+    },
+    {
+      "path": "tests/mesh/gh122-review-attacks.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "cd9b000d71a4d0e66a9b2e9f0e2953e6b26cf776ecf5900c0b5848d6e03f8557",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:23.137Z"
+    },
+    {
+      "path": "tests/mesh/gh122-settlement.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "be59c8ac869d2abe9d811d8edd94ab73743ae312286363b6d5ef04fc1aed1aee",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:23.205Z"
+    },
+    {
+      "path": "tests/mesh/gh125-echo-enforce.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "39b1817b7b1b56d5a1a3ce95ece609a44e1897bba48b02cce14f7fceae7abdae",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:23.275Z"
+    },
+    {
+      "path": "tests/mesh/gh131-canvas-local-handle.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "244d6dbebbb0a3d685f766b49c5309a9f6609dea2d68d5cabdbb2b62b21e5455",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:23.345Z"
+    },
+    {
+      "path": "tests/mesh/gh133-cli-origin-claim.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "5eba3a269ba72ce4deb9e1c8c9dced7ce3032409f02377dff25ee1dfcca3046d",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:23.414Z"
+    },
+    {
+      "path": "tests/mesh/gh139-cross-host-legit.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "7ccdd7e34f4aeee7f20069cd62b627f832e36cece1cc19a87aae23fe3a0c1009",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:23.484Z"
+    },
+    {
+      "path": "tests/mesh/gh139-inbound-delivered-to.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "92165f8c23312eb56d4eb62cd88830c60d0f5ad0324441046fd5339532a2c3fd",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:23.555Z"
+    },
+    {
+      "path": "tests/mesh/gh139-observer-local-auth.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "963270e93226c6d0cdd90426abbe4ef047bbec26488c8bcfd5632824408b37b5",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:23.631Z"
+    },
+    {
+      "path": "tests/mesh/gh141-receipt-delivery-row.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "11f99e431777c955e8fa7f2f2d14106faf297e4bf20cee29ee202efc845d8d4e",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:23.707Z"
+    },
+    {
+      "path": "tests/mesh/gh152-handle-member-visibility.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "9d121af1c23414c5e935bfcca1804030409f29b54c2569dcea8b33abb7a6fe75",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:23.787Z"
+    },
+    {
+      "path": "tests/mesh/gh159-remote-canvas-directory.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "253a2cc7fa98e14127cfdf3a6c728631c34d527468d87533a2cb239886c65f53",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:23.861Z"
+    },
+    {
+      "path": "tests/mesh/gh189-path-claim-link.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "4b64143dd3068334a8e4aea55fa8fb724cc7f6f6fe5bc92a28acda08bf4f0fee",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:23.939Z"
+    },
+    {
+      "path": "tests/mesh/gh217-cross-host-receipt-scope.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "78678612a4f706e34ecaa29ead4a93d6781e7b9a3815b0ea1765c68bb2dbd401",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:24.022Z"
+    },
+    {
+      "path": "tests/mesh/gh24-host-rail-repro.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "6e81f03e40ab85948728bd2287ca98a3e56443e1b3d43dbe3c6c76557bf2fb5d",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:24.122Z"
+    },
+    {
+      "path": "tests/mesh/gh26-f5-target-admission.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "bdb6b7cfb3621c758b3991c286cff9d1250706cbdbb341cede0109c076ede14a",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:24.226Z"
+    },
+    {
+      "path": "tests/mesh/gh277-enforce-fallback.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "3c8423f0bf0067685ab952943cb60f97802539094a085c5aff250635abef597a",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:24.321Z"
+    },
+    {
+      "path": "tests/mesh/gh291-list-only-registry.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "6435dc2cfc12bc14e83638f00649e6a5ff2f658e72c1375f5153579f042a4e51",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:24.412Z"
+    },
+    {
+      "path": "tests/mesh/gh306-sync-attribution.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "f8c39de499084478796443d45596742b62d266f0b45bc9119488d5c82c54680c",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:24.509Z"
+    },
+    {
+      "path": "tests/mesh/gh311-lan-origins.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "60c1ffbe2dfa67303de88dcee12801db3bbd6d6f30268272d94e0c0f00aca5d7",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:24.597Z"
+    },
+    {
+      "path": "tests/mesh/gh312-private-card-peers.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "868ac1928215d11bd3ab11edb6a10535597799f56032dd7d3f0de56b90b0e369",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:24.693Z"
+    },
+    {
+      "path": "tests/mesh/gh317-link-keys.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "5daf8670da6b3babf76716fba15f24eb1201baee7610395c73983ef094650542",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:24.786Z"
+    },
+    {
+      "path": "tests/mesh/gh320-canvas-http-status.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "83f0f2fe1b81478bd049a473c80742e4199e0c8aec15fc6c18f5dc5efdf67206",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:24.876Z"
+    },
+    {
+      "path": "tests/mesh/gh335-canvas-suspension.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "0934e7da3a0bf1e8a4a0c5f72dd0f2fa4b4fd83c3d2f4f668c45af14a3ca299f",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:24.961Z"
+    },
+    {
+      "path": "tests/mesh/gh34-owner-panel.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "9336a8119c8eed1f52bf448f2852c908a1e5f6501859cc73c9f1d4b078282844",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:25.045Z"
+    },
+    {
+      "path": "tests/mesh/gh36-dispatch-face.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "724f10645429e53b90289e41b077c859114efffb778224307218995f0ea962bc",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:25.130Z"
+    },
+    {
+      "path": "tests/mesh/gh39-teams-circle.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "d12e42d64b926291cf0bdc4211ffd2cc50c9c9eb54576d98272522f5807b607c",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:25.214Z"
+    },
+    {
+      "path": "tests/mesh/gh41-fleet-canvas.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "045621e9a379184e296e36a3e03d3f953f59b799621d9fbd6765619a5696eab0",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:25.292Z"
+    },
+    {
+      "path": "tests/mesh/gh45-cli-caller-admission.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "bea0f5786059832b77e6d98d29d4a83b1b2581f58fb5f85ff7e86ed764c6cb12",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:25.372Z"
+    },
+    {
+      "path": "tests/mesh/gh45-cli-deposit.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "3be8beb89f9119419e3c26ec6998cd90184b3fa85482f3d5cf109701235788bc",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:25.456Z"
+    },
+    {
+      "path": "tests/mesh/gh58-seat-name.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "836e366ab9ab66b010625349b01249fd01d6f6d1e11fb450312c7ba06997726f",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:25.541Z"
+    },
+    {
+      "path": "tests/mesh/gh71-peer-org-admission.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "cb8504ef65ccf789bcee6c5c16feb1a13b2615be5a88606c95eb9acb3cdd2d37",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:25.617Z"
+    },
+    {
+      "path": "tests/mesh/governance-invariants.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "d075d4ddf586e1e9b949afc409a018adb8c8b5cb23ac0b485a23e82c50685484",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:25.695Z"
+    },
+    {
+      "path": "tests/mesh/harness.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "6b780f6d44abbe36782f469ba4c6b9712ea93138aca67711fb725916828abd4f",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:25.781Z"
+    },
+    {
+      "path": "tests/mesh/issue41-canvas-self-skip.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "8a074e6e8bb747705b98b6b234655111995f5e98d6f87e1ec3f599c66f00967a",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:25.863Z"
+    },
+    {
+      "path": "tests/mesh/link-state.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "77de33ab3a0d8b384c529aff20abce402f6f5a049b88ccdb0ae8d9a6ba2da2db",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:25.941Z"
+    },
+    {
+      "path": "tests/mesh/mesh-anomalies.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "a323eb15767cbfd7bf3413998f88016e604ddd46fe5bbe041544220b1847a2b0",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:26.024Z"
+    },
+    {
+      "path": "tests/mesh/mesh-baseline.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "87c7baf18a7cf9535ce5732d672072e302797b3f77e41c888433a72092b35240",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:26.108Z"
+    },
+    {
+      "path": "tests/mesh/mesh-faults.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "608d35ca16e0e2924e1e43def8291781203312d1b51d6568b8f15c6ad11ebef1",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:26.190Z"
+    },
+    {
+      "path": "tests/mesh/node-bind.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "d7ae972228cb2de7c9b0015848000d184c9d0db40356b07e99b75e8b7fd07383",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:26.269Z"
+    },
+    {
+      "path": "tests/mesh/origin-claim-audience.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "5176cfb9f3ef2c6f3a32afefe2bd748a38ea09c67622b57cc80f503cf1713b85",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:26.350Z"
+    },
+    {
+      "path": "tests/mesh/origin-claim-body-v3.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "d3218247cc9736021adb208329ca3e44d3b1225671f5fad27da07266f22067d4",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:26.430Z"
+    },
+    {
+      "path": "tests/mesh/origin-claim-window.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "7b39241f13a54fd867b4da59ed7e2d582c75c582248af2c953de0a157098a175",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:26.509Z"
+    },
+    {
+      "path": "tests/mesh/process-face-tool-gate.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "7cc0167221a9fe2995cd738bb9331cf7baa0b1a34bfac2e67c45ec7c84a97fa7",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:26.589Z"
+    },
+    {
+      "path": "tests/mesh/proxy-loopback-trust.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "b18d973f135ce6c4ed835dc3ba3909d165f8ee250e8618ca4c0b6494958e442d",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:26.667Z"
+    },
+    {
+      "path": "tests/mesh/standalone-serve.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "33127e7a0d5a999e5d4c87941094f8897326658f818c1c22fa2d308c356adb6e",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:26.749Z"
+    },
+    {
+      "path": "tests/mesh/tool-output-schema.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "ebf6d8e11723a45e8443ee3c59c711d0b001667376758931213707f23db153dc",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:26.834Z"
+    },
+    {
+      "path": "tests/mesh/xjoin-relay.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "103715dd89caca635458733c3bad674faf580e9f1514ba52b739bd6bbdce621a",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:26.918Z"
+    },
+    {
+      "path": "tests/temp-dirs.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "31108036386af836582eab68c92dd03f1d755c48f545f4e62fa22bf265704bfc",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:27.005Z"
+    },
+    {
+      "path": "tests/unit/architecture-audit.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "ca48d1105d8387370705e3aecaee0c78a15a0359311ab4ceed0a8d3f8cbe93e3",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:27.087Z"
+    },
+    {
+      "path": "tests/unit/blob-store.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "9a2356a7489aa1555699ce24d0a25d526b1acd59d7a4207231f9a3c0419df683",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:27.167Z"
+    },
+    {
+      "path": "tests/unit/canvas-discovery.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "77a0b2b7d531519614b53a349ace1faa45f15c9753e6aa2f3dfa8ca9392e2aed",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:27.250Z"
+    },
+    {
+      "path": "tests/unit/canvas-id.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "372e86f2da75af1112661b8782a162e2209adb55c23436a6c822b204462682d5",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:27.328Z"
+    },
+    {
+      "path": "tests/unit/canvas-notify.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "400fc8a3cc16c97429c932d44e62feba470ec357dd3d7805040e456f9e98ac4c",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:27.417Z"
+    },
+    {
+      "path": "tests/unit/canvas-ops.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "9d484ed587d40cb2221c74207b21828f788f6931b3711024fef61c215217e733",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:27.504Z"
+    },
+    {
+      "path": "tests/unit/canvas-store.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "de3c6b8f88c7d036fd930a1976996bbad772156ddb292d729ed2d147f3116389",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:27.590Z"
+    },
+    {
+      "path": "tests/unit/canvas-wire.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "91de8b7128ccaaef2d090fb4c30930c5e3fe3e772ab7fb9a7f8b5369fd955593",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:27.674Z"
+    },
+    {
+      "path": "tests/unit/card.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "78d033d9d8266db86810e2ef7b5a7f04d6d2f0610e283ee205e5f7f3a583043c",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:27.761Z"
+    },
+    {
+      "path": "tests/unit/cli-args.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "207ab603339f14a35c9dbda6cecd2f5e878432993d3bd1f450325055ff4061e4",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:27.884Z"
+    },
+    {
+      "path": "tests/unit/cli-deposit.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "ae6aa17c47ce9d85fc2838551d7146ea2deb8bbeb167b637941e17077984c909",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:27.971Z"
+    },
+    {
+      "path": "tests/unit/cli-home.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "5f9bdb1788d68b38e774265d52d9e269722177218e7126431e5c26ffb01ebd23",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:28.056Z"
+    },
+    {
+      "path": "tests/unit/cli-spawn-env.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "ffc6cef818b9ae3f9bdece628c60be5cf792e0c7d47b93d60dfa0f60b4db840b",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:28.146Z"
+    },
+    {
+      "path": "tests/unit/cli-tombstone.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "1dd501bbbb6b40f92a228921244e83ce4fa736c06ce4e388486cd37bb20ccdf2",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:28.227Z"
+    },
+    {
+      "path": "tests/unit/client.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "8b1fb5b2cbfcaa2d9e8197632e04762a803f0a474f7be52507abba20987c2cce",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:28.309Z"
+    },
+    {
+      "path": "tests/unit/direct-exposure.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "f78a3960ce7cb944e7dd7b94033380a8a75a1434ba23558ce6b4faedc17aeddd",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:28.388Z"
+    },
+    {
+      "path": "tests/unit/direct-forward.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "d16a7dea420b302d429f57c6373db9aeee0e78ea2b802c0bee48c37b036da3c8",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:28.470Z"
+    },
+    {
+      "path": "tests/unit/doc-drift.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "4f3d79362a6be93554f504632de0658134a5a732a82e8580b3808b4f736f61f0",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:28.551Z"
+    },
+    {
+      "path": "tests/unit/federation.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "dd3c1a2ea906951eb092fe59b25dba6a8ee482c0aeb0122114810793326af272",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:28.633Z"
+    },
+    {
+      "path": "tests/unit/file-tools.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "9c29f49e40df201ec6d07e5e988c45c08fb9b9bd718650d410df9ddba212fd2c",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:28.712Z"
+    },
+    {
+      "path": "tests/unit/fixtures/receipt-pre-s5.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "ad82558698cebe6eeda6db56e1d55ed75a69088fab84a5f6dfd44a89675a3bce",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:28.794Z"
+    },
+    {
+      "path": "tests/unit/gh120-inbound-auth.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "25bc13ee5e45ef455308ff1ebed936dfd58d521836868ff88fcab1944b32fd7b",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:28.878Z"
+    },
+    {
+      "path": "tests/unit/gh121-outbound-sender.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "ac66a5970624391ce05a62a6cf77ce3498716cf1e760921d93147e0346d9cc01",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:28.956Z"
+    },
+    {
+      "path": "tests/unit/gh122-settlement.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "3b61efa6eaab98be379bd33f48608e17c20e341d1464f2833a4df13632df1e01",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:29.043Z"
+    },
+    {
+      "path": "tests/unit/gh123-auth-ref.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "f9cd88f33e275f7ba231993620dee7b2d609add6ecccf78a47aaac15b0afbe76",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:29.124Z"
+    },
+    {
+      "path": "tests/unit/gh124-auth-observer.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "e974ec73e6363e2e34b1cb85108cec0d00462665531bf678c0127cf8430aa61f",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:29.210Z"
+    },
+    {
+      "path": "tests/unit/gh139-enforce-prereqs.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "d79eb146353ce5da0c3eacf70d03e6cea8da7ee81f70143d6ad452b0ccf4a996",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:29.291Z"
+    },
+    {
+      "path": "tests/unit/gh141-own-inbound.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "cb386df7cf8384f638b1dd37a7065023925c76b116b8ebf50eaf6410675532d3",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:29.368Z"
+    },
+    {
+      "path": "tests/unit/gh154-ledger-conservation.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "4e5a0130e960346e263ba9970e04523ea587fa2569884dcfb73db8a80387734b",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:29.451Z"
+    },
+    {
+      "path": "tests/unit/gh159-peer-directory.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "9d156d7eb77dabe52eedb6a22ce44b64f5569354592bfced7d0aa6038b6b94d0",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:29.533Z"
+    },
+    {
+      "path": "tests/unit/gh224-queue-guard.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "034f2f0c3826ddd89ac96ac08ace6992cd7f617ca2c4266f3830671f52431a25",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:29.626Z"
+    },
+    {
+      "path": "tests/unit/gh275-ledger-hardening.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "c3decbf190df82f92118b75f2cf7ca6c6aead564b5430da3d6d31bd77062ea12",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:29.719Z"
+    },
+    {
+      "path": "tests/unit/gh31-state-face.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "69e361c9fce54496518ea46a35c4f2ab0feba75c032c6f8ac543e50893700dc6",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:29.811Z"
+    },
+    {
+      "path": "tests/unit/gh335-canvas-suspension.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "9dac4e9b96b85ff0430d1ee987e065762f22553dc28f01f3d0bd16325233060a",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:29.908Z"
+    },
+    {
+      "path": "tests/unit/gh86-eviction.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "006372ba97fe33d2fe6dc02e814af659ccf799e9b13293c82d3fdb2853c683b6",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:30.014Z"
+    },
+    {
+      "path": "tests/unit/gh91-flood-guard.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "a2ec502b506db7059ade7b3124918d496dc5008983272d33a73eb92e7a1cb02a",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:30.119Z"
+    },
+    {
+      "path": "tests/unit/group-store.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "88e45c4c5d3c42dae48293735cd3619c92d14a9752f0a8509d12399bacdff0f2",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:30.232Z"
+    },
+    {
+      "path": "tests/unit/join-gate-fix12.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "9c99d5f1a0f95826bf04ef752691b88ffefa07e2a8df8499a489dd76c1d5dc82",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:30.352Z"
+    },
+    {
+      "path": "tests/unit/joined-store.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "3b4c8269f82db486df2552ee4ba11d1d7f45432227bea399418af4ae57a4ca64",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:30.465Z"
+    },
+    {
+      "path": "tests/unit/lan-ip.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "87abdf94a23daa0f37727e65cf3f7f6ad95166ce63ececae9ecb1e07dff9e1d7",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:30.584Z"
+    },
+    {
+      "path": "tests/unit/layout-store.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "b66a9392fdb69cbe72d1b03af74e3947800e33e7319d3eea88605e42b7ee8b11",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:30.690Z"
+    },
+    {
+      "path": "tests/unit/live-roots.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "274d2dc80bf21262b0cd0d4394abffdcddd899369b60e038c2e7f99ef55b8ab8",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:30.844Z"
+    },
+    {
+      "path": "tests/unit/load-path.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "fe9a864ed1d0e45bae6eabeeefc2895324acdcc726bd7cbdc22b42818db7c668",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:30.938Z"
+    },
+    {
+      "path": "tests/unit/node-self.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "3428c997df956d9ddeefdc612b5fefbb376a2ca6fe7d571a687caab17b8d1825",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:31.036Z"
+    },
+    {
+      "path": "tests/unit/node-store.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "37b6248738ff6adb9766ba62eaa4896eaa6d6484fb35870d2430e083a9424193",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:31.128Z"
+    },
+    {
+      "path": "tests/unit/node-tasks.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "ffcc8f133e8b49822f86d7c43b9d061248d45a234b0970c71c6a90d100174a06",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:31.224Z"
+    },
+    {
+      "path": "tests/unit/origin-claim.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "474eba00f1a4cf8ba257cc1561bb09b3c3391f1e52c88a0e81a316daf8256fa4",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:31.316Z"
+    },
+    {
+      "path": "tests/unit/outbound-scope.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "8c8cbba2c0dba98667e3c475f4247927cb68a7a622cf67d6c18173e515ca12e1",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:31.409Z"
+    },
+    {
+      "path": "tests/unit/owner-settings.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "d6b829eb54b29fa22fd9a2f6abe5941939ca5d63579992369b5c3a7caf5dd8f2",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:31.495Z"
+    },
+    {
+      "path": "tests/unit/peer-link-display.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "f713bb681f5633d87903207cbbfd23a170bf38e7155f57488fc6970b3e97f284",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:31.586Z"
+    },
+    {
+      "path": "tests/unit/peer-store-cooldown.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "9d6c3d60273ade366c7687ce5e3c4f4da87a13ea5ca0d5571a8648ee87dcb618",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:31.676Z"
+    },
+    {
+      "path": "tests/unit/peer-store.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "cb71397e30e4b7076ab0dee9dfd9f0ae57fc220b67fa094fbb895ff65b03d8a6",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:31.768Z"
+    },
+    {
+      "path": "tests/unit/planning-edges.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "fd4d52cf83a1dd606eff8ee8f9c457dcdb20105fdd5d13b8ebf59edfd7952503",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:31.862Z"
+    },
+    {
+      "path": "tests/unit/planning-viewport.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "81330396c365979c0cad73b8181117a00fabc4289870bfc9a43bfea973447f4a",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:31.991Z"
+    },
+    {
+      "path": "tests/unit/planning-wire.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "51ed4e790ed237ea4dce62161f95d25f8356b1865f25d2a19d17cf027c84babd",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:32.081Z"
+    },
+    {
+      "path": "tests/unit/planning-world.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "2e5ba6ca998af966552a75cbb05fd98043066978b86f7858894577027ecccc06",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:32.173Z"
+    },
+    {
+      "path": "tests/unit/reanchor-architecture.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "c6466899884cfecdd74298ae29981a42ba4df05d7356f4ceca423033687c1da5",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:32.270Z"
+    },
+    {
+      "path": "tests/unit/receipt-envelope-v2.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "da07cf4f9f94ef91a45c09517f92dc2ae113215853f522d461a380f7fb0f993b",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:32.364Z"
+    },
+    {
+      "path": "tests/unit/receipt-ladder.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "5fba49c1e8d1e079627fe896d355d512194337a8400e020c05dccb8f0f3ad936",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:32.469Z"
+    },
+    {
+      "path": "tests/unit/roster-op.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "2150d334fc168be8f4efedb70dc8c4a5bfd173961a7d4751a6ae3ebc2efbdc97",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:32.567Z"
+    },
+    {
+      "path": "tests/unit/same-mounted-url.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "912c2175dcf958ea280ff6fd5f39fdbb1178ffff52260822dbe817e6c6499d19",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:32.670Z"
+    },
+    {
+      "path": "tests/unit/self-suppress.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "8dd4f3a7c043511050915d0c24dfaa8a85a162d9474d89c11f10ab3fd6b6d1e5",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:32.768Z"
+    },
+    {
+      "path": "tests/unit/session-transcript.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "95e5623746a5acffce96e849f9683561084c1f7757ac1bc4e035ea22bd2c4b0e",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:32.864Z"
+    },
+    {
+      "path": "tests/unit/settler-claim-fields.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "b87f00c41c485b6671aedfdaca2a33b3b546b3c8f9392577de6d2a6745c8a4fb",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:32.960Z"
+    },
+    {
+      "path": "tests/unit/stage-css-contract.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "ede45253670ac81d7cdf68566b3b48eaa24bcd1084250e5caaaa884499bbecbe",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:33.051Z"
+    },
+    {
+      "path": "tests/unit/stage-mount.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "ee169875fa4557ff75e932e5f53c3b247ff966ede8cff3dfb853c88af841968a",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:33.147Z"
+    },
+    {
+      "path": "tests/unit/sync-answered.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "b78497b03b4025c4470f3e61ed91da88f858bb1fbb3793be71ac98ce2fece7fd",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:33.239Z"
+    },
+    {
+      "path": "tests/unit/task-auth-differential.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "604c4667965a8050654876318f591fa18bcea7a5e3ca2503536a71097af8ebf5",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:33.331Z"
+    },
+    {
+      "path": "tests/unit/task-auth.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "5478d09e1f2c9fcc2e540e53accf41fa716fcf705871d28817088d17dc407c5e",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:33.418Z"
+    },
+    {
+      "path": "tests/unit/task-cancel.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "592c5c34bcb81968863d86855ced024a9e1e6a0ddb101a11973c8a69a6aa77e6",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:33.510Z"
+    },
+    {
+      "path": "tests/unit/task-ledger.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "6d47dc473acd92a46f180a1ab480c7a415c1edf1d4e58d6d79c912710b2f981e",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:33.599Z"
+    },
+    {
+      "path": "tests/unit/verify-release-artifact.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "a309c187a2a723199ef6bef3d2f78b7451c903303eaf1bc7b791e367dcc47360",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:33.683Z"
+    },
+    {
+      "path": "tests/unit/verify-submission.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "d554691f07586e8c13ea9bbbc8790222df7e2350f6f32ddb9c8d1606deb6a1ab",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:33.771Z"
+    },
+    {
+      "path": "tests/unit/wire-abort-telemetry.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "34d4cdcd8b4975ea134ba25cabbd0afc579c86dbd25781fc370472d866d91b17",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:33.859Z"
+    },
+    {
+      "path": "tests/unit/zone.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "d562e82cead8ebe7d74c58500d6db7af7c2a9ac5c77c0a2dc892065670a20cb4",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:33.948Z"
+    },
+    {
+      "path": "tests/wire/apply.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "41426849e69daa32a38bac1c7ef96d06f40a4a4c429149533864fe6d6d8d6dc5",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:34.040Z"
+    },
+    {
+      "path": "tests/wire/canvas-remote.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "446c6a75762ac87d9c4365f9b66471b0b7cd2ae6bbe0b78ebde2bb2ae7f0671d",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:34.129Z"
+    },
+    {
+      "path": "tests/wire/canvas-routing.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "62217ca885b4f96754537cd21461e61baa0626000aced5d30c11593be7a0537c",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:34.216Z"
+    },
+    {
+      "path": "tests/wire/canvas-stage.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "df080df2ec5ada255d242a593d028b36659def64210e6dd01fd8624294f32ea8",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:34.304Z"
+    },
+    {
+      "path": "tests/wire/card-cache.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "aa876559df3a76777d7e47aee52267fa4bf97731ef9e4e510c8421f6928167a0",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:34.397Z"
+    },
+    {
+      "path": "tests/wire/control-body-object.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "826664f03a187d0a07dfec61702267d32b058b68976deaec447236fe2b1287b0",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:34.490Z"
+    },
+    {
+      "path": "tests/wire/envelope.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "91e875d118337fb0b701133b41a42ae6a8eacb1f8b06153cd4f6df2d045a6675",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:34.584Z"
+    },
+    {
+      "path": "tests/wire/gh224-target-queue.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "c3dd5bdcacfe471ca3cf854595234f66b253e69eec72fa6ae17fc99dfbdbd4a3",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:34.682Z"
+    },
+    {
+      "path": "tests/wire/gh253-answered-queue.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "4ff1639ebd22e110add55ca4c9ed87a91cb5463299cf0cf4f870b512236fb5a5",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:34.773Z"
+    },
+    {
+      "path": "tests/wire/gh60-hop-budget.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "e9a5c66ec7501fd6a9927f4db9c245da965cdfce1782249ee8d3b1c2b167e962",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:34.865Z"
+    },
+    {
+      "path": "tests/wire/gh91-flood-guard.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "a90a77ba3a32d21066f8eab6c410a58ab9a5eac917ae67b0c8b4210eced810db",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:34.959Z"
+    },
+    {
+      "path": "tests/wire/isolated.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "497d3a502ad2c1bae465cefa3603516e84f9bdc4fe67c2373a5e7f39e962485e",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:35.058Z"
+    },
+    {
+      "path": "tests/wire/issue43-same-zone-remote-ref.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "02bd7459db2fcca37fc4555bc79712316eb106f4ebf0f79b854bdd22c9823b36",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:35.155Z"
+    },
+    {
+      "path": "tests/wire/join-gate.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "de3e54b092f52242d163461de1b4c406238cceae380fb41cadd716dffdfa7307",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:35.261Z"
+    },
+    {
+      "path": "tests/wire/node-face.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "113ee059de9e3c6aa44406a198f7121f31718499051729ef170ee24d1a7524be",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:35.359Z"
+    },
+    {
+      "path": "tests/wire/node-work-status.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "b27c411dccb532394bd89c2e83f62f86949211c97d724fb169bd7e5f2603a662",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:35.457Z"
+    },
+    {
+      "path": "tests/wire/payload-cap.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "d0791b6c2cbdd4ce96a4b601a95df5f14b041237ba1576e3fe349691d16550a7",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:35.563Z"
+    },
+    {
+      "path": "tests/wire/pr143-owner-hotapply.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "d5cc61e1f7a99fb6f9504a2cbf8489f989cb1744e11ea4964c3be1b0e3b091cd",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:35.659Z"
+    },
+    {
+      "path": "tests/wire/quick-dispatch.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "b43f80ac7fc9f803a63271a0cf5b83841ecd359905dabc23b1ef08c1fcfb6d94",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:35.756Z"
+    },
+    {
+      "path": "tests/wire/receipt-autosend.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "425185147d9a3bf59dd9c177a32fbe55426d0caa4d77f65248b48c573d80bf7f",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:35.858Z"
+    },
+    {
+      "path": "tests/wire/reconcile.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "3568b9ce7ec4ebbe38de2fe20ed26783245fee17b2435a888bc37416436ae419",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:35.958Z"
+    },
+    {
+      "path": "tests/wire/remote-log.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "0828e869f485083278918495fad028cac9322e6d704f18314d9907276a9bb0f0",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:36.094Z"
+    },
+    {
+      "path": "tests/wire/report-ingress.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "7eed277c63cdda562bf7fcb0904a96ca336fb4b7c542ea833f09f91ffc0535eb",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:36.211Z"
+    },
+    {
+      "path": "tests/wire/report-suppress.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "c8dcbe09b32ca349b2e02d2dfcb84234c0d1d522181e9810c17ce8accd567b37",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:36.313Z"
+    },
+    {
+      "path": "tests/wire/roster-op.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "7c0a0a72eece2a3e00fa8b9135a4e1e369fe1f3586dcae12caee1388fefb8e3e",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:36.412Z"
+    },
+    {
+      "path": "tests/wire/rv145-report-loop-scope.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "d9b32657286438b9be5ed48890a7d2690d14b5756c22f40b1df2f7943c49f838",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:36.508Z"
+    },
+    {
+      "path": "tests/wire/self-route.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "0b71e4afc2efbbabc2da39600be006f042e1567f8c1a7cd5b375c424131d37fe",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:36.604Z"
+    },
+    {
+      "path": "tests/wire/session-log.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "5bcdc8c1c702f917460e991ab47741d0586e56a9925d4a135da231ab13eea58c",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:36.702Z"
+    },
+    {
+      "path": "tests/wire/task-abandon.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "a8d0cfc353096bc392f10c87fd0c1cb9b04feac0e6bd033be0d12a15a796c573",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:36.798Z"
+    },
+    {
+      "path": "tests/wire/task-idempotency.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "6edffc7eb6b404b3ffd17b64c4a9ff22027da8c70bc6a5a264b92e8edda64785",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:36.895Z"
+    },
+    {
+      "path": "tests/wire/team-roster.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "5b99cbb2557e2f5c412a34f00b8e7c80576a6b902b0d2b4be99605489744418e",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:36.989Z"
+    },
+    {
+      "path": "tests/wire/team-scope-info.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "138b51f7d6ea879987f4845aff3b0ee42a5f976023805757ca956b509a7d0360",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:37.080Z"
+    },
+    {
+      "path": "tests/wire/teams-bridge.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "bb95e0b4552c0b117aaa8eb6d9dc54a519daccb3be11755b89247dea1428e148",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:37.187Z"
+    },
+    {
+      "path": "tests/wire/text-guard.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "9828987168a921bea378ab394bfc7126594a44f0d44c4691222a517145a7d654",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:37.303Z"
+    },
+    {
+      "path": "tests/wire/wire-body-object.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "5a193f745610ddb2e16606ab7bf7a808ef60c440fc60e5ccf4be067c64ad9d0f",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:37.415Z"
+    },
+    {
+      "path": "tests/wire/zz-m1-fix-probe.spec.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "675db8c7fdd51500742f9cba718bd6edceff04b087f269d20bcacf86aba4a9a4",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:37.510Z"
+    },
+    {
+      "path": "tsdown.config.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "22103bd57e459eb9375b5c062ac1245d0209712b0ebc828665e98d63ec8a2f3d",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:37.608Z"
+    },
+    {
+      "path": "vitest.config.ts",
+      "old_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "new_sha256": "41ba539d7a007d9338ea10f2fafbb4b26968b4f2f27c6430b22c89c8fc14e8e4",
+      "reason": "initial registration (--add; #37 item 1 anchor)",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:49:37.701Z"
+    },
+    {
+      "path": "scripts/collect-release-measurements.mjs",
+      "old_sha256": "0ab097d0fb644b19d7a68927051af2afdb343b87edce708a55629a00b27612b2",
+      "new_sha256": "84124426e4040732f59ba4feca451f8ec259fc4f66a6a64f641c3145a8505039",
+      "reason": "一期原始快照wx排他创建与非有限JSON数值原文保留，无判据变更",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T15:50:17.098Z"
+    },
+    {
+      "path": "assets/stageDist/assets/index-C-28k_o5.js",
+      "old_sha256": "c078dc55af5db05eb03f86cd3597e23e88a11996ee7615ac2c89502f39580c40",
+      "new_sha256": "87f42e4280068993943e1dba30dc4b54cd6abd70481286da82b724a75edfdd42",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.133Z"
+    },
+    {
+      "path": "examples/external-node/index.mjs",
+      "old_sha256": "e04bbe5d1270e49927cedc3383bfcd344fea650a8c2d458f6934fe2c5b6f3ffb",
+      "new_sha256": "74528d9967a7a7f357f576f61ae4b2999ee3e660c7ccebd345d7a8fcf132a841",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.196Z"
+    },
+    {
+      "path": "feedback/2026-08-27-nexus-canvas-ux/shot_planning.py",
+      "old_sha256": "a4a4d1ddd5dcbb7e994b45325615bc1c6ca035d911ca6575b53e7b044b37998c",
+      "new_sha256": "15fd4c14f2d77aa474cdf4c4acb50b811487b04ba565243f14f795b53d263f13",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.257Z"
+    },
+    {
+      "path": "feedback/2026-08-27-nexus-canvas-ux/shot_status_quo.py",
+      "old_sha256": "3bbec77f1dbd6840ce90e52799939cb5e8cf6f2965914629e37ad5c713dd7157",
+      "new_sha256": "f5707f17f4694f0c2421418021bcb00d66fba756f716def82c96e5521f75ba08",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.322Z"
+    },
+    {
+      "path": "nexus-stage/scripts/mockhost.py",
+      "old_sha256": "9a04e009b06d87df69d61319ef03ce00ac2a61579fd442a356d80f654690f29e",
+      "new_sha256": "0799e62ed605158944518756373c0e34f71159050679b29211582aa28ddfbbdf",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.384Z"
+    },
+    {
+      "path": "nexus-stage/tests/chat-drawer-dom.spec.ts",
+      "old_sha256": "393799024f629d31222b9b4cb798186f42a0576d191599abeef2d258a363cb9f",
+      "new_sha256": "49c90e0fbda458fa402094c13a4ba5cee0d2e232b92ad988c29011f4e961c017",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.444Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-card-text.spec.ts",
+      "old_sha256": "6b2b93ef09cf1cd354640ef5444d4a2e97fdfcf6f7de3e0fc4ff08421a440bc9",
+      "new_sha256": "e43e5f3ba8b22d9d575d00d1624b7ccd76a33e46114c8ac2d4281cfa4c9965f6",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.510Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-dom.spec.ts",
+      "old_sha256": "530049a3d5575534d1171f08127246cfac01d818fa444f3171314dc24f2b90e1",
+      "new_sha256": "4839e3eddfc65b4701e1e3073dc43985dde484cdbf72c57d3c825ddd766d8cd9",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.572Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-federation-dom.spec.ts",
+      "old_sha256": "2fb58f2f81db07224763ac3a5658eeb04232c9cce9e4018493c6c4a9eeef02bf",
+      "new_sha256": "c763e61ab5f6b603be1454b0ccce16b81dc9329a18379ab4a865a04740bf988d",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.631Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-first-run-dom.spec.ts",
+      "old_sha256": "a71db74ed3b81b8f08b18528eeea968be56fac7a95b1a4664cdeb31cba43eb3f",
+      "new_sha256": "440b324382e2b1b0feb4edc1b2b5a68af70e0e1076908c444b30914b2460c04d",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.695Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-fit.spec.ts",
+      "old_sha256": "4c3e777830e308791150583ae89c28f9105c42100768876f4f7903ca28aa9749",
+      "new_sha256": "3554403aea9345593d7b2721e6fcdea57f18ff92e3e978943091622960f9def1",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.752Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-frame-solo.spec.ts",
+      "old_sha256": "2064c884b1c3f9e1e00cea3e4acf7488aa4589c95c886dbcf8672dd0f8336ce4",
+      "new_sha256": "a5badeddea95b4fe9d3cedf6eb6e9fb0f257ef6a5d7f49f357c548d6b4082018",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.812Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh108-settlement.spec.ts",
+      "old_sha256": "6f1ac1ef67bb12d9b70ae7448cb2329ffc81ed69e67f7e7965c3e20d0b90909a",
+      "new_sha256": "992b863a98f4d0d4813049e444704e4016064df1b09ed6165d5f6c798a59ecd7",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.872Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh41-fleet-frames.spec.ts",
+      "old_sha256": "2dad0f882ed051d1fe4c8a31a864e0a1c86aee092976349e680e7938f6e0ad98",
+      "new_sha256": "ceaf31ebb9a72c5b9b3ce80dc6a9e65c7d462852768b06ac32e03d704697c16c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.929Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh43-org-members.spec.ts",
+      "old_sha256": "fe20bffe13a3802eb5196f17098bdd425913ce29c1ce50e16e37efdcee892550",
+      "new_sha256": "f285e19ea5dc68992efc2affbcaa378555bfd86a4a17d5af4aee6c1b18797c55",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:24.987Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-gh48-tidy.spec.ts",
+      "old_sha256": "67c7b73c6d697fa039d370e2cf6d6cd1b131053248585e7daa5ad64d1e357944",
+      "new_sha256": "56664b9cd126d36bd2f28bf297b2a4e11bcf75eaa76d78ee196c98b77ac2e4b7",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.047Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-leave-mirror.spec.ts",
+      "old_sha256": "0f0459f82bc26834d2693865c39953be93c3080e791d168d28084ccfd4db945b",
+      "new_sha256": "4127a726b0084a0cc81f5b2858e0777104613213548b165d131ada9213805e06",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.115Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-member-badge.spec.ts",
+      "old_sha256": "87a44984aa52e80f8ecc59d096e88ade598a4719f7428360d4797b34318196ce",
+      "new_sha256": "402eb0118a4c8f34d6ffd7fc6d55e33c94226e1ab630f3b60cd238739944341c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.175Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-mirror.spec.ts",
+      "old_sha256": "2cc5491d411331ebff141559c3f2c8e45200ac2a0a72be8ab3b2b414c6e2620d",
+      "new_sha256": "fbc5f0beda728e2a728f71d4866440d15a25751279537e4e4888a4904492132e",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.236Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-nodelist-dom.spec.ts",
+      "old_sha256": "f93d58cbb0f2d2790fd8be223e17a35a4c774b9c8b97cd533a8e1afc6c9508dc",
+      "new_sha256": "fc6124646fc6f72f2d3080b34387561078a6ca5832485794b6e72139d027afef",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.299Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-overlap-dom.spec.ts",
+      "old_sha256": "ca60ef9fe6d82658a09de00062c47efc799139c5b8e94c9c9ce14c603656b9b5",
+      "new_sha256": "f158edcdad94b3b2cc6f4d61261f8ec0ebcf344e4cdf221ae20f71e1bcc39232",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.400Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-overlap.spec.ts",
+      "old_sha256": "d39326ae206a23cf0c7aa680014650059273fabc9042b18900c80994f9e9bcab",
+      "new_sha256": "5daa52af57b79f01120533350f7492fa6f19c24ebf48f64e4e29374cf11f9a23",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.464Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-relayout.spec.ts",
+      "old_sha256": "8b68b3001ad69aa6b6e70c0a42d703330c3a4d7c92a1ba756cbb49a063054f4e",
+      "new_sha256": "eec98b64106c447c9673be8bbee04c7261d84061b242785a773325cf669633a1",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.529Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-roster.spec.ts",
+      "old_sha256": "123ed07aedb596f0be32baf3da4820863061c94cf184729f7de5faaa389c569c",
+      "new_sha256": "66b032990b472ce76a1bfeabc578598bd7249039da2cfe18cc7f7ea0035aeea5",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.600Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-search.spec.ts",
+      "old_sha256": "81bfd8be5ef226a17a29e01b2b4f6547eb036602c731f7008a10a587cec2287a",
+      "new_sha256": "119f148ce2845d372c7c6fcad63e8fb82e3eb8ea9076da07a8a0511ccc2bf318",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.703Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-teams-dom.spec.ts",
+      "old_sha256": "60c9d50d0ebe71245165a06443e8eee725e26083c35a95e0fdb42fd06cfe0fbd",
+      "new_sha256": "f98627d77371b5f98b33f92366ffb4acfa0cae5dd0c3db39343c122d4007e1f3",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.767Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-undo.spec.ts",
+      "old_sha256": "29e6cec51b93b08c29823e1c8c5aa0fb61f6c2fcda82908c2d4da944362eab88",
+      "new_sha256": "753deee4054b15300d4e97e179125b42da4ceb3ccca1447ff31cd99fb92926e9",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.835Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-wb-compose.spec.ts",
+      "old_sha256": "3ace61e38d25a5535dcf27b7c8e94323bf0cc3547b36d5801526e0e1d838e6a8",
+      "new_sha256": "6fa73f917411d4559bb37d7d6a2c9b21e6877397d7e2ebc419f5d762115176bf",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.901Z"
+    },
+    {
+      "path": "nexus-stage/tests/planning-work-status.spec.ts",
+      "old_sha256": "6c993cce3dd9ec20eabdfb61095f4be2a1c19da61ed001dc4f743dffb164f672",
+      "new_sha256": "a4b64d231595aae322ad796efe48f87fe40e28bbc63c651ab160df4453436bb5",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:25.963Z"
+    },
+    {
+      "path": "nexus-stage/tests/rail-dom.spec.ts",
+      "old_sha256": "770e3c7e81b33cc69d735cd91cff130aa7c1976277a11538b47bf0022e9074ca",
+      "new_sha256": "e1c71d93ad7226449e3a6b505fe7806d2ca0be2fa246b333601066e7feed3b77",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.027Z"
+    },
+    {
+      "path": "nexus-stage/tests/seat-name-editor.spec.ts",
+      "old_sha256": "554f688b0cdaa67eb580ec0f49ed5133bc329204c2c8ed44d41c034c0a74a331",
+      "new_sha256": "00117423d1e58529b54b2c00b2494e0855e8d9e407736a5b36ad305fafd6e1a2",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.095Z"
+    },
+    {
+      "path": "nexus-stage/tests/session-drag.spec.ts",
+      "old_sha256": "347f09fe52c9b366a9736712c82f9c9610b366e537c1da83c10a8b8b5a1ec957",
+      "new_sha256": "6d275bb8c9c88124f1043f3d73fe4b934152172962147f971a29b43dccbbab6f",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.163Z"
+    },
+    {
+      "path": "nexus-stage/tests/viewport-fit.spec.ts",
+      "old_sha256": "6c94c74f4d2c7b108cc74f05ed4358fcd19876b04613d97c0535a631f2b315fe",
+      "new_sha256": "0c2857aa04ea895606a6a4fe96120935b89664aeb95a045fde10c3442dcb472a",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.255Z"
+    },
+    {
+      "path": "nexus-stage/vite.config.ts",
+      "old_sha256": "dd958a15ab2a6347e1cd22862c008ce2fa5e92213f7bdfd30581d1729154fec5",
+      "new_sha256": "2d2ab04369c144dc3dd42b66c1f1b782b6493619e8a50804387c08f689059613",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.317Z"
+    },
+    {
+      "path": "nexus-stage/vitest.config.ts",
+      "old_sha256": "9bd0ecc4544ae7da3930da75ea0b0e561b73bb027588eeab386bc96651de24e9",
+      "new_sha256": "02b57e63a6da91191bf360975b8d0c9f9008fdd232411b6ccfa98eeb51d3baf6",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.380Z"
+    },
+    {
+      "path": "scripts/copy-skill.mjs",
+      "old_sha256": "2da5530a6d6af92d2452b924f02dd20fbc9051e027b9893fe928a38e43cc828e",
+      "new_sha256": "9a91a47f38d48eb14392dc8b3476e7c501fee4f64b20c60b65703351e9d83f02",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.473Z"
+    },
+    {
+      "path": "scripts/doc-drift.mjs",
+      "old_sha256": "3c9e6ee0f1d509a5e793bcfe6f6af535cfc6b33cb95c5ff51cb5ac0c7724410f",
+      "new_sha256": "734810401893c9dcdf105b73868020757d3de5f35d4cd919950f7e024304daab",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.533Z"
+    },
+    {
+      "path": "scripts/reanchor-architecture.mjs",
+      "old_sha256": "23335bd23cde92571469e25abd9fcc9c3731cf48ec6ed19e125ca052d4bcc34f",
+      "new_sha256": "a7ed67dc5b13832159a4ae55569b28ba500314c215fb6bd86ac78f500bb6d64a",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.593Z"
+    },
+    {
+      "path": "scripts/supervisor-snapshot.mjs",
+      "old_sha256": "1b485bada541cde44c5cdde46313b227bbb31ae277d2fc5264940065cacd9c32",
+      "new_sha256": "b33fd58ea5f508108acb7ca4542d79130fabf3d59971b620bffd03af4665f991",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.654Z"
+    },
+    {
+      "path": "scripts/verify-architecture.mjs",
+      "old_sha256": "b3003e5d09aceeffd97532db263032cb81cc60a6aa27dd29385ed6b70205a523",
+      "new_sha256": "24f2c87103af8282dc7895bf1ab7bdef38028143ff56eb9ac4e38d7aa5598271",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.714Z"
+    },
+    {
+      "path": "scripts/verify-submission.mjs",
+      "old_sha256": "6fe0263c6d1da3d182f71632b43ae421e30569885064429c7f3f49781483e0d6",
+      "new_sha256": "fbb821abb7e80157db1ab0ba615a754f2cfcfb87a385b88bc6f94a889ca8bb28",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.773Z"
+    },
+    {
+      "path": "stage/vite.config.ts",
+      "old_sha256": "801319c63666162fdda4d6749d76e4e106b1d4f0a4bbe761dd7fb4b1f9c0cbbb",
+      "new_sha256": "626db8e561710d29787a18991fd7b8b1c34315924390e9ad9f85a1abab395570",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.836Z"
+    },
+    {
+      "path": "tests/gates/build-layout.spec.ts",
+      "old_sha256": "74f8f8d51317bdf9ae582c2aeb5ed02586a96cc154e86125807fe3561230156e",
+      "new_sha256": "507febbb775232f8f7d41eac9810697b54dc742d9c41967a03a59459ba570059",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.896Z"
+    },
+    {
+      "path": "tests/live/cross-machine.spec.ts",
+      "old_sha256": "9c1a4ff494316394ea988cfdda2d54dd1e0417214739b8f10b33d86705e3a9a0",
+      "new_sha256": "d8cb2712b79fc685e006b1f6d03e97fc0646f6e6f8da3fc179e037d41d175c7c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:26.958Z"
+    },
+    {
+      "path": "tests/mesh/boundary-hardening-w23.spec.ts",
+      "old_sha256": "29c34149341d20868d1746be7b29f93568db1a8e72d33862fbdb65ffacf7bdec",
+      "new_sha256": "8b0f086332875320f08b4a297d023a65ac68d10bc7f31a3183db192ab02839f4",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.020Z"
+    },
+    {
+      "path": "tests/mesh/canvas-mirror-notify.spec.ts",
+      "old_sha256": "08adb01c0b1ff7e2fa948cbf6514f01407f0cc5ddf8ebc34b982c3875236042c",
+      "new_sha256": "aab2dd754d7d4e84e8aa1360cc4f095166f353d19e1579604a5aeaf8cddebb39",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.082Z"
+    },
+    {
+      "path": "tests/mesh/cli-home-admission.spec.ts",
+      "old_sha256": "511d85e174778bcc38fe84af1b7d8dde792ee79c8525cf92c3a11883b102eb83",
+      "new_sha256": "d6533195e8ce6d01e44e12ddf41d00b45a55cc0ff13b19ec502cbaee1a9919da",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.181Z"
+    },
+    {
+      "path": "tests/mesh/file-channel-f1b.spec.ts",
+      "old_sha256": "5c6ac9533e147273bf1c938a0e63dd8cc19335c1258c908058bb33b0defbe7e5",
+      "new_sha256": "170a4a2a8c93a1d59a377edf04de35d213e8249e6ffbbea72e6a3302a8542b54",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.249Z"
+    },
+    {
+      "path": "tests/mesh/fleet-dissolve.spec.ts",
+      "old_sha256": "8a7ab08b2a53edb81d2ce39d8fd8b0f255e541d08cd27a9b2d99b7110daa9328",
+      "new_sha256": "c215905e39f411b33e15e4669424fc99a94405990e716c496887ef3b4a068143",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.321Z"
+    },
+    {
+      "path": "tests/mesh/gh108-capacity.spec.ts",
+      "old_sha256": "6419e27d5dee658621fc60fa7f598bde0be902578a62caaff262648130169fe3",
+      "new_sha256": "3c54cd35d35697ff17b1efb3e6ed34666fa618a3e805ece51c1581042e9f7456",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.388Z"
+    },
+    {
+      "path": "tests/mesh/gh113-mailbox-shape.spec.ts",
+      "old_sha256": "3217fb2965598a8a4f1fdc36e6cbf6cc2f7b67df8f48552729dbef12449e251c",
+      "new_sha256": "1b8ab65af7e0984a55f025fcb8a1ed5a442e00619b58ac97304e42d6c9d1c95c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.459Z"
+    },
+    {
+      "path": "tests/mesh/gh122-review-attacks.spec.ts",
+      "old_sha256": "cd9b000d71a4d0e66a9b2e9f0e2953e6b26cf776ecf5900c0b5848d6e03f8557",
+      "new_sha256": "2de7a78356eaf441288961aa4e02a73f7a6466b9207866f2c6336638897d457c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.526Z"
+    },
+    {
+      "path": "tests/mesh/gh122-settlement.spec.ts",
+      "old_sha256": "be59c8ac869d2abe9d811d8edd94ab73743ae312286363b6d5ef04fc1aed1aee",
+      "new_sha256": "b5c7cadac77107b8dfc29fc51b7dab90cc1730eeee43e469c806b507e7837778",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.630Z"
+    },
+    {
+      "path": "tests/mesh/gh125-echo-enforce.spec.ts",
+      "old_sha256": "39b1817b7b1b56d5a1a3ce95ece609a44e1897bba48b02cce14f7fceae7abdae",
+      "new_sha256": "c431a5f3db66247bd6cc5854d85c70ecee9a436b76e3f99b1d03cd60547a74aa",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.694Z"
+    },
+    {
+      "path": "tests/mesh/gh139-cross-host-legit.spec.ts",
+      "old_sha256": "7ccdd7e34f4aeee7f20069cd62b627f832e36cece1cc19a87aae23fe3a0c1009",
+      "new_sha256": "f7cf3d5dc2e8c5b736d742483bf510801653d96c802aec7f075675f49916a5d4",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.779Z"
+    },
+    {
+      "path": "tests/mesh/gh139-inbound-delivered-to.spec.ts",
+      "old_sha256": "92165f8c23312eb56d4eb62cd88830c60d0f5ad0324441046fd5339532a2c3fd",
+      "new_sha256": "90fd92d18e4ad5f4669601e695ea69173624d0bd80fdbfec4d7180df83664ef4",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.846Z"
+    },
+    {
+      "path": "tests/mesh/gh139-observer-local-auth.spec.ts",
+      "old_sha256": "963270e93226c6d0cdd90426abbe4ef047bbec26488c8bcfd5632824408b37b5",
+      "new_sha256": "160d7da190a818807d6ffa074128de110e4a3b412ad3ecc459b5b49937e3a808",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:27.949Z"
+    },
+    {
+      "path": "tests/mesh/gh141-receipt-delivery-row.spec.ts",
+      "old_sha256": "11f99e431777c955e8fa7f2f2d14106faf297e4bf20cee29ee202efc845d8d4e",
+      "new_sha256": "9953463a8d36d5881bafe03d8f283f670e9c224af846f4748e736e45278ed792",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.011Z"
+    },
+    {
+      "path": "tests/mesh/gh152-handle-member-visibility.spec.ts",
+      "old_sha256": "9d121af1c23414c5e935bfcca1804030409f29b54c2569dcea8b33abb7a6fe75",
+      "new_sha256": "8e190566bd1d94a44142d8b46c762316a2e936d073c43a7db9acd32f67cdac3b",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.074Z"
+    },
+    {
+      "path": "tests/mesh/gh189-path-claim-link.spec.ts",
+      "old_sha256": "4b64143dd3068334a8e4aea55fa8fb724cc7f6f6fe5bc92a28acda08bf4f0fee",
+      "new_sha256": "c32692c8a5cf3bb1eb6c52850836b0c17b044bb2bf193f5ab4b2b3e616c023fa",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.135Z"
+    },
+    {
+      "path": "tests/mesh/gh217-cross-host-receipt-scope.spec.ts",
+      "old_sha256": "78678612a4f706e34ecaa29ead4a93d6781e7b9a3815b0ea1765c68bb2dbd401",
+      "new_sha256": "74c2aa99b4b4f81923340c7997f00907560cb7ebf2675086d4be5f9af905f3c4",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.197Z"
+    },
+    {
+      "path": "tests/mesh/gh41-fleet-canvas.spec.ts",
+      "old_sha256": "045621e9a379184e296e36a3e03d3f953f59b799621d9fbd6765619a5696eab0",
+      "new_sha256": "09d7cf4e5f7f397a68272919670bb48f4d58248deeae7618fb6fafe656797af6",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.272Z"
+    },
+    {
+      "path": "tests/mesh/gh45-cli-deposit.spec.ts",
+      "old_sha256": "3be8beb89f9119419e3c26ec6998cd90184b3fa85482f3d5cf109701235788bc",
+      "new_sha256": "189a80aefff324211eb86b83d05f6b30fee926f1ffe2a3a5b70b28169d30e752",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.345Z"
+    },
+    {
+      "path": "tests/mesh/gh58-seat-name.spec.ts",
+      "old_sha256": "836e366ab9ab66b010625349b01249fd01d6f6d1e11fb450312c7ba06997726f",
+      "new_sha256": "784ee0ecb46e6fb8756959b7652120a64be3d56bba45971cea8216df7187540c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.462Z"
+    },
+    {
+      "path": "tests/mesh/issue41-canvas-self-skip.spec.ts",
+      "old_sha256": "8a074e6e8bb747705b98b6b234655111995f5e98d6f87e1ec3f599c66f00967a",
+      "new_sha256": "ca3f02ab78d503eb325b564bf5b91961c9e304a5b0c0267f9596c3d946e4a085",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.529Z"
+    },
+    {
+      "path": "tests/mesh/link-state.spec.ts",
+      "old_sha256": "77de33ab3a0d8b384c529aff20abce402f6f5a049b88ccdb0ae8d9a6ba2da2db",
+      "new_sha256": "7ebe872b5b41f74ad362ef21d69847eca209a0779bfc7678b647115ac290ba00",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.608Z"
+    },
+    {
+      "path": "tests/mesh/mesh-anomalies.spec.ts",
+      "old_sha256": "a323eb15767cbfd7bf3413998f88016e604ddd46fe5bbe041544220b1847a2b0",
+      "new_sha256": "7ff26fb16c8e327abb5673bd1beed4f25221d2f723de92b6ababe5faa33b5fd5",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.675Z"
+    },
+    {
+      "path": "tests/mesh/mesh-baseline.spec.ts",
+      "old_sha256": "87c7baf18a7cf9535ce5732d672072e302797b3f77e41c888433a72092b35240",
+      "new_sha256": "028bfee2ded170050d69898e98a4048c27d7a90183f676acf4b8be83f1a61c16",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.746Z"
+    },
+    {
+      "path": "tests/mesh/mesh-faults.spec.ts",
+      "old_sha256": "608d35ca16e0e2924e1e43def8291781203312d1b51d6568b8f15c6ad11ebef1",
+      "new_sha256": "5a333b7b9f039336f8228218064b1e91c3480a03683eaba19fb86a70e4a5907d",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.822Z"
+    },
+    {
+      "path": "tests/mesh/origin-claim-audience.spec.ts",
+      "old_sha256": "5176cfb9f3ef2c6f3a32afefe2bd748a38ea09c67622b57cc80f503cf1713b85",
+      "new_sha256": "58cb585f59f9429abbe5ff24afe69a711976558cee5b676fe25915a75c1dc206",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.903Z"
+    },
+    {
+      "path": "tests/mesh/origin-claim-body-v3.spec.ts",
+      "old_sha256": "d3218247cc9736021adb208329ca3e44d3b1225671f5fad27da07266f22067d4",
+      "new_sha256": "1a101d8b2ba2c4e0052840ca015efe190b0a62a95b3ee2368c4ae852bd6832af",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:28.996Z"
+    },
+    {
+      "path": "tests/mesh/tool-output-schema.spec.ts",
+      "old_sha256": "ebf6d8e11723a45e8443ee3c59c711d0b001667376758931213707f23db153dc",
+      "new_sha256": "5969aaa8520445ee4dacdd55afcbc2f1a2daa9eb3aa0169fbe72cee39238db8f",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.065Z"
+    },
+    {
+      "path": "tests/mesh/xjoin-relay.spec.ts",
+      "old_sha256": "103715dd89caca635458733c3bad674faf580e9f1514ba52b739bd6bbdce621a",
+      "new_sha256": "c35c4c2d7c0384eef5510efe7ac44249f9047859de73d2c11f36e8ab510434f7",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.149Z"
+    },
+    {
+      "path": "tests/unit/architecture-audit.spec.ts",
+      "old_sha256": "ca48d1105d8387370705e3aecaee0c78a15a0359311ab4ceed0a8d3f8cbe93e3",
+      "new_sha256": "ae3672fc4c5d4647702dde97aa9ab5574781f894fa9796e335d9a9b457e94bc5",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.216Z"
+    },
+    {
+      "path": "tests/unit/canvas-discovery.spec.ts",
+      "old_sha256": "77a0b2b7d531519614b53a349ace1faa45f15c9753e6aa2f3dfa8ca9392e2aed",
+      "new_sha256": "91b649330a0974493df8c681670608e6fb45979dcec010f8b45d7fb54354543b",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.280Z"
+    },
+    {
+      "path": "tests/unit/canvas-notify.spec.ts",
+      "old_sha256": "400fc8a3cc16c97429c932d44e62feba470ec357dd3d7805040e456f9e98ac4c",
+      "new_sha256": "6493ef1b4a0c446f83cdb36909465d73c7cdf3b25623d89c238d45eb5a196c45",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.345Z"
+    },
+    {
+      "path": "tests/unit/canvas-wire.spec.ts",
+      "old_sha256": "91de8b7128ccaaef2d090fb4c30930c5e3fe3e772ab7fb9a7f8b5369fd955593",
+      "new_sha256": "e7e4a4c8cb94120075650ddb12dd7f2dcbe3893ffaf90e00280a13b8adc3df74",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.455Z"
+    },
+    {
+      "path": "tests/unit/card.spec.ts",
+      "old_sha256": "78d033d9d8266db86810e2ef7b5a7f04d6d2f0610e283ee205e5f7f3a583043c",
+      "new_sha256": "3c6bde7cdc8cae639651ebb364bd263e0a32c6c6488b747bc3165847a22e76eb",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.523Z"
+    },
+    {
+      "path": "tests/unit/cli-home.spec.ts",
+      "old_sha256": "5f9bdb1788d68b38e774265d52d9e269722177218e7126431e5c26ffb01ebd23",
+      "new_sha256": "7eee67671d97a1d80f77261d9fce5b3c2ec3f70bf980cdc8de94bac81fc8291b",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.589Z"
+    },
+    {
+      "path": "tests/unit/fixtures/receipt-pre-s5.ts",
+      "old_sha256": "ad82558698cebe6eeda6db56e1d55ed75a69088fab84a5f6dfd44a89675a3bce",
+      "new_sha256": "f8e39edb1bcac7112d94216a1c9676bcbe41ce0211cf22eb3023e214983fb387",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.654Z"
+    },
+    {
+      "path": "tests/unit/gh123-auth-ref.spec.ts",
+      "old_sha256": "f9cd88f33e275f7ba231993620dee7b2d609add6ecccf78a47aaac15b0afbe76",
+      "new_sha256": "3216876ba19e4ebb0e1515cd0c2da8bf1c58566ec86af740bcca12af06961009",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.722Z"
+    },
+    {
+      "path": "tests/unit/gh141-own-inbound.spec.ts",
+      "old_sha256": "cb386df7cf8384f638b1dd37a7065023925c76b116b8ebf50eaf6410675532d3",
+      "new_sha256": "45df4ce699c7df5d86dc2c465be1b1259ef5f9e7d8a40052830201c1832ade7f",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.822Z"
+    },
+    {
+      "path": "tests/unit/gh159-peer-directory.spec.ts",
+      "old_sha256": "9d156d7eb77dabe52eedb6a22ce44b64f5569354592bfced7d0aa6038b6b94d0",
+      "new_sha256": "31698030791b27e5300c5f17f88ca54402dcb4ba94df87800f2e7de36eb0972b",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.890Z"
+    },
+    {
+      "path": "tests/unit/gh224-queue-guard.spec.ts",
+      "old_sha256": "034f2f0c3826ddd89ac96ac08ace6992cd7f617ca2c4266f3830671f52431a25",
+      "new_sha256": "5ec4e5f65ef42f8b7c7e95b92a9cc037576534918674338245121edd08bfc24c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:29.975Z"
+    },
+    {
+      "path": "tests/unit/gh91-flood-guard.spec.ts",
+      "old_sha256": "a2ec502b506db7059ade7b3124918d496dc5008983272d33a73eb92e7a1cb02a",
+      "new_sha256": "31c49d8472a8bc91d968bffc4e6419264a566d7e7248ca2731759b2f515adedf",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.042Z"
+    },
+    {
+      "path": "tests/unit/join-gate-fix12.spec.ts",
+      "old_sha256": "9c99d5f1a0f95826bf04ef752691b88ffefa07e2a8df8499a489dd76c1d5dc82",
+      "new_sha256": "ec0bd687d013309c90309bb589e911b7a4e38f38c133d02bb245c853f37c9b11",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.140Z"
+    },
+    {
+      "path": "tests/unit/load-path.spec.ts",
+      "old_sha256": "fe9a864ed1d0e45bae6eabeeefc2895324acdcc726bd7cbdc22b42818db7c668",
+      "new_sha256": "2e53f0ff15eab8bb35ecab011ca22464d9d326e66352b58390c99c371e5f50bb",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.204Z"
+    },
+    {
+      "path": "tests/unit/node-self.spec.ts",
+      "old_sha256": "3428c997df956d9ddeefdc612b5fefbb376a2ca6fe7d571a687caab17b8d1825",
+      "new_sha256": "a8db4db185727b3ebecc3669af0949c77f5e23649295544d0dcea1d6c672b46a",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.267Z"
+    },
+    {
+      "path": "tests/unit/outbound-scope.spec.ts",
+      "old_sha256": "8c8cbba2c0dba98667e3c475f4247927cb68a7a622cf67d6c18173e515ca12e1",
+      "new_sha256": "b29ad75fff7287ef62a800fb53d7015943aadc5dc7fc57da26d8b6041d3b789c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.330Z"
+    },
+    {
+      "path": "tests/unit/owner-settings.spec.ts",
+      "old_sha256": "d6b829eb54b29fa22fd9a2f6abe5941939ca5d63579992369b5c3a7caf5dd8f2",
+      "new_sha256": "7136b5b3462b3c25caa14b8b3a510cddacdeeeea3b325610e56a7924a0a4b4f1",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.392Z"
+    },
+    {
+      "path": "tests/unit/planning-world.spec.ts",
+      "old_sha256": "2e5ba6ca998af966552a75cbb05fd98043066978b86f7858894577027ecccc06",
+      "new_sha256": "4b61a64943098b3e07910e2c20594deedfd5d2dc72ead416100d9ca2508874d3",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.456Z"
+    },
+    {
+      "path": "tests/unit/reanchor-architecture.spec.ts",
+      "old_sha256": "c6466899884cfecdd74298ae29981a42ba4df05d7356f4ceca423033687c1da5",
+      "new_sha256": "3b8cdd0dc59e94c6cf9e2d5c3198fea36eb332e6aa5facafc18a36955a7051dc",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.518Z"
+    },
+    {
+      "path": "tests/unit/receipt-ladder.spec.ts",
+      "old_sha256": "5fba49c1e8d1e079627fe896d355d512194337a8400e020c05dccb8f0f3ad936",
+      "new_sha256": "63c2bedae1837cb7c923165e506716d1cf6b0e6c6bc6bedaeef5ec2f73e04ecf",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.582Z"
+    },
+    {
+      "path": "tests/unit/same-mounted-url.spec.ts",
+      "old_sha256": "912c2175dcf958ea280ff6fd5f39fdbb1178ffff52260822dbe817e6c6499d19",
+      "new_sha256": "251caa622564e9e02a77f0a4736fd5ebad6e278d977148e2ff56eaf6eb770e47",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.677Z"
+    },
+    {
+      "path": "tests/unit/self-suppress.spec.ts",
+      "old_sha256": "8dd4f3a7c043511050915d0c24dfaa8a85a162d9474d89c11f10ab3fd6b6d1e5",
+      "new_sha256": "be5256a42e31d305fa1e720adf418b58e5519659944461bf1fc22c9616fe63bd",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.738Z"
+    },
+    {
+      "path": "tests/unit/settler-claim-fields.spec.ts",
+      "old_sha256": "b87f00c41c485b6671aedfdaca2a33b3b546b3c8f9392577de6d2a6745c8a4fb",
+      "new_sha256": "c6f3bdab5ba78e9df99a0ce7f21b324c9c03cd903e1fc19ee184866e9f88561c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.803Z"
+    },
+    {
+      "path": "tests/unit/stage-mount.spec.ts",
+      "old_sha256": "ee169875fa4557ff75e932e5f53c3b247ff966ede8cff3dfb853c88af841968a",
+      "new_sha256": "1812040ca6308668401e12a01bb409a97420fc0137fcfbdc34f9ef428552cfdd",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.861Z"
+    },
+    {
+      "path": "tests/unit/task-auth-differential.spec.ts",
+      "old_sha256": "604c4667965a8050654876318f591fa18bcea7a5e3ca2503536a71097af8ebf5",
+      "new_sha256": "02813971f1c0ab491bed05252d2b36a00ec8df9f45f539c4f893ec70876da832",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.923Z"
+    },
+    {
+      "path": "tests/unit/task-auth.spec.ts",
+      "old_sha256": "5478d09e1f2c9fcc2e540e53accf41fa716fcf705871d28817088d17dc407c5e",
+      "new_sha256": "54fb8e21870f1f25bb6f6cdbf5fe0b90398dec0414a74739f92f83988458f182",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:30.983Z"
+    },
+    {
+      "path": "tests/unit/wire-abort-telemetry.spec.ts",
+      "old_sha256": "34d4cdcd8b4975ea134ba25cabbd0afc579c86dbd25781fc370472d866d91b17",
+      "new_sha256": "f36ae6595241ee4ab96d3a186a8472fcc56dc0472662c6751954763c191c1806",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:31.046Z"
+    },
+    {
+      "path": "tests/unit/zone.spec.ts",
+      "old_sha256": "d562e82cead8ebe7d74c58500d6db7af7c2a9ac5c77c0a2dc892065670a20cb4",
+      "new_sha256": "130c55b79121cfa34dc5d846762d3a73f420e314225f47780703096904be4f0c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:31.106Z"
+    },
+    {
+      "path": "tests/wire/gh253-answered-queue.spec.ts",
+      "old_sha256": "4ff1639ebd22e110add55ca4c9ed87a91cb5463299cf0cf4f870b512236fb5a5",
+      "new_sha256": "e0a84fa78aeda74d84978dd8e88f706763e474bdf069d86ab29817b87818c8c6",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:31.201Z"
+    },
+    {
+      "path": "tests/wire/gh91-flood-guard.spec.ts",
+      "old_sha256": "a90a77ba3a32d21066f8eab6c410a58ab9a5eac917ae67b0c8b4210eced810db",
+      "new_sha256": "1d8aee079aa39594e552d5bcb2133bf3dc77ad8e051145abfe4f64ca4b79387b",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:31.262Z"
+    },
+    {
+      "path": "tests/wire/receipt-autosend.spec.ts",
+      "old_sha256": "425185147d9a3bf59dd9c177a32fbe55426d0caa4d77f65248b48c573d80bf7f",
+      "new_sha256": "308d7e70b8cb31b1b7f3d76a754ed9deaa7657fff18026571116a1b79fc30bd6",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:31.322Z"
+    },
+    {
+      "path": "tests/wire/report-ingress.spec.ts",
+      "old_sha256": "7eed277c63cdda562bf7fcb0904a96ca336fb4b7c542ea833f09f91ffc0535eb",
+      "new_sha256": "1497780782f6aae6e40861021692c836fee6802bbfb7185f4e246c62f6c74f1c",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:31.379Z"
+    },
+    {
+      "path": "vitest.config.ts",
+      "old_sha256": "41ba539d7a007d9338ea10f2fafbb4b26968b4f2f27c6430b22c89c8fc14e8e4",
+      "new_sha256": "9d57aa0d681d258a7a8e7a724d70cb8efac014093a0482d8d001bb142381ae77",
+      "reason": "登记可移植修复；证据锚7e1603aaaa747b1feee91fc2b719e3e47b53b2c6；HEAD已LF，仅清陈旧CRLF工作树",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:12:31.472Z"
+    },
+    {
+      "path": "tests/unit/verify-submission.spec.ts",
+      "old_sha256": "d554691f07586e8c13ea9bbbc8790222df7e2350f6f32ddb9c8d1606deb6a1ab",
+      "new_sha256": "aef2d55a8c42e046396be23e7688621bea05890cb2c833a8cfb9b3b4a675a6cc",
+      "reason": "批准e09761e退场清单：保留绑定行为用例，第三例迁移直接CLI三产物与唯一submission文档入口",
+      "actor": "dsh/f49961b0",
+      "at": "2026-11-05T16:42:08.289Z"
+    }
+  ]
 }
