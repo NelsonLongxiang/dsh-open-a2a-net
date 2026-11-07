@@ -12,8 +12,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync } from '../temp-dirs.ts'
-import { CAPS, KV as SNAP_KV, key as snapKey, seqGaps, isLoss, parseWindow, checkTally, TALLY, flattenShadow } from '../../scripts/a2a-shadow-snapshot.mjs'
-import { HEALTH_RECORD_CAP, KV, PAGE_RECORD_CAP, ROW_RECORD_CAP } from '../../src/superagent/a2a-watch.ts'
+import { CAPS, KV as SNAP_KV, key as snapKey, LINK_RULES as SNAP_LINK_RULES, LOOP_PREFIX as SNAP_LOOP_PREFIX, seqGaps, isLoss, parseWindow, checkTally, TALLY, flattenShadow } from '../../scripts/a2a-shadow-snapshot.mjs'
+import { HEALTH_RECORD_CAP, KV, LINK_RULES, LOOP_PREFIX, PAGE_RECORD_CAP, ROW_RECORD_CAP } from '../../src/superagent/a2a-watch.ts'
 import { key } from '../../src/superagent/source-types.ts'
 
 const repo = process.cwd()
@@ -83,6 +83,58 @@ describe('p2 shadow collector (verify-probe --a2a-shadow)', () => {
     expect(SNAP_KV).toEqual({ rows: KV.rows, pages: KV.pages, healthLog: KV.healthLog })
     expect(CAPS).toEqual({ rows: ROW_RECORD_CAP, pages: PAGE_RECORD_CAP, health: HEALTH_RECORD_CAP })
     expect(snapKey('a2a', 'from/1', 'task-9')).toBe(key('a2a', 'from/1', 'task-9'))
+    expect([...SNAP_LINK_RULES].sort()).toEqual([...LINK_RULES].sort())
+    expect(SNAP_LOOP_PREFIX).toBe(LOOP_PREFIX)
+  })
+
+  it('p3: rows keep the admission; heartbeat pages carry their counts and both gaps; A14 and A15 tallies', () => {
+    const hb = (at: string, rounds: number, rows: number) => ({ at, after: 'ep1:9', next: 'ep1:9', epoch: 'ep1', lost: 0, epochChanged: false, cursorAhead: false, heartbeat: true, rounds, rows })
+    const f = fixture({
+      rows: [
+        row(1, 'stored', '2026-11-07T00:10:00.000Z', { proof: 'cli-identity', admission: 'cli-deposit' }), // before the first heartbeat's delta, still an A14 row
+        row(2, 'stored', '2026-11-07T00:40:00.000Z', { proof: 'cli-identity', admission: 'cli-deposit' }), // A14 counts it
+        row(3, 'stored', '2026-11-07T00:40:00.000Z', { proof: 'cli-identity', admission: 'roster-shared' }), // not a link
+        row(4, 'filtered:loop', '2026-11-07T00:40:00.000Z', { proof: 'cli-identity', admission: 'cli-deposit', task_id: 'a2a-x' }),
+        row(7, 'stored', '2026-11-07T00:40:00.000Z', { proof: 'cli-identity', admission: 'cli-deposit', task_id: 'a2a-y' }), // even stored, a loop id never counts for A14
+        row(5, 'stored', '2026-11-07T01:10:00.000Z', { proof: 'cli-identity', admission: 'canvas-shared', receipt_for: 'j' }), // a receipt
+        row(6, 'stored', '2026-11-07T01:10:00.000Z', { proof: 'origin-claim', admission: 'canvas-shared' }),
+      ],
+      pages: [
+        hb('2026-11-07T00:10:00.000Z', 20, 1),
+        { at: '2026-11-07T00:40:00.000Z', after: 'ep1:1', next: 'ep1:4', epoch: 'ep1', lost: 0, epochChanged: false, cursorAhead: false },
+        hb('2026-11-07T01:10:00.000Z', 120, 6), // rows 2..7 lie in (00:10, 01:10]: delta 0
+        hb('2026-11-07T02:20:30.000Z', 140, 0), // 70.5 minutes after the last: rounded up to 71
+      ],
+      health: [],
+    })
+    const r = probe(['--a2a-shadow', f.source, '--cli-home', f.cliHome, '--window', WINDOW, '--out', f.out])
+    expect(r.code, r.stdout + r.stderr).toBe(0)
+    expect(all(f.out, 'SELECT seq, admission FROM shadow_rows ORDER BY rowid').map(x => x.admission)).toEqual(['cli-deposit', 'cli-deposit', 'roster-shared', 'cli-deposit', 'cli-deposit', 'canvas-shared', 'canvas-shared'])
+    expect(all(f.out, 'SELECT at, heartbeat, rounds, rows, hb_gap_min, hb_next_gap_min FROM shadow_pages ORDER BY rowid')).toEqual([
+      { at: '2026-11-07T00:10:00.000Z', heartbeat: 1, rounds: 20, rows: 1, hb_gap_min: 10, hb_next_gap_min: 60 },
+      { at: '2026-11-07T00:40:00.000Z', heartbeat: 0, rounds: null, rows: null, hb_gap_min: null, hb_next_gap_min: null },
+      { at: '2026-11-07T01:10:00.000Z', heartbeat: 1, rounds: 120, rows: 6, hb_gap_min: 60, hb_next_gap_min: 71 },
+      { at: '2026-11-07T02:20:30.000Z', heartbeat: 1, rounds: 140, rows: 0, hb_gap_min: 71, hb_next_gap_min: 1300 }, // to the window's end
+    ])
+    expect(r.json.tally).toMatchObject({ cli_identity_stored: 2, heartbeat_row_delta: 0 }) // rows 1 and 2
+    // A heartbeat that under-counts its rows shows as a non-zero delta, recounted from the snapshot.
+    const g = fixture({ rows: [row(2, 'stored', '2026-11-07T00:40:00.000Z'), row(3, 'stored', '2026-11-07T00:50:00.000Z')],
+      pages: [hb('2026-11-07T00:10:00.000Z', 1, 0), hb('2026-11-07T01:10:00.000Z', 120, 1)], health: [] })
+    const r2 = probe(['--a2a-shadow', g.source, '--cli-home', g.cliHome, '--window', WINDOW, '--out', g.out])
+    expect(r2.code, r2.stdout + r2.stderr).toBe(0)
+    expect(r2.json.tally).toMatchObject({ heartbeat_row_delta: -1 })
+    expect(all(g.out, "SELECT n FROM shadow_tally WHERE name = 'heartbeat_row_delta'")).toEqual([{ n: -1 }])
+  })
+
+  it('p3: a malformed heartbeat page fails closed with no snapshot', () => {
+    const base = { at: '2026-11-07T01:00:00.000Z', after: 'ep1:1', next: 'ep1:3', epoch: 'ep1', lost: 0, epochChanged: false, cursorAhead: false }
+    for (const bad of [{ ...base, heartbeat: 1, rounds: 1, rows: 0 }, { ...base, heartbeat: true, rounds: -1, rows: 0 }, { ...base, heartbeat: true, rounds: 1 },
+      { ...base, heartbeat: true, rounds: 1.5, rows: 0 }, { ...base, rounds: 3 }, { ...base, rows: 3 }]) {
+      const f = fixture({ pages: [bad] })
+      const r = probe(['--a2a-shadow', f.source, '--cli-home', f.cliHome, '--window', WINDOW, '--out', f.out])
+      expect(r.code, JSON.stringify(bad)).toBe(1)
+      expect(existsSync(f.out)).toBe(false)
+    }
   })
 
   it('flattens the records into a new snapshot and leaves the source byte-identical', () => {
@@ -118,8 +170,8 @@ describe('p2 shadow collector (verify-probe --a2a-shadow)', () => {
     expect(all(f.out, 'SELECT handle, task_id, at, source_handle FROM shadow_sent')).toEqual([{ handle: 'other/1', task_id: 'x1', at: '2026-11-07T01:30:00.000Z', source_handle: SOURCE_HANDLE }])
     expect(readFileSync(f.out).toString('latin1')).not.toMatch(/SECRET/)
     expect(all(f.out, 'SELECT name, n FROM shadow_tally ORDER BY name')).toEqual([
-      { name: 'gaps_uncovered', n: 0 }, { name: 'outbox_sent', n: 0 }, { name: 'source_sent', n: 0 }, { name: 'tickets_a2a', n: 0 }])
-    expect(r.json.tally).toEqual({ outbox_sent: 0, source_sent: 0, tickets_a2a: 0, gaps_uncovered: 0 })
+      { name: 'cli_identity_stored', n: 0 }, { name: 'gaps_uncovered', n: 0 }, { name: 'heartbeat_row_delta', n: 0 }, { name: 'outbox_sent', n: 0 }, { name: 'source_sent', n: 0 }, { name: 'tickets_a2a', n: 0 }])
+    expect(r.json.tally).toEqual({ outbox_sent: 0, source_sent: 0, tickets_a2a: 0, gaps_uncovered: 0, cli_identity_stored: 0, heartbeat_row_delta: 0 })
 
     // Rerunnable: the same inputs into another new file give the same tables.
     const again = join(f.dir, 'snap2.sqlite')
@@ -209,7 +261,7 @@ describe('p2 shadow collector (verify-probe --a2a-shadow)', () => {
     expect(existsSync(f.out)).toBe(false)
   })
 
-  it('shadow_tally: the four zero-must-hold counts, from the rows written into the snapshot', () => {
+  it('shadow_tally: the zero-must-hold counts and the p3 counts, from the rows written into the snapshot', () => {
     const f = fixture({ rows: [
       row(2, 'stored', '2026-11-07T01:00:00.000Z'), row(3, 'filtered:unverified', '2026-11-07T01:00:00.000Z', { proof: 'cli-identity' }),
       row(6, 'filtered:receipt', '2026-11-07T02:00:00.000Z', { receipt_for: 'job-1' }),
@@ -224,9 +276,9 @@ describe('p2 shadow collector (verify-probe --a2a-shadow)', () => {
     appendFileSync(join(f.cliHome, 'sent.1.jsonl'), `${JSON.stringify({ handle: SOURCE_HANDLE, at: Date.parse('2026-11-07T04:00:00Z'), task_id: 's1' })}\n${JSON.stringify({ handle: SOURCE_HANDLE, at: Date.parse('2026-11-06T04:00:00Z'), task_id: 's0' })}\n`)
     const r = probe(['--a2a-shadow', f.source, '--cli-home', f.cliHome, '--window', WINDOW, '--out', f.out])
     expect(r.code, r.stdout).toBe(0)
-    expect(r.json.tally).toEqual({ outbox_sent: 1, source_sent: 1, tickets_a2a: 1, gaps_uncovered: 1 })
+    expect(r.json.tally).toEqual({ outbox_sent: 1, source_sent: 1, tickets_a2a: 1, gaps_uncovered: 1, cli_identity_stored: 0, heartbeat_row_delta: 0 })
     expect(all(f.out, 'SELECT name, n FROM shadow_tally ORDER BY name')).toEqual([
-      { name: 'gaps_uncovered', n: 1 }, { name: 'outbox_sent', n: 1 }, { name: 'source_sent', n: 1 }, { name: 'tickets_a2a', n: 1 }])
+      { name: 'cli_identity_stored', n: 0 }, { name: 'gaps_uncovered', n: 1 }, { name: 'heartbeat_row_delta', n: 0 }, { name: 'outbox_sent', n: 1 }, { name: 'source_sent', n: 1 }, { name: 'tickets_a2a', n: 1 }])
     // The detail rows stay beside the counts for audit.
     expect(all(f.out, 'SELECT seq, covered FROM shadow_seq_gaps ORDER BY seq')).toEqual([{ seq: 4, covered: 1 }, { seq: 5, covered: 1 }, { seq: 7, covered: 0 }])
   })
@@ -244,7 +296,7 @@ describe('p2 shadow collector (verify-probe --a2a-shadow)', () => {
     } finally { real.close(); sourceDb.close() }
   })
 
-  it('checkTally: exactly the four rows, each equal to its re-count, or the run fails', () => {
+  it('checkTally: exactly the TALLY rows, each equal to its re-count, or the run fails', () => {
     const make = (extra: string) => {
       mkdirSync(join(repo, 'tmp'), { recursive: true })
       const db = new DatabaseSync(join(mkdtempSync(join(repo, 'tmp', 'a2a-shadow-tally-')), 'snap.sqlite'))
@@ -252,18 +304,21 @@ describe('p2 shadow collector (verify-probe --a2a-shadow)', () => {
         CREATE TABLE shadow_sent (handle TEXT, task_id TEXT, at TEXT, source_handle TEXT);
         CREATE TABLE shadow_tickets (id TEXT, basis_source TEXT);
         CREATE TABLE shadow_seq_gaps (epoch TEXT, seq INTEGER, covered INTEGER);
+        CREATE TABLE shadow_rows (outcome TEXT, proof TEXT, receipt_for TEXT, admission TEXT, task_id TEXT, at TEXT);
+        CREATE TABLE shadow_pages (at TEXT, heartbeat INTEGER, rows INTEGER);
         CREATE TABLE shadow_tally (name TEXT PRIMARY KEY, n INTEGER NOT NULL);
         INSERT INTO shadow_outbox VALUES ('o1', 'a2a', 'sent', NULL);
         ${extra}`)
       return db
     }
-    const four = (outbox: number) => `INSERT INTO shadow_tally VALUES ('outbox_sent', ${String(outbox)}), ('source_sent', 0), ('tickets_a2a', 0), ('gaps_uncovered', 0);`
+    const four = (outbox: number) => `INSERT INTO shadow_tally VALUES ('outbox_sent', ${String(outbox)}), ('source_sent', 0), ('tickets_a2a', 0), ('gaps_uncovered', 0), ('cli_identity_stored', 0), ('heartbeat_row_delta', 0);`
     expect(() => checkTally(make(four(1)))).not.toThrow()
     expect(() => checkTally(make(four(0)))).toThrow(/outbox_sent is 0 but the snapshot holds 1/)
     expect(() => checkTally(make("INSERT INTO shadow_tally VALUES ('outbox_sent', 1), ('source_sent', 0), ('tickets_a2a', 0);"))).toThrow(/exactly/)
     expect(() => checkTally(make(`${four(1)} INSERT INTO shadow_tally VALUES ('outbox_sent_x', 0);`))).toThrow(/exactly/)
-    expect(() => checkTally(make("INSERT INTO shadow_tally VALUES ('outbox_sentX', 1), ('source_sent', 0), ('tickets_a2a', 0), ('gaps_uncovered', 0);"))).toThrow(/exactly/)
-    expect(Object.keys(TALLY).sort()).toEqual(['gaps_uncovered', 'outbox_sent', 'source_sent', 'tickets_a2a'])
+    expect(() => checkTally(make("INSERT INTO shadow_tally VALUES ('outbox_sentX', 1), ('source_sent', 0), ('tickets_a2a', 0), ('gaps_uncovered', 0), ('cli_identity_stored', 0), ('heartbeat_row_delta', 0);"))).toThrow(/exactly/)
+    expect(() => checkTally(make("INSERT INTO shadow_tally VALUES ('outbox_sent', 1), ('source_sent', 0), ('tickets_a2a', 0), ('gaps_uncovered', 0);"))).toThrow(/exactly/)
+    expect(Object.keys(TALLY).sort()).toEqual(['cli_identity_stored', 'gaps_uncovered', 'heartbeat_row_delta', 'outbox_sent', 'source_sent', 'tickets_a2a'])
   })
 
   it('A7b gaps: covered exactly by (after_seq, after_seq+lost] of a lost>0 page of the same epoch', () => {

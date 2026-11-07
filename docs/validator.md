@@ -252,13 +252,22 @@ ygl-trees verify run spec_4de5f3b9d48d --db <snapshot>      # 判定：overall �
   - shadow_rows.seq_records：按全量 a2a-rows 计算（不限窗口），同一 epoch、同一 seq 的记录条数；seq 为空时此列为空。
   - shadow_pages.health_error：按全量 a2a-health-log 计算（不限窗口），存在 at 与该页头相同、entry 为 a2a、state 为 error 的记录为 1，否则为 0。
   - shadow_triggers.in_window：按 trigger.at 和 --window 计算，左闭右开，落在窗口内为 1，否则为 0；trigger.at 读不出时间就整次采集失败（退出码 1），不猜。
+  - p3 新增的列（影子验收 v5.1）：
+    - shadow_rows.admission：信箱行上宿主准入规则的原值。
+    - shadow_pages.heartbeat、rounds、rows：心跳页头自带的字段（方案 P）；不是心跳的页头分别为 0、空、空。心跳页头的 rounds 或 rows 不是非负整数，或者非心跳页头带了这两项，都整次失败。
+    - shadow_pages.hb_gap_min：心跳与窗口内上一条心跳相隔的整分钟数，向上取整；窗口内第一条心跳，取它与窗口起点的间隔。
+    - shadow_pages.hb_next_gap_min：心跳到下一条心跳的间隔；最后一条，取它到窗口终点的间隔。
+    - A15 同时看这两个间隔，窗口两端的空白都查得出来。
   - 每列都有反向变异守着：只在窗口内的 Trigger 里查找、code 取错列、seq_records 只计窗口内、health_error 不比较 entry 或不比较 state、in_window 用闭区间，都会让测试变红。
-- **计数表 shadow_tally**（2026-11-07 全局裁定追加）：verify 的检查器对扫描域为 0 行的表一律判 NEEDS-MATERIAL，而「必须为零」的 4 条判据，在健康运行下要扫的明细表本来就是空的。所以采集器另写一张固定 4 行的计数表，每个计数都由刚写入快照的同一批明细行算出，不再查一次源库：
+- **计数表 shadow_tally**（2026-11-07 全局裁定追加）：verify 的检查器对扫描域为 0 行的表一律判 NEEDS-MATERIAL，而「必须为零」的 4 条判据，在健康运行下要扫的明细表本来就是空的。所以采集器另写一张固定行数的计数表，每个计数都由刚写入快照的同一批明细行算出，不再查一次源库：
   - outbox_sent：shadow_outbox 中 status 为 sent 的行数（这张表只收 a2a 的外发，不限窗口），对应 A1；
   - source_sent：shadow_sent 中 handle 等于 source_handle 的行数（按窗口），对应 A2；
   - tickets_a2a：shadow_tickets 中 basis_source 为 a2a 的行数（全库），对应 A9；
   - gaps_uncovered：shadow_seq_gaps 中 covered 为 0 的行数，对应 A7b。
-  - 自检：快照写完以后，在快照库里用 SQL 把 4 个计数重算一遍；行数不是恰好 4 行、少了某个名字、或者任何一项对不上，都整次失败（退出码 1），不留文件。
+  - p3 追加两行，不是「必须为零」的计数，放在这里是为了扫描域固定：
+    - cli_identity_stored：窗口内 outcome 为 stored、proof 为 cli-identity、admission 在 LINK_RULES 内、不是回执、task id 不以 a2a- 开头的行数，对应 A14（应不少于 1）；
+    - heartbeat_row_delta：窗口内第一条心跳之后各心跳的 rows 之和，减去 (第一条心跳, 最后一条心跳] 区间内的行记录数，对应 A15（应为 0）。
+  - 自检：快照写完以后，在快照库里用 SQL 把每个计数重算一遍；行集合与 TALLY 的名字不完全一致、或者任何一项对不上，都整次失败（退出码 1），不留文件。
   - 检查器统一写成：scan 为 name='<计数名>'，where 为 n>0，fail_when 为 rows>0，这样扫描域固定是那一行。2026-11-07 用一次性工作区实测过：n=0 时 PASS（rows_scanned=1），n=1 时 FAIL，那一行被改名或缺失时 NEEDS-MATERIAL。不写 scan 时扫描域是整张表，改名会被静默判 PASS，所以不用那种写法。
 - **不带正文**：快照里没有消息正文、Trigger 正文、外发正文和 health 的 detail，测试断言了这一点。
   - 反向用例：同一真实宿主数据删掉一条未报告挤出的行记录，对应的 seq 得到 covered=0。
