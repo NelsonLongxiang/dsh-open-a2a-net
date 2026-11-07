@@ -14,6 +14,17 @@ The flow follows upstream's model:
 4. **Decision → Ticket with Mandate.** An accepted request becomes a ticket.
 5. **Assignment → executor.** The A2A executor arrives in a later PR; until then accepted tickets wait as `working / queued`.
 
+## The A2A Source (agents)
+
+With `sources.a2a` on, the host holds the team's A2A address: a CLI identity `superagent-team/<16 hex>`, created under `<a2a home>/superagent/team-cli/`. `GET /__dsh_a2a/superagent` shows it as `a2a.address`. #402's a2a-watch runs inside the host, unchanged:
+
+- It keeps the deposit published, renewing it before the 4h expiry.
+- It reads the mailbox and turns each message into a Trigger. A2A callers are agents, so each Trigger has `human: false` and `addressed: direct`.
+- It applies its own trust filter. A message needs a host-verified proof and an operator link (`canvas-shared`, `remote-ref-*` or `cli-deposit`; a CLI deposited on this host counts once routing scope is on). It must not be a loop and must not be a receipt.
+- It sends replies back only to the original caller, after the host rechecks the caller's link. The first message to a task is the formal receipt, and later ones are follow-ups in the same context.
+
+Requests to the team address take **no target queue slot**: the engine governs the work. An agent's request becomes a candidate only when the agent is on the bot list and the accept mode is not `off`. Upstream sends automatic acknowledgements only to persons, so an agent's first reply is the result, which is its formal receipt.
+
 ## For the router
 
 - Candidates arrive in your own session as `[superagent candidate] …` cards. Decide each by its `trigger_id` with `superagent_route`:

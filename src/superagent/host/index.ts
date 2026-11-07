@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { Engine, ticketStage, type Assessor, type Candidate, type Executor, type Outbox, type Ticket, type Trigger, type ReceiveResult } from '../upstream/dsh-superagent/src/core/index.ts'
 import { JsonRepositories, type StoredMessage } from './store.ts'
+import { A2aSource } from './a2a-source.ts'
 import { DEFAULT_SETTINGS, WORKBENCH_OWNER, parseSettings, policyVersion, teamPolicy, teamScope, type TeamSettings } from './policy.ts'
 
 export interface SuperagentHostDeps {
@@ -28,6 +29,14 @@ export interface SuperagentHostDeps {
   /** A repeating timer; returns its disposer. */
   readonly interval: (fn: () => void, ms: number) => () => void
   readonly now?: () => string
+  /** This host's own base URL for the team identity's CLI, once the web server listens. */
+  readonly homeUrl?: () => string | undefined
+  /** This host's API key (the CLI's control credential). */
+  readonly apiKey?: () => string | undefined
+  /** Tests shorten the A2A mailbox poll. */
+  readonly a2aPollSeconds?: number
+  /** Tests stub the CLI. */
+  readonly runCli?: (args: string[], env: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<string>
 }
 
 /** How often due Evals are checked and undelivered candidates retried. */
@@ -70,6 +79,11 @@ export class SuperagentHost {
   /** Candidates waiting to reach the router, by evalId; delivered ones stay until the engine releases them. */
   private readonly candidates = new Map<string, { candidate: Candidate; delivered: boolean }>()
   private disposeTimer: (() => void) | undefined
+  /** The A2A Source (PR-B2b): the team's A2A address and its mailbox loop. */
+  readonly a2a: A2aSource
+  /** Outbox messages being sent right now, so a pass never sends one twice at once. */
+  private readonly sending = new Set<string>()
+  private started = false
 
   constructor(private readonly d: SuperagentHostDeps) {
     const dir = join(d.home, 'superagent')
@@ -95,6 +109,12 @@ export class SuperagentHost {
         this.store.messages.save({ ...row, status: 'dropped', droppedAt: this.now(), reason: 'withdrawn' })
       },
     }
+    this.a2a = new A2aSource({
+      dir, homeUrl: () => d.homeUrl?.(), apiKey: () => d.apiKey?.(), enabled: () => this.settingsValue.sources.a2a,
+      receive: trigger => { const result = this.engine.receive(trigger as unknown as Trigger); queueMicrotask(() => this.pass()); return result },
+      ticket: id => this.store.tickets.get(id) as never,
+      logger: d.logger, ...(d.runCli !== undefined ? { run: d.runCli } : {}), ...(d.a2aPollSeconds !== undefined ? { pollSeconds: d.a2aPollSeconds } : {}),
+    })
     this.engine = new Engine({
       repo: this.store,
       policy: () => teamPolicy(this.settingsValue),
@@ -128,16 +148,45 @@ export class SuperagentHost {
       if (candidate !== undefined) this.candidates.set(candidate.evalId, { candidate, delivered: evaluation.delivered !== undefined })
     }
     this.disposeTimer = this.d.interval(() => this.pass(), PASS_MS)
+    this.started = true
+    this.syncA2a()
     this.pass()
   }
 
-  stop(): void { this.disposeTimer?.(); this.disposeTimer = undefined }
+  stop(): Promise<void> { this.disposeTimer?.(); this.disposeTimer = undefined; this.started = false; return this.a2a.stop() }
+
+  /** Run the A2A Source's mailbox loop exactly while its Source is on. */
+  private syncA2a(): void {
+    if (this.started && this.settingsValue.sources.a2a) this.a2a.start()
+    else void this.a2a.stop()
+  }
+
+  /** The team's A2A address: requests to it are Triggers, so they take no target queue slot. */
+  get a2aAddress(): string | undefined { return this.settingsValue.sources.a2a ? this.a2a.address : undefined }
+
+  /** Send pending a2a Channel messages; a thrown send stays pending for the next pass (a2a-watch gives up after 24h). */
+  private flushOutbox(): void {
+    for (const row of this.store.messages.list()) {
+      if (row.status !== 'pending' || row.message.channel.source !== 'a2a' || this.sending.has(row.message.id)) continue
+      if (this.settingsValue.paused || !this.a2a.allowed(row.message as never)) continue
+      this.sending.add(row.message.id)
+      void this.a2a.send(row.message as never).then(result => {
+        this.store.atomic(() => {
+          const now = this.store.messages.get(row.message.id)
+          if (now === undefined || now.status !== 'pending') return
+          this.store.messages.save(result === 'sent' ? { ...now, status: 'sent', sentAt: this.now() } : { ...now, status: 'dropped', droppedAt: this.now(), reason: 'gone' })
+        })
+      }, (error: unknown) => { this.d.logger.warn('superagent: a2a reply %s not sent yet: %s', row.message.id, String(error)) })
+        .finally(() => { this.sending.delete(row.message.id) })
+    }
+  }
 
   /** One pass: expire or start due Evals, then deliver what waits for the router. */
   pass(): void {
     if (this.store.loadError !== undefined) return
     try { this.engine.evaluateDue() } catch (error) { this.d.logger.warn('superagent: evaluation pass failed: %s', String(error)) }
     this.flushCandidates()
+    this.flushOutbox()
   }
 
   private flushCandidates(): void {
@@ -170,6 +219,7 @@ export class SuperagentHost {
     // A new router receives whatever the old one had not decided yet.
     if (routerChanged) for (const entry of this.candidates.values()) entry.delivered = false
     this.d.logger.info('superagent: team settings saved (policy %s)', after)
+    this.syncA2a()
     this.pass()
     return parsed
   }
@@ -201,6 +251,7 @@ export class SuperagentHost {
     return {
       settings: this.settingsValue,
       policyVersion: policyVersion(this.settingsValue),
+      a2a: { enabled: this.settingsValue.sources.a2a, address: this.a2a.address ?? null, health: this.a2a.health },
       ...(this.store.loadError !== undefined ? { error: this.store.loadError } : {}),
       threads: this.store.threads.list().map(thread => ({
         key: thread.key, ref: thread.ref, createdAt: thread.createdAt, lastAt: thread.lastAt ?? null, subscriptions: thread.subscriptions,

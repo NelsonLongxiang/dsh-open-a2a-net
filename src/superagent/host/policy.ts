@@ -17,6 +17,7 @@
  */
 import { createHash } from 'node:crypto'
 import type { GateResult, Mandate, Policy, SourceScope, Thread, Ticket, Trigger } from '../upstream/dsh-superagent/src/core/index.ts'
+import { scope as a2aScope } from '../a2a-watch.ts'
 
 /** The Sources this host runs. */
 export const SOURCES = ['workbench', 'a2a'] as const
@@ -171,8 +172,10 @@ export function teamPolicy(settings: TeamSettings): Policy {
 /** Which Sources listen: a Trigger of a Source that is off is stored as filtered. */
 export function teamScope(settings: () => TeamSettings): SourceScope {
   return {
-    scope: ({ source }) => (source === 'workbench' || source === 'a2a') && settings().sources[source]
-      ? { listened: true, observed: false }
-      : { listened: false, reason: 'sourceOff' },
+    scope: ({ source, meta }) => {
+      if ((source !== 'workbench' && source !== 'a2a') || !settings().sources[source]) return { listened: false, reason: 'sourceOff' }
+      // The A2A Source's own trust filter (a2a-watch): a host-verified proof and an operator link, no loop, no receipt.
+      return source === 'a2a' ? a2aScope({ meta }) : { listened: true, observed: false }
+    },
   }
 }

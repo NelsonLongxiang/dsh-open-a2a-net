@@ -18,6 +18,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, type Config } from '../../src/index.ts'
 import { spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { cliEnv } from './harness.ts'
 
 class ManyAgents extends Service {
@@ -49,7 +50,7 @@ const R_ID = 'session-a0000000aaaa1111', M_ID = 'session-b1111111bbbb2222', O_ID
 const execAs = (agent: Agent) => ({ signal: new AbortController().signal, agent }) as never
 const until = async (f: () => boolean | Promise<boolean>, ms = 8000): Promise<void> => { const t = Date.now(); while (Date.now() - t < ms) { if (await f()) return; await new Promise(r => setTimeout(r, 25)) } }
 
-async function mount(home: string) {
+async function mount(home: string, extra: Partial<Config> = {}) {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt); await ctx.plugin(ToolRuntime); await ctx.plugin(TimerService)
   await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
@@ -57,7 +58,7 @@ async function mount(home: string) {
   const agents = ctx.get('agents') as unknown as ManyAgents
   const [R, M, O] = [[R_ID, 'router'], [M_ID, 'member'], [O_ID, 'outsider']].map(([id, name]) => makeAgent(id!, name!))
   for (const a of [R!, M!, O!]) { agents.map.set(String(a.id), a); a.host = ctx }
-  apply(ctx, { apiKey: '', session: 'host-sess', team: 'dsh', routeTimeoutMs: 5_000, flushTimeoutMs: 300_000, announce: true, agentName: 'sa-host', peers: [], delegates: [], sessionNodes: true, wakeJoinedOnBoot: false, dshHome: home, superagent: true } as unknown as Config)
+  apply(ctx, { apiKey: '', session: 'host-sess', team: 'dsh', routeTimeoutMs: 5_000, flushTimeoutMs: 300_000, announce: true, agentName: 'sa-host', peers: [], delegates: [], sessionNodes: true, wakeJoinedOnBoot: false, dshHome: home, superagent: true, ...extra } as unknown as Config)
   for (const a of [R!, M!, O!]) ctx.emit('agent/created', { agent: a as unknown as Agent })
   const port = (ctx as unknown as { webServer: { port: number } }).webServer.port
   const post = async (path: string, body: unknown): Promise<Record<string, any>> => await (await globalThis.fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json() as Record<string, any>
@@ -187,4 +188,59 @@ describe('superagent engine in the a2a host', () => {
       expect((await cli('superagent', 'request')).status).not.toBe(0)
     } finally { await m.dispose() }
   }, 30_000)
+
+  it('PR-B2b: the A2A Source — a CLI identity\'s request to the team address is an agent\'s Trigger, takes no queue slot, and reaches the router only through the bot list', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-a2a-src-'))
+    // Routing scope on, as shipped: a CLI deposited on this host is then admitted as `cli-deposit`, an operator link.
+    const m = await mount(home, { teamScopeRouting: true })
+    const run = (cliHome: string, ...args: string[]) => new Promise<{ status: number | null; stdout: string; stderr: string }>(resolve => {
+      const child = spawn(process.execPath, [join(process.cwd(), 'cli/a2a.mjs'), ...args, '--home', `http://127.0.0.1:${m.port}`], { env: cliEnv(cliHome) })
+      let stdout = '', stderr = ''
+      child.stdout.on('data', d => { stdout += String(d) }); child.stderr.on('data', d => { stderr += String(d) })
+      child.on('close', status => resolve({ status, stdout, stderr }))
+    })
+    try {
+      const rules = [{ name: 'deps', text: 'Bump a pinned dependency when an agent reports it.' }]
+      expect(await m.sa({ action: 'settings', settings: { router: R_ID, sources: { a2a: true }, acceptMode: 'observe', rules } })).toMatchObject({ ok: true })
+      // The host creates and deposits the team identity itself (reply mode publishes it as owing receipts).
+      let address = ''
+      await until(async () => { const s = await m.state(); address = s.a2a.address ?? ''; return address !== '' && s.a2a.health['a2a-deposit']?.state === 'ready' }, 20_000)
+      expect(address).toMatch(/^superagent-team\/[0-9a-f]{16}$/)
+
+      // Two requester identities on this host: one the owner lists as a bot, one not.
+      const listed = mkdtempSync(join(tmpdir(), 'sa-req-a-')), stranger = mkdtempSync(join(tmpdir(), 'sa-req-b-'))
+      for (const [dir, name] of [[listed, 'reporter'], [stranger, 'stranger']] as const) {
+        expect((await run(dir, 'init', name)).status).toBe(0)
+        expect((await run(dir, 'publish')).status).toBe(0)
+      }
+      const handleOf = (dir: string): string => (JSON.parse(readFileSync(join(dir, 'cli.json'), 'utf8')) as { handle: string }).handle
+      expect(await m.sa({ action: 'settings', settings: { bots: { a2a: [handleOf(listed)] } } })).toMatchObject({ ok: true })
+
+      // Four requests from the listed agent: the team address owes receipts, yet none is refused for a full queue (cap 3).
+      for (const n of [1, 2, 3, 4]) {
+        const sent = await run(listed, 'route', address, `依赖 lib-${String(n)} 有新版本`, '--json')
+        expect(sent.status, sent.stderr).toBe(0)
+        expect(JSON.parse(sent.stdout)).toMatchObject({ delivered: true })
+      }
+      const strangerSent = await run(stranger, 'route', address, '陌生 agent 的请求', '--json')
+      expect(strangerSent.status, strangerSent.stderr).toBe(0)
+
+      // a2a-watch reads the mailbox: the listed agent's requests reach the router as inferred candidates with the rules.
+      await until(() => m.R.steered.filter(t => t.includes('[superagent candidate]') && t.includes(handleOf(listed))).length >= 1, 40_000)
+      const card = m.R.steered.find(t => t.includes(handleOf(listed)))!
+      expect(card).toContain('strength inferred')
+      expect(card).toContain('rule deps:')
+      expect(m.R.steered.some(t => t.includes(handleOf(stranger)))).toBe(false)
+      // Observe: the router's accept on the matched rule is recorded as would-accept; no ticket.
+      const trigger = /^trigger (\S+) /m.exec(card)![1]!
+      const routed = await m.tool('superagent_route', m.R, { items: [{ trigger_id: trigger, kind: 'accept', title: 'bump', scope: 'one dep', reason: 'matches deps', rules: ['deps'] }] })
+      expect(routed.results[0]).toMatchObject({ ok: true, decision: 'ignore', reason: [{ code: 'observed' }] })
+      expect((await m.state()).tickets).toHaveLength(0)
+      // The stranger's request was recorded and refused at the gate (an audited ignore), never a candidate.
+      const s = await m.state()
+      const strangerThread = s.threads.find((t: any) => t.triggers.some((x: any) => x.actor.id === handleOf(stranger)))
+      expect(strangerThread, JSON.stringify(s.threads.map((t: any) => t.key))).toBeDefined()
+      expect(strangerThread.decisions.map((d: any) => [d.kind, d.reason[0]?.code])).toEqual([['ignore', 'botNotListed']])
+    } finally { await m.dispose() }
+  }, 90_000)
 })
