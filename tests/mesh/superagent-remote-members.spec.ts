@@ -58,6 +58,10 @@ describe('superagent members on other hosts', () => {
         // An unsigned assignment to B is refused; a signed one from E (not A's key) is refused too.
         const unsigned = await (await postJson(B.baseUrl, '/a2a/superagent-member', { op: 'assign', member: member, text: 'unsigned work' })).json() as Record<string, any>
         expect(unsigned).toMatchObject({ ok: false, code: 'untrusted-origin' })
+        // PR-F: identity refusals are counted where they happen — the impostor's report on A, the unsigned assignment on B.
+        const onA = (await state(A)).refusals.counts as Record<string, number>
+        expect((onA['superagent-not-signer'] ?? 0) + (onA['superagent-not-member'] ?? 0), JSON.stringify(onA)).toBe(1)
+        expect((await state(B)).refusals.counts).toMatchObject({ 'superagent-untrusted-origin': 1 })
 
         // B's member reports ready: A takes it (key pinned), the ticket completes, A's router hears the report.
         const report = await tool(B, 'a2a_ticket_report', { state: 'ready', summary: '已提交 PR https://example.invalid/pr/7' })

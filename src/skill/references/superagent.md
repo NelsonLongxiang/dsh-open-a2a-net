@@ -66,7 +66,7 @@ A member can sit on another host: another physical node, or another DSH instance
 
 The owner control route is `/__dsh_a2a/superagent`.
 
-- `GET` returns the state: threads with their triggers, decisions and replies, and tickets with their stage.
+- `GET` returns the state: threads with their triggers, decisions and replies, and tickets with their stage. It also returns `refusals`, the refusals at the team's edge in this process. These include A2A routes to or from a role session, role sessions' calls outside their tool list, and host-to-host requests that are unsigned or not signed by the pinned key. They are counted by rule (`counts`), and the latest 50 are kept with caller and target (`recent`).
 - `POST { action }` takes one of:
   - `settings`: the router (a joined local session), the members (joined local sessions, not the router; one worker slot each), the allowed persons per Source, the A2A bot list, the accept mode, the proactive rules (`{name, text, enabled}`), the Source switches, the Eval timeout, and pause;
   - `request`: the workbench Source, with `text`, and `thread` to follow up;

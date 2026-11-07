@@ -2045,7 +2045,11 @@ export function apply(ctx: Context, config: Config): void {
     registerSuperagentTools(ctx, () => superagentHost)
     // A member's turn ending is the executor's turn-end fact (PR-C1).
     ctx.on('agent/status', payload => { if (payload.status === 'idle') superagentHost.memberIdle(String(payload.agent.id)) })
-    ctx.tools.guard(exec => superagentRoleTools.guard(exec.name, exec.agent as unknown as RoleAgent | undefined))
+    ctx.tools.guard(exec => {
+      const refusal = superagentRoleTools.guard(exec.name, exec.agent as unknown as RoleAgent | undefined)
+      if (refusal !== undefined) superagentHost.noteRefusal('superagent-role-tools', { ...(exec.agent !== undefined ? { caller: String(exec.agent.id) } : {}), target: exec.name })
+      return refusal
+    })
     ctx.on('agent/created', ({ agent }) => { superagentRoleTools.sync(agent as unknown as RoleAgent); return undefined })
     ctx.on('agent/disposed', ({ agent }) => { superagentRoleTools.forget(String(agent.id)) })
     syncRoleTools()
@@ -2056,6 +2060,12 @@ export function apply(ctx: Context, config: Config): void {
    * @returns the refusal, or undefined when the router is not involved.
    */
   function superagentRouterRefusal(callerSessionId: string | undefined, target: string): string | undefined {
+    const refusal = superagentRefusalText(callerSessionId, target)
+    // Every caller returns this refusal to the route it refused, so each refused route counts once (PR-F: acceptance item 7).
+    if (refusal !== undefined) superagentHost?.noteRefusal(/^\[([a-z-]+)\]/.exec(refusal)?.[1] ?? 'superagent', { ...(callerSessionId !== undefined ? { caller: callerSessionId } : {}), target })
+    return refusal
+  }
+  function superagentRefusalText(callerSessionId: string | undefined, target: string): string | undefined {
     if (superagentHost === undefined) return undefined
     const callerRole = callerSessionId === undefined ? undefined : superagentHost.roleOf(callerSessionId)
     if (callerRole === 'router') return '[superagent-router-outbound] the team router does not route A2A; it decides with superagent_route and replies with superagent_reply'
@@ -3063,11 +3073,14 @@ export function apply(ctx: Context, config: Config): void {
               const claim = await verifyOriginClaim(req, { rawBody })
               if (!claim.ok || !claim.bound || claim.bodyBound !== true || typeof claim.card.publicKey !== 'string') {
                 recordActivity('in', path, String(req.headers['x-a2a-caller'] ?? 'unknown'), false)
+                superagentHost.noteRefusal('superagent-untrusted-origin', { caller: String(req.headers['x-a2a-caller'] ?? 'unknown'), target: path })
                 send({ ok: false, code: 'untrusted-origin', error: `a signed, body-bound OriginClaim is required (${claim.ok ? 'unbound' : claim.reason})` })
                 return
               }
               const out = judge(body, { caller: claim.caller, key: claim.card.publicKey })
               recordActivity('in', path, claim.caller, out.ok === true)
+              // A signer that is not the pinned key (an impostor sharing a handle) is refused by identity; a malformed body is not counted.
+              if (out.ok !== true && ['not-signer', 'not-team', 'not-member'].includes(String(out.code))) superagentHost.noteRefusal(`superagent-${String(out.code)}`, { caller: claim.caller, target: path })
               send(out)
             })().catch(error => send({ ok: false, error: String(error) }))
           })
