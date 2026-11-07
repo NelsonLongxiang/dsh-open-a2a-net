@@ -3946,7 +3946,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         // same-host session, so no separate inbound row is kept.
         return { ok: true, team, reply: `delivered to the mailbox of ${team} — it owes a receipt`, task_id: taskIdFromCaller, context_id: contextId ?? '', task_status: 'TASK_STATE_DELIVERED', receipt: 'mailbox' }
       }
-      return { ok: true, team, reply: `delivered to the mailbox of ${team} — the CLI polls while online`, task_id: taskIdFromCaller ?? '', context_id: contextId ?? '', task_status: 'TASK_STATE_COMPLETED' }
+      // S29 / #404: a plain mailbox is final for the caller, as on the wire face (receipt 'mailbox'), so no debt is booked.
+      return { ok: true, team, reply: `delivered to the mailbox of ${team} — the CLI polls while online`, task_id: taskIdFromCaller ?? '', context_id: contextId ?? '', task_status: 'TASK_STATE_COMPLETED', receipt: 'mailbox' }
     }
     // The native-teams claim probe is an await: pay it only when the four
     // cheap synchronous locality checks missed (a registry team is a local
