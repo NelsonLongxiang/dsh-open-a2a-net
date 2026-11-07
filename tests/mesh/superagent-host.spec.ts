@@ -329,7 +329,7 @@ describe('superagent engine in the a2a host', () => {
       for (const a of [m.R, m.M, m.O]) {
         const seen = { allow: undefined as string[] | undefined, lifted: 0 }
         scopes.set(String(a.id), seen)
-        ;(a as unknown as { ctx: unknown }).ctx = { tools: {
+        ;(a as unknown as { ctx: unknown }).ctx = { [Symbol('dsh.scope')]: a, tools: {
           get: (name: string) => m.ctx.tools.get(name),
           restrict: (filter: { allow: string[] }) => { seen.allow = [...filter.allow]; return () => { seen.allow = undefined; seen.lifted++ } },
         } }

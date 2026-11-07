@@ -30,7 +30,8 @@ describe('RoleTools', () => {
     const log: string[] = []
     const scoped = (id: string, known: string[]): RoleAgent => ({
       id,
-      ctx: { tools: { get: name => (known.includes(name) ? {} : undefined), restrict: f => { log.push(`${id} restrict ${f.allow.join(',')}`); return () => { log.push(`${id} lift`) } } } },
+      // The agent's scope key, under dsh-scope's symbol description, as on a host.
+      ctx: { [Symbol('dsh.scope')]: {}, tools: { get: name => (known.includes(name) ? {} : undefined), restrict: f => { log.push(`${id} restrict ${f.allow.join(',')}`); return () => { log.push(`${id} lift`) } } } },
     })
     const tools = new RoleTools({ roleOf: id => roles[id], agentOf: id => agents.get(id), logger: { warn: () => {} } })
     return { agents, log, scoped, tools }
@@ -66,7 +67,7 @@ describe('RoleTools', () => {
   it('a restriction the registry refuses is logged, never thrown into the agent\'s creation', () => {
     const warned: string[] = []
     const tools = new RoleTools({ roleOf: () => 'member', agentOf: () => undefined, logger: { warn: (f, ...a) => { warned.push([f, ...a].join(' ')) } } })
-    tools.sync({ id: 'x', ctx: { tools: { get: () => ({}), restrict: () => { throw new Error('scope-local name') } } } })
+    tools.sync({ id: 'x', ctx: { [Symbol('dsh.scope')]: {}, tools: { get: () => ({}), restrict: () => { throw new Error('scope-local name') } } } as never })
     expect(warned.join()).toContain('not restricted')
     expect(tools.list()).toEqual({})
   })
