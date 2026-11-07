@@ -92,6 +92,8 @@ function sameOrigin(a: string, b: string): boolean {
 export interface WireDeps {
   /** superagent design v4: the refusal when `team` is the superagent router (it takes no A2A work), else undefined. */
   readonly superagentInbound: (team: string) => string | undefined
+  /** superagent design v4: whether `team` is the team's A2A address (its requests take no target queue slot). */
+  readonly superagentIntake: (team: string) => boolean
   readonly ctx: Context
   readonly logger: ReturnType<Context['logger']>
   readonly config: Config
@@ -814,7 +816,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           }
           if (refuseIfFlooded(caller, message, team, taskId, res)) return
           // p1-mailbox-owes (S33): a deposit whose card declares it owes receipts is under the per-target cap like a session.
-          if (refuseIfQueueFull(caller, message, team, taskId, cliDeposits.get(team) !== undefined && !cliDeposits.owes(team), res)) return
+          if (refuseIfQueueFull(caller, message, team, taskId, (cliDeposits.get(team) !== undefined && !cliDeposits.owes(team)) || d.superagentIntake(team), res)) return
           // The caller-side receipt correlation: a message shaped as a
           // receipt resolves the task it echoes, whichever wait semantics
           // carried it here. Correlation is bookkeeping only — the message

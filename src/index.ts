@@ -2015,9 +2015,14 @@ export function apply(ctx: Context, config: Config): void {
     home: join(home, 'a2a'), logger,
     deliverToSession: (id, text) => { const agent = sessionNodes.get(id); if (agent === undefined) return false; followupRelay(agent, text, config.team); return true },
     interval: (fn, ms) => ctx.timer.interval(fn, ms),
+    // The team's A2A address (PR-B2b) is a CLI identity the a2a-net CLI runs against this very host.
+    homeUrl: () => superagentHomeUrl,
+    apiKey: () => config.apiKey,
   }) : undefined
+  let superagentHomeUrl: string | undefined
   if (superagentHost !== undefined) {
-    ctx.effect(() => { superagentHost.start(); return () => superagentHost.stop() }, 'a2a: superagent engine passes')
+    whenWebServerSettled(webServer => { superagentHomeUrl = `http://127.0.0.1:${String((webServer as { port: number }).port)}` })
+    ctx.effect(() => { superagentHost.start(); return () => { void superagentHost.stop() } }, 'a2a: superagent engine passes')
     registerSuperagentTools(ctx, () => superagentHost)
   }
   /**
@@ -2893,6 +2898,7 @@ export function apply(ctx: Context, config: Config): void {
       cliDeposits,
       canvasStore, canvasMemberForWrite,
       superagentInbound: team => superagentRouterRefusal(undefined, team),
+      superagentIntake: team => superagentHost?.a2aAddress === team,
       canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
       sessionNodes,
       joinedSessions,
@@ -3971,7 +3977,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     }
     // gh#224: a full target queue refuses a same-host delivery as the wire face does (receipts, CLI mailboxes pass).
     // p1-mailbox-owes (S33): a deposit that declares it owes receipts is under the cap like a session.
-    const queueRefusal = queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, cliDeposits.get(team) !== undefined && !cliDeposits.owes(team), ownTask)
+    // superagent v4: a request to the team's A2A address is a Trigger; the engine's worker slots govern it, not this cap.
+    const queueRefusal = queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, (cliDeposits.get(team) !== undefined && !cliDeposits.owes(team)) || superagentHost?.a2aAddress === team, ownTask)
     if (queueRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: queueRefusal, code: WIRE_ERROR_QUEUE_FULL, next: QUEUE_FULL_NEXT }

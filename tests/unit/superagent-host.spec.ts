@@ -187,7 +187,7 @@ describe('PR-B2a: the router tool on inferred candidates', () => {
     const home = mkdtempSync(join(tmpdir(), 'sa-b2a-'))
     const host = new SuperagentHost({ home, logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {} })
     expect(host.saveSettings({ router: 'session-r', sources: { a2a: true }, bots: { a2a: ['seat/0123456789abcdef'] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
-    const botTrigger = (id: string, thread: string): Trigger => ({ ...wb(id, thread), source: 'a2a', threads: [{ source: 'a2a', id: thread }], actor: { source: 'a2a', id: 'seat/0123456789abcdef' }, human: false, channel: { source: 'a2a', thread, address: {} } })
+    const botTrigger = (id: string, thread: string): Trigger => ({ ...wb(id, thread), source: 'a2a', threads: [{ source: 'a2a', id: thread }], actor: { source: 'a2a', id: 'seat/0123456789abcdef' }, human: false, channel: { source: 'a2a', thread, address: {} }, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: `direct-${id}` } })
     host.engine.receive(botTrigger('1', 'b1')); host.pass()
     expect(host.engine.candidate('1')?.strength).toBe('inferred')
     expect(routeItem(host, { trigger_id: '1', kind: 'accept', title: 't', scope: 's', reason: 'matches deps' })).toMatchObject({ ok: false, code: 'rules' })
@@ -205,5 +205,60 @@ describe('PR-B2a: the router tool on inferred candidates', () => {
     // A rule it did not match, or a disabled one, accepts nothing.
     host.engine.receive(botTrigger('4', 'b4')); host.pass()
     expect(routeItem(host, { trigger_id: '4', kind: 'accept', title: 'x', scope: 'y', reason: 'z', rules: ['nope'] })).toMatchObject({ ok: false })
+  })
+})
+
+describe('PR-B2b: the a2a Channel through the hosted a2a-watch', () => {
+  async function hostWith(answer: (args: string[]) => string | Error) {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const calls: string[][] = []
+    const host = new SuperagentHost({
+      home: mkdtempSync(join(tmpdir(), 'sa-b2b-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
+      homeUrl: () => 'http://127.0.0.1:1',
+      runCli: async args => { calls.push(args); const out = answer(args); if (out instanceof Error) throw out; return out },
+    })
+    expect(host.saveSettings({ sources: { a2a: true } }, () => true)).toMatchObject({ ok: true })
+    const queue = (id: string, address: Record<string, string>) => host.store.atomic(() => host.store.messages.save({ message: { id, channel: { source: 'a2a', thread: 'a2a:ctx', address }, text: 'done', kind: 'reply' }, status: 'pending', queuedAt: new Date().toISOString() }))
+    const settle = async () => { host.pass(); for (let i = 0; i < 20 && calls.length >= 0; i++) await new Promise(r => setTimeout(r, 5)) }
+    return { host, calls, queue, settle }
+  }
+  const caller = { caller: 'reporter/0123456789abcdef', task: 'direct-0123456789ab' }
+  it('rechecks the caller link, then sends the one formal receipt; the row turns sent', async () => {
+    const h = await hostWith(args => args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}')
+    h.queue('m1', caller)
+    await h.settle()
+    expect(h.calls.map(a => a[0])).toEqual(['admission', 'receipt'])
+    expect(h.calls[1]).toEqual(expect.arrayContaining(['direct-0123456789ab', '--to', 'reporter/0123456789abcdef', '--outcome', 'completed']))
+    expect(h.host.store.messages.get('m1')?.status).toBe('sent')
+  })
+  it('a caller no longer linked makes the message gone (dropped), never sent', async () => {
+    const h = await hostWith(args => args[0] === 'admission' ? JSON.stringify({ admitted: false }) : '{}')
+    h.queue('m2', caller)
+    await h.settle()
+    expect(h.calls.map(a => a[0])).toEqual(['admission'])
+    expect(h.host.store.messages.get('m2')).toMatchObject({ status: 'dropped', reason: 'gone' })
+  })
+  it('a failed send stays pending for the next pass; a Source switched off sends nothing', async () => {
+    const h = await hostWith(() => new Error('host busy'))
+    h.queue('m3', caller)
+    await h.settle()
+    expect(h.host.store.messages.get('m3')?.status).toBe('pending')
+    expect(h.host.saveSettings({ sources: { a2a: false } }, () => true)).toMatchObject({ ok: true })
+    const before = h.calls.length
+    await h.settle()
+    expect(h.calls.length).toBe(before)
+    expect(h.host.a2aAddress).toBeUndefined()
+  })
+})
+
+describe('PR-B2b: the A2A Source scope is a2a-watch\'s trust filter', () => {
+  it('a Trigger without a trusted proof and an operator link, or a loop or a receipt, is filtered', () => {
+    const scope = teamScope(() => settings({ sources: { workbench: true, a2a: true } })).scope
+    expect(scope({ source: 'a2a', meta: { proof: 'cli-identity', admission: 'cli-deposit' } })).toMatchObject({ listened: true })
+    expect(scope({ source: 'a2a', meta: { proof: 'legacy-window', admission: 'cli-deposit' } })).toEqual({ listened: false, reason: 'unverified' })
+    expect(scope({ source: 'a2a', meta: { proof: 'cli-identity', admission: 'scope-off' } })).toEqual({ listened: false, reason: 'unlinked' })
+    expect(scope({ source: 'a2a', meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: 'a2a-x' } })).toEqual({ listened: false, reason: 'loop' })
+    expect(scope({ source: 'a2a', meta: { proof: 'cli-identity', admission: 'cli-deposit', receiptFor: 't' } })).toEqual({ listened: false, reason: 'receipt' })
+    expect(teamScope(() => settings()).scope({ source: 'a2a', meta: { proof: 'cli-identity', admission: 'cli-deposit' } })).toEqual({ listened: false, reason: 'sourceOff' })
   })
 })
