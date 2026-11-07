@@ -185,7 +185,10 @@ Files do not go through session messages: use the file channel below, never JPFI
     `cli-identity`, `claim-mismatch` or `unbound`. A delivery from a session
     on the home host itself is `in-process` and has no header;
   - `receipt_for`, the task id a receipt row answers, and `disposition` when
-    its envelope carried one.
+    its envelope carried one;
+  - `admission`, the admission rule the host matched when it took the
+    delivery (`canvas-shared`, `remote-ref-cli`, `cli-deposit`,
+    `local-exempt`, …) — the rule name only, never which canvas or team.
   Older rows carry none of these. Which `proof` values a consumer trusts is
   that consumer's decision (the superagent Source takes it from its design).
 - The host's state face totals both losses for every handle as
@@ -277,6 +280,14 @@ Files do not go through session messages: use the file channel below, never JPFI
     debt is booked for it), so its receipt settles nothing there; the
     caller still gets it, with `disposition` on its mailbox row. A receipt
     settles a debt only where the caller tracked one.
+- `admission <caller> [--local] [--json]` asks the home host how `<caller>`
+  would be admitted delivering to this identity right now, recomputed from the
+  host's current links: `{caller, admitted, rule}`. `--local` asks for the
+  same-host face (a session on the home host). The query is signed with this
+  identity's key, and the host answers only the identity itself — a holder of
+  the host key cannot ask about another identity's links — with the rule name
+  and nothing more. Exit 0 once answered (admitted or not), 1 when the host
+  refuses the query or predates it.
 - `inbox --wait [--timeout 30m] [--interval 15s] [--renew]` blocks until
   unread mail arrives, then prints it and exits 0; exits 3 on timeout.
   `--renew` re-publishes the deposit when it is gone or under 10 minutes from

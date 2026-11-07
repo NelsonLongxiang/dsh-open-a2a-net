@@ -14,12 +14,12 @@
  * and holds a mailbox for inbound deliveries (receipts land here; the CLI
  * polls while alive).
  */
-import { randomUUID } from 'node:crypto'
+import { createPublicKey, randomUUID, verify } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { verifyCard } from './card.ts'
 import type { ReceiptDisposition } from './receipt.ts'
-import type { AuthProof } from './task-auth.ts'
+import type { AdmissionRule, AuthProof } from './task-auth.ts'
 
 /** Owner ruling ③: the default AND maximum online window. */
 export const CLI_DEPOSIT_TTL_MS = 4 * 60 * 60 * 1000
@@ -88,10 +88,20 @@ export interface CliMail {
   readonly proof?: AuthProof
   /** p1-mail-proof: the task id this row's receipt answers, when the row is a receipt. */
   readonly receipt_for?: string
+  /**
+   * superagent p1-mail-admission: the admission rule the host matched when it took the delivery (task-auth.ts
+   * AdmissionRule) — the name only, never its basis, so a reader learns how the caller was let in without the topology.
+   */
+  readonly admission?: AdmissionRule
 }
 
 /** p1-mail-proof: the AuthProof values a restored row may carry (task-auth.ts); anything else is dropped. */
 const MAIL_PROOFS = ['origin-claim', 'claim-mismatch', 'legacy-window', 'unbound', 'cli-identity', 'in-process', 'none'] as const satisfies readonly AuthProof[]
+/**
+ * p1-mail-admission: the AdmissionRule names a restored row may carry (task-auth.ts); anything else is dropped. Kept
+ * literal like MAIL_PROOFS (no runtime import back into task-auth); a unit test pins it to task-auth's full set.
+ */
+export const MAIL_ADMISSIONS = ['scope-off', 'host-face', 'local-exempt', 'roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'peer-org', 'node-fact', 'cli-deposit'] as const satisfies readonly AdmissionRule[]
 
 /** p1-context-read: the task and conversation a mailbox delivery belongs to (empty strings are dropped). */
 export interface CliMailThread {
@@ -100,6 +110,7 @@ export interface CliMailThread {
   readonly disposition?: ReceiptDisposition
   readonly proof?: AuthProof
   readonly receiptFor?: string
+  readonly admission?: AdmissionRule
 }
 
 /** gh#113: one mailbox read — the rows plus what a reader needs to notice loss. */
@@ -133,11 +144,13 @@ const isSeq = (n: unknown): n is number => typeof n === 'number' && Number.isInt
 
 /** p1-mail-proof: a damaged snapshot never promotes a row's proof — an unknown value (or a non-string receipt_for) is dropped. */
 function sanitizeMail(m: CliMail): CliMail {
-  const { proof, receipt_for: receiptFor, ...rest } = m as CliMail & { proof?: unknown; receipt_for?: unknown }
+  const { proof, receipt_for: receiptFor, admission, ...rest } = m as CliMail & { proof?: unknown; receipt_for?: unknown; admission?: unknown }
   return {
     ...rest,
     ...(typeof proof === 'string' && (MAIL_PROOFS as readonly string[]).includes(proof) ? { proof: proof as AuthProof } : {}),
     ...(typeof receiptFor === 'string' && receiptFor !== '' ? { receipt_for: receiptFor } : {}),
+    // p1-mail-admission: likewise an admission value outside the rule set is dropped, never kept as a link.
+    ...(typeof admission === 'string' && (MAIL_ADMISSIONS as readonly string[]).includes(admission) ? { admission: admission as AdmissionRule } : {}),
   }
 }
 
@@ -148,6 +161,33 @@ const publicKeyOf = (cardJson: string): string => {
     return typeof key === 'string' ? key : ''
   } catch {
     return ''
+  }
+}
+
+/**
+ * superagent p1-mail-admission (M-2): the bytes a CLI identity signs to ask its home host how a caller would be admitted
+ * to it. The CLI builds the same array (cli/a2a.mjs); a unit test pins the two together.
+ */
+export const admissionQueryPayload = (handle: string, caller: string, ingress: 'local' | 'wire', ts: number): string =>
+  JSON.stringify(['a2a-admission', handle, caller, ingress, ts])
+
+/** How far an admission query's timestamp may stray from this host's clock (the OriginClaim window). */
+export const ADMISSION_QUERY_WINDOW_MS = 300_000
+
+/**
+ * Whether an admission query really comes from `handle` itself: signed with the key its LIVE deposit was published
+ * with, fresh, over exactly these fields. Anything else is refused — so a holder of the control key cannot ask about
+ * another identity's links (global review of the p1-mail-admission design).
+ */
+export function verifyAdmissionQuery(cardJson: string | undefined, q: { handle: string; caller: string; ingress: 'local' | 'wire'; ts: number; sig: string }, now: number): boolean {
+  if (cardJson === undefined || !Number.isFinite(q.ts) || Math.abs(now - q.ts) > ADMISSION_QUERY_WINDOW_MS || q.sig === '') return false
+  const key = publicKeyOf(cardJson)
+  if (key === '') return false
+  try {
+    const publicKey = createPublicKey({ key: Buffer.from(key, 'base64'), format: 'der', type: 'spki' })
+    return verify(null, Buffer.from(admissionQueryPayload(q.handle, q.caller, q.ingress, q.ts)), publicKey, Buffer.from(q.sig, 'base64'))
+  } catch {
+    return false
   }
 }
 
@@ -286,7 +326,8 @@ export class CliDepositStore {
     list.unshift({ at: this.now(), from, text: cut ? text.slice(0, MAILBOX_TEXT_CAP) : text, seq, ...(cut ? { truncated: true as const, chars: text.length } : {}), ...(dup !== undefined ? { dup } : {}),
       ...(thread?.taskId ? { task_id: thread.taskId } : {}), ...(thread?.contextId ? { context_id: thread.contextId } : {}),
       ...(thread?.disposition !== undefined ? { disposition: thread.disposition } : {}),
-      ...(thread?.proof !== undefined ? { proof: thread.proof } : {}), ...(thread?.receiptFor ? { receipt_for: thread.receiptFor } : {}) })
+      ...(thread?.proof !== undefined ? { proof: thread.proof } : {}), ...(thread?.receiptFor ? { receipt_for: thread.receiptFor } : {}),
+      ...(thread?.admission !== undefined ? { admission: thread.admission } : {}) })
     // gh#113: the cap still holds, but what it pushes out is counted, not lost silently.
     if (list.length > MAILBOX_CAP) this.dropped.set(handle, (this.dropped.get(handle) ?? 0) + list.length - MAILBOX_CAP)
     this.mailbox.set(handle, list.slice(0, MAILBOX_CAP))
