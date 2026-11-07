@@ -56,6 +56,8 @@ import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type OutboundBirth, type ReceiptResolvedInfo, type Sender, type SettlementJudge, type TaskRecord } from './task-ledger.ts'
 import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
+import { SuperagentHost } from './superagent/host/index.ts'
+import { registerSuperagentTools } from './superagent/host/tools.ts'
 import { ReconciliationReminders, type ReminderAgent } from './reconciliation-reminders.ts'
 import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
@@ -2007,6 +2009,31 @@ export function apply(ctx: Context, config: Config): void {
     warn:code=>logger.warn('a2a: sourced followup (%s); check ledger persistence and original task',code),
   })
   const followupRelay = (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string, taskExpected=true): 'inserted'|void => followupDelivery.deliver(agent,text,sender,localFrom,taskId,callerKey,taskExpected)
+  // superagent design v4, PR-B: superagent's domain engine in this host (off unless config.superagent). The router gets
+  // candidate cards in its own session (host relay, not A2A) and decides only through the superagent_* tools.
+  const superagentHost: SuperagentHost | undefined = config.superagent === true ? new SuperagentHost({
+    home: join(home, 'a2a'), logger,
+    deliverToSession: (id, text) => { const agent = sessionNodes.get(id); if (agent === undefined) return false; followupRelay(agent, text, config.team); return true },
+    interval: (fn, ms) => ctx.timer.interval(fn, ms),
+  }) : undefined
+  if (superagentHost !== undefined) {
+    ctx.effect(() => { superagentHost.start(); return () => superagentHost.stop() }, 'a2a: superagent engine passes')
+    registerSuperagentTools(ctx, () => superagentHost)
+  }
+  /**
+   * The router acts only through superagent tools and takes work only as candidates from the team's Sources, so A2A
+   * neither reaches it nor leaves it (hard rule, every route seam).
+   * @returns the refusal, or undefined when the router is not involved.
+   */
+  function superagentRouterRefusal(callerSessionId: string | undefined, target: string): string | undefined {
+    const router = superagentHost?.routerSession
+    if (router === undefined) return undefined
+    if (callerSessionId === router) return '[superagent-router-outbound] the team router does not route A2A; it decides with superagent_route and replies with superagent_reply'
+    const handle = `${config.team}/${id8(router)}`
+    const bare = target.replace(/@[0-9a-f]{8}$/, '')
+    if (target === router || (bare === handle && (target === bare || target.endsWith('@' + ownCanvasFingerprint)))) return '[superagent-router-inbound] the team router takes no A2A work; send requests to the team\'s Sources (the workbench), where the gate admits them'
+    return undefined
+  }
   ctx.on('agent/inbox/claimed',({agent,message})=>followupDelivery.claimed(agent,String(message.id)))
   const withdrawQueuedTask = (taskId:string): Promise<'removed'|'claimed'|'legacy'> => {
     const controller=ctx.get('sessionController')
@@ -2395,6 +2422,10 @@ export function apply(ctx: Context, config: Config): void {
   function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number,acceptance?:'inserted'|void) => void, callerKey?: string): Promise<
     { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown' }
   > {
+    // superagent v4: whatever address resolved to it (a canvas team, the node team), the router takes no A2A work.
+    if (superagentHost?.routerSession !== undefined && String(agent.id) === superagentHost.routerSession) {
+      return Promise.resolve({ ok: false, error: superagentRouterRefusal(undefined, String(agent.id)) ?? 'the team router takes no A2A work' })
+    }
     return new Promise((resolve) => {
       // #306: synchronous replies use the same reading-turn attribution as automatic receipts.
       // Registering and steering are synchronous, so this is the exact pre-steer floor.
@@ -2861,6 +2892,7 @@ export function apply(ctx: Context, config: Config): void {
       config,
       cliDeposits,
       canvasStore, canvasMemberForWrite,
+      superagentInbound: team => superagentRouterRefusal(undefined, team),
       canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
       sessionNodes,
       joinedSessions,
@@ -2920,6 +2952,37 @@ export function apply(ctx: Context, config: Config): void {
     })
 
 
+  })
+
+  if (superagentHost !== undefined) whenWebServerSettled((webServer) => {
+    // superagent design v4, PR-B: the owner's workbench face of the engine (owner control route only).
+    // GET: the engine state; POST: settings (router, allowed senders, Sources, pause), request (the workbench Source),
+    // stop / retry a ticket (upstream's people commands).
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/__dsh_a2a/superagent',
+      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+        const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
+        if (req.method === 'GET') { send(200, superagentHost.state()); return }
+        readJsonBody(req, res, (body) => {
+          const fields = body as Record<string, unknown>
+          try {
+            if (fields.action === 'settings') {
+              send(200, superagentHost.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true))
+            } else if (fields.action === 'request') {
+              send(200, superagentHost.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined))
+            } else if (fields.action === 'stop' || fields.action === 'retry') {
+              const ticketId = typeof fields.ticket_id === 'string' ? fields.ticket_id : ''
+              const ticket = fields.action === 'stop'
+                ? superagentHost.engine.stopTicket(ticketId, typeof fields.reason === 'string' ? fields.reason : undefined)
+                : superagentHost.engine.retryTicket(ticketId)
+              superagentHost.pass()
+              send(200, { ok: true, ticket })
+            } else send(200, { ok: false, error: 'action must be settings, request, stop or retry' })
+          } catch (error) { send(200, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
+        }, 64_000)
+      }),
+    }), 'a2a: superagent control route')
   })
 
   whenWebServerSettled((webServer) => {
@@ -3703,6 +3766,10 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const ownerQualified = splitCanvasOwner(String(args.team ?? '').trim())
       const foreignOwner = ownerQualified.owner !== undefined && ownerQualified.owner !== ownCanvasFingerprint ? ownerQualified.owner : undefined
       if (ownerQualified.owner !== undefined) args = { ...args, team: ownerQualified.team }
+      {
+        const refusal = superagentRouterRefusal(agent === undefined ? undefined : String(agent.id), String(args.team ?? '').trim())
+        if (refusal !== undefined) { recordActivity('out', String(args.team ?? ''), agent !== undefined ? sessionTeamOf(agent) : 'local', false); return { ok: false, error: refusal, code: -32000 } }
+      }
       // A receipt may use only its own frozen return lane; local answer state is not delivery proof.
       const answer = parseReceipt(args.message)
       const receiptRow=answer===null?undefined:taskLedger.find(answer.taskId)
@@ -3891,6 +3958,11 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: joinedRefusal, code: -32000 }
     }
+    const routerRefusal = superagentRouterRefusal(undefined, team)
+    if (routerRefusal !== undefined) {
+      recordActivity('out', team, callerSession ?? 'local', false)
+      return { ok: false, error: routerRefusal, code: -32000 }
+    }
     // #114 S5: the same header-safe id rule the wire face enforces.
     const idRefusal = taskIdFromCaller === undefined ? undefined : taskIdRefusal(taskIdFromCaller)
     if (idRefusal !== undefined) {
@@ -4026,6 +4098,12 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       }
       try {
         const target = await woken
+        // superagent v4: whatever address resolved to it (a canvas team, the node team), the router takes no A2A work.
+        if (superagentHost?.routerSession !== undefined && String(target.id) === superagentHost.routerSession) {
+          endRoute(flight)
+          recordActivity('out', team, callerSession ?? 'local', false)
+          return { ok: false, error: superagentRouterRefusal(undefined, String(target.id)) ?? 'the team router takes no A2A work', code: -32000 }
+        }
         // N1 (review seat 7e4cf94a): dashed composite labels are NOT routable;
         // accept only <zone>/<short-id> shapes so envelopes stop bouncing -32004.
         // An explicit callback address (P2) wins over the caller-label
