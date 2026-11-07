@@ -46,7 +46,24 @@ export function roleToolRefusal(role: Role, name: string): string | undefined {
 export interface RoleAgent {
   readonly id: unknown
   readonly session?: { readonly header?: { readonly parentSession?: unknown } }
-  readonly ctx?: { readonly tools?: { get(name: string): unknown; restrict(filter: { allow: readonly string[] }): () => void } }
+  readonly ctx?: { readonly tools?: { get(name: string, scope?: object): unknown; restrict(filter: { allow: readonly string[] }): () => void } }
+}
+
+/**
+ * The agent's scope key (what `scopeOf(agent.ctx)` returns in DSH): the tool registry's view for that scope includes the
+ * tools its preset contributes from an ancestor scope, which the global view does not. The key sits on the context under
+ * dsh-scope's `Symbol("dsh.scope")`, possibly up the context's prototype chain (cordis `extend`). It is read by its
+ * description because the plugin's own copy of dsh-scope would hold another symbol and another parent map.
+ */
+export function scopeKeyOf(ctx: unknown): object | undefined {
+  for (let cursor = ctx, depth = 0; cursor !== null && typeof cursor === 'object' && depth < 32; cursor = Object.getPrototypeOf(cursor), depth++) {
+    for (const symbol of Object.getOwnPropertySymbols(cursor)) {
+      if (symbol.description !== 'dsh.scope') continue
+      const key = (cursor as Record<symbol, unknown>)[symbol]
+      if (key !== null && typeof key === 'object') return key
+    }
+  }
+  return undefined
 }
 
 export interface RoleToolsDeps {
@@ -97,8 +114,12 @@ export class RoleTools {
     if (current !== undefined) { this.applied.delete(id); try { current.dispose() } catch { /* the scope is gone */ } }
     const tools = agent.ctx?.tools
     if (role === undefined || tools === undefined) return
-    // The registry refuses names it does not know; restrict to the role's tools this scope actually has.
-    const allow = roleTools(role).filter(name => { try { return tools.get(name) !== undefined } catch { return false } })
+    // The registry refuses names it does not know, so restrict to the role's tools this agent can see — through its own
+    // scope, which includes its preset's tools (bash, read, edit…). The global view misses them, and restricting to it
+    // would hide a member's work tools. Without the scope key, visibility stays as it is: the guard is the rule.
+    const scope = scopeKeyOf(agent.ctx)
+    if (scope === undefined) { this.d.logger.warn('superagent: no tool scope for %s; its tools are guarded, not hidden', id); return }
+    const allow = roleTools(role).filter(name => { try { return tools.get(name, scope) !== undefined } catch { return false } })
     if (allow.length === 0) return
     try { this.applied.set(id, { role, dispose: tools.restrict({ allow }) }) } catch (error) { this.d.logger.warn('superagent: tools of %s not restricted: %s', id, String(error)) }
   }
