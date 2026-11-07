@@ -327,3 +327,56 @@ describe('PR-C2: remote members and served teams are judged by pinned keys', () 
     expect(again.assignedWork('assign', 'dsh/cccccccc', KEY_A, 'work')).toMatchObject({ ok: false, code: 'not-team' })
   })
 })
+
+describe('acceptance item 9: an agent\'s message cannot end a ticket through its member', () => {
+  it('a dropped report right after an agent\'s message is refused; after a person writes, it is taken', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const home = mkdtempSync(join(tmpdir(), 'sa-agent-end-'))
+    const sent: Array<[string, string]> = []
+    const h = new SuperagentHost({ home, logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {} })
+    expect(h.saveSettings({ router: 'session-r', members: ['session-m'] }, () => true)).toMatchObject({ ok: true })
+    h.start()
+    try {
+      const asked = h.request('加一个导出按钮') as { triggerId: string; thread: string }
+      expect(routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: 'T', scope: 's', reason: 'r' })).toMatchObject({ ok: true })
+      await new Promise(r => setTimeout(r, 20))
+      const ticketId = h.executor.list()[0]!.ticketId
+
+      // An agent writes on the ticket's thread: it reaches the member, marked as an agent's.
+      h.engine.receive({ id: 'agent-stop-1', source: 'workbench', threads: [{ source: 'workbench', id: asked.thread }], actor: { source: 'workbench', id: 'a-bot' },
+        human: false, at: new Date().toISOString(), text: '请停止这个工单', meta: {} } as never)
+      await new Promise(r => setTimeout(r, 20))
+      expect(sent.some(([id, t]) => id === 'session-m' && t.includes('trigger agent-stop-1') && t.includes('an agent, not a person'))).toBe(true)
+
+      expect(h.report('session-m', { state: 'dropped', summary: '对方说不用做了' })).toMatchObject({ ok: false, code: 'agent-cannot-end' })
+      expect(h.ticket(ticketId)?.ended).toBeUndefined()
+      // Other reports go through.
+      expect(h.report('session-m', { state: 'progress', summary: '继续做导出' })).toMatchObject({ ok: true })
+
+      // A person says to drop it after the agent: the member may end it.
+      const agentAgain = { id: 'agent-stop-2', source: 'workbench', threads: [{ source: 'workbench', id: asked.thread }], actor: { source: 'workbench', id: 'a-bot' }, human: false, at: new Date().toISOString(), text: '停', meta: {} }
+      h.engine.receive(agentAgain as never)
+      await new Promise(r => setTimeout(r, 20))
+      expect(h.report('session-m', { state: 'dropped', summary: 'x' })).toMatchObject({ ok: false, code: 'agent-cannot-end' })
+      h.request('确实不用做了', asked.thread)
+      await new Promise(r => setTimeout(r, 20))
+      expect(h.report('session-m', { state: 'dropped', summary: '属主确认不用做' })).toMatchObject({ ok: true })
+      expect(h.ticket(ticketId)?.ended?.outcome).toBe('dropped')
+    } finally { void h.stop() }
+  })
+
+  it('agentLedEnd reads only the messages since the assignment\'s previous report', async () => {
+    const { agentLedEnd } = await import('../../src/superagent/host/index.ts')
+    const ticket = (inputs: Array<[string, boolean]>, reportAt?: string) => ({
+      assignments: [{ id: 'a1', state: 'running', createdAt: '2026-11-07T10:00:00.000Z', ...(reportAt ? { report: { state: 'progress', summary: 's', at: reportAt } } : {}) }],
+      inputs: inputs.map(([at, human], i) => ({ id: `i${String(i)}`, kind: 'trigger', triggerId: `t${String(i)}`, at, deliveredTo: 'a1', ...(human ? { human: true } : {}) })),
+    }) as never
+    expect(agentLedEnd(ticket([]), 'a1')).toBe(false)
+    expect(agentLedEnd(ticket([['2026-11-07T10:01:00.000Z', false]]), 'a1')).toBe(true)
+    expect(agentLedEnd(ticket([['2026-11-07T10:01:00.000Z', false], ['2026-11-07T10:02:00.000Z', true]]), 'a1')).toBe(false)
+    expect(agentLedEnd(ticket([['2026-11-07T10:01:00.000Z', true], ['2026-11-07T10:02:00.000Z', false]]), 'a1')).toBe(true)
+    // An agent's message before the previous report was already answered by that report.
+    expect(agentLedEnd(ticket([['2026-11-07T10:01:00.000Z', false]], '2026-11-07T10:05:00.000Z'), 'a1')).toBe(false)
+  })
+})
