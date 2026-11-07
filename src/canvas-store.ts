@@ -43,7 +43,16 @@ export interface CanvasSnapshot {
   readonly cliHome?: Readonly<Record<string, string>>
   /** Local publish cleared an older pin; kept for the owner inspector until membership is removed or re-pinned. */
   readonly cliHomeCleared?: readonly string[]
+  /**
+   * Role canvases (superagent design v3.1): canvas name -> its router's member ref. Present only in a
+   * formatVersion 3 snapshot, so a plugin that predates roles refuses the file (read-only) instead of
+   * silently dropping the role rules.
+   */
+  readonly routers?: Readonly<Record<string, string>>
 }
+
+/** The snapshot format with role canvases; plain canvases keep writing 2. */
+export const CANVAS_ROLE_FORMAT = 3
 
 /** Upper bounds: a canvas taxonomy, not a database. */
 export const CANVAS_TEAM_CAP = 64
@@ -105,6 +114,7 @@ export class CanvasStore {
   private revision = 0
   private committed = ''
   private memberOwners: Record<string, string> = {}
+  private routers: Record<string, string> = {}
   private disk: string | undefined
   private readOnlyReason = ''
   private lastWriteError = ''
@@ -138,9 +148,9 @@ export class CanvasStore {
     try {
       this.disk = readFileSync(this.path, 'utf8')
       const snapshot = JSON.parse(this.disk) as Partial<CanvasSnapshot> | null
-      if (snapshot?.formatVersion !== undefined && snapshot.formatVersion !== 2) { this.readOnlyReason = 'unsupported canvas formatVersion'; return }
+      if (snapshot?.formatVersion !== undefined && snapshot.formatVersion !== 2 && snapshot.formatVersion !== CANVAS_ROLE_FORMAT) { this.readOnlyReason = 'unsupported canvas formatVersion'; return }
       if (snapshot?.memberOwners && typeof snapshot.memberOwners === 'object' && !Array.isArray(snapshot.memberOwners)) this.memberOwners = { ...snapshot.memberOwners }
-      if (snapshot?.formatVersion === 2) {
+      if (snapshot?.formatVersion === 2 || snapshot?.formatVersion === CANVAS_ROLE_FORMAT) {
         if (!Number.isSafeInteger(snapshot.revision) || snapshot.revision! < 0 || !Array.isArray(snapshot.suspendedMembers) || !Array.isArray(snapshot.teams) || snapshot.teams.length > CANVAS_TEAM_CAP) throw Error('incomplete or oversized canvas v2 snapshot')
         const names = new Set<string>()
         for (const entry of snapshot.teams) {
@@ -160,6 +170,8 @@ export class CanvasStore {
           fpKeys.set(fp,key)
         }
         if (snapshot.cliHome !== undefined && (snapshot.cliHome === null || typeof snapshot.cliHome !== 'object' || Array.isArray(snapshot.cliHome) || Object.entries(snapshot.cliHome).some(([handle, home]) => !CLI_HANDLE_RE.test(handle) || typeof home !== 'string' || !validHomeOrigin(home) || !snapshot.teams!.some(t => t.members.includes(handle))))) throw Error('invalid canvas v2 CLI homes')
+        if (snapshot.formatVersion === CANVAS_ROLE_FORMAT && (snapshot.routers === null || typeof snapshot.routers !== 'object' || Array.isArray(snapshot.routers) || Object.keys(snapshot.routers).length === 0 || Object.entries(snapshot.routers).some(([name, ref]) => !names.has(name) || typeof ref !== 'string' || ref === '' || /[\x00-\x1f\x7f]/.test(ref)))) throw Error('invalid canvas v3 routers')
+        if (snapshot.formatVersion === 2 && snapshot.routers !== undefined) throw Error('canvas routers require formatVersion 3')
         if (snapshot.cliHomeCleared !== undefined && (!Array.isArray(snapshot.cliHomeCleared) || new Set(snapshot.cliHomeCleared).size !== snapshot.cliHomeCleared.length || snapshot.cliHomeCleared.some(handle => typeof handle !== 'string' || !CLI_HANDLE_RE.test(handle) || !snapshot.teams!.some(t => t.members.includes(handle))))) throw Error('invalid canvas v2 cleared homes')
       }
       this.revision = Number.isSafeInteger(snapshot?.revision) && snapshot!.revision! >= 0 ? snapshot!.revision! : 0
@@ -191,6 +203,7 @@ export class CanvasStore {
           if (CLI_HANDLE_RE.test(handle) && typeof home === 'string' && validHomeOrigin(home) && this.teams.some(t => t.members.includes(handle))) this.cliHome[handle] = home
         }
       }
+      if (snapshot.formatVersion === CANVAS_ROLE_FORMAT && snapshot.routers) this.routers = { ...snapshot.routers }
       if (Array.isArray(snapshot.cliHomeCleared)) for (const handle of snapshot.cliHomeCleared) {
         if (typeof handle === 'string' && CLI_HANDLE_RE.test(handle) && this.cliHome[handle] === undefined && this.teams.some(t => t.members.includes(handle))) this.cliHomeCleared.add(handle)
       }
@@ -210,6 +223,7 @@ export class CanvasStore {
       this.suspended = [...previous.suspendedMembers ?? []]
       this.memberOwners = { ...previous.memberOwners }
       this.cliHome = { ...previous.cliHome }; this.cliHomeCleared = new Set(previous.cliHomeCleared)
+      this.routers = { ...previous.routers }
       this.revision = previous.revision ?? 0
       throw error
     }
@@ -219,17 +233,19 @@ export class CanvasStore {
   }
 
   private serialize(): string {
-    return JSON.stringify({ teams: this.teams, memberOwners: this.memberOwners, suspendedMembers: this.suspended, cliHome: this.cliHome, cliHomeCleared: [...this.cliHomeCleared], revision: this.revision })
+    return JSON.stringify({ teams: this.teams, memberOwners: this.memberOwners, suspendedMembers: this.suspended, cliHome: this.cliHome, cliHomeCleared: [...this.cliHomeCleared], routers: this.routers, revision: this.revision })
   }
   private write(): void {
     if (this.readOnlyReason) throw Error(this.readOnlyReason)
     const revision = this.revision + 1
-    const snapshot: CanvasSnapshot = { formatVersion: 2, revision,
+    const roles = Object.keys(this.routers).length > 0
+    const snapshot: CanvasSnapshot = { formatVersion: roles ? CANVAS_ROLE_FORMAT : 2, revision,
       teams: this.teams.map(t => ({ name: t.name, members: [...t.members] })),
       suspendedMembers: this.suspended.map(r => ({ ...r })),
       ...(Object.keys(this.memberOwners).length ? { memberOwners: this.memberOwners } : {}),
       ...(Object.keys(this.cliHome).length ? { cliHome: { ...this.cliHome } } : {}),
-      ...(this.cliHomeCleared.size ? { cliHomeCleared: [...this.cliHomeCleared] } : {}) }
+      ...(this.cliHomeCleared.size ? { cliHomeCleared: [...this.cliHomeCleared] } : {}),
+      ...(roles ? { routers: { ...this.routers } } : {}) }
     const bytes = JSON.stringify(snapshot)
     if (this.path !== '') {
       mkdirSync(dirname(this.path), { recursive: true })
@@ -242,7 +258,7 @@ export class CanvasStore {
         if (current !== this.disk) throw Error('canvas snapshot changed externally; reload before writing')
         let oldVersion: unknown
         try { oldVersion = current === undefined ? undefined : JSON.parse(current)?.formatVersion } catch { /* back up malformed legacy data too */ }
-        if (current !== undefined && oldVersion !== 2) {
+        if (current !== undefined && oldVersion !== 2 && oldVersion !== CANVAS_ROLE_FORMAT) {
           const backup = this.path + '.pre-v2'
           if (existsSync(backup)) {
             if (readFileSync(backup, 'utf8') !== current) throw Error('canvas pre-v2 backup differs; inspect before migration: ' + backup)
@@ -339,6 +355,7 @@ export class CanvasStore {
     this.suspended = this.suspended.map(row => row.team === team && row.member === member ? { ...row, member: replacement } : row)
       .filter((row, i, all) => all.findIndex(other => other.team === row.team && other.member === row.member && other.reason === row.reason && other.localSessionId === row.localSessionId) === i)
     if (qualified) this.memberOwners[replacement] = ownerKey!
+    if (this.routers[team] === member) this.routers[team] = replacement
     try { this.persist(); return { ok: true } } catch (error) { return { ok: false, error: String(error) } }
   }
   /** Durably revoke canvas consent BEFORE join/agent/roster state is removed. */
@@ -366,6 +383,29 @@ export class CanvasStore {
     this.suspended = this.suspended.filter(r => r.team !== team || r.member !== member)
     if (action === 'delete') entry.members = entry.members.filter(m => m !== member)
     try { this.persist(); return { ok: true } } catch (error) { this.suspended = old; entry.members = members; return { ok: false, error: String(error) } }
+  }
+
+  /** The router member ref of a role canvas; undefined for a plain canvas. */
+  routerOf(name: string): string | undefined { return this.routers[name] }
+  /** Every role canvas with its router ref, in no particular order. */
+  routerEntries(): ReadonlyArray<readonly [string, string]> { return this.readOnlyReason ? [] : Object.entries(this.routers) }
+  /**
+   * Owner control only: name the canvas's router (turning it into a role canvas) or clear it.
+   * The router must be one of the canvas's current member refs; whether that ref is a local
+   * session is the control route's check, since the store knows no registry.
+   */
+  setRouter(name: string, ref: string | undefined): { ok: boolean; error?: string } {
+    if (this.readOnlyReason || this.failedSuspension) return { ok: false, error: this.state().error }
+    if (!this.hasTeam(name)) return { ok: false, error: 'no such canvas team' }
+    if (ref !== undefined && !this.membersOf(name).includes(ref)) return { ok: false, error: 'the router must be a current member of the canvas' }
+    const before = this.routers[name]
+    if (before === ref) return { ok: true }
+    if (ref === undefined) delete this.routers[name]
+    else this.routers[name] = ref
+    try { this.persist(); return { ok: true } } catch (error) {
+      if (before === undefined) delete this.routers[name]; else this.routers[name] = before
+      return { ok: false, error: String(error) }
+    }
   }
 
   /** Frozen, operator-linked CLI home; undefined means unknown or ambiguous. */
@@ -421,6 +461,7 @@ export class CanvasStore {
     if (this.suspended.some(r => r.team === name)) return false
     const [removed] = this.teams.splice(index, 1)
     for (const id of removed!.members) this.forgetUnusedHome(id)
+    delete this.routers[name]
     this.persist()
     return true
   }

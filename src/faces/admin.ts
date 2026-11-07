@@ -73,6 +73,10 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly cliDeposits: CliDepositStore
   /** superagent p1-mail-admission (M-2): the admission `caller` would get delivering to a deposited handle now. */
   readonly admissionRecheck: (caller: string, handle: string, local: boolean) => Admission
+  /** v3.1 PR-1: why a role canvas cannot take this router (router set) or this member (member set), else undefined. */
+  readonly roleCanvasProblem: (name: string, router: string | undefined, member?: string, memberKey?: string) => string | undefined
+  /** v3.1 PR-1: routers, refusal counts by rule, latest refusals. */
+  readonly roleState: () => unknown
   readonly groupStore: GroupStore
   readonly canvasStore: CanvasStore
   readonly canvasMemberForWrite: (ref: string, peer?: unknown) => Promise<{ ok: true; member: string; ownerKey?: string } | { ok: false; error: string }>
@@ -279,6 +283,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           groups: groupStore.list(),
           canvas: {
             ...d.canvasMigrationState(),
+            // v3.1 PR-1: role canvases (router per canvas) and the direction refusals counted by rule.
+            roles: d.roleState(),
             // Raw retained slots are an inspection view, never the effective team member list.
             retainedMembers: canvasStore.list().flatMap(name => canvasStore.rawMembersOf(name).filter(id => !canvasStore.membersOf(name).includes(id)).map(id => ({ team: name, member: id, suspended: canvasStore.isSuspended(name,id), records: canvasStore.suspensionOf(name,id) }))),
             teams: canvasStore.list().map(name => ({
@@ -286,6 +292,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               team: canvasTeamOf(name),
               // #282 S2: the owner-qualified routing id.
               id: `${canvasTeamOf(name)}@${d.ownCanvasFingerprint}`,
+              ...(canvasStore.routerOf(name) !== undefined ? { router: canvasStore.routerOf(name) } : {}),
               // gh#152: members as the local tiers read them (gh#131). One
               // of this host's own handles renders as the local session it
               // names — join/live facts instead of an opaque remote chip — and
@@ -919,6 +926,20 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           } else if (action === 'remove') {
             const name = typeof body.name === 'string' ? body.name : ''
             payload = JSON.stringify({ ok: canvasStore.remove(name), teams: canvasStore.list() })
+          } else if (action === 'set-router') {
+            // v3.1 PR-1: the owner names (or clears, id null/'') the router of a canvas, making it a role canvas.
+            // Owner control route only: the peer canvas face never sets or reads past a role.
+            const name = typeof body.name === 'string' ? body.name : ''
+            const raw = (body as { id?: unknown }).id
+            const id = typeof raw === 'string' && raw !== '' ? raw : undefined
+            if (raw !== undefined && raw !== null && typeof raw !== 'string') payload = JSON.stringify({ ok: false, error: 'id must be a member ref, or null to clear' })
+            else if (!canvasStore.hasTeam(name)) payload = JSON.stringify({ ok: false, error: 'no such canvas team' })
+            else {
+              const problem = id === undefined ? undefined : d.roleCanvasProblem(name, id)
+              const out = problem !== undefined ? { ok: false, error: problem } : canvasStore.setRouter(name, id)
+              logger.info('canvas role owner operation set-router %s %s: %s', name, id ?? '(clear)', out.ok ? 'applied' : out.error)
+              payload = JSON.stringify({ ...out, router: canvasStore.routerOf(name) ?? null, roles: d.roleState() })
+            }
           } else if (action === 'add-member') {
             const name = typeof body.name === 'string' ? body.name : ''
             const id = typeof body.id === 'string' ? body.id : ''
@@ -939,6 +960,9 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             } else {
               const proof = await d.canvasMemberForWrite(id, (body as { peer?: unknown }).peer)
               if (!proof.ok) { payload = JSON.stringify(proof); res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(payload); return }
+              // v3.1 PR-1: a role canvas seats local sessions and owner-qualified remote sessions with a proven key only.
+              const roleProblem = canvasStore.routerOf(name) === undefined ? undefined : d.roleCanvasProblem(name, undefined, proof.member, proof.ownerKey)
+              if (roleProblem !== undefined) { payload = JSON.stringify({ ok: false, error: 'role canvas: ' + roleProblem }); res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(payload); return }
               const pin = await d.cliHomeForAdd(proof.member, (body as { home?: unknown }).home).catch(() => ({ ok: false as const, error: 'linked home card lookup failed' }))
               if (!pin.ok) payload = JSON.stringify({ ok: false, error: pin.error })
               else {

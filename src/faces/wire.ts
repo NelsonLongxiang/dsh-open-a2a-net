@@ -90,6 +90,8 @@ function sameOrigin(a: string, b: string): boolean {
 
 /** The closure captures the wire faces read (grows with each extracted face). */
 export interface WireDeps {
+  /** v3.1 PR-1: the role canvas direction verdict for one inbound delivery (the claim proves a remote caller's key). */
+  readonly roleVerdict: (caller: string, team: string, message: string, claim: OriginClaimResult) => { readonly governed: boolean; readonly ok?: boolean; readonly refusal?: string; readonly rule?: string; readonly next?: string }
   readonly ctx: Context
   readonly logger: ReturnType<Context['logger']>
   readonly config: Config
@@ -348,7 +350,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const provenOwn = rawId.endsWith('@' + d.ownCanvasFingerprint)
             const id = (provenOwn ? localSessionOfHandle(rawId) : undefined) ?? rawId
             let payload: { ok: boolean; members?: readonly string[]; removed?: boolean; error?: string }
-            if (op === 'create') {
+            if (name !== '' && canvasStore.routerOf(name) !== undefined) {
+              // v3.1 PR-1: a role canvas is composed by this host's owner only; peers may not edit or dissolve it.
+              payload = { ok: false, error: 'role canvas: members and roles are set only by this host\'s owner (workbench)' }
+            } else if (op === 'create') {
               const stored = canvasNameReserved(name) ? undefined : canvasStore.create(name)
               payload = stored === undefined ? { ok: false, error: 'invalid, roster-reserved name or team cap reached' } : { ok: true, members: canvasStore.membersOf(stored) }
             } else if (op === 'add-member') {
@@ -712,6 +717,15 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             recordActivity('in', team, caller === '' ? 'anonymous' : caller, false)
             const next = nextOf(admission)
             const payload = JSON.stringify({ error: callerRefusal, code: -32000, team, task_status: 'TASK_STATE_FAILED', ...(next !== undefined ? { next } : {}) })
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+            return
+          }
+          // v3.1 PR-1: a role holder on this host takes only its role's directions, whatever the ordinary admission said.
+          const role = d.roleVerdict(caller, team, message, earlyClaim)
+          if (role.governed && role.ok !== true) {
+            recordActivity('in', team, caller, false)
+            const payload = JSON.stringify({ error: role.refusal, code: -32000, rule: role.rule, team, task_status: 'TASK_STATE_FAILED', ...(role.next !== undefined ? { next: role.next } : {}) })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
             return

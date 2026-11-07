@@ -43,6 +43,38 @@
   [cli.md](cli.md)).
 - Anonymous deliveries (no `caller_session`) are refused outright.
 
+## Role canvases (router and members)
+
+A canvas team becomes a **role canvas** when the owner names one of its members
+the router (workbench, or the owner control route `/__dsh_a2a/canvas`
+`{ action: 'set-router', name, id }`; `id: null` clears it). Every other member
+is a member. The host then admits only two directions between role holders:
+
+- router → a member of the same canvas: work (any non-receipt message);
+- member → its router: a receipt for a task that router sent to that member.
+
+Everything else touching a role holder is refused with a rule name in the
+error (`[role-…]`) and counted on the state face (`canvas.roles`):
+`role-member-initiates` (a member never starts work, nor talks to another
+member), `role-router-inbound` (the router takes no A2A work — the owner talks
+to it in its own session), `role-boundary` (no traffic crosses the canvas in
+either direction, CLI identities and the host face included),
+`role-receipt-unowed` (a receipt for a task the router did not send to that
+member), `role-canvas-address` (the role canvas is never addressed as a team),
+`role-ambiguous` (a session in two role canvases, or a bare handle with two
+pinned keys).
+
+Across hosts — several physical nodes, or several DSH instances on one machine
+that may share a zone label — every host enforces **its own** record: the
+owner sets the router on each host that holds a role holder. Remote role
+holders must be owner-qualified members (`<zone>/<id8>@<fp8>`, added with the
+member's host selected, so the full key is pinned); a remote caller holds its
+seat only when its signed OriginClaim key equals that pinned key. A bare
+handle or an unproven caller reaches no role holder. Peers cannot edit or
+dissolve a role canvas through the fleet canvas face. A role canvas is saved as
+canvas `formatVersion` 3, which an older plugin opens read-only instead of
+dropping the roles.
+
 ## Information-plane scoping (S5, default on)
 
 - The read-only fleet tools answer from the joined-team scope only

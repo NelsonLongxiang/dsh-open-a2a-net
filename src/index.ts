@@ -56,6 +56,7 @@ import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type OutboundBirth, type ReceiptResolvedInfo, type Sender, type SettlementJudge, type TaskRecord } from './task-ledger.ts'
 import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
+import { roleDirection, localSessionOf, seatsOf, addressParty, partyLabel, type Party, type RoleRecords, type RoleVerdict, type RoleRefusalRule, type ReceiptFacts } from './role-direction.ts'
 import { ReconciliationReminders, type ReminderAgent } from './reconciliation-reminders.ts'
 import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
@@ -1785,6 +1786,7 @@ export function apply(ctx: Context, config: Config): void {
         ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
         admissionRecheck: (caller: string, handle: string, local: boolean) => recheckCallerAdmission(admissionRecords, caller, handle, local),
+        roleCanvasProblem, roleState,
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
         get legacyInboundCount() { return legacyInboundCount },
@@ -2686,6 +2688,95 @@ export function apply(ctx: Context, config: Config): void {
     cliHomeOf: handle => canvasStore.cliHomeOf(handle),
   }
 
+  // superagent design v3.1 PR-1: role canvas direction admission (src/role-direction.ts).
+  // One decision, applied at every seam a delivery can take: the a2a_route trunk,
+  // the local in-process candidate, and the inbound wire face.
+  const roleRecords: RoleRecords = {
+    zone: config.team,
+    ownFingerprint: ownCanvasFingerprint,
+    id8,
+    routers: () => canvasStore.routerEntries(),
+    canvasMembersOf: name => canvasStore.membersOf(name),
+    canvasTeamOf,
+    ownerKeyOf: ref => canvasStore.ownerKeyOf(ref),
+    localSessions: () => [...new Set([...joinedSessions.list(), ...sessionNodes.keys()])],
+  }
+  /** An in-process caller label as a party: a local session, else the host face / a CLI identity. */
+  const localCallerParty = (label: string | undefined): Party => {
+    const local = label === undefined || CLI_HANDLE_RE.test(label) ? undefined : localSessionOf(roleRecords, label)
+    return local !== undefined ? { kind: 'local', session: local } : { kind: 'other', label: label ?? 'host' }
+  }
+  /**
+   * A wire caller as a party: a remote session proven by a bound OriginClaim whose signer covers the
+   * caller handle (its key is matched against the key the owner pinned); this host's own key is local.
+   */
+  const wireCallerParty = (caller: string, claim: { ok: true; caller: string; card: { publicKey?: string }; bound: boolean; cli?: true } | { ok: false }): Party => {
+    if (caller === '' || CLI_HANDLE_RE.test(caller)) return { kind: 'other', label: caller || 'anonymous' }
+    const proven = claim.ok && claim.bound && claim.cli !== true && claimCovers(caller, claim.caller) && typeof claim.card.publicKey === 'string' ? claim.card.publicKey : undefined
+    if (proven !== undefined && proven === encodePublicKey(createPublicKey(nodePrivateKey))) return localCallerParty(caller)
+    return { kind: 'remote', handle: caller.replace(/@[0-9a-f]{8}$/, ''), ...(proven !== undefined ? { key: proven } : {}) }
+  }
+  const ROLE_REFUSAL_RECENT = 32
+  const roleRefusalCounts = new Map<RoleRefusalRule, number>()
+  const recentRoleRefusals: { at: number; rule: RoleRefusalRule; caller: string; target: string; face: string }[] = []
+  /** The direction verdict for one delivery; every refusal is counted by rule and kept in a short ring. */
+  function roleVerdictFor(caller: Party, target: string, message: string, face: string, courier = false): RoleVerdict {
+    if (canvasStore.routerEntries().length === 0) return { governed: false }
+    const parsed = parseReceipt(message)
+    let receipt: ReceiptFacts | undefined
+    if (parsed !== null) {
+      // The router's host books an outbound row; a member's host (router elsewhere) has only the inbound row it admitted.
+      const rows = taskLedger.list().filter(entry => entry.taskId === parsed.taskId)
+      const out = rows.find(entry => entry.direction !== 'inbound' && entry.sender?.kind === 'session')
+      const inbound = rows.find(entry => entry.direction === 'inbound' && (entry.auth?.proof === 'origin-claim' || entry.auth?.proof === 'in-process'))
+      receipt = out !== undefined
+        ? { taskId: parsed.taskId, from: out.sender!.id, to: out.deliveredTo ?? out.team }
+        : inbound !== undefined ? { taskId: parsed.taskId, from: inbound.auth!.caller, to: inbound.deliveredTo ?? inbound.team } : { taskId: parsed.taskId }
+    }
+    const verdict = roleDirection(roleRecords, { caller, target, ...(receipt !== undefined ? { receipt } : {}), courier })
+    if (verdict.governed && !verdict.ok) {
+      roleRefusalCounts.set(verdict.rule, (roleRefusalCounts.get(verdict.rule) ?? 0) + 1)
+      recentRoleRefusals.unshift({ at: Date.now(), rule: verdict.rule, caller: courier ? 'host' : partyLabel(caller), target, face })
+      recentRoleRefusals.length = Math.min(recentRoleRefusals.length, ROLE_REFUSAL_RECENT)
+      logger.info('a2a: role canvas refused %s -> %s (%s, %s)', caller ?? 'host', target, verdict.rule, face)
+    }
+    return verdict
+  }
+  /** The workbench's view of the role canvases: routers, refusal counts by rule, the latest refusals. */
+  function roleState() {
+    return {
+      routers: Object.fromEntries(canvasStore.routerEntries().map(([name, ref]) => [name, { ref, ...((party: Party) => party.kind === 'local' ? { session: party.session } : party.kind === 'remote' ? { remote: party.handle, keyPinned: party.key !== undefined } : { unresolved: true })(addressParty(roleRecords, ref)) }])),
+      refusals: Object.fromEntries(roleRefusalCounts),
+      recent: recentRoleRefusals.map(row => ({ ...row })),
+    }
+  }
+  /**
+   * Owner control checks for a role canvas (same-host only, one role canvas per session).
+   * @param router - the router ref being set, or undefined to check an add-member of `member`.
+   */
+  function roleCanvasProblem(name: string, router: string | undefined, member?: string, memberKey?: string): string | undefined {
+    const refs = member !== undefined ? [member] : canvasStore.membersOf(name)
+    // A role holder is a session of this host or a session of another host (another node or another DSH
+    // instance on this machine) under an owner-qualified ref whose full key the owner pinned; a bare
+    // remote handle cannot tell two instances with the same zone apart, and a CLI identity holds no role.
+    const partyOf = (ref: string): Party | string => {
+      if (CLI_HANDLE_RE.test(ref)) return `${ref} is a CLI identity; role canvases seat sessions only`
+      const resolved = addressParty(roleRecords, ref)
+      // A member being added has its key proven by canvasMemberForWrite but not pinned yet.
+      const party: Party = resolved.kind === 'remote' && ref === member && memberKey !== undefined ? { ...resolved, key: memberKey } : resolved
+      if (party.kind === 'local') return party
+      if (party.kind === 'remote' && splitQualifiedMember(ref) !== undefined && party.key !== undefined) return party
+      return `${ref} is not a local session or an owner-qualified remote session with a pinned key; confirm the member (owner-qualified handle) first`
+    }
+    if (router !== undefined) { const party = partyOf(router); if (typeof party === 'string') return 'router: ' + party }
+    for (const ref of refs) {
+      const party = partyOf(ref)
+      if (typeof party === 'string') return party
+      if (seatsOf(roleRecords, party).some(seat => seat.canvas !== name)) return `${ref} already sits in another role canvas; a session holds one role at most`
+    }
+    return undefined
+  }
+
   /** W1/W2 shared-team admission (see sameZoneAdmission in src/task-auth.ts). */
   function sameZoneSharedTeamRefusal(caller: string, targetTeam?: string): string | undefined {
     return refusalOf(sameZoneAdmission(admissionRecords, caller, targetTeam))
@@ -2755,6 +2846,7 @@ export function apply(ctx: Context, config: Config): void {
       canvas: canvasStore.list().map(name => [canvasTeamOf(name), canvasStore.membersOf(name).map(m => (m.includes('/') ? m : handle(m)))] as const),
       cli: cliDeposits.list().map(row => row.handle),
       cliHome: canvasStore.pinnedCliHomes(),
+      roles: canvasStore.routerEntries().map(([name, ref]) => [canvasTeamOf(name), ref.includes('/') ? ref : handle(ref)] as const),
       links: config.peers.map(peer => { try { return new URL(peer).origin } catch { return peer } }),
     }
   }
@@ -2861,6 +2953,7 @@ export function apply(ctx: Context, config: Config): void {
       config,
       cliDeposits,
       canvasStore, canvasMemberForWrite,
+      roleVerdict: (caller, team, message, claim) => roleVerdictFor(wireCallerParty(caller, claim), team, message, 'wire'),
       canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
       sessionNodes,
       joinedSessions,
@@ -3703,6 +3796,16 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const ownerQualified = splitCanvasOwner(String(args.team ?? '').trim())
       const foreignOwner = ownerQualified.owner !== undefined && ownerQualified.owner !== ownCanvasFingerprint ? ownerQualified.owner : undefined
       if (ownerQualified.owner !== undefined) args = { ...args, team: ownerQualified.team }
+      // v3.1 PR-1: a role holder's route is judged by direction before anything is marked or sent.
+      let roleAdmitted = false
+      {
+        const role = roleVerdictFor(agent !== undefined ? { kind: 'local', session: String(agent.id) } : { kind: 'other', label: hostCaller ?? session }, String(args.team ?? '').trim(), String(args.message ?? ''), 'route')
+        if (role.governed && !role.ok) {
+          recordActivity('out', String(args.team ?? ''), agent !== undefined ? sessionTeamOf(agent) : 'local', false)
+          return { ok: false, error: role.refusal, code: -32000, rule: role.rule, next: role.next }
+        }
+        roleAdmitted = role.governed && role.ok
+      }
       // A receipt may use only its own frozen return lane; local answer state is not delivery proof.
       const answer = parseReceipt(args.message)
       const receiptRow=answer===null?undefined:taskLedger.find(answer.taskId)
@@ -3727,7 +3830,10 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // and the initiator face stay exempt, like the join gate; discovery
       // (a2a_teams) stays open so a teamless node can still see what to join.
       let scopedCanvasCaller: { id: string; handle: string } | undefined
-      if (config.teamScopeRouting && agent !== undefined) {
+      // A direction the role canvas admitted is a link at least as strict as the sender scope (both ends sit in
+      // the owner's role canvas), so the scope gate does not judge it again — it reads canvas members by
+      // handle only and would refuse a member stored by session id.
+      if (config.teamScopeRouting && agent !== undefined && !roleAdmitted) {
         const scopeCaller = String(agent.id)
         let initiator = false
         try {
@@ -3890,6 +3996,12 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     if (joinedRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: joinedRefusal, code: -32000 }
+    }
+    // v3.1 PR-1: the same direction rules on the in-process path (receipt autosend rides it with the host as courier).
+    const role = roleVerdictFor(localCallerParty(callerSession), team, message, 'local', callerSession === undefined || callerSession === session)
+    if (role.governed && !role.ok) {
+      recordActivity('out', team, callerSession ?? 'local', false)
+      return { ok: false, error: role.refusal, code: -32000, next: role.next }
     }
     // #114 S5: the same header-safe id rule the wire face enforces.
     const idRefusal = taskIdFromCaller === undefined ? undefined : taskIdRefusal(taskIdFromCaller)

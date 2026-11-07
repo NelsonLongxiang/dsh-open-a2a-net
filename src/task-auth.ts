@@ -338,6 +338,8 @@ export interface AllowlistInputs {
   readonly canvas: readonly (readonly [team: string, members: readonly string[]])[]
   readonly cli: readonly string[]
   readonly cliHome?: readonly (readonly [handle: string, origin: string])[]
+  /** Role canvases (v3.1): [canvas team, router handle]. Hashed only when present, so hosts without roles keep their versions. */
+  readonly roles?: readonly (readonly [team: string, router: string])[]
   readonly links: readonly string[]
 }
 
@@ -366,6 +368,7 @@ export function canonicalAllowlist(inputs: AllowlistInputs): string {
     canvas,
     cli: sortedUnique(inputs.cli),
     ...(inputs.cliHome !== undefined && inputs.cliHome.length > 0 ? { cliHome: [...new Map(inputs.cliHome.map(p => [JSON.stringify(p), p])).values()].sort((a, b) => pairKey(a) < pairKey(b) ? -1 : pairKey(a) > pairKey(b) ? 1 : 0) } : {}),
+    ...(inputs.roles !== undefined && inputs.roles.length > 0 ? { roles: [...new Map(inputs.roles.map(p => [JSON.stringify(p), [p[0], p[1]] as const])).values()].sort((a, b) => pairKey(a) < pairKey(b) ? -1 : pairKey(a) > pairKey(b) ? 1 : 0) } : {}),
     links: sortedUnique(inputs.links),
   })
 }
