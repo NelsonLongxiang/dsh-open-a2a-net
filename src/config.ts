@@ -108,7 +108,7 @@ export interface Config {
   /**
    * Override for the OriginClaim callerUrl anchor. Loopback-bound hosts
    * behind a pocket tunnel must name the card URL peers can actually
-   * fetch (e.g. http://192.168.3.157:13080); empty uses the web server's
+   * fetch (e.g. http://10.20.30.11:13080); empty uses the web server's
    * own address.
    */
   readonly originClaimUrl: string

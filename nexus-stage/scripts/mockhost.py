@@ -109,7 +109,7 @@ def valid_name(raw):
 # request carries demo=1 (query or Referer), so the activity/federal layers are
 # demonstrable offline and on live fleets that have no in-flight routes. ──
 DEMO_PEERS = [
-    {'url': 'http://192.168.3.88:3080', 'score': 42},
+    {'url': 'http://10.20.30.12:3080', 'score': 42},
     {'url': 'http://10.0.0.7:13080', 'score': 17},
 ]
 
@@ -138,7 +138,7 @@ def build_state(demo: bool = False) -> bytes:
         second = names[1] if len(names) > 1 else first
         now_ms = int(time.time() * 1000)
         state['inFlight'] = [
-            {'team': first, 'peer': '192.168.3.88:3080', 'startedAt': now_ms - 12000},
+            {'team': first, 'peer': '10.20.30.12:3080', 'startedAt': now_ms - 12000},
             {'team': second, 'peer': '10.0.0.7:13080', 'startedAt': now_ms - 45000},
         ]
     return json.dumps(state).encode()

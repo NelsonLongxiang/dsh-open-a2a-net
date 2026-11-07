@@ -94,7 +94,7 @@ npm i @nelsonlongxiang/dsh-open-a2a-net@0.6.39 @deepseek-ai/cordis@4.0.5 @deepse
   "session": "a2a-node-mac",
   "agentName": "a2a-net node (mac)",
   "apiKey": "<与所有互联主机相同的强随机 key>",
-  "peers": ["http://100.75.181.127:13080"],
+  "peers": ["http://100.64.0.10:13080"],
   "originClaimUrl": "",
   "originClaimAudiences": []
 }

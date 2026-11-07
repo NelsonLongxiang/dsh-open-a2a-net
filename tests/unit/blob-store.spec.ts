@@ -128,14 +128,14 @@ describe('names and reference lines', () => {
   })
 
   it('a reference round-trips, from anywhere in a message; malformed, oversized or non-origin sources are refused', () => {
-    const ref = { sha256: sha('x'), size: 12, name: '月报 v2.xlsx', from: 'http://100.75.181.127:13080' }
+    const ref = { sha256: sha('x'), size: 12, name: '月报 v2.xlsx', from: 'http://100.64.0.10:13080' }
     const line = formatFileRef(ref)
     expect(parseFileRef(`请查收：\n${line}\n谢谢`)).toEqual(ref)
     expect(parseFileRef(line.replace(sha('x'), 'z'.repeat(64)))).toBeUndefined()
     expect(parseFileRef(line.replace('size=12', `size=${String(BLOB_FILE_MAX + 1)}`))).toBeUndefined()
-    expect(parseFileRef(line.replace('from=http://100.75.181.127:13080', 'from=http://h:1/a2a/cli/x'))).toBeUndefined()
-    expect(parseFileRef(line.replace('from=http://100.75.181.127:13080', 'from=http://u:p@h:1'))).toBeUndefined()
-    expect(parseFileRef(line.replace('from=http://100.75.181.127:13080', 'from=http://h:1/?q=1'))).toBeUndefined()
+    expect(parseFileRef(line.replace('from=http://100.64.0.10:13080', 'from=http://h:1/a2a/cli/x'))).toBeUndefined()
+    expect(parseFileRef(line.replace('from=http://100.64.0.10:13080', 'from=http://u:p@h:1'))).toBeUndefined()
+    expect(parseFileRef(line.replace('from=http://100.64.0.10:13080', 'from=http://h:1/?q=1'))).toBeUndefined()
     expect(parseFileRef(line.replace(' v1 ', ' v2 '))).toBeUndefined()
     // A name that tries to climb out is sanitized on parse.
     expect(parseFileRef(formatFileRef({ ...ref, name: 'x' }).replace('name=x', `name=${encodeURIComponent('../../a')}`))?.name).toBe('a')

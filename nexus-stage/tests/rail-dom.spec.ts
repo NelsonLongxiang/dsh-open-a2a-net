@@ -243,7 +243,7 @@ describe('台账 (wb-ledger)', () => {
   })
 
   it('a dead letter reads its direction from the row (gh#31), the peer prefix only on older hosts', () => {
-    const s: StateBody = { tasks: [], tasksDead: [{ taskId: 'direct-in000004', team: 'dsh/11111111', peer: 'http://192.168.3.157:13080', direction: 'inbound', startedAt: NOW - 25 * HOUR, deadAt: NOW - HOUR, reason: 'unconsumed', brief: '远端来的请求' }] }
+    const s: StateBody = { tasks: [], tasksDead: [{ taskId: 'direct-in000004', team: 'dsh/11111111', peer: 'http://10.20.30.11:13080', direction: 'inbound', startedAt: NOW - 25 * HOUR, deadAt: NOW - HOUR, reason: 'unconsumed', brief: '远端来的请求' }] }
     const { pane } = render({}, s)
     const c = pane.querySelector('.wb-led-card')!
     expect(text(c.querySelector('.wb-led-dir'))).toBe('↙')
