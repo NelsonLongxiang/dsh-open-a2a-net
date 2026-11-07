@@ -322,11 +322,20 @@ describe('D1/D2 · records for the shadow acceptance (global review of the accep
     const pages = f.state.get(KV.pages) as PageRecord[]
     expect(pages).toHaveLength(PAGE_RECORD_CAP)
     expect(pages[0]!.after).toBe('e1:2')
-    for (let i = 0; i < HEALTH_RECORD_CAP + 3; i += 1) reportError(f.ctx, 'a2a', { state: 'error', detail: `d${String(i)}`, at, values: { n: String(i) } })
+    for (let i = 0; i < HEALTH_RECORD_CAP + 3; i += 1) reportError(f.ctx, 'a2a', { state: 'error', detail: `d${String(i)}`, at, values: { count: String(i) } })
     const log = f.state.get(KV.healthLog) as HealthRecord[]
     expect(log).toHaveLength(HEALTH_RECORD_CAP)
-    expect(log[0]!.values).toEqual({ n: '3' })
+    expect(log[0]!.values).toEqual({ count: '3' })
     expect(f.reports).toHaveLength(HEALTH_RECORD_CAP + 3)
+  })
+
+  it('a failed read keeps its count in the record; the error text stays in the live report only', async () => {
+    const f = fake(() => { throw new Error('a2a-net: stderr says host 10.0.0.9 refused token abc') })
+    for (let i = 0; i < 3; i += 1) await pollMailbox(f.ctx, new AbortController().signal).catch(() => {})
+    reportError(f.ctx, 'a2a', { state: 'error', detail: 'd', at, code: 'pollFailures', values: { count: '3', error: 'a2a-net: stderr says host 10.0.0.9 refused token abc' } })
+    expect(f.state.get(KV.healthLog)).toEqual([{ at, entry: 'a2a', state: 'error', code: 'pollFailures', values: { count: '3' } }])
+    expect(JSON.stringify(f.state.get(KV.healthLog))).not.toContain('stderr')
+    expect(f.reports.at(-1)![1].values).toEqual({ count: '3', error: 'a2a-net: stderr says host 10.0.0.9 refused token abc' })
   })
 
   it('every loss round leaves a health record with its numbers and no free text', async () => {

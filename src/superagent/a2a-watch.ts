@@ -28,6 +28,8 @@ export const PAGE_RECORD_CAP = 1000
 export const HEALTH_RECORD_CAP = 200
 /** The host's proof vocabulary (src/task-auth.ts AuthProof): a row record keeps a proof only from this closed set. */
 const PROOF_VALUES: ReadonlySet<string> = new Set(['origin-claim', 'claim-mismatch', 'legacy-window', 'unbound', 'cli-identity', 'in-process', 'none'])
+/** The structured health values a health record may keep; free text (such as a CLI error) stays in the live report only. */
+const LOG_VALUE_KEYS: ReadonlySet<string> = new Set(['count', 'lost', 'after', 'epochChanged'])
 /** The mailbox's duplicate markers a row record may keep. */
 const DUP_VALUES: ReadonlySet<string> = new Set(['sync-answered'])
 
@@ -70,7 +72,8 @@ export function recordPage(ctx: SourceContext, page: PageRecord): void {
 /** Report a health error and keep its record (A7: every loss round leaves a record, whatever the current value says). */
 export function reportError(ctx: SourceContext, entry: string, h: Health, now: () => Date = () => new Date()): void {
   const log = ctx.state.get<HealthRecord[]>(KV.healthLog) ?? []
-  log.push({ at: h.at ?? now().toISOString(), entry, state: h.state, ...(h.code !== undefined ? { code: h.code } : {}), ...(h.values !== undefined ? { values: h.values } : {}) })
+  const values = h.values === undefined ? undefined : Object.fromEntries(Object.entries(h.values).filter(([name]) => LOG_VALUE_KEYS.has(name)))
+  log.push({ at: h.at ?? now().toISOString(), entry, state: h.state, ...(h.code !== undefined ? { code: h.code } : {}), ...(values !== undefined ? { values } : {}) })
   ctx.state.set(KV.healthLog, log.slice(-HEALTH_RECORD_CAP))
   ctx.report(entry, h)
 }

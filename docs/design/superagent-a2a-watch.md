@@ -42,9 +42,9 @@ superagent 包的 `cordis.patch.yml` 里插入一条，默认禁用：
 
 影子验收需要三类记录，Source 写在自己的 KV 里，与 `a2a-cursor`、`a2a-renewed-at` 分开存放：
 
-- `a2a-rows`：每一条信箱行一条记录，只有 `{epoch, seq, task_id, from, outcome, at, proof, receipt_for, dup}` 这几个字段，不存正文。proof 只记宿主的闭集取值，否则为 null；receipt_for 只记 task id；dup 只记已知的标记值（sync-answered）。有了这三项，验收就能以信箱行为全集和 Trigger 对账，查得出漏收的行，不只是用 Trigger 自证。`outcome` 取值为 stored、duplicate、filtered:unverified、filtered:receipt、duplicateCopy、unreadable 之一。同一行一处理完就写记录；**一轮所有行的记录都写完之后，游标才前移**。按稳定键 `epoch:seq` 去重，所以中断后重放不会记两次。最多保留最新的 `ROW_RECORD_CAP = 1000` 条，旧的滚动淘汰。
+- `a2a-rows`：每一条信箱行一条记录，只有 `{epoch, seq, task_id, from, outcome, at, proof, receipt_for, dup}` 这几个字段，不存正文。proof 只记宿主的闭集取值，否则为 null；receipt_for 只记 task id；dup 只记已知的标记值（sync-answered）。有了这三项，验收就能以信箱行为全集和 Trigger 对账，查得出漏收的行，不只是用 Trigger 自证。`outcome` 取值为 stored、duplicate、filtered:unverified、filtered:receipt、duplicateCopy、unreadable 之一。同一行一处理完就写记录；**一轮所有行的记录都写完之后，游标才前移**。按稳定键 `epoch:seq` 去重，所以中断后重放不会记两次。例外：seq 为空的行（只会来自不编号的老宿主）没有稳定键，不去重，重放时可能重复记录；验收里“同一 (epoch, seq) 只出现一次”这条检查不包括 seq 为空的行。最多保留最新的 `ROW_RECORD_CAP = 1000` 条，旧的滚动淘汰。
 - `a2a-pages`：每读一次记一条页头原值 `{at, after, next, epoch, lost, epochChanged, cursorAhead}`。这条记录无条件写，而且先于判断，所以即使 Source 漏判了 loss，也能被验收独立查出来。最多保留最新的 `PAGE_RECORD_CAP = 1000` 条。
-- `a2a-health-log`：Source 每报一次 error（读取挤出或游标异常、连续读取失败、户口续期失败、循环异常退出）就追加一条，只有 `{at, entry, state, code?, values?}`，不存 detail 文本。最多保留最新的 `HEALTH_RECORD_CAP = 200` 条。
+- `a2a-health-log`：Source 每报一次 error（读取挤出或游标异常、连续读取失败、户口续期失败、循环异常退出）就追加一条，只有 `{at, entry, state, code?, values?}`，不存 detail 文本。values 只保留结构化的几项：count、lost、after、epochChanged。CLI 错误原文这类自由文本只留在 ctx.report 的当前值里，不写进这份记录。最多保留最新的 `HEALTH_RECORD_CAP = 200` 条。
 
 这三份记录都在 superagent 存储的 kv 表里。页头记录和同一轮的 health 记录用的是同一个 `at`，验收靠它把两者对上。验收采集器只读它们，展平后交 verify 判定（A5、A7、A10）。上限决定了影子窗口能回溯多远：按每轮的流量估算，窗口内的记录条数不能超过上限，否则最早的记录会被淘汰，验收会少看到一部分。
 
