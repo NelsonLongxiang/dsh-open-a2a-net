@@ -123,6 +123,18 @@ export function health(state: Health['state'], code: HealthCode, values: Record<
 /** Display label, URL, and facts (`null` removes a fact) that a Source publishes on a Thread. */
 export interface ThreadDescription { label?: string; url?: string; facts?: Record<string, ThreadFact | null> }
 
+// ── src/sources/registry.ts:20, the one SourceRegistry member a Source plugin calls (left out: the class body) ──
+export interface SourceRegistry {
+  register<C extends Record<string, unknown>>(kind: SourceKind<C>): () => void
+}
+
+// ── src/sources/host.ts:23-27 ──
+export interface SourceHost {
+  readonly sources: SourceRegistry
+  /** Returns the context for one Source kind; its `report` writes only the health entries declared by the kind. */
+  context(kind: { kind: string; health: readonly string[] }): SourceContext
+}
+
 // ── src/sources/host.ts:31-66 (left out: problem, atomic, state.keys, threads.get/subscribed/patch, tickets, triggers, notify) ──
 /** Application capabilities exposed to a Source kind for reading state, ingesting triggers, managing threads/tickets, and reporting health. */
 export interface SourceContext {
