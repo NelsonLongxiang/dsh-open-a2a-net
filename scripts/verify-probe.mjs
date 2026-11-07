@@ -51,6 +51,32 @@ if (argv.includes('--release-audit')) {
   process.exit(0) // Collection success is not a validator PASS; only verify run judges this snapshot.
 }
 
+// superagent p2 shadow acceptance: flatten one a2a Source's records into a new snapshot. Exit 0 collected, 1 run error,
+// 2 usage error; one JSON object on stdout either way. Collection is not a PASS; only verify run judges the snapshot.
+if (argv.includes('--a2a-shadow')) {
+  const { collectA2aShadow, parseWindow, UsageError } = await import('./a2a-shadow-snapshot.mjs')
+  const value = name => { const i = argv.indexOf(`--${name}`); const v = i >= 0 ? argv[i + 1] : undefined; return v === undefined || v.startsWith('--') ? '' : v }
+  try {
+    const [source, cliHome, out] = ['a2a-shadow', 'cli-home', 'out'].map(value)
+    if (!source || !cliHome || !out) throw new UsageError('--a2a-shadow <superagent-db> requires --cli-home <dir>, --window <from>..<to> and --out <new snapshot>')
+    const window = parseWindow(value('window'))
+    const summary = await collectA2aShadow({ sourcePath: resolve(source), cliHome: resolve(cliHome), window, out: resolve(out) })
+    // The collector's identity stands in for a tooling registration: an acceptance names this commit and these hashes,
+    // and they must equal the ones at the collector PR's merge.
+    const { createHash } = await import('node:crypto')
+    const files = ['scripts/verify-probe.mjs', 'scripts/a2a-shadow-snapshot.mjs']
+    const git = args => { const r = spawnSync('git', args, { cwd: REPO, encoding: 'utf8' }); return r.status === 0 ? r.stdout.trim() : null }
+    const changed = git(['status', '--porcelain', '--', ...files])
+    const collector = { commit: git(['rev-parse', 'HEAD']), clean: changed === null ? null : changed === '',
+      sha256: Object.fromEntries(files.map(f => [f, createHash('sha256').update(readFileSync(resolve(REPO, f))).digest('hex')])) }
+    console.log(JSON.stringify({ mode: 'a2a-shadow-snapshot', collector, snapshot: resolve(out), ...summary }))
+    process.exit(0)
+  } catch (error) {
+    console.log(JSON.stringify({ error: String(error?.message ?? error) }))
+    process.exit(error instanceof UsageError ? 2 : 1)
+  }
+}
+
 const pkg = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8"));
 
 /* ── 小工具 ─────────────────────────────────────────────── */
