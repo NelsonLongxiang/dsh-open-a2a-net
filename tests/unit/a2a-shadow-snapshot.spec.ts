@@ -30,7 +30,7 @@ CREATE TABLE outbox (id TEXT PRIMARY KEY, value TEXT NOT NULL);`
 const row = (seq: number | null, outcome: string, at: string, extra: Record<string, unknown> = {}) =>
   ({ epoch: 'ep1', seq, task_id: seq === null ? null : `t${String(seq)}`, from: 'caller/0011223344556677', outcome, at, proof: 'in-process', receipt_for: null, dup: null, ...extra })
 
-function fixture(over: { rows?: unknown; pages?: unknown } = {}) {
+function fixture(over: { rows?: unknown; pages?: unknown; health?: unknown; triggerAt?: Record<string, string> } = {}) {
   mkdirSync(join(repo, 'tmp'), { recursive: true })
   const dir = mkdtempSync(join(repo, 'tmp', 'a2a-shadow-unit-'))
   const db = new DatabaseSync(join(dir, 'superagent.db'))
@@ -47,10 +47,11 @@ function fixture(over: { rows?: unknown; pages?: unknown } = {}) {
     { at: '2026-11-07T01:00:00.000Z', after: 'ep1:1', next: 'ep1:3', epoch: 'ep1', lost: 0, epochChanged: false, cursorAhead: false },
     { at: '2026-11-07T02:00:00.000Z', after: 'ep1:3', next: 'ep1:6', epoch: 'ep1', lost: 2, epochChanged: false, cursorAhead: false },
   ])
-  kv(KV.healthLog, [{ at: '2026-11-07T02:00:00.000Z', entry: 'a2a', state: 'error', values: { lost: '2', after: 'ep1:3', epochChanged: 'false' } }])
+  kv(KV.healthLog, over.health ?? [{ at: '2026-11-07T02:00:00.000Z', entry: 'a2a', state: 'error', values: { lost: '2', after: 'ep1:3', epochChanged: 'false' } }])
   kv(KV.cursor, 'ep1:6')
   const trig = (id: string, source: string, human: boolean, filtered?: string) => {
-    db.prepare('INSERT INTO trigger VALUES (?,?,?)').run(id, JSON.stringify({ id, source, human, text: 'SECRET-TRIGGER-TEXT', at: '2026-11-07T01:00:00.000Z' }), '2026-11-07T01:00:00.000Z')
+    const at = over.triggerAt?.[id] ?? '2026-11-07T01:00:00.000Z'
+    db.prepare('INSERT INTO trigger VALUES (?,?,?)').run(id, JSON.stringify({ id, source, human, text: 'SECRET-TRIGGER-TEXT', at }), at)
     if (filtered !== undefined) db.prepare('INSERT INTO disposition VALUES (?,?)').run(id, JSON.stringify({ filtered: { code: filtered } }))
   }
   trig(key('a2a', 'caller/0011223344556677', 't2'), 'a2a', false)
@@ -159,6 +160,50 @@ describe('p2 shadow collector (verify-probe --a2a-shadow)', () => {
       expect(r.json.error).toMatch(/snapshot was not written/)
       expect(existsSync(f.out)).toBe(false)
     }
+  })
+
+  it('lookup columns: Trigger presence and filter code, seq records, health error, Trigger window', () => {
+    const T = (task: string) => key('a2a', 'caller/0011223344556677', task)
+    const f = fixture({
+      rows: [
+        row(3, 'duplicate', '2026-11-06T23:59:00.000Z'), // outside the window, same epoch:seq as the row below
+        row(2, 'stored', '2026-11-07T01:00:00.000Z'),
+        row(3, 'filtered:unverified', '2026-11-07T01:00:00.000Z', { proof: 'cli-identity' }),
+        row(null, 'unreadable', '2026-11-07T01:00:00.000Z', { task_id: null }),
+      ],
+      pages: [
+        { at: '2026-11-07T01:00:00.000Z', after: 'ep1:1', next: 'ep1:3', epoch: 'ep1', lost: 0, epochChanged: false, cursorAhead: false },
+        { at: '2026-11-07T02:00:00.000Z', after: 'ep1:3', next: 'ep1:6', epoch: 'ep1', lost: 2, epochChanged: false, cursorAhead: false },
+      ],
+      // At the first page's at: an error of another entry and an a2a record that is not an error; neither is its health error.
+      health: [
+        { at: '2026-11-07T01:00:00.000Z', entry: 'a2a-deposit', state: 'error' },
+        { at: '2026-11-07T01:00:00.000Z', entry: 'a2a', state: 'paused' },
+        { at: '2026-11-07T02:00:00.000Z', entry: 'a2a', state: 'error' },
+      ],
+      // t2's Trigger is older than the window (a row in the window still finds it); t9 sits exactly on the window's end.
+      triggerAt: { [T('t2')]: '2026-11-06T23:00:00.000Z', [T('t3')]: '2026-11-07T00:00:00.000Z', [T('t9')]: '2026-11-08T00:00:00.000Z' },
+    })
+    expect(probe(['--a2a-shadow', f.source, '--cli-home', f.cliHome, '--window', WINDOW, '--out', f.out]).code).toBe(0)
+    expect(all(f.out, 'SELECT seq, outcome, trigger_present, trigger_filtered_code, seq_records FROM shadow_rows ORDER BY rowid')).toEqual([
+      { seq: 2, outcome: 'stored', trigger_present: 1, trigger_filtered_code: null, seq_records: 1 },
+      { seq: 3, outcome: 'filtered:unverified', trigger_present: 1, trigger_filtered_code: 'unverified', seq_records: 2 },
+      { seq: null, outcome: 'unreadable', trigger_present: 0, trigger_filtered_code: null, seq_records: null },
+    ])
+    expect(all(f.out, 'SELECT at, loss, health_error FROM shadow_pages ORDER BY rowid')).toEqual([
+      { at: '2026-11-07T01:00:00.000Z', loss: 0, health_error: 0 }, { at: '2026-11-07T02:00:00.000Z', loss: 1, health_error: 1 }])
+    expect(Object.fromEntries(all(f.out, 'SELECT id, in_window FROM shadow_triggers').map(r => [r.id, r.in_window])))
+      .toEqual({ [T('t2')]: 0, [T('t3')]: 1, [T('t9')]: 0 })
+    // The raw columns stay as they were: shadow_triggers.at is the stored value, not a recomputed one.
+    expect(all(f.out, `SELECT at FROM shadow_triggers WHERE id = '${T('t2')}'`)).toEqual([{ at: '2026-11-06T23:00:00.000Z' }])
+  })
+
+  it('fails closed on a Trigger without a readable at', () => {
+    const f = fixture({ triggerAt: { [key('a2a', 'caller/0011223344556677', 't2')]: 'yesterday' } })
+    const r = probe(['--a2a-shadow', f.source, '--cli-home', f.cliHome, '--window', WINDOW, '--out', f.out])
+    expect(r.code).toBe(1)
+    expect(r.json.error).toMatch(/no readable at/)
+    expect(existsSync(f.out)).toBe(false)
   })
 
   it('A7b gaps: covered exactly by (after_seq, after_seq+lost] of a lost>0 page of the same epoch', () => {

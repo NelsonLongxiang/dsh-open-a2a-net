@@ -246,10 +246,17 @@ ygl-trees verify run spec_4de5f3b9d48d --db <snapshot>      # 判定：overall �
   - trigger_id = key('a2a', from, task_id)，与插件同一算法，测试中对照；
   - loss：A7 的定义，即 lost>0、lost 为 null、cursorAhead 或 epochChanged；
   - shadow_seq_gaps：同一 epoch 内、窗口首末 seq 之间缺失的 seq。covered 表示它落在同 epoch 某个 lost>0 页头的区间 (after_seq, after_seq+lost] 内（after 为 start 时 after_seq 取 0）。宿主的 lost 等于 oldest_seq − after_seq − 1，被挤出的正好是这个区间。真实宿主用例（tests/mesh/a2a-shadow-snapshot.spec.ts）按 64 行上限挤出 6 条，校准了这个区间。
+- **查找列**（2026-11-07 全局裁定追加）：verify 的谓词 AST 只能查单表，sql-pair 只判断两侧键集合是否相等，因此「包含于」、计数、窗口限定都在采集器里算好。原始列一律保留，派生列只追加，每列定义如下：
+  - shadow_rows.trigger_present：按全库 trigger 表计算（任何 source、不限窗口），存在 id = trigger_id 的记录为 1，否则为 0；trigger_id 为空时为 0。trigger.id 是主键（上游 superagent store.ts:72），一个 trigger_id 最多对应一条 Trigger。
+  - shadow_rows.trigger_filtered_code：取上面那条 Trigger 的 disposition `$.filtered.code`；没有 Trigger 或未被过滤时为空。
+  - shadow_rows.seq_records：按全量 a2a-rows 计算（不限窗口），同一 epoch、同一 seq 的记录条数；seq 为空时此列为空。
+  - shadow_pages.health_error：按全量 a2a-health-log 计算（不限窗口），存在 at 与该页头相同、entry 为 a2a、state 为 error 的记录为 1，否则为 0。
+  - shadow_triggers.in_window：按 trigger.at 和 --window 计算，左闭右开，落在窗口内为 1，否则为 0；trigger.at 读不出时间就整次采集失败（退出码 1），不猜。
+  - 每列都有反向变异守着：只在窗口内的 Trigger 里查找、code 取错列、seq_records 只计窗口内、health_error 不比较 entry 或不比较 state、in_window 用闭区间，都会让测试变红。
 - **不带正文**：快照里没有消息正文、Trigger 正文、外发正文和 health 的 detail，测试断言了这一点。
   - 反向用例：同一真实宿主数据删掉一条未报告挤出的行记录，对应的 seq 得到 covered=0。
 - **登记口径**（全局 2026-11-07 裁定 (a)）：本仓 `verify/meta.json` 是 meta_index_version 1，scripts/ 按 v1 的目录白名单豁免，采集器不进 tooling[]（v1 没有这一登记形状）。升到 v2 是另一件治理改动，要做时单独提议。
-- **身份钉住**（代替 tooling 登记）：输出 JSON 的 `collector` 字段带 git commit、两个采集脚本（verify-probe.mjs 和 a2a-shadow-snapshot.mjs）的 sha256，以及这两个文件相对该 commit 是否干净。验收回报必须写明这些值，并且要与采集器 PR 合入时的值一致，否则不能作为验收依据。
+- **身份钉住**（代替 tooling 登记）：输出 JSON 的 `collector` 字段带 git commit、两个采集脚本（verify-probe.mjs 和 a2a-shadow-snapshot.mjs）的 sha256，以及这两个文件相对该 commit 是否干净。验收回报必须写明这些值，并且要与最近一次采集器 PR 合入时的值一致，否则不能作为验收依据。加查找列的 PR 合入后，以它的 merge commit 和 sha256 为准，#392 那组值（796cccc）作废。
 - **机械检查**：单元测试去掉注释后断言两个脚本的代码里不出现 ygl-trees 调用，也不出现 verify 的 run、prepare、submit、archive 步骤；展平模块不引入 child_process。
 
 ## 维护
