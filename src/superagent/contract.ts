@@ -5,15 +5,20 @@
  */
 import type * as Ours from './source-types.ts'
 import type * as Up from './upstream/snapshot-8c32a9d.ts'
+import type { A2aConfig, a2aKind } from './a2a-watch.ts'
 
 type Extends<A, B> = [A] extends [B] ? true : false
 type Same<A, B> = Extends<A, B> extends true ? Extends<B, A> : false
 type Holds<T extends true> = T
 
-type Config = { mode: 'observe' }
+type Config = A2aConfig
 
 /** What the Source registers must be a valid upstream kind. */
 export type KindIsUpstream = Holds<Extends<Ours.SourceKind<Config>, Up.SourceKind<Config>>>
+/** The kind the a2a-watch plugin actually registers is a valid upstream kind. */
+export type PluginKindIsUpstream = Holds<Extends<typeof a2aKind, Up.SourceKind<A2aConfig>>>
+/** The host superagent injects as `orchestrator` serves everything the plugin entry calls. */
+export type HostFromUpstream = Holds<Extends<Up.SourceHost, Ours.SourceHost>>
 /** What upstream hands the Source must carry everything the Source reads. */
 export type ContextFromUpstream = Holds<Extends<Up.SourceContext, Ours.SourceContext>>
 /** Values that cross in both directions must match exactly. */

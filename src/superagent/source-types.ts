@@ -55,6 +55,12 @@ export interface SourceContext {
   report(entry: string, health: Health): void
 }
 
+/** What the a2a Source uses of superagent's host service (`orchestrator`). */
+export interface SourceHost {
+  readonly sources: { register<C extends Record<string, unknown>>(kind: SourceKind<C>): () => void }
+  context(kind: { kind: string; health: readonly string[] }): SourceContext
+}
+
 /** The kind descriptor the a2a Source registers. */
 export interface SourceKind<C extends Record<string, unknown>> {
   kind: string
