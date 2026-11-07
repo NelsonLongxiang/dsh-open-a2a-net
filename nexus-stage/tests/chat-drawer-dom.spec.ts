@@ -177,7 +177,7 @@ describe('chat drawer (wb-chat)', () => {
 
   it('a dead row says its own direction (gh#31): an inbound one sits on their side unseen before', () => {
     const { d } = drawer()
-    d.update({ ...baseState, tasksDead: [{ taskId: 'direct-in000010', team: TEAM, peer: 'http://192.168.3.157:13080', direction: 'inbound', startedAt: NOW - 25 * 3_600_000, deadAt: NOW, reason: 'unconsumed', brief: '远端的请求' }] })
+    d.update({ ...baseState, tasksDead: [{ taskId: 'direct-in000010', team: TEAM, peer: 'http://10.20.30.11:13080', direction: 'inbound', startedAt: NOW - 25 * 3_600_000, deadAt: NOW, reason: 'unconsumed', brief: '远端的请求' }] })
     d.open(session)
     const b = q(d.root, '.wb-chat-sent .wb-msg')
     expect(b.classList.contains('wb-msg-ledger')).toBe(false)

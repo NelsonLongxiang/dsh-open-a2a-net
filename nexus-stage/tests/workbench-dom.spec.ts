@@ -56,18 +56,18 @@ const state: StateBody = {
     { id: 'session-11111111-aaaa', live: true },
     { id: 'nel157/a1b2c3d4', team: 'nel157/a1b2c3d4', remote: true },
   ] }] },
-  peers: [{ url: 'http://192.168.3.157:13080', score: 687700 }],
+  peers: [{ url: 'http://10.20.30.11:13080', score: 687700 }],
   remote: [
-    { team: 'dsh-host-ca0c0a8d', name: 'remote-host', origin: 'node 192.168.3.157', via: 'http://192.168.3.157:13080', canvasTeams: ['dsh/canvas/ygl'] },
+    { team: 'dsh-host-ca0c0a8d', name: 'remote-host', origin: 'node 10.20.30.11', via: 'http://10.20.30.11:13080', canvasTeams: ['dsh/canvas/ygl'] },
     // gh#37: a zone/id8 HANDLE row (the only addable remote member shape);
     // the bare host row above must NOT appear in the member picker.
-    { team: 'nel85/9abc1234', name: '测试席-远端', origin: 'node 192.168.3.85', via: 'http://192.168.3.85:13080' },
+    { team: 'nel85/9abc1234', name: '测试席-远端', origin: 'node 10.20.30.13', via: 'http://10.20.30.13:13080' },
   ],
   activity: [
-    { ts: NOW - 60_000, dir: 'out', team: 'dsh/11111111', peer: '192.168.3.157:13080', ok: true },
-    { ts: NOW - 120_000, dir: 'in', team: 'dsh/22222222', peer: '192.168.3.157:13080', ok: false },
+    { ts: NOW - 60_000, dir: 'out', team: 'dsh/11111111', peer: '10.20.30.11:13080', ok: true },
+    { ts: NOW - 120_000, dir: 'in', team: 'dsh/22222222', peer: '10.20.30.11:13080', ok: false },
   ],
-  inFlight: [{ team: 'dsh/11111111', peer: '192.168.3.157:13080', startedAt: NOW - 5_000 }],
+  inFlight: [{ team: 'dsh/11111111', peer: '10.20.30.11:13080', startedAt: NOW - 5_000 }],
   tasks: [
     { taskId: 'direct-aaaaaaaa', team: 'dsh/11111111', startedAt: NOW - 3_700_000, status: 'pending', direction: 'outbound', receiptExpected: true, settleable: false },
     { taskId: 'direct-bbbbbbbb', team: 'dsh/22222222', startedAt: NOW - 10_000, status: 'pending', receiptExpected: false, settleable: false },
@@ -112,7 +112,7 @@ describe('workbench rail sections', () => {
     expect(heads.join('|')).not.toContain('Peers')
     const labels = [...v.root.querySelectorAll('.wb-directory .wb-item-label')].map(n => text(n))
     expect(labels).toContain('scout-01')
-    expect(labels.some(l => l.includes('192.168.3.157:13080'))).toBe(false)
+    expect(labels.some(l => l.includes('10.20.30.11:13080'))).toBe(false)
     // Live before cold, the cold row says so in its sub line.
     const subs = [...v.root.querySelectorAll('.wb-directory .wb-item-sub')].map(n => text(n))
     expect(subs.some(t => t.startsWith('冷 · '))).toBe(true)
@@ -272,8 +272,8 @@ describe('workbench panels', () => {
     v.update({
       ...state,
       peers: [
-        { url: 'http://192.168.3.157:13080', score: 687700, link: 'linked', verified: true, name: '评审主机', version: '0.6.26', lastContactAt: NOW - 10_000 },
-        { url: 'http://192.168.3.9:13080', score: 1200, link: 'stranger', verified: false, lastContactAt: NOW - 20 * 60_000 },
+        { url: 'http://10.20.30.11:13080', score: 687700, link: 'linked', verified: true, name: '评审主机', version: '0.6.26', lastContactAt: NOW - 10_000 },
+        { url: 'http://10.20.30.14:13080', score: 1200, link: 'stranger', verified: false, lastContactAt: NOW - 20 * 60_000 },
       ],
     })
     const rows = [...v.root.querySelectorAll<HTMLElement>('.wb-host-row')]
@@ -389,7 +389,7 @@ describe('workbench panels', () => {
 
   it('activity rows name the session behind a team; the id rides the tooltip, unknown teams stay ids', () => {
     const { v } = bench()
-    v.update({ ...state, activity: [...(state.activity ?? []), { ts: NOW - 1_000, dir: 'in', team: 'dsh/abcdef00', peer: '192.168.3.157:13080', ok: true }] })
+    v.update({ ...state, activity: [...(state.activity ?? []), { ts: NOW - 1_000, dir: 'in', team: 'dsh/abcdef00', peer: '10.20.30.11:13080', ok: true }] })
     const pane = [...v.root.querySelectorAll('.wb-pane')].find(p => text(p).includes('活动环'))!
     const cells = [...pane.querySelectorAll<HTMLElement>('.wb-row-team')]
     // in-flight + 3 ring rows
@@ -400,7 +400,7 @@ describe('workbench panels', () => {
   it('an empty published name falls back to the id; a peer-published name carries a visible 远端 chip (review #72)', () => {
     const { v } = bench()
     v.update({ ...state,
-      remote: [{ team: 'dsh-host-ca0c0a8d', name: 'scout-01', origin: 'node 192.168.3.157' }, { team: 'dsh-host-00000000', name: '' }],
+      remote: [{ team: 'dsh-host-ca0c0a8d', name: 'scout-01', origin: 'node 10.20.30.11' }, { team: 'dsh-host-00000000', name: '' }],
       inFlight: [],
       activity: [
         { ts: NOW - 1_000, dir: 'in', team: 'dsh/11111111', peer: 'x', ok: true },
@@ -1108,10 +1108,10 @@ describe('node chat drawer (0.6.13)', () => {
     const v = createWorkbench({ now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(), canvasOp: vi.fn(async () => true), sessionLog })
     document.body.appendChild(v.root)
     v.update(state)
-    v.openNodeChat('peer-192.168.3.157:13080')
+    v.openNodeChat('peer-10.20.30.11:13080')
     const chat = v.root.querySelector('.wb-chat')!
     expect(chat.classList.contains('is-open')).toBe(true)
-    expect(text(chat.querySelector('.wb-chat-title'))).toBe('http://192.168.3.157:13080')
+    expect(text(chat.querySelector('.wb-chat-title'))).toBe('http://10.20.30.11:13080')
     expect(text(chat)).toContain('会话记录存放在对端机器上')
     expect(chat.querySelectorAll('.wb-chat-log .wb-msg').length).toBe(0)
     expect(sessionLog).not.toHaveBeenCalled()
@@ -1140,7 +1140,7 @@ describe('remote chat through the proxy (0.6.15)', () => {
     const chat = v.root.querySelector('.wb-chat')!
     expect(chat.classList.contains('is-open')).toBe(true)
     // Card metadata rides the chat head area (0.6.15 moved the remote card).
-    expect(text(chat)).toContain('node 192.168.3.157')
+    expect(text(chat)).toContain('node 10.20.30.11')
     await vi.waitFor(() => expect(remoteSessionLog).toHaveBeenCalledWith({ team: 'dsh-host-ca0c0a8d' }))
     await vi.waitFor(() => {
       const body = chat.querySelector('.wb-chat-log')!
@@ -1152,11 +1152,11 @@ describe('remote chat through the proxy (0.6.15)', () => {
   it('a peer pick drills: session list from the peer, then the picked transcript, then back', async () => {
     const { v, remoteSessionLog } = bench()
     v.update(state)
-    v.openNodeChat('peer-192.168.3.157:13080')
+    v.openNodeChat('peer-10.20.30.11:13080')
     const chat = v.root.querySelector('.wb-chat')!
     expect(chat.classList.contains('is-open')).toBe(true)
     // Phase 1: the listing (via the proxy, never a direct dial).
-    await vi.waitFor(() => expect(remoteSessionLog).toHaveBeenCalledWith({ peer: 'http://192.168.3.157:13080' }))
+    await vi.waitFor(() => expect(remoteSessionLog).toHaveBeenCalledWith({ peer: 'http://10.20.30.11:13080' }))
     await vi.waitFor(() => {
       const rows = [...chat.querySelectorAll('.wb-chat-session')].map(n => text(n))
       expect(rows.some(r => r.includes('-peer'))).toBe(true)
@@ -1164,7 +1164,7 @@ describe('remote chat through the proxy (0.6.15)', () => {
     expect((chat.querySelector('.wb-chat-back') as HTMLElement).hidden).toBe(true)
     // Phase 2: pick a session → transcript keyed peer:url:id.
     ;(chat.querySelector('.wb-chat-session') as HTMLElement).click()
-    await vi.waitFor(() => expect(remoteSessionLog).toHaveBeenLastCalledWith({ peer: 'http://192.168.3.157:13080', id: 'session-77777777-peer' }))
+    await vi.waitFor(() => expect(remoteSessionLog).toHaveBeenLastCalledWith({ peer: 'http://10.20.30.11:13080', id: 'session-77777777-peer' }))
     await vi.waitFor(() => expect(text(chat.querySelector('.wb-chat-log'))).toContain('对端会话正文'))
     // Phase 3: back to the listing through the head's back button.
     const backBtn = chat.querySelector('.wb-chat-back') as HTMLElement
@@ -1177,11 +1177,11 @@ describe('remote chat through the proxy (0.6.15)', () => {
   })
 
   it('a peer listing failure surfaces the proxy error inline', async () => {
-    const failing = vi.fn(async () => ({ ok: false, error: 'remote log unavailable — http://192.168.3.157:13080' }))
+    const failing = vi.fn(async () => ({ ok: false, error: 'remote log unavailable — http://10.20.30.11:13080' }))
     const v = createWorkbench({ now: () => NOW, abandon: vi.fn(async () => true), copy: vi.fn(), canvasOp: vi.fn(async () => true), remoteSessionLog: failing })
     document.body.appendChild(v.root)
     v.update(state)
-    v.openNodeChat('peer-192.168.3.157:13080')
+    v.openNodeChat('peer-10.20.30.11:13080')
     const chat = v.root.querySelector('.wb-chat')!
     await vi.waitFor(() => expect(text(chat)).toContain('无法读取（remote log unavailable'))
   })

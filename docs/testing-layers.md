@@ -77,7 +77,7 @@ build-layout 门禁与 nexus-stage 子套件。分层脚本供人按深度迭代
 
 ```powershell
 # 观察者节点只探测不发布（announce: false），对远端零副作用
-$env:DSH_A2A_LIVE_MESH = 'http://192.168.3.156:3080,http://192.168.3.157:3080'
+$env:DSH_A2A_LIVE_MESH = 'http://10.20.30.10:3080,http://10.20.30.11:3080'
 # 可选：向某个真实 team 发一条自包含探针消息（分钟级，等待真实回合）
 $env:DSH_A2A_LIVE_TARGET_TEAM = 'dsh'
 pnpm test:live

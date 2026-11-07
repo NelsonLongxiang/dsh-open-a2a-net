@@ -7,7 +7,7 @@
  *   the title repeated, the handle truncated on every card. The line now
  *   carries what the session is FOR (its description) and falls back to the
  *   handle; the handle always rides the tooltip.
- * - Peer cards titled `192.168.3.157:13080`, clipped by the peer badge with no
+ * - Peer cards titled `10.20.30.11:13080`, clipped by the peer badge with no
  *   break point. When the host publishes exactly one named team (its host
  *   row), that name is the title and the address moves to the second line.
  * @module nexus-stage/planning-card-text

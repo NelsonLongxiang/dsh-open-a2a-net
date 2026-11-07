@@ -24,10 +24,10 @@
 
 | 节点 | 系统 | LAN IP | dsh web | pocket | 现状 |
 |---|---|---|---|---|---|
-| .156 | Windows | 192.168.3.156 | 127.0.0.1:3080 | 13080 | **0.6.24 待升级**（升级包见 §5.2）；originClaimUrl 待设 |
-| .157 | Ubuntu | 192.168.3.157 | 127.0.0.1:3080 | 13080 | 0.6.26 ✓ 已互链 .85 |
-| .85 | Ubuntu | 192.168.3.85 | 127.0.0.1:3080 | 13080 | 0.6.26 ✓ 已互链 .157 |
-| 3081（测试参考） | Windows | 192.168.3.156:3081 | 直接 LAN 绑（形态 B，非本方案） | — | 0.6.26 |
+| .156 | Windows | 10.20.30.10 | 127.0.0.1:3080 | 13080 | **0.6.24 待升级**（升级包见 §5.2）；originClaimUrl 待设 |
+| .157 | Ubuntu | 10.20.30.11 | 127.0.0.1:3080 | 13080 | 0.6.26 ✓ 已互链 .85 |
+| .85 | Ubuntu | 10.20.30.13 | 127.0.0.1:3080 | 13080 | 0.6.26 ✓ 已互链 .157 |
+| 3081（测试参考） | Windows | 10.20.30.10:3081 | 直接 LAN 绑（形态 B，非本方案） | — | 0.6.26 |
 
 > 测试宿主 3081 走形态 B（直接绑定+密钥门），**不属于本方案范围**，仅供验收时做对照。
 
@@ -52,12 +52,12 @@ dsh web --port 3080 --no-open        # 默认绑 127.0.0.1，不要加 --host �
 ```yaml
 - id: a2a
   config:
-    originClaimUrl: 'http://192.168.3.<本机LAN IP>:13080'   # ← 每台换成自己的
+    originClaimUrl: 'http://10.20.30.<本机LAN IP>:13080'   # ← 每台换成自己的
     announce: true
     apiKey: '<运维生成的强钥>'                                 # ← LAN 打开控制面/面板用
     peers: [                                                  # ← 互种：另外两台的 pocket 口
-      'http://192.168.3.<对端A>:13080',
-      'http://192.168.3.<对端B>:13080',
+      'http://10.20.30.<对端A>:13080',
+      'http://10.20.30.<对端B>:13080',
     ]
     wakeJoinedOnBoot: true
 ```
@@ -76,7 +76,7 @@ dsh web --port 3080 --no-open        # 默认绑 127.0.0.1，不要加 --host �
 
 ### 3.4 Windows 节点（.156）补丁位置
 
-`.156` 的 a2a 配置当前在 `C:\Users\Administrator\.dsh\profiles\web\cordis.patch.yml` 的 `- id: a2a` 块。运维操作：
+`.156` 的 a2a 配置当前在 `C:\Users\<user>\.dsh\profiles\web\cordis.patch.yml` 的 `- id: a2a` 块。运维操作：
 
 1. 追加/修改上述五键（peers 填 .157/.85 两台）。
 2. **重启 3080 宿主属于属主专属门**：运维准备好配置后，向属主申请重启窗口（一次重启=九件叠加重启窗，见 §7）。
@@ -97,12 +97,12 @@ dsh web --port 3080 --no-open        # 默认绑 127.0.0.1，不要加 --host �
 
 ```powershell
 # .156 上（管理员）：
-Copy-Item C:\tmp\gh34-sdk\nelsonlongxiang-dsh-open-a2a-net-0.6.26.tgz C:\Users\Administrator\.dsh\plugins-data\ -Force
-$env:DSH_HOME='C:\Users\Administrator\.dsh'
-Set-Location C:\Users\Administrator\.dsh\profiles\web
+Copy-Item C:\tmp\gh34-sdk\nelsonlongxiang-dsh-open-a2a-net-0.6.26.tgz C:\Users\<user>\.dsh\plugins-data\ -Force
+$env:DSH_HOME='C:\Users\<user>\.dsh'
+Set-Location C:\Users\<user>\.dsh\profiles\web
 corepack pnpm remove '@nelsonlongxiang/dsh-open-a2a-net' --config.minimum-release-age=0
 corepack pnpm add 'file:..\..\plugins-data\nelsonlongxiang-dsh-open-a2a-net-0.6.26.tgz' --config.minimum-release-age=0
-node -e "console.log(require('C:/Users/Administrator/.dsh/profiles/web/node_modules/@nelsonlongxiang/dsh-open-a2a-net/package.json').version)"
+node -e "console.log(require('C:/Users/<user>/.dsh/profiles/web/node_modules/@nelsonlongxiang/dsh-open-a2a-net/package.json').version)"
 # 期望输出: 0.6.26
 ```
 
@@ -148,7 +148,7 @@ Start-Process -FilePath 'D:\node-v24.12.0-win-x64\dsh.cmd' -ArgumentList 'web','
 
 | # | 检查 | 命令 | 期望 |
 |---|---|---|---|
-| 1 | 卡面可达（LAN） | `curl http://192.168.3.157:13080/.well-known/agent-card.json` | 200 JSON |
+| 1 | 卡面可达（LAN） | `curl http://10.20.30.11:13080/.well-known/agent-card.json` | 200 JSON |
 | 2 | 版本指纹 | `curl http://127.0.0.1:3080/__dsh_a2a/state`（各台本机） | `"version":"0.6.26"` |
 | 3 | **互看 linked**（核心） | 各台 `state` 的 `peers[].link` | 对端两台均 `linked`，`verified:true` |
 | 4 | 控制面凭钥 | LAN 侧不带钥 GET `/__dsh_a2a/state` | 401/403 |
@@ -180,7 +180,7 @@ Start-Process -FilePath 'D:\node-v24.12.0-win-x64\dsh.cmd' -ArgumentList 'web','
 ```
 ①宿主(.156)开转发（管理员，规则持久跨重启）：
   netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=<LAN口> connectaddress=<远程内网址> connectport=<远程a2a口>
-  实测：13909 → 192.168.29.136:3091
+  实测：13909 → 192.168.200.136:3091
 
 ②远程节点侧（三条配置）：
   originClaimUrl: 'http://<宿主LAN-IP>:<LAN口>'   ← 声明地址=代理地址
