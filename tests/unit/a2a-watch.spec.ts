@@ -212,10 +212,27 @@ describe('the rest of the kind', () => {
     expect(f.runs).toEqual([['a2a-net', 'publish'], ['a2a-net', 'publish']])
   })
 
+  it('observe mode reads while superagent awaits setup (shadow run: the Engine records, holds evaluation and sending)', async () => {
+    const f = fake(args => args[0] === 'publish' ? '' : page([row()]), OBSERVE, false)
+    const stop = new AbortController()
+    const run = watch(f.ctx, stop.signal)
+    await new Promise(r => setTimeout(r, 10)); stop.abort(); await run
+    expect(f.runs).toEqual([['a2a-net', 'publish'], ['a2a-net', 'inbox', '--after', 'start']])
+    expect(f.reports.some(([, h]) => h.code === 'setupPending')).toBe(false)
+    expect(f.reports.at(-1)).toEqual(['a2a', expect.objectContaining({ state: 'ready' })])
+    expect(f.received).toHaveLength(1)
+  })
+
   it('the loop waits for setup, follows the switch, and stops on abort', async () => {
-    const notSet = fake(() => page([]), OBSERVE, false)
+    // A mode other than observe (unreachable through the schema, so forced here) and a switched-off Source wait for setup.
+    const notSet = fake(() => page([]), { ...OBSERVE, mode: 'reply' } as unknown as A2aConfig, false)
     await watch(notSet.ctx, new AbortController().signal)
     expect(notSet.reports).toEqual([['a2a', expect.objectContaining({ state: 'paused', code: 'setupPending' })]])
+    expect(notSet.runs).toEqual([])
+    const offNotSet = fake(() => page([]), null, false)
+    await watch(offNotSet.ctx, new AbortController().signal)
+    expect(offNotSet.reports).toEqual([['a2a', expect.objectContaining({ state: 'paused', code: 'setupPending' })]])
+    expect(offNotSet.runs).toEqual([])
     const off = fake(() => page([]), null)
     const stopOff = new AbortController()
     const offRun = watch(off.ctx, stopOff.signal)
