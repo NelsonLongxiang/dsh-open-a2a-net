@@ -1,6 +1,6 @@
 # superagent-a2a-spec-r7
 
-_generated 2026-11-07 08:16:25 UTC by ygl-trees_
+_generated 2026-11-07 08:19:57 UTC by ygl-trees_
 
 **研究问题**：superagent × a2a-net 接入规格与计划（p2 设计稿第 2 版：按全局设计评审改稿，S20，单次生产）
 
@@ -66,27 +66,27 @@ _generated 2026-11-07 08:16:25 UTC by ygl-trees_
    _置信度 A，状态 supported_
 28. ✓ S27 防回环属主裁定（2026-11-07）：task id 以 a2a- 开头的入站永不匹配自动接单规则（L1）；p4 主动派工的回环防护留到 p4 设计（L2）；不加 attention 次数或对话轮数状态  [63][69][70]  
    _置信度 A，状态 supported_
-29. ✓ S28 p1-receipt-outcome 由评审席会话实现，评估侧会话只做评估和设计（全局 2026-11-07：两席位上限、禁 worktree 共用检出）；需求交接见任务 58121c78d2  [72][71]  
+29. ✓ S28 p1-receipt-outcome 由评审席会话实现，评估侧会话只做评估和设计（全局 2026-11-07：两席位上限、禁 worktree 共用检出）；需求交接见任务 58121c78d2  [104][103]  
    _置信度 A，状态 supported_
-30. ✓ S29 投给 CLI 身份的任务，宿主回 TASK_STATE_COMPLETED 加 receipt:'mailbox'，调用方 trackOwedTask 因此提前返回，不记欠账（next/0.8 ee92712f081e）  [73][74][75]  
+30. ✓ S29 投给 CLI 身份的任务，宿主回 TASK_STATE_COMPLETED 加 receipt:'mailbox'，调用方 trackOwedTask 因此提前返回，不记欠账（next/0.8 ee92712f081e）  [71][72][73]  
    _置信度 A，状态 supported_
-31. ✓ S30 投给 CLI 信箱的任务不受每目标 3 笔名额约束：queueFullRefusal 对 mailbox 直接放行，不会出现 -32009  [76]  
+31. ✓ S30 投给 CLI 信箱的任务不受每目标 3 笔名额约束：queueFullRefusal 对 mailbox 直接放行，不会出现 -32009  [74]  
    _置信度 A，状态 supported_
-32. ✓ S31 CLI 信箱上限 64 行，超出时挤出最旧的行，只计数（dropped），不通知调用方  [78][77]  
+32. ✓ S31 CLI 信箱上限 64 行，超出时挤出最旧的行，只计数（dropped），不通知调用方  [76][75]  
    _置信度 A，状态 supported_
-33. ✓ S32 合起来：调用方派给 superagent（CLI 身份）的请求，调用方既不记欠账、也不受背压；信箱挤出时这笔请求在任何一方的账本上都不存在，与属主「强制对账」「拥堵是背压」两条原则冲突  [73][75][78][76]  
+33. ✓ S32 合起来：调用方派给 superagent（CLI 身份）的请求，调用方既不记欠账、也不受背压；信箱挤出时这笔请求在任何一方的账本上都不存在，与属主「强制对账」「拥堵是背压」两条原则冲突  [71][73][76][74]  
    _置信度 A，状态 supported_
-34. ✓ S33 信箱欠回执属主裁定（2026-11-07）：CLI 身份在签名名片里声明「接活信箱、欠回执」，家宿主对它的投递回已投递而非终态，调用方记欠账并受 3 笔名额与 -32009 背压；仅 superagent Source 身份声明；经宿主转发路径一并改；高档，作为 p3 前置，不挡 p2b；修复 S32  [79][82][81][80][84][83]  
+34. ✓ S33 信箱欠回执属主裁定（2026-11-07）：CLI 身份在签名名片里声明「接活信箱、欠回执」，家宿主对它的投递回已投递而非终态，调用方记欠账并受 3 笔名额与 -32009 背压；仅 superagent Source 身份声明；经宿主转发路径一并改；高档，作为 p3 前置，不挡 p2b；修复 S32  [77][80][79][78][82][81]  
    _置信度 A，状态 supported_
-35. ✓ S34 cli-identity 只出现在「CLI 用自己的户口密钥签名、直接投到本宿主」的情形；外主机的 CLI 经其家宿主转发、且本宿主运营者链接过该句柄并钉住 home（remote-ref-cli）时，记为 origin-claim  [88][85][86]  
+35. ✓ S34 cli-identity 只出现在「CLI 用自己的户口密钥签名、直接投到本宿主」的情形；外主机的 CLI 经其家宿主转发、且本宿主运营者链接过该句柄并钉住 home（remote-ref-cli）时，记为 origin-claim  [86][83][84]  
    _置信度 A，状态 supported_
-36. ✓ S35 cli-identity 证明的是本机户口密钥的持有，户口只能经本机控制路由建立；D4 不认它，于是同宿主的 CLI 调用方反而比经转发的外主机 CLI 调用方更不受信（倒挂）  [85][86][87][89]  
+36. ✓ S35 cli-identity 证明的是本机户口密钥的持有，户口只能经本机控制路由建立；D4 不认它，于是同宿主的 CLI 调用方反而比经转发的外主机 CLI 调用方更不受信（倒挂）  [83][84][85][87]  
    _置信度 A，状态 supported_
-37. ✓ S36 D4 修订属主裁定（2026-11-07）：可信来源集合扩为 {origin-claim, in-process, cli-identity}，三类都须调用方在属主建立的链接集内（D7 唯一规则），信任锚统一为属主建链；消除 S35 的倒挂；修订全局 #385 的 D4；p3 设计改动，不挡 p2b  [92][93][90][91]  
+37. ✓ S36 D4 修订属主裁定（2026-11-07）：可信来源集合扩为 {origin-claim, in-process, cli-identity}，三类都须调用方在属主建立的链接集内（D7 唯一规则），信任锚统一为属主建链；消除 S35 的倒挂；修订全局 #385 的 D4；p3 设计改动，不挡 p2b  [90][91][88][89]  
    _置信度 A，状态 supported_
-38. ✓ S37 现行 p4 设计（规格 §4、S8）让 superagent 把工单 route 给开发席等远端席位执行；这与协作规范 v1.18 冲突：一个项目至多开发、评审两个角色，要并行由开发自己拉子 agent，项目内 A2A 只有送审和上报  [99][95][96][97][94][98]  
+38. ✓ S37 现行 p4 设计（规格 §4、S8）让 superagent 把工单 route 给开发席等远端席位执行；这与协作规范 v1.18 冲突：一个项目至多开发、评审两个角色，要并行由开发自己拉子 agent，项目内 A2A 只有送审和上报  [97][93][94][95][92][96]  
    _置信度 A，状态 supported_
-39. ✓ S38 p4 属主裁定（2026-11-07）：收窄为送审——superagent 用本地执行器自己做，不经 A2A 派工给远端席位；A2A 外发只剩回执与 attention、送审、上报三种；总工席不拆、r1-role-split 关闭；L2 回环风险基本消失；规格 §4 与 S8 在 r8 重写；解决 S37  [103][101][102][100][104]  
+39. ✓ S38 p4 属主裁定（2026-11-07）：收窄为送审——superagent 用本地执行器自己做，不经 A2A 派工给远端席位；A2A 外发只剩回执与 attention、送审、上报三种；总工席不拆、r1-role-split 关闭；L2 回环风险基本消失；规格 §4 与 S8 在 r8 重写；解决 S37  [101][99][100][98][102]  
    _置信度 A，状态 supported_
 
 ## 已知局限（设计代价）
@@ -173,40 +173,40 @@ _generated 2026-11-07 08:16:25 UTC by ygl-trees_
 [68] 属主 2026-11-07 在评审席会话中裁定出站边界与防回环：「全部按推荐」。O1：每条外发只发给触发它的那条入站消息 · O5 — O5：首次发送失败起 24 小时仍未发出则判 gone 并报 health error
 [69] 属主 2026-11-07 在评审席会话中裁定出站边界与防回环：「全部按推荐」。O1：每条外发只发给触发它的那条入站消息 · L1 — L1：task id 以 a2a- 开头的入站永不匹配自动接单规则
 [70] 属主 2026-11-07 在评审席会话中裁定出站边界与防回环：「全部按推荐」。O1：每条外发只发给触发它的那条入站消息 · L2 — L2：p4 主动派工的回环防护留到 p4 设计
-[71] 全局生产评估 2026-11-07 要求：p1-receipt-outcome 的实现不由评估侧会话来做，交评审席（lo · owner — 交评审席（local_bb38fac4）排进 next/0.8 队列
-[72] 全局生产评估 2026-11-07 要求：p1-receipt-outcome 的实现不由评估侧会话来做，交评审席（lo · scope — 评估侧会话只做评估和设计，不写代码、不改检出。
-[73] a2a-net src/faces/wire.ts（next/0.8 b1a72570d090） · wire mailbox answer — const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_COMPLETED', note })
-[74] a2a-net src/faces/wire.ts（next/0.8 b1a72570d090） · wire comment — a mailbox delivery is final from this host's
-[75] a2a-net src/index.ts（next/0.8 b1a72570d090） · trackOwedTask — if (result.task_status !== 'TASK_STATE_DELIVERED'&&result.receiverBookkeeping!=='failed'&&!(result.task_status==='TASK_STATE_COMPLETED'&&result.replyFinal!==true&&result.receipt!=='mailbox')) return
-[76] a2a-net src/queue-guard.ts（next/0.8 b1a72570d090） · queueFullRefusal — if (limit <= 0 || mailbox) return undefined
-[77] a2a-net src/cli-deposit.ts（next/0.8 b1a72570d090） · cap — export const MAILBOX_CAP = 64
-[78] a2a-net src/cli-deposit.ts（next/0.8 b1a72570d090） · evict — this.mailbox.set(handle, list.slice(0, MAILBOX_CAP))
-[79] 属主 2026-11-07 在评审席会话中裁定 S32 缺口：「按推荐：身份声明欠回执」。内容：CLI 身份可在签名名片 · ruling — 裁定 S32 缺口：「按推荐：身份声明欠回执」
-[80] 属主 2026-11-07 在评审席会话中裁定 S32 缺口：「按推荐：身份声明欠回执」。内容：CLI 身份可在签名名片 · declare — CLI 身份可在签名名片里声明自己是接活信箱（欠回执）
-[81] 属主 2026-11-07 在评审席会话中裁定 S32 缺口：「按推荐：身份声明欠回执」。内容：CLI 身份可在签名名片 · deliver — 家宿主对声明了的身份，投递改回「已投递、欠回执」而不是终态，调用方照常记欠账
-[82] 属主 2026-11-07 在评审席会话中裁定 S32 缺口：「按推荐：身份声明欠回执」。内容：CLI 身份可在签名名片 · cap — 每目标 3 笔名额对它生效、拥堵时调用方可见 -32009
-[83] 属主 2026-11-07 在评审席会话中裁定 S32 缺口：「按推荐：身份声明欠回执」。内容：CLI 身份可在签名名片 · scope — 只有 superagent 的 Source 身份声明，人用的 CLI 身份不变。声明是身份属性，不是新的任务状态。经宿主转发的路径一并改。
-[84] 属主 2026-11-07 在评审席会话中裁定 S32 缺口：「按推荐：身份声明欠回执」。内容：CLI 身份可在签名名片 · gate — 作为 p3 前置，不挡 p2b。
-[85] a2a-net src/faces/wire.ts（next/0.8 b1a72570d090） · callerProof — : admission.rule === 'remote-ref-cli' ? 'origin-claim'
-[86] a2a-net src/faces/wire.ts（next/0.8 b1a72570d090） · callerProof — : claim.cli === true ? (claimCovers(caller, claim.caller) ? 'cli-identity' : 'claim-mismatch')
-[87] a2a-net src/task-auth.ts（next/0.8 b1a72570d090） · AuthProof doc — `cli-identity`: a deposited CLI key proves the local CLI handle, not market issuer origin.
-[88] a2a-net docs/design/cross-host-forward.md（next/0.8 b1a72570d090） · 2.3 cond 1 — **H2 的运营者链接过这个句柄**：它在 H2 某个画布队的远端成员引用里。
-[89] a2a-net docs/design/cross-host-forward.md（next/0.8 b1a72570d090） · 2.3 pin — 本机户口只能经本机控制路由建立，是运营者认可的节点事实
-[90] 属主 2026-11-07 在评审席侧会话中裁定 D4 修订：「按新推荐：认但要链接」。内容：a2a Source 的可 · ruling — 裁定 D4 修订：「按新推荐：认但要链接」
-[91] 属主 2026-11-07 在评审席侧会话中裁定 D4 修订：「按新推荐：认但要链接」。内容：a2a Source 的可 · set — 由 {origin-claim, in-process} 扩为 {origin-claim, in-process, cli-identity}
-[92] 属主 2026-11-07 在评审席侧会话中裁定 D4 修订：「按新推荐：认但要链接」。内容：a2a Source 的可 · anchor — 信任锚统一为属主亲手建立的链接
-[93] 属主 2026-11-07 在评审席侧会话中裁定 D4 修订：「按新推荐：认但要链接」。内容：a2a Source 的可 · gate — 属 p3 设计改动，不挡 p2b
-[94] superagent-a2a-spec.md（next/0.8 f96cd467f9ec） · §4 — | launch（Assignment 启动） | `a2a-net route <席位> <派工卡> --task <确定性 id> --context <工单 id>` |
-[95] superagent-a2a-spec.md（next/0.8 f96cd467f9ec） · S8 — | 执行器 | 开发席等远端席位 | 自判范围、自判跟进，超出范围交还 |
-[96] 协作规范 collaboration.md v1.18（next/0.8 f96cd467f9ec） · §1 — 一个项目，或者单独交办的一件任务，至多两个角色：**开发**和**评审**。
-[97] 协作规范 collaboration.md v1.18（next/0.8 f96cd467f9ec） · §1 — 要并行，开发自己拉子 agent 分段做，结果收回来自己合，不另开开发坐席。
-[98] 协作规范 collaboration.md v1.18（next/0.8 f96cd467f9ec） · §2 — 别的都自己做：改别的仓库，自己改（下一节）；要并行，拉子 agent；要定的事，自己定（第 4 节）。
-[99] 协作规范 collaboration.md v1.18（next/0.8 f96cd467f9ec） · §2 — | 送审 | 开发发给评审。中档异步通知，不等；高档等评审 PASS（第 6、7 节） |
-[100] 属主 2026-11-07 在评审席侧会话中裁定 p4：「按推荐：收窄为送审」。内容：superagent 在它负责的项 · ruling — 裁定 p4：「按推荐：收窄为送审」
-[101] 属主 2026-11-07 在评审席侧会话中裁定 p4：「按推荐：收窄为送审」。内容：superagent 在它负责的项 · scope — 不再用 A2A Executor 把工单派给开发席等远端席位
-[102] 属主 2026-11-07 在评审席侧会话中裁定 p4：「按推荐：收窄为送审」。内容：superagent 在它负责的项 · outbound — superagent 的 A2A 外发只剩三种：回执与 attention（p3）、送审（高档改动发给评审席，等非自我评审 PASS）、上报（要凭证或要属主拍板时找能解决的人）
-[103] 属主 2026-11-07 在评审席侧会话中裁定 p4：「按推荐：收窄为送审」。内容：superagent 在它负责的项 · r1 — 总工席不拆，r1-role-split 按不拆关闭
-[104] 属主 2026-11-07 在评审席侧会话中裁定 p4：「按推荐：收窄为送审」。内容：superagent 在它负责的项 · L2 — 原 L2 回环风险随之基本消失
+[71] a2a-net src/faces/wire.ts（next/0.8 b1a72570d090） · wire mailbox answer — const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_COMPLETED', note })
+[72] a2a-net src/faces/wire.ts（next/0.8 b1a72570d090） · wire comment — a mailbox delivery is final from this host's
+[73] a2a-net src/index.ts（next/0.8 b1a72570d090） · trackOwedTask — if (result.task_status !== 'TASK_STATE_DELIVERED'&&result.receiverBookkeeping!=='failed'&&!(result.task_status==='TASK_STATE_COMPLETED'&&result.replyFinal!==true&&result.receipt!=='mailbox')) return
+[74] a2a-net src/queue-guard.ts（next/0.8 b1a72570d090） · queueFullRefusal — if (limit <= 0 || mailbox) return undefined
+[75] a2a-net src/cli-deposit.ts（next/0.8 b1a72570d090） · cap — export const MAILBOX_CAP = 64
+[76] a2a-net src/cli-deposit.ts（next/0.8 b1a72570d090） · evict — this.mailbox.set(handle, list.slice(0, MAILBOX_CAP))
+[77] 属主 2026-11-07 在评审席会话中裁定 S32 缺口：「按推荐：身份声明欠回执」。内容：CLI 身份可在签名名片 · ruling — 裁定 S32 缺口：「按推荐：身份声明欠回执」
+[78] 属主 2026-11-07 在评审席会话中裁定 S32 缺口：「按推荐：身份声明欠回执」。内容：CLI 身份可在签名名片 · declare — CLI 身份可在签名名片里声明自己是接活信箱（欠回执）
+[79] 属主 2026-11-07 在评审席会话中裁定 S32 缺口：「按推荐：身份声明欠回执」。内容：CLI 身份可在签名名片 · deliver — 家宿主对声明了的身份，投递改回「已投递、欠回执」而不是终态，调用方照常记欠账
+[80] 属主 2026-11-07 在评审席会话中裁定 S32 缺口：「按推荐：身份声明欠回执」。内容：CLI 身份可在签名名片 · cap — 每目标 3 笔名额对它生效、拥堵时调用方可见 -32009
+[81] 属主 2026-11-07 在评审席会话中裁定 S32 缺口：「按推荐：身份声明欠回执」。内容：CLI 身份可在签名名片 · scope — 只有 superagent 的 Source 身份声明，人用的 CLI 身份不变。声明是身份属性，不是新的任务状态。经宿主转发的路径一并改。
+[82] 属主 2026-11-07 在评审席会话中裁定 S32 缺口：「按推荐：身份声明欠回执」。内容：CLI 身份可在签名名片 · gate — 作为 p3 前置，不挡 p2b。
+[83] a2a-net src/faces/wire.ts（next/0.8 b1a72570d090） · callerProof — : admission.rule === 'remote-ref-cli' ? 'origin-claim'
+[84] a2a-net src/faces/wire.ts（next/0.8 b1a72570d090） · callerProof — : claim.cli === true ? (claimCovers(caller, claim.caller) ? 'cli-identity' : 'claim-mismatch')
+[85] a2a-net src/task-auth.ts（next/0.8 b1a72570d090） · AuthProof doc — `cli-identity`: a deposited CLI key proves the local CLI handle, not market issuer origin.
+[86] a2a-net docs/design/cross-host-forward.md（next/0.8 b1a72570d090） · 2.3 cond 1 — **H2 的运营者链接过这个句柄**：它在 H2 某个画布队的远端成员引用里。
+[87] a2a-net docs/design/cross-host-forward.md（next/0.8 b1a72570d090） · 2.3 pin — 本机户口只能经本机控制路由建立，是运营者认可的节点事实
+[88] 属主 2026-11-07 在评审席侧会话中裁定 D4 修订：「按新推荐：认但要链接」。内容：a2a Source 的可 · ruling — 裁定 D4 修订：「按新推荐：认但要链接」
+[89] 属主 2026-11-07 在评审席侧会话中裁定 D4 修订：「按新推荐：认但要链接」。内容：a2a Source 的可 · set — 由 {origin-claim, in-process} 扩为 {origin-claim, in-process, cli-identity}
+[90] 属主 2026-11-07 在评审席侧会话中裁定 D4 修订：「按新推荐：认但要链接」。内容：a2a Source 的可 · anchor — 信任锚统一为属主亲手建立的链接
+[91] 属主 2026-11-07 在评审席侧会话中裁定 D4 修订：「按新推荐：认但要链接」。内容：a2a Source 的可 · gate — 属 p3 设计改动，不挡 p2b
+[92] superagent-a2a-spec.md（next/0.8 f96cd467f9ec） · §4 — | launch（Assignment 启动） | `a2a-net route <席位> <派工卡> --task <确定性 id> --context <工单 id>` |
+[93] superagent-a2a-spec.md（next/0.8 f96cd467f9ec） · S8 — | 执行器 | 开发席等远端席位 | 自判范围、自判跟进，超出范围交还 |
+[94] 协作规范 collaboration.md v1.18（next/0.8 f96cd467f9ec） · §1 — 一个项目，或者单独交办的一件任务，至多两个角色：**开发**和**评审**。
+[95] 协作规范 collaboration.md v1.18（next/0.8 f96cd467f9ec） · §1 — 要并行，开发自己拉子 agent 分段做，结果收回来自己合，不另开开发坐席。
+[96] 协作规范 collaboration.md v1.18（next/0.8 f96cd467f9ec） · §2 — 别的都自己做：改别的仓库，自己改（下一节）；要并行，拉子 agent；要定的事，自己定（第 4 节）。
+[97] 协作规范 collaboration.md v1.18（next/0.8 f96cd467f9ec） · §2 — | 送审 | 开发发给评审。中档异步通知，不等；高档等评审 PASS（第 6、7 节） |
+[98] 属主 2026-11-07 在评审席侧会话中裁定 p4：「按推荐：收窄为送审」。内容：superagent 在它负责的项 · ruling — 裁定 p4：「按推荐：收窄为送审」
+[99] 属主 2026-11-07 在评审席侧会话中裁定 p4：「按推荐：收窄为送审」。内容：superagent 在它负责的项 · scope — 不再用 A2A Executor 把工单派给开发席等远端席位
+[100] 属主 2026-11-07 在评审席侧会话中裁定 p4：「按推荐：收窄为送审」。内容：superagent 在它负责的项 · outbound — superagent 的 A2A 外发只剩三种：回执与 attention（p3）、送审（高档改动发给评审席，等非自我评审 PASS）、上报（要凭证或要属主拍板时找能解决的人）
+[101] 属主 2026-11-07 在评审席侧会话中裁定 p4：「按推荐：收窄为送审」。内容：superagent 在它负责的项 · r1 — 总工席不拆，r1-role-split 按不拆关闭
+[102] 属主 2026-11-07 在评审席侧会话中裁定 p4：「按推荐：收窄为送审」。内容：superagent 在它负责的项 · L2 — 原 L2 回环风险随之基本消失
+[103] 全局生产评估 2026-11-07 要求：p1-receipt-outcome 的实现不由评估侧会话来做，交评审席排进 next/0.8 队列 · owner — 交评审席排进 next/0.8 队列
+[104] 全局生产评估 2026-11-07 要求：p1-receipt-outcome 的实现不由评估侧会话来做，交评审席排进 next/0.8 队列 · scope — 评估侧会话只做评估和设计，不写代码、不改检出。
 
 ## 来源
 
@@ -251,10 +251,10 @@ _generated 2026-11-07 08:16:25 UTC by ygl-trees_
 - superagent 002 Authorization — https://github.com/deepseek-ai/dsh-superagent-prototype/blob/8c32a9dc5d72/docs/002-authorization.md （置信度 B）
 - superagent 000 Philosophy — https://github.com/deepseek-ai/dsh-superagent-prototype/blob/8c32a9dc5d72/docs/000-philosophy.md （置信度 B）
 - superagent src/core/ports.ts（8c32a9d） — https://github.com/deepseek-ai/dsh-superagent-prototype/blob/8c32a9dc5d72/src/core/ports.ts （置信度 B）
+- 全局生产评估 2026-11-07 要求：p1-receipt-outcome 的实现不由评估侧会话来做，交评审席排进 next/0.8 队列 — session://adjudication/202611070526-public （置信度 B）
 - 属主 2026-11-07 在评审席侧会话中裁定 p4：「按推荐：收窄为送审」。内容：superagent 在它负责的项 — session://adjudication/202611070620 （置信度 B）
 - 属主 2026-11-07 在评审席侧会话中裁定 D4 修订：「按新推荐：认但要链接」。内容：a2a Source 的可 — session://adjudication/202611070611 （置信度 B）
 - 属主 2026-11-07 在评审席会话中裁定 S32 缺口：「按推荐：身份声明欠回执」。内容：CLI 身份可在签名名片 — session://adjudication/202611070602 （置信度 B）
-- 全局生产评估 2026-11-07 要求：p1-receipt-outcome 的实现不由评估侧会话来做，交评审席（lo — session://adjudication/202611070526 （置信度 B）
 - 属主 2026-11-07 在评审席会话中裁定出站边界与防回环：「全部按推荐」。O1：每条外发只发给触发它的那条入站消息 — session://adjudication/202611070524 （置信度 B）
 - 属主 2026-11-07 在评审席会话中裁定 D7：「按推荐：规则化 inferred」。采纳的推荐内容：a2a So — session://adjudication/202611070514 （置信度 B）
 
