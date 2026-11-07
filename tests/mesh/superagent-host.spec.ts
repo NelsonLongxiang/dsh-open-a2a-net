@@ -300,6 +300,10 @@ describe('superagent engine in the a2a host', () => {
       expect(String(inbound.error)).toContain('superagent-member-inbound')
       const outbound = await m.tool('a2a_route', m.M, { team: 'dsh/c2222222', message: '成员私下派活', async: true })
       expect(String(outbound.error)).toContain('superagent-member-outbound')
+      // PR-F: each refused route is counted once, by its rule, with who and what.
+      const refusals = (await m.state()).refusals
+      expect(refusals.counts).toMatchObject({ 'superagent-member-inbound': 1, 'superagent-member-outbound': 1 })
+      expect(refusals.recent.slice(-2)).toMatchObject([{ rule: 'superagent-member-inbound', target: 'dsh/b1111111' }, { rule: 'superagent-member-outbound', caller: M_ID }])
 
       // No session was opened for any ticket.
       expect(m.agents.roots().length).toBe(sessionsBefore)
@@ -365,6 +369,8 @@ describe('superagent engine in the a2a host', () => {
       expect(await refusedByRole('a2a_teams', m.R)).toBe(false)
       expect(await refusedByRole('a2a_teams', m.O)).toBe(true)
       expect(await refusedByRole('a2a_route', S, { team: 'dsh/c2222222', message: 'x' })).toBe(false)
+      // PR-F: every refused call counted once (router 5, member 6, the member's subagent 1, the new router 1).
+      expect((await m.state()).refusals.counts['superagent-role-tools']).toBe(13)
     } finally { await m.dispose() }
   }, 30_000)
 })

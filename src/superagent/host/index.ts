@@ -54,6 +54,8 @@ export interface SuperagentHostDeps {
 /** How often due Evals are checked and undelivered candidates retried. */
 export const PASS_MS = 5_000
 const TEXT_CAP = 4_000
+/** How many refusals the state keeps with their detail (the counts keep all). */
+const REFUSALS_KEPT = 50
 
 const clip = (text: string, cap = TEXT_CAP): string => (text.length > cap ? `${text.slice(0, cap)}… (${String(text.length - cap)} more characters)` : text)
 
@@ -98,6 +100,9 @@ export class SuperagentHost {
   /** Outbox messages being sent right now, so a pass never sends one twice at once. */
   private readonly sending = new Set<string>()
   private started = false
+  /** Refusals at the team's edge by rule, and the latest ones (noteRefusal). */
+  private readonly refusalCounts = new Map<string, number>()
+  private readonly refusalRecent: Array<{ at: string; rule: string; caller?: string; target?: string }> = []
 
   constructor(private readonly d: SuperagentHostDeps) {
     const dir = join(d.home, 'superagent')
@@ -330,6 +335,17 @@ export class SuperagentHost {
     }
   }
 
+  /**
+   * A refusal at the team's edge, by its rule: an A2A route to or from a role session, a role session's tool call outside
+   * its list, a host-to-host request whose signer is not the pinned key. Counted for this process (the acceptance and the
+   * workbench read them); the latest ones are kept with who and what.
+   */
+  noteRefusal(rule: string, detail: { caller?: string; target?: string } = {}): void {
+    this.refusalCounts.set(rule, (this.refusalCounts.get(rule) ?? 0) + 1)
+    this.refusalRecent.push({ at: (this.d.now ?? (() => new Date().toISOString()))(), rule, ...(detail.caller !== undefined ? { caller: detail.caller } : {}), ...(detail.target !== undefined ? { target: detail.target } : {}) })
+    if (this.refusalRecent.length > REFUSALS_KEPT) this.refusalRecent.splice(0, this.refusalRecent.length - REFUSALS_KEPT)
+  }
+
   get settings(): TeamSettings { return this.settingsValue }
   get routerSession(): string | undefined { return this.settingsValue.router }
 
@@ -382,6 +398,7 @@ export class SuperagentHost {
       settings: this.settingsValue,
       policyVersion: policyVersion(this.settingsValue),
       a2a: { enabled: this.settingsValue.sources.a2a, address: this.a2a.address ?? null, health: this.a2a.health },
+      refusals: { counts: Object.fromEntries(this.refusalCounts), recent: [...this.refusalRecent] },
       executor: { members: this.settingsValue.members, remoteMembers: this.settingsValue.remoteMembers, bindings: this.executor.list() },
       ...(this.settingsValue.serves !== undefined ? { serves: this.settingsValue.serves } : {}),
       ...(this.store.loadError !== undefined ? { error: this.store.loadError } : {}),
