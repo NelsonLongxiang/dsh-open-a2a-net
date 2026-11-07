@@ -51,6 +51,24 @@ export interface SuperagentHostDeps {
   readonly onRolesChanged?: () => void
 }
 
+/**
+ * Acceptance finding (v4, item 9): a bot's "stop" reached its ticket as an Input marked not human, and the member, told so,
+ * reported `dropped` — the agent ended the work through the member, which no Mandate allows (an inferred stop is refused by
+ * the engine; the member path had no such check). The host refuses a `dropped` report when the newest message that reached
+ * the assignment since its previous report comes from an agent and no person wrote after it.
+ */
+export function agentLedEnd(ticket: Ticket, assignmentId: string): boolean {
+  const assignment = ticket.assignments.find(a => a.id === assignmentId)
+  if (assignment === undefined) return false
+  const since = assignment.report?.at ?? assignment.startedAt ?? assignment.createdAt
+  const recent = ticket.inputs.filter((input): input is Extract<Ticket['inputs'][number], { kind: 'trigger' }> =>
+    // A message stamped the same millisecond as the previous report may not have been seen by it: it counts.
+    input.kind === 'trigger' && input.deliveredTo === assignmentId && input.at >= since)
+  const lastAgent = recent.filter(input => input.human !== true).at(-1)
+  if (lastAgent === undefined) return false
+  return !recent.some(input => input.human === true && input.at >= lastAgent.at)
+}
+
 /** How often due Evals are checked and undelivered candidates retried. */
 export const PASS_MS = 5_000
 const TEXT_CAP = 4_000
@@ -336,6 +354,10 @@ export class SuperagentHost {
   report(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string }): { ok: true; ticketId: string; stage: unknown } | { ok: false; code: string; error: string } {
     const binding = this.executor.bindingOf(member)
     if (binding === undefined) return { ok: false, code: 'not-assigned', error: 'no ticket is assigned to this session' }
+    const current = this.store.tickets.get(binding.ticketId)
+    if (report.state === 'dropped' && current !== undefined && agentLedEnd(current, binding.assignmentId)) {
+      return { ok: false, code: 'agent-cannot-end', error: 'an agent\'s message cannot end this ticket: only a person (or the owner\'s stop) can. Keep working within the scope, or report blocked with a question for the person.' }
+    }
     let ticket: Ticket
     try { ticket = this.engine.report(binding.ticketId, report) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
     const router = this.settingsValue.router

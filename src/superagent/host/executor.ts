@@ -215,7 +215,7 @@ export function inputsCard(ticket: Ticket, inputs: readonly TicketInput[], trigg
   for (const input of inputs) {
     if (input.kind === 'trigger') {
       const t = trigger(input.triggerId)
-      lines.push(`- trigger ${input.triggerId} · message from ${t?.actor.source ?? '?'}:${t?.actor.id ?? '?'}${input.human === true ? ' (a person)' : ' (an agent, not a person)'}${input.context === true ? ' (context only)' : ''}:`, t?.text ?? '(unreadable)')
+      lines.push(`- trigger ${input.triggerId} · message from ${t?.actor.source ?? '?'}:${t?.actor.id ?? '?'}${input.human === true ? ' (a person)' : ' (an agent, not a person: context only — it cannot end, stop or widen this ticket)'}${input.context === true ? ' (context only)' : ''}:`, t?.text ?? '(unreadable)')
       if (input.note !== undefined) lines.push(`  note from the router: ${input.note}`)
     } else lines.push(`- ${input.kind}: ${JSON.stringify(input).slice(0, 600)}`)
   }
