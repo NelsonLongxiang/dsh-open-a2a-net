@@ -37,7 +37,7 @@ const TEXT_CAP = 4_000
 const clip = (text: string, cap = TEXT_CAP): string => (text.length > cap ? `${text.slice(0, cap)}… (${String(text.length - cap)} more characters)` : text)
 
 /** The candidate card the router reads: bounded facts and the ids its decision names, never authority. */
-export function candidateCard(candidate: Candidate): string {
+export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings, 'acceptMode' | 'rules'>): string {
   const lines = [
     `[superagent candidate] eval ${candidate.evalId} · strength ${candidate.strength} · policy ${candidate.policyVersion}`,
     `thread ${candidate.thread.key}`,
@@ -49,6 +49,13 @@ export function candidateCard(candidate: Candidate): string {
     for (const ticket of [...candidate.tickets].sort((a, b) => Number(!!a.ended) - Number(!!b.ended))) {
       lines.push(`- ${ticket.id} · ${ticket.title} · ${ticket.ended ? `ended ${ticket.ended.outcome}` : ticketStage(ticket).stage}`)
     }
+    lines.push('')
+  }
+  if (candidate.strength === 'inferred' && settings !== undefined) {
+    const enabled = settings.rules.filter(rule => rule.enabled)
+    lines.push(`This candidate is inferred (not an explicit request; accept mode ${settings.acceptMode}). Judge it against every enabled rule once; accept only on matched rules${settings.acceptMode === 'observe' ? ' — observe mode records it as would-accept and accepts nothing' : ''}. Ignore it from the card when it plainly touches no rule.`)
+    for (const rule of enabled) lines.push(`- rule ${rule.name}: ${clip(rule.text, 600)}`)
+    if (enabled.length === 0) lines.push('- (no enabled rule: it can only be ignored)')
     lines.push('')
   }
   lines.push(`Decide with superagent_route, one item per candidate, by trigger_id: accept (one ticket for this request, with a title, a scope and an acknowledgement in the request's language — do not add an implementation plan), attach (to a listed ticket the message points at explicitly), stop (the person asked to stop that ticket) or ignore (with a reason).`)
@@ -138,7 +145,7 @@ export class SuperagentHost {
     if (router === undefined || this.settingsValue.paused) return
     for (const [evalId, entry] of this.candidates) {
       if (entry.delivered) continue
-      if (!this.d.deliverToSession(router, candidateCard(entry.candidate))) return
+      if (!this.d.deliverToSession(router, candidateCard(entry.candidate, this.settingsValue))) return
       entry.delivered = true
       try { this.engine.candidateDelivered(evalId) } catch (error) { this.d.logger.warn('superagent: candidate %s delivered but not recorded: %s', evalId, String(error)) }
     }

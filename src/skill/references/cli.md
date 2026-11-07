@@ -317,6 +317,14 @@ state face (key-gated on a keyed host). `--json` prints raw rows for
 
 `teams` includes local canvas and peerOrg rows with qualified route name, owner URL and memberCount; same names on different hosts stay separate. `whoami --json` is pure JSON and includes only canvases naming this CLI identity, local and remote. An unreadable optional state face reports canvasError/UNKNOWN, never falsely empty membership. Canvas failures retain the original refusal and add visible-directory not-found, owner prerequisites (including each missing direct receiver link), or conflicting owner candidates. Owner URLs do not require direct dialing or a home override and grant no admission.
 
+## The superagent team (owner)
+
+`a2a-net superagent request <text…> [--thread ID] [--json]` sends the owner's request to the team's workbench Source. `a2a-net superagent state [--json]` prints the team state: router, accept mode, tickets with their stage, and replies. These commands apply only on a home with `superagent: true`.
+
+Both ride the home's **owner** control credential (`$A2A_KEY`, plus the pocket cookie behind dsh-pocket), not this CLI's identity. A request made this way is a person addressing the team, so it is an explicit request.
+
+A message from a CLI identity (`route` to the team's A2A address) is an agent's message under superagent's definition. It can reach the team only through the A2A Source's bot list and accept mode; it is never an explicit request and never a stop. See [superagent.md](superagent.md).
+
 ## Local commands
 
 - `a2a-net skills [name] [--root DIR] [--json]` lists the skills under the

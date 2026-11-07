@@ -17,6 +17,8 @@ import WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, type Config } from '../../src/index.ts'
+import { spawn } from 'node:child_process'
+import { cliEnv } from './harness.ts'
 
 class ManyAgents extends Service {
   map = new Map<string, Agent>()
@@ -63,7 +65,7 @@ async function mount(home: string) {
   const state = async (): Promise<Record<string, any>> => await (await globalThis.fetch(`http://127.0.0.1:${port}/__dsh_a2a/superagent`)).json() as Record<string, any>
   const tool = async (name: string, from: Agent, args: Record<string, unknown>): Promise<Record<string, any>> => await ctx.tools.get(name)!.execute(args, execAs(from)) as Record<string, any>
   for (const a of [R!, M!, O!]) await post('/__dsh_a2a/join', { id: String(a.id) })
-  return { ctx, R: R!, M: M!, O: O!, post, sa, state, tool, dispose: async () => { await ctx.fiber.dispose() } }
+  return { ctx, port, R: R!, M: M!, O: O!, post, sa, state, tool, dispose: async () => { await ctx.fiber.dispose() } }
 }
 const triggerIn = (card: string): string => /^trigger (\S+) /m.exec(card)![1]!
 
@@ -156,4 +158,33 @@ describe('superagent engine in the a2a host', () => {
       expect(String(out.error ?? '')).not.toContain('superagent-router')
     } finally { await m.dispose() }
   }, 60_000)
+
+  it('PR-B2a: the owner\'s terminal is the workbench Source — a2a-net superagent request / state ride the owner credential', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-host-cli-'))
+    const m = await mount(home)
+    try {
+      expect(await m.sa({ action: 'settings', settings: { router: R_ID } })).toMatchObject({ ok: true })
+      // Async spawn: the host answers in this very process, so a synchronous child would deadlock it.
+      const cli = (...args: string[]) => new Promise<{ status: number | null; stdout: string; stderr: string }>(resolve => {
+        const child = spawn(process.execPath, [join(process.cwd(), 'cli/a2a.mjs'), ...args, '--home', `http://127.0.0.1:${m.port}`], { env: cliEnv(mkdtempSync(join(tmpdir(), 'sa-cli-home-'))) })
+        let stdout = '', stderr = ''
+        child.stdout.on('data', d => { stdout += String(d) }); child.stderr.on('data', d => { stderr += String(d) })
+        child.on('close', status => resolve({ status, stdout, stderr }))
+      })
+      const asked = await cli('superagent', 'request', '终端里提的需求', '--json')
+      expect(asked.status, asked.stderr).toBe(0)
+      const out = JSON.parse(asked.stdout) as { ok: boolean; result: string; triggerId: string; thread: string }
+      expect(out).toMatchObject({ ok: true, result: 'stored' })
+      // A person addressing the team: the router gets an explicit candidate, exactly as from the workbench.
+      await until(() => m.R.steered.some(t => t.includes(out.triggerId) && t.includes('strength explicit')))
+      const routed = await m.tool('superagent_route', m.R, { items: [{ trigger_id: out.triggerId, kind: 'accept', title: '终端需求', scope: 's', reason: '属主', acknowledgement: '收到' }] })
+      expect(routed.ok).toBe(true)
+      const state = await cli('superagent', 'state')
+      expect(state.status, state.stderr).toBe(0)
+      expect(state.stdout).toContain(`router ${R_ID}`)
+      expect(state.stdout).toContain('终端需求')
+      expect(state.stdout).toContain('acknowledgement: 收到')
+      expect((await cli('superagent', 'request')).status).not.toBe(0)
+    } finally { await m.dispose() }
+  }, 30_000)
 })
