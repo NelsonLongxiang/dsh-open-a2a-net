@@ -2,7 +2,7 @@
 
 配套：[ADR](superagent-a2a-adr.md) · [实施计划](superagent-a2a-plan.md) · [p2 Source 设计稿](superagent-a2a-p2-source-design.md) · [断言与证据](superagent-a2a-evidence.md)
 
-状态：属主已定方向（第 6 节），全局生产评估已 PASS；计划第 1 阶段（p1）的四个节点已全部交付（PR #379–#384），p2 处于设计评审。依据断言 S1–S19，每条都挂有原文证据（ygl-trees 项目 superagent-a2a-spec-r6）。修订经过：按全局 PR #376 @ a537c5a 的评审意见修订；按 PR #381 的评审条件对齐 3.4 节与实现；按全局 p1-receipt-cmd 开工前裁定，把回执观察字段定名为 `disposition`；本版补入 p2 设计时发现的来源校验缺口（S18）和类型依赖缺口（S19）。
+状态：属主已定方向（第 6 节），全局生产评估已 PASS；计划第 1 阶段（p1）的四个节点已全部交付（PR #379–#384），p2 设计稿第 2 版待全局抽查（第 1 版评审已批 G1、G2、D4，D7 不批并移进 p3）。依据断言 S1–S20，每条都挂有原文证据（ygl-trees 项目 superagent-a2a-spec-r7）。修订经过：按全局 PR #376 @ a537c5a 的评审意见修订；按 PR #381 的评审条件对齐 3.4 节与实现；按全局 p1-receipt-cmd 开工前裁定，把回执观察字段定名为 `disposition`；补入 p2 设计时发现的来源校验缺口（S18）和类型依赖缺口（S19）；本版按全局对 p2 设计稿的裁定（S20）改 Trigger id 与 actor 的翻译。
 
 ## 1. 目标与非目标
 
@@ -39,9 +39,9 @@
 | superagent 概念 | a2a 映射 |
 |---|---|
 | Source 实例 | 一个专用 a2a-net CLI 身份（独立 A2A_CLI_HOME）的信箱（S5） |
-| Trigger | 信箱中一条已验证的入站消息；id = key('a2a', 信箱 seq 与 task id) |
+| Trigger | 信箱中一条入站消息；id = key('a2a', 调用方句柄, task id)。task id 只在宿主幂等窗口内唯一，带上调用方句柄防止窗口过后撞号；不用信箱 seq（新 epoch 会从 1 重来） |
 | Thread | context_id；没有 context_id 时用 task id |
-| Actor | 入站校验通过（bound）的调用方句柄（S4） |
+| Actor | 来源校验通过的调用方句柄（S4）：信箱行 `proof` 为 origin-claim 或 in-process（S20）；按事实翻译为 `human: false` |
 | addressed | direct：A2A 消息总是点名路由到本身份 |
 | Channel 地址 | {调用方句柄, task_id, context_id} |
 | Policy 的 Source 部分 | allowed = 允许发起工作的调用方句柄名单；bots 为空 |
@@ -126,7 +126,7 @@ A2A 的回执是终态。progress 一类中间报告不经 A2A 传输，执行�
 ## 6. 属主裁定（2026-11-06，采用评审席建议，断言 S13）
 
 1. 代码位置：本仓 `next/0.8`，做成独立导出的插件包（例如 `a2a-watch`），不 fork superagent。
-2. 校验通过、且句柄在 allowed 名单内的 Agent 调用方，给 explicit 强度。
+2. 校验通过、且句柄在 allowed 名单内的 Agent 调用方，给 explicit 强度。注意：这与 superagent Cookbook「名单内的 bot 只能当 inferred」相冲突；p2 按事实翻译为 `human: false`，只把按本条应得的强度记为观察字段，冲突留到 p3 设计时由属主裁定（D7，S20）。
 3. attention 走“正式回执 + 同 context 新任务答复”。
 4. 路由席暂不从评审席拆出，由评审席独自完成全部工作（S12），r1 节点暂缓。
 
