@@ -1,4 +1,4 @@
-# p1-mailbox-owes：信箱欠回执声明（设计稿第 1.2 版：实现时的修订）
+# p1-mailbox-owes：信箱欠回执声明（设计稿第 1.3 版：重发原样回已投递）
 
 依据：属主 2026-11-07 的裁定 S33。CLI 身份在签名名片里声明「接活信箱、欠回执」；家宿主对它的投递回「已投递」，不回终态；调用方记欠账，并受 3 笔名额和 -32009 背压约束。只有 superagent Source 身份做这个声明。经宿主转发的路径一并改。档位为高档，作为 p3 的前置，不挡 p2b。要修复的问题是 S32。
 
@@ -56,9 +56,10 @@ next/0.8（f96cd46）上的现状，核对过代码：
 ## v1.1 补充（全局 2026-11-07 design_pass 附带的 a–e，以及开工核对中的发现）
 
 - **a 结清方核验**：家宿主在 wire 面结算回执之后，如果本次投递的调用方本身是本宿主上的 CLI 户口（`cliDeposits.get(caller)` 存在），并且消息是 `[A2A receipt] task <id>`，就调用 `taskLedger.markAnswered(id, caller)`。`markAnswered`（task-ledger.ts:280）本来就要求 `(row.deliveredTo ?? row.team) === target`，所以只有该户口自己发出的回执能把它名下的入站行标为已答。其他 CLI 即使知道 task id，也会被拒（返回 false），名额不释放。
-- **b 重发幂等**：wire 面在进入信箱分支之前，先用 `idempotencyStore.claim(taskId, fingerprint)` 认领 task id（wire.ts:768）。同一个 id 重发时会拿到 409 replay，根本到不了信箱分支：不会再写一行信箱，不会再记一行入站，也不会再占名额。`trackInbound` 本身也按 task id 去重。
-  - 调用方 CLI 收到 replay 后会去查结局，读到的是 pending，打印「already received … pending — not sent a second time」。这是现行会话异步投递的契约，等同于「原样已投递」。
-  - 进程内面的 task id 由路由方现生成（`direct-<rand>`），不存在重发。
+- **b 重发幂等（v1.3 按全局评审改）**：wire 面在进入信箱分支之前，先用 `idempotencyStore.claim` 认领 task id。同指纹重发时，如果该户口声明了 owes，而且这个 task id 名下仍有 pending 的入站行，就原样回复 `TASK_STATE_DELIVERED` 加 `receipt: 'mailbox'`（context 取入站行上的那个），不再返回 409 replay。不会再写一行信箱，不会再记一行入站，也不会再占一笔名额。
+  - 这样，首个应答丢失的调用方，在重试时也能把这笔欠账记上。转发路径的 `ledger.track` 按 task id 去重，所以调用方那边仍只有一笔欠账。
+  - 不回「已投递」的情况：行已结清（归档）、已到期（dead）、指纹不同（conflict），或者户口没有声明 owes。这些仍是原来的 409。
+  - 进程内面的 task id 由路由方现生成，不存在重发。
 - **c 到期释放**：用的是现有的懒式死信清扫（task-ledger.ts:665）。pending 行超过 `taskStaleTtlMs`（`TASK_STALE_TTL_MS`）后转为 dead。`queuedFor` 只数 pending 的行，所以名额自动回来。调用方的欠账行用的是同一个 TTL，到期时间对齐。
 - **d 重启持久**：
   - owes 不单独存，每次都从户口里保存的、已经验过签的 cardJson 读出（`capabilities.owes === true`）。cardJson 原样持久化在 deposits 快照里，重启后同样生效。

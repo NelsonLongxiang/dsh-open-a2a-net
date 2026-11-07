@@ -768,6 +768,16 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           const idemVerdict = idempotencyStore.claim(taskId, idemFingerprint)
           if (idemVerdict !== 'fresh') {
             const replay = idemVerdict === 'replay'
+            // p1-mailbox-owes (S33, b): a same-payload resend of a task an owing deposit still owes reads as the first
+            // answer did — delivered, with the mailbox marker — so a caller whose first answer was lost books the debt
+            // now. Nothing is written again: no second mailbox row, no second inbound row, no second slot.
+            const stillOwed = replay && cliDeposits.owes(team) ? taskLedger.find(taskId) : undefined
+            if (stillOwed !== undefined && stillOwed.direction === 'inbound' && stillOwed.status === 'pending' && stillOwed.team === team) {
+              const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, context_id: stillOwed.contextId ?? contextId, task_status: 'TASK_STATE_DELIVERED', note: `delivered to the mailbox of ${team} — it owes a receipt` })
+              res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+              return
+            }
             // Conflicts warn (caller key reuse bugs); harmless replays stay silent.
             if (!replay) logger.warn(`a2a: idempotency CONFLICT on task ${taskId.slice(0, 80)} — same key reused with a different payload (caller bug; never auto-retry)`)
             const payload = JSON.stringify({

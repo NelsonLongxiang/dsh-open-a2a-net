@@ -76,15 +76,21 @@ describe('superagent p1-mailbox-owes: a deposit that owes receipts', () => {
       expect(full.body).toMatchObject({ code: -32009 })
       expect(String(full.body.error)).toContain('target-queue-full')
       expect((await mailbox(a, OWER)).map(m => m.task_id)).not.toContain('o-4')
-      // (b) a resend of a delivered id replays: no second mailbox row, no second inbound row, no extra slot.
+      // (b) a same-payload resend of a task still owed reads as the first answer did (a caller whose first answer was
+      // lost books the debt now), and writes nothing again: one mailbox row, one inbound row, no extra slot.
       const resend = await send(a, w0, handleOf(OWER), 'o-1')
-      expect(resend.status).toBe(409)
-      expect(resend.body).toMatchObject({ replay: true })
+      expect(resend.status).toBe(200)
+      expect(resend.body).toEqual(first.body)
       expect((await mailbox(a, OWER)).filter(m => m.task_id === 'o-1')).toHaveLength(1)
+      expect((await state(a)).tasks.filter(t => t.taskId === 'o-1')).toHaveLength(1)
       expect((await owedIn(a, handleOf(OWER))).map(t => t.taskId).sort()).toEqual(['o-1', 'o-2', 'o-3'])
+      // The real CLI's retry with the same id and message reads as an ordinary delivery.
       const replayed = await cli(cliHome(a, w0), ['route', handleOf(OWER), 'work o-1', '--task', 'o-1', '--context', 'ctx-o-1'])
-      expect(replayed.stdout).toContain('already received')
-      expect(replayed.stdout).toContain('pending')
+      expect(replayed.code, replayed.stderr).toBe(0)
+      expect(replayed.stdout).toContain(`delivered → ${handleOf(OWER)} · task o-1`)
+      expect((await mailbox(a, OWER)).filter(m => m.task_id === 'o-1')).toHaveLength(1)
+      // A different payload under the same id is still a conflict, never a delivery.
+      expect((await send(a, w0, handleOf(OWER), 'o-1', 'something else')).status).toBe(409)
       // (a) another identity's receipt-shaped message for o-2 frees nothing.
       expect((await send(a, OTHER, handleOf(w1), 'fake-o-2', '[A2A receipt] task o-2 done')).body).toMatchObject({ delivered: true })
       expect((await owedIn(a, handleOf(OWER))).map(t => t.taskId).sort()).toEqual(['o-1', 'o-2', 'o-3'])
@@ -92,6 +98,8 @@ describe('superagent p1-mailbox-owes: a deposit that owes receipts', () => {
       const own = await cli(cliHome(a, OWER), ['receipt', 'o-2', 'done'])
       expect(own.code, own.stderr).toBe(0)
       expect((await owedIn(a, handleOf(OWER))).map(t => t.taskId).sort()).toEqual(['o-1', 'o-3'])
+      // Once answered, a resend of o-2 is the ordinary replay again: nothing is owed any more.
+      expect(await send(a, w1, handleOf(OWER), 'o-2')).toMatchObject({ status: 409, body: { replay: true } })
       expect((await send(a, w0, handleOf(OWER), 'o-5')).body).toMatchObject({ task_status: 'TASK_STATE_DELIVERED' })
       expect((await send(a, w0, handleOf(OWER), 'o-6')).body).toMatchObject({ code: -32009 })
     } finally {
@@ -157,6 +165,8 @@ describe('superagent p1-mailbox-owes: a deposit that owes receipts', () => {
       for (const n of [1, 2, 3]) expect((await send(a, WRITERS[0]!, handleOf(OWER), `t-${String(n)}`)).body).toMatchObject({ task_status: 'TASK_STATE_DELIVERED' })
       expect((await send(a, WRITERS[0]!, handleOf(OWER), 't-4')).body).toMatchObject({ code: -32009 })
       await vi.waitFor(async () => { expect((await send(a, WRITERS[1]!, handleOf(OWER), `t-late-${String(Date.now())}`)).body).toMatchObject({ task_status: 'TASK_STATE_DELIVERED' }) }, { timeout: 8000, interval: 500 })
+      // An expired row is owed no more: its resend is the ordinary replay, not a fresh 'delivered'.
+      expect(await send(a, WRITERS[0]!, handleOf(OWER), 't-1')).toMatchObject({ status: 409, body: { replay: true } })
     } finally {
       await a.dispose()
     }
