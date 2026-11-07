@@ -15,7 +15,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
-import { Engine, ticketStage, type Assessor, type Candidate, type Outbox, type Ticket, type Trigger, type ReceiveResult } from '../upstream/dsh-superagent/src/core/index.ts'
+import { Engine, UserError, ticketStage, type Assessor, type Candidate, type Outbox, type Ticket, type Trigger, type ReceiveResult } from '../upstream/dsh-superagent/src/core/index.ts'
 import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
 import { MemberExecutor } from './executor.ts'
@@ -196,12 +196,25 @@ export class SuperagentHost {
   }
 
   /** A member's turn ended (agent idle): the executor's turn-end fact — told to the served team host when it is theirs. */
-  memberIdle(sessionId: string): void {
-    if (this.settingsValue.members.includes(sessionId)) { this.executor.memberIdle(sessionId); return }
+  memberIdle(sessionId: string): void { this.memberEvent(sessionId, 'idle') }
+
+  /**
+   * PR-F: a member's session took a message into its history (its inbox claim). The Inputs delivered to it count as read
+   * from then on — as upstream's executor marks them when the message enters the session — not only once the turn ends:
+   * a member that answers and reports in the same turn has read the person's message before its report.
+   */
+  memberClaimed(sessionId: string): void { this.memberEvent(sessionId, 'read') }
+
+  private memberEvent(sessionId: string, op: 'idle' | 'read'): void {
+    if (this.settingsValue.members.includes(sessionId)) {
+      if (op === 'idle') this.executor.memberIdle(sessionId)
+      else this.executor.memberRead(sessionId)
+      return
+    }
     const serves = this.settingsValue.serves
     if (serves?.members.includes(sessionId) === true && this.d.signedPost !== undefined && this.d.handleOf !== undefined) {
-      void this.d.signedPost(serves.url, '/a2a/superagent-team', { op: 'idle', member: this.d.handleOf(sessionId) })
-        .catch(error => { this.d.logger.warn('superagent: turn end not told to the team host: %s', String(error)) })
+      void this.d.signedPost(serves.url, '/a2a/superagent-team', { op, member: this.d.handleOf(sessionId) })
+        .catch(error => { this.d.logger.warn('superagent: %s not told to the team host: %s', op, String(error)) })
     }
   }
 
@@ -222,7 +235,12 @@ export class SuperagentHost {
     const entry = this.settingsValue.remoteMembers.find(r => r.ref.replace(/@[0-9a-f]{8}$/, '') === memberHandle && r.key === signerKey)
     if (entry === undefined) return { ok: false, code: 'not-member', error: 'no remote member of this team is that session under that key' }
     if (op === 'idle') { this.executor.memberIdle(entry.ref); return { ok: true } }
-    if (op !== 'report') return { ok: false, code: 'op', error: 'op must be report or idle' }
+    if (op === 'read') { this.executor.memberRead(entry.ref); return { ok: true } }
+    if (op === 'ack' || op === 'handback') {
+      const r = (report ?? {}) as Record<string, unknown>
+      return this.takeUp(entry.ref, op, r.trigger_id, r.text)
+    }
+    if (op !== 'report') return { ok: false, code: 'op', error: 'op must be report, ack, handback, read or idle' }
     const r = (report ?? {}) as Record<string, unknown>
     if (typeof r.state !== 'string' || !['progress', 'waiting', 'ready', 'blocked', 'failed', 'dropped'].includes(r.state) || typeof r.summary !== 'string' || r.summary.trim() === '') return { ok: false, code: 'report', error: 'a report needs a state and a summary' }
     return this.report(entry.ref, { state: r.state as ReportState, summary: r.summary, ...(typeof r.question === 'string' || r.question === null ? { question: r.question as string | null } : {}), ...(typeof r.answers === 'string' ? { answers: r.answers } : {}) })
@@ -244,6 +262,37 @@ export class SuperagentHost {
     const serves = this.settingsValue.serves
     if (serves === undefined || !serves.members.includes(member) || this.d.signedPost === undefined || this.d.handleOf === undefined) return { ok: false, code: 'not-member', error: 'this session serves no team' }
     try { return await this.d.signedPost(serves.url, '/a2a/superagent-team', { op: 'report', member: this.d.handleOf(member), report }) } catch (error) { return { ok: false, code: 'unreachable', error: String(error) } }
+  }
+
+  /** PR-F: a served member's acknowledgement or handback goes to the team host as a report does, signed. */
+  async forwardTakeUp(member: string, op: 'ack' | 'handback', triggerId: string, text: string): Promise<Record<string, unknown>> {
+    const serves = this.settingsValue.serves
+    if (serves === undefined || !serves.members.includes(member) || this.d.signedPost === undefined || this.d.handleOf === undefined) return { ok: false, code: 'not-member', error: 'this session serves no team' }
+    try { return await this.d.signedPost(serves.url, '/a2a/superagent-team', { op, member: this.d.handleOf(member), report: { trigger_id: triggerId, text } }) } catch (error) { return { ok: false, code: 'unreachable', error: String(error) } }
+  }
+
+  /**
+   * PR-F (upstream orchestrator_ack / orchestrator_trigger_handback): a member takes up a person's message that reached its
+   * ticket — `ack` posts a short acknowledgement on that person's Thread, and the ticket's worker owns the message from then on;
+   * `handback` returns a message that asks for work beyond the ticket to the router's assessment. Only for the ticket bound to
+   * the member. A message no member took up is handed to the router when its ticket ends (the engine's letGo), so nothing a
+   * person said is lost.
+   */
+  takeUp(member: string, op: 'ack' | 'handback', triggerId: unknown, text: unknown): Record<string, unknown> {
+    const binding = this.executor.bindingOf(member)
+    if (binding === undefined) return { ok: false, code: 'not-assigned', error: 'no ticket is assigned to this session' }
+    if (typeof triggerId !== 'string' || triggerId === '') return { ok: false, code: 'missing', error: 'trigger_id is required' }
+    if (typeof text !== 'string' || text.trim() === '') return { ok: false, code: 'missing', error: op === 'ack' ? 'text is required' : 'reason is required' }
+    try {
+      if (op === 'ack') {
+        const reply = this.engine.reply({ purpose: 'acknowledgement', ticketId: binding.ticketId, triggerId, text: clip(text.trim(), 1_000) })
+        this.pass()
+        return { ok: true, ticketId: binding.ticketId, trigger_id: triggerId, acknowledgement: reply.status, reused: reply.reused }
+      }
+      const queued = this.engine.handback(binding.ticketId, triggerId, clip(text.trim(), 300))
+      this.pass()
+      return { ok: true, ticketId: binding.ticketId, trigger_id: triggerId, queued }
+    } catch (error) { return { ok: false, code: error instanceof UserError ? error.code : 'refused', error: error instanceof Error ? error.message : String(error) } }
   }
 
   /** Owner control: pin a remote member (resolved from a linked peer's signed card by the caller). */
