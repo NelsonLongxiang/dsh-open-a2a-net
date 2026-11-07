@@ -29,12 +29,14 @@ export interface QueueRow {
   readonly direction?: string
   readonly receiptExpected?: boolean
   readonly answeredAt?: number
+  /** Its target acknowledged it: owed until the result, but no longer queued. */
+  readonly acknowledgedAt?: number
   readonly deliveredTo?: string
 }
 
 /** How many receipt-owing tasks this host holds pending and unanswered for `team`. */
 export function queuedFor(rows: readonly QueueRow[], team: string): number {
-  return rows.filter(row => row.status === 'pending' && row.receiptExpected !== false && row.answeredAt === undefined &&
+  return rows.filter(row => row.status === 'pending' && row.receiptExpected !== false && row.answeredAt === undefined && row.acknowledgedAt === undefined &&
     (row.direction === 'inbound' || row.peer === 'local') &&
     (row.team === team || row.deliveredTo === team)).length
 }

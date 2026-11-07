@@ -587,7 +587,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         'Read-only three-tier ledger of routed A2A tasks: pending rows still owed a receipt, rows '
         + 'auto-dead-lettered past the stale TTL, and the bounded archive of correlated '
         + '`[A2A receipt] task <task_id>` outcomes. Use it to reconcile dispatched async work instead of '
-        + 're-routing to ask for progress. answeredAt means the local target answered, not that the receipt arrived; that row stays owed but no longer occupies target queue capacity.',
+        + 're-routing to ask for progress. answeredAt means the local target answered, not that the receipt arrived; that row stays owed but no longer occupies target queue capacity. acknowledgedAt means the target acknowledged the task (an acknowledged receipt): it stays owed until the result, outside the queue count, and expires 7 days after the acknowledgement instead of 24 hours after dispatch.',
       parameters: {},
       output: {
         // gh#198: the host's own verdict on whether this result came from outside this host, persisted on tool/result.
@@ -613,6 +613,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
                   status: { type: 'string', required: true },
                   deadAt: { type: 'number' },
                   answeredAt: { type: 'number' },
+                  acknowledgedAt: { type: 'number' },
                   receiptDelivery:{type:'string',enum:['receipt-undelivered']},
                   consumed:{type:'boolean'}, deliveryObservation:{type:'string',enum:['consumed','delivered-unconsumed']},
                   reminderAttempts: {type:'number'}, reminderDelivered:{type:'number'}, reminderLastAt:{type:'number'}, reminderNextAt:{type:'number'}, reminderResult:{type:'string'}, reminderDiagnostic:{type:'string',enum:['metadata-reset']}, repeatedlyUnreconciled:{type:'boolean'},
@@ -648,6 +649,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
                   summary: { type: 'string' },
                   brief: { type: 'string' },
                   forwarded: { type: 'boolean' },
+                  disposition: { type: 'string', enum: ['result', 'attention'] },
                   sender: {
                     type: 'object',
                     additionalProperties: false,
@@ -693,16 +695,18 @@ export function createInfoTools(deps: InfoToolsDeps) {
                 return `  - ${task.taskId}${brief} → ${task.team} (via ${task.peer === 'local' ? 'this host' : task.peer}), dispatched ${describeAge(Date.now() - task.startedAt)} ago${context}`
               }),
               ...(value.archivedTotal > 0 ? [`Archived (${String(value.archivedTotal)}), most recent first:`] : []),
-              ...value.archive.map((entry: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; withdrawalResult?:string }) => {
+              ...value.archive.map((entry: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; withdrawalResult?:string; disposition?: string }) => {
                 const brief = entry.brief === undefined || entry.brief === '' ? '' : ` — "${entry.brief}"`
-                return `  - ${entry.taskId}${brief} → ${entry.team}: after ${describeAge(entry.resolvedAt - entry.startedAt)}, ${entry.summary === undefined || entry.summary === '' ? 'resolved' : entry.summary}${entry.withdrawalResult?`, withdrawal: ${entry.withdrawalResult}`:''}`
+                // p1-receipt-cmd: an attention receipt settled the task with a question, not a result.
+                const attention = entry.disposition === 'attention' ? ' [attention: settled with a question, not completed]' : ''
+                return `  - ${entry.taskId}${brief} → ${entry.team}: after ${describeAge(entry.resolvedAt - entry.startedAt)}, ${entry.summary === undefined || entry.summary === '' ? 'resolved' : entry.summary}${attention}${entry.withdrawalResult?`, withdrawal: ${entry.withdrawalResult}`:''}`
               }),
               ...(value.archivedTotal > value.archive.length ? [`  (+${String(value.archivedTotal - value.archive.length)} older not shown)`] : []),
             ].join('\n'),
         }],
       },
       presentCall: () => ({ card: 'generic', title: 'A2A task ledger', kind: 'other', rawInput: null }),
-      execute: async (_args, exec): Promise<{ ok: boolean; tasks: ({ taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; status: 'pending' | 'dead'; deadAt?: number; answeredAt?: number; receiptDelivery?:'receipt-undelivered'; reason?: 'fire-forget' | 'unconsumed'; consumed?:boolean; deliveryObservation?:'consumed'|'delivered-unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean; forwarded?: true; deliveredTo?: string; sender?: Sender } & Partial<ReminderView>)[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; withdrawalResult?:import('../task-ledger.ts').WithdrawalResult; sender?: Sender }[]; archivedTotal: number }> => {
+      execute: async (_args, exec): Promise<{ ok: boolean; tasks: ({ taskId: string; team: string; peer: string; startedAt: number; contextId?: string; brief?: string; status: 'pending' | 'dead'; deadAt?: number; answeredAt?: number; acknowledgedAt?: number; receiptDelivery?:'receipt-undelivered'; reason?: 'fire-forget' | 'unconsumed'; consumed?:boolean; deliveryObservation?:'consumed'|'delivered-unconsumed'; direction?: 'inbound' | 'outbound'; receiptExpected?: boolean; forwarded?: true; deliveredTo?: string; sender?: Sender } & Partial<ReminderView>)[]; archive: { taskId: string; team: string; startedAt: number; resolvedAt: number; summary?: string; brief?: string; withdrawalResult?:import('../task-ledger.ts').WithdrawalResult; sender?: Sender; disposition?: 'result' | 'attention' }[]; archivedTotal: number }> => {
         a2aJoinGateRefusal(exec)
         observeAuthorization('lazy')
         const archiveAll = taskLedger.archive()
@@ -710,12 +714,13 @@ export function createInfoTools(deps: InfoToolsDeps) {
           ok: true,
           // Project the declared fields only: ledger rows also carry internal audit facts (the #114 auth record,
           // #139 peerKey/peerHost) the output schema does not admit — spreading the row failed every call (0.6.32+).
-          tasks: taskLedger.list().map(({ taskId, team, peer, startedAt, contextId, brief, status, deadAt, answeredAt, receiptDelivery, consumed, direction, receiptExpected, forwarded, deliveredTo, reason, sender }) => ({
+          tasks: taskLedger.list().map(({ taskId, team, peer, startedAt, contextId, brief, status, deadAt, answeredAt, acknowledgedAt, receiptDelivery, consumed, direction, receiptExpected, forwarded, deliveredTo, reason, sender }) => ({
             taskId, team, peer, startedAt, status, ...reminderView(taskLedger.reminderState(taskId)),
             ...(contextId !== undefined ? { contextId } : {}),
             ...(brief !== undefined ? { brief } : {}),
             ...(deadAt !== undefined ? { deadAt } : {}),
             ...(answeredAt !== undefined ? { answeredAt } : {}),
+            ...(acknowledgedAt !== undefined ? { acknowledgedAt } : {}),
             ...(receiptDelivery?{receiptDelivery}:{}),
             ...(consumed!==undefined?{consumed,deliveryObservation:consumed?'consumed':'delivered-unconsumed'}:{}),
             ...(direction !== undefined ? { direction } : {}),
@@ -725,7 +730,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
             ...(reason !== undefined ? { reason } : {}),
             ...(sender !== undefined ? { sender } : {}),
           })),
-          archive: archiveAll.slice(0, 5).map(({ taskId, team, startedAt, resolvedAt, summary, brief, withdrawalResult, sender }) => ({ ...(withdrawalResult?{withdrawalResult}:{}), taskId, team, startedAt, resolvedAt, ...(summary !== undefined && summary !== '' ? { summary } : {}), ...(brief !== undefined ? { brief } : {}), ...(sender !== undefined ? { sender } : {}) })),
+          archive: archiveAll.slice(0, 5).map(({ taskId, team, startedAt, resolvedAt, summary, brief, withdrawalResult, sender, disposition }) => ({ ...(withdrawalResult?{withdrawalResult}:{}), taskId, team, startedAt, resolvedAt, ...(summary !== undefined && summary !== '' ? { summary } : {}), ...(brief !== undefined ? { brief } : {}), ...(sender !== undefined ? { sender } : {}), ...(disposition === 'result' || disposition === 'attention' ? { disposition } : {}) })),
           archivedTotal: archiveAll.length,
         }
       },

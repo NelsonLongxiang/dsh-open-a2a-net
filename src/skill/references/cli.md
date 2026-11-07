@@ -28,6 +28,17 @@ model tools.
   its card is no longer served, but it stays in the host's directory as an
   OFFLINE row (gh#47; the newest 16 are kept) so canvas refs to it never
   dangle silently. Publish again (same handle, same key) to come back.
+- `a2a-net publish --owes` (superagent p1-mailbox-owes) declares in the
+  signed card that this identity owes a receipt for what its mailbox takes.
+  A home host that knows the declaration answers a delivery to it
+  `delivered` instead of final: the caller books a debt, the per-target cap
+  (3, counted per identity across all callers) applies and refuses with
+  `-32009` when full, and the identity's own `receipt <task_id>` frees the
+  slot. An owed row the 64-row cap pushes out is archived as evicted. Every
+  publish states it afresh — `publish` or `inbox --renew` without `--owes`
+  withdraws it — so only an identity that does answer every task (the
+  superagent Source) should declare it. A host that predates it ignores the
+  field and keeps the mailbox final.
 - A handle stays pinned to the key it was published with, live or offline
   (gh#137): publishing it with a different key (e.g. after `init --force
   --uuid <same>`) is refused with "held by another key". Run `a2a-net revoke`
@@ -136,7 +147,21 @@ Files do not go through session messages: use the file channel below, never JPFI
 - A message that starts with `-` goes after `--`. Flag values never become
   part of the message.
 - Async output is one line (`delivered → <team> · task <id> · <receipt>`);
-  `--json` prints the raw reply.
+  `--json` prints the raw reply plus the `class` field below.
+- `route --json` adds an observation field `class`, judged from structured
+  fields only (HTTP status, `delivered`, `code`, `acceptance`, a sync
+  `result`, a replay's `prior`) and never from error text:
+  - `sent`: delivered, including `receiverBookkeeping: "failed"`,
+    `acceptance: "inserted"` and `-32005` (landed, not settled); also a replay
+    whose task the host already holds, unless it failed.
+  - `gone`: resending the same task can never succeed: `-32001` payload too
+    large, `-32002` the id is bound to a different message, or a replay whose
+    task already failed.
+  - `retry`: everything else, including `acceptance: "unknown"`, 401/403, 5xx,
+    `-32003/-32007/-32008/-32009/-32011` and generic `-32000`. Retry with the
+    SAME task id. A consumer counts retries and only drops (with a record)
+    past its own bound. No JSON at all (e.g. the network failed) also means
+    retry. `class` changes no exit code and no host semantics.
 
 ## Receiving: the mailbox
 
@@ -151,6 +176,21 @@ Files do not go through session messages: use the file channel below, never JPFI
   its snapshot is unreadable or renumbered, or a write to disk failed (the
   next restart would reload older numbers).
 - Text over 4000 chars is cut and marked `truncated: true, chars: <original>`.
+- Rows mailed by a host from next/0.8 on also carry structured fields, so a
+  reader branches on fields and never parses the text:
+  - `task_id` and `context_id` of the delivery;
+  - `proof`, how the host proved the caller when it took the delivery. On
+    the wire face it is the same verdict the text header states:
+    `origin-claim` for 已验证来源, otherwise the value in 未验证（…）, such as
+    `cli-identity`, `claim-mismatch` or `unbound`. A delivery from a session
+    on the home host itself is `in-process` and has no header;
+  - `receipt_for`, the task id a receipt row answers, and `disposition` when
+    its envelope carried one;
+  - `admission`, the admission rule the host matched when it took the
+    delivery (`canvas-shared`, `remote-ref-cli`, `cli-deposit`,
+    `local-exempt`, …) — the rule name only, never which canvas or team.
+  Older rows carry none of these. Which `proof` values a consumer trusts is
+  that consumer's decision (the superagent Source takes it from its design).
 - The host's state face totals both losses for every handle as
   `cliMailbox: {dropped, truncated}`.
 - `a2a-net inbox` lists the whole mailbox.
@@ -164,6 +204,100 @@ Files do not go through session messages: use the file channel below, never JPFI
     cannot be recovered; tell the user.
   - On an older host, or after the store starts over (a new `epoch`), the
     cursor falls back to the newest `at` seen.
+- `inbox --after <cursor>` is a replayable read for a consumer that keeps its
+  own position, such as a superagent a2a Source. Start with `start`, then pass
+  back the `next` you received. It prints one JSON object
+  `{handle, epoch, after, next, mail, lost, epochChanged}` with `mail` oldest
+  first, and never reads or moves the local `inbox.cursor`:
+  - `lost` counts mail the cap pushed out before this window. It is `null`,
+    meaning unknown, when the host's store restarted (`epochChanged: true`);
+    the read then returns every row it still has.
+  - A cursor past the newest seq the host issued is not one it handed out
+    (forged or mixed up). The read flags it with `cursorAhead: true`, returns
+    no mail, keeps `next` equal to the cursor, reports `lost: null` (unknown,
+    as across an epoch change), and warns on stderr.
+  - A consumer such as the superagent a2a Source reports a health error
+    whenever `lost > 0`, `lost` is `null`, or `cursorAhead` is set. Lost mail
+    cannot be recovered; the error makes the gap visible instead of hiding it.
+  - A host without `seq` is refused (exit 1); there is no time-based
+    fallback. `--after` does not combine with `--new`, `--peek`, `--wait` or
+    `--hook` (exit 2).
+- `thread <context_id> [--limit N] [--before <cursor>]` reads one
+  conversation back, newest first, as one JSON object
+  `{handle, epoch, context_id, entries, more, next_before, unscoped, mail_lost}`
+  (superagent p1-context-read). It is read-only: it never reads or moves the
+  local `inbox.cursor`.
+  - Entries with `dir: "in"` are mailbox rows the home host tagged with that
+    `context_id` (`seq`, `from`, `task_id`, `text`, and `proof` /
+    `receipt_for` when the row has them). The host tags every
+    mailbox delivery from this version on; `unscoped` counts the rows that
+    carry no `context_id` (mailed by an older host) and cannot be placed.
+  - Entries with `dir: "out"` are this identity's own routes the host took
+    (`route --json` class `sent`), read from `sent.jsonl` in the identity
+    home: `team`, `task_id`, `text`, and `reply` when `--sync` got one. A route
+    is journaled under the context the host named in its reply, or the
+    explicit `--context`; a `-32005` reply names none, so only `--context`
+    covers it. Texts over 4000 characters are cut (`truncated`, `chars`). Past
+    1 MiB the journal rolls into `sent.1.jsonl` (one older generation, read
+    too). The journal lives on this machine only; a failed journal write
+    warns on stderr and never fails the send.
+  - `--limit` is 1-200 (default 20). When `more` is true, pass `next_before`
+    back as `--before` for the next page. Within one millisecond the journal
+    side is newer than the mailbox side.
+  - `mail_lost` counts earlier mailbox rows the 64-row cap already pushed
+    off the host, whatever their context; they cannot be recovered.
+  - The two sides keep time on different machines: an `in` row's `at` is the
+    home host's clock, an `out` row's `at` is this machine's. When the CLI
+    talks to a home on another machine whose clock is off, the two sides can
+    interleave in the wrong order. Paging stays complete either way.
+- `receipt <task_id> [--attention | --acknowledged | --outcome O] [--to TEAM] <one line…>` is the one formal
+  receipt for a task this identity received:
+  - It sends `[A2A receipt] task <task_id> <one line>` plus the v2 envelope
+    line. The default is a result,
+    `{"outcome":"completed","idempotencyKey":<id>,"disposition":"result"}`.
+    `--outcome` says how the work ended instead: `failed`, `rejected`
+    (declined, never taken up) or `abandoned` (stopped before it finished);
+    `completed` is the default. Any other value, or `--outcome` together with
+    `--attention`, exits 2 and sends nothing; `expired`, `sync_completed` and
+    `unknown` are outcomes the host derives, not ones a sender claims.
+    With `--attention` it is a question for the caller,
+    `{"idempotencyKey":<id>,"disposition":"attention"}`, with no outcome:
+    it settles the task but is not a completion. The caller's answer comes
+    back as a new task in the same context.
+  - The target is the sender of that task's mailbox row; `--to` names one
+    when the mailbox has none (or several). With neither, it exits 2 and
+    sends nothing. The receipt rides the task's own `context_id`, so it also
+    shows in `thread`.
+  - It rides task id `receipt-<task_id>`. The host runs a task id once, so a
+    task gets one receipt: the same receipt again is a replay ("already
+    received"), and a different one, such as a result after an attention,
+    is refused (exit 1).
+  - The task id must be letters, digits, `.`, `_`, `:` or `-`, and at most
+    72 characters, so `receipt-<task_id>` fits the 80-character task id. A
+    longer id exits 2; it is never cut short. The line is folded to one
+    line.
+  - `--json --exit-class` (on `route` and `receipt`) makes the exit code
+    carry the class too, for callers whose command runner keeps the exit
+    code and drops stdout (superagent's a2a Source): 0 sent (or the same
+    receipt replayed), 4 gone, 5 the task already carries a different receipt
+    (`receipt` only), 1 retry or any other failure. `--exit-class` without
+    `--json` exits 2. Without the switch no exit code changes.
+  - A task delivered into a CLI mailbox is final on the caller's side (no
+    debt is booked for it), so its receipt settles nothing there; the
+    caller still gets it, with `disposition` on its mailbox row. A receipt
+    settles a debt only where the caller tracked one.
+  - `--acknowledged` says the task is taken up and its result follows. It settles nothing: the caller's row stays owed until the result receipt, leaves the queue count, and expires 7 days after the acknowledgement instead of 24 hours after dispatch. It rides task id `ack-<task_id>`, so the later receipt is not refused.
+- `admission <caller> [--local] [--json]` asks the home host how `<caller>`
+  would be admitted delivering to this identity right now, recomputed from the
+  host's current links: `{caller, admitted, rule}`. `--local` asks for the
+  same-host face (a session on the home host). The query is signed with this
+  identity's key, and the host answers only the identity itself — a holder of
+  the host key cannot ask about another identity's links — with the rule name
+  and nothing more. Exit 0 once answered (admitted or not), 1 when the host
+  refuses the query or predates it. A signed query stays valid for its
+  5-minute window, so it can be replayed within it; that is accepted — the
+  answer is read-only, goes through the host's own control face, and is the
+  identity's own question.
 - `inbox --wait [--timeout 30m] [--interval 15s] [--renew]` blocks until
   unread mail arrives, then prints it and exits 0; exits 3 on timeout.
   `--renew` re-publishes the deposit when it is gone or under 10 minutes from
@@ -183,6 +317,14 @@ state face (key-gated on a keyed host). `--json` prints raw rows for
 `whoami`, `teams`, `tasks`, `probe`, `route`, `report`, `inbox` and `skills`.
 
 `teams` includes local canvas and peerOrg rows with qualified route name, owner URL and memberCount; same names on different hosts stay separate. `whoami --json` is pure JSON and includes only canvases naming this CLI identity, local and remote. An unreadable optional state face reports canvasError/UNKNOWN, never falsely empty membership. Canvas failures retain the original refusal and add visible-directory not-found, owner prerequisites (including each missing direct receiver link), or conflicting owner candidates. Owner URLs do not require direct dialing or a home override and grant no admission.
+
+## The superagent team (owner)
+
+`a2a-net superagent request <text…> [--thread ID] [--json]` sends the owner's request to the team's workbench Source. `a2a-net superagent state [--json]` prints the team state: router, accept mode, tickets with their stage, and replies. These commands apply only on a home with `superagent: true`.
+
+Both ride the home's **owner** control credential (`$A2A_KEY`, plus the pocket cookie behind dsh-pocket), not this CLI's identity. A request made this way is a person addressing the team, so it is an explicit request.
+
+A message from a CLI identity (`route` to the team's A2A address) is an agent's message under superagent's definition. It can reach the team only through the A2A Source's bot list and accept mode; it is never an explicit request and never a stop. See [superagent.md](superagent.md).
 
 ## Local commands
 

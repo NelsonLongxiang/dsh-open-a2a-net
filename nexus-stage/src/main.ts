@@ -8,6 +8,7 @@
  */
 import { createFaultReporter } from './fault'
 import { createWorkbench, type StateBody } from './workbench'
+import type { SaState } from './wb-superagent'
 import { createPlanningView } from './planning-view'
 import { rosterFrames, rosterNameOf } from './planning-roster'
 import { createSaveLoop, type LampState } from './layout-wire'
@@ -251,6 +252,14 @@ async function fetchLayout(): Promise<unknown> {
 // ─── The workbench ───
 const bench = createWorkbench({
   now: () => Date.now(),
+  // superagent v4 PR-E: the 团队 tab writes through the owner control face.
+  superagent: {
+    async act(body) {
+      const res = await controlFetch('/__dsh_a2a/superagent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      try { return await res.json() as Record<string, unknown> } catch { return { ok: false, error: `HTTP ${res.status}` } }
+    },
+    refresh() { void pollSuperagent() },
+  },
   // gh#34: the owner three-key panel rides the control face.
   async ownerSettingsRead() {
     try {
@@ -425,6 +434,17 @@ if (new URLSearchParams(window.location.search).get('mode') === 'plan') {
   window.setTimeout(() => window.clearInterval(tryBoard), 30_000)
 }
 
+/** GET /__dsh_a2a/superagent: 404 (no superagent on this host) or a failure hides the 团队 tab; single flight. */
+let superagentBusy = false
+async function pollSuperagent(): Promise<void> {
+  if (superagentBusy) return
+  superagentBusy = true
+  try {
+    const res = await controlFetch('/__dsh_a2a/superagent', { cache: 'no-store' })
+    bench.updateSuperagent(res.ok ? await res.json() as SaState : null)
+  } catch { bench.updateSuperagent(null) } finally { superagentBusy = false }
+}
+
 async function poll(): Promise<void> {
   try {
     const res = await controlFetch('/__dsh_a2a/state', { cache: 'no-store' })
@@ -449,6 +469,7 @@ async function poll(): Promise<void> {
     // board's first reconcile measured a zero-width view.
     canvasFace = body.canvas !== undefined
     bench.update(shown)
+    void pollSuperagent()
 
     // ── The layout answer precedes the first reconcile on purpose ──
     // The board's first build reads `layoutDoc` for saved positions and

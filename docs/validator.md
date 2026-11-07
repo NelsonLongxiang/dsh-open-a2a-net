@@ -229,6 +229,52 @@ ygl-trees verify run spec_4de5f3b9d48d --db <snapshot>      # 判定：overall �
 
 **处置记录**：0.7.0 曾在 `docs/ops/fixtures/` 新增两个回退 fixture，因此多了两条“docs/ 下的执行工件”。按全局 2026-11-06 的裁定，这两个文件已原字节移到 `tests/fixtures/`。移动后复测（引擎 0.119.0 和 0.120.0，meta 1.4），docs/ 下已不再被报，R3 共 9 条：产品 CLI 2 条、bundle 2 条、`tests/fixtures/` 5 条，其中包括移过来的这两个。这三类都按上面的原因保留为 FAIL 现状：移动解决的是“文档目录下有执行工件”，并没有让这两个文件从 R3 里消失。
 
+## superagent p2 影子验收采集器（2026-11-07）
+
+**用途**：p2 影子运行结束时，把 a2a Source 自己记下的行记录、页头记录、health 记录，以及 superagent 库里的 Trigger、外发、Ticket，展平成一个新的快照，交给 `ygl-trees verify run` 按影子验收材料判定。采集器只产快照，不产判定，也不调用 verify 的 run、prepare、submit、archive。
+
+    node scripts/verify-probe.mjs --a2a-shadow <superagent 库> --cli-home <Source 身份目录> --window <起>..<止> --out <新快照.sqlite>
+
+- **源库只读**：以 readOnly 打开，并设 `PRAGMA query_only = ON`；测试断言采集前后源库字节不变。
+- **只写新文件**：`--out` 已存在就拒绝（退出码 1），原文件不动；采集中途出错时删掉本次新建的文件，重跑不会被挡住。
+- **输出与退出码**：stdout 只有一个 JSON 对象。0 表示采集完成，1 表示运行错误（源库或记录形状不对），2 表示用法错误（缺参数、窗口不是带时区的严格 ISO、起点不早于终点）。采集完成不等于 PASS。
+- **展平规则**写在 `scripts/a2a-shadow-snapshot.mjs`，可复跑：同一输入写到另一个新文件，各表内容相同。
+  - 按窗口（`at` 含起点、不含终点）截取：shadow_rows、shadow_pages、shadow_health、shadow_sent。
+  - 不按窗口截取：shadow_triggers（只取 source 为 a2a 的）、shadow_outbox（只取 channel.source 为 a2a 的）、shadow_tickets。这几类记录没有窗口内的时间字段，检查范围只会更大，不会更小。
+  - shadow_meta 按三类记录的全量计算，并带 window_from，供 A0 做同表列比较。
+- **采集器自己计算的列**：
+  - trigger_id = key('a2a', from, task_id)，与插件同一算法，测试中对照；
+  - loss：A7 的定义，即 lost>0、lost 为 null、cursorAhead 或 epochChanged；
+  - shadow_seq_gaps：同一 epoch 内、窗口首末 seq 之间缺失的 seq。covered 表示它落在同 epoch 某个 lost>0 页头的区间 (after_seq, after_seq+lost] 内（after 为 start 时 after_seq 取 0）。宿主的 lost 等于 oldest_seq − after_seq − 1，被挤出的正好是这个区间。真实宿主用例（tests/mesh/a2a-shadow-snapshot.spec.ts）按 64 行上限挤出 6 条，校准了这个区间。
+- **查找列**（2026-11-07 全局裁定追加）：verify 的谓词 AST 只能查单表，sql-pair 只判断两侧键集合是否相等，因此「包含于」、计数、窗口限定都在采集器里算好。原始列一律保留，派生列只追加，每列定义如下：
+  - shadow_rows.trigger_present：按全库 trigger 表计算（任何 source、不限窗口），存在 id = trigger_id 的记录为 1，否则为 0；trigger_id 为空时为 0。trigger.id 是主键（上游 superagent store.ts:72），一个 trigger_id 最多对应一条 Trigger。
+  - shadow_rows.trigger_filtered_code：取上面那条 Trigger 的 disposition `$.filtered.code`；没有 Trigger 或未被过滤时为空。
+  - shadow_rows.seq_records：按全量 a2a-rows 计算（不限窗口），同一 epoch、同一 seq 的记录条数；seq 为空时此列为空。
+  - shadow_pages.health_error：按全量 a2a-health-log 计算（不限窗口），存在 at 与该页头相同、entry 为 a2a、state 为 error 的记录为 1，否则为 0。
+  - shadow_triggers.in_window：按 trigger.at 和 --window 计算，左闭右开，落在窗口内为 1，否则为 0；trigger.at 读不出时间就整次采集失败（退出码 1），不猜。
+  - p3 新增的列（影子验收 v5.1）：
+    - shadow_rows.admission：信箱行上宿主准入规则的原值。
+    - shadow_pages.heartbeat、rounds、rows：心跳页头自带的字段（方案 P）；不是心跳的页头分别为 0、空、空。心跳页头的 rounds 或 rows 不是非负整数，或者非心跳页头带了这两项，都整次失败。
+    - shadow_pages.hb_gap_min：心跳与窗口内上一条心跳相隔的整分钟数，向上取整；窗口内第一条心跳，取它与窗口起点的间隔。
+    - shadow_pages.hb_next_gap_min：心跳到下一条心跳的间隔；最后一条，取它到窗口终点的间隔。
+    - A15 同时看这两个间隔，窗口两端的空白都查得出来。
+  - 每列都有反向变异守着：只在窗口内的 Trigger 里查找、code 取错列、seq_records 只计窗口内、health_error 不比较 entry 或不比较 state、in_window 用闭区间，都会让测试变红。
+- **计数表 shadow_tally**（2026-11-07 全局裁定追加）：verify 的检查器对扫描域为 0 行的表一律判 NEEDS-MATERIAL，而「必须为零」的 4 条判据，在健康运行下要扫的明细表本来就是空的。所以采集器另写一张固定行数的计数表，每个计数都由刚写入快照的同一批明细行算出，不再查一次源库：
+  - outbox_sent：shadow_outbox 中 status 为 sent 的行数（这张表只收 a2a 的外发，不限窗口），对应 A1；
+  - source_sent：shadow_sent 中 handle 等于 source_handle 的行数（按窗口），对应 A2；
+  - tickets_a2a：shadow_tickets 中 basis_source 为 a2a 的行数（全库），对应 A9；
+  - gaps_uncovered：shadow_seq_gaps 中 covered 为 0 的行数，对应 A7b。
+  - p3 追加两行，不是「必须为零」的计数，放在这里是为了扫描域固定：
+    - cli_identity_stored：窗口内 outcome 为 stored、proof 为 cli-identity、admission 在 LINK_RULES 内、不是回执、task id 不以 a2a- 开头的行数，对应 A14（应不少于 1）；
+    - heartbeat_row_delta：窗口内第一条心跳之后各心跳的 rows 之和，减去 (第一条心跳, 最后一条心跳] 区间内的行记录数，对应 A15（应为 0）。
+  - 自检：快照写完以后，在快照库里用 SQL 把每个计数重算一遍；行集合与 TALLY 的名字不完全一致、或者任何一项对不上，都整次失败（退出码 1），不留文件。
+  - 检查器统一写成：scan 为 name='<计数名>'，where 为 n>0，fail_when 为 rows>0，这样扫描域固定是那一行。2026-11-07 用一次性工作区实测过：n=0 时 PASS（rows_scanned=1），n=1 时 FAIL，那一行被改名或缺失时 NEEDS-MATERIAL。不写 scan 时扫描域是整张表，改名会被静默判 PASS，所以不用那种写法。
+- **不带正文**：快照里没有消息正文、Trigger 正文、外发正文和 health 的 detail，测试断言了这一点。
+  - 反向用例：同一真实宿主数据删掉一条未报告挤出的行记录，对应的 seq 得到 covered=0。
+- **登记口径**（全局 2026-11-07 裁定 (a)）：本仓 `verify/meta.json` 是 meta_index_version 1，scripts/ 按 v1 的目录白名单豁免，采集器不进 tooling[]（v1 没有这一登记形状）。升到 v2 是另一件治理改动，要做时单独提议。
+- **身份钉住**（代替 tooling 登记）：输出 JSON 的 `collector` 字段带 git commit、两个采集脚本（verify-probe.mjs 和 a2a-shadow-snapshot.mjs）的 sha256，以及这两个文件相对该 commit 是否干净。验收回报必须写明这些值，并且要与最近一次采集器 PR 合入时的值一致，否则不能作为验收依据。每次采集器 PR 合入都会换一次身份，旧值随之作废：#392 的 796cccc、#393 的 bcf150c 都已作废，以最近一次合入为准。
+- **机械检查**：单元测试去掉注释后断言两个脚本的代码里不出现 ygl-trees 调用，也不出现 verify 的 run、prepare、submit、archive 步骤；展平模块不引入 child_process。
+
 ## 维护
 
 - **调阈值/加判据**：改 verify/material.md（判据句必须逐字可引用）+ candidates/reviews，

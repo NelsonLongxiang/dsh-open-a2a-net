@@ -7,6 +7,7 @@
 import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
 
+import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { formatReceipt, parseReceipt, taskIdRefusal } from '../../src/receipt.ts'
@@ -122,5 +123,54 @@ describe('ledger × envelope integration', () => {
     const text = formatReceipt('t-8', 'plain')
     expect(text.split('\n')).toHaveLength(1)
     expect(parseReceipt(text)?.envelope).toBeUndefined()
+  })
+})
+
+describe('superagent p1-receipt-cmd: disposition (S14)', () => {
+  it('is a closed set: result and attention parse, anything else is dropped', () => {
+    expect(parseReceipt('[A2A receipt] task t-1 ok\n{"outcome":"completed","disposition":"result"}')?.envelope).toEqual({ outcome: 'completed', disposition: 'result' })
+    expect(parseReceipt('[A2A receipt] task t-1 why?\n{"idempotencyKey":"t-1","disposition":"attention"}')?.envelope).toEqual({ idempotencyKey: 't-1', disposition: 'attention' })
+    expect(parseReceipt('[A2A receipt] task t-1 ok\n{"outcome":"completed","disposition":"done"}')?.envelope).toEqual({ outcome: 'completed' })
+    // disposition alone is a recognized envelope (a known key extracted), so the summary is the header line only.
+    const alone = parseReceipt('[A2A receipt] task t-1 which branch?\n{"disposition":"attention"}\nmore prose')
+    expect(alone).toEqual({ taskId: 't-1', summary: 'which branch?', envelope: { disposition: 'attention' } })
+    // A bogus value alone is no envelope at all: the legacy remainder flows through untouched.
+    expect(parseReceipt('[A2A receipt] task t-1 x\n{"disposition":"maybe"}')?.envelope).toBeUndefined()
+  })
+
+  it('formats after the existing keys, so earlier envelopes keep their exact bytes', () => {
+    expect(formatReceipt('t-1', 'why?', { idempotencyKey: 't-1', disposition: 'attention' })).toBe('[A2A receipt] task t-1 why?\n{"idempotencyKey":"t-1","disposition":"attention"}')
+    expect(formatReceipt('t-1', 'ok', { disposition: 'result', outcome: 'completed', authRef: '0123456789abcdef' })).toBe('[A2A receipt] task t-1 ok\n{"outcome":"completed","authRef":"0123456789abcdef","disposition":"result"}')
+    expect(formatReceipt('t-1', 'ok', { outcome: 'completed' })).toBe('[A2A receipt] task t-1 ok\n{"outcome":"completed"}')
+  })
+
+  it('an attention receipt settles its row with no outcome; a result one with both; both survive a restart', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'disp-ledger-')), 'tasks.json')
+    const ledger = new TaskLedger(path)
+    ledger.track('q-1', 'dsh/aaaaaaaa', 'peer', 'ctx-q')
+    ledger.track('r-1', 'dsh/aaaaaaaa', 'peer', 'ctx-r')
+    expect(ledger.resolveFromMessage('[A2A receipt] task q-1 which branch?\n{"idempotencyKey":"q-1","disposition":"attention"}')).toEqual({ taskId: 'q-1', team: 'dsh/aaaaaaaa', peer: 'peer', disposition: 'attention', summary: 'which branch?' })
+    ledger.resolveFromMessage('[A2A receipt] task r-1 done\n{"outcome":"completed","idempotencyKey":"r-1","disposition":"result"}')
+    const rows = (l: TaskLedger) => new Map(l.archive().map(r => [r.taskId, r]))
+    for (const l of [ledger, new TaskLedger(path)]) {
+      const q = rows(l).get('q-1')!
+      expect(q).toMatchObject({ disposition: 'attention', endedBy: 'receipt', summary: 'which branch?' })
+      expect(q.outcome).toBeUndefined()
+      expect(rows(l).get('r-1')).toMatchObject({ outcome: 'completed', disposition: 'result' })
+      expect(l.list().map(r => r.taskId)).toEqual([])
+    }
+  })
+
+  it('a late receipt refreshes the disposition as it refreshes the outcome; a stored bogus value is dropped on restore', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'disp-late-')), 'tasks.json')
+    const ledger = new TaskLedger(path)
+    ledger.track('t-2', 'dsh/aaaaaaaa', 'peer')
+    ledger.resolveFromMessage('[A2A receipt] task t-2 first\n{"outcome":"completed","disposition":"result"}')
+    expect(ledger.resolveFromMessage('[A2A receipt] task t-2 again\n{"idempotencyKey":"t-2","disposition":"attention"}')).toMatchObject({ disposition: 'attention' })
+    expect(ledger.archive().find(r => r.taskId === 't-2')).toMatchObject({ disposition: 'attention', summary: 'again' })
+    const doc = JSON.parse(readFileSync(path, 'utf8')) as { archived: Array<Record<string, unknown>> }
+    doc.archived[0]!.disposition = 'maybe'
+    writeFileSync(path, JSON.stringify(doc))
+    expect(new TaskLedger(path).archive().find(r => r.taskId === 't-2')?.disposition).toBeUndefined()
   })
 })

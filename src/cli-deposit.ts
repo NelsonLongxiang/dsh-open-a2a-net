@@ -14,10 +14,12 @@
  * and holds a mailbox for inbound deliveries (receipts land here; the CLI
  * polls while alive).
  */
-import { randomUUID } from 'node:crypto'
+import { createPublicKey, randomUUID, verify } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { verifyCard } from './card.ts'
+import type { ReceiptDisposition } from './receipt.ts'
+import type { AdmissionRule, AuthProof } from './task-auth.ts'
 
 /** Owner ruling ③: the default AND maximum online window. */
 export const CLI_DEPOSIT_TTL_MS = 4 * 60 * 60 * 1000
@@ -69,6 +71,55 @@ export interface CliMail {
    * HTTP answer, so this copy is a duplicate. Kept in full (never dropped); readers may fold it.
    */
   readonly dup?: 'sync-answered'
+  /**
+   * superagent p1-context-read: the delivery's task and conversation, as the host saw them —
+   * `a2a thread <context_id>` reads a conversation back from these. Absent on rows mailed
+   * before the field existed, and on deliveries that carried none.
+   */
+  readonly task_id?: string
+  readonly context_id?: string
+  /** p1-receipt-cmd: a receipt's envelope disposition (result / attention), so a reader branches on a field, never the text. */
+  readonly disposition?: ReceiptDisposition
+  /**
+   * p1-mail-proof (S18): how the host proved the caller when it took the delivery — the verdict the
+   * wire face already writes into the text header, as a field, so a reader never parses the text.
+   * The local face is in-process. Absent on rows mailed before the field existed.
+   */
+  readonly proof?: AuthProof
+  /** p1-mail-proof: the task id this row's receipt answers, when the row is a receipt. */
+  readonly receipt_for?: string
+  /**
+   * superagent p1-mail-admission: the admission rule the host matched when it took the delivery (task-auth.ts
+   * AdmissionRule) — the name only, never its basis, so a reader learns how the caller was let in without the topology.
+   */
+  readonly admission?: AdmissionRule
+}
+
+/** p1-mail-proof: the AuthProof values a restored row may carry (task-auth.ts); anything else is dropped. */
+const MAIL_PROOFS = ['origin-claim', 'claim-mismatch', 'legacy-window', 'unbound', 'cli-identity', 'in-process', 'none'] as const satisfies readonly AuthProof[]
+/**
+ * p1-mail-admission: the AdmissionRule names a restored row may carry (task-auth.ts); anything else is dropped. Kept
+ * literal like MAIL_PROOFS (no runtime import back into task-auth); a unit test pins it to task-auth's full set.
+ */
+export const MAIL_ADMISSIONS = ['scope-off', 'host-face', 'local-exempt', 'roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'peer-org', 'node-fact', 'cli-deposit'] as const satisfies readonly AdmissionRule[]
+
+/**
+ * Both lists cover their whole union: `satisfies` above keeps each entry a real value; these fail to compile when
+ * task-auth gains a proof or a rule the list does not carry (which a restored row would then silently lose).
+ */
+type Missing<All, Listed> = Exclude<All, Listed>
+const MAIL_PROOFS_COMPLETE: Missing<AuthProof, typeof MAIL_PROOFS[number]> extends never ? true : never = true
+const MAIL_ADMISSIONS_COMPLETE: Missing<AdmissionRule, typeof MAIL_ADMISSIONS[number]> extends never ? true : never = true
+void MAIL_PROOFS_COMPLETE; void MAIL_ADMISSIONS_COMPLETE
+
+/** p1-context-read: the task and conversation a mailbox delivery belongs to (empty strings are dropped). */
+export interface CliMailThread {
+  readonly taskId?: string
+  readonly contextId?: string
+  readonly disposition?: ReceiptDisposition
+  readonly proof?: AuthProof
+  readonly receiptFor?: string
+  readonly admission?: AdmissionRule
 }
 
 /** gh#113: one mailbox read — the rows plus what a reader needs to notice loss. */
@@ -100,6 +151,18 @@ const newEpoch = (): string => randomUUID().replace(/-/g, '').slice(0, 12)
 
 const isSeq = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 1
 
+/** p1-mail-proof: a damaged snapshot never promotes a row's proof — an unknown value (or a non-string receipt_for) is dropped. */
+function sanitizeMail(m: CliMail): CliMail {
+  const { proof, receipt_for: receiptFor, admission, ...rest } = m as CliMail & { proof?: unknown; receipt_for?: unknown; admission?: unknown }
+  return {
+    ...rest,
+    ...(typeof proof === 'string' && (MAIL_PROOFS as readonly string[]).includes(proof) ? { proof: proof as AuthProof } : {}),
+    ...(typeof receiptFor === 'string' && receiptFor !== '' ? { receipt_for: receiptFor } : {}),
+    // p1-mail-admission: likewise an admission value outside the rule set is dropped, never kept as a link.
+    ...(typeof admission === 'string' && (MAIL_ADMISSIONS as readonly string[]).includes(admission) ? { admission: admission as AdmissionRule } : {}),
+  }
+}
+
 /** The public key a stored card was published with ('' when it does not parse: never equal to a verified key, so fail-closed). */
 const publicKeyOf = (cardJson: string): string => {
   try {
@@ -107,6 +170,33 @@ const publicKeyOf = (cardJson: string): string => {
     return typeof key === 'string' ? key : ''
   } catch {
     return ''
+  }
+}
+
+/**
+ * superagent p1-mail-admission (M-2): the bytes a CLI identity signs to ask its home host how a caller would be admitted
+ * to it. The CLI builds the same array (cli/a2a.mjs); a unit test pins the two together.
+ */
+export const admissionQueryPayload = (handle: string, caller: string, ingress: 'local' | 'wire', ts: number): string =>
+  JSON.stringify(['a2a-admission', handle, caller, ingress, ts])
+
+/** How far an admission query's timestamp may stray from this host's clock (the OriginClaim window). */
+export const ADMISSION_QUERY_WINDOW_MS = 300_000
+
+/**
+ * Whether an admission query really comes from `handle` itself: signed with the key its LIVE deposit was published
+ * with, fresh, over exactly these fields. Anything else is refused — so a holder of the control key cannot ask about
+ * another identity's links (global review of the p1-mail-admission design).
+ */
+export function verifyAdmissionQuery(cardJson: string | undefined, q: { handle: string; caller: string; ingress: 'local' | 'wire'; ts: number; sig: string }, now: number): boolean {
+  if (cardJson === undefined || !Number.isFinite(q.ts) || Math.abs(now - q.ts) > ADMISSION_QUERY_WINDOW_MS || q.sig === '') return false
+  const key = publicKeyOf(cardJson)
+  if (key === '') return false
+  try {
+    const publicKey = createPublicKey({ key: Buffer.from(key, 'base64'), format: 'der', type: 'spki' })
+    return verify(null, Buffer.from(admissionQueryPayload(q.handle, q.caller, q.ingress, q.ts)), publicKey, Buffer.from(q.sig, 'base64'))
+  } catch {
+    return false
   }
 }
 
@@ -219,17 +309,39 @@ export class CliDepositStore {
     }))
   }
 
-  mail(handle: string, from: string, text: string, dup?: 'sync-answered'): void {
+  /**
+   * superagent p1-mailbox-owes (S33): the live deposit's signed card declares it owes a receipt for what its mailbox
+   * takes (`capabilities.owes === true`). Read from the verified card kept verbatim, so it survives a restart and a
+   * re-publish without the flag withdraws it.
+   */
+  owes(handle: string): boolean {
+    const row = this.get(handle)
+    if (row === undefined) return false
+    try {
+      const capabilities = (JSON.parse(row.cardJson) as { capabilities?: unknown } | null)?.capabilities
+      return typeof capabilities === 'object' && capabilities !== null && (capabilities as { owes?: unknown }).owes === true
+    } catch {
+      return false
+    }
+  }
+
+  /** Add one row to `handle`'s mailbox; returns the rows the cap pushed out by this delivery (oldest last), for their owed books. */
+  mail(handle: string, from: string, text: string, dup?: 'sync-answered', thread?: CliMailThread): readonly CliMail[] {
     const list = this.mailbox.get(handle) ?? []
     const seq = this.nextSeq.get(handle) ?? 1
     this.nextSeq.set(handle, seq + 1)
     const cut = text.length > MAILBOX_TEXT_CAP
     if (cut) this.truncated.set(handle, (this.truncated.get(handle) ?? 0) + 1)
-    list.unshift({ at: this.now(), from, text: cut ? text.slice(0, MAILBOX_TEXT_CAP) : text, seq, ...(cut ? { truncated: true as const, chars: text.length } : {}), ...(dup !== undefined ? { dup } : {}) })
+    list.unshift({ at: this.now(), from, text: cut ? text.slice(0, MAILBOX_TEXT_CAP) : text, seq, ...(cut ? { truncated: true as const, chars: text.length } : {}), ...(dup !== undefined ? { dup } : {}),
+      ...(thread?.taskId ? { task_id: thread.taskId } : {}), ...(thread?.contextId ? { context_id: thread.contextId } : {}),
+      ...(thread?.disposition !== undefined ? { disposition: thread.disposition } : {}),
+      ...(thread?.proof !== undefined ? { proof: thread.proof } : {}), ...(thread?.receiptFor ? { receipt_for: thread.receiptFor } : {}),
+      ...(thread?.admission !== undefined ? { admission: thread.admission } : {}) })
     // gh#113: the cap still holds, but what it pushes out is counted, not lost silently.
     if (list.length > MAILBOX_CAP) this.dropped.set(handle, (this.dropped.get(handle) ?? 0) + list.length - MAILBOX_CAP)
     this.mailbox.set(handle, list.slice(0, MAILBOX_CAP))
     this.persist()
+    return list.slice(MAILBOX_CAP)
   }
 
   readMail(handle: string): readonly CliMail[] {
@@ -336,7 +448,7 @@ export class CliDepositStore {
       let renumbered = false
       for (const [handle, list] of Object.entries(snapshot.mailbox ?? {})) {
         if (!Array.isArray(list)) continue
-        const rows = list.filter((m): m is CliMail => m !== null && typeof m === 'object')
+        const rows = list.filter((m): m is CliMail => m !== null && typeof m === 'object').map(sanitizeMail)
         const seqs = rows.map(m => m.seq)
         const sound = seqs.every(isSeq) && new Set(seqs).size === seqs.length &&
           seqs.every((n, i) => i === 0 || n < seqs[i - 1]!) && (this.nextSeq.get(handle) ?? 0) > Math.max(0, ...seqs)

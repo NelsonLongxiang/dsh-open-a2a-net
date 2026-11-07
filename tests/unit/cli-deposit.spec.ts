@@ -222,3 +222,57 @@ describe('gh#113 CLI mailbox: seq, loss and truncation are visible', () => {
     expect(s.readMailbox(H)).toMatchObject({ next_seq: 5, oldest_seq: 1 })
   })
 })
+
+describe('superagent p1-context-read: mailbox rows carry their task and conversation', () => {
+  const H = 'ops-cli/a1b2c3d4e5f60718'
+  it('task_id and context_id are kept as given, empty ones dropped, and both survive a restart', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-thread-store-'))
+    const { s } = store(dir)
+    s.mail(H, 'ops/1', 'tagged', undefined, { taskId: 't-1', contextId: 'ctx-1' })
+    s.mail(H, 'ops/1', 'empty tags', undefined, { taskId: '', contextId: '' })
+    s.mail(H, 'ops/1', 'context only', 'sync-answered', { contextId: 'ctx-2' })
+    s.mail(H, 'ops/1', 'untagged')
+    const rows = (st: CliDepositStore) => st.readMailbox(H).mail.map(({ at: _at, ...m }) => m)
+    const expected = [
+      { from: 'ops/1', text: 'untagged', seq: 4 },
+      { from: 'ops/1', text: 'context only', seq: 3, dup: 'sync-answered', context_id: 'ctx-2' },
+      { from: 'ops/1', text: 'empty tags', seq: 2 },
+      { from: 'ops/1', text: 'tagged', seq: 1, task_id: 't-1', context_id: 'ctx-1' },
+    ]
+    expect(rows(s)).toEqual(expected)
+    expect(rows(store(dir).s)).toEqual(expected)
+  })
+})
+
+describe('superagent p1-mail-proof: rows carry the host proof and the task a receipt answers', () => {
+  const H = 'ops-cli/a1b2c3d4e5f60718'
+  it('keeps proof and receipt_for as given, drops an empty receipt_for, and both survive a restart', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-proof-store-'))
+    const { s } = store(dir)
+    s.mail(H, 'ops/1', 'verified', undefined, { proof: 'origin-claim' })
+    s.mail(H, 'ops/1', 'a receipt', undefined, { proof: 'cli-identity', receiptFor: 'job-1' })
+    s.mail(H, 'ops/1', 'empty answer', undefined, { proof: 'in-process', receiptFor: '' })
+    const rows = (st: CliDepositStore) => st.readMailbox(H).mail.map(({ at: _at, ...m }) => m)
+    const expected = [
+      { from: 'ops/1', text: 'empty answer', seq: 3, proof: 'in-process' },
+      { from: 'ops/1', text: 'a receipt', seq: 2, proof: 'cli-identity', receipt_for: 'job-1' },
+      { from: 'ops/1', text: 'verified', seq: 1, proof: 'origin-claim' },
+    ]
+    expect(rows(s)).toEqual(expected)
+    expect(rows(store(dir).s)).toEqual(expected)
+  })
+
+  it('a damaged snapshot never promotes a row: unknown proof values and non-string receipt_for are dropped on restore', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cli-proof-bad-'))
+    const { s } = store(dir)
+    s.mail(H, 'ops/1', 'one', undefined, { proof: 'unbound', receiptFor: 'job-9' })
+    s.mail(H, 'ops/1', 'two', undefined, { proof: 'none' })
+    const path = join(dir, 'deposits.json')
+    const doc = JSON.parse(readFileSync(path, 'utf8')) as { mailbox: Record<string, Array<Record<string, unknown>>> }
+    doc.mailbox[H]![0]!.proof = 'trusted-by-me'
+    doc.mailbox[H]![1]!.receipt_for = 42
+    writeFileSync(path, JSON.stringify(doc))
+    const back = store(dir).s.readMailbox(H).mail
+    expect(back.map(m => [m.text, m.proof, m.receipt_for])).toEqual([['two', undefined, undefined], ['one', 'unbound', undefined]])
+  })
+})

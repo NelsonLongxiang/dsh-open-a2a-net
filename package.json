@@ -1,6 +1,6 @@
 {
   "name": "@nelsonlongxiang/dsh-open-a2a-net",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Open A2A network plugin for DeepSeek Harness: signed agent cards, decentralized peer/zone discovery, direct routing model tools, and joinable session nodes with a sidebar control",
   "type": "module",
   "main": "lib/index.js",
@@ -33,6 +33,10 @@
     "./a2a-client": {
       "types": "./lib/types/a2a-client.d.ts",
       "default": "./lib/a2a-client.js"
+    },
+    "./a2a-watch": {
+      "types": "./lib/types/superagent/a2a-watch.d.ts",
+      "default": "./lib/superagent/a2a-watch.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"

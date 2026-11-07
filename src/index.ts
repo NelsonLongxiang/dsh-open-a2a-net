@@ -56,6 +56,9 @@ import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type OutboundBirth, type ReceiptResolvedInfo, type Sender, type SettlementJudge, type TaskRecord } from './task-ledger.ts'
 import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
+import { SuperagentHost } from './superagent/host/index.ts'
+import { registerSuperagentTools } from './superagent/host/tools.ts'
+import { RoleTools, type RoleAgent } from './superagent/host/role-tools.ts'
 import { ReconciliationReminders, type ReminderAgent } from './reconciliation-reminders.ts'
 import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
@@ -70,7 +73,7 @@ import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
 import { isRootOriginUrl, sameMountedUrl, originClaimTeamWarning, signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
 import { AuthObserver, type AffectedEntry } from './auth-observer.ts'
-import { claimCovers, allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry, type RemoteCliProof, recheckRemoteCliAuthorization } from './task-auth.ts'
+import { claimCovers, allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry, type RemoteCliProof, recheckRemoteCliAuthorization, recheckCallerAdmission } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: the vendored timer plugin's declaration merging is what puts
 // `ctx.timer` on Context; the runtime service is mounted by app compositions.
@@ -764,6 +767,10 @@ export function apply(ctx: Context, config: Config): void {
     // (enforce): that is the verdict — the echo fallback must not judge the
     // same message a second time.
     const owedRow = parsed !== null && parsed.taskId !== '' ? taskLedger.find(parsed.taskId) : undefined
+    // p1-mailbox-owes (S33, a): a row owed by a CLI identity on this host (the inbound row an owing deposit keeps, or a
+    // same-host caller's local row) is answered by that identity alone — keyed on the row, so it holds after the deposit
+    // lapses too. A receipt header from anyone else names it without touching it: no settlement, no echo, no outcome.
+    if (owedRow !== undefined && (owedRow.direction === 'inbound' || owedRow.peer === 'local') && CLI_HANDLE_RE.test(owedRow.team) && settler?.caller !== owedRow.team) return undefined
     const owedByHeader = owedRow !== undefined
     // #139 (design §4.4): an enforce refusal of the row the header names is
     // told to the sender on the wire response, not only in /state.
@@ -771,6 +778,12 @@ export function apply(ctx: Context, config: Config): void {
     // Capture authority while the owed row is still present; successful resolve archives it.
     const outcomeAllowed = judge?.enforce !== true || (owedRow !== undefined && headerVerdict?.ok === true)
     const resolved = taskLedger.resolveFromMessage(message, judge)
+    // An acknowledgement marks the owed row and settles nothing: no waiter is answered, no outcome is recorded, and the
+    // settlement seam is not told (its consumers treat a resolution as the end of the task).
+    if (parsed?.envelope?.disposition === 'acknowledged') {
+      if (resolved?.acknowledged === true) logger.info(`a2a: task ${resolved.taskId} acknowledged by its target; it stays owed until the result`)
+      return undefined
+    }
     if(resolved!==undefined)pruneReceiptWaiters()
     if (parsed !== null && parsed.taskId !== '') {
       const line = parsed.summary.trim()
@@ -829,6 +842,8 @@ export function apply(ctx: Context, config: Config): void {
     if (parsed === null || parsed.taskId === '') return true
     try {
       const settled = taskLedger.resolveFromMessage(message, settlementJudgeFor(payer, parsed, true), row => row.direction === 'inbound' && row.peer === `local:${creditor}`)
+      // An acknowledgement only marks the row it was born with (it stays owed until the result).
+      if (settled?.acknowledged === true) return true
       const line = parsed.summary.trim()
       if(settled!==undefined)pruneReceiptWaiters()
       if (settled !== undefined && line !== '') idempotencyStore.recordOutcome(parsed.taskId, { status: 'completed', reply: line.slice(0, SUMMARY_CAP) })
@@ -1780,6 +1795,7 @@ export function apply(ctx: Context, config: Config): void {
         nudgeEscalations:()=>nudgeObservations.snapshot(),
         ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
+        admissionRecheck: (caller: string, handle: string, local: boolean) => recheckCallerAdmission(admissionRecords, caller, handle, local),
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
         get legacyInboundCount() { return legacyInboundCount },
@@ -2002,6 +2018,75 @@ export function apply(ctx: Context, config: Config): void {
     warn:code=>logger.warn('a2a: sourced followup (%s); check ledger persistence and original task',code),
   })
   const followupRelay = (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string, taskExpected=true): 'inserted'|void => followupDelivery.deliver(agent,text,sender,localFrom,taskId,callerKey,taskExpected)
+  // superagent design v4, PR-B: superagent's domain engine in this host (off unless config.superagent). The router gets
+  // candidate cards in its own session (host relay, not A2A) and decides only through the superagent_* tools.
+  const superagentHost: SuperagentHost | undefined = config.superagent === true ? new SuperagentHost({
+    home: join(home, 'a2a'), logger,
+    deliverToSession: (id, text) => { const agent = sessionNodes.get(id); if (agent === undefined) return false; followupRelay(agent, text, config.team); return true },
+    interval: (fn, ms) => ctx.timer.interval(fn, ms),
+    // The team's A2A address (PR-B2b) is a CLI identity the a2a-net CLI runs against this very host.
+    homeUrl: () => superagentHomeUrl,
+    apiKey: () => config.apiKey,
+    // PR-C2: remote members and served teams talk host to host, signed with this host's card key and bound to the body.
+    signedPost: async (baseUrl, path, body) => {
+      const target = baseUrl.replace(/\/$/, '') + path
+      const text = JSON.stringify(body)
+      const reply = await peerFetch(target, { method: 'POST', headers: { 'Content-Type': 'application/json', ...originClaimHeaders({ url: target, method: 'POST', body: text }) }, body: text, signal: AbortSignal.timeout(15_000) })
+      if (!reply.ok) { void reply.body?.cancel().catch(() => {}); return { ok: false, status: reply.status, error: `HTTP ${String(reply.status)}` } }
+      try { return JSON.parse(await reply.text()) as Record<string, unknown> } catch { return { ok: false, error: 'not JSON' } }
+    },
+    handleOf: id => `${config.team}/${id8(id)}`,
+    localSessionOf: handle => localSessionOfHandle(handle),
+    onRolesChanged: () => { syncRoleTools() },
+  }) : undefined
+  // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
+  const superagentRoleTools = new RoleTools({
+    roleOf: id => superagentHost?.roleOf(id),
+    agentOf: id => ctx.get('agents')?.get(SessionId(id)) as RoleAgent | undefined,
+    logger,
+  })
+  function syncRoleTools(): void { for (const agent of liveRootAgents(ctx.get('agents'))) superagentRoleTools.sync(agent as unknown as RoleAgent) }
+  let superagentHomeUrl: string | undefined
+  if (superagentHost !== undefined) {
+    whenWebServerSettled(webServer => { superagentHomeUrl = `http://127.0.0.1:${String((webServer as { port: number }).port)}` })
+    ctx.effect(() => { superagentHost.start(); return () => { void superagentHost.stop() } }, 'a2a: superagent engine passes')
+    registerSuperagentTools(ctx, () => superagentHost)
+    // A member's turn ending is the executor's turn-end fact (PR-C1).
+    ctx.on('agent/status', payload => { if (payload.status === 'idle') superagentHost.memberIdle(String(payload.agent.id)) })
+    // PR-F: an Input counts as read once the member's session takes the message carrying it into its history.
+    ctx.on('agent/inbox/claimed', ({ agent }) => { superagentHost.memberClaimed(String(agent.id)) })
+    ctx.tools.guard(exec => {
+      const refusal = superagentRoleTools.guard(exec.name, exec.agent as unknown as RoleAgent | undefined)
+      if (refusal !== undefined) superagentHost.noteRefusal('superagent-role-tools', { ...(exec.agent !== undefined ? { caller: String(exec.agent.id) } : {}), target: exec.name })
+      return refusal
+    })
+    ctx.on('agent/created', ({ agent }) => { superagentRoleTools.sync(agent as unknown as RoleAgent); return undefined })
+    ctx.on('agent/disposed', ({ agent }) => { superagentRoleTools.forget(String(agent.id)) })
+    syncRoleTools()
+  }
+  /**
+   * The router acts only through superagent tools and takes work only as candidates from the team's Sources, so A2A
+   * neither reaches it nor leaves it (hard rule, every route seam).
+   * @returns the refusal, or undefined when the router is not involved.
+   */
+  function superagentRouterRefusal(callerSessionId: string | undefined, target: string): string | undefined {
+    const refusal = superagentRefusalText(callerSessionId, target)
+    // Every caller returns this refusal to the route it refused, so each refused route counts once (PR-F: acceptance item 7).
+    if (refusal !== undefined) superagentHost?.noteRefusal(/^\[([a-z-]+)\]/.exec(refusal)?.[1] ?? 'superagent', { ...(callerSessionId !== undefined ? { caller: callerSessionId } : {}), target })
+    return refusal
+  }
+  function superagentRefusalText(callerSessionId: string | undefined, target: string): string | undefined {
+    if (superagentHost === undefined) return undefined
+    const callerRole = callerSessionId === undefined ? undefined : superagentHost.roleOf(callerSessionId)
+    if (callerRole === 'router') return '[superagent-router-outbound] the team router does not route A2A; it decides with superagent_route and replies with superagent_reply'
+    if (callerRole === 'member') return '[superagent-member-outbound] a team member does not route A2A; it works on its assigned ticket and reports with a2a_ticket_report'
+    const bare = target.replace(/@[0-9a-f]{8}$/, '')
+    const named = (id: string): boolean => { const handle = `${config.team}/${id8(id)}`; return target === id || (bare === handle && (target === bare || target.endsWith('@' + ownCanvasFingerprint))) }
+    const router = superagentHost.routerSession
+    if (router !== undefined && named(router)) return '[superagent-router-inbound] the team router takes no A2A work; send requests to the team\'s Sources (the workbench or its A2A address), where the gate admits them'
+    if (superagentHost.settings.members.some(named)) return '[superagent-member-inbound] a team member takes work only as assignments from the team\'s executor; send requests to the team\'s Sources'
+    return undefined
+  }
   ctx.on('agent/inbox/claimed',({agent,message})=>followupDelivery.claimed(agent,String(message.id)))
   const withdrawQueuedTask = (taskId:string): Promise<'removed'|'claimed'|'legacy'> => {
     const controller=ctx.get('sessionController')
@@ -2390,6 +2475,10 @@ export function apply(ctx: Context, config: Config): void {
   function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number,acceptance?:'inserted'|void) => void, callerKey?: string): Promise<
     { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown' }
   > {
+    // superagent v4: whatever address resolved to it (a canvas team, the node team), the router takes no A2A work.
+    if (superagentHost?.roleOf(String(agent.id)) !== undefined) {
+      return Promise.resolve({ ok: false, error: superagentRouterRefusal(undefined, String(agent.id)) ?? 'superagent team sessions take no A2A work' })
+    }
     return new Promise((resolve) => {
       // #306: synchronous replies use the same reading-turn attribution as automatic receipts.
       // Registering and steering are synchronous, so this is the exact pre-steer floor.
@@ -2856,6 +2945,8 @@ export function apply(ctx: Context, config: Config): void {
       config,
       cliDeposits,
       canvasStore, canvasMemberForWrite,
+      superagentInbound: team => superagentRouterRefusal(undefined, team),
+      superagentIntake: team => superagentHost?.a2aAddress === team,
       canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
       sessionNodes,
       joinedSessions,
@@ -2915,6 +3006,101 @@ export function apply(ctx: Context, config: Config): void {
     })
 
 
+  })
+
+  if (superagentHost !== undefined) whenWebServerSettled((webServer) => {
+    // superagent design v4, PR-B: the owner's workbench face of the engine (owner control route only).
+    // GET: the engine state; POST: settings (router, allowed senders, Sources, pause), request (the workbench Source),
+    // stop / retry a ticket (upstream's people commands).
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/__dsh_a2a/superagent',
+      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+        const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
+        if (req.method === 'GET') { send(200, superagentHost.state()); return }
+        readJsonBody(req, res, (body) => {
+          const fields = body as Record<string, unknown>
+          try {
+            if (fields.action === 'settings') {
+              send(200, superagentHost.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true))
+            } else if (fields.action === 'request') {
+              send(200, superagentHost.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined))
+            } else if (fields.action === 'add-remote-member') {
+              // PR-C2: a member on another host. Its key comes from the linked peer's signed card (the canvas member proof).
+              const ref = typeof fields.ref === 'string' ? fields.ref : '', peer = typeof fields.peer === 'string' ? fields.peer : ''
+              void (async () => {
+                const proof = await canvasMemberForWrite(ref, peer)
+                if (!proof.ok) { send(200, proof); return }
+                if (proof.ownerKey === undefined || !proof.member.includes('/') || proof.ownerKey === encodePublicKey(createPublicKey(nodePrivateKey))) { send(200, { ok: false, error: 'a remote member is a session on another host; name local sessions in members' }); return }
+                send(200, superagentHost.addRemoteMember({ ref: proof.member, key: proof.ownerKey, url: new URL(peer).origin }))
+              })().catch(error => send(200, { ok: false, error: String(error) }))
+            } else if (fields.action === 'remove-remote-member') {
+              send(200, superagentHost.removeRemoteMember(typeof fields.ref === 'string' ? fields.ref : ''))
+            } else if (fields.action === 'serve-team') {
+              // PR-C2: serve another host's team. Its key comes from that linked peer's signed card; null peer leaves.
+              if (fields.peer === null) { send(200, superagentHost.serveTeam(undefined, [], () => false)); return }
+              const peer = typeof fields.peer === 'string' ? fields.peer : ''
+              const members = Array.isArray(fields.members) ? fields.members.filter((m): m is string => typeof m === 'string') : []
+              void (async () => {
+                if (peer === '' || !/^https?:\/\//.test(peer)) { send(200, { ok: false, error: 'peer (the team host base URL) is required' }); return }
+                const card = await fetchPeerCard(peer)
+                if (card === undefined || !verifyCard(card, Date.now()).ok || typeof card.publicKey !== 'string') { send(200, { ok: false, error: 'the team host card is unreadable or unsigned' }); return }
+                // The link judgement reads the cached card: cache the verified one first, as the canvas member proof does.
+                cardCache.set(peer, { at: Date.now(), card })
+                if (peerAdmissionLinkState(peer).link !== 'linked') { send(200, { ok: false, error: 'the team host must be a linked peer' }); return }
+                send(200, superagentHost.serveTeam({ url: new URL(peer).origin, key: card.publicKey }, members, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true))
+              })().catch(error => send(200, { ok: false, error: String(error) }))
+            } else if (fields.action === 'stop' || fields.action === 'retry') {
+              const ticketId = typeof fields.ticket_id === 'string' ? fields.ticket_id : ''
+              const ticket = fields.action === 'stop'
+                ? superagentHost.engine.stopTicket(ticketId, typeof fields.reason === 'string' ? fields.reason : undefined)
+                : superagentHost.engine.retryTicket(ticketId)
+              superagentHost.pass()
+              send(200, { ok: true, ticket })
+            } else send(200, { ok: false, error: 'action must be settings, request, add-remote-member, remove-remote-member, serve-team, stop or retry' })
+          } catch (error) { send(200, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
+        }, 64_000)
+      }),
+    }), 'a2a: superagent control route')
+    // PR-C2: the two host-to-host faces. Each takes a signed, body-bound OriginClaim and judges the signer's card key against
+    // the key the owner pinned: the team host's key on a member host, the member host's key on the team host.
+    const signedFace = (path: string, judge: (body: Record<string, unknown>, claim: { caller: string; key: string }) => Record<string, unknown>, label: string): void => {
+      ctx.effect(() => webServer.register({
+        kind: 'exact',
+        path,
+        handler: (req: IncomingMessage, res: ServerResponse) => {
+          const send = (value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
+          if (req.method !== 'POST') { send({ ok: false, error: 'POST required' }); return }
+          const chunks: Buffer[] = []
+          let size = 0
+          req.on('data', (chunk: Buffer) => { size += chunk.length; if (size <= 64 * 1024) chunks.push(chunk) })
+          req.on('end', () => {
+            void (async () => {
+              if (size > 64 * 1024) { send({ ok: false, error: 'payload too large' }); return }
+              const rawBody = Buffer.concat(chunks)
+              let body: Record<string, unknown>
+              try { body = JSON.parse(rawBody.toString('utf8')) as Record<string, unknown> } catch { send({ ok: false, error: 'not JSON' }); return }
+              const claim = await verifyOriginClaim(req, { rawBody })
+              if (!claim.ok || !claim.bound || claim.bodyBound !== true || typeof claim.card.publicKey !== 'string') {
+                recordActivity('in', path, String(req.headers['x-a2a-caller'] ?? 'unknown'), false)
+                superagentHost.noteRefusal('superagent-untrusted-origin', { caller: String(req.headers['x-a2a-caller'] ?? 'unknown'), target: path })
+                send({ ok: false, code: 'untrusted-origin', error: `a signed, body-bound OriginClaim is required (${claim.ok ? 'unbound' : claim.reason})` })
+                return
+              }
+              const out = judge(body, { caller: claim.caller, key: claim.card.publicKey })
+              recordActivity('in', path, claim.caller, out.ok === true)
+              // A signer that is not the pinned key (an impostor sharing a handle) is refused by identity; a malformed body is not counted.
+              if (out.ok !== true && ['not-signer', 'not-team', 'not-member'].includes(String(out.code))) superagentHost.noteRefusal(`superagent-${String(out.code)}`, { caller: claim.caller, target: path })
+              send(out)
+            })().catch(error => send({ ok: false, error: String(error) }))
+          })
+        },
+      }), label)
+    }
+    signedFace('/a2a/superagent-member', (body, claim) => superagentHost.assignedWork(body.op, body.member, claim.key, body.text), 'a2a: superagent member face')
+    signedFace('/a2a/superagent-team', (body, claim) => typeof body.member === 'string' && claimCovers(body.member, claim.caller)
+      ? superagentHost.remoteEvent(body.op, body.member, claim.key, body.report)
+      : { ok: false, code: 'not-signer', error: 'the signer does not speak for that member' }, 'a2a: superagent team face')
   })
 
   whenWebServerSettled((webServer) => {
@@ -3698,6 +3884,10 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const ownerQualified = splitCanvasOwner(String(args.team ?? '').trim())
       const foreignOwner = ownerQualified.owner !== undefined && ownerQualified.owner !== ownCanvasFingerprint ? ownerQualified.owner : undefined
       if (ownerQualified.owner !== undefined) args = { ...args, team: ownerQualified.team }
+      {
+        const refusal = superagentRouterRefusal(agent === undefined ? undefined : String(agent.id), String(args.team ?? '').trim())
+        if (refusal !== undefined) { recordActivity('out', String(args.team ?? ''), agent !== undefined ? sessionTeamOf(agent) : 'local', false); return { ok: false, error: refusal, code: -32000 } }
+      }
       // A receipt may use only its own frozen return lane; local answer state is not delivery proof.
       const answer = parseReceipt(args.message)
       const receiptRow=answer===null?undefined:taskLedger.find(answer.taskId)
@@ -3886,6 +4076,11 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: joinedRefusal, code: -32000 }
     }
+    const routerRefusal = superagentRouterRefusal(undefined, team)
+    if (routerRefusal !== undefined) {
+      recordActivity('out', team, callerSession ?? 'local', false)
+      return { ok: false, error: routerRefusal, code: -32000 }
+    }
     // #114 S5: the same header-safe id rule the wire face enforces.
     const idRefusal = taskIdFromCaller === undefined ? undefined : taskIdRefusal(taskIdFromCaller)
     if (idRefusal !== undefined) {
@@ -3893,7 +4088,9 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       return { ok: false, error: idRefusal, code: -32000 }
     }
     // gh#224: a full target queue refuses a same-host delivery as the wire face does (receipts, CLI mailboxes pass).
-    const queueRefusal = queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, cliDeposits.get(team) !== undefined, ownTask)
+    // p1-mailbox-owes (S33): a deposit that declares it owes receipts is under the cap like a session.
+    // superagent v4: a request to the team's A2A address is a Trigger; the engine's worker slots govern it, not this cap.
+    const queueRefusal = queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, (cliDeposits.get(team) !== undefined && !cliDeposits.owes(team)) || superagentHost?.a2aAddress === team, ownTask)
     if (queueRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: queueRefusal, code: WIRE_ERROR_QUEUE_FULL, next: QUEUE_FULL_NEXT }
@@ -3924,10 +4121,24 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // exactly the settlement a CLI-originated task waits for — settle it,
       // as the wire face settles before ITS mailbox split.
       settleAndAnnounce(message, localSettler)
-      cliDeposits.mail(team, callerSession ?? 'unknown', message)
+      const answered = parseReceipt(message)
+      const disposition = answered?.envelope?.disposition
+      // p1-mail-admission: the same-host admission this delivery passed (a joined face's rule, else local-exempt).
+      const localAdmission = localCandidateAdmission(admissionRecords, callerSession, team)
+      const evicted = cliDeposits.mail(team, callerSession ?? 'unknown', message, undefined, { taskId: taskIdFromCaller, contextId, proof: 'in-process', ...(answered !== null ? { receiptFor: answered.taskId } : {}), ...(disposition !== undefined ? { disposition } : {}),
+        ...(localAdmission.ok ? { admission: localAdmission.rule } : {}) })
+      // p1-mailbox-owes (D-5): a row the cap pushed out takes its owed inbound row with it.
+      for (const gone of evicted) if (gone.task_id !== undefined) taskLedger.evictInbound(gone.task_id, team)
       recordActivity('in', team, callerSession ?? 'peer', true)
       logger.info(`a2a: cli mailbox delivery for ${team} (from ${callerSession ?? 'unknown'})`)
-      return { ok: true, team, reply: `delivered to the mailbox of ${team} — the CLI polls while online`, task_id: taskIdFromCaller ?? '', context_id: contextId ?? '', task_status: 'TASK_STATE_COMPLETED' }
+      if (answered === null && taskIdFromCaller !== undefined && cliDeposits.owes(team)) {
+        // p1-mailbox-owes (S33, D-2): delivered, not final. On one host the caller and the target share this ledger: the
+        // caller's own owed row (peer 'local', booked by trackOwedTask) is the one the per-target cap counts, as for a
+        // same-host session, so no separate inbound row is kept.
+        return { ok: true, team, reply: `delivered to the mailbox of ${team} — it owes a receipt`, task_id: taskIdFromCaller, context_id: contextId ?? '', task_status: 'TASK_STATE_DELIVERED', receipt: 'mailbox' }
+      }
+      // S29 / #404: a plain mailbox is final for the caller, as on the wire face (receipt 'mailbox'), so no debt is booked.
+      return { ok: true, team, reply: `delivered to the mailbox of ${team} — the CLI polls while online`, task_id: taskIdFromCaller ?? '', context_id: contextId ?? '', task_status: 'TASK_STATE_COMPLETED', receipt: 'mailbox' }
     }
     // The native-teams claim probe is an await: pay it only when the four
     // cheap synchronous locality checks missed (a registry team is a local
@@ -4006,6 +4217,12 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       }
       try {
         const target = await woken
+        // superagent v4: whatever address resolved to it (a canvas team, the node team), the router takes no A2A work.
+        if (superagentHost?.roleOf(String(target.id)) !== undefined) {
+          endRoute(flight)
+          recordActivity('out', team, callerSession ?? 'local', false)
+          return { ok: false, error: superagentRouterRefusal(undefined, String(target.id)) ?? 'superagent team sessions take no A2A work', code: -32000 }
+        }
         // N1 (review seat 7e4cf94a): dashed composite labels are NOT routable;
         // accept only <zone>/<short-id> shapes so envelopes stop bouncing -32004.
         // An explicit callback address (P2) wins over the caller-label

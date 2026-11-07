@@ -23,6 +23,7 @@ import { createSeatNameEditor } from './seat-name-editor'
 import { createCliHomePicker, type CliHomeOptions } from './cli-home-picker'
 import { createMemberProvenancePicker, type ProvenanceChoice } from './member-provenance-picker'
 import { createRailTabs } from './wb-rail'
+import { createSuperagentPane, type SaState, type SuperagentPaneDeps } from './wb-superagent'
 import { DIRECTORY_FILTERS, learnLogTitle, loadLogTitles, renderDirectory, type DirFilter } from './wb-directory'
 import { ledgerFacts, renderLedger as paintLedger } from './wb-ledger'
 import { nameInto, teamLabel } from './wb-names'
@@ -258,6 +259,8 @@ export interface WorkbenchDeps {
     deactivate(): void
     available(): boolean
   }
+  /** superagent v4 PR-E: the 团队 tab's writes (POST /__dsh_a2a/superagent). Optional — without it the tab never shows. */
+  superagent?: SuperagentPaneDeps
 }
 
 /** Display name for one node: session title, then team, then label. */
@@ -293,7 +296,7 @@ type Selection =
   | undefined
 
 /** The rail sections. */
-export type WorkbenchSection = 'directory' | 'hosts' | 'ledger' | 'activity' | 'plan'
+export type WorkbenchSection = 'directory' | 'hosts' | 'ledger' | 'activity' | 'plan' | 'team'
 
 
 /** Legacy deep-link targets: 'board' focuses the stage, sections open a rail section. */
@@ -306,6 +309,8 @@ export interface Workbench {
   readonly root: HTMLElement
   /** Feed one /state poll (or null while the first fetch is out). */
   update(state: StateBody | null): void
+  /** Feed one GET /__dsh_a2a/superagent poll: null when the host runs no superagent team (the 团队 tab hides). */
+  updateSuperagent(state: SaState | null): void
   /** Current stage mode: the board while the canvas face is up, else data. */
   readonly mode: () => WorkbenchMode
   /** Focus a target: 'board' converges on canvas mode (no-op while the
@@ -334,6 +339,7 @@ const SECTION_DEFS: ReadonlyArray<{ key: WorkbenchSection; label: string }> = [
   { key: 'ledger', label: '台账' },
   { key: 'activity', label: '活动' },
   { key: 'plan', label: '规划' },
+  { key: 'team', label: '团队' },
 ]
 
 export function createWorkbench(deps: WorkbenchDeps): Workbench {
@@ -448,12 +454,18 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   const planPane = el('section', 'wb-pane')
   // gh#20 W-C: the host rail pane (one row per tracked peer).
   const hostsPane = el('section', 'wb-pane')
+  // superagent v4 PR-E: the 团队 pane, shown only while the host answers a superagent state.
+  const superagentPane = deps.superagent === undefined ? undefined : createSuperagentPane(deps.superagent)
+  let teamOn = false
   const dataPanes: ReadonlyArray<[WorkbenchSection, HTMLElement]> = [
     ['ledger', ledgerPane],
     ['activity', activityPane],
     ['plan', planPane],
     ['hosts', hostsPane],
+    ...(superagentPane !== undefined ? [['team', superagentPane.root] as [WorkbenchSection, HTMLElement]] : []),
   ]
+  // Without superagent writes the 团队 tab never shows.
+  railTabs.setHidden('team', true)
 
   const stage = el('main', 'wb-stage')
   const boardPane = el('section', 'wb-stage-board')
@@ -504,7 +516,9 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     for (const [key, pane] of dataPanes) {
       const home = m === 'canvas' ? railTabs.panel(key) : dataStack
       // Data mode: the pane lives on the stage, so its tab steps aside.
-      railTabs.setHidden(key, m !== 'canvas')
+      const off = key === 'team' && !teamOn
+      railTabs.setHidden(key, m !== 'canvas' || off)
+      pane.classList.toggle('is-hidden', off)
       if (pane.parentElement !== home) home.appendChild(pane)
     }
   }
@@ -1311,6 +1325,14 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     railTabs.select(key)
   }
 
+  function updateSuperagent(state: SaState | null): void {
+    if (superagentPane === undefined) return
+    teamOn = state !== null
+    const out = superagentPane.update(state, last?.sessions ?? [], deps.now())
+    railTabs.setBadge('team', out.badge, out.tone)
+    placePanes(mode)
+  }
+
   update(null)
-  return { root, update, mode: () => mode, selectTab, openNodeChat }
+  return { root, update, updateSuperagent, mode: () => mode, selectTab, openNodeChat }
 }
