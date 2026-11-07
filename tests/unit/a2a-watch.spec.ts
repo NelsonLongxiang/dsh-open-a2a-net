@@ -6,7 +6,7 @@
  */
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { a2aKind, apply, configSchema, KV, lossHealth, policySchema, pollMailbox, renewDeposit, scope, translate, TRUSTED_PROOFS, watch, type A2aConfig } from '../../src/superagent/a2a-watch.ts'
+import { a2aKind, apply, configSchema, HEALTH_RECORD_CAP, KV, lossHealth, PAGE_RECORD_CAP, policySchema, pollMailbox, recordPage, recordRows, renewDeposit, reportError, ROW_RECORD_CAP, scope, translate, TRUSTED_PROOFS, watch, type A2aConfig, type HealthRecord, type PageRecord, type RowRecord } from '../../src/superagent/a2a-watch.ts'
 import type { Health, SourceContext, Trigger } from '../../src/superagent/source-types.ts'
 
 const upstreamKey = (...values: string[]) => createHash('sha256').update(JSON.stringify(values)).digest('hex').slice(0, 32)
@@ -240,5 +240,101 @@ describe('the rest of the kind', () => {
     ;(effects[0] as () => void)()
     expect(unregistered).toBe(1)
     await (effects[1] as () => Promise<void>)()
+  })
+})
+
+describe('D1/D2 · records for the shadow acceptance (global review of the acceptance draft)', () => {
+  const at = '2026-11-07T00:00:00.000Z'
+  /** The Engine's intake as the Source sees it: filtered by this kind's scope, stored once by id. */
+  function engine(f: ReturnType<typeof fake>) {
+    const ids = new Set<string>()
+    const sets: string[] = []
+    const set = f.ctx.state.set
+    f.ctx.state.set = (k, v) => { sets.push(k); set(k, v) }
+    f.ctx.receive = async t => { if (ids.has(t.id)) return 'duplicate'; ids.add(t.id); return scope(t).listened ? 'stored' : 'filtered' }
+    return sets
+  }
+  const mail = [row(), row({ seq: 2, task_id: 'task-2', proof: 'cli-identity' }), row({ seq: 3, task_id: 'task-3', receipt_for: 'job-1' }),
+    row({ seq: 4, task_id: 'task-4', dup: 'sync-answered' }), row({ seq: 5, task_id: undefined })]
+
+  it('records one outcome per row, with exactly these fields and never the text, before the cursor moves', async () => {
+    const f = fake(() => page(mail))
+    const sets = engine(f)
+    await pollMailbox(f.ctx, new AbortController().signal, () => new Date(at))
+    const rows = f.state.get(KV.rows) as RowRecord[]
+    expect(rows.map(r => [r.seq, r.outcome])).toEqual([[1, 'stored'], [2, 'filtered:unverified'], [3, 'filtered:receipt'], [4, 'duplicateCopy'], [5, 'unreadable']])
+    expect(rows[0]).toEqual({ epoch: 'e1', seq: 1, task_id: 'task-1', from: 'dsh/aaaa1111', outcome: 'stored', at, proof: 'origin-claim', receipt_for: null, dup: null })
+    expect(rows[1]).toMatchObject({ proof: 'cli-identity', receipt_for: null, dup: null })
+    expect(rows[2]).toMatchObject({ proof: 'origin-claim', receipt_for: 'job-1', dup: null })
+    expect(rows[3]).toMatchObject({ outcome: 'duplicateCopy', dup: 'sync-answered' })
+    expect(rows[4]).toEqual({ epoch: 'e1', seq: 5, task_id: null, from: 'dsh/aaaa1111', outcome: 'unreadable', at, proof: 'origin-claim', receipt_for: null, dup: null })
+    for (const r of rows) expect(Object.keys(r).sort()).toEqual(['at', 'dup', 'epoch', 'from', 'outcome', 'proof', 'receipt_for', 'seq', 'task_id'])
+    expect(JSON.stringify([...f.state.values()])).not.toContain('please build it')
+    // Every record is written before the cursor: the cursor is the round's last write.
+    expect(sets.at(-1)).toBe(KV.cursor)
+    expect(sets.filter(k => k === KV.rows)).toHaveLength(5)
+    expect(sets.indexOf(KV.pages)).toBeLessThan(sets.indexOf(KV.rows))
+  })
+
+  it('keeps proof and dup only from their closed sets; a page header is recorded every read, loss or not', async () => {
+    const f = fake(() => page([row({ proof: 'trusted-by-me', dup: 'maybe' }), row({ seq: 2, task_id: 'task-2', proof: 3 })], { lost: 0 }))
+    engine(f)
+    await pollMailbox(f.ctx, new AbortController().signal, () => new Date(at))
+    expect((f.state.get(KV.rows) as RowRecord[]).map(r => [r.proof, r.dup])).toEqual([[null, null], [null, null]])
+    expect(f.state.get(KV.pages)).toEqual([{ at, after: 'start', next: 'e1:2', epoch: 'e1', lost: 0, epochChanged: false, cursorAhead: false }])
+    expect(f.state.get(KV.healthLog)).toBeUndefined()
+    const lossy = fake(() => page([], { lost: null, epochChanged: true, next: 'e2:0', epoch: 'e2' }))
+    await pollMailbox(lossy.ctx, new AbortController().signal, () => new Date(at))
+    expect(lossy.state.get(KV.pages)).toEqual([{ at, after: 'start', next: 'e2:0', epoch: 'e2', lost: null, epochChanged: true, cursorAhead: false }])
+    const ahead = fake(() => page([], { cursorAhead: true, next: 'e1:999' }))
+    await pollMailbox(ahead.ctx, new AbortController().signal, () => new Date(at))
+    expect(ahead.state.get(KV.pages)).toEqual([{ at, after: 'start', next: 'e1:999', epoch: 'e1', lost: 0, epochChanged: false, cursorAhead: true }])
+    // The loss's health record and the page header share the round's at, so the acceptance can join them.
+    expect((lossy.state.get(KV.healthLog) as HealthRecord[])[0]!.at).toBe(at)
+  })
+
+  it('an interrupted round keeps its records and the replay records nothing twice', async () => {
+    const f = fake(() => page(mail))
+    engine(f)
+    const stop = new AbortController()
+    const receive = f.ctx.receive
+    f.ctx.receive = async t => { const r = await receive(t); stop.abort(); return r }
+    await expect(pollMailbox(f.ctx, stop.signal, () => new Date(at))).rejects.toThrow('stopped during the read')
+    expect((f.state.get(KV.rows) as RowRecord[]).map(r => r.seq)).toEqual([1])
+    expect(f.state.has(KV.cursor)).toBe(false)
+    f.ctx.receive = receive
+    await pollMailbox(f.ctx, new AbortController().signal, () => new Date(at))
+    await pollMailbox(f.ctx, new AbortController().signal, () => new Date(at))
+    expect((f.state.get(KV.rows) as RowRecord[]).map(r => r.seq)).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('keeps the newest ROW_RECORD_CAP rows and HEALTH_RECORD_CAP health records', () => {
+    const f = fake(() => '')
+    const rows = (from: number, n: number): RowRecord[] => Array.from({ length: n }, (_, i) => ({ epoch: 'e1', seq: from + i, task_id: 't', from: 'x', outcome: 'stored' as const, at, proof: null, receipt_for: null, dup: null }))
+    recordRows(f.ctx, rows(1, ROW_RECORD_CAP))
+    recordRows(f.ctx, rows(ROW_RECORD_CAP + 1, 5))
+    const kept = f.state.get(KV.rows) as RowRecord[]
+    expect(kept).toHaveLength(ROW_RECORD_CAP)
+    expect(kept[0]!.seq).toBe(6)
+    expect(kept.at(-1)!.seq).toBe(ROW_RECORD_CAP + 5)
+    const header = (n: number): PageRecord => ({ at, after: `e1:${String(n)}`, next: `e1:${String(n + 1)}`, epoch: 'e1', lost: 0, epochChanged: false, cursorAhead: false })
+    for (let i = 0; i < PAGE_RECORD_CAP + 2; i += 1) recordPage(f.ctx, header(i))
+    const pages = f.state.get(KV.pages) as PageRecord[]
+    expect(pages).toHaveLength(PAGE_RECORD_CAP)
+    expect(pages[0]!.after).toBe('e1:2')
+    for (let i = 0; i < HEALTH_RECORD_CAP + 3; i += 1) reportError(f.ctx, 'a2a', { state: 'error', detail: `d${String(i)}`, at, values: { n: String(i) } })
+    const log = f.state.get(KV.healthLog) as HealthRecord[]
+    expect(log).toHaveLength(HEALTH_RECORD_CAP)
+    expect(log[0]!.values).toEqual({ n: '3' })
+    expect(f.reports).toHaveLength(HEALTH_RECORD_CAP + 3)
+  })
+
+  it('every loss round leaves a health record with its numbers and no free text', async () => {
+    const f = fake(args => args[0] === 'publish' ? '' : page([row()], { lost: 2 }))
+    const stop = new AbortController()
+    const run = watch(f.ctx, stop.signal, () => new Date(at))
+    await new Promise(r => setTimeout(r, 10)); stop.abort(); await run
+    expect(f.state.get(KV.healthLog)).toEqual([{ at, entry: 'a2a', state: 'error', values: { lost: '2', after: 'start', epochChanged: 'false' } }])
+    expect(JSON.stringify(f.state.get(KV.healthLog))).not.toContain('pushed out')
   })
 })
