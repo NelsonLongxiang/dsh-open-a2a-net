@@ -18,7 +18,65 @@ export const PROGRAM = 'a2a-net'
 export const TRUSTED_PROOFS: ReadonlySet<string> = new Set(['origin-claim', 'in-process'])
 export const HEALTH = { read: 'a2a', deposit: 'a2a-deposit' } as const
 /** Source-scoped KV records (superagent keys are plain strings). */
-export const KV = { cursor: 'a2a-cursor', renewedAt: 'a2a-renewed-at' } as const
+export const KV = { cursor: 'a2a-cursor', renewedAt: 'a2a-renewed-at', rows: 'a2a-rows', pages: 'a2a-pages', healthLog: 'a2a-health-log' } as const
+/**
+ * Records kept for the shadow acceptance (D1, D2): the newest ROW_RECORD_CAP row outcomes, PAGE_RECORD_CAP page headers
+ * (one per read) and HEALTH_RECORD_CAP health errors. Older ones roll off; none ever holds message text.
+ */
+export const ROW_RECORD_CAP = 1000
+export const PAGE_RECORD_CAP = 1000
+export const HEALTH_RECORD_CAP = 200
+/** The host's proof vocabulary (src/task-auth.ts AuthProof): a row record keeps a proof only from this closed set. */
+const PROOF_VALUES: ReadonlySet<string> = new Set(['origin-claim', 'claim-mismatch', 'legacy-window', 'unbound', 'cli-identity', 'in-process', 'none'])
+/** The structured health values a health record may keep; free text (such as a CLI error) stays in the live report only. */
+const LOG_VALUE_KEYS: ReadonlySet<string> = new Set(['count', 'lost', 'after', 'epochChanged'])
+/** The mailbox's duplicate markers a row record may keep. */
+const DUP_VALUES: ReadonlySet<string> = new Set(['sync-answered'])
+
+/** Where one mailbox row went, as the shadow acceptance reads it (A5). */
+export type RowOutcome = 'stored' | 'duplicate' | 'filtered:unverified' | 'filtered:receipt' | 'duplicateCopy' | 'unreadable'
+/**
+ * One row's record: the row's identifying metadata and its outcome, never the text. proof, receipt_for and dup are the
+ * mailbox's own fields, so the acceptance can take the rows as the whole set and reconcile the Triggers against them.
+ */
+export interface RowRecord {
+  epoch: string; seq: number | null; task_id: string | null; from: string | null; outcome: RowOutcome; at: string
+  proof: string | null; receipt_for: string | null; dup: string | null
+}
+/** One read's page header as the host printed it, recorded whether or not the Source judged a loss (A7 checks the Source against it). */
+export interface PageRecord { at: string; after: string; next: string; epoch: string; lost: number | null; epochChanged: boolean; cursorAhead: boolean }
+/** One health error's record: the entry and its state/code/values, never the free-text detail. */
+export interface HealthRecord { at: string; entry: string; state: Health['state']; code?: string; values?: Record<string, string> }
+
+/** Append rows by their stable key epoch:seq (a replay records nothing twice), keeping the newest ROW_RECORD_CAP. */
+export function recordRows(ctx: SourceContext, rows: readonly RowRecord[]): void {
+  if (rows.length === 0) return
+  const kept = ctx.state.get<RowRecord[]>(KV.rows) ?? []
+  const seen = new Set(kept.map(r => `${r.epoch}:${String(r.seq)}`))
+  for (const row of rows) {
+    const key = `${row.epoch}:${String(row.seq)}`
+    if (row.seq !== null && seen.has(key)) continue
+    seen.add(key)
+    kept.push(row)
+  }
+  ctx.state.set(KV.rows, kept.slice(-ROW_RECORD_CAP))
+}
+
+/** Keep one read's page header, newest PAGE_RECORD_CAP. */
+export function recordPage(ctx: SourceContext, page: PageRecord): void {
+  const kept = ctx.state.get<PageRecord[]>(KV.pages) ?? []
+  kept.push(page)
+  ctx.state.set(KV.pages, kept.slice(-PAGE_RECORD_CAP))
+}
+
+/** Report a health error and keep its record (A7: every loss round leaves a record, whatever the current value says). */
+export function reportError(ctx: SourceContext, entry: string, h: Health, now: () => Date = () => new Date()): void {
+  const log = ctx.state.get<HealthRecord[]>(KV.healthLog) ?? []
+  const values = h.values === undefined ? undefined : Object.fromEntries(Object.entries(h.values).filter(([name]) => LOG_VALUE_KEYS.has(name)))
+  log.push({ at: h.at ?? now().toISOString(), entry, state: h.state, ...(h.code !== undefined ? { code: h.code } : {}), ...(values !== undefined ? { values } : {}) })
+  ctx.state.set(KV.healthLog, log.slice(-HEALTH_RECORD_CAP))
+  ctx.report(entry, h)
+}
 
 export interface A2aConfig extends Record<string, unknown> {
   /** p2 knows one mode. `reply` belongs to p3 and is refused here, as is anything else. */
@@ -173,16 +231,31 @@ export interface RoundSummary { read: number; triggers: number; duplicateCopies:
 export async function pollMailbox(ctx: SourceContext, signal: AbortSignal, now: () => Date = () => new Date()): Promise<RoundSummary> {
   const after = ctx.state.get<string>(KV.cursor) ?? 'start'
   const page = parsePage(await ctx.commands.withSignal(signal).run(PROGRAM, ['inbox', '--after', after]))
-  const loss = lossHealth(page, after, now().toISOString())
-  if (loss !== undefined) ctx.report(HEALTH.read, loss)
+  const at = now().toISOString()
+  // The header is recorded unconditionally, before any judgement, so a missed loss still shows in the records.
+  recordPage(ctx, { at, after, next: page.next, epoch: page.epoch, lost: page.lost, epochChanged: page.epochChanged, cursorAhead: page.cursorAhead === true })
+  const loss = lossHealth(page, after, at)
+  if (loss !== undefined) reportError(ctx, HEALTH.read, loss, now)
   const summary: RoundSummary = { read: page.mail.length, triggers: 0, duplicateCopies: 0, unreadable: 0, next: page.next, ...(loss !== undefined ? { loss } : {}) }
+  // Each row's record is written as soon as the row is through, so an interrupted round keeps what it did; the cursor
+  // moves only after every row of the round has its record (D1).
   for (const row of page.mail) {
     if (signal.aborted) throw new Error('The a2a Source stopped during the read')
     const result = translate(row, page.epoch)
-    if (result.kind === 'duplicateCopy') { summary.duplicateCopies += 1; continue }
-    if (result.kind === 'unreadable') { summary.unreadable += 1; continue }
-    await ctx.receive(result.trigger)
+    const raw = isRecord(row) ? row : {}
+    const base = { epoch: page.epoch, seq: Number.isInteger(raw.seq) ? raw.seq as number : null,
+      task_id: typeof raw.task_id === 'string' && raw.task_id !== '' ? raw.task_id : null, from: typeof raw.from === 'string' && raw.from !== '' ? raw.from : null, at,
+      proof: typeof raw.proof === 'string' && PROOF_VALUES.has(raw.proof) ? raw.proof : null,
+      receipt_for: typeof raw.receipt_for === 'string' && raw.receipt_for !== '' ? raw.receipt_for : null,
+      dup: typeof raw.dup === 'string' && DUP_VALUES.has(raw.dup) ? raw.dup : null }
+    if (result.kind === 'duplicateCopy') { summary.duplicateCopies += 1; recordRows(ctx, [{ ...base, outcome: 'duplicateCopy' }]); continue }
+    if (result.kind === 'unreadable') { summary.unreadable += 1; recordRows(ctx, [{ ...base, outcome: 'unreadable' }]); continue }
+    const received = await ctx.receive(result.trigger)
     summary.triggers += 1
+    // The Engine says whether it filtered the Trigger; this kind's own scope says why.
+    const verdict = scope(result.trigger)
+    const outcome: RowOutcome = received !== 'filtered' ? received : !verdict.listened && verdict.reason === 'receipt' ? 'filtered:receipt' : 'filtered:unverified'
+    recordRows(ctx, [{ ...base, outcome }])
     ctx.threads.describe(threadKey(result.trigger.threads[0]!), { label: `A2A ${result.trigger.actor.id}` })
   }
   ctx.state.set(KV.cursor, page.next)
@@ -284,7 +357,7 @@ export async function watch(ctx: SourceContext, signal: AbortSignal, now: () => 
         depositFailures = 0
       } catch (error) {
         depositFailures += 1
-        if (!signal.aborted && depositFailures >= 3) ctx.report(HEALTH.deposit, { state: 'error', detail: `${String(depositFailures)} consecutive failed deposit renewals; last: ${String(error)}`, at: now().toISOString() })
+        if (!signal.aborted && depositFailures >= 3) reportError(ctx, HEALTH.deposit, { state: 'error', detail: `${String(depositFailures)} consecutive failed deposit renewals; last: ${String(error)}`, at: now().toISOString(), values: { count: String(depositFailures) } }, now)
       }
       try {
         const round = await pollMailbox(ctx, signal, now)
@@ -294,7 +367,7 @@ export async function watch(ctx: SourceContext, signal: AbortSignal, now: () => 
         if (round.loss === undefined) ctx.report(HEALTH.read, { state: 'ready', detail: `${String(round.read)} read, ${String(round.triggers)} taken in, ${String(round.duplicateCopies)} duplicate copies, ${String(round.unreadable)} unreadable`, at: now().toISOString() })
       } catch (error) {
         readFailures += 1
-        if (!signal.aborted && readFailures >= 3) ctx.report(HEALTH.read, health('error', 'pollFailures', { count: String(readFailures), error: String(error) }))
+        if (!signal.aborted && readFailures >= 3) reportError(ctx, HEALTH.read, { ...health('error', 'pollFailures', { count: String(readFailures), error: String(error) }), at: now().toISOString() }, now)
       }
     }
     await delay((config?.pollSeconds ?? DEFAULTS.pollSeconds) * 1000, signal)
@@ -315,7 +388,7 @@ export function apply(ctx: PluginContext): void {
     const source = ctx.orchestrator.context(a2aKind)
     const controller = new AbortController()
     // A failure that escapes the loop becomes the Source's health instead of an unhandled rejection.
-    const running = watch(source, controller.signal).catch((error: unknown) => { source.report(HEALTH.read, { state: 'error', detail: String(error) }) })
+    const running = watch(source, controller.signal).catch((error: unknown) => { reportError(source, HEALTH.read, { state: 'error', detail: String(error) }) })
     return async () => { controller.abort(); await running }
   }, 'a2a: mailbox loop')
 }

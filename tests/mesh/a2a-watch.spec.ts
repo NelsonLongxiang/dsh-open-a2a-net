@@ -97,6 +97,12 @@ describe('superagent p2a: a2a Source on a real host (shadow mode)', () => {
       expect(byText('from a cli')).toMatchObject({ result: 'filtered', trigger: { actor: { id: handleOf(WRITER) }, meta: { proof: 'cli-identity', taskId: 'w-1' } } })
       expect(scope(byText('from a cli').trigger)).toEqual({ listened: false, reason: 'unverified' })
       expect(scope(byText('task job-1').trigger)).toEqual({ listened: false, reason: 'receipt' })
+      // D1: one record per mailbox row, in seq order, without the text.
+      const records = state.get(KV.rows) as Array<{ seq: number; outcome: string; task_id: string | null }>
+      expect(records.map(r => r.outcome)).toEqual(taken.slice(0, 3).map(t => scope(t.trigger).listened ? 'stored' : `filtered:${(scope(t.trigger) as { reason: string }).reason}`))
+      expect(records.map(r => r.seq)).toEqual([1, 2, 3])
+      expect((records as Array<{ proof: string | null; receipt_for: string | null }>).map(r => [r.proof, r.receipt_for])).toEqual([['in-process', null], ['cli-identity', null], ['in-process', 'job-1']])
+      expect(JSON.stringify(records)).not.toContain('from the home host')
       const cursor = state.get(KV.cursor)
       expect(cursor).toMatch(/^[^:]+:3$/)
 
@@ -106,6 +112,9 @@ describe('superagent p2a: a2a Source on a real host (shadow mode)', () => {
       state.delete(KV.cursor)
       expect(await pollMailbox(ctx, new AbortController().signal)).toMatchObject({ read: 3, triggers: 3 })
       expect(taken.slice(3).map(t => t.result)).toEqual(['duplicate', 'duplicate', 'duplicate'])
+      expect((state.get(KV.rows) as unknown[]).length).toBe(3)
+      // D2: one page header per read (first read, caught-up read, replay), none of them a loss.
+      expect((state.get(KV.pages) as Array<{ lost: number | null; epochChanged: boolean }>).map(p => [p.lost, p.epochChanged])).toEqual([[0, false], [0, false], [0, false]])
 
       // Thread context through the real `a2a-net thread`.
       const part = await a2aKind.threadContext.read(ctx.commands, local.trigger, 'thread', undefined, OBSERVE)
