@@ -768,11 +768,12 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           const idemVerdict = idempotencyStore.claim(taskId, idemFingerprint)
           if (idemVerdict !== 'fresh') {
             const replay = idemVerdict === 'replay'
-            // p1-mailbox-owes (S33, b): a same-payload resend of a task an owing deposit still owes reads as the first
-            // answer did — delivered, with the mailbox marker — so a caller whose first answer was lost books the debt
-            // now. Nothing is written again: no second mailbox row, no second inbound row, no second slot.
+            // p1-mailbox-owes (S33, b): the original caller's same-payload resend of a task an owing deposit still owes
+            // reads as the first answer did — delivered, with the mailbox marker — so a caller whose first answer was lost
+            // books the debt now. Nothing is written again: no second mailbox row, no second inbound row, no second slot.
+            // Anyone else gets the ordinary 409 (the fingerprint binds the caller too; this check holds should that change).
             const stillOwed = replay && cliDeposits.owes(team) ? taskLedger.find(taskId) : undefined
-            if (stillOwed !== undefined && stillOwed.direction === 'inbound' && stillOwed.status === 'pending' && stillOwed.team === team) {
+            if (stillOwed !== undefined && stillOwed.direction === 'inbound' && stillOwed.status === 'pending' && stillOwed.team === team && stillOwed.peer === `local:${caller}`) {
               const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, context_id: stillOwed.contextId ?? contextId, task_status: 'TASK_STATE_DELIVERED', note: `delivered to the mailbox of ${team} — it owes a receipt` })
               res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
               res.end(payload)

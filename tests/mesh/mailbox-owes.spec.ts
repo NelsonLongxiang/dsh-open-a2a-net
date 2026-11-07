@@ -89,6 +89,14 @@ describe('superagent p1-mailbox-owes: a deposit that owes receipts', () => {
       expect(replayed.code, replayed.stderr).toBe(0)
       expect(replayed.stdout).toContain(`delivered → ${handleOf(OWER)} · task o-1`)
       expect((await mailbox(a, OWER)).filter(m => m.task_id === 'o-1')).toHaveLength(1)
+      // Another caller with the same id and message is not the one owed. The idempotency fingerprint binds the caller,
+      // so it is a conflict (409, replay false) before the owed-resend branch: nothing booked, nothing revealed.
+      const stranger = await send(a, w1, handleOf(OWER), 'o-1')
+      expect(stranger.status).toBe(409)
+      expect(stranger.body).toMatchObject({ replay: false })
+      expect(stranger.body).not.toHaveProperty('task_status')
+      expect((await send(a, w0, handleOf(OWER), 'o-1')).body).toEqual(first.body)
+      expect((await mailbox(a, OWER)).filter(m => m.task_id === 'o-1')).toHaveLength(1)
       // A different payload under the same id is still a conflict, never a delivery.
       expect((await send(a, w0, handleOf(OWER), 'o-1', 'something else')).status).toBe(409)
       // (a) another identity's receipt-shaped message for o-2 frees nothing.
