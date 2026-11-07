@@ -19,7 +19,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { EXIT_GONE, EXIT_RECEIPT_CONFLICT, HEALTH, KIND, LINK_RULES, createA2aKind, replyAllowed, watch, type A2aConfig } from '../a2a-watch.ts'
+import { EXIT_GONE, EXIT_RECEIPT_CONFLICT, HEALTH, KIND, KV, LINK_RULES, createA2aKind, replyAllowed, sendReply, watch, type A2aConfig } from '../a2a-watch.ts'
 import type { Commands, Health, OutboundMessage, ReceiveResult, SourceContext, TicketView, Trigger } from '../source-types.ts'
 
 /** The packaged CLI, from both src/superagent/host and lib/superagent/host. */
@@ -43,6 +43,11 @@ export interface A2aSourceDeps {
   readonly enabled: () => boolean
   readonly receive: (trigger: Trigger) => ReceiveResult
   readonly ticket: (id: string) => TicketView | undefined
+  /**
+   * Whether `task` is the request a still-open ticket was accepted from, and no member report on it is ready: a reply on
+   * that task then is a question or a notice, never the result the requester's formal receipt is kept for.
+   */
+  readonly resultPending?: (ticketId: string, task: string) => boolean
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
   /** Mailbox poll interval in seconds (a2a-watch default 15 here); tests shorten it. */
   readonly pollSeconds?: number
@@ -214,8 +219,23 @@ export class A2aSource {
     return 'sent'
   }
 
-  /** Send one Outbox message: 'sent', 'gone' (never deliverable), or a thrown error (retry later). */
+  /** Whether the A2A request `task` has had its one formal receipt (a2a-watch records it once it went out). */
+  answered(task: string): boolean {
+    const answered = this.stateValue[KV.answered]
+    return typeof answered === 'object' && answered !== null && (answered as Record<string, unknown>)[task] !== undefined
+  }
+
+  /**
+   * Send one Outbox message: 'sent', 'gone' (never deliverable), or a thrown error (retry later). The request a ticket was
+   * accepted from keeps its one formal receipt for the result (acceptance run 3: a relayed question took it and settled
+   * the acknowledged row): while the ticket is open with no ready report, a reply on that request — the member's question,
+   * a notice — goes out as a follow-up in the same context, and the requester's row stays owed until the result settles
+   * it. Whether or not the acknowledgement has gone out yet: it is sent asynchronously and may come second.
+   */
   async send(message: OutboundMessage): Promise<'sent' | 'gone'> {
-    return await this.kindValue.channel.send({ commands: this.context.commands }, message)
+    const task = message.channel.address.task
+    const hold = task !== undefined && message.ticketId !== undefined && this.d.resultPending?.(message.ticketId, task) === true
+    if (!hold) return await this.kindValue.channel.send({ commands: this.context.commands }, message)
+    return await sendReply(this.context, this.context.commands, message, undefined, { holdReceipt: true })
   }
 }

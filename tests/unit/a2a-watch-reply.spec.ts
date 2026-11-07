@@ -141,6 +141,18 @@ describe('P3-5 · the first message is the one formal receipt; later ones are ne
   })
 })
 
+describe('acceptance run 3 · a held receipt: the host keeps the formal receipt for a later message', () => {
+  it('a held message goes out as a follow-up and leaves the task unanswered; the next unheld one is the receipt', async () => {
+    const f = fake(cli())
+    expect(await sendReply(f.ctx, f.commands, message({ id: 'reply:q', text: 'which case?' }), at(T0), { holdReceipt: true })).toBe('sent')
+    expect(f.runs.at(-1)).toEqual(['a2a-net', 'route', 'dsh/aaaa1111', '--task', `${LOOP_PREFIX}${key('reply:q')}`, '--context', 'ctx-1', '--json', '--exit-class', '--', 'which case?'])
+    expect(f.state.get(KV.answered)).toBeUndefined()
+    expect(await sendReply(f.ctx, f.commands, message({ id: 'reply:r', text: 'done' }), at(T0 + 1000))).toBe('sent')
+    expect(f.runs.at(-1)).toEqual(['a2a-net', 'receipt', 'task-1', '--to', 'dsh/aaaa1111', '--outcome', 'completed', '--json', '--exit-class', '--', 'done'])
+    expect(f.state.get(KV.answered)).toEqual({ 'task-1': new Date(T0 + 1000).toISOString() })
+  })
+})
+
 describe('P3-8 · failures retry until 24 hours, then the message is gone with a health record', () => {
   it('keeps the first failure time, throws until GONE_AFTER_MS, then reports and clears', async () => {
     const f = fake(cli({ receipt: () => { throw new CliExit(1) } }))

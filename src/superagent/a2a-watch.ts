@@ -415,13 +415,19 @@ export function replyAllowed(address: Record<string, string>, config: Pick<A2aCo
     typeof address.task === 'string' && address.task !== ''
 }
 
+/** How the host wants one message sent. */
+export interface SendOptions {
+  /** Never take the task's formal receipt with this message: send it as a follow-up, and leave the receipt for later. */
+  readonly holdReceipt?: boolean
+}
+
 /**
  * Send one outbound message (p3 design P3-5 to P3-8). Before anything leaves, the home host rechecks the caller against its
  * current links (O1): no link, no message. The task's first message is its one formal receipt; later ones are new tasks
  * in the same context with an a2a- task id (O2, L1). A class of gone, a vanished link, or 24 hours of failures since the
  * first one end the message as gone with a health record; any other failure throws so the Outbox retries.
  */
-export async function sendReply(ctx: SourceContext, commands: Commands, message: OutboundMessage, now: () => Date = () => new Date()): Promise<'sent' | 'gone'> {
+export async function sendReply(ctx: SourceContext, commands: Commands, message: OutboundMessage, now: () => Date = () => new Date(), options: SendOptions = {}): Promise<'sent' | 'gone'> {
   const at = now()
   const nowMs = at.getTime()
   const { caller, task, context, ingress } = message.channel.address
@@ -436,7 +442,9 @@ export async function sendReply(ctx: SourceContext, commands: Commands, message:
     const check = JSON.parse(await commands.run(PROGRAM, ['admission', caller, ...(ingress === 'local' ? ['--local'] : []), '--json'])) as unknown
     const rule = isRecord(check) && check.admitted === true && typeof check.rule === 'string' ? check.rule : undefined
     if (rule === undefined || !LINK_RULES.has(rule)) return gone(`${caller} is no longer linked to this identity; the reply was not sent`)
-    const first = stamps(ctx, KV.answered)[task] === undefined
+    // A held receipt (the host's call: an acknowledged request whose ticket has no result yet) leaves the task's one
+    // formal receipt for the result; this message goes out as a follow-up in the same context.
+    const first = options.holdReceipt !== true && stamps(ctx, KV.answered)[task] === undefined
     const text = message.text.trim() === '' ? '(no text)' : message.text
     if (first && !receiptable(task)) return gone(`Task ${task} cannot carry a receipt (its id is not a CLI task id); the reply was not sent`)
     const args = first

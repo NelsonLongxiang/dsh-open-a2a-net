@@ -268,9 +268,15 @@ describe('superagent engine in the a2a host', () => {
       const owed = async () => ((await (await globalThis.fetch(`http://127.0.0.1:${m.port}/__dsh_a2a/state`)).json()) as { tasks: any[] }).tasks
       const ackRow = (await owed()).find((t: any) => t.taskId === ackMail.receipt_for || t.taskId === ackMail.receiptFor)
       expect(ackRow, JSON.stringify(ackMail)).toMatchObject({ team: address, status: 'pending', acknowledgedAt: expect.any(Number) })
-      // The owner stops the ticket (no member here): its ending receipt settles the row.
+      // The owner stops the ticket (no member here). Upstream sends no result for a stopped ticket; the host sends the
+      // request its ending receipt, which settles the row (acceptance run 3: it stayed owed). `until` returns quietly at its
+      // deadline, so the row's absence is asserted after it.
       expect(await m.sa({ action: 'stop', ticket_id: ticketId, reason: '验收：结束' })).toMatchObject({ ok: true })
       await until(async () => !(await owed()).some((t: any) => t.taskId === ackRow.taskId), 30_000)
+      expect((await owed()).some((t: any) => t.taskId === ackRow.taskId)).toBe(false)
+      // The archived row says it was acknowledged first, and how the ticket ended for the requester.
+      const st = (await (await globalThis.fetch(`http://127.0.0.1:${m.port}/__dsh_a2a/state`)).json()) as { archived: any[] }
+      expect(st.archived.find((r: any) => r.taskId === ackRow.taskId)).toMatchObject({ acknowledgedAt: ackRow.acknowledgedAt, outcome: 'abandoned', disposition: 'result' })
     } finally { await m.dispose() }
   }, 150_000)
 

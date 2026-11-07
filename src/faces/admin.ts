@@ -411,6 +411,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             startedAt: row.startedAt,
             resolvedAt: row.resolvedAt,
             ...(row.answeredAt !== undefined ? { answeredAt: row.answeredAt } : {}),
+            // superagent v4: the row was acknowledged before its result settled it.
+            ...(row.acknowledgedAt !== undefined ? { acknowledgedAt: row.acknowledgedAt } : {}),
             outcome: row.outcome ?? 'unclassified',
             // p1-receipt-cmd: an attention row has no outcome and stays unclassified, never completed.
             ...(row.disposition !== undefined ? { disposition: row.disposition } : {}),
