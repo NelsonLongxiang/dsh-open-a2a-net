@@ -46,7 +46,7 @@ function makeAgent(id: string, name: string): TestAgent {
   } as unknown as TestAgent
   return agent
 }
-const R_ID = 'session-a0000000aaaa1111', M_ID = 'session-b1111111bbbb2222', O_ID = 'session-c2222222cccc3333'
+const R_ID = 'session-a0000000aaaa1111', M_ID = 'session-b1111111bbbb2222', O_ID = 'session-c2222222cccc3333', X_ID = 'session-d3333333dddd4444'
 const execAs = (agent: Agent) => ({ signal: new AbortController().signal, agent }) as never
 const until = async (f: () => boolean | Promise<boolean>, ms = 8000): Promise<void> => { const t = Date.now(); while (Date.now() - t < ms) { if (await f()) return; await new Promise(r => setTimeout(r, 25)) } }
 
@@ -56,17 +56,17 @@ async function mount(home: string, extra: Partial<Config> = {}) {
   await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
   await ctx.plugin(ManyAgents)
   const agents = ctx.get('agents') as unknown as ManyAgents
-  const [R, M, O] = [[R_ID, 'router'], [M_ID, 'member'], [O_ID, 'outsider']].map(([id, name]) => makeAgent(id!, name!))
-  for (const a of [R!, M!, O!]) { agents.map.set(String(a.id), a); a.host = ctx }
+  const [R, M, O, X] = [[R_ID, 'router'], [M_ID, 'member'], [O_ID, 'outsider'], [X_ID, 'member-x']].map(([id, name]) => makeAgent(id!, name!))
+  for (const a of [R!, M!, O!, X!]) { agents.map.set(String(a.id), a); a.host = ctx }
   apply(ctx, { apiKey: '', session: 'host-sess', team: 'dsh', routeTimeoutMs: 5_000, flushTimeoutMs: 300_000, announce: true, agentName: 'sa-host', peers: [], delegates: [], sessionNodes: true, wakeJoinedOnBoot: false, dshHome: home, superagent: true, ...extra } as unknown as Config)
-  for (const a of [R!, M!, O!]) ctx.emit('agent/created', { agent: a as unknown as Agent })
+  for (const a of [R!, M!, O!, X!]) ctx.emit('agent/created', { agent: a as unknown as Agent })
   const port = (ctx as unknown as { webServer: { port: number } }).webServer.port
   const post = async (path: string, body: unknown): Promise<Record<string, any>> => await (await globalThis.fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json() as Record<string, any>
   const sa = async (body: unknown): Promise<Record<string, any>> => await post('/__dsh_a2a/superagent', body)
   const state = async (): Promise<Record<string, any>> => await (await globalThis.fetch(`http://127.0.0.1:${port}/__dsh_a2a/superagent`)).json() as Record<string, any>
   const tool = async (name: string, from: Agent, args: Record<string, unknown>): Promise<Record<string, any>> => await ctx.tools.get(name)!.execute(args, execAs(from)) as Record<string, any>
-  for (const a of [R!, M!, O!]) await post('/__dsh_a2a/join', { id: String(a.id) })
-  return { ctx, port, R: R!, M: M!, O: O!, post, sa, state, tool, dispose: async () => { await ctx.fiber.dispose() } }
+  for (const a of [R!, M!, O!, X!]) await post('/__dsh_a2a/join', { id: String(a.id) })
+  return { ctx, port, agents, R: R!, M: M!, O: O!, X: X!, post, sa, state, tool, dispose: async () => { await ctx.fiber.dispose() } }
 }
 const triggerIn = (card: string): string => /^trigger (\S+) /m.exec(card)![1]!
 
@@ -243,4 +243,66 @@ describe('superagent engine in the a2a host', () => {
       expect(strangerThread.decisions.map((d: any) => [d.kind, d.reason[0]?.code])).toEqual([['ignore', 'botNotListed']])
     } finally { await m.dispose() }
   }, 90_000)
+
+  it('PR-C1: the A2A executor runs tickets on the fixed members — one slot each, queue, report, relay, follow-ups — and never opens a session', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-exec-'))
+    const m = await mount(home)
+    try {
+      expect(await m.sa({ action: 'settings', settings: { router: R_ID, members: [R_ID] } })).toMatchObject({ ok: false })
+      expect(await m.sa({ action: 'settings', settings: { router: R_ID, members: [M_ID, 'session-ffffffff00000000'] } })).toMatchObject({ ok: false })
+      expect(await m.sa({ action: 'settings', settings: { router: R_ID, members: [M_ID, X_ID] } })).toMatchObject({ ok: true })
+      const sessionsBefore = m.agents.roots().length
+
+      // Three requests, three tickets, two members: two run, one waits.
+      const asks: Array<{ triggerId: string; thread: string }> = []
+      for (const text of ['需求一：加搜索框', '需求二：修复排序', '需求三：补文档']) asks.push(await m.sa({ action: 'request', text }) as never)
+      await until(() => asks.every(a => m.R.steered.some(t => t.includes(a.triggerId))))
+      const tickets: string[] = []
+      for (const [i, a] of asks.entries()) {
+        const routed = await m.tool('superagent_route', m.R, { items: [{ trigger_id: a.triggerId, kind: 'accept', title: `工单${String(i + 1)}`, scope: '小改动', reason: '属主', acknowledgement: '收到' }] })
+        tickets.push(routed.results[0].ticket_id)
+      }
+      const cards = (agent: { steered: string[] }) => agent.steered.filter(t => t.includes('[superagent assignment]'))
+      await until(() => cards(m.M).length === 1 && cards(m.X).length === 1)
+      let s = await m.state()
+      expect(s.executor.bindings).toHaveLength(2)
+      const queued = s.tickets.find((t: any) => !s.executor.bindings.some((b: any) => b.ticketId === t.id))
+      expect(queued.stage).toEqual({ stage: 'working', action: 'queued' })
+      expect(cards(m.M)[0]).toContain('需求一：加搜索框')
+      expect(cards(m.M)[0]).toContain('a2a_ticket_report')
+
+      // The owner's follow-up on X's ticket goes straight to X (Subscription fan-out → executor Input).
+      const xTicket = s.executor.bindings.find((b: any) => b.member === X_ID).ticketId
+      const xAsk = asks[tickets.indexOf(xTicket)]!
+      await m.sa({ action: 'request', text: '补充：要带单元测试', thread: xAsk.thread })
+      await until(() => m.X.steered.some(t => t.includes('[superagent input]') && t.includes('补充：要带单元测试')))
+
+      // Only an assigned member may report; M reports ready → its ticket completes → the router hears it → M takes the waiting one.
+      expect(await m.tool('a2a_ticket_report', m.O, { state: 'ready', summary: 'x' })).toMatchObject({ ok: false, code: 'not-member' })
+      const mTicket = s.executor.bindings.find((b: any) => b.member === M_ID).ticketId
+      const report = await m.tool('a2a_ticket_report', m.M, { state: 'ready', summary: '已提交 PR https://example.invalid/pr/1' })
+      expect(report, JSON.stringify(report)).toMatchObject({ ok: true, ticketId: mTicket })
+      await until(() => m.R.steered.some(t => t.includes('[superagent report]') && t.includes(mTicket)))
+      await until(() => cards(m.M).length === 2)
+      expect(cards(m.M)[1]).toContain(queued.id)
+      s = await m.state()
+      expect(s.tickets.find((t: any) => t.id === mTicket).ended).toMatchObject({ outcome: 'completed' })
+      expect(s.executor.bindings.map((b: any) => b.ticketId).sort()).toEqual([queued.id, xTicket].sort())
+
+      // The router hands the result to the person, on the thread the request came from.
+      const mAsk = asks[tickets.indexOf(mTicket)]!
+      expect(await m.tool('superagent_reply', m.R, { purpose: 'result', ticket_id: mTicket, text: '搜索框已完成：https://example.invalid/pr/1' })).toMatchObject({ ok: true })
+      s = await m.state()
+      expect(s.threads.find((t: any) => t.ref.id === mAsk.thread).replies.map((r: any) => r.message.text)).toContain('搜索框已完成：https://example.invalid/pr/1')
+
+      // Members neither take nor send A2A work.
+      const inbound = await m.tool('a2a_route', m.O, { team: 'dsh/b1111111', message: '私下找成员派活', async: true })
+      expect(String(inbound.error)).toContain('superagent-member-inbound')
+      const outbound = await m.tool('a2a_route', m.M, { team: 'dsh/c2222222', message: '成员私下派活', async: true })
+      expect(String(outbound.error)).toContain('superagent-member-outbound')
+
+      // No session was opened for any ticket.
+      expect(m.agents.roots().length).toBe(sessionsBefore)
+    } finally { await m.dispose() }
+  }, 60_000)
 })

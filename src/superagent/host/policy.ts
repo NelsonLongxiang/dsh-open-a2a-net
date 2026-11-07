@@ -31,6 +31,8 @@ export interface ProactiveRule { readonly name: string; readonly text: string; r
 export interface TeamSettings {
   /** The router (upstream's main Session): a local session id; absent until the owner names one. */
   readonly router?: string
+  /** The executor's fixed member pool: local session ids, one worker slot each (no session is ever opened for a ticket). */
+  readonly members: readonly string[]
   /** Who may originate work, per Source, in that Source's own identities (upstream: identities are never mapped across Sources). */
   readonly allowed: { readonly workbench: readonly string[]; readonly a2a: readonly string[] }
   /** Agents whose messages may become inferred candidates, per Source (only the A2A Source has bots). */
@@ -51,6 +53,7 @@ export interface TeamSettings {
 export const WORKBENCH_OWNER = 'owner'
 
 export const DEFAULT_SETTINGS: TeamSettings = {
+  members: [],
   allowed: { workbench: [WORKBENCH_OWNER], a2a: [] },
   bots: { a2a: [] },
   acceptMode: 'observe',
@@ -109,7 +112,11 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
     }
     rules = parsedRules
   }
-  return { ok: true, settings: { ...(router !== undefined ? { router } : {}), allowed: { workbench, a2a }, bots: { a2a: bots }, acceptMode, rules, sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
+  const members = 'members' in r ? list(r.members, 'members') : current.members
+  if (typeof members === 'string') return { ok: false, error: members }
+  if (members.length > 32) return { ok: false, error: 'at most 32 members' }
+  if (router !== undefined && members.includes(router)) return { ok: false, error: 'the router is not a member: it routes, members work' }
+  return { ok: true, settings: { ...(router !== undefined ? { router } : {}), members, allowed: { workbench, a2a }, bots: { a2a: bots }, acceptMode, rules, sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
 }
 
 /**

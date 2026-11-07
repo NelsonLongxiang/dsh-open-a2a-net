@@ -3,7 +3,7 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "20bc2fd755fdc29d72a3f9cdf0dc05ba9d2bbec5bc4c94e31980e163f9b3efc6",
+    "src/index.ts": "48075d099b5644022098f97e0f5326426059b262ecf6d8e31de9db3e56fb3a33",
     "src/faces/admin.ts": "44151f598119fba66dc61c2671e6b53ec7737502bdf1d9bb522f5757b812eaf5",
     "src/canvas-store.ts": "86240be8bcae39faf0077c68aa48f244928cf132e91a9eae6f5b97177ae3d115",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
@@ -63,7 +63,7 @@
     {
       "page": "p1-arch",
       "cell": "b3",
-      "ref": "src/index.ts:2630",
+      "ref": "src/index.ts:2635",
       "expect": "function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {"
     },
     {
@@ -147,7 +147,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:3069",
+      "ref": "src/index.ts:3074",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -225,7 +225,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:3993",
+      "ref": "src/index.ts:3998",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -267,7 +267,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3408",
+      "ref": "src/index.ts:3413",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
@@ -279,13 +279,13 @@
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2328",
+      "ref": "src/index.ts:2333",
       "expect": "void retryReceiptDelivery({"
     },
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2248",
+      "ref": "src/index.ts:2253",
       "expect": "function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {"
     },
     {
