@@ -346,7 +346,7 @@ describe('superagent engine in the a2a host', () => {
 
       // A member: work tools + a2a_ticket_report + a2a_file_fetch (of this host's tools, the last two). No A2A route, no report
       // outside its ticket, no router tool.
-      expect(scopes.get(M_ID)!.allow).toEqual(['a2a_ticket_report', 'a2a_file_fetch'])
+      expect(scopes.get(M_ID)!.allow).toEqual(['a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_file_fetch'])
       expect(await refusedByRole('a2a_ticket_report', m.M, { state: 'progress', summary: 'x' })).toBe(false)
       expect(await refusedByRole('a2a_file_fetch', m.M, {})).toBe(false)
       for (const name of ['a2a_route', 'a2a_report', 'a2a_teams', 'a2a_tasks', 'a2a_file_send', 'superagent_route']) expect(await refusedByRole(name, m.M, { team: 'dsh/c2222222', message: 'x' }), name).toBe(true)
@@ -371,6 +371,62 @@ describe('superagent engine in the a2a host', () => {
       expect(await refusedByRole('a2a_route', S, { team: 'dsh/c2222222', message: 'x' })).toBe(false)
       // PR-F: every refused call counted once (router 5, member 6, the member's subagent 1, the new router 1).
       expect((await m.state()).refusals.counts['superagent-role-tools']).toBe(13)
+    } finally { await m.dispose() }
+  }, 30_000)
+
+  it('PR-F: a member takes up a person\'s message by its trigger id; what it read before reporting stays with the ticket, an unread one goes to the router at the end', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-takeup-'))
+    const m = await mount(home)
+    try {
+      expect(await m.sa({ action: 'settings', settings: { router: R_ID, members: [M_ID] } })).toMatchObject({ ok: true })
+      const ask = await m.sa({ action: 'request', text: '需求：加一个导出按钮' })
+      await until(() => m.R.steered.some(t => t.includes(ask.triggerId)))
+      const routed = await m.tool('superagent_route', m.R, { items: [{ trigger_id: ask.triggerId, kind: 'accept', title: '导出按钮', scope: '小改动', reason: '属主', acknowledgement: '收到' }] })
+      const ticketId = routed.results[0].ticket_id as string
+      await until(() => m.M.steered.some(t => t.includes('[superagent assignment]')))
+      const card = m.M.steered.find(t => t.includes('[superagent assignment]'))!
+      // The card names the request's trigger and how to take up later messages.
+      expect(card).toContain(`request: trigger ${ask.triggerId}`)
+      expect(card).toContain('a2a_ticket_ack')
+
+      // From here the member stays in one turn (no idle): what it reads counts only by its session's inbox claims.
+      const M = m.M as unknown as { steer: (p: unknown) => void; followup: (p: unknown) => void; steered: string[] }
+      const text = (p: unknown) => typeof p === 'object' && p !== null && 'content' in (p as object) ? (p as { content: Array<{ text?: string }> }).content.map(b => b.text ?? '').join('') : String(p)
+      let claim = true
+      M.followup = (message: unknown) => { queueMicrotask(() => { if (claim) m.ctx.emit('agent/inbox/claimed', { agent: m.M as never, message, turn: 1 } as never); M.steered.push(text(message)) }) }
+      const said = async (body: string) => { const r = await m.sa({ action: 'request', text: body, thread: ask.thread }); await until(() => M.steered.some(t => t.includes(body))); return r.triggerId as string }
+
+      // Three follow-ups the member reads: one it acknowledges, one it hands back, one it just reads.
+      const acked = await said('补充：导出 CSV 就行')
+      const handed = await said('另外：顺便把登录页也改一下')
+      const read = await said('文件名用日期')
+      const input = M.steered.find(t => t.includes('补充：导出 CSV 就行'))!
+      expect(input).toContain(`trigger ${acked}`)
+      expect(input).toContain('(a person)')
+      await until(async () => (await m.state()).tickets[0].inputs.filter((i: any) => [acked, handed, read].includes(i.triggerId) && typeof i.readAt === 'string').length === 3)
+      let s = await m.state()
+      expect(s.tickets[0].inputs.filter((i: any) => [acked, handed, read].includes(i.triggerId)).every((i: any) => typeof i.readAt === 'string')).toBe(true)
+
+      expect(await m.tool('a2a_ticket_ack', m.M, { trigger_id: acked, text: '好的，只做 CSV。' })).toMatchObject({ ok: true, ticketId })
+      s = await m.state()
+      expect(s.threads.find((t: any) => t.ref.id === ask.thread).replies.map((r: any) => r.message.text)).toContain('好的，只做 CSV。')
+      expect(await m.tool('a2a_ticket_handback', m.M, { trigger_id: handed, reason: '登录页不在本工单范围' })).toMatchObject({ ok: true, queued: true })
+      await until(() => m.R.steered.some(t => t.includes('[superagent candidate]') && t.includes(handed)))
+      // The router decides the handed-back message (one Eval per thread at a time).
+      expect((await m.tool('superagent_route', m.R, { items: [{ trigger_id: handed, kind: 'ignore', reason: '另提需求再说' }] })).ok).toBe(true)
+      expect(await m.tool('a2a_ticket_ack', m.O, { trigger_id: acked, text: 'x' })).toMatchObject({ ok: false, code: 'not-member' })
+
+      // One more message arrives that the session never claims before the member reports ready in the same turn.
+      claim = false
+      const unread = await said('还有：按钮要蓝色')
+      expect(await m.tool('a2a_ticket_report', m.M, { state: 'ready', summary: '完成：分支 ticket/x 提交 abc1234' })).toMatchObject({ ok: true })
+      await until(() => m.R.steered.some(t => t.includes('[superagent candidate]') && t.includes(unread)))
+      s = await m.state()
+      expect(s.tickets.find((t: any) => t.id === ticketId).ended).toMatchObject({ outcome: 'completed' })
+      const candidates = m.R.steered.filter(t => t.includes('[superagent candidate]'))
+      expect(candidates.some(t => t.includes(acked))).toBe(false)
+      expect(candidates.some(t => t.includes(read))).toBe(false)
+      expect(candidates.some(t => t.includes(unread))).toBe(true)
     } finally { await m.dispose() }
   }, 30_000)
 })

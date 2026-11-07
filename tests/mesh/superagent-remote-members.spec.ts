@@ -51,6 +51,14 @@ describe('superagent members on other hosts', () => {
         expect(texts(E).some(t => t.includes('[superagent assignment]'))).toBe(false)
         expect((await state(A)).executor.bindings).toMatchObject([{ ticketId }])
 
+        // PR-F: the owner adds a message; B's member acknowledges it by its trigger id — signed to A, a reply on the thread.
+        const extra = await sa(A, { action: 'request', text: '补充：搜索要支持拼音', thread: asked.thread })
+        await until(() => texts(B).some(t => t.includes('[superagent input]') && t.includes(`trigger ${String(extra.triggerId)}`)))
+        expect(await tool(B, 'a2a_ticket_ack', { trigger_id: extra.triggerId, text: '收到，会支持拼音。' })).toMatchObject({ ok: true, ticketId })
+        await until(async () => (await state(A)).threads.some((t: any) => t.replies.some((r: any) => r.message.text === '收到，会支持拼音。')))
+        // The impostor cannot acknowledge for the member either.
+        expect((await tool(E, 'a2a_ticket_ack', { trigger_id: extra.triggerId, text: '冒名确认' })).ok).toBe(false)
+
         // The impostor's report for the same handle is refused on A (another key); the ticket stays open.
         const forged = await tool(E, 'a2a_ticket_report', { state: 'ready', summary: 'forged by an instance sharing the handle' })
         expect(forged.ok, JSON.stringify(forged)).toBe(false)
@@ -58,9 +66,10 @@ describe('superagent members on other hosts', () => {
         // An unsigned assignment to B is refused; a signed one from E (not A's key) is refused too.
         const unsigned = await (await postJson(B.baseUrl, '/a2a/superagent-member', { op: 'assign', member: member, text: 'unsigned work' })).json() as Record<string, any>
         expect(unsigned).toMatchObject({ ok: false, code: 'untrusted-origin' })
-        // PR-F: identity refusals are counted where they happen — the impostor's report on A, the unsigned assignment on B.
+        // PR-F: identity refusals are counted where they happen — the impostor's acknowledgement and report on A, the
+        // unsigned assignment on B.
         const onA = (await state(A)).refusals.counts as Record<string, number>
-        expect((onA['superagent-not-signer'] ?? 0) + (onA['superagent-not-member'] ?? 0), JSON.stringify(onA)).toBe(1)
+        expect((onA['superagent-not-signer'] ?? 0) + (onA['superagent-not-member'] ?? 0), JSON.stringify(onA)).toBe(2)
         expect((await state(B)).refusals.counts).toMatchObject({ 'superagent-untrusted-origin': 1 })
 
         // B's member reports ready: A takes it (key pinned), the ticket completes, A's router hears the report.
