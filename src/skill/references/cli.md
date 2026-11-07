@@ -165,6 +165,18 @@ Files do not go through session messages: use the file channel below, never JPFI
   its snapshot is unreadable or renumbered, or a write to disk failed (the
   next restart would reload older numbers).
 - Text over 4000 chars is cut and marked `truncated: true, chars: <original>`.
+- Rows mailed by a host from next/0.8 on also carry structured fields, so a
+  reader branches on fields and never parses the text:
+  - `task_id` and `context_id` of the delivery;
+  - `proof`, how the host proved the caller when it took the delivery. On
+    the wire face it is the same verdict the text header states:
+    `origin-claim` for 已验证来源, otherwise the value in 未验证（…）, such as
+    `cli-identity`, `claim-mismatch` or `unbound`. A delivery from a session
+    on the home host itself is `in-process` and has no header;
+  - `receipt_for`, the task id a receipt row answers, and `disposition` when
+    its envelope carried one.
+  Older rows carry none of these. Which `proof` values a consumer trusts is
+  that consumer's decision (the superagent Source takes it from its design).
 - The host's state face totals both losses for every handle as
   `cliMailbox: {dropped, truncated}`.
 - `a2a-net inbox` lists the whole mailbox.
@@ -202,7 +214,8 @@ Files do not go through session messages: use the file channel below, never JPFI
   (superagent p1-context-read). It is read-only: it never reads or moves the
   local `inbox.cursor`.
   - Entries with `dir: "in"` are mailbox rows the home host tagged with that
-    `context_id` (`seq`, `from`, `task_id`, `text`). The host tags every
+    `context_id` (`seq`, `from`, `task_id`, `text`, and `proof` /
+    `receipt_for` when the row has them). The host tags every
     mailbox delivery from this version on; `unscoped` counts the rows that
     carry no `context_id` (mailed by an older host) and cannot be placed.
   - Entries with `dir: "out"` are this identity's own routes the host took

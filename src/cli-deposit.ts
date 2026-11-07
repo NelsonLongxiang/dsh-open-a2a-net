@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { verifyCard } from './card.ts'
 import type { ReceiptDisposition } from './receipt.ts'
+import type { AuthProof } from './task-auth.ts'
 
 /** Owner ruling ③: the default AND maximum online window. */
 export const CLI_DEPOSIT_TTL_MS = 4 * 60 * 60 * 1000
@@ -79,13 +80,26 @@ export interface CliMail {
   readonly context_id?: string
   /** p1-receipt-cmd: a receipt's envelope disposition (result / attention), so a reader branches on a field, never the text. */
   readonly disposition?: ReceiptDisposition
+  /**
+   * p1-mail-proof (S18): how the host proved the caller when it took the delivery — the verdict the
+   * wire face already writes into the text header, as a field, so a reader never parses the text.
+   * The local face is in-process. Absent on rows mailed before the field existed.
+   */
+  readonly proof?: AuthProof
+  /** p1-mail-proof: the task id this row's receipt answers, when the row is a receipt. */
+  readonly receipt_for?: string
 }
+
+/** p1-mail-proof: the AuthProof values a restored row may carry (task-auth.ts); anything else is dropped. */
+const MAIL_PROOFS = ['origin-claim', 'claim-mismatch', 'legacy-window', 'unbound', 'cli-identity', 'in-process', 'none'] as const satisfies readonly AuthProof[]
 
 /** p1-context-read: the task and conversation a mailbox delivery belongs to (empty strings are dropped). */
 export interface CliMailThread {
   readonly taskId?: string
   readonly contextId?: string
   readonly disposition?: ReceiptDisposition
+  readonly proof?: AuthProof
+  readonly receiptFor?: string
 }
 
 /** gh#113: one mailbox read — the rows plus what a reader needs to notice loss. */
@@ -116,6 +130,16 @@ interface Snapshot {
 const newEpoch = (): string => randomUUID().replace(/-/g, '').slice(0, 12)
 
 const isSeq = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 1
+
+/** p1-mail-proof: a damaged snapshot never promotes a row's proof — an unknown value (or a non-string receipt_for) is dropped. */
+function sanitizeMail(m: CliMail): CliMail {
+  const { proof, receipt_for: receiptFor, ...rest } = m as CliMail & { proof?: unknown; receipt_for?: unknown }
+  return {
+    ...rest,
+    ...(typeof proof === 'string' && (MAIL_PROOFS as readonly string[]).includes(proof) ? { proof: proof as AuthProof } : {}),
+    ...(typeof receiptFor === 'string' && receiptFor !== '' ? { receipt_for: receiptFor } : {}),
+  }
+}
 
 /** The public key a stored card was published with ('' when it does not parse: never equal to a verified key, so fail-closed). */
 const publicKeyOf = (cardJson: string): string => {
@@ -244,7 +268,8 @@ export class CliDepositStore {
     if (cut) this.truncated.set(handle, (this.truncated.get(handle) ?? 0) + 1)
     list.unshift({ at: this.now(), from, text: cut ? text.slice(0, MAILBOX_TEXT_CAP) : text, seq, ...(cut ? { truncated: true as const, chars: text.length } : {}), ...(dup !== undefined ? { dup } : {}),
       ...(thread?.taskId ? { task_id: thread.taskId } : {}), ...(thread?.contextId ? { context_id: thread.contextId } : {}),
-      ...(thread?.disposition !== undefined ? { disposition: thread.disposition } : {}) })
+      ...(thread?.disposition !== undefined ? { disposition: thread.disposition } : {}),
+      ...(thread?.proof !== undefined ? { proof: thread.proof } : {}), ...(thread?.receiptFor ? { receipt_for: thread.receiptFor } : {}) })
     // gh#113: the cap still holds, but what it pushes out is counted, not lost silently.
     if (list.length > MAILBOX_CAP) this.dropped.set(handle, (this.dropped.get(handle) ?? 0) + list.length - MAILBOX_CAP)
     this.mailbox.set(handle, list.slice(0, MAILBOX_CAP))
@@ -355,7 +380,7 @@ export class CliDepositStore {
       let renumbered = false
       for (const [handle, list] of Object.entries(snapshot.mailbox ?? {})) {
         if (!Array.isArray(list)) continue
-        const rows = list.filter((m): m is CliMail => m !== null && typeof m === 'object')
+        const rows = list.filter((m): m is CliMail => m !== null && typeof m === 'object').map(sanitizeMail)
         const seqs = rows.map(m => m.seq)
         const sound = seqs.every(isSeq) && new Set(seqs).size === seqs.length &&
           seqs.every((n, i) => i === 0 || n < seqs[i - 1]!) && (this.nextSeq.get(handle) ?? 0) > Math.max(0, ...seqs)

@@ -825,7 +825,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const answered = parseReceipt(message)
             // #298: only the answering member's own, unrefused receipt is the duplicate of a sync answer.
             const duplicate = answered !== null && refusedSettlement === undefined && syncAnswered.take(answered.taskId, team, caller)
-            cliDeposits.mail(team, caller, `${directHeader(caller)}\n\n${message}`, duplicate ? 'sync-answered' : undefined, { taskId, contextId, ...(answered?.envelope?.disposition !== undefined ? { disposition: answered.envelope.disposition } : {}) })
+            cliDeposits.mail(team, caller, `${directHeader(caller)}\n\n${message}`, duplicate ? 'sync-answered' : undefined, { taskId, contextId, proof: callerProof, ...(answered !== null ? { receiptFor: answered.taskId } : {}), ...(answered?.envelope?.disposition !== undefined ? { disposition: answered.envelope.disposition } : {}) })
             recordActivity('in', team, caller, true)
             logger.info(`a2a: cli mailbox delivery for ${team} (from ${caller})`)
             const note = `delivered to the mailbox of ${team} — the CLI polls while online`

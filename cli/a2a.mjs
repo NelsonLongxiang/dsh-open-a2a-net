@@ -518,7 +518,8 @@ async function cmdThread() {
   const handle = identity().handle
   const box = await fetchMail(handle)
   const inbound = box.mail.filter(r => r?.context_id === contextId && typeof r.at === 'number').map(r => ({
-    dir: 'in', at: r.at, seq: Number.isInteger(r.seq) ? r.seq : 0, from: r.from, ...(typeof r.task_id === 'string' ? { task_id: r.task_id } : {}), text: r.text,
+    dir: 'in', at: r.at, seq: Number.isInteger(r.seq) ? r.seq : 0, from: r.from, ...(typeof r.task_id === 'string' ? { task_id: r.task_id } : {}),
+    ...(typeof r.proof === 'string' ? { proof: r.proof } : {}), ...(typeof r.receipt_for === 'string' ? { receipt_for: r.receipt_for } : {}), text: r.text,
     ...(r.truncated === true ? { truncated: true, chars: r.chars } : {}), ...(r.dup !== undefined ? { dup: r.dup } : {}),
   }))
   const outbound = sentIn(handle, contextId).map(({ handle: _h, context_id: _c, ...r }) => ({ dir: 'out', ...r }))

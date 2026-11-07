@@ -10,6 +10,7 @@
 - `a2a-net route --json` 附 `class: sent | gone | retry`（#381）。
 - `a2a-net thread <context_id>`：按 context 只读读取一段往来（入向邮件 + 本身份发出的路由），分页（p1-context-read）。宿主从这一版起在每条 CLI 邮件上记 `task_id`、`context_id`，wire 面投递到邮箱的应答也带回 `context_id`；老宿主投递的邮件没有这两个字段，`thread` 计入 `unscoped`。CLI 在身份目录下新增 `sent.jsonl` 发件日志（0600，1 MiB 轮转一代，只在本机）。
 - `a2a-net receipt <task_id> [--attention] <一句话>`：CLI 身份发正式回执的唯一命令（p1-receipt-cmd，回执语义变化，S14）。回执 v2 信封新增可分支键 `disposition`（`result` / `attention`，闭集），既有 `outcome` 不变；attention 回执结清原任务但不写 outcome，账本归档行、`tasks --json`、`a2a_tasks`、CLI 信箱里的回执行都带 `disposition`，attention 行显示为 `unclassified`，不显示 completed。回执走固定 task id `receipt-<task_id>`，一个任务只有一张回执。旧主机忽略这个新键，仍按头行结清。见 [receipt-envelope-v2](protocol/receipt-envelope-v2.md) §2a。
+- CLI 信箱行新增 `proof` 与 `receipt_for`（p1-mail-proof，S18）：宿主把它接收投递时已算出的来源校验结论（wire 面与正文头一致；本地面为 `in-process`）和回执所回答的 task id 写成字段，读者不再解析正文。快照恢复时 `proof` 只收已知取值。`thread` 的入向条目一并带出。准入与正文头不变。
 
 - followup 抛异常后的宿主接纳观察：只有本次预留的精确会话/MessageId 出现在该会话 inbox 或事件流，才返回 DELIVERED 与 `acceptance:inserted`，提示后续未确认、原 task 对账；不代表消费或完成。证明不了仍失败并带 `acceptance:unknown`，提示“接纳状态未知，请用原 task id 对账，不要换 id 重派”，新调用方停止候选 failover；已知插入前拒绝不改。契约与旧客户端限制见[接纳观察](protocol/followup-admission.md)。不新增状态，0.2.2-rc.1 仅源码判断、未运行验证，不进入0.7.0。
 - 已披露限制（#375，全局 2026-11-06）：返回 `acceptance:"inserted"` 时，主机已接纳输入；但如果接收方没有出生行（例如出生提交失败），这一笔不会触发 nudge，也不会挂自动回执，只能由人按原 task id 人工对账。
