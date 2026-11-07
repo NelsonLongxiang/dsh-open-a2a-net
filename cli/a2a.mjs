@@ -53,6 +53,7 @@ usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
 文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR]   (#91: bytes never ride a message)
+superagent: superagent request <text…> [--thread ID] · superagent state   (owner credential: the team's workbench Source)
 
 host:     --home > $A2A_HOME > the home saved by 'a2a init --home URL' > ${DEFAULT_HOME}
 key:      --key > $A2A_KEY (prefer the env var: a --key value stays in shell history)
@@ -606,6 +607,49 @@ async function cmdAdmission() {
   const row = { caller, admitted: out.admitted === true, ...(typeof out.rule === 'string' ? { rule: out.rule } : {}) }
   if (has('--json')) { console.log(JSON.stringify(row)); return }
   console.log(row.admitted ? `[admission] ${caller} → admitted (${String(row.rule)})` : `[admission] ${caller} → not admitted`)
+}
+
+/**
+ * superagent design v4 (PR-B2a): the owner's terminal face of the team's workbench Source. It rides the home's
+ * OWNER control credential ($A2A_KEY / pocket cookie), never a CLI identity: a request made this way is the owner's
+ * (a person addressing the agent), while a CLI identity's message reaches the team only as an agent through the A2A
+ * Source's bot list.
+ */
+async function cmdSuperagent() {
+  const [sub, ...words] = positionals()
+  const url = `${home()}/__dsh_a2a/superagent`
+  const answer = async (res) => {
+    if (res.status === 401 || res.status === 403) die(keyHint(res.status))
+    if (res.status === 404) die(`[superagent] ${home()} runs no superagent team (plugin config superagent: true), or predates it`)
+    return await replyOf(res)
+  }
+  if (sub === 'request') {
+    const text = words.join(' ')
+    if (text === '') usage('usage: a2a superagent request <text…> [--thread <workbench thread id>] [--json]')
+    const thread = flag('--thread')
+    const out = await answer(await homeFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...keyHeaders() },
+      body: JSON.stringify({ action: 'request', text, ...(thread !== undefined ? { thread } : {}) }) }))
+    if (has('--json')) { console.log(JSON.stringify(out)); if (out.ok !== true) process.exitCode = 1; return }
+    if (out.ok !== true) die(`[superagent] request refused: ${String(out.error)}`)
+    console.log(`[superagent] ${String(out.result)} · trigger ${String(out.triggerId)} · thread ${String(out.thread)}${out.result === 'filtered' ? ' (the workbench Source is off)' : ''}`)
+    return
+  }
+  if (sub === 'state') {
+    const out = await answer(await homeFetch(url, { headers: keyHeaders() }))
+    if (has('--json')) { console.log(JSON.stringify(out)); return }
+    if (out.error !== undefined && !Array.isArray(out.tickets)) die(`[superagent] ${String(out.error)}`)
+    const settings = out.settings ?? {}
+    console.log(`[superagent] router ${settings.router ?? '(none)'} · accept mode ${String(settings.acceptMode)} · policy ${String(out.policyVersion)}`)
+    for (const t of out.tickets ?? []) {
+      const stage = t.ended ? `ended ${String(t.ended.outcome)}` : `${String(t.stage?.stage ?? '?')}${t.stage?.action ? ` / ${String(t.stage.action)}` : ''}`
+      console.log(`  ${String(t.id)}  ${stage.padEnd(22)}  ${String(t.title)}`)
+    }
+    for (const th of out.threads ?? []) {
+      for (const r of th.replies ?? []) console.log(`  ↳ ${String(th.ref?.id)} ${String(r.message?.kind)}: ${String(r.message?.text ?? '').slice(0, 120)}`)
+    }
+    return
+  }
+  usage('usage: a2a superagent request <text…> [--thread ID] [--json] · a2a superagent state [--json]')
 }
 
 /** One mailbox read: the rows, plus the gh#113 seq bounds when the host has them. */
@@ -1327,6 +1371,7 @@ async function main() {
   }
   if (cmd === 'receipt') { await cmdReceipt(); return }
   if (cmd === 'admission') { await cmdAdmission(); return }
+  if (cmd === 'superagent') { await cmdSuperagent(); return }
   if (cmd === 'report') {
     const text = positionals().join(' ')
     if (text === '') usage('usage: a2a report <message…> — one-way report into the host process-team mailbox')

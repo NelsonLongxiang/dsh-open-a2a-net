@@ -24,7 +24,7 @@ const failure = (error: unknown): Record<string, JsonValue> => error instanceof 
 
 interface RouteItem {
   trigger_id?: unknown; kind?: unknown; title?: unknown; scope?: unknown; reason?: unknown; acknowledgement?: unknown
-  ticket_id?: unknown; name?: unknown; note?: unknown
+  ticket_id?: unknown; name?: unknown; note?: unknown; rules?: unknown
 }
 const str = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined)
 
@@ -42,14 +42,23 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
     }
     const reason = str(item.reason)
     if (reason === undefined) return { ok: false, trigger_id: triggerId, code: 'missing', error: `${String(kind)} needs a reason` }
-    const evalId = host.engine.candidate(triggerId)?.evalId
+    const candidate = host.engine.candidate(triggerId)
+    const evalId = candidate?.evalId
+    const rules = Array.isArray(item.rules) ? [...new Set(item.rules.filter((r): r is string => typeof r === 'string' && r !== ''))] : []
     let outcome: Outcome
-    if (kind === 'accept') {
+    if (kind === 'accept' && candidate?.strength === 'inferred' && host.settings.acceptMode !== 'auto') {
+      // Upstream accept mode `observe`: a positive assessment of an inferred candidate is recorded as an ignore that says
+      // it would accept, with the rules it matched; nothing is accepted.
+      if (rules.length === 0) return { ok: false, trigger_id: triggerId, code: 'rules', error: 'an inferred candidate is assessed against the enabled rules: name the rules it matches' }
+      outcome = { kind: 'ignore', reason: { code: 'observed', values: { text: rules.join(', ') } }, audit: { wouldAccept: true, rules, assessed: reason } }
+    } else if (kind === 'accept') {
       const title = str(item.title), scope = str(item.scope)
       if (title === undefined || scope === undefined) return { ok: false, trigger_id: triggerId, code: 'missing', error: 'accept needs a title and a scope' }
       const acknowledgement = str(item.acknowledgement), name = str(item.name), note = str(item.note)
-      outcome = { kind: 'accept', title, scope, reason, ...(acknowledgement !== undefined ? { acknowledgement } : {}), ...(name !== undefined ? { name } : {}), ...(note !== undefined ? { note } : {}) }
-    } else if (kind === 'ignore') outcome = { kind: 'ignore', reason }
+      outcome = { kind: 'accept', title, scope, reason, ...(acknowledgement !== undefined ? { acknowledgement } : {}), ...(name !== undefined ? { name } : {}), ...(note !== undefined ? { note } : {}), ...(rules.length > 0 ? { rules } : {}) }
+    } else if (kind === 'ignore') outcome = candidate?.strength === 'inferred' && rules.length === 0 && item.rules !== undefined
+      ? { kind: 'ignore', reason, audit: { assessed: true, rules: [] } }
+      : { kind: 'ignore', reason }
     else if (kind === 'stop') {
       const ticketId = str(item.ticket_id)
       if (ticketId === undefined) return { ok: false, trigger_id: triggerId, code: 'missing', error: 'stop needs ticket_id' }
@@ -72,7 +81,7 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
     name: 'superagent_route',
     description: 'Team router only: decide candidates by trigger_id. Each item is one of accept (one ticket for the request: title, scope, reason, acknowledgement in the request language; no implementation plan), attach (ticket_id the message explicitly points at), stop (ticket_id a person asked to stop) or ignore (reason). Items are processed independently.',
     parameters: {
-      items: { type: 'array', required: true, items: { type: 'object', additionalProperties: true }, description: 'Routing items: { trigger_id, kind, title?, scope?, reason?, acknowledgement?, ticket_id?, name?, note? }' },
+      items: { type: 'array', required: true, items: { type: 'object', additionalProperties: true }, description: 'Routing items: { trigger_id, kind, title?, scope?, reason?, acknowledgement?, ticket_id?, name?, note?, rules? }. For an inferred candidate, rules names the enabled rules it matches (required to accept; observe mode records it as would-accept); rules: [] records an assessed ignore.' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('superagent route', value) },
     presentCall: args => ({ card: 'generic', title: `superagent route (${String(Array.isArray(args.items) ? args.items.length : 0)})`, kind: 'other', rawInput: args }),

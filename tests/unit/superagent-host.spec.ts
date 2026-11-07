@@ -78,11 +78,11 @@ describe('JsonRepositories', () => {
 
 describe('team policy (upstream docs/002, accept mode off)', () => {
   const thread = (subscriptions: string[] = []) => ({ key: 'workbench:t1', ref: { source: 'workbench', id: 't1' }, createdAt: '', subscriptions, correlated: [], pending: [], meta: {} })
-  const policy = teamPolicy(settings({ allowed: { workbench: ['owner'], a2a: ['dsh/aaaaaaaa'] } }))
-  it('an allowed sender addressing the agent is explicit; nothing else is admitted while the accept mode is off', () => {
+  const policy = teamPolicy(settings({ allowed: { workbench: ['owner'], a2a: ['dsh/aaaaaaaa'] }, acceptMode: 'off' }))
+  it('an allowed sender addressing the agent is explicit; nothing inferred while the accept mode is off', () => {
     expect(policy.gate(wb('1'), thread(), [])).toMatchObject({ admissible: true, strength: 'explicit', basis: { via: 'addressed', addressed: 'direct', sender: 'owner' } })
     expect(policy.gate(wb('1', 't1', { actor: { source: 'workbench', id: 'stranger' } }), thread(), [])).toEqual({ admissible: false, reason: 'notListed' })
-    expect(policy.gate(wb('1', 't1', { human: false }), thread(), [])).toEqual({ admissible: false, reason: 'notHuman' })
+    expect(policy.gate(wb('1', 't1', { human: false }), thread(), [])).toEqual({ admissible: false, reason: 'botNotListed' })
     const { addressed: _a, ...unaddressed } = wb('1')
     expect(policy.gate(unaddressed, thread(), [])).toEqual({ admissible: false, reason: 'notAddressed' })
     expect(policy.gate(unaddressed, thread(['k1']), [])).toMatchObject({ admissible: true, strength: 'explicit', basis: { via: 'followup' } })
@@ -128,5 +128,82 @@ describe('candidate card', () => {
     expect(card).toContain('request 1')
     expect(card).toContain('superagent_route')
     expect(card).toContain('do not add an implementation plan')
+  })
+})
+
+describe('PR-B2a: bots, accept modes and rules (upstream docs/002)', () => {
+  const thread = (subscriptions: string[] = []) => ({ key: 'a2a:t1', ref: { source: 'a2a', id: 't1' }, createdAt: '', subscriptions, correlated: [], pending: [], meta: {} })
+  const bot = (over: Partial<Trigger> = {}): Trigger => ({ ...wb('9'), source: 'a2a', threads: [{ source: 'a2a', id: 't1' }], actor: { source: 'a2a', id: 'seat/0123456789abcdef' }, human: false, addressed: 'direct', ...over })
+  const rules = [{ name: 'deps', text: 'Upgrade a pinned dependency when a bot reports it.', enabled: true }, { name: 'off-rule', text: 'disabled', enabled: false }]
+  const with_ = (over: Partial<TeamSettings>) => teamPolicy(settings({ bots: { a2a: ['seat/0123456789abcdef'] }, rules, ...over }))
+  it('a listed bot addressing the agent is an inferred candidate unless the mode is off; nothing else of a bot', () => {
+    expect(with_({ acceptMode: 'observe' }).gate(bot(), thread(), [])).toMatchObject({ admissible: true, strength: 'inferred', basis: { via: 'bot', sender: 'seat/0123456789abcdef', observation: { mode: 'observe' } } })
+    expect(with_({ acceptMode: 'off' }).gate(bot(), thread(), [])).toEqual({ admissible: false, reason: 'acceptOff' })
+    expect(with_({ acceptMode: 'auto' }).gate(bot({ actor: { source: 'a2a', id: 'other/0123456789abcdef' } }), thread(), [])).toEqual({ admissible: false, reason: 'botNotListed' })
+    const { addressed: _a, ...unaddressed } = bot()
+    expect(with_({ acceptMode: 'auto' }).gate(unaddressed, thread(), [])).toEqual({ admissible: false, reason: 'notAddressed' })
+    // A bot listed under a2a is no workbench person, and an A2A handle is never human (a2a-watch D7).
+    expect(with_({ acceptMode: 'auto' }).gate(bot({ source: 'workbench' }), thread(), [])).toEqual({ admissible: false, reason: 'botNotListed' })
+  })
+  it('an unlisted person\'s follow-up is inferred outside off', () => {
+    const p = teamPolicy(settings({ acceptMode: 'observe' }))
+    expect(p.gate(wb('1', 't1', { actor: { source: 'workbench', id: 'guest' } }), thread(['k1']), [])).toMatchObject({ admissible: true, strength: 'inferred', basis: { via: 'followup' } })
+  })
+  it('accepting inferred work needs auto and only enabled rules', () => {
+    expect(with_({ acceptMode: 'auto' }).admitsInferred(['deps'])).toBe(true)
+    expect(with_({ acceptMode: 'auto' }).admitsInferred([])).toBe(false)
+    expect(with_({ acceptMode: 'auto' }).admitsInferred(['off-rule'])).toBe(false)
+    expect(with_({ acceptMode: 'auto' }).admitsInferred(['deps', 'unknown'])).toBe(false)
+    expect(with_({ acceptMode: 'observe' }).admitsInferred(['deps'])).toBe(false)
+  })
+  it('revalidation of a bot mandate needs the bot still listed, auto, and its rules still enabled', () => {
+    const mandate = { strength: 'inferred' as const, policyVersion: 'x', basis: { via: 'bot' as const, addressed: 'direct' as const, sender: 'seat/0123456789abcdef', rules: ['deps'], observation: { mode: 'auto' as const } }, actor: { source: 'a2a', id: 'seat/0123456789abcdef' }, scope: 's' }
+    expect(with_({ acceptMode: 'auto' }).revalidate(mandate)).toBe(true)
+    expect(with_({ acceptMode: 'observe' }).revalidate(mandate)).toBe(false)
+    expect(with_({ acceptMode: 'auto', bots: { a2a: [] } }).revalidate(mandate)).toBe(false)
+    expect(with_({ acceptMode: 'auto', rules: [{ ...rules[0]!, enabled: false }] }).revalidate(mandate)).toBe(false)
+  })
+  it('the Policy version moves with the mode, the bot list and the rules', () => {
+    const base = policyVersion(settings())
+    expect(policyVersion(settings({ acceptMode: 'auto' }))).not.toBe(base)
+    expect(policyVersion(settings({ bots: { a2a: ['seat/0123456789abcdef'] } }))).not.toBe(base)
+    expect(policyVersion(settings({ rules }))).not.toBe(base)
+    expect(policyVersion(settings({ rules: [...rules].reverse() }))).toBe(policyVersion(settings({ rules })))
+  })
+  it('settings validate bots, mode and rules', () => {
+    expect(parseSettings({ acceptMode: 'auto', bots: { a2a: ['seat/0123456789abcdef'] }, rules: [{ name: 'deps', text: 't' }] }, DEFAULT_SETTINGS)).toMatchObject({ ok: true, settings: { acceptMode: 'auto', rules: [{ name: 'deps', text: 't', enabled: true }] } })
+    expect(parseSettings({ acceptMode: 'always' }, DEFAULT_SETTINGS)).toMatchObject({ ok: false })
+    expect(parseSettings({ bots: { workbench: ['x'] } }, DEFAULT_SETTINGS)).toMatchObject({ ok: false })
+    expect(parseSettings({ rules: [{ name: 'Bad Name', text: 't' }] }, DEFAULT_SETTINGS)).toMatchObject({ ok: false })
+    expect(parseSettings({ rules: [{ name: 'a', text: 't' }, { name: 'a', text: 'u' }] }, DEFAULT_SETTINGS)).toMatchObject({ ok: false })
+    expect(DEFAULT_SETTINGS.acceptMode).toBe('observe')
+  })
+})
+
+describe('PR-B2a: the router tool on inferred candidates', () => {
+  it('observe records would-accept; auto accepts on matched enabled rules; a bot can never stop', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const home = mkdtempSync(join(tmpdir(), 'sa-b2a-'))
+    const host = new SuperagentHost({ home, logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {} })
+    expect(host.saveSettings({ router: 'session-r', sources: { a2a: true }, bots: { a2a: ['seat/0123456789abcdef'] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
+    const botTrigger = (id: string, thread: string): Trigger => ({ ...wb(id, thread), source: 'a2a', threads: [{ source: 'a2a', id: thread }], actor: { source: 'a2a', id: 'seat/0123456789abcdef' }, human: false, channel: { source: 'a2a', thread, address: {} } })
+    host.engine.receive(botTrigger('1', 'b1')); host.pass()
+    expect(host.engine.candidate('1')?.strength).toBe('inferred')
+    expect(routeItem(host, { trigger_id: '1', kind: 'accept', title: 't', scope: 's', reason: 'matches deps' })).toMatchObject({ ok: false, code: 'rules' })
+    expect(routeItem(host, { trigger_id: '1', kind: 'accept', title: 't', scope: 's', reason: 'matches deps', rules: ['deps'] })).toMatchObject({ ok: true, decision: 'ignore', reason: [{ code: 'observed', values: { text: 'deps' } }] })
+    expect(host.store.tickets.list()).toHaveLength(0)
+    expect(host.saveSettings({ acceptMode: 'auto' }, () => true)).toMatchObject({ ok: true })
+    host.engine.receive(botTrigger('2', 'b2')); host.pass()
+    expect(routeItem(host, { trigger_id: '2', kind: 'accept', title: 'bump', scope: 'one dep', reason: 'matches deps', rules: ['deps'] })).toMatchObject({ ok: true, decision: 'accept' })
+    const ticket = host.store.tickets.list()[0]!
+    expect(ticket.mandate).toMatchObject({ strength: 'inferred', basis: { via: 'bot', rules: ['deps'] } })
+    // A bot asking to stop is never a stop (upstream stopNotExplicit).
+    host.engine.receive(botTrigger('3', 'b3')); host.pass()
+    expect(routeItem(host, { trigger_id: '3', kind: 'stop', ticket_id: ticket.id, reason: 'bot says stop' })).toMatchObject({ ok: true, decision: 'ignore', reason: [{ code: 'stopNotExplicit' }] })
+    expect(host.store.tickets.get(ticket.id)?.ended).toBeUndefined()
+    // A rule it did not match, or a disabled one, accepts nothing.
+    host.engine.receive(botTrigger('4', 'b4')); host.pass()
+    expect(routeItem(host, { trigger_id: '4', kind: 'accept', title: 'x', scope: 'y', reason: 'z', rules: ['nope'] })).toMatchObject({ ok: false })
   })
 })
