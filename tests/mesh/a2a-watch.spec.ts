@@ -1,0 +1,122 @@
+// @vitest-environment node
+/**
+ * superagent a2a Source (p2a-source-code) against a real loopback host and the real `a2a-net` CLI: the Source's own
+ * deposited identity reads its mailbox with `inbox --after`, translates rows into Triggers, judges trust from the host's
+ * `proof` field only, keeps its cursor, replays without second Triggers, renews its deposit and reads thread context.
+ * Temporary homes live under tmp/ (gitignored) and are removed when the file's tests end (tests/temp-dirs.ts). Each holds a
+ * throwaway test identity's private key in cli.json (mode 0600), as the CLI keeps one; no real key, host token or A2A_KEY
+ * is written anywhere, and nothing is logged. No production host is contacted: the host runs on loopback.
+ */
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { generateKeyPairSync } from 'node:crypto'
+import { spawn } from 'node:child_process'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { mkdtempSync } from '../temp-dirs.ts'
+import { bootNode, cliEnv, reservePort } from './harness.ts'
+import { signCard } from '../../src/card.ts'
+import { a2aKind, KV, pollMailbox, renewDeposit, scope, type A2aConfig } from '../../src/superagent/a2a-watch.ts'
+import { key, type Health, type SourceContext, type Trigger } from '../../src/superagent/source-types.ts'
+
+const SOURCE = { name: 'shadow-src', uuid: 'a1b2c3d4e5f60718', key: generateKeyPairSync('ed25519').privateKey }
+const WRITER = { name: 'shadow-writer', uuid: 'a1b2c3d4e5f60719', key: generateKeyPairSync('ed25519').privateKey }
+const handleOf = (id: typeof SOURCE) => `${id.name}/${id.uuid}`
+const OBSERVE: A2aConfig = { mode: 'observe', pollSeconds: 30, renewMinutes: 60 }
+
+beforeEach(() => { vi.stubGlobal('WebSocket', function throwOnSocket() { throw new Error('no socket') }) })
+afterEach(() => { vi.unstubAllGlobals() })
+
+function cli(home: string, args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [join(process.cwd(), 'cli/a2a.mjs'), ...args], { env: cliEnv(home) })
+    let stdout = '', stderr = ''
+    child.stdout.on('data', d => { stdout += String(d) }); child.stderr.on('data', d => { stderr += String(d) })
+    child.on('error', reject); child.on('close', code => resolve({ code, stdout, stderr }))
+  })
+}
+
+/** superagent's Commands as the Source sees it: `a2a-net` is the real CLI under the Source identity's home. */
+function commandsFor(home: string) {
+  const commands = {
+    withSignal: () => commands,
+    run: async (program: string, args: string[]) => {
+      if (program !== 'a2a-net') throw new Error(`unexpected program ${program}`)
+      const out = await cli(home, args)
+      if (out.code !== 0) throw new Error(`a2a-net exited ${String(out.code)}`)
+      return out.stdout
+    },
+  }
+  return commands
+}
+
+describe('superagent p2a: a2a Source on a real host (shadow mode)', () => {
+  it('reads its mailbox, trusts only host proof, keeps its cursor, replays without second Triggers', async () => {
+    mkdirSync(join(process.cwd(), 'tmp'), { recursive: true })
+    const a = await bootNode({ name: 'A', session: 'mesh-a2a-watch', team: 'dsh', sessionNodes: true, port: await reservePort() })
+    try {
+      const homes: Record<string, string> = {}
+      for (const id of [SOURCE, WRITER]) {
+        const card = signCard({ name: id.name, session: `cli-${id.name}`, team: handleOf(id), capabilities: { route: true, async: true }, expiresAt: Date.now() + 172_800_000 }, id.key)
+        const dep = await fetch(`${a.baseUrl}/__dsh_a2a/cli-deposit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'publish', card: JSON.stringify(card) }) }).then(r => r.json() as Promise<{ ok?: boolean }>)
+        expect(dep.ok).toBe(true)
+        const home = mkdtempSync(join(process.cwd(), 'tmp', 'p2a-a2a-watch-'))
+        writeFileSync(join(home, 'cli.json'), JSON.stringify({ name: id.name, uuid: id.uuid, handle: handleOf(id), home: a.baseUrl, privateKeyPem: id.key.export({ format: 'pem', type: 'pkcs8' }) }), { mode: 0o600 })
+        homes[id.name] = home
+      }
+      const signal = { signal: new AbortController().signal } as never
+      // In-process caller (trusted), a CLI caller (cli-identity: not trusted), and an in-process receipt.
+      expect((await a.ctx.tools.get('a2a_route')?.execute({ team: handleOf(SOURCE), message: 'from the home host', context_id: 'ctx-local' }, signal) as { ok?: boolean })?.ok).toBe(true)
+      expect((await cli(homes[WRITER.name], ['route', handleOf(SOURCE), 'from a cli', '--task', 'w-1', '--context', 'ctx-cli'])).code).toBe(0)
+      expect((await a.ctx.tools.get('a2a_route')?.execute({ team: handleOf(SOURCE), message: '[A2A receipt] task job-1 done' }, signal) as { ok?: boolean })?.ok).toBe(true)
+
+      const state = new Map<string, unknown>()
+      const ids = new Set<string>()
+      const taken: Array<{ trigger: Trigger; result: string }> = []
+      const reports: Array<[string, Health]> = []
+      const ctx: SourceContext = {
+        commands: commandsFor(homes[SOURCE.name]), ready: Promise.resolve(), configured: () => true,
+        config: <C extends Record<string, unknown>>() => OBSERVE as unknown as C,
+        // The Engine's intake as far as the Source can see it: stored once by id, filtered by the kind's scope.
+        receive: async trigger => {
+          const result = ids.has(trigger.id) ? 'duplicate' : scope(trigger).listened ? 'stored' : 'filtered'
+          ids.add(trigger.id); taken.push({ trigger, result }); return result as 'stored' | 'duplicate' | 'filtered'
+        },
+        state: { get: <V>(k: string) => state.get(k) as V | undefined, set: (k, v) => { if (v === undefined) state.delete(k); else state.set(k, v) } },
+        threads: { describe: () => {} },
+        report: (entry, h) => { reports.push([entry, h]) },
+      }
+
+      const first = await pollMailbox(ctx, new AbortController().signal)
+      expect(first).toMatchObject({ read: 3, triggers: 3, duplicateCopies: 0, unreadable: 0 })
+      expect(reports).toEqual([])
+      const byText = (s: string) => taken.find(t => t.trigger.text.includes(s))!
+      const local = byText('from the home host')
+      expect(local.trigger.meta).toMatchObject({ proof: 'in-process', contextId: 'ctx-local', s13Strength: 'explicit-if-allowed' })
+      expect(local.trigger.id).toBe(key('a2a', local.trigger.actor.id, String(local.trigger.meta.taskId)))
+      expect(local).toMatchObject({ result: 'stored', trigger: { human: false, addressed: 'direct', threads: [{ source: 'a2a', id: 'ctx-local' }] } })
+      expect(byText('from a cli')).toMatchObject({ result: 'filtered', trigger: { actor: { id: handleOf(WRITER) }, meta: { proof: 'cli-identity', taskId: 'w-1' } } })
+      expect(scope(byText('from a cli').trigger)).toEqual({ listened: false, reason: 'unverified' })
+      expect(scope(byText('task job-1').trigger)).toEqual({ listened: false, reason: 'receipt' })
+      const cursor = state.get(KV.cursor)
+      expect(cursor).toMatch(/^[^:]+:3$/)
+
+      // Caught up: nothing new, the cursor stays.
+      expect(await pollMailbox(ctx, new AbortController().signal)).toMatchObject({ read: 0, triggers: 0, next: cursor })
+      // A replay from the start (a lost cursor) makes no second Trigger.
+      state.delete(KV.cursor)
+      expect(await pollMailbox(ctx, new AbortController().signal)).toMatchObject({ read: 3, triggers: 3 })
+      expect(taken.slice(3).map(t => t.result)).toEqual(['duplicate', 'duplicate', 'duplicate'])
+
+      // Thread context through the real `a2a-net thread`.
+      const part = await a2aKind.threadContext.read(ctx.commands, local.trigger, 'thread', undefined, OBSERVE)
+      expect(part.messages).toEqual([expect.objectContaining({ from: local.trigger.actor.id, text: expect.stringContaining('from the home host'), bot: true })])
+      // The deposit renews through the real `a2a-net publish`.
+      expect(await renewDeposit(ctx, OBSERVE, new AbortController().signal)).toBe(true)
+      expect(typeof state.get(KV.renewedAt)).toBe('number')
+      // Shadow mode: no reply can go anywhere.
+      expect(a2aKind.channel.allowed(local.trigger.channel!.address, OBSERVE)).toBe(false)
+    } finally {
+      await a.dispose()
+    }
+  }, 90_000)
+})

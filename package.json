@@ -34,6 +34,10 @@
       "types": "./lib/types/a2a-client.d.ts",
       "default": "./lib/a2a-client.js"
     },
+    "./a2a-watch": {
+      "types": "./lib/types/superagent/a2a-watch.d.ts",
+      "default": "./lib/superagent/a2a-watch.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
