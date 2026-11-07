@@ -87,6 +87,7 @@ describe('superagent p2: shadow collector on a real host overflow', () => {
           set: (k, v) => { if (v === undefined) db.prepare('DELETE FROM kv WHERE key = ?').run(k); else db.prepare('INSERT INTO kv VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(k, JSON.stringify(v)) },
         },
         threads: { describe: () => {} },
+        tickets: { get: () => undefined },
         report: () => {},
       }
 
@@ -106,24 +107,26 @@ describe('superagent p2: shadow collector on a real host overflow', () => {
       const windowTo = new Date(Date.now() + 60_000).toISOString()
       const r = spawnSync(process.execPath, ['scripts/verify-probe.mjs', '--a2a-shadow', dbPath, '--cli-home', home, '--window', `${windowFrom}..${windowTo}`, '--out', out], { cwd: process.cwd(), encoding: 'utf8' })
       expect(r.status, r.stdout + r.stderr).toBe(0)
-      expect(JSON.parse(r.stdout)).toMatchObject({ handle: SOURCE.handle, counts: { rows: 3 + MAILBOX_CAP, pages: 2, health: 1, seq_gaps: 6, triggers: 3 + MAILBOX_CAP } })
+      expect(JSON.parse(r.stdout)).toMatchObject({ handle: SOURCE.handle, counts: { rows: 3 + MAILBOX_CAP, pages: 3, health: 1, seq_gaps: 6, triggers: 3 + MAILBOX_CAP } })
 
       const snap = new DatabaseSync(out, { readOnly: true })
       try {
-        // The host said lost=6 after seq 3: the gaps are 4..9 and every one is covered.
+        // The host said lost=6 after seq 3: the gaps are 4..9 and every one is covered. Plan P (p3): the first read's header,
+        // that round's heartbeat (the first one), then the loss round's header.
         expect(snap.prepare('SELECT after, lost, loss FROM shadow_pages ORDER BY rowid').all()).toEqual([
-          { after: 'start', lost: 0, loss: 0 }, { after: `${epoch}:3`, lost: 6, loss: 1 }])
+          { after: 'start', lost: 0, loss: 0 }, { after: 'start', lost: 0, loss: 0 }, { after: `${epoch}:3`, lost: 6, loss: 1 }])
         expect(snap.prepare('SELECT epoch, seq, covered FROM shadow_seq_gaps ORDER BY seq').all()).toEqual([4, 5, 6, 7, 8, 9].map(seq => ({ epoch, seq, covered: 1 })))
         // A7: the loss round left an a2a error health record at the same at.
         expect(snap.prepare(`SELECT COUNT(*) AS n FROM shadow_pages p JOIN shadow_health h ON h.at = p.at AND h.entry = 'a2a' AND h.state = 'error' WHERE p.loss = 1`).get()).toEqual({ n: 1 })
-        // Lookup columns on real data: each row finds its (filtered) Trigger once, the loss page its health error, all in the window.
+        // Lookup columns on real data: each row finds its Trigger once (deposited CLI callers are linked since p3, so stored),
+        // the loss page its health error, all in the window.
         expect(snap.prepare(`SELECT trigger_present, trigger_filtered_code, seq_records, COUNT(*) AS n FROM shadow_rows GROUP BY 1, 2, 3`).all())
-          .toEqual([{ trigger_present: 1, trigger_filtered_code: 'unverified', seq_records: 1, n: 3 + MAILBOX_CAP }])
-        expect(snap.prepare('SELECT loss, health_error FROM shadow_pages ORDER BY rowid').all()).toEqual([{ loss: 0, health_error: 0 }, { loss: 1, health_error: 1 }])
+          .toEqual([{ trigger_present: 1, trigger_filtered_code: null, seq_records: 1, n: 3 + MAILBOX_CAP }])
+        expect(snap.prepare('SELECT loss, health_error FROM shadow_pages ORDER BY rowid').all()).toEqual([{ loss: 0, health_error: 0 }, { loss: 0, health_error: 0 }, { loss: 1, health_error: 1 }])
         expect(snap.prepare('SELECT in_window, COUNT(*) AS n FROM shadow_triggers GROUP BY 1').all()).toEqual([{ in_window: 1, n: 3 + MAILBOX_CAP }])
         expect(snap.prepare('SELECT name, n FROM shadow_tally ORDER BY name').all()).toEqual(['gaps_uncovered', 'outbox_sent', 'source_sent', 'tickets_a2a'].map(name => ({ name, n: 0 })))
-        // Every row's trigger_id is a stored Trigger (cli callers: all filtered unverified), and no text came across.
-        expect(snap.prepare(`SELECT COUNT(*) AS n FROM shadow_rows r LEFT JOIN shadow_triggers t ON t.id = r.trigger_id WHERE t.id IS NULL OR t.filtered_code IS NOT 'unverified' OR r.outcome IS NOT 'filtered:unverified'`).get()).toEqual({ n: 0 })
+        // Every row's trigger_id is a stored Trigger (cli callers: all stored, no filter code), and no text came across.
+        expect(snap.prepare(`SELECT COUNT(*) AS n FROM shadow_rows r LEFT JOIN shadow_triggers t ON t.id = r.trigger_id WHERE t.id IS NULL OR t.filtered_code IS NOT NULL OR r.outcome IS NOT 'stored'`).get()).toEqual({ n: 0 })
       } finally { snap.close() }
       expect(readFileSync(out).toString('latin1')).not.toContain('SECRET-BODY')
 

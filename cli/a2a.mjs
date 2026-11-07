@@ -64,6 +64,9 @@ route:    async by default (delivered + task id; the receipt comes to 'a2a inbox
           the SAME id, and --task ID resends an earlier one — the host runs one task id at most once
 --json:   teams / tasks / probe / route / report / inbox print the raw rows instead of the table
           route --json adds class: sent | gone | retry (structured fields only; gone = resending the same task can never succeed)
+          route/receipt --json --exit-class: the exit code carries the class as well — 0 sent (or the same receipt
+          replayed), 4 gone, 5 the task already carries a different receipt (receipt only), 1 retry or any other failure;
+          without --exit-class every exit code stays as it was
 
 inbox:    bare 'inbox' lists the whole mailbox (newest first, the host keeps 64; mail it pushed out is counted)
           --new         only mail newer than the local cursor (~/.a2a/inbox.cursor), then advance it
@@ -98,7 +101,7 @@ admission: admission <caller> [--local] [--json]   how <caller> would be admitte
 
 /** Flags that take a value (both '--home URL' and '--home=URL'); the rest are switches. */
 const VALUE_FLAGS = new Set(['--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome'])
-const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--owes', '--local'])
+const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--owes', '--local', '--exit-class'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
 const HOOK_MODE = process.argv.includes('--hook')
@@ -1068,6 +1071,14 @@ async function cmdFileFetch() {
  * routed/result, a replay's prior), never from error text. 'gone'
  * only where resending the same task can never succeed; anything unknown retries.
  */
+/**
+ * superagent p3 G3 (design P3-7): with --exit-class the exit code carries the class, because a caller that runs the CLI
+ * through a command runner may keep the exit code and lose stdout. Opt-in only; without it no exit code changes.
+ */
+const CLASS_EXIT = { sent: 0, gone: 4, retry: 1 }
+const RECEIPT_CONFLICT_EXIT = 5
+const exitClass = () => has('--exit-class')
+
 function sendClass(out, prior) {
   // A replay proves the host already holds this id: it landed, unless it already failed.
   if (prior !== undefined) return prior.status === 'failed' ? 'gone' : 'sent'
@@ -1078,6 +1089,7 @@ function sendClass(out, prior) {
 }
 
 async function sendDirect(verb, body) {
+  if (exitClass() && !has('--json')) usage(`${verb}: --exit-class needs --json (the class it exits with is the one --json prints)`)
   const { res } = await postDirect(body)
   // Exhausted 5xx resends: the outcome is unknown, not "not delivered" (the hint above names the safe resend).
   if (res.status >= 500 && !has('--json')) die(`[${verb}] not confirmed (HTTP ${String(res.status)}) — the task may have landed; use the --task resend above`)
@@ -1089,6 +1101,8 @@ async function sendDirect(verb, body) {
   const out = await replyOf(res)
   if (out.replay !== true) {
     if (has('--json')) console.log(JSON.stringify({ ...out, class: sendClass(out) }, null, 2))
+    // A task id already used for another message: a receipt says so with 5; a route exits with the class --json printed.
+    if (exitClass()) process.exit(verb === 'receipt' ? RECEIPT_CONFLICT_EXIT : CLASS_EXIT[sendClass(out)])
     // p1-receipt-cmd: one receipt per task — a follow-up is a new task in the same context, never a second receipt.
     if (verb === 'receipt') die(`[receipt] task ${String(body.task_id)} already carried a different receipt — a task gets one receipt; send any follow-up as a new task in the same context (a2a route <team> … --context <id>)`)
     die(`[${verb}] task ${String(body.task_id)} was already used for a different message (or with${body.wait === true ? 'out' : ''} --sync) — not sent; drop --task to send it as a new task`)
@@ -1100,6 +1114,7 @@ async function sendDirect(verb, body) {
   // leaves refused async rounds pending).
   if (has('--json')) {
     console.log(JSON.stringify({ ...out, received: true, ...(prior.status === 'completed' ? { delivered: true } : prior.status === 'failed' ? { delivered: false } : {}), prior, class: sendClass(out, prior) }, null, 2))
+    if (exitClass()) { process.exitCode = CLASS_EXIT[sendClass(out, prior)]; return }
     if (prior.status === 'failed' || (body.wait === true && prior.status !== 'completed')) process.exitCode = 1
     return
   }
@@ -1122,6 +1137,7 @@ async function sendDirect(verb, body) {
 function printDelivery(verb, res, out) {
   if (has('--json')) {
     console.log(JSON.stringify({ ...out, class: sendClass(out) }, null, 2))
+    if (exitClass()) { process.exitCode = CLASS_EXIT[sendClass(out)]; return }
     if (out.delivered !== true) process.exitCode = 1
     return
   }

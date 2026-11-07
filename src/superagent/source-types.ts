@@ -43,6 +43,12 @@ export type FieldSpec =
 export interface ContextMessage { id: string; from: string; at: string; text: string; bot?: true }
 export interface ContextPart { messages: ContextMessage[]; next?: string; body: Record<string, unknown> }
 
+/** How a ticket ended (upstream TicketOutcome / TicketEndBy); the a2a Source maps it to a receipt outcome (p3 design P3-6). */
+export type TicketOutcome = 'completed' | 'merged' | 'closed' | 'dropped' | 'stopped'
+export type TicketEndBy = 'executor' | 'human'
+/** The part of a ticket the a2a Source reads: whether and how it ended. */
+export interface TicketView { id: string; ended?: { at: string; by: TicketEndBy; outcome: TicketOutcome; reason?: string } }
+
 /** What the a2a Source uses of the context superagent hands a Source plugin. */
 export interface SourceContext {
   readonly commands: Commands
@@ -52,6 +58,7 @@ export interface SourceContext {
   receive(trigger: Trigger): ReceiveResult | Promise<ReceiveResult>
   state: { get<V>(key: string): V | undefined; set<V>(key: string, value: V | undefined): void }
   threads: { describe(key: string, description: { label?: string; url?: string }): void }
+  tickets: { get(id: string): TicketView | undefined }
   report(entry: string, health: Health): void
 }
 

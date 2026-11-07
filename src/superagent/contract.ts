@@ -32,3 +32,7 @@ export type CommandsFromUpstream = Holds<Extends<Up.Commands, Ours.Commands>>
 export type HealthIsUpstream = Holds<Extends<Ours.Health, Up.Health>>
 export type ContextPartIsUpstream = Holds<Extends<Ours.ContextPart, Up.ContextPart>>
 export type HealthCodesUpstream = Holds<Extends<Ours.HealthCode, Up.HealthCode>>
+/** The ticket ending the Source maps to a receipt outcome must be upstream's, value for value. */
+export type TicketOutcomeSame = Holds<Same<Ours.TicketOutcome, Up.TicketOutcome>>
+export type TicketEndBySame = Holds<Same<Ours.TicketEndBy, Up.TicketEndBy>>
+export type TicketFromUpstream = Holds<Extends<Up.Ticket, Ours.TicketView>>

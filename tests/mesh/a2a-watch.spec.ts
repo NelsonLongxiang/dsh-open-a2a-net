@@ -2,7 +2,7 @@
 /**
  * superagent a2a Source (p2a-source-code) against a real loopback host and the real `a2a-net` CLI: the Source's own
  * deposited identity reads its mailbox with `inbox --after`, translates rows into Triggers, judges trust from the host's
- * `proof` field only, keeps its cursor, replays without second Triggers, renews its deposit and reads thread context.
+ * `proof` and `admission` fields only (p3: a trusted proof plus an operator link), keeps its cursor, replays without second Triggers, renews its deposit and reads thread context.
  * Temporary homes live under tmp/ (gitignored) and are removed when the file's tests end (tests/temp-dirs.ts). Each holds a
  * throwaway test identity's private key in cli.json (mode 0600), as the CLI keeps one; no real key, host token or A2A_KEY
  * is written anywhere, and nothing is logged. No production host is contacted: the host runs on loopback.
@@ -64,7 +64,8 @@ describe('superagent p2a: a2a Source on a real host (shadow mode)', () => {
         homes[id.name] = home
       }
       const signal = { signal: new AbortController().signal } as never
-      // In-process caller (trusted), a CLI caller (cli-identity: not trusted), and an in-process receipt.
+      // The host's own face (in-process, but local-exempt: no link), a deposited CLI caller (cli-identity + cli-deposit: a
+      // linked caller since S36), and an in-process receipt from the host face (unlinked before it is a receipt).
       expect((await a.ctx.tools.get('a2a_route')?.execute({ team: handleOf(SOURCE), message: 'from the home host', context_id: 'ctx-local' }, signal) as { ok?: boolean })?.ok).toBe(true)
       expect((await cli(homes[WRITER.name], ['route', handleOf(SOURCE), 'from a cli', '--task', 'w-1', '--context', 'ctx-cli'])).code).toBe(0)
       expect((await a.ctx.tools.get('a2a_route')?.execute({ team: handleOf(SOURCE), message: '[A2A receipt] task job-1 done' }, signal) as { ok?: boolean })?.ok).toBe(true)
@@ -83,6 +84,7 @@ describe('superagent p2a: a2a Source on a real host (shadow mode)', () => {
         },
         state: { get: <V>(k: string) => state.get(k) as V | undefined, set: (k, v) => { if (v === undefined) state.delete(k); else state.set(k, v) } },
         threads: { describe: () => {} },
+        tickets: { get: () => undefined },
         report: (entry, h) => { reports.push([entry, h]) },
       }
 
@@ -91,17 +93,17 @@ describe('superagent p2a: a2a Source on a real host (shadow mode)', () => {
       expect(reports).toEqual([])
       const byText = (s: string) => taken.find(t => t.trigger.text.includes(s))!
       const local = byText('from the home host')
-      expect(local.trigger.meta).toMatchObject({ proof: 'in-process', contextId: 'ctx-local', s13Strength: 'explicit-if-allowed' })
+      expect(local.trigger.meta).toMatchObject({ proof: 'in-process', admission: 'local-exempt', contextId: 'ctx-local', s13Strength: 'explicit-if-allowed' })
       expect(local.trigger.id).toBe(key('a2a', local.trigger.actor.id, String(local.trigger.meta.taskId)))
-      expect(local).toMatchObject({ result: 'stored', trigger: { human: false, addressed: 'direct', threads: [{ source: 'a2a', id: 'ctx-local' }] } })
-      expect(byText('from a cli')).toMatchObject({ result: 'filtered', trigger: { actor: { id: handleOf(WRITER) }, meta: { proof: 'cli-identity', taskId: 'w-1' } } })
-      expect(scope(byText('from a cli').trigger)).toEqual({ listened: false, reason: 'unverified' })
-      expect(scope(byText('task job-1').trigger)).toEqual({ listened: false, reason: 'receipt' })
+      expect(local).toMatchObject({ result: 'filtered', trigger: { human: false, addressed: 'direct', threads: [{ source: 'a2a', id: 'ctx-local' }] } })
+      expect(scope(local.trigger)).toEqual({ listened: false, reason: 'unlinked' })
+      expect(byText('from a cli')).toMatchObject({ result: 'stored', trigger: { actor: { id: handleOf(WRITER) }, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: 'w-1' } } })
+      expect(scope(byText('task job-1').trigger)).toEqual({ listened: false, reason: 'unlinked' })
       // D1: one record per mailbox row, in seq order, without the text.
       const records = state.get(KV.rows) as Array<{ seq: number; outcome: string; task_id: string | null }>
       expect(records.map(r => r.outcome)).toEqual(taken.slice(0, 3).map(t => scope(t.trigger).listened ? 'stored' : `filtered:${(scope(t.trigger) as { reason: string }).reason}`))
       expect(records.map(r => r.seq)).toEqual([1, 2, 3])
-      expect((records as Array<{ proof: string | null; receipt_for: string | null }>).map(r => [r.proof, r.receipt_for])).toEqual([['in-process', null], ['cli-identity', null], ['in-process', 'job-1']])
+      expect((records as Array<{ proof: string | null; receipt_for: string | null; admission: string | null }>).map(r => [r.proof, r.receipt_for, r.admission])).toEqual([['in-process', null, 'local-exempt'], ['cli-identity', null, 'cli-deposit'], ['in-process', 'job-1', 'local-exempt']])
       expect(JSON.stringify(records)).not.toContain('from the home host')
       const cursor = state.get(KV.cursor)
       expect(cursor).toMatch(/^[^:]+:3$/)
@@ -113,8 +115,11 @@ describe('superagent p2a: a2a Source on a real host (shadow mode)', () => {
       expect(await pollMailbox(ctx, new AbortController().signal)).toMatchObject({ read: 3, triggers: 3 })
       expect(taken.slice(3).map(t => t.result)).toEqual(['duplicate', 'duplicate', 'duplicate'])
       expect((state.get(KV.rows) as unknown[]).length).toBe(3)
-      // D2: one page header per read (first read, caught-up read, replay), none of them a loss.
-      expect((state.get(KV.pages) as Array<{ lost: number | null; epochChanged: boolean }>).map(p => [p.lost, p.epochChanged])).toEqual([[0, false], [0, false], [0, false]])
+      // Plan P: a header for each read that brought rows (the first and the replay), none of them a loss, and one heartbeat
+      // (the first round: none before it) — the caught-up empty read writes nothing.
+      const pages = state.get(KV.pages) as Array<{ lost: number | null; epochChanged: boolean; heartbeat?: true; rounds?: number; rows?: number }>
+      expect(pages.map(p => [p.lost, p.epochChanged, p.heartbeat ?? false])).toEqual([[0, false, false], [0, false, true], [0, false, false]])
+      expect(pages[1]).toMatchObject({ rounds: 1, rows: 3 })
 
       // Thread context through the real `a2a-net thread`.
       const part = await a2aKind.threadContext.read(ctx.commands, local.trigger, 'thread', undefined, OBSERVE)
@@ -123,7 +128,7 @@ describe('superagent p2a: a2a Source on a real host (shadow mode)', () => {
       expect(await renewDeposit(ctx, OBSERVE, new AbortController().signal)).toBe(true)
       expect(typeof state.get(KV.renewedAt)).toBe('number')
       // Shadow mode: no reply can go anywhere.
-      expect(a2aKind.channel.allowed(local.trigger.channel!.address, OBSERVE)).toBe(false)
+      expect(a2aKind.channel.allowed(byText('from a cli').trigger.channel!.address, OBSERVE)).toBe(false)
 
       // superagent awaiting setup (no GitHub repository yet): observe mode still reads the real mailbox and takes every row
       // in, while the Engine holds evaluation and sending; a non-observe mode waits for setup and runs nothing.
