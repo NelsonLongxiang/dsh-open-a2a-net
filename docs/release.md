@@ -23,7 +23,12 @@
 - 旧客户端兼容：0.7.0 及更早 CLI 收到这种含 `result.text` 的 DELIVERED 同步响应时会打印回复并在 stderr 提示未 settled，通常退出0，不自动重投；旧 `a2a_route` 返回 `ok:true` 和 DELIVERED，保留可路由回调的欠账，但旧 `trackOwedTask` 不识别 plain sync 新的 `receipt:none`，仍可能挂幽灵债；因此普通同步两端也应同步升级，不能仅凭旧文案当完成。旧版没有新的明确中文同步对账提示。如果走旧客户端的 `delivered:true` 分支，其文案可能仍称 async；以状态/task id 对账，不能把主机文字当业务完成。旧转发 home 若误收到旧对端的无 `reply_final` COMPLETED 仍可能按旧规则 receiptless，因此建议两端同步升级；本候选不改0.7.0已构建字节或代替后续发版授权。
 - 边界见[同步回复契约](protocol/synchronous-reply-contract.md)。同步回复片段不涉及 followup 泛化 throw 的接纳未知（本节另列接纳观察候选）；#369已覆盖窗口、不自动补出生及重启不恢复补发定时器等边界不变。不新增任务状态，不 tag / publish / 部署。
 
-## 0.7.0（阶段0：可发布候选，未 tag / publish / 部署）
+## 0.7.0（已发布；部署后核对进行中）
+
+- 状态（2026-11-07）：标签 `v0.7.0` 指向 c12c299。2026-11-07T02:33:53Z 发布到 npmjs，shasum `3e633c89a8064707707aa72b495fd2f05c29f093`，integrity `sha512-Jmv/nlADKLV07maFfDszvjCfYC3n1fKvxUj25cjdQV9hjeyQb014ac+M0DmuUWAyP2OYIqyRdW+Grx/EKCdn0Q==`。在没有作用域 registry 配置的机器上做过两次独立回读，字节都与验收包一致。
+- 未结项：镜像源回读与逐节点安装来源核对尚未完成，所以本版发布记录未结案。安装时请把版本写死为 `0.7.0`，并显式指定作用域 registry：`--@nelsonlongxiang:registry=https://registry.npmjs.org/`。原因是作用域 registry 配置会覆盖 `--registry`。
+- 下文是发布前的候选说明，原样保留。
+
 
 基线 8a0403d，相对 v0.6.43 为 54 个提交、19 个 first-parent 提交。全局选择 minor 版本：本版改变入站准入、任务投递及失败时的对外契约。高档发版材料须非作者精确头 PASS 后报全局，回复后才能合入；版本就位不等于发布或部署授权。不碰凭证，不补生产积压。
 
