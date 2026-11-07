@@ -386,3 +386,35 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-led-forensics summary{cursor:pointer}
 .wb-led-forensics summary:focus-visible{outline:2px solid var(--n-accent);outline-offset:1px}
 .wb-led-forensics-body{display:flex;flex-direction:column;gap:2px;padding:4px 0 0 12px;font-family:ui-monospace,Consolas,monospace}
+
+/* superagent v4 PR-E: the 团队 tab (wb-superagent). Reuses the ledger's groups and cards; only what is its own here. */
+.wb-sa{display:flex;flex-direction:column;gap:8px}
+.wb-pane.is-hidden{display:none}
+.wb-sa-nav{flex-wrap:wrap}
+.wb-sa-nav .wb-filter.is-active{border-color:var(--n-accent);color:var(--n-ink)}
+.wb-sa-body{display:flex;flex-direction:column;gap:10px}
+.wb-sa-note{font-size:11.5px;color:var(--n-ink-muted);min-height:1em}
+.wb-sa-note.is-danger{color:var(--n-danger)}
+.wb-sa-hint{font-size:11.5px;color:var(--n-ink-muted)}
+.wb-sa-form{display:flex;flex-direction:column;gap:6px}
+.wb-sa-input{width:100%;box-sizing:border-box;resize:vertical;font:inherit;font-size:12.5px;color:var(--n-ink);background:var(--n-bg);
+  border:1px solid var(--n-border);border-radius:6px;padding:6px 8px}
+.wb-sa-input:focus,.wb-sa-select:focus{outline:2px solid var(--n-accent);outline-offset:1px}
+.wb-sa-select{font:inherit;font-size:12.5px;color:var(--n-ink);background:var(--n-bg);border:1px solid var(--n-border);border-radius:6px;padding:4px 6px;max-width:100%}
+.wb-sa-field{display:flex;align-items:flex-start;gap:8px;font-size:12px}
+.wb-sa-checks{display:flex;flex-direction:column;gap:3px}
+.wb-sa-check{display:flex;align-items:center;gap:6px;font-size:12px}
+.wb-sa-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px;margin-top:2px}
+.wb-sa .wb-btn{margin:0}
+.wb-sa-form>.wb-btn{align-self:flex-end}
+.wb-sa-ticket-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.wb-sa-title{font-size:12.5px;color:var(--n-ink);overflow-wrap:anywhere}
+.wb-sa-stage{flex:none;font-size:11px;color:var(--n-ink-muted)}
+.wb-sa-ticket.is-warn .wb-sa-stage{color:var(--n-act)}
+.wb-sa-msg{display:flex;gap:6px;align-items:baseline;font-size:12px}
+.wb-sa-msg.is-reply .wb-sa-who{color:var(--n-accent)}
+.wb-sa-msg.is-danger .wb-sa-text{color:var(--n-danger)}
+.wb-sa-who{flex:none;font-size:11px;color:var(--n-ink-muted)}
+.wb-sa-text{flex:1;white-space:pre-wrap;overflow-wrap:anywhere}
+.wb-sa-when{flex:none;font-size:10.5px;color:var(--n-ink-muted)}
+.wb-sa-decision{font-size:11.5px;color:var(--n-ink-muted);overflow-wrap:anywhere}

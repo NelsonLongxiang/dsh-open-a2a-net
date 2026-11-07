@@ -1,0 +1,184 @@
+// @vitest-environment jsdom
+/**
+ * superagent design v4, PR-E: the 团队 tab. What needs a person comes first; the request box is the workbench Source;
+ * tickets, the team (pinned keys included) and the settings follow. Records are data: textContent only.
+ */
+import { describe, expect, it, vi } from 'vitest'
+import { createSuperagentPane, personTickets, problemsOf, stageLabel, type SaState, type SaTicket } from '../src/wb-superagent.ts'
+import { createWorkbench } from '../src/workbench.ts'
+
+const NOW = Date.parse('2026-11-07T12:00:00Z')
+const at = (minutesAgo: number): string => new Date(NOW - minutesAgo * 60_000).toISOString()
+const R = 'session-a0000000aaaa1111', M = 'session-b1111111bbbb2222', N = 'session-c2222222cccc3333'
+const text = (n: Element | null | undefined): string => n?.textContent ?? ''
+
+function ticket(id: string, over: Partial<SaTicket> = {}): SaTicket {
+  return {
+    id, title: `工单 ${id}`, createdAt: at(60), updatedAt: at(30),
+    mandate: { strength: 'explicit', scope: '只改节点列表', basis: { via: 'addressed' }, actor: { source: 'workbench', id: 'owner' } },
+    channels: [{ source: 'workbench', thread: `th-${id}` }], assignments: [], inputs: [], stage: { stage: 'working' }, ...over,
+  }
+}
+
+function state(over: Partial<SaState> = {}): SaState {
+  return {
+    settings: { router: R, members: [M], acceptMode: 'observe', paused: false, sources: { workbench: true, a2a: false }, remoteMembers: [{ ref: 'bravo/dddddddd', key: 'MCowBQYDK2VwAyEAabcdefghijklmnopqrstuvwxyz0123456789', url: 'https://member.example.invalid' }] },
+    policyVersion: 'p-1',
+    a2a: { enabled: false, address: null, health: {} },
+    executor: { bindings: [{ member: M, ticketId: 't-work', at: at(10) }] },
+    threads: [{
+      key: 'workbench:th-ask', ref: { source: 'workbench', id: 'th-ask' }, createdAt: at(50), lastAt: at(40), evaluating: null,
+      triggers: [{ id: 'tr1', actor: { source: 'workbench', id: 'owner' }, at: at(50), text: '给节点列表加搜索框 <img src=x onerror=alert(1)>', disposition: null }],
+      decisions: [{ id: 'd1', kind: 'accept', at: at(45), ticketId: 't-ask', reason: [{ code: 'text', values: { text: '属主明确提出' } }] }],
+      replies: [{ message: { kind: 'acknowledgement', text: '收到，会加搜索框。' }, status: 'sent' }],
+    }],
+    tickets: [
+      ticket('t-ask', { attention: { question: '搜索要不要支持拼音？' }, stage: { stage: 'person', action: 'answer' }, channels: [{ source: 'workbench', thread: 'th-ask' }] }),
+      ticket('t-fail', { stage: { stage: 'person', action: 'failed' }, assignments: [{ id: 'a1', state: 'ended', report: { state: 'failed', summary: '构建挂了', at: at(5) } }] }),
+      ticket('t-work', { stage: { stage: 'working' } }),
+      ticket('t-queue', { stage: { stage: 'working', action: 'queued' } }),
+      ticket('t-done', { stage: null, ended: { at: at(2), outcome: 'completed' } }),
+    ],
+    ...over,
+  }
+}
+const sessions = [{ id: R, name: '总工', joined: true }, { id: M, name: '成员一', joined: true }, { id: N, name: '会话三', joined: true }]
+
+function mount(act = vi.fn(async (_body: Record<string, unknown>) => ({ ok: true }))) {
+  const refresh = vi.fn()
+  const pane = createSuperagentPane({ act, refresh })
+  document.body.replaceChildren(pane.root)
+  return { pane, act, refresh }
+}
+const button = (root: Element, label: string): HTMLButtonElement => Array.from(root.querySelectorAll('button')).find(b => b.textContent === label)!
+const flush = async (): Promise<void> => { for (let i = 0; i < 5; i++) await Promise.resolve() }
+
+describe('team tab helpers', () => {
+  it('labels stages as a person reads them and finds what waits on a person', () => {
+    const s = state()
+    expect(s.tickets.map(stageLabel)).toEqual(['待你回答', '失败', '进行中', '排队等成员', '已结束 · completed'])
+    expect(personTickets(s).map(t => t.id).sort()).toEqual(['t-ask', 't-fail'])
+  })
+
+  it('names the problems that block the team', () => {
+    expect(problemsOf(state(), NOW)).toEqual([])
+    const bad = state({ settings: { ...state().settings, router: undefined, members: [], remoteMembers: [], paused: true }, a2a: { enabled: true, address: null, health: { read: { state: 'error', detail: 'cli exited 1' } } } })
+    expect(problemsOf(bad, NOW).map(p => p.text).join('\n')).toMatch(/还没有指定总工[\s\S]*成员池是空的[\s\S]*执行已暂停[\s\S]*cli exited 1/)
+  })
+})
+
+describe('team tab', () => {
+  it('opens on what needs a person: an answer box on the request thread, retry on a failed ticket; badge counts them', async () => {
+    const { pane, act, refresh } = mount()
+    const out = pane.update(state(), sessions, NOW)
+    expect(out).toEqual({ badge: '2', tone: 'warn' })
+    const cards = Array.from(pane.root.querySelectorAll<HTMLElement>('.wb-sa-ticket'))
+    expect(cards.map(c => c.dataset.ticket)).toEqual(['t-ask', 't-fail'])
+    expect(text(cards[0])).toContain('搜索要不要支持拼音？')
+    const box = cards[0]!.querySelector('textarea')!
+    box.value = '要支持'
+    button(cards[0]!, '回答').click()
+    await flush()
+    expect(act).toHaveBeenCalledWith({ action: 'request', text: '要支持', thread: 'th-ask' })
+    expect(refresh).toHaveBeenCalled()
+    expect(box.value).toBe('')
+    expect(text(cards[1])).toContain('构建挂了')
+    button(cards[1]!, '重试').click()
+    await flush()
+    expect(act).toHaveBeenLastCalledWith({ action: 'retry', ticket_id: 't-fail' })
+  })
+
+  it('the request box is the workbench Source; a thread shows the request, the decision and the reply as text', async () => {
+    const { pane, act } = mount()
+    pane.update(state(), sessions, NOW)
+    pane.select('request')
+    const thread = pane.root.querySelector<HTMLElement>('.wb-sa-thread')!
+    expect(text(thread)).toContain('给节点列表加搜索框 <img src=x onerror=alert(1)>')
+    expect(thread.querySelector('img')).toBeNull()
+    expect(text(thread)).toContain('总工：接单 · 属主明确提出 · t-ask')
+    expect(text(thread)).toContain('收到，会加搜索框。')
+    const ask = pane.root.querySelector<HTMLTextAreaElement>('.wb-sa-form textarea')!
+    ask.value = '再加一个导出按钮'
+    button(pane.root, '提交需求').click()
+    await flush()
+    expect(act).toHaveBeenCalledWith({ action: 'request', text: '再加一个导出按钮' })
+  })
+
+  it('a refused write is said, and the input is kept', async () => {
+    const { pane } = mount(vi.fn(async () => ({ ok: false, error: 'workbench Source is off' })))
+    pane.update(state(), sessions, NOW)
+    pane.select('request')
+    const ask = pane.root.querySelector<HTMLTextAreaElement>('.wb-sa-form textarea')!
+    ask.value = '一个需求'
+    button(pane.root, '提交需求').click()
+    await flush()
+    expect(text(pane.root.querySelector('.wb-sa-note'))).toContain('workbench Source is off')
+    expect(ask.value).toBe('一个需求')
+  })
+
+  it('tickets by stage; stop asks first', async () => {
+    const { pane, act } = mount()
+    pane.update(state(), sessions, NOW)
+    pane.select('tickets')
+    const heads = Array.from(pane.root.querySelectorAll('.wb-led-group-head')).map(h => text(h.firstElementChild))
+    expect(heads).toEqual(['待你处理', '进行中', '已结束（最近 20）'])
+    const work = pane.root.querySelector<HTMLElement>('[data-ticket="t-work"]')!
+    expect(text(work)).toContain('成员一')
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true)
+    button(work, '停止').click()
+    await flush()
+    expect(act).not.toHaveBeenCalled()
+    button(work, '停止').click()
+    await flush()
+    expect(act).toHaveBeenCalledWith({ action: 'stop', ticket_id: 't-work', reason: '属主在工作台停止' })
+    confirm.mockRestore()
+    expect(pane.root.querySelector('[data-ticket="t-done"] button')).toBeNull()
+  })
+
+  it('the team page shows the router, each member\'s slot, remote members with their pinned key, and the queue', () => {
+    const { pane } = mount()
+    pane.update(state(), sessions, NOW)
+    pane.select('team')
+    const t = text(pane.root)
+    expect(t).toContain('总工（a0000000）')
+    expect(t).toContain('在做「工单 t-work」')
+    expect(t).toContain('bravo/dddddddd')
+    expect(t).toContain('MCowBQYDK2Vw…')
+    expect(t).not.toContain('abcdefghijklmnopqrstuvwxyz')
+    expect(t).toContain('工单 t-queue')
+  })
+
+  it('settings write only the editable fields; an open form survives the poll', async () => {
+    const { pane, act } = mount()
+    pane.update(state(), sessions, NOW)
+    pane.select('settings')
+    const router = pane.root.querySelector<HTMLSelectElement>('select[aria-label="总工"]')!
+    expect(router.value).toBe(R)
+    const n = Array.from(pane.root.querySelectorAll<HTMLInputElement>('.wb-sa-check input')).find(x => x.value === N)!
+    n.checked = true
+    n.dispatchEvent(new Event('change'))
+    // A poll while the form is dirty does not reset it.
+    pane.update(state(), sessions, NOW + 3000)
+    const kept = Array.from(pane.root.querySelectorAll<HTMLInputElement>('.wb-sa-check input')).find(x => x.value === N)!
+    expect(kept.checked).toBe(true)
+    button(pane.root, '保存').click()
+    await flush()
+    expect(act).toHaveBeenCalledWith({ action: 'settings', settings: { router: R, members: [M, N], acceptMode: 'observe', sources: { workbench: true, a2a: false }, paused: false } })
+  })
+
+  it('in the workbench the tab shows only while the host answers a superagent state', () => {
+    const bench = createWorkbench({
+      now: () => NOW, abandon: async () => true, canvasOp: async () => true, copy: () => {},
+      superagent: { act: async () => ({ ok: true }), refresh: () => {} },
+    } as never)
+    document.body.replaceChildren(bench.root)
+    const tab = bench.root.querySelector<HTMLElement>('#wb-tab-team')!
+    expect(tab.hidden || tab.classList.contains('is-hidden') || tab.style.display === 'none').toBe(true)
+    bench.update({ sessions } as never)
+    bench.updateSuperagent(state())
+    const pane = bench.root.querySelector<HTMLElement>('.wb-sa')!
+    expect(pane.classList.contains('is-hidden')).toBe(false)
+    bench.updateSuperagent(null)
+    expect(pane.classList.contains('is-hidden')).toBe(true)
+  })
+})
