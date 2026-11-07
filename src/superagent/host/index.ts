@@ -47,6 +47,8 @@ export interface SuperagentHostDeps {
   readonly a2aPollSeconds?: number
   /** Tests stub the CLI. */
   readonly runCli?: (args: string[], env: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<string>
+  /** Settings were written: who is router or member may have changed (PR-D re-applies the role tool lists). */
+  readonly onRolesChanged?: () => void
 }
 
 /** How often due Evals are checked and undelivered candidates retried. */
@@ -267,6 +269,7 @@ export class SuperagentHost {
     const temporary = `${this.settingsPath}.tmp-${randomUUID()}`
     try { writeFileSync(temporary, JSON.stringify(next), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.settingsPath) } finally { rmSync(temporary, { force: true }) }
     this.settingsValue = next
+    try { this.d.onRolesChanged?.() } catch (error) { this.d.logger.warn('superagent: role change not applied: %s', String(error)) }
   }
 
   /**

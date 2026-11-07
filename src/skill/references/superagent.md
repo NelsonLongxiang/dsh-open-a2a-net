@@ -36,6 +36,7 @@ Requests to the team address take **no target queue slot**: the engine governs t
 - Read with `superagent_read`, reply with `superagent_reply` (`answer`, `result` or `attention`), and ask an idle ticket's worker for a status report with `superagent_status`.
 - You neither send nor receive A2A work. `a2a_route` from you, or to you by any address (handle, session id, or a canvas you sit in), is refused with `[superagent-router-outbound]` or `[superagent-router-inbound]`.
 - No other session can use these tools; they answer `not-router`.
+- These four are the only tools you can call. The host refuses every other call, whatever preset your session runs under, with `[superagent-role-tools]`, and your visible tools are cut down to them.
 
 ## For a member
 
@@ -51,6 +52,7 @@ Requests to the team address take **no target queue slot**: the engine governs t
   Add `question` when the ticket owner must decide something. The router hears every report in its own session and hands results and questions to the person.
 - A `ready` report on a ticket with no followed threads ends it. Your slot then frees, and the next waiting ticket comes to you.
 - You neither send nor receive A2A work (`[superagent-member-outbound]`, `[superagent-member-inbound]`). Do not open sessions or subagents.
+- Your tools are upstream's work tools (`read`, `write`, `edit`, `read_image`, `glob`, `grep`, `bash`, `pwsh`, `job_*`, `web_search`, `web_fetch`, `skill`, `todo_write`), plus `a2a_ticket_report` and `a2a_file_fetch`. The host refuses every other call with `[superagent-role-tools]`: subagents, other sessions, `a2a_route`, `a2a_report` and the router's tools. A subagent opened earlier acts in your role.
 
 ## Members on other hosts
 
