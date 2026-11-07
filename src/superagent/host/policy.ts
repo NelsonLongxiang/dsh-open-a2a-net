@@ -24,6 +24,8 @@ export const SOURCES = ['workbench', 'a2a'] as const
 export type SourceName = typeof SOURCES[number]
 
 export type AcceptMode = 'off' | 'observe' | 'auto'
+/** A remote member: `ref` is `<zone>/<id8>@<fp8>`, `key` the member host's full public key, `url` its base URL. */
+export interface RemoteMember { readonly ref: string; readonly key: string; readonly url: string }
 /** A kind of proactive work the team may take on without being asked (upstream: Policy rules). */
 export interface ProactiveRule { readonly name: string; readonly text: string; readonly enabled: boolean }
 
@@ -33,6 +35,17 @@ export interface TeamSettings {
   readonly router?: string
   /** The executor's fixed member pool: local session ids, one worker slot each (no session is ever opened for a ticket). */
   readonly members: readonly string[]
+  /**
+   * Members on other hosts (other nodes, or other DSH instances on this machine): the owner-qualified session ref, the
+   * member host's full key as the owner pinned it (from a linked peer's signed card), and that host's base URL. A report
+   * or turn end is accepted only when signed by that key. Written only by the `add-remote-member` control action.
+   */
+  readonly remoteMembers: readonly RemoteMember[]
+  /**
+   * This host serving another team host: that host's base URL and pinned key, and the local sessions that work for it.
+   * Only that key may assign them work. Written only by the `serve-team` control action.
+   */
+  readonly serves?: { readonly url: string; readonly key: string; readonly members: readonly string[] }
   /** Who may originate work, per Source, in that Source's own identities (upstream: identities are never mapped across Sources). */
   readonly allowed: { readonly workbench: readonly string[]; readonly a2a: readonly string[] }
   /** Agents whose messages may become inferred candidates, per Source (only the A2A Source has bots). */
@@ -54,6 +67,7 @@ export const WORKBENCH_OWNER = 'owner'
 
 export const DEFAULT_SETTINGS: TeamSettings = {
   members: [],
+  remoteMembers: [],
   allowed: { workbench: [WORKBENCH_OWNER], a2a: [] },
   bots: { a2a: [] },
   acceptMode: 'observe',
@@ -112,11 +126,38 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
     }
     rules = parsedRules
   }
+  if ('remoteMembers' in r || 'serves' in r) return { ok: false, error: 'remote members and serving a team are set by their own actions (add-remote-member, serve-team), which pin the peer key' }
   const members = 'members' in r ? list(r.members, 'members') : current.members
   if (typeof members === 'string') return { ok: false, error: members }
   if (members.length > 32) return { ok: false, error: 'at most 32 members' }
   if (router !== undefined && members.includes(router)) return { ok: false, error: 'the router is not a member: it routes, members work' }
-  return { ok: true, settings: { ...(router !== undefined ? { router } : {}), members, allowed: { workbench, a2a }, bots: { a2a: bots }, acceptMode, rules, sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
+  return { ok: true, settings: { ...(router !== undefined ? { router } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), allowed: { workbench, a2a }, bots: { a2a: bots }, acceptMode, rules, sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
+}
+
+const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/
+const validUrl = (url: unknown): url is string => { try { const u = new URL(String(url)); return (u.protocol === 'http:' || u.protocol === 'https:') && u.origin === String(url) } catch { return false } }
+const validKey = (key: unknown): key is string => typeof key === 'string' && /^[A-Za-z0-9+/]{40,}={0,2}$/.test(key)
+/** One pinned remote member, or undefined when malformed. */
+export function parseRemoteMember(raw: unknown): RemoteMember | undefined {
+  const r = (raw ?? {}) as Record<string, unknown>
+  return typeof r.ref === 'string' && QUALIFIED_REF.test(r.ref) && validKey(r.key) && validUrl(r.url) ? { ref: r.ref, key: r.key, url: r.url } : undefined
+}
+
+/** Settings as stored: the owner fields plus the pinned peers only the host's own actions write. */
+export function parseStoredSettings(raw: unknown): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'settings must be an object' }
+  const { remoteMembers, serves, ...rest } = raw as Record<string, unknown>
+  const parsed = parseSettings(rest, DEFAULT_SETTINGS)
+  if (!parsed.ok) return parsed
+  const remote = Array.isArray(remoteMembers) ? remoteMembers.map(parseRemoteMember) : []
+  if (remote.some(r => r === undefined)) return { ok: false, error: 'a stored remote member is malformed' }
+  let served: TeamSettings['serves']
+  if (serves !== undefined) {
+    const sv = (serves ?? {}) as Record<string, unknown>
+    if (!validUrl(sv.url) || !validKey(sv.key) || !Array.isArray(sv.members) || sv.members.some(m => typeof m !== 'string' || m === '')) return { ok: false, error: 'the stored served team is malformed' }
+    served = { url: sv.url, key: sv.key, members: sv.members as string[] }
+  }
+  return { ok: true, settings: { ...parsed.settings, remoteMembers: remote as RemoteMember[], ...(served !== undefined ? { serves: served } : {}) } }
 }
 
 /**

@@ -52,6 +52,14 @@ Requests to the team address take **no target queue slot**: the engine governs t
 - A `ready` report on a ticket with no followed threads ends it. Your slot then frees, and the next waiting ticket comes to you.
 - You neither send nor receive A2A work (`[superagent-member-outbound]`, `[superagent-member-inbound]`). Do not open sessions or subagents.
 
+## Members on other hosts
+
+A member can sit on another host: another physical node, or another DSH instance on this machine, even one with the same zone label. Its work and reports travel **host to host** as signed, body-bound OriginClaim requests. There is no A2A route, no ledger debt and no receipt.
+
+- **On the team host:** `POST { action: 'add-remote-member', ref: '<zone>/<id8>', peer: '<member host base URL>' }`. The member host must be a linked peer. Its key comes from its signed card, as for a canvas member, and is pinned with the qualified ref. A report or turn end for that member counts only under that key (`/a2a/superagent-team`), so another instance sharing the handle is refused. `remove-remote-member` undoes it.
+- **On the member host:** `POST { action: 'serve-team', peer: '<team host base URL>', members: [<local session ids>] }`. The team host must be a linked peer, and its key is pinned the same way. Only that key may assign work to those sessions (`/a2a/superagent-member`). Those sessions report with `a2a_ticket_report` as usual, and the host forwards the report, signed. `peer: null` leaves the team.
+- Serving sessions are isolated from A2A like any member.
+
 ## For the owner
 
 The owner control route is `/__dsh_a2a/superagent`.

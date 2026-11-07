@@ -20,7 +20,7 @@ import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
 import { MemberExecutor } from './executor.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
-import { DEFAULT_SETTINGS, WORKBENCH_OWNER, parseSettings, policyVersion, teamPolicy, teamScope, type TeamSettings } from './policy.ts'
+import { DEFAULT_SETTINGS, WORKBENCH_OWNER, parseRemoteMember, parseSettings, parseStoredSettings, policyVersion, teamPolicy, teamScope, type TeamSettings } from './policy.ts'
 
 export interface SuperagentHostDeps {
   /** The a2a home directory; state lives under `<home>/superagent/`. */
@@ -35,6 +35,14 @@ export interface SuperagentHostDeps {
   readonly homeUrl?: () => string | undefined
   /** This host's API key (the CLI's control credential). */
   readonly apiKey?: () => string | undefined
+  /**
+   * PR-C2: a signed request to another a2a host (OriginClaim, body-bound, on this host's card key). Absent: no remote
+   * members can be reached and no team can be served.
+   */
+  readonly signedPost?: (baseUrl: string, path: string, body: Record<string, unknown>) => Promise<Record<string, unknown>>
+  /** A local session's `<zone>/<id8>` handle, and the local session a handle of this host names. */
+  readonly handleOf?: (sessionId: string) => string
+  readonly localSessionOf?: (handle: string) => string | undefined
   /** Tests shorten the A2A mailbox poll. */
   readonly a2aPollSeconds?: number
   /** Tests stub the CLI. */
@@ -99,7 +107,8 @@ export class SuperagentHost {
       release: evalId => { this.candidates.delete(evalId) },
     }
     const executor = this.executor = new MemberExecutor({
-      path: join(dir, 'executor.json'), members: () => this.settingsValue.members, deliver: d.deliverToSession, engine: () => this.engine,
+      path: join(dir, 'executor.json'), members: () => [...this.settingsValue.members, ...this.settingsValue.remoteMembers.map(r => r.ref)],
+      deliver: (member, text, kind, ticketId) => this.deliverToMember(member, text, kind, ticketId), engine: () => this.engine,
       ticket: id => this.store.tickets.get(id), trigger: id => this.store.triggers.get(id), logger: d.logger,
     })
     const outbox: Outbox = {
@@ -135,7 +144,7 @@ export class SuperagentHost {
   private loadSettings(): TeamSettings {
     if (!existsSync(this.settingsPath)) return DEFAULT_SETTINGS
     try {
-      const parsed = parseSettings(JSON.parse(readFileSync(this.settingsPath, 'utf8')), DEFAULT_SETTINGS)
+      const parsed = parseStoredSettings(JSON.parse(readFileSync(this.settingsPath, 'utf8')))
       if (parsed.ok) return parsed.settings
       this.d.logger.warn('superagent: settings invalid (%s); using defaults with every Source off', parsed.error)
     } catch (error) { this.d.logger.warn('superagent: settings unreadable (%s); using defaults with every Source off', String(error)) }
@@ -173,13 +182,92 @@ export class SuperagentHost {
     else void this.a2a.stop()
   }
 
-  /** Whether a local session is the router or a member: such sessions take and send no A2A work. */
+  /** Whether a local session is the router or a member (of this team, or of the team this host serves): no A2A work either way. */
   roleOf(sessionId: string): 'router' | 'member' | undefined {
-    return this.settingsValue.router === sessionId ? 'router' : this.settingsValue.members.includes(sessionId) ? 'member' : undefined
+    if (this.settingsValue.router === sessionId) return 'router'
+    return this.settingsValue.members.includes(sessionId) || this.settingsValue.serves?.members.includes(sessionId) === true ? 'member' : undefined
   }
 
-  /** A member's turn ended (agent idle): the executor's turn-end fact. */
-  memberIdle(sessionId: string): void { if (this.settingsValue.members.includes(sessionId)) this.executor.memberIdle(sessionId) }
+  /** A member's turn ended (agent idle): the executor's turn-end fact — told to the served team host when it is theirs. */
+  memberIdle(sessionId: string): void {
+    if (this.settingsValue.members.includes(sessionId)) { this.executor.memberIdle(sessionId); return }
+    const serves = this.settingsValue.serves
+    if (serves?.members.includes(sessionId) === true && this.d.signedPost !== undefined && this.d.handleOf !== undefined) {
+      void this.d.signedPost(serves.url, '/a2a/superagent-team', { op: 'idle', member: this.d.handleOf(sessionId) })
+        .catch(error => { this.d.logger.warn('superagent: turn end not told to the team host: %s', String(error)) })
+    }
+  }
+
+  /** PR-C2: put a card into a member's session — local by host relay, remote by a signed request to its host. */
+  private async deliverToMember(member: string, text: string, kind: 'assign' | 'input' | 'stop', ticketId: string): Promise<boolean> {
+    const remote = this.settingsValue.remoteMembers.find(r => r.ref === member)
+    if (remote === undefined) return this.d.deliverToSession(member, text)
+    if (this.d.signedPost === undefined) return false
+    const out = await this.d.signedPost(remote.url, '/a2a/superagent-member', { op: kind, member: remote.ref.replace(/@[0-9a-f]{8}$/, ''), ticket: ticketId, text })
+    return out.ok === true
+  }
+
+  /**
+   * PR-C2, team host side: a member host's signed report or turn end. It counts only when the signer's key is the key the
+   * owner pinned for that member's ref (another instance sharing the zone and id8 has another key).
+   */
+  remoteEvent(op: unknown, memberHandle: unknown, signerKey: string, report: unknown): Record<string, unknown> {
+    const entry = this.settingsValue.remoteMembers.find(r => r.ref.replace(/@[0-9a-f]{8}$/, '') === memberHandle && r.key === signerKey)
+    if (entry === undefined) return { ok: false, code: 'not-member', error: 'no remote member of this team is that session under that key' }
+    if (op === 'idle') { this.executor.memberIdle(entry.ref); return { ok: true } }
+    if (op !== 'report') return { ok: false, code: 'op', error: 'op must be report or idle' }
+    const r = (report ?? {}) as Record<string, unknown>
+    if (typeof r.state !== 'string' || !['progress', 'waiting', 'ready', 'blocked', 'failed', 'dropped'].includes(r.state) || typeof r.summary !== 'string' || r.summary.trim() === '') return { ok: false, code: 'report', error: 'a report needs a state and a summary' }
+    return this.report(entry.ref, { state: r.state as ReportState, summary: r.summary, ...(typeof r.question === 'string' || r.question === null ? { question: r.question as string | null } : {}), ...(typeof r.answers === 'string' ? { answers: r.answers } : {}) })
+  }
+
+  /** PR-C2, member host side: work the served team host sends one of this host's member sessions, signed by its pinned key. */
+  assignedWork(op: unknown, memberHandle: unknown, signerKey: string, text: unknown): Record<string, unknown> {
+    const serves = this.settingsValue.serves
+    if (serves === undefined || serves.key !== signerKey) return { ok: false, code: 'not-team', error: 'this host serves no team under that key' }
+    const local = typeof memberHandle === 'string' ? this.d.localSessionOf?.(memberHandle) : undefined
+    if (local === undefined || !serves.members.includes(local)) return { ok: false, code: 'not-member', error: 'that session does not serve this team' }
+    if (op !== 'assign' && op !== 'input' && op !== 'stop') return { ok: false, code: 'op', error: 'op must be assign, input or stop' }
+    if (typeof text !== 'string' || text === '') return { ok: false, code: 'text', error: 'text is required' }
+    return { ok: this.d.deliverToSession(local, text) }
+  }
+
+  /** PR-C2, member host side: a served member's report goes to the team host (it answers whether it took it). */
+  async forwardReport(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string }): Promise<Record<string, unknown>> {
+    const serves = this.settingsValue.serves
+    if (serves === undefined || !serves.members.includes(member) || this.d.signedPost === undefined || this.d.handleOf === undefined) return { ok: false, code: 'not-member', error: 'this session serves no team' }
+    try { return await this.d.signedPost(serves.url, '/a2a/superagent-team', { op: 'report', member: this.d.handleOf(member), report }) } catch (error) { return { ok: false, code: 'unreachable', error: String(error) } }
+  }
+
+  /** Owner control: pin a remote member (resolved from a linked peer's signed card by the caller). */
+  addRemoteMember(member: { ref: string; key: string; url: string }): { ok: boolean; error?: string } {
+    const parsed = parseRemoteMember(member)
+    if (parsed === undefined) return { ok: false, error: 'a remote member needs a qualified ref, a key and a base URL' }
+    const others = this.settingsValue.remoteMembers.filter(r => r.ref !== parsed.ref)
+    if (others.length + this.settingsValue.members.length >= 32) return { ok: false, error: 'at most 32 members' }
+    this.writeSettings({ ...this.settingsValue, remoteMembers: [...others, parsed] })
+    this.executor.launch()
+    return { ok: true }
+  }
+  removeRemoteMember(ref: string): { ok: boolean } {
+    this.writeSettings({ ...this.settingsValue, remoteMembers: this.settingsValue.remoteMembers.filter(r => r.ref !== ref) })
+    return { ok: true }
+  }
+  /** Owner control: serve a team host (its key pinned from a linked peer's signed card) with these local sessions. */
+  serveTeam(team: { url: string; key: string } | undefined, members: readonly string[], sessionValid: (id: string) => boolean): { ok: boolean; error?: string } {
+    if (team === undefined) { const { serves: _gone, ...rest } = this.settingsValue; this.writeSettings(rest); return { ok: true } }
+    const bad = members.find(m => !sessionValid(m) || m === this.settingsValue.router || this.settingsValue.members.includes(m))
+    if (bad !== undefined) return { ok: false, error: `${bad} must be a joined local session that is neither this team's router nor its member` }
+    this.writeSettings({ ...this.settingsValue, serves: { url: team.url, key: team.key, members: [...new Set(members)] } })
+    return { ok: true }
+  }
+
+  private writeSettings(next: TeamSettings): void {
+    mkdirSync(dirname(this.settingsPath), { recursive: true })
+    const temporary = `${this.settingsPath}.tmp-${randomUUID()}`
+    try { writeFileSync(temporary, JSON.stringify(next), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.settingsPath) } finally { rmSync(temporary, { force: true }) }
+    this.settingsValue = next
+  }
 
   /**
    * A member's report (upstream orchestrator_report) on the ticket bound to it. The router hears it in its own session,
@@ -251,10 +339,7 @@ export class SuperagentHost {
     if (strange !== undefined) return { ok: false, error: `member ${strange} must be a joined local session` }
     const before = policyVersion(this.settingsValue)
     const routerChanged = parsed.settings.router !== this.settingsValue.router
-    mkdirSync(dirname(this.settingsPath), { recursive: true })
-    const temporary = `${this.settingsPath}.tmp-${randomUUID()}`
-    try { writeFileSync(temporary, JSON.stringify(parsed.settings), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.settingsPath) } finally { rmSync(temporary, { force: true }) }
-    this.settingsValue = parsed.settings
+    this.writeSettings(parsed.settings)
     const after = policyVersion(parsed.settings)
     if (before !== after) this.engine.policyChanged(before, after)
     // A new router receives whatever the old one had not decided yet.
@@ -294,7 +379,8 @@ export class SuperagentHost {
       settings: this.settingsValue,
       policyVersion: policyVersion(this.settingsValue),
       a2a: { enabled: this.settingsValue.sources.a2a, address: this.a2a.address ?? null, health: this.a2a.health },
-      executor: { members: this.settingsValue.members, bindings: this.executor.list() },
+      executor: { members: this.settingsValue.members, remoteMembers: this.settingsValue.remoteMembers, bindings: this.executor.list() },
+      ...(this.settingsValue.serves !== undefined ? { serves: this.settingsValue.serves } : {}),
       ...(this.store.loadError !== undefined ? { error: this.store.loadError } : {}),
       threads: this.store.threads.list().map(thread => ({
         key: thread.key, ref: thread.ref, createdAt: thread.createdAt, lastAt: thread.lastAt ?? null, subscriptions: thread.subscriptions,

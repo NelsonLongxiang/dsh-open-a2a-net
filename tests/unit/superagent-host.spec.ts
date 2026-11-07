@@ -295,3 +295,35 @@ describe('PR-C1: executor restart recovery', () => {
     void h2.stop()
   })
 })
+
+describe('PR-C2: remote members and served teams are judged by pinned keys', () => {
+  const KEY_B = 'MCowBQYDK2VwAyEA' + 'B'.repeat(44), KEY_A = 'MCowBQYDK2VwAyEA' + 'A'.repeat(44), KEY_E = 'MCowBQYDK2VwAyEA' + 'E'.repeat(44)
+  it('pins come only from their actions, and survive a reload', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { parseStoredSettings } = await import('../../src/superagent/host/policy.ts')
+    const home = mkdtempSync(join(tmpdir(), 'sa-c2-'))
+    const make = () => new SuperagentHost({ home, logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, localSessionOf: h => h === 'dsh/cccccccc' ? 'session-c' : undefined })
+    const h = make()
+    expect(h.saveSettings({ remoteMembers: [{ ref: 'dsh/bbbbbbbb@12345678', key: KEY_B, url: 'http://127.0.0.1:9' }] }, () => true)).toMatchObject({ ok: false })
+    expect(h.addRemoteMember({ ref: 'dsh/bbbbbbbb', key: KEY_B, url: 'http://127.0.0.1:9' })).toMatchObject({ ok: false })
+    expect(h.addRemoteMember({ ref: 'dsh/bbbbbbbb@12345678', key: KEY_B, url: 'http://127.0.0.1:9' })).toEqual({ ok: true })
+    expect(h.serveTeam({ url: 'http://127.0.0.1:8', key: KEY_A }, ['session-c'], () => true)).toEqual({ ok: true })
+    const again = make()
+    expect(again.settings.remoteMembers).toEqual([{ ref: 'dsh/bbbbbbbb@12345678', key: KEY_B, url: 'http://127.0.0.1:9' }])
+    expect(again.settings.serves).toEqual({ url: 'http://127.0.0.1:8', key: KEY_A, members: ['session-c'] })
+    expect(parseStoredSettings({ remoteMembers: [{ ref: 'bad', key: KEY_B, url: 'x' }] })).toMatchObject({ ok: false })
+    // Team side: a report or turn end counts only under the pinned key for that member handle.
+    expect(again.remoteEvent('idle', 'dsh/bbbbbbbb', KEY_E, undefined)).toMatchObject({ ok: false, code: 'not-member' })
+    expect(again.remoteEvent('idle', 'dsh/bbbbbbbb', KEY_B, undefined)).toEqual({ ok: true })
+    expect(again.remoteEvent('report', 'dsh/bbbbbbbb', KEY_B, { state: 'ready', summary: 'x' })).toMatchObject({ ok: false, code: 'not-assigned' })
+    // Member side: work counts only from the served team's key, for a session that serves it.
+    expect(again.assignedWork('assign', 'dsh/cccccccc', KEY_E, 'work')).toMatchObject({ ok: false, code: 'not-team' })
+    expect(again.assignedWork('assign', 'dsh/dddddddd', KEY_A, 'work')).toMatchObject({ ok: false, code: 'not-member' })
+    expect(again.assignedWork('assign', 'dsh/cccccccc', KEY_A, 'work')).toEqual({ ok: true })
+    expect(again.roleOf('session-c')).toBe('member')
+    // Leaving the team drops the pin and the role.
+    expect(again.serveTeam(undefined, [], () => false)).toEqual({ ok: true })
+    expect(again.roleOf('session-c')).toBeUndefined()
+    expect(again.assignedWork('assign', 'dsh/cccccccc', KEY_A, 'work')).toMatchObject({ ok: false, code: 'not-team' })
+  })
+})

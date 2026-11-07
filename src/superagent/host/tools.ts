@@ -180,7 +180,9 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
       const summary = str(args.summary)
       if (summary === undefined) return { ok: false, code: 'missing', error: 'summary is required' }
       const question = args.question === 'null' ? null : str(args.question)
-      const out = h.report(me, { state: args.state as 'progress', summary, ...(question !== undefined ? { question } : {}), ...(str(args.answers) !== undefined ? { answers: str(args.answers)! } : {}) })
+      const report = { state: args.state as 'progress', summary, ...(question !== undefined ? { question } : {}), ...(str(args.answers) !== undefined ? { answers: str(args.answers)! } : {}) }
+      // PR-C2: a session serving another host's team reports there, signed by this host's key.
+      const out = h.settings.serves?.members.includes(me) === true ? await h.forwardReport(me, report) : h.report(me, report)
       return json(out) as Record<string, JsonValue>
     },
   }))
