@@ -260,7 +260,24 @@ export class CliDepositStore {
     }))
   }
 
-  mail(handle: string, from: string, text: string, dup?: 'sync-answered', thread?: CliMailThread): void {
+  /**
+   * superagent p1-mailbox-owes (S33): the live deposit's signed card declares it owes a receipt for what its mailbox
+   * takes (`capabilities.owes === true`). Read from the verified card kept verbatim, so it survives a restart and a
+   * re-publish without the flag withdraws it.
+   */
+  owes(handle: string): boolean {
+    const row = this.get(handle)
+    if (row === undefined) return false
+    try {
+      const capabilities = (JSON.parse(row.cardJson) as { capabilities?: unknown } | null)?.capabilities
+      return typeof capabilities === 'object' && capabilities !== null && (capabilities as { owes?: unknown }).owes === true
+    } catch {
+      return false
+    }
+  }
+
+  /** Add one row to `handle`'s mailbox; returns the rows the cap pushed out by this delivery (oldest last), for their owed books. */
+  mail(handle: string, from: string, text: string, dup?: 'sync-answered', thread?: CliMailThread): readonly CliMail[] {
     const list = this.mailbox.get(handle) ?? []
     const seq = this.nextSeq.get(handle) ?? 1
     this.nextSeq.set(handle, seq + 1)
@@ -274,6 +291,7 @@ export class CliDepositStore {
     if (list.length > MAILBOX_CAP) this.dropped.set(handle, (this.dropped.get(handle) ?? 0) + list.length - MAILBOX_CAP)
     this.mailbox.set(handle, list.slice(0, MAILBOX_CAP))
     this.persist()
+    return list.slice(MAILBOX_CAP)
   }
 
   readMail(handle: string): readonly CliMail[] {

@@ -276,6 +276,38 @@ export class TaskLedger {
     this.persist()
   }
 
+  /**
+   * superagent p1-mailbox-owes (S33, D-5): the mailbox cap pushed out a row its deposit owed a receipt for. The pending
+   * row the per-target cap counts for that deposit (its inbound row from a remote caller, or a same-host caller's local
+   * row) goes to the archive as evicted (summary `mailbox-evicted`): the slot is freed and it counts with the other
+   * evictions. A remote caller's own debt stays on its host for its idle reminders to chase.
+   * @returns whether a pending inbound row of `team` was archived.
+   */
+  evictInbound(taskId: string, team: string): boolean {
+    if (taskId === '') return false
+    this.sweep(this.now())
+    const row = this.tasks.find(entry => entry.taskId === taskId)
+    if (row === undefined || !(row.direction === 'inbound' || row.peer === 'local') || row.status !== 'pending' || (row.deliveredTo ?? row.team) !== team) return false
+    this.tasks = this.tasks.filter(entry => entry !== row)
+    this.archiveSettled({
+      taskId: row.taskId,
+      team: row.team,
+      peer: row.peer,
+      startedAt: row.startedAt,
+      ...(row.contextId !== undefined ? { contextId: row.contextId } : {}),
+      resolvedAt: this.now(),
+      ...(row.brief !== undefined ? { brief: row.brief } : {}),
+      summary: 'mailbox-evicted',
+      endedBy: 'evicted' as const,
+      ...(row.direction !== undefined ? { direction: row.direction } : {}),
+      ...(row.sender !== undefined ? { sender: row.sender } : {}),
+      ...(row.auth !== undefined ? { auth: row.auth } : {}),
+      ...routingOf(row),
+    })
+    this.persist()
+    return true
+  }
+
   /** Record an answer only from the local member that actually received this row; never settle or change counters. */
   markAnswered(taskId: string, target: string): boolean {
     const row = this.tasks.find(entry => entry.taskId === taskId)

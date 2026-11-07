@@ -104,6 +104,17 @@ describe('one-hop CLI forwarding', () => {
     await createDirectForward(none.deps)(request)
     expect(none.ledger.list()[0]?.receiptExpected).toBe(false)
   })
+  it('p1-mailbox-owes (D-4): a peer mailbox that owes a receipt (delivered) books the debt; a final one stays receiptless', async () => {
+    const owed = fixture([{ ...ok, task_status: 'TASK_STATE_DELIVERED', receipt: 'mailbox' }])
+    expect(await createDirectForward(owed.deps)(request)).toMatchObject({ ok: true, receipt: 'mailbox', task_status: 'TASK_STATE_DELIVERED' })
+    expect(owed.ledger.list()).toHaveLength(1)
+    expect(owed.ledger.list()[0]).toMatchObject({ direction: 'outbound', forwarded: true, status: 'pending' })
+    expect(owed.ledger.list()[0]?.receiptExpected).toBeUndefined()
+    // A host before p1-mailbox-owes (or a deposit that does not declare it) answers final: no debt, as before.
+    const final = fixture([{ ...ok, task_status: 'TASK_STATE_COMPLETED', receipt: 'mailbox' }])
+    await createDirectForward(final.deps)(request)
+    expect(final.ledger.list()[0]?.receiptExpected).toBe(false)
+  })
   it('does not fail over an uncertain sync timeout or an idempotency verdict', async () => {
     for (const code of [-32005, -32002, -32003]) {
       const x = fixture([{ ok: false, code, error: 'terminal or uncertain' }, ok])

@@ -48,7 +48,7 @@ const USAGE = `a2a-net CLI — aligned with the plugin's model tools ('a2a tools
 
 usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 
-户口制:   init <name> [--uuid 16hex] [--force] · publish · inbox [--new|--wait|--hook] · thread <context_id> · receipt <task_id> <result…> · revoke
+户口制:   init <name> [--uuid 16hex] [--force] · publish [--owes] · inbox [--new|--wait|--hook] · thread <context_id> · receipt <task_id> <result…> · revoke
 对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · report <msg…> [--task ID]
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
@@ -92,7 +92,7 @@ receipt:  receipt <task_id> [--attention | --outcome O] [--to TEAM] <one line…
 
 /** Flags that take a value (both '--home URL' and '--home=URL'); the rest are switches. */
 const VALUE_FLAGS = new Set(['--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome'])
-const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention'])
+const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--owes'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
 const HOOK_MODE = process.argv.includes('--hook')
@@ -691,7 +691,10 @@ async function publishDeposit() {
   const signCard = await loadSignCard()
   const id = identity()
   const privateKey = createPrivateKey(id.privateKeyPem)
-  const card = signCard({ name: id.name, session: `cli-${id.name}`, team: id.handle, capabilities: { route: true, async: true }, expiresAt: Date.now() + 2 * 24 * 60 * 60 * 1000 }, privateKey)
+  // superagent p1-mailbox-owes (S33): --owes declares, in the signed card, that this identity owes a receipt for what
+  // its mailbox takes; every publish (and --renew) states it afresh, so a publish without it withdraws the declaration.
+  const capabilities = { route: true, async: true, ...(has('--owes') ? { owes: true } : {}) }
+  const card = signCard({ name: id.name, session: `cli-${id.name}`, team: id.handle, capabilities, expiresAt: Date.now() + 2 * 24 * 60 * 60 * 1000 }, privateKey)
   return await control({ action: 'publish', card: JSON.stringify(card) })
 }
 

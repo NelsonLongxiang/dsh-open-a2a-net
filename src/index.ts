@@ -764,6 +764,10 @@ export function apply(ctx: Context, config: Config): void {
     // (enforce): that is the verdict — the echo fallback must not judge the
     // same message a second time.
     const owedRow = parsed !== null && parsed.taskId !== '' ? taskLedger.find(parsed.taskId) : undefined
+    // p1-mailbox-owes (S33, a): a row owed by a CLI identity on this host (the inbound row an owing deposit keeps, or a
+    // same-host caller's local row) is answered by that identity alone — keyed on the row, so it holds after the deposit
+    // lapses too. A receipt header from anyone else names it without touching it: no settlement, no echo, no outcome.
+    if (owedRow !== undefined && (owedRow.direction === 'inbound' || owedRow.peer === 'local') && CLI_HANDLE_RE.test(owedRow.team) && settler?.caller !== owedRow.team) return undefined
     const owedByHeader = owedRow !== undefined
     // #139 (design §4.4): an enforce refusal of the row the header names is
     // told to the sender on the wire response, not only in /state.
@@ -3893,7 +3897,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       return { ok: false, error: idRefusal, code: -32000 }
     }
     // gh#224: a full target queue refuses a same-host delivery as the wire face does (receipts, CLI mailboxes pass).
-    const queueRefusal = queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, cliDeposits.get(team) !== undefined, ownTask)
+    // p1-mailbox-owes (S33): a deposit that declares it owes receipts is under the cap like a session.
+    const queueRefusal = queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, cliDeposits.get(team) !== undefined && !cliDeposits.owes(team), ownTask)
     if (queueRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: queueRefusal, code: WIRE_ERROR_QUEUE_FULL, next: QUEUE_FULL_NEXT }
@@ -3926,9 +3931,17 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       settleAndAnnounce(message, localSettler)
       const answered = parseReceipt(message)
       const disposition = answered?.envelope?.disposition
-      cliDeposits.mail(team, callerSession ?? 'unknown', message, undefined, { taskId: taskIdFromCaller, contextId, proof: 'in-process', ...(answered !== null ? { receiptFor: answered.taskId } : {}), ...(disposition !== undefined ? { disposition } : {}) })
+      const evicted = cliDeposits.mail(team, callerSession ?? 'unknown', message, undefined, { taskId: taskIdFromCaller, contextId, proof: 'in-process', ...(answered !== null ? { receiptFor: answered.taskId } : {}), ...(disposition !== undefined ? { disposition } : {}) })
+      // p1-mailbox-owes (D-5): a row the cap pushed out takes its owed inbound row with it.
+      for (const gone of evicted) if (gone.task_id !== undefined) taskLedger.evictInbound(gone.task_id, team)
       recordActivity('in', team, callerSession ?? 'peer', true)
       logger.info(`a2a: cli mailbox delivery for ${team} (from ${callerSession ?? 'unknown'})`)
+      if (answered === null && taskIdFromCaller !== undefined && cliDeposits.owes(team)) {
+        // p1-mailbox-owes (S33, D-2): delivered, not final. On one host the caller and the target share this ledger: the
+        // caller's own owed row (peer 'local', booked by trackOwedTask) is the one the per-target cap counts, as for a
+        // same-host session, so no separate inbound row is kept.
+        return { ok: true, team, reply: `delivered to the mailbox of ${team} — it owes a receipt`, task_id: taskIdFromCaller, context_id: contextId ?? '', task_status: 'TASK_STATE_DELIVERED', receipt: 'mailbox' }
+      }
       return { ok: true, team, reply: `delivered to the mailbox of ${team} — the CLI polls while online`, task_id: taskIdFromCaller ?? '', context_id: contextId ?? '', task_status: 'TASK_STATE_COMPLETED' }
     }
     // The native-teams claim probe is an await: pay it only when the four
