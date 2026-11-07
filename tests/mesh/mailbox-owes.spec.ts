@@ -166,6 +166,31 @@ describe('superagent p1-mailbox-owes: a deposit that owes receipts', () => {
     }
   }, 60_000)
 
+  it('#404 in process: a plain identity\'s mailbox is final for a same-host caller, as on the wire — no debt, no slot', async () => {
+    const SID = 'session-0123456789abcdef'
+    const a = await bootNode({ name: 'A', session: 'mesh-plain-local', team: 'dsh', agentId: SID, sessionNodes: true, teamScopeRouting: false, teamScopeInfo: false, port: await reservePort() })
+    try {
+      await deposit(a, OTHER, false)
+      expect((await postJson(a.baseUrl, '/__dsh_a2a/join', { id: SID })).status).toBe(200)
+      for (const id of [SID, handleOf(OTHER)]) { const r = await (await postJson(a.baseUrl, '/__dsh_a2a/canvas', { action: 'add-member', name: 'ops', id })).json() as { ok?: boolean }; expect(r.ok, JSON.stringify(r)).toBe(true) }
+      const tool = a.ctx.tools.get('a2a_route')! as unknown as { execute: (args: unknown, ctx: unknown) => Promise<Record<string, unknown>> }
+      const ids: string[] = []
+      for (const n of [1, 2, 3, 4]) {
+        const out = await tool.execute({ team: handleOf(OTHER), message: `plain ${String(n)}`, async: true }, runContext(a.agents.agent))
+        expect(out, JSON.stringify(out)).toMatchObject({ ok: true, task_status: 'TASK_STATE_COMPLETED' })
+        ids.push(String(out.task_id))
+      }
+      // Same as the wire face (S29): the caller books nothing for a mailbox that owes no receipt.
+      expect((await state(a)).tasks.filter(t => ids.includes(String(t.taskId)))).toEqual([])
+      // The wire face for comparison: the same kind of delivery, no debt either.
+      await deposit(a, WRITERS[0]!, false)
+      expect((await send(a, WRITERS[0]!, handleOf(OTHER), 'wire-plain')).body).toMatchObject({ task_status: 'TASK_STATE_COMPLETED', receipt: 'mailbox' })
+      expect((await state(a)).tasks).toEqual([])
+    } finally {
+      await a.dispose()
+    }
+  }, 60_000)
+
   it('(c) an owed row expires with the stale sweep and its slot comes back', async () => {
     const a = await bootNode({ name: 'A', session: 'mesh-owes-ttl', team: 'dsh', sessionNodes: true, taskStaleTtlMs: 1500, port: await reservePort() })
     try {
