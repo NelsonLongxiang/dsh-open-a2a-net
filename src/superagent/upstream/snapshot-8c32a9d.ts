@@ -81,6 +81,17 @@ export interface Trigger {
   meta: Record<string, unknown>
 }
 
+// ── src/core/model.ts:271-273,276-278,284-285 (Ticket: left out everything but id and ended) ──
+export type TicketEndBy = 'executor' | 'human'
+/** How a ticket ended: with its result, with its pull request merged or closed unmerged, with nothing to do, or stopped by a person. */
+export type TicketOutcome = 'completed' | 'merged' | 'closed' | 'dropped' | 'stopped'
+/** Ticket aggregate: an authorized work item with its assignments, channels, thread bindings, and inputs. */
+export interface Ticket {
+  id: string
+  /** When, by whom, and how the ticket ended, with a person's or the host's reason beyond the outcome; an open ticket has none. */
+  ended?: { at: string; by: TicketEndBy; outcome: TicketOutcome; reason?: string }
+}
+
 // ── src/core/ids.ts:3-5 ──
 export function key(...values: string[]): string {
   return createHash('sha256').update(JSON.stringify(values)).digest('hex').slice(0, 32)
@@ -135,7 +146,7 @@ export interface SourceHost {
   context(kind: { kind: string; health: readonly string[] }): SourceContext
 }
 
-// ── src/sources/host.ts:31-66 (left out: problem, atomic, state.keys, threads.get/subscribed/patch, tickets, triggers, notify) ──
+// ── src/sources/host.ts:31-66 (left out: problem, atomic, state.keys, threads.get/subscribed/patch, tickets.open/bindThread/threadClosed, triggers, notify) ──
 /** Application capabilities exposed to a Source kind for reading state, ingesting triggers, managing threads/tickets, and reporting health. */
 export interface SourceContext {
   readonly deployment: Deployment
@@ -151,6 +162,9 @@ export interface SourceContext {
   state: { get<V>(key: Key<V>): V | undefined; set<V>(key: Key<V>, value: V | undefined): void }
   threads: {
     describe(key: string, description: ThreadDescription): void
+  }
+  tickets: {
+    get(id: string): Ticket | undefined
   }
   /** Reports the state of one of this kind's declared health entries; throws for undeclared entry names. */
   report(entry: string, health: Health): void
