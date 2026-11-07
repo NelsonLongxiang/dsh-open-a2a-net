@@ -236,11 +236,16 @@ Files do not go through session messages: use the file channel below, never JPFI
     home host's clock, an `out` row's `at` is this machine's. When the CLI
     talks to a home on another machine whose clock is off, the two sides can
     interleave in the wrong order. Paging stays complete either way.
-- `receipt <task_id> [--attention] [--to TEAM] <one line…>` is the one formal
+- `receipt <task_id> [--attention | --outcome O] [--to TEAM] <one line…>` is the one formal
   receipt for a task this identity received:
   - It sends `[A2A receipt] task <task_id> <one line>` plus the v2 envelope
     line. The default is a result,
     `{"outcome":"completed","idempotencyKey":<id>,"disposition":"result"}`.
+    `--outcome` says how the work ended instead: `failed`, `rejected`
+    (declined, never taken up) or `abandoned` (stopped before it finished);
+    `completed` is the default. Any other value, or `--outcome` together with
+    `--attention`, exits 2 and sends nothing; `expired`, `sync_completed` and
+    `unknown` are outcomes the host derives, not ones a sender claims.
     With `--attention` it is a question for the caller,
     `{"idempotencyKey":<id>,"disposition":"attention"}`, with no outcome:
     it settles the task but is not a completion. The caller's answer comes
