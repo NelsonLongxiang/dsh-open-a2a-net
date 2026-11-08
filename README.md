@@ -84,7 +84,7 @@ tool runtime; the card route `/.well-known/agent-card.json` is registered only w
 
 ## Model tools at a glance
 
-Ten tools. With `teamScopeInfo` on (the default), `a2a_teams`, `a2a_status` and `a2a_probe` answer from
+Twelve tools. With `teamScopeInfo` on (the default), `a2a_teams`, `a2a_status` and `a2a_probe` answer from
 this host's joined-team scope: `[this host]` rows plus peers serving a team this host's nodes declared.
 `a2a_tasks` (this host's own dispatch ledger) stays unscoped.
 
@@ -95,13 +95,13 @@ this host's joined-team scope: `[this host]` rows plus peers serving a team this
 | `a2a_route` | Send a message to a team. | `context_id` continues a conversation; `async: true` delivers without waiting; fails over across candidates. |
 | `a2a_tasks` | Which async tasks still owe a receipt? | Three tiers: owed rows keep the follow-up `context_id`; past-TTL rows auto-dead-letter (still settleable); outcomes land in the bounded archive; persisted across restarts. |
 | `a2a_probe` | Is the fleet healthy? | One verified-card fetch per in-scope peer (or one given url); `N reachable, M down`; misses classified `unreachable` vs `rejected`. |
-| `a2a_team_join` | Declare one joined node a member of a team. | Allowlist-gated: only an **exact** name in `teamJoinAllowlist` authorizes a join (empty list denies every join). A wildcard/prefix entry is shown by `a2a_whoami` but authorizes nothing (`[PATTERN_NO_MINT]`); canvas teams are assigned in the workbench, never here (`[CANVAS_TEAM]`). Attempts land in the state face's `registry.teamAudit`. |
-| `a2a_team_leave` | Retract a team membership. | Always allowed — leaving only shrinks exposure. |
-| `a2a_exposure` | How visible is this session? | Sets the session's own tier: `linked` (the default floor) or `fleet` (a voluntary opt-up); a group's visibility follows its strictest member. Requires a joined session. |
-| `a2a_report` | Tell this host's supervision something while off the network. | The one ingress exempt from the join gate: one-way, lands in the state face's reports ring, grants no presence or routing. One report per 30s per session, ≤4000 chars, identical text 3× in 10 min is refused as a loop. |
+| `a2a_team_join` | Declare one joined node a member of a team. | Allowlist-gated: only an **exact** name in `teamJoinAllowlist` authorizes a join (empty list denies every join). A wildcard/prefix entry is shown by `a2a_whoami` but authorizes nothing (`[PATTERN_NO_MINT]`); canvas teams are assigned in the workbench, never here (`[CANVAS_TEAM]`). Attempts land in the state face's `registry.teamAudit`. A model tool may only declare membership for the calling session's own node (else `[NOT_SELF]`), and that node must already be joined (else `[NOT_JOINED]`). |
+| `a2a_team_leave` | Retract a team membership. | Not subject to the allowlist — leaving only shrinks exposure; it still can only retract a membership the calling session's own node declared (`[NOT_SELF]`, `[NOT_JOINED]`; nothing to retract if it never declared one). |
+| `a2a_exposure` | How visible is this session? | Sets the session's own tier: `linked` (the default floor) or `fleet` (a voluntary opt-up), changeable at any time; requires a joined session. **Today the tier is only persisted (`a2a/exposure.json`) and shown in the `exposure` field of the state face's session rows; it does not yet change what the card or the directory exposes** — "a group's visibility follows its strictest member" is a written rule with neither a group-level API nor an enforcement point in v1 (owner ruling 2026-11-08, #449: documented as is). |
+| `a2a_report` | Tell this host's supervision something while off the network. | The one write-ingress to this host that works while unjoined (the read-only `a2a_whoami` is exempt from the join gate too): one-way, lands in the state face's reports ring (newest 64 kept), grants no presence or routing. One report per 30s per session, ≤4000 chars; once the same session has reported the same text 3 times within 10 min, the 4th is refused as a loop. |
 | `a2a_status` | What is this node doing right now? | In-scope tracked peers with quality scores, in-flight routes, recent routing activity, and the idempotency window aggregate (occupancy + claim/replay/conflict counters). |
-| `a2a_file_send` | Hand files to a team without putting them in a message. | Stages each file (≤16 per call, ≤64 MiB each) on this host for that team and routes ONE message of `[A2A file]` reference lines; the bytes never ride the message (#91). |
-| `a2a_file_fetch` | Pull a file someone referenced. | Pulls one `[A2A file]` reference from the host that staged it, signed as this session; checks size and sha256 before saving it under `<cwd>/a2a-inbox/`. A grant names one session (or a whole host, or a canvas team's members); the fetch always marks the session as having read peer content. |
+| `a2a_file_send` | Hand files to a team without putting them in a message. | Stages each file (≤16 per call, ≤64 MiB each) on this host, granted to that team for 24 hours, and routes ONE message of `[A2A file]` reference lines; the bytes never ride the message (#91). Needs this host to have published a card URL (`announce`), otherwise it refuses to send. |
+| `a2a_file_fetch` | Pull a file someone referenced. | Pulls one `[A2A file]` reference from the host that staged it, carrying this session as `caller_session` and this host node's OriginClaim envelope (a reference naming this host reads the local store directly); checks size and sha256 before saving it under `<cwd>/a2a-inbox/`. A grant names one session (or a whole host, or a canvas team's members); the fetch always marks the session as having read peer content. |
 
 ## a2a-net CLI (callers outside a session)
 
