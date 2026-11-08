@@ -48,7 +48,7 @@ function makeAgent(id: string, name: string): TestAgent {
 }
 const R_ID = 'session-a0000000aaaa1111', M_ID = 'session-b1111111bbbb2222', O_ID = 'session-c2222222cccc3333', X_ID = 'session-d3333333dddd4444'
 const execAs = (agent: Agent) => ({ signal: new AbortController().signal, agent }) as never
-const until = async (f: () => boolean | Promise<boolean>, ms = 8000): Promise<void> => { const t = Date.now(); while (Date.now() - t < ms) { if (await f()) return; await new Promise(r => setTimeout(r, 25)) } }
+const until = async (f: () => boolean | Promise<boolean>, ms = 8000): Promise<void> => { const t = Date.now(); while (Date.now() - t < ms) { if (await f()) return; await new Promise(r => setTimeout(r, 25)) } throw new Error(`until: condition not met within ${String(ms)} ms`) }
 
 async function mount(home: string, extra: Partial<Config> = {}) {
   const ctx = new Context()

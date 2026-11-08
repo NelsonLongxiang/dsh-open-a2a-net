@@ -16,7 +16,7 @@ const url = (p: number): string => `http://127.0.0.1:${String(p)}`
 const sa = async (n: MeshNode, body: unknown): Promise<Record<string, any>> => await (await postJson(n.baseUrl, '/__dsh_a2a/superagent', body)).json() as Record<string, any>
 const state = async (n: MeshNode): Promise<Record<string, any>> => await (await globalThis.fetch(`${n.baseUrl}/__dsh_a2a/superagent`)).json() as Record<string, any>
 const tool = async (n: MeshNode, name: string, args: Record<string, unknown>): Promise<Record<string, any>> => await n.ctx.tools.get(name)!.execute(args, runContext(n.agents.agent)) as Record<string, any>
-const until = async (f: () => boolean | Promise<boolean>, ms = 10_000): Promise<void> => { const t = Date.now(); while (Date.now() - t < ms) { if (await f()) return; await new Promise(r => setTimeout(r, 50)) } }
+const until = async (f: () => boolean | Promise<boolean>, ms = 10_000): Promise<void> => { const t = Date.now(); while (Date.now() - t < ms) { if (await f()) return; await new Promise(r => setTimeout(r, 50)) } throw new Error(`until: condition not met within ${String(ms)} ms`) }
 const texts = (n: MeshNode): string[] => n.steered.map(p => typeof p === 'string' ? p : JSON.stringify(p))
 
 describe('superagent members on other hosts', () => {

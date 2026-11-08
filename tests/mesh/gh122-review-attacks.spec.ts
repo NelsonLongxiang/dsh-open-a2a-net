@@ -26,7 +26,7 @@ afterEach(() => { validationControl.mode='normal';vi.unstubAllGlobals() })
 const A_ID = 'session-aaaaaaaa11112222'
 const B_ID = 'session-bbbbbbbb33334444'
 const state = async (n: MeshNode): Promise<Record<string, any>> => await globalThis.fetch(`${n.baseUrl}/__dsh_a2a/state`).then(async r => await r.json())
-const until = async (f: () => Promise<boolean>, ms = 5000): Promise<void> => { const t = Date.now(); while (Date.now() - t < ms) { if (await f()) return; await new Promise(r => setTimeout(r, 50)) } }
+const until = async (f: () => Promise<boolean>, ms = 5000): Promise<void> => { const t = Date.now(); while (Date.now() - t < ms) { if (await f()) return; await new Promise(r => setTimeout(r, 50)) } throw new Error(`until: condition not met within ${String(ms)} ms`) }
 const rowOf = async (n: MeshNode, id: string): Promise<Record<string, any> | undefined> => { const s = await state(n); return [...s.tasks, ...(s.archived ?? [])].find((r: any) => r.taskId === id) }
 const route = async (n: MeshNode, args: Record<string, unknown>): Promise<Record<string, any>> => await n.ctx.tools.get('a2a_route')!.execute(args, runContext(n.agents.agent)) as Record<string, any>
 const silence = (n: MeshNode): void => { (n.agents.agent as never).steer = (p: unknown) => { n.steered.push(p) } }

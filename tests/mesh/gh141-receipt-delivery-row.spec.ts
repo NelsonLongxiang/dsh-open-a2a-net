@@ -18,7 +18,7 @@ afterEach(() => { vi.unstubAllGlobals() })
 const A_ID = 'session-aaaaaaaa11112222'
 const B_ID = 'session-bbbbbbbb33334444'
 const state = async (n: MeshNode): Promise<Record<string, any>> => await globalThis.fetch(`${n.baseUrl}/__dsh_a2a/state`).then(async r => await r.json())
-const until = async (f: () => Promise<boolean>, ms = 8000): Promise<void> => { const t = Date.now(); while (Date.now() - t < ms) { if (await f()) return; await new Promise(r => setTimeout(r, 50)) } }
+const until = async (f: () => Promise<boolean>, ms = 8000): Promise<void> => { const t = Date.now(); while (Date.now() - t < ms) { if (await f()) return; await new Promise(r => setTimeout(r, 50)) } throw new Error(`until: condition not met within ${String(ms)} ms`) }
 const archived = async (n: MeshNode, id: string): Promise<Record<string, any> | undefined> => ((await state(n)).archived ?? []).find((r: any) => r.taskId === id)
 const route = async (n: MeshNode, args: Record<string, unknown>, agent: Agent = n.agents.agent!): Promise<Record<string, any>> =>
   await n.ctx.tools.get('a2a_route')!.execute(args, runContext(agent)) as Record<string, any>
