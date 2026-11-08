@@ -94,12 +94,18 @@ export interface WireDeps {
   readonly superagentInbound: (team: string) => string | undefined
   /** superagent design v4: whether `team` is the team's A2A address (its requests take no target queue slot). */
   readonly superagentIntake: (team: string) => boolean
+  /** Design v5 (D2): the team mailbox a route to the bound team canvas lands in; undefined for any other target. */
+  readonly teamMailboxOf?: (team: string) => string | undefined
+  /** Design v5 (D2): why a route straight to the team identity's handle is refused, if it is. */
+  readonly teamAddressRefusal?: (team: string, message: string) => string | undefined
   readonly ctx: Context
   readonly logger: ReturnType<Context['logger']>
   readonly config: Config
   readonly cliDeposits: CliDepositStore
   readonly canvasStore: CanvasStore
   readonly canvasMemberForWrite: (ref: string, peer?: unknown, editorCard?: A2aPeerCard) => Promise<{ ok: true; member: string; ownerKey?: string } | { ok: false; error: string }>
+  /** Design v5 R3/R4: why the superagent team refuses this member on this canvas, if it does (absent: no team). */
+  readonly teamCanvasRefusal?: (canvas: string, member: string) => string | undefined
   readonly canvasNameReserved: (name: string) => boolean
   readonly sessionNodes: Map<string, Agent>
   readonly joinedSessions: JoinedSessions
@@ -112,6 +118,8 @@ export interface WireDeps {
   readonly remoteCliProof: (handle: string, claim: Extract<OriginClaimResult, { ok: true }>) => Promise<RemoteCliProof | undefined>
   /** #282 S3: the basis for a receipt to a local CLI from a member frozen on this host's own forward, else undefined. */
   readonly forwardReceiptBasis: (taskId: string, caller: string, cliHandle: string, claim: Extract<OriginClaimResult, { ok: true }>) => string | undefined
+  /** Design v5 (v5-B2): the basis on which a superagent team's host-face receipt to one of this host's own requests lands. */
+  readonly teamReceiptBasis?: (taskId: string, caller: string, target: string, onBehalfOf: string | undefined, claim: Extract<OriginClaimResult, { ok: true }>) => string | undefined
   readonly receiptReplayAllowed:(message:string,caller:string,team:string,claim:Extract<OriginClaimResult,{ok:true}>)=>boolean
   readonly callerLinkedToThisHost: (caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined) => boolean
   /** This host's own card URL (read when a request lands; set once the web server settles). */
@@ -366,7 +374,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 if (body.home !== undefined) payload = { ok: false, error: 'CLI home pins may only be set by this host local control route' }
                 else {
                   const proof = await d.canvasMemberForWrite(rawId, undefined, claim.card)
+                  const teamRefusal = proof.ok ? d.teamCanvasRefusal?.(name, proof.member) : undefined
                   if (!proof.ok) payload = proof
+                  else if (teamRefusal !== undefined) payload = { ok: false, error: teamRefusal }
                   else { canvasStore.create(name); payload = { ok: canvasStore.addMember(name, proof.member, undefined, { ownerKey: proof.ownerKey }), members: canvasStore.membersOf(name) } }
                 }
               }
@@ -639,6 +649,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           const ownerQualified = splitCanvasOwner(typeof body.team === 'string' ? body.team : '')
           const team = ownerQualified.owner !== undefined && ownerQualified.owner === d.ownCanvasFingerprint ? ownerQualified.team : typeof body.team === 'string' ? body.team : ''
           const message = typeof body.message === 'string' ? body.message : ''
+          // Design v5 (D2): a route to the bound team canvas is admitted and mailed as one to the team's address; the
+          // requester's own spelling is what the team answers on behalf of (review R1).
+          const mailTeam = d.teamMailboxOf?.(team) ?? team
+          const addressed = mailTeam !== team && typeof body.team === 'string' ? body.team : team
           const caller = typeof body.caller_session === 'string' ? body.caller_session : ''
           // P2 receipt-callback: where THIS node's receipt should route on
           // the caller's side — the caller knows its routable address best
@@ -686,7 +700,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           const envelopePresent=hasOriginClaimFields(req)
           const earlyClaim: OriginClaimResult = envelopePresent ? await completeInboundVerification(()=>verifyOriginClaim(req, { cli: true, rawBody })) : {ok:false,reason:'absent'}
           const memberClaim=/^[^/\s]+\/[0-9a-f]{8}(?:@[0-9a-f]{8})?$/.test(caller)||caller===config.team||caller.startsWith(config.team+'/')||canvasStore.list().some(name=>canvasStore.rawMembersOf(name).some(ref=>ref===caller||ref.startsWith(caller+'@')))||String(req.headers['x-a2a-caller']??'')===config.team
-          const gate=verifiedInboundAdmission(earlyClaim,envelopePresent,memberClaim,key=>a2aCallerAdmission(caller,team,undefined,key))
+          const gate=verifiedInboundAdmission(earlyClaim,envelopePresent,memberClaim,key=>a2aCallerAdmission(caller,mailTeam,undefined,key))
           if(!gate.ok) {
             recordActivity('in',team,caller,false)
             const payload=JSON.stringify({error:'untrusted-origin: OriginClaim verification failed ('+gate.reason+')',code:WIRE_ERROR_INBOUND_VERIFICATION,reason:gate.reason,team,task_status:'TASK_STATE_FAILED',delivered:false})
@@ -699,7 +713,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
           }
           const cliProof = foreignCli && earlyClaim?.ok ? await remoteCliProof(caller, earlyClaim).catch(() => undefined) : undefined
-          let admission = foreignCli ? a2aCallerAdmission(caller, team, cliProof, earlyClaim?.ok ? earlyClaim.card.publicKey : undefined) : gate.admission
+          let admission = foreignCli ? a2aCallerAdmission(caller, mailTeam, cliProof, earlyClaim?.ok ? earlyClaim.card.publicKey : undefined) : gate.admission
           // #282 S3 (same team authorizes): a receipt for this host's own forward, to the CLI that sent it, from a
           // receiver frozen at birth on the selected peer's key — the owner's signed canvas is the return path.
           const echoed = !admission.ok && cliDeposits.get(team) !== undefined ? parseReceipt(message) : null
@@ -711,6 +725,13 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const basis = receiptClaim.ok ? d.forwardReceiptBasis(echoed.taskId, caller, team, receiptClaim) : undefined
             if (basis !== undefined) admission = { ok: true, via: 'peer-org', rule: 'peer-org', basis: [basis] }
           }
+          // Design v5 (v5-B2): a superagent team answers this host's own request from its process face, on its canvas's
+          // behalf — admitted for that request's receipt alone (teamReceiptBasis), whatever the target session's links.
+          const teamAnswer = !admission.ok && echoed === null && earlyClaim.ok ? parseReceipt(message) : null
+          if (teamAnswer !== null && earlyClaim.ok) {
+            const basis = d.teamReceiptBasis?.(teamAnswer.taskId, caller, team, teamAnswer.envelope?.onBehalfOf, earlyClaim)
+            if (basis !== undefined) admission = { ok: true, via: 'peer-org', rule: 'peer-org', basis: [basis] }
+          }
           const callerRefusal = refusalOf(admission)
           if (callerRefusal !== undefined || !admission.ok) {
             recordActivity('in', team, caller === '' ? 'anonymous' : caller, false)
@@ -720,7 +741,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             res.end(payload)
             return
           }
-          const routerRefusal = d.superagentInbound(team)
+          const routerRefusal = d.superagentInbound(team) ?? d.teamAddressRefusal?.(team, message)
           if (routerRefusal !== undefined) {
             recordActivity('in', team, caller, false)
             const payload = JSON.stringify({ error: routerRefusal, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
@@ -784,8 +805,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             // reads as the first answer did — delivered, with the mailbox marker — so a caller whose first answer was lost
             // books the debt now. Nothing is written again: no second mailbox row, no second inbound row, no second slot.
             // Anyone else gets the ordinary 409 (the fingerprint binds the caller too; this check holds should that change).
-            const stillOwed = replay && cliDeposits.owes(team) ? taskLedger.find(taskId) : undefined
-            if (stillOwed !== undefined && stillOwed.direction === 'inbound' && stillOwed.status === 'pending' && stillOwed.team === team && stillOwed.peer === `local:${caller}`) {
+            const stillOwed = replay && cliDeposits.owes(mailTeam) ? taskLedger.find(taskId) : undefined
+            if (stillOwed !== undefined && stillOwed.direction === 'inbound' && stillOwed.status === 'pending' && stillOwed.team === addressed && stillOwed.peer === `local:${caller}`) {
               const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, context_id: stillOwed.contextId ?? contextId, task_status: 'TASK_STATE_DELIVERED', note: `delivered to the mailbox of ${team} — it owes a receipt` })
               res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
               res.end(payload)
@@ -816,7 +837,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           }
           if (refuseIfFlooded(caller, message, team, taskId, res)) return
           // p1-mailbox-owes (S33): a deposit whose card declares it owes receipts is under the per-target cap like a session.
-          if (refuseIfQueueFull(caller, message, team, taskId, (cliDeposits.get(team) !== undefined && !cliDeposits.owes(team)) || d.superagentIntake(team), res)) return
+          if (refuseIfQueueFull(caller, message, team, taskId, (cliDeposits.get(mailTeam) !== undefined && !cliDeposits.owes(mailTeam)) || d.superagentIntake(mailTeam), res)) return
           // The caller-side receipt correlation: a message shaped as a
           // receipt resolves the task it echoes, whichever wait semantics
           // carried it here. Correlation is bookkeeping only — the message
@@ -844,22 +865,29 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // CLI handle never resolves a session and never wakes — it lands
           // in the deposit's mailbox and answers delivered. Placement here
           // keeps the idempotency claim (above) exactly as for sessions.
-          const cliRow = cliDeposits.get(team)
+          const cliRow = cliDeposits.get(mailTeam)
           if (cliRow !== undefined) {
             const answered = parseReceipt(message)
             // #298: only the answering member's own, unrefused receipt is the duplicate of a sync answer.
-            const duplicate = answered !== null && refusedSettlement === undefined && syncAnswered.take(answered.taskId, team, caller)
-            const evicted = cliDeposits.mail(team, caller, `${directHeader(caller)}\n\n${message}`, duplicate ? 'sync-answered' : undefined, { taskId, contextId, proof: callerProof, ...(answered !== null ? { receiptFor: answered.taskId } : {}), ...(answered?.envelope?.disposition !== undefined ? { disposition: answered.envelope.disposition } : {}),
+            const duplicate = answered !== null && refusedSettlement === undefined && syncAnswered.take(answered.taskId, mailTeam, caller)
+            const evicted = cliDeposits.mail(mailTeam, caller, `${directHeader(caller)}\n\n${message}`, duplicate ? 'sync-answered' : undefined, { taskId, contextId, proof: callerProof, ...(answered !== null ? { receiptFor: answered.taskId } : {}), ...(answered?.envelope?.disposition !== undefined ? { disposition: answered.envelope.disposition } : {}),
               // p1-mail-admission: the rule this host matched when it took the delivery, as it already computed it.
               ...(admission.ok ? { admission: admission.rule } : {}) })
             // p1-mailbox-owes (D-5): a row the cap pushed out takes its owed inbound row with it (slot freed, counted as evicted).
-            for (const gone of evicted) if (gone.task_id !== undefined) taskLedger.evictInbound(gone.task_id, team)
+            for (const gone of evicted) if (gone.task_id !== undefined) taskLedger.evictInbound(gone.task_id, taskLedger.find(gone.task_id)?.team ?? mailTeam)
             recordActivity('in', team, caller, true)
-            logger.info(`a2a: cli mailbox delivery for ${team} (from ${caller})`)
-            if (answered === null && cliDeposits.owes(team)) {
+            logger.info(`a2a: cli mailbox delivery for ${mailTeam} (from ${caller}${mailTeam !== team ? `, addressed to ${addressed}` : ''})`)
+            if (answered === null && cliDeposits.owes(mailTeam)) {
               // p1-mailbox-owes (S33, D-2): delivered, not final — the caller books a debt, this host keeps the owed
               // inbound row (the per-target cap counts it) and records no outcome, so a resend reads pending.
-              taskLedger.trackInbound(taskId, team, caller, contextId === '' ? undefined : contextId, true, briefOf(message))
+              taskLedger.trackInbound(taskId, addressed, caller, contextId === '' ? undefined : contextId, true, briefOf(message))
+              // Design v5 (R5): a sync route to the team answers at once — the team works asynchronously.
+              if (mailTeam !== team) {
+                const teamPayload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_DELIVERED', note: `delivered to the superagent team ${addressed} — it works asynchronously; its result arrives as this task's receipt` })
+                res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(teamPayload) })
+                res.end(teamPayload)
+                return
+              }
               const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_DELIVERED', note: `delivered to the mailbox of ${team} — it owes a receipt` })
               res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
               res.end(payload)

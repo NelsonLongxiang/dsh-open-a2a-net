@@ -180,7 +180,7 @@ export const inject = ['tools', 'timer', 'systemPrompt']
 
 import { Config } from './config.ts'
 import { canvasOwnerFingerprint, splitCanvasOwner } from './canvas-id.ts'
-import { forwardReceiptBasis } from './direct-forward.ts'
+import { forwardReceiptBasis, teamReceiptBasis } from './direct-forward.ts'
 import { NudgeObservability } from './nudge-observability.ts'
 export { Config }
 export type { DelegateConfig } from './config.ts'
@@ -1805,7 +1805,8 @@ export function apply(ctx: Context, config: Config): void {
         nudgeEscalations:()=>nudgeObservations.snapshot(),
         ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
-        admissionRecheck: (caller: string, handle: string, local: boolean) => recheckCallerAdmission(admissionRecords, caller, handle, local),
+        teamCanvasRefusal: (canvas: string, member: string) => superagentHost?.canvasMemberRefusal(canvas, member, sessionPresetOf),
+        admissionRecheck: (caller: string, handle: string, local: boolean) => recheckCallerAdmission(linkRecheckRecords, caller, handle, local),
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
         get legacyInboundCount() { return legacyInboundCount },
@@ -1968,7 +1969,7 @@ export function apply(ctx: Context, config: Config): void {
             // gh#152: members are read through the local tiers' lens — one of
             // this host's own handles resolves to the session it names, and
             // the two stored shapes of one session publish as ONE handle.
-            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) })) } : {}),
+            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) , ...(superagentHost?.a2aAddress !== undefined && superagentHost.settings.canvas === name ? { superagentTeam: true as const } : {}) })) } : {}),
             ...(named && lanIp !== '' ? { lanIp } : {}),
             ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}),
             description: `A2A node exposing team ${config.team}${named ? '' : ' (minimal card — OriginClaim envelope required for the full card: X-A2A-Caller/-Url/-Ts/-Sig signed with your card key)'}`,
@@ -2048,6 +2049,25 @@ export function apply(ctx: Context, config: Config): void {
     handleOf: id => `${config.team}/${id8(id)}`,
     localSessionOf: handle => localSessionOfHandle(handle),
     onRolesChanged: () => { syncRoleTools() },
+    // Design v5: the team is a canvas team this host owns. Its local sessions in canvas order, and its remote session slots
+    // with the key the canvas pinned and the base URL of the linked peer whose signed card carries that key.
+    canvasTeam: name => {
+      if (!canvasStore.hasTeam(name)) return undefined
+      const ownKey = encodePublicKey(createPublicKey(nodePrivateKey))
+      const local = canvasLocalMembersOf(name, true).filter(id => !id.includes('/'))
+      const remote = canvasStore.membersOf(name).flatMap(ref => {
+        if (CLI_HANDLE_RE.test(ref) || splitQualifiedMember(ref) === undefined) return []
+        const key = canvasStore.ownerKeyOf(ref)
+        if (key === undefined || key === ownKey || memberProvenance(ref, key, ownKey) !== 'confirmed-remote') return []
+        const url = [...cardCache.entries()].find(([, entry]) => entry.card?.publicKey === key)?.[0]
+        return [{ ref, key, url: url !== undefined ? new URL(url).origin : '' }]
+      })
+      return { local, remote }
+    },
+    canvasesOf: id => canvasTeamsOfSession(id),
+    canvasNames: () => canvasStore.list(),
+    presetOf: id => sessionPresetOf(id),
+    teamSend: args => teamCanvasSend(args),
   }) : undefined
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
   const superagentRoleTools = new RoleTools({
@@ -2096,6 +2116,71 @@ export function apply(ctx: Context, config: Config): void {
     if (router !== undefined && named(router)) return '[superagent-router-inbound] the team router takes no A2A work; send requests to the team\'s Sources (the workbench or its A2A address), where the gate admits them'
     if (superagentHost.settings.members.some(named)) return '[superagent-member-inbound] a team member takes work only as assignments from the team\'s executor; send requests to the team\'s Sources'
     return undefined
+  }
+  /**
+   * Design v5 (D2): the team's address is its canvas team. A route to the bound canvas — bare, or qualified with this
+   * host's own fingerprint — lands in the team's mailbox (the A2A Source reads it), never in a member session.
+   */
+  function teamMailboxOf(team: string): string | undefined {
+    const bound = superagentHost?.settings.canvas
+    const address = superagentHost?.a2aAddress
+    if (bound === undefined || address === undefined) return undefined
+    const split = splitCanvasOwner(team.trim())
+    if (split.owner !== undefined && split.owner !== ownCanvasFingerprint) return undefined
+    return split.team === `${config.team}/canvas/${bound}` ? address : undefined
+  }
+  /** Design v5 (D2): a route straight to the team identity's handle is refused (a receipt to it still lands): the address is the canvas. */
+  function teamAddressRefusal(team: string, message: string): string | undefined {
+    const address = superagentHost?.a2aAddress
+    if (address === undefined || team.trim() !== address || parseReceipt(message) !== null) return undefined
+    const bound = superagentHost?.settings.canvas
+    superagentHost?.noteRefusal('superagent-team-address', { target: team })
+    return `[superagent-team-address] ${address} is the team's internal mailbox; send requests to the team's canvas address${bound !== undefined ? ` ${config.team}/canvas/${bound}` : ' (the team is bound to no canvas team yet)'}`
+  }
+  /**
+   * Design v5 (D2, review R1): the team's own messages to a requester that came through its canvas address — the formal
+   * receipt (result, attention or acknowledgement) and follow-ups in the same conversation — go out from this host's
+   * process face on the canvas team's behalf, with onBehalfOf spelled exactly as the requester addressed it, so the
+   * requester's ledger settles them as host-face. Speaks the a2a-net CLI's `receipt` / `route` JSON contract (stdout, exit
+   * codes 4 gone / 5 another receipt) for the A2A Source; undefined when the task did not come through the canvas.
+   */
+  async function teamCanvasSend(args: readonly string[]): Promise<string | undefined> {
+    const verb = args[0]
+    if (verb !== 'receipt' && verb !== 'route') return undefined
+    const dash = args.indexOf('--')
+    const text = dash >= 0 ? args.slice(dash + 1).join(' ') : ''
+    const flagOf = (name: string): string | undefined => { const i = args.indexOf(name); return i >= 0 && (dash < 0 || i < dash) ? args[i + 1] : undefined }
+    const fail = (code: number, error: string): never => { const e = new Error(error) as Error & { exitCode: number }; e.exitCode = code; throw e }
+    if (verb === 'receipt') {
+      const task = args[1] ?? '', to = flagOf('--to') ?? ''
+      const row = taskLedger.find(task)
+      if (row === undefined || teamMailboxOf(row.team) === undefined || to === '') return undefined
+      // Review of #442: switches are read before `--` only — the text after it may be anything.
+      const switches = dash >= 0 ? args.slice(0, dash) : args
+      const acknowledged = switches.includes('--acknowledged'), attention = switches.includes('--attention')
+      const outcome = flagOf('--outcome')
+      const fields = acknowledged ? { idempotencyKey: task, disposition: 'acknowledged' as const, onBehalfOf: row.team }
+        : attention ? { idempotencyKey: task, disposition: 'attention' as const, onBehalfOf: row.team }
+        : { outcome: (outcome ?? 'completed') as 'completed', idempotencyKey: task, disposition: 'result' as const, onBehalfOf: row.team }
+      const receipt = formatReceipt(task, text.replace(/\s+/g, ' ').trim(), fields)
+      const receiptTask = `${acknowledged ? 'ack' : 'receipt'}-${task}`
+      try {
+        const out = await dispatchAnywhere(to, receipt, session, row.contextId, new AbortController().signal, true, receiptTask)
+        // This host's own inbound row (a requester on another host or a CLI here): the receipt it sent settles it.
+        if (row.direction === 'inbound' && !acknowledged) settleOwnInbound(receipt, to, { caller: session, proof: 'in-process', ingress: 'local' })
+        return JSON.stringify({ delivered: true, class: 'sent', task_id: receiptTask, team: to, ...(typeof (out as { context_id?: unknown }).context_id === 'string' ? { context_id: (out as { context_id: string }).context_id } : {}) })
+      } catch (error) {
+        const code = (error as { code?: unknown }).code
+        return fail(code === WIRE_ERROR_IDEMPOTENCY_CONFLICT ? 5 : 1, String(error instanceof Error ? error.message : error))
+      }
+    }
+    const to = args[1] ?? '', context = flagOf('--context') ?? '', followTask = flagOf('--task')
+    const origin = taskLedger.list().find(r => r.contextId === context && teamMailboxOf(r.team) !== undefined)
+    if (origin === undefined || to === '') return undefined
+    try {
+      await dispatchAnywhere(to, text, session, context, new AbortController().signal, true, followTask)
+      return JSON.stringify({ delivered: true, class: 'sent', ...(followTask !== undefined ? { task_id: followTask } : {}), team: to, context_id: context })
+    } catch (error) { return fail(1, String(error instanceof Error ? error.message : error)) }
   }
   ctx.on('agent/inbox/claimed',({agent,message})=>followupDelivery.claimed(agent,String(message.id)))
   const withdrawQueuedTask = (taskId:string): Promise<'removed'|'claimed'|'legacy'> => {
@@ -2780,6 +2865,21 @@ export function apply(ctx: Context, config: Config): void {
     cliHomeOf: handle => canvasStore.cliHomeOf(handle),
   }
 
+  /**
+   * v5-B2: an identity's `admission` query rechecks a caller it already took (its key was verified when the delivery came
+   * in): only that the operator's link still stands. A confirmed canvas remote reference pinned with its key is that link
+   * for the bare handle too — the delivery-time records match a qualified reference only under the signer's key, which a
+   * recheck does not carry.
+   */
+  const linkRecheckRecords: AdmissionRecords = {
+    ...admissionRecords,
+    canvasRemoteMembersOf: name => canvasStore.remoteMembersOf(name).flatMap(ref => {
+      const qualified = splitQualifiedMember(ref)
+      if (qualified === undefined) return [ref]
+      return memberProvenance(ref, canvasStore.ownerKeyOf(ref), encodePublicKey(createPublicKey(nodePrivateKey))) === 'confirmed-remote' ? [ref, qualified.handle] : [ref]
+    }),
+  }
+
   /** W1/W2 shared-team admission (see sameZoneAdmission in src/task-auth.ts). */
   function sameZoneSharedTeamRefusal(caller: string, targetTeam?: string): string | undefined {
     return refusalOf(sameZoneAdmission(admissionRecords, caller, targetTeam))
@@ -2955,8 +3055,11 @@ export function apply(ctx: Context, config: Config): void {
       config,
       cliDeposits,
       canvasStore, canvasMemberForWrite,
+      teamCanvasRefusal: (canvas: string, member: string) => superagentHost?.canvasMemberRefusal(canvas, member, sessionPresetOf),
       superagentInbound: team => superagentRouterRefusal(undefined, team),
       superagentIntake: team => superagentHost?.a2aAddress === team,
+      teamMailboxOf: team => teamMailboxOf(team),
+      teamAddressRefusal: (team, message) => teamAddressRefusal(team, message),
       canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
       sessionNodes,
       joinedSessions,
@@ -2965,6 +3068,7 @@ export function apply(ctx: Context, config: Config): void {
       peerKeyAdmits,
       remoteCliProof,
       forwardReceiptBasis: (taskId, caller, cliHandle, claim) => forwardReceiptBasis(taskLedger.find(taskId), caller, cliHandle, claim),
+      teamReceiptBasis: (taskId, caller, target, onBehalfOf, claim) => teamReceiptBasis(taskLedger.find(taskId), caller, target, onBehalfOf, claim),
       forwardDirect: request => forwardDirect(request), ownCanvasFingerprint,
       diagnoseCanvas: (team, reason, caller) => diagnoseCanvas(team, reason, caller),
       callerLinkedToThisHost, get ownCardUrl() { return ownCardUrl },
@@ -3035,30 +3139,37 @@ export function apply(ctx: Context, config: Config): void {
               send(200, superagentHost.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf))
             } else if (fields.action === 'request') {
               send(200, superagentHost.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined))
-            } else if (fields.action === 'add-remote-member') {
-              // PR-C2: a member on another host. Its key comes from the linked peer's signed card (the canvas member proof).
-              const ref = typeof fields.ref === 'string' ? fields.ref : '', peer = typeof fields.peer === 'string' ? fields.peer : ''
-              void (async () => {
-                const proof = await canvasMemberForWrite(ref, peer)
-                if (!proof.ok) { send(200, proof); return }
-                if (proof.ownerKey === undefined || !proof.member.includes('/') || proof.ownerKey === encodePublicKey(createPublicKey(nodePrivateKey))) { send(200, { ok: false, error: 'a remote member is a session on another host; name local sessions in members' }); return }
-                send(200, superagentHost.addRemoteMember({ ref: proof.member, key: proof.ownerKey, url: new URL(peer).origin }))
-              })().catch(error => send(200, { ok: false, error: String(error) }))
-            } else if (fields.action === 'remove-remote-member') {
-              send(200, superagentHost.removeRemoteMember(typeof fields.ref === 'string' ? fields.ref : ''))
+            } else if (fields.action === 'add-remote-member' || fields.action === 'remove-remote-member') {
+              // Design v5: a remote member is a remote slot of the bound canvas team — added on the canvas, which pins its key.
+              send(200, { ok: false, error: 'the team is a canvas team: add or remove a remote member on the canvas (/__dsh_a2a/canvas add-member / remove-member)' })
             } else if (fields.action === 'serve-team') {
-              // PR-C2: serve another host's team. Its key comes from that linked peer's signed card; null peer leaves.
-              if (fields.peer === null) { send(200, superagentHost.serveTeam(undefined, [], () => false)); return }
-              const peer = typeof fields.peer === 'string' ? fields.peer : ''
+              // Design v5 (D4): a team is served by its canvas id, which names its owner by key fingerprint.
+              send(200, { ok: false, error: "serve a team by its canvas id: POST { action: 'serve', team: '<zone>/canvas/<name>@<fp8>', members: [<local session ids>] } (team: null leaves)" })
+            } else if (fields.action === 'serve') {
+              // Design v5 (D4): serve another host's team — the canvas team `<zone>/canvas/<name>@<fp8>`. The fingerprint picks
+              // the linked peer whose signed card key it names and which advertises that canvas; that key is pinned, so only it
+              // may assign these sessions work. null leaves. The member host's owner consents here; the team host cannot
+              // take another host's sessions on its own (U17).
+              if (fields.team === null) { send(200, superagentHost.serveTeam(undefined, [], () => false)); return }
+              const team = typeof fields.team === 'string' ? fields.team.trim() : ''
               const members = Array.isArray(fields.members) ? fields.members.filter((m): m is string => typeof m === 'string') : []
               void (async () => {
-                if (peer === '' || !/^https?:\/\//.test(peer)) { send(200, { ok: false, error: 'peer (the team host base URL) is required' }); return }
-                const card = await fetchPeerCard(peer)
-                if (card === undefined || !verifyCard(card, Date.now()).ok || typeof card.publicKey !== 'string') { send(200, { ok: false, error: 'the team host card is unreadable or unsigned' }); return }
+                const split = splitCanvasOwner(team)
+                if (split.owner === undefined || !/^[^/\s]+\/canvas\/[^/\s]+$/.test(split.team)) { send(200, { ok: false, error: 'team must be a canvas id with its owner: <zone>/canvas/<name>@<fp8>' }); return }
+                if (split.owner === ownCanvasFingerprint) { send(200, { ok: false, error: "that canvas is this host's own: its sessions join it as members on the canvas" }); return }
+                let found: { url: string; card: A2aPeerCard } | undefined
+                for (const url of new Set([...peerStore.list(), ...cardCache.keys()])) {
+                  const card = await fetchPeerCard(url).catch(() => undefined)
+                  if (card === undefined || !verifyCard(card, Date.now()).ok || typeof card.publicKey !== 'string' || canvasOwnerFingerprint(card.publicKey) !== split.owner) continue
+                  if (!(card.canvasOrg ?? []).some(entry => entry.team === split.team && entry.team === card.team + '/canvas/' + entry.name)) continue
+                  found = { url, card }
+                  break
+                }
+                if (found === undefined) { send(200, { ok: false, error: `no linked peer's signed card is the owner of ${team} (key fingerprint ${split.owner}) and advertises it` }); return }
                 // The link judgement reads the cached card: cache the verified one first, as the canvas member proof does.
-                cardCache.set(peer, { at: Date.now(), card })
-                if (peerAdmissionLinkState(peer).link !== 'linked') { send(200, { ok: false, error: 'the team host must be a linked peer' }); return }
-                send(200, superagentHost.serveTeam({ url: new URL(peer).origin, key: card.publicKey }, members, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf))
+                cardCache.set(found.url, { at: Date.now(), card: found.card })
+                if (peerAdmissionLinkState(found.url).link !== 'linked') { send(200, { ok: false, error: 'the team host must be a linked peer' }); return }
+                send(200, superagentHost.serveTeam({ url: new URL(found.url).origin, key: found.card.publicKey!, canvas: team }, members, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf))
               })().catch(error => send(200, { ok: false, error: String(error) }))
             } else if (fields.action === 'stop' || fields.action === 'retry') {
               const ticketId = typeof fields.ticket_id === 'string' ? fields.ticket_id : ''
@@ -3067,7 +3178,7 @@ export function apply(ctx: Context, config: Config): void {
                 : superagentHost.engine.retryTicket(ticketId)
               superagentHost.pass()
               send(200, { ok: true, ticket })
-            } else send(200, { ok: false, error: 'action must be settings, request, add-remote-member, remove-remote-member, serve-team, stop or retry' })
+            } else send(200, { ok: false, error: 'action must be settings, request, serve, stop or retry' })
           } catch (error) { send(200, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
         }, 64_000)
       }),
@@ -3318,6 +3429,8 @@ export function apply(ctx: Context, config: Config): void {
   // The cache is still empty here, so the observer skips cache-resting rows
   // on 'boot' (#138 R1); the first lazy read rechecks them.
   ctx.effect(() => canvasStore.onChange(() => observeAuthorization('canvas')), 'a2a: S6 canvas observer')
+  // Design v5: the team's pool is its canvas team's; a canvas change is a pool change.
+  if (superagentHost !== undefined) ctx.effect(() => canvasStore.onChange(() => { superagentHost.poolChanged() }), 'a2a: superagent team canvas')
   ctx.effect(() => joinedSessions.onChange(() => observeAuthorization('joined')), 'a2a: S6 joined observer')
   ctx.effect(() => teamMemberships.onChange(() => observeAuthorization('roster')), 'a2a: S6 roster observer')
   observeAuthorization('boot')
@@ -3928,7 +4041,9 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         try {
           initiator = ctx.get('agents')?.requireInitiator() === agent
         } catch { /* no initiator in this fiber */ }
-        if (!initiator) {
+        // Design v5 (Q1): the bound team canvas takes requests from any session of this host; the team's Policy decides
+        // whether it works on them, so team scope does not gate the route.
+        if (!initiator && teamMailboxOf(String(args.team ?? '')) === undefined) {
           const callerHandle = `${config.team}/${id8(scopeCaller)}`
           scopedCanvasCaller = { id: scopeCaller, handle: callerHandle }
           const scope = await outboundScope(senderScopeRecords, scopeCaller, callerHandle, String(args.team ?? '').trim())
@@ -4081,12 +4196,14 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // the cheapest path. The initiator face (bare node team) and
     // foreign-zone labels are NOT gated here (F1b host-face rules, R-C
     // pending) — only the joined face closes.
-    const joinedRefusal = joinedFaceAdmissionRefusal(callerSession, team)
+    // Design v5 (D2, Q1): a route to the bound team canvas is a route to the team's mailbox, admitted as one.
+    const mailTeam = teamMailboxOf(team) ?? team
+    const joinedRefusal = joinedFaceAdmissionRefusal(callerSession, mailTeam)
     if (joinedRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: joinedRefusal, code: -32000 }
     }
-    const routerRefusal = superagentRouterRefusal(undefined, team)
+    const routerRefusal = superagentRouterRefusal(undefined, team) ?? teamAddressRefusal(team, message)
     if (routerRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: routerRefusal, code: -32000 }
@@ -4100,7 +4217,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // gh#224: a full target queue refuses a same-host delivery as the wire face does (receipts, CLI mailboxes pass).
     // p1-mailbox-owes (S33): a deposit that declares it owes receipts is under the cap like a session.
     // superagent v4: a request to the team's A2A address is a Trigger; the engine's worker slots govern it, not this cap.
-    const queueRefusal = queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, (cliDeposits.get(team) !== undefined && !cliDeposits.owes(team)) || superagentHost?.a2aAddress === team, ownTask)
+    const queueRefusal = queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, (cliDeposits.get(mailTeam) !== undefined && !cliDeposits.owes(mailTeam)) || superagentHost?.a2aAddress === mailTeam, ownTask)
     if (queueRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: queueRefusal, code: WIRE_ERROR_QUEUE_FULL, next: QUEUE_FULL_NEXT }
@@ -4125,7 +4242,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // polls while alive; receipts and messages never wake anything).
     // The settler of any receipt on this path: this host's own caller (in-process).
     const localSettler: Settler = { caller: callerSession ?? '', proof: 'in-process', ingress: 'local' }
-    const cliRow = cliDeposits.get(team)
+    const cliRow = cliDeposits.get(mailTeam)
     if (cliRow !== undefined) {
       // #114 S4 (design §4.5): a receipt dropped into a local CLI mailbox is
       // exactly the settlement a CLI-originated task waits for — settle it,
@@ -4134,13 +4251,15 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const answered = parseReceipt(message)
       const disposition = answered?.envelope?.disposition
       // p1-mail-admission: the same-host admission this delivery passed (a joined face's rule, else local-exempt).
-      const localAdmission = localCandidateAdmission(admissionRecords, callerSession, team)
-      const evicted = cliDeposits.mail(team, callerSession ?? 'unknown', message, undefined, { taskId: taskIdFromCaller, contextId, proof: 'in-process', ...(answered !== null ? { receiptFor: answered.taskId } : {}), ...(disposition !== undefined ? { disposition } : {}),
+      const localAdmission = localCandidateAdmission(admissionRecords, callerSession, mailTeam)
+      const evicted = cliDeposits.mail(mailTeam, callerSession ?? 'unknown', message, undefined, { taskId: taskIdFromCaller, contextId, proof: 'in-process', ...(answered !== null ? { receiptFor: answered.taskId } : {}), ...(disposition !== undefined ? { disposition } : {}),
         ...(localAdmission.ok ? { admission: localAdmission.rule } : {}) })
       // p1-mailbox-owes (D-5): a row the cap pushed out takes its owed inbound row with it.
-      for (const gone of evicted) if (gone.task_id !== undefined) taskLedger.evictInbound(gone.task_id, team)
+      for (const gone of evicted) if (gone.task_id !== undefined) taskLedger.evictInbound(gone.task_id, taskLedger.find(gone.task_id)?.team ?? mailTeam)
       recordActivity('in', team, callerSession ?? 'peer', true)
-      logger.info(`a2a: cli mailbox delivery for ${team} (from ${callerSession ?? 'unknown'})`)
+      logger.info(`a2a: cli mailbox delivery for ${mailTeam} (from ${callerSession ?? 'unknown'}${mailTeam !== team ? `, addressed to ${team}` : ''})`)
+      // Design v5 (R5): the team works asynchronously — a sync route to it answers at once, delivered.
+      if (mailTeam !== team && answered === null && taskIdFromCaller !== undefined) return { ok: true, team, reply: `delivered to the superagent team ${team} — it works asynchronously; its result arrives as this task's receipt`, task_id: taskIdFromCaller, context_id: contextId ?? '', task_status: 'TASK_STATE_DELIVERED', receipt: 'mailbox' }
       if (answered === null && taskIdFromCaller !== undefined && cliDeposits.owes(team)) {
         // p1-mailbox-owes (S33, D-2): delivered, not final. On one host the caller and the target share this ledger: the
         // caller's own owed row (peer 'local', booked by trackOwedTask) is the one the per-target cap counts, as for a

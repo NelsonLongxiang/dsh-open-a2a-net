@@ -125,3 +125,19 @@ export function forwardReceiptBasis(row: TaskRecord | undefined, caller: string,
   if (row.deliveredTo !== undefined && row.deliveredTo.includes('/canvas/')) return undefined
   return (row.deliveredTo !== undefined ? [row.deliveredTo] : row.receiverMembers ?? []).includes(caller) ? `peer-org:${row.team}` : undefined
 }
+
+/**
+ * Design v5 (v5-B2): a superagent team's receipt to one of this host's own requests, sent from the team host's process face
+ * on its canvas's behalf. It is admitted as the answer to that request alone: the row is this host's pending outbound
+ * request to a canvas, sent by the very session or CLI the receipt is delivered to; the envelope answers on behalf of that
+ * canvas, spelled as the row names it; and the delivery is body-bound-signed by the key the row was born on, from the
+ * process label the row recorded (when it did). Nothing else the team host sends rides this.
+ */
+export function teamReceiptBasis(row: TaskRecord | undefined, caller: string, target: string, onBehalfOf: string | undefined, claim: { readonly bound: boolean; readonly bodyBound?: true; readonly card: { readonly publicKey: string } }): string | undefined {
+  if (row === undefined || row.direction !== 'outbound' || row.status !== 'pending' || row.receiptExpected === false) return undefined
+  if (!row.team.includes('/canvas/') || onBehalfOf !== row.team) return undefined
+  if (row.sender === undefined || row.sender.id !== target) return undefined
+  if (!claim.bound || claim.bodyBound !== true || row.peerKey === undefined || claim.card.publicKey !== row.peerKey) return undefined
+  if (caller.includes('/') || (row.peerHost !== undefined && caller !== row.peerHost)) return undefined
+  return `peer-org:${row.team}`
+}

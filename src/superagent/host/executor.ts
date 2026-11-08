@@ -45,6 +45,8 @@ export class MemberExecutor implements Executor {
   private bindings: Binding[]
   /** The repository each open ticket was accepted for (`owner/name`); a ticket not here runs on any member. */
   private ticketRepos: Record<string, string>
+  /** Members leaving the team right now (design v5: removed from the canvas): their stop notice says why. */
+  private readonly leaving = new Set<string>()
   /** Assignments waiting for a free member, oldest first. */
   private waiting: { ticketId: string; assignmentId: string }[] = []
   /** One launch loop at a time, so two launches never bind one slot; a request during a run runs it again. */
@@ -75,6 +77,8 @@ export class MemberExecutor implements Executor {
     try { writeFileSync(temporary, JSON.stringify({ bindings: this.bindings, repos: this.ticketRepos }), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.d.path) } finally { rmSync(temporary, { force: true }) }
   }
 
+  /** A member is leaving the team (removed from the canvas): the stop its Assignment gets next says so. */
+  removing(member: string): void { this.leaving.add(member) }
   /** The ticket bound to a member, if any. */
   bindingOf(member: string): Binding | undefined { return this.bindings.find(b => b.member === member) }
   /** Every binding (for the workbench). */
@@ -172,7 +176,8 @@ export class MemberExecutor implements Executor {
       // The member's own ready or dropped report ended the ticket: it knows, and a notice would only wake it for a turn.
       const ownEnd = ticket.ended?.by === 'executor' && assignment.report !== undefined && assignment.report.at === ticket.ended.at
         && (assignment.report.state === 'ready' || assignment.report.state === 'dropped')
-      if (!ownEnd) void this.tryDeliver(binding.member, `[superagent] ticket ${ticket.id} «${ticket.title}» is no longer yours (${reason}). Stop working on it; do not report on it again.`, 'stop', ticket.id)
+      const why = this.leaving.delete(binding.member) ? 'you were removed from the team' : reason
+      if (!ownEnd) void this.tryDeliver(binding.member, `[superagent] ticket ${ticket.id} «${ticket.title}» is no longer yours (${why}). Stop working on it; do not report on it again.`, 'stop', ticket.id)
     }
     queueMicrotask(() => this.launch())
   }

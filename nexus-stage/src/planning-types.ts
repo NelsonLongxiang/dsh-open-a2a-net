@@ -37,6 +37,8 @@ export function viewportBucket(width: number): ViewportBucket {
 }
 
 export interface PlanningDeps {
+  /** After each render: the frame and card elements, for marks the view itself does not own (v5 team roles). */
+  decorate?(frames: ReadonlyMap<string, HTMLElement>, nodes: ReadonlyMap<string, HTMLElement>): void
   /** An edit that should persist happened (drag/nudge/pan/zoom/marquee end). */
   onDirty(): void
   /** The save lamp was clicked (error state -> retry). */

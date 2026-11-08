@@ -16,7 +16,7 @@ The flow follows upstream's model:
 
 ## The A2A Source (agents)
 
-With `sources.a2a` on, the host holds the team's A2A address: a CLI identity `superagent-team/<16 hex>`, created under `<a2a home>/superagent/team-cli/`. `GET /__dsh_a2a/superagent` shows it as `a2a.address`. #402's a2a-watch runs inside the host, unchanged:
+With `sources.a2a` on, **the team's A2A address is its canvas team**: `<zone>/canvas/<name>`, or `<zone>/canvas/<name>@<fp8>` from another host (design v5). A route there never reaches a member session: the host takes it into the team's mailbox, a CLI identity `superagent-team/<16 hex>` it holds under `<a2a home>/superagent/team-cli/` (`GET /__dsh_a2a/superagent` shows it as `a2a.address`). That handle is internal: a route straight to it is refused (`[superagent-team-address]`, counted). Requesters are admitted as for any route to this host's mailboxes — a CLI identity deposited here, an operator's canvas remote reference, a session of this host that declares a team (a teamless session has no network); the team's Policy then decides what becomes work. A sync route answers at once, delivered: the team works asynchronously and its result arrives as the task's receipt. The team's receipts and follow-ups go out from this host's own process face on the canvas team's behalf, with `onBehalfOf` spelled exactly as the requester addressed it, so the requester's ledger settles them as host-face. The team host's card marks the bound canvas as its superagent team (`canvasOrg[].superagentTeam`), so a session on another host that declares a team of its own may route there without a seat on it; the team host still admits it only through an operator link (the owner adds it as a canvas remote reference), and the team's receipt lands on the requester's host as the answer to that one request — its sender, its canvas, the peer key and process label the request was born on. #402's a2a-watch runs inside the host, unchanged:
 
 - It keeps the deposit published, renewing it before the 4h expiry.
 - It reads the mailbox and turns each message into a Trigger. A2A callers are agents, so each Trigger has `human: false` and `addressed: direct`.
@@ -68,20 +68,22 @@ Every A2A message to the team address gets a formal outcome, not only those that
 
 A member can sit on another host: another physical node, or another DSH instance on this machine, even one with the same zone label. Its work and reports travel **host to host** as signed, body-bound OriginClaim requests. There is no A2A route, no ledger debt and no receipt.
 
-- **On the team host:** `POST { action: 'add-remote-member', ref: '<zone>/<id8>', peer: '<member host base URL>' }`. The member host must be a linked peer. Its key comes from its signed card, as for a canvas member, and is pinned with the qualified ref. A report or turn end for that member counts only under that key (`/a2a/superagent-team`), so another instance sharing the handle is refused. `remove-remote-member` undoes it.
-- **On the member host:** `POST { action: 'serve-team', peer: '<team host base URL>', members: [<local session ids>] }`. The team host must be a linked peer, and its key is pinned the same way. Only that key may assign work to those sessions (`/a2a/superagent-member`). Those sessions report with `a2a_ticket_report` as usual, and the host forwards the report, signed. `peer: null` leaves the team.
+- **On the team host:** add the member's session to the team's canvas team, naming its host: `POST /__dsh_a2a/canvas { action: 'add-member', name: '<team canvas>', id: '<zone>/<id8>', peer: '<member host base URL>' }` (or in the planning view). The member host must be a linked peer. Its key comes from its signed card and the canvas pins it with the qualified ref. A report or turn end for that member counts only under that key (`/a2a/superagent-team`), so another instance sharing the handle is refused. Removing it from the canvas removes it from the team.
+- **On the member host:** `POST { action: 'serve', team: '<zone>/canvas/<name>@<fp8>', members: [<local session ids>] }` — the team's canvas id, whose fingerprint names its owner. The host finds the linked peer whose signed card has that key and advertises that canvas, and pins the key. Only that key may assign work to those sessions (`/a2a/superagent-member`). Those sessions report with `a2a_ticket_report` as usual, and the host forwards the report, signed. `team: null` leaves the team. This is the member host owner's consent: a team host cannot take another host's sessions on its own. A served session on another preset than `superagent-member` (a serve stored before presets) takes no new work — a stop still reaches it — and the state reports it as `servesProblem` until it is served from a member-preset session.
 - Serving sessions are isolated from A2A like any member.
 
 ## For the owner
 
 The owner control route is `/__dsh_a2a/superagent`.
 
+**The team is a canvas team** (design v5). The owner composes it on the canvas — the planning view's 建队, or `/__dsh_a2a/canvas` — with the router and the members, local and on other hosts, then binds it here with `canvas` (the canvas team's name on this host) and `router` (one of its local sessions). Every other session on that canvas is a member, one worker slot each; adding or removing one on the canvas adds it to or removes it from the pool at once. A member removed while it runs a ticket is told to stop, and the ticket starts again on another member. While the team is bound to no canvas (as right after upgrading from a version before canvas teams, which keeps the router and drops the stored pool) or its canvas is gone, nothing is moved: running work stays with its member until the owner binds a canvas again, and the stored router may join the canvas that becomes the team. One session holds one team role: the team's canvas takes no CLI handle and no session that serves another team host, and a team session sits in no other canvas (`[superagent-team-canvas]`).
+
 The router and the members are sessions the owner creates under the team's agent presets, which this plugin ships in its bundle layer: **`superagent-router`** (superagent 总工) for the router and **`superagent-member`** (superagent 团队成员) for each member. The preset is the role's boundary:
 
 - `superagent-router`: read-only files, a foreground command and a job wait of at most 5 s, skills and compaction; no subagents.
 - `superagent-member`: the work tools; a foreground command moves to a background job after 5 s, so a stop or a person's answer is taken at the next step; no subagents.
 
-Settings naming a router or member that runs another preset are refused, and so is `serve-team`. A session not loaded at the time, or a host without a preset registry, is not checked.
+Settings naming a router or member that runs another preset are refused, and so is `serve`. A session not loaded at the time, or a host without a preset registry, is not checked.
 
 The workbench (`/__dsh_a2a_nexus/`) shows it as the **团队** tab whenever the host runs a team. The tab has five views:
 
@@ -89,11 +91,11 @@ The workbench (`/__dsh_a2a_nexus/`) shows it as the **团队** tab whenever the 
 - **提需求**: the workbench Source. A request box, and each request's thread with its decisions and replies. Each thread has a box for adding a follow-up.
 - **工单**: tickets grouped by stage, with stop and retry.
 - **团队**: the router, each member's slot, the remote members and the team this host serves, with their pinned keys, and the A2A address.
-- **设置**: the router, the members, the accept mode, the Source switches, and pause.
+- **设置**: the canvas team and its router (members are shown from the canvas), the accept mode, the Source switches, and pause.
 
 - `GET` returns the state: threads with their triggers, decisions and replies, and tickets with their stage. It also returns `refusals`, the refusals at the team's edge in this process. These include A2A routes to or from a role session, role sessions' calls outside their tool list, and host-to-host requests that are unsigned or not signed by the pinned key. They are counted by rule (`counts`), and the latest 50 are kept with caller and target (`recent`).
 - `POST { action }` takes one of:
-  - `settings`: the router (a joined local session), the members (joined local sessions, not the router; one worker slot each), the allowed persons per Source, the A2A bot list, the accept mode, the proactive rules (`{name, text, enabled}`), the Source switches, the Eval timeout, and pause;
+  - `settings`: the canvas team (`canvas`, a canvas on this host; `null` unbinds) and its router (`router`, a joined local session of that canvas) — members are never named here, they come from the canvas — the repository per member (`repos`), the allowed persons per Source, the A2A bot list, the accept mode, the proactive rules (`{name, text, enabled}`), the Source switches, the Eval timeout, and pause;
   - `request`: the workbench Source, with `text`, and `thread` to follow up;
   - `stop` / `retry`: act on a ticket by `ticket_id`.
 - A follow-up on a ticket's thread goes to that ticket (Subscription fan-out). It does not start a new Eval.

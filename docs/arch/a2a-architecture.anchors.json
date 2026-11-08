@@ -3,8 +3,8 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "8dfbc47924c27303f75d7f7e4e3c7dbf527d5a70900ea8e461438d62df7a266d",
-    "src/faces/admin.ts": "a83449c3b564a41349bbbc1fd5835e2a80175c467ef14914d438be995c4301fa",
+    "src/index.ts": "fd9a580192a81787b71cb1706f13a3a4ac0fbb0049efea32da8eb5af01c09ab1",
+    "src/faces/admin.ts": "42fe084df511f1e2bc96ce9c82477e0f93144de0cddd5a8f0eb2307268942117",
     "src/canvas-store.ts": "86240be8bcae39faf0077c68aa48f244928cf132e91a9eae6f5b97177ae3d115",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
     "src/cli-deposit.ts": "a75ad0c60232e686717efc93aba2c2713253e6bac768d03d6acbdcc56172c882",
@@ -19,15 +19,15 @@
     "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "b4f92c9ce3237019ab3c7ab71f0624c3306e8c316cb15d119d4e7c57f65e604f",
-    "src/faces/wire.ts": "06698d254fe288cbb609a0e1772b383e35a553edc7d3fc39ed19609e864fc7b0",
+    "src/faces/wire.ts": "addb7bd250986d12a1d41e5856bf8f73d224802a17464e0e6f509d15860b9835",
     "src/faces/canvas-notify.ts": "4d06ea71c72f5a0fd200fbc7cc32c62cfd367af054c22f284be3d242919c1358",
     "src/task-auth.ts": "1ab8aa09763b70e921704fd066ebc834d501f4bdf81fcf938a90a2906e01cd70",
     "src/origin-claim.ts": "54079e01ec324ea1054bc892ef403ba813fa52c480bd99ecb9cf8b73190c376a",
     "src/tools/info.ts": "a7801081842cb9dd79a70ac5961e952467d81fa8cb978a804517e66d893115f9",
     "src/tools/act.ts": "983f78c58b8c886b39b5af3f2cf474a1a47e4d03b91fedf5ed581aba3225bed2",
-    "src/peer-directory.ts": "1e58577dc4282f20d011847e8f7efe8c1c281cbdc867133401df0554d3bfeafc",
-    "src/card.ts": "c72e71e453d8b2cd3981e4fd1a2b4c2e804b1f6a312328825eec89489ca13cf5",
-    "src/outbound-scope.ts": "42ff804e263cc5c2e8972c337cf4e1a2f6b0db604f25cfb175e372f48271ec36"
+    "src/peer-directory.ts": "1f5eb4c1b19edcb834c168f8e9c36928128085cb92aa75b52e0f040ab2c5f009",
+    "src/card.ts": "6616f6270327ba86624a23815434026cedad80ff968bf6a5b6137f1d06d138b6",
+    "src/outbound-scope.ts": "f8206432e964209c949d3e2ad3c34865025dbc5d6e9008b23cbab2f92bd4559f"
   },
   "anchors": [
     {
@@ -63,7 +63,7 @@
     {
       "page": "p1-arch",
       "cell": "b3",
-      "ref": "src/index.ts:2688",
+      "ref": "src/index.ts:2773",
       "expect": "function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {"
     },
     {
@@ -105,7 +105,7 @@
     {
       "page": "p1-arch",
       "cell": "c1",
-      "ref": "src/index.ts:1863",
+      "ref": "src/index.ts:1864",
       "expect": "path: '/.well-known/agent-card.json',"
     },
     {
@@ -117,37 +117,37 @@
     {
       "page": "p1-arch",
       "cell": "c2",
-      "ref": "src/faces/wire.ts:565",
+      "ref": "src/faces/wire.ts:575",
       "expect": "path: '/a2a/direct',"
     },
     {
       "page": "p1-arch",
       "cell": "c3",
-      "ref": "src/faces/wire.ts:410",
+      "ref": "src/faces/wire.ts:420",
       "expect": "path: '/a2a/log',"
     },
     {
       "page": "p1-arch",
       "cell": "c4",
-      "ref": "src/faces/wire.ts:486",
+      "ref": "src/faces/wire.ts:496",
       "expect": "path: '/a2a/query',"
     },
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:588",
+      "ref": "src/faces/admin.ts:590",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:189",
+      "ref": "src/faces/admin.ts:191",
       "expect": "path: '/__dsh_a2a/state',"
     },
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:3191",
+      "ref": "src/index.ts:3302",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -189,7 +189,7 @@
     {
       "page": "p1-arch",
       "cell": "d7",
-      "ref": "src/faces/admin.ts:343",
+      "ref": "src/faces/admin.ts:345",
       "expect": "activity: recentActivity.slice(),"
     },
     {
@@ -225,7 +225,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:4115",
+      "ref": "src/index.ts:4232",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -267,7 +267,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3530",
+      "ref": "src/index.ts:3643",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
@@ -279,13 +279,13 @@
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2386",
+      "ref": "src/index.ts:2471",
       "expect": "void retryReceiptDelivery({"
     },
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2306",
+      "ref": "src/index.ts:2391",
       "expect": "function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {"
     },
     {
@@ -297,7 +297,7 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/admin.ts:138",
+      "ref": "src/faces/admin.ts:140",
       "expect": "export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void {"
     },
     {
@@ -333,7 +333,7 @@
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/faces/wire.ts:817",
+      "ref": "src/faces/wire.ts:838",
       "expect": "if (refuseIfFlooded(caller, message, team, taskId, res)) return"
     },
     {
@@ -345,7 +345,7 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/wire.ts:219",
+      "ref": "src/faces/wire.ts:227",
       "expect": "export function registerWireFaces(webServer: WebServer, d: WireDeps): void {"
     },
     {

@@ -22,7 +22,8 @@ function ticket(id: string, over: Partial<SaTicket> = {}): SaTicket {
 
 function state(over: Partial<SaState> = {}): SaState {
   return {
-    settings: { router: R, members: [M], acceptMode: 'observe', paused: false, sources: { workbench: true, a2a: false }, remoteMembers: [{ ref: 'bravo/dddddddd', key: 'MCowBQYDK2VwAyEAabcdefghijklmnopqrstuvwxyz0123456789', url: 'https://member.example.invalid' }] },
+    canvases: ['ops', 'other'],
+    settings: { canvas: 'ops', router: R, members: [M], acceptMode: 'observe', paused: false, sources: { workbench: true, a2a: false }, remoteMembers: [{ ref: 'bravo/dddddddd', key: 'MCowBQYDK2VwAyEAabcdefghijklmnopqrstuvwxyz0123456789', url: 'https://member.example.invalid' }] },
     policyVersion: 'p-1',
     a2a: { enabled: false, address: null, health: {} },
     executor: { bindings: [{ member: M, ticketId: 't-work', at: at(10) }] },
@@ -64,6 +65,10 @@ describe('team tab helpers', () => {
     expect(problemsOf(state(), NOW)).toEqual([])
     const bad = state({ settings: { ...state().settings, router: undefined, members: [], remoteMembers: [], paused: true }, a2a: { enabled: true, address: null, health: { read: { state: 'error', detail: 'cli exited 1' } } } })
     expect(problemsOf(bad, NOW).map(p => p.text).join('\n')).toMatch(/还没有指定总工[\s\S]*成员池是空的[\s\S]*执行已暂停[\s\S]*cli exited 1/)
+    // Design v5: unbound, or bound to a canvas that cannot run as the team.
+    const { canvas: _bound, ...unbound } = state().settings
+    expect(problemsOf(state({ settings: unbound }), NOW)[0]).toMatchObject({ tone: 'danger', text: expect.stringContaining('还没有绑定画布团队') })
+    expect(problemsOf(state({ canvasProblem: 'the bound canvas team ops does not exist on this host' }), NOW)[0]).toMatchObject({ tone: 'danger', text: expect.stringContaining('画布团队「ops」不能作为团队运行') })
   })
 })
 
@@ -146,24 +151,31 @@ describe('team tab', () => {
     expect(t).toContain('MCowBQYDK2Vw…')
     expect(t).not.toContain('abcdefghijklmnopqrstuvwxyz')
     expect(t).toContain('工单 t-queue')
+    // Design v5 (D4): the team this host serves shows its canvas id.
+    pane.update({ ...state(), settings: { ...state().settings, serves: { url: 'https://team.example.invalid', key: 'MCowBQYDK2VwAyEAabcdefghijklmnopqrstuvwxyz0123456789', members: [M], team: 'alpha/canvas/team@0123abcd' } } }, sessions, NOW + 61_000)
+    expect(text(pane.root)).toContain('alpha/canvas/team@0123abcd')
   })
 
-  it('settings write only the editable fields; an open form survives the poll', async () => {
+  it('settings bind a canvas team and name its router (members come from the canvas); an open form survives the poll', async () => {
     const { pane, act } = mount()
     pane.update(state(), sessions, NOW)
     pane.select('settings')
     const router = pane.root.querySelector<HTMLSelectElement>('select[aria-label="总工"]')!
     expect(router.value).toBe(R)
-    const n = Array.from(pane.root.querySelectorAll<HTMLInputElement>('.wb-sa-check input')).find(x => x.value === N)!
-    n.checked = true
-    n.dispatchEvent(new Event('change'))
+    const canvas = pane.root.querySelector<HTMLSelectElement>('select[aria-label="画布团队"]')!
+    expect(canvas.value).toBe('ops')
+    expect(Array.from(canvas.options).map(o => o.value)).toEqual(['', 'ops', 'other'])
+    // Members are shown from the canvas, not edited here.
+    expect(pane.root.querySelectorAll('.wb-sa-check input')).toHaveLength(0)
+    expect(text(pane.root)).toContain('成员（来自画布）')
+    canvas.value = 'other'
+    canvas.dispatchEvent(new Event('change'))
     // A poll while the form is dirty does not reset it.
     pane.update(state(), sessions, NOW + 3000)
-    const kept = Array.from(pane.root.querySelectorAll<HTMLInputElement>('.wb-sa-check input')).find(x => x.value === N)!
-    expect(kept.checked).toBe(true)
+    expect(pane.root.querySelector<HTMLSelectElement>('select[aria-label="画布团队"]')!.value).toBe('other')
     button(pane.root, '保存').click()
     await flush()
-    expect(act).toHaveBeenCalledWith({ action: 'settings', settings: { router: R, members: [M, N], acceptMode: 'observe', sources: { workbench: true, a2a: false }, paused: false } })
+    expect(act).toHaveBeenCalledWith({ action: 'settings', settings: { canvas: 'other', router: R, acceptMode: 'observe', sources: { workbench: true, a2a: false }, paused: false } })
   })
 
   it('in the workbench the tab shows only while the host answers a superagent state', () => {

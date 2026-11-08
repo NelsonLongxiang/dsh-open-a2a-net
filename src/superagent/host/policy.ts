@@ -31,21 +31,29 @@ export interface ProactiveRule { readonly name: string; readonly text: string; r
 
 /** The owner's team settings (owner control route only). */
 export interface TeamSettings {
-  /** The router (upstream's main Session): a local session id; absent until the owner names one. */
+  /**
+   * Design v5: the canvas team (a canvas this host owns) that IS the team. The owner composes it in the planning view;
+   * the router is one of its local sessions and every other member slot is the member pool. Absent until the owner binds one.
+   */
+  readonly canvas?: string
+  /** The router (upstream's main Session): a local session of the bound canvas; absent until the owner names one. */
   readonly router?: string
-  /** The executor's fixed member pool: local session ids, one worker slot each (no session is ever opened for a ticket). */
+  /**
+   * The executor's fixed member pool: the bound canvas's local sessions other than the router, one worker slot each (no
+   * session is ever opened for a ticket). Derived from the canvas on every read; never written by the owner or stored.
+   */
   readonly members: readonly string[]
   /**
-   * Members on other hosts (other nodes, or other DSH instances on this machine): the owner-qualified session ref, the
-   * member host's full key as the owner pinned it (from a linked peer's signed card), and that host's base URL. A report
-   * or turn end is accepted only when signed by that key. Written only by the `add-remote-member` control action.
+   * The bound canvas's members on other hosts: the owner-qualified session ref, the key the canvas pinned for it (from a
+   * linked peer's signed card), and that host's base URL as this host knows it (empty while unknown). A report or turn end
+   * is accepted only when signed by that key. Derived from the canvas on every read; never stored.
    */
   readonly remoteMembers: readonly RemoteMember[]
   /**
    * This host serving another team host: that host's base URL and pinned key, and the local sessions that work for it.
    * Only that key may assign them work. Written only by the `serve-team` control action.
    */
-  readonly serves?: { readonly url: string; readonly key: string; readonly members: readonly string[] }
+  readonly serves?: { readonly url: string; readonly key: string; readonly members: readonly string[]; /** Design v5: the team's canvas id, `<zone>/canvas/<name>@<fp8>`. */ readonly team?: string }
   /**
    * The repository each member works in (`owner/name`), by member (a local session id or a remote member's ref). A ticket
    * the router accepts for a repository goes only to that repository's members; a ticket without one, to any member.
@@ -66,6 +74,10 @@ export interface TeamSettings {
   /** Pause processing (upstream docs/003): Sources still record Triggers; Evals, dispatch and replies wait. */
   readonly paused: boolean
 }
+
+/** A canvas team name as the canvas store takes it: 1–40 characters, no `/`, not all digits, no surrounding space. */
+export const validCanvasName = (name: unknown): name is string =>
+  typeof name === 'string' && name !== '' && name.length <= 40 && name.trim() === name && !name.includes('/') && !/^\d+$/.test(name) && !/@[0-9a-f]{8}$/.test(name)
 
 /** A repository as GitHub names it: `owner/name`. */
 export const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\/[A-Za-z0-9_.][A-Za-z0-9_.-]{0,99}$/
@@ -93,6 +105,12 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const list = (value: unknown, name: string): readonly string[] | string => {
     if (!Array.isArray(value) || value.some(v => typeof v !== 'string' || v.trim() === '' || /\s/.test(v))) return `${name} must be a list of identities`
     return [...new Set(value as string[])]
+  }
+  let canvas = current.canvas
+  if ('canvas' in r) {
+    if (r.canvas === null || r.canvas === '') canvas = undefined
+    else if (validCanvasName(r.canvas)) canvas = r.canvas
+    else return { ok: false, error: 'canvas must be the name of a canvas team on this host, or null to unbind' }
   }
   let router = current.router
   if ('router' in r) {
@@ -135,11 +153,10 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
     }
     rules = parsedRules
   }
-  if ('remoteMembers' in r || 'serves' in r) return { ok: false, error: 'remote members and serving a team are set by their own actions (add-remote-member, serve-team), which pin the peer key' }
-  const members = 'members' in r ? list(r.members, 'members') : current.members
-  if (typeof members === 'string') return { ok: false, error: members }
-  if (members.length > 32) return { ok: false, error: 'at most 32 members' }
-  if (router !== undefined && members.includes(router)) return { ok: false, error: 'the router is not a member: it routes, members work' }
+  if ('members' in r || 'remoteMembers' in r) return { ok: false, error: 'the team is a canvas team: add or remove members on the canvas (planning view 建队), then bind it here with canvas and router' }
+  if ('serves' in r) return { ok: false, error: 'serving a team is set by its own action (serve-team), which pins the peer key' }
+  // The pool is the bound canvas's, which the host derives; a settings write never names members.
+  const members = current.members
   // A member's repository: named explicitly here, or kept from the current settings while it is still a member.
   const memberIds = new Set([...members, ...current.remoteMembers.map(m => m.ref)])
   let repos: Record<string, string>
@@ -152,7 +169,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
       repos[member] = repo
     }
   } else repos = Object.fromEntries(Object.entries(current.repos ?? {}).filter(([member]) => memberIds.has(member)))
-  return { ok: true, settings: { ...(router !== undefined ? { router } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a }, bots: { a2a: bots }, acceptMode, rules, sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
+  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a }, bots: { a2a: bots }, acceptMode, rules, sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/
@@ -164,22 +181,25 @@ export function parseRemoteMember(raw: unknown): RemoteMember | undefined {
   return typeof r.ref === 'string' && QUALIFIED_REF.test(r.ref) && validKey(r.key) && validUrl(r.url) ? { ref: r.ref, key: r.key, url: r.url } : undefined
 }
 
-/** Settings as stored: the owner fields plus the pinned peers only the host's own actions write. */
+/**
+ * Settings as stored: the owner fields plus the served team only the host's own action writes. The pool is never stored
+ * (design v5: it is the bound canvas's); a v4 file's members and remote members are dropped on load, and its repositories
+ * are kept for the members the canvas still has.
+ */
 export function parseStoredSettings(raw: unknown): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'settings must be an object' }
-  const { remoteMembers, serves, repos, ...rest } = raw as Record<string, unknown>
-  const remote = Array.isArray(remoteMembers) ? remoteMembers.map(parseRemoteMember) : []
-  if (remote.some(r => r === undefined)) return { ok: false, error: 'a stored remote member is malformed' }
-  // Repositories are checked against the members, remote ones included: parse them with the stored remote members known.
-  const parsed = parseSettings(repos === undefined ? rest : { ...rest, repos }, { ...DEFAULT_SETTINGS, remoteMembers: remote as RemoteMember[] })
+  const { members: _members, remoteMembers: _remote, serves, repos, ...rest } = raw as Record<string, unknown>
+  // Repositories are checked against the pool when the owner writes them; here only their shape, for whoever they name.
+  const named = repos !== null && typeof repos === 'object' && !Array.isArray(repos) ? Object.keys(repos) : []
+  const parsed = parseSettings(repos === undefined ? rest : { ...rest, repos }, { ...DEFAULT_SETTINGS, members: named })
   if (!parsed.ok) return parsed
   let served: TeamSettings['serves']
   if (serves !== undefined) {
     const sv = (serves ?? {}) as Record<string, unknown>
     if (!validUrl(sv.url) || !validKey(sv.key) || !Array.isArray(sv.members) || sv.members.some(m => typeof m !== 'string' || m === '')) return { ok: false, error: 'the stored served team is malformed' }
-    served = { url: sv.url, key: sv.key, members: sv.members as string[] }
+    served = { url: sv.url, key: sv.key, members: sv.members as string[], ...(typeof sv.team === 'string' && /^[^/\s]+\/canvas\/[^/\s]+@[0-9a-f]{8}$/.test(sv.team) ? { team: sv.team } : {}) }
   }
-  return { ok: true, settings: { ...parsed.settings, remoteMembers: remote as RemoteMember[], ...(served !== undefined ? { serves: served } : {}) } }
+  return { ok: true, settings: { ...parsed.settings, members: [], remoteMembers: [], ...(served !== undefined ? { serves: served } : {}) } }
 }
 
 /**

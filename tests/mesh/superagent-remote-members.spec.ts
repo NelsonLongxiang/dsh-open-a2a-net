@@ -1,7 +1,8 @@
 // @vitest-environment node
 /**
- * superagent design v4, PR-C2: a member on another host. Team host A runs the engine and its router; member host B serves
- * A's team with its session. A pins B's key (from B's signed card) for the member ref; B pins A's key for the team. Work
+ * superagent design v4, PR-C2 (v5: the team is A's canvas team): a member on another host. Team host A runs the engine and
+ * its router; member host B serves A's team with its session. A's canvas pins B's key (from B's signed card) for the member
+ * ref; B pins A's key for the team. Work
  * goes A → B and reports B → A as signed, body-bound requests — no A2A route, no ledger debt. An impostor host E, sharing
  * B's zone label and the member's id8 but not B's key, can neither report for the member nor be assigned work.
  */
@@ -31,15 +32,28 @@ describe('superagent members on other hosts', () => {
       try {
         for (const [n, id] of [[A, R_ID], [B, B_ID], [E, E_ID]] as const) expect((await postJson(n.baseUrl, '/__dsh_a2a/join', { id })).status).toBe(200)
         const member = `${zB}/bbbbbbbb`
-        expect(await sa(A, { action: 'settings', settings: { router: R_ID } })).toMatchObject({ ok: true })
-        // E publishes the same handle: without naming B the owner could not tell them apart — naming B pins B's key.
-        expect(await sa(A, { action: 'add-remote-member', ref: member, peer: url(pB) })).toMatchObject({ ok: true })
+        // Design v5: the team is A's canvas team `team` — its router, and B's session added on the canvas. E publishes the
+        // same handle: without naming B the owner could not tell them apart — naming B pins B's key in the canvas.
+        const canvas = async (body: unknown): Promise<Record<string, any>> => await (await postJson(A.baseUrl, '/__dsh_a2a/canvas', body)).json() as Record<string, any>
+        expect(await canvas({ action: 'add-member', name: 'team', id: R_ID })).toMatchObject({ ok: true })
+        const added = await canvas({ action: 'add-member', name: 'team', id: member, peer: url(pB) })
+        expect(added, JSON.stringify(added)).toMatchObject({ ok: true })
+        expect(await sa(A, { action: 'settings', settings: { canvas: 'team', router: R_ID } })).toMatchObject({ ok: true })
+        // The v4 action is gone: a remote member is a canvas slot.
+        expect(await sa(A, { action: 'add-remote-member', ref: member, peer: url(pB) })).toMatchObject({ ok: false, error: expect.stringContaining('canvas') })
         const pinned = (await state(A)).executor.remoteMembers
         expect(pinned).toHaveLength(1)
         expect(pinned[0]).toMatchObject({ url: url(pB) })
         // B and E both serve A's team (each pins A's key); only B is A's member.
-        const served = await sa(B, { action: 'serve-team', peer: url(pA), members: [B_ID] }); expect(served, JSON.stringify(served)).toMatchObject({ ok: true })
-        expect(await sa(E, { action: 'serve-team', peer: url(pA), members: [E_ID] })).toMatchObject({ ok: true })
+        // Design v5 (D4): B and E serve A's team by its canvas id, whose fingerprint names A's key.
+        const teamId = ((await (await globalThis.fetch(`${A.baseUrl}/__dsh_a2a/state`)).json()) as any).canvas.teams.find((t: any) => t.name === 'team').id as string
+        expect(teamId).toMatch(new RegExp(`^${zA}/canvas/team@[0-9a-f]{8}$`))
+        expect(await sa(B, { action: 'serve-team', peer: url(pA), members: [B_ID] })).toMatchObject({ ok: false, error: expect.stringContaining("action: 'serve'") })
+        expect(await sa(B, { action: 'serve', team: `${zA}/canvas/team`, members: [B_ID] })).toMatchObject({ ok: false, error: expect.stringContaining('<fp8>') })
+        expect(await sa(B, { action: 'serve', team: `${zA}/canvas/team@00000000`, members: [B_ID] })).toMatchObject({ ok: false, error: expect.stringContaining('no linked peer') })
+        const served = await sa(B, { action: 'serve', team: teamId, members: [B_ID] }); expect(served, JSON.stringify(served)).toMatchObject({ ok: true })
+        expect((await state(B)).serves).toMatchObject({ team: teamId, url: url(pA) })
+        expect(await sa(E, { action: 'serve', team: teamId, members: [E_ID] })).toMatchObject({ ok: true })
 
         // A request on A becomes a ticket; the executor assigns it to B's session across hosts.
         const asked = await sa(A, { action: 'request', text: '跨主机：给节点列表加搜索框' })

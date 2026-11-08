@@ -39,15 +39,22 @@ export interface SaTicket {
   readonly stage: { stage: string; action?: string } | null
 }
 export interface SaSettings {
+  /** Design v5: the canvas team that is the team (absent until the owner binds one). */
+  readonly canvas?: string
   readonly router?: string; readonly members: readonly string[]; readonly acceptMode: string; readonly paused: boolean
   readonly sources: { workbench: boolean; a2a: boolean }
   readonly remoteMembers: ReadonlyArray<{ ref: string; key: string; url: string }>
   /** The repository each member works in (owner/name), by member; absent on hosts before it. */
   readonly repos?: Readonly<Record<string, string>>
-  readonly serves?: { url: string; key: string; members: readonly string[] }
+  readonly serves?: { url: string; key: string; members: readonly string[]; team?: string }
 }
 export interface SaState {
   readonly settings: SaSettings; readonly policyVersion: string
+  /** Design v5: why the bound canvas cannot run as the team, and the canvas teams this host owns (to bind one). */
+  readonly canvasProblem?: string
+  /** v5 acceptance F4: why a session this host serves another team with cannot take work (wrong preset). */
+  readonly servesProblem?: string
+  readonly canvases?: readonly string[]
   readonly a2a: { enabled: boolean; address: string | null; health: Record<string, { state: string; detail?: string }> }
   readonly executor: { bindings: ReadonlyArray<{ member: string; ticketId: string; at: string }> }
   readonly error?: string
@@ -88,8 +95,11 @@ export interface SaProblem { readonly text: string; readonly tone: 'danger' | 'w
 export function problemsOf(state: SaState, now: number): SaProblem[] {
   const out: SaProblem[] = []
   if (state.error !== undefined) out.push({ tone: 'danger', text: `团队记录读不出来，写入已停止：${state.error}` })
+  if (state.settings.canvas === undefined) out.push({ tone: 'danger', text: '团队还没有绑定画布团队：先在画布上建队（总工 + 成员），再到「设置」里绑定' })
+  else if (state.canvasProblem !== undefined) out.push({ tone: 'danger', text: `画布团队「${state.settings.canvas}」不能作为团队运行：${state.canvasProblem}` })
+  if (state.servesProblem !== undefined) out.push({ tone: 'danger', text: `本机为别的团队服务的会话不能接活：${state.servesProblem}` })
   if (state.settings.router === undefined) out.push({ tone: 'danger', text: '还没有指定总工：需求会停在候选里，没人决定（到「设置」里选）' })
-  if (state.settings.members.length === 0 && state.settings.remoteMembers.length === 0) out.push({ tone: 'warn', text: '成员池是空的：接下的工单会一直排队' })
+  if (state.settings.members.length === 0 && state.settings.remoteMembers.length === 0) out.push({ tone: 'warn', text: '成员池是空的：在画布团队里加成员，接下的工单才有人做' })
   if (state.settings.paused) out.push({ tone: 'warn', text: '执行已暂停：新工单不会派给成员' })
   for (const [entry, health] of Object.entries(state.a2a.health)) if (health.state === 'error') out.push({ tone: 'danger', text: `A2A Source（${entry}）出错：${health.detail ?? ''}` })
   for (const thread of state.threads) {
@@ -333,6 +343,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   function renderTeam(state: SaState): void {
     const s = state.settings
     const head = el('div', 'wb-led-card')
+    kv(head, '画布团队', s.canvas ?? '未绑定')
     kv(head, '总工', s.router === undefined ? '未指定' : sessionName(s.router))
     kv(head, '接单模式', ACCEPT[s.acceptMode] ?? s.acceptMode)
     kv(head, 'A2A 地址', state.a2a.address ?? (s.sources.a2a ? '创建中…' : '未开启'))
@@ -353,6 +364,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     if (queued.length > 0) body.appendChild(group('排队', 'is-warn', queued.map(t => el('div', 'wb-led-card', `${t.title} · ${ago(t.createdAt, now)}`))))
     if (s.serves !== undefined) {
       const c = el('div', 'wb-led-card')
+      if (s.serves.team !== undefined) kv(c, '画布团队', s.serves.team)
       kv(c, '团队宿主', s.serves.url)
       kv(c, '钉住公钥', fingerprint(s.serves.key))
       kv(c, '本机成员', s.serves.members.map(sessionName).join('、') || '无')
@@ -361,15 +373,24 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   }
 
   function renderSettings(state: SaState): void {
-    if (settingsForm === undefined || !settingsDirty) settingsForm = buildSettings(state.settings)
+    if (settingsForm === undefined || !settingsDirty) settingsForm = buildSettings(state.settings, state.canvases ?? [])
     body.appendChild(settingsForm)
   }
 
-  function buildSettings(s: SaSettings): HTMLElement {
+  function buildSettings(s: SaSettings, canvases: readonly string[]): HTMLElement {
     const form = el('div', 'wb-sa-form wb-sa-settings')
     const joined = sessions.filter(x => x.joined === true)
     const mark = (): void => { settingsDirty = true }
     const label = (text: string, input: HTMLElement): HTMLElement => { const l = el('label', 'wb-sa-field'); l.append(el('span', 'wb-kv-k', text), input); return l }
+
+    // Design v5: the team is a canvas team; composing it happens on the canvas, binding it here.
+    const canvas = el('select', 'wb-sa-select')
+    canvas.setAttribute('aria-label', '画布团队')
+    canvas.appendChild(new Option('（不绑定）', ''))
+    for (const name of canvases) canvas.appendChild(new Option(name, name, false, name === s.canvas))
+    if (s.canvas !== undefined && !canvases.includes(s.canvas)) canvas.appendChild(new Option(`${s.canvas}（已不存在）`, s.canvas, false, true))
+    canvas.addEventListener('change', mark)
+    form.appendChild(label('画布团队', canvas))
 
     const router = el('select', 'wb-sa-select')
     router.setAttribute('aria-label', '总工')
@@ -379,17 +400,9 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     router.addEventListener('change', mark)
     form.appendChild(label('总工', router))
 
-    const members = el('div', 'wb-sa-checks')
+    const members = el('div', 'wb-sa-hint', s.members.length + s.remoteMembers.length === 0 ? '（画布团队里除总工外还没有成员）' : [...s.members.map(sessionName), ...s.remoteMembers.map(r => r.ref)].join('、'))
     members.setAttribute('aria-label', '成员')
-    const ids = [...new Set([...joined.map(x => x.id), ...s.members])]
-    for (const id of ids) {
-      const l = el('label', 'wb-sa-check')
-      const box = el('input'); box.type = 'checkbox'; box.value = id; box.checked = s.members.includes(id)
-      box.addEventListener('change', mark)
-      l.append(box, el('span', undefined, sessionName(id)))
-      members.appendChild(l)
-    }
-    form.appendChild(label('成员', members))
+    form.appendChild(label('成员（来自画布）', members))
 
     const mode = el('select', 'wb-sa-select')
     mode.setAttribute('aria-label', '接单模式')
@@ -410,8 +423,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     const save = el('button', 'wb-btn wb-btn-primary', '保存')
     save.type = 'button'
     save.addEventListener('click', () => {
-      const chosen = Array.from(members.querySelectorAll<HTMLInputElement>('input:checked')).map(x => x.value)
-      const patch: Json = { router: router.value === '' ? null : router.value, members: chosen, acceptMode: mode.value, sources: { workbench: wb.checked, a2a: a2a.checked }, paused: paused.checked }
+      const patch: Json = { canvas: canvas.value === '' ? null : canvas.value, router: router.value === '' ? null : router.value, acceptMode: mode.value, sources: { workbench: wb.checked, a2a: a2a.checked }, paused: paused.checked }
       void send({ action: 'settings', settings: patch }, () => { settingsDirty = false }, '设置已保存')
     })
     const reset = el('button', 'wb-btn', '放弃修改')
@@ -419,7 +431,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     reset.addEventListener('click', () => { settingsDirty = false; render() })
     const actions = el('div', 'wb-sa-actions')
     actions.append(save, reset)
-    form.append(actions, el('div', 'wb-sa-hint', '总工和成员必须是已加入网络的本机会话，总工不能同时是成员。远端成员和为别的团队干活，在宿主之间各自钉公钥，不在这里改。'))
+    form.append(actions, el('div', 'wb-sa-hint', '团队就是一支画布团队：在画布上建队、增删成员（含远端成员），这里只绑定画布并从中指定总工。总工用 superagent-router 预设，本机成员用 superagent-member 预设；团队里的会话不再加入别的画布。'))
     return form
   }
 

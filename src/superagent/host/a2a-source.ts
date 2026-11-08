@@ -53,6 +53,11 @@ export interface A2aSourceDeps {
   readonly pollSeconds?: number
   /** Tests point this at a stub. */
   readonly run?: (args: string[], env: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<string>
+  /**
+   * Design v5 (D2): send a `receipt` or `route` on the canvas team's behalf from the host's own process face, when the
+   * task came through the team's canvas address; stdout of the CLI contract, or undefined to run the CLI as before.
+   */
+  readonly teamSend?: (args: readonly string[]) => Promise<string | undefined>
 }
 
 /** One CLI run: stdout on exit 0, otherwise an Error carrying `exitCode` (a2a-watch reads it) and the stderr text. */
@@ -131,6 +136,8 @@ export class A2aSource {
       run: async (program, args) => {
         if (program !== 'a2a-net') throw new Error(`the a2a Source runs only a2a-net, not ${program}`)
         if (this.d.homeUrl() === undefined) throw new Error('this host is not listening yet')
+        const sent = await this.d.teamSend?.(args)
+        if (sent !== undefined) return sent
         return await (this.d.run ?? runCli)(args, this.env(), signal)
       },
     }

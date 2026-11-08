@@ -110,11 +110,16 @@ describe('the team\'s agent presets: shipped in the bundle layer, required of a 
     const { mkdtempSync } = await import('../temp-dirs.ts')
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
-    const h = new SuperagentHost({ home: mkdtempSync(join(tmpdir(), 'sa-presets-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {} })
     const of = (id: string) => ({ 'session-r': 'superagent-router', 'session-m': 'superagent-member', 'session-s': 'standard' } as Record<string, string>)[id]
-    expect(h.saveSettings({ router: 'session-s', members: ['session-m'] }, () => true, of)).toMatchObject({ ok: false, error: expect.stringContaining('superagent-router') })
-    expect(h.saveSettings({ router: 'session-r', members: ['session-s'] }, () => true, of)).toMatchObject({ ok: false, error: expect.stringContaining('superagent-member') })
-    expect(h.saveSettings({ router: 'session-r', members: ['session-m'] }, () => true, of)).toMatchObject({ ok: true })
+    // Design v5: the team is a canvas team; the host reads its sessions from the canvas (router first here).
+    let local: string[] = []
+    const h = new SuperagentHost({ home: mkdtempSync(join(tmpdir(), 'sa-presets-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, canvasTeam: name => name === 'team' ? { local, remote: [] } : undefined })
+    local = ['session-s', 'session-m']
+    expect(h.saveSettings({ canvas: 'team', router: 'session-s' }, () => true, of)).toMatchObject({ ok: false, error: expect.stringContaining('superagent-router') })
+    local = ['session-r', 'session-s']
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true, of)).toMatchObject({ ok: false, error: expect.stringContaining('superagent-member') })
+    local = ['session-r', 'session-m']
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true, of)).toMatchObject({ ok: true })
     expect(h.serveTeam({ url: 'http://127.0.0.1:1', key: 'MCowBQYDK2VwAyEAabcdefghijklmnopqrstuvwxyz0123456789' }, ['session-s'], () => true, of)).toMatchObject({ ok: false })
   })
 })

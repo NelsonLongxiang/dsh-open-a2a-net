@@ -76,6 +76,8 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly groupStore: GroupStore
   readonly canvasStore: CanvasStore
   readonly canvasMemberForWrite: (ref: string, peer?: unknown) => Promise<{ ok: true; member: string; ownerKey?: string } | { ok: false; error: string }>
+  /** Design v5 R3/R4: why the superagent team refuses this member on this canvas, if it does (absent: no team). */
+  readonly teamCanvasRefusal?: (canvas: string, member: string) => string | undefined
   readonly cliHomeForAdd: (handle: string, requested?: unknown) => Promise<CliHomeDecision>
   readonly cliHomeOptions: (handle: string) => Promise<{ homes: string[]; unreadable: number; held?: true }>
   readonly layoutStore: LayoutStore
@@ -942,6 +944,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             } else {
               const proof = await d.canvasMemberForWrite(id, (body as { peer?: unknown }).peer)
               if (!proof.ok) { payload = JSON.stringify(proof); res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(payload); return }
+              const teamRefusal = d.teamCanvasRefusal?.(name, proof.member)
+              if (teamRefusal !== undefined) { payload = JSON.stringify({ ok: false, error: teamRefusal }); res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(payload); return }
               const pin = await d.cliHomeForAdd(proof.member, (body as { home?: unknown }).home).catch(() => ({ ok: false as const, error: 'linked home card lookup failed' }))
               if (!pin.ok) payload = JSON.stringify({ ok: false, error: pin.error })
               else {
