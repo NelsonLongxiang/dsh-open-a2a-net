@@ -9,6 +9,7 @@
 import { createFaultReporter } from './fault'
 import { createWorkbench, type StateBody } from './workbench'
 import type { SaState } from './wb-superagent'
+import { createTeamRoleDecorator } from './planning-team-roles'
 import { createPlanningView } from './planning-view'
 import { rosterFrames, rosterNameOf } from './planning-roster'
 import { createSaveLoop, type LampState } from './layout-wire'
@@ -107,7 +108,10 @@ const viewportStore = {
   },
 }
 
+// Design v5 (D6): the planning view marks the superagent team's canvas and its roles; the 团队 poll feeds it.
+const teamRoles = createTeamRoleDecorator()
 const planning = createPlanningView({
+  decorate: (frames, nodes) => teamRoles.decorate(frames, nodes),
   viewportStore,
   onDirty: () => saveLoop.markDirty(),
   onLampClick: () => saveLoop.retry(),
@@ -441,8 +445,10 @@ async function pollSuperagent(): Promise<void> {
   superagentBusy = true
   try {
     const res = await controlFetch('/__dsh_a2a/superagent', { cache: 'no-store' })
-    bench.updateSuperagent(res.ok ? await res.json() as SaState : null)
-  } catch { bench.updateSuperagent(null) } finally { superagentBusy = false }
+    const state = res.ok ? await res.json() as SaState : null
+    bench.updateSuperagent(state)
+    teamRoles.update(state)
+  } catch { bench.updateSuperagent(null); teamRoles.update(null) } finally { superagentBusy = false }
 }
 
 async function poll(): Promise<void> {

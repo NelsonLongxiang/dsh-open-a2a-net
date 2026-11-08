@@ -86,6 +86,10 @@
 #dsh-plan .p-frame.is-roster{border-style:double;border-width:3px}
 #dsh-plan .p-frame.is-roster .p-frame-head{border-style:dashed}
 #dsh-plan .p-frame.is-syncing .p-frame-head .route{color:var(--accent)}
+/* Design v5 (D6): the superagent team's canvas and its roles. */
+#dsh-plan .p-frame-head .sa-team{font-size:10.5px; padding:0 6px; border-radius:8px; border:1px solid var(--accent); color:var(--accent); white-space:nowrap}
+#dsh-plan .p-node .nm .sa-role{flex:none; margin-left:auto; font-size:10.5px; padding:0 5px; border-radius:6px; border:1px solid var(--ink-muted); color:var(--ink-muted); white-space:nowrap}
+#dsh-plan .p-node.is-superagent-router .nm .sa-role{border-color:var(--accent); color:var(--accent)}
 #dsh-plan .p-frame.is-unreachable{opacity:.76;border-style:dashed}
 #dsh-plan .p-frame-unreachable{position:absolute;left:8px;top:20px;max-width:calc(100% - 16px);color:var(--uupm-error);font-size:11px;pointer-events:none}
 #dsh-plan .p-node.remote.is-unreachable{opacity:.72;border-left-color:var(--uupm-error)}

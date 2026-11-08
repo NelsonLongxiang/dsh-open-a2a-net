@@ -307,6 +307,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       renderedRevision = model.revision
       renderFrames()
       renderNodes()
+      deps.decorate?.(frameEls, nodeEls)
       drawMemberEdges(svg, model) // planning-edges
     }
     renderFederation()
