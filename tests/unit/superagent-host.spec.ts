@@ -615,6 +615,30 @@ describe('design v5: the team is a canvas team', () => {
     } finally { void h.stop() }
   })
 
+  it('a removed member is let go even when the engine will not move its ticket (review of #441)', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const sent: Array<[string, string]> = []
+    let local: string[] = ['session-r', 'session-a']
+    const h = new SuperagentHost({
+      home: mkdtempSync(join(tmpdir(), 'sa-v5-letgo-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {},
+      canvasTeam: name => name === 'ops' ? { local, remote: [] } : undefined,
+    })
+    expect(h.saveSettings({ canvas: 'ops', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
+    h.start()
+    try {
+      const asked = h.request('核对一节文档') as { triggerId: string }
+      expect(routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: 'doc', scope: 's', reason: 'r' })).toMatchObject({ ok: true })
+      await vi.waitFor(() => { expect(h.executor.list()).toHaveLength(1) })
+      // The engine refuses the move (as for an Assignment it no longer runs): the binding still goes, with the notice.
+      h.engine.retryTicket = () => { throw new Error('notRetryable') }
+      local = ['session-r']
+      h.poolChanged()
+      expect(h.executor.list()).toEqual([])
+      expect(sent.find(([id, t]) => id === 'session-a' && t.includes('is no longer yours'))?.[1]).toContain('(you were removed from the team)')
+    } finally { void h.stop() }
+  })
+
   it('one session, one team role: the team canvas takes no CLI handle and no off-preset session; a team session joins no other canvas', async () => {
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
     const canvases: Record<string, string[]> = { ops: ['session-r', 'session-m'], other: [] }

@@ -57,6 +57,8 @@ export interface SuperagentHostDeps {
    * not team members. Undefined when no canvas team has that name. Absent: no team can be bound.
    */
   readonly canvasTeam?: (name: string) => { readonly local: readonly string[]; readonly remote: readonly RemoteMember[] } | undefined
+  /** Design v5 (D2): the host-face sender of the team's replies to requests that came through its canvas address. */
+  readonly teamSend?: (args: readonly string[]) => Promise<string | undefined>
   /** The canvas teams this host owns, by name (the owner binds one of them). */
   readonly canvasNames?: () => readonly string[]
   /** The canvas teams a local session sits in (any slot shape that names it). */
@@ -214,7 +216,7 @@ export class SuperagentHost {
       receive: trigger => { const result = this.engine.receive(trigger as unknown as Trigger); queueMicrotask(() => this.pass()); return result },
       ticket: id => this.store.tickets.get(id) as never,
       resultPending: (ticketId, task) => this.resultPending(ticketId, task),
-      logger: d.logger, ...(d.runCli !== undefined ? { run: d.runCli } : {}), ...(d.a2aPollSeconds !== undefined ? { pollSeconds: d.a2aPollSeconds } : {}),
+      logger: d.logger, ...(d.runCli !== undefined ? { run: d.runCli } : {}), ...(d.teamSend !== undefined ? { teamSend: d.teamSend } : {}), ...(d.a2aPollSeconds !== undefined ? { pollSeconds: d.a2aPollSeconds } : {}),
     })
     this.engine = new Engine({
       repo: this.store,
@@ -412,10 +414,19 @@ export class SuperagentHost {
     for (const binding of this.executor.list()) {
       if (pool.has(binding.member)) continue
       this.executor.removing(binding.member)
+      const ticket = this.store.tickets.get(binding.ticketId)
+      const assignment = ticket?.assignments.find(a => a.id === binding.assignmentId)
+      // Review of #441: a member that already reported ready leaves a result the ticket ends on (its followed threads
+      // closing); moving it would redo finished work — the member is only let go.
+      if (ticket !== undefined && assignment !== undefined && assignment.report?.state === 'ready') { this.executor.stop(ticket, assignment, 'removed from the team'); continue }
       try {
         this.engine.deliveryFailed(binding.ticketId, binding.assignmentId, 'member removed from the team')
         this.engine.retryTicket(binding.ticketId)
-      } catch (error) { this.d.logger.warn('superagent: ticket %s not moved off a removed member: %s', binding.ticketId, String(error)) }
+      } catch (error) {
+        // Review of #441: whatever the engine says, the removed member is let go (a binding must not outlive membership).
+        this.d.logger.warn('superagent: ticket %s not moved off a removed member: %s', binding.ticketId, String(error))
+        if (ticket !== undefined && assignment !== undefined && this.executor.bindingOf(binding.member) !== undefined) this.executor.stop(ticket, assignment, 'removed from the team')
+      }
     }
     try { this.d.onRolesChanged?.() } catch (error) { this.d.logger.warn('superagent: role change not applied: %s', String(error)) }
     this.executor.launch()
