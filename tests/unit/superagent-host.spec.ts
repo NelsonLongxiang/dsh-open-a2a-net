@@ -128,6 +128,9 @@ describe('candidate card', () => {
     expect(card).toContain('request 1')
     expect(card).toContain('superagent_route')
     expect(card).toContain('do not add an implementation plan')
+    // The team's one-request-one-ticket rule outranks generic router guidance loaded from elsewhere (agent-atelier allows splitting).
+    expect(card).toContain('never split it into several')
+    expect(card).toContain('does not change them')
   })
 })
 

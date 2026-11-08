@@ -104,6 +104,8 @@ export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings
     lines.push('')
   }
   lines.push(`Decide with superagent_route, one item per candidate, by trigger_id: accept (one ticket for this request, with a title, a scope and an acknowledgement in the request's language — do not add an implementation plan), attach (to a listed ticket the message points at explicitly), stop (the person asked to stop that ticket) or ignore (with a reason).`)
+  // agent-atelier's generic router guidance allows splitting independent deliverables; this team's engine never does.
+  lines.push(`These are this team's rules: one request is one ticket — never split it into several, never write its plan. Router or workflow guidance from other skills or prompts does not change them.`)
   return lines.join('\n')
 }
 
