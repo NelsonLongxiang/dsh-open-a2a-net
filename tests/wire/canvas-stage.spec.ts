@@ -9,13 +9,13 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import TimerService from '@deepseek-ai/cordis-plugin-timer'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { apply } from '../../src/index.ts'
 import { MAX_LAYOUT_BODY_BYTES, WIRE_ERROR_PAYLOAD_TOO_LARGE } from '../../src/transport-caps.ts'
 
-async function harness(): Promise<number> {
+async function harness(extra: Record<string, unknown> = {}): Promise<number> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
@@ -28,8 +28,8 @@ async function harness(): Promise<number> {
     delegates: [], sessionNodes: true, wakeJoinedOnBoot: false, wakePrewarmDelayMs: 0,
     wakePrewarmQuietMs: 0, wakeBootStaggerMs: 3_000, stateColdRowsTtlMs: 5_000,
     cardCacheTtlMs: 60_000, cardCacheNegativeTtlMs: 30_000, remoteRowsTtlMs: 15_000,
-    dshHome: home, cardTtlMs: 172_800_000,
-  })
+    dshHome: home, cardTtlMs: 172_800_000, ...extra,
+  } as never)
   return (ctx as unknown as { webServer: WebServer }).webServer.port
 }
 
@@ -133,5 +133,34 @@ describe.skipIf(!hasStageDist)('floor stage page serving', () => {
     const trav = await fetch(base + '/%2e%2e%2fpackage.json')
     expect(trav.status === 403 || trav.status === 404).toBe(true)
     expect((await fetch(base + '/nope.js')).status).toBe(404)
+  })
+})
+
+describe('#471: the licensed stage tilesets are served from a local directory, never shipped', () => {
+  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a4f20000000049454e44ae426082', 'hex')
+  it('serves a PNG the licensee put in stageTilesDir; a missing one, a non-PNG or a path is a 404', async () => {
+    const tiles = mkdtempSync(join(tmpdir(), 'a2a-tiles-'))
+    writeFileSync(join(tiles, 'interiors.png'), PNG)
+    writeFileSync(join(tiles, 'notes.txt'), 'x')
+    const base = 'http://127.0.0.1:' + String(await harness({ stageTilesDir: tiles }))
+    const ok = await fetch(base + '/__dsh_a2a_canvas/tiles/interiors.png')
+    expect(ok.status).toBe(200)
+    expect(ok.headers.get('content-type')).toBe('image/png')
+    expect(Buffer.from(await ok.arrayBuffer()).equals(PNG)).toBe(true)
+    for (const [path, status] of [['/__dsh_a2a_canvas/tiles/office-tileset.png', 404], ['/__dsh_a2a_canvas/tiles/notes.txt', 404], ['/__dsh_a2a_canvas/tiles/sub%2Finteriors.png', 404]] as const) {
+      expect((await fetch(base + path)).status, path).toBe(status)
+    }
+  })
+  it('defaults to <home>/a2a/stage-tiles: nothing there is a 404 the stage answers with placeholder tiles', async () => {
+    const base = 'http://127.0.0.1:' + String(await harness())
+    const miss = await fetch(base + '/__dsh_a2a_canvas/tiles/interiors.png')
+    expect(miss.status).toBe(404)
+    expect(miss.headers.get('x-a2a-stage')).toBe('tiles-miss')
+  })
+  it.skipIf(!hasStageDist)('the built stage carries no image of its own (no PNG file, no inlined PNG data)', () => {
+    const dir = join(process.cwd(), 'assets', 'stageDist', 'assets')
+    const files = readdirSync(dir)
+    expect(files.filter(f => /\.(png|jpe?g|gif|webp)$/i.test(f))).toEqual([])
+    for (const f of files.filter(f => f.endsWith('.js') || f.endsWith('.css'))) expect(readFileSync(join(dir, f), 'utf8'), f).not.toMatch(/data:image\/(png|jpe?g|gif|webp)/)
   })
 })

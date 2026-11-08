@@ -5,7 +5,13 @@ The office tilesets and Tiled maps in this directory are vendored from
 
 ## Pixel art from LimeZu (licensed)
 
-The tilesets (`tilesets/*.png`) are from **Modern Interiors - RPG Tileset [16X16]** by
+> **Since #471 the tilesets are not in this repository or the npm package.** The licence below forbids
+> redistributing them. The stage loads them at runtime from `./tiles/`, which the host serves from its local
+> `stageTilesDir` (default `<home>/a2a/stage-tiles`); a licensee puts the three PNGs there. Without them the floor draws
+> placeholder tiles (`scene/office/placeholderTiles.ts`). When they load, the stage shows the required credit link.
+> Releases up to 0.7.0 and git history before #471 still contain them.
+
+The tilesets were from **Modern Interiors - RPG Tileset [16X16]** by
 [LimeZu](https://limezu.itch.io/moderninteriors), used under the **Complete Version licence**
 purchased on 2026-08-20 (see `tilesets/LIMEZUASSETS-LICENSE.txt`):
 
@@ -15,9 +21,8 @@ purchased on 2026-08-20 (see `tilesets/LIMEZUASSETS-LICENSE.txt`):
   link must stay in the README acknowledgements, in the app's about/credits surface, and on the
   website. Removing it breaks the licence.
 
-The three bundled tilesets are `interiors.png`, `office-tileset.png` and
-`a5-office-floors-walls.png`. Each one is imported by `scene/office/themeRegistry.ts` and actually
-drawn on the office floor. Nothing else in this directory is LimeZu art.
+The three tilesets are `interiors.png`, `office-tileset.png` and `a5-office-floors-walls.png`.
+`scene/office/themeRegistry.ts` loads each from `./tiles/` at runtime and draws it on the office floor. Nothing else in this directory is LimeZu art.
 
 ## The Office cast is *not* LimeZu art
 

@@ -1037,6 +1037,26 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
         res.end()
         return
       }
+      // #471: the licensed tilesets are not shipped; serve them from the licensee's local directory, PNG by plain
+      // name only. A missing file is a 404 the stage answers with placeholder tiles.
+      if (rel.startsWith('/tiles/')) {
+        const name = rel.slice('/tiles/'.length)
+        if (!/^[\w.-]+\.png$/.test(name)) {
+          res.writeHead(404, { 'Content-Type': 'text/plain', 'X-A2A-Stage': 'tiles-name' })
+          res.end()
+          return
+        }
+        const tilesDir = d.config.stageTilesDir !== '' && d.config.stageTilesDir !== undefined ? d.config.stageTilesDir : join(d.home, 'a2a', 'stage-tiles')
+        try {
+          const file = readFileSync(join(tilesDir, name))
+          res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store', 'X-A2A-Stage': 'tiles' })
+          res.end(file)
+        } catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain', 'X-A2A-Stage': 'tiles-miss' })
+          res.end()
+        }
+        return
+      }
       try {
         const file = readFileSync(join(rootDir, rel))
         const ext = rel.slice(rel.lastIndexOf('.') + 1)

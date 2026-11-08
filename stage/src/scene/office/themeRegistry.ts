@@ -22,9 +22,12 @@ import {
   type OfficeCharacterName,
 } from './cast';
 
-import officeTilesetUrl from '@/assets/tilesets/office-tileset.png?url';
-import a5FloorsWallsUrl from '@/assets/tilesets/a5-office-floors-walls.png?url';
-import interiorsUrl from '@/assets/tilesets/interiors.png?url';
+// The tilesets are LimeZu's licensed art and are not shipped (#471): the host serves them from its local stage-tiles
+// directory when their licensee put them there; otherwise the floor draws placeholder tiles (placeholderTiles.ts).
+const TILES = './tiles/';
+const officeTilesetUrl = `${TILES}office-tileset.png`;
+const a5FloorsWallsUrl = `${TILES}a5-office-floors-walls.png`;
+const interiorsUrl = `${TILES}interiors.png`;
 // .tmj is Tiled JSON; imported as raw text and parsed by the loader.
 import officeMapRaw from '@/assets/maps/office.tmj?raw';
 import brooklyn99MapRaw from '@/assets/maps/brooklyn99.tmj?raw';

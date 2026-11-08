@@ -2363,6 +2363,7 @@ describe('a2a plugin module surface', () => {
       cardCacheNegativeTtlMs: 30_000,
       remoteRowsTtlMs: 15_000,
       dshHome: '',
+      stageTilesDir: '',
       cardTtlMs: 172_800_000,
       flushTimeoutMs: 300_000,
       routeTimeoutMs: 1_800_000,
