@@ -85,12 +85,12 @@ a2a-net inbox --new                                      # 未读来信；--wait
 
 ## Native-teams 桥（节点统一，P1）——已弃用
 
-> **已弃用。** `@nelsonlongxiang/dsh-native-teams` 已弃用。桥接代码仍随包发布（`src/teams-bridge.ts`；`nativeTeamsInbound` 默认 `false`），仅为既有部署保留；新部署不应依赖它。下文按其现状描述。
+> **已弃用。** `@nelsonlongxiang/dsh-native-teams` 已弃用。桥接代码仍随包发布（契约镜像 `src/teams-bridge.ts`，入站实现 `src/legacy/teams-bridge-inbound.ts`，出站面 `bridgeFace` 在 `src/index.ts`；`nativeTeamsInbound` 默认 `false`），仅为既有部署保留；新部署不应依赖它。下文按其现状描述。
 
 通往 `@nelsonlongxiang/dsh-native-teams` 的两条半桥（结构契约镜像：`src/teams-bridge.ts`；冻结契约原文在该包 `src/a2a-face.ts`）：
 
-- **出站传输面**——本插件挂载 `nativeTeamsA2a` 服务：`resolve` 与 `submit` 复用同一次目录遍历（单一匹配器，无漂移风险），`submit` 走直连路由派发器（逐候选 async 门禁，镜像 `a2a_route`；对端幂等 409 回放判为终态 accepted，绝不转投造成重复执行；accepted 提交进欠账账本；提交会话为 joined 节点时，其节点地址随 wire `callback` 字段携带——对端回执据此路由回发起会话，冷会话由 wake-on-route 物化；父会话未 joined 时不携带 callback，回执回落 caller label），`cancel` 经 wire 向持有团队投递协作式 `[A2A cancel]` 停止通知（对端不跟踪入站任务 id，走其账本路由必然 unknown）并清除本端欠账行。它不暴露任何新东西——只有 peer 网络已发布的团队可解析。
-- **入站分发**（配置 `nativeTeamsInbound`，默认 `false`）——兄弟注册表判定为无歧义本地主张的团队名，经其权威路由缝（`describeTarget`/`startRound`）发起一轮路由，由本节点活 initiator 会话担任 parent，A2A 信封随轮消息携带。注册表存在本身绝不是暴露：操作者显式开启才算。仅分发到 dispatcher 层——入站调用方寻址团队，不能寻址成员（成员保持可见不可寻）。轮与 steer 路径同样有界：180s 回复死线（`nativeRoundWaitMs`）以诚实的 delivered-unsettled 形态应答，轮自身继续运行；调用方 abort（存在时）经其 signal 取消轮。`wait: false` 在 prepare-first 检查（主张/seam/initiator——幻影派发绝不回应成功）之后脱离派发；本切片 native-teams 轮不发 A2A 回执，其结果携带 `bridge` 标记且绝不记为欠回执行（回 `callbackTarget` 的回执回流属 P2 切片）。
+- **出站传输面**——本插件挂载 `nativeTeamsA2a` 服务：`resolve` 与 `submit` 复用同一次目录遍历（单一匹配器，无漂移风险），`submit` 走直连路由派发器（逐候选 async 门禁，镜像 `a2a_route`；对端幂等 409 回放是终态判决、绝不转投造成重复执行：`async` 提交判为 accepted，`sync` 提交抛错并在文案里带 `-32003`（先前尝试在对端仍权威），同键异载荷的 409 冲突抛错并带 `-32002`；新派发的 accepted 提交进欠账账本（回放得到的 accepted 不入账）；提交会话为 joined 节点时，其节点地址随 wire `callback` 字段携带——对端回执据此路由回发起会话，冷会话由 wake-on-route 物化；父会话未 joined 时不携带 callback，回执回落 caller label），`cancel` 先清除本端欠账行（账本优先，通知失败只记警告、不影响取消），再通知持有方：本机目标对活目标 steer `[A2A cancel]`；远端经 wire 投递协作式 `[A2A cancel]` 停止通知（不带 `task_id`——原 id 已被对端幂等账本认领，复用会 409）。对端卡片声明 `queuedTaskCancellation` 时，通知额外带 `cancel_task_id`，对端核对原调用方后撤回仍在队列中的原任务。`queryOutcome`（W7 slice 2）按 submit 同式重组指纹，经只读的 `POST /a2a/query` 向候选 peer 取回结果，无增量信息时回 `undefined`，永不给出合成判决。它不暴露任何新东西——只有 peer 网络已发布的团队可解析。
+- **入站分发**（配置 `nativeTeamsInbound`，默认 `false`）——兄弟注册表判定为无歧义本地主张的团队名，经其权威路由缝（`describeTarget`/`startRound`）发起一轮路由，由本节点活 initiator 会话担任 parent，A2A 信封随轮消息携带。注册表存在本身绝不是暴露：操作者显式开启才算。仅分发到 dispatcher 层——入站调用方寻址团队，不能寻址成员（成员保持可见不可寻）。轮与 steer 路径同样有界：180s 回复死线（`nativeRoundWaitMs`）以诚实的 delivered-unsettled 形态应答，轮自身继续运行；调用方 abort（存在时）经其 signal 取消轮。`wait: false` 在 prepare-first 检查（主张/seam/initiator——幻影派发绝不回应成功）之后脱离派发；本切片 native-teams 轮不发 A2A 回执，其结果携带 `bridge` 标记且绝不记为欠回执行（回 `callbackTarget` 的回执回流已由 P2a 落地为 wire `callback` 字段，但 native-teams 入站轮本身仍不发回执）。
 
 完整映射与范围说明见 `docs/native-teams-bridge.md`。
 
