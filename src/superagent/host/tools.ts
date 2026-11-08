@@ -77,17 +77,27 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
   } catch (error) { return { trigger_id: triggerId, ...failure(error) } }
 }
 
+/** The most a superagent tool result shows the model, in characters of its JSON. */
+export const SAID_CAP = 12_000
+
 export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost | undefined): void {
   /** The host, when the calling session is the team's router; undefined otherwise. */
   const asRouter = (exec: { agent?: { id: unknown } }): SuperagentHost | undefined => {
     const h = host()
     return h !== undefined && h.routerSession !== undefined && exec.agent !== undefined && String(exec.agent.id) === h.routerSession ? h : undefined
   }
-  const said = (title: string, value: Record<string, unknown>) => [{ type: 'text' as const, text: value.ok === true ? `${title}: ok` : `${title} refused: ${String(value.error ?? JSON.stringify(value.results ?? ''))}` }]
+  // The model sees what the call returned, not just that it ran: the router reads tickets and candidates through these
+  // tools, and a decision's ticket id or a refused item's code is what it acts on next (router acceptance RJ2/RJ6).
+  const said = (title: string, value: Record<string, unknown>) => {
+    const { ok, ...rest } = value
+    const body = JSON.stringify(rest)
+    const shown = body.length > SAID_CAP ? `${body.slice(0, SAID_CAP)}… (clipped, ${String(body.length)} chars)` : body
+    return [{ type: 'text' as const, text: `${title}${ok === true ? ': ok' : ' refused:'} ${shown}` }]
+  }
 
   ctx.tools.register(defineTool({
     name: 'superagent_route',
-    description: 'Team router only: decide candidates by trigger_id. Each item is one of accept (one ticket for the request: title, scope, reason, acknowledgement in the request language; no implementation plan), attach (ticket_id the message explicitly points at), stop (ticket_id a person asked to stop) or ignore (reason). Items are processed independently.',
+    description: 'Team router only: decide candidates by trigger_id. Each item is one of accept (one ticket for the request: title, scope, reason, acknowledgement in the request language; no implementation plan), attach (ticket_id of an open ticket the message points at or asks for again — a duplicate is attached, never accepted twice), stop (ticket_id a person asked to stop) or ignore (reason). Items are processed independently.',
     parameters: {
       items: { type: 'array', required: true, items: { type: 'object', additionalProperties: true }, description: 'Routing items: { trigger_id, kind, title?, scope?, reason?, acknowledgement?, ticket_id?, name?, note?, rules?, repo? }. repo (owner/name, a repository the team members work in) sends an accepted ticket to a member working in that repository. For an inferred candidate, rules names the enabled rules it matches (required to accept; observe mode records it as would-accept); rules: [] records an assessed ignore.' },
     },

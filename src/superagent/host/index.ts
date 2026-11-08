@@ -126,8 +126,12 @@ export function notTakenText(reason: Reason | undefined): string {
   }
 }
 
+/** How many of the team's other open tickets a candidate card lists. */
+export const OTHER_TICKETS_SHOWN = 20
+
 /** The candidate card the router reads: bounded facts and the ids its decision names, never authority. */
-export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings, 'acceptMode' | 'rules'> & Partial<Pick<TeamSettings, 'repos'>>): string {
+export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings, 'acceptMode' | 'rules'> & Partial<Pick<TeamSettings, 'repos'>>,
+  others: readonly Pick<Ticket, 'id' | 'title' | 'createdAt'>[] = []): string {
   const lines = [
     `[superagent candidate] eval ${candidate.evalId} · strength ${candidate.strength} · policy ${candidate.policyVersion}`,
     `thread ${candidate.thread.key}`,
@@ -139,6 +143,15 @@ export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings
     for (const ticket of [...candidate.tickets].sort((a, b) => Number(!!a.ended) - Number(!!b.ended))) {
       lines.push(`- ${ticket.id} · ${ticket.title} · ${ticket.ended ? `ended ${ticket.ended.outcome}` : ticketStage(ticket).stage}`)
     }
+    lines.push('')
+  }
+  // The team's other open tickets, so a request that asks again for work already under way is attached, not accepted twice
+  // (upstream's candidate carries only this thread's tickets; a duplicate from another conversation has no thread in common).
+  const onThread = new Set(candidate.tickets.map(t => t.id))
+  const elsewhere = [...others].filter(t => !onThread.has(t.id)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, OTHER_TICKETS_SHOWN)
+  if (elsewhere.length > 0) {
+    lines.push('open tickets on other threads (newest first):')
+    for (const ticket of elsewhere) lines.push(`- ${ticket.id} · ${ticket.title}`)
     lines.push('')
   }
   if (candidate.strength === 'inferred' && settings !== undefined) {
@@ -153,7 +166,8 @@ export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings
     lines.push(`The team's members each work in one repository: ${repos.join(', ')}. When you accept, name the repository the request is about as repo; its ticket goes to that repository's member. A request about no single one of them is accepted without repo.`)
     lines.push('')
   }
-  lines.push(`Decide with superagent_route, one item per candidate, by trigger_id: accept (one ticket for this request, with a title, a scope and an acknowledgement in the request's language — do not add an implementation plan), attach (to a listed ticket the message points at explicitly), stop (the person asked to stop that ticket) or ignore (with a reason).`)
+  lines.push(`Decide with superagent_route, one item per candidate, by trigger_id: accept (one ticket for this request, with a title, a scope and an acknowledgement in the request's language — do not add an implementation plan), attach (to a listed open ticket the message points at or asks for again — a duplicate is attached, never accepted twice), stop (the person asked to stop that ticket) or ignore (with a reason).`)
+  lines.push(`A person's question that asks for no work is answered with superagent_reply (purpose answer, its trigger_id) and still decided here: ignore, with the reason that it was answered. Every candidate ends with a superagent_route item.`)
   // agent-atelier's generic router guidance allows splitting independent deliverables; this team's engine never does.
   lines.push(`These are this team's rules: one request is one ticket — never split it into several, never write its plan. Router or workflow guidance from other skills or prompts does not change them.`)
   return lines.join('\n')
@@ -660,7 +674,8 @@ export class SuperagentHost {
     if (router === undefined || this.settingsValue.paused) return
     for (const [evalId, entry] of this.candidates) {
       if (entry.delivered) continue
-      if (!this.d.deliverToSession(router, candidateCard(entry.candidate, this.settingsValue))) return
+      const open = this.store.tickets.list().filter(t => !t.ended)
+      if (!this.d.deliverToSession(router, candidateCard(entry.candidate, this.settingsValue, open))) return
       entry.delivered = true
       try { this.engine.candidateDelivered(evalId) } catch (error) { this.d.logger.warn('superagent: candidate %s delivered but not recorded: %s', evalId, String(error)) }
     }

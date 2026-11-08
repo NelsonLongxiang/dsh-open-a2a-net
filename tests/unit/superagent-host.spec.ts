@@ -10,7 +10,8 @@ import { tmpdir } from 'node:os'
 import { Engine, MemoryRepositories, type Candidate, type EngineOptions, type Repositories, type Trigger } from '../../src/superagent/upstream/dsh-superagent/src/core/index.ts'
 import { JsonRepositories } from '../../src/superagent/host/store.ts'
 import { DEFAULT_SETTINGS, parseSettings, policyVersion, teamPolicy, teamScope, type TeamSettings } from '../../src/superagent/host/policy.ts'
-import { candidateCard } from '../../src/superagent/host/index.ts'
+import { OTHER_TICKETS_SHOWN, candidateCard } from '../../src/superagent/host/index.ts'
+import { SAID_CAP, registerSuperagentTools } from '../../src/superagent/host/tools.ts'
 
 /** Design v5: the team is a canvas team; tests give the host one canvas, `team`, with these sessions (router first). */
 const canvasOf = (local: readonly string[], remote: ReadonlyArray<{ ref: string; key: string; url: string }> = []) => (name: string) => name === 'team' ? { local, remote } : undefined
@@ -134,6 +135,44 @@ describe('candidate card', () => {
     // The team's one-request-one-ticket rule outranks generic router guidance loaded from elsewhere (agent-atelier allows splitting).
     expect(card).toContain('never split it into several')
     expect(card).toContain('does not change them')
+  })
+
+  it('router acceptance RJ2/RJ6: lists the team\'s other open tickets for duplicates, and says a question is answered and still decided', () => {
+    const repo = new MemoryRepositories()
+    const seen: Candidate[] = []
+    const engine = new Engine({ repo, policy: () => teamPolicy(settings()), scope: teamScope(() => settings()), assessor: { request: vi.fn(c => { seen.push(c) }) },
+      executor: { start: () => {}, deliver: () => {}, stop: () => {} }, outbox: { send: () => {}, status: () => undefined, withdraw: () => {} } })
+    engine.receive(wb('1')); engine.evaluateDue()
+    const others = Array.from({ length: OTHER_TICKETS_SHOWN + 3 }, (_, i) => ({ id: `t${String(i)}`, title: `check doc ${String(i)}`, createdAt: `2026-11-08T09:${String(10 + i)}:00.000Z` }))
+    const card = candidateCard(seen[0]!, undefined, others)
+    expect(card).toContain('open tickets on other threads (newest first):')
+    // Newest first, capped: the newest is listed, the oldest beyond the cap is not.
+    expect(card).toContain(`- t${String(OTHER_TICKETS_SHOWN + 2)} · check doc ${String(OTHER_TICKETS_SHOWN + 2)}`)
+    expect(card).not.toContain('- t0 · ')
+    expect(card.indexOf(`t${String(OTHER_TICKETS_SHOWN + 2)} ·`)).toBeLessThan(card.indexOf(`t${String(OTHER_TICKETS_SHOWN + 1)} ·`))
+    expect(card).toContain('a duplicate is attached, never accepted twice')
+    expect(card).toContain('superagent_reply (purpose answer')
+    expect(card).toContain('Every candidate ends with a superagent_route item.')
+    // No other open ticket: no such section.
+    expect(candidateCard(seen[0]!)).not.toContain('open tickets on other threads')
+  })
+})
+
+describe('router acceptance RJ2/RJ6: the model sees what a superagent tool returned', () => {
+  const registered = new Map<string, { output: { render: (args: unknown, value: Record<string, unknown>) => { type: string; text: string }[] } }>()
+  registerSuperagentTools({ tools: { register: (tool: { name: string }) => { registered.set(tool.name, tool as never) } } } as never, () => undefined)
+  const render = (name: string, value: Record<string, unknown>): string => registered.get(name)!.output.render({}, value)[0]!.text
+  it('a read shows the tickets, a decision its ticket id, a refusal its code — not a bare ok', () => {
+    expect(render('superagent_read', { ok: true, tickets: [{ id: 'abc', title: 'check a2a-cli.md', ended: null }] })).toBe('superagent read: ok {"tickets":[{"id":"abc","title":"check a2a-cli.md","ended":null}]}')
+    expect(render('superagent_route', { ok: true, results: [{ ok: true, trigger_id: 'x', kind: 'accept', ticket_id: 'T1' }] })).toContain('"ticket_id":"T1"')
+    expect(render('superagent_route', { ok: false, results: [{ ok: false, trigger_id: 'x', code: 'repo', error: 'no member works in a/b' }] })).toBe('superagent route refused: {"results":[{"ok":false,"trigger_id":"x","code":"repo","error":"no member works in a/b"}]}')
+    expect(render('superagent_reply', { ok: false, code: 'notReady', error: 'the ticket has no usable result yet' })).toContain('"code":"notReady"')
+    expect(render('a2a_ticket_report', { ok: true, ticket_id: 'T1', state: 'ready' })).toContain('"state":"ready"')
+  })
+  it('a result longer than the cap is clipped and says so', () => {
+    const text = render('superagent_read', { ok: true, tickets: 'x'.repeat(SAID_CAP * 2) })
+    expect(text.length).toBeLessThan(SAID_CAP + 200)
+    expect(text).toMatch(/… \(clipped, \d+ chars\)$/)
   })
 })
 
