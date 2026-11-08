@@ -278,19 +278,26 @@ Tests are layered by depth (contract: `docs/testing-layers.md`): each layer
 has its own directory and script, so iteration can target one depth.
 
 ```sh
-pnpm install       # auto-install-peers pulls the DSH peer train from npm
-pnpm verify        # typecheck + build + ALL vitest layers below + layout gate + nexus-stage suite
-pnpm test:unit     # L0 — pure logic, no fiber, no sockets (stores, codecs, jsdom components)
+pnpm install       # auto-install-peers pulls the DSH peer train from npm; `prepare` also runs pnpm build once
+pnpm verify        # verify:core wrapped in a "zero leftover temp directories" gate: typecheck + verify:docs (doc drift)
+                   #     + build + pnpm test (ALL vitest layers L0-L3; L4 is skipped without its env) + layout gate + nexus-stage suite
+pnpm test          # ALL vitest layers L0-L3 (gates included)
+pnpm test:unit     # L0 — pure logic, usually no fiber and no sockets (stores, codecs, jsdom components); a few exceptions:
+                   #     cli-args / cli-receipt / cli-thread start a loopback HTTP server to test the real CLI,
+                   #     receipt-retry / superagent-role-tools-scope build a bare cordis Context
 pnpm test:wire     # L1 — ONE real plugin instance over real HTTP against faked peers
 pnpm test:mesh     # L2 — >=2 REAL nodes (own homes/keys/peers.json) over real HTTP: the
                    #     cross-machine equivalent, incl. fault injection (clock-skew cards,
                    #     tampered cards, partition/restart, alias collapse, zone delegation,
                    #     referral freeze) and receipt replay — see the fault matrix in
                    #     docs/testing-layers.md
+pnpm test:build-layout # L3 — artifact contract (the build layout `exports` points at exists); not a behavior test
 pnpm test:live     # L4 — REAL remote machines, env-gated (DSH_A2A_LIVE_MESH=...); skipped
                    #     by default, never in CI — runbook in docs/testing-layers.md
-pnpm build         # host lib (including lib/a2a-client.js), client types, and browser bundle (lib/client.js)
+pnpm build         # host lib (including lib/a2a-client.js), client types, the browser bundle (lib/client.js) and the packaged skill (lib/skill/)
 ```
+
+Note: the `paths` in `tsconfig.json` point first at a checkout of `../deepseek-harness` **beside** this repo (`vendor/`, `packages/`) for types; without that sibling checkout typecheck/build falls back to the DSH types on npm, which may lag the source this plugin compiles against (see the note in Install).
 
 ## Non-DSH interop (protocol modules)
 
