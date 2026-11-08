@@ -80,7 +80,7 @@ describe('superagent members on other hosts', () => {
         expect((await tool(E, 'a2a_ticket_ack', { trigger_id: extra.triggerId, text: '冒名确认' })).ok).toBe(false)
 
         // The impostor's report for the same handle is refused on A (another key); the ticket stays open.
-        const forged = await tool(E, 'a2a_ticket_report', { state: 'ready', summary: 'forged by an instance sharing the handle' })
+        const forged = await tool(E, 'a2a_ticket_report', { ticket_id: ticketId, state: 'ready', summary: 'forged by an instance sharing the handle' })
         expect(forged.ok, JSON.stringify(forged)).toBe(false)
         expect((await state(A)).tickets[0].ended).toBeUndefined()
         // An unsigned assignment to B is refused; a signed one from E (not A's key) is refused too.
@@ -93,7 +93,7 @@ describe('superagent members on other hosts', () => {
         expect((await state(B)).refusals.counts).toMatchObject({ 'superagent-untrusted-origin': 1 })
 
         // B's member reports ready: A takes it (key pinned), the ticket completes, A's router hears the report.
-        const report = await tool(B, 'a2a_ticket_report', { state: 'ready', summary: '已提交 PR https://example.invalid/pr/7' })
+        const report = await tool(B, 'a2a_ticket_report', { ticket_id: ticketId, state: 'ready', summary: '已提交 PR https://example.invalid/pr/7' })
         expect(report, JSON.stringify(report)).toMatchObject({ ok: true, ticketId })
         await vi.waitFor(async () => { expect((await state(A)).tickets[0].ended !== undefined).toBe(true) }, { timeout: 10_000 })
         expect((await state(A)).tickets[0].ended).toMatchObject({ outcome: 'completed' })

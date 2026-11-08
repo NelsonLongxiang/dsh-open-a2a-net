@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { Engine, MemoryRepositories, type Candidate, type EngineOptions, type Repositories, type Trigger } from '../../src/superagent/upstream/dsh-superagent/src/core/index.ts'
+import { Engine, MemoryRepositories, ticketStage, type Candidate, type EngineOptions, type Repositories, type Trigger } from '../../src/superagent/upstream/dsh-superagent/src/core/index.ts'
 import { JsonRepositories } from '../../src/superagent/host/store.ts'
 import { DEFAULT_SETTINGS, parseSettings, policyEffects, policyVersion, teamPolicy, teamScope, type TeamSettings } from '../../src/superagent/host/policy.ts'
 import { policyChangedLines } from '../../src/superagent/host/executor.ts'
@@ -523,6 +523,126 @@ describe('acceptance item 9: an agent\'s message cannot end a ticket through its
     expect(agentLedEnd(ticket([['2026-11-07T10:01:00.000Z', false]], '2026-11-07T10:05:00.000Z'), 'a1')).toBe(false)
     // One stamped the same millisecond as the previous report is not known to have been seen by it.
     expect(agentLedEnd(ticket([['2026-11-07T10:05:00.000Z', false]], '2026-11-07T10:05:00.000Z'), 'a1')).toBe(true)
+  })
+})
+
+describe('a member\'s turn: silent ends, failures, handoffs and stale reports', () => {
+  async function team(extra: Record<string, unknown> = {}) {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const sent: Array<[string, string]> = []
+    const turn = { quiet: true, text: '' }
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-a']), home: mkdtempSync(join(tmpdir(), 'sa-turn-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {}, memberTurn: () => ({ ...turn }), ...extra } as never)
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
+    h.start()
+    const accept = (text: string, title: string): { ticket: string; thread: string; trigger: string } => {
+      const asked = h.request(text) as { triggerId: string; thread: string }
+      h.pass()
+      const out = routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title, scope: 's', reason: 'r' }) as { ticket_id: string }
+      return { ticket: out.ticket_id, thread: asked.thread, trigger: asked.triggerId }
+    }
+    const cards = (prefix: string): string[] => sent.filter(([id, t]) => id === 'session-a' && t.startsWith(prefix)).map(([, t]) => t)
+    const toRouter = (): string[] => sent.filter(([id, t]) => id === 'session-r' && t.startsWith('[superagent report]')).map(([, t]) => t)
+    const tick = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 20))
+    return { h, sent, turn, accept, cards, toRouter, tick }
+  }
+
+  it('a turn that ends without a report reports waiting with the member\'s last words, and frees the member', async () => {
+    const m = await team()
+    try {
+      const one = m.accept('第一', '一'), two = m.accept('第二', '二')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      m.turn.text = '我看完了，等你确认。'
+      m.h.memberIdle('session-a')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(2) })
+      expect(m.cards('[superagent assignment]')[1]).toContain(two.ticket)
+      expect(m.h.store.tickets.get(one.ticket)!.assignments.at(-1)!.report).toMatchObject({ state: 'waiting', summary: '我看完了，等你确认。' })
+      expect(m.toRouter().some(t => t.includes(one.ticket) && t.includes('我看完了'))).toBe(true)
+    } finally { await m.h.stop() }
+  })
+
+  it('shell jobs still running hold the slot and decide nothing until they end', async () => {
+    const m = await team()
+    try {
+      const one = m.accept('第一', '一'); m.accept('第二', '二')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      m.turn.quiet = false
+      m.h.memberIdle('session-a')
+      await m.tick()
+      expect(m.h.store.tickets.get(one.ticket)!.assignments.at(-1)!.report).toBeUndefined()
+      expect(m.cards('[superagent assignment]')).toHaveLength(1)
+      m.turn.quiet = true
+      m.h.memberIdle('session-a')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(2) })
+    } finally { await m.h.stop() }
+  })
+
+  it('a ticket waiting on a person holds no member; the answer brings it back to that member first', async () => {
+    const m = await team()
+    try {
+      const one = m.accept('第一', '一'), two = m.accept('第二', '二'), three = m.accept('第三', '三')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      expect(m.h.report('session-a', { state: 'waiting', summary: '要问一下', question: '用哪种格式？' }, one.ticket)).toMatchObject({ ok: true })
+      m.h.memberIdle('session-a')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(2) })
+      expect(m.cards('[superagent assignment]')[1]).toContain(two.ticket)
+      expect(m.h.store.tickets.get(one.ticket)!.assignments.at(-1)!.state).toBe('running')
+      // The parked ticket still takes its member's report.
+      expect(m.h.report('session-a', { state: 'progress', summary: '后台那项跑完了' }, one.ticket)).toMatchObject({ ok: true })
+      expect(m.h.request('用 CSV', one.thread)).toMatchObject({ ok: true })
+      m.h.pass()
+      await m.tick()
+      expect(m.cards('[superagent input]')).toHaveLength(0)
+      // The member finishes the second ticket: the answer goes before the third ticket.
+      expect(m.h.report('session-a', { state: 'ready', summary: '完成' }, two.ticket)).toMatchObject({ ok: true })
+      await vi.waitFor(() => { expect(m.cards('[superagent input]').some(t => t.includes(one.ticket) && t.includes('用 CSV'))).toBe(true) })
+      expect(m.cards('[superagent assignment]').some(t => t.includes(three.ticket))).toBe(false)
+    } finally { await m.h.stop() }
+  })
+
+  it('a report names its ticket: a late turn cannot report on the next one', async () => {
+    const m = await team()
+    try {
+      const one = m.accept('第一', '一'), two = m.accept('第二', '二')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      m.h.engine.stopTicket(one.ticket, 'not needed')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(2) })
+      expect(m.h.report('session-a', { state: 'ready', summary: '旧回合的结果' }, one.ticket)).toMatchObject({ ok: false, code: 'not-yours' })
+      expect(m.h.store.tickets.get(two.ticket)!.ended).toBeUndefined()
+    } finally { await m.h.stop() }
+  })
+
+  it('a member stopped mid-turn takes no new ticket until that turn has ended', async () => {
+    let running = true
+    const m = await team({ cancelTurn: () => running })
+    try {
+      const one = m.accept('第一', '一'); m.accept('第二', '二')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      m.h.engine.stopTicket(one.ticket, 'not needed')
+      await m.tick()
+      expect(m.cards('[superagent assignment]')).toHaveLength(1)
+      running = false
+      m.h.memberIdle('session-a')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(2) })
+    } finally { await m.h.stop() }
+  })
+
+  it('a failed turn fails the ticket for a person; a passing failure goes on after a backoff', async () => {
+    const m = await team()
+    try {
+      const one = m.accept('第一', '一')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      vi.useFakeTimers({ toFake: ['setTimeout'] })
+      m.h.memberFailed('session-a', new Error('429 rate limit'))
+      m.h.memberIdle('session-a') // the idle that follows a failure ends nothing while the retry waits
+      expect(m.h.store.tickets.get(one.ticket)!.assignments.at(-1)!.report).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(15_000)
+      vi.useRealTimers()
+      await vi.waitFor(() => { expect(m.sent.some(([id, t]) => id === 'session-a' && t.includes('failed for a passing reason'))).toBe(true) })
+      m.h.memberFailed('session-a', new Error('invalid tool schema'))
+      expect(ticketStage(m.h.store.tickets.get(one.ticket)!)).toEqual({ stage: 'person', action: 'failed' })
+      expect(m.toRouter().some(t => t.includes('invalid tool schema'))).toBe(true)
+    } finally { vi.useRealTimers(); await m.h.stop() }
   })
 })
 

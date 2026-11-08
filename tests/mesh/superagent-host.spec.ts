@@ -360,9 +360,9 @@ describe('superagent engine in the a2a host', () => {
       await vi.waitFor(() => { expect(m.X.steered.some(t => t.includes('[superagent input]') && t.includes('补充：要带单元测试'))).toBe(true) }, { timeout: 8000 })
 
       // Only an assigned member may report; M reports ready → its ticket completes → the router hears it → M takes the waiting one.
-      expect(await m.tool('a2a_ticket_report', m.O, { state: 'ready', summary: 'x' })).toMatchObject({ ok: false, code: 'not-member' })
+      expect(await m.tool('a2a_ticket_report', m.O, { ticket_id: 'x', state: 'ready', summary: 'x' })).toMatchObject({ ok: false, code: 'not-member' })
       const mTicket = s.executor.bindings.find((b: any) => b.member === M_ID).ticketId
-      const report = await m.tool('a2a_ticket_report', m.M, { state: 'ready', summary: '已提交 PR https://example.invalid/pr/1' })
+      const report = await m.tool('a2a_ticket_report', m.M, { ticket_id: mTicket, state: 'ready', summary: '已提交 PR https://example.invalid/pr/1' })
       expect(report, JSON.stringify(report)).toMatchObject({ ok: true, ticketId: mTicket })
       await vi.waitFor(() => { expect(m.R.steered.some(t => t.includes('[superagent report]') && t.includes(mTicket))).toBe(true) }, { timeout: 8000 })
       await vi.waitFor(() => { expect(cards(m.M).length === 2).toBe(true) }, { timeout: 8000 })
@@ -429,7 +429,7 @@ describe('superagent engine in the a2a host', () => {
       // A member: work tools + a2a_ticket_report + a2a_file_fetch (of this host's tools, the last two). No A2A route, no report
       // outside its ticket, no router tool.
       expect(scopes.get(M_ID)!.allow).toEqual(['a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_file_fetch'])
-      expect(await refusedByRole('a2a_ticket_report', m.M, { state: 'progress', summary: 'x' })).toBe(false)
+      expect(await refusedByRole('a2a_ticket_report', m.M, { ticket_id: 'x', state: 'progress', summary: 'x' })).toBe(false)
       expect(await refusedByRole('a2a_file_fetch', m.M, {})).toBe(false)
       for (const name of ['a2a_route', 'a2a_report', 'a2a_teams', 'a2a_tasks', 'a2a_file_send', 'superagent_route']) expect(await refusedByRole(name, m.M, { team: 'dsh/c2222222', message: 'x' }), name).toBe(true)
 
@@ -494,7 +494,7 @@ describe('superagent engine in the a2a host', () => {
         const before = (await m.state()).tickets.find((t: any) => t.id === ticketId)
         await vi.waitFor(async () => { expect((await m.state()).tickets.find((t: any) => t.id === ticketId).assignments.at(-1).state).toBe('running') }, { timeout: 8000 })
         const cards = m.M.steered.filter(t => t.includes('[superagent assignment]') && t.includes(ticketId)).length
-        expect(await m.tool('a2a_ticket_report', m.M, { state, summary: `${state}: 缺少权限` })).toMatchObject({ ok: true })
+        expect(await m.tool('a2a_ticket_report', m.M, { ticket_id: ticketId, state, summary: `${state}: 缺少权限` })).toMatchObject({ ok: true })
         await vi.waitFor(async () => { expect((await m.state()).tickets.find((t: any) => t.id === ticketId).stage).toEqual({ stage: 'person', action: state }) }, { timeout: 8000 })
         expect(await m.sa({ action: 'retry', ticket_id: ticketId })).toMatchObject({ ok: true })
         await vi.waitFor(async () => { expect((await m.state()).tickets.find((t: any) => t.id === ticketId).assignments.length).toBe(before.assignments.length + 1) }, { timeout: 8000 })
@@ -559,7 +559,7 @@ describe('superagent engine in the a2a host', () => {
       const ticketId = routed.results[0].ticket_id as string
       await vi.waitFor(() => { expect(m.M.steered.some(t => t.includes('[superagent assignment]'))).toBe(true) }, { timeout: 8000 })
       const question = '这次报告用中文还是英文写？'
-      expect(await m.tool('a2a_ticket_report', m.M, { state: 'waiting', summary: '开工前先问语言', question })).toMatchObject({ ok: true })
+      expect(await m.tool('a2a_ticket_report', m.M, { ticket_id: ticketId, state: 'waiting', summary: '开工前先问语言', question })).toMatchObject({ ok: true })
       await vi.waitFor(async () => { expect((await m.state()).tickets.find((t: any) => t.id === ticketId).attention).toMatchObject({ question }) }, { timeout: 8000 })
       // The router's text leaves the question out (as the live router did); the host puts it in front.
       expect(await m.tool('superagent_reply', m.R, { purpose: 'attention', ticket_id: ticketId, question, text: '成员开工前先问你一个问题，等你回答。' })).toMatchObject({ ok: true })
@@ -615,7 +615,7 @@ describe('superagent engine in the a2a host', () => {
       // One more message arrives that the session never claims before the member reports ready in the same turn.
       claim = false
       const unread = await said('还有：按钮要蓝色')
-      expect(await m.tool('a2a_ticket_report', m.M, { state: 'ready', summary: '完成：分支 ticket/x 提交 abc1234' })).toMatchObject({ ok: true })
+      expect(await m.tool('a2a_ticket_report', m.M, { ticket_id: ticketId, state: 'ready', summary: '完成：分支 ticket/x 提交 abc1234' })).toMatchObject({ ok: true })
       await vi.waitFor(() => { expect(m.R.steered.some(t => t.includes('[superagent candidate]') && t.includes(unread))).toBe(true) }, { timeout: 8000 })
       s = await m.state()
       expect(s.tickets.find((t: any) => t.id === ticketId).ended).toMatchObject({ outcome: 'completed' })

@@ -2062,6 +2062,20 @@ export function apply(ctx: Context, config: Config): void {
     canvasesOf: id => canvasTeamsOfSession(id),
     canvasNames: () => canvasStore.list(),
     presetOf: id => sessionPresetOf(id),
+    cancelTurn: id => {
+      const agent = sessionNodes.get(id) as (Agent & { cancel?: (reason: { kind: 'user' }, options: { keepInbox: boolean }) => unknown }) | undefined
+      if (agent === undefined || agent.status === 'idle' || typeof agent.cancel !== 'function') return false
+      agent.cancel({ kind: 'user' }, { keepInbox: false })
+      return true
+    },
+    memberTurn: id => {
+      const agent = sessionNodes.get(id)
+      if (agent === undefined) return undefined
+      const jobs = ctx.get('jobs' as never) as { list?: (caller: string) => readonly { owner?: string; status: string }[] } | undefined
+      const quiet = !(jobs?.list?.(id) ?? []).some(job => job.owner === id && (job.status === 'running' || job.status === 'stopping'))
+      const last = [...sessionEventsOf(agent)].reverse().find(event => event?.type === 'assistant/message') as { data?: { message?: { content?: ReadonlyArray<{ type?: string; text?: string }> } } } | undefined
+      return { quiet, text: (last?.data?.message?.content ?? []).filter(block => block.type === 'text').map(block => block.text ?? '').join('\n').trim() }
+    },
     teamSend: args => teamCanvasSend(args),
   }) : undefined
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
@@ -2078,6 +2092,8 @@ export function apply(ctx: Context, config: Config): void {
     registerSuperagentTools(ctx, () => superagentHost)
     // A member's turn ending is the executor's turn-end fact (PR-C1).
     ctx.on('agent/status', payload => { if (payload.status === 'idle') superagentHost.memberIdle(String(payload.agent.id)) })
+    // A failed turn is retried or fails the ticket for a person (upstream); without this it read as still working.
+    ctx.on('agent/error', ({ agent, error }) => { superagentHost.memberFailed(String(agent.id), error) })
     // PR-F: an Input counts as read once the member's session takes the message carrying it into its history.
     ctx.on('agent/inbox/claimed', ({ agent }) => { superagentHost.memberClaimed(String(agent.id)) })
     ctx.tools.guard(exec => {
