@@ -490,8 +490,9 @@ describe('ops loop: members work in repositories; a ticket accepted for one runs
       expect(routeItem(h, { trigger_id: first.triggerId, kind: 'accept', title: 'net 1', scope: 's', reason: 'r', repo: 'o/net' })).toMatchObject({ ok: true, repo: 'o/net' })
       await vi.waitFor(() => { expect(assigned('session-a')).toHaveLength(1) })
       expect(assigned('session-a')[0]).toContain('repository: o/net (yours)')
-      // A ticket's worktree goes beside the checkout, never inside it (the ops clones filled up with ticket directories).
-      expect(assigned('session-a')[0]).toContain('beside the checkout')
+      // A ticket's worktree stays inside the member's sandbox, kept out of the checkout's status (a path beside it is refused).
+      expect(assigned('session-a')[0]).toContain('.worktrees/')
+      expect(assigned('session-a')[0]).toContain('.git/info/exclude')
       // A second net ticket waits for session-a although session-b is free …
       const second = h.request('net：核对 docs/protocol') as { triggerId: string }
       expect(routeItem(h, { trigger_id: second.triggerId, kind: 'accept', title: 'net 2', scope: 's', reason: 'r', repo: 'o/net' })).toMatchObject({ ok: true })
@@ -508,6 +509,14 @@ describe('ops loop: members work in repositories; a ticket accepted for one runs
       expect(h.report('session-a', { state: 'ready', summary: '核对完毕，ticket/net-1 0123abc' })).toMatchObject({ ok: true })
       await vi.waitFor(() => { expect(assigned('session-a')).toHaveLength(2) })
       expect(assigned('session-a')[1]).toContain('net 2')
+      // Its own ready report ended net 1: no "no longer yours" notice wakes it for a turn.
+      const notices = (member: string) => sent.filter(([id, t]) => id === member && t.includes('is no longer yours'))
+      expect(notices('session-a')).toEqual([])
+      // An owner stop is news to the member: it gets the notice.
+      const atelier = h.store.tickets.list().find(t => t.title === 'atelier 1')!
+      h.engine.stopTicket(atelier.id, 'owner stop')
+      await vi.waitFor(() => { expect(notices('session-b')).toHaveLength(1) })
+      expect(notices('session-b')[0]?.[1]).toContain('(owner stop)')
     } finally { void h.stop() }
   })
 })
