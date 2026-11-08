@@ -509,3 +509,52 @@ describe('ops loop: members work in repositories; a ticket accepted for one runs
     } finally { void h.stop() }
   })
 })
+
+describe('ops team ledger: every A2A message to the team address gets a formal outcome', () => {
+  it('a message the team does not take is told so (rejected, with the reason); a follow-up is told it reached the member', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const calls: string[][] = []
+    const h = new SuperagentHost({
+      home: mkdtempSync(join(tmpdir(), 'sa-outcome-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
+      homeUrl: () => 'http://127.0.0.1:1',
+      runCli: async args => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' },
+    })
+    const bot = 'reporter/0123456789abcdef', stranger = 'stranger/0123456789abcdef'
+    expect(h.saveSettings({ router: 'session-r', members: ['session-m'], sources: { a2a: true }, acceptMode: 'observe', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const receive = (n: string, from: string, ctx = `ctx-${n}`) => {
+      const task = `direct-${n.padStart(12, '0')}`
+      h.engine.receive({ ...wb(n, ctx), source: 'a2a', threads: [{ source: 'a2a', id: ctx }], actor: { source: 'a2a', id: from }, human: false, channel: { source: 'a2a', thread: `a2a:${ctx}`, address: { caller: from, task, context: ctx } }, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } })
+      h.pass()
+      return task
+    }
+    const receiptFor = (task: string) => calls.find(a => a[0] === 'receipt' && a[1] === task && !a.includes('--acknowledged'))
+    const outcome = (args: string[] | undefined) => args?.[args.indexOf('--outcome') + 1]
+    // Observe mode: the router's accept is recorded as would-accept; the requester learns nothing was taken.
+    const observed = receive('1', bot)
+    expect(routeItem(h, { trigger_id: '1', kind: 'accept', title: 't', scope: 's', reason: 'matches deps', rules: ['deps'] })).toMatchObject({ ok: true, decision: 'ignore' })
+    // A sender not on the list is refused at the gate.
+    const refused = receive('2', stranger)
+    await settle()
+    expect(outcome(receiptFor(observed))).toBe('rejected')
+    expect(receiptFor(observed)!.at(-1)).toContain('观察模式')
+    expect(outcome(receiptFor(refused))).toBe('rejected')
+    expect(receiptFor(refused)!.at(-1)).toContain('名单')
+    // Auto: a ticket, whose own request keeps the acknowledgement-and-result path (no outcome receipt now).
+    expect(h.saveSettings({ acceptMode: 'auto' }, () => true)).toMatchObject({ ok: true })
+    const request = receive('3', bot, 'ctx-3')
+    const accepted = routeItem(h, { trigger_id: '3', kind: 'accept', title: 'bump', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
+    await settle()
+    expect(receiptFor(request)).toBeUndefined()
+    // The bot's stop on that thread is refused (an agent cannot stop a ticket), and told so.
+    const stop = receive('4', bot, 'ctx-3')
+    expect(routeItem(h, { trigger_id: '4', kind: 'stop', ticket_id: accepted.ticket_id, reason: 'bot says stop' })).toMatchObject({ ok: true, decision: 'ignore' })
+    await settle()
+    expect(outcome(receiptFor(stop))).toBe('rejected')
+    expect(receiptFor(stop)!.at(-1)).toContain('不能停止工单')
+    // Each message is answered once.
+    await settle()
+    expect(calls.filter(a => a[0] === 'receipt' && [observed, refused, stop].includes(a[1]!)).length).toBe(3)
+  })
+})

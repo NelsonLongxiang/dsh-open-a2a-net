@@ -31,6 +31,8 @@ The request keeps its one formal receipt for the result. While its ticket is ope
 
 Members can each work in one repository: the owner names it per member in the settings (`repos`, member → `owner/name`). The router then names the repository a request is about when it accepts (`superagent_route` item `repo`); the ticket runs only on that repository's members and waits for one of them without holding up tickets behind it. A request about no single repository is accepted without `repo` and runs on any member. An unknown repository is refused with the team's list.
 
+Every A2A message to the team address gets a formal outcome, not only those that start a ticket. A message the team does not take (observe mode, a sender not on the list, a stop an agent may not give, the router's ignore) gets a `rejected` receipt with the reason. A message delivered into a ticket as a follow-up gets a `completed` receipt once its member has it. Without these, the sender's owed row only ever dead-lettered.
+
 ## For the router
 
 - Candidates arrive in your own session as `[superagent candidate] …` cards. Decide each by its `trigger_id` with `superagent_route`:

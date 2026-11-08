@@ -419,6 +419,8 @@ export function replyAllowed(address: Record<string, string>, config: Pick<A2aCo
 export interface SendOptions {
   /** Never take the task's formal receipt with this message: send it as a follow-up, and leave the receipt for later. */
   readonly holdReceipt?: boolean
+  /** The outcome the receipt states, when the host knows it better than a ticket can (a request the team did not take). */
+  readonly outcome?: ReceiptOutcome
 }
 
 /**
@@ -452,7 +454,7 @@ export async function sendReply(ctx: SourceContext, commands: Commands, message:
     const ticket = message.ticketId !== undefined ? ctx.tickets.get(message.ticketId) : undefined
     const attention = ticket?.attention !== undefined && message.id === key('attention-reply', ticket.attention.id)
     const args = first
-      ? ['receipt', task, '--to', caller, ...(attention ? ['--attention'] : ['--outcome', receiptOutcome(ticket)]), '--json', '--exit-class', '--', text]
+      ? ['receipt', task, '--to', caller, ...(attention ? ['--attention'] : ['--outcome', options.outcome ?? receiptOutcome(ticket)]), '--json', '--exit-class', '--', text]
       : ['route', caller, '--task', `${LOOP_PREFIX}${key(message.id)}`, '--context', context ?? task, '--json', '--exit-class', '--', text]
     try {
       await commands.run(PROGRAM, args)
