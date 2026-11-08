@@ -38,34 +38,49 @@ tool runtime; the card route `/.well-known/agent-card.json` is registered only w
 
 ## What you get
 
-- **Model tools** (see the table below) — `a2a_teams` lists the teams this node can see (its own rows
+- **Model tools** (twelve, see the table below) — `a2a_teams` lists the teams this node can see (its own rows
   plus peer teams inside the joined-team scope); `a2a_route`
   sends one message to a team, reuses `context_id` to continue a remote conversation, and fails over across
   candidates when a peer is unreachable. `a2a_tasks` reconciles the receipt contract across three tiers: every route that leaves a
-  task owed a reply (async delivery, a released wait) stays in the owed book as pending until its
+  task owed a reply (async delivery, or a synchronous wait released at its 180s deadline; a synchronous wait the caller aborts is not booked,
+  and a delivery with no routable callback address is only listed as a visible row with no receipt debt) stays in the owed book as pending until its
   `[A2A receipt] task <task_id>` message correlates — overdue rows auto-dead-letter past the stale TTL (a revived target can still
   settle with a late receipt), every settlement lands in the bounded archive instead of being silently evicted, and each row keeps
   its follow-up `context_id`, persisted across
   restarts. `a2a_probe` measures the tracked fleet's reachability and round-trip latency (one verified-card
   fetch per peer, optionally narrowed to a single url) for pre-dispatch health checks, naming each miss's
   stage — `unreachable` (transport/HTTP) vs. `rejected` (distrusted card).
-- **Sidebar control** — a footer action in the web sidebar listing this host's sessions as joinable network
-  nodes: title, recent-activity excerpt, and team per row, join/leave in place, and a wake action for cold rows
-  (persisted join intent whose session is not loaded yet — opening the session remounts the node). Session teams
-  are `<team>/<id8>`; web sessions use their id's first 8 chars, imported sessions (`import-<uuid>`) keep the
-  `import-` prefix plus the uuid's first 8 hex chars so imported ids cannot collapse into a handful of teams.
-  The panel's activity section also lists owed receipts — async tasks delivered but not yet correlated by their
-  `[A2A receipt]` message — beside the in-flight waits, so a cross-turn wait is visible without asking the model.
-- **Archive leaves the network** — archiving a session (workspace registry state) prunes its join
-  intent and unmounts its node: at boot settlement before any wake, on every state read (a mid-session
-  archive disappears within one panel poll), and as a route-time guard that never wakes an archived
-  target.
-- **Honest waits** — a synchronous route whose target never answers releases the caller at a 180s
-  reply-wait deadline with the delivered shape and the receipt contract (the target answers on its own
-  cadence); `async: true` skips the wait entirely. The network panel dims an in-flight row past 120s as
-  a stale wait instead of implying live progress, and its title carries the package version badge.
-- **Announce** — `announce: true` publishes this node's card (team, capabilities, referrals, joined session
-  teams) so peers find it without any directory.
+- **Sidebar panel** — the footer entry in the web sidebar, slimmed down to this host's recent network activity
+  (`docs/design/panel-activity-feed.md`): in-flight routes, owed receipts (only settleable debt is listed; the stale conversational tail is
+  only counted) and the routing activity ring side by side, so a cross-turn wait is visible without asking the model; an activity row for a
+  same-host session jumps to that session inside the GUI; an unread badge for inbound activity, the package version badge in the title, and an entry
+  to the workbench. Joining/leaving the network, canvas teams and member arrangement are no longer done in the sidebar — they moved to the
+  workbench planning board below. Session teams are `<team>/<id8>`; web sessions use their id's first 8 chars (after dropping the `session-`
+  prefix), imported sessions (`import-<uuid>`) keep the `import-` prefix plus the uuid's first 8 hex chars so imported ids cannot collapse into a
+  handful of teams.
+- **Archive leaves the network** — archiving a session (workspace registry state) takes it off the node network: its node is unmounted,
+  its roster declarations withdrawn, it is hidden from listings and the card, and it is never woken — at boot settlement before any wake, on every
+  state read (a mid-session archive disappears within one state poll), and as a route-time guard. **The join intent is kept** in `joined.json`
+  (wiping it on a transient archived reading once left cold sessions that could never wake again); the prune is recorded as `archive-prune` in the
+  state face's `registry.teamAudit`.
+- **Honest waits** — a synchronous route whose target never answers: for a same-host session target the caller is released at a 180s
+  reply-wait deadline with the delivered shape (`TASK_STATE_DELIVERED`) and the receipt contract (the target answers on its own cadence); a remote
+  peer reached over the direct route is bound by a 15s transport budget, then the host tries to recover the peer's settled outcome through the task
+  query (upgrading to the real result if it finished) and otherwise returns `-32005` "delivered, not settled" — reconcile by task id, do not
+  re-dispatch blindly. `async: true` skips the wait entirely. The network panel dims an in-flight row past 120s as a stale wait instead of
+  implying live progress.
+- **A2A workbench** — `/__dsh_a2a_nexus/`, a full-page DOM workbench (it replaced the Three.js 3D view in 0.6.0; 0.6.2 merged the planning board
+  into it: the board is the main stage and Directory / Hosts / Ledger / Activity / Plan ride a collapsible sidebar, plus a Team page when the host
+  runs a superagent team; responsive — a wider sidebar from 1440px, a drawer sidebar and bottom-sheet detail up to 1023px, a wrapping header up to
+  680px; the panels fall back to the main area when the canvas face goes down). Directory: local sessions (live / cold), canvas teams, remote nodes,
+  local logs. Hosts: tracked peers' health and link badges. Ledger: pending / dead letters with in-place clearing. Activity ring. Plan: a derived
+  action list plus nudge and dispatch drafting (both produce copyable text). The spatial planning board: build canvas teams, arrange members,
+  join/leave the network, with the layout persisted; `?mode=plan` is only an old-link compatibility form — with the canvas face up the board is
+  already the default.
+- **Announce** — `announce: true` (default `false`; needs a web server in the composition) publishes this node's signed card so peers find it
+  without any directory. Referrals (`peers`) go only to a signature-verified caller that is a configured seed or already linked; joined session
+  teams (`sessionTeams`), rosters and the canvas org go only to a linked caller; every other caller gets the minimal discovery card (name, team,
+  capabilities, records, signature). Unjoined session nodes are not published.
 
 ## Model tools at a glance
 
