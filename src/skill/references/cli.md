@@ -370,6 +370,10 @@ A message from a CLI identity (`route` to the team's A2A address) is an agent's 
 | 2 | usage error: unknown command or flag, missing value, bad argument |
 | 3 | `inbox --wait` timed out |
 
+With `--json --exit-class` on `route`/`receipt` the exit code carries the
+class instead: 0 sent, 4 gone, 5 the task already carries a different receipt
+(`receipt` only), 1 retry or any other failure (see the receipt section).
+
 ## Caveats
 
 - The mailbox read is gated by the host's control key and the handle only,
