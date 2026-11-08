@@ -171,11 +171,13 @@ function identity() {
   return id
 }
 
+/** An environment variable set to the empty string counts as unset (#490). */
+const envValue = name => { const value = process.env[name]; return value !== undefined && value !== '' ? value : undefined }
 const home = () => {
   const saved = storedIdentity()?.home
-  return String(flag('--home') ?? process.env.A2A_HOME ?? saved ?? DEFAULT_HOME).replace(/\/$/, '')
+  return String(flag('--home') ?? envValue('A2A_HOME') ?? saved ?? DEFAULT_HOME).replace(/\/$/, '')
 }
-const apiKey = () => flag('--key') ?? (process.env.A2A_KEY !== undefined && process.env.A2A_KEY !== '' ? process.env.A2A_KEY : undefined)
+const apiKey = () => flag('--key') ?? envValue('A2A_KEY')
 
 /** The bound form's domain tag (src/origin-claim.ts ORIGIN_CLAIM_BOUND_TAG). */
 const ORIGIN_CLAIM_BOUND_TAG = 'a2a-origin-claim/2'
@@ -219,10 +221,7 @@ function originClaimFor(base) {
 }
 
 /** A host behind dsh-pocket also wants its session token, as the dsh_pocket_token cookie. */
-const pocketToken = () => {
-  const token = process.env.A2A_POCKET_TOKEN ?? process.env.A2A_TOKEN
-  return token !== undefined && token !== '' ? token : undefined
-}
+const pocketToken = () => envValue('A2A_POCKET_TOKEN') ?? envValue('A2A_TOKEN')
 
 const keyHeaders = () => {
   const key = apiKey()
@@ -256,6 +255,15 @@ async function homeFetch(url, init) {
     throw new RedirectRefused(url, res.status, location)
   }
   return res
+}
+
+/** The home host's zone, which names its process team (#503); `dsh` when the host does not say. */
+async function homeZone() {
+  try {
+    const res = await homeFetch(`${home()}/__dsh_a2a/state`, { headers: keyHeaders() })
+    const zone = res.ok ? (await res.json())?.zone : undefined
+    return typeof zone === 'string' && zone !== '' ? zone : 'dsh'
+  } catch { return 'dsh' }
 }
 
 /**
@@ -1393,7 +1401,7 @@ async function main() {
   if (cmd === 'report') {
     const text = positionals().join(' ')
     if (text === '') usage('usage: a2a report <message…> — one-way report into the host process-team mailbox')
-    await sendDirect('report', { team: 'dsh', message: `[a2a-net cli report] ${text}`, caller_session: identity().handle, wait: false, task_id: taskFlag() ?? newTaskId() })
+    await sendDirect('report', { team: await homeZone(), message: `[a2a-net cli report] ${text}`, caller_session: identity().handle, wait: false, task_id: taskFlag() ?? newTaskId() })
     return
   }
   if (cmd === 'revoke') {
