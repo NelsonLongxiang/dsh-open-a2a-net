@@ -5,6 +5,10 @@
 
 ## 下一版本候选（待评审，未发布）
 
+### 移除 native-teams 桥
+- `@nelsonlongxiang/dsh-native-teams` 早已弃用，对接它的桥一并移除：`nativeTeamsA2a` 服务接口、`src/teams-bridge.ts`、`src/legacy/teams-bridge-inbound.ts`、路由里的三处分支、目录里的注册表行，以及配置 `nativeTeamsInbound` 和 `nativeRoundWaitMs`（配置里还写着这两项的主机要删掉）。
+- 接收端仍认老节点回复里的 `bridge: 'native-teams'` 标记：0.7.0 及更早、开着这座桥的对端，其轮次不发回执，不记成欠账。
+
 ### 许可证与办公室舞台（#470、#471）
 - 包内现带 `LICENSE`（MIT）、`THIRD_PARTY_NOTICES.md` 与 `docs/licenses/`。
 - **移除办公室舞台 `/__dsh_a2a_canvas`**：`stage/` 子包、`assets/stageDist` 与该路由一并删除。它自工作台上线后没有入口，只是展示页，也是 LimeZu 贴图等第三方义务的来源。组队、规划板和 `/__dsh_a2a/canvas-layout` 不受影响。书签指向该地址的用户请改用工作台 `/__dsh_a2a_nexus/`。0.7.0 及更早的发布版和此前的 git 历史仍含这部分内容。

@@ -89,7 +89,7 @@ type WireRoute = {
   readonly settlement?: unknown
 }
 
-/** The native-teams bridge marker, when the peer's answer carries one: its
+/** The native-teams bridge marker, from a peer that still runs the retired bridge (0.7.0 and older): its
  * rounds emit no A2A receipt in this slice, so the caller must not book the
  * task as receipt-owed. */
 function wireBridge(value: unknown): 'native-teams' | undefined {

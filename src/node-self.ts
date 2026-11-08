@@ -171,7 +171,7 @@ export function sessionSource(events: readonly unknown[], others: SessionLookups
     if (field !== undefined) {
       // Another session's text: its taint becomes ours (persisted); a clean one is neutral. A subagent is
       // always this host's; a peer agent or a reference must be a session this host knows, else this
-      // call is refused (a native-teams bridge could name a remote caller here).
+      // call is refused (a caller could name a remote session here).
       // A session reference names its sessions in references[].sessionId (the installed shape); the others name one.
       const named = kind === 'session-reference' && Array.isArray(source?.references)
         ? (source.references as Array<{ sessionId?: unknown } | null>).map(r => r?.sessionId)

@@ -272,25 +272,6 @@ export interface Config {
    * dead-letter → revival lifecycle without wall-clock waits.
    */
   readonly taskStaleTtlMs: number
-  /**
-   * Opt-in native-teams inbound bridge: when composed with
-   * `@nelsonlongxiang/dsh-native-teams`, a routed team name that its
-   * registry classifies as an unambiguous local claim dispatches through
-   * its authoritative routing seam (`/a2a/direct`, the outbound A2A tools,
-   * and the directory listing). Off by default — exposing every registered
-   * team to the network is an operator decision (exposure-grants
-   * governance: grants are deliberate, never ambient). Dispatcher-level
-   * only: inbound callers address the team, never its individual members
-   * (members stay visible-not-addressable).
-   */
-  readonly nativeTeamsInbound?: boolean
-  /**
-   * Reply-wait budget for one native-teams round (the bridge's answer
-   * deadline, mirroring the steer path's 180s deadline). A round still
-   * running past it answers the honest delivered-unsettled shape instead
-   * of parking the caller; the round itself keeps going.
-   */
-  readonly nativeRoundWaitMs?: number
 }
 
 /** Schemastery configuration for the A2A client plugin row. */
@@ -420,6 +401,4 @@ export const Config: s<Config> = s.object({
   flushTimeoutMs: s.number().default(300_000),
   routeTimeoutMs: s.number().default(1_800_000),
   taskStaleTtlMs: s.number().default(TASK_STALE_TTL_MS),
-  nativeTeamsInbound: s.boolean().default(false),
-  nativeRoundWaitMs: s.number().default(180_000),
 })
