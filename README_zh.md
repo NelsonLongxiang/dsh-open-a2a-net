@@ -109,19 +109,19 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | `team` | `'dsh'` | 本节点暴露给直连路由的团队名。 |
 | `session` | `''` | 调用方标签；`''` 为每个 home 派生稳定的 `dsh-host-<8hex>`。 |
 | `agentName` | `'DeepSeek Harness A2A node'` | 卡片上的人类可读名称。 |
-| `apiKey` | `''` | peer 请求携带的 `X-API-Key`；非空时同时门禁控制路由。 |
+| `apiKey` | `''` | 发往 peer 的请求携带的 `X-API-Key`（配了 `linkKeys` 的对端改带链路 key）；非空时同时门禁控制路由和本机对端面（`/a2a/direct`、`/a2a/log`、`/a2a/blob`，链路 key 的接受条件见 `linkKeys`）。为空时对端面保持开放姿态，按调用方身份准入。 |
 | `sessionNodes` | `true` | 把主会话暴露为可加入的网络节点。 |
 | `nativeTeamsInbound` | `false` | 把入站直连路由（及出站 A2A 工具的本地候选）经 native-teams 路由缝分发到其注册表团队；需兄弟插件已组合。 |
 | `nativeRoundWaitMs` | `180000` | 单轮 native-teams 路由的回复等待预算（桥的死线，对齐 steer 路径的 180s）。超时轮以诚实的 delivered-unsettled 形态应答并继续运行。 |
-| `wakeJoinedOnBoot` | `false` | 挂载后预热冷加入会话的 agent（需要 session controller 唤醒面；无它时路由唤醒与侧栏唤醒按钮仍可用）。预热是延迟启动、前台让路、可取消的——不会阻塞启动窗口（见下方两个参数）。 |
+| `wakeJoinedOnBoot` | `false` | 挂载后预热冷加入会话的 agent（需要 session controller 唤醒面，缺失时跳过并在状态面记 `skipped:no-wake-face`；关闭时冷会话仍会被路由时唤醒（wake-on-route）和 `wakeReconcile` 对账唤醒，二者同样需要唤醒面）。预热是延迟启动、前台让路、可取消的——不会阻塞启动窗口（见下方两个参数）。 |
 | `wakePrewarmDelayMs` | `10000` | loader 树就绪到第一次预热唤醒之间的空闲延迟；`0` 恢复就绪即唤醒的旧行为。 |
-| `wakePrewarmQuietMs` | `5000` | 前台静默窗口：窗口内有唤醒/路由需求（或有出站路由在途）则推迟下一步预热；`0` 关闭让路。 |
+| `wakePrewarmQuietMs` | `5000` | 前台静默窗口：窗口内有唤醒/路由需求（或有出站路由在途）则推迟下一步预热；`0` 关闭时间窗，但有出站路由在途时仍会让路。对账循环（`wakeReconcile`）也按此窗口让路，每轮最多让路 5 次。 |
 | `wakeBootStaggerMs` | `3000` | 启动预热串行唤醒之间的停顿（压住重启后的日志解码饱和；路由唤醒不排此队）。 |
 | `wakeReconcile` | `true` | 持续的期望态对账：每个 tick 重新推导到期的冷加入意图，每轮唤醒一个（覆盖启动后漂移、唤醒失败、晚挂载的网关）。由 `wakeReconcileIntervalMs`（`60000`）、`wakeReconcileBackoffBaseMs`（`5000`）、`wakeReconcileMaxBackoffMs`（`600000`）调节。 |
-| `seatNames` | `{}` | 按完整本机会话 id 保存的人工席位展示名；拒绝 Cc/Cf 控制/格式字符、行段分隔符、无可见内容的名字，以及形似路由地址的名字（如 `dsh/66abc2cf`、`zone/canvas/x`）。启动配置逐条丢弃非法项并警告，不拖垮插件；属主写入仍整次校验。工作台主人设置中选择会话、输入并显式保存；留空保存清除。即时用于卡面、whoami、CLI teams 和画布，不改标题、句柄或准入；A2A 模型工具携带命名字段会被拒。 |
+| `seatNames` | `{}` | 按完整本机会话 id（`session-…` 形式，至多 1024 条）保存的人工席位展示名（≤64 字）；拒绝 Cc/Cf 控制/格式字符、行段分隔符、无可见内容的名字，以及形似路由地址的名字（如 `dsh/66abc2cf`、`zone/canvas/x`）。启动配置逐条丢弃非法项并警告，不拖垮插件；属主写入仍整次校验。工作台主人设置中选择会话、输入并显式保存；留空保存清除。即时用于卡面、whoami、CLI teams 和画布，不改标题、句柄或准入；A2A 模型工具携带命名字段会被拒。 |
 | `teamJoinAllowlist` | `[]` | `a2a_team_join` 可声明的团队：**只认精确名**（`*`/前缀条目不授权任何加入）。空列表拒绝一切加入。属主也可在工作台属主面板（`/__dsh_a2a/owner-settings`）编辑。 |
 | `teamScopeRouting` | `true` | S3 准入：路由检查调用方与目标是否共享团队；未声明任何团队的会话没有网络。`false` 恢复开放出站缝。 |
-| `teamScopeInfo` | `true` | S5 信息面作用域，作用于 `a2a_teams` / `a2a_status` / `a2a_probe`（见工具一览）。`false` 恢复全舰队披露。 |
+| `teamScopeInfo` | `true` | S5 信息面作用域，作用于 `a2a_teams` / `a2a_status` / `a2a_probe`（见工具一览）。`false` 恢复全舰队披露。属主面板热更新目前只对 `a2a_teams` 即时生效，`a2a_status` / `a2a_probe` 读启动值（#454）。 |
 | `peerAllowlist` | `[]` | 非空时，引荐只有在主机匹配某条目时才被接纳（精确 `host[:port]`、裸域名后缀或完整 URL）。种子从不过滤。 |
 | `referralLearning` | `true` | `false` 把跟踪集冻结为配置的种子：既不学习也不提供引荐。 |
 | `referralTeamResolution` | `false` | gh#8：团队名只在种子 + 委托上解析；`true` 恢复旧的全 store 基础（含引荐学到的 peers）。 |
@@ -134,11 +134,11 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | `linkKeys` | `{}` | 链路 key（#317）：`{ "<对端 origin>": "<key>" }`。发往该对端的请求改带这把 key；本机对端面（`/a2a/direct`、`/a2a/log`、`/a2a/blob`）只在调用方 OriginClaim 验签通过、且签名者正是该 origin 时接受它（POST 须 Sig3 绑定请求体）；控制路由不接受。用于公网节点与舰队互联而不持有舰队 apiKey，两端配同一把链路 key。 |
 | `gateAgentLessCalls` | `'audit'` | 宿主侧（无 agent）路由调用：审计，或 `refuse` 拒绝。 |
 | `settlementAuth` | `'observe'` | 结算授权（#114）：`off`、`observe`（记下本会拒绝的，照旧结算）或 `enforce`。 |
-| `asyncNudgeDelayMs` | `120000` | 已投递但未被消费的异步路由，在此延迟后用一行催办重新唤醒目标；`0` 关闭。 |
+| `asyncNudgeDelayMs` | `120000` | 经 `/a2a/direct` 入站、已投递但目标未消费的异步任务，在此延迟后用一行催办重新唤醒目标（目标忙时先让一轮，再升级为排队提示）。注意：代码里 `0` 目前不会关闭催办，而是立即催办（#453）。 |
 | `targetQueueCap` | `3` | 本宿主上同一个目标最多排队这么多条目标尚未回应且等回执的任务；再来新投递就可见拒收（`-32009 target-queue-full`，不投递）。本宿主自己记过账的任务的回执、以及 CLI 信箱从不拦；一个画布队算一个目标。被拒的 task id 记为失败，重试要换新 id。目标消费本任务后的 final 或目标自己发回执会记 `answeredAt` 并释放名额，即使回执投递失败；行仍欠回执，死信、迟到回执和守恒不变，状态面/画布排队数采用同一口径。`0` 关闭（#224/#253）。 |
 | `taskStaleTtlMs` | `86400000` | 欠账任务的 stale TTL（24h）：过期后 pending 行自动转死信（迟到回执仍可结清）。 |
 | `dshHome` | `''` | 插件状态所用的 DSH home 目录覆盖（`<home>/a2a/…`）；`''` 解析默认 home。 |
-| `cardTtlMs` / `flushTimeoutMs` / `routeTimeoutMs` | 见 schema | 卡片生命周期（48h）与路由时序预算。 |
+| `cardTtlMs` / `flushTimeoutMs` / `routeTimeoutMs` | `172800000` / `300000` / `1800000` | 卡片生命周期（48h，每 1/4 周期重签一次）；会话在此窗口内没有最终回复时，回复等待者以占位应答释放（5 分钟）；`a2a_route` 工具的单次调用超时（30 分钟）。 |
 | `cardCacheTtlMs` / `cardCacheNegativeTtlMs` / `remoteRowsTtlMs` / `stateColdRowsTtlMs` | `60000` / `30000` / `15000` / `5000` | peer 卡片缓存（命中/未命中）、远端会话行刷新窗口、状态面冷行刷新窗口。 |
 
 示例——一个带种子的通告节点：
