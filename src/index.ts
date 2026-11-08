@@ -2066,6 +2066,7 @@ export function apply(ctx: Context, config: Config): void {
     },
     canvasesOf: id => canvasTeamsOfSession(id),
     canvasNames: () => canvasStore.list(),
+    teamSend: args => teamCanvasSend(args),
   }) : undefined
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
   const superagentRoleTools = new RoleTools({
@@ -2114,6 +2115,69 @@ export function apply(ctx: Context, config: Config): void {
     if (router !== undefined && named(router)) return '[superagent-router-inbound] the team router takes no A2A work; send requests to the team\'s Sources (the workbench or its A2A address), where the gate admits them'
     if (superagentHost.settings.members.some(named)) return '[superagent-member-inbound] a team member takes work only as assignments from the team\'s executor; send requests to the team\'s Sources'
     return undefined
+  }
+  /**
+   * Design v5 (D2): the team's address is its canvas team. A route to the bound canvas — bare, or qualified with this
+   * host's own fingerprint — lands in the team's mailbox (the A2A Source reads it), never in a member session.
+   */
+  function teamMailboxOf(team: string): string | undefined {
+    const bound = superagentHost?.settings.canvas
+    const address = superagentHost?.a2aAddress
+    if (bound === undefined || address === undefined) return undefined
+    const split = splitCanvasOwner(team.trim())
+    if (split.owner !== undefined && split.owner !== ownCanvasFingerprint) return undefined
+    return split.team === `${config.team}/canvas/${bound}` ? address : undefined
+  }
+  /** Design v5 (D2): a route straight to the team identity's handle is refused (a receipt to it still lands): the address is the canvas. */
+  function teamAddressRefusal(team: string, message: string): string | undefined {
+    const address = superagentHost?.a2aAddress
+    if (address === undefined || team.trim() !== address || parseReceipt(message) !== null) return undefined
+    const bound = superagentHost?.settings.canvas
+    superagentHost?.noteRefusal('superagent-team-address', { target: team })
+    return `[superagent-team-address] ${address} is the team's internal mailbox; send requests to the team's canvas address${bound !== undefined ? ` ${config.team}/canvas/${bound}` : ' (the team is bound to no canvas team yet)'}`
+  }
+  /**
+   * Design v5 (D2, review R1): the team's own messages to a requester that came through its canvas address — the formal
+   * receipt (result, attention or acknowledgement) and follow-ups in the same conversation — go out from this host's
+   * process face on the canvas team's behalf, with onBehalfOf spelled exactly as the requester addressed it, so the
+   * requester's ledger settles them as host-face. Speaks the a2a-net CLI's `receipt` / `route` JSON contract (stdout, exit
+   * codes 4 gone / 5 another receipt) for the A2A Source; undefined when the task did not come through the canvas.
+   */
+  async function teamCanvasSend(args: readonly string[]): Promise<string | undefined> {
+    const verb = args[0]
+    if (verb !== 'receipt' && verb !== 'route') return undefined
+    const dash = args.indexOf('--')
+    const text = dash >= 0 ? args.slice(dash + 1).join(' ') : ''
+    const flagOf = (name: string): string | undefined => { const i = args.indexOf(name); return i >= 0 && (dash < 0 || i < dash) ? args[i + 1] : undefined }
+    const fail = (code: number, error: string): never => { const e = new Error(error) as Error & { exitCode: number }; e.exitCode = code; throw e }
+    if (verb === 'receipt') {
+      const task = args[1] ?? '', to = flagOf('--to') ?? ''
+      const row = taskLedger.find(task)
+      if (row === undefined || teamMailboxOf(row.team) === undefined || to === '') return undefined
+      const acknowledged = args.includes('--acknowledged'), attention = args.includes('--attention')
+      const outcome = flagOf('--outcome')
+      const fields = acknowledged ? { idempotencyKey: task, disposition: 'acknowledged' as const, onBehalfOf: row.team }
+        : attention ? { idempotencyKey: task, disposition: 'attention' as const, onBehalfOf: row.team }
+        : { outcome: (outcome ?? 'completed') as 'completed', idempotencyKey: task, disposition: 'result' as const, onBehalfOf: row.team }
+      const receipt = formatReceipt(task, text.replace(/\s+/g, ' ').trim(), fields)
+      const receiptTask = `${acknowledged ? 'ack' : 'receipt'}-${task}`
+      try {
+        const out = await dispatchAnywhere(to, receipt, session, row.contextId, new AbortController().signal, true, receiptTask)
+        // This host's own inbound row (a requester on another host or a CLI here): the receipt it sent settles it.
+        if (row.direction === 'inbound' && !acknowledged) settleOwnInbound(receipt, to, { caller: session, proof: 'in-process', ingress: 'local' })
+        return JSON.stringify({ delivered: true, class: 'sent', task_id: receiptTask, team: to, ...(typeof (out as { context_id?: unknown }).context_id === 'string' ? { context_id: (out as { context_id: string }).context_id } : {}) })
+      } catch (error) {
+        const code = (error as { code?: unknown }).code
+        return fail(code === WIRE_ERROR_IDEMPOTENCY_CONFLICT ? 5 : 1, String(error instanceof Error ? error.message : error))
+      }
+    }
+    const to = args[1] ?? '', context = flagOf('--context') ?? '', followTask = flagOf('--task')
+    const origin = taskLedger.list().find(r => r.contextId === context && teamMailboxOf(r.team) !== undefined)
+    if (origin === undefined || to === '') return undefined
+    try {
+      await dispatchAnywhere(to, text, session, context, new AbortController().signal, true, followTask)
+      return JSON.stringify({ delivered: true, class: 'sent', ...(followTask !== undefined ? { task_id: followTask } : {}), team: to, context_id: context })
+    } catch (error) { return fail(1, String(error instanceof Error ? error.message : error)) }
   }
   ctx.on('agent/inbox/claimed',({agent,message})=>followupDelivery.claimed(agent,String(message.id)))
   const withdrawQueuedTask = (taskId:string): Promise<'removed'|'claimed'|'legacy'> => {
@@ -2976,6 +3040,8 @@ export function apply(ctx: Context, config: Config): void {
       teamCanvasRefusal: (canvas: string, member: string) => superagentHost?.canvasMemberRefusal(canvas, member, sessionPresetOf),
       superagentInbound: team => superagentRouterRefusal(undefined, team),
       superagentIntake: team => superagentHost?.a2aAddress === team,
+      teamMailboxOf: team => teamMailboxOf(team),
+      teamAddressRefusal: (team, message) => teamAddressRefusal(team, message),
       canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
       sessionNodes,
       joinedSessions,
@@ -3941,7 +4007,9 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         try {
           initiator = ctx.get('agents')?.requireInitiator() === agent
         } catch { /* no initiator in this fiber */ }
-        if (!initiator) {
+        // Design v5 (Q1): the bound team canvas takes requests from any session of this host; the team's Policy decides
+        // whether it works on them, so team scope does not gate the route.
+        if (!initiator && teamMailboxOf(String(args.team ?? '')) === undefined) {
           const callerHandle = `${config.team}/${id8(scopeCaller)}`
           scopedCanvasCaller = { id: scopeCaller, handle: callerHandle }
           const scope = await outboundScope(senderScopeRecords, scopeCaller, callerHandle, String(args.team ?? '').trim())
@@ -4094,12 +4162,14 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // the cheapest path. The initiator face (bare node team) and
     // foreign-zone labels are NOT gated here (F1b host-face rules, R-C
     // pending) — only the joined face closes.
-    const joinedRefusal = joinedFaceAdmissionRefusal(callerSession, team)
+    // Design v5 (D2, Q1): a route to the bound team canvas is a route to the team's mailbox, admitted as one.
+    const mailTeam = teamMailboxOf(team) ?? team
+    const joinedRefusal = joinedFaceAdmissionRefusal(callerSession, mailTeam)
     if (joinedRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: joinedRefusal, code: -32000 }
     }
-    const routerRefusal = superagentRouterRefusal(undefined, team)
+    const routerRefusal = superagentRouterRefusal(undefined, team) ?? teamAddressRefusal(team, message)
     if (routerRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: routerRefusal, code: -32000 }
@@ -4113,7 +4183,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // gh#224: a full target queue refuses a same-host delivery as the wire face does (receipts, CLI mailboxes pass).
     // p1-mailbox-owes (S33): a deposit that declares it owes receipts is under the cap like a session.
     // superagent v4: a request to the team's A2A address is a Trigger; the engine's worker slots govern it, not this cap.
-    const queueRefusal = queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, (cliDeposits.get(team) !== undefined && !cliDeposits.owes(team)) || superagentHost?.a2aAddress === team, ownTask)
+    const queueRefusal = queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, (cliDeposits.get(mailTeam) !== undefined && !cliDeposits.owes(mailTeam)) || superagentHost?.a2aAddress === mailTeam, ownTask)
     if (queueRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: queueRefusal, code: WIRE_ERROR_QUEUE_FULL, next: QUEUE_FULL_NEXT }
@@ -4138,7 +4208,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // polls while alive; receipts and messages never wake anything).
     // The settler of any receipt on this path: this host's own caller (in-process).
     const localSettler: Settler = { caller: callerSession ?? '', proof: 'in-process', ingress: 'local' }
-    const cliRow = cliDeposits.get(team)
+    const cliRow = cliDeposits.get(mailTeam)
     if (cliRow !== undefined) {
       // #114 S4 (design §4.5): a receipt dropped into a local CLI mailbox is
       // exactly the settlement a CLI-originated task waits for — settle it,
@@ -4147,13 +4217,15 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const answered = parseReceipt(message)
       const disposition = answered?.envelope?.disposition
       // p1-mail-admission: the same-host admission this delivery passed (a joined face's rule, else local-exempt).
-      const localAdmission = localCandidateAdmission(admissionRecords, callerSession, team)
-      const evicted = cliDeposits.mail(team, callerSession ?? 'unknown', message, undefined, { taskId: taskIdFromCaller, contextId, proof: 'in-process', ...(answered !== null ? { receiptFor: answered.taskId } : {}), ...(disposition !== undefined ? { disposition } : {}),
+      const localAdmission = localCandidateAdmission(admissionRecords, callerSession, mailTeam)
+      const evicted = cliDeposits.mail(mailTeam, callerSession ?? 'unknown', message, undefined, { taskId: taskIdFromCaller, contextId, proof: 'in-process', ...(answered !== null ? { receiptFor: answered.taskId } : {}), ...(disposition !== undefined ? { disposition } : {}),
         ...(localAdmission.ok ? { admission: localAdmission.rule } : {}) })
       // p1-mailbox-owes (D-5): a row the cap pushed out takes its owed inbound row with it.
-      for (const gone of evicted) if (gone.task_id !== undefined) taskLedger.evictInbound(gone.task_id, team)
+      for (const gone of evicted) if (gone.task_id !== undefined) taskLedger.evictInbound(gone.task_id, taskLedger.find(gone.task_id)?.team ?? mailTeam)
       recordActivity('in', team, callerSession ?? 'peer', true)
-      logger.info(`a2a: cli mailbox delivery for ${team} (from ${callerSession ?? 'unknown'})`)
+      logger.info(`a2a: cli mailbox delivery for ${mailTeam} (from ${callerSession ?? 'unknown'}${mailTeam !== team ? `, addressed to ${team}` : ''})`)
+      // Design v5 (R5): the team works asynchronously — a sync route to it answers at once, delivered.
+      if (mailTeam !== team && answered === null && taskIdFromCaller !== undefined) return { ok: true, team, reply: `delivered to the superagent team ${team} — it works asynchronously; its result arrives as this task's receipt`, task_id: taskIdFromCaller, context_id: contextId ?? '', task_status: 'TASK_STATE_DELIVERED', receipt: 'mailbox' }
       if (answered === null && taskIdFromCaller !== undefined && cliDeposits.owes(team)) {
         // p1-mailbox-owes (S33, D-2): delivered, not final. On one host the caller and the target share this ledger: the
         // caller's own owed row (peer 'local', booked by trackOwedTask) is the one the per-target cap counts, as for a
