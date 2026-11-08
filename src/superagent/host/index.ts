@@ -22,7 +22,7 @@ import { MemberExecutor } from './executor.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { MEMBER_PRESET, ROUTER_PRESET } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
-import { DEFAULT_SETTINGS, WORKBENCH_OWNER, parseSettings, parseStoredSettings, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
+import { DEFAULT_SETTINGS, WORKBENCH_OWNER, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 
 export interface SuperagentHostDeps {
   /** The a2a home directory; state lives under `<home>/superagent/`. */
@@ -745,11 +745,13 @@ export class SuperagentHost {
     const wrongPreset = presetRefusal(parsed.settings.router, next.members, presetOf)
     if (wrongPreset !== undefined) return { ok: false, error: wrongPreset }
     const before = policyVersion(this.settingsValue)
+    const previous = this.settings
     const routerChanged = parsed.settings.router !== this.settingsValue.router
     this.writeSettings(parsed.settings)
     this.poolChanged()
     const after = policyVersion(parsed.settings)
-    if (before !== after) this.engine.policyChanged(before, after)
+    // Open tickets hear what the change means to them (upstream PolicyEffect): their rule, proactive work, their requester.
+    if (before !== after) this.engine.policyChanged(before, after, policyEffects(previous, this.settings, this.store.tickets.list().filter(t => !t.ended)))
     // A new router receives whatever the old one had not decided yet.
     if (routerChanged) for (const entry of this.candidates.values()) entry.delivered = false
     this.d.logger.info('superagent: team settings saved (policy %s)', after)
