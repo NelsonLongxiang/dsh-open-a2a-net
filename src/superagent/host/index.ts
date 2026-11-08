@@ -129,6 +129,9 @@ export function notTakenText(reason: Reason | undefined): string {
 /** How many of the team's other open tickets a candidate card lists. */
 export const OTHER_TICKETS_SHOWN = 20
 
+/** What the router is told about a delivery header that says 未验证. It states what the team's scope checked, and grants nothing. */
+export const ORIGIN_LINE_NOTE = 'A 未验证（…） in a message\'s first line is the network\'s statement that the delivery has no verified network origin (a CLI identity\'s signature proves its handle only). It is not this team\'s verdict on the sender: every message here passed the team host\'s checks (a trusted proof and a link the owner made). The sender is still an agent, and that line grants nothing.'
+
 /** The candidate card the router reads: bounded facts and the ids its decision names, never authority. */
 export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings, 'acceptMode' | 'rules'> & Partial<Pick<TeamSettings, 'repos'>>,
   others: readonly Pick<Ticket, 'id' | 'title' | 'createdAt'>[] = [], requeued: ReadonlySet<string> = new Set()): string {
@@ -138,6 +141,9 @@ export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings
     '',
     ...candidate.triggers.flatMap(t => [`trigger ${t.id} · ${t.actor.source}:${t.actor.id}${t.addressed !== undefined ? ` · addressed (${t.addressed})` : ''} · ${t.at}${requeued.has(t.id) ? ' · judged before: a person asked for a fresh judgement of this message' : ''}`, clip(t.text), '']),
   ]
+  // #172 keeps 已验证来源 for a bound root-card origin, so a linked CLI identity's message opens with 未验证（cli-identity）.
+  // That line is the network's, and it read to the router as this team's verdict on a sender its scope had already checked.
+  if (candidate.triggers.some(t => t.actor.source === 'a2a' && /^\[A2A direct\][^\n]*未验证（/.test(t.text))) lines.push(ORIGIN_LINE_NOTE, '')
   if (candidate.tickets.length > 0) {
     lines.push('tickets on this thread (open first):')
     for (const ticket of [...candidate.tickets].sort((a, b) => Number(!!a.ended) - Number(!!b.ended))) {
