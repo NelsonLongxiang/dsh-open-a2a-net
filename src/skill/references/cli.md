@@ -10,12 +10,19 @@ model tools.
 ## Identity and home host
 
 - `a2a-net init <name> [--uuid 16hex] [--home URL] [--force]` creates an
-  Ed25519 identity: handle `<name>/<16 hex>`, stored in
-  `$A2A_CLI_HOME/cli.json` (default `~/.a2a/cli.json`, mode 0600). An
-  existing identity is never replaced without `--force` (the old handle's
-  deposit stops verifying).
+  Ed25519 identity: handle `<name>/<16 hex>` (the name must match
+  `[a-z0-9-]{1,32}`, else a usage error, exit 2; the 16 hex is random unless
+  `--uuid` gives it), stored in `$A2A_CLI_HOME/cli.json` (default
+  `~/.a2a/cli.json`; the file is mode 0600). `--home` is saved with the
+  identity, a trailing `/` stripped. An existing identity is never replaced
+  without `--force`. `--force` writes a fresh identity file: a new key, a new
+  random uuid unless `--uuid` is given, and the saved home is dropped unless
+  `--home` is passed again. The old key is gone for good, so nothing can sign
+  for the old handle any more; its deposit stays on the home host until it
+  expires (4h at most).
 - Home host: `--home` > `$A2A_HOME` > the home saved by `init --home` >
-  `http://127.0.0.1:3080`.
+  `http://127.0.0.1:3080`. (An `A2A_HOME` set to the empty string currently
+  counts as set and breaks every request — #490; unset it instead.)
 - Keyed hosts: `--key` > `$A2A_KEY` (prefer the variable; a flag value stays
   in shell history). A host behind dsh-pocket also wants its session token as
   the `dsh_pocket_token` cookie: set `$A2A_POCKET_TOKEN` (or `$A2A_TOKEN`).
