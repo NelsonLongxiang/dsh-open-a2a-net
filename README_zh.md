@@ -251,4 +251,10 @@ npm install /path/to/nelsonlongxiang-dsh-open-a2a-net-<version>.tgz
 
 ## 许可证
 
-MIT
+本包以 MIT 许可发布（package.json 的 `license` 字段）。仓库根目前没有单独的 LICENSE 文件，npm 包里也不带许可文本（#470）。
+
+包内含的第三方内容，许可文本都在仓库里（目前不随 npm 包分发）：
+
+- **办公室舞台** `/__dsh_a2a_canvas` 的渲染器与资源改编自 [Munder Difflin](https://github.com/chaitanyagiri/munder-difflin)（MIT，© Chaitanya Giri），其中座位池逻辑移植自 [the-office](https://github.com/shahar061/the-office)（ISC）；见 `stage/NOTICE.md`、`stage/ATTRIBUTION.md`、`docs/licenses/`。
+- **舞台贴图**来自 [LimeZu](https://limezu.itch.io/) 的 *Modern Interiors - RPG Tileset [16X16]*，按其 Complete Version 许可使用，**不在 MIT 授权范围内**：可编辑并用于任何项目，不可转售或再分发，须署名并链接 <https://limezu.itch.io/>；许可文本见 `stage/LIMEZUASSETS-LICENSE.txt`。随包再分发这些贴图是否符合该许可，待属主确认（#471）。
+- **superagent 引擎**是原样引入的上游代码（MIT，© DeepSeek Harness Team），见 `src/superagent/upstream/LICENSE.dsh-superagent`。
