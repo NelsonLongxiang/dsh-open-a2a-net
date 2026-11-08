@@ -26,7 +26,6 @@ afterEach(() => { validationControl.mode='normal';vi.unstubAllGlobals() })
 const A_ID = 'session-aaaaaaaa11112222'
 const B_ID = 'session-bbbbbbbb33334444'
 const state = async (n: MeshNode): Promise<Record<string, any>> => await globalThis.fetch(`${n.baseUrl}/__dsh_a2a/state`).then(async r => await r.json())
-const until = async (f: () => Promise<boolean>, ms = 5000): Promise<void> => { const t = Date.now(); while (Date.now() - t < ms) { if (await f()) return; await new Promise(r => setTimeout(r, 50)) } throw new Error(`until: condition not met within ${String(ms)} ms`) }
 const rowOf = async (n: MeshNode, id: string): Promise<Record<string, any> | undefined> => { const s = await state(n); return [...s.tasks, ...(s.archived ?? [])].find((r: any) => r.taskId === id) }
 const route = async (n: MeshNode, args: Record<string, unknown>): Promise<Record<string, any>> => await n.ctx.tools.get('a2a_route')!.execute(args, runContext(n.agents.agent)) as Record<string, any>
 const silence = (n: MeshNode): void => { (n.agents.agent as never).steer = (p: unknown) => { n.steered.push(p) } }
@@ -158,7 +157,7 @@ describe('#114 S4 review of PR #140: off-chain settlement under enforce stays re
       delayed(B)
       const t = await route(A, { team: 'cargo', message: 'long task', async: true })
       expect(t.ok, JSON.stringify(t)).toBe(true)
-      await until(async () => (await rowOf(A, String(t.task_id)))?.settledBy !== undefined)
+      await vi.waitFor(async () => { expect((await rowOf(A, String(t.task_id)))?.settledBy !== undefined).toBe(true) }, { timeout: 5000 })
       expect((await rowOf(A, String(t.task_id)))?.settledBy).toMatchObject({ chain_role: 'host-face' })
       expect((await state(A)).settlement.refusalsTotal).toBe(0)
     } finally { await A.dispose(); await B.dispose() }

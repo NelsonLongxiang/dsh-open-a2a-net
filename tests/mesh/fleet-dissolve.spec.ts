@@ -40,13 +40,6 @@ const ownTeams = async (node: MeshNode): Promise<string[]> =>
   ((await post(`${node.baseUrl}/__dsh_a2a/state`)).canvas?.teams as Array<{ name: string }> | undefined ?? []).map(t => t.name)
 const mirrored = async (node: MeshNode, peer: string): Promise<string[]> =>
   ((await post(`${node.baseUrl}/__dsh_a2a/state`)).peerOrg as Array<{ url: string; org: Array<{ name: string }> }> | undefined)?.find(r => r.url === peer)?.org.map(t => t.name) ?? []
-async function until(check: () => Promise<boolean>, ms = 4_000): Promise<boolean> {
-  for (const end = Date.now() + ms; Date.now() < end;) {
-    if (await check()) return true
-    await new Promise(r => setTimeout(r, 100))
-  }
-  return false
-}
 
 /** A signed peer whose card does not seed A back: tracked by A, NOT linked.
  *  It keeps the envelope A stamps on its card reads (every outbound request
@@ -91,7 +84,7 @@ describe('fleet dissolve: a linked peer dissolves a team it does not own', () =>
       await sweep(b)
       expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: '共建队' })).ok).toBe(true)
       expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: '共建队', id: ids.a })).ok).toBe(true)
-      expect(await until(async () => (await mirrored(b, a.baseUrl)).includes('共建队'))).toBe(true)
+      await vi.waitFor(async () => { expect((await mirrored(b, a.baseUrl)).includes('共建队')).toBe(true) }, { timeout: 4_000 })
 
       // B's own store has no such team: the local control cannot dissolve it.
       expect(await ownTeams(b)).not.toContain('共建队')
@@ -101,7 +94,7 @@ describe('fleet dissolve: a linked peer dissolves a team it does not own', () =>
       expect(await ownTeams(a)).not.toContain('共建队')
       // B runs a 10-minute card cache: the mirror clears from the relay's
       // refresh / A's change ping, not from the TTL.
-      expect(await until(async () => !(await mirrored(b, a.baseUrl)).includes('共建队'))).toBe(true)
+      await vi.waitFor(async () => { expect((await mirrored(b, a.baseUrl)).includes('共建队')).toBe(false) }, { timeout: 4_000 })
 
       // Two peers dissolving at once: the second finds it gone — still ok, and says so.
       expect(await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'remove', name: '共建队' })).toMatchObject({ ok: true, removed: false })

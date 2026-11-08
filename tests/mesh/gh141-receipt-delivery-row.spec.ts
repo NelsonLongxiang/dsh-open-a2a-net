@@ -18,7 +18,6 @@ afterEach(() => { vi.unstubAllGlobals() })
 const A_ID = 'session-aaaaaaaa11112222'
 const B_ID = 'session-bbbbbbbb33334444'
 const state = async (n: MeshNode): Promise<Record<string, any>> => await globalThis.fetch(`${n.baseUrl}/__dsh_a2a/state`).then(async r => await r.json())
-const until = async (f: () => Promise<boolean>, ms = 8000): Promise<void> => { const t = Date.now(); while (Date.now() - t < ms) { if (await f()) return; await new Promise(r => setTimeout(r, 50)) } throw new Error(`until: condition not met within ${String(ms)} ms`) }
 const archived = async (n: MeshNode, id: string): Promise<Record<string, any> | undefined> => ((await state(n)).archived ?? []).find((r: any) => r.taskId === id)
 const route = async (n: MeshNode, args: Record<string, unknown>, agent: Agent = n.agents.agent!): Promise<Record<string, any>> =>
   await n.ctx.tools.get('a2a_route')!.execute(args, runContext(agent)) as Record<string, any>
@@ -66,13 +65,13 @@ describe('gh#141 cross-host receipts leave no unpayable rows (settlementAuth enf
       answering(B)
       const auto = await route(A, { team: 'dsh/bbbbbbbb', message: 'auto job', async: true })
       expect(auto.ok, JSON.stringify(auto)).toBe(true)
-      await until(async () => (await archived(B, auto.task_id)) !== undefined)
+      await vi.waitFor(async () => { expect((await archived(B, auto.task_id)) !== undefined).toBe(true) }, { timeout: 8000 })
       silent(B)
       const man = await route(A, { team: 'dsh/bbbbbbbb', message: 'manual job', async: true })
       expect(man.ok, JSON.stringify(man)).toBe(true)
       const r = await route(B, { team: 'dsh/aaaaaaaa', message: `[A2A receipt] task ${String(man.task_id)} done`, async: true })
       expect(r.ok, JSON.stringify(r)).toBe(true)
-      await until(async () => (await archived(A, man.task_id)) !== undefined && (await archived(B, man.task_id)) !== undefined)
+      await vi.waitFor(async () => { expect((await archived(A, man.task_id)) !== undefined && (await archived(B, man.task_id)) !== undefined).toBe(true) }, { timeout: 8000 })
 
       expect(await owed(A)).toEqual([])
       expect(await owed(B)).toEqual([])
@@ -159,7 +158,7 @@ describe('gh#141 review of PR #149: only the debtor pays, and only what the cred
       const man = await route(A, { team: 'dsh/bbbbbbbb', message: 'manual job', async: true })
       expect(man.ok, JSON.stringify(man)).toBe(true)
       await route(B, { team: 'dsh/aaaaaaaa', message: `[A2A receipt] task ${String(man.task_id)} done`, async: true })
-      await until(async () => (await archived(B, man.task_id)) !== undefined)
+      await vi.waitFor(async () => { expect((await archived(B, man.task_id)) !== undefined).toBe(true) }, { timeout: 8000 })
       const fingerprint = peerPayloadFingerprint({ caller: 'dsh/aaaaaaaa', message: 'manual job', noWait: true, team: 'dsh/bbbbbbbb' })
       const answer = await (await postJson(B.baseUrl, '/a2a/query', { task_id: man.task_id, fingerprint })).json() as Record<string, unknown>
       expect(answer).toMatchObject({ found: true, status: 'completed', reply: 'done' })
