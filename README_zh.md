@@ -103,7 +103,7 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | `announce` | `false` | 发布本节点 agent 卡片供 peer 发现。 |
 | `isolated` | `false` | 不向任何对端发请求：取卡、目录扫描、路由、远端日志读取、canvas 变更推送、舰队 canvas-op 中继一律拒绝（gh#193）。`a2a/peers.json` 不动，被拒的请求也不给对端扣分；入站面照常应答；state 面显示 `isolated: true`。供测试与验收主机使用。 |
 | `forwardDirect` | `true` | 从 0.6.38 起默认开启，本机目标未找到时，允许替已验签且在线的本地CLI转发一跳；仍检查发送作用域和跳数预算。A 链接 B 接收成员，B 链接 CLI 并钉住 A；对端不会再转发；显式设 `forwardDirect: false` 恢复 CLI 仅投本机。 |
-| `superagent` | `false` | superagent 设计 v4：在本主机运行 superagent 自己的领域引擎（原样引入的上游 `src/core`）。属主在 `/__dsh_a2a/superagent` 指定总工和允许的发送者；总工与成员分别使用插件自带的 `superagent-router` / `superagent-member` 智能体预设；见 [`superagent.md`](src/skill/references/superagent.md)。 |
+| `superagent` | `false` | superagent（设计 v4，团队模型 v5）：在本主机运行 superagent 自己的领域引擎（原样引入的上游 `src/core`）。团队就是一支画布团队：属主在画布上组队（总工与成员，本机或其他主机），再在 `/__dsh_a2a/superagent` 绑定画布、指定总工和允许的发送者；团队的 A2A 地址就是画布地址 `<zone>/canvas/<名字>`。总工与成员分别使用插件自带的 `superagent-router` / `superagent-member` 智能体预设；见 [`superagent.md`](src/skill/references/superagent.md)。 |
 | `peers` | `[]` | 种子 base URL；被引荐的 peers 从其卡片学习。 |
 | `delegates` | `[]` | 区域委托：`{ name, url, publicKey }` 发布在卡片上。 |
 | `team` | `'dsh'` | 本节点暴露给直连路由的团队名。 |
@@ -170,7 +170,7 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | `/__dsh_a2a/groups` | 手工会话分组——自 0.6.6 起弃用（被画布队伍取代），为旧面板保留。 |
 | `POST /__dsh_a2a/dispatch` | 工作台快速派单到一个团队。 |
 | `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | 从调用方一侧结清一个欠账任务（cancel 还会向在线的本地目标转达停止通知）；该行落入 `archived[]`。 |
-| `GET`/`POST /__dsh_a2a/superagent` | `superagent: true` 时：引擎状态（线程、决定、回复、带阶段的工单），以及属主操作 `settings` · `request`（工作台 Source）· `stop` · `retry`。 |
+| `GET`/`POST /__dsh_a2a/superagent` | `superagent: true` 时：引擎状态（线程、决定、回复、带阶段的工单、绑定的画布及绑定问题），以及属主操作 `settings`（绑定 `canvas` 与 `router`）· `request`（工作台 Source）· `serve`（按画布 id 为其他主机的团队服务）· `stop` · `retry`。 |
 | `/__dsh_a2a/session-log` · `/remote-session-log` | 供工作台读取会话日志。 |
 | `/__dsh_a2a/owner-settings` | 属主面板：读取（GET）或写入（POST）`teamJoinAllowlist`、`teamScopeInfo`、`seatNames` 与 `announce` 到 home patch 层（除 `announce` 外即时生效）。`seatNames` 为完整映射，删去会话 id 即清除。复用属主鉴权，不提供模型命名工具；本机 shell/配置写入者仍处于既有运营者信任边界内。 |
 | `/__dsh_a2a/fleet-canvas-op` | 把画布操作中继到某 peer 的 `/a2a/canvas-op`，盖上本节点的 OriginClaim；由对端的链接门裁决。 |
