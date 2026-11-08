@@ -61,6 +61,8 @@ export interface SuperagentHostDeps {
   readonly teamSend?: (args: readonly string[]) => Promise<string | undefined>
   /** The canvas teams this host owns, by name (the owner binds one of them). */
   readonly canvasNames?: () => readonly string[]
+  /** The agent preset a live local session runs (undefined: not loaded, or no preset registry). */
+  readonly presetOf?: (sessionId: string) => string | undefined
   /** The canvas teams a local session sits in (any slot shape that names it). */
   readonly canvasesOf?: (sessionId: string) => readonly string[]
 }
@@ -334,6 +336,10 @@ export class SuperagentHost {
     const local = typeof memberHandle === 'string' ? this.d.localSessionOf?.(memberHandle) : undefined
     if (local === undefined || !serves.members.includes(local)) return { ok: false, code: 'not-member', error: 'that session does not serve this team' }
     if (op !== 'assign' && op !== 'input' && op !== 'stop') return { ok: false, code: 'op', error: 'op must be assign, input or stop' }
+    // v5 acceptance F4: a serve stored before presets (or a session since swapped) takes no new work on another preset;
+    // a stop still reaches it.
+    const wrongPreset = op === 'stop' ? undefined : presetRefusal(undefined, [local], this.d.presetOf ?? (() => undefined))
+    if (wrongPreset !== undefined) { this.noteRefusal('superagent-member-preset', { target: local }); return { ok: false, code: 'preset', error: wrongPreset } }
     if (typeof text !== 'string' || text === '') return { ok: false, code: 'text', error: 'text is required' }
     return { ok: this.d.deliverToSession(local, text) }
   }
@@ -392,6 +398,9 @@ export class SuperagentHost {
    * preset; any other canvas takes no session that holds a role in this team.
    */
   canvasMemberRefusal(canvas: string, member: string, presetOf: (id: string) => string | undefined = () => undefined): string | undefined {
+    // v5 acceptance F1: with no canvas bound there is no team canvas to protect — an upgraded team's stored router must be
+    // able to join the canvas that becomes the team; binding checks one role per session then.
+    if (!this.teamBound()) return undefined
     const local = member.includes('/') ? this.d.localSessionOf?.(member.replace(/@[0-9a-f]{8}$/, '')) : member
     if (canvas === this.settingsValue.canvas) {
       if (CLI_HANDLE_RE.test(member)) return `[superagent-team-canvas] ${canvas} is the superagent team's canvas: a CLI handle is a requester, not a member — it sends requests to the team's address instead`
@@ -409,6 +418,12 @@ export class SuperagentHost {
    * ticket gets a new one on another member (owner ruling Q2: stop and requeue), and the member is told to stop.
    */
   poolChanged(): void {
+    // v5 acceptance F3: with no canvas bound (or the bound one gone) the pool reads empty; that is not the owner taking
+    // members away — running work stays where it is until a canvas is bound again.
+    if (!this.teamBound()) {
+      try { this.d.onRolesChanged?.() } catch (error) { this.d.logger.warn('superagent: role change not applied: %s', String(error)) }
+      return
+    }
     const now = this.settings
     const pool = new Set([...now.members, ...now.remoteMembers.map(r => r.ref)])
     for (const binding of this.executor.list()) {
@@ -673,6 +688,14 @@ export class SuperagentHost {
     if (team === undefined) return { ...stored, members: [], remoteMembers: [] }
     return { ...stored, members: team.local.filter(id => id !== stored.router), remoteMembers: [...team.remote] }
   }
+  /** Whether the team is bound to a canvas team that exists here (v5 acceptance F1/F3: otherwise nothing is protected or moved). */
+  private teamBound(): boolean { return this.settingsValue.canvas !== undefined && this.d.canvasTeam?.(this.settingsValue.canvas) !== undefined }
+  /** v5 acceptance F4: why sessions this host serves another team with cannot take work, if one cannot (wrong preset). */
+  servesProblem(): string | undefined {
+    const serves = this.settingsValue.serves
+    if (serves === undefined) return undefined
+    return presetRefusal(undefined, serves.members, this.d.presetOf ?? (() => undefined))
+  }
   /** Why the team cannot run its canvas as bound, if it cannot (the workbench's 待你处理 shows it). */
   canvasProblem(stored: TeamSettings = this.settingsValue): string | undefined {
     if (stored.canvas === undefined) return 'the team is bound to no canvas team: compose it on the canvas (建队), then bind it with canvas and router'
@@ -748,6 +771,7 @@ export class SuperagentHost {
     return {
       settings: this.settings,
       ...(this.canvasProblem() !== undefined ? { canvasProblem: this.canvasProblem() } : {}),
+      ...(this.servesProblem() !== undefined ? { servesProblem: this.servesProblem() } : {}),
       canvases: [...(this.d.canvasNames?.() ?? [])],
       policyVersion: policyVersion(this.settingsValue),
       a2a: { enabled: this.settingsValue.sources.a2a, address: this.a2a.address ?? null, health: this.a2a.health },

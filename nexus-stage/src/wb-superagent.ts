@@ -52,6 +52,8 @@ export interface SaState {
   readonly settings: SaSettings; readonly policyVersion: string
   /** Design v5: why the bound canvas cannot run as the team, and the canvas teams this host owns (to bind one). */
   readonly canvasProblem?: string
+  /** v5 acceptance F4: why a session this host serves another team with cannot take work (wrong preset). */
+  readonly servesProblem?: string
   readonly canvases?: readonly string[]
   readonly a2a: { enabled: boolean; address: string | null; health: Record<string, { state: string; detail?: string }> }
   readonly executor: { bindings: ReadonlyArray<{ member: string; ticketId: string; at: string }> }
@@ -95,6 +97,7 @@ export function problemsOf(state: SaState, now: number): SaProblem[] {
   if (state.error !== undefined) out.push({ tone: 'danger', text: `团队记录读不出来，写入已停止：${state.error}` })
   if (state.settings.canvas === undefined) out.push({ tone: 'danger', text: '团队还没有绑定画布团队：先在画布上建队（总工 + 成员），再到「设置」里绑定' })
   else if (state.canvasProblem !== undefined) out.push({ tone: 'danger', text: `画布团队「${state.settings.canvas}」不能作为团队运行：${state.canvasProblem}` })
+  if (state.servesProblem !== undefined) out.push({ tone: 'danger', text: `本机为别的团队服务的会话不能接活：${state.servesProblem}` })
   if (state.settings.router === undefined) out.push({ tone: 'danger', text: '还没有指定总工：需求会停在候选里，没人决定（到「设置」里选）' })
   if (state.settings.members.length === 0 && state.settings.remoteMembers.length === 0) out.push({ tone: 'warn', text: '成员池是空的：在画布团队里加成员，接下的工单才有人做' })
   if (state.settings.paused) out.push({ tone: 'warn', text: '执行已暂停：新工单不会派给成员' })
