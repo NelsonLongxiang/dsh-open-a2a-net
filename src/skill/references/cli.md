@@ -81,12 +81,15 @@ Files do not go through session messages: use the file channel below, never JPFI
 - `a2a-net file send <path…> <team> [--note TEXT]` stages each file (≤64 MiB,
   ≤16 per send) on the home host by sha256, granted to `<team>` for 24h, and
   routes ONE message with one `[A2A file] v1 sha256=… size=… name=… from=<home>`
-  line per file. File bytes never ride a message.
+  line per file (`--note`, when given, rides as the message's first line). File bytes never ride a message.
 - `a2a-net file fetch "<reference line>" [--out DIR]` pulls a referenced file,
   checks its size and sha256, and saves it as `<sha12>-<name>` (no links
   followed, no overwrite of other content). A CLI identity proves itself only
-  on its HOME host, so only files whose `from` is the home host can be fetched;
-  for a file on another host, ask the sender to send it through your home host.
+  on its HOME host, so only files whose `from` is the home host — or one of the
+  home's advertised aliases (`ownerHost` / `originClaimAudiences` from the state
+  face, #332) — can be fetched; the alias lookup asks only the configured home,
+  and old/denied/malformed/redirected metadata fails closed. For a file on any
+  other host, ask the sender to send it through your home host.
 - Sessions use the `a2a_file_send` / `a2a_file_fetch` tools for the same thing.
 
 ## Sending
