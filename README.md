@@ -237,18 +237,18 @@ caller ended it, and `direction` when known — plus `archivedCount` and `archiv
 
 A full-page workbench mounts beside the model tools: `/__dsh_a2a_nexus` (the
 A2A workbench — since 0.6.2 the 2D spatial planning board IS the stage and
-the directory/ledger/activity/plan panels ride a collapsible side rail in
+the directory / hosts / ledger / activity / plan panels (plus a Team page when the host runs a superagent team) ride a collapsible side rail in
 one merged, responsive shell; while the canvas face is down the panels fall
 back to the main stack; the Three.js topology viewer was retired in 0.6.0;
 `?mode=plan` still converges on the board). A bare
 mount path
 redirects (301) onto its trailing-slash form, so both spellings render and
 the shell's relative assets always resolve inside the served tree. The earlier office stage `/__dsh_a2a_canvas` has been removed. For
-offline development, `nexus-stage/scripts/mockhost.py [port]` serves the
-built stage with canned state; open `/?fault=500` on it to exercise the
-on-page fault badge. `pnpm verify` needs no manual bootstrap on a fresh
-checkout: its `verify:nexus` step installs the subpackage dependencies
-itself before building.
+offline development, `nexus-stage/scripts/mockhost.py [port]` (default 8780) serves the
+built stage (`assets/nexusDist`); its state comes from `LIVE_STATE` (default: the state face on local port 3080) and falls back to an empty fleet when that is unreachable. Open `/?fault=500` on it to exercise the
+on-page fault badge, `/?demo=1` to merge a demo federation dataset (2 peers, 2 in-flight routes), and set `LAYOUT_FILE=<path>` to keep the layout across restarts
+(in memory only by default). `pnpm verify` is `pnpm verify:core` wrapped in a "zero leftover temp directories" gate; its `verify:nexus` step runs `npm ci` for the
+stage subpackage and then builds, so the subpackage needs no manual bootstrap (the repo root's own dependencies still need `pnpm install` first).
 
 ## Collaboration SOP (network practice, v0.1)
 
