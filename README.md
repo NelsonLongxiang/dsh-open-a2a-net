@@ -145,7 +145,7 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | `announce` | `false` | Publish this node's agent card for peer discovery. |
 | `isolated` | `false` | Send nothing to any peer: card reads, directory sweeps, routes, remote log reads, canvas pings and fleet canvas-op relays are all refused (gh#193). `a2a/peers.json` is left untouched and refused fetches do not score peers; inbound faces keep answering; the state face shows `isolated: true`. For test and acceptance hosts. |
 | `forwardDirect` | `true` | From 0.6.38, one-hop forwarding is enabled by default for an authenticated online local CLI after a local target miss; sender scope and the hop guard remain enforced. Link B receiving members at A, and link/pin the CLI home A at B; no second forwarding hop. Set `forwardDirect: false` to restore local-only CLI delivery. |
-| `superagent` | `false` | superagent design v4: run superagent's own domain engine (vendored upstream `src/core`) in this host. The owner names the router and the allowed senders at `/__dsh_a2a/superagent`; see [`superagent.md`](src/skill/references/superagent.md). |
+| `superagent` | `false` | superagent design v4: run superagent's own domain engine (vendored upstream `src/core`) in this host. The owner names the router and the allowed senders at `/__dsh_a2a/superagent`; the router and members run the shipped `superagent-router` / `superagent-member` agent presets; see [`superagent.md`](src/skill/references/superagent.md). |
 | `peers` | `[]` | Seed base URLs; referred peers are learned from their cards. |
 | `delegates` | `[]` | Zone delegations: `{ name, url, publicKey }` published on the card. |
 | `team` | `'dsh'` | Team name this node exposes for direct routing. |
