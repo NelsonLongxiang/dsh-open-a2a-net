@@ -81,8 +81,15 @@ describe('P3-5 · the first message is the one formal receipt; later ones are ne
 
   it('an attention reply is an attention receipt; no ticket is completed; a task without a context uses the task', async () => {
     const f = fake(cli())
-    await sendReply(f.ctx, f.commands, message({ id: 'attention-reply:a1', text: 'which branch?' }), at(T0))
+    // The engine's id for a reply to the ticket's open question (upstream Replies: key('attention-reply', attention.id)).
+    f.tickets.set('tk-1', { id: 'tk-1', attention: { id: 'a1' } })
+    await sendReply(f.ctx, f.commands, message({ id: key('attention-reply', 'a1'), ticketId: 'tk-1', text: 'which branch?' }), at(T0))
     expect(f.runs.at(-1)).toEqual(['a2a-net', 'receipt', 'task-1', '--to', 'dsh/aaaa1111', '--attention', '--json', '--exit-class', '--', 'which branch?'])
+    // An id that only looks like one (the old prefix check) is not an attention reply.
+    const p = fake(cli())
+    p.tickets.set('tk-1', { id: 'tk-1', attention: { id: 'a1' } })
+    await sendReply(p.ctx, p.commands, message({ id: 'attention-reply:a1', ticketId: 'tk-1' }), at(T0))
+    expect(p.runs.at(-1)).toEqual(expect.arrayContaining(['--outcome', 'completed']))
     const g = fake(cli())
     await sendReply(g.ctx, g.commands, message({}, { caller: 'dsh/aaaa1111', task: 'task-2' }), at(T0))
     expect(g.runs.at(-1)).toContain('completed')
