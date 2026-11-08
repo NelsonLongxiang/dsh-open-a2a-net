@@ -2312,6 +2312,8 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
   function armAsyncNudge(agent: Agent, team: string, taskId: string, delayMs: number): void {
+    // asyncNudgeDelayMs 0 (or less) turns the nudge off, as the config schema and README promise (#453).
+    if (!(delayMs > 0)) return
     const key = String(agent.id)
     const spent = nudgeBudget.get(key)
     if (spent !== undefined && spent > 1) return

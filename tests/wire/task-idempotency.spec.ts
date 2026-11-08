@@ -626,6 +626,27 @@ describe('inbound ledger birth + unconditional nudge (F2 defect card)', () => {
     }
   })
 
+  it('#453: asyncNudgeDelayMs 0 turns the nudge off — the same pending idle task gets none', async () => {
+    const { port, registry, dispose } = await mount({ asyncNudgeDelayMs: 0 })
+    try {
+      const agent = registry.agent as unknown as { status?: string; steer: ReturnType<typeof vi.fn> }
+      agent.status = 'running'
+      const direct = await globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/direct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team: 'dsh', message: 'async work', caller_session: 'idem-runner', task_id: 'no-nudge-task', wait: false }),
+      })
+      expect((await direct.json() as { consumed?: boolean }).consumed).toBe(false)
+      agent.status = 'idle'
+      await new Promise(resolve => setTimeout(resolve, 250))
+      const nudgeCalls = agent.steer.mock.calls
+        .filter(args => String((args[0] as { content?: ReadonlyArray<{ type?: string; text?: string }> })?.content?.[0]?.text ?? '').includes('[A2A nudge]'))
+      expect(nudgeCalls).toHaveLength(0)
+    } finally {
+      await dispose()
+    }
+  })
+
   it.each(['queued','unavailable','failed','sync-failed','rejected'] as const)('observes queue-mode nudge escalation %s without changing debt',async mode=>{
     const prompt=vi.fn(()=>{if(mode==='sync-failed')throw Object.assign(Error('private prompt detail'),{code:'EACCES'});return mode==='failed'?Promise.reject(Object.assign(Error('private prompt detail'),{code:'ETIMEDOUT'})):Promise.resolve(mode==='rejected'?{accepted:false}:undefined)})
     const {port,registry,dispose}=await mount({asyncNudgeDelayMs:35,sessionNodes:true},mode==='unavailable'?undefined:{prompt})
