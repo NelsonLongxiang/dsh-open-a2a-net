@@ -3,7 +3,7 @@
  *
  * The planning view stays unaware of superagent: it hands its frame and card elements to `decorate` after each render,
  * and the 团队 poll hands the team's state to `update`. The bound canvas's frame is marked `superagent 团队`; the router's
- * card says 总工, each member's card says 成员 (and its repository). Only this host's own sessions carry a role badge.
+ * card says 总工, each member's card says 成员 (and its repository), a member on another host adding （远端）.
  * @module nexus-stage/planning-team-roles
  */
 import type { SaState } from './wb-superagent'
@@ -14,18 +14,24 @@ export interface TeamRoles {
   readonly router?: string
   /** Each local member's session id, with its repository when the owner named one. */
   readonly members: ReadonlyMap<string, string | undefined>
+  /** Each remote member by its planning card id, with its repository when the owner named one. */
+  readonly remote: ReadonlyMap<string, string | undefined>
 }
+
+/** The planning card id of a remote member ref (see planning-member-handles). */
+const remoteCardId = (ref: string): string => `member-${ref.replace(/[^a-z0-9-]/gi, '-')}`
 
 export function teamRolesOf(state: SaState | null): TeamRoles | undefined {
   const s = state?.settings
   if (s === undefined || s.canvas === undefined) return undefined
-  return { canvas: s.canvas, ...(s.router !== undefined ? { router: s.router } : {}), members: new Map(s.members.map(id => [id, s.repos?.[id]])) }
+  return { canvas: s.canvas, ...(s.router !== undefined ? { router: s.router } : {}), members: new Map(s.members.map(id => [id, s.repos?.[id]])), remote: new Map(s.remoteMembers.map(r => [remoteCardId(r.ref), s.repos?.[r.ref]])) }
 }
 
 /** The role badge a card shows, if any. */
 export function roleText(roles: TeamRoles | undefined, id: string): string | undefined {
   if (roles === undefined) return undefined
   if (roles.router === id) return '总工'
+  if (roles.remote.has(id)) { const repo = roles.remote.get(id); return repo !== undefined ? `成员 · ${repo}（远端）` : '成员（远端）' }
   if (!roles.members.has(id)) return undefined
   const repo = roles.members.get(id)
   return repo !== undefined ? `成员 · ${repo}` : '成员'
