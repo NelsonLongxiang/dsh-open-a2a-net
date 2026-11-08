@@ -180,7 +180,7 @@ export const inject = ['tools', 'timer', 'systemPrompt']
 
 import { Config } from './config.ts'
 import { canvasOwnerFingerprint, splitCanvasOwner } from './canvas-id.ts'
-import { forwardReceiptBasis } from './direct-forward.ts'
+import { forwardReceiptBasis, teamReceiptBasis } from './direct-forward.ts'
 import { NudgeObservability } from './nudge-observability.ts'
 export { Config }
 export type { DelegateConfig } from './config.ts'
@@ -1806,7 +1806,7 @@ export function apply(ctx: Context, config: Config): void {
         ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
         teamCanvasRefusal: (canvas: string, member: string) => superagentHost?.canvasMemberRefusal(canvas, member, sessionPresetOf),
-        admissionRecheck: (caller: string, handle: string, local: boolean) => recheckCallerAdmission(admissionRecords, caller, handle, local),
+        admissionRecheck: (caller: string, handle: string, local: boolean) => recheckCallerAdmission(linkRecheckRecords, caller, handle, local),
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
         get legacyInboundCount() { return legacyInboundCount },
@@ -1969,7 +1969,7 @@ export function apply(ctx: Context, config: Config): void {
             // gh#152: members are read through the local tiers' lens — one of
             // this host's own handles resolves to the session it names, and
             // the two stored shapes of one session publish as ONE handle.
-            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) })) } : {}),
+            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) , ...(superagentHost?.a2aAddress !== undefined && superagentHost.settings.canvas === name ? { superagentTeam: true as const } : {}) })) } : {}),
             ...(named && lanIp !== '' ? { lanIp } : {}),
             ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}),
             description: `A2A node exposing team ${config.team}${named ? '' : ' (minimal card — OriginClaim envelope required for the full card: X-A2A-Caller/-Url/-Ts/-Sig signed with your card key)'}`,
@@ -2154,7 +2154,9 @@ export function apply(ctx: Context, config: Config): void {
       const task = args[1] ?? '', to = flagOf('--to') ?? ''
       const row = taskLedger.find(task)
       if (row === undefined || teamMailboxOf(row.team) === undefined || to === '') return undefined
-      const acknowledged = args.includes('--acknowledged'), attention = args.includes('--attention')
+      // Review of #442: switches are read before `--` only — the text after it may be anything.
+      const switches = dash >= 0 ? args.slice(0, dash) : args
+      const acknowledged = switches.includes('--acknowledged'), attention = switches.includes('--attention')
       const outcome = flagOf('--outcome')
       const fields = acknowledged ? { idempotencyKey: task, disposition: 'acknowledged' as const, onBehalfOf: row.team }
         : attention ? { idempotencyKey: task, disposition: 'attention' as const, onBehalfOf: row.team }
@@ -2862,6 +2864,21 @@ export function apply(ctx: Context, config: Config): void {
     cliHomeOf: handle => canvasStore.cliHomeOf(handle),
   }
 
+  /**
+   * v5-B2: an identity's `admission` query rechecks a caller it already took (its key was verified when the delivery came
+   * in): only that the operator's link still stands. A confirmed canvas remote reference pinned with its key is that link
+   * for the bare handle too — the delivery-time records match a qualified reference only under the signer's key, which a
+   * recheck does not carry.
+   */
+  const linkRecheckRecords: AdmissionRecords = {
+    ...admissionRecords,
+    canvasRemoteMembersOf: name => canvasStore.remoteMembersOf(name).flatMap(ref => {
+      const qualified = splitQualifiedMember(ref)
+      if (qualified === undefined) return [ref]
+      return memberProvenance(ref, canvasStore.ownerKeyOf(ref), encodePublicKey(createPublicKey(nodePrivateKey))) === 'confirmed-remote' ? [ref, qualified.handle] : [ref]
+    }),
+  }
+
   /** W1/W2 shared-team admission (see sameZoneAdmission in src/task-auth.ts). */
   function sameZoneSharedTeamRefusal(caller: string, targetTeam?: string): string | undefined {
     return refusalOf(sameZoneAdmission(admissionRecords, caller, targetTeam))
@@ -3050,6 +3067,7 @@ export function apply(ctx: Context, config: Config): void {
       peerKeyAdmits,
       remoteCliProof,
       forwardReceiptBasis: (taskId, caller, cliHandle, claim) => forwardReceiptBasis(taskLedger.find(taskId), caller, cliHandle, claim),
+      teamReceiptBasis: (taskId, caller, target, onBehalfOf, claim) => teamReceiptBasis(taskLedger.find(taskId), caller, target, onBehalfOf, claim),
       forwardDirect: request => forwardDirect(request), ownCanvasFingerprint,
       diagnoseCanvas: (team, reason, caller) => diagnoseCanvas(team, reason, caller),
       callerLinkedToThisHost, get ownCardUrl() { return ownCardUrl },

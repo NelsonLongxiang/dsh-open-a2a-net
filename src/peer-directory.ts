@@ -56,7 +56,9 @@ export function canvasCandidateMatches(
 ): boolean {
   return advertisedCanvasTeams(card).some(entry => {
     if (entry.team !== team) return false
-    if (caller === undefined) return true
+    // Design v5 (v5-B2): a superagent team canvas takes requests from callers that sit in no seat of it; the
+    // publisher's own admission (links, then the team's Policy) decides, as for any route to its mailboxes.
+    if (caller === undefined || entry.superagentTeam === true) return true
     return entry.members.some(ref => {
       const qualified=splitQualifiedMember(ref)
       if (qualified) return qualified.handle===caller.handle && resolveLocal?.(ref)===caller.id
