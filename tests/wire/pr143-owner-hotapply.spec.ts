@@ -24,7 +24,7 @@ class FakeAgentsService extends Service {
 beforeEach(() => { vi.stubGlobal('WebSocket', function throwOnSocket() { throw new Error('no socket') }) })
 afterEach(() => { vi.unstubAllGlobals() })
 
-async function mounted(): Promise<{ ctx: Context; agent: Agent }> {
+async function mounted(extra: Partial<Config> = {}): Promise<{ ctx: Context; agent: Agent; port: number }> {
   const home = mkdtempSync(joinPath(tmpdir(), 'pr143-owner-'))
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
@@ -38,7 +38,7 @@ async function mounted(): Promise<{ ctx: Context; agent: Agent }> {
     apiKey: '', session: 'host-pr143', team: 'dsh', routeTimeoutMs: 5_000,
     flushTimeoutMs: 300_000, announce: false, agentName: 'pr143-host', peers: [],
     delegates: [], sessionNodes: true, wakeJoinedOnBoot: false, dshHome: home,
-    cardTtlMs: 172_800_000, teamJoinAllowlist: ['dsh/initial'],
+    cardTtlMs: 172_800_000, teamJoinAllowlist: ['dsh/initial'], ...extra,
   } as Config)
   ctx.emit('agent/created', { agent })
   const port = (ctx as unknown as { webServer: { port: number } }).webServer.port
@@ -50,7 +50,7 @@ async function mounted(): Promise<{ ctx: Context; agent: Agent }> {
     body: JSON.stringify({ teamJoinAllowlist: ['dsh/initial', 'dsh/review-gate'], teamScopeInfo: true }),
   })).json() as { ok: boolean }
   expect(write.ok).toBe(true)
-  return { ctx, agent }
+  return { ctx, agent, port }
 }
 
 describe('PR143 review: owner-settings hot apply', () => {
@@ -73,6 +73,39 @@ describe('PR143 review: owner-settings hot apply', () => {
       }
       expect(answer?.ok).toBe(true)
       expect(answer?.note ?? '').toContain('teamScopeInfo on')
+    } finally { await ctx.fiber.dispose() }
+  }, 30_000)
+
+  // #454: a2a_status and a2a_probe read the owner panel's live teamScopeInfo too, not the boot value.
+  const PEER = 'http://127.0.0.1:9'
+  const ownerScope = async (port: number, on: boolean): Promise<void> => {
+    const write = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/owner-settings`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teamScopeInfo: on }),
+    })).json() as { ok: boolean }
+    expect(write.ok).toBe(true)
+  }
+  it('#454: a2a_status follows a hot teamScopeInfo change both ways', async () => {
+    const { ctx, agent, port } = await mounted({ peers: [PEER] })
+    const status = async () => await ctx.tools.get('a2a_status')?.execute({}, { signal: new AbortController().signal, agent }) as { ok: boolean; peers: Array<{ url: string }> }
+    try {
+      // On (written by mounted): an unverified peer is outside the scope.
+      expect((await status()).peers.map(p => p.url)).not.toContain(PEER)
+      await ownerScope(port, false)
+      expect((await status()).peers.map(p => p.url)).toContain(PEER)
+      await ownerScope(port, true)
+      expect((await status()).peers.map(p => p.url)).not.toContain(PEER)
+    } finally { await ctx.fiber.dispose() }
+  }, 30_000)
+
+  it('#454: a2a_probe follows a hot teamScopeInfo change both ways', async () => {
+    const { ctx, agent, port } = await mounted({ peers: [PEER] })
+    const probe = async () => await ctx.tools.get('a2a_probe')?.execute({ url: PEER }, { signal: new AbortController().signal, agent }) as { ok: boolean; results: Array<{ error?: string }> }
+    try {
+      expect((await probe()).results[0]?.error ?? '').toContain('refused (not probed): teamScopeInfo on')
+      await ownerScope(port, false)
+      expect((await probe()).results[0]?.error ?? '').not.toContain('refused (not probed)')
+      await ownerScope(port, true)
+      expect((await probe()).results[0]?.error ?? '').toContain('refused (not probed): teamScopeInfo on')
     } finally { await ctx.fiber.dispose() }
   }, 30_000)
 })
