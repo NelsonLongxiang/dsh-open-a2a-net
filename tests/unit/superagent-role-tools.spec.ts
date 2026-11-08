@@ -85,6 +85,7 @@ describe('the team\'s agent presets: shipped in the bundle layer, required of a 
     expect(router).toMatch(/dsh-tool-fs'\n\s+config:\n\s+write: false\n\s+edit: false/)
     expect(router).toContain('superagent_route')
     expect(member).toContain('a2a_ticket_report')
+    expect(member).toContain('reasonable defaults for routine steps')
     expect(member).toContain("name: '@deepseek-ai/dsh-tool-fs'\n")
     // Both wait at most 5 s in the foreground, as upstream's executor: a long command moves to a background job, so a stop
     // notice or a person's answer is taken at the next step, and a job wait ends after 5 s too.

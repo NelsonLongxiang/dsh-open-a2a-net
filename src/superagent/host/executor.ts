@@ -401,7 +401,7 @@ export function assignmentCard(ticket: Ticket, trigger: MemberExecutorDeps['trig
     '- progress while you work only when something changed for the person; waiting when you wait for a Trigger;',
     '- ready when the result can be reviewed or used (a pull request link in the summary when there is one);',
     '- blocked or failed when you cannot go on; dropped when there turns out to be nothing to do;',
-    '- question: one concrete question when the ticket owner must decide something.',
+    '- question: one concrete question, only for what a person alone can decide. Choose reasonable defaults for routine steps yourself and say in your report which you chose.',
     'Later messages on this ticket arrive as [superagent input], each with its trigger id. Before you act on a person\'s message,',
     'acknowledge it with a2a_ticket_ack (trigger_id, one or two sentences to them): it becomes yours to handle. A message that asks',
     'for work beyond this ticket goes back with a2a_ticket_handback. When a report answers a person\'s question, pass its trigger id',
