@@ -201,18 +201,25 @@ a2a-net inbox --new                                      # 未读来信；--wait
 测试按深度分层（契约见 `docs/testing-layers.md`）：每层独立目录 + 独立脚本，可按层迭代。
 
 ```sh
-pnpm install       # auto-install-peers 从 npm 拉取 DSH peer 线
-pnpm verify        # typecheck + 构建 + 下列全部 vitest 层 + 布局门禁 + nexus-stage 子套件
-pnpm test:unit     # L0 —— 纯逻辑，无 fiber、无 socket（store/codec/jsdom 组件）
+pnpm install       # auto-install-peers 从 npm 拉取 DSH peer 线；`prepare` 会顺带跑一次 pnpm build
+pnpm verify        # 包在「临时目录零残留」闸门里的 verify:core：typecheck + verify:docs（文档漂移）+ 构建
+                   #      + pnpm test（L0–L3 全部 vitest 层；L4 无 env 时跳过）+ 布局门禁 + nexus-stage 子套件
+pnpm test          # L0–L3 全部 vitest 层（含 gates）
+pnpm test:unit     # L0 —— 纯逻辑，通常无 fiber、无 socket（store/codec/jsdom 组件）；少数例外：
+                   #      cli-args / cli-receipt / cli-thread 起本机回环 HTTP 服务测真实 CLI，
+                   #      receipt-retry / superagent-role-tools-scope 建裸 cordis Context
 pnpm test:wire     # L1 —— 单个真实插件实例 + 真实 HTTP，对端 peer 为 fake
 pnpm test:mesh     # L2 —— ≥2 个真实节点（独立 home/密钥/peers.json）走真实 HTTP：
                    #      跨机器等价层，含故障注入（时钟偏差卡片、篡改卡片、分区/重启、
                    #      别名塌缩、zone 委托、referral 冻结）与回执重放——故障矩阵见
                    #      docs/testing-layers.md
+pnpm test:build-layout # L3 —— 产物契约（exports 指向的构建布局存在性），不是行为测试
 pnpm test:live     # L4 —— 真实远端机器，env 门控（DSH_A2A_LIVE_MESH=...），默认跳过、
                    #      不进 CI——运行手册见 docs/testing-layers.md
-pnpm build         # host lib（含 lib/a2a-client.js）、client 类型与浏览器 bundle（lib/client.js）
+pnpm build         # host lib（含 lib/a2a-client.js）、client 类型、浏览器 bundle（lib/client.js）与随包技能（lib/skill/）
 ```
+
+注意：`tsconfig.json` 的 `paths` 优先指向与本仓**同级**的 `../deepseek-harness` 检出（`vendor/`、`packages/`）来取类型；没有这份同级检出时 typecheck/构建回落到 npm 上的 DSH 类型，而 npm 快照可能落后于本插件所对照的源码（见「安装」一节的说明）。
 
 ## 非 DSH 节点互通（协议模块）
 
