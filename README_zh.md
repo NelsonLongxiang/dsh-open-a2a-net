@@ -182,7 +182,7 @@ a2a-net inbox --new                                      # 未读来信；--wait
 
 ## 舞台（可视化面）
 
-两个全页舞台与模型工具并列挂载：`/__dsh_a2a_nexus`（A2A 工作台——自 0.6.2 起 2D 空间规划板即舞台，目录/台账/活动/规划面板乘可折叠侧栏，合并为一个响应式外壳；canvas 面掉线时面板回落主区；Three.js 拓扑观测在 0.6.0 退役；`?mode=plan` 仍汇聚到规划板）与 `/__dsh_a2a_canvas`。不带斜杠的挂载路径会 301 重定向到带尾斜杠形式，两种写法都能渲染，外壳的相对资源总在服务树内解析。离线开发时，`nexus-stage/scripts/mockhost.py [port]` 用预置状态服务已构建的舞台；在其上打开 `/?fault=500` 可演练页内故障徽标。新检出的仓库上 `pnpm verify` 无需手工引导：其 `verify:nexus` 步骤会自行安装子包依赖再构建。
+两个全页舞台与模型工具并列挂载：`/__dsh_a2a_nexus`（A2A 工作台——自 0.6.2 起 2D 空间规划板即舞台，目录/主机/台账/活动/规划面板（宿主运行 superagent 团队时多一个「团队」页）乘可折叠侧栏，合并为一个响应式外壳；canvas 面掉线时面板回落主区；Three.js 拓扑观测在 0.6.0 退役；`?mode=plan` 仍汇聚到规划板）与 `/__dsh_a2a_canvas`（Munder Difflin 风格的办公室平面舞台，同源全页；源码在 `stage/`，构建产物在 `assets/stageDist`）。不带斜杠的挂载路径会 301 重定向到带尾斜杠形式，两种写法都能渲染，外壳的相对资源总在服务树内解析。离线开发时，`nexus-stage/scripts/mockhost.py [port]`（默认 8780）服务已构建的舞台（`assets/nexusDist`），状态取自 `LIVE_STATE`（默认本机 3080 端口的 `/__dsh_a2a/state`），取不到就用空舰队；在其上打开 `/?fault=500` 可演练页内故障徽标，`/?demo=1` 合并一份演示联邦数据（2 个 peer、2 条在途路由），设 `LAYOUT_FILE=<路径>` 可让布局跨重启保留（默认只存内存）。`pnpm verify` 是包了一层「临时目录零残留」闸门的 `pnpm verify:core`；其中 `verify:nexus` 步骤会自行 `npm ci` 安装舞台子包依赖再构建，无需手工引导子包（仓库根的依赖仍需先 `pnpm install`）。
 
 ## 协作 SOP（网络实践，v0.1）
 
