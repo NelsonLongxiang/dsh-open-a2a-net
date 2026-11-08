@@ -348,7 +348,7 @@ state face (key-gated on a keyed host). `--json` prints raw rows for
 
 `a2a-net superagent request <text…> [--thread ID] [--json]` sends a request to the team's workbench Source. Sent from the terminal it is an ordinary message, not a person's: the router judges it against the team's rules. `a2a-net superagent reevaluate <trigger id> [--json]` asks the router to judge a stored message again (refused for an A2A message whose sender already has its outcome). `a2a-net superagent state [--json]` prints the team state: router, accept mode, tickets with their stage, and replies. These commands apply only on a home with `superagent: true`.
 
-Both ride the home's **owner** control credential (`$A2A_KEY`, plus the pocket cookie behind dsh-pocket), not this CLI's identity. A request made this way is a person addressing the team, so it is an explicit request.
+Both ride the home's **owner** control credential (`$A2A_KEY`, plus the pocket cookie behind dsh-pocket), not this CLI's identity. The credential makes the request land, not the person: sent from the terminal it is an ordinary message — the router judges it against the team's rules like an agent's, never as an explicit request or a stop (owner ruling 2026-11-08; only the workbench GUI's owner action is a person's).
 
 A message from a CLI identity (`route` to the team's A2A address) is an agent's message under superagent's definition. It can reach the team only through the A2A Source's bot list and accept mode; it is never an explicit request and never a stop. See [superagent.md](superagent.md).
 
