@@ -157,28 +157,28 @@ a2a-net inbox --new                                      # 未读来信；--wait
 
 ## 信任模型
 
-卡片经 Ed25519 签名且会过期；卡片上的 `peers` 引荐、`sessionTeams` 列表、`lanIp` 与 `version` 未签名、每次现读——后两项让运维无需逐台登录即可核对每个舰队节点实际运行的构建。若某引荐 URL 自身的取卡刚证明它提供的就是本节点的卡片，该 URL 会被记住，抑制窗口内再次被引荐时直接忽略，不会在 peer store 里反复闪现。
+卡片经 Ed25519 签名且会过期；签名核心只含 `name`、`session`、`team`、`capabilities`、`expiresAt` 与区域委托记录 `records`。卡片上的 `peers` 引荐、`sessionTeams` 列表、`teamMemberships`、`canvasOrg`、`lanIp` 与 `version` 未签名、每次现读——后两项让运维无需逐台登录即可核对每个舰队节点实际运行的构建。若某引荐 URL 自身的取卡刚证明它提供的是本节点的卡片（或某个已跟踪 peer 的另一种地址写法），该 URL 会被记住 6 小时，窗口内再次被引荐时直接忽略，不会在 peer store 里反复闪现。
 
-每个 `/__dsh_a2a/*` 控制路由（读也算）在配置了 `apiKey` 时都要求之（`X-API-Key`，常数时间比较）。密钥为空时只信任 loopback socket；`Sec-Fetch-Site` 头只能否决、不能授权（跨站页面即使在 loopback 上也会被拒）。把监听器暴露到 loopback 之外前请先设置 `apiKey`。
+每个 `/__dsh_a2a/*` 控制路由（读也算）在配置了 `apiKey` 时都要求之（`X-API-Key` 头，非浏览器客户端也可用 `api_key` 查询参数；常数时间比较）。密钥为空时只信任 loopback socket；`Sec-Fetch-Site` 头只能否决、不能授权（跨站页面即使在 loopback 上也会被拒），带 `X-Forwarded-For`、`Forwarded` 或 `X-Real-IP` 的请求同样不享受 loopback 信任（经本机反向代理或隧道进来的远端调用方不能借此免密钥）。把监听器暴露到 loopback 之外前请先设置 `apiKey`。
 
 | 控制路由 | 用途 |
 | --- | --- |
 | `GET /__dsh_a2a/state` | 面板与工作台轮询的状态面（会话、画布、peers、远端行、活动、账本）。 |
 | `POST /__dsh_a2a/join` · `/leave` | 加入或退出一个会话节点。 |
-| `/__dsh_a2a/canvas` · `/canvas-layout` | 画布队伍（create/remove/add-member/remove-member）与规划板布局。 |
-| `POST /__dsh_a2a/roster-op` | 属主在画布创建、加减成员、解散 roster 队，并维护精确允许名单。 |
+| `/__dsh_a2a/canvas` · `/canvas-layout` | 画布队伍（create/remove/add-member/remove-member，另有属主的 confirm-member / restore-suspended / delete-suspended / cli-home-options）与规划板布局。 |
+| `POST /__dsh_a2a/roster-op` | 属主在规划板创建（至少两个已加入的本机会话）、加减成员、解散 roster 队（`op`：create / add-member / remove-member / dissolve），并同步维护 `teamJoinAllowlist` 里的精确名；不能接纳远端或未加入的会话。 |
 | `/__dsh_a2a/groups` | 手工会话分组——自 0.6.6 起弃用（被画布队伍取代），为旧面板保留。 |
 | `POST /__dsh_a2a/dispatch` | 工作台快速派单到一个团队。 |
-| `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | 从调用方一侧结清一个欠账任务（cancel 还会向在线的本地目标转达停止通知）；该行落入 `archived[]`。 |
+| `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | 从调用方一侧结清一个欠账任务（cancel 还会尽力向目标转达停止通知：本机目标直接 steer，远端目标经 wire 投递，卡片声明 `queuedTaskCancellation` 时另带 `cancel_task_id` 撤回队列中的原任务；回复里带 `steered`、`removed`）；该行落入 `archived[]`。 |
 | `GET`/`POST /__dsh_a2a/superagent` | `superagent: true` 时：引擎状态（线程、决定、回复、带阶段的工单、绑定的画布及绑定问题），以及属主操作 `settings`（绑定 `canvas` 与 `router`）· `request`（工作台 Source）· `serve`（按画布 id 为其他主机的团队服务）· `stop` · `retry`。 |
 | `/__dsh_a2a/session-log` · `/remote-session-log` | 供工作台读取会话日志。 |
-| `/__dsh_a2a/owner-settings` | 属主面板：读取（GET）或写入（POST）`teamJoinAllowlist`、`teamScopeInfo`、`seatNames` 与 `announce` 到 home patch 层（除 `announce` 外即时生效）。`seatNames` 为完整映射，删去会话 id 即清除。复用属主鉴权，不提供模型命名工具；本机 shell/配置写入者仍处于既有运营者信任边界内。 |
+| `/__dsh_a2a/owner-settings` | 属主面板：读取（GET）或写入（POST）`teamJoinAllowlist`、`teamScopeInfo`、`seatNames` 与 `announce` 到 home patch 层（`announce` 需重启生效，GET 的 `announceRestartPending` 标出；其余即时生效，但 `teamScopeInfo` 目前只对 `a2a_teams` 即时，`a2a_status` / `a2a_probe` 读启动值，见 #454）。`seatNames` 为完整映射，删去会话 id 即清除。复用属主鉴权，不提供模型命名工具；本机 shell/配置写入者仍处于既有运营者信任边界内。 |
 | `/__dsh_a2a/fleet-canvas-op` | 把画布操作中继到某 peer 的 `/a2a/canvas-op`，盖上本节点的 OriginClaim；由对端的链接门裁决。 |
-| `/__dsh_a2a/cli-deposit` | `a2a-net` CLI 身份的寄存、列表、撤销与信箱读取。 |
-| `GET /__dsh_a2a/nodes` · `POST` | 节点身份（docs/design/node-identity.md）：GET 读名册或单个节点（`?name=`）；POST 是身份写入，即使在 loopback 也要 apiKey。 |
+| `/__dsh_a2a/cli-deposit` | `a2a-net` CLI 身份的寄存、列表、撤销、信箱读取与准入查询（`admission`，须由该身份自己签名）。 |
+| `GET /__dsh_a2a/nodes` · `POST` | 节点身份（docs/design/node-identity.md）：GET 读名册或单个节点（`?name=`）；POST 是身份写入，即使在 loopback 也要 `X-API-Key`；未配置 `apiKey` 的主机直接拒绝一切身份写入。 |
 | `POST /__dsh_a2a/blob` | 为接收方暂存一个文件（`?to=&name=`）——文件通道的写入面；对端经 `GET /a2a/blob` 拉取。 |
 
-状态面的账本：`tasks`（pending，每行带 `settleable`）、`tasksStaleCount`、`tasksDead`（已知时带 `direction`），以及 `archived`——最新 64 条已结清行，最新在前，每行带 `outcome`、`endedBy`（`receipt` | `echo` | `abandoned` | `cancelled`）、回执在调用方结束之后才到时带 `late: true`、已知时带 `direction`——另有 `archivedCount` 与 `archivedSplit`（按结局计数）。
+状态面的账本：`tasks`（pending，每行带 `settleable`）、`tasksStaleCount`、`tasksDead`（已知时带 `direction`），以及 `archived`——最新 64 条已结清行，最新在前，每行带 `outcome`、`endedBy`（`receipt` | `echo` | `abandoned` | `cancelled` | `evicted`）、回执在调用方结束之后才到时带 `late: true`、已知时带 `direction`——另有 `archivedCount` 与 `archivedSplit`（按结局计数）。
 
 ## 舞台（可视化面）
 
