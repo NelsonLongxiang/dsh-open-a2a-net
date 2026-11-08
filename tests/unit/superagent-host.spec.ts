@@ -456,3 +456,56 @@ describe('acceptance item 9: an agent\'s message cannot end a ticket through its
     expect(agentLedEnd(ticket([['2026-11-07T10:05:00.000Z', false]], '2026-11-07T10:05:00.000Z'), 'a1')).toBe(true)
   })
 })
+
+describe('ops loop: members work in repositories; a ticket accepted for one runs only on its members', () => {
+  it('settings name each member\'s repository (owner/name), only for members, and drop it when the member goes', () => {
+    const base = parseSettings({ members: ['session-a', 'session-b'] }, DEFAULT_SETTINGS)
+    expect(base).toMatchObject({ ok: true })
+    const s = (base as { settings: TeamSettings }).settings
+    expect(parseSettings({ repos: { 'session-a': 'NelsonLongxiang/dsh-open-a2a-net', 'session-b': 'NelsonLongxiang/agent-atelier' } }, s)).toMatchObject({ ok: true, settings: { repos: { 'session-a': 'NelsonLongxiang/dsh-open-a2a-net', 'session-b': 'NelsonLongxiang/agent-atelier' } } })
+    expect(parseSettings({ repos: { 'session-x': 'o/r' } }, s)).toMatchObject({ ok: false, error: expect.stringContaining('not a member') })
+    expect(parseSettings({ repos: { 'session-a': 'no-slash' } }, s)).toMatchObject({ ok: false, error: expect.stringContaining('owner/name') })
+    const named = (parseSettings({ repos: { 'session-a': 'o/a', 'session-b': 'o/b' } }, s) as { settings: TeamSettings }).settings
+    expect(parseSettings({ members: ['session-a'] }, named)).toMatchObject({ ok: true, settings: { repos: { 'session-a': 'o/a' } } })
+    expect(parseSettings({ paused: true }, named)).toMatchObject({ ok: true, settings: { repos: { 'session-a': 'o/a', 'session-b': 'o/b' } } })
+    expect(DEFAULT_SETTINGS.repos).toEqual({})
+  })
+
+  it('the router names the repository; its ticket waits for that repository\'s member without holding up others', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const home = mkdtempSync(join(tmpdir(), 'sa-repos-'))
+    const sent: Array<[string, string]> = []
+    const h = new SuperagentHost({ home, logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {} })
+    expect(h.saveSettings({ router: 'session-r', members: ['session-a', 'session-b'], repos: { 'session-a': 'o/net', 'session-b': 'o/atelier' } }, () => true)).toMatchObject({ ok: true })
+    h.start()
+    const assigned = (member: string): string[] => sent.filter(([id, t]) => id === member && t.startsWith('[superagent assignment]')).map(([, t]) => t)
+    try {
+      // The router sees the team's repositories.
+      const first = h.request('net：核对 README 的命令表') as { triggerId: string }
+      h.pass()
+      expect(sent.find(([id]) => id === 'session-r')?.[1]).toContain('The team\'s members each work in one repository: o/atelier, o/net')
+      // An unknown repository is refused, naming the known ones; nothing is accepted.
+      expect(routeItem(h, { trigger_id: first.triggerId, kind: 'accept', title: 'x', scope: 'y', reason: 'z', repo: 'o/other' })).toMatchObject({ ok: false, code: 'repo', error: expect.stringContaining('o/atelier, o/net') })
+      expect(routeItem(h, { trigger_id: first.triggerId, kind: 'accept', title: 'net 1', scope: 's', reason: 'r', repo: 'o/net' })).toMatchObject({ ok: true, repo: 'o/net' })
+      await vi.waitFor(() => { expect(assigned('session-a')).toHaveLength(1) })
+      expect(assigned('session-a')[0]).toContain('repository: o/net (yours)')
+      // A second net ticket waits for session-a although session-b is free …
+      const second = h.request('net：核对 docs/protocol') as { triggerId: string }
+      expect(routeItem(h, { trigger_id: second.triggerId, kind: 'accept', title: 'net 2', scope: 's', reason: 'r', repo: 'o/net' })).toMatchObject({ ok: true })
+      // … and an atelier ticket accepted after it goes to session-b at once.
+      const third = h.request('atelier：校准 a2a-cli 参考') as { triggerId: string }
+      expect(routeItem(h, { trigger_id: third.triggerId, kind: 'accept', title: 'atelier 1', scope: 's', reason: 'r', repo: 'o/atelier' })).toMatchObject({ ok: true })
+      await vi.waitFor(() => { expect(assigned('session-b')).toHaveLength(1) })
+      expect(assigned('session-b')[0]).toContain('atelier 1')
+      expect(assigned('session-a')).toHaveLength(1)
+      // The ticket repositories persist with the bindings.
+      const stored = JSON.parse(readFileSync(join(home, 'superagent', 'executor.json'), 'utf8')) as { repos: Record<string, string> }
+      expect(Object.values(stored.repos).sort()).toEqual(['o/atelier', 'o/net', 'o/net'])
+      // session-a finishes: the waiting net ticket launches on it.
+      expect(h.report('session-a', { state: 'ready', summary: '核对完毕，ticket/net-1 0123abc' })).toMatchObject({ ok: true })
+      await vi.waitFor(() => { expect(assigned('session-a')).toHaveLength(2) })
+      expect(assigned('session-a')[1]).toContain('net 2')
+    } finally { void h.stop() }
+  })
+})

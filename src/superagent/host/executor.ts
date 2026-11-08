@@ -8,7 +8,10 @@
  * - the assignment card and every Input reach the member's own session by host relay (never A2A);
  * - the member's turn ending is the executor's `turnEnded` fact, and the Inputs delivered before it count as read;
  * - the member reports with `a2a_ticket_report` (upstream orchestrator_report), only for the ticket bound to it.
- * Bindings persist under `<a2a home>/superagent/executor.json`, so a restart knows which member ran what.
+ * - a ticket the router accepted for a repository runs only on that repository's members (settings `repos`); it waits
+ *   for one of them without holding up the tickets behind it;
+ * Bindings and ticket repositories persist under `<a2a home>/superagent/executor.json`, so a restart knows which member
+ * ran what and where each ticket belongs.
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/executor
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
@@ -20,6 +23,8 @@ export interface MemberExecutorDeps {
   readonly path: string
   /** The members the owner named, in order (the order is the launch preference). */
   readonly members: () => readonly string[]
+  /** The repository a member works in (`owner/name`), if the owner named one. */
+  readonly repoOf: (member: string) => string | undefined
   /**
    * Put text into a member's session: a local one by host relay, a remote one by a signed request to its host (PR-C2).
    * `kind` says what it carries. False (or a rejected promise) when it did not arrive.
@@ -38,6 +43,8 @@ interface Binding { readonly member: string; readonly ticketId: string; readonly
 
 export class MemberExecutor implements Executor {
   private bindings: Binding[]
+  /** The repository each open ticket was accepted for (`owner/name`); a ticket not here runs on any member. */
+  private ticketRepos: Record<string, string>
   /** Assignments waiting for a free member, oldest first. */
   private waiting: { ticketId: string; assignmentId: string }[] = []
   /** One launch loop at a time, so two launches never bind one slot; a request during a run runs it again. */
@@ -47,24 +54,49 @@ export class MemberExecutor implements Executor {
   private readonly claimedAt = new Map<string, number>()
 
   constructor(private readonly d: MemberExecutorDeps) {
-    this.bindings = this.load()
+    const stored = this.load()
+    this.bindings = stored.bindings
+    this.ticketRepos = stored.repos
   }
 
-  private load(): Binding[] {
-    try { return existsSync(this.d.path) ? (JSON.parse(readFileSync(this.d.path, 'utf8')) as { bindings: Binding[] }).bindings ?? [] : [] } catch { return [] }
+  private load(): { bindings: Binding[]; repos: Record<string, string> } {
+    try {
+      if (!existsSync(this.d.path)) return { bindings: [], repos: {} }
+      const raw = JSON.parse(readFileSync(this.d.path, 'utf8')) as { bindings?: Binding[]; repos?: Record<string, unknown> }
+      const repos = Object.fromEntries(Object.entries(raw.repos ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+      return { bindings: raw.bindings ?? [], repos }
+    } catch { return { bindings: [], repos: {} } }
   }
   private save(): void {
+    // An ended ticket's repository is no longer needed.
+    this.ticketRepos = Object.fromEntries(Object.entries(this.ticketRepos).filter(([id]) => { const t = this.d.ticket(id); return t !== undefined && !t.ended }))
     mkdirSync(dirname(this.d.path), { recursive: true })
     const temporary = `${this.d.path}.tmp-${randomUUID()}`
-    try { writeFileSync(temporary, JSON.stringify({ bindings: this.bindings }), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.d.path) } finally { rmSync(temporary, { force: true }) }
+    try { writeFileSync(temporary, JSON.stringify({ bindings: this.bindings, repos: this.ticketRepos }), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.d.path) } finally { rmSync(temporary, { force: true }) }
   }
 
   /** The ticket bound to a member, if any. */
   bindingOf(member: string): Binding | undefined { return this.bindings.find(b => b.member === member) }
   /** Every binding (for the workbench). */
   list(): readonly Binding[] { return [...this.bindings] }
-  /** Members with no ticket bound. */
-  private free(): string[] { return this.d.members().filter(m => !this.bindings.some(b => b.member === m)) }
+  /** Members with no ticket bound — for a ticket of a repository, only that repository's members. */
+  private free(ticketId?: string): string[] {
+    const repo = ticketId !== undefined ? this.ticketRepos[ticketId] : undefined
+    return this.d.members().filter(m => !this.bindings.some(b => b.member === m) && (repo === undefined || this.d.repoOf(m) === repo))
+  }
+
+  /** The repository a ticket was accepted for. */
+  repoOfTicket(ticketId: string): string | undefined { return this.ticketRepos[ticketId] }
+
+  /**
+   * Record the repository the router accepted a ticket for, before its first Assignment launches (the engine queues it
+   * through start; the launch runs on a microtask after the accept returns).
+   */
+  setRepo(ticketId: string, repo: string): void {
+    this.ticketRepos[ticketId] = repo
+    this.save()
+    queueMicrotask(() => this.launch())
+  }
 
   start(ticket: Ticket, assignment: Assignment): void {
     if (!this.waiting.some(w => w.assignmentId === assignment.id)) this.waiting.push({ ticketId: ticket.id, assignmentId: assignment.id })
@@ -86,23 +118,26 @@ export class MemberExecutor implements Executor {
   }
 
   private async launchLoop(): Promise<void> {
-    for (;;) {
-      const next = this.waiting[0]
-      if (next === undefined) return
-      const engine = this.d.engine()
-      const ticket = this.d.ticket(next.ticketId)
-      const assignment = ticket?.assignments.find(a => a.id === next.assignmentId)
-      if (ticket === undefined || ticket.ended || assignment === undefined || assignment.state !== 'pending') { this.waiting.shift(); continue }
-      let member: string | undefined
-      for (const candidate of this.free()) {
-        if (await this.tryDeliver(candidate, assignmentCard(ticket, this.d.trigger), 'assign', ticket.id)) { member = candidate; break }
+    // Oldest first, but a ticket waiting for its repository's member does not hold up the ones behind it.
+    for (let progressed = true; progressed;) {
+      progressed = false
+      for (const next of [...this.waiting]) {
+        const engine = this.d.engine()
+        const ticket = this.d.ticket(next.ticketId)
+        const assignment = ticket?.assignments.find(a => a.id === next.assignmentId)
+        if (ticket === undefined || ticket.ended || assignment === undefined || assignment.state !== 'pending') { this.waiting = this.waiting.filter(w => w !== next); continue }
+        let member: string | undefined
+        for (const candidate of this.free(ticket.id)) {
+          if (await this.tryDeliver(candidate, assignmentCard(ticket, this.d.trigger, this.ticketRepos[ticket.id]), 'assign', ticket.id)) { member = candidate; break }
+        }
+        if (member === undefined) continue
+        this.waiting = this.waiting.filter(w => w !== next)
+        this.bindings.push({ member, ticketId: ticket.id, assignmentId: assignment.id, at: new Date().toISOString() })
+        this.save()
+        this.d.logger.info('superagent: ticket %s assigned to %s', ticket.id, member)
+        try { engine.assignmentStarted(ticket.id, assignment.id) } catch (error) { this.d.logger.warn('superagent: assignment %s not recorded started: %s', assignment.id, String(error)) }
+        progressed = true
       }
-      if (member === undefined) return
-      this.waiting.shift()
-      this.bindings.push({ member, ticketId: ticket.id, assignmentId: assignment.id, at: new Date().toISOString() })
-      this.save()
-      this.d.logger.info('superagent: ticket %s assigned to %s', ticket.id, member)
-      try { engine.assignmentStarted(ticket.id, assignment.id) } catch (error) { this.d.logger.warn('superagent: assignment %s not recorded started: %s', assignment.id, String(error)) }
     }
   }
 
@@ -184,12 +219,13 @@ export class MemberExecutor implements Executor {
 }
 
 /** The first message a member gets for a ticket: what it may do, bounded by its Mandate, and how to report. */
-export function assignmentCard(ticket: Ticket, trigger: MemberExecutorDeps['trigger']): string {
+export function assignmentCard(ticket: Ticket, trigger: MemberExecutorDeps['trigger'], repo?: string): string {
   const origin = trigger(ticket.origin.triggerId)
   const name = ticket.execution?.name ?? ticket.id
   return [
     `[superagent assignment] ticket ${ticket.id} «${ticket.title}»`,
     `request: trigger ${ticket.origin.triggerId}`,
+    ...(repo !== undefined ? [`repository: ${repo} (yours)`] : []),
     `scope: ${ticket.mandate.scope}`,
     `mandate: ${ticket.mandate.strength} (${ticket.mandate.basis.via}), from ${ticket.mandate.actor.source}:${ticket.mandate.actor.id}`,
     '',

@@ -82,7 +82,7 @@ const REFUSALS_KEPT = 50
 const clip = (text: string, cap = TEXT_CAP): string => (text.length > cap ? `${text.slice(0, cap)}… (${String(text.length - cap)} more characters)` : text)
 
 /** The candidate card the router reads: bounded facts and the ids its decision names, never authority. */
-export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings, 'acceptMode' | 'rules'>): string {
+export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings, 'acceptMode' | 'rules'> & Partial<Pick<TeamSettings, 'repos'>>): string {
   const lines = [
     `[superagent candidate] eval ${candidate.evalId} · strength ${candidate.strength} · policy ${candidate.policyVersion}`,
     `thread ${candidate.thread.key}`,
@@ -101,6 +101,11 @@ export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings
     lines.push(`This candidate is inferred (not an explicit request; accept mode ${settings.acceptMode}). Judge it against every enabled rule once; accept only on matched rules${settings.acceptMode === 'observe' ? ' — observe mode records it as would-accept and accepts nothing' : ''}. Ignore it from the card when it plainly touches no rule.`)
     for (const rule of enabled) lines.push(`- rule ${rule.name}: ${clip(rule.text, 600)}`)
     if (enabled.length === 0) lines.push('- (no enabled rule: it can only be ignored)')
+    lines.push('')
+  }
+  const repos = [...new Set(Object.values(settings?.repos ?? {}))].sort()
+  if (repos.length > 0) {
+    lines.push(`The team's members each work in one repository: ${repos.join(', ')}. When you accept, name the repository the request is about as repo; its ticket goes to that repository's member. A request about no single one of them is accepted without repo.`)
     lines.push('')
   }
   lines.push(`Decide with superagent_route, one item per candidate, by trigger_id: accept (one ticket for this request, with a title, a scope and an acknowledgement in the request's language — do not add an implementation plan), attach (to a listed ticket the message points at explicitly), stop (the person asked to stop that ticket) or ignore (with a reason).`)
@@ -144,6 +149,7 @@ export class SuperagentHost {
     }
     const executor = this.executor = new MemberExecutor({
       path: join(dir, 'executor.json'), members: () => [...this.settingsValue.members, ...this.settingsValue.remoteMembers.map(r => r.ref)],
+      repoOf: member => this.settingsValue.repos[member],
       deliver: (member, text, kind, ticketId) => this.deliverToMember(member, text, kind, ticketId), engine: () => this.engine,
       ticket: id => this.store.tickets.get(id), trigger: id => this.store.triggers.get(id), logger: d.logger,
     })
@@ -325,6 +331,13 @@ export class SuperagentHost {
     } catch (error) { return { ok: false, code: error instanceof UserError ? error.code : 'refused', error: error instanceof Error ? error.message : String(error) } }
   }
 
+  /** The repositories the team's members work in, each with its members (settings `repos`). */
+  teamRepos(): Map<string, string[]> {
+    const out = new Map<string, string[]>()
+    for (const [member, repo] of Object.entries(this.settingsValue.repos)) out.set(repo, [...(out.get(repo) ?? []), member])
+    return out
+  }
+
   /** Owner control: pin a remote member (resolved from a linked peer's signed card by the caller). */
   addRemoteMember(member: { ref: string; key: string; url: string }): { ok: boolean; error?: string } {
     const parsed = parseRemoteMember(member)
@@ -336,7 +349,8 @@ export class SuperagentHost {
     return { ok: true }
   }
   removeRemoteMember(ref: string): { ok: boolean } {
-    this.writeSettings({ ...this.settingsValue, remoteMembers: this.settingsValue.remoteMembers.filter(r => r.ref !== ref) })
+    const { [ref]: _gone, ...repos } = this.settingsValue.repos
+    this.writeSettings({ ...this.settingsValue, remoteMembers: this.settingsValue.remoteMembers.filter(r => r.ref !== ref), repos })
     return { ok: true }
   }
   /** Owner control: serve a team host (its key pinned from a linked peer's signed card) with these local sessions. */
