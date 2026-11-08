@@ -24,6 +24,11 @@ describe('planning view: the superagent team canvas and its roles', () => {
     expect(roleText(roles, R)).toBe('总工')
     expect(roleText(roles, M)).toBe('成员 · o/net')
     expect(roleText(roles, O)).toBeUndefined()
+    // A member on another host: its planning card id is derived from the canvas ref.
+    const withRemote = teamRolesOf(state({ canvas: 'ops', router: R, members: [M], remoteMembers: [{ ref: 'dsh/3a0d2c35@46744199', key: 'k', url: 'u' }], repos: { 'dsh/3a0d2c35@46744199': 'acceptance/c5' } }))!
+    expect(roleText(withRemote, 'member-dsh-3a0d2c35-46744199')).toBe('成员 · acceptance/c5（远端）')
+    const noRepo = teamRolesOf(state({ canvas: 'ops', remoteMembers: [{ ref: 'dsh/3a0d2c35@46744199', key: 'k', url: 'u' }] }))!
+    expect(roleText(noRepo, 'member-dsh-3a0d2c35-46744199')).toBe('成员（远端）')
   })
 
   it('marks the bound frame and the role cards, follows the state, and takes the marks away when unbound', () => {

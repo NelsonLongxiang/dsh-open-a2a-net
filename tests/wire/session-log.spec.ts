@@ -84,6 +84,7 @@ const mounted: Array<() => Promise<void>> = []
 afterEach(async () => {
   while (mounted.length > 0) await (mounted.pop() as () => Promise<void>)()
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
 })
 
 /** Write a two-frame zstd generation log for `id` under a cwd bucket. */
@@ -176,6 +177,20 @@ describe('session-log route (0.6.11)', () => {
     mounted.push(m.dispose)
     const body = await (await get(m.port, '../a2a/joined.json')).json() as { ok: boolean; error: string }
     expect(body.ok).toBe(false)
+  })
+
+  it('finds the host\u2019s own logs when dshHome moves only the plugin\u2019s state', async () => {
+    const hostHome = mkdtempSync(join(tmpdir(), 'a2a-host-home-'))
+    vi.stubEnv('DSH_HOME', hostHome)
+    const id = 'session-cccc3333-0000-4000-8000-000000000000'
+    const m = await mount()
+    mounted.push(m.dispose)
+    writeLog(hostHome, id, ['宿主写的日志'])
+    const body = await (await get(m.port, id)).json() as { ok: boolean; messages: Array<{ text: string }> }
+    expect(body.ok, JSON.stringify(body)).toBe(true)
+    expect(body.messages.map(message => message.text)).toEqual(['宿主写的日志'])
+    const list = await (await fetch(`http://127.0.0.1:${m.port}/__dsh_a2a/session-log`)).json() as { sessions: Array<{ id: string }> }
+    expect(list.sessions.map(row => row.id)).toContain(id)
   })
 
   it('answers honestly when the session has no log artifact', async () => {

@@ -2991,23 +2991,30 @@ export function apply(ctx: Context, config: Config): void {
      identical semantics — artifact existence is the only gate (archived
      and never-joined sessions stay readable), caps mirror
      session-transcript.ts. */
+  /** `dshHome` may move only the plugin's own state, with the host still writing session logs under its own home. */
+  function sessionLogRoots(): string[] {
+    const own = join(home, 'sessions')
+    const root = existsSync(own) ? own : join(resolveDshHome(), 'sessions')
+    return existsSync(root) ? [root] : []
+  }
   function scanSessionLogList(): Array<{ id: string; mtimeMs: number; sizeBytes: number }> {
     const rows: Array<{ id: string; mtimeMs: number; sizeBytes: number }> = []
-    const sessionsRoot = join(home, 'sessions')
-    if (!existsSync(sessionsRoot)) return rows
-    for (const bucket of readdirSync(sessionsRoot, { withFileTypes: true })) {
-      if (!bucket.isDirectory()) continue
-      for (const child of readdirSync(join(sessionsRoot, bucket.name), { withFileTypes: true })) {
-        if (!child.isDirectory()) continue
-        const dir = join(sessionsRoot, bucket.name, child.name)
-        const files = readdirSync(dir).filter(name => name.startsWith('session.') && (name.endsWith('.jsonl.zstd') || name.endsWith('.jsonl')))
-        if (files.length === 0) continue
-        let newest: { mtimeMs: number; sizeBytes: number } | undefined
-        for (const name of files) {
-          const st = statSync(join(dir, name))
-          if (newest === undefined || st.mtimeMs > newest.mtimeMs) newest = { mtimeMs: st.mtimeMs, sizeBytes: st.size }
+    const seen = new Set<string>()
+    for (const sessionsRoot of sessionLogRoots()) {
+      for (const bucket of readdirSync(sessionsRoot, { withFileTypes: true })) {
+        if (!bucket.isDirectory()) continue
+        for (const child of readdirSync(join(sessionsRoot, bucket.name), { withFileTypes: true })) {
+          if (!child.isDirectory() || seen.has(child.name)) continue
+          const dir = join(sessionsRoot, bucket.name, child.name)
+          const files = readdirSync(dir).filter(name => name.startsWith('session.') && (name.endsWith('.jsonl.zstd') || name.endsWith('.jsonl')))
+          if (files.length === 0) continue
+          let newest: { mtimeMs: number; sizeBytes: number } | undefined
+          for (const name of files) {
+            const st = statSync(join(dir, name))
+            if (newest === undefined || st.mtimeMs > newest.mtimeMs) newest = { mtimeMs: st.mtimeMs, sizeBytes: st.size }
+          }
+          if (newest !== undefined) { seen.add(child.name); rows.push({ id: child.name, ...newest }) }
         }
-        if (newest !== undefined) rows.push({ id: child.name, ...newest })
       }
     }
     rows.sort((a, b) => b.mtimeMs - a.mtimeMs)
@@ -3015,9 +3022,8 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   function readSessionLogTail(id: string, limit: number): { ok: true; id: string; messages: Array<{ role: string; text: string; time?: number }> } | { ok: false; error: string } {
-    const sessionsRoot = join(home, 'sessions')
     let logPath: string | undefined
-    if (existsSync(sessionsRoot)) {
+    search: for (const sessionsRoot of sessionLogRoots()) {
       for (const entry of readdirSync(sessionsRoot, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue
         const candidate = join(sessionsRoot, entry.name, id)
@@ -3030,7 +3036,7 @@ export function apply(ctx: Context, config: Config): void {
         const rank = (name: string): number => generation(name) * 2 + (name.endsWith('.zstd') ? 1 : 0)
         files.sort((a, b) => rank(b) - rank(a))
         logPath = files[0] !== undefined ? join(candidate, files[0]) : undefined
-        break
+        break search
       }
     }
     if (logPath === undefined) return { ok: false, error: 'no log artifact for this session' }
