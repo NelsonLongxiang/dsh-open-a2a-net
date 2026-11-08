@@ -16,7 +16,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/policy
  */
 import { createHash } from 'node:crypto'
-import type { GateResult, Mandate, Policy, SourceScope, Thread, Ticket, Trigger } from '../upstream/dsh-superagent/src/core/index.ts'
+import type { GateResult, Mandate, Policy, PolicyEffect, SourceScope, Thread, Ticket, Trigger } from '../upstream/dsh-superagent/src/core/index.ts'
 import { scope as a2aScope } from '../a2a-watch.ts'
 
 /** The Sources this host runs. */
@@ -219,6 +219,39 @@ export function policyVersion(settings: TeamSettings): string {
 const allowedOn = (settings: TeamSettings, source: string, actor: string): boolean =>
   (source === 'workbench' || source === 'a2a') && settings.allowed[source].includes(actor)
 const botOn = (settings: TeamSettings, source: string, actor: string): boolean => source === 'a2a' && settings.bots.a2a.includes(actor)
+/**
+ * What a settings change means to each open ticket, in upstream's PolicyEffect terms (the engine records it as the
+ * ticket's `policy-changed` input and delivers it to its worker): a rule the ticket was accepted on that changed or no
+ * longer applies, proactive work no longer accepted, or a requester no longer allowed to start work. Tickets nothing
+ * happened to are left out. (Before this, the host told open tickets nothing — router acceptance follow-up.)
+ * @param before - the settings in force when the tickets were accepted.
+ * @param after - the settings just saved.
+ * @param open - the team's open tickets.
+ * @returns the effect per ticket id.
+ */
+export function policyEffects(before: TeamSettings, after: TeamSettings, open: readonly Pick<Ticket, 'id' | 'mandate'>[]): Map<string, PolicyEffect> {
+  const effects = new Map<string, PolicyEffect>()
+  for (const ticket of open) {
+    const mandate = ticket.mandate
+    if (mandate === undefined) continue
+    const effect: { rules?: NonNullable<PolicyEffect['rules']>; proactive?: false; requesterAllowed?: false; requester?: PolicyEffect['requester'] } = {}
+    const rules: NonNullable<PolicyEffect['rules']> = []
+    for (const name of mandate.basis.rules ?? []) {
+      const was = before.rules.find(rule => rule.name === name)
+      const now = after.rules.find(rule => rule.name === name)
+      if (was?.enabled === true && now?.enabled !== true) rules.push({ id: name, name, change: 'disabled' })
+      else if (was !== undefined && now?.enabled === true && now.text !== was.text) rules.push({ id: name, name, change: 'changed', instruction: now.text })
+    }
+    if (rules.length > 0) effect.rules = rules
+    if (mandate.strength === 'inferred' && before.acceptMode === 'auto' && after.acceptMode !== 'auto') effect.proactive = false
+    const { source, id } = mandate.actor
+    const allowedBefore = allowedOn(before, source, id) || botOn(before, source, id)
+    if (allowedBefore && !allowedOn(after, source, id) && !botOn(after, source, id)) { effect.requesterAllowed = false; effect.requester = mandate.actor }
+    if (Object.keys(effect).length > 0) effects.set(ticket.id, effect)
+  }
+  return effects
+}
+
 /** Whether an inferred candidate may be accepted on these matched rules: `auto`, at least one, every one enabled. */
 const admits = (settings: TeamSettings, rules: readonly string[]): boolean => settings.acceptMode === 'auto' && rules.length > 0
   && rules.every(name => settings.rules.some(rule => rule.name === name && rule.enabled))

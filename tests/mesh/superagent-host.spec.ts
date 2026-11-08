@@ -456,6 +456,75 @@ describe('superagent engine in the a2a host', () => {
     } finally { await m.dispose() }
   }, 30_000)
 
+  // Router acceptance follow-up: the branches the live run did not reach, through the real tool pipeline.
+  const accepted = async (m: Awaited<ReturnType<typeof mount>>, text: string, members: string[] = [M_ID]): Promise<{ ask: Record<string, any>; ticketId: string }> => {
+    if ((await m.state()).settings.router === undefined) expect(await m.team(R_ID, members)).toMatchObject({ ok: true })
+    const ask = await m.sa({ action: 'request', text })
+    await vi.waitFor(() => { expect(m.R.steered.some(t => t.includes(ask.triggerId))).toBe(true) }, { timeout: 8000 })
+    const routed = await m.tool('superagent_route', m.R, { items: [{ trigger_id: ask.triggerId, kind: 'accept', title: text.slice(0, 20), scope: text, reason: '属主', acknowledgement: '收到' }] })
+    return { ask, ticketId: routed.results[0].ticket_id as string }
+  }
+
+  it('router acceptance follow-up: a request that asks again for work under way is attached to that ticket — one ticket, the member gets it as an input', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-attach-'))
+    const m = await mount(home)
+    try {
+      const { ticketId } = await accepted(m, '核对 a2a-cli.md 的对外声明')
+      await vi.waitFor(() => { expect(m.M.steered.some(t => t.includes('[superagent assignment]'))).toBe(true) }, { timeout: 8000 })
+      // The same request again, on a thread of its own: the card lists the open ticket, the router attaches.
+      const again = await m.sa({ action: 'request', text: '再说一遍：核对 a2a-cli.md 的对外声明' })
+      await vi.waitFor(() => { expect(m.R.steered.some(t => t.includes(again.triggerId))).toBe(true) }, { timeout: 8000 })
+      const card = m.R.steered.find(t => t.includes(again.triggerId))!
+      expect(card).toContain('open tickets on other threads (newest first):')
+      expect(card).toContain(`- ${ticketId} · `)
+      expect(await m.tool('superagent_route', m.R, { items: [{ trigger_id: again.triggerId, kind: 'attach', ticket_id: ticketId }] })).toMatchObject({ ok: true, results: [{ ok: true, kind: 'attach', ticket_id: ticketId }] })
+      const s = await m.state()
+      expect(s.tickets).toHaveLength(1)
+      expect(s.tickets[0].inputs.some((i: any) => i.kind === 'trigger' && i.triggerId === again.triggerId)).toBe(true)
+      await vi.waitFor(() => { expect(m.M.steered.some(t => t.includes('[superagent input]') && t.includes('再说一遍'))).toBe(true) }, { timeout: 8000 })
+    } finally { await m.dispose() }
+  }, 30_000)
+
+  it('router acceptance follow-up: a blocked or failed report waits on a person; the owner\'s retry gives the ticket a new assignment', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-retry-'))
+    const m = await mount(home)
+    try {
+      for (const state of ['blocked', 'failed'] as const) {
+        const { ticketId } = await accepted(m, `要一个会${state}的小活`)
+        const before = (await m.state()).tickets.find((t: any) => t.id === ticketId)
+        await vi.waitFor(async () => { expect((await m.state()).tickets.find((t: any) => t.id === ticketId).assignments.at(-1).state).toBe('running') }, { timeout: 8000 })
+        const cards = m.M.steered.filter(t => t.includes('[superagent assignment]') && t.includes(ticketId)).length
+        expect(await m.tool('a2a_ticket_report', m.M, { state, summary: `${state}: 缺少权限` })).toMatchObject({ ok: true })
+        await vi.waitFor(async () => { expect((await m.state()).tickets.find((t: any) => t.id === ticketId).stage).toEqual({ stage: 'person', action: state }) }, { timeout: 8000 })
+        expect(await m.sa({ action: 'retry', ticket_id: ticketId })).toMatchObject({ ok: true })
+        await vi.waitFor(async () => { expect((await m.state()).tickets.find((t: any) => t.id === ticketId).assignments.length).toBe(before.assignments.length + 1) }, { timeout: 8000 })
+        await vi.waitFor(() => { expect(m.M.steered.filter(t => t.includes('[superagent assignment]') && t.includes(ticketId)).length).toBe(cards + 1) }, { timeout: 8000 })
+        expect(await m.sa({ action: 'stop', ticket_id: ticketId, reason: '测试结束' })).toMatchObject({ ok: true })
+      }
+    } finally { await m.dispose() }
+  }, 40_000)
+
+  it('router acceptance follow-up: a settings change tells the open ticket\'s member what it means for that ticket', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-policy-'))
+    const m = await mount(home)
+    try {
+      const { ticketId } = await accepted(m, '做一个小改动')
+      await vi.waitFor(() => { expect(m.M.steered.some(t => t.includes('[superagent assignment]'))).toBe(true) }, { timeout: 8000 })
+      // The owner takes the workbench requester off the allowed list: the ticket hears it, as upstream's PolicyEffect.
+      expect(await m.sa({ action: 'settings', settings: { allowed: { workbench: [] } } })).toMatchObject({ ok: true })
+      await vi.waitFor(() => { expect(m.M.steered.some(t => t.includes('[superagent input]') && t.includes('the team settings changed for this ticket'))).toBe(true) }, { timeout: 8000 })
+      const input = m.M.steered.find(t => t.includes('the team settings changed for this ticket'))!
+      expect(input).toContain('workbench:owner, who asked for this ticket, may no longer start work')
+      expect(input).not.toContain('{"')
+      const s = await m.state()
+      expect(s.tickets.find((t: any) => t.id === ticketId).inputs.some((i: any) => i.kind === 'policy-changed' && i.effect.requesterAllowed === false)).toBe(true)
+      // A change that touches no open ticket's basis adds no input.
+      const inputs = s.tickets.find((t: any) => t.id === ticketId).inputs.length
+      expect(await m.sa({ action: 'settings', settings: { evalTimeoutMs: 120_000 } })).toMatchObject({ ok: true })
+      expect((await m.state()).tickets.find((t: any) => t.id === ticketId).inputs.length).toBe(inputs)
+    } finally { await m.dispose() }
+  }, 30_000)
+
   it('router acceptance RJ8: the router relays a member\'s question and the person\'s thread shows it verbatim', async () => {
     const home = mkdtempSync(join(tmpdir(), 'sa-attention-'))
     const m = await mount(home)

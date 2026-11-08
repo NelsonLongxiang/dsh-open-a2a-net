@@ -9,7 +9,8 @@ import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Engine, MemoryRepositories, type Candidate, type EngineOptions, type Repositories, type Trigger } from '../../src/superagent/upstream/dsh-superagent/src/core/index.ts'
 import { JsonRepositories } from '../../src/superagent/host/store.ts'
-import { DEFAULT_SETTINGS, parseSettings, policyVersion, teamPolicy, teamScope, type TeamSettings } from '../../src/superagent/host/policy.ts'
+import { DEFAULT_SETTINGS, parseSettings, policyEffects, policyVersion, teamPolicy, teamScope, type TeamSettings } from '../../src/superagent/host/policy.ts'
+import { policyChangedLines } from '../../src/superagent/host/executor.ts'
 import { OTHER_TICKETS_SHOWN, candidateCard } from '../../src/superagent/host/index.ts'
 import { SAID_CAP, attentionText, registerSuperagentTools } from '../../src/superagent/host/tools.ts'
 
@@ -758,5 +759,37 @@ describe('design v5: the team is a canvas team', () => {
     // Binding is refused while a team session also sits in another canvas.
     canvases.other = ['session-m']
     expect(h.saveSettings({ canvas: 'ops', router: 'session-r', paused: false }, () => true, of)).toMatchObject({ ok: false, error: expect.stringContaining('also sits in canvas other') })
+  })
+})
+
+describe('router acceptance follow-up: what a settings change means to each open ticket (upstream PolicyEffect)', () => {
+  const rule = (name: string, text: string, enabled = true) => ({ name, text, enabled })
+  const base: TeamSettings = { ...DEFAULT_SETTINGS, acceptMode: 'auto', bots: { a2a: ['ops/0123456789abcdef'] }, rules: [rule('docs', 'check docs'), rule('deps', 'bump deps')] }
+  const inferred = (id: string, rules: string[]) => ({ id, mandate: { strength: 'inferred' as const, policyVersion: 'v', basis: { via: 'bot' as const, observation: { mode: 'auto' as const }, rules }, actor: { source: 'a2a', id: 'ops/0123456789abcdef' } } }) as never
+  const explicit = (id: string) => ({ id, mandate: { strength: 'explicit' as const, policyVersion: 'v', basis: { via: 'addressed' as const, addressed: 'direct' as const, sender: 'owner' }, actor: { source: 'workbench', id: 'owner' } } }) as never
+  it('a rule the ticket was accepted on that changed, was turned off or removed', () => {
+    const after = { ...base, rules: [rule('docs', 'check docs and code'), rule('deps', 'bump deps', false)] }
+    const effects = policyEffects(base, after, [inferred('t1', ['docs']), inferred('t2', ['deps']), explicit('t3')])
+    expect(effects.get('t1')).toEqual({ rules: [{ id: 'docs', name: 'docs', change: 'changed', instruction: 'check docs and code' }] })
+    expect(effects.get('t2')).toEqual({ rules: [{ id: 'deps', name: 'deps', change: 'disabled' }] })
+    expect(effects.has('t3')).toBe(false)
+    expect(policyEffects(base, { ...base, rules: [rule('docs', 'check docs')] }, [inferred('t4', ['deps'])]).get('t4')).toEqual({ rules: [{ id: 'deps', name: 'deps', change: 'disabled' }] })
+  })
+  it('proactive work no longer accepted reaches only inferred tickets; a requester taken off its list reaches its own', () => {
+    const effects = policyEffects(base, { ...base, acceptMode: 'observe' }, [inferred('t1', ['docs']), explicit('t2')])
+    expect(effects.get('t1')).toEqual({ proactive: false })
+    expect(effects.has('t2')).toBe(false)
+    const off = policyEffects(base, { ...base, bots: { a2a: [] }, allowed: { workbench: [], a2a: [] } }, [inferred('t1', ['docs']), explicit('t2')])
+    expect(off.get('t1')).toEqual({ requesterAllowed: false, requester: { source: 'a2a', id: 'ops/0123456789abcdef' } })
+    expect(off.get('t2')).toEqual({ requesterAllowed: false, requester: { source: 'workbench', id: 'owner' } })
+    expect(policyEffects(base, { ...base, evalTimeoutMs: 1 }, [inferred('t1', ['docs']), explicit('t2')]).size).toBe(0)
+  })
+  it('the member reads the effect in words, never as JSON', () => {
+    const lines = policyChangedLines({ rules: [{ id: 'docs', name: 'docs', change: 'changed', instruction: 'check docs and code' }, { id: 'deps', name: 'deps', change: 'disabled' }], proactive: false, requesterAllowed: false, requester: { source: 'a2a', id: 'ops/x' } })
+    expect(lines.join('\n')).toContain('rule docs, which this ticket was accepted on, now reads: check docs and code')
+    expect(lines.join('\n')).toContain('rule deps, which this ticket was accepted on, is off now')
+    expect(lines.join('\n')).toContain('accept mode is not auto')
+    expect(lines.join('\n')).toContain('a2a:ops/x, who asked for this ticket, may no longer start work')
+    expect(lines.join('\n')).not.toContain('{')
   })
 })
