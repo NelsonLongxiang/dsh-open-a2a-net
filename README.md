@@ -202,35 +202,35 @@ Example — one announcing node with a seed:
 
 ## Trust model
 
-Cards are Ed25519-signed and expire; `peers` referrals, `sessionTeams` listings, `lanIp`, and `version` on a card
+Cards are Ed25519-signed and expire; the signed core covers only `name`, `session`, `team`, `capabilities`, `expiresAt` and the zone-delegation `records`. `peers` referrals, `sessionTeams` listings, `teamMemberships`, `canvasOrg`, `lanIp`, and `version` on a card
 are unsigned and read fresh — the last two exist so operators can audit which build every fleet node actually runs
-without visiting each host. A referral URL whose own fetch just proved it serves this node's card is remembered,
-and re-offers of it within a suppression window are ignored instead of flickering in and out of the peer store.
-Every `/__dsh_a2a/*` control route — reads included — requires the configured `apiKey` (`X-API-Key`,
+without visiting each host. A referral URL whose own fetch just proved it serves this node's card (or another spelling of an already tracked peer) is remembered for 6 hours,
+and re-offers of it within that window are ignored instead of flickering in and out of the peer store.
+Every `/__dsh_a2a/*` control route — reads included — requires the configured `apiKey` (the `X-API-Key` header, or an `api_key` query parameter for non-browser clients;
 constant-time compare) when one is set. With an empty key only a loopback socket is trusted; a
-`Sec-Fetch-Site` header can only refuse (a cross-site page is rejected even on loopback), never grant.
+`Sec-Fetch-Site` header can only refuse (a cross-site page is rejected even on loopback), never grant, and a request carrying `X-Forwarded-For`, `Forwarded` or `X-Real-IP` gets no loopback trust either (a remote caller arriving through a local reverse proxy or tunnel cannot borrow it to skip the key).
 Set an `apiKey` before exposing the listener beyond loopback.
 
 | Control route | Purpose |
 | --- | --- |
 | `GET /__dsh_a2a/state` | The state face the panel and workbench poll (sessions, canvas, peers, remote rows, activity, ledger). |
 | `POST /__dsh_a2a/join` · `/leave` | Join or leave one session node. |
-| `/__dsh_a2a/canvas` · `/canvas-layout` | Canvas teams (create/remove/add-member/remove-member) and the board layout. |
-| `POST /__dsh_a2a/roster-op` | Owner-controlled roster team creation, member add/remove, dissolution, and exact allowlist maintenance. |
+| `/__dsh_a2a/canvas` · `/canvas-layout` | Canvas teams (create/remove/add-member/remove-member, plus the owner's confirm-member / restore-suspended / delete-suspended / cli-home-options) and the board layout. |
+| `POST /__dsh_a2a/roster-op` | Owner-controlled roster teams on the planning board (`op`: create — at least two joined local sessions — / add-member / remove-member / dissolve), with the exact names in `teamJoinAllowlist` maintained alongside; it cannot admit remote or unjoined sessions. |
 | `/__dsh_a2a/groups` | Manual session grouping — deprecated since 0.6.6 (canvas teams supersede it), kept for old panels. |
 | `POST /__dsh_a2a/dispatch` | Workbench quick dispatch into a team. |
-| `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | Settle an owed task from the caller side (cancel also steers a stop notice to a live local target); the row lands in `archived[]`. |
+| `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | Settle an owed task from the caller side (cancel also makes a best-effort stop notice to the target: a steered notice for a local one, a wire delivery for a remote one — which also carries `cancel_task_id` when the peer's card declares `queuedTaskCancellation`, withdrawing the original task if it is still queued; the reply carries `steered` and `removed`); the row lands in `archived[]`. |
 | `GET`/`POST /__dsh_a2a/superagent` | With `superagent: true`: the engine state (threads, decisions, replies, tickets with stage, the bound canvas and any binding problem), and the owner's actions `settings` (bind `canvas` and `router`) · `request` (the workbench Source) · `serve` (serve another host's team by its canvas id) · `stop` · `retry`. |
 | `/__dsh_a2a/session-log` · `/remote-session-log` | Session log reads for the workbench. |
-| `/__dsh_a2a/owner-settings` | The owner panel: read (GET) or write (POST) `teamJoinAllowlist`, `teamScopeInfo`, `seatNames` and `announce` into the home patch layer (all but `announce` apply immediately). `seatNames` is a validated full map; omit a session id to clear its label. This owner-authenticated control face is not a model naming tool; local shell/config writers remain inside the existing operator trust boundary. |
+| `/__dsh_a2a/owner-settings` | The owner panel: read (GET) or write (POST) `teamJoinAllowlist`, `teamScopeInfo`, `seatNames` and `announce` into the home patch layer (all but `announce` apply immediately; `announce` needs a restart, and GET reports `announceRestartPending`). `seatNames` is a validated full map; omit a session id to clear its label. This owner-authenticated control face is not a model naming tool; local shell/config writers remain inside the existing operator trust boundary. |
 | `/__dsh_a2a/fleet-canvas-op` | Relay a canvas operation (`create`, `add-member`, `remove-member`, `remove`) to a peer's `/a2a/canvas-op`, stamped with this node's OriginClaim; the peer's link gate decides. |
-| `/__dsh_a2a/cli-deposit` | Deposit, list, revoke and mailbox reads for `a2a-net` CLI identities. |
-| `GET /__dsh_a2a/nodes` · `POST` | Node identities (docs/design/node-identity.md): GET reads the roster or one node (`?name=`); POST is an identity write and needs the apiKey even on loopback. |
+| `/__dsh_a2a/cli-deposit` | Deposit, list, revoke, mailbox reads and admission queries (`admission`, which must be signed by the identity itself) for `a2a-net` CLI identities. |
+| `GET /__dsh_a2a/nodes` · `POST` | Node identities (docs/design/node-identity.md): GET reads the roster or one node (`?name=`); POST is an identity write and needs the `X-API-Key` even on loopback; a host with no `apiKey` refuses every identity write. |
 | `POST /__dsh_a2a/blob` | Stage a file for a recipient (`?to=&name=`) — the file channel's write side; peers pull through `GET /a2a/blob`. |
 
 The state face's ledger: `tasks` (pending, each with `settleable`), `tasksStaleCount`, `tasksDead` (with
 `direction` when known), and `archived` — the newest 64 settled rows, newest first, each with `outcome`,
-`endedBy` (`receipt` | `echo` | `abandoned` | `cancelled`), `late: true` when a receipt arrived after the
+`endedBy` (`receipt` | `echo` | `abandoned` | `cancelled` | `evicted`), `late: true` when a receipt arrived after the
 caller ended it, and `direction` when known — plus `archivedCount` and `archivedSplit` (count per outcome).
 
 ## Stages (visualization surfaces)
