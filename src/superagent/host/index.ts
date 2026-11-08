@@ -166,7 +166,7 @@ export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings
   }
   if (candidate.strength === 'inferred' && settings !== undefined) {
     const enabled = settings.rules.filter(rule => rule.enabled)
-    lines.push(`This candidate is inferred (not an explicit request; accept mode ${settings.acceptMode}). Judge it against every enabled rule once; accept only on matched rules${settings.acceptMode === 'observe' ? ' — observe mode records it as would-accept and accepts nothing' : ''}. Ignore it from the card when it plainly touches no rule.`)
+    lines.push(`This candidate is inferred (not an explicit request; accept mode ${settings.acceptMode}). Judge it against every enabled rule once; accept only on matched rules${settings.acceptMode === 'observe' ? ' — in observe mode still route a matching candidate as accept, naming its rules: the host records it as would-accept and accepts nothing' : ''}. Ignore it from the card when it plainly touches no rule.`)
     for (const rule of enabled) lines.push(`- rule ${rule.name}: ${clip(rule.text, 600)}`)
     if (enabled.length === 0) lines.push('- (no enabled rule: it can only be ignored)')
     lines.push('')
