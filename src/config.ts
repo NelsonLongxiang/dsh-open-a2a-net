@@ -128,13 +128,6 @@ export interface Config {
    */
   readonly dshHome: string
   /**
-   * #471: where the full-page office stage (`/__dsh_a2a_canvas`) finds its licensed tileset PNGs
-   * (`office-tileset.png`, `a5-office-floors-walls.png`, `interiors.png`). The art is not shipped in this package;
-   * its licensee puts the files here and the stage serves them at `/__dsh_a2a_canvas/tiles/`. Empty (the default) is
-   * `<home>/a2a/stage-tiles`. Missing files: the stage draws placeholder tiles.
-   */
-  readonly stageTilesDir: string
-  /**
    * Agent-card validity. Announce re-signs at TTL/4 so three lost refreshes
    * still leave a live card; a node silent for one TTL disappears from every
    * peer's discovery without manual eviction.
@@ -316,7 +309,6 @@ export const Config: s<Config> = s.object({
   peers: s.array(s.string()).default([]),
   delegates: s.array(s.object({ name: s.string(), url: s.string(), publicKey: s.string().default('') })).default([]),
   dshHome: s.string().default(''),
-  stageTilesDir: s.string().default(''),
   sessionNodes: s.boolean().default(true),
   wakeJoinedOnBoot: s.boolean().default(false),
   wakePrewarmDelayMs: s.number().default(10_000),

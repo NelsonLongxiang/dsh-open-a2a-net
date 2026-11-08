@@ -138,7 +138,6 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | `targetQueueCap` | `3` | 本宿主上同一个目标最多排队这么多条目标尚未回应且等回执的任务；再来新投递就可见拒收（`-32009 target-queue-full`，不投递）。本宿主自己记过账的任务的回执、以及 CLI 信箱从不拦；一个画布队算一个目标。被拒的 task id 记为失败，重试要换新 id。目标消费本任务后的 final 或目标自己发回执会记 `answeredAt` 并释放名额，即使回执投递失败；行仍欠回执，死信、迟到回执和守恒不变，状态面/画布排队数采用同一口径。`0` 关闭（#224/#253）。 |
 | `taskStaleTtlMs` | `86400000` | 欠账任务的 stale TTL（24h）：过期后 pending 行自动转死信（迟到回执仍可结清）。 |
 | `dshHome` | `''` | 插件状态所用的 DSH home 目录覆盖（`<home>/a2a/…`）；`''` 解析默认 home。 |
-| `stageTilesDir` | `''` | 办公室舞台的授权贴图目录（`office-tileset.png`、`a5-office-floors-walls.png`、`interiors.png`，本包不分发，#471），舞台经 `/__dsh_a2a_canvas/tiles/` 读取；`''` 即 `<home>/a2a/stage-tiles`；缺文件时画占位块。 |
 | `cardTtlMs` / `flushTimeoutMs` / `routeTimeoutMs` | `172800000` / `300000` / `1800000` | 卡片生命周期（48h，每 1/4 周期重签一次）；会话在此窗口内没有最终回复时，回复等待者以占位应答释放（5 分钟）；`a2a_route` 工具的单次调用超时（30 分钟）。 |
 | `cardCacheTtlMs` / `cardCacheNegativeTtlMs` / `remoteRowsTtlMs` / `stateColdRowsTtlMs` | `60000` / `30000` / `15000` / `5000` | peer 卡片缓存（命中/未命中）、远端会话行刷新窗口、状态面冷行刷新窗口。 |
 
@@ -183,7 +182,7 @@ a2a-net inbox --new                                      # 未读来信；--wait
 
 ## 舞台（可视化面）
 
-两个全页舞台与模型工具并列挂载：`/__dsh_a2a_nexus`（A2A 工作台——自 0.6.2 起 2D 空间规划板即舞台，目录/主机/台账/活动/规划面板（宿主运行 superagent 团队时多一个「团队」页）乘可折叠侧栏，合并为一个响应式外壳；canvas 面掉线时面板回落主区；Three.js 拓扑观测在 0.6.0 退役；`?mode=plan` 仍汇聚到规划板）与 `/__dsh_a2a_canvas`（Munder Difflin 风格的办公室平面舞台，同源全页；源码在 `stage/`，构建产物在 `assets/stageDist`）。不带斜杠的挂载路径会 301 重定向到带尾斜杠形式，两种写法都能渲染，外壳的相对资源总在服务树内解析。离线开发时，`nexus-stage/scripts/mockhost.py [port]`（默认 8780）服务已构建的舞台（`assets/nexusDist`），状态取自 `LIVE_STATE`（默认本机 3080 端口的 `/__dsh_a2a/state`），取不到就用空舰队；在其上打开 `/?fault=500` 可演练页内故障徽标，`/?demo=1` 合并一份演示联邦数据（2 个 peer、2 条在途路由），设 `LAYOUT_FILE=<路径>` 可让布局跨重启保留（默认只存内存）。`pnpm verify` 是包了一层「临时目录零残留」闸门的 `pnpm verify:core`；其中 `verify:nexus` 步骤会自行 `npm ci` 安装舞台子包依赖再构建，无需手工引导子包（仓库根的依赖仍需先 `pnpm install`）。
+全页工作台与模型工具并列挂载：`/__dsh_a2a_nexus`（A2A 工作台——自 0.6.2 起 2D 空间规划板即舞台，目录/主机/台账/活动/规划面板（宿主运行 superagent 团队时多一个「团队」页）乘可折叠侧栏，合并为一个响应式外壳；canvas 面掉线时面板回落主区；Three.js 拓扑观测在 0.6.0 退役；`?mode=plan` 仍汇聚到规划板）。不带斜杠的挂载路径会 301 重定向到带尾斜杠形式，两种写法都能渲染，外壳的相对资源总在服务树内解析。此前的办公室舞台 `/__dsh_a2a_canvas` 已移除。离线开发时，`nexus-stage/scripts/mockhost.py [port]`（默认 8780）服务已构建的舞台（`assets/nexusDist`），状态取自 `LIVE_STATE`（默认本机 3080 端口的 `/__dsh_a2a/state`），取不到就用空舰队；在其上打开 `/?fault=500` 可演练页内故障徽标，`/?demo=1` 合并一份演示联邦数据（2 个 peer、2 条在途路由），设 `LAYOUT_FILE=<路径>` 可让布局跨重启保留（默认只存内存）。`pnpm verify` 是包了一层「临时目录零残留」闸门的 `pnpm verify:core`；其中 `verify:nexus` 步骤会自行 `npm ci` 安装舞台子包依赖再构建，无需手工引导子包（仓库根的依赖仍需先 `pnpm install`）。
 
 ## 协作 SOP（网络实践，v0.1）
 
@@ -254,6 +253,4 @@ npm install /path/to/nelsonlongxiang-dsh-open-a2a-net-<version>.tgz
 
 本包以 MIT 许可发布，见仓库根的 `LICENSE`；第三方内容见 `THIRD_PARTY_NOTICES.md`，各许可文本在 `docs/licenses/`，三者都随 npm 包分发（#470）。
 
-- **办公室舞台** `/__dsh_a2a_canvas` 的渲染器改编自 [Munder Difflin](https://github.com/chaitanyagiri/munder-difflin)（MIT，© Chaitanya Giri），座位池逻辑与办公室地图来自 [the-office](https://github.com/shahar061/the-office)（ISC）。
-- **superagent 引擎**是原样引入的上游代码（MIT，© DeepSeek Harness Team）。
-- **舞台贴图不随包分发**（#471）：舞台原用 [LimeZu](https://limezu.itch.io/) 的 *Modern Interiors - RPG Tileset [16X16]*，其许可禁止再分发。持有许可的人把 `office-tileset.png`、`a5-office-floors-walls.png`、`interiors.png` 放进宿主的 `stageTilesDir`（默认 `<home>/a2a/stage-tiles`），舞台即显示原图并附上 LimeZu 要求的署名链接；没有这些文件时画素色占位块。0.7.0 及更早的发布版和此前的 git 历史仍含这些贴图。
+superagent 引擎是原样引入的上游代码（MIT，© DeepSeek Harness Team）。

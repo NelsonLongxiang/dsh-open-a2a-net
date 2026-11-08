@@ -198,7 +198,6 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | `targetQueueCap` | `3` | At most this many unanswered, receipt-owing tasks queue for one target on this host; the next delivery is refused visibly (`-32009 target-queue-full`, nothing delivered). A receipt for a task this host booked and CLI mailboxes are never refused; a canvas team counts as one target. A refused task id is recorded as failed — retry with a new id. A target-attributed final or its own receipt attempt records `answeredAt` and releases queue capacity even if receipt delivery fails; the row remains owed, with unchanged expiry, late-receipt and conservation semantics. State/board queue counts use this same rule. `0` disables (#224/#253). |
 | `taskStaleTtlMs` | `86400000` | Owed-task stale TTL (24h): past it a pending row auto-dead-letters (a late receipt can still settle it). |
 | `dshHome` | `''` | DSH home directory override for the plugin's state (`<home>/a2a/…`); `''` resolves the default home. |
-| `stageTilesDir` | `''` | Where the office stage finds its licensed tilesets (`office-tileset.png`, `a5-office-floors-walls.png`, `interiors.png`; not shipped, #471), served at `/__dsh_a2a_canvas/tiles/`; `''` is `<home>/a2a/stage-tiles`; missing files draw placeholder tiles. |
 | `cardTtlMs` / `flushTimeoutMs` / `routeTimeoutMs` | see schema | Card lifetime (48h) and route timing budgets. |
 | `cardCacheTtlMs` / `cardCacheNegativeTtlMs` / `remoteRowsTtlMs` / `stateColdRowsTtlMs` | `60000` / `30000` / `15000` / `5000` | Peer card cache (hit / miss), remote session rows refresh window, and cold-row refresh window of the state face. |
 
@@ -251,15 +250,15 @@ caller ended it, and `direction` when known — plus `archivedCount` and `archiv
 
 ## Stages (visualization surfaces)
 
-Two full-page stages mount beside the model tools: `/__dsh_a2a_nexus` (the
+A full-page workbench mounts beside the model tools: `/__dsh_a2a_nexus` (the
 A2A workbench — since 0.6.2 the 2D spatial planning board IS the stage and
 the directory/ledger/activity/plan panels ride a collapsible side rail in
 one merged, responsive shell; while the canvas face is down the panels fall
 back to the main stack; the Three.js topology viewer was retired in 0.6.0;
-`?mode=plan` still converges on the board) and `/__dsh_a2a_canvas`. A bare
+`?mode=plan` still converges on the board). A bare
 mount path
 redirects (301) onto its trailing-slash form, so both spellings render and
-the shell's relative assets always resolve inside the served tree. For
+the shell's relative assets always resolve inside the served tree. The earlier office stage `/__dsh_a2a_canvas` has been removed. For
 offline development, `nexus-stage/scripts/mockhost.py [port]` serves the
 built stage with canned state; open `/?fault=500` on it to exercise the
 on-page fault badge. `pnpm verify` needs no manual bootstrap on a fresh
@@ -365,11 +364,4 @@ subpaths import only each other and `node:crypto`.
 MIT — see `LICENSE`. Third-party work is listed in `THIRD_PARTY_NOTICES.md`, with its licence texts in `docs/licenses/`;
 all three ship in the npm package (#470).
 
-- The office stage `/__dsh_a2a_canvas` is adapted from [Munder Difflin](https://github.com/chaitanyagiri/munder-difflin)
-  (MIT, © Chaitanya Giri); its seat pool and office maps come from [the-office](https://github.com/shahar061/the-office) (ISC).
-- The superagent engine is vendored unchanged from upstream (MIT, © DeepSeek Harness Team).
-- **The stage tilesets are not shipped** (#471). The stage was drawn with [LimeZu](https://limezu.itch.io/)'s *Modern
-  Interiors - RPG Tileset [16X16]*, whose licence forbids redistribution. A licensee puts `office-tileset.png`,
-  `a5-office-floors-walls.png` and `interiors.png` in the host's `stageTilesDir` (default `<home>/a2a/stage-tiles`); the
-  stage then shows them with the credit link LimeZu requires, and otherwise draws placeholder tiles. Releases up to 0.7.0
-  and earlier git history still contain the tilesets.
+The superagent engine is vendored unchanged from upstream (MIT, © DeepSeek Harness Team).

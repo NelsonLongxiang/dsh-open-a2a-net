@@ -11,7 +11,7 @@
  *   binding semantics of the closure; so does `cardCache`, which apply()
  *   declares after this registration (a destructure would hit its TDZ);
  * - `indexUrl` is index.ts's `import.meta.url`: the asset roots
- *   (`../assets/stageDist`, `../assets/nexusDist`) resolve against the
+ *   (`../assets/nexusDist`) resolve against the
  *   entry module, not this file (tsc mirrors src/ under lib/).
  * @module src/faces/admin
  */
@@ -1013,70 +1013,6 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
       }, MAX_LAYOUT_BODY_BYTES)
     }),
   }), 'a2a: canvas-layout route')
-  // The dsh-a2a-munder-difflin floor stage: a same-origin full-page
-  // surface adapted from the Munder Difflin office renderer (stage/,
-  // NOTICE). Serves the built Vite tree with a traversal-guarded map.
-  ctx.effect(() => webServer.register({
-    kind: 'prefix',
-    path: '/__dsh_a2a_canvas',
-    handler: (req: IncomingMessage, res: ServerResponse) => {
-      const rootDir = fileURLToPath(new URL('../assets/stageDist', indexUrl))
-      // Directory-classic resolution: the bare mount 301s onto itself
-      // with a slash, so the shell's `./assets` references resolve
-      // inside this tree instead of 404ing against the web root.
-      const MOUNT = '/__dsh_a2a_canvas'
-      const resolved = resolveStageMount(req.url ?? '/', MOUNT)
-      if (resolved.redirectTo !== undefined) {
-        res.writeHead(301, { Location: resolved.redirectTo, 'Cache-Control': 'no-store', 'X-A2A-Stage': 'redirect' })
-        res.end()
-        return
-      }
-      const rel = decodeURIComponent(resolved.rel).replace(/\\/g, '/')
-      if (rel.includes('..')) {
-        res.writeHead(403, { 'Content-Type': 'text/plain', 'X-A2A-Stage': 'traversal' })
-        res.end()
-        return
-      }
-      // #471: the licensed tilesets are not shipped; serve them from the licensee's local directory, PNG by plain
-      // name only. A missing file is a 404 the stage answers with placeholder tiles.
-      if (rel.startsWith('/tiles/')) {
-        const name = rel.slice('/tiles/'.length)
-        if (!/^[\w.-]+\.png$/.test(name)) {
-          res.writeHead(404, { 'Content-Type': 'text/plain', 'X-A2A-Stage': 'tiles-name' })
-          res.end()
-          return
-        }
-        const tilesDir = d.config.stageTilesDir !== '' && d.config.stageTilesDir !== undefined ? d.config.stageTilesDir : join(d.home, 'a2a', 'stage-tiles')
-        try {
-          const file = readFileSync(join(tilesDir, name))
-          res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store', 'X-A2A-Stage': 'tiles' })
-          res.end(file)
-        } catch {
-          res.writeHead(404, { 'Content-Type': 'text/plain', 'X-A2A-Stage': 'tiles-miss' })
-          res.end()
-        }
-        return
-      }
-      try {
-        const file = readFileSync(join(rootDir, rel))
-        const ext = rel.slice(rel.lastIndexOf('.') + 1)
-        const types: Record<string, string> = {
-          html: 'text/html; charset=utf-8',
-          js: 'text/javascript; charset=utf-8',
-          mjs: 'text/javascript; charset=utf-8',
-          css: 'text/css; charset=utf-8',
-          png: 'image/png',
-          json: 'application/json; charset=utf-8',
-          svg: 'image/svg+xml',
-        }
-        res.writeHead(200, { 'Content-Type': types[ext] ?? 'application/octet-stream', 'Cache-Control': 'no-store', 'X-A2A-Stage': 'ok:' + ext })
-        res.end(file)
-      } catch (err) {
-        res.writeHead(404, { 'Content-Type': 'text/plain', 'X-A2A-Stage': 'miss' })
-        res.end('stage-miss rel=' + rel + ' rootDir=' + rootDir + ' err=' + String(err))
-      }
-    },
-  }), 'a2a: canvas-stage page')
   // The dsh-a2a-nexus stage: Three.js infinite-canvas topology viewer.
   // Serves the built Vite tree from assets/nexusDist with a traversal-
   // guarded file map (same discipline as canvas-stage).
@@ -1085,7 +1021,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
     path: '/__dsh_a2a_nexus',
     handler: (req: IncomingMessage, res: ServerResponse) => {
       const rootDirNexus = fileURLToPath(new URL('../assets/nexusDist', indexUrl))
-      // Same directory-classic resolution as the canvas mount: the bare
+      // Directory-classic resolution: the bare
       // `/__dsh_a2a_nexus` form used to serve the shell verbatim, whose
       // `./assets` then 404'd at the web root — a silent black viewer.
       const MOUNT = '/__dsh_a2a_nexus'

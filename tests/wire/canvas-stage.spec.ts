@@ -1,6 +1,5 @@
 /**
- * The floor stage faces: page serving over the built Vite tree (shell,
- * hashed assets, traversal guard) plus the canvas-layout control face.
+ * The canvas-layout control face the workbench's planning board saves to.
  */
 import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
@@ -9,13 +8,12 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import TimerService from '@deepseek-ai/cordis-plugin-timer'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { apply } from '../../src/index.ts'
 import { MAX_LAYOUT_BODY_BYTES, WIRE_ERROR_PAYLOAD_TOO_LARGE } from '../../src/transport-caps.ts'
 
-async function harness(extra: Record<string, unknown> = {}): Promise<number> {
+async function harness(): Promise<number> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
@@ -28,12 +26,10 @@ async function harness(extra: Record<string, unknown> = {}): Promise<number> {
     delegates: [], sessionNodes: true, wakeJoinedOnBoot: false, wakePrewarmDelayMs: 0,
     wakePrewarmQuietMs: 0, wakeBootStaggerMs: 3_000, stateColdRowsTtlMs: 5_000,
     cardCacheTtlMs: 60_000, cardCacheNegativeTtlMs: 30_000, remoteRowsTtlMs: 15_000,
-    dshHome: home, cardTtlMs: 172_800_000, ...extra,
-  } as never)
+    dshHome: home, cardTtlMs: 172_800_000,
+  })
   return (ctx as unknown as { webServer: WebServer }).webServer.port
 }
-
-const hasStageDist = existsSync(join(process.cwd(), 'assets', 'stageDist', 'index.html'))
 
 const DOC_FIXTURE = {
   version: 1 as const,
@@ -112,55 +108,24 @@ describe('canvas-layout control face', () => {
   })
 })
 
-// Asset-serving assertions require the built stage bundle; source-only checkouts must build it first.
-describe.skipIf(!hasStageDist)('floor stage page serving', () => {
-  it('serves the shell with brand and hashed assets, guarding traversal', async () => {
+describe('the workbench page is served from its built tree', () => {
+  it('serves the shell and hashed assets, guarding traversal; the removed office stage is gone', async () => {
     const port = await harness()
-    const base = 'http://127.0.0.1:' + String(port) + '/__dsh_a2a_canvas'
+    const root = 'http://127.0.0.1:' + String(port)
+    const base = root + '/__dsh_a2a_nexus'
     const shell = await fetch(base + '/')
     expect(shell.status).toBe(200)
     expect(shell.headers.get('content-type')).toContain('text/html')
-    const htmlText = await shell.text()
-    expect(htmlText).toContain('id="root"')
-    expect(htmlText).toContain('dsh-a2a-munder-difflin')
+    const html = await shell.text()
     // Vite may order script attributes freely (crossorigin before src).
-    const m = htmlText.match(/<script[^>]*src="([^"]+\.js)"/)
+    const m = html.match(/<script[^>]*src="([^"]+\.js)"/)
     expect(m).not.toBeNull()
-    const jsPath = m![1]!.startsWith('/') === true ? m![1]! : '/' + String(m![1])
-    const jsRes = await fetch(base + jsPath)
-    expect(jsRes.status).toBe(200)
-    expect(jsRes.headers.get('content-type')).toContain('javascript')
+    const js = await fetch(base + '/' + m![1]!.replace(/^\.?\//, ''))
+    expect(js.status).toBe(200)
+    expect(js.headers.get('content-type')).toContain('javascript')
     const trav = await fetch(base + '/%2e%2e%2fpackage.json')
     expect(trav.status === 403 || trav.status === 404).toBe(true)
     expect((await fetch(base + '/nope.js')).status).toBe(404)
-  })
-})
-
-describe('#471: the licensed stage tilesets are served from a local directory, never shipped', () => {
-  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a4f20000000049454e44ae426082', 'hex')
-  it('serves a PNG the licensee put in stageTilesDir; a missing one, a non-PNG or a path is a 404', async () => {
-    const tiles = mkdtempSync(join(tmpdir(), 'a2a-tiles-'))
-    writeFileSync(join(tiles, 'interiors.png'), PNG)
-    writeFileSync(join(tiles, 'notes.txt'), 'x')
-    const base = 'http://127.0.0.1:' + String(await harness({ stageTilesDir: tiles }))
-    const ok = await fetch(base + '/__dsh_a2a_canvas/tiles/interiors.png')
-    expect(ok.status).toBe(200)
-    expect(ok.headers.get('content-type')).toBe('image/png')
-    expect(Buffer.from(await ok.arrayBuffer()).equals(PNG)).toBe(true)
-    for (const [path, status] of [['/__dsh_a2a_canvas/tiles/office-tileset.png', 404], ['/__dsh_a2a_canvas/tiles/notes.txt', 404], ['/__dsh_a2a_canvas/tiles/sub%2Finteriors.png', 404]] as const) {
-      expect((await fetch(base + path)).status, path).toBe(status)
-    }
-  })
-  it('defaults to <home>/a2a/stage-tiles: nothing there is a 404 the stage answers with placeholder tiles', async () => {
-    const base = 'http://127.0.0.1:' + String(await harness())
-    const miss = await fetch(base + '/__dsh_a2a_canvas/tiles/interiors.png')
-    expect(miss.status).toBe(404)
-    expect(miss.headers.get('x-a2a-stage')).toBe('tiles-miss')
-  })
-  it.skipIf(!hasStageDist)('the built stage carries no image of its own (no PNG file, no inlined PNG data)', () => {
-    const dir = join(process.cwd(), 'assets', 'stageDist', 'assets')
-    const files = readdirSync(dir)
-    expect(files.filter(f => /\.(png|jpe?g|gif|webp)$/i.test(f))).toEqual([])
-    for (const f of files.filter(f => f.endsWith('.js') || f.endsWith('.css'))) expect(readFileSync(join(dir, f), 'utf8'), f).not.toMatch(/data:image\/(png|jpe?g|gif|webp)/)
+    expect((await fetch(root + '/__dsh_a2a_canvas/')).headers.get('x-a2a-stage')).toBeNull()
   })
 })

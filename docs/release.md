@@ -5,6 +5,10 @@
 
 ## 下一版本候选（待评审，未发布）
 
+### 许可证与办公室舞台（#470、#471）
+- 包内现带 `LICENSE`（MIT）、`THIRD_PARTY_NOTICES.md` 与 `docs/licenses/`。
+- **移除办公室舞台 `/__dsh_a2a_canvas`**：`stage/` 子包、`assets/stageDist` 与该路由一并删除。它自工作台上线后没有入口，只是展示页，也是 LimeZu 贴图等第三方义务的来源。组队、规划板和 `/__dsh_a2a/canvas-layout` 不受影响。书签指向该地址的用户请改用工作台 `/__dsh_a2a_nexus/`。0.7.0 及更早的发布版和此前的 git 历史仍含这部分内容。
+
 ### 属主重判与总工备注（设计 superagent-reevaluate-note）
 - 属主可让总工重新判断一条被拒的需求：团队页「提需求」的线上「重新判断」，控制面 `{ action: 'reevaluate', trigger_id }`，或 `a2a-net superagent reevaluate <trigger id>`。总工收到时卡片标明是复判。已经拿到正式结局的 A2A 消息不重判（任务已结清，请发送方重发）。
 - 总工新工具 `superagent_note`：给在办工单的成员补一条事实（成员收到「note from the router」），只告知、不授权。
