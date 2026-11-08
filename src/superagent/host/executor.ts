@@ -232,7 +232,7 @@ export function assignmentCard(ticket: Ticket, trigger: MemberExecutorDeps['trig
     'request text:',
     origin === undefined ? '(the original message is not readable)' : origin.text,
     '',
-    `Work in your own workspace, in a directory or worktree named ${name}. Stay within the scope; derive what to do from the request yourself.`,
+    `Work in your own workspace, in a directory or worktree named ${name}; in a git checkout, create that worktree beside the checkout (../<checkout>-${name}), never inside it, so the checkout stays clean. Stay within the scope; derive what to do from the request yourself.`,
     'Do not open sessions, subagents, or A2A routes: this ticket is your only work. Report with a2a_ticket_report:',
     '- progress while you work only when something changed for the person; waiting when you wait for a Trigger;',
     '- ready when the result can be reviewed or used (a pull request link in the summary when there is one);',
