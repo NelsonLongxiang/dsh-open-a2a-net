@@ -3142,18 +3142,33 @@ export function apply(ctx: Context, config: Config): void {
               // Design v5: a remote member is a remote slot of the bound canvas team — added on the canvas, which pins its key.
               send(200, { ok: false, error: 'the team is a canvas team: add or remove a remote member on the canvas (/__dsh_a2a/canvas add-member / remove-member)' })
             } else if (fields.action === 'serve-team') {
-              // PR-C2: serve another host's team. Its key comes from that linked peer's signed card; null peer leaves.
-              if (fields.peer === null) { send(200, superagentHost.serveTeam(undefined, [], () => false)); return }
-              const peer = typeof fields.peer === 'string' ? fields.peer : ''
+              // Design v5 (D4): a team is served by its canvas id, which names its owner by key fingerprint.
+              send(200, { ok: false, error: "serve a team by its canvas id: POST { action: 'serve', team: '<zone>/canvas/<name>@<fp8>', members: [<local session ids>] } (team: null leaves)" })
+            } else if (fields.action === 'serve') {
+              // Design v5 (D4): serve another host's team — the canvas team `<zone>/canvas/<name>@<fp8>`. The fingerprint picks
+              // the linked peer whose signed card key it names and which advertises that canvas; that key is pinned, so only it
+              // may assign these sessions work. null leaves. The member host's owner consents here; the team host cannot
+              // take another host's sessions on its own (U17).
+              if (fields.team === null) { send(200, superagentHost.serveTeam(undefined, [], () => false)); return }
+              const team = typeof fields.team === 'string' ? fields.team.trim() : ''
               const members = Array.isArray(fields.members) ? fields.members.filter((m): m is string => typeof m === 'string') : []
               void (async () => {
-                if (peer === '' || !/^https?:\/\//.test(peer)) { send(200, { ok: false, error: 'peer (the team host base URL) is required' }); return }
-                const card = await fetchPeerCard(peer)
-                if (card === undefined || !verifyCard(card, Date.now()).ok || typeof card.publicKey !== 'string') { send(200, { ok: false, error: 'the team host card is unreadable or unsigned' }); return }
+                const split = splitCanvasOwner(team)
+                if (split.owner === undefined || !/^[^/\s]+\/canvas\/[^/\s]+$/.test(split.team)) { send(200, { ok: false, error: 'team must be a canvas id with its owner: <zone>/canvas/<name>@<fp8>' }); return }
+                if (split.owner === ownCanvasFingerprint) { send(200, { ok: false, error: "that canvas is this host's own: its sessions join it as members on the canvas" }); return }
+                let found: { url: string; card: A2aPeerCard } | undefined
+                for (const url of new Set([...peerStore.list(), ...cardCache.keys()])) {
+                  const card = await fetchPeerCard(url).catch(() => undefined)
+                  if (card === undefined || !verifyCard(card, Date.now()).ok || typeof card.publicKey !== 'string' || canvasOwnerFingerprint(card.publicKey) !== split.owner) continue
+                  if (!(card.canvasOrg ?? []).some(entry => entry.team === split.team && entry.team === card.team + '/canvas/' + entry.name)) continue
+                  found = { url, card }
+                  break
+                }
+                if (found === undefined) { send(200, { ok: false, error: `no linked peer's signed card is the owner of ${team} (key fingerprint ${split.owner}) and advertises it` }); return }
                 // The link judgement reads the cached card: cache the verified one first, as the canvas member proof does.
-                cardCache.set(peer, { at: Date.now(), card })
-                if (peerAdmissionLinkState(peer).link !== 'linked') { send(200, { ok: false, error: 'the team host must be a linked peer' }); return }
-                send(200, superagentHost.serveTeam({ url: new URL(peer).origin, key: card.publicKey }, members, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf))
+                cardCache.set(found.url, { at: Date.now(), card: found.card })
+                if (peerAdmissionLinkState(found.url).link !== 'linked') { send(200, { ok: false, error: 'the team host must be a linked peer' }); return }
+                send(200, superagentHost.serveTeam({ url: new URL(found.url).origin, key: found.card.publicKey!, canvas: team }, members, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf))
               })().catch(error => send(200, { ok: false, error: String(error) }))
             } else if (fields.action === 'stop' || fields.action === 'retry') {
               const ticketId = typeof fields.ticket_id === 'string' ? fields.ticket_id : ''
@@ -3162,7 +3177,7 @@ export function apply(ctx: Context, config: Config): void {
                 : superagentHost.engine.retryTicket(ticketId)
               superagentHost.pass()
               send(200, { ok: true, ticket })
-            } else send(200, { ok: false, error: 'action must be settings, request, serve-team, stop or retry' })
+            } else send(200, { ok: false, error: 'action must be settings, request, serve, stop or retry' })
           } catch (error) { send(200, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
         }, 64_000)
       }),

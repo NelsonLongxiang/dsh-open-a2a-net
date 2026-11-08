@@ -433,13 +433,13 @@ export class SuperagentHost {
     this.pass()
   }
   /** Owner control: serve a team host (its key pinned from a linked peer's signed card) with these local sessions. */
-  serveTeam(team: { url: string; key: string } | undefined, members: readonly string[], sessionValid: (id: string) => boolean, presetOf: (id: string) => string | undefined = () => undefined): { ok: boolean; error?: string } {
+  serveTeam(team: { url: string; key: string; canvas?: string } | undefined, members: readonly string[], sessionValid: (id: string) => boolean, presetOf: (id: string) => string | undefined = () => undefined): { ok: boolean; error?: string } {
     if (team === undefined) { const { serves: _gone, ...rest } = this.settingsValue; this.writeSettings(rest); return { ok: true } }
     const bad = members.find(m => !sessionValid(m) || m === this.settingsValue.router || this.settings.members.includes(m))
     if (bad !== undefined) return { ok: false, error: `${bad} must be a joined local session that is neither this team's router nor its member` }
     const wrongPreset = presetRefusal(undefined, members, presetOf)
     if (wrongPreset !== undefined) return { ok: false, error: wrongPreset }
-    this.writeSettings({ ...this.settingsValue, serves: { url: team.url, key: team.key, members: [...new Set(members)] } })
+    this.writeSettings({ ...this.settingsValue, serves: { url: team.url, key: team.key, members: [...new Set(members)], ...(team.canvas !== undefined ? { team: team.canvas } : {}) } })
     return { ok: true }
   }
 
