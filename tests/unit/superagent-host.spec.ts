@@ -11,7 +11,7 @@ import { Engine, MemoryRepositories, type Candidate, type EngineOptions, type Re
 import { JsonRepositories } from '../../src/superagent/host/store.ts'
 import { DEFAULT_SETTINGS, parseSettings, policyVersion, teamPolicy, teamScope, type TeamSettings } from '../../src/superagent/host/policy.ts'
 import { OTHER_TICKETS_SHOWN, candidateCard } from '../../src/superagent/host/index.ts'
-import { SAID_CAP, registerSuperagentTools } from '../../src/superagent/host/tools.ts'
+import { SAID_CAP, attentionText, registerSuperagentTools } from '../../src/superagent/host/tools.ts'
 
 /** Design v5: the team is a canvas team; tests give the host one canvas, `team`, with these sessions (router first). */
 const canvasOf = (local: readonly string[], remote: ReadonlyArray<{ ref: string; key: string; url: string }> = []) => (name: string) => name === 'team' ? { local, remote } : undefined
@@ -168,6 +168,10 @@ describe('router acceptance RJ2/RJ6: the model sees what a superagent tool retur
     expect(render('superagent_route', { ok: false, results: [{ ok: false, trigger_id: 'x', code: 'repo', error: 'no member works in a/b' }] })).toBe('superagent route refused: {"results":[{"ok":false,"trigger_id":"x","code":"repo","error":"no member works in a/b"}]}')
     expect(render('superagent_reply', { ok: false, code: 'notReady', error: 'the ticket has no usable result yet' })).toContain('"code":"notReady"')
     expect(render('a2a_ticket_report', { ok: true, ticket_id: 'T1', state: 'ready' })).toContain('"state":"ready"')
+  })
+  it('router acceptance RJ8: an attention reply carries the member\'s question verbatim, once', () => {
+    expect(attentionText('等你回答后成员继续。', '这次报告用中文还是英文写？')).toBe('这次报告用中文还是英文写？\n\n等你回答后成员继续。')
+    expect(attentionText('成员问：这次报告用中文还是英文写？请回复。', '这次报告用中文还是英文写？')).toBe('成员问：这次报告用中文还是英文写？请回复。')
   })
   it('a result longer than the cap is clipped and says so', () => {
     const text = render('superagent_read', { ok: true, tickets: 'x'.repeat(SAID_CAP * 2) })

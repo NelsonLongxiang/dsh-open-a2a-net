@@ -9,6 +9,7 @@
 - 修正：superagent 各工具此前只把「ok」交给模型，总工用 `superagent_read` 读到的工单与候选、`superagent_route` 的工单号和被拒项都看不见。现在模型看到调用返回的内容（JSON，超过 12,000 字符截断并注明）。
 - 候选卡片列出团队在其他会话线上的在办工单（最多 20 张，新的在前）；与在办工单重复的请求要并入（`attach`），不再接成第二张。
 - 候选卡片写明：人只提问、不要求干活时，用 `superagent_reply`（`answer`）回答后仍要用 `superagent_route` 判为 `ignore`；每个候选都以一条 route 结束，否则到期后回来重判。
+- 总工转问（`superagent_reply` 的 `attention`）：发给人的只有正文；正文里没有成员问题原文时，宿主把原题放在正文前面，人在自己的会话线上就能看到要回答什么（验收 RJ8）。
 
 ### next/0.8：superagent 接入面（CLI）
 - `a2a-net inbox --after <cursor>`：调用方自持游标的可重放读取，报告被上限挤出的条数（#379）。

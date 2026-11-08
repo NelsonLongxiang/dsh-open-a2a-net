@@ -77,6 +77,17 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
   } catch (error) { return { trigger_id: triggerId, ...failure(error) } }
 }
 
+/**
+ * The text an attention reply sends: the router's words, led by the member's question verbatim when they do not already
+ * contain it — the engine checks the question against the ticket's open one, but only the text reaches the person.
+ * @param text - what the router wrote.
+ * @param question - the ticket's open question, copied exactly.
+ * @returns the text to send.
+ */
+export function attentionText(text: string, question: string): string {
+  return text.includes(question) ? text : `${question}\n\n${text}`
+}
+
 /** The most a superagent tool result shows the model, in characters of its JSON. */
 export const SAID_CAP = 12_000
 
@@ -145,7 +156,7 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
 
   ctx.tools.register(defineTool({
     name: 'superagent_reply',
-    description: 'Team router only: send a short message to the conversation a rule allows — purpose answer (a person\'s question, trigger_id), result (a ticket\'s usable result, ticket_id) or attention (a ticket\'s stored question for a person, ticket_id, question copied exactly). Progress stays internal.',
+    description: 'Team router only: send a short message to the conversation a rule allows — purpose answer (a person\'s question, trigger_id), result (a ticket\'s usable result, ticket_id) or attention (a ticket\'s stored question for a person, ticket_id, question copied exactly — the host puts it in front of your text when the text does not already carry it). Progress stays internal.',
     parameters: {
       purpose: { type: 'string', required: true, description: 'answer | result | attention' },
       text: { type: 'string', required: true, description: 'The message, in the request\'s language.' },
@@ -161,7 +172,10 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
       if (!['answer', 'result', 'attention'].includes(args.purpose)) return { ok: false, code: 'purpose', error: 'purpose must be answer, result or attention' }
       const text = str(args.text)
       if (text === undefined) return { ok: false, code: 'missing', error: 'text is required' }
-      const request = { purpose: args.purpose as 'answer' | 'result' | 'attention', text, ...(str(args.ticket_id) !== undefined ? { ticketId: str(args.ticket_id)! } : {}), ...(str(args.trigger_id) !== undefined ? { triggerId: str(args.trigger_id)! } : {}), ...(str(args.question) !== undefined ? { question: str(args.question)! } : {}) } as ReplyRequest
+      // An attention reply is the person's only sight of the member's question: carry it verbatim (router acceptance RJ8).
+      const question = str(args.question)
+      const sent = args.purpose === 'attention' && question !== undefined ? attentionText(text, question) : text
+      const request = { purpose: args.purpose as 'answer' | 'result' | 'attention', text: sent, ...(str(args.ticket_id) !== undefined ? { ticketId: str(args.ticket_id)! } : {}), ...(str(args.trigger_id) !== undefined ? { triggerId: str(args.trigger_id)! } : {}), ...(str(args.question) !== undefined ? { question: str(args.question)! } : {}) } as ReplyRequest
       try { const reply = h.engine.reply(request); return { ok: true, reply: json(reply) } } catch (error) { return failure(error) }
     },
   }))

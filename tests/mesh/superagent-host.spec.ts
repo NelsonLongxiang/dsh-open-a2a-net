@@ -456,6 +456,28 @@ describe('superagent engine in the a2a host', () => {
     } finally { await m.dispose() }
   }, 30_000)
 
+  it('router acceptance RJ8: the router relays a member\'s question and the person\'s thread shows it verbatim', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-attention-'))
+    const m = await mount(home)
+    try {
+      expect(await m.team(R_ID, [M_ID])).toMatchObject({ ok: true })
+      const ask = await m.sa({ action: 'request', text: '先问我报告用什么语言，再写一句话' })
+      await vi.waitFor(() => { expect(m.R.steered.some(t => t.includes(ask.triggerId))).toBe(true) }, { timeout: 8000 })
+      const routed = await m.tool('superagent_route', m.R, { items: [{ trigger_id: ask.triggerId, kind: 'accept', title: '一句话', scope: '先问语言', reason: '属主', acknowledgement: '收到' }] })
+      const ticketId = routed.results[0].ticket_id as string
+      await vi.waitFor(() => { expect(m.M.steered.some(t => t.includes('[superagent assignment]'))).toBe(true) }, { timeout: 8000 })
+      const question = '这次报告用中文还是英文写？'
+      expect(await m.tool('a2a_ticket_report', m.M, { state: 'waiting', summary: '开工前先问语言', question })).toMatchObject({ ok: true })
+      await vi.waitFor(async () => { expect((await m.state()).tickets.find((t: any) => t.id === ticketId).attention).toMatchObject({ question }) }, { timeout: 8000 })
+      // The router's text leaves the question out (as the live router did); the host puts it in front.
+      expect(await m.tool('superagent_reply', m.R, { purpose: 'attention', ticket_id: ticketId, question, text: '成员开工前先问你一个问题，等你回答。' })).toMatchObject({ ok: true })
+      const replies = (await m.state()).threads.find((t: any) => t.ref.id === ask.thread).replies.map((r: any) => r.message.text as string)
+      expect(replies).toContain(`${question}\n\n成员开工前先问你一个问题，等你回答。`)
+      // A wrong question is still refused by the engine (only the ticket's open question is relayed).
+      expect(await m.tool('superagent_reply', m.R, { purpose: 'attention', ticket_id: ticketId, question: '别的问题？', text: 'x' })).toMatchObject({ ok: false })
+    } finally { await m.dispose() }
+  }, 30_000)
+
   it('PR-F: a member takes up a person\'s message by its trigger id; what it read before reporting stays with the ticket, an unread one goes to the router at the end', async () => {
     const home = mkdtempSync(join(tmpdir(), 'sa-takeup-'))
     const m = await mount(home)
