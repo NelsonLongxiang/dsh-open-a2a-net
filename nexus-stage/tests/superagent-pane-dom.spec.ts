@@ -235,3 +235,15 @@ describe('the poll leaves the view alone unless it changed (0.8.0 live test: a �
     expect(button(pane.root, '停止')).not.toBe(stop)
   })
 })
+
+describe('ops loop: the team view shows each member\'s repository', () => {
+  it('lists the repository on the member card when the settings name one', () => {
+    const { pane } = mount()
+    const s = state()
+    pane.update({ ...s, settings: { ...s.settings, repos: { [M]: 'NelsonLongxiang/agent-atelier' } } }, sessions, NOW)
+    pane.select('team')
+    expect(text(pane.root)).toContain('仓库NelsonLongxiang/agent-atelier')
+    pane.update(s, sessions, NOW + 1_000)
+    expect(text(pane.root)).not.toContain('仓库')
+  })
+})

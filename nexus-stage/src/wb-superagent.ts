@@ -42,6 +42,8 @@ export interface SaSettings {
   readonly router?: string; readonly members: readonly string[]; readonly acceptMode: string; readonly paused: boolean
   readonly sources: { workbench: boolean; a2a: boolean }
   readonly remoteMembers: ReadonlyArray<{ ref: string; key: string; url: string }>
+  /** The repository each member works in (owner/name), by member; absent on hosts before it. */
+  readonly repos?: Readonly<Record<string, string>>
   readonly serves?: { url: string; key: string; members: readonly string[] }
 }
 export interface SaState {
@@ -343,8 +345,9 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       const t = state.tickets.find(x => x.id === b.ticketId)
       return `在做「${t?.title ?? b.ticketId}」 · ${ago(b.at, now)}`
     }
-    const members = s.members.map(m => { const c = el('div', 'wb-led-card'); kv(c, '成员', sessionName(m)); kv(c, '槽位', slot(m)); return c })
-    const remote = s.remoteMembers.map(r => { const c = el('div', 'wb-led-card'); kv(c, '远端成员', r.ref); kv(c, '主机', r.url); kv(c, '钉住公钥', fingerprint(r.key)); kv(c, '槽位', slot(r.ref)); return c })
+    const repo = (member: string, card: HTMLElement): void => { const r = s.repos?.[member]; if (r !== undefined) kv(card, '仓库', r) }
+    const members = s.members.map(m => { const c = el('div', 'wb-led-card'); kv(c, '成员', sessionName(m)); repo(m, c); kv(c, '槽位', slot(m)); return c })
+    const remote = s.remoteMembers.map(r => { const c = el('div', 'wb-led-card'); kv(c, '远端成员', r.ref); repo(r.ref, c); kv(c, '主机', r.url); kv(c, '钉住公钥', fingerprint(r.key)); kv(c, '槽位', slot(r.ref)); return c })
     body.appendChild(group('成员池', '', [...members, ...remote], '没有成员'))
     const queued = state.tickets.filter(t => t.ended === undefined && t.stage?.stage === 'working' && t.stage.action === 'queued')
     if (queued.length > 0) body.appendChild(group('排队', 'is-warn', queued.map(t => el('div', 'wb-led-card', `${t.title} · ${ago(t.createdAt, now)}`))))

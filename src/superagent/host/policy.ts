@@ -46,6 +46,11 @@ export interface TeamSettings {
    * Only that key may assign them work. Written only by the `serve-team` control action.
    */
   readonly serves?: { readonly url: string; readonly key: string; readonly members: readonly string[] }
+  /**
+   * The repository each member works in (`owner/name`), by member (a local session id or a remote member's ref). A ticket
+   * the router accepts for a repository goes only to that repository's members; a ticket without one, to any member.
+   */
+  readonly repos: Readonly<Record<string, string>>
   /** Who may originate work, per Source, in that Source's own identities (upstream: identities are never mapped across Sources). */
   readonly allowed: { readonly workbench: readonly string[]; readonly a2a: readonly string[] }
   /** Agents whose messages may become inferred candidates, per Source (only the A2A Source has bots). */
@@ -62,12 +67,16 @@ export interface TeamSettings {
   readonly paused: boolean
 }
 
+/** A repository as GitHub names it: `owner/name`. */
+export const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\/[A-Za-z0-9_.][A-Za-z0-9_.-]{0,99}$/
+
 /** The workbench actor id: the owner, the only person the workbench control route serves. */
 export const WORKBENCH_OWNER = 'owner'
 
 export const DEFAULT_SETTINGS: TeamSettings = {
   members: [],
   remoteMembers: [],
+  repos: {},
   allowed: { workbench: [WORKBENCH_OWNER], a2a: [] },
   bots: { a2a: [] },
   acceptMode: 'observe',
@@ -131,7 +140,19 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   if (typeof members === 'string') return { ok: false, error: members }
   if (members.length > 32) return { ok: false, error: 'at most 32 members' }
   if (router !== undefined && members.includes(router)) return { ok: false, error: 'the router is not a member: it routes, members work' }
-  return { ok: true, settings: { ...(router !== undefined ? { router } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), allowed: { workbench, a2a }, bots: { a2a: bots }, acceptMode, rules, sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
+  // A member's repository: named explicitly here, or kept from the current settings while it is still a member.
+  const memberIds = new Set([...members, ...current.remoteMembers.map(m => m.ref)])
+  let repos: Record<string, string>
+  if ('repos' in r) {
+    if (r.repos === null || typeof r.repos !== 'object' || Array.isArray(r.repos)) return { ok: false, error: 'repos maps a member to its repository (owner/name)' }
+    repos = {}
+    for (const [member, repo] of Object.entries(r.repos as Record<string, unknown>)) {
+      if (!memberIds.has(member)) return { ok: false, error: `repos: ${member} is not a member` }
+      if (typeof repo !== 'string' || !REPO_RE.test(repo)) return { ok: false, error: `repos: ${member} needs a repository as owner/name` }
+      repos[member] = repo
+    }
+  } else repos = Object.fromEntries(Object.entries(current.repos ?? {}).filter(([member]) => memberIds.has(member)))
+  return { ok: true, settings: { ...(router !== undefined ? { router } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a }, bots: { a2a: bots }, acceptMode, rules, sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/
@@ -146,11 +167,12 @@ export function parseRemoteMember(raw: unknown): RemoteMember | undefined {
 /** Settings as stored: the owner fields plus the pinned peers only the host's own actions write. */
 export function parseStoredSettings(raw: unknown): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'settings must be an object' }
-  const { remoteMembers, serves, ...rest } = raw as Record<string, unknown>
-  const parsed = parseSettings(rest, DEFAULT_SETTINGS)
-  if (!parsed.ok) return parsed
+  const { remoteMembers, serves, repos, ...rest } = raw as Record<string, unknown>
   const remote = Array.isArray(remoteMembers) ? remoteMembers.map(parseRemoteMember) : []
   if (remote.some(r => r === undefined)) return { ok: false, error: 'a stored remote member is malformed' }
+  // Repositories are checked against the members, remote ones included: parse them with the stored remote members known.
+  const parsed = parseSettings(repos === undefined ? rest : { ...rest, repos }, { ...DEFAULT_SETTINGS, remoteMembers: remote as RemoteMember[] })
+  if (!parsed.ok) return parsed
   let served: TeamSettings['serves']
   if (serves !== undefined) {
     const sv = (serves ?? {}) as Record<string, unknown>
