@@ -320,7 +320,8 @@ Files do not go through session messages: use the file channel below, never JPFI
   answer is read-only, goes through the host's own control face, and is the
   identity's own question.
 - `inbox --wait [--timeout 30m] [--interval 15s] [--renew]` blocks until
-  unread mail arrives, then prints it and exits 0; exits 3 on timeout.
+  unread mail arrives (the interval also comes from `$A2A_POLL_MS` when
+  `--interval` is not given), then prints it and exits 0; exits 3 on timeout.
   `--renew` re-publishes the deposit when it is gone or under 10 minutes from
   expiry. Run as a background task, its exit is the wake signal.
 - `inbox --hook` serves a Claude Code hook (PostToolUse / UserPromptSubmit):
