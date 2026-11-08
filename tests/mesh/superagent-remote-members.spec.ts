@@ -45,8 +45,15 @@ describe('superagent members on other hosts', () => {
         expect(pinned).toHaveLength(1)
         expect(pinned[0]).toMatchObject({ url: url(pB) })
         // B and E both serve A's team (each pins A's key); only B is A's member.
-        const served = await sa(B, { action: 'serve-team', peer: url(pA), members: [B_ID] }); expect(served, JSON.stringify(served)).toMatchObject({ ok: true })
-        expect(await sa(E, { action: 'serve-team', peer: url(pA), members: [E_ID] })).toMatchObject({ ok: true })
+        // Design v5 (D4): B and E serve A's team by its canvas id, whose fingerprint names A's key.
+        const teamId = ((await (await globalThis.fetch(`${A.baseUrl}/__dsh_a2a/state`)).json()) as any).canvas.teams.find((t: any) => t.name === 'team').id as string
+        expect(teamId).toMatch(new RegExp(`^${zA}/canvas/team@[0-9a-f]{8}$`))
+        expect(await sa(B, { action: 'serve-team', peer: url(pA), members: [B_ID] })).toMatchObject({ ok: false, error: expect.stringContaining("action: 'serve'") })
+        expect(await sa(B, { action: 'serve', team: `${zA}/canvas/team`, members: [B_ID] })).toMatchObject({ ok: false, error: expect.stringContaining('<fp8>') })
+        expect(await sa(B, { action: 'serve', team: `${zA}/canvas/team@00000000`, members: [B_ID] })).toMatchObject({ ok: false, error: expect.stringContaining('no linked peer') })
+        const served = await sa(B, { action: 'serve', team: teamId, members: [B_ID] }); expect(served, JSON.stringify(served)).toMatchObject({ ok: true })
+        expect((await state(B)).serves).toMatchObject({ team: teamId, url: url(pA) })
+        expect(await sa(E, { action: 'serve', team: teamId, members: [E_ID] })).toMatchObject({ ok: true })
 
         // A request on A becomes a ticket; the executor assigns it to B's session across hosts.
         const asked = await sa(A, { action: 'request', text: '跨主机：给节点列表加搜索框' })

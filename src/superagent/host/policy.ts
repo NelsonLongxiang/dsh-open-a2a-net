@@ -53,7 +53,7 @@ export interface TeamSettings {
    * This host serving another team host: that host's base URL and pinned key, and the local sessions that work for it.
    * Only that key may assign them work. Written only by the `serve-team` control action.
    */
-  readonly serves?: { readonly url: string; readonly key: string; readonly members: readonly string[] }
+  readonly serves?: { readonly url: string; readonly key: string; readonly members: readonly string[]; /** Design v5: the team's canvas id, `<zone>/canvas/<name>@<fp8>`. */ readonly team?: string }
   /**
    * The repository each member works in (`owner/name`), by member (a local session id or a remote member's ref). A ticket
    * the router accepts for a repository goes only to that repository's members; a ticket without one, to any member.
@@ -197,7 +197,7 @@ export function parseStoredSettings(raw: unknown): { ok: true; settings: TeamSet
   if (serves !== undefined) {
     const sv = (serves ?? {}) as Record<string, unknown>
     if (!validUrl(sv.url) || !validKey(sv.key) || !Array.isArray(sv.members) || sv.members.some(m => typeof m !== 'string' || m === '')) return { ok: false, error: 'the stored served team is malformed' }
-    served = { url: sv.url, key: sv.key, members: sv.members as string[] }
+    served = { url: sv.url, key: sv.key, members: sv.members as string[], ...(typeof sv.team === 'string' && /^[^/\s]+\/canvas\/[^/\s]+@[0-9a-f]{8}$/.test(sv.team) ? { team: sv.team } : {}) }
   }
   return { ok: true, settings: { ...parsed.settings, members: [], remoteMembers: [], ...(served !== undefined ? { serves: served } : {}) } }
 }
