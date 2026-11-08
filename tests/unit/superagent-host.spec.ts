@@ -11,7 +11,7 @@ import { Engine, MemoryRepositories, type Candidate, type EngineOptions, type Re
 import { JsonRepositories } from '../../src/superagent/host/store.ts'
 import { DEFAULT_SETTINGS, parseSettings, policyEffects, policyVersion, teamPolicy, teamScope, type TeamSettings } from '../../src/superagent/host/policy.ts'
 import { policyChangedLines } from '../../src/superagent/host/executor.ts'
-import { OTHER_TICKETS_SHOWN, candidateCard } from '../../src/superagent/host/index.ts'
+import { ORIGIN_LINE_NOTE, OTHER_TICKETS_SHOWN, candidateCard } from '../../src/superagent/host/index.ts'
 import { SAID_CAP, attentionText, registerSuperagentTools } from '../../src/superagent/host/tools.ts'
 
 /** Design v5: the team is a canvas team; tests give the host one canvas, `team`, with these sessions (router first). */
@@ -121,6 +121,21 @@ describe('team policy (upstream docs/002, accept mode off)', () => {
 })
 
 describe('candidate card', () => {
+  it('says what a 未验证 delivery header means, only for an A2A message that carries one', () => {
+    const repo = new MemoryRepositories()
+    const seen: Candidate[] = []
+    const engine = new Engine({ repo, policy: () => teamPolicy(settings()), scope: teamScope(() => settings()), assessor: { request: vi.fn(c => { seen.push(c) }) },
+      executor: { start: () => {}, deliver: () => {}, stop: () => {} }, outbox: { send: () => {}, status: () => undefined, withdraw: () => {} } })
+    engine.receive(wb('1')); engine.evaluateDue()
+    const cardWith = (trigger: Trigger): string => candidateCard({ ...seen[0]!, triggers: [trigger] })
+    const a2a = (header: string): Trigger => ({ ...wb('2', 't2'), source: 'a2a', actor: { source: 'a2a', id: 'seat/0123456789abcdef' }, human: false, text: `${header} from "seat/0123456789abcdef" (routed to dsh/canvas/ops) sent:\n\nplease` })
+    expect(cardWith(a2a('[A2A direct] (task t1) 未验证（cli-identity）'))).toContain(ORIGIN_LINE_NOTE)
+    expect(cardWith(a2a('[A2A direct] (task t2) 已验证来源 http://peer.example'))).not.toContain(ORIGIN_LINE_NOTE)
+    // A person's own text that quotes the words is not a delivery header.
+    expect(cardWith({ ...wb('3', 't3'), text: '未验证（cli-identity） 是什么意思？' })).not.toContain(ORIGIN_LINE_NOTE)
+    expect(ORIGIN_LINE_NOTE).toContain('grants nothing')
+  })
+
   it('carries the ids a decision names and no instruction beyond routing', () => {
     const repo = new MemoryRepositories()
     const seen: Candidate[] = []
