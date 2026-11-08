@@ -59,6 +59,7 @@ export class MemberExecutor implements Executor {
   private launchAgain = false
   /** One delivery at a time per Assignment: the retry never sends what a delivery in flight is sending. */
   private readonly delivering = new Set<string>()
+  private readonly deliverAgain = new Set<string>()
   private lastRetry = 0
   /** When each member's session last took a message into its history (memberRead), for a claim that beats the delivery record. */
   private readonly claimedAt = new Map<string, number>()
@@ -174,11 +175,16 @@ export class MemberExecutor implements Executor {
 
   deliver(ticket: Ticket, assignment: Assignment): void {
     queueMicrotask(() => { void (async () => {
-      if (this.d.paused?.() === true || this.delivering.has(assignment.id)) return
+      if (this.d.paused?.() === true) return
+      // An Input that arrives during a delivery goes out right after it.
+      if (this.delivering.has(assignment.id)) { this.deliverAgain.add(assignment.id); return }
       const binding = this.bindings.find(b => b.assignmentId === assignment.id)
       if (binding === undefined) return
       this.delivering.add(assignment.id)
-      try { await this.deliverNow(ticket, assignment, binding) } finally { this.delivering.delete(assignment.id) }
+      try { await this.deliverNow(ticket, assignment, binding) } finally {
+        this.delivering.delete(assignment.id)
+        if (this.deliverAgain.delete(assignment.id)) this.deliver(ticket, assignment)
+      }
     })() })
   }
 

@@ -560,6 +560,35 @@ describe('ops loop: members work in repositories; a ticket accepted for one runs
     } finally { await h.stop() }
   })
 
+  it('an Input that arrives during a delivery goes out right after it', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const home = mkdtempSync(join(tmpdir(), 'sa-again-'))
+    const sent: string[] = []
+    let release: ((ok: boolean) => void) | undefined
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-a']), home, logger: { info: () => {}, warn: () => {} }, interval: () => () => {},
+      deliverToSession: ((id: string, text: string) => {
+        if (id !== 'session-a') return true
+        sent.push(text)
+        return text.startsWith('[superagent input]') && release === undefined ? new Promise<boolean>(resolve => { release = resolve }) : true
+      }) as never })
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
+    h.start()
+    try {
+      const first = h.request('一张') as { triggerId: string; thread: string }
+      h.pass()
+      expect(routeItem(h, { trigger_id: first.triggerId, kind: 'accept', title: '一', scope: 's', reason: 'r' })).toMatchObject({ ok: true })
+      await vi.waitFor(() => { expect(sent.some(t => t.startsWith('[superagent assignment]'))).toBe(true) })
+      const one = h.request('补充甲', first.thread) as { triggerId: string }
+      await vi.waitFor(() => { expect(release).toBeDefined() })
+      const two = h.request('补充乙', first.thread) as { triggerId: string }
+      await new Promise(resolve => setTimeout(resolve, 20))
+      release!(true)
+      await vi.waitFor(() => { expect(sent.some(t => t.startsWith('[superagent input]') && t.includes(two.triggerId))).toBe(true) })
+      expect(sent.filter(t => t.includes(one.triggerId))).toHaveLength(1)
+    } finally { await h.stop() }
+  })
+
   it('a failed assignment goes out again on the periodic retry', async () => {
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
     const { routeItem } = await import('../../src/superagent/host/tools.ts')
