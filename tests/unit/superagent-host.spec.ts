@@ -765,6 +765,7 @@ describe('ops loop: members work in repositories; a ticket accepted for one runs
       expect(routeItem(h, { trigger_id: first.triggerId, kind: 'accept', title: 'net 1', scope: 's', reason: 'r', repo: 'o/net' })).toMatchObject({ ok: true, repo: 'o/net' })
       await vi.waitFor(() => { expect(assigned('session-a')).toHaveLength(1) })
       expect(assigned('session-a')[0]).toContain('repository: o/net (yours)')
+      expect(assigned('session-a')[0]).toContain('reasonable defaults for routine steps')
       // A ticket's worktree stays inside the member's sandbox, kept out of the checkout's status (a path beside it is refused).
       expect(assigned('session-a')[0]).toContain('.worktrees/')
       expect(assigned('session-a')[0]).toContain('.git/info/exclude')
