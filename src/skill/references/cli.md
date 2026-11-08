@@ -355,7 +355,8 @@ A message from a CLI identity (`route` to the team's A2A address) is an agent's 
 ## Local commands
 
 - `a2a-net skills [name] [--root DIR] [--json]` lists the skills under the
-  local skill directory (default `~/.agents/skills`), or prints one by name.
+  local skill directory (default `~/.agents/skills`), or prints one by name (a
+  name miss falls back to a path-substring match).
   It has no model-tool counterpart.
 - `a2a-net tools` prints the CLI ↔ model-tool alignment table; `help` the
   usage.
