@@ -25,13 +25,16 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 
 Restart `dsh web`, then open the sidebar network panel (footer action).
 
-(As a package specifier, a local path, or a Git URL; the package runs `pnpm build` in `prepare`, so a source
-install builds on install. Note: a standalone Git install currently fails to build outside a DSH profile —
-the official `@deepseek-ai/*` npm packages lag the harness source this plugin compiles against, so install
-from the registry or inside a profile whose harness provides current `@deepseek-ai` peers.) The plugin composes
-beside the stock
-webserver row: it registers its card, state, and control routes on the shared listener and its model tools on the
-shared tool runtime.
+(As a package name, a local path, or a Git URL; the argument is handed to pnpm unchanged. The package's `prepare`
+script is `pnpm build`, but only a Git URL install triggers it, and pnpm 11 blocks a Git package's build script:
+`dsh plugin` reports an error that prints the exact key — add it under `allowBuilds` in the profile's
+`pnpm-workspace.yaml` and run it again. A package installed from the registry already ships its build output and
+does not build; a local-path install does not build either, so run `pnpm build` in that directory first. Building
+needs pnpm >=11.24 and <12 (`engines` in `package.json`). A standalone Git install outside a DSH profile can now
+build (the `@deepseek-ai/*` peers come from npm; verified on 0.7.0), so it no longer has to be limited to a registry
+or profile install.) The plugin composes beside the stock webserver row: it registers the state and control routes
+(`/__dsh_a2a/*`, while `sessionNodes` is on — the default) on the shared listener and its model tools on the shared
+tool runtime; the card route `/.well-known/agent-card.json` is registered only when `announce: true` (off by default).
 
 ## What you get
 
