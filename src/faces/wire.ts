@@ -118,6 +118,8 @@ export interface WireDeps {
   readonly remoteCliProof: (handle: string, claim: Extract<OriginClaimResult, { ok: true }>) => Promise<RemoteCliProof | undefined>
   /** #282 S3: the basis for a receipt to a local CLI from a member frozen on this host's own forward, else undefined. */
   readonly forwardReceiptBasis: (taskId: string, caller: string, cliHandle: string, claim: Extract<OriginClaimResult, { ok: true }>) => string | undefined
+  /** Design v5 (v5-B2): the basis on which a superagent team's host-face receipt to one of this host's own requests lands. */
+  readonly teamReceiptBasis?: (taskId: string, caller: string, target: string, onBehalfOf: string | undefined, claim: Extract<OriginClaimResult, { ok: true }>) => string | undefined
   readonly receiptReplayAllowed:(message:string,caller:string,team:string,claim:Extract<OriginClaimResult,{ok:true}>)=>boolean
   readonly callerLinkedToThisHost: (caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined) => boolean
   /** This host's own card URL (read when a request lands; set once the web server settles). */
@@ -721,6 +723,13 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const receiptClaim = earlyClaim
             if (receiptClaim.ok && receiptClaim.bodyBound === true) await waitForForwardBirth(message)
             const basis = receiptClaim.ok ? d.forwardReceiptBasis(echoed.taskId, caller, team, receiptClaim) : undefined
+            if (basis !== undefined) admission = { ok: true, via: 'peer-org', rule: 'peer-org', basis: [basis] }
+          }
+          // Design v5 (v5-B2): a superagent team answers this host's own request from its process face, on its canvas's
+          // behalf — admitted for that request's receipt alone (teamReceiptBasis), whatever the target session's links.
+          const teamAnswer = !admission.ok && echoed === null && earlyClaim.ok ? parseReceipt(message) : null
+          if (teamAnswer !== null && earlyClaim.ok) {
+            const basis = d.teamReceiptBasis?.(teamAnswer.taskId, caller, team, teamAnswer.envelope?.onBehalfOf, earlyClaim)
             if (basis !== undefined) admission = { ok: true, via: 'peer-org', rule: 'peer-org', basis: [basis] }
           }
           const callerRefusal = refusalOf(admission)
