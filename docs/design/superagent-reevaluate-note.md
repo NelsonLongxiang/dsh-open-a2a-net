@@ -1,6 +1,6 @@
 # superagent: re-evaluate a message, and the router's note to a ticket
 
-Status: proposed on next/0.8 (owner 2026-11-08: "是的，那么开始吧" after the router acceptance). It exposes two operations of
+Status: implemented on next/0.8 (#466), both operations exercised on a real team; requested by the owner (owner 2026-11-08: "是的，那么开始吧" after the router acceptance). It exposes two operations of
 the vendored upstream engine that a2a had no entry for. The engine itself is unchanged.
 
 ## Context
