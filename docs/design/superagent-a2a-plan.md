@@ -1,5 +1,7 @@
 # superagent × a2a-net 实施计划（草案）
 
+> 状态说明（2026-11-08）：本表停在 r8，只反映当时的路线。之后设计 v4、v5 取代了 p2b 和 p3 的形态：`p3-source-explicit` 已交付（#402），`p2b-shadow-run` 作废（影子实例已停）；`p4-review-request` 仍未做。节点现状以 ygl-trees 科技树为准。
+
 配套：[接入规格](superagent-a2a-spec.md)、[ADR](superagent-a2a-adr.md)、[断言与证据](superagent-a2a-evidence.md)。
 
 本版（r8）按 2026-11-07 的属主裁定修订，涉及 S21、S25–S27、S33、S36、S38：
