@@ -65,7 +65,17 @@ async function mount(home: string, extra: Partial<Config> = {}) {
   const state = async (): Promise<Record<string, any>> => await (await globalThis.fetch(`http://127.0.0.1:${port}/__dsh_a2a/superagent`)).json() as Record<string, any>
   const tool = async (name: string, from: Agent, args: Record<string, unknown>): Promise<Record<string, any>> => await ctx.tools.get(name)!.execute(args, execAs(from)) as Record<string, any>
   for (const a of [R!, M!, O!, X!]) await post('/__dsh_a2a/join', { id: String(a.id) })
-  return { ctx, port, agents, R: R!, M: M!, O: O!, X: X!, post, sa, state, tool, dispose: async () => { await ctx.fiber.dispose() } }
+  // Design v5: the team is the canvas team `team`. Take off the canvas whoever is no longer in it, add the router and the
+  // members, then bind it — as the owner does in the planning view and the 团队 tab.
+  const team = async (router: string | null, members: string[] = [], extra: Record<string, unknown> = {}): Promise<Record<string, any>> => {
+    const want = [...(router !== null ? [router] : []), ...members]
+    const a2aState = await (await globalThis.fetch(`http://127.0.0.1:${port}/__dsh_a2a/state`)).json() as any
+    const now: string[] = a2aState.canvas?.teams?.find((t: any) => t.name === 'team')?.members?.map((x: any) => x.id) ?? []
+    for (const id of now) if (!want.includes(id)) await post('/__dsh_a2a/canvas', { action: 'remove-member', name: 'team', id })
+    for (const id of want) if (!now.includes(id)) expect(await post('/__dsh_a2a/canvas', { action: 'add-member', name: 'team', id })).toMatchObject({ ok: true })
+    return await sa({ action: 'settings', settings: { canvas: 'team', router, ...extra } })
+  }
+  return { ctx, port, agents, R: R!, M: M!, O: O!, X: X!, post, sa, state, tool, team, dispose: async () => { await ctx.fiber.dispose() } }
 }
 const triggerIn = (card: string): string => /^trigger (\S+) /m.exec(card)![1]!
 
@@ -77,9 +87,10 @@ describe('superagent engine in the a2a host', () => {
     const home = mkdtempSync(join(tmpdir(), 'sa-host-mesh-'))
     let m = await mount(home)
     try {
-      // Owner control: only a joined local session can be the router.
+      // Owner control: the team is a canvas team; its router is one of its local sessions.
       expect(await m.sa({ action: 'settings', settings: { router: 'session-ffffffff00000000' } })).toMatchObject({ ok: false })
-      expect(await m.sa({ action: 'settings', settings: { router: R_ID } })).toMatchObject({ ok: true, settings: { router: R_ID } })
+      expect(await m.sa({ action: 'settings', settings: { canvas: 'team', router: R_ID } })).toMatchObject({ ok: false, error: expect.stringContaining('no canvas team team') })
+      expect(await m.team(R_ID)).toMatchObject({ ok: true, settings: { canvas: 'team', router: R_ID } })
 
       // 1) The owner's request reaches the router as a candidate card, in its own session (no A2A involved).
       const asked = await m.sa({ action: 'request', text: '给 nexus 的节点列表加一个搜索框' })
@@ -125,9 +136,10 @@ describe('superagent engine in the a2a host', () => {
       expect(await m.tool('superagent_route', m.R, { items: [{ trigger_id: chat.triggerId, kind: 'ignore', reason: '闲聊，不是工作请求' }] })).toMatchObject({ ok: true, results: [{ decision: 'ignore' }] })
       expect((await m.state()).tickets).toHaveLength(1)
 
-      // 6) The router takes no A2A work and sends none — by handle, by session id, or through a canvas it sits in.
-      for (const id of [R_ID, O_ID]) await m.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'mixed', id })
-      for (const team of ['dsh/a0000000', 'dsh/canvas/mixed']) {
+      // 6) The router takes no A2A work and sends none — by handle or session id — and sits in no other canvas (v5 R3), so no
+      // canvas route can reach it either.
+      expect(await m.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'mixed', id: R_ID })).toMatchObject({ ok: false, error: expect.stringContaining('[superagent-team-canvas]') })
+      for (const team of ['dsh/a0000000']) {
         const out = await m.tool('a2a_route', m.O, { team, message: '直接找总工派活', async: true })
         expect(out.ok, `${team}: ${JSON.stringify(out)}`).toBe(false)
         expect(String(out.error)).toContain('superagent-router-inbound')
@@ -152,9 +164,10 @@ describe('superagent engine in the a2a host', () => {
       expect(s.tickets).toHaveLength(1)
       expect(s.tickets[0]).toMatchObject({ title: '节点列表搜索框' })
       expect(s.threads.flatMap((t: any) => t.decisions.map((d: any) => d.kind)).sort()).toEqual(['accept', 'ignore'])
-      // Inverse of the isolation: once the owner clears the router, the same session is ordinary again.
-      expect(await m.sa({ action: 'settings', settings: { router: null } })).toMatchObject({ ok: true })
-      const out = await m.tool('a2a_route', m.R, { team: 'dsh/canvas/mixed', message: 'ordinary again', async: true })
+      // Inverse of the isolation: once the owner takes it off the team canvas and clears the router, it is ordinary again.
+      expect(await m.team(null, [])).toMatchObject({ ok: true })
+      expect(await m.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'mixed', id: R_ID })).toMatchObject({ ok: true })
+      const out = await m.tool('a2a_route', m.R, { team: 'dsh/c2222222', message: 'ordinary again', async: true })
       expect(String(out.error ?? '')).not.toContain('superagent-router')
     } finally { await m.dispose() }
   }, 60_000)
@@ -163,7 +176,7 @@ describe('superagent engine in the a2a host', () => {
     const home = mkdtempSync(join(tmpdir(), 'sa-host-cli-'))
     const m = await mount(home)
     try {
-      expect(await m.sa({ action: 'settings', settings: { router: R_ID } })).toMatchObject({ ok: true })
+      expect(await m.team(R_ID)).toMatchObject({ ok: true })
       // Async spawn: the host answers in this very process, so a synchronous child would deadlock it.
       const cli = (...args: string[]) => new Promise<{ status: number | null; stdout: string; stderr: string }>(resolve => {
         const child = spawn(process.execPath, [join(process.cwd(), 'cli/a2a.mjs'), ...args, '--home', `http://127.0.0.1:${m.port}`], { env: cliEnv(mkdtempSync(join(tmpdir(), 'sa-cli-home-'))) })
@@ -200,7 +213,7 @@ describe('superagent engine in the a2a host', () => {
     })
     try {
       const rules = [{ name: 'deps', text: 'Bump a pinned dependency when an agent reports it.' }]
-      expect(await m.sa({ action: 'settings', settings: { router: R_ID, sources: { a2a: true }, acceptMode: 'observe', rules } })).toMatchObject({ ok: true })
+      expect(await m.team(R_ID, [], { sources: { a2a: true }, acceptMode: 'observe', rules })).toMatchObject({ ok: true })
       // The host creates and deposits the team identity itself (reply mode publishes it as owing receipts).
       let address = ''
       await vi.waitFor(async () => { const s = await m.state(); address = s.a2a.address ?? ''; expect(address !== '' && s.a2a.health['a2a-deposit']?.state === 'ready').toBe(true) }, { timeout: 20_000 })
@@ -280,9 +293,10 @@ describe('superagent engine in the a2a host', () => {
     const home = mkdtempSync(join(tmpdir(), 'sa-exec-'))
     const m = await mount(home)
     try {
-      expect(await m.sa({ action: 'settings', settings: { router: R_ID, members: [R_ID] } })).toMatchObject({ ok: false })
-      expect(await m.sa({ action: 'settings', settings: { router: R_ID, members: [M_ID, 'session-ffffffff00000000'] } })).toMatchObject({ ok: false })
-      expect(await m.sa({ action: 'settings', settings: { router: R_ID, members: [M_ID, X_ID] } })).toMatchObject({ ok: true })
+      // A session that is not joined cannot sit on the canvas; members are named on the canvas, never in settings.
+      expect(await m.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'team', id: 'session-ffffffff00000000' })).toMatchObject({ ok: false })
+      expect(await m.sa({ action: 'settings', settings: { router: R_ID, members: [M_ID] } })).toMatchObject({ ok: false, error: expect.stringContaining('canvas') })
+      expect(await m.team(R_ID, [M_ID, X_ID])).toMatchObject({ ok: true, settings: { members: [M_ID, X_ID] } })
       const sessionsBefore = m.agents.roots().length
 
       // Three requests, three tickets, two members: two run, one waits.
@@ -369,7 +383,7 @@ describe('superagent engine in the a2a host', () => {
 
       // No role yet: nothing is refused for a role, nothing restricted.
       expect(await refusedByRole('a2a_teams', m.R)).toBe(false)
-      expect(await m.sa({ action: 'settings', settings: { router: R_ID, members: [M_ID] } })).toMatchObject({ ok: true })
+      expect(await m.team(R_ID, [M_ID])).toMatchObject({ ok: true })
 
       // The router: superagent_* only. Its visible tools are exactly those.
       expect(scopes.get(R_ID)!.allow).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status'])
@@ -394,7 +408,7 @@ describe('superagent engine in the a2a host', () => {
       expect(scopes.get(O_ID)!.allow).toBeUndefined()
 
       // The owner swaps the roles: restrictions follow the settings at once, the old ones are lifted.
-      expect(await m.sa({ action: 'settings', settings: { router: O_ID, members: [] } })).toMatchObject({ ok: true })
+      expect(await m.team(O_ID, [])).toMatchObject({ ok: true })
       expect(scopes.get(R_ID)).toMatchObject({ allow: undefined, lifted: 1 })
       expect(scopes.get(M_ID)).toMatchObject({ allow: undefined, lifted: 1 })
       expect(scopes.get(O_ID)!.allow).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status'])
@@ -410,7 +424,7 @@ describe('superagent engine in the a2a host', () => {
     const home = mkdtempSync(join(tmpdir(), 'sa-takeup-'))
     const m = await mount(home)
     try {
-      expect(await m.sa({ action: 'settings', settings: { router: R_ID, members: [M_ID] } })).toMatchObject({ ok: true })
+      expect(await m.team(R_ID, [M_ID])).toMatchObject({ ok: true })
       const ask = await m.sa({ action: 'request', text: '需求：加一个导出按钮' })
       await vi.waitFor(() => { expect(m.R.steered.some(t => t.includes(ask.triggerId))).toBe(true) }, { timeout: 8000 })
       const routed = await m.tool('superagent_route', m.R, { items: [{ trigger_id: ask.triggerId, kind: 'accept', title: '导出按钮', scope: '小改动', reason: '属主', acknowledgement: '收到' }] })
