@@ -18,6 +18,14 @@
 export type Role = 'router' | 'member'
 
 /** The router's tools: upstream orchestrator_route / _read / _reply / _ticket_request_status. */
+/**
+ * The agent presets a team's sessions run under (shipped in this package's bundle layer, cordis.patch.yml): the router's
+ * composition is read-only routing, a member's is the work tools; the persona carries the role. The host refuses a router
+ * or member on any other preset, so the role's boundary is the composition, not instructions in cards.
+ */
+export const ROUTER_PRESET = 'superagent-router'
+export const MEMBER_PRESET = 'superagent-member'
+
 export const ROUTER_TOOLS: readonly string[] = ['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status']
 
 /** Upstream `WORK_TOOLS` (src/app/sessions.ts) without the tools that start, list, message or interrupt other sessions. */

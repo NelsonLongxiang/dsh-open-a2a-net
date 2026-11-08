@@ -876,6 +876,16 @@ export function apply(ctx: Context, config: Config): void {
   // Live top-level agents: the join surface's candidates and the cold-row
   // complement (apply scope — the direct-route wake below reads it too).
   const liveRoots = new Map<string, Agent>()
+  /**
+   * The agent preset a live session runs (the preset registry's inspection of its exact revision); undefined when the
+   * session is not loaded or the host has no preset registry.
+   */
+  const sessionPresetOf = (id: string): string | undefined => {
+    const agent = liveRoots.get(id)
+    const presets = (ctx as unknown as { get(name: string): unknown }).get('agentPresets') as { inspectCompositions?(ctx: unknown): ReadonlyArray<{ id: string }> } | undefined
+    if (agent === undefined || presets?.inspectCompositions === undefined) return undefined
+    try { return presets.inspectCompositions(agent.ctx)[0]?.id } catch { return undefined }
+  }
   // Node identity N2+N3: a joined session that carries a node gets that node's layers on its own scope.
   const nodeBindings = new NodeBindings(join(home, 'a2a'))
   const nodeReviews = new NodeReviewQueue(join(home, 'a2a'))
@@ -3022,7 +3032,7 @@ export function apply(ctx: Context, config: Config): void {
           const fields = body as Record<string, unknown>
           try {
             if (fields.action === 'settings') {
-              send(200, superagentHost.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true))
+              send(200, superagentHost.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf))
             } else if (fields.action === 'request') {
               send(200, superagentHost.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined))
             } else if (fields.action === 'add-remote-member') {
@@ -3048,7 +3058,7 @@ export function apply(ctx: Context, config: Config): void {
                 // The link judgement reads the cached card: cache the verified one first, as the canvas member proof does.
                 cardCache.set(peer, { at: Date.now(), card })
                 if (peerAdmissionLinkState(peer).link !== 'linked') { send(200, { ok: false, error: 'the team host must be a linked peer' }); return }
-                send(200, superagentHost.serveTeam({ url: new URL(peer).origin, key: card.publicKey }, members, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true))
+                send(200, superagentHost.serveTeam({ url: new URL(peer).origin, key: card.publicKey }, members, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf))
               })().catch(error => send(200, { ok: false, error: String(error) }))
             } else if (fields.action === 'stop' || fields.action === 'retry') {
               const ticketId = typeof fields.ticket_id === 'string' ? fields.ticket_id : ''
