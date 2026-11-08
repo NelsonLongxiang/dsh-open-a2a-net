@@ -5,6 +5,9 @@
  * whose concurrency and workspaces are its own concern, so this one runs Assignments on the members the owner named:
  * - one worker slot per member: `start` binds a pending Assignment to a free member, or leaves it waiting (the ticket
  *   shows `working / queued`); `stop` frees the slot and the next waiting Assignment launches, oldest first;
+ * - a member that hands off (a result, a question, blocked, failed or waiting) parks its Assignment and takes the next
+ *   ticket, as upstream's slot holds only while a turn runs; an Input for a parked Assignment brings it back first;
+ * - a turn that ended without a report reports `waiting` with the member's last words, and a failed turn retries or fails;
  * - the assignment card and every Input reach the member's own session by host relay (never A2A);
  * - the member's turn ending is the executor's `turnEnded` fact, and the Inputs delivered before it count as read;
  * - the member reports with `a2a_ticket_report` (upstream orchestrator_report), only for the ticket bound to it.
@@ -17,7 +20,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
-import type { Assignment, Engine, Executor, PolicyEffect, Ticket, TicketInput } from '../upstream/dsh-superagent/src/core/index.ts'
+import { waitsForPerson, type Assignment, type Engine, type Executor, type PolicyEffect, type Ticket, type TicketInput } from '../upstream/dsh-superagent/src/core/index.ts'
 
 export interface MemberExecutorDeps {
   readonly path: string
@@ -33,6 +36,10 @@ export interface MemberExecutorDeps {
   readonly engine: () => Engine
   /** The owner paused the team (upstream: evaluation, dispatch and outbound delivery hold). */
   readonly paused?: () => boolean
+  /** Stop a member's running turn (upstream cancels the worker on stop). True when a turn was running, and an idle event will follow. */
+  readonly cancelTurn?: (member: string) => boolean
+  /** The ticket's report made on the member's behalf (a turn that ended silently, or failed), told to the router as a report is. */
+  readonly reportFor: (ticketId: string, member: string, state: 'waiting' | 'failed', summary: string) => void
   /** A stored ticket (the engine's repositories). */
   readonly ticket: (id: string) => Ticket | undefined
   /** Text of a stored Trigger, for Inputs. */
@@ -40,14 +47,40 @@ export interface MemberExecutorDeps {
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
 }
 
+/** What a member's turn left when it ended: whether nothing of it still runs (shell jobs), and its last words. */
+export interface MemberTurn { readonly quiet: boolean; readonly text: string }
+
 /** One binding: which member runs which ticket's Assignment. */
 interface Binding { readonly member: string; readonly ticketId: string; readonly assignmentId: string; readonly at: string }
 
 /** How often a launch or delivery a failure left behind is tried again. */
 const RETRY_MS = 30_000
+/** Upstream: a failed turn for a passing reason goes on, three times, with backoff from 15 seconds. */
+const TRANSIENT_TRIES = 3, TRANSIENT_BACKOFF_MS = 15_000
+/** How long a member stopped mid-turn is kept from new work if its turn never reports ending. */
+const STOPPING_MS = 60_000
+/** Upstream: a worker's background work holds its slot at most this long after its turn ended. */
+const BACKGROUND_LIMIT_MS = 30 * 60_000
+const PASSING = new RegExp(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'EPIPE', 'UND_ERR', 'socket hang up', 'fetch failed',
+  'network error', 'overloaded', 'rate limit', '\\b(?:408|429|50[0-4])\\b'].join('|'), 'i')
+/** A network or provider failure that passes (upstream's `transient`). */
+export function transientError(error: unknown): boolean {
+  const status = (error as { status?: unknown } | undefined)?.status
+  if (typeof status === 'number') return status === 408 || status === 429 || status >= 500
+  return PASSING.test(error instanceof Error ? `${error.name} ${error.message} ${String((error as { code?: unknown }).code ?? '')}` : String(error))
+}
 
 export class MemberExecutor implements Executor {
   private bindings: Binding[]
+  /** Assignments whose member handed off: still running for the engine, holding no slot until an Input brings them back. */
+  private parked: Binding[]
+  /** Members stopped mid-turn, until the turn ends: a late report of the old turn must not meet a new ticket. */
+  private readonly stopping = new Map<string, number>()
+  /** Members idle with shell jobs still running, since when: nothing is decided about their ticket until the jobs end. */
+  private readonly background = new Map<string, number>()
+  /** Failed turns retried so far, by Assignment; while a retry waits, the idle that follows the failure ends nothing. */
+  private readonly retries = new Map<string, number>()
+  private readonly resuming = new Set<string>()
   /** The repository each open ticket was accepted for (`owner/name`); a ticket not here runs on any member. */
   private ticketRepos: Record<string, string>
   /** Members leaving the team right now (design v5: removed from the canvas): their stop notice says why. */
@@ -67,35 +100,44 @@ export class MemberExecutor implements Executor {
   constructor(private readonly d: MemberExecutorDeps) {
     const stored = this.load()
     this.bindings = stored.bindings
+    this.parked = stored.parked
     this.ticketRepos = stored.repos
   }
 
-  private load(): { bindings: Binding[]; repos: Record<string, string> } {
+  private load(): { bindings: Binding[]; parked: Binding[]; repos: Record<string, string> } {
     try {
-      if (!existsSync(this.d.path)) return { bindings: [], repos: {} }
-      const raw = JSON.parse(readFileSync(this.d.path, 'utf8')) as { bindings?: Binding[]; repos?: Record<string, unknown> }
+      if (!existsSync(this.d.path)) return { bindings: [], parked: [], repos: {} }
+      const raw = JSON.parse(readFileSync(this.d.path, 'utf8')) as { bindings?: Binding[]; parked?: Binding[]; repos?: Record<string, unknown> }
       const repos = Object.fromEntries(Object.entries(raw.repos ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
-      return { bindings: raw.bindings ?? [], repos }
-    } catch { return { bindings: [], repos: {} } }
+      return { bindings: raw.bindings ?? [], parked: raw.parked ?? [], repos }
+    } catch { return { bindings: [], parked: [], repos: {} } }
   }
   private save(): void {
     // An ended ticket's repository is no longer needed.
     this.ticketRepos = Object.fromEntries(Object.entries(this.ticketRepos).filter(([id]) => { const t = this.d.ticket(id); return t !== undefined && !t.ended }))
     mkdirSync(dirname(this.d.path), { recursive: true })
     const temporary = `${this.d.path}.tmp-${randomUUID()}`
-    try { writeFileSync(temporary, JSON.stringify({ bindings: this.bindings, repos: this.ticketRepos }), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.d.path) } finally { rmSync(temporary, { force: true }) }
+    try { writeFileSync(temporary, JSON.stringify({ bindings: this.bindings, parked: this.parked, repos: this.ticketRepos }), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.d.path) } finally { rmSync(temporary, { force: true }) }
   }
 
   /** A member is leaving the team (removed from the canvas): the stop its Assignment gets next says so. */
   removing(member: string): void { this.leaving.add(member) }
   /** The ticket bound to a member, if any. */
   bindingOf(member: string): Binding | undefined { return this.bindings.find(b => b.member === member) }
+  /** A member's hold on one ticket, running or parked: a report names its ticket, so a late turn cannot report on the next one. */
+  bindingFor(member: string, ticketId: string): Binding | undefined { return [...this.bindings, ...this.parked].find(b => b.member === member && b.ticketId === ticketId) }
   /** Every binding (for the workbench). */
-  list(): readonly Binding[] { return [...this.bindings] }
+  list(): readonly Binding[] { return [...this.bindings, ...this.parked] }
   /** Members with no ticket bound — for a ticket of a repository, only that repository's members. */
   private free(ticketId?: string): string[] {
     const repo = ticketId !== undefined ? this.ticketRepos[ticketId] : undefined
-    return this.d.members().filter(m => !this.bindings.some(b => b.member === m) && (repo === undefined || this.d.repoOf(m) === repo))
+    return this.d.members().filter(m => this.available(m) && (repo === undefined || this.d.repoOf(m) === repo))
+  }
+
+  private available(member: string): boolean {
+    const stopping = this.stopping.get(member)
+    if (stopping !== undefined && Date.now() - stopping >= STOPPING_MS) this.stopping.delete(member)
+    return !this.bindings.some(b => b.member === member) && !this.stopping.has(member) && !this.background.has(member)
   }
 
   /** The repository a ticket was accepted for. */
@@ -133,6 +175,8 @@ export class MemberExecutor implements Executor {
     const now = Date.now()
     if (now - this.lastRetry < RETRY_MS) return
     this.lastRetry = now
+    // A member whose background work ran past the limit is settled as upstream does; what it says next still counts.
+    for (const [member, since] of [...this.background]) if (now - since >= BACKGROUND_LIMIT_MS) { this.background.delete(member); this.memberIdle(member, { quiet: true, text: 'Background jobs still ran 30 minutes after the turn ended.' }) }
     this.launch()
   }
 
@@ -153,6 +197,19 @@ export class MemberExecutor implements Executor {
     // Oldest first, but a ticket waiting for its repository's member does not hold up the ones behind it.
     for (let progressed = true; progressed;) {
       progressed = false
+      // A parked Assignment with something new for it comes before a new ticket (upstream keeps a slot for a person's message).
+      for (const held of [...this.parked]) {
+        const ticket = this.d.ticket(held.ticketId)
+        const assignment = ticket?.assignments.find(a => a.id === held.assignmentId)
+        if (ticket === undefined || ticket.ended || assignment?.state !== 'running') { this.parked = this.parked.filter(b => b !== held); this.save(); continue }
+        if (ticket.undelivered.length === 0 || !this.available(held.member)) continue
+        this.parked = this.parked.filter(b => b !== held)
+        this.bindings.push({ ...held, at: new Date().toISOString() })
+        this.save()
+        this.d.logger.info('superagent: ticket %s back on %s', ticket.id, held.member)
+        this.deliver(ticket, assignment)
+        progressed = true
+      }
       for (const next of [...this.waiting]) {
         const engine = this.d.engine()
         const ticket = this.d.ticket(next.ticketId)
@@ -179,7 +236,8 @@ export class MemberExecutor implements Executor {
       // An Input that arrives during a delivery goes out right after it.
       if (this.delivering.has(assignment.id)) { this.deliverAgain.add(assignment.id); return }
       const binding = this.bindings.find(b => b.assignmentId === assignment.id)
-      if (binding === undefined) return
+      // A parked Assignment comes back through the launch loop once its member is free.
+      if (binding === undefined) { if (this.parked.some(b => b.assignmentId === assignment.id)) this.launch(); return }
       this.delivering.add(assignment.id)
       try { await this.deliverNow(ticket, assignment, binding) } finally {
         this.delivering.delete(assignment.id)
@@ -209,6 +267,14 @@ export class MemberExecutor implements Executor {
   stop(ticket: Ticket, assignment: Assignment, reason: string): void {
     const binding = this.bindings.find(b => b.assignmentId === assignment.id)
     this.waiting = this.waiting.filter(w => w.assignmentId !== assignment.id)
+    this.retries.delete(assignment.id); this.resuming.delete(assignment.id)
+    const parked = this.parked.find(b => b.assignmentId === assignment.id)
+    if (parked !== undefined) {
+      // It holds no turn and may be on another ticket by now: nothing to stop. A member removed from the team is told.
+      this.parked = this.parked.filter(b => b !== parked)
+      this.save()
+      if (this.leaving.delete(parked.member)) void this.tryDeliver(parked.member, `[superagent] ticket ${ticket.id} «${ticket.title}» is no longer yours (you were removed from the team). Do not report on it again.`, 'stop', ticket.id)
+    }
     if (binding !== undefined) {
       this.bindings = this.bindings.filter(b => b !== binding)
       this.save()
@@ -216,6 +282,8 @@ export class MemberExecutor implements Executor {
       const ownEnd = ticket.ended?.by === 'executor' && assignment.report !== undefined && assignment.report.at === ticket.ended.at
         && (assignment.report.state === 'ready' || assignment.report.state === 'dropped')
       const why = this.leaving.delete(binding.member) ? 'you were removed from the team' : reason
+      // Upstream cancels the worker's turn; here the member stays out of the pool until that turn has ended.
+      if (!ownEnd && this.d.cancelTurn?.(binding.member) === true) this.stopping.set(binding.member, Date.now())
       if (!ownEnd) void this.tryDeliver(binding.member, `[superagent] ticket ${ticket.id} «${ticket.title}» is no longer yours (${why}). Stop working on it; do not report on it again.`, 'stop', ticket.id)
     }
     queueMicrotask(() => this.launch())
@@ -234,16 +302,65 @@ export class MemberExecutor implements Executor {
   }
 
   /** The member's turn ended: Inputs delivered to it before now count as read, and the engine hears the turn end. */
-  memberIdle(member: string): void {
+  memberIdle(member: string, turn: MemberTurn = { quiet: true, text: '' }): void {
+    if (this.stopping.delete(member)) queueMicrotask(() => this.launch())
     const binding = this.bindingOf(member)
-    if (binding === undefined) return
+    if (binding === undefined) { this.background.delete(member); return }
     this.memberRead(member)
     try { this.d.engine().turnEnded(binding.ticketId, binding.assignmentId) } catch (error) { this.d.logger.warn('superagent: turn end of %s not recorded: %s', binding.ticketId, String(error)) }
+    if (this.resuming.has(binding.assignmentId)) return
+    // Shell jobs still run for it: the job's end wakes it, and that turn's end decides.
+    if (!turn.quiet) { if (!this.background.has(member)) this.background.set(member, Date.now()); return }
+    this.background.delete(member)
+    this.retries.delete(binding.assignmentId)
+    this.settle(binding, turn.text)
+  }
+
+  /** The turn ended with nothing left running: a handoff parks the Assignment; a turn that said nothing formal reports `waiting` (upstream). */
+  private settle(binding: Binding, text: string): void {
+    const ticket = this.d.ticket(binding.ticketId)
+    const assignment = ticket?.assignments.find(a => a.id === binding.assignmentId)
+    if (ticket === undefined || ticket.ended || assignment?.state !== 'running' || this.delivering.has(assignment.id) || ticket.undelivered.length > 0) return
+    const report = assignment.report
+    const since = !!assignment.deliveredAt && !!report && assignment.deliveredAt >= report.at
+    const handedOff = ((report?.state === 'ready' || report?.state === 'waiting' || !!ticket.attention) && !since) || waitsForPerson(ticket)
+    if (!handedOff) {
+      try { this.d.reportFor(ticket.id, binding.member, 'waiting', text !== '' ? text : report?.summary ?? 'The member ended its turn without a report.') } catch (error) { this.d.logger.warn('superagent: turn-end report of %s failed: %s', ticket.id, String(error)); return }
+      if (this.d.ticket(ticket.id)?.ended) return
+    }
+    this.bindings = this.bindings.filter(b => b !== binding)
+    this.parked.push(binding)
+    this.save()
+    queueMicrotask(() => this.launch())
+  }
+
+  /** The member's turn failed: a passing failure goes on after a backoff (upstream, three times); any other fails the ticket for a person. */
+  memberError(member: string, error: unknown): void {
+    const binding = this.bindingOf(member)
+    if (binding === undefined) return
+    const { ticketId, assignmentId } = binding
+    const tries = this.retries.get(assignmentId) ?? 0
+    if (transientError(error) && tries < TRANSIENT_TRIES) {
+      this.retries.set(assignmentId, tries + 1)
+      this.resuming.add(assignmentId)
+      const timer = setTimeout(() => {
+        this.resuming.delete(assignmentId)
+        const still = this.bindings.some(b => b.assignmentId === assignmentId)
+        if (still) void this.tryDeliver(member, `[superagent] ticket ${ticketId}: your last turn failed for a passing reason (${String(error).slice(0, 200)}). Continue the assignment where it stopped.`, 'input', ticketId)
+      }, TRANSIENT_BACKOFF_MS * 2 ** tries)
+      timer.unref?.()
+      return
+    }
+    this.retries.delete(assignmentId)
+    try { this.d.reportFor(ticketId, member, 'failed', `The member's turn failed: ${String(error).slice(0, 500)}`) } catch (failure) { this.d.logger.warn('superagent: failure of %s not recorded: %s', ticketId, String(failure)); return }
+    this.memberIdle(member, { quiet: true, text: '' })
   }
 
   /** After a restart: each Assignment that was running gets upstream's interruption handling (restart with a recovery note). */
   recover(): void {
     const engine = this.d.engine()
+    // A parked Assignment holds no turn to interrupt; one that ended while this host was down is forgotten.
+    this.parked = this.parked.filter(b => { const t = this.d.ticket(b.ticketId); return t !== undefined && !t.ended && t.assignments.find(a => a.id === b.assignmentId)?.state === 'running' })
     for (const binding of [...this.bindings]) {
       const ticket = this.d.ticket(binding.ticketId)
       const assignment = ticket?.assignments.find(a => a.id === binding.assignmentId)
@@ -280,7 +397,7 @@ export function assignmentCard(ticket: Ticket, trigger: MemberExecutorDeps['trig
     origin === undefined ? '(the original message is not readable)' : origin.text,
     '',
     `Work in your own workspace, in a directory or worktree named ${name}; in a git checkout, create that worktree at .worktrees/${name} and list .worktrees/ in the checkout's .git/info/exclude, so the checkout stays clean (your sandbox writes only inside your workspace: a path beside the checkout is refused). Stay within the scope; derive what to do from the request yourself.`,
-    'Do not open sessions, subagents, or A2A routes: this ticket is your only work. Report with a2a_ticket_report:',
+    `Do not open sessions, subagents, or A2A routes. Report with a2a_ticket_report, naming ticket_id ${ticket.id}. When you hand off (a result, a question, waiting, blocked) you may get another ticket; a later [superagent input] brings this one back:`,
     '- progress while you work only when something changed for the person; waiting when you wait for a Trigger;',
     '- ready when the result can be reviewed or used (a pull request link in the summary when there is one);',
     '- blocked or failed when you cannot go on; dropped when there turns out to be nothing to do;',

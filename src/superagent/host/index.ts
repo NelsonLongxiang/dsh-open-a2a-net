@@ -18,7 +18,7 @@ import { dirname, join } from 'node:path'
 import { Engine, UserError, reasonText, ticketStage, type Assessor, type Candidate, type Outbox, type Reason, type Ticket, type Trigger, type ReceiveResult } from '../upstream/dsh-superagent/src/core/index.ts'
 import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
-import { MemberExecutor } from './executor.ts'
+import { MemberExecutor, transientError, type MemberTurn } from './executor.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { MEMBER_PRESET, ROUTER_PRESET } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
@@ -30,6 +30,10 @@ export interface SuperagentHostDeps {
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
   /** Put text into a live local session as a follow-up; false when the session is not live here. */
   readonly deliverToSession: (sessionId: string, text: string) => boolean
+  /** Stop a session's running turn; true when one was running. */
+  readonly cancelTurn?: (sessionId: string) => boolean
+  /** What a session's ended turn left: whether its shell jobs have ended, and its last words. */
+  readonly memberTurn?: (sessionId: string) => MemberTurn | undefined
   /** A repeating timer; returns its disposer. */
   readonly interval: (fn: () => void, ms: number) => () => void
   readonly now?: () => string
@@ -220,6 +224,8 @@ export class SuperagentHost {
       repoOf: member => this.settingsValue.repos[member],
       deliver: (member, text, kind, ticketId) => this.deliverToMember(member, text, kind, ticketId), engine: () => this.engine,
       paused: () => this.settingsValue.paused,
+      cancelTurn: member => this.d.cancelTurn?.(member) === true,
+      reportFor: (ticketId, member, state, summary) => { this.engine.report(ticketId, { state, summary: clip(summary, 2_000) }); this.relayReport(ticketId, state, summary); this.pass(); void member },
       ticket: id => this.store.tickets.get(id), trigger: id => this.store.triggers.get(id), logger: d.logger,
     })
     const outbox: Outbox = {
@@ -302,6 +308,15 @@ export class SuperagentHost {
 
   /** A member's turn ended (agent idle): the executor's turn-end fact — told to the served team host when it is theirs. */
   memberIdle(sessionId: string): void { this.memberEvent(sessionId, 'idle') }
+  /** A member's turn failed (agent error): retried or reported as failed — by the team host when it is theirs. */
+  memberFailed(sessionId: string, error: unknown): void {
+    if (this.settings.members.includes(sessionId)) { this.executor.memberError(sessionId, error); return }
+    const serves = this.settingsValue.serves
+    if (serves?.members.includes(sessionId) === true && this.d.signedPost !== undefined && this.d.handleOf !== undefined) {
+      void this.d.signedPost(serves.url, '/a2a/superagent-team', { op: 'error', member: this.d.handleOf(sessionId), report: { error: String(error).slice(0, 500), transient: transientError(error) } })
+        .catch(failure => { this.d.logger.warn('superagent: failed turn not told to the team host: %s', String(failure)) })
+    }
+  }
 
   /**
    * PR-F: a member's session took a message into its history (its inbox claim). The Inputs delivered to it count as read
@@ -312,13 +327,13 @@ export class SuperagentHost {
 
   private memberEvent(sessionId: string, op: 'idle' | 'read'): void {
     if (this.settings.members.includes(sessionId)) {
-      if (op === 'idle') this.executor.memberIdle(sessionId)
+      if (op === 'idle') this.executor.memberIdle(sessionId, this.d.memberTurn?.(sessionId))
       else this.executor.memberRead(sessionId)
       return
     }
     const serves = this.settingsValue.serves
     if (serves?.members.includes(sessionId) === true && this.d.signedPost !== undefined && this.d.handleOf !== undefined) {
-      void this.d.signedPost(serves.url, '/a2a/superagent-team', { op, member: this.d.handleOf(sessionId) })
+      void this.d.signedPost(serves.url, '/a2a/superagent-team', { op, member: this.d.handleOf(sessionId), ...(op === 'idle' ? { report: this.d.memberTurn?.(sessionId) ?? { quiet: true, text: '' } } : {}) })
         .catch(error => { this.d.logger.warn('superagent: %s not told to the team host: %s', op, String(error)) })
     }
   }
@@ -339,16 +354,25 @@ export class SuperagentHost {
   remoteEvent(op: unknown, memberHandle: unknown, signerKey: string, report: unknown): Record<string, unknown> {
     const entry = this.settings.remoteMembers.find(r => r.ref.replace(/@[0-9a-f]{8}$/, '') === memberHandle && r.key === signerKey)
     if (entry === undefined) return { ok: false, code: 'not-member', error: 'no remote member of this team is that session under that key' }
-    if (op === 'idle') { this.executor.memberIdle(entry.ref); return { ok: true } }
+    if (op === 'idle') {
+      const turn = (report ?? {}) as Record<string, unknown>
+      this.executor.memberIdle(entry.ref, { quiet: turn.quiet !== false, text: typeof turn.text === 'string' ? clip(turn.text, 2_000) : '' })
+      return { ok: true }
+    }
+    if (op === 'error') {
+      const r = (report ?? {}) as Record<string, unknown>
+      this.executor.memberError(entry.ref, Object.assign(new Error(typeof r.error === 'string' ? r.error : 'failed'), r.transient === true ? {} : { status: 400 }))
+      return { ok: true }
+    }
     if (op === 'read') { this.executor.memberRead(entry.ref); return { ok: true } }
     if (op === 'ack' || op === 'handback') {
       const r = (report ?? {}) as Record<string, unknown>
       return this.takeUp(entry.ref, op, r.trigger_id, r.text)
     }
-    if (op !== 'report') return { ok: false, code: 'op', error: 'op must be report, ack, handback, read or idle' }
+    if (op !== 'report') return { ok: false, code: 'op', error: 'op must be report, ack, handback, read, idle or error' }
     const r = (report ?? {}) as Record<string, unknown>
     if (typeof r.state !== 'string' || !['progress', 'waiting', 'ready', 'blocked', 'failed', 'dropped'].includes(r.state) || typeof r.summary !== 'string' || r.summary.trim() === '') return { ok: false, code: 'report', error: 'a report needs a state and a summary' }
-    return this.report(entry.ref, { state: r.state as ReportState, summary: r.summary, ...(typeof r.question === 'string' || r.question === null ? { question: r.question as string | null } : {}), ...(typeof r.answers === 'string' ? { answers: r.answers } : {}) })
+    return this.report(entry.ref, { state: r.state as ReportState, summary: r.summary, ...(typeof r.question === 'string' || r.question === null ? { question: r.question as string | null } : {}), ...(typeof r.answers === 'string' ? { answers: r.answers } : {}) }, typeof r.ticket_id === 'string' ? r.ticket_id : undefined)
   }
 
   /** PR-C2, member host side: work the served team host sends one of this host's member sessions, signed by its pinned key. */
@@ -363,11 +387,12 @@ export class SuperagentHost {
     const wrongPreset = op === 'stop' ? undefined : presetRefusal(undefined, [local], this.d.presetOf ?? (() => undefined))
     if (wrongPreset !== undefined) { this.noteRefusal('superagent-member-preset', { target: local }); return { ok: false, code: 'preset', error: wrongPreset } }
     if (typeof text !== 'string' || text === '') return { ok: false, code: 'text', error: 'text is required' }
+    if (op === 'stop') this.d.cancelTurn?.(local)
     return { ok: this.d.deliverToSession(local, text) }
   }
 
   /** PR-C2, member host side: a served member's report goes to the team host (it answers whether it took it). */
-  async forwardReport(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string }): Promise<Record<string, unknown>> {
+  async forwardReport(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string; ticket_id?: string }): Promise<Record<string, unknown>> {
     const serves = this.settingsValue.serves
     if (serves === undefined || !serves.members.includes(member) || this.d.signedPost === undefined || this.d.handleOf === undefined) return { ok: false, code: 'not-member', error: 'this session serves no team' }
     try { return await this.d.signedPost(serves.url, '/a2a/superagent-team', { op: 'report', member: this.d.handleOf(member), report }) } catch (error) { return { ok: false, code: 'unreachable', error: String(error) } }
@@ -388,7 +413,9 @@ export class SuperagentHost {
    * person said is lost.
    */
   takeUp(member: string, op: 'ack' | 'handback', triggerId: unknown, text: unknown): Record<string, unknown> {
-    const binding = this.executor.bindingOf(member)
+    const bindings = this.executor.list().filter(b => b.member === member)
+    const stored = typeof triggerId === 'string' ? bindings.find(b => this.store.tickets.get(b.ticketId)?.inputs.some(input => input.kind === 'trigger' && input.triggerId === triggerId)) : undefined
+    const binding = stored ?? this.executor.bindingOf(member)
     if (binding === undefined) return { ok: false, code: 'not-assigned', error: 'no ticket is assigned to this session' }
     if (typeof triggerId !== 'string' || triggerId === '') return { ok: false, code: 'missing', error: 'trigger_id is required' }
     if (typeof text !== 'string' || text.trim() === '') return { ok: false, code: 'missing', error: op === 'ack' ? 'text is required' : 'reason is required' }
@@ -494,23 +521,28 @@ export class SuperagentHost {
    * A member's report (upstream orchestrator_report) on the ticket bound to it. The router hears it in its own session,
    * so it can hand a ready result or a question to the person (superagent_reply).
    */
-  report(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string }): { ok: true; ticketId: string; stage: unknown } | { ok: false; code: string; error: string } {
-    const binding = this.executor.bindingOf(member)
-    if (binding === undefined) return { ok: false, code: 'not-assigned', error: 'no ticket is assigned to this session' }
+  report(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string }, ticketId?: string): { ok: true; ticketId: string; stage: unknown } | { ok: false; code: string; error: string } {
+    const binding = ticketId === undefined ? this.executor.bindingOf(member) : this.executor.bindingFor(member, ticketId)
+    if (binding === undefined) return ticketId === undefined ? { ok: false, code: 'not-assigned', error: 'no ticket is assigned to this session' } : { ok: false, code: 'not-yours', error: `ticket ${ticketId} is not assigned to this session (any more): stop working on it and do not report on it again` }
     const current = this.store.tickets.get(binding.ticketId)
     if (report.state === 'dropped' && current !== undefined && agentLedEnd(current, binding.assignmentId)) {
       return { ok: false, code: 'agent-cannot-end', error: 'an agent\'s message cannot end this ticket: only a person (or the owner\'s stop) can. Keep working within the scope, or report blocked with a question for the person.' }
     }
     let ticket: Ticket
     try { ticket = this.engine.report(binding.ticketId, report) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
-    const router = this.settingsValue.router
     const stage = ticket.ended ? { stage: 'ended', outcome: ticket.ended.outcome } : ticketStage(ticket)
-    if (router !== undefined) {
-      const question = ticket.attention !== undefined ? `\nquestion for the person (send it with superagent_reply purpose attention, copied exactly): ${ticket.attention.question}` : ''
-      this.d.deliverToSession(router, `[superagent report] ticket ${ticket.id} «${ticket.title}» · ${report.state} · stage ${JSON.stringify(stage)}\n${clip(report.summary, 2_000)}${question}`)
-    }
+    this.relayReport(ticket.id, report.state, report.summary)
     this.pass()
     return { ok: true, ticketId: ticket.id, stage }
+  }
+
+  /** The router hears a report in its own session, so it can hand a result or a question to the person. */
+  private relayReport(ticketId: string, state: string, summary: string): void {
+    const router = this.settingsValue.router, ticket = this.store.tickets.get(ticketId)
+    if (router === undefined || ticket === undefined) return
+    const stage = ticket.ended ? { stage: 'ended', outcome: ticket.ended.outcome } : ticketStage(ticket)
+    const question = ticket.attention !== undefined ? `\nquestion for the person (send it with superagent_reply purpose attention, copied exactly): ${ticket.attention.question}` : ''
+    this.d.deliverToSession(router, `[superagent report] ticket ${ticket.id} «${ticket.title}» · ${state} · stage ${JSON.stringify(stage)}\n${clip(summary, 2_000)}${question}`)
   }
 
   /** The team's A2A address: requests to it are Triggers, so they take no target queue slot. */
