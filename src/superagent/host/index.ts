@@ -20,6 +20,7 @@ import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
 import { MemberExecutor } from './executor.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
+import { MEMBER_PRESET, ROUTER_PRESET } from './role-tools.ts'
 import { DEFAULT_SETTINGS, WORKBENCH_OWNER, parseRemoteMember, parseSettings, parseStoredSettings, policyVersion, teamPolicy, teamScope, type TeamSettings } from './policy.ts'
 
 export interface SuperagentHostDeps {
@@ -82,6 +83,20 @@ const REFUSALS_KEPT = 50
 const clip = (text: string, cap = TEXT_CAP): string => (text.length > cap ? `${text.slice(0, cap)}… (${String(text.length - cap)} more characters)` : text)
 
 /** The candidate card the router reads: bounded facts and the ids its decision names, never authority. */
+/**
+ * A router or member session that runs another agent preset than its role's (when its preset is known: a session that is
+ * not loaded right now is checked when it is).
+ */
+export function presetRefusal(router: string | undefined, members: readonly string[], presetOf: (id: string) => string | undefined): string | undefined {
+  const routerPreset = router !== undefined ? presetOf(router) : undefined
+  if (routerPreset !== undefined && routerPreset !== ROUTER_PRESET) return `router ${router} runs the ${routerPreset} preset: a team's router runs ${ROUTER_PRESET} (superagent 总工); create it under that preset`
+  for (const member of members) {
+    const preset = presetOf(member)
+    if (preset !== undefined && preset !== MEMBER_PRESET) return `member ${member} runs the ${preset} preset: a team's member runs ${MEMBER_PRESET} (superagent 团队成员); create it under that preset`
+  }
+  return undefined
+}
+
 export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings, 'acceptMode' | 'rules'> & Partial<Pick<TeamSettings, 'repos'>>): string {
   const lines = [
     `[superagent candidate] eval ${candidate.evalId} · strength ${candidate.strength} · policy ${candidate.policyVersion}`,
@@ -354,10 +369,12 @@ export class SuperagentHost {
     return { ok: true }
   }
   /** Owner control: serve a team host (its key pinned from a linked peer's signed card) with these local sessions. */
-  serveTeam(team: { url: string; key: string } | undefined, members: readonly string[], sessionValid: (id: string) => boolean): { ok: boolean; error?: string } {
+  serveTeam(team: { url: string; key: string } | undefined, members: readonly string[], sessionValid: (id: string) => boolean, presetOf: (id: string) => string | undefined = () => undefined): { ok: boolean; error?: string } {
     if (team === undefined) { const { serves: _gone, ...rest } = this.settingsValue; this.writeSettings(rest); return { ok: true } }
     const bad = members.find(m => !sessionValid(m) || m === this.settingsValue.router || this.settingsValue.members.includes(m))
     if (bad !== undefined) return { ok: false, error: `${bad} must be a joined local session that is neither this team's router nor its member` }
+    const wrongPreset = presetRefusal(undefined, members, presetOf)
+    if (wrongPreset !== undefined) return { ok: false, error: wrongPreset }
     this.writeSettings({ ...this.settingsValue, serves: { url: team.url, key: team.key, members: [...new Set(members)] } })
     return { ok: true }
   }
@@ -531,12 +548,14 @@ export class SuperagentHost {
   get routerSession(): string | undefined { return this.settingsValue.router }
 
   /** Owner control: replace the team settings; a Policy version change is reported to the engine as upstream does. */
-  saveSettings(raw: unknown, sessionValid: (id: string) => boolean): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
+  saveSettings(raw: unknown, sessionValid: (id: string) => boolean, presetOf: (id: string) => string | undefined = () => undefined): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
     const parsed = parseSettings(raw, this.settingsValue)
     if (!parsed.ok) return parsed
     if (parsed.settings.router !== undefined && !sessionValid(parsed.settings.router)) return { ok: false, error: 'router must be a joined local session' }
     const strange = parsed.settings.members.find(member => !sessionValid(member))
     if (strange !== undefined) return { ok: false, error: `member ${strange} must be a joined local session` }
+    const wrongPreset = presetRefusal(parsed.settings.router, parsed.settings.members, presetOf)
+    if (wrongPreset !== undefined) return { ok: false, error: wrongPreset }
     const before = policyVersion(this.settingsValue)
     const routerChanged = parsed.settings.router !== this.settingsValue.router
     this.writeSettings(parsed.settings)

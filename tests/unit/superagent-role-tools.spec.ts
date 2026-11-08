@@ -72,3 +72,42 @@ describe('RoleTools', () => {
     expect(tools.list()).toEqual({})
   })
 })
+
+describe('the team\'s agent presets: shipped in the bundle layer, required of a router and its members', () => {
+  it('the bundle layer declares the router and member presets the host names', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { ROUTER_PRESET, MEMBER_PRESET } = await import('../../src/superagent/host/role-tools.ts')
+    const layer = readFileSync(new URL('../../cordis.patch.yml', import.meta.url), 'utf8')
+    const block = (id: string): string => { const start = layer.indexOf(`        id: ${id}\n`); expect(start).toBeGreaterThan(0); const next = layer.indexOf('\n    - id: ', start); return layer.slice(start, next < 0 ? undefined : next) }
+    const router = block(ROUTER_PRESET), member = block(MEMBER_PRESET)
+    // The role lives in the composition: a persona each; the router reads only and waits at most 5 s; no subagents anywhere.
+    for (const preset of [router, member]) { expect(preset).toContain("name: '@deepseek-ai/dsh-persona'"); expect(preset).not.toContain('dsh-tool-subagent') }
+    expect(router).toMatch(/dsh-tool-fs'\n\s+config:\n\s+write: false\n\s+edit: false/)
+    expect(router).toContain('superagent_route')
+    expect(member).toContain('a2a_ticket_report')
+    expect(member).toContain("name: '@deepseek-ai/dsh-tool-fs'\n")
+  })
+
+  it('a router or member on another preset is refused; an unloaded one (preset unknown) is not', async () => {
+    const { presetRefusal } = await import('../../src/superagent/host/index.ts')
+    const presets: Record<string, string> = { 'session-r': 'superagent-router', 'session-m': 'superagent-member', 'session-s': 'standard' }
+    const of = (id: string) => presets[id]
+    expect(presetRefusal('session-r', ['session-m'], of)).toBeUndefined()
+    expect(presetRefusal('session-s', ['session-m'], of)).toContain('superagent-router')
+    expect(presetRefusal('session-r', ['session-s'], of)).toContain('superagent-member')
+    expect(presetRefusal('session-r', ['session-cold'], of)).toBeUndefined()
+  })
+
+  it('the host refuses such settings', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { mkdtempSync } = await import('../temp-dirs.ts')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const h = new SuperagentHost({ home: mkdtempSync(join(tmpdir(), 'sa-presets-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {} })
+    const of = (id: string) => ({ 'session-r': 'superagent-router', 'session-m': 'superagent-member', 'session-s': 'standard' } as Record<string, string>)[id]
+    expect(h.saveSettings({ router: 'session-s', members: ['session-m'] }, () => true, of)).toMatchObject({ ok: false, error: expect.stringContaining('superagent-router') })
+    expect(h.saveSettings({ router: 'session-r', members: ['session-s'] }, () => true, of)).toMatchObject({ ok: false, error: expect.stringContaining('superagent-member') })
+    expect(h.saveSettings({ router: 'session-r', members: ['session-m'] }, () => true, of)).toMatchObject({ ok: true })
+    expect(h.serveTeam({ url: 'http://127.0.0.1:1', key: 'MCowBQYDK2VwAyEAabcdefghijklmnopqrstuvwxyz0123456789' }, ['session-s'], () => true, of)).toMatchObject({ ok: false })
+  })
+})
