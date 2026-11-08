@@ -3,17 +3,64 @@
 > 2026-10-21 立，源自 K3 测试章前瞻（cordis 事故线收尾）：两项与「锁重生成 × 环境策略」
 > 交互的坑，已实测咬人，故入档为纪律。
 
-## 下一版本候选（待评审，未发布）
+## 0.8.1（候选，待评审，未发布）
 
-### next/0.8：superagent 接入面（CLI）
+- 基线：next/0.8 合入 master 后的合并提交（候选提交在发版 PR 里写明）。相对已打标签、未发布的 v0.8.0（d691926 → 3fd979f），合入 #425–#438。选 patch：CLI、回执协议、账本与信箱格式都不变（`rejected` 结局自 0.7.0 起就在回执协议里）；只改 superagent 团队（可选）的行为与随附预设，团队状态目录 `<a2a home>/superagent/` 的设置与执行器文件多一个 `repos` 字段。
+- **0.8.0 不发布，由 0.8.1 取代。** v0.8.0 标签保留不改写；npmjs 上从 0.7.0 直接到 0.8.1。0.8.0 一节的全部内容都包含在本版里，升级、回退照 [0.8.1 升级检查](ops/0.8.1-upgrade-check.md)。
+- 默认不变：不配置 `superagent: true` 的宿主不受本版任何改动影响。本节是候选说明；版本号就位不等于发布或部署授权。
+
+### superagent 团队：智能体预设（#432、#437、#438）
+
+- 插件在 bundle 层随附两个智能体预设：`superagent-router`（总工：文件只读，前台命令与等待最多 5 秒，不开子代理）和 `superagent-member`（成员：工作工具，前台命令 5 秒后转后台，不开子代理），改编自上游 dsh-superagent 的主会话与执行器预设。角色边界由预设本身决定，不靠卡片里的提示词。
+- 宿主在保存设置（以及 `serve-team`）时核对：总工或成员的会话跑在别的预设上就拒绝。未加载的会话、或宿主没有预设注册表时不检查。
+
+### superagent 团队：运维负载暴露的问题（#427–#436）
+
+在本机运维团队（真实仓库的文档核对工单）上跑出来的问题，逐个修复：
+- 团队地址收到的每条 A2A 消息都有正式结局：不接的（observe、名单外、agent 不能给的停止、总工忽略）收到带原因的 `rejected` 回执；作为后续送进工单的，在成员拿到后收到 `completed` 回执。此前这些消息在发送方一侧只能变成死信（#431）。
+- 成员按仓库分工：设置里给成员标 `repos`，总工接单时写明仓库，工单只派给该仓库的成员、排队时不挡后面的工单（#429）。
+- 派工卡片：worktree 建在 `.worktrees/<工单>` 并写进 `.git/info/exclude`，在成员沙箱之内（#434、#436）；成员自己报完成或 dropped 后不再收到「已不归你」，省掉一整轮模型调用（#436）。
+- 总工卡片写明「一个需求一张工单、不拆、不写计划」优先于其他技能里的路由说法（#427）；成员提问的答复按真实 attention id 识别（#428）。
+- 工作台「团队」页：轮询不再每 3 秒重建页面（不丢点击、焦点和输入）（#425）。
+- 测试：等待统一用 `vi.waitFor`（#426）。文档核对的 worker PR：README_zh 的安装与「你能得到什么」两节按代码改正（#430、#433）。
+
+### 0.8.1 已披露限制
+
+- 0.8.0 一节列出的限制全部仍然适用。
+- 预设核对依赖宿主的预设注册表（`agentPresets.inspectCompositions`）；没有时不拦截，只靠角色工具守卫。
+- 机器（A2A 机器名单）发起的工单，成员的提问回到请求方的 A2A 会话；请求方是机器时，系统里没有人能回答，工单停在「待你回答」，没有超时或升级。运维使用时把需要人裁定的问题放到人所在的地方（如仓库 issue）。
+
+## 0.8.0（已打标签，未发布，由 0.8.1 取代）
+
+- 基线：next/0.8 合入 master 后的合并提交（候选提交在发版 PR 里写明）。相对 v0.7.0 合入 #372、#375、#376–#423。选 minor：新增 CLI 命令与回执信封的 `disposition` 键（对外契约变化），新增可选的 superagent 团队。
+- 默认不变：不配置 `superagent: true` 的宿主不加载团队引擎、不建团队地址、不改路由。
+- 升级、回退与可复现打包见 [0.8.0 升级检查](ops/0.8.0-upgrade-check.md)。本节是候选说明；版本号就位不等于发布或部署授权，tag、发布与部署另行安排。
+
+### superagent 团队（可选，`superagent: true`；#409–#422）
+
+按 superagent 自身的定义实现：领域层是原样内置的上游引擎（`src/superagent/upstream/`，钉住 8c32a9d，`scripts/superagent-upstream.mjs` 守住逐字节一致），a2a 只做传输层。
+
+- 一个需求一张工单：总工（router）只决定接不接、结不结，不拆任务、不写计划；成员是属主指定的固定会话池，一人一个名额，满了排队，从不新开会话（#410、#413）。
+- 需求来源：工作台「团队」页和 `a2a-net superagent request`（属主凭证，明确授权）；A2A 团队地址由宿主持有的 CLI 身份承接，按机器名单与接单模式（off / observe / auto + 规则）判定，接收不占目标名额（#411、#412）。
+- 跨主机成员：派工与报告是钉住公钥的签名宿主间请求；未签名或签名不符一律拒绝并计数（#414、#417）。
+- 角色工具：总工只见 `superagent_*`，成员只见工作工具与 `a2a_ticket_*`，由宿主全局守卫执行；可见性按会话自己的作用域收窄（#415、#418）。
+- 人的追问按 trigger id 被成员接下（`a2a_ticket_ack` / `a2a_ticket_handback`），成员读到即标记；工单结束时仍未读的追问交总工评估，不丢（#419）。机器的消息只作上下文，不能经成员以 dropped 结束工单（#420）。
+- 请求方确认：机器的请求成为工单时，团队发一张 `acknowledged` 回执（任务 `ack-<task>`）。请求方的欠账不结清，退出队列计数，过期改为确认后 7 天。工单出结果前的回复（成员提问、通知）作为同一会话的后续消息发出，正式回执留给结果；工单不经结果就结束（停止、关闭或总工未转发）时，宿主自己补发结束回执（#421、#422）。
+- 工作台「团队」页：待你处理、需求、工单、团队、设置五个视图（#416）。
+- 验收：判据 v4 共 31 条（需求→工单、固定成员池、结果回到原线程、追问、排队、问答、拒绝与计数、跨实例成员、CLI 与机器、请求方欠账的确认与过期），两个实例上的全新一轮全部通过；运行与归档留在验证器工作区。
+
+### CLI 与回执（#379–#399）
 - `a2a-net inbox --after <cursor>`：调用方自持游标的可重放读取，报告被上限挤出的条数（#379）。
 - `a2a-net route --json` 附 `class: sent | gone | retry`（#381）。
 - `a2a-net thread <context_id>`：按 context 只读读取一段往来（入向邮件 + 本身份发出的路由），分页（p1-context-read）。宿主从这一版起在每条 CLI 邮件上记 `task_id`、`context_id`，wire 面投递到邮箱的应答也带回 `context_id`；老宿主投递的邮件没有这两个字段，`thread` 计入 `unscoped`。CLI 在身份目录下新增 `sent.jsonl` 发件日志（0600，1 MiB 轮转一代，只在本机）。
 - `a2a-net receipt <task_id> [--attention] <一句话>`：CLI 身份发正式回执的唯一命令（p1-receipt-cmd，回执语义变化，S14）。回执 v2 信封新增可分支键 `disposition`（`result` / `attention`，闭集），既有 `outcome` 不变；attention 回执结清原任务但不写 outcome，账本归档行、`tasks --json`、`a2a_tasks`、CLI 信箱里的回执行都带 `disposition`，attention 行显示为 `unclassified`，不显示 completed。回执走固定 task id `receipt-<task_id>`，一个任务只有一张回执。旧主机忽略这个新键，仍按头行结清。见 [receipt-envelope-v2](protocol/receipt-envelope-v2.md) §2a。
 - CLI 信箱行新增 `proof` 与 `receipt_for`（p1-mail-proof，S18）：宿主把它接收投递时已算出的来源校验结论（wire 面与正文头一致；本地面为 `in-process`）和回执所回答的 task id 写成字段，读者不再解析正文。快照恢复时 `proof` 只收已知取值。`thread` 的入向条目一并带出。准入与正文头不变。
 - superagent Source 的类型基础（p2 设计 G2）：`src/superagent/source-types.ts` 声明 a2a Source 所用的最小结构类型；`src/superagent/upstream/` 放一份 superagent 类型快照（钉住提交 8c32a9d，MIT，许可全文随快照），`src/superagent/contract.ts` 在类型检查里把两边对齐，运行时契约测试核对 `key`、`threadKey`、`health`。不引入 superagent 的构建链或 npm 包，构建和测试都不拉取上游。尚无 Source 插件代码。
-- superagent a2a Source 插件 `./a2a-watch`（p2a-source-code）：独立导出入口，本插件自身不加载它。影子模式只有 observe，Channel 拒绝所有地址，从不回发；可信来源只认信箱行 `proof` 为 origin-claim 或 in-process。只合入 next/0.8，不随版本发布、不上节点；上节点运行（p2b）另须属主选定节点并经全局放行。接入说明见 [superagent-a2a-watch](design/superagent-a2a-watch.md)。
+- superagent a2a Source 插件 `./a2a-watch`（p2a-source-code）：独立导出入口；0.8.0 起由 superagent 团队宿主在 `superagent: true` 时承载（#412），其余宿主仍不加载它。以下为其最初（影子阶段）的说明：影子模式只有 observe，Channel 拒绝所有地址，从不回发；可信来源只认信箱行 `proof` 为 origin-claim 或 in-process。只合入 next/0.8，不随版本发布、不上节点；上节点运行（p2b）另须属主选定节点并经全局放行。接入说明见 [superagent-a2a-watch](design/superagent-a2a-watch.md)。
 
+### 路由（#372、#375、#405）
+
+- 进程内投给普通 CLI 信箱的消息不再记欠账（#405）。
 - followup 抛异常后的宿主接纳观察：只有本次预留的精确会话/MessageId 出现在该会话 inbox 或事件流，才返回 DELIVERED 与 `acceptance:inserted`，提示后续未确认、原 task 对账；不代表消费或完成。证明不了仍失败并带 `acceptance:unknown`，提示“接纳状态未知，请用原 task id 对账，不要换 id 重派”，新调用方停止候选 failover；已知插入前拒绝不改。契约与旧客户端限制见[接纳观察](protocol/followup-admission.md)。不新增状态，0.2.2-rc.1 仅源码判断、未运行验证，不进入0.7.0。
 - 已披露限制（#375，全局 2026-11-06）：返回 `acceptance:"inserted"` 时，主机已接纳输入；但如果接收方没有出生行（例如出生提交失败），这一笔不会触发 nudge，也不会挂自动回执，只能由人按原 task id 人工对账。
 - 节点升级说明（#375）：旧主机（0.7.0 及更早）不认识 `acceptance:"unknown"`，收到后仍可能 failover 到其他候选目标。新主机才会停止 failover，并提示“接纳状态未知，请用原 task id 对账，不要换 id 重派”。建议调用方和接收方两端都升级。
@@ -23,6 +70,17 @@
 - HTTP 等待和自动回执用途分离：等待到期不删除后续 receipt 归属跟踪；后者按原任务终态、取消、TTL 或卸载清理。晚到真实读取轮 final 仍走同一固定身份回执和原有有限退避；占位、未消费、已关闭的空/失败读取轮不生成正式回执，不采用其他任务/后续轮输出。#351 提醒只提示本人对账，不新造正式回执。
 - 旧客户端兼容：0.7.0 及更早 CLI 收到这种含 `result.text` 的 DELIVERED 同步响应时会打印回复并在 stderr 提示未 settled，通常退出0，不自动重投；旧 `a2a_route` 返回 `ok:true` 和 DELIVERED，保留可路由回调的欠账，但旧 `trackOwedTask` 不识别 plain sync 新的 `receipt:none`，仍可能挂幽灵债；因此普通同步两端也应同步升级，不能仅凭旧文案当完成。旧版没有新的明确中文同步对账提示。如果走旧客户端的 `delivered:true` 分支，其文案可能仍称 async；以状态/task id 对账，不能把主机文字当业务完成。旧转发 home 若误收到旧对端的无 `reply_final` COMPLETED 仍可能按旧规则 receiptless，因此建议两端同步升级；本候选不改0.7.0已构建字节或代替后续发版授权。
 - 边界见[同步回复契约](protocol/synchronous-reply-contract.md)。同步回复片段不涉及 followup 泛化 throw 的接纳未知（本节另列接纳观察候选）；#369已覆盖窗口、不自动补出生及重启不恢复补发定时器等边界不变。不新增任务状态，不 tag / publish / 部署。
+
+### 工作台（#407、#416）
+
+- 「节点」面板的行内按钮不再被挤出可见区（#407）；「团队」页见上。
+
+### 0.8.0 已披露限制
+
+- 请求方确认需要两端都是 0.8.0：0.7.0 及更早的请求方宿主不认识 `acknowledged`，会把确认当普通回执直接结清，之后的结果作为迟到回执更新。建议团队宿主和请求方宿主同时升级。
+- 回退到 0.7.0：0.7.0 读得出 0.8.0 写的全部欠账与信箱行；一旦 0.7.0 写过账本，`acknowledgedAt` 与归档行的 `disposition` 丢失，已确认的欠账回到 24 小时过期（按派发时间算）。信箱行的新字段 0.7.0 原样保留。`<a2a home>/superagent/` 目录 0.7.0 不读也不删。
+- 角色工具的可见性收窄依赖宿主工具运行时的 `restrict` 与会话作用域；缺这两样时只靠全局守卫拒绝调用（日志记一条），不隐藏工具。
+- 结束回执：工单以完成、合并或 dropped 结束而总工 5 分钟内没转发结果时，宿主补发的结束回执只带结局和最新报告摘要，不是总工写的结果。
 
 ## 0.7.0（已发布；部署后核对已结案）
 
