@@ -219,6 +219,7 @@ export class SuperagentHost {
       path: join(dir, 'executor.json'), members: () => { const now = this.settings; return [...now.members, ...now.remoteMembers.map(r => r.ref)] },
       repoOf: member => this.settingsValue.repos[member],
       deliver: (member, text, kind, ticketId) => this.deliverToMember(member, text, kind, ticketId), engine: () => this.engine,
+      paused: () => this.settingsValue.paused,
       ticket: id => this.store.tickets.get(id), trigger: id => this.store.triggers.get(id), logger: d.logger,
     })
     const outbox: Outbox = {
@@ -555,6 +556,9 @@ export class SuperagentHost {
     try { this.engine.evaluateDue() } catch (error) { this.d.logger.warn('superagent: evaluation pass failed: %s', String(error)) }
     this.flushCandidates()
     this.flushOutbox()
+    // Upstream: evaluation, dispatch and outbound delivery hold while paused.
+    if (this.settingsValue.paused) return
+    this.executor.tick()
     this.acknowledgeRequests()
     this.receiptEndedRequests()
     this.receiptOtherMessages()

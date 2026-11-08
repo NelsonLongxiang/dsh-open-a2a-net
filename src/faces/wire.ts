@@ -89,6 +89,8 @@ export interface WireDeps {
   readonly canvasMemberForWrite: (ref: string, peer?: unknown, editorCard?: A2aPeerCard) => Promise<{ ok: true; member: string; ownerKey?: string } | { ok: false; error: string }>
   /** Design v5 R3/R4: why the superagent team refuses this member on this canvas, if it does (absent: no team). */
   readonly teamCanvasRefusal?: (canvas: string, member: string) => string | undefined
+  /** The canvas a superagent team is bound to here: only this host's owner changes it (a canvas change is a pool change). */
+  readonly teamCanvasBound?: (canvas: string) => boolean
   readonly canvasNameReserved: (name: string) => boolean
   readonly sessionNodes: Map<string, Agent>
   readonly joinedSessions: JoinedSessions
@@ -334,6 +336,11 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const op = body.op
             const name = typeof body.name === 'string' ? body.name : ''
             const rawId = typeof body.id === 'string' ? body.id : ''
+            if (d.teamCanvasBound?.(name) === true) {
+              recordActivity('in', 'fleet-canvas', claim.caller, false)
+              send(200, JSON.stringify({ ok: false, error: '[superagent-team-canvas] a superagent team is changed only by its own host\'s owner' }))
+              return
+            }
             // gh#131: a peer names our sessions by handle — the session it names, for removal.
             // A bare handle may still infer for routing, never for deleting another stored slot.
             const provenOwn = rawId.endsWith('@' + d.ownCanvasFingerprint)

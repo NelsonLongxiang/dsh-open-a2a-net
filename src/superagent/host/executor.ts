@@ -31,6 +31,8 @@ export interface MemberExecutorDeps {
    */
   readonly deliver: (member: string, text: string, kind: 'assign' | 'input' | 'stop', ticketId: string) => boolean | Promise<boolean>
   readonly engine: () => Engine
+  /** The owner paused the team (upstream: evaluation, dispatch and outbound delivery hold). */
+  readonly paused?: () => boolean
   /** A stored ticket (the engine's repositories). */
   readonly ticket: (id: string) => Ticket | undefined
   /** Text of a stored Trigger, for Inputs. */
@@ -40,6 +42,9 @@ export interface MemberExecutorDeps {
 
 /** One binding: which member runs which ticket's Assignment. */
 interface Binding { readonly member: string; readonly ticketId: string; readonly assignmentId: string; readonly at: string }
+
+/** How often a launch or delivery a failure left behind is tried again. */
+const RETRY_MS = 30_000
 
 export class MemberExecutor implements Executor {
   private bindings: Binding[]
@@ -52,6 +57,9 @@ export class MemberExecutor implements Executor {
   /** One launch loop at a time, so two launches never bind one slot; a request during a run runs it again. */
   private launching = false
   private launchAgain = false
+  /** One delivery at a time per Assignment: the retry never sends what a delivery in flight is sending. */
+  private readonly delivering = new Set<string>()
+  private lastRetry = 0
   /** When each member's session last took a message into its history (memberRead), for a claim that beats the delivery record. */
   private readonly claimedAt = new Map<string, number>()
 
@@ -109,12 +117,31 @@ export class MemberExecutor implements Executor {
 
   /** Launch waiting Assignments on free members, oldest first, while both exist. */
   launch(): void {
+    if (this.d.paused?.() === true) return
     if (this.launching) { this.launchAgain = true; return }
     this.launching = true
     void this.launchLoop().catch(error => { this.d.logger.warn('superagent: launch failed: %s', String(error)) }).finally(() => {
       this.launching = false
       if (this.launchAgain) { this.launchAgain = false; this.launch() }
     })
+    this.redeliver()
+  }
+
+  /** The periodic retry (upstream retries launches and deliveries): an assignment or Input a failed delivery left behind goes out again. */
+  tick(): void {
+    const now = Date.now()
+    if (now - this.lastRetry < RETRY_MS) return
+    this.lastRetry = now
+    this.launch()
+  }
+
+  /** Inputs still undelivered on the Assignments that run (held while paused, or left by a failed delivery). */
+  private redeliver(): void {
+    for (const binding of this.bindings) {
+      const ticket = this.d.ticket(binding.ticketId)
+      const assignment = ticket?.assignments.find(a => a.id === binding.assignmentId)
+      if (ticket !== undefined && !ticket.ended && assignment?.state === 'running' && ticket.undelivered.length > 0) this.deliver(ticket, assignment)
+    }
   }
 
   private async tryDeliver(member: string, text: string, kind: 'assign' | 'input' | 'stop', ticketId: string): Promise<boolean> {
@@ -147,24 +174,30 @@ export class MemberExecutor implements Executor {
 
   deliver(ticket: Ticket, assignment: Assignment): void {
     queueMicrotask(() => { void (async () => {
+      if (this.d.paused?.() === true || this.delivering.has(assignment.id)) return
       const binding = this.bindings.find(b => b.assignmentId === assignment.id)
       if (binding === undefined) return
-      const current = this.d.ticket(ticket.id)
-      if (current === undefined || current.ended) return
-      const inputs = current.inputs.filter(input => current.undelivered.includes(input.id))
-      if (inputs.length === 0) return
-      const engine = this.d.engine()
-      // The Triggers the ticket was accepted from are already in its assignment card: recorded delivered, not sent twice.
-      const fresh = inputs.filter(input => !(input.kind === 'trigger' && current.origin.triggerIds.includes(input.triggerId)))
-      const sentAt = Date.now()
-      if (fresh.length > 0 && !(await this.tryDeliver(binding.member, inputsCard(current, fresh, this.d.trigger), 'input', ticket.id))) {
-        try { engine.deliveryFailed(ticket.id, assignment.id, `member ${binding.member} did not receive the input`) } catch { /* the ticket ended meanwhile */ }
-        return
-      }
-      try { engine.inputsDelivered(ticket.id, assignment.id, inputs.map(input => input.id)) } catch (error) { this.d.logger.warn('superagent: inputs of %s not recorded delivered: %s', ticket.id, String(error)) }
-      // The member's session may take the message in before its delivery is recorded: that claim counts for it.
-      if ((this.claimedAt.get(binding.member) ?? 0) >= sentAt) this.memberRead(binding.member)
+      this.delivering.add(assignment.id)
+      try { await this.deliverNow(ticket, assignment, binding) } finally { this.delivering.delete(assignment.id) }
     })() })
+  }
+
+  private async deliverNow(ticket: Ticket, assignment: Assignment, binding: Binding): Promise<void> {
+    const current = this.d.ticket(ticket.id)
+    if (current === undefined || current.ended) return
+    const inputs = current.inputs.filter(input => current.undelivered.includes(input.id))
+    if (inputs.length === 0) return
+    const engine = this.d.engine()
+    // The Triggers the ticket was accepted from are already in its assignment card: recorded delivered, not sent twice.
+    const fresh = inputs.filter(input => !(input.kind === 'trigger' && current.origin.triggerIds.includes(input.triggerId)))
+    const sentAt = Date.now()
+    if (fresh.length > 0 && !(await this.tryDeliver(binding.member, inputsCard(current, fresh, this.d.trigger), 'input', ticket.id))) {
+      try { engine.deliveryFailed(ticket.id, assignment.id, `member ${binding.member} did not receive the input`) } catch { /* the ticket ended meanwhile */ }
+      return
+    }
+    try { engine.inputsDelivered(ticket.id, assignment.id, inputs.map(input => input.id)) } catch (error) { this.d.logger.warn('superagent: inputs of %s not recorded delivered: %s', ticket.id, String(error)) }
+    // The member's session may take the message in before its delivery is recorded: that claim counts for it.
+    if ((this.claimedAt.get(binding.member) ?? 0) >= sentAt) this.memberRead(binding.member)
   }
 
   stop(ticket: Ticket, assignment: Assignment, reason: string): void {

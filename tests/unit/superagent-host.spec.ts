@@ -527,6 +527,62 @@ describe('acceptance item 9: an agent\'s message cannot end a ticket through its
 })
 
 describe('ops loop: members work in repositories; a ticket accepted for one runs only on its members', () => {
+  it('paused: nothing is assigned or delivered to a member; resuming sends what waited', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const home = mkdtempSync(join(tmpdir(), 'sa-paused-'))
+    const sent: Array<[string, string]> = []
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-a']), home, logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {} })
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
+    h.start()
+    const toMember = (prefix: string): string[] => sent.filter(([id, t]) => id === 'session-a' && t.startsWith(prefix)).map(([, t]) => t)
+    const settle = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 30))
+    try {
+      const first = h.request('第一张') as { triggerId: string; thread: string }
+      h.pass()
+      const one = routeItem(h, { trigger_id: first.triggerId, kind: 'accept', title: '一', scope: 's', reason: 'r' }) as { ticket_id: string }
+      await vi.waitFor(() => { expect(toMember('[superagent assignment]')).toHaveLength(1) })
+      const second = h.request('第二张') as { triggerId: string }
+      h.pass()
+      expect(routeItem(h, { trigger_id: second.triggerId, kind: 'accept', title: '二', scope: 's', reason: 'r' })).toMatchObject({ ok: true })
+      await settle()
+      expect(h.saveSettings({ paused: true }, () => true)).toMatchObject({ ok: true })
+      // An Input for the running ticket is held, and the member the stop frees takes no new ticket.
+      expect(h.request('补充', first.thread)).toMatchObject({ ok: true })
+      await settle()
+      expect(toMember('[superagent input]')).toHaveLength(0)
+      h.engine.stopTicket(one.ticket_id, 'done')
+      h.pass()
+      await settle()
+      expect(toMember('[superagent assignment]')).toHaveLength(1)
+      expect(h.saveSettings({ paused: false }, () => true)).toMatchObject({ ok: true })
+      await vi.waitFor(() => { expect(toMember('[superagent assignment]')).toHaveLength(2) })
+    } finally { await h.stop() }
+  })
+
+  it('a failed assignment goes out again on the periodic retry', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const home = mkdtempSync(join(tmpdir(), 'sa-retry-'))
+    const sent: Array<[string, string]> = []
+    let up = false
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-a']), home, logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { if (id === 'session-a' && !up) return false; sent.push([id, text]); return true }, interval: () => () => {} })
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
+    h.start()
+    const now = vi.spyOn(Date, 'now')
+    try {
+      const first = h.request('一张') as { triggerId: string }
+      h.pass()
+      expect(routeItem(h, { trigger_id: first.triggerId, kind: 'accept', title: '一', scope: 's', reason: 'r' })).toMatchObject({ ok: true })
+      await new Promise(resolve => setTimeout(resolve, 30))
+      expect(sent.some(([id]) => id === 'session-a')).toBe(false)
+      up = true
+      now.mockReturnValue(Date.now() + 60_000)
+      h.pass()
+      await vi.waitFor(() => { expect(sent.some(([id, t]) => id === 'session-a' && t.startsWith('[superagent assignment]'))).toBe(true) })
+    } finally { now.mockRestore(); await h.stop() }
+  })
+
   it('settings name each member\'s repository (owner/name), only for members, and drop it when the member goes', () => {
     // Design v5: the pool comes from the canvas (the host passes it in as the current settings); a write never names members.
     expect(parseSettings({ members: ['session-a', 'session-b'] }, DEFAULT_SETTINGS)).toMatchObject({ ok: false, error: expect.stringContaining('canvas') })
