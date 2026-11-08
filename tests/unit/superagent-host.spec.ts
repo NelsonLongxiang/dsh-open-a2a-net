@@ -121,6 +121,16 @@ describe('team policy (upstream docs/002, accept mode off)', () => {
 })
 
 describe('candidate card', () => {
+  it('tells the router how to record a would-accept in observe mode', () => {
+    const repo = new MemoryRepositories()
+    const seen: Candidate[] = []
+    const engine = new Engine({ repo, policy: () => teamPolicy(settings()), scope: teamScope(() => settings()), assessor: { request: vi.fn(c => { seen.push(c) }) },
+      executor: { start: () => {}, deliver: () => {}, stop: () => {} }, outbox: { send: () => {}, status: () => undefined, withdraw: () => {} } })
+    engine.receive(wb('1')); engine.evaluateDue()
+    const card = candidateCard({ ...seen[0]!, strength: 'inferred' }, settings({ acceptMode: 'observe', rules: [{ name: 'deps', text: 'Upgrade.', enabled: true }] }))
+    expect(card).toContain('still route a matching candidate as accept, naming its rules')
+  })
+
   it('says what a 未验证 delivery header means, only for an A2A message that carries one', () => {
     const repo = new MemoryRepositories()
     const seen: Candidate[] = []
