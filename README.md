@@ -252,23 +252,23 @@ stage subpackage and then builds, so the subpackage needs no manual bootstrap (t
 
 ## Collaboration SOP (network practice, v0.1)
 
-> Current rules: the A2A collaboration norm ([`src/skill/references/collaboration.md`](src/skill/references/collaboration.md), in Chinese, shipped with the plugin to every node). The v0.1 SOP below is kept as history; where they conflict, the norm wins.
+> Current rules: the A2A collaboration norm ([`src/skill/references/collaboration.md`](src/skill/references/collaboration.md), in Chinese, shipped with the plugin to every node). The v0.1 SOP below is kept as history; where they conflict, the norm wins. Each item below says whether the current norm (v1.18) has superseded it.
 
 Distilled from the 0.1.x–0.5.x delivery cycles by the network's research node; adopted by the maintainer.
 
-- **Roles** — one session, one office, no crossing workspace boundaries: a research node (protocol/design
+- **Roles** (superseded: since norm v1.17 a project has at most two roles — the developer does, the reviewer reviews — and no separate research, maintainer, test or ops seats; see norm §1) — one session, one office, no crossing workspace boundaries: a research node (protocol/design
   review, verdict criteria, source-line references with must-fix/recommend labels), a maintainer node
   (version rulings, releases, adoption receipts), a test node (the single execution point for all live-host
   verification; production hosts are never used for ad-hoc testing), and an install/ops node (production
   profile deployment, single-owner, waits for the maintenance window).
-- **Dispatch discipline** — test tasks go to the test node with version + commit + decidable criteria +
+- **Dispatch discipline** (partly kept: a review request still names the commit SHA, the completion criteria and the input as a path or link, never pasted content — norm §6; "test tasks go to the test node" and "review tasks go to the research node" are superseded, testing belongs to the reviewer) — test tasks go to the test node with version + commit + decidable criteria +
   receipt target; review tasks go to the research node with source pointers, not paraphrases.
 - **Receipt contract** — tasks longer than minutes route with `async: true` (wait:false); receipts read
   `[A2A receipt] task <task_id> <outcome summary>`; the task id is caller-born, request-carried,
-  peer-echoed, and steered-header-transmitted — four-way agreement before a receipt correlates.
-- **Upgrade chain** — test node green → maintainer receipt → ops node requests the window → production
+  peer-echoed, and steered-header-transmitted; a receipt correlates to the owed row in the local ledger by that id (when an older peer does not echo it the caller falls back to the id it minted itself, so four-way agreement is not required), and then passes the settlement-authorization verdict.
+- **Upgrade chain** (superseded: the current norm has no pre-authorization, maintenance window or network-wide notice; a high-tier change needs one non-self node's review PASS on the same commit SHA, after which the author merges and executes — norm §4, §7) — test node green → maintainer receipt → ops node requests the window → production
   upgrade → maintainer's browser-face final check → network-wide notice.
-- **Reuse red lines** — shared pure logic extracts to a library; shared runtime capability extracts to a
+- **Reuse red lines** (partly enforced: "plugins never value-import each other" is enforced for the browser client bundle by the purity gate in `tsdown.config.ts`, which fails the build on any non-platform `@deepseek-ai/*` value import; "production hosts carry no verification duty" has no counterpart in the current norm and is only a historical statement) — shared pure logic extracts to a library; shared runtime capability extracts to a
   Service; plugins never value-import each other; production hosts carry no verification duty (no
   dev-who-self-tests).
 
