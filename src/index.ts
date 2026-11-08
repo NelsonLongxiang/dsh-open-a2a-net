@@ -3173,6 +3173,9 @@ export function apply(ctx: Context, config: Config): void {
                 if (peerAdmissionLinkState(found.url).link !== 'linked') { send(200, { ok: false, error: 'the team host must be a linked peer' }); return }
                 send(200, superagentHost.serveTeam({ url: new URL(found.url).origin, key: found.card.publicKey!, canvas: team }, members, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf))
               })().catch(error => send(200, { ok: false, error: String(error) }))
+            } else if (fields.action === 'reevaluate') {
+              // Design superagent-reevaluate-note D1: the owner asks for a fresh judgement of a stored message.
+              send(200, superagentHost.reevaluate(typeof fields.trigger_id === 'string' ? fields.trigger_id : ''))
             } else if (fields.action === 'stop' || fields.action === 'retry') {
               const ticketId = typeof fields.ticket_id === 'string' ? fields.ticket_id : ''
               const ticket = fields.action === 'stop'
@@ -3180,7 +3183,7 @@ export function apply(ctx: Context, config: Config): void {
                 : superagentHost.engine.retryTicket(ticketId)
               superagentHost.pass()
               send(200, { ok: true, ticket })
-            } else send(200, { ok: false, error: 'action must be settings, request, serve, stop or retry' })
+            } else send(200, { ok: false, error: 'action must be settings, request, serve, stop, retry or reevaluate' })
           } catch (error) { send(200, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
         }, 64_000)
       }),

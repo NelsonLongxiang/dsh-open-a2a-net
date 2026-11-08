@@ -53,7 +53,7 @@ usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
 文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR]   (#91: bytes never ride a message)
-superagent: superagent request <text…> [--thread ID] · superagent state   (owner credential: the team's workbench Source)
+superagent: superagent request <text…> [--thread ID] · superagent reevaluate <trigger id> · superagent state   (owner credential: the team's workbench Source)
 
 host:     --home > $A2A_HOME > the home saved by 'a2a init --home URL' > ${DEFAULT_HOME}
 key:      --key > $A2A_KEY (prefer the env var: a --key value stays in shell history)
@@ -642,6 +642,17 @@ async function cmdSuperagent() {
     console.log(`[superagent] ${String(out.result)} · trigger ${String(out.triggerId)} · thread ${String(out.thread)}${out.result === 'filtered' ? ' (the workbench Source is off)' : ''}`)
     return
   }
+  if (sub === 'reevaluate') {
+    // Design superagent-reevaluate-note D3: the owner asks the router to judge a stored message again.
+    const [triggerId] = words
+    if (triggerId === undefined || triggerId === '') usage('usage: a2a superagent reevaluate <trigger id> [--json]')
+    const out = await answer(await homeFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...keyHeaders() },
+      body: JSON.stringify({ action: 'reevaluate', trigger_id: triggerId }) }))
+    if (has('--json')) { console.log(JSON.stringify(out)); if (out.ok !== true) process.exitCode = 1; return }
+    if (out.ok !== true) die(`[superagent] reevaluate refused: ${String(out.error)}`)
+    console.log(out.queued === true ? `[superagent] ${triggerId} queued for a fresh judgement` : `[superagent] ${triggerId} is being judged right now; nothing queued`)
+    return
+  }
   if (sub === 'state') {
     const out = await answer(await homeFetch(url, { headers: keyHeaders() }))
     if (has('--json')) { console.log(JSON.stringify(out)); return }
@@ -657,7 +668,7 @@ async function cmdSuperagent() {
     }
     return
   }
-  usage('usage: a2a superagent request <text…> [--thread ID] [--json] · a2a superagent state [--json]')
+  usage('usage: a2a superagent request <text…> [--thread ID] [--json] · a2a superagent reevaluate <trigger id> [--json] · a2a superagent state [--json]')
 }
 
 /** One mailbox read: the rows, plus the gh#113 seq bounds when the host has them. */

@@ -19,7 +19,7 @@ import type { RailTone } from './wb-rail'
 type Json = Record<string, unknown>
 
 export interface SaTrigger { readonly id: string; readonly actor: { source: string; id: string }; readonly at: string; readonly text: string; readonly disposition: unknown }
-export interface SaDecision { readonly id: string; readonly kind: string; readonly at: string; readonly ticketId?: string; readonly reason?: ReadonlyArray<{ code?: string; text?: string; values?: Record<string, string> }> | string }
+export interface SaDecision { readonly id: string; readonly kind: string; readonly at: string; readonly ticketId?: string; readonly triggerIds?: readonly string[]; readonly reason?: ReadonlyArray<{ code?: string; text?: string; values?: Record<string, string> }> | string }
 export interface SaReply { readonly message: { kind: string; text: string }; readonly status: string; readonly reason?: string }
 export interface SaThread {
   readonly key: string; readonly ref: { source: string; id: string }; readonly createdAt: string; readonly lastAt: string | null
@@ -312,7 +312,16 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       }
       for (const d of thread.decisions) {
         const reason = typeof d.reason === 'string' ? d.reason : (d.reason ?? []).map(r => r.text ?? r.values?.text ?? r.code ?? '').filter(Boolean).join('；')
-        card.appendChild(el('div', 'wb-sa-decision', `总工：${DECISION[d.kind] ?? d.kind}${reason !== '' ? ` · ${reason}` : ''}${d.ticketId !== undefined ? ` · ${d.ticketId}` : ''}`))
+        const row = el('div', 'wb-sa-decision', `总工：${DECISION[d.kind] ?? d.kind}${reason !== '' ? ` · ${reason}` : ''}${d.ticketId !== undefined ? ` · ${d.ticketId}` : ''}`)
+        // Design superagent-reevaluate-note D3: the owner asks the router to judge a turned-down message again.
+        if ((d.kind === 'ignore' || d.kind === 'unavailable') && thread.evaluating === null && (d.triggerIds ?? []).length > 0) {
+          const again = el('button', 'wb-btn wb-sa-reevaluate', '重新判断')
+          again.type = 'button'
+          // One ask per click: the button turns off until the next render (design review: no repeated requeues).
+          again.addEventListener('click', () => { again.disabled = true; for (const id of d.triggerIds ?? []) void send({ action: 'reevaluate', trigger_id: id }, undefined, '已请总工重新判断') })
+          row.appendChild(again)
+        }
+        card.appendChild(row)
       }
       if (thread.evaluating !== null) card.appendChild(el('div', 'wb-sa-hint', '等总工决定…'))
       for (const r of thread.replies) {

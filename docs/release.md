@@ -5,6 +5,11 @@
 
 ## 下一版本候选（待评审，未发布）
 
+### 属主重判与总工备注（设计 superagent-reevaluate-note）
+- 属主可让总工重新判断一条被拒的需求：团队页「提需求」的线上「重新判断」，控制面 `{ action: 'reevaluate', trigger_id }`，或 `a2a-net superagent reevaluate <trigger id>`。总工收到时卡片标明是复判。已经拿到正式结局的 A2A 消息不重判（任务已结清，请发送方重发）。
+- 总工新工具 `superagent_note`：给在办工单的成员补一条事实（成员收到「note from the router」），只告知、不授权。
+- 总工预设人设与 #456 后的卡片口径对齐：重复请求并入，不再接第二张。
+
 ### 配置承诺按文档生效（属主裁定 #453、#454）
 - `asyncNudgeDelayMs: 0` 现在真的关闭催办（此前 0 会立刻催办，与 README 和配置注释相反）。已配成 0 的主机升级后不再催办。
 - 属主面板热改 `teamScopeInfo` 后，`a2a_status` 与 `a2a_probe` 也立即按新值收窄或放开（此前只有 `a2a_teams` 即时，另两个读启动值）。
