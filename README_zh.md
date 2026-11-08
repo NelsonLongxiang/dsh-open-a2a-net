@@ -74,13 +74,13 @@ a2a-net inbox --new                                      # 未读来信；--wait
 
 主机/成员的 linked 徽章按主机事实显示：双向 URL 种子，或该主机卡唯一列出的精确非本机画布成员句柄。同名 zone（例如全为 `dsh`）不再推断已链接；最小卡缺少会话列表时，除非双向种子能证明该主机，否则保守显示 stranger。该显示规则不改变调用方准入或 CLI home 校验。
 
-画布队伍是用户自建的有名多成员路由组：**一个原子会话节点可同时属于多个队伍**，路由到 `<team>/canvas/<name>` 解析**第一个活成员**（成员顺序即路由优先级），无活成员则唤醒**第一个冷 joined 成员**（wake-on-route）。`canvas/` 路径段与节点别名（`<team>/<id8>`）结构性无冲突，两个命名空间互不干扰。
+画布队伍是用户自建的有名多成员路由组：**一个原子会话节点可同时属于多个队伍**，路由到 `<team>/canvas/<name>` 解析**第一个活成员**（成员顺序即路由优先级），无活成员则唤醒**第一个冷 joined 成员**（wake-on-route）；本机成员都不可用时，再依次落到远端成员（经目录解析其句柄，远端节点不会在这里被唤醒）。发起路由的会话自己不会占用本机两档（自路由规则，#41）。`canvas/` 路径段与节点别名（`<team>/<id8>`）结构性无冲突，两个命名空间互不干扰。
 
-- 存储：`<dsh-home>/a2a/canvas.json`（有序队伍条目；上限：64 队 × 32 成员）
-- 控制 API：`POST /__dsh_a2a/canvas`，`action: create | remove | add-member | remove-member`；`cli-home-options` 是仅查询已有 CLI 成员候选的属主操作。
+- 存储：`<dsh-home>/a2a/canvas.json`（有序队伍条目；上限：64 队 × 32 成员；文件另带版本号、成员属主锚、暂停记录与 CLI home 钉）
+- 控制 API：`POST /__dsh_a2a/canvas`，`action: create | remove | add-member | remove-member`；`add-member` 对不存在的队伍会先建队。另有属主的成员来源与暂停治理操作 `confirm-member`、`restore-suspended`、`delete-suspended`（#334/#335），以及仅查询已有 CLI 成员候选的 `cli-home-options`。队名 ≤40 字，不含 `/`，不是纯数字，不以 `@<8 位小写十六进制>` 结尾，且不能被 roster 保留（`roster:` 前缀，或等于白名单/roster 团队名）；含暂停成员的队不能 `remove`。
 - CLI 成员标「home 未确定」时，打开其画布队详情并点「指定 home」。宿主现读名片，只列已链接且列出该句柄的主机，并显示不可读名片数；不会自动选中。确认后复用本机 `add-member` 的显式 `home`，提交时再次现读校验，不放宽自动钉或准入。本机持有在线户口或离线墓碑时显示「本机持有，无需指定」，候选返回 `held:true` 且为空，显式 home 写入提示先撤销本机户口；回执优先投在线本机信箱；本机 publish 成功会清除冲突旧钉并在面板提示，户口离线不复活旧钉；本地投递中途到期即报错，不回落对端目录。
-- 成员必须是 joined 会话（活节点或已记意图）——未加入会话没有路由后门；退出网络（leave/archive）自动清空全部画布成员关系
-- 成员也可以是操作者手工加入的**远端**带 zone 团队句柄（`zone/a1b2c3d4`）——这就是让该远端调用方在本机获准入、并有权拿完整卡片的链接
+- 成员必须是 joined 会话（活节点或已记意图）——未加入会话没有路由后门；退出网络（leave/archive）自动把它移出全部画布队（旧式裸句柄槽位改记为 suspended：不再路由、不计入有效成员，由属主 `restore-suspended` 或 `delete-suspended`，见 `docs/design/canvas-member-provenance.md`）
+- 成员也可以是操作者手工加入的**远端**带 zone 团队句柄（`zone/a1b2c3d4`）——这就是让该远端调用方在本机获准入、并有权拿完整卡片的链接。写入时宿主现读已链接的种子/委托主机的验签名片，把句柄钉成带属主指纹的 `zone/a1b2c3d4@<8 位指纹>`；找不到唯一可验证的属主就拒写（#334）。不带指纹的旧式裸句柄只作兼容保留（`canvasLegacyBareMembers` 默认 `true` 时仍按旧读法计入、授权和路由），需属主 `confirm-member` 确认
 - `a2a_teams` 列出本地和作用域内远端画布队，带属主 URL 和成员数；CLI `teams` 包含本地 canvas 和 peerOrg，同名不同属主各列一行。`a2a_whoami.teams.canvasDetails` 和 CLI `whoami --json` 列本身份本地/远端归属，旧 `teams.canvas` 本地名字数组兼容保留。URL 只作发现事实，不要求改 `--home`。失败提示区分可见目录无此队、已知属主但缺前提、同名多属主（列候选不猜）；信息作用域、路由选择与准入不变；`/__dsh_a2a/state` 对本地成员提供 `joined`/`live` 标记，对远端成员提供 `{ id, team, remote: true }`
 
 ## Native-teams 桥（节点统一，P1）——已弃用
