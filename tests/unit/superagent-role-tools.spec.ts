@@ -86,6 +86,13 @@ describe('the team\'s agent presets: shipped in the bundle layer, required of a 
     expect(router).toContain('superagent_route')
     expect(member).toContain('a2a_ticket_report')
     expect(member).toContain("name: '@deepseek-ai/dsh-tool-fs'\n")
+    // Both wait at most 5 s in the foreground, as upstream's executor: a long command moves to a background job, so a stop
+    // notice or a person's answer is taken at the next step, and a job wait ends after 5 s too.
+    for (const preset of [router, member]) {
+      expect(preset).toMatch(/isolate:\n\s+shell: true/)
+      expect(preset.match(/maxTimeoutMs: 5000/g)).toHaveLength(2)
+      expect(preset).toMatch(/dsh-tool-jobs'\n\s+config:\n\s+waitTimeoutMs: 5000\n\s+maxWaitTimeoutMs: 5000/)
+    }
   })
 
   it('a router or member on another preset is refused; an unloaded one (preset unknown) is not', async () => {
