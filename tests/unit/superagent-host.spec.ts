@@ -490,6 +490,8 @@ describe('ops loop: members work in repositories; a ticket accepted for one runs
       expect(routeItem(h, { trigger_id: first.triggerId, kind: 'accept', title: 'net 1', scope: 's', reason: 'r', repo: 'o/net' })).toMatchObject({ ok: true, repo: 'o/net' })
       await vi.waitFor(() => { expect(assigned('session-a')).toHaveLength(1) })
       expect(assigned('session-a')[0]).toContain('repository: o/net (yours)')
+      // A ticket's worktree goes beside the checkout, never inside it (the ops clones filled up with ticket directories).
+      expect(assigned('session-a')[0]).toContain('beside the checkout')
       // A second net ticket waits for session-a although session-b is free …
       const second = h.request('net：核对 docs/protocol') as { triggerId: string }
       expect(routeItem(h, { trigger_id: second.triggerId, kind: 'accept', title: 'net 2', scope: 's', reason: 'r', repo: 'o/net' })).toMatchObject({ ok: true })
