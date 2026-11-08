@@ -21,8 +21,8 @@ model tools.
   for the old handle any more; its deposit stays on the home host until it
   expires (4h at most).
 - Home host: `--home` > `$A2A_HOME` > the home saved by `init --home` >
-  `http://127.0.0.1:3080`. (An `A2A_HOME` set to the empty string currently
-  counts as set and breaks every request — #490; unset it instead.)
+  `http://127.0.0.1:3080`. An environment variable set to the empty string
+  counts as unset.
 - Keyed hosts: `--key` > `$A2A_KEY` (prefer the variable; a flag value stays
   in shell history). A host behind dsh-pocket also wants its session token as
   the `dsh_pocket_token` cookie: set `$A2A_POCKET_TOKEN` (or `$A2A_TOKEN`).
@@ -159,8 +159,7 @@ Files do not go through session messages: use the file channel below, never JPFI
 - With forwarding off or any prerequisite missing, the original "No live DSH session node accepts team" error includes the reason it was not forwarded. Receiving hosts never forward the forwarded request again.
 - Admission: a deposited handle is a node fact of its home host (N3); that fact alone grants no remote scope or admission. Operator canvas membership and B’s home pin are still required. Global self-description is never a link.
 - `a2a-net report <message…>` is a one-way report to the host's process team
-  (addressed to the zone team `dsh`; on a host whose zone is not `dsh` it does
-  not reach the process team today — #503).
+  (addressed to the zone the home's state face names, `dsh` if it names none).
 - A message that starts with `-` goes after `--`. Flag values never become
   part of the message.
 - Async output is one line (`delivered → <team> · task <id> · <receipt>`);
