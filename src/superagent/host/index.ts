@@ -15,7 +15,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
-import { Engine, UserError, ticketStage, type Assessor, type Candidate, type Outbox, type Ticket, type Trigger, type ReceiveResult } from '../upstream/dsh-superagent/src/core/index.ts'
+import { Engine, UserError, reasonText, ticketStage, type Assessor, type Candidate, type Outbox, type Reason, type Ticket, type Trigger, type ReceiveResult } from '../upstream/dsh-superagent/src/core/index.ts'
 import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
 import { MemberExecutor } from './executor.ts'
@@ -82,7 +82,6 @@ const REFUSALS_KEPT = 50
 
 const clip = (text: string, cap = TEXT_CAP): string => (text.length > cap ? `${text.slice(0, cap)}… (${String(text.length - cap)} more characters)` : text)
 
-/** The candidate card the router reads: bounded facts and the ids its decision names, never authority. */
 /**
  * A router or member session that runs another agent preset than its role's (when its preset is known: a session that is
  * not loaded right now is checked when it is).
@@ -97,6 +96,22 @@ export function presetRefusal(router: string | undefined, members: readonly stri
   return undefined
 }
 
+/** Why the team did not take a message, in the requester's terms (upstream's codes plus this host's gate codes). */
+export function notTakenText(reason: Reason | undefined): string {
+  switch (reason?.code) {
+    case 'observed': return '团队处于观察模式，这类请求只记录、不接单'
+    case 'botNotListed': case 'notListed': return '发送方不在团队的名单上'
+    case 'notAddressed': return '消息没有明确发给团队'
+    case 'acceptOff': return '团队目前不接推断出来的请求'
+    case 'stopNotExplicit': return '机器的消息不能停止工单，只有属主可以'
+    case 'stopUnknown': return '要停止的工单不存在或已经结束'
+    case 'said': return `总工的理由：${reason.values?.text ?? ''}`
+    case undefined: return '没有记录原因'
+    default: return reasonText(reason)
+  }
+}
+
+/** The candidate card the router reads: bounded facts and the ids its decision names, never authority. */
 export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings, 'acceptMode' | 'rules'> & Partial<Pick<TeamSettings, 'repos'>>): string {
   const lines = [
     `[superagent candidate] eval ${candidate.evalId} · strength ${candidate.strength} · policy ${candidate.policyVersion}`,
@@ -149,6 +164,8 @@ export class SuperagentHost {
   private readonly ackSettled = new Set<string>()
   private endReceipting = false
   private readonly endReceipted = new Set<string>()
+  private outcomeReceipting = false
+  private readonly outcomeReceipted = new Set<string>()
   /** Refusals at the team's edge by rule, and the latest ones (noteRefusal). */
   private readonly refusalCounts = new Map<string, number>()
   private readonly refusalRecent: Array<{ at: string; rule: string; caller?: string; target?: string }> = []
@@ -438,6 +455,7 @@ export class SuperagentHost {
     this.flushOutbox()
     this.acknowledgeRequests()
     this.receiptEndedRequests()
+    this.receiptOtherMessages()
   }
 
   /**
@@ -520,6 +538,57 @@ export class SuperagentHost {
         } catch (error) { this.d.logger.warn('superagent: ending receipt for ticket %s failed (retried later): %s', ticket.id, String(error)) }
       }
     })().finally(() => { this.endReceipting = false })
+  }
+
+  /**
+   * Every A2A message to the team address gets a formal outcome, not only the ones that start a ticket (the ops team's
+   * ledger: each dead letter was a message the team did not take, and nobody told its sender). A message delivered into
+   * a ticket as a follow-up gets a `completed` receipt saying so once its member has it; one the team decided not to take
+   * (observe mode, a sender not on the list, a stop an agent may not give, the router's ignore) gets a `rejected` receipt
+   * with the reason. A ticket's own request keeps its acknowledgement and result receipts. One at a time per pass;
+   * a failure is tried again on a later pass.
+   */
+  private receiptOtherMessages(): void {
+    if (this.outcomeReceipting || !this.settingsValue.sources.a2a) return
+    const now = Date.parse(this.now())
+    const origins = new Set(this.store.tickets.list().flatMap(t => t.origin.triggerIds))
+    const due = new Map<string, { channel: NonNullable<Trigger['channel']>; text: string; outcome: 'completed' | 'rejected'; ticketId?: string }>()
+    const consider = (triggerId: string, make: () => { text: string; outcome: 'completed' | 'rejected'; ticketId?: string }): void => {
+      if (origins.has(triggerId) || due.has(triggerId) || this.outcomeReceipted.has(triggerId)) return
+      const trigger = this.store.triggers.get(triggerId)
+      const channel = trigger?.source === 'a2a' && trigger.human !== true ? trigger.channel : undefined
+      const task = channel?.address.task
+      if (channel === undefined || task === undefined || this.a2a.answered(task) || now - Date.parse(trigger!.at) > END_RECEIPT_HORIZON_MS) { this.outcomeReceipted.add(triggerId); return }
+      due.set(triggerId, { channel, ...make() })
+    }
+    for (const ticket of this.store.tickets.list()) {
+      for (const input of ticket.inputs) {
+        if (input.kind !== 'trigger' || input.deliveredTo === undefined) continue
+        consider(input.triggerId, () => ({ outcome: 'completed', ticketId: ticket.id, text: `已作为补充送达工单「${ticket.title}」的成员。Delivered to the member of ticket «${ticket.title}» as a follow-up.` }))
+      }
+    }
+    for (const thread of this.store.threads.list()) {
+      for (const decision of this.store.decisions.byThread(thread.key)) {
+        if (decision.kind !== 'ignore') continue
+        decision.triggerIds.forEach((triggerId, i) => {
+          const reason = decision.reason.find(r => r.triggerId === triggerId) ?? decision.reason[decision.reason.length === decision.triggerIds.length ? i : 0]
+          // A message routed into a ticket is answered when its member has it (above).
+          if (reason?.code === 'routed') return
+          consider(triggerId, () => ({ outcome: 'rejected', text: clip(`团队未接这条消息：${notTakenText(reason)}。The team did not take this message: ${reason === undefined ? 'no reason recorded' : reasonText(reason)}.`, 1_000) }))
+        })
+      }
+    }
+    if (due.size === 0) return
+    this.outcomeReceipting = true
+    void (async () => {
+      for (const [triggerId, item] of due) {
+        try {
+          const result = await this.a2a.send({ id: `a2a-outcome:${triggerId}`, channel: item.channel, text: item.text, kind: 'notice', ...(item.ticketId !== undefined ? { ticketId: item.ticketId } : {}) }, { outcome: item.outcome })
+          this.outcomeReceipted.add(triggerId)
+          this.d.logger.info('superagent: A2A message %s got its outcome receipt (%s, %s)', triggerId, item.outcome, result)
+        } catch (error) { this.d.logger.warn('superagent: outcome receipt for %s failed (retried later): %s', triggerId, String(error)) }
+      }
+    })().finally(() => { this.outcomeReceipting = false })
   }
 
   private flushCandidates(): void {
