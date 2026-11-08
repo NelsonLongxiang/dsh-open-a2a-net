@@ -259,7 +259,15 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
           answer.addEventListener('click', () => { void send({ action: 'request', text: box.value, thread }, () => { box.value = '' }, '回答已送出') })
           card.appendChild(box)
           actions.appendChild(answer)
-        } else card.appendChild(el('div', 'wb-sa-hint', '这张工单来自别的渠道，请在原渠道回答'))
+        } else {
+          // Its requester is an agent, so the question is the owner's to answer here.
+          const box = draftFor(`ticket:${ticket.id}`, '回答这个问题（请求方是 agent，由你来答，答复会送给成员）')
+          const answer = el('button', 'wb-btn wb-btn-primary', '回答')
+          answer.type = 'button'
+          answer.addEventListener('click', () => { void send({ action: 'answer', ticket_id: ticket.id, text: box.value }, () => { box.value = '' }, '回答已送出') })
+          card.appendChild(box)
+          actions.appendChild(answer)
+        }
       }
       const retryable = ticket.delivery !== undefined || (person && (ticket.stage?.action === 'blocked' || ticket.stage?.action === 'failed'))
       if (retryable) {

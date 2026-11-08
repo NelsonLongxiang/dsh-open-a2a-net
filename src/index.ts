@@ -3129,7 +3129,9 @@ export function apply(ctx: Context, config: Config): void {
             if (fields.action === 'settings') {
               send(200, superagentHost.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf))
             } else if (fields.action === 'request') {
-              send(200, superagentHost.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined))
+              send(200, superagentHost.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined, fields.via === 'cli' ? 'cli' : undefined))
+            } else if (fields.action === 'answer') {
+              send(200, superagentHost.answer(typeof fields.ticket_id === 'string' ? fields.ticket_id : '', typeof fields.text === 'string' ? fields.text : ''))
             } else if (fields.action === 'add-remote-member' || fields.action === 'remove-remote-member') {
               // Design v5: a remote member is a remote slot of the bound canvas team — added on the canvas, which pins its key.
               send(200, { ok: false, error: 'the team is a canvas team: add or remove a remote member on the canvas (/__dsh_a2a/canvas add-member / remove-member)' })
@@ -3172,7 +3174,7 @@ export function apply(ctx: Context, config: Config): void {
                 : superagentHost.engine.retryTicket(ticketId)
               superagentHost.pass()
               send(200, { ok: true, ticket })
-            } else send(200, { ok: false, error: 'action must be settings, request, serve, stop, retry or reevaluate' })
+            } else send(200, { ok: false, error: 'action must be settings, request, answer, serve, stop, retry or reevaluate' })
           } catch (error) { send(200, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
         }, 64_000)
       }),

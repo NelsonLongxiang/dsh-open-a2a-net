@@ -93,6 +93,18 @@ describe('team tab', () => {
     expect(act).toHaveBeenLastCalledWith({ action: 'retry', ticket_id: 't-fail' })
   })
 
+  it('a question on a ticket an agent asked for is the owner\'s to answer here', async () => {
+    const { pane, act } = mount()
+    pane.update(state({ tickets: [ticket('t-bot', { attention: { question: '用哪种格式？' }, stage: { stage: 'person', action: 'answer' }, channels: [{ source: 'a2a', thread: 'a2a:ctx' }] })] }), sessions, NOW)
+    const card = pane.root.querySelector<HTMLElement>('.wb-sa-ticket')!
+    const box = card.querySelector('textarea')!
+    box.value = '用 CSV'
+    button(card, '回答').click()
+    await flush()
+    expect(act).toHaveBeenCalledWith({ action: 'answer', ticket_id: 't-bot', text: '用 CSV' })
+    expect(box.value).toBe('')
+  })
+
   it('the request box is the workbench Source; a thread shows the request, the decision and the reply as text', async () => {
     const { pane, act } = mount()
     pane.update(state(), sessions, NOW)

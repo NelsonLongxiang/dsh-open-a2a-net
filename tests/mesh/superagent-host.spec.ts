@@ -176,7 +176,7 @@ describe('superagent engine in the a2a host', () => {
     const home = mkdtempSync(join(tmpdir(), 'sa-host-cli-'))
     const m = await mount(home)
     try {
-      expect(await m.team(R_ID)).toMatchObject({ ok: true })
+      expect(await m.team(R_ID, [], { acceptMode: 'auto', rules: [{ name: 'cli-rule', text: 'Requests from the terminal.' }] })).toMatchObject({ ok: true })
       // Async spawn: the host answers in this very process, so a synchronous child would deadlock it.
       const cli = (...args: string[]) => new Promise<{ status: number | null; stdout: string; stderr: string }>(resolve => {
         const child = spawn(process.execPath, [join(process.cwd(), 'cli/a2a.mjs'), ...args, '--home', `http://127.0.0.1:${m.port}`], { env: cliEnv(mkdtempSync(join(tmpdir(), 'sa-cli-home-'))) })
@@ -188,15 +188,14 @@ describe('superagent engine in the a2a host', () => {
       expect(asked.status, asked.stderr).toBe(0)
       const out = JSON.parse(asked.stdout) as { ok: boolean; result: string; triggerId: string; thread: string }
       expect(out).toMatchObject({ ok: true, result: 'stored' })
-      // A person addressing the team: the router gets an explicit candidate, exactly as from the workbench.
-      await vi.waitFor(() => { expect(m.R.steered.some(t => t.includes(out.triggerId) && t.includes('strength explicit'))).toBe(true) }, { timeout: 8000 })
-      const routed = await m.tool('superagent_route', m.R, { items: [{ trigger_id: out.triggerId, kind: 'accept', title: '终端需求', scope: 's', reason: '属主', acknowledgement: '收到' }] })
-      expect(routed.ok).toBe(true)
+      // The terminal is not a person (owner 2026-11-08): an inferred candidate, judged by the team's rules like an agent's.
+      await vi.waitFor(() => { expect(m.R.steered.some(t => t.includes(out.triggerId) && t.includes('strength inferred'))).toBe(true) }, { timeout: 8000 })
+      const routed = await m.tool('superagent_route', m.R, { items: [{ trigger_id: out.triggerId, kind: 'accept', title: '终端需求', scope: 's', reason: '符合规则', acknowledgement: '收到', rules: ['cli-rule'] }] })
+      expect(routed.ok, JSON.stringify(routed)).toBe(true)
       const state = await cli('superagent', 'state')
       expect(state.status, state.stderr).toBe(0)
       expect(state.stdout).toContain(`router ${R_ID}`)
       expect(state.stdout).toContain('终端需求')
-      expect(state.stdout).toContain('acknowledgement: 收到')
       expect((await cli('superagent', 'request')).status).not.toBe(0)
     } finally { await m.dispose() }
   }, 30_000)

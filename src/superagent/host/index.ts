@@ -22,7 +22,7 @@ import { MemberExecutor, transientError, type MemberTurn } from './executor.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { MEMBER_PRESET, ROUTER_PRESET } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
-import { DEFAULT_SETTINGS, WORKBENCH_OWNER, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
+import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 
 export interface SuperagentHostDeps {
   /** The a2a home directory; state lives under `<home>/superagent/`. */
@@ -622,8 +622,13 @@ export class SuperagentHost {
       const trigger = this.store.triggers.get(ticket.origin.triggerId)
       const address = trigger?.source === 'a2a' && trigger.human !== true ? trigger.channel?.address : undefined
       const task = address?.task
-      if (address === undefined || task === undefined || this.ackSettled.has(task)) continue
-      due.push({ task, address, text: clip(`已接下，工单「${ticket.title}」完成后回执结果。Accepted as ticket «${ticket.title}»; the result follows.`, 400) })
+      if (address !== undefined && task !== undefined && !this.ackSettled.has(task)) due.push({ task, address, text: clip(`已接下，工单「${ticket.title}」完成后回执结果。Accepted as ticket «${ticket.title}»; the result follows.`, 400) })
+      // A message delivered into this ticket as a follow-up is taken up, not finished: its formal outcome follows when the ticket ends.
+      for (const followUp of this.followUpsOf(ticket)) {
+        const followTask = followUp.channel.address.task
+        if (followTask === undefined || this.ackSettled.has(followTask) || this.outcomeReceipted.has(followUp.triggerId) || this.a2a.answered(followTask)) continue
+        due.push({ task: followTask, address: followUp.channel.address, text: clip(`已转给工单「${ticket.title}」的成员，工单结束后回执结果。Passed to the member of ticket «${ticket.title}»; the result follows when it ends.`, 400) })
+      }
     }
     if (due.length === 0) return
     this.acknowledging = true
@@ -650,38 +655,53 @@ export class SuperagentHost {
   private receiptEndedRequests(): void {
     if (this.endReceipting || !this.settingsValue.sources.a2a) return
     const now = Date.parse(this.now())
-    const due: Array<{ ticket: Ticket; channel: NonNullable<Trigger['channel']> }> = []
+    const due: Array<{ ticket: Ticket; channel: NonNullable<Trigger['channel']>; key: string }> = []
     for (const ticket of this.store.tickets.list()) {
-      if (!ticket.ended || this.endReceipted.has(ticket.id)) continue
+      if (!ticket.ended) continue
       const trigger = this.store.triggers.get(ticket.origin.triggerId)
-      const channel = trigger?.source === 'a2a' && trigger.human !== true ? trigger.channel : undefined
-      const task = channel?.address.task
-      if (channel === undefined || task === undefined || this.a2a.answered(task)) { this.endReceipted.add(ticket.id); continue }
+      const origin = trigger?.source === 'a2a' && trigger.human !== true ? trigger.channel : undefined
       const grace = ticket.ended.outcome === 'stopped' || ticket.ended.outcome === 'closed' ? 0 : END_RECEIPT_GRACE_MS
       const since = now - Date.parse(ticket.ended.at)
-      if (since > END_RECEIPT_HORIZON_MS) { this.endReceipted.add(ticket.id); continue }
-      if (since < grace) continue
-      due.push({ ticket, channel })
+      // The request the ticket came from, and the messages that reached it as follow-ups.
+      const targets = [{ key: ticket.id, channel: origin }, ...this.followUpsOf(ticket).map(f => ({ key: `${ticket.id}:${f.triggerId}`, channel: f.channel as typeof origin }))]
+      for (const { key, channel } of targets) {
+        if (this.endReceipted.has(key)) continue
+        const task = channel?.address.task
+        if (channel === undefined || task === undefined || this.a2a.answered(task) || since > END_RECEIPT_HORIZON_MS) { this.endReceipted.add(key); continue }
+        if (since >= grace) due.push({ ticket, channel, key })
+      }
     }
     if (due.length === 0) return
     this.endReceipting = true
     void (async () => {
-      for (const { ticket, channel } of due) {
+      for (const { ticket, channel, key } of due) {
         const summary = [...ticket.assignments].reverse().find(a => a.report !== undefined)?.report?.summary
         const text = clip(`工单「${ticket.title}」已结束（${ticket.ended!.outcome}）${summary !== undefined ? `：${summary}` : '。'} Ticket «${ticket.title}» ended (${ticket.ended!.outcome}).`, 1_000)
         try {
-          const result = await this.a2a.send({ id: `a2a-end:${ticket.id}`, channel, text, kind: 'notice', ticketId: ticket.id })
-          this.endReceipted.add(ticket.id)
+          const result = await this.a2a.send({ id: `a2a-end:${key}`, channel, text, kind: 'notice', ticketId: ticket.id })
+          this.endReceipted.add(key)
           this.d.logger.info('superagent: ticket %s ended; its A2A request %s got the ending receipt (%s)', ticket.id, channel.address.task ?? '?', result)
         } catch (error) { this.d.logger.warn('superagent: ending receipt for ticket %s failed (retried later): %s', ticket.id, String(error)) }
       }
     })().finally(() => { this.endReceipting = false })
   }
 
+  /** The agents' A2A messages that reached a ticket's member as follow-ups (delivered, and not handed back). */
+  private followUpsOf(ticket: Ticket): Array<{ triggerId: string; channel: NonNullable<Trigger['channel']> }> {
+    const out = new Map<string, NonNullable<Trigger['channel']>>()
+    for (const input of ticket.inputs) {
+      if (input.kind !== 'trigger' || input.deliveredTo === undefined || ticket.origin.triggerIds.includes(input.triggerId)) continue
+      if (this.store.triggers.disposition(input.triggerId)?.handbacks?.some(item => item.ticketId === ticket.id)) continue
+      const trigger = this.store.triggers.get(input.triggerId)
+      if (trigger?.source === 'a2a' && trigger.human !== true && trigger.channel !== undefined) out.set(input.triggerId, trigger.channel)
+    }
+    return [...out].map(([triggerId, channel]) => ({ triggerId, channel }))
+  }
+
   /**
    * Every A2A message to the team address gets a formal outcome, not only the ones that start a ticket (the ops team's
    * ledger: each dead letter was a message the team did not take, and nobody told its sender). A message delivered into
-   * a ticket as a follow-up gets a `completed` receipt saying so once its member has it; one the team decided not to take
+   * a ticket as a follow-up is acknowledged, and gets its outcome when the ticket ends; one the team decided not to take
    * (observe mode, a sender not on the list, a stop an agent may not give, the router's ignore) gets a `rejected` receipt
    * with the reason. A ticket's own request keeps its acknowledgement and result receipts. One at a time per pass;
    * a failure is tried again on a later pass.
@@ -698,12 +718,6 @@ export class SuperagentHost {
       const task = channel?.address.task
       if (channel === undefined || task === undefined || this.a2a.answered(task) || now - Date.parse(trigger!.at) > END_RECEIPT_HORIZON_MS) { this.outcomeReceipted.add(triggerId); return }
       due.set(triggerId, { channel, ...make() })
-    }
-    for (const ticket of this.store.tickets.list()) {
-      for (const input of ticket.inputs) {
-        if (input.kind !== 'trigger' || input.deliveredTo === undefined) continue
-        consider(input.triggerId, () => ({ outcome: 'completed', ticketId: ticket.id, text: `已作为补充送达工单「${ticket.title}」的成员。Delivered to the member of ticket «${ticket.title}» as a follow-up.` }))
-      }
     }
     for (const thread of this.store.threads.list()) {
       for (const decision of this.store.decisions.byThread(thread.key)) {
@@ -822,24 +836,46 @@ export class SuperagentHost {
     return { ok: true, settings: this.settings }
   }
 
+  /**
+   * The owner answers a question on a ticket that did not start in the workbench: its requester is an agent, so nobody else
+   * can (definition 找人: a question reaches a person). The answer is the owner's message on a new workbench Thread, routed
+   * straight to the ticket as the router's attach does.
+   */
+  answer(ticketId: string, text: string): { ok: true; triggerId: string; thread: string } | { ok: false; code: string; error: string } {
+    const body = text.trim()
+    if (body === '' || body.length > 20_000) return { ok: false, code: 'text', error: 'text is required, at most 20000 characters' }
+    const ticket = this.store.tickets.get(ticketId)
+    if (ticket === undefined || ticket.ended !== undefined) return { ok: false, code: 'ticket', error: 'no open ticket has that id' }
+    if (ticket.attention === undefined) return { ok: false, code: 'no-question', error: 'that ticket has no open question' }
+    const trigger = this.workbenchTrigger(body)
+    // Received and attached in one step, so the router never gets it as a candidate.
+    try { this.engine.receive(trigger); this.engine.attach(ticketId, trigger.id) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
+    this.pass()
+    return { ok: true, triggerId: trigger.id, thread: trigger.threads[0]!.id }
+  }
+
   /** The workbench Source: the owner's message, as one Trigger on a new Thread or on the Thread it continues. */
-  request(text: string, thread?: string): { ok: true; result: ReceiveResult; triggerId: string; thread: string } | { ok: false; error: string } {
+  request(text: string, thread?: string, via?: 'cli'): { ok: true; result: ReceiveResult; triggerId: string; thread: string } | { ok: false; error: string } {
     const body = text.trim()
     if (body === '') return { ok: false, error: 'text is required' }
     if (body.length > 20_000) return { ok: false, error: 'text is longer than 20000 characters' }
     if (thread !== undefined && !/^wb-[0-9a-f-]{36}$/.test(thread)) return { ok: false, error: 'thread must be a workbench thread id' }
-    const threadId = thread ?? `wb-${randomUUID()}`
-    const id = `wb-${randomUUID()}`
-    const trigger: Trigger = {
-      id, source: 'workbench', threads: [{ source: 'workbench', id: threadId }],
-      actor: { source: 'workbench', id: WORKBENCH_OWNER }, human: true, addressed: 'direct', at: this.now(), text: body,
-      channel: { source: 'workbench', thread: threadId, address: { trigger: id } }, meta: {},
-    }
+    const trigger = this.workbenchTrigger(body, thread, via)
     try {
       const result = this.engine.receive(trigger)
       this.pass()
-      return { ok: true, result, triggerId: id, thread: threadId }
+      return { ok: true, result, triggerId: trigger.id, thread: trigger.threads[0]!.id }
     } catch (error) { return { ok: false, error: String(error) } }
+  }
+
+  private workbenchTrigger(body: string, thread?: string, via?: 'cli'): Trigger {
+    const threadId = thread ?? `wb-${randomUUID()}`
+    const id = `wb-${randomUUID()}`
+    return {
+      id, source: 'workbench', threads: [{ source: 'workbench', id: threadId }],
+      actor: { source: 'workbench', id: via === 'cli' ? WORKBENCH_CLI : WORKBENCH_OWNER }, human: via !== 'cli', addressed: 'direct', at: this.now(), text: body,
+      channel: { source: 'workbench', thread: threadId, address: { trigger: id } }, meta: {},
+    }
   }
 
   /** The workbench's read: threads with their triggers, decisions and replies; tickets with their stage. */
