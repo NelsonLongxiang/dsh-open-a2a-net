@@ -12,6 +12,9 @@ import { JsonRepositories } from '../../src/superagent/host/store.ts'
 import { DEFAULT_SETTINGS, parseSettings, policyVersion, teamPolicy, teamScope, type TeamSettings } from '../../src/superagent/host/policy.ts'
 import { candidateCard } from '../../src/superagent/host/index.ts'
 
+/** Design v5: the team is a canvas team; tests give the host one canvas, `team`, with these sessions (router first). */
+const canvasOf = (local: readonly string[], remote: ReadonlyArray<{ ref: string; key: string; url: string }> = []) => (name: string) => name === 'team' ? { local, remote } : undefined
+
 const tmp = (): string => join(mkdtempSync(join(tmpdir(), 'sa-host-')), 'superagent', 'state.json')
 const settings = (over: Partial<TeamSettings> = {}): TeamSettings => ({ ...DEFAULT_SETTINGS, ...over })
 const wb = (id: string, thread = 't1', over: Partial<Trigger> = {}): Trigger => ({
@@ -188,8 +191,8 @@ describe('PR-B2a: the router tool on inferred candidates', () => {
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
     const { routeItem } = await import('../../src/superagent/host/tools.ts')
     const home = mkdtempSync(join(tmpdir(), 'sa-b2a-'))
-    const host = new SuperagentHost({ home, logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {} })
-    expect(host.saveSettings({ router: 'session-r', sources: { a2a: true }, bots: { a2a: ['seat/0123456789abcdef'] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
+    const host = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']), home, logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {} })
+    expect(host.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, bots: { a2a: ['seat/0123456789abcdef'] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
     const botTrigger = (id: string, thread: string): Trigger => ({ ...wb(id, thread), source: 'a2a', threads: [{ source: 'a2a', id: thread }], actor: { source: 'a2a', id: 'seat/0123456789abcdef' }, human: false, channel: { source: 'a2a', thread, address: {} }, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: `direct-${id}` } })
     host.engine.receive(botTrigger('1', 'b1')); host.pass()
     expect(host.engine.candidate('1')?.strength).toBe('inferred')
@@ -215,7 +218,7 @@ describe('PR-B2b: the a2a Channel through the hosted a2a-watch', () => {
   async function hostWith(answer: (args: string[]) => string | Error) {
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
     const calls: string[][] = []
-    const host = new SuperagentHost({
+    const host = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']),
       home: mkdtempSync(join(tmpdir(), 'sa-b2b-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
       homeUrl: () => 'http://127.0.0.1:1',
       runCli: async args => { calls.push(args); const out = answer(args); if (out instanceof Error) throw out; return out },
@@ -237,7 +240,7 @@ describe('PR-B2b: the a2a Channel through the hosted a2a-watch', () => {
   it('acceptance run 3: the request a ticket was accepted from keeps its formal receipt for the result — before a ready report a reply on it is a follow-up', async () => {
     const { routeItem } = await import('../../src/superagent/host/tools.ts')
     const h = await hostWith(args => args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}')
-    expect(h.host.saveSettings({ router: 'session-r', members: ['session-m'], acceptMode: 'auto', bots: { a2a: [caller.caller] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
+    expect(h.host.saveSettings({ canvas: 'team', router: 'session-r', acceptMode: 'auto', bots: { a2a: [caller.caller] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
     const channel = { source: 'a2a', thread: 'a2a:ctx-5', address: { ...caller, context: 'ctx-5' } }
     h.host.engine.receive({ ...wb('5', 'ctx-5'), source: 'a2a', threads: [{ source: 'a2a', id: 'ctx-5' }], actor: { source: 'a2a', id: caller.caller }, human: false, channel, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: caller.task } })
     h.host.pass()
@@ -268,12 +271,12 @@ describe('PR-B2b: the a2a Channel through the hosted a2a-watch', () => {
     const { routeItem } = await import('../../src/superagent/host/tools.ts')
     let clock = Date.parse('2026-11-07T10:00:00.000Z')
     const calls: string[][] = []
-    const host = new SuperagentHost({
+    const host = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']),
       home: mkdtempSync(join(tmpdir(), 'sa-end-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
       homeUrl: () => 'http://127.0.0.1:1', now: () => new Date(clock).toISOString(),
       runCli: async args => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' },
     })
-    expect(host.saveSettings({ router: 'session-r', members: ['session-m'], sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [caller.caller] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
+    expect(host.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [caller.caller] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
     const settle = async () => { host.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
     const open = (n: string) => {
       const channel = { source: 'a2a', thread: `a2a:ctx-${n}`, address: { caller: caller.caller, task: `direct-${n.padStart(12, '0')}`, context: `ctx-${n}` } }
@@ -338,10 +341,10 @@ describe('PR-C1: executor restart recovery', () => {
   it('a running assignment restarts on the same member with upstream\'s recovery note; the slot is not stuck', async () => {
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
     const home = mkdtempSync(join(tmpdir(), 'sa-c1-'))
-    const make = (sent: Array<[string, string]>) => new SuperagentHost({ home, logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {} })
+    const make = (sent: Array<[string, string]>) => new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']), home, logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {} })
     const sent1: Array<[string, string]> = []
     const h1 = make(sent1)
-    expect(h1.saveSettings({ router: 'session-r', members: ['session-m'] }, () => true)).toMatchObject({ ok: true })
+    expect(h1.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
     h1.start()
     const asked = h1.request('do it')
     expect(asked.ok).toBe(true)
@@ -369,20 +372,22 @@ describe('PR-C1: executor restart recovery', () => {
 
 describe('PR-C2: remote members and served teams are judged by pinned keys', () => {
   const KEY_B = 'MCowBQYDK2VwAyEA' + 'B'.repeat(44), KEY_A = 'MCowBQYDK2VwAyEA' + 'A'.repeat(44), KEY_E = 'MCowBQYDK2VwAyEA' + 'E'.repeat(44)
-  it('pins come only from their actions, and survive a reload', async () => {
+  it('remote members are the canvas team\'s remote slots (keys pinned there); the served team is pinned by its action; both survive a reload', async () => {
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
     const { parseStoredSettings } = await import('../../src/superagent/host/policy.ts')
     const home = mkdtempSync(join(tmpdir(), 'sa-c2-'))
-    const make = () => new SuperagentHost({ home, logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, localSessionOf: h => h === 'dsh/cccccccc' ? 'session-c' : undefined })
+    const remote = [{ ref: 'dsh/bbbbbbbb@12345678', key: KEY_B, url: 'http://127.0.0.1:9' }]
+    const make = () => new SuperagentHost({ canvasTeam: canvasOf(['session-r'], remote), home, logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, localSessionOf: h => h === 'dsh/cccccccc' ? 'session-c' : undefined })
     const h = make()
-    expect(h.saveSettings({ remoteMembers: [{ ref: 'dsh/bbbbbbbb@12345678', key: KEY_B, url: 'http://127.0.0.1:9' }] }, () => true)).toMatchObject({ ok: false })
-    expect(h.addRemoteMember({ ref: 'dsh/bbbbbbbb', key: KEY_B, url: 'http://127.0.0.1:9' })).toMatchObject({ ok: false })
-    expect(h.addRemoteMember({ ref: 'dsh/bbbbbbbb@12345678', key: KEY_B, url: 'http://127.0.0.1:9' })).toEqual({ ok: true })
+    // A write never names members, remote ones included: they are added on the canvas, which pins their key.
+    expect(h.saveSettings({ remoteMembers: remote }, () => true)).toMatchObject({ ok: false, error: expect.stringContaining('canvas') })
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
     expect(h.serveTeam({ url: 'http://127.0.0.1:8', key: KEY_A }, ['session-c'], () => true)).toEqual({ ok: true })
     const again = make()
-    expect(again.settings.remoteMembers).toEqual([{ ref: 'dsh/bbbbbbbb@12345678', key: KEY_B, url: 'http://127.0.0.1:9' }])
+    expect(again.settings.remoteMembers).toEqual(remote)
     expect(again.settings.serves).toEqual({ url: 'http://127.0.0.1:8', key: KEY_A, members: ['session-c'] })
-    expect(parseStoredSettings({ remoteMembers: [{ ref: 'bad', key: KEY_B, url: 'x' }] })).toMatchObject({ ok: false })
+    // A v4 file's stored pool is dropped on load (the canvas is the pool now), whatever its shape.
+    expect(parseStoredSettings({ members: ['session-x'], remoteMembers: [{ ref: 'bad', key: KEY_B, url: 'x' }] })).toMatchObject({ ok: true, settings: { members: [], remoteMembers: [] } })
     // Team side: a report or turn end counts only under the pinned key for that member handle.
     expect(again.remoteEvent('idle', 'dsh/bbbbbbbb', KEY_E, undefined)).toMatchObject({ ok: false, code: 'not-member' })
     expect(again.remoteEvent('idle', 'dsh/bbbbbbbb', KEY_B, undefined)).toEqual({ ok: true })
@@ -405,8 +410,8 @@ describe('acceptance item 9: an agent\'s message cannot end a ticket through its
     const { routeItem } = await import('../../src/superagent/host/tools.ts')
     const home = mkdtempSync(join(tmpdir(), 'sa-agent-end-'))
     const sent: Array<[string, string]> = []
-    const h = new SuperagentHost({ home, logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {} })
-    expect(h.saveSettings({ router: 'session-r', members: ['session-m'] }, () => true)).toMatchObject({ ok: true })
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']), home, logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {} })
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
     h.start()
     // Delivery and fan-out run on microtasks: wait for the state, not a fixed time (a loaded test run is slower).
     const reached = (ticketId: string, triggerId: string) => () => h.ticket(ticketId)?.inputs.some(i => i.kind === 'trigger' && i.triggerId === triggerId && typeof i.deliveredTo === 'string') === true
@@ -459,14 +464,15 @@ describe('acceptance item 9: an agent\'s message cannot end a ticket through its
 
 describe('ops loop: members work in repositories; a ticket accepted for one runs only on its members', () => {
   it('settings name each member\'s repository (owner/name), only for members, and drop it when the member goes', () => {
-    const base = parseSettings({ members: ['session-a', 'session-b'] }, DEFAULT_SETTINGS)
-    expect(base).toMatchObject({ ok: true })
-    const s = (base as { settings: TeamSettings }).settings
+    // Design v5: the pool comes from the canvas (the host passes it in as the current settings); a write never names members.
+    expect(parseSettings({ members: ['session-a', 'session-b'] }, DEFAULT_SETTINGS)).toMatchObject({ ok: false, error: expect.stringContaining('canvas') })
+    const s: TeamSettings = { ...DEFAULT_SETTINGS, members: ['session-a', 'session-b'] }
     expect(parseSettings({ repos: { 'session-a': 'NelsonLongxiang/dsh-open-a2a-net', 'session-b': 'NelsonLongxiang/agent-atelier' } }, s)).toMatchObject({ ok: true, settings: { repos: { 'session-a': 'NelsonLongxiang/dsh-open-a2a-net', 'session-b': 'NelsonLongxiang/agent-atelier' } } })
     expect(parseSettings({ repos: { 'session-x': 'o/r' } }, s)).toMatchObject({ ok: false, error: expect.stringContaining('not a member') })
     expect(parseSettings({ repos: { 'session-a': 'no-slash' } }, s)).toMatchObject({ ok: false, error: expect.stringContaining('owner/name') })
     const named = (parseSettings({ repos: { 'session-a': 'o/a', 'session-b': 'o/b' } }, s) as { settings: TeamSettings }).settings
-    expect(parseSettings({ members: ['session-a'] }, named)).toMatchObject({ ok: true, settings: { repos: { 'session-a': 'o/a' } } })
+    // session-b left the canvas: its repository is not carried into the next write.
+    expect(parseSettings({ paused: false }, { ...named, members: ['session-a'] })).toMatchObject({ ok: true, settings: { repos: { 'session-a': 'o/a' } } })
     expect(parseSettings({ paused: true }, named)).toMatchObject({ ok: true, settings: { repos: { 'session-a': 'o/a', 'session-b': 'o/b' } } })
     expect(DEFAULT_SETTINGS.repos).toEqual({})
   })
@@ -476,8 +482,8 @@ describe('ops loop: members work in repositories; a ticket accepted for one runs
     const { routeItem } = await import('../../src/superagent/host/tools.ts')
     const home = mkdtempSync(join(tmpdir(), 'sa-repos-'))
     const sent: Array<[string, string]> = []
-    const h = new SuperagentHost({ home, logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {} })
-    expect(h.saveSettings({ router: 'session-r', members: ['session-a', 'session-b'], repos: { 'session-a': 'o/net', 'session-b': 'o/atelier' } }, () => true)).toMatchObject({ ok: true })
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-a', 'session-b']), home, logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {} })
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', repos: { 'session-a': 'o/net', 'session-b': 'o/atelier' } }, () => true)).toMatchObject({ ok: true })
     h.start()
     const assigned = (member: string): string[] => sent.filter(([id, t]) => id === member && t.startsWith('[superagent assignment]')).map(([, t]) => t)
     try {
@@ -526,13 +532,13 @@ describe('ops team ledger: every A2A message to the team address gets a formal o
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
     const { routeItem } = await import('../../src/superagent/host/tools.ts')
     const calls: string[][] = []
-    const h = new SuperagentHost({
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']),
       home: mkdtempSync(join(tmpdir(), 'sa-outcome-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
       homeUrl: () => 'http://127.0.0.1:1',
       runCli: async args => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' },
     })
     const bot = 'reporter/0123456789abcdef', stranger = 'stranger/0123456789abcdef'
-    expect(h.saveSettings({ router: 'session-r', members: ['session-m'], sources: { a2a: true }, acceptMode: 'observe', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'observe', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
     const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
     const receive = (n: string, from: string, ctx = `ctx-${n}`) => {
       const task = `direct-${n.padStart(12, '0')}`
@@ -567,5 +573,67 @@ describe('ops team ledger: every A2A message to the team address gets a formal o
     // Each message is answered once.
     await settle()
     expect(calls.filter(a => a[0] === 'receipt' && [observed, refused, stop].includes(a[1]!)).length).toBe(3)
+  })
+})
+
+describe('design v5: the team is a canvas team', () => {
+  it('binds to a canvas this host owns; the router is one of its sessions; the pool follows the canvas; a member removed mid-ticket loses it to another member', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const sent: Array<[string, string]> = []
+    let local: string[] = ['session-r', 'session-a']
+    const h = new SuperagentHost({
+      home: mkdtempSync(join(tmpdir(), 'sa-v5-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {},
+      canvasTeam: name => name === 'ops' ? { local, remote: [] } : undefined, canvasNames: () => ['ops'],
+    })
+    // Unbound: the state says why; a router alone, an unknown canvas, a router outside the canvas are refused.
+    expect(h.state()).toMatchObject({ canvasProblem: expect.stringContaining('建队'), canvases: ['ops'] })
+    expect(h.saveSettings({ router: 'session-r' }, () => true)).toMatchObject({ ok: false, error: expect.stringContaining('canvas') })
+    expect(h.saveSettings({ canvas: 'nope', router: 'session-r' }, () => true)).toMatchObject({ ok: false, error: expect.stringContaining('no canvas team nope') })
+    expect(h.saveSettings({ canvas: 'ops', router: 'session-x' }, () => true)).toMatchObject({ ok: false, error: expect.stringContaining('local session of the canvas team ops') })
+    expect(h.saveSettings({ canvas: 'ops', router: 'session-r' }, () => true)).toMatchObject({ ok: true, settings: { canvas: 'ops', router: 'session-r', members: ['session-a'] } })
+    expect(h.state().canvasProblem).toBeUndefined()
+    expect(h.roleOf('session-a')).toBe('member')
+    h.start()
+    const assigned = (member: string) => sent.filter(([id, t]) => id === member && t.startsWith('[superagent assignment]'))
+    try {
+      const asked = h.request('核对 README 的命令表') as { triggerId: string }
+      expect(routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: 'readme', scope: 's', reason: 'r' })).toMatchObject({ ok: true })
+      await vi.waitFor(() => { expect(h.executor.list()).toHaveLength(1) })
+      const ticketId = h.executor.list()[0]!.ticketId
+      // The owner adds session-b on the canvas and removes session-a: the pool follows, and the ticket moves (Q2).
+      local = ['session-r', 'session-b']
+      h.poolChanged()
+      expect(h.roleOf('session-a')).toBeUndefined()
+      // The binding is recorded once the card is delivered (asynchronously): wait for it, not for the card.
+      await vi.waitFor(() => { expect(h.executor.list()).toEqual([expect.objectContaining({ member: 'session-b', ticketId })]) })
+      expect(assigned('session-b')).toHaveLength(1)
+      const stop = sent.find(([id, t]) => id === 'session-a' && t.includes('is no longer yours'))
+      expect(stop?.[1]).toContain('(you were removed from the team)')
+      expect(h.ticket(ticketId)?.ended).toBeUndefined()
+      expect(h.ticket(ticketId)?.delivery).toBeUndefined()
+    } finally { void h.stop() }
+  })
+
+  it('one session, one team role: the team canvas takes no CLI handle and no off-preset session; a team session joins no other canvas', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const canvases: Record<string, string[]> = { ops: ['session-r', 'session-m'], other: [] }
+    const h = new SuperagentHost({
+      home: mkdtempSync(join(tmpdir(), 'sa-v5-roles-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
+      canvasTeam: name => canvases[name] !== undefined ? { local: canvases[name]!, remote: [] } : undefined,
+      canvasesOf: id => Object.keys(canvases).filter(name => canvases[name]!.includes(id)),
+      localSessionOf: handle => handle === 'dsh/aaaaaaaa' ? 'session-m' : undefined,
+    })
+    const of = (id: string) => ({ 'session-r': 'superagent-router', 'session-m': 'superagent-member', 'session-s': 'standard' } as Record<string, string>)[id]
+    expect(h.saveSettings({ canvas: 'ops', router: 'session-r' }, () => true, of)).toMatchObject({ ok: true })
+    expect(h.canvasMemberRefusal('ops', 'ops-inventory/0123456789abcdef', of)).toContain('a CLI handle is a requester')
+    expect(h.canvasMemberRefusal('ops', 'session-s', of)).toContain('superagent-member')
+    expect(h.canvasMemberRefusal('ops', 'session-n', of)).toBeUndefined()
+    expect(h.canvasMemberRefusal('other', 'session-m', of)).toContain('sits in no other canvas')
+    expect(h.canvasMemberRefusal('other', 'dsh/aaaaaaaa@12345678', of)).toContain('sits in no other canvas')
+    expect(h.canvasMemberRefusal('other', 'session-s', of)).toBeUndefined()
+    // Binding is refused while a team session also sits in another canvas.
+    canvases.other = ['session-m']
+    expect(h.saveSettings({ canvas: 'ops', router: 'session-r', paused: false }, () => true, of)).toMatchObject({ ok: false, error: expect.stringContaining('also sits in canvas other') })
   })
 })

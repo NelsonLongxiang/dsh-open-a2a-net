@@ -100,6 +100,8 @@ export interface WireDeps {
   readonly cliDeposits: CliDepositStore
   readonly canvasStore: CanvasStore
   readonly canvasMemberForWrite: (ref: string, peer?: unknown, editorCard?: A2aPeerCard) => Promise<{ ok: true; member: string; ownerKey?: string } | { ok: false; error: string }>
+  /** Design v5 R3/R4: why the superagent team refuses this member on this canvas, if it does (absent: no team). */
+  readonly teamCanvasRefusal?: (canvas: string, member: string) => string | undefined
   readonly canvasNameReserved: (name: string) => boolean
   readonly sessionNodes: Map<string, Agent>
   readonly joinedSessions: JoinedSessions
@@ -366,7 +368,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 if (body.home !== undefined) payload = { ok: false, error: 'CLI home pins may only be set by this host local control route' }
                 else {
                   const proof = await d.canvasMemberForWrite(rawId, undefined, claim.card)
+                  const teamRefusal = proof.ok ? d.teamCanvasRefusal?.(name, proof.member) : undefined
                   if (!proof.ok) payload = proof
+                  else if (teamRefusal !== undefined) payload = { ok: false, error: teamRefusal }
                   else { canvasStore.create(name); payload = { ok: canvasStore.addMember(name, proof.member, undefined, { ownerKey: proof.ownerKey }), members: canvasStore.membersOf(name) } }
                 }
               }

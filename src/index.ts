@@ -1805,6 +1805,7 @@ export function apply(ctx: Context, config: Config): void {
         nudgeEscalations:()=>nudgeObservations.snapshot(),
         ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
+        teamCanvasRefusal: (canvas: string, member: string) => superagentHost?.canvasMemberRefusal(canvas, member, sessionPresetOf),
         admissionRecheck: (caller: string, handle: string, local: boolean) => recheckCallerAdmission(admissionRecords, caller, handle, local),
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
@@ -2048,6 +2049,23 @@ export function apply(ctx: Context, config: Config): void {
     handleOf: id => `${config.team}/${id8(id)}`,
     localSessionOf: handle => localSessionOfHandle(handle),
     onRolesChanged: () => { syncRoleTools() },
+    // Design v5: the team is a canvas team this host owns. Its local sessions in canvas order, and its remote session slots
+    // with the key the canvas pinned and the base URL of the linked peer whose signed card carries that key.
+    canvasTeam: name => {
+      if (!canvasStore.hasTeam(name)) return undefined
+      const ownKey = encodePublicKey(createPublicKey(nodePrivateKey))
+      const local = canvasLocalMembersOf(name, true).filter(id => !id.includes('/'))
+      const remote = canvasStore.membersOf(name).flatMap(ref => {
+        if (CLI_HANDLE_RE.test(ref) || splitQualifiedMember(ref) === undefined) return []
+        const key = canvasStore.ownerKeyOf(ref)
+        if (key === undefined || key === ownKey || memberProvenance(ref, key, ownKey) !== 'confirmed-remote') return []
+        const url = [...cardCache.entries()].find(([, entry]) => entry.card?.publicKey === key)?.[0]
+        return [{ ref, key, url: url !== undefined ? new URL(url).origin : '' }]
+      })
+      return { local, remote }
+    },
+    canvasesOf: id => canvasTeamsOfSession(id),
+    canvasNames: () => canvasStore.list(),
   }) : undefined
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
   const superagentRoleTools = new RoleTools({
@@ -2955,6 +2973,7 @@ export function apply(ctx: Context, config: Config): void {
       config,
       cliDeposits,
       canvasStore, canvasMemberForWrite,
+      teamCanvasRefusal: (canvas: string, member: string) => superagentHost?.canvasMemberRefusal(canvas, member, sessionPresetOf),
       superagentInbound: team => superagentRouterRefusal(undefined, team),
       superagentIntake: team => superagentHost?.a2aAddress === team,
       canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
@@ -3035,17 +3054,9 @@ export function apply(ctx: Context, config: Config): void {
               send(200, superagentHost.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf))
             } else if (fields.action === 'request') {
               send(200, superagentHost.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined))
-            } else if (fields.action === 'add-remote-member') {
-              // PR-C2: a member on another host. Its key comes from the linked peer's signed card (the canvas member proof).
-              const ref = typeof fields.ref === 'string' ? fields.ref : '', peer = typeof fields.peer === 'string' ? fields.peer : ''
-              void (async () => {
-                const proof = await canvasMemberForWrite(ref, peer)
-                if (!proof.ok) { send(200, proof); return }
-                if (proof.ownerKey === undefined || !proof.member.includes('/') || proof.ownerKey === encodePublicKey(createPublicKey(nodePrivateKey))) { send(200, { ok: false, error: 'a remote member is a session on another host; name local sessions in members' }); return }
-                send(200, superagentHost.addRemoteMember({ ref: proof.member, key: proof.ownerKey, url: new URL(peer).origin }))
-              })().catch(error => send(200, { ok: false, error: String(error) }))
-            } else if (fields.action === 'remove-remote-member') {
-              send(200, superagentHost.removeRemoteMember(typeof fields.ref === 'string' ? fields.ref : ''))
+            } else if (fields.action === 'add-remote-member' || fields.action === 'remove-remote-member') {
+              // Design v5: a remote member is a remote slot of the bound canvas team — added on the canvas, which pins its key.
+              send(200, { ok: false, error: 'the team is a canvas team: add or remove a remote member on the canvas (/__dsh_a2a/canvas add-member / remove-member)' })
             } else if (fields.action === 'serve-team') {
               // PR-C2: serve another host's team. Its key comes from that linked peer's signed card; null peer leaves.
               if (fields.peer === null) { send(200, superagentHost.serveTeam(undefined, [], () => false)); return }
@@ -3067,7 +3078,7 @@ export function apply(ctx: Context, config: Config): void {
                 : superagentHost.engine.retryTicket(ticketId)
               superagentHost.pass()
               send(200, { ok: true, ticket })
-            } else send(200, { ok: false, error: 'action must be settings, request, add-remote-member, remove-remote-member, serve-team, stop or retry' })
+            } else send(200, { ok: false, error: 'action must be settings, request, serve-team, stop or retry' })
           } catch (error) { send(200, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
         }, 64_000)
       }),
@@ -3318,6 +3329,8 @@ export function apply(ctx: Context, config: Config): void {
   // The cache is still empty here, so the observer skips cache-resting rows
   // on 'boot' (#138 R1); the first lazy read rechecks them.
   ctx.effect(() => canvasStore.onChange(() => observeAuthorization('canvas')), 'a2a: S6 canvas observer')
+  // Design v5: the team's pool is its canvas team's; a canvas change is a pool change.
+  if (superagentHost !== undefined) ctx.effect(() => canvasStore.onChange(() => { superagentHost.poolChanged() }), 'a2a: superagent team canvas')
   ctx.effect(() => joinedSessions.onChange(() => observeAuthorization('joined')), 'a2a: S6 joined observer')
   ctx.effect(() => teamMemberships.onChange(() => observeAuthorization('roster')), 'a2a: S6 roster observer')
   observeAuthorization('boot')

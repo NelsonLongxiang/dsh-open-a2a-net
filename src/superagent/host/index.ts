@@ -21,7 +21,8 @@ import { A2aSource } from './a2a-source.ts'
 import { MemberExecutor } from './executor.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { MEMBER_PRESET, ROUTER_PRESET } from './role-tools.ts'
-import { DEFAULT_SETTINGS, WORKBENCH_OWNER, parseRemoteMember, parseSettings, parseStoredSettings, policyVersion, teamPolicy, teamScope, type TeamSettings } from './policy.ts'
+import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
+import { DEFAULT_SETTINGS, WORKBENCH_OWNER, parseSettings, parseStoredSettings, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 
 export interface SuperagentHostDeps {
   /** The a2a home directory; state lives under `<home>/superagent/`. */
@@ -50,6 +51,16 @@ export interface SuperagentHostDeps {
   readonly runCli?: (args: string[], env: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<string>
   /** Settings were written: who is router or member may have changed (PR-D re-applies the role tool lists). */
   readonly onRolesChanged?: () => void
+  /**
+   * Design v5: a canvas team this host owns, as the team reads it — its local sessions (in canvas order), and its members
+   * on other hosts with the key the canvas pinned and that host's base URL (empty while unknown). CLI handle slots are
+   * not team members. Undefined when no canvas team has that name. Absent: no team can be bound.
+   */
+  readonly canvasTeam?: (name: string) => { readonly local: readonly string[]; readonly remote: readonly RemoteMember[] } | undefined
+  /** The canvas teams this host owns, by name (the owner binds one of them). */
+  readonly canvasNames?: () => readonly string[]
+  /** The canvas teams a local session sits in (any slot shape that names it). */
+  readonly canvasesOf?: (sessionId: string) => readonly string[]
 }
 
 /**
@@ -180,7 +191,7 @@ export class SuperagentHost {
       release: evalId => { this.candidates.delete(evalId) },
     }
     const executor = this.executor = new MemberExecutor({
-      path: join(dir, 'executor.json'), members: () => [...this.settingsValue.members, ...this.settingsValue.remoteMembers.map(r => r.ref)],
+      path: join(dir, 'executor.json'), members: () => { const now = this.settings; return [...now.members, ...now.remoteMembers.map(r => r.ref)] },
       repoOf: member => this.settingsValue.repos[member],
       deliver: (member, text, kind, ticketId) => this.deliverToMember(member, text, kind, ticketId), engine: () => this.engine,
       ticket: id => this.store.tickets.get(id), trigger: id => this.store.triggers.get(id), logger: d.logger,
@@ -260,7 +271,7 @@ export class SuperagentHost {
   /** Whether a local session is the router or a member (of this team, or of the team this host serves): no A2A work either way. */
   roleOf(sessionId: string): 'router' | 'member' | undefined {
     if (this.settingsValue.router === sessionId) return 'router'
-    return this.settingsValue.members.includes(sessionId) || this.settingsValue.serves?.members.includes(sessionId) === true ? 'member' : undefined
+    return this.settings.members.includes(sessionId) || this.settingsValue.serves?.members.includes(sessionId) === true ? 'member' : undefined
   }
 
   /** A member's turn ended (agent idle): the executor's turn-end fact — told to the served team host when it is theirs. */
@@ -274,7 +285,7 @@ export class SuperagentHost {
   memberClaimed(sessionId: string): void { this.memberEvent(sessionId, 'read') }
 
   private memberEvent(sessionId: string, op: 'idle' | 'read'): void {
-    if (this.settingsValue.members.includes(sessionId)) {
+    if (this.settings.members.includes(sessionId)) {
       if (op === 'idle') this.executor.memberIdle(sessionId)
       else this.executor.memberRead(sessionId)
       return
@@ -288,9 +299,9 @@ export class SuperagentHost {
 
   /** PR-C2: put a card into a member's session — local by host relay, remote by a signed request to its host. */
   private async deliverToMember(member: string, text: string, kind: 'assign' | 'input' | 'stop', ticketId: string): Promise<boolean> {
-    const remote = this.settingsValue.remoteMembers.find(r => r.ref === member)
+    const remote = this.settings.remoteMembers.find(r => r.ref === member)
     if (remote === undefined) return this.d.deliverToSession(member, text)
-    if (this.d.signedPost === undefined) return false
+    if (this.d.signedPost === undefined || remote.url === '') return false
     const out = await this.d.signedPost(remote.url, '/a2a/superagent-member', { op: kind, member: remote.ref.replace(/@[0-9a-f]{8}$/, ''), ticket: ticketId, text })
     return out.ok === true
   }
@@ -300,7 +311,7 @@ export class SuperagentHost {
    * owner pinned for that member's ref (another instance sharing the zone and id8 has another key).
    */
   remoteEvent(op: unknown, memberHandle: unknown, signerKey: string, report: unknown): Record<string, unknown> {
-    const entry = this.settingsValue.remoteMembers.find(r => r.ref.replace(/@[0-9a-f]{8}$/, '') === memberHandle && r.key === signerKey)
+    const entry = this.settings.remoteMembers.find(r => r.ref.replace(/@[0-9a-f]{8}$/, '') === memberHandle && r.key === signerKey)
     if (entry === undefined) return { ok: false, code: 'not-member', error: 'no remote member of this team is that session under that key' }
     if (op === 'idle') { this.executor.memberIdle(entry.ref); return { ok: true } }
     if (op === 'read') { this.executor.memberRead(entry.ref); return { ok: true } }
@@ -366,29 +377,54 @@ export class SuperagentHost {
   /** The repositories the team's members work in, each with its members (settings `repos`). */
   teamRepos(): Map<string, string[]> {
     const out = new Map<string, string[]>()
-    for (const [member, repo] of Object.entries(this.settingsValue.repos)) out.set(repo, [...(out.get(repo) ?? []), member])
+    // Only members the canvas still has: a repository named for a member that left is kept for its return, not used.
+    const now = this.settings
+    const pool = new Set([...now.members, ...now.remoteMembers.map(r => r.ref)])
+    for (const [member, repo] of Object.entries(this.settingsValue.repos)) if (pool.has(member)) out.set(repo, [...(out.get(repo) ?? []), member])
     return out
   }
 
-  /** Owner control: pin a remote member (resolved from a linked peer's signed card by the caller). */
-  addRemoteMember(member: { ref: string; key: string; url: string }): { ok: boolean; error?: string } {
-    const parsed = parseRemoteMember(member)
-    if (parsed === undefined) return { ok: false, error: 'a remote member needs a qualified ref, a key and a base URL' }
-    const others = this.settingsValue.remoteMembers.filter(r => r.ref !== parsed.ref)
-    if (others.length + this.settingsValue.members.length >= 32) return { ok: false, error: 'at most 32 members' }
-    this.writeSettings({ ...this.settingsValue, remoteMembers: [...others, parsed] })
-    this.executor.launch()
-    return { ok: true }
+  /**
+   * Design v5 R3/R4: why a member may not be added to a canvas, if it may not. The team's canvas takes no CLI handle (a
+   * handle is a requester, not a worker), no session that serves another team host, and only local sessions on the member
+   * preset; any other canvas takes no session that holds a role in this team.
+   */
+  canvasMemberRefusal(canvas: string, member: string, presetOf: (id: string) => string | undefined = () => undefined): string | undefined {
+    const local = member.includes('/') ? this.d.localSessionOf?.(member.replace(/@[0-9a-f]{8}$/, '')) : member
+    if (canvas === this.settingsValue.canvas) {
+      if (CLI_HANDLE_RE.test(member)) return `[superagent-team-canvas] ${canvas} is the superagent team's canvas: a CLI handle is a requester, not a member — it sends requests to the team's address instead`
+      if (local === undefined || local === this.settingsValue.router) return undefined
+      if (this.settingsValue.serves?.members.includes(local) === true) return `[superagent-team-canvas] ${local} serves another team host: a session has one team role`
+      return presetRefusal(undefined, [local], presetOf)
+    }
+    if (local !== undefined && this.roleOf(local) !== undefined) return `[superagent-team-canvas] ${local} is the superagent team's ${this.roleOf(local)!}: a team session sits in no other canvas`
+    return undefined
   }
-  removeRemoteMember(ref: string): { ok: boolean } {
-    const { [ref]: _gone, ...repos } = this.settingsValue.repos
-    this.writeSettings({ ...this.settingsValue, remoteMembers: this.settingsValue.remoteMembers.filter(r => r.ref !== ref), repos })
-    return { ok: true }
+
+  /**
+   * Design v5: the bound canvas changed (a member added, removed, suspended, or the canvas gone). The pool is read from
+   * the canvas, so a new member is simply free; a member that left while it ran a ticket loses that Assignment — the
+   * ticket gets a new one on another member (owner ruling Q2: stop and requeue), and the member is told to stop.
+   */
+  poolChanged(): void {
+    const now = this.settings
+    const pool = new Set([...now.members, ...now.remoteMembers.map(r => r.ref)])
+    for (const binding of this.executor.list()) {
+      if (pool.has(binding.member)) continue
+      this.executor.removing(binding.member)
+      try {
+        this.engine.deliveryFailed(binding.ticketId, binding.assignmentId, 'member removed from the team')
+        this.engine.retryTicket(binding.ticketId)
+      } catch (error) { this.d.logger.warn('superagent: ticket %s not moved off a removed member: %s', binding.ticketId, String(error)) }
+    }
+    try { this.d.onRolesChanged?.() } catch (error) { this.d.logger.warn('superagent: role change not applied: %s', String(error)) }
+    this.executor.launch()
+    this.pass()
   }
   /** Owner control: serve a team host (its key pinned from a linked peer's signed card) with these local sessions. */
   serveTeam(team: { url: string; key: string } | undefined, members: readonly string[], sessionValid: (id: string) => boolean, presetOf: (id: string) => string | undefined = () => undefined): { ok: boolean; error?: string } {
     if (team === undefined) { const { serves: _gone, ...rest } = this.settingsValue; this.writeSettings(rest); return { ok: true } }
-    const bad = members.find(m => !sessionValid(m) || m === this.settingsValue.router || this.settingsValue.members.includes(m))
+    const bad = members.find(m => !sessionValid(m) || m === this.settingsValue.router || this.settings.members.includes(m))
     if (bad !== undefined) return { ok: false, error: `${bad} must be a joined local session that is neither this team's router nor its member` }
     const wrongPreset = presetRefusal(undefined, members, presetOf)
     if (wrongPreset !== undefined) return { ok: false, error: wrongPreset }
@@ -399,8 +435,10 @@ export class SuperagentHost {
   private writeSettings(next: TeamSettings): void {
     mkdirSync(dirname(this.settingsPath), { recursive: true })
     const temporary = `${this.settingsPath}.tmp-${randomUUID()}`
-    try { writeFileSync(temporary, JSON.stringify(next), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.settingsPath) } finally { rmSync(temporary, { force: true }) }
-    this.settingsValue = next
+    // The pool is the canvas's (design v5): never stored.
+    const stored: TeamSettings = { ...next, members: [], remoteMembers: [] }
+    try { writeFileSync(temporary, JSON.stringify(stored), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.settingsPath) } finally { rmSync(temporary, { force: true }) }
+    this.settingsValue = stored
     try { this.d.onRolesChanged?.() } catch (error) { this.d.logger.warn('superagent: role change not applied: %s', String(error)) }
   }
 
@@ -613,21 +651,54 @@ export class SuperagentHost {
     if (this.refusalRecent.length > REFUSALS_KEPT) this.refusalRecent.splice(0, this.refusalRecent.length - REFUSALS_KEPT)
   }
 
-  get settings(): TeamSettings { return this.settingsValue }
+  /**
+   * The settings with the pool derived from the bound canvas (design v5): the router comes out of the canvas's local
+   * sessions, the rest are the members, and the canvas's remote slots are the remote members. Unbound, or bound to a
+   * canvas that is gone: no members.
+   */
+  get settings(): TeamSettings { return this.derive(this.settingsValue) }
+  private derive(stored: TeamSettings): TeamSettings {
+    const team = stored.canvas !== undefined ? this.d.canvasTeam?.(stored.canvas) : undefined
+    if (team === undefined) return { ...stored, members: [], remoteMembers: [] }
+    return { ...stored, members: team.local.filter(id => id !== stored.router), remoteMembers: [...team.remote] }
+  }
+  /** Why the team cannot run its canvas as bound, if it cannot (the workbench's 待你处理 shows it). */
+  canvasProblem(stored: TeamSettings = this.settingsValue): string | undefined {
+    if (stored.canvas === undefined) return 'the team is bound to no canvas team: compose it on the canvas (建队), then bind it with canvas and router'
+    const team = this.d.canvasTeam?.(stored.canvas)
+    if (team === undefined) return `the bound canvas team ${stored.canvas} does not exist on this host`
+    if (stored.router !== undefined && !team.local.includes(stored.router)) return `the router ${stored.router} is not a local session of the canvas team ${stored.canvas}`
+    return undefined
+  }
   get routerSession(): string | undefined { return this.settingsValue.router }
 
   /** Owner control: replace the team settings; a Policy version change is reported to the engine as upstream does. */
   saveSettings(raw: unknown, sessionValid: (id: string) => boolean, presetOf: (id: string) => string | undefined = () => undefined): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
-    const parsed = parseSettings(raw, this.settingsValue)
+    // Repositories are checked against the pool this write leads to: the canvas and router it names, or the current ones.
+    const fields = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
+    const pick = <K extends 'canvas' | 'router'>(key: K): string | undefined => key in fields ? (typeof fields[key] === 'string' && fields[key] !== '' ? fields[key] as string : undefined) : this.settingsValue[key]
+    const { canvas: _canvas, router: _router, ...unbound } = this.settingsValue
+    const nextCanvas = pick('canvas'), nextRouter = pick('router')
+    const parsed = parseSettings(raw, this.derive({ ...unbound, ...(nextCanvas !== undefined ? { canvas: nextCanvas } : {}), ...(nextRouter !== undefined ? { router: nextRouter } : {}) }))
     if (!parsed.ok) return parsed
+    // Design v5: the canvas named must exist here, and the router must be one of its local sessions.
+    if (parsed.settings.canvas !== undefined && this.d.canvasTeam?.(parsed.settings.canvas) === undefined) return { ok: false, error: `no canvas team ${parsed.settings.canvas} on this host: compose it on the canvas (建队) first` }
+    if (parsed.settings.router !== undefined && parsed.settings.canvas === undefined) return { ok: false, error: 'bind the team to its canvas team (canvas) before naming its router' }
+    const next = this.derive(parsed.settings)
+    const team = parsed.settings.canvas !== undefined ? this.d.canvasTeam?.(parsed.settings.canvas) : undefined
+    if (parsed.settings.router !== undefined && team !== undefined && !team.local.includes(parsed.settings.router)) return { ok: false, error: `router must be a local session of the canvas team ${parsed.settings.canvas}` }
     if (parsed.settings.router !== undefined && !sessionValid(parsed.settings.router)) return { ok: false, error: 'router must be a joined local session' }
-    const strange = parsed.settings.members.find(member => !sessionValid(member))
-    if (strange !== undefined) return { ok: false, error: `member ${strange} must be a joined local session` }
-    const wrongPreset = presetRefusal(parsed.settings.router, parsed.settings.members, presetOf)
+    // Design v5 R3: one session, one team role — a team session sits in no other canvas (a route there would reach a role).
+    const elsewhere = [parsed.settings.router, ...next.members].find(id => id !== undefined && (this.d.canvasesOf?.(id) ?? []).some(name => name !== parsed.settings.canvas))
+    if (elsewhere !== undefined) return { ok: false, error: `${elsewhere} also sits in canvas ${(this.d.canvasesOf?.(elsewhere) ?? []).filter(name => name !== parsed.settings.canvas).join(', ')}: a team session sits in no other canvas` }
+    const serving = [parsed.settings.router, ...next.members].find(id => id !== undefined && this.settingsValue.serves?.members.includes(id) === true)
+    if (serving !== undefined) return { ok: false, error: `${serving} already serves another team host: a session has one team role` }
+    const wrongPreset = presetRefusal(parsed.settings.router, next.members, presetOf)
     if (wrongPreset !== undefined) return { ok: false, error: wrongPreset }
     const before = policyVersion(this.settingsValue)
     const routerChanged = parsed.settings.router !== this.settingsValue.router
     this.writeSettings(parsed.settings)
+    this.poolChanged()
     const after = policyVersion(parsed.settings)
     if (before !== after) this.engine.policyChanged(before, after)
     // A new router receives whatever the old one had not decided yet.
@@ -636,7 +707,7 @@ export class SuperagentHost {
     this.syncA2a()
     this.executor.launch()
     this.pass()
-    return parsed
+    return { ok: true, settings: this.settings }
   }
 
   /** The workbench Source: the owner's message, as one Trigger on a new Thread or on the Thread it continues. */
@@ -664,11 +735,13 @@ export class SuperagentHost {
     const messages = this.store.messages.list()
     const repliesOf = (thread: string): StoredMessage[] => messages.filter(row => row.message.channel.source === 'workbench' && row.message.channel.thread === thread)
     return {
-      settings: this.settingsValue,
+      settings: this.settings,
+      ...(this.canvasProblem() !== undefined ? { canvasProblem: this.canvasProblem() } : {}),
+      canvases: [...(this.d.canvasNames?.() ?? [])],
       policyVersion: policyVersion(this.settingsValue),
       a2a: { enabled: this.settingsValue.sources.a2a, address: this.a2a.address ?? null, health: this.a2a.health },
       refusals: { counts: Object.fromEntries(this.refusalCounts), recent: [...this.refusalRecent] },
-      executor: { members: this.settingsValue.members, remoteMembers: this.settingsValue.remoteMembers, bindings: this.executor.list() },
+      executor: { canvas: this.settingsValue.canvas ?? null, members: this.settings.members, remoteMembers: this.settings.remoteMembers, bindings: this.executor.list() },
       ...(this.settingsValue.serves !== undefined ? { serves: this.settingsValue.serves } : {}),
       ...(this.store.loadError !== undefined ? { error: this.store.loadError } : {}),
       threads: this.store.threads.list().map(thread => ({
