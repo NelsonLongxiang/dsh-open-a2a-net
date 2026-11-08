@@ -54,6 +54,13 @@ describe('superagent members on other hosts', () => {
         const served = await sa(B, { action: 'serve', team: teamId, members: [B_ID] }); expect(served, JSON.stringify(served)).toMatchObject({ ok: true })
         expect((await state(B)).serves).toMatchObject({ team: teamId, url: url(pA) })
         expect(await sa(E, { action: 'serve', team: teamId, members: [E_ID] })).toMatchObject({ ok: true })
+        // A linked peer edits this host's other canvases through the fleet face, never the team's: a canvas change is a pool change.
+        const before = (await state(A)).settings.remoteMembers
+        for (const op of [{ op: 'remove-member', id: member }, { op: 'add-member', id: B_ID }, { op: 'remove' }]) {
+          const out = await (await postJson(B.baseUrl, '/__dsh_a2a/fleet-canvas-op', { peer: url(pA), name: 'team', ...op })).json() as Record<string, any>
+          expect(out, JSON.stringify(out)).toMatchObject({ ok: false, error: expect.stringContaining('superagent-team-canvas') })
+        }
+        expect((await state(A)).settings.remoteMembers).toEqual(before)
 
         // A request on A becomes a ticket; the executor assigns it to B's session across hosts.
         const asked = await sa(A, { action: 'request', text: '跨主机：给节点列表加搜索框' })

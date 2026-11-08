@@ -3032,6 +3032,7 @@ export function apply(ctx: Context, config: Config): void {
       cliDeposits,
       canvasStore, canvasMemberForWrite,
       teamCanvasRefusal: (canvas: string, member: string) => superagentHost?.canvasMemberRefusal(canvas, member, sessionPresetOf),
+      teamCanvasBound: (canvas: string) => superagentHost?.settings.canvas === canvas,
       superagentInbound: team => superagentRouterRefusal(undefined, team),
       superagentIntake: team => superagentHost?.a2aAddress === team,
       teamMailboxOf: team => teamMailboxOf(team),
