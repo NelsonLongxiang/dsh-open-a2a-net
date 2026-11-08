@@ -42,6 +42,8 @@ export interface SaSettings {
   readonly router?: string; readonly members: readonly string[]; readonly acceptMode: string; readonly paused: boolean
   readonly sources: { workbench: boolean; a2a: boolean }
   readonly remoteMembers: ReadonlyArray<{ ref: string; key: string; url: string }>
+  /** The repository each member works in (owner/name), by member; absent on hosts before it. */
+  readonly repos?: Readonly<Record<string, string>>
   readonly serves?: { url: string; key: string; members: readonly string[] }
 }
 export interface SaState {
@@ -161,9 +163,15 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   root.append(el('div', 'wb-pane-head', 'superagent 团队'), nav, note, body)
 
   let view: SaView = 'person'
-  let last: SaState | null = null
+  // undefined until the first poll answers; null once it says this host runs no team.
+  let last: SaState | null | undefined = undefined
   let sessions: readonly SaSession[] = []
   let now = Date.now()
+  /** What the view was last built from, and when: an unchanged poll leaves the view (and its buttons) alone. */
+  let builtFrom = ''
+  let builtAt = 0
+  /** A press in progress inside the pane: a rebuild between pointerdown and click would swallow the click. */
+  let pressing = false
   const navButtons = new Map<SaView, HTMLButtonElement>()
   for (const def of VIEWS) {
     const b = el('button', 'wb-filter', def.label)
@@ -337,8 +345,9 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       const t = state.tickets.find(x => x.id === b.ticketId)
       return `在做「${t?.title ?? b.ticketId}」 · ${ago(b.at, now)}`
     }
-    const members = s.members.map(m => { const c = el('div', 'wb-led-card'); kv(c, '成员', sessionName(m)); kv(c, '槽位', slot(m)); return c })
-    const remote = s.remoteMembers.map(r => { const c = el('div', 'wb-led-card'); kv(c, '远端成员', r.ref); kv(c, '主机', r.url); kv(c, '钉住公钥', fingerprint(r.key)); kv(c, '槽位', slot(r.ref)); return c })
+    const repo = (member: string, card: HTMLElement): void => { const r = s.repos?.[member]; if (r !== undefined) kv(card, '仓库', r) }
+    const members = s.members.map(m => { const c = el('div', 'wb-led-card'); kv(c, '成员', sessionName(m)); repo(m, c); kv(c, '槽位', slot(m)); return c })
+    const remote = s.remoteMembers.map(r => { const c = el('div', 'wb-led-card'); kv(c, '远端成员', r.ref); repo(r.ref, c); kv(c, '主机', r.url); kv(c, '钉住公钥', fingerprint(r.key)); kv(c, '槽位', slot(r.ref)); return c })
     body.appendChild(group('成员池', '', [...members, ...remote], '没有成员'))
     const queued = state.tickets.filter(t => t.ended === undefined && t.stage?.stage === 'working' && t.stage.action === 'queued')
     if (queued.length > 0) body.appendChild(group('排队', 'is-warn', queued.map(t => el('div', 'wb-led-card', `${t.title} · ${ago(t.createdAt, now)}`))))
@@ -417,6 +426,9 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   function render(): void {
     for (const [key, b] of navButtons) { const on = key === view; b.classList.toggle('is-active', on); b.setAttribute('aria-selected', String(on)) }
     body.replaceChildren()
+    builtFrom = viewKey()
+    builtAt = now
+    if (last === undefined) { body.appendChild(el('div', 'wb-sa-hint', '正在读取团队状态…')); return }
     if (last === null) { body.appendChild(el('div', 'wb-sa-hint', '这台主机没有运行 superagent 团队')); return }
     if (view === 'person') renderPerson(last)
     else if (view === 'request') renderRequest(last)
@@ -427,13 +439,32 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
 
   function select(next: SaView): void { view = next; render() }
 
+  function focusVisible(node: HTMLElement): boolean { try { return node.matches(':focus-visible') } catch { return false } }
+
+  /**
+   * What the view is built from, minus what moves without changing it: the A2A Source stamps its health on every read
+   * round (`at`), which the view does not show.
+   */
+  function viewKey(): string {
+    const shown = last === undefined || last === null ? last ?? null
+      : { ...last, a2a: { ...last.a2a, health: Object.fromEntries(Object.entries(last.a2a.health).map(([k, h]) => [k, { state: h.state, detail: h.detail }])) } }
+    return JSON.stringify([view, shown, sessions])
+  }
+
   function update(state: SaState | null, rows: readonly SaSession[], at: number): { badge: string; tone?: RailTone } {
     last = state
     sessions = rows
     now = at
-    // A focused input keeps its place: the poll does not rebuild the view under the person's cursor.
+    // The poll rebuilds the view only when what it shows changed (or a minute passed, for the "n 分钟前" times), and never
+    // under the person's hands: not while a control inside the pane has focus (a box being typed in, a button reached by
+    // keyboard), and not in the middle of a press, which a rebuild would swallow.
     const active = document.activeElement
-    if (!(active instanceof HTMLElement && root.contains(active) && (active.tagName === 'TEXTAREA' || active.tagName === 'SELECT' || active.tagName === 'INPUT'))) render()
+    const typing = active instanceof HTMLElement && root.contains(active) && (active.tagName === 'TEXTAREA' || active.tagName === 'SELECT' || active.tagName === 'INPUT')
+    // A button keeps focus after a mouse click; only keyboard focus (focus-visible) holds the view still.
+    const keyboard = active instanceof HTMLElement && body.contains(active) && focusVisible(active)
+    const busy = pressing || typing || keyboard
+    const changed = viewKey() !== builtFrom || at - builtAt >= 60_000
+    if (changed && !busy) render()
     if (state === null) return { badge: '' }
     const waiting = personTickets(state).length
     const problems = problemsOf(state, at)
@@ -441,6 +472,8 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     return waiting + problems.length > 0 ? { badge: String(waiting + problems.length), tone: 'warn' } : { badge: '' }
   }
 
+  root.addEventListener('pointerdown', () => { pressing = true })
+  for (const type of ['pointerup', 'pointercancel']) document.addEventListener(type, () => { pressing = false })
   render()
   return { root, update, select }
 }

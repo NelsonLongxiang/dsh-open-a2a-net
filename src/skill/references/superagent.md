@@ -29,6 +29,10 @@ When an agent's request becomes a ticket, the host sends the requester one **ack
 
 The request keeps its one formal receipt for the result. While its ticket is open and no member report on it is `ready`, a reply on that request (a member's question, a notice) goes to the requester as a follow-up in the same conversation, not as the receipt. When the ticket ends and the request still has no receipt, the host sends the ending receipt itself, with the outcome and the latest report's summary. Upstream sends no result for a stopped or closed ticket, so for those it goes out at once. For any other outcome it waits 5 minutes, so the router's own result goes first.
 
+Members can each work in one repository: the owner names it per member in the settings (`repos`, member → `owner/name`). The router then names the repository a request is about when it accepts (`superagent_route` item `repo`); the ticket runs only on that repository's members and waits for one of them without holding up tickets behind it. A request about no single repository is accepted without `repo` and runs on any member. An unknown repository is refused with the team's list.
+
+Every A2A message to the team address gets a formal outcome, not only those that start a ticket. A message the team does not take (observe mode, a sender not on the list, a stop an agent may not give, the router's ignore) gets a `rejected` receipt with the reason. A message delivered into a ticket as a follow-up gets a `completed` receipt once its member has it. Without these, the sender's owed row only ever dead-lettered.
+
 ## For the router
 
 - Candidates arrive in your own session as `[superagent candidate] …` cards. Decide each by its `trigger_id` with `superagent_route`:
@@ -40,7 +44,7 @@ The request keeps its one formal receipt for the result. While its ticket is ope
 - Read with `superagent_read`, reply with `superagent_reply` (`answer`, `result` or `attention`), and ask an idle ticket's worker for a status report with `superagent_status`.
 - You neither send nor receive A2A work. `a2a_route` from you, or to you by any address (handle, session id, or a canvas you sit in), is refused with `[superagent-router-outbound]` or `[superagent-router-inbound]`.
 - No other session can use these tools; they answer `not-router`.
-- These four are the only tools you can call. The host refuses every other call, whatever preset your session runs under, with `[superagent-role-tools]`, and your visible tools are cut down to them.
+- These four are the only tools you can call. Your session runs the `superagent-router` preset; beyond it, the host refuses every other call with `[superagent-role-tools]`, and your visible tools are cut down to them.
 
 ## For a member
 
@@ -71,6 +75,13 @@ A member can sit on another host: another physical node, or another DSH instance
 ## For the owner
 
 The owner control route is `/__dsh_a2a/superagent`.
+
+The router and the members are sessions the owner creates under the team's agent presets, which this plugin ships in its bundle layer: **`superagent-router`** (superagent 总工) for the router and **`superagent-member`** (superagent 团队成员) for each member. The preset is the role's boundary:
+
+- `superagent-router`: read-only files, a foreground command and a job wait of at most 5 s, skills and compaction; no subagents.
+- `superagent-member`: the work tools; a foreground command moves to a background job after 5 s, so a stop or a person's answer is taken at the next step; no subagents.
+
+Settings naming a router or member that runs another preset are refused, and so is `serve-team`. A session not loaded at the time, or a host without a preset registry, is not checked.
 
 The workbench (`/__dsh_a2a_nexus/`) shows it as the **团队** tab whenever the host runs a team. The tab has five views:
 

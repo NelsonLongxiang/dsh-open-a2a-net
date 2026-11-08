@@ -128,6 +128,9 @@ describe('candidate card', () => {
     expect(card).toContain('request 1')
     expect(card).toContain('superagent_route')
     expect(card).toContain('do not add an implementation plan')
+    // The team's one-request-one-ticket rule outranks generic router guidance loaded from elsewhere (agent-atelier allows splitting).
+    expect(card).toContain('never split it into several')
+    expect(card).toContain('does not change them')
   })
 })
 
@@ -406,19 +409,18 @@ describe('acceptance item 9: an agent\'s message cannot end a ticket through its
     expect(h.saveSettings({ router: 'session-r', members: ['session-m'] }, () => true)).toMatchObject({ ok: true })
     h.start()
     // Delivery and fan-out run on microtasks: wait for the state, not a fixed time (a loaded test run is slower).
-    const until = async (f: () => boolean, ms = 5000): Promise<void> => { const t = Date.now(); while (!f()) { if (Date.now() - t > ms) throw new Error('timed out'); await new Promise(r => setTimeout(r, 10)) } }
     const reached = (ticketId: string, triggerId: string) => () => h.ticket(ticketId)?.inputs.some(i => i.kind === 'trigger' && i.triggerId === triggerId && typeof i.deliveredTo === 'string') === true
     try {
       const asked = h.request('加一个导出按钮') as { triggerId: string; thread: string }
       expect(routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: 'T', scope: 's', reason: 'r' })).toMatchObject({ ok: true })
-      await until(() => h.executor.list().length === 1 && h.ticket(h.executor.list()[0]!.ticketId)?.assignments.at(-1)?.state === 'running')
+      await vi.waitFor(() => { expect(h.executor.list().length === 1 && h.ticket(h.executor.list()[0]!.ticketId)?.assignments.at(-1)?.state === 'running').toBe(true) }, { timeout: 5000 })
       const ticketId = h.executor.list()[0]!.ticketId
 
       // An agent writes on the ticket's thread: it reaches the member, marked as an agent's.
       h.engine.receive({ id: 'agent-stop-1', source: 'workbench', threads: [{ source: 'workbench', id: asked.thread }], actor: { source: 'workbench', id: 'a-bot' },
         human: false, at: new Date().toISOString(), text: '请停止这个工单', meta: {} } as never)
-      await until(reached(ticketId, 'agent-stop-1'))
-      await until(() => sent.some(([id, t]) => id === 'session-m' && t.includes('trigger agent-stop-1')))
+      await vi.waitFor(async () => { expect(await reached(ticketId, 'agent-stop-1')()).toBe(true) }, { timeout: 5000 })
+      await vi.waitFor(() => { expect(sent.some(([id, t]) => id === 'session-m' && t.includes('trigger agent-stop-1'))).toBe(true) }, { timeout: 5000 })
       expect(sent.some(([id, t]) => id === 'session-m' && t.includes('trigger agent-stop-1') && t.includes('an agent, not a person'))).toBe(true)
 
       expect(h.report('session-m', { state: 'dropped', summary: '对方说不用做了' })).toMatchObject({ ok: false, code: 'agent-cannot-end' })
@@ -429,10 +431,10 @@ describe('acceptance item 9: an agent\'s message cannot end a ticket through its
       // A person says to drop it after the agent: the member may end it.
       const agentAgain = { id: 'agent-stop-2', source: 'workbench', threads: [{ source: 'workbench', id: asked.thread }], actor: { source: 'workbench', id: 'a-bot' }, human: false, at: new Date().toISOString(), text: '停', meta: {} }
       h.engine.receive(agentAgain as never)
-      await until(reached(ticketId, 'agent-stop-2'))
+      await vi.waitFor(async () => { expect(await reached(ticketId, 'agent-stop-2')()).toBe(true) }, { timeout: 5000 })
       expect(h.report('session-m', { state: 'dropped', summary: 'x' })).toMatchObject({ ok: false, code: 'agent-cannot-end' })
       const person = h.request('确实不用做了', asked.thread) as { triggerId: string }
-      await until(reached(ticketId, person.triggerId))
+      await vi.waitFor(async () => { expect(await reached(ticketId, person.triggerId)()).toBe(true) }, { timeout: 5000 })
       expect(h.report('session-m', { state: 'dropped', summary: '属主确认不用做' })).toMatchObject({ ok: true })
       expect(h.ticket(ticketId)?.ended?.outcome).toBe('dropped')
     } finally { void h.stop() }
@@ -452,5 +454,118 @@ describe('acceptance item 9: an agent\'s message cannot end a ticket through its
     expect(agentLedEnd(ticket([['2026-11-07T10:01:00.000Z', false]], '2026-11-07T10:05:00.000Z'), 'a1')).toBe(false)
     // One stamped the same millisecond as the previous report is not known to have been seen by it.
     expect(agentLedEnd(ticket([['2026-11-07T10:05:00.000Z', false]], '2026-11-07T10:05:00.000Z'), 'a1')).toBe(true)
+  })
+})
+
+describe('ops loop: members work in repositories; a ticket accepted for one runs only on its members', () => {
+  it('settings name each member\'s repository (owner/name), only for members, and drop it when the member goes', () => {
+    const base = parseSettings({ members: ['session-a', 'session-b'] }, DEFAULT_SETTINGS)
+    expect(base).toMatchObject({ ok: true })
+    const s = (base as { settings: TeamSettings }).settings
+    expect(parseSettings({ repos: { 'session-a': 'NelsonLongxiang/dsh-open-a2a-net', 'session-b': 'NelsonLongxiang/agent-atelier' } }, s)).toMatchObject({ ok: true, settings: { repos: { 'session-a': 'NelsonLongxiang/dsh-open-a2a-net', 'session-b': 'NelsonLongxiang/agent-atelier' } } })
+    expect(parseSettings({ repos: { 'session-x': 'o/r' } }, s)).toMatchObject({ ok: false, error: expect.stringContaining('not a member') })
+    expect(parseSettings({ repos: { 'session-a': 'no-slash' } }, s)).toMatchObject({ ok: false, error: expect.stringContaining('owner/name') })
+    const named = (parseSettings({ repos: { 'session-a': 'o/a', 'session-b': 'o/b' } }, s) as { settings: TeamSettings }).settings
+    expect(parseSettings({ members: ['session-a'] }, named)).toMatchObject({ ok: true, settings: { repos: { 'session-a': 'o/a' } } })
+    expect(parseSettings({ paused: true }, named)).toMatchObject({ ok: true, settings: { repos: { 'session-a': 'o/a', 'session-b': 'o/b' } } })
+    expect(DEFAULT_SETTINGS.repos).toEqual({})
+  })
+
+  it('the router names the repository; its ticket waits for that repository\'s member without holding up others', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const home = mkdtempSync(join(tmpdir(), 'sa-repos-'))
+    const sent: Array<[string, string]> = []
+    const h = new SuperagentHost({ home, logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {} })
+    expect(h.saveSettings({ router: 'session-r', members: ['session-a', 'session-b'], repos: { 'session-a': 'o/net', 'session-b': 'o/atelier' } }, () => true)).toMatchObject({ ok: true })
+    h.start()
+    const assigned = (member: string): string[] => sent.filter(([id, t]) => id === member && t.startsWith('[superagent assignment]')).map(([, t]) => t)
+    try {
+      // The router sees the team's repositories.
+      const first = h.request('net：核对 README 的命令表') as { triggerId: string }
+      h.pass()
+      expect(sent.find(([id]) => id === 'session-r')?.[1]).toContain('The team\'s members each work in one repository: o/atelier, o/net')
+      // An unknown repository is refused, naming the known ones; nothing is accepted.
+      expect(routeItem(h, { trigger_id: first.triggerId, kind: 'accept', title: 'x', scope: 'y', reason: 'z', repo: 'o/other' })).toMatchObject({ ok: false, code: 'repo', error: expect.stringContaining('o/atelier, o/net') })
+      expect(routeItem(h, { trigger_id: first.triggerId, kind: 'accept', title: 'net 1', scope: 's', reason: 'r', repo: 'o/net' })).toMatchObject({ ok: true, repo: 'o/net' })
+      await vi.waitFor(() => { expect(assigned('session-a')).toHaveLength(1) })
+      expect(assigned('session-a')[0]).toContain('repository: o/net (yours)')
+      // A ticket's worktree stays inside the member's sandbox, kept out of the checkout's status (a path beside it is refused).
+      expect(assigned('session-a')[0]).toContain('.worktrees/')
+      expect(assigned('session-a')[0]).toContain('.git/info/exclude')
+      // A second net ticket waits for session-a although session-b is free …
+      const second = h.request('net：核对 docs/protocol') as { triggerId: string }
+      expect(routeItem(h, { trigger_id: second.triggerId, kind: 'accept', title: 'net 2', scope: 's', reason: 'r', repo: 'o/net' })).toMatchObject({ ok: true })
+      // … and an atelier ticket accepted after it goes to session-b at once.
+      const third = h.request('atelier：校准 a2a-cli 参考') as { triggerId: string }
+      expect(routeItem(h, { trigger_id: third.triggerId, kind: 'accept', title: 'atelier 1', scope: 's', reason: 'r', repo: 'o/atelier' })).toMatchObject({ ok: true })
+      await vi.waitFor(() => { expect(assigned('session-b')).toHaveLength(1) })
+      expect(assigned('session-b')[0]).toContain('atelier 1')
+      expect(assigned('session-a')).toHaveLength(1)
+      // The ticket repositories persist with the bindings.
+      const stored = JSON.parse(readFileSync(join(home, 'superagent', 'executor.json'), 'utf8')) as { repos: Record<string, string> }
+      expect(Object.values(stored.repos).sort()).toEqual(['o/atelier', 'o/net', 'o/net'])
+      // session-a finishes: the waiting net ticket launches on it.
+      expect(h.report('session-a', { state: 'ready', summary: '核对完毕，ticket/net-1 0123abc' })).toMatchObject({ ok: true })
+      await vi.waitFor(() => { expect(assigned('session-a')).toHaveLength(2) })
+      expect(assigned('session-a')[1]).toContain('net 2')
+      // Its own ready report ended net 1: no "no longer yours" notice wakes it for a turn.
+      const notices = (member: string) => sent.filter(([id, t]) => id === member && t.includes('is no longer yours'))
+      expect(notices('session-a')).toEqual([])
+      // An owner stop is news to the member: it gets the notice.
+      const atelier = h.store.tickets.list().find(t => t.title === 'atelier 1')!
+      h.engine.stopTicket(atelier.id, 'owner stop')
+      await vi.waitFor(() => { expect(notices('session-b')).toHaveLength(1) })
+      expect(notices('session-b')[0]?.[1]).toContain('(owner stop)')
+    } finally { void h.stop() }
+  })
+})
+
+describe('ops team ledger: every A2A message to the team address gets a formal outcome', () => {
+  it('a message the team does not take is told so (rejected, with the reason); a follow-up is told it reached the member', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const calls: string[][] = []
+    const h = new SuperagentHost({
+      home: mkdtempSync(join(tmpdir(), 'sa-outcome-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
+      homeUrl: () => 'http://127.0.0.1:1',
+      runCli: async args => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' },
+    })
+    const bot = 'reporter/0123456789abcdef', stranger = 'stranger/0123456789abcdef'
+    expect(h.saveSettings({ router: 'session-r', members: ['session-m'], sources: { a2a: true }, acceptMode: 'observe', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const receive = (n: string, from: string, ctx = `ctx-${n}`) => {
+      const task = `direct-${n.padStart(12, '0')}`
+      h.engine.receive({ ...wb(n, ctx), source: 'a2a', threads: [{ source: 'a2a', id: ctx }], actor: { source: 'a2a', id: from }, human: false, channel: { source: 'a2a', thread: `a2a:${ctx}`, address: { caller: from, task, context: ctx } }, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } })
+      h.pass()
+      return task
+    }
+    const receiptFor = (task: string) => calls.find(a => a[0] === 'receipt' && a[1] === task && !a.includes('--acknowledged'))
+    const outcome = (args: string[] | undefined) => args?.[args.indexOf('--outcome') + 1]
+    // Observe mode: the router's accept is recorded as would-accept; the requester learns nothing was taken.
+    const observed = receive('1', bot)
+    expect(routeItem(h, { trigger_id: '1', kind: 'accept', title: 't', scope: 's', reason: 'matches deps', rules: ['deps'] })).toMatchObject({ ok: true, decision: 'ignore' })
+    // A sender not on the list is refused at the gate.
+    const refused = receive('2', stranger)
+    await settle()
+    expect(outcome(receiptFor(observed))).toBe('rejected')
+    expect(receiptFor(observed)!.at(-1)).toContain('观察模式')
+    expect(outcome(receiptFor(refused))).toBe('rejected')
+    expect(receiptFor(refused)!.at(-1)).toContain('名单')
+    // Auto: a ticket, whose own request keeps the acknowledgement-and-result path (no outcome receipt now).
+    expect(h.saveSettings({ acceptMode: 'auto' }, () => true)).toMatchObject({ ok: true })
+    const request = receive('3', bot, 'ctx-3')
+    const accepted = routeItem(h, { trigger_id: '3', kind: 'accept', title: 'bump', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
+    await settle()
+    expect(receiptFor(request)).toBeUndefined()
+    // The bot's stop on that thread is refused (an agent cannot stop a ticket), and told so.
+    const stop = receive('4', bot, 'ctx-3')
+    expect(routeItem(h, { trigger_id: '4', kind: 'stop', ticket_id: accepted.ticket_id, reason: 'bot says stop' })).toMatchObject({ ok: true, decision: 'ignore' })
+    await settle()
+    expect(outcome(receiptFor(stop))).toBe('rejected')
+    expect(receiptFor(stop)!.at(-1)).toContain('不能停止工单')
+    // Each message is answered once.
+    await settle()
+    expect(calls.filter(a => a[0] === 'receipt' && [observed, refused, stop].includes(a[1]!)).length).toBe(3)
   })
 })

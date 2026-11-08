@@ -419,6 +419,8 @@ export function replyAllowed(address: Record<string, string>, config: Pick<A2aCo
 export interface SendOptions {
   /** Never take the task's formal receipt with this message: send it as a follow-up, and leave the receipt for later. */
   readonly holdReceipt?: boolean
+  /** The outcome the receipt states, when the host knows it better than a ticket can (a request the team did not take). */
+  readonly outcome?: ReceiptOutcome
 }
 
 /**
@@ -447,8 +449,12 @@ export async function sendReply(ctx: SourceContext, commands: Commands, message:
     const first = options.holdReceipt !== true && stamps(ctx, KV.answered)[task] === undefined
     const text = message.text.trim() === '' ? '(no text)' : message.text
     if (first && !receiptable(task)) return gone(`Task ${task} cannot carry a receipt (its id is not a CLI task id); the reply was not sent`)
+    // The engine's reply to a ticket's question carries the id key('attention-reply', <attention id>) — hashed, so
+    // it is recognised by recomputing that id from the ticket's open question, never by a prefix.
+    const ticket = message.ticketId !== undefined ? ctx.tickets.get(message.ticketId) : undefined
+    const attention = ticket?.attention !== undefined && message.id === key('attention-reply', ticket.attention.id)
     const args = first
-      ? ['receipt', task, '--to', caller, ...(message.id.startsWith('attention-reply:') ? ['--attention'] : ['--outcome', receiptOutcome(message.ticketId !== undefined ? ctx.tickets.get(message.ticketId) : undefined)]), '--json', '--exit-class', '--', text]
+      ? ['receipt', task, '--to', caller, ...(attention ? ['--attention'] : ['--outcome', options.outcome ?? receiptOutcome(ticket)]), '--json', '--exit-class', '--', text]
       : ['route', caller, '--task', `${LOOP_PREFIX}${key(message.id)}`, '--context', context ?? task, '--json', '--exit-class', '--', text]
     try {
       await commands.run(PROGRAM, args)

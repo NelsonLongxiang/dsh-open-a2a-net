@@ -14,7 +14,6 @@ afterEach(() => { vi.unstubAllGlobals() })
 const A_ID = 'session-aaaaaaaa11112222'
 const B_ID = 'session-bbbbbbbb33334444'
 const state = async (n: MeshNode): Promise<Record<string, any>> => await globalThis.fetch(`${n.baseUrl}/__dsh_a2a/state`).then(async r => await r.json())
-const until = async (f: () => Promise<boolean>, ms = 8000): Promise<void> => { const t = Date.now(); while (Date.now() - t < ms) { if (await f()) return; await new Promise(r => setTimeout(r, 50)) } }
 const rowOf = async (n: MeshNode, id: string): Promise<Record<string, any> | undefined> => { const s = await state(n); return [...s.tasks, ...(s.archived ?? [])].find((r: any) => r.taskId === id) }
 const route = async (n: MeshNode, args: Record<string, unknown>): Promise<Record<string, any>> => await n.ctx.tools.get('a2a_route')!.execute(args, runContext(n.agents.agent)) as Record<string, any>
 const delayed = (n: MeshNode, text = 'finished the work'): void => {
@@ -43,14 +42,14 @@ describe('#125 content echo is judged as enforce under observe', () => {
       // 1. An off-chain relay (this host's own process face, not the target) quotes the task id.
       const relay = await globalThis.fetch(`${A.baseUrl}/a2a/direct`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ team: 'alpha/aaaaaaaa', caller_session: 'alpha', message: `[转达] task ${id} 已完成`, wait: false }) })
       expect(relay.status).toBe(200)
-      await until(async () => (await state(A)).settlement.refusals.some((r: { taskId: string }) => r.taskId === id))
+      await vi.waitFor(async () => { expect((await state(A)).settlement.refusals.some((r: { taskId: string }) => r.taskId === id)).toBe(true) }, { timeout: 8000 })
       expect((await rowOf(A, id))?.status).toBe('pending')
       const refusal = (await state(A)).settlement.refusals.find((r: { taskId: string }) => r.taskId === id)
       expect(refusal).toMatchObject({ reason: 'echo-off-chain', enforced: true })
       // 2. The member that got the task mentions it (no receipt header): an on-chain echo still settles.
       const note = await route(B, { team: 'alpha/aaaaaaaa', message: `进度：task ${id} 做完了`, async: true })
       expect(note.ok, JSON.stringify(note)).toBe(true)
-      await until(async () => (await rowOf(A, id))?.status !== 'pending')
+      await vi.waitFor(async () => { expect((await rowOf(A, id))?.status !== 'pending').toBe(true) }, { timeout: 8000 })
       expect((await rowOf(A, id))?.settledBy).toMatchObject({ caller: 'cargo/bbbbbbbb' })
     } finally { await A.dispose(); await B.dispose() }
   }, 90_000)

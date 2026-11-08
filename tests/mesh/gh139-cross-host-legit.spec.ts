@@ -18,7 +18,6 @@ afterEach(() => { vi.unstubAllGlobals() })
 const A_ID = 'session-aaaaaaaa11112222'
 const B_ID = 'session-bbbbbbbb33334444'
 const state = async (n: MeshNode): Promise<Record<string, any>> => await globalThis.fetch(`${n.baseUrl}/__dsh_a2a/state`).then(async r => await r.json())
-const until = async (f: () => Promise<boolean>, ms = 8000): Promise<void> => { const t = Date.now(); while (Date.now() - t < ms) { if (await f()) return; await new Promise(r => setTimeout(r, 50)) } }
 const rowOf = async (n: MeshNode, id: string): Promise<Record<string, any> | undefined> => { const s = await state(n); return [...s.tasks, ...(s.archived ?? [])].find((r: any) => r.taskId === id) }
 const ledgerRow = (n: MeshNode, id: string): Record<string, any> | undefined => (JSON.parse(readFileSync(join(n.home, 'a2a', 'tasks.json'), 'utf8')).tasks as any[]).find(r => r.taskId === id)
 const route = async (n: MeshNode, args: Record<string, unknown>): Promise<Record<string, any>> => await n.ctx.tools.get('a2a_route')!.execute(args, runContext(n.agents.agent)) as Record<string, any>
@@ -43,7 +42,7 @@ describe('r142 legitimate cross-host receipts under enforce', () => {
       const t = await route(A, { team: 'alpha/canvas/ops', message: 'canvas work', async: true })
       expect(t.ok, JSON.stringify(t)).toBe(true)
       expect(ledgerRow(A, String(t.task_id))).toMatchObject({ deliveredTo: 'cargo/bbbbbbbb', peerHost: 'hostB' })
-      await until(async () => (await rowOf(A, String(t.task_id)))?.status !== 'pending' || (await state(A)).settlement.refusals.length > 0)
+      await vi.waitFor(async () => { expect((await rowOf(A, String(t.task_id)))?.status !== 'pending' || (await state(A)).settlement.refusals.length > 0).toBe(true) }, { timeout: 8000 })
       const s = await state(A)
       expect(s.settlement.refusals, JSON.stringify(s.settlement.refusals)).toEqual([])
       // gh#217: the member that did the work answers for it (it used to be the host's process label).

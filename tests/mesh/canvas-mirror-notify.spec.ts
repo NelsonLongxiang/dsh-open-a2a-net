@@ -44,13 +44,6 @@ async function sweep(node: MeshNode): Promise<void> {
   await node.ctx.tools.get('a2a_teams')?.execute({}, { signal: new AbortController().signal, agent: node.agents.agent } as never)
 }
 
-async function until(check: () => Promise<boolean>, ms = 4_000): Promise<boolean> {
-  for (const end = Date.now() + ms; Date.now() < end;) {
-    if (await check()) return true
-    await new Promise(r => setTimeout(r, 100))
-  }
-  return false
-}
 
 /** A signed stand-in peer that records which paths it was POSTed. */
 async function fakePeer(port: number, peers: string[]): Promise<{ server: Server; posts: string[]; envelope: (as?: string) => Record<string, string>; cardReads: () => number }> {
@@ -101,15 +94,15 @@ describe('canvas single owner + mirror: change notification', () => {
       // bilateral seeds → each side holds the other's FULL card.
       await sweep(a)
       await sweep(b)
-      expect(await until(async () => (await post(`${b.baseUrl}/__dsh_a2a/state`)).peerOrg?.some((row: { url: string }) => row.url === a.baseUrl) === true)).toBe(true)
+      await vi.waitFor(async () => { expect((await post(`${b.baseUrl}/__dsh_a2a/state`)).peerOrg?.some((row: { url: string }) => row.url === a.baseUrl) === true).toBe(true) }, { timeout: 4_000 })
 
       // 1. Owner-side create: B's mirror shows the new frame (ping, not TTL).
       expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: '镜像队' })).ok).toBe(true)
-      expect(await until(async () => (await mirrored(b, a.baseUrl)).some(e => e.name === '镜像队'))).toBe(true)
+      await vi.waitFor(async () => { expect((await mirrored(b, a.baseUrl)).some(e => e.name === '镜像队')).toBe(true) }, { timeout: 4_000 })
 
       // 2. Owner-side add-member: the member shows up in B's mirror.
       expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: '镜像队', id: ids.a })).ok).toBe(true)
-      expect(await until(async () => (await mirrored(b, a.baseUrl)).find(e => e.name === '镜像队')?.members.includes('dsh/aaaaaaaa') === true)).toBe(true)
+      await vi.waitFor(async () => { expect((await mirrored(b, a.baseUrl)).find(e => e.name === '镜像队')?.members.includes('dsh/aaaaaaaa') === true).toBe(true) }, { timeout: 4_000 })
 
       // 3. B edits A's team through the relay: the reply only proves the op
       // landed on the owner (the refresh runs detached, pr96-review P2-1);
@@ -117,11 +110,11 @@ describe('canvas single owner + mirror: change notification', () => {
       // detached refresh lands — settle it the same way as steps 2 and 4.
       const relayed = await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'add-member', name: '镜像队', id: ids.b })
       expect(relayed.ok).toBe(true)
-      expect(await until(async () => (await mirrored(b, a.baseUrl)).find(e => e.name === '镜像队')?.members.some(member=>/^dsh\/bbbbbbbb@[0-9a-f]{8}$/.test(member)) === true)).toBe(true)
+      await vi.waitFor(async () => { expect((await mirrored(b, a.baseUrl)).find(e => e.name === '镜像队')?.members.some(member=>/^dsh\/bbbbbbbb@[0-9a-f]{8}$/.test(member)) === true).toBe(true) }, { timeout: 4_000 })
 
       // 4. Removal propagates the same way (no tombstones: the owner's store is the truth).
       expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'remove-member', name: '镜像队', id: (await mirrored(b,a.baseUrl)).find(e=>e.name==='镜像队')!.members.find(member=>member.startsWith('dsh/bbbbbbbb@')) })).ok).toBe(true)
-      expect(await until(async () => (await mirrored(b, a.baseUrl)).find(e => e.name === '镜像队')?.members.some(member=>member.startsWith('dsh/bbbbbbbb@')) === false)).toBe(true)
+      await vi.waitFor(async () => { expect((await mirrored(b, a.baseUrl)).find(e => e.name === '镜像队')?.members.some(member=>member.startsWith('dsh/bbbbbbbb@')) === false).toBe(true) }, { timeout: 4_000 })
     } finally {
       await a.dispose()
       await b.dispose()

@@ -47,7 +47,12 @@ export interface ContextPart { messages: ContextMessage[]; next?: string; body: 
 export type TicketOutcome = 'completed' | 'merged' | 'closed' | 'dropped' | 'stopped'
 export type TicketEndBy = 'executor' | 'human'
 /** The part of a ticket the a2a Source reads: whether and how it ended. */
-export interface TicketView { id: string; ended?: { at: string; by: TicketEndBy; outcome: TicketOutcome; reason?: string } }
+export interface TicketView {
+  id: string
+  ended?: { at: string; by: TicketEndBy; outcome: TicketOutcome; reason?: string }
+  /** The ticket's open question for a person; its reply's message id is key('attention-reply', attention.id). */
+  attention?: { id: string }
+}
 
 /** What the a2a Source uses of the context superagent hands a Source plugin. */
 export interface SourceContext {

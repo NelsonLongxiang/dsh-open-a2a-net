@@ -19,7 +19,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { EXIT_GONE, EXIT_RECEIPT_CONFLICT, HEALTH, KIND, KV, LINK_RULES, createA2aKind, replyAllowed, sendReply, watch, type A2aConfig } from '../a2a-watch.ts'
+import { EXIT_GONE, EXIT_RECEIPT_CONFLICT, HEALTH, KIND, KV, LINK_RULES, createA2aKind, replyAllowed, sendReply, watch, type A2aConfig, type ReceiptOutcome } from '../a2a-watch.ts'
 import type { Commands, Health, OutboundMessage, ReceiveResult, SourceContext, TicketView, Trigger } from '../source-types.ts'
 
 /** The packaged CLI, from both src/superagent/host and lib/superagent/host. */
@@ -232,10 +232,10 @@ export class A2aSource {
    * a notice — goes out as a follow-up in the same context, and the requester's row stays owed until the result settles
    * it. Whether or not the acknowledgement has gone out yet: it is sent asynchronously and may come second.
    */
-  async send(message: OutboundMessage): Promise<'sent' | 'gone'> {
+  async send(message: OutboundMessage, options: { outcome?: ReceiptOutcome } = {}): Promise<'sent' | 'gone'> {
     const task = message.channel.address.task
     const hold = task !== undefined && message.ticketId !== undefined && this.d.resultPending?.(message.ticketId, task) === true
-    if (!hold) return await this.kindValue.channel.send({ commands: this.context.commands }, message)
-    return await sendReply(this.context, this.context.commands, message, undefined, { holdReceipt: true })
+    if (!hold && options.outcome === undefined) return await this.kindValue.channel.send({ commands: this.context.commands }, message)
+    return await sendReply(this.context, this.context.commands, message, undefined, { ...(hold ? { holdReceipt: true } : {}), ...options })
   }
 }

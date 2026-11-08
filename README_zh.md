@@ -20,16 +20,16 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 
 重启 `dsh web`，打开侧栏网络面板（底部入口）。
 
-（支持包名、本地路径或 Git URL；包内 `prepare` 会在安装时执行 `pnpm build`。注意：脱离 DSH profile 的独立 Git 安装目前无法构建——官方 `@deepseek-ai/*` npm 快照落后于本插件编译所对照的 harness 源码，请从 registry 安装，或在由 harness 提供当前 `@deepseek-ai` peers 的 profile 内安装。）插件组合在标准 webserver 行旁边：在共享监听器上注册卡片、状态与控制路由，在共享工具运行时上注册模型工具。
+（支持包名、本地路径或 Git URL，参数原样交给 pnpm。包的 `prepare` 脚本是 `pnpm build`，但只有 Git URL 安装会在安装时触发它，而且 pnpm 11 会拦住 Git 包的构建脚本：`dsh plugin` 会报错并打印确切的键，须把它加到 profile 的 `pnpm-workspace.yaml` 的 `allowBuilds` 下再重跑。registry 安装的包已带构建产物，不再构建；本地路径安装不会构建，须先在该目录执行 `pnpm build`。构建需要 pnpm ≥11.24 且 <12（见 `package.json` 的 `engines`）。脱离 DSH profile 的独立 Git 安装现在可以构建（`@deepseek-ai/*` peers 取自 npm；0.7.0 实测通过），不再需要限定 registry 或 profile 安装。）插件组合在标准 webserver 行旁边：在共享监听器上注册状态与控制路由（`/__dsh_a2a/*`），在共享工具运行时上注册模型工具；卡片路由 `/.well-known/agent-card.json` 只在 `announce: true` 时注册（默认关闭）。
 
 ## 你能得到什么
 
-- **模型工具**（共十个，见下表）—— `a2a_teams` 列出本节点可见的团队（本机行，加上已加入团队作用域内的 peer 团队）；`a2a_route` 向一个团队发送消息，用 `context_id` 继续远端会话，peer 不可达时在候选间故障切换。`a2a_tasks` 按三层对账回执契约：每个让任务欠回复的路由（异步投递、已释放的等待）都以 pending 留在欠账本里，直到其 `[A2A receipt] task <task_id>` 消息关联上——超过 stale TTL 的逾期行自动转死信（复活的目标仍可用迟到回执结清），每次结清都落入有界归档而不是被静默淘汰，每行保留续聊用的 `context_id`，跨重启持久化。`a2a_probe` 测量受跟踪舰队的可达性与往返延迟（每个 peer 一次验签取卡，可收窄到单个 url），供派单前健康检查，并标明每次失败的阶段——`unreachable`（传输/HTTP）或 `rejected`（卡片不可信）。
-- **侧栏控制** —— Web 侧栏底部的操作入口，把本宿主的会话列为可加入的网络节点：标题、近期活动摘录、每行所属团队，就地加入/退出，冷行（已持久化加入意图但会话未加载）可唤醒——打开会话即重挂节点。会话团队名为 `<team>/<id8>`；Web 会话取 id 前 8 位，导入会话（`import-<uuid>`）保留 `import-` 前缀加 uuid 前 8 位十六进制，避免导入 id 塌缩成少数几个团队。面板的活动区还列出欠回执——已投递但尚未被其 `[A2A receipt]` 消息关联的异步任务——与在途等待并列，跨轮等待无需询问模型即可看见。
-- **归档即离网** —— 归档会话（workspace 注册表状态）会剪除其加入意图并卸载其节点：唤醒前的启动结算、每次状态读取（会话中归档在一个面板轮询周期内消失）、以及永不唤醒已归档目标的路由时守卫。
-- **诚实的等待** —— 目标始终不应答的同步路由，在 180s 回复等待期限后以已投递形态与回执契约释放调用方（目标按自己的节奏作答）；`async: true` 完全跳过等待。网络面板对超过 120s 的在途行降亮度标记为过期等待而非暗示活跃进度，标题带包版本徽标。
-- **A2A 工作台** —— `/__dsh_a2a_nexus/` 全页 DOM 工作台（0.6.0 取代 Three.js 3D 观测；0.6.2 合并：规划板即主舞台，目录/台账/活动/规划乘可折叠侧栏，响应式三档——窄屏侧栏变抽屉、详情变底部浮层；canvas 面掉线时面板自动回落主区）：目录（本机现场/冷启动、canvas 队、peers、远端节点）、台账（待回执/死信+就地清账）、活动环、规划（衍生行动清单+催办/派单起草）、空间规划板（canvas 队组建/成员编排/网络加入退出，布局持久化，`?mode=plan` 直达）。
-- **通告** —— `announce: true` 发布本节点卡片（团队、能力、引荐、已加入会话团队），peers 无需任何目录即可发现它。
+- **模型工具**（共十二个，见下表）—— `a2a_teams` 列出本节点可见的团队（本机行，加上已加入团队作用域内的 peer 团队）；`a2a_route` 向一个团队发送消息，用 `context_id` 继续远端会话，peer 不可达时在候选间故障切换。`a2a_tasks` 按三层对账回执契约：每个让任务欠回复的路由（异步投递、到 180s 期限被释放的同步等待；调用方自行中止的同步等待不入账，没有可路由回调地址的投递只登记为「无回执债」的可见行）都以 pending 留在欠账本里，直到其 `[A2A receipt] task <task_id>` 消息关联上——超过 stale TTL 的逾期行自动转死信（复活的目标仍可用迟到回执结清），每次结清都落入有界归档而不是被静默淘汰，每行保留续聊用的 `context_id`，跨重启持久化。`a2a_probe` 测量受跟踪舰队的可达性与往返延迟（每个 peer 一次验签取卡，可收窄到单个 url），供派单前健康检查，并标明每次失败的阶段——`unreachable`（传输/HTTP）或 `rejected`（卡片不可信）。
+- **侧栏面板** —— Web 侧栏底部的网络入口，已瘦身为本宿主的最近网络动态（`docs/design/panel-activity-feed.md`）：在途路由、欠回执（只列可结算的欠账，对话式已送达的陈旧尾巴只计数）与路由活动环并列，跨轮等待无需询问模型即可看见；同机会话的活动行点击可在 GUI 内跳转到该会话；入站未读徽标，标题带包版本徽标，并提供工作台入口。会话的入网/退网、画布队与成员编排不再在侧栏里做，已迁入下面的工作台规划板。会话团队名为 `<team>/<id8>`；Web 会话取 id 前 8 位（先去掉 `session-` 前缀），导入会话（`import-<uuid>`）保留 `import-` 前缀加 uuid 前 8 位十六进制，避免导入 id 塌缩成少数几个团队。
+- **归档即离网** —— 归档会话（workspace 注册表状态）会离开节点网络：卸载其节点、撤回其 roster 声明、从列表与卡片中隐藏，并永不被唤醒——发生在唤醒前的启动结算、每次状态读取（会话中归档在一个状态轮询周期内消失）、以及路由时守卫三处。**加入意图保留**在 `joined.json`（曾因瞬时读到归档态而抹掉入网姿态，导致冷会话再也唤不醒），剪除事件记入状态面 `registry.teamAudit` 的 `archive-prune`。
+- **诚实的等待** —— 目标始终不应答的同步路由：本机会话目标在 180s 回复等待期限后以已投递形态（`TASK_STATE_DELIVERED`）与回执契约释放调用方（目标按自己的节奏作答）；经直连的远端 peer 受 15s 传输预算约束，超时先经任务查询补偿（对端已完成则升级为真实结果），否则以 `-32005`「已投递未结清」失败返回，须按任务查询对账、不要盲目重发。`async: true` 完全跳过等待。网络面板对超过 120s 的在途行降亮度标记为过期等待而非暗示活跃进度。
+- **A2A 工作台** —— `/__dsh_a2a_nexus/` 全页 DOM 工作台（0.6.0 取代 Three.js 3D 观测；0.6.2 合并：规划板即主舞台，目录/主机/台账/活动/规划乘可折叠侧栏，宿主运行 superagent 团队时多一个「团队」页；响应式——宽屏 ≥1440px 加宽侧栏，≤1023px 侧栏变抽屉、详情变底部浮层，≤680px 页头折行；canvas 面掉线时面板自动回落主区）：目录（本机会话现场/冷启动、画布队、远端节点、本机日志）、主机（tracked peers 的健康与 linked 徽章）、台账（待回执/死信+就地清账）、活动环、规划（衍生行动清单+催办/派单起草，均生成可复制文本）、空间规划板（canvas 队组建/成员编排/网络加入退出，布局持久化；`?mode=plan` 仅为旧链接兼容，canvas 面在线时本就默认进入规划板）。
+- **通告** —— `announce: true`（默认 `false`，需要组合了 web server）发布本节点签名卡片，peers 无需任何目录即可发现它。引荐 `peers` 只给经签名验证、且已配种子或已链接的调用方；已加入会话团队 `sessionTeams`、roster 与画布组织只给已链接的调用方；其余调用方只得到最小发现卡（名称、团队、能力、记录与签名）。未入网的会话节点不在卡片里公布。
 
 ## 模型工具一览
 
@@ -103,7 +103,7 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | `announce` | `false` | 发布本节点 agent 卡片供 peer 发现。 |
 | `isolated` | `false` | 不向任何对端发请求：取卡、目录扫描、路由、远端日志读取、canvas 变更推送、舰队 canvas-op 中继一律拒绝（gh#193）。`a2a/peers.json` 不动，被拒的请求也不给对端扣分；入站面照常应答；state 面显示 `isolated: true`。供测试与验收主机使用。 |
 | `forwardDirect` | `true` | 从 0.6.38 起默认开启，本机目标未找到时，允许替已验签且在线的本地CLI转发一跳；仍检查发送作用域和跳数预算。A 链接 B 接收成员，B 链接 CLI 并钉住 A；对端不会再转发；显式设 `forwardDirect: false` 恢复 CLI 仅投本机。 |
-| `superagent` | `false` | superagent 设计 v4：在本主机运行 superagent 自己的领域引擎（原样引入的上游 `src/core`）。属主在 `/__dsh_a2a/superagent` 指定总工和允许的发送者；见 [`superagent.md`](src/skill/references/superagent.md)。 |
+| `superagent` | `false` | superagent 设计 v4：在本主机运行 superagent 自己的领域引擎（原样引入的上游 `src/core`）。属主在 `/__dsh_a2a/superagent` 指定总工和允许的发送者；总工与成员分别使用插件自带的 `superagent-router` / `superagent-member` 智能体预设；见 [`superagent.md`](src/skill/references/superagent.md)。 |
 | `peers` | `[]` | 种子 base URL；被引荐的 peers 从其卡片学习。 |
 | `delegates` | `[]` | 区域委托：`{ name, url, publicKey }` 发布在卡片上。 |
 | `team` | `'dsh'` | 本节点暴露给直连路由的团队名。 |
