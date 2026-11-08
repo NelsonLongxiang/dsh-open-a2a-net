@@ -232,12 +232,12 @@ import { withinRouteBodyCap } from '@nelsonlongxiang/dsh-open-a2a-net/transport-
 import { A2aClient } from '@nelsonlongxiang/dsh-open-a2a-net/a2a-client'
 ```
 
-外部节点需要自己实现三样东西：签名卡片、`GET /.well-known/agent-card.json` 和 `POST /a2a/direct`，这些模块编码的线上格式就是契约。匿名取卡只能拿到最小发现面，**不带 `peers`**（#312）。引荐列表要求 OriginClaim 验签通过，且调用方是本机 config.peers 显式种下的对端（根地址按 origin，挂载地址精确匹配），或原 operator link 已成立。无关系的自签名陌生人拿不到拓扑；显式 seed 可在双边完整名片链接形成前读取引荐。会话、roster、组织字段仍须原完整名片链接门。带签名的 `?discovery=1` 只请求核心与引荐，用于有限次自举，避免递归获取完整卡片。仅匿名取卡的旧爬取者须显式配置 seed 或升级签名请求；缺少 peers 仍是合法签名卡片，委派记录不变。要拿完整卡片，必须带上通过验证的 OriginClaim 信封（即用你自己的卡片密钥签名的 `X-A2A-Caller` / `-Url` / `-Ts` / `-Sig`），**并且**与提供卡片的宿主有链接：你的卡片 URL 与它同源、你的句柄是它的已加入会话句柄之一、它的操作者把你的精确句柄加成了画布远端成员，或双方操作者互相种了对方（它的 `peers` 列有你的源，你卡片的 `peers` 也列有它的源）。验签通过但没有链接的调用方仍只拿到最小卡片。细节见 `docs/protocol/delivery-origin-auth.md` 及 `docs/protocol/` 下其余文档。
+外部节点需要自己实现三样东西：签名卡片、`GET /.well-known/agent-card.json` 和 `POST /a2a/direct`，这些模块编码的线上格式就是契约。匿名取卡只能拿到最小发现面，**不带 `peers`**（#312）。引荐列表要求 OriginClaim 验签通过，且调用方是本机 config.peers 显式种下的对端（根地址按 origin，挂载地址精确匹配），或原 operator link 已成立。无关系的自签名陌生人拿不到拓扑；显式 seed 可在双边完整名片链接形成前读取引荐。会话、roster、组织字段仍须原完整名片链接门。带签名的 `?discovery=1` 只请求核心与引荐，用于有限次自举，避免递归获取完整卡片。仅匿名取卡的旧爬取者须显式配置 seed 或升级签名请求；缺少 peers 仍是合法签名卡片，委派记录不变。要拿完整卡片，必须带上通过验证的 OriginClaim 信封（即用你自己的卡片密钥签名的 `X-A2A-Caller` / `-Url` / `-Ts` / `-Sig`；这是不带受众的旧信封，宿主只在 `originClaimUnboundWindow` 打开期间接受，默认仍打开，窗口关闭后必须改用绑定受众的形式——另带 `X-A2A-Caller-Aud` 与 `X-A2A-Caller-Sig2`；带请求体的 POST 还应带 `X-A2A-Caller-Sig3`（链路 key、转发回执结算、superagent 的签名面都要求它），见 `docs/protocol/delivery-origin-auth.md` §2.1），**并且**与提供卡片的宿主有链接：你的卡片 URL 与它同源、你的句柄是它的已加入会话句柄之一、它的操作者把你的精确句柄加成了画布远端成员，或双方操作者互相种了对方（它的 `peers` 列有你的源，你卡片的 `peers` 也列有它的源）。验签通过但没有链接的调用方仍只拿到最小卡片。细节见 `docs/protocol/delivery-origin-auth.md` 及 `docs/protocol/` 下其余文档。
 
-**按哪个产物实现。** npm 直装已含四个子路径：自 0.6.25 起（徽章 `latest`）的正式版带齐这批导出，`npm install @nelsonlongxiang/dsh-open-a2a-net` 开箱即用——`examples/external-node/` 有一个可对内嵌 mock peer 跑通全部四个子路径的外部节点参考实现。子路径导出随提交 `9cb3852` 落地；更早的版本（含公开 0.5.15）早于这批导出，也早于上述准入规则和 OriginClaim 信封，从它们引入会报 `ERR_PACKAGE_PATH_NOT_EXPORTED`——历史上的做法（钉提交、`pnpm build`、`npm pack`、依赖 tarball）仅留作 0.6.25 之前部署的历史注：
+**按哪个产物实现。** npm 直装已含四个子路径：npm 上自 0.6.24 起的发布版都带齐这批导出（0.5.15 与 0.6.24 之间没有发布版），当前 `latest` 为 0.7.0，`npm install @nelsonlongxiang/dsh-open-a2a-net` 开箱即用——`examples/external-node/` 有一个可对内嵌 mock peer 跑通全部四个子路径的外部节点参考实现。子路径导出随提交 `9cb3852` 落地（0.6.24 已含），完整卡片的链接门自 0.6.25 起；0.5.15 及更早的发布版没有这批导出，也早于 OriginClaim 信封和上述准入规则，从它们引入会报 `ERR_PACKAGE_PATH_NOT_EXPORTED`——历史上的做法（钉提交、`pnpm build`、`npm pack`、依赖 tarball）仅留作需要从源码构建时的历史注（脱离 DSH profile 的 Git 构建受「安装」一节所述限制，本节的做法未在当前主干上重跑）：
 
 ```bash
-# 历史做法（0.5.15 及更早）：从钉住的提交自行构建
+# 历史做法（没有带导出的发布版时）：从钉住的提交自行构建
 git clone https://github.com/NelsonLongxiang/dsh-open-a2a-net && cd dsh-open-a2a-net
 git checkout <commit>              # 钉一个提交；9cb3852 及之后的提交都导出这四个子路径
 pnpm install --frozen-lockfile     # pnpm 版本以 package.json 的 "packageManager" 为准
@@ -247,7 +247,7 @@ npm pack                           # → nelsonlongxiang-dsh-open-a2a-net-<versi
 npm install /path/to/nelsonlongxiang-dsh-open-a2a-net-<version>.tgz
 ```
 
-安装这个包（npm 或历史 tarball）不会拉入任何 `@deepseek-ai/*` 包：DSH peer 依赖都是可选的，四个子路径只互相引用，外加 `node:crypto`。
+安装这个包（npm 或历史 tarball）不会拉入任何 `@deepseek-ai/*` 包：DSH peer 依赖都是可选的，四个子路径只互相引用（连同它们引用的内部辅助模块，对 `@deepseek-ai/*` 只有编译后会被擦除的类型引用），外加 `node:crypto`。
 
 ## 许可证
 
