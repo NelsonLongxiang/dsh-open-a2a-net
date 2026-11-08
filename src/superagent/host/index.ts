@@ -523,7 +523,7 @@ export class SuperagentHost {
    */
   report(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string }, ticketId?: string): { ok: true; ticketId: string; stage: unknown } | { ok: false; code: string; error: string } {
     const binding = ticketId === undefined ? this.executor.bindingOf(member) : this.executor.bindingFor(member, ticketId)
-    if (binding === undefined) return ticketId === undefined ? { ok: false, code: 'not-assigned', error: 'no ticket is assigned to this session' } : { ok: false, code: 'not-yours', error: `ticket ${ticketId} is not assigned to this session (any more): stop working on it and do not report on it again` }
+    if (binding === undefined) return ticketId === undefined ? { ok: false, code: 'not-assigned', error: 'no ticket is assigned to this session' } : this.notYours(member, ticketId)
     const current = this.store.tickets.get(binding.ticketId)
     if (report.state === 'dropped' && current !== undefined && agentLedEnd(current, binding.assignmentId)) {
       return { ok: false, code: 'agent-cannot-end', error: 'an agent\'s message cannot end this ticket: only a person (or the owner\'s stop) can. Keep working within the scope, or report blocked with a question for the person.' }
@@ -534,6 +534,13 @@ export class SuperagentHost {
     this.relayReport(ticket.id, report.state, report.summary)
     this.pass()
     return { ok: true, ticketId: ticket.id, stage }
+  }
+
+  /** A report named a ticket this member does not hold: refused and counted, naming the ones it does. */
+  private notYours(member: string, ticketId: string): { ok: false; code: string; error: string } {
+    this.noteRefusal('superagent-wrong-id', { caller: member, target: ticketId })
+    const held = this.executor.list().filter(b => b.member === member).map(b => b.ticketId)
+    return { ok: false, code: 'not-yours', error: `ticket ${ticketId} is not assigned to this session (any more), and nothing was changed. ${held.length > 0 ? `Your tickets: ${held.join(', ')}. Copy the id exactly; if that was an old ticket, stop working on it.` : 'You hold no ticket now: stop working on it and do not report on it again.'}` }
   }
 
   /** The router hears a report in its own session, so it can hand a result or a question to the person. */
@@ -761,6 +768,23 @@ export class SuperagentHost {
    * its list, a host-to-host request whose signer is not the pinned key. Counted for this process (the acceptance and the
    * workbench read them); the latest ones are kept with who and what.
    */
+  /**
+   * A tool call named an id that does not exist. It stays refused and nothing changes; it is counted, and the text names
+   * what is waiting so the caller can retry. A long id is easy to miscopy, and "unknown" alone left the router repeating it.
+   */
+  wrongId(kind: 'trigger' | 'ticket', given: string): string {
+    this.noteRefusal('superagent-wrong-id', { target: given })
+    const open = kind === 'trigger'
+      ? [...new Set([...this.candidates.values()].flatMap(entry => entry.candidate.triggers.map(t => t.id)))]
+      : this.store.tickets.list().filter(t => !t.ended).map(t => t.id)
+    const lead = `No ${kind} has the id ${given}, and nothing was changed.`
+    if (open.length === 0) return `${lead} Nothing is open for you now.`
+    const distance = (id: string): number => id.length !== given.length ? Number.MAX_SAFE_INTEGER : [...id].filter((c, n) => c !== given[n]).length
+    const closest = [...open].sort((a, b) => distance(a) - distance(b))[0]!
+    const near = distance(closest) <= 4 ? ` Closest: ${closest}.` : ''
+    return `${lead}${near} Open ${kind}s: ${open.slice(0, 20).join(', ')}. Copy the id exactly from this list or the card.`
+  }
+
   noteRefusal(rule: string, detail: { caller?: string; target?: string } = {}): void {
     this.refusalCounts.set(rule, (this.refusalCounts.get(rule) ?? 0) + 1)
     this.refusalRecent.push({ at: (this.d.now ?? (() => new Date().toISOString()))(), rule, ...(detail.caller !== undefined ? { caller: detail.caller } : {}), ...(detail.target !== undefined ? { target: detail.target } : {}) })

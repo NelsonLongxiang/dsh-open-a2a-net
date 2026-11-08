@@ -600,6 +600,28 @@ describe('a member\'s turn: silent ends, failures, handoffs and stale reports', 
     } finally { await m.h.stop() }
   })
 
+  it('a wrong id is refused and says what is open; nothing changes and it is counted', async () => {
+    const m = await team()
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    try {
+      const asked = m.h.request('一张') as { triggerId: string }
+      m.h.pass()
+      const wrong = asked.triggerId.slice(0, -1) + (asked.triggerId.endsWith('0') ? '1' : '0')
+      const out = routeItem(m.h, { trigger_id: wrong, kind: 'ignore', reason: 'r' }) as { ok: boolean; error: string }
+      expect(out).toMatchObject({ ok: false, trigger_id: wrong })
+      expect(out.error).toContain('nothing was changed')
+      expect(out.error).toContain(`Closest: ${asked.triggerId}`)
+      expect(m.h.store.triggers.disposition(asked.triggerId)?.decisionId).toBeUndefined()
+      expect((m.h.state() as { refusals: { counts: Record<string, number> } }).refusals.counts['superagent-wrong-id']).toBe(1)
+      const one = routeItem(m.h, { trigger_id: asked.triggerId, kind: 'accept', title: '一', scope: 's', reason: 'r' }) as { ticket_id: string }
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      const stale = m.h.report('session-a', { state: 'ready', summary: 'x' }, one.ticket_id.slice(0, -1) + 'z') as { code: string; error: string }
+      expect(stale.code).toBe('not-yours')
+      expect(stale.error).toContain(`Your tickets: ${one.ticket_id}`)
+      expect(m.h.store.tickets.get(one.ticket_id)!.ended).toBeUndefined()
+    } finally { await m.h.stop() }
+  })
+
   it('a report names its ticket: a late turn cannot report on the next one', async () => {
     const m = await team()
     try {

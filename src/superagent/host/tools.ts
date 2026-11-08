@@ -22,6 +22,14 @@ const failure = (error: unknown): Record<string, JsonValue> => error instanceof 
   ? { ok: false, code: error.code, error: error.message }
   : { ok: false, code: 'error', error: error instanceof Error ? error.message : String(error) }
 
+/** A wrong id is refused as before; the refusal now says what the caller does hold, so it can retry from the right id. */
+const refusal = (host: SuperagentHost, error: unknown, ids: { trigger?: string; ticket?: string }): Record<string, JsonValue> => {
+  const out = failure(error)
+  const hint = out.error === 'Unknown trigger' && ids.trigger !== undefined ? host.wrongId('trigger', ids.trigger)
+    : out.error === 'Unknown ticket' && ids.ticket !== undefined ? host.wrongId('ticket', ids.ticket) : undefined
+  return hint === undefined ? out : { ...out, error: hint }
+}
+
 interface RouteItem {
   trigger_id?: unknown; kind?: unknown; title?: unknown; scope?: unknown; reason?: unknown; acknowledgement?: unknown
   ticket_id?: unknown; name?: unknown; note?: unknown; rules?: unknown; repo?: unknown
@@ -74,7 +82,7 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
     const repoSet = decision.kind === 'accept' && decision.ticketId !== undefined && repo !== undefined
     if (repoSet) host.executor.setRepo(decision.ticketId!, repo!)
     return { ok: true, trigger_id: triggerId, kind, decision_id: decision.id, decision: decision.kind, ...(decision.ticketId !== undefined ? { ticket_id: decision.ticketId } : {}), ...(repoSet ? { repo: repo! } : {}), reason: json(decision.reason) }
-  } catch (error) { return { trigger_id: triggerId, ...failure(error) } }
+  } catch (error) { return { trigger_id: triggerId, ...refusal(host, error, { trigger: triggerId, ...(str(item.ticket_id) !== undefined ? { ticket: str(item.ticket_id)! } : {}) }) } }
 }
 
 /**
@@ -140,11 +148,11 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
       if (h === undefined) return { ...notRouter }
       if (args.kind === 'candidate') {
         const candidate = h.engine.candidate(String(args.trigger_id ?? ''))
-        return candidate === undefined ? { ok: false, code: 'none', error: 'no Eval holds that trigger' } : { ok: true, candidate: json(candidate) }
+        return candidate === undefined ? { ok: false, code: 'none', error: h.wrongId('trigger', String(args.trigger_id ?? '')) } : { ok: true, candidate: json(candidate) }
       }
       if (args.kind === 'ticket') {
         const ticket = h.ticket(String(args.ticket_id ?? ''))
-        return ticket === undefined ? { ok: false, code: 'unknownTicket', error: 'no such ticket' } : { ok: true, ticket: json(ticket) }
+        return ticket === undefined ? { ok: false, code: 'unknownTicket', error: h.wrongId('ticket', String(args.ticket_id ?? '')) } : { ok: true, ticket: json(ticket) }
       }
       if (args.kind === 'tickets') {
         const tickets = h.store.tickets.list().slice(0, 50).map(t => ({ id: t.id, title: t.title, ended: t.ended ?? null, stage: h.ticket(t.id)?.stage ?? null, origin: t.origin }))
@@ -176,7 +184,7 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
       const question = str(args.question)
       const sent = args.purpose === 'attention' && question !== undefined ? attentionText(text, question) : text
       const request = { purpose: args.purpose as 'answer' | 'result' | 'attention', text: sent, ...(str(args.ticket_id) !== undefined ? { ticketId: str(args.ticket_id)! } : {}), ...(str(args.trigger_id) !== undefined ? { triggerId: str(args.trigger_id)! } : {}), ...(str(args.question) !== undefined ? { question: str(args.question)! } : {}) } as ReplyRequest
-      try { const reply = h.engine.reply(request); return { ok: true, reply: json(reply) } } catch (error) { return failure(error) }
+      try { const reply = h.engine.reply(request); return { ok: true, reply: json(reply) } } catch (error) { return refusal(h, error, { ...(str(args.trigger_id) !== undefined ? { trigger: str(args.trigger_id)! } : {}), ...(str(args.ticket_id) !== undefined ? { ticket: str(args.ticket_id)! } : {}) }) }
     },
   }))
 
@@ -194,7 +202,7 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
       if (h === undefined) return { ...notRouter }
       const text = str(args.text)
       if (text === undefined) return { ok: false, code: 'missing', error: 'text is required' }
-      try { const ticket = h.engine.note(String(args.ticket_id ?? ''), text); h.pass(); return { ok: true, ticket_id: ticket.id } } catch (error) { return failure(error) }
+      try { const ticket = h.engine.note(String(args.ticket_id ?? ''), text); h.pass(); return { ok: true, ticket_id: ticket.id } } catch (error) { return refusal(h, error, { ticket: String(args.ticket_id ?? '') }) }
     },
   }))
 
@@ -207,7 +215,7 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
     execute: async (args: { ticket_id: string }, exec): Promise<Record<string, JsonValue>> => {
       const h = asRouter(exec)
       if (h === undefined) return { ...notRouter }
-      try { return { ok: true, requested: h.engine.requestStatus(String(args.ticket_id ?? '')) } } catch (error) { return failure(error) }
+      try { return { ok: true, requested: h.engine.requestStatus(String(args.ticket_id ?? '')) } } catch (error) { return refusal(h, error, { ticket: String(args.ticket_id ?? '') }) }
     },
   }))
 
