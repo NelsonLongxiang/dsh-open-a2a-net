@@ -31,7 +31,8 @@ model tools.
 
 - `a2a-net publish` deposits the signed CLI card on the home host
   (`/__dsh_a2a/cli-deposit`, a control route: key-gated like every write).
-  The deposit lives at most 4h. An expired deposit is no longer routable and
+  The deposit lives 4h from each publish (both the default and the maximum;
+  there is no flag to change it). An expired deposit is no longer routable and
   its card is no longer served, but it stays in the host's directory as an
   OFFLINE row (gh#47; the newest 16 are kept) so canvas refs to it never
   dangle silently. Publish again (same handle, same key) to come back.
@@ -39,7 +40,8 @@ model tools.
   signed card that this identity owes a receipt for what its mailbox takes.
   A home host that knows the declaration answers a delivery to it
   `delivered` instead of final: the caller books a debt, the per-target cap
-  (3, counted per identity across all callers) applies and refuses with
+  (`targetQueueCap`, default 3, `0` disables; counted per identity across all
+  callers) applies and refuses with
   `-32009` when full, and the identity's own `receipt <task_id>` frees the
   slot. An owed row the 64-row cap pushes out is archived as evicted. Every
   publish states it afresh — `publish` or `inbox --renew` without `--owes`
@@ -49,7 +51,9 @@ model tools.
 - A handle stays pinned to the key it was published with, live or offline
   (gh#137): publishing it with a different key (e.g. after `init --force
   --uuid <same>`) is refused with "held by another key". Run `a2a-net revoke`
-  first; the next publish then takes the new key. A key swap is therefore
+  first (it acts on the current identity's handle, so with the same `--uuid`
+  it removes the old deposit, live or offline); the next publish then takes
+  the new key. A key swap is therefore
   always an explicit act, never a silent overwrite.
 - While deposited, the host serves the card at
   `<home>/a2a/cli/<handle>/.well-known/agent-card.json` and lists the handle
