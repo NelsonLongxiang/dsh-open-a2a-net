@@ -6,9 +6,13 @@
 > `internalFacts` exists in `src/`. The native-teams slice it targeted
 > (`@nelsonlongxiang/dsh-native-teams`) is deprecated. Exposure today is a
 > per-session tier, `linked` (the default floor) or `fleet` (opt-up), set
-> through `a2a_exposure`. A group's visibility is its strictest member's
-> tier (`src/exposure-store.ts`). The text below is kept as the A4 ruling
-> record.
+> through `a2a_exposure`. As of next/0.8 the tier is stored
+> (`a2a/exposure.json`) and shown on the state face only: no card or
+> directory code reads it, and "a group's visibility is its strictest
+> member's tier" is a rule written in `src/exposure-store.ts` with no
+> enforcement point (owner ruling on #449, 2026-11-08: document it as it
+> is; enforcing it would be a separate design). The text below is kept as
+> the A4 ruling record.
 
 - **Status**: accepted-codification of ROUND-2 ruling A4 (the free addendum promised alongside the chair's ACK-A4-SPLIT-DONE); implementation lands with native-teams slice 2 (0.14.0) against `mount`/`TeamDeclaration`
 - **Owner**: dsh-open-a2a-net (protocol face)
