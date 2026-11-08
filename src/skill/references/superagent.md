@@ -69,7 +69,7 @@ Every A2A message to the team address gets a formal outcome, not only those that
 A member can sit on another host: another physical node, or another DSH instance on this machine, even one with the same zone label. Its work and reports travel **host to host** as signed, body-bound OriginClaim requests. There is no A2A route, no ledger debt and no receipt.
 
 - **On the team host:** add the member's session to the team's canvas team, naming its host: `POST /__dsh_a2a/canvas { action: 'add-member', name: '<team canvas>', id: '<zone>/<id8>', peer: '<member host base URL>' }` (or in the planning view). The member host must be a linked peer. Its key comes from its signed card and the canvas pins it with the qualified ref. A report or turn end for that member counts only under that key (`/a2a/superagent-team`), so another instance sharing the handle is refused. Removing it from the canvas removes it from the team.
-- **On the member host:** `POST { action: 'serve-team', peer: '<team host base URL>', members: [<local session ids>] }`. The team host must be a linked peer, and its key is pinned the same way. Only that key may assign work to those sessions (`/a2a/superagent-member`). Those sessions report with `a2a_ticket_report` as usual, and the host forwards the report, signed. `peer: null` leaves the team.
+- **On the member host:** `POST { action: 'serve', team: '<zone>/canvas/<name>@<fp8>', members: [<local session ids>] }` — the team's canvas id, whose fingerprint names its owner. The host finds the linked peer whose signed card has that key and advertises that canvas, and pins the key. Only that key may assign work to those sessions (`/a2a/superagent-member`). Those sessions report with `a2a_ticket_report` as usual, and the host forwards the report, signed. `team: null` leaves the team. This is the member host owner's consent: a team host cannot take another host's sessions on its own.
 - Serving sessions are isolated from A2A like any member.
 
 ## For the owner
@@ -83,7 +83,7 @@ The router and the members are sessions the owner creates under the team's agent
 - `superagent-router`: read-only files, a foreground command and a job wait of at most 5 s, skills and compaction; no subagents.
 - `superagent-member`: the work tools; a foreground command moves to a background job after 5 s, so a stop or a person's answer is taken at the next step; no subagents.
 
-Settings naming a router or member that runs another preset are refused, and so is `serve-team`. A session not loaded at the time, or a host without a preset registry, is not checked.
+Settings naming a router or member that runs another preset are refused, and so is `serve`. A session not loaded at the time, or a host without a preset registry, is not checked.
 
 The workbench (`/__dsh_a2a_nexus/`) shows it as the **团队** tab whenever the host runs a team. The tab has five views:
 

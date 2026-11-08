@@ -46,7 +46,7 @@ export interface SaSettings {
   readonly remoteMembers: ReadonlyArray<{ ref: string; key: string; url: string }>
   /** The repository each member works in (owner/name), by member; absent on hosts before it. */
   readonly repos?: Readonly<Record<string, string>>
-  readonly serves?: { url: string; key: string; members: readonly string[] }
+  readonly serves?: { url: string; key: string; members: readonly string[]; team?: string }
 }
 export interface SaState {
   readonly settings: SaSettings; readonly policyVersion: string
@@ -361,6 +361,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     if (queued.length > 0) body.appendChild(group('排队', 'is-warn', queued.map(t => el('div', 'wb-led-card', `${t.title} · ${ago(t.createdAt, now)}`))))
     if (s.serves !== undefined) {
       const c = el('div', 'wb-led-card')
+      if (s.serves.team !== undefined) kv(c, '画布团队', s.serves.team)
       kv(c, '团队宿主', s.serves.url)
       kv(c, '钉住公钥', fingerprint(s.serves.key))
       kv(c, '本机成员', s.serves.members.map(sessionName).join('、') || '无')

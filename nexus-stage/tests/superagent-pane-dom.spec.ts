@@ -151,6 +151,9 @@ describe('team tab', () => {
     expect(t).toContain('MCowBQYDK2Vw…')
     expect(t).not.toContain('abcdefghijklmnopqrstuvwxyz')
     expect(t).toContain('工单 t-queue')
+    // Design v5 (D4): the team this host serves shows its canvas id.
+    pane.update({ ...state(), settings: { ...state().settings, serves: { url: 'https://team.example.invalid', key: 'MCowBQYDK2VwAyEAabcdefghijklmnopqrstuvwxyz0123456789', members: [M], team: 'alpha/canvas/team@0123abcd' } } }, sessions, NOW + 61_000)
+    expect(text(pane.root)).toContain('alpha/canvas/team@0123abcd')
   })
 
   it('settings bind a canvas team and name its router (members come from the canvas); an open form survives the poll', async () => {
