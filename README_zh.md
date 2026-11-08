@@ -83,17 +83,6 @@ a2a-net inbox --new                                      # 未读来信；--wait
 - 成员也可以是操作者手工加入的**远端**带 zone 团队句柄（`zone/a1b2c3d4`）——这就是让该远端调用方在本机获准入、并有权拿完整卡片的链接。写入时宿主现读已链接的种子/委托主机的验签名片，把句柄钉成带属主指纹的 `zone/a1b2c3d4@<8 位指纹>`；找不到唯一可验证的属主就拒写（#334）。不带指纹的旧式裸句柄只作兼容保留（`canvasLegacyBareMembers` 默认 `true` 时仍按旧读法计入、授权和路由），需属主 `confirm-member` 确认
 - `a2a_teams` 列出本地和作用域内远端画布队，带属主 URL 和成员数；CLI `teams` 包含本地 canvas 和 peerOrg，同名不同属主各列一行。`a2a_whoami.teams.canvasDetails` 和 CLI `whoami --json` 列本身份本地/远端归属，旧 `teams.canvas` 本地名字数组兼容保留。URL 只作发现事实，不要求改 `--home`。失败提示区分可见目录无此队、已知属主但缺前提、同名多属主（列候选不猜）；信息作用域、路由选择与准入不变；`/__dsh_a2a/state` 对本地成员提供 `joined`/`live` 标记，对远端成员提供 `{ id, team, remote: true }`
 
-## Native-teams 桥（节点统一，P1）——已弃用
-
-> **已弃用。** `@nelsonlongxiang/dsh-native-teams` 已弃用。桥接代码仍随包发布（契约镜像 `src/teams-bridge.ts`，入站实现 `src/legacy/teams-bridge-inbound.ts`，出站面 `bridgeFace` 在 `src/index.ts`；`nativeTeamsInbound` 默认 `false`），仅为既有部署保留；新部署不应依赖它。下文按其现状描述。
-
-通往 `@nelsonlongxiang/dsh-native-teams` 的两条半桥（结构契约镜像：`src/teams-bridge.ts`；冻结契约原文在该包 `src/a2a-face.ts`）：
-
-- **出站传输面**——本插件挂载 `nativeTeamsA2a` 服务：`resolve` 与 `submit` 复用同一次目录遍历（单一匹配器，无漂移风险），`submit` 走直连路由派发器（逐候选 async 门禁，镜像 `a2a_route`；对端幂等 409 回放是终态判决、绝不转投造成重复执行：`async` 提交判为 accepted，`sync` 提交抛错并在文案里带 `-32003`（先前尝试在对端仍权威），同键异载荷的 409 冲突抛错并带 `-32002`；新派发的 accepted 提交进欠账账本（回放得到的 accepted 不入账）；提交会话为 joined 节点时，其节点地址随 wire `callback` 字段携带——对端回执据此路由回发起会话，冷会话由 wake-on-route 物化；父会话未 joined 时不携带 callback，回执回落 caller label），`cancel` 先清除本端欠账行（账本优先，通知失败只记警告、不影响取消），再通知持有方：本机目标对活目标 steer `[A2A cancel]`；远端经 wire 投递协作式 `[A2A cancel]` 停止通知（不带 `task_id`——原 id 已被对端幂等账本认领，复用会 409）。对端卡片声明 `queuedTaskCancellation` 时，通知额外带 `cancel_task_id`，对端核对原调用方后撤回仍在队列中的原任务。`queryOutcome`（W7 slice 2）按 submit 同式重组指纹，经只读的 `POST /a2a/query` 向候选 peer 取回结果，无增量信息时回 `undefined`，永不给出合成判决。它不暴露任何新东西——只有 peer 网络已发布的团队可解析。
-- **入站分发**（配置 `nativeTeamsInbound`，默认 `false`）——兄弟注册表判定为无歧义本地主张的团队名，经其权威路由缝（`describeTarget`/`startRound`）发起一轮路由，由本节点活 initiator 会话担任 parent，A2A 信封随轮消息携带。注册表存在本身绝不是暴露：操作者显式开启才算。仅分发到 dispatcher 层——入站调用方寻址团队，不能寻址成员（成员保持可见不可寻）。轮与 steer 路径同样有界：180s 回复死线（`nativeRoundWaitMs`）以诚实的 delivered-unsettled 形态应答，轮自身继续运行；调用方 abort（存在时）经其 signal 取消轮。`wait: false` 在 prepare-first 检查（主张/seam/initiator——幻影派发绝不回应成功）之后脱离派发；本切片 native-teams 轮不发 A2A 回执，其结果携带 `bridge` 标记且绝不记为欠回执行（回 `callbackTarget` 的回执回流已由 P2a 落地为 wire `callback` 字段，但 native-teams 入站轮本身仍不发回执）。
-
-完整映射与范围说明见 `docs/native-teams-bridge.md`。
-
 ## 配置
 
 行配置叠加在 profile 的 patch 层；每个键都有 schema 默认值。
@@ -111,8 +100,6 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | `agentName` | `'DeepSeek Harness A2A node'` | 卡片上的人类可读名称。 |
 | `apiKey` | `''` | 发往 peer 的请求携带的 `X-API-Key`（配了 `linkKeys` 的对端改带链路 key）；非空时同时门禁控制路由和本机对端面（`/a2a/direct`、`/a2a/log`、`/a2a/blob`，链路 key 的接受条件见 `linkKeys`）。为空时对端面保持开放姿态，按调用方身份准入。 |
 | `sessionNodes` | `true` | 把主会话暴露为可加入的网络节点。 |
-| `nativeTeamsInbound` | `false` | 把入站直连路由（及出站 A2A 工具的本地候选）经 native-teams 路由缝分发到其注册表团队；需兄弟插件已组合。 |
-| `nativeRoundWaitMs` | `180000` | 单轮 native-teams 路由的回复等待预算（桥的死线，对齐 steer 路径的 180s）。超时轮以诚实的 delivered-unsettled 形态应答并继续运行。 |
 | `wakeJoinedOnBoot` | `false` | 挂载后预热冷加入会话的 agent（需要 session controller 唤醒面，缺失时跳过并在状态面记 `skipped:no-wake-face`；关闭时冷会话仍会被路由时唤醒（wake-on-route）和 `wakeReconcile` 对账唤醒，二者同样需要唤醒面）。预热是延迟启动、前台让路、可取消的——不会阻塞启动窗口（见下方两个参数）。 |
 | `wakePrewarmDelayMs` | `10000` | loader 树就绪到第一次预热唤醒之间的空闲延迟；`0` 恢复就绪即唤醒的旧行为。 |
 | `wakePrewarmQuietMs` | `5000` | 前台静默窗口：窗口内有唤醒/路由需求（或有出站路由在途）则推迟下一步预热；`0` 关闭时间窗，但有出站路由在途时仍会让路。对账循环（`wakeReconcile`）也按此窗口让路，每轮最多让路 5 次。 |

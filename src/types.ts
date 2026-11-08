@@ -139,9 +139,9 @@ export interface A2aRouteOk {
    */
   readonly consumed?: boolean
   /**
-   * Present when the result rode the native-teams bridge: its rounds emit
-   * no A2A receipt in this slice, so callers must not book the row as
-   * receipt-owed (`trackOwedTask` skips it).
+   * Present when a peer still running the retired native-teams bridge (0.7.0
+   * and older) answered from a bridge round: those rounds emit no A2A receipt,
+   * so callers must not book the row as receipt-owed (`trackOwedTask` skips it).
    */
   readonly bridge?: 'native-teams'
   /** The peer's explicit receipt contract, when provided. */

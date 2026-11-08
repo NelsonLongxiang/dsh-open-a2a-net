@@ -413,7 +413,7 @@ export interface TaskLedgerOptions {
 /**
  * What one correlated receipt settled — the payload of the
  * `a2a/receipt-resolved` event, emitted for consumers that react to receipt
- * arrivals (P2: native-teams settles its outstanding async submissions from
+ * arrivals (P2: a plugin can settle its outstanding async submissions from
  * this seam). `outcome` carries the v2 envelope's controlled-vocabulary
  * verdict when the receipt rode one; `late` marks a receipt answering a
  * dead-lettered row (revival) or an abandoned row (arrival recorded) — a
