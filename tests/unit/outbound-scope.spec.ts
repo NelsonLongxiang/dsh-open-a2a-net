@@ -6,6 +6,19 @@ function world(over: Partial<OutboundScopeRecords> = {}): OutboundScopeRecords {
 const caller = 'ops-cli/0123456789abcdef'
 const target = 'beta/abcdef01'
 describe('shared outbound sender scope behavior', () => {
+  it('v5-B2: a peer\'s superagent team canvas takes requests from a session that declares any team; a teamless one has no network', async () => {
+    const team = { team: 'beta/canvas/team', members: ['beta/aaaaaaaa'], superagentTeam: true }
+    const r = world({ peerOrgs: () => [[team]] })
+    // Teamless: still refused (S3), bare or qualified.
+    expect((await outboundScope(r, caller, caller, 'beta/canvas/team')).ok).toBe(false)
+    // A seat on any canvas of its own host, or a roster team: the team canvas takes it, bare or with the owner's fingerprint.
+    const seated = { ...r, canvasNames: () => ['mine'], canvasMembers: () => [caller] }
+    expect((await outboundScope(seated, caller, caller, 'beta/canvas/team')).ok).toBe(true)
+    expect((await outboundScope(seated, caller, caller, 'beta/canvas/team@0123abcd')).ok).toBe(true)
+    expect((await outboundScope({ ...r, teamsOf: () => ['alpha/roster'] }, caller, caller, 'beta/canvas/team')).ok).toBe(true)
+    // An ordinary peer canvas is unchanged: the caller must sit in it.
+    expect((await outboundScope({ ...seated, peerOrgs: () => [[{ ...team, superagentTeam: undefined }]] }, caller, caller, 'beta/canvas/team')).ok).toBe(false)
+  })
   it('a canvas that lists only the target never authorizes an unrelated caller', async () => {
     const r = world({ canvasNames: () => ['ops'], canvasMembers: () => [target] })
     expect((await outboundScope(r, caller, caller, target)).ok).toBe(false)

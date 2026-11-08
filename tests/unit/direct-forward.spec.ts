@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createDirectForward, ForwardBirths, forwardReceiptBasis, type DirectForwardDeps, type ForwardRequest } from '../../src/direct-forward.ts'
+import { createDirectForward, ForwardBirths, forwardReceiptBasis, teamReceiptBasis, type DirectForwardDeps, type ForwardRequest } from '../../src/direct-forward.ts'
 import { TaskLedger } from '../../src/task-ledger.ts'
 import { checkGuardAtIngress, DEFAULT_HOP_BUDGET } from '../../src/recursion-guard.ts'
 import type { A2aPeerCard, A2aRouteResult } from '../../src/types.ts'
@@ -171,6 +171,26 @@ describe('one-hop CLI forwarding', () => {
     for (const over of [{ guarded: true }, { localCliProof: false }]) { const x = fixture(); expect((await createDirectForward(x.deps)({ ...request, ...over })).ok).toBe(false); expect(x.sent).toHaveLength(0) }
     // A protocol refusal (already forwarded) has nothing for the caller to do.
     { const x = fixture(); const out = await createDirectForward(x.deps)({ ...request, guarded: true }); expect(!out.ok && out.next).toBeUndefined() }
+  })
+  it('v5-B2: a superagent team\'s host-face receipt lands only as the answer to that request — its sender, its canvas, its peer key and host', () => {
+    const row: any = { taskId: 't', team: 'alpha/canvas/team', direction: 'outbound', status: 'pending', sender: { kind: 'session', id: 'charlie/cccccccc' }, peerKey: 'K', peerHost: 'hostA' }
+    const claim = { bound: true, bodyBound: true as const, card: { publicKey: 'K' } }
+    expect(teamReceiptBasis(row, 'hostA', 'charlie/cccccccc', 'alpha/canvas/team', claim)).toBe('peer-org:alpha/canvas/team')
+    for (const [over, caller, target, onBehalfOf, c] of [
+      [{}, 'hostX', 'charlie/cccccccc', 'alpha/canvas/team', claim],              // another process label than the row's
+      [{}, 'alpha/aaaaaaaa', 'charlie/cccccccc', 'alpha/canvas/team', claim],     // a session face, not the host's
+      [{}, 'hostA', 'charlie/dddddddd', 'alpha/canvas/team', claim],              // delivered to someone else than the sender
+      [{}, 'hostA', 'charlie/cccccccc', 'alpha/canvas/other', claim],             // on behalf of another canvas
+      [{}, 'hostA', 'charlie/cccccccc', undefined, claim],                        // on nobody's behalf
+      [{}, 'hostA', 'charlie/cccccccc', 'alpha/canvas/team', { ...claim, card: { publicKey: 'E' } }], // another key
+      [{}, 'hostA', 'charlie/cccccccc', 'alpha/canvas/team', { bound: true, card: { publicKey: 'K' } }], // not body-bound
+      [{ status: 'settled' }, 'hostA', 'charlie/cccccccc', 'alpha/canvas/team', claim],
+      [{ direction: 'inbound' }, 'hostA', 'charlie/cccccccc', 'alpha/canvas/team', claim],
+      [{ receiptExpected: false }, 'hostA', 'charlie/cccccccc', 'alpha/canvas/team', claim],
+      [{ team: 'alpha/aaaaaaaa' }, 'hostA', 'charlie/cccccccc', 'alpha/aaaaaaaa', claim], // not a canvas request
+      [{ peerKey: undefined }, 'hostA', 'charlie/cccccccc', 'alpha/canvas/team', claim],
+    ] as const) expect(teamReceiptBasis({ ...row, ...over }, caller, target, onBehalfOf, c as never), JSON.stringify([over, caller, target, onBehalfOf])).toBeUndefined()
+    expect(teamReceiptBasis(undefined, 'hostA', 'charlie/cccccccc', 'alpha/canvas/team', claim)).toBeUndefined()
   })
   it('#282 S3: a forward receipt is admissible only for that CLI, from a frozen receiver, on the frozen peer key', () => {
     const cli = request.caller
