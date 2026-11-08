@@ -2066,6 +2066,7 @@ export function apply(ctx: Context, config: Config): void {
     },
     canvasesOf: id => canvasTeamsOfSession(id),
     canvasNames: () => canvasStore.list(),
+    presetOf: id => sessionPresetOf(id),
     teamSend: args => teamCanvasSend(args),
   }) : undefined
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.

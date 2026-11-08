@@ -639,6 +639,62 @@ describe('design v5: the team is a canvas team', () => {
     } finally { void h.stop() }
   })
 
+  it('v5 acceptance F1/F3: an upgraded team (router stored, no canvas bound) can be composed and bound; its running work stays put meanwhile', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const sent: Array<[string, string]> = []
+    const canvases: Record<string, string[]> = { ops: ['session-r', 'session-a'] }
+    const h = new SuperagentHost({
+      home: mkdtempSync(join(tmpdir(), 'sa-v5-upgrade-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {},
+      canvasTeam: name => canvases[name] !== undefined ? { local: canvases[name]!, remote: [] } : undefined,
+      canvasesOf: id => Object.keys(canvases).filter(name => canvases[name]!.includes(id)),
+    })
+    expect(h.saveSettings({ canvas: 'ops', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
+    h.start()
+    try {
+      const asked = h.request('核对一节文档') as { triggerId: string }
+      expect(routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: 'doc', scope: 's', reason: 'r' })).toMatchObject({ ok: true })
+      await vi.waitFor(() => { expect(h.executor.list()).toHaveLength(1) })
+      const assignment = h.executor.list()[0]!.assignmentId
+      // The canvas goes away (as after an upgrade: the router is stored, nothing is bound) …
+      delete canvases.ops
+      h.poolChanged()
+      // … F3: the running assignment stays with its member, which is told nothing.
+      expect(h.executor.list()).toEqual([expect.objectContaining({ member: 'session-a', assignmentId: assignment })])
+      expect(sent.some(([id, t]) => id === 'session-a' && t.includes('is no longer yours'))).toBe(false)
+      // F1: with the bound canvas gone, the stored router may join the canvas that becomes the team.
+      expect(h.settings.router).toBe('session-r')
+      expect(h.canvasMemberRefusal('ops2', 'session-r')).toBeUndefined()
+      canvases.ops2 = ['session-r', 'session-a']
+      h.poolChanged()
+      expect(h.executor.list()).toEqual([expect.objectContaining({ member: 'session-a', assignmentId: assignment })])
+      // Bound again: the member is in the pool, its work goes on.
+      expect(h.saveSettings({ canvas: 'ops2', router: 'session-r' }, () => true)).toMatchObject({ ok: true, settings: { members: ['session-a'] } })
+      expect(h.executor.list()).toEqual([expect.objectContaining({ member: 'session-a', assignmentId: assignment })])
+    } finally { void h.stop() }
+  })
+
+  it('v5 acceptance F4: a session served for another team on another preset takes no new work (a stop still reaches it), and the state says why', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const KEY_A = 'MCowBQYDK2VwAyEA' + 'A'.repeat(44)
+    const delivered: string[] = []
+    const presets: Record<string, string> = { 'session-c': 'standard' }
+    const h = new SuperagentHost({
+      home: mkdtempSync(join(tmpdir(), 'sa-v5-serve-preset-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: (_id, text) => { delivered.push(text); return true }, interval: () => () => {},
+      localSessionOf: handle => handle === 'dsh/cccccccc' ? 'session-c' : undefined, presetOf: id => presets[id],
+    })
+    // A serve stored before presets: written without the check (as a v4 file loads).
+    expect(h.serveTeam({ url: 'http://127.0.0.1:8', key: KEY_A }, ['session-c'], () => true)).toEqual({ ok: true })
+    expect(h.assignedWork('assign', 'dsh/cccccccc', KEY_A, 'work')).toMatchObject({ ok: false, code: 'preset' })
+    expect(h.assignedWork('stop', 'dsh/cccccccc', KEY_A, 'stop')).toEqual({ ok: true })
+    expect(h.state()).toMatchObject({ servesProblem: expect.stringContaining('superagent-member') })
+    expect((h.state().refusals as { counts: Record<string, number> }).counts['superagent-member-preset']).toBe(1)
+    // On the member preset it works again.
+    presets['session-c'] = 'superagent-member'
+    expect(h.assignedWork('assign', 'dsh/cccccccc', KEY_A, 'work')).toEqual({ ok: true })
+    expect(h.state().servesProblem).toBeUndefined()
+  })
+
   it('one session, one team role: the team canvas takes no CLI handle and no off-preset session; a team session joins no other canvas', async () => {
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
     const canvases: Record<string, string[]> = { ops: ['session-r', 'session-m'], other: [] }
