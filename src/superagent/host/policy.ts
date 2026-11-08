@@ -84,6 +84,8 @@ export const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\/[A-Za-z0-9_.][A-Za-z0-
 
 /** The workbench actor id: the owner, the only person the workbench control route serves. */
 export const WORKBENCH_OWNER = 'owner'
+/** The actor of a request sent with the owner's credential from the terminal: an ordinary message, not a person (owner 2026-11-08). */
+export const WORKBENCH_CLI = 'cli'
 
 export const DEFAULT_SETTINGS: TeamSettings = {
   members: [],
@@ -218,7 +220,7 @@ export function policyVersion(settings: TeamSettings): string {
 
 const allowedOn = (settings: TeamSettings, source: string, actor: string): boolean =>
   (source === 'workbench' || source === 'a2a') && settings.allowed[source].includes(actor)
-const botOn = (settings: TeamSettings, source: string, actor: string): boolean => source === 'a2a' && settings.bots.a2a.includes(actor)
+const botOn = (settings: TeamSettings, source: string, actor: string): boolean => (source === 'a2a' && settings.bots.a2a.includes(actor)) || (source === 'workbench' && actor === WORKBENCH_CLI)
 /**
  * What a settings change means to each open ticket, in upstream's PolicyEffect terms (the engine records it as the
  * ticket's `policy-changed` input and delivers it to its worker): a rule the ticket was accepted on that changed or no

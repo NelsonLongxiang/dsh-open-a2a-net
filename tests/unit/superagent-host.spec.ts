@@ -797,7 +797,7 @@ describe('ops loop: members work in repositories; a ticket accepted for one runs
 })
 
 describe('ops team ledger: every A2A message to the team address gets a formal outcome', () => {
-  it('a message the team does not take is told so (rejected, with the reason); a follow-up is told it reached the member', async () => {
+  it('a message the team does not take is told so (rejected, with the reason)', async () => {
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
     const { routeItem } = await import('../../src/superagent/host/tools.ts')
     const calls: string[][] = []
@@ -842,6 +842,66 @@ describe('ops team ledger: every A2A message to the team address gets a formal o
     // Each message is answered once.
     await settle()
     expect(calls.filter(a => a[0] === 'receipt' && [observed, refused, stop].includes(a[1]!)).length).toBe(3)
+  })
+})
+
+describe('spec audit: follow-ups, the owner answering, the terminal', () => {
+  it('a follow-up delivered to a member is acknowledged, and gets its formal outcome when the ticket ends', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const calls: string[][] = []
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']), home: mkdtempSync(join(tmpdir(), 'sa-followup-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, homeUrl: () => 'http://127.0.0.1:1',
+      runCli: async args => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' } })
+    const bot = 'reporter/0123456789abcdef'
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const receive = (n: string, ctx: string) => { const task = `direct-${n.padStart(12, '0')}`; h.engine.receive({ ...wb(n, ctx), source: 'a2a', threads: [{ source: 'a2a', id: ctx }], actor: { source: 'a2a', id: bot }, human: false, channel: { source: 'a2a', thread: `a2a:${ctx}`, address: { caller: bot, task, context: ctx } }, addressed: 'direct', meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } } as never); h.pass(); return task }
+    const receipts = (task: string): string[][] => calls.filter(a => a[0] === 'receipt' && a[1] === task)
+    const first = receive('1', 'ctx-1')
+    const accepted = routeItem(h, { trigger_id: '1', kind: 'accept', title: 'bump', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
+    await settle()
+    const followUp = receive('2', 'ctx-1')
+    await settle(); await settle()
+    expect(receipts(followUp).length, JSON.stringify(calls)).toBe(1)
+    expect(receipts(followUp)[0]).toContain('--acknowledged')
+    h.engine.stopTicket(accepted.ticket_id, 'done')
+    await settle()
+    const final = receipts(followUp).find(a => !a.includes('--acknowledged'))
+    expect(final, JSON.stringify(receipts(followUp))).toBeDefined()
+    expect(final![final!.indexOf('--outcome') + 1]).toBe('abandoned')
+    expect(receipts(first).some(a => !a.includes('--acknowledged'))).toBe(true)
+    await h.stop()
+  })
+
+  it('the owner answers a question on a ticket an agent asked for; the answer reaches its member as a person\'s message', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const sent: Array<[string, string]> = []
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']), home: mkdtempSync(join(tmpdir(), 'sa-answer-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {} })
+    const bot = 'reporter/0123456789abcdef'
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade.' }] }, () => true)).toMatchObject({ ok: true })
+    h.engine.receive({ ...wb('1', 'ctx-1'), source: 'a2a', threads: [{ source: 'a2a', id: 'ctx-1' }], actor: { source: 'a2a', id: bot }, human: false, channel: { source: 'a2a', thread: 'a2a:ctx-1', address: { caller: bot, task: 'direct-1', context: 'ctx-1' } }, addressed: 'direct', meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: 'direct-1' } } as never)
+    h.pass()
+    const accepted = routeItem(h, { trigger_id: '1', kind: 'accept', title: 'bump', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
+    await vi.waitFor(() => { expect(sent.some(([id, t]) => id === 'session-m' && t.startsWith('[superagent assignment]'))).toBe(true) })
+    expect(h.answer(accepted.ticket_id, '用 CSV')).toMatchObject({ ok: false, code: 'no-question' })
+    expect(h.report('session-m', { state: 'waiting', summary: '要问', question: '用哪种格式？' }, accepted.ticket_id)).toMatchObject({ ok: true })
+    const answered = h.answer(accepted.ticket_id, '用 CSV') as { triggerId: string }
+    expect(answered).toMatchObject({ ok: true })
+    await vi.waitFor(() => { expect(sent.some(([id, t]) => id === 'session-m' && t.startsWith('[superagent input]') && t.includes('用 CSV'))).toBe(true) })
+    const ticket = h.store.tickets.get(accepted.ticket_id)!
+    expect(ticket.inputs.find(i => i.kind === 'trigger' && i.triggerId === answered.triggerId)).toMatchObject({ human: true })
+    expect(sent.filter(([id, t]) => id === 'session-r' && t.includes('[superagent candidate]') && t.includes('用 CSV'))).toHaveLength(0)
+    await h.stop()
+  })
+
+  it('a request from the terminal is an ordinary message: judged by the rules, and it cannot stop a ticket', () => {
+    const repo = new MemoryRepositories()
+    const gate = teamPolicy(settings({ acceptMode: 'auto' })).gate
+    const thread = { key: 'workbench:t', subscriptions: [] } as never
+    expect(gate({ ...wb('1'), actor: { source: 'workbench', id: 'cli' }, human: false, addressed: 'direct' } as never, thread, [])).toMatchObject({ admissible: true, strength: 'inferred', basis: { via: 'bot' } })
+    expect(gate({ ...wb('2'), actor: { source: 'workbench', id: 'owner' }, human: true, addressed: 'direct' } as never, thread, [])).toMatchObject({ admissible: true, strength: 'explicit' })
+    void repo
   })
 })
 

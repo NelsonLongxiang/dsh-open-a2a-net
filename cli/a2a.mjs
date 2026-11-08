@@ -619,9 +619,8 @@ async function cmdAdmission() {
 
 /**
  * superagent design v4 (PR-B2a): the owner's terminal face of the team's workbench Source. It rides the home's
- * OWNER control credential ($A2A_KEY / pocket cookie), never a CLI identity: a request made this way is the owner's
- * (a person addressing the agent), while a CLI identity's message reaches the team only as an agent through the A2A
- * Source's bot list.
+ * OWNER control credential ($A2A_KEY / pocket cookie), never a CLI identity. A request made this way is an ordinary
+ * message, not a person's (owner 2026-11-08): the router judges it against the team's rules, as an agent's.
  */
 async function cmdSuperagent() {
   const [sub, ...words] = positionals()
@@ -636,7 +635,7 @@ async function cmdSuperagent() {
     if (text === '') usage('usage: a2a superagent request <text…> [--thread <workbench thread id>] [--json]')
     const thread = flag('--thread')
     const out = await answer(await homeFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...keyHeaders() },
-      body: JSON.stringify({ action: 'request', text, ...(thread !== undefined ? { thread } : {}) }) }))
+      body: JSON.stringify({ action: 'request', text, via: 'cli', ...(thread !== undefined ? { thread } : {}) }) }))
     if (has('--json')) { console.log(JSON.stringify(out)); if (out.ok !== true) process.exitCode = 1; return }
     if (out.ok !== true) die(`[superagent] request refused: ${String(out.error)}`)
     console.log(`[superagent] ${String(out.result)} · trigger ${String(out.triggerId)} · thread ${String(out.thread)}${out.result === 'filtered' ? ' (the workbench Source is off)' : ''}`)
