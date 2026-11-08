@@ -61,14 +61,14 @@ a2a-net route dsh/1a2b3c4d "status?"                     # 默认异步；--sync
 a2a-net inbox --new                                      # 未读来信；--wait 阻塞等待，--hook 供 Claude Code hook 使用
 ```
 
-从 0.6.38 起 `forwardDirect` 默认 `true`；本机目标未找到时，home 可替已验签且在线的 CLI 向已链接的对端目标转发一跳。两边运营者必须各自链接：A 链接 B 的接收成员，B 链接 CLI 句柄并将 home 钉为 A。画布目标只需 A 链接画布属主主机（#282 S3，同队即授权）：接收成员在转发行出生时从属主签名名片冻结，回执只有来自这些成员、且由该属主公钥签名时才放行进 CLI 信箱并结算。作用域及结算 enforce 开启时，B 成员宿主的自动回执结清 A 的转发行并进入 CLI 信箱；`--sync` 返回 B 的回复。命令、参数、环境变量与退出码见 [`src/skill/references/cli.md`](src/skill/references/cli.md)。
+从 0.6.38 起 `forwardDirect` 默认 `true`；本机目标未找到时，home 可替已验签且在线的 CLI 向已链接的对端目标转发一跳。两边运营者必须各自链接：A 链接 B 的接收成员，B 链接 CLI 句柄并将 home 钉为 A。画布目标只需 A 链接画布属主主机（#282 S3，同队即授权；属主主机须为 0.6.37 及以上）：接收成员在转发行出生时从属主签名名片冻结，回执只有来自这些成员、且由该属主公钥签名时才放行进 CLI 信箱并结算。作用域及结算 enforce 开启时，B 成员宿主的自动回执结清 A 的转发行并进入 CLI 信箱；`--sync` 返回 B 的回复，但转发路径上同步等待只有约 15 秒的传输窗口，超时返回 `-32005`（已投递未结清）：对端做完后仍会自动回执，请按 task id / `inbox` 对账，不要盲目重发；长任务用默认的异步 `route`，再 `inbox --wait --renew`。命令、参数、环境变量与退出码见 [`src/skill/references/cli.md`](src/skill/references/cli.md)。
 
 
 ### 独立网络节点（不依赖 DSH 实例）
 
 部署手册（安装、常驻服务、与 DSH 宿主互联、公网安全）：[docs/guides/standalone-node.md](docs/guides/standalone-node.md)。
 
-`a2a-net serve --config node.json` 在一个独立的 Node 进程里运行网络层：名片与签名、对端目录、CLI 户口与信箱、一跳转发、canvas 归属、台账、状态面和工作台。它不承载 AI 会话，发往会话的消息照常转发给 DSH 主机。把它部署在一台稳定的机器上作为 CLI 的 home，DSH 重启就不会让 CLI 户口、信箱和 canvas 目录掉线（节点自身重启后也保留）。安装与配置见 [`src/skill/references/cli.md`](src/skill/references/cli.md) 的 `a2a-net serve` 一节。
+`a2a-net serve --config node.json` 在一个独立的 Node 进程里运行网络层：名片与签名、对端目录、CLI 户口与信箱、一跳转发、canvas 归属、台账、状态面和工作台。它不承载 AI 会话，CLI 发往会话的消息按上述一跳转发规则交给已链接的 DSH 主机。「不依赖 DSH 实例」指不需要运行中的 DSH 主机；运行时仍需 `@deepseek-ai/*` 的 npm 包（缺失时 `serve` 会打印要安装的固定版本集合）。把它部署在一台稳定的机器上作为 CLI 的 home，DSH 重启就不会让 CLI 户口、信箱和 canvas 目录掉线（节点自身重启后也保留）。安装与配置见 [`src/skill/references/cli.md`](src/skill/references/cli.md) 的 `a2a-net serve` 一节。
 
 ## 画布队伍（任意组队，v0.5.25）
 
