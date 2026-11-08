@@ -422,7 +422,7 @@ describe('superagent engine in the a2a host', () => {
       expect(await m.team(R_ID, [M_ID])).toMatchObject({ ok: true })
 
       // The router: superagent_* only. Its visible tools are exactly those.
-      expect(scopes.get(R_ID)!.allow).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status'])
+      expect(scopes.get(R_ID)!.allow).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note'])
       const statusRun = await run('superagent_read', m.R, { kind: 'tickets' }); expect(statusRun.isError, statusRun.text).toBe(false)
       for (const name of ['a2a_route', 'a2a_report', 'a2a_teams', 'a2a_ticket_report', 'a2a_file_send']) expect(await refusedByRole(name, m.R, { team: 'dsh/c2222222', message: 'x' }), name).toBe(true)
 
@@ -447,7 +447,7 @@ describe('superagent engine in the a2a host', () => {
       expect(await m.team(O_ID, [])).toMatchObject({ ok: true })
       expect(scopes.get(R_ID)).toMatchObject({ allow: undefined, lifted: 1 })
       expect(scopes.get(M_ID)).toMatchObject({ allow: undefined, lifted: 1 })
-      expect(scopes.get(O_ID)!.allow).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status'])
+      expect(scopes.get(O_ID)!.allow).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note'])
       expect(await refusedByRole('a2a_teams', m.R)).toBe(false)
       expect(await refusedByRole('a2a_teams', m.O)).toBe(true)
       expect(await refusedByRole('a2a_route', S, { team: 'dsh/c2222222', message: 'x' })).toBe(false)
@@ -522,6 +522,29 @@ describe('superagent engine in the a2a host', () => {
       const inputs = s.tickets.find((t: any) => t.id === ticketId).inputs.length
       expect(await m.sa({ action: 'settings', settings: { evalTimeoutMs: 120_000 } })).toMatchObject({ ok: true })
       expect((await m.state()).tickets.find((t: any) => t.id === ticketId).inputs.length).toBe(inputs)
+    } finally { await m.dispose() }
+  }, 30_000)
+
+  it('design reevaluate-note: the owner has a turned-down request judged again; the router passes a running ticket\'s member a note', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-reeval-note-'))
+    const m = await mount(home)
+    try {
+      expect(await m.team(R_ID, [M_ID])).toMatchObject({ ok: true })
+      const ask = await m.sa({ action: 'request', text: '把导出按钮做了' })
+      await vi.waitFor(() => { expect(m.R.steered.some(t => t.includes(ask.triggerId))).toBe(true) }, { timeout: 8000 })
+      expect(await m.tool('superagent_route', m.R, { items: [{ trigger_id: ask.triggerId, kind: 'ignore', reason: '看错了' }] })).toMatchObject({ ok: true })
+      const before = m.R.steered.length
+      expect(await m.sa({ action: 'reevaluate', trigger_id: ask.triggerId })).toEqual({ ok: true, queued: true })
+      await vi.waitFor(() => { expect(m.R.steered.slice(before).some(t => t.includes(ask.triggerId) && t.includes('judged before'))).toBe(true) }, { timeout: 8000 })
+      const routed = await m.tool('superagent_route', m.R, { items: [{ trigger_id: ask.triggerId, kind: 'accept', title: '导出按钮', scope: '加一个', reason: '重判后接单', acknowledgement: '收到' }] })
+      const ticketId = routed.results[0].ticket_id as string
+      await vi.waitFor(() => { expect(m.M.steered.some(t => t.includes('[superagent assignment]') && t.includes(ticketId))).toBe(true) }, { timeout: 8000 })
+      // The router's note reaches the running member as a fact; only the router may give one; an ended ticket takes none.
+      expect(await m.tool('superagent_note', m.R, { ticket_id: ticketId, text: '属主补充：导出 CSV 即可' })).toMatchObject({ ok: true, ticket_id: ticketId })
+      await vi.waitFor(() => { expect(m.M.steered.some(t => t.includes('[superagent input]') && t.includes('note from the router') && t.includes('属主补充：导出 CSV 即可'))).toBe(true) }, { timeout: 8000 })
+      expect(await m.tool('superagent_note', m.M, { ticket_id: ticketId, text: 'x' })).toMatchObject({ ok: false, code: 'not-router' })
+      expect(await m.sa({ action: 'stop', ticket_id: ticketId, reason: '测试结束' })).toMatchObject({ ok: true })
+      expect(await m.tool('superagent_note', m.R, { ticket_id: ticketId, text: '晚了' })).toMatchObject({ ok: false })
     } finally { await m.dispose() }
   }, 30_000)
 

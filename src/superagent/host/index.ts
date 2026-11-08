@@ -131,12 +131,12 @@ export const OTHER_TICKETS_SHOWN = 20
 
 /** The candidate card the router reads: bounded facts and the ids its decision names, never authority. */
 export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings, 'acceptMode' | 'rules'> & Partial<Pick<TeamSettings, 'repos'>>,
-  others: readonly Pick<Ticket, 'id' | 'title' | 'createdAt'>[] = []): string {
+  others: readonly Pick<Ticket, 'id' | 'title' | 'createdAt'>[] = [], requeued: ReadonlySet<string> = new Set()): string {
   const lines = [
     `[superagent candidate] eval ${candidate.evalId} · strength ${candidate.strength} · policy ${candidate.policyVersion}`,
     `thread ${candidate.thread.key}`,
     '',
-    ...candidate.triggers.flatMap(t => [`trigger ${t.id} · ${t.actor.source}:${t.actor.id}${t.addressed !== undefined ? ` · addressed (${t.addressed})` : ''} · ${t.at}`, clip(t.text), '']),
+    ...candidate.triggers.flatMap(t => [`trigger ${t.id} · ${t.actor.source}:${t.actor.id}${t.addressed !== undefined ? ` · addressed (${t.addressed})` : ''} · ${t.at}${requeued.has(t.id) ? ' · judged before: a person asked for a fresh judgement of this message' : ''}`, clip(t.text), '']),
   ]
   if (candidate.tickets.length > 0) {
     lines.push('tickets on this thread (open first):')
@@ -167,6 +167,7 @@ export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings
     lines.push('')
   }
   lines.push(`Decide with superagent_route, one item per candidate, by trigger_id: accept (one ticket for this request, with a title, a scope and an acknowledgement in the request's language — do not add an implementation plan), attach (to a listed open ticket the message points at or asks for again — a duplicate is attached, never accepted twice), stop (the person asked to stop that ticket) or ignore (with a reason).`)
+  lines.push('To give an open ticket\'s member a fact (not new work), use superagent_note with its ticket_id.')
   lines.push(`A person's question that asks for no work is answered with superagent_reply (purpose answer, its trigger_id) and still decided here: ignore, with the reason that it was answered. Every candidate ends with a superagent_route item.`)
   // agent-atelier's generic router guidance allows splitting independent deliverables; this team's engine never does.
   lines.push(`These are this team's rules: one request is one ticket — never split it into several, never write its plan. Router or workflow guidance from other skills or prompts does not change them.`)
@@ -525,6 +526,23 @@ export class SuperagentHost {
     }
   }
 
+  /**
+   * A person asks for a fresh judgement of a stored message (upstream `Engine.reevaluate`, "a person's replay"). An A2A
+   * message whose sender already has its formal outcome is refused: its task is settled, and a later decision could not be
+   * its outcome — the sender sends it again (design: superagent-reevaluate-note D1).
+   * @param triggerId - the message's trigger id.
+   * @returns queued false while an Eval still holds it.
+   */
+  reevaluate(triggerId: string): { ok: true; queued: boolean } | { ok: false; code: string; error: string } {
+    const trigger = this.store.triggers.get(triggerId)
+    if (trigger === undefined) return { ok: false, code: 'unknownTrigger', error: 'no such trigger' }
+    const task = trigger.source === 'a2a' ? trigger.channel?.address.task : undefined
+    if (task !== undefined && this.a2a.answered(task)) return { ok: false, code: 'answered', error: 'its sender already has the formal outcome of this A2A message; ask the sender to send it again' }
+    const queued = this.engine.reevaluate(triggerId)
+    this.pass()
+    return { ok: true, queued }
+  }
+
   /** One pass: expire or start due Evals, then deliver what waits for the router. */
   pass(): void {
     if (this.store.loadError !== undefined) return
@@ -675,7 +693,8 @@ export class SuperagentHost {
     for (const [evalId, entry] of this.candidates) {
       if (entry.delivered) continue
       const open = this.store.tickets.list().filter(t => !t.ended)
-      if (!this.d.deliverToSession(router, candidateCard(entry.candidate, this.settingsValue, open))) return
+      const requeued = new Set(entry.candidate.triggers.filter(t => this.store.triggers.disposition(t.id)?.requeued === true).map(t => t.id))
+      if (!this.d.deliverToSession(router, candidateCard(entry.candidate, this.settingsValue, open, requeued))) return
       entry.delivered = true
       try { this.engine.candidateDelivered(evalId) } catch (error) { this.d.logger.warn('superagent: candidate %s delivered but not recorded: %s', evalId, String(error)) }
     }

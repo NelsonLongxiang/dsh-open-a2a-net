@@ -26,7 +26,7 @@ export type Role = 'router' | 'member'
 export const ROUTER_PRESET = 'superagent-router'
 export const MEMBER_PRESET = 'superagent-member'
 
-export const ROUTER_TOOLS: readonly string[] = ['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status']
+export const ROUTER_TOOLS: readonly string[] = ['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note']
 
 /** Upstream `WORK_TOOLS` (src/app/sessions.ts) without the tools that start, list, message or interrupt other sessions. */
 export const MEMBER_WORK_TOOLS: readonly string[] = ['read', 'write', 'edit', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'job_output', 'job_list',

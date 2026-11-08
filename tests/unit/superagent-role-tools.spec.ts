@@ -6,7 +6,7 @@ import { MEMBER_TOOLS, ROUTER_TOOLS, RoleTools, roleToolRefusal, type Role, type
 
 describe('role tool lists', () => {
   it('pins what the router and a member may call', () => {
-    expect(ROUTER_TOOLS).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status'])
+    expect(ROUTER_TOOLS).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note'])
     expect(MEMBER_TOOLS).toEqual(['read', 'write', 'edit', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'job_output', 'job_list', 'job_kill',
       'web_search', 'web_fetch', 'skill', 'todo_write', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_file_fetch'])
   })

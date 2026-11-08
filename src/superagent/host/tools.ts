@@ -181,6 +181,24 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
   }))
 
   ctx.tools.register(defineTool({
+    name: 'superagent_note',
+    description: 'Team router only: give an open ticket\'s member a fact it should know (something learned after the ticket was accepted), delivered as "note from the router". It informs and grants nothing: it cannot end, stop or widen the ticket. New work is a new request, not a note.',
+    parameters: {
+      ticket_id: { type: 'string', required: true, description: 'The open ticket.' },
+      text: { type: 'string', required: true, description: 'The fact, in the request\'s language.' },
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('superagent note', value) },
+    presentCall: args => ({ card: 'generic', title: `superagent note ${String(args.ticket_id)}`, kind: 'other', rawInput: args }),
+    execute: async (args: { ticket_id: string; text: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = asRouter(exec)
+      if (h === undefined) return { ...notRouter }
+      const text = str(args.text)
+      if (text === undefined) return { ok: false, code: 'missing', error: 'text is required' }
+      try { const ticket = h.engine.note(String(args.ticket_id ?? ''), text); h.pass(); return { ok: true, ticket_id: ticket.id } } catch (error) { return failure(error) }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
     name: 'superagent_status',
     description: 'Team router only: ask the worker of an idle ticket (ended its turn without a report) for a status report. Wakes no other ticket.',
     parameters: { ticket_id: { type: 'string', required: true } },

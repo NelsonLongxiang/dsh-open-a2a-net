@@ -156,6 +156,11 @@ describe('candidate card', () => {
     expect(card).toContain('Every candidate ends with a superagent_route item.')
     // No other open ticket: no such section.
     expect(candidateCard(seen[0]!)).not.toContain('open tickets on other threads')
+    // Design reevaluate-note: the router is told a message is a second look, and how to pass a member a fact.
+    expect(card).toContain('superagent_note')
+    expect(candidateCard(seen[0]!, undefined, [], new Set(['1']))).toContain('trigger 1 · workbench:owner · addressed (direct) · ')
+    expect(candidateCard(seen[0]!, undefined, [], new Set(['1']))).toContain('judged before: a person asked for a fresh judgement of this message')
+    expect(card).not.toContain('judged before')
   })
 })
 
@@ -783,6 +788,40 @@ describe('router acceptance follow-up: what a settings change means to each open
     expect(off.get('t1')).toEqual({ requesterAllowed: false, requester: { source: 'a2a', id: 'ops/0123456789abcdef' } })
     expect(off.get('t2')).toEqual({ requesterAllowed: false, requester: { source: 'workbench', id: 'owner' } })
     expect(policyEffects(base, { ...base, evalTimeoutMs: 1 }, [inferred('t1', ['docs']), explicit('t2')]).size).toBe(0)
+  })
+  it('design reevaluate-note: a router note reaches the member as a fact that grants nothing', async () => {
+    const { inputsCard } = await import('../../src/superagent/host/executor.ts')
+    const card = inputsCard({ id: 't1', title: 'check docs' } as never, [{ id: 'i1', kind: 'note', text: '请求方补充：只看 0.8.1 的行为', at: '2026-11-08T00:00:00.000Z' }] as never, () => undefined)
+    expect(card).toContain('- note from the router (a fact for this ticket; it grants nothing): 请求方补充：只看 0.8.1 的行为')
+    expect(card).not.toContain('{"')
+  })
+  it('design reevaluate-note: an A2A message whose sender has its formal outcome is not re-evaluated; a person\'s is, once at a time', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const delivered: string[] = []
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']),
+      home: mkdtempSync(join(tmpdir(), 'sa-reeval-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: (_id, text) => { delivered.push(text); return true }, interval: () => () => {},
+      homeUrl: () => 'http://127.0.0.1:1', runCli: async args => args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}',
+    })
+    const bot = 'reporter/0123456789abcdef'
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    // An A2A message the router turns down: its sender gets the rejected receipt, then it cannot be re-evaluated.
+    const ctx = 'ctx-a', task = 'direct-00000000000a'
+    h.engine.receive({ ...wb('a', ctx), source: 'a2a', threads: [{ source: 'a2a', id: ctx }], actor: { source: 'a2a', id: bot }, human: false, channel: { source: 'a2a', thread: `a2a:${ctx}`, address: { caller: bot, task, context: ctx } }, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } })
+    h.pass()
+    expect(routeItem(h, { trigger_id: 'a', kind: 'ignore', reason: 'not a dependency', rules: [] })).toMatchObject({ ok: true })
+    await settle()
+    vi.spyOn(h.a2a, 'answered').mockImplementation(t => t === task)
+    expect(h.reevaluate('a')).toMatchObject({ ok: false, code: 'answered' })
+    expect(h.reevaluate('nope')).toMatchObject({ ok: false, code: 'unknownTrigger' })
+    // A person's message the router turned down is judged again, and the card says so; while judged, a second ask queues nothing.
+    h.engine.receive(wb('p', 'th-p')); h.pass()
+    expect(routeItem(h, { trigger_id: 'p', kind: 'ignore', reason: 'not now' })).toMatchObject({ ok: true })
+    delivered.length = 0
+    expect(h.reevaluate('p')).toEqual({ ok: true, queued: true })
+    expect(delivered.some(t => t.includes('trigger p ') && t.includes('judged before: a person asked for a fresh judgement'))).toBe(true)
+    expect(h.reevaluate('p')).toEqual({ ok: true, queued: false })
   })
   it('the member reads the effect in words, never as JSON', () => {
     const lines = policyChangedLines({ rules: [{ id: 'docs', name: 'docs', change: 'changed', instruction: 'check docs and code' }, { id: 'deps', name: 'deps', change: 'disabled' }], proactive: false, requesterAllowed: false, requester: { source: 'a2a', id: 'ops/x' } })
