@@ -153,7 +153,7 @@ a2a-net inbox --new                                      # 未读来信；--wait
 
 ## 退出语义（有界的陈旧期）
 
-`leave` 是按会话、按宿主的动作（`POST /__dsh_a2a/leave`，控制路由）：在本地移除加入意图并卸载节点，同时把该会话移出全部画布队（旧式裸句柄槽位记为 suspended）、撤回它的 roster 声明；本机发布的卡片里 `sessionTeams` 立刻不再列出它。**没有全网撤销广播**——peers 会继续列出该团队，直到它们缓存的本节点卡片刷新（对端自己的 `cardCacheTtlMs`，默认 60s；`sessionTeams` 是未签名的现读字段，不受卡片自身 48h TTL 约束），这段时间内的入站投递会诚实失败（宿主已不再解析该团队）。这个上界只在本节点仍可达时成立：若 peer 此后读不到本节点的卡片，会在 `cardCacheNegativeTtlMs`（默认 30s）窗口内沿用旧卡并重试，最迟留到旧卡自身的到期（默认 48h，行标记为 unreachable）。「已实现回执契约的远端目标不受影响」一句尚无法对应到代码行为，待属主裁定（#458）。正式的撤销广播协议记录在上游笔记 `2026-08-27-a2a-leave-no-revocation-broadcast.md`（提案）。
+`leave` 是按会话、按宿主的动作（`POST /__dsh_a2a/leave`，控制路由）：在本地移除加入意图并卸载节点，同时把该会话移出全部画布队（旧式裸句柄槽位记为 suspended）、撤回它的 roster 声明；本机发布的卡片里 `sessionTeams` 立刻不再列出它。**没有全网撤销广播**——peers 会继续列出该团队，直到它们缓存的本节点卡片刷新（对端自己的 `cardCacheTtlMs`，默认 60s；`sessionTeams` 是未签名的现读字段，不受卡片自身 48h TTL 约束），这段时间内的入站投递会诚实失败（宿主已不再解析该团队）。这个上界只在本节点仍可达时成立：若 peer 此后读不到本节点的卡片，会在 `cardCacheNegativeTtlMs`（默认 30s）窗口内沿用旧卡并重试，最迟留到旧卡自身的到期（默认 48h，行标记为 unreachable）。正式的撤销广播协议记录在上游笔记 `2026-08-27-a2a-leave-no-revocation-broadcast.md`（提案）。
 
 ## 信任模型
 

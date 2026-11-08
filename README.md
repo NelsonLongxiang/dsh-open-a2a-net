@@ -195,7 +195,7 @@ Example — one announcing node with a seed:
 
 ## Leave semantics (bounded staleness)
 
-`leave` is a per-session, per-host gesture: it removes the join intent locally and unmounts the node. There is **no network-wide revocation broadcast** — peers keep listing the team until their cached copy of this node's card refreshes (`cardCacheTtlMs`, 60s by default — `sessionTeams` is an unsigned serve-fresh field, so the card's own 48h TTL does not hold it), and inbound deliveries during that window fail honestly (the host no longer resolves the team). Remote targets that already implemented the receipt contract are unaffected. A formal revocation-broadcast protocol is tracked in upstream note `2026-08-27-a2a-leave-no-revocation-broadcast.md` (proposed).
+`leave` is a per-session, per-host gesture: it removes the join intent locally and unmounts the node. There is **no network-wide revocation broadcast** — peers keep listing the team until their cached copy of this node's card refreshes (`cardCacheTtlMs`, 60s by default — `sessionTeams` is an unsigned serve-fresh field, so the card's own 48h TTL does not hold it), and inbound deliveries during that window fail honestly (the host no longer resolves the team). A formal revocation-broadcast protocol is tracked in upstream note `2026-08-27-a2a-leave-no-revocation-broadcast.md` (proposed).
 
 ## Trust model
 
