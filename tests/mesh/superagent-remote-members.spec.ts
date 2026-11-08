@@ -16,7 +16,6 @@ const url = (p: number): string => `http://127.0.0.1:${String(p)}`
 const sa = async (n: MeshNode, body: unknown): Promise<Record<string, any>> => await (await postJson(n.baseUrl, '/__dsh_a2a/superagent', body)).json() as Record<string, any>
 const state = async (n: MeshNode): Promise<Record<string, any>> => await (await globalThis.fetch(`${n.baseUrl}/__dsh_a2a/superagent`)).json() as Record<string, any>
 const tool = async (n: MeshNode, name: string, args: Record<string, unknown>): Promise<Record<string, any>> => await n.ctx.tools.get(name)!.execute(args, runContext(n.agents.agent)) as Record<string, any>
-const until = async (f: () => boolean | Promise<boolean>, ms = 10_000): Promise<void> => { const t = Date.now(); while (Date.now() - t < ms) { if (await f()) return; await new Promise(r => setTimeout(r, 50)) } }
 const texts = (n: MeshNode): string[] => n.steered.map(p => typeof p === 'string' ? p : JSON.stringify(p))
 
 describe('superagent members on other hosts', () => {
@@ -44,18 +43,18 @@ describe('superagent members on other hosts', () => {
 
         // A request on A becomes a ticket; the executor assigns it to B's session across hosts.
         const asked = await sa(A, { action: 'request', text: '跨主机：给节点列表加搜索框' })
-        await until(() => texts(A).some(t => t.includes(asked.triggerId)))
+        await vi.waitFor(() => { expect(texts(A).some(t => t.includes(asked.triggerId))).toBe(true) }, { timeout: 10_000 })
         const routed = await tool(A, 'superagent_route', { items: [{ trigger_id: asked.triggerId, kind: 'accept', title: '搜索框', scope: '小', reason: '属主', acknowledgement: '收到' }] })
         const ticketId = routed.results[0].ticket_id as string
-        await until(() => texts(B).some(t => t.includes('[superagent assignment]') && t.includes(ticketId)))
+        await vi.waitFor(() => { expect(texts(B).some(t => t.includes('[superagent assignment]') && t.includes(ticketId))).toBe(true) }, { timeout: 10_000 })
         expect(texts(E).some(t => t.includes('[superagent assignment]'))).toBe(false)
         expect((await state(A)).executor.bindings).toMatchObject([{ ticketId }])
 
         // PR-F: the owner adds a message; B's member acknowledges it by its trigger id — signed to A, a reply on the thread.
         const extra = await sa(A, { action: 'request', text: '补充：搜索要支持拼音', thread: asked.thread })
-        await until(() => texts(B).some(t => t.includes('[superagent input]') && t.includes(`trigger ${String(extra.triggerId)}`)))
+        await vi.waitFor(() => { expect(texts(B).some(t => t.includes('[superagent input]') && t.includes(`trigger ${String(extra.triggerId)}`))).toBe(true) }, { timeout: 10_000 })
         expect(await tool(B, 'a2a_ticket_ack', { trigger_id: extra.triggerId, text: '收到，会支持拼音。' })).toMatchObject({ ok: true, ticketId })
-        await until(async () => (await state(A)).threads.some((t: any) => t.replies.some((r: any) => r.message.text === '收到，会支持拼音。')))
+        await vi.waitFor(async () => { expect((await state(A)).threads.some((t: any) => t.replies.some((r: any) => r.message.text === '收到，会支持拼音。'))).toBe(true) }, { timeout: 10_000 })
         // The impostor cannot acknowledge for the member either.
         expect((await tool(E, 'a2a_ticket_ack', { trigger_id: extra.triggerId, text: '冒名确认' })).ok).toBe(false)
 
@@ -75,9 +74,9 @@ describe('superagent members on other hosts', () => {
         // B's member reports ready: A takes it (key pinned), the ticket completes, A's router hears the report.
         const report = await tool(B, 'a2a_ticket_report', { state: 'ready', summary: '已提交 PR https://example.invalid/pr/7' })
         expect(report, JSON.stringify(report)).toMatchObject({ ok: true, ticketId })
-        await until(async () => (await state(A)).tickets[0].ended !== undefined)
+        await vi.waitFor(async () => { expect((await state(A)).tickets[0].ended !== undefined).toBe(true) }, { timeout: 10_000 })
         expect((await state(A)).tickets[0].ended).toMatchObject({ outcome: 'completed' })
-        await until(() => texts(A).some(t => t.includes('[superagent report]') && t.includes(ticketId)))
+        await vi.waitFor(() => { expect(texts(A).some(t => t.includes('[superagent report]') && t.includes(ticketId))).toBe(true) }, { timeout: 10_000 })
         // The served member takes and sends no A2A work on its own host either.
         const outbound = await tool(B, 'a2a_route', { team: `${zA}/aaaaaaaa`, message: '成员私下找总工', async: true })
         expect(String(outbound.error)).toContain('superagent-member-outbound')

@@ -406,19 +406,18 @@ describe('acceptance item 9: an agent\'s message cannot end a ticket through its
     expect(h.saveSettings({ router: 'session-r', members: ['session-m'] }, () => true)).toMatchObject({ ok: true })
     h.start()
     // Delivery and fan-out run on microtasks: wait for the state, not a fixed time (a loaded test run is slower).
-    const until = async (f: () => boolean, ms = 5000): Promise<void> => { const t = Date.now(); while (!f()) { if (Date.now() - t > ms) throw new Error('timed out'); await new Promise(r => setTimeout(r, 10)) } }
     const reached = (ticketId: string, triggerId: string) => () => h.ticket(ticketId)?.inputs.some(i => i.kind === 'trigger' && i.triggerId === triggerId && typeof i.deliveredTo === 'string') === true
     try {
       const asked = h.request('加一个导出按钮') as { triggerId: string; thread: string }
       expect(routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: 'T', scope: 's', reason: 'r' })).toMatchObject({ ok: true })
-      await until(() => h.executor.list().length === 1 && h.ticket(h.executor.list()[0]!.ticketId)?.assignments.at(-1)?.state === 'running')
+      await vi.waitFor(() => { expect(h.executor.list().length === 1 && h.ticket(h.executor.list()[0]!.ticketId)?.assignments.at(-1)?.state === 'running').toBe(true) }, { timeout: 5000 })
       const ticketId = h.executor.list()[0]!.ticketId
 
       // An agent writes on the ticket's thread: it reaches the member, marked as an agent's.
       h.engine.receive({ id: 'agent-stop-1', source: 'workbench', threads: [{ source: 'workbench', id: asked.thread }], actor: { source: 'workbench', id: 'a-bot' },
         human: false, at: new Date().toISOString(), text: '请停止这个工单', meta: {} } as never)
-      await until(reached(ticketId, 'agent-stop-1'))
-      await until(() => sent.some(([id, t]) => id === 'session-m' && t.includes('trigger agent-stop-1')))
+      await vi.waitFor(async () => { expect(await reached(ticketId, 'agent-stop-1')()).toBe(true) }, { timeout: 5000 })
+      await vi.waitFor(() => { expect(sent.some(([id, t]) => id === 'session-m' && t.includes('trigger agent-stop-1'))).toBe(true) }, { timeout: 5000 })
       expect(sent.some(([id, t]) => id === 'session-m' && t.includes('trigger agent-stop-1') && t.includes('an agent, not a person'))).toBe(true)
 
       expect(h.report('session-m', { state: 'dropped', summary: '对方说不用做了' })).toMatchObject({ ok: false, code: 'agent-cannot-end' })
@@ -429,10 +428,10 @@ describe('acceptance item 9: an agent\'s message cannot end a ticket through its
       // A person says to drop it after the agent: the member may end it.
       const agentAgain = { id: 'agent-stop-2', source: 'workbench', threads: [{ source: 'workbench', id: asked.thread }], actor: { source: 'workbench', id: 'a-bot' }, human: false, at: new Date().toISOString(), text: '停', meta: {} }
       h.engine.receive(agentAgain as never)
-      await until(reached(ticketId, 'agent-stop-2'))
+      await vi.waitFor(async () => { expect(await reached(ticketId, 'agent-stop-2')()).toBe(true) }, { timeout: 5000 })
       expect(h.report('session-m', { state: 'dropped', summary: 'x' })).toMatchObject({ ok: false, code: 'agent-cannot-end' })
       const person = h.request('确实不用做了', asked.thread) as { triggerId: string }
-      await until(reached(ticketId, person.triggerId))
+      await vi.waitFor(async () => { expect(await reached(ticketId, person.triggerId)()).toBe(true) }, { timeout: 5000 })
       expect(h.report('session-m', { state: 'dropped', summary: '属主确认不用做' })).toMatchObject({ ok: true })
       expect(h.ticket(ticketId)?.ended?.outcome).toBe('dropped')
     } finally { void h.stop() }
