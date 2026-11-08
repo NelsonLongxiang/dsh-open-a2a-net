@@ -138,6 +138,7 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | `targetQueueCap` | `3` | 本宿主上同一个目标最多排队这么多条目标尚未回应且等回执的任务；再来新投递就可见拒收（`-32009 target-queue-full`，不投递）。本宿主自己记过账的任务的回执、以及 CLI 信箱从不拦；一个画布队算一个目标。被拒的 task id 记为失败，重试要换新 id。目标消费本任务后的 final 或目标自己发回执会记 `answeredAt` 并释放名额，即使回执投递失败；行仍欠回执，死信、迟到回执和守恒不变，状态面/画布排队数采用同一口径。`0` 关闭（#224/#253）。 |
 | `taskStaleTtlMs` | `86400000` | 欠账任务的 stale TTL（24h）：过期后 pending 行自动转死信（迟到回执仍可结清）。 |
 | `dshHome` | `''` | 插件状态所用的 DSH home 目录覆盖（`<home>/a2a/…`）；`''` 解析默认 home。 |
+| `stageTilesDir` | `''` | 办公室舞台的授权贴图目录（`office-tileset.png`、`a5-office-floors-walls.png`、`interiors.png`，本包不分发，#471），舞台经 `/__dsh_a2a_canvas/tiles/` 读取；`''` 即 `<home>/a2a/stage-tiles`；缺文件时画占位块。 |
 | `cardTtlMs` / `flushTimeoutMs` / `routeTimeoutMs` | `172800000` / `300000` / `1800000` | 卡片生命周期（48h，每 1/4 周期重签一次）；会话在此窗口内没有最终回复时，回复等待者以占位应答释放（5 分钟）；`a2a_route` 工具的单次调用超时（30 分钟）。 |
 | `cardCacheTtlMs` / `cardCacheNegativeTtlMs` / `remoteRowsTtlMs` / `stateColdRowsTtlMs` | `60000` / `30000` / `15000` / `5000` | peer 卡片缓存（命中/未命中）、远端会话行刷新窗口、状态面冷行刷新窗口。 |
 
@@ -251,10 +252,8 @@ npm install /path/to/nelsonlongxiang-dsh-open-a2a-net-<version>.tgz
 
 ## 许可证
 
-本包以 MIT 许可发布（package.json 的 `license` 字段）。仓库根目前没有单独的 LICENSE 文件，npm 包里也不带许可文本（#470）。
+本包以 MIT 许可发布，见仓库根的 `LICENSE`；第三方内容见 `THIRD_PARTY_NOTICES.md`，各许可文本在 `docs/licenses/`，三者都随 npm 包分发（#470）。
 
-包内含的第三方内容，许可文本都在仓库里（目前不随 npm 包分发）：
-
-- **办公室舞台** `/__dsh_a2a_canvas` 的渲染器与资源改编自 [Munder Difflin](https://github.com/chaitanyagiri/munder-difflin)（MIT，© Chaitanya Giri），其中座位池逻辑移植自 [the-office](https://github.com/shahar061/the-office)（ISC）；见 `stage/NOTICE.md`、`stage/ATTRIBUTION.md`、`docs/licenses/`。
-- **舞台贴图**来自 [LimeZu](https://limezu.itch.io/) 的 *Modern Interiors - RPG Tileset [16X16]*，按其 Complete Version 许可使用，**不在 MIT 授权范围内**：可编辑并用于任何项目，不可转售或再分发，须署名并链接 <https://limezu.itch.io/>；许可文本见 `stage/LIMEZUASSETS-LICENSE.txt`。随包再分发这些贴图是否符合该许可，待属主确认（#471）。
-- **superagent 引擎**是原样引入的上游代码（MIT，© DeepSeek Harness Team），见 `src/superagent/upstream/LICENSE.dsh-superagent`。
+- **办公室舞台** `/__dsh_a2a_canvas` 的渲染器改编自 [Munder Difflin](https://github.com/chaitanyagiri/munder-difflin)（MIT，© Chaitanya Giri），座位池逻辑与办公室地图来自 [the-office](https://github.com/shahar061/the-office)（ISC）。
+- **superagent 引擎**是原样引入的上游代码（MIT，© DeepSeek Harness Team）。
+- **舞台贴图不随包分发**（#471）：舞台原用 [LimeZu](https://limezu.itch.io/) 的 *Modern Interiors - RPG Tileset [16X16]*，其许可禁止再分发。持有许可的人把 `office-tileset.png`、`a5-office-floors-walls.png`、`interiors.png` 放进宿主的 `stageTilesDir`（默认 `<home>/a2a/stage-tiles`），舞台即显示原图并附上 LimeZu 要求的署名链接；没有这些文件时画素色占位块。0.7.0 及更早的发布版和此前的 git 历史仍含这些贴图。

@@ -12,6 +12,7 @@ import { hexToNumber, DEFAULT_CHARACTER } from './cast';
 import { pickSoloLine, pickExchange, type BreakSpot } from './cafeteriaLines';
 import { colors } from '@/design/tokens';
 import { loadTheme, resolveThemeMap, themeTilesetUrls } from './themeLoader';
+import { placeholderTexture } from './placeholderTiles';
 import { installContextLossRecovery } from './glRecovery';
 import type { Tile, Facing, ErrandKind, ErrandSpot } from './themeRegistry';
 
@@ -270,11 +271,28 @@ export function OfficeFloor() {
         }
       });
 
-      // Load tilesets in theme order (texture[i] lines up with map tilesets[i]).
+      // Load tilesets in theme order (texture[i] lines up with map tilesets[i]). The art is not shipped (#471): a
+      // tileset the host does not serve becomes a same-size placeholder atlas, so the map renders as a plan.
+      // Atlas sizes as the map records them (Tiled writes imagewidth/imageheight/tilewidth on every tileset).
+      const atlases = resolveThemeMap(theme).tilesets as ReadonlyArray<{ imagewidth?: number; imageheight?: number; tilewidth?: number }>;
+      let licensedTiles = 0;
       const tilesetTextures = await Promise.all(
-        themeTilesetUrls(theme).map(loadTexture),
+        themeTilesetUrls(theme).map((url, i) => loadTexture(url)
+          .then((texture) => { licensedTiles += 1; return texture; })
+          .catch(() => placeholderTexture(atlases[i]?.imagewidth ?? 256, atlases[i]?.imageheight ?? 256, atlases[i]?.tilewidth ?? 16))),
       );
       if (mountIdRef.current !== mountId) { safeDestroy(app); return; }
+      // LimeZu's licence requires the credit wherever its art is shown.
+      if (licensedTiles > 0) {
+        const credit = document.createElement('a');
+        credit.href = 'https://limezu.itch.io/';
+        credit.target = '_blank';
+        credit.rel = 'noopener noreferrer';
+        credit.textContent = 'Tiles: LimeZu';
+        credit.className = 'stage-tiles-credit';
+        Object.assign(credit.style, { position: 'absolute', right: '8px', bottom: '6px', font: '11px sans-serif', color: 'rgba(255,255,255,0.75)', textDecoration: 'none', zIndex: '5' });
+        host.appendChild(credit);
+      }
 
       const world = new Container();
       app.stage.addChild(world);
