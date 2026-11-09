@@ -2,7 +2,7 @@
 
 Status: revised after the owner's ruling, on next/0.8, design review pending. The vendored engine is unchanged.
 
-Owner, 2026-11-09: 「每个 work 成员有自己的接单规则，总工负责团队的接单规则和派单规则，根据 work 成员的角色和接单规则派发。每个成员只能修改自己的接单规则，总工能修改团队的接单规则，规则修改必须获得用户批准才可。」 Earlier the same day: 「我期望总工能够帮我创建工单和优化接单规则。」
+Owner, 2026-11-09: 「每个 work 成员有自己的接单规则，总工负责团队的接单规则和派单规则，根据 work 成员的角色和接单规则派发。每个成员只能修改自己的接单规则，总工能修改团队的接单规则，规则修改必须获得用户批准才可。」 Earlier the same day: 「我期望总工能够帮我创建工单和优化接单规则。」 And: 「做再多的 UI/UX 不如让大家自己动手。」
 
 ## Context
 
@@ -21,11 +21,11 @@ Owner, 2026-11-09: 「每个 work 成员有自己的接单规则，总工负责�
 
 | Rules | May propose a change | Applies |
 |---|---|---|
-| A member's own | that member only | the owner |
-| The team's and the dispatch rules | the router only | the owner |
+| A member's own | that member only | the owner's message |
+| The team's and the dispatch rules | the router only | the owner's message |
 | Accept mode, sender list, sources, review address | nobody | the owner, directly on the page |
 
-The owner can also edit any rule directly on the team page. The last row decides who may ask at all, so no session can propose it.
+The owner can also edit any rule on the team page. The last row decides who may ask at all, so no session can propose it.
 
 ### Dispatch
 
@@ -36,13 +36,13 @@ The owner can also edit any rule directly on the team page. The last row decides
 
 ### Changing rules
 
-- **D8 A change is a proposal.** `superagent_rules_propose` (router: `team` or `dispatch`) and `a2a_member_rules_propose` (member: its own rules and role, the member taken from the calling session, never from an argument) file the whole proposed text, the reason, and the revision it was based on. Nothing changes.
-- **D9 Only the owner approves.** Proposals appear under 待你处理 with the old and new text and 批准 / 拒绝. Approving applies the text through the same validation as the page. A proposal whose base revision has moved cannot be approved and says so. A changed team rule moves the policy version and tells affected open tickets, as today.
-- **D10 What approval has to withstand.** Approval means nothing if a team session can perform it. The approve action must need a proof of the owner that a team session does not hold. Before implementing, measure what a member's shell can reach on the host; the implementation follows from that and the acceptance covers it.
+- **D8 A change is agreed in conversation.** The owner talks to the member or the router in its own session. It writes the proposed text with `superagent_rules_propose` (router: `team` or `dispatch`) or `a2a_member_rules_propose` (member: its own rules and role, the member taken from the calling session, never from an argument), and shows it to the owner. Nothing changes yet.
+- **D9 Only the owner's next message approves.** `superagent_rules_apply` applies a pending proposal only under D11, and only if the person's message came after the proposal was filed, so the person has seen it. It goes through the same validation as the page. A proposal whose base revision has moved is refused and must be proposed again. A changed team rule moves the policy version and tells affected open tickets, as today. The tool cannot tell a yes from a no: it proves the person spoke after seeing the text, and the session decides what they said. Every applied change is recorded with the proposal and the person's message, and shows on the page.
+- **D10 No approval screen.** Approval is the person's own typed message, which the host marks and a shell cannot produce. The page keeps showing the rules and can still edit them directly; it gains no proposal queue. Before implementing, measure what a member's shell can reach on the host, because direct edits on the page go through the control route.
 
 ### The router working for the owner
 
-- **D11 Only the person's own words.** `superagent_request` acts only while the router's turn answers a message the person typed: the latest message in its session that is not host context has `source.kind === 'user'`. The host sets that field; a model or a relayed message cannot. A candidate card, report or note is `a2a-relay` and closes the door until the person speaks again; a compaction checkpoint has its own kind. Otherwise it is refused with `not-the-owner`.
+- **D11 Only the person's own words.** `superagent_request` and `superagent_rules_apply` (and the member's apply) act only while the router's turn answers a message the person typed: the latest message in its session that is not host context has `source.kind === 'user'`. The host sets that field; a model or a relayed message cannot. A candidate card, report or note is `a2a-relay` and closes the door until the person speaks again; a compaction checkpoint has its own kind. Otherwise it is refused with `not-the-owner`.
 - **D12 Opening a ticket is a request made for the person.** `superagent_request` takes no text. The host files that message verbatim as a workbench Trigger from the owner (`human: true`, explicit) on a new thread, once per message id. It reaches the router as an ordinary candidate and is accepted as any other, so there is no second way to create a ticket, and the router cannot restate or widen the request.
 - **D13 Reading what happened.** `superagent_read` gains kind `decisions`: recent inferred candidates with text, decision, rules named and reason. A proposal to improve the rules is drawn from it.
 - **D14 Nothing proactive.** No session opens a ticket on its own initiative; a member still hands back what is beyond its ticket.
@@ -52,8 +52,9 @@ The owner can also edit any rule directly on the team page. The last row decides
 - With profiles set, every accept names a member, so a poor choice is the router's and shows on the decision.
 - A named member that is busy delays its ticket even when another is free. That is the owner's model: work goes to the member it fits.
 - Remote members propose through the same forward as their reports, and the proposal lands on the team host.
-- Deferred: applying a proposal from the router's session by the owner's words, and rules that gate automatically without the router's judgement.
+- A person's change happens where they are already talking; a remote member's session proves the person spoke on its own host, and the team host trusts that pinned peer as it trusts its reports.
+- Deferred: rules that gate automatically without the router's judgement.
 
 ## Acceptance
 
-Live, on a fresh router, under its own frozen spec: a ticket goes to the member the rules fit while another is free; a named busy member keeps its ticket; a member proposes only its own rules; a member or the router cannot apply a proposal; an approved proposal shows on the page and in the next card; a stale proposal cannot be approved; a request typed in the router's session opens a ticket whose origin is that message, and the same text arriving as a candidate cannot.
+Live, on a fresh router, under its own frozen spec: a ticket goes to the member the rules fit while another is free; a named busy member keeps its ticket; a member proposes only its own rules; a proposal is not applied until the person speaks after it, and a candidate or relayed message cannot apply it; an applied proposal shows on the page and in the next card; a stale proposal cannot be applied; a request typed in the router's session opens a ticket whose origin is that message, and the same text arriving as a candidate cannot.
