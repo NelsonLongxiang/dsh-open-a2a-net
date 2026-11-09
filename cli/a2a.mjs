@@ -635,7 +635,7 @@ async function cmdSuperagent() {
   const url = `${home()}/__dsh_a2a/superagent`
   const answer = async (res) => {
     if (res.status === 401 || res.status === 403) die(keyHint(res.status))
-    if (res.status === 404) die(`[superagent] ${home()} runs no superagent team (plugin config superagent: true), or predates it`)
+    if (res.status === 404) die(`[superagent] ${home()} runs no superagent team (plugin config superagent: false), or predates it`)
     return await replyOf(res)
   }
   if (sub === 'request') {

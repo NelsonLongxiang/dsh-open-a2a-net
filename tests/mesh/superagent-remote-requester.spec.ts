@@ -7,14 +7,15 @@
  * from A's process face on the canvas's behalf: C's own ledger settles its owed row as host-face.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { bootNode, postJson, reservePort, runContext, tmpHome, type MeshNode } from './harness.ts'
+import { bootNode, mockGuiLogin, postJson, reservePort, runContext, tmpHome, type MeshNode } from './harness.ts'
 
 beforeEach(() => { vi.stubGlobal('WebSocket', function throwOnSocket() { throw new Error('no socket') }) })
 afterEach(() => { vi.unstubAllGlobals() })
 
 const R_ID = 'session-aaaaaaaa00001111', C_ID = 'session-cccccccc00003333'
 const url = (p: number): string => `http://127.0.0.1:${String(p)}`
-const post = async (n: MeshNode, path: string, body: unknown): Promise<Record<string, any>> => await (await postJson(n.baseUrl, path, body)).json() as Record<string, any>
+const login = mockGuiLogin()
+const post = async (n: MeshNode, path: string, body: unknown): Promise<Record<string, any>> => await (await globalThis.fetch(`${n.baseUrl}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...login }, body: JSON.stringify(body) })).json() as Record<string, any>
 const get = async (n: MeshNode, path: string): Promise<Record<string, any>> => await (await globalThis.fetch(`${n.baseUrl}${path}`)).json() as Record<string, any>
 const tool = async (n: MeshNode, name: string, args: Record<string, unknown>): Promise<Record<string, any>> => await n.ctx.tools.get(name)!.execute(args, runContext(n.agents.agent)) as Record<string, any>
 const texts = (n: MeshNode): string[] => n.steered.map(p => typeof p === 'string' ? p : JSON.stringify(p))

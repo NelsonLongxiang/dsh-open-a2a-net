@@ -32,7 +32,7 @@ const refusal = (host: SuperagentHost, error: unknown, ids: { trigger?: string; 
 
 interface RouteItem {
   trigger_id?: unknown; kind?: unknown; title?: unknown; scope?: unknown; reason?: unknown; acknowledgement?: unknown
-  ticket_id?: unknown; name?: unknown; note?: unknown; rules?: unknown; repo?: unknown
+  ticket_id?: unknown; name?: unknown; note?: unknown; rules?: unknown; repo?: unknown; member?: unknown
 }
 const str = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined)
 
@@ -54,6 +54,8 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
     const evalId = candidate?.evalId
     const rules = Array.isArray(item.rules) ? [...new Set(item.rules.filter((r): r is string => typeof r === 'string' && r !== ''))] : []
     const repo = str(item.repo)
+    const memberName = str(item.member)
+    const member = memberName !== undefined ? host.resolveMember(memberName) : undefined
     let outcome: Outcome
     if (kind === 'accept' && candidate?.strength === 'inferred' && host.settings.acceptMode !== 'auto') {
       // Upstream accept mode `observe`: a positive assessment of an inferred candidate is recorded as an ignore that says
@@ -67,6 +69,8 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
         const known = [...host.teamRepos().keys()].sort()
         return { ok: false, trigger_id: triggerId, code: 'repo', error: `no member works in ${repo}; the team's repositories: ${known.length > 0 ? known.join(', ') : '(none — accept without repo)'}` }
       }
+      if (memberName !== undefined && member === undefined) return { ok: false, trigger_id: triggerId, code: 'member', error: `no such member: ${memberName}. ${host.memberListLine()}` }
+      if (memberName === undefined && host.membersProfiled()) return { ok: false, trigger_id: triggerId, code: 'member', error: `this team's members have roles and rules: name the one this work fits as member. ${host.memberListLine()}` }
       const acknowledgement = str(item.acknowledgement), name = str(item.name), note = str(item.note)
       outcome = { kind: 'accept', title, scope, reason, ...(acknowledgement !== undefined ? { acknowledgement } : {}), ...(name !== undefined ? { name } : {}), ...(note !== undefined ? { note } : {}), ...(rules.length > 0 ? { rules } : {}) }
     } else if (kind === 'ignore') outcome = candidate?.strength === 'inferred' && rules.length === 0 && item.rules !== undefined
@@ -81,6 +85,7 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
     // The repository stays with the host (the engine has no such field); it is set before the first Assignment launches.
     const repoSet = decision.kind === 'accept' && decision.ticketId !== undefined && repo !== undefined
     if (repoSet) host.executor.setRepo(decision.ticketId!, repo!)
+    if (decision.kind === 'accept' && decision.ticketId !== undefined && member !== undefined) host.executor.setMember(decision.ticketId, member)
     return { ok: true, trigger_id: triggerId, kind, decision_id: decision.id, decision: decision.kind, ...(decision.ticketId !== undefined ? { ticket_id: decision.ticketId } : {}), ...(repoSet ? { repo: repo! } : {}), reason: json(decision.reason) }
   } catch (error) { return { trigger_id: triggerId, ...refusal(host, error, { trigger: triggerId, ...(str(item.ticket_id) !== undefined ? { ticket: str(item.ticket_id)! } : {}) }) } }
 }
@@ -118,7 +123,7 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
     name: 'superagent_route',
     description: 'Team router only: decide candidates by trigger_id. Each item is one of accept (one ticket for the request: title, scope, reason, acknowledgement in the request language; no implementation plan), attach (ticket_id of an open ticket the message points at or asks for again — a duplicate is attached, never accepted twice), stop (ticket_id a person asked to stop) or ignore (reason). Items are processed independently.',
     parameters: {
-      items: { type: 'array', required: true, items: { type: 'object', additionalProperties: true }, description: 'Routing items: { trigger_id, kind, title?, scope?, reason?, acknowledgement?, ticket_id?, name?, note?, rules?, repo? }. repo (owner/name, a repository the team members work in) sends an accepted ticket to a member working in that repository. For an inferred candidate, rules names the enabled rules it matches (required to accept; observe mode records it as would-accept); rules: [] records an assessed ignore.' },
+      items: { type: 'array', required: true, items: { type: 'object', additionalProperties: true }, description: 'Routing items: { trigger_id, kind, title?, scope?, reason?, acknowledgement?, ticket_id?, name?, note?, rules?, repo? }. repo (owner/name, a repository the team members work in) sends an accepted ticket to a member working in that repository. member names the member the work fits; the ticket then waits for that member. For an inferred candidate, rules names the enabled rules it matches (required to accept; observe mode records it as would-accept); rules: [] records an assessed ignore.' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('superagent route', value) },
     presentCall: args => ({ card: 'generic', title: `superagent route (${String(Array.isArray(args.items) ? args.items.length : 0)})`, kind: 'other', rawInput: args }),
@@ -135,9 +140,9 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
 
   ctx.tools.register(defineTool({
     name: 'superagent_read',
-    description: 'Team router only: read the candidate holding a trigger (kind candidate, trigger_id), one ticket (kind ticket, ticket_id) or the open and recent tickets (kind tickets).',
+    description: 'Team router only: read the candidate holding a trigger (kind candidate, trigger_id), one ticket (kind ticket, ticket_id) or the open and recent tickets (kind tickets), or recent decisions and the rules they named (kind decisions).',
     parameters: {
-      kind: { type: 'string', required: true, description: 'candidate | ticket | tickets' },
+      kind: { type: 'string', required: true, description: 'candidate | ticket | tickets | decisions' },
       trigger_id: { type: 'string', description: 'For kind candidate.' },
       ticket_id: { type: 'string', description: 'For kind ticket.' },
     },
@@ -158,7 +163,8 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
         const tickets = h.store.tickets.list().slice(0, 50).map(t => ({ id: t.id, title: t.title, ended: t.ended ?? null, stage: h.ticket(t.id)?.stage ?? null, origin: t.origin }))
         return { ok: true, tickets: json(tickets) }
       }
-      return { ok: false, code: 'kind', error: 'kind must be candidate, ticket or tickets' }
+      if (args.kind === 'decisions') return { ok: true, decisions: json(h.recentDecisions()) }
+      return { ok: false, code: 'kind', error: 'kind must be candidate, ticket, tickets or decisions' }
     },
   }))
 
@@ -245,6 +251,113 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
       const report = { state: args.state as 'progress', summary, ...(question !== undefined ? { question } : {}), ...(str(args.answers) !== undefined ? { answers: str(args.answers)! } : {}) }
       // PR-C2: a session serving another host's team reports there, signed by this host's key.
       const out = h.settings.serves?.members.includes(me) === true ? await h.forwardReport(me, { ...report, ticket_id: ticketId, ...(str(args.pull_request) !== undefined ? { pull_request: str(args.pull_request)! } : {}) }) : h.report(me, report, ticketId, str(args.pull_request))
+      return json(out) as Record<string, JsonValue>
+    },
+  }))
+
+  // The owner working through the router and its members (docs/design/superagent-router-owner-asks.md).
+  const notOwner = { ok: false, code: 'not-the-owner', error: 'this works only in a turn answering the owner\'s own message in this session; ask them to say it here or use 提需求' } as const
+  const callerOf = (exec: { agent?: { id: unknown } }): string | undefined => exec.agent === undefined ? undefined : String(exec.agent.id)
+  const anyProps = { schema: { type: 'object', additionalProperties: true } } as const
+
+  ctx.tools.register(defineTool({
+    name: 'superagent_request',
+    description: 'Team router only: when the owner, in this session, asks you to open a ticket, file their message as a request. It takes no text: the host files their words verbatim, once, and the request comes back to you as a candidate to accept as usual.',
+    parameters: {},
+    output: { ...anyProps, render: (_args, value) => said('superagent request', value) },
+    presentCall: () => ({ card: 'generic', title: 'superagent request', kind: 'other', rawInput: {} }),
+    execute: async (_args: Record<string, never>, exec): Promise<Record<string, JsonValue>> => {
+      const h = asRouter(exec)
+      if (h === undefined) return { ...notRouter }
+      const person = h.personMessageOf(callerOf(exec)!)
+      return person === undefined ? { ...notOwner } : json(h.requestForPerson(person)) as Record<string, JsonValue>
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'superagent_assign',
+    description: 'Team router only: give a ticket to another member, when it waits for a member who left or its member reported it cannot go on.',
+    parameters: { ticket_id: { type: 'string', required: true }, member: { type: 'string', required: true, description: 'The member\'s name or id.' } },
+    output: { ...anyProps, render: (_args, value) => said('superagent assign', value) },
+    presentCall: args => ({ card: 'generic', title: `superagent assign ${String(args.ticket_id)}`, kind: 'other', rawInput: args }),
+    execute: async (args: { ticket_id: string; member: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = asRouter(exec)
+      if (h === undefined) return { ...notRouter }
+      return json(h.assignTicket(String(args.ticket_id ?? ''), String(args.member ?? ''))) as Record<string, JsonValue>
+    },
+  }))
+
+  const routerScope = (value: unknown): 'team' | 'dispatch' | undefined => value === 'team' || value === 'dispatch' ? value : undefined
+  ctx.tools.register(defineTool({
+    name: 'superagent_rules_propose',
+    description: 'Team router only: propose the whole new text of the team rules (scope team: rules, a list of { name, text, enabled }) or the dispatch rules (scope dispatch: text). Nothing changes: show the owner the text and wait for their reply.',
+    parameters: {
+      scope: { type: 'string', required: true, description: 'team | dispatch' },
+      rules: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'For scope team: the whole list.' },
+      text: { type: 'string', description: 'For scope dispatch: the whole text.' },
+      reason: { type: 'string', required: true, description: 'Why, in the owner\'s language.' },
+    },
+    output: { ...anyProps, render: (_args, value) => said('superagent rules propose', value) },
+    presentCall: args => ({ card: 'generic', title: `superagent rules propose ${String(args.scope)}`, kind: 'other', rawInput: args }),
+    execute: async (args: { scope: string; rules?: unknown; text?: unknown; reason: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = asRouter(exec)
+      if (h === undefined) return { ...notRouter }
+      const scope = routerScope(args.scope)
+      if (scope === undefined) return { ok: false, code: 'scope', error: 'scope must be team or dispatch' }
+      return json(h.proposeRules(scope, callerOf(exec)!, scope === 'team' ? args.rules : args.text, String(args.reason ?? ''))) as Record<string, JsonValue>
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'superagent_rules_apply',
+    description: 'Team router only: apply your pending proposal after the owner has agreed to it in this session. Only their own message since the proposal lets it through.',
+    parameters: { scope: { type: 'string', required: true, description: 'team | dispatch' } },
+    output: { ...anyProps, render: (_args, value) => said('superagent rules apply', value) },
+    presentCall: args => ({ card: 'generic', title: `superagent rules apply ${String(args.scope)}`, kind: 'other', rawInput: args }),
+    execute: async (args: { scope: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = asRouter(exec)
+      if (h === undefined) return { ...notRouter }
+      const scope = routerScope(args.scope)
+      if (scope === undefined) return { ok: false, code: 'scope', error: 'scope must be team or dispatch' }
+      const me = callerOf(exec)!
+      return json(h.applyRules(scope, me, h.personMessageOf(me))) as Record<string, JsonValue>
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'a2a_member_rules_propose',
+    description: 'Team member only: propose the whole new text of your own role and rules, for yourself only. Nothing changes: show the owner the text and wait for their reply.',
+    parameters: {
+      role: { type: 'string', description: 'One line: what you are for.' },
+      rules: { type: 'array', required: true, items: { type: 'object', additionalProperties: true }, description: 'The whole list: { name, text, enabled }.' },
+      reason: { type: 'string', required: true, description: 'Why, in the owner\'s language.' },
+    },
+    output: { ...anyProps, render: (_args, value) => said('a2a_member_rules_propose', value) },
+    presentCall: () => ({ card: 'generic', title: 'a2a_member_rules_propose', kind: 'other', rawInput: {} }),
+    execute: async (args: { role?: string; rules: unknown; reason: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = host()
+      const me = callerOf(exec)
+      if (h === undefined || me === undefined || h.roleOf(me) !== 'member') return { ok: false, code: 'not-member', error: 'a2a_member_rules_propose serves only the superagent team members the owner named' }
+      const value = { ...(typeof args.role === 'string' ? { role: args.role } : {}), rules: args.rules }
+      const reason = String(args.reason ?? '')
+      const out = h.settings.serves?.members.includes(me) === true ? await h.forwardRules(me, 'rules-propose', { value, reason }) : h.proposeRules(`member:${me}`, me, value, reason)
+      return json(out) as Record<string, JsonValue>
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'a2a_member_rules_apply',
+    description: 'Team member only: apply your pending proposal about your own role and rules after the owner has agreed to it in this session.',
+    parameters: {},
+    output: { ...anyProps, render: (_args, value) => said('a2a_member_rules_apply', value) },
+    presentCall: () => ({ card: 'generic', title: 'a2a_member_rules_apply', kind: 'other', rawInput: {} }),
+    execute: async (_args: Record<string, never>, exec): Promise<Record<string, JsonValue>> => {
+      const h = host()
+      const me = callerOf(exec)
+      if (h === undefined || me === undefined || h.roleOf(me) !== 'member') return { ok: false, code: 'not-member', error: 'a2a_member_rules_apply serves only the superagent team members the owner named' }
+      const person = h.personMessageOf(me)
+      if (person === undefined) return { ...notOwner }
+      const out = h.settings.serves?.members.includes(me) === true ? await h.forwardRules(me, 'rules-apply', { person }) : h.applyRules(`member:${me}`, me, person)
       return json(out) as Record<string, JsonValue>
     },
   }))

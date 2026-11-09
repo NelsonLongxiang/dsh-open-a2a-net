@@ -47,6 +47,15 @@ describe('planning view: the superagent team canvas and its roles', () => {
     expect(card.querySelector('.nm .sa-role')).toBeNull()
   })
 
+  it('a member\'s tooltip carries its role and enabled rules, once', () => {
+    const card = createCardElement(M); card.title = '原提示'
+    const d = createTeamRoleDecorator()
+    d.decorate(new Map(), new Map([[M, card]]))
+    d.update(state({ canvas: 'ops', members: [M], profiles: { [M]: { role: '写文档', rules: [{ name: 'a', text: '接文档', enabled: true }, { name: 'b', text: '停用的', enabled: false }] } } }))
+    d.decorate(new Map(), new Map([[M, card]]))
+    expect(card.title).toBe('原提示\n角色：写文档\n规则 a：接文档')
+  })
+
   it('marks the bound frame and the role cards, follows the state, and takes the marks away when unbound', () => {
     const frames = new Map([['ops', frame('ops')], ['other', frame('other')]])
     const nodes = new Map([[R, createCardElement(R)], [M, createCardElement(M)], [O, createCardElement(O)]])

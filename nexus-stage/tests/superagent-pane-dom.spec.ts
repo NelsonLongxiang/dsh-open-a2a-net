@@ -212,6 +212,102 @@ describe('team tab', () => {
     expect(act).toHaveBeenCalledWith({ action: 'settings', settings: { canvas: 'other', router: R, acceptMode: 'observe', sources: { workbench: true, a2a: false }, paused: false } })
   })
 
+  describe('the settings that are lists', () => {
+    const q = <T extends Element>(root: Element, label: string): T => root.querySelector<T>(`[aria-label="${label}"]`)!
+    const type = (box: HTMLInputElement | HTMLTextAreaElement, value: string): void => { box.value = value; box.dispatchEvent(new Event('input')) }
+    const open = (settings: Record<string, unknown> = {}) => {
+      const m = mount()
+      m.pane.update({ ...state(), settings: { ...state().settings, ...settings } }, sessions, NOW)
+      m.pane.select('settings')
+      return m
+    }
+    const sent = (act: ReturnType<typeof vi.fn>): Record<string, unknown> => act.mock.calls.at(-1)![0].settings
+
+    it('shows what is set, and a save without edits writes none of them', async () => {
+      const { pane, act } = open({ rules: [{ name: 'docs', text: '核对文档', enabled: false }], bots: { a2a: ['bot/1'] }, allowed: { github: ['Owner'] }, reviewer: 'dsh/aaaaaaaa', repos: { [M]: 'o/net' } })
+      expect(q<HTMLInputElement>(pane.root, '规则名称').value).toBe('docs')
+      expect(q<HTMLTextAreaElement>(pane.root, '规则内容').value).toBe('核对文档')
+      expect(q<HTMLInputElement>(pane.root, '启用规则').checked).toBe(false)
+      expect(q<HTMLTextAreaElement>(pane.root, '允许发需求的机器').value).toBe('bot/1')
+      expect(q<HTMLTextAreaElement>(pane.root, 'PR 上算人的 GitHub 账号').value).toBe('Owner')
+      expect(q<HTMLInputElement>(pane.root, '送审地址').value).toBe('dsh/aaaaaaaa')
+      button(pane.root, '保存').click()
+      await flush()
+      const written = sent(act)
+      for (const key of ['rules', 'bots', 'allowed', 'reviewer', 'repos']) expect(written).not.toHaveProperty(key)
+    })
+
+    it('writes what was edited: a rule, the lists, a repository, the review address', async () => {
+      const { pane, act } = open()
+      button(pane.root, '添加规则').click()
+      type(q<HTMLTextAreaElement>(pane.root, '规则内容'), '  以 [ops] 开头的文档核对  ')
+      type(q<HTMLTextAreaElement>(pane.root, '允许发需求的机器'), 'bot/1\nbot/2, bot/1')
+      type(q<HTMLTextAreaElement>(pane.root, 'PR 上算人的 GitHub 账号'), 'Owner')
+      type(pane.root.querySelector<HTMLInputElement>(`[aria-label$="的仓库"]`)!, 'o/net')
+      type(q<HTMLInputElement>(pane.root, '送审地址'), 'dsh/aaaaaaaa')
+      button(pane.root, '保存').click()
+      await flush()
+      expect(sent(act)).toMatchObject({
+        rules: [{ name: 'rule-1', text: '以 [ops] 开头的文档核对', enabled: true }], bots: { a2a: ['bot/1', 'bot/2'] }, allowed: { github: ['Owner'] }, repos: { [M]: 'o/net' }, reviewer: 'dsh/aaaaaaaa',
+      })
+    })
+
+    it('clears a review address and removes a rule', async () => {
+      const { pane, act } = open({ rules: [{ name: 'docs', text: '核对文档', enabled: true }], reviewer: 'dsh/aaaaaaaa' })
+      button(pane.root, '删除').click()
+      type(q<HTMLInputElement>(pane.root, '送审地址'), '')
+      button(pane.root, '保存').click()
+      await flush()
+      expect(sent(act)).toMatchObject({ rules: [], reviewer: null })
+    })
+
+    it('edits a member\'s role and rules and the dispatch rules; an untouched profile is not rewritten', async () => {
+      const { pane, act } = open({ profiles: { [M]: { role: '写文档', rules: [{ name: 'docs', text: '文档类', enabled: true }] } }, dispatch: '看角色' })
+      expect(q<HTMLTextAreaElement>(pane.root, '派单规则').value).toBe('看角色')
+      expect(pane.root.querySelector<HTMLInputElement>('[aria-label$="的角色"]')!.value).toBe('写文档')
+      button(pane.root, '保存').click()
+      await flush()
+      expect(sent(act)).not.toHaveProperty('profiles')
+      expect(sent(act)).not.toHaveProperty('dispatch')
+      type(pane.root.querySelector<HTMLInputElement>('[aria-label$="的角色"]')!, '写代码')
+      type(q<HTMLTextAreaElement>(pane.root, '派单规则'), '看仓库')
+      button(pane.root, '保存').click()
+      await flush()
+      expect(sent(act)).toMatchObject({ profiles: { [M]: { role: '写代码', rules: [{ name: 'docs', text: '文档类', enabled: true }] } }, dispatch: '看仓库' })
+    })
+
+    it('the team page shows each member\'s role and rules, the team\'s rules, and pending and last changes', () => {
+      const m = mount()
+      const base = state()
+      m.pane.update({ ...base, settings: { ...base.settings, rules: [{ name: 'ops', text: '核对文档', enabled: true }], dispatch: '看角色', profiles: { [M]: { role: '写文档', rules: [{ name: 'docs', text: '文档类', enabled: true }] } } },
+        ruleChanges: { pending: { [`member:${M}`]: { at: at(1), by: M, reason: '想收窄', value: { role: '只写中文文档', rules: [] } } }, last: { team: { at: at(5), by: R, message: '同意' } } } }, sessions, NOW)
+      m.pane.select('team')
+      const page = text(m.pane.root)
+      for (const words of ['写文档', '文档类', '核对文档', '看角色', '待你确认的修改', '想收窄', '只写中文文档', '最近修改', '同意']) expect(page).toContain(words)
+    })
+
+    it('an edit survives the poll', () => {
+      const { pane } = open()
+      button(pane.root, '添加规则').click()
+      type(q<HTMLTextAreaElement>(pane.root, '规则内容'), '写到一半')
+      pane.update(state(), sessions, NOW + 3000)
+      expect(q<HTMLTextAreaElement>(pane.root, '规则内容').value).toBe('写到一半')
+    })
+
+    it.each([
+      ['a bad name', (root: Element) => { button(root, '添加规则').click(); type(q(root, '规则名称'), 'Bad Name'); type(q(root, '规则内容'), 'x') }, '只能用小写字母'],
+      ['an empty rule', (root: Element) => { button(root, '添加规则').click() }, '还没有写内容'],
+      ['a repository without an owner', (root: Element) => { type(root.querySelector<HTMLInputElement>('[aria-label$="的仓库"]')!, 'net') }, 'owner/name'],
+    ])('says what is wrong and sends nothing: %s', async (_name, edit, words) => {
+      const { pane, act } = open()
+      edit(pane.root)
+      button(pane.root, '保存').click()
+      await flush()
+      expect(act).not.toHaveBeenCalled()
+      expect(text(pane.root)).toContain(words)
+    })
+  })
+
   it('in the workbench the tab shows only while the host answers a superagent state', () => {
     const bench = createWorkbench({
       now: () => NOW, abandon: async () => true, canvasOp: async () => true, copy: () => {},

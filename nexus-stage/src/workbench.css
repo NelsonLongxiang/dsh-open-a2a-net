@@ -404,6 +404,16 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-sa-field{display:flex;align-items:flex-start;gap:8px;font-size:12px}
 .wb-sa-checks{display:flex;flex-direction:column;gap:3px}
 .wb-sa-check{display:flex;align-items:center;gap:6px;font-size:12px}
+.wb-sa-section{display:flex;flex-direction:column;gap:5px;padding-top:8px;margin-top:4px;border-top:1px solid var(--n-border)}
+.wb-sa-section-title{font-size:12.5px;font-weight:600;color:var(--n-ink)}
+.wb-sa-section .wb-sa-field>.wb-sa-input{flex:1;min-width:0}
+.wb-sa-section .wb-sa-field>.wb-kv-k{flex:0 1 45%;min-width:0;overflow-wrap:anywhere}
+.wb-sa-rules{display:flex;flex-direction:column;gap:8px}
+.wb-sa-rule{display:flex;flex-direction:column;gap:4px}
+.wb-sa-rule-head{display:flex;align-items:center;gap:8px}
+.wb-sa-rule-head>.wb-sa-input{flex:1;min-width:0}
+.wb-sa-rule-head>.wb-sa-check{flex:none}
+.wb-sa-section>.wb-btn{align-self:flex-start}
 .wb-sa-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px;margin-top:2px}
 .wb-sa .wb-btn{margin:0}
 .wb-sa-form>.wb-btn{align-self:flex-end}
