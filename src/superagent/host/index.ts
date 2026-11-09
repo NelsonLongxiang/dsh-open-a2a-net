@@ -19,6 +19,7 @@ import { Engine, UserError, reasonText, ticketStage, type Assessor, type Candida
 import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
 import { MemberExecutor, transientError, type MemberTurn } from './executor.ts'
+import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { MEMBER_PRESET, ROUTER_PRESET } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
@@ -34,6 +35,8 @@ export interface SuperagentHostDeps {
   readonly cancelTurn?: (sessionId: string) => boolean
   /** What a session's ended turn left: whether its shell jobs have ended, and its last words. */
   readonly memberTurn?: (sessionId: string) => MemberTurn | undefined
+  /** `gh` for reading pull requests; the operator's by default, tests stub it. */
+  readonly gh?: GhRun
   /** A repeating timer; returns its disposer. */
   readonly interval: (fn: () => void, ms: number) => () => void
   readonly now?: () => string
@@ -191,6 +194,7 @@ export class SuperagentHost {
   private readonly settingsPath: string
   /** Candidates waiting to reach the router, by evalId; delivered ones stay until the engine releases them. */
   private readonly candidates = new Map<string, { candidate: Candidate; delivered: boolean }>()
+  private readonly prs: PrFollower
   private disposeTimer: (() => void) | undefined
   /** The A2A executor (PR-C1): the owner's fixed member pool, one worker slot each. */
   readonly executor: MemberExecutor
@@ -247,6 +251,10 @@ export class SuperagentHost {
       ticket: id => this.store.tickets.get(id) as never,
       resultPending: (ticketId, task) => this.resultPending(ticketId, task),
       logger: d.logger, ...(d.runCli !== undefined ? { run: d.runCli } : {}), ...(d.teamSend !== undefined ? { teamSend: d.teamSend } : {}), ...(d.a2aPollSeconds !== undefined ? { pollSeconds: d.a2aPollSeconds } : {}),
+    })
+    this.prs = new PrFollower({
+      path: join(dir, 'pr-follow.json'), tickets: () => this.store.tickets.list(), engine: () => this.engine, gh: d.gh ?? defaultGh,
+      allowed: () => this.settingsValue.allowed.github, paused: () => this.settingsValue.paused, logger: d.logger,
     })
     this.engine = new Engine({
       repo: this.store,
@@ -372,7 +380,7 @@ export class SuperagentHost {
     if (op !== 'report') return { ok: false, code: 'op', error: 'op must be report, ack, handback, read, idle or error' }
     const r = (report ?? {}) as Record<string, unknown>
     if (typeof r.state !== 'string' || !['progress', 'waiting', 'ready', 'blocked', 'failed', 'dropped'].includes(r.state) || typeof r.summary !== 'string' || r.summary.trim() === '') return { ok: false, code: 'report', error: 'a report needs a state and a summary' }
-    return this.report(entry.ref, { state: r.state as ReportState, summary: r.summary, ...(typeof r.question === 'string' || r.question === null ? { question: r.question as string | null } : {}), ...(typeof r.answers === 'string' ? { answers: r.answers } : {}) }, typeof r.ticket_id === 'string' ? r.ticket_id : undefined)
+    return this.report(entry.ref, { state: r.state as ReportState, summary: r.summary, ...(typeof r.question === 'string' || r.question === null ? { question: r.question as string | null } : {}), ...(typeof r.answers === 'string' ? { answers: r.answers } : {}) }, typeof r.ticket_id === 'string' ? r.ticket_id : undefined, typeof r.pull_request === 'string' ? r.pull_request : undefined)
   }
 
   /** PR-C2, member host side: work the served team host sends one of this host's member sessions, signed by its pinned key. */
@@ -392,7 +400,7 @@ export class SuperagentHost {
   }
 
   /** PR-C2, member host side: a served member's report goes to the team host (it answers whether it took it). */
-  async forwardReport(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string; ticket_id?: string }): Promise<Record<string, unknown>> {
+  async forwardReport(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string; ticket_id?: string; pull_request?: string }): Promise<Record<string, unknown>> {
     const serves = this.settingsValue.serves
     if (serves === undefined || !serves.members.includes(member) || this.d.signedPost === undefined || this.d.handleOf === undefined) return { ok: false, code: 'not-member', error: 'this session serves no team' }
     try { return await this.d.signedPost(serves.url, '/a2a/superagent-team', { op: 'report', member: this.d.handleOf(member), report }) } catch (error) { return { ok: false, code: 'unreachable', error: String(error) } }
@@ -521,12 +529,16 @@ export class SuperagentHost {
    * A member's report (upstream orchestrator_report) on the ticket bound to it. The router hears it in its own session,
    * so it can hand a ready result or a question to the person (superagent_reply).
    */
-  report(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string }, ticketId?: string): { ok: true; ticketId: string; stage: unknown } | { ok: false; code: string; error: string } {
+  report(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string }, ticketId?: string, pullRequest?: string): { ok: true; ticketId: string; stage: unknown } | { ok: false; code: string; error: string } {
     const binding = ticketId === undefined ? this.executor.bindingOf(member) : this.executor.bindingFor(member, ticketId)
     if (binding === undefined) return ticketId === undefined ? { ok: false, code: 'not-assigned', error: 'no ticket is assigned to this session' } : this.notYours(member, ticketId)
     const current = this.store.tickets.get(binding.ticketId)
     if (report.state === 'dropped' && current !== undefined && agentLedEnd(current, binding.assignmentId)) {
       return { ok: false, code: 'agent-cannot-end', error: 'an agent\'s message cannot end this ticket: only a person (or the owner\'s stop) can. Keep working within the scope, or report blocked with a question for the person.' }
+    }
+    if (pullRequest !== undefined) {
+      const refused = this.followPullRequest(binding.ticketId, pullRequest)
+      if (refused !== undefined) return refused
     }
     let ticket: Ticket
     try { ticket = this.engine.report(binding.ticketId, report) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
@@ -534,6 +546,16 @@ export class SuperagentHost {
     this.relayReport(ticket.id, report.state, report.summary)
     this.pass()
     return { ok: true, ticketId: ticket.id, stage }
+  }
+
+  /** Design D1: the ticket follows the pull request its member named, so `ready` ends it only when that pull request ends. */
+  private followPullRequest(ticketId: string, url: string): { ok: false; code: string; error: string } | undefined {
+    const pull = parsePullRequest(url)
+    if (pull === undefined) return { ok: false, code: 'pull-request', error: 'pull_request must be a GitHub pull request URL' }
+    const repo = this.executor.repoOfTicket(ticketId)
+    if (repo !== undefined && repo.toLowerCase() !== pull.repo.toLowerCase()) return { ok: false, code: 'pull-request', error: `that pull request is in ${pull.repo}; this ticket works in ${repo}` }
+    try { this.engine.bindThread(ticketId, { source: GITHUB_SOURCE, id: pull.id }, true) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
+    return undefined
   }
 
   /** A report named a ticket this member does not hold: refused and counted, naming the ones it does. */
@@ -598,6 +620,7 @@ export class SuperagentHost {
     // Upstream: evaluation, dispatch and outbound delivery hold while paused.
     if (this.settingsValue.paused) return
     this.executor.tick()
+    this.prs.tick()
     this.acknowledgeRequests()
     this.receiptEndedRequests()
     this.receiptOtherMessages()
@@ -611,7 +634,9 @@ export class SuperagentHost {
     const ticket = this.store.tickets.get(ticketId)
     if (ticket === undefined || ticket.ended) return false
     const fromTask = ticket.origin.triggerIds.some(id => this.store.triggers.get(id)?.channel?.address?.task === task)
-    return fromTask && !ticket.assignments.some(a => a.report?.state === 'ready')
+    // A ticket that follows a pull request has its outcome when that ends; `ready` only hands it to a person.
+    const following = (ticket.follows ?? []).some(f => !f.closed)
+    return fromTask && (following || !ticket.assignments.some(a => a.report?.state === 'ready'))
   }
 
   /**
@@ -914,6 +939,7 @@ export class SuperagentHost {
       policyVersion: policyVersion(this.settingsValue),
       a2a: { enabled: this.settingsValue.sources.a2a, address: this.a2a.address ?? null, health: this.a2a.health },
       refusals: { counts: Object.fromEntries(this.refusalCounts), recent: [...this.refusalRecent] },
+      ...(this.prs.problem !== undefined ? { pullRequestProblem: this.prs.problem } : {}),
       executor: { canvas: this.settingsValue.canvas ?? null, members: this.settings.members, remoteMembers: this.settings.remoteMembers, bindings: this.executor.list() },
       ...(this.settingsValue.serves !== undefined ? { serves: this.settingsValue.serves } : {}),
       ...(this.store.loadError !== undefined ? { error: this.store.loadError } : {}),

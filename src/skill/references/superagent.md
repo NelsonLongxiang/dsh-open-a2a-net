@@ -55,7 +55,7 @@ Every A2A message to the team address gets a formal outcome, not only those that
 - Report with `a2a_ticket_report`, naming the `ticket_id` on the assignment card (a report for a ticket that is no longer yours is refused):
   - `progress`: something changed that the person must know;
   - `waiting`: you are waiting for a Trigger;
-  - `ready`: the result can be reviewed or used; put the PR link in the summary;
+  - `ready`: the result can be reviewed or used. Name a pull request in `pull_request`: the ticket then stays open until it merges or closes, and review comments come back to you as `[superagent input]`;
   - `blocked` / `failed`: you cannot go on;
   - `dropped`: there is nothing to do.
 

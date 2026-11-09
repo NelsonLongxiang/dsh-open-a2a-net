@@ -108,7 +108,7 @@ describe('team policy (upstream docs/002, accept mode off)', () => {
   it('a Source that is off filters its Triggers', () => {
     expect(teamScope(() => settings()).scope({ source: 'workbench', meta: {} })).toEqual({ listened: true, observed: false })
     expect(teamScope(() => settings()).scope({ source: 'a2a', meta: {} })).toEqual({ listened: false, reason: 'sourceOff' })
-    expect(teamScope(() => settings()).scope({ source: 'github', meta: {} })).toEqual({ listened: false, reason: 'sourceOff' })
+    expect(teamScope(() => settings()).scope({ source: 'feishu', meta: {} })).toEqual({ listened: false, reason: 'sourceOff' })
   })
   it('settings writes are validated field by field', () => {
     expect(parseSettings({ router: 'session-1', allowed: { a2a: ['dsh/aaaaaaaa'] } }, DEFAULT_SETTINGS)).toMatchObject({ ok: true, settings: { router: 'session-1', allowed: { workbench: ['owner'], a2a: ['dsh/aaaaaaaa'] } } })

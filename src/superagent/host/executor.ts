@@ -399,7 +399,7 @@ export function assignmentCard(ticket: Ticket, trigger: MemberExecutorDeps['trig
     `Work in your own workspace, in a directory or worktree named ${name}; in a git checkout, create that worktree at .worktrees/${name} and list .worktrees/ in the checkout's .git/info/exclude, so the checkout stays clean (your sandbox writes only inside your workspace: a path beside the checkout is refused). Stay within the scope; derive what to do from the request yourself.`,
     `Do not open sessions, subagents, or A2A routes. Report with a2a_ticket_report, naming ticket_id ${ticket.id}. When you hand off (a result, a question, waiting, blocked) you may get another ticket; a later [superagent input] brings this one back:`,
     '- progress while you work only when something changed for the person; waiting when you wait for a Trigger;',
-    '- ready when the result can be reviewed or used (a pull request link in the summary when there is one);',
+    '- ready when the result can be reviewed or used. Name a pull request in pull_request: the ticket then stays open until it merges, and review comments come back to you as [superagent input];',
     '- blocked or failed when you cannot go on; dropped when there turns out to be nothing to do;',
     '- question: one concrete question, only for what a person alone can decide. Choose reasonable defaults for routine steps yourself and say in your report which you chose.',
     'Later messages on this ticket arrive as [superagent input], each with its trigger id. Before you act on a person\'s message,',

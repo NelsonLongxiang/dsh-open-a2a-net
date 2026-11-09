@@ -227,11 +227,12 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
       state: { type: 'string', required: true, description: 'progress | waiting | ready | blocked | failed | dropped' },
       summary: { type: 'string', required: true, description: 'What changed, with evidence; links for results.' },
       question: { type: 'string', description: 'One concrete question for the ticket owner; empty to keep, "null" to clear.' },
+      pull_request: { type: 'string', description: 'The URL of the pull request this ticket opened. The ticket then ends when that pull request merges or closes.' },
       answers: { type: 'string', description: 'The trigger id of the person\'s question this report answers.' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('ticket report', value) },
     presentCall: args => ({ card: 'generic', title: `ticket report: ${String(args.state)}`, kind: 'other', rawInput: args }),
-    execute: async (args: { ticket_id: string; state: string; summary: string; question?: string; answers?: string }, exec): Promise<Record<string, JsonValue>> => {
+    execute: async (args: { ticket_id: string; state: string; summary: string; question?: string; answers?: string; pull_request?: string }, exec): Promise<Record<string, JsonValue>> => {
       const h = host()
       const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
       if (h === undefined || me === undefined || h.roleOf(me) !== 'member') return { ok: false, code: 'not-member', error: 'a2a_ticket_report serves only the superagent team members the owner named' }
@@ -243,7 +244,7 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
       const question = args.question === 'null' ? null : str(args.question)
       const report = { state: args.state as 'progress', summary, ...(question !== undefined ? { question } : {}), ...(str(args.answers) !== undefined ? { answers: str(args.answers)! } : {}) }
       // PR-C2: a session serving another host's team reports there, signed by this host's key.
-      const out = h.settings.serves?.members.includes(me) === true ? await h.forwardReport(me, { ...report, ticket_id: ticketId }) : h.report(me, report, ticketId)
+      const out = h.settings.serves?.members.includes(me) === true ? await h.forwardReport(me, { ...report, ticket_id: ticketId, ...(str(args.pull_request) !== undefined ? { pull_request: str(args.pull_request)! } : {}) }) : h.report(me, report, ticketId, str(args.pull_request))
       return json(out) as Record<string, JsonValue>
     },
   }))
