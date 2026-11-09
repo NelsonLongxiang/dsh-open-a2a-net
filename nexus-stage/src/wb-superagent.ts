@@ -503,7 +503,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     reset.addEventListener('click', () => { settingsDirty = false; render() })
     const actions = el('div', 'wb-sa-actions')
     actions.append(save, reset)
-    form.append(actions, el('div', 'wb-sa-hint', '团队就是一支画布团队：在画布上建队、增删成员（含远端成员），这里只绑定画布并从中指定总工。总工用 superagent-router 预设，本机成员用 superagent-member 预设；团队里的会话不再加入别的画布。'))
+    form.append(actions, el('div', 'wb-sa-hint', '团队就是一支画布团队：在画布上建队、增删成员（含远端成员），这里只绑定画布并从中指定总工。总工用 superagent-router 预设，本机成员用 superagent-member 预设，能自己开工单的观察者用 superagent-observer 预设；团队里的会话不再加入别的画布。'))
     return form
   }
 

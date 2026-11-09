@@ -374,7 +374,7 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
     execute: async (args: { text?: string }, exec): Promise<Record<string, JsonValue>> => {
       const h = host()
       const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
-      if (h === undefined || me === undefined) return { ok: false, code: 'not-observer', error: 'a2a_ticket_request serves only the observers the owner named on this team' }
+      if (h === undefined || me === undefined) return { ok: false, code: 'not-observer', error: 'a2a_ticket_request serves only the sessions on this team created under the observer preset' }
       return json(h.requestForObserver(me, String(args.text ?? ''))) as Record<string, JsonValue>
     },
   }))
