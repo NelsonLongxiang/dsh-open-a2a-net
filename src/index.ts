@@ -3264,6 +3264,17 @@ export function apply(ctx: Context, config: Config): void {
       : { ok: false, code: 'not-signer', error: 'the signer does not speak for that member' }, 'a2a: superagent team face')
   })
 
+  /** Design M8: the teams linked instances advertise on their cards; only a team whose A2A Source is on is advertised. */
+  function linkedTeams(): Array<{ id: string; primary: false; remote: true; canvas: string; address: string; open: true; host: string }> {
+    return [...cardCache.entries()].flatMap(([url, hit]) => {
+      const card = hit.card
+      if (card === undefined || typeof card.publicKey !== 'string' || !verifyCard(card, Date.now()).ok || peerAdmissionLinkState(url).link !== 'linked') return []
+      const owner = canvasOwnerFingerprint(card.publicKey)
+      return (card.canvasOrg ?? []).filter(entry => entry.superagentTeam === true && entry.team === `${card.team}/canvas/${entry.name}`)
+        .map(entry => ({ id: `remote:${entry.team}@${owner}`, primary: false as const, remote: true as const, canvas: entry.name, address: `${entry.team}@${owner}`, open: true as const, host: card.name ?? new URL(url).host }))
+    })
+  }
+
   if (superagentTeams !== undefined) whenWebServerSettled((webServer) => {
     // Design M3/M5: the instance's teams, and adding one.
     ctx.effect(() => webServer.register({
@@ -3271,9 +3282,19 @@ export function apply(ctx: Context, config: Config): void {
       path: '/__dsh_a2a/superagent/teams',
       handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
         const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
-        if (req.method === 'GET') { send(200, { teams: superagentTeams.rows().map(row => ({ ...row, ...(row.canvas !== undefined ? { address: `${config.team}/canvas/${row.canvas}` } : {}) })) }); return }
+        if (req.method === 'GET') { send(200, { teams: [...superagentTeams.rows().map(row => ({ ...row, ...(row.canvas !== undefined ? { address: `${config.team}/canvas/${row.canvas}` } : {}) })), ...linkedTeams()] }); return }
         readJsonBody(req, res, (body) => {
-          const fields = body as { canvas?: unknown; router?: unknown }
+          const fields = body as { canvas?: unknown; router?: unknown; action?: unknown; address?: unknown; session?: unknown; text?: unknown }
+          if (fields.action === 'send') {
+            // Design M9: as the session the view is open in, through the ordinary route, so every gate of a2a_route applies.
+            const address = typeof fields.address === 'string' ? fields.address : '', text = typeof fields.text === 'string' ? fields.text.trim() : ''
+            const agent = typeof fields.session === 'string' ? sessionNodes.get(fields.session) : undefined
+            if (!linkedTeams().some(team => team.address === address)) { send(200, { ok: false, code: 'not-listed', error: 'that team is not on a linked instance, or it takes no A2A requests' }); return }
+            if (text === '' || text.length > 20_000) { send(200, { ok: false, code: 'text', error: 'text is required, at most 20000 characters' }); return }
+            if (agent === undefined) { send(200, { ok: false, code: 'not-joined', error: 'join this session to the A2A network first: a request to another instance is sent as this session' }); return }
+            void routeTrunk({ team: address, message: text, async: true }, agent, new AbortController().signal).then((out) => { send(200, { ...out, sender: sessionTeamOf(agent) }) }, (error: unknown) => { send(200, { ok: false, error: String(error) }) })
+            return
+          }
           send(200, superagentTeams.add({ canvas: fields.canvas, router: fields.router }, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf))
         })
       }),
