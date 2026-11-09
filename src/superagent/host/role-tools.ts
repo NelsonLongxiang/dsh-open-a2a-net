@@ -17,7 +17,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/role-tools
  */
 
-export type Role = 'router' | 'member'
+export type Role = 'router' | 'member' | 'observer'
 
 /** The router's tools: upstream orchestrator_route / _read / _reply / _ticket_request_status. */
 /**
@@ -37,14 +37,17 @@ export const MEMBER_WORK_TOOLS: readonly string[] = ['read', 'write', 'edit', 'r
 /** A member's tools: its work tools, its report, and the file channel for inputs it was handed. */
 export const MEMBER_TOOLS: readonly string[] = [...MEMBER_WORK_TOOLS, 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch']
 
+/** An observer's tools: a member's, and opening a ticket (design D15). */
+export const OBSERVER_TOOLS: readonly string[] = [...MEMBER_TOOLS, 'a2a_ticket_request']
+
 /** The tools only a team's sessions have: a session with no role is not offered them. */
-export const TEAM_TOOLS: readonly string[] = [...ROUTER_TOOLS, 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply']
+export const TEAM_TOOLS: readonly string[] = [...ROUTER_TOOLS, 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request']
 
 /** The tool runtime's own transport (programmatic tool calling); never restricted, every inner call is guarded. */
 const TRANSPORT = new Set(['run_code'])
 
 export function roleTools(role: Role): readonly string[] {
-  return role === 'router' ? ROUTER_TOOLS : MEMBER_TOOLS
+  return role === 'router' ? ROUTER_TOOLS : role === 'observer' ? OBSERVER_TOOLS : MEMBER_TOOLS
 }
 
 /** Why a role session may not call a tool, or undefined when it may. */

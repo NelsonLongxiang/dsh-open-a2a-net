@@ -48,7 +48,13 @@ The owner can also edit any rule on the team page. The last row decides who may 
 - **D11 Only the person's own words.** `superagent_request` and `superagent_rules_apply` (and the member's apply) act only while the router's turn answers a message the person typed: the latest message in its session that is not host context has `source.kind === 'user'`. The host sets that field; a model or a relayed message cannot. A candidate card, report or note is `a2a-relay` and closes the door until the person speaks again; a compaction checkpoint has its own kind. Otherwise it is refused with `not-the-owner`.
 - **D12 Opening a ticket is a request made for the person.** `superagent_request` takes no text. The host files that message verbatim as a workbench Trigger from the owner (`human: true`, explicit) on a new thread, once per message id. It reaches the router as an ordinary candidate and is accepted as any other, so there is no second way to create a ticket, and the router cannot restate or widen the request.
 - **D13 Reading what happened.** `superagent_read` gains kind `decisions`: recent inferred candidates with text, decision, rules named and reason. A proposal to improve the rules is drawn from it.
-- **D14 Nothing proactive.** No session opens a ticket on its own initiative; a member still hands back what is beyond its ticket.
+- **D14 Nothing proactive, except an observer.** Apart from D15, no session opens a ticket on its own initiative; a member still hands back what is beyond its ticket.
+
+### The observer
+
+- **D15 A member who may open tickets (owner 2026-11-09).** The owner marks a local member as the team's observer on the team page. It joins the team through the canvas like any member, has a member's tools, and takes tickets like one; the one difference is `a2a_ticket_request`. The tool files the observer's own words as a workbench Trigger on a new thread, with the actor `observer:<session>` and `human: false`. It reaches the router as an ordinary candidate, so D12's single way of creating a ticket holds and the router still accepts and dispatches.
+- **D16 What the observer's request is worth.** The gate admits it as explicit, because the owner named the observer for this; no accept mode or rule holds it back. It stays an agent's request: the candidate card says so, `superagent_route` refuses a stop on it, and no person's question or acknowledgement is answered on it. Naming or removing an observer is a settings write that needs the owner's proof (D10) and moves the policy version, and an open ticket whose observer was removed is told its requester no longer may. An observer on another host is not supported: the tool lives on the local session.
+- **D17 A loop cannot fill the queue.** The observer acts on its own judgement, so the host keeps at most five of its requests open and returns the existing one for an identical text.
 
 ## Consequences
 

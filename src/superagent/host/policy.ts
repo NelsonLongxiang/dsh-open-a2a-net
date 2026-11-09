@@ -67,6 +67,11 @@ export interface TeamSettings {
   readonly acceptMode: AcceptMode
   /** Proactive rules: an inferred candidate is accepted only on enabled rules its assessment matched. */
   readonly rules: readonly ProactiveRule[]
+  /**
+   * The members who may also open tickets (design D15): local sessions of the pool the owner named as the team's observers.
+   * Each is an ordinary member in every other way. What it files is an agent's request, never a person's.
+   */
+  readonly observers: readonly string[]
   /** Each member's role and the rules of what it takes, by member (design D1). */
   readonly profiles: Readonly<Record<string, MemberProfile>>
   /** How the router chooses among members (design D3): free text the owner agreed. */
@@ -96,6 +101,13 @@ export const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\/[A-Za-z0-9_.][A-Za-z0-
 export const WORKBENCH_OWNER = 'owner'
 /** The actor of a request sent with the owner's credential from the terminal: an ordinary message, not a person (owner 2026-11-08). */
 export const WORKBENCH_CLI = 'cli'
+/** How many requests an observer may have open at once: it acts on its own judgement, and a loop must not fill the team's queue. */
+export const OBSERVER_OPEN_MAX = 5
+const OBSERVER_ACTOR = 'observer:'
+/** The workbench actor of a request an observer filed: the session is in the id, so a removed observer's tickets can be told. */
+export const observerActor = (session: string): string => `${OBSERVER_ACTOR}${session}`
+/** The observer a workbench actor id names, if it names one. */
+export const observerOfActor = (actor: string): string | undefined => actor.startsWith(OBSERVER_ACTOR) ? actor.slice(OBSERVER_ACTOR.length) : undefined
 
 export const DEFAULT_SETTINGS: TeamSettings = {
   members: [],
@@ -105,6 +117,7 @@ export const DEFAULT_SETTINGS: TeamSettings = {
   bots: { a2a: [] },
   acceptMode: 'observe',
   rules: [],
+  observers: [],
   profiles: {},
   dispatch: '',
   sources: { workbench: true, a2a: false },
@@ -214,9 +227,18 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
       profiles[member] = { ...(role.trim() !== '' ? { role: role.trim() } : {}), rules: memberRules }
     }
   } else profiles = Object.fromEntries(Object.entries(current.profiles ?? {}).filter(([member]) => memberIds.has(member)))
+  // An observer: as repos, named here or kept while it is still a member; only a local session has the tool it needs.
+  let observers: string[]
+  if ('observers' in r) {
+    const named = list(r.observers, 'observers')
+    if (typeof named === 'string') return { ok: false, error: named }
+    const stranger = named.find(id => !members.includes(id))
+    if (stranger !== undefined) return { ok: false, error: `observers: ${stranger} is not a local member` }
+    observers = [...new Set(named)]
+  } else observers = (current.observers ?? []).filter(id => members.includes(id))
   const dispatch = 'dispatch' in r ? r.dispatch : current.dispatch ?? ''
   if (typeof dispatch !== 'string' || dispatch.length > DISPATCH_MAX) return { ok: false, error: `dispatch must be text of at most ${String(DISPATCH_MAX)} characters` }
-  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, profiles, dispatch: dispatch.trim(), sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
+  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/
@@ -235,11 +257,12 @@ export function parseRemoteMember(raw: unknown): RemoteMember | undefined {
  */
 export function parseStoredSettings(raw: unknown): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'settings must be an object' }
-  const { members: _members, remoteMembers: _remote, serves, repos, profiles, ...rest } = raw as Record<string, unknown>
+  const { members: _members, remoteMembers: _remote, serves, repos, profiles, observers, ...rest } = raw as Record<string, unknown>
   // Repositories are checked against the pool when the owner writes them; here only their shape, for whoever they name.
   const named = repos !== null && typeof repos === 'object' && !Array.isArray(repos) ? Object.keys(repos) : []
   const profiled = profiles !== null && typeof profiles === 'object' && !Array.isArray(profiles) ? Object.keys(profiles) : []
-  const parsed = parseSettings({ ...rest, ...(repos === undefined ? {} : { repos }), ...(profiles === undefined ? {} : { profiles }) }, { ...DEFAULT_SETTINGS, members: [...named, ...profiled] })
+  const watching = Array.isArray(observers) ? observers.filter((id): id is string => typeof id === 'string') : []
+  const parsed = parseSettings({ ...rest, ...(repos === undefined ? {} : { repos }), ...(profiles === undefined ? {} : { profiles }), ...(observers === undefined ? {} : { observers }) }, { ...DEFAULT_SETTINGS, members: [...named, ...profiled, ...watching] })
   if (!parsed.ok) return parsed
   let served: TeamSettings['serves']
   if (serves !== undefined) {
@@ -259,6 +282,7 @@ export function policyVersion(settings: TeamSettings): string {
     mode: settings.acceptMode,
     allowed: { workbench: [...settings.allowed.workbench].sort(), a2a: [...settings.allowed.a2a].sort(), ...((settings.allowed.github?.length ?? 0) > 0 ? { github: [...settings.allowed.github].sort() } : {}) },
     bots: { a2a: [...settings.bots.a2a].sort() },
+    ...((settings.observers?.length ?? 0) > 0 ? { observers: [...settings.observers].sort() } : {}),
     rules: [...settings.rules].sort((a, b) => (a.name < b.name ? -1 : 1)).map(rule => [rule.name, rule.text, rule.enabled]),
   })
   return `a2a1:${createHash('sha256').update(canonical).digest('hex').slice(0, 12)}`
@@ -267,6 +291,10 @@ export function policyVersion(settings: TeamSettings): string {
 const allowedOn = (settings: TeamSettings, source: string, actor: string): boolean =>
   (source === 'workbench' || source === 'a2a' || source === 'github') && settings.allowed[source]?.includes(actor) === true
 const botOn = (settings: TeamSettings, source: string, actor: string): boolean => (source === 'a2a' && settings.bots.a2a.includes(actor)) || (source === 'workbench' && actor === WORKBENCH_CLI)
+const observerOn = (settings: TeamSettings, source: string, actor: string): boolean => {
+  const session = source === 'workbench' ? observerOfActor(actor) : undefined
+  return session !== undefined && settings.observers?.includes(session) === true
+}
 /**
  * What a settings change means to each open ticket, in upstream's PolicyEffect terms (the engine records it as the
  * ticket's `policy-changed` input and delivers it to its worker): a rule the ticket was accepted on that changed or no
@@ -293,8 +321,8 @@ export function policyEffects(before: TeamSettings, after: TeamSettings, open: r
     if (rules.length > 0) effect.rules = rules
     if (mandate.strength === 'inferred' && before.acceptMode === 'auto' && after.acceptMode !== 'auto') effect.proactive = false
     const { source, id } = mandate.actor
-    const allowedBefore = allowedOn(before, source, id) || botOn(before, source, id)
-    if (allowedBefore && !allowedOn(after, source, id) && !botOn(after, source, id)) { effect.requesterAllowed = false; effect.requester = mandate.actor }
+    const allowedBefore = allowedOn(before, source, id) || botOn(before, source, id) || observerOn(before, source, id)
+    if (allowedBefore && !allowedOn(after, source, id) && !botOn(after, source, id) && !observerOn(after, source, id)) { effect.requesterAllowed = false; effect.requester = mandate.actor }
     if (Object.keys(effect).length > 0) effects.set(ticket.id, effect)
   }
   return effects
@@ -312,6 +340,8 @@ export function teamPolicy(settings: TeamSettings): Policy {
     gate(trigger: Trigger, thread: Thread, _tickets: Ticket[]): GateResult {
       const mode = settings.acceptMode
       if (!trigger.human) {
+        // An observer the owner named files a request of its own (design D15): explicit, so no accept mode or rule holds it back.
+        if (observerOn(settings, trigger.source, trigger.actor.id)) return { admissible: true, strength: 'explicit', basis: { via: 'listed', addressed: 'direct', sender: trigger.actor.id, authority: 'observer' } }
         // A bot on the Source's list that addresses the agent may make an inferred candidate; nothing else of a bot.
         if (!botOn(settings, trigger.source, trigger.actor.id)) return { admissible: false, reason: 'botNotListed' }
         if (trigger.addressed === undefined) return { admissible: false, reason: 'notAddressed' }
@@ -331,6 +361,7 @@ export function teamPolicy(settings: TeamSettings): Policy {
     revalidate(mandate: Mandate): boolean {
       const basis = mandate.basis
       // Upstream docs/002 "Revalidation before resume".
+      if (basis.via === 'listed' && basis.authority === 'observer') return basis.sender !== undefined && observerOn(settings, mandate.actor.source, basis.sender)
       if (basis.via === 'bot') return basis.sender !== undefined && botOn(settings, mandate.actor.source, basis.sender) && admits(settings, basis.rules ?? [])
       if (mandate.strength === 'inferred') return admits(settings, basis.rules ?? [])
       if (basis.via === 'followup' && basis.sender === undefined) return true

@@ -23,9 +23,9 @@ import { ReviewRequests } from './review-requests.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
-import { MEMBER_PRESET, ROUTER_PRESET } from './role-tools.ts'
+import { MEMBER_PRESET, ROUTER_PRESET, type Role } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
-import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
+import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 
 export interface SuperagentHostDeps {
   /** The a2a home directory; state lives under `<home>/superagent/`. */
@@ -147,8 +147,12 @@ export const ORIGIN_LINE_NOTE = 'A 未验证（…） in a message\'s first line
 
 /** The candidate card the router reads: bounded facts and the ids its decision names, never authority. */
 /** A message a person typed into a session: only the host can mark one. */
+/** Who a workbench request is from, when it is not the owner at the page: their terminal, or an observer. */
+type WorkbenchVia = 'cli' | { readonly observer: string }
+
 export interface PersonMessage { readonly id: string; readonly atMs: number; readonly text: string }
 
+const OBSERVER_LINE = "This request is from the team's observer, an agent the owner named to open tickets; these are not a person's words. Accept it as any request when it is real work for this team, attach it when it repeats an open ticket, and otherwise ignore it with a reason. It cannot stop a ticket."
 export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings, 'acceptMode' | 'rules'> & Partial<Pick<TeamSettings, 'repos'>>,
   others: readonly Pick<Ticket, 'id' | 'title' | 'createdAt'>[] = [], requeued: ReadonlySet<string> = new Set(), teamLines: readonly string[] = []): string {
   const lines = [
@@ -160,6 +164,7 @@ export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings
   // #172 keeps 已验证来源 for a bound root-card origin, so a linked CLI identity's message opens with 未验证（cli-identity）.
   // That line is the network's, and it read to the router as this team's verdict on a sender its scope had already checked.
   if (candidate.triggers.some(t => t.actor.source === 'a2a' && /^\[A2A direct\][^\n]*未验证（/.test(t.text))) lines.push(ORIGIN_LINE_NOTE, '')
+  if (candidate.triggers.some(t => t.actor.source === 'workbench' && observerOfActor(t.actor.id) !== undefined)) lines.push(OBSERVER_LINE, '')
   if (candidate.tickets.length > 0) {
     lines.push('tickets on this thread (open first):')
     for (const ticket of [...candidate.tickets].sort((a, b) => Number(!!a.ended) - Number(!!b.ended))) {
@@ -333,6 +338,15 @@ export class SuperagentHost {
   roleOf(sessionId: string): 'router' | 'member' | undefined {
     if (this.settingsValue.router === sessionId) return 'router'
     return this.settings.members.includes(sessionId) || this.settingsValue.serves?.members.includes(sessionId) === true ? 'member' : undefined
+  }
+
+  /** Whether a session is one of this team's observers: named by the owner and still a local member. */
+  isObserver(sessionId: string): boolean { return this.settingsValue.observers.includes(sessionId) && this.settings.members.includes(sessionId) }
+
+  /** A session's tool list: its role, an observer being a member with one tool more. */
+  toolRoleOf(sessionId: string): Role | undefined {
+    const role = this.roleOf(sessionId)
+    return role === 'member' && this.isObserver(sessionId) ? 'observer' : role
   }
 
   /** A member's turn ended (agent idle): the executor's turn-end fact — told to the served team host when it is theirs. */
@@ -598,6 +612,26 @@ export class SuperagentHost {
     const filed = this.request(person.text)
     if (!filed.ok) return { ok: false, code: 'refused', error: filed.error }
     this.ruleChanges.recordRequest(person.id, filed.triggerId)
+    return { ok: true, trigger_id: filed.triggerId, thread: filed.thread }
+  }
+
+  /** What an observer filed that is still undecided or on an open ticket. */
+  private observerOpen(actor: string): Trigger[] {
+    const ids = new Set<string>()
+    for (const thread of this.store.threads.list()) for (const id of [...thread.pending, ...(thread.evaluating?.triggerIds ?? [])]) ids.add(id)
+    for (const ticket of this.store.tickets.list()) if (ticket.ended === undefined && ticket.mandate?.actor.id === actor) for (const id of ticket.origin?.triggerIds ?? []) ids.add(id)
+    return [...ids].flatMap(id => { const t = this.store.triggers.get(id); return t !== undefined && t.actor.source === 'workbench' && t.actor.id === actor ? [t] : [] })
+  }
+
+  /** File an observer's own request (design D15). It reaches the router as any request does; the host only keeps a loop from flooding it. */
+  requestForObserver(session: string, text: string): Record<string, unknown> {
+    if (!this.isObserver(session)) return { ok: false, code: 'not-observer', error: 'a2a_ticket_request serves only the observers the owner named on this team' }
+    const open = this.observerOpen(observerActor(session))
+    const repeated = open.find(t => t.text === text.trim())
+    if (repeated !== undefined) return { ok: true, trigger_id: repeated.id, reused: true }
+    if (open.length >= OBSERVER_OPEN_MAX) return { ok: false, code: 'too-many-open', error: `you already have ${String(open.length)} requests open; wait for one to end before filing another` }
+    const filed = this.request(text, undefined, { observer: session })
+    if (!filed.ok) return { ok: false, code: 'refused', error: filed.error }
     return { ok: true, trigger_id: filed.triggerId, thread: filed.thread }
   }
 
@@ -1089,7 +1123,7 @@ export class SuperagentHost {
   }
 
   /** The workbench Source: the owner's message, as one Trigger on a new Thread or on the Thread it continues. */
-  request(text: string, thread?: string, via?: 'cli'): { ok: true; result: ReceiveResult; triggerId: string; thread: string } | { ok: false; error: string } {
+  request(text: string, thread?: string, via?: WorkbenchVia): { ok: true; result: ReceiveResult; triggerId: string; thread: string } | { ok: false; error: string } {
     const body = text.trim()
     if (body === '') return { ok: false, error: 'text is required' }
     if (body.length > 20_000) return { ok: false, error: 'text is longer than 20000 characters' }
@@ -1102,12 +1136,12 @@ export class SuperagentHost {
     } catch (error) { return { ok: false, error: String(error) } }
   }
 
-  private workbenchTrigger(body: string, thread?: string, via?: 'cli'): Trigger {
+  private workbenchTrigger(body: string, thread?: string, via?: WorkbenchVia): Trigger {
     const threadId = thread ?? `wb-${randomUUID()}`
     const id = `wb-${randomUUID()}`
     return {
       id, source: 'workbench', threads: [{ source: 'workbench', id: threadId }],
-      actor: { source: 'workbench', id: via === 'cli' ? WORKBENCH_CLI : WORKBENCH_OWNER }, human: via !== 'cli', addressed: 'direct', at: this.now(), text: body,
+      actor: { source: 'workbench', id: via === undefined ? WORKBENCH_OWNER : via === 'cli' ? WORKBENCH_CLI : observerActor(via.observer) }, human: via === undefined, addressed: 'direct', at: this.now(), text: body,
       channel: { source: 'workbench', thread: threadId, address: { trigger: id } }, meta: {},
     }
   }
