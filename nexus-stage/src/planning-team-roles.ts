@@ -4,6 +4,7 @@
  * The planning view stays unaware of superagent: it hands its frame and card elements to `decorate` after each render,
  * and the 团队 poll hands the team's state to `update`. The bound canvas's frame is marked `superagent 团队`; the router's
  * card says 总工, each member's card says 成员 (and its repository), a member on another host adding （远端）.
+ * The role takes the card's second line, in place of the description, so the name keeps the first (172px holds no more).
  * @module nexus-stage/planning-team-roles
  */
 import type { SaState } from './wb-superagent'
@@ -27,6 +28,9 @@ export function teamRolesOf(state: SaState | null): TeamRoles | undefined {
   return { canvas: s.canvas, ...(s.router !== undefined ? { router: s.router } : {}), members: new Map(s.members.map(id => [id, s.repos?.[id]])), remote: new Map(s.remoteMembers.map(r => [remoteCardId(r.ref), s.repos?.[r.ref]])) }
 }
 
+/** What the badge shows of a role: the repository without its owner. The tooltip has it whole. */
+export const roleLabel = (text: string): string => text.replace(/ · [^/（]+\//, ' · ')
+
 /** The role badge a card shows, if any. */
 export function roleText(roles: TeamRoles | undefined, id: string): string | undefined {
   if (roles === undefined) return undefined
@@ -48,11 +52,12 @@ export function createTeamRoleDecorator(): TeamRoleDecorator {
   let roles: TeamRoles | undefined
   let frames: ReadonlyMap<string, HTMLElement> | undefined
   let nodes: ReadonlyMap<string, HTMLElement> | undefined
-  const badge = (host: Element, cls: string, text: string | undefined): void => {
+  const badge = (host: Element, cls: string, text: string | undefined, tip?: string): void => {
     let el = host.querySelector<HTMLElement>(`:scope > .${cls}`)
     if (text === undefined) { el?.remove(); return }
     if (el === null) { el = document.createElement('span'); el.className = cls; host.appendChild(el) }
     if (el.textContent !== text) el.textContent = text
+    if (tip !== undefined && el.title !== tip) el.title = tip
   }
   const apply = (): void => {
     for (const [name, el] of frames ?? []) {
@@ -65,8 +70,8 @@ export function createTeamRoleDecorator(): TeamRoleDecorator {
       const text = roleText(roles, id)
       el.classList.toggle('is-superagent-router', text === '总工')
       el.classList.toggle('is-superagent-member', text?.startsWith('成员') === true)
-      const line = el.querySelector('.nm')
-      if (line !== null) badge(line, 'sa-role', text)
+      const line = el.querySelector('.sub-row')
+      if (line !== null) badge(line, 'sa-role', text === undefined ? undefined : roleLabel(text), text)
     }
   }
   return {
