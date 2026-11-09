@@ -1,6 +1,6 @@
 # superagent team (design v4)
 
-With `superagent: true` in the plugin config, this host runs superagent's own domain engine. The engine is upstream `src/core`, vendored unchanged under `src/superagent/upstream/dsh-superagent`.
+Unless the plugin config says `superagent: false`, this host runs superagent's own domain engine, idle until a team is bound. Sessions outside a team are not offered the team's tools. The engine is upstream `src/core`, vendored unchanged under `src/superagent/upstream/dsh-superagent`.
 
 The flow follows upstream's model:
 

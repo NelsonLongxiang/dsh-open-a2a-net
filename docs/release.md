@@ -3,6 +3,15 @@
 > 2026-10-21 立，源自 K3 测试章前瞻（cordis 事故线收尾）：两项与「锁重生成 × 环境策略」
 > 交互的坑，已实测咬人，故入档为纪律。
 
+## 下一版本候选（待评审，未发布）
+
+### superagent 团队默认开启（属主 2026-11-09）
+
+- `superagent` 默认从 `false` 改为 `true`：不用改配置、不用重启，属主在画布上组队并在「团队」页绑定即可。想关的主机配 `superagent: false`。
+- 没绑定团队的主机上，引擎只是空转，不接单、不开团队地址、不发任何消息；会多出 `<a2a home>/superagent/` 目录和可用的「团队」页。
+- 不在团队里的会话看不到团队的 8 个工具（`superagent_*`、`a2a_ticket_*`）；会话成为总工或成员时才显示。
+- 独立的 `a2a-net serve` 节点没有会话，始终不跑引擎。
+
 ## 0.8.1-preview.1（预览版，已发布到 npm 的 preview 标签）
 
 - 状态（2026-11-09）：标签 `v0.8.1-preview.1` 指向 4efc1f6。2026-11-09T06:40:21Z 发布到 npmjs，dist-tag 为 `preview`，`latest` 仍是 0.7.0。shasum `e962e8e52433ddc09b6aab246d396d1d9e36702d`，integrity `sha512-ERj1ydkRiWgO3rYcf7bQCManbnYQiGfBn3Iv9d8rS/jG5OZMD5rGZdmFeV4Kzr+oopgR2ZKvm4h56LT2ffwWfw==`。从 npmjs 回读的包与审计过的包逐字节相同。未发布到 Gitea 私仓。

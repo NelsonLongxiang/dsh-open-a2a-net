@@ -7,6 +7,8 @@
  * - a global tool guard refuses every call outside the role's list, whatever preset the session runs under, including
  *   calls from a subagent of a role session (it inherits the role);
  * - each live role session's visible tools are restricted to the same list, so its model is not offered the rest.
+ * - every other session is not offered the team's tools at all: the engine is on by default, and a session outside a team
+ *   has no use for them.
  *
  * The router decides only through `superagent_*`. A member keeps upstream's work tools without the ones that reach other
  * sessions (`subagent`, `send_message`, `list_agents`, `interrupt_agent`), plus `a2a_ticket_report` and `a2a_file_fetch`:
@@ -35,6 +37,9 @@ export const MEMBER_WORK_TOOLS: readonly string[] = ['read', 'write', 'edit', 'r
 /** A member's tools: its work tools, its report, and the file channel for inputs it was handed. */
 export const MEMBER_TOOLS: readonly string[] = [...MEMBER_WORK_TOOLS, 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_file_fetch']
 
+/** The tools only a team's sessions have: a session with no role is not offered them. */
+export const TEAM_TOOLS: readonly string[] = [...ROUTER_TOOLS, 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback']
+
 /** The tool runtime's own transport (programmatic tool calling); never restricted, every inner call is guarded. */
 const TRANSPORT = new Set(['run_code'])
 
@@ -54,7 +59,7 @@ export function roleToolRefusal(role: Role, name: string): string | undefined {
 export interface RoleAgent {
   readonly id: unknown
   readonly session?: { readonly header?: { readonly parentSession?: unknown } }
-  readonly ctx?: { readonly tools?: { get(name: string, scope?: object): unknown; restrict(filter: { allow: readonly string[] }): () => void } }
+  readonly ctx?: { readonly tools?: { get(name: string, scope?: object): unknown; restrict(filter: { allow?: readonly string[]; deny?: readonly string[] }): () => void } }
 }
 
 /**
@@ -87,7 +92,7 @@ const PARENT_DEPTH = 8
 
 export class RoleTools {
   /** Restrictions in force, by session id: the role they were made for and their disposer. */
-  private readonly applied = new Map<string, { role: Role; dispose: () => void }>()
+  private readonly applied = new Map<string, { role: Role | undefined; dispose: () => void }>()
 
   constructor(private readonly d: RoleToolsDeps) {}
 
@@ -111,17 +116,20 @@ export class RoleTools {
   }
 
   /**
-   * Bring one live agent's visible tools in line with its role now: restrict a role session to its list, lift the
-   * restriction of a session that no longer has one. Visibility only; the guard is the rule.
+   * Bring one live agent's visible tools in line with its role now: restrict a role session to its list, and keep the
+   * team's tools from a session with no role. Visibility only; the guard is the rule.
    */
   sync(agent: RoleAgent): void {
     const id = String(agent.id)
     const role = this.d.roleOf(id)
     const current = this.applied.get(id)
-    if (current?.role === role) return
+    if (current !== undefined && current.role === role) return
     if (current !== undefined) { this.applied.delete(id); try { current.dispose() } catch { /* the scope is gone */ } }
-    const tools = agent.ctx?.tools
-    if (role === undefined || tools === undefined) return
+    // Runs for every session now, in `agent/created`: a context that has not injected the tools service throws on the read.
+    let tools: NonNullable<RoleAgent['ctx']>['tools']
+    try { tools = agent.ctx?.tools } catch { return }
+    if (tools === undefined) return
+    if (role === undefined) { this.hideTeamTools(id, agent, tools); return }
     // The registry refuses names it does not know, so restrict to the role's tools this agent can see — through its own
     // scope, which includes its preset's tools (bash, read, edit…). The global view misses them, and restricting to it
     // would hide a member's work tools. Without the scope key, visibility stays as it is: the guard is the rule.
@@ -132,9 +140,18 @@ export class RoleTools {
     try { this.applied.set(id, { role, dispose: tools.restrict({ allow }) }) } catch (error) { this.d.logger.warn('superagent: tools of %s not restricted: %s', id, String(error)) }
   }
 
+  /** A session with no role: the names its scope has of the team's tools come off its list. */
+  private hideTeamTools(id: string, agent: RoleAgent, tools: NonNullable<NonNullable<RoleAgent['ctx']>['tools']>): void {
+    const scope = scopeKeyOf(agent.ctx)
+    if (scope === undefined) return
+    const deny = TEAM_TOOLS.filter(name => { try { return tools.get(name, scope) !== undefined } catch { return false } })
+    if (deny.length === 0) return
+    try { this.applied.set(id, { role: undefined, dispose: tools.restrict({ deny }) }) } catch (error) { this.d.logger.warn('superagent: team tools of %s not hidden: %s', id, String(error)) }
+  }
+
   /** A disposed agent's restriction went with its scope. */
   forget(sessionId: string): void { this.applied.delete(sessionId) }
 
   /** Session ids whose visible tools are restricted now, with their role (for the state face and tests). */
-  list(): Record<string, Role> { return Object.fromEntries([...this.applied].map(([id, { role }]) => [id, role])) }
+  list(): Record<string, Role> { return Object.fromEntries([...this.applied].flatMap(([id, { role }]) => role === undefined ? [] : [[id, role]])) }
 }

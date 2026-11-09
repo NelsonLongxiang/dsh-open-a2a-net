@@ -19,7 +19,7 @@
       # Node-resolvable package name — must stay in sync with package.json
       # `name`. Quoted because `@` is a reserved YAML indicator.
       name: '@nelsonlongxiang/dsh-open-a2a-net'
-    # superagent team presets (opt-in teams only; harmless elsewhere). A team's router and its members are ordinary
+    # superagent team presets (used only by a team's sessions; harmless elsewhere). A team's router and its members are ordinary
     # sessions the owner creates under these presets; the host refuses a router or member running any other preset, so
     # the role's boundary is the composition itself, not instructions in cards. Adapted from upstream dsh-superagent's
     # main-Session and executor presets; the persona carries the role.

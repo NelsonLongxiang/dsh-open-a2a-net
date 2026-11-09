@@ -2024,7 +2024,7 @@ export function apply(ctx: Context, config: Config): void {
     warn:code=>logger.warn('a2a: sourced followup (%s); check ledger persistence and original task',code),
   })
   const followupRelay = (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string, taskExpected=true): 'inserted'|void => followupDelivery.deliver(agent,text,sender,localFrom,taskId,callerKey,taskExpected)
-  // superagent design v4, PR-B: superagent's domain engine in this host (off unless config.superagent). The router gets
+  // superagent design v4, PR-B: superagent's domain engine in this host (on by default, idle until a team is bound). The router gets
   // candidate cards in its own session (host relay, not A2A) and decides only through the superagent_* tools.
   const superagentHost: SuperagentHost | undefined = config.superagent === true ? new SuperagentHost({
     home: join(home, 'a2a'), logger,
