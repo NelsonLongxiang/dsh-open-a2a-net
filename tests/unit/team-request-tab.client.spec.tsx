@@ -132,6 +132,56 @@ describe('files', () => {
   })
 })
 
+describe('dragging files in', () => {
+  const file = (name: string) => new File(['x'], name)
+  const transfer = (files: File[], over: Record<string, unknown> = {}) => ({ types: ['Files'], files, items: files.map(() => ({ webkitGetAsEntry: () => ({ isDirectory: false }) })), ...over })
+  const view = async () => { await waitFor(box); return box().closest('label')!.parentElement! }
+
+  it('takes several files dropped anywhere on the view, and they are all sent', async () => {
+    const f = serve(bound)
+    render(<TeamRequestTab t={t} />)
+    await waitFor(box)
+    fireEvent.drop(screen.getByText(en['team.pick']), { dataTransfer: transfer([file('a.txt'), file('b.txt'), file('c.txt')]) })
+    for (const name of ['a.txt', 'b.txt', 'c.txt']) expect(screen.getByText(name)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: en['team.send'] }))
+    await waitFor(() => { expect(posts(f)).toHaveLength(1) })
+    expect(String(posts(f)[0]!.text).split('\n')).toEqual([REF('a.txt'), REF('b.txt'), REF('c.txt')])
+  })
+
+  it('takes a drop on the text box too, and adds to what is already there', async () => {
+    serve(bound)
+    render(<TeamRequestTab t={t} />)
+    fireEvent.drop(await waitFor(box), { dataTransfer: transfer([file('a.txt')]) })
+    fireEvent.drop(box(), { dataTransfer: transfer([file('b.txt'), file('c.txt')]) })
+    for (const name of ['a.txt', 'b.txt', 'c.txt']) expect(screen.getByText(name)).toBeTruthy()
+  })
+
+  it('marks the view while files are over it', async () => {
+    serve(bound)
+    render(<TeamRequestTab t={t} />)
+    const root = await view()
+    fireEvent.dragOver(root, { dataTransfer: transfer([]) })
+    expect(root.className).toContain('dragging')
+    fireEvent.dragLeave(root, { dataTransfer: transfer([]), relatedTarget: document.body })
+    expect(root.className).not.toContain('dragging')
+  })
+
+  it('refuses a folder and adds nothing from that drop', async () => {
+    serve(bound)
+    render(<TeamRequestTab t={t} />)
+    fireEvent.drop(await view(), { dataTransfer: transfer([file('a.txt'), file('dir')], { items: [{ webkitGetAsEntry: () => ({ isDirectory: false }) }, { webkitGetAsEntry: () => ({ isDirectory: true }) }] }) })
+    expect(screen.getByRole('status').textContent).toBe(en['team.noFolders'])
+    expect(screen.queryByText('a.txt')).toBeNull()
+  })
+
+  it('leaves a drag of text to the browser', async () => {
+    serve(bound)
+    render(<TeamRequestTab t={t} />)
+    const notPrevented = fireEvent.drop(await waitFor(box), { dataTransfer: { types: ['text/plain'], files: [], items: [] } })
+    expect(notPrevented).toBe(true)
+  })
+})
+
 describe('registration', () => {
   function client() {
     const types: Array<Record<string, any>> = [], slots: Array<Record<string, unknown>> = []
