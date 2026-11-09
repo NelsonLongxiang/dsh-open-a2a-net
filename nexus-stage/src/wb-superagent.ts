@@ -33,6 +33,7 @@ export interface SaTicket {
   readonly channels: ReadonlyArray<{ source: string; thread: string }>
   readonly ended?: { at: string; outcome: string; reason?: string }
   readonly attention?: { question: string }
+  readonly follows?: ReadonlyArray<{ thread: string; closed?: { outcome: string } }>
   readonly delivery?: { error: string; at: string }
   readonly assignments: readonly SaAssignment[]
   readonly inputs: readonly unknown[]
@@ -52,6 +53,7 @@ export interface SaState {
   readonly settings: SaSettings; readonly policyVersion: string
   /** Design v5: why the bound canvas cannot run as the team, and the canvas teams this host owns (to bind one). */
   readonly canvasProblem?: string
+  readonly pullRequestProblem?: string
   /** v5 acceptance F4: why a session this host serves another team with cannot take work (wrong preset). */
   readonly servesProblem?: string
   readonly canvases?: readonly string[]
@@ -101,6 +103,7 @@ export function problemsOf(state: SaState, now: number): SaProblem[] {
   if (state.settings.router === undefined) out.push({ tone: 'danger', text: '还没有指定总工：需求会停在候选里，没人决定（到「设置」里选）' })
   if (state.settings.members.length === 0 && state.settings.remoteMembers.length === 0) out.push({ tone: 'warn', text: '成员池是空的：在画布团队里加成员，接下的工单才有人做' })
   if (state.settings.paused) out.push({ tone: 'warn', text: '执行已暂停：新工单不会派给成员' })
+  if (state.pullRequestProblem !== undefined) out.push({ tone: 'warn', text: `读取 PR 状态失败，稍后重试：${state.pullRequestProblem}` })
   for (const [entry, health] of Object.entries(state.a2a.health)) if (health.state === 'error') out.push({ tone: 'danger', text: `A2A Source（${entry}）出错：${health.detail ?? ''}` })
   for (const thread of state.threads) {
     if (thread.evaluating !== null && Date.parse(thread.evaluating.deadline) < now) out.push({ tone: 'warn', text: `「${firstText(thread)}」等总工决定已超时` })
@@ -242,6 +245,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     kv(card, '授权', `${ticket.mandate.strength === 'explicit' ? '明确请求' : '推断'} · ${ticket.mandate.actor.source}:${ticket.mandate.actor.id}`)
     const binding = last?.executor.bindings.find(b => b.ticketId === ticket.id)
     if (binding !== undefined) kv(card, '成员', sessionName(binding.member))
+    for (const f of ticket.follows ?? []) if (f.thread.startsWith('github:')) kv(card, 'PR', `${f.thread.slice(7)}${f.closed !== undefined ? ` · ${f.closed.outcome === 'merged' ? '已合并' : '已关闭'}` : ' · 等待合并'}`)
     if (ticket.attention !== undefined) kv(card, '问题', ticket.attention.question)
     if (ticket.delivery !== undefined) kv(card, '投递', ticket.delivery.error)
     const report = latestReport(ticket)

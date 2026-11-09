@@ -60,7 +60,7 @@ export interface TeamSettings {
    */
   readonly repos: Readonly<Record<string, string>>
   /** Who may originate work, per Source, in that Source's own identities (upstream: identities are never mapped across Sources). */
-  readonly allowed: { readonly workbench: readonly string[]; readonly a2a: readonly string[] }
+  readonly allowed: { readonly workbench: readonly string[]; readonly a2a: readonly string[]; /** GitHub logins whose comments on a followed pull request are a person's. */ readonly github: readonly string[] }
   /** Agents whose messages may become inferred candidates, per Source (only the A2A Source has bots). */
   readonly bots: { readonly a2a: readonly string[] }
   /** Whether inferred candidates are assessed and accepted (upstream accept mode). */
@@ -91,7 +91,7 @@ export const DEFAULT_SETTINGS: TeamSettings = {
   members: [],
   remoteMembers: [],
   repos: {},
-  allowed: { workbench: [WORKBENCH_OWNER], a2a: [] },
+  allowed: { workbench: [WORKBENCH_OWNER], a2a: [], github: [] },
   bots: { a2a: [] },
   acceptMode: 'observe',
   rules: [],
@@ -125,6 +125,8 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const a2a = 'a2a' in allowedRaw ? list(allowedRaw.a2a, 'allowed.a2a') : current.allowed.a2a
   if (typeof workbench === 'string') return { ok: false, error: workbench }
   if (typeof a2a === 'string') return { ok: false, error: a2a }
+  const github = 'github' in allowedRaw ? list(allowedRaw.github, 'allowed.github') : current.allowed.github
+  if (typeof github === 'string') return { ok: false, error: github }
   const sourcesRaw = (r.sources ?? {}) as Record<string, unknown>
   const flag = (name: SourceName): boolean | string => !(name in sourcesRaw) ? current.sources[name] : typeof sourcesRaw[name] === 'boolean' ? sourcesRaw[name] as boolean : `sources.${name} must be true or false`
   const wb = flag('workbench'), a = flag('a2a')
@@ -171,7 +173,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
       repos[member] = repo
     }
   } else repos = Object.fromEntries(Object.entries(current.repos ?? {}).filter(([member]) => memberIds.has(member)))
-  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a }, bots: { a2a: bots }, acceptMode, rules, sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
+  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/
@@ -211,7 +213,7 @@ export function parseStoredSettings(raw: unknown): { ok: true; settings: TeamSet
 export function policyVersion(settings: TeamSettings): string {
   const canonical = JSON.stringify({
     mode: settings.acceptMode,
-    allowed: { workbench: [...settings.allowed.workbench].sort(), a2a: [...settings.allowed.a2a].sort() },
+    allowed: { workbench: [...settings.allowed.workbench].sort(), a2a: [...settings.allowed.a2a].sort(), ...((settings.allowed.github?.length ?? 0) > 0 ? { github: [...settings.allowed.github].sort() } : {}) },
     bots: { a2a: [...settings.bots.a2a].sort() },
     rules: [...settings.rules].sort((a, b) => (a.name < b.name ? -1 : 1)).map(rule => [rule.name, rule.text, rule.enabled]),
   })
@@ -219,7 +221,7 @@ export function policyVersion(settings: TeamSettings): string {
 }
 
 const allowedOn = (settings: TeamSettings, source: string, actor: string): boolean =>
-  (source === 'workbench' || source === 'a2a') && settings.allowed[source].includes(actor)
+  (source === 'workbench' || source === 'a2a' || source === 'github') && settings.allowed[source]?.includes(actor) === true
 const botOn = (settings: TeamSettings, source: string, actor: string): boolean => (source === 'a2a' && settings.bots.a2a.includes(actor)) || (source === 'workbench' && actor === WORKBENCH_CLI)
 /**
  * What a settings change means to each open ticket, in upstream's PolicyEffect terms (the engine records it as the
@@ -298,6 +300,8 @@ export function teamPolicy(settings: TeamSettings): Policy {
 export function teamScope(settings: () => TeamSettings): SourceScope {
   return {
     scope: ({ source, meta }) => {
+      // GitHub is not a Source of new work: its Triggers exist only for pull requests a ticket already follows.
+      if (source === 'github') return { listened: true, observed: false }
       if ((source !== 'workbench' && source !== 'a2a') || !settings().sources[source]) return { listened: false, reason: 'sourceOff' }
       // The A2A Source's own trust filter (a2a-watch): a host-verified proof and an operator link, no loop, no receipt.
       return source === 'a2a' ? a2aScope({ meta }) : { listened: true, observed: false }
