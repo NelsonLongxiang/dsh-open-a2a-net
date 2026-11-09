@@ -73,6 +73,8 @@ export interface TeamSettings {
   readonly evalTimeoutMs: number
   /** Pause processing (upstream docs/003): Sources still record Triggers; Evals, dispatch and replies wait. */
   readonly paused: boolean
+  /** Who reviews the team's pull requests: one A2A address the owner set and linked (design D5). Absent: nobody is asked. */
+  readonly reviewer?: string
 }
 
 /** A canvas team name as the canvas store takes it: 1–40 characters, no `/`, not all digits, no surrounding space. */
@@ -134,6 +136,12 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   if (typeof a === 'string') return { ok: false, error: a }
   const evalTimeoutMs = 'evalTimeoutMs' in r ? r.evalTimeoutMs : current.evalTimeoutMs
   if (typeof evalTimeoutMs !== 'number' || !Number.isSafeInteger(evalTimeoutMs) || evalTimeoutMs < 30_000 || evalTimeoutMs > 24 * 3_600_000) return { ok: false, error: 'evalTimeoutMs must be 30000–86400000' }
+  let reviewer = current.reviewer
+  if ('reviewer' in r) {
+    if (r.reviewer === null || r.reviewer === '') reviewer = undefined
+    else if (typeof r.reviewer === 'string' && /^[^\s/@]+(\/[^\s/@]+){1,2}(@[0-9a-f]{8})?$/.test(r.reviewer)) reviewer = r.reviewer
+    else return { ok: false, error: 'reviewer must be an A2A address, or null to clear' }
+  }
   const paused = 'paused' in r ? r.paused : current.paused
   if (typeof paused !== 'boolean') return { ok: false, error: 'paused must be true or false' }
   const botsRaw = (r.bots ?? {}) as Record<string, unknown>
@@ -173,7 +181,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
       repos[member] = repo
     }
   } else repos = Object.fromEntries(Object.entries(current.repos ?? {}).filter(([member]) => memberIds.has(member)))
-  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
+  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/

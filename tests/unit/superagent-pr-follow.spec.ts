@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { parsePullRequest } from '../../src/superagent/host/pr-follow.ts'
+import { ReviewRequests } from '../../src/superagent/host/review-requests.ts'
+import { DEFAULT_SETTINGS, parseSettings } from '../../src/superagent/host/policy.ts'
 
 const URL = 'https://github.com/o/net/pull/7'
 const canvasOf = (ids: string[]) => (name: string) => name === 'team' ? { local: ids, remote: [] } : undefined
@@ -115,5 +117,64 @@ describe('a ticket follows its pull request', () => {
       await m.poll()
       expect((m.h.state() as { pullRequestProblem?: string }).pullRequestProblem).toBeUndefined()
     } finally { await m.h.stop() }
+  })
+})
+
+describe('asking for review', () => {
+  const reviewer = 'dsh/f49961b0', head = 'abcdef1234567890', next = '1234567abcdefff0'
+  function channel(ask: (address: string, text: string) => Promise<string | undefined> = async () => 'direct-1', who: string | null = reviewer) {
+    const asked: Array<[string, string]> = [], notes: Array<[string, string]> = []
+    const r = new ReviewRequests({ path: join(mkdtempSync(join(tmpdir(), 'sa-review-')), 'r.json'), reviewer: () => who ?? undefined, logger: { warn: () => {} }, note: (t, x) => { notes.push([t, x]) },
+      ask: async (a, x) => { asked.push([a, x]); return await ask(a, x) } })
+    return { r, asked, notes }
+  }
+  const receipt = (task: string, text: string, actor = reviewer, proof = 'origin-claim') => ({ actor: { source: 'a2a', id: actor }, text, at: '2026-11-09T00:00:00Z', meta: { receiptFor: task, proof } }) as never
+
+  it('asks once per head, naming only the pull request and its commit', async () => {
+    const m = channel()
+    await m.r.opened('o/net#7', head, URL, 't1')
+    await m.r.opened('o/net#7', head, URL, 't1')
+    expect(m.asked).toHaveLength(1)
+    expect(m.asked[0]![0]).toBe(reviewer)
+    expect(m.asked[0]![1]).toContain(URL)
+    expect(m.asked[0]![1]).toContain(head)
+    await m.r.opened('o/net#7', next, URL, 't1')
+    expect(m.asked).toHaveLength(2)
+  })
+
+  it('asks nobody without a reviewer, and records nothing when the reviewer is not linked', async () => {
+    const none = channel(undefined, null)
+    await none.r.opened('o/net#7', head, URL, 't1')
+    expect(none.asked).toHaveLength(0)
+    const unlinked = channel(async () => undefined)
+    await unlinked.r.opened('o/net#7', head, URL, 't1')
+    expect(unlinked.r.list()).toHaveLength(0)
+  })
+
+  it('a PASS naming the commit passes; anything else does not; only the reviewer on the latest request counts', async () => {
+    const m = channel()
+    await m.r.opened('o/net#7', head, URL, 't1')
+    m.r.received(receipt('direct-1', 'PASS @ abcdef1', 'someone/else'))
+    m.r.received(receipt('direct-1', 'PASS @ abcdef1', reviewer, 'unbound'))
+    expect(m.notes).toHaveLength(0)
+    m.r.received(receipt('direct-1', 'PASS @ abcdef1'))
+    expect(m.notes[0]![1]).toContain('PASS')
+    expect(m.r.list()[0]!.verdict).toMatchObject({ pass: true })
+    const bare = channel()
+    await bare.r.opened('o/net#7', head, URL, 't1')
+    bare.r.received(receipt('direct-1', 'PASS'))
+    expect(bare.r.list()[0]!.verdict).toMatchObject({ pass: false })
+    const stale = channel(async (_a, x) => x.includes(head) ? 'direct-old' : 'direct-new')
+    await stale.r.opened('o/net#7', head, URL, 't1')
+    await stale.r.opened('o/net#7', next, URL, 't1')
+    stale.r.received(receipt('direct-old', 'PASS @ abcdef1'))
+    expect(stale.notes).toHaveLength(0)
+  })
+
+  it('settings take one reviewer address and clear it', () => {
+    expect(parseSettings({ reviewer }, DEFAULT_SETTINGS)).toMatchObject({ ok: true, settings: { reviewer } })
+    expect(parseSettings({ reviewer: 'not an address' }, DEFAULT_SETTINGS)).toMatchObject({ ok: false })
+    const set = parseSettings({ reviewer }, DEFAULT_SETTINGS) as { ok: true; settings: typeof DEFAULT_SETTINGS }
+    expect((parseSettings({ reviewer: null }, set.settings) as { settings: { reviewer?: string } }).settings.reviewer).toBeUndefined()
   })
 })
