@@ -54,6 +54,7 @@ export interface SaState {
   /** Design v5: why the bound canvas cannot run as the team, and the canvas teams this host owns (to bind one). */
   readonly canvasProblem?: string
   readonly pullRequestProblem?: string
+  readonly reviews?: ReadonlyArray<{ ticketId: string; head: string; verdict?: { pass: boolean } }>
   /** v5 acceptance F4: why a session this host serves another team with cannot take work (wrong preset). */
   readonly servesProblem?: string
   readonly canvases?: readonly string[]
@@ -246,6 +247,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     const binding = last?.executor.bindings.find(b => b.ticketId === ticket.id)
     if (binding !== undefined) kv(card, '成员', sessionName(binding.member))
     for (const f of ticket.follows ?? []) if (f.thread.startsWith('github:')) kv(card, 'PR', `${f.thread.slice(7)}${f.closed !== undefined ? ` · ${f.closed.outcome === 'merged' ? '已合并' : '已关闭'}` : ' · 等待合并'}`)
+    for (const r of last?.reviews ?? []) if (r.ticketId === ticket.id) kv(card, '评审', `${r.head.slice(0, 7)} · ${r.verdict === undefined ? '等待评审' : r.verdict.pass ? 'PASS' : '未通过'}`)
     if (ticket.attention !== undefined) kv(card, '问题', ticket.attention.question)
     if (ticket.delivery !== undefined) kv(card, '投递', ticket.delivery.error)
     const report = latestReport(ticket)

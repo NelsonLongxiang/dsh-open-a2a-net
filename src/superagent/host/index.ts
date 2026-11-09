@@ -19,6 +19,7 @@ import { Engine, UserError, reasonText, ticketStage, type Assessor, type Candida
 import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
 import { MemberExecutor, transientError, type MemberTurn } from './executor.ts'
+import { ReviewRequests } from './review-requests.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { MEMBER_PRESET, ROUTER_PRESET } from './role-tools.ts'
@@ -195,6 +196,7 @@ export class SuperagentHost {
   /** Candidates waiting to reach the router, by evalId; delivered ones stay until the engine releases them. */
   private readonly candidates = new Map<string, { candidate: Candidate; delivered: boolean }>()
   private readonly prs: PrFollower
+  private readonly reviews: ReviewRequests
   private disposeTimer: (() => void) | undefined
   /** The A2A executor (PR-C1): the owner's fixed member pool, one worker slot each. */
   readonly executor: MemberExecutor
@@ -247,7 +249,7 @@ export class SuperagentHost {
     }
     this.a2a = new A2aSource({
       dir, homeUrl: () => d.homeUrl?.(), apiKey: () => d.apiKey?.(), enabled: () => this.settingsValue.sources.a2a,
-      receive: trigger => { const result = this.engine.receive(trigger as unknown as Trigger); queueMicrotask(() => this.pass()); return result },
+      receive: trigger => { this.reviews.received(trigger as unknown as Trigger); const result = this.engine.receive(trigger as unknown as Trigger); queueMicrotask(() => this.pass()); return result },
       ticket: id => this.store.tickets.get(id) as never,
       resultPending: (ticketId, task) => this.resultPending(ticketId, task),
       logger: d.logger, ...(d.runCli !== undefined ? { run: d.runCli } : {}), ...(d.teamSend !== undefined ? { teamSend: d.teamSend } : {}), ...(d.a2aPollSeconds !== undefined ? { pollSeconds: d.a2aPollSeconds } : {}),
@@ -255,6 +257,12 @@ export class SuperagentHost {
     this.prs = new PrFollower({
       path: join(dir, 'pr-follow.json'), tickets: () => this.store.tickets.list(), engine: () => this.engine, gh: d.gh ?? defaultGh,
       allowed: () => this.settingsValue.allowed.github, paused: () => this.settingsValue.paused, logger: d.logger,
+      onOpen: (thread, head, url, ticketId) => this.reviews.opened(thread, head, url, ticketId),
+    })
+    this.reviews = new ReviewRequests({
+      path: join(dir, 'reviews.json'), reviewer: () => this.settingsValue.reviewer, logger: d.logger,
+      ask: (address, text) => this.a2a.askReview(address, text),
+      note: (ticketId, text) => { try { this.engine.note(ticketId, text); this.pass() } catch (error) { this.d.logger.warn('superagent: review verdict of %s not noted: %s', ticketId, String(error)) } },
     })
     this.engine = new Engine({
       repo: this.store,
@@ -940,6 +948,7 @@ export class SuperagentHost {
       a2a: { enabled: this.settingsValue.sources.a2a, address: this.a2a.address ?? null, health: this.a2a.health },
       refusals: { counts: Object.fromEntries(this.refusalCounts), recent: [...this.refusalRecent] },
       ...(this.prs.problem !== undefined ? { pullRequestProblem: this.prs.problem } : {}),
+      reviews: this.reviews.list(),
       executor: { canvas: this.settingsValue.canvas ?? null, members: this.settings.members, remoteMembers: this.settings.remoteMembers, bindings: this.executor.list() },
       ...(this.settingsValue.serves !== undefined ? { serves: this.settingsValue.serves } : {}),
       ...(this.store.loadError !== undefined ? { error: this.store.loadError } : {}),

@@ -46,6 +46,8 @@ export interface PrFollowDeps {
   /** GitHub logins whose comments are a person's (settings `allowed.github`). */
   readonly allowed: () => readonly string[]
   readonly paused: () => boolean
+  /** An open pull request was read: the review channel looks at its head. */
+  readonly onOpen?: (thread: string, head: string, url: string, ticketId: string) => Promise<void>
   readonly logger: { warn(format: string, ...args: unknown[]): void }
 }
 
@@ -103,7 +105,7 @@ export class PrFollower {
   private async readThread(id: string): Promise<void> {
     const hash = id.lastIndexOf('#')
     const repo = id.slice(0, hash), number = id.slice(hash + 1)
-    const pull = await this.api<{ state?: string; merged?: boolean; merged_at?: string | null; closed_at?: string | null }>(`repos/${repo}/pulls/${number}`)
+    const pull = await this.api<{ state?: string; merged?: boolean; merged_at?: string | null; closed_at?: string | null; head?: { sha?: string }; html_url?: string }>(`repos/${repo}/pulls/${number}`)
     const [issue, reviews, inline] = await Promise.all([
       this.api<GhComment[]>(`repos/${repo}/issues/${number}/comments?per_page=100`),
       this.api<GhComment[]>(`repos/${repo}/pulls/${number}/reviews?per_page=100`),
@@ -126,6 +128,8 @@ export class PrFollower {
       }
       if (fresh.length > 0) { this.seen[id] = before.slice(-SEEN_CAP); this.save() }
     }
+    const owner = this.d.tickets().find(t => !t.ended && (t.follows ?? []).some(f => f.own && !f.closed && f.thread === `${GITHUB_SOURCE}:${id}`))
+    if (pull.state !== 'closed' && owner !== undefined && typeof pull.head?.sha === 'string') await this.d.onOpen?.(id, pull.head.sha, pull.html_url ?? `https://github.com/${repo}/pull/${number}`, owner.id)
     if (pull.state === 'closed') {
       this.d.engine().threadClosed({ source: GITHUB_SOURCE, id }, pull.merged === true ? 'merged' : 'closed', pull.merged_at ?? pull.closed_at ?? new Date().toISOString())
     }
