@@ -801,7 +801,10 @@ export class SuperagentHost {
     if (router === undefined || ticket === undefined) return
     const stage = ticket.ended ? { stage: 'ended', outcome: ticket.ended.outcome } : ticketStage(ticket)
     const question = ticket.attention !== undefined ? `\nquestion for the person (send it with superagent_reply purpose attention, copied exactly): ${ticket.attention.question}` : ''
-    this.d.deliverToSession(router, `[superagent report] ticket ${ticket.id} «${ticket.title}» · ${state} · stage ${JSON.stringify(stage)}\n${clip(summary, 2_000)}${question}`)
+    // The owner asked for this in the router's own session, and reads the answer there: superagent_reply goes to the team page.
+    const inChat = (state === 'ready' || state === 'failed' || state === 'dropped' || ticket.attention !== undefined) && ticket.origin.triggerIds.some(id => this.ruleChanges.filedFromChat(id))
+      ? '\nThe owner asked for this in this session: besides superagent_reply, tell them here in plain words what came of it, or what you need from them.' : ''
+    this.d.deliverToSession(router, `[superagent report] ticket ${ticket.id} «${ticket.title}» · ${state} · stage ${JSON.stringify(stage)}\n${clip(summary, 2_000)}${question}${inChat}`)
   }
 
   /** The team's A2A address: requests to it are Triggers, so they take no target queue slot. */
