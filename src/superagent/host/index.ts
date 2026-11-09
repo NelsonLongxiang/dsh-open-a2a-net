@@ -30,6 +30,10 @@ import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, ob
 export interface SuperagentHostDeps {
   /** The a2a home directory; state lives under `<home>/superagent/`. */
   readonly home: string
+  /** Where this team's state lives instead, when it is not the instance's primary team (design M2). */
+  readonly stateDir?: string
+  /** Whether another team on this instance holds a canvas: one canvas is one team. */
+  readonly canvasTaken?: (canvas: string, self: SuperagentHost) => boolean
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
   /** Put text into a live local session as a follow-up; false when the session is not live here. */
   readonly deliverToSession: (sessionId: string, text: string) => boolean
@@ -235,7 +239,7 @@ export class SuperagentHost {
   private readonly refusalRecent: Array<{ at: string; rule: string; caller?: string; target?: string }> = []
 
   constructor(private readonly d: SuperagentHostDeps) {
-    const dir = join(d.home, 'superagent')
+    const dir = d.stateDir ?? join(d.home, 'superagent')
     this.settingsPath = join(dir, 'settings.json')
     this.settingsValue = this.loadSettings()
     this.store = new JsonRepositories(join(dir, 'state.json'))
@@ -1078,6 +1082,7 @@ export class SuperagentHost {
     // Design v5: the canvas named must exist here, and the router must be one of its local sessions.
     if (parsed.settings.canvas !== undefined && this.d.canvasTeam?.(parsed.settings.canvas) === undefined) return { ok: false, error: `no canvas team ${parsed.settings.canvas} on this host: compose it on the canvas (建队) first` }
     if (parsed.settings.router !== undefined && parsed.settings.canvas === undefined) return { ok: false, error: 'bind the team to its canvas team (canvas) before naming its router' }
+    if (parsed.settings.canvas !== undefined && this.d.canvasTaken?.(parsed.settings.canvas, this) === true) return { ok: false, error: `canvas ${parsed.settings.canvas} is already another team's on this instance` }
     const next = this.derive(parsed.settings)
     const team = parsed.settings.canvas !== undefined ? this.d.canvasTeam?.(parsed.settings.canvas) : undefined
     if (parsed.settings.router !== undefined && team !== undefined && !team.local.includes(parsed.settings.router)) return { ok: false, error: `router must be a local session of the canvas team ${parsed.settings.canvas}` }

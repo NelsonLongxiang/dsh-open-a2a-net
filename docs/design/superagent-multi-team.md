@@ -14,7 +14,7 @@ Today one DSH instance runs one team. `SuperagentHost` holds one settings file, 
 
 - **M1 One host object per team.** `SuperagentHost` stays a single team. A new registry, `SuperagentTeams`, holds one per team, so each team keeps its own settings, rules, dispatch rules, accept mode, tickets, A2A address, repositories and reviewer.
 - **M2 Existing data does not move.** `<a2a home>/superagent/` remains the primary team. A further team lives in `<a2a home>/superagent/teams/<id>/`, where `id` is a short hash of its canvas name.
-- **M3 Old callers keep working.** The control route takes an optional team (`team` in a POST body, `?team=` on a GET). Without one it means the primary team, so the CLI and existing scripts are unchanged. `GET /__dsh_a2a/superagent/teams` lists the teams.
+- **M3 Old callers keep working.** The control route takes an optional team (`teamId` in a POST body, `?teamId=` on a GET; `team` already means something else there). Without one it means the primary team, so the CLI and existing scripts are unchanged. `GET /__dsh_a2a/superagent/teams` lists the teams.
 - **M4 One session, one role, across all teams.** The rule that a team session sits in no other canvas already gives this; the registry enforces it across teams as well. Tools, the role guard and turn events find the team from the calling session.
 - **M5 A new team is a new binding.** The owner composes a canvas team and adds it on the team page by naming its canvas and router, as binding works today. The team page gets a team switcher.
 - **M6 Remote members.** Signed host-to-host calls carry the member, so each one goes to the team that holds that member with that pinned key. A session serving another host's team stays one role.

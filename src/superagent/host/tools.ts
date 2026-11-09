@@ -107,10 +107,12 @@ export function attentionText(text: string, question: string): string {
 /** The most a superagent tool result shows the model, in characters of its JSON. */
 export const SAID_CAP = 12_000
 
-export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost | undefined): void {
+export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string) => SuperagentHost | undefined): void {
+  /** The team the calling session has a role in. */
+  const host = (exec: { agent?: { id: unknown } }): SuperagentHost | undefined => exec.agent === undefined ? undefined : teamOf(String(exec.agent.id))
   /** The host, when the calling session is the team's router; undefined otherwise. */
   const asRouter = (exec: { agent?: { id: unknown } }): SuperagentHost | undefined => {
-    const h = host()
+    const h = host(exec)
     return h !== undefined && h.routerSession !== undefined && exec.agent !== undefined && String(exec.agent.id) === h.routerSession ? h : undefined
   }
   // The model sees what the call returned, not just that it ran: the router reads tickets and candidates through these
@@ -242,7 +244,7 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('ticket report', value) },
     presentCall: args => ({ card: 'generic', title: `ticket report: ${String(args.state)}`, kind: 'other', rawInput: args }),
     execute: async (args: { ticket_id: string; state: string; summary: string; question?: string; answers?: string; pull_request?: string }, exec): Promise<Record<string, JsonValue>> => {
-      const h = host()
+      const h = host(exec)
       const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
       if (h === undefined || me === undefined || h.roleOf(me) !== 'member') return { ok: false, code: 'not-member', error: 'a2a_ticket_report serves only the superagent team members the owner named' }
       if (!['progress', 'waiting', 'ready', 'blocked', 'failed', 'dropped'].includes(args.state)) return { ok: false, code: 'state', error: 'state must be progress, waiting, ready, blocked, failed or dropped' }
@@ -338,7 +340,7 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
     output: { ...anyProps, render: (_args, value) => said('a2a_member_rules_propose', value) },
     presentCall: () => ({ card: 'generic', title: 'a2a_member_rules_propose', kind: 'other', rawInput: {} }),
     execute: async (args: { role?: string; rules: unknown; reason: string }, exec): Promise<Record<string, JsonValue>> => {
-      const h = host()
+      const h = host(exec)
       const me = callerOf(exec)
       if (h === undefined || me === undefined || h.roleOf(me) !== 'member') return { ok: false, code: 'not-member', error: 'a2a_member_rules_propose serves only the superagent team members the owner named' }
       const value = { ...(typeof args.role === 'string' ? { role: args.role } : {}), rules: args.rules }
@@ -355,7 +357,7 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
     output: { ...anyProps, render: (_args, value) => said('a2a_member_rules_apply', value) },
     presentCall: () => ({ card: 'generic', title: 'a2a_member_rules_apply', kind: 'other', rawInput: {} }),
     execute: async (_args: Record<string, never>, exec): Promise<Record<string, JsonValue>> => {
-      const h = host()
+      const h = host(exec)
       const me = callerOf(exec)
       if (h === undefined || me === undefined || h.roleOf(me) !== 'member') return { ok: false, code: 'not-member', error: 'a2a_member_rules_apply serves only the superagent team members the owner named' }
       const person = h.personMessageOf(me)
@@ -372,7 +374,7 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
     output: { ...anyProps, render: (_args, value) => said('a2a_ticket_request', value) },
     presentCall: () => ({ card: 'generic', title: 'a2a_ticket_request', kind: 'other', rawInput: {} }),
     execute: async (args: { text?: string }, exec): Promise<Record<string, JsonValue>> => {
-      const h = host()
+      const h = host(exec)
       const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
       if (h === undefined || me === undefined) return { ok: false, code: 'not-observer', error: 'a2a_ticket_request serves only the sessions on this team created under the observer preset' }
       return json(h.requestForObserver(me, String(args.text ?? ''))) as Record<string, JsonValue>
@@ -390,7 +392,7 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said(name, value) },
     presentCall: args => ({ card: 'generic', title: `${name}: ${String(args.trigger_id)}`, kind: 'other', rawInput: args }),
     execute: async (args: Record<string, string>, exec): Promise<Record<string, JsonValue>> => {
-      const h = host()
+      const h = host(exec)
       const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
       if (h === undefined || me === undefined || h.roleOf(me) !== 'member') return { ok: false, code: 'not-member', error: `${name} serves only the superagent team members the owner named` }
       const triggerId = String(args.trigger_id ?? ''), text = String(args[textName] ?? '')
