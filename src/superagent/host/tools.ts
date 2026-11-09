@@ -269,7 +269,7 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
     },
   })
   ctx.tools.register(takeUpTool('a2a_ticket_ack', 'ack',
-    'Team member only: acknowledge a person\'s message that reached your ticket before you act on it (upstream orchestrator_ack). It posts your short acknowledgement on that person\'s thread, and the message is yours to handle from then on.',
+    'Team member only: acknowledge a person\'s message that reached your ticket before you act on it (upstream orchestrator_ack). It posts your short acknowledgement on that person\'s thread (for a GitHub comment it is only recorded, nothing is posted), and the message is yours to handle from then on.',
     'text', 'One or two sentences to the person: what you will do with their message, in their language.'))
   ctx.tools.register(takeUpTool('a2a_ticket_handback', 'handback',
     'Team member only: hand back a person\'s message that asks for work beyond your ticket or for another one, so the router assesses it afresh (upstream orchestrator_trigger_handback). Once per message.',

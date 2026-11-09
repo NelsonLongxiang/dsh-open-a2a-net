@@ -437,6 +437,8 @@ export class SuperagentHost {
     if (typeof text !== 'string' || text.trim() === '') return { ok: false, code: 'missing', error: op === 'ack' ? 'text is required' : 'reason is required' }
     try {
       if (op === 'ack') {
+        const comment = this.ackComment(binding.ticketId, triggerId)
+        if (comment !== undefined) return comment
         const reply = this.engine.reply({ purpose: 'acknowledgement', ticketId: binding.ticketId, triggerId, text: clip(text.trim(), 1_000) })
         this.pass()
         return { ok: true, ticketId: binding.ticketId, trigger_id: triggerId, acknowledgement: reply.status, reused: reply.reused }
@@ -445,6 +447,21 @@ export class SuperagentHost {
       this.pass()
       return { ok: true, ticketId: binding.ticketId, trigger_id: triggerId, queued }
     } catch (error) { return { ok: false, code: error instanceof UserError ? error.code : 'refused', error: error instanceof Error ? error.message : String(error) } }
+  }
+
+  /**
+   * A member takes up a person's comment on the pull request its ticket follows. The host only reads GitHub, so a comment has
+   * no Channel and the engine's acknowledgement refuses it; left untaken, it would go to the router as a new message when the
+   * ticket ends. Recording the take-up is what the acknowledgement does on the engine's side; nothing is posted.
+   * @returns undefined for anything else, which the engine then answers.
+   */
+  private ackComment(ticketId: string, triggerId: string): Record<string, unknown> | undefined {
+    const trigger = this.store.triggers.get(triggerId), ticket = this.store.tickets.get(ticketId), disposition = this.store.triggers.disposition(triggerId)
+    if (trigger?.source !== GITHUB_SOURCE || trigger.human !== true || ticket === undefined || ticket.ended !== undefined) return undefined
+    if (disposition === undefined || !disposition.fanout.includes(ticketId) || disposition.context?.includes(ticketId) === true) return undefined
+    const reused = disposition.acked?.includes(ticketId) === true
+    if (!reused) this.store.atomic(() => { this.store.triggers.saveDisposition(triggerId, { ...disposition, acked: [...disposition.acked ?? [], ticketId] }) })
+    return { ok: true, ticketId, trigger_id: triggerId, acknowledgement: 'recorded', reused, note: 'Recorded that you took this GitHub comment up. Nothing is posted on the pull request.' }
   }
 
   /** The repositories the team's members work in, each with its members (settings `repos`). */

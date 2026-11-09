@@ -105,6 +105,38 @@ describe('a ticket follows its pull request', () => {
     } finally { await m.h.stop() }
   })
 
+  it('a comment the member took up stays with the ticket; one it did not goes to the router when the ticket ends', async () => {
+    const m = await team()
+    try {
+      m.h.report('session-a', { state: 'ready', summary: 'x' }, m.id, URL)
+      m.h.memberIdle('session-a')
+      await m.poll()
+      m.gh.comments = [
+        { id: 2, user: { login: 'owner', type: 'User' }, body: '已看过', created_at: '2026-11-09T02:00:00Z' },
+        { id: 3, user: { login: 'owner', type: 'User' }, body: '没人接', created_at: '2026-11-09T02:01:00Z' },
+        { id: 4, user: { login: 'someone', type: 'User' }, body: '路过', created_at: '2026-11-09T02:02:00Z' }]
+      await m.poll()
+      await vi.waitFor(() => { expect(m.sent.some(([id, t]) => id === 'session-a' && t.includes('已看过'))).toBe(true) })
+      expect(m.h.takeUp('session-a', 'ack', 'gh-comment-2', '收到')).toMatchObject({ ok: true, acknowledgement: 'recorded', reused: false, ticketId: m.id })
+      expect(m.h.takeUp('session-a', 'ack', 'gh-comment-2', '收到')).toMatchObject({ ok: true, reused: true })
+      expect(m.h.takeUp('session-a', 'ack', 'gh-comment-4', '收到')).toMatchObject({ ok: false, code: 'ackNoChannel' })
+      expect(m.h.store.messages.list().filter(row => row.message.channel.source === 'github')).toHaveLength(0)
+      m.h.report('session-a', { state: 'ready', summary: '已回应' }, m.id, URL)
+      await vi.waitFor(() => { m.h.memberIdle('session-a'); expect(m.h.executor.bindingOf('session-a')).toBeUndefined() })
+      // One the member took up and answered in its report; one that came in after that report and nobody took up.
+      const read = m.ticket()
+      for (const input of read.inputs) if (input.kind === 'trigger') input.readAt = new Date(Date.now() + (input.triggerId === 'gh-comment-3' ? 3_600_000 : -3_600_000)).toISOString()
+      m.h.store.tickets.save(read)
+      m.gh.pull = { state: 'closed', merged: true, merged_at: '2026-11-09T03:00:00Z' }
+      await m.poll()
+      expect(m.ticket().ended).toMatchObject({ outcome: 'merged' })
+      m.h.pass()
+      const candidates = (): string[] => m.sent.filter(([id, t]) => id === 'session-r' && t.startsWith('[superagent candidate]')).map(([, t]) => t)
+      await vi.waitFor(() => { expect(candidates().some(t => t.includes('没人接'))).toBe(true) })
+      expect(candidates().some(t => t.includes('已看过'))).toBe(false)
+    } finally { await m.h.stop() }
+  })
+
   it('a failed read ends nothing, is shown, and clears when reads work again', async () => {
     const m = await team()
     try {
