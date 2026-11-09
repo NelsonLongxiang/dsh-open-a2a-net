@@ -5,15 +5,24 @@
 import { createElement } from 'react'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import { TeamRequestTab } from './TeamRequestTab.tsx'
+import { TeamDecisionsTab } from './TeamDecisionsTab.tsx'
 import type { A2aNetKey } from './locales.ts'
 
 export const TEAM_REQUEST_KIND = 'a2a-team-request'
 const TEAM_REQUEST_ID = '@nelsonlongxiang/dsh-open-a2a-net/team-request'
+export const TEAM_DECISIONS_KIND = 'a2a-team-decisions'
+const TEAM_DECISIONS_ID = '@nelsonlongxiang/dsh-open-a2a-net/team-decisions'
 
 /** The guide card's picture: a speech bubble. */
 function RequestIcon() {
   return createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
     createElement('path', { d: 'M4 5h16v11H9l-5 4z' }), createElement('path', { d: 'M8 9h8M8 12h5' }))
+}
+
+/** The guide card's picture: a check in a box. */
+function DecisionIcon() {
+  return createElement('svg', { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+    createElement('rect', { x: 4, y: 4, width: 16, height: 16, rx: 2 }), createElement('path', { d: 'M8 12l3 3 5-6' }))
 }
 
 interface RightBarScope {
@@ -41,6 +50,11 @@ export function registerTeamRequest(ctx: ClientContext, namespace: string): void
           guide: [{ id: 'new', order: 40, title: () => t('team.tab'), description: () => t('team.guide'), icon: RequestIcon }],
         }), 'a2a-net: request tab type')
         scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({ name: 'sidebar.right.pane.tab', key: TEAM_REQUEST_ID, locale: namespace }, TeamRequestTab)), 'a2a-net: request tab body')
+        scope.effect(() => scope.sidebarRightTabs.register({
+          id: TEAM_DECISIONS_ID, kind: TEAM_DECISIONS_KIND, priority: 'builtin', title: () => t('team.decisions'),
+          guide: [{ id: 'new', order: 41, title: () => t('team.decisions'), description: () => t('team.decisionsGuide'), icon: DecisionIcon }],
+        }), 'a2a-net: decisions tab type')
+        scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({ name: 'sidebar.right.pane.tab', key: TEAM_DECISIONS_ID, locale: namespace }, TeamDecisionsTab)), 'a2a-net: decisions tab body')
       })
     })
     .catch(() => {})

@@ -22,6 +22,14 @@ export type A2aNetKey =
   | 'team.noFolders'
   | 'team.sentRemote'
   | 'team.remoteHint'
+  | 'team.decisions'
+  | 'team.decisionsGuide'
+  | 'team.noDecisions'
+  | 'team.recommended'
+  | 'team.approve'
+  | 'team.confirmChoice'
+  | 'team.decisionNote'
+  | 'team.decisionWrite'
   | 'team.tab'
   | 'team.guide'
   | 'team.pick'
@@ -47,6 +55,14 @@ export const zh: Record<A2aNetKey, string> = {
   'team.noFolders': '不能拖入文件夹，请选择里面的文件',
   'team.sentRemote': '已发给 {team}，由对方团队按自己的规则决定。发送者是 {sender}，回执会回到这个会话',
   'team.remoteHint': '这支团队在其他实例上：这条消息算当前会话发的，不算你本人。对方要把这个会话列入名单，并开 auto 和对应规则，才会开单。',
+  'team.decisions': '待决策',
+  'team.decisionsGuide': '各团队等你拍板的事，附推荐选项',
+  'team.noDecisions': '现在没有等你决定的事。',
+  'team.recommended': '推荐',
+  'team.approve': '批准推荐',
+  'team.confirmChoice': '确认选择',
+  'team.decisionNote': '补充说明（可选）',
+  'team.decisionWrite': '写下你的决定',
   'team.tab': '提需求',
   'team.guide': '把需求交给 superagent 团队，不用离开当前对话',
   'team.pick': '团队',
@@ -85,6 +101,14 @@ export const en: Record<A2aNetKey, string> = {
   'team.noFolders': 'Folders cannot be added. Choose the files inside',
   'team.sentRemote': 'Sent to {team}, whose own rules decide. The sender is {sender}; the receipt comes back to this session',
   'team.remoteHint': 'This team is on another instance. The message counts as this session\'s, not yours. That team opens a ticket only if it lists this session and runs auto with a matching rule.',
+  'team.decisions': 'Decisions',
+  'team.decisionsGuide': 'What your teams need you to decide, each with a recommendation',
+  'team.noDecisions': 'Nothing is waiting for your decision.',
+  'team.recommended': 'Recommended',
+  'team.approve': 'Approve recommendation',
+  'team.confirmChoice': 'Confirm choice',
+  'team.decisionNote': 'Add a note (optional)',
+  'team.decisionWrite': 'Write your decision',
   'team.tab': 'Request',
   'team.guide': 'Send a superagent team a request without leaving this conversation',
   'team.pick': 'Team',

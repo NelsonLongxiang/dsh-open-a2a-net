@@ -125,3 +125,58 @@
   outline: 2px dashed var(--dsh-accent, #4c8bf5);
   outline-offset: -4px;
 }
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--dsh-border, #2a2a30);
+  border-radius: 8px;
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.level {
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--dsh-surface-raised, #1c1c22);
+  font-weight: 600;
+}
+
+.level[data-level='P0'],
+.level[data-level='P1'] {
+  color: var(--dsh-danger, #e5534b);
+}
+
+.question {
+  margin: 0;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.option {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.recommended {
+  font-weight: 600;
+}
+
+.badge {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--dsh-accent, #4c8bf5);
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+}

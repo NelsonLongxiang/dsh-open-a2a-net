@@ -54,7 +54,7 @@ describe('the preset decides', () => {
 
 describe('the tool list', () => {
   it('is a member\'s and one more; a plain member and a sessionless caller have not got it', () => {
-    expect(OBSERVER_TOOLS).toEqual([...MEMBER_TOOLS, 'a2a_ticket_request'])
+    expect(OBSERVER_TOOLS).toEqual([...MEMBER_TOOLS, 'a2a_ticket_request', 'a2a_decision_propose'])
     expect(TEAM_TOOLS).toContain('a2a_ticket_request')
     expect(roleToolRefusal('observer', 'a2a_ticket_request')).toBeUndefined()
     expect(roleToolRefusal('member', 'a2a_ticket_request')).toContain('a2a_ticket_request')

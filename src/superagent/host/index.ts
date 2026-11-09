@@ -21,6 +21,7 @@ import { A2aSource } from './a2a-source.ts'
 import { MemberExecutor, transientError, type MemberTurn } from './executor.ts'
 import { ReviewRequests } from './review-requests.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
+import { DecisionBook, oneClick, parseDecision, ticketCardId, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, type Role } from './role-tools.ts'
@@ -222,6 +223,7 @@ export class SuperagentHost {
   private disposeTimer: (() => void) | undefined
   /** The A2A executor (PR-C1): the owner's fixed member pool, one worker slot each. */
   readonly executor: MemberExecutor
+  private readonly decisions: DecisionBook
   /** The A2A Source (PR-B2b): the team's A2A address and its mailbox loop. */
   readonly a2a: A2aSource
   /** Outbox messages being sent right now, so a pass never sends one twice at once. */
@@ -283,6 +285,7 @@ export class SuperagentHost {
       onOpen: (thread, head, url, ticketId) => this.reviews.opened(thread, head, url, ticketId),
     })
     this.ruleChanges = new RuleChanges(join(dir, 'rule-changes.json'))
+    this.decisions = new DecisionBook(join(dir, 'decisions.json'))
     this.reviews = new ReviewRequests({
       path: join(dir, 'reviews.json'), reviewer: () => this.settingsValue.reviewer, logger: d.logger,
       ask: (address, text) => this.a2a.askReview(address, text),
@@ -429,7 +432,7 @@ export class SuperagentHost {
     if (op !== 'report') return { ok: false, code: 'op', error: 'op must be report, ack, handback, rules-propose, rules-apply, read, idle or error' }
     const r = (report ?? {}) as Record<string, unknown>
     if (typeof r.state !== 'string' || !['progress', 'waiting', 'ready', 'blocked', 'failed', 'dropped'].includes(r.state) || typeof r.summary !== 'string' || r.summary.trim() === '') return { ok: false, code: 'report', error: 'a report needs a state and a summary' }
-    return this.report(entry.ref, { state: r.state as ReportState, summary: r.summary, ...(typeof r.question === 'string' || r.question === null ? { question: r.question as string | null } : {}), ...(typeof r.answers === 'string' ? { answers: r.answers } : {}) }, typeof r.ticket_id === 'string' ? r.ticket_id : undefined, typeof r.pull_request === 'string' ? r.pull_request : undefined)
+    return this.report(entry.ref, { state: r.state as ReportState, summary: r.summary, ...(typeof r.question === 'string' || r.question === null ? { question: r.question as string | null } : {}), ...(typeof r.answers === 'string' ? { answers: r.answers } : {}), ...(typeof r.question === 'string' && typeof parseDecision(r) !== 'string' ? { decision: parseDecision(r) as DecisionSpec } : {}) }, typeof r.ticket_id === 'string' ? r.ticket_id : undefined, typeof r.pull_request === 'string' ? r.pull_request : undefined)
   }
 
   /** PR-C2, member host side: work the served team host sends one of this host's member sessions, signed by its pinned key. */
@@ -449,7 +452,7 @@ export class SuperagentHost {
   }
 
   /** PR-C2, member host side: a served member's report goes to the team host (it answers whether it took it). */
-  async forwardReport(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string; ticket_id?: string; pull_request?: string }): Promise<Record<string, unknown>> {
+  async forwardReport(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string; ticket_id?: string; pull_request?: string; options?: readonly string[]; recommended?: string; level?: string }): Promise<Record<string, unknown>> {
     const serves = this.settingsValue.serves
     if (serves === undefined || !serves.members.includes(member) || this.d.signedPost === undefined || this.d.handleOf === undefined) return { ok: false, code: 'not-member', error: 'this session serves no team' }
     try { return await this.d.signedPost(serves.url, '/a2a/superagent-team', { op: 'report', member: this.d.handleOf(member), report }) } catch (error) { return { ok: false, code: 'unreachable', error: String(error) } }
@@ -647,6 +650,60 @@ export class SuperagentHost {
     return { ok: true, trigger_id: filed.triggerId, thread: filed.thread }
   }
 
+  /** Raise a card of the router's or an observer's own (decision cards C2). */
+  proposeDecision(source: 'router' | 'observer', by: string, question: string, spec: DecisionSpec, reason?: string): Record<string, unknown> {
+    return this.decisions.propose({ source, by, question, spec, at: this.now(), ...(reason !== undefined && reason.trim() !== '' ? { reason: reason.trim() } : {}) })
+  }
+
+  /** The cards waiting for the owner: those raised on their own, and every open question on a ticket. */
+  decisionCards(): Array<StoredCard & { readonly title?: string }> {
+    const onTickets = this.store.tickets.list().flatMap((ticket): Array<StoredCard & { title: string }> => {
+      if (ticket.ended !== undefined || ticket.attention === undefined) return []
+      const id = ticketCardId(ticket.id, ticket.attention.question)
+      const card = this.decisions.get(id)
+      if (card?.decided !== undefined) return []
+      // A question asked before cards, or by an older member: it has no recommendation, so it is the strictest kind.
+      return [{ ...(card ?? { id, question: ticket.attention.question, source: 'ticket' as const, by: '', ticketId: ticket.id, at: ticket.updatedAt, level: 'P1' as const, options: [], recommended: '' }), title: ticket.title }]
+    })
+    return [...this.decisions.open().filter(card => card.source !== 'ticket'), ...onTickets]
+  }
+
+  /**
+   * The owner decides a card (decision cards C3, C4).
+   * @param id - the card.
+   * @param how - `approve` takes the recommendation (P2 and P3 only); `choose` names an option, or writes a decision in `note`.
+   * @param option - the option chosen.
+   * @param note - the owner's words, added to the decision or standing as it.
+   * @returns what was filed, or why not.
+   */
+  decide(id: string, how: unknown, option?: unknown, note?: unknown): Record<string, unknown> {
+    const card = this.decisionCards().find(row => row.id === id)
+    if (card === undefined) return { ok: false, code: 'stale', error: 'that decision is no longer waiting: it was decided, or its ticket moved on' }
+    const words = typeof note === 'string' ? note.trim() : ''
+    let chosen: string
+    if (how === 'approve') {
+      if (!oneClick(card.level) || card.recommended === '') return { ok: false, code: 'needs-choice', error: `a ${card.level} decision needs an option chosen, not one click` }
+      chosen = card.recommended
+    } else if (how === 'choose') {
+      if (typeof option === 'string' && card.options.includes(option)) chosen = option
+      else if (option === undefined || option === null || option === '') { if (words === '') return { ok: false, code: 'choice', error: 'choose an option, or write your decision' }; chosen = '' }
+      else return { ok: false, code: 'choice', error: 'that is not one of the options' }
+    } else return { ok: false, code: 'how', error: 'how must be approve or choose' }
+    const answer = [...(chosen !== '' ? [`决定：${chosen}`] : []), ...(words !== '' ? [`说明：${words}`] : [])].join('\n')
+    const at = this.now()
+    const { title: _title, ...stored } = card
+    if (card.ticketId !== undefined) {
+      const out = this.answer(card.ticketId, answer)
+      if (!out.ok) return out
+      this.decisions.decide(card.id, { at, text: answer, triggerId: out.triggerId }, stored)
+      return { ok: true, ticket_id: card.ticketId, trigger_id: out.triggerId }
+    }
+    const filed = this.request(`[决策卡] ${card.question}\n${answer}`)
+    if (!filed.ok) return { ok: false, code: 'refused', error: filed.error }
+    this.decisions.decide(card.id, { at, text: answer, triggerId: filed.triggerId }, stored)
+    return { ok: true, trigger_id: filed.triggerId, thread: filed.thread }
+  }
+
   /** Recent inferred candidates and what became of them, for improving the rules (design D13). */
   recentDecisions(limit = 40): Array<Record<string, unknown>> {
     const rows: Array<Record<string, unknown> & { at: string }> = []
@@ -759,7 +816,7 @@ export class SuperagentHost {
    * A member's report (upstream orchestrator_report) on the ticket bound to it. The router hears it in its own session,
    * so it can hand a ready result or a question to the person (superagent_reply).
    */
-  report(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string }, ticketId?: string, pullRequest?: string): { ok: true; ticketId: string; stage: unknown } | { ok: false; code: string; error: string } {
+  report(member: string, { decision, ...report }: { state: ReportState; summary: string; question?: string | null; answers?: string; decision?: DecisionSpec }, ticketId?: string, pullRequest?: string): { ok: true; ticketId: string; stage: unknown } | { ok: false; code: string; error: string } {
     const binding = ticketId === undefined ? this.executor.bindingOf(member) : this.executor.bindingFor(member, ticketId)
     if (binding === undefined) return ticketId === undefined ? { ok: false, code: 'not-assigned', error: 'no ticket is assigned to this session' } : this.notYours(member, ticketId)
     const current = this.store.tickets.get(binding.ticketId)
@@ -773,6 +830,7 @@ export class SuperagentHost {
     let ticket: Ticket
     try { ticket = this.engine.report(binding.ticketId, report) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
     const stage = ticket.ended ? { stage: 'ended', outcome: ticket.ended.outcome } : ticketStage(ticket)
+    if (decision !== undefined && typeof report.question === 'string') this.decisions.forTicket({ ticketId: ticket.id, by: member, question: report.question, spec: decision, at: this.now() })
     this.relayReport(ticket.id, report.state, report.summary)
     this.pass()
     return { ok: true, ticketId: ticket.id, stage }
