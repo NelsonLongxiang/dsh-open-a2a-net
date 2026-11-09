@@ -7,12 +7,13 @@ import { TEAM_REQUEST_KIND, registerTeamRequest } from '../../src/client/team-re
 import { en } from '../../src/client/locales.ts'
 
 const t = ((key: string, values?: Record<string, string>) => Object.entries(values ?? {}).reduce((text, [name, value]) => text.replace(`{${name}}`, value), (en as Record<string, string>)[key] ?? key)) as never
-const bound = { settings: { canvas: 'ops', router: 'session-r', sources: { workbench: true } } }
+const row = (id: string, canvas: string, open = true) => ({ id, canvas, address: `dsh/canvas/${canvas}`, open })
+const bound = { teams: [row('', 'ops')] }
 
 const REF = (name: string) => `[A2A file] v1 sha256=${'a'.repeat(64)} size=1 name=${name} from=http://h`
 function serve(state: unknown, status = 200, post: () => { status: number; body: unknown } = () => ({ status: 200, body: { ok: true, triggerId: 'wb-1' } }), blob: (url: string) => { status: number; body: unknown } = url => ({ status: 200, body: { ok: true, ref: REF(new URL(url, 'http://x').searchParams.get('name')!) } })) {
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
-    const reply = url === '/__dsh_a2a/state' ? { status: 200, body: { zone: 'dsh' } } : url.startsWith('/__dsh_a2a/blob') ? blob(url) : init?.method === 'POST' ? post() : { status, body: state }
+    const reply = url.startsWith('/__dsh_a2a/blob') ? blob(url) : init?.method === 'POST' ? post() : { status, body: state }
     return { ok: reply.status < 300, status: reply.status, json: async () => reply.body } as Response
   })
   vi.stubGlobal('fetch', fetcher)
@@ -57,9 +58,8 @@ describe('the request view', () => {
   })
 
   it.each([
-    ['no canvas', { settings: { sources: { workbench: true } } }],
-    ['no router', { settings: { canvas: 'ops', sources: { workbench: true } } }],
-    ['the workbench Source off', { settings: { canvas: 'ops', router: 'r', sources: { workbench: false } } }],
+    ['no team', { teams: [] }],
+    ['a team that cannot take requests', { teams: [row('', 'ops', false)] }],
   ])('offers no box with %s', async (_name, state) => {
     serve(state)
     render(<TeamRequestTab t={t} />)
@@ -75,6 +75,30 @@ describe('the request view', () => {
     serve({}, 500)
     render(<TeamRequestTab t={t} />)
     await screen.findByText(en['team.unreadable'])
+  })
+})
+
+describe('several teams', () => {
+  it('lists those that can take a request, and sends to the one chosen', async () => {
+    const f = serve({ teams: [row('', 'ops'), row('aaaaaaaa', 'docs'), row('bbbbbbbb', 'idle', false)] })
+    render(<TeamRequestTab t={t} />)
+    fireEvent.change(await waitFor(box), { target: { value: '写文档' } })
+    expect(screen.getAllByRole('option').map(o => o.textContent)).toEqual(['ops', 'docs'])
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'aaaaaaaa' } })
+    fireEvent.click(screen.getByRole('button', { name: en['team.send'] }))
+    await waitFor(() => { expect(posts(f)).toHaveLength(1) })
+    expect(posts(f)[0]).toEqual({ action: 'request', text: '写文档', teamId: 'aaaaaaaa' })
+    expect(screen.getByRole('status').textContent).toContain('docs')
+  })
+  it('grants files to the team chosen', async () => {
+    const f = serve({ teams: [row('', 'ops'), row('aaaaaaaa', 'docs')] })
+    render(<TeamRequestTab t={t} />)
+    await waitFor(box)
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'aaaaaaaa' } })
+    fireEvent.change(screen.getByLabelText(en['team.addFiles'], { selector: 'input' }), { target: { files: [new File(['x'], 'a.txt')] } })
+    fireEvent.click(screen.getByRole('button', { name: en['team.send'] }))
+    await waitFor(() => { expect(posts(f)).toHaveLength(1) })
+    expect(f.mock.calls.map(([url]) => url).find(url => url.startsWith('/__dsh_a2a/blob'))).toContain(encodeURIComponent('dsh/canvas/docs'))
   })
 })
 

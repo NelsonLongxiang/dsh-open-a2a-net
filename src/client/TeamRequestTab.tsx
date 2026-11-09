@@ -11,7 +11,7 @@ import styles from './TeamRequestTab.module.css'
 export type TeamRequestTabProps = PropsLocale<'a2aNet'>
 
 /** A team this view can send to. */
-export interface RequestTeam { readonly name: string; /** Its canvas address: files are granted to it. */ readonly address: string }
+export interface RequestTeam { /** '' is the instance's primary team. */ readonly id: string; readonly name: string; /** Its canvas address: files are granted to it. */ readonly address: string }
 
 export type LoadedTeams = { readonly state: 'ready'; readonly teams: readonly RequestTeam[] } | { readonly state: 'denied' | 'failed' }
 
@@ -20,20 +20,16 @@ const TEAM_ROUTE = '/__dsh_a2a/superagent'
 export const FILES_MAX = 16, FILE_BYTES_MAX = 64 * 1024 * 1024
 
 /**
- * This host's team, if it can take a request: bound to a canvas, with a router, and listening on the workbench Source.
+ * This instance's teams that can take a request: bound to a canvas, with a router, and listening on the workbench Source.
  * @returns the teams, or why they could not be read.
  */
 export async function loadTeams(): Promise<LoadedTeams> {
   try {
-    const response = await fetch(TEAM_ROUTE, { cache: 'no-store' })
+    const response = await fetch(`${TEAM_ROUTE}/teams`, { cache: 'no-store' })
     if (response.status === 401 || response.status === 403) return { state: 'denied' }
     if (!response.ok) return { state: 'failed' }
-    const { settings } = await response.json() as { settings?: { canvas?: string; router?: string; sources?: { workbench?: boolean } } }
-    if (settings?.canvas === undefined || settings.router === undefined || settings.sources?.workbench === false) return { state: 'ready', teams: [] }
-    const network = await fetch('/__dsh_a2a/state', { cache: 'no-store' })
-    const { zone } = network.ok ? await network.json() as { zone?: string } : { zone: undefined }
-    if (zone === undefined) return { state: 'failed' }
-    return { state: 'ready', teams: [{ name: settings.canvas, address: `${zone}/canvas/${settings.canvas}` }] }
+    const { teams } = await response.json() as { teams?: Array<{ id: string; canvas?: string; address?: string; open?: boolean }> }
+    return { state: 'ready', teams: (teams ?? []).flatMap(row => row.open === true && row.canvas !== undefined && row.address !== undefined ? [{ id: row.id, name: row.canvas, address: row.address }] : []) }
   } catch { return { state: 'failed' } }
 }
 
@@ -57,9 +53,9 @@ async function stageFiles(files: readonly File[], address: string): Promise<{ re
 }
 
 /** One request, as the team page sends it; undefined when it was taken, otherwise why not. */
-async function sendRequest(text: string): Promise<string | undefined> {
+async function sendRequest(team: string, text: string): Promise<string | undefined> {
   try {
-    const response = await fetch(TEAM_ROUTE, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'request', text }) })
+    const response = await fetch(TEAM_ROUTE, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'request', text, ...(team !== '' ? { teamId: team } : {}) }) })
     const out = await response.json() as { ok?: boolean; error?: string }
     return response.ok && out.ok === true ? undefined : out.error ?? `HTTP ${String(response.status)}`
   } catch (error) { return String(error) }
@@ -98,7 +94,7 @@ export function TeamRequestTab({ t }: TeamRequestTabProps) {
   }, [])
 
   const teams = loaded?.state === 'ready' ? loaded.teams : []
-  const chosen = teams.find(row => row.name === team) ?? teams[0]
+  const chosen = teams.find(row => row.id === team) ?? teams[0]
   const canSend = chosen !== undefined && (text.trim() !== '' || files.length > 0) && !busy
 
   const send = useCallback(async () => {
@@ -107,7 +103,7 @@ export function TeamRequestTab({ t }: TeamRequestTabProps) {
     setNote(undefined)
     const staged = await stageFiles(files, chosen.address)
     if ('refused' in staged) { setBusy(false); setNote({ tone: 'error', text: t('team.failed', { reason: staged.refused }) }); return }
-    const refused = await sendRequest([...(text.trim() !== '' ? [text] : []), ...staged.refs].join('\n'))
+    const refused = await sendRequest(chosen.id, [...(text.trim() !== '' ? [text] : []), ...staged.refs].join('\n'))
     setBusy(false)
     if (refused !== undefined) { setNote({ tone: 'error', text: t('team.failed', { reason: refused }) }); return }
     setText('')
@@ -147,8 +143,8 @@ export function TeamRequestTab({ t }: TeamRequestTabProps) {
     <div className={`${styles.view} ${dragging ? styles.dragging : ''}`} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
       <label className={styles.field}>
         <span className={styles.label}>{t('team.pick')}</span>
-        <select className={styles.input} value={chosen.name} onChange={(event) => { setTeam(event.target.value) }}>
-          {teams.map(row => <option key={row.name} value={row.name}>{row.name}</option>)}
+        <select className={styles.input} value={chosen.id} onChange={(event) => { setTeam(event.target.value) }}>
+          {teams.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}
         </select>
       </label>
       <label className={styles.field}>
