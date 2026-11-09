@@ -190,6 +190,90 @@ describe('team tab', () => {
     expect(text(pane.root)).toContain('alpha/canvas/team@0123abcd')
   })
 
+  describe('several teams', () => {
+    const teams = [{ id: '', canvas: 'ops' }, { id: 'aaaaaaaa', canvas: 'docs' }]
+    const open = () => {
+      const selectTeam = vi.fn(), addTeam = vi.fn(async () => ({ ok: true, id: 'bbbbbbbb' }))
+      const pane = createSuperagentPane({ act: vi.fn(async () => ({ ok: true })), refresh: vi.fn(), selectTeam, addTeam })
+      document.body.replaceChildren(pane.root)
+      pane.update({ ...state(), teams, selectedTeam: 'aaaaaaaa', canvases: ['ops', 'docs', 'new'] }, sessions, NOW)
+      return { pane, selectTeam, addTeam, picker: pane.root.querySelector<HTMLSelectElement>('[aria-label="当前团队"]')! }
+    }
+    it('lists the teams, shows the current one, and switches', () => {
+      const { picker, selectTeam } = open()
+      expect(Array.from(picker.options).map(o => o.text)).toEqual(['ops', 'docs'])
+      expect(picker.value).toBe('aaaaaaaa')
+      picker.value = ''
+      picker.dispatchEvent(new Event('change'))
+      expect(selectTeam).toHaveBeenCalledWith('')
+    })
+    it('offers only canvases no team holds, adds the team, and switches to it', async () => {
+      const { pane, selectTeam, addTeam } = open()
+      button(pane.root, '新增团队').click()
+      const canvas = pane.root.querySelector<HTMLSelectElement>('[aria-label="新团队的画布"]')!
+      expect(Array.from(canvas.options).map(o => o.value)).toEqual(['', 'new'])
+      const router = pane.root.querySelector<HTMLSelectElement>('[aria-label="新团队的总工"]')!
+      canvas.value = 'new'
+      router.value = router.options[1]!.value
+      button(pane.root, '添加').click()
+      await flush()
+      expect(addTeam).toHaveBeenCalledWith('new', router.value)
+      expect(selectTeam).toHaveBeenCalledWith('bbbbbbbb')
+    })
+    const editSettings = (pane: ReturnType<typeof open>['pane']) => {
+      pane.select('settings')
+      const mode = pane.root.querySelector<HTMLSelectElement>('select[aria-label="接单模式"]')!
+      mode.value = 'auto'
+      mode.dispatchEvent(new Event('change'))
+    }
+    const toPrimary = (picker: HTMLSelectElement) => { picker.value = ''; picker.dispatchEvent(new Event('change')) }
+
+    it('keeps unsaved settings when the person declines to switch', () => {
+      const { pane, picker, selectTeam } = open()
+      editSettings(pane)
+      vi.stubGlobal('confirm', () => false)
+      toPrimary(picker)
+      vi.unstubAllGlobals()
+      expect(selectTeam).not.toHaveBeenCalled()
+      expect(picker.value).toBe('aaaaaaaa')
+      expect(pane.root.querySelector<HTMLSelectElement>('select[aria-label="接单模式"]')!.value).toBe('auto')
+    })
+
+    it('drops unsaved settings on a switch, so they cannot be saved to the other team', () => {
+      const { pane, picker, selectTeam } = open()
+      editSettings(pane)
+      vi.stubGlobal('confirm', () => true)
+      toPrimary(picker)
+      vi.unstubAllGlobals()
+      expect(selectTeam).toHaveBeenCalledWith('')
+      expect(pane.root.querySelector('select[aria-label="接单模式"]')).toBeNull()
+      pane.update({ ...state(), teams, selectedTeam: '', canvases: ['ops', 'docs', 'new'] }, sessions, NOW)
+      expect(pane.root.querySelector<HTMLSelectElement>('select[aria-label="接单模式"]')!.value).toBe('observe')
+    })
+
+    it('ignores the old team\'s state arriving after a switch', () => {
+      const { pane, picker } = open()
+      pane.select('settings')
+      toPrimary(picker)
+      pane.update({ ...state(), teams, selectedTeam: 'aaaaaaaa', canvases: [] }, sessions, NOW)
+      expect(pane.root.querySelector('select[aria-label="接单模式"]')).toBeNull()
+    })
+
+    it('asks for both, and shows a refusal', async () => {
+      const { pane, addTeam } = open()
+      button(pane.root, '新增团队').click()
+      button(pane.root, '添加').click()
+      expect(addTeam).not.toHaveBeenCalled()
+      expect(pane.root.querySelector('[role=status]')!.textContent).toContain('先选')
+      addTeam.mockResolvedValueOnce({ ok: false, error: 'router must be a local session' } as never)
+      const canvas = pane.root.querySelector<HTMLSelectElement>('[aria-label="新团队的画布"]')!, router = pane.root.querySelector<HTMLSelectElement>('[aria-label="新团队的总工"]')!
+      canvas.value = 'new'; router.value = router.options[1]!.value
+      button(pane.root, '添加').click()
+      await flush()
+      expect(pane.root.querySelector('[role=status]')!.textContent).toContain('router must be')
+    })
+  })
+
   it('settings bind a canvas team and name its router (members come from the canvas); an open form survives the poll', async () => {
     const { pane, act } = mount()
     pane.update(state(), sessions, NOW)
@@ -274,6 +358,16 @@ describe('team tab', () => {
       button(pane.root, '保存').click()
       await flush()
       expect(sent(act)).toMatchObject({ profiles: { [M]: { role: '写代码', rules: [{ name: 'docs', text: '文档类', enabled: true }] } }, dispatch: '看仓库' })
+    })
+
+    it('the team page says which member is the observer and which ticket it opened', () => {
+      const m = mount()
+      const base = state()
+      m.pane.update({ ...base, settings: { ...base.settings, observers: [M] }, tickets: [ticket('t1', { mandate: { strength: 'explicit', scope: 's', basis: { via: 'listed' }, actor: { source: 'workbench', id: `observer:${M}` } } })] }, sessions, NOW)
+      m.pane.select('team')
+      expect(text(m.pane.root)).toContain('观察者')
+      m.pane.select('tickets')
+      expect(text(m.pane.root)).toContain('观察者开单')
     })
 
     it('the team page shows each member\'s role and rules, the team\'s rules, and pending and last changes', () => {

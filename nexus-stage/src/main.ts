@@ -253,16 +253,24 @@ async function fetchLayout(): Promise<unknown> {
   return ((await res.json()) as { layout?: unknown }).layout ?? null
 }
 
+/** The team the 团队 tab shows; '' is the instance's primary team. */
+let selectedTeam = ''
+
 // ─── The workbench ───
 const bench = createWorkbench({
   now: () => Date.now(),
   // superagent v4 PR-E: the 团队 tab writes through the owner control face.
   superagent: {
     async act(body) {
-      const res = await controlFetch('/__dsh_a2a/superagent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      const res = await controlFetch('/__dsh_a2a/superagent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, ...(selectedTeam !== '' ? { teamId: selectedTeam } : {}) }) })
       try { return await res.json() as Record<string, unknown> } catch { return { ok: false, error: `HTTP ${res.status}` } }
     },
     refresh() { void pollSuperagent() },
+    selectTeam(id) { selectedTeam = id; void pollSuperagent() },
+    async addTeam(canvas, router) {
+      const res = await controlFetch('/__dsh_a2a/superagent/teams', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ canvas, router }) })
+      try { return await res.json() as Record<string, unknown> } catch { return { ok: false, error: `HTTP ${res.status}` } }
+    },
   },
   // gh#34: the owner three-key panel rides the control face.
   async ownerSettingsRead() {
@@ -443,12 +451,22 @@ let superagentBusy = false
 async function pollSuperagent(): Promise<void> {
   if (superagentBusy) return
   superagentBusy = true
+  // A switch while this read is out: its answer is the old team's, and must not be shown as the new one's.
+  const asked = selectedTeam
   try {
-    const res = await controlFetch('/__dsh_a2a/superagent', { cache: 'no-store' })
-    const state = res.ok ? await res.json() as SaState : null
+    const [res, list] = await Promise.all([
+      controlFetch(`/__dsh_a2a/superagent${asked !== '' ? `?teamId=${encodeURIComponent(asked)}` : ''}`, { cache: 'no-store' }),
+      controlFetch('/__dsh_a2a/superagent/teams', { cache: 'no-store' }),
+    ])
+    const { teams = [] } = list.ok ? await list.json() as { teams?: SaState['teams'] } : {}
+    if (asked !== selectedTeam) return
+    const state = res.ok ? { ...await res.json() as SaState, teams, selectedTeam: asked } : null
     bench.updateSuperagent(state)
     teamRoles.update(state)
-  } catch { bench.updateSuperagent(null); teamRoles.update(null) } finally { superagentBusy = false }
+  } catch { bench.updateSuperagent(null); teamRoles.update(null) } finally {
+    superagentBusy = false
+    if (asked !== selectedTeam) void pollSuperagent()
+  }
 }
 
 async function poll(): Promise<void> {

@@ -46,9 +46,19 @@ The owner can also edit any rule on the team page. The last row decides who may 
 ### The router working for the owner
 
 - **D11 Only the person's own words.** `superagent_request` and `superagent_rules_apply` (and the member's apply) act only while the router's turn answers a message the person typed: the latest message in its session that is not host context has `source.kind === 'user'`. The host sets that field; a model or a relayed message cannot. A candidate card, report or note is `a2a-relay` and closes the door until the person speaks again; a compaction checkpoint has its own kind. Otherwise it is refused with `not-the-owner`.
-- **D12 Opening a ticket is a request made for the person.** `superagent_request` takes no text. The host files that message verbatim as a workbench Trigger from the owner (`human: true`, explicit) on a new thread, once per message id. It reaches the router as an ordinary candidate and is accepted as any other, so there is no second way to create a ticket, and the router cannot restate or widen the request.
+- **D12 Opening a ticket is a request made for the person.** A message of the owner's in the router's session that asks for work is enough; the router does not ask first whether to open a ticket (owner 2026-11-09). `superagent_request` takes no text. The host files that message verbatim as a workbench Trigger from the owner (`human: true`, explicit) on a new thread, once per message id. It reaches the router as an ordinary candidate and is accepted as any other, so there is no second way to create a ticket, and the router cannot restate or widen the request. The owner reads the outcome where they asked: the report card for such a ticket tells the router to say the result or question in its own session as well as with `superagent_reply`.
 - **D13 Reading what happened.** `superagent_read` gains kind `decisions`: recent inferred candidates with text, decision, rules named and reason. A proposal to improve the rules is drawn from it.
-- **D14 Nothing proactive.** No session opens a ticket on its own initiative; a member still hands back what is beyond its ticket.
+- **D14 Nothing proactive, except an observer.** Apart from D15, no session opens a ticket on its own initiative; a member still hands back what is beyond its ticket.
+
+### Talking to a member directly
+
+- **D14a A person's conversation is not the ticket (owner 2026-11-09).** The owner can talk to a member or an observer in its own session as in any session; it needs no ticket. A turn that answered the owner says nothing about the ticket the member holds: the host records no report from it, and tells the member to go on with the ticket afterwards.
+
+### The observer
+
+- **D15 A member who may open tickets (owner 2026-11-09).** An observer is a session the owner creates under the `superagent-observer` preset and adds to the canvas team; the preset alone makes it one, and nothing else is set. It has a member's tools and takes tickets like one; the one difference is `a2a_ticket_request`. The tool files the observer's own words as a workbench Trigger on a new thread, with the actor `observer:<session>` and `human: false`. It reaches the router as an ordinary candidate, so D12's single way of creating a ticket holds and the router still accepts and dispatches.
+- **D16 What the observer's request is worth.** The gate admits it as explicit, because the owner created the observer for this; no accept mode or rule holds it back. It stays an agent's request: the candidate card says so, `superagent_route` refuses a stop on it, and no person's question or acknowledgement is answered on it. Creating a session needs the owner's GUI login, and a session's preset does not change, so a member's shell cannot make itself an observer. The host checks the preset when the request is filed; from then on the gate and revalidation ask only whether the session is still in the pool, because a preset can be read only while its session is loaded. Once an observer leaves the team, its open tickets cannot be resumed. A session under this preset cannot serve another host's team: the tool files on the host it sits on.
+- **D17 A loop cannot fill the queue.** The observer acts on its own judgement, so the host keeps at most five of its requests open and returns the existing one for an identical text.
 
 ## Consequences
 

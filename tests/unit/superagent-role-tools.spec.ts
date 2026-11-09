@@ -7,12 +7,12 @@ import { MEMBER_TOOLS, ROUTER_TOOLS, RoleTools, TEAM_TOOLS, roleToolRefusal, typ
 
 describe('role tool lists', () => {
   it('the team\'s own tools are the router\'s and the member\'s ticket tools', () => {
-    expect(TEAM_TOOLS).toEqual([...ROUTER_TOOLS, 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply'])
+    expect(TEAM_TOOLS).toEqual([...ROUTER_TOOLS, 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose'])
     for (const name of ['a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback']) expect(MEMBER_TOOLS).toContain(name)
   })
 
   it('pins what the router and a member may call', () => {
-    expect(ROUTER_TOOLS).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply'])
+    expect(ROUTER_TOOLS).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose'])
     expect(MEMBER_TOOLS).toEqual(['read', 'write', 'edit', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'job_output', 'job_list', 'job_kill',
       'web_search', 'web_fetch', 'skill', 'todo_write', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch'])
   })
@@ -113,6 +113,19 @@ describe('RoleTools', () => {
 })
 
 describe('the team\'s agent presets: shipped in the bundle layer, required of a router and its members', () => {
+  it('the bundle layer declares the observer preset: a member\'s composition with its own persona', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { MEMBER_PRESET, OBSERVER_PRESET } = await import('../../src/superagent/host/role-tools.ts')
+    const layer = readFileSync(new URL('../../cordis.patch.yml', import.meta.url), 'utf8')
+    const block = (id: string): string => { const start = layer.indexOf(`        id: ${id}\n`); expect(start).toBeGreaterThan(0); const next = layer.indexOf('\n    - id: ', start); return layer.slice(start, next < 0 ? undefined : next) }
+    const plugins = (preset: string): string[] => preset.split('\n').filter(line => /^\s+(- id|name): /.test(line) && !/persona|prefix/.test(line) && !line.startsWith('        id:') && !line.startsWith('        name:'))
+    const member = block(MEMBER_PRESET), observer = block(OBSERVER_PRESET)
+    expect(plugins(observer)).toEqual(plugins(member))
+    expect(observer).toContain('a2a_ticket_request')
+    expect(member).not.toContain('a2a_ticket_request')
+    expect(observer).not.toContain('dsh-tool-subagent')
+  })
+
   it('the bundle layer declares the router and member presets the host names', async () => {
     const { readFileSync } = await import('node:fs')
     const { ROUTER_PRESET, MEMBER_PRESET } = await import('../../src/superagent/host/role-tools.ts')

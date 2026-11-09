@@ -16,7 +16,22 @@ export function touchesRules(settings: unknown): boolean {
 }
 
 type Probe = (url: string, init: RequestInit) => Promise<{ status: number }>
+
+/**
+ * Whether a request may act as the owner on what today's control route already lets through: a live login when the host has
+ * one. On a host with no login there is nothing to prove against, and the control route stands (decision cards C5).
+ * @param home - this host's own base URL.
+ * @param cookie - the request's Cookie header.
+ * @param probe - fetch, or a stub in tests.
+ * @returns whether to go on.
+ */
+export async function ownerOrNoLogin(home: string | undefined, cookie: string | undefined, probe: Probe = fetch): Promise<boolean> {
+  if (home === undefined) return false
+  if ((await probe(`${home}${PROBE_PATH}`, probeInit({}))).status !== 401) return true
+  return cookie !== undefined && cookie !== '' && await guiOwnerProven(home, cookie, probe)
+}
 const PROBE_PATH = '/api/session/a2a-owner-proof'
+const probeInit = (headers: Record<string, string>): RequestInit => ({ method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ type: 'client-request', rpcId: 'a2a-owner-proof', method: 'session/a2a-owner-proof', payload: { args: {} } }) })
 
 /**
  * Whether `cookie` is a live login on this host.
@@ -27,9 +42,7 @@ const PROBE_PATH = '/api/session/a2a-owner-proof'
  */
 export async function guiOwnerProven(home: string | undefined, cookie: string | undefined, probe: Probe = fetch): Promise<boolean> {
   if (home === undefined || cookie === undefined || cookie === '') return false
-  const ask = async (headers: Record<string, string>): Promise<number> => (await probe(`${home}${PROBE_PATH}`, {
-    method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ type: 'client-request', rpcId: 'a2a-owner-proof', method: 'session/a2a-owner-proof', payload: { args: {} } }),
-  })).status
+  const ask = async (headers: Record<string, string>): Promise<number> => (await probe(`${home}${PROBE_PATH}`, probeInit(headers))).status
   if (await ask({}) !== 401) return false
   const status = await ask({ cookie })
   return status !== 401 && status < 500

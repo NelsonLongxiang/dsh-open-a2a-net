@@ -422,7 +422,7 @@ describe('superagent engine in the a2a host', () => {
       expect(await m.team(R_ID, [M_ID])).toMatchObject({ ok: true })
 
       // The router: superagent_* only. Its visible tools are exactly those.
-      expect(scopes.get(R_ID)!.allow).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply'])
+      expect(scopes.get(R_ID)!.allow).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose'])
       const statusRun = await run('superagent_read', m.R, { kind: 'tickets' }); expect(statusRun.isError, statusRun.text).toBe(false)
       for (const name of ['a2a_route', 'a2a_report', 'a2a_teams', 'a2a_ticket_report', 'a2a_file_send']) expect(await refusedByRole(name, m.R, { team: 'dsh/c2222222', message: 'x' }), name).toBe(true)
 
@@ -447,7 +447,7 @@ describe('superagent engine in the a2a host', () => {
       expect(await m.team(O_ID, [])).toMatchObject({ ok: true })
       expect(scopes.get(R_ID)).toMatchObject({ allow: undefined, lifted: 1 })
       expect(scopes.get(M_ID)).toMatchObject({ allow: undefined, lifted: 1 })
-      expect(scopes.get(O_ID)!.allow).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply'])
+      expect(scopes.get(O_ID)!.allow).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose'])
       expect(await refusedByRole('a2a_teams', m.R)).toBe(false)
       expect(await refusedByRole('a2a_teams', m.O)).toBe(true)
       expect(await refusedByRole('a2a_route', S, { team: 'dsh/c2222222', message: 'x' })).toBe(false)
@@ -559,7 +559,7 @@ describe('superagent engine in the a2a host', () => {
       const ticketId = routed.results[0].ticket_id as string
       await vi.waitFor(() => { expect(m.M.steered.some(t => t.includes('[superagent assignment]'))).toBe(true) }, { timeout: 8000 })
       const question = '这次报告用中文还是英文写？'
-      expect(await m.tool('a2a_ticket_report', m.M, { ticket_id: ticketId, state: 'waiting', summary: '开工前先问语言', question })).toMatchObject({ ok: true })
+      expect(await m.tool('a2a_ticket_report', m.M, { options: ['是', '否'], recommended: '是', ticket_id: ticketId, state: 'waiting', summary: '开工前先问语言', question })).toMatchObject({ ok: true })
       await vi.waitFor(async () => { expect((await m.state()).tickets.find((t: any) => t.id === ticketId).attention).toMatchObject({ question }) }, { timeout: 8000 })
       // The router's text leaves the question out (as the live router did); the host puts it in front.
       expect(await m.tool('superagent_reply', m.R, { purpose: 'attention', ticket_id: ticketId, question, text: '成员开工前先问你一个问题，等你回答。' })).toMatchObject({ ok: true })

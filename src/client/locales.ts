@@ -14,9 +14,75 @@ export type A2aNetKey =
   | 'a2a.jump'
   | 'a2a.stageTitle'
   | 'a2a.stageWorkbench'
+  | 'team.addFiles'
+  | 'team.removeFile'
+  | 'team.fileTooBig'
+  | 'team.tooManyFiles'
+  | 'team.dropHint'
+  | 'team.noFolders'
+  | 'team.sentRemote'
+  | 'team.remoteHint'
+  | 'team.decisions'
+  | 'team.decisionsGuide'
+  | 'team.noDecisions'
+  | 'team.recommended'
+  | 'team.approve'
+  | 'team.confirmChoice'
+  | 'team.decisionNote'
+  | 'team.decisionWrite'
+  | 'team.fromRouter'
+  | 'team.fromObserver'
+  | 'team.fromMember'
+  | 'team.tab'
+  | 'team.guide'
+  | 'team.pick'
+  | 'team.request'
+  | 'team.placeholder'
+  | 'team.send'
+  | 'team.sending'
+  | 'team.sent'
+  | 'team.failed'
+  | 'team.none'
+  | 'team.denied'
+  | 'team.unreadable'
+  | 'team.loading'
+  | 'team.open'
 
 /** Simplified Chinese dictionary. */
 export const zh: Record<A2aNetKey, string> = {
+  'team.addFiles': '添加文件',
+  'team.removeFile': '移除 {name}',
+  'team.fileTooBig': '{name} 超过 64 MB，发不了',
+  'team.tooManyFiles': '一次最多 {max} 个文件',
+  'team.dropHint': '也可以把多个文件一起拖到这里',
+  'team.noFolders': '不能拖入文件夹，请选择里面的文件',
+  'team.sentRemote': '已发给 {team}，由对方团队按自己的规则决定。发送者是 {sender}，回执会回到这个会话',
+  'team.remoteHint': '这支团队在其他实例上：这条消息算当前会话发的，不算你本人。对方要把这个会话列入名单，并开 auto 和对应规则，才会开单。',
+  'team.decisions': '待决策',
+  'team.decisionsGuide': '各团队等你拍板的事，附推荐选项',
+  'team.noDecisions': '现在没有等你决定的事。',
+  'team.recommended': '推荐',
+  'team.approve': '批准推荐',
+  'team.confirmChoice': '确认选择',
+  'team.decisionNote': '补充说明（可选）',
+  'team.decisionWrite': '写下你的决定',
+  'team.fromRouter': '总工提出',
+  'team.fromObserver': '观察者提出',
+  'team.fromMember': '成员提问',
+  'team.tab': '提需求',
+  'team.guide': '把需求交给 superagent 团队，不用离开当前对话',
+  'team.pick': '团队',
+  'team.request': '需求',
+  'team.placeholder': '写清要做什么、为什么。Ctrl/⌘ + Enter 发送',
+  'team.send': '提交',
+  'team.sending': '提交中…',
+  'team.sent': '已提交给 {team}，等总工决定',
+  'team.failed': '没有提交成功：{reason}',
+  'team.none': '这台 DSH 还没有能接需求的团队。先在 A2A 工作台建队，绑定总工。',
+  'team.denied': '这台 DSH 设了控制密钥，这个页面没有权限读取团队。请到 A2A 工作台的「团队」页提交。',
+  'team.unreadable': '暂时读不到团队，稍后再打开试试。',
+  'team.loading': '正在读取团队…',
+  'team.open': '打开团队页',
   'a2a.label': 'A2A 网络',
   'a2a.title': 'A2A 网络动态',
   'a2a.activity': '最近动态',
@@ -33,6 +99,39 @@ export const zh: Record<A2aNetKey, string> = {
 
 /** English dictionary. */
 export const en: Record<A2aNetKey, string> = {
+  'team.addFiles': 'Add files',
+  'team.removeFile': 'Remove {name}',
+  'team.fileTooBig': '{name} is over 64 MB and cannot be sent',
+  'team.tooManyFiles': 'At most {max} files at a time',
+  'team.dropHint': 'Or drag several files here at once',
+  'team.noFolders': 'Folders cannot be added. Choose the files inside',
+  'team.sentRemote': 'Sent to {team}, whose own rules decide. The sender is {sender}; the receipt comes back to this session',
+  'team.remoteHint': 'This team is on another instance. The message counts as this session\'s, not yours. That team opens a ticket only if it lists this session and runs auto with a matching rule.',
+  'team.decisions': 'Decisions',
+  'team.decisionsGuide': 'What your teams need you to decide, each with a recommendation',
+  'team.noDecisions': 'Nothing is waiting for your decision.',
+  'team.recommended': 'Recommended',
+  'team.approve': 'Approve recommendation',
+  'team.confirmChoice': 'Confirm choice',
+  'team.decisionNote': 'Add a note (optional)',
+  'team.decisionWrite': 'Write your decision',
+  'team.fromRouter': 'From the router',
+  'team.fromObserver': 'From an observer',
+  'team.fromMember': 'From a member',
+  'team.tab': 'Request',
+  'team.guide': 'Send a superagent team a request without leaving this conversation',
+  'team.pick': 'Team',
+  'team.request': 'Request',
+  'team.placeholder': 'What needs doing, and why. Ctrl/⌘ + Enter to send',
+  'team.send': 'Send',
+  'team.sending': 'Sending…',
+  'team.sent': 'Sent to {team}. Waiting for the router to decide',
+  'team.failed': 'Not sent: {reason}',
+  'team.none': 'This DSH has no team that can take a request yet. Compose one in the A2A workbench and bind its router.',
+  'team.denied': 'This DSH has a control key, and this page cannot read its teams. Send the request from the Team page of the A2A workbench.',
+  'team.unreadable': 'The team cannot be read right now. Try opening this again later.',
+  'team.loading': 'Reading the teams…',
+  'team.open': 'Open the team page',
   'a2a.label': 'A2A network',
   'a2a.title': 'A2A network activity',
   'a2a.activity': 'Recent activity',

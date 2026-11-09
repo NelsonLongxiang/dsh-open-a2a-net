@@ -41,6 +41,10 @@ A change to a rule set is agreed in conversation. The owner talks to the member 
 
 The team page shows all of it and lets the owner edit the rules directly; that write needs the host's GUI login.
 
+## Sending a request from the right bar
+
+DSH's right bar has a **提需求** view in its guide. It sends the text to this instance's team the way the team page does, as the owner's request, without leaving the conversation. Files you add go through the file channel, granted to the team's canvas for 24 hours, and the request carries a `[A2A file]` line for each; the member pulls them with `a2a_file_fetch`.
+
 ## For the router
 
 - Candidates arrive in your own session as `[superagent candidate] …` cards. Decide each by its `trigger_id` with `superagent_route`:
@@ -75,6 +79,21 @@ The team page shows all of it and lets the owner edit the rules directly; that w
 - You neither send nor receive A2A work (`[superagent-member-outbound]`, `[superagent-member-inbound]`). Do not open sessions or subagents.
 - Your tools are upstream's work tools (`read`, `write`, `edit`, `read_image`, `glob`, `grep`, `bash`, `pwsh`, `job_*`, `web_search`, `web_fetch`, `skill`, `todo_write`), plus `a2a_ticket_report`, `a2a_ticket_ack`, `a2a_ticket_handback` and `a2a_file_fetch`. The host refuses every other call with `[superagent-role-tools]`: subagents, other sessions, `a2a_route`, `a2a_report` and the router's tools. A subagent opened earlier acts in your role.
 
+## When the owner talks to you
+
+The owner can talk to a member or an observer directly in its own session. Treat that as a normal conversation: answer and do what they ask. It needs no ticket and no `a2a_ticket_report`. A ticket you hold goes on after it.
+
+## Decision cards
+
+What the owner has to decide is a card: a question, 2 to 6 options, the option you recommend, and a level (P0 irreversible or production, P1 significant, P2 routine and easy to undo, P3 trivial; no level counts as P1). The cards wait in the right bar's **待决策** view. P2 and P3 can be approved with one click; P0 and P1 need an option chosen.
+
+- A member's question in `a2a_ticket_report` is a card: `question` needs `options` and `recommended`, and the decision comes back on that ticket.
+- The router puts every recommendation of its own to the owner with `superagent_decision_propose`. An observer can use `a2a_decision_propose`. Once decided, these reach the router as a request from the owner beginning `[决策卡]`, to accept as any request.
+
+## For an observer
+
+An observer is a session the owner creates under the `superagent-observer` preset and adds to the canvas team. You join through the canvas, have a member's tools and take tickets like any member. You also have `a2a_ticket_request` (`text`: what needs doing and why): when you notice work nobody has asked for, file it there. The host files it in your name as an agent's request, and the router accepts and assigns it like any other. It cannot stop or change a ticket. An identical text still open returns the same request, and at most five of yours can be open at once (`too-many-open`).
+
 ## Members on other hosts
 
 A member can sit on another host: another physical node, or another DSH instance on this machine, even one with the same zone label. Its work and reports travel **host to host** as signed, body-bound OriginClaim requests. There is no A2A route, no ledger debt and no receipt.
@@ -85,14 +104,15 @@ A member can sit on another host: another physical node, or another DSH instance
 
 ## For the owner
 
-The owner control route is `/__dsh_a2a/superagent`.
+The owner control route is `/__dsh_a2a/superagent`. One DSH instance can run several teams: `GET /__dsh_a2a/superagent/teams` lists them and `POST { canvas, router }` there adds one. On the control route, `teamId` in a POST body or `?teamId=` on a GET picks a team by id; without it the route means the instance's primary team. Each team has its own settings, rules, tickets and A2A address, and a session has one role across all of them. The list also has the teams linked instances advertise (a team advertises itself only while its A2A Source is on), and `POST { action: 'send', address, session, text }` there sends one a request as that session. It goes through the ordinary route, and the receiving team treats it as any A2A message.
 
 **The team is a canvas team** (design v5). The owner composes it on the canvas — the planning view's 建队, or `/__dsh_a2a/canvas` — with the router and the members, local and on other hosts, then binds it here with `canvas` (the canvas team's name on this host) and `router` (one of its local sessions). Every other session on that canvas is a member, one worker slot each; adding or removing one on the canvas adds it to or removes it from the pool at once. A member removed while it runs a ticket is told to stop, and the ticket starts again on another member. While the team is bound to no canvas (as right after upgrading from a version before canvas teams, which keeps the router and drops the stored pool) or its canvas is gone, nothing is moved: running work stays with its member until the owner binds a canvas again, and the stored router may join the canvas that becomes the team. One session holds one team role: the team's canvas takes no CLI handle and no session that serves another team host, and a team session sits in no other canvas (`[superagent-team-canvas]`).
 
-The router and the members are sessions the owner creates under the team's agent presets, which this plugin ships in its bundle layer: **`superagent-router`** (superagent 总工) for the router and **`superagent-member`** (superagent 团队成员) for each member. The preset is the role's boundary:
+The router and the members are sessions the owner creates under the team's agent presets, which this plugin ships in its bundle layer: **`superagent-router`** (superagent 总工) for the router and **`superagent-member`** (superagent 团队成员) for each member, or **`superagent-observer`** (superagent 团队观察者) for a member who may also open tickets. The preset is the role's boundary:
 
 - `superagent-router`: read-only files, a foreground command and a job wait of at most 5 s, skills and compaction; no subagents.
 - `superagent-member`: the work tools; a foreground command moves to a background job after 5 s, so a stop or a person's answer is taken at the next step; no subagents.
+- `superagent-observer`: the same as `superagent-member`, on the team's own host only.
 
 Settings naming a router or member that runs another preset are refused, and so is `serve`. A session not loaded at the time, or a host without a preset registry, is not checked.
 

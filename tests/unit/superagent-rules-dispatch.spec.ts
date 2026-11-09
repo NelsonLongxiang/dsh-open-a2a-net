@@ -51,6 +51,41 @@ describe('settings: member profiles and dispatch rules', () => {
   })
 })
 
+describe('a ticket the owner asked for in the router session', () => {
+  const NOTE = 'tell them here in plain words'
+  async function ticketFrom(chat: boolean) {
+    const m = await team()
+    let trigger: string
+    if (chat) { m.say(person('msg-1', 1, '帮我补文档')); trigger = (m.h.requestForPerson(person('msg-1', 1, '帮我补文档')) as { trigger_id: string }).trigger_id }
+    else trigger = (m.h.request('帮我补文档') as { triggerId: string }).triggerId
+    m.h.pass()
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const ticket = (routeItem(m.h, { trigger_id: trigger, kind: 'accept', title: 't', scope: 's', reason: 'r' } as never) as { ticket_id: string }).ticket_id
+    await vi.waitFor(() => { expect(m.h.executor.bindingOf('session-a') ?? m.h.executor.bindingOf('session-b')).toBeDefined() })
+    const member = m.h.executor.bindingOf('session-a') !== undefined ? 'session-a' : 'session-b'
+    const reports = () => m.sent.filter(([id, t]) => id === 'session-r' && t.startsWith('[superagent report]')).map(([, t]) => t)
+    return { ...m, ticket, member, reports }
+  }
+  it('asks the router to say the result in its own session', async () => {
+    const m = await ticketFrom(true)
+    m.h.report(m.member, { state: 'ready', summary: '做完了' }, m.ticket)
+    expect(m.reports().at(-1)).toContain(NOTE)
+    await m.h.stop()
+  })
+  it('leaves progress in the router\'s own notes', async () => {
+    const m = await ticketFrom(true)
+    m.h.report(m.member, { state: 'progress', summary: '做到一半' }, m.ticket)
+    expect(m.reports().at(-1)).not.toContain(NOTE)
+    await m.h.stop()
+  })
+  it('asks nothing of the kind for a request from the team page', async () => {
+    const m = await ticketFrom(false)
+    m.h.report(m.member, { state: 'ready', summary: '做完了' }, m.ticket)
+    expect(m.reports().at(-1)).not.toContain(NOTE)
+    await m.h.stop()
+  })
+})
+
 describe('dispatch', () => {
   it('a named member gets the ticket while another is free', async () => {
     const m = await team(undefined, roles)

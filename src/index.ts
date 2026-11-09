@@ -142,7 +142,8 @@ import { createNodeBinder, NodeBindings } from './node-bind.ts'
 import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
 import { NEUTRAL_SOURCES, NodeReviewQueue, SessionTaint, localRoute, toolTaint } from './node-self.ts'
-import { guiOwnerProven, touchesRules } from './superagent/host/owner-proof.ts'
+import { guiOwnerProven, ownerOrNoLogin, touchesRules } from './superagent/host/owner-proof.ts'
+import { SuperagentTeams } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { registerSessionLogFaces } from './faces/session-log.ts'
@@ -1801,7 +1802,7 @@ export function apply(ctx: Context, config: Config): void {
         nudgeEscalations:()=>nudgeObservations.snapshot(),
         ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
-        teamCanvasRefusal: (canvas: string, member: string) => superagentHost?.canvasMemberRefusal(canvas, member, sessionPresetOf),
+        teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
         admissionRecheck: (caller: string, handle: string, local: boolean) => recheckCallerAdmission(linkRecheckRecords, caller, handle, local),
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
@@ -1965,7 +1966,7 @@ export function apply(ctx: Context, config: Config): void {
             // gh#152: members are read through the local tiers' lens — one of
             // this host's own handles resolves to the session it names, and
             // the two stored shapes of one session publish as ONE handle.
-            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) , ...(superagentHost?.a2aAddress !== undefined && superagentHost.settings.canvas === name ? { superagentTeam: true as const } : {}) })) } : {}),
+            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) , ...(superagentTeams?.all().some(team => team.a2aAddress !== undefined && team.settings.canvas === name) === true ? { superagentTeam: true as const } : {}) })) } : {}),
             ...(named && lanIp !== '' ? { lanIp } : {}),
             ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}),
             description: `A2A node exposing team ${config.team}${named ? '' : ' (minimal card — OriginClaim envelope required for the full card: X-A2A-Caller/-Url/-Ts/-Sig signed with your card key)'}`,
@@ -2027,7 +2028,7 @@ export function apply(ctx: Context, config: Config): void {
   const followupRelay = (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string, taskExpected=true): 'inserted'|void => followupDelivery.deliver(agent,text,sender,localFrom,taskId,callerKey,taskExpected)
   // superagent design v4, PR-B: superagent's domain engine in this host (on by default, idle until a team is bound). The router gets
   // candidate cards in its own session (host relay, not A2A) and decides only through the superagent_* tools.
-  const superagentHost: SuperagentHost | undefined = config.superagent === true ? new SuperagentHost({
+  const superagentTeams: SuperagentTeams | undefined = config.superagent === true ? new SuperagentTeams({
     home: join(home, 'a2a'), logger,
     deliverToSession: (id, text) => { const agent = sessionNodes.get(id); if (agent === undefined) return false; followupRelay(agent, text, config.team); return true },
     interval: (fn, ms) => ctx.timer.interval(fn, ms),
@@ -2097,9 +2098,10 @@ export function apply(ctx: Context, config: Config): void {
     },
     teamSend: args => teamCanvasSend(args),
   }) : undefined
+  const superagentHost: SuperagentHost | undefined = superagentTeams?.primary
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
   const superagentRoleTools = new RoleTools({
-    roleOf: id => superagentHost?.roleOf(id),
+    roleOf: id => superagentTeams?.ofSession(id)?.toolRoleOf(id),
     agentOf: id => ctx.get('agents')?.get(SessionId(id)) as RoleAgent | undefined,
     logger,
   })
@@ -2107,17 +2109,17 @@ export function apply(ctx: Context, config: Config): void {
   let superagentHomeUrl: string | undefined
   if (superagentHost !== undefined) {
     whenWebServerSettled(webServer => { superagentHomeUrl = `http://127.0.0.1:${String((webServer as { port: number }).port)}` })
-    ctx.effect(() => { superagentHost.start(); return () => { void superagentHost.stop() } }, 'a2a: superagent engine passes')
-    registerSuperagentTools(ctx, () => superagentHost)
+    ctx.effect(() => { superagentTeams!.start(); return () => { void superagentTeams!.stop() } }, 'a2a: superagent engine passes')
+    registerSuperagentTools(ctx, id => superagentTeams!.ofSession(id))
     // A member's turn ending is the executor's turn-end fact (PR-C1).
-    ctx.on('agent/status', payload => { if (payload.status === 'idle') superagentHost.memberIdle(String(payload.agent.id)) })
+    ctx.on('agent/status', payload => { if (payload.status === 'idle') superagentTeams!.ofSession(String(payload.agent.id))?.memberIdle(String(payload.agent.id)) })
     // A failed turn is retried or fails the ticket for a person (upstream); without this it read as still working.
-    ctx.on('agent/error', ({ agent, error }) => { superagentHost.memberFailed(String(agent.id), error) })
+    ctx.on('agent/error', ({ agent, error }) => { superagentTeams!.ofSession(String(agent.id))?.memberFailed(String(agent.id), error) })
     // PR-F: an Input counts as read once the member's session takes the message carrying it into its history.
-    ctx.on('agent/inbox/claimed', ({ agent }) => { superagentHost.memberClaimed(String(agent.id)) })
+    ctx.on('agent/inbox/claimed', ({ agent }) => { superagentTeams!.ofSession(String(agent.id))?.memberClaimed(String(agent.id)) })
     ctx.tools.guard(exec => {
       const refusal = superagentRoleTools.guard(exec.name, exec.agent as unknown as RoleAgent | undefined)
-      if (refusal !== undefined) superagentHost.noteRefusal('superagent-role-tools', { ...(exec.agent !== undefined ? { caller: String(exec.agent.id) } : {}), target: exec.name })
+      if (refusal !== undefined) (exec.agent !== undefined ? superagentTeams!.ofSession(String(exec.agent.id)) ?? superagentHost! : superagentHost!).noteRefusal('superagent-role-tools', { ...(exec.agent !== undefined ? { caller: String(exec.agent.id) } : {}), target: exec.name })
       return refusal
     })
     ctx.on('agent/created', ({ agent }) => { superagentRoleTools.sync(agent as unknown as RoleAgent); return undefined })
@@ -2132,19 +2134,18 @@ export function apply(ctx: Context, config: Config): void {
   function superagentRouterRefusal(callerSessionId: string | undefined, target: string): string | undefined {
     const refusal = superagentRefusalText(callerSessionId, target)
     // Every caller returns this refusal to the route it refused, so each refused route counts once (PR-F: acceptance item 7).
-    if (refusal !== undefined) superagentHost?.noteRefusal(/^\[([a-z-]+)\]/.exec(refusal)?.[1] ?? 'superagent', { ...(callerSessionId !== undefined ? { caller: callerSessionId } : {}), target })
+    if (refusal !== undefined) (callerSessionId !== undefined ? superagentTeams?.ofSession(callerSessionId) ?? superagentHost : superagentHost)?.noteRefusal(/^\[([a-z-]+)\]/.exec(refusal)?.[1] ?? 'superagent', { ...(callerSessionId !== undefined ? { caller: callerSessionId } : {}), target })
     return refusal
   }
   function superagentRefusalText(callerSessionId: string | undefined, target: string): string | undefined {
     if (superagentHost === undefined) return undefined
-    const callerRole = callerSessionId === undefined ? undefined : superagentHost.roleOf(callerSessionId)
+    const callerRole = callerSessionId === undefined ? undefined : superagentTeams!.ofSession(callerSessionId)?.roleOf(callerSessionId)
     if (callerRole === 'router') return '[superagent-router-outbound] the team router does not route A2A; it decides with superagent_route and replies with superagent_reply'
     if (callerRole === 'member') return '[superagent-member-outbound] a team member does not route A2A; it works on its assigned ticket and reports with a2a_ticket_report'
     const bare = target.replace(/@[0-9a-f]{8}$/, '')
     const named = (id: string): boolean => { const handle = `${config.team}/${id8(id)}`; return target === id || (bare === handle && (target === bare || target.endsWith('@' + ownCanvasFingerprint))) }
-    const router = superagentHost.routerSession
-    if (router !== undefined && named(router)) return '[superagent-router-inbound] the team router takes no A2A work; send requests to the team\'s Sources (the workbench or its A2A address), where the gate admits them'
-    if (superagentHost.settings.members.some(named)) return '[superagent-member-inbound] a team member takes work only as assignments from the team\'s executor; send requests to the team\'s Sources'
+    if (superagentTeams!.all().some(team => team.routerSession !== undefined && named(team.routerSession))) return '[superagent-router-inbound] the team router takes no A2A work; send requests to the team\'s Sources (the workbench or its A2A address), where the gate admits them'
+    if (superagentTeams!.all().some(team => team.settings.members.some(named))) return '[superagent-member-inbound] a team member takes work only as assignments from the team\'s executor; send requests to the team\'s Sources'
     return undefined
   }
   /**
@@ -2152,19 +2153,17 @@ export function apply(ctx: Context, config: Config): void {
    * host's own fingerprint — lands in the team's mailbox (the A2A Source reads it), never in a member session.
    */
   function teamMailboxOf(team: string): string | undefined {
-    const bound = superagentHost?.settings.canvas
-    const address = superagentHost?.a2aAddress
-    if (bound === undefined || address === undefined) return undefined
     const split = splitCanvasOwner(team.trim())
     if (split.owner !== undefined && split.owner !== ownCanvasFingerprint) return undefined
-    return split.team === `${config.team}/canvas/${bound}` ? address : undefined
+    return superagentTeams?.all().find(host => host.a2aAddress !== undefined && split.team === `${config.team}/canvas/${host.settings.canvas ?? ''}`)?.a2aAddress
   }
   /** Design v5 (D2): a route straight to the team identity's handle is refused (a receipt to it still lands): the address is the canvas. */
   function teamAddressRefusal(team: string, message: string): string | undefined {
-    const address = superagentHost?.a2aAddress
-    if (address === undefined || team.trim() !== address || parseReceipt(message) !== null) return undefined
-    const bound = superagentHost?.settings.canvas
-    superagentHost?.noteRefusal('superagent-team-address', { target: team })
+    const owner = superagentTeams?.all().find(host => host.a2aAddress === team.trim())
+    const address = owner?.a2aAddress
+    if (owner === undefined || address === undefined || parseReceipt(message) !== null) return undefined
+    const bound = owner.settings.canvas
+    owner.noteRefusal('superagent-team-address', { target: team })
     return `[superagent-team-address] ${address} is the team's internal mailbox; send requests to the team's canvas address${bound !== undefined ? ` ${config.team}/canvas/${bound}` : ' (the team is bound to no canvas team yet)'}`
   }
   /**
@@ -2588,7 +2587,7 @@ export function apply(ctx: Context, config: Config): void {
     { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown' }
   > {
     // superagent v4: whatever address resolved to it (a canvas team, the node team), the router takes no A2A work.
-    if (superagentHost?.roleOf(String(agent.id)) !== undefined) {
+    if (superagentTeams?.ofSession(String(agent.id)) !== undefined) {
       return Promise.resolve({ ok: false, error: superagentRouterRefusal(undefined, String(agent.id)) ?? 'superagent team sessions take no A2A work' })
     }
     return new Promise((resolve) => {
@@ -3072,10 +3071,10 @@ export function apply(ctx: Context, config: Config): void {
       config,
       cliDeposits,
       canvasStore, canvasMemberForWrite,
-      teamCanvasRefusal: (canvas: string, member: string) => superagentHost?.canvasMemberRefusal(canvas, member, sessionPresetOf),
-      teamCanvasBound: (canvas: string) => superagentHost?.settings.canvas === canvas,
+      teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
+      teamCanvasBound: (canvas: string) => superagentTeams?.ofCanvas(canvas) !== undefined,
       superagentInbound: team => superagentRouterRefusal(undefined, team),
-      superagentIntake: team => superagentHost?.a2aAddress === team,
+      superagentIntake: team => superagentTeams?.all().some(host => host.a2aAddress === team) === true,
       teamMailboxOf: team => teamMailboxOf(team),
       teamAddressRefusal: (team, message) => teamAddressRefusal(team, message),
       canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
@@ -3147,12 +3146,19 @@ export function apply(ctx: Context, config: Config): void {
       path: '/__dsh_a2a/superagent',
       handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
         const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
-        if (req.method === 'GET') { send(200, superagentHost.state()); return }
+        if (req.method === 'GET') {
+          const asked = superagentTeams!.get(new URL(req.url ?? '/', 'http://x').searchParams.get('teamId') ?? undefined)
+          if (asked === undefined) { send(404, { ok: false, error: 'no such team on this instance' }); return }
+          send(200, asked.state())
+          return
+        }
         readJsonBody(req, res, (body) => {
           const fields = body as Record<string, unknown>
+          const sa = superagentTeams!.get(typeof fields.teamId === 'string' ? fields.teamId : undefined)
+          if (sa === undefined) { send(404, { ok: false, error: 'no such team on this instance' }); return }
           try {
             if (fields.action === 'settings') {
-              const save = (): void => { send(200, superagentHost.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf)) }
+              const save = (): void => { send(200, sa.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf)) }
               // A shell on this machine passes the control route; a rule change needs what only the owner's browser holds (design D10).
               if (!touchesRules(fields.settings)) { save(); return }
               void guiOwnerProven(superagentHomeUrl, req.headers.cookie).then(proven => {
@@ -3161,9 +3167,9 @@ export function apply(ctx: Context, config: Config): void {
               }, (error: unknown) => { send(500, { ok: false, error: String(error) }) })
               return
             } else if (fields.action === 'request') {
-              send(200, superagentHost.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined, fields.via === 'cli' ? 'cli' : undefined))
+              send(200, sa.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined, fields.via === 'cli' ? 'cli' : undefined))
             } else if (fields.action === 'answer') {
-              send(200, superagentHost.answer(typeof fields.ticket_id === 'string' ? fields.ticket_id : '', typeof fields.text === 'string' ? fields.text : ''))
+              send(200, sa.answer(typeof fields.ticket_id === 'string' ? fields.ticket_id : '', typeof fields.text === 'string' ? fields.text : ''))
             } else if (fields.action === 'add-remote-member' || fields.action === 'remove-remote-member') {
               // Design v5: a remote member is a remote slot of the bound canvas team — added on the canvas, which pins its key.
               send(200, { ok: false, error: 'the team is a canvas team: add or remove a remote member on the canvas (/__dsh_a2a/canvas add-member / remove-member)' })
@@ -3175,7 +3181,7 @@ export function apply(ctx: Context, config: Config): void {
               // the linked peer whose signed card key it names and which advertises that canvas; that key is pinned, so only it
               // may assign these sessions work. null leaves. The member host's owner consents here; the team host cannot
               // take another host's sessions on its own (U17).
-              if (fields.team === null) { send(200, superagentHost.serveTeam(undefined, [], () => false)); return }
+              if (fields.team === null) { send(200, sa.serveTeam(undefined, [], () => false)); return }
               const team = typeof fields.team === 'string' ? fields.team.trim() : ''
               const members = Array.isArray(fields.members) ? fields.members.filter((m): m is string => typeof m === 'string') : []
               void (async () => {
@@ -3194,17 +3200,17 @@ export function apply(ctx: Context, config: Config): void {
                 // The link judgement reads the cached card: cache the verified one first, as the canvas member proof does.
                 cardCache.set(found.url, { at: Date.now(), card: found.card })
                 if (peerAdmissionLinkState(found.url).link !== 'linked') { send(200, { ok: false, error: 'the team host must be a linked peer' }); return }
-                send(200, superagentHost.serveTeam({ url: new URL(found.url).origin, key: found.card.publicKey!, canvas: team }, members, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf))
+                send(200, sa.serveTeam({ url: new URL(found.url).origin, key: found.card.publicKey!, canvas: team }, members, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf))
               })().catch(error => send(200, { ok: false, error: String(error) }))
             } else if (fields.action === 'reevaluate') {
               // Design superagent-reevaluate-note D1: the owner asks for a fresh judgement of a stored message.
-              send(200, superagentHost.reevaluate(typeof fields.trigger_id === 'string' ? fields.trigger_id : ''))
+              send(200, sa.reevaluate(typeof fields.trigger_id === 'string' ? fields.trigger_id : ''))
             } else if (fields.action === 'stop' || fields.action === 'retry') {
               const ticketId = typeof fields.ticket_id === 'string' ? fields.ticket_id : ''
               const ticket = fields.action === 'stop'
-                ? superagentHost.engine.stopTicket(ticketId, typeof fields.reason === 'string' ? fields.reason : undefined)
-                : superagentHost.engine.retryTicket(ticketId)
-              superagentHost.pass()
+                ? sa.engine.stopTicket(ticketId, typeof fields.reason === 'string' ? fields.reason : undefined)
+                : sa.engine.retryTicket(ticketId)
+              sa.pass()
               send(200, { ok: true, ticket })
             } else send(200, { ok: false, error: 'action must be settings, request, answer, serve, stop, retry or reevaluate' })
           } catch (error) { send(200, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
@@ -3246,10 +3252,75 @@ export function apply(ctx: Context, config: Config): void {
         },
       }), label)
     }
-    signedFace('/a2a/superagent-member', (body, claim) => superagentHost.assignedWork(body.op, body.member, claim.key, body.text), 'a2a: superagent member face')
+    // Design M6: each team answers only for its own members and pinned keys, so the first that does not refuse is the one.
+    const firstTeam = (ask: (team: SuperagentHost) => Record<string, unknown>): Record<string, unknown> => {
+      let refused: Record<string, unknown> = { ok: false, code: 'not-team', error: 'no team here' }
+      for (const team of superagentTeams!.all()) { refused = ask(team); if (!['not-team', 'not-member'].includes(String(refused.code))) return refused }
+      return refused
+    }
+    signedFace('/a2a/superagent-member', (body, claim) => firstTeam(team => team.assignedWork(body.op, body.member, claim.key, body.text)), 'a2a: superagent member face')
     signedFace('/a2a/superagent-team', (body, claim) => typeof body.member === 'string' && claimCovers(body.member, claim.caller)
-      ? superagentHost.remoteEvent(body.op, body.member, claim.key, body.report)
+      ? firstTeam(team => team.remoteEvent(body.op, body.member, claim.key, body.report))
       : { ok: false, code: 'not-signer', error: 'the signer does not speak for that member' }, 'a2a: superagent team face')
+  })
+
+  /** Design M8: the teams linked instances advertise on their cards; only a team whose A2A Source is on is advertised. */
+  function linkedTeams(): Array<{ id: string; primary: false; remote: true; canvas: string; address: string; open: true; host: string }> {
+    return [...cardCache.entries()].flatMap(([url, hit]) => {
+      const card = hit.card
+      if (card === undefined || typeof card.publicKey !== 'string' || !verifyCard(card, Date.now()).ok || peerAdmissionLinkState(url).link !== 'linked') return []
+      const owner = canvasOwnerFingerprint(card.publicKey)
+      return (card.canvasOrg ?? []).filter(entry => entry.superagentTeam === true && entry.team === `${card.team}/canvas/${entry.name}`)
+        .map(entry => ({ id: `remote:${entry.team}@${owner}`, primary: false as const, remote: true as const, canvas: entry.name, address: `${entry.team}@${owner}`, open: true as const, host: card.name ?? new URL(url).host }))
+    })
+  }
+
+  if (superagentTeams !== undefined) whenWebServerSettled((webServer) => {
+    // Decision cards: what waits for the owner, and their decision (C3, C5).
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/__dsh_a2a/superagent/decisions',
+      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+        const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
+        if (req.method === 'GET') { send(200, { decisions: superagentTeams.decisionCards() }); return }
+        readJsonBody(req, res, (body) => {
+          const fields = body as { teamId?: unknown; id?: unknown; how?: unknown; option?: unknown; note?: unknown }
+          const team = superagentTeams.get(typeof fields.teamId === 'string' ? fields.teamId : undefined)
+          if (team === undefined) { send(404, { ok: false, error: 'no such team on this instance' }); return }
+          // A member's shell on this machine passes the control route; deciding is the owner's alone (C5).
+          void ownerOrNoLogin(superagentHomeUrl, req.headers.cookie).then((allowed) => {
+            if (!allowed) { send(403, { ok: false, code: 'owner-proof', error: '决策需要在已登录的 DSH 界面里操作。' }); return }
+            send(200, team.decide(typeof fields.id === 'string' ? fields.id : '', fields.how, fields.option, fields.note))
+          }, (error: unknown) => { send(500, { ok: false, error: String(error) }) })
+        })
+      }),
+    }), 'a2a: superagent decisions face')
+  })
+
+  if (superagentTeams !== undefined) whenWebServerSettled((webServer) => {
+    // Design M3/M5: the instance's teams, and adding one.
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/__dsh_a2a/superagent/teams',
+      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+        const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
+        if (req.method === 'GET') { send(200, { teams: [...superagentTeams.rows().map(row => ({ ...row, ...(row.canvas !== undefined ? { address: `${config.team}/canvas/${row.canvas}` } : {}) })), ...linkedTeams()] }); return }
+        readJsonBody(req, res, (body) => {
+          const fields = body as { canvas?: unknown; router?: unknown; action?: unknown; address?: unknown; session?: unknown; text?: unknown }
+          if (fields.action === 'send') {
+            // Design M9: as the session the view is open in, through the ordinary route, so every gate of a2a_route applies.
+            const address = typeof fields.address === 'string' ? fields.address : '', text = typeof fields.text === 'string' ? fields.text.trim() : ''
+            const agent = typeof fields.session === 'string' ? sessionNodes.get(fields.session) : undefined
+            if (!linkedTeams().some(team => team.address === address)) { send(200, { ok: false, code: 'not-listed', error: 'that team is not on a linked instance, or it takes no A2A requests' }); return }
+            if (text === '' || text.length > 20_000) { send(200, { ok: false, code: 'text', error: 'text is required, at most 20000 characters' }); return }
+            if (agent === undefined) { send(200, { ok: false, code: 'not-joined', error: 'join this session to the A2A network first: a request to another instance is sent as this session' }); return }
+            void routeTrunk({ team: address, message: text, async: true }, agent, new AbortController().signal).then((out) => { send(200, { ...out, sender: sessionTeamOf(agent) }) }, (error: unknown) => { send(200, { ok: false, error: String(error) }) })
+            return
+          }
+          send(200, superagentTeams.add({ canvas: fields.canvas, router: fields.router }, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf))
+        })
+      }),
+    }), 'a2a: superagent teams face')
   })
 
   whenWebServerSettled((webServer) => {
@@ -3368,7 +3439,7 @@ export function apply(ctx: Context, config: Config): void {
 
     // gh#77: the session-log faces (local transcript reader + remote-log proxy) live in src/faces/session-log.ts.
     registerSessionLogFaces(webServer, { ctx, config, controlRoute, scanSessionLogList, readSessionLogTail, peerStore, peerFetch, peerRequestHeaders, directoryPeerCandidates, memoizedCardFetch })
-    registerFileFaces(webServer, { ctx, config, blobStore, canvasStore, verifyOriginClaim, peerKeyAdmits, controlRoute, recordActivity })
+    registerFileFaces(webServer, { ctx, config, blobStore, ownOrigin: () => originOf(ownCardUrl), canvasStore, verifyOriginClaim, peerKeyAdmits, controlRoute, recordActivity })
   })
 
   /**
@@ -3458,7 +3529,7 @@ export function apply(ctx: Context, config: Config): void {
   // on 'boot' (#138 R1); the first lazy read rechecks them.
   ctx.effect(() => canvasStore.onChange(() => observeAuthorization('canvas')), 'a2a: S6 canvas observer')
   // Design v5: the team's pool is its canvas team's; a canvas change is a pool change.
-  if (superagentHost !== undefined) ctx.effect(() => canvasStore.onChange(() => { superagentHost.poolChanged() }), 'a2a: superagent team canvas')
+  if (superagentHost !== undefined) ctx.effect(() => canvasStore.onChange(() => { for (const team of superagentTeams!.all()) team.poolChanged() }), 'a2a: superagent team canvas')
   ctx.effect(() => joinedSessions.onChange(() => observeAuthorization('joined')), 'a2a: S6 joined observer')
   ctx.effect(() => teamMemberships.onChange(() => observeAuthorization('roster')), 'a2a: S6 roster observer')
   observeAuthorization('boot')
@@ -3943,7 +4014,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
 
   actTools.registerRoute()
   // #91 file channel F2: a2a_file_send / a2a_file_fetch (src/tools/files.ts).
-  const fileTools = createFileTools({ ctx, config, blobStore, canvasMembersOf: name => canvasStore.membersOf(name), ownCardUrl: () => ownCardUrl, sessionTeamOf, a2aJoinGateRefusal, routeTrunk, peerFetch, originClaimHeaders })
+  const fileTools = createFileTools({ ctx, config, blobStore, canvasMembersOf: name => canvasStore.membersOf(name).map(member => member.startsWith('session-') ? `${config.team}/${id8(member)}` : member), ownCardUrl: () => ownCardUrl, sessionTeamOf, a2aJoinGateRefusal, routeTrunk, peerFetch, originClaimHeaders })
   fileTools.registerFileSend()
   fileTools.registerFileFetch()
 
@@ -4323,7 +4394,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       try {
         const target = await woken
         // superagent v4: whatever address resolved to it (a canvas team, the node team), the router takes no A2A work.
-        if (superagentHost?.roleOf(String(target.id)) !== undefined) {
+        if (superagentTeams?.ofSession(String(target.id)) !== undefined) {
           endRoute(flight)
           recordActivity('out', team, callerSession ?? 'local', false)
           return { ok: false, error: superagentRouterRefusal(undefined, String(target.id)) ?? 'superagent team sessions take no A2A work', code: -32000 }

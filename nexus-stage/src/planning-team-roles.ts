@@ -15,6 +15,8 @@ export interface TeamRoles {
   readonly router?: string
   /** Each local member's session id, with its repository when the owner named one. */
   readonly members: ReadonlyMap<string, string | undefined>
+  /** The local members who may also open tickets. */
+  readonly observers: ReadonlySet<string>
   /** Each remote member by its planning card id, with its repository when the owner named one. */
   readonly remote: ReadonlyMap<string, string | undefined>
   /** Each member's role and rules, by planning card id, for its tooltip. */
@@ -31,7 +33,7 @@ const profileTip = (profile: { readonly role?: string; readonly rules: ReadonlyA
 export function teamRolesOf(state: SaState | null): TeamRoles | undefined {
   const s = state?.settings
   if (s === undefined || s.canvas === undefined) return undefined
-  return { canvas: s.canvas, ...(s.router !== undefined ? { router: s.router } : {}), members: new Map(s.members.map(id => [id, s.repos?.[id]])), remote: new Map(s.remoteMembers.map(r => [remoteCardId(r.ref), s.repos?.[r.ref]])), tips: new Map([...s.members.map(id => [id, profileTip(s.profiles?.[id])] as const), ...s.remoteMembers.map(r => [remoteCardId(r.ref), profileTip(s.profiles?.[r.ref])] as const)].filter(([, tip]) => tip !== '')) }
+  return { canvas: s.canvas, ...(s.router !== undefined ? { router: s.router } : {}), members: new Map(s.members.map(id => [id, s.repos?.[id]])), observers: new Set(s.observers ?? []), remote: new Map(s.remoteMembers.map(r => [remoteCardId(r.ref), s.repos?.[r.ref]])), tips: new Map([...s.members.map(id => [id, profileTip(s.profiles?.[id])] as const), ...s.remoteMembers.map(r => [remoteCardId(r.ref), profileTip(s.profiles?.[r.ref])] as const)].filter(([, tip]) => tip !== '')) }
 }
 
 /** What the badge shows of a role: the repository without its owner. The tooltip has it whole. */
@@ -43,8 +45,8 @@ export function roleText(roles: TeamRoles | undefined, id: string): string | und
   if (roles.router === id) return '总工'
   if (roles.remote.has(id)) { const repo = roles.remote.get(id); return repo !== undefined ? `成员 · ${repo}（远端）` : '成员（远端）' }
   if (!roles.members.has(id)) return undefined
-  const repo = roles.members.get(id)
-  return repo !== undefined ? `成员 · ${repo}` : '成员'
+  const repo = roles.members.get(id), name = roles.observers.has(id) ? '观察者' : '成员'
+  return repo !== undefined ? `${name} · ${repo}` : name
 }
 
 export interface TeamRoleDecorator {
@@ -75,7 +77,7 @@ export function createTeamRoleDecorator(): TeamRoleDecorator {
     for (const [id, el] of nodes ?? []) {
       const text = roleText(roles, id)
       el.classList.toggle('is-superagent-router', text === '总工')
-      el.classList.toggle('is-superagent-member', text?.startsWith('成员') === true)
+      el.classList.toggle('is-superagent-member', text?.startsWith('成员') === true || text?.startsWith('观察者') === true)
       badge(el, 'sa-role', text === undefined ? undefined : roleLabel(text), text)
       // The card's own tooltip is written on each render, before this runs: add to it once.
       const tip = roles?.tips.get(id)

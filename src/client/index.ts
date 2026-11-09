@@ -14,11 +14,13 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls ui-sidebar's SlotMap merge so PropsRuntime<
 // 'sidebar.footer.action'> resolves (the owner props the shell injects).
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
+import { registerTeamRequest } from './team-request.ts'
 import type { SessionIdOf } from '@deepseek-ai/dsh-client-ui-slots'
 import { A2aControl } from './A2aControl.tsx'
 import { en, zh, type A2aNetKey } from './locales.ts'
 
 export type { A2aControlInjected, A2aControlProps, A2aSessionRow } from './A2aControl.tsx'
+export { TEAM_DECISIONS_KIND, TEAM_REQUEST_KIND } from './team-request.ts'
 export type { A2aNetKey } from './locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -40,6 +42,7 @@ export const inject = ['slots', 'sessions', 'locale']
  */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'a2a-net: dictionaries')
+  registerTeamRequest(ctx, NS)
 
   // The network control renders only on a host that serves the session-node
   // state route (a2a host half + session nodes composed); the probe keeps

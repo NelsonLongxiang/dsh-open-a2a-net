@@ -75,6 +75,8 @@ export class RuleChanges {
   }
 
   requestOf(messageId: string): string | undefined { return this.state.requests[messageId] }
+  /** Whether a Trigger is a person's message filed from the router's own session. */
+  filedFromChat(triggerId: string): boolean { return Object.values(this.state.requests).includes(triggerId) }
   recordRequest(messageId: string, triggerId: string): void {
     this.state.requests[messageId] = triggerId
     const keys = Object.keys(this.state.requests)

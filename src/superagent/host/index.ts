@@ -21,15 +21,20 @@ import { A2aSource } from './a2a-source.ts'
 import { MemberExecutor, transientError, type MemberTurn } from './executor.ts'
 import { ReviewRequests } from './review-requests.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
+import { DecisionBook, oneClick, parseDecision, ticketCardId, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
-import { MEMBER_PRESET, ROUTER_PRESET } from './role-tools.ts'
+import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, type Role } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
-import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
+import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 
 export interface SuperagentHostDeps {
   /** The a2a home directory; state lives under `<home>/superagent/`. */
   readonly home: string
+  /** Where this team's state lives instead, when it is not the instance's primary team (design M2). */
+  readonly stateDir?: string
+  /** Whether another team on this instance holds a canvas: one canvas is one team. */
+  readonly canvasTaken?: (canvas: string, self: SuperagentHost) => boolean
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
   /** Put text into a live local session as a follow-up; false when the session is not live here. */
   readonly deliverToSession: (sessionId: string, text: string) => boolean
@@ -114,11 +119,13 @@ const clip = (text: string, cap = TEXT_CAP): string => (text.length > cap ? `${t
  * A router or member session that runs another agent preset than its role's (when its preset is known: a session that is
  * not loaded right now is checked when it is).
  */
-export function presetRefusal(router: string | undefined, members: readonly string[], presetOf: (id: string) => string | undefined): string | undefined {
+export function presetRefusal(router: string | undefined, members: readonly string[], presetOf: (id: string) => string | undefined, served = false): string | undefined {
   const routerPreset = router !== undefined ? presetOf(router) : undefined
   if (routerPreset !== undefined && routerPreset !== ROUTER_PRESET) return `router ${router} runs the ${routerPreset} preset: a team's router runs ${ROUTER_PRESET} (superagent 总工); create it under that preset`
   for (const member of members) {
     const preset = presetOf(member)
+    // An observer files on the host it sits on, which the team's own host alone can admit.
+    if (preset === OBSERVER_PRESET && !served) continue
     if (preset !== undefined && preset !== MEMBER_PRESET) return `member ${member} runs the ${preset} preset: a team's member runs ${MEMBER_PRESET} (superagent 团队成员); create it under that preset`
   }
   return undefined
@@ -147,8 +154,12 @@ export const ORIGIN_LINE_NOTE = 'A 未验证（…） in a message\'s first line
 
 /** The candidate card the router reads: bounded facts and the ids its decision names, never authority. */
 /** A message a person typed into a session: only the host can mark one. */
+/** Who a workbench request is from, when it is not the owner at the page: their terminal, or an observer. */
+type WorkbenchVia = 'cli' | { readonly observer: string }
+
 export interface PersonMessage { readonly id: string; readonly atMs: number; readonly text: string }
 
+const OBSERVER_LINE = "This request is from the team's observer, an agent the owner named to open tickets; these are not a person's words. Accept it as any request when it is real work for this team, attach it when it repeats an open ticket, and otherwise ignore it with a reason. It cannot stop a ticket."
 export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings, 'acceptMode' | 'rules'> & Partial<Pick<TeamSettings, 'repos'>>,
   others: readonly Pick<Ticket, 'id' | 'title' | 'createdAt'>[] = [], requeued: ReadonlySet<string> = new Set(), teamLines: readonly string[] = []): string {
   const lines = [
@@ -160,6 +171,7 @@ export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings
   // #172 keeps 已验证来源 for a bound root-card origin, so a linked CLI identity's message opens with 未验证（cli-identity）.
   // That line is the network's, and it read to the router as this team's verdict on a sender its scope had already checked.
   if (candidate.triggers.some(t => t.actor.source === 'a2a' && /^\[A2A direct\][^\n]*未验证（/.test(t.text))) lines.push(ORIGIN_LINE_NOTE, '')
+  if (candidate.triggers.some(t => t.actor.source === 'workbench' && observerOfActor(t.actor.id) !== undefined)) lines.push(OBSERVER_LINE, '')
   if (candidate.tickets.length > 0) {
     lines.push('tickets on this thread (open first):')
     for (const ticket of [...candidate.tickets].sort((a, b) => Number(!!a.ended) - Number(!!b.ended))) {
@@ -211,6 +223,7 @@ export class SuperagentHost {
   private disposeTimer: (() => void) | undefined
   /** The A2A executor (PR-C1): the owner's fixed member pool, one worker slot each. */
   readonly executor: MemberExecutor
+  private readonly decisions: DecisionBook
   /** The A2A Source (PR-B2b): the team's A2A address and its mailbox loop. */
   readonly a2a: A2aSource
   /** Outbox messages being sent right now, so a pass never sends one twice at once. */
@@ -228,7 +241,7 @@ export class SuperagentHost {
   private readonly refusalRecent: Array<{ at: string; rule: string; caller?: string; target?: string }> = []
 
   constructor(private readonly d: SuperagentHostDeps) {
-    const dir = join(d.home, 'superagent')
+    const dir = d.stateDir ?? join(d.home, 'superagent')
     this.settingsPath = join(dir, 'settings.json')
     this.settingsValue = this.loadSettings()
     this.store = new JsonRepositories(join(dir, 'state.json'))
@@ -272,6 +285,7 @@ export class SuperagentHost {
       onOpen: (thread, head, url, ticketId) => this.reviews.opened(thread, head, url, ticketId),
     })
     this.ruleChanges = new RuleChanges(join(dir, 'rule-changes.json'))
+    this.decisions = new DecisionBook(join(dir, 'decisions.json'))
     this.reviews = new ReviewRequests({
       path: join(dir, 'reviews.json'), reviewer: () => this.settingsValue.reviewer, logger: d.logger,
       ask: (address, text) => this.a2a.askReview(address, text),
@@ -279,7 +293,7 @@ export class SuperagentHost {
     })
     this.engine = new Engine({
       repo: this.store,
-      policy: () => teamPolicy(this.settingsValue),
+      policy: () => teamPolicy(this.settings),
       scope: teamScope(() => this.settingsValue),
       assessor, executor, outbox,
       ...(d.now !== undefined ? { now: d.now } : {}),
@@ -335,6 +349,21 @@ export class SuperagentHost {
     return this.settings.members.includes(sessionId) || this.settingsValue.serves?.members.includes(sessionId) === true ? 'member' : undefined
   }
 
+  /** Whether a session is one of this team's observers: a local member created under the observer preset. */
+  isObserver(sessionId: string): boolean { return this.settings.observers.includes(sessionId) }
+
+  /** A session's tool list: its role, an observer being a member with one tool more. */
+  toolRoleOf(sessionId: string): Role | undefined {
+    const role = this.roleOf(sessionId)
+    return role === 'member' && this.isObserver(sessionId) ? 'observer' : role
+  }
+
+  /** How a member's turn ended, and whether it answered the owner in person. */
+  private turnOf(sessionId: string): MemberTurn | undefined {
+    const turn = this.d.memberTurn?.(sessionId)
+    return turn === undefined ? undefined : { ...turn, person: this.d.personMessage?.(sessionId) !== undefined }
+  }
+
   /** A member's turn ended (agent idle): the executor's turn-end fact — told to the served team host when it is theirs. */
   memberIdle(sessionId: string): void { this.memberEvent(sessionId, 'idle') }
   /** A member's turn failed (agent error): retried or reported as failed — by the team host when it is theirs. */
@@ -356,13 +385,13 @@ export class SuperagentHost {
 
   private memberEvent(sessionId: string, op: 'idle' | 'read'): void {
     if (this.settings.members.includes(sessionId)) {
-      if (op === 'idle') this.executor.memberIdle(sessionId, this.d.memberTurn?.(sessionId))
+      if (op === 'idle') this.executor.memberIdle(sessionId, this.turnOf(sessionId))
       else this.executor.memberRead(sessionId)
       return
     }
     const serves = this.settingsValue.serves
     if (serves?.members.includes(sessionId) === true && this.d.signedPost !== undefined && this.d.handleOf !== undefined) {
-      void this.d.signedPost(serves.url, '/a2a/superagent-team', { op, member: this.d.handleOf(sessionId), ...(op === 'idle' ? { report: this.d.memberTurn?.(sessionId) ?? { quiet: true, text: '' } } : {}) })
+      void this.d.signedPost(serves.url, '/a2a/superagent-team', { op, member: this.d.handleOf(sessionId), ...(op === 'idle' ? { report: this.turnOf(sessionId) ?? { quiet: true, text: '' } } : {}) })
         .catch(error => { this.d.logger.warn('superagent: %s not told to the team host: %s', op, String(error)) })
     }
   }
@@ -385,7 +414,7 @@ export class SuperagentHost {
     if (entry === undefined) return { ok: false, code: 'not-member', error: 'no remote member of this team is that session under that key' }
     if (op === 'idle') {
       const turn = (report ?? {}) as Record<string, unknown>
-      this.executor.memberIdle(entry.ref, { quiet: turn.quiet !== false, text: typeof turn.text === 'string' ? clip(turn.text, 2_000) : '' })
+      this.executor.memberIdle(entry.ref, { quiet: turn.quiet !== false, text: typeof turn.text === 'string' ? clip(turn.text, 2_000) : '', ...(turn.person === true ? { person: true } : {}) })
       return { ok: true }
     }
     if (op === 'error') {
@@ -403,7 +432,7 @@ export class SuperagentHost {
     if (op !== 'report') return { ok: false, code: 'op', error: 'op must be report, ack, handback, rules-propose, rules-apply, read, idle or error' }
     const r = (report ?? {}) as Record<string, unknown>
     if (typeof r.state !== 'string' || !['progress', 'waiting', 'ready', 'blocked', 'failed', 'dropped'].includes(r.state) || typeof r.summary !== 'string' || r.summary.trim() === '') return { ok: false, code: 'report', error: 'a report needs a state and a summary' }
-    return this.report(entry.ref, { state: r.state as ReportState, summary: r.summary, ...(typeof r.question === 'string' || r.question === null ? { question: r.question as string | null } : {}), ...(typeof r.answers === 'string' ? { answers: r.answers } : {}) }, typeof r.ticket_id === 'string' ? r.ticket_id : undefined, typeof r.pull_request === 'string' ? r.pull_request : undefined)
+    return this.report(entry.ref, { state: r.state as ReportState, summary: r.summary, ...(typeof r.question === 'string' || r.question === null ? { question: r.question as string | null } : {}), ...(typeof r.answers === 'string' ? { answers: r.answers } : {}), ...(typeof r.question === 'string' && typeof parseDecision(r) !== 'string' ? { decision: parseDecision(r) as DecisionSpec } : {}) }, typeof r.ticket_id === 'string' ? r.ticket_id : undefined, typeof r.pull_request === 'string' ? r.pull_request : undefined)
   }
 
   /** PR-C2, member host side: work the served team host sends one of this host's member sessions, signed by its pinned key. */
@@ -415,7 +444,7 @@ export class SuperagentHost {
     if (op !== 'assign' && op !== 'input' && op !== 'stop') return { ok: false, code: 'op', error: 'op must be assign, input or stop' }
     // v5 acceptance F4: a serve stored before presets (or a session since swapped) takes no new work on another preset;
     // a stop still reaches it.
-    const wrongPreset = op === 'stop' ? undefined : presetRefusal(undefined, [local], this.d.presetOf ?? (() => undefined))
+    const wrongPreset = op === 'stop' ? undefined : presetRefusal(undefined, [local], this.d.presetOf ?? (() => undefined), true)
     if (wrongPreset !== undefined) { this.noteRefusal('superagent-member-preset', { target: local }); return { ok: false, code: 'preset', error: wrongPreset } }
     if (typeof text !== 'string' || text === '') return { ok: false, code: 'text', error: 'text is required' }
     if (op === 'stop') this.d.cancelTurn?.(local)
@@ -423,7 +452,7 @@ export class SuperagentHost {
   }
 
   /** PR-C2, member host side: a served member's report goes to the team host (it answers whether it took it). */
-  async forwardReport(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string; ticket_id?: string; pull_request?: string }): Promise<Record<string, unknown>> {
+  async forwardReport(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string; ticket_id?: string; pull_request?: string; options?: readonly string[]; recommended?: string; level?: string }): Promise<Record<string, unknown>> {
     const serves = this.settingsValue.serves
     if (serves === undefined || !serves.members.includes(member) || this.d.signedPost === undefined || this.d.handleOf === undefined) return { ok: false, code: 'not-member', error: 'this session serves no team' }
     try { return await this.d.signedPost(serves.url, '/a2a/superagent-team', { op: 'report', member: this.d.handleOf(member), report }) } catch (error) { return { ok: false, code: 'unreachable', error: String(error) } }
@@ -601,6 +630,80 @@ export class SuperagentHost {
     return { ok: true, trigger_id: filed.triggerId, thread: filed.thread }
   }
 
+  /** What an observer filed that is still undecided or on an open ticket. */
+  private observerOpen(actor: string): Trigger[] {
+    const ids = new Set<string>()
+    for (const thread of this.store.threads.list()) for (const id of [...thread.pending, ...(thread.evaluating?.triggerIds ?? [])]) ids.add(id)
+    for (const ticket of this.store.tickets.list()) if (ticket.ended === undefined && ticket.mandate?.actor.id === actor) for (const id of ticket.origin?.triggerIds ?? []) ids.add(id)
+    return [...ids].flatMap(id => { const t = this.store.triggers.get(id); return t !== undefined && t.actor.source === 'workbench' && t.actor.id === actor ? [t] : [] })
+  }
+
+  /** File an observer's own request (design D15). It reaches the router as any request does; the host only keeps a loop from flooding it. */
+  requestForObserver(session: string, text: string): Record<string, unknown> {
+    if (!this.isObserver(session)) return { ok: false, code: 'not-observer', error: 'a2a_ticket_request serves only the sessions on this team created under the observer preset' }
+    const open = this.observerOpen(observerActor(session))
+    const repeated = open.find(t => t.text === text.trim())
+    if (repeated !== undefined) return { ok: true, trigger_id: repeated.id, reused: true }
+    if (open.length >= OBSERVER_OPEN_MAX) return { ok: false, code: 'too-many-open', error: `you already have ${String(open.length)} requests open; wait for one to end before filing another` }
+    const filed = this.request(text, undefined, { observer: session })
+    if (!filed.ok) return { ok: false, code: 'refused', error: filed.error }
+    return { ok: true, trigger_id: filed.triggerId, thread: filed.thread }
+  }
+
+  /** Raise a card of the router's or an observer's own (decision cards C2). */
+  proposeDecision(source: 'router' | 'observer', by: string, question: string, spec: DecisionSpec, reason?: string): Record<string, unknown> {
+    return this.decisions.propose({ source, by, question, spec, at: this.now(), ...(reason !== undefined && reason.trim() !== '' ? { reason: reason.trim() } : {}) })
+  }
+
+  /** The cards waiting for the owner: those raised on their own, and every open question on a ticket. */
+  decisionCards(): Array<StoredCard & { readonly title?: string }> {
+    const onTickets = this.store.tickets.list().flatMap((ticket): Array<StoredCard & { title: string }> => {
+      if (ticket.ended !== undefined || ticket.attention === undefined) return []
+      const id = ticketCardId(ticket.id, ticket.attention.question)
+      const card = this.decisions.get(id)
+      if (card?.decided !== undefined) return []
+      // A question asked before cards, or by an older member: it has no recommendation, so it is the strictest kind.
+      return [{ ...(card ?? { id, question: ticket.attention.question, source: 'ticket' as const, by: '', ticketId: ticket.id, at: ticket.updatedAt, level: 'P1' as const, options: [], recommended: '' }), title: ticket.title }]
+    })
+    return [...this.decisions.open().filter(card => card.source !== 'ticket'), ...onTickets]
+  }
+
+  /**
+   * The owner decides a card (decision cards C3, C4).
+   * @param id - the card.
+   * @param how - `approve` takes the recommendation (P2 and P3 only); `choose` names an option, or writes a decision in `note`.
+   * @param option - the option chosen.
+   * @param note - the owner's words, added to the decision or standing as it.
+   * @returns what was filed, or why not.
+   */
+  decide(id: string, how: unknown, option?: unknown, note?: unknown): Record<string, unknown> {
+    const card = this.decisionCards().find(row => row.id === id)
+    if (card === undefined) return { ok: false, code: 'stale', error: 'that decision is no longer waiting: it was decided, or its ticket moved on' }
+    const words = typeof note === 'string' ? note.trim() : ''
+    let chosen: string
+    if (how === 'approve') {
+      if (!oneClick(card.level) || card.recommended === '') return { ok: false, code: 'needs-choice', error: `a ${card.level} decision needs an option chosen, not one click` }
+      chosen = card.recommended
+    } else if (how === 'choose') {
+      if (typeof option === 'string' && card.options.includes(option)) chosen = option
+      else if (option === undefined || option === null || option === '') { if (words === '') return { ok: false, code: 'choice', error: 'choose an option, or write your decision' }; chosen = '' }
+      else return { ok: false, code: 'choice', error: 'that is not one of the options' }
+    } else return { ok: false, code: 'how', error: 'how must be approve or choose' }
+    const answer = [...(chosen !== '' ? [`决定：${chosen}`] : []), ...(words !== '' ? [`说明：${words}`] : [])].join('\n')
+    const at = this.now()
+    const { title: _title, ...stored } = card
+    if (card.ticketId !== undefined) {
+      const out = this.answer(card.ticketId, answer)
+      if (!out.ok) return out
+      this.decisions.decide(card.id, { at, text: answer, triggerId: out.triggerId }, stored)
+      return { ok: true, ticket_id: card.ticketId, trigger_id: out.triggerId }
+    }
+    const filed = this.request(`[决策卡]（${card.source === 'router' ? '总工' : '观察者'}提出）${card.question}\n${answer}`)
+    if (!filed.ok) return { ok: false, code: 'refused', error: filed.error }
+    this.decisions.decide(card.id, { at, text: answer, triggerId: filed.triggerId }, stored)
+    return { ok: true, trigger_id: filed.triggerId, thread: filed.thread }
+  }
+
   /** Recent inferred candidates and what became of them, for improving the rules (design D13). */
   recentDecisions(limit = 40): Array<Record<string, unknown>> {
     const rows: Array<Record<string, unknown> & { at: string }> = []
@@ -693,7 +796,7 @@ export class SuperagentHost {
     if (team === undefined) { const { serves: _gone, ...rest } = this.settingsValue; this.writeSettings(rest); return { ok: true } }
     const bad = members.find(m => !sessionValid(m) || m === this.settingsValue.router || this.settings.members.includes(m))
     if (bad !== undefined) return { ok: false, error: `${bad} must be a joined local session that is neither this team's router nor its member` }
-    const wrongPreset = presetRefusal(undefined, members, presetOf)
+    const wrongPreset = presetRefusal(undefined, members, presetOf, true)
     if (wrongPreset !== undefined) return { ok: false, error: wrongPreset }
     this.writeSettings({ ...this.settingsValue, serves: { url: team.url, key: team.key, members: [...new Set(members)], ...(team.canvas !== undefined ? { team: team.canvas } : {}) } })
     return { ok: true }
@@ -713,7 +816,7 @@ export class SuperagentHost {
    * A member's report (upstream orchestrator_report) on the ticket bound to it. The router hears it in its own session,
    * so it can hand a ready result or a question to the person (superagent_reply).
    */
-  report(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string }, ticketId?: string, pullRequest?: string): { ok: true; ticketId: string; stage: unknown } | { ok: false; code: string; error: string } {
+  report(member: string, { decision, ...report }: { state: ReportState; summary: string; question?: string | null; answers?: string; decision?: DecisionSpec }, ticketId?: string, pullRequest?: string): { ok: true; ticketId: string; stage: unknown } | { ok: false; code: string; error: string } {
     const binding = ticketId === undefined ? this.executor.bindingOf(member) : this.executor.bindingFor(member, ticketId)
     if (binding === undefined) return ticketId === undefined ? { ok: false, code: 'not-assigned', error: 'no ticket is assigned to this session' } : this.notYours(member, ticketId)
     const current = this.store.tickets.get(binding.ticketId)
@@ -727,6 +830,7 @@ export class SuperagentHost {
     let ticket: Ticket
     try { ticket = this.engine.report(binding.ticketId, report) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
     const stage = ticket.ended ? { stage: 'ended', outcome: ticket.ended.outcome } : ticketStage(ticket)
+    if (decision !== undefined && typeof report.question === 'string') this.decisions.forTicket({ ticketId: ticket.id, by: member, question: report.question, spec: decision, at: this.now() })
     this.relayReport(ticket.id, report.state, report.summary)
     this.pass()
     return { ok: true, ticketId: ticket.id, stage }
@@ -755,7 +859,10 @@ export class SuperagentHost {
     if (router === undefined || ticket === undefined) return
     const stage = ticket.ended ? { stage: 'ended', outcome: ticket.ended.outcome } : ticketStage(ticket)
     const question = ticket.attention !== undefined ? `\nquestion for the person (send it with superagent_reply purpose attention, copied exactly): ${ticket.attention.question}` : ''
-    this.d.deliverToSession(router, `[superagent report] ticket ${ticket.id} «${ticket.title}» · ${state} · stage ${JSON.stringify(stage)}\n${clip(summary, 2_000)}${question}`)
+    // The owner asked for this in the router's own session, and reads the answer there: superagent_reply goes to the team page.
+    const inChat = (state === 'ready' || state === 'failed' || state === 'dropped' || ticket.attention !== undefined) && ticket.origin.triggerIds.some(id => this.ruleChanges.filedFromChat(id))
+      ? '\nThe owner asked for this in this session: besides superagent_reply, tell them here in plain words what came of it, or what you need from them.' : ''
+    this.d.deliverToSession(router, `[superagent report] ticket ${ticket.id} «${ticket.title}» · ${state} · stage ${JSON.stringify(stage)}\n${clip(summary, 2_000)}${question}${inChat}`)
   }
 
   /** The team's A2A address: requests to it are Triggers, so they take no target queue slot. */
@@ -1008,8 +1115,9 @@ export class SuperagentHost {
   get settings(): TeamSettings { return this.derive(this.settingsValue) }
   private derive(stored: TeamSettings): TeamSettings {
     const team = stored.canvas !== undefined ? this.d.canvasTeam?.(stored.canvas) : undefined
-    if (team === undefined) return { ...stored, members: [], remoteMembers: [] }
-    return { ...stored, members: team.local.filter(id => id !== stored.router), remoteMembers: [...team.remote] }
+    if (team === undefined) return { ...stored, members: [], remoteMembers: [], observers: [] }
+    const members = team.local.filter(id => id !== stored.router)
+    return { ...stored, members, remoteMembers: [...team.remote], observers: members.filter(id => this.d.presetOf?.(id) === OBSERVER_PRESET) }
   }
   /** Whether the team is bound to a canvas team that exists here (v5 acceptance F1/F3: otherwise nothing is protected or moved). */
   private teamBound(): boolean { return this.settingsValue.canvas !== undefined && this.d.canvasTeam?.(this.settingsValue.canvas) !== undefined }
@@ -1017,7 +1125,7 @@ export class SuperagentHost {
   servesProblem(): string | undefined {
     const serves = this.settingsValue.serves
     if (serves === undefined) return undefined
-    return presetRefusal(undefined, serves.members, this.d.presetOf ?? (() => undefined))
+    return presetRefusal(undefined, serves.members, this.d.presetOf ?? (() => undefined), true)
   }
   /** Why the team cannot run its canvas as bound, if it cannot (the workbench's 待你处理 shows it). */
   canvasProblem(stored: TeamSettings = this.settingsValue): string | undefined {
@@ -1041,6 +1149,7 @@ export class SuperagentHost {
     // Design v5: the canvas named must exist here, and the router must be one of its local sessions.
     if (parsed.settings.canvas !== undefined && this.d.canvasTeam?.(parsed.settings.canvas) === undefined) return { ok: false, error: `no canvas team ${parsed.settings.canvas} on this host: compose it on the canvas (建队) first` }
     if (parsed.settings.router !== undefined && parsed.settings.canvas === undefined) return { ok: false, error: 'bind the team to its canvas team (canvas) before naming its router' }
+    if (parsed.settings.canvas !== undefined && this.d.canvasTaken?.(parsed.settings.canvas, this) === true) return { ok: false, error: `canvas ${parsed.settings.canvas} is already another team's on this instance` }
     const next = this.derive(parsed.settings)
     const team = parsed.settings.canvas !== undefined ? this.d.canvasTeam?.(parsed.settings.canvas) : undefined
     if (parsed.settings.router !== undefined && team !== undefined && !team.local.includes(parsed.settings.router)) return { ok: false, error: `router must be a local session of the canvas team ${parsed.settings.canvas}` }
@@ -1089,7 +1198,7 @@ export class SuperagentHost {
   }
 
   /** The workbench Source: the owner's message, as one Trigger on a new Thread or on the Thread it continues. */
-  request(text: string, thread?: string, via?: 'cli'): { ok: true; result: ReceiveResult; triggerId: string; thread: string } | { ok: false; error: string } {
+  request(text: string, thread?: string, via?: WorkbenchVia): { ok: true; result: ReceiveResult; triggerId: string; thread: string } | { ok: false; error: string } {
     const body = text.trim()
     if (body === '') return { ok: false, error: 'text is required' }
     if (body.length > 20_000) return { ok: false, error: 'text is longer than 20000 characters' }
@@ -1102,12 +1211,12 @@ export class SuperagentHost {
     } catch (error) { return { ok: false, error: String(error) } }
   }
 
-  private workbenchTrigger(body: string, thread?: string, via?: 'cli'): Trigger {
+  private workbenchTrigger(body: string, thread?: string, via?: WorkbenchVia): Trigger {
     const threadId = thread ?? `wb-${randomUUID()}`
     const id = `wb-${randomUUID()}`
     return {
       id, source: 'workbench', threads: [{ source: 'workbench', id: threadId }],
-      actor: { source: 'workbench', id: via === 'cli' ? WORKBENCH_CLI : WORKBENCH_OWNER }, human: via !== 'cli', addressed: 'direct', at: this.now(), text: body,
+      actor: { source: 'workbench', id: via === undefined ? WORKBENCH_OWNER : via === 'cli' ? WORKBENCH_CLI : observerActor(via.observer) }, human: via === undefined, addressed: 'direct', at: this.now(), text: body,
       channel: { source: 'workbench', thread: threadId, address: { trigger: id } }, meta: {},
     }
   }

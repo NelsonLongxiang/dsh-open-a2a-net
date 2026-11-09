@@ -51,14 +51,21 @@ export interface SaSettings {
   readonly repos?: Readonly<Record<string, string>>
   readonly rules?: readonly TeamRule[]
   readonly profiles?: Readonly<Record<string, { readonly role?: string; readonly rules: readonly TeamRule[] }>>
+  readonly observers?: readonly string[]
   readonly dispatch?: string
   readonly bots?: { readonly a2a?: readonly string[] }
   readonly allowed?: { readonly github?: readonly string[] }
   readonly reviewer?: string
   readonly serves?: { url: string; key: string; members: readonly string[]; team?: string }
 }
+/** One team on this instance (`GET /__dsh_a2a/superagent/teams`); id '' is the primary team. */
+export interface SaTeamRow { readonly id: string; readonly canvas?: string }
+
 export interface SaState {
   readonly settings: SaSettings; readonly policyVersion: string
+  /** This instance's teams, and which one this state is, added by the poll. */
+  readonly teams?: readonly SaTeamRow[]
+  readonly selectedTeam?: string
   /** Proposals waiting for the owner and each rule set's last change, by scope (`team`, `dispatch`, `member:<id>`). */
   readonly ruleChanges?: {
     readonly pending: Readonly<Record<string, { readonly at: string; readonly by: string; readonly reason: string; readonly value: unknown }>>
@@ -84,6 +91,10 @@ export interface SuperagentPaneDeps {
   act(body: Json): Promise<Json>
   /** Re-read the state after a write (the next poll otherwise). */
   refresh(): void
+  /** Show another team on this instance. */
+  selectTeam?(id: string): void
+  /** Bind another canvas team as a new team on this instance. */
+  addTeam?(canvas: string, router: string): Promise<Json>
 }
 
 export type SaView = 'person' | 'request' | 'tickets' | 'team' | 'settings'
@@ -196,7 +207,22 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   const note = el('div', 'wb-sa-note')
   note.setAttribute('role', 'status')
   // On the stage (data mode) the panes stack: the heading says whose this is.
-  root.append(el('div', 'wb-pane-head', 'superagent 团队'), nav, note, body)
+  const teamBar = el('div', 'wb-sa-teambar')
+  const teamSelect = el('select', 'wb-sa-select')
+  teamSelect.setAttribute('aria-label', '当前团队')
+  // Blurred at once: a select that keeps focus counts as typing, and would hold back the new team's view.
+  teamSelect.addEventListener('change', () => {
+    // Unsaved edits belong to the team they were made for: a save after the switch would write them to the other one.
+    if (settingsDirty && typeof window.confirm === 'function' && !window.confirm('设置里还有没保存的修改，切换团队会丢弃它们。继续吗？')) { teamSelect.value = last?.selectedTeam ?? ''; return }
+    switchTeam(teamSelect.value)
+    teamSelect.blur()
+  })
+  const addTeamToggle = el('button', 'wb-btn', '新增团队')
+  addTeamToggle.type = 'button'
+  const addTeamBox = el('div', 'wb-sa-addteam')
+  addTeamBox.hidden = true
+  teamBar.append(teamSelect, addTeamToggle)
+  root.append(el('div', 'wb-pane-head', 'superagent 团队'), teamBar, addTeamBox, nav, note, body)
 
   let view: SaView = 'person'
   // undefined until the first poll answers; null once it says this host runs no team.
@@ -208,6 +234,54 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   let builtAt = 0
   /** A press in progress inside the pane: a rebuild between pointerdown and click would swallow the click. */
   let pressing = false
+  let teamOptions = ''
+  /** The team just asked for: until its state arrives the old one's view is gone, so nothing can be written from it. */
+  let pendingTeam: string | undefined
+  function switchTeam(id: string): void {
+    pendingTeam = id
+    settingsDirty = false
+    settingsForm = undefined
+    body.replaceChildren()
+    deps.selectTeam?.(id)
+  }
+  /** The team picker: rebuilt only when the list changes, and left alone while it is open. */
+  function syncTeams(state: SaState | null): void {
+    teamBar.hidden = state === null || deps.selectTeam === undefined
+    if (state === null) return
+    const teams = state.teams ?? []
+    const key = JSON.stringify(teams)
+    if (key !== teamOptions && document.activeElement !== teamSelect) {
+      teamOptions = key
+      teamSelect.replaceChildren(...teams.map(team => new Option(team.canvas ?? '（未绑定）', team.id)))
+    }
+    if (document.activeElement !== teamSelect) teamSelect.value = state.selectedTeam ?? ''
+  }
+  function openAddTeam(): void {
+    const taken = new Set((last?.teams ?? []).flatMap(team => team.canvas !== undefined ? [team.canvas] : []))
+    const canvas = el('select', 'wb-sa-select')
+    canvas.setAttribute('aria-label', '新团队的画布')
+    canvas.appendChild(new Option('选择画布团队', ''))
+    for (const name of last?.canvases ?? []) if (!taken.has(name)) canvas.appendChild(new Option(name, name))
+    const router = el('select', 'wb-sa-select')
+    router.setAttribute('aria-label', '新团队的总工')
+    router.appendChild(new Option('选择总工', ''))
+    for (const row of sessions) if (row.joined === true) router.appendChild(new Option(row.name ?? row.id, row.id))
+    const confirm = el('button', 'wb-btn wb-btn-primary', '添加')
+    confirm.type = 'button'
+    confirm.addEventListener('click', () => {
+      if (canvas.value === '' || router.value === '') { note.textContent = '先选画布团队和总工'; return }
+      void deps.addTeam?.(canvas.value, router.value).then((out) => {
+        if (out.ok !== true) { note.textContent = `没有添加成功：${String(out.error ?? '未知原因')}`; return }
+        addTeamBox.hidden = true
+        note.textContent = `已新增团队 ${canvas.value}`
+        switchTeam(String(out.id ?? ''))
+      })
+    })
+    addTeamBox.replaceChildren(canvas, router, confirm, el('div', 'wb-sa-hint', '先在画布上建队。总工用 superagent-router 预设，且必须在这个画布里。'))
+    addTeamBox.hidden = false
+  }
+  addTeamToggle.addEventListener('click', () => { if (addTeamBox.hidden) openAddTeam(); else addTeamBox.hidden = true })
+
   const navButtons = new Map<SaView, HTMLButtonElement>()
   for (const def of VIEWS) {
     const b = el('button', 'wb-filter', def.label)
@@ -265,7 +339,8 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     head.append(el('strong', 'wb-sa-title', ticket.title), el('span', 'wb-sa-stage', stageLabel(ticket)))
     card.appendChild(head)
     kv(card, '范围', ticket.mandate.scope)
-    kv(card, '授权', `${ticket.mandate.strength === 'explicit' ? '明确请求' : '推断'} · ${ticket.mandate.actor.source}:${ticket.mandate.actor.id}`)
+    const { source, id: actorId } = ticket.mandate.actor
+    kv(card, '授权', source === 'workbench' && actorId.startsWith('observer:') ? `观察者开单 · ${sessionName(actorId.slice('observer:'.length))}` : `${ticket.mandate.strength === 'explicit' ? '明确请求' : '推断'} · ${source}:${actorId}`)
     const binding = last?.executor.bindings.find(b => b.ticketId === ticket.id)
     if (binding !== undefined) kv(card, '成员', sessionName(binding.member))
     for (const f of ticket.follows ?? []) if (f.thread.startsWith('github:')) kv(card, 'PR', `${f.thread.slice(7)}${f.closed !== undefined ? ` · ${f.closed.outcome === 'merged' ? '已合并' : '已关闭'}` : ' · 等待合并'}`)
@@ -414,7 +489,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       for (const rule of p?.rules ?? []) kv(card, `规则 ${rule.name}${rule.enabled ? '' : '（停用）'}`, rule.text)
       change(`member:${member}`, card)
     }
-    const members = s.members.map(m => { const c = el('div', 'wb-led-card'); kv(c, '成员', sessionName(m)); profile(m, c); repo(m, c); kv(c, '槽位', slot(m)); return c })
+    const members = s.members.map(m => { const c = el('div', 'wb-led-card'); kv(c, s.observers?.includes(m) === true ? '观察者' : '成员', sessionName(m)); profile(m, c); repo(m, c); kv(c, '槽位', slot(m)); return c })
     const remote = s.remoteMembers.map(r => { const c = el('div', 'wb-led-card'); kv(c, '远端成员', r.ref); profile(r.ref, c); repo(r.ref, c); kv(c, '主机', r.url); kv(c, '钉住公钥', fingerprint(r.key)); kv(c, '槽位', slot(r.ref)); return c })
     body.appendChild(group('成员池', '', [...members, ...remote], '没有成员'))
     const teamRules = el('div', 'wb-led-card')
@@ -501,7 +576,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     reset.addEventListener('click', () => { settingsDirty = false; render() })
     const actions = el('div', 'wb-sa-actions')
     actions.append(save, reset)
-    form.append(actions, el('div', 'wb-sa-hint', '团队就是一支画布团队：在画布上建队、增删成员（含远端成员），这里只绑定画布并从中指定总工。总工用 superagent-router 预设，本机成员用 superagent-member 预设；团队里的会话不再加入别的画布。'))
+    form.append(actions, el('div', 'wb-sa-hint', '团队就是一支画布团队：在画布上建队、增删成员（含远端成员），这里只绑定画布并从中指定总工。总工用 superagent-router 预设，本机成员用 superagent-member 预设，能自己开工单的观察者用 superagent-observer 预设；团队里的会话不再加入别的画布。'))
     return form
   }
 
@@ -534,9 +609,14 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   }
 
   function update(state: SaState | null, rows: readonly SaSession[], at: number): { badge: string; tone?: RailTone } {
+    if (pendingTeam !== undefined) {
+      if (state !== null && state.selectedTeam !== pendingTeam) return { badge: '' }
+      pendingTeam = undefined
+    }
     last = state
     sessions = rows
     now = at
+    syncTeams(state)
     // The poll rebuilds the view only when what it shows changed (or a minute passed, for the "n 分钟前" times), and never
     // under the person's hands: not while a control inside the pane has focus (a box being typed in, a button reached by
     // keyboard), and not in the middle of a press, which a rebuild would swallow.
