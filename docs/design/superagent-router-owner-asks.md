@@ -1,30 +1,59 @@
-# superagent: the owner asks the router to open a ticket or tune the rules
+# superagent: who sets the rules, how work is dispatched, and what the router does for the owner
 
-Status: design review PASS, implementation pending, on next/0.8 (owner 2026-11-09: 「我期望总工能够帮我创建工单 和 优化接单规则」). It builds on the v5 canvas team. The vendored engine is unchanged.
+Status: revised after the owner's ruling, on next/0.8, design review pending. The vendored engine is unchanged.
+
+Owner, 2026-11-09: 「每个 work 成员有自己的接单规则，总工负责团队的接单规则和派单规则，根据 work 成员的角色和接单规则派发。每个成员只能修改自己的接单规则，总工能修改团队的接单规则，规则修改必须获得用户批准才可。」 Earlier the same day: 「我期望总工能够帮我创建工单和优化接单规则。」
 
 ## Context
 
-The owner talks to the router in its own session. On a real team the owner asked it there to open a ticket, and `superagent_route` refused: a route needs a `trigger_id`, and a message typed into the router's session is not a Trigger. The owner had to go to 提需求 instead.
-
-Rules are worse off. They decide what the team takes without being asked, nobody can see them on most hosts, and the router, which sees every candidate and how each was decided, cannot help with them at all.
-
-The two asks have one risk in common. The router reads text from outsiders all day. A tool that opens work or changes rules must not be reachable from that text.
+- A ticket goes to the first free member. The router cannot name one and is not told who the members are, so on a real team a ticket the owner addressed to one member ran on another.
+- The owner cannot open a ticket from the router's session: a route needs a `trigger_id`.
+- The team's rules exist, but nobody can improve them with the router's help, and a member has no rules of its own.
+- The router reads text from outsiders all day, so nothing here may be reachable from that text.
 
 ## Decisions
 
-- **D1 Only the person's own words.** Both tools below act only while the router's turn answers a message the person typed: the latest message in its session that is not host context has `source.kind === 'user'`. That field is set by the host when the message arrives from the GUI, and a model or a relayed message cannot set it. A candidate card, a report or a note is `a2a-relay` and closes the door until the person speaks again. Without such a message the call is refused with `not-the-owner`, and the refusal says to ask on 提需求. Only `user` counts: a compaction checkpoint has its own kind, so compaction does not reopen an old permission, and the router has no tool for asking the person a question, so a question reply never arises there. Upstream's `orchestrator_settings_save` has the same limit, stated in its description only ("on an explicit human configuration request, never on observed content"); here the host enforces it.
-- **D2 Opening a ticket is a request made for the person.** New tool `superagent_request`, no arguments that carry the request's content: the host takes the text of that message verbatim and files it as a workbench Trigger from the owner (`human: true`, explicit), on a new thread. It is idempotent per message id: a second call on the same message returns the first request. It then reaches the router as an ordinary candidate, and the router accepts it with `superagent_route` as it would any other. No second way to create a ticket exists, the ticket's origin is what the person wrote, and the thread shows on 提需求. The router cannot restate or widen the request, because it supplies none of the text.
-- **D3 Reading what happened.** `superagent_read` gains kind `decisions`: the recent inferred candidates, each with its text, the decision, the rules it named and the reason. Read-only, open to the router at any time, because proposing a better rule needs it.
-- **D4 Changing the rules needs the person's yes.** New tool `superagent_rules_save` takes the whole rule list and the revision it read, passes the same `parseSettings` as the page, and writes under D1. A stale revision is refused with the current one, and the router reads again. The router's card tells it to show the proposed text and wait for the person to say so; D1 is what makes that binding. A rule change moves the policy version and tells affected open tickets, as a change from the page does, and the page shows the new rules.
-- **D5 Rules only.** The accept mode, the sender list, the sources and the review address stay with the owner's page. They decide who may ask at all, and a router that can widen them can widen its own reach.
-- **D6 Nothing proactive.** The router does not open a ticket or change a rule on its own initiative. A task it notices goes to the person as a reply.
+### Three kinds of rule, each with one owner
+
+- **D1 Member profile.** Each member has a `role` (one line: what it is for) and its own `rules` (what it takes). Stored per member in the team's settings, for local and remote members alike.
+- **D2 Team rules** stay as they are: which inferred requests the team takes.
+- **D3 Dispatch rules** are new, team-level, and free text: how the router chooses among members.
+
+| Rules | May propose a change | Applies |
+|---|---|---|
+| A member's own | that member only | the owner |
+| The team's and the dispatch rules | the router only | the owner |
+| Accept mode, sender list, sources, review address | nobody | the owner, directly on the page |
+
+The owner can also edit any rule directly on the team page. The last row decides who may ask at all, so no session can propose it.
+
+### Dispatch
+
+- **D4 The router chooses.** The candidate card lists each member with its name, role, rules, repository and whether it is free, and the dispatch rules. `superagent_route`'s accept gains `member`, by name or id. An unknown member is refused with the list.
+- **D5 A named member keeps the ticket.** The ticket waits for that member and goes to nobody else. Without `member` it goes to the first free member, as today, and within `repo` when one is named. If any member has a role or rules, the router must name a member.
+- **D6 The member sees why it has the ticket.** The assignment card carries the member's own rules and the team rules the ticket was accepted on. A ticket that does not fit the member's rules is reported `blocked` with the reason, and the router or the owner re-dispatches it.
+- **D7 Re-dispatch keeps the member.** A ticket whose assignment is replaced goes back to the same member unless the member has left the team.
+
+### Changing rules
+
+- **D8 A change is a proposal.** `superagent_rules_propose` (router: `team` or `dispatch`) and `a2a_member_rules_propose` (member: its own rules and role, the member taken from the calling session, never from an argument) file the whole proposed text, the reason, and the revision it was based on. Nothing changes.
+- **D9 Only the owner approves.** Proposals appear under 待你处理 with the old and new text and 批准 / 拒绝. Approving applies the text through the same validation as the page. A proposal whose base revision has moved cannot be approved and says so. A changed team rule moves the policy version and tells affected open tickets, as today.
+- **D10 What approval has to withstand.** Approval means nothing if a team session can perform it. The approve action must need a proof of the owner that a team session does not hold. Before implementing, measure what a member's shell can reach on the host; the implementation follows from that and the acceptance covers it.
+
+### The router working for the owner
+
+- **D11 Only the person's own words.** `superagent_request` acts only while the router's turn answers a message the person typed: the latest message in its session that is not host context has `source.kind === 'user'`. The host sets that field; a model or a relayed message cannot. A candidate card, report or note is `a2a-relay` and closes the door until the person speaks again; a compaction checkpoint has its own kind. Otherwise it is refused with `not-the-owner`.
+- **D12 Opening a ticket is a request made for the person.** `superagent_request` takes no text. The host files that message verbatim as a workbench Trigger from the owner (`human: true`, explicit) on a new thread, once per message id. It reaches the router as an ordinary candidate and is accepted as any other, so there is no second way to create a ticket, and the router cannot restate or widen the request.
+- **D13 Reading what happened.** `superagent_read` gains kind `decisions`: recent inferred candidates with text, decision, rules named and reason. A proposal to improve the rules is drawn from it.
+- **D14 Nothing proactive.** No session opens a ticket on its own initiative; a member still hands back what is beyond its ticket.
 
 ## Consequences
 
-- A person who pastes hostile text into the router's session and sends it has made that request themself, as on 提需求.
-- A person's message and a candidate arriving in one turn: the latest non-context message decides. A candidate after the person's message refuses the call, and the person is asked again. This errs on the side of refusing.
-- Deferred: choosing the member for a ticket (a separate change), and rules proposed on the page with an accept button.
+- With profiles set, every accept names a member, so a poor choice is the router's and shows on the decision.
+- A named member that is busy delays its ticket even when another is free. That is the owner's model: work goes to the member it fits.
+- Remote members propose through the same forward as their reports, and the proposal lands on the team host.
+- Deferred: applying a proposal from the router's session by the owner's words, and rules that gate automatically without the router's judgement.
 
 ## Acceptance
 
-Live, on a fresh router, under its own frozen spec: a message typed in the router's session opens a ticket whose origin text is that message; the same request arriving as a candidate cannot use either tool; a proposed rule is not applied until the person says so, and then shows on the page with a new policy version; the accept mode and sender list cannot be changed by the router.
+Live, on a fresh router, under its own frozen spec: a ticket goes to the member the rules fit while another is free; a named busy member keeps its ticket; a member proposes only its own rules; a member or the router cannot apply a proposal; an approved proposal shows on the page and in the next card; a stale proposal cannot be approved; a request typed in the router's session opens a ticket whose origin is that message, and the same text arriving as a candidate cannot.
