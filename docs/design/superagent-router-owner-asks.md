@@ -1,6 +1,6 @@
 # superagent: who sets the rules, how work is dispatched, and what the router does for the owner
 
-Status: revised after the owner's ruling, on next/0.8, design review pending. The vendored engine is unchanged.
+Status: revised after the owner's ruling, on next/0.8, design review folded. The vendored engine is unchanged.
 
 Owner, 2026-11-09: 「每个 work 成员有自己的接单规则，总工负责团队的接单规则和派单规则，根据 work 成员的角色和接单规则派发。每个成员只能修改自己的接单规则，总工能修改团队的接单规则，规则修改必须获得用户批准才可。」 Earlier the same day: 「我期望总工能够帮我创建工单和优化接单规则。」 And: 「做再多的 UI/UX 不如让大家自己动手。」
 
@@ -32,15 +32,16 @@ The owner can also edit any rule on the team page. The last row decides who may 
 - **D4 The router chooses.** The candidate card lists each member with its name, role, rules, repository and whether it is free, and the dispatch rules. `superagent_route`'s accept gains `member`, by name or id. An unknown member is refused with the list.
 - **D5 A named member keeps the ticket.** The ticket waits for that member and goes to nobody else. Without `member` it goes to the first free member, as today, and within `repo` when one is named. If any member has a role or rules, the router must name a member.
 - **D6 The member sees why it has the ticket.** The assignment card carries the member's own rules and the team rules the ticket was accepted on. A ticket that does not fit the member's rules is reported `blocked` with the reason, and the router or the owner re-dispatches it.
-- **D7 Re-dispatch keeps the member.** A ticket whose assignment is replaced goes back to the same member unless the member has left the team.
+- **D7 Re-dispatch keeps the member.** The named member is recorded with the ticket (`executor.json`, beside its repository). A ticket whose assignment is replaced goes back to the same member unless the member has left the team.
+- **D7a A ticket waiting for a member who left.** When the member set changes, a waiting ticket whose named member is no longer on the team goes back to the router to choose again, so it cannot wait forever.
 
 ### Changing rules
 
 - **D8 A change is agreed in conversation.** The owner talks to the member or the router in its own session. It writes the proposed text with `superagent_rules_propose` (router: `team` or `dispatch`) or `a2a_member_rules_propose` (member: its own rules and role, the member taken from the calling session, never from an argument), and shows it to the owner. Nothing changes yet.
 - **D9 Only the owner's next message approves.** `superagent_rules_apply` applies a pending proposal only under D11, and only if the person's message came after the proposal was filed, so the person has seen it. It goes through the same validation as the page. A proposal whose base revision has moved is refused and must be proposed again. A changed team rule moves the policy version and tells affected open tickets, as today. The tool cannot tell a yes from a no: it proves the person spoke after seeing the text, and the session decides what they said. Every applied change is recorded with the proposal and the person's message, and shows on the page.
-- **D10 No approval screen.** Approval is the person's own typed message, which the host marks and a shell cannot produce. The page keeps showing the rules and can still edit them directly; it gains no proposal queue. Before implementing, measure what a member's shell can reach on the host, because direct edits on the page go through the control route.
-
-- **D10a Everything is on show.** The team page's member cards show each member's role and rules, the team page shows the team and dispatch rules, and a proposal still waiting shows beside what it would change. Each rule set shows its last change: when, the proposal and the person's message. On the planning canvas a member's tooltip carries its role and rules. This is for watching; changes still happen in conversation.
+- **D10 No approval screen, and page edits need the owner's proof.** Approval in conversation is the person's own typed message, which the host marks and a shell cannot produce. The page has no proposal queue. The owner can also edit rules directly on the page (D10a), and that write goes through the control route. A member's shell runs on the same machine, and without an API key the control route trusts loopback, so loopback alone is not enough for this write: a settings write that touches a rule, a role or the dispatch rules needs the API key or the GUI session credential, which a team session does not hold. On a host with neither, the page says so and the write is refused; changing rules in conversation still works there.
+- **D10a Everything is on show and editable by the owner.** The team page's member cards show each member's role and rules, the team page shows the team and dispatch rules, and a proposal still waiting shows beside what it would change. Each rule set shows its last change: when, by whom, and for a proposal the person's message. The owner can edit all of these on the page, under D10; each member's rules can be edited only there or by that member's own proposal. On the planning canvas a member's tooltip carries its role and rules.
+- **D10b Revisions.** Each rule set (a member's profile, the team rules, the dispatch rules) has its own revision, because the policy version does not cover members. A proposal names the revision it was based on. A member's profile goes when the member leaves the team, as its repository does.
 
 ### The router working for the owner
 
@@ -59,4 +60,4 @@ The owner can also edit any rule on the team page. The last row decides who may 
 
 ## Acceptance
 
-Live, on a fresh router, under its own frozen spec: a ticket goes to the member the rules fit while another is free; a named busy member keeps its ticket; a member proposes only its own rules; a proposal is not applied until the person speaks after it, and a candidate or relayed message cannot apply it; an applied proposal shows on the page with its last change, and in the next card; a member's role and rules show on its card; a stale proposal cannot be applied; a request typed in the router's session opens a ticket whose origin is that message, and the same text arriving as a candidate cannot.
+Live, on a fresh router, under its own frozen spec: a ticket goes to the member the rules fit while another is free; a named busy member keeps its ticket; a named member who leaves the team sends its waiting ticket back to the router; a member's shell cannot write a rule through the control route; the owner's page can; a member proposes only its own rules; a proposal is not applied until the person speaks after it, and a candidate or relayed message cannot apply it; an applied proposal shows on the page with its last change, and in the next card; a member's role and rules show on its card; a stale proposal cannot be applied; a request typed in the router's session opens a ticket whose origin is that message, and the same text arriving as a candidate cannot.
