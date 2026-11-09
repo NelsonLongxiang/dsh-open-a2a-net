@@ -51,6 +51,7 @@ export interface SaSettings {
   readonly repos?: Readonly<Record<string, string>>
   readonly rules?: readonly TeamRule[]
   readonly profiles?: Readonly<Record<string, { readonly role?: string; readonly rules: readonly TeamRule[] }>>
+  readonly observers?: readonly string[]
   readonly dispatch?: string
   readonly bots?: { readonly a2a?: readonly string[] }
   readonly allowed?: { readonly github?: readonly string[] }
@@ -265,7 +266,8 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     head.append(el('strong', 'wb-sa-title', ticket.title), el('span', 'wb-sa-stage', stageLabel(ticket)))
     card.appendChild(head)
     kv(card, '范围', ticket.mandate.scope)
-    kv(card, '授权', `${ticket.mandate.strength === 'explicit' ? '明确请求' : '推断'} · ${ticket.mandate.actor.source}:${ticket.mandate.actor.id}`)
+    const { source, id: actorId } = ticket.mandate.actor
+    kv(card, '授权', source === 'workbench' && actorId.startsWith('observer:') ? `观察者开单 · ${sessionName(actorId.slice('observer:'.length))}` : `${ticket.mandate.strength === 'explicit' ? '明确请求' : '推断'} · ${source}:${actorId}`)
     const binding = last?.executor.bindings.find(b => b.ticketId === ticket.id)
     if (binding !== undefined) kv(card, '成员', sessionName(binding.member))
     for (const f of ticket.follows ?? []) if (f.thread.startsWith('github:')) kv(card, 'PR', `${f.thread.slice(7)}${f.closed !== undefined ? ` · ${f.closed.outcome === 'merged' ? '已合并' : '已关闭'}` : ' · 等待合并'}`)
@@ -414,7 +416,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       for (const rule of p?.rules ?? []) kv(card, `规则 ${rule.name}${rule.enabled ? '' : '（停用）'}`, rule.text)
       change(`member:${member}`, card)
     }
-    const members = s.members.map(m => { const c = el('div', 'wb-led-card'); kv(c, '成员', sessionName(m)); profile(m, c); repo(m, c); kv(c, '槽位', slot(m)); return c })
+    const members = s.members.map(m => { const c = el('div', 'wb-led-card'); kv(c, s.observers?.includes(m) === true ? '观察者' : '成员', sessionName(m)); profile(m, c); repo(m, c); kv(c, '槽位', slot(m)); return c })
     const remote = s.remoteMembers.map(r => { const c = el('div', 'wb-led-card'); kv(c, '远端成员', r.ref); profile(r.ref, c); repo(r.ref, c); kv(c, '主机', r.url); kv(c, '钉住公钥', fingerprint(r.key)); kv(c, '槽位', slot(r.ref)); return c })
     body.appendChild(group('成员池', '', [...members, ...remote], '没有成员'))
     const teamRules = el('div', 'wb-led-card')

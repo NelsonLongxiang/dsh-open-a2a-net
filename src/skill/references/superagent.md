@@ -75,6 +75,10 @@ The team page shows all of it and lets the owner edit the rules directly; that w
 - You neither send nor receive A2A work (`[superagent-member-outbound]`, `[superagent-member-inbound]`). Do not open sessions or subagents.
 - Your tools are upstream's work tools (`read`, `write`, `edit`, `read_image`, `glob`, `grep`, `bash`, `pwsh`, `job_*`, `web_search`, `web_fetch`, `skill`, `todo_write`), plus `a2a_ticket_report`, `a2a_ticket_ack`, `a2a_ticket_handback` and `a2a_file_fetch`. The host refuses every other call with `[superagent-role-tools]`: subagents, other sessions, `a2a_route`, `a2a_report` and the router's tools. A subagent opened earlier acts in your role.
 
+## For an observer
+
+The owner can mark a local member as the team's observer on the team page. You join through the canvas, have a member's tools and take tickets like any member. You also have `a2a_ticket_request` (`text`: what needs doing and why): when you notice work nobody has asked for, file it there. The host files it in your name as an agent's request, and the router accepts and assigns it like any other. It cannot stop or change a ticket. An identical text still open returns the same request, and at most five of yours can be open at once (`too-many-open`).
+
 ## Members on other hosts
 
 A member can sit on another host: another physical node, or another DSH instance on this machine, even one with the same zone label. Its work and reports travel **host to host** as signed, body-bound OriginClaim requests. There is no A2A route, no ledger debt and no receipt.

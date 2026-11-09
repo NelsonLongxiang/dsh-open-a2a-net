@@ -24,6 +24,9 @@ describe('planning view: the superagent team canvas and its roles', () => {
     expect(roleText(roles, R)).toBe('总工')
     expect(roleText(roles, M)).toBe('成员 · o/net')
     expect(roleText(roles, O)).toBeUndefined()
+    const watching = teamRolesOf(state({ canvas: 'ops', router: R, members: [M, O], observers: [O], repos: { [O]: 'o/net' } }))!
+    expect(roleText(watching, O)).toBe('观察者 · o/net')
+    expect(roleText(watching, M)).toBe('成员')
     // A member on another host: its planning card id is derived from the canvas ref.
     const withRemote = teamRolesOf(state({ canvas: 'ops', router: R, members: [M], remoteMembers: [{ ref: 'dsh/3a0d2c35@46744199', key: 'k', url: 'u' }], repos: { 'dsh/3a0d2c35@46744199': 'acceptance/c5' } }))!
     expect(roleText(withRemote, 'member-dsh-3a0d2c35-46744199')).toBe('成员 · acceptance/c5（远端）')

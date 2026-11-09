@@ -7,7 +7,7 @@ import { MEMBER_TOOLS, ROUTER_TOOLS, RoleTools, TEAM_TOOLS, roleToolRefusal, typ
 
 describe('role tool lists', () => {
   it('the team\'s own tools are the router\'s and the member\'s ticket tools', () => {
-    expect(TEAM_TOOLS).toEqual([...ROUTER_TOOLS, 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply'])
+    expect(TEAM_TOOLS).toEqual([...ROUTER_TOOLS, 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request'])
     for (const name of ['a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback']) expect(MEMBER_TOOLS).toContain(name)
   })
 

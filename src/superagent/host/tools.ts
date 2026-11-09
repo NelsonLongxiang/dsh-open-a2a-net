@@ -12,6 +12,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import { UserError, type Outcome, type ReplyRequest } from '../upstream/dsh-superagent/src/core/index.ts'
 import type { SuperagentHost } from './index.ts'
+import { OBSERVER_OPEN_MAX, observerOfActor } from './policy.ts'
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
@@ -79,6 +80,8 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
     else if (kind === 'stop') {
       const ticketId = str(item.ticket_id)
       if (ticketId === undefined) return { ok: false, trigger_id: triggerId, code: 'missing', error: 'stop needs ticket_id' }
+      // An observer's request is explicit so that it can be accepted; a stop stays a person's.
+      if (candidate?.triggers.some(t => t.actor.source === 'workbench' && observerOfActor(t.actor.id) !== undefined) === true) return { ok: false, trigger_id: triggerId, code: 'observer-stop', error: "an observer's request cannot stop a ticket: accept, attach or ignore it" }
       outcome = { kind: 'stop', ticketId, reason }
     } else return { ok: false, trigger_id: triggerId, code: 'kind', error: 'kind must be accept, attach, stop or ignore' }
     const decision = host.engine.decide(triggerId, { ...outcome, ...(evalId !== undefined ? { evalId } : {}) })
@@ -359,6 +362,20 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
       if (person === undefined) return { ...notOwner }
       const out = h.settings.serves?.members.includes(me) === true ? await h.forwardRules(me, 'rules-apply', { person }) : h.applyRules(`member:${me}`, me, person)
       return json(out) as Record<string, JsonValue>
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'a2a_ticket_request',
+    description: `Team observer only: open a ticket for work you noticed that nobody has asked for yet. Say in text what needs doing and why. The host files it in your name, as an agent's request and never a person's, and the router accepts and assigns it like any other. It cannot stop or change a ticket; at most ${String(OBSERVER_OPEN_MAX)} of yours may be open at once.`,
+    parameters: { text: { type: 'string', required: true, description: 'What needs doing and why, for the router and the member who gets it.' } },
+    output: { ...anyProps, render: (_args, value) => said('a2a_ticket_request', value) },
+    presentCall: () => ({ card: 'generic', title: 'a2a_ticket_request', kind: 'other', rawInput: {} }),
+    execute: async (args: { text?: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = host()
+      const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
+      if (h === undefined || me === undefined) return { ok: false, code: 'not-observer', error: 'a2a_ticket_request serves only the observers the owner named on this team' }
+      return json(h.requestForObserver(me, String(args.text ?? ''))) as Record<string, JsonValue>
     },
   }))
 

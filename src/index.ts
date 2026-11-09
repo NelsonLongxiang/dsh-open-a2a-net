@@ -2099,7 +2099,7 @@ export function apply(ctx: Context, config: Config): void {
   }) : undefined
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
   const superagentRoleTools = new RoleTools({
-    roleOf: id => superagentHost?.roleOf(id),
+    roleOf: id => superagentHost?.toolRoleOf(id),
     agentOf: id => ctx.get('agents')?.get(SessionId(id)) as RoleAgent | undefined,
     logger,
   })
