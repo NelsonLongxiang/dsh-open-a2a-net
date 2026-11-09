@@ -49,7 +49,7 @@ describe('owner ruling: a frame moves only itself', () => {
     expect(m.getFrame('T')).toEqual({ x: 0, y: 0, w: 500, h: 260 })
     expect(memberX()).toBe(before)
     expect(NODE_W).toBe(172) // card geometry contract intact
-    expect(NODE_H).toBe(56)
+    expect(NODE_H).toBe(68)
   })
 
   it('④ settleBoard step-yield: the YIELDING frame moves, its members stay', () => {

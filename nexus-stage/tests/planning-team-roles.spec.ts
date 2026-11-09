@@ -41,7 +41,7 @@ describe('planning view: the superagent team canvas and its roles', () => {
     const d = createTeamRoleDecorator()
     d.decorate(new Map(), new Map([[M, card]]))
     d.update(state({ canvas: 'ops', members: [M], repos: { [M]: 'o/net' } }))
-    const badge = card.querySelector<HTMLElement>('.sub-row .sa-role')!
+    const badge = card.querySelector<HTMLElement>(':scope > .sa-role')!
     expect(badge.textContent).toBe('成员 · net')
     expect(badge.title).toBe('成员 · o/net')
     expect(card.querySelector('.nm .sa-role')).toBeNull()
@@ -57,9 +57,9 @@ describe('planning view: the superagent team canvas and its roles', () => {
     expect(frames.get('ops')!.classList.contains('is-superagent-team')).toBe(true)
     expect(frames.get('ops')!.querySelector('.p-frame-head .sa-team')?.textContent).toBe('superagent 团队')
     expect(frames.get('other')!.querySelector('.sa-team')).toBeNull()
-    expect(nodes.get(R)!.querySelector('.sub-row .sa-role')?.textContent).toBe('总工')
+    expect(nodes.get(R)!.querySelector(':scope > .sa-role')?.textContent).toBe('总工')
     expect(nodes.get(R)!.classList.contains('is-superagent-router')).toBe(true)
-    expect(nodes.get(M)!.querySelector('.sub-row .sa-role')?.textContent).toBe('成员')
+    expect(nodes.get(M)!.querySelector(':scope > .sa-role')?.textContent).toBe('成员')
     expect(nodes.get(O)!.querySelector('.sa-role')).toBeNull()
     // A re-render hands the same elements again: one badge each, not two.
     d.decorate(frames, nodes)
