@@ -21,7 +21,7 @@ import type { WorldBounds } from './viewport'
 
 /** Card geometry: the single source both CSS and edge math must agree with. */
 export const NODE_W = 172
-export const NODE_H = 56
+export const NODE_H = 68
 
 /**
  * Deterministic 2D fallback seating. The 3D scene's polar ring (radius
