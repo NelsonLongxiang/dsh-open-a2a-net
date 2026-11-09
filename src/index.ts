@@ -142,7 +142,7 @@ import { createNodeBinder, NodeBindings } from './node-bind.ts'
 import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
 import { NEUTRAL_SOURCES, NodeReviewQueue, SessionTaint, localRoute, toolTaint } from './node-self.ts'
-import { guiOwnerProven, touchesRules } from './superagent/host/owner-proof.ts'
+import { guiOwnerProven, ownerOrNoLogin, touchesRules } from './superagent/host/owner-proof.ts'
 import { SuperagentTeams } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
@@ -3274,6 +3274,28 @@ export function apply(ctx: Context, config: Config): void {
         .map(entry => ({ id: `remote:${entry.team}@${owner}`, primary: false as const, remote: true as const, canvas: entry.name, address: `${entry.team}@${owner}`, open: true as const, host: card.name ?? new URL(url).host }))
     })
   }
+
+  if (superagentTeams !== undefined) whenWebServerSettled((webServer) => {
+    // Decision cards: what waits for the owner, and their decision (C3, C5).
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/__dsh_a2a/superagent/decisions',
+      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+        const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
+        if (req.method === 'GET') { send(200, { decisions: superagentTeams.decisionCards() }); return }
+        readJsonBody(req, res, (body) => {
+          const fields = body as { teamId?: unknown; id?: unknown; how?: unknown; option?: unknown; note?: unknown }
+          const team = superagentTeams.get(typeof fields.teamId === 'string' ? fields.teamId : undefined)
+          if (team === undefined) { send(404, { ok: false, error: 'no such team on this instance' }); return }
+          // A member's shell on this machine passes the control route; deciding is the owner's alone (C5).
+          void ownerOrNoLogin(superagentHomeUrl, req.headers.cookie).then((allowed) => {
+            if (!allowed) { send(403, { ok: false, code: 'owner-proof', error: '决策需要在已登录的 DSH 界面里操作。' }); return }
+            send(200, team.decide(typeof fields.id === 'string' ? fields.id : '', fields.how, fields.option, fields.note))
+          }, (error: unknown) => { send(500, { ok: false, error: String(error) }) })
+        })
+      }),
+    }), 'a2a: superagent decisions face')
+  })
 
   if (superagentTeams !== undefined) whenWebServerSettled((webServer) => {
     // Design M3/M5: the instance's teams, and adding one.

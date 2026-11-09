@@ -83,6 +83,13 @@ DSH's right bar has a **提需求** view in its guide. It sends the text to this
 
 The owner can talk to a member or an observer directly in its own session. Treat that as a normal conversation: answer and do what they ask. It needs no ticket and no `a2a_ticket_report`. A ticket you hold goes on after it.
 
+## Decision cards
+
+What the owner has to decide is a card: a question, 2 to 6 options, the option you recommend, and a level (P0 irreversible or production, P1 significant, P2 routine and easy to undo, P3 trivial; no level counts as P1). The cards wait in the right bar's **待决策** view. P2 and P3 can be approved with one click; P0 and P1 need an option chosen.
+
+- A member's question in `a2a_ticket_report` is a card: `question` needs `options` and `recommended`, and the decision comes back on that ticket.
+- The router puts every recommendation of its own to the owner with `superagent_decision_propose`. An observer can use `a2a_decision_propose`. Once decided, these reach the router as a request from the owner beginning `[决策卡]`, to accept as any request.
+
 ## For an observer
 
 An observer is a session the owner creates under the `superagent-observer` preset and adds to the canvas team. You join through the canvas, have a member's tools and take tickets like any member. You also have `a2a_ticket_request` (`text`: what needs doing and why): when you notice work nobody has asked for, file it there. The host files it in your name as an agent's request, and the router accepts and assigns it like any other. It cannot stop or change a ticket. An identical text still open returns the same request, and at most five of yours can be open at once (`too-many-open`).

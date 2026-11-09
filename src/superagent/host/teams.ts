@@ -55,6 +55,11 @@ export class SuperagentTeams {
     return [row('', this.primary), ...[...this.extras].map(([id, team]) => row(id, team))]
   }
 
+  /** Every team's waiting decisions, each with the team it belongs to. */
+  decisionCards(): Array<Record<string, unknown>> {
+    return [['', this.primary] as const, ...this.extras].flatMap(([id, team]) => team.decisionCards().map(card => ({ ...card, teamId: id, team: team.settings.canvas ?? '' })))
+  }
+
   /** Why a session may not join a canvas, asked of every team. */
   canvasMemberRefusal(canvas: string, member: string, presetOf: (id: string) => string | undefined): string | undefined {
     for (const team of this.all()) { const refused = team.canvasMemberRefusal(canvas, member, presetOf); if (refused !== undefined) return refused }

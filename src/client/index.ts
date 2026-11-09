@@ -20,7 +20,7 @@ import { A2aControl } from './A2aControl.tsx'
 import { en, zh, type A2aNetKey } from './locales.ts'
 
 export type { A2aControlInjected, A2aControlProps, A2aSessionRow } from './A2aControl.tsx'
-export { TEAM_REQUEST_KIND } from './team-request.ts'
+export { TEAM_DECISIONS_KIND, TEAM_REQUEST_KIND } from './team-request.ts'
 export type { A2aNetKey } from './locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
