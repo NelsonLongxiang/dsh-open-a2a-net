@@ -58,6 +58,11 @@ describe('the decisions view', () => {
     await waitFor(() => { expect(screen.getByRole('status').textContent).toContain('需要登录') })
     expect(screen.getByText('要不要升级？')).toBeTruthy()
   })
+  it.each([['router', 'team.fromRouter'], ['observer', 'team.fromObserver'], ['ticket', 'team.fromMember']] as const)('says who raised a %s card', async (source, key) => {
+    serve([card({ source })])
+    render(<TeamDecisionsTab t={t} />)
+    await screen.findByText(new RegExp(en[key]))
+  })
   it('says when nothing is waiting', async () => {
     serve([])
     render(<TeamDecisionsTab t={t} />)

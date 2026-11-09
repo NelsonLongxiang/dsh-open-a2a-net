@@ -52,7 +52,7 @@ describe('a card the router or an observer raises', () => {
     expect(m.h.decide(raised.id, 'approve')).toMatchObject({ ok: true, trigger_id: expect.any(String) })
     expect(m.h.decisionCards()).toHaveLength(0)
     m.h.pass()
-    await vi.waitFor(() => { expect(m.candidates().some(t => t.includes('[决策卡] 要不要升级依赖？') && t.includes('决定：甲') && t.includes('strength explicit'))).toBe(true) })
+    await vi.waitFor(() => { expect(m.candidates().some(t => t.includes('[决策卡]（总工提出）要不要升级依赖？') && t.includes('决定：甲') && t.includes('strength explicit'))).toBe(true) })
     await m.h.stop()
   })
   it('cannot be decided twice', async () => {
