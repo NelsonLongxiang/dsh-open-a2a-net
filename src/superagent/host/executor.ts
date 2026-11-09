@@ -50,7 +50,7 @@ export interface MemberExecutorDeps {
 }
 
 /** What a member's turn left when it ended: whether nothing of it still runs (shell jobs), and its last words. */
-export interface MemberTurn { readonly quiet: boolean; readonly text: string }
+export interface MemberTurn { readonly quiet: boolean; readonly text: string; /** The turn answered the owner talking to this session directly. */ readonly person?: boolean }
 
 /** One binding: which member runs which ticket's Assignment. */
 interface Binding { readonly member: string; readonly ticketId: string; readonly assignmentId: string; readonly at: string }
@@ -341,6 +341,12 @@ export class MemberExecutor implements Executor {
     const binding = this.bindingOf(member)
     if (binding === undefined) { this.background.delete(member); return }
     this.memberRead(member)
+    // The owner talked to this session directly: that turn says nothing about the ticket, and the ticket goes on after it.
+    if (turn.person === true && turn.quiet && !this.resuming.has(binding.assignmentId)) {
+      this.background.delete(member)
+      void this.tryDeliver(member, `[superagent] ticket ${binding.ticketId}: your conversation with the owner is separate from this ticket. Go on with the assignment where it stopped, and report on it as usual.`, 'input', binding.ticketId)
+      return
+    }
     try { this.d.engine().turnEnded(binding.ticketId, binding.assignmentId) } catch (error) { this.d.logger.warn('superagent: turn end of %s not recorded: %s', binding.ticketId, String(error)) }
     if (this.resuming.has(binding.assignmentId)) return
     // Shell jobs still run for it: the job's end wakes it, and that turn's end decides.

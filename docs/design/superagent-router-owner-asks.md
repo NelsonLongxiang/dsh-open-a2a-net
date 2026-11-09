@@ -50,6 +50,10 @@ The owner can also edit any rule on the team page. The last row decides who may 
 - **D13 Reading what happened.** `superagent_read` gains kind `decisions`: recent inferred candidates with text, decision, rules named and reason. A proposal to improve the rules is drawn from it.
 - **D14 Nothing proactive, except an observer.** Apart from D15, no session opens a ticket on its own initiative; a member still hands back what is beyond its ticket.
 
+### Talking to a member directly
+
+- **D14a A person's conversation is not the ticket (owner 2026-11-09).** The owner can talk to a member or an observer in its own session as in any session; it needs no ticket. A turn that answered the owner says nothing about the ticket the member holds: the host records no report from it, and tells the member to go on with the ticket afterwards.
+
 ### The observer
 
 - **D15 A member who may open tickets (owner 2026-11-09).** An observer is a session the owner creates under the `superagent-observer` preset and adds to the canvas team; the preset alone makes it one, and nothing else is set. It has a member's tools and takes tickets like one; the one difference is `a2a_ticket_request`. The tool files the observer's own words as a workbench Trigger on a new thread, with the actor `observer:<session>` and `human: false`. It reaches the router as an ordinary candidate, so D12's single way of creating a ticket holds and the router still accepts and dispatches.

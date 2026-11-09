@@ -355,6 +355,12 @@ export class SuperagentHost {
     return role === 'member' && this.isObserver(sessionId) ? 'observer' : role
   }
 
+  /** How a member's turn ended, and whether it answered the owner in person. */
+  private turnOf(sessionId: string): MemberTurn | undefined {
+    const turn = this.d.memberTurn?.(sessionId)
+    return turn === undefined ? undefined : { ...turn, person: this.d.personMessage?.(sessionId) !== undefined }
+  }
+
   /** A member's turn ended (agent idle): the executor's turn-end fact — told to the served team host when it is theirs. */
   memberIdle(sessionId: string): void { this.memberEvent(sessionId, 'idle') }
   /** A member's turn failed (agent error): retried or reported as failed — by the team host when it is theirs. */
@@ -376,13 +382,13 @@ export class SuperagentHost {
 
   private memberEvent(sessionId: string, op: 'idle' | 'read'): void {
     if (this.settings.members.includes(sessionId)) {
-      if (op === 'idle') this.executor.memberIdle(sessionId, this.d.memberTurn?.(sessionId))
+      if (op === 'idle') this.executor.memberIdle(sessionId, this.turnOf(sessionId))
       else this.executor.memberRead(sessionId)
       return
     }
     const serves = this.settingsValue.serves
     if (serves?.members.includes(sessionId) === true && this.d.signedPost !== undefined && this.d.handleOf !== undefined) {
-      void this.d.signedPost(serves.url, '/a2a/superagent-team', { op, member: this.d.handleOf(sessionId), ...(op === 'idle' ? { report: this.d.memberTurn?.(sessionId) ?? { quiet: true, text: '' } } : {}) })
+      void this.d.signedPost(serves.url, '/a2a/superagent-team', { op, member: this.d.handleOf(sessionId), ...(op === 'idle' ? { report: this.turnOf(sessionId) ?? { quiet: true, text: '' } } : {}) })
         .catch(error => { this.d.logger.warn('superagent: %s not told to the team host: %s', op, String(error)) })
     }
   }
@@ -405,7 +411,7 @@ export class SuperagentHost {
     if (entry === undefined) return { ok: false, code: 'not-member', error: 'no remote member of this team is that session under that key' }
     if (op === 'idle') {
       const turn = (report ?? {}) as Record<string, unknown>
-      this.executor.memberIdle(entry.ref, { quiet: turn.quiet !== false, text: typeof turn.text === 'string' ? clip(turn.text, 2_000) : '' })
+      this.executor.memberIdle(entry.ref, { quiet: turn.quiet !== false, text: typeof turn.text === 'string' ? clip(turn.text, 2_000) : '', ...(turn.person === true ? { person: true } : {}) })
       return { ok: true }
     }
     if (op === 'error') {
