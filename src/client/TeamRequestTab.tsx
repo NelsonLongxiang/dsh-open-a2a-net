@@ -4,7 +4,7 @@
  * it sends is the owner's request and goes to the router like any other. Records are data: text nodes only.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { KeyboardEvent } from 'react'
+import type { DragEvent, KeyboardEvent } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import styles from './TeamRequestTab.module.css'
 
@@ -80,6 +80,7 @@ export function TeamRequestTab({ t }: TeamRequestTabProps) {
   const [note, setNote] = useState<Note | undefined>(undefined)
   const [files, setFiles] = useState<readonly File[]>([])
   const picker = useRef<HTMLInputElement>(null)
+  const [dragging, setDragging] = useState(false)
 
   const addFiles = (added: readonly File[]): void => {
     const tooBig = added.find(file => file.size > FILE_BYTES_MAX)
@@ -114,6 +115,26 @@ export function TeamRequestTab({ t }: TeamRequestTabProps) {
     setNote({ tone: 'ok', text: t('team.sent', { team: chosen.name }) })
   }, [canSend, chosen, files, t, text])
 
+  // Only a drag of files is ours: dragging selected text into the box stays the browser's.
+  const dragsFiles = (event: DragEvent<HTMLElement>): boolean => [...event.dataTransfer.types].includes('Files')
+  const onDragOver = (event: DragEvent<HTMLElement>): void => {
+    if (!dragsFiles(event)) return
+    event.preventDefault()
+    setDragging(true)
+  }
+  const onDragLeave = (event: DragEvent<HTMLElement>): void => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false)
+  }
+  const onDrop = (event: DragEvent<HTMLElement>): void => {
+    if (!dragsFiles(event)) return
+    event.preventDefault()
+    setDragging(false)
+    // A folder arrives as a File that cannot be read; the entry says what it really is.
+    const items = [...event.dataTransfer.items]
+    if (items.some(item => item.webkitGetAsEntry?.()?.isDirectory === true)) { setNote({ tone: 'error', text: t('team.noFolders') }); return }
+    addFiles([...event.dataTransfer.files])
+  }
+
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void send() }
   }
@@ -123,7 +144,7 @@ export function TeamRequestTab({ t }: TeamRequestTabProps) {
   if (chosen === undefined) return <div className={styles.view}><p className={styles.hint}>{t('team.none')}</p><a className={styles.link} href="/__dsh_a2a_nexus/" target="_blank" rel="noreferrer">{t('team.open')}</a></div>
 
   return (
-    <div className={styles.view}>
+    <div className={`${styles.view} ${dragging ? styles.dragging : ''}`} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
       <label className={styles.field}>
         <span className={styles.label}>{t('team.pick')}</span>
         <select className={styles.input} value={chosen.name} onChange={(event) => { setTeam(event.target.value) }}>
@@ -132,11 +153,12 @@ export function TeamRequestTab({ t }: TeamRequestTabProps) {
       </label>
       <label className={styles.field}>
         <span className={styles.label}>{t('team.request')}</span>
-        <textarea className={`${styles.input} ${styles.text}`} value={text} maxLength={20_000} placeholder={t('team.placeholder')} onChange={(event) => { setText(event.target.value) }} onKeyDown={onKeyDown} onDragOver={(event) => { event.preventDefault() }} onDrop={(event) => { event.preventDefault(); addFiles([...event.dataTransfer.files]) }} />
+        <textarea className={`${styles.input} ${styles.text}`} value={text} maxLength={20_000} placeholder={t('team.placeholder')} onChange={(event) => { setText(event.target.value) }} onKeyDown={onKeyDown} />
       </label>
       <div className={styles.files}>
         <input ref={picker} type="file" multiple hidden aria-label={t('team.addFiles')} onChange={(event) => { addFiles([...(event.target.files ?? [])]); event.target.value = '' }} />
         <button type="button" className={styles.attach} onClick={() => { picker.current?.click() }}>{t('team.addFiles')}</button>
+        <span className={styles.hint}>{t('team.dropHint')}</span>
         {files.map(file => (
           <div key={`${file.name}:${String(file.size)}`} className={styles.file}>
             <span className={styles.fileName}>{file.name}</span>

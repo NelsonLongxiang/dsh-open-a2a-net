@@ -18,6 +18,8 @@ export type A2aNetKey =
   | 'team.removeFile'
   | 'team.fileTooBig'
   | 'team.tooManyFiles'
+  | 'team.dropHint'
+  | 'team.noFolders'
   | 'team.tab'
   | 'team.guide'
   | 'team.pick'
@@ -39,6 +41,8 @@ export const zh: Record<A2aNetKey, string> = {
   'team.removeFile': '移除 {name}',
   'team.fileTooBig': '{name} 超过 64 MB，发不了',
   'team.tooManyFiles': '一次最多 {max} 个文件',
+  'team.dropHint': '也可以把多个文件一起拖到这里',
+  'team.noFolders': '不能拖入文件夹，请选择里面的文件',
   'team.tab': '提需求',
   'team.guide': '把需求交给 superagent 团队，不用离开当前对话',
   'team.pick': '团队',
@@ -73,6 +77,8 @@ export const en: Record<A2aNetKey, string> = {
   'team.removeFile': 'Remove {name}',
   'team.fileTooBig': '{name} is over 64 MB and cannot be sent',
   'team.tooManyFiles': 'At most {max} files at a time',
+  'team.dropHint': 'Or drag several files here at once',
+  'team.noFolders': 'Folders cannot be added. Choose the files inside',
   'team.tab': 'Request',
   'team.guide': 'Send a superagent team a request without leaving this conversation',
   'team.pick': 'Team',

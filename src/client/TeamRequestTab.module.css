@@ -120,3 +120,8 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.dragging {
+  outline: 2px dashed var(--dsh-accent, #4c8bf5);
+  outline-offset: -4px;
+}
