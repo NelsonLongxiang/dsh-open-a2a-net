@@ -267,7 +267,7 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
 
   ctx.tools.register(defineTool({
     name: 'superagent_request',
-    description: 'Team router only: when the owner, in this session, asks you to open a ticket, file their message as a request. It takes no text: the host files their words verbatim, once, and the request comes back to you as a candidate to accept as usual.',
+    description: 'Team router only: when a message of the owner in this session asks for work, file it as a request, without first asking whether to open a ticket. It takes no text: the host files their words verbatim, once, and the request comes back to you as a candidate to accept as usual.',
     parameters: {},
     output: { ...anyProps, render: (_args, value) => said('superagent request', value) },
     presentCall: () => ({ card: 'generic', title: 'superagent request', kind: 'other', rawInput: {} }),
