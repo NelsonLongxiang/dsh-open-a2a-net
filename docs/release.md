@@ -3,7 +3,12 @@
 > 2026-10-21 立，源自 K3 测试章前瞻（cordis 事故线收尾）：两项与「锁重生成 × 环境策略」
 > 交互的坑，已实测咬人，故入档为纪律。
 
-## 0.8.1-preview.1（预览版候选，待评审，未发布）
+## 0.8.1-preview.1（预览版，已发布到 npm 的 preview 标签）
+
+- 状态（2026-11-09）：标签 `v0.8.1-preview.1` 指向 4efc1f6。2026-11-09T06:40:21Z 发布到 npmjs，dist-tag 为 `preview`，`latest` 仍是 0.7.0。shasum `e962e8e52433ddc09b6aab246d396d1d9e36702d`，integrity `sha512-ERj1ydkRiWgO3rYcf7bQCManbnYQiGfBn3Iv9d8rS/jG5OZMD5rGZdmFeV4Kzr+oopgR2ZKvm4h56LT2ffwWfw==`。从 npmjs 回读的包与审计过的包逐字节相同。未发布到 Gitea 私仓。
+- 安装时写死版本号，并显式指定作用域 registry：`--@nelsonlongxiang:registry=https://registry.npmjs.org/`。
+- 下文是发布前的候选说明，原样保留。
+
 
 - 基线：next/0.8 合入 master 后的合并提交（候选提交在发版 PR 里写明）。这是 0.8.1 的预览版：npm 上用 `preview` 标签发布，`latest` 不动，要装必须写明版本号。相对已打标签、未发布的 v0.8.0（d691926 → 3fd979f），合入 #425–#522。CLI、回执协议、账本与信箱格式都不变；改动集中在可选的 superagent 团队，另有两处移除（见下）。
 - **0.8.0 不发布，由 0.8.1 取代。** v0.8.0 标签保留不改写；npmjs 上从 0.7.0 直接到本预览版。0.8.0 一节的全部内容都包含在本版里，升级、回退照 [0.8.1 升级检查](ops/0.8.1-upgrade-check.md)。
