@@ -17,15 +17,21 @@ export interface TeamRoles {
   readonly members: ReadonlyMap<string, string | undefined>
   /** Each remote member by its planning card id, with its repository when the owner named one. */
   readonly remote: ReadonlyMap<string, string | undefined>
+  /** Each member's role and rules, by planning card id, for its tooltip. */
+  readonly tips: ReadonlyMap<string, string>
 }
 
 /** The planning card id of a remote member ref (see planning-member-handles). */
 const remoteCardId = (ref: string): string => `member-${ref.replace(/[^a-z0-9-]/gi, '-')}`
 
+/** What a member's tooltip adds: its role and enabled rules. */
+const profileTip = (profile: { readonly role?: string; readonly rules: ReadonlyArray<{ readonly name: string; readonly text: string; readonly enabled: boolean }> } | undefined): string =>
+  profile === undefined ? '' : [...(profile.role !== undefined ? [`角色：${profile.role}`] : []), ...profile.rules.filter(r => r.enabled).map(r => `规则 ${r.name}：${r.text}`)].join('\n')
+
 export function teamRolesOf(state: SaState | null): TeamRoles | undefined {
   const s = state?.settings
   if (s === undefined || s.canvas === undefined) return undefined
-  return { canvas: s.canvas, ...(s.router !== undefined ? { router: s.router } : {}), members: new Map(s.members.map(id => [id, s.repos?.[id]])), remote: new Map(s.remoteMembers.map(r => [remoteCardId(r.ref), s.repos?.[r.ref]])) }
+  return { canvas: s.canvas, ...(s.router !== undefined ? { router: s.router } : {}), members: new Map(s.members.map(id => [id, s.repos?.[id]])), remote: new Map(s.remoteMembers.map(r => [remoteCardId(r.ref), s.repos?.[r.ref]])), tips: new Map([...s.members.map(id => [id, profileTip(s.profiles?.[id])] as const), ...s.remoteMembers.map(r => [remoteCardId(r.ref), profileTip(s.profiles?.[r.ref])] as const)].filter(([, tip]) => tip !== '')) }
 }
 
 /** What the badge shows of a role: the repository without its owner. The tooltip has it whole. */
@@ -71,6 +77,9 @@ export function createTeamRoleDecorator(): TeamRoleDecorator {
       el.classList.toggle('is-superagent-router', text === '总工')
       el.classList.toggle('is-superagent-member', text?.startsWith('成员') === true)
       badge(el, 'sa-role', text === undefined ? undefined : roleLabel(text), text)
+      // The card's own tooltip is written on each render, before this runs: add to it once.
+      const tip = roles?.tips.get(id)
+      if (tip !== undefined && !el.title.endsWith(tip)) el.title = `${el.title}\n${tip}`
     }
   }
   return {

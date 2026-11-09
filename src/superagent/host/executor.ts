@@ -28,6 +28,8 @@ export interface MemberExecutorDeps {
   readonly members: () => readonly string[]
   /** The repository a member works in (`owner/name`), if the owner named one. */
   readonly repoOf: (member: string) => string | undefined
+  /** What a member is told of its own rules and the rules its ticket was accepted on (design D6). */
+  readonly memberNotes?: (member: string, ticket: Ticket) => readonly string[]
   /**
    * Put text into a member's session: a local one by host relay, a remote one by a signed request to its host (PR-C2).
    * `kind` says what it carries. False (or a rejected promise) when it did not arrive.
@@ -83,6 +85,8 @@ export class MemberExecutor implements Executor {
   private readonly resuming = new Set<string>()
   /** The repository each open ticket was accepted for (`owner/name`); a ticket not here runs on any member. */
   private ticketRepos: Record<string, string>
+  /** The member a ticket stays with. `named`: the router chose it, so the ticket waits for it (design D5); otherwise it is where the ticket last ran (D7). */
+  private ticketMembers: Record<string, { member: string; named: boolean }>
   /** Members leaving the team right now (design v5: removed from the canvas): their stop notice says why. */
   private readonly leaving = new Set<string>()
   /** Assignments waiting for a free member, oldest first. */
@@ -102,9 +106,10 @@ export class MemberExecutor implements Executor {
     this.bindings = stored.bindings
     this.parked = stored.parked
     this.ticketRepos = stored.repos
+    this.ticketMembers = stored.ticketMembers ?? {}
   }
 
-  private load(): { bindings: Binding[]; parked: Binding[]; repos: Record<string, string> } {
+  private load(): { bindings: Binding[]; parked: Binding[]; repos: Record<string, string>; ticketMembers?: Record<string, { member: string; named: boolean }> } {
     try {
       if (!existsSync(this.d.path)) return { bindings: [], parked: [], repos: {} }
       const raw = JSON.parse(readFileSync(this.d.path, 'utf8')) as { bindings?: Binding[]; parked?: Binding[]; repos?: Record<string, unknown> }
@@ -115,9 +120,10 @@ export class MemberExecutor implements Executor {
   private save(): void {
     // An ended ticket's repository is no longer needed.
     this.ticketRepos = Object.fromEntries(Object.entries(this.ticketRepos).filter(([id]) => { const t = this.d.ticket(id); return t !== undefined && !t.ended }))
+    this.ticketMembers = Object.fromEntries(Object.entries(this.ticketMembers).filter(([id]) => { const t = this.d.ticket(id); return t !== undefined && !t.ended }))
     mkdirSync(dirname(this.d.path), { recursive: true })
     const temporary = `${this.d.path}.tmp-${randomUUID()}`
-    try { writeFileSync(temporary, JSON.stringify({ bindings: this.bindings, parked: this.parked, repos: this.ticketRepos }), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.d.path) } finally { rmSync(temporary, { force: true }) }
+    try { writeFileSync(temporary, JSON.stringify({ bindings: this.bindings, parked: this.parked, repos: this.ticketRepos, ticketMembers: this.ticketMembers }), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.d.path) } finally { rmSync(temporary, { force: true }) }
   }
 
   /** A member is leaving the team (removed from the canvas): the stop its Assignment gets next says so. */
@@ -130,6 +136,8 @@ export class MemberExecutor implements Executor {
   list(): readonly Binding[] { return [...this.bindings, ...this.parked] }
   /** Members with no ticket bound — for a ticket of a repository, only that repository's members. */
   private free(ticketId?: string): string[] {
+    const held = ticketId !== undefined ? this.ticketMembers[ticketId] : undefined
+    if (held !== undefined) return this.d.members().filter(m => m === held.member && this.available(m))
     const repo = ticketId !== undefined ? this.ticketRepos[ticketId] : undefined
     return this.d.members().filter(m => this.available(m) && (repo === undefined || this.d.repoOf(m) === repo))
   }
@@ -151,6 +159,31 @@ export class MemberExecutor implements Executor {
     this.ticketRepos[ticketId] = repo
     this.save()
     queueMicrotask(() => this.launch())
+  }
+
+  /** The member the router named for a ticket (design D5). It waits for that member and goes to nobody else. */
+  setMember(ticketId: string, member: string): void {
+    this.ticketMembers[ticketId] = { member, named: true }
+    this.save()
+    queueMicrotask(() => this.launch())
+  }
+
+  memberOfTicket(ticketId: string): { member: string; named: boolean } | undefined { return this.ticketMembers[ticketId] }
+
+  /**
+   * The team's members changed. A ticket that merely last ran on a member who left is free to go anywhere; one the router
+   * named a departed member for waits, and is returned so the router can choose again (design D7a).
+   */
+  membersLeft(pool: ReadonlySet<string>): string[] {
+    const orphaned: string[] = []
+    let changed = false
+    for (const [ticketId, held] of Object.entries(this.ticketMembers)) {
+      if (pool.has(held.member)) continue
+      if (held.named) orphaned.push(ticketId)
+      else { Reflect.deleteProperty(this.ticketMembers, ticketId); changed = true }
+    }
+    if (changed) this.save()
+    return orphaned
   }
 
   start(ticket: Ticket, assignment: Assignment): void {
@@ -217,11 +250,12 @@ export class MemberExecutor implements Executor {
         if (ticket === undefined || ticket.ended || assignment === undefined || assignment.state !== 'pending') { this.waiting = this.waiting.filter(w => w !== next); continue }
         let member: string | undefined
         for (const candidate of this.free(ticket.id)) {
-          if (await this.tryDeliver(candidate, assignmentCard(ticket, this.d.trigger, this.ticketRepos[ticket.id]), 'assign', ticket.id)) { member = candidate; break }
+          if (await this.tryDeliver(candidate, assignmentCard(ticket, this.d.trigger, this.ticketRepos[ticket.id], this.d.memberNotes?.(candidate, ticket) ?? []), 'assign', ticket.id)) { member = candidate; break }
         }
         if (member === undefined) continue
         this.waiting = this.waiting.filter(w => w !== next)
         this.bindings.push({ member, ticketId: ticket.id, assignmentId: assignment.id, at: new Date().toISOString() })
+        if (this.ticketMembers[ticket.id] === undefined) this.ticketMembers[ticket.id] = { member, named: false }
         this.save()
         this.d.logger.info('superagent: ticket %s assigned to %s', ticket.id, member)
         try { engine.assignmentStarted(ticket.id, assignment.id) } catch (error) { this.d.logger.warn('superagent: assignment %s not recorded started: %s', assignment.id, String(error)) }
@@ -383,13 +417,14 @@ export class MemberExecutor implements Executor {
 }
 
 /** The first message a member gets for a ticket: what it may do, bounded by its Mandate, and how to report. */
-export function assignmentCard(ticket: Ticket, trigger: MemberExecutorDeps['trigger'], repo?: string): string {
+export function assignmentCard(ticket: Ticket, trigger: MemberExecutorDeps['trigger'], repo?: string, notes: readonly string[] = []): string {
   const origin = trigger(ticket.origin.triggerId)
   const name = ticket.execution?.name ?? ticket.id
   return [
     `[superagent assignment] ticket ${ticket.id} «${ticket.title}»`,
     `request: trigger ${ticket.origin.triggerId}`,
     ...(repo !== undefined ? [`repository: ${repo} (yours)`] : []),
+    ...notes,
     `scope: ${ticket.mandate.scope}`,
     `mandate: ${ticket.mandate.strength} (${ticket.mandate.basis.via}), from ${ticket.mandate.actor.source}:${ticket.mandate.actor.id}`,
     '',

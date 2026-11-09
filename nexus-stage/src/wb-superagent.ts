@@ -50,6 +50,8 @@ export interface SaSettings {
   /** The repository each member works in (owner/name), by member; absent on hosts before it. */
   readonly repos?: Readonly<Record<string, string>>
   readonly rules?: readonly TeamRule[]
+  readonly profiles?: Readonly<Record<string, { readonly role?: string; readonly rules: readonly TeamRule[] }>>
+  readonly dispatch?: string
   readonly bots?: { readonly a2a?: readonly string[] }
   readonly allowed?: { readonly github?: readonly string[] }
   readonly reviewer?: string
@@ -57,6 +59,11 @@ export interface SaSettings {
 }
 export interface SaState {
   readonly settings: SaSettings; readonly policyVersion: string
+  /** Proposals waiting for the owner and each rule set's last change, by scope (`team`, `dispatch`, `member:<id>`). */
+  readonly ruleChanges?: {
+    readonly pending: Readonly<Record<string, { readonly at: string; readonly by: string; readonly reason: string; readonly value: unknown }>>
+    readonly last: Readonly<Record<string, { readonly at: string; readonly by: string; readonly reason?: string; readonly message?: string }>>
+  }
   /** Design v5: why the bound canvas cannot run as the team, and the canvas teams this host owns (to bind one). */
   readonly canvasProblem?: string
   readonly pullRequestProblem?: string
@@ -137,6 +144,15 @@ function firstText(thread: SaThread): string {
 function latestReport(ticket: SaTicket): { state: string; summary: string } | undefined {
   for (let i = ticket.assignments.length - 1; i >= 0; i--) { const r = ticket.assignments[i]!.report; if (r !== undefined) return r }
   return undefined
+}
+
+/** A proposal's text for reading: a rule list by its names and text, anything else as it is. */
+function describeRuleValue(value: unknown): string {
+  const rules = (list: unknown): string => Array.isArray(list) ? list.map(rule => { const r = rule as TeamRule; return `${r.name}：${r.text}` }).join('；') : ''
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return rules(value)
+  const profile = (value ?? {}) as { role?: string; rules?: unknown }
+  return [profile.role, rules(profile.rules)].filter(part => part !== undefined && part !== '').join(' · ')
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -386,9 +402,29 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       return `在做「${t?.title ?? b.ticketId}」 · ${ago(b.at, now)}`
     }
     const repo = (member: string, card: HTMLElement): void => { const r = s.repos?.[member]; if (r !== undefined) kv(card, '仓库', r) }
-    const members = s.members.map(m => { const c = el('div', 'wb-led-card'); kv(c, '成员', sessionName(m)); repo(m, c); kv(c, '槽位', slot(m)); return c })
-    const remote = s.remoteMembers.map(r => { const c = el('div', 'wb-led-card'); kv(c, '远端成员', r.ref); repo(r.ref, c); kv(c, '主机', r.url); kv(c, '钉住公钥', fingerprint(r.key)); kv(c, '槽位', slot(r.ref)); return c })
+    const change = (scope: string, card: HTMLElement): void => {
+      const pending = state.ruleChanges?.pending[scope]
+      if (pending !== undefined) kv(card, '待你确认的修改', `${pending.reason}：${describeRuleValue(pending.value)}`)
+      const last = state.ruleChanges?.last[scope]
+      if (last !== undefined) kv(card, '最近修改', `${ago(last.at, now)} · ${last.by === 'owner' ? '你在页面上改的' : `${sessionName(last.by)} 提议${last.message !== undefined ? `，你说：${last.message}` : ''}`}`)
+    }
+    const profile = (member: string, card: HTMLElement): void => {
+      const p = s.profiles?.[member]
+      if (p?.role !== undefined) kv(card, '角色', p.role)
+      for (const rule of p?.rules ?? []) kv(card, `规则 ${rule.name}${rule.enabled ? '' : '（停用）'}`, rule.text)
+      change(`member:${member}`, card)
+    }
+    const members = s.members.map(m => { const c = el('div', 'wb-led-card'); kv(c, '成员', sessionName(m)); profile(m, c); repo(m, c); kv(c, '槽位', slot(m)); return c })
+    const remote = s.remoteMembers.map(r => { const c = el('div', 'wb-led-card'); kv(c, '远端成员', r.ref); profile(r.ref, c); repo(r.ref, c); kv(c, '主机', r.url); kv(c, '钉住公钥', fingerprint(r.key)); kv(c, '槽位', slot(r.ref)); return c })
     body.appendChild(group('成员池', '', [...members, ...remote], '没有成员'))
+    const teamRules = el('div', 'wb-led-card')
+    for (const rule of s.rules ?? []) kv(teamRules, `规则 ${rule.name}${rule.enabled ? '' : '（停用）'}`, rule.text)
+    change('team', teamRules)
+    const dispatchRules = el('div', 'wb-led-card')
+    if (s.dispatch !== undefined && s.dispatch !== '') kv(dispatchRules, '派单规则', s.dispatch)
+    change('dispatch', dispatchRules)
+    const ruleCards = [teamRules, dispatchRules].filter(card => card.childElementCount > 0)
+    body.appendChild(group('团队规则', '', ruleCards, '还没有团队规则'))
     const queued = state.tickets.filter(t => t.ended === undefined && t.stage?.stage === 'working' && t.stage.action === 'queued')
     if (queued.length > 0) body.appendChild(group('排队', 'is-warn', queued.map(t => el('div', 'wb-led-card', `${t.title} · ${ago(t.createdAt, now)}`))))
     if (s.serves !== undefined) {

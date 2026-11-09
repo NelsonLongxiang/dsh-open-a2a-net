@@ -33,6 +33,14 @@ Members can each work in one repository: the owner names it per member in the se
 
 Every A2A message to the team address gets a formal outcome, not only those that start a ticket. A message the team does not take (observe mode, a sender not on the list, a stop an agent may not give, the router's ignore) gets a `rejected` receipt with the reason. A message delivered into a ticket as a follow-up gets a `completed` receipt once its member has it. Without these, the sender's owed row only ever dead-lettered.
 
+## Rules and dispatch
+
+Each member has a `role` and its own rules; the router holds the team's rules and the dispatch rules. The candidate card lists the members with their roles, rules and whether they are free, and when any member has a profile an accept must name one as `member`. The ticket then waits for that member, and goes to nobody else. A member who leaves sends such a ticket back to the router (`superagent_assign`).
+
+A change to a rule set is agreed in conversation. The owner talks to the member or the router in its own session; it proposes the whole new text (`a2a_member_rules_propose`, `superagent_rules_propose`), shows it, and applies it (`a2a_member_rules_apply`, `superagent_rules_apply`) after the owner replies. A member can change only its own. The host lets an apply through only when the turn answers the owner's own typed message, sent after the proposal. The accept mode, sender list, sources and review address are the owner's alone. Asked in its session to open a ticket, the router calls `superagent_request`: the host files the owner's words verbatim as a request, once per message.
+
+The team page shows all of it and lets the owner edit the rules directly; that write needs the host's GUI login.
+
 ## For the router
 
 - Candidates arrive in your own session as `[superagent candidate] …` cards. Decide each by its `trigger_id` with `superagent_route`:

@@ -12,6 +12,13 @@
 - 不在团队里的会话看不到团队的 8 个工具（`superagent_*`、`a2a_ticket_*`）；会话成为总工或成员时才显示。
 - 独立的 `a2a-net serve` 节点没有会话，始终不跑引擎。
 
+### 成员规则、派单规则与属主批准（设计 superagent-router-owner-asks）
+
+- 每个成员有自己的角色和接单规则，总工有团队接单规则和派单规则。候选卡片列出成员的角色、规则和忙闲；成员设了角色或规则后，总工接单必须点名成员，工单只等这个成员。
+- 规则在对话里改：成员只能提议自己的，总工只能提议团队的；你本人回复之后才生效。接单模式、机器名单等只有你能改。
+- 总工会话里说「帮我开个工单」，总工把你的原话提交成需求，走正常接单流程。
+- 「团队」页展示每个成员的角色、规则、待确认的修改和最近修改，也可以直接编辑；页面改规则需要已登录的 DSH 界面。
+
 ## 0.8.1-preview.1（预览版，已发布到 npm 的 preview 标签）
 
 - 状态（2026-11-09）：标签 `v0.8.1-preview.1` 指向 4efc1f6。2026-11-09T06:40:21Z 发布到 npmjs，dist-tag 为 `preview`，`latest` 仍是 0.7.0。shasum `e962e8e52433ddc09b6aab246d396d1d9e36702d`，integrity `sha512-ERj1ydkRiWgO3rYcf7bQCManbnYQiGfBn3Iv9d8rS/jG5OZMD5rGZdmFeV4Kzr+oopgR2ZKvm4h56LT2ffwWfw==`。从 npmjs 回读的包与审计过的包逐字节相同。未发布到 Gitea 私仓。

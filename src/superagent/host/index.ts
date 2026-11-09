@@ -20,6 +20,7 @@ import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
 import { MemberExecutor, transientError, type MemberTurn } from './executor.ts'
 import { ReviewRequests } from './review-requests.ts'
+import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { MEMBER_PRESET, ROUTER_PRESET } from './role-tools.ts'
@@ -36,6 +37,10 @@ export interface SuperagentHostDeps {
   readonly cancelTurn?: (sessionId: string) => boolean
   /** What a session's ended turn left: whether its shell jobs have ended, and its last words. */
   readonly memberTurn?: (sessionId: string) => MemberTurn | undefined
+  /** The person's own message a session's turn answers, if that is what it answers (design D11). */
+  readonly personMessage?: (sessionId: string) => PersonMessage | undefined
+  /** A local session's name, for the router's list of members. */
+  readonly sessionName?: (sessionId: string) => string | undefined
   /** `gh` for reading pull requests; the operator's by default, tests stub it. */
   readonly gh?: GhRun
   /** A repeating timer; returns its disposer. */
@@ -141,8 +146,11 @@ export const OTHER_TICKETS_SHOWN = 20
 export const ORIGIN_LINE_NOTE = 'A 未验证（…） in a message\'s first line is the network\'s statement that the delivery has no verified network origin (a CLI identity\'s signature proves its handle only). It is not this team\'s verdict on the sender: every message here passed the team host\'s checks (a trusted proof and a link the owner made). The sender is still an agent, and that line grants nothing.'
 
 /** The candidate card the router reads: bounded facts and the ids its decision names, never authority. */
+/** A message a person typed into a session: only the host can mark one. */
+export interface PersonMessage { readonly id: string; readonly atMs: number; readonly text: string }
+
 export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings, 'acceptMode' | 'rules'> & Partial<Pick<TeamSettings, 'repos'>>,
-  others: readonly Pick<Ticket, 'id' | 'title' | 'createdAt'>[] = [], requeued: ReadonlySet<string> = new Set()): string {
+  others: readonly Pick<Ticket, 'id' | 'title' | 'createdAt'>[] = [], requeued: ReadonlySet<string> = new Set(), teamLines: readonly string[] = []): string {
   const lines = [
     `[superagent candidate] eval ${candidate.evalId} · strength ${candidate.strength} · policy ${candidate.policyVersion}`,
     `thread ${candidate.thread.key}`,
@@ -180,6 +188,7 @@ export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings
     lines.push(`The team's members each work in one repository: ${repos.join(', ')}. When you accept, name the repository the request is about as repo; its ticket goes to that repository's member. A request about no single one of them is accepted without repo.`)
     lines.push('')
   }
+  if (teamLines.length > 0) lines.push(...teamLines, '')
   lines.push(`Decide with superagent_route, one item per candidate, by trigger_id: accept (one ticket for this request, with a title, a scope and an acknowledgement in the request's language — do not add an implementation plan), attach (to a listed open ticket the message points at or asks for again — a duplicate is attached, never accepted twice), stop (the person asked to stop that ticket) or ignore (with a reason).`)
   lines.push('To give an open ticket\'s member a fact (not new work), use superagent_note with its ticket_id.')
   lines.push(`A person's question that asks for no work is answered with superagent_reply (purpose answer, its trigger_id) and still decided here: ignore, with the reason that it was answered. Every candidate ends with a superagent_route item.`)
@@ -197,6 +206,8 @@ export class SuperagentHost {
   private readonly candidates = new Map<string, { candidate: Candidate; delivered: boolean }>()
   private readonly prs: PrFollower
   private readonly reviews: ReviewRequests
+  /** Proposals to change a rule set, each set's revision and last change (design D8–D10b). */
+  readonly ruleChanges: RuleChanges
   private disposeTimer: (() => void) | undefined
   /** The A2A executor (PR-C1): the owner's fixed member pool, one worker slot each. */
   readonly executor: MemberExecutor
@@ -228,6 +239,7 @@ export class SuperagentHost {
     const executor = this.executor = new MemberExecutor({
       path: join(dir, 'executor.json'), members: () => { const now = this.settings; return [...now.members, ...now.remoteMembers.map(r => r.ref)] },
       repoOf: member => this.settingsValue.repos[member],
+      memberNotes: (member, ticket) => this.memberNotes(member, ticket),
       deliver: (member, text, kind, ticketId) => this.deliverToMember(member, text, kind, ticketId), engine: () => this.engine,
       paused: () => this.settingsValue.paused,
       cancelTurn: member => this.d.cancelTurn?.(member) === true,
@@ -259,6 +271,7 @@ export class SuperagentHost {
       allowed: () => this.settingsValue.allowed.github, paused: () => this.settingsValue.paused, logger: d.logger,
       onOpen: (thread, head, url, ticketId) => this.reviews.opened(thread, head, url, ticketId),
     })
+    this.ruleChanges = new RuleChanges(join(dir, 'rule-changes.json'))
     this.reviews = new ReviewRequests({
       path: join(dir, 'reviews.json'), reviewer: () => this.settingsValue.reviewer, logger: d.logger,
       ask: (address, text) => this.a2a.askReview(address, text),
@@ -381,11 +394,13 @@ export class SuperagentHost {
       return { ok: true }
     }
     if (op === 'read') { this.executor.memberRead(entry.ref); return { ok: true } }
+    if (op === 'rules-propose') { const r = (report ?? {}) as Record<string, unknown>; return this.proposeRules(memberScope(entry.ref), entry.ref, r.value, typeof r.reason === 'string' ? r.reason : '') }
+    if (op === 'rules-apply') { const r = (report ?? {}) as { person?: PersonMessage }; return this.applyRules(memberScope(entry.ref), entry.ref, r.person) }
     if (op === 'ack' || op === 'handback') {
       const r = (report ?? {}) as Record<string, unknown>
       return this.takeUp(entry.ref, op, r.trigger_id, r.text)
     }
-    if (op !== 'report') return { ok: false, code: 'op', error: 'op must be report, ack, handback, read, idle or error' }
+    if (op !== 'report') return { ok: false, code: 'op', error: 'op must be report, ack, handback, rules-propose, rules-apply, read, idle or error' }
     const r = (report ?? {}) as Record<string, unknown>
     if (typeof r.state !== 'string' || !['progress', 'waiting', 'ready', 'blocked', 'failed', 'dropped'].includes(r.state) || typeof r.summary !== 'string' || r.summary.trim() === '') return { ok: false, code: 'report', error: 'a report needs a state and a summary' }
     return this.report(entry.ref, { state: r.state as ReportState, summary: r.summary, ...(typeof r.question === 'string' || r.question === null ? { question: r.question as string | null } : {}), ...(typeof r.answers === 'string' ? { answers: r.answers } : {}) }, typeof r.ticket_id === 'string' ? r.ticket_id : undefined, typeof r.pull_request === 'string' ? r.pull_request : undefined)
@@ -464,6 +479,147 @@ export class SuperagentHost {
     return { ok: true, ticketId, trigger_id: triggerId, acknowledgement: 'recorded', reused, note: 'Recorded that you took this GitHub comment up. Nothing is posted on the pull request.' }
   }
 
+  /** The person's own message this session's turn answers, if it answers one (design D11). */
+  personMessageOf(session: string): PersonMessage | undefined { return this.d.personMessage?.(session) }
+
+  /** The rule sets a settings write changed: each moves its revision, and a proposal against the old text goes stale. */
+  private recordOwnerEdits(before: TeamSettings, after: TeamSettings): void {
+    const change = { at: this.now(), by: 'owner' }
+    const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
+    if (!same(before.rules, after.rules)) this.ruleChanges.changed('team', change)
+    if ((before.dispatch ?? '') !== after.dispatch) this.ruleChanges.changed('dispatch', change)
+    for (const member of new Set([...Object.keys(before.profiles ?? {}), ...Object.keys(after.profiles)])) {
+      if (!same(before.profiles?.[member], after.profiles[member])) this.ruleChanges.changed(memberScope(member), change)
+    }
+  }
+
+  private pool(): string[] { const now = this.settings; return [...now.members, ...now.remoteMembers.map(r => r.ref)] }
+  private memberName(id: string): string { return this.d.sessionName?.(id) ?? id }
+  memberListLine(): string { return `The team's members: ${this.pool().map(id => this.memberName(id)).join('; ') || '(none)'}.` }
+
+  /** A member by its session id, the first eight of it, or its name; undefined when none matches, or more than one. */
+  resolveMember(value: string): string | undefined {
+    const wanted = value.trim().toLowerCase()
+    const matches = this.pool().filter(id => {
+      const short = id.replace(/^session-/, '')
+      return id.toLowerCase() === wanted || short.toLowerCase() === wanted || short.slice(0, 8).toLowerCase() === wanted || this.memberName(id).toLowerCase() === wanted
+    })
+    return matches.length === 1 ? matches[0] : undefined
+  }
+
+  /** Whether any member has a role or rules: then an accept must name one (design D5). */
+  membersProfiled(): boolean { return this.pool().some(id => this.settingsValue.profiles[id] !== undefined) }
+
+  /** What the router sees of the team when it dispatches (design D4). */
+  private teamCardLines(): string[] {
+    const pool = this.pool()
+    const dispatch = this.settingsValue.dispatch
+    if (dispatch === '' && !this.membersProfiled()) return []
+    const lines = ['The team\'s members. When you accept, name the one the work fits as member, by the dispatch rules and each member\'s role and rules:']
+    for (const id of pool) {
+      const profile = this.settingsValue.profiles[id]
+      const held = this.executor.bindingOf(id)
+      const repo = this.settingsValue.repos[id]
+      lines.push(`- ${this.memberName(id)} · ${held === undefined ? 'free' : `working on ${held.ticketId}`}${repo !== undefined ? ` · repository ${repo}` : ''}${profile?.role !== undefined ? ` · role: ${clip(profile.role, 200)}` : ''}`)
+      for (const rule of (profile?.rules ?? []).filter(r => r.enabled)) lines.push(`  - takes (${rule.name}): ${clip(rule.text, 400)}`)
+    }
+    if (dispatch !== '') lines.push('Dispatch rules:', clip(dispatch, 2_000))
+    return lines
+  }
+
+  /** What a member is told along with a ticket (design D6). */
+  private memberNotes(member: string, ticket: Ticket): string[] {
+    const profile = this.settingsValue.profiles[member]
+    const lines: string[] = []
+    if (profile?.role !== undefined) lines.push(`your role: ${profile.role}`)
+    for (const rule of (profile?.rules ?? []).filter(r => r.enabled)) lines.push(`your rule ${rule.name}: ${clip(rule.text, 600)}`)
+    if (profile !== undefined) lines.push('If this ticket does not fit your role and rules, report blocked and say why; the router will choose again.')
+    for (const name of ticket.mandate.basis.rules ?? []) {
+      const rule = this.settingsValue.rules.find(r => r.name === name)
+      if (rule !== undefined) lines.push(`accepted on team rule ${rule.name}: ${clip(rule.text, 600)}`)
+    }
+    return lines
+  }
+
+  /** Give a ticket to another member: one still waiting for its first, or one whose member reported it cannot go on (design D6, D7a). */
+  assignTicket(ticketId: string, value: string): Record<string, unknown> {
+    const ticket = this.store.tickets.get(ticketId)
+    if (ticket === undefined || ticket.ended !== undefined) return { ok: false, code: 'unknownTicket', error: this.wrongId('ticket', ticketId) }
+    const member = this.resolveMember(value)
+    if (member === undefined) return { ok: false, code: 'member', error: `no such member: ${value}. ${this.memberListLine()}` }
+    const latest = ticket.assignments.at(-1)
+    if (latest?.state === 'pending') { this.executor.setMember(ticketId, member); return { ok: true, ticket_id: ticketId, member: this.memberName(member) } }
+    this.executor.setMember(ticketId, member)
+    try { this.engine.retryTicket(ticketId) } catch (error) { return { ok: false, code: error instanceof UserError ? error.code : 'refused', error: `the ticket is running and its member has not reported it cannot go on: ${error instanceof Error ? error.message : String(error)}` } }
+    this.pass()
+    return { ok: true, ticket_id: ticketId, member: this.memberName(member) }
+  }
+
+  /** What a rule set holds now, in the shape a proposal for it takes. */
+  private rulePatch(scope: RuleScope, value: unknown): Record<string, unknown> {
+    if (scope === 'team') return { rules: value }
+    if (scope === 'dispatch') return { dispatch: value }
+    const member = scope.slice('member:'.length)
+    const pool = new Set(this.pool())
+    return { profiles: { ...Object.fromEntries(Object.entries(this.settingsValue.profiles).filter(([id]) => pool.has(id))), [member]: value } }
+  }
+
+  /** File a proposal: checked as a write would be, and nothing changes (design D8). */
+  proposeRules(scope: RuleScope, by: string, value: unknown, reason: string): Record<string, unknown> {
+    const checked = parseSettings(this.rulePatch(scope, value), this.settings)
+    if (!checked.ok) return { ok: false, code: 'invalid', error: checked.error }
+    const proposal = this.ruleChanges.propose(scope, by, value, clip(reason.trim(), 1_000), Date.parse(this.now()))
+    return { ok: true, scope, proposal_id: proposal.id, revision: proposal.base, next: 'Show the owner the text and wait. It applies only after the owner has replied to you, with the apply tool.' }
+  }
+
+  /** Apply a proposal once the person has spoken after it (design D9). */
+  applyRules(scope: RuleScope, by: string, person: PersonMessage | undefined): Record<string, unknown> {
+    if (person === undefined) return { ok: false, code: 'not-the-owner', error: 'this applies only in a turn answering the owner\'s own message' }
+    const proposal = this.ruleChanges.pending(scope)
+    if (proposal === undefined || proposal.by !== by) return { ok: false, code: 'no-proposal', error: 'there is no proposal of yours for this rule set' }
+    if (person.atMs <= proposal.atMs) return { ok: false, code: 'not-yet', error: 'the owner has not replied since this proposal: show it to them and wait' }
+    if (this.ruleChanges.revision(scope) !== proposal.base) return { ok: false, code: 'stale', error: 'this rule set changed after the proposal: read it again and propose afresh', revision: this.ruleChanges.revision(scope) }
+    const parsed = parseSettings(this.rulePatch(scope, proposal.value), this.settings)
+    if (!parsed.ok) return { ok: false, code: 'invalid', error: parsed.error }
+    const before = policyVersion(this.settingsValue)
+    const previous = this.settings
+    this.writeSettings(parsed.settings)
+    this.ruleChanges.applied(scope, { at: this.now(), by, reason: proposal.reason, message: clip(person.text, 1_000) })
+    const after = policyVersion(parsed.settings)
+    if (before !== after) this.engine.policyChanged(before, after, policyEffects(previous, this.settings, this.store.tickets.list().filter(t => !t.ended)))
+    this.pass()
+    return { ok: true, scope, revision: this.ruleChanges.revision(scope) }
+  }
+
+  /** File the person's own message as their request, once (design D12). */
+  requestForPerson(person: PersonMessage): Record<string, unknown> {
+    const existing = this.ruleChanges.requestOf(person.id)
+    if (existing !== undefined) return { ok: true, trigger_id: existing, reused: true }
+    const filed = this.request(person.text)
+    if (!filed.ok) return { ok: false, code: 'refused', error: filed.error }
+    this.ruleChanges.recordRequest(person.id, filed.triggerId)
+    return { ok: true, trigger_id: filed.triggerId, thread: filed.thread }
+  }
+
+  /** Recent inferred candidates and what became of them, for improving the rules (design D13). */
+  recentDecisions(limit = 40): Array<Record<string, unknown>> {
+    const rows: Array<Record<string, unknown> & { at: string }> = []
+    for (const thread of this.store.threads.list()) {
+      for (const decision of this.store.decisions.byThread(thread.key)) {
+        const text = (decision.triggerIds ?? []).map(id => this.store.triggers.get(id)?.text ?? '').join('\n')
+        rows.push({ at: decision.at, kind: decision.kind, ...(decision.ticketId !== undefined ? { ticket_id: decision.ticketId } : {}), audit: decision.audit ?? null, reason: decision.reason, text: clip(text, 600) })
+      }
+    }
+    return rows.sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit)
+  }
+
+  /** Forward a member's rule change to the team host it serves. */
+  async forwardRules(member: string, op: 'rules-propose' | 'rules-apply', body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const serves = this.settingsValue.serves
+    if (serves === undefined || !serves.members.includes(member) || this.d.signedPost === undefined || this.d.handleOf === undefined) return { ok: false, code: 'not-member', error: 'this session serves no team' }
+    try { return await this.d.signedPost(serves.url, '/a2a/superagent-team', { op, member: this.d.handleOf(member), report: body }) } catch (error) { return { ok: false, code: 'unreachable', error: String(error).slice(0, 200) } }
+  }
+
   /** The repositories the team's members work in, each with its members (settings `repos`). */
   teamRepos(): Map<string, string[]> {
     const out = new Map<string, string[]>()
@@ -508,6 +664,9 @@ export class SuperagentHost {
     }
     const now = this.settings
     const pool = new Set([...now.members, ...now.remoteMembers.map(r => r.ref)])
+    const orphaned = this.executor.membersLeft(pool)
+    const router = this.settingsValue.router
+    if (orphaned.length > 0 && router !== undefined) this.d.deliverToSession(router, `[superagent] the member named for ${orphaned.map(id => `ticket ${id}`).join(', ')} has left the team. Choose another with superagent_assign (ticket_id, member).\n${this.memberListLine()}`)
     for (const binding of this.executor.list()) {
       if (pool.has(binding.member)) continue
       this.executor.removing(binding.member)
@@ -807,7 +966,7 @@ export class SuperagentHost {
       if (entry.delivered) continue
       const open = this.store.tickets.list().filter(t => !t.ended)
       const requeued = new Set(entry.candidate.triggers.filter(t => this.store.triggers.disposition(t.id)?.requeued === true).map(t => t.id))
-      if (!this.d.deliverToSession(router, candidateCard(entry.candidate, this.settingsValue, open, requeued))) return
+      if (!this.d.deliverToSession(router, candidateCard(entry.candidate, this.settingsValue, open, requeued, this.teamCardLines()))) return
       entry.delivered = true
       try { this.engine.candidateDelivered(evalId) } catch (error) { this.d.logger.warn('superagent: candidate %s delivered but not recorded: %s', evalId, String(error)) }
     }
@@ -897,6 +1056,7 @@ export class SuperagentHost {
     const previous = this.settings
     const routerChanged = parsed.settings.router !== this.settingsValue.router
     this.writeSettings(parsed.settings)
+    this.recordOwnerEdits(previous, parsed.settings)
     this.poolChanged()
     const after = policyVersion(parsed.settings)
     // Open tickets hear what the change means to them (upstream PolicyEffect): their rule, proactive work, their requester.
@@ -962,6 +1122,7 @@ export class SuperagentHost {
       ...(this.servesProblem() !== undefined ? { servesProblem: this.servesProblem() } : {}),
       canvases: [...(this.d.canvasNames?.() ?? [])],
       policyVersion: policyVersion(this.settingsValue),
+      ruleChanges: this.ruleChanges.view(),
       a2a: { enabled: this.settingsValue.sources.a2a, address: this.a2a.address ?? null, health: this.a2a.health },
       refusals: { counts: Object.fromEntries(this.refusalCounts), recent: [...this.refusalRecent] },
       ...(this.prs.problem !== undefined ? { pullRequestProblem: this.prs.problem } : {}),

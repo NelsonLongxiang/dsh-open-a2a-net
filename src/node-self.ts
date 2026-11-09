@@ -62,7 +62,7 @@ const LOCAL_SOURCES: ReadonlySet<string> = new Set(['user'])
  * Messages the harness or agent loop injects on its own: they neither prove a person nor carry a
  * delivery, so they neither count as input nor taint (projections of state already on this host).
  */
-const NEUTRAL_SOURCES: ReadonlySet<string> = new Set([
+export const NEUTRAL_SOURCES: ReadonlySet<string> = new Set([
   'runtime-context', 'time-context', 'skill-catalog', 'tool-jobs', 'user-approval', 'model-selection', 'tool-registry', 'ptc-mode', 'system-prompt',
   // Host features of a long-running session: compaction (its own history), a person's /skill, schedules, goals.
   'compact-checkpoint', 'skill-invocation', 'schedule', 'goal',
