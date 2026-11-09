@@ -9,12 +9,14 @@
  *   工单      every ticket by stage, with its mandate, assignee, latest report, and stop / retry;
  *   团队      the router, the member pool with each member's slot, remote members and the team this host serves, with the
  *             keys pinned for them, and the A2A address;
- *   设置      router, members, accept mode, the A2A Source, pause (a partial settings write; pins have their own actions).
+ *   设置      router, members, accept mode, the A2A Source, pause, and the rules, sender list, repositories, GitHub people
+ *             and review address (a partial settings write; pins have their own actions).
  * Records are attacker-shaped data (requests and reports come from people and agents): textContent only.
  * Inputs (request, follow-ups, answers, the settings form) are built once and survive the poll.
  * @module nexus-stage/wb-superagent
  */
 import type { RailTone } from './wb-rail'
+import { buildTeamFields, type TeamRule } from './wb-superagent-settings'
 
 type Json = Record<string, unknown>
 
@@ -47,6 +49,10 @@ export interface SaSettings {
   readonly remoteMembers: ReadonlyArray<{ ref: string; key: string; url: string }>
   /** The repository each member works in (owner/name), by member; absent on hosts before it. */
   readonly repos?: Readonly<Record<string, string>>
+  readonly rules?: readonly TeamRule[]
+  readonly bots?: { readonly a2a?: readonly string[] }
+  readonly allowed?: { readonly github?: readonly string[] }
+  readonly reviewer?: string
   readonly serves?: { url: string; key: string; members: readonly string[]; team?: string }
 }
 export interface SaState {
@@ -442,11 +448,16 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     const wb = flag('工作台 Source', s.sources.workbench)
     const a2a = flag('A2A Source', s.sources.a2a)
     const paused = flag('暂停执行', s.paused)
+    const fields = buildTeamFields(s, sessionName, mark)
+    form.append(...fields.nodes)
 
     const save = el('button', 'wb-btn wb-btn-primary', '保存')
     save.type = 'button'
     save.addEventListener('click', () => {
       const patch: Json = { canvas: canvas.value === '' ? null : canvas.value, router: router.value === '' ? null : router.value, acceptMode: mode.value, sources: { workbench: wb.checked, a2a: a2a.checked }, paused: paused.checked }
+      const edited = fields.patch()
+      if ('error' in edited) { say(edited.error, 'danger'); return }
+      Object.assign(patch, edited.patch)
       void send({ action: 'settings', settings: patch }, () => { settingsDirty = false }, '设置已保存')
     })
     const reset = el('button', 'wb-btn', '放弃修改')
