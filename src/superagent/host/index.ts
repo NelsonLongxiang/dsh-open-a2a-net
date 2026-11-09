@@ -698,7 +698,7 @@ export class SuperagentHost {
       this.decisions.decide(card.id, { at, text: answer, triggerId: out.triggerId }, stored)
       return { ok: true, ticket_id: card.ticketId, trigger_id: out.triggerId }
     }
-    const filed = this.request(`[决策卡] ${card.question}\n${answer}`)
+    const filed = this.request(`[决策卡]（${card.source === 'router' ? '总工' : '观察者'}提出）${card.question}\n${answer}`)
     if (!filed.ok) return { ok: false, code: 'refused', error: filed.error }
     this.decisions.decide(card.id, { at, text: answer, triggerId: filed.triggerId }, stored)
     return { ok: true, trigger_id: filed.triggerId, thread: filed.thread }

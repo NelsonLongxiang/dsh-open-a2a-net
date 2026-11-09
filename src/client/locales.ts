@@ -30,6 +30,9 @@ export type A2aNetKey =
   | 'team.confirmChoice'
   | 'team.decisionNote'
   | 'team.decisionWrite'
+  | 'team.fromRouter'
+  | 'team.fromObserver'
+  | 'team.fromMember'
   | 'team.tab'
   | 'team.guide'
   | 'team.pick'
@@ -63,6 +66,9 @@ export const zh: Record<A2aNetKey, string> = {
   'team.confirmChoice': '确认选择',
   'team.decisionNote': '补充说明（可选）',
   'team.decisionWrite': '写下你的决定',
+  'team.fromRouter': '总工提出',
+  'team.fromObserver': '观察者提出',
+  'team.fromMember': '成员提问',
   'team.tab': '提需求',
   'team.guide': '把需求交给 superagent 团队，不用离开当前对话',
   'team.pick': '团队',
@@ -109,6 +115,9 @@ export const en: Record<A2aNetKey, string> = {
   'team.confirmChoice': 'Confirm choice',
   'team.decisionNote': 'Add a note (optional)',
   'team.decisionWrite': 'Write your decision',
+  'team.fromRouter': 'From the router',
+  'team.fromObserver': 'From an observer',
+  'team.fromMember': 'From a member',
   'team.tab': 'Request',
   'team.guide': 'Send a superagent team a request without leaving this conversation',
   'team.pick': 'Team',
