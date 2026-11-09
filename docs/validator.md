@@ -50,16 +50,16 @@ node scripts/verify-probe.mjs
 
 # 2. 判定（YGL_HOME 指向仓库内自包含工作区；路径按本机替换，下例为开发席 Windows 机）
 export YGL_HOME=D:/workspace/dsh-open-a2a-net/tmp/ygl-verify
-YGL=D:/workspace/ygl-trees/dist/apps/cli/src/bin.js
+# 使用本项目精确钉版的 pnpm exec ygl-trees；不依赖邻仓引擎路径
 # 现行隔离候选版 RC spec：spec_bdf9df9d3851；--submission 必须取本轮 probe 输出的唯一目录
-ygl-trees verify run spec_bdf9df9d3851 --db verify/snapshot.sqlite --submission "<本轮 probe 的 submission exported 路径>" --json
+pnpm exec ygl-trees verify run spec_bdf9df9d3851 --db verify/snapshot.sqlite --submission "<本轮 probe 的 submission exported 路径>" --json
 # （submission 路径以本轮 probe-summary.json.submission 为准；缺失或与 snapshot/HEAD 不匹配即拒绝）
 # overall 在报告 JSON 里；rc=0 只表示「跑完出报告」，FAIL 也是有效结论
 ```
 
-新环境没有 `spec_bdf9df9d3851` 时，不得借用旧 spec 的 PASS：先由 CLI 按 `verify/material-isolated.md`、`verify/candidates-isolated.json`、`verify/reviews-isolated.json` 提交/准备，file 检查器必须以本轮仓库真实 nexusDist bundle、`docs/release-gate.md` 和一份已跟踪的 `tests/**/*.spec.ts` 作为 `--attach` 样本。引擎治理 meta 指向实际验证器源码根（本机 `D:/workspace/ygl-trees`）；本插件仓 `verify meta` 当前 R3 因已存在的插件运行时代码报 FAIL，不能冒称本仓 meta PASS。冻结后记新 spec id 与材料 hash，正式判定只认 `verify run` 的报告和归档。
+新环境没有 `spec_bdf9df9d3851` 时，不得借用旧 spec 的 PASS：先由 CLI 按 `verify/material-isolated.md`、`verify/candidates-isolated.json`、`verify/reviews-isolated.json` 提交/准备，file 检查器必须以本轮仓库真实 nexusDist bundle、`docs/release-gate.md` 和一份已跟踪的 `tests/**/*.spec.ts` 作为 `--attach` 样本。新构造必须在项目根执行 `pnpm exec ygl-trees verify meta .` 并通过，不能用 `--meta-repo` 指向引擎根或 `--no-meta` 求绿；历史借引擎根的构造记录仅保留为事实，不证明本产品准入。未通过时停止 submit/prepare，不改旧冻结 spec。冻结后记新 spec id 与材料 hash，正式判定只认 `verify run` 的报告和归档。
 
-`scripts/verify-probe.mjs` 直连 npmjs **候选精确版本**：404 才记未发布，200 记已发布，网络错误/其他状态记未核且 V6 FAIL；不以 `latest` 标签或项目 `.npmrc` 证明精确版本不存在。3081 state 在 isolated 模式可保留持久化 peer 列表，V9 看显式 `isolated=true` 而不要求 peer 数为 0；V10 必须 state HTTP 200 且死信计数非空、处于 0–30。probe 的提交物目录每轮新建，写进摘要并打印路径；递归层只接受同一 snapshot/HEAD 下的该目录，缺摘要、路径异常、旧固定 TEMP 目录都 FAIL，不回落旧目录。
+`scripts/verify-probe.mjs` 直连 npmjs **候选精确版本**：404 才记未发布，200 记已发布，网络错误/其他状态记未核且 V6 FAIL；不以 `latest` 标签或项目 `.npmrc` 证明精确版本不存在。3081 state 在 isolated 模式可保留持久化 peer 列表，V9 看显式 `isolated=true` 而不要求 peer 数为 0；V10 必须 state HTTP 200 且死信计数非空、处于 0–30。probe 的提交物目录每轮新建，写进摘要并打印路径；直接 CLI RC 入口只接受同一 snapshot/HEAD 下的该目录，缺摘要、路径异常、旧固定 TEMP 目录都拒绝，不回落旧目录。运行前以保留的 submissionFromProbe 绑定 helper 核对本轮摘要；不得只复制一条旧路径。
 
 **本机正式CLI运行（2026-11-03，非发布PASS）**：现行 `spec_bdf9df9d3851` 的 `run_b67ca23c44bee3a7` 判 `FAIL`（9 PASS、6 FAIL，V15 文档漂移闸 PASS），红项 V2/V5/V6/V7/V9/V10：仓库仍是已发布的 0.6.31、Windows unit 红、工作树在途且 3081 state 返回 401，不能宣称候选通过。该报告归档 `archive verify` **169 项通过**；把现行规格跑在旧四门禁快照得到 `run_c3de2aebeb915040`，V15 明确 FAIL，缺门禁不会空洞通过。历史 14 单元 `run_b927977dbea7a8b9` 在 3081 v0.6.32 `isolated=true` 且 state 报 9 个持久化 peer 时，V8/V9/V10 PASS，但其快照仍使用旧 latest 探针，不证明精确版本的 V6；整体仍 FAIL。两份报告均不对应 90c7d4c 的完整正式候选 PASS。
 
@@ -114,31 +114,21 @@ unit 300/wire 291/nexus 120 全 exit 0、3081 v0.6.17、三闸门 ✓）。
 正确行为（下次候选升 spec_version 重出材料）。私仓 Gitea（latest=0.6.15）未同步——
 双 registry 纪律下按属主指令补发。
 
-## 递归验证器（scripts/verify-recursive.mjs，2026-10-21 开发席指令）
+## 引擎自检与 RC 证据链（旧自判递归驱动已退场）
 
-一层入口三层递归，退出码 0 = 三层全绿：
+当前入口是本项目钉版 CLI，不再生产 `recursive-summary.json` 或 JS 总体 ok，不再按最新 zip 名猜本轮归档。目标是引擎 `verify tree run`；self-check、附件 submission 与归档校验的树能力齐备、正式树规格获准入前，不伪造树 id 或“总体 PASS”。
 
-| 层 | 验证对象 | 机制 |
-|---|---|---|
-| L·引擎 | 判官自己 | `verify self-check`（canonical 向量→语料摘要→形状→全语料实跑→归档链，六环） |
-| L·判定 | 候选 | 冻结 spec 在当前快照上的 15 单元 run |
-| L·证据 | 判定本身的证据链 | 最新 run 归档 `archive verify` 全 hash 链逐字节重算 |
+树能力补齐前，以下**三份 CLI 产物缺一不可**，全部绑定同一候选完整 SHA、精确引擎版本和本轮证据目录。候选关联在交付记录中显式记下，不暗示 self-check JSON 自带候选：
 
-```bash
-node scripts/verify-recursive.mjs [--fresh]   # --fresh 先跑探针重采快照再判定
-```
+1. `pnpm exec ygl-trees verify self-check --corpus <明确语料目录> --json` 的完整原始产物；缺语料或 skip 如实列出，不用历史自检替本轮。
+2. 直接 CLI RC `verify run` 报告，使用本轮 snapshot/HEAD/唯一 submission 绑定，并保存本次 run 返回的精确 archive 路径。
+3. `pnpm exec ygl-trees verify archive verify <该 run 返回的精确 zip> --json` 产物。不能用最新文件名、别的 spec 或旧候选归档代替。
 
-环境变量（脚本默认值写死开发席 Windows 路径与历史 spec id，换机或换引擎须覆盖）：
-`YGL_BIN`（引擎 bin.js）、`YGL_HOME`（默认仓库 `tmp/ygl-verify`）、`A2A_SPEC_ID`
-（默认 `spec_bdf9df9d3851`）、`YGL_VERIFY_CORPUS`。
+缺任何一份或候选绑定不一致，不能声称 RC 证据链完整。rc=0只是过程完成，业务结论仍读各自 CLI verdict，不由新 shell/JS 汇总。原 --fresh 的效果改为先显式运行 verify-probe，再执行上述 CLI 步骤，采集 exit0 不是 PASS。唯一 submission 核查使用 scripts/verify-submission.mjs 的 submissionFromProbe；不回落固定 TEMP 目录。
 
-产出 verify/recursive-summary.json（gitignore 再生产物）。首跑实绩：引擎 6 ok/0 skip/0 fail、
-spec-run PASS 14/14（run_60ff8d9aa34e5a6e）、归档链 5 items 无问题。
+**历史记录（非当前入口）**：2026-10-21 的 scripts/verify-recursive.mjs 首跑曾为引擎6ok、RC14/14（run_60ff8d9aa34e5a6e）、归档5items；旧结论不重写。源码可按旧精确490809b或bb481b9 git对象只读查看，blob为5dcc5238d73b28543bca51ec81a612cc1bc840cd。历史复核优先 CLI archive verify旧封包；不得重跑会写 summary 的旧脚本覆盖正式目录。旧摘要仍被 gitignore保留，不迁移成新报告。
 
-**gh#5 评审证据请求的标准答案**：评审席/监督席要「候选运行时证据」时，开发席交付三件套——
-① `node scripts/verify-recursive.mjs --fresh` 的 recursive-summary.json（引擎自证+判定+证据链）；
-② verify/probe-summary.json（四门禁退出码+3081 探针+闸门推导）；③ 最新 run 报告
-（tmp/ygl-verify/verify/reports/run_*.json，含每 VU witness）。三件同 commit 出，缺一不可。
+**gh#5 交付格式更新**：交付上述三份 CLI 产物 + 本轮 probe-summary 的 snapshot/HEAD/submission绑定；具备正式引擎树后交 tree report及archive。文档不能把独立产物假称已组成树；0.6.43发布后v2（A1–A8）放行链不依赖旧递归脚本，见留存v2节。
 
 ## 监督席 S 层（scripts/supervisor-snapshot.mjs + ygl-trees verify run）
 
@@ -196,8 +186,10 @@ ygl-trees verify run spec_4de5f3b9d48d --db <snapshot>      # 判定：overall �
 
     node scripts/verify-probe.mjs --release-audit <留存目录> --out <新快照.sqlite>
     ygl-trees verify lint-candidates verify/candidates-artifact-audit.json --text verify/material-artifact-audit.md --reviews verify/reviews-artifact-audit.json --db <新快照.sqlite> --json
-    ygl-trees verify submit --title "发布物留存证据 v1" --text verify/material-artifact-audit.md --meta-repo <引擎源码根>
-    ygl-trees verify prepare <材料ID> --candidates verify/candidates-artifact-audit.json --reviews verify/reviews-artifact-audit.json --db <新快照.sqlite> --as-of <采集ISO时间> --meta-repo <引擎源码根>
+    # 新构造仅在项目根 meta PASS 且获对应材料冻结授权后执行；历史spec不重写
+    pnpm exec ygl-trees verify meta . --json
+    pnpm exec ygl-trees verify submit --title "发布物留存证据 v1" --text verify/material-artifact-audit.md
+    pnpm exec ygl-trees verify prepare <材料ID> --candidates verify/candidates-artifact-audit.json --reviews verify/reviews-artifact-audit.json --db <新快照.sqlite> --as-of <采集ISO时间>
     ygl-trees verify run <规格ID> --db <新快照.sqlite> --json
     ygl-trees verify archive verify <run返回的zip> --json
 
@@ -217,7 +209,7 @@ ygl-trees verify run spec_4de5f3b9d48d --db <snapshot>      # 判定：overall �
 
 真实旧0.6.42因无同候选评审清单，新v2 run_f5fad4a34102b47f如实7PASS/1FAIL；不倒填伪造清单。#331真实macOS清单另经新比对器与当时Windows包解析对账208/208，无差异（tmp/validator-review-manifest/actual331-comparison.json），此不是宣称该候选曾正式发布。旧v1历史发布结论仍限旧规格。
 
-新流程仍是probe采集→lint-candidates→prepare新冻结规格→verify run→archive verify；用--meta-repo指向验证器引擎源码根，不把插件产品源码误当纯验证器项目，也不使用--no-meta绕过。采集exit0不是PASS，所有结论只认spec run。
+既有v2放行仍是probe --release-audit采集→verify run既有spec_5723ba8259bb→archive verify（不依赖旧递归脚本）。新材料/规格必须先项目根meta PASS并获对应冻结授权；不使用--meta-repo借引擎根或--no-meta绕过。历史曾借引擎根的构造行为仍如实保留，不能当本仓准入证明。采集exit0不是PASS，所有结论只认spec run。v3未全PASS前仍以v2放行并附v3结果；v3真FAIL而v2PASS时暂停发布报全局评估。
 
 ## 产品仓根目录 `verify meta` 的 R3 现状与原因（2026-11-06）
 

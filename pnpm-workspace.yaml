@@ -18,3 +18,7 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-file-reference@0.1.2-alpha.3'
   - '@deepseek-ai/dsh-util-time@0.1.2-alpha.3'
   - '@deepseek-ai/dsh-util-workspace-path@0.1.2-alpha.3'
+
+# Exact verifier devDependency requires its native SQLite driver; no blanket script approval.
+allowBuilds:
+  better-sqlite3: true
