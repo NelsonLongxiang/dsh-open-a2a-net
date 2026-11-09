@@ -10,12 +10,19 @@ model tools.
 ## Identity and home host
 
 - `a2a-net init <name> [--uuid 16hex] [--home URL] [--force]` creates an
-  Ed25519 identity: handle `<name>/<16 hex>`, stored in
-  `$A2A_CLI_HOME/cli.json` (default `~/.a2a/cli.json`, mode 0600). An
-  existing identity is never replaced without `--force` (the old handle's
-  deposit stops verifying).
+  Ed25519 identity: handle `<name>/<16 hex>` (the name must match
+  `[a-z0-9-]{1,32}`, else a usage error, exit 2; the 16 hex is random unless
+  `--uuid` gives it), stored in `$A2A_CLI_HOME/cli.json` (default
+  `~/.a2a/cli.json`; the file is mode 0600). `--home` is saved with the
+  identity, a trailing `/` stripped. An existing identity is never replaced
+  without `--force`. `--force` writes a fresh identity file: a new key, a new
+  random uuid unless `--uuid` is given, and the saved home is dropped unless
+  `--home` is passed again. The old key is gone for good, so nothing can sign
+  for the old handle any more; its deposit stays on the home host until it
+  expires (4h at most).
 - Home host: `--home` > `$A2A_HOME` > the home saved by `init --home` >
-  `http://127.0.0.1:3080`.
+  `http://127.0.0.1:3080`. An environment variable set to the empty string
+  counts as unset.
 - Keyed hosts: `--key` > `$A2A_KEY` (prefer the variable; a flag value stays
   in shell history). A host behind dsh-pocket also wants its session token as
   the `dsh_pocket_token` cookie: set `$A2A_POCKET_TOKEN` (or `$A2A_TOKEN`).
@@ -24,7 +31,8 @@ model tools.
 
 - `a2a-net publish` deposits the signed CLI card on the home host
   (`/__dsh_a2a/cli-deposit`, a control route: key-gated like every write).
-  The deposit lives at most 4h. An expired deposit is no longer routable and
+  The deposit lives 4h from each publish (both the default and the maximum;
+  there is no flag to change it). An expired deposit is no longer routable and
   its card is no longer served, but it stays in the host's directory as an
   OFFLINE row (gh#47; the newest 16 are kept) so canvas refs to it never
   dangle silently. Publish again (same handle, same key) to come back.
@@ -32,7 +40,8 @@ model tools.
   signed card that this identity owes a receipt for what its mailbox takes.
   A home host that knows the declaration answers a delivery to it
   `delivered` instead of final: the caller books a debt, the per-target cap
-  (3, counted per identity across all callers) applies and refuses with
+  (`targetQueueCap`, default 3, `0` disables; counted per identity across all
+  callers) applies and refuses with
   `-32009` when full, and the identity's own `receipt <task_id>` frees the
   slot. An owed row the 64-row cap pushes out is archived as evicted. Every
   publish states it afresh — `publish` or `inbox --renew` without `--owes`
@@ -42,7 +51,9 @@ model tools.
 - A handle stays pinned to the key it was published with, live or offline
   (gh#137): publishing it with a different key (e.g. after `init --force
   --uuid <same>`) is refused with "held by another key". Run `a2a-net revoke`
-  first; the next publish then takes the new key. A key swap is therefore
+  first (it acts on the current identity's handle, so with the same `--uuid`
+  it removes the old deposit, live or offline); the next publish then takes
+  the new key. A key swap is therefore
   always an explicit act, never a silent overwrite.
 - While deposited, the host serves the card at
   `<home>/a2a/cli/<handle>/.well-known/agent-card.json` and lists the handle
@@ -55,13 +66,13 @@ model tools.
 
 ## Team display names
 
-Canvas rows in `a2a-net teams` carry an owner-qualified id, `<zone>/canvas/<name>@<fp8>` (the first 8 hex of sha256 over the owner card's public key; #282). Route to that id to pick one owner when several hosts have a canvas of the same name; a bare `<zone>/canvas/<name>` still routes as before (this host's own canvas first, refused as ambiguous when several remote owners match). Your own fingerprint names your own canvas; an id nobody's key matches reaches no one. The id survives a change of the owner's address. It names a signing key, not a host: a seeded peer serving that key's signed card core is treated as an alias of the same owner (as before), and a card's canvas list is not itself signed. Canvas names may not end in `@<8 hex>`.
+Canvas rows in `a2a-net teams` carry an owner-qualified id, `<zone>/canvas/<name>@<fp8>` (the first 8 hex of sha256 over the owner card's public key; #282; a host that does not send an `id`, or an owner card without a key, shows the bare `<zone>/canvas/<name>`). Route to that id to pick one owner when several hosts have a canvas of the same name; a bare `<zone>/canvas/<name>` still routes as before (this host's own canvas first, refused as ambiguous when several remote owners match). Your own fingerprint names your own canvas; an id nobody's key matches reaches no one. The id survives a change of the owner's address. It names a signing key, not a host: a seeded peer serving that key's signed card core is treated as an alias of the same owner (as before), and a card's canvas list is not itself signed. Canvas names may not end in `@<8 hex>`.
 
-`a2a-net teams <query>` searches the owner-set seat label as well as the route handle; `--json` exposes the effective display name. Local rows prefer `seatName`, then the current title (`name`), then the legacy label. Only the human workbench owner panel/config can set `seatNames`; the CLI has no naming command.
+`a2a-net teams <query>` is a case-insensitive substring search over the route handle and the display name (the owner-set seat label included); `--json` exposes the effective display name. Local rows prefer `seatName`, then the current title (`name`), then the legacy label. Only the human workbench owner panel/config can set `seatNames`; the CLI has no naming command.
 
 ## Tasks: ledger and host observability
 
-`a2a-net tasks --json` returns the existing `pending`, `dead`, and `archived` arrays plus `settlement` and `conservation` copied unchanged from `/__dsh_a2a/state`. These blocks include the lifetime `settlement.refusalsTotal`, refusal ring and mode, and the host conservation verdict/counters/duplicate ids. Older hosts omit a block they do not expose; the CLI does not manufacture zero counters or a passing verdict. Plain `tasks` appends a conservation line (`conserved`, `delta`) and a settlement line (`mode`, `refusalsTotal`, `offChain`) when the respective block exists.
+`a2a-net tasks --json` returns the existing `pending`, `dead`, and `archived` arrays plus `settlement` and `conservation` copied unchanged from `/__dsh_a2a/state`. These blocks include the lifetime `settlement.refusalsTotal`, refusal ring and mode, and the host conservation verdict/counters/duplicate ids. Older hosts omit a block they do not expose; the CLI does not manufacture zero counters or a passing verdict. Plain `tasks` appends a conservation line (`conserved`, `delta`) and a settlement line (`mode`, `refusalsTotal`, `offChain`) when the respective block exists, and a further `enforce refused` line (reason and blockers) when the settlement block carries `enforceRefused`; plain lists cap at 20 rows per section.
 
 ## Files (#91 file channel)
 
@@ -70,12 +81,15 @@ Files do not go through session messages: use the file channel below, never JPFI
 - `a2a-net file send <path…> <team> [--note TEXT]` stages each file (≤64 MiB,
   ≤16 per send) on the home host by sha256, granted to `<team>` for 24h, and
   routes ONE message with one `[A2A file] v1 sha256=… size=… name=… from=<home>`
-  line per file. File bytes never ride a message.
+  line per file (`--note`, when given, rides as the message's first line). File bytes never ride a message.
 - `a2a-net file fetch "<reference line>" [--out DIR]` pulls a referenced file,
   checks its size and sha256, and saves it as `<sha12>-<name>` (no links
   followed, no overwrite of other content). A CLI identity proves itself only
-  on its HOME host, so only files whose `from` is the home host can be fetched;
-  for a file on another host, ask the sender to send it through your home host.
+  on its HOME host, so only files whose `from` is the home host — or one of the
+  home's advertised aliases (`ownerHost` / `originClaimAudiences` from the state
+  face, #332) — can be fetched; the alias lookup asks only the configured home,
+  and old/denied/malformed/redirected metadata fails closed. For a file on any
+  other host, ask the sender to send it through your home host.
 - Sessions use the `a2a_file_send` / `a2a_file_fetch` tools for the same thing.
 
 ## Sending
@@ -125,7 +139,8 @@ Files do not go through session messages: use the file channel below, never JPFI
   same message: 409 replay; different message: 409 conflict). Resending is
   therefore safe:
   - A dropped connection or a 5xx is resent automatically, up to 3 times,
-    with the SAME id (backoff 1s, 2s, 4s).
+    with the SAME id (backoff 1s, 2s, 4s; the 1s base is overridable with
+    `$A2A_RETRY_BASE_MS`).
   - If it still fails, stderr names the id: rerun with `--task <id>` to
     resend it without risking a second execution.
   - A resend the host already has prints `already received … — not sent a
@@ -143,11 +158,15 @@ Files do not go through session messages: use the file channel below, never JPFI
 - B signs its auto-receipt as the member that did the work. Its destination prefers an online CLI household on that host (an owner-controlled fact); otherwise it returns only to the pinned home, never another directory advertiser. In the normal single-home setup it settles A’s single forwarded outbound row on-chain under `enforce` and enters the CLI mailbox (`a2a-net inbox`). `--sync` returns B’s final reply. The transport still has a 15s synchronous patience window, not a full model-turn budget. For forwarded or long work, prefer `a2a-net route <team> <message>` (async by default) then `a2a-net inbox --wait --renew`. A `--sync` transport expiry is `-32005`; the target still auto-receipts the original task after finishing. Reconcile by task id/inbox instead of treating a new direct pong as its receipt or resending blindly.
 - With forwarding off or any prerequisite missing, the original "No live DSH session node accepts team" error includes the reason it was not forwarded. Receiving hosts never forward the forwarded request again.
 - Admission: a deposited handle is a node fact of its home host (N3); that fact alone grants no remote scope or admission. Operator canvas membership and B’s home pin are still required. Global self-description is never a link.
-- `a2a-net report <message…>` is a one-way report to the host's process team.
+- `a2a-net report <message…>` is a one-way report to the host's process team
+  (addressed to the zone the home's state face names, `dsh` if it names none).
 - A message that starts with `-` goes after `--`. Flag values never become
   part of the message.
 - Async output is one line (`delivered → <team> · task <id> · <receipt>`);
-  `--json` prints the raw reply plus the `class` field below.
+  delivery-uncertainty outcomes (acceptance `unknown`/`inserted`, receiver
+  bookkeeping failed, a sync wait released without a final reply) print a
+  reconciliation-hint line instead. `--json` prints the raw reply plus the
+  `class` field below.
 - `route --json` adds an observation field `class`, judged from structured
   fields only (HTTP status, `delivered`, `code`, `acceptance`, a sync
   `result`, a replay's `prior`) and never from error text:
@@ -161,7 +180,8 @@ Files do not go through session messages: use the file channel below, never JPFI
     `-32003/-32007/-32008/-32009/-32011` and generic `-32000`. Retry with the
     SAME task id. A consumer counts retries and only drops (with a record)
     past its own bound. No JSON at all (e.g. the network failed) also means
-    retry. `class` changes no exit code and no host semantics.
+    retry. `class` changes no host semantics, and no exit code by default; the opt-in
+  `--exit-class` switch (see the receipt section) makes the exit code carry it.
 
 ## Receiving: the mailbox
 
@@ -299,7 +319,8 @@ Files do not go through session messages: use the file channel below, never JPFI
   answer is read-only, goes through the host's own control face, and is the
   identity's own question.
 - `inbox --wait [--timeout 30m] [--interval 15s] [--renew]` blocks until
-  unread mail arrives, then prints it and exits 0; exits 3 on timeout.
+  unread mail arrives (the interval also comes from `$A2A_POLL_MS` when
+  `--interval` is not given), then prints it and exits 0; exits 3 on timeout.
   `--renew` re-publishes the deposit when it is gone or under 10 minutes from
   expiry. Run as a background task, its exit is the wake signal.
 - `inbox --hook` serves a Claude Code hook (PostToolUse / UserPromptSubmit):
@@ -310,26 +331,31 @@ Files do not go through session messages: use the file channel below, never JPFI
 
 ## Reading the host
 
-If configured enforcement is refused because old forwarded canvas debts lack receiver facts, the plugin stays online in observe. `tasks --json` preserves `settlement.mode` and `settlement.enforceRefused:{reason,blockers}`; tasks/status text also shows the refusal. This boot-time audit remains after reconciliation; a later owner-controlled reapplication may enable enforce once blockers are cleared. Configuration on disk is unchanged.
+If configured enforcement is refused because old forwarded canvas debts lack receiver facts, the plugin stays online in observe. `tasks --json` preserves `settlement.mode` and `settlement.enforceRefused:{reason,blockers}`; tasks/status text also shows the refusal. The audit runs once at boot, so the refusal remains after reconciliation
+until the host restarts (a restart with the same config re-runs it and turns
+enforce back on once the blockers are gone); configuration on disk is
+unchanged — the downgrade to observe happens in memory only.
 
 `whoami`, `teams [query]`, `status`, `tasks`, `probe` read the home host's
 state face (key-gated on a keyed host). `--json` prints raw rows for
-`whoami`, `teams`, `tasks`, `probe`, `route`, `report`, `inbox` and `skills`.
+`whoami`, `teams`, `status`, `tasks`, `probe`, `route`, `report`, `inbox` and
+`skills`.
 
 `teams` includes local canvas and peerOrg rows with qualified route name, owner URL and memberCount; same names on different hosts stay separate. `whoami --json` is pure JSON and includes only canvases naming this CLI identity, local and remote. An unreadable optional state face reports canvasError/UNKNOWN, never falsely empty membership. Canvas failures retain the original refusal and add visible-directory not-found, owner prerequisites (including each missing direct receiver link), or conflicting owner candidates. Owner URLs do not require direct dialing or a home override and grant no admission.
 
 ## The superagent team (owner)
 
-`a2a-net superagent request <text…> [--thread ID] [--json]` sends the owner's request to the team's workbench Source. `a2a-net superagent state [--json]` prints the team state: router, accept mode, tickets with their stage, and replies. These commands apply only on a home with `superagent: true`.
+`a2a-net superagent request <text…> [--thread ID] [--json]` sends a request to the team's workbench Source. Sent from the terminal it is an ordinary message, not a person's: the router judges it against the team's rules. `a2a-net superagent reevaluate <trigger id> [--json]` asks the router to judge a stored message again (refused for an A2A message whose sender already has its outcome). `a2a-net superagent state [--json]` prints the team state: router, accept mode, tickets with their stage, and replies. These commands apply only on a home with `superagent: true`.
 
-Both ride the home's **owner** control credential (`$A2A_KEY`, plus the pocket cookie behind dsh-pocket), not this CLI's identity. A request made this way is a person addressing the team, so it is an explicit request.
+Both ride the home's **owner** control credential (`$A2A_KEY`, plus the pocket cookie behind dsh-pocket), not this CLI's identity. The credential makes the request land, not the person: sent from the terminal it is an ordinary message — the router judges it against the team's rules like an agent's, never as an explicit request or a stop (owner ruling 2026-11-08; only the workbench GUI's owner action is a person's).
 
 A message from a CLI identity (`route` to the team's A2A address) is an agent's message under superagent's definition. It can reach the team only through the A2A Source's bot list and accept mode; it is never an explicit request and never a stop. See [superagent.md](superagent.md).
 
 ## Local commands
 
 - `a2a-net skills [name] [--root DIR] [--json]` lists the skills under the
-  local skill directory (default `~/.agents/skills`), or prints one by name.
+  local skill directory (default `~/.agents/skills`), or prints one by name (a
+  name miss falls back to a path-substring match).
   It has no model-tool counterpart.
 - `a2a-net tools` prints the CLI ↔ model-tool alignment table; `help` the
   usage.
@@ -343,6 +369,10 @@ A message from a CLI identity (`route` to the team's A2A address) is an agent's 
 | 2 | usage error: unknown command or flag, missing value, bad argument |
 | 3 | `inbox --wait` timed out |
 
+With `--json --exit-class` on `route`/`receipt` the exit code carries the
+class instead: 0 sent, 4 gone, 5 the task already carries a different receipt
+(`receipt` only), 1 retry or any other failure (see the receipt section).
+
 ## Caveats
 
 - The mailbox read is gated by the host's control key and the handle only,
@@ -355,6 +385,6 @@ A message from a CLI identity (`route` to the team's A2A address) is an agent's 
 
 `a2a-net serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]` runs the network layer without a DSH instance: cards and OriginClaim, the peer directory, CLI deposits and mailboxes, one-hop forwarding, canvas ownership, the task ledger, the state face and the workbench. It hosts no AI sessions; it forwards to DSH hosts like any home. Use it as an always-on home for CLIs so a DSH restart does not take their deposits, mailboxes and canvas directory down (they also survive the node's own restart).
 
-- `node.json` holds plugin config keys (`team`, `session`, `agentName`, `apiKey`, `peers`, `originClaimUrl`, `originClaimAudiences`, `forwardDirect`, …; `dshHome` is the file form of `--home`, `host`/`port` the file form of the flags); flags win. `--host` takes `127.0.0.1` or `0.0.0.0` only. Defaults: `--host 127.0.0.1`, `--port 13090`, `--home ~/.a2a-net/node` (separate from the CLI's own `~/.a2a`). Bind beyond loopback only with an `apiKey`.
+- `node.json` holds plugin config keys (`team`, `session`, `agentName`, `apiKey`, `peers`, `originClaimUrl`, `originClaimAudiences`, `forwardDirect`, …; `dshHome` is the file form of `--home`, `host`/`port` the file form of the flags); flags win. `--host` is meant for `127.0.0.1` (default) or `0.0.0.0` — the value reaches the listener unvalidated (only `--port` is validated). The node also forces `sessionNodes: true` and `wakeJoinedOnBoot: false`, and defaults `announce: true` (an always-on node exists to be found; a file `announce` still overrides it). Defaults: `--host 127.0.0.1`, `--port 13090`, `--home ~/.a2a-net/node` (separate from the CLI's own `~/.a2a`). Bind beyond loopback only with an `apiKey`.
 - The runtime needs the tested DSH packages next to this one. In an empty folder: `npm i @nelsonlongxiang/dsh-open-a2a-net@<version>` plus the pinned set `serve` prints when one is missing (npm's `latest` tags of those packages are older and do not work), then `npx a2a-net serve --config node.json`.
 - Link it like any host: list the DSH hosts in its `peers` and add the node's URL to theirs; put CLIs and the DSH sessions they work with in a canvas team on the node (or rely on #282 S3 for canvases owned elsewhere).

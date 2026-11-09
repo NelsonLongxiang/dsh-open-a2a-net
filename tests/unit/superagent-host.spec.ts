@@ -7,10 +7,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { Engine, MemoryRepositories, type Candidate, type EngineOptions, type Repositories, type Trigger } from '../../src/superagent/upstream/dsh-superagent/src/core/index.ts'
+import { Engine, MemoryRepositories, ticketStage, type Candidate, type EngineOptions, type Repositories, type Trigger } from '../../src/superagent/upstream/dsh-superagent/src/core/index.ts'
 import { JsonRepositories } from '../../src/superagent/host/store.ts'
-import { DEFAULT_SETTINGS, parseSettings, policyVersion, teamPolicy, teamScope, type TeamSettings } from '../../src/superagent/host/policy.ts'
-import { candidateCard } from '../../src/superagent/host/index.ts'
+import { DEFAULT_SETTINGS, parseSettings, policyEffects, policyVersion, teamPolicy, teamScope, type TeamSettings } from '../../src/superagent/host/policy.ts'
+import { policyChangedLines } from '../../src/superagent/host/executor.ts'
+import { ORIGIN_LINE_NOTE, OTHER_TICKETS_SHOWN, candidateCard } from '../../src/superagent/host/index.ts'
+import { SAID_CAP, attentionText, registerSuperagentTools } from '../../src/superagent/host/tools.ts'
 
 /** Design v5: the team is a canvas team; tests give the host one canvas, `team`, with these sessions (router first). */
 const canvasOf = (local: readonly string[], remote: ReadonlyArray<{ ref: string; key: string; url: string }> = []) => (name: string) => name === 'team' ? { local, remote } : undefined
@@ -106,7 +108,7 @@ describe('team policy (upstream docs/002, accept mode off)', () => {
   it('a Source that is off filters its Triggers', () => {
     expect(teamScope(() => settings()).scope({ source: 'workbench', meta: {} })).toEqual({ listened: true, observed: false })
     expect(teamScope(() => settings()).scope({ source: 'a2a', meta: {} })).toEqual({ listened: false, reason: 'sourceOff' })
-    expect(teamScope(() => settings()).scope({ source: 'github', meta: {} })).toEqual({ listened: false, reason: 'sourceOff' })
+    expect(teamScope(() => settings()).scope({ source: 'feishu', meta: {} })).toEqual({ listened: false, reason: 'sourceOff' })
   })
   it('settings writes are validated field by field', () => {
     expect(parseSettings({ router: 'session-1', allowed: { a2a: ['dsh/aaaaaaaa'] } }, DEFAULT_SETTINGS)).toMatchObject({ ok: true, settings: { router: 'session-1', allowed: { workbench: ['owner'], a2a: ['dsh/aaaaaaaa'] } } })
@@ -119,6 +121,31 @@ describe('team policy (upstream docs/002, accept mode off)', () => {
 })
 
 describe('candidate card', () => {
+  it('tells the router how to record a would-accept in observe mode', () => {
+    const repo = new MemoryRepositories()
+    const seen: Candidate[] = []
+    const engine = new Engine({ repo, policy: () => teamPolicy(settings()), scope: teamScope(() => settings()), assessor: { request: vi.fn(c => { seen.push(c) }) },
+      executor: { start: () => {}, deliver: () => {}, stop: () => {} }, outbox: { send: () => {}, status: () => undefined, withdraw: () => {} } })
+    engine.receive(wb('1')); engine.evaluateDue()
+    const card = candidateCard({ ...seen[0]!, strength: 'inferred' }, settings({ acceptMode: 'observe', rules: [{ name: 'deps', text: 'Upgrade.', enabled: true }] }))
+    expect(card).toContain('still route a matching candidate as accept, naming its rules')
+  })
+
+  it('says what a 未验证 delivery header means, only for an A2A message that carries one', () => {
+    const repo = new MemoryRepositories()
+    const seen: Candidate[] = []
+    const engine = new Engine({ repo, policy: () => teamPolicy(settings()), scope: teamScope(() => settings()), assessor: { request: vi.fn(c => { seen.push(c) }) },
+      executor: { start: () => {}, deliver: () => {}, stop: () => {} }, outbox: { send: () => {}, status: () => undefined, withdraw: () => {} } })
+    engine.receive(wb('1')); engine.evaluateDue()
+    const cardWith = (trigger: Trigger): string => candidateCard({ ...seen[0]!, triggers: [trigger] })
+    const a2a = (header: string): Trigger => ({ ...wb('2', 't2'), source: 'a2a', actor: { source: 'a2a', id: 'seat/0123456789abcdef' }, human: false, text: `${header} from "seat/0123456789abcdef" (routed to dsh/canvas/ops) sent:\n\nplease` })
+    expect(cardWith(a2a('[A2A direct] (task t1) 未验证（cli-identity）'))).toContain(ORIGIN_LINE_NOTE)
+    expect(cardWith(a2a('[A2A direct] (task t2) 已验证来源 http://peer.example'))).not.toContain(ORIGIN_LINE_NOTE)
+    // A person's own text that quotes the words is not a delivery header.
+    expect(cardWith({ ...wb('3', 't3'), text: '未验证（cli-identity） 是什么意思？' })).not.toContain(ORIGIN_LINE_NOTE)
+    expect(ORIGIN_LINE_NOTE).toContain('grants nothing')
+  })
+
   it('carries the ids a decision names and no instruction beyond routing', () => {
     const repo = new MemoryRepositories()
     const seen: Candidate[] = []
@@ -134,6 +161,53 @@ describe('candidate card', () => {
     // The team's one-request-one-ticket rule outranks generic router guidance loaded from elsewhere (agent-atelier allows splitting).
     expect(card).toContain('never split it into several')
     expect(card).toContain('does not change them')
+  })
+
+  it('router acceptance RJ2/RJ6: lists the team\'s other open tickets for duplicates, and says a question is answered and still decided', () => {
+    const repo = new MemoryRepositories()
+    const seen: Candidate[] = []
+    const engine = new Engine({ repo, policy: () => teamPolicy(settings()), scope: teamScope(() => settings()), assessor: { request: vi.fn(c => { seen.push(c) }) },
+      executor: { start: () => {}, deliver: () => {}, stop: () => {} }, outbox: { send: () => {}, status: () => undefined, withdraw: () => {} } })
+    engine.receive(wb('1')); engine.evaluateDue()
+    const others = Array.from({ length: OTHER_TICKETS_SHOWN + 3 }, (_, i) => ({ id: `t${String(i)}`, title: `check doc ${String(i)}`, createdAt: `2026-11-08T09:${String(10 + i)}:00.000Z` }))
+    const card = candidateCard(seen[0]!, undefined, others)
+    expect(card).toContain('open tickets on other threads (newest first):')
+    // Newest first, capped: the newest is listed, the oldest beyond the cap is not.
+    expect(card).toContain(`- t${String(OTHER_TICKETS_SHOWN + 2)} · check doc ${String(OTHER_TICKETS_SHOWN + 2)}`)
+    expect(card).not.toContain('- t0 · ')
+    expect(card.indexOf(`t${String(OTHER_TICKETS_SHOWN + 2)} ·`)).toBeLessThan(card.indexOf(`t${String(OTHER_TICKETS_SHOWN + 1)} ·`))
+    expect(card).toContain('a duplicate is attached, never accepted twice')
+    expect(card).toContain('superagent_reply (purpose answer')
+    expect(card).toContain('Every candidate ends with a superagent_route item.')
+    // No other open ticket: no such section.
+    expect(candidateCard(seen[0]!)).not.toContain('open tickets on other threads')
+    // Design reevaluate-note: the router is told a message is a second look, and how to pass a member a fact.
+    expect(card).toContain('superagent_note')
+    expect(candidateCard(seen[0]!, undefined, [], new Set(['1']))).toContain('trigger 1 · workbench:owner · addressed (direct) · ')
+    expect(candidateCard(seen[0]!, undefined, [], new Set(['1']))).toContain('judged before: a person asked for a fresh judgement of this message')
+    expect(card).not.toContain('judged before')
+  })
+})
+
+describe('router acceptance RJ2/RJ6: the model sees what a superagent tool returned', () => {
+  const registered = new Map<string, { output: { render: (args: unknown, value: Record<string, unknown>) => { type: string; text: string }[] } }>()
+  registerSuperagentTools({ tools: { register: (tool: { name: string }) => { registered.set(tool.name, tool as never) } } } as never, () => undefined)
+  const render = (name: string, value: Record<string, unknown>): string => registered.get(name)!.output.render({}, value)[0]!.text
+  it('a read shows the tickets, a decision its ticket id, a refusal its code — not a bare ok', () => {
+    expect(render('superagent_read', { ok: true, tickets: [{ id: 'abc', title: 'check a2a-cli.md', ended: null }] })).toBe('superagent read: ok {"tickets":[{"id":"abc","title":"check a2a-cli.md","ended":null}]}')
+    expect(render('superagent_route', { ok: true, results: [{ ok: true, trigger_id: 'x', kind: 'accept', ticket_id: 'T1' }] })).toContain('"ticket_id":"T1"')
+    expect(render('superagent_route', { ok: false, results: [{ ok: false, trigger_id: 'x', code: 'repo', error: 'no member works in a/b' }] })).toBe('superagent route refused: {"results":[{"ok":false,"trigger_id":"x","code":"repo","error":"no member works in a/b"}]}')
+    expect(render('superagent_reply', { ok: false, code: 'notReady', error: 'the ticket has no usable result yet' })).toContain('"code":"notReady"')
+    expect(render('a2a_ticket_report', { ok: true, ticket_id: 'T1', state: 'ready' })).toContain('"state":"ready"')
+  })
+  it('router acceptance RJ8: an attention reply carries the member\'s question verbatim, once', () => {
+    expect(attentionText('等你回答后成员继续。', '这次报告用中文还是英文写？')).toBe('这次报告用中文还是英文写？\n\n等你回答后成员继续。')
+    expect(attentionText('成员问：这次报告用中文还是英文写？请回复。', '这次报告用中文还是英文写？')).toBe('成员问：这次报告用中文还是英文写？请回复。')
+  })
+  it('a result longer than the cap is clipped and says so', () => {
+    const text = render('superagent_read', { ok: true, tickets: 'x'.repeat(SAID_CAP * 2) })
+    expect(text.length).toBeLessThan(SAID_CAP + 200)
+    expect(text).toMatch(/… \(clipped, \d+ chars\)$/)
   })
 })
 
@@ -462,7 +536,234 @@ describe('acceptance item 9: an agent\'s message cannot end a ticket through its
   })
 })
 
+describe('a member\'s turn: silent ends, failures, handoffs and stale reports', () => {
+  async function team(extra: Record<string, unknown> = {}) {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const sent: Array<[string, string]> = []
+    const turn = { quiet: true, text: '' }
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-a']), home: mkdtempSync(join(tmpdir(), 'sa-turn-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {}, memberTurn: () => ({ ...turn }), ...extra } as never)
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
+    h.start()
+    const accept = (text: string, title: string): { ticket: string; thread: string; trigger: string } => {
+      const asked = h.request(text) as { triggerId: string; thread: string }
+      h.pass()
+      const out = routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title, scope: 's', reason: 'r' }) as { ticket_id: string }
+      return { ticket: out.ticket_id, thread: asked.thread, trigger: asked.triggerId }
+    }
+    const cards = (prefix: string): string[] => sent.filter(([id, t]) => id === 'session-a' && t.startsWith(prefix)).map(([, t]) => t)
+    const toRouter = (): string[] => sent.filter(([id, t]) => id === 'session-r' && t.startsWith('[superagent report]')).map(([, t]) => t)
+    const tick = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 20))
+    return { h, sent, turn, accept, cards, toRouter, tick }
+  }
+
+  it('a turn that ends without a report reports waiting with the member\'s last words, and frees the member', async () => {
+    const m = await team()
+    try {
+      const one = m.accept('第一', '一'), two = m.accept('第二', '二')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      m.turn.text = '我看完了，等你确认。'
+      m.h.memberIdle('session-a')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(2) })
+      expect(m.cards('[superagent assignment]')[1]).toContain(two.ticket)
+      expect(m.h.store.tickets.get(one.ticket)!.assignments.at(-1)!.report).toMatchObject({ state: 'waiting', summary: '我看完了，等你确认。' })
+      expect(m.toRouter().some(t => t.includes(one.ticket) && t.includes('我看完了'))).toBe(true)
+    } finally { await m.h.stop() }
+  })
+
+  it('shell jobs still running hold the slot and decide nothing until they end', async () => {
+    const m = await team()
+    try {
+      const one = m.accept('第一', '一'); m.accept('第二', '二')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      m.turn.quiet = false
+      m.h.memberIdle('session-a')
+      await m.tick()
+      expect(m.h.store.tickets.get(one.ticket)!.assignments.at(-1)!.report).toBeUndefined()
+      expect(m.cards('[superagent assignment]')).toHaveLength(1)
+      m.turn.quiet = true
+      m.h.memberIdle('session-a')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(2) })
+    } finally { await m.h.stop() }
+  })
+
+  it('a ticket waiting on a person holds no member; the answer brings it back to that member first', async () => {
+    const m = await team()
+    try {
+      const one = m.accept('第一', '一'), two = m.accept('第二', '二'), three = m.accept('第三', '三')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      expect(m.h.report('session-a', { state: 'waiting', summary: '要问一下', question: '用哪种格式？' }, one.ticket)).toMatchObject({ ok: true })
+      m.h.memberIdle('session-a')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(2) })
+      expect(m.cards('[superagent assignment]')[1]).toContain(two.ticket)
+      expect(m.h.store.tickets.get(one.ticket)!.assignments.at(-1)!.state).toBe('running')
+      // The parked ticket still takes its member's report.
+      expect(m.h.report('session-a', { state: 'progress', summary: '后台那项跑完了' }, one.ticket)).toMatchObject({ ok: true })
+      expect(m.h.request('用 CSV', one.thread)).toMatchObject({ ok: true })
+      m.h.pass()
+      await m.tick()
+      expect(m.cards('[superagent input]')).toHaveLength(0)
+      // The member finishes the second ticket: the answer goes before the third ticket.
+      expect(m.h.report('session-a', { state: 'ready', summary: '完成' }, two.ticket)).toMatchObject({ ok: true })
+      await vi.waitFor(() => { expect(m.cards('[superagent input]').some(t => t.includes(one.ticket) && t.includes('用 CSV'))).toBe(true) })
+      expect(m.cards('[superagent assignment]').some(t => t.includes(three.ticket))).toBe(false)
+    } finally { await m.h.stop() }
+  })
+
+  it('a wrong id is refused and says what is open; nothing changes and it is counted', async () => {
+    const m = await team()
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    try {
+      const asked = m.h.request('一张') as { triggerId: string }
+      m.h.pass()
+      const wrong = asked.triggerId.slice(0, -1) + (asked.triggerId.endsWith('0') ? '1' : '0')
+      const out = routeItem(m.h, { trigger_id: wrong, kind: 'ignore', reason: 'r' }) as { ok: boolean; error: string }
+      expect(out).toMatchObject({ ok: false, trigger_id: wrong })
+      expect(out.error).toContain('nothing was changed')
+      expect(out.error).toContain(`Closest: ${asked.triggerId}`)
+      expect(m.h.store.triggers.disposition(asked.triggerId)?.decisionId).toBeUndefined()
+      expect((m.h.state() as { refusals: { counts: Record<string, number> } }).refusals.counts['superagent-wrong-id']).toBe(1)
+      const one = routeItem(m.h, { trigger_id: asked.triggerId, kind: 'accept', title: '一', scope: 's', reason: 'r' }) as { ticket_id: string }
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      const stale = m.h.report('session-a', { state: 'ready', summary: 'x' }, one.ticket_id.slice(0, -1) + 'z') as { code: string; error: string }
+      expect(stale.code).toBe('not-yours')
+      expect(stale.error).toContain(`Your tickets: ${one.ticket_id}`)
+      expect(m.h.store.tickets.get(one.ticket_id)!.ended).toBeUndefined()
+    } finally { await m.h.stop() }
+  })
+
+  it('a report names its ticket: a late turn cannot report on the next one', async () => {
+    const m = await team()
+    try {
+      const one = m.accept('第一', '一'), two = m.accept('第二', '二')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      m.h.engine.stopTicket(one.ticket, 'not needed')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(2) })
+      expect(m.h.report('session-a', { state: 'ready', summary: '旧回合的结果' }, one.ticket)).toMatchObject({ ok: false, code: 'not-yours' })
+      expect(m.h.store.tickets.get(two.ticket)!.ended).toBeUndefined()
+    } finally { await m.h.stop() }
+  })
+
+  it('a member stopped mid-turn takes no new ticket until that turn has ended', async () => {
+    let running = true
+    const m = await team({ cancelTurn: () => running })
+    try {
+      const one = m.accept('第一', '一'); m.accept('第二', '二')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      m.h.engine.stopTicket(one.ticket, 'not needed')
+      await m.tick()
+      expect(m.cards('[superagent assignment]')).toHaveLength(1)
+      running = false
+      m.h.memberIdle('session-a')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(2) })
+    } finally { await m.h.stop() }
+  })
+
+  it('a failed turn fails the ticket for a person; a passing failure goes on after a backoff', async () => {
+    const m = await team()
+    try {
+      const one = m.accept('第一', '一')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      vi.useFakeTimers({ toFake: ['setTimeout'] })
+      m.h.memberFailed('session-a', new Error('429 rate limit'))
+      m.h.memberIdle('session-a') // the idle that follows a failure ends nothing while the retry waits
+      expect(m.h.store.tickets.get(one.ticket)!.assignments.at(-1)!.report).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(15_000)
+      vi.useRealTimers()
+      await vi.waitFor(() => { expect(m.sent.some(([id, t]) => id === 'session-a' && t.includes('failed for a passing reason'))).toBe(true) })
+      m.h.memberFailed('session-a', new Error('invalid tool schema'))
+      expect(ticketStage(m.h.store.tickets.get(one.ticket)!)).toEqual({ stage: 'person', action: 'failed' })
+      expect(m.toRouter().some(t => t.includes('invalid tool schema'))).toBe(true)
+    } finally { vi.useRealTimers(); await m.h.stop() }
+  })
+})
+
 describe('ops loop: members work in repositories; a ticket accepted for one runs only on its members', () => {
+  it('paused: nothing is assigned or delivered to a member; resuming sends what waited', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const home = mkdtempSync(join(tmpdir(), 'sa-paused-'))
+    const sent: Array<[string, string]> = []
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-a']), home, logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {} })
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
+    h.start()
+    const toMember = (prefix: string): string[] => sent.filter(([id, t]) => id === 'session-a' && t.startsWith(prefix)).map(([, t]) => t)
+    const settle = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 30))
+    try {
+      const first = h.request('第一张') as { triggerId: string; thread: string }
+      h.pass()
+      const one = routeItem(h, { trigger_id: first.triggerId, kind: 'accept', title: '一', scope: 's', reason: 'r' }) as { ticket_id: string }
+      await vi.waitFor(() => { expect(toMember('[superagent assignment]')).toHaveLength(1) })
+      const second = h.request('第二张') as { triggerId: string }
+      h.pass()
+      expect(routeItem(h, { trigger_id: second.triggerId, kind: 'accept', title: '二', scope: 's', reason: 'r' })).toMatchObject({ ok: true })
+      await settle()
+      expect(h.saveSettings({ paused: true }, () => true)).toMatchObject({ ok: true })
+      // An Input for the running ticket is held, and the member the stop frees takes no new ticket.
+      expect(h.request('补充', first.thread)).toMatchObject({ ok: true })
+      await settle()
+      expect(toMember('[superagent input]')).toHaveLength(0)
+      h.engine.stopTicket(one.ticket_id, 'done')
+      h.pass()
+      await settle()
+      expect(toMember('[superagent assignment]')).toHaveLength(1)
+      expect(h.saveSettings({ paused: false }, () => true)).toMatchObject({ ok: true })
+      await vi.waitFor(() => { expect(toMember('[superagent assignment]')).toHaveLength(2) })
+    } finally { await h.stop() }
+  })
+
+  it('an Input that arrives during a delivery goes out right after it', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const home = mkdtempSync(join(tmpdir(), 'sa-again-'))
+    const sent: string[] = []
+    let release: ((ok: boolean) => void) | undefined
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-a']), home, logger: { info: () => {}, warn: () => {} }, interval: () => () => {},
+      deliverToSession: ((id: string, text: string) => {
+        if (id !== 'session-a') return true
+        sent.push(text)
+        return text.startsWith('[superagent input]') && release === undefined ? new Promise<boolean>(resolve => { release = resolve }) : true
+      }) as never })
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
+    h.start()
+    try {
+      const first = h.request('一张') as { triggerId: string; thread: string }
+      h.pass()
+      expect(routeItem(h, { trigger_id: first.triggerId, kind: 'accept', title: '一', scope: 's', reason: 'r' })).toMatchObject({ ok: true })
+      await vi.waitFor(() => { expect(sent.some(t => t.startsWith('[superagent assignment]'))).toBe(true) })
+      const one = h.request('补充甲', first.thread) as { triggerId: string }
+      await vi.waitFor(() => { expect(release).toBeDefined() })
+      const two = h.request('补充乙', first.thread) as { triggerId: string }
+      await new Promise(resolve => setTimeout(resolve, 20))
+      release!(true)
+      await vi.waitFor(() => { expect(sent.some(t => t.startsWith('[superagent input]') && t.includes(two.triggerId))).toBe(true) })
+      expect(sent.filter(t => t.includes(one.triggerId))).toHaveLength(1)
+    } finally { await h.stop() }
+  })
+
+  it('a failed assignment goes out again on the periodic retry', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const home = mkdtempSync(join(tmpdir(), 'sa-retry-'))
+    const sent: Array<[string, string]> = []
+    let up = false
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-a']), home, logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { if (id === 'session-a' && !up) return false; sent.push([id, text]); return true }, interval: () => () => {} })
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
+    h.start()
+    const now = vi.spyOn(Date, 'now')
+    try {
+      const first = h.request('一张') as { triggerId: string }
+      h.pass()
+      expect(routeItem(h, { trigger_id: first.triggerId, kind: 'accept', title: '一', scope: 's', reason: 'r' })).toMatchObject({ ok: true })
+      await new Promise(resolve => setTimeout(resolve, 30))
+      expect(sent.some(([id]) => id === 'session-a')).toBe(false)
+      up = true
+      now.mockReturnValue(Date.now() + 60_000)
+      h.pass()
+      await vi.waitFor(() => { expect(sent.some(([id, t]) => id === 'session-a' && t.startsWith('[superagent assignment]'))).toBe(true) })
+    } finally { now.mockRestore(); await h.stop() }
+  })
+
   it('settings name each member\'s repository (owner/name), only for members, and drop it when the member goes', () => {
     // Design v5: the pool comes from the canvas (the host passes it in as the current settings); a write never names members.
     expect(parseSettings({ members: ['session-a', 'session-b'] }, DEFAULT_SETTINGS)).toMatchObject({ ok: false, error: expect.stringContaining('canvas') })
@@ -496,6 +797,7 @@ describe('ops loop: members work in repositories; a ticket accepted for one runs
       expect(routeItem(h, { trigger_id: first.triggerId, kind: 'accept', title: 'net 1', scope: 's', reason: 'r', repo: 'o/net' })).toMatchObject({ ok: true, repo: 'o/net' })
       await vi.waitFor(() => { expect(assigned('session-a')).toHaveLength(1) })
       expect(assigned('session-a')[0]).toContain('repository: o/net (yours)')
+      expect(assigned('session-a')[0]).toContain('reasonable defaults for routine steps')
       // A ticket's worktree stays inside the member's sandbox, kept out of the checkout's status (a path beside it is refused).
       expect(assigned('session-a')[0]).toContain('.worktrees/')
       expect(assigned('session-a')[0]).toContain('.git/info/exclude')
@@ -528,7 +830,7 @@ describe('ops loop: members work in repositories; a ticket accepted for one runs
 })
 
 describe('ops team ledger: every A2A message to the team address gets a formal outcome', () => {
-  it('a message the team does not take is told so (rejected, with the reason); a follow-up is told it reached the member', async () => {
+  it('a message the team does not take is told so (rejected, with the reason)', async () => {
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
     const { routeItem } = await import('../../src/superagent/host/tools.ts')
     const calls: string[][] = []
@@ -573,6 +875,66 @@ describe('ops team ledger: every A2A message to the team address gets a formal o
     // Each message is answered once.
     await settle()
     expect(calls.filter(a => a[0] === 'receipt' && [observed, refused, stop].includes(a[1]!)).length).toBe(3)
+  })
+})
+
+describe('spec audit: follow-ups, the owner answering, the terminal', () => {
+  it('a follow-up delivered to a member is acknowledged, and gets its formal outcome when the ticket ends', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const calls: string[][] = []
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']), home: mkdtempSync(join(tmpdir(), 'sa-followup-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, homeUrl: () => 'http://127.0.0.1:1',
+      runCli: async args => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' } })
+    const bot = 'reporter/0123456789abcdef'
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const receive = (n: string, ctx: string) => { const task = `direct-${n.padStart(12, '0')}`; h.engine.receive({ ...wb(n, ctx), source: 'a2a', threads: [{ source: 'a2a', id: ctx }], actor: { source: 'a2a', id: bot }, human: false, channel: { source: 'a2a', thread: `a2a:${ctx}`, address: { caller: bot, task, context: ctx } }, addressed: 'direct', meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } } as never); h.pass(); return task }
+    const receipts = (task: string): string[][] => calls.filter(a => a[0] === 'receipt' && a[1] === task)
+    const first = receive('1', 'ctx-1')
+    const accepted = routeItem(h, { trigger_id: '1', kind: 'accept', title: 'bump', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
+    await settle()
+    const followUp = receive('2', 'ctx-1')
+    await settle(); await settle()
+    expect(receipts(followUp).length, JSON.stringify(calls)).toBe(1)
+    expect(receipts(followUp)[0]).toContain('--acknowledged')
+    h.engine.stopTicket(accepted.ticket_id, 'done')
+    await settle()
+    const final = receipts(followUp).find(a => !a.includes('--acknowledged'))
+    expect(final, JSON.stringify(receipts(followUp))).toBeDefined()
+    expect(final![final!.indexOf('--outcome') + 1]).toBe('abandoned')
+    expect(receipts(first).some(a => !a.includes('--acknowledged'))).toBe(true)
+    await h.stop()
+  })
+
+  it('the owner answers a question on a ticket an agent asked for; the answer reaches its member as a person\'s message', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const sent: Array<[string, string]> = []
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']), home: mkdtempSync(join(tmpdir(), 'sa-answer-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: (id, text) => { sent.push([id, text]); return true }, interval: () => () => {} })
+    const bot = 'reporter/0123456789abcdef'
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade.' }] }, () => true)).toMatchObject({ ok: true })
+    h.engine.receive({ ...wb('1', 'ctx-1'), source: 'a2a', threads: [{ source: 'a2a', id: 'ctx-1' }], actor: { source: 'a2a', id: bot }, human: false, channel: { source: 'a2a', thread: 'a2a:ctx-1', address: { caller: bot, task: 'direct-1', context: 'ctx-1' } }, addressed: 'direct', meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: 'direct-1' } } as never)
+    h.pass()
+    const accepted = routeItem(h, { trigger_id: '1', kind: 'accept', title: 'bump', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
+    await vi.waitFor(() => { expect(sent.some(([id, t]) => id === 'session-m' && t.startsWith('[superagent assignment]'))).toBe(true) })
+    expect(h.answer(accepted.ticket_id, '用 CSV')).toMatchObject({ ok: false, code: 'no-question' })
+    expect(h.report('session-m', { state: 'waiting', summary: '要问', question: '用哪种格式？' }, accepted.ticket_id)).toMatchObject({ ok: true })
+    const answered = h.answer(accepted.ticket_id, '用 CSV') as { triggerId: string }
+    expect(answered).toMatchObject({ ok: true })
+    await vi.waitFor(() => { expect(sent.some(([id, t]) => id === 'session-m' && t.startsWith('[superagent input]') && t.includes('用 CSV'))).toBe(true) })
+    const ticket = h.store.tickets.get(accepted.ticket_id)!
+    expect(ticket.inputs.find(i => i.kind === 'trigger' && i.triggerId === answered.triggerId)).toMatchObject({ human: true })
+    expect(sent.filter(([id, t]) => id === 'session-r' && t.includes('[superagent candidate]') && t.includes('用 CSV'))).toHaveLength(0)
+    await h.stop()
+  })
+
+  it('a request from the terminal is an ordinary message: judged by the rules, and it cannot stop a ticket', () => {
+    const repo = new MemoryRepositories()
+    const gate = teamPolicy(settings({ acceptMode: 'auto' })).gate
+    const thread = { key: 'workbench:t', subscriptions: [] } as never
+    expect(gate({ ...wb('1'), actor: { source: 'workbench', id: 'cli' }, human: false, addressed: 'direct' } as never, thread, [])).toMatchObject({ admissible: true, strength: 'inferred', basis: { via: 'bot' } })
+    expect(gate({ ...wb('2'), actor: { source: 'workbench', id: 'owner' }, human: true, addressed: 'direct' } as never, thread, [])).toMatchObject({ admissible: true, strength: 'explicit' })
+    void repo
   })
 })
 
@@ -715,5 +1077,71 @@ describe('design v5: the team is a canvas team', () => {
     // Binding is refused while a team session also sits in another canvas.
     canvases.other = ['session-m']
     expect(h.saveSettings({ canvas: 'ops', router: 'session-r', paused: false }, () => true, of)).toMatchObject({ ok: false, error: expect.stringContaining('also sits in canvas other') })
+  })
+})
+
+describe('router acceptance follow-up: what a settings change means to each open ticket (upstream PolicyEffect)', () => {
+  const rule = (name: string, text: string, enabled = true) => ({ name, text, enabled })
+  const base: TeamSettings = { ...DEFAULT_SETTINGS, acceptMode: 'auto', bots: { a2a: ['ops/0123456789abcdef'] }, rules: [rule('docs', 'check docs'), rule('deps', 'bump deps')] }
+  const inferred = (id: string, rules: string[]) => ({ id, mandate: { strength: 'inferred' as const, policyVersion: 'v', basis: { via: 'bot' as const, observation: { mode: 'auto' as const }, rules }, actor: { source: 'a2a', id: 'ops/0123456789abcdef' } } }) as never
+  const explicit = (id: string) => ({ id, mandate: { strength: 'explicit' as const, policyVersion: 'v', basis: { via: 'addressed' as const, addressed: 'direct' as const, sender: 'owner' }, actor: { source: 'workbench', id: 'owner' } } }) as never
+  it('a rule the ticket was accepted on that changed, was turned off or removed', () => {
+    const after = { ...base, rules: [rule('docs', 'check docs and code'), rule('deps', 'bump deps', false)] }
+    const effects = policyEffects(base, after, [inferred('t1', ['docs']), inferred('t2', ['deps']), explicit('t3')])
+    expect(effects.get('t1')).toEqual({ rules: [{ id: 'docs', name: 'docs', change: 'changed', instruction: 'check docs and code' }] })
+    expect(effects.get('t2')).toEqual({ rules: [{ id: 'deps', name: 'deps', change: 'disabled' }] })
+    expect(effects.has('t3')).toBe(false)
+    expect(policyEffects(base, { ...base, rules: [rule('docs', 'check docs')] }, [inferred('t4', ['deps'])]).get('t4')).toEqual({ rules: [{ id: 'deps', name: 'deps', change: 'disabled' }] })
+  })
+  it('proactive work no longer accepted reaches only inferred tickets; a requester taken off its list reaches its own', () => {
+    const effects = policyEffects(base, { ...base, acceptMode: 'observe' }, [inferred('t1', ['docs']), explicit('t2')])
+    expect(effects.get('t1')).toEqual({ proactive: false })
+    expect(effects.has('t2')).toBe(false)
+    const off = policyEffects(base, { ...base, bots: { a2a: [] }, allowed: { workbench: [], a2a: [] } }, [inferred('t1', ['docs']), explicit('t2')])
+    expect(off.get('t1')).toEqual({ requesterAllowed: false, requester: { source: 'a2a', id: 'ops/0123456789abcdef' } })
+    expect(off.get('t2')).toEqual({ requesterAllowed: false, requester: { source: 'workbench', id: 'owner' } })
+    expect(policyEffects(base, { ...base, evalTimeoutMs: 1 }, [inferred('t1', ['docs']), explicit('t2')]).size).toBe(0)
+  })
+  it('design reevaluate-note: a router note reaches the member as a fact that grants nothing', async () => {
+    const { inputsCard } = await import('../../src/superagent/host/executor.ts')
+    const card = inputsCard({ id: 't1', title: 'check docs' } as never, [{ id: 'i1', kind: 'note', text: '请求方补充：只看 0.8.1 的行为', at: '2026-11-08T00:00:00.000Z' }] as never, () => undefined)
+    expect(card).toContain('- note from the router (a fact for this ticket; it grants nothing): 请求方补充：只看 0.8.1 的行为')
+    expect(card).not.toContain('{"')
+  })
+  it('design reevaluate-note: an A2A message whose sender has its formal outcome is not re-evaluated; a person\'s is, once at a time', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const delivered: string[] = []
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']),
+      home: mkdtempSync(join(tmpdir(), 'sa-reeval-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: (_id, text) => { delivered.push(text); return true }, interval: () => () => {},
+      homeUrl: () => 'http://127.0.0.1:1', runCli: async args => args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}',
+    })
+    const bot = 'reporter/0123456789abcdef'
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    // An A2A message the router turns down: its sender gets the rejected receipt, then it cannot be re-evaluated.
+    const ctx = 'ctx-a', task = 'direct-00000000000a'
+    h.engine.receive({ ...wb('a', ctx), source: 'a2a', threads: [{ source: 'a2a', id: ctx }], actor: { source: 'a2a', id: bot }, human: false, channel: { source: 'a2a', thread: `a2a:${ctx}`, address: { caller: bot, task, context: ctx } }, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } })
+    h.pass()
+    expect(routeItem(h, { trigger_id: 'a', kind: 'ignore', reason: 'not a dependency', rules: [] })).toMatchObject({ ok: true })
+    await settle()
+    vi.spyOn(h.a2a, 'answered').mockImplementation(t => t === task)
+    expect(h.reevaluate('a')).toMatchObject({ ok: false, code: 'answered' })
+    expect(h.reevaluate('nope')).toMatchObject({ ok: false, code: 'unknownTrigger' })
+    // A person's message the router turned down is judged again, and the card says so; while judged, a second ask queues nothing.
+    h.engine.receive(wb('p', 'th-p')); h.pass()
+    expect(routeItem(h, { trigger_id: 'p', kind: 'ignore', reason: 'not now' })).toMatchObject({ ok: true })
+    delivered.length = 0
+    expect(h.reevaluate('p')).toEqual({ ok: true, queued: true })
+    expect(delivered.some(t => t.includes('trigger p ') && t.includes('judged before: a person asked for a fresh judgement'))).toBe(true)
+    expect(h.reevaluate('p')).toEqual({ ok: true, queued: false })
+  })
+  it('the member reads the effect in words, never as JSON', () => {
+    const lines = policyChangedLines({ rules: [{ id: 'docs', name: 'docs', change: 'changed', instruction: 'check docs and code' }, { id: 'deps', name: 'deps', change: 'disabled' }], proactive: false, requesterAllowed: false, requester: { source: 'a2a', id: 'ops/x' } })
+    expect(lines.join('\n')).toContain('rule docs, which this ticket was accepted on, now reads: check docs and code')
+    expect(lines.join('\n')).toContain('rule deps, which this ticket was accepted on, is off now')
+    expect(lines.join('\n')).toContain('accept mode is not auto')
+    expect(lines.join('\n')).toContain('a2a:ops/x, who asked for this ticket, may no longer start work')
+    expect(lines.join('\n')).not.toContain('{')
   })
 })

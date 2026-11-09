@@ -53,7 +53,7 @@ usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
 文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR]   (#91: bytes never ride a message)
-superagent: superagent request <text…> [--thread ID] · superagent state   (owner credential: the team's workbench Source)
+superagent: superagent request <text…> [--thread ID] · superagent reevaluate <trigger id> · superagent state   (owner credential: the team's workbench Source)
 
 host:     --home > $A2A_HOME > the home saved by 'a2a init --home URL' > ${DEFAULT_HOME}
 key:      --key > $A2A_KEY (prefer the env var: a --key value stays in shell history)
@@ -171,11 +171,13 @@ function identity() {
   return id
 }
 
+/** An environment variable set to the empty string counts as unset (#490). */
+const envValue = name => { const value = process.env[name]; return value !== undefined && value !== '' ? value : undefined }
 const home = () => {
   const saved = storedIdentity()?.home
-  return String(flag('--home') ?? process.env.A2A_HOME ?? saved ?? DEFAULT_HOME).replace(/\/$/, '')
+  return String(flag('--home') ?? envValue('A2A_HOME') ?? saved ?? DEFAULT_HOME).replace(/\/$/, '')
 }
-const apiKey = () => flag('--key') ?? (process.env.A2A_KEY !== undefined && process.env.A2A_KEY !== '' ? process.env.A2A_KEY : undefined)
+const apiKey = () => flag('--key') ?? envValue('A2A_KEY')
 
 /** The bound form's domain tag (src/origin-claim.ts ORIGIN_CLAIM_BOUND_TAG). */
 const ORIGIN_CLAIM_BOUND_TAG = 'a2a-origin-claim/2'
@@ -219,10 +221,7 @@ function originClaimFor(base) {
 }
 
 /** A host behind dsh-pocket also wants its session token, as the dsh_pocket_token cookie. */
-const pocketToken = () => {
-  const token = process.env.A2A_POCKET_TOKEN ?? process.env.A2A_TOKEN
-  return token !== undefined && token !== '' ? token : undefined
-}
+const pocketToken = () => envValue('A2A_POCKET_TOKEN') ?? envValue('A2A_TOKEN')
 
 const keyHeaders = () => {
   const key = apiKey()
@@ -256,6 +255,15 @@ async function homeFetch(url, init) {
     throw new RedirectRefused(url, res.status, location)
   }
   return res
+}
+
+/** The home host's zone, which names its process team (#503); `dsh` when the host does not say. */
+async function homeZone() {
+  try {
+    const res = await homeFetch(`${home()}/__dsh_a2a/state`, { headers: keyHeaders() })
+    const zone = res.ok ? (await res.json())?.zone : undefined
+    return typeof zone === 'string' && zone !== '' ? zone : 'dsh'
+  } catch { return 'dsh' }
 }
 
 /**
@@ -619,9 +627,8 @@ async function cmdAdmission() {
 
 /**
  * superagent design v4 (PR-B2a): the owner's terminal face of the team's workbench Source. It rides the home's
- * OWNER control credential ($A2A_KEY / pocket cookie), never a CLI identity: a request made this way is the owner's
- * (a person addressing the agent), while a CLI identity's message reaches the team only as an agent through the A2A
- * Source's bot list.
+ * OWNER control credential ($A2A_KEY / pocket cookie), never a CLI identity. A request made this way is an ordinary
+ * message, not a person's (owner 2026-11-08): the router judges it against the team's rules, as an agent's.
  */
 async function cmdSuperagent() {
   const [sub, ...words] = positionals()
@@ -636,10 +643,21 @@ async function cmdSuperagent() {
     if (text === '') usage('usage: a2a superagent request <text…> [--thread <workbench thread id>] [--json]')
     const thread = flag('--thread')
     const out = await answer(await homeFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...keyHeaders() },
-      body: JSON.stringify({ action: 'request', text, ...(thread !== undefined ? { thread } : {}) }) }))
+      body: JSON.stringify({ action: 'request', text, via: 'cli', ...(thread !== undefined ? { thread } : {}) }) }))
     if (has('--json')) { console.log(JSON.stringify(out)); if (out.ok !== true) process.exitCode = 1; return }
     if (out.ok !== true) die(`[superagent] request refused: ${String(out.error)}`)
     console.log(`[superagent] ${String(out.result)} · trigger ${String(out.triggerId)} · thread ${String(out.thread)}${out.result === 'filtered' ? ' (the workbench Source is off)' : ''}`)
+    return
+  }
+  if (sub === 'reevaluate') {
+    // Design superagent-reevaluate-note D3: the owner asks the router to judge a stored message again.
+    const [triggerId] = words
+    if (triggerId === undefined || triggerId === '') usage('usage: a2a superagent reevaluate <trigger id> [--json]')
+    const out = await answer(await homeFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...keyHeaders() },
+      body: JSON.stringify({ action: 'reevaluate', trigger_id: triggerId }) }))
+    if (has('--json')) { console.log(JSON.stringify(out)); if (out.ok !== true) process.exitCode = 1; return }
+    if (out.ok !== true) die(`[superagent] reevaluate refused: ${String(out.error)}`)
+    console.log(out.queued === true ? `[superagent] ${triggerId} queued for a fresh judgement` : `[superagent] ${triggerId} is being judged right now; nothing queued`)
     return
   }
   if (sub === 'state') {
@@ -657,7 +675,7 @@ async function cmdSuperagent() {
     }
     return
   }
-  usage('usage: a2a superagent request <text…> [--thread ID] [--json] · a2a superagent state [--json]')
+  usage('usage: a2a superagent request <text…> [--thread ID] [--json] · a2a superagent reevaluate <trigger id> [--json] · a2a superagent state [--json]')
 }
 
 /** One mailbox read: the rows, plus the gh#113 seq bounds when the host has them. */
@@ -1383,7 +1401,7 @@ async function main() {
   if (cmd === 'report') {
     const text = positionals().join(' ')
     if (text === '') usage('usage: a2a report <message…> — one-way report into the host process-team mailbox')
-    await sendDirect('report', { team: 'dsh', message: `[a2a-net cli report] ${text}`, caller_session: identity().handle, wait: false, task_id: taskFlag() ?? newTaskId() })
+    await sendDirect('report', { team: await homeZone(), message: `[a2a-net cli report] ${text}`, caller_session: identity().handle, wait: false, task_id: taskFlag() ?? newTaskId() })
     return
   }
   if (cmd === 'revoke') {

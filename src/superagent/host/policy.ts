@@ -16,7 +16,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/policy
  */
 import { createHash } from 'node:crypto'
-import type { GateResult, Mandate, Policy, SourceScope, Thread, Ticket, Trigger } from '../upstream/dsh-superagent/src/core/index.ts'
+import type { GateResult, Mandate, Policy, PolicyEffect, SourceScope, Thread, Ticket, Trigger } from '../upstream/dsh-superagent/src/core/index.ts'
 import { scope as a2aScope } from '../a2a-watch.ts'
 
 /** The Sources this host runs. */
@@ -60,7 +60,7 @@ export interface TeamSettings {
    */
   readonly repos: Readonly<Record<string, string>>
   /** Who may originate work, per Source, in that Source's own identities (upstream: identities are never mapped across Sources). */
-  readonly allowed: { readonly workbench: readonly string[]; readonly a2a: readonly string[] }
+  readonly allowed: { readonly workbench: readonly string[]; readonly a2a: readonly string[]; /** GitHub logins whose comments on a followed pull request are a person's. */ readonly github: readonly string[] }
   /** Agents whose messages may become inferred candidates, per Source (only the A2A Source has bots). */
   readonly bots: { readonly a2a: readonly string[] }
   /** Whether inferred candidates are assessed and accepted (upstream accept mode). */
@@ -73,6 +73,8 @@ export interface TeamSettings {
   readonly evalTimeoutMs: number
   /** Pause processing (upstream docs/003): Sources still record Triggers; Evals, dispatch and replies wait. */
   readonly paused: boolean
+  /** Who reviews the team's pull requests: one A2A address the owner set and linked (design D5). Absent: nobody is asked. */
+  readonly reviewer?: string
 }
 
 /** A canvas team name as the canvas store takes it: 1–40 characters, no `/`, not all digits, no surrounding space. */
@@ -84,12 +86,14 @@ export const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\/[A-Za-z0-9_.][A-Za-z0-
 
 /** The workbench actor id: the owner, the only person the workbench control route serves. */
 export const WORKBENCH_OWNER = 'owner'
+/** The actor of a request sent with the owner's credential from the terminal: an ordinary message, not a person (owner 2026-11-08). */
+export const WORKBENCH_CLI = 'cli'
 
 export const DEFAULT_SETTINGS: TeamSettings = {
   members: [],
   remoteMembers: [],
   repos: {},
-  allowed: { workbench: [WORKBENCH_OWNER], a2a: [] },
+  allowed: { workbench: [WORKBENCH_OWNER], a2a: [], github: [] },
   bots: { a2a: [] },
   acceptMode: 'observe',
   rules: [],
@@ -123,6 +127,8 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const a2a = 'a2a' in allowedRaw ? list(allowedRaw.a2a, 'allowed.a2a') : current.allowed.a2a
   if (typeof workbench === 'string') return { ok: false, error: workbench }
   if (typeof a2a === 'string') return { ok: false, error: a2a }
+  const github = 'github' in allowedRaw ? list(allowedRaw.github, 'allowed.github') : current.allowed.github
+  if (typeof github === 'string') return { ok: false, error: github }
   const sourcesRaw = (r.sources ?? {}) as Record<string, unknown>
   const flag = (name: SourceName): boolean | string => !(name in sourcesRaw) ? current.sources[name] : typeof sourcesRaw[name] === 'boolean' ? sourcesRaw[name] as boolean : `sources.${name} must be true or false`
   const wb = flag('workbench'), a = flag('a2a')
@@ -130,6 +136,12 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   if (typeof a === 'string') return { ok: false, error: a }
   const evalTimeoutMs = 'evalTimeoutMs' in r ? r.evalTimeoutMs : current.evalTimeoutMs
   if (typeof evalTimeoutMs !== 'number' || !Number.isSafeInteger(evalTimeoutMs) || evalTimeoutMs < 30_000 || evalTimeoutMs > 24 * 3_600_000) return { ok: false, error: 'evalTimeoutMs must be 30000–86400000' }
+  let reviewer = current.reviewer
+  if ('reviewer' in r) {
+    if (r.reviewer === null || r.reviewer === '') reviewer = undefined
+    else if (typeof r.reviewer === 'string' && /^[^\s/@]+(\/[^\s/@]+){1,2}(@[0-9a-f]{8})?$/.test(r.reviewer)) reviewer = r.reviewer
+    else return { ok: false, error: 'reviewer must be an A2A address, or null to clear' }
+  }
   const paused = 'paused' in r ? r.paused : current.paused
   if (typeof paused !== 'boolean') return { ok: false, error: 'paused must be true or false' }
   const botsRaw = (r.bots ?? {}) as Record<string, unknown>
@@ -169,7 +181,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
       repos[member] = repo
     }
   } else repos = Object.fromEntries(Object.entries(current.repos ?? {}).filter(([member]) => memberIds.has(member)))
-  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a }, bots: { a2a: bots }, acceptMode, rules, sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
+  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/
@@ -209,7 +221,7 @@ export function parseStoredSettings(raw: unknown): { ok: true; settings: TeamSet
 export function policyVersion(settings: TeamSettings): string {
   const canonical = JSON.stringify({
     mode: settings.acceptMode,
-    allowed: { workbench: [...settings.allowed.workbench].sort(), a2a: [...settings.allowed.a2a].sort() },
+    allowed: { workbench: [...settings.allowed.workbench].sort(), a2a: [...settings.allowed.a2a].sort(), ...((settings.allowed.github?.length ?? 0) > 0 ? { github: [...settings.allowed.github].sort() } : {}) },
     bots: { a2a: [...settings.bots.a2a].sort() },
     rules: [...settings.rules].sort((a, b) => (a.name < b.name ? -1 : 1)).map(rule => [rule.name, rule.text, rule.enabled]),
   })
@@ -217,8 +229,41 @@ export function policyVersion(settings: TeamSettings): string {
 }
 
 const allowedOn = (settings: TeamSettings, source: string, actor: string): boolean =>
-  (source === 'workbench' || source === 'a2a') && settings.allowed[source].includes(actor)
-const botOn = (settings: TeamSettings, source: string, actor: string): boolean => source === 'a2a' && settings.bots.a2a.includes(actor)
+  (source === 'workbench' || source === 'a2a' || source === 'github') && settings.allowed[source]?.includes(actor) === true
+const botOn = (settings: TeamSettings, source: string, actor: string): boolean => (source === 'a2a' && settings.bots.a2a.includes(actor)) || (source === 'workbench' && actor === WORKBENCH_CLI)
+/**
+ * What a settings change means to each open ticket, in upstream's PolicyEffect terms (the engine records it as the
+ * ticket's `policy-changed` input and delivers it to its worker): a rule the ticket was accepted on that changed or no
+ * longer applies, proactive work no longer accepted, or a requester no longer allowed to start work. Tickets nothing
+ * happened to are left out. (Before this, the host told open tickets nothing — router acceptance follow-up.)
+ * @param before - the settings in force when the tickets were accepted.
+ * @param after - the settings just saved.
+ * @param open - the team's open tickets.
+ * @returns the effect per ticket id.
+ */
+export function policyEffects(before: TeamSettings, after: TeamSettings, open: readonly Pick<Ticket, 'id' | 'mandate'>[]): Map<string, PolicyEffect> {
+  const effects = new Map<string, PolicyEffect>()
+  for (const ticket of open) {
+    const mandate = ticket.mandate
+    if (mandate === undefined) continue
+    const effect: { rules?: NonNullable<PolicyEffect['rules']>; proactive?: false; requesterAllowed?: false; requester?: PolicyEffect['requester'] } = {}
+    const rules: NonNullable<PolicyEffect['rules']> = []
+    for (const name of mandate.basis.rules ?? []) {
+      const was = before.rules.find(rule => rule.name === name)
+      const now = after.rules.find(rule => rule.name === name)
+      if (was?.enabled === true && now?.enabled !== true) rules.push({ id: name, name, change: 'disabled' })
+      else if (was !== undefined && now?.enabled === true && now.text !== was.text) rules.push({ id: name, name, change: 'changed', instruction: now.text })
+    }
+    if (rules.length > 0) effect.rules = rules
+    if (mandate.strength === 'inferred' && before.acceptMode === 'auto' && after.acceptMode !== 'auto') effect.proactive = false
+    const { source, id } = mandate.actor
+    const allowedBefore = allowedOn(before, source, id) || botOn(before, source, id)
+    if (allowedBefore && !allowedOn(after, source, id) && !botOn(after, source, id)) { effect.requesterAllowed = false; effect.requester = mandate.actor }
+    if (Object.keys(effect).length > 0) effects.set(ticket.id, effect)
+  }
+  return effects
+}
+
 /** Whether an inferred candidate may be accepted on these matched rules: `auto`, at least one, every one enabled. */
 const admits = (settings: TeamSettings, rules: readonly string[]): boolean => settings.acceptMode === 'auto' && rules.length > 0
   && rules.every(name => settings.rules.some(rule => rule.name === name && rule.enabled))
@@ -263,6 +308,8 @@ export function teamPolicy(settings: TeamSettings): Policy {
 export function teamScope(settings: () => TeamSettings): SourceScope {
   return {
     scope: ({ source, meta }) => {
+      // GitHub is not a Source of new work: its Triggers exist only for pull requests a ticket already follows.
+      if (source === 'github') return { listened: true, observed: false }
       if ((source !== 'workbench' && source !== 'a2a') || !settings().sources[source]) return { listened: false, reason: 'sourceOff' }
       // The A2A Source's own trust filter (a2a-watch): a host-verified proof and an operator link, no loop, no receipt.
       return source === 'a2a' ? a2aScope({ meta }) : { listened: true, observed: false }

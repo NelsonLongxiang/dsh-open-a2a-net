@@ -158,6 +158,31 @@ describe('a2a-net CLI: route / report talk to the right host with the right mess
     expect(host.seen.find(s => s.path === '/a2a/direct')?.body.message).toBe('-1 is the answer')
   })
 
+  it('an environment variable set empty counts as unset (#490)', async () => {
+    const host = await stubHost(() => delivered)
+    servers.push(host.server)
+    const SAVED = tmpHomeDir()
+    await runCli(['init', 'scout', '--home', host.url], { HOME: SAVED, A2A_CLI_HOME: SAVED })
+    expect((await runCli(['route', 'ops', 'hello'], { HOME: SAVED, A2A_CLI_HOME: SAVED, A2A_HOME: '' })).code).toBe(0)
+    expect(host.seen.some(s => s.path === '/a2a/direct')).toBe(true)
+    host.seen.length = 0
+    expect((await runCli(['teams'], { HOME: SAVED, A2A_CLI_HOME: SAVED, A2A_HOME: host.url, A2A_POCKET_TOKEN: '', A2A_TOKEN: 'T1' })).code).toBe(0)
+    expect(host.seen[0]?.headers.cookie).toBe('dsh_pocket_token=T1')
+  })
+
+  it('report goes to the zone the home names, and to dsh when it names none (#503)', async () => {
+    const host = await stubHost(path => path.startsWith('/__dsh_a2a/state') ? { status: 200, body: { zone: 'alpha' } } : delivered)
+    servers.push(host.server)
+    const HOME = tmpHomeDir()
+    await runCli(['init', 'scout'], { HOME, A2A_CLI_HOME: HOME })
+    expect((await runCli(['report', 'hello'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url })).code).toBe(0)
+    expect(host.seen.find(s => s.path === '/a2a/direct')?.body.team).toBe('alpha')
+    const old = await stubHost(path => path.startsWith('/__dsh_a2a/state') ? { status: 404, body: {} } : delivered)
+    servers.push(old.server)
+    expect((await runCli(['report', 'hello'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: old.url })).code).toBe(0)
+    expect(old.seen.find(s => s.path === '/a2a/direct')?.body.team).toBe('dsh')
+  })
+
   it('host and key resolve from $A2A_HOME / $A2A_KEY, and from the home saved by init --home', async () => {
     const host = await stubHost(() => delivered)
     servers.push(host.server)

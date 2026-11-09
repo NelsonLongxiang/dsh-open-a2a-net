@@ -6,7 +6,7 @@ import { MEMBER_TOOLS, ROUTER_TOOLS, RoleTools, roleToolRefusal, type Role, type
 
 describe('role tool lists', () => {
   it('pins what the router and a member may call', () => {
-    expect(ROUTER_TOOLS).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status'])
+    expect(ROUTER_TOOLS).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note'])
     expect(MEMBER_TOOLS).toEqual(['read', 'write', 'edit', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'job_output', 'job_list', 'job_kill',
       'web_search', 'web_fetch', 'skill', 'todo_write', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_file_fetch'])
   })
@@ -85,6 +85,7 @@ describe('the team\'s agent presets: shipped in the bundle layer, required of a 
     expect(router).toMatch(/dsh-tool-fs'\n\s+config:\n\s+write: false\n\s+edit: false/)
     expect(router).toContain('superagent_route')
     expect(member).toContain('a2a_ticket_report')
+    expect(member).toContain('reasonable defaults for routine steps')
     expect(member).toContain("name: '@deepseek-ai/dsh-tool-fs'\n")
     // Both wait at most 5 s in the foreground, as upstream's executor: a long command moves to a background job, so a stop
     // notice or a person's answer is taken at the next step, and a job wait ends after 5 s too.

@@ -219,9 +219,11 @@ describe('first-run board', () => {
   it("peer cards leave room for their 'peer' tag", () => {
     // jsdom's import.meta.url is not file:, so resolve from the run directory (package or repo root).
     const css = readFileSync(['src/planning.css', 'nexus-stage/src/planning.css'].find(f => existsSync(f))!, 'utf8')
-    const rule = /#dsh-plan \.p-node\.remote\{([^}]*)\}/.exec(css)?.[1] ?? ''
+    // The tag sits at the end of the second line, whose description stops short of it.
+    const rule = /#dsh-plan \.p-node\.remote:not\(\.is-superagent-member\) \.sub-row\{([^}]*)\}/.exec(css)?.[1] ?? ''
     const pad = Number(/padding-right:(\d+)px/.exec(rule)?.[1] ?? 0)
-    expect(pad).toBeGreaterThanOrEqual(44) // 'peer' at 10px mono + tag padding/border + 8px inset
+    expect(pad).toBeGreaterThanOrEqual(54) // 'linked✓', the widest tag, at 10px mono + tag padding/border
+    expect(/#dsh-plan \.p-node\.remote:not\(\.is-superagent-member\) \.prio\{[^}]*bottom:6px/.test(css)).toBe(true)
     // and a long address wraps to TWO clamped lines instead of a hard
     // mid-digit cut (owner order W2: the single-line ellipsis became a
     // two-line clamp; the card geometry is untouched).

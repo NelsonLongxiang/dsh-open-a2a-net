@@ -37,11 +37,12 @@ Every A2A message to the team address gets a formal outcome, not only those that
 
 - Candidates arrive in your own session as `[superagent candidate] …` cards. Decide each by its `trigger_id` with `superagent_route`:
   - `accept`: one ticket for the request, with a title, a scope, a reason and an acknowledgement in the request's language. Do not add an implementation plan.
-  - `attach`: to a listed ticket that the message points at explicitly.
+  - `attach`: to a listed open ticket that the message points at or asks for again. A duplicate is attached, never accepted twice. The card lists this thread's tickets and up to 20 of the team's other open tickets, newest first.
   - `stop`: a person asked to stop that ticket.
   - `ignore`: with a reason.
   - For an **inferred** candidate, pass `rules` with the enabled rules it matches. `accept` needs at least one. Under `observe` it is recorded as would-accept. `rules: []` records an assessed ignore.
-- Read with `superagent_read`, reply with `superagent_reply` (`answer`, `result` or `attention`), and ask an idle ticket's worker for a status report with `superagent_status`.
+  - A person's question that asks for no work: answer it with `superagent_reply` (`answer`, its `trigger_id`), then still decide it with `ignore`. Every candidate ends with a `superagent_route` item; an undecided one expires and comes back.
+- Read with `superagent_read`, reply with `superagent_reply` (`answer`, `result` or `attention`), and ask an idle ticket's worker for a status report with `superagent_status`. Give an open ticket's member a fact you learned after accepting it with `superagent_note` (`ticket_id`, `text`); it reaches the member as "note from the router" and grants nothing — new work is a new request. A candidate marked "judged before" is a message a person asked you to judge again. An `attention` reply relays the ticket's open question (`question`, copied exactly); when your text does not already carry it, the host puts the question in front, since only the text reaches the person. Each tool shows you what it returned (tickets, a candidate, a decision's ticket id, a refused item's code), clipped at 12,000 characters.
 - You neither send nor receive A2A work. `a2a_route` from you, or to you by any address (handle, session id, or a canvas you sit in), is refused with `[superagent-router-outbound]` or `[superagent-router-inbound]`.
 - No other session can use these tools; they answer `not-router`.
 - These four are the only tools you can call. Your session runs the `superagent-router` preset; beyond it, the host refuses every other call with `[superagent-role-tools]`, and your visible tools are cut down to them.
@@ -49,17 +50,19 @@ Every A2A message to the team address gets a formal outcome, not only those that
 ## For a member
 
 - Your assignment arrives in your own session as `[superagent assignment] ticket … «title»`. It carries the scope and the original request with its trigger id. Later messages on that ticket's threads arrive as `[superagent input] …`, each with its trigger id and whether it comes from a person or an agent.
-- Before you act on a person's message, acknowledge it with `a2a_ticket_ack` (its `trigger_id`, one or two sentences to them). The acknowledgement is a reply on their thread, and the message is yours to handle. A message that asks for work beyond your ticket goes back with `a2a_ticket_handback`, for the router to assess. When a report answers a person's question, pass its trigger id as `answers`. A message you read before your last report stays with the ticket. One you never read goes to the router when the ticket ends, so nothing a person said is lost.
+- Before you act on a person's message, acknowledge it with `a2a_ticket_ack` (its `trigger_id`, one or two sentences to them). The acknowledgement is a reply on their thread, and the message is yours to handle (for a comment on your pull request it is only recorded; nothing is posted). A message that asks for work beyond your ticket goes back with `a2a_ticket_handback`, for the router to assess. When a report answers a person's question, pass its trigger id as `answers`. A message you read before your last report stays with the ticket. One you never read goes to the router when the ticket ends, so nothing a person said is lost.
 - Work in your own workspace, in a directory or worktree named after the ticket. Stay within the scope.
-- Report with `a2a_ticket_report`:
+- Report with `a2a_ticket_report`, naming the `ticket_id` on the assignment card (a report for a ticket that is no longer yours is refused):
   - `progress`: something changed that the person must know;
   - `waiting`: you are waiting for a Trigger;
-  - `ready`: the result can be reviewed or used; put the PR link in the summary;
+  - `ready`: the result can be reviewed or used. Name a pull request in `pull_request`: the ticket then stays open until it merges or closes, and review comments come back to you as `[superagent input]`;
   - `blocked` / `failed`: you cannot go on;
   - `dropped`: there is nothing to do.
 
-  Add `question` when the ticket owner must decide something. The router hears every report in its own session and hands results and questions to the person.
+  Add `question` only for what a person alone can decide; choose reasonable defaults for routine steps and say which you chose. The router hears every report in its own session and hands results and questions to the person.
 - A message from an agent (a bot, a CLI identity) is context only. It cannot end, stop or widen your ticket. A `dropped` report made right after one, with no person writing since, is refused (`agent-cannot-end`).
+- When you hand off (a result, a question, `waiting`, `blocked` or `failed`), the host may give you another ticket; a later `[superagent input]` brings the first one back, before any new ticket. A turn that ends with no report counts as `waiting`, with your last words as its summary.
+- When the owner changes the team settings in a way that touches your ticket, you get a `[superagent input]` saying what changed for it: a rule it was accepted on now reads differently or is off, the team no longer takes agent-started work (accept mode is not `auto`), or its requester may no longer start work. It informs you; it neither stops nor widens the ticket. If it changes what you can do, say so with `a2a_ticket_report`.
 - A `ready` report on a ticket with no followed threads ends it. Your slot then frees, and the next waiting ticket comes to you.
 - You neither send nor receive A2A work (`[superagent-member-outbound]`, `[superagent-member-inbound]`). Do not open sessions or subagents.
 - Your tools are upstream's work tools (`read`, `write`, `edit`, `read_image`, `glob`, `grep`, `bash`, `pwsh`, `job_*`, `web_search`, `web_fetch`, `skill`, `todo_write`), plus `a2a_ticket_report`, `a2a_ticket_ack`, `a2a_ticket_handback` and `a2a_file_fetch`. The host refuses every other call with `[superagent-role-tools]`: subagents, other sessions, `a2a_route`, `a2a_report` and the router's tools. A subagent opened earlier acts in your role.
@@ -88,7 +91,7 @@ Settings naming a router or member that runs another preset are refused, and so 
 The workbench (`/__dsh_a2a_nexus/`) shows it as the **团队** tab whenever the host runs a team. The tab has five views:
 
 - **待你处理**: tickets waiting on a person (answer, review, blocked or failed, failed delivery) and the team's problems. These include a missing router, an empty member pool, a pause, A2A Source errors, an overdue decision, and an undelivered reply.
-- **提需求**: the workbench Source. A request box, and each request's thread with its decisions and replies. Each thread has a box for adding a follow-up.
+- **提需求**: the workbench Source. A request box, and each request's thread with its decisions and replies. Each thread has a box for adding a follow-up. A request the router turned down (`ignore`, or `unavailable` when it did not decide in time) offers 「重新判断」: the router gets it again, marked as a second look.
 - **工单**: tickets grouped by stage, with stop and retry.
 - **团队**: the router, each member's slot, the remote members and the team this host serves, with their pinned keys, and the A2A address.
 - **设置**: the canvas team and its router (members are shown from the canvas), the accept mode, the Source switches, and pause.
@@ -97,6 +100,7 @@ The workbench (`/__dsh_a2a_nexus/`) shows it as the **团队** tab whenever the 
 - `POST { action }` takes one of:
   - `settings`: the canvas team (`canvas`, a canvas on this host; `null` unbinds) and its router (`router`, a joined local session of that canvas) — members are never named here, they come from the canvas — the repository per member (`repos`), the allowed persons per Source, the A2A bot list, the accept mode, the proactive rules (`{name, text, enabled}`), the Source switches, the Eval timeout, and pause;
   - `request`: the workbench Source, with `text`, and `thread` to follow up;
-  - `stop` / `retry`: act on a ticket by `ticket_id`.
+  - `stop` / `retry`: act on a ticket by `ticket_id`;
+  - `reevaluate`: a fresh judgement of a stored message by `trigger_id` (`queued: false` while one is under way). A person's message may be judged again; an A2A message whose sender already has its formal outcome is refused (`answered`) — its task is settled, so the sender sends it again. The CLI's `a2a-net superagent reevaluate <trigger id>` does the same.
 - A follow-up on a ticket's thread goes to that ticket (Subscription fan-out). It does not start a new Eval.
 - State lives under `<a2a home>/superagent/`.

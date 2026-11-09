@@ -61,24 +61,7 @@ export type ColdWake =
   | { readonly kind: 'no-match' }
 
 /** routeIntoAgent's settled answer (mirrors index.ts's local union). */
-export type RouteOutcome = { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; status?: string; bridge?: 'native-teams'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown'; localMiss?: true }
-
-interface BridgeTeamsRegistryMirror {
-  listTeams(): Array<{ name: string; description: string }>
-  describeTarget(handle: string): Promise<{ plane: 'local' | 'a2a'; ambiguous?: boolean; localLabel?: string }>
-  startRound(args: { team?: string; message: string }, parent: { id: string; session: { events?: readonly unknown[] } }, signal: AbortSignal): Promise<string>
-}
-
-/** nativeTeamsPrepare's answer (mirrors index.ts's local union). */
-export type NativePrepared =
-  | { readonly ok: true; readonly teams: BridgeTeamsRegistryMirror; readonly parent: { id: string; session: { events?: readonly unknown[] } } }
-  | { readonly ok: false; readonly reason: 'not-claimed' }
-  | { readonly ok: false; readonly reason: 'error'; readonly error: string }
-
-/** nativeTeamsRound's settled answer (mirrors index.ts's local union). */
-export type NativeRoundOutcome =
-  | { readonly ok: true; readonly reply: string; readonly settled: boolean }
-  | { readonly ok: false; readonly error: string; readonly phase?: 'pre-dispatch'; readonly aborted?: boolean }
+export type RouteOutcome = { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; status?: string; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown'; localMiss?: true }
 
 /** What verifyOriginClaim answers (see index.ts; reason widens to string here — the faces only interpolate it). */
 export type OriginClaimResult = OriginClaimVerdict
@@ -106,6 +89,8 @@ export interface WireDeps {
   readonly canvasMemberForWrite: (ref: string, peer?: unknown, editorCard?: A2aPeerCard) => Promise<{ ok: true; member: string; ownerKey?: string } | { ok: false; error: string }>
   /** Design v5 R3/R4: why the superagent team refuses this member on this canvas, if it does (absent: no team). */
   readonly teamCanvasRefusal?: (canvas: string, member: string) => string | undefined
+  /** The canvas a superagent team is bound to here: only this host's owner changes it (a canvas change is a pool change). */
+  readonly teamCanvasBound?: (canvas: string) => boolean
   readonly canvasNameReserved: (name: string) => boolean
   readonly sessionNodes: Map<string, Agent>
   readonly joinedSessions: JoinedSessions
@@ -171,8 +156,6 @@ export interface WireDeps {
   readonly noWakeFaceText: (team: string) => string
   readonly archivedColdMatchText: (team: string) => string
   readonly noColdMatchText: (team: string) => string
-  readonly nativeTeamsPrepare: (team: string) => Promise<NativePrepared>
-  readonly nativeTeamsRound: (prepared: Extract<NativePrepared, { ok: true }>, team: string, caller: string, message: string, taskId: string | undefined, proofClause: string, external?: AbortSignal, proofHeader?: (team: string, taskId: string, from: string, proofClause: string) => string) => Promise<NativeRoundOutcome>
   readonly routeIntoAgent: (team: string, message: string, caller: string, taskId?: string, proofClause?: string, directHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number,acceptance?:'inserted'|void) => void, callerKey?: string) => Promise<RouteOutcome>
 }
 
@@ -271,8 +254,6 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     noWakeFaceText,
     archivedColdMatchText,
     noColdMatchText,
-    nativeTeamsPrepare,
-    nativeTeamsRound,
     routeIntoAgent,
   } = d
   const syncAnswered = new SyncAnswered()
@@ -355,6 +336,11 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const op = body.op
             const name = typeof body.name === 'string' ? body.name : ''
             const rawId = typeof body.id === 'string' ? body.id : ''
+            if (d.teamCanvasBound?.(name) === true) {
+              recordActivity('in', 'fleet-canvas', claim.caller, false)
+              send(200, JSON.stringify({ ok: false, error: '[superagent-team-canvas] a superagent team is changed only by its own host\'s owner' }))
+              return
+            }
             // gh#131: a peer names our sessions by handle — the session it names, for removal.
             // A bare handle may still infer for routing, never for deleting another stored slot.
             const provenOwn = rawId.endsWith('@' + d.ownCanvasFingerprint)
@@ -1072,15 +1058,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
               })
               return
             }
-            // Remaining candidates need one async classification (the
-            // native-teams bridge), so the tail answers inside an IIFE.
-            await (async () => {
-              // Native-teams inbound bridge (opt-in): prepare BEFORE answering
-              // delivered — claim, seam, and parent initiator are everything
-              // that can fail fast, and a phantom dispatch must never answer
-              // success. Past prepare, the round fires detached (noWait means
-              // delivery, not settlement); its late outcome corrects the
-              // activity ring and the log.
+            {
               const standardMiss = async (): Promise<void> => {
                 if (team === config.team) {
                   const live = liveAgent()
@@ -1099,36 +1077,8 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 if (wake?.kind === 'no-match') { await forwardMiss(noColdMatchText(team)); return }
                 refuseNoWait(wake?.kind === 'no-face' ? noWakeFaceText(team) : wake?.kind === 'archived' ? archivedColdMatchText(team) : noColdMatchText(team), false)
               }
-              const prepared = await nativeTeamsPrepare(team)
-              if (!prepared.ok) {
-                if (prepared.reason === 'error') {
-                  refuseNoWait(prepared.error)
-                  return
-                }
-                await standardMiss()
-                return
-              }
-              recordActivity('in', team, caller, true)
-              void nativeTeamsRound(prepared, team, caller, message, taskId, proofClause, undefined, (_team, _taskId, from) => directHeader(from))
-                .then(outcome => {
-                  if (!outcome.ok) {
-                    recordActivity('in', team, caller, false)
-                    logger.warn(`a2a: detached native-teams round for "${team}" failed: ${outcome.error}`)
-                  }
-                  // W7 slice-2 hook 2: only a genuinely settled detached round
-                  // records an outcome. The deadline's settled:false
-                  // projection is a placeholder, not a product — the same
-                  // ruling as hook 1's DELIVERED skip; placeholder prose never
-                  // enters the ledger a replay could adopt from.
-                  if (taskId !== '') {
-                    if (!outcome.ok) idempotencyStore.recordOutcome(taskId, { status: 'failed', error: outcome.error })
-                    else if (outcome.settled) idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: outcome.reply })
-                  }
-                })
-              const payload = JSON.stringify({ routed: true, delivered: true, team, session, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_DELIVERED', artifacts: [], consumed: false, bridge: 'native-teams' })
-              res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
-              res.end(payload)
-            })()
+              await standardMiss()
+            }
             return
           }
           let syncTarget: string | undefined
@@ -1173,18 +1123,13 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 result: { text: outcome.reply },
                 ...(syncTarget !== undefined ? { delivered_to: syncTarget } : {}),
                 // #298: a positive, cross-host statement that this text is the member's own final reply — the turn
-                // that read this task's steer (`ownTurn`), never a placeholder, a bridge round or another turn (#305 F3/F4).
-                ...(outcome.ownTurn === true && outcome.placeholder !== true && outcome.bridge === undefined && (outcome.status ?? 'TASK_STATE_COMPLETED') === 'TASK_STATE_COMPLETED' ? { reply_final: true } : {}),
+                // that read this task's steer (`ownTurn`), never a placeholder or another turn (#305 F3/F4).
+                ...(outcome.ownTurn === true && outcome.placeholder !== true && (outcome.status ?? 'TASK_STATE_COMPLETED') === 'TASK_STATE_COMPLETED' ? { reply_final: true } : {}),
                 task_id: taskId,
                 context_id: contextId,
-                task_status: outcome.placeholder===true||(outcome.bridge===undefined&&outcome.ownTurn!==true&&outcome.status===undefined)?'TASK_STATE_DELIVERED':outcome.status??'TASK_STATE_COMPLETED',
-                ...(outcome.bridge===undefined&&(outcome.placeholder===true||outcome.ownTurn!==true)?{receipt:syncTarget===undefined?'none':'routed'}:{}),
+                task_status: outcome.placeholder===true||(outcome.ownTurn!==true&&outcome.status===undefined)?'TASK_STATE_DELIVERED':outcome.status??'TASK_STATE_COMPLETED',
+                ...(outcome.placeholder===true||outcome.ownTurn!==true?{receipt:syncTarget===undefined?'none':'routed'}:{}),
                 artifacts: [],
-                // The bridge marker rides the wire so the caller's
-                // trackOwedTask skips a receipt-less native round — without
-                // it, a cross-node unsettled round books an unpayable owed
-                // row and re-creates the TASK_CAP backlog.
-                ...(outcome.bridge !== undefined ? { bridge: outcome.bridge } : {}),
               })
               : JSON.stringify({ ...(outcome.acceptance==='unknown'?{acceptance:'unknown'}:{}),error: outcome.error, code: -32000, team, task_id: taskId, task_status: 'TASK_STATE_FAILED' })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })

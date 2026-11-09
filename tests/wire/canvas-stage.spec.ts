@@ -1,6 +1,5 @@
 /**
- * The floor stage faces: page serving over the built Vite tree (shell,
- * hashed assets, traversal guard) plus the canvas-layout control face.
+ * The canvas-layout control face the workbench's planning board saves to.
  */
 import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
@@ -9,7 +8,6 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import TimerService from '@deepseek-ai/cordis-plugin-timer'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
-import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { apply } from '../../src/index.ts'
@@ -32,8 +30,6 @@ async function harness(): Promise<number> {
   })
   return (ctx as unknown as { webServer: WebServer }).webServer.port
 }
-
-const hasStageDist = existsSync(join(process.cwd(), 'assets', 'stageDist', 'index.html'))
 
 const DOC_FIXTURE = {
   version: 1 as const,
@@ -112,26 +108,24 @@ describe('canvas-layout control face', () => {
   })
 })
 
-// Asset-serving assertions require the built stage bundle; source-only checkouts must build it first.
-describe.skipIf(!hasStageDist)('floor stage page serving', () => {
-  it('serves the shell with brand and hashed assets, guarding traversal', async () => {
+describe('the workbench page is served from its built tree', () => {
+  it('serves the shell and hashed assets, guarding traversal; the removed office stage is gone', async () => {
     const port = await harness()
-    const base = 'http://127.0.0.1:' + String(port) + '/__dsh_a2a_canvas'
+    const root = 'http://127.0.0.1:' + String(port)
+    const base = root + '/__dsh_a2a_nexus'
     const shell = await fetch(base + '/')
     expect(shell.status).toBe(200)
     expect(shell.headers.get('content-type')).toContain('text/html')
-    const htmlText = await shell.text()
-    expect(htmlText).toContain('id="root"')
-    expect(htmlText).toContain('dsh-a2a-munder-difflin')
+    const html = await shell.text()
     // Vite may order script attributes freely (crossorigin before src).
-    const m = htmlText.match(/<script[^>]*src="([^"]+\.js)"/)
+    const m = html.match(/<script[^>]*src="([^"]+\.js)"/)
     expect(m).not.toBeNull()
-    const jsPath = m![1]!.startsWith('/') === true ? m![1]! : '/' + String(m![1])
-    const jsRes = await fetch(base + jsPath)
-    expect(jsRes.status).toBe(200)
-    expect(jsRes.headers.get('content-type')).toContain('javascript')
+    const js = await fetch(base + '/' + m![1]!.replace(/^\.?\//, ''))
+    expect(js.status).toBe(200)
+    expect(js.headers.get('content-type')).toContain('javascript')
     const trav = await fetch(base + '/%2e%2e%2fpackage.json')
     expect(trav.status === 403 || trav.status === 404).toBe(true)
     expect((await fetch(base + '/nope.js')).status).toBe(404)
+    expect((await fetch(root + '/__dsh_a2a_canvas/')).headers.get('x-a2a-stage')).toBeNull()
   })
 })

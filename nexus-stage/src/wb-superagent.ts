@@ -19,7 +19,7 @@ import type { RailTone } from './wb-rail'
 type Json = Record<string, unknown>
 
 export interface SaTrigger { readonly id: string; readonly actor: { source: string; id: string }; readonly at: string; readonly text: string; readonly disposition: unknown }
-export interface SaDecision { readonly id: string; readonly kind: string; readonly at: string; readonly ticketId?: string; readonly reason?: ReadonlyArray<{ code?: string; text?: string; values?: Record<string, string> }> | string }
+export interface SaDecision { readonly id: string; readonly kind: string; readonly at: string; readonly ticketId?: string; readonly triggerIds?: readonly string[]; readonly reason?: ReadonlyArray<{ code?: string; text?: string; values?: Record<string, string> }> | string }
 export interface SaReply { readonly message: { kind: string; text: string }; readonly status: string; readonly reason?: string }
 export interface SaThread {
   readonly key: string; readonly ref: { source: string; id: string }; readonly createdAt: string; readonly lastAt: string | null
@@ -33,6 +33,7 @@ export interface SaTicket {
   readonly channels: ReadonlyArray<{ source: string; thread: string }>
   readonly ended?: { at: string; outcome: string; reason?: string }
   readonly attention?: { question: string }
+  readonly follows?: ReadonlyArray<{ thread: string; closed?: { outcome: string } }>
   readonly delivery?: { error: string; at: string }
   readonly assignments: readonly SaAssignment[]
   readonly inputs: readonly unknown[]
@@ -52,6 +53,8 @@ export interface SaState {
   readonly settings: SaSettings; readonly policyVersion: string
   /** Design v5: why the bound canvas cannot run as the team, and the canvas teams this host owns (to bind one). */
   readonly canvasProblem?: string
+  readonly pullRequestProblem?: string
+  readonly reviews?: ReadonlyArray<{ ticketId: string; head: string; verdict?: { pass: boolean } }>
   /** v5 acceptance F4: why a session this host serves another team with cannot take work (wrong preset). */
   readonly servesProblem?: string
   readonly canvases?: readonly string[]
@@ -101,6 +104,7 @@ export function problemsOf(state: SaState, now: number): SaProblem[] {
   if (state.settings.router === undefined) out.push({ tone: 'danger', text: '还没有指定总工：需求会停在候选里，没人决定（到「设置」里选）' })
   if (state.settings.members.length === 0 && state.settings.remoteMembers.length === 0) out.push({ tone: 'warn', text: '成员池是空的：在画布团队里加成员，接下的工单才有人做' })
   if (state.settings.paused) out.push({ tone: 'warn', text: '执行已暂停：新工单不会派给成员' })
+  if (state.pullRequestProblem !== undefined) out.push({ tone: 'warn', text: `读取 PR 状态失败，稍后重试：${state.pullRequestProblem}` })
   for (const [entry, health] of Object.entries(state.a2a.health)) if (health.state === 'error') out.push({ tone: 'danger', text: `A2A Source（${entry}）出错：${health.detail ?? ''}` })
   for (const thread of state.threads) {
     if (thread.evaluating !== null && Date.parse(thread.evaluating.deadline) < now) out.push({ tone: 'warn', text: `「${firstText(thread)}」等总工决定已超时` })
@@ -242,6 +246,8 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     kv(card, '授权', `${ticket.mandate.strength === 'explicit' ? '明确请求' : '推断'} · ${ticket.mandate.actor.source}:${ticket.mandate.actor.id}`)
     const binding = last?.executor.bindings.find(b => b.ticketId === ticket.id)
     if (binding !== undefined) kv(card, '成员', sessionName(binding.member))
+    for (const f of ticket.follows ?? []) if (f.thread.startsWith('github:')) kv(card, 'PR', `${f.thread.slice(7)}${f.closed !== undefined ? ` · ${f.closed.outcome === 'merged' ? '已合并' : '已关闭'}` : ' · 等待合并'}`)
+    for (const r of last?.reviews ?? []) if (r.ticketId === ticket.id) kv(card, '评审', `${r.head.slice(0, 7)} · ${r.verdict === undefined ? '等待评审' : r.verdict.pass ? 'PASS' : '未通过'}`)
     if (ticket.attention !== undefined) kv(card, '问题', ticket.attention.question)
     if (ticket.delivery !== undefined) kv(card, '投递', ticket.delivery.error)
     const report = latestReport(ticket)
@@ -259,7 +265,15 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
           answer.addEventListener('click', () => { void send({ action: 'request', text: box.value, thread }, () => { box.value = '' }, '回答已送出') })
           card.appendChild(box)
           actions.appendChild(answer)
-        } else card.appendChild(el('div', 'wb-sa-hint', '这张工单来自别的渠道，请在原渠道回答'))
+        } else {
+          // Its requester is an agent, so the question is the owner's to answer here.
+          const box = draftFor(`ticket:${ticket.id}`, '回答这个问题（请求方是 agent，由你来答，答复会送给成员）')
+          const answer = el('button', 'wb-btn wb-btn-primary', '回答')
+          answer.type = 'button'
+          answer.addEventListener('click', () => { void send({ action: 'answer', ticket_id: ticket.id, text: box.value }, () => { box.value = '' }, '回答已送出') })
+          card.appendChild(box)
+          actions.appendChild(answer)
+        }
       }
       const retryable = ticket.delivery !== undefined || (person && (ticket.stage?.action === 'blocked' || ticket.stage?.action === 'failed'))
       if (retryable) {
@@ -312,7 +326,16 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       }
       for (const d of thread.decisions) {
         const reason = typeof d.reason === 'string' ? d.reason : (d.reason ?? []).map(r => r.text ?? r.values?.text ?? r.code ?? '').filter(Boolean).join('；')
-        card.appendChild(el('div', 'wb-sa-decision', `总工：${DECISION[d.kind] ?? d.kind}${reason !== '' ? ` · ${reason}` : ''}${d.ticketId !== undefined ? ` · ${d.ticketId}` : ''}`))
+        const row = el('div', 'wb-sa-decision', `总工：${DECISION[d.kind] ?? d.kind}${reason !== '' ? ` · ${reason}` : ''}${d.ticketId !== undefined ? ` · ${d.ticketId}` : ''}`)
+        // Design superagent-reevaluate-note D3: the owner asks the router to judge a turned-down message again.
+        if ((d.kind === 'ignore' || d.kind === 'unavailable') && thread.evaluating === null && (d.triggerIds ?? []).length > 0) {
+          const again = el('button', 'wb-btn wb-sa-reevaluate', '重新判断')
+          again.type = 'button'
+          // One ask per click: the button turns off until the next render (design review: no repeated requeues).
+          again.addEventListener('click', () => { again.disabled = true; for (const id of d.triggerIds ?? []) void send({ action: 'reevaluate', trigger_id: id }, undefined, '已请总工重新判断') })
+          row.appendChild(again)
+        }
+        card.appendChild(row)
       }
       if (thread.evaluating !== null) card.appendChild(el('div', 'wb-sa-hint', '等总工决定…'))
       for (const r of thread.replies) {

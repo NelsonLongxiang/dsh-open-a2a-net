@@ -22,6 +22,14 @@ const failure = (error: unknown): Record<string, JsonValue> => error instanceof 
   ? { ok: false, code: error.code, error: error.message }
   : { ok: false, code: 'error', error: error instanceof Error ? error.message : String(error) }
 
+/** A wrong id is refused as before; the refusal now says what the caller does hold, so it can retry from the right id. */
+const refusal = (host: SuperagentHost, error: unknown, ids: { trigger?: string; ticket?: string }): Record<string, JsonValue> => {
+  const out = failure(error)
+  const hint = out.error === 'Unknown trigger' && ids.trigger !== undefined ? host.wrongId('trigger', ids.trigger)
+    : out.error === 'Unknown ticket' && ids.ticket !== undefined ? host.wrongId('ticket', ids.ticket) : undefined
+  return hint === undefined ? out : { ...out, error: hint }
+}
+
 interface RouteItem {
   trigger_id?: unknown; kind?: unknown; title?: unknown; scope?: unknown; reason?: unknown; acknowledgement?: unknown
   ticket_id?: unknown; name?: unknown; note?: unknown; rules?: unknown; repo?: unknown
@@ -74,8 +82,22 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
     const repoSet = decision.kind === 'accept' && decision.ticketId !== undefined && repo !== undefined
     if (repoSet) host.executor.setRepo(decision.ticketId!, repo!)
     return { ok: true, trigger_id: triggerId, kind, decision_id: decision.id, decision: decision.kind, ...(decision.ticketId !== undefined ? { ticket_id: decision.ticketId } : {}), ...(repoSet ? { repo: repo! } : {}), reason: json(decision.reason) }
-  } catch (error) { return { trigger_id: triggerId, ...failure(error) } }
+  } catch (error) { return { trigger_id: triggerId, ...refusal(host, error, { trigger: triggerId, ...(str(item.ticket_id) !== undefined ? { ticket: str(item.ticket_id)! } : {}) }) } }
 }
+
+/**
+ * The text an attention reply sends: the router's words, led by the member's question verbatim when they do not already
+ * contain it — the engine checks the question against the ticket's open one, but only the text reaches the person.
+ * @param text - what the router wrote.
+ * @param question - the ticket's open question, copied exactly.
+ * @returns the text to send.
+ */
+export function attentionText(text: string, question: string): string {
+  return text.includes(question) ? text : `${question}\n\n${text}`
+}
+
+/** The most a superagent tool result shows the model, in characters of its JSON. */
+export const SAID_CAP = 12_000
 
 export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost | undefined): void {
   /** The host, when the calling session is the team's router; undefined otherwise. */
@@ -83,11 +105,18 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
     const h = host()
     return h !== undefined && h.routerSession !== undefined && exec.agent !== undefined && String(exec.agent.id) === h.routerSession ? h : undefined
   }
-  const said = (title: string, value: Record<string, unknown>) => [{ type: 'text' as const, text: value.ok === true ? `${title}: ok` : `${title} refused: ${String(value.error ?? JSON.stringify(value.results ?? ''))}` }]
+  // The model sees what the call returned, not just that it ran: the router reads tickets and candidates through these
+  // tools, and a decision's ticket id or a refused item's code is what it acts on next (router acceptance RJ2/RJ6).
+  const said = (title: string, value: Record<string, unknown>) => {
+    const { ok, ...rest } = value
+    const body = JSON.stringify(rest)
+    const shown = body.length > SAID_CAP ? `${body.slice(0, SAID_CAP)}… (clipped, ${String(body.length)} chars)` : body
+    return [{ type: 'text' as const, text: `${title}${ok === true ? ': ok' : ' refused:'} ${shown}` }]
+  }
 
   ctx.tools.register(defineTool({
     name: 'superagent_route',
-    description: 'Team router only: decide candidates by trigger_id. Each item is one of accept (one ticket for the request: title, scope, reason, acknowledgement in the request language; no implementation plan), attach (ticket_id the message explicitly points at), stop (ticket_id a person asked to stop) or ignore (reason). Items are processed independently.',
+    description: 'Team router only: decide candidates by trigger_id. Each item is one of accept (one ticket for the request: title, scope, reason, acknowledgement in the request language; no implementation plan), attach (ticket_id of an open ticket the message points at or asks for again — a duplicate is attached, never accepted twice), stop (ticket_id a person asked to stop) or ignore (reason). Items are processed independently.',
     parameters: {
       items: { type: 'array', required: true, items: { type: 'object', additionalProperties: true }, description: 'Routing items: { trigger_id, kind, title?, scope?, reason?, acknowledgement?, ticket_id?, name?, note?, rules?, repo? }. repo (owner/name, a repository the team members work in) sends an accepted ticket to a member working in that repository. For an inferred candidate, rules names the enabled rules it matches (required to accept; observe mode records it as would-accept); rules: [] records an assessed ignore.' },
     },
@@ -119,11 +148,11 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
       if (h === undefined) return { ...notRouter }
       if (args.kind === 'candidate') {
         const candidate = h.engine.candidate(String(args.trigger_id ?? ''))
-        return candidate === undefined ? { ok: false, code: 'none', error: 'no Eval holds that trigger' } : { ok: true, candidate: json(candidate) }
+        return candidate === undefined ? { ok: false, code: 'none', error: h.wrongId('trigger', String(args.trigger_id ?? '')) } : { ok: true, candidate: json(candidate) }
       }
       if (args.kind === 'ticket') {
         const ticket = h.ticket(String(args.ticket_id ?? ''))
-        return ticket === undefined ? { ok: false, code: 'unknownTicket', error: 'no such ticket' } : { ok: true, ticket: json(ticket) }
+        return ticket === undefined ? { ok: false, code: 'unknownTicket', error: h.wrongId('ticket', String(args.ticket_id ?? '')) } : { ok: true, ticket: json(ticket) }
       }
       if (args.kind === 'tickets') {
         const tickets = h.store.tickets.list().slice(0, 50).map(t => ({ id: t.id, title: t.title, ended: t.ended ?? null, stage: h.ticket(t.id)?.stage ?? null, origin: t.origin }))
@@ -135,7 +164,7 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
 
   ctx.tools.register(defineTool({
     name: 'superagent_reply',
-    description: 'Team router only: send a short message to the conversation a rule allows — purpose answer (a person\'s question, trigger_id), result (a ticket\'s usable result, ticket_id) or attention (a ticket\'s stored question for a person, ticket_id, question copied exactly). Progress stays internal.',
+    description: 'Team router only: send a short message to the conversation a rule allows — purpose answer (a person\'s question, trigger_id), result (a ticket\'s usable result, ticket_id) or attention (a ticket\'s stored question for a person, ticket_id, question copied exactly — the host puts it in front of your text when the text does not already carry it). Progress stays internal.',
     parameters: {
       purpose: { type: 'string', required: true, description: 'answer | result | attention' },
       text: { type: 'string', required: true, description: 'The message, in the request\'s language.' },
@@ -151,8 +180,29 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
       if (!['answer', 'result', 'attention'].includes(args.purpose)) return { ok: false, code: 'purpose', error: 'purpose must be answer, result or attention' }
       const text = str(args.text)
       if (text === undefined) return { ok: false, code: 'missing', error: 'text is required' }
-      const request = { purpose: args.purpose as 'answer' | 'result' | 'attention', text, ...(str(args.ticket_id) !== undefined ? { ticketId: str(args.ticket_id)! } : {}), ...(str(args.trigger_id) !== undefined ? { triggerId: str(args.trigger_id)! } : {}), ...(str(args.question) !== undefined ? { question: str(args.question)! } : {}) } as ReplyRequest
-      try { const reply = h.engine.reply(request); return { ok: true, reply: json(reply) } } catch (error) { return failure(error) }
+      // An attention reply is the person's only sight of the member's question: carry it verbatim (router acceptance RJ8).
+      const question = str(args.question)
+      const sent = args.purpose === 'attention' && question !== undefined ? attentionText(text, question) : text
+      const request = { purpose: args.purpose as 'answer' | 'result' | 'attention', text: sent, ...(str(args.ticket_id) !== undefined ? { ticketId: str(args.ticket_id)! } : {}), ...(str(args.trigger_id) !== undefined ? { triggerId: str(args.trigger_id)! } : {}), ...(str(args.question) !== undefined ? { question: str(args.question)! } : {}) } as ReplyRequest
+      try { const reply = h.engine.reply(request); return { ok: true, reply: json(reply) } } catch (error) { return refusal(h, error, { ...(str(args.trigger_id) !== undefined ? { trigger: str(args.trigger_id)! } : {}), ...(str(args.ticket_id) !== undefined ? { ticket: str(args.ticket_id)! } : {}) }) }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'superagent_note',
+    description: 'Team router only: give an open ticket\'s member a fact it should know (something learned after the ticket was accepted), delivered as "note from the router". It informs and grants nothing: it cannot end, stop or widen the ticket. New work is a new request, not a note.',
+    parameters: {
+      ticket_id: { type: 'string', required: true, description: 'The open ticket.' },
+      text: { type: 'string', required: true, description: 'The fact, in the request\'s language.' },
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('superagent note', value) },
+    presentCall: args => ({ card: 'generic', title: `superagent note ${String(args.ticket_id)}`, kind: 'other', rawInput: args }),
+    execute: async (args: { ticket_id: string; text: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = asRouter(exec)
+      if (h === undefined) return { ...notRouter }
+      const text = str(args.text)
+      if (text === undefined) return { ok: false, code: 'missing', error: 'text is required' }
+      try { const ticket = h.engine.note(String(args.ticket_id ?? ''), text); h.pass(); return { ok: true, ticket_id: ticket.id } } catch (error) { return refusal(h, error, { ticket: String(args.ticket_id ?? '') }) }
     },
   }))
 
@@ -165,7 +215,7 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
     execute: async (args: { ticket_id: string }, exec): Promise<Record<string, JsonValue>> => {
       const h = asRouter(exec)
       if (h === undefined) return { ...notRouter }
-      try { return { ok: true, requested: h.engine.requestStatus(String(args.ticket_id ?? '')) } } catch (error) { return failure(error) }
+      try { return { ok: true, requested: h.engine.requestStatus(String(args.ticket_id ?? '')) } } catch (error) { return refusal(h, error, { ticket: String(args.ticket_id ?? '') }) }
     },
   }))
 
@@ -173,24 +223,28 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
     name: 'a2a_ticket_report',
     description: 'Team member only: report on the superagent ticket assigned to you (upstream orchestrator_report). state: progress (something changed the person must know), waiting (you wait for a Trigger), ready (the result can be reviewed or used — put the pull request link in the summary), blocked or failed (you cannot go on), dropped (nothing to do). question: one concrete question when the ticket owner must decide; null clears an open one.',
     parameters: {
+      ticket_id: { type: 'string', required: true, description: 'The ticket this report is about: the id on its assignment card.' },
       state: { type: 'string', required: true, description: 'progress | waiting | ready | blocked | failed | dropped' },
       summary: { type: 'string', required: true, description: 'What changed, with evidence; links for results.' },
       question: { type: 'string', description: 'One concrete question for the ticket owner; empty to keep, "null" to clear.' },
+      pull_request: { type: 'string', description: 'The URL of the pull request this ticket opened. The ticket then ends when that pull request merges or closes.' },
       answers: { type: 'string', description: 'The trigger id of the person\'s question this report answers.' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('ticket report', value) },
     presentCall: args => ({ card: 'generic', title: `ticket report: ${String(args.state)}`, kind: 'other', rawInput: args }),
-    execute: async (args: { state: string; summary: string; question?: string; answers?: string }, exec): Promise<Record<string, JsonValue>> => {
+    execute: async (args: { ticket_id: string; state: string; summary: string; question?: string; answers?: string; pull_request?: string }, exec): Promise<Record<string, JsonValue>> => {
       const h = host()
       const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
       if (h === undefined || me === undefined || h.roleOf(me) !== 'member') return { ok: false, code: 'not-member', error: 'a2a_ticket_report serves only the superagent team members the owner named' }
       if (!['progress', 'waiting', 'ready', 'blocked', 'failed', 'dropped'].includes(args.state)) return { ok: false, code: 'state', error: 'state must be progress, waiting, ready, blocked, failed or dropped' }
+      const ticketId = str(args.ticket_id)
+      if (ticketId === undefined) return { ok: false, code: 'missing', error: 'ticket_id is required: the id on the ticket\'s assignment card' }
       const summary = str(args.summary)
       if (summary === undefined) return { ok: false, code: 'missing', error: 'summary is required' }
       const question = args.question === 'null' ? null : str(args.question)
       const report = { state: args.state as 'progress', summary, ...(question !== undefined ? { question } : {}), ...(str(args.answers) !== undefined ? { answers: str(args.answers)! } : {}) }
       // PR-C2: a session serving another host's team reports there, signed by this host's key.
-      const out = h.settings.serves?.members.includes(me) === true ? await h.forwardReport(me, report) : h.report(me, report)
+      const out = h.settings.serves?.members.includes(me) === true ? await h.forwardReport(me, { ...report, ticket_id: ticketId, ...(str(args.pull_request) !== undefined ? { pull_request: str(args.pull_request)! } : {}) }) : h.report(me, report, ticketId, str(args.pull_request))
       return json(out) as Record<string, JsonValue>
     },
   }))
@@ -215,7 +269,7 @@ export function registerSuperagentTools(ctx: Context, host: () => SuperagentHost
     },
   })
   ctx.tools.register(takeUpTool('a2a_ticket_ack', 'ack',
-    'Team member only: acknowledge a person\'s message that reached your ticket before you act on it (upstream orchestrator_ack). It posts your short acknowledgement on that person\'s thread, and the message is yours to handle from then on.',
+    'Team member only: acknowledge a person\'s message that reached your ticket before you act on it (upstream orchestrator_ack). It posts your short acknowledgement on that person\'s thread (for a GitHub comment it is only recorded, nothing is posted), and the message is yours to handle from then on.',
     'text', 'One or two sentences to the person: what you will do with their message, in their language.'))
   ctx.tools.register(takeUpTool('a2a_ticket_handback', 'handback',
     'Team member only: hand back a person\'s message that asks for work beyond your ticket or for another one, so the router assesses it afresh (upstream orchestrator_trigger_handback). Once per message.',

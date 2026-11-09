@@ -76,4 +76,4 @@ WorkbenchMode = 'canvas' | 'data'（依 board.available() 每 poll 派生；canv
 
 - **hoisted 快照**：DSH profile 的 `file:`/`link:` 都是真实副本——host/client 面改动必须 rebuild + profile 重装 + 重启（技能 `dsh-plugin-dev-test` 为权威）。
 - **发布闸门**（docs/release-gate.md）：候选先上 3081 测试环境（本地 tgz 装稳定路径），用户校验通过才 `npm publish` 与生产部署；稳定期不自动发版。
-- 设计决策档案：`intent/2026-10-19-a2a-workbench.md`（0.6.0 决策）、`intent/2026-10-19-release-gate-3081.md`（闸门）、`docs/canvas-stage-design-system.md`（更早的画布设计系统）。
+- 设计决策档案：`docs/design/2026-10-19-a2a-workbench.md`（0.6.0 决策）、`docs/design/2026-10-19-release-gate-3081.md`（闸门）、`docs/canvas-stage-design-system.md`（更早的画布设计系统）。

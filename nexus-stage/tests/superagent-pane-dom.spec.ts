@@ -93,6 +93,18 @@ describe('team tab', () => {
     expect(act).toHaveBeenLastCalledWith({ action: 'retry', ticket_id: 't-fail' })
   })
 
+  it('a question on a ticket an agent asked for is the owner\'s to answer here', async () => {
+    const { pane, act } = mount()
+    pane.update(state({ tickets: [ticket('t-bot', { attention: { question: '用哪种格式？' }, stage: { stage: 'person', action: 'answer' }, channels: [{ source: 'a2a', thread: 'a2a:ctx' }] })] }), sessions, NOW)
+    const card = pane.root.querySelector<HTMLElement>('.wb-sa-ticket')!
+    const box = card.querySelector('textarea')!
+    box.value = '用 CSV'
+    button(card, '回答').click()
+    await flush()
+    expect(act).toHaveBeenCalledWith({ action: 'answer', ticket_id: 't-bot', text: '用 CSV' })
+    expect(box.value).toBe('')
+  })
+
   it('the request box is the workbench Source; a thread shows the request, the decision and the reply as text', async () => {
     const { pane, act } = mount()
     pane.update(state(), sessions, NOW)
@@ -107,6 +119,28 @@ describe('team tab', () => {
     button(pane.root, '提交需求').click()
     await flush()
     expect(act).toHaveBeenCalledWith({ action: 'request', text: '再加一个导出按钮' })
+  })
+
+  it('a turned-down request offers 重新判断 once; an accepted one or one being judged does not', async () => {
+    const { pane, act } = mount()
+    const thread = (over: Record<string, unknown>) => ({ key: 'workbench:th-no', ref: { source: 'workbench', id: 'th-no' }, createdAt: at(30), lastAt: at(20), evaluating: null,
+      triggers: [{ id: 'tr-no', actor: { source: 'workbench', id: 'owner' }, at: at(30), text: '把导出按钮做了', disposition: null }],
+      decisions: [{ id: 'd-no', kind: 'ignore', at: at(25), triggerIds: ['tr-no'], reason: [{ code: 'said', values: { text: '不在规则内' } }] }], replies: [], ...over })
+    pane.update(state({ threads: [thread({}), ...state().threads] } as never), sessions, NOW)
+    pane.select('request')
+    const card = pane.root.querySelector<HTMLElement>('.wb-sa-thread[data-thread="th-no"]')!
+    const again = Array.from(card.querySelectorAll('button')).find(b => b.textContent === '重新判断')!
+    expect(again).toBeDefined()
+    again.click()
+    await flush()
+    expect(act).toHaveBeenCalledWith({ action: 'reevaluate', trigger_id: 'tr-no' })
+    expect(again.disabled).toBe(true)
+    // The accepted thread has no such button; nor does a thread the router is judging right now.
+    const accepted = pane.root.querySelector<HTMLElement>('.wb-sa-thread[data-thread="th-ask"]')!
+    expect(Array.from(accepted.querySelectorAll('button')).some(b => b.textContent === '重新判断')).toBe(false)
+    pane.update(state({ threads: [thread({ evaluating: { id: 'e', triggerIds: ['tr-no'] } })] } as never), sessions, NOW + 120_000)
+    pane.select('request')
+    expect(Array.from(pane.root.querySelectorAll('button')).some(b => b.textContent === '重新判断')).toBe(false)
   })
 
   it('a refused write is said, and the input is kept', async () => {

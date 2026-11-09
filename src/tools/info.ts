@@ -515,7 +515,8 @@ export function createInfoTools(deps: InfoToolsDeps) {
       }> => {
         a2aJoinGateRefusal(exec)
         // S5 open plane: the unscoped snapshot, as before.
-        if (!config.teamScopeInfo) {
+        // The owner panel's live value, as a2a_teams reads it (#454): a hot change applies without a restart.
+        if (!deps.ownerTeamScopeInfo) {
           return {
             ok: true,
             peers: peerStore.list().map(url => ({ url, score: peerStore.score(url) })),
@@ -825,7 +826,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
           return card !== undefined && cardServesJoined(card, joined, resolveLocal)
         }
         if (args.url !== undefined && args.url !== '') {
-          if (config.teamScopeInfo && !(await serves(args.url))) {
+          if (deps.ownerTeamScopeInfo && !(await serves(args.url))) {
             const stale = cardCache.get(args.url)?.card
             if (stale !== undefined && cardServesJoined(stale, joined, resolveLocal)) {
               // Was serving, now unverifiable fresh — probe and report the
@@ -838,7 +839,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
           }
           return { ok: true, results: await Promise.all([args.url].map(probeOne)) }
         }
-        const targets = config.teamScopeInfo
+        const targets = deps.ownerTeamScopeInfo
           ? await mapBounded(peerStore.list(), SWEEP_CONCURRENCY, async (url: string) => await serves(url) ? url : undefined).then(rows => rows.filter((url): url is string => url !== undefined))
           : peerStore.list()
         // Promise.all keeps the report in the store's preference order.
