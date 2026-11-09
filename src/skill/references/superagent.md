@@ -77,7 +77,7 @@ The team page shows all of it and lets the owner edit the rules directly; that w
 
 ## For an observer
 
-The owner can mark a local member as the team's observer on the team page. You join through the canvas, have a member's tools and take tickets like any member. You also have `a2a_ticket_request` (`text`: what needs doing and why): when you notice work nobody has asked for, file it there. The host files it in your name as an agent's request, and the router accepts and assigns it like any other. It cannot stop or change a ticket. An identical text still open returns the same request, and at most five of yours can be open at once (`too-many-open`).
+An observer is a session the owner creates under the `superagent-observer` preset and adds to the canvas team. You join through the canvas, have a member's tools and take tickets like any member. You also have `a2a_ticket_request` (`text`: what needs doing and why): when you notice work nobody has asked for, file it there. The host files it in your name as an agent's request, and the router accepts and assigns it like any other. It cannot stop or change a ticket. An identical text still open returns the same request, and at most five of yours can be open at once (`too-many-open`).
 
 ## Members on other hosts
 
@@ -93,10 +93,11 @@ The owner control route is `/__dsh_a2a/superagent`.
 
 **The team is a canvas team** (design v5). The owner composes it on the canvas — the planning view's 建队, or `/__dsh_a2a/canvas` — with the router and the members, local and on other hosts, then binds it here with `canvas` (the canvas team's name on this host) and `router` (one of its local sessions). Every other session on that canvas is a member, one worker slot each; adding or removing one on the canvas adds it to or removes it from the pool at once. A member removed while it runs a ticket is told to stop, and the ticket starts again on another member. While the team is bound to no canvas (as right after upgrading from a version before canvas teams, which keeps the router and drops the stored pool) or its canvas is gone, nothing is moved: running work stays with its member until the owner binds a canvas again, and the stored router may join the canvas that becomes the team. One session holds one team role: the team's canvas takes no CLI handle and no session that serves another team host, and a team session sits in no other canvas (`[superagent-team-canvas]`).
 
-The router and the members are sessions the owner creates under the team's agent presets, which this plugin ships in its bundle layer: **`superagent-router`** (superagent 总工) for the router and **`superagent-member`** (superagent 团队成员) for each member. The preset is the role's boundary:
+The router and the members are sessions the owner creates under the team's agent presets, which this plugin ships in its bundle layer: **`superagent-router`** (superagent 总工) for the router and **`superagent-member`** (superagent 团队成员) for each member, or **`superagent-observer`** (superagent 团队观察者) for a member who may also open tickets. The preset is the role's boundary:
 
 - `superagent-router`: read-only files, a foreground command and a job wait of at most 5 s, skills and compaction; no subagents.
 - `superagent-member`: the work tools; a foreground command moves to a background job after 5 s, so a stop or a person's answer is taken at the next step; no subagents.
+- `superagent-observer`: the same as `superagent-member`, on the team's own host only.
 
 Settings naming a router or member that runs another preset are refused, and so is `serve`. A session not loaded at the time, or a host without a preset registry, is not checked.
 

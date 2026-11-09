@@ -15,7 +15,6 @@ export interface TeamFieldValues {
   readonly reviewer?: string
   readonly repos?: Readonly<Record<string, string>>
   readonly profiles?: Readonly<Record<string, { readonly role?: string; readonly rules: readonly TeamRule[] }>>
-  readonly observers?: readonly string[]
   readonly dispatch?: string
   readonly members: readonly string[]
   readonly remoteMembers: ReadonlyArray<{ readonly ref: string }>
@@ -136,21 +135,9 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
     const row = el('div', 'wb-sa-rule')
     const role = input(`${memberName(id)} 的角色`, profile?.role ?? '', '一句话：这个成员负责什么')
     const rules = ruleList(profile?.rules ?? [], `${memberName(id)} `)
-    row.append(el('div', 'wb-sa-section-title', memberName(id)), role)
-    // Only a session on this host can hold the tool; a remote member stays a member.
-    let observer: HTMLInputElement | undefined
-    if (s.members.includes(id)) {
-      observer = el('input', '')
-      observer.type = 'checkbox'
-      observer.checked = s.observers?.includes(id) === true
-      observer.setAttribute('aria-label', `${memberName(id)} 是观察者`)
-      const line = el('label', 'wb-sa-hint', ' 观察者：除了接单，还能自己开工单，开的单交总工决定')
-      line.prepend(observer)
-      row.appendChild(line)
-    }
-    row.appendChild(rules.node)
+    row.append(el('div', 'wb-sa-section-title', memberName(id)), role, rules.node)
     profilesBox.appendChild(row)
-    return { id, role, rules, observer }
+    return { id, role, rules }
   })
 
   const githubBox = section('PR 上算人的 GitHub 账号', '工单跟随的 PR 上，这些账号的评论算人写的，其他账号只作参考。一行一个。')
@@ -181,9 +168,6 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
     }
     const sorted = (value: Readonly<Record<string, unknown>>): unknown => Object.fromEntries(Object.entries(value).sort(([x], [y]) => x.localeCompare(y)))
     if (!same(sorted(nextProfiles), sorted(s.profiles ?? {}))) out.profiles = nextProfiles
-
-    const nextObservers = profiles.flatMap(({ id, observer }) => observer?.checked === true ? [id] : [])
-    if (!same([...nextObservers].sort(), [...(s.observers ?? [])].sort())) out.observers = nextObservers
 
     const botList = linesOf(bots.value)
     if (!same(botList, s.bots?.a2a ?? [])) out.bots = { a2a: botList }

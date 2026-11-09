@@ -27,6 +27,8 @@ export type Role = 'router' | 'member' | 'observer'
  */
 export const ROUTER_PRESET = 'superagent-router'
 export const MEMBER_PRESET = 'superagent-member'
+/** A member who may also open tickets (design D15): the preset is what makes a session one. */
+export const OBSERVER_PRESET = 'superagent-observer'
 
 export const ROUTER_TOOLS: readonly string[] = ['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply']
 

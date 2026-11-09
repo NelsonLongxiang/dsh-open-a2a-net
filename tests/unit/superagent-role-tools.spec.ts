@@ -113,6 +113,19 @@ describe('RoleTools', () => {
 })
 
 describe('the team\'s agent presets: shipped in the bundle layer, required of a router and its members', () => {
+  it('the bundle layer declares the observer preset: a member\'s composition with its own persona', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { MEMBER_PRESET, OBSERVER_PRESET } = await import('../../src/superagent/host/role-tools.ts')
+    const layer = readFileSync(new URL('../../cordis.patch.yml', import.meta.url), 'utf8')
+    const block = (id: string): string => { const start = layer.indexOf(`        id: ${id}\n`); expect(start).toBeGreaterThan(0); const next = layer.indexOf('\n    - id: ', start); return layer.slice(start, next < 0 ? undefined : next) }
+    const plugins = (preset: string): string[] => preset.split('\n').filter(line => /^\s+(- id|name): /.test(line) && !/persona|prefix/.test(line) && !line.startsWith('        id:') && !line.startsWith('        name:'))
+    const member = block(MEMBER_PRESET), observer = block(OBSERVER_PRESET)
+    expect(plugins(observer)).toEqual(plugins(member))
+    expect(observer).toContain('a2a_ticket_request')
+    expect(member).not.toContain('a2a_ticket_request')
+    expect(observer).not.toContain('dsh-tool-subagent')
+  })
+
   it('the bundle layer declares the router and member presets the host names', async () => {
     const { readFileSync } = await import('node:fs')
     const { ROUTER_PRESET, MEMBER_PRESET } = await import('../../src/superagent/host/role-tools.ts')

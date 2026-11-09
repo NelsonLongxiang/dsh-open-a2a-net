@@ -23,7 +23,7 @@ import { ReviewRequests } from './review-requests.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
-import { MEMBER_PRESET, ROUTER_PRESET, type Role } from './role-tools.ts'
+import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, type Role } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
 import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 
@@ -114,11 +114,13 @@ const clip = (text: string, cap = TEXT_CAP): string => (text.length > cap ? `${t
  * A router or member session that runs another agent preset than its role's (when its preset is known: a session that is
  * not loaded right now is checked when it is).
  */
-export function presetRefusal(router: string | undefined, members: readonly string[], presetOf: (id: string) => string | undefined): string | undefined {
+export function presetRefusal(router: string | undefined, members: readonly string[], presetOf: (id: string) => string | undefined, served = false): string | undefined {
   const routerPreset = router !== undefined ? presetOf(router) : undefined
   if (routerPreset !== undefined && routerPreset !== ROUTER_PRESET) return `router ${router} runs the ${routerPreset} preset: a team's router runs ${ROUTER_PRESET} (superagent 总工); create it under that preset`
   for (const member of members) {
     const preset = presetOf(member)
+    // An observer files on the host it sits on, which the team's own host alone can admit.
+    if (preset === OBSERVER_PRESET && !served) continue
     if (preset !== undefined && preset !== MEMBER_PRESET) return `member ${member} runs the ${preset} preset: a team's member runs ${MEMBER_PRESET} (superagent 团队成员); create it under that preset`
   }
   return undefined
@@ -284,7 +286,7 @@ export class SuperagentHost {
     })
     this.engine = new Engine({
       repo: this.store,
-      policy: () => teamPolicy(this.settingsValue),
+      policy: () => teamPolicy(this.settings),
       scope: teamScope(() => this.settingsValue),
       assessor, executor, outbox,
       ...(d.now !== undefined ? { now: d.now } : {}),
@@ -340,8 +342,8 @@ export class SuperagentHost {
     return this.settings.members.includes(sessionId) || this.settingsValue.serves?.members.includes(sessionId) === true ? 'member' : undefined
   }
 
-  /** Whether a session is one of this team's observers: named by the owner and still a local member. */
-  isObserver(sessionId: string): boolean { return this.settingsValue.observers.includes(sessionId) && this.settings.members.includes(sessionId) }
+  /** Whether a session is one of this team's observers: a local member created under the observer preset. */
+  isObserver(sessionId: string): boolean { return this.settings.observers.includes(sessionId) }
 
   /** A session's tool list: its role, an observer being a member with one tool more. */
   toolRoleOf(sessionId: string): Role | undefined {
@@ -429,7 +431,7 @@ export class SuperagentHost {
     if (op !== 'assign' && op !== 'input' && op !== 'stop') return { ok: false, code: 'op', error: 'op must be assign, input or stop' }
     // v5 acceptance F4: a serve stored before presets (or a session since swapped) takes no new work on another preset;
     // a stop still reaches it.
-    const wrongPreset = op === 'stop' ? undefined : presetRefusal(undefined, [local], this.d.presetOf ?? (() => undefined))
+    const wrongPreset = op === 'stop' ? undefined : presetRefusal(undefined, [local], this.d.presetOf ?? (() => undefined), true)
     if (wrongPreset !== undefined) { this.noteRefusal('superagent-member-preset', { target: local }); return { ok: false, code: 'preset', error: wrongPreset } }
     if (typeof text !== 'string' || text === '') return { ok: false, code: 'text', error: 'text is required' }
     if (op === 'stop') this.d.cancelTurn?.(local)
@@ -625,7 +627,7 @@ export class SuperagentHost {
 
   /** File an observer's own request (design D15). It reaches the router as any request does; the host only keeps a loop from flooding it. */
   requestForObserver(session: string, text: string): Record<string, unknown> {
-    if (!this.isObserver(session)) return { ok: false, code: 'not-observer', error: 'a2a_ticket_request serves only the observers the owner named on this team' }
+    if (!this.isObserver(session)) return { ok: false, code: 'not-observer', error: 'a2a_ticket_request serves only the sessions on this team created under the observer preset' }
     const open = this.observerOpen(observerActor(session))
     const repeated = open.find(t => t.text === text.trim())
     if (repeated !== undefined) return { ok: true, trigger_id: repeated.id, reused: true }
@@ -727,7 +729,7 @@ export class SuperagentHost {
     if (team === undefined) { const { serves: _gone, ...rest } = this.settingsValue; this.writeSettings(rest); return { ok: true } }
     const bad = members.find(m => !sessionValid(m) || m === this.settingsValue.router || this.settings.members.includes(m))
     if (bad !== undefined) return { ok: false, error: `${bad} must be a joined local session that is neither this team's router nor its member` }
-    const wrongPreset = presetRefusal(undefined, members, presetOf)
+    const wrongPreset = presetRefusal(undefined, members, presetOf, true)
     if (wrongPreset !== undefined) return { ok: false, error: wrongPreset }
     this.writeSettings({ ...this.settingsValue, serves: { url: team.url, key: team.key, members: [...new Set(members)], ...(team.canvas !== undefined ? { team: team.canvas } : {}) } })
     return { ok: true }
@@ -1042,8 +1044,9 @@ export class SuperagentHost {
   get settings(): TeamSettings { return this.derive(this.settingsValue) }
   private derive(stored: TeamSettings): TeamSettings {
     const team = stored.canvas !== undefined ? this.d.canvasTeam?.(stored.canvas) : undefined
-    if (team === undefined) return { ...stored, members: [], remoteMembers: [] }
-    return { ...stored, members: team.local.filter(id => id !== stored.router), remoteMembers: [...team.remote] }
+    if (team === undefined) return { ...stored, members: [], remoteMembers: [], observers: [] }
+    const members = team.local.filter(id => id !== stored.router)
+    return { ...stored, members, remoteMembers: [...team.remote], observers: members.filter(id => this.d.presetOf?.(id) === OBSERVER_PRESET) }
   }
   /** Whether the team is bound to a canvas team that exists here (v5 acceptance F1/F3: otherwise nothing is protected or moved). */
   private teamBound(): boolean { return this.settingsValue.canvas !== undefined && this.d.canvasTeam?.(this.settingsValue.canvas) !== undefined }
@@ -1051,7 +1054,7 @@ export class SuperagentHost {
   servesProblem(): string | undefined {
     const serves = this.settingsValue.serves
     if (serves === undefined) return undefined
-    return presetRefusal(undefined, serves.members, this.d.presetOf ?? (() => undefined))
+    return presetRefusal(undefined, serves.members, this.d.presetOf ?? (() => undefined), true)
   }
   /** Why the team cannot run its canvas as bound, if it cannot (the workbench's 待你处理 shows it). */
   canvasProblem(stored: TeamSettings = this.settingsValue): string | undefined {

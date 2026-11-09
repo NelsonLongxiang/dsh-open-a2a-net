@@ -276,18 +276,6 @@ describe('team tab', () => {
       expect(sent(act)).toMatchObject({ profiles: { [M]: { role: '写代码', rules: [{ name: 'docs', text: '文档类', enabled: true }] } }, dispatch: '看仓库' })
     })
 
-    it('marks a local member as an observer, and sends the list only when it changed', async () => {
-      const { pane, act } = open({ remoteMembers: [{ ref: 'bravo/dddddddd', key: 'k', url: 'u' }] })
-      expect(pane.root.querySelectorAll('input[aria-label$="是观察者"]')).toHaveLength(1)
-      button(pane.root, '保存').click()
-      await flush()
-      expect(sent(act)).not.toHaveProperty('observers')
-      pane.root.querySelector<HTMLInputElement>('input[aria-label$="是观察者"]')!.checked = true
-      button(pane.root, '保存').click()
-      await flush()
-      expect(sent(act)).toMatchObject({ observers: [M] })
-    })
-
     it('the team page says which member is the observer and which ticket it opened', () => {
       const m = mount()
       const base = state()

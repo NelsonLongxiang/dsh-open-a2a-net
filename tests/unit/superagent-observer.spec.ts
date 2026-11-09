@@ -4,38 +4,51 @@ import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { touchesRules } from '../../src/superagent/host/owner-proof.ts'
-import { DEFAULT_SETTINGS, OBSERVER_OPEN_MAX, observerActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy } from '../../src/superagent/host/policy.ts'
+import { DEFAULT_SETTINGS, OBSERVER_OPEN_MAX, observerActor, parseSettings, parseStoredSettings, policyEffects, teamPolicy } from '../../src/superagent/host/policy.ts'
 import { MEMBER_TOOLS, OBSERVER_TOOLS, TEAM_TOOLS, roleToolRefusal } from '../../src/superagent/host/role-tools.ts'
 
-async function team(settings: Record<string, unknown> = { observers: ['session-o'] }) {
+async function team() {
   const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
   const { routeItem } = await import('../../src/superagent/host/tools.ts')
   const sent: Array<[string, string]> = []
   const pool = { ids: ['session-r', 'session-a', 'session-o'] }
+  const presets: Record<string, string> = { 'session-r': 'superagent-router', 'session-a': 'superagent-member', 'session-o': 'superagent-observer' }
   const h = new SuperagentHost({
     canvasTeam: (name: string) => name === 'team' ? { local: pool.ids, remote: [] } : undefined, home: mkdtempSync(join(tmpdir(), 'sa-observer-')), logger: { info: () => {}, warn: () => {} },
     deliverToSession: (id: string, text: string) => { sent.push([id, text]); return true }, interval: () => () => {},
-    memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id,
+    memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id, presetOf: (id: string) => presets[id],
   } as never)
-  expect(h.saveSettings({ canvas: 'team', router: 'session-r', ...settings }, () => true)).toMatchObject({ ok: true })
+  expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true, id => presets[id])).toMatchObject({ ok: true })
   h.start()
   const file = (text: string, who = 'session-o') => h.requestForObserver(who, text) as Record<string, any>
   const route = (item: Record<string, unknown>) => routeItem(h, item as never) as Record<string, any>
-  return { h, sent, pool, file, route, cards: () => sent.filter(([id, t]) => id === 'session-r' && t.startsWith('[superagent candidate]')).map(([, t]) => t) }
+  return { h, sent, pool, presets, file, route, cards: () => sent.filter(([id, t]) => id === 'session-r' && t.startsWith('[superagent candidate]')).map(([, t]) => t) }
 }
 
-describe('settings', () => {
-  const current = { ...DEFAULT_SETTINGS, members: ['m'], remoteMembers: [{ ref: 'dsh/aaaaaaaa@bbbbbbbb', key: 'k', url: 'http://x' }] }
-  it('names local members only, and drops one who left', () => {
-    expect(parseSettings({ observers: ['m', 'm'] }, current)).toMatchObject({ ok: true, settings: { observers: ['m'] } })
-    expect(parseSettings({ observers: ['dsh/aaaaaaaa@bbbbbbbb'] }, current)).toMatchObject({ ok: false, error: expect.stringContaining('not a local member') })
-    expect(parseSettings({}, { ...DEFAULT_SETTINGS, members: [], observers: ['m'] })).toMatchObject({ ok: true, settings: { observers: [] } })
+describe('the preset decides', () => {
+  it('a settings write cannot name an observer, and a stored list is not read', () => {
+    expect(parseSettings({ observers: ['m'] }, { ...DEFAULT_SETTINGS, members: ['m'] })).toMatchObject({ ok: false, error: expect.stringContaining('superagent-observer') })
+    expect(parseStoredSettings({ observers: ['m'] })).toMatchObject({ ok: true, settings: { observers: [] } })
   })
-  it('survives a reload, needs the owner, and moves the policy version', () => {
-    expect(parseStoredSettings({ observers: ['m'] })).toMatchObject({ ok: true, settings: { observers: ['m'] } })
-    expect(touchesRules({ observers: [] })).toBe(true)
-    expect(policyVersion({ ...DEFAULT_SETTINGS, observers: ['m'] })).not.toBe(policyVersion(DEFAULT_SETTINGS))
+  it('reads the role off the pool, and the state shows it', async () => {
+    const m = await team()
+    expect(m.h.settings.observers).toEqual(['session-o'])
+    expect((m.h.state().settings as { observers: string[] }).observers).toEqual(['session-o'])
+    await m.h.stop()
+  })
+  it('joins a team on the canvas, and cannot serve another host\'s team', async () => {
+    const { presetRefusal } = await import('../../src/superagent/host/index.ts')
+    const of = () => 'superagent-observer'
+    expect(presetRefusal(undefined, ['x'], of)).toBeUndefined()
+    expect(presetRefusal(undefined, ['x'], of, true)).toContain('superagent-member')
+    expect(presetRefusal('x', [], of)).toContain('superagent-router')
+  })
+  it('a session whose preset cannot be read has no tool until it is loaded', async () => {
+    const m = await team()
+    delete m.presets['session-o']
+    expect(m.h.toolRoleOf('session-o')).toBe('member')
+    expect(m.file('还要做')).toMatchObject({ ok: false, code: 'not-observer' })
+    await m.h.stop()
   })
 })
 
@@ -113,18 +126,18 @@ describe('filing', () => {
 describe('the gate', () => {
   const observer = { id: 't', source: 'workbench', threads: [], actor: { source: 'workbench', id: observerActor('m') }, human: false, addressed: 'direct', at: '', text: 'x', meta: {} } as never
   const thread = { subscriptions: [] } as never
-  it('admits a named observer in any accept mode, and nobody else with its actor shape', () => {
-    for (const acceptMode of ['off', 'observe', 'auto'] as const) expect(teamPolicy({ ...DEFAULT_SETTINGS, acceptMode, observers: ['m'] }).gate(observer, thread, [])).toMatchObject({ admissible: true, strength: 'explicit' })
+  it('admits a session in the pool in any accept mode, and nobody else with its actor shape', () => {
+    for (const acceptMode of ['off', 'observe', 'auto'] as const) expect(teamPolicy({ ...DEFAULT_SETTINGS, acceptMode, members: ['m'] }).gate(observer, thread, [])).toMatchObject({ admissible: true, strength: 'explicit' })
     expect(teamPolicy(DEFAULT_SETTINGS).gate(observer, thread, [])).toMatchObject({ admissible: false })
     const forged = { ...(observer as object), source: 'a2a', actor: { source: 'a2a', id: observerActor('m') } } as never
-    expect(teamPolicy({ ...DEFAULT_SETTINGS, observers: ['m'] }).gate(forged, thread, [])).toMatchObject({ admissible: false })
+    expect(teamPolicy({ ...DEFAULT_SETTINGS, members: ['m'] }).gate(forged, thread, [])).toMatchObject({ admissible: false })
   })
-  it('a removed observer no longer revalidates, and its open tickets are told', () => {
+  it('an observer who left no longer revalidates, and its open tickets are told when settings change', () => {
     const actor = { source: 'workbench', id: observerActor('m') }
     const mandate = { strength: 'explicit', policyVersion: 'v', actor, scope: 's', basis: { via: 'listed', addressed: 'direct', sender: actor.id, authority: 'observer' } } as never
-    expect(teamPolicy({ ...DEFAULT_SETTINGS, observers: ['m'] }).revalidate(mandate)).toBe(true)
+    expect(teamPolicy({ ...DEFAULT_SETTINGS, members: ['m'] }).revalidate(mandate)).toBe(true)
     expect(teamPolicy(DEFAULT_SETTINGS).revalidate(mandate)).toBe(false)
-    const effects = policyEffects({ ...DEFAULT_SETTINGS, observers: ['m'] }, DEFAULT_SETTINGS, [{ id: 'ticket', mandate } as never])
+    const effects = policyEffects({ ...DEFAULT_SETTINGS, members: ['m'] }, DEFAULT_SETTINGS, [{ id: 'ticket', mandate } as never])
     expect(effects.get('ticket')).toMatchObject({ requesterAllowed: false })
   })
 })
