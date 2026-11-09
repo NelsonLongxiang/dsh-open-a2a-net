@@ -4,7 +4,7 @@
  * The planning view stays unaware of superagent: it hands its frame and card elements to `decorate` after each render,
  * and the 团队 poll hands the team's state to `update`. The bound canvas's frame is marked `superagent 团队`; the router's
  * card says 总工, each member's card says 成员 (and its repository), a member on another host adding （远端）.
- * The role takes the card's second line, in place of the description, so the name keeps the first (172px holds no more).
+ * The role has a line of its own between the name and the description, so neither crowds the other out of the 172px card.
  * @module nexus-stage/planning-team-roles
  */
 import type { SaState } from './wb-superagent'
@@ -70,8 +70,7 @@ export function createTeamRoleDecorator(): TeamRoleDecorator {
       const text = roleText(roles, id)
       el.classList.toggle('is-superagent-router', text === '总工')
       el.classList.toggle('is-superagent-member', text?.startsWith('成员') === true)
-      const line = el.querySelector('.sub-row')
-      if (line !== null) badge(line, 'sa-role', text === undefined ? undefined : roleLabel(text), text)
+      badge(el, 'sa-role', text === undefined ? undefined : roleLabel(text), text)
     }
   }
   return {

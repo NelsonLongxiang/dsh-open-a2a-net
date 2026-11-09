@@ -15,6 +15,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createPlanningView, type PlanningInput } from '../src/planning-view.ts'
 import { matchHits, createPlanningSearch } from '../src/planning-search.ts'
+import { NODE_H } from '../src/world.ts'
 
 const NOW = 72_400
 const mounted: Array<() => void> = []
@@ -95,7 +96,7 @@ describe('W1 search — the board widget', () => {
     expect(cx).toBeGreaterThanOrEqual(-1)
     expect(cy).toBeGreaterThanOrEqual(-1)
     expect(cx + 172 * sc).toBeLessThanOrEqual(1201)
-    expect(cy + 56 * sc).toBeLessThanOrEqual(801)
+    expect(cy + NODE_H * sc).toBeLessThanOrEqual(801)
     // Pulse armed on the picked card, then cleared by the 1.2s timer.
     expect(v.root.querySelector<HTMLElement>('[data-id="zhao"]')!.classList.contains('pulse')).toBe(true)
     vi.advanceTimersByTime(1300)
