@@ -14,6 +14,10 @@ export type A2aNetKey =
   | 'a2a.jump'
   | 'a2a.stageTitle'
   | 'a2a.stageWorkbench'
+  | 'team.addFiles'
+  | 'team.removeFile'
+  | 'team.fileTooBig'
+  | 'team.tooManyFiles'
   | 'team.tab'
   | 'team.guide'
   | 'team.pick'
@@ -31,6 +35,10 @@ export type A2aNetKey =
 
 /** Simplified Chinese dictionary. */
 export const zh: Record<A2aNetKey, string> = {
+  'team.addFiles': '添加文件',
+  'team.removeFile': '移除 {name}',
+  'team.fileTooBig': '{name} 超过 64 MB，发不了',
+  'team.tooManyFiles': '一次最多 {max} 个文件',
   'team.tab': '提需求',
   'team.guide': '把需求交给 superagent 团队，不用离开当前对话',
   'team.pick': '团队',
@@ -61,6 +69,10 @@ export const zh: Record<A2aNetKey, string> = {
 
 /** English dictionary. */
 export const en: Record<A2aNetKey, string> = {
+  'team.addFiles': 'Add files',
+  'team.removeFile': 'Remove {name}',
+  'team.fileTooBig': '{name} is over 64 MB and cannot be sent',
+  'team.tooManyFiles': 'At most {max} files at a time',
   'team.tab': 'Request',
   'team.guide': 'Send a superagent team a request without leaving this conversation',
   'team.pick': 'Team',

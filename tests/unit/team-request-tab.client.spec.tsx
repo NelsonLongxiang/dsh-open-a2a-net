@@ -9,15 +9,16 @@ import { en } from '../../src/client/locales.ts'
 const t = ((key: string, values?: Record<string, string>) => Object.entries(values ?? {}).reduce((text, [name, value]) => text.replace(`{${name}}`, value), (en as Record<string, string>)[key] ?? key)) as never
 const bound = { settings: { canvas: 'ops', router: 'session-r', sources: { workbench: true } } }
 
-function serve(state: unknown, status = 200, post: () => { status: number; body: unknown } = () => ({ status: 200, body: { ok: true, triggerId: 'wb-1' } })) {
-  const fetcher = vi.fn(async (_url: string, init?: RequestInit) => {
-    const reply = init?.method === 'POST' ? post() : { status, body: state }
+const REF = (name: string) => `[A2A file] v1 sha256=${'a'.repeat(64)} size=1 name=${name} from=http://h`
+function serve(state: unknown, status = 200, post: () => { status: number; body: unknown } = () => ({ status: 200, body: { ok: true, triggerId: 'wb-1' } }), blob: (url: string) => { status: number; body: unknown } = url => ({ status: 200, body: { ok: true, ref: REF(new URL(url, 'http://x').searchParams.get('name')!) } })) {
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    const reply = url === '/__dsh_a2a/state' ? { status: 200, body: { zone: 'dsh' } } : url.startsWith('/__dsh_a2a/blob') ? blob(url) : init?.method === 'POST' ? post() : { status, body: state }
     return { ok: reply.status < 300, status: reply.status, json: async () => reply.body } as Response
   })
   vi.stubGlobal('fetch', fetcher)
   return fetcher
 }
-const posts = (f: ReturnType<typeof serve>) => f.mock.calls.filter(([, init]) => init?.method === 'POST').map(([, init]) => JSON.parse(String(init!.body)) as Record<string, unknown>)
+const posts = (f: ReturnType<typeof serve>) => f.mock.calls.filter(([url, init]) => init?.method === 'POST' && !url.startsWith('/__dsh_a2a/blob')).map(([, init]) => JSON.parse(String(init!.body)) as Record<string, unknown>)
 const box = () => screen.getByPlaceholderText(en['team.placeholder']) as HTMLTextAreaElement
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
@@ -74,6 +75,60 @@ describe('the request view', () => {
     serve({}, 500)
     render(<TeamRequestTab t={t} />)
     await screen.findByText(en['team.unreadable'])
+  })
+})
+
+describe('files', () => {
+  const stagedUrls = (f: ReturnType<typeof serve>) => f.mock.calls.map(([url]) => url).filter(url => url.startsWith('/__dsh_a2a/blob'))
+  const add = async (...files: File[]) => { const input = await waitFor(() => screen.getByLabelText(en['team.addFiles'], { selector: 'input' })); fireEvent.change(input, { target: { files } }) }
+  const file = (name: string, size = 3) => new File(['x'.repeat(size)], name)
+
+  it('stages each file for the team and sends one reference line each, after the text', async () => {
+    const f = serve(bound)
+    render(<TeamRequestTab t={t} />)
+    fireEvent.change(await waitFor(box), { target: { value: '看这个' } })
+    await add(file('a.txt'), file('b.txt'))
+    fireEvent.click(screen.getByRole('button', { name: en['team.send'] }))
+    await waitFor(() => { expect(posts(f)).toHaveLength(1) })
+    expect(stagedUrls(f)).toEqual(['a.txt', 'b.txt'].map(name => `/__dsh_a2a/blob?to=${encodeURIComponent('dsh/canvas/ops')}&name=${name}&by=owner`))
+    expect(posts(f)[0]).toEqual({ action: 'request', text: ['看这个', REF('a.txt'), REF('b.txt')].join('\n') })
+    await waitFor(() => { expect(screen.queryByText('a.txt')).toBeNull() })
+  })
+
+  it('can send files with no text', async () => {
+    const f = serve(bound)
+    render(<TeamRequestTab t={t} />)
+    await add(file('a.txt'))
+    fireEvent.click(screen.getByRole('button', { name: en['team.send'] }))
+    await waitFor(() => { expect(posts(f)[0]).toEqual({ action: 'request', text: REF('a.txt') }) })
+  })
+
+  it('sends no request when a file is refused, and keeps the text and the files', async () => {
+    const f = serve(bound, 200, undefined, () => ({ status: 507, body: { ok: false, error: 'store is full' } }))
+    render(<TeamRequestTab t={t} />)
+    fireEvent.change(await waitFor(box), { target: { value: '看这个' } })
+    await add(file('a.txt'))
+    fireEvent.click(screen.getByRole('button', { name: en['team.send'] }))
+    await waitFor(() => { expect(screen.getByRole('status').textContent).toContain('store is full') })
+    expect(posts(f)).toHaveLength(0)
+    expect(box().value).toBe('看这个')
+    expect(screen.getByText('a.txt')).toBeTruthy()
+  })
+
+  it('removes a file, ignores the same file twice, and refuses what the channel cannot take', async () => {
+    serve(bound)
+    render(<TeamRequestTab t={t} />)
+    await add(file('a.txt'))
+    await add(file('a.txt'))
+    expect(screen.getAllByText('a.txt')).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Remove {name}'.replace('{name}', 'a.txt') }))
+    expect(screen.queryByText('a.txt')).toBeNull()
+    const big = file('big.bin'); Object.defineProperty(big, 'size', { value: 64 * 1024 * 1024 + 1 })
+    await add(big)
+    expect(screen.getByRole('status').textContent).toContain('big.bin')
+    await add(...Array.from({ length: 17 }, (_, i) => file(`f${String(i)}.txt`)))
+    expect(screen.getByRole('status').textContent).toContain('16')
+    expect(screen.queryByText('f0.txt')).toBeNull()
   })
 })
 

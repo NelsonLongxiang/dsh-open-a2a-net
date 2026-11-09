@@ -43,7 +43,7 @@ The team page shows all of it and lets the owner edit the rules directly; that w
 
 ## Sending a request from the right bar
 
-DSH's right bar has a **提需求** view in its guide. It sends the text to this instance's team the way the team page does, as the owner's request, without leaving the conversation.
+DSH's right bar has a **提需求** view in its guide. It sends the text to this instance's team the way the team page does, as the owner's request, without leaving the conversation. Files you add go through the file channel, granted to the team's canvas for 24 hours, and the request carries a `[A2A file]` line for each; the member pulls them with `a2a_file_fetch`.
 
 ## For the router
 

@@ -21,7 +21,7 @@ Today one DSH instance runs one team. `SuperagentHost` holds one settings file, 
 
 ### The right-bar view
 
-- **M7 A tab of its own.** A tab type `a2a-team-request` in `sidebar.right.pane.tab`, opened from the right bar's guide. It has a team picker, a text box and a send button, and shows whether the request was taken.
+- **M7 A tab of its own.** A tab type `a2a-team-request` in `sidebar.right.pane.tab`, opened from the right bar's guide. It has a team picker, a text box, files and a send button, and shows whether the request was taken. Files go through the file channel: staged on this host, granted to the team's canvas, with one reference line each in the request.
 - **M8 What the picker lists.** This instance's teams that have a router, then teams on linked instances. A linked instance advertises a team on its signed card only while that team's A2A Source is on, because otherwise nothing can reach it.
 
 ### Sending to another instance

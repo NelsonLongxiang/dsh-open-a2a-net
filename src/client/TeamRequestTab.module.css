@@ -88,3 +88,35 @@
 .error {
   color: var(--dsh-danger, #e5534b);
 }
+
+.files {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.attach,
+.remove {
+  border: none;
+  background: none;
+  color: var(--dsh-accent, #4c8bf5);
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+
+.fileName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

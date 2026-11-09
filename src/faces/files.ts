@@ -17,7 +17,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Config } from '../index.ts'
-import { BLOB_FILE_MAX, type BlobStore } from '../blob-store.ts'
+import { BLOB_FILE_MAX, formatFileRef, type BlobStore } from '../blob-store.ts'
 import type { CanvasStore } from '../canvas-store.ts'
 import { isRootOriginUrl } from '../origin-claim.ts'
 import { claimCovers } from '../task-auth.ts'
@@ -33,6 +33,8 @@ export interface FileFaceDeps {
   readonly ctx: Context
   readonly config: Pick<Config, 'apiKey' | 'team'>
   readonly blobStore: BlobStore
+  /** This host's origin as its card names it; '' until it publishes one. */
+  readonly ownOrigin?: () => string
   readonly canvasStore: Pick<CanvasStore, 'membersOf'> & Partial<Pick<CanvasStore, 'ownerKeyOf'>>
   readonly verifyOriginClaim: (req: IncomingMessage, options?: { readonly cli?: boolean }) => Promise<OriginClaimResult>
   /** #317: the peer-face key gate — this host's apiKey, or a link key from the verified peer it belongs to. */
@@ -145,7 +147,9 @@ export function registerFileFaces(webServer: WebServer, d: FileFaceDeps): void {
       req.on('end', () => {
         if (over) { json(res, 413, { ok: false, code: 'too-large', error: `the file channel takes at most ${String(BLOB_FILE_MAX)} bytes` }); return }
         const staged = blobStore.stage(Buffer.concat(chunks), { name, to, by })
-        json(res, staged.ok ? 200 : staged.code === 'too-large' ? 413 : staged.code === 'full' ? 507 : 400, { ...staged })
+        // The reference names this host as its card does, which a page reached by another address cannot know.
+        const from = d.ownOrigin?.() ?? ''
+        json(res, staged.ok ? 200 : staged.code === 'too-large' ? 413 : staged.code === 'full' ? 507 : 400, { ...staged, ...(staged.ok && from !== '' ? { ref: formatFileRef({ sha256: staged.sha256, size: staged.size, name: staged.name, from }) } : {}) })
       })
     }),
   }), 'a2a: file-channel stage face')
