@@ -451,16 +451,22 @@ let superagentBusy = false
 async function pollSuperagent(): Promise<void> {
   if (superagentBusy) return
   superagentBusy = true
+  // A switch while this read is out: its answer is the old team's, and must not be shown as the new one's.
+  const asked = selectedTeam
   try {
     const [res, list] = await Promise.all([
-      controlFetch(`/__dsh_a2a/superagent${selectedTeam !== '' ? `?teamId=${encodeURIComponent(selectedTeam)}` : ''}`, { cache: 'no-store' }),
+      controlFetch(`/__dsh_a2a/superagent${asked !== '' ? `?teamId=${encodeURIComponent(asked)}` : ''}`, { cache: 'no-store' }),
       controlFetch('/__dsh_a2a/superagent/teams', { cache: 'no-store' }),
     ])
     const { teams = [] } = list.ok ? await list.json() as { teams?: SaState['teams'] } : {}
-    const state = res.ok ? { ...await res.json() as SaState, teams, selectedTeam } : null
+    if (asked !== selectedTeam) return
+    const state = res.ok ? { ...await res.json() as SaState, teams, selectedTeam: asked } : null
     bench.updateSuperagent(state)
     teamRoles.update(state)
-  } catch { bench.updateSuperagent(null); teamRoles.update(null) } finally { superagentBusy = false }
+  } catch { bench.updateSuperagent(null); teamRoles.update(null) } finally {
+    superagentBusy = false
+    if (asked !== selectedTeam) void pollSuperagent()
+  }
 }
 
 async function poll(): Promise<void> {

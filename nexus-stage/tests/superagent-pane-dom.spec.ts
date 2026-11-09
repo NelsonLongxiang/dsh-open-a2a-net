@@ -220,6 +220,45 @@ describe('team tab', () => {
       expect(addTeam).toHaveBeenCalledWith('new', router.value)
       expect(selectTeam).toHaveBeenCalledWith('bbbbbbbb')
     })
+    const editSettings = (pane: ReturnType<typeof open>['pane']) => {
+      pane.select('settings')
+      const mode = pane.root.querySelector<HTMLSelectElement>('select[aria-label="接单模式"]')!
+      mode.value = 'auto'
+      mode.dispatchEvent(new Event('change'))
+    }
+    const toPrimary = (picker: HTMLSelectElement) => { picker.value = ''; picker.dispatchEvent(new Event('change')) }
+
+    it('keeps unsaved settings when the person declines to switch', () => {
+      const { pane, picker, selectTeam } = open()
+      editSettings(pane)
+      vi.stubGlobal('confirm', () => false)
+      toPrimary(picker)
+      vi.unstubAllGlobals()
+      expect(selectTeam).not.toHaveBeenCalled()
+      expect(picker.value).toBe('aaaaaaaa')
+      expect(pane.root.querySelector<HTMLSelectElement>('select[aria-label="接单模式"]')!.value).toBe('auto')
+    })
+
+    it('drops unsaved settings on a switch, so they cannot be saved to the other team', () => {
+      const { pane, picker, selectTeam } = open()
+      editSettings(pane)
+      vi.stubGlobal('confirm', () => true)
+      toPrimary(picker)
+      vi.unstubAllGlobals()
+      expect(selectTeam).toHaveBeenCalledWith('')
+      expect(pane.root.querySelector('select[aria-label="接单模式"]')).toBeNull()
+      pane.update({ ...state(), teams, selectedTeam: '', canvases: ['ops', 'docs', 'new'] }, sessions, NOW)
+      expect(pane.root.querySelector<HTMLSelectElement>('select[aria-label="接单模式"]')!.value).toBe('observe')
+    })
+
+    it('ignores the old team\'s state arriving after a switch', () => {
+      const { pane, picker } = open()
+      pane.select('settings')
+      toPrimary(picker)
+      pane.update({ ...state(), teams, selectedTeam: 'aaaaaaaa', canvases: [] }, sessions, NOW)
+      expect(pane.root.querySelector('select[aria-label="接单模式"]')).toBeNull()
+    })
+
     it('asks for both, and shows a refusal', async () => {
       const { pane, addTeam } = open()
       button(pane.root, '新增团队').click()

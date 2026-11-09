@@ -211,7 +211,12 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   const teamSelect = el('select', 'wb-sa-select')
   teamSelect.setAttribute('aria-label', '当前团队')
   // Blurred at once: a select that keeps focus counts as typing, and would hold back the new team's view.
-  teamSelect.addEventListener('change', () => { deps.selectTeam?.(teamSelect.value); teamSelect.blur() })
+  teamSelect.addEventListener('change', () => {
+    // Unsaved edits belong to the team they were made for: a save after the switch would write them to the other one.
+    if (settingsDirty && typeof window.confirm === 'function' && !window.confirm('设置里还有没保存的修改，切换团队会丢弃它们。继续吗？')) { teamSelect.value = last?.selectedTeam ?? ''; return }
+    switchTeam(teamSelect.value)
+    teamSelect.blur()
+  })
   const addTeamToggle = el('button', 'wb-btn', '新增团队')
   addTeamToggle.type = 'button'
   const addTeamBox = el('div', 'wb-sa-addteam')
@@ -230,6 +235,15 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   /** A press in progress inside the pane: a rebuild between pointerdown and click would swallow the click. */
   let pressing = false
   let teamOptions = ''
+  /** The team just asked for: until its state arrives the old one's view is gone, so nothing can be written from it. */
+  let pendingTeam: string | undefined
+  function switchTeam(id: string): void {
+    pendingTeam = id
+    settingsDirty = false
+    settingsForm = undefined
+    body.replaceChildren()
+    deps.selectTeam?.(id)
+  }
   /** The team picker: rebuilt only when the list changes, and left alone while it is open. */
   function syncTeams(state: SaState | null): void {
     teamBar.hidden = state === null || deps.selectTeam === undefined
@@ -260,7 +274,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
         if (out.ok !== true) { note.textContent = `没有添加成功：${String(out.error ?? '未知原因')}`; return }
         addTeamBox.hidden = true
         note.textContent = `已新增团队 ${canvas.value}`
-        deps.selectTeam?.(String(out.id ?? ''))
+        switchTeam(String(out.id ?? ''))
       })
     })
     addTeamBox.replaceChildren(canvas, router, confirm, el('div', 'wb-sa-hint', '先在画布上建队。总工用 superagent-router 预设，且必须在这个画布里。'))
@@ -595,6 +609,10 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   }
 
   function update(state: SaState | null, rows: readonly SaSession[], at: number): { badge: string; tone?: RailTone } {
+    if (pendingTeam !== undefined) {
+      if (state !== null && state.selectedTeam !== pendingTeam) return { badge: '' }
+      pendingTeam = undefined
+    }
     last = state
     sessions = rows
     now = at
