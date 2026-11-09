@@ -71,6 +71,22 @@ describe('#91 F2 — a2a_file_fetch across two hosts', () => {
     } finally { await dispose() }
   }, 90_000)
 
+  it('a session on a canvas of this host pulls what was granted to that canvas, by the reference the stage face gives', async () => {
+    const { b, ws, fetchFile, dispose } = await pair()
+    try {
+      const id = String((b.agents.agent as unknown as { id: unknown }).id)
+      await post(`${b.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: 'ops' })
+      await post(`${b.baseUrl}/__dsh_a2a/canvas`, { action: 'add-member', name: 'ops', id })
+      const staged = await stage(b, '给团队的件', 'bb/canvas/ops', '需求.md')
+      expect(staged.ref).toContain(`from=${new URL(b.baseUrl).origin}`)
+      const out = await fetchFile(staged.ref as string)
+      expect(out, JSON.stringify(out)).toEqual(expect.objectContaining({ ok: true, name: '需求.md' }))
+      expect(readFileSync(join(ws, 'a2a-inbox', `${sha('给团队的件').slice(0, 12)}-需求.md`), 'utf8')).toBe('给团队的件')
+      const other = await stage(b, '别的团队', 'bb/canvas/other', 'x.md')
+      expect(await fetchFile(other.ref as string)).toEqual(expect.objectContaining({ ok: false, code: 'not-granted' }))
+    } finally { await dispose() }
+  }, 90_000)
+
   it('an isolated host refuses to pull at all', async () => {
     const { a, fetchFile, dispose } = await pair({ isolated: true })
     try {
