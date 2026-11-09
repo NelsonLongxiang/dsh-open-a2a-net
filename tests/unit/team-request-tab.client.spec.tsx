@@ -102,6 +102,31 @@ describe('several teams', () => {
   })
 })
 
+describe('a team on another instance', () => {
+  const remote = { id: 'remote:z/canvas/far@abcd1234', canvas: 'far', address: 'z/canvas/far@abcd1234', open: true, remote: true, host: 'node-b' }
+  it('says whose message it is, sends it as this session, and names the sender', async () => {
+    const f = serve({ teams: [row('', 'ops'), remote] }, 200, () => ({ status: 200, body: { delivered: true, sender: 'dsh/aaaaaaaa' } }))
+    render(<TeamRequestTab t={t} sessionId="session-aaaaaaaa" />)
+    fireEvent.change(await waitFor(box), { target: { value: '远端的活' } })
+    expect(screen.queryByText(en['team.remoteHint'])).toBeNull()
+    expect(screen.getByRole('option', { name: 'far（node-b）' })).toBeTruthy()
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: remote.id } })
+    expect(screen.getByText(en['team.remoteHint'])).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: en['team.send'] }))
+    await waitFor(() => { expect(screen.getByRole('status').textContent).toContain('dsh/aaaaaaaa') })
+    expect(posts(f)).toEqual([{ action: 'send', address: remote.address, session: 'session-aaaaaaaa', text: '远端的活' }])
+    expect(f.mock.calls.find(([, init]) => init?.method === 'POST')![0]).toBe('/__dsh_a2a/superagent/teams')
+  })
+  it('keeps the text and shows why when the route is refused', async () => {
+    serve({ teams: [remote] }, 200, () => ({ status: 200, body: { ok: false, error: 'join this session first' } }))
+    render(<TeamRequestTab t={t} sessionId="session-aaaaaaaa" />)
+    fireEvent.change(await waitFor(box), { target: { value: '做' } })
+    fireEvent.click(screen.getByRole('button', { name: en['team.send'] }))
+    await waitFor(() => { expect(screen.getByRole('status').textContent).toContain('join this session first') })
+    expect(box().value).toBe('做')
+  })
+})
+
 describe('files', () => {
   const stagedUrls = (f: ReturnType<typeof serve>) => f.mock.calls.map(([url]) => url).filter(url => url.startsWith('/__dsh_a2a/blob'))
   const add = async (...files: File[]) => { const input = await waitFor(() => screen.getByLabelText(en['team.addFiles'], { selector: 'input' })); fireEvent.change(input, { target: { files } }) }

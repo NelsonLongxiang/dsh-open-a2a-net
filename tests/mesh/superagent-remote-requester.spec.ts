@@ -24,7 +24,7 @@ describe('superagent v5-B2: a requester on another host', () => {
   it('routes to the team host\'s canvas address and is answered on the canvas\'s behalf — host-face settlement on its own host', async () => {
     const [pA, pC] = await Promise.all([reservePort(), reservePort()])
     const A = await bootNode({ name: 'A', session: 'hostA', team: 'alpha', agentId: R_ID, port: pA, peers: [url(pC)], home: tmpHome(), sessionNodes: true, superagent: true } as never)
-    const C = await bootNode({ name: 'C', session: 'hostC', team: 'charlie', agentId: C_ID, port: pC, peers: [url(pA)], home: tmpHome(), silent: true, sessionNodes: true } as never)
+    const C = await bootNode({ name: 'C', session: 'hostC', team: 'charlie', agentId: C_ID, port: pC, peers: [url(pA)], home: tmpHome(), silent: true, sessionNodes: true, superagent: true } as never)
     try {
       for (const [n, id] of [[A, R_ID], [C, C_ID]] as const) expect((await postJson(n.baseUrl, '/__dsh_a2a/join', { id })).status).toBe(200)
       const requester = 'charlie/cccccccc'
@@ -38,6 +38,15 @@ describe('superagent v5-B2: a requester on another host', () => {
       expect(qualified).toMatch(/^alpha\/canvas\/team@[0-9a-f]{8}$/)
       // A's owner links C's session by hand (a canvas remote reference): the transport admits it (Q1).
       expect(await post(A, '/__dsh_a2a/canvas', { action: 'add-member', name: 'requesters', id: requester, peer: url(pC) })).toMatchObject({ ok: true })
+
+      // Design M8/M9: C's team list has A's team, and only a listed team on a joined session can be sent to.
+      await vi.waitFor(async () => {
+        await get(C, '/__dsh_a2a/state')
+        const row = (await get(C, '/__dsh_a2a/superagent/teams')).teams?.find((x: any) => x.remote === true)
+        expect(row).toMatchObject({ canvas: 'team', address: qualified, open: true })
+      }, { timeout: 30_000 })
+      expect(await post(C, '/__dsh_a2a/superagent/teams', { action: 'send', address: 'alpha/canvas/other@00000000', session: C_ID, text: 'x' })).toMatchObject({ ok: false, code: 'not-listed' })
+      expect(await post(C, '/__dsh_a2a/superagent/teams', { action: 'send', address: qualified, session: 'session-nobody', text: 'x' })).toMatchObject({ ok: false, code: 'not-joined' })
 
       // C: a teamless session has no network (S3) …
       const teamless = await tool(C, 'a2a_route', { team: qualified, message: '无团队的请求', async: true })
@@ -63,6 +72,10 @@ describe('superagent v5-B2: a requester on another host', () => {
       await vi.waitFor(async () => { expect((await owedOnC()).some(t => t.taskId === taskId)).toBe(false) }, { timeout: 30_000 })
       const archived = (await get(C, '/__dsh_a2a/state')).archived as any[]
       expect(archived.find(r => r.taskId === taskId)).toMatchObject({ outcome: 'abandoned', settledBy: { chain_role: 'host-face' } })
+      // The right bar's way in reaches the same mailbox, as the same session.
+      const sent = await post(C, '/__dsh_a2a/superagent/teams', { action: 'send', address: qualified, session: C_ID, text: '从右栏发的需求' })
+      expect(sent, JSON.stringify(sent)).toMatchObject({ sender: requester })
+      await vi.waitFor(() => { expect(texts(A).some(t => t.includes('[superagent candidate]') && t.includes('从右栏发的需求'))).toBe(true) }, { timeout: 40_000 })
     } finally { await A.dispose(); await C.dispose() }
   }, 120_000)
 })

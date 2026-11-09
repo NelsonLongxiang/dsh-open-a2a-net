@@ -20,6 +20,8 @@ export type A2aNetKey =
   | 'team.tooManyFiles'
   | 'team.dropHint'
   | 'team.noFolders'
+  | 'team.sentRemote'
+  | 'team.remoteHint'
   | 'team.tab'
   | 'team.guide'
   | 'team.pick'
@@ -43,6 +45,8 @@ export const zh: Record<A2aNetKey, string> = {
   'team.tooManyFiles': '一次最多 {max} 个文件',
   'team.dropHint': '也可以把多个文件一起拖到这里',
   'team.noFolders': '不能拖入文件夹，请选择里面的文件',
+  'team.sentRemote': '已发给 {team}，由对方团队按自己的规则决定。发送者是 {sender}，回执会回到这个会话',
+  'team.remoteHint': '这支团队在其他实例上：这条消息算当前会话发的，不算你本人。对方要把这个会话列入名单，并开 auto 和对应规则，才会开单。',
   'team.tab': '提需求',
   'team.guide': '把需求交给 superagent 团队，不用离开当前对话',
   'team.pick': '团队',
@@ -79,6 +83,8 @@ export const en: Record<A2aNetKey, string> = {
   'team.tooManyFiles': 'At most {max} files at a time',
   'team.dropHint': 'Or drag several files here at once',
   'team.noFolders': 'Folders cannot be added. Choose the files inside',
+  'team.sentRemote': 'Sent to {team}, whose own rules decide. The sender is {sender}; the receipt comes back to this session',
+  'team.remoteHint': 'This team is on another instance. The message counts as this session\'s, not yours. That team opens a ticket only if it lists this session and runs auto with a matching rule.',
   'team.tab': 'Request',
   'team.guide': 'Send a superagent team a request without leaving this conversation',
   'team.pick': 'Team',
