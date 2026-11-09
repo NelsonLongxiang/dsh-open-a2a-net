@@ -67,6 +67,10 @@ export interface TeamSettings {
   readonly acceptMode: AcceptMode
   /** Proactive rules: an inferred candidate is accepted only on enabled rules its assessment matched. */
   readonly rules: readonly ProactiveRule[]
+  /** Each member's role and the rules of what it takes, by member (design D1). */
+  readonly profiles: Readonly<Record<string, MemberProfile>>
+  /** How the router chooses among members (design D3): free text the owner agreed. */
+  readonly dispatch: string
   /** Sources that listen. The workbench is on by default; the A2A Source is wired in a later PR. */
   readonly sources: { readonly workbench: boolean; readonly a2a: boolean }
   /** How long the router may take over a candidate before its Eval expires (upstream: re-queued twice, then unavailable). */
@@ -76,6 +80,10 @@ export interface TeamSettings {
   /** Who reviews the team's pull requests: one A2A address the owner set and linked (design D5). Absent: nobody is asked. */
   readonly reviewer?: string
 }
+
+/** A member's role and what it takes. */
+export interface MemberProfile { readonly role?: string; readonly rules: readonly ProactiveRule[] }
+export const ROLE_MAX = 200, DISPATCH_MAX = 4_000
 
 /** A canvas team name as the canvas store takes it: 1–40 characters, no `/`, not all digits, no surrounding space. */
 export const validCanvasName = (name: unknown): name is string =>
@@ -97,9 +105,27 @@ export const DEFAULT_SETTINGS: TeamSettings = {
   bots: { a2a: [] },
   acceptMode: 'observe',
   rules: [],
+  profiles: {},
+  dispatch: '',
   sources: { workbench: true, a2a: false },
   evalTimeoutMs: 10 * 60_000,
   paused: false,
+}
+
+/** A rule list, normalized, or the first problem with it. */
+function parseRules(value: unknown, where: string): readonly ProactiveRule[] | string {
+  if (!Array.isArray(value) || value.length > 32) return `${where} must be a list of at most 32 rules`
+  const seen = new Set<string>()
+  const parsedRules: ProactiveRule[] = []
+  for (const rule of value as unknown[]) {
+    const x = (rule ?? {}) as Record<string, unknown>
+    if (typeof x.name !== 'string' || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(x.name) || seen.has(x.name)) return 'each rule needs a unique name of lowercase letters, digits and dashes'
+    if (typeof x.text !== 'string' || x.text.trim() === '' || x.text.length > 2_000) return `rule ${x.name} needs a text of at most 2000 characters`
+    if (x.enabled !== undefined && typeof x.enabled !== 'boolean') return `rule ${x.name}: enabled must be true or false`
+    seen.add(x.name)
+    parsedRules.push({ name: x.name, text: x.text.trim(), enabled: x.enabled !== false })
+  }
+  return parsedRules
 }
 
 /** Validate an owner's settings write; returns the normalized settings or the first problem. */
@@ -152,18 +178,9 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   if (acceptMode !== 'off' && acceptMode !== 'observe' && acceptMode !== 'auto') return { ok: false, error: 'acceptMode must be off, observe or auto' }
   let rules = current.rules
   if ('rules' in r) {
-    if (!Array.isArray(r.rules) || r.rules.length > 32) return { ok: false, error: 'rules must be a list of at most 32 rules' }
-    const seen = new Set<string>()
-    const parsedRules: ProactiveRule[] = []
-    for (const rule of r.rules as unknown[]) {
-      const x = (rule ?? {}) as Record<string, unknown>
-      if (typeof x.name !== 'string' || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(x.name) || seen.has(x.name)) return { ok: false, error: 'each rule needs a unique name of lowercase letters, digits and dashes' }
-      if (typeof x.text !== 'string' || x.text.trim() === '' || x.text.length > 2_000) return { ok: false, error: `rule ${x.name} needs a text of at most 2000 characters` }
-      if (x.enabled !== undefined && typeof x.enabled !== 'boolean') return { ok: false, error: `rule ${x.name}: enabled must be true or false` }
-      seen.add(x.name)
-      parsedRules.push({ name: x.name, text: x.text.trim(), enabled: x.enabled !== false })
-    }
-    rules = parsedRules
+    const parsed = parseRules(r.rules, 'rules')
+    if (typeof parsed === 'string') return { ok: false, error: parsed }
+    rules = parsed
   }
   if ('members' in r || 'remoteMembers' in r) return { ok: false, error: 'the team is a canvas team: add or remove members on the canvas (planning view 建队), then bind it here with canvas and router' }
   if ('serves' in r) return { ok: false, error: 'serving a team is set by its own action (serve-team), which pins the peer key' }
@@ -181,7 +198,25 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
       repos[member] = repo
     }
   } else repos = Object.fromEntries(Object.entries(current.repos ?? {}).filter(([member]) => memberIds.has(member)))
-  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
+  // A member's profile: as repos, named explicitly here or kept while it is still a member.
+  let profiles: Record<string, MemberProfile>
+  if ('profiles' in r) {
+    if (r.profiles === null || typeof r.profiles !== 'object' || Array.isArray(r.profiles)) return { ok: false, error: 'profiles maps a member to its role and rules' }
+    profiles = {}
+    for (const [member, value] of Object.entries(r.profiles as Record<string, unknown>)) {
+      if (!memberIds.has(member)) return { ok: false, error: `profiles: ${member} is not a member` }
+      const x = (value ?? {}) as Record<string, unknown>
+      const role = x.role === undefined || x.role === null ? '' : x.role
+      if (typeof role !== 'string' || role.length > ROLE_MAX) return { ok: false, error: `profiles: ${member} needs a role of at most ${String(ROLE_MAX)} characters` }
+      const memberRules = parseRules(x.rules ?? [], `profiles: ${member} rules`)
+      if (typeof memberRules === 'string') return { ok: false, error: memberRules }
+      if (role.trim() === '' && memberRules.length === 0) continue
+      profiles[member] = { ...(role.trim() !== '' ? { role: role.trim() } : {}), rules: memberRules }
+    }
+  } else profiles = Object.fromEntries(Object.entries(current.profiles ?? {}).filter(([member]) => memberIds.has(member)))
+  const dispatch = 'dispatch' in r ? r.dispatch : current.dispatch ?? ''
+  if (typeof dispatch !== 'string' || dispatch.length > DISPATCH_MAX) return { ok: false, error: `dispatch must be text of at most ${String(DISPATCH_MAX)} characters` }
+  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, profiles, dispatch: dispatch.trim(), sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/
@@ -200,10 +235,11 @@ export function parseRemoteMember(raw: unknown): RemoteMember | undefined {
  */
 export function parseStoredSettings(raw: unknown): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'settings must be an object' }
-  const { members: _members, remoteMembers: _remote, serves, repos, ...rest } = raw as Record<string, unknown>
+  const { members: _members, remoteMembers: _remote, serves, repos, profiles, ...rest } = raw as Record<string, unknown>
   // Repositories are checked against the pool when the owner writes them; here only their shape, for whoever they name.
   const named = repos !== null && typeof repos === 'object' && !Array.isArray(repos) ? Object.keys(repos) : []
-  const parsed = parseSettings(repos === undefined ? rest : { ...rest, repos }, { ...DEFAULT_SETTINGS, members: named })
+  const profiled = profiles !== null && typeof profiles === 'object' && !Array.isArray(profiles) ? Object.keys(profiles) : []
+  const parsed = parseSettings({ ...rest, ...(repos === undefined ? {} : { repos }), ...(profiles === undefined ? {} : { profiles }) }, { ...DEFAULT_SETTINGS, members: [...named, ...profiled] })
   if (!parsed.ok) return parsed
   let served: TeamSettings['serves']
   if (serves !== undefined) {

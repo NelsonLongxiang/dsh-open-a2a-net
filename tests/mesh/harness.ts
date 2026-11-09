@@ -344,3 +344,16 @@ export function craftCard(core: {
   )
   return { card, publicKey: card.publicKey }
 }
+
+/**
+ * A DSH login for tests that write rules through the control route (design D10): the host's own auth route answers 401
+ * without the cookie, and anything else with it. Returns the header to send.
+ */
+export function mockGuiLogin(): { Cookie: string } {
+  const real = globalThis.fetch.bind(globalThis)
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    if (String(input).endsWith('/api/session/a2a-owner-proof')) return new Response('', { status: new Headers(init?.headers).has('cookie') ? 404 : 401 })
+    return await real(input, init)
+  }) as typeof fetch
+  return { Cookie: 'dsh-auth-test=1' }
+}

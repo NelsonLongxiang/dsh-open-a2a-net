@@ -2,13 +2,19 @@
  * superagent design v4, PR-D: the role tool lists (pinned) and how the host applies them.
  */
 import { describe, expect, it } from 'vitest'
-import { MEMBER_TOOLS, ROUTER_TOOLS, RoleTools, roleToolRefusal, type Role, type RoleAgent } from '../../src/superagent/host/role-tools.ts'
+import { Config } from '../../src/config.ts'
+import { MEMBER_TOOLS, ROUTER_TOOLS, RoleTools, TEAM_TOOLS, roleToolRefusal, type Role, type RoleAgent } from '../../src/superagent/host/role-tools.ts'
 
 describe('role tool lists', () => {
+  it('the team\'s own tools are the router\'s and the member\'s ticket tools', () => {
+    expect(TEAM_TOOLS).toEqual([...ROUTER_TOOLS, 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply'])
+    for (const name of ['a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback']) expect(MEMBER_TOOLS).toContain(name)
+  })
+
   it('pins what the router and a member may call', () => {
-    expect(ROUTER_TOOLS).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note'])
+    expect(ROUTER_TOOLS).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply'])
     expect(MEMBER_TOOLS).toEqual(['read', 'write', 'edit', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'job_output', 'job_list', 'job_kill',
-      'web_search', 'web_fetch', 'skill', 'todo_write', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_file_fetch'])
+      'web_search', 'web_fetch', 'skill', 'todo_write', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch'])
   })
 
   it('no role may open or reach sessions, or route or report over A2A', () => {
@@ -24,6 +30,13 @@ describe('role tool lists', () => {
   })
 })
 
+describe('the plugin config', () => {
+  it('runs the team engine unless told not to', () => {
+    expect(Config({}).superagent).toBe(true)
+    expect(Config({ superagent: false }).superagent).toBe(false)
+  })
+})
+
 describe('RoleTools', () => {
   const setup = (roles: Record<string, Role>) => {
     const agents = new Map<string, RoleAgent>()
@@ -31,7 +44,7 @@ describe('RoleTools', () => {
     const scoped = (id: string, known: string[]): RoleAgent => ({
       id,
       // The agent's scope key, under dsh-scope's symbol description, as on a host.
-      ctx: { [Symbol('dsh.scope')]: {}, tools: { get: name => (known.includes(name) ? {} : undefined), restrict: f => { log.push(`${id} restrict ${f.allow.join(',')}`); return () => { log.push(`${id} lift`) } } } },
+      ctx: { [Symbol('dsh.scope')]: {}, tools: { get: name => (known.includes(name) ? {} : undefined), restrict: f => { log.push(`${id} ${f.allow !== undefined ? `restrict ${f.allow.join(',')}` : `deny ${f.deny!.join(',')}`}`); return () => { log.push(`${id} lift`) } } } },
     })
     const tools = new RoleTools({ roleOf: id => roles[id], agentOf: id => agents.get(id), logger: { warn: () => {} } })
     return { agents, log, scoped, tools }
@@ -60,8 +73,34 @@ describe('RoleTools', () => {
     expect(log.slice(1)).toEqual(['r lift', 'r restrict bash'])
     delete roles.r
     tools.sync(r)
-    expect(log.slice(3)).toEqual(['r lift'])
+    expect(log.slice(3)).toEqual(['r lift', 'r deny superagent_route,superagent_status'])
     expect(tools.list()).toEqual({})
+  })
+
+  it('a session with no role is not offered the team\'s tools, until it gets a role', () => {
+    const roles: Record<string, Role> = {}
+    const { log, scoped, tools } = setup(roles)
+    const plain = scoped('p', [...TEAM_TOOLS, 'bash', 'a2a_route'])
+    tools.sync(plain)
+    tools.sync(plain)
+    expect(log).toEqual([`p deny ${TEAM_TOOLS.join(',')}`])
+    expect(tools.list()).toEqual({})
+    roles.p = 'router'
+    tools.sync(plain)
+    expect(log.slice(1)).toEqual(['p lift', `p restrict ${ROUTER_TOOLS.join(',')}`])
+    expect(tools.list()).toEqual({ p: 'router' })
+  })
+
+  it('a context without the tools service does not throw into the session\'s creation', () => {
+    const { tools } = setup({})
+    const ctx = { get tools(): never { throw new Error('cannot get property "tools" without inject') } }
+    expect(() => tools.sync({ id: 'x', ctx } as never)).not.toThrow()
+  })
+
+  it('a session with none of the team\'s tools is left alone', () => {
+    const { log, scoped, tools } = setup({})
+    tools.sync(scoped('p', ['bash']))
+    expect(log).toEqual([])
   })
 
   it('a restriction the registry refuses is logged, never thrown into the agent\'s creation', () => {

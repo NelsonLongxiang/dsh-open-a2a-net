@@ -261,6 +261,31 @@ describe('team tab', () => {
       expect(sent(act)).toMatchObject({ rules: [], reviewer: null })
     })
 
+    it('edits a member\'s role and rules and the dispatch rules; an untouched profile is not rewritten', async () => {
+      const { pane, act } = open({ profiles: { [M]: { role: '写文档', rules: [{ name: 'docs', text: '文档类', enabled: true }] } }, dispatch: '看角色' })
+      expect(q<HTMLTextAreaElement>(pane.root, '派单规则').value).toBe('看角色')
+      expect(pane.root.querySelector<HTMLInputElement>('[aria-label$="的角色"]')!.value).toBe('写文档')
+      button(pane.root, '保存').click()
+      await flush()
+      expect(sent(act)).not.toHaveProperty('profiles')
+      expect(sent(act)).not.toHaveProperty('dispatch')
+      type(pane.root.querySelector<HTMLInputElement>('[aria-label$="的角色"]')!, '写代码')
+      type(q<HTMLTextAreaElement>(pane.root, '派单规则'), '看仓库')
+      button(pane.root, '保存').click()
+      await flush()
+      expect(sent(act)).toMatchObject({ profiles: { [M]: { role: '写代码', rules: [{ name: 'docs', text: '文档类', enabled: true }] } }, dispatch: '看仓库' })
+    })
+
+    it('the team page shows each member\'s role and rules, the team\'s rules, and pending and last changes', () => {
+      const m = mount()
+      const base = state()
+      m.pane.update({ ...base, settings: { ...base.settings, rules: [{ name: 'ops', text: '核对文档', enabled: true }], dispatch: '看角色', profiles: { [M]: { role: '写文档', rules: [{ name: 'docs', text: '文档类', enabled: true }] } } },
+        ruleChanges: { pending: { [`member:${M}`]: { at: at(1), by: M, reason: '想收窄', value: { role: '只写中文文档', rules: [] } } }, last: { team: { at: at(5), by: R, message: '同意' } } } }, sessions, NOW)
+      m.pane.select('team')
+      const page = text(m.pane.root)
+      for (const words of ['写文档', '文档类', '核对文档', '看角色', '待你确认的修改', '想收窄', '只写中文文档', '最近修改', '同意']) expect(page).toContain(words)
+    })
+
     it('an edit survives the poll', () => {
       const { pane } = open()
       button(pane.root, '添加规则').click()

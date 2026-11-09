@@ -60,6 +60,8 @@ export function nodeConfig(file, flags) {
       // composes no agents service, so there is no session to track, expose or wake.
       sessionNodes: true,
       wakeJoinedOnBoot: false,
+      // A superagent team runs on a host with sessions; this node has none.
+      superagent: false,
       dshHome: home,
     },
   }

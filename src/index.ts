@@ -141,7 +141,8 @@ import { NodeStore } from './node-store.ts'
 import { createNodeBinder, NodeBindings } from './node-bind.ts'
 import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
-import { NodeReviewQueue, SessionTaint, localRoute, toolTaint } from './node-self.ts'
+import { NEUTRAL_SOURCES, NodeReviewQueue, SessionTaint, localRoute, toolTaint } from './node-self.ts'
+import { guiOwnerProven, touchesRules } from './superagent/host/owner-proof.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { registerSessionLogFaces } from './faces/session-log.ts'
@@ -2024,7 +2025,7 @@ export function apply(ctx: Context, config: Config): void {
     warn:code=>logger.warn('a2a: sourced followup (%s); check ledger persistence and original task',code),
   })
   const followupRelay = (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string, taskExpected=true): 'inserted'|void => followupDelivery.deliver(agent,text,sender,localFrom,taskId,callerKey,taskExpected)
-  // superagent design v4, PR-B: superagent's domain engine in this host (off unless config.superagent). The router gets
+  // superagent design v4, PR-B: superagent's domain engine in this host (on by default, idle until a team is bound). The router gets
   // candidate cards in its own session (host relay, not A2A) and decides only through the superagent_* tools.
   const superagentHost: SuperagentHost | undefined = config.superagent === true ? new SuperagentHost({
     home: join(home, 'a2a'), logger,
@@ -2068,6 +2069,24 @@ export function apply(ctx: Context, config: Config): void {
       agent.cancel({ kind: 'user' }, { keepInbox: false })
       return true
     },
+    // Design D11: the latest message in the session that is not host context, when a person typed it. `source` is set by
+    // the host on arrival; a nudge the plugin itself sends through the same RPC is marked by its rpcId.
+    personMessage: id => {
+      const agent = sessionNodes.get(id)
+      if (agent === undefined) return undefined
+      for (const event of [...sessionEventsOf(agent)].reverse()) {
+        const e = event as { type?: string; time?: number; data?: { id?: unknown; source?: { kind?: unknown; rpcId?: unknown }; content?: ReadonlyArray<{ type?: string; text?: string }> } } | undefined
+        if (e?.type !== 'user/message') continue
+        const kind = e.data?.source?.kind
+        if (typeof kind === 'string' && NEUTRAL_SOURCES.has(kind)) continue
+        const rpcId = e.data?.source?.rpcId
+        if (kind !== 'user' || (typeof rpcId === 'string' && rpcId.startsWith('a2a-')) || typeof e.data?.id !== 'string' || typeof e.time !== 'number') return undefined
+        const text = (e.data.content ?? []).filter(block => block.type === 'text').map(block => block.text ?? '').join('\n').trim()
+        return text === '' ? undefined : { id: e.data.id, atMs: e.time, text }
+      }
+      return undefined
+    },
+    sessionName: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : `${nodeMetadataOf(agent).name} (${id.replace(/^session-/, '').slice(0, 8)})` },
     memberTurn: id => {
       const agent = sessionNodes.get(id)
       if (agent === undefined) return undefined
@@ -3133,7 +3152,14 @@ export function apply(ctx: Context, config: Config): void {
           const fields = body as Record<string, unknown>
           try {
             if (fields.action === 'settings') {
-              send(200, superagentHost.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf))
+              const save = (): void => { send(200, superagentHost.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf)) }
+              // A shell on this machine passes the control route; a rule change needs what only the owner's browser holds (design D10).
+              if (!touchesRules(fields.settings)) { save(); return }
+              void guiOwnerProven(superagentHomeUrl, req.headers.cookie).then(proven => {
+                if (proven) { save(); return }
+                send(403, { ok: false, code: 'owner-proof', error: '修改规则需要在已登录的 DSH 界面里操作，这个请求没有登录凭据。也可以直接在对话里让总工或成员修改。' })
+              }, (error: unknown) => { send(500, { ok: false, error: String(error) }) })
+              return
             } else if (fields.action === 'request') {
               send(200, superagentHost.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined, fields.via === 'cli' ? 'cli' : undefined))
             } else if (fields.action === 'answer') {

@@ -19,7 +19,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, type Config } from '../../src/index.ts'
 import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { cliEnv } from './harness.ts'
+import { cliEnv, mockGuiLogin } from './harness.ts'
 
 class ManyAgents extends Service {
   map = new Map<string, Agent>()
@@ -60,7 +60,8 @@ async function mount(home: string, extra: Partial<Config> = {}) {
   apply(ctx, { apiKey: '', session: 'host-sess', team: 'dsh', routeTimeoutMs: 5_000, flushTimeoutMs: 300_000, announce: true, agentName: 'sa-host', peers: [], delegates: [], sessionNodes: true, wakeJoinedOnBoot: false, dshHome: home, superagent: true, ...extra } as unknown as Config)
   for (const a of [R!, M!, O!, X!]) ctx.emit('agent/created', { agent: a as unknown as Agent })
   const port = (ctx as unknown as { webServer: { port: number } }).webServer.port
-  const post = async (path: string, body: unknown): Promise<Record<string, any>> => await (await globalThis.fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json() as Record<string, any>
+  const login = mockGuiLogin()
+  const post = async (path: string, body: unknown): Promise<Record<string, any>> => await (await globalThis.fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...login }, body: JSON.stringify(body) })).json() as Record<string, any>
   const sa = async (body: unknown): Promise<Record<string, any>> => await post('/__dsh_a2a/superagent', body)
   const state = async (): Promise<Record<string, any>> => await (await globalThis.fetch(`http://127.0.0.1:${port}/__dsh_a2a/superagent`)).json() as Record<string, any>
   const tool = async (name: string, from: Agent, args: Record<string, unknown>): Promise<Record<string, any>> => await ctx.tools.get(name)!.execute(args, execAs(from)) as Record<string, any>
@@ -421,13 +422,13 @@ describe('superagent engine in the a2a host', () => {
       expect(await m.team(R_ID, [M_ID])).toMatchObject({ ok: true })
 
       // The router: superagent_* only. Its visible tools are exactly those.
-      expect(scopes.get(R_ID)!.allow).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note'])
+      expect(scopes.get(R_ID)!.allow).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply'])
       const statusRun = await run('superagent_read', m.R, { kind: 'tickets' }); expect(statusRun.isError, statusRun.text).toBe(false)
       for (const name of ['a2a_route', 'a2a_report', 'a2a_teams', 'a2a_ticket_report', 'a2a_file_send']) expect(await refusedByRole(name, m.R, { team: 'dsh/c2222222', message: 'x' }), name).toBe(true)
 
       // A member: work tools + a2a_ticket_report + a2a_file_fetch (of this host's tools, the last two). No A2A route, no report
       // outside its ticket, no router tool.
-      expect(scopes.get(M_ID)!.allow).toEqual(['a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_file_fetch'])
+      expect(scopes.get(M_ID)!.allow).toEqual(['a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch'])
       expect(await refusedByRole('a2a_ticket_report', m.M, { ticket_id: 'x', state: 'progress', summary: 'x' })).toBe(false)
       expect(await refusedByRole('a2a_file_fetch', m.M, {})).toBe(false)
       for (const name of ['a2a_route', 'a2a_report', 'a2a_teams', 'a2a_tasks', 'a2a_file_send', 'superagent_route']) expect(await refusedByRole(name, m.M, { team: 'dsh/c2222222', message: 'x' }), name).toBe(true)
@@ -446,7 +447,7 @@ describe('superagent engine in the a2a host', () => {
       expect(await m.team(O_ID, [])).toMatchObject({ ok: true })
       expect(scopes.get(R_ID)).toMatchObject({ allow: undefined, lifted: 1 })
       expect(scopes.get(M_ID)).toMatchObject({ allow: undefined, lifted: 1 })
-      expect(scopes.get(O_ID)!.allow).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note'])
+      expect(scopes.get(O_ID)!.allow).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply'])
       expect(await refusedByRole('a2a_teams', m.R)).toBe(false)
       expect(await refusedByRole('a2a_teams', m.O)).toBe(true)
       expect(await refusedByRole('a2a_route', S, { team: 'dsh/c2222222', message: 'x' })).toBe(false)
