@@ -41,6 +41,10 @@ A change to a rule set is agreed in conversation. The owner talks to the member 
 
 The team page shows all of it and lets the owner edit the rules directly; that write needs the host's GUI login.
 
+## Sending a request from the right bar
+
+DSH's right bar has a **提需求** view in its guide. It sends the text to this instance's team the way the team page does, as the owner's request, without leaving the conversation.
+
 ## For the router
 
 - Candidates arrive in your own session as `[superagent candidate] …` cards. Decide each by its `trigger_id` with `superagent_route`:

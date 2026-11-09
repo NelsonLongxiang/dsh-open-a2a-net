@@ -14,9 +14,37 @@ export type A2aNetKey =
   | 'a2a.jump'
   | 'a2a.stageTitle'
   | 'a2a.stageWorkbench'
+  | 'team.tab'
+  | 'team.guide'
+  | 'team.pick'
+  | 'team.request'
+  | 'team.placeholder'
+  | 'team.send'
+  | 'team.sending'
+  | 'team.sent'
+  | 'team.failed'
+  | 'team.none'
+  | 'team.denied'
+  | 'team.unreadable'
+  | 'team.loading'
+  | 'team.open'
 
 /** Simplified Chinese dictionary. */
 export const zh: Record<A2aNetKey, string> = {
+  'team.tab': '提需求',
+  'team.guide': '把需求交给 superagent 团队，不用离开当前对话',
+  'team.pick': '团队',
+  'team.request': '需求',
+  'team.placeholder': '写清要做什么、为什么。Ctrl/⌘ + Enter 发送',
+  'team.send': '提交',
+  'team.sending': '提交中…',
+  'team.sent': '已提交给 {team}，等总工决定',
+  'team.failed': '没有提交成功：{reason}',
+  'team.none': '这台 DSH 还没有能接需求的团队。先在 A2A 工作台建队，绑定总工。',
+  'team.denied': '这台 DSH 设了控制密钥，这个页面没有权限读取团队。请到 A2A 工作台的「团队」页提交。',
+  'team.unreadable': '暂时读不到团队，稍后再打开试试。',
+  'team.loading': '正在读取团队…',
+  'team.open': '打开团队页',
   'a2a.label': 'A2A 网络',
   'a2a.title': 'A2A 网络动态',
   'a2a.activity': '最近动态',
@@ -33,6 +61,20 @@ export const zh: Record<A2aNetKey, string> = {
 
 /** English dictionary. */
 export const en: Record<A2aNetKey, string> = {
+  'team.tab': 'Request',
+  'team.guide': 'Send a superagent team a request without leaving this conversation',
+  'team.pick': 'Team',
+  'team.request': 'Request',
+  'team.placeholder': 'What needs doing, and why. Ctrl/⌘ + Enter to send',
+  'team.send': 'Send',
+  'team.sending': 'Sending…',
+  'team.sent': 'Sent to {team}. Waiting for the router to decide',
+  'team.failed': 'Not sent: {reason}',
+  'team.none': 'This DSH has no team that can take a request yet. Compose one in the A2A workbench and bind its router.',
+  'team.denied': 'This DSH has a control key, and this page cannot read its teams. Send the request from the Team page of the A2A workbench.',
+  'team.unreadable': 'The team cannot be read right now. Try opening this again later.',
+  'team.loading': 'Reading the teams…',
+  'team.open': 'Open the team page',
   'a2a.label': 'A2A network',
   'a2a.title': 'A2A network activity',
   'a2a.activity': 'Recent activity',
