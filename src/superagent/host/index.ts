@@ -30,7 +30,7 @@ import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, type Role } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
-import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
+import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 
 export interface SuperagentHostDeps {
   /** The a2a home directory; state lives under `<home>/superagent/`. */
@@ -633,7 +633,17 @@ export class SuperagentHost {
       const rule = this.settingsValue.rules.find(r => r.name === name)
       if (rule !== undefined) lines.push(`accepted on team rule ${rule.name}: ${clip(rule.text, 600)}`)
     }
+    lines.push(...this.promptCardLines('communication'))
+    lines.push(...this.promptCardLines('delivery'))
     return lines
+  }
+
+  /** The owner's prompt supplements as card lines (owner 2026-11-10, 对照上游): presets stand; on a clash these lose. */
+  private promptCardLines(which: 'communication' | 'delivery'): string[] {
+    const text = this.settingsValue.prompts?.[which]
+    if (text === undefined || text.trim() === '') return []
+    const head = which === 'communication' ? 'the owner\'s words on how this team talks (they add to the preset; where they clash, the preset stands)' : 'the owner\'s words on what delivery looks like (they add to the preset; where they clash, the preset stands)'
+    return [head + ':', clip(text, PROMPT_MAX)]
   }
 
   /** Give a ticket to another member: one still waiting for its first, or one whose member reported it cannot go on (design D6, D7a). */
@@ -1277,7 +1287,7 @@ export class SuperagentHost {
       if (entry.delivered) continue
       const open = this.store.tickets.list().filter(t => !t.ended)
       const requeued = new Set(entry.candidate.triggers.filter(t => this.store.triggers.disposition(t.id)?.requeued === true).map(t => t.id))
-      if (!this.d.deliverToSession(router, candidateCard(entry.candidate, this.settingsValue, open, requeued, this.teamCardLines()))) return
+      if (!this.d.deliverToSession(router, candidateCard(entry.candidate, this.settingsValue, open, requeued, [...this.teamCardLines(), ...this.promptCardLines('communication')]))) return
       entry.delivered = true
       try { this.engine.candidateDelivered(evalId) } catch (error) { this.d.logger.warn('superagent: candidate %s delivered but not recorded: %s', evalId, String(error)) }
     }

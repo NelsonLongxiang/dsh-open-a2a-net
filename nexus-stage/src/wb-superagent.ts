@@ -51,6 +51,8 @@ export interface SaSettings {
   readonly repos?: Readonly<Record<string, string>>
   /** Which model each role's sessions run (owner 2026-11-10); unset leaves a session's own choice alone. */
   readonly models?: { readonly router?: { provider: string; model: string; reasoningEffort?: string }; readonly member?: { provider: string; model: string; reasoningEffort?: string } }
+  /** The owner's prompt supplements (owner 2026-11-10, 对照上游): communication and delivery; empty is the default. */
+  readonly prompts?: { readonly communication?: string; readonly delivery?: string }
   readonly rules?: readonly TeamRule[]
   readonly profiles?: Readonly<Record<string, { readonly role?: string; readonly rules: readonly TeamRule[] }>>
   readonly observers?: readonly string[]
@@ -661,6 +663,22 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     const fields = buildTeamFields(s, sessionName, mark, () => { void send({ action: 'sync-github-allowed' }, () => { settingsDirty = false }, 'GitHub 账号已同步') })
     form.append(...fields.nodes)
 
+    // The owner's prompt supplements (owner 2026-11-10, 对照上游): how the team talks, and what delivery looks like.
+    // Empty is the default; the presets' own text cannot be edited, and on a clash it stands.
+    const promptBox = (text: string, which: 'communication' | 'delivery', aria: string): HTMLTextAreaElement => {
+      const box = el('textarea', 'wb-sa-prompt')
+      box.setAttribute('aria-label', aria)
+      box.maxLength = 4000
+      box.placeholder = '（留空：按预设默认）'
+      box.value = s.prompts?.[which] ?? ''
+      box.addEventListener('input', mark)
+      form.appendChild(label(text, box))
+      return box
+    }
+    const communication = promptBox('沟通方式补充说明', 'communication', '沟通方式补充说明')
+    const delivery = promptBox('交付要求补充说明', 'delivery', '交付要求补充说明')
+    void communication; void delivery
+
     const save = el('button', 'wb-btn wb-btn-primary', '保存')
     save.type = 'button'
     save.addEventListener('click', () => {
@@ -681,6 +699,18 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       const { sources: githubSource, ...rest } = edited.patch as Json & { sources?: Json }
       Object.assign(patch, rest)
       if (githubSource !== undefined) patch.sources = { ...(patch.sources as Json), ...githubSource }
+      // Prompts ride along only when one actually changed (review of #567): untouched saves keep their own owner-proof
+      // lane, and a host with no login saves ordinary settings without a 403.
+      const saved = s.prompts ?? {}
+      const nextCommunication = communication.value, nextDelivery = delivery.value
+      const communicationChanged = (nextCommunication.trim() === '' ? undefined : nextCommunication) !== saved.communication
+      const deliveryChanged = (nextDelivery.trim() === '' ? undefined : nextDelivery) !== saved.delivery
+      if (communicationChanged || deliveryChanged) {
+        // Clearing one box sends '' for it explicitly (host: '' clears that one; both-empty '' would too, but '' is only
+        // sent for what actually changed) - prompts: null would clear both (#567 second review).
+        const prompts: Json = { ...(communicationChanged ? { communication: nextCommunication } : {}), ...(deliveryChanged ? { delivery: nextDelivery } : {}) }
+        Object.assign(patch, { prompts })
+      }
       void send({ action: 'settings', settings: patch }, () => { settingsDirty = false }, '设置已保存')
     })
     const reset = el('button', 'wb-btn', '放弃修改')
