@@ -55,6 +55,7 @@ describe('ygl-trees in the team presets', () => {
       expect(text).toContain('serverName: ygl')
       expect(text).toContain('transport: stdio')
       expect(text).toContain("args: ['mcp']")
+      expect(text).toContain('YGL_HOME: !!js process.env.SUPERAGENT_YGL_HOME ??')
       expect(text).toContain("ygl-trees is the team's memory")
       expect(text).toMatch(/do not install anything/)
     }
