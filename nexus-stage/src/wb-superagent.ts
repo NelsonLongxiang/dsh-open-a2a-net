@@ -625,7 +625,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     const wb = flag('工作台 Source', s.sources.workbench)
     const a2a = flag('A2A Source', s.sources.a2a)
     const paused = flag('暂停执行', s.paused)
-    const fields = buildTeamFields(s, sessionName, mark)
+    const fields = buildTeamFields(s, sessionName, mark, () => { void send({ action: 'sync-github-allowed' }, () => { settingsDirty = false }, 'GitHub 账号已同步') })
     form.append(...fields.nodes)
 
     // The owner's prompt supplements (owner 2026-11-10, 对照上游): how the team talks, and what delivery looks like.
@@ -650,7 +650,10 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       const patch: Json = { canvas: canvas.value === '' ? null : canvas.value, router: router.value === '' ? null : router.value, acceptMode: mode.value, sources: { workbench: wb.checked, a2a: a2a.checked }, paused: paused.checked }
       const edited = fields.patch()
       if ('error' in edited) { say(edited.error, 'danger'); return }
-      Object.assign(patch, edited.patch)
+      // The GitHub switch rides in sources only when it changed (design github-issues G7).
+      const { sources: githubSource, ...rest } = edited.patch as Json & { sources?: Json }
+      Object.assign(patch, rest)
+      if (githubSource !== undefined) patch.sources = { ...(patch.sources as Json), ...githubSource }
       // Prompts ride along only when one actually changed (review of #567): untouched saves keep their own owner-proof
       // lane, and a host with no login saves ordinary settings without a 403.
       const saved = s.prompts ?? {}

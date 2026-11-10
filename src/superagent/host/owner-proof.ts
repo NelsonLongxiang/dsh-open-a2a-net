@@ -12,7 +12,11 @@ const RULE_FIELDS = ['rules', 'dispatch', 'profiles', 'prepare', 'prompts'] as c
 
 /** Whether a settings write changes a rule, a role, the dispatch rules, or the command that runs on this host (reliability R4). */
 export function touchesRules(settings: unknown): boolean {
-  return settings !== null && typeof settings === 'object' && RULE_FIELDS.some(field => field in (settings as object))
+  if (settings === null || typeof settings !== 'object') return false
+  const fields = settings as Record<string, unknown>
+  // Who may file work from GitHub (design github-issues G7): the source, its repositories, and its allowed logins.
+  const nested = (key: string): boolean => fields[key] !== null && typeof fields[key] === 'object' && 'github' in (fields[key] as object)
+  return RULE_FIELDS.some(field => field in fields) || 'github' in fields || nested('allowed') || nested('sources')
 }
 
 type Probe = (url: string, init: RequestInit) => Promise<{ status: number }>
