@@ -13,6 +13,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { UserError, type Outcome, type ReplyRequest } from '../upstream/dsh-superagent/src/core/index.ts'
 import type { SuperagentHost } from './index.ts'
 import { OBSERVER_OPEN_MAX, observerOfActor } from './policy.ts'
+import { grantableTool, roleTools } from './role-tools.ts'
 import { parseDecision } from './decisions.ts'
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
@@ -439,6 +440,25 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
       const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
       if (h === undefined || me === undefined) return { ok: false, code: 'not-observer', error: 'a2a_ticket_request serves only the sessions on this team created under the observer preset' }
       return json(h.requestForObserver(me, String(args.text ?? ''))) as Record<string, JsonValue>
+    },
+  }))
+
+  // Design tool-requests T3: a tool the role's list hides can still be asked for by name; the owner decides on a P0 card.
+  ctx.tools.register(defineTool({
+    name: 'a2a_tool_request',
+    description: 'Team session only: ask the owner to let this team use a tool that is not on your role\'s list (for example a shell a plugin on this host provides). Name the tool exactly and say why you need it. The owner decides on a P0 decision card; once approved the tool appears in your list. Tools that leave the team (routes, sessions, subagents) are never granted.',
+    parameters: { name: { type: 'string', required: true, description: 'The exact tool name.' }, why: { type: 'string', required: true, description: 'What you need it for, in a sentence.' } },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('a2a_tool_request', value) },
+    presentCall: args => ({ card: 'generic', title: `a2a_tool_request ${String(args.name)}`, kind: 'other', rawInput: args }),
+    execute: async (args: { name?: string; why?: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = host(exec)
+      const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
+      const role = me === undefined ? undefined : h?.toolRoleOf(me)
+      if (h === undefined || me === undefined || role === undefined) return { ok: false, code: 'not-team', error: 'a2a_tool_request serves only the sessions of a superagent team on this host' }
+      const name = String(args.name ?? '').trim()
+      if (h.grantedTools(me).includes(name) || roleTools(role).includes(name)) return { ok: true, granted: true, note: `${name} is already yours to use` }
+      if (!grantableTool(role, name)) return { ok: false, code: 'not-grantable', error: `${name} is not something a team session may be granted (it would leave the team, or it belongs to another role)` }
+      return { ok: true, requested: true, note: h.requestTool(me, role, name, String(args.why ?? '')) }
     },
   }))
 

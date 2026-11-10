@@ -337,11 +337,12 @@ function collectRoadmapAnchors() {
   return rows
 }
 
-// ── S24（#77 属主终裁·R-mod）：src/ 除 index.ts 外任一 .ts ≤1200 行（只降不升·S23 族）──
+// ── S24（#77 属主终裁·R-mod；v24 #570 属主 2026-11-10 裁定）：src/ 除 index.ts 外任一 .ts ≤1200 行（只降不升·S23 族）；
+//    vendored 上游 src/superagent/upstream/ 不计（UPSTREAM.json 逐文件哈希冻结、原样运行，本仓不改它）──
 function collectSrcModuleCap() {
   const rows = []
   try {
-    let max = 0, maxFile = ''
+    let max = 0, maxFile = '', vendored = 0
     // gh#77 R-mod wording is "src/ 下（不含 index.ts）任一 .ts" — that reading is
     // recursive. The original walk listed src/ only, so every src/faces/* and
     // src/tools/* module was invisible to the cap (the exact hole the ruling's
@@ -351,11 +352,13 @@ function collectSrcModuleCap() {
     for (const file of walk(join(REPO, 'src'))) {
       const name = relative(join(REPO, 'src'), file).replaceAll('\\', '/')
       if (name === 'index.ts') continue
+      // v24: the vendored upstream tree is upstream's code, frozen by UPSTREAM.json hashes; it is counted aside, not capped.
+      if (name.startsWith('superagent/upstream/')) { vendored++; continue }
       const raw = readFileSync(file, 'utf8')
       const n = raw.endsWith('\n') ? raw.split('\n').length - 1 : raw.split('\n').length
       if (n > max) { max = n; maxFile = name }
     }
-    rows.push({ name: 'src-module-cap-1200', ok: max <= 1200 ? 1 : 0, detail: 'max=' + maxFile + ' ' + max + '行 ≤1200（R-mod·只降不升）' })
+    rows.push({ name: 'src-module-cap-1200', ok: max <= 1200 ? 1 : 0, detail: 'max=' + maxFile + ' ' + max + '行 ≤1200（R-mod·只降不升；vendored 上游 ' + vendored + ' 个不计）' })
   } catch (e) { rows.push({ name: 'src-module-cap-1200', ok: 0, detail: String(e).slice(0, 60) }) }
   return rows
 }

@@ -143,11 +143,13 @@ import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
 import { NEUTRAL_SOURCES, NodeReviewQueue, SessionTaint, localRoute, toolTaint } from './node-self.ts'
 import { guiOwnerProven, ownerOrNoLogin, touchesRules } from './superagent/host/owner-proof.ts'
-import { SuperagentTeams } from './superagent/host/teams.ts'
+import { SuperagentTeams, ensureTeamYglHome } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { registerSessionLogFaces } from './faces/session-log.ts'
 import { registerFileFaces } from './faces/files.ts'
+import { registerSuperagentFaces } from './faces/superagent.ts'
+import { cancelAgentTurn, memberTurnFrom, personMessageFrom, selectSessionModel, stageCardFiles } from './superagent/session-reads.ts'
 import { createFileTools } from './tools/files.ts'
 import { BLOB_FILE_MAX, BlobStore, formatFileRef } from './blob-store.ts'
 import { canvasCandidateMatches, canvasTargetAmbiguous, peerDirectoryRows, routableCallerLabel, sessionCandidateMatches, unroutableCallerNote } from './peer-directory.ts'
@@ -2075,45 +2077,16 @@ export function apply(ctx: Context, config: Config): void {
     canvasesOf: id => canvasTeamsOfSession(id),
     canvasNames: () => canvasStore.list(),
     presetOf: id => sessionPresetOf(id),
-    cancelTurn: id => {
-      const agent = sessionNodes.get(id) as (Agent & { cancel?: (reason: { kind: 'user' }, options: { keepInbox: boolean }) => unknown }) | undefined
-      if (agent === undefined || agent.status === 'idle' || typeof agent.cancel !== 'function') return false
-      agent.cancel({ kind: 'user' }, { keepInbox: false })
-      return true
-    },
+    cancelTurn: id => cancelAgentTurn(sessionNodes.get(id)),
     // Design D11: the latest message in the session that is not host context, when a person typed it. `source` is set by
     // the host on arrival; a nudge the plugin itself sends through the same RPC is marked by its rpcId.
-    personMessage: id => {
-      const agent = sessionNodes.get(id)
-      if (agent === undefined) return undefined
-      for (const event of [...sessionEventsOf(agent)].reverse()) {
-        const e = event as { type?: string; time?: number; data?: { id?: unknown; source?: { kind?: unknown; rpcId?: unknown }; content?: ReadonlyArray<{ type?: string; text?: string }> } } | undefined
-        if (e?.type !== 'user/message') continue
-        const kind = e.data?.source?.kind
-        // A scheduled prompt is the session's own text: it closes the door as a relayed message does (D11).
-        if (kind === 'schedule') return undefined
-        if (typeof kind === 'string' && NEUTRAL_SOURCES.has(kind)) continue
-        const rpcId = e.data?.source?.rpcId
-        if (kind !== 'user' || (typeof rpcId === 'string' && rpcId.startsWith('a2a-')) || typeof e.data?.id !== 'string' || typeof e.time !== 'number') return undefined
-        const text = (e.data.content ?? []).filter(block => block.type === 'text').map(block => block.text ?? '').join('\n').trim()
-        return text === '' ? undefined : { id: e.data.id, atMs: e.time, text }
-      }
-      return undefined
-    },
+    personMessage: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : personMessageFrom(sessionEventsOf(agent)) },
     sessionName: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : `${nodeMetadataOf(agent).name} (${id.replace(/^session-/, '').slice(0, 8)})` },
     sessionLoaded: id => sessionNodes.has(id),
     // The team's model choices (owner 2026-11-10): in-process sessionController.selectModel, not HTTP - the host's
     // /api/session/* answers 401 without a browser cookie, so the loopback call could never work (review of #566).
     // A session not loaded yet is skipped; the next start or pool change applies it.
-    selectModel: async (sessionId, pick) => {
-      if (!sessionNodes.has(sessionId)) throw new Error('the session is not loaded on this host yet')
-      const controller = (ctx as unknown as { get?(name: string): { selectModel?(request: unknown): Promise<unknown> } | undefined }).get?.('sessionController')
-      if (controller?.selectModel === undefined) throw new Error('DSH offers no sessionController here')
-      // DSH answers with the selection it installed for the session's next request: that is the read-back.
-      const done = await controller.selectModel({ sessionId, ...pick }) as { selected?: { provider?: string; model?: string } } | undefined
-      if (done?.selected?.provider !== pick.provider || done.selected.model !== pick.model) throw new Error(`DSH installed ${String(done?.selected?.provider)}/${String(done?.selected?.model)} instead`)
-      return true
-    },
+    selectModel: (sessionId, pick) => selectSessionModel(sessionNodes.has(sessionId), ctx.get('sessionController' as never), sessionId, pick),
     bootSettled: () => bootPrewarm.settled(),
     workspaceOf: id => { const cwd = (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd; return typeof cwd === 'string' ? cwd : undefined },
     hasTool: (id, name) => {
@@ -2121,42 +2094,15 @@ export function apply(ctx: Context, config: Config): void {
       return agent?.ctx?.tools?.get(name, scopeKeyOf(agent.ctx)) !== undefined
     },
     // Decision cards C8: a proposer's files go on the file channel, granted to its team's canvas, as a2a_file_send stages them.
-    stageFiles: (id, paths, canvas) => {
-      const from = originOf(ownCardUrl)
-      if (from === '') return { ok: false, code: 'files', error: 'this host publishes no card URL yet: nobody could pull the files' }
-      const cwd = (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd
-      const files: Array<{ sha256: string; size: number; name: string; ref: string }> = []
-      for (const p of paths) {
-        const abs = isAbsolute(p) ? p : typeof cwd === 'string' && cwd !== '' ? resolve(cwd, p) : ''
-        if (abs === '') return { ok: false, code: 'files', error: `relative path ${p} needs a session workspace` }
-        let bytes: Uint8Array
-        try {
-          const st = statSync(abs)
-          if (!st.isFile()) return { ok: false, code: 'files', error: `${p} is not a file` }
-          if (st.size > BLOB_FILE_MAX) return { ok: false, code: 'files', error: `${p} is ${String(st.size)} bytes; a file on a card is at most ${String(BLOB_FILE_MAX)}` }
-          bytes = readFileSync(abs)
-        } catch (error) { return { ok: false, code: 'files', error: `cannot read ${p}: ${error instanceof Error ? error.message : String(error)}` } }
-        const out = blobStore.stage(bytes, { name: abs.split(/[\\/]/).pop() ?? p, to: `${config.team}/canvas/${canvas}`, by: id })
-        if (!out.ok) return { ok: false, code: out.code ?? 'files', error: `${p}: ${out.error}` }
-        files.push({ sha256: out.sha256, size: out.size, name: out.name, ref: formatFileRef({ sha256: out.sha256, size: out.size, name: out.name, from }) })
-      }
-      return { ok: true, files }
-    },
-    memberTurn: id => {
-      const agent = sessionNodes.get(id)
-      if (agent === undefined) return undefined
-      const jobs = ctx.get('jobs' as never) as { list?: (caller: string) => readonly { owner?: string; status: string }[] } | undefined
-      const quiet = !(jobs?.list?.(id) ?? []).some(job => job.owner === id && (job.status === 'running' || job.status === 'stopping'))
-      const last = [...sessionEventsOf(agent)].reverse().find(event => event?.type === 'assistant/message') as { data?: { message?: { content?: ReadonlyArray<{ type?: string; text?: string }> } } } | undefined
-      return { quiet, text: (last?.data?.message?.content ?? []).filter(block => block.type === 'text').map(block => block.text ?? '').join('\n').trim() }
-    },
+    stageFiles: (id, paths, canvas) => stageCardFiles({ blobStore, from: originOf(ownCardUrl), cwd: (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd, team: `${config.team}/canvas/${canvas}`, by: id }, paths),
+    memberTurn: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : memberTurnFrom(id, sessionEventsOf(agent), ctx.get('jobs' as never)) },
     teamSend: args => teamCanvasSend(args),
   }) : undefined
   teamsHandle = superagentTeams
   const superagentHost: SuperagentHost | undefined = superagentTeams?.primary
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
   const superagentRoleTools = new RoleTools({
-    roleOf: id => superagentTeams?.ofSession(id)?.toolRoleOf(id),
+    roleOf: id => superagentTeams?.ofSession(id)?.toolRoleOf(id), grantedOf: id => superagentTeams?.ofSession(id)?.grantedTools(id) ?? [], onRefused: (id, role, name) => superagentTeams?.ofSession(id)?.requestTool(id, role, name),
     agentOf: id => ctx.get('agents')?.get(SessionId(id)) as RoleAgent | undefined,
     logger,
   })
@@ -2164,7 +2110,7 @@ export function apply(ctx: Context, config: Config): void {
   let superagentHomeUrl: string | undefined
   if (superagentHost !== undefined) {
     whenWebServerSettled(webServer => { superagentHomeUrl = `http://127.0.0.1:${String((webServer as { port: number }).port)}` })
-    ctx.effect(() => { superagentTeams!.start(); return () => { void superagentTeams!.stop() } }, 'a2a: superagent engine passes')
+    ctx.effect(() => { superagentTeams!.start(); void ensureTeamYglHome({ logger }); return () => { void superagentTeams!.stop() } }, 'a2a: superagent engine passes')
     registerSuperagentTools(ctx, id => superagentTeams!.ofSession(id))
     // A member's turn ending is the executor's turn-end fact (PR-C1).
     ctx.on('agent/status', payload => { if (payload.status === 'idle') superagentTeams!.ofSession(String(payload.agent.id))?.memberIdle(String(payload.agent.id)) })
@@ -3192,244 +3138,6 @@ export function apply(ctx: Context, config: Config): void {
 
   })
 
-  if (superagentHost !== undefined) whenWebServerSettled((webServer) => {
-    // superagent design v4, PR-B: the owner's workbench face of the engine (owner control route only).
-    // GET: the engine state; POST: settings (router, allowed senders, Sources, pause), request (the workbench Source),
-    // stop / retry a ticket (upstream's people commands).
-    ctx.effect(() => webServer.register({
-      kind: 'exact',
-      path: '/__dsh_a2a/superagent',
-      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
-        const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
-        if (req.method === 'GET') {
-          const params = new URL(req.url ?? '/', 'http://x').searchParams
-          const asked = superagentTeams!.get(params.get('teamId') ?? undefined)
-          if (asked === undefined) { send(404, { ok: false, error: 'no such team on this instance' }); return }
-          // The team page's 搜索: this team's records only, like the state it reads.
-          const search = params.get('search')
-          if (search !== null) { send(200, asked.search(search)); return }
-          send(200, asked.state())
-          return
-        }
-        readJsonBody(req, res, (body) => {
-          const fields = body as Record<string, unknown>
-          const sa = superagentTeams!.get(typeof fields.teamId === 'string' ? fields.teamId : undefined)
-          if (sa === undefined) { send(404, { ok: false, error: 'no such team on this instance' }); return }
-          try {
-            if (fields.action === 'settings') {
-              const save = (): void => { send(200, sa.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf, 'owner')) }
-              // A shell on this machine passes the control route; a rule change needs what only the owner's browser holds (design D10).
-              if (!touchesRules(fields.settings)) { save(); return }
-              void guiOwnerProven(superagentHomeUrl, req.headers.cookie).then(proven => {
-                if (proven) { save(); return }
-                send(403, { ok: false, code: 'owner-proof', error: '修改规则需要在已登录的 DSH 界面里操作，这个请求没有登录凭据。也可以直接在对话里让总工或成员修改。' })
-              }, (error: unknown) => { send(500, { ok: false, error: String(error) }) })
-              return
-            } else if (fields.action === 'sync-github-allowed') {
-              // Design github-issues G6, G7: add the repositories' collaborators with push access to allowed.github; owner only.
-              void guiOwnerProven(superagentHomeUrl, req.headers.cookie).then(async (proven) => {
-                if (!proven) { send(403, { ok: false, code: 'owner-proof', error: '同步 GitHub 名单需要在已登录的 DSH 界面里操作。' }); return }
-                const found = await sa.githubCollaborators()
-                if (!found.ok) { send(200, found); return }
-                const before = sa.settings.allowed.github ?? []
-                const added = found.logins.filter(login => !before.some(a => a.toLowerCase() === login.toLowerCase()))
-                if (added.length === 0) { send(200, { ok: true, added: [], allowed: before }); return }
-                const saved = sa.saveSettings({ allowed: { github: [...before, ...added] } }, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf, 'owner')
-                send(200, saved.ok ? { ok: true, added, allowed: saved.settings.allowed.github } : saved)
-              }).catch((error: unknown) => { send(500, { ok: false, error: String(error) }) })
-              return
-            } else if (fields.action === 'request') {
-              send(200, sa.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined, fields.via === 'cli' ? 'cli' : undefined))
-            } else if (fields.action === 'answer') {
-              send(200, sa.answer(typeof fields.ticket_id === 'string' ? fields.ticket_id : '', typeof fields.text === 'string' ? fields.text : ''))
-            } else if (fields.action === 'add-remote-member' || fields.action === 'remove-remote-member') {
-              // Design v5: a remote member is a remote slot of the bound canvas team — added on the canvas, which pins its key.
-              send(200, { ok: false, error: 'the team is a canvas team: add or remove a remote member on the canvas (/__dsh_a2a/canvas add-member / remove-member)' })
-            } else if (fields.action === 'serve-team') {
-              // Design v5 (D4): a team is served by its canvas id, which names its owner by key fingerprint.
-              send(200, { ok: false, error: "serve a team by its canvas id: POST { action: 'serve', team: '<zone>/canvas/<name>@<fp8>', members: [<local session ids>] } (team: null leaves)" })
-            } else if (fields.action === 'serve') {
-              // Design v5 (D4): serve another host's team — the canvas team `<zone>/canvas/<name>@<fp8>`. The fingerprint picks
-              // the linked peer whose signed card key it names and which advertises that canvas; that key is pinned, so only it
-              // may assign these sessions work. null leaves. The member host's owner consents here; the team host cannot
-              // take another host's sessions on its own (U17).
-              if (fields.team === null) { send(200, sa.serveTeam(undefined, [], () => false)); return }
-              const team = typeof fields.team === 'string' ? fields.team.trim() : ''
-              const members = Array.isArray(fields.members) ? fields.members.filter((m): m is string => typeof m === 'string') : []
-              void (async () => {
-                const split = splitCanvasOwner(team)
-                if (split.owner === undefined || !/^[^/\s]+\/canvas\/[^/\s]+$/.test(split.team)) { send(200, { ok: false, error: 'team must be a canvas id with its owner: <zone>/canvas/<name>@<fp8>' }); return }
-                if (split.owner === ownCanvasFingerprint) { send(200, { ok: false, error: "that canvas is this host's own: its sessions join it as members on the canvas" }); return }
-                let found: { url: string; card: A2aPeerCard } | undefined
-                for (const url of new Set([...peerStore.list(), ...cardCache.keys()])) {
-                  const card = await fetchPeerCard(url).catch(() => undefined)
-                  if (card === undefined || !verifyCard(card, Date.now()).ok || typeof card.publicKey !== 'string' || canvasOwnerFingerprint(card.publicKey) !== split.owner) continue
-                  if (!(card.canvasOrg ?? []).some(entry => entry.team === split.team && entry.team === card.team + '/canvas/' + entry.name)) continue
-                  found = { url, card }
-                  break
-                }
-                if (found === undefined) { send(200, { ok: false, error: `no linked peer's signed card is the owner of ${team} (key fingerprint ${split.owner}) and advertises it` }); return }
-                // The link judgement reads the cached card: cache the verified one first, as the canvas member proof does.
-                cardCache.set(found.url, { at: Date.now(), card: found.card })
-                if (peerAdmissionLinkState(found.url).link !== 'linked') { send(200, { ok: false, error: 'the team host must be a linked peer' }); return }
-                send(200, sa.serveTeam({ url: new URL(found.url).origin, key: found.card.publicKey!, canvas: team }, members, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf))
-              })().catch(error => send(200, { ok: false, error: String(error) }))
-            } else if (fields.action === 'reevaluate') {
-              // Design superagent-reevaluate-note D1: the owner asks for a fresh judgement of a stored message.
-              send(200, sa.reevaluate(typeof fields.trigger_id === 'string' ? fields.trigger_id : ''))
-            } else if (fields.action === 'stop' || fields.action === 'retry') {
-              const ticketId = typeof fields.ticket_id === 'string' ? fields.ticket_id : ''
-              const ticket = fields.action === 'stop'
-                ? sa.engine.stopTicket(ticketId, typeof fields.reason === 'string' ? fields.reason : undefined)
-                : sa.engine.retryTicket(ticketId)
-              sa.pass()
-              send(200, { ok: true, ticket })
-            } else send(200, { ok: false, error: 'action must be settings, request, answer, serve, stop, retry or reevaluate' })
-          } catch (error) { send(200, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
-        }, 64_000)
-      }),
-    }), 'a2a: superagent control route')
-    // PR-C2: the two host-to-host faces. Each takes a signed, body-bound OriginClaim and judges the signer's card key against
-    // the key the owner pinned: the team host's key on a member host, the member host's key on the team host.
-    const signedFace = (path: string, judge: (body: Record<string, unknown>, claim: { caller: string; key: string }) => Record<string, unknown>, label: string): void => {
-      ctx.effect(() => webServer.register({
-        kind: 'exact',
-        path,
-        handler: (req: IncomingMessage, res: ServerResponse) => {
-          const send = (value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
-          if (req.method !== 'POST') { send({ ok: false, error: 'POST required' }); return }
-          const chunks: Buffer[] = []
-          let size = 0
-          req.on('data', (chunk: Buffer) => { size += chunk.length; if (size <= 64 * 1024) chunks.push(chunk) })
-          req.on('end', () => {
-            void (async () => {
-              if (size > 64 * 1024) { send({ ok: false, error: 'payload too large' }); return }
-              const rawBody = Buffer.concat(chunks)
-              let body: Record<string, unknown>
-              try { body = JSON.parse(rawBody.toString('utf8')) as Record<string, unknown> } catch { send({ ok: false, error: 'not JSON' }); return }
-              const claim = await verifyOriginClaim(req, { rawBody })
-              if (!claim.ok || !claim.bound || claim.bodyBound !== true || typeof claim.card.publicKey !== 'string') {
-                recordActivity('in', path, String(req.headers['x-a2a-caller'] ?? 'unknown'), false)
-                superagentHost.noteRefusal('superagent-untrusted-origin', { caller: String(req.headers['x-a2a-caller'] ?? 'unknown'), target: path })
-                send({ ok: false, code: 'untrusted-origin', error: `a signed, body-bound OriginClaim is required (${claim.ok ? 'unbound' : claim.reason})` })
-                return
-              }
-              const out = judge(body, { caller: claim.caller, key: claim.card.publicKey })
-              recordActivity('in', path, claim.caller, out.ok === true)
-              // A signer that is not the pinned key (an impostor sharing a handle) is refused by identity; a malformed body is not counted.
-              if (out.ok !== true && ['not-signer', 'not-team', 'not-member'].includes(String(out.code))) superagentHost.noteRefusal(`superagent-${String(out.code)}`, { caller: claim.caller, target: path })
-              send(out)
-            })().catch(error => send({ ok: false, error: String(error) }))
-          })
-        },
-      }), label)
-    }
-    // Design M6: each team answers only for its own members and pinned keys, so the first that does not refuse is the one.
-    const firstTeam = (ask: (team: SuperagentHost) => Record<string, unknown>): Record<string, unknown> => {
-      let refused: Record<string, unknown> = { ok: false, code: 'not-team', error: 'no team here' }
-      for (const team of superagentTeams!.all()) { refused = ask(team); if (!['not-team', 'not-member'].includes(String(refused.code))) return refused }
-      return refused
-    }
-    signedFace('/a2a/superagent-member', (body, claim) => firstTeam(team => team.assignedWork(body.op, body.member, claim.key, body.text)), 'a2a: superagent member face')
-    signedFace('/a2a/superagent-team', (body, claim) => typeof body.member === 'string' && claimCovers(body.member, claim.caller)
-      ? firstTeam(team => team.remoteEvent(body.op, body.member, claim.key, body.report))
-      : { ok: false, code: 'not-signer', error: 'the signer does not speak for that member' }, 'a2a: superagent team face')
-  })
-
-  /** Design M8: the teams linked instances advertise on their cards; only a team whose A2A Source is on is advertised. */
-  function linkedTeams(): Array<{ id: string; primary: false; remote: true; canvas: string; address: string; open: true; host: string }> {
-    return [...cardCache.entries()].flatMap(([url, hit]) => {
-      const card = hit.card
-      if (card === undefined || typeof card.publicKey !== 'string' || !verifyCard(card, Date.now()).ok || peerAdmissionLinkState(url).link !== 'linked') return []
-      const owner = canvasOwnerFingerprint(card.publicKey)
-      return (card.canvasOrg ?? []).filter(entry => entry.superagentTeam === true && entry.team === `${card.team}/canvas/${entry.name}`)
-        .map(entry => ({ id: `remote:${entry.team}@${owner}`, primary: false as const, remote: true as const, canvas: entry.name, address: `${entry.team}@${owner}`, open: true as const, host: card.name ?? new URL(url).host }))
-    })
-  }
-
-  if (superagentTeams !== undefined) whenWebServerSettled((webServer) => {
-    // Decision cards: what waits for the owner, and their decision (C3, C5).
-    ctx.effect(() => webServer.register({
-      kind: 'exact',
-      path: '/__dsh_a2a/superagent/decisions',
-      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
-        const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
-        // Each card names its team's canvas address: the right bar stages the owner's files to it (C8).
-        if (req.method === 'GET') { send(200, { decisions: superagentTeams.decisionCards().map(card => ({ ...card, ...(typeof card.team === 'string' && card.team !== '' ? { address: `${config.team}/canvas/${card.team}` } : {}) })), health: superagentTeams.health() }); return }
-        readJsonBody(req, res, (body) => {
-          const fields = body as { teamId?: unknown; id?: unknown; how?: unknown; option?: unknown; note?: unknown; files?: unknown }
-          const team = superagentTeams.get(typeof fields.teamId === 'string' ? fields.teamId : undefined)
-          if (team === undefined) { send(404, { ok: false, error: 'no such team on this instance' }); return }
-          // A member's shell on this machine passes the control route; deciding is the owner's alone (C5).
-          void ownerOrNoLogin(superagentHomeUrl, req.headers.cookie).then((allowed) => {
-            if (!allowed) { send(403, { ok: false, code: 'owner-proof', error: '决策需要在已登录的 DSH 界面里操作。' }); return }
-            send(200, team.decide(typeof fields.id === 'string' ? fields.id : '', fields.how, fields.option, fields.note, fields.files))
-          }, (error: unknown) => { send(500, { ok: false, error: String(error) }) })
-        })
-      }),
-    }), 'a2a: superagent decisions face')
-    // C8: a file on a card, for the owner. Only files a card names, only while the file channel still holds them (24 h).
-    ctx.effect(() => webServer.register({
-      kind: 'exact',
-      path: '/__dsh_a2a/superagent/decisions/file',
-      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
-        const fail = (status: number, error: string): void => { const payload = JSON.stringify({ ok: false, error }); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
-        if (req.method !== 'GET') { fail(405, 'GET only'); return }
-        const query = new URL(req.url ?? '/', 'http://local').searchParams
-        const team = superagentTeams.get(query.get('teamId') ?? undefined)
-        const sha256 = query.get('sha256') ?? ''
-        if (team === undefined || !/^[0-9a-f]{64}$/.test(sha256)) { fail(404, 'no such file on a card'); return }
-        void ownerOrNoLogin(superagentHomeUrl, req.headers.cookie).then((allowed) => {
-          if (!allowed) { fail(403, '决策卡的文件需要在已登录的 DSH 界面里打开。'); return }
-          const file = team.decisionFile(query.get('card') ?? '', sha256)
-          if (file === undefined) { fail(404, 'no such file on a card'); return }
-          const grant = blobStore.list().find(g => g.sha256 === sha256)
-          const bytes = grant === undefined ? undefined : blobStore.read(grant)
-          if (bytes === undefined) { fail(410, '文件已过期：文件通道只保留 24 小时。'); return }
-          res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': bytes.byteLength, 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' })
-          res.end(bytes)
-        }, (error: unknown) => { fail(500, String(error)) })
-      }),
-    }), 'a2a: superagent decision file face')
-  })
-
-  if (superagentTeams !== undefined) whenWebServerSettled((webServer) => {
-    // The models a team's roles may run (owner 2026-11-10): DSH's own catalog, proxied; the page falls back to free text.
-    ctx.effect(() => webServer.register({
-      kind: 'exact',
-      path: '/__dsh_a2a/superagent/models',
-      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
-        const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
-        // In-process modelCatalog (review of #566): the HTTP face answers 401 without a browser cookie.
-        const controller = (ctx as unknown as { get?(name: string): { modelCatalog?(request: unknown): Promise<unknown> } | undefined }).get?.('sessionController')
-        if (controller?.modelCatalog === undefined) { send(200, { ok: false, code: 'no-service' }); return }
-        void controller.modelCatalog({}).then(catalog => { send(200, catalog as Record<string, unknown>) }, (error: unknown) => { send(200, { ok: false, code: 'catalog', error: String(error) }) })
-      }),
-    }), 'a2a: superagent models face')
-    // Design M3/M5: the instance's teams, and adding one.
-    ctx.effect(() => webServer.register({
-      kind: 'exact',
-      path: '/__dsh_a2a/superagent/teams',
-      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
-        const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
-        if (req.method === 'GET') { send(200, { teams: [...superagentTeams.rows().map(row => ({ ...row, ...(row.canvas !== undefined ? { address: `${config.team}/canvas/${row.canvas}` } : {}) })), ...linkedTeams()] }); return }
-        readJsonBody(req, res, (body) => {
-          const fields = body as { canvas?: unknown; router?: unknown; action?: unknown; address?: unknown; session?: unknown; text?: unknown }
-          if (fields.action === 'send') {
-            // Design M9: as the session the view is open in, through the ordinary route, so every gate of a2a_route applies.
-            const address = typeof fields.address === 'string' ? fields.address : '', text = typeof fields.text === 'string' ? fields.text.trim() : ''
-            const agent = typeof fields.session === 'string' ? sessionNodes.get(fields.session) : undefined
-            if (!linkedTeams().some(team => team.address === address)) { send(200, { ok: false, code: 'not-listed', error: 'that team is not on a linked instance, or it takes no A2A requests' }); return }
-            if (text === '' || text.length > 20_000) { send(200, { ok: false, code: 'text', error: 'text is required, at most 20000 characters' }); return }
-            if (agent === undefined) { send(200, { ok: false, code: 'not-joined', error: 'join this session to the A2A network first: a request to another instance is sent as this session' }); return }
-            void routeTrunk({ team: address, message: text, async: true }, agent, new AbortController().signal).then((out) => { send(200, { ...out, sender: sessionTeamOf(agent) }) }, (error: unknown) => { send(200, { ok: false, error: String(error) }) })
-            return
-          }
-          send(200, superagentTeams.add({ canvas: fields.canvas, router: fields.router }, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf))
-        })
-      }),
-    }), 'a2a: superagent teams face')
-  })
 
   whenWebServerSettled((webServer) => {
     // Task-ledger control: explicit caller-side abandonment of one owed
@@ -3630,6 +3338,14 @@ export function apply(ctx: Context, config: Config): void {
    * fetch (single-flight) instead of racing N requests.
    */
   const cardCache = new Map<string, CardCacheEntry>()
+  // superagent's HTTP faces live in src/faces/superagent.ts (#570 line ratchet); registered after cardCache exists: whenWebServerSettled may run its callback at once.
+  if (superagentHost !== undefined && superagentTeams !== undefined) whenWebServerSettled((webServer) => {
+    registerSuperagentFaces(webServer, {
+      ctx, config, superagentHost, superagentTeams, homeUrl: () => superagentHomeUrl, controlRoute, readJsonBody, recordActivity, routeTrunk,
+      sessionNodes, sessionPresetOf, sessionTeamOf, joinedSessions, archivedSessionFilter, verifyOriginClaim, fetchPeerCard, peerStore, cardCache,
+      ownCanvasFingerprint, peerAdmissionLinkState, blobStore,
+    })
+  })
   const cardCacheInFlight = new Map<string, Promise<A2aPeerCard | undefined>>()
   // #114 S6: the change hooks and the boot observation start only once every
   // record admission reads exists (the peer-org basis reads cardCache above).
