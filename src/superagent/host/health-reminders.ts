@@ -3,8 +3,9 @@
  *
  * The host looks at its health every 15 minutes. A problem that is new raises one decision card (P2: 去处理 or 先忽略
  * 24 小时); the same problem while it lasts raises nothing more, a problem that goes away takes its undecided card back,
- * and a decision holds the reminder off (24 h for 忽略, 1 h for anything else). The boot grace period raises nothing.
- * Each team's host keeps its own reminders.
+ * and a decision holds the reminder off (24 h for 忽略, an hour otherwise). The boot grace period raises nothing.
+ * Each team's host keeps its own reminders. The card carries its problem's key in `reason`, so a restart rebuilds the
+ * pairing from the open cards and a problem that went away while the host was down still takes its card back.
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/health-reminders
  */
 
@@ -19,6 +20,13 @@ export const HOLD_IGNORE_MS = 24 * 3_600_000, HOLD_OTHER_MS = 3_600_000
 /** The problems a reminder card is about, one key each. */
 export const problemKey = (problem: HealthProblem): string => `${problem.code}:${problem.session ?? problem.ticketId ?? ''}`
 
+/** What a problem's card says, in the words the health banner already uses (no internal codes). */
+export const problemText = (problem: HealthProblem): string =>
+  problem.code === 'router-not-loaded' ? `总工会话 ${problem.session ?? ''} 没有加载，需求送不到它，打开这个会话即可`
+  : problem.code === 'member-not-loaded' ? `成员会话 ${problem.session ?? ''} 没有加载，工单派不给它，打开这个会话即可`
+  : problem.ticketId !== undefined ? `工单 ${problem.ticketId} 很久没有动静`
+  : `问题 ${problem.code}`
+
 /**
  * What a team raises and takes back, as its health changes.
  */
@@ -27,13 +35,16 @@ export class HealthReminders {
   private readonly held = new Map<string, { readonly until: number }>()
 
   constructor(
-    private readonly raise: (question: string, at: string) => string | undefined,
+    private readonly raise: (question: string, key: string, at: string) => string | undefined,
     private readonly takeBack: (cardId: string) => void,
+    private readonly openCards: () => ReadonlyArray<{ id: string; reason?: string }>,
     private readonly at: () => string,
   ) {}
 
-  /** One look: raise cards for new problems, take back what went away, and hold off what was decided. */
+  /** One look: rebuild the pairing from the open cards, take back what went away, raise cards for what is new. */
   tick(problems: readonly HealthProblem[], now: number): void {
+    // A restart empties the map: the open cards say which problems still have a card (the key rides in reason).
+    if (this.open.size === 0) for (const card of this.openCards()) if (card.reason !== undefined) this.open.set(card.reason, card.id)
     const keys = new Set(problems.map(problemKey))
     for (const [key, cardId] of [...this.open]) {
       if (keys.has(key)) continue
@@ -47,8 +58,7 @@ export class HealthReminders {
       const hold = this.held.get(key)
       if (hold !== undefined && now < hold.until) continue
       this.held.delete(key)
-      const what = problem.session !== undefined ? `会话 ${problem.session}` : problem.ticketId !== undefined ? `工单 ${problem.ticketId}` : '团队'
-      const cardId = this.raise(`健康自检：${what} 的问题 ${problem.code} 还在。`, this.at())
+      const cardId = this.raise(`健康自检：${problemText(problem)}。`, key, this.at())
       if (cardId !== undefined) this.open.set(key, cardId)
     }
   }

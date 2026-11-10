@@ -36,8 +36,8 @@ describe('health reminders', () => {
     // one card per problem: the router and the member are both not loaded
     expect(cards).toHaveLength(2)
     expect(cards[0]).toMatchObject({ level: 'P2', options: ['去处理', '先忽略 24 小时'], recommended: '去处理' })
-    expect(cards.some(card => card.question.includes('router-not-loaded'))).toBe(true)
-    expect(cards.some(card => card.question.includes('member-not-loaded'))).toBe(true)
+    expect(cards.some(card => card.question.includes('总工会话'))).toBe(true)
+    expect(cards.some(card => card.question.includes('成员会话'))).toBe(true)
     m.tick()
     expect(m.h.decisionCards().filter(card => card.source === 'health')).toHaveLength(2)
     await m.h.stop()
@@ -76,6 +76,25 @@ describe('health reminders', () => {
     for (const again of m.h.decisionCards().filter(row => row.source === 'health')) expect(m.h.decide(again.id, 'approve')).toMatchObject({ ok: true })
     m.tick()
     expect(m.h.decisionCards().filter(row => row.source === 'health')).toHaveLength(0)
+    await m.h.stop()
+  })
+  it('a restart takes back a card whose problem went away while the host was down', async () => {
+    const m = await team(() => false)
+    m.tick()
+    expect(m.h.decisionCards().filter(row => row.source === 'health')).toHaveLength(2)
+    await m.h.stop()
+    // a restart over the same state: the sessions are loaded now, the open health card loses its problem
+    const again = await team(() => true)
+    again.tick()
+    expect(again.h.decisionCards().filter(row => row.source === 'health')).toHaveLength(0)
+    await again.h.stop()
+  })
+  it('a card says what the banner says, not an internal code', async () => {
+    const m = await team(id => id !== 'session-r')
+    m.tick()
+    const card = m.h.decisionCards().find(row => row.source === 'health' && row.question.includes('总工会话'))!
+    expect(card).toBeDefined()
+    expect(card!.question).not.toMatch(/[a-z]+-not-loaded/)
     await m.h.stop()
   })
   it('each team keeps its own reminders', async () => {

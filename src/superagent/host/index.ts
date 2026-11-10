@@ -328,8 +328,9 @@ export class SuperagentHost {
     this.settingsHistory = new SettingsHistory(join(dir, 'settings-history.json'))
     this.decisions = new DecisionBook(join(dir, 'decisions.json'), ticketId => { const ticket = this.store.tickets.get(ticketId); return ticket !== undefined && ticket.ended === undefined })
     this.healthReminders = new HealthReminders(
-      (question, at) => { const out = this.decisions.propose({ source: 'health', by: 'health', question, at, spec: { level: 'P2', options: ['去处理', '先忽略 24 小时'], recommended: '去处理' } }); return out.ok ? out.id : undefined },
+      (question, key, at) => { const out = this.decisions.propose({ source: 'health', by: 'health', question, reason: key, at, spec: { level: 'P2', options: ['去处理', '先忽略 24 小时'], recommended: '去处理' } }); return out.ok ? out.id : undefined },
       cardId => this.decisions.withdraw(cardId),
+      () => this.decisions.open().filter(card => card.source === 'health').map(card => ({ id: card.id, ...(card.reason !== undefined ? { reason: card.reason } : {}) })),
       () => this.now(),
     )
     this.reviews = new ReviewRequests({
