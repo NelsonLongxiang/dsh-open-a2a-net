@@ -583,14 +583,14 @@ export class SuperagentHost {
    * owner declined is not asked about again within a day.
    * @returns what the refusal should add, for the session to read.
    */
-  requestTool(session: string, role: Role, name: string): string {
+  requestTool(session: string, role: Role, name: string, why?: string): string {
     const cls = grantClass(role), by = `${cls}:${name}`
     if (this.decisions.open().some(card => card.source === 'tool' && card.by === by)) return `A request to use ${name} is already waiting for the owner as a P0 decision card; try again after it is approved.`
     const last = this.decisions.lastDecided('tool', by)
     if (last !== undefined && !last.decided!.text.includes('批准') && Date.parse(this.now()) - Date.parse(last.decided!.at) < TOOL_ASK_AGAIN_MS) return `The owner declined ${name} for this team at ${last.decided!.at}; it is not asked about again for a day.`
     const who = cls === 'router' ? '总工' : '成员和观察者'
     const out = this.decisions.propose({ source: 'tool', by, at: this.now(), question: `${this.memberName(session)} 申请使用工具 ${name}（不在这个角色的工具列表里），要放行给本团队的${who}吗？`,
-      reason: `这个工具不在团队预设里，宿主确认不了它来自哪个插件、有没有沙箱。信得过提供它的插件再批准；批准后本团队的${who}都能用，可以在设置里收回。`,
+      reason: `${why !== undefined && why.trim() !== '' ? `申请理由：${why.trim().slice(0, 300)}。` : ''}这个工具不在团队预设里，宿主确认不了它来自哪个插件、有没有沙箱。信得过提供它的插件再批准；批准后本团队的${who}都能用，可以在设置里收回。`,
       spec: { level: 'P0', options: [`批准：本团队的${who}可用 ${name}`, '拒绝'], recommended: '拒绝' } })
     return out.ok ? `A P0 decision card asks the owner whether this team's ${cls === 'router' ? 'router' : 'members'} may use ${name}; try again after it is approved.` : `The request could not be raised: ${out.error}`
   }

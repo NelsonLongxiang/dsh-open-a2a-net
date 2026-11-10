@@ -95,3 +95,21 @@ describe('the setting (T1, T5)', () => {
     expect(touchesRules({ extraTools: { member: [] } })).toBe(true)
   })
 })
+
+describe('asking by name (T3)', () => {
+  it('a team session asks for a tool its list hides; a tool that leaves the team is refused outright; a session outside the team cannot ask', async () => {
+    const m = await team()
+    const { registerSuperagentTools } = await import('../../src/superagent/host/tools.ts')
+    const registered = new Map<string, { execute(a: unknown, e: unknown): Promise<Record<string, any>> }>()
+    registerSuperagentTools({ tools: { register: (tool: { name: string }) => { registered.set(tool.name, tool as never) } } } as never, id => (m.h.roleOf(id) !== undefined ? m.h : undefined))
+    const ask = async (as: string, args: Record<string, unknown>) => await registered.get('a2a_tool_request')!.execute(args, { agent: { id: as }, signal: new AbortController().signal })
+    expect(await ask('session-m', { name: 'a2a_teams', why: '想看有哪些团队' })).toMatchObject({ ok: true, requested: true })
+    const [card] = m.h.decisionCards().filter(c => c.source === 'tool')
+    expect(card).toMatchObject({ level: 'P0', by: 'member:a2a_teams' })
+    expect(card!.reason).toContain('想看有哪些团队')
+    expect(await ask('session-m', { name: 'a2a_route', why: 'x' })).toMatchObject({ ok: false, code: 'not-grantable' })
+    expect(await ask('session-m', { name: 'bash', why: 'x' })).toMatchObject({ ok: true, granted: true })
+    expect(await ask('session-x', { name: 'a2a_teams', why: 'x' })).toMatchObject({ ok: false, code: 'not-team' })
+    await m.h.stop()
+  })
+})
