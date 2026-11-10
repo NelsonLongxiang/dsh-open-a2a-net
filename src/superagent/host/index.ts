@@ -22,6 +22,7 @@ import { MemberExecutor, transientError, type MemberTurn, type PrepareRunner } f
 import { ReviewRequests } from './review-requests.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
 import { SettingsHistory } from './settings-history.ts'
+import { HealthReminders, HEALTH_TICK_MS, type HealthProblem } from './health-reminders.ts'
 import { DECISION_FILES_MAX, DecisionBook, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { parseFileRef } from '../../blob-store.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
@@ -253,11 +254,14 @@ export class SuperagentHost {
   /** Proposals to change a rule set, each set's revision and last change (design D8–D10b). */
   readonly ruleChanges: RuleChanges
   private disposeTimer: (() => void) | undefined
+  private healthTimer: (() => void) | undefined
   /** The A2A executor (PR-C1): the owner's fixed member pool, one worker slot each. */
   readonly executor: MemberExecutor
   private readonly decisions: DecisionBook
   /** The team's settings saves, for the team page's 设置 (each team keeps its own, with its state). */
   private readonly settingsHistory: SettingsHistory
+  /** The team's health reminders: one card per problem, taken back when it goes away (reliability R7). */
+  private readonly healthReminders: HealthReminders
   /** The A2A Source (PR-B2b): the team's A2A address and its mailbox loop. */
   readonly a2a: A2aSource
   /** Outbox messages being sent right now, so a pass never sends one twice at once. */
@@ -323,6 +327,12 @@ export class SuperagentHost {
     this.ruleChanges = new RuleChanges(join(dir, 'rule-changes.json'))
     this.settingsHistory = new SettingsHistory(join(dir, 'settings-history.json'))
     this.decisions = new DecisionBook(join(dir, 'decisions.json'), ticketId => { const ticket = this.store.tickets.get(ticketId); return ticket !== undefined && ticket.ended === undefined })
+    this.healthReminders = new HealthReminders(
+      (question, key, at) => { const out = this.decisions.propose({ source: 'health', by: 'health', question, reason: key, at, spec: { level: 'P2', options: ['去处理', '先忽略 24 小时'], recommended: '去处理' } }); return out.ok ? out.id : undefined },
+      cardId => this.decisions.withdraw(cardId),
+      () => this.decisions.open().filter(card => card.source === 'health').map(card => ({ id: card.id, ...(card.reason !== undefined ? { reason: card.reason } : {}) })),
+      () => this.now(),
+    )
     this.reviews = new ReviewRequests({
       path: join(dir, 'reviews.json'), reviewer: () => this.settingsValue.reviewer, logger: d.logger,
       ask: (address, text) => this.a2a.askReview(address, text),
@@ -367,12 +377,15 @@ export class SuperagentHost {
       if (latest !== undefined && latest.state === 'pending' && this.executor.list().every(b => b.assignmentId !== latest.id)) this.executor.start(ticket, latest)
     }
     this.disposeTimer = this.d.interval(() => this.pass(), PASS_MS)
+    // Reliability R7: look at the team's health every 15 minutes; a new problem raises one card (the boot grace period
+    // keeps health() quiet, so nothing is raised from it either).
+    this.healthTimer = this.d.interval(() => { this.healthReminders.tick(this.health() as readonly HealthProblem[], Date.parse(this.now())) }, HEALTH_TICK_MS)
     this.started = true
     this.syncA2a()
     this.pass()
   }
 
-  stop(): Promise<void> { this.disposeTimer?.(); this.disposeTimer = undefined; this.started = false; return this.a2a.stop() }
+  stop(): Promise<void> { this.disposeTimer?.(); this.disposeTimer = undefined; this.healthTimer?.(); this.healthTimer = undefined; this.started = false; return this.a2a.stop() }
 
   /** Run the A2A Source's mailbox loop exactly while its Source is on. */
   private syncA2a(): void {
@@ -818,6 +831,12 @@ export class SuperagentHost {
     const withFiles = attached.length > 0 ? { files: attached } : {}
     const at = this.now()
     const { title: _title, ...stored } = card
+    // A health reminder's decision is a dismissal: it opens no ticket and answers no question (reliability R7).
+    if (card.source === 'health') {
+      this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
+      this.healthReminders.decided(card.id, chosen, Date.parse(at))
+      return { ok: true }
+    }
     if (card.ticketId !== undefined) {
       const out = this.answer(card.ticketId, answer)
       if (!out.ok) return out
