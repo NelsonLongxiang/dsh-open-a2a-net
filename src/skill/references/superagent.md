@@ -89,6 +89,10 @@ The owner can talk to a member or an observer directly in its own session. Treat
 - **同时进行的工单上限** caps how many tickets run at once (0: one per member, no other cap). A ticket coming back for a person's message is not held by it.
 - The host lists what keeps a team from working (a router or member session not loaded, a working ticket quiet for an hour). The team page and the right-bar views show it.
 
+## Schedules
+
+The router, members and observers have DSH's schedule tools (`schedule_create`, `schedule_edit`, `schedule_list`, `schedule_view`) for reminders and follow-ups in their own session. Only `target: this_session` is allowed; `new_once` and `new` are refused, because they would open sessions outside the team. A scheduled prompt is the session's own text, never the owner's: it cannot open a ticket for the owner or approve a rule change.
+
 ## Decision cards
 
 What the owner has to decide is a card: a question, 2 to 6 options, the option you recommend, and a level (P0 irreversible or production, P1 significant, P2 routine and easy to undo, P3 trivial; no level counts as P1). The cards wait in the right bar's **待决策** view. P2 and P3 can be approved with one click; P0 and P1 need an option chosen.

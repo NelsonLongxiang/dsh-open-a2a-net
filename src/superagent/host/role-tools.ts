@@ -30,20 +30,26 @@ export const MEMBER_PRESET = 'superagent-member'
 /** A member who may also open tickets (design D15): the preset is what makes a session one. */
 export const OBSERVER_PRESET = 'superagent-observer'
 
-export const ROUTER_TOOLS: readonly string[] = ['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose']
+/**
+ * DSH's schedule tools, for each role's own session (owner 2026-11-10): reminders and follow-ups it keeps for itself. A target
+ * other than `this_session` would open new sessions outside the team, so the guard refuses it.
+ */
+export const SCHEDULE_TOOLS: readonly string[] = ['schedule_create', 'schedule_edit', 'schedule_list', 'schedule_view']
+
+export const ROUTER_TOOLS: readonly string[] = [...SCHEDULE_TOOLS, 'superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose']
 
 /** Upstream `WORK_TOOLS` (src/app/sessions.ts) without the tools that start, list, message or interrupt other sessions. */
 export const MEMBER_WORK_TOOLS: readonly string[] = ['read', 'write', 'edit', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'job_output', 'job_list',
   'job_kill', 'web_search', 'web_fetch', 'skill', 'todo_write']
 
 /** A member's tools: its work tools, its report, and the file channel for inputs it was handed. */
-export const MEMBER_TOOLS: readonly string[] = [...MEMBER_WORK_TOOLS, 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch']
+export const MEMBER_TOOLS: readonly string[] = [...MEMBER_WORK_TOOLS, ...SCHEDULE_TOOLS, 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch']
 
 /** An observer's tools: a member's, and opening a ticket (design D15). */
 export const OBSERVER_TOOLS: readonly string[] = [...MEMBER_TOOLS, 'a2a_ticket_request', 'a2a_decision_propose']
 
 /** The tools only a team's sessions have: a session with no role is not offered them. */
-export const TEAM_TOOLS: readonly string[] = [...ROUTER_TOOLS, 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose']
+export const TEAM_TOOLS: readonly string[] = [...ROUTER_TOOLS.filter(name => !SCHEDULE_TOOLS.includes(name)), 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose']
 
 /** The tool runtime's own transport (programmatic tool calling); never restricted, every inner call is guarded. */
 const TRANSPORT = new Set(['run_code'])
@@ -52,9 +58,19 @@ export function roleTools(role: Role): readonly string[] {
   return role === 'router' ? ROUTER_TOOLS : role === 'observer' ? OBSERVER_TOOLS : MEMBER_TOOLS
 }
 
+/** Why a schedule call would reach beyond the calling session, or undefined when it stays in it. */
+export function scheduleTargetRefusal(name: string, args: unknown): string | undefined {
+  if (name !== 'schedule_create' && name !== 'schedule_edit') return undefined
+  const target = args !== null && typeof args === 'object' ? (args as { target?: unknown }).target : undefined
+  // An edit without a target keeps the one the task has, which a team session could only have made this_session.
+  if (name === 'schedule_edit' && target === undefined) return undefined
+  return target === 'this_session' ? undefined : `[superagent-role-tools] a team session schedules only for itself: target must be this_session, not ${String(target)} (a new session would sit outside the team)`
+}
+
 /** Why a role session may not call a tool, or undefined when it may. */
-export function roleToolRefusal(role: Role, name: string): string | undefined {
-  if (TRANSPORT.has(name) || roleTools(role).includes(name)) return undefined
+export function roleToolRefusal(role: Role, name: string, args?: unknown): string | undefined {
+  if (TRANSPORT.has(name)) return undefined
+  if (roleTools(role).includes(name)) return scheduleTargetRefusal(name, args)
   return role === 'router'
     ? `[superagent-role-tools] the team router acts only through ${ROUTER_TOOLS.join(', ')}; ${name} is not one of them`
     : `[superagent-role-tools] a team member works with its work tools and reports with a2a_ticket_report; ${name} is not one of them (no sessions, subagents or A2A routes)`
@@ -115,9 +131,9 @@ export class RoleTools {
   }
 
   /** The global guard: a role session (or its subagent) calls only its role's tools. */
-  guard(name: string, agent: RoleAgent | undefined): string | undefined {
+  guard(name: string, agent: RoleAgent | undefined, args?: unknown): string | undefined {
     const role = this.roleOfAgent(agent)
-    return role === undefined ? undefined : roleToolRefusal(role, name)
+    return role === undefined ? undefined : roleToolRefusal(role, name, args)
   }
 
   /**

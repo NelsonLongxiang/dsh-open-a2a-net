@@ -82,6 +82,9 @@
             name: '@deepseek-ai/dsh-skill-filesystem'
           - id: tool-skill
             name: '@deepseek-ai/dsh-tool-skill'
+          # Schedules for the session itself (owner 2026-11-10): the host refuses any target but this_session.
+          - id: tool-schedule
+            name: '@deepseek-ai/dsh-tool-schedule'
           - id: compaction
             name: cordis:group
             group: true
@@ -162,6 +165,9 @@
             name: '@deepseek-ai/dsh-skill-filesystem'
           - id: tool-skill
             name: '@deepseek-ai/dsh-tool-skill'
+          # Schedules for the session itself (owner 2026-11-10): the host refuses any target but this_session.
+          - id: tool-schedule
+            name: '@deepseek-ai/dsh-tool-schedule'
           - id: compaction
             name: cordis:group
             group: true
@@ -251,6 +257,9 @@
             name: '@deepseek-ai/dsh-skill-filesystem'
           - id: tool-skill
             name: '@deepseek-ai/dsh-tool-skill'
+          # Schedules for the session itself (owner 2026-11-10): the host refuses any target but this_session.
+          - id: tool-schedule
+            name: '@deepseek-ai/dsh-tool-schedule'
           - id: compaction
             name: cordis:group
             group: true
