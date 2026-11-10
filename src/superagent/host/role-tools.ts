@@ -79,9 +79,22 @@ export function scheduleTargetRefusal(name: string, args: unknown): string | und
 }
 
 /** Why a role session may not call a tool, or undefined when it may. */
-export function roleToolRefusal(role: Role, name: string, args?: unknown): string | undefined {
+/**
+ * Whether a tool outside a role's list may be asked for (design tool-requests T2): never the team's own protocol tools, a
+ * route out of the team, team membership, subagents or other sessions, nor the ygl-trees tools each role is narrowed to.
+ */
+export function grantableTool(role: Role, name: string): boolean {
+  if (roleTools(role).includes(name) || TEAM_TOOLS.includes(name) || TRANSPORT.has(name)) return false
+  if (['a2a_route', 'a2a_file_send', 'a2a_team_join', 'a2a_team_leave'].includes(name) || name.startsWith('mcp__ygl__') || name.startsWith('schedule_')) return false
+  return !/subagent|^task$|^agent$|^session[_/]|^sessions?$/i.test(name) && /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(name)
+}
+
+/** The role class a granted tool is kept under: an observer shares the members' grants (design tool-requests T1). */
+export const grantClass = (role: Role): 'router' | 'member' => role === 'router' ? 'router' : 'member'
+
+export function roleToolRefusal(role: Role, name: string, args?: unknown, granted: readonly string[] = []): string | undefined {
   if (TRANSPORT.has(name)) return undefined
-  if (roleTools(role).includes(name)) return scheduleTargetRefusal(name, args)
+  if (roleTools(role).includes(name) || (granted.includes(name) && grantableTool(role, name))) return scheduleTargetRefusal(name, args)
   return role === 'router'
     ? `[superagent-role-tools] the team router acts only through ${ROUTER_TOOLS.join(', ')}; ${name} is not one of them`
     : `[superagent-role-tools] a team member works with its work tools and reports with a2a_ticket_report; ${name} is not one of them (no sessions, subagents or A2A routes)`
@@ -114,6 +127,10 @@ export function scopeKeyOf(ctx: unknown): object | undefined {
 export interface RoleToolsDeps {
   /** A local session's role in the team (or the team this host serves). */
   readonly roleOf: (sessionId: string) => Role | undefined
+  /** Tools the owner granted this session's team for its role (design tool-requests T1). */
+  readonly grantedOf?: (sessionId: string) => readonly string[]
+  /** A grantable tool was refused: the host may raise a request and say so in the refusal (T3). */
+  readonly onRefused?: (sessionId: string, role: Role, name: string) => string | undefined
   /** A loaded agent by session id (for a subagent's parents). */
   readonly agentOf: (sessionId: string) => RoleAgent | undefined
   readonly logger: { warn(format: string, ...args: unknown[]): void }
@@ -124,16 +141,19 @@ const PARENT_DEPTH = 8
 
 export class RoleTools {
   /** Restrictions in force, by session id: the role they were made for and their disposer. */
-  private readonly applied = new Map<string, { role: Role | undefined; dispose: () => void }>()
+  private readonly applied = new Map<string, { role: Role | undefined; key: string; dispose: () => void }>()
 
   constructor(private readonly d: RoleToolsDeps) {}
 
   /** The role an agent acts in: its own, or the nearest parent session's (a subagent inherits it). */
-  roleOfAgent(agent: RoleAgent | undefined): Role | undefined {
+  roleOfAgent(agent: RoleAgent | undefined): Role | undefined { return this.roleSessionOf(agent)?.role }
+
+  /** The role an agent acts in and the session that holds it (its own, or the nearest parent's). */
+  private roleSessionOf(agent: RoleAgent | undefined): { role: Role; session: string } | undefined {
     let current = agent
     for (let depth = 0; current !== undefined && depth <= PARENT_DEPTH; depth++) {
       const role = this.d.roleOf(String(current.id))
-      if (role !== undefined) return role
+      if (role !== undefined) return { role, session: String(current.id) }
       const parent = current.session?.header?.parentSession
       if (parent === undefined || parent === null) return undefined
       current = this.d.agentOf(String(parent))
@@ -143,8 +163,12 @@ export class RoleTools {
 
   /** The global guard: a role session (or its subagent) calls only its role's tools. */
   guard(name: string, agent: RoleAgent | undefined, args?: unknown): string | undefined {
-    const role = this.roleOfAgent(agent)
-    return role === undefined ? undefined : roleToolRefusal(role, name, args)
+    const held = this.roleSessionOf(agent)
+    if (held === undefined) return undefined
+    const refusal = roleToolRefusal(held.role, name, args, this.d.grantedOf?.(held.session) ?? [])
+    if (refusal === undefined || !grantableTool(held.role, name)) return refusal
+    const asked = this.d.onRefused?.(held.session, held.role, name)
+    return asked === undefined ? refusal : `${refusal}. ${asked}`
   }
 
   /**
@@ -154,8 +178,10 @@ export class RoleTools {
   sync(agent: RoleAgent): void {
     const id = String(agent.id)
     const role = this.d.roleOf(id)
+    const granted = role === undefined ? [] : (this.d.grantedOf?.(id) ?? []).filter(name => grantableTool(role, name))
+    const key = granted.join(',')
     const current = this.applied.get(id)
-    if (current !== undefined && current.role === role) return
+    if (current !== undefined && current.role === role && current.key === key) return
     if (current !== undefined) { this.applied.delete(id); try { current.dispose() } catch { /* the scope is gone */ } }
     // Runs for every session now, in `agent/created`: a context that has not injected the tools service throws on the read.
     let tools: NonNullable<RoleAgent['ctx']>['tools']
@@ -167,9 +193,9 @@ export class RoleTools {
     // would hide a member's work tools. Without the scope key, visibility stays as it is: the guard is the rule.
     const scope = scopeKeyOf(agent.ctx)
     if (scope === undefined) { this.d.logger.warn('superagent: no tool scope for %s; its tools are guarded, not hidden', id); return }
-    const allow = roleTools(role).filter(name => { try { return tools.get(name, scope) !== undefined } catch { return false } })
+    const allow = [...roleTools(role), ...granted].filter(name => { try { return tools.get(name, scope) !== undefined } catch { return false } })
     if (allow.length === 0) return
-    try { this.applied.set(id, { role, dispose: tools.restrict({ allow }) }) } catch (error) { this.d.logger.warn('superagent: tools of %s not restricted: %s', id, String(error)) }
+    try { this.applied.set(id, { role, key, dispose: tools.restrict({ allow }) }) } catch (error) { this.d.logger.warn('superagent: tools of %s not restricted: %s', id, String(error)) }
   }
 
   /** A session with no role: the names its scope has of the team's tools come off its list. */
@@ -178,7 +204,7 @@ export class RoleTools {
     if (scope === undefined) return
     const deny = TEAM_TOOLS.filter(name => { try { return tools.get(name, scope) !== undefined } catch { return false } })
     if (deny.length === 0) return
-    try { this.applied.set(id, { role: undefined, dispose: tools.restrict({ deny }) }) } catch (error) { this.d.logger.warn('superagent: team tools of %s not hidden: %s', id, String(error)) }
+    try { this.applied.set(id, { role: undefined, key: '', dispose: tools.restrict({ deny }) }) } catch (error) { this.d.logger.warn('superagent: team tools of %s not hidden: %s', id, String(error)) }
   }
 
   /** A disposed agent's restriction went with its scope. */

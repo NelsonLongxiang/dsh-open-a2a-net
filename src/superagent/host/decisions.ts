@@ -27,7 +27,7 @@ export interface StoredCard extends DecisionSpec {
   readonly id: string
   readonly question: string
   readonly reason?: string
-  readonly source: 'router' | 'observer' | 'ticket' | 'health'
+  readonly source: 'router' | 'observer' | 'ticket' | 'health' | 'tool'
   readonly by: string
   readonly ticketId?: string
   readonly at: string
@@ -100,8 +100,13 @@ export class DecisionBook {
   }
   open(): StoredCard[] { return this.cards.filter(card => card.decided === undefined) }
 
+  /** The newest decided card of one proposer, if any (a declined tool request is not raised again for a while). */
+  lastDecided(source: StoredCard['source'], by: string): StoredCard | undefined {
+    return this.cards.filter(card => card.source === source && card.by === by && card.decided !== undefined).sort((a, b) => b.decided!.at.localeCompare(a.decided!.at))[0]
+  }
+
   /** A card of the router's or an observer's own. An identical open question returns the existing card. */
-  propose(input: { source: 'router' | 'observer' | 'health'; by: string; question: string; reason?: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[] }): { ok: true; id: string; reused?: true } | { ok: false; code: string; error: string } {
+  propose(input: { source: 'router' | 'observer' | 'health' | 'tool'; by: string; question: string; reason?: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[] }): { ok: true; id: string; reused?: true } | { ok: false; code: string; error: string } {
     const question = input.question.trim()
     if (question === '' || question.length > QUESTION_MAX) return { ok: false, code: 'question', error: `question is required, at most ${String(QUESTION_MAX)} characters` }
     const mine = this.open().filter(card => card.source === input.source && card.by === input.by)

@@ -28,12 +28,14 @@ import { parseFileRef } from '../../blob-store.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
-import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, type Role } from './role-tools.ts'
+import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, grantClass, type Role } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
 import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 import { searchTeam } from './search.ts'
 import { A2aReceipts, END_RECEIPT_GRACE_MS } from './receipts.ts'
 export { END_RECEIPT_GRACE_MS } from './receipts.ts'
+/** How long a declined tool request stays declined before the tool may be asked about again (design tool-requests T4). */
+export const TOOL_ASK_AGAIN_MS = 24 * 3_600_000
 import { agentLedEnd, clip, TEXT_CAP, presetRefusal, notTakenText, OTHER_TICKETS_SHOWN, ORIGIN_LINE_NOTE, OBSERVER_LINE, candidateCard, YGL_WRITE, YGL_CARD_LINES } from './cards.ts'
 import type { SuperagentHostDeps, PersonMessage, WorkbenchVia } from './deps.ts'
 export * from './cards.ts'
@@ -570,6 +572,40 @@ export class SuperagentHost {
     try { return { ok: true, logins: await this.issues.collaborators(repos) } } catch (error) { return { ok: false, code: 'github', error: String(error).slice(0, 300) } }
   }
 
+  /** Tools the owner granted the team for this session's role (design tool-requests T1). */
+  grantedTools(session: string): readonly string[] {
+    const role = this.toolRoleOf(session)
+    return role === undefined ? [] : this.settingsValue.extraTools?.[grantClass(role)] ?? []
+  }
+
+  /**
+   * A grantable tool was refused to a team session: ask the owner with a P0 card, once per role and tool (T3). A tool the
+   * owner declined is not asked about again within a day.
+   * @returns what the refusal should add, for the session to read.
+   */
+  requestTool(session: string, role: Role, name: string): string {
+    const cls = grantClass(role), by = `${cls}:${name}`
+    if (this.decisions.open().some(card => card.source === 'tool' && card.by === by)) return `A request to use ${name} is already waiting for the owner as a P0 decision card; try again after it is approved.`
+    const last = this.decisions.lastDecided('tool', by)
+    if (last !== undefined && !last.decided!.text.includes('批准') && Date.parse(this.now()) - Date.parse(last.decided!.at) < TOOL_ASK_AGAIN_MS) return `The owner declined ${name} for this team at ${last.decided!.at}; it is not asked about again for a day.`
+    const who = cls === 'router' ? '总工' : '成员和观察者'
+    const out = this.decisions.propose({ source: 'tool', by, at: this.now(), question: `${this.memberName(session)} 申请使用工具 ${name}（不在这个角色的工具列表里），要放行给本团队的${who}吗？`,
+      reason: `这个工具不在团队预设里，宿主确认不了它来自哪个插件、有没有沙箱。信得过提供它的插件再批准；批准后本团队的${who}都能用，可以在设置里收回。`,
+      spec: { level: 'P0', options: [`批准：本团队的${who}可用 ${name}`, '拒绝'], recommended: '拒绝' } })
+    return out.ok ? `A P0 decision card asks the owner whether this team's ${cls === 'router' ? 'router' : 'members'} may use ${name}; try again after it is approved.` : `The request could not be raised: ${out.error}`
+  }
+
+  /** Apply an approved tool request: the tool joins the team's grants for that role, and the sessions' lists update now. */
+  private grantTool(by: string): void {
+    const [cls, name] = [by.slice(0, by.indexOf(':')), by.slice(by.indexOf(':') + 1)] as ['router' | 'member', string]
+    const current = this.settingsValue.extraTools?.[cls] ?? []
+    if (current.includes(name)) return
+    const previous = this.settings
+    this.writeSettings({ ...this.settingsValue, extraTools: { ...(this.settingsValue.extraTools ?? {}), [cls]: [...current, name] } })
+    this.settingsHistory.record(this.now(), 'owner', previous as unknown as Record<string, unknown>, this.settings as unknown as Record<string, unknown>)
+    try { this.d.onRolesChanged?.() } catch (error) { this.d.logger.warn('superagent: granted tool not applied: %s', String(error)) }
+  }
+
   /** A file on one of the cards, for the owner to download (C8). */
   decisionFile(cardId: string, sha256: string): DecisionFile | undefined { return this.decisions.fileOf(cardId, sha256) }
 
@@ -625,6 +661,12 @@ export class SuperagentHost {
       this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
       this.healthReminders.decided(card.id, chosen, Date.parse(at))
       return { ok: true }
+    }
+    // Design tool-requests T4: a tool request is applied to the team's grants, not ticketed.
+    if (card.source === 'tool') {
+      this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
+      if (chosen.startsWith('批准')) this.grantTool(card.by)
+      return { ok: true, granted: chosen.startsWith('批准') }
     }
     if (card.ticketId !== undefined) {
       const out = this.answer(card.ticketId, answer)

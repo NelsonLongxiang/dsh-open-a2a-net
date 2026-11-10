@@ -15,6 +15,8 @@ export interface TeamFieldValues {
   /** GitHub issues as requests (design github-issues). */
   readonly github?: { readonly repos: readonly string[]; readonly intake: 'mention' | 'all' }
   readonly sources?: { readonly workbench?: boolean; readonly a2a?: boolean; readonly github?: boolean }
+  /** Tools the owner granted beyond each role's list (design tool-requests). */
+  readonly extraTools?: { readonly router?: readonly string[]; readonly member?: readonly string[] }
   readonly reviewer?: string
   readonly repos?: Readonly<Record<string, string>>
   readonly profiles?: Readonly<Record<string, { readonly role?: string; readonly rules: readonly TeamRule[] }>>
@@ -166,6 +168,11 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
   const capBox = input('同时进行的工单上限', String(s.maxConcurrent ?? 0), '0')
   execBox.append(prepareBox, capBox)
 
+  const toolsBox = section('额外放行的工具', '成员或观察者用到角色白名单外的工具时，会给你提一张 P0 决策卡申请；批准后会出现在这里。删掉一个就是收回授权。这一块的修改需要在已登录的界面里保存。')
+  const routerTools = area('总工额外放行的工具', (s.extraTools?.router ?? []).join('\n'), 2, '一行一个工具名')
+  const memberTools = area('成员和观察者额外放行的工具', (s.extraTools?.member ?? []).join('\n'), 2, '一行一个工具名，例如 gitbash')
+  toolsBox.append(routerTools, memberTools)
+
   const reviewBox = section('送审地址', '填了之后，工单开的 PR 会在每个新提交上发一次评审请求，结论只供合并的人参考。必须是已建链的 A2A 地址，留空表示不送审。')
   const reviewer = input('送审地址', s.reviewer ?? '', 'dsh/xxxxxxxx')
   reviewBox.appendChild(reviewer)
@@ -219,9 +226,13 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
     if (repoList.length > 10 || repoList.some(repo => !REPO.test(repo))) return { error: '接收 Issue 的仓库要写成 owner/name，最多 10 个' }
     if (!same(repoList, s.github?.repos ?? []) || intake.value !== (s.github?.intake ?? 'mention')) out.github = repoList.length === 0 && intake.value === 'mention' ? null : { repos: repoList, intake: intake.value }
 
+    // Granted tools go out only when a list changed: an untouched save stays clear of the owner-login check (T5).
+    const routerList = linesOf(routerTools.value), memberList = linesOf(memberTools.value)
+    const toolsChanged = { router: !same(routerList, s.extraTools?.router ?? []), member: !same(memberList, s.extraTools?.member ?? []) }
+    if (toolsChanged.router || toolsChanged.member) out.extraTools = { ...(toolsChanged.router ? { router: routerList } : {}), ...(toolsChanged.member ? { member: memberList } : {}) }
     const address = reviewer.value.trim()
     if (address !== (s.reviewer ?? '')) out.reviewer = address === '' ? null : address
     return { patch: out }
   }
-  return { nodes: [rulesBox, dispatchBox, profilesBox, execBox, botsBox, repoBox, githubBox, reviewBox], patch }
+  return { nodes: [rulesBox, dispatchBox, profilesBox, execBox, botsBox, repoBox, githubBox, toolsBox, reviewBox], patch }
 }

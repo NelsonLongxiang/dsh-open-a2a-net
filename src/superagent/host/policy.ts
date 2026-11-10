@@ -92,6 +92,8 @@ export interface TeamSettings {
   readonly sources: { readonly workbench: boolean; readonly a2a: boolean; readonly github?: boolean }
   /** GitHub issues as a source of requests (design github-issues G1, G2). */
   readonly github?: GithubIntake
+  /** Tools the owner granted beyond a role's list, for this team (design tool-requests T1); an observer follows `member`. */
+  readonly extraTools?: { readonly router?: readonly string[]; readonly member?: readonly string[] }
   /** How long the router may take over a candidate before its Eval expires (upstream: re-queued twice, then unavailable). */
   readonly evalTimeoutMs: number
   /** Pause processing (upstream docs/003): Sources still record Triggers; Evals, dispatch and replies wait. */
@@ -205,6 +207,22 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   if (typeof wb === 'string') return { ok: false, error: wb }
   if (typeof a === 'string') return { ok: false, error: a }
   if (typeof gh === 'string') return { ok: false, error: gh }
+  // Design tool-requests T1: what the owner granted; a named role replaces its list, an unnamed one keeps what is saved.
+  let extraTools = current.extraTools
+  if ('extraTools' in r) {
+    if (r.extraTools === null) extraTools = undefined
+    else {
+      const raw = (r.extraTools ?? {}) as Record<string, unknown>
+      const next: { router?: readonly string[]; member?: readonly string[] } = { ...(current.extraTools ?? {}) }
+      for (const key of ['router', 'member'] as const) {
+        if (!(key in raw)) continue
+        const names = Array.isArray(raw[key]) ? [...new Set((raw[key] as unknown[]).map(x => String(x).trim()).filter(x => x !== ''))] : undefined
+        if (names === undefined || names.length > 20 || names.some(x => !/^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(x))) return { ok: false, error: `extraTools.${key} must list at most 20 tool names` }
+        if (names.length === 0) delete next[key]; else next[key] = names
+      }
+      extraTools = next.router === undefined && next.member === undefined ? undefined : next
+    }
+  }
   // Design github-issues G1, G2: the repositories whose issues reach the team, and which issues count.
   let githubIntake = current.github
   if ('github' in r) {
@@ -333,7 +351,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const observers = current.observers ?? []
   const dispatch = 'dispatch' in r ? r.dispatch : current.dispatch ?? ''
   if (typeof dispatch !== 'string' || dispatch.length > DISPATCH_MAX) return { ok: false, error: `dispatch must be text of at most ${String(DISPATCH_MAX)} characters` }
-  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), evalTimeoutMs, paused } }
+  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), ...(extraTools !== undefined ? { extraTools } : {}), evalTimeoutMs, paused } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/
