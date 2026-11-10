@@ -2088,6 +2088,8 @@ export function apply(ctx: Context, config: Config): void {
       return undefined
     },
     sessionName: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : `${nodeMetadataOf(agent).name} (${id.replace(/^session-/, '').slice(0, 8)})` },
+    sessionLoaded: id => sessionNodes.has(id),
+    workspaceOf: id => { const cwd = (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd; return typeof cwd === 'string' ? cwd : undefined },
     memberTurn: id => {
       const agent = sessionNodes.get(id)
       if (agent === undefined) return undefined
@@ -3282,7 +3284,7 @@ export function apply(ctx: Context, config: Config): void {
       path: '/__dsh_a2a/superagent/decisions',
       handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
         const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
-        if (req.method === 'GET') { send(200, { decisions: superagentTeams.decisionCards() }); return }
+        if (req.method === 'GET') { send(200, { decisions: superagentTeams.decisionCards(), health: superagentTeams.health() }); return }
         readJsonBody(req, res, (body) => {
           const fields = body as { teamId?: unknown; id?: unknown; how?: unknown; option?: unknown; note?: unknown }
           const team = superagentTeams.get(typeof fields.teamId === 'string' ? fields.teamId : undefined)

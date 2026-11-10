@@ -33,6 +33,10 @@ export type A2aNetKey =
   | 'team.fromRouter'
   | 'team.fromObserver'
   | 'team.fromMember'
+  | 'team.healthTitle'
+  | 'team.healthRouter'
+  | 'team.healthMember'
+  | 'team.healthQuiet'
   | 'team.tab'
   | 'team.guide'
   | 'team.pick'
@@ -69,6 +73,10 @@ export const zh: Record<A2aNetKey, string> = {
   'team.fromRouter': '总工提出',
   'team.fromObserver': '观察者提出',
   'team.fromMember': '成员提问',
+  'team.healthTitle': '团队有 {count} 个问题',
+  'team.healthRouter': '总工会话 {session} 没有加载，需求送不到它，打开这个会话即可',
+  'team.healthMember': '成员会话 {session} 没有加载，工单派不给它，打开这个会话即可',
+  'team.healthQuiet': '工单「{title}」已经 {minutes} 分钟没有动静',
   'team.tab': '提需求',
   'team.guide': '把需求交给 superagent 团队，不用离开当前对话',
   'team.pick': '团队',
@@ -118,6 +126,10 @@ export const en: Record<A2aNetKey, string> = {
   'team.fromRouter': 'From the router',
   'team.fromObserver': 'From an observer',
   'team.fromMember': 'From a member',
+  'team.healthTitle': 'The team has {count} problem(s)',
+  'team.healthRouter': 'Router session {session} is not loaded, so requests cannot reach it. Open that session',
+  'team.healthMember': 'Member session {session} is not loaded, so tickets cannot reach it. Open that session',
+  'team.healthQuiet': 'Ticket “{title}” has had no activity for {minutes} minutes',
   'team.tab': 'Request',
   'team.guide': 'Send a superagent team a request without leaving this conversation',
   'team.pick': 'Team',

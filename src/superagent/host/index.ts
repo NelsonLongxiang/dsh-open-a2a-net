@@ -18,7 +18,7 @@ import { dirname, join } from 'node:path'
 import { Engine, UserError, reasonText, ticketStage, type Assessor, type Candidate, type Outbox, type Reason, type Ticket, type Trigger, type ReceiveResult } from '../upstream/dsh-superagent/src/core/index.ts'
 import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
-import { MemberExecutor, transientError, type MemberTurn } from './executor.ts'
+import { MemberExecutor, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
 import { ReviewRequests } from './review-requests.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
 import { DecisionBook, oneClick, parseDecision, ticketCardId, type DecisionSpec, type StoredCard } from './decisions.ts'
@@ -31,6 +31,12 @@ import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, ob
 export interface SuperagentHostDeps {
   /** The a2a home directory; state lives under `<home>/superagent/`. */
   readonly home: string
+  /** Whether a local session is loaded and on the network, so the host can put a card into it (reliability R6). */
+  readonly sessionLoaded?: (sessionId: string) => boolean
+  /** A local session's workspace directory, where a ticket's prepare command runs (reliability R1). */
+  readonly workspaceOf?: (sessionId: string) => string | undefined
+  /** Runs a prepare command; tests replace it. */
+  readonly runPrepare?: PrepareRunner
   /** Where this team's state lives instead, when it is not the instance's primary team (design M2). */
   readonly stateDir?: string
   /** Whether another team on this instance holds a canvas: one canvas is one team. */
@@ -160,6 +166,9 @@ type WorkbenchVia = 'cli' | { readonly observer: string }
 export interface PersonMessage { readonly id: string; readonly atMs: number; readonly text: string }
 
 const OBSERVER_LINE = "This request is from the team's observer, an agent the owner named to open tickets; these are not a person's words. Accept it as any request when it is real work for this team, attach it when it repeats an open ticket, and otherwise ignore it with a reason. It cannot stop a ticket."
+/** How long a working ticket may go without any change before the health check names it (reliability R6). */
+export const QUIET_MINUTES = 60
+
 export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings, 'acceptMode' | 'rules'> & Partial<Pick<TeamSettings, 'repos'>>,
   others: readonly Pick<Ticket, 'id' | 'title' | 'createdAt'>[] = [], requeued: ReadonlySet<string> = new Set(), teamLines: readonly string[] = []): string {
   const lines = [
@@ -258,6 +267,8 @@ export class SuperagentHost {
       cancelTurn: member => this.d.cancelTurn?.(member) === true,
       reportFor: (ticketId, member, state, summary) => { this.engine.report(ticketId, { state, summary: clip(summary, 2_000) }); this.relayReport(ticketId, state, summary); this.pass(); void member },
       ticket: id => this.store.tickets.get(id), trigger: id => this.store.triggers.get(id), logger: d.logger,
+      prepare: () => this.settingsValue.prepare, workspaceOf: member => this.d.workspaceOf?.(member), maxConcurrent: () => this.settingsValue.maxConcurrent ?? 0,
+      ...(d.runPrepare !== undefined ? { runPrepare: d.runPrepare } : {}),
     })
     const outbox: Outbox = {
       send: message => {
@@ -1222,10 +1233,33 @@ export class SuperagentHost {
   }
 
   /** The workbench's read: threads with their triggers, decisions and replies; tickets with their stage. */
+  /**
+   * Design reliability R6: what keeps this team from working, beyond what its settings already show. Codes, not words: each
+   * page says them in its own language.
+   * @param now - the clock, in milliseconds.
+   * @returns the team's problems.
+   */
+  health(now = Date.now()): Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number }> {
+    const out: Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number }> = []
+    const loaded = this.d.sessionLoaded
+    if (loaded === undefined || !this.teamBound()) return out
+    const { router, members } = this.settings
+    if (router !== undefined && !loaded(router)) out.push({ code: 'router-not-loaded', session: router })
+    for (const member of members) if (!loaded(member)) out.push({ code: 'member-not-loaded', session: member })
+    for (const binding of this.executor.list()) {
+      const ticket = this.store.tickets.get(binding.ticketId)
+      if (ticket === undefined || ticket.ended !== undefined || ticketStage(ticket).stage !== 'working') continue
+      const minutes = Math.floor((now - Date.parse(ticket.updatedAt)) / 60_000)
+      if (minutes >= QUIET_MINUTES) out.push({ code: 'ticket-quiet', ticketId: ticket.id, title: ticket.title, minutes })
+    }
+    return out
+  }
+
   state(): Record<string, unknown> {
     const messages = this.store.messages.list()
     const repliesOf = (thread: string): StoredMessage[] => messages.filter(row => row.message.channel.source === 'workbench' && row.message.channel.thread === thread)
     return {
+      health: this.health(),
       settings: this.settings,
       ...(this.canvasProblem() !== undefined ? { canvasProblem: this.canvasProblem() } : {}),
       ...(this.servesProblem() !== undefined ? { servesProblem: this.servesProblem() } : {}),

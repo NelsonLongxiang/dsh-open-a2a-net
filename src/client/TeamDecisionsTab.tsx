@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import styles from './TeamRequestTab.module.css'
+import { TeamHealthBanner } from './TeamHealthBanner.tsx'
 
 export type TeamDecisionsTabProps = PropsLocale<'a2aNet'>
 
@@ -95,6 +96,6 @@ export function TeamDecisionsTab({ t }: TeamDecisionsTabProps) {
 
   if (state !== 'ok') return <div className={styles.view}><p className={styles.hint}>{t(state === 'denied' ? 'team.denied' : 'team.unreadable')}</p></div>
   if (rows === undefined) return <div className={styles.view}><p className={styles.hint}>{t('team.loading')}</p></div>
-  if (rows.length === 0) return <div className={styles.view}><p className={styles.hint}>{t('team.noDecisions')}</p></div>
-  return <div className={styles.view}>{rows.map(row => <Card key={row.id} row={row} t={t} done={() => { void load() }} />)}</div>
+  if (rows.length === 0) return <div className={styles.view}><TeamHealthBanner t={t} /><p className={styles.hint}>{t('team.noDecisions')}</p></div>
+  return <div className={styles.view}><TeamHealthBanner t={t} />{rows.map(row => <Card key={row.id} row={row} t={t} done={() => { void load() }} />)}</div>
 }

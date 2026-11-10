@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DragEvent, KeyboardEvent } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import styles from './TeamRequestTab.module.css'
+import { TeamHealthBanner } from './TeamHealthBanner.tsx'
 
 export type TeamRequestTabProps = PropsLocale<'a2aNet'> & { /** The session the view is open in: a request to another instance is sent as it. */ readonly sessionId?: string }
 
@@ -160,6 +161,7 @@ export function TeamRequestTab({ t, sessionId }: TeamRequestTabProps) {
 
   return (
     <div className={`${styles.view} ${dragging ? styles.dragging : ''}`} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+      <TeamHealthBanner t={t} />
       <label className={styles.field}>
         <span className={styles.label}>{t('team.pick')}</span>
         <select className={styles.input} value={chosen.id} onChange={(event) => { setTeam(event.target.value) }}>

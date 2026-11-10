@@ -55,6 +55,11 @@ export class SuperagentTeams {
     return [row('', this.primary), ...[...this.extras].map(([id, team]) => row(id, team))]
   }
 
+  /** Every team's health problems, each with the team it belongs to (reliability R6). */
+  health(): Array<Record<string, unknown>> {
+    return [['', this.primary] as const, ...this.extras].flatMap(([id, team]) => team.health().map(problem => ({ ...problem, teamId: id, team: team.settings.canvas ?? '' })))
+  }
+
   /** Every team's waiting decisions, each with the team it belongs to. */
   decisionCards(): Array<Record<string, unknown>> {
     return [['', this.primary] as const, ...this.extras].flatMap(([id, team]) => team.decisionCards().map(card => ({ ...card, teamId: id, team: team.settings.canvas ?? '' })))

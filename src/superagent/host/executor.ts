@@ -18,6 +18,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/executor
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import { waitsForPerson, type Assignment, type Engine, type Executor, type PolicyEffect, type Ticket, type TicketInput } from '../upstream/dsh-superagent/src/core/index.ts'
@@ -47,7 +48,29 @@ export interface MemberExecutorDeps {
   /** Text of a stored Trigger, for Inputs. */
   readonly trigger: (id: string) => { text: string; actor: { source: string; id: string }; at: string } | undefined
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
+  /** The team's prepare command (design reliability R1), if it has one. */
+  readonly prepare?: () => { readonly command: string; readonly timeoutMs: number } | undefined
+  /** A local member session's workspace directory. */
+  readonly workspaceOf?: (member: string) => string | undefined
+  /** Run a prepare command; tests replace it. */
+  readonly runPrepare?: PrepareRunner
+  /** How many tickets may run at once; 0 is no cap (design reliability R5). */
+  readonly maxConcurrent?: () => number
 }
+
+/** Runs a prepare command: whether it exited 0, and the end of what it printed. */
+export type PrepareRunner = (command: string, cwd: string, env: Readonly<Record<string, string>>, timeoutMs: number) => Promise<{ ok: boolean; output: string }>
+const PREPARE_OUTPUT_TAIL = 2_000
+
+/** `sh -c` in the workspace, with the ticket's variables added to this process's environment. */
+export const defaultPrepare: PrepareRunner = (command, cwd, env, timeoutMs) => new Promise((resolve) => {
+  execFile('sh', ['-c', command], { cwd, env: { ...process.env, ...env }, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+    const output = `${String(stdout)}${String(stderr)}`.slice(-PREPARE_OUTPUT_TAIL)
+    if (error === null) { resolve({ ok: true, output }); return }
+    const why = (error as { killed?: boolean }).killed === true ? `timed out after ${String(Math.round(timeoutMs / 1000))} s` : `exit ${String((error as { code?: unknown }).code ?? '?')}`
+    resolve({ ok: false, output: `${why}\n${output}`.slice(-PREPARE_OUTPUT_TAIL) })
+  })
+})
 
 /** What a member's turn left when it ended: whether nothing of it still runs (shell jobs), and its last words. */
 export interface MemberTurn { readonly quiet: boolean; readonly text: string; /** The turn answered the owner talking to this session directly. */ readonly person?: boolean }
@@ -107,20 +130,24 @@ export class MemberExecutor implements Executor {
     this.parked = stored.parked
     this.ticketRepos = stored.repos
     this.ticketMembers = stored.ticketMembers ?? {}
+    this.prepared = stored.prepared ?? {}
   }
+  /** Tickets whose directory the prepare command has made (R1: once per ticket). */
+  private prepared: Record<string, true>
 
-  private load(): { bindings: Binding[]; parked: Binding[]; repos: Record<string, string>; ticketMembers?: Record<string, { member: string; named: boolean }> } {
+  private load(): { bindings: Binding[]; parked: Binding[]; repos: Record<string, string>; ticketMembers?: Record<string, { member: string; named: boolean }>; prepared?: Record<string, true> } {
     try {
       if (!existsSync(this.d.path)) return { bindings: [], parked: [], repos: {} }
-      const raw = JSON.parse(readFileSync(this.d.path, 'utf8')) as { bindings?: Binding[]; parked?: Binding[]; repos?: Record<string, unknown> }
+      const raw = JSON.parse(readFileSync(this.d.path, 'utf8')) as { bindings?: Binding[]; parked?: Binding[]; repos?: Record<string, unknown>; ticketMembers?: Record<string, { member: string; named: boolean }>; prepared?: Record<string, true> }
       const repos = Object.fromEntries(Object.entries(raw.repos ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
-      return { bindings: raw.bindings ?? [], parked: raw.parked ?? [], repos }
+      return { bindings: raw.bindings ?? [], parked: raw.parked ?? [], repos, ...(raw.ticketMembers !== undefined ? { ticketMembers: raw.ticketMembers } : {}), ...(raw.prepared !== undefined ? { prepared: raw.prepared } : {}) }
     } catch { return { bindings: [], parked: [], repos: {} } }
   }
   private save(): void {
     // An ended ticket's repository is no longer needed.
     this.ticketRepos = Object.fromEntries(Object.entries(this.ticketRepos).filter(([id]) => { const t = this.d.ticket(id); return t !== undefined && !t.ended }))
     this.ticketMembers = Object.fromEntries(Object.entries(this.ticketMembers).filter(([id]) => { const t = this.d.ticket(id); return t !== undefined && !t.ended }))
+    this.prepared = Object.fromEntries(Object.entries(this.prepared).filter(([id]) => { const t = this.d.ticket(id); return t !== undefined && !t.ended })) as Record<string, true>
     mkdirSync(dirname(this.d.path), { recursive: true })
     const temporary = `${this.d.path}.tmp-${randomUUID()}`
     try { writeFileSync(temporary, JSON.stringify({ bindings: this.bindings, parked: this.parked, repos: this.ticketRepos, ticketMembers: this.ticketMembers }), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.d.path) } finally { rmSync(temporary, { force: true }) }
@@ -248,8 +275,14 @@ export class MemberExecutor implements Executor {
         const ticket = this.d.ticket(next.ticketId)
         const assignment = ticket?.assignments.find(a => a.id === next.assignmentId)
         if (ticket === undefined || ticket.ended || assignment === undefined || assignment.state !== 'pending') { this.waiting = this.waiting.filter(w => w !== next); continue }
+        // R5: at the cap a new ticket waits; a parked ticket coming back for a person's message (above) is not held.
+        const cap = this.d.maxConcurrent?.() ?? 0
+        if (cap > 0 && this.bindings.length >= cap) break
         let member: string | undefined
+        let preparing: { command: string; timeoutMs: number; cwd: string } | 'no-workspace' | undefined
         for (const candidate of this.free(ticket.id)) {
+          preparing = this.preparationFor(ticket.id, candidate)
+          if (preparing !== undefined) { member = candidate; break }
           if (await this.tryDeliver(candidate, assignmentCard(ticket, this.d.trigger, this.ticketRepos[ticket.id], this.d.memberNotes?.(candidate, ticket) ?? []), 'assign', ticket.id)) { member = candidate; break }
         }
         if (member === undefined) continue
@@ -259,9 +292,42 @@ export class MemberExecutor implements Executor {
         this.save()
         this.d.logger.info('superagent: ticket %s assigned to %s', ticket.id, member)
         try { engine.assignmentStarted(ticket.id, assignment.id) } catch (error) { this.d.logger.warn('superagent: assignment %s not recorded started: %s', assignment.id, String(error)) }
+        if (preparing !== undefined) void this.prepareThenAssign(ticket.id, assignment.id, member, preparing)
         progressed = true
       }
     }
+  }
+
+  /** What preparing a ticket for this member needs, or undefined when nothing is to be prepared (R1, R4). */
+  private preparationFor(ticketId: string, member: string): { command: string; timeoutMs: number; cwd: string } | 'no-workspace' | undefined {
+    const prepare = this.d.prepare?.()
+    if (prepare === undefined || this.prepared[ticketId] === true || !member.startsWith('session-')) return undefined
+    const cwd = this.d.workspaceOf?.(member)
+    return cwd === undefined || cwd === '' ? 'no-workspace' : { ...prepare, cwd }
+  }
+
+  /** R1–R3: run the prepare command for a bound ticket, then hand the member its card; a failure frees the member. */
+  private async prepareThenAssign(ticketId: string, assignmentId: string, member: string, preparing: { command: string; timeoutMs: number; cwd: string } | 'no-workspace'): Promise<void> {
+    const ticket = this.d.ticket(ticketId)
+    const fail = (why: string): void => {
+      try { this.d.engine().deliveryFailed(ticketId, assignmentId, why) } catch (error) { this.d.logger.warn('superagent: prepare failure of %s not recorded: %s', ticketId, String(error)) }
+      this.bindings = this.bindings.filter(b => b.assignmentId !== assignmentId)
+      this.save()
+      this.d.logger.warn('superagent: ticket %s not prepared: %s', ticketId, why.slice(0, 200))
+      queueMicrotask(() => this.launch())
+    }
+    if (ticket === undefined) return
+    if (preparing === 'no-workspace') { fail(`prepare command not run: member ${member} has no workspace directory`); return }
+    const name = ticket.execution?.name ?? ticket.id
+    const env = { SUPERAGENT_TICKET_ID: ticket.id, SUPERAGENT_TICKET_NAME: name, SUPERAGENT_REPO: this.ticketRepos[ticket.id] ?? '', SUPERAGENT_MEMBER: member }
+    const result = await (this.d.runPrepare ?? defaultPrepare)(preparing.command, preparing.cwd, env, preparing.timeoutMs)
+    const now = this.d.ticket(ticketId)
+    if (now === undefined || now.ended || !this.bindings.some(b => b.assignmentId === assignmentId)) return
+    if (!result.ok) { fail(`prepare command failed: ${result.output}`); return }
+    this.prepared[ticketId] = true
+    this.save()
+    const notes = [...(this.d.memberNotes?.(member, now) ?? []), `prepared: the team's prepare command ran in your workspace for this ticket (directory name ${name}); work in what it made`]
+    if (!(await this.tryDeliver(member, assignmentCard(now, this.d.trigger, this.ticketRepos[now.id], notes), 'assign', now.id))) fail(`member ${member} did not receive the assignment`)
   }
 
   deliver(ticket: Ticket, assignment: Assignment): void {
