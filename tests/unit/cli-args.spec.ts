@@ -250,6 +250,8 @@ describe('a2a-net CLI: a host behind dsh-pocket', () => {
     const out = await runCli(['whoami', '--home', host.url], { HOME, A2A_CLI_HOME: HOME })
     expect(out.stdout).toMatch(/deposit\s+UNKNOWN — deposit face unreadable: HTTP 405/)
     expect(out.stdout).not.toContain('OFFLINE')
+    // The card is read at <base>/.well-known/agent-card.json; the bare base answers 404, so whoami prints the document URL.
+    expect(out.stdout).toMatch(/card url\s+\S+\/a2a\/cli\/scout%2F[0-9a-f]{16}\/\.well-known\/agent-card\.json/)
   })
 })
 

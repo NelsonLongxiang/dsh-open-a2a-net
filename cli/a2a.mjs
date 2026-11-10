@@ -1279,7 +1279,7 @@ async function main() {
     const out = await publishDeposit()
     if (out.ok !== true) die(`[publish] refused: ${String(out.error)}`)
     console.log(`[publish] ${String(out.handle)} online — ${hoursLeft(out.expiresAt)}h left (auto-deregister then; re-publish returns)`)
-    console.log(`[publish] card url: ${String(out.cardUrl)}`)
+    console.log(`[publish] card url: ${cardDocUrl(String(out.cardUrl))}`)
     return
   }
   if (cmd === 'route') {
@@ -1312,7 +1312,7 @@ async function main() {
     console.log(`identity    ~/.a2a/cli.json (own Ed25519 key — the card's team = "${id.name}" is its own zone)`)
     console.log(`deposit     ${depositLine(list, id.handle, 'OFFLINE (expired or never published — run: a2a publish)')}`)
     console.log(`host        ${home()}`)
-    console.log(`card url    ${home()}/a2a/cli/${encodeURIComponent(id.handle)}`)
+    console.log(`card url    ${cardDocUrl(`${home()}/a2a/cli/${encodeURIComponent(id.handle)}`)}`)
     console.log(`capability  route via signed envelope; receive via mailbox (poll: a2a inbox)`)
     if (s.error) console.log(`canvas      UNKNOWN — ${String(s.error)}`)
     for (const team of canvas) console.log(`canvas      ${team.team} owner=${team.owner} members=${String(team.memberCount)}`)
@@ -1425,3 +1425,6 @@ void main().catch(error => {
   }
   process.exit(1)
 })
+
+/** Where the deposited card can be read: the identity's base plus the card document (a bare base answers 404). */
+function cardDocUrl(base) { return base.endsWith('/.well-known/agent-card.json') ? base : `${base.replace(/\/+$/, '')}/.well-known/agent-card.json` }
