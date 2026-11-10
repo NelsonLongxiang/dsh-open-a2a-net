@@ -45,20 +45,29 @@ describe('reading where work stands', () => {
 })
 
 describe('ygl-trees in the team presets', () => {
-  it('every team persona names ygl-trees as the team memory; the router only reads it; nobody installs it', async () => {
+  it('every team preset mounts the ygl-trees MCP server and names it as the team memory; the router only reads; nobody installs it', async () => {
     const { readFileSync } = await import('node:fs')
     const layer = readFileSync(new URL('../../cordis.patch.yml', import.meta.url), 'utf8')
     const preset = (id: string) => layer.slice(layer.indexOf(`- id: ${id}-preset`)).split(/\n    - id: superagent-/)[0]!
     for (const id of ['superagent-router', 'superagent-member', 'superagent-observer']) {
       const text = preset(id)
+      expect(text).toContain("name: '@deepseek-ai/dsh-mcp-client'")
+      expect(text).toContain('serverName: ygl')
+      expect(text).toContain('transport: stdio')
+      expect(text).toContain("args: ['mcp']")
       expect(text).toContain("ygl-trees is the team's memory")
-      expect(text).toContain('do not install it')
+      expect(text).toMatch(/do not install anything/)
     }
     expect(preset('superagent-router')).toContain('You only read ygl-trees')
-    for (const id of ['superagent-member', 'superagent-observer']) {
-      expect(preset(id)).toContain('`ygl-trees agent brief`')
-      expect(preset(id)).toContain('`kb add`')
-      expect(preset(id)).toContain('`ygl-trees verify run`')
+    expect(preset('superagent-router')).not.toContain('mcp__ygl__write')
+    for (const id of ['superagent-member', 'superagent-observer']) expect(preset(id)).toContain('mcp__ygl__write')
+  })
+  it('the router may only read ygl-trees; members and observers may read, write, verify and check it', () => {
+    expect(roleToolRefusal('router', 'mcp__ygl__read', {})).toBeUndefined()
+    for (const name of ['mcp__ygl__write', 'mcp__ygl__verify', 'mcp__ygl__doctor']) {
+      expect(roleToolRefusal('router', name, {})).toBeDefined()
+      for (const role of ['member', 'observer'] as const) expect(roleToolRefusal(role, name, {})).toBeUndefined()
     }
+    expect(TEAM_TOOLS.some(name => name.startsWith('mcp__ygl__'))).toBe(false)
   })
 })
