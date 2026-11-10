@@ -3215,6 +3215,19 @@ export function apply(ctx: Context, config: Config): void {
                 send(403, { ok: false, code: 'owner-proof', error: '修改规则需要在已登录的 DSH 界面里操作，这个请求没有登录凭据。也可以直接在对话里让总工或成员修改。' })
               }, (error: unknown) => { send(500, { ok: false, error: String(error) }) })
               return
+            } else if (fields.action === 'sync-github-allowed') {
+              // Design github-issues G6, G7: add the repositories' collaborators with push access to allowed.github; owner only.
+              void guiOwnerProven(superagentHomeUrl, req.headers.cookie).then(async (proven) => {
+                if (!proven) { send(403, { ok: false, code: 'owner-proof', error: '同步 GitHub 名单需要在已登录的 DSH 界面里操作。' }); return }
+                const found = await sa.githubCollaborators()
+                if (!found.ok) { send(200, found); return }
+                const before = sa.settings.allowed.github ?? []
+                const added = found.logins.filter(login => !before.some(a => a.toLowerCase() === login.toLowerCase()))
+                if (added.length === 0) { send(200, { ok: true, added: [], allowed: before }); return }
+                const saved = sa.saveSettings({ allowed: { github: [...before, ...added] } }, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf, 'owner')
+                send(200, saved.ok ? { ok: true, added, allowed: saved.settings.allowed.github } : saved)
+              }).catch((error: unknown) => { send(500, { ok: false, error: String(error) }) })
+              return
             } else if (fields.action === 'request') {
               send(200, sa.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined, fields.via === 'cli' ? 'cli' : undefined))
             } else if (fields.action === 'answer') {

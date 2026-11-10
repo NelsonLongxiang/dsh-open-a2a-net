@@ -658,7 +658,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     const wb = flag('工作台 Source', s.sources.workbench)
     const a2a = flag('A2A Source', s.sources.a2a)
     const paused = flag('暂停执行', s.paused)
-    const fields = buildTeamFields(s, sessionName, mark)
+    const fields = buildTeamFields(s, sessionName, mark, () => { void send({ action: 'sync-github-allowed' }, () => { settingsDirty = false }, 'GitHub 账号已同步') })
     form.append(...fields.nodes)
 
     const save = el('button', 'wb-btn wb-btn-primary', '保存')
@@ -677,7 +677,10 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       const patch: Json = { canvas: canvas.value === '' ? null : canvas.value, router: router.value === '' ? null : router.value, acceptMode: mode.value, sources: { workbench: wb.checked, a2a: a2a.checked }, paused: paused.checked, models: Object.keys(models).length === 0 ? null : models }
       const edited = fields.patch()
       if ('error' in edited) { say(edited.error, 'danger'); return }
-      Object.assign(patch, edited.patch)
+      // The GitHub switch rides in sources only when it changed (design github-issues G7).
+      const { sources: githubSource, ...rest } = edited.patch as Json & { sources?: Json }
+      Object.assign(patch, rest)
+      if (githubSource !== undefined) patch.sources = { ...(patch.sources as Json), ...githubSource }
       void send({ action: 'settings', settings: patch }, () => { settingsDirty = false }, '设置已保存')
     })
     const reset = el('button', 'wb-btn', '放弃修改')
