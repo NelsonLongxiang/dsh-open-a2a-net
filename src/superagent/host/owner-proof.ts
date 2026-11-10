@@ -8,9 +8,9 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/owner-proof
  */
 
-const RULE_FIELDS = ['rules', 'dispatch', 'profiles'] as const
+const RULE_FIELDS = ['rules', 'dispatch', 'profiles', 'prepare'] as const
 
-/** Whether a settings write changes a rule, a role or the dispatch rules. */
+/** Whether a settings write changes a rule, a role, the dispatch rules, or the command that runs on this host (reliability R4). */
 export function touchesRules(settings: unknown): boolean {
   return settings !== null && typeof settings === 'object' && RULE_FIELDS.some(field => field in (settings as object))
 }
