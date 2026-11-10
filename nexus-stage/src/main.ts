@@ -266,6 +266,10 @@ const bench = createWorkbench({
       try { return await res.json() as Record<string, unknown> } catch { return { ok: false, error: `HTTP ${res.status}` } }
     },
     refresh() { void pollSuperagent() },
+    async search(query) {
+      const res = await controlFetch(`/__dsh_a2a/superagent?search=${encodeURIComponent(query)}${selectedTeam !== '' ? `&teamId=${encodeURIComponent(selectedTeam)}` : ''}`, { cache: 'no-store' })
+      try { return await res.json() as Record<string, unknown> } catch { return { ok: false, error: `HTTP ${res.status}` } }
+    },
     selectTeam(id) { selectedTeam = id; void pollSuperagent() },
     async addTeam(canvas, router) {
       const res = await controlFetch('/__dsh_a2a/superagent/teams', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ canvas, router }) })

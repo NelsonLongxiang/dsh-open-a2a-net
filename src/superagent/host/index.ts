@@ -21,6 +21,7 @@ import { A2aSource } from './a2a-source.ts'
 import { MemberExecutor, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
 import { ReviewRequests } from './review-requests.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
+import { SettingsHistory } from './settings-history.ts'
 import { DECISION_FILES_MAX, DecisionBook, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { parseFileRef } from '../../blob-store.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
@@ -255,6 +256,8 @@ export class SuperagentHost {
   /** The A2A executor (PR-C1): the owner's fixed member pool, one worker slot each. */
   readonly executor: MemberExecutor
   private readonly decisions: DecisionBook
+  /** The team's settings saves, for the team page's 设置 (each team keeps its own, with its state). */
+  private readonly settingsHistory: SettingsHistory
   /** The A2A Source (PR-B2b): the team's A2A address and its mailbox loop. */
   readonly a2a: A2aSource
   /** Outbox messages being sent right now, so a pass never sends one twice at once. */
@@ -318,6 +321,7 @@ export class SuperagentHost {
       onOpen: (thread, head, url, ticketId) => this.reviews.opened(thread, head, url, ticketId),
     })
     this.ruleChanges = new RuleChanges(join(dir, 'rule-changes.json'))
+    this.settingsHistory = new SettingsHistory(join(dir, 'settings-history.json'))
     this.decisions = new DecisionBook(join(dir, 'decisions.json'), ticketId => { const ticket = this.store.tickets.get(ticketId); return ticket !== undefined && ticket.ended === undefined })
     this.reviews = new ReviewRequests({
       path: join(dir, 'reviews.json'), reviewer: () => this.settingsValue.reviewer, logger: d.logger,
@@ -714,6 +718,54 @@ export class SuperagentHost {
     if (state !== 'ready' || ids.length > 0 || this.d.hasTool?.(member, YGL_WRITE) !== true || this.yglReminded.has(ticketId)) return undefined
     this.yglReminded.add(ticketId)
     return { ok: false, code: 'ygl-record', error: 'Before ready, record what this ticket found in ygl-trees: evidence and claims with mcp__ygl__write, and kb add what the next session should reuse. Then report ready again with the ids in ygl. If nothing here is worth keeping, report ready again and say why in summary; this reminder comes only once.' }
+  }
+
+  /**
+   * The team page's 搜索 (upstream's search): a person looks for a request, a thread or a ticket by words, an id, a link
+   * or a #number. This team's records only (the page names the team it is showing).
+   * @param query - what the person typed, already trimmed.
+   * @returns the matching items, newest activity first, at most 30.
+   */
+  search(query: string): Record<string, unknown> {
+    const q = query.trim()
+    if (q === '') return { ok: true, results: [] }
+    if (q.length > 200) return { ok: false, code: 'query', error: 'the search text is at most 200 characters' }
+    const needle = q.toLowerCase()
+    // #tail: a ticket id's short tail (the ids are hex), as a person reads them off a card.
+    const hash = /^#([0-9a-f]{1,8})$/.exec(q)?.[1]
+    const has = (...texts: ReadonlyArray<string | undefined>): boolean => texts.some(text => text !== undefined && text.toLowerCase().includes(needle))
+    const results: Array<Record<string, unknown>> = []
+    const push = (kind: 'request' | 'thread' | 'ticket', id: string, title: string, at: string | undefined, extra: Record<string, unknown>): void => {
+      if (results.length >= 30 || results.some(row => row.kind === kind && row.id === id)) return
+      results.push({ kind, id, title, ...(at !== undefined ? { at } : {}), ...extra })
+    }
+    for (const ticket of this.store.tickets.list()) {
+      const thread = ticket.channels[0]?.thread
+      const numbered = hash !== undefined && ticket.id.endsWith(hash)
+      if (!numbered && !has(ticket.id, ticket.title, ticket.mandate?.scope, ticket.attention?.question, thread)) continue
+      push('ticket', ticket.id, ticket.title, ticket.updatedAt, { stage: ticket.ended !== undefined ? 'ended' : ticketStage(ticket).stage, thread })
+    }
+    for (const thread of this.store.threads.list()) {
+      const texts = [...new Set([...thread.pending, ...(thread.evaluating?.triggerIds ?? []), ...this.store.decisions.byThread(thread.key).flatMap(d => d.triggerIds)])]
+        .map(id => this.store.triggers.get(id)).filter((t): t is Trigger => t !== undefined)
+      const hit = texts.find(t => has(t.id, t.text))
+      if (hit === undefined && !has(thread.key, thread.ref.id)) continue
+      const text = hit?.text ?? this.store.triggers.get(thread.pending[0] ?? '')?.text ?? ''
+      push('request', thread.ref.id, clip(text, 120), thread.lastAt ?? thread.createdAt, { key: thread.key, ticket: this.store.tickets.list().find(t => t.channels.some(c => c.thread === thread.ref.id))?.id })
+    }
+    // A trigger id the person pasted: name the thread it belongs to (the trigger list itself is not enumerable).
+    const byTrigger = /^wb-[0-9a-f-]{36}$/.test(q) || /^\d+$/.test(q) ? q : undefined
+    if (byTrigger !== undefined) {
+      for (const thread of this.store.threads.list()) {
+        const ids = [...new Set([...thread.pending, ...(thread.evaluating?.triggerIds ?? []), ...this.store.decisions.byThread(thread.key).flatMap(d => d.triggerIds)])]
+        if (ids.includes(byTrigger) && !results.some(row => row.id === thread.ref.id)) {
+          const text = this.store.triggers.get(byTrigger)?.text ?? ''
+          push('request', thread.ref.id, clip(text, 120), thread.lastAt ?? thread.createdAt, { key: thread.key, ticket: this.store.tickets.list().find(t => t.channels.some(c => c.thread === thread.ref.id))?.id })
+        }
+      }
+    }
+    results.sort((a, b) => String(b.at ?? '').localeCompare(String(a.at ?? '')))
+    return { ok: true, results: results.slice(0, 30) }
   }
 
   /** A file on one of the cards, for the owner to download (C8). */
@@ -1212,7 +1264,7 @@ export class SuperagentHost {
   get routerSession(): string | undefined { return this.settingsValue.router }
 
   /** Owner control: replace the team settings; a Policy version change is reported to the engine as upstream does. */
-  saveSettings(raw: unknown, sessionValid: (id: string) => boolean, presetOf: (id: string) => string | undefined = () => undefined): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
+  saveSettings(raw: unknown, sessionValid: (id: string) => boolean, presetOf: (id: string) => string | undefined = () => undefined, by = 'owner'): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
     // Repositories are checked against the pool this write leads to: the canvas and router it names, or the current ones.
     const fields = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
     const pick = <K extends 'canvas' | 'router'>(key: K): string | undefined => key in fields ? (typeof fields[key] === 'string' && fields[key] !== '' ? fields[key] as string : undefined) : this.settingsValue[key]
@@ -1240,6 +1292,7 @@ export class SuperagentHost {
     const routerChanged = parsed.settings.router !== this.settingsValue.router
     this.writeSettings(parsed.settings)
     this.recordOwnerEdits(previous, parsed.settings)
+    this.settingsHistory.record(this.now(), by, previous as unknown as Record<string, unknown>, this.settings as unknown as Record<string, unknown>)
     this.poolChanged()
     const after = policyVersion(parsed.settings)
     // Open tickets hear what the change means to them (upstream PolicyEffect): their rule, proactive work, their requester.
@@ -1333,6 +1386,7 @@ export class SuperagentHost {
       ruleChanges: this.ruleChanges.view(),
       a2a: { enabled: this.settingsValue.sources.a2a, address: this.a2a.address ?? null, health: this.a2a.health },
       refusals: { counts: Object.fromEntries(this.refusalCounts), recent: [...this.refusalRecent] },
+      settingsHistory: this.settingsHistory.list(),
       ...(this.prs.problem !== undefined ? { pullRequestProblem: this.prs.problem } : {}),
       reviews: this.reviews.list(),
       executor: { canvas: this.settingsValue.canvas ?? null, members: this.settings.members, remoteMembers: this.settings.remoteMembers, bindings: this.executor.list() },

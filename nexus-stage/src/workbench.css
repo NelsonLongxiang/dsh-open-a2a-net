@@ -434,3 +434,17 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-sa-teambar .wb-sa-select{flex:1;min-width:0}
 .wb-sa-addteam{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:0 0 8px}
 .wb-sa-addteam[hidden]{display:none}
+/* The team page's 搜索 (upstream's search): a box above the views, its results a dropdown. */
+.wb-sa-searchwrap{position:relative;padding:0 0 8px}
+.wb-sa-search{width:100%;box-sizing:border-box}
+.wb-sa-drop{position:absolute;top:100%;left:0;right:0;z-index:30;max-height:320px;overflow:auto;background:var(--bg-panel,#fff);border:1px solid var(--border,#ccc);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.18)}
+.wb-sa-drop[hidden]{display:none}
+.wb-sa-hit{display:flex;gap:8px;align-items:baseline;width:100%;text-align:left;padding:6px 10px;border:0;background:none;cursor:pointer;font:inherit}
+.wb-sa-hit:hover{background:var(--bg-hover,#f0f0f0)}
+.wb-sa-hit-kind{flex:none;font-size:12px;color:var(--muted,#888)}
+.wb-sa-hit-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* A search result the person opened: flash the row it located. */
+.is-flash{outline:2px solid var(--accent,#4a90d9);outline-offset:2px;transition:outline-color .4s}
+/* The settings saves, under 设置. */
+.wb-sa-hist{padding:4px 0}
+.wb-sa-hist-line{font-size:12px;color:var(--muted,#888);word-break:break-all}
