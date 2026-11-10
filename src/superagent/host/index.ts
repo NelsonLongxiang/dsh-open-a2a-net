@@ -901,11 +901,6 @@ export class SuperagentHost {
     return undefined
   }
 
-  /**
-   * Design v5: the bound canvas changed (a member added, removed, suspended, or the canvas gone). The pool is read from
-   * the canvas, so a new member is simply free; a member that left while it ran a ticket loses that Assignment — the
-   * ticket gets a new one on another member (owner ruling Q2: stop and requeue), and the member is told to stop.
-   */
   /** Put the team's model choices on its local sessions (owner 2026-11-10): unset leaves a session alone; a failure is logged, never blocks. */
   applyModels(): void {
     const select = this.d.selectModel
@@ -920,6 +915,11 @@ export class SuperagentHost {
     for (const member of this.settings.members) one(member, models.member, 'member')
   }
 
+  /**
+   * Design v5: the bound canvas changed (a member added, removed, suspended, or the canvas gone). The pool is read from
+   * the canvas, so a new member is simply free; a member that left while it ran a ticket loses that Assignment — the
+   * ticket gets a new one on another member (owner ruling Q2: stop and requeue), and the member is told to stop.
+   */
   poolChanged(): void {
     // v5 acceptance F3: with no canvas bound (or the bound one gone) the pool reads empty; that is not the owner taking
     // members away — running work stays where it is until a canvas is bound again.

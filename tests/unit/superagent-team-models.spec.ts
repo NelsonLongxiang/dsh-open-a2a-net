@@ -44,6 +44,34 @@ describe('settings.models', () => {
     expect(h.stop).toBeDefined()
     await h.stop()
   })
+  it('the selectModel dep works without any HTTP (a host with a login): the controller is called in-process', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sa-models3-'))
+    homes.push(dir)
+    let called: unknown
+    const deps = {
+      canvasTeam: () => ({ local: ['session-r'], remote: [] }),
+      home: dir, logger: { info: vi.fn(), warn: vi.fn() }, deliverToSession: vi.fn(() => false), sessionLabel: () => 'x',
+      now: () => new Date().toISOString(), interval: vi.fn(() => () => undefined),
+      selectModel: async (sessionId: string, pick: Record<string, string>) => {
+        const controller = (globalThis as Record<string, unknown>)['__sa_test_controller__'] as { selectModel(request: unknown): Promise<unknown> } | undefined
+        if (controller === undefined) return false
+        called = { sessionId, pick }
+        return controller.selectModel({ sessionId, ...pick }).then(() => true, () => false)
+      },
+    } as unknown as SuperagentHostDeps
+    const h = new SuperagentHost(deps)
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', models: { router: { provider: 'p', model: 'm' } } }, yes)).toMatchObject({ ok: true })
+    // no controller: the save still stands, the failure is only logged
+    await new Promise(r => setTimeout(r, 30))
+    expect(called).toBeUndefined()
+    // an in-process controller resolves without any HTTP/cookie face
+    ;(globalThis as Record<string, unknown>)['__sa_test_controller__'] = { selectModel: async () => ({ selected: { provider: 'p', model: 'm' } }) }
+    h.applyModels()
+    await new Promise(r => setTimeout(r, 30))
+    expect(called).toMatchObject({ sessionId: 'session-r', pick: { provider: 'p', model: 'm' } })
+    delete (globalThis as Record<string, unknown>)['__sa_test_controller__']
+    await h.stop()
+  })
   it('a member joining (pool change) and a restart apply the choice again; unset models touch nothing', async () => {
     const calls2: Array<{ session: string }> = []
     const dir = mkdtempSync(join(tmpdir(), 'sa-models2-'))
