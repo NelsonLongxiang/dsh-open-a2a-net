@@ -78,6 +78,23 @@ describe('the request view', () => {
   })
 })
 
+describe('one view for requests and decisions', () => {
+  it('shows the waiting decisions above the request box, and nothing of them when none waits', async () => {
+    const decisions = [{ id: 'd-1', teamId: '', team: 'ops', question: '要不要升级？', level: 'P2', options: ['升级', '不升'], recommended: '升级', source: 'router' }]
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, status: 200, json: async () => url.startsWith('/__dsh_a2a/superagent/decisions') ? { decisions, health: [] } : bound }) as Response))
+    render(<TeamRequestTab t={t} />)
+    expect(await screen.findByText('要不要升级？')).toBeTruthy()
+    expect(screen.getByText('Waiting for your decision (1)')).toBeTruthy()
+    expect(screen.getByRole('button', { name: en['team.approve'] })).toBeTruthy()
+    expect(box()).toBeTruthy()
+    cleanup()
+    serve(bound)
+    render(<TeamRequestTab t={t} />)
+    await waitFor(box)
+    expect(screen.queryByText(/Waiting for your decision/)).toBeNull()
+  })
+})
+
 describe('several teams', () => {
   it('lists those that can take a request, and sends to the one chosen', async () => {
     const f = serve({ teams: [row('', 'ops'), row('aaaaaaaa', 'docs'), row('bbbbbbbb', 'idle', false)] })
@@ -248,7 +265,9 @@ describe('registration', () => {
     const c = client()
     registerTeamRequest(c.ctx, 'a2aNet')
     await waitFor(() => { expect(c.types).toHaveLength(2) })
-    expect(c.types[1]).toMatchObject({ kind: 'a2a-team-decisions', guide: [{ id: 'new' }] })
+    expect(c.types[1]).toMatchObject({ kind: 'a2a-team-decisions' })
+    // One view: only the team view has a guide card; an old decisions tab shows the same view.
+    expect(c.types[1]).not.toHaveProperty('guide')
     expect(c.slots[1]).toMatchObject({ name: 'sidebar.right.pane.tab', key: c.types[1]!.id })
     expect(c.types[0]).toMatchObject({ kind: TEAM_REQUEST_KIND, guide: [{ id: 'new' }] })
     expect(c.slots[0]).toMatchObject({ name: 'sidebar.right.pane.tab', key: c.types[0]!.id })

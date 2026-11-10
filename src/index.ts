@@ -1475,6 +1475,9 @@ export function apply(ctx: Context, config: Config): void {
     sessionNodes.set(String(agent.id), agent)
   }
 
+  /** Whether the boot prewarm has finished waking joined sessions: until then a session not yet loaded is not a problem. */
+  const bootStartedAt = Date.now()
+  const bootPrewarm = { settled: (): boolean => Date.now() - bootStartedAt >= 120_000 }
   if (config.sessionNodes) {
     // Track live top-level sessions for the join surface; joining is
     // explicit (the sidebar control), never automatic. A throwing
@@ -1509,6 +1512,8 @@ export function apply(ctx: Context, config: Config): void {
       woken: number
       failed: Array<{ id: string; error: string }>
     } = { state: 'off', attempted: 0, woken: 0, failed: [] }
+    // A prewarm that has not begun yet reads 'off' for a moment at boot; the first two minutes count as waking too.
+    bootPrewarm.settled = () => prewarmStatus.state !== 'draining' && (prewarmStatus.state !== 'off' || Date.now() - bootStartedAt >= 120_000)
 
     // F8: continuous desired-state reconciliation. The boot prewarm is a
     // one-shot snapshot over a queue — a session that goes cold later, a
@@ -2089,6 +2094,7 @@ export function apply(ctx: Context, config: Config): void {
     },
     sessionName: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : `${nodeMetadataOf(agent).name} (${id.replace(/^session-/, '').slice(0, 8)})` },
     sessionLoaded: id => sessionNodes.has(id),
+    bootSettled: () => bootPrewarm.settled(),
     workspaceOf: id => { const cwd = (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd; return typeof cwd === 'string' ? cwd : undefined },
     memberTurn: id => {
       const agent = sessionNodes.get(id)

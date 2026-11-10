@@ -6,14 +6,14 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { QUIET_MINUTES } from '../../src/superagent/host/index.ts'
 
-async function team(loaded: Set<string>) {
+async function team(loaded: Set<string>, settled = () => true) {
   const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
   const { routeItem } = await import('../../src/superagent/host/tools.ts')
   const clock = { ms: Date.parse('2026-11-10T00:00:00Z') }
   const h = new SuperagentHost({
     canvasTeam: (name: string) => name === 'team' ? { local: ['session-r', 'session-a'], remote: [] } : undefined, home: mkdtempSync(join(tmpdir(), 'sa-health-')), logger: { info: () => {}, warn: () => {} },
     deliverToSession: () => true, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id,
-    sessionLoaded: (id: string) => loaded.has(id), now: () => new Date(clock.ms).toISOString(),
+    sessionLoaded: (id: string) => loaded.has(id), bootSettled: settled, now: () => new Date(clock.ms).toISOString(),
   } as never)
   expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
   h.start()
@@ -33,6 +33,14 @@ describe('the health check', () => {
     const n = await team(new Set(['session-r']))
     expect(n.h.health()).toEqual([{ code: 'member-not-loaded', session: 'session-a' }])
     await m.h.stop(); await n.h.stop()
+  })
+  it('says nothing of sessions not loaded while the host is still waking them after a start', async () => {
+    let settled = false
+    const m = await team(new Set(), () => settled)
+    expect(m.h.health()).toEqual([])
+    settled = true
+    expect(m.h.health().map(p => p.code)).toEqual(['router-not-loaded', 'member-not-loaded'])
+    await m.h.stop()
   })
   it('names a working ticket with no change for an hour, and the state carries it', async () => {
     const m = await team(new Set(['session-r', 'session-a']))

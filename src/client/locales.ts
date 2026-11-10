@@ -37,6 +37,7 @@ export type A2aNetKey =
   | 'team.healthRouter'
   | 'team.healthMember'
   | 'team.healthQuiet'
+  | 'team.decisionsCount'
   | 'team.tab'
   | 'team.guide'
   | 'team.pick'
@@ -77,8 +78,9 @@ export const zh: Record<A2aNetKey, string> = {
   'team.healthRouter': '总工会话 {session} 没有加载，需求送不到它，打开这个会话即可',
   'team.healthMember': '成员会话 {session} 没有加载，工单派不给它，打开这个会话即可',
   'team.healthQuiet': '工单「{title}」已经 {minutes} 分钟没有动静',
-  'team.tab': '提需求',
-  'team.guide': '把需求交给 superagent 团队，不用离开当前对话',
+  'team.decisionsCount': '待你决定（{count}）',
+  'team.tab': '团队',
+  'team.guide': '处理团队等你决定的事，或给团队提需求，不用离开当前对话',
   'team.pick': '团队',
   'team.request': '需求',
   'team.placeholder': '写清要做什么、为什么。Ctrl/⌘ + Enter 发送',
@@ -130,8 +132,9 @@ export const en: Record<A2aNetKey, string> = {
   'team.healthRouter': 'Router session {session} is not loaded, so requests cannot reach it. Open that session',
   'team.healthMember': 'Member session {session} is not loaded, so tickets cannot reach it. Open that session',
   'team.healthQuiet': 'Ticket “{title}” has had no activity for {minutes} minutes',
-  'team.tab': 'Request',
-  'team.guide': 'Send a superagent team a request without leaving this conversation',
+  'team.decisionsCount': 'Waiting for your decision ({count})',
+  'team.tab': 'Team',
+  'team.guide': 'Decide what your teams wait for, or send them a request, without leaving this conversation',
   'team.pick': 'Team',
   'team.request': 'Request',
   'team.placeholder': 'What needs doing, and why. Ctrl/⌘ + Enter to send',
