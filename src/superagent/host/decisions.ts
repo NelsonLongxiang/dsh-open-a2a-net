@@ -19,6 +19,10 @@ export const OPEN_CARDS_MAX = 10
 export const DECIDED_KEEP_MS = 30 * 24 * 3_600_000, DECIDED_KEEP_MAX = 500
 
 export interface DecisionSpec { readonly level: DecisionLevel; readonly options: readonly string[]; readonly recommended: string }
+/** A file on a card (C8): staged on this host's file channel, granted to the team; `ref` is its "[A2A file] v1 …" line. */
+export interface DecisionFile { readonly sha256: string; readonly size: number; readonly name: string; readonly ref: string }
+/** How many files a card, or a decision on it, carries at most (the file channel's per-send limit). */
+export const DECISION_FILES_MAX = 16
 export interface StoredCard extends DecisionSpec {
   readonly id: string
   readonly question: string
@@ -27,7 +31,9 @@ export interface StoredCard extends DecisionSpec {
   readonly by: string
   readonly ticketId?: string
   readonly at: string
-  readonly decided?: { readonly at: string; readonly text: string; readonly triggerId?: string }
+  /** Files the proposer put on the card (C8). */
+  readonly files?: readonly DecisionFile[]
+  readonly decided?: { readonly at: string; readonly text: string; readonly triggerId?: string; readonly files?: readonly DecisionFile[] }
 }
 
 /** Whether a level may be approved with one click. Absent a level the card is treated as P1, which may not. */
@@ -86,10 +92,16 @@ export class DecisionBook {
   }
 
   get(id: string): StoredCard | undefined { return this.cards.find(card => card.id === id) }
+
+  /** A file on a card, put there by its proposer or with the owner's decision: what the owner may download (C8). */
+  fileOf(id: string, sha256: string): DecisionFile | undefined {
+    const card = this.get(id)
+    return [...(card?.files ?? []), ...(card?.decided?.files ?? [])].find(file => file.sha256 === sha256)
+  }
   open(): StoredCard[] { return this.cards.filter(card => card.decided === undefined) }
 
   /** A card of the router's or an observer's own. An identical open question returns the existing card. */
-  propose(input: { source: 'router' | 'observer'; by: string; question: string; reason?: string; spec: DecisionSpec; at: string }): { ok: true; id: string; reused?: true } | { ok: false; code: string; error: string } {
+  propose(input: { source: 'router' | 'observer'; by: string; question: string; reason?: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[] }): { ok: true; id: string; reused?: true } | { ok: false; code: string; error: string } {
     const question = input.question.trim()
     if (question === '' || question.length > QUESTION_MAX) return { ok: false, code: 'question', error: `question is required, at most ${String(QUESTION_MAX)} characters` }
     const mine = this.open().filter(card => card.source === input.source && card.by === input.by)
@@ -97,16 +109,16 @@ export class DecisionBook {
     if (repeated !== undefined) return { ok: true, id: repeated.id, reused: true }
     if (mine.length >= OPEN_CARDS_MAX) return { ok: false, code: 'too-many-open', error: `you already have ${String(mine.length)} decisions waiting for the owner` }
     const id = `d-${randomUUID()}`
-    this.cards.push({ id, question, ...(input.reason !== undefined ? { reason: input.reason } : {}), source: input.source, by: input.by, at: input.at, ...input.spec })
+    this.cards.push({ id, question, ...(input.reason !== undefined ? { reason: input.reason } : {}), source: input.source, by: input.by, at: input.at, ...input.spec, ...(input.files !== undefined && input.files.length > 0 ? { files: input.files } : {}) })
     this.save()
     return { ok: true, id }
   }
 
   /** The card of a member's question on a ticket. */
-  forTicket(input: { ticketId: string; by: string; question: string; spec: DecisionSpec; at: string }): void {
+  forTicket(input: { ticketId: string; by: string; question: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[] }): void {
     const id = ticketCardId(input.ticketId, input.question)
     if (this.get(id) !== undefined) return
-    this.cards.push({ id, question: input.question, source: 'ticket', by: input.by, ticketId: input.ticketId, at: input.at, ...input.spec })
+    this.cards.push({ id, question: input.question, source: 'ticket', by: input.by, ticketId: input.ticketId, at: input.at, ...input.spec, ...(input.files !== undefined && input.files.length > 0 ? { files: input.files } : {}) })
     this.save()
   }
 
