@@ -80,6 +80,8 @@ export interface TeamSettings {
   readonly profiles: Readonly<Record<string, MemberProfile>>
   /** The command that prepares a ticket's directory before its member starts (design reliability R1–R4). */
   readonly prepare?: { readonly command: string; readonly timeoutMs: number }
+  /** The owner's own supplement to the presets (owner 2026-11-10, 对照上游): how the team talks, and what delivery looks like. The presets stand; on a clash these lose. */
+  readonly prompts?: { readonly communication?: string; readonly delivery?: string }
   /** How many tickets may run at once; 0 is no cap beyond one per member (design reliability R5). */
   readonly maxConcurrent: number
   /** How the router chooses among members (design D3): free text the owner agreed. */
@@ -98,7 +100,7 @@ export interface TeamSettings {
 
 /** A member's role and what it takes. */
 export interface MemberProfile { readonly role?: string; readonly rules: readonly ProactiveRule[] }
-export const ROLE_MAX = 200, DISPATCH_MAX = 4_000, PREPARE_MAX = 4_000
+export const ROLE_MAX = 200, DISPATCH_MAX = 4_000, PREPARE_MAX = 4_000, PROMPT_MAX = 4_000
 
 /** A canvas team name as the canvas store takes it: 1–40 characters, no `/`, not all digits, no surrounding space. */
 export const validCanvasName = (name: unknown): name is string =>
@@ -153,6 +155,8 @@ function parseRules(value: unknown, where: string): readonly ProactiveRule[] | s
 }
 
 /** Validate an owner's settings write; returns the normalized settings or the first problem. */
+const BAD = Symbol('bad prompt')
+
 export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'settings must be an object' }
   const r = raw as Record<string, unknown>
@@ -222,6 +226,30 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   }
   const maxConcurrent = 'maxConcurrent' in r ? r.maxConcurrent : current.maxConcurrent ?? 0
   if (typeof maxConcurrent !== 'number' || !Number.isInteger(maxConcurrent) || maxConcurrent < 0 || maxConcurrent > 64) return { ok: false, error: 'maxConcurrent must be an integer 0–64' }
+  // The owner's prompt supplements (owner 2026-11-10): what the team adds to the presets; empty is empty, unset keeps what is.
+  let prompts = current.prompts
+  if ('prompts' in r) {
+    if (r.prompts === null || r.prompts === '') prompts = undefined
+    else {
+      const raw = (r.prompts ?? {}) as Record<string, unknown>
+      // A named key must be text; an empty string clears that one (#567 second review). A key the write does not name
+      // keeps what is saved, or counts as absent when nothing is saved yet - never a refusal.
+      const read = (key: 'communication' | 'delivery', currentText: string | undefined): string | undefined | typeof BAD => {
+        if (!(key in raw)) return currentText
+        if (typeof raw[key] !== 'string') return BAD
+        return raw[key] as string
+      }
+      const named = (key: 'communication' | 'delivery'): boolean => key in raw
+      const communication = read('communication', current?.prompts?.communication), delivery = read('delivery', current?.prompts?.delivery)
+      if (communication === BAD || delivery === BAD) return { ok: false, error: 'prompts.communication and prompts.delivery are text' }
+      const max = (text: string | undefined, key: 'communication' | 'delivery'): string | undefined => text !== undefined && text.length > PROMPT_MAX ? `prompts.${key} is at most ${String(PROMPT_MAX)} characters` : undefined
+      const tooLong = max(communication, 'communication') ?? max(delivery, 'delivery')
+      if (tooLong !== undefined) return { ok: false, error: tooLong }
+      const kept = (text: string | undefined, wasNamed: boolean): string | undefined => text === undefined ? undefined : wasNamed && text === '' ? undefined : text
+      const nextCommunication = kept(communication, named('communication')), nextDelivery = kept(delivery, named('delivery'))
+      prompts = nextCommunication === undefined && nextDelivery === undefined ? undefined : { ...(nextCommunication !== undefined ? { communication: nextCommunication } : {}), ...(nextDelivery !== undefined ? { delivery: nextDelivery } : {}) }
+    }
+  }
   if (typeof paused !== 'boolean') return { ok: false, error: 'paused must be true or false' }
   const botsRaw = (r.bots ?? {}) as Record<string, unknown>
   if (Object.keys(botsRaw).some(name => name !== 'a2a')) return { ok: false, error: 'only the a2a Source has a bot list' }
@@ -271,7 +299,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const observers = current.observers ?? []
   const dispatch = 'dispatch' in r ? r.dispatch : current.dispatch ?? ''
   if (typeof dispatch !== 'string' || dispatch.length > DISPATCH_MAX) return { ok: false, error: `dispatch must be text of at most ${String(DISPATCH_MAX)} characters` }
-  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), evalTimeoutMs, paused } }
+  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), evalTimeoutMs, paused } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/
