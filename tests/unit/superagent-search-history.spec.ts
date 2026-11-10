@@ -68,6 +68,29 @@ describe('the settings-save history', () => {
     expect((m.h.state() as { settingsHistory: unknown[] }).settingsHistory.length).toBe(2)
     await m.h.stop()
   })
+  it('a change past the clip length is still recorded (review PR#561: compare the full value, clip only the display)', async () => {
+    const m = await team()
+    homes.push(m.dir)
+    expect(m.h.saveSettings({ canvas: 'team', router: 'session-r' }, yes)).toMatchObject({ ok: true })
+    expect(m.h.saveSettings({ dispatch: 'x'.repeat(200) + 'A' }, yes)).toMatchObject({ ok: true })
+    expect(m.h.saveSettings({ dispatch: 'x'.repeat(200) + 'B' }, yes)).toMatchObject({ ok: true })
+    const rows = (m.h.state() as { settingsHistory: ReadonlyArray<{ changes: ReadonlyArray<{ field: string; to: string }> }> }).settingsHistory
+    expect(rows.length).toBe(3)
+    expect(rows[0]!.changes.some(c => c.field === 'dispatch' && c.to.endsWith('…'))).toBe(true)
+    await m.h.stop()
+  })
+  it('a #tail in either case finds its ticket', async () => {
+    const m = await team()
+    homes.push(m.dir)
+    expect(m.h.saveSettings({ canvas: 'team', router: 'session-r' }, yes)).toMatchObject({ ok: true })
+    const filed = m.h.request('帮我补部署文档')
+    m.h.pass()
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const ticket = (routeItem(m.h, { trigger_id: (filed as { triggerId: string }).triggerId, kind: 'accept', title: '部署文档补全', scope: '补文档', reason: 'r' } as never) as { ticket_id: string }).ticket_id
+    const upper = m.h.search(`#${ticket.slice(-4).toUpperCase()}`) as { results: ReadonlyArray<{ id: string }> }
+    expect(upper.results.some(row => row.id === ticket)).toBe(true)
+    await m.h.stop()
+  })
   it('clips a long value and keeps each team its own file', async () => {
     const m = await team()
     homes.push(m.dir)

@@ -731,8 +731,8 @@ export class SuperagentHost {
     if (q === '') return { ok: true, results: [] }
     if (q.length > 200) return { ok: false, code: 'query', error: 'the search text is at most 200 characters' }
     const needle = q.toLowerCase()
-    // #tail: a ticket id's short tail (the ids are hex), as a person reads them off a card.
-    const hash = /^#([0-9a-f]{1,8})$/.exec(q)?.[1]
+    // #tail: a ticket id's short tail (the ids are hex), as a person reads them off a card; either case.
+    const hash = /^#([0-9a-fA-F]{1,8})$/.exec(q)?.[1]?.toLowerCase()
     const has = (...texts: ReadonlyArray<string | undefined>): boolean => texts.some(text => text !== undefined && text.toLowerCase().includes(needle))
     const results: Array<Record<string, unknown>> = []
     const push = (kind: 'request' | 'thread' | 'ticket', id: string, title: string, at: string | undefined, extra: Record<string, unknown>): void => {

@@ -677,7 +677,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     if (focus === undefined) return
     const node = focus.kind === 'ticket' ? body.querySelector(`[data-ticket="${focus.id}"]`) : body.querySelector(`[data-thread="${focus.id}"]`) ?? body.querySelector(`[data-thread="${String(focus.id)}"]`)
     if (node instanceof HTMLElement) {
-      node.scrollIntoView({ block: 'center' })
+      node.scrollIntoView?.({ block: 'center' })
       node.classList.add('is-flash')
       setTimeout(() => { node.classList.remove('is-flash') }, 1600)
     }

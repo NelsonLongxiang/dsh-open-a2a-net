@@ -32,8 +32,6 @@ export const valueText = (value: unknown): string => {
   return text.length > VALUE_CLIP ? `${text.slice(0, VALUE_CLIP)}…` : text
 }
 
-const clipText = (text: string): string => valueText(text)
-
 /**
  * The settings saves a team keeps, newest first.
  */
@@ -57,10 +55,10 @@ export class SettingsHistory {
    */
   record(at: string, by: string, before: Record<string, unknown>, after: Record<string, unknown>): void {
     const changes: FieldChange[] = []
+    // Compare the full serialization (a change past the clip length still counts); clip only what is shown.
+    const full = (value: unknown): string => typeof value === 'string' ? value : JSON.stringify(value) ?? String(value)
     for (const field of [...new Set([...Object.keys(before), ...Object.keys(after)])].sort()) {
-      const from = valueText(before[field] ?? null)
-      const to = valueText(after[field] ?? null)
-      if (from !== to) changes.push({ field, from: clipText(from), to: clipText(to) })
+      if (full(before[field] ?? null) !== full(after[field] ?? null)) changes.push({ field, from: valueText(before[field] ?? null), to: valueText(after[field] ?? null) })
     }
     if (changes.length === 0) return
     this.rows = [{ id: randomUUID(), at, by, changes }, ...this.rows].slice(0, SETTINGS_HISTORY_KEPT)
