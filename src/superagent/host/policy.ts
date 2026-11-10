@@ -74,6 +74,10 @@ export interface TeamSettings {
   readonly observers: readonly string[]
   /** Each member's role and the rules of what it takes, by member (design D1). */
   readonly profiles: Readonly<Record<string, MemberProfile>>
+  /** The command that prepares a ticket's directory before its member starts (design reliability R1–R4). */
+  readonly prepare?: { readonly command: string; readonly timeoutMs: number }
+  /** How many tickets may run at once; 0 is no cap beyond one per member (design reliability R5). */
+  readonly maxConcurrent: number
   /** How the router chooses among members (design D3): free text the owner agreed. */
   readonly dispatch: string
   /** Sources that listen. The workbench is on by default; the A2A Source is wired in a later PR. */
@@ -88,7 +92,7 @@ export interface TeamSettings {
 
 /** A member's role and what it takes. */
 export interface MemberProfile { readonly role?: string; readonly rules: readonly ProactiveRule[] }
-export const ROLE_MAX = 200, DISPATCH_MAX = 4_000
+export const ROLE_MAX = 200, DISPATCH_MAX = 4_000, PREPARE_MAX = 4_000
 
 /** A canvas team name as the canvas store takes it: 1–40 characters, no `/`, not all digits, no surrounding space. */
 export const validCanvasName = (name: unknown): name is string =>
@@ -118,6 +122,7 @@ export const DEFAULT_SETTINGS: TeamSettings = {
   acceptMode: 'observe',
   rules: [],
   observers: [],
+  maxConcurrent: 0,
   profiles: {},
   dispatch: '',
   sources: { workbench: true, a2a: false },
@@ -182,6 +187,21 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
     else return { ok: false, error: 'reviewer must be an A2A address, or null to clear' }
   }
   const paused = 'paused' in r ? r.paused : current.paused
+  let prepare = current.prepare
+  if ('prepare' in r) {
+    if (r.prepare === null || r.prepare === '') prepare = undefined
+    else {
+      const p = (r.prepare ?? {}) as Record<string, unknown>
+      const command = typeof p.command === 'string' ? p.command.trim() : ''
+      // A write names minutes; the stored settings keep milliseconds.
+      const minutes = p.timeoutMinutes !== undefined ? p.timeoutMinutes : typeof p.timeoutMs === 'number' ? p.timeoutMs / 60_000 : 10
+      if (command === '' || command.length > PREPARE_MAX) return { ok: false, error: `prepare.command is required, at most ${String(PREPARE_MAX)} characters` }
+      if (typeof minutes !== 'number' || !Number.isInteger(minutes) || minutes < 1 || minutes > 30) return { ok: false, error: 'prepare.timeoutMinutes must be 1–30' }
+      prepare = { command, timeoutMs: minutes * 60_000 }
+    }
+  }
+  const maxConcurrent = 'maxConcurrent' in r ? r.maxConcurrent : current.maxConcurrent ?? 0
+  if (typeof maxConcurrent !== 'number' || !Number.isInteger(maxConcurrent) || maxConcurrent < 0 || maxConcurrent > 64) return { ok: false, error: 'maxConcurrent must be an integer 0–64' }
   if (typeof paused !== 'boolean') return { ok: false, error: 'paused must be true or false' }
   const botsRaw = (r.bots ?? {}) as Record<string, unknown>
   if (Object.keys(botsRaw).some(name => name !== 'a2a')) return { ok: false, error: 'only the a2a Source has a bot list' }
@@ -231,7 +251,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const observers = current.observers ?? []
   const dispatch = 'dispatch' in r ? r.dispatch : current.dispatch ?? ''
   if (typeof dispatch !== 'string' || dispatch.length > DISPATCH_MAX) return { ok: false, error: `dispatch must be text of at most ${String(DISPATCH_MAX)} characters` }
-  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
+  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/

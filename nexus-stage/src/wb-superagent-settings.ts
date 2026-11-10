@@ -15,6 +15,8 @@ export interface TeamFieldValues {
   readonly reviewer?: string
   readonly repos?: Readonly<Record<string, string>>
   readonly profiles?: Readonly<Record<string, { readonly role?: string; readonly rules: readonly TeamRule[] }>>
+  readonly prepare?: { readonly command: string; readonly timeoutMs: number }
+  readonly maxConcurrent?: number
   readonly dispatch?: string
   readonly members: readonly string[]
   readonly remoteMembers: ReadonlyArray<{ readonly ref: string }>
@@ -144,6 +146,11 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
   const github = area('PR 上算人的 GitHub 账号', (s.allowed?.github ?? []).join('\n'), 2)
   githubBox.appendChild(github)
 
+  const execBox = section('执行', '准备命令在成员拿到工单前，在成员的工作区里用 sh 跑一次，可用变量 $SUPERAGENT_TICKET_ID、$SUPERAGENT_TICKET_NAME、$SUPERAGENT_REPO、$SUPERAGENT_MEMBER。它以本机用户身份运行，不在沙箱里，保存需要界面登录。上限为 0 表示不限，每个成员同时只接一张。')
+  const prepareBox = area('准备命令', s.prepare?.command ?? '', 3, '例如：git worktree add .worktrees/$SUPERAGENT_TICKET_NAME')
+  const capBox = input('同时进行的工单上限', String(s.maxConcurrent ?? 0), '0')
+  execBox.append(prepareBox, capBox)
+
   const reviewBox = section('送审地址', '填了之后，工单开的 PR 会在每个新提交上发一次评审请求，结论只供合并的人参考。必须是已建链的 A2A 地址，留空表示不送审。')
   const reviewer = input('送审地址', s.reviewer ?? '', 'dsh/xxxxxxxx')
   reviewBox.appendChild(reviewer)
@@ -169,6 +176,12 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
     const sorted = (value: Readonly<Record<string, unknown>>): unknown => Object.fromEntries(Object.entries(value).sort(([x], [y]) => x.localeCompare(y)))
     if (!same(sorted(nextProfiles), sorted(s.profiles ?? {}))) out.profiles = nextProfiles
 
+    const command = prepareBox.value.trim()
+    if (command !== (s.prepare?.command ?? '')) out.prepare = command === '' ? null : { command, timeoutMinutes: Math.round((s.prepare?.timeoutMs ?? 600_000) / 60_000) }
+    const cap = capBox.value.trim() === '' ? 0 : Number(capBox.value.trim())
+    if (!Number.isInteger(cap) || cap < 0 || cap > 64) return { error: '同时进行的工单上限要是 0–64 的整数' }
+    if (cap !== (s.maxConcurrent ?? 0)) out.maxConcurrent = cap
+
     const botList = linesOf(bots.value)
     if (!same(botList, s.bots?.a2a ?? [])) out.bots = { a2a: botList }
 
@@ -190,5 +203,5 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
     if (address !== (s.reviewer ?? '')) out.reviewer = address === '' ? null : address
     return { patch: out }
   }
-  return { nodes: [rulesBox, dispatchBox, profilesBox, botsBox, repoBox, githubBox, reviewBox], patch }
+  return { nodes: [rulesBox, dispatchBox, profilesBox, execBox, botsBox, repoBox, githubBox, reviewBox], patch }
 }

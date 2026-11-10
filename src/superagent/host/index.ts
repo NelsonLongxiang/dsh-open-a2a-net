@@ -18,10 +18,11 @@ import { dirname, join } from 'node:path'
 import { Engine, UserError, reasonText, ticketStage, type Assessor, type Candidate, type Outbox, type Reason, type Ticket, type Trigger, type ReceiveResult } from '../upstream/dsh-superagent/src/core/index.ts'
 import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
-import { MemberExecutor, transientError, type MemberTurn } from './executor.ts'
+import { MemberExecutor, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
 import { ReviewRequests } from './review-requests.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
-import { DecisionBook, oneClick, parseDecision, ticketCardId, type DecisionSpec, type StoredCard } from './decisions.ts'
+import { DECISION_FILES_MAX, DecisionBook, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
+import { parseFileRef } from '../../blob-store.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, type Role } from './role-tools.ts'
@@ -31,6 +32,19 @@ import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, ob
 export interface SuperagentHostDeps {
   /** The a2a home directory; state lives under `<home>/superagent/`. */
   readonly home: string
+  /** Whether a local session is loaded and on the network, so the host can put a card into it (reliability R6). */
+  readonly sessionLoaded?: (sessionId: string) => boolean
+  /** Whether the host has finished waking its sessions after starting: before that, one not loaded yet is no problem. */
+  readonly bootSettled?: () => boolean
+  /** A local session's workspace directory, where a ticket's prepare command runs (reliability R1). */
+  readonly workspaceOf?: (sessionId: string) => string | undefined
+  /** Runs a prepare command; tests replace it. */
+  readonly runPrepare?: PrepareRunner
+  /**
+   * Stage files from a local session's workspace on the file channel, granted to the team's canvas (decision cards C8).
+   * Absent, a card takes no files.
+   */
+  readonly stageFiles?: (sessionId: string, paths: readonly string[], canvas: string) => { ok: true; files: DecisionFile[] } | { ok: false; code: string; error: string }
   /** Where this team's state lives instead, when it is not the instance's primary team (design M2). */
   readonly stateDir?: string
   /** Whether another team on this instance holds a canvas: one canvas is one team. */
@@ -160,6 +174,9 @@ type WorkbenchVia = 'cli' | { readonly observer: string }
 export interface PersonMessage { readonly id: string; readonly atMs: number; readonly text: string }
 
 const OBSERVER_LINE = "This request is from the team's observer, an agent the owner named to open tickets; these are not a person's words. Accept it as any request when it is real work for this team, attach it when it repeats an open ticket, and otherwise ignore it with a reason. It cannot stop a ticket."
+/** How long a working ticket may go without any change before the health check names it (reliability R6). */
+export const QUIET_MINUTES = 60
+
 export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings, 'acceptMode' | 'rules'> & Partial<Pick<TeamSettings, 'repos'>>,
   others: readonly Pick<Ticket, 'id' | 'title' | 'createdAt'>[] = [], requeued: ReadonlySet<string> = new Set(), teamLines: readonly string[] = []): string {
   const lines = [
@@ -258,6 +275,8 @@ export class SuperagentHost {
       cancelTurn: member => this.d.cancelTurn?.(member) === true,
       reportFor: (ticketId, member, state, summary) => { this.engine.report(ticketId, { state, summary: clip(summary, 2_000) }); this.relayReport(ticketId, state, summary); this.pass(); void member },
       ticket: id => this.store.tickets.get(id), trigger: id => this.store.triggers.get(id), logger: d.logger,
+      prepare: () => this.settingsValue.prepare, workspaceOf: member => this.d.workspaceOf?.(member), maxConcurrent: () => this.settingsValue.maxConcurrent ?? 0,
+      ...(d.runPrepare !== undefined ? { runPrepare: d.runPrepare } : {}),
     })
     const outbox: Outbox = {
       send: message => {
@@ -650,10 +669,28 @@ export class SuperagentHost {
     return { ok: true, trigger_id: filed.triggerId, thread: filed.thread }
   }
 
-  /** Raise a card of the router's or an observer's own (decision cards C2). */
-  proposeDecision(source: 'router' | 'observer', by: string, question: string, spec: DecisionSpec, reason?: string): Record<string, unknown> {
-    return this.decisions.propose({ source, by, question, spec, at: this.now(), ...(reason !== undefined && reason.trim() !== '' ? { reason: reason.trim() } : {}) })
+  /**
+   * Stage a session's files for a card it raises (decision cards C8).
+   * @param session - the proposing session, whose workspace relative paths are read from.
+   * @param paths - the files; none is fine.
+   * @returns the staged files, or why not.
+   */
+  stageCardFiles(session: string, paths: unknown): { ok: true; files: DecisionFile[] } | { ok: false; code: string; error: string } {
+    const list = Array.isArray(paths) ? paths.map(p => String(p).trim()).filter(p => p !== '') : []
+    if (list.length === 0) return { ok: true, files: [] }
+    if (list.length > DECISION_FILES_MAX) return { ok: false, code: 'files', error: `a card carries at most ${String(DECISION_FILES_MAX)} files` }
+    const canvas = this.settings.canvas
+    if (this.d.stageFiles === undefined || canvas === undefined) return { ok: false, code: 'files', error: 'this host cannot put files on a card' }
+    return this.d.stageFiles(session, list, canvas)
   }
+
+  /** Raise a card of the router's or an observer's own (decision cards C2, C8). */
+  proposeDecision(source: 'router' | 'observer', by: string, question: string, spec: DecisionSpec, reason?: string, files?: readonly DecisionFile[]): Record<string, unknown> {
+    return this.decisions.propose({ source, by, question, spec, at: this.now(), ...(reason !== undefined && reason.trim() !== '' ? { reason: reason.trim() } : {}), ...(files !== undefined ? { files } : {}) })
+  }
+
+  /** A file on one of the cards, for the owner to download (C8). */
+  decisionFile(cardId: string, sha256: string): DecisionFile | undefined { return this.decisions.fileOf(cardId, sha256) }
 
   /** The cards waiting for the owner: those raised on their own, and every open question on a ticket. */
   decisionCards(): Array<StoredCard & { readonly title?: string }> {
@@ -676,9 +713,18 @@ export class SuperagentHost {
    * @param note - the owner's words, added to the decision or standing as it.
    * @returns what was filed, or why not.
    */
-  decide(id: string, how: unknown, option?: unknown, note?: unknown): Record<string, unknown> {
+  decide(id: string, how: unknown, option?: unknown, note?: unknown, files?: unknown): Record<string, unknown> {
     const card = this.decisionCards().find(row => row.id === id)
     if (card === undefined) return { ok: false, code: 'stale', error: 'that decision is no longer waiting: it was decided, or its ticket moved on' }
+    // The owner's files, staged by the right bar like a request's (C8): reference lines, added below the decision.
+    const lines = files === undefined || files === null ? [] : Array.isArray(files) ? files.map(f => String(f).trim()) : [String(files)]
+    if (lines.length > DECISION_FILES_MAX) return { ok: false, code: 'files', error: `a decision carries at most ${String(DECISION_FILES_MAX)} files` }
+    const attached: DecisionFile[] = []
+    for (const line of lines) {
+      const ref = parseFileRef(line)
+      if (ref === undefined) return { ok: false, code: 'files', error: 'each file must be an "[A2A file] v1 …" reference line' }
+      attached.push({ sha256: ref.sha256, size: ref.size, name: ref.name, ref: line })
+    }
     const words = typeof note === 'string' ? note.trim() : ''
     let chosen: string
     if (how === 'approve') {
@@ -689,18 +735,19 @@ export class SuperagentHost {
       else if (option === undefined || option === null || option === '') { if (words === '') return { ok: false, code: 'choice', error: 'choose an option, or write your decision' }; chosen = '' }
       else return { ok: false, code: 'choice', error: 'that is not one of the options' }
     } else return { ok: false, code: 'how', error: 'how must be approve or choose' }
-    const answer = [...(chosen !== '' ? [`决定：${chosen}`] : []), ...(words !== '' ? [`说明：${words}`] : [])].join('\n')
+    const answer = [...(chosen !== '' ? [`决定：${chosen}`] : []), ...(words !== '' ? [`说明：${words}`] : []), ...attached.map(file => file.ref)].join('\n')
+    const withFiles = attached.length > 0 ? { files: attached } : {}
     const at = this.now()
     const { title: _title, ...stored } = card
     if (card.ticketId !== undefined) {
       const out = this.answer(card.ticketId, answer)
       if (!out.ok) return out
-      this.decisions.decide(card.id, { at, text: answer, triggerId: out.triggerId }, stored)
+      this.decisions.decide(card.id, { at, text: answer, triggerId: out.triggerId, ...withFiles }, stored)
       return { ok: true, ticket_id: card.ticketId, trigger_id: out.triggerId }
     }
     const filed = this.request(`[决策卡]（${card.source === 'router' ? '总工' : '观察者'}提出）${card.question}\n${answer}`)
     if (!filed.ok) return { ok: false, code: 'refused', error: filed.error }
-    this.decisions.decide(card.id, { at, text: answer, triggerId: filed.triggerId }, stored)
+    this.decisions.decide(card.id, { at, text: answer, triggerId: filed.triggerId, ...withFiles }, stored)
     return { ok: true, trigger_id: filed.triggerId, thread: filed.thread }
   }
 
@@ -816,7 +863,7 @@ export class SuperagentHost {
    * A member's report (upstream orchestrator_report) on the ticket bound to it. The router hears it in its own session,
    * so it can hand a ready result or a question to the person (superagent_reply).
    */
-  report(member: string, { decision, ...report }: { state: ReportState; summary: string; question?: string | null; answers?: string; decision?: DecisionSpec }, ticketId?: string, pullRequest?: string): { ok: true; ticketId: string; stage: unknown } | { ok: false; code: string; error: string } {
+  report(member: string, { decision, ...report }: { state: ReportState; summary: string; question?: string | null; answers?: string; decision?: DecisionSpec & { files?: readonly DecisionFile[] } }, ticketId?: string, pullRequest?: string): { ok: true; ticketId: string; stage: unknown } | { ok: false; code: string; error: string } {
     const binding = ticketId === undefined ? this.executor.bindingOf(member) : this.executor.bindingFor(member, ticketId)
     if (binding === undefined) return ticketId === undefined ? { ok: false, code: 'not-assigned', error: 'no ticket is assigned to this session' } : this.notYours(member, ticketId)
     const current = this.store.tickets.get(binding.ticketId)
@@ -830,7 +877,7 @@ export class SuperagentHost {
     let ticket: Ticket
     try { ticket = this.engine.report(binding.ticketId, report) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
     const stage = ticket.ended ? { stage: 'ended', outcome: ticket.ended.outcome } : ticketStage(ticket)
-    if (decision !== undefined && typeof report.question === 'string') this.decisions.forTicket({ ticketId: ticket.id, by: member, question: report.question, spec: decision, at: this.now() })
+    if (decision !== undefined && typeof report.question === 'string') this.decisions.forTicket({ ticketId: ticket.id, by: member, question: report.question, spec: { level: decision.level, options: decision.options, recommended: decision.recommended }, at: this.now(), ...(decision.files !== undefined ? { files: decision.files } : {}) })
     this.relayReport(ticket.id, report.state, report.summary)
     this.pass()
     return { ok: true, ticketId: ticket.id, stage }
@@ -1222,10 +1269,35 @@ export class SuperagentHost {
   }
 
   /** The workbench's read: threads with their triggers, decisions and replies; tickets with their stage. */
+  /**
+   * Design reliability R6: what keeps this team from working, beyond what its settings already show. Codes, not words: each
+   * page says them in its own language.
+   * @param now - the clock, in milliseconds.
+   * @returns the team's problems.
+   */
+  health(now = Date.now()): Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number }> {
+    const out: Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number }> = []
+    const loaded = this.d.sessionLoaded
+    if (loaded === undefined || !this.teamBound()) return out
+    const { router, members } = this.settings
+    if (this.d.bootSettled?.() !== false) {
+      if (router !== undefined && !loaded(router)) out.push({ code: 'router-not-loaded', session: router })
+      for (const member of members) if (!loaded(member)) out.push({ code: 'member-not-loaded', session: member })
+    }
+    for (const binding of this.executor.list()) {
+      const ticket = this.store.tickets.get(binding.ticketId)
+      if (ticket === undefined || ticket.ended !== undefined || ticketStage(ticket).stage !== 'working') continue
+      const minutes = Math.floor((now - Date.parse(ticket.updatedAt)) / 60_000)
+      if (minutes >= QUIET_MINUTES) out.push({ code: 'ticket-quiet', ticketId: ticket.id, title: ticket.title, minutes })
+    }
+    return out
+  }
+
   state(): Record<string, unknown> {
     const messages = this.store.messages.list()
     const repliesOf = (thread: string): StoredMessage[] => messages.filter(row => row.message.channel.source === 'workbench' && row.message.channel.thread === thread)
     return {
+      health: this.health(),
       settings: this.settings,
       ...(this.canvasProblem() !== undefined ? { canvasProblem: this.canvasProblem() } : {}),
       ...(this.servesProblem() !== undefined ? { servesProblem: this.servesProblem() } : {}),

@@ -1,12 +1,18 @@
 /**
- * The right bar's request view (docs/design/superagent-multi-team.md, M7): a person sends a superagent team a request without
+ * The right bar's team view (docs/design/superagent-multi-team.md, M7): what the teams need decided, and a request box, in one
+ * place (owner 2026-11-10: switching between two views was a chore). A person sends a superagent team a request without
  * leaving the conversation. It uses the team page's own way in, `POST /__dsh_a2a/superagent` `{ action: 'request' }`, so what
  * it sends is the owner's request and goes to the router like any other. Records are data: text nodes only.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { DragEvent, KeyboardEvent } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import type { KeyboardEvent } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import styles from './TeamRequestTab.module.css'
+import { TeamHealthBanner } from './TeamHealthBanner.tsx'
+import { DecisionList } from './TeamDecisionsTab.tsx'
+import { AttachedFiles, stageFiles, useAttachedFiles } from './team-files.tsx'
+
+export { FILES_MAX, FILE_BYTES_MAX } from './team-files.tsx'
 
 export type TeamRequestTabProps = PropsLocale<'a2aNet'> & { /** The session the view is open in: a request to another instance is sent as it. */ readonly sessionId?: string }
 
@@ -16,8 +22,6 @@ export interface RequestTeam { /** '' is the instance's primary team. */ readonl
 export type LoadedTeams = { readonly state: 'ready'; readonly teams: readonly RequestTeam[] } | { readonly state: 'denied' | 'failed' }
 
 const TEAM_ROUTE = '/__dsh_a2a/superagent'
-/** The file channel's limits (src/tools/files.ts, src/blob-store.ts). */
-export const FILES_MAX = 16, FILE_BYTES_MAX = 64 * 1024 * 1024
 
 /**
  * This instance's teams that can take a request: bound to a canvas, with a router, and listening on the workbench Source.
@@ -33,24 +37,6 @@ export async function loadTeams(): Promise<LoadedTeams> {
   } catch { return { state: 'failed' } }
 }
 
-/**
- * Stage files on this host for a team, each granted to its canvas.
- * @param files - the files to stage.
- * @param address - the team's canvas address.
- * @returns one reference line per file, or why one could not be staged.
- */
-async function stageFiles(files: readonly File[], address: string): Promise<{ refs: string[] } | { refused: string }> {
-  const refs: string[] = []
-  for (const file of files) {
-    try {
-      const response = await fetch(`/__dsh_a2a/blob?to=${encodeURIComponent(address)}&name=${encodeURIComponent(file.name)}&by=owner`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file })
-      const out = await response.json() as { ok?: boolean; ref?: string; error?: string }
-      if (!response.ok || out.ok !== true || out.ref === undefined) return { refused: `${file.name}: ${out.error ?? `HTTP ${String(response.status)}`}` }
-      refs.push(out.ref)
-    } catch (error) { return { refused: `${file.name}: ${String(error)}` } }
-  }
-  return { refs }
-}
 
 /** One request, as the team page sends it; undefined when it was taken, otherwise why not. */
 async function sendRequest(team: string, text: string): Promise<string | undefined> {
@@ -83,18 +69,7 @@ export function TeamRequestTab({ t, sessionId }: TeamRequestTabProps) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<Note | undefined>(undefined)
-  const [files, setFiles] = useState<readonly File[]>([])
-  const picker = useRef<HTMLInputElement>(null)
-  const [dragging, setDragging] = useState(false)
-
-  const addFiles = (added: readonly File[]): void => {
-    const tooBig = added.find(file => file.size > FILE_BYTES_MAX)
-    if (tooBig !== undefined) { setNote({ tone: 'error', text: t('team.fileTooBig', { name: tooBig.name }) }); return }
-    const known = new Set(files.map(file => `${file.name}:${String(file.size)}`))
-    const next = [...files, ...added.filter(file => !known.has(`${file.name}:${String(file.size)}`))]
-    if (next.length > FILES_MAX) { setNote({ tone: 'error', text: t('team.tooManyFiles', { max: String(FILES_MAX) }) }); return }
-    setFiles(next)
-  }
+  const { files, setFiles, addFiles, dragging, dropProps } = useAttachedFiles(t, (text) => { setNote({ tone: 'error', text }) })
 
   useEffect(() => {
     let live = true
@@ -130,25 +105,6 @@ export function TeamRequestTab({ t, sessionId }: TeamRequestTabProps) {
     setNote({ tone: 'ok', text: t('team.sent', { team: chosen.name }) })
   }, [canSend, chosen, files, sessionId, t, text])
 
-  // Only a drag of files is ours: dragging selected text into the box stays the browser's.
-  const dragsFiles = (event: DragEvent<HTMLElement>): boolean => [...event.dataTransfer.types].includes('Files')
-  const onDragOver = (event: DragEvent<HTMLElement>): void => {
-    if (!dragsFiles(event)) return
-    event.preventDefault()
-    setDragging(true)
-  }
-  const onDragLeave = (event: DragEvent<HTMLElement>): void => {
-    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false)
-  }
-  const onDrop = (event: DragEvent<HTMLElement>): void => {
-    if (!dragsFiles(event)) return
-    event.preventDefault()
-    setDragging(false)
-    // A folder arrives as a File that cannot be read; the entry says what it really is.
-    const items = [...event.dataTransfer.items]
-    if (items.some(item => item.webkitGetAsEntry?.()?.isDirectory === true)) { setNote({ tone: 'error', text: t('team.noFolders') }); return }
-    addFiles([...event.dataTransfer.files])
-  }
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void send() }
@@ -159,7 +115,9 @@ export function TeamRequestTab({ t, sessionId }: TeamRequestTabProps) {
   if (chosen === undefined) return <div className={styles.view}><p className={styles.hint}>{t('team.none')}</p><a className={styles.link} href="/__dsh_a2a_nexus/" target="_blank" rel="noreferrer">{t('team.open')}</a></div>
 
   return (
-    <div className={`${styles.view} ${dragging ? styles.dragging : ''}`} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+    <div className={`${styles.view} ${dragging ? styles.dragging : ''}`} {...dropProps}>
+      <TeamHealthBanner t={t} />
+      <DecisionList t={t} />
       <label className={styles.field}>
         <span className={styles.label}>{t('team.pick')}</span>
         <select className={styles.input} value={chosen.id} onChange={(event) => { setTeam(event.target.value) }}>
@@ -171,17 +129,7 @@ export function TeamRequestTab({ t, sessionId }: TeamRequestTabProps) {
         <span className={styles.label}>{t('team.request')}</span>
         <textarea className={`${styles.input} ${styles.text}`} value={text} maxLength={20_000} placeholder={t('team.placeholder')} onChange={(event) => { setText(event.target.value) }} onKeyDown={onKeyDown} />
       </label>
-      <div className={styles.files}>
-        <input ref={picker} type="file" multiple hidden aria-label={t('team.addFiles')} onChange={(event) => { addFiles([...(event.target.files ?? [])]); event.target.value = '' }} />
-        <button type="button" className={styles.attach} onClick={() => { picker.current?.click() }}>{t('team.addFiles')}</button>
-        <span className={styles.hint}>{t('team.dropHint')}</span>
-        {files.map(file => (
-          <div key={`${file.name}:${String(file.size)}`} className={styles.file}>
-            <span className={styles.fileName}>{file.name}</span>
-            <button type="button" className={styles.remove} aria-label={t('team.removeFile', { name: file.name })} onClick={() => { setFiles(files.filter(row => row !== file)) }}>×</button>
-          </div>
-        ))}
-      </div>
+      <AttachedFiles t={t} files={files} setFiles={setFiles} addFiles={addFiles} />
       <div className={styles.actions}>
         <button type="button" className={styles.send} disabled={!canSend} onClick={() => { void send() }}>{busy ? t('team.sending') : t('team.send')}</button>
         <a className={styles.link} href="/__dsh_a2a_nexus/" target="_blank" rel="noreferrer">{t('team.open')}</a>

@@ -19,6 +19,8 @@ export type A2aNetKey =
   | 'team.fileTooBig'
   | 'team.tooManyFiles'
   | 'team.dropHint'
+  | 'team.cardFiles'
+  | 'team.noFileTarget'
   | 'team.noFolders'
   | 'team.sentRemote'
   | 'team.remoteHint'
@@ -33,6 +35,11 @@ export type A2aNetKey =
   | 'team.fromRouter'
   | 'team.fromObserver'
   | 'team.fromMember'
+  | 'team.healthTitle'
+  | 'team.healthRouter'
+  | 'team.healthMember'
+  | 'team.healthQuiet'
+  | 'team.decisionsCount'
   | 'team.tab'
   | 'team.guide'
   | 'team.pick'
@@ -55,6 +62,8 @@ export const zh: Record<A2aNetKey, string> = {
   'team.fileTooBig': '{name} 超过 64 MB，发不了',
   'team.tooManyFiles': '一次最多 {max} 个文件',
   'team.dropHint': '也可以把多个文件一起拖到这里',
+  'team.cardFiles': '卡上的文件',
+  'team.noFileTarget': '这张卡的团队没有画布地址，不能附文件',
   'team.noFolders': '不能拖入文件夹，请选择里面的文件',
   'team.sentRemote': '已发给 {team}，由对方团队按自己的规则决定。发送者是 {sender}，回执会回到这个会话',
   'team.remoteHint': '这支团队在其他实例上：这条消息算当前会话发的，不算你本人。对方要把这个会话列入名单，并开 auto 和对应规则，才会开单。',
@@ -69,8 +78,13 @@ export const zh: Record<A2aNetKey, string> = {
   'team.fromRouter': '总工提出',
   'team.fromObserver': '观察者提出',
   'team.fromMember': '成员提问',
-  'team.tab': '提需求',
-  'team.guide': '把需求交给 superagent 团队，不用离开当前对话',
+  'team.healthTitle': '团队有 {count} 个问题',
+  'team.healthRouter': '总工会话 {session} 没有加载，需求送不到它，打开这个会话即可',
+  'team.healthMember': '成员会话 {session} 没有加载，工单派不给它，打开这个会话即可',
+  'team.healthQuiet': '工单「{title}」已经 {minutes} 分钟没有动静',
+  'team.decisionsCount': '待你决定（{count}）',
+  'team.tab': '团队',
+  'team.guide': '处理团队等你决定的事，或给团队提需求，不用离开当前对话',
   'team.pick': '团队',
   'team.request': '需求',
   'team.placeholder': '写清要做什么、为什么。Ctrl/⌘ + Enter 发送',
@@ -104,6 +118,8 @@ export const en: Record<A2aNetKey, string> = {
   'team.fileTooBig': '{name} is over 64 MB and cannot be sent',
   'team.tooManyFiles': 'At most {max} files at a time',
   'team.dropHint': 'Or drag several files here at once',
+  'team.cardFiles': 'Files on this card',
+  'team.noFileTarget': 'this card\'s team has no canvas address to send files to',
   'team.noFolders': 'Folders cannot be added. Choose the files inside',
   'team.sentRemote': 'Sent to {team}, whose own rules decide. The sender is {sender}; the receipt comes back to this session',
   'team.remoteHint': 'This team is on another instance. The message counts as this session\'s, not yours. That team opens a ticket only if it lists this session and runs auto with a matching rule.',
@@ -118,8 +134,13 @@ export const en: Record<A2aNetKey, string> = {
   'team.fromRouter': 'From the router',
   'team.fromObserver': 'From an observer',
   'team.fromMember': 'From a member',
-  'team.tab': 'Request',
-  'team.guide': 'Send a superagent team a request without leaving this conversation',
+  'team.healthTitle': 'The team has {count} problem(s)',
+  'team.healthRouter': 'Router session {session} is not loaded, so requests cannot reach it. Open that session',
+  'team.healthMember': 'Member session {session} is not loaded, so tickets cannot reach it. Open that session',
+  'team.healthQuiet': 'Ticket “{title}” has had no activity for {minutes} minutes',
+  'team.decisionsCount': 'Waiting for your decision ({count})',
+  'team.tab': 'Team',
+  'team.guide': 'Decide what your teams wait for, or send them a request, without leaving this conversation',
   'team.pick': 'Team',
   'team.request': 'Request',
   'team.placeholder': 'What needs doing, and why. Ctrl/⌘ + Enter to send',

@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { networkInterfaces } from 'node:os'
 import { selectLanIPv4 } from './lan-ip.ts'
 import { isLinkKey, normalizeLinkKeys, originOf, outboundKeyFor } from './link-keys.ts'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 // The package own version, read from package.json at load time so the
 // panel never drifts from the manifest the installer actually resolved.
@@ -149,7 +149,7 @@ import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { registerSessionLogFaces } from './faces/session-log.ts'
 import { registerFileFaces } from './faces/files.ts'
 import { createFileTools } from './tools/files.ts'
-import { BlobStore } from './blob-store.ts'
+import { BLOB_FILE_MAX, BlobStore, formatFileRef } from './blob-store.ts'
 import { canvasCandidateMatches, canvasTargetAmbiguous, peerDirectoryRows, routableCallerLabel, sessionCandidateMatches, unroutableCallerNote } from './peer-directory.ts'
 import { createActTools } from './tools/act.ts'
 import type { A2aPeerCard, A2aRouteResult, ZoneRecord } from './types.ts'
@@ -1475,6 +1475,9 @@ export function apply(ctx: Context, config: Config): void {
     sessionNodes.set(String(agent.id), agent)
   }
 
+  /** Whether the boot prewarm has finished waking joined sessions: until then a session not yet loaded is not a problem. */
+  const bootStartedAt = Date.now()
+  const bootPrewarm = { settled: (): boolean => Date.now() - bootStartedAt >= 120_000 }
   if (config.sessionNodes) {
     // Track live top-level sessions for the join surface; joining is
     // explicit (the sidebar control), never automatic. A throwing
@@ -1509,6 +1512,8 @@ export function apply(ctx: Context, config: Config): void {
       woken: number
       failed: Array<{ id: string; error: string }>
     } = { state: 'off', attempted: 0, woken: 0, failed: [] }
+    // A prewarm that has not begun yet reads 'off' for a moment at boot; the first two minutes count as waking too.
+    bootPrewarm.settled = () => prewarmStatus.state !== 'draining' && (prewarmStatus.state !== 'off' || Date.now() - bootStartedAt >= 120_000)
 
     // F8: continuous desired-state reconciliation. The boot prewarm is a
     // one-shot snapshot over a queue — a session that goes cold later, a
@@ -2079,6 +2084,8 @@ export function apply(ctx: Context, config: Config): void {
         const e = event as { type?: string; time?: number; data?: { id?: unknown; source?: { kind?: unknown; rpcId?: unknown }; content?: ReadonlyArray<{ type?: string; text?: string }> } } | undefined
         if (e?.type !== 'user/message') continue
         const kind = e.data?.source?.kind
+        // A scheduled prompt is the session's own text: it closes the door as a relayed message does (D11).
+        if (kind === 'schedule') return undefined
         if (typeof kind === 'string' && NEUTRAL_SOURCES.has(kind)) continue
         const rpcId = e.data?.source?.rpcId
         if (kind !== 'user' || (typeof rpcId === 'string' && rpcId.startsWith('a2a-')) || typeof e.data?.id !== 'string' || typeof e.time !== 'number') return undefined
@@ -2088,6 +2095,31 @@ export function apply(ctx: Context, config: Config): void {
       return undefined
     },
     sessionName: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : `${nodeMetadataOf(agent).name} (${id.replace(/^session-/, '').slice(0, 8)})` },
+    sessionLoaded: id => sessionNodes.has(id),
+    bootSettled: () => bootPrewarm.settled(),
+    workspaceOf: id => { const cwd = (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd; return typeof cwd === 'string' ? cwd : undefined },
+    // Decision cards C8: a proposer's files go on the file channel, granted to its team's canvas, as a2a_file_send stages them.
+    stageFiles: (id, paths, canvas) => {
+      const from = originOf(ownCardUrl)
+      if (from === '') return { ok: false, code: 'files', error: 'this host publishes no card URL yet: nobody could pull the files' }
+      const cwd = (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd
+      const files: Array<{ sha256: string; size: number; name: string; ref: string }> = []
+      for (const p of paths) {
+        const abs = isAbsolute(p) ? p : typeof cwd === 'string' && cwd !== '' ? resolve(cwd, p) : ''
+        if (abs === '') return { ok: false, code: 'files', error: `relative path ${p} needs a session workspace` }
+        let bytes: Uint8Array
+        try {
+          const st = statSync(abs)
+          if (!st.isFile()) return { ok: false, code: 'files', error: `${p} is not a file` }
+          if (st.size > BLOB_FILE_MAX) return { ok: false, code: 'files', error: `${p} is ${String(st.size)} bytes; a file on a card is at most ${String(BLOB_FILE_MAX)}` }
+          bytes = readFileSync(abs)
+        } catch (error) { return { ok: false, code: 'files', error: `cannot read ${p}: ${error instanceof Error ? error.message : String(error)}` } }
+        const out = blobStore.stage(bytes, { name: abs.split(/[\\/]/).pop() ?? p, to: `${config.team}/canvas/${canvas}`, by: id })
+        if (!out.ok) return { ok: false, code: out.code ?? 'files', error: `${p}: ${out.error}` }
+        files.push({ sha256: out.sha256, size: out.size, name: out.name, ref: formatFileRef({ sha256: out.sha256, size: out.size, name: out.name, from }) })
+      }
+      return { ok: true, files }
+    },
     memberTurn: id => {
       const agent = sessionNodes.get(id)
       if (agent === undefined) return undefined
@@ -2118,7 +2150,7 @@ export function apply(ctx: Context, config: Config): void {
     // PR-F: an Input counts as read once the member's session takes the message carrying it into its history.
     ctx.on('agent/inbox/claimed', ({ agent }) => { superagentTeams!.ofSession(String(agent.id))?.memberClaimed(String(agent.id)) })
     ctx.tools.guard(exec => {
-      const refusal = superagentRoleTools.guard(exec.name, exec.agent as unknown as RoleAgent | undefined)
+      const refusal = superagentRoleTools.guard(exec.name, exec.agent as unknown as RoleAgent | undefined, exec.arguments)
       if (refusal !== undefined) (exec.agent !== undefined ? superagentTeams!.ofSession(String(exec.agent.id)) ?? superagentHost! : superagentHost!).noteRefusal('superagent-role-tools', { ...(exec.agent !== undefined ? { caller: String(exec.agent.id) } : {}), target: exec.name })
       return refusal
     })
@@ -3282,19 +3314,43 @@ export function apply(ctx: Context, config: Config): void {
       path: '/__dsh_a2a/superagent/decisions',
       handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
         const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
-        if (req.method === 'GET') { send(200, { decisions: superagentTeams.decisionCards() }); return }
+        // Each card names its team's canvas address: the right bar stages the owner's files to it (C8).
+        if (req.method === 'GET') { send(200, { decisions: superagentTeams.decisionCards().map(card => ({ ...card, ...(typeof card.team === 'string' && card.team !== '' ? { address: `${config.team}/canvas/${card.team}` } : {}) })), health: superagentTeams.health() }); return }
         readJsonBody(req, res, (body) => {
-          const fields = body as { teamId?: unknown; id?: unknown; how?: unknown; option?: unknown; note?: unknown }
+          const fields = body as { teamId?: unknown; id?: unknown; how?: unknown; option?: unknown; note?: unknown; files?: unknown }
           const team = superagentTeams.get(typeof fields.teamId === 'string' ? fields.teamId : undefined)
           if (team === undefined) { send(404, { ok: false, error: 'no such team on this instance' }); return }
           // A member's shell on this machine passes the control route; deciding is the owner's alone (C5).
           void ownerOrNoLogin(superagentHomeUrl, req.headers.cookie).then((allowed) => {
             if (!allowed) { send(403, { ok: false, code: 'owner-proof', error: '决策需要在已登录的 DSH 界面里操作。' }); return }
-            send(200, team.decide(typeof fields.id === 'string' ? fields.id : '', fields.how, fields.option, fields.note))
+            send(200, team.decide(typeof fields.id === 'string' ? fields.id : '', fields.how, fields.option, fields.note, fields.files))
           }, (error: unknown) => { send(500, { ok: false, error: String(error) }) })
         })
       }),
     }), 'a2a: superagent decisions face')
+    // C8: a file on a card, for the owner. Only files a card names, only while the file channel still holds them (24 h).
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/__dsh_a2a/superagent/decisions/file',
+      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+        const fail = (status: number, error: string): void => { const payload = JSON.stringify({ ok: false, error }); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
+        if (req.method !== 'GET') { fail(405, 'GET only'); return }
+        const query = new URL(req.url ?? '/', 'http://local').searchParams
+        const team = superagentTeams.get(query.get('teamId') ?? undefined)
+        const sha256 = query.get('sha256') ?? ''
+        if (team === undefined || !/^[0-9a-f]{64}$/.test(sha256)) { fail(404, 'no such file on a card'); return }
+        void ownerOrNoLogin(superagentHomeUrl, req.headers.cookie).then((allowed) => {
+          if (!allowed) { fail(403, '决策卡的文件需要在已登录的 DSH 界面里打开。'); return }
+          const file = team.decisionFile(query.get('card') ?? '', sha256)
+          if (file === undefined) { fail(404, 'no such file on a card'); return }
+          const grant = blobStore.list().find(g => g.sha256 === sha256)
+          const bytes = grant === undefined ? undefined : blobStore.read(grant)
+          if (bytes === undefined) { fail(410, '文件已过期：文件通道只保留 24 小时。'); return }
+          res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': bytes.byteLength, 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' })
+          res.end(bytes)
+        }, (error: unknown) => { fail(500, String(error)) })
+      }),
+    }), 'a2a: superagent decision file face')
   })
 
   if (superagentTeams !== undefined) whenWebServerSettled((webServer) => {

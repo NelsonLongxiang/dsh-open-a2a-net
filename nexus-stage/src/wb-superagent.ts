@@ -61,7 +61,19 @@ export interface SaSettings {
 /** One team on this instance (`GET /__dsh_a2a/superagent/teams`); id '' is the primary team. */
 export interface SaTeamRow { readonly id: string; readonly canvas?: string }
 
+/** A problem the host found (design reliability R6). */
+export interface SaHealth { readonly code: string; readonly session?: string; readonly ticketId?: string; readonly title?: string; readonly minutes?: number }
+
+/** The words for a problem the host found. */
+export function healthText(problem: SaHealth, sessionName: (id: string) => string = id => id): string {
+  if (problem.code === 'router-not-loaded') return `总工会话 ${sessionName(problem.session ?? '')} 没有加载：需求送不到它，打开这个会话即可`
+  if (problem.code === 'member-not-loaded') return `成员会话 ${sessionName(problem.session ?? '')} 没有加载：工单派不给它，打开这个会话即可`
+  if (problem.code === 'ticket-quiet') return `工单「${problem.title ?? problem.ticketId ?? ''}」已经 ${String(problem.minutes ?? 0)} 分钟没有动静`
+  return problem.code
+}
+
 export interface SaState {
+  readonly health?: readonly SaHealth[]
   readonly settings: SaSettings; readonly policyVersion: string
   /** This instance's teams, and which one this state is, added by the poll. */
   readonly teams?: readonly SaTeamRow[]
@@ -128,6 +140,7 @@ export function problemsOf(state: SaState, now: number): SaProblem[] {
   if (state.settings.router === undefined) out.push({ tone: 'danger', text: '还没有指定总工：需求会停在候选里，没人决定（到「设置」里选）' })
   if (state.settings.members.length === 0 && state.settings.remoteMembers.length === 0) out.push({ tone: 'warn', text: '成员池是空的：在画布团队里加成员，接下的工单才有人做' })
   if (state.settings.paused) out.push({ tone: 'warn', text: '执行已暂停：新工单不会派给成员' })
+  for (const problem of state.health ?? []) out.push({ tone: problem.code === 'ticket-quiet' ? 'warn' : 'danger', text: healthText(problem) })
   if (state.pullRequestProblem !== undefined) out.push({ tone: 'warn', text: `读取 PR 状态失败，稍后重试：${state.pullRequestProblem}` })
   for (const [entry, health] of Object.entries(state.a2a.health)) if (health.state === 'error') out.push({ tone: 'danger', text: `A2A Source（${entry}）出错：${health.detail ?? ''}` })
   for (const thread of state.threads) {

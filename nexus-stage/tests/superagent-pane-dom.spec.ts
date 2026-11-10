@@ -68,6 +68,9 @@ describe('team tab helpers', () => {
     // Design v5: unbound, or bound to a canvas that cannot run as the team.
     const { canvas: _bound, ...unbound } = state().settings
     expect(problemsOf(state({ settings: unbound }), NOW)[0]).toMatchObject({ tone: 'danger', text: expect.stringContaining('还没有绑定画布团队') })
+    const sick = problemsOf(state({ health: [{ code: 'member-not-loaded', session: 'session-x' }, { code: 'ticket-quiet', title: '写文档', minutes: 90 }] }), NOW)
+    expect(sick.map(p => p.tone)).toEqual(['danger', 'warn'])
+    expect(sick[1]!.text).toContain('90 分钟没有动静')
     expect(problemsOf(state({ canvasProblem: 'the bound canvas team ops does not exist on this host' }), NOW)[0]).toMatchObject({ tone: 'danger', text: expect.stringContaining('画布团队「ops」不能作为团队运行') })
   })
 })

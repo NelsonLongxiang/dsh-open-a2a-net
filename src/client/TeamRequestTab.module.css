@@ -180,3 +180,19 @@
   font-size: 11px;
   line-height: 18px;
 }
+
+.health {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsh-danger, #e5534b);
+  border-radius: 8px;
+  line-height: 1.5;
+}
+
+.decisions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
