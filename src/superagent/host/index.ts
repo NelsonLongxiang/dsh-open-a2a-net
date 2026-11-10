@@ -44,6 +44,8 @@ export interface SuperagentHostDeps {
    * Stage files from a local session's workspace on the file channel, granted to the team's canvas (decision cards C8).
    * Absent, a card takes no files.
    */
+  /** Whether a local session can call a tool (its preset mounts it): the ygl-trees steps go only to a member that has them. */
+  readonly hasTool?: (sessionId: string, name: string) => boolean
   readonly stageFiles?: (sessionId: string, paths: readonly string[], canvas: string) => { ok: true; files: DecisionFile[] } | { ok: false; code: string; error: string }
   /** Where this team's state lives instead, when it is not the instance's primary team (design M2). */
   readonly stateDir?: string
@@ -226,6 +228,16 @@ export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings
   return lines.join('\n')
 }
 
+/** The ygl-trees write tool a member's preset mounts (role-tools YGL_WORK_TOOLS). */
+export const YGL_WRITE = 'mcp__ygl__write'
+/** The ygl-trees steps on an assignment card (docs/design/superagent-ygl-memory.md). */
+export const YGL_CARD_LINES: readonly string[] = [
+  'team memory (ygl-trees), as part of this ticket:',
+  '- first: mcp__ygl__read domain agent action brief, and domain kb action search on this ticket\'s subject; build on what earlier work found',
+  '- as you go: with mcp__ygl__write, record each source you rely on and the exact lines you quote as evidence, and each judgement as a claim linked to them',
+  '- before ready: kb add what the next session should reuse, and pass the ids you wrote in ygl on a2a_ticket_report',
+]
+
 export class SuperagentHost {
   readonly store: JsonRepositories
   readonly engine: Engine
@@ -233,6 +245,8 @@ export class SuperagentHost {
   private readonly settingsPath: string
   /** Candidates waiting to reach the router, by evalId; delivered ones stay until the engine releases them. */
   private readonly candidates = new Map<string, { candidate: Candidate; delivered: boolean }>()
+  /** Tickets whose member was already reminded once to record in ygl-trees before ready. */
+  private readonly yglReminded = new Set<string>()
   private readonly prs: PrFollower
   private readonly reviews: ReviewRequests
   /** Proposals to change a rule set, each set's revision and last change (design D8–D10b). */
@@ -582,6 +596,8 @@ export class SuperagentHost {
     if (profile?.role !== undefined) lines.push(`your role: ${profile.role}`)
     for (const rule of (profile?.rules ?? []).filter(r => r.enabled)) lines.push(`your rule ${rule.name}: ${clip(rule.text, 600)}`)
     if (profile !== undefined) lines.push('If this ticket does not fit your role and rules, report blocked and say why; the router will choose again.')
+    // The team's memory, in the card the member acts on (owner 2026-11-10: a persona line alone was not followed).
+    if (this.d.hasTool?.(member, YGL_WRITE) === true) lines.push(...YGL_CARD_LINES)
     for (const name of ticket.mandate.basis.rules ?? []) {
       const rule = this.settingsValue.rules.find(r => r.name === name)
       if (rule !== undefined) lines.push(`accepted on team rule ${rule.name}: ${clip(rule.text, 600)}`)
@@ -687,6 +703,17 @@ export class SuperagentHost {
   /** Raise a card of the router's or an observer's own (decision cards C2, C8). */
   proposeDecision(source: 'router' | 'observer', by: string, question: string, spec: DecisionSpec, reason?: string, files?: readonly DecisionFile[]): Record<string, unknown> {
     return this.decisions.propose({ source, by, question, spec, at: this.now(), ...(reason !== undefined && reason.trim() !== '' ? { reason: reason.trim() } : {}), ...(files !== undefined ? { files } : {}) })
+  }
+
+  /**
+   * A ready report from a member that has ygl-trees but names nothing it wrote there is sent back once (design Y2): the
+   * second ready goes through, so a ticket with nothing worth keeping is never held.
+   * @returns the refusal, or undefined to take the report.
+   */
+  yglReadyRefusal(member: string, ticketId: string, state: string, ids: readonly string[]): { ok: false; code: string; error: string } | undefined {
+    if (state !== 'ready' || ids.length > 0 || this.d.hasTool?.(member, YGL_WRITE) !== true || this.yglReminded.has(ticketId)) return undefined
+    this.yglReminded.add(ticketId)
+    return { ok: false, code: 'ygl-record', error: 'Before ready, record what this ticket found in ygl-trees: evidence and claims with mcp__ygl__write, and kb add what the next session should reuse. Then report ready again with the ids in ygl. If nothing here is worth keeping, report ready again and say why in summary; this reminder comes only once.' }
   }
 
   /** A file on one of the cards, for the owner to download (C8). */
