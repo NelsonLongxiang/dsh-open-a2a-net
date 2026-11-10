@@ -942,6 +942,9 @@ export class SuperagentHost {
     return undefined
   }
 
+  /** The last model selection per session, for the team page (review of #566). */
+  private readonly modelResults = new Map<string, { model: string; at: string; ok: boolean; error?: string }>()
+
   /** Put one local team session's model choice through (owner 2026-11-10): what a just-loaded session catches up with. */
   applyModelFor(session: string): void {
     try {
@@ -949,7 +952,11 @@ export class SuperagentHost {
       if (pick === undefined) return
       const select = this.d.selectModel
       if (select === undefined) return
-      void select(session, pick).then(ok => { if (ok !== true) this.d.logger.warn('superagent: the team model was not selected for %s', session) }, error => { this.d.logger.warn('superagent: the team model was not selected for %s: %s', session, String(error)) })
+      // The outcome is kept for the team page (review of #566: the host log does not reach the operator, so a silent miss looked like success).
+      const at = this.now(), model = `${pick.provider}/${pick.model}${pick.reasoningEffort !== undefined ? ` (${pick.reasoningEffort})` : ''}`
+      void select(session, pick).then(
+        ok => { this.modelResults.set(session, { model, at, ok: ok === true, ...(ok === true ? {} : { error: 'session not loaded, or the model service refused it' }) }); if (ok !== true) this.d.logger.warn('superagent: the team model was not selected for %s', session) },
+        error => { this.modelResults.set(session, { model, at, ok: false, error: String(error).slice(0, 300) }); this.d.logger.warn('superagent: the team model was not selected for %s: %s', session, String(error)) })
     } catch (error) { this.d.logger.warn('superagent: applying the team model failed: %s', String(error)) }
   }
 
@@ -1476,6 +1483,7 @@ export class SuperagentHost {
       a2a: { enabled: this.settingsValue.sources.a2a, address: this.a2a.address ?? null, health: this.a2a.health },
       refusals: { counts: Object.fromEntries(this.refusalCounts), recent: [...this.refusalRecent] },
       settingsHistory: this.settingsHistory.list(),
+      modelResults: Object.fromEntries(this.modelResults),
       ...(this.prs.problem !== undefined ? { pullRequestProblem: this.prs.problem } : {}),
       ...(this.issues.problem !== undefined ? { githubIssuesProblem: this.issues.problem } : {}),
       reviews: this.reviews.list(),

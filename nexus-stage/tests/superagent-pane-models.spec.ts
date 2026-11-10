@@ -48,11 +48,12 @@ describe('the model pickers', () => {
     await new Promise(r => setTimeout(r, 30))
     expect(calls.acts[0]).toMatchObject({ action: 'settings', settings: { models: { router: { provider: 'deepseek', model: 'chat' }, member: { provider: 'openai', model: 'gpt-5' } } } })
   })
-  it('empty pickers save models null; a bad shape is refused with a note', async () => {
+  it('untouched pickers send no models, so an unrelated save keeps the stored choices; a bad shape is refused with a note', async () => {
     const { p, calls } = pane()
     save(p)
     await new Promise(r => setTimeout(r, 30))
-    expect(calls.acts[0]).toMatchObject({ action: 'settings', settings: { models: null } })
+    expect(calls.acts[0]).toMatchObject({ action: 'settings' })
+    expect('models' in (calls.acts[0] as { settings: Json }).settings).toBe(false)
     const input = p.root.querySelector<HTMLInputElement>('input.wb-sa-model')!
     input.value = 'noslash'
     save(p)
@@ -74,5 +75,27 @@ describe('the model pickers', () => {
     settings.click()
     const input = p.root.querySelector<HTMLInputElement>('input.wb-sa-model')!
     expect(input.value).toBe('deepseek/chat')
+  })
+  it('a stored choice survives an unrelated save; changing one keeps the other with its effort; clearing both sends null', async () => {
+    const stored = { router: { provider: 'local', model: 'glm-5.3', reasoningEffort: 'max' }, member: { provider: 'local', model: 'glm-5.3', reasoningEffort: 'high' } }
+    const calls: Act = { acts: [] }
+    const deps: SuperagentPaneDeps = { async act(body) { calls.acts.push(body); return { ok: true } }, refresh: () => {}, async models() { throw new Error('no') } }
+    const p = createSuperagentPane(deps)
+    const st = state() as unknown as { settings: Json }
+    st.settings = { ...st.settings, models: stored }
+    p.update(st as unknown as SaState, [], Date.parse('2026-11-10T10:00:00.000Z'))
+    ;[...p.root.querySelectorAll<HTMLButtonElement>('.wb-filter')].find(b => b.textContent === '设置')!.click()
+    save(p)
+    await new Promise(r => setTimeout(r, 30))
+    expect('models' in (calls.acts[0] as { settings: Json }).settings).toBe(false)
+    const [routerInput, memberInput] = [...p.root.querySelectorAll<HTMLInputElement>('input.wb-sa-model')]
+    memberInput!.value = 'opencode-go/deepseek-v4.1-flash'
+    save(p)
+    await new Promise(r => setTimeout(r, 30))
+    expect((calls.acts[1] as { settings: Json }).settings.models).toEqual({ router: stored.router, member: { provider: 'opencode-go', model: 'deepseek-v4.1-flash' } })
+    routerInput!.value = ''; memberInput!.value = ''
+    save(p)
+    await new Promise(r => setTimeout(r, 30))
+    expect((calls.acts[2] as { settings: Json }).settings.models).toBeNull()
   })
 })

@@ -2106,15 +2106,13 @@ export function apply(ctx: Context, config: Config): void {
     // /api/session/* answers 401 without a browser cookie, so the loopback call could never work (review of #566).
     // A session not loaded yet is skipped; the next start or pool change applies it.
     selectModel: async (sessionId, pick) => {
-      if (!sessionNodes.has(sessionId)) return false
+      if (!sessionNodes.has(sessionId)) throw new Error('the session is not loaded on this host yet')
       const controller = (ctx as unknown as { get?(name: string): { selectModel?(request: unknown): Promise<unknown> } | undefined }).get?.('sessionController')
-      if (controller?.selectModel === undefined) return false
-      try { await controller.selectModel({ sessionId, ...pick }) } catch { return false }
-      // Read back what the session actually runs (review of #566 third round): a resolve without an effect is a miss.
-      try {
-        const agent = sessionNodes.get(sessionId) as { model?: { provider?: string; model?: string } } | undefined
-        return agent?.model?.provider === pick.provider && agent?.model?.model === pick.model
-      } catch { return false }
+      if (controller?.selectModel === undefined) throw new Error('DSH offers no sessionController here')
+      // DSH answers with the selection it installed for the session's next request: that is the read-back.
+      const done = await controller.selectModel({ sessionId, ...pick }) as { selected?: { provider?: string; model?: string } } | undefined
+      if (done?.selected?.provider !== pick.provider || done.selected.model !== pick.model) throw new Error(`DSH installed ${String(done?.selected?.provider)}/${String(done?.selected?.model)} instead`)
+      return true
     },
     bootSettled: () => bootPrewarm.settled(),
     workspaceOf: id => { const cwd = (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd; return typeof cwd === 'string' ? cwd : undefined },
