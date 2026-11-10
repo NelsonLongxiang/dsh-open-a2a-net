@@ -33,6 +33,12 @@ Today one DSH instance runs one team. `SuperagentHost` holds one settings file, 
 
 Treating a request from another instance as the owner's own. That needs the receiving host to trust another host's login, which is a new authority and a separate decision.
 
+### M11 Each role its own model (2026-11-10, owner: 对照上游)
+
+- The team's settings name a model for the router and one for the members (an observer runs the member's): `models: { router?, member? }`, each what DSH's `session/selectModel` takes (provider, model, optional reasoningEffort).
+- The host applies the choice to its local team sessions when the settings save, when the pool changes (a member joins), and after it starts (it just woke the sessions). A failure is logged and never blocks the save; a session not loaded yet is skipped and caught by the next trigger. Unset leaves a session's own choice alone. Remote members are the other host's business.
+- The team page's 设置 lists both, picked from DSH's own catalog (the control face proxies `session/modelCatalog`; unreadable: free text `provider/model`). The settings history (PR#561) records every change.
+
 ## Order
 
 1. The right-bar view, sending to this instance's team.

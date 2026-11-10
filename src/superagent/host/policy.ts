@@ -80,6 +80,8 @@ export interface TeamSettings {
   readonly profiles: Readonly<Record<string, MemberProfile>>
   /** The command that prepares a ticket's directory before its member starts (design reliability R1–R4). */
   readonly prepare?: { readonly command: string; readonly timeoutMs: number }
+  /** Which model each role's sessions run (owner 2026-11-10, 对照上游): the router's own, and the members' (an observer follows the member's). Unset leaves a session's own choice alone. */
+  readonly models?: { readonly router?: ModelPick; readonly member?: ModelPick }
   /** The owner's own supplement to the presets (owner 2026-11-10, 对照上游): how the team talks, and what delivery looks like. The presets stand; on a clash these lose. */
   readonly prompts?: { readonly communication?: string; readonly delivery?: string }
   /** How many tickets may run at once; 0 is no cap beyond one per member (design reliability R5). */
@@ -100,7 +102,21 @@ export interface TeamSettings {
 
 /** A member's role and what it takes. */
 export interface MemberProfile { readonly role?: string; readonly rules: readonly ProactiveRule[] }
+/** One model a role's sessions run: what DSH's session/selectModel takes. */
+export interface ModelPick { readonly provider: string; readonly model: string; readonly reasoningEffort?: string }
+export const PROVIDER_MAX = 100, MODEL_MAX = 200, EFFORT_MAX = 20
 export const ROLE_MAX = 200, DISPATCH_MAX = 4_000, PREPARE_MAX = 4_000, PROMPT_MAX = 4_000
+
+/** Read one model pick, or why it is not one. */
+const parseModel = (raw: unknown): ModelPick | string => {
+  if (raw === null || raw === '') return undefined as unknown as ModelPick
+  if (typeof raw !== 'object') return 'a model is { provider, model, reasoningEffort? }'
+  const { provider, model, reasoningEffort } = raw as Record<string, unknown>
+  if (typeof provider !== 'string' || provider === '' || provider.length > PROVIDER_MAX) return `provider is required, at most ${String(PROVIDER_MAX)} characters`
+  if (typeof model !== 'string' || model === '' || model.length > MODEL_MAX) return `model is required, at most ${String(MODEL_MAX)} characters`
+  if (reasoningEffort !== undefined && (typeof reasoningEffort !== 'string' || reasoningEffort.length > EFFORT_MAX)) return 'reasoningEffort is a short word'
+  return { provider, model, ...(reasoningEffort !== undefined ? { reasoningEffort } : {}) }
+}
 
 /** A canvas team name as the canvas store takes it: 1–40 characters, no `/`, not all digits, no surrounding space. */
 export const validCanvasName = (name: unknown): name is string =>
@@ -226,6 +242,24 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   }
   const maxConcurrent = 'maxConcurrent' in r ? r.maxConcurrent : current.maxConcurrent ?? 0
   if (typeof maxConcurrent !== 'number' || !Number.isInteger(maxConcurrent) || maxConcurrent < 0 || maxConcurrent > 64) return { ok: false, error: 'maxConcurrent must be an integer 0–64' }
+  // Which model each role's sessions run (owner 2026-11-10): absent leaves a session's own choice alone.
+  let models = current.models
+  if ('models' in r) {
+    if (r.models === null || r.models === '') models = undefined
+    else {
+      const raw = (r.models ?? {}) as Record<string, unknown>
+      // A named key is a pick or '' to clear that one (#566 fifth round, the prompts shape); unnamed keeps what is saved.
+      const read = (key: 'router' | 'member', wasNamed: boolean): ModelPick | string | undefined => {
+        if (!wasNamed) return current.models?.[key]
+        if (raw[key] === '' || raw[key] === null) return undefined
+        return parseModel(raw[key]) as ModelPick | string
+      }
+      const router = read('router', 'router' in raw), member = read('member', 'member' in raw)
+      if (typeof router === 'string') return { ok: false, error: `models.router: ${router}` }
+      if (typeof member === 'string') return { ok: false, error: `models.member: ${member}` }
+      models = router === undefined && member === undefined ? undefined : { ...(router !== undefined ? { router } : {}), ...(member !== undefined ? { member } : {}) }
+    }
+  }
   // The owner's prompt supplements (owner 2026-11-10): what the team adds to the presets; empty is empty, unset keeps what is.
   let prompts = current.prompts
   if ('prompts' in r) {
@@ -299,7 +333,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const observers = current.observers ?? []
   const dispatch = 'dispatch' in r ? r.dispatch : current.dispatch ?? ''
   if (typeof dispatch !== 'string' || dispatch.length > DISPATCH_MAX) return { ok: false, error: `dispatch must be text of at most ${String(DISPATCH_MAX)} characters` }
-  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), evalTimeoutMs, paused } }
+  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), evalTimeoutMs, paused } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/

@@ -43,6 +43,8 @@ export interface SuperagentHostDeps {
   readonly workspaceOf?: (sessionId: string) => string | undefined
   /** Runs a prepare command; tests replace it. */
   readonly runPrepare?: PrepareRunner
+  /** Selects a session's model through DSH's session/selectModel (owner 2026-11-10, 对照上游); failures are logged, never thrown. */
+  readonly selectModel?: (sessionId: string, pick: { provider: string; model: string; reasoningEffort?: string }) => Promise<boolean>
   /**
    * Stage files from a local session's workspace on the file channel, granted to the team's canvas (decision cards C8).
    * Absent, a card takes no files.
@@ -388,6 +390,10 @@ export class SuperagentHost {
     // Reliability R7: look at the team's health every 15 minutes; a new problem raises one card (the boot grace period
     // keeps health() quiet, so nothing is raised from it either).
     this.healthTimer = this.d.interval(() => { this.healthReminders.tick(this.health() as readonly HealthProblem[], Date.parse(this.now())) }, HEALTH_TICK_MS)
+    // Defer: start() may run while the plugin's apply() still executes, when the canvas lookups it touches are not
+    // initialized yet (a TDZ crash took the plugin down on hosts with models set - review of #566). A microtask runs
+    // after apply() finishes; the catch inside applyModels is the second fence.
+    queueMicrotask(() => { this.applyModels() })
     this.started = true
     this.syncA2a()
     this.pass()
@@ -927,6 +933,43 @@ export class SuperagentHost {
     return undefined
   }
 
+  /** One session's model pick, by role. */
+  private modelPickFor(session: string): { provider: string; model: string; reasoningEffort?: string } | undefined {
+    const { models } = this.settingsValue
+    if (models === undefined) return undefined
+    if (session === this.settingsValue.router) return models.router
+    if (this.settings.members.includes(session)) return models.member
+    return undefined
+  }
+
+  /** The last model selection per session, for the team page (review of #566). */
+  private readonly modelResults = new Map<string, { model: string; at: string; ok: boolean; error?: string }>()
+
+  /** Put one local team session's model choice through (owner 2026-11-10): what a just-loaded session catches up with. */
+  applyModelFor(session: string): void {
+    try {
+      const pick = this.modelPickFor(session)
+      if (pick === undefined) return
+      const select = this.d.selectModel
+      if (select === undefined) return
+      // The outcome is kept for the team page (review of #566: the host log does not reach the operator, so a silent miss looked like success).
+      const at = this.now(), model = `${pick.provider}/${pick.model}${pick.reasoningEffort !== undefined ? ` (${pick.reasoningEffort})` : ''}`
+      void select(session, pick).then(
+        ok => { this.modelResults.set(session, { model, at, ok: ok === true, ...(ok === true ? {} : { error: 'session not loaded, or the model service refused it' }) }); if (ok !== true) this.d.logger.warn('superagent: the team model was not selected for %s', session) },
+        error => { this.modelResults.set(session, { model, at, ok: false, error: String(error).slice(0, 300) }); this.d.logger.warn('superagent: the team model was not selected for %s: %s', session, String(error)) })
+    } catch (error) { this.d.logger.warn('superagent: applying the team model failed: %s', String(error)) }
+  }
+
+  /** Put the team's model choices on its local sessions (owner 2026-11-10): unset leaves a session alone; a failure is logged, never blocks. Never throws: start() may call this while the plugin's apply() still runs. */
+  applyModels(): void {
+    try {
+      if (this.settingsValue.models === undefined) return
+      const router = this.settingsValue.router
+      if (router !== undefined) this.applyModelFor(router)
+      for (const member of this.settings.members) this.applyModelFor(member)
+    } catch (error) { this.d.logger.warn('superagent: applying the team models failed: %s', String(error)) }
+  }
+
   /**
    * Design v5: the bound canvas changed (a member added, removed, suspended, or the canvas gone). The pool is read from
    * the canvas, so a new member is simply free; a member that left while it ran a ticket loses that Assignment — the
@@ -962,6 +1005,7 @@ export class SuperagentHost {
       }
     }
     try { this.d.onRolesChanged?.() } catch (error) { this.d.logger.warn('superagent: role change not applied: %s', String(error)) }
+    this.applyModels()
     this.executor.launch()
     this.pass()
   }
@@ -1351,6 +1395,7 @@ export class SuperagentHost {
     // A new router receives whatever the old one had not decided yet.
     if (routerChanged) for (const entry of this.candidates.values()) entry.delivered = false
     this.d.logger.info('superagent: team settings saved (policy %s)', after)
+    this.applyModels()
     this.syncA2a()
     this.executor.launch()
     this.pass()
@@ -1438,6 +1483,7 @@ export class SuperagentHost {
       a2a: { enabled: this.settingsValue.sources.a2a, address: this.a2a.address ?? null, health: this.a2a.health },
       refusals: { counts: Object.fromEntries(this.refusalCounts), recent: [...this.refusalRecent] },
       settingsHistory: this.settingsHistory.list(),
+      modelResults: Object.fromEntries(this.modelResults),
       ...(this.prs.problem !== undefined ? { pullRequestProblem: this.prs.problem } : {}),
       ...(this.issues.problem !== undefined ? { githubIssuesProblem: this.issues.problem } : {}),
       reviews: this.reviews.list(),

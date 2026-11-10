@@ -49,6 +49,8 @@ export interface SaSettings {
   readonly remoteMembers: ReadonlyArray<{ ref: string; key: string; url: string }>
   /** The repository each member works in (owner/name), by member; absent on hosts before it. */
   readonly repos?: Readonly<Record<string, string>>
+  /** Which model each role's sessions run (owner 2026-11-10); unset leaves a session's own choice alone. */
+  readonly models?: { readonly router?: { provider: string; model: string; reasoningEffort?: string }; readonly member?: { provider: string; model: string; reasoningEffort?: string } }
   /** The owner's prompt supplements (owner 2026-11-10, 对照上游): communication and delivery; empty is the default. */
   readonly prompts?: { readonly communication?: string; readonly delivery?: string }
   readonly rules?: readonly TeamRule[]
@@ -109,6 +111,8 @@ export interface SuperagentPaneDeps {
   refresh(): void
   /** The team page's 搜索: GET the current team's records for a query (empty query: no results). */
   search?(query: string): Promise<Json>
+  /** The models DSH offers (the settings' pickers); absent or failed: the pickers take free text. */
+  models?(): Promise<Json>
   /** Show another team on this instance. */
   selectTeam?(id: string): void
   /** Bind another canvas team as a new team on this instance. */
@@ -616,6 +620,37 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     mode.addEventListener('change', mark)
     form.appendChild(label('接单模式', mode))
 
+    // Which model each role's sessions run (owner 2026-11-10): a picker from DSH's catalog, free text when it cannot be read.
+    const modelRow = (text: string, which: 'router' | 'member'): HTMLInputElement => {
+      const input = el('input', 'wb-sa-model')
+      input.type = 'text'
+      input.setAttribute('list', `wb-sa-models-${which}`)
+      input.placeholder = 'provider/model（留空：不动会话自己的选择）'
+      const current = s.models?.[which]
+      input.value = current === undefined ? '' : `${current.provider}/${current.model}`
+      input.addEventListener('input', mark)
+      const list = el('datalist')
+      list.id = `wb-sa-models-${which}`
+      form.appendChild(list)
+      form.appendChild(label(text, input))
+      return input
+    }
+    const routerModel = modelRow('总工模型', 'router')
+    const memberModel = modelRow('成员模型（观察者同此）', 'member')
+    void deps.models?.().then(catalog => {
+      const rows: string[] = []
+      for (const group of Array.isArray(catalog.providers) ? catalog.providers as ReadonlyArray<Record<string, unknown>> : []) {
+        for (const model of Array.isArray(group.models) ? group.models as ReadonlyArray<Record<string, unknown>> : []) {
+          if (typeof group.id === 'string' && typeof model.id === 'string') rows.push(`${group.id}/${model.id}`)
+        }
+      }
+      for (const which of ['router', 'member'] as const) {
+        const list = form.querySelector<HTMLDataListElement>(`#wb-sa-models-${which}`)
+        if (list === null) continue
+        for (const value of rows) list.appendChild(new Option(value, value))
+      }
+    }).catch(() => undefined)
+
     const flag = (text: string, on: boolean): HTMLInputElement => {
       const box = el('input'); box.type = 'checkbox'; box.checked = on
       box.addEventListener('change', mark)
@@ -647,7 +682,21 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     const save = el('button', 'wb-btn wb-btn-primary', '保存')
     save.type = 'button'
     save.addEventListener('click', () => {
-      const patch: Json = { canvas: canvas.value === '' ? null : canvas.value, router: router.value === '' ? null : router.value, acceptMode: mode.value, sources: { workbench: wb.checked, a2a: a2a.checked }, paused: paused.checked }
+      const pick = (input: HTMLInputElement): Json | null | undefined => {
+        const text = input.value.trim()
+        if (text === '') return null
+        const slash = text.indexOf('/')
+        if (slash <= 0 || slash === text.length - 1) { say('模型写成 provider/model，例如 deepseek/deepseek-chat', 'danger'); return undefined }
+        return { provider: text.slice(0, slash), model: text.slice(slash + 1) }
+      }
+      const routerPick = pick(routerModel), memberPick = pick(memberModel)
+      if (routerPick === undefined || memberPick === undefined) return
+      // Models ride along only when a picker changed (review of #566): an untouched save keeps the stored choices, effort included.
+      const shown = (which: 'router' | 'member'): string => { const m = s.models?.[which]; return m === undefined ? '' : `${m.provider}/${m.model}` }
+      const routerChanged = routerModel.value.trim() !== shown('router'), memberChanged = memberModel.value.trim() !== shown('member')
+      // Only the changed picker is named: the host keeps an unnamed one as saved, and '' clears a named one.
+      const models: Json = { ...(routerChanged ? { router: routerPick ?? '' } : {}), ...(memberChanged ? { member: memberPick ?? '' } : {}) }
+      const patch: Json = { canvas: canvas.value === '' ? null : canvas.value, router: router.value === '' ? null : router.value, acceptMode: mode.value, sources: { workbench: wb.checked, a2a: a2a.checked }, paused: paused.checked, ...(routerChanged || memberChanged ? { models } : {}) }
       const edited = fields.patch()
       if ('error' in edited) { say(edited.error, 'danger'); return }
       // The GitHub switch rides in sources only when it changed (design github-issues G7).

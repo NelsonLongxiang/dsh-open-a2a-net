@@ -870,6 +870,8 @@ export function apply(ctx: Context, config: Config): void {
   // is a local fact: the entry dispatches `/a2a/direct` routes and rides
   // the announced card's unsigned sessionTeams listing.
   const sessionNodes = new Map<string, Agent>()
+  /** Late-bound handle to the teams registry: mountSessionNode runs before the registry's const initializes. */
+  let teamsHandle: { ofSession(sessionId: string): { applyModelFor(session: string): void } | undefined } | undefined
   // Live top-level agents: the join surface's candidates and the cold-row
   // complement (apply scope — the direct-route wake below reads it too).
   const liveRoots = new Map<string, Agent>()
@@ -1473,6 +1475,10 @@ export function apply(ctx: Context, config: Config): void {
    */
   function mountSessionNode(agent: Agent): void {
     sessionNodes.set(String(agent.id), agent)
+    // A team session that just loaded catches up the model the team set for it (design M11: after the host wakes its
+    // sessions) - the start-time pass may have run before this session existed (review of #566 third round). Through the
+    // late-bound handle: this function runs before the teams registry's const initializes (a TDZ crash, review four).
+    teamsHandle?.ofSession(String(agent.id))?.applyModelFor(String(agent.id))
   }
 
   /** Whether the boot prewarm has finished waking joined sessions: until then a session not yet loaded is not a problem. */
@@ -2096,6 +2102,18 @@ export function apply(ctx: Context, config: Config): void {
     },
     sessionName: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : `${nodeMetadataOf(agent).name} (${id.replace(/^session-/, '').slice(0, 8)})` },
     sessionLoaded: id => sessionNodes.has(id),
+    // The team's model choices (owner 2026-11-10): in-process sessionController.selectModel, not HTTP - the host's
+    // /api/session/* answers 401 without a browser cookie, so the loopback call could never work (review of #566).
+    // A session not loaded yet is skipped; the next start or pool change applies it.
+    selectModel: async (sessionId, pick) => {
+      if (!sessionNodes.has(sessionId)) throw new Error('the session is not loaded on this host yet')
+      const controller = (ctx as unknown as { get?(name: string): { selectModel?(request: unknown): Promise<unknown> } | undefined }).get?.('sessionController')
+      if (controller?.selectModel === undefined) throw new Error('DSH offers no sessionController here')
+      // DSH answers with the selection it installed for the session's next request: that is the read-back.
+      const done = await controller.selectModel({ sessionId, ...pick }) as { selected?: { provider?: string; model?: string } } | undefined
+      if (done?.selected?.provider !== pick.provider || done.selected.model !== pick.model) throw new Error(`DSH installed ${String(done?.selected?.provider)}/${String(done?.selected?.model)} instead`)
+      return true
+    },
     bootSettled: () => bootPrewarm.settled(),
     workspaceOf: id => { const cwd = (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd; return typeof cwd === 'string' ? cwd : undefined },
     hasTool: (id, name) => {
@@ -2134,6 +2152,7 @@ export function apply(ctx: Context, config: Config): void {
     },
     teamSend: args => teamCanvasSend(args),
   }) : undefined
+  teamsHandle = superagentTeams
   const superagentHost: SuperagentHost | undefined = superagentTeams?.primary
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
   const superagentRoleTools = new RoleTools({
@@ -3375,6 +3394,18 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   if (superagentTeams !== undefined) whenWebServerSettled((webServer) => {
+    // The models a team's roles may run (owner 2026-11-10): DSH's own catalog, proxied; the page falls back to free text.
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/__dsh_a2a/superagent/models',
+      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+        const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
+        // In-process modelCatalog (review of #566): the HTTP face answers 401 without a browser cookie.
+        const controller = (ctx as unknown as { get?(name: string): { modelCatalog?(request: unknown): Promise<unknown> } | undefined }).get?.('sessionController')
+        if (controller?.modelCatalog === undefined) { send(200, { ok: false, code: 'no-service' }); return }
+        void controller.modelCatalog({}).then(catalog => { send(200, catalog as Record<string, unknown>) }, (error: unknown) => { send(200, { ok: false, code: 'catalog', error: String(error) }) })
+      }),
+    }), 'a2a: superagent models face')
     // Design M3/M5: the instance's teams, and adding one.
     ctx.effect(() => webServer.register({
       kind: 'exact',
