@@ -58,7 +58,7 @@ import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedB
 import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
 import { SuperagentHost } from './superagent/host/index.ts'
 import { registerSuperagentTools } from './superagent/host/tools.ts'
-import { RoleTools, type RoleAgent } from './superagent/host/role-tools.ts'
+import { RoleTools, scopeKeyOf, type RoleAgent } from './superagent/host/role-tools.ts'
 import { ReconciliationReminders, type ReminderAgent } from './reconciliation-reminders.ts'
 import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
@@ -2098,6 +2098,10 @@ export function apply(ctx: Context, config: Config): void {
     sessionLoaded: id => sessionNodes.has(id),
     bootSettled: () => bootPrewarm.settled(),
     workspaceOf: id => { const cwd = (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd; return typeof cwd === 'string' ? cwd : undefined },
+    hasTool: (id, name) => {
+      const agent = ctx.get('agents')?.get(SessionId(id)) as RoleAgent | undefined
+      return agent?.ctx?.tools?.get(name, scopeKeyOf(agent.ctx)) !== undefined
+    },
     // Decision cards C8: a proposer's files go on the file channel, granted to its team's canvas, as a2a_file_send stages them.
     stageFiles: (id, paths, canvas) => {
       const from = originOf(ownCardUrl)

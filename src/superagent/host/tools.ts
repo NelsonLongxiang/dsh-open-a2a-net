@@ -245,18 +245,25 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
       pull_request: { type: 'string', description: 'The URL of the pull request this ticket opened. The ticket then ends when that pull request merges or closes.' },
       answers: { type: 'string', description: 'The trigger id of the person\'s question this report answers.' },
       files: { type: 'array', items: { type: 'string' }, description: 'With a question: up to 16 files from your workspace for the owner to look at (paths relative to it). They show on the card for the owner to download, and the team can pull them.' },
+      ygl: { type: 'array', items: { type: 'string' }, description: 'The ygl-trees ids you wrote for this ticket (evidence, claims, kb notes). Expected with ready when you have the ygl tools.' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('ticket report', value) },
     presentCall: args => ({ card: 'generic', title: `ticket report: ${String(args.state)}`, kind: 'other', rawInput: args }),
-    execute: async (args: { ticket_id: string; state: string; summary: string; question?: string; answers?: string; pull_request?: string; options?: string[]; recommended?: string; level?: string; files?: string[] }, exec): Promise<Record<string, JsonValue>> => {
+    execute: async (args: { ticket_id: string; state: string; summary: string; question?: string; answers?: string; pull_request?: string; options?: string[]; recommended?: string; level?: string; files?: string[]; ygl?: string[] }, exec): Promise<Record<string, JsonValue>> => {
       const h = host(exec)
       const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
       if (h === undefined || me === undefined || h.roleOf(me) !== 'member') return { ok: false, code: 'not-member', error: 'a2a_ticket_report serves only the superagent team members the owner named' }
       if (!['progress', 'waiting', 'ready', 'blocked', 'failed', 'dropped'].includes(args.state)) return { ok: false, code: 'state', error: 'state must be progress, waiting, ready, blocked, failed or dropped' }
       const ticketId = str(args.ticket_id)
       if (ticketId === undefined) return { ok: false, code: 'missing', error: 'ticket_id is required: the id on the ticket\'s assignment card' }
-      const summary = str(args.summary)
-      if (summary === undefined) return { ok: false, code: 'missing', error: 'summary is required' }
+      const said = str(args.summary)
+      if (said === undefined) return { ok: false, code: 'missing', error: 'summary is required' }
+      const ygl = Array.isArray(args.ygl) ? args.ygl.map(id => String(id).trim()).filter(id => id !== '') : []
+      if (ygl.length > 40 || ygl.some(id => id.length > 120)) return { ok: false, code: 'ygl', error: 'ygl takes at most 40 ids of at most 120 characters' }
+      const remind = h.settings.serves?.members.includes(me) === true ? undefined : h.yglReadyRefusal(me, ticketId, args.state, ygl)
+      if (remind !== undefined) return json(remind) as Record<string, JsonValue>
+      // The ids ride in the summary, so the router and the owner see what the ticket left in the team's memory.
+      const summary = ygl.length > 0 ? `${said}\nygl: ${ygl.join(', ')}` : said
       const question = args.question === 'null' ? null : str(args.question)
       // A question reaches the owner as a decision card, so it must say what to decide between and what you would do (C1, C2).
       const decision = typeof question === 'string' ? parseDecision(args) : undefined
