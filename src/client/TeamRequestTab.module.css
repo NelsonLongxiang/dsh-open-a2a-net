@@ -190,3 +190,9 @@
   border-radius: 8px;
   line-height: 1.5;
 }
+
+.decisions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

@@ -69,6 +69,35 @@ function Card({ row, t, done }: { readonly row: DecisionRow; readonly done: () =
 }
 
 /**
+ * The waiting decisions, as a section of the right bar's one team view: nothing at all while none waits.
+ * @param props - the slot's locale.
+ * @returns the cards under a heading that counts them.
+ */
+export function DecisionList({ t }: TeamDecisionsTabProps) {
+  const [rows, setRows] = useState<readonly DecisionRow[]>([])
+  const load = useCallback(async (): Promise<void> => {
+    try {
+      const response = await fetch(ROUTE, { cache: 'no-store' })
+      if (!response.ok) return
+      const out = await response.json() as { decisions?: DecisionRow[] }
+      setRows(out.decisions ?? [])
+    } catch { /* the next poll tries again */ }
+  }, [])
+  useEffect(() => {
+    void load()
+    const timer = setInterval(() => { void load() }, POLL_MS)
+    return () => { clearInterval(timer) }
+  }, [load])
+  if (rows.length === 0) return null
+  return (
+    <section className={styles.decisions} aria-label={t('team.decisions')}>
+      <span className={styles.label}>{t('team.decisionsCount', { count: String(rows.length) })}</span>
+      {rows.map(row => <Card key={row.id} row={row} t={t} done={() => { void load() }} />)}
+    </section>
+  )
+}
+
+/**
  * The view's body.
  * @param props - the slot's locale.
  * @returns the waiting decisions.
