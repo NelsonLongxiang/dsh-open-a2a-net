@@ -94,6 +94,8 @@ export interface SaState {
   readonly executor: { bindings: ReadonlyArray<{ member: string; ticketId: string; at: string }> }
   readonly error?: string
   readonly threads: readonly SaThread[]; readonly tickets: readonly SaTicket[]
+  /** The team's recent settings saves (the 设置 view shows them): who, when, which fields changed. */
+  readonly settingsHistory?: ReadonlyArray<{ id: string; at: string; by: string; changes: ReadonlyArray<{ field: string; from: string; to: string }> }>
 }
 /** A local session the pickers offer (the workbench's /state rows). */
 export interface SaSession { readonly id: string; readonly name?: string; readonly joined?: boolean }
@@ -103,6 +105,8 @@ export interface SuperagentPaneDeps {
   act(body: Json): Promise<Json>
   /** Re-read the state after a write (the next poll otherwise). */
   refresh(): void
+  /** The team page's 搜索: GET the current team's records for a query (empty query: no results). */
+  search?(query: string): Promise<Json>
   /** Show another team on this instance. */
   selectTeam?(id: string): void
   /** Bind another canvas team as a new team on this instance. */
@@ -235,7 +239,41 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   const addTeamBox = el('div', 'wb-sa-addteam')
   addTeamBox.hidden = true
   teamBar.append(teamSelect, addTeamToggle)
-  root.append(el('div', 'wb-pane-head', 'superagent 团队'), teamBar, addTeamBox, nav, note, body)
+  // The team page's 搜索 (upstream's search): this team's requests, threads and tickets; clicking a result shows it.
+  const searchBox = el('input', 'wb-sa-search')
+  searchBox.type = 'search'
+  searchBox.setAttribute('aria-label', '搜索本团队')
+  searchBox.placeholder = '搜索：文字 / 工单或需求 id / 线程 / #数字'
+  const searchDrop = el('div', 'wb-sa-drop')
+  searchDrop.hidden = true
+  let searchTimer: ReturnType<typeof setTimeout> | undefined
+  const closeSearch = (): void => { searchDrop.hidden = true }
+  const runSearch = (query: string): void => {
+    clearTimeout(searchTimer)
+    if (deps.search === undefined || query.trim().length < 2) { searchDrop.hidden = true; return }
+    searchTimer = setTimeout(() => {
+      void deps.search?.(query).then(out => {
+        if (searchBox.value !== query || !root.contains(searchBox)) return
+        const rows = Array.isArray(out.results) ? out.results as ReadonlyArray<Record<string, unknown>> : []
+        searchDrop.replaceChildren()
+        if (rows.length === 0) searchDrop.appendChild(el('div', 'wb-sa-hint', '没有匹配的结果'))
+        for (const row of rows.slice(0, 20)) {
+          const kind = String(row.kind)
+          const line = el('button', 'wb-sa-hit')
+          line.type = 'button'
+          line.append(el('span', 'wb-sa-hit-kind', kind === 'ticket' ? '工单' : kind === 'request' ? '需求' : '消息'), el('span', 'wb-sa-hit-text', String(row.title ?? '')))
+          line.addEventListener('click', () => { closeSearch(); searchBox.value = ''; locate(kind, row) })
+          searchDrop.appendChild(line)
+        }
+        searchDrop.hidden = false
+      }).catch(() => { searchDrop.hidden = true })
+    }, 300)
+  }
+  searchBox.addEventListener('input', () => { runSearch(searchBox.value) })
+  searchBox.addEventListener('blur', () => { setTimeout(closeSearch, 150) })
+  const searchWrap = el('div', 'wb-sa-searchwrap')
+  searchWrap.append(searchBox, searchDrop)
+  root.append(el('div', 'wb-pane-head', 'superagent 团队'), teamBar, addTeamBox, searchWrap, nav, note, body)
 
   let view: SaView = 'person'
   // undefined until the first poll answers; null once it says this host runs no team.
@@ -528,6 +566,19 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   function renderSettings(state: SaState): void {
     if (settingsForm === undefined || !settingsDirty) settingsForm = buildSettings(state.settings, state.canvases ?? [])
     body.appendChild(settingsForm)
+    // The team's recent settings saves: who, when, and what moved (rules keep their own 最近修改; this is the rest).
+    const history = state.settingsHistory ?? []
+    if (history.length > 0) {
+      const block = el('div', 'wb-led-card')
+      block.appendChild(el('div', 'wb-kv-k', '设置保存记录（最近）'))
+      for (const row of history.slice(0, 10)) {
+        const item = el('div', 'wb-sa-hist')
+        item.append(el('span', 'wb-sa-when', `${ago(row.at, now)} · ${row.by === 'owner' ? '属主' : row.by}`))
+        for (const change of row.changes.slice(0, 8)) item.appendChild(el('div', 'wb-sa-hist-line', `${change.field}：${change.from} → ${change.to}`))
+        block.appendChild(item)
+      }
+      body.appendChild(block)
+    }
   }
 
   function buildSettings(s: SaSettings, canvases: readonly string[]): HTMLElement {
@@ -605,9 +656,32 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     else if (view === 'tickets') renderTickets(last)
     else if (view === 'team') renderTeam(last)
     else renderSettings(last)
+    applyFocus()
   }
 
   function select(next: SaView): void { view = next; render() }
+
+  /** A search result the person clicked: show it where it lives, and flash it. */
+  let pendingFocus: { readonly kind: string; readonly id: string } | undefined
+  function locate(kind: string, row: Record<string, unknown>): void {
+    const id = String(row.id ?? '')
+    if (id === '') return
+    pendingFocus = { kind, id }
+    const wanted: SaView = kind === 'ticket' ? 'tickets' : 'request'
+    if (view !== wanted) { view = wanted; render() } else { render() }
+  }
+
+  function applyFocus(): void {
+    const focus = pendingFocus
+    pendingFocus = undefined
+    if (focus === undefined) return
+    const node = focus.kind === 'ticket' ? body.querySelector(`[data-ticket="${focus.id}"]`) : body.querySelector(`[data-thread="${focus.id}"]`) ?? body.querySelector(`[data-thread="${String(focus.id)}"]`)
+    if (node instanceof HTMLElement) {
+      node.scrollIntoView?.({ block: 'center' })
+      node.classList.add('is-flash')
+      setTimeout(() => { node.classList.remove('is-flash') }, 1600)
+    }
+  }
 
   function focusVisible(node: HTMLElement): boolean { try { return node.matches(':focus-visible') } catch { return false } }
 

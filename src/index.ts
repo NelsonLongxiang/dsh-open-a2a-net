@@ -3183,8 +3183,12 @@ export function apply(ctx: Context, config: Config): void {
       handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
         const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
         if (req.method === 'GET') {
-          const asked = superagentTeams!.get(new URL(req.url ?? '/', 'http://x').searchParams.get('teamId') ?? undefined)
+          const params = new URL(req.url ?? '/', 'http://x').searchParams
+          const asked = superagentTeams!.get(params.get('teamId') ?? undefined)
           if (asked === undefined) { send(404, { ok: false, error: 'no such team on this instance' }); return }
+          // The team page's 搜索: this team's records only, like the state it reads.
+          const search = params.get('search')
+          if (search !== null) { send(200, asked.search(search)); return }
           send(200, asked.state())
           return
         }
@@ -3194,7 +3198,7 @@ export function apply(ctx: Context, config: Config): void {
           if (sa === undefined) { send(404, { ok: false, error: 'no such team on this instance' }); return }
           try {
             if (fields.action === 'settings') {
-              const save = (): void => { send(200, sa.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf)) }
+              const save = (): void => { send(200, sa.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf, 'owner')) }
               // A shell on this machine passes the control route; a rule change needs what only the owner's browser holds (design D10).
               if (!touchesRules(fields.settings)) { save(); return }
               void guiOwnerProven(superagentHomeUrl, req.headers.cookie).then(proven => {
