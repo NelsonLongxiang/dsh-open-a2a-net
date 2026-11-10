@@ -76,7 +76,7 @@ describe('the model pickers', () => {
     const input = p.root.querySelector<HTMLInputElement>('input.wb-sa-model')!
     expect(input.value).toBe('deepseek/chat')
   })
-  it('a stored choice survives an unrelated save; changing one keeps the other with its effort; clearing both sends null', async () => {
+  it('a stored choice survives an unrelated save; only a changed picker is named, so the other keeps its effort; a cleared one is sent as empty', async () => {
     const stored = { router: { provider: 'local', model: 'glm-5.3', reasoningEffort: 'max' }, member: { provider: 'local', model: 'glm-5.3', reasoningEffort: 'high' } }
     const calls: Act = { acts: [] }
     const deps: SuperagentPaneDeps = { async act(body) { calls.acts.push(body); return { ok: true } }, refresh: () => {}, async models() { throw new Error('no') } }
@@ -92,10 +92,10 @@ describe('the model pickers', () => {
     memberInput!.value = 'opencode-go/deepseek-v4.1-flash'
     save(p)
     await new Promise(r => setTimeout(r, 30))
-    expect((calls.acts[1] as { settings: Json }).settings.models).toEqual({ router: stored.router, member: { provider: 'opencode-go', model: 'deepseek-v4.1-flash' } })
-    routerInput!.value = ''; memberInput!.value = ''
+    expect((calls.acts[1] as { settings: Json }).settings.models).toEqual({ member: { provider: 'opencode-go', model: 'deepseek-v4.1-flash' } })
+    routerInput!.value = ''
     save(p)
     await new Promise(r => setTimeout(r, 30))
-    expect((calls.acts[2] as { settings: Json }).settings.models).toBeNull()
+    expect((calls.acts[2] as { settings: Json }).settings.models).toEqual({ router: '', member: { provider: 'opencode-go', model: 'deepseek-v4.1-flash' } })
   })
 })

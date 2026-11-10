@@ -248,8 +248,13 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
     if (r.models === null || r.models === '') models = undefined
     else {
       const raw = (r.models ?? {}) as Record<string, unknown>
-      const read = (key: 'router' | 'member'): ModelPick | string | undefined => raw[key] === undefined ? undefined : parseModel(raw[key])
-      const router = read('router'), member = read('member')
+      // A named key is a pick or '' to clear that one (#566 fifth round, the prompts shape); unnamed keeps what is saved.
+      const read = (key: 'router' | 'member', wasNamed: boolean): ModelPick | string | undefined => {
+        if (!wasNamed) return current.models?.[key]
+        if (raw[key] === '' || raw[key] === null) return undefined
+        return parseModel(raw[key]) as ModelPick | string
+      }
+      const router = read('router', 'router' in raw), member = read('member', 'member' in raw)
       if (typeof router === 'string') return { ok: false, error: `models.router: ${router}` }
       if (typeof member === 'string') return { ok: false, error: `models.member: ${member}` }
       models = router === undefined && member === undefined ? undefined : { ...(router !== undefined ? { router } : {}), ...(member !== undefined ? { member } : {}) }

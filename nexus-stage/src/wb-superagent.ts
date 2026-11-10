@@ -694,10 +694,9 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       // Models ride along only when a picker changed (review of #566): an untouched save keeps the stored choices, effort included.
       const shown = (which: 'router' | 'member'): string => { const m = s.models?.[which]; return m === undefined ? '' : `${m.provider}/${m.model}` }
       const routerChanged = routerModel.value.trim() !== shown('router'), memberChanged = memberModel.value.trim() !== shown('member')
-      const keep = (which: 'router' | 'member', changed: boolean, picked: Json | null): Json | null => changed ? picked : (s.models?.[which] as Json | undefined) ?? null
-      const nextRouter = keep('router', routerChanged, routerPick), nextMember = keep('member', memberChanged, memberPick)
-      const models: Json = { ...(nextRouter !== null ? { router: nextRouter } : {}), ...(nextMember !== null ? { member: nextMember } : {}) }
-      const patch: Json = { canvas: canvas.value === '' ? null : canvas.value, router: router.value === '' ? null : router.value, acceptMode: mode.value, sources: { workbench: wb.checked, a2a: a2a.checked }, paused: paused.checked, ...(routerChanged || memberChanged ? { models: Object.keys(models).length === 0 ? null : models } : {}) }
+      // Only the changed picker is named: the host keeps an unnamed one as saved, and '' clears a named one.
+      const models: Json = { ...(routerChanged ? { router: routerPick ?? '' } : {}), ...(memberChanged ? { member: memberPick ?? '' } : {}) }
+      const patch: Json = { canvas: canvas.value === '' ? null : canvas.value, router: router.value === '' ? null : router.value, acceptMode: mode.value, sources: { workbench: wb.checked, a2a: a2a.checked }, paused: paused.checked, ...(routerChanged || memberChanged ? { models } : {}) }
       const edited = fields.patch()
       if ('error' in edited) { say(edited.error, 'danger'); return }
       // The GitHub switch rides in sources only when it changed (design github-issues G7).

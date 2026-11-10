@@ -31,6 +31,9 @@ describe('settings.models', () => {
     expect(state.settings.models).toEqual({ router: { provider: 'deepseek', model: 'chat' }, member: { provider: 'openai', model: 'gpt-5', reasoningEffort: 'high' } })
     expect(h.saveSettings({ models: { router: { provider: '', model: 'x' } } }, yes).ok).toBe(false)
     expect(h.saveSettings({ models: { member: 'x' } }, yes).ok).toBe(false)
+    // '' clears one, unnamed keeps the other saved (review of #566 fifth round).
+    expect(h.saveSettings({ models: { router: '' } }, yes)).toMatchObject({ ok: true })
+    expect((h.state() as { settings: { models?: Record<string, unknown> } }).settings.models).toEqual({ member: { provider: 'openai', model: 'gpt-5', reasoningEffort: 'high' } })
     expect(h.saveSettings({ models: null }, yes)).toMatchObject({ ok: true })
     expect((h.state() as typeof state).settings.models).toBeUndefined()
     await h.stop()
