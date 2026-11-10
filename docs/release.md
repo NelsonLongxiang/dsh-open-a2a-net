@@ -3,7 +3,11 @@
 > 2026-10-21 立，源自 K3 测试章前瞻（cordis 事故线收尾）：两项与「锁重生成 × 环境策略」
 > 交互的坑，已实测咬人，故入档为纪律。
 
-## 0.8.1-preview.6（预览版候选，待评审，未发布）
+> 2026-11-10（#569）：预览版从 npm 回读、核对通过后，立即单独提交一次「记录已发布」：把该版本一节的标题改成「已发布到 npm 的 preview 标签」，并写上状态行（标签指向的提交、npm 发布时间、shasum、integrity、回读结果）。不要等到下一版发版时才顺手改。
+
+## 0.8.1-preview.6（预览版，已发布到 npm 的 preview 标签）
+
+- 状态（2026-11-10）：标签 `v0.8.1-preview.6` 指向 f0309d6（发版 PR #568）。2026-11-10T11:15:07Z 发布到 npmjs，dist-tag 为 `preview`，`latest` 仍是 0.7.0。shasum `5f3ed3b3df3f94cd398ee00a8eee746d219f790a`，integrity `sha512-PkCv0A65YLqxQFbLDD/7XJtPAGj7Om4D46QjhaGObmUtyYuVuX/+bivtdfvg1SIGuhrg2B4dnjeEi/w0MrNDtg==`。从 npmjs 回读的包与审计过的包逐字节相同。GitHub Release 为 prerelease。未发布到 Gitea。
 
 - 基线：next/0.8 合入 master 后的合并提交（候选提交在发版 PR 里写明）。相对已发布的 0.8.1-preview.5 有下列改动。
 - 升级、回退照 [0.8.1 升级检查](ops/0.8.1-upgrade-check.md)。
