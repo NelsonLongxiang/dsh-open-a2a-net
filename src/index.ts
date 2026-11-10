@@ -2096,6 +2096,16 @@ export function apply(ctx: Context, config: Config): void {
     },
     sessionName: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : `${nodeMetadataOf(agent).name} (${id.replace(/^session-/, '').slice(0, 8)})` },
     sessionLoaded: id => sessionNodes.has(id),
+    // The team's model choices (owner 2026-11-10): DSH's own session/selectModel over the same local HTTP face the
+    // owner-proof probe uses; a session not loaded yet is skipped (the next start or pool change applies it).
+    selectModel: async (sessionId, pick) => {
+      const home = superagentHomeUrl
+      if (home === undefined || !sessionNodes.has(sessionId)) return false
+      try {
+        const response = await fetch(`${home}/api/session/selectModel`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: `a2a-model-${sessionId}`, method: 'session/selectModel', payload: { args: { sessionId, ...pick } } }) })
+        return response.ok
+      } catch { return false }
+    },
     bootSettled: () => bootPrewarm.settled(),
     workspaceOf: id => { const cwd = (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd; return typeof cwd === 'string' ? cwd : undefined },
     hasTool: (id, name) => {
@@ -3362,6 +3372,18 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   if (superagentTeams !== undefined) whenWebServerSettled((webServer) => {
+    // The models a team's roles may run (owner 2026-11-10): DSH's own catalog, proxied; the page falls back to free text.
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/__dsh_a2a/superagent/models',
+      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+        const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
+        const home = superagentHomeUrl
+        if (home === undefined) { send(200, { ok: false, code: 'no-home' }); return }
+        void fetch(`${home}/api/session/modelCatalog`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: 'a2a-model-catalog', method: 'session/modelCatalog', payload: { args: {} } }) })
+          .then(async response => { send(response.ok ? 200 : 200, response.ok ? await response.json() as Record<string, unknown> : { ok: false, code: `HTTP ${String(response.status)}` }) }, (error: unknown) => { send(200, { ok: false, code: 'unreachable', error: String(error) }) })
+      }),
+    }), 'a2a: superagent models face')
     // Design M3/M5: the instance's teams, and adding one.
     ctx.effect(() => webServer.register({
       kind: 'exact',

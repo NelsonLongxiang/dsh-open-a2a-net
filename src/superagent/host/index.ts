@@ -42,6 +42,8 @@ export interface SuperagentHostDeps {
   readonly workspaceOf?: (sessionId: string) => string | undefined
   /** Runs a prepare command; tests replace it. */
   readonly runPrepare?: PrepareRunner
+  /** Selects a session's model through DSH's session/selectModel (owner 2026-11-10, 对照上游); failures are logged, never thrown. */
+  readonly selectModel?: (sessionId: string, pick: { provider: string; model: string; reasoningEffort?: string }) => Promise<boolean>
   /**
    * Stage files from a local session's workspace on the file channel, granted to the team's canvas (decision cards C8).
    * Absent, a card takes no files.
@@ -380,6 +382,7 @@ export class SuperagentHost {
     // Reliability R7: look at the team's health every 15 minutes; a new problem raises one card (the boot grace period
     // keeps health() quiet, so nothing is raised from it either).
     this.healthTimer = this.d.interval(() => { this.healthReminders.tick(this.health() as readonly HealthProblem[], Date.parse(this.now())) }, HEALTH_TICK_MS)
+    this.applyModels()
     this.started = true
     this.syncA2a()
     this.pass()
@@ -903,6 +906,20 @@ export class SuperagentHost {
    * the canvas, so a new member is simply free; a member that left while it ran a ticket loses that Assignment — the
    * ticket gets a new one on another member (owner ruling Q2: stop and requeue), and the member is told to stop.
    */
+  /** Put the team's model choices on its local sessions (owner 2026-11-10): unset leaves a session alone; a failure is logged, never blocks. */
+  applyModels(): void {
+    const select = this.d.selectModel
+    if (select === undefined) return
+    const { models } = this.settingsValue
+    if (models === undefined) return
+    const one = (session: string | undefined, pick: { provider: string; model: string; reasoningEffort?: string } | undefined, role: string): void => {
+      if (session === undefined || pick === undefined) return
+      void select(session, pick).then(ok => { if (ok !== true) this.d.logger.warn('superagent: the %s model was not selected for %s', role, session) }, error => { this.d.logger.warn('superagent: the %s model was not selected for %s: %s', role, session, String(error)) })
+    }
+    one(this.settingsValue.router, models.router, 'router')
+    for (const member of this.settings.members) one(member, models.member, 'member')
+  }
+
   poolChanged(): void {
     // v5 acceptance F3: with no canvas bound (or the bound one gone) the pool reads empty; that is not the owner taking
     // members away — running work stays where it is until a canvas is bound again.
@@ -933,6 +950,7 @@ export class SuperagentHost {
       }
     }
     try { this.d.onRolesChanged?.() } catch (error) { this.d.logger.warn('superagent: role change not applied: %s', String(error)) }
+    this.applyModels()
     this.executor.launch()
     this.pass()
   }
@@ -1319,6 +1337,7 @@ export class SuperagentHost {
     // A new router receives whatever the old one had not decided yet.
     if (routerChanged) for (const entry of this.candidates.values()) entry.delivered = false
     this.d.logger.info('superagent: team settings saved (policy %s)', after)
+    this.applyModels()
     this.syncA2a()
     this.executor.launch()
     this.pass()

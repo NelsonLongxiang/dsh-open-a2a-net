@@ -270,6 +270,10 @@ const bench = createWorkbench({
       const res = await controlFetch(`/__dsh_a2a/superagent?search=${encodeURIComponent(query)}${selectedTeam !== '' ? `&teamId=${encodeURIComponent(selectedTeam)}` : ''}`, { cache: 'no-store' })
       try { return await res.json() as Record<string, unknown> } catch { return { ok: false, error: `HTTP ${res.status}` } }
     },
+    async models() {
+      const res = await controlFetch('/__dsh_a2a/superagent/models', { cache: 'no-store' })
+      try { return await res.json() as Record<string, unknown> } catch { return { ok: false } }
+    },
     selectTeam(id) { selectedTeam = id; void pollSuperagent() },
     async addTeam(canvas, router) {
       const res = await controlFetch('/__dsh_a2a/superagent/teams', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ canvas, router }) })

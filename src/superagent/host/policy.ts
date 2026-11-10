@@ -76,6 +76,8 @@ export interface TeamSettings {
   readonly profiles: Readonly<Record<string, MemberProfile>>
   /** The command that prepares a ticket's directory before its member starts (design reliability R1–R4). */
   readonly prepare?: { readonly command: string; readonly timeoutMs: number }
+  /** Which model each role's sessions run (owner 2026-11-10, 对照上游): the router's own, and the members' (an observer follows the member's). Unset leaves a session's own choice alone. */
+  readonly models?: { readonly router?: ModelPick; readonly member?: ModelPick }
   /** How many tickets may run at once; 0 is no cap beyond one per member (design reliability R5). */
   readonly maxConcurrent: number
   /** How the router chooses among members (design D3): free text the owner agreed. */
@@ -92,7 +94,21 @@ export interface TeamSettings {
 
 /** A member's role and what it takes. */
 export interface MemberProfile { readonly role?: string; readonly rules: readonly ProactiveRule[] }
+/** One model a role's sessions run: what DSH's session/selectModel takes. */
+export interface ModelPick { readonly provider: string; readonly model: string; readonly reasoningEffort?: string }
+export const PROVIDER_MAX = 100, MODEL_MAX = 200, EFFORT_MAX = 20
 export const ROLE_MAX = 200, DISPATCH_MAX = 4_000, PREPARE_MAX = 4_000
+
+/** Read one model pick, or why it is not one. */
+const parseModel = (raw: unknown): ModelPick | string => {
+  if (raw === null || raw === '') return undefined as unknown as ModelPick
+  if (typeof raw !== 'object') return 'a model is { provider, model, reasoningEffort? }'
+  const { provider, model, reasoningEffort } = raw as Record<string, unknown>
+  if (typeof provider !== 'string' || provider === '' || provider.length > PROVIDER_MAX) return `provider is required, at most ${String(PROVIDER_MAX)} characters`
+  if (typeof model !== 'string' || model === '' || model.length > MODEL_MAX) return `model is required, at most ${String(MODEL_MAX)} characters`
+  if (reasoningEffort !== undefined && (typeof reasoningEffort !== 'string' || reasoningEffort.length > EFFORT_MAX)) return 'reasoningEffort is a short word'
+  return { provider, model, ...(reasoningEffort !== undefined ? { reasoningEffort } : {}) }
+}
 
 /** A canvas team name as the canvas store takes it: 1–40 characters, no `/`, not all digits, no surrounding space. */
 export const validCanvasName = (name: unknown): name is string =>
@@ -202,6 +218,19 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   }
   const maxConcurrent = 'maxConcurrent' in r ? r.maxConcurrent : current.maxConcurrent ?? 0
   if (typeof maxConcurrent !== 'number' || !Number.isInteger(maxConcurrent) || maxConcurrent < 0 || maxConcurrent > 64) return { ok: false, error: 'maxConcurrent must be an integer 0–64' }
+  // Which model each role's sessions run (owner 2026-11-10): absent leaves a session's own choice alone.
+  let models = current.models
+  if ('models' in r) {
+    if (r.models === null || r.models === '') models = undefined
+    else {
+      const raw = (r.models ?? {}) as Record<string, unknown>
+      const read = (key: 'router' | 'member'): ModelPick | string | undefined => raw[key] === undefined ? undefined : parseModel(raw[key])
+      const router = read('router'), member = read('member')
+      if (typeof router === 'string') return { ok: false, error: `models.router: ${router}` }
+      if (typeof member === 'string') return { ok: false, error: `models.member: ${member}` }
+      models = router === undefined && member === undefined ? undefined : { ...(router !== undefined ? { router } : {}), ...(member !== undefined ? { member } : {}) }
+    }
+  }
   if (typeof paused !== 'boolean') return { ok: false, error: 'paused must be true or false' }
   const botsRaw = (r.bots ?? {}) as Record<string, unknown>
   if (Object.keys(botsRaw).some(name => name !== 'a2a')) return { ok: false, error: 'only the a2a Source has a bot list' }
@@ -251,7 +280,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const observers = current.observers ?? []
   const dispatch = 'dispatch' in r ? r.dispatch : current.dispatch ?? ''
   if (typeof dispatch !== 'string' || dispatch.length > DISPATCH_MAX) return { ok: false, error: `dispatch must be text of at most ${String(DISPATCH_MAX)} characters` }
-  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
+  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/
