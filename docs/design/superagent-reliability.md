@@ -26,3 +26,5 @@ Upstream superagent prepares each ticket's directory with a command, caps how ma
 ## Consequences
 
 The prepare command is as powerful as a shell on this host. Nothing checks what it does beyond its exit status.
+
+A host that has just started wakes its joined sessions one by one; until that is done, or for its first two minutes, a session not loaded yet is not reported.

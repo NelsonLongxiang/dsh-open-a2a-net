@@ -33,6 +33,8 @@ export interface SuperagentHostDeps {
   readonly home: string
   /** Whether a local session is loaded and on the network, so the host can put a card into it (reliability R6). */
   readonly sessionLoaded?: (sessionId: string) => boolean
+  /** Whether the host has finished waking its sessions after starting: before that, one not loaded yet is no problem. */
+  readonly bootSettled?: () => boolean
   /** A local session's workspace directory, where a ticket's prepare command runs (reliability R1). */
   readonly workspaceOf?: (sessionId: string) => string | undefined
   /** Runs a prepare command; tests replace it. */
@@ -1244,8 +1246,10 @@ export class SuperagentHost {
     const loaded = this.d.sessionLoaded
     if (loaded === undefined || !this.teamBound()) return out
     const { router, members } = this.settings
-    if (router !== undefined && !loaded(router)) out.push({ code: 'router-not-loaded', session: router })
-    for (const member of members) if (!loaded(member)) out.push({ code: 'member-not-loaded', session: member })
+    if (this.d.bootSettled?.() !== false) {
+      if (router !== undefined && !loaded(router)) out.push({ code: 'router-not-loaded', session: router })
+      for (const member of members) if (!loaded(member)) out.push({ code: 'member-not-loaded', session: member })
+    }
     for (const binding of this.executor.list()) {
       const ticket = this.store.tickets.get(binding.ticketId)
       if (ticket === undefined || ticket.ended !== undefined || ticketStage(ticket).stage !== 'working') continue
