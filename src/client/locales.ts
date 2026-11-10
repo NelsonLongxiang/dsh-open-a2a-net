@@ -19,6 +19,8 @@ export type A2aNetKey =
   | 'team.fileTooBig'
   | 'team.tooManyFiles'
   | 'team.dropHint'
+  | 'team.cardFiles'
+  | 'team.noFileTarget'
   | 'team.noFolders'
   | 'team.sentRemote'
   | 'team.remoteHint'
@@ -60,6 +62,8 @@ export const zh: Record<A2aNetKey, string> = {
   'team.fileTooBig': '{name} 超过 64 MB，发不了',
   'team.tooManyFiles': '一次最多 {max} 个文件',
   'team.dropHint': '也可以把多个文件一起拖到这里',
+  'team.cardFiles': '卡上的文件',
+  'team.noFileTarget': '这张卡的团队没有画布地址，不能附文件',
   'team.noFolders': '不能拖入文件夹，请选择里面的文件',
   'team.sentRemote': '已发给 {team}，由对方团队按自己的规则决定。发送者是 {sender}，回执会回到这个会话',
   'team.remoteHint': '这支团队在其他实例上：这条消息算当前会话发的，不算你本人。对方要把这个会话列入名单，并开 auto 和对应规则，才会开单。',
@@ -114,6 +118,8 @@ export const en: Record<A2aNetKey, string> = {
   'team.fileTooBig': '{name} is over 64 MB and cannot be sent',
   'team.tooManyFiles': 'At most {max} files at a time',
   'team.dropHint': 'Or drag several files here at once',
+  'team.cardFiles': 'Files on this card',
+  'team.noFileTarget': 'this card\'s team has no canvas address to send files to',
   'team.noFolders': 'Folders cannot be added. Choose the files inside',
   'team.sentRemote': 'Sent to {team}, whose own rules decide. The sender is {sender}; the receipt comes back to this session',
   'team.remoteHint': 'This team is on another instance. The message counts as this session\'s, not yours. That team opens a ticket only if it lists this session and runs auto with a matching rule.',
