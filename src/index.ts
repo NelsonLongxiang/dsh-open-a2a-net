@@ -870,6 +870,8 @@ export function apply(ctx: Context, config: Config): void {
   // is a local fact: the entry dispatches `/a2a/direct` routes and rides
   // the announced card's unsigned sessionTeams listing.
   const sessionNodes = new Map<string, Agent>()
+  /** Late-bound handle to the teams registry: mountSessionNode runs before the registry's const initializes. */
+  let teamsHandle: { ofSession(sessionId: string): { applyModelFor(session: string): void } | undefined } | undefined
   // Live top-level agents: the join surface's candidates and the cold-row
   // complement (apply scope — the direct-route wake below reads it too).
   const liveRoots = new Map<string, Agent>()
@@ -1474,8 +1476,9 @@ export function apply(ctx: Context, config: Config): void {
   function mountSessionNode(agent: Agent): void {
     sessionNodes.set(String(agent.id), agent)
     // A team session that just loaded catches up the model the team set for it (design M11: after the host wakes its
-    // sessions) - the start-time pass may have run before this session existed (review of #566 third round).
-    superagentTeams?.ofSession(String(agent.id))?.applyModelFor(String(agent.id))
+    // sessions) - the start-time pass may have run before this session existed (review of #566 third round). Through the
+    // late-bound handle: this function runs before the teams registry's const initializes (a TDZ crash, review four).
+    teamsHandle?.ofSession(String(agent.id))?.applyModelFor(String(agent.id))
   }
 
   /** Whether the boot prewarm has finished waking joined sessions: until then a session not yet loaded is not a problem. */
@@ -2151,6 +2154,7 @@ export function apply(ctx: Context, config: Config): void {
     },
     teamSend: args => teamCanvasSend(args),
   }) : undefined
+  teamsHandle = superagentTeams
   const superagentHost: SuperagentHost | undefined = superagentTeams?.primary
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
   const superagentRoleTools = new RoleTools({
