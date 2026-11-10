@@ -422,13 +422,13 @@ describe('superagent engine in the a2a host', () => {
       expect(await m.team(R_ID, [M_ID])).toMatchObject({ ok: true })
 
       // The router: superagent_* only. Its visible tools are exactly those.
-      expect(scopes.get(R_ID)!.allow).toEqual(['a2a_whoami', 'superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose'])
+      expect(scopes.get(R_ID)!.allow).toEqual(['a2a_whoami', 'a2a_tool_request', 'superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose'])
       const statusRun = await run('superagent_read', m.R, { kind: 'tickets' }); expect(statusRun.isError, statusRun.text).toBe(false)
       for (const name of ['a2a_route', 'a2a_report', 'a2a_teams', 'a2a_ticket_report', 'a2a_file_send']) expect(await refusedByRole(name, m.R, { team: 'dsh/c2222222', message: 'x' }), name).toBe(true)
 
       // A member: work tools + a2a_ticket_report + a2a_file_fetch (of this host's tools, the last two). No A2A route, no report
       // outside its ticket, no router tool.
-      expect(scopes.get(M_ID)!.allow).toEqual(['a2a_whoami', 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch'])
+      expect(scopes.get(M_ID)!.allow).toEqual(['a2a_whoami', 'a2a_tool_request', 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch'])
       expect(await refusedByRole('a2a_ticket_report', m.M, { ticket_id: 'x', state: 'progress', summary: 'x' })).toBe(false)
       expect(await refusedByRole('a2a_file_fetch', m.M, {})).toBe(false)
       for (const name of ['a2a_route', 'a2a_report', 'a2a_teams', 'a2a_tasks', 'a2a_file_send', 'superagent_route']) expect(await refusedByRole(name, m.M, { team: 'dsh/c2222222', message: 'x' }), name).toBe(true)
@@ -447,7 +447,7 @@ describe('superagent engine in the a2a host', () => {
       expect(await m.team(O_ID, [])).toMatchObject({ ok: true })
       expect(scopes.get(R_ID)).toMatchObject({ allow: undefined, lifted: 1 })
       expect(scopes.get(M_ID)).toMatchObject({ allow: undefined, lifted: 1 })
-      expect(scopes.get(O_ID)!.allow).toEqual(['a2a_whoami', 'superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose'])
+      expect(scopes.get(O_ID)!.allow).toEqual(['a2a_whoami', 'a2a_tool_request', 'superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose'])
       expect(await refusedByRole('a2a_teams', m.R)).toBe(false)
       expect(await refusedByRole('a2a_teams', m.O)).toBe(true)
       expect(await refusedByRole('a2a_route', S, { team: 'dsh/c2222222', message: 'x' })).toBe(false)

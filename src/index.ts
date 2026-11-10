@@ -2102,7 +2102,7 @@ export function apply(ctx: Context, config: Config): void {
   const superagentHost: SuperagentHost | undefined = superagentTeams?.primary
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
   const superagentRoleTools = new RoleTools({
-    roleOf: id => superagentTeams?.ofSession(id)?.toolRoleOf(id),
+    roleOf: id => superagentTeams?.ofSession(id)?.toolRoleOf(id), grantedOf: id => superagentTeams?.ofSession(id)?.grantedTools(id) ?? [], onRefused: (id, role, name) => superagentTeams?.ofSession(id)?.requestTool(id, role, name),
     agentOf: id => ctx.get('agents')?.get(SessionId(id)) as RoleAgent | undefined,
     logger,
   })
