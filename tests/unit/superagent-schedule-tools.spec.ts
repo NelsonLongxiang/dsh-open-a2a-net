@@ -43,3 +43,22 @@ describe('reading where work stands', () => {
     expect(TEAM_TOOLS).not.toContain('a2a_whoami')
   })
 })
+
+describe('ygl-trees in the team presets', () => {
+  it('every team persona names ygl-trees as the team memory; the router only reads it; nobody installs it', async () => {
+    const { readFileSync } = await import('node:fs')
+    const layer = readFileSync(new URL('../../cordis.patch.yml', import.meta.url), 'utf8')
+    const preset = (id: string) => layer.slice(layer.indexOf(`- id: ${id}-preset`)).split(/\n    - id: superagent-/)[0]!
+    for (const id of ['superagent-router', 'superagent-member', 'superagent-observer']) {
+      const text = preset(id)
+      expect(text).toContain("ygl-trees is the team's memory")
+      expect(text).toContain('do not install it')
+    }
+    expect(preset('superagent-router')).toContain('You only read ygl-trees')
+    for (const id of ['superagent-member', 'superagent-observer']) {
+      expect(preset(id)).toContain('`ygl-trees agent brief`')
+      expect(preset(id)).toContain('`kb add`')
+      expect(preset(id)).toContain('`ygl-trees verify run`')
+    }
+  })
+})
