@@ -49,6 +49,8 @@ export interface SaSettings {
   readonly remoteMembers: ReadonlyArray<{ ref: string; key: string; url: string }>
   /** The repository each member works in (owner/name), by member; absent on hosts before it. */
   readonly repos?: Readonly<Record<string, string>>
+  /** The owner's prompt supplements (owner 2026-11-10, 对照上游): communication and delivery; empty is the default. */
+  readonly prompts?: { readonly communication?: string; readonly delivery?: string }
   readonly rules?: readonly TeamRule[]
   readonly profiles?: Readonly<Record<string, { readonly role?: string; readonly rules: readonly TeamRule[] }>>
   readonly observers?: readonly string[]
@@ -626,6 +628,22 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     const fields = buildTeamFields(s, sessionName, mark)
     form.append(...fields.nodes)
 
+    // The owner's prompt supplements (owner 2026-11-10, 对照上游): how the team talks, and what delivery looks like.
+    // Empty is the default; the presets' own text cannot be edited, and on a clash it stands.
+    const promptBox = (text: string, which: 'communication' | 'delivery', aria: string): HTMLTextAreaElement => {
+      const box = el('textarea', 'wb-sa-prompt')
+      box.setAttribute('aria-label', aria)
+      box.maxLength = 4000
+      box.placeholder = '（留空：按预设默认）'
+      box.value = s.prompts?.[which] ?? ''
+      box.addEventListener('input', mark)
+      form.appendChild(label(text, box))
+      return box
+    }
+    const communication = promptBox('沟通方式补充说明', 'communication', '沟通方式补充说明')
+    const delivery = promptBox('交付要求补充说明', 'delivery', '交付要求补充说明')
+    void communication; void delivery
+
     const save = el('button', 'wb-btn wb-btn-primary', '保存')
     save.type = 'button'
     save.addEventListener('click', () => {
@@ -633,6 +651,8 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       const edited = fields.patch()
       if ('error' in edited) { say(edited.error, 'danger'); return }
       Object.assign(patch, edited.patch)
+      const prompts: Json = { ...(communication.value.trim() !== '' ? { communication: communication.value } : {}), ...(delivery.value.trim() !== '' ? { delivery: delivery.value } : {}) }
+      Object.assign(patch, { prompts: Object.keys(prompts).length === 0 ? null : prompts })
       void send({ action: 'settings', settings: patch }, () => { settingsDirty = false }, '设置已保存')
     })
     const reset = el('button', 'wb-btn', '放弃修改')
