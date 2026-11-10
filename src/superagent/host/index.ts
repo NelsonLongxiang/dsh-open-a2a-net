@@ -923,19 +923,33 @@ export class SuperagentHost {
     return undefined
   }
 
+  /** One session's model pick, by role. */
+  private modelPickFor(session: string): { provider: string; model: string; reasoningEffort?: string } | undefined {
+    const { models } = this.settingsValue
+    if (models === undefined) return undefined
+    if (session === this.settingsValue.router) return models.router
+    if (this.settings.members.includes(session)) return models.member
+    return undefined
+  }
+
+  /** Put one local team session's model choice through (owner 2026-11-10): what a just-loaded session catches up with. */
+  applyModelFor(session: string): void {
+    try {
+      const pick = this.modelPickFor(session)
+      if (pick === undefined) return
+      const select = this.d.selectModel
+      if (select === undefined) return
+      void select(session, pick).then(ok => { if (ok !== true) this.d.logger.warn('superagent: the team model was not selected for %s', session) }, error => { this.d.logger.warn('superagent: the team model was not selected for %s: %s', session, String(error)) })
+    } catch (error) { this.d.logger.warn('superagent: applying the team model failed: %s', String(error)) }
+  }
+
   /** Put the team's model choices on its local sessions (owner 2026-11-10): unset leaves a session alone; a failure is logged, never blocks. Never throws: start() may call this while the plugin's apply() still runs. */
   applyModels(): void {
     try {
-    const select = this.d.selectModel
-    if (select === undefined) return
-    const { models } = this.settingsValue
-    if (models === undefined) return
-    const one = (session: string | undefined, pick: { provider: string; model: string; reasoningEffort?: string } | undefined, role: string): void => {
-      if (session === undefined || pick === undefined) return
-      void select(session, pick).then(ok => { if (ok !== true) this.d.logger.warn('superagent: the %s model was not selected for %s', role, session) }, error => { this.d.logger.warn('superagent: the %s model was not selected for %s: %s', role, session, String(error)) })
-    }
-    one(this.settingsValue.router, models.router, 'router')
-    for (const member of this.settings.members) one(member, models.member, 'member')
+      if (this.settingsValue.models === undefined) return
+      const router = this.settingsValue.router
+      if (router !== undefined) this.applyModelFor(router)
+      for (const member of this.settings.members) this.applyModelFor(member)
     } catch (error) { this.d.logger.warn('superagent: applying the team models failed: %s', String(error)) }
   }
 

@@ -1473,6 +1473,9 @@ export function apply(ctx: Context, config: Config): void {
    */
   function mountSessionNode(agent: Agent): void {
     sessionNodes.set(String(agent.id), agent)
+    // A team session that just loaded catches up the model the team set for it (design M11: after the host wakes its
+    // sessions) - the start-time pass may have run before this session existed (review of #566 third round).
+    superagentTeams?.ofSession(String(agent.id))?.applyModelFor(String(agent.id))
   }
 
   /** Whether the boot prewarm has finished waking joined sessions: until then a session not yet loaded is not a problem. */
@@ -2099,11 +2102,16 @@ export function apply(ctx: Context, config: Config): void {
     // The team's model choices (owner 2026-11-10): in-process sessionController.selectModel, not HTTP - the host's
     // /api/session/* answers 401 without a browser cookie, so the loopback call could never work (review of #566).
     // A session not loaded yet is skipped; the next start or pool change applies it.
-    selectModel: (sessionId, pick) => {
-      if (!sessionNodes.has(sessionId)) return Promise.resolve(false)
+    selectModel: async (sessionId, pick) => {
+      if (!sessionNodes.has(sessionId)) return false
       const controller = (ctx as unknown as { get?(name: string): { selectModel?(request: unknown): Promise<unknown> } | undefined }).get?.('sessionController')
-      if (controller?.selectModel === undefined) return Promise.resolve(false)
-      return controller.selectModel({ sessionId, ...pick }).then(() => true, () => false)
+      if (controller?.selectModel === undefined) return false
+      try { await controller.selectModel({ sessionId, ...pick }) } catch { return false }
+      // Read back what the session actually runs (review of #566 third round): a resolve without an effect is a miss.
+      try {
+        const agent = sessionNodes.get(sessionId) as { model?: { provider?: string; model?: string } } | undefined
+        return agent?.model?.provider === pick.provider && agent?.model?.model === pick.model
+      } catch { return false }
     },
     bootSettled: () => bootPrewarm.settled(),
     workspaceOf: id => { const cwd = (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd; return typeof cwd === 'string' ? cwd : undefined },
