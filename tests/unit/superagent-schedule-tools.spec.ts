@@ -33,3 +33,13 @@ describe('schedule tools for team sessions', () => {
     }
   })
 })
+
+describe('reading where work stands', () => {
+  it('every role may ask who it is; members and observers may read tickets; a session outside the team is not offered the read', async () => {
+    for (const role of ['router', 'member', 'observer'] as const) expect(roleToolRefusal(role, 'a2a_whoami', {})).toBeUndefined()
+    expect(roleToolRefusal('member', 'a2a_ticket_read', { kind: 'mine' })).toBeUndefined()
+    expect(roleToolRefusal('router', 'a2a_ticket_read', { kind: 'mine' })).toContain('a2a_ticket_read')
+    expect(TEAM_TOOLS).toContain('a2a_ticket_read')
+    expect(TEAM_TOOLS).not.toContain('a2a_whoami')
+  })
+})
