@@ -12,6 +12,9 @@ export interface TeamFieldValues {
   readonly rules?: readonly TeamRule[]
   readonly bots?: { readonly a2a?: readonly string[] }
   readonly allowed?: { readonly github?: readonly string[] }
+  /** GitHub issues as requests (design github-issues). */
+  readonly github?: { readonly repos: readonly string[]; readonly intake: 'mention' | 'all' }
+  readonly sources?: { readonly workbench?: boolean; readonly a2a?: boolean; readonly github?: boolean }
   readonly reviewer?: string
   readonly repos?: Readonly<Record<string, string>>
   readonly profiles?: Readonly<Record<string, { readonly role?: string; readonly rules: readonly TeamRule[] }>>
@@ -43,7 +46,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
 const linesOf = (text: string): string[] => [...new Set(text.split(/[\s,，]+/).filter(item => item !== ''))]
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
 
-export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => string, mark: () => void): TeamFields {
+export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => string, mark: () => void, syncGithub?: () => void): TeamFields {
   const section = (title: string, hint: string): HTMLElement => {
     const box = el('div', 'wb-sa-section')
     box.append(el('div', 'wb-sa-section-title', title), el('div', 'wb-sa-hint', hint))
@@ -142,9 +145,21 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
     return { id, role, rules }
   })
 
-  const githubBox = section('PR 上算人的 GitHub 账号', '工单跟随的 PR 上，这些账号的评论算人写的，其他账号只作参考。一行一个。')
-  const github = area('PR 上算人的 GitHub 账号', (s.allowed?.github ?? []).join('\n'), 2)
-  githubBox.appendChild(github)
+  const githubBox = section('GitHub', '下面这些账号算人：工单跟随的 PR 上他们的评论、列出的仓库里他们开的 Issue。打开 Issue 接收后，点名 @superagent 或打 superagent 标签的新 Issue 会作为需求交给总工，回复写回 Issue。这一块的修改需要在已登录的界面里保存。')
+  const issuesOn = el('input', '') as HTMLInputElement; issuesOn.type = 'checkbox'; issuesOn.checked = s.sources?.github === true
+  issuesOn.setAttribute('aria-label', '接收 GitHub Issue 作为需求'); issuesOn.addEventListener('change', mark)
+  const onRow = el('label', 'wb-sa-hint'); onRow.append(issuesOn, document.createTextNode(' 接收 GitHub Issue 作为需求'))
+  const issueRepos = area('接收 Issue 的仓库', (s.github?.repos ?? []).join('\n'), 2, '一行一个 owner/name，最多 10 个')
+  const intake = el('select', 'wb-sa-input') as HTMLSelectElement; intake.setAttribute('aria-label', '哪些 Issue 算需求')
+  for (const [value, text] of [['mention', '只收点名 @superagent 或打 superagent 标签的'], ['all', '仓库里所有新 Issue']] as const) { const option = el('option', '', text); option.value = value; intake.appendChild(option) }
+  intake.value = s.github?.intake ?? 'mention'; intake.addEventListener('change', mark)
+  const github = area('算人的 GitHub 账号', (s.allowed?.github ?? []).join('\n'), 2)
+  githubBox.append(onRow, issueRepos, intake, github)
+  if (syncGithub !== undefined) {
+    const sync = el('button', 'wb-btn', '从仓库协作者同步账号'); sync.type = 'button'
+    sync.addEventListener('click', syncGithub)
+    githubBox.append(sync, el('div', 'wb-sa-hint', '把上面仓库里有推送权限的协作者加进账号名单，只加不删。先保存仓库再同步。'))
+  }
 
   const execBox = section('执行', '准备命令在成员拿到工单前，在成员的工作区里用 sh 跑一次，可用变量 $SUPERAGENT_TICKET_ID、$SUPERAGENT_TICKET_NAME、$SUPERAGENT_REPO、$SUPERAGENT_MEMBER。它以本机用户身份运行，不在沙箱里，保存需要界面登录。上限为 0 表示不限，每个成员同时只接一张。')
   const prepareBox = area('准备命令', s.prepare?.command ?? '', 3, '例如：git worktree add .worktrees/$SUPERAGENT_TICKET_NAME')
@@ -198,6 +213,11 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
 
     const githubList = linesOf(github.value)
     if (!same(githubList, s.allowed?.github ?? [])) out.allowed = { github: githubList }
+    // Only what changed goes out: an untouched GitHub part keeps the save free of the owner-login check (design github-issues G7).
+    if (issuesOn.checked !== (s.sources?.github === true)) out.sources = { github: issuesOn.checked }
+    const repoList = linesOf(issueRepos.value)
+    if (repoList.length > 10 || repoList.some(repo => !REPO.test(repo))) return { error: '接收 Issue 的仓库要写成 owner/name，最多 10 个' }
+    if (!same(repoList, s.github?.repos ?? []) || intake.value !== (s.github?.intake ?? 'mention')) out.github = repoList.length === 0 && intake.value === 'mention' ? null : { repos: repoList, intake: intake.value }
 
     const address = reviewer.value.trim()
     if (address !== (s.reviewer ?? '')) out.reviewer = address === '' ? null : address
