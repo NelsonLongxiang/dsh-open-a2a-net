@@ -97,6 +97,10 @@ The router, members and observers have DSH's schedule tools (`schedule_create`, 
 
 Every role has `a2a_whoami` (which session and team it is). A member reads its own open tickets with `a2a_ticket_read` (kind `mine`, or `ticket` with an id it holds); an observer can also read kind `team` and kind `decisions`. It is read-only: candidates, dispatch, stopping and rules stay the router's and the owner's.
 
+## ygl-trees, the team's memory
+
+The three presets tell the team to keep what it learns in ygl-trees: a2a carries the work and its receipts, ygl-trees keeps the evidence, the judgements and the reusable notes. The router reads it (`kb search`, `agent brief`) before deciding and names earlier work in the scope; members and observers open a ticket with `agent brief` and a `kb search`, record evidence and claims as they go, `kb add` the reusable lesson before ready, and name the ids in their report. A check passes only from `ygl-trees verify run` or the project's tests. The presets use the CLI through the shell, or the ygl-trees MCP tools where a session has them; where neither is reachable the session says so and does not install it.
+
 ## Decision cards
 
 What the owner has to decide is a card: a question, 2 to 6 options, the option you recommend, and a level (P0 irreversible or production, P1 significant, P2 routine and easy to undo, P3 trivial; no level counts as P1). The cards wait in the right bar's **待决策** view. P2 and P3 can be approved with one click; P0 and P1 need an option chosen.
