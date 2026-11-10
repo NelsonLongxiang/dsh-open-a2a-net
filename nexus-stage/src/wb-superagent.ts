@@ -691,8 +691,13 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       }
       const routerPick = pick(routerModel), memberPick = pick(memberModel)
       if (routerPick === undefined || memberPick === undefined) return
-      const models: Json = { ...(routerPick !== null ? { router: routerPick } : {}), ...(memberPick !== null ? { member: memberPick } : {}) }
-      const patch: Json = { canvas: canvas.value === '' ? null : canvas.value, router: router.value === '' ? null : router.value, acceptMode: mode.value, sources: { workbench: wb.checked, a2a: a2a.checked }, paused: paused.checked, models: Object.keys(models).length === 0 ? null : models }
+      // Models ride along only when one actually changed (review of #566 fifth round, the #567 shape): untouched saves
+      // keep models alone - a bare null here would clear what the owner set.
+      const same = (a: Json | null, b: Json | undefined): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+      const routerChanged = !same(routerPick, s.models?.router as Json | undefined)
+      const memberChanged = !same(memberPick, s.models?.member as Json | undefined)
+      const modelsPatch: Json = { ...(routerChanged ? { router: routerPick ?? '' } : {}), ...(memberChanged ? { member: memberPick ?? '' } : {}) }
+      const patch: Json = { canvas: canvas.value === '' ? null : canvas.value, router: router.value === '' ? null : router.value, acceptMode: mode.value, sources: { workbench: wb.checked, a2a: a2a.checked }, paused: paused.checked, ...(Object.keys(modelsPatch).length === 0 ? {} : { models: modelsPatch }) }
       const edited = fields.patch()
       if ('error' in edited) { say(edited.error, 'danger'); return }
       // The GitHub switch rides in sources only when it changed (design github-issues G7).

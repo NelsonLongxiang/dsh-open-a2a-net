@@ -47,6 +47,11 @@ describe('the model pickers', () => {
     save(p)
     await new Promise(r => setTimeout(r, 30))
     expect(calls.acts[0]).toMatchObject({ action: 'settings', settings: { models: { router: { provider: 'deepseek', model: 'chat' }, member: { provider: 'openai', model: 'gpt-5' } } } })
+    // Untouched pickers send no models at all (review of #566 fifth round): an ordinary save must not clear what is set.
+    const untouched = pane(state())
+    save(untouched.p)
+    await new Promise(r => setTimeout(r, 30))
+    expect('models' in (untouched.calls.acts[0] as { settings: Record<string, unknown> }).settings).toBe(false)
   })
   it('empty pickers save models null; a bad shape is refused with a note', async () => {
     const { p, calls } = pane()
