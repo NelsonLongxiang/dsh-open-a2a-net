@@ -37,3 +37,15 @@ describe('the GitHub section', () => {
     expect([...mount(base).root.querySelectorAll('button')].some(b => b.textContent === '从仓库协作者同步账号')).toBe(false)
   })
 })
+
+describe('granted tools (design tool-requests T5)', () => {
+  const granted = { ...base, extraTools: { router: ['webcam'], member: ['gitbash'] } }
+  it('an untouched list sends nothing, so an ordinary save needs no owner login', () => {
+    expect(mount(granted).fields.patch()).toEqual({ patch: {} })
+  })
+  it('taking a tool back sends only that role\'s list', () => {
+    const { fields, q } = mount(granted)
+    q<HTMLTextAreaElement>('成员和观察者额外放行的工具').value = ''
+    expect(fields.patch()).toEqual({ patch: { extraTools: { member: [] } } })
+  })
+})
