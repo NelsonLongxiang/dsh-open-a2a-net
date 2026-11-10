@@ -382,7 +382,10 @@ export class SuperagentHost {
     // Reliability R7: look at the team's health every 15 minutes; a new problem raises one card (the boot grace period
     // keeps health() quiet, so nothing is raised from it either).
     this.healthTimer = this.d.interval(() => { this.healthReminders.tick(this.health() as readonly HealthProblem[], Date.parse(this.now())) }, HEALTH_TICK_MS)
-    this.applyModels()
+    // Defer: start() may run while the plugin's apply() still executes, when the canvas lookups it touches are not
+    // initialized yet (a TDZ crash took the plugin down on hosts with models set - review of #566). A microtask runs
+    // after apply() finishes; the catch inside applyModels is the second fence.
+    queueMicrotask(() => { this.applyModels() })
     this.started = true
     this.syncA2a()
     this.pass()
@@ -901,8 +904,9 @@ export class SuperagentHost {
     return undefined
   }
 
-  /** Put the team's model choices on its local sessions (owner 2026-11-10): unset leaves a session alone; a failure is logged, never blocks. */
+  /** Put the team's model choices on its local sessions (owner 2026-11-10): unset leaves a session alone; a failure is logged, never blocks. Never throws: start() may call this while the plugin's apply() still runs. */
   applyModels(): void {
+    try {
     const select = this.d.selectModel
     if (select === undefined) return
     const { models } = this.settingsValue
@@ -913,6 +917,7 @@ export class SuperagentHost {
     }
     one(this.settingsValue.router, models.router, 'router')
     for (const member of this.settings.members) one(member, models.member, 'member')
+    } catch (error) { this.d.logger.warn('superagent: applying the team models failed: %s', String(error)) }
   }
 
   /**

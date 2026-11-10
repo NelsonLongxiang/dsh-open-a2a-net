@@ -72,6 +72,25 @@ describe('settings.models', () => {
     delete (globalThis as Record<string, unknown>)['__sa_test_controller__']
     await h.stop()
   })
+  it('a team with models set starts without crashing and applies after the microtask (review of #566: no TDZ)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sa-models4-'))
+    homes.push(dir)
+    const calls: string[] = []
+    const deps = {
+      canvasTeam: () => ({ local: ['session-r'], remote: [] }),
+      home: dir, logger: { info: vi.fn(), warn: vi.fn() }, deliverToSession: vi.fn(() => false), sessionLabel: () => 'x',
+      now: () => new Date().toISOString(), interval: vi.fn(() => () => undefined),
+      selectModel: (sessionId: string) => { calls.push(sessionId); return Promise.resolve(true) },
+    } as unknown as SuperagentHostDeps
+    const h = new SuperagentHost(deps)
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', models: { router: { provider: 'p', model: 'm' } } }, yes)).toMatchObject({ ok: true })
+    await h.stop()
+    const again = new SuperagentHost(deps)
+    again.start() // must not throw even if this runs inside the plugin's apply()
+    await new Promise(r => setTimeout(r, 30)) // the deferred microtask lands
+    expect(calls).toContain('session-r')
+    await again.stop()
+  })
   it('a member joining (pool change) and a restart apply the choice again; unset models touch nothing', async () => {
     const calls2: Array<{ session: string }> = []
     const dir = mkdtempSync(join(tmpdir(), 'sa-models2-'))
