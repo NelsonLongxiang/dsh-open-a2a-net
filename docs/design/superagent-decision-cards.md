@@ -15,6 +15,7 @@ The owner wants every decision a team needs from them in one place, in DSH's rig
 - **C5 Only the owner decides.** Deciding needs the host's GUI login, as rule edits do (router-owner-asks D10), so a member's shell cannot approve its own card. A host with no login accepts the control route, as it does for answering a question today.
 - **C6 A loop cannot bury the owner.** One proposer has at most ten cards open, and an identical open question returns the existing card.
 - **C7 Decided cards are a record, not an archive.** A decided card is kept 30 days, and at most the newest 500. A member's card whose ticket has ended is dropped. A card still waiting for the owner is never dropped.
+- **C8 Files on a card (owner 2026-11-10).** The router and an observer raising a card, and a member asking a question, may put up to 16 files from their workspace on it (`files`, paths). The host stages them on the file channel granted to the team's canvas, as `a2a_file_send` does, and the card lists them; the owner downloads one through `GET /__dsh_a2a/superagent/decisions/file`, which serves only a file a card names, behind the same owner proof as deciding. The owner may attach files when deciding: the right bar stages them for the card's team like a request's files, and their reference lines go below the decision to the router or the ticket's member, who pull them with `a2a_file_fetch`. The file channel keeps a file 24 hours; after that the card still lists it, and the download says it has expired.
 
 ## Levels
 
