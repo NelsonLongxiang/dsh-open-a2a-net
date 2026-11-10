@@ -54,7 +54,10 @@ describe('ygl-trees in the team presets', () => {
       expect(text).toContain("name: '@deepseek-ai/dsh-mcp-client'")
       expect(text).toContain('serverName: ygl')
       expect(text).toContain('transport: stdio')
-      expect(text).toContain("args: ['mcp']")
+      expect(text).toContain('YGL_SESSION="superagent-$$" exec ygl-trees mcp')
+      expect(text).toContain('- id: mcp-ygl-win')
+      expect(text.match(/disabled: !!js process.platform [!=]== 'win32'/g)?.length).toBeGreaterThanOrEqual(2)
+      expect(text).toContain('YGL_HOME: !!js process.env.SUPERAGENT_YGL_HOME ??')
       expect(text).toContain("ygl-trees is the team's memory")
       expect(text).toMatch(/do not install anything/)
     }
