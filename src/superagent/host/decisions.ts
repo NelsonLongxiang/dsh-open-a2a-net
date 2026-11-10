@@ -15,6 +15,8 @@ const LEVELS: readonly string[] = ['P0', 'P1', 'P2', 'P3']
 const OPTIONS_MIN = 2, OPTIONS_MAX = 6, OPTION_MAX = 300, QUESTION_MAX = 2_000
 /** How many cards one proposer may have open at once: it acts on its own judgement, and a loop must not bury the owner. */
 export const OPEN_CARDS_MAX = 10
+/** How long a decided card is kept, and how many at most: the record of what was decided, not an archive. */
+export const DECIDED_KEEP_MS = 30 * 24 * 3_600_000, DECIDED_KEEP_MAX = 500
 
 export interface DecisionSpec { readonly level: DecisionLevel; readonly options: readonly string[]; readonly recommended: string }
 export interface StoredCard extends DecisionSpec {
@@ -51,13 +53,33 @@ export const ticketCardId = (ticketId: string, question: string): string => `t-$
 
 export class DecisionBook {
   private cards: StoredCard[]
-  constructor(private readonly path: string) {
+  /**
+   * @param path - the file the cards live in.
+   * @param ticketOpen - whether a ticket is still open: a member's card waits only as long as its ticket.
+   * @param now - the clock, in milliseconds.
+   */
+  constructor(private readonly path: string, private readonly ticketOpen: (ticketId: string) => boolean = () => true, private readonly now: () => number = () => Date.now()) {
     let loaded: StoredCard[] = []
     try { if (existsSync(path)) loaded = JSON.parse(readFileSync(path, 'utf8')) as StoredCard[] } catch { loaded = [] }
     this.cards = Array.isArray(loaded) ? loaded : []
   }
 
+  /**
+   * Drop what no longer matters: a decided card past {@link DECIDED_KEEP_MS} or beyond the newest {@link DECIDED_KEEP_MAX},
+   * and a member's undecided card whose ticket has ended. A card still waiting for the owner is never dropped.
+   * @returns how many cards were dropped.
+   */
+  prune(): number {
+    const cutoff = this.now() - DECIDED_KEEP_MS
+    const decided = this.cards.filter(card => card.decided !== undefined).sort((a, b) => b.decided!.at.localeCompare(a.decided!.at))
+    const keepDecided = new Set(decided.filter(card => Date.parse(card.decided!.at) >= cutoff).slice(0, DECIDED_KEEP_MAX).map(card => card.id))
+    const before = this.cards.length
+    this.cards = this.cards.filter(card => card.decided !== undefined ? keepDecided.has(card.id) : card.source !== 'ticket' || card.ticketId === undefined || this.ticketOpen(card.ticketId))
+    return before - this.cards.length
+  }
+
   private save(): void {
+    this.prune()
     mkdirSync(dirname(this.path), { recursive: true })
     const temporary = `${this.path}.tmp-${randomUUID()}`
     try { writeFileSync(temporary, JSON.stringify(this.cards), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.path) } finally { rmSync(temporary, { force: true }) }

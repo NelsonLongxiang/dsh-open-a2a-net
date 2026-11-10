@@ -285,7 +285,7 @@ export class SuperagentHost {
       onOpen: (thread, head, url, ticketId) => this.reviews.opened(thread, head, url, ticketId),
     })
     this.ruleChanges = new RuleChanges(join(dir, 'rule-changes.json'))
-    this.decisions = new DecisionBook(join(dir, 'decisions.json'))
+    this.decisions = new DecisionBook(join(dir, 'decisions.json'), ticketId => { const ticket = this.store.tickets.get(ticketId); return ticket !== undefined && ticket.ended === undefined })
     this.reviews = new ReviewRequests({
       path: join(dir, 'reviews.json'), reviewer: () => this.settingsValue.reviewer, logger: d.logger,
       ask: (address, text) => this.a2a.askReview(address, text),

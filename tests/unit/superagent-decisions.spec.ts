@@ -3,8 +3,9 @@
 import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { OPEN_CARDS_MAX, oneClick, parseDecision, type DecisionSpec } from '../../src/superagent/host/decisions.ts'
+import { DECIDED_KEEP_MAX, DECIDED_KEEP_MS, DecisionBook, OPEN_CARDS_MAX, oneClick, parseDecision, type DecisionSpec } from '../../src/superagent/host/decisions.ts'
 import { ownerOrNoLogin } from '../../src/superagent/host/owner-proof.ts'
 
 const spec = (level: DecisionSpec['level'] = 'P2'): DecisionSpec => ({ level, options: ['甲', '乙'], recommended: '甲' })
@@ -112,6 +113,50 @@ describe('a member\'s question', () => {
     expect(m.h.decide(card!.id, 'approve')).toMatchObject({ ok: false, code: 'needs-choice' })
     expect(m.h.decide(card!.id, 'choose', undefined, '用甲')).toMatchObject({ ok: true })
     await m.h.stop()
+  })
+})
+
+describe('pruning', () => {
+  const book = (open: (id: string) => boolean = () => true) => {
+    const clock = { ms: Date.parse('2026-11-10T00:00:00Z') }
+    const b = new DecisionBook(join(mkdtempSync(join(tmpdir(), 'sa-prune-')), 'decisions.json'), open, () => clock.ms)
+    return { b, clock, iso: () => new Date(clock.ms).toISOString() }
+  }
+  it('keeps a decided card for 30 days, and never drops one still waiting', () => {
+    const { b, clock, iso } = book()
+    const waiting = b.propose({ source: 'router', by: 'r', question: '还在等', spec: spec(), at: iso() }) as { id: string }
+    const done = b.propose({ source: 'router', by: 'r', question: '定了', spec: spec(), at: iso() }) as { id: string }
+    b.decide(done.id, { at: iso(), text: '决定：甲' })
+    clock.ms += DECIDED_KEEP_MS - 1000
+    expect(b.prune()).toBe(0)
+    clock.ms += 2000
+    expect(b.prune()).toBe(1)
+    expect(b.get(done.id)).toBeUndefined()
+    expect(b.get(waiting.id)).toBeDefined()
+  })
+  it('keeps at most the newest decided cards', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sa-prune-max-'))
+    const clock = { ms: Date.parse('2026-11-10T00:00:00Z') }
+    const b = new DecisionBook(join(dir, 'decisions.json'), () => true, () => clock.ms)
+    const ids: string[] = []
+    for (let i = 0; i < DECIDED_KEEP_MAX + 3; i++) {
+      const { id } = b.propose({ source: 'observer', by: `o${String(i)}`, question: `问 ${String(i)}`, spec: spec(), at: new Date(clock.ms).toISOString() }) as { id: string }
+      clock.ms += 1000
+      b.decide(id, { at: new Date(clock.ms).toISOString(), text: 'x' })
+      ids.push(id)
+    }
+    const stored = JSON.parse(readFileSync(join(dir, 'decisions.json'), 'utf8')) as Array<{ id: string }>
+    expect(stored).toHaveLength(DECIDED_KEEP_MAX)
+    expect(ids.slice(0, 3).some(id => b.get(id) !== undefined)).toBe(false)
+    expect(b.get(ids.at(-1)!)).toBeDefined()
+  })
+  it('drops a member\'s card once its ticket has ended', () => {
+    const open = new Set(['t1', 't2'])
+    const { b, iso } = book(id => open.has(id))
+    b.forTicket({ ticketId: 't1', by: 'm', question: 'q1', spec: spec(), at: iso() })
+    open.delete('t1')
+    b.forTicket({ ticketId: 't2', by: 'm', question: 'q2', spec: spec(), at: iso() })
+    expect(b.open().map(card => card.ticketId)).toEqual(['t2'])
   })
 })
 

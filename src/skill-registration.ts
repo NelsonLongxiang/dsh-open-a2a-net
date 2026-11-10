@@ -44,19 +44,31 @@ function readSkill(): ParsedSkill {
   return { name: skillName, description, content: raw.slice(bodyStart + 1).trim() }
 }
 
-/** Register the a2a-network skill (runtime contribution). */
+/** The part of the DSH skill registry this plugin uses. */
+interface SkillScope {
+  readonly skills: { register(skill: Record<string, unknown>): () => void }
+  effect(run: () => () => void, label?: string): void
+}
+
+/**
+ * Register the a2a-network skill (runtime contribution) once the host's skill registry is up.
+ *
+ * The plugin does not declare `skills` among the services it needs, so `ctx.skills` read at apply time was undefined and the
+ * skill silently never registered. Waiting for the service through `ctx.inject` registers it when the registry exists, and
+ * the registration goes when either side does. The registry supplies the runtime provider and the default invocation policy
+ * only when they are left out; a made-up provider name would own no loader for the skill's body.
+ * @param ctx - the plugin's context.
+ */
 export function registerA2aNetworkSkill(ctx: Context): void {
-  const skills = (ctx as unknown as { skills?: { register: (reg: Record<string, unknown>) => () => void } }).skills
-  if (skills === undefined) return
   const skill = readSkill()
   const registration = {
     name: skill.name,
     description: skill.description,
     invocation: { modelInvocable: true, userInvocable: true },
-    provider: 'a2a',
-    source: 'runtime',
     resourceBase: { kind: 'directory', path: fileURLToPath(PACKAGED_SKILL_ROOT) },
     content: skill.content,
   }
-  skills.register(registration)
+  const late = ctx as unknown as { inject?(services: string[], run: (scope: SkillScope) => void): void }
+  if (typeof late.inject !== 'function') return
+  late.inject(['skills'], (scope) => { scope.effect(() => scope.skills.register(registration), 'a2a: a2a-network skill') })
 }

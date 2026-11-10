@@ -1,6 +1,6 @@
 # superagent: decision cards
 
-Status: agreed with the owner on 2026-11-09.
+Status: agreed with the owner on 2026-11-09; C7 added on 2026-11-10.
 
 ## Context
 
@@ -14,6 +14,7 @@ The owner wants every decision a team needs from them in one place, in DSH's rig
 - **C4 Every decision becomes the team's work.** A card raised by the router or an observer becomes, once decided, a request from the owner on a new thread. It says who raised the card, so the proposer's words are not read as the owner's own. It reaches the router as a candidate and is accepted and dispatched as any request. A member's card belongs to the ticket it was asked on, which is already the team's work: the decision goes back to that ticket. Opening a second ticket would leave the first waiting for an answer.
 - **C5 Only the owner decides.** Deciding needs the host's GUI login, as rule edits do (router-owner-asks D10), so a member's shell cannot approve its own card. A host with no login accepts the control route, as it does for answering a question today.
 - **C6 A loop cannot bury the owner.** One proposer has at most ten cards open, and an identical open question returns the existing card.
+- **C7 Decided cards are a record, not an archive.** A decided card is kept 30 days, and at most the newest 500. A member's card whose ticket has ended is dropped. A card still waiting for the owner is never dropped.
 
 ## Levels
 
