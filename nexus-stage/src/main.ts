@@ -462,7 +462,13 @@ async function pollSuperagent(): Promise<void> {
     if (asked !== selectedTeam) return
     const state = res.ok ? { ...await res.json() as SaState, teams, selectedTeam: asked } : null
     bench.updateSuperagent(state)
-    teamRoles.update(state)
+    // The planning view marks every team's canvas and roles, not only the one the 团队 tab shows.
+    const others = await Promise.all((teams ?? []).filter(row => row.id !== asked && row.canvas !== undefined).map(async (row) => {
+      const r = await controlFetch(`/__dsh_a2a/superagent?teamId=${encodeURIComponent(row.id)}`, { cache: 'no-store' }).catch(() => undefined)
+      return r?.ok === true ? await r.json() as SaState : undefined
+    }))
+    if (asked !== selectedTeam) return
+    teamRoles.update(state === null ? null : [state, ...others.flatMap(other => other !== undefined ? [other] : [])])
   } catch { bench.updateSuperagent(null); teamRoles.update(null) } finally {
     superagentBusy = false
     if (asked !== selectedTeam) void pollSuperagent()
