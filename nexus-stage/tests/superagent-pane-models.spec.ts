@@ -53,11 +53,11 @@ describe('the model pickers', () => {
     await new Promise(r => setTimeout(r, 30))
     expect('models' in (untouched.calls.acts[0] as { settings: Record<string, unknown> }).settings).toBe(false)
   })
-  it('empty pickers save models null; a bad shape is refused with a note', async () => {
+  it('untouched pickers send no models; a bad shape is refused with a note', async () => {
     const { p, calls } = pane()
     save(p)
     await new Promise(r => setTimeout(r, 30))
-    expect(calls.acts[0]).toMatchObject({ action: 'settings', settings: { models: null } })
+    expect('models' in (calls.acts[0] as { settings: Record<string, unknown> }).settings).toBe(false)
     const input = p.root.querySelector<HTMLInputElement>('input.wb-sa-model')!
     input.value = 'noslash'
     save(p)
