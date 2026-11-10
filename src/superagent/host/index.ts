@@ -26,6 +26,7 @@ import { HealthReminders, HEALTH_TICK_MS, type HealthProblem } from './health-re
 import { DECISION_FILES_MAX, DecisionBook, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { parseFileRef } from '../../blob-store.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
+import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, type Role } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
@@ -250,6 +251,8 @@ export class SuperagentHost {
   /** Tickets whose member was already reminded once to record in ygl-trees before ready. */
   private readonly yglReminded = new Set<string>()
   private readonly prs: PrFollower
+  /** GitHub issues as a source of requests (design github-issues). */
+  private readonly issues: IssueSource
   private readonly reviews: ReviewRequests
   /** Proposals to change a rule set, each set's revision and last change (design D8–D10b). */
   readonly ruleChanges: RuleChanges
@@ -323,6 +326,11 @@ export class SuperagentHost {
       path: join(dir, 'pr-follow.json'), tickets: () => this.store.tickets.list(), engine: () => this.engine, gh: d.gh ?? defaultGh,
       allowed: () => this.settingsValue.allowed.github, paused: () => this.settingsValue.paused, logger: d.logger,
       onOpen: (thread, head, url, ticketId) => this.reviews.opened(thread, head, url, ticketId),
+    })
+    this.issues = new IssueSource({
+      path: join(dir, 'github-issues.json'), engine: () => this.engine, gh: d.gh ?? defaultGh, logger: d.logger,
+      settings: () => ({ on: this.settingsValue.sources.github === true, intake: this.settingsValue.github }),
+      allowed: () => this.settingsValue.allowed.github ?? [], paused: () => this.settingsValue.paused,
     })
     this.ruleChanges = new RuleChanges(join(dir, 'rule-changes.json'))
     this.settingsHistory = new SettingsHistory(join(dir, 'settings-history.json'))
@@ -781,6 +789,17 @@ export class SuperagentHost {
     return { ok: true, results: results.slice(0, 30) }
   }
 
+  /**
+   * The logins with push access to the team's GitHub repositories, for the owner to add to allowed.github (design
+   * github-issues G6). The caller saves them, so the write goes through settings like any other.
+   * @returns the logins to add, or why not.
+   */
+  async githubCollaborators(): Promise<{ ok: true; logins: string[] } | { ok: false; code: string; error: string }> {
+    const repos = this.settingsValue.github?.repos ?? []
+    if (repos.length === 0) return { ok: false, code: 'no-repos', error: 'list the team\'s GitHub repositories first' }
+    try { return { ok: true, logins: await this.issues.collaborators(repos) } } catch (error) { return { ok: false, code: 'github', error: String(error).slice(0, 300) } }
+  }
+
   /** A file on one of the cards, for the owner to download (C8). */
   decisionFile(cardId: string, sha256: string): DecisionFile | undefined { return this.decisions.fileOf(cardId, sha256) }
 
@@ -1016,10 +1035,12 @@ export class SuperagentHost {
   /** Send pending a2a Channel messages; a thrown send stays pending for the next pass (a2a-watch gives up after 24h). */
   private flushOutbox(): void {
     for (const row of this.store.messages.list()) {
-      if (row.status !== 'pending' || row.message.channel.source !== 'a2a' || this.sending.has(row.message.id)) continue
-      if (this.settingsValue.paused || !this.a2a.allowed(row.message as never)) continue
+      if (row.status !== 'pending' || (row.message.channel.source !== 'a2a' && row.message.channel.source !== GITHUB_SOURCE) || this.sending.has(row.message.id)) continue
+      const github = row.message.channel.source === GITHUB_SOURCE
+      // Design github-issues G5: a reply on an issue's thread goes back as a comment while the source is on.
+      if (this.settingsValue.paused || (github ? this.settingsValue.sources.github !== true : !this.a2a.allowed(row.message as never))) continue
       this.sending.add(row.message.id)
-      void this.a2a.send(row.message as never).then(result => {
+      void (github ? this.issues.send(row.message.channel.address, row.message.text) : this.a2a.send(row.message as never)).then(result => {
         this.store.atomic(() => {
           const now = this.store.messages.get(row.message.id)
           if (now === undefined || now.status !== 'pending') return
@@ -1057,6 +1078,7 @@ export class SuperagentHost {
     if (this.settingsValue.paused) return
     this.executor.tick()
     this.prs.tick()
+    this.issues.tick()
     this.acknowledgeRequests()
     this.receiptEndedRequests()
     this.receiptOtherMessages()
@@ -1407,6 +1429,7 @@ export class SuperagentHost {
       refusals: { counts: Object.fromEntries(this.refusalCounts), recent: [...this.refusalRecent] },
       settingsHistory: this.settingsHistory.list(),
       ...(this.prs.problem !== undefined ? { pullRequestProblem: this.prs.problem } : {}),
+      ...(this.issues.problem !== undefined ? { githubIssuesProblem: this.issues.problem } : {}),
       reviews: this.reviews.list(),
       executor: { canvas: this.settingsValue.canvas ?? null, members: this.settings.members, remoteMembers: this.settings.remoteMembers, bindings: this.executor.list() },
       ...(this.settingsValue.serves !== undefined ? { serves: this.settingsValue.serves } : {}),
