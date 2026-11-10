@@ -29,7 +29,11 @@ describe('team prompt supplements', () => {
     expect(h.saveSettings({ canvas: 'team', router: 'session-r', prompts: { communication: '讲中文', delivery: '交付即 PR 链接' } }, yes)).toMatchObject({ ok: true })
     expect((h.state() as { settings: { prompts?: Record<string, string> } }).settings.prompts).toEqual({ communication: '讲中文', delivery: '交付即 PR 链接' })
     expect(h.saveSettings({ prompts: { communication: 'x'.repeat(4001) } }, yes).ok).toBe(false)
-    // A partial write keeps the other saved text; a non-string is refused, not stringified (#567 review).
+    // First write of one prompt alone is fine (nothing saved yet is not a refusal); '' clears one, null clears all (#567).
+    expect(h.saveSettings({ prompts: { communication: '只用中文' } }, yes)).toMatchObject({ ok: true })
+    expect((h.state() as { settings: { prompts?: Record<string, string> } }).settings.prompts).toEqual({ communication: '只用中文', delivery: '交付即 PR 链接' })
+    expect(h.saveSettings({ prompts: { communication: '' } }, yes)).toMatchObject({ ok: true })
+    expect((h.state() as { settings: { prompts?: Record<string, string> } }).settings.prompts).toEqual({ delivery: '交付即 PR 链接' })
     expect(h.saveSettings({ prompts: { communication: '英文' } }, yes)).toMatchObject({ ok: true })
     expect((h.state() as { settings: { prompts?: Record<string, string> } }).settings.prompts).toEqual({ communication: '英文', delivery: '交付即 PR 链接' })
     expect(h.saveSettings({ prompts: { delivery: 42 as unknown as string } }, yes).ok).toBe(false)

@@ -658,8 +658,10 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       const communicationChanged = (nextCommunication.trim() === '' ? undefined : nextCommunication) !== saved.communication
       const deliveryChanged = (nextDelivery.trim() === '' ? undefined : nextDelivery) !== saved.delivery
       if (communicationChanged || deliveryChanged) {
-        const prompts: Json = { ...(nextCommunication.trim() !== '' && communicationChanged ? { communication: nextCommunication } : {}), ...(nextDelivery.trim() !== '' && deliveryChanged ? { delivery: nextDelivery } : {}) }
-        Object.assign(patch, { prompts: Object.keys(prompts).length === 0 ? null : prompts })
+        // Clearing one box sends '' for it explicitly (host: '' clears that one; both-empty '' would too, but '' is only
+        // sent for what actually changed) - prompts: null would clear both (#567 second review).
+        const prompts: Json = { ...(communicationChanged ? { communication: nextCommunication } : {}), ...(deliveryChanged ? { delivery: nextDelivery } : {}) }
+        Object.assign(patch, { prompts })
       }
       void send({ action: 'settings', settings: patch }, () => { settingsDirty = false }, '设置已保存')
     })

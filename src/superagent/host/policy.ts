@@ -212,17 +212,22 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
     if (r.prompts === null || r.prompts === '') prompts = undefined
     else {
       const raw = (r.prompts ?? {}) as Record<string, unknown>
-      // A key the write does not name keeps what is saved; a non-string is refused, not silently stringified (#567 review).
+      // A named key must be text; an empty string clears that one (#567 second review). A key the write does not name
+      // keeps what is saved, or counts as absent when nothing is saved yet - never a refusal.
       const read = (key: 'communication' | 'delivery', currentText: string | undefined): string | undefined | typeof BAD => {
         if (!(key in raw)) return currentText
         if (typeof raw[key] !== 'string') return BAD
         return raw[key] as string
       }
+      const named = (key: 'communication' | 'delivery'): boolean => key in raw
       const communication = read('communication', current?.prompts?.communication), delivery = read('delivery', current?.prompts?.delivery)
-      if (typeof communication !== 'string' || typeof delivery !== 'string') return { ok: false, error: 'prompts.communication and prompts.delivery are text' }
-      if (communication.length > PROMPT_MAX) return { ok: false, error: `prompts.communication is at most ${String(PROMPT_MAX)} characters` }
-      if (delivery.length > PROMPT_MAX) return { ok: false, error: `prompts.delivery is at most ${String(PROMPT_MAX)} characters` }
-      prompts = communication.trim() === '' && delivery.trim() === '' ? undefined : { ...(communication.trim() !== '' ? { communication } : {}), ...(delivery.trim() !== '' ? { delivery } : {}) }
+      if (communication === BAD || delivery === BAD) return { ok: false, error: 'prompts.communication and prompts.delivery are text' }
+      const max = (text: string | undefined, key: 'communication' | 'delivery'): string | undefined => text !== undefined && text.length > PROMPT_MAX ? `prompts.${key} is at most ${String(PROMPT_MAX)} characters` : undefined
+      const tooLong = max(communication, 'communication') ?? max(delivery, 'delivery')
+      if (tooLong !== undefined) return { ok: false, error: tooLong }
+      const kept = (text: string | undefined, wasNamed: boolean): string | undefined => text === undefined ? undefined : wasNamed && text === '' ? undefined : text
+      const nextCommunication = kept(communication, named('communication')), nextDelivery = kept(delivery, named('delivery'))
+      prompts = nextCommunication === undefined && nextDelivery === undefined ? undefined : { ...(nextCommunication !== undefined ? { communication: nextCommunication } : {}), ...(nextDelivery !== undefined ? { delivery: nextDelivery } : {}) }
     }
   }
   if (typeof paused !== 'boolean') return { ok: false, error: 'paused must be true or false' }
