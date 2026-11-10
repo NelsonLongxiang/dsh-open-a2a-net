@@ -58,7 +58,7 @@ import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedB
 import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
 import { SuperagentHost } from './superagent/host/index.ts'
 import { registerSuperagentTools } from './superagent/host/tools.ts'
-import { RoleTools, type RoleAgent } from './superagent/host/role-tools.ts'
+import { RoleTools, scopeKeyOf, type RoleAgent } from './superagent/host/role-tools.ts'
 import { ReconciliationReminders, type ReminderAgent } from './reconciliation-reminders.ts'
 import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
@@ -870,6 +870,8 @@ export function apply(ctx: Context, config: Config): void {
   // is a local fact: the entry dispatches `/a2a/direct` routes and rides
   // the announced card's unsigned sessionTeams listing.
   const sessionNodes = new Map<string, Agent>()
+  /** Late-bound handle to the teams registry: mountSessionNode runs before the registry's const initializes. */
+  let teamsHandle: { ofSession(sessionId: string): { applyModelFor(session: string): void } | undefined } | undefined
   // Live top-level agents: the join surface's candidates and the cold-row
   // complement (apply scope — the direct-route wake below reads it too).
   const liveRoots = new Map<string, Agent>()
@@ -1473,6 +1475,10 @@ export function apply(ctx: Context, config: Config): void {
    */
   function mountSessionNode(agent: Agent): void {
     sessionNodes.set(String(agent.id), agent)
+    // A team session that just loaded catches up the model the team set for it (design M11: after the host wakes its
+    // sessions) - the start-time pass may have run before this session existed (review of #566 third round). Through the
+    // late-bound handle: this function runs before the teams registry's const initializes (a TDZ crash, review four).
+    teamsHandle?.ofSession(String(agent.id))?.applyModelFor(String(agent.id))
   }
 
   /** Whether the boot prewarm has finished waking joined sessions: until then a session not yet loaded is not a problem. */
@@ -2096,8 +2102,24 @@ export function apply(ctx: Context, config: Config): void {
     },
     sessionName: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : `${nodeMetadataOf(agent).name} (${id.replace(/^session-/, '').slice(0, 8)})` },
     sessionLoaded: id => sessionNodes.has(id),
+    // The team's model choices (owner 2026-11-10): in-process sessionController.selectModel, not HTTP - the host's
+    // /api/session/* answers 401 without a browser cookie, so the loopback call could never work (review of #566).
+    // A session not loaded yet is skipped; the next start or pool change applies it.
+    selectModel: async (sessionId, pick) => {
+      if (!sessionNodes.has(sessionId)) throw new Error('the session is not loaded on this host yet')
+      const controller = (ctx as unknown as { get?(name: string): { selectModel?(request: unknown): Promise<unknown> } | undefined }).get?.('sessionController')
+      if (controller?.selectModel === undefined) throw new Error('DSH offers no sessionController here')
+      // DSH answers with the selection it installed for the session's next request: that is the read-back.
+      const done = await controller.selectModel({ sessionId, ...pick }) as { selected?: { provider?: string; model?: string } } | undefined
+      if (done?.selected?.provider !== pick.provider || done.selected.model !== pick.model) throw new Error(`DSH installed ${String(done?.selected?.provider)}/${String(done?.selected?.model)} instead`)
+      return true
+    },
     bootSettled: () => bootPrewarm.settled(),
     workspaceOf: id => { const cwd = (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd; return typeof cwd === 'string' ? cwd : undefined },
+    hasTool: (id, name) => {
+      const agent = ctx.get('agents')?.get(SessionId(id)) as RoleAgent | undefined
+      return agent?.ctx?.tools?.get(name, scopeKeyOf(agent.ctx)) !== undefined
+    },
     // Decision cards C8: a proposer's files go on the file channel, granted to its team's canvas, as a2a_file_send stages them.
     stageFiles: (id, paths, canvas) => {
       const from = originOf(ownCardUrl)
@@ -2130,6 +2152,7 @@ export function apply(ctx: Context, config: Config): void {
     },
     teamSend: args => teamCanvasSend(args),
   }) : undefined
+  teamsHandle = superagentTeams
   const superagentHost: SuperagentHost | undefined = superagentTeams?.primary
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
   const superagentRoleTools = new RoleTools({
@@ -3179,8 +3202,12 @@ export function apply(ctx: Context, config: Config): void {
       handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
         const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
         if (req.method === 'GET') {
-          const asked = superagentTeams!.get(new URL(req.url ?? '/', 'http://x').searchParams.get('teamId') ?? undefined)
+          const params = new URL(req.url ?? '/', 'http://x').searchParams
+          const asked = superagentTeams!.get(params.get('teamId') ?? undefined)
           if (asked === undefined) { send(404, { ok: false, error: 'no such team on this instance' }); return }
+          // The team page's 搜索: this team's records only, like the state it reads.
+          const search = params.get('search')
+          if (search !== null) { send(200, asked.search(search)); return }
           send(200, asked.state())
           return
         }
@@ -3190,13 +3217,26 @@ export function apply(ctx: Context, config: Config): void {
           if (sa === undefined) { send(404, { ok: false, error: 'no such team on this instance' }); return }
           try {
             if (fields.action === 'settings') {
-              const save = (): void => { send(200, sa.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf)) }
+              const save = (): void => { send(200, sa.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf, 'owner')) }
               // A shell on this machine passes the control route; a rule change needs what only the owner's browser holds (design D10).
               if (!touchesRules(fields.settings)) { save(); return }
               void guiOwnerProven(superagentHomeUrl, req.headers.cookie).then(proven => {
                 if (proven) { save(); return }
                 send(403, { ok: false, code: 'owner-proof', error: '修改规则需要在已登录的 DSH 界面里操作，这个请求没有登录凭据。也可以直接在对话里让总工或成员修改。' })
               }, (error: unknown) => { send(500, { ok: false, error: String(error) }) })
+              return
+            } else if (fields.action === 'sync-github-allowed') {
+              // Design github-issues G6, G7: add the repositories' collaborators with push access to allowed.github; owner only.
+              void guiOwnerProven(superagentHomeUrl, req.headers.cookie).then(async (proven) => {
+                if (!proven) { send(403, { ok: false, code: 'owner-proof', error: '同步 GitHub 名单需要在已登录的 DSH 界面里操作。' }); return }
+                const found = await sa.githubCollaborators()
+                if (!found.ok) { send(200, found); return }
+                const before = sa.settings.allowed.github ?? []
+                const added = found.logins.filter(login => !before.some(a => a.toLowerCase() === login.toLowerCase()))
+                if (added.length === 0) { send(200, { ok: true, added: [], allowed: before }); return }
+                const saved = sa.saveSettings({ allowed: { github: [...before, ...added] } }, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf, 'owner')
+                send(200, saved.ok ? { ok: true, added, allowed: saved.settings.allowed.github } : saved)
+              }).catch((error: unknown) => { send(500, { ok: false, error: String(error) }) })
               return
             } else if (fields.action === 'request') {
               send(200, sa.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined, fields.via === 'cli' ? 'cli' : undefined))
@@ -3354,6 +3394,18 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   if (superagentTeams !== undefined) whenWebServerSettled((webServer) => {
+    // The models a team's roles may run (owner 2026-11-10): DSH's own catalog, proxied; the page falls back to free text.
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/__dsh_a2a/superagent/models',
+      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+        const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
+        // In-process modelCatalog (review of #566): the HTTP face answers 401 without a browser cookie.
+        const controller = (ctx as unknown as { get?(name: string): { modelCatalog?(request: unknown): Promise<unknown> } | undefined }).get?.('sessionController')
+        if (controller?.modelCatalog === undefined) { send(200, { ok: false, code: 'no-service' }); return }
+        void controller.modelCatalog({}).then(catalog => { send(200, catalog as Record<string, unknown>) }, (error: unknown) => { send(200, { ok: false, code: 'catalog', error: String(error) }) })
+      }),
+    }), 'a2a: superagent models face')
     // Design M3/M5: the instance's teams, and adding one.
     ctx.effect(() => webServer.register({
       kind: 'exact',

@@ -21,13 +21,16 @@ import { A2aSource } from './a2a-source.ts'
 import { MemberExecutor, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
 import { ReviewRequests } from './review-requests.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
+import { SettingsHistory } from './settings-history.ts'
+import { HealthReminders, HEALTH_TICK_MS, type HealthProblem } from './health-reminders.ts'
 import { DECISION_FILES_MAX, DecisionBook, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { parseFileRef } from '../../blob-store.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
+import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, type Role } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
-import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
+import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 
 export interface SuperagentHostDeps {
   /** The a2a home directory; state lives under `<home>/superagent/`. */
@@ -40,10 +43,14 @@ export interface SuperagentHostDeps {
   readonly workspaceOf?: (sessionId: string) => string | undefined
   /** Runs a prepare command; tests replace it. */
   readonly runPrepare?: PrepareRunner
+  /** Selects a session's model through DSH's session/selectModel (owner 2026-11-10, 对照上游); failures are logged, never thrown. */
+  readonly selectModel?: (sessionId: string, pick: { provider: string; model: string; reasoningEffort?: string }) => Promise<boolean>
   /**
    * Stage files from a local session's workspace on the file channel, granted to the team's canvas (decision cards C8).
    * Absent, a card takes no files.
    */
+  /** Whether a local session can call a tool (its preset mounts it): the ygl-trees steps go only to a member that has them. */
+  readonly hasTool?: (sessionId: string, name: string) => boolean
   readonly stageFiles?: (sessionId: string, paths: readonly string[], canvas: string) => { ok: true; files: DecisionFile[] } | { ok: false; code: string; error: string }
   /** Where this team's state lives instead, when it is not the instance's primary team (design M2). */
   readonly stateDir?: string
@@ -226,6 +233,16 @@ export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings
   return lines.join('\n')
 }
 
+/** The ygl-trees write tool a member's preset mounts (role-tools YGL_WORK_TOOLS). */
+export const YGL_WRITE = 'mcp__ygl__write'
+/** The ygl-trees steps on an assignment card (docs/design/superagent-ygl-memory.md). */
+export const YGL_CARD_LINES: readonly string[] = [
+  'team memory (ygl-trees), as part of this ticket:',
+  '- first: mcp__ygl__read domain agent action brief, and domain kb action search on this ticket\'s subject; build on what earlier work found',
+  '- as you go: with mcp__ygl__write, record each source you rely on and the exact lines you quote as evidence, and each judgement as a claim linked to them',
+  '- before ready: kb add what the next session should reuse, and pass the ids you wrote in ygl on a2a_ticket_report',
+]
+
 export class SuperagentHost {
   readonly store: JsonRepositories
   readonly engine: Engine
@@ -233,14 +250,23 @@ export class SuperagentHost {
   private readonly settingsPath: string
   /** Candidates waiting to reach the router, by evalId; delivered ones stay until the engine releases them. */
   private readonly candidates = new Map<string, { candidate: Candidate; delivered: boolean }>()
+  /** Tickets whose member was already reminded once to record in ygl-trees before ready. */
+  private readonly yglReminded = new Set<string>()
   private readonly prs: PrFollower
+  /** GitHub issues as a source of requests (design github-issues). */
+  private readonly issues: IssueSource
   private readonly reviews: ReviewRequests
   /** Proposals to change a rule set, each set's revision and last change (design D8–D10b). */
   readonly ruleChanges: RuleChanges
   private disposeTimer: (() => void) | undefined
+  private healthTimer: (() => void) | undefined
   /** The A2A executor (PR-C1): the owner's fixed member pool, one worker slot each. */
   readonly executor: MemberExecutor
   private readonly decisions: DecisionBook
+  /** The team's settings saves, for the team page's 设置 (each team keeps its own, with its state). */
+  private readonly settingsHistory: SettingsHistory
+  /** The team's health reminders: one card per problem, taken back when it goes away (reliability R7). */
+  private readonly healthReminders: HealthReminders
   /** The A2A Source (PR-B2b): the team's A2A address and its mailbox loop. */
   readonly a2a: A2aSource
   /** Outbox messages being sent right now, so a pass never sends one twice at once. */
@@ -303,8 +329,20 @@ export class SuperagentHost {
       allowed: () => this.settingsValue.allowed.github, paused: () => this.settingsValue.paused, logger: d.logger,
       onOpen: (thread, head, url, ticketId) => this.reviews.opened(thread, head, url, ticketId),
     })
+    this.issues = new IssueSource({
+      path: join(dir, 'github-issues.json'), engine: () => this.engine, gh: d.gh ?? defaultGh, logger: d.logger,
+      settings: () => ({ on: this.settingsValue.sources.github === true, intake: this.settingsValue.github }),
+      allowed: () => this.settingsValue.allowed.github ?? [], paused: () => this.settingsValue.paused,
+    })
     this.ruleChanges = new RuleChanges(join(dir, 'rule-changes.json'))
+    this.settingsHistory = new SettingsHistory(join(dir, 'settings-history.json'))
     this.decisions = new DecisionBook(join(dir, 'decisions.json'), ticketId => { const ticket = this.store.tickets.get(ticketId); return ticket !== undefined && ticket.ended === undefined })
+    this.healthReminders = new HealthReminders(
+      (question, key, at) => { const out = this.decisions.propose({ source: 'health', by: 'health', question, reason: key, at, spec: { level: 'P2', options: ['去处理', '先忽略 24 小时'], recommended: '去处理' } }); return out.ok ? out.id : undefined },
+      cardId => this.decisions.withdraw(cardId),
+      () => this.decisions.open().filter(card => card.source === 'health').map(card => ({ id: card.id, ...(card.reason !== undefined ? { reason: card.reason } : {}) })),
+      () => this.now(),
+    )
     this.reviews = new ReviewRequests({
       path: join(dir, 'reviews.json'), reviewer: () => this.settingsValue.reviewer, logger: d.logger,
       ask: (address, text) => this.a2a.askReview(address, text),
@@ -349,12 +387,19 @@ export class SuperagentHost {
       if (latest !== undefined && latest.state === 'pending' && this.executor.list().every(b => b.assignmentId !== latest.id)) this.executor.start(ticket, latest)
     }
     this.disposeTimer = this.d.interval(() => this.pass(), PASS_MS)
+    // Reliability R7: look at the team's health every 15 minutes; a new problem raises one card (the boot grace period
+    // keeps health() quiet, so nothing is raised from it either).
+    this.healthTimer = this.d.interval(() => { this.healthReminders.tick(this.health() as readonly HealthProblem[], Date.parse(this.now())) }, HEALTH_TICK_MS)
+    // Defer: start() may run while the plugin's apply() still executes, when the canvas lookups it touches are not
+    // initialized yet (a TDZ crash took the plugin down on hosts with models set - review of #566). A microtask runs
+    // after apply() finishes; the catch inside applyModels is the second fence.
+    queueMicrotask(() => { this.applyModels() })
     this.started = true
     this.syncA2a()
     this.pass()
   }
 
-  stop(): Promise<void> { this.disposeTimer?.(); this.disposeTimer = undefined; this.started = false; return this.a2a.stop() }
+  stop(): Promise<void> { this.disposeTimer?.(); this.disposeTimer = undefined; this.healthTimer?.(); this.healthTimer = undefined; this.started = false; return this.a2a.stop() }
 
   /** Run the A2A Source's mailbox loop exactly while its Source is on. */
   private syncA2a(): void {
@@ -582,11 +627,23 @@ export class SuperagentHost {
     if (profile?.role !== undefined) lines.push(`your role: ${profile.role}`)
     for (const rule of (profile?.rules ?? []).filter(r => r.enabled)) lines.push(`your rule ${rule.name}: ${clip(rule.text, 600)}`)
     if (profile !== undefined) lines.push('If this ticket does not fit your role and rules, report blocked and say why; the router will choose again.')
+    // The team's memory, in the card the member acts on (owner 2026-11-10: a persona line alone was not followed).
+    if (this.d.hasTool?.(member, YGL_WRITE) === true) lines.push(...YGL_CARD_LINES)
     for (const name of ticket.mandate.basis.rules ?? []) {
       const rule = this.settingsValue.rules.find(r => r.name === name)
       if (rule !== undefined) lines.push(`accepted on team rule ${rule.name}: ${clip(rule.text, 600)}`)
     }
+    lines.push(...this.promptCardLines('communication'))
+    lines.push(...this.promptCardLines('delivery'))
     return lines
+  }
+
+  /** The owner's prompt supplements as card lines (owner 2026-11-10, 对照上游): presets stand; on a clash these lose. */
+  private promptCardLines(which: 'communication' | 'delivery'): string[] {
+    const text = this.settingsValue.prompts?.[which]
+    if (text === undefined || text.trim() === '') return []
+    const head = which === 'communication' ? 'the owner\'s words on how this team talks (they add to the preset; where they clash, the preset stands)' : 'the owner\'s words on what delivery looks like (they add to the preset; where they clash, the preset stands)'
+    return [head + ':', clip(text, PROMPT_MAX)]
   }
 
   /** Give a ticket to another member: one still waiting for its first, or one whose member reported it cannot go on (design D6, D7a). */
@@ -689,6 +746,76 @@ export class SuperagentHost {
     return this.decisions.propose({ source, by, question, spec, at: this.now(), ...(reason !== undefined && reason.trim() !== '' ? { reason: reason.trim() } : {}), ...(files !== undefined ? { files } : {}) })
   }
 
+  /**
+   * A ready report from a member that has ygl-trees but names nothing it wrote there is sent back once (design Y2): the
+   * second ready goes through, so a ticket with nothing worth keeping is never held.
+   * @returns the refusal, or undefined to take the report.
+   */
+  yglReadyRefusal(member: string, ticketId: string, state: string, ids: readonly string[]): { ok: false; code: string; error: string } | undefined {
+    if (state !== 'ready' || ids.length > 0 || this.d.hasTool?.(member, YGL_WRITE) !== true || this.yglReminded.has(ticketId)) return undefined
+    this.yglReminded.add(ticketId)
+    return { ok: false, code: 'ygl-record', error: 'Before ready, record what this ticket found in ygl-trees: evidence and claims with mcp__ygl__write, and kb add what the next session should reuse. Then report ready again with the ids in ygl. If nothing here is worth keeping, report ready again and say why in summary; this reminder comes only once.' }
+  }
+
+  /**
+   * The team page's 搜索 (upstream's search): a person looks for a request, a thread or a ticket by words, an id, a link
+   * or a #number. This team's records only (the page names the team it is showing).
+   * @param query - what the person typed, already trimmed.
+   * @returns the matching items, newest activity first, at most 30.
+   */
+  search(query: string): Record<string, unknown> {
+    const q = query.trim()
+    if (q === '') return { ok: true, results: [] }
+    if (q.length > 200) return { ok: false, code: 'query', error: 'the search text is at most 200 characters' }
+    const needle = q.toLowerCase()
+    // #tail: a ticket id's short tail (the ids are hex), as a person reads them off a card; either case.
+    const hash = /^#([0-9a-fA-F]{1,8})$/.exec(q)?.[1]?.toLowerCase()
+    const has = (...texts: ReadonlyArray<string | undefined>): boolean => texts.some(text => text !== undefined && text.toLowerCase().includes(needle))
+    const results: Array<Record<string, unknown>> = []
+    const push = (kind: 'request' | 'thread' | 'ticket', id: string, title: string, at: string | undefined, extra: Record<string, unknown>): void => {
+      if (results.length >= 30 || results.some(row => row.kind === kind && row.id === id)) return
+      results.push({ kind, id, title, ...(at !== undefined ? { at } : {}), ...extra })
+    }
+    for (const ticket of this.store.tickets.list()) {
+      const thread = ticket.channels[0]?.thread
+      const numbered = hash !== undefined && ticket.id.endsWith(hash)
+      if (!numbered && !has(ticket.id, ticket.title, ticket.mandate?.scope, ticket.attention?.question, thread)) continue
+      push('ticket', ticket.id, ticket.title, ticket.updatedAt, { stage: ticket.ended !== undefined ? 'ended' : ticketStage(ticket).stage, thread })
+    }
+    for (const thread of this.store.threads.list()) {
+      const texts = [...new Set([...thread.pending, ...(thread.evaluating?.triggerIds ?? []), ...this.store.decisions.byThread(thread.key).flatMap(d => d.triggerIds)])]
+        .map(id => this.store.triggers.get(id)).filter((t): t is Trigger => t !== undefined)
+      const hit = texts.find(t => has(t.id, t.text))
+      if (hit === undefined && !has(thread.key, thread.ref.id)) continue
+      const text = hit?.text ?? this.store.triggers.get(thread.pending[0] ?? '')?.text ?? ''
+      push('request', thread.ref.id, clip(text, 120), thread.lastAt ?? thread.createdAt, { key: thread.key, ticket: this.store.tickets.list().find(t => t.channels.some(c => c.thread === thread.ref.id))?.id })
+    }
+    // A trigger id the person pasted: name the thread it belongs to (the trigger list itself is not enumerable).
+    const byTrigger = /^wb-[0-9a-f-]{36}$/.test(q) || /^\d+$/.test(q) ? q : undefined
+    if (byTrigger !== undefined) {
+      for (const thread of this.store.threads.list()) {
+        const ids = [...new Set([...thread.pending, ...(thread.evaluating?.triggerIds ?? []), ...this.store.decisions.byThread(thread.key).flatMap(d => d.triggerIds)])]
+        if (ids.includes(byTrigger) && !results.some(row => row.id === thread.ref.id)) {
+          const text = this.store.triggers.get(byTrigger)?.text ?? ''
+          push('request', thread.ref.id, clip(text, 120), thread.lastAt ?? thread.createdAt, { key: thread.key, ticket: this.store.tickets.list().find(t => t.channels.some(c => c.thread === thread.ref.id))?.id })
+        }
+      }
+    }
+    results.sort((a, b) => String(b.at ?? '').localeCompare(String(a.at ?? '')))
+    return { ok: true, results: results.slice(0, 30) }
+  }
+
+  /**
+   * The logins with push access to the team's GitHub repositories, for the owner to add to allowed.github (design
+   * github-issues G6). The caller saves them, so the write goes through settings like any other.
+   * @returns the logins to add, or why not.
+   */
+  async githubCollaborators(): Promise<{ ok: true; logins: string[] } | { ok: false; code: string; error: string }> {
+    const repos = this.settingsValue.github?.repos ?? []
+    if (repos.length === 0) return { ok: false, code: 'no-repos', error: 'list the team\'s GitHub repositories first' }
+    try { return { ok: true, logins: await this.issues.collaborators(repos) } } catch (error) { return { ok: false, code: 'github', error: String(error).slice(0, 300) } }
+  }
+
   /** A file on one of the cards, for the owner to download (C8). */
   decisionFile(cardId: string, sha256: string): DecisionFile | undefined { return this.decisions.fileOf(cardId, sha256) }
 
@@ -739,6 +866,12 @@ export class SuperagentHost {
     const withFiles = attached.length > 0 ? { files: attached } : {}
     const at = this.now()
     const { title: _title, ...stored } = card
+    // A health reminder's decision is a dismissal: it opens no ticket and answers no question (reliability R7).
+    if (card.source === 'health') {
+      this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
+      this.healthReminders.decided(card.id, chosen, Date.parse(at))
+      return { ok: true }
+    }
     if (card.ticketId !== undefined) {
       const out = this.answer(card.ticketId, answer)
       if (!out.ok) return out
@@ -800,6 +933,43 @@ export class SuperagentHost {
     return undefined
   }
 
+  /** One session's model pick, by role. */
+  private modelPickFor(session: string): { provider: string; model: string; reasoningEffort?: string } | undefined {
+    const { models } = this.settingsValue
+    if (models === undefined) return undefined
+    if (session === this.settingsValue.router) return models.router
+    if (this.settings.members.includes(session)) return models.member
+    return undefined
+  }
+
+  /** The last model selection per session, for the team page (review of #566). */
+  private readonly modelResults = new Map<string, { model: string; at: string; ok: boolean; error?: string }>()
+
+  /** Put one local team session's model choice through (owner 2026-11-10): what a just-loaded session catches up with. */
+  applyModelFor(session: string): void {
+    try {
+      const pick = this.modelPickFor(session)
+      if (pick === undefined) return
+      const select = this.d.selectModel
+      if (select === undefined) return
+      // The outcome is kept for the team page (review of #566: the host log does not reach the operator, so a silent miss looked like success).
+      const at = this.now(), model = `${pick.provider}/${pick.model}${pick.reasoningEffort !== undefined ? ` (${pick.reasoningEffort})` : ''}`
+      void select(session, pick).then(
+        ok => { this.modelResults.set(session, { model, at, ok: ok === true, ...(ok === true ? {} : { error: 'session not loaded, or the model service refused it' }) }); if (ok !== true) this.d.logger.warn('superagent: the team model was not selected for %s', session) },
+        error => { this.modelResults.set(session, { model, at, ok: false, error: String(error).slice(0, 300) }); this.d.logger.warn('superagent: the team model was not selected for %s: %s', session, String(error)) })
+    } catch (error) { this.d.logger.warn('superagent: applying the team model failed: %s', String(error)) }
+  }
+
+  /** Put the team's model choices on its local sessions (owner 2026-11-10): unset leaves a session alone; a failure is logged, never blocks. Never throws: start() may call this while the plugin's apply() still runs. */
+  applyModels(): void {
+    try {
+      if (this.settingsValue.models === undefined) return
+      const router = this.settingsValue.router
+      if (router !== undefined) this.applyModelFor(router)
+      for (const member of this.settings.members) this.applyModelFor(member)
+    } catch (error) { this.d.logger.warn('superagent: applying the team models failed: %s', String(error)) }
+  }
+
   /**
    * Design v5: the bound canvas changed (a member added, removed, suspended, or the canvas gone). The pool is read from
    * the canvas, so a new member is simply free; a member that left while it ran a ticket loses that Assignment — the
@@ -835,6 +1005,7 @@ export class SuperagentHost {
       }
     }
     try { this.d.onRolesChanged?.() } catch (error) { this.d.logger.warn('superagent: role change not applied: %s', String(error)) }
+    this.applyModels()
     this.executor.launch()
     this.pass()
   }
@@ -918,10 +1089,12 @@ export class SuperagentHost {
   /** Send pending a2a Channel messages; a thrown send stays pending for the next pass (a2a-watch gives up after 24h). */
   private flushOutbox(): void {
     for (const row of this.store.messages.list()) {
-      if (row.status !== 'pending' || row.message.channel.source !== 'a2a' || this.sending.has(row.message.id)) continue
-      if (this.settingsValue.paused || !this.a2a.allowed(row.message as never)) continue
+      if (row.status !== 'pending' || (row.message.channel.source !== 'a2a' && row.message.channel.source !== GITHUB_SOURCE) || this.sending.has(row.message.id)) continue
+      const github = row.message.channel.source === GITHUB_SOURCE
+      // Design github-issues G5: a reply on an issue's thread goes back as a comment while the source is on.
+      if (this.settingsValue.paused || (github ? this.settingsValue.sources.github !== true : !this.a2a.allowed(row.message as never))) continue
       this.sending.add(row.message.id)
-      void this.a2a.send(row.message as never).then(result => {
+      void (github ? this.issues.send(row.message.channel.address, row.message.text) : this.a2a.send(row.message as never)).then(result => {
         this.store.atomic(() => {
           const now = this.store.messages.get(row.message.id)
           if (now === undefined || now.status !== 'pending') return
@@ -959,6 +1132,7 @@ export class SuperagentHost {
     if (this.settingsValue.paused) return
     this.executor.tick()
     this.prs.tick()
+    this.issues.tick()
     this.acknowledgeRequests()
     this.receiptEndedRequests()
     this.receiptOtherMessages()
@@ -1120,7 +1294,7 @@ export class SuperagentHost {
       if (entry.delivered) continue
       const open = this.store.tickets.list().filter(t => !t.ended)
       const requeued = new Set(entry.candidate.triggers.filter(t => this.store.triggers.disposition(t.id)?.requeued === true).map(t => t.id))
-      if (!this.d.deliverToSession(router, candidateCard(entry.candidate, this.settingsValue, open, requeued, this.teamCardLines()))) return
+      if (!this.d.deliverToSession(router, candidateCard(entry.candidate, this.settingsValue, open, requeued, [...this.teamCardLines(), ...this.promptCardLines('communication')]))) return
       entry.delivered = true
       try { this.engine.candidateDelivered(evalId) } catch (error) { this.d.logger.warn('superagent: candidate %s delivered but not recorded: %s', evalId, String(error)) }
     }
@@ -1185,7 +1359,7 @@ export class SuperagentHost {
   get routerSession(): string | undefined { return this.settingsValue.router }
 
   /** Owner control: replace the team settings; a Policy version change is reported to the engine as upstream does. */
-  saveSettings(raw: unknown, sessionValid: (id: string) => boolean, presetOf: (id: string) => string | undefined = () => undefined): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
+  saveSettings(raw: unknown, sessionValid: (id: string) => boolean, presetOf: (id: string) => string | undefined = () => undefined, by = 'owner'): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
     // Repositories are checked against the pool this write leads to: the canvas and router it names, or the current ones.
     const fields = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
     const pick = <K extends 'canvas' | 'router'>(key: K): string | undefined => key in fields ? (typeof fields[key] === 'string' && fields[key] !== '' ? fields[key] as string : undefined) : this.settingsValue[key]
@@ -1213,6 +1387,7 @@ export class SuperagentHost {
     const routerChanged = parsed.settings.router !== this.settingsValue.router
     this.writeSettings(parsed.settings)
     this.recordOwnerEdits(previous, parsed.settings)
+    this.settingsHistory.record(this.now(), by, previous as unknown as Record<string, unknown>, this.settings as unknown as Record<string, unknown>)
     this.poolChanged()
     const after = policyVersion(parsed.settings)
     // Open tickets hear what the change means to them (upstream PolicyEffect): their rule, proactive work, their requester.
@@ -1220,6 +1395,7 @@ export class SuperagentHost {
     // A new router receives whatever the old one had not decided yet.
     if (routerChanged) for (const entry of this.candidates.values()) entry.delivered = false
     this.d.logger.info('superagent: team settings saved (policy %s)', after)
+    this.applyModels()
     this.syncA2a()
     this.executor.launch()
     this.pass()
@@ -1306,7 +1482,10 @@ export class SuperagentHost {
       ruleChanges: this.ruleChanges.view(),
       a2a: { enabled: this.settingsValue.sources.a2a, address: this.a2a.address ?? null, health: this.a2a.health },
       refusals: { counts: Object.fromEntries(this.refusalCounts), recent: [...this.refusalRecent] },
+      settingsHistory: this.settingsHistory.list(),
+      modelResults: Object.fromEntries(this.modelResults),
       ...(this.prs.problem !== undefined ? { pullRequestProblem: this.prs.problem } : {}),
+      ...(this.issues.problem !== undefined ? { githubIssuesProblem: this.issues.problem } : {}),
       reviews: this.reviews.list(),
       executor: { canvas: this.settingsValue.canvas ?? null, members: this.settings.members, remoteMembers: this.settings.remoteMembers, bindings: this.executor.list() },
       ...(this.settingsValue.serves !== undefined ? { serves: this.settingsValue.serves } : {}),

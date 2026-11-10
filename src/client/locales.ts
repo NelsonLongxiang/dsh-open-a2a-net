@@ -35,6 +35,7 @@ export type A2aNetKey =
   | 'team.fromRouter'
   | 'team.fromObserver'
   | 'team.fromMember'
+  | 'team.fromHealth'
   | 'team.healthTitle'
   | 'team.healthRouter'
   | 'team.healthMember'
@@ -78,6 +79,7 @@ export const zh: Record<A2aNetKey, string> = {
   'team.fromRouter': '总工提出',
   'team.fromObserver': '观察者提出',
   'team.fromMember': '成员提问',
+  'team.fromHealth': '健康自检',
   'team.healthTitle': '团队有 {count} 个问题',
   'team.healthRouter': '总工会话 {session} 没有加载，需求送不到它，打开这个会话即可',
   'team.healthMember': '成员会话 {session} 没有加载，工单派不给它，打开这个会话即可',
@@ -134,6 +136,7 @@ export const en: Record<A2aNetKey, string> = {
   'team.fromRouter': 'From the router',
   'team.fromObserver': 'From an observer',
   'team.fromMember': 'From a member',
+  'team.fromHealth': 'Health check',
   'team.healthTitle': 'The team has {count} problem(s)',
   'team.healthRouter': 'Router session {session} is not loaded, so requests cannot reach it. Open that session',
   'team.healthMember': 'Member session {session} is not loaded, so tickets cannot reach it. Open that session',

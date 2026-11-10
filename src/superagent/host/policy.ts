@@ -20,10 +20,14 @@ import type { GateResult, Mandate, Policy, PolicyEffect, SourceScope, Thread, Ti
 import { scope as a2aScope } from '../a2a-watch.ts'
 
 /** The Sources this host runs. */
-export const SOURCES = ['workbench', 'a2a'] as const
+export const SOURCES = ['workbench', 'a2a', 'github'] as const
 export type SourceName = typeof SOURCES[number]
 
 export type AcceptMode = 'off' | 'observe' | 'auto'
+
+/** Which repositories' issues reach the team, and which issues count (design github-issues G1, G2). */
+export interface GithubIntake { readonly repos: readonly string[]; readonly intake: 'mention' | 'all' }
+export const GITHUB_REPOS_MAX = 10
 /** A remote member: `ref` is `<zone>/<id8>@<fp8>`, `key` the member host's full public key, `url` its base URL. */
 export interface RemoteMember { readonly ref: string; readonly key: string; readonly url: string }
 /** A kind of proactive work the team may take on without being asked (upstream: Policy rules). */
@@ -76,12 +80,18 @@ export interface TeamSettings {
   readonly profiles: Readonly<Record<string, MemberProfile>>
   /** The command that prepares a ticket's directory before its member starts (design reliability R1–R4). */
   readonly prepare?: { readonly command: string; readonly timeoutMs: number }
+  /** Which model each role's sessions run (owner 2026-11-10, 对照上游): the router's own, and the members' (an observer follows the member's). Unset leaves a session's own choice alone. */
+  readonly models?: { readonly router?: ModelPick; readonly member?: ModelPick }
+  /** The owner's own supplement to the presets (owner 2026-11-10, 对照上游): how the team talks, and what delivery looks like. The presets stand; on a clash these lose. */
+  readonly prompts?: { readonly communication?: string; readonly delivery?: string }
   /** How many tickets may run at once; 0 is no cap beyond one per member (design reliability R5). */
   readonly maxConcurrent: number
   /** How the router chooses among members (design D3): free text the owner agreed. */
   readonly dispatch: string
   /** Sources that listen. The workbench is on by default; the A2A Source is wired in a later PR. */
-  readonly sources: { readonly workbench: boolean; readonly a2a: boolean }
+  readonly sources: { readonly workbench: boolean; readonly a2a: boolean; readonly github?: boolean }
+  /** GitHub issues as a source of requests (design github-issues G1, G2). */
+  readonly github?: GithubIntake
   /** How long the router may take over a candidate before its Eval expires (upstream: re-queued twice, then unavailable). */
   readonly evalTimeoutMs: number
   /** Pause processing (upstream docs/003): Sources still record Triggers; Evals, dispatch and replies wait. */
@@ -92,7 +102,21 @@ export interface TeamSettings {
 
 /** A member's role and what it takes. */
 export interface MemberProfile { readonly role?: string; readonly rules: readonly ProactiveRule[] }
-export const ROLE_MAX = 200, DISPATCH_MAX = 4_000, PREPARE_MAX = 4_000
+/** One model a role's sessions run: what DSH's session/selectModel takes. */
+export interface ModelPick { readonly provider: string; readonly model: string; readonly reasoningEffort?: string }
+export const PROVIDER_MAX = 100, MODEL_MAX = 200, EFFORT_MAX = 20
+export const ROLE_MAX = 200, DISPATCH_MAX = 4_000, PREPARE_MAX = 4_000, PROMPT_MAX = 4_000
+
+/** Read one model pick, or why it is not one. */
+const parseModel = (raw: unknown): ModelPick | string => {
+  if (raw === null || raw === '') return undefined as unknown as ModelPick
+  if (typeof raw !== 'object') return 'a model is { provider, model, reasoningEffort? }'
+  const { provider, model, reasoningEffort } = raw as Record<string, unknown>
+  if (typeof provider !== 'string' || provider === '' || provider.length > PROVIDER_MAX) return `provider is required, at most ${String(PROVIDER_MAX)} characters`
+  if (typeof model !== 'string' || model === '' || model.length > MODEL_MAX) return `model is required, at most ${String(MODEL_MAX)} characters`
+  if (reasoningEffort !== undefined && (typeof reasoningEffort !== 'string' || reasoningEffort.length > EFFORT_MAX)) return 'reasoningEffort is a short word'
+  return { provider, model, ...(reasoningEffort !== undefined ? { reasoningEffort } : {}) }
+}
 
 /** A canvas team name as the canvas store takes it: 1–40 characters, no `/`, not all digits, no surrounding space. */
 export const validCanvasName = (name: unknown): name is string =>
@@ -125,7 +149,7 @@ export const DEFAULT_SETTINGS: TeamSettings = {
   maxConcurrent: 0,
   profiles: {},
   dispatch: '',
-  sources: { workbench: true, a2a: false },
+  sources: { workbench: true, a2a: false, github: false },
   evalTimeoutMs: 10 * 60_000,
   paused: false,
 }
@@ -147,6 +171,8 @@ function parseRules(value: unknown, where: string): readonly ProactiveRule[] | s
 }
 
 /** Validate an owner's settings write; returns the normalized settings or the first problem. */
+const BAD = Symbol('bad prompt')
+
 export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'settings must be an object' }
   const r = raw as Record<string, unknown>
@@ -174,10 +200,24 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const github = 'github' in allowedRaw ? list(allowedRaw.github, 'allowed.github') : current.allowed.github
   if (typeof github === 'string') return { ok: false, error: github }
   const sourcesRaw = (r.sources ?? {}) as Record<string, unknown>
-  const flag = (name: SourceName): boolean | string => !(name in sourcesRaw) ? current.sources[name] : typeof sourcesRaw[name] === 'boolean' ? sourcesRaw[name] as boolean : `sources.${name} must be true or false`
-  const wb = flag('workbench'), a = flag('a2a')
+  const flag = (name: SourceName): boolean | string => !(name in sourcesRaw) ? current.sources[name] ?? false : typeof sourcesRaw[name] === 'boolean' ? sourcesRaw[name] as boolean : `sources.${name} must be true or false`
+  const wb = flag('workbench'), a = flag('a2a'), gh = flag('github')
   if (typeof wb === 'string') return { ok: false, error: wb }
   if (typeof a === 'string') return { ok: false, error: a }
+  if (typeof gh === 'string') return { ok: false, error: gh }
+  // Design github-issues G1, G2: the repositories whose issues reach the team, and which issues count.
+  let githubIntake = current.github
+  if ('github' in r) {
+    if (r.github === null) githubIntake = undefined
+    else {
+      const g = (r.github ?? {}) as Record<string, unknown>
+      const repos = Array.isArray(g.repos) ? [...new Set(g.repos.map(x => String(x).trim()).filter(x => x !== ''))] : undefined
+      if (repos === undefined || repos.length > GITHUB_REPOS_MAX || repos.some(x => !REPO_RE.test(x))) return { ok: false, error: `github.repos must list at most ${String(GITHUB_REPOS_MAX)} repositories as owner/name` }
+      const intake = g.intake === undefined ? 'mention' : g.intake
+      if (intake !== 'mention' && intake !== 'all') return { ok: false, error: 'github.intake must be mention or all' }
+      githubIntake = { repos, intake }
+    }
+  }
   const evalTimeoutMs = 'evalTimeoutMs' in r ? r.evalTimeoutMs : current.evalTimeoutMs
   if (typeof evalTimeoutMs !== 'number' || !Number.isSafeInteger(evalTimeoutMs) || evalTimeoutMs < 30_000 || evalTimeoutMs > 24 * 3_600_000) return { ok: false, error: 'evalTimeoutMs must be 30000–86400000' }
   let reviewer = current.reviewer
@@ -202,6 +242,48 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   }
   const maxConcurrent = 'maxConcurrent' in r ? r.maxConcurrent : current.maxConcurrent ?? 0
   if (typeof maxConcurrent !== 'number' || !Number.isInteger(maxConcurrent) || maxConcurrent < 0 || maxConcurrent > 64) return { ok: false, error: 'maxConcurrent must be an integer 0–64' }
+  // Which model each role's sessions run (owner 2026-11-10): absent leaves a session's own choice alone.
+  let models = current.models
+  if ('models' in r) {
+    if (r.models === null || r.models === '') models = undefined
+    else {
+      const raw = (r.models ?? {}) as Record<string, unknown>
+      // A named key is a pick or '' to clear that one (#566 fifth round, the prompts shape); unnamed keeps what is saved.
+      const read = (key: 'router' | 'member', wasNamed: boolean): ModelPick | string | undefined => {
+        if (!wasNamed) return current.models?.[key]
+        if (raw[key] === '' || raw[key] === null) return undefined
+        return parseModel(raw[key]) as ModelPick | string
+      }
+      const router = read('router', 'router' in raw), member = read('member', 'member' in raw)
+      if (typeof router === 'string') return { ok: false, error: `models.router: ${router}` }
+      if (typeof member === 'string') return { ok: false, error: `models.member: ${member}` }
+      models = router === undefined && member === undefined ? undefined : { ...(router !== undefined ? { router } : {}), ...(member !== undefined ? { member } : {}) }
+    }
+  }
+  // The owner's prompt supplements (owner 2026-11-10): what the team adds to the presets; empty is empty, unset keeps what is.
+  let prompts = current.prompts
+  if ('prompts' in r) {
+    if (r.prompts === null || r.prompts === '') prompts = undefined
+    else {
+      const raw = (r.prompts ?? {}) as Record<string, unknown>
+      // A named key must be text; an empty string clears that one (#567 second review). A key the write does not name
+      // keeps what is saved, or counts as absent when nothing is saved yet - never a refusal.
+      const read = (key: 'communication' | 'delivery', currentText: string | undefined): string | undefined | typeof BAD => {
+        if (!(key in raw)) return currentText
+        if (typeof raw[key] !== 'string') return BAD
+        return raw[key] as string
+      }
+      const named = (key: 'communication' | 'delivery'): boolean => key in raw
+      const communication = read('communication', current?.prompts?.communication), delivery = read('delivery', current?.prompts?.delivery)
+      if (communication === BAD || delivery === BAD) return { ok: false, error: 'prompts.communication and prompts.delivery are text' }
+      const max = (text: string | undefined, key: 'communication' | 'delivery'): string | undefined => text !== undefined && text.length > PROMPT_MAX ? `prompts.${key} is at most ${String(PROMPT_MAX)} characters` : undefined
+      const tooLong = max(communication, 'communication') ?? max(delivery, 'delivery')
+      if (tooLong !== undefined) return { ok: false, error: tooLong }
+      const kept = (text: string | undefined, wasNamed: boolean): string | undefined => text === undefined ? undefined : wasNamed && text === '' ? undefined : text
+      const nextCommunication = kept(communication, named('communication')), nextDelivery = kept(delivery, named('delivery'))
+      prompts = nextCommunication === undefined && nextDelivery === undefined ? undefined : { ...(nextCommunication !== undefined ? { communication: nextCommunication } : {}), ...(nextDelivery !== undefined ? { delivery: nextDelivery } : {}) }
+    }
+  }
   if (typeof paused !== 'boolean') return { ok: false, error: 'paused must be true or false' }
   const botsRaw = (r.bots ?? {}) as Record<string, unknown>
   if (Object.keys(botsRaw).some(name => name !== 'a2a')) return { ok: false, error: 'only the a2a Source has a bot list' }
@@ -251,7 +333,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const observers = current.observers ?? []
   const dispatch = 'dispatch' in r ? r.dispatch : current.dispatch ?? ''
   if (typeof dispatch !== 'string' || dispatch.length > DISPATCH_MAX) return { ok: false, error: `dispatch must be text of at most ${String(DISPATCH_MAX)} characters` }
-  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), sources: { workbench: wb, a2a: a }, evalTimeoutMs, paused } }
+  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), evalTimeoutMs, paused } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/
@@ -389,7 +471,8 @@ export function teamScope(settings: () => TeamSettings): SourceScope {
   return {
     scope: ({ source, meta }) => {
       // GitHub is not a Source of new work: its Triggers exist only for pull requests a ticket already follows.
-      if (source === 'github') return { listened: true, observed: false }
+      // Issues are a source of new work only while the owner has it on (design github-issues G1); pull request follow-ups always.
+      if (source === 'github') return meta?.issue === true && settings().sources.github !== true ? { listened: false, reason: 'sourceOff' } : { listened: true, observed: false }
       if ((source !== 'workbench' && source !== 'a2a') || !settings().sources[source]) return { listened: false, reason: 'sourceOff' }
       // The A2A Source's own trust filter (a2a-watch): a host-verified proof and an operator link, no loop, no receipt.
       return source === 'a2a' ? a2aScope({ meta }) : { listened: true, observed: false }
