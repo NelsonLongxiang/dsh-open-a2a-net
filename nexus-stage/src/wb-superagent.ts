@@ -651,8 +651,16 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       const edited = fields.patch()
       if ('error' in edited) { say(edited.error, 'danger'); return }
       Object.assign(patch, edited.patch)
-      const prompts: Json = { ...(communication.value.trim() !== '' ? { communication: communication.value } : {}), ...(delivery.value.trim() !== '' ? { delivery: delivery.value } : {}) }
-      Object.assign(patch, { prompts: Object.keys(prompts).length === 0 ? null : prompts })
+      // Prompts ride along only when one actually changed (review of #567): untouched saves keep their own owner-proof
+      // lane, and a host with no login saves ordinary settings without a 403.
+      const saved = s.prompts ?? {}
+      const nextCommunication = communication.value, nextDelivery = delivery.value
+      const communicationChanged = (nextCommunication.trim() === '' ? undefined : nextCommunication) !== saved.communication
+      const deliveryChanged = (nextDelivery.trim() === '' ? undefined : nextDelivery) !== saved.delivery
+      if (communicationChanged || deliveryChanged) {
+        const prompts: Json = { ...(nextCommunication.trim() !== '' && communicationChanged ? { communication: nextCommunication } : {}), ...(nextDelivery.trim() !== '' && deliveryChanged ? { delivery: nextDelivery } : {}) }
+        Object.assign(patch, { prompts: Object.keys(prompts).length === 0 ? null : prompts })
+      }
       void send({ action: 'settings', settings: patch }, () => { settingsDirty = false }, '设置已保存')
     })
     const reset = el('button', 'wb-btn', '放弃修改')

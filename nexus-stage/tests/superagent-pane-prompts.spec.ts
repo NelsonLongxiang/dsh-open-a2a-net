@@ -31,11 +31,11 @@ const save = (p: ReturnType<typeof createSuperagentPane>): void => {
 }
 
 describe('the prompt boxes', () => {
-  it('empty boxes save prompts null; text saves as settings.prompts', async () => {
+  it('untouched boxes send no prompts at all; text saves as settings.prompts', async () => {
     const { p, acts } = pane(state())
     save(p)
     await new Promise(r => setTimeout(r, 30))
-    expect(acts[0]).toMatchObject({ action: 'settings', settings: { prompts: null } })
+    expect('prompts' in (acts[0] as { settings: Record<string, unknown> }).settings).toBe(false)
     const boxes = [...p.root.querySelectorAll<HTMLTextAreaElement>('textarea.wb-sa-prompt')]
     expect(boxes.length).toBe(2)
     boxes[0]!.value = '讲中文'
@@ -43,6 +43,13 @@ describe('the prompt boxes', () => {
     save(p)
     await new Promise(r => setTimeout(r, 30))
     expect(acts[1]).toMatchObject({ action: 'settings', settings: { prompts: { communication: '讲中文', delivery: '交付即 PR 链接' } } })
+  })
+  it('clearing a saved prompt sends prompts null (the change is real)', async () => {
+    const { p, acts } = pane(state({ communication: '讲中文' }))
+    p.root.querySelector<HTMLTextAreaElement>('textarea.wb-sa-prompt')!.value = ''
+    save(p)
+    await new Promise(r => setTimeout(r, 30))
+    expect(acts[0]).toMatchObject({ action: 'settings', settings: { prompts: null } })
   })
   it('a saved prompt pre-fills the box for the next read', () => {
     const { p } = pane(state({ communication: '讲中文' }))

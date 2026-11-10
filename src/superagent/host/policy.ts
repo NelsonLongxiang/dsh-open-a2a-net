@@ -149,6 +149,8 @@ function parseRules(value: unknown, where: string): readonly ProactiveRule[] | s
 }
 
 /** Validate an owner's settings write; returns the normalized settings or the first problem. */
+const BAD = Symbol('bad prompt')
+
 export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'settings must be an object' }
   const r = raw as Record<string, unknown>
@@ -210,11 +212,17 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
     if (r.prompts === null || r.prompts === '') prompts = undefined
     else {
       const raw = (r.prompts ?? {}) as Record<string, unknown>
-      const read = (key: 'communication' | 'delivery'): string | undefined => raw[key] === undefined ? undefined : String(raw[key])
-      const communication = read('communication'), delivery = read('delivery')
-      if (communication !== undefined && communication.length > PROMPT_MAX) return { ok: false, error: `prompts.communication is at most ${String(PROMPT_MAX)} characters` }
-      if (delivery !== undefined && delivery.length > PROMPT_MAX) return { ok: false, error: `prompts.delivery is at most ${String(PROMPT_MAX)} characters` }
-      prompts = communication === undefined && delivery === undefined ? undefined : { ...(communication !== undefined ? { communication } : {}), ...(delivery !== undefined ? { delivery } : {}) }
+      // A key the write does not name keeps what is saved; a non-string is refused, not silently stringified (#567 review).
+      const read = (key: 'communication' | 'delivery', currentText: string | undefined): string | undefined | typeof BAD => {
+        if (!(key in raw)) return currentText
+        if (typeof raw[key] !== 'string') return BAD
+        return raw[key] as string
+      }
+      const communication = read('communication', current?.prompts?.communication), delivery = read('delivery', current?.prompts?.delivery)
+      if (typeof communication !== 'string' || typeof delivery !== 'string') return { ok: false, error: 'prompts.communication and prompts.delivery are text' }
+      if (communication.length > PROMPT_MAX) return { ok: false, error: `prompts.communication is at most ${String(PROMPT_MAX)} characters` }
+      if (delivery.length > PROMPT_MAX) return { ok: false, error: `prompts.delivery is at most ${String(PROMPT_MAX)} characters` }
+      prompts = communication.trim() === '' && delivery.trim() === '' ? undefined : { ...(communication.trim() !== '' ? { communication } : {}), ...(delivery.trim() !== '' ? { delivery } : {}) }
     }
   }
   if (typeof paused !== 'boolean') return { ok: false, error: 'paused must be true or false' }
