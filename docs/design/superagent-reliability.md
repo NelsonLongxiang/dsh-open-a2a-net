@@ -22,6 +22,7 @@ Upstream superagent prepares each ticket's directory with a command, caps how ma
 ### The health check
 
 - **R6 Problems are computed on the host.** The host lists the team's problems, among them a router or member session that is not loaded and a ticket with no activity for an hour. The team page and both right-bar views show them, so a problem is seen from the conversation too.
+- **R7 A problem that stays tells the owner (2026-11-10, 对照上游「每小时检查，出问题才告诉你」).** Every 15 minutes the host looks at its health and raises one decision card (P2, 去处理 or 先忽略 24 小时) for a problem that is new; the same problem while it lasts raises nothing more, and a problem that goes away takes its undecided card back. A decision holds its reminder off — a day for 忽略, an hour otherwise. The boot grace period raises nothing (R6 keeps health quiet then, so nothing reaches the cards either). Each team's host keeps its own reminders; no session is started and no A2A route is sent. A health card's decision opens no ticket: both options only dismiss it.
 
 ## Consequences
 

@@ -27,7 +27,7 @@ export interface StoredCard extends DecisionSpec {
   readonly id: string
   readonly question: string
   readonly reason?: string
-  readonly source: 'router' | 'observer' | 'ticket'
+  readonly source: 'router' | 'observer' | 'ticket' | 'health'
   readonly by: string
   readonly ticketId?: string
   readonly at: string
@@ -101,7 +101,7 @@ export class DecisionBook {
   open(): StoredCard[] { return this.cards.filter(card => card.decided === undefined) }
 
   /** A card of the router's or an observer's own. An identical open question returns the existing card. */
-  propose(input: { source: 'router' | 'observer'; by: string; question: string; reason?: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[] }): { ok: true; id: string; reused?: true } | { ok: false; code: string; error: string } {
+  propose(input: { source: 'router' | 'observer' | 'health'; by: string; question: string; reason?: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[] }): { ok: true; id: string; reused?: true } | { ok: false; code: string; error: string } {
     const question = input.question.trim()
     if (question === '' || question.length > QUESTION_MAX) return { ok: false, code: 'question', error: `question is required, at most ${String(QUESTION_MAX)} characters` }
     const mine = this.open().filter(card => card.source === input.source && card.by === input.by)
@@ -120,6 +120,14 @@ export class DecisionBook {
     if (this.get(id) !== undefined) return
     this.cards.push({ id, question: input.question, source: 'ticket', by: input.by, ticketId: input.ticketId, at: input.at, ...input.spec, ...(input.files !== undefined && input.files.length > 0 ? { files: input.files } : {}) })
     this.save()
+  }
+
+  /** Take an undecided card back (reliability R7: a problem that went away recalls its reminder). */
+  withdraw(id: string): void {
+    if (this.cards.some(card => card.id === id && card.decided === undefined)) {
+      this.cards = this.cards.filter(card => card.id !== id)
+      this.save()
+    }
   }
 
   /** Record what was decided; a question that had no card gets one, so it cannot be answered twice. */
