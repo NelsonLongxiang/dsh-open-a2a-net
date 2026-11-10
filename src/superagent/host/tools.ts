@@ -426,6 +426,44 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     },
   }))
 
+  // A member reads its own tickets, an observer its team's tickets and decisions; nobody but the router reads candidates or
+  // acts on tickets through this (owner 2026-11-10: a scheduled turn reads where things stand before it acts).
+  ctx.tools.register(defineTool({
+    name: 'a2a_ticket_read',
+    description: 'Team member or observer only, read-only: where your work stands before you act on it. kind mine: your open tickets; kind ticket: one of them (ticket_id). An observer can also read kind team (the team\'s open and recent tickets) and kind decisions (the router\'s recent decisions). It changes nothing.',
+    parameters: {
+      kind: { type: 'string', required: true, description: 'mine | ticket | team | decisions' },
+      ticket_id: { type: 'string', description: 'For kind ticket.' },
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('a2a_ticket_read', value) },
+    presentCall: args => ({ card: 'generic', title: `a2a_ticket_read ${String(args.kind)}`, kind: 'read', rawInput: args }),
+    execute: async (args: { kind?: string; ticket_id?: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = host(exec)
+      const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
+      if (h === undefined || me === undefined || h.roleOf(me) !== 'member' || !h.settings.members.includes(me)) return { ok: false, code: 'not-member', error: 'a2a_ticket_read serves only the members on this host of a superagent team' }
+      const observer = h.isObserver(me)
+      const summary = (ticketId: string): JsonValue => {
+        const t = h.store.tickets.get(ticketId)
+        if (t === undefined) return null
+        const report = t.assignments.at(-1)?.report
+        return json({ id: t.id, title: t.title, scope: t.mandate?.scope ?? null, stage: t.ended !== undefined ? { stage: 'ended', outcome: t.ended.outcome } : h.ticket(t.id)?.stage ?? null,
+          report: report === undefined ? null : { state: report.state, summary: report.summary, at: report.at }, question: t.attention?.question ?? null, updatedAt: t.updatedAt })
+      }
+      const mine = (): string[] => h.store.tickets.list().filter(t => t.ended === undefined && h.executor.memberOfTicket(t.id)?.member === me).map(t => t.id)
+      if (args.kind === 'mine') return { ok: true, tickets: mine().map(summary) }
+      if (args.kind === 'ticket') {
+        const id = String(args.ticket_id ?? '')
+        if (!observer && !mine().includes(id)) return { ok: false, code: 'not-yours', error: 'a member reads only the tickets it holds' }
+        const t = summary(id)
+        return t === null ? { ok: false, code: 'unknownTicket', error: 'no ticket has that id' } : { ok: true, ticket: t }
+      }
+      if (!observer) return { ok: false, code: 'not-observer', error: 'kind team and kind decisions are for observers; a member reads kind mine or ticket' }
+      if (args.kind === 'team') return { ok: true, tickets: h.store.tickets.list().slice(0, 50).map(t => summary(t.id)) }
+      if (args.kind === 'decisions') return { ok: true, decisions: json(h.recentDecisions()) }
+      return { ok: false, code: 'kind', error: 'kind must be mine, ticket, team or decisions' }
+    },
+  }))
+
   // PR-F (upstream orchestrator_ack / orchestrator_trigger_handback): a member takes up, or hands back, a person's message that
   // reached its ticket, by the trigger id its card shows.
   const takeUpTool = (name: 'a2a_ticket_ack' | 'a2a_ticket_handback', op: 'ack' | 'handback', description: string, textName: 'text' | 'reason', textHelp: string) => defineTool({

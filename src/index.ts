@@ -2084,6 +2084,8 @@ export function apply(ctx: Context, config: Config): void {
         const e = event as { type?: string; time?: number; data?: { id?: unknown; source?: { kind?: unknown; rpcId?: unknown }; content?: ReadonlyArray<{ type?: string; text?: string }> } } | undefined
         if (e?.type !== 'user/message') continue
         const kind = e.data?.source?.kind
+        // A scheduled prompt is the session's own text: it closes the door as a relayed message does (D11).
+        if (kind === 'schedule') return undefined
         if (typeof kind === 'string' && NEUTRAL_SOURCES.has(kind)) continue
         const rpcId = e.data?.source?.rpcId
         if (kind !== 'user' || (typeof rpcId === 'string' && rpcId.startsWith('a2a-')) || typeof e.data?.id !== 'string' || typeof e.time !== 'number') return undefined
@@ -2126,7 +2128,7 @@ export function apply(ctx: Context, config: Config): void {
     // PR-F: an Input counts as read once the member's session takes the message carrying it into its history.
     ctx.on('agent/inbox/claimed', ({ agent }) => { superagentTeams!.ofSession(String(agent.id))?.memberClaimed(String(agent.id)) })
     ctx.tools.guard(exec => {
-      const refusal = superagentRoleTools.guard(exec.name, exec.agent as unknown as RoleAgent | undefined)
+      const refusal = superagentRoleTools.guard(exec.name, exec.agent as unknown as RoleAgent | undefined, exec.arguments)
       if (refusal !== undefined) (exec.agent !== undefined ? superagentTeams!.ofSession(String(exec.agent.id)) ?? superagentHost! : superagentHost!).noteRefusal('superagent-role-tools', { ...(exec.agent !== undefined ? { caller: String(exec.agent.id) } : {}), target: exec.name })
       return refusal
     })
