@@ -53,6 +53,7 @@ describe('ygl-trees in the team presets', () => {
       const text = preset(id)
       expect(text).toContain("name: '@deepseek-ai/dsh-mcp-client'")
       expect(text).toContain('serverName: ygl')
+      expect(text).toContain('transport: stdio')
       expect(text).toContain("args: ['mcp']")
       expect(text).toContain("ygl-trees is the team's memory")
       expect(text).toMatch(/do not install anything/)
