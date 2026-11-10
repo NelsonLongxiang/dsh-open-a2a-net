@@ -34,8 +34,10 @@ network shapes:
 - **one host**: install, join the sessions, give them a shared team;
 - **two hosts that reach each other**: one shared `apiKey`, `announce` plus
   peers seeded both ways, and a canvas team naming both handles;
-- **hosts that cannot reach each other**: host forwarding is not shipped
-  yet (#57), so tunnel or delegate per hop.
+- **hosts that cannot reach each other**: home-host one-hop forwarding
+  shipped in 0.6.34 and defaults on from 0.6.38 (§3 of setup.md), so an
+  online deposited CLI on the right home reaches one linked peer hop —
+  otherwise tunnel or delegate per hop.
 
 The owner does the gestures (install, config, join, allowlist, canvas). The
 agent prepares the exact config and verifies each step with `a2a_whoami`,
@@ -71,8 +73,9 @@ a2a_route { team: "<zone>/<id8 or canvas name>", message, context_id?, async? }
 - An unjoined session has NO network: `a2a_route` and `a2a_teams` refuse it
   (join gate), and discovery does not list it. The session that originates a
   task is exempt from the gate.
-- Join through the GUI sidebar (A2A 网络) or the join gate prompt; leave
-  through the same surface. Membership is visible; leaving removes you from
+- Join through the workbench planning board (the session row's network
+  join action; the sidebar join toggle was removed with the panel-slim
+  move) or the join gate prompt; leave through the same surface. Membership is visible; leaving removes you from
   discovery too.
 - Inbound deliveries from a caller with no `caller_session` are refused
   (anonymous injection is a closed hole).
