@@ -10,6 +10,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { SuperagentHost, type SuperagentHostDeps } from './index.ts'
+export { ensureTeamYglHome } from './ygl-home.ts'
 
 const TEAM_ID = /^[0-9a-f]{8}$/
 
@@ -85,7 +86,13 @@ export class SuperagentTeams {
     const team = unbound?.[1] ?? this.build(id)
     const saved = team.saveSettings({ canvas: settings.canvas, router: settings.router }, sessionValid, presetOf)
     if (!saved.ok) return saved
-    if (unbound === undefined) { this.extras.set(id, team); if (this.started) team.start() }
+    if (unbound === undefined) {
+      this.extras.set(id, team)
+      if (this.started) team.start()
+      // saveSettings told the tool lists before the team was in the registry, so they still saw its sessions as outside any
+      // team: the router was refused its work tools but never shown superagent_* (remote report 2026-11-10). Tell them again.
+      try { this.deps.onRolesChanged?.() } catch (error) { this.deps.logger.warn('superagent: role change not applied: %s', String(error)) }
+    }
     return { ok: true, id }
   }
 
