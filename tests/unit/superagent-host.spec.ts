@@ -1207,3 +1207,16 @@ describe('router acceptance follow-up: what a settings change means to each open
     expect(lines.join('\n')).not.toContain('{')
   })
 })
+
+describe('a remote member listed as a bot is a caller, not a worker (market on the canvas)', () => {
+  it('the worker pool, the member list and the executor leave it out; other remote members stay workers', async () => {
+    const { SuperagentHost, workerRemotes } = await import('../../src/superagent/host/index.ts')
+    const market = { ref: 'market/fd417315@88679599', key: 'K1', url: 'http://127.0.0.1:1' }, peer = { ref: 'dsh/bbbb2222@89abcdef', key: 'K2', url: 'http://127.0.0.1:2' }
+    expect(workerRemotes({ remoteMembers: [market, peer], bots: { a2a: ['market/fd417315'] } })).toEqual(['dsh/bbbb2222@89abcdef'])
+    expect(workerRemotes({ remoteMembers: [market, peer], bots: { a2a: [] } })).toEqual(['market/fd417315@88679599', 'dsh/bbbb2222@89abcdef'])
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m'], [market, peer]), home: mkdtempSync(join(tmpdir(), 'sa-botworker-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, sessionName: (id: string) => id } as never)
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', bots: { a2a: ['market/fd417315'] } }, () => true)).toMatchObject({ ok: true })
+    expect(h.memberListLine()).toBe("The team's members: session-m; dsh/bbbb2222@89abcdef.")
+    await h.stop()
+  })
+})
