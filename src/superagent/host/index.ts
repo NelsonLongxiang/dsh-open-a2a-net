@@ -18,6 +18,8 @@ import { dirname, join } from 'node:path'
 import { Engine, UserError, reasonText, ticketStage, type Assessor, type Candidate, type Outbox, type Reason, type Ticket, type Trigger, type ReceiveResult } from '../upstream/dsh-superagent/src/core/index.ts'
 import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
+import { ProgressReceipts } from './progress.ts'
+import { RosterReports } from './roster.ts'
 import { MemberExecutor, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
 import { ReviewRequests } from './review-requests.ts'
 import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, type OutboundAsk } from './outbound.ts'
@@ -78,6 +80,8 @@ export class SuperagentHost {
   readonly a2a: A2aSource
   /** What the team owes A2A requesters (host/receipts.ts). */
   private readonly receipts: A2aReceipts
+  private readonly progress: ProgressReceipts
+  private readonly roster: RosterReports
   /** Outbox messages being sent right now, so a pass never sends one twice at once. */
   private readonly sending = new Set<string>()
   private started = false
@@ -124,9 +128,26 @@ export class SuperagentHost {
       receive: trigger => { this.reviews.received(trigger as unknown as Trigger); this.outbound.received(trigger as unknown as Trigger); const result = this.engine.receive(trigger as unknown as Trigger); queueMicrotask(() => this.pass()); return result },
       ticket: id => this.store.tickets.get(id) as never,
       resultPending: (ticketId, task) => this.resultPending(ticketId, task),
+      seatOf: ticketId => this.seatOf(ticketId),
       logger: d.logger, ...(d.runCli !== undefined ? { run: d.runCli } : {}), ...(d.teamSend !== undefined ? { teamSend: d.teamSend } : {}), ...(d.a2aPollSeconds !== undefined ? { pollSeconds: d.a2aPollSeconds } : {}),
     })
-    this.receipts = new A2aReceipts({ store: this.store, a2a: this.a2a, a2aOn: () => this.settingsValue.sources.a2a, now: () => this.now(), logger: d.logger })
+    this.roster = new RosterReports({
+      team: () => { const s = this.settings; return s.canvas === undefined ? undefined : { canvas: s.canvas, ...(s.router !== undefined ? { router: s.router } : {}), members: s.members.filter(id => !s.observers.includes(id)), observers: s.observers } },
+      remotes: canvas => (d.canvasTeam?.(canvas)?.remote ?? []).map(r => r.ref),
+      declares: (ref, capability) => d.memberDeclares?.(ref, capability) === true,
+      send: async (ref, text, taskId) => { if (d.rosterSend === undefined) throw new Error('no roster send on this host'); await d.rosterSend(ref, text, taskId) },
+      handleOf: id => d.handleOf?.(id) ?? id, nameOf: id => d.sessionName?.(id), online: id => d.sessionLoaded?.(id) ?? false,
+      loadOf: id => this.executor.loadOf(id), hostFingerprint: () => d.hostFingerprint?.(), nowMs: () => Date.parse(this.now()), logger: d.logger,
+    })
+    const progressPath = join(dir, 'progress.json')
+    this.progress = new ProgressReceipts({
+      store: this.store, a2a: this.a2a, on: () => this.settingsValue.sources.a2a && this.settingsValue.progressOff !== true, nowMs: () => Date.parse(this.now()),
+      seatOf: ticketId => this.seatOf(ticketId), queueAhead: ticketId => this.executor.queueAhead(ticketId), answered: task => this.a2a.answered(task),
+      load: () => { try { return existsSync(progressPath) ? JSON.parse(readFileSync(progressPath, 'utf8')) as never : undefined } catch { return undefined } },
+      save: value => { try { mkdirSync(dir, { recursive: true }); const tmp = `${progressPath}.tmp-${randomUUID()}`; writeFileSync(tmp, JSON.stringify(value), { mode: 0o600 }); renameSync(tmp, progressPath) } catch (error) { d.logger.warn('superagent: progress state not saved: %s', String(error)) } },
+      logger: d.logger,
+    })
+    this.receipts = new A2aReceipts({ store: this.store, a2a: this.a2a, a2aOn: () => this.settingsValue.sources.a2a, now: () => this.now(), seatOf: ticketId => this.seatOf(ticketId), logger: d.logger })
     this.prs = new PrFollower({
       path: join(dir, 'pr-follow.json'), tickets: () => this.store.tickets.list(), engine: () => this.engine, gh: d.gh ?? defaultGh,
       allowed: () => this.settingsValue.allowed.github, paused: () => this.settingsValue.paused, logger: d.logger,
@@ -157,6 +178,8 @@ export class SuperagentHost {
       policy: () => teamPolicy(this.settings),
       scope: teamScope(() => this.settingsValue),
       assessor, executor, outbox,
+      // P2 light path: decided inside the intake's unit of work, before any pass can hand the message to the router.
+      emit: event => { if (event.type === 'trigger.received') this.lightPath((event.data as { triggerId: string }).triggerId) },
       ...(d.now !== undefined ? { now: d.now } : {}),
     })
   }
@@ -195,6 +218,7 @@ export class SuperagentHost {
     // Reliability R7: look at the team's health every 15 minutes; a new problem raises one card (the boot grace period
     // keeps health() quiet, so nothing is raised from it either).
     this.healthTimer = this.d.interval(() => { this.healthReminders.tick(this.health() as readonly HealthProblem[], Date.parse(this.now())) }, HEALTH_TICK_MS)
+    this.roster.start(this.d.interval)
     // Defer: start() may run while the plugin's apply() still executes, when the canvas lookups it touches are not
     // initialized yet (a TDZ crash took the plugin down on hosts with models set - review of #566). A microtask runs
     // after apply() finishes; the catch inside applyModels is the second fence.
@@ -204,7 +228,7 @@ export class SuperagentHost {
     this.pass()
   }
 
-  stop(): Promise<void> { this.disposeTimer?.(); this.disposeTimer = undefined; this.healthTimer?.(); this.healthTimer = undefined; this.started = false; return this.a2a.stop() }
+  stop(): Promise<void> { this.roster.close(); this.disposeTimer?.(); this.disposeTimer = undefined; this.healthTimer?.(); this.healthTimer = undefined; this.started = false; return this.a2a.stop() }
 
   /** Run the A2A Source's mailbox loop exactly while its Source is on. */
   private syncA2a(): void {
@@ -393,6 +417,41 @@ export class SuperagentHost {
 
   private pool(): string[] { const now = this.settings; return [...now.members, ...now.remoteMembers.map(r => r.ref)] }
   private memberName(id: string): string { return this.d.sessionName?.(id) ?? id }
+
+  /**
+   * superagent-market-progress-roster P2, the light path: an agent's message that reached a live ticket on that ticket's own
+   * thread, from the very caller the ticket was accepted from, is routed to that ticket at once — the router's `attach`,
+   * made by the host — so it is not queued for the router's judgement. A person's message is the engine's to decide
+   * already; another caller's message in the same conversation still goes to the router.
+   */
+  private lightPath(triggerId: string): void {
+    const trigger = this.store.triggers.get(triggerId)
+    const disposition = this.store.triggers.disposition(triggerId)
+    if (trigger === undefined || trigger.human || disposition === undefined) return
+    for (const ticketId of disposition.fanout) {
+      if (disposition.context?.includes(ticketId)) continue
+      const ticket = this.store.tickets.get(ticketId)
+      const origin = ticket !== undefined && !ticket.ended ? this.store.triggers.get(ticket.origin.triggerId) : undefined
+      if (origin === undefined || origin.human || origin.actor.source !== trigger.actor.source || origin.actor.id !== trigger.actor.id) continue
+      try {
+        this.engine.attach(ticketId, triggerId)
+        this.d.logger.info('superagent: %s from %s goes straight to ticket %s (light path)', triggerId, trigger.actor.id, ticketId)
+        return
+      } catch (error) { this.d.logger.warn('superagent: light path for %s into %s not taken: %s', triggerId, ticketId, String(error)) }
+    }
+  }
+
+  /**
+   * market N1c: the seat a ticket's receipts name as the one that took it up — its member once one holds it (the one it
+   * last ran on, after it ended), else the router that accepted it — as its A2A handle (the session id where the host has none) and its name.
+   */
+  seatOf(ticketId: string): { seat: string; name?: string } | undefined {
+    const session = this.executor.memberOfTicket(ticketId)?.member ?? this.executor.lastMemberOf(ticketId) ?? this.settingsValue.router
+    if (session === undefined || session === '') return undefined
+    const seat = this.d.handleOf?.(session) ?? session
+    const name = this.d.sessionName?.(session)
+    return { seat, ...(name !== undefined && name !== '' && name !== seat ? { name } : {}) }
+  }
   memberListLine(): string { return `The team's members: ${this.pool().map(id => this.memberName(id)).join('; ') || '(none)'}.` }
 
   /** A member by its session id, the first eight of it, or its name; undefined when none matches, or more than one. */
@@ -959,6 +1018,7 @@ export class SuperagentHost {
     this.prs.tick()
     this.issues.tick()
     this.receipts.tick()
+    this.progress.tick()
   }
 
   /**

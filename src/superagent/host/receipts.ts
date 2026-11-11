@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path'
 import { Engine, UserError, reasonText, ticketStage, type Assessor, type Candidate, type Outbox, type Reason, type Ticket, type Trigger, type ReceiveResult } from '../upstream/dsh-superagent/src/core/index.ts'
 import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
+import type { ReceiptSeat } from '../a2a-watch.ts'
 import { MemberExecutor, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
 import { ReviewRequests } from './review-requests.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
@@ -37,6 +38,8 @@ export interface A2aReceiptsDeps {
   /** Whether the team's A2A Source is on: nothing is receipted while it is off. */
   readonly a2aOn: () => boolean
   readonly now: () => string
+  /** market N1c: the seat an acknowledgement names as the one that took the ticket up. */
+  readonly seatOf?: (ticketId: string) => ReceiptSeat | undefined
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
 }
 
@@ -67,18 +70,18 @@ export class A2aReceipts {
    */
   acknowledgeRequests(): void {
     if (this.acknowledging || !this.d.a2aOn()) return
-    const due: Array<{ task: string; address: Record<string, string>; text: string }> = []
+    const due: Array<{ task: string; ticketId: string; address: Record<string, string>; text: string }> = []
     for (const ticket of this.d.store.tickets.list()) {
       if (ticket.ended) continue
       const trigger = this.d.store.triggers.get(ticket.origin.triggerId)
       const address = trigger?.source === 'a2a' && trigger.human !== true ? trigger.channel?.address : undefined
       const task = address?.task
-      if (address !== undefined && task !== undefined && !this.ackSettled.has(task)) due.push({ task, address, text: clip(`已接下，工单「${ticket.title}」完成后回执结果。Accepted as ticket «${ticket.title}»; the result follows.`, 400) })
+      if (address !== undefined && task !== undefined && !this.ackSettled.has(task)) due.push({ task, ticketId: ticket.id, address, text: clip(`已接下，工单「${ticket.title}」完成后回执结果。Accepted as ticket «${ticket.title}»; the result follows.`, 400) })
       // A message delivered into this ticket as a follow-up is taken up, not finished: its formal outcome follows when the ticket ends.
       for (const followUp of this.followUpsOf(ticket)) {
         const followTask = followUp.channel.address.task
         if (followTask === undefined || this.ackSettled.has(followTask) || this.outcomeReceipted.has(followUp.triggerId) || this.d.a2a.answered(followTask)) continue
-        due.push({ task: followTask, address: followUp.channel.address, text: clip(`已转给工单「${ticket.title}」的成员，工单结束后回执结果。Passed to the member of ticket «${ticket.title}»; the result follows when it ends.`, 400) })
+        due.push({ task: followTask, ticketId: ticket.id, address: followUp.channel.address, text: clip(`已转给工单「${ticket.title}」的成员，工单结束后回执结果。Passed to the member of ticket «${ticket.title}»; the result follows when it ends.`, 400) })
       }
     }
     if (due.length === 0) return
@@ -86,7 +89,7 @@ export class A2aReceipts {
     void (async () => {
       for (const item of due) {
         try {
-          const result = await this.d.a2a.acknowledge(item.address, item.text)
+          const result = await this.d.a2a.acknowledge(item.address, item.text, this.d.seatOf?.(item.ticketId))
           this.ackSettled.add(item.task)
           if (result === 'sent') this.d.logger.info('superagent: acknowledged A2A task %s to %s', item.task, item.address.caller ?? '?')
           else if (result === 'gone') this.d.logger.warn('superagent: A2A task %s cannot be acknowledged', item.task)
@@ -161,6 +164,19 @@ export class A2aReceipts {
     if (this.outcomeReceipting || !this.d.a2aOn()) return
     const now = Date.parse(this.d.now())
     const origins = new Set(this.d.store.tickets.list().flatMap(t => t.origin.triggerIds))
+    // A message the engine fanned out into a ticket is that ticket's follow-up even when the router also judged it and
+    // ignored it in its own words (a requester's answer to a member's question, 2026-11-11): its one formal receipt is the
+    // ticket's ending receipt, so a rejected one here would contradict the "passed to the member" acknowledgement and use it
+    // up. A refusal of what the message asked (an agent's stop, a sender not listed) is still told; one the member handed
+    // back is the router's again, and a rejection stands.
+    // A message fanned into a ticket, or delivered to a ticket's member (it keeps its input when the ticket lets go of it at
+    // its end, superagent-market-progress-roster P2), and not handed back: its receipt is the ticket's ending receipt.
+    const intoTicket = (triggerId: string): boolean => {
+      const disposition = this.d.store.triggers.disposition(triggerId)
+      const handedBack = (ticketId: string): boolean => (disposition?.handbacks ?? []).some(item => item.ticketId === ticketId)
+      if ((disposition?.fanout ?? []).some(ticketId => !handedBack(ticketId))) return true
+      return this.d.store.tickets.list().some(ticket => !handedBack(ticket.id) && ticket.inputs.some(input => input.kind === 'trigger' && input.triggerId === triggerId && input.deliveredTo !== undefined))
+    }
     const due = new Map<string, { channel: NonNullable<Trigger['channel']>; text: string; outcome: 'completed' | 'rejected'; ticketId?: string }>()
     const consider = (triggerId: string, make: () => { text: string; outcome: 'completed' | 'rejected'; ticketId?: string }): void => {
       if (origins.has(triggerId) || due.has(triggerId) || this.outcomeReceipted.has(triggerId)) return
@@ -175,8 +191,9 @@ export class A2aReceipts {
         if (decision.kind !== 'ignore') continue
         decision.triggerIds.forEach((triggerId, i) => {
           const reason = decision.reason.find(r => r.triggerId === triggerId) ?? decision.reason[decision.reason.length === decision.triggerIds.length ? i : 0]
-          // A message routed into a ticket is answered when its member has it (above).
-          if (reason?.code === 'routed') return
+          // A message routed into a ticket is answered when its member has it (above); so is one fanned out into one and only
+          // set aside by the router.
+          if (reason?.code === 'routed' || (reason?.code === 'said' && intoTicket(triggerId))) return
           consider(triggerId, () => ({ outcome: 'rejected', text: clip(`团队未接这条消息：${notTakenText(reason)}。The team did not take this message: ${reason === undefined ? 'no reason recorded' : reasonText(reason)}.`, 1_000) }))
         })
       }

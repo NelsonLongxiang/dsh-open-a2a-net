@@ -95,6 +95,9 @@ export function transientError(error: unknown): boolean {
   return PASSING.test(error instanceof Error ? `${error.name} ${error.message} ${String((error as { code?: unknown }).code ?? '')}` : String(error))
 }
 
+/** How many tickets' last members the executor keeps (market N1c: who did an ended ticket's work). */
+const LAST_MEMBERS_CAP = 500
+
 export class MemberExecutor implements Executor {
   private bindings: Binding[]
   /** Assignments whose member handed off: still running for the engine, holding no slot until an Input brings them back. */
@@ -110,6 +113,11 @@ export class MemberExecutor implements Executor {
   private ticketRepos: Record<string, string>
   /** The member a ticket stays with. `named`: the router chose it, so the ticket waits for it (design D5); otherwise it is where the ticket last ran (D7). */
   private ticketMembers: Record<string, { member: string; named: boolean }>
+  /**
+   * market N1c: the member each ticket last ran on, kept after the ticket ends (ticketMembers is not), so the ending
+   * receipt can name who did the work. Pruned to tickets the store still keeps, newest LAST_MEMBERS_CAP.
+   */
+  private lastMembers: Record<string, string>
   /** Members leaving the team right now (design v5: removed from the canvas): their stop notice says why. */
   private readonly leaving = new Set<string>()
   /** Assignments waiting for a free member, oldest first. */
@@ -130,17 +138,19 @@ export class MemberExecutor implements Executor {
     this.parked = stored.parked
     this.ticketRepos = stored.repos
     this.ticketMembers = stored.ticketMembers ?? {}
+    this.lastMembers = stored.lastMembers ?? {}
     this.prepared = stored.prepared ?? {}
   }
   /** Tickets whose directory the prepare command has made (R1: once per ticket). */
   private prepared: Record<string, true>
 
-  private load(): { bindings: Binding[]; parked: Binding[]; repos: Record<string, string>; ticketMembers?: Record<string, { member: string; named: boolean }>; prepared?: Record<string, true> } {
+  private load(): { bindings: Binding[]; parked: Binding[]; repos: Record<string, string>; ticketMembers?: Record<string, { member: string; named: boolean }>; lastMembers?: Record<string, string>; prepared?: Record<string, true> } {
     try {
       if (!existsSync(this.d.path)) return { bindings: [], parked: [], repos: {} }
-      const raw = JSON.parse(readFileSync(this.d.path, 'utf8')) as { bindings?: Binding[]; parked?: Binding[]; repos?: Record<string, unknown>; ticketMembers?: Record<string, { member: string; named: boolean }>; prepared?: Record<string, true> }
+      const raw = JSON.parse(readFileSync(this.d.path, 'utf8')) as { bindings?: Binding[]; parked?: Binding[]; repos?: Record<string, unknown>; ticketMembers?: Record<string, { member: string; named: boolean }>; lastMembers?: Record<string, unknown>; prepared?: Record<string, true> }
+      const lastMembers = Object.fromEntries(Object.entries(raw.lastMembers ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
       const repos = Object.fromEntries(Object.entries(raw.repos ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
-      return { bindings: raw.bindings ?? [], parked: raw.parked ?? [], repos, ...(raw.ticketMembers !== undefined ? { ticketMembers: raw.ticketMembers } : {}), ...(raw.prepared !== undefined ? { prepared: raw.prepared } : {}) }
+      return { bindings: raw.bindings ?? [], parked: raw.parked ?? [], repos, ...(raw.ticketMembers !== undefined ? { ticketMembers: raw.ticketMembers } : {}), lastMembers, ...(raw.prepared !== undefined ? { prepared: raw.prepared } : {}) }
     } catch { return { bindings: [], parked: [], repos: {} } }
   }
   private save(): void {
@@ -148,9 +158,10 @@ export class MemberExecutor implements Executor {
     this.ticketRepos = Object.fromEntries(Object.entries(this.ticketRepos).filter(([id]) => { const t = this.d.ticket(id); return t !== undefined && !t.ended }))
     this.ticketMembers = Object.fromEntries(Object.entries(this.ticketMembers).filter(([id]) => { const t = this.d.ticket(id); return t !== undefined && !t.ended }))
     this.prepared = Object.fromEntries(Object.entries(this.prepared).filter(([id]) => { const t = this.d.ticket(id); return t !== undefined && !t.ended })) as Record<string, true>
+    this.lastMembers = Object.fromEntries(Object.entries(this.lastMembers).filter(([id]) => this.d.ticket(id) !== undefined).slice(-LAST_MEMBERS_CAP))
     mkdirSync(dirname(this.d.path), { recursive: true })
     const temporary = `${this.d.path}.tmp-${randomUUID()}`
-    try { writeFileSync(temporary, JSON.stringify({ bindings: this.bindings, parked: this.parked, repos: this.ticketRepos, ticketMembers: this.ticketMembers }), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.d.path) } finally { rmSync(temporary, { force: true }) }
+    try { writeFileSync(temporary, JSON.stringify({ bindings: this.bindings, parked: this.parked, repos: this.ticketRepos, ticketMembers: this.ticketMembers, lastMembers: this.lastMembers }), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.d.path) } finally { rmSync(temporary, { force: true }) }
   }
 
   /** A member is leaving the team (removed from the canvas): the stop its Assignment gets next says so. */
@@ -196,6 +207,23 @@ export class MemberExecutor implements Executor {
   }
 
   memberOfTicket(ticketId: string): { member: string; named: boolean } | undefined { return this.ticketMembers[ticketId] }
+  /**
+   * A member's load for the roster report (superagent-market-progress-roster P3): the tickets it holds (running or
+   * parked), the tickets waiting that stay with it, and when its latest hold began.
+   */
+  loadOf(member: string): { active: number; queued: number; since?: string } {
+    const held = [...this.bindings, ...this.parked].filter(b => b.member === member)
+    const queued = new Set(this.waiting.filter(w => this.ticketMembers[w.ticketId]?.member === member).map(w => w.ticketId)).size
+    const since = held.map(b => b.at).sort().at(-1)
+    return { active: new Set(held.map(b => b.ticketId)).size, queued, ...(since !== undefined ? { since } : {}) }
+  }
+  /** How many tickets wait for a member ahead of this one; undefined when it is not waiting (superagent-market-progress-roster P1). */
+  queueAhead(ticketId: string): number | undefined {
+    const at = this.waiting.findIndex(w => w.ticketId === ticketId)
+    return at < 0 ? undefined : new Set(this.waiting.slice(0, at).map(w => w.ticketId)).size
+  }
+  /** The member a ticket last ran on, also after it ended (market N1c). */
+  lastMemberOf(ticketId: string): string | undefined { return this.lastMembers[ticketId] }
 
   /**
    * The team's members changed. A ticket that merely last ran on a member who left is free to go anywhere; one the router
@@ -289,6 +317,8 @@ export class MemberExecutor implements Executor {
         this.waiting = this.waiting.filter(w => w !== next)
         this.bindings.push({ member, ticketId: ticket.id, assignmentId: assignment.id, at: new Date().toISOString() })
         if (this.ticketMembers[ticket.id] === undefined) this.ticketMembers[ticket.id] = { member, named: false }
+        delete this.lastMembers[ticket.id]
+        this.lastMembers[ticket.id] = member
         this.save()
         this.d.logger.info('superagent: ticket %s assigned to %s', ticket.id, member)
         try { engine.assignmentStarted(ticket.id, assignment.id) } catch (error) { this.d.logger.warn('superagent: assignment %s not recorded started: %s', assignment.id, String(error)) }

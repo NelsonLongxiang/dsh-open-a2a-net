@@ -33,3 +33,17 @@ export function memberProvenance(ref: string, ownerKey: string | undefined, ownK
   if (qualified.fingerprint === canvasOwnerFingerprint(ownKey) && ownerKey !== ownKey) return 'conflict'
   return ownerKey === ownKey ? 'confirmed-local' : 'confirmed-remote'
 }
+
+/**
+ * Whether a caller declares a capability on its verified card (superagent-market-progress-roster P1/P3): the caller is a
+ * canvas remote member whose full key this host pinned (exactly one key across the canvases), and a cached verified card
+ * with that key carries `capabilities[name] === true`. A CLI identity, an unpinned caller or a card not fetched yet
+ * declares nothing.
+ */
+export function pinnedCallerDeclares(caller: string, name: string, members: readonly string[], ownerKeyOf: (ref: string) => string | undefined, cards: Iterable<{ publicKey?: unknown; capabilities?: unknown } | undefined>): boolean {
+  const keys = new Set(members.filter(ref => splitQualifiedMember(ref)?.handle === caller).map(ownerKeyOf).filter((key): key is string => typeof key === 'string' && key !== ''))
+  if (keys.size !== 1) return false
+  const [key] = [...keys]
+  for (const card of cards) if (card?.publicKey === key && (card?.capabilities as Record<string, unknown> | undefined)?.[name] === true) return true
+  return false
+}

@@ -37,7 +37,7 @@ export function resolveCallerLabel(input: {
 import { encodePublicKey, signCard, verifyCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { CanvasStore, canvasNameReserved, isRemoteMemberRef, legacyBareMember } from './canvas-store.ts'
-import { splitQualifiedMember, memberProvenance, qualifiedSessionMember } from './canvas-member.ts'
+import { splitQualifiedMember, memberProvenance, qualifiedSessionMember, pinnedCallerDeclares } from './canvas-member.ts'
 import { decodeSessionLog, extractTranscript, TRANSCRIPT_MAX_FILE_BYTES } from './session-transcript.ts'
 import { LayoutStore } from './layout-store.ts'
 import { peerLinkDisplay } from './peer-link-display.ts'
@@ -55,7 +55,7 @@ import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type OutboundBirth, type ReceiptResolvedInfo, type Sender, type SettlementJudge, type TaskRecord } from './task-ledger.ts'
-import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
+import { formatReceipt, holdsRow, parseReceipt, receiptExtras, receiptTaskId, taskIdRefusal } from './receipt.ts'
 import { SuperagentHost } from './superagent/host/index.ts'
 import { registerSuperagentTools } from './superagent/host/tools.ts'
 import { RoleTools, scopeKeyOf, type RoleAgent } from './superagent/host/role-tools.ts'
@@ -779,8 +779,8 @@ export function apply(ctx: Context, config: Config): void {
     const resolved = taskLedger.resolveFromMessage(message, judge)
     // An acknowledgement marks the owed row and settles nothing: no waiter is answered, no outcome is recorded, and the
     // settlement seam is not told (its consumers treat a resolution as the end of the task).
-    if (parsed?.envelope?.disposition === 'acknowledged') {
-      if (resolved?.acknowledged === true) logger.info(`a2a: task ${resolved.taskId} acknowledged by its target; it stays owed until the result`)
+    if (holdsRow(parsed?.envelope)) {
+      if (resolved?.acknowledged === true) logger.info(`a2a: task ${resolved.taskId} ${parsed?.envelope?.disposition === 'attention' ? 'has a question from' : 'acknowledged by'} its target; it stays owed until the result`)
       return undefined
     }
     if(resolved!==undefined)pruneReceiptWaiters()
@@ -2098,6 +2098,9 @@ export function apply(ctx: Context, config: Config): void {
     stageFiles: (id, paths, canvas) => stageCardFiles({ blobStore, from: originOf(ownCardUrl), cwd: (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd, team: `${config.team}/canvas/${canvas}`, by: id }, paths),
     memberTurn: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : memberTurnFrom(id, sessionEventsOf(agent), ctx.get('jobs' as never)) },
     teamSend: args => teamCanvasSend(args),
+    memberDeclares: (ref, capability) => { const member = splitQualifiedMember(ref); return member !== undefined && callerCapability(member.handle, capability) },
+    rosterSend: async (ref, text, taskId) => { await dispatchAnywhere(ref, text, session, undefined, AbortSignal.timeout(15_000), true, taskId) },
+    hostFingerprint: () => canvasOwnerFingerprint(encodePublicKey(createPublicKey(nodePrivateKey))),
   }) : undefined
   teamsHandle = superagentTeams
   const superagentHost: SuperagentHost | undefined = superagentTeams?.primary
@@ -2175,6 +2178,15 @@ export function apply(ctx: Context, config: Config): void {
    * requester's ledger settles them as host-face. Speaks the a2a-net CLI's `receipt` / `route` JSON contract (stdout, exit
    * codes 4 gone / 5 another receipt) for the A2A Source; undefined when the task did not come through the canvas.
    */
+  /**
+   * Whether a caller declares a capability on its verified card: a canvas remote member whose full key this host pinned,
+   * and whose card (fetched and verified, in the card cache) carries `capabilities[name] === true`. Anything else — a
+   * CLI identity, an unpinned or unknown caller, a card not fetched yet — declares nothing.
+   */
+  function callerCapability(caller: string, name: string): boolean {
+    return pinnedCallerDeclares(caller, name, canvasStore.list().flatMap(canvas => canvasStore.membersOf(canvas)), ref => canvasStore.ownerKeyOf(ref), [...cardCache.values()].map(entry => entry.card))
+  }
+
   async function teamCanvasSend(args: readonly string[]): Promise<string | undefined> {
     const verb = args[0]
     if (verb !== 'receipt' && verb !== 'route') return undefined
@@ -2190,15 +2202,27 @@ export function apply(ctx: Context, config: Config): void {
       const switches = dash >= 0 ? args.slice(0, dash) : args
       const acknowledged = switches.includes('--acknowledged'), attention = switches.includes('--attention')
       const outcome = flagOf('--outcome')
-      const fields = acknowledged ? { idempotencyKey: task, disposition: 'acknowledged' as const, onBehalfOf: row.team }
-        : attention ? { idempotencyKey: task, disposition: 'attention' as const, onBehalfOf: row.team }
-        : { outcome: (outcome ?? 'completed') as 'completed', idempotencyKey: task, disposition: 'result' as const, onBehalfOf: row.team }
-      const receipt = formatReceipt(task, text.replace(/\s+/g, ' ').trim(), fields)
-      const receiptTask = `${acknowledged ? 'ack' : 'receipt'}-${task}`
+      const line = text.replace(/\s+/g, ' ').trim()
+      // market N1c/N1d: who took it up, what it produced, and an attention's structured question.
+      const extras = receiptExtras(name => flagOf(name), attention, line)
+      if ('error' in extras) return fail(2, extras.error)
+      const progress = extras.fields.progress !== undefined
+      if (progress && acknowledged) return fail(2, '--progress does not go with --acknowledged')
+      // superagent-market-progress-roster P1: an older receiver would settle the row on an unknown disposition, so a
+      // progress step goes only to a caller whose verified card declares progressReceipts.
+      if (progress && !callerCapability(to, 'progressReceipts')) return fail(4, `${to} does not declare progressReceipts; no progress was sent`)
+      const fields = progress ? { idempotencyKey: task, disposition: 'progress' as const, onBehalfOf: row.team, ...extras.fields }
+        : acknowledged ? { idempotencyKey: task, disposition: 'acknowledged' as const, onBehalfOf: row.team, ...extras.fields }
+        : attention ? { idempotencyKey: task, disposition: 'attention' as const, onBehalfOf: row.team, ...extras.fields }
+        : { outcome: (outcome ?? 'completed') as 'completed', idempotencyKey: task, disposition: 'result' as const, onBehalfOf: row.team, ...extras.fields }
+      const receipt = formatReceipt(task, line, fields)
+      const receiptTask = receiptTaskId(task, fields.disposition, extras.fields.question, extras.fields.progress)
+      if (receiptTask.length > 80) return fail(2, `receipt: its task id ${receiptTask} is longer than 80 characters`)
       try {
         const out = await dispatchAnywhere(to, receipt, session, row.contextId, new AbortController().signal, true, receiptTask)
         // This host's own inbound row (a requester on another host or a CLI here): the receipt it sent settles it.
-        if (row.direction === 'inbound' && !acknowledged) settleOwnInbound(receipt, to, { caller: session, proof: 'in-process', ingress: 'local' })
+        // An acknowledgement or a question marks it instead (settleOwnInbound leaves such a row owed).
+        if (row.direction === 'inbound' && !acknowledged && !progress) settleOwnInbound(receipt, to, { caller: session, proof: 'in-process', ingress: 'local' })
         return JSON.stringify({ delivered: true, class: 'sent', task_id: receiptTask, team: to, ...(typeof (out as { context_id?: unknown }).context_id === 'string' ? { context_id: (out as { context_id: string }).context_id } : {}) })
       } catch (error) {
         const code = (error as { code?: unknown }).code

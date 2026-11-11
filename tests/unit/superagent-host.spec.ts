@@ -378,6 +378,12 @@ describe('PR-B2b: the a2a Channel through the hosted a2a-watch', () => {
     const doneReceipts = endings().filter(a => a[1] === done.task)
     expect(doneReceipts).toHaveLength(1)
     expect(doneReceipts[0]!.at(-1)).toContain('ticket/t7 0123abc')
+    // market N1c: the ending receipt names the member that did the work, even though the ticket has ended; the
+    // acknowledgement, sent before any member held it, names the router.
+    expect(doneReceipts[0]!.slice(doneReceipts[0]!.indexOf('--by'), doneReceipts[0]!.indexOf('--by') + 2)).toEqual(['--by', 'session-m'])
+    const ack = calls.find(a => a[0] === 'receipt' && a[1] === done.task && a.includes('--acknowledged'))!
+    expect(ack.slice(ack.indexOf('--by'), ack.indexOf('--by') + 2)).toEqual(['--by', 'session-r'])
+    expect(host.seatOf(done.ticketId)).toEqual({ seat: 'session-m' })
   })
   it('a caller no longer linked makes the message gone (dropped), never sent', async () => {
     const h = await hostWith(args => args[0] === 'admission' ? JSON.stringify({ admitted: false }) : '{}')
@@ -903,6 +909,62 @@ describe('spec audit: follow-ups, the owner answering, the terminal', () => {
     expect(final, JSON.stringify(receipts(followUp))).toBeDefined()
     expect(final![final!.indexOf('--outcome') + 1]).toBe('abandoned')
     expect(receipts(first).some(a => !a.includes('--acknowledged'))).toBe(true)
+    await h.stop()
+  })
+
+  it('a requester\'s answer that reaches the ticket and is also judged and ignored by the router keeps its formal receipt for the ticket\'s end (field run, 2026-11-11)', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const calls: string[][] = []
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']), home: mkdtempSync(join(tmpdir(), 'sa-answer-ignore-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, homeUrl: () => 'http://127.0.0.1:1',
+      runCli: async args => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' } })
+    const bot = 'market/0123456789abcdef'
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const receive = (n: string, ctx: string) => { const task = `direct-${n.padStart(12, '0')}`; h.engine.receive({ ...wb(n, ctx), source: 'a2a', threads: [{ source: 'a2a', id: ctx }], actor: { source: 'a2a', id: bot }, human: false, channel: { source: 'a2a', thread: `a2a:${ctx}`, address: { caller: bot, task, context: ctx } }, addressed: 'direct', meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } } as never); h.pass(); return task }
+    const receipts = (task: string): string[][] => calls.filter(a => a[0] === 'receipt' && a[1] === task)
+    receive('1', 'ctx-1')
+    const accepted = routeItem(h, { trigger_id: '1', kind: 'accept', title: 'bump', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
+    await settle()
+    // The requester answers on a new task in the same context; the engine fans it out into the ticket.
+    const answer = receive('2', 'ctx-1')
+    await settle()
+    expect(h.store.triggers.disposition('2')?.fanout ?? []).toContain(accepted.ticket_id)
+    // The router also judges it, as on the field run, and ignores it (an answer, not new work).
+    h.store.decisions.save({ id: 'dec-2', threadKey: 'a2a:ctx-1', evalId: 'ev-2', kind: 'ignore', triggerIds: ['2'], reason: [{ triggerId: '2', code: 'said', values: { text: '对在办工单问题的回答' } }], at: new Date().toISOString() } as never)
+    await settle(); await settle()
+    // No "not taken" receipt: the member has it, and its outcome comes when the ticket ends.
+    expect(receipts(answer).filter(a => !a.includes('--acknowledged')), JSON.stringify(receipts(answer))).toHaveLength(0)
+    h.engine.stopTicket(accepted.ticket_id, 'done')
+    await settle()
+    const final = receipts(answer).find(a => !a.includes('--acknowledged'))
+    expect(final, JSON.stringify(receipts(answer))).toBeDefined()
+    expect(final![final!.indexOf('--outcome') + 1]).not.toBe('rejected')
+    await h.stop()
+  })
+
+  it('light path (superagent-market-progress-roster P2): the caller a ticket serves talks to its member without the router; another caller in the same conversation still goes to the router', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']), home: mkdtempSync(join(tmpdir(), 'sa-light-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, homeUrl: () => 'http://127.0.0.1:1',
+      runCli: async args => args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' })
+    const market = 'market/0123456789abcdef', other = 'other/0123456789abcdef'
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [market, other] }, rules: [{ name: 'deps', text: 'Upgrade.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const receive = (n: string, ctx: string, bot: string) => { const task = `direct-${n.padStart(12, '0')}`; h.engine.receive({ ...wb(n, ctx), source: 'a2a', threads: [{ source: 'a2a', id: ctx }], actor: { source: 'a2a', id: bot }, human: false, channel: { source: 'a2a', thread: `a2a:${ctx}`, address: { caller: bot, task, context: ctx } }, addressed: 'direct', meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } } as never); h.pass() }
+    receive('1', 'ctx-1', market)
+    const accepted = routeItem(h, { trigger_id: '1', kind: 'accept', title: 'chat', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
+    await settle()
+    receive('2', 'ctx-1', market)
+    receive('3', 'ctx-1', other)
+    await settle()
+    // The router's queue: the served caller's message is not in it, the other caller's is.
+    const thread = h.store.threads.get('a2a:ctx-1')!
+    const queued = [...thread.pending, ...(thread.evaluating?.triggerIds ?? [])]
+    expect(queued).not.toContain('2')
+    expect(queued).toContain('3')
+    // Both reach the member as inputs.
+    expect(h.store.tickets.get(accepted.ticket_id)!.inputs.filter(i => i.kind === 'trigger').map(i => (i as { triggerId: string }).triggerId)).toEqual(expect.arrayContaining(['2', '3']))
     await h.stop()
   })
 

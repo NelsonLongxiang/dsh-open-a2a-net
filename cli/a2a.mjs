@@ -96,6 +96,11 @@ receipt:  receipt <task_id> [--attention | --acknowledged | --outcome O] [--to T
           --acknowledged: the task is taken up and its result follows — the caller's row stays owed but leaves the
           queue count and expires 7 days after the acknowledgement instead of 24 hours after dispatch; it rides
           task id ack-<task_id>, so the later receipt is not refused
+          --attention --question-id ID [--options 'A|B'] [--default X]: a question (the one line is its text) that
+          marks the caller's row instead of settling it; it rides attention-<task_id>-<ID>, so the result still follows
+          --by SEAT [--by-name N] [--by-team T]: who took the work up; --artifacts KIND:ID[,…]: what it produced
+          --progress N --state queued|working|waiting|blocked [--ahead K] [--tickets JSON]: a progress step (the one
+          line is its summary) that marks the caller's row and settles nothing; it rides progress-<task_id>-<N>
 
 admission: admission <caller> [--local] [--json]   how <caller> would be admitted delivering to THIS identity right
           now (the home host recomputes it from its current links): {caller, admitted, rule}. --local asks for the
@@ -104,7 +109,7 @@ admission: admission <caller> [--local] [--json]   how <caller> would be admitte
           host refuses or does not know the query`
 
 /** Flags that take a value (both '--home URL' and '--home=URL'); the rest are switches. */
-const VALUE_FLAGS = new Set(['--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome'])
+const VALUE_FLAGS = new Set(['--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets'])
 const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--acknowledged', '--owes', '--local', '--exit-class'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
@@ -570,6 +575,50 @@ const SENDER_OUTCOMES = ['completed', 'failed', 'rejected', 'abandoned']
  * outcome because it is not a completion. The receipt rides its own fixed task id
  * `receipt-<id>`, so the host's idempotency holds a task to one receipt.
  */
+/** The receipt's added fields from its switches (the copy of src/receipt.ts receiptExtras); a bad one exits 2. */
+function receiptExtras(attention, text) {
+  const SHORT = 200, TEXT = 2000, MAX_ARTIFACTS = 16, MAX_OPTIONS = 6
+  const ok = (v, cap = SHORT) => typeof v === 'string' && v.trim() !== '' && v.length <= cap
+  const out = {}
+  const seat = flag('--by'), name = flag('--by-name'), team = flag('--by-team')
+  if (seat !== undefined) {
+    if (!ok(seat)) usage(`receipt: --by takes a seat id of at most ${SHORT} characters`)
+    out.by = { seat, ...(ok(name) ? { name } : {}), ...(ok(team) ? { team } : {}) }
+  } else if (name !== undefined || team !== undefined) usage('receipt: --by-name and --by-team go with --by')
+  const artifacts = flag('--artifacts')
+  if (artifacts !== undefined) {
+    const items = artifacts.split(',').map(i => i.trim()).filter(i => i !== '').map(i => { const at = i.indexOf(':'); return at > 0 ? { kind: i.slice(0, at), id: i.slice(at + 1) } : undefined })
+    if (items.length === 0 || items.length > MAX_ARTIFACTS || items.some(i => i === undefined || !ok(i.kind) || !ok(i.id))) usage(`receipt: --artifacts takes up to ${MAX_ARTIFACTS} KIND:ID items, comma-separated`)
+    out.artifacts = items
+  }
+  const id = flag('--question-id'), options = flag('--options'), fallback = flag('--default')
+  if (id !== undefined) {
+    if (!attention) usage('receipt: --question-id goes with --attention')
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,23}$/.test(id)) usage('receipt: --question-id takes letters, digits, . _ : - (at most 24 characters)')
+    if (!ok(text, TEXT)) usage(`receipt: a question's text is at most ${TEXT} characters`)
+    const list = options?.split('|').map(o => o.trim()).filter(o => o !== '')
+    if (list !== undefined && (list.length === 0 || list.length > MAX_OPTIONS || list.some(o => !ok(o)))) usage(`receipt: --options takes up to ${MAX_OPTIONS} answers of at most ${SHORT} characters, separated by |`)
+    out.question = { id, text, ...(list !== undefined ? { options: list } : {}), ...(ok(fallback) ? { default: fallback } : {}) }
+  } else if (options !== undefined || fallback !== undefined) usage('receipt: --options and --default go with --question-id')
+  // market N2a/N2b: a progress step (the one line is its summary) and the tickets the request became.
+  const step = flag('--progress'), state = flag('--state'), ahead = flag('--ahead')
+  if (step !== undefined) {
+    if (attention) usage('receipt: --progress does not go with --attention')
+    const n = Number(step), k = ahead === undefined ? undefined : Number(ahead)
+    if (!Number.isSafeInteger(n) || n < 1 || !['queued', 'working', 'waiting', 'blocked'].includes(state ?? '') || (k !== undefined && (!Number.isSafeInteger(k) || k < 0))) usage('receipt: --progress takes a step number from 1 with --state queued|working|waiting|blocked [--ahead K]')
+    out.progress = { n, state, ...(ok(text, TEXT) ? { summary: text } : {}), at: new Date().toISOString(), ...(k !== undefined ? { ahead: k } : {}) }
+  } else if (state !== undefined || ahead !== undefined) usage('receipt: --state and --ahead go with --progress')
+  const tickets = flag('--tickets')
+  if (tickets !== undefined) {
+    let list
+    try { list = JSON.parse(tickets) } catch { list = undefined }
+    const states = ['queued', 'working', 'waiting', 'blocked', 'ended']
+    if (!Array.isArray(list) || list.length === 0 || list.length > 16 || list.some(t => t === null || typeof t !== 'object' || !ok(t.id) || !states.includes(t.state))) usage('receipt: --tickets takes a JSON array of up to 16 {id, state, title?, seat?, outcome?}')
+    out.tickets = list.map(t => ({ id: t.id, ...(ok(t.title) ? { title: t.title } : {}), ...(ok(t.seat) ? { seat: t.seat } : {}), state: t.state, ...(ok(t.outcome) ? { outcome: t.outcome } : {}) }))
+  }
+  return out
+}
+
 async function cmdReceipt() {
   const [taskId, ...words] = positionals()
   const summary = words.join(' ').replace(/\s+/g, ' ').trim()
@@ -580,7 +629,10 @@ async function cmdReceipt() {
   const acknowledged = has('--acknowledged')
   if (acknowledged && (outcome !== undefined || has('--attention'))) usage('receipt: --acknowledged takes neither --outcome nor --attention — it is not an ending')
   if (outcome !== undefined && !SENDER_OUTCOMES.includes(outcome)) usage(`receipt: --outcome takes ${SENDER_OUTCOMES.join(', ')} (got "${outcome}")`)
-  const receiptTask = `${acknowledged ? 'ack' : 'receipt'}-${taskId}`
+  // market N1c/N1d (src/receipt.ts receiptExtras keeps the same rules): who took it up, what it produced, a question.
+  const extras = receiptExtras(has('--attention'), summary)
+  if (acknowledged && extras.progress !== undefined) usage('receipt: --progress does not go with --acknowledged')
+  const receiptTask = acknowledged ? `ack-${taskId}` : extras.progress !== undefined ? `progress-${taskId}-${extras.progress.n}` : extras.question !== undefined ? `attention-${taskId}-${extras.question.id}` : `receipt-${taskId}`
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(taskId)) usage(`receipt: task id "${taskId}" has characters a receipt's own task id cannot carry (letters, digits, . _ : -)`)
   if (receiptTask.length > 80) usage(`receipt: task id "${taskId}" is too long — its receipt rides "${receiptTask}" (${String(receiptTask.length)} characters, at most 80); it is not cut short`)
   const to = flag('--to')
@@ -595,11 +647,13 @@ async function cmdReceipt() {
       : `receipt: task ${taskId} came from more than one sender (${senders.join(', ')}) — pass --to <team>`)
   }
   const contextId = rows.find(r => typeof r.context_id === 'string')?.context_id
-  const envelope = acknowledged
-    ? { idempotencyKey: taskId, disposition: 'acknowledged' }
+  const envelope = extras.progress !== undefined
+    ? { idempotencyKey: taskId, disposition: 'progress', ...extras }
+    : acknowledged
+    ? { idempotencyKey: taskId, disposition: 'acknowledged', ...extras }
     : has('--attention')
-    ? { idempotencyKey: taskId, disposition: 'attention' }
-    : { outcome: outcome ?? 'completed', idempotencyKey: taskId, disposition: 'result' }
+    ? { idempotencyKey: taskId, disposition: 'attention', ...extras }
+    : { outcome: outcome ?? 'completed', idempotencyKey: taskId, disposition: 'result', ...extras }
   await sendDirect('receipt', {
     team: to ?? senders[0], message: `[A2A receipt] task ${taskId} ${summary}\n${JSON.stringify(envelope)}`,
     caller_session: handle, wait: false, task_id: receiptTask, ...(contextId !== undefined ? { context_id: contextId } : {}),

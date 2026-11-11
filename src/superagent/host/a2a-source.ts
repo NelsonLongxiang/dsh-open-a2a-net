@@ -19,7 +19,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { EXIT_GONE, EXIT_RECEIPT_CONFLICT, HEALTH, KIND, KV, LINK_RULES, createA2aKind, replyAllowed, sendReply, watch, type A2aConfig, type ReceiptOutcome } from '../a2a-watch.ts'
+import { EXIT_GONE, EXIT_RECEIPT_CONFLICT, HEALTH, KIND, KV, LINK_RULES, createA2aKind, replyAllowed, seatArgs, sendReply, watch, type A2aConfig, type ReceiptOutcome, type ReceiptSeat } from '../a2a-watch.ts'
 import type { Commands, Health, OutboundMessage, ReceiveResult, SourceContext, TicketView, Trigger } from '../source-types.ts'
 
 /** The packaged CLI, from both src/superagent/host and lib/superagent/host. */
@@ -48,6 +48,8 @@ export interface A2aSourceDeps {
    * that task then is a question or a notice, never the result the requester's formal receipt is kept for.
    */
   readonly resultPending?: (ticketId: string, task: string) => boolean
+  /** market N1c: the seat a ticket's receipts name as the one that took it up (its member, else the router). */
+  readonly seatOf?: (ticketId: string) => ReceiptSeat | undefined
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
   /** Mailbox poll interval in seconds (a2a-watch default 15 here); tests shorten it. */
   readonly pollSeconds?: number
@@ -196,6 +198,30 @@ export class A2aSource {
   }
 
   /**
+   * superagent-market-progress-roster P1: one progress step to the requester of `address`'s task, on task
+   * `progress-<task>-<n>`. Only through the team's host face, which sends it only to a caller that declares
+   * progressReceipts: 'sent' (or already there), 'gone' (no face for this task, the caller declares nothing, or it is no
+   * longer linked), or a thrown error (try again later).
+   */
+  async progress(address: Record<string, string>, step: { n: number; state: string; summary: string; ahead?: number; tickets?: readonly unknown[]; by?: ReceiptSeat }): Promise<'sent' | 'gone'> {
+    const config = this.context.config<A2aConfig>(KIND)
+    const { caller, task } = address
+    if (config === undefined || !replyAllowed(address, config) || caller === undefined || task === undefined || this.d.teamSend === undefined) return 'gone'
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(task) || `progress-${task}-${String(step.n)}`.length > 80) return 'gone'
+    const args = ['receipt', task, '--to', caller, '--progress', String(step.n), '--state', step.state,
+      ...(step.ahead !== undefined ? ['--ahead', String(step.ahead)] : []), ...(step.tickets !== undefined && step.tickets.length > 0 ? ['--tickets', JSON.stringify(step.tickets)] : []),
+      ...seatArgs(step.by), '--json', '--exit-class', '--', step.summary.replace(/\s+/g, ' ').trim().slice(0, 400) || step.state]
+    try {
+      return (await this.d.teamSend(args)) === undefined ? 'gone' : 'sent'
+    } catch (error) {
+      const code = (error as { exitCode?: unknown }).exitCode
+      if (code === EXIT_GONE || code === 2) return 'gone'
+      if (code === EXIT_RECEIPT_CONFLICT) return 'sent'
+      throw error
+    }
+  }
+
+  /**
    * superagent v4 (requester acknowledgement): tell an A2A requester its request became a ticket, with an `acknowledged`
    * receipt on task `ack-<task>`. The requester's row stays owed — the ticket's result receipt settles it — but leaves its
    * host's queue count and the 24-hour TTL. Not an Outbox message: the first Outbox message to a caller is its one formal
@@ -203,7 +229,7 @@ export class A2aSource {
    * deliverable: no reply mode, no real caller, an id no receipt can carry, a caller no longer linked), or a thrown
    * error (try again on a later pass).
    */
-  async acknowledge(address: Record<string, string>, text: string): Promise<'sent' | 'already' | 'gone'> {
+  async acknowledge(address: Record<string, string>, text: string, by?: ReceiptSeat): Promise<'sent' | 'already' | 'gone'> {
     const config = this.context.config<A2aConfig>(KIND)
     const { caller, task, ingress } = address
     if (config === undefined || !replyAllowed(address, config) || caller === undefined || task === undefined) return 'gone'
@@ -213,7 +239,7 @@ export class A2aSource {
     const check = JSON.parse(await this.context.commands.run('a2a-net', ['admission', caller, ...(ingress === 'local' ? ['--local'] : []), '--json'])) as { admitted?: unknown; rule?: unknown }
     if (check.admitted !== true || typeof check.rule !== 'string' || !LINK_RULES.has(check.rule)) return 'gone'
     try {
-      await this.context.commands.run('a2a-net', ['receipt', task, '--acknowledged', '--to', caller, '--json', '--exit-class', '--', text])
+      await this.context.commands.run('a2a-net', ['receipt', task, '--acknowledged', '--to', caller, ...seatArgs(by), '--json', '--exit-class', '--', text])
     } catch (error) {
       const code = (error as { exitCode?: unknown }).exitCode
       if (code === EXIT_GONE) return 'gone'
@@ -253,7 +279,8 @@ export class A2aSource {
   async send(message: OutboundMessage, options: { outcome?: ReceiptOutcome } = {}): Promise<'sent' | 'gone'> {
     const task = message.channel.address.task
     const hold = task !== undefined && message.ticketId !== undefined && this.d.resultPending?.(message.ticketId, task) === true
-    if (!hold && options.outcome === undefined) return await this.kindValue.channel.send({ commands: this.context.commands }, message)
-    return await sendReply(this.context, this.context.commands, message, undefined, { ...(hold ? { holdReceipt: true } : {}), ...options })
+    const by = message.ticketId !== undefined ? this.d.seatOf?.(message.ticketId) : undefined
+    if (!hold && options.outcome === undefined && by === undefined) return await this.kindValue.channel.send({ commands: this.context.commands }, message)
+    return await sendReply(this.context, this.context.commands, message, undefined, { ...(hold ? { holdReceipt: true } : {}), ...(by !== undefined ? { by } : {}), ...options })
   }
 }
