@@ -470,7 +470,9 @@ export class SuperagentHost {
     const session = worker ?? this.settingsValue.router
     if (session === undefined || session === '') return undefined
     // The market shows who does the work (its 承接) from a member's seat only: the role says which one this is.
-    const role = worker === undefined ? 'router' as const : this.isObserver(worker) ? 'observer' as const : 'member' as const
+    // From the session's preset, not the canvas settings: this runs in the first pass at boot (a progress step for an open
+    // ticket), before the a2a plugin's card cache exists, and reading the canvas there failed the plugin's start.
+    const role = worker === undefined ? 'router' as const : this.d.presetOf?.(worker) === OBSERVER_PRESET ? 'observer' as const : 'member' as const
     const seat = this.d.handleOf?.(session) ?? session
     const name = this.d.sessionName?.(session)
     return { seat, ...(name !== undefined && name !== '' && name !== seat ? { name } : {}), role }
