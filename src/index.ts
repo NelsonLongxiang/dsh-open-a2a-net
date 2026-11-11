@@ -55,7 +55,7 @@ import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type OutboundBirth, type ReceiptResolvedInfo, type Sender, type SettlementJudge, type TaskRecord } from './task-ledger.ts'
-import { formatReceipt, parseReceipt, taskIdRefusal } from './receipt.ts'
+import { formatReceipt, holdsRow, parseReceipt, receiptExtras, receiptTaskId, taskIdRefusal } from './receipt.ts'
 import { SuperagentHost } from './superagent/host/index.ts'
 import { registerSuperagentTools } from './superagent/host/tools.ts'
 import { RoleTools, scopeKeyOf, type RoleAgent } from './superagent/host/role-tools.ts'
@@ -779,8 +779,8 @@ export function apply(ctx: Context, config: Config): void {
     const resolved = taskLedger.resolveFromMessage(message, judge)
     // An acknowledgement marks the owed row and settles nothing: no waiter is answered, no outcome is recorded, and the
     // settlement seam is not told (its consumers treat a resolution as the end of the task).
-    if (parsed?.envelope?.disposition === 'acknowledged') {
-      if (resolved?.acknowledged === true) logger.info(`a2a: task ${resolved.taskId} acknowledged by its target; it stays owed until the result`)
+    if (holdsRow(parsed?.envelope)) {
+      if (resolved?.acknowledged === true) logger.info(`a2a: task ${resolved.taskId} ${parsed?.envelope?.disposition === 'attention' ? 'has a question from' : 'acknowledged by'} its target; it stays owed until the result`)
       return undefined
     }
     if(resolved!==undefined)pruneReceiptWaiters()
@@ -2190,14 +2190,20 @@ export function apply(ctx: Context, config: Config): void {
       const switches = dash >= 0 ? args.slice(0, dash) : args
       const acknowledged = switches.includes('--acknowledged'), attention = switches.includes('--attention')
       const outcome = flagOf('--outcome')
-      const fields = acknowledged ? { idempotencyKey: task, disposition: 'acknowledged' as const, onBehalfOf: row.team }
-        : attention ? { idempotencyKey: task, disposition: 'attention' as const, onBehalfOf: row.team }
-        : { outcome: (outcome ?? 'completed') as 'completed', idempotencyKey: task, disposition: 'result' as const, onBehalfOf: row.team }
-      const receipt = formatReceipt(task, text.replace(/\s+/g, ' ').trim(), fields)
-      const receiptTask = `${acknowledged ? 'ack' : 'receipt'}-${task}`
+      const line = text.replace(/\s+/g, ' ').trim()
+      // market N1c/N1d: who took it up, what it produced, and an attention's structured question.
+      const extras = receiptExtras(name => flagOf(name), attention, line)
+      if ('error' in extras) return fail(2, extras.error)
+      const fields = acknowledged ? { idempotencyKey: task, disposition: 'acknowledged' as const, onBehalfOf: row.team, ...extras.fields }
+        : attention ? { idempotencyKey: task, disposition: 'attention' as const, onBehalfOf: row.team, ...extras.fields }
+        : { outcome: (outcome ?? 'completed') as 'completed', idempotencyKey: task, disposition: 'result' as const, onBehalfOf: row.team, ...extras.fields }
+      const receipt = formatReceipt(task, line, fields)
+      const receiptTask = receiptTaskId(task, fields.disposition, extras.fields.question)
+      if (receiptTask.length > 80) return fail(2, `receipt: its task id ${receiptTask} is longer than 80 characters`)
       try {
         const out = await dispatchAnywhere(to, receipt, session, row.contextId, new AbortController().signal, true, receiptTask)
         // This host's own inbound row (a requester on another host or a CLI here): the receipt it sent settles it.
+        // An acknowledgement or a question marks it instead (settleOwnInbound leaves such a row owed).
         if (row.direction === 'inbound' && !acknowledged) settleOwnInbound(receipt, to, { caller: session, proof: 'in-process', ingress: 'local' })
         return JSON.stringify({ delivered: true, class: 'sent', task_id: receiptTask, team: to, ...(typeof (out as { context_id?: unknown }).context_id === 'string' ? { context_id: (out as { context_id: string }).context_id } : {}) })
       } catch (error) {

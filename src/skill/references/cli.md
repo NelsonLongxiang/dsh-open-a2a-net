@@ -306,6 +306,15 @@ Files do not go through session messages: use the file channel below, never JPFI
     debt is booked for it), so its receipt settles nothing there; the
     caller still gets it, with `disposition` on its mailbox row. A receipt
     settles a debt only where the caller tracked one.
+  - Added fields (market N1c/N1d, [receipt-envelope-fields](../../../docs/design/receipt-envelope-fields.md)):
+    `--by SEAT [--by-name N] [--by-team T]` says who took the work up, and
+    `--artifacts KIND:ID[,KIND:ID…]` names what it produced, as ids in the
+    caller's system. With `--attention`, `--question-id ID [--options 'A|B']
+    [--default X]` makes it a structured question, whose text is the one line.
+    Such a question rides task id `attention-<task_id>-<ID>` and marks the
+    caller's row the way `--acknowledged` does: it settles nothing, more
+    questions may follow, and the result receipt still comes on
+    `receipt-<task_id>`. A malformed switch exits 2 and sends nothing.
   - `--acknowledged` says the task is taken up and its result follows. It settles nothing: the caller's row stays owed until the result receipt, leaves the queue count, and expires 7 days after the acknowledgement instead of 24 hours after dispatch. It rides task id `ack-<task_id>`, so the later receipt is not refused.
 - `admission <caller> [--local] [--json]` asks the home host how `<caller>`
   would be admitted delivering to this identity right now, recomputed from the

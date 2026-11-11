@@ -79,12 +79,23 @@ describe('P3-5 · the first message is the one formal receipt; later ones are ne
     expect(f.reports).toEqual([])
   })
 
-  it('an attention reply is an attention receipt; no ticket is completed; a task without a context uses the task', async () => {
+  it('an attention reply is an attention receipt with its question on its own task id, leaving the formal receipt for the result (market N2c); a task without a context uses the task', async () => {
     const f = fake(cli())
     // The engine's id for a reply to the ticket's open question (upstream Replies: key('attention-reply', attention.id)).
     f.tickets.set('tk-1', { id: 'tk-1', attention: { id: 'a1' } })
-    await sendReply(f.ctx, f.commands, message({ id: key('attention-reply', 'a1'), ticketId: 'tk-1', text: 'which branch?' }), at(T0))
-    expect(f.runs.at(-1)).toEqual(['a2a-net', 'receipt', 'task-1', '--to', 'dsh/aaaa1111', '--attention', '--json', '--exit-class', '--', 'which branch?'])
+    await sendReply(f.ctx, f.commands, message({ id: key('attention-reply', 'a1'), ticketId: 'tk-1', text: 'which branch?' }), at(T0), { by: { seat: 'dsh/bbbb2222', name: '后端' } })
+    expect(f.runs.at(-1)).toEqual(['a2a-net', 'receipt', 'task-1', '--to', 'dsh/aaaa1111', '--attention', '--question-id', 'a1', '--by', 'dsh/bbbb2222', '--by-name', '后端', '--json', '--exit-class', '--', 'which branch?'])
+    // The question is not the task's formal receipt: the result that follows still is.
+    expect((f.state.get(KV.answered) as Record<string, string> | undefined)?.['task-1']).toBeUndefined()
+    f.tickets.set('tk-1', { id: 'tk-1' })
+    await sendReply(f.ctx, f.commands, message({ id: 'result:1', ticketId: 'tk-1', text: 'main' }), at(T0))
+    expect(f.runs.at(-1)!.slice(1, 7)).toEqual(['receipt', 'task-1', '--to', 'dsh/aaaa1111', '--outcome', 'completed'])
+    // A task id with no room for a question id under 80 characters sends the question the older way.
+    const long = fake(cli())
+    const longTask = 'x'.repeat(70)
+    long.tickets.set('tk-1', { id: 'tk-1', attention: { id: 'a1' } })
+    await sendReply(long.ctx, long.commands, message({ id: key('attention-reply', 'a1'), ticketId: 'tk-1', text: 'q' }, { caller: 'dsh/aaaa1111', task: longTask }), at(T0))
+    expect(long.runs.at(-1)).toEqual(['a2a-net', 'receipt', longTask, '--to', 'dsh/aaaa1111', '--attention', '--json', '--exit-class', '--', 'q'])
     // An id that only looks like one (the old prefix check) is not an attention reply.
     const p = fake(cli())
     p.tickets.set('tk-1', { id: 'tk-1', attention: { id: 'a1' } })

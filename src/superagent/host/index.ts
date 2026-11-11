@@ -124,9 +124,10 @@ export class SuperagentHost {
       receive: trigger => { this.reviews.received(trigger as unknown as Trigger); this.outbound.received(trigger as unknown as Trigger); const result = this.engine.receive(trigger as unknown as Trigger); queueMicrotask(() => this.pass()); return result },
       ticket: id => this.store.tickets.get(id) as never,
       resultPending: (ticketId, task) => this.resultPending(ticketId, task),
+      seatOf: ticketId => this.seatOf(ticketId),
       logger: d.logger, ...(d.runCli !== undefined ? { run: d.runCli } : {}), ...(d.teamSend !== undefined ? { teamSend: d.teamSend } : {}), ...(d.a2aPollSeconds !== undefined ? { pollSeconds: d.a2aPollSeconds } : {}),
     })
-    this.receipts = new A2aReceipts({ store: this.store, a2a: this.a2a, a2aOn: () => this.settingsValue.sources.a2a, now: () => this.now(), logger: d.logger })
+    this.receipts = new A2aReceipts({ store: this.store, a2a: this.a2a, a2aOn: () => this.settingsValue.sources.a2a, now: () => this.now(), seatOf: ticketId => this.seatOf(ticketId), logger: d.logger })
     this.prs = new PrFollower({
       path: join(dir, 'pr-follow.json'), tickets: () => this.store.tickets.list(), engine: () => this.engine, gh: d.gh ?? defaultGh,
       allowed: () => this.settingsValue.allowed.github, paused: () => this.settingsValue.paused, logger: d.logger,
@@ -393,6 +394,18 @@ export class SuperagentHost {
 
   private pool(): string[] { const now = this.settings; return [...now.members, ...now.remoteMembers.map(r => r.ref)] }
   private memberName(id: string): string { return this.d.sessionName?.(id) ?? id }
+
+  /**
+   * market N1c: the seat a ticket's receipts name as the one that took it up — its member once one holds it, else the
+   * router that accepted it — as its A2A handle (the session id where the host has none) and its name.
+   */
+  seatOf(ticketId: string): { seat: string; name?: string } | undefined {
+    const session = this.executor.memberOfTicket(ticketId)?.member ?? this.settingsValue.router
+    if (session === undefined || session === '') return undefined
+    const seat = this.d.handleOf?.(session) ?? session
+    const name = this.d.sessionName?.(session)
+    return { seat, ...(name !== undefined && name !== '' && name !== seat ? { name } : {}) }
+  }
   memberListLine(): string { return `The team's members: ${this.pool().map(id => this.memberName(id)).join('; ') || '(none)'}.` }
 
   /** A member by its session id, the first eight of it, or its name; undefined when none matches, or more than one. */

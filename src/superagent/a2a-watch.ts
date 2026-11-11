@@ -421,6 +421,23 @@ export interface SendOptions {
   readonly holdReceipt?: boolean
   /** The outcome the receipt states, when the host knows it better than a ticket can (a request the team did not take). */
   readonly outcome?: ReceiptOutcome
+  /** market N1c: the seat that took the work up, carried on the formal receipt as `--by`. */
+  readonly by?: ReceiptSeat
+}
+
+/** market N1c: who took the work up (a seat id, its name), as a receipt's `by`. */
+export interface ReceiptSeat { readonly seat: string; readonly name?: string }
+
+/** The receipt switches that carry a seat. */
+export const seatArgs = (by: ReceiptSeat | undefined): string[] => by === undefined ? [] : ['--by', by.seat, ...(by.name !== undefined && by.name !== by.seat ? ['--by-name', by.name] : [])]
+
+/**
+ * market N2c: the question id an attention receipt rides (`attention-<task>-<id>`), cut from the ticket's attention id;
+ * undefined when the task id leaves no room under the 80-character task id, and then the question goes the older way.
+ */
+export function questionIdFor(task: string, attentionId: string): string | undefined {
+  const id = attentionId.replace(/[^A-Za-z0-9]/g, '').slice(0, 12)
+  return id !== '' && `attention-${task}-${id}`.length <= 80 ? id : undefined
 }
 
 /**
@@ -446,15 +463,21 @@ export async function sendReply(ctx: SourceContext, commands: Commands, message:
     if (rule === undefined || !LINK_RULES.has(rule)) return gone(`${caller} is no longer linked to this identity; the reply was not sent`)
     // A held receipt (the host's call: an acknowledged request whose ticket has no result yet) leaves the task's one
     // formal receipt for the result; this message goes out as a follow-up in the same context.
-    const first = options.holdReceipt !== true && stamps(ctx, KV.answered)[task] === undefined
     const text = message.text.trim() === '' ? '(no text)' : message.text
-    if (first && !receiptable(task)) return gone(`Task ${task} cannot carry a receipt (its id is not a CLI task id); the reply was not sent`)
     // The engine's reply to a ticket's question carries the id key('attention-reply', <attention id>) — hashed, so
     // it is recognised by recomputing that id from the ticket's open question, never by a prefix.
     const ticket = message.ticketId !== undefined ? ctx.tickets.get(message.ticketId) : undefined
     const attention = ticket?.attention !== undefined && message.id === key('attention-reply', ticket.attention.id)
-    const args = first
-      ? ['receipt', task, '--to', caller, ...(attention ? ['--attention'] : ['--outcome', options.outcome ?? receiptOutcome(ticket)]), '--json', '--exit-class', '--', text]
+    // market N2c: a ticket's question goes out as an attention receipt with a structured question on its own task id
+    // (attention-<task>-<id>). It marks the requester's row and settles nothing, so the task's one formal receipt stays
+    // for the result. Not when a formal receipt already went out (the question then follows it as a follow-up).
+    const questionId = attention && receiptable(task) && stamps(ctx, KV.answered)[task] === undefined ? questionIdFor(task, ticket!.attention!.id) : undefined
+    const first = questionId === undefined && options.holdReceipt !== true && stamps(ctx, KV.answered)[task] === undefined
+    if (first && !receiptable(task)) return gone(`Task ${task} cannot carry a receipt (its id is not a CLI task id); the reply was not sent`)
+    const args = questionId !== undefined
+      ? ['receipt', task, '--to', caller, '--attention', '--question-id', questionId, ...seatArgs(options.by), '--json', '--exit-class', '--', text.replace(/\s+/g, ' ').trim().slice(0, 2000)]
+      : first
+      ? ['receipt', task, '--to', caller, ...(attention ? ['--attention'] : ['--outcome', options.outcome ?? receiptOutcome(ticket)]), ...seatArgs(options.by), '--json', '--exit-class', '--', text]
       : ['route', caller, '--task', `${LOOP_PREFIX}${key(message.id)}`, '--context', context ?? task, '--json', '--exit-class', '--', text]
     try {
       await commands.run(PROGRAM, args)
@@ -462,7 +485,7 @@ export async function sendReply(ctx: SourceContext, commands: Commands, message:
       const code = exitCodeOf(error)
       if (code === EXIT_GONE) return gone(`The host says ${caller} can no longer receive task ${task}'s reply`)
       // The receipt is already there (a crash after the CLI succeeded, before the record): it counts as sent.
-      if (!(first && code === EXIT_RECEIPT_CONFLICT)) throw error
+      if (!((first || questionId !== undefined) && code === EXIT_RECEIPT_CONFLICT)) throw error
     }
     if (first) setStamp(ctx, KV.answered, task, at.toISOString(), ANSWERED_RECORD_CAP, nowMs)
     setStamp(ctx, KV.sendFailed, message.id, undefined, SEND_FAILED_RECORD_CAP, nowMs)
