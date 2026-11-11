@@ -5,7 +5,9 @@
 
 > 2026-11-10（#569）：预览版从 npm 回读、核对通过后，立即单独提交一次「记录已发布」：把该版本一节的标题改成「已发布到 npm 的 preview 标签」，并写上状态行（标签指向的提交、npm 发布时间、shasum、integrity、回读结果）。不要等到下一版发版时才顺手改。
 
-## 0.8.1-preview.13（预览版候选，待评审，未发布）
+## 0.8.1-preview.13（预览版，已发布到 npm 的 preview 标签）
+
+- 状态（2026-11-11）：标签 `v0.8.1-preview.13` 指向 145aa2d（发版 PR #607）。2026-11-11T14:40:17Z 发布到 npmjs，dist-tag 为 `preview`，`latest` 仍是 0.7.0。shasum `0b3dbbfcacfe469dbaf86f8a24c4d30b3750cdab`，integrity `sha512-47+4RNNa/rmifRn37QQYYJPb6jPFvDVap7j4h4UaxT+EmU92eTiB55GJnZfSlS6Rti6rfxyfQZ4zMP9mAKnDFg==`。从 npmjs 回读的包与审计过的包逐字节相同。GitHub Release 为 prerelease。未发布到 Gitea。
 
 - 基线：next/0.8 合入 master 后的合并提交（候选提交在发版 PR 里写明）。相对已发布的 0.8.1-preview.12 有下列改动。
 - 升级、回退照 [0.8.1 升级检查](ops/0.8.1-upgrade-check.md)。
