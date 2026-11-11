@@ -5,6 +5,36 @@
 
 > 2026-11-10（#569）：预览版从 npm 回读、核对通过后，立即单独提交一次「记录已发布」：把该版本一节的标题改成「已发布到 npm 的 preview 标签」，并写上状态行（标签指向的提交、npm 发布时间、shasum、integrity、回读结果）。不要等到下一版发版时才顺手改。
 
+## 0.8.1-preview.13（预览版候选，待评审，未发布）
+
+- 基线：next/0.8 合入 master 后的合并提交（候选提交在发版 PR 里写明）。相对已发布的 0.8.1-preview.12 有下列改动。
+- 升级、回退照 [0.8.1 升级检查](ops/0.8.1-upgrade-check.md)。
+- 这一版是 superagent 团队接工作台市场的节点侧：节点怎么接见 [superagent 团队接工作台市场](ops/superagent-market-team.md)（#602）。
+
+### 新功能
+
+- 回执带上接手人、产出和结构化提问（#603，设计 `docs/design/receipt-envelope-fields.md`）：
+  - 回执信封新增 `by`（接手的席位）、`artifacts`（产出在请求方系统里的编号）；`attention` 回执可带 `question`（提问编号、问题、可选答法、缺省项）。旧版本读取方忽略这些字段。
+  - 带 `question` 的提问走自己的任务号 `attention-<task>-<提问编号>`，不结清原派工，可以问多次；结果仍走 `receipt-<task>`，带可机读的结局。
+  - `a2a-net receipt` 和团队宿主出口认同一组开关：`--by`、`--artifacts`、`--question-id`/`--options`/`--default`。
+  - superagent 团队的成员提问改用这种回执，不再走要回执、占名额的跟进路由；确认、提问和结果回执都写明接手的席位，工单结束后写的是做事的成员。
+- 进展回执与轻路径（#605，设计 `docs/design/superagent-market-progress-roster.md` P1/P2）：
+  - 新增 `progress` 回执（任务号 `progress-<task>-<n>`）：排队（前面几件）、在做、等待、卡住，谁在做，请求拆成了哪些工单；不结清原派工，原派工的过期时间重新计算。只发给钉了公钥、名片声明 `progressReceipts` 的调用方；限频；团队设置 `progressOff` 可关。
+  - 轻路径：请求方在自己那张工单的对话里接着发的消息，由宿主直接挂到工单交给成员，不再经总工判定；别人在同一对话里发的仍由总工判。内置的 superagent 引擎没有改动。
+- 名册上报（#606，P3）：团队宿主每 5 分钟、以及席位变化 30 秒后，给画布上钉了公钥、名片声明 `teamRoster` 的远端成员发一份名册（`[A2A roster]`：席位、名称、画布地址、角色、在线、手上几件、排队几件），不欠回执、不占名额。
+
+### 修复
+
+- 请求方的答复被转进工单、同时被总工判为「不接」时，不再先回「已转给成员」、再回一条矛盾的「团队未接」（#601）；送到成员手里的消息，即便工单结束时被放回，也在工单结束时回执结局。
+
+### 本版已披露限制
+
+- 0.8.1-preview.12 一节列出的限制仍然适用。
+- 进展回执和名册要对端名片声明能力、并作为画布远端成员钉了公钥；本版只在单元测试里走过发送一侧，没有和真实的市场对端联调。
+- `progressOff` 目前只能经设置接口或设置文件改，工作台设置页还没有开关。
+- 任务号太长（`attention-<task>-<提问编号>` 超过 80 字符）时，提问退回旧的跟进路由。
+- superagent 自己还不填 `artifacts`：成员报告里没有产出字段。
+
 ## 0.8.1-preview.12（预览版，已发布到 npm 的 preview 标签）
 
 - 状态（2026-11-11）：标签 `v0.8.1-preview.12` 指向 b222802（发版 PR #599）。2026-11-11T12:07:20Z 发布到 npmjs，dist-tag 为 `preview`，`latest` 仍是 0.7.0。shasum `a35b2e4c03763205371edd6dc9625e9975e143c7`，integrity `sha512-OcEZMbJ7t6OtFjhSL3TkGEfCIHoBYSi8G7kUDjWRvKdea9oHltAeGCjm9nEnphWUSe9M0SV0yMGdyFde4wYLgw==`。从 npmjs 回读的包与审计过的包逐字节相同。GitHub Release 为 prerelease。未发布到 Gitea。
