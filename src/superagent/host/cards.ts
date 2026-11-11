@@ -139,7 +139,7 @@ export const YGL_WRITE = 'mcp__ygl__write'
 /** The ygl-trees steps on an assignment card (docs/design/superagent-ygl-memory.md). */
 export const YGL_CARD_LINES: readonly string[] = [
   'team memory (ygl-trees), as part of this ticket:',
-  '- first: mcp__ygl__read domain agent action brief, and domain kb action search on this ticket\'s subject; build on what earlier work found',
+  '- first: mcp__ygl__read domain agent action brief (if it answers ambiguous project: mcp__ygl__write domain project action use, then again), and domain kb action search on this ticket\'s subject; build on what earlier work found',
   '- as you go: with mcp__ygl__write, record each source you rely on and the exact lines you quote as evidence, and each judgement as a claim linked to them',
   '- before ready: kb add what the next session should reuse, and pass the ids you wrote in ygl on a2a_ticket_report',
 ]
