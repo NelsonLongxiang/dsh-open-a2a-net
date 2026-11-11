@@ -109,6 +109,25 @@ describe('receipt <task_id> (superagent p1-receipt-cmd)', () => {
     }
   })
 
+  it('market N2a: --progress sends a numbered step on progress-<task>-<n> that leaves the result to follow', async () => {
+    const h = await host(() => ({ status: 200, body: { routed: true, delivered: true, team: 'ops/11111111' } }))
+    const env = await scoutEnv(h.url)
+    h.store.mail(SCOUT, 'ops/11111111', 'please build it', undefined, { taskId: 'job-8', contextId: 'ctx-8' })
+    const out = await runCli(['receipt', 'job-8', '--progress', '1', '--state', 'queued', '--ahead', '2', '--tickets', '[{"id":"tk1","state":"queued"}]', '--', '排队中'], env)
+    expect(out.code, out.stderr).toBe(0)
+    const body = h.bodies.at(-1) as { task_id: string; message: string }
+    expect(body.task_id).toBe('progress-job-8-1')
+    const envelope = JSON.parse(body.message.split('\n')[1]!) as Record<string, unknown>
+    expect(envelope).toMatchObject({ idempotencyKey: 'job-8', disposition: 'progress', progress: { n: 1, state: 'queued', summary: '排队中', ahead: 2 }, tickets: [{ id: 'tk1', state: 'queued' }] })
+    const before = h.bodies.length
+    for (const bad of [['--progress', '1', '--state', 'done'], ['--state', 'working'], ['--acknowledged', '--progress', '1', '--state', 'working']]) {
+      expect((await runCli(['receipt', 'job-8', ...bad, '--', 'x'], env)).code, bad.join(' ')).toBe(2)
+    }
+    expect(h.bodies.length).toBe(before)
+    expect((await runCli(['receipt', 'job-8', '--', 'built'], env)).code).toBe(0)
+    expect((h.bodies.at(-1) as { task_id: string }).task_id).toBe('receipt-job-8')
+  })
+
   it('a second, different receipt for the task is refused with the follow-up path named', async () => {
     const h = await host(() => ({ status: 409, body: { error: 'task id already used for a different message', replay: false, task_id: 'receipt-job-3' } }))
     const env = await scoutEnv(h.url)

@@ -198,6 +198,30 @@ export class A2aSource {
   }
 
   /**
+   * superagent-market-progress-roster P1: one progress step to the requester of `address`'s task, on task
+   * `progress-<task>-<n>`. Only through the team's host face, which sends it only to a caller that declares
+   * progressReceipts: 'sent' (or already there), 'gone' (no face for this task, the caller declares nothing, or it is no
+   * longer linked), or a thrown error (try again later).
+   */
+  async progress(address: Record<string, string>, step: { n: number; state: string; summary: string; ahead?: number; tickets?: readonly unknown[]; by?: ReceiptSeat }): Promise<'sent' | 'gone'> {
+    const config = this.context.config<A2aConfig>(KIND)
+    const { caller, task } = address
+    if (config === undefined || !replyAllowed(address, config) || caller === undefined || task === undefined || this.d.teamSend === undefined) return 'gone'
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(task) || `progress-${task}-${String(step.n)}`.length > 80) return 'gone'
+    const args = ['receipt', task, '--to', caller, '--progress', String(step.n), '--state', step.state,
+      ...(step.ahead !== undefined ? ['--ahead', String(step.ahead)] : []), ...(step.tickets !== undefined && step.tickets.length > 0 ? ['--tickets', JSON.stringify(step.tickets)] : []),
+      ...seatArgs(step.by), '--json', '--exit-class', '--', step.summary.replace(/\s+/g, ' ').trim().slice(0, 400) || step.state]
+    try {
+      return (await this.d.teamSend(args)) === undefined ? 'gone' : 'sent'
+    } catch (error) {
+      const code = (error as { exitCode?: unknown }).exitCode
+      if (code === EXIT_GONE || code === 2) return 'gone'
+      if (code === EXIT_RECEIPT_CONFLICT) return 'sent'
+      throw error
+    }
+  }
+
+  /**
    * superagent v4 (requester acknowledgement): tell an A2A requester its request became a ticket, with an `acknowledged`
    * receipt on task `ack-<task>`. The requester's row stays owed — the ticket's result receipt settles it — but leaves its
    * host's queue count and the 24-hour TTL. Not an Outbox message: the first Outbox message to a caller is its one formal

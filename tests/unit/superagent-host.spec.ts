@@ -943,6 +943,31 @@ describe('spec audit: follow-ups, the owner answering, the terminal', () => {
     await h.stop()
   })
 
+  it('light path (superagent-market-progress-roster P2): the caller a ticket serves talks to its member without the router; another caller in the same conversation still goes to the router', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']), home: mkdtempSync(join(tmpdir(), 'sa-light-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, homeUrl: () => 'http://127.0.0.1:1',
+      runCli: async args => args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' })
+    const market = 'market/0123456789abcdef', other = 'other/0123456789abcdef'
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [market, other] }, rules: [{ name: 'deps', text: 'Upgrade.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const receive = (n: string, ctx: string, bot: string) => { const task = `direct-${n.padStart(12, '0')}`; h.engine.receive({ ...wb(n, ctx), source: 'a2a', threads: [{ source: 'a2a', id: ctx }], actor: { source: 'a2a', id: bot }, human: false, channel: { source: 'a2a', thread: `a2a:${ctx}`, address: { caller: bot, task, context: ctx } }, addressed: 'direct', meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } } as never); h.pass() }
+    receive('1', 'ctx-1', market)
+    const accepted = routeItem(h, { trigger_id: '1', kind: 'accept', title: 'chat', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
+    await settle()
+    receive('2', 'ctx-1', market)
+    receive('3', 'ctx-1', other)
+    await settle()
+    // The router's queue: the served caller's message is not in it, the other caller's is.
+    const thread = h.store.threads.get('a2a:ctx-1')!
+    const queued = [...thread.pending, ...(thread.evaluating?.triggerIds ?? [])]
+    expect(queued).not.toContain('2')
+    expect(queued).toContain('3')
+    // Both reach the member as inputs.
+    expect(h.store.tickets.get(accepted.ticket_id)!.inputs.filter(i => i.kind === 'trigger').map(i => (i as { triggerId: string }).triggerId)).toEqual(expect.arrayContaining(['2', '3']))
+    await h.stop()
+  })
+
   it('the owner answers a question on a ticket an agent asked for; the answer reaches its member as a person\'s message', async () => {
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
     const { routeItem } = await import('../../src/superagent/host/tools.ts')

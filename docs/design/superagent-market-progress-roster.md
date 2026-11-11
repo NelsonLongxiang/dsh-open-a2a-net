@@ -1,6 +1,6 @@
 # superagent ↔ market: progress, sub-tickets, the light path, and the roster
 
-Status: agreed with the workbench market on 2026-11-11 (its items N2a, N2b, the "light path" of its chat design, and N3). This builds on [receipt-envelope-fields](receipt-envelope-fields.md) (`by`, `artifacts`, `question`, the `attention-<task>-<id>` question) and on the node-side checklist [superagent-market-team](../ops/superagent-market-team.md).
+Status: agreed with the workbench market on 2026-11-11; P1 and P2 implemented (P3 follows) (its items N2a, N2b, the "light path" of its chat design, and N3). This builds on [receipt-envelope-fields](receipt-envelope-fields.md) (`by`, `artifacts`, `question`, the `attention-<task>-<id>` question) and on the node-side checklist [superagent-market-team](../ops/superagent-market-team.md).
 
 The market's goal: people use only the market, and the nodes work headless. The market therefore needs to see:
 
@@ -49,7 +49,7 @@ It also needs a conversation with a seat that does not cost a router judgement p
   - the caller is the one the ticket was accepted from;
   - the caller is linked (a pinned remote canvas member, `canvas-shared` or `cli-deposit`).
 - **What stays the same.** The member gets the message as an input as before, and the message's formal receipt is the ticket's ending receipt (#601).
-- **Where it changes.** This is an engine intake change (the vendored engine's `owners()`). It is recorded against the vendored snapshot so a later engine update carries it.
+- **Where it changes.** In the host, not the vendored engine (which stays byte for byte its pinned upstream). The engine's `trigger.received` event calls the host inside the intake's unit of work. For such a message the host makes the router's own `attach` to that ticket: the message leaves the router's queue before any pass can hand it over, and is recorded as routed to the ticket.
 - **What still goes to the router:**
   - messages from other callers into the same conversation;
   - a message that reaches only an ended ticket;
@@ -77,7 +77,7 @@ Each host with a superagent team reports its seats to every **canvas remote memb
 
 ### P4. Order
 
-- **First PR: P1 and P2.** Mid tier: receipt semantics plus engine intake.
+- **First PR: P1 and P2.** Mid tier: receipt semantics plus the host's light path.
 - **Then P3.** Mid tier: a new outbound message and a timer.
 
 Each needs a non-self review PASS. The market's side follows the shapes above; field names are fixed here.

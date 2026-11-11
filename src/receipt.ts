@@ -63,11 +63,11 @@ export type ReceiptOutcomeV2 = (typeof RECEIPT_OUTCOMES)[number]
  * by a queue). A host that predates it drops the unknown value and settles the row on it; the result then arrives as a
  * late receipt that updates the settled row's summary and outcome.
  */
-export const RECEIPT_DISPOSITIONS = ['result', 'attention', 'acknowledged'] as const
+export const RECEIPT_DISPOSITIONS = ['result', 'attention', 'acknowledged', 'progress'] as const
 
 export type ReceiptDisposition = (typeof RECEIPT_DISPOSITIONS)[number]
 
-const KNOWN_ENVELOPE_KEYS: readonly string[] = ['outcome', 'idempotencyKey', 'sessionKey', 'elapsedMs', 'artifacts', 'onBehalfOf', 'authRef', 'disposition', 'by', 'question']
+const KNOWN_ENVELOPE_KEYS: readonly string[] = ['outcome', 'idempotencyKey', 'sessionKey', 'elapsedMs', 'artifacts', 'onBehalfOf', 'authRef', 'disposition', 'by', 'question', 'progress', 'tickets']
 void KNOWN_ENVELOPE_KEYS
 
 /** Envelope fields this codec extracts; anything else rides through ignored (append-only). */
@@ -95,10 +95,26 @@ export interface ReceiptEnvelopeV2Fields {
    * `attention-<task>-<question id>`, so the task's result receipt still follows. Additive.
    */
   question?: ReceiptQuestion
+  /**
+   * market N2a (superagent-market-progress-roster P1): a `progress` receipt's step — marks the caller's row like an
+   * acknowledgement, rides `progress-<task>-<n>`. Additive.
+   */
+  progress?: ReceiptProgress
+  /** market N2b: the tickets the request became or was fanned into, with who holds each and its state. Additive. */
+  tickets?: ReceiptTicket[]
 }
 
+/** Where a request stands between its acknowledgement and its result. */
+export const PROGRESS_STATES = ['queued', 'working', 'waiting', 'blocked'] as const
+export type ProgressState = (typeof PROGRESS_STATES)[number]
+/** One progress step: its number (1, 2, …), the state, a one-line summary, when, and for `queued` how many are ahead. */
+export interface ReceiptProgress { n: number; state: ProgressState; summary?: string; at: string; ahead?: number }
+export const TICKET_STATES = ['queued', 'working', 'waiting', 'blocked', 'ended'] as const
+/** One ticket a request became: its id and title, the seat holding it, its state and, once ended, its outcome. */
+export interface ReceiptTicket { id: string; title?: string; seat?: string; state: (typeof TICKET_STATES)[number]; outcome?: string }
+
 /** Bounds on the added fields: what a parser keeps, and what a sender may claim. */
-export const RECEIPT_FIELD_LIMITS = { text: 2000, short: 200, artifacts: 16, options: 6, questionId: 24 } as const
+export const RECEIPT_FIELD_LIMITS = { text: 2000, short: 200, artifacts: 16, options: 6, questionId: 24, tickets: 16 } as const
 
 /** Who took the work up: a seat id (a session id or a qualified member ref), its display name, the team it serves. */
 export interface ReceiptBy { seat: string; name?: string; team?: string }
@@ -112,7 +128,7 @@ export const QUESTION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,23}$/
 
 /** Whether a receipt marks the caller's row instead of settling it: an acknowledgement, or an attention carrying a question. */
 export function holdsRow(envelope: ReceiptEnvelopeV2Fields | undefined): boolean {
-  return envelope?.disposition === 'acknowledged' || (envelope?.disposition === 'attention' && envelope.question !== undefined)
+  return envelope?.disposition === 'acknowledged' || envelope?.disposition === 'progress' || (envelope?.disposition === 'attention' && envelope.question !== undefined)
 }
 
 const shortText = (value: unknown, cap: number = RECEIPT_FIELD_LIMITS.short): string | undefined =>
@@ -136,6 +152,32 @@ export function parseArtifacts(value: unknown): ReceiptArtifact[] | undefined {
     if (item === null || typeof item !== 'object' || Array.isArray(item)) continue
     const kind = shortText((item as Record<string, unknown>)['kind']), id = shortText((item as Record<string, unknown>)['id'])
     if (kind !== undefined && id !== undefined) items.push({ kind, id })
+  }
+  return items.length > 0 ? items : undefined
+}
+
+/** The `progress` field, or undefined when it is not a well-formed one. */
+export function parseProgress(value: unknown): ReceiptProgress | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const r = value as Record<string, unknown>
+  const n = r['n'], state = r['state'], at = shortText(r['at'])
+  if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 1 || typeof state !== 'string' || !(PROGRESS_STATES as readonly string[]).includes(state) || at === undefined) return undefined
+  const summary = shortText(r['summary'], RECEIPT_FIELD_LIMITS.text)
+  const ahead = typeof r['ahead'] === 'number' && Number.isSafeInteger(r['ahead']) && r['ahead'] >= 0 ? r['ahead'] : undefined
+  return { n, state: state as ProgressState, ...(summary !== undefined ? { summary } : {}), at, ...(ahead !== undefined ? { ahead } : {}) }
+}
+
+/** The `tickets` field, or undefined when it holds no well-formed item; malformed items are dropped. */
+export function parseTickets(value: unknown): ReceiptTicket[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const items: ReceiptTicket[] = []
+  for (const item of value.slice(0, RECEIPT_FIELD_LIMITS.tickets)) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) continue
+    const r = item as Record<string, unknown>
+    const id = shortText(r['id']), state = r['state']
+    if (id === undefined || typeof state !== 'string' || !(TICKET_STATES as readonly string[]).includes(state)) continue
+    const title = shortText(r['title']), seat = shortText(r['seat']), outcome = shortText(r['outcome'])
+    items.push({ id, ...(title !== undefined ? { title } : {}), ...(seat !== undefined ? { seat } : {}), state: state as ReceiptTicket['state'], ...(outcome !== undefined ? { outcome } : {}) })
   }
   return items.length > 0 ? items : undefined
 }
@@ -193,6 +235,10 @@ function tryEnvelopeLine(line: string): ReceiptEnvelopeV2Fields | undefined {
     // A question means something only on an attention receipt; on any other it is dropped.
     const question = fields.disposition === 'attention' ? parseQuestion(record['question']) : undefined
     if (question !== undefined) fields.question = question
+    const progress = fields.disposition === 'progress' ? parseProgress(record['progress']) : undefined
+    if (progress !== undefined) fields.progress = progress
+    const tickets = parseTickets(record['tickets'])
+    if (tickets !== undefined) fields.tickets = tickets
     if (Object.keys(fields).length === 0) return undefined
     return fields
   } catch {
@@ -247,6 +293,8 @@ export function formatReceipt(
   if (fields.by !== undefined) ordered['by'] = fields.by
   if (fields.artifacts !== undefined && fields.artifacts.length > 0) ordered['artifacts'] = fields.artifacts
   if (fields.question !== undefined) ordered['question'] = fields.question
+  if (fields.progress !== undefined) ordered['progress'] = fields.progress
+  if (fields.tickets !== undefined && fields.tickets.length > 0) ordered['tickets'] = fields.tickets
   const keys = Object.keys(ordered)
   if (keys.length === 0) return header
   return `${header}\n${JSON.stringify(ordered)}`
@@ -258,8 +306,24 @@ export function formatReceipt(
  * `--question-id ID [--options A|B|…] [--default X]` (the receipt's one line is the question's text). Returns the fields,
  * or the usage error that sends nothing. cli/a2a.mjs keeps a copy of these rules (it runs without the plugin's sources).
  */
-export function receiptExtras(flag: (name: string) => string | undefined, attention: boolean, text: string): { fields: Pick<ReceiptEnvelopeV2Fields, 'by' | 'artifacts' | 'question'> } | { error: string } {
-  const fields: Pick<ReceiptEnvelopeV2Fields, 'by' | 'artifacts' | 'question'> = {}
+export function receiptExtras(flag: (name: string) => string | undefined, attention: boolean, text: string, now: () => string = () => new Date().toISOString()): { fields: Pick<ReceiptEnvelopeV2Fields, 'by' | 'artifacts' | 'question' | 'progress' | 'tickets'> } | { error: string } {
+  const fields: Pick<ReceiptEnvelopeV2Fields, 'by' | 'artifacts' | 'question' | 'progress' | 'tickets'> = {}
+  // market N2a/N2b: --progress N --state S [--ahead K] [--tickets JSON] (the one line is the step's summary).
+  const step = flag('--progress')
+  if (step !== undefined) {
+    if (attention) return { error: '--progress does not go with --attention' }
+    const ahead = flag('--ahead')
+    const progress = parseProgress({ n: Number(step), state: flag('--state'), summary: text, at: now(), ...(ahead !== undefined ? { ahead: Number(ahead) } : {}) })
+    if (progress === undefined || (ahead !== undefined && progress.ahead === undefined)) return { error: `--progress takes a step number from 1 with --state ${PROGRESS_STATES.join('|')} [--ahead K]` }
+    fields.progress = progress
+  } else if (flag('--state') !== undefined || flag('--ahead') !== undefined) return { error: '--state and --ahead go with --progress' }
+  const ticketsJson = flag('--tickets')
+  if (ticketsJson !== undefined) {
+    let tickets: ReceiptTicket[] | undefined
+    try { tickets = parseTickets(JSON.parse(ticketsJson) as unknown) } catch { tickets = undefined }
+    if (tickets === undefined) return { error: `--tickets takes a JSON array of up to ${String(RECEIPT_FIELD_LIMITS.tickets)} {id, state, title?, seat?, outcome?}` }
+    fields.tickets = tickets
+  }
   const seat = flag('--by')
   if (seat !== undefined) {
     const by = parseBy({ seat, name: flag('--by-name'), team: flag('--by-team') })
@@ -288,6 +352,7 @@ export function receiptExtras(flag: (name: string) => string | undefined, attent
 }
 
 /** The task id a receipt rides: `ack-<task>`, `attention-<task>-<question id>` for a question, else `receipt-<task>`. */
-export function receiptTaskId(task: string, disposition: ReceiptDisposition, question?: ReceiptQuestion): string {
+export function receiptTaskId(task: string, disposition: ReceiptDisposition, question?: ReceiptQuestion, progress?: ReceiptProgress): string {
+  if (disposition === 'progress' && progress !== undefined) return `progress-${task}-${String(progress.n)}`
   return disposition === 'acknowledged' ? `ack-${task}` : disposition === 'attention' && question !== undefined ? `attention-${task}-${question.id}` : `receipt-${task}`
 }

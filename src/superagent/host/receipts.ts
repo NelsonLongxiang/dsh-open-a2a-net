@@ -169,10 +169,13 @@ export class A2aReceipts {
     // ticket's ending receipt, so a rejected one here would contradict the "passed to the member" acknowledgement and use it
     // up. A refusal of what the message asked (an agent's stop, a sender not listed) is still told; one the member handed
     // back is the router's again, and a rejection stands.
+    // A message fanned into a ticket, or delivered to a ticket's member (it keeps its input when the ticket lets go of it at
+    // its end, superagent-market-progress-roster P2), and not handed back: its receipt is the ticket's ending receipt.
     const intoTicket = (triggerId: string): boolean => {
       const disposition = this.d.store.triggers.disposition(triggerId)
-      const tickets = disposition?.fanout ?? []
-      return tickets.some(ticketId => !(disposition?.handbacks ?? []).some(item => item.ticketId === ticketId))
+      const handedBack = (ticketId: string): boolean => (disposition?.handbacks ?? []).some(item => item.ticketId === ticketId)
+      if ((disposition?.fanout ?? []).some(ticketId => !handedBack(ticketId))) return true
+      return this.d.store.tickets.list().some(ticket => !handedBack(ticket.id) && ticket.inputs.some(input => input.kind === 'trigger' && input.triggerId === triggerId && input.deliveredTo !== undefined))
     }
     const due = new Map<string, { channel: NonNullable<Trigger['channel']>; text: string; outcome: 'completed' | 'rejected'; ticketId?: string }>()
     const consider = (triggerId: string, make: () => { text: string; outcome: 'completed' | 'rejected'; ticketId?: string }): void => {
