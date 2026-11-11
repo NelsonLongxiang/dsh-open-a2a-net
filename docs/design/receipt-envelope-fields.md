@@ -21,7 +21,7 @@ All three are additive: every older reader ignores them.
 | Key | Shape | On |
 |---|---|---|
 | `by` | `{seat, name?, team?, role?}` | any receipt; superagent sets it on acknowledgements, questions, progress and results |
-| `artifacts` | `[{kind, id}]`, at most 16 | any receipt; `kind` such as `table`, `file`, `sop-run`, `id` in the requester's system |
+| `artifacts` | `[{kind, id, title?}]`, at most 16; `title` is display text for people (added 2026-11-11) | any receipt; `kind` such as `table`, `file`, `sop-run`, `id` in the requester's system |
 | `question` | `{id, text, options?, default?}` | `attention` only; dropped on any other disposition |
 
 - **`seat`** is the seat's A2A handle (`<zone>/<id8>`), or its session id where the host has none. `name` is its display name.
