@@ -133,6 +133,17 @@ A member can sit on another host: another physical node, or another DSH instance
 - **On the member host:** `POST { action: 'serve', team: '<zone>/canvas/<name>@<fp8>', members: [<local session ids>] }` — the team's canvas id, whose fingerprint names its owner. The host finds the linked peer whose signed card has that key and advertises that canvas, and pins the key. Only that key may assign work to those sessions (`/a2a/superagent-member`). Those sessions report with `a2a_ticket_report` as usual, and the host forwards the report, signed. `team: null` leaves the team. This is the member host owner's consent: a team host cannot take another host's sessions on its own. A served session on another preset than `superagent-member` (a serve stored before presets) takes no new work — a stop still reaches it — and the state reports it as `servesProblem` until it is served from a member-preset session.
 - Serving sessions are isolated from A2A like any member.
 
+## Named dispatch and rework returns
+
+A request whose first line is `[A2A dispatch] {json}` is read by the host, not only by the router, when it comes signed from a pinned canvas remote member whose card declares the capability (docs/design/superagent-named-dispatch.md).
+
+- **`for`** (capability `directedSeats`) names a seat: a seat id, a handle or a member name.
+  - The router only decides whether to take the request. On accept the host gives the ticket to that seat. A busy seat makes it wait.
+  - A seat that is not on the team, not loaded or unknown holds the ticket. The requester is asked 「等」 or 「换人」 on `attention-<task>-<id>`.
+  - A split of a named ticket gives its parts to the seat, unless a part names another member.
+- **`rework`** (capability `reworkReturns`, `{"of": "<returned task id>"}`) is accepted by the host at once as a new ticket, 「打回重做：<title>」. It goes on the member that last worked the returned ticket, or the `for` seat.
+- **Seats.** Each member slot has a stable `seatId`, carried in the roster. `POST /__dsh_a2a/superagent { action: 'move-seat', from, to }` moves it to the session that replaced a member.
+
 ## For the owner
 
 The owner control route is `/__dsh_a2a/superagent`. One DSH instance can run several teams: `GET /__dsh_a2a/superagent/teams` lists them and `POST { canvas, router }` there adds one. On the control route, `teamId` in a POST body or `?teamId=` on a GET picks a team by id; without it the route means the instance's primary team. Each team has its own settings, rules, tickets and A2A address, and a session has one role across all of them. The list also has the teams linked instances advertise (a team advertises itself only while its A2A Source is on), and `POST { action: 'send', address, session, text }` there sends one a request as that session. It goes through the ordinary route, and the receiving team treats it as any A2A message.

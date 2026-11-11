@@ -141,6 +141,11 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
             } else if (fields.action === 'reevaluate') {
               // Design superagent-reevaluate-note D1: the owner asks for a fresh judgement of a stored message.
               send(200, sa.reevaluate(typeof fields.trigger_id === 'string' ? fields.trigger_id : ''))
+            } else if (fields.action === 'move-seat') {
+              // Named dispatch N2: the owner moves a seat (its stable id) to the session that replaced its member.
+              const moved = sa.named.moveSeat(typeof fields.from === 'string' ? fields.from : '', typeof fields.to === 'string' ? fields.to : '')
+              sa.pass()
+              send(200, moved)
             } else if (fields.action === 'stop' || fields.action === 'retry') {
               const ticketId = typeof fields.ticket_id === 'string' ? fields.ticket_id : ''
               const ticket = fields.action === 'stop'
@@ -148,7 +153,7 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
                 : sa.engine.retryTicket(ticketId)
               sa.pass()
               send(200, { ok: true, ticket })
-            } else send(200, { ok: false, error: 'action must be settings, request, answer, serve, stop, retry or reevaluate' })
+            } else send(200, { ok: false, error: 'action must be settings, request, answer, serve, move-seat, stop, retry or reevaluate' })
           } catch (error) { send(200, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
         }, 64_000)
       }),
