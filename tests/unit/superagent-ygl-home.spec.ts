@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { ensureTeamYglHome, teamYglHome, YGL_DB_FILE, type YglRun } from '../../src/superagent/host/ygl-home.ts'
+import { ensureTeamYglHome, ensureTeamYglProject, teamYglHome, teamYglProject, YGL_DB_FILE, type YglRun } from '../../src/superagent/host/ygl-home.ts'
 
 const quiet = { warn: () => {} }
 const fresh = () => join(mkdtempSync(join(tmpdir(), 'sa-ygl-')), 'team')
@@ -33,5 +33,21 @@ describe('the team ygl-trees workspace', () => {
     expect(await ensureTeamYglHome({ logger, home: fresh(), run: async () => { throw Object.assign(new Error('spawn ygl-trees ENOENT'), { code: 'ENOENT' }) } })).toBe('unavailable')
     expect(warned).toEqual([])
     expect(await ensureTeamYglHome({ logger, home: fresh(), run: async () => { throw Object.assign(new Error('locked'), { code: 1 }) } })).toBe(process.platform === 'win32' ? 'unavailable' : 'failed')
+  })
+})
+
+describe('the team project (Y1c)', () => {
+  it('is named after the canvas', () => { expect(teamYglProject('运维')).toBe('team-运维') })
+  it('is made once, after the workspace, under the host\'s own ygl session', async () => {
+    const home = fresh(), calls: Array<[readonly string[], string | undefined, string | undefined]> = []
+    const run: YglRun = async (args, env) => { calls.push([args, env.YGL_HOME, env.YGL_SESSION]); if (args[0] === 'db') writeFileSync(join(home, YGL_DB_FILE), '') }
+    expect(await ensureTeamYglProject('team-ops', { logger: quiet, home, run })).toBe('created')
+    expect(await ensureTeamYglProject('team-ops', { logger: quiet, home, run })).toBe('present')
+    expect(calls.map(c => c[0].slice(0, 3))).toEqual([['db', 'init'], ['project', 'new', 'team-ops']])
+    expect(calls[1]![1]).toBe(home)
+    expect(calls[1]![2]).toBe('superagent-host')
+  })
+  it('does nothing without the command', async () => {
+    expect(await ensureTeamYglProject('team-x', { logger: quiet, home: fresh(), run: async () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) } })).toBe('unavailable')
   })
 })

@@ -50,3 +50,29 @@ export async function ensureTeamYglHome(d: { readonly logger: { warn(format: str
   }
   return existsSync(join(home, YGL_DB_FILE)) ? 'created' : 'failed'
 }
+
+/** One ygl-trees project per team, named after its canvas (design Y1c): members record into it, the router reads it. */
+export const teamYglProject = (canvas: string): string => `team-${canvas}`
+
+const madeProjects = new Set<string>()
+
+/**
+ * Create the team's project once in the team workspace (after the workspace itself). `project new` is idempotent; it runs
+ * under its own YGL_SESSION, so the selection it makes touches no team session.
+ * @returns what happened; a failure is logged, never thrown.
+ */
+export async function ensureTeamYglProject(name: string, d: { readonly logger: { warn(format: string, ...args: unknown[]): void }; readonly home?: string; readonly run?: YglRun }): Promise<YglHomeOutcome> {
+  const home = d.home ?? teamYglHome()
+  const key = `${home}\n${name}`
+  if (madeProjects.has(key)) return 'present'
+  const workspace = await ensureTeamYglHome(d)
+  if (workspace === 'unavailable' || workspace === 'failed') return workspace
+  try {
+    await (d.run ?? defaultYglRun)(['project', 'new', name, '-q', `superagent team ${name}: what the team learned, the evidence behind it and the decisions made`], { ...process.env, YGL_HOME: home, YGL_SESSION: 'superagent-host' })
+  } catch (error) {
+    d.logger.warn('superagent: creating the team ygl-trees project %s failed: %s', name, String(error).slice(0, 300))
+    return 'failed'
+  }
+  madeProjects.add(key)
+  return 'created'
+}
