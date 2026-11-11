@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path'
 import { Engine, UserError, reasonText, ticketStage, type Assessor, type Candidate, type Outbox, type Reason, type Ticket, type Trigger, type ReceiveResult } from '../upstream/dsh-superagent/src/core/index.ts'
 import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
+import type { ReceiptSeat } from '../a2a-watch.ts'
 import { MemberExecutor, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
 import { ReviewRequests } from './review-requests.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
@@ -37,6 +38,8 @@ export interface A2aReceiptsDeps {
   /** Whether the team's A2A Source is on: nothing is receipted while it is off. */
   readonly a2aOn: () => boolean
   readonly now: () => string
+  /** market N1c: the seat an acknowledgement names as the one that took the ticket up. */
+  readonly seatOf?: (ticketId: string) => ReceiptSeat | undefined
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
 }
 
@@ -67,18 +70,18 @@ export class A2aReceipts {
    */
   acknowledgeRequests(): void {
     if (this.acknowledging || !this.d.a2aOn()) return
-    const due: Array<{ task: string; address: Record<string, string>; text: string }> = []
+    const due: Array<{ task: string; ticketId: string; address: Record<string, string>; text: string }> = []
     for (const ticket of this.d.store.tickets.list()) {
       if (ticket.ended) continue
       const trigger = this.d.store.triggers.get(ticket.origin.triggerId)
       const address = trigger?.source === 'a2a' && trigger.human !== true ? trigger.channel?.address : undefined
       const task = address?.task
-      if (address !== undefined && task !== undefined && !this.ackSettled.has(task)) due.push({ task, address, text: clip(`已接下，工单「${ticket.title}」完成后回执结果。Accepted as ticket «${ticket.title}»; the result follows.`, 400) })
+      if (address !== undefined && task !== undefined && !this.ackSettled.has(task)) due.push({ task, ticketId: ticket.id, address, text: clip(`已接下，工单「${ticket.title}」完成后回执结果。Accepted as ticket «${ticket.title}»; the result follows.`, 400) })
       // A message delivered into this ticket as a follow-up is taken up, not finished: its formal outcome follows when the ticket ends.
       for (const followUp of this.followUpsOf(ticket)) {
         const followTask = followUp.channel.address.task
         if (followTask === undefined || this.ackSettled.has(followTask) || this.outcomeReceipted.has(followUp.triggerId) || this.d.a2a.answered(followTask)) continue
-        due.push({ task: followTask, address: followUp.channel.address, text: clip(`已转给工单「${ticket.title}」的成员，工单结束后回执结果。Passed to the member of ticket «${ticket.title}»; the result follows when it ends.`, 400) })
+        due.push({ task: followTask, ticketId: ticket.id, address: followUp.channel.address, text: clip(`已转给工单「${ticket.title}」的成员，工单结束后回执结果。Passed to the member of ticket «${ticket.title}»; the result follows when it ends.`, 400) })
       }
     }
     if (due.length === 0) return
@@ -86,7 +89,7 @@ export class A2aReceipts {
     void (async () => {
       for (const item of due) {
         try {
-          const result = await this.d.a2a.acknowledge(item.address, item.text)
+          const result = await this.d.a2a.acknowledge(item.address, item.text, this.d.seatOf?.(item.ticketId))
           this.ackSettled.add(item.task)
           if (result === 'sent') this.d.logger.info('superagent: acknowledged A2A task %s to %s', item.task, item.address.caller ?? '?')
           else if (result === 'gone') this.d.logger.warn('superagent: A2A task %s cannot be acknowledged', item.task)

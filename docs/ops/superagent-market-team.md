@@ -41,7 +41,8 @@ superagent 只接收运维已经建了链的调用方。宿主给来信判出的
 | 确认（工单已接） | `ack-<task>` | `acknowledged` | 不结清，行保持欠账，7 天后过期 |
 | 正式回执（结果） | `receipt-<task>` | `result`，带 `outcome` | 结清 |
 | 正式回执（未成工单时，总工直接提问） | `receipt-<task>` | `attention`，不带 `outcome` | 结清，但不算完成 |
-| 跟进（成员的提问、通知） | `a2a-<hash>`，与 `<task>` 没有字面关系 | 无（普通路由） | 不结清；它自己欠市场一条回执 |
+| 提问（成员的问题，带结构化 `question`） | `attention-<task>-<提问 id>` | `attention`，带 `question` | 不结清，行保持欠账；之后结果仍在 `receipt-<task>` |
+| 跟进（通知；任务号放不下提问 id 时的提问） | `a2a-<hash>`，与 `<task>` 没有字面关系 | 无（普通路由） | 不结清；它自己欠市场一条回执 |
 
 跟进只能靠 context 对回原派工。所以市场**每次派工都带 `context_id`，一件事项只用一个 context**。
 
@@ -66,9 +67,10 @@ superagent 只接收运维已经建了链的调用方。宿主给来信判出的
 
 已和市场约定、还没实现的部分（实现时以本仓库的评审结论为准）：
 
-- 提问改走自己的任务号 `attention-<task>-<qid>`，属于结清类消息：不欠回执，也不结清原派工。
 - 新增进展消息，任务号 `progress-<task>-<n>`。
-- 信封新增字段：接手人 `by`、产出 `artifacts`、结构化提问 `question`、子任务 `tickets`。
+- 信封新增子任务 `tickets`；成员的产出 `artifacts` 由 superagent 填写。
+
+已实现（[receipt-envelope-fields](../design/receipt-envelope-fields.md)）：提问走自己的任务号 `attention-<task>-<提问 id>`，不欠回执，也不结清原派工；回执带接手人 `by`；`artifacts` 和结构化 `question` 的字段已可用。
 - 节点名册：任务号 `roster-<指纹>-<at>`，同样经 `/a2a/direct` 发送。
 
 这些落地后，第 3、4 节里关于跟进的过渡做法会随之更新。
