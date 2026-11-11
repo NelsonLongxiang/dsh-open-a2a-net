@@ -64,16 +64,20 @@ describe('RoleTools', () => {
   it('restricts a role session to the tools its scope has, re-applies on a role change, lifts when the role goes', () => {
     const roles: Record<string, Role> = { r: 'router' }
     const { log, scoped, tools } = setup(roles)
-    const r = scoped('r', ['superagent_route', 'superagent_status', 'bash', 'a2a_route'])
+    // The plugin registers every team tool, so a real scope has them all; the work tools come from the preset.
+    const team = TEAM_TOOLS
+    const r = scoped('r', [...team, 'bash', 'a2a_route'])
+    const routerAllow = ROUTER_TOOLS.filter(name => team.includes(name)).join(',')
+    const memberAllow = MEMBER_TOOLS.filter(name => team.includes(name) || name === 'bash').join(',')
     tools.sync(r)
     tools.sync(r)
-    expect(log).toEqual(['r restrict superagent_route,superagent_status'])
+    expect(log).toEqual([`r restrict ${routerAllow}`])
     roles.r = 'member'
     tools.sync(r)
-    expect(log.slice(1)).toEqual(['r lift', 'r restrict bash'])
+    expect(log.slice(1)).toEqual(['r lift', `r restrict ${memberAllow}`])
     delete roles.r
     tools.sync(r)
-    expect(log.slice(3)).toEqual(['r lift', 'r deny superagent_route,superagent_status'])
+    expect(log.slice(3)).toEqual(['r lift', `r deny ${team.join(',')}`])
     expect(tools.list()).toEqual({})
   })
 
@@ -90,6 +94,25 @@ describe('RoleTools', () => {
     // The fake registry has no schedule tools, no a2a_whoami and no MCP tools, and a restriction names only the tools the scope has.
     expect(log.slice(1)).toEqual(['p lift', `p restrict ${ROUTER_TOOLS.filter(name => !name.startsWith('schedule_') && name !== 'a2a_whoami' && !name.startsWith('mcp__')).join(',')}`])
     expect(tools.list()).toEqual({ p: 'router' })
+  })
+
+  it('a restriction made before the plugin\'s own tools were visible is made again on the next sync (router after a restart, 2026-11-11)', () => {
+    const { log, tools } = setup({ r: 'router' })
+    const known = ['bash', 'schedule_list']
+    const r: RoleAgent = { id: 'r', ctx: { [Symbol('dsh.scope')]: {}, tools: { get: name => (known.includes(name) ? {} : undefined), restrict: f => { log.push(`restrict ${f.allow!.join(',')}`); return () => { log.push('lift') } } } } } as never
+    tools.sync(r)
+    expect(log).toEqual(['restrict schedule_list'])
+    known.push('superagent_route', 'superagent_status')
+    tools.sync(r)
+    expect(log.slice(1)).toEqual(['lift', 'restrict schedule_list,superagent_route,superagent_status'])
+  })
+
+  it('a complete restriction is not made again on every sync', () => {
+    const roles: Record<string, Role> = { m: 'member' }
+    const { log, scoped, tools } = setup(roles)
+    const m = scoped('m', [...MEMBER_TOOLS])
+    tools.sync(m); tools.sync(m); tools.sync(m)
+    expect(log).toHaveLength(1)
   })
 
   it('a context without the tools service does not throw into the session\'s creation', () => {
