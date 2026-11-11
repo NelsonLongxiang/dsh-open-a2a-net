@@ -63,7 +63,8 @@ export interface SaSettings {
   readonly serves?: { url: string; key: string; members: readonly string[]; team?: string }
 }
 /** One team on this instance (`GET /__dsh_a2a/superagent/teams`); id '' is the primary team. */
-export interface SaTeamRow { readonly id: string; readonly canvas?: string }
+/** `waiting`: tickets waiting on a person in that team (filled for the teams not shown, so the picker says where to look). */
+export interface SaTeamRow { readonly id: string; readonly canvas?: string; readonly waiting?: number }
 
 /** A problem the host found (design reliability R6). */
 export interface SaHealth { readonly code: string; readonly session?: string; readonly ticketId?: string; readonly title?: string; readonly minutes?: number }
@@ -124,6 +125,8 @@ const VIEWS: ReadonlyArray<{ key: SaView; label: string }> = [
   { key: 'person', label: '待你处理' }, { key: 'request', label: '提需求' }, { key: 'tickets', label: '工单' },
   { key: 'team', label: '团队' }, { key: 'settings', label: '设置' },
 ]
+
+const VIEW_KEY = 'dsh-a2a.superagent.view'
 
 const PERSON_ACTION: Readonly<Record<string, string>> = { answer: '待你回答', review: '待你查看结果', blocked: '受阻', failed: '失败', delivery: '投递失败' }
 
@@ -281,7 +284,10 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   searchWrap.append(searchBox, searchDrop)
   root.append(el('div', 'wb-pane-head', 'superagent 团队'), teamBar, addTeamBox, searchWrap, nav, note, body)
 
-  let view: SaView = 'person'
+  // The sub-tab is a per-viewer convenience kept across reloads (every access guarded).
+  let view: SaView = (() => {
+    try { const v = window.localStorage.getItem(VIEW_KEY); return VIEWS.some(d => d.key === v) ? v as SaView : 'person' } catch { return 'person' }
+  })()
   // undefined until the first poll answers; null once it says this host runs no team.
   let last: SaState | null | undefined = undefined
   let sessions: readonly SaSession[] = []
@@ -309,7 +315,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     const key = JSON.stringify(teams)
     if (key !== teamOptions && document.activeElement !== teamSelect) {
       teamOptions = key
-      teamSelect.replaceChildren(...teams.map(team => new Option(team.canvas ?? '（未绑定）', team.id)))
+      teamSelect.replaceChildren(...teams.map(team => new Option(`${team.canvas ?? '（未绑定）'}${(team.waiting ?? 0) > 0 ? `（${team.waiting} 待你处理）` : ''}`, team.id)))
     }
     if (document.activeElement !== teamSelect) teamSelect.value = state.selectedTeam ?? ''
   }
@@ -731,7 +737,9 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     body.replaceChildren()
     builtFrom = viewKey()
     builtAt = now
-    if (last === undefined) { body.appendChild(el('div', 'wb-sa-hint', '正在读取团队状态…')); return }
+    // Until the switched-to team's state arrives, the old team's would show under the new name, and act() already
+    // writes to the new team: nothing is built from it.
+    if (last === undefined || pendingTeam !== undefined) { body.appendChild(el('div', 'wb-sa-hint', '正在读取团队状态…')); return }
     if (last === null) { body.appendChild(el('div', 'wb-sa-hint', '这台主机没有运行 superagent 团队')); return }
     if (view === 'person') renderPerson(last)
     else if (view === 'request') renderRequest(last)
@@ -741,7 +749,11 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     applyFocus()
   }
 
-  function select(next: SaView): void { view = next; render() }
+  function select(next: SaView): void {
+    view = next
+    try { window.localStorage.setItem(VIEW_KEY, next) } catch { /* per-viewer convenience only */ }
+    render()
+  }
 
   /** A search result the person clicked: show it where it lives, and flash it. */
   let pendingFocus: { readonly kind: string; readonly id: string } | undefined
