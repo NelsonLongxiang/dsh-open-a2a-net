@@ -68,7 +68,8 @@ superagent 只接收运维已经建了链的调用方。宿主给来信判出的
 已和市场约定、还没实现的部分（实现时以本仓库的评审结论为准）：
 
 - 成员的产出 `artifacts` 由 superagent 填写。
-- 节点名册（`[A2A roster]`，给名片声明 `teamRoster` 的远端成员）。
+
+已实现（[superagent-market-progress-roster](../design/superagent-market-progress-roster.md) P3）：团队宿主每 5 分钟、以及席位变化 30 秒后，给画布上名片声明 `capabilities.teamRoster: true` 的远端成员发一份名册（`[A2A roster]`，任务号 `roster-<宿主指纹前 8 位>-<毫秒>`，不欠回执、不占槽）。
 
 已实现（[superagent-market-progress-roster](../design/superagent-market-progress-roster.md) P1/P2）：名片声明 `capabilities.progressReceipts: true` 的市场会收到进展消息 `progress-<task>-<n>`（带 `progress` 与子任务 `tickets`，不结清原派工，团队设置 `progressOff` 可关）；市场在自己那张工单的对话里接着发的话直接交给成员，不再经总工判定。
 

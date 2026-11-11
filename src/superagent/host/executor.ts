@@ -207,6 +207,16 @@ export class MemberExecutor implements Executor {
   }
 
   memberOfTicket(ticketId: string): { member: string; named: boolean } | undefined { return this.ticketMembers[ticketId] }
+  /**
+   * A member's load for the roster report (superagent-market-progress-roster P3): the tickets it holds (running or
+   * parked), the tickets waiting that stay with it, and when its latest hold began.
+   */
+  loadOf(member: string): { active: number; queued: number; since?: string } {
+    const held = [...this.bindings, ...this.parked].filter(b => b.member === member)
+    const queued = new Set(this.waiting.filter(w => this.ticketMembers[w.ticketId]?.member === member).map(w => w.ticketId)).size
+    const since = held.map(b => b.at).sort().at(-1)
+    return { active: new Set(held.map(b => b.ticketId)).size, queued, ...(since !== undefined ? { since } : {}) }
+  }
   /** How many tickets wait for a member ahead of this one; undefined when it is not waiting (superagent-market-progress-roster P1). */
   queueAhead(ticketId: string): number | undefined {
     const at = this.waiting.findIndex(w => w.ticketId === ticketId)

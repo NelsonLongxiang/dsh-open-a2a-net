@@ -19,6 +19,7 @@ import { Engine, UserError, reasonText, ticketStage, type Assessor, type Candida
 import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
 import { ProgressReceipts } from './progress.ts'
+import { RosterReports } from './roster.ts'
 import { MemberExecutor, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
 import { ReviewRequests } from './review-requests.ts'
 import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, type OutboundAsk } from './outbound.ts'
@@ -80,6 +81,7 @@ export class SuperagentHost {
   /** What the team owes A2A requesters (host/receipts.ts). */
   private readonly receipts: A2aReceipts
   private readonly progress: ProgressReceipts
+  private readonly roster: RosterReports
   /** Outbox messages being sent right now, so a pass never sends one twice at once. */
   private readonly sending = new Set<string>()
   private started = false
@@ -128,6 +130,14 @@ export class SuperagentHost {
       resultPending: (ticketId, task) => this.resultPending(ticketId, task),
       seatOf: ticketId => this.seatOf(ticketId),
       logger: d.logger, ...(d.runCli !== undefined ? { run: d.runCli } : {}), ...(d.teamSend !== undefined ? { teamSend: d.teamSend } : {}), ...(d.a2aPollSeconds !== undefined ? { pollSeconds: d.a2aPollSeconds } : {}),
+    })
+    this.roster = new RosterReports({
+      team: () => { const s = this.settings; return s.canvas === undefined ? undefined : { canvas: s.canvas, ...(s.router !== undefined ? { router: s.router } : {}), members: s.members.filter(id => !s.observers.includes(id)), observers: s.observers } },
+      remotes: canvas => (d.canvasTeam?.(canvas)?.remote ?? []).map(r => r.ref),
+      declares: (ref, capability) => d.memberDeclares?.(ref, capability) === true,
+      send: async (ref, text, taskId) => { if (d.rosterSend === undefined) throw new Error('no roster send on this host'); await d.rosterSend(ref, text, taskId) },
+      handleOf: id => d.handleOf?.(id) ?? id, nameOf: id => d.sessionName?.(id), online: id => d.sessionLoaded?.(id) ?? false,
+      loadOf: id => this.executor.loadOf(id), hostFingerprint: () => d.hostFingerprint?.(), nowMs: () => Date.parse(this.now()), logger: d.logger,
     })
     const progressPath = join(dir, 'progress.json')
     this.progress = new ProgressReceipts({
@@ -208,6 +218,7 @@ export class SuperagentHost {
     // Reliability R7: look at the team's health every 15 minutes; a new problem raises one card (the boot grace period
     // keeps health() quiet, so nothing is raised from it either).
     this.healthTimer = this.d.interval(() => { this.healthReminders.tick(this.health() as readonly HealthProblem[], Date.parse(this.now())) }, HEALTH_TICK_MS)
+    this.roster.start(this.d.interval)
     // Defer: start() may run while the plugin's apply() still executes, when the canvas lookups it touches are not
     // initialized yet (a TDZ crash took the plugin down on hosts with models set - review of #566). A microtask runs
     // after apply() finishes; the catch inside applyModels is the second fence.
@@ -217,7 +228,7 @@ export class SuperagentHost {
     this.pass()
   }
 
-  stop(): Promise<void> { this.disposeTimer?.(); this.disposeTimer = undefined; this.healthTimer?.(); this.healthTimer = undefined; this.started = false; return this.a2a.stop() }
+  stop(): Promise<void> { this.roster.close(); this.disposeTimer?.(); this.disposeTimer = undefined; this.healthTimer?.(); this.healthTimer = undefined; this.started = false; return this.a2a.stop() }
 
   /** Run the A2A Source's mailbox loop exactly while its Source is on. */
   private syncA2a(): void {

@@ -1,6 +1,6 @@
 # superagent ↔ market: progress, sub-tickets, the light path, and the roster
 
-Status: agreed with the workbench market on 2026-11-11; P1 and P2 implemented (P3 follows) (its items N2a, N2b, the "light path" of its chat design, and N3). This builds on [receipt-envelope-fields](receipt-envelope-fields.md) (`by`, `artifacts`, `question`, the `attention-<task>-<id>` question) and on the node-side checklist [superagent-market-team](../ops/superagent-market-team.md).
+Status: agreed with the workbench market on 2026-11-11; P1, P2 and P3 implemented (its items N2a, N2b, the "light path" of its chat design, and N3). This builds on [receipt-envelope-fields](receipt-envelope-fields.md) (`by`, `artifacts`, `question`, the `attention-<task>-<id>` question) and on the node-side checklist [superagent-market-team](../ops/superagent-market-team.md).
 
 The market's goal: people use only the market, and the nodes work headless. The market therefore needs to see:
 
