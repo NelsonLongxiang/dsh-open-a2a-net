@@ -32,7 +32,8 @@ describe('the a2a-network skill', () => {
     registerA2aNetworkSkill(h.ctx)
     h.start()
     expect(h.registered[0]).not.toHaveProperty('provider')
-    expect(h.registered[0]).not.toHaveProperty('source')
+    // DSH's load check requires a string source and does not default it (#580).
+    expect(h.registered[0]).toHaveProperty('source', 'bundled')
   })
   it('does nothing on a host whose context cannot wait for services', () => {
     expect(() => { registerA2aNetworkSkill({} as never) }).not.toThrow()

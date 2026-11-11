@@ -56,7 +56,7 @@ interface SkillScope {
  * The plugin does not declare `skills` among the services it needs, so `ctx.skills` read at apply time was undefined and the
  * skill silently never registered. Waiting for the service through `ctx.inject` registers it when the registry exists, and
  * the registration goes when either side does. The registry supplies the runtime provider and the default invocation policy
- * only when they are left out; a made-up provider name would own no loader for the skill's body.
+ * only when they are left out; a made-up provider name would own no loader for the skill's body. `source` is not defaulted.
  * @param ctx - the plugin's context.
  */
 export function registerA2aNetworkSkill(ctx: Context): void {
@@ -65,6 +65,9 @@ export function registerA2aNetworkSkill(ctx: Context): void {
     name: skill.name,
     description: skill.description,
     invocation: { modelInvocable: true, userInvocable: true },
+    // DSH checks every loaded skill for a string `source` and fills in only `provider` and `invocation`, so without it the skill
+    // listed but would not load ("source must be a string", #580). `bundled` is what DSH's own plugin-packaged skills use.
+    source: 'bundled',
     resourceBase: { kind: 'directory', path: fileURLToPath(PACKAGED_SKILL_ROOT) },
     content: skill.content,
   }
