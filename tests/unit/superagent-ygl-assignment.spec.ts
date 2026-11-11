@@ -5,14 +5,15 @@ import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
-async function team(ygl: boolean) {
+async function team(ygl: boolean, made: string[] = []) {
   const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
   const { routeItem, registerSuperagentTools } = await import('../../src/superagent/host/tools.ts')
   const sent: Array<[string, string]> = []
   const h = new SuperagentHost({
     canvasTeam: (name: string) => name === 'team' ? { local: ['session-r', 'session-m'], remote: [] } : undefined, home: mkdtempSync(join(tmpdir(), 'sa-ygl-')), logger: { info: () => {}, warn: () => {} },
     deliverToSession: (id: string, text: string) => { sent.push([id, text]); return true }, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id,
-    hasTool: (id: string, name: string) => ygl && id === 'session-m' && name === 'mcp__ygl__write',
+    hasTool: (id: string, name: string) => ygl && ((id === 'session-m' && name === 'mcp__ygl__write') || (id === 'session-r' && name === 'mcp__ygl__read')),
+    ensureYglProject: (name: string) => { made.push(name) },
   } as never)
   expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
   h.start()
@@ -24,7 +25,8 @@ async function team(ygl: boolean) {
   const ticket = (routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: '调研', scope: 's', reason: 'r' } as never) as { ticket_id: string }).ticket_id
   await vi.waitFor(() => { expect(h.executor.bindingOf('session-m')?.ticketId).toBe(ticket) })
   const card = sent.find(([id, text]) => id === 'session-m' && text.startsWith('[superagent assignment]'))![1]
-  return { h, ticket, card, report }
+  const candidate = sent.find(([id, text]) => id === 'session-r' && text.startsWith('[superagent candidate]'))?.[1] ?? ''
+  return { h, ticket, card, candidate, report }
 }
 
 describe('ygl-trees on the assignment card', () => {
@@ -32,12 +34,30 @@ describe('ygl-trees on the assignment card', () => {
     const m = await team(true)
     expect(m.card).toContain('team memory (ygl-trees)')
     expect(m.card).toContain('mcp__ygl__read domain agent action brief')
-    // ygl-trees MCP drops an explicit project on agent brief (ygl-trees#260): select it for this session, then brief again.
-    expect(m.card).toContain('ambiguous project: mcp__ygl__write domain project action use')
+    // Y1c: the card names the team's project; the member selects it for its own session first (ygl-trees#260), then briefs.
+    expect(m.card).toContain('This team\'s project is "team-team"')
+    expect(m.card).toContain('mcp__ygl__write domain project action use name "team-team"')
+    expect(m.card).toContain('make no other project')
     expect(m.card).toContain('pass the ids you wrote in ygl on a2a_ticket_report')
     await m.h.stop()
     const n = await team(false)
     expect(n.card).not.toContain('ygl')
+    await n.h.stop()
+  })
+})
+
+describe('the team\'s ygl-trees project (Y1c)', () => {
+  it('the host asks for the team\'s project, named after its canvas, and the router\'s card names it', async () => {
+    const made: string[] = []
+    const m = await team(true, made)
+    expect(m.h.yglProject()).toBe('team-team')
+    expect(made).toContain('team-team')
+    expect(m.candidate).toContain('this team\'s ygl-trees project is "team-team"')
+    await m.h.stop()
+  })
+  it('a router without the ygl read tool is not told about it', async () => {
+    const n = await team(false)
+    expect(n.candidate).not.toContain('ygl-trees project')
     await n.h.stop()
   })
 })

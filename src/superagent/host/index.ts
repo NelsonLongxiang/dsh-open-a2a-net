@@ -36,7 +36,8 @@ import { A2aReceipts, END_RECEIPT_GRACE_MS } from './receipts.ts'
 export { END_RECEIPT_GRACE_MS } from './receipts.ts'
 /** How long a declined tool request stays declined before the tool may be asked about again (design tool-requests T4). */
 export const TOOL_ASK_AGAIN_MS = 24 * 3_600_000
-import { agentLedEnd, clip, TEXT_CAP, presetRefusal, notTakenText, OTHER_TICKETS_SHOWN, ORIGIN_LINE_NOTE, OBSERVER_LINE, candidateCard, YGL_WRITE, YGL_CARD_LINES } from './cards.ts'
+import { agentLedEnd, clip, TEXT_CAP, presetRefusal, notTakenText, OTHER_TICKETS_SHOWN, ORIGIN_LINE_NOTE, OBSERVER_LINE, candidateCard, YGL_WRITE, yglCardLines, yglRouterLine } from './cards.ts'
+import { teamYglProject } from './ygl-home.ts'
 import type { SuperagentHostDeps, PersonMessage, WorkbenchVia } from './deps.ts'
 export * from './cards.ts'
 export type * from './deps.ts'
@@ -187,6 +188,7 @@ export class SuperagentHost {
       const latest = ticket.assignments.at(-1)
       if (latest !== undefined && latest.state === 'pending' && this.executor.list().every(b => b.assignmentId !== latest.id)) this.executor.start(ticket, latest)
     }
+    this.ensureYglProject()
     this.disposeTimer = this.d.interval(() => this.pass(), PASS_MS)
     // Reliability R7: look at the team's health every 15 minutes; a new problem raises one card (the boot grace period
     // keeps health() quiet, so nothing is raised from it either).
@@ -405,6 +407,17 @@ export class SuperagentHost {
   membersProfiled(): boolean { return this.pool().some(id => this.settingsValue.profiles[id] !== undefined) }
 
   /** What the router sees of the team when it dispatches (design D4). */
+  /** This team's ygl-trees project (design Y1c), named after its canvas; none while the team has no canvas. */
+  yglProject(): string | undefined { return this.settingsValue.canvas === undefined ? undefined : teamYglProject(this.settingsValue.canvas) }
+  /** Ask the host to make the team's project (idempotent, cached there); never in the way of the work. */
+  private ensureYglProject(): void { const project = this.yglProject(); if (project !== undefined) { try { this.d.ensureYglProject?.(project) } catch { /* best effort */ } } }
+  private yglRouterLines(router: string): string[] {
+    const project = this.yglProject()
+    if (project === undefined || this.d.hasTool?.(router, 'mcp__ygl__read') !== true) return []
+    this.ensureYglProject()
+    return [yglRouterLine(project)]
+  }
+
   private teamCardLines(): string[] {
     const pool = this.pool()
     const dispatch = this.settingsValue.dispatch
@@ -429,7 +442,7 @@ export class SuperagentHost {
     for (const rule of (profile?.rules ?? []).filter(r => r.enabled)) lines.push(`your rule ${rule.name}: ${clip(rule.text, 600)}`)
     if (profile !== undefined) lines.push('If this ticket does not fit your role and rules, report blocked and say why; the router will choose again.')
     // The team's memory, in the card the member acts on (owner 2026-11-10: a persona line alone was not followed).
-    if (this.d.hasTool?.(member, YGL_WRITE) === true) lines.push(...YGL_CARD_LINES)
+    if (this.d.hasTool?.(member, YGL_WRITE) === true) { this.ensureYglProject(); lines.push(...yglCardLines(this.yglProject())) }
     for (const name of ticket.mandate.basis.rules ?? []) {
       const rule = this.settingsValue.rules.find(r => r.name === name)
       if (rule !== undefined) lines.push(`accepted on team rule ${rule.name}: ${clip(rule.text, 600)}`)
@@ -952,7 +965,7 @@ export class SuperagentHost {
       if (entry.delivered) continue
       const open = this.store.tickets.list().filter(t => !t.ended)
       const requeued = new Set(entry.candidate.triggers.filter(t => this.store.triggers.disposition(t.id)?.requeued === true).map(t => t.id))
-      if (!this.d.deliverToSession(router, candidateCard(entry.candidate, this.settingsValue, open, requeued, [...this.teamCardLines(), ...this.promptCardLines('communication')]))) return
+      if (!this.d.deliverToSession(router, candidateCard(entry.candidate, this.settingsValue, open, requeued, [...this.teamCardLines(), ...this.yglRouterLines(router), ...this.promptCardLines('communication')]))) return
       entry.delivered = true
       try { this.engine.candidateDelivered(evalId) } catch (error) { this.d.logger.warn('superagent: candidate %s delivered but not recorded: %s', evalId, String(error)) }
     }

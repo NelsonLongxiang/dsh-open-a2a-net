@@ -143,7 +143,7 @@ import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
 import { NEUTRAL_SOURCES, NodeReviewQueue, SessionTaint, localRoute, toolTaint } from './node-self.ts'
 import { guiOwnerProven, ownerOrNoLogin, touchesRules } from './superagent/host/owner-proof.ts'
-import { SuperagentTeams, ensureTeamYglHome } from './superagent/host/teams.ts'
+import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { registerSessionLogFaces } from './faces/session-log.ts'
@@ -2059,6 +2059,7 @@ export function apply(ctx: Context, config: Config): void {
     handleOf: id => `${config.team}/${id8(id)}`,
     localSessionOf: handle => localSessionOfHandle(handle),
     onRolesChanged: () => { syncRoleTools() },
+    ensureYglProject: name => { void ensureTeamYglProject(name, { logger }) },
     // Design v5: the team is a canvas team this host owns. Its local sessions in canvas order, and its remote session slots
     // with the key the canvas pinned and the base URL of the linked peer whose signed card carries that key.
     canvasTeam: name => {

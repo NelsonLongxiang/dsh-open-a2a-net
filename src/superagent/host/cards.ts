@@ -136,10 +136,27 @@ export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings
 
 /** The ygl-trees write tool a member's preset mounts (role-tools YGL_WORK_TOOLS). */
 export const YGL_WRITE = 'mcp__ygl__write'
-/** The ygl-trees steps on an assignment card (docs/design/superagent-ygl-memory.md). */
-export const YGL_CARD_LINES: readonly string[] = [
-  'team memory (ygl-trees), as part of this ticket:',
-  '- first: mcp__ygl__read domain agent action brief (if it answers ambiguous project: mcp__ygl__write domain project action use, then again), and domain kb action search on this ticket\'s subject; build on what earlier work found',
-  '- as you go: with mcp__ygl__write, record each source you rely on and the exact lines you quote as evidence, and each judgement as a claim linked to them',
-  '- before ready: kb add what the next session should reuse, and pass the ids you wrote in ygl on a2a_ticket_report',
-]
+/**
+ * The ygl-trees steps on an assignment card (docs/design/superagent-ygl-memory.md). With the team's project (Y1c) the card
+ * names it: the member selects it for its own session first (ygl-trees' MCP brief ignores an explicit project, ygl-trees#260)
+ * and passes it on every other call, so the team's records stay in one project and no member makes another.
+ */
+export function yglCardLines(project?: string): string[] {
+  if (project === undefined) return [
+    'team memory (ygl-trees), as part of this ticket:',
+    '- first: mcp__ygl__read domain agent action brief (if it answers ambiguous project: mcp__ygl__write domain project action use, then again), and domain kb action search on this ticket\'s subject; build on what earlier work found',
+    '- as you go: with mcp__ygl__write, record each source you rely on and the exact lines you quote as evidence, and each judgement as a claim linked to them',
+    '- before ready: kb add what the next session should reuse, and pass the ids you wrote in ygl on a2a_ticket_report',
+  ]
+  const named = JSON.stringify(project)
+  return [
+    `team memory (ygl-trees), as part of this ticket. This team's project is ${named}: use it, pass project ${named} on every read and write, and make no other project.`,
+    `- first: mcp__ygl__write domain project action use name ${named} (it selects the project for your session only), then, as a separate call, mcp__ygl__read domain agent action brief, and domain kb action search on this ticket's subject with project ${named}; build on what earlier work found`,
+    '- as you go: with mcp__ygl__write, record each source you rely on and the exact lines you quote as evidence, and each judgement as a claim linked to them',
+    '- before ready: kb add what the next session should reuse, and pass the ids you wrote in ygl on a2a_ticket_report',
+  ]
+}
+/** The steps without a project, for callers from before Y1c. */
+export const YGL_CARD_LINES: readonly string[] = yglCardLines()
+/** The line on a router's candidate card that names the team's project (Y1c). */
+export const yglRouterLine = (project: string): string => `team memory: this team's ygl-trees project is ${JSON.stringify(project)}; pass it as project when you search there before deciding.`
