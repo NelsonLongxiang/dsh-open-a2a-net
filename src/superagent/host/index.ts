@@ -51,6 +51,12 @@ const REFUSALS_KEPT = 50
 /** How long a working ticket may go without any change before the health check names it (reliability R6). */
 export const QUIET_MINUTES = 60
 
+/** A remote member's refs that take tickets: those whose handle is not on the team's A2A bot list. */
+export function workerRemotes(settings: Pick<TeamSettings, 'remoteMembers' | 'bots'>): string[] {
+  const bots = new Set(settings.bots.a2a.map(ref => ref.split('@')[0]))
+  return settings.remoteMembers.map(r => r.ref).filter(ref => !bots.has(ref.split('@')[0]))
+}
+
 export class SuperagentHost {
   readonly store: JsonRepositories
   readonly engine: Engine
@@ -99,7 +105,7 @@ export class SuperagentHost {
       release: evalId => { this.candidates.delete(evalId) },
     }
     const executor = this.executor = new MemberExecutor({
-      path: join(dir, 'executor.json'), members: () => { const now = this.settings; return [...now.members, ...now.remoteMembers.map(r => r.ref)] },
+      path: join(dir, 'executor.json'), members: () => this.pool(),
       repoOf: member => this.settingsValue.repos[member],
       memberNotes: (member, ticket) => this.memberNotes(member, ticket),
       deliver: (member, text, kind, ticketId) => this.deliverToMember(member, text, kind, ticketId), engine: () => this.engine,
@@ -415,7 +421,12 @@ export class SuperagentHost {
     }
   }
 
-  private pool(): string[] { const now = this.settings; return [...now.members, ...now.remoteMembers.map(r => r.ref)] }
+  /**
+   * The team's workers: the canvas's local members and its remote members — except a remote member the team lists as an
+   * A2A bot, which is a caller (the workbench market sits on the canvas to be linked, docs/ops/superagent-market-team.md),
+   * never one that takes tickets.
+   */
+  private pool(): string[] { const now = this.settings; return [...now.members, ...workerRemotes(now)] }
   private memberName(id: string): string { return this.d.sessionName?.(id) ?? id }
 
   /**
@@ -792,7 +803,7 @@ export class SuperagentHost {
     const out = new Map<string, string[]>()
     // Only members the canvas still has: a repository named for a member that left is kept for its return, not used.
     const now = this.settings
-    const pool = new Set([...now.members, ...now.remoteMembers.map(r => r.ref)])
+    const pool = new Set(this.pool())
     for (const [member, repo] of Object.entries(this.settingsValue.repos)) if (pool.has(member)) out.set(repo, [...(out.get(repo) ?? []), member])
     return out
   }
@@ -866,8 +877,7 @@ export class SuperagentHost {
       try { this.d.onRolesChanged?.() } catch (error) { this.d.logger.warn('superagent: role change not applied: %s', String(error)) }
       return
     }
-    const now = this.settings
-    const pool = new Set([...now.members, ...now.remoteMembers.map(r => r.ref)])
+    const pool = new Set(this.pool())
     const orphaned = this.executor.membersLeft(pool)
     const router = this.settingsValue.router
     if (orphaned.length > 0 && router !== undefined) this.d.deliverToSession(router, `[superagent] the member named for ${orphaned.map(id => `ticket ${id}`).join(', ')} has left the team. Choose another with superagent_assign (ticket_id, member).\n${this.memberListLine()}`)
