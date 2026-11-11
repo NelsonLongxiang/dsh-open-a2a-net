@@ -207,6 +207,11 @@ export class MemberExecutor implements Executor {
   }
 
   memberOfTicket(ticketId: string): { member: string; named: boolean } | undefined { return this.ticketMembers[ticketId] }
+  /** How many tickets wait for a member ahead of this one; undefined when it is not waiting (superagent-market-progress-roster P1). */
+  queueAhead(ticketId: string): number | undefined {
+    const at = this.waiting.findIndex(w => w.ticketId === ticketId)
+    return at < 0 ? undefined : new Set(this.waiting.slice(0, at).map(w => w.ticketId)).size
+  }
   /** The member a ticket last ran on, also after it ended (market N1c). */
   lastMemberOf(ticketId: string): string | undefined { return this.lastMembers[ticketId] }
 

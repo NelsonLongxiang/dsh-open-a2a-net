@@ -67,8 +67,10 @@ superagent 只接收运维已经建了链的调用方。宿主给来信判出的
 
 已和市场约定、还没实现的部分（实现时以本仓库的评审结论为准）：
 
-- 新增进展消息，任务号 `progress-<task>-<n>`。
-- 信封新增子任务 `tickets`；成员的产出 `artifacts` 由 superagent 填写。
+- 成员的产出 `artifacts` 由 superagent 填写。
+- 节点名册（`[A2A roster]`，给名片声明 `teamRoster` 的远端成员）。
+
+已实现（[superagent-market-progress-roster](../design/superagent-market-progress-roster.md) P1/P2）：名片声明 `capabilities.progressReceipts: true` 的市场会收到进展消息 `progress-<task>-<n>`（带 `progress` 与子任务 `tickets`，不结清原派工，团队设置 `progressOff` 可关）；市场在自己那张工单的对话里接着发的话直接交给成员，不再经总工判定。
 
 已实现（[receipt-envelope-fields](../design/receipt-envelope-fields.md)）：提问走自己的任务号 `attention-<task>-<提问 id>`，不欠回执，也不结清原派工；回执带接手人 `by`；`artifacts` 和结构化 `question` 的字段已可用。
 - 节点名册：任务号 `roster-<指纹>-<at>`，同样经 `/a2a/direct` 发送。

@@ -315,6 +315,14 @@ Files do not go through session messages: use the file channel below, never JPFI
     caller's row the way `--acknowledged` does: it settles nothing, more
     questions may follow, and the result receipt still comes on
     `receipt-<task_id>`. A malformed switch exits 2 and sends nothing.
+  - `--progress N --state queued|working|waiting|blocked [--ahead K]
+    [--tickets JSON]` sends progress step N (the one line is its summary)
+    on task id `progress-<task_id>-<N>`, with the tickets the request
+    became. Like `--acknowledged`, it marks the caller's row and settles
+    nothing ([superagent-market-progress-roster](../../../docs/design/superagent-market-progress-roster.md)).
+    An older receiver settles the row on it, so send it only to a caller
+    that declares `progressReceipts`; a team's host face refuses others
+    (exit 4).
   - `--acknowledged` says the task is taken up and its result follows. It settles nothing: the caller's row stays owed until the result receipt, leaves the queue count, and expires 7 days after the acknowledgement instead of 24 hours after dispatch. It rides task id `ack-<task_id>`, so the later receipt is not refused.
 - `admission <caller> [--local] [--json]` asks the home host how `<caller>`
   would be admitted delivering to this identity right now, recomputed from the

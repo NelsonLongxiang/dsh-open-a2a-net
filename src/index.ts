@@ -37,7 +37,7 @@ export function resolveCallerLabel(input: {
 import { encodePublicKey, signCard, verifyCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { CanvasStore, canvasNameReserved, isRemoteMemberRef, legacyBareMember } from './canvas-store.ts'
-import { splitQualifiedMember, memberProvenance, qualifiedSessionMember } from './canvas-member.ts'
+import { splitQualifiedMember, memberProvenance, qualifiedSessionMember, pinnedCallerDeclares } from './canvas-member.ts'
 import { decodeSessionLog, extractTranscript, TRANSCRIPT_MAX_FILE_BYTES } from './session-transcript.ts'
 import { LayoutStore } from './layout-store.ts'
 import { peerLinkDisplay } from './peer-link-display.ts'
@@ -2175,6 +2175,15 @@ export function apply(ctx: Context, config: Config): void {
    * requester's ledger settles them as host-face. Speaks the a2a-net CLI's `receipt` / `route` JSON contract (stdout, exit
    * codes 4 gone / 5 another receipt) for the A2A Source; undefined when the task did not come through the canvas.
    */
+  /**
+   * Whether a caller declares a capability on its verified card: a canvas remote member whose full key this host pinned,
+   * and whose card (fetched and verified, in the card cache) carries `capabilities[name] === true`. Anything else — a
+   * CLI identity, an unpinned or unknown caller, a card not fetched yet — declares nothing.
+   */
+  function callerCapability(caller: string, name: string): boolean {
+    return pinnedCallerDeclares(caller, name, canvasStore.list().flatMap(canvas => canvasStore.membersOf(canvas)), ref => canvasStore.ownerKeyOf(ref), [...cardCache.values()].map(entry => entry.card))
+  }
+
   async function teamCanvasSend(args: readonly string[]): Promise<string | undefined> {
     const verb = args[0]
     if (verb !== 'receipt' && verb !== 'route') return undefined
@@ -2194,17 +2203,23 @@ export function apply(ctx: Context, config: Config): void {
       // market N1c/N1d: who took it up, what it produced, and an attention's structured question.
       const extras = receiptExtras(name => flagOf(name), attention, line)
       if ('error' in extras) return fail(2, extras.error)
-      const fields = acknowledged ? { idempotencyKey: task, disposition: 'acknowledged' as const, onBehalfOf: row.team, ...extras.fields }
+      const progress = extras.fields.progress !== undefined
+      if (progress && acknowledged) return fail(2, '--progress does not go with --acknowledged')
+      // superagent-market-progress-roster P1: an older receiver would settle the row on an unknown disposition, so a
+      // progress step goes only to a caller whose verified card declares progressReceipts.
+      if (progress && !callerCapability(to, 'progressReceipts')) return fail(4, `${to} does not declare progressReceipts; no progress was sent`)
+      const fields = progress ? { idempotencyKey: task, disposition: 'progress' as const, onBehalfOf: row.team, ...extras.fields }
+        : acknowledged ? { idempotencyKey: task, disposition: 'acknowledged' as const, onBehalfOf: row.team, ...extras.fields }
         : attention ? { idempotencyKey: task, disposition: 'attention' as const, onBehalfOf: row.team, ...extras.fields }
         : { outcome: (outcome ?? 'completed') as 'completed', idempotencyKey: task, disposition: 'result' as const, onBehalfOf: row.team, ...extras.fields }
       const receipt = formatReceipt(task, line, fields)
-      const receiptTask = receiptTaskId(task, fields.disposition, extras.fields.question)
+      const receiptTask = receiptTaskId(task, fields.disposition, extras.fields.question, extras.fields.progress)
       if (receiptTask.length > 80) return fail(2, `receipt: its task id ${receiptTask} is longer than 80 characters`)
       try {
         const out = await dispatchAnywhere(to, receipt, session, row.contextId, new AbortController().signal, true, receiptTask)
         // This host's own inbound row (a requester on another host or a CLI here): the receipt it sent settles it.
         // An acknowledgement or a question marks it instead (settleOwnInbound leaves such a row owed).
-        if (row.direction === 'inbound' && !acknowledged) settleOwnInbound(receipt, to, { caller: session, proof: 'in-process', ingress: 'local' })
+        if (row.direction === 'inbound' && !acknowledged && !progress) settleOwnInbound(receipt, to, { caller: session, proof: 'in-process', ingress: 'local' })
         return JSON.stringify({ delivered: true, class: 'sent', task_id: receiptTask, team: to, ...(typeof (out as { context_id?: unknown }).context_id === 'string' ? { context_id: (out as { context_id: string }).context_id } : {}) })
       } catch (error) {
         const code = (error as { code?: unknown }).code

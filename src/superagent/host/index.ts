@@ -18,6 +18,7 @@ import { dirname, join } from 'node:path'
 import { Engine, UserError, reasonText, ticketStage, type Assessor, type Candidate, type Outbox, type Reason, type Ticket, type Trigger, type ReceiveResult } from '../upstream/dsh-superagent/src/core/index.ts'
 import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
+import { ProgressReceipts } from './progress.ts'
 import { MemberExecutor, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
 import { ReviewRequests } from './review-requests.ts'
 import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, type OutboundAsk } from './outbound.ts'
@@ -78,6 +79,7 @@ export class SuperagentHost {
   readonly a2a: A2aSource
   /** What the team owes A2A requesters (host/receipts.ts). */
   private readonly receipts: A2aReceipts
+  private readonly progress: ProgressReceipts
   /** Outbox messages being sent right now, so a pass never sends one twice at once. */
   private readonly sending = new Set<string>()
   private started = false
@@ -127,6 +129,14 @@ export class SuperagentHost {
       seatOf: ticketId => this.seatOf(ticketId),
       logger: d.logger, ...(d.runCli !== undefined ? { run: d.runCli } : {}), ...(d.teamSend !== undefined ? { teamSend: d.teamSend } : {}), ...(d.a2aPollSeconds !== undefined ? { pollSeconds: d.a2aPollSeconds } : {}),
     })
+    const progressPath = join(dir, 'progress.json')
+    this.progress = new ProgressReceipts({
+      store: this.store, a2a: this.a2a, on: () => this.settingsValue.sources.a2a && this.settingsValue.progressOff !== true, nowMs: () => Date.parse(this.now()),
+      seatOf: ticketId => this.seatOf(ticketId), queueAhead: ticketId => this.executor.queueAhead(ticketId), answered: task => this.a2a.answered(task),
+      load: () => { try { return existsSync(progressPath) ? JSON.parse(readFileSync(progressPath, 'utf8')) as never : undefined } catch { return undefined } },
+      save: value => { try { mkdirSync(dir, { recursive: true }); const tmp = `${progressPath}.tmp-${randomUUID()}`; writeFileSync(tmp, JSON.stringify(value), { mode: 0o600 }); renameSync(tmp, progressPath) } catch (error) { d.logger.warn('superagent: progress state not saved: %s', String(error)) } },
+      logger: d.logger,
+    })
     this.receipts = new A2aReceipts({ store: this.store, a2a: this.a2a, a2aOn: () => this.settingsValue.sources.a2a, now: () => this.now(), seatOf: ticketId => this.seatOf(ticketId), logger: d.logger })
     this.prs = new PrFollower({
       path: join(dir, 'pr-follow.json'), tickets: () => this.store.tickets.list(), engine: () => this.engine, gh: d.gh ?? defaultGh,
@@ -158,6 +168,8 @@ export class SuperagentHost {
       policy: () => teamPolicy(this.settings),
       scope: teamScope(() => this.settingsValue),
       assessor, executor, outbox,
+      // P2 light path: decided inside the intake's unit of work, before any pass can hand the message to the router.
+      emit: event => { if (event.type === 'trigger.received') this.lightPath((event.data as { triggerId: string }).triggerId) },
       ...(d.now !== undefined ? { now: d.now } : {}),
     })
   }
@@ -394,6 +406,29 @@ export class SuperagentHost {
 
   private pool(): string[] { const now = this.settings; return [...now.members, ...now.remoteMembers.map(r => r.ref)] }
   private memberName(id: string): string { return this.d.sessionName?.(id) ?? id }
+
+  /**
+   * superagent-market-progress-roster P2, the light path: an agent's message that reached a live ticket on that ticket's own
+   * thread, from the very caller the ticket was accepted from, is routed to that ticket at once — the router's `attach`,
+   * made by the host — so it is not queued for the router's judgement. A person's message is the engine's to decide
+   * already; another caller's message in the same conversation still goes to the router.
+   */
+  private lightPath(triggerId: string): void {
+    const trigger = this.store.triggers.get(triggerId)
+    const disposition = this.store.triggers.disposition(triggerId)
+    if (trigger === undefined || trigger.human || disposition === undefined) return
+    for (const ticketId of disposition.fanout) {
+      if (disposition.context?.includes(ticketId)) continue
+      const ticket = this.store.tickets.get(ticketId)
+      const origin = ticket !== undefined && !ticket.ended ? this.store.triggers.get(ticket.origin.triggerId) : undefined
+      if (origin === undefined || origin.human || origin.actor.source !== trigger.actor.source || origin.actor.id !== trigger.actor.id) continue
+      try {
+        this.engine.attach(ticketId, triggerId)
+        this.d.logger.info('superagent: %s from %s goes straight to ticket %s (light path)', triggerId, trigger.actor.id, ticketId)
+        return
+      } catch (error) { this.d.logger.warn('superagent: light path for %s into %s not taken: %s', triggerId, ticketId, String(error)) }
+    }
+  }
 
   /**
    * market N1c: the seat a ticket's receipts name as the one that took it up — its member once one holds it (the one it
@@ -972,6 +1007,7 @@ export class SuperagentHost {
     this.prs.tick()
     this.issues.tick()
     this.receipts.tick()
+    this.progress.tick()
   }
 
   /**
