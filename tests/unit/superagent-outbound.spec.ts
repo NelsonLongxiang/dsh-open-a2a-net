@@ -120,6 +120,13 @@ describe('the whole way, on a team (O1–O5)', () => {
     const raised = h.requestOutbound(holder, { ticket_id: ticket, address: 'dsh/canvas/other', text: '请给我们接口数据', why: '工单要用' }) as { ok: boolean; card_id: string }
     expect(raised.ok).toBe(true)
     expect(h.decisionCards().find(c => c.id === raised.card_id)).toMatchObject({ source: 'outbound', level: 'P0' })
+    // An approver finds the waiting card through a2a_ticket_read kind outbound; a member that is no approver cannot.
+    const { registerSuperagentTools } = await import('../../src/superagent/host/tools.ts')
+    const registered = new Map<string, { execute(a: unknown, e: unknown): Promise<Record<string, any>> }>()
+    registerSuperagentTools({ tools: { register: (tool: { name: string }) => { registered.set(tool.name, tool as never) } } } as never, id => (h.roleOf(id) !== undefined ? h : undefined))
+    const read = async (as: string) => await registered.get('a2a_ticket_read')!.execute({ kind: 'outbound' }, { agent: { id: as }, signal: new AbortController().signal })
+    expect(await read('session-o')).toMatchObject({ ok: true, cards: [expect.objectContaining({ id: raised.card_id, by: holder })] })
+    if (holder === 'session-m') expect(await read('session-m')).toMatchObject({ code: 'not-approver' })
     const other = holder === 'session-m' ? 'session-o' : 'session-m'
     // The asker is no approver of its own card; a session not on the list is none at all.
     expect(h.approverDecide(holder, raised.card_id, OUTBOUND_APPROVE, '我自己批')).toMatchObject({ ok: false })

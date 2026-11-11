@@ -495,7 +495,9 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     execute: async (args: { card_id?: string; option?: string; reason?: string }, exec): Promise<Record<string, JsonValue>> => {
       const h = host(exec), me = callerOf(exec)
       if (h === undefined || me === undefined) return { ok: false, code: 'not-team', error: 'a2a_decision_decide serves only the sessions of a superagent team on this host' }
-      return h.approverDecide(me, String(args.card_id ?? ''), args.option, args.reason) as Record<string, JsonValue>
+      const out = h.approverDecide(me, String(args.card_id ?? ''), args.option, args.reason)
+      // Approving is not delivering (live check): the host sends it now, and the answer reaches the asking ticket as a note.
+      return (out.approved === true ? { ...out, note: 'Approved. The host sends the text from the team\'s A2A identity now; whether it went out, and the other team\'s receipt, reach the asking ticket as notes.' } : out) as Record<string, JsonValue>
     },
   }))
 
@@ -503,9 +505,9 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
   // acts on tickets through this (owner 2026-11-10: a scheduled turn reads where things stand before it acts).
   ctx.tools.register(defineTool({
     name: 'a2a_ticket_read',
-    description: 'Team member or observer only, read-only: where your work stands before you act on it. kind mine: your open tickets; kind ticket: one of them (ticket_id). An observer can also read kind team (the team\'s open and recent tickets) and kind decisions (the router\'s recent decisions). It changes nothing.',
+    description: 'Team member or observer only, read-only: where your work stands before you act on it. kind mine: your open tickets; kind ticket: one of them (ticket_id). An observer can also read kind team (the team\'s open and recent tickets) and kind decisions (the router\'s recent decisions). An approver the owner named reads kind outbound: the outbound cards waiting for a decision, with their ids. It changes nothing.',
     parameters: {
-      kind: { type: 'string', required: true, description: 'mine | ticket | team | decisions' },
+      kind: { type: 'string', required: true, description: 'mine | ticket | team | decisions | outbound' },
       ticket_id: { type: 'string', description: 'For kind ticket.' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('a2a_ticket_read', value) },
@@ -529,6 +531,11 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
         if (!observer && !mine().includes(id)) return { ok: false, code: 'not-yours', error: 'a member reads only the tickets it holds' }
         const t = summary(id)
         return t === null ? { ok: false, code: 'unknownTicket', error: 'no ticket has that id' } : { ok: true, ticket: t }
+      }
+      // Design outbound-requests O3: an approver finds the waiting outbound cards here (live check: a member approver could not list them).
+      if (args.kind === 'outbound') {
+        if (!(h.settings.approvers ?? []).includes(me)) return { ok: false, code: 'not-approver', error: 'kind outbound is for the approvers the owner named in the team settings' }
+        return { ok: true, cards: json(h.decisionCards().filter(card => card.source === 'outbound').map(card => ({ id: card.id, question: card.question, ...(card.reason !== undefined ? { reason: card.reason } : {}), by: card.by, at: card.at, options: card.options }))) }
       }
       if (!observer) return { ok: false, code: 'not-observer', error: 'kind team and kind decisions are for observers; a member reads kind mine or ticket' }
       if (args.kind === 'team') return { ok: true, tickets: h.store.tickets.list().slice(0, 50).map(t => summary(t.id)) }

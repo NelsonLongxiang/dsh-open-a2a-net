@@ -105,7 +105,7 @@ The three presets mount the ygl-trees MCP server as `ygl` (`ygl-trees mcp`, foun
 
 A team session does not message other teams itself. When a ticket needs another team, it calls `a2a_outbound_request { ticket_id, address, text, why }`. The router may ask on any open ticket; a member or an observer only on the ticket it holds. The address is another team's: `<zone>/<id8>`, or `<zone>/canvas/<name>`, optionally with `@<fp8>`. The team's A2A Source must be on.
 
-The request becomes a P0 card with source `outbound`. It is decided by the owner on the team page, or by an approver: a member or observer the owner lists in the team setting `approvers` (owner-only). An approver uses `a2a_decision_decide { card_id, option, reason }`. It can decide only outbound cards, never one it raised itself, and always with a reason.
+The request becomes a P0 card with source `outbound`. It is decided by the owner on the team page, or by an approver: a member or observer the owner lists in the team setting `approvers` (owner-only). An approver lists the waiting outbound cards with `a2a_ticket_read` kind `outbound` and decides with `a2a_decision_decide { card_id, option, reason }`. It can decide only outbound cards, never one it raised itself, and always with a reason.
 
 On approval, the host sends exactly the card's text from the team's A2A identity, under a header naming the team and the ticket. The other team's formal receipt comes back to the ticket as a note. A ticket has at most three outbound requests waiting or unanswered. Design: `docs/design/superagent-outbound-requests.md`.
 
