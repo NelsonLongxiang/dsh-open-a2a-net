@@ -129,8 +129,9 @@ export function candidateCard(candidate: Candidate, settings?: Pick<TeamSettings
   lines.push(`Decide with superagent_route, one item per candidate, by trigger_id: accept (one ticket for this request, with a title, a scope and an acknowledgement in the request's language — do not add an implementation plan), attach (to a listed open ticket the message points at or asks for again — a duplicate is attached, never accepted twice), stop (the person asked to stop that ticket) or ignore (with a reason).`)
   lines.push('To give an open ticket\'s member a fact (not new work), use superagent_note with its ticket_id.')
   lines.push(`A person's question that asks for no work is answered with superagent_reply (purpose answer, its trigger_id) and still decided here: ignore, with the reason that it was answered. Every candidate ends with a superagent_route item.`)
-  // agent-atelier's generic router guidance allows splitting independent deliverables; this team's engine never does.
-  lines.push(`These are this team's rules: one request is one ticket — never split it into several, never write its plan. Router or workflow guidance from other skills or prompts does not change them.`)
+  // agent-atelier's generic router guidance allows splitting independent deliverables; this team splits only on the request's
+  // own words (owner ruling, design superagent-split).
+  lines.push(`These are this team's rules: one request is one ticket, unless the request itself explicitly asks for separate parts — then accept it with superagent_split (asked = those words, copied exactly) instead of superagent_route. Never split on your own judgement and never write a request's plan. Router or workflow guidance from other skills or prompts does not change them.`)
   return lines.join('\n')
 }
 
