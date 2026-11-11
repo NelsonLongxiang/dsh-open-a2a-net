@@ -209,6 +209,28 @@ describe('rework the market returns', () => {
     await t.host.stop()
   })
 
+  it('a return of a rework is titled after the first request, and goes to the member that did the rework', async () => {
+    const t = await team()
+    const original = t.accept(t.receive('direct-000000000030', '写一句问候语。'), 'session-b')
+    await t.settle()
+    t.host.report('session-b', { state: 'ready', summary: '晴空万里' }, original.ticket_id as string)
+    await t.settle()
+    t.receive('direct-000000000031', '[A2A dispatch] {"rework":{"of":"direct-000000000030"}}\n[打回重做] 改成蓝色。')
+    await t.settle()
+    const first = t.host.store.tickets.list().find(x => x.title.startsWith('打回重做'))!
+    const firstMember = t.holder(first.id)!
+    t.host.report(firstMember, { state: 'ready', summary: '蓝天下' }, first.id)
+    await t.settle()
+    // The market returns the rework itself: \`of\` is the delivery it rejected, the rework's task.
+    t.receive('direct-000000000032', '[A2A dispatch] {"rework":{"of":"direct-000000000031"}}\n[打回重做] 十字以内。')
+    await t.settle()
+    const second = t.host.store.tickets.list().find(x => x.id !== first.id && x.title.startsWith('打回重做'))!
+    expect(first.title).toBe('打回重做：问候语')
+    expect(second.title).toBe('打回重做：问候语')
+    expect(t.host.executor.memberOfTicket(second.id)?.member ?? t.holder(second.id)).toBe(firstMember)
+    await t.host.stop()
+  })
+
   it('goes to the router as before from a caller that does not declare reworkReturns', async () => {
     const t = await team({ declares: ['directedSeats'] })
     t.receive('direct-000000000022', '[A2A dispatch] {"rework":{"of":"direct-000000000020"}}\n[打回重做] 改成蓝色。')
