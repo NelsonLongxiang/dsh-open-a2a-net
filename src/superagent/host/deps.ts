@@ -92,6 +92,14 @@ export interface SuperagentHostDeps {
   readonly canvasTeam?: (name: string) => { readonly local: readonly string[]; readonly remote: readonly RemoteMember[] } | undefined
   /** Design v5 (D2): the host-face sender of the team's replies to requests that came through its canvas address. */
   readonly teamSend?: (args: readonly string[]) => Promise<string | undefined>
+  /**
+   * superagent-market-progress-roster P3: whether a canvas remote member (its pinned ref) declares a capability on its
+   * verified card, and the roster report's send — a fire-and-forget direct message from this host's process face (no
+   * debt booked, no queue slot), on its own task id. The host's card key fingerprint names the host in the report.
+   */
+  readonly memberDeclares?: (ref: string, capability: string) => boolean
+  readonly rosterSend?: (ref: string, text: string, taskId: string) => Promise<void>
+  readonly hostFingerprint?: () => string | undefined
   /** The canvas teams this host owns, by name (the owner binds one of them). */
   readonly canvasNames?: () => readonly string[]
   /** The agent preset a live local session runs (undefined: not loaded, or no preset registry). */
