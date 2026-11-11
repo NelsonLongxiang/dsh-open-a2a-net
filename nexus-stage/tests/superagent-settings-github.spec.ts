@@ -43,10 +43,21 @@ describe('granted tools (design tool-requests T5)', () => {
   it('an untouched list sends nothing, so an ordinary save needs no owner login', () => {
     expect(mount(granted).fields.patch()).toEqual({ patch: {} })
   })
-  it('taking a tool back sends only that role\'s list', () => {
+  it('taking a router tool back sends only the router\'s list', () => {
     const { fields, q } = mount(granted)
-    q<HTMLTextAreaElement>('成员和观察者额外放行的工具').value = ''
-    expect(fields.patch()).toEqual({ patch: { extraTools: { member: [] } } })
+    q<HTMLTextAreaElement>('总工额外放行的工具').value = ''
+    expect(fields.patch()).toEqual({ patch: { extraTools: { router: [] } } })
+  })
+})
+
+describe('blocked tools (tool-requests T6)', () => {
+  it('members have every tool by default; a changed block list goes out; a wrong name is refused', () => {
+    const { fields, q } = mount({ ...base, blockedTools: ['gitbash'] })
+    expect(fields.patch()).toEqual({ patch: {} })
+    q<HTMLTextAreaElement>('成员和观察者禁用的工具').value = 'gitbash\nmcp__market__publish'
+    expect(fields.patch()).toEqual({ patch: { blockedTools: ['gitbash', 'mcp__market__publish'] } })
+    q<HTMLTextAreaElement>('成员和观察者禁用的工具').value = 'bad/name'
+    expect(fields.patch()).toMatchObject({ error: expect.stringContaining('禁用的工具') })
   })
 })
 

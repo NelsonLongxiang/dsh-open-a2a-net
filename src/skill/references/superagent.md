@@ -137,7 +137,7 @@ The owner control route is `/__dsh_a2a/superagent`. One DSH instance can run sev
 The router and the members are sessions the owner creates under the team's agent presets, which this plugin ships in its bundle layer: **`superagent-router`** (superagent 总工) for the router and **`superagent-member`** (superagent 团队成员) for each member, or **`superagent-observer`** (superagent 团队观察者) for a member who may also open tickets. The preset is the role's boundary:
 
 - `superagent-router`: read-only files, a foreground command and a job wait of at most 5 s, skills and compaction; no subagents.
-- `superagent-member`: the work tools; a foreground command moves to a background job after 5 s, so a stop or a person's answer is taken at the next step; no subagents.
+- `superagent-member`: the work tools; a foreground command moves to a background job after 5 s, so a stop or a person's answer is taken at the next step; no subagents. A member or an observer may also use every other tool the host offers (the owner's MCP servers and plugins), except what leaves the team: other sessions and subagents, `plugin_manager`, `ask_user_question`, A2A sending and joining, another role's team tools. The owner can block more in the team settings (`blockedTools`). The router keeps its own list.
 - `superagent-observer`: the same as `superagent-member`, on the team's own host only.
 
 Settings naming a router or member that runs another preset are refused, and so is `serve`. A session not loaded at the time, or a host without a preset registry, is not checked.
