@@ -1223,3 +1223,29 @@ describe('a remote member listed as a bot is a caller, not a worker (market on t
     await h.stop()
   })
 })
+
+describe('seatOf at boot reads no canvas (regression of #611 on the test host)', () => {
+  it('the seat and its role come from the executor and the preset, even when reading the canvas throws', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    let booting = false
+    const team = canvasOf(['session-r', 'session-o'])
+    const bot = 'market/0123456789abcdef'
+    const host = new SuperagentHost({ canvasTeam: (name: string) => { if (booting) throw new ReferenceError("Cannot access 'cardCache' before initialization"); return team(name) },
+      home: mkdtempSync(join(tmpdir(), 'sa-seatboot-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, homeUrl: () => 'http://127.0.0.1:1',
+      presetOf: (id: string) => id === 'session-o' ? 'superagent-observer' : 'superagent-router', sessionName: (id: string) => id,
+      runCli: async (args: string[]) => args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' } as never)
+    expect(host.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade.' }] }, () => true)).toMatchObject({ ok: true })
+    const channel = { source: 'a2a', thread: 'a2a:ctx-b', address: { caller: bot, task: 'direct-00000000000b', context: 'ctx-b' } }
+    host.engine.receive({ ...wb('b', 'ctx-b'), source: 'a2a', threads: [{ source: 'a2a', id: 'ctx-b' }], actor: { source: 'a2a', id: bot }, human: false, channel, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: channel.address.task } } as never)
+    host.pass()
+    const routed = routeItem(host, { trigger_id: 'b', kind: 'accept', title: 'boot', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
+    for (let i = 0; i < 20; i++) { host.pass(); await new Promise(r => setTimeout(r, 5)) }
+    expect(host.seatOf(routed.ticket_id)).toEqual({ seat: 'session-o', role: 'observer' })
+    booting = true
+    // Before the fix the observer check read the canvas settings and threw here (the plugin's start failed with it).
+    expect(host.seatOf(routed.ticket_id)).toEqual({ seat: 'session-o', role: 'observer' })
+    booting = false
+    await host.stop()
+  })
+})
