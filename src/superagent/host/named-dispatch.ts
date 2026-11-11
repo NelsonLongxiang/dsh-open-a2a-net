@@ -23,8 +23,15 @@ const ID_MAX = 128
 
 export interface DispatchLine { readonly for?: string; readonly rework?: { readonly of: string } }
 
-/** The request's dispatch line, if its first line is one; `body` is the request without it. */
-export function parseDispatch(text: string): { line: DispatchLine; body: string } | undefined {
+/**
+ * The network's own header on a delivered request — `[A2A direct] (task …) <verdict> from "…" (routed to …) sent:` and a
+ * blank line — written by the receiving host above the caller's message. The dispatch line is the message's first line.
+ */
+const DIRECT_HEADER = /^\[A2A direct\][^\n]* sent:\n\n/
+
+/** The request's dispatch line, if its message's first line is one; `body` is the message without it. */
+export function parseDispatch(delivered: string): { line: DispatchLine; body: string } | undefined {
+  const text = delivered.replace(DIRECT_HEADER, '')
   if (!text.startsWith(DISPATCH_PREFIX)) return undefined
   const newline = text.indexOf('\n')
   const head = (newline === -1 ? text : text.slice(0, newline)).slice(DISPATCH_PREFIX.length).trim()
